@@ -302,6 +302,19 @@ describe('countDeclaredWork', () => {
     }
   })
 
+  // The other live shape, pinned so the overlap is a decision and not an accident:
+  // when a THIRD party (the coordinator) had the last word, both rules fire and the
+  // card sits in both queues. 17 of the 18 overlaps on the board were this. Left as is
+  // on purpose -- with a third party talking, nobody can say from the data alone whose
+  // move it is, and nudging both is the safe answer. Telling them apart would mean
+  // reading what the comment SAYS, which is judgement, not mechanics.
+  it('a third party speaking last puts the card in BOTH queues, deliberately', () => {
+    const rows: Row[] = [card('x', 'testing', 'dexter', { updatedAt: 300 })]
+    const coordinatorLast = commentsAt([['x', 'didi', 200], ['x', 'marveen', 300]])
+    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, coordinatorLast)).toBe(1)
+    expect(countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', rows, coordinatorLast)).toBe(1)
+  })
+
   // A KNOWN gap, asserted so it cannot change unnoticed: a card assigned to X where
   // only X has commented stays out of X's queue. That is right when X is waiting for a
   // reviewer, and wrong when X IS the reviewer -- and from assignee plus comments alone
