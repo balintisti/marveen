@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildAgentPrompt } from '../heartbeat.js'
@@ -92,6 +92,30 @@ describe('scripts/gmail-recent.py -- caller contract', () => {
     const parsed = JSON.parse(runWithHome(home).stdout)
     expect(parsed.ok).toBe(false)
     expect(parsed.messages).toBeUndefined()
+  })
+})
+
+describe('gmail-recent.py -- charset handling', () => {
+  // A SOURCE-level test, deliberately, and worth saying why: the parse has no
+  // reachable seam without standing up a fake IMAP server, and the bug it
+  // guards is SILENT CORRUPTION -- the output stays valid JSON and every field
+  // is present, the letters are just wrong. Measured 2026-08-20: two forwards
+  // from a Thunderbird client came back as "tud\ufffdsanyag" because the raw
+  // message was decoded as UTF-8 before the per-part charset handling ran.
+  // A test that only asserted "returns messages" passes on the broken version.
+  const SRC = readFileSync(join(__dirname, '..', '..', 'scripts', 'gmail-recent.py'), 'utf-8')
+
+  it('parses the message from BYTES, so non-UTF-8 parts survive', () => {
+    expect(SRC).toMatch(/email\.message_from_bytes\(/)
+  })
+
+  it('never decodes the whole raw message as UTF-8 first', () => {
+    // This is the exact line that destroyed the accents.
+    expect(SRC).not.toMatch(/message_from_string\(/)
+  })
+
+  it('decodes each part with ITS OWN declared charset', () => {
+    expect(SRC).toMatch(/get_content_charset\(\)/)
   })
 })
 
