@@ -296,9 +296,13 @@ describe('countDeclaredWork', () => {
     // instead, and the claim narrowed to what actually holds: nothing may be invisible.
     // Overlap is tolerated on purpose (it errs toward more work, never toward silence).
     for (const c of rows) {
-      const inMine = countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', [c], cmts)
+      // Ask the card's OWN assignee, not a hard-coded one. Didi's catch: with 'dexter'
+      // pinned here, a fixture card belonging to anyone else would fail with 0+0 --
+      // reading as "invisible" when in truth we asked the wrong agent. A test that
+      // fails for the right reason with the wrong message costs an hour to diagnose.
+      const inMine = countDeclaredWork({ kind: 'assigned_open_cards' }, c.assignee ?? '', [c], cmts)
       const inHers = countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', [c], cmts)
-      expect(inMine + inHers).toBeGreaterThan(0)
+      expect(inMine + inHers, `card ${c.id} (assignee ${c.assignee}) is in no queue`).toBeGreaterThan(0)
     }
   })
 
