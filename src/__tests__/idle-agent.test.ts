@@ -290,7 +290,27 @@ describe('countDeclaredWork', () => {
     const hers = countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', rows, cmts)
     expect(mine).toBe(1)
     expect(hers).toBe(2)
-    expect(mine + hers).toBe(rows.length)
+    // NOT a sum. Didi's catch: `mine + hers === rows.length` is satisfied just as well
+    // by one card counted twice and another counted zero times -- the two errors cancel,
+    // and the assertion cannot see the very property its name claims. Checked per card
+    // instead, and the claim narrowed to what actually holds: nothing may be invisible.
+    // Overlap is tolerated on purpose (it errs toward more work, never toward silence).
+    for (const c of rows) {
+      const inMine = countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', [c], cmts)
+      const inHers = countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', [c], cmts)
+      expect(inMine + inHers).toBeGreaterThan(0)
+    }
+  })
+
+  // A KNOWN gap, asserted so it cannot change unnoticed: a card assigned to X where
+  // only X has commented stays out of X's queue. That is right when X is waiting for a
+  // reviewer, and wrong when X IS the reviewer -- and from assignee plus comments alone
+  // the two are indistinguishable. Four cards were in that state on 2026-08-20, all of
+  // them the reviewer's own measurement cards. Documented rather than guessed at.
+  it('assignee-only comments stay out of the assignee queue (known gap, see 52d94a9e)', () => {
+    const rows: Row[] = [card('s', 'testing', 'didi', { updatedAt: 200 })]
+    const onlyMine = commentsAt([['s', 'didi', 200]])
+    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'didi', rows, onlyMine)).toBe(0)
   })
 
   it('a queue made only of waiting cards is not work', () => {

@@ -221,6 +221,16 @@ export function countDeclaredWork(
         for (const [author, at] of authors) {
           if (at > latestAt) { latestAt = at; latestAuthor = author }
         }
+        // NOT resolvable here: "assigned to X, only X has commented" looks identical
+        // whether X is waiting for a separate reviewer (correct to exclude) or is the
+        // reviewer themselves (a real hole -- Didi's four self-measured cards fell out
+        // of both queues that way). Distinguishing them needs to know WHO reviews this
+        // card, which this function is not told. Tried the broad fix -- count it as mine
+        // whenever I am the only commenter -- and the existing tests caught it: it would
+        // also claim cards that are genuinely waiting for someone else's first look.
+        // Left as a known gap on card 52d94a9e; four cards today, all with the same
+        // board-level anomaly behind them (a reviewer assigned cards she must review).
+        //
         // Someone else had the last word -> an unanswered finding is waiting on me.
         return latestAuthor !== null && latestAuthor !== agent
       }).length
