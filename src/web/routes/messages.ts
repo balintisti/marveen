@@ -1,5 +1,5 @@
 import {
-  createAgentMessage, getPendingMessages, listAgentMessages,
+  createAgentMessage, getPendingMessages, listAgentMessages, getRecipientQueueState,
   getAgentConversation, getAgentConversationThreads,
   getKanbanSeqByIdPrefix,
   markMessageDone, markMessageFailed, getAgentMessage,
@@ -15,7 +15,7 @@ import { isKnownAgent } from '../agent-config.js'
 import { OWNER_NAME } from '../../config.js'
 import { readBody, json, jsonMaybeGzip } from '../http-helpers.js'
 import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
-import { parseQualifiedId, formatQualifiedId } from '../federation/address.js'
+import { parseQualifiedId, formatQualifiedId, isQualifiedId } from '../federation/address.js'
 import { getFederationConfig } from '../federation/config.js'
 import type { RouteContext } from './types.js'
 
@@ -132,8 +132,18 @@ export async function tryHandleMessages(ctx: RouteContext): Promise<boolean> {
     // itself -- capped short so it stays a label, not a second content field.
     const trimmedOriginNote = origin_note?.trim().slice(0, 120) || null
     const msg = createAgentMessage(from.trim(), storedTo, normalizedContent, trimmedOriginNote)
-    logger.info({ id: msg.id, from: msg.from_agent, to: msg.to_agent, originNote: msg.origin_note }, 'Agent message created')
-    json(res, msg)
+    // Backpressure, returned WITH the id rather than behind a second call:
+    // `{"id":N,"status":"pending"}` alone reads as "sent", and on a busy
+    // recipient it can be 80 minutes from true. See getRecipientQueueState for
+    // the measurement this came from. Federated recipients are skipped -- their
+    // queue lives on the peer, so any number we computed here would be a local
+    // artefact, and a wrong number is worse than none.
+    const queue = isQualifiedId(storedTo) ? undefined : getRecipientQueueState(storedTo)
+    logger.info(
+      { id: msg.id, from: msg.from_agent, to: msg.to_agent, originNote: msg.origin_note, queueDepth: queue?.queueDepth },
+      'Agent message created',
+    )
+    json(res, queue ? { ...msg, queue } : msg)
     return true
   }
 

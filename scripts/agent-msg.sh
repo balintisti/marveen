@@ -12,7 +12,13 @@
 #   content: plain text (quotes / newlines OK) -- the body is built with json.dumps (no quoting pitfalls).
 #   large / multi-line content may come from STDIN when the 3rd arg is "-":
 #     echo "<long text>" | bash scripts/agent-msg.sh <from> <to> -
-# Output: success -> "OK id=<n>"; failure -> "FAIL <reason>" + a line in store/agent-msg-failures.log, exit 1.
+# Output: success -> "OK id=<n> queue=<depth> (~<n> perc)"; failure -> "FAIL <reason>"
+#         + a line in store/agent-msg-failures.log, exit 1.
+# The queue fields come from the POST response (2026-08-20): a message is accepted
+# instantly but only DELIVERED into an idle gap in the recipient's pane, which on a
+# busy agent measured 80+ minutes. At 3+ waiting the script says so on stderr and
+# tells the sender to use the card instead -- the number alone would arrive after
+# the send, when it can only help next time.
 # Env: MARVEEN_WEB_PORT (default 3420).
 set -uo pipefail
 
@@ -36,13 +42,41 @@ while [ "$attempt" -lt "$max" ]; do
   RESP="$(curl -s -X POST "$URL" -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" -d "$BODY" -w $'\n%{http_code}' 2>/dev/null || true)"
   CODE="$(printf '%s' "$RESP" | tail -n1)"
   JSON="$(printf '%s' "$RESP" | sed '$d')"
-  ID="$(printf '%s' "$JSON" | python3 -c 'import sys,json
+  # Two values out of one parse: the id (proof it was accepted) and the
+  # recipient's queue state (how long "accepted" is from "arrived"). Tab
+  # separated so an empty queue field cannot shift the id.
+  PARSED="$(printf '%s' "$JSON" | python3 -c 'import sys,json
 try:
-  d=json.load(sys.stdin); print(d.get("id","") if isinstance(d,dict) else "")
+  d = json.load(sys.stdin)
+  if not isinstance(d, dict): raise ValueError
+  q = d.get("queue") or {}
+  depth = q.get("queueDepth", "")
+  delay = q.get("estimatedDelaySec")
+  # NULL delay means "no delivery history yet", which is NOT "instant" -- keep
+  # the distinction visible instead of printing a misleading 0.
+  mins = "" if delay is None else str(max(1, round(delay / 60)))
+  print("\t".join([str(d.get("id", "")), str(depth), mins]))
 except Exception:
-  print("")' 2>/dev/null)"
+  print("\t\t")' 2>/dev/null)"
+  ID="$(printf '%s' "$PARSED" | cut -f1)"
+  DEPTH="$(printf '%s' "$PARSED" | cut -f2)"
+  MINS="$(printf '%s' "$PARSED" | cut -f3)"
   if { [ "$CODE" = "200" ] || [ "$CODE" = "201" ]; } && [ -n "$ID" ]; then
-    echo "OK id=$ID"; exit 0
+    # The "OK id=<n>" prefix is a contract -- callers and CLAUDE.md grep for it.
+    # Anything new goes after it.
+    LINE="OK id=$ID"
+    [ -n "$DEPTH" ] && LINE="$LINE queue=$DEPTH"
+    [ -n "$MINS" ] && LINE="$LINE (~${MINS} perc)"
+    echo "$LINE"
+    # The fleet rule is "3+ pending -> write on the card instead". Printing the
+    # number is not enough: the sender has already sent by the time they read
+    # it, and the rule then depends on them remembering it for NEXT time. Say
+    # what to do, at the moment the evidence is in front of them.
+    if [ -n "$DEPTH" ] && [ "$DEPTH" -ge 3 ] 2>/dev/null; then
+      echo "FIGYELEM: $TO sorában $DEPTH üzenet vár${MINS:+, a mérés szerint ~${MINS} perc a késés}." >&2
+      echo "  A következőt NE üzenetben küldd -- írd a kártyára kommentként. Az üzenet tol, a kártya húzat." >&2
+    fi
+    exit 0
   fi
   sleep 1
 done
