@@ -13,7 +13,7 @@
  * healthy one does not just fail to warn, it CLOSES the question.
  */
 import { describe, it, expect } from 'vitest'
-import { judgeBuildFreshness } from '../web/build-freshness.js'
+import { judgeBuildFreshness, judgeLocalOnly } from '../web/build-freshness.js'
 
 const T = (h: number) => new Date(`2026-08-20T${String(h).padStart(2, '0')}:00:00Z`).getTime()
 
@@ -143,5 +143,80 @@ describe('judgeBuildFreshness', () => {
     expect(v.builtAt).toBe(T(9))
     expect(v.sourceAt).toBe(T(10))
     expect(v.startedAt).toBe(T(11))
+  })
+})
+
+/**
+ * THE SECOND QUESTION -- card b807c756, and the reason it needs its own answer.
+ *
+ * The build check compares the running process with the LOCAL source. On the
+ * night this card was written a second thing was also true and that check
+ * could not see it: the feature existed in two commits that no remote branch
+ * contained. Against the local source the verdict would have been `current`,
+ * and correct. A rebuild would have made it run HERE and nowhere else -- a
+ * fresh install, or an `update.sh` pull, would not have the code at all.
+ *
+ * Same symptom, two causes, and the remedy for one does nothing for the other.
+ */
+describe('judgeLocalOnly', () => {
+  const NOW = new Date('2026-08-20T22:00:00Z').getTime()
+  const HOUR = 3600_000
+
+  const args = (over: Partial<Parameters<typeof judgeLocalOnly>[0]> = {}) => ({
+    commits: 0,
+    branch: 'develop',
+    fetchedAt: NOW - HOUR,
+    now: NOW,
+    ...over,
+  })
+
+  it('says nothing when everything is on a remote somewhere', () => {
+    // A banner that fires on the normal state is a banner people hide.
+    expect(judgeLocalOnly(args()).detail).toBeNull()
+  })
+
+  it('names the count and the branch when commits exist only here', () => {
+    const { detail } = judgeLocalOnly(args({ commits: 2, branch: 'feat/x' }))
+    expect(detail).toContain('2 commit')
+    expect(detail).toContain('feat/x')
+  })
+
+  it('says a rebuild does NOT fix this, which is the whole distinction', () => {
+    // Without this sentence the reader applies the other card's remedy and
+    // believes the problem is solved.
+    const { detail } = judgeLocalOnly(args({ commits: 2 }))
+    expect(detail).toContain('Ujraepites ezen NEM segit')
+  })
+
+  it('warns that the count can only be too HIGH when the refs are stale', () => {
+    // The asymmetry is the reason the number is still usable: a commit that
+    // really is unpushed can never be missed, only a pushed one over-counted.
+    const { detail } = judgeLocalOnly(args({ commits: 2, fetchedAt: NOW - 72 * HOUR }))
+    expect(detail).toContain('felfele torzithat')
+  })
+
+  it('does not add the caveat when the refs are fresh', () => {
+    const { detail } = judgeLocalOnly(args({ commits: 2, fetchedAt: NOW - HOUR }))
+    expect(detail).not.toContain('felfele torzithat')
+  })
+
+  it('treats never-fetched as stale rather than as fresh', () => {
+    const { detail } = judgeLocalOnly(args({ commits: 2, fetchedAt: null }))
+    expect(detail).toContain('felfele torzithat')
+  })
+
+  it('says "could not tell" -- never "all clear" -- when git could not answer', () => {
+    // The neighbouring git helpers in this codebase fall back to 'main' on
+    // failure. Here the equivalent guess would claim everything is pushed,
+    // which is exactly the claim we do not have.
+    const { detail } = judgeLocalOnly(args({ commits: null }))
+    expect(detail).toContain('Nem tudni')
+    expect(detail).toContain('NEM azt jelenti')
+  })
+
+  it('carries the raw numbers so the verdict can be checked', () => {
+    const v = judgeLocalOnly(args({ commits: 3, branch: 'develop' }))
+    expect(v.commits).toBe(3)
+    expect(v.branch).toBe('develop')
   })
 })

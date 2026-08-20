@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { PROJECT_ROOT } from '../config.js'
@@ -62,6 +63,13 @@ export interface BuildFreshness {
    * rather than being reinvented by every reader of the status field.
    */
   detail: string
+  /**
+   * The OTHER way code can be missing: present here and on no remote at all.
+   * Deliberately a separate field rather than another `status` value -- both
+   * can be true at once, and folding them into one enum would force a choice
+   * between two facts that need two different actions.
+   */
+  localOnly?: LocalOnlyState
 }
 
 export interface BuildFreshnessInput {
@@ -127,6 +135,112 @@ export function judgeBuildFreshness(input: BuildFreshnessInput): BuildFreshness 
 }
 
 /**
+ * THE SECOND QUESTION, AND IT IS NOT THE SAME ONE -- card b807c756.
+ *
+ * `judgeBuildFreshness` above compares the RUNNING PROCESS with the LOCAL
+ * SOURCE. That is one way for code to be missing, and on 2026-08-20 it was
+ * true. So was another one, and the first check cannot see it:
+ *
+ *   the running copy is old        -> rebuild, and the feature is alive.
+ *   the feature exists ONLY HERE   -> a rebuild changes nothing anywhere else.
+ *                                     A fresh install, an `update.sh` pull, or
+ *                                     any other machine would not have it AT
+ *                                     ALL.
+ *
+ * The measured case: the back-pressure signal lived in two commits that no
+ * remote branch contained. Compared against the local source, the build check
+ * would have answered `current` -- and been RIGHT. The question was simply a
+ * different one, and the same symptom ("it does not work") had two causes with
+ * two unrelated remedies.
+ *
+ * `HEAD --not --remotes` rather than `@{u}..`: a branch that was never pushed
+ * has no upstream at all, and that is precisely the case being looked for, so
+ * a check that needs one would fail on exactly the branches it must catch.
+ *
+ * IT CAN ONLY OVERSTATE, NEVER UNDERSTATE, and the difference is worth saying
+ * out loud. Remote-tracking refs are as fresh as the last fetch, so a commit
+ * pushed from elsewhere may still count as local here. The number is therefore
+ * an upper bound: "at most this many are only here". It cannot miss one that
+ * really is unpushed, which is the direction that would matter.
+ */
+export interface LocalOnlyState {
+  /** Commits on this branch that no remote-tracking ref contains. Null = could not tell. */
+  commits: number | null
+  branch: string | null
+  /** When the remote refs were last refreshed, ms. Null when unknown. */
+  fetchedAt: number | null
+  /** One line for a human, or null when there is nothing worth saying. */
+  detail: string | null
+}
+
+/** How stale the remote refs may be before the count needs a caveat. */
+const FETCH_CAVEAT_MS = 24 * 60 * 60 * 1000
+
+export function judgeLocalOnly(input: {
+  commits: number | null
+  branch: string | null
+  fetchedAt: number | null
+  now: number
+}): LocalOnlyState {
+  const { commits, branch, fetchedAt, now } = input
+  const base = { commits, branch, fetchedAt }
+
+  if (commits === null) {
+    // NOT silence, and NOT a comfortable default. The neighbouring git helpers
+    // in this codebase fall back to "main" on failure; here a guess would say
+    // "everything is pushed", which is the claim we do not have.
+    return {
+      ...base,
+      detail: 'Nem tudni, hogy a helyi commitok fent vannak-e barmelyik tavoli agon. '
+        + 'Ez NEM azt jelenti, hogy fent vannak.',
+    }
+  }
+
+  if (commits === 0) return { ...base, detail: null }
+
+  const where = branch ? ` a(z) ${branch} agon` : ''
+  const stale = fetchedAt === null || now - fetchedAt > FETCH_CAVEAT_MS
+    ? ' (a tavoli referenciak regen frissultek, tehat ez a szam felfele torzithat -- lefele nem)'
+    : ''
+  return {
+    ...base,
+    detail: `${commits} commit${where} EGYETLEN tavoli agon sincs fent${stale}. `
+      + 'Ujraepites ezen NEM segit: egy uj telepites vagy egy update.sh utani allapot '
+      + 'ezt a kodot egyaltalan nem tartalmazna.',
+  }
+}
+
+/** Ask git. Every failure answers "could not tell", never "all clear". */
+export function readLocalOnly(now: number = Date.now()): LocalOnlyState {
+  const git = (args: string[]): string | null => {
+    try {
+      return execFileSync('/usr/bin/git', args, {
+        cwd: PROJECT_ROOT, timeout: 5000, encoding: 'utf-8',
+      }).trim()
+    } catch {
+      return null
+    }
+  }
+
+  const branchRaw = git(['rev-parse', '--abbrev-ref', 'HEAD'])
+  const branch = branchRaw && branchRaw !== 'HEAD' ? branchRaw : null
+  const countRaw = git(['rev-list', '--count', 'HEAD', '--not', '--remotes'])
+  const parsed = countRaw === null ? NaN : Number.parseInt(countRaw, 10)
+
+  let fetchedAt: number | null = null
+  try {
+    fetchedAt = statSync(join(PROJECT_ROOT, '.git', 'FETCH_HEAD')).mtimeMs
+  } catch { /* never fetched, or not a work tree */ }
+
+  return judgeLocalOnly({
+    commits: Number.isFinite(parsed) ? parsed : null,
+    branch,
+    fetchedAt,
+    now,
+  })
+}
+
+/**
  * The newest mtime under a directory, the file that carries it, and every
  * mtime seen -- so "how many are newer than X" costs no second walk.
  */
@@ -182,8 +296,8 @@ export function getBuildFreshness(now: number = Date.now()): BuildFreshness {
       : null,
     startedAt: now - Math.round(process.uptime() * 1000),
   })
-  cached = { at: now, value }
-  return value
+  cached = { at: now, value: { ...value, localOnly: readLocalOnly(now) } }
+  return cached.value
 }
 
 /** Test seam: the cache must not carry one case's answer into the next. */

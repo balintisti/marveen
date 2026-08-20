@@ -11732,8 +11732,11 @@ const BUILD_HEAL_COMMAND = 'npm run build && launchctl kickstart -k gui/$(id -u)
 function buildStaleKey(build) {
   // Keyed on the FACTS, not on a flag: dismiss it now and it returns the
   // moment either side moves. A dismissal that outlives the situation would
-  // rebuild the silence this banner exists to break.
-  return `${build.status}|${build.builtAt || 0}|${build.sourceAt || 0}`
+  // rebuild the silence this banner exists to break. The unpushed count is
+  // part of the key for the same reason -- pushing is one of the ways the
+  // situation changes.
+  const local = build.localOnly ? build.localOnly.commits : ''
+  return `${build.status}|${build.builtAt || 0}|${build.sourceAt || 0}|${local}`
 }
 
 function buildStaleDismissed(build) {
@@ -11751,12 +11754,24 @@ function updateBuildFreshnessUI(build) {
     status: 'unknown',
     detail: 'A futo szerver nem kuld build-informaciot, tehat NEM tudni, hogy a forrasbol fut-e.',
   }
-  if (b.status === 'current') { banner.hidden = true; return }
+  // TWO QUESTIONS, TWO ANSWERS, ONE BANNER. "The running copy is old" and "this
+  // code is on no remote at all" are both ways for a fix to be missing, they
+  // can be true at once, and they need different remedies -- so the banner
+  // shows whichever apply rather than picking one.
+  const localLine = b.localOnly && b.localOnly.detail ? b.localOnly.detail : ''
+  if (b.status === 'current' && !localLine) { banner.hidden = true; return }
   if (buildStaleDismissed(b)) { banner.hidden = true; return }
   const textEl = document.getElementById('buildStaleBannerText')
   if (textEl) {
-    const cmd = b.status === 'unknown' ? '' : ` <code>${escapeHtml(BUILD_HEAL_COMMAND)}</code>`
-    textEl.innerHTML = `<strong>${escapeHtml(b.detail || '')}</strong>${cmd}`
+    const parts = []
+    if (b.status !== 'current') {
+      const cmd = b.status === 'unknown' ? '' : ` <code>${escapeHtml(BUILD_HEAL_COMMAND)}</code>`
+      parts.push(`<strong>${escapeHtml(b.detail || '')}</strong>${cmd}`)
+    }
+    // No command offered for this one on purpose: pushing is a decision, not a
+    // repair, and a copy-paste `git push` here would make it look like one.
+    if (localLine) parts.push(`<strong>${escapeHtml(localLine)}</strong>`)
+    textEl.innerHTML = parts.join('<br>')
   }
   window._buildFreshness = b
   banner.hidden = false
