@@ -80,6 +80,21 @@ describe('decideIdleAlert -- spell bookkeeping', () => {
     expect(stillQuiet.decision).toEqual({ alert: false, reason: 'not-sustained' })
   })
 
+  // Didi's mutant: setting lastAlertAt to null inside clear() left every test green.
+  // With that mutant any productive tick forgets the window, and the guard could fire
+  // every 12 minutes at an agent who is simply slow to finish.
+  it('a busy tick does NOT forget the re-alert window', () => {
+    const fired = decideIdleAlert(base, { idleSinceMs: at(0), lastAlertAt: null }, TH, at(10))
+    expect(fired.decision.alert).toBe(true)
+
+    const worked = decideIdleAlert({ ...base, paneIdle: false }, fired.next, TH, at(12))
+    expect(worked.next.lastAlertAt).toBe(at(10))
+
+    const backIdle = decideIdleAlert(base, worked.next, TH, at(13))
+    const later = decideIdleAlert(base, backIdle.next, TH, at(25))
+    expect(later.decision).toEqual({ alert: false, reason: 'recently-alerted' })
+  })
+
   it('does not re-alert inside the re-alert window, and does again after it', () => {
     const fired = decideIdleAlert(base, { idleSinceMs: at(0), lastAlertAt: null }, TH, at(10))
     expect(fired.decision.alert).toBe(true)
@@ -89,6 +104,38 @@ describe('decideIdleAlert -- spell bookkeeping', () => {
 
     const again = decideIdleAlert(base, muted.next, TH, at(41))
     expect(again.decision.alert).toBe(true)
+  })
+})
+
+describe('decideIdleAlert -- an unreadable pane', () => {
+  // The failure Didi found in my own code: capture errors returned false, which reads
+  // as "busy", which silently switches the guard off for that agent. A blind guard that
+  // says nothing looks exactly like a healthy fleet -- the shape this guard exists to
+  // catch, turned on itself.
+  it('reports that it cannot tell, instead of assuming the agent is busy', () => {
+    const { decision } = decideIdleAlert({ ...base, paneIdle: null }, NO_IDLE_STATE, TH, at(0))
+    expect(decision).toEqual({ alert: true, reason: 'pane-unreadable' })
+  })
+
+  it('never reports it as idleness, because idleness was not measured', () => {
+    const { decision } = decideIdleAlert({ ...base, paneIdle: null }, NO_IDLE_STATE, TH, at(0))
+    expect(decision.reason).not.toBe('idle-with-work')
+  })
+
+  it('is rate-limited like every other rail', () => {
+    const first = decideIdleAlert({ ...base, paneIdle: null }, NO_IDLE_STATE, TH, at(0))
+    const second = decideIdleAlert({ ...base, paneIdle: null }, first.next, TH, at(5))
+    expect(second.decision).toEqual({ alert: false, reason: 'recently-alerted' })
+  })
+
+  it('a stopped agent is still not-running, not unreadable', () => {
+    const { decision } = decideIdleAlert(
+      { ...base, paneIdle: null, running: false },
+      NO_IDLE_STATE,
+      TH,
+      at(0),
+    )
+    expect(decision).toEqual({ alert: false, reason: 'not-running' })
   })
 })
 
@@ -106,7 +153,7 @@ describe('decideIdleAlert -- the undeclared agent', () => {
     expect(next.lastAlertAt).toBe(at(0))
   })
 
-  it('does not alert immediately, so a missing declaration is not a drumbeat', () => {
+  it('rate-limits the config-gap report, so it is not a drumbeat', () => {
     const first = decideIdleAlert({ ...base, ownWorkCount: null }, NO_IDLE_STATE, TH, at(0))
     const second = decideIdleAlert({ ...base, ownWorkCount: null }, first.next, TH, at(5))
     expect(second.decision).toEqual({ alert: false, reason: 'recently-alerted' })
@@ -154,12 +201,29 @@ describe('parseWorkCheck', () => {
 import { countDeclaredWork, type WorkCountCard } from '../idle-agent.js'
 
 type Row = WorkCountCard & { id: string }
-const card = (id: string, status: string, assignee: string | null, archived = false): Row => ({
+const card = (
+  id: string,
+  status: string,
+  assignee: string | null,
+  opts: { archived?: boolean; updatedAt?: number | null } = {},
+): Row => ({
   id,
   status,
   assignee,
-  archived_at: archived ? 1 : null,
+  archived_at: opts.archived ? 1 : null,
+  updated_at: opts.updatedAt === undefined ? 100 : opts.updatedAt,
 })
+
+/** card id -> (author -> timestamp of their last comment) */
+const commentsAt = (rows: [string, string, number][]): Map<string, Map<string, number>> => {
+  const m = new Map<string, Map<string, number>>()
+  for (const [cardId, author, at] of rows) {
+    let inner = m.get(cardId)
+    if (!inner) { inner = new Map(); m.set(cardId, inner) }
+    inner.set(author, at)
+  }
+  return m
+}
 
 describe('countDeclaredWork', () => {
   const cards: Row[] = [
@@ -170,23 +234,52 @@ describe('countDeclaredWork', () => {
     card('e', 'planned', 'didi'),
     card('f', 'testing', 'didi'),
     card('g', 'testing', 'dexter'),
-    card('h', 'planned', 'dexter', true),
+    card('h', 'planned', 'dexter', { archived: true }),
+    card('w', 'waiting', 'dexter'),
   ]
-  const comments = new Map<string, Set<string>>([
-    ['c', new Set(['didi'])],
-    ['g', new Set(['dexter'])],
+  // didi reviewed 'c' at 150 (after its last activity at 100) -- covered.
+  // dexter commented on 'g' at 150, which must not count as didi's review.
+  const comments = commentsAt([
+    ['c', 'didi', 150],
+    ['g', 'dexter', 150],
   ])
 
-  it('assigned_open_cards skips done, archived, and testing', () => {
-    // testing is excluded on purpose: that card is with the reviewer, not the assignee.
-    // Counting it would leave a worker permanently "with work" and nag them forever.
+  it('assigned_open_cards skips done, archived, testing AND waiting', () => {
+    // testing: the card is with the reviewer. waiting: it is blocked on someone else.
+    // Counting either would nag a worker who is correctly not acting.
     expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', cards, comments)).toBe(2)
   })
 
+  it('a queue made only of waiting cards is not work', () => {
+    // The AgroTech case again: silence is the correct behaviour here.
+    const onlyWaiting: Row[] = [card('w1', 'waiting', 'dexter'), card('w2', 'waiting', 'dexter')]
+    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', onlyWaiting, new Map())).toBe(0)
+  })
+
   it('testing_without_my_comment is the reviewer queue, not the testing column', () => {
-    // didi already reviewed 'c'; 'f' and 'g' still need her. 'g' has a dexter comment,
-    // which must NOT count as hers -- otherwise an author could clear their own queue.
+    // 'f' has no comment at all; 'g' has one from dexter, which is not didi's review.
     expect(countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', cards, comments)).toBe(2)
+  })
+
+  // The defect Didi measured: asking "did I ever comment" retires a card permanently,
+  // so the guard falls silent exactly when the reviewer has caught up. On the live board
+  // that was 28 cards with activity after her comment.
+  it('a card that moved AFTER my comment is back in my queue', () => {
+    const rows: Row[] = [card('x', 'testing', 'dexter', { updatedAt: 200 })]
+    const reviewedEarlier = commentsAt([['x', 'didi', 150]])
+    expect(countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', rows, reviewedEarlier)).toBe(1)
+  })
+
+  it('a card untouched since my comment stays out of my queue', () => {
+    const rows: Row[] = [card('x', 'testing', 'dexter', { updatedAt: 100 })]
+    const reviewedAfter = commentsAt([['x', 'didi', 150]])
+    expect(countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', rows, reviewedAfter)).toBe(0)
+  })
+
+  it('without a card timestamp it stays out -- we do not nag on a guess', () => {
+    const rows: Row[] = [card('x', 'testing', 'dexter', { updatedAt: null })]
+    const reviewed = commentsAt([['x', 'didi', 150]])
+    expect(countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', rows, reviewed)).toBe(0)
   })
 
   it('none is always zero, whatever the board looks like', () => {
@@ -195,7 +288,7 @@ describe('countDeclaredWork', () => {
   })
 
   it('archived cards never count', () => {
-    const onlyArchived: Row[] = [card('z', 'planned', 'dexter', true)]
+    const onlyArchived: Row[] = [card('z', 'planned', 'dexter', { archived: true })]
     expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', onlyArchived, new Map())).toBe(0)
   })
 })

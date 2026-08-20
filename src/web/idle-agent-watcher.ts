@@ -54,28 +54,41 @@ function readWorkCheckRaw(agent: string): string | null {
   }
 }
 
-function commentAuthorsByCard(): Map<string, Set<string>> {
+/** card id -> (author -> the time of that author's LATEST comment on the card).
+ *
+ *  The timestamp is the point: a reviewer's queue asks whether their review still
+ *  covers the card's current state, not whether one ever happened. Without the time
+ *  the first comment retires a card forever -- and the guard then falls silent exactly
+ *  when the reviewer has caught up. */
+function lastCommentAtByCard(): Map<string, Map<string, number>> {
   const rows = getDb()
-    .prepare('SELECT card_id, author FROM kanban_comments')
-    .all() as { card_id: string; author: string }[]
-  const map = new Map<string, Set<string>>()
+    .prepare('SELECT card_id, author, MAX(created_at) AS at FROM kanban_comments GROUP BY card_id, author')
+    .all() as { card_id: string; author: string; at: number }[]
+  const map = new Map<string, Map<string, number>>()
   for (const row of rows) {
-    let set = map.get(row.card_id)
-    if (!set) {
-      set = new Set()
-      map.set(row.card_id, set)
+    let inner = map.get(row.card_id)
+    if (!inner) {
+      inner = new Map()
+      map.set(row.card_id, inner)
     }
-    set.add(row.author)
+    inner.set(row.author, row.at)
   }
   return map
 }
 
-function paneIsIdle(agent: string): boolean {
+/** null = could not tell (no session, capture failed, unknown pane). NOT the same as
+ *  "busy". Folding an unreadable pane into "busy" silently switches the guard off for
+ *  that agent -- a failure that looks exactly like health, which is the one shape this
+ *  whole guard exists to avoid. Didi spotted it on my own code; the rule "not measured
+ *  is not passing" applies here too, and here it means: say so, do not assume. */
+function paneIsIdle(agent: string): boolean | null {
   const session = resolveAgentSession(agent)
-  if (!session) return false
+  if (!session) return null
   const pane = capturePane(session, readAgentRemoteHost(agent))
-  if (!pane) return false
-  return detectPaneState(pane) === 'idle'
+  if (!pane) return null
+  const state = detectPaneState(pane)
+  if (state === 'unknown') return null
+  return state === 'idle'
 }
 
 function tick(): void {
@@ -86,13 +99,13 @@ function tick(): void {
     // Loaded once per tick, not once per agent: the board is the same for everyone,
     // and re-reading it per agent turned a cheap tick into N table scans.
     const cards = listKanbanCards()
-    const authors = commentAuthorsByCard()
+    const comments = lastCommentAtByCard()
     const now = Date.now()
 
     for (const agent of agents) {
       const running = isAgentRunning(agent)
       const check = parseWorkCheck(readWorkCheckRaw(agent))
-      const ownWorkCount = check ? countDeclaredWork(check, agent, cards, authors) : null
+      const ownWorkCount = check ? countDeclaredWork(check, agent, cards, comments) : null
 
       const state = watchState.get(agent) ?? NO_IDLE_STATE
       const { decision, next } = decideIdleAlert(
@@ -112,6 +125,16 @@ function tick(): void {
       watchState.set(agent, next)
 
       if (!decision.alert) continue
+
+      if (decision.reason === 'pane-unreadable') {
+        sendAlert(
+          `[tetlen-or] A(z) "${agent}" panelje NEM OLVASHATO (nincs session, vagy a capture elszallt), ` +
+            `ezert nem tudom megmondani, dolgozik-e. Ez NEM azt jelenti, hogy dolgozik -- azt jelenti, ` +
+            `hogy az or VAK erre az agensre. Nezd meg a tmux session-jet.`,
+        )
+        logger.warn({ idleGuard: true, agent }, 'idle guard: pane unreadable, guard blind for this agent')
+        continue
+      }
 
       if (decision.reason === 'no-work-check-declared') {
         sendAlert(
@@ -145,6 +168,3 @@ export function startIdleAgentWatcher(): NodeJS.Timeout {
   return setInterval(() => { tick() }, INTERVAL_MS)
 }
 
-export function _resetIdleStateForTest(): void {
-  watchState.clear()
-}

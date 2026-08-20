@@ -51,8 +51,11 @@ export interface IdleAgentState {
 
 export interface IdleAgentInput {
   agent: string
-  /** detectPaneState says the pane is idle (prompt waiting, no spinner). */
-  paneIdle: boolean
+  /** detectPaneState says the pane is idle (prompt waiting, no spinner).
+   *  `null` = could not tell (no session, capture failed, unknown pane). Deliberately
+   *  NOT folded into `false`: an unreadable pane is not evidence of work, and treating
+   *  it as such silently switches the guard off for that agent. */
+  paneIdle: boolean | null
   /** Undelivered inbound messages. If the agent is waiting on the router, that is the
    *  router's problem, not idleness -- alerting here would blame the wrong component. */
   pendingMessages: number
@@ -67,6 +70,7 @@ export type IdleDecision =
   | { alert: false; reason: 'not-running' | 'busy' | 'waiting-on-router' | 'no-work' | 'not-sustained' | 'recently-alerted' }
   | { alert: true; reason: 'idle-with-work'; workCount: number; idleForMs: number }
   | { alert: true; reason: 'no-work-check-declared' }
+  | { alert: true; reason: 'pane-unreadable' }
 
 export const NO_IDLE_STATE: IdleAgentState = { idleSinceMs: null, lastAlertAt: null }
 
@@ -87,6 +91,20 @@ export function decideIdleAlert(
   })
 
   if (!input.running) return clear('not-running')
+
+  // An unreadable pane is NOT "busy". Reported on its own rail, rate-limited like the
+  // undeclared case: a pane we cannot read means the guard is blind for that agent, and
+  // a blind guard that says nothing is indistinguishable from a healthy fleet.
+  if (input.paneIdle === null) {
+    if (state.lastAlertAt !== null && now - state.lastAlertAt < thresholds.realertMs) {
+      return clear('recently-alerted')
+    }
+    return {
+      decision: { alert: true, reason: 'pane-unreadable' },
+      next: { idleSinceMs: null, lastAlertAt: now },
+    }
+  }
+
   if (!input.paneIdle) return clear('busy')
   if (input.pendingMessages > 0) return clear('waiting-on-router')
 
@@ -149,6 +167,9 @@ export interface WorkCountCard {
   status: string
   assignee: string | null
   archived_at?: number | null
+  /** Last time anything happened on the card. Used to decide whether a reviewer's
+   *  earlier comment still covers the card's current state. */
+  updated_at?: number | null
 }
 
 /**
@@ -162,7 +183,7 @@ export function countDeclaredWork(
   check: WorkCheck,
   agent: string,
   cards: (WorkCountCard & { id: string })[],
-  commentAuthorsByCard: Map<string, Set<string>>,
+  lastCommentAtByCard: Map<string, Map<string, number>>,
 ): number {
   const live = cards.filter((c) => !c.archived_at)
   switch (check.kind) {
@@ -172,14 +193,40 @@ export function countDeclaredWork(
       // 'testing' is NOT open work for the assignee: the card is with the reviewer.
       // Counting it would keep a worker permanently "having work" and make the guard
       // fire forever at someone who is correctly waiting.
+      //
+      // 'waiting' is excluded for the same reason, one step further out: on this board
+      // it means blocked on someone else's decision. An agent whose whole queue is
+      // 'waiting' is behaving correctly by doing nothing, and nagging them every half
+      // hour is the AgroTech false alarm wearing a different hat. (Didi measured the
+      // gap: adding this filter left all tests green, so the decision had never
+      // actually been made -- 'testing' got a paragraph of reasoning and 'waiting'
+      // got nothing.)
       return live.filter(
-        (c) => c.assignee === agent && c.status !== 'done' && c.status !== 'testing',
+        (c) =>
+          c.assignee === agent &&
+          c.status !== 'done' &&
+          c.status !== 'testing' &&
+          c.status !== 'waiting',
       ).length
     case 'testing_without_my_comment':
-      // The reviewer's real queue. "In testing" alone is not it -- a card stays there
-      // after the review, so the review itself has to be the thing that removes it.
-      return live.filter(
-        (c) => c.status === 'testing' && !(commentAuthorsByCard.get(c.id)?.has(agent) ?? false),
-      ).length
+      // The reviewer's real queue -- and the question is whether the review covers the
+      // card's CURRENT state, not whether one was ever done.
+      //
+      // The first version asked "have I ever commented", which permanently retired a
+      // card on the reviewer's first comment. Didi measured what that costs on the live
+      // board: 70 cards in testing, 61 already commented, and 28 of those had activity
+      // AFTER her comment -- cards that came back from a fix. So the moment she cleared
+      // her nine, the count would hit zero and the guard would fall silent forever,
+      // with 28 cards waiting for a second look. It would switch off exactly when the
+      // reviewer had caught up, which is precisely when it is needed.
+      return live.filter((c) => {
+        if (c.status !== 'testing') return false
+        const mine = lastCommentAtByCard.get(c.id)?.get(agent)
+        if (mine === undefined) return true
+        // No timestamp on the card means we cannot show the comment is stale; leave it
+        // out rather than nag on a guess.
+        if (c.updated_at == null) return false
+        return c.updated_at > mine
+      }).length
   }
 }
