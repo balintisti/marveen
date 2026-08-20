@@ -13,6 +13,10 @@
 #   large / multi-line content may come from STDIN when the 3rd arg is "-":
 #     echo "<long text>" | bash scripts/agent-msg.sh <from> <to> -
 # Output: success -> "OK id=<n> queue=<depth> (~<n> perc)"; failure -> "FAIL <reason>"
+# When the recipient is not running -- or could not be asked -- the server also
+# returns a line saying so, and it is printed on stderr (card bbb8557c). The
+# depth alone cannot say it: "4 waiting" reads as a backlog whether or not
+# anybody is there to drain it.
 #         + a line in store/agent-msg-failures.log, exit 1.
 # The queue fields come from the POST response (2026-08-20): a message is accepted
 # instantly but only DELIVERED into an idle gap in the recipient's pane, which on a
@@ -55,12 +59,17 @@ try:
   # NULL delay means "no delivery history yet", which is NOT "instant" -- keep
   # the distinction visible instead of printing a misleading 0.
   mins = "" if delay is None else str(max(1, round(delay / 60)))
-  print("\t".join([str(d.get("id", "")), str(depth), mins]))
+  # The advice text is composed server-side so the threshold and the wording
+  # live in ONE place. Newlines become \x1f here and are restored on print:
+  # a multi-line field would shift every column after it.
+  advice = (q.get("advice") or "").replace("\n", "\x1f")
+  print("\t".join([str(d.get("id", "")), str(depth), mins, advice]))
 except Exception:
-  print("\t\t")' 2>/dev/null)"
+  print("\t\t\t")' 2>/dev/null)"
   ID="$(printf '%s' "$PARSED" | cut -f1)"
   DEPTH="$(printf '%s' "$PARSED" | cut -f2)"
   MINS="$(printf '%s' "$PARSED" | cut -f3)"
+  ADVICE="$(printf '%s' "$PARSED" | cut -f4)"
   if { [ "$CODE" = "200" ] || [ "$CODE" = "201" ]; } && [ -n "$ID" ]; then
     # The "OK id=<n>" prefix is a contract -- callers and CLAUDE.md grep for it.
     # Anything new goes after it.
@@ -68,13 +77,17 @@ except Exception:
     [ -n "$DEPTH" ] && LINE="$LINE queue=$DEPTH"
     [ -n "$MINS" ] && LINE="$LINE (~${MINS} perc)"
     echo "$LINE"
-    # The fleet rule is "3+ pending -> write on the card instead". Printing the
-    # number is not enough: the sender has already sent by the time they read
-    # it, and the rule then depends on them remembering it for NEXT time. Say
-    # what to do, at the moment the evidence is in front of them.
-    if [ -n "$DEPTH" ] && [ "$DEPTH" -ge 3 ] 2>/dev/null; then
-      echo "FIGYELEM: $TO sorában $DEPTH üzenet vár${MINS:+, a mérés szerint ~${MINS} perc a késés}." >&2
-      echo "  A következőt NE üzenetben küldd -- írd a kártyára kommentként. Az üzenet tol, a kártya húzat." >&2
+    # Printing the number is not enough: the sender has already sent by the
+    # time they read it, and a rule they must REMEMBER for next time is not a
+    # rule. So the server says what to do, at the moment the evidence is in
+    # front of them -- and it says it only where it applies: a busy recipient
+    # and an absent one need opposite advice (card bbb8557c).
+    #
+    # The threshold and the wording used to live here as well as on the server.
+    # One rule written in two places drifts, and the copy nobody edits is the
+    # one that ends up lying, so this side now only prints what it is given.
+    if [ -n "$ADVICE" ]; then
+      printf '%s\n' "$ADVICE" | tr '\037' '\n' >&2
     fi
     exit 0
   fi
