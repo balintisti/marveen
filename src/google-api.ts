@@ -27,10 +27,24 @@ const SERVICE_ACCOUNT_PATH = join(homedir(), '.config', 'marveen', 'google-servi
 
 // One token covers both APIs: Google accepts a space-separated scope claim in
 // the JWT, so we do not need a token per API.
+//
+// READ and WRITE are deliberately SEPARATE tokens with different scopes. A
+// service account can mint any scope it likes without asking anyone, which is
+// exactly why the read path must not carry write rights: a bug in a read call
+// then cannot damage anything, no matter what it does.
+//
+// The write scope is `drive.file`, NOT `drive`: it covers only files this
+// application itself created, so it cannot touch the owner's existing
+// documents even by mistake. Editing a file the owner made would need the full
+// `drive` scope -- if that is ever genuinely required, it should be a
+// deliberate, separately reasoned change, not a widening slipped in here.
 const SERVICE_ACCOUNT_SCOPES = [
   'https://www.googleapis.com/auth/calendar.readonly',
   'https://www.googleapis.com/auth/drive.readonly',
 ].join(' ')
+
+/** Write scope: only files this application created. See the note above. */
+const SERVICE_ACCOUNT_WRITE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
 
 interface TokenData {
   access_token: string
@@ -183,15 +197,18 @@ export function buildServiceAccountJwt(
 }
 
 // Access tokens live an hour; cache until 5 minutes before expiry so a burst
-// of calls costs one token exchange, not one per call.
-let cachedSaToken: { token: string; expiresAtMs: number } | null = null
+// of calls costs one token exchange, not one per call. Keyed BY SCOPE: a single
+// cache would hand a read caller whichever token happened to be minted last,
+// which is the one way the read/write split above could quietly stop holding.
+const cachedSaTokens = new Map<string, { token: string; expiresAtMs: number }>()
 
-async function getServiceAccountAccessToken(forceNew = false): Promise<string> {
-  if (!forceNew && cachedSaToken && Date.now() < cachedSaToken.expiresAtMs - 5 * 60 * 1000) {
-    return cachedSaToken.token
+async function getServiceAccountAccessToken(forceNew = false, scopes = SERVICE_ACCOUNT_SCOPES): Promise<string> {
+  const cached = cachedSaTokens.get(scopes)
+  if (!forceNew && cached && Date.now() < cached.expiresAtMs - 5 * 60 * 1000) {
+    return cached.token
   }
   const sa = loadServiceAccount()
-  const assertion = buildServiceAccountJwt(sa, SERVICE_ACCOUNT_SCOPES, Date.now())
+  const assertion = buildServiceAccountJwt(sa, scopes, Date.now())
   const params = new URLSearchParams({
     grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
     assertion,
@@ -204,24 +221,28 @@ async function getServiceAccountAccessToken(forceNew = false): Promise<string> {
   if (status !== 200) {
     // Do NOT keep a stale token around after a failed exchange -- a revoked
     // key must surface as an error, not as a silently reused old token.
-    cachedSaToken = null
+    cachedSaTokens.delete(scopes)
     logger.error({ status, body: data }, 'Google service-account token exchange failed')
     throw new Error(`Service-account token exchange failed: ${status}`)
   }
   const parsed = JSON.parse(data) as { access_token: string; expires_in: number }
-  cachedSaToken = {
+  const entry = {
     token: parsed.access_token,
     expiresAtMs: Date.now() + parsed.expires_in * 1000,
   }
-  logger.info('Google service-account access token issued')
-  return cachedSaToken.token
+  cachedSaTokens.set(scopes, entry)
+  logger.info({ write: scopes === SERVICE_ACCOUNT_WRITE_SCOPE }, 'Google service-account access token issued')
+  return entry.token
 }
 
 function httpsRequest(
   url: string,
   options: https.RequestOptions,
   body?: string,
-  timeoutMs = TOOL_TIMEOUTS['google-calendar'],
+  // Explicitly `number`, not inferred from the default: TS would otherwise
+  // narrow the parameter to the literal 5000 and reject every other timeout,
+  // which is what happened the first time a Drive call needed a longer one.
+  timeoutMs: number = TOOL_TIMEOUTS['google-calendar'],
 ): Promise<{ status: number; data: string }> {
   return new Promise((resolve, reject) => {
     const req = https.request(url, options, (res) => {
@@ -458,13 +479,13 @@ export async function listDriveFiles(query?: string, pageSize = 50): Promise<Dri
   const { status, data } = await httpsRequest(url, {
     method: 'GET',
     headers: { Authorization: `Bearer ${token}` },
-  })
+  }, undefined, TOOL_TIMEOUTS['google-drive'])
   if (status === 401) {
     const newToken = await forceNewAccessToken()
     const retry = await httpsRequest(url, {
       method: 'GET',
       headers: { Authorization: `Bearer ${newToken}` },
-    })
+    }, undefined, TOOL_TIMEOUTS['google-drive'])
     if (retry.status !== 200) {
       logger.error({ status: retry.status, body: retry.data }, 'Google Drive list error after refresh')
       return []
@@ -503,13 +524,13 @@ export async function readDriveFileText(fileId: string, mimeType?: string): Prom
   const { status, data } = await httpsRequest(url, {
     method: 'GET',
     headers: { Authorization: `Bearer ${token}` },
-  })
+  }, undefined, TOOL_TIMEOUTS['google-drive'])
   if (status === 401) {
     const newToken = await forceNewAccessToken()
     const retry = await httpsRequest(url, {
       method: 'GET',
       headers: { Authorization: `Bearer ${newToken}` },
-    })
+    }, undefined, TOOL_TIMEOUTS['google-drive'])
     if (retry.status !== 200) {
       logger.error({ status: retry.status, fileId }, 'Google Drive read error after refresh')
       return null
@@ -521,6 +542,71 @@ export async function readDriveFileText(fileId: string, mimeType?: string): Prom
     return null
   }
   return data
+}
+
+/**
+ * Create a NEW Google Doc from plain text and return its id.
+ *
+ * Deliberately a CREATE, not an update of something the owner wrote. The first
+ * time this ran, the task was "restructure my ideas document" -- and replacing
+ * that document wholesale would put the owner's own notes behind an undo he
+ * did not ask for. A new file next to the original is reversible by ignoring
+ * it, and the two can be compared side by side. Overwriting someone's
+ * document should be a separate, explicitly requested act.
+ *
+ * The narrow `drive.file` scope makes that a property of the credential rather
+ * than of my restraint: this token CANNOT touch a file it did not create.
+ *
+ * Returns null on failure (logged), so a caller mid-way through a longer job
+ * loses this step and not the job.
+ */
+export async function createDriveDoc(
+  name: string,
+  text: string,
+  parentFolderId?: string,
+): Promise<string | null> {
+  const token = await getServiceAccountAccessToken(false, SERVICE_ACCOUNT_WRITE_SCOPE)
+  const boundary = `marveen-${Date.now().toString(36)}`
+  const metadata: Record<string, unknown> = {
+    name,
+    // Uploading text/plain with this target type makes Drive convert it into a
+    // real Google Doc rather than storing a .txt the owner has to open in
+    // another app.
+    mimeType: 'application/vnd.google-apps.document',
+  }
+  if (parentFolderId) metadata.parents = [parentFolderId]
+
+  const body = [
+    `--${boundary}`,
+    'Content-Type: application/json; charset=UTF-8',
+    '',
+    JSON.stringify(metadata),
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=UTF-8',
+    '',
+    text,
+    `--${boundary}--`,
+    '',
+  ].join('\r\n')
+
+  const { status, data } = await httpsRequest(
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`,
+        'Content-Length': Buffer.byteLength(body).toString(),
+      },
+    },
+    body,
+    TOOL_TIMEOUTS['google-drive'],
+  )
+  if (status !== 200 && status !== 201) {
+    logger.error({ status, body: data.slice(0, 300) }, 'Google Drive create failed')
+    return null
+  }
+  return (JSON.parse(data) as { id?: string }).id ?? null
 }
 
 export type { CalendarEvent, CalendarSummary, DriveFile }
