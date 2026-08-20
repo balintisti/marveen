@@ -189,25 +189,42 @@ export function countDeclaredWork(
   switch (check.kind) {
     case 'none':
       return 0
-    case 'assigned_open_cards':
-      // 'testing' is NOT open work for the assignee: the card is with the reviewer.
-      // Counting it would keep a worker permanently "having work" and make the guard
-      // fire forever at someone who is correctly waiting.
+    case 'assigned_open_cards': {
+      // 'waiting' is excluded: on this board it means blocked on someone else's
+      // decision. An agent whose whole queue is 'waiting' is behaving correctly by
+      // doing nothing, and nagging them every half hour is the on-call false alarm
+      // wearing a different hat. (Didi measured the gap: adding this filter left every
+      // test green, so the decision had never actually been made -- 'testing' got a
+      // paragraph of reasoning and 'waiting' got nothing.)
       //
-      // 'waiting' is excluded for the same reason, one step further out: on this board
-      // it means blocked on someone else's decision. An agent whose whole queue is
-      // 'waiting' is behaving correctly by doing nothing, and nagging them every half
-      // hour is the AgroTech false alarm wearing a different hat. (Didi measured the
-      // gap: adding this filter left all tests green, so the decision had never
-      // actually been made -- 'testing' got a paragraph of reasoning and 'waiting'
-      // got nothing.)
-      return live.filter(
-        (c) =>
-          c.assignee === agent &&
-          c.status !== 'done' &&
-          c.status !== 'testing' &&
-          c.status !== 'waiting',
-      ).length
+      // 'testing' is excluded ONLY while the ball is with the reviewer -- and that is
+      // the half the first version got wrong. Didi measured where the other half went:
+      // of 70 cards in testing, 34 had her comment as the LAST word. There the finding
+      // is written and the ball is back with the assignee, but the card stays in
+      // testing (nobody moves it back, and nobody should -- it is still under review).
+      // Those 34 fell out of HER queue because she had commented, and out of HIS
+      // because testing was excluded wholesale. 63 of 70 cards sat in no counted queue
+      // at all; the guard could see 7.
+      //
+      // The two rules were meant to be complementary and instead left a gap between
+      // them, because 'testing' means two things at once -- "awaiting review" and
+      // "awaiting fix" -- and the status cannot say which. The last comment can:
+      // if someone else spoke last, the assignee owes an answer.
+      const isMine = (c: WorkCountCard) => c.assignee === agent
+      const open = live.filter((c) => isMine(c) && c.status !== 'done' && c.status !== 'waiting')
+      return open.filter((c) => {
+        if (c.status !== 'testing') return true
+        const authors = lastCommentAtByCard.get(c.id)
+        if (!authors || authors.size === 0) return false
+        let latestAuthor: string | null = null
+        let latestAt = -Infinity
+        for (const [author, at] of authors) {
+          if (at > latestAt) { latestAt = at; latestAuthor = author }
+        }
+        // Someone else had the last word -> an unanswered finding is waiting on me.
+        return latestAuthor !== null && latestAuthor !== agent
+      }).length
+    }
     case 'testing_without_my_comment':
       // The reviewer's real queue -- and the question is whether the review covers the
       // card's CURRENT state, not whether one was ever done.

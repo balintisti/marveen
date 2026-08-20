@@ -244,10 +244,53 @@ describe('countDeclaredWork', () => {
     ['g', 'dexter', 150],
   ])
 
-  it('assigned_open_cards skips done, archived, testing AND waiting', () => {
-    // testing: the card is with the reviewer. waiting: it is blocked on someone else.
-    // Counting either would nag a worker who is correctly not acting.
-    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', cards, comments)).toBe(2)
+  it('assigned_open_cards skips done, archived and waiting, and testing only while it awaits review', () => {
+    // 'a' and 'b' are plain open work. 'c' is in testing with didi's comment as the
+    // last word -- an unanswered finding, so it counts as dexter's. 'g' is in testing
+    // with only dexter's own comment, so the ball is still with the reviewer.
+    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', cards, comments)).toBe(3)
+  })
+
+  // The gap Didi measured between the two rules: a card in testing whose last comment
+  // is the reviewer's finding is waiting on the ASSIGNEE, but it used to fall out of
+  // both queues -- hers because she had commented, his because testing was excluded
+  // wholesale. 34 of 70 cards were in that state; 63 of 70 were in no queue at all.
+  it('a testing card whose last word came from someone else IS my work', () => {
+    const rows: Row[] = [card('t', 'testing', 'dexter')]
+    const reviewerSpokeLast = commentsAt([['t', 'didi', 200]])
+    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, reviewerSpokeLast)).toBe(1)
+  })
+
+  it('a testing card where I answered last is NOT my work -- the ball is back with the reviewer', () => {
+    const rows: Row[] = [card('t', 'testing', 'dexter')]
+    const iAnsweredLast = commentsAt([['t', 'didi', 200], ['t', 'dexter', 300]])
+    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, iAnsweredLast)).toBe(0)
+  })
+
+  it('a testing card nobody has commented on is NOT my work -- it awaits review', () => {
+    const rows: Row[] = [card('t', 'testing', 'dexter')]
+    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, new Map())).toBe(0)
+  })
+
+  it('every testing card lands in exactly one queue, never zero', () => {
+    // The invariant the two rules were supposed to have and did not.
+    // updated_at tracks the last activity, as it does on the real board -- an earlier
+    // fixture set it out of step with the comments and put one card in both queues,
+    // which is exactly the ambiguity this invariant is meant to rule out.
+    const rows: Row[] = [
+      card('n', 'testing', 'dexter', { updatedAt: 100 }),   // no comments -> reviewer's
+      card('r', 'testing', 'dexter', { updatedAt: 200 }),   // reviewer spoke last -> assignee's
+      card('a', 'testing', 'dexter', { updatedAt: 250 }),   // assignee answered last -> reviewer's
+    ]
+    const cmts = commentsAt([
+      ['r', 'didi', 200],
+      ['a', 'didi', 200], ['a', 'dexter', 250],
+    ])
+    const mine = countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, cmts)
+    const hers = countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', rows, cmts)
+    expect(mine).toBe(1)
+    expect(hers).toBe(2)
+    expect(mine + hers).toBe(rows.length)
   })
 
   it('a queue made only of waiting cards is not work', () => {
