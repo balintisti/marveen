@@ -71,8 +71,22 @@ describe('buildGateMsg brands the email-gate deny message', () => {
       'Email-kuldes sub-agentkent tiltott (governance hard-gate). ' +
         'Kuldd a tervezett emailt (CIMZETT + TARGY + TELJES SZOVEG) Marveennek inter-agent uzenetben ' +
         'jovahagyasra; a kimeno emailt Marveen kuldi. Csak VERIFIKALT cimre (soha nem nevbol talalt cim). ' +
-        'Soha ne irj ala Szabolcs nevevel, es soha ne kerj penzt senki neveben.',
+        'Soha ne irj ala Szabolcs nevevel, es soha ne kerj penzt senki neveben. ' +
+        'Ha NEM kuldeni akartal (forras-kereses, jelentes- vagy komment-iras): a Grep, a Read, ' +
+        'a Glob es a fajliro eszkozok NINCSENEK kapuzva (a kapu matchere: Bash|send_email). ' +
+        'Hasznald azokat a hej-parancs helyett -- nem kerulout, hanem a helyes eszkoz.',
     )
+  })
+
+  // Card 92e3c22f: the refusal must name the un-gated path. Four command blocks
+  // were lost to this gate during a source search + card write; the matcher is
+  // `Bash|send_email`, so Grep/Read/Glob/Write were available the whole time.
+  // A gate that refuses without saying where to go costs minutes on every fire.
+  it('names the un-gated alternative, so a refusal is actionable', () => {
+    const msg = buildGateMsg('Marveen', 'Szabolcs')
+    expect(msg).toContain('Bash|send_email')
+    expect(msg).toContain('Grep')
+    expect(msg).toMatch(/NINCSENEK kapuzva/)
   })
 
   it('substitutes a custom brand + owner and drops the stock names', () => {

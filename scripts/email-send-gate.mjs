@@ -74,7 +74,18 @@ export function buildGateMsg(botName, ownerName) {
     'Email-kuldes sub-agentkent tiltott (governance hard-gate). ' +
     `Kuldd a tervezett emailt (CIMZETT + TARGY + TELJES SZOVEG) ${botName}nek inter-agent uzenetben ` +
     `jovahagyasra; a kimeno emailt ${botName} kuldi. Csak VERIFIKALT cimre (soha nem nevbol talalt cim). ` +
-    `Soha ne irj ala ${ownerName} nevevel, es soha ne kerj penzt senki neveben.`
+    `Soha ne irj ala ${ownerName} nevevel, es soha ne kerj penzt senki neveben. ` +
+    // The gate's matcher is `Bash|send_email`, so Grep/Read/Glob/the file-writer
+    // are untouched by it. Measured 2026-08-21 (card 92e3c22f): an agent lost four
+    // command blocks to this gate while doing a SOURCE SEARCH and writing a card
+    // comment -- never a send. It found the un-gated path on its own, after the
+    // fact. The patterns stay strict on purpose (see the card: the obvious
+    // narrowing was refuted by its own negative control), so the fix belongs
+    // here, in what the refusal TELLS you: a gate that blocks without naming the
+    // legitimate path spends someone's minutes every single time it fires.
+    'Ha NEM kuldeni akartal (forras-kereses, jelentes- vagy komment-iras): a Grep, a Read, ' +
+    'a Glob es a fajliro eszkozok NINCSENEK kapuzva (a kapu matchere: Bash|send_email). ' +
+    'Hasznald azokat a hej-parancs helyett -- nem kerulout, hanem a helyes eszkoz.'
   )
 }
 
