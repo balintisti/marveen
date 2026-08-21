@@ -36,6 +36,46 @@ TOKEN="$(cat "$TOKEN_FILE")"
 
 BODY="$(FROM="$FROM" TO="$TO" C="$C" python3 -c 'import json,os; print(json.dumps({"from":os.environ["FROM"],"to":os.environ["TO"],"content":os.environ["C"]}))')"
 
+# --- PREFLIGHT: the recipient's queue BEFORE we add to it (2026-08-21) ---
+# The post-send warning below is real but arrives too late: by the time the
+# sender reads it the message is already in the queue, so the rule depends on
+# them remembering it NEXT time. Measured that day: mandark had 4 pending
+# messages, ALL mine, sent within 40 minutes -- each individually justified,
+# and the sum is what saturates. So the check moved BEFORE the send.
+#
+# Read straight from SQLite, not from the POST response: the running dashboard
+# is an older build that does not return the `queue` field at all, so the
+# server-side depth silently never arrives. A guard that depends on a field the
+# server may not send is not a guard.
+#
+# status='pending' ONLY -- `!= 'delivered'` also counts `failed`, which never
+# delivers. That mistake made dexter's empty queue look like 9 waiting messages
+# for a whole morning, and the sender stayed silent for no reason.
+#
+# FAIL-OPEN on measurement error, and SAY SO: a broken probe must not block a
+# message. Override a real backlog with --force as the 4th argument.
+FORCE="${4:-}"
+if [ "$FORCE" != "--force" ]; then
+  DEPTH_PRE="$(BASE="$BASE" TO="$TO" python3 -c '
+import os, sqlite3, sys
+try:
+    c = sqlite3.connect("file:" + os.environ["BASE"] + "/store/claudeclaw.db?mode=ro", uri=True)
+    n = c.execute("select count(*) from agent_messages where to_agent=? and status=?",
+                  (os.environ["TO"], "pending")).fetchone()[0]
+    print(n)
+except Exception:
+    print("")' 2>/dev/null)"
+  if [ -z "$DEPTH_PRE" ]; then
+    echo "FIGYELEM: a sor melyseget NEM tudtam megmerni (adatbazis nem olvashato). Kuldok, de vakon." >&2
+  elif [ "$DEPTH_PRE" -ge 3 ] 2>/dev/null; then
+    echo "NEM KULDTEM. $TO soraban mar $DEPTH_PRE uzenet var, es a pending azt jelenti, hogy az" >&2
+    echo "  elozot EL SEM OLVASTA -- egy ujabb level nem gyorsitja, csak a telitest hozza kozelebb." >&2
+    echo "  Ird a kartyara kommentkent. Az uzenet tol, a kartya huzat." >&2
+    echo "  Ha tenyleg most kell mennie:  bash scripts/agent-msg.sh $FROM $TO \"...\" --force" >&2
+    exit 2
+  fi
+fi
+
 attempt=0; max=3; CODE=""; ID=""
 while [ "$attempt" -lt "$max" ]; do
   attempt=$((attempt+1))
