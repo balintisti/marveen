@@ -83,9 +83,10 @@ export function buildGateMsg(botName, ownerName) {
     // narrowing was refuted by its own negative control), so the fix belongs
     // here, in what the refusal TELLS you: a gate that blocks without naming the
     // legitimate path spends someone's minutes every single time it fires.
-    'Ha NEM kuldeni akartal (forras-kereses, jelentes- vagy komment-iras): a Grep, a Read, ' +
-    'a Glob es a fajliro eszkozok NINCSENEK kapuzva (a kapu matchere: Bash|send_email). ' +
-    'Hasznald azokat a hej-parancs helyett -- nem kerulout, hanem a helyes eszkoz.'
+    'Ha NEM kuldeni akartal (forras-kereses, jelentes- vagy komment-iras): a kapu matchere ' +
+    'Bash|send_email, tehat MINDEN NEM-BASH eszkoz kivul esik rajta -- a fajl-olvaso, a ' +
+    'tartalom-kereso es a fajliro, barmelyik is all a sessionodben. Azt hasznald a ' +
+    'hej-parancs helyett: nem kerulout, hanem a helyes eszkoz.'
   )
 }
 
