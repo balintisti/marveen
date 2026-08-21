@@ -38,6 +38,30 @@ describe('gateDecision', () => {
     expect(bash('tsx scripts/graph-mail.ts list --unread').deny).toBe(false)
   })
 
+  // Card 92e3c22f: the CRM's mail service file is `resend-email.service.ts`, and the
+  // vendor pattern matched the FILENAME. Two agents hit it on two different days --
+  // one could not read the file he was fixing, the other could not REPORT a security
+  // measurement (five refused attempts). Both directions are pinned here, because
+  // narrowing a gate is exactly where a silent hole gets opened.
+  it('still gates a real send through the vendor, in every shape', () => {
+    const bash = (command: string) => gateDecision('Bash', { command })
+    expect(bash('node -e "resend.emails.send({to:1})"').deny).toBe(true)
+    expect(bash('npx resend send --to a@b.c').deny).toBe(true)
+    expect(bash('curl -X POST https://api.resend.com/emails -d @b.json').deny).toBe(true)
+    expect(bash('python3 support-mail/send.py --to a@b.c').deny).toBe(true)
+  })
+
+  it('does NOT gate commands that merely NAME the mail service file', () => {
+    const bash = (command: string) => gateDecision('Bash', { command })
+    // reading it
+    expect(bash('wc -l src/common/services/resend-email.service.ts').deny).toBe(false)
+    expect(bash('grep -n sanitizeHeaderValue src/common/services/resend-email.service.ts').deny).toBe(false)
+    // and reporting about it -- the case that kept a finding out of the card
+    expect(
+      bash('curl -X POST localhost:3420/api/kanban/x/comments -d "a resend-email.service.ts 1833 sora"').deny,
+    ).toBe(false)
+  })
+
   it('allows ordinary Bash that does not send mail', () => {
     const bash = (command: string) => gateDecision('Bash', { command })
     expect(bash('git status').deny).toBe(false)

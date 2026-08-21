@@ -27,7 +27,18 @@ const SEND_PATTERNS = [
   /support-mail\/send\.py/i,
   /\bsend\.py\b/i,
   /api\.resend\.com/i,
-  /\bresend\b[^\n]*\b(email|send|message)\b/i,
+  // `resend` as a VENDOR CALL, not as part of a filename. Measured 2026-08-21 (twice,
+  // two agents, two days): the CRM's mail service file is called
+  // `resend-email.service.ts`, so ANY command naming that file -- `wc -l`, a grep, an
+  // `echo` of the token -- read as a send and was refused. It blocked Didi from
+  // REPORTING a security measurement for five attempts, and Dexter from reading the
+  // file he was hired to fix. A gate that also blocks the report about a finding keeps
+  // the knowledge in, and does it silently: a missing card comment and an unwritten one
+  // look the same. Card 92e3c22f.
+  // The negative lookahead excludes `resend-<word>` (a filename/identifier) while
+  // leaving `resend.emails.send(...)` and `npx resend send` gated -- both verified by
+  // the tests below.
+  /\bresend\b(?!-\w)[^\n]*\b(email|send|message)\b/i,
   /\bsendmail\b/i,
   /\bmsmtp\b/i,
   /\bswaks\b/i,
