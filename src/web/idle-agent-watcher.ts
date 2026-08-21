@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { logger } from '../logger.js'
+import { MAIN_AGENT_ID } from '../config.js'
 import { listAgentNames, agentDir, readAgentRemoteHost } from './agent-config.js'
 import { isAgentRunning, capturePane } from './agent-process.js'
 import { resolveAgentSession } from './channel-mcp-reconnect.js'
@@ -115,7 +116,9 @@ function tick(): void {
     for (const agent of agents) {
       const running = isAgentRunning(agent)
       const check = parseWorkCheck(readWorkCheckRaw(agent))
-      const ownWorkCount = check ? countDeclaredWork(check, agent, cards, comments) : null
+      // MAIN_AGENT_ID is passed so the coordinator's own comments are not mistaken for
+      // a reviewer's unanswered finding -- see selectDeclaredWork for the measurement.
+      const ownWorkCount = check ? countDeclaredWork(check, agent, cards, comments, MAIN_AGENT_ID) : null
 
       const state = watchState.get(agent) ?? NO_IDLE_STATE
       const { decision, next } = decideIdleAlert(
@@ -158,7 +161,7 @@ function tick(): void {
       }
 
       if (decision.reason === 'wake-agent') {
-        const items = selectDeclaredWork(check as WorkCheck, agent, cards, comments)
+        const items = selectDeclaredWork(check as WorkCheck, agent, cards, comments, MAIN_AGENT_ID)
         const minutes = Math.round(decision.idleForMs / 60_000)
         try {
           createAgentMessage('system', agent, buildWakeMessage(agent, minutes, decision.workCount, items))

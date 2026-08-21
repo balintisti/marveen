@@ -244,6 +244,13 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
   agent: string,
   cards: T[],
   lastCommentAtByCard: Map<string, Map<string, number>>,
+  /** The coordinator's id. Its comments are COORDINATION (acknowledgement, a decision,
+   *  a hand-off), not review -- and it comments on nearly every card, so counting its
+   *  last word as "an unanswered finding" permanently colonises the top of every
+   *  agent's queue. Measured 2026-08-22: of the six cards the wake put in front of
+   *  dexter, FOUR had marveen as the last commenter, all of them acknowledgements.
+   *  Omit it only where there is no coordinator to speak of. */
+  coordinator?: string,
 ): T[] {
   const live = cards.filter((c) => !c.archived_at)
   switch (check.kind) {
@@ -291,8 +298,10 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
         // Left as a known gap on card 52d94a9e; four cards today, all with the same
         // board-level anomaly behind them (a reviewer assigned cards she must review).
         //
-        // Someone else had the last word -> an unanswered finding is waiting on me.
-        return latestAuthor !== null && latestAuthor !== agent
+        // A REVIEWER had the last word -> an unanswered finding is waiting on me.
+        // "Someone else" was too wide: it swept in the coordinator, whose comment is
+        // the opposite signal -- it usually means the card is settled, not open.
+        return latestAuthor !== null && latestAuthor !== agent && latestAuthor !== coordinator
       })
     }
     case 'testing_without_my_comment':
@@ -329,8 +338,9 @@ export function countDeclaredWork(
   agent: string,
   cards: (WorkCountCard & { id: string })[],
   lastCommentAtByCard: Map<string, Map<string, number>>,
+  coordinator?: string,
 ): number {
-  return selectDeclaredWork(check, agent, cards, lastCommentAtByCard).length
+  return selectDeclaredWork(check, agent, cards, lastCommentAtByCard, coordinator).length
 }
 
 /** The wake an agent actually acts on.
@@ -339,7 +349,14 @@ export function countDeclaredWork(
  *  move anyone -- what moved Didi at 22:30 was six cards named in priority order, and
  *  she took the first one within two minutes. So the message names items, and it says
  *  WHY it arrived, because a session that cannot explain the gap in its own history
- *  will spend its first minutes investigating instead of working. */
+ *  will spend its first minutes investigating instead of working.
+ *
+ *  Measured again 2026-08-22, and this is why the ordering is not by priority alone:
+ *  Dexter counted his own board (167 planned, 46 testing) and found ALL SIX cards the
+ *  wake put in front of him were `testing` -- none of them work he could pick up. A
+ *  plain priority sort floats every high-priority review to the top, so the pickable
+ *  work never appears. The fix is not fewer items; it is ordering by what the reader
+ *  can ACT on, and saying on each line which kind it is. */
 export function buildWakeMessage(
   agent: string,
   minutes: number,
@@ -347,23 +364,44 @@ export function buildWakeMessage(
   items: { id: string; title?: string | null; priority?: string | null; status?: string }[],
 ): string {
   const rank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 }
-  const top = [...items]
-    .sort((a, b) => (rank[a.priority ?? 'normal'] ?? 2) - (rank[b.priority ?? 'normal'] ?? 2))
-    .slice(0, 6)
-  const lines = top.map(
-    (c) => `  ${c.id.slice(0, 8)}  ${(c.priority ?? 'normal').padEnd(6)}  ${(c.title ?? '').slice(0, 68)}`,
-  )
-  return [
+  // Pickable first. Within each group, priority. A `testing` card is never something
+  // the assignee can start -- it is a review waiting for an answer.
+  const pickable = (c: { status?: string }) => c.status !== 'testing'
+  const byPriority = (a: { priority?: string | null }, b: { priority?: string | null }) =>
+    (rank[a.priority ?? 'normal'] ?? 2) - (rank[b.priority ?? 'normal'] ?? 2)
+  const work = [...items].filter(pickable).sort(byPriority)
+  const review = [...items].filter((c) => !pickable(c)).sort(byPriority)
+
+  const line = (c: { id: string; title?: string | null; priority?: string | null; status?: string }) =>
+    `  ${c.id.slice(0, 8)}  ${(c.status ?? '?').padEnd(11)} ${(c.priority ?? 'normal').padEnd(6)}  ${(c.title ?? '').slice(0, 60)}`
+
+  const out = [
     `[tetlen-or] ${minutes} perce allsz ureses prompton, es ${workCount} tetel var rád.`,
     '',
     'EZ NEM SZEMREHANYAS, ES NEM A TE HIBAD. Egy agens nem tud maganak uj fordulot inditani:',
     'a szandek a fordulo belsejeben el, es a fordulo vegen meghal vele. Az egyetlen dolog, ami',
     'uj fordulot indit, egy beerkezo uzenet -- ezert kapod ezt. Isti NEM lett ertesitve.',
     '',
-    lines.length ? 'A SORODBOL, PRIORITAS SZERINT:' : 'A szamlalod nem nulla, de tetelt nem tudtam megnevezni -- nezd meg a tablat.',
-    ...lines,
+  ]
+  if (work.length) {
+    out.push(`FELVEHETO MUNKA (${work.length}) -- ezekbe bele lehet kezdeni:`, ...work.slice(0, 5).map(line))
+  }
+  if (review.length) {
+    out.push(
+      '',
+      `VALASZRA VARO ELLENORZES (${review.length}) -- ezeken egy ellenorzo szolt utoljara, nem munka:`,
+      ...review.slice(0, 3).map(line),
+    )
+  }
+  if (!work.length && !review.length) {
+    out.push('A szamlalod nem nulla, de tetelt nem tudtam megnevezni -- nezd meg a tablat.')
+  }
+  out.push(
     '',
-    'Vedd fel a legfelsot, vagy ha egyik sem a tied, ird meg egy sorban, hogy miert -- akkor a',
-    'workcheck.json-od hazudik, es azt kell javitani, nem teged ebreszteni.',
-  ].join('\n')
+    work.length
+      ? 'Vedd fel a legfelso FELVEHETO tetelt. Ha egyik sem a tied, ird meg egy sorban, hogy miert --'
+      : 'Nincs felveheto munkad, csak valaszra varo ellenorzes. Ha ez sem a tied, ird meg egy sorban --',
+    'akkor a workcheck.json-od hazudik, es azt kell javitani, nem teged ebreszteni.',
+  )
+  return out.join('\n')
 }

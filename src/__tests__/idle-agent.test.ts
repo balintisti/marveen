@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import {
   decideIdleAlert,
   parseWorkCheck,
@@ -490,10 +491,42 @@ describe('buildWakeMessage', () => {
     expect(lines[2]).toContain('cccccccc')
   })
 
-  it('never dumps the whole board into a pane -- six is the cap', () => {
+  it('never dumps the whole board into a pane', () => {
     const many = Array.from({ length: 40 }, (_, i) => card(`id${i}`.padEnd(9, 'x'), 'normal', `t${i}`))
     const lines = buildWakeMessage('didi', 13, 40, many).split('\n').filter((l) => l.startsWith('  '))
-    expect(lines).toHaveLength(6)
+    // All 40 are `testing`, so they land in the review section, which is capped tighter
+    // than the work section: a reviewer's queue is not what the reader can act on.
+    expect(lines.length).toBeLessThanOrEqual(3)
+  })
+
+  // Measured 2026-08-22 on Dexter's own board: all six cards the wake put in front of
+  // him were `testing` -- reviews, not work. A plain priority sort does this every time,
+  // because reviews carry the high priorities. He could not see a single pickable card.
+  it('PUTS PICKABLE WORK FIRST, even when a review outranks it', () => {
+    const msg = buildWakeMessage('dexter', 13, 4, [
+      { ...card('rev11111', 'high', 'a review waiting for an answer'), status: 'testing' },
+      { ...card('rev22222', 'urgent', 'another review'), status: 'testing' },
+      { ...card('work1111', 'low', 'something I can actually start'), status: 'planned' },
+    ])
+    const lines = msg.split('\n').filter((l) => l.startsWith('  '))
+    expect(lines[0]).toContain('work1111')
+    expect(msg.indexOf('work1111')).toBeLessThan(msg.indexOf('rev22222'))
+  })
+
+  it('labels each line with its status, so a review cannot read as work', () => {
+    const msg = buildWakeMessage('dexter', 13, 2, [
+      { ...card('work1111', 'normal', 'w'), status: 'planned' },
+      { ...card('rev11111', 'normal', 'r'), status: 'testing' },
+    ])
+    expect(msg).toMatch(/FELVEHETO MUNKA \(1\)/)
+    expect(msg).toMatch(/VALASZRA VARO ELLENORZES \(1\)/)
+    expect(msg).toContain('planned')
+    expect(msg).toContain('testing')
+  })
+
+  it('says so plainly when there is nothing pickable, only reviews', () => {
+    const msg = buildWakeMessage('dexter', 13, 1, [{ ...card('rev11111', 'high', 'r'), status: 'testing' }])
+    expect(msg).toMatch(/Nincs felveheto munkad/)
   })
 
   it('says the count and the idle time, because the agent cannot see either', () => {
@@ -514,5 +547,78 @@ describe('buildWakeMessage', () => {
   it('tells the agent that no human was alerted, so it does not go looking', () => {
     const msg = buildWakeMessage('didi', 13, 48, [card('aaaaaaaa1', 'high', 'x')])
     expect(msg).toContain('Isti NEM lett ertesitve')
+  })
+})
+
+// The coordinator comments on nearly every card, and its comment means the opposite of a
+// reviewer's: usually "settled", not "answer me". Counting it as an unanswered finding
+// colonised the top of every queue -- measured on Dexter's board, four of six.
+describe('assigned_open_cards -- the coordinator is not a reviewer', () => {
+  const comments = (m: Record<string, Record<string, number>>) =>
+    new Map(Object.entries(m).map(([k, v]) => [k, new Map(Object.entries(v))]))
+
+  const testingCard = (id: string) => ({ id, status: 'testing', assignee: 'dexter', updated_at: 100 })
+
+  it('a testing card where the COORDINATOR spoke last is NOT the assignee’s work', () => {
+    const n = countDeclaredWork(
+      { kind: 'assigned_open_cards' },
+      'dexter',
+      [testingCard('c1')],
+      comments({ c1: { dexter: 1, marveen: 2 } }),
+      'marveen',
+    )
+    expect(n).toBe(0)
+  })
+
+  it('a testing card where a REVIEWER spoke last still IS -- the original case survives', () => {
+    const n = countDeclaredWork(
+      { kind: 'assigned_open_cards' },
+      'dexter',
+      [testingCard('c1')],
+      comments({ c1: { dexter: 1, didi: 2 } }),
+      'marveen',
+    )
+    expect(n).toBe(1)
+  })
+
+  // The guard against "fixing" this by dropping testing wholesale: Didi measured 34 of 70
+  // testing cards where her comment was the last word, and those are real work.
+  it('the coordinator speaking EARLIER does not disqualify a reviewer’s last word', () => {
+    const n = countDeclaredWork(
+      { kind: 'assigned_open_cards' },
+      'dexter',
+      [testingCard('c1')],
+      comments({ c1: { marveen: 1, didi: 5 } }),
+      'marveen',
+    )
+    expect(n).toBe(1)
+  })
+
+  it('planned cards are unaffected -- they are work whoever commented', () => {
+    const n = countDeclaredWork(
+      { kind: 'assigned_open_cards' },
+      'dexter',
+      [{ id: 'p1', status: 'planned', assignee: 'dexter', updated_at: 100 }],
+      comments({ p1: { marveen: 9 } }),
+      'marveen',
+    )
+    expect(n).toBe(1)
+  })
+})
+
+// The decision above is worthless if the watcher forgets to pass the coordinator: the
+// pure function would silently fall back to the old, wrong behaviour and every test
+// here would still be green. So the control reads the REAL source file, not a copy of
+// the call -- a fixture built from our own assumption cannot fail.
+describe('the watcher actually passes the coordinator id', () => {
+  it('both call sites hand MAIN_AGENT_ID to the work-selection', () => {
+    const src = readFileSync(
+      new URL('../web/idle-agent-watcher.ts', import.meta.url),
+      'utf8',
+    )
+    expect(src).toMatch(/countDeclaredWork\([^)]*MAIN_AGENT_ID\)/)
+    expect(src).toMatch(/selectDeclaredWork\([^)]*MAIN_AGENT_ID\)/)
+    // And that the id is imported, not a stray local that happens to share the name.
+    expect(src).toMatch(/import \{ MAIN_AGENT_ID \} from '\.\.\/config\.js'/)
   })
 })
