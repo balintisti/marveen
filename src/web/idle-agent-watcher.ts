@@ -6,14 +6,17 @@ import { isAgentRunning, capturePane } from './agent-process.js'
 import { resolveAgentSession } from './channel-mcp-reconnect.js'
 import { sendAlert } from './channel-monitor.js'
 import { detectPaneState } from '../pane-state.js'
-import { getPendingMessages, listKanbanCards, getDb } from '../db.js'
+import { getPendingMessages, listKanbanCards, getDb, createAgentMessage } from '../db.js'
 import {
   decideIdleAlert,
   parseWorkCheck,
   countDeclaredWork,
+  selectDeclaredWork,
+  buildWakeMessage,
   NO_IDLE_STATE,
   type IdleAgentState,
   type IdleAgentThresholds,
+  type WorkCheck,
 } from '../idle-agent.js'
 
 // The guard for the agent that HAS work and is not doing it.
@@ -39,6 +42,13 @@ const THRESHOLDS: IdleAgentThresholds = {
   sustainedMs: 12 * 60_000,
   // A genuinely parked agent is worth one reminder every half hour, not every tick.
   realertMs: 30 * 60_000,
+  // The router injects into an IDLE pane almost immediately, so a wake that is going to
+  // work has worked long before this. What this window really buys is the difference
+  // between "not yet" and "did not take" -- and only the second is worth a human.
+  wakeGraceMs: 15 * 60_000,
+  // Floor between two wakes of the same agent. An agent finishing short turns ends a
+  // spell every time it goes busy, so without this the wake would follow every turn.
+  wakeCooldownMs: 30 * 60_000,
 }
 
 const INITIAL_DELAY_MS = 90_000
@@ -147,15 +157,39 @@ function tick(): void {
         continue
       }
 
+      if (decision.reason === 'wake-agent') {
+        const items = selectDeclaredWork(check as WorkCheck, agent, cards, comments)
+        const minutes = Math.round(decision.idleForMs / 60_000)
+        try {
+          createAgentMessage('system', agent, buildWakeMessage(agent, minutes, decision.workCount, items))
+          logger.info(
+            { idleGuard: true, agent, workCount: decision.workCount, idleForMs: decision.idleForMs },
+            'idle guard: woke the agent (stage 1) -- no human told yet',
+          )
+        } catch (err) {
+          // A failed enqueue must not look like a successful wake: stage 2 would then
+          // wait out its grace window for a message that was never sent.
+          logger.warn({ err, agent }, 'idle guard: could not enqueue the wake message')
+          sendAlert(
+            `[tetlen-or] A(z) "${agent}" ${minutes} perce tetlen, ${decision.workCount} tetellel, ` +
+              `es az EBRESZTO UZENETET SEM SIKERULT betenni a soraba. Ez nem tetlenseg-kerdes tobbe, ` +
+              `hanem az uzenetsore. Nezd meg kezzel.`,
+          )
+        }
+        continue
+      }
+
       const minutes = Math.round(decision.idleForMs / 60_000)
       sendAlert(
-        `[tetlen-or] A(z) "${agent}" ${minutes} perce tetlen, kozben ${decision.workCount} tetel var rá. ` +
-          `A panelje egeszseges es nincs kezbesitetlen uzenete -- tehat nem elakadt, hanem all. ` +
-          `Adj neki munkat, vagy ha tenyleg nincs mit tennie, az a workcheck.json-jaban latszodjon.`,
+        `[tetlen-or] A(z) "${agent}" ${minutes} perce tetlen, ${decision.workCount} tetellel a soraban, ` +
+          `ES MAR FELEBRESZTETTEM -- az ebreszto uzenetet megkapta, megsem mozdult. Ezert szolok: ` +
+          `nem az a hir, hogy all valaki, hanem hogy egy ebresztes nem hatott. ` +
+          `Nezd meg a panelt (elakadt turn, telitett kontextus), vagy ha tenyleg nincs mit tennie, ` +
+          `az a workcheck.json-jaban latszodjon.`,
       )
       logger.warn(
         { idleGuard: true, agent, workCount: decision.workCount, idleForMs: decision.idleForMs },
-        'idle guard: agent is idle with work waiting',
+        'idle guard: agent still idle AFTER a wake (stage 2) -- human alerted',
       )
     }
   } catch (err) {

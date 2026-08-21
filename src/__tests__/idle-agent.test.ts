@@ -2,13 +2,19 @@ import { describe, it, expect } from 'vitest'
 import {
   decideIdleAlert,
   parseWorkCheck,
+  buildWakeMessage,
   NO_IDLE_STATE,
   type IdleAgentInput,
   type IdleAgentState,
   type IdleAgentThresholds,
 } from '../idle-agent.js'
 
-const TH: IdleAgentThresholds = { sustainedMs: 10 * 60_000, realertMs: 30 * 60_000 }
+const TH: IdleAgentThresholds = {
+  sustainedMs: 10 * 60_000,
+  realertMs: 30 * 60_000,
+  wakeGraceMs: 15 * 60_000,
+  wakeCooldownMs: 30 * 60_000,
+}
 
 const base: IdleAgentInput = {
   agent: 'didi',
@@ -49,7 +55,7 @@ describe('decideIdleAlert -- the four conditions, each on its own', () => {
     }
   })
 
-  it('idle WITH work alerts once the spell is sustained', () => {
+  it('idle WITH work acts once the spell is sustained -- by WAKING, not alerting', () => {
     const first = decideIdleAlert(base, NO_IDLE_STATE, TH, at(0))
     expect(first.decision).toEqual({ alert: false, reason: 'not-sustained' })
     expect(first.next.idleSinceMs).toBe(at(0))
@@ -60,11 +66,89 @@ describe('decideIdleAlert -- the four conditions, each on its own', () => {
     const fires = decideIdleAlert(base, tooSoon.next, TH, at(10))
     expect(fires.decision).toEqual({
       alert: true,
-      reason: 'idle-with-work',
+      reason: 'wake-agent',
       workCount: 66,
       idleForMs: at(10),
     })
-    expect(fires.next.lastAlertAt).toBe(at(10))
+    expect(fires.next.lastWakeAt).toBe(at(10))
+    // The half that matters: nobody has been told a human-facing thing yet.
+    expect(fires.next.lastAlertAt).toBeNull()
+  })
+})
+
+// The two stages exist because of a measured mechanism, not a preference: an agent
+// cannot start its own turn, so the party that can fix "idle with work" is the agent,
+// and the only thing that reaches it is a message. A human is worth interrupting only
+// for the case the message did NOT fix.
+describe('decideIdleAlert -- wake first, tell a human only if the wake fails', () => {
+  const spell = (lastWakeAt: number | null = null): IdleAgentState => ({
+    idleSinceMs: at(0),
+    lastAlertAt: null,
+    lastWakeAt,
+  })
+
+  it('WHEN THE WAKE WORKS, NO HUMAN IS EVER TOLD', () => {
+    const woke = decideIdleAlert(base, spell(), TH, at(10))
+    expect(woke.decision.reason).toBe('wake-agent')
+
+    // The agent picks the work up. That is what going busy MEANS here, and it is the
+    // entire "did the wake help" signal -- no extra bookkeeping decides it.
+    const busy = decideIdleAlert({ ...base, paneIdle: false }, woke.next, TH, at(12))
+    expect(busy.next.idleSinceMs).toBeNull()
+    expect(busy.next.lastAlertAt).toBeNull()
+  })
+
+  it('a wake still inside its grace window is not yet news', () => {
+    const woke = decideIdleAlert(base, spell(), TH, at(10))
+    const waiting = decideIdleAlert(base, woke.next, TH, at(20))
+    expect(waiting.decision).toEqual({ alert: false, reason: 'wake-pending' })
+    expect(waiting.next.lastAlertAt).toBeNull()
+  })
+
+  it('a wake that did NOT take escalates to a human after the grace window', () => {
+    const woke = decideIdleAlert(base, spell(), TH, at(10))
+    const escalates = decideIdleAlert(base, woke.next, TH, at(26))
+    expect(escalates.decision).toEqual({
+      alert: true,
+      reason: 'idle-with-work',
+      workCount: 66,
+      idleForMs: at(26),
+    })
+    expect(escalates.next.lastAlertAt).toBe(at(26))
+  })
+
+  // Without the cooldown this is a drumbeat, and the reason is subtle: going busy is
+  // exactly what ends a spell, so an agent finishing short turns starts a NEW spell
+  // every time it works -- and every new spell would earn a fresh wake.
+  it('does not wake again on every new spell -- the cooldown spans spells', () => {
+    const woke = decideIdleAlert(base, spell(), TH, at(10))
+    const busy = decideIdleAlert({ ...base, paneIdle: false }, woke.next, TH, at(12))
+    const backIdle = decideIdleAlert(base, busy.next, TH, at(13))
+
+    const cooling = decideIdleAlert(base, backIdle.next, TH, at(23))
+    expect(cooling.decision).toEqual({ alert: false, reason: 'wake-cooling-down' })
+
+    const allowed = decideIdleAlert(base, cooling.next, TH, at(45))
+    expect(allowed.decision.reason).toBe('wake-agent')
+  })
+
+  // Mutation guard for the exact line that makes the cooldown real. Drop lastWakeAt in
+  // clear() and every test above still passes, because each of them stays inside one
+  // spell -- this is the only one that crosses a busy tick.
+  it('a busy tick does NOT forget that the agent was already woken', () => {
+    const woke = decideIdleAlert(base, spell(), TH, at(10))
+    const busy = decideIdleAlert({ ...base, paneIdle: false }, woke.next, TH, at(12))
+    expect(busy.next.lastWakeAt).toBe(at(10))
+  })
+
+  // Same shape, different rail: these two branches rebuild the state object instead of
+  // spreading it, so they are where lastWakeAt is most likely to be dropped silently.
+  it('the unreadable-pane and undeclared rails preserve the wake record too', () => {
+    const blind = decideIdleAlert({ ...base, paneIdle: null }, spell(at(3)), TH, at(10))
+    expect(blind.next.lastWakeAt).toBe(at(3))
+
+    const undeclared = decideIdleAlert({ ...base, ownWorkCount: null }, spell(at(3)), TH, at(10))
+    expect(undeclared.next.lastWakeAt).toBe(at(3))
   })
 })
 
@@ -84,26 +168,34 @@ describe('decideIdleAlert -- spell bookkeeping', () => {
   // With that mutant any productive tick forgets the window, and the guard could fire
   // every 12 minutes at an agent who is simply slow to finish.
   it('a busy tick does NOT forget the re-alert window', () => {
-    const fired = decideIdleAlert(base, { idleSinceMs: at(0), lastAlertAt: null }, TH, at(10))
-    expect(fired.decision.alert).toBe(true)
+    // Starts with the wake already spent in this spell, so the tick under test is the
+    // stage-2 alert rather than the stage-1 wake.
+    const woken: IdleAgentState = { idleSinceMs: at(0), lastAlertAt: null, lastWakeAt: at(0) }
+    const fired = decideIdleAlert(base, woken, TH, at(16))
+    expect(fired.decision).toMatchObject({ alert: true, reason: 'idle-with-work' })
 
-    const worked = decideIdleAlert({ ...base, paneIdle: false }, fired.next, TH, at(12))
-    expect(worked.next.lastAlertAt).toBe(at(10))
+    const worked = decideIdleAlert({ ...base, paneIdle: false }, fired.next, TH, at(18))
+    expect(worked.next.lastAlertAt).toBe(at(16))
 
-    const backIdle = decideIdleAlert(base, worked.next, TH, at(13))
-    const later = decideIdleAlert(base, backIdle.next, TH, at(25))
-    expect(later.decision).toEqual({ alert: false, reason: 'recently-alerted' })
+    const backIdle = decideIdleAlert(base, worked.next, TH, at(19))
+    const later = decideIdleAlert(base, backIdle.next, TH, at(31))
+    // The guarantee is about the HUMAN, not about doing nothing: a new spell may well
+    // earn another wake (it does here, 31 minutes after the last one), and that is the
+    // guard working. What must not happen is a second alert inside the re-alert window.
+    expect(later.decision.reason).not.toBe('idle-with-work')
+    expect(later.next.lastAlertAt).toBe(at(16))
   })
 
   it('does not re-alert inside the re-alert window, and does again after it', () => {
-    const fired = decideIdleAlert(base, { idleSinceMs: at(0), lastAlertAt: null }, TH, at(10))
-    expect(fired.decision.alert).toBe(true)
+    const woken: IdleAgentState = { idleSinceMs: at(0), lastAlertAt: null, lastWakeAt: at(0) }
+    const fired = decideIdleAlert(base, woken, TH, at(16))
+    expect(fired.decision).toMatchObject({ alert: true, reason: 'idle-with-work' })
 
-    const muted = decideIdleAlert(base, fired.next, TH, at(20))
+    const muted = decideIdleAlert(base, fired.next, TH, at(30))
     expect(muted.decision).toEqual({ alert: false, reason: 'recently-alerted' })
 
-    const again = decideIdleAlert(base, muted.next, TH, at(41))
-    expect(again.decision.alert).toBe(true)
+    const again = decideIdleAlert(base, muted.next, TH, at(47))
+    expect(again.decision).toMatchObject({ alert: true, reason: 'idle-with-work' })
   })
 })
 
@@ -370,5 +462,57 @@ describe('countDeclaredWork', () => {
   it('archived cards never count', () => {
     const onlyArchived: Row[] = [card('z', 'planned', 'dexter', { archived: true })]
     expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', onlyArchived, new Map())).toBe(0)
+  })
+})
+
+// The wake is the ACTION this guard takes, so its text is not cosmetic: the measured
+// difference between a wake that moves an agent and one that does not is whether it
+// names concrete items. Testing it here (rather than in the watcher) is why it lives in
+// this module -- the watcher is I/O, and I/O is not where a decision belongs.
+describe('buildWakeMessage', () => {
+  const card = (id: string, priority: string, title: string) => ({
+    id,
+    priority,
+    title,
+    status: 'testing',
+    assignee: 'didi',
+  })
+
+  it('names items, most urgent first, so the agent has something to pick up', () => {
+    const msg = buildWakeMessage('didi', 13, 48, [
+      card('cccccccc1', 'low', 'a low one'),
+      card('aaaaaaaa1', 'urgent', 'the urgent one'),
+      card('bbbbbbbb1', 'normal', 'a normal one'),
+    ])
+    const lines = msg.split('\n').filter((l) => l.startsWith('  '))
+    expect(lines[0]).toContain('aaaaaaaa')
+    expect(lines[0]).toContain('the urgent one')
+    expect(lines[2]).toContain('cccccccc')
+  })
+
+  it('never dumps the whole board into a pane -- six is the cap', () => {
+    const many = Array.from({ length: 40 }, (_, i) => card(`id${i}`.padEnd(9, 'x'), 'normal', `t${i}`))
+    const lines = buildWakeMessage('didi', 13, 40, many).split('\n').filter((l) => l.startsWith('  '))
+    expect(lines).toHaveLength(6)
+  })
+
+  it('says the count and the idle time, because the agent cannot see either', () => {
+    const msg = buildWakeMessage('didi', 13, 48, [card('aaaaaaaa1', 'high', 'x')])
+    expect(msg).toContain('13')
+    expect(msg).toContain('48')
+  })
+
+  // The contradiction that would otherwise reach an agent as a silent lie: the guard
+  // fires on a count above zero, so an empty item list means the count and the list
+  // disagree. Saying so is the only honest option -- "you have 48 things" followed by
+  // nothing at all is exactly the shape this fleet keeps getting burned by.
+  it('when it can name nothing, it SAYS so instead of pretending', () => {
+    const msg = buildWakeMessage('didi', 13, 48, [])
+    expect(msg).toMatch(/nem tudtam megnevezni/)
+  })
+
+  it('tells the agent that no human was alerted, so it does not go looking', () => {
+    const msg = buildWakeMessage('didi', 13, 48, [card('aaaaaaaa1', 'high', 'x')])
+    expect(msg).toContain('Isti NEM lett ertesitve')
   })
 })

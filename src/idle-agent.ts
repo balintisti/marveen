@@ -35,18 +35,30 @@ export interface WorkCheck {
 }
 
 export interface IdleAgentThresholds {
-  /** How long the four conditions must hold together before alerting. Guards against
+  /** How long the four conditions must hold together before acting. Guards against
    *  the gap between two turns, which is idle-but-fine for a few seconds. */
   sustainedMs: number
   /** Minimum gap between two alerts for the same agent, so a genuinely stuck agent
    *  is reported once in a while rather than every tick. */
   realertMs: number
+  /** How long the wake is given to take effect before a human is told. If the agent
+   *  picks the work up, it goes busy and the spell ends on its own -- so this window
+   *  only ever elapses when the wake genuinely did not work. */
+  wakeGraceMs: number
+  /** Floor between two wakes of the same agent, across spells. Without it, an agent
+   *  that keeps finishing short turns would be woken every few minutes: each spell
+   *  looks new, because going busy is exactly what ends the previous one. */
+  wakeCooldownMs: number
 }
 
 export interface IdleAgentState {
   /** When the agent was first seen idle-with-work in the current spell; null = not in one. */
   idleSinceMs: number | null
   lastAlertAt: number | null
+  /** When this agent was last WOKEN (stage 1). Deliberately survives the spell reset:
+   *  it is the only thing that stops a wake-per-spell drumbeat, and a spell ends every
+   *  time the agent takes a turn. */
+  lastWakeAt: number | null
 }
 
 export interface IdleAgentInput {
@@ -67,12 +79,27 @@ export interface IdleAgentInput {
 }
 
 export type IdleDecision =
-  | { alert: false; reason: 'not-running' | 'busy' | 'waiting-on-router' | 'no-work' | 'not-sustained' | 'recently-alerted' }
+  | {
+      alert: false
+      reason:
+        | 'not-running' | 'busy' | 'waiting-on-router' | 'no-work' | 'not-sustained'
+        | 'recently-alerted'
+        // Woken already; the wake is still inside its grace window. Not a fault.
+        | 'wake-pending'
+        // Idle with work, but this agent was woken too recently to wake again.
+        | 'wake-cooling-down'
+    }
+  /** Stage 1: tell the AGENT, not a human. The agent is awake, its queue is empty and
+   *  the condition is about itself -- it is the only party that can both be reached and
+   *  act. A human woken at 22:49 can do nothing here that the agent cannot do faster. */
+  | { alert: true; reason: 'wake-agent'; workCount: number; idleForMs: number }
+  /** Stage 2: the wake did not take. NOW it is news, because "I woke it and it did not
+   *  move" is a fault, while "someone is idle" is not. */
   | { alert: true; reason: 'idle-with-work'; workCount: number; idleForMs: number }
   | { alert: true; reason: 'no-work-check-declared' }
   | { alert: true; reason: 'pane-unreadable' }
 
-export const NO_IDLE_STATE: IdleAgentState = { idleSinceMs: null, lastAlertAt: null }
+export const NO_IDLE_STATE: IdleAgentState = { idleSinceMs: null, lastAlertAt: null, lastWakeAt: null }
 
 /**
  * Pure decision. Returns the next state alongside the verdict so the caller owns
@@ -101,7 +128,7 @@ export function decideIdleAlert(
     }
     return {
       decision: { alert: true, reason: 'pane-unreadable' },
-      next: { idleSinceMs: null, lastAlertAt: now },
+      next: { ...state, idleSinceMs: null, lastAlertAt: now },
     }
   }
 
@@ -116,7 +143,7 @@ export function decideIdleAlert(
     }
     return {
       decision: { alert: true, reason: 'no-work-check-declared' },
-      next: { idleSinceMs: null, lastAlertAt: now },
+      next: { ...state, idleSinceMs: null, lastAlertAt: now },
     }
   }
 
@@ -128,12 +155,41 @@ export function decideIdleAlert(
   if (idleForMs < thresholds.sustainedMs) {
     return { decision: { alert: false, reason: 'not-sustained' }, next: { ...state, idleSinceMs } }
   }
+
+  // ---- stage 1: wake the agent -------------------------------------------------
+  //
+  // Measured 2026-08-21, and this is the whole reason the guard has two stages. Didi
+  // ended a turn with the words "azt veszem kovetkezonek" -- naming the next card --
+  // and then stood at an empty prompt for 13.5 minutes with 48 items waiting. Nothing
+  // was broken and no rule was disobeyed: AN AGENT CANNOT START ITS OWN TURN. The
+  // intention lives inside a turn and dies with it. The only thing that starts one is
+  // an inbound message, so the fix is not a louder alarm -- it is a message.
+  const lastWakeAt = state.lastWakeAt
+  // Written as an explicit null-or-older test rather than a `wokeThisSpell` boolean so
+  // the compiler can narrow lastWakeAt to a number below; a boolean flag would not.
+  if (lastWakeAt === null || lastWakeAt < idleSinceMs) {
+    if (lastWakeAt !== null && now - lastWakeAt < thresholds.wakeCooldownMs) {
+      return { decision: { alert: false, reason: 'wake-cooling-down' }, next: { ...state, idleSinceMs } }
+    }
+    return {
+      decision: { alert: true, reason: 'wake-agent', workCount: input.ownWorkCount, idleForMs },
+      next: { ...state, idleSinceMs, lastWakeAt: now },
+    }
+  }
+
+  // ---- stage 2: the wake did not take, so tell a human -------------------------
+  //
+  // No extra bookkeeping decides "did it help": if it helped, the agent went busy, the
+  // spell was cleared, and this line is never reached. Reaching it IS the evidence.
+  if (now - lastWakeAt < thresholds.wakeGraceMs) {
+    return { decision: { alert: false, reason: 'wake-pending' }, next: { ...state, idleSinceMs } }
+  }
   if (state.lastAlertAt !== null && now - state.lastAlertAt < thresholds.realertMs) {
     return { decision: { alert: false, reason: 'recently-alerted' }, next: { ...state, idleSinceMs } }
   }
   return {
     decision: { alert: true, reason: 'idle-with-work', workCount: input.ownWorkCount, idleForMs },
-    next: { idleSinceMs, lastAlertAt: now },
+    next: { ...state, idleSinceMs, lastAlertAt: now },
   }
 }
 
@@ -173,22 +229,26 @@ export interface WorkCountCard {
 }
 
 /**
- * Count the work a declared check refers to, from already-loaded rows. Kept pure and
+ * The work a declared check refers to, from already-loaded rows. Kept pure and
  * separate from the database so the counting rules are testable on fixtures -- the
  * rules are where the judgement lives, and the SQL is not.
  *
+ * Returns the ITEMS, not a count: the wake message has to name concrete cards. A wake
+ * that only says "you have work" is the one thing measured NOT to work -- what moved
+ * Didi at 22:30 was six cards named in priority order.
+ *
  * `commentAuthorsByCard` maps card id -> the set of authors who have commented.
  */
-export function countDeclaredWork(
+export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
   check: WorkCheck,
   agent: string,
-  cards: (WorkCountCard & { id: string })[],
+  cards: T[],
   lastCommentAtByCard: Map<string, Map<string, number>>,
-): number {
+): T[] {
   const live = cards.filter((c) => !c.archived_at)
   switch (check.kind) {
     case 'none':
-      return 0
+      return []
     case 'assigned_open_cards': {
       // 'waiting' is excluded: on this board it means blocked on someone else's
       // decision. An agent whose whole queue is 'waiting' is behaving correctly by
@@ -233,7 +293,7 @@ export function countDeclaredWork(
         //
         // Someone else had the last word -> an unanswered finding is waiting on me.
         return latestAuthor !== null && latestAuthor !== agent
-      }).length
+      })
     }
     case 'testing_without_my_comment':
       // The reviewer's real queue -- and the question is whether the review covers the
@@ -254,6 +314,56 @@ export function countDeclaredWork(
         // out rather than nag on a guess.
         if (c.updated_at == null) return false
         return c.updated_at > mine
-      }).length
+      })
   }
+}
+
+/**
+ * The count the guard decides on. Kept as a thin wrapper over selectDeclaredWork so the
+ * number the alert quotes and the items the wake message names can never disagree --
+ * two separate implementations of "what counts as work" would drift, and the drift would
+ * show up as a wake that names nothing while the alert claims 48 items.
+ */
+export function countDeclaredWork(
+  check: WorkCheck,
+  agent: string,
+  cards: (WorkCountCard & { id: string })[],
+  lastCommentAtByCard: Map<string, Map<string, number>>,
+): number {
+  return selectDeclaredWork(check, agent, cards, lastCommentAtByCard).length
+}
+
+/** The wake an agent actually acts on.
+ *
+ *  Measured 2026-08-21: a wake that says "you have work" is the version that does not
+ *  move anyone -- what moved Didi at 22:30 was six cards named in priority order, and
+ *  she took the first one within two minutes. So the message names items, and it says
+ *  WHY it arrived, because a session that cannot explain the gap in its own history
+ *  will spend its first minutes investigating instead of working. */
+export function buildWakeMessage(
+  agent: string,
+  minutes: number,
+  workCount: number,
+  items: { id: string; title?: string | null; priority?: string | null; status?: string }[],
+): string {
+  const rank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 }
+  const top = [...items]
+    .sort((a, b) => (rank[a.priority ?? 'normal'] ?? 2) - (rank[b.priority ?? 'normal'] ?? 2))
+    .slice(0, 6)
+  const lines = top.map(
+    (c) => `  ${c.id.slice(0, 8)}  ${(c.priority ?? 'normal').padEnd(6)}  ${(c.title ?? '').slice(0, 68)}`,
+  )
+  return [
+    `[tetlen-or] ${minutes} perce allsz ureses prompton, es ${workCount} tetel var rád.`,
+    '',
+    'EZ NEM SZEMREHANYAS, ES NEM A TE HIBAD. Egy agens nem tud maganak uj fordulot inditani:',
+    'a szandek a fordulo belsejeben el, es a fordulo vegen meghal vele. Az egyetlen dolog, ami',
+    'uj fordulot indit, egy beerkezo uzenet -- ezert kapod ezt. Isti NEM lett ertesitve.',
+    '',
+    lines.length ? 'A SORODBOL, PRIORITAS SZERINT:' : 'A szamlalod nem nulla, de tetelt nem tudtam megnevezni -- nezd meg a tablat.',
+    ...lines,
+    '',
+    'Vedd fel a legfelsot, vagy ha egyik sem a tied, ird meg egy sorban, hogy miert -- akkor a',
+    'workcheck.json-od hazudik, es azt kell javitani, nem teged ebreszteni.',
+  ].join('\n')
 }
