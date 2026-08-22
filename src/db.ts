@@ -1786,6 +1786,7 @@ export function unarchiveKanbanCard(id: string): boolean {
 export interface ArchivedKanbanCard {
   id: string
   title: string
+  description: string | null
   status: string
   project: string | null
   priority: string
@@ -1803,8 +1804,15 @@ export function listArchivedKanbanCards(opts: {
   limit: number
 }): ArchivedKanbanCard[] {
   const { q, project, label, from, to, limit } = opts
+  // `description` is SELECTed and searched, and that is the whole point of the
+  // archive rather than a nicety. The house rule for a duplicate is: carry the
+  // content onto the surviving card, THEN archive the loser -- so the archive is
+  // the safety net under every merge. Measured 2026-08-22: the listing returned
+  // title/status/assignee only and `q` searched title/project/assignee, so the
+  // body of a merged-away card was unreachable through the API. A net that
+  // cannot be searched is not a net; it looks like one, which is worse.
   let sql = `
-    SELECT DISTINCT kc.id, kc.title, kc.status, kc.project, kc.priority, kc.assignee, kc.archived_at, kc.updated_at
+    SELECT DISTINCT kc.id, kc.title, kc.description, kc.status, kc.project, kc.priority, kc.assignee, kc.archived_at, kc.updated_at
     FROM kanban_cards kc
   `
   const params: unknown[] = []
@@ -1820,9 +1828,9 @@ export function listArchivedKanbanCards(opts: {
   if (from)    { sql += ' AND kc.archived_at >= ?'; params.push(from) }
   if (to)      { sql += ' AND kc.archived_at <= ?'; params.push(to) }
   if (q) {
-    sql += ' AND (kc.title LIKE ? OR kc.project LIKE ? OR kc.assignee LIKE ?)'
+    sql += ' AND (kc.title LIKE ? OR kc.description LIKE ? OR kc.project LIKE ? OR kc.assignee LIKE ?)'
     const like = `%${q}%`
-    params.push(like, like, like)
+    params.push(like, like, like, like)
   }
   sql += ' ORDER BY kc.archived_at DESC LIMIT ?'
   params.push(limit)
