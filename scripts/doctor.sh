@@ -249,6 +249,57 @@ else
   ok "No failure log"
 fi
 
+# --- Documented commands actually exist ---
+#
+# WHY (card 48940af0, 2026-08-22). The morning briefing is an LLM procedure
+# driven by instruction documents. On 08-22 three of them named three different
+# ways to reach the calendar and the agent picked the one that does not exist,
+# then told Isti the calendar was unreachable while it was answering HTTP 200.
+# Making all three name ONE command moved the failure rather than removing it:
+# a document can now name a command that is not installed.
+#
+# The repo half of this is a unit test. THIS half covers the documents that
+# live OUTSIDE the repo, under ~/.claude, which no CI checkout can see -- and
+# which are exactly the ones the 07:30 briefing reads.
+#
+# It prints how many documents it examined. A sweep that finds nothing must not
+# read as a pass; that is the same silence the whole card is about.
+echo -e "\n${BOLD}Documented commands${RESET}"
+DOC_LIST=(
+  "$HOME/.claude/scheduled-tasks/reggeli-napindito/SKILL.md"
+  "$HOME/.claude/skills/reggeli-napindito/SKILL.md"
+  "$INSTALL_DIR/CLAUDE.md"
+)
+DOC_SEEN=0
+for doc in "${DOC_LIST[@]}"; do
+  # Show a path that IDENTIFIES the file. Both briefing documents are named
+  # SKILL.md and both sit in a directory called reggeli-napindito, so a
+  # basename (or even basename + parent) tells the reader which file to open
+  # only by luck. Measured: the first version of this section printed
+  # "SKILL.md ezt hivja" twice, for two different files.
+  DOC_LABEL="${doc#"$HOME"/}"
+  [ -f "$doc" ] || { warn "$DOC_LABEL: nincs ilyen fajl"; continue; }
+  DOC_SEEN=$((DOC_SEEN+1))
+  # Whole-line comments stripped first: a comment names a script precisely when
+  # it is explaining that the script is no longer used.
+  MISSING="$(grep -v '^[[:space:]]*#' "$doc" \
+    | grep -oE '(bash|sh|python3)[[:space:]]+(\$INSTALL_DIR/|/Users/[A-Za-z0-9_.-]+/marveen/)?scripts/[A-Za-z0-9_./-]+' \
+    | sed -E 's#.*(scripts/[A-Za-z0-9_./-]+)#\1#' | sort -u \
+    | while read -r rel; do [ -f "$INSTALL_DIR/$rel" ] || echo "$rel"; done)"
+  if [ -z "$MISSING" ]; then
+    ok "$DOC_LABEL: minden hivott parancs megvan"
+  else
+    for rel in $MISSING; do
+      fail "$DOC_LABEL ezt hivja, de nincs telepitve: $rel"
+    done
+  fi
+done
+if [ "$DOC_SEEN" -eq 0 ]; then
+  fail "EGYETLEN utasitas-dokumentumot sem talaltam -- ez NEM azt jelenti, hogy minden rendben"
+else
+  echo "    $DOC_SEEN dokumentum atnezve"
+fi
+
 # --- Google access (calendar + Drive + mail) ---
 #
 # WHY THIS IS IN THE DOCTOR (2026-08-22). All three legs were set up on
