@@ -282,10 +282,19 @@ for doc in "${DOC_LIST[@]}"; do
   DOC_SEEN=$((DOC_SEEN+1))
   # Whole-line comments stripped first: a comment names a script precisely when
   # it is explaining that the script is no longer used.
-  MISSING="$(grep -v '^[[:space:]]*#' "$doc" \
-    | grep -oE '(bash|sh|python3)[[:space:]]+(\$INSTALL_DIR/|/Users/[A-Za-z0-9_.-]+/marveen/)?scripts/[A-Za-z0-9_./-]+' \
-    | sed -E 's#.*(scripts/[A-Za-z0-9_./-]+)#\1#' | sort -u \
-    | while read -r rel; do [ -f "$INSTALL_DIR/$rel" ] || echo "$rel"; done)"
+  # RESOLVE WHERE THE DOCUMENT SAYS IT WILL RUN, NOT WHERE THIS SCRIPT LIVES.
+  # (Marveen caught this, 2026-08-22 23:54.) The first version stripped the
+  # absolute prefix and re-resolved everything against $INSTALL_DIR -- so run
+  # from a WORKTREE it checked the worktree, where the author's own branch
+  # always has the file. That is the one place the answer is guaranteed to be
+  # yes, and it is never the place the briefing actually runs from. An absolute
+  # path in a document is a promise about a SPECIFIC tree; check that tree.
+  #
+  # python3 does extraction and resolution together. The same work in bash
+  # needs a `case` inside a command substitution -- and a backtick or a quote
+  # in the pattern then breaks the parse in a way that half-runs. jq is not
+  # installed on a plain box; python3 is an installer requirement.
+  MISSING="$(python3 "$INSTALL_DIR/scripts/doc-commands.py" "$doc" "$INSTALL_DIR")"
   if [ -z "$MISSING" ]; then
     ok "$DOC_LABEL: minden hivott parancs megvan"
   else
