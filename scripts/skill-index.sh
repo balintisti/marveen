@@ -121,3 +121,17 @@ elif [ "$OVER_LIMIT" -gt 0 ]; then
 else
   echo "MERET-OR: minden skill a ${SKILL_LINE_LIMIT} soros hatar alatt (pozitiv kontroll: OK)."
 fi
+
+# ES A LEPES, AMI NELKUL A FENTI EGESZ NEMA MARADHAT (2026-08-22, merve, es a hiba az enyem):
+# a figyelmeztetes stderr-re megy, ami HELYES -- de ma ejjel ketszer futtattam ezt a szkriptet
+# `>/dev/null 2>&1` alakban, hogy az "index generated" sort elrejtsem, es ezzel a FIGYELMEZTETEST
+# is eldobtam. Ugyanabban a ket fordulóban vittem a felderites-ket-listas-proba fajlt 611 -> 634 ->
+# 643 sorra. Az or hibatlanul dolgozott, es senki nem hallotta.
+#
+# Egy uzenet, ami CSAK szoveg, annyira hangos, amennyire a HIVO engedi. Egy kilepesi kod nem az:
+# tulel egy `>/dev/null 2>&1`-et is, es megallit egy `&&` lancot. Ezert a hatar-atlepes mostantol
+# 3-as kilepesi kod. A 3 SAJAT ertek, nem 1: egy valodi generalasi hiba tovabbra is megkulonboztetheto
+# marad attol, hogy az index elkeszult ES a hatar-or talalt valamit.
+if [ "${OVER_LIMIT}" -gt 0 ]; then
+  exit 3
+fi
