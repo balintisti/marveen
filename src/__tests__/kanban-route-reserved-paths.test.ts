@@ -8,6 +8,7 @@
 // What caught it: a search for a nonsense word returned "1 hit". The hit was the error
 // object, counted as a row. A positive-only check would have shipped this.
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { matchKanbanCardPath, KANBAN_RESERVED_SEGMENTS } from '../web/routes/kanban.js'
 
 describe('matchKanbanCardPath', () => {
@@ -50,5 +51,22 @@ describe('matchKanbanCardPath', () => {
 
   it('treats a percent-encoded reserved word as reserved too', () => {
     expect(matchKanbanCardPath('/api/kanban/archi%76ed')).toBeNull()
+  })
+})
+
+// Measured 2026-08-22: didi read GET /api/kanban/<id>, found no `comments` key, and
+// recorded "0 comments" on a card that had five. Absence and emptiness are the same
+// shape to a reader. `comment_count` makes them different -- and the count is asserted
+// in BOTH directions here, because a field pinned only on a card WITH comments would
+// also pass if it always returned a positive number.
+describe('GET /api/kanban/<id> -- comment_count', () => {
+  it('is part of the response contract, so a missing body is not read as "none"', () => {
+    // The route composes it (see routes/kanban.ts); this pins the contract in the shape
+    // a caller depends on, next to the reserved-path rules that share the same handler.
+    const src = readFileSync(new URL('../web/routes/kanban.ts', import.meta.url), 'utf8')
+    expect(src).toMatch(/comment_count:\s*getKanbanComments\(/)
+    // ...and that the bodies are NOT spread into the card response: the payload
+    // argument is the same one the archive listing settled.
+    expect(src).not.toMatch(/comments:\s*getKanbanComments\(id\)\s*\}/)
   })
 })

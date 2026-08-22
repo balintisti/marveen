@@ -310,7 +310,17 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   if (kanbanCardMatch && method === 'GET') {
     const id = decodeURIComponent(kanbanCardMatch[1])
     const card = getKanbanCard(id)
-    if (card) { json(res, card); return true }
+    // `comment_count`, and the body deliberately NOT included. Measured 2026-08-22:
+    // didi read this endpoint, saw no `comments` key, and recorded "0 comments" on a
+    // card that had five. Absence and emptiness look identical to a reader -- in
+    // Python a missing key and an empty list both arrive as falsy -- and she caught it
+    // only because she ran a positive control against a card she KNEW had comments.
+    //
+    // The bodies stay out on purpose (the same payload argument as the archive
+    // listing: they grow without bound and a reader usually wants one card's). The
+    // count costs one COUNT and turns a silent absence into an explicit signal:
+    // 0 means none, anything else means fetch /comments.
+    if (card) { json(res, { ...card, comment_count: getKanbanComments(id).length }); return true }
     json(res, { error: 'Kártya nem található' }, 404)
     return true
   }
