@@ -127,7 +127,11 @@ function tick(): void {
       const check = parseWorkCheck(readWorkCheckRaw(agent))
       // MAIN_AGENT_ID is passed so the coordinator's own comments are not mistaken for
       // a reviewer's unanswered finding -- see selectDeclaredWork for the measurement.
-      const ownWorkCount = check ? countDeclaredWork(check, agent, cards, comments, MAIN_AGENT_ID) : null
+      // nowSec: the due_date column is in epoch SECONDS while this loop's `now` is in
+      // milliseconds. Passing the wrong unit would make every future date look long past
+      // (or never reached) -- silently, since the filter would simply never fire.
+      const nowSec = Math.floor(now / 1000)
+      const ownWorkCount = check ? countDeclaredWork(check, agent, cards, comments, MAIN_AGENT_ID, nowSec) : null
 
       const state = watchState.get(agent) ?? NO_IDLE_STATE
       const { decision, next } = decideIdleAlert(
@@ -161,7 +165,7 @@ function tick(): void {
       }
 
       if (decision.reason === 'wake-agent') {
-        const items = selectDeclaredWork(check as WorkCheck, agent, cards, comments, MAIN_AGENT_ID)
+        const items = selectDeclaredWork(check as WorkCheck, agent, cards, comments, MAIN_AGENT_ID, nowSec)
         const minutes = Math.round(decision.idleForMs / 60_000)
         try {
           createAgentMessage('system', agent, buildWakeMessage(agent, minutes, decision.workCount, items, (check as WorkCheck).kind))

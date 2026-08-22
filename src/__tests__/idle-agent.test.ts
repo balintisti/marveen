@@ -4,6 +4,7 @@ import {
   decideIdleAlert,
   parseWorkCheck,
   buildWakeMessage,
+  selectDeclaredWork,
   buildFleetAlert,
   NO_IDLE_STATE,
   type IdleAgentInput,
@@ -647,8 +648,14 @@ describe('the watcher actually passes the coordinator id', () => {
       new URL('../web/idle-agent-watcher.ts', import.meta.url),
       'utf8',
     )
-    expect(src).toMatch(/countDeclaredWork\([^)]*MAIN_AGENT_ID\)/)
-    expect(src).toMatch(/selectDeclaredWork\([^)]*MAIN_AGENT_ID\)/)
+    // NOT anchored to the closing paren: the first version was
+    // `countDeclaredWork\([^)]*MAIN_AGENT_ID\)`, which asserted that the coordinator is
+    // the LAST argument. Adding a `now` parameter after it broke the test while the
+    // behaviour it guards was untouched (2026-08-22). A source-reading control should
+    // pin WHAT is passed, not the argument order -- otherwise every later parameter
+    // costs a false red, and the third one gets "fixed" by deleting the assertion.
+    expect(src).toMatch(/countDeclaredWork\([^)]*MAIN_AGENT_ID/)
+    expect(src).toMatch(/selectDeclaredWork\([^)]*MAIN_AGENT_ID/)
     // And that the id is imported, not a stray local that happens to share the name.
     expect(src).toMatch(/import \{ MAIN_AGENT_ID \} from '\.\.\/config\.js'/)
   })
@@ -659,6 +666,47 @@ describe('the watcher actually passes the coordinator id', () => {
 // the next re-alert window. Eight messages for one situation, at 05:00, while the owner
 // slept. The escalation itself was right; the fan-out was not, and per-agent rate
 // limiting cannot fix it because the limit is per agent.
+// A card deliberately deferred to a future date is not work for today. Measured
+// 2026-08-22: the guard offered jarvis his own card, due 2026-09-05, with a written
+// reopening condition on it. The count was right; the input was incomplete.
+//
+// The unit trap is the reason `now` is injected rather than read from the clock: the
+// column is epoch SECONDS and the watcher's loop clock is milliseconds. Pass the wrong
+// one and the filter never fires -- silently, which is the only failure mode that
+// would not show up in a green suite.
+describe('selectDeclaredWork -- deferred cards', () => {
+  const NOW_SEC = 1_800_000_000
+  const card = (id: string, extra: Record<string, unknown> = {}) => ({
+    id, status: 'planned', assignee: 'jarvis', ...extra,
+  })
+  const pick = (cards: ReturnType<typeof card>[], now?: number) =>
+    selectDeclaredWork({ kind: 'assigned_open_cards' }, 'jarvis', cards, new Map(), 'marveen', now)
+      .map((c) => c.id)
+
+  it('hides a card whose due_date is in the future', () => {
+    const cards = [card('sleeping', { due_date: NOW_SEC + 86_400 }), card('todo')]
+    expect(pick(cards, NOW_SEC)).toEqual(['todo'])
+  })
+
+  it('KEEPS a card whose due_date has arrived -- the deferral expires on its own', () => {
+    // The half that makes the test above mean something: a filter that hid every dated
+    // card would satisfy the first assertion and quietly bury work forever.
+    const cards = [card('due-today', { due_date: NOW_SEC - 60 }), card('todo')]
+    expect(pick(cards, NOW_SEC).sort()).toEqual(['due-today', 'todo'])
+  })
+
+  it('keeps undated cards, which is nearly all of them', () => {
+    expect(pick([card('a'), card('b')], NOW_SEC).sort()).toEqual(['a', 'b'])
+  })
+
+  it('without a clock it hides nothing -- an absent `now` must not silently filter', () => {
+    // Callers that never pass a clock keep the old behaviour instead of losing cards
+    // for a reason they were never told about.
+    const cards = [card('sleeping', { due_date: NOW_SEC + 86_400 })]
+    expect(pick(cards, undefined)).toEqual(['sleeping'])
+  })
+})
+
 describe('buildFleetAlert', () => {
   const idle = (agent: string, minutes = 27, workCount = 40) =>
     ({ kind: 'still-idle', agent, minutes, workCount }) as const

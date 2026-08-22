@@ -226,6 +226,11 @@ export interface WorkCountCard {
   /** Last time anything happened on the card. Used to decide whether a reviewer's
    *  earlier comment still covers the card's current state. */
   updated_at?: number | null
+  /** A date the card was deliberately deferred TO. Distinct from `waiting`, and the
+   *  distinction matters: `waiting` means we are blocked on someone ELSE, a future
+   *  due_date means WE decided to do it later. Conflating them makes `waiting` mean
+   *  two things again. (jarvis, 2026-08-22) */
+  due_date?: number | null
 }
 
 /**
@@ -251,6 +256,9 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
    *  dexter, FOUR had marveen as the last commenter, all of them acknowledgements.
    *  Omit it only where there is no coordinator to speak of. */
   coordinator?: string,
+  /** Now, in epoch SECONDS (the column's unit). Injected rather than read from the
+   *  clock so this function stays pure and testable on fixtures. */
+  now?: number,
 ): T[] {
   const live = cards.filter((c) => !c.archived_at)
   switch (check.kind) {
@@ -277,8 +285,22 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
       // them, because 'testing' means two things at once -- "awaiting review" and
       // "awaiting fix" -- and the status cannot say which. The last comment can:
       // if someone else spoke last, the assignee owes an answer.
+      // A card with a FUTURE due_date is not pickable today: someone deliberately
+      // deferred it, usually with a written reopening condition. Measured 2026-08-22:
+      // the guard offered jarvis his own card, dated to 2026-09-05 -- the count was
+      // right and the input was incomplete. An idle guard that offers unpickable work
+      // spends the only thing it has, which is being believed; that is the same failure
+      // as telling a reviewer she has no work while 40 items wait.
+      //
+      // Today this hides exactly ONE card of the whole board -- I measured before
+      // writing it, and it is not the reason. The reason is that the guard must not
+      // teach anyone to skim its list.
       const isMine = (c: WorkCountCard) => c.assignee === agent
-      const open = live.filter((c) => isMine(c) && c.status !== 'done' && c.status !== 'waiting')
+      const deferred = (c: WorkCountCard) =>
+        now !== undefined && c.due_date != null && c.due_date > now
+      const open = live.filter(
+        (c) => isMine(c) && c.status !== 'done' && c.status !== 'waiting' && !deferred(c),
+      )
       return open.filter((c) => {
         if (c.status !== 'testing') return true
         const authors = lastCommentAtByCard.get(c.id)
@@ -339,8 +361,9 @@ export function countDeclaredWork(
   cards: (WorkCountCard & { id: string })[],
   lastCommentAtByCard: Map<string, Map<string, number>>,
   coordinator?: string,
+  now?: number,
 ): number {
-  return selectDeclaredWork(check, agent, cards, lastCommentAtByCard, coordinator).length
+  return selectDeclaredWork(check, agent, cards, lastCommentAtByCard, coordinator, now).length
 }
 
 /** The wake an agent actually acts on.
