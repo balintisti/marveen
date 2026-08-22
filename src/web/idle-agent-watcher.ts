@@ -13,6 +13,7 @@ import {
   parseWorkCheck,
   countDeclaredWork,
   selectDeclaredWork,
+  buildNoWorkNotice,
   buildWakeMessage,
   buildFleetAlert,
   type FleetAlert,
@@ -143,6 +144,7 @@ function tick(): void {
           paneIdle: running ? paneIsIdle(agent) : false,
           pendingMessages: running ? getPendingMessages(agent).length : 0,
           ownWorkCount,
+          workCheckKind: (check as WorkCheck | null)?.kind ?? null,
         },
         state,
         THRESHOLDS,
@@ -161,6 +163,20 @@ function tick(): void {
       if (decision.reason === 'no-work-check-declared') {
         alerts.push({ kind: 'no-work-check', agent })
         logger.warn({ idleGuard: true, agent }, 'idle guard: agent has no declared work check')
+        continue
+      }
+
+      if (decision.reason === 'idle-no-work') {
+        const minutes = Math.round(decision.idleForMs / 60_000)
+        try {
+          createAgentMessage('system', MAIN_AGENT_ID, buildNoWorkNotice(agent, minutes))
+          logger.info(
+            { idleGuard: true, agent, idleForMs: decision.idleForMs },
+            'idle guard: agent idle with nothing assigned -- told the coordinator',
+          )
+        } catch (err) {
+          logger.warn({ err, agent }, 'idle guard: could not tell the coordinator about an unassigned idle agent')
+        }
         continue
       }
 

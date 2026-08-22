@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import {
   decideIdleAlert,
   parseWorkCheck,
+  buildNoWorkNotice,
   buildWakeMessage,
   selectDeclaredWork,
   buildFleetAlert,
@@ -49,10 +50,13 @@ describe('decideIdleAlert -- the four conditions, each on its own', () => {
   // The one that killed the timer design. An on-call agent with an empty queue is
   // behaving correctly; a guard that nags it every day gets muted, and then it
   // protects nothing at all.
-  it('THE AGROTECH CASE: declared zero work stays silent forever', () => {
+  it('THE AGROTECH CASE: a declared `none` check stays silent forever', () => {
+    // The distinction added 2026-08-22: silence is owed to an agent that DECLARED it has
+    // no queue here, not to every agent that happens to have zero cards. An on-call agent
+    // nagged every half hour is a guard that gets muted -- and then protects nothing.
     let state = NO_IDLE_STATE
     for (const hour of [0, 6, 12, 24, 48]) {
-      const r = decideIdleAlert({ ...base, ownWorkCount: 0 }, state, TH, at(hour * 60))
+      const r = decideIdleAlert({ ...base, ownWorkCount: 0, workCheckKind: 'none' }, state, TH, at(hour * 60))
       expect(r.decision).toEqual({ alert: false, reason: 'no-work' })
       state = r.next
     }
@@ -752,5 +756,95 @@ describe('buildFleetAlert', () => {
     const msg = buildFleetAlert([idle('didi'), idle('dexter')])
     expect(msg).not.toMatch(/NINCS workcheck/)
     expect(msg).not.toMatch(/A PANEL NEM OLVASHATO/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Idle with NOTHING ASSIGNED -- the state the guard used to be blind to
+// ---------------------------------------------------------------------------
+//
+// `ownWorkCount <= 0` returned silently, with the comment "declared 'I have nothing
+// to do' -> silence. This is correct behaviour, not a fault." Right about the AGENT,
+// wrong about the FLEET: an agent at an empty prompt with zero assigned cards is the
+// most expensive state there is, and nobody notices, because the guard was built to
+// catch the opposite case. Measured 2026-08-22 20:43: three of four agents stood idle
+// with empty queues and no assigned work while the window ran down, and the guard said
+// nothing about any of them -- correctly, by its own rule.
+describe('idle with no assigned work reaches the coordinator', () => {
+  const base = {
+    agent: 'nobody-assigned-me',
+    running: true,
+    paneIdle: true,
+    pendingMessages: 0,
+    ownWorkCount: 0,
+    // A REAL declared check with zero cards -- that is the leak. `none` is the on-call
+    // case and stays silent; see THE AGROTECH CASE above.
+    workCheckKind: 'assigned_open_cards',
+  }
+
+  it('stays quiet until the idle spell is sustained', () => {
+    const t0 = 1_000_000
+    const first = decideIdleAlert(base, NO_IDLE_STATE, TH, t0)
+    expect(first.decision.alert).toBe(false)
+    expect(first.decision.reason).toBe('not-sustained')
+  })
+
+  it('tells the coordinator once the spell is sustained', () => {
+    const t0 = 1_000_000
+    const first = decideIdleAlert(base, NO_IDLE_STATE, TH, t0)
+    const later = decideIdleAlert(base, first.next, TH, t0 + TH.sustainedMs + 1)
+    expect(later.decision.alert).toBe(true)
+    expect(later.decision.reason).toBe('idle-no-work')
+  })
+
+  it('does not repeat every sweep', () => {
+    const t0 = 1_000_000
+    const s1 = decideIdleAlert(base, NO_IDLE_STATE, TH, t0)
+    const s2 = decideIdleAlert(base, s1.next, TH, t0 + TH.sustainedMs + 1)
+    const s3 = decideIdleAlert(base, s2.next, TH, t0 + TH.sustainedMs + 60_000)
+    expect(s2.decision.alert).toBe(true)
+    expect(s3.decision.alert).toBe(false)
+  })
+
+  // The busy/blocked cases must NOT be swallowed by the new branch: an agent that is
+  // working, or waiting on the router, is not idle-with-no-work no matter what its
+  // board says.
+  it('never fires for a busy agent', () => {
+    const t = 1_000_000 + TH.sustainedMs * 3
+    const r = decideIdleAlert({ ...base, paneIdle: false }, NO_IDLE_STATE, TH, t)
+    expect(r.decision.alert).toBe(false)
+  })
+
+  it('never fires while messages are queued for the agent', () => {
+    const t0 = 1_000_000
+    const s1 = decideIdleAlert({ ...base, pendingMessages: 2 }, NO_IDLE_STATE, TH, t0)
+    const s2 = decideIdleAlert({ ...base, pendingMessages: 2 }, s1.next, TH, t0 + TH.sustainedMs + 1)
+    expect(s2.decision.alert).toBe(false)
+  })
+
+  it('an agent WITH work still gets the wake, not the coordinator notice', () => {
+    const t0 = 1_000_000
+    const withWork = { ...base, ownWorkCount: 5 }
+    const s1 = decideIdleAlert(withWork, NO_IDLE_STATE, TH, t0)
+    const s2 = decideIdleAlert(withWork, s1.next, TH, t0 + TH.sustainedMs + 1)
+    expect(s2.decision.reason).toBe('wake-agent')
+  })
+})
+
+describe('buildNoWorkNotice', () => {
+  it('names the agent, the duration, and what it wants from the coordinator', () => {
+    const msg = buildNoWorkNotice('jarvis', 14)
+    expect(msg).toContain('jarvis')
+    expect(msg).toContain('14 perce')
+    expect(msg).toContain('NINCS RA KIOSZTVA SEMMI')
+    expect(msg.toLowerCase()).toContain('adj neki kartyat')
+  })
+
+  // It must NOT name cards: choosing them needs the board and the fleet's shape, which
+  // the coordinator has and this function does not. A guessed card list would look
+  // authoritative and be wrong.
+  it('does not pretend to know which cards to hand over', () => {
+    const msg = buildNoWorkNotice('jarvis', 14)
+    expect(msg).not.toMatch(/\b[0-9a-f]{8}\b/)
   })
 })

@@ -59,6 +59,9 @@ export interface IdleAgentState {
    *  it is the only thing that stops a wake-per-spell drumbeat, and a spell ends every
    *  time the agent takes a turn. */
   lastWakeAt: number | null
+  /** When the COORDINATOR was last told this agent is idle with nothing assigned.
+   *  Survives the spell reset for the same reason lastWakeAt does. */
+  lastNoWorkNoticeAt?: number | null
 }
 
 export interface IdleAgentInput {
@@ -73,6 +76,11 @@ export interface IdleAgentInput {
   pendingMessages: number
   /** Result of the agent's own declared work check. null = the agent declared nothing. */
   ownWorkCount: number | null
+  /** The KIND the agent declared. `'none'` means "this agent has no queue in this
+   *  system" -- an on-call agent whose empty board is the correct state, not a leak.
+   *  Absent is treated as 'not none': an agent that declared a real check and has zero
+   *  cards is the case worth telling the coordinator about. */
+  workCheckKind?: string | null
   /** Whether the agent process is running at all. A stopped agent is a different
    *  failure with its own watchers; this guard stays out of it. */
   running: boolean
@@ -96,6 +104,10 @@ export type IdleDecision =
   /** Stage 2: the wake did not take. NOW it is news, because "I woke it and it did not
    *  move" is a fault, while "someone is idle" is not. */
   | { alert: true; reason: 'idle-with-work'; workCount: number; idleForMs: number }
+  /** Idle AND nothing assigned. Goes to the COORDINATOR, not the agent and not a human:
+   *  waking an agent that has no work only makes it say so, and assigning work is the
+   *  coordinator's job. This case used to be silent -- see the note at the call site. */
+  | { alert: true; reason: 'idle-no-work'; idleForMs: number }
   | { alert: true; reason: 'no-work-check-declared' }
   | { alert: true; reason: 'pane-unreadable' }
 
@@ -147,13 +159,47 @@ export function decideIdleAlert(
     }
   }
 
-  // Declared "I have nothing to do" -> silence. This is correct behaviour, not a fault.
-  if (input.ownWorkCount <= 0) return clear('no-work')
+  // THE AGROTECH CASE, and it short-circuits BEFORE the spell even starts. An agent
+  // whose declared check is `none` has no queue in this system at all: its empty board
+  // is the correct state, and a guard that reports it every half hour is the guard that
+  // gets muted -- after which it protects nothing. The distinction is what the agent
+  // DECLARED, not how many cards it happens to have: `none` means on-call, any other
+  // kind means "I am supposed to have work, and I have none".
+  if ((input.ownWorkCount ?? 0) <= 0 && (input.workCheckKind ?? '') === 'none') {
+    return clear('no-work')
+  }
 
   const idleSinceMs = state.idleSinceMs ?? now
   const idleForMs = now - idleSinceMs
   if (idleForMs < thresholds.sustainedMs) {
     return { decision: { alert: false, reason: 'not-sustained' }, next: { ...state, idleSinceMs } }
+  }
+
+  // Idle AND nothing assigned. This used to return silently, with the comment
+  // "declared 'I have nothing to do' -> silence. This is correct behaviour, not a
+  // fault." That was right about the AGENT and wrong about the FLEET.
+  //
+  // An agent standing at an empty prompt with zero assigned cards is the most
+  // expensive state there is: it is not blocked, not thinking, and nobody is going to
+  // notice, because the guard was built to catch the opposite case. Measured
+  // 2026-08-22 20:43: three of four agents stood idle with empty queues and no
+  // assigned work while the five-hour window ran down, and the guard said nothing
+  // about any of them -- correctly, by its own rule.
+  //
+  // The notice goes to the COORDINATOR, not to the agent and not to the owner. Waking
+  // the agent would only make it answer "I have nothing"; the owner cannot assign
+  // cards at 22:00 and should not be asked to. Assigning work is the coordinator's job,
+  // so the coordinator is the only party that can both be reached and act -- the same
+  // argument the stage-1 wake makes for the agent itself.
+  if (input.ownWorkCount <= 0) {
+    const lastNotice = state.lastNoWorkNoticeAt ?? null
+    if (lastNotice !== null && now - lastNotice < thresholds.realertMs) {
+      return { decision: { alert: false, reason: 'recently-alerted' }, next: { ...state, idleSinceMs } }
+    }
+    return {
+      decision: { alert: true, reason: 'idle-no-work', idleForMs },
+      next: { ...state, idleSinceMs, lastNoWorkNoticeAt: now },
+    }
   }
 
   // ---- stage 1: wake the agent -------------------------------------------------
@@ -364,6 +410,29 @@ export function countDeclaredWork(
   now?: number,
 ): number {
   return selectDeclaredWork(check, agent, cards, lastCommentAtByCard, coordinator, now).length
+}
+
+/** What the COORDINATOR gets when an agent stands idle with nothing assigned.
+ *
+ *  Deliberately NOT sent to the agent: it already knows it has nothing, and telling it
+ *  so produces a turn whose entire content is "I have nothing". And deliberately not to
+ *  the owner: assigning cards is the coordinator's job, and a 22:00 notification cannot
+ *  make it happen faster.
+ *
+ *  It names the agent and the duration, and asks for the one thing that ends the state.
+ *  It does NOT name candidate cards -- picking them needs the board and the fleet's
+ *  current shape, which is what the coordinator has and this function does not. */
+export function buildNoWorkNotice(agent: string, minutes: number): string {
+  return [
+    `[tetlen-or] A(z) "${agent}" ${minutes} perce ures prompton all, ES NINCS RA KIOSZTVA SEMMI.`,
+    '',
+    'Ez nem az o hibaja es nem is akadaly: nincs mit felvennie. A tetlen-or eddig HALLGATOTT',
+    'errol az esetrol -- azt figyelte, akinek VAN munkaja es megsem mozdul --, tehat epp a',
+    'legdragabb allapot volt lathatatlan.',
+    '',
+    'Amit tolem var: adj neki kartyat, vagy ha tenyleg nincs neki valo, mondd ki a kartyan,',
+    'hogy miert all -- kulonben a kovetkezo korben ugyanezt fogom kuldeni.',
+  ].join('\n')
 }
 
 /** The wake an agent actually acts on.
