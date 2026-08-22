@@ -808,6 +808,53 @@ export function detectPaneState(
  * definition rather than re-inlining `detectPaneState(...) === 'idle'`
  * (and, worse, the busy regex) in several files.
  */
+/** Which signal made a pane read 'busy' -- and they are NOT equally strong.
+ *
+ *  `esc to interrupt` is written into the footer only DURING a live turn and removed
+ *  when the turn ends, so it is direct evidence of a turn in flight. The spinner /
+ *  token-counter line is not: Claude Code does not always overwrite it on completion
+ *  (the reason BUSY_LIVE_REGION_LINES exists at all), so a finished turn can leave one
+ *  above an otherwise idle prompt.
+ *
+ *  THE SAME DETECTOR SERVES TWO PURPOSES WITH OPPOSITE COST PROFILES, which is why the
+ *  distinction is worth exposing rather than folding into one boolean:
+ *
+ *    "may I inject a message?"  -- a false BUSY costs one wait cycle; a false IDLE
+ *                                  interrupts a live turn. Prefer busy: use paneLooksIdle.
+ *    "is anyone standing idle
+ *     and unnoticed?"           -- a false BUSY costs SILENCE, possibly forever; a false
+ *                                  IDLE costs one unnecessary notice. Prefer idle: treat
+ *                                  counter-only evidence as not-busy.
+ *
+ *  Measured 2026-08-22 by jarvis, end to end: after the busy pattern was widened to
+ *  minute-form counters (dd3fec50), a stale minute-form counter above an idle footer
+ *  silenced the brand-new "idle with nothing assigned" notice (d23e8d8c) -- the exact
+ *  state that notice was built for. Not a new hole: before the widening the same gap
+ *  existed for second-form counters. The widening moved the door, it did not open it.
+ *
+ *  His structural observation is the reason this comment is long: the guard that must
+ *  catch "nobody notices an agent" was built on the detector whose failure mode is
+ *  "reads a quiet agent as working". Guard and danger shared a dependency, so the error
+ *  did not add up -- it hid itself.
+ */
+export type BusyEvidence = 'footer' | 'counter' | null
+
+export function busyEvidence(capture: string): BusyEvidence {
+  if (!capture || !capture.trim()) return null
+  if (detectPaneState(capture) !== 'busy') return null
+  const paneLines = capture.split('\n')
+  const footerAnchor = paneLines.findIndex(l => IDLE_FOOTER_RX.test(l))
+  const liveEnd = footerAnchor >= 0 ? footerAnchor + 1 : paneLines.length
+  const region = (n: number): string =>
+    paneLines.slice(Math.max(0, liveEnd - n), liveEnd).join('\n')
+  if (BUSY_ESC_TO_INTERRUPT_RX.test(region(LIVE_FOOTER_REGION_LINES))) return 'footer'
+  const busyRegion = region(BUSY_LIVE_REGION_LINES)
+  for (const rx of BUSY_INDICATORS) if (rx.test(busyRegion)) return 'counter'
+  // 'busy' from something else (a paste placeholder, a queued-messages hint): treat it
+  // as strong. Those are states where input IS waiting, not leftover render.
+  return 'footer'
+}
+
 export function paneLooksIdle(capture: string): boolean {
   return detectPaneState(capture) === 'idle'
 }

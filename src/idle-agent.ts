@@ -76,6 +76,12 @@ export interface IdleAgentInput {
   pendingMessages: number
   /** Result of the agent's own declared work check. null = the agent declared nothing. */
   ownWorkCount: number | null
+  /** True when the pane's only busy evidence is a leftover spinner / token-counter
+   *  line -- weaker than the footer's `esc to interrupt`, which exists only during a
+   *  live turn. Used ONLY by the no-work notice: there a false BUSY costs silence,
+   *  possibly forever, while a false IDLE costs one unnecessary notice to the
+   *  coordinator. See busyEvidence() in pane-state.ts for the measurement. */
+  staleCounterOnly?: boolean
   /** The KIND the agent declared. `'none'` means "this agent has no queue in this
    *  system" -- an on-call agent whose empty board is the correct state, not a leak.
    *  Absent is treated as 'not none': an agent that declared a real check and has zero
@@ -144,7 +150,23 @@ export function decideIdleAlert(
     }
   }
 
-  if (!input.paneIdle) return clear('busy')
+  // The no-work notice reads a counter-only 'busy' as idle, and NOTHING ELSE does.
+  //
+  // Measured end to end by jarvis 2026-08-22: after the busy pattern was widened to
+  // minute-form counters, a stale counter above an idle footer silenced the notice --
+  // in exactly the state the notice was built for. The two consumers of this detector
+  // have opposite cost profiles, so they get different thresholds rather than one
+  // boolean tuned as a compromise:
+  //   injection / wake     -> a false BUSY costs a wait cycle, a false IDLE interrupts
+  //                           a live turn. Strict: any busy is busy.
+  //   idle-with-no-work    -> a false BUSY costs SILENCE, a false IDLE costs one notice.
+  //                           Lenient: leftover render is not evidence of work.
+  // This is NOT a narrowing of the pattern. Narrowing would bring back dd3fec50 (long
+  // turns read as idle); the pattern stays wide, only the WEIGHT of its verdict differs
+  // per question.
+  const countsAsIdleForNoWork = input.paneIdle || input.staleCounterOnly === true
+  if (!input.paneIdle && !countsAsIdleForNoWork) return clear('busy')
+  if (!input.paneIdle && (input.ownWorkCount ?? 0) > 0) return clear('busy')
   if (input.pendingMessages > 0) return clear('waiting-on-router')
 
   // Undeclared is a configuration gap, not an idleness verdict. Reported on its own

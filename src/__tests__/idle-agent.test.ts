@@ -848,3 +848,59 @@ describe('buildNoWorkNotice', () => {
     expect(msg).not.toMatch(/\b[0-9a-f]{8}\b/)
   })
 })
+
+// ---------------------------------------------------------------------------
+// The two consumers of the pane detector have OPPOSITE cost profiles
+// ---------------------------------------------------------------------------
+//
+// jarvis measured end to end 2026-08-22: after the busy pattern was widened to
+// minute-form counters, a stale counter above an idle footer silenced the brand-new
+// "idle with nothing assigned" notice -- in exactly the state the notice was built for.
+// Not a new hole; before the widening the same gap existed for second-form counters.
+//
+// His structural point is why the fix is a WEIGHT and not a narrower pattern: the guard
+// that must catch "nobody notices an agent" was built on the detector whose failure mode
+// is "reads a quiet agent as working". Guard and danger shared a dependency, so the
+// error did not add up -- it hid itself. Narrowing the pattern would bring back the
+// long-turn bug (dd3fec50); the two errors pull in opposite directions.
+describe('counter-only busy evidence is weak enough for the no-work notice', () => {
+  const idleNoWork = {
+    agent: 'stale-counter-agent',
+    running: true,
+    paneIdle: false,
+    staleCounterOnly: true,
+    pendingMessages: 0,
+    ownWorkCount: 0,
+    workCheckKind: 'assigned_open_cards',
+  }
+
+  it('still tells the coordinator when the only busy evidence is a leftover counter', () => {
+    const s1 = decideIdleAlert(idleNoWork, NO_IDLE_STATE, TH, at(0))
+    const s2 = decideIdleAlert(idleNoWork, s1.next, TH, at(11))
+    expect(s2.decision.alert).toBe(true)
+    expect(s2.decision.reason).toBe('idle-no-work')
+  })
+
+  it('a footer-backed busy still silences it -- that evidence is strong', () => {
+    const footerBusy = { ...idleNoWork, staleCounterOnly: false }
+    const r = decideIdleAlert(footerBusy, NO_IDLE_STATE, TH, at(0))
+    expect(r.decision).toEqual({ alert: false, reason: 'busy' })
+  })
+
+  // The lenient reading must NOT leak into the wake path: there a false idle interrupts
+  // a live turn, which is the expensive direction. An agent WITH work and a counter-only
+  // busy stays busy.
+  it('does not make an agent WITH work wakeable on weak evidence', () => {
+    const withWork = { ...idleNoWork, ownWorkCount: 7 }
+    const s1 = decideIdleAlert(withWork, NO_IDLE_STATE, TH, at(0))
+    const s2 = decideIdleAlert(withWork, s1.next, TH, at(11))
+    expect(s2.decision.reason).toBe('busy')
+  })
+
+  it('an on-call agent stays silent however weak the busy evidence is', () => {
+    const onCall = { ...idleNoWork, workCheckKind: 'none' }
+    const s1 = decideIdleAlert(onCall, NO_IDLE_STATE, TH, at(0))
+    const s2 = decideIdleAlert(onCall, s1.next, TH, at(11))
+    expect(s2.decision.alert).toBe(false)
+  })
+})

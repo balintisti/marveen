@@ -6,7 +6,7 @@ import { listAgentNames, agentDir, readAgentRemoteHost } from './agent-config.js
 import { isAgentRunning, capturePane } from './agent-process.js'
 import { resolveAgentSession } from './channel-mcp-reconnect.js'
 import { sendAlert } from './channel-monitor.js'
-import { detectPaneState } from '../pane-state.js'
+import { busyEvidence, detectPaneState } from '../pane-state.js'
 import { getPendingMessages, listKanbanCards, getDb, createAgentMessage } from '../db.js'
 import {
   decideIdleAlert,
@@ -95,14 +95,14 @@ function lastCommentAtByCard(): Map<string, Map<string, number>> {
  *  that agent -- a failure that looks exactly like health, which is the one shape this
  *  whole guard exists to avoid. Didi spotted it on my own code; the rule "not measured
  *  is not passing" applies here too, and here it means: say so, do not assume. */
-function paneIsIdle(agent: string): boolean | null {
+function readPane(agent: string): { idle: boolean | null; staleCounterOnly: boolean } {
   const session = resolveAgentSession(agent)
-  if (!session) return null
+  if (!session) return { idle: null, staleCounterOnly: false }
   const pane = capturePane(session, readAgentRemoteHost(agent))
-  if (!pane) return null
+  if (!pane) return { idle: null, staleCounterOnly: false }
   const state = detectPaneState(pane)
-  if (state === 'unknown') return null
-  return state === 'idle'
+  if (state === 'unknown') return { idle: null, staleCounterOnly: false }
+  return { idle: state === 'idle', staleCounterOnly: busyEvidence(pane) === 'counter' }
 }
 
 function tick(): void {
@@ -134,6 +134,12 @@ function tick(): void {
       const nowSec = Math.floor(now / 1000)
       const ownWorkCount = check ? countDeclaredWork(check, agent, cards, comments, MAIN_AGENT_ID, nowSec) : null
 
+      // One capture per agent per tick: the evidence strength comes from the same read
+      // as the idle verdict, so the two can never disagree about what was on screen.
+      const paneRead = running
+        ? readPane(agent)
+        : { idle: false as boolean | null, staleCounterOnly: false }
+
       const state = watchState.get(agent) ?? NO_IDLE_STATE
       const { decision, next } = decideIdleAlert(
         {
@@ -141,7 +147,8 @@ function tick(): void {
           running,
           // Only pay for the tmux capture when the cheap checks have not already
           // settled it -- a running fleet ticks this every three minutes.
-          paneIdle: running ? paneIsIdle(agent) : false,
+          paneIdle: running ? paneRead.idle : false,
+          staleCounterOnly: running ? paneRead.staleCounterOnly : false,
           pendingMessages: running ? getPendingMessages(agent).length : 0,
           ownWorkCount,
           workCheckKind: (check as WorkCheck | null)?.kind ?? null,

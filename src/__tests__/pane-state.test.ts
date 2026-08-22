@@ -18,6 +18,7 @@ import {
   parkedInputRowCount,
   submitLanded,
   paneShowsContextSaturation,
+  busyEvidence,
 } from '../pane-state.js'
 
 // Realistic pane fixtures modelled on actual `tmux capture-pane -p`
@@ -820,6 +821,60 @@ const liveTurn = (t: string) => [
   // the pattern it was meant to exercise matched nothing.
   '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents',
 ].join('\n')
+
+describe('busyEvidence: which signal made the pane read busy', () => {
+  const withFooterEsc = [
+    '  ⎿  running',
+    '',
+    SEP, '❯ ', SEP,
+    '  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← for agents',
+  ].join('\n')
+
+  const counterOnly = [
+    '  ⎿  done',
+    '',
+    '✽ Architecting… (3m 41s · ↓ 6.2k tokens)',
+    '',
+    SEP, '❯ ', SEP,
+    // No `esc to interrupt`: the turn ENDED and the spinner line was simply not
+    // overwritten. This is the leftover-render case, and it is weaker evidence.
+    '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents',
+  ].join('\n')
+
+  it('reports the footer signal as the strong one', () => {
+    expect(busyEvidence(withFooterEsc)).toBe('footer')
+  })
+
+  it('reports a leftover counter as the weak one', () => {
+    expect(busyEvidence(counterOnly)).toBe('counter')
+  })
+
+  it('is null when the pane is not busy at all', () => {
+    expect(busyEvidence(IDLE_BYPASS)).toBeNull()
+  })
+
+  // Both are still 'busy' for anyone asking the plain question -- the weight is an
+  // ADDITION, not a replacement. If this ever flips, the widened pattern (dd3fec50)
+  // silently regresses and long turns read as idle again.
+  it('does not change the plain busy verdict for either', () => {
+    expect(detectPaneState(withFooterEsc)).toBe('busy')
+    expect(detectPaneState(counterOnly)).toBe('busy')
+  })
+})
+
+// jarvis proposed this one and it costs nothing: the whole counter/anchor defence
+// rests on the subagent panel rendering BELOW the footer. Nothing asserted that, and
+// the entire thread started because the panel's appearance MOVED the footer.
+describe('the subagent panel renders below the footer', () => {
+  it('the footer line comes before every panel row', () => {
+    const pane = BUSY_WITH_SUBAGENTS(4).split('\n')
+    const footerIdx = pane.findIndex(l => /on \(shift\+tab to cycle\)/.test(l))
+    const panelIdx = pane.findIndex(l => /^\s+[◯⏺]/.test(l))
+    expect(footerIdx).toBeGreaterThanOrEqual(0)
+    expect(panelIdx).toBeGreaterThanOrEqual(0)
+    expect(footerIdx).toBeLessThan(panelIdx)
+  })
+})
 
 describe('detectPaneState token-counter durations', () => {
   it.each([
