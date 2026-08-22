@@ -890,5 +890,161 @@ class TestReadClaudeMacosKeychain(unittest.TestCase):
         self.assertIn("/login", source)
 
 
+class TestKeychainAccountDiscovery(unittest.TestCase):
+    """_keychain_account() -- writing back under the wrong account name does
+    not update the entry, it creates a second one, and the reader keeps
+    returning the old value. Measured 2026-08-22: a refreshed token landed in
+    an entry nothing read, while the rotated-away one stayed in place."""
+
+    def test_account_parsed_from_attribute_dump(self):
+        out = MagicMock()
+        out.stdout = 'keychain: "/Users/x/Library/Keychains/login.keychain-db"\n'
+        out.stdout += '    "acct"<blob>="isti"\n    "svce"<blob>="Claude Code-credentials"\n'
+        with patch.object(uc.subprocess, "run", return_value=out):
+            self.assertEqual(uc._keychain_account(), "isti")
+
+    def test_missing_entry_returns_none(self):
+        out = MagicMock()
+        out.stdout = ""
+        with patch.object(uc.subprocess, "run", return_value=out):
+            self.assertIsNone(uc._keychain_account())
+
+
+class TestRefreshClaudeMacosKeychain(unittest.TestCase):
+    def _blob(self, refresh="refresh-old"):
+        return json.dumps({
+            "claudeAiOauth": {"accessToken": "old-access", "refreshToken": refresh,
+                              "expiresAt": int((time.time() - 3600) * 1000)},
+            "mcpOAuth": {"some": "other-credential"},
+        })
+
+    def _resp(self, payload):
+        cm = MagicMock()
+        cm.__enter__.return_value.read.return_value = json.dumps(payload).encode()
+        cm.__exit__.return_value = False
+        return cm
+
+    def _runner(self, read_blob, write_rc=0):
+        """subprocess.run stand-in: reads return the blob, writes return write_rc."""
+        calls = []
+
+        def run(cmd, **kw):
+            calls.append(cmd)
+            r = MagicMock()
+            if "add-generic-password" in cmd:
+                r.returncode = write_rc
+                r.stdout = ""
+                r.stderr = "" if write_rc == 0 else "write refused"
+            else:
+                r.returncode = 0
+                r.stdout = read_blob
+            return r
+
+        return run, calls
+
+    def test_rotated_refresh_token_is_written_back(self):
+        # The response rotates the refresh token. If the new one is not stored,
+        # the machine can never refresh again -- so assert it reaches the write.
+        run, calls = self._runner(self._blob())
+        with patch.object(uc.sys, "platform", "darwin"), \
+             patch.object(uc, "REFRESH_ENABLED", True), \
+             patch.object(uc, "_keychain_account", return_value="isti"), \
+             patch.object(uc.subprocess, "run", side_effect=run), \
+             patch.object(uc.urllib.request, "urlopen", return_value=self._resp(
+                 {"access_token": "new-access", "refresh_token": "refresh-new",
+                  "expires_in": 28800})):
+            got = uc._refresh_claude_macos_keychain()
+        self.assertEqual(got, "new-access")
+        writes = [c for c in calls if "add-generic-password" in c]
+        self.assertEqual(len(writes), 1)
+        written = json.loads(writes[0][writes[0].index("-w") + 1])
+        self.assertEqual(written["claudeAiOauth"]["refreshToken"], "refresh-new")
+        self.assertEqual(written["claudeAiOauth"]["accessToken"], "new-access")
+
+    def test_write_back_preserves_other_credentials_in_the_blob(self):
+        # The same keychain entry holds mcpOAuth. A partial write drops it.
+        run, calls = self._runner(self._blob())
+        with patch.object(uc.sys, "platform", "darwin"), \
+             patch.object(uc, "REFRESH_ENABLED", True), \
+             patch.object(uc, "_keychain_account", return_value="isti"), \
+             patch.object(uc.subprocess, "run", side_effect=run), \
+             patch.object(uc.urllib.request, "urlopen", return_value=self._resp(
+                 {"access_token": "new-access", "expires_in": 28800})):
+            uc._refresh_claude_macos_keychain()
+        writes = [c for c in calls if "add-generic-password" in c]
+        written = json.loads(writes[0][writes[0].index("-w") + 1])
+        self.assertEqual(written["mcpOAuth"], {"some": "other-credential"})
+
+    def test_write_back_uses_the_discovered_account_not_a_hardcoded_one(self):
+        run, calls = self._runner(self._blob())
+        with patch.object(uc.sys, "platform", "darwin"), \
+             patch.object(uc, "REFRESH_ENABLED", True), \
+             patch.object(uc, "_keychain_account", return_value="someone-else"), \
+             patch.object(uc.subprocess, "run", side_effect=run), \
+             patch.object(uc.urllib.request, "urlopen", return_value=self._resp(
+                 {"access_token": "new-access", "expires_in": 28800})):
+            uc._refresh_claude_macos_keychain()
+        write = [c for c in calls if "add-generic-password" in c][0]
+        self.assertEqual(write[write.index("-a") + 1], "someone-else")
+
+    def test_failed_write_back_is_retried_then_announced(self):
+        # The dangerous case: refresh succeeded, so the OLD refresh token is
+        # already dead. Silence here leaves a machine that cannot refresh and
+        # nobody knowing why.
+        run, calls = self._runner(self._blob(), write_rc=1)
+        with patch.object(uc.sys, "platform", "darwin"), \
+             patch.object(uc, "REFRESH_ENABLED", True), \
+             patch.object(uc, "_keychain_account", return_value="isti"), \
+             patch.object(uc.subprocess, "run", side_effect=run), \
+             patch.object(uc.urllib.request, "urlopen", return_value=self._resp(
+                 {"access_token": "new-access", "refresh_token": "refresh-new",
+                  "expires_in": 28800})), \
+             patch("builtins.print") as printed:
+            got = uc._refresh_claude_macos_keychain()
+        self.assertEqual(got, "new-access")  # still usable for THIS run
+        self.assertEqual(len([c for c in calls if "add-generic-password" in c]), 2)
+        said = " ".join(str(a) for call in printed.call_args_list for a in call.args)
+        self.assertIn("ALERT", said)
+        self.assertIn("/login", said)
+
+    def test_http_failure_leaves_the_credential_untouched(self):
+        run, calls = self._runner(self._blob())
+        with patch.object(uc.sys, "platform", "darwin"), \
+             patch.object(uc, "REFRESH_ENABLED", True), \
+             patch.object(uc, "_keychain_account", return_value="isti"), \
+             patch.object(uc.subprocess, "run", side_effect=run), \
+             patch.object(uc.urllib.request, "urlopen",
+                          side_effect=urllib.error.URLError("no network")):
+            self.assertIsNone(uc._refresh_claude_macos_keychain())
+        self.assertEqual([c for c in calls if "add-generic-password" in c], [])
+
+    def test_disabled_by_env_flag_never_calls_out(self):
+        with patch.object(uc.sys, "platform", "darwin"), \
+             patch.object(uc, "REFRESH_ENABLED", False), \
+             patch.object(uc.urllib.request, "urlopen") as opened:
+            self.assertIsNone(uc._refresh_claude_macos_keychain())
+            opened.assert_not_called()
+
+    def test_expired_keychain_token_triggers_refresh_in_read_path(self):
+        past_ms = (time.time() - 5 * 3600) * 1000
+        kc = {"token": "stale", "expired_hours": 5}
+        with patch.object(uc.os.path, "exists", lambda p: False), \
+             patch.object(uc, "_read_claude_macos_keychain", return_value=kc), \
+             patch.object(uc, "_refresh_claude_macos_keychain", return_value="fresh-one"):
+            token, source = uc._read_claude_token()
+        self.assertEqual(token, "fresh-one")
+        self.assertEqual(source, "macos_keychain (refreshed)")
+
+    def test_fresh_keychain_token_is_not_refreshed(self):
+        kc = {"token": "still-good", "expired_hours": None}
+        with patch.object(uc.os.path, "exists", lambda p: False), \
+             patch.object(uc, "_read_claude_macos_keychain", return_value=kc), \
+             patch.object(uc, "_refresh_claude_macos_keychain") as refresh:
+            token, source = uc._read_claude_token()
+            refresh.assert_not_called()
+        self.assertEqual((token, source), ("still-good", "macos_keychain"))
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
