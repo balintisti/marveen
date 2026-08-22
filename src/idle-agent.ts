@@ -422,3 +422,87 @@ export function buildWakeMessage(
   )
   return out.join('\n')
 }
+
+/** One human-facing alert raised during a single sweep, before it is sent. */
+export interface FleetAlert {
+  kind: 'still-idle' | 'pane-unreadable' | 'no-work-check' | 'wake-enqueue-failed'
+  agent: string
+  minutes?: number
+  workCount?: number
+}
+
+/** Collapse a sweep's alerts into ONE owner-facing message.
+ *
+ *  Measured 2026-08-22: the watcher called sendAlert() inside its per-agent loop, so
+ *  four idle agents produced FOUR Telegram messages -- and again at the next re-alert
+ *  window. The owner got eight notifications between 04:58 and 05:28 for one situation
+ *  ("the fleet is standing"), while asleep. Nothing was wrong with the escalation; the
+ *  fan-out was. Per-agent rate limiting cannot fix it, because the limit is per agent:
+ *  the more agents there are, the more copies of the same news.
+ *
+ *  A single alert keeps its original single-agent wording -- the fleet case must not
+ *  make the common case worse. Two or more are grouped by kind, because the kinds ask
+ *  for different things: "still idle" is a look-at-the-pane, a missing work-check is a
+ *  config gap, and an unreadable pane means the guard is BLIND, not that anyone is idle. */
+export function buildFleetAlert(alerts: FleetAlert[]): string {
+  if (alerts.length === 0) return ''
+
+  const stillIdle = (a: FleetAlert) =>
+    `A(z) "${a.agent}" ${a.minutes} perce tetlen, ${a.workCount} tetellel a soraban, ES MAR ` +
+    `FELEBRESZTETTEM -- az ebreszto uzenetet megkapta, megsem mozdult. Ezert szolok: nem az a hir, ` +
+    `hogy all valaki, hanem hogy egy ebresztes nem hatott. Nezd meg a panelt (elakadt turn, telitett ` +
+    `kontextus), vagy ha tenyleg nincs mit tennie, az a workcheck.json-jaban latszodjon.`
+  const paneUnreadable = (a: FleetAlert) =>
+    `A(z) "${a.agent}" panelje NEM OLVASHATO (nincs session, vagy a capture elszallt), ezert nem ` +
+    `tudom megmondani, dolgozik-e. Ez NEM azt jelenti, hogy dolgozik -- azt jelenti, hogy az or VAK ` +
+    `erre az agensre. Nezd meg a tmux session-jet.`
+  const noWorkCheck = (a: FleetAlert) =>
+    `A(z) "${a.agent}" agensnek NINCS workcheck.json-ja, ezert nem tudom megmondani, van-e dolga. ` +
+    `Ez konfiguracios hiany, NEM az agens hibaja -- amig nincs, a tetlenseg-or rá nem mukodik. ` +
+    `Fajl: agents/${a.agent}/workcheck.json, tartalom pl. {"kind":"none"} ha ennek az agensnek ` +
+    `nincs sora ebben a rendszerben.`
+  const enqueueFailed = (a: FleetAlert) =>
+    `A(z) "${a.agent}" ${a.minutes} perce tetlen, ${a.workCount} tetellel, es az EBRESZTO UZENETET ` +
+    `SEM SIKERULT betenni a soraba. Ez nem tetlenseg-kerdes tobbe, hanem az uzenetsore. Nezd meg kezzel.`
+
+  const single: Record<FleetAlert['kind'], (a: FleetAlert) => string> = {
+    'still-idle': stillIdle,
+    'pane-unreadable': paneUnreadable,
+    'no-work-check': noWorkCheck,
+    'wake-enqueue-failed': enqueueFailed,
+  }
+
+  if (alerts.length === 1) return `[tetlen-or] ${single[alerts[0].kind](alerts[0])}`
+
+  // Group headers say what to DO, because that is what differs between the kinds.
+  const groups: { kind: FleetAlert['kind']; header: string; line: (a: FleetAlert) => string }[] = [
+    {
+      kind: 'still-idle',
+      header: 'EBRESZTES UTAN IS ALL (nezd meg a panelt: elakadt turn, telitett kontextus):',
+      line: (a) => `  ${a.agent} -- ${a.minutes} perce, ${a.workCount} tetellel`,
+    },
+    {
+      kind: 'wake-enqueue-failed',
+      header: 'AZ EBRESZTOT BE SEM LEHETETT TENNI A SORBA (ez mar az uzenetsor baja):',
+      line: (a) => `  ${a.agent} -- ${a.minutes} perce, ${a.workCount} tetellel`,
+    },
+    {
+      kind: 'pane-unreadable',
+      header: 'A PANEL NEM OLVASHATO -- az or VAK ezekre, nem azt mondja, hogy dolgoznak:',
+      line: (a) => `  ${a.agent}`,
+    },
+    {
+      kind: 'no-work-check',
+      header: 'NINCS workcheck.json (konfiguracios hiany, nem az agens hibaja):',
+      line: (a) => `  ${a.agent}`,
+    },
+  ]
+
+  const out = [`[tetlen-or] ${alerts.length} agensrol szolok EGY uzenetben.`]
+  for (const g of groups) {
+    const mine = alerts.filter((a) => a.kind === g.kind)
+    if (!mine.length) continue
+    out.push('', g.header, ...mine.map(g.line))
+  }
+  return out.join('\n')
+}

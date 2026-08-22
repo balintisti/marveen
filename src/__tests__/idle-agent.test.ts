@@ -4,6 +4,7 @@ import {
   decideIdleAlert,
   parseWorkCheck,
   buildWakeMessage,
+  buildFleetAlert,
   NO_IDLE_STATE,
   type IdleAgentInput,
   type IdleAgentState,
@@ -650,5 +651,58 @@ describe('the watcher actually passes the coordinator id', () => {
     expect(src).toMatch(/selectDeclaredWork\([^)]*MAIN_AGENT_ID\)/)
     // And that the id is imported, not a stray local that happens to share the name.
     expect(src).toMatch(/import \{ MAIN_AGENT_ID \} from '\.\.\/config\.js'/)
+  })
+})
+
+// Measured 2026-08-22: the watcher sent one Telegram message PER AGENT from inside its
+// sweep loop, so four standing agents produced four notifications -- and four more at
+// the next re-alert window. Eight messages for one situation, at 05:00, while the owner
+// slept. The escalation itself was right; the fan-out was not, and per-agent rate
+// limiting cannot fix it because the limit is per agent.
+describe('buildFleetAlert', () => {
+  const idle = (agent: string, minutes = 27, workCount = 40) =>
+    ({ kind: 'still-idle', agent, minutes, workCount }) as const
+
+  it('says nothing when there is nothing to say', () => {
+    expect(buildFleetAlert([])).toBe('')
+  })
+
+  it('keeps the ORIGINAL single-agent wording, so the common case does not get worse', () => {
+    const msg = buildFleetAlert([idle('didi', 27, 40)])
+    expect(msg).toContain('"didi" 27 perce tetlen, 40 tetellel a soraban')
+    expect(msg).toContain('MAR FELEBRESZTETTEM')
+    // The fleet framing must NOT appear for one agent.
+    expect(msg).not.toMatch(/EGY uzenetben/)
+  })
+
+  it('collapses four standing agents into ONE message that names all four', () => {
+    const msg = buildFleetAlert([idle('dexter', 27, 234), idle('didi', 27, 40), idle('jarvis', 27, 1), idle('mandark', 27, 16)])
+    for (const a of ['dexter', 'didi', 'jarvis', 'mandark']) expect(msg).toContain(a)
+    expect(msg).toContain('4 agensrol szolok EGY uzenetben')
+    // The counts survive the collapse -- an aggregate that drops the numbers would
+    // trade eight useful messages for one useless one.
+    expect(msg).toContain('234')
+    expect(msg).toContain('16')
+  })
+
+  it('groups by KIND, because the kinds ask the reader for different things', () => {
+    const msg = buildFleetAlert([
+      idle('didi'),
+      { kind: 'pane-unreadable', agent: 'mandark' },
+      { kind: 'no-work-check', agent: 'newbie' },
+    ])
+    expect(msg).toMatch(/EBRESZTES UTAN IS ALL/)
+    expect(msg).toMatch(/A PANEL NEM OLVASHATO/)
+    expect(msg).toMatch(/NINCS workcheck\.json/)
+    // An unreadable pane is the guard being BLIND -- it must not read as idleness.
+    expect(msg).toMatch(/VAK/)
+    // ...and mandark must be under the blind header, not the standing one.
+    expect(msg.indexOf('mandark')).toBeGreaterThan(msg.indexOf('A PANEL NEM OLVASHATO'))
+  })
+
+  it('does not invent a group that has no members', () => {
+    const msg = buildFleetAlert([idle('didi'), idle('dexter')])
+    expect(msg).not.toMatch(/NINCS workcheck/)
+    expect(msg).not.toMatch(/A PANEL NEM OLVASHATO/)
   })
 })

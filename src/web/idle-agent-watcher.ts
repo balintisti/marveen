@@ -14,6 +14,8 @@ import {
   countDeclaredWork,
   selectDeclaredWork,
   buildWakeMessage,
+  buildFleetAlert,
+  type FleetAlert,
   NO_IDLE_STATE,
   type IdleAgentState,
   type IdleAgentThresholds,
@@ -113,6 +115,13 @@ function tick(): void {
     const comments = lastCommentAtByCard()
     const now = Date.now()
 
+    // Alerts are COLLECTED here and sent once at the end of the sweep. Sending inside
+    // the loop turned one situation ("the fleet is standing") into one Telegram message
+    // per agent -- eight of them between 04:58 and 05:28 on 2026-08-22, while the owner
+    // slept. Per-agent rate limiting cannot fix that: the limit is per agent, so more
+    // agents means more copies of the same news.
+    const alerts: FleetAlert[] = []
+
     for (const agent of agents) {
       const running = isAgentRunning(agent)
       const check = parseWorkCheck(readWorkCheckRaw(agent))
@@ -140,22 +149,13 @@ function tick(): void {
       if (!decision.alert) continue
 
       if (decision.reason === 'pane-unreadable') {
-        sendAlert(
-          `[tetlen-or] A(z) "${agent}" panelje NEM OLVASHATO (nincs session, vagy a capture elszallt), ` +
-            `ezert nem tudom megmondani, dolgozik-e. Ez NEM azt jelenti, hogy dolgozik -- azt jelenti, ` +
-            `hogy az or VAK erre az agensre. Nezd meg a tmux session-jet.`,
-        )
+        alerts.push({ kind: 'pane-unreadable', agent })
         logger.warn({ idleGuard: true, agent }, 'idle guard: pane unreadable, guard blind for this agent')
         continue
       }
 
       if (decision.reason === 'no-work-check-declared') {
-        sendAlert(
-          `[tetlen-or] A(z) "${agent}" agensnek NINCS workcheck.json-ja, ezert nem tudom megmondani, ` +
-            `van-e dolga. Ez konfiguracios hiany, NEM az agens hibaja -- amig nincs, a tetlenseg-or ` +
-            `rá nem mukodik. Fajl: agents/${agent}/workcheck.json, tartalom pl. {"kind":"none"} ha ` +
-            `ennek az agensnek nincs sora ebben a rendszerben.`,
-        )
+        alerts.push({ kind: 'no-work-check', agent })
         logger.warn({ idleGuard: true, agent }, 'idle guard: agent has no declared work check')
         continue
       }
@@ -173,28 +173,26 @@ function tick(): void {
           // A failed enqueue must not look like a successful wake: stage 2 would then
           // wait out its grace window for a message that was never sent.
           logger.warn({ err, agent }, 'idle guard: could not enqueue the wake message')
-          sendAlert(
-            `[tetlen-or] A(z) "${agent}" ${minutes} perce tetlen, ${decision.workCount} tetellel, ` +
-              `es az EBRESZTO UZENETET SEM SIKERULT betenni a soraba. Ez nem tetlenseg-kerdes tobbe, ` +
-              `hanem az uzenetsore. Nezd meg kezzel.`,
-          )
+          alerts.push({
+            kind: 'wake-enqueue-failed',
+            agent,
+            minutes,
+            workCount: decision.workCount,
+          })
         }
         continue
       }
 
       const minutes = Math.round(decision.idleForMs / 60_000)
-      sendAlert(
-        `[tetlen-or] A(z) "${agent}" ${minutes} perce tetlen, ${decision.workCount} tetellel a soraban, ` +
-          `ES MAR FELEBRESZTETTEM -- az ebreszto uzenetet megkapta, megsem mozdult. Ezert szolok: ` +
-          `nem az a hir, hogy all valaki, hanem hogy egy ebresztes nem hatott. ` +
-          `Nezd meg a panelt (elakadt turn, telitett kontextus), vagy ha tenyleg nincs mit tennie, ` +
-          `az a workcheck.json-jaban latszodjon.`,
-      )
+      alerts.push({ kind: 'still-idle', agent, minutes, workCount: decision.workCount })
       logger.warn(
         { idleGuard: true, agent, workCount: decision.workCount, idleForMs: decision.idleForMs },
         'idle guard: agent still idle AFTER a wake (stage 2) -- human alerted',
       )
     }
+
+    // One message for the whole sweep, or none at all.
+    if (alerts.length > 0) sendAlert(buildFleetAlert(alerts))
   } catch (err) {
     logger.warn({ err }, 'idle guard: tick error')
   }
