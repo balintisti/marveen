@@ -116,6 +116,36 @@ function fireKanbanDispatch(id: string, actor?: string | null): void {
   }
 }
 
+/** Literal sub-paths of /api/kanban that are NOT card ids. */
+export const KANBAN_RESERVED_SEGMENTS = ['archived', 'labels', 'assignees', 'heartbeat-summary'] as const
+
+/** Match `/api/kanban/<id>` -- and NEVER match a literal sub-path.
+ *
+ *  Measured 2026-08-22, minutes after the GET arm went live: `/api/kanban/archived`
+ *  resolved as a card whose id is "archived", and the archive listing answered
+ *  "Kártya nem található" -- on the exact endpoint the change existed to make usable.
+ *  The suite was green; what caught it was a negative control against the running
+ *  service (a search for a nonsense word returned one "hit", which was the error body).
+ *
+ *  PUT and DELETE carried the same collision from the start; nobody had ever aimed
+ *  them at a literal, so it stayed invisible. Excluding the reserved segments fixes
+ *  all three arms, and a literal route added later is covered by one entry here --
+ *  not by remembering to order the handlers correctly.
+ */
+export function matchKanbanCardPath(path: string): RegExpMatchArray | null {
+  const m = path.match(/^\/api\/kanban\/([^/]+)$/)
+  if (!m) return null
+  let seg: string
+  try {
+    seg = decodeURIComponent(m[1])
+  } catch {
+    // A malformed escape is not a reserved word, and it is not our job to reject it
+    // here -- the id simply will not be found.
+    seg = m[1]
+  }
+  return (KANBAN_RESERVED_SEGMENTS as readonly string[]).includes(seg) ? null : m
+}
+
 export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   const { req, res, path, method } = ctx
 
@@ -261,7 +291,18 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     return true
   }
 
-  const kanbanCardMatch = path.match(/^\/api\/kanban\/([^/]+)$/)
+  // `/api/kanban/<id>` must never swallow a LITERAL sub-path. Measured 2026-08-22,
+  // minutes after deploying the GET arm below: `/api/kanban/archived` resolved as a
+  // card whose id is "archived", and the archive listing began answering
+  // "Kártya nem található" -- on the exact endpoint this change existed to make
+  // usable. A negative control caught it (a search for a nonsense word returned one
+  // "hit", which was the error object).
+  //
+  // PUT and DELETE carried the same collision all along; nobody had ever aimed them
+  // at a literal, so it stayed invisible. Excluding the reserved words fixes all
+  // three arms at once, and the next literal route added above will be covered by
+  // adding one entry here rather than by remembering to order the handlers.
+  const kanbanCardMatch = matchKanbanCardPath(path)
   // Read ONE card, archived ones included. The archive listing deliberately does
   // not carry `description` (see listArchivedKanbanCards -- the payload grows
   // without bound), so `q` finds the card and this route reads its body. Without
