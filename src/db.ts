@@ -1786,7 +1786,6 @@ export function unarchiveKanbanCard(id: string): boolean {
 export interface ArchivedKanbanCard {
   id: string
   title: string
-  description: string | null
   status: string
   project: string | null
   priority: string
@@ -1804,15 +1803,22 @@ export function listArchivedKanbanCards(opts: {
   limit: number
 }): ArchivedKanbanCard[] {
   const { q, project, label, from, to, limit } = opts
-  // `description` is SELECTed and searched, and that is the whole point of the
-  // archive rather than a nicety. The house rule for a duplicate is: carry the
-  // content onto the surviving card, THEN archive the loser -- so the archive is
-  // the safety net under every merge. Measured 2026-08-22: the listing returned
-  // title/status/assignee only and `q` searched title/project/assignee, so the
-  // body of a merged-away card was unreachable through the API. A net that
-  // cannot be searched is not a net; it looks like one, which is worse.
+  // `q` searches the BODY, but the body is deliberately NOT in the projection.
+  //
+  // The house rule for a duplicate is: carry the content onto the surviving card,
+  // THEN archive the loser -- so the archive is the safety net under every merge.
+  // Until 2026-08-22 `q` searched title/project/assignee only, which made a
+  // merged-away body unfindable; searching it costs one more LIKE and no payload.
+  //
+  // Returning the body here would cost payload that grows without bound. Measured
+  // the same day: 634 cards carry 737 KB of descriptions (~1 KB each), 175 `done`
+  // cards are still queued for the 30-day archive sweep, and this endpoint's row
+  // cap defaults to 500 and allows 5000. The archive only ever grows, so a
+  // projection that carries bodies turns one listing into megabytes.
+  // Reading ONE body is a different request, and it has its own route:
+  // GET /api/kanban/<id> (routes/kanban.ts), which reaches archived cards too.
   let sql = `
-    SELECT DISTINCT kc.id, kc.title, kc.description, kc.status, kc.project, kc.priority, kc.assignee, kc.archived_at, kc.updated_at
+    SELECT DISTINCT kc.id, kc.title, kc.status, kc.project, kc.priority, kc.assignee, kc.archived_at, kc.updated_at
     FROM kanban_cards kc
   `
   const params: unknown[] = []

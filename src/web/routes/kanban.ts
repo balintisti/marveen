@@ -262,6 +262,18 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   }
 
   const kanbanCardMatch = path.match(/^\/api\/kanban\/([^/]+)$/)
+  // Read ONE card, archived ones included. The archive listing deliberately does
+  // not carry `description` (see listArchivedKanbanCards -- the payload grows
+  // without bound), so `q` finds the card and this route reads its body. Without
+  // both halves a merged-away card is searchable but unreadable.
+  if (kanbanCardMatch && method === 'GET') {
+    const id = decodeURIComponent(kanbanCardMatch[1])
+    const card = getKanbanCard(id)
+    if (card) { json(res, card); return true }
+    json(res, { error: 'Kártya nem található' }, 404)
+    return true
+  }
+
   if (kanbanCardMatch && method === 'PUT') {
     const id = decodeURIComponent(kanbanCardMatch[1])
     const body = await readBody(req)
