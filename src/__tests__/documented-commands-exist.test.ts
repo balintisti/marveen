@@ -79,6 +79,15 @@ describe('the matcher itself, before it is trusted with a verdict', () => {
   const MUST_NOT_MATCH: string[] = [
     '# No CALENDAR_ID here any more: scripts/calendar-agenda.sh reads',
     '  # korabban a scripts/regi-valami.sh csinalta ezt, mar nem letezik',
+    // THE CASE THE COMMENT-STRIPPER ACTUALLY EXISTS FOR, and it was missing
+    // from this list until a mutation stayed green: the two lines above carry
+    // no interpreter, so the anchor alone rejects them and the stripper was
+    // never exercised. A comment that quotes the OLD invocation is the
+    // realistic shape -- it is exactly what someone writes when removing a
+    // script, and without stripping it would demand a file that is gone on
+    // purpose.
+    '# korabban ezt hivta: bash scripts/regi-valami.sh --hours 24',
+    '   # python3 scripts/torolt-mero.py  (2026-08-01 ota nincs meg)',
     'Vagy hasznald a `scripts/agent-msg.sh` helpert (HTTP-statusz + id ellenorzes)',
     'A `scripts/` mappa a repo gyokereben van',
     'cd /Users/isti/marveen && python3 store/usage-collect.py',
@@ -98,9 +107,11 @@ describe('the matcher itself, before it is trusted with a verdict', () => {
   })
 
   it('reports the population, so the numbers above mean something', () => {
-    // 7 must-match / 6 must-not-match, 0 false negatives, 0 false positives.
+    // 7 must-match / 8 must-not-match, 0 false negatives, 0 false positives.
+    // The last two arrived after a mutation: deleting the comment-stripper left
+    // every test green, which said more about this list than about the code.
     expect(MUST_MATCH).toHaveLength(7)
-    expect(MUST_NOT_MATCH).toHaveLength(6)
+    expect(MUST_NOT_MATCH).toHaveLength(8)
   })
 })
 
