@@ -249,6 +249,53 @@ else
   ok "No failure log"
 fi
 
+# --- Google access (calendar + Drive + mail) ---
+#
+# WHY THIS IS IN THE DOCTOR (2026-08-22). All three legs were set up on
+# 2026-08-20 and verified once, by hand. Only the calendar is wired into
+# anything the system runs; Drive has zero callers in src/, so it could rot for
+# weeks with nobody noticing. And the calendar leg has already been reported
+# broken while working: the morning briefing told Isti "nincs bekotve
+# naptar-eszkoz" on a day the API answered 200 with accessRole=writer.
+#
+# scripts/google-health.sh always prints JSON and always exits 0, so a missing
+# build or a dead node shows up as a NAMED failure here rather than as a silent
+# skip.
+echo -e "\n${BOLD}Google access${RESET}"
+if [ -x "scripts/google-health.sh" ]; then
+  GH_JSON="$(bash scripts/google-health.sh 2>/dev/null)"
+  if [ -z "$GH_JSON" ]; then
+    fail "google-health.sh: no output"
+  else
+    # python3 is a hard requirement of the installer; jq is not installed on a
+    # plain box, so it must not appear here.
+    GH_LINES="$(printf '%s' "$GH_JSON" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception as e:
+    print("FAIL|health JSON unparseable: %s" % type(e).__name__)
+    sys.exit(0)
+if "legs" not in d:
+    print("FAIL|%s" % (d.get("error") or "no legs in output"))
+    sys.exit(0)
+print("INFO|auth: %s, via: %s" % (d.get("auth", "?"), d.get("via", "?")))
+for name, leg in d["legs"].items():
+    print("%s|%s: %s" % ("OK" if leg.get("ok") else "FAIL", name, leg.get("detail", "?")))
+print("INFO|nem fedi: %s" % d.get("not_covered", "?"))
+')"
+    while IFS='|' read -r status text; do
+      case "$status" in
+        OK)   ok "$text" ;;
+        FAIL) fail "$text" ;;
+        *)    echo "    $text" ;;
+      esac
+    done <<< "$GH_LINES"
+  fi
+else
+  warn "scripts/google-health.sh missing or not executable"
+fi
+
 # --- Summary ---
 echo ""
 if [ "$FAIL" -eq 0 ]; then
