@@ -89,3 +89,35 @@ echo "" >> "$OUTPUT"
 echo "_${SKILL_COUNT} skill indexelve. Generálva: $(date '+%Y-%m-%d %H:%M')_" >> "$OUTPUT"
 
 echo "Skill index generated: $OUTPUT ($SKILL_COUNT skills)"
+
+# ---- meret-or -------------------------------------------------------------
+# MIERT: a skill-hatar (500 sor) eddig CSAK azon allt, hogy valakinek eszebe jut
+# megmerni. 2026-08-21 13:45-kor jelentettem, hogy a harom bontott skill 132/226/186
+# sor -- 2026-08-22 04:30-ra az egyik 576 lett, es a hatar-atlepes SEHOL nem latszott.
+# Isti szabalya: ha egy megoldas azon all, hogy valaki megjegyez valamit, az nem megoldas.
+SKILL_LINE_LIMIT="${SKILL_LINE_LIMIT:-500}"
+OVER_LIMIT=0
+OVER_LIST=""
+for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
+  [ -f "$f" ] || continue
+  n=$(wc -l < "$f" | tr -d ' ')
+  if [ "$n" -gt "$SKILL_LINE_LIMIT" ]; then
+    OVER_LIMIT=$((OVER_LIMIT+1))
+    OVER_LIST="${OVER_LIST}  $(basename "$(dirname "$f")")  ${n} sor\n"
+  fi
+done
+
+# POZITIV KONTROLL: egy or, ami sosem tud tuzelni, ugyanugy "mukodik", mint egy helyes.
+# Ellenorizzuk, hogy a szamlalo-ag EGYALTALAN elerheto-e egy biztosan tullepo bemenettel.
+_probe=$(printf 'x\n%.0s' $(seq 1 $((SKILL_LINE_LIMIT+1))) | wc -l | tr -d ' ')
+if [ "$_probe" -le "$SKILL_LINE_LIMIT" ]; then
+  echo "MERET-OR: a pozitiv kontroll ELBUKOTT (a szamlalas nem mukodik) -- az or NEM megbizhato." >&2
+elif [ "$OVER_LIMIT" -gt 0 ]; then
+  echo "" >&2
+  echo "MERET-OR: ${OVER_LIMIT} skill lepte tul a ${SKILL_LINE_LIMIT} soros hatart:" >&2
+  printf "%b" "$OVER_LIST" >&2
+  echo "  -> references/ bontas javasolt. A LEGFRISSEBB szekciok vannak a fajl vegen," >&2
+  echo "     tehat epp azok jutnak el a legkevesebb olvasohoz." >&2
+else
+  echo "MERET-OR: minden skill a ${SKILL_LINE_LIMIT} soros hatar alatt (pozitiv kontroll: OK)."
+fi
