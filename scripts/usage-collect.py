@@ -34,6 +34,7 @@ import glob
 import json
 import os
 import subprocess
+import time
 import sys
 import urllib.error
 import urllib.request
@@ -305,6 +306,57 @@ def collect_codex():
 # Claude collector -- authoritative endpoint, else local-transcript estimate
 # --------------------------------------------------------------------------
 
+def _read_claude_macos_keychain():
+    """Return the Claude Code session token from the macOS Keychain, or None.
+
+    WHY THIS EXISTS, and why its absence read as "no key on this machine"
+    (measured 2026-08-22): on macOS the Claude Code login credentials are NOT
+    in ~/.claude/.credentials.json -- that file does not exist -- they are in
+    the login Keychain under the service name "Claude Code-credentials", in
+    the SAME {"claudeAiOauth": {...}} shape. A collector that only knows the
+    file reports "no oauth token available", which is indistinguishable from
+    "this machine was never logged in", and sends whoever reads it looking for
+    a key that is already there.
+
+    AND THE SCOPE IS THE POINT. This token carries user:profile and
+    user:sessions:claude_code -- the ones /api/oauth/usage wants. A
+    `claude setup-token` long-lived token carries user:inference ONLY, so it
+    answers 403 on that endpoint: present, valid, and useless here. That is
+    why the keychain is tried BEFORE the .env token rather than after.
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        out = subprocess.run(
+            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode != 0 or not out.stdout.strip():
+            return None
+        data = json.loads(out.stdout.strip())
+        oauth = data.get("claudeAiOauth") or {}
+        token = oauth.get("accessToken")
+        if not token:
+            return None
+        # A 401 from the usage endpoint and an EXPIRED token look identical
+        # from the outside, and the difference is the whole answer: one means
+        # "wrong credential", the other means "right credential, log in
+        # again". expiresAt is right here in the same blob, so say which.
+        exp = oauth.get("expiresAt")
+        expired_for = None
+        if isinstance(exp, (int, float)):
+            delta = time.time() - (exp / 1000.0)
+            if delta > 0:
+                expired_for = int(delta // 3600)
+        return {"token": token, "expired_hours": expired_for}
+    except (subprocess.SubprocessError, OSError, ValueError):
+        # Missing `security` binary, locked keychain, non-JSON blob: these
+        # genuinely mean "no usable keychain credential". A NameError or
+        # TypeError does NOT -- it is a bug in this function, and swallowing
+        # it would report "no keychain entry" for code that never ran.
+        return None
+
+
 def _read_claude_token():
     """Return (token, token_source) or (None, None). Never logs the value."""
     cred_path = os.path.expanduser("~/.claude/.credentials.json")
@@ -318,6 +370,13 @@ def _read_claude_token():
                 return token, "credentials_file"
         except Exception:
             pass
+
+    kc = _read_claude_macos_keychain()
+    if kc:
+        src = "macos_keychain"
+        if kc["expired_hours"] is not None:
+            src = "macos_keychain (EXPIRED %dh ago -- run /login in Claude Code)" % kc["expired_hours"]
+        return kc["token"], src
 
     if os.path.exists(ENV_PATH):
         try:
@@ -354,7 +413,7 @@ def _collect_claude_authoritative():
     """
     token, token_source = _read_claude_token()
     if not token:
-        return None, "no oauth token available (no credentials.json, no .env token)", "no_token"
+        return None, "no oauth token available (no credentials.json, no macOS keychain entry, no .env token)", "no_token"
 
     version = _claude_cli_version()
     req = urllib.request.Request(

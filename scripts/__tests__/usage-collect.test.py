@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 import tempfile
+import time
 import unittest
 import urllib.error
 from datetime import datetime, timedelta, timezone
@@ -789,6 +790,104 @@ class TestComputeAlerts(unittest.TestCase):
         later = self.NOW + timedelta(minutes=50)
         third = uc.compute_alerts(self._snapshot(claude_windows=window), state, now_utc=later)
         self.assertTrue(any("nearly exhausted" in a for a in third))
+
+
+class TestReadClaudeMacosKeychain(unittest.TestCase):
+    """The keychain is the ONLY place the Claude Code login token lives on
+    macOS -- there is no ~/.claude/.credentials.json. Before card-less fix
+    2026-08-22 the collector did not look there, reported "no oauth token
+    available", and that reads exactly like "this machine was never logged
+    in". These tests hold the three answers apart: present-and-fresh,
+    present-but-expired, and genuinely absent."""
+
+    def _fake_run(self, payload, returncode=0):
+        result = MagicMock()
+        result.returncode = returncode
+        result.stdout = payload
+        return result
+
+    def _blob(self, token="tok-abc", expires_at=None):
+        oauth = {"accessToken": token, "scopes": ["user:profile"]}
+        if expires_at is not None:
+            oauth["expiresAt"] = expires_at
+        return json.dumps({"claudeAiOauth": oauth})
+
+    def test_fresh_token_returned_without_expiry_flag(self):
+        future_ms = (time.time() + 3600) * 1000
+        with patch.object(uc.sys, "platform", "darwin"), patch.object(
+            uc.subprocess, "run", return_value=self._fake_run(self._blob(expires_at=future_ms))
+        ):
+            got = uc._read_claude_macos_keychain()
+        self.assertEqual(got["token"], "tok-abc")
+        self.assertIsNone(got["expired_hours"])
+
+    def test_expired_token_is_returned_but_flagged_with_age(self):
+        # It is still returned: the endpoint, not this function, decides.
+        # But an expired credential must not look like a wrong one -- the
+        # answers differ ("log in again" vs "wrong scope").
+        past_ms = (time.time() - 83 * 3600) * 1000
+        with patch.object(uc.sys, "platform", "darwin"), patch.object(
+            uc.subprocess, "run", return_value=self._fake_run(self._blob(expires_at=past_ms))
+        ):
+            got = uc._read_claude_macos_keychain()
+        self.assertEqual(got["token"], "tok-abc")
+        self.assertEqual(got["expired_hours"], 83)
+
+    def test_absent_entry_returns_none(self):
+        with patch.object(uc.sys, "platform", "darwin"), patch.object(
+            uc.subprocess, "run", return_value=self._fake_run("", returncode=44)
+        ):
+            self.assertIsNone(uc._read_claude_macos_keychain())
+
+    def test_non_darwin_never_shells_out(self):
+        with patch.object(uc.sys, "platform", "linux"), patch.object(
+            uc.subprocess, "run"
+        ) as run:
+            self.assertIsNone(uc._read_claude_macos_keychain())
+            run.assert_not_called()
+
+    def test_programming_error_is_not_swallowed_as_missing_credential(self):
+        # The regression this guards: a bare `except Exception` turned a
+        # NameError in this function into "no keychain entry", which is the
+        # most reassuring possible wrong answer.
+        with patch.object(uc.sys, "platform", "darwin"), patch.object(
+            uc.subprocess, "run", side_effect=NameError("time is not defined")
+        ):
+            with self.assertRaises(NameError):
+                uc._read_claude_macos_keychain()
+
+    def test_keychain_is_preferred_over_env_file_token(self):
+        # A `claude setup-token` token in .env carries user:inference ONLY and
+        # answers 403 on the usage endpoint. If the .env were consulted first,
+        # a working keychain credential would sit unused behind a 403.
+        future_ms = (time.time() + 3600) * 1000
+        with tempfile.NamedTemporaryFile("w", suffix=".env", delete=False) as f:
+            f.write("CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-env-one\n")
+            env_path = f.name
+        try:
+            with patch.object(uc, "ENV_PATH", env_path), patch.object(
+                uc.os.path, "exists", lambda p: p == env_path
+            ), patch.object(uc.sys, "platform", "darwin"), patch.object(
+                uc.subprocess, "run",
+                return_value=self._fake_run(self._blob(token="tok-keychain", expires_at=future_ms)),
+            ):
+                token, source = uc._read_claude_token()
+            self.assertEqual(token, "tok-keychain")
+            self.assertEqual(source, "macos_keychain")
+        finally:
+            os.unlink(env_path)
+
+    def test_expired_keychain_source_names_the_remedy(self):
+        past_ms = (time.time() - 5 * 3600) * 1000
+        with patch.object(uc.os.path, "exists", lambda p: False), patch.object(
+            uc.sys, "platform", "darwin"
+        ), patch.object(
+            uc.subprocess, "run", return_value=self._fake_run(self._blob(expires_at=past_ms))
+        ):
+            token, source = uc._read_claude_token()
+        self.assertEqual(token, "tok-abc")
+        self.assertIn("EXPIRED", source)
+        self.assertIn("/login", source)
 
 
 if __name__ == "__main__":
