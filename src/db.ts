@@ -1322,12 +1322,24 @@ export function saveAgentMemory(
   if (category === 'shared') clearMemoryCache()
   else memoryCacheInvalidate(agentId)
 
-  // Fire-and-forget: generate embedding asynchronously
-  generateEmbedding(content + (keywords ? ' ' + keywords : '')).then(emb => {
-    if (emb) {
-      db.prepare('UPDATE memories SET embedding = ? WHERE id = ?').run(JSON.stringify(emb), id)
+  // Fire-and-forget: generate embedding asynchronously.
+  //
+  // The empty `.catch(() => {})` that used to sit here was the most complete
+  // silence in the whole path: not a value, not a log, nothing. Saving stays
+  // fire-and-forget on purpose (a save must not wait on Ollama, and must not
+  // fail because of it) -- but a row that ends up without a vector is now at
+  // least visible at debug level, and the AUTHORITATIVE signal for it is
+  // getMemoryStats().withEmbedding plus the backfill result, both of which
+  // now separate "nothing to do" from "nothing worked".
+  embedText(content + (keywords ? ' ' + keywords : '')).then(res => {
+    if (res.ok) {
+      db.prepare('UPDATE memories SET embedding = ? WHERE id = ?').run(JSON.stringify(res.embedding), id)
+    } else {
+      logger.debug({ memoryId: id, err: res.error }, 'Memory saved without a vector')
     }
-  }).catch(() => {})
+  }).catch((err) => {
+    logger.debug({ memoryId: id, err }, 'Memory embedding job threw')
+  })
 
   return { id }
 }
@@ -2692,22 +2704,58 @@ export function markPendingTaskRetryAlert(taskName: string, agentName: string, t
 
 const EMBED_MODEL = 'nomic-embed-text'
 
-export async function generateEmbedding(text: string): Promise<number[] | null> {
+/**
+ * The outcome of one embedding request. The REASON is part of the value.
+ *
+ * WHY NOT `number[] | null` (2026-08-22). `null` meant four different things --
+ * Ollama not running, the model not pulled, a timeout, a malformed response --
+ * and every caller collapsed them into "no vector". The visible result was a
+ * backfill that answered `{"ok":true,"count":0}` for two nights running while
+ * 161 memories waited, because zero successes and zero work look identical
+ * from the outside. Naming the reason here is what lets the caller above tell
+ * "nothing to do" from "nothing worked".
+ */
+export type EmbedResult =
+  | { ok: true; embedding: number[] }
+  | { ok: false; error: string }
+
+/**
+ * `baseUrl` exists so a test can point this at a server it controls. Without
+ * that seam the only way to exercise the failure path is to have Ollama
+ * genuinely down -- which makes the test depend on a service nobody is
+ * thinking about, and (worse) makes it go GREEN for the wrong reason on the
+ * machine where the bug was found. Production callers pass nothing.
+ */
+export async function embedText(text: string, baseUrl: string = OLLAMA_URL): Promise<EmbedResult> {
   try {
-    const resp = await fetch(`${OLLAMA_URL}/api/embeddings`, {
+    const resp = await fetch(`${baseUrl}/api/embeddings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: EMBED_MODEL, prompt: text.slice(0, 2000) }),
       signal: AbortSignal.timeout(TOOL_TIMEOUTS['ollama-embedding']),
     })
+    // A NON-OK RESPONSE NEVER THREW, and that was the quietest path of all: a
+    // model that was never pulled answers 404 with a JSON body that simply has
+    // no `embedding` field, so the old code returned null having logged
+    // NOTHING -- not even at debug. "Ollama is down" at least left a trace;
+    // "you never pulled nomic-embed-text" left none.
+    if (!resp.ok) {
+      const body = (await resp.text().catch(() => '')).replace(/\s+/g, ' ').trim().slice(0, 160)
+      return { ok: false, error: `Ollama HTTP ${resp.status}${body ? `: ${body}` : ''} (model: ${EMBED_MODEL})` }
+    }
     const data = await resp.json() as { embedding?: number[] }
-    return data.embedding || null
+    if (!data.embedding || data.embedding.length === 0) {
+      return { ok: false, error: `Ollama valaszolt, de nem adott vektort (model: ${EMBED_MODEL})` }
+    }
+    return { ok: true, embedding: data.embedding }
   } catch (err) {
-    // Debug-level so it doesn't spam default INFO logs when Ollama isn't
-    // running (the common case on most user machines). Enables "why does
-    // hybrid search only return FTS results?" diagnostics without noise.
-    logger.debug({ err, ollamaUrl: OLLAMA_URL }, 'Embedding generation failed (Ollama not running?)')
-    return null
+    // STILL debug-level, and deliberately: Ollama is absent on most machines,
+    // and an INFO line per memory save would be pure noise. The fix is not a
+    // louder log -- nobody reads logs -- it is that the RESULT now carries the
+    // reason to whoever asked.
+    logger.debug({ err, ollamaUrl: baseUrl }, 'Embedding generation failed (Ollama not running?)')
+    const msg = err instanceof Error ? err.message : String(err)
+    return { ok: false, error: `${msg.replace(/\s+/g, ' ').trim().slice(0, 160)} (${baseUrl})` }
   }
 }
 
@@ -2745,9 +2793,14 @@ export async function hybridSearch(agentId: string, query: string, limit: number
   // FTS5 results
   const ftsResults = searchAgentMemories(agentId, query, limit * 2)
 
-  // Vector results
-  const queryEmbedding = await generateEmbedding(query)
-  const vecResults = queryEmbedding ? vectorSearch(agentId, queryEmbedding, limit * 2) : []
+  // Vector results. When the embedding fails, this degrades to FTS-only --
+  // deliberately, because a keyword hit is far better than an error page for
+  // someone recalling a memory. The degradation is SILENT to the caller today,
+  // and that is a separate, named gap on card a6685b0f: the search gets dumber
+  // and nothing says so. What is fixed here is the half that can be answered
+  // without changing every agent's recall contract.
+  const embedded = await embedText(query)
+  const vecResults = embedded.ok ? vectorSearch(agentId, embedded.embedding, limit * 2) : []
 
   // Reciprocal Rank Fusion
   const scores: Map<number, number> = new Map()
@@ -2767,20 +2820,82 @@ export async function hybridSearch(agentId: string, query: string, limit: number
   return ranked.slice(0, limit).map(([id]) => byId.get(id)!)
 }
 
-export async function backfillEmbeddings(): Promise<number> {
+/**
+ * What a backfill run actually did. `embedded` alone cannot say it.
+ *
+ * THE BUG THIS REPLACES (card a6685b0f, measured 2026-08-21 and 08-22). The
+ * old signature returned the SUCCESS COUNT and nothing else, so `0` meant both
+ * "every memory already has a vector" and "all 161 attempts failed because
+ * Ollama is not running". The dream-engine called this endpoint every night,
+ * got `{"ok":true,"count":0}` with HTTP 200, and moved on -- for two nights,
+ * while the vectorized count sat frozen at 200 and the newest 161 memories
+ * stayed keyword-only. Nothing was broken; the system was just quietly dumber.
+ *
+ * The fleet ALREADY KNEW: the dream-engine skill carries a note saying
+ * "count:0 is ambiguous, do not judge the state from the response". A
+ * documented workaround is not a fix -- the knowledge was there and the bug
+ * stayed. Same shape as the `search_emails` note that outlived the call it
+ * warned about by months.
+ */
+export interface BackfillResult {
+  /** False when there was work and any of it failed. */
+  ok: boolean
+  /** Rows with no vector when the run STARTED. */
+  pending: number
+  embedded: number
+  failed: number
+  /** True when we stopped early because the backend was clearly unavailable. */
+  aborted: boolean
+  /** Rows still without a vector after this run. */
+  remaining: number
+  /** The first real reason, verbatim enough to act on. */
+  error: string | null
+}
+
+/**
+ * Stop after this many consecutive failures. With Ollama down and 161 rows
+ * waiting, the old loop made 161 requests that each ran to the timeout and
+ * slept 100 ms between them, then returned 0 -- minutes of work to learn
+ * nothing. Three in a row is a backend that is down, not a bad record.
+ */
+const BACKFILL_ABORT_AFTER_CONSECUTIVE_FAILURES = 3
+
+export async function backfillEmbeddings(baseUrl: string = OLLAMA_URL): Promise<BackfillResult> {
   const rows = db.prepare('SELECT id, content, keywords FROM memories WHERE embedding IS NULL').all() as { id: number; content: string; keywords: string | null }[]
-  let count = 0
+  const pending = rows.length
+  let embedded = 0
+  let failed = 0
+  let consecutiveFailures = 0
+  let aborted = false
+  let error: string | null = null
+
   for (const row of rows) {
     const text = row.content + (row.keywords ? ' ' + row.keywords : '')
-    const emb = await generateEmbedding(text)
-    if (emb) {
-      db.prepare('UPDATE memories SET embedding = ? WHERE id = ?').run(JSON.stringify(emb), row.id)
-      count++
+    const res = await embedText(text, baseUrl)
+    if (res.ok) {
+      db.prepare('UPDATE memories SET embedding = ? WHERE id = ?').run(JSON.stringify(res.embedding), row.id)
+      embedded++
+      consecutiveFailures = 0
+    } else {
+      failed++
+      consecutiveFailures++
+      // Keep the FIRST reason, not the last: later ones are usually the same
+      // timeout repeated, and the first is the one closest to the cause.
+      if (error === null) error = res.error
+      if (consecutiveFailures >= BACKFILL_ABORT_AFTER_CONSECUTIVE_FAILURES) {
+        aborted = true
+        break
+      }
     }
     // Small delay to not overwhelm Ollama
     await new Promise(r => setTimeout(r, 100))
   }
-  return count
+
+  const remaining = pending - embedded
+  if (failed > 0) {
+    logger.warn({ pending, embedded, failed, aborted, err: error }, 'Embedding backfill did not complete')
+  }
+  return { ok: failed === 0, pending, embedded, failed, aborted, remaining, error }
 }
 
 // --- Pending Channel Requests ---

@@ -6720,7 +6720,21 @@ async function loadMemStats() {
       try {
         const r = await fetch('/api/memories/backfill', { method: 'POST' })
         const data = await r.json()
-        showToast(t('memories.toast.vector_count', { count: data.count }))
+        // "0 memories vectorized" used to be the SUCCESS toast for a run in
+        // which every single attempt failed, because the endpoint returned
+        // only a success count. The person who clicked the button got a
+        // reassuring message about a backend that is not running. The response
+        // now separates the two, so the toast can too -- and the failure toast
+        // carries the REASON, because "error" alone sends the reader to the
+        // logs, which is where this bug lived unnoticed for two nights.
+        if (data && data.ok === false) {
+          showToast(t('memories.toast.vector_failed', {
+            failed: data.failed != null ? data.failed : '?',
+            reason: data.error || '?',
+          }), 8000)
+        } else {
+          showToast(t('memories.toast.vector_count', { count: data && data.embedded != null ? data.embedded : 0 }))
+        }
         loadMemStats()
       } catch { showToast(t('memories.toast.vector_error')) }
     })

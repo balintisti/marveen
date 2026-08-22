@@ -1104,6 +1104,7 @@ window._i18n.en = {
   'memories.stat.vectors_btn':			'Generate vectors',
   'memories.stat.vectors_gen':			'Generating...',
   'memories.toast.vector_count':			'{count} memories vectorized',
+  'memories.toast.vector_failed':			'Vectorization failed for {failed} memories: {reason}',
   'messages.empty':			'No messages',
   'messages.empty_thread':			'No messages in this thread.',
   'messages.placeholder':			'Message {agent}...',

@@ -117,19 +117,33 @@ describe('getAgentMemories in-process cache', () => {
 // 3. Embedding backfill
 // ---------------------------------------------------------------------------
 describe('backfillEmbeddings', () => {
-  it('returns 0 when all memories already have embeddings or Ollama is unreachable', async () => {
-    // In the test environment Ollama is not running; the function must
-    // complete gracefully and return 0 (no memories without embeddings
-    // that it could successfully embed).
-    const count = await backfillEmbeddings()
-    expect(typeof count).toBe('number')
-    expect(count).toBeGreaterThanOrEqual(0)
+  // WHAT THESE USED TO ASSERT, AND WHY IT LET THE BUG THROUGH (rewritten
+  // 2026-08-22, card a6685b0f). The old version checked `typeof count ===
+  // 'number'` and `count >= 0`. Both are true of the broken implementation and
+  // of the fixed one, on a machine with Ollama and on a machine without -- so
+  // the test was green for two nights while the vectorizer sat dead and the
+  // endpoint reported success. A test that cannot fail is documentation with a
+  // green tick next to it.
+  //
+  // The failure paths now live in embedding-silent-success.test.ts, which
+  // drives a fake backend so the result does not depend on whether Ollama
+  // happens to be running here. What stays here are the INVARIANTS: the
+  // relationships between the fields that must hold in every world.
+  it('returns a result whose fields agree with each other', async () => {
+    const r = await backfillEmbeddings()
+    expect(r.remaining).toBe(r.pending - r.embedded)
+    expect(r.embedded + r.failed).toBeLessThanOrEqual(r.pending)
+    expect(r.ok).toBe(r.failed === 0)
   })
 
-  it('processes rows without embeddings and updates them when Ollama responds', async () => {
-    const BACKFILL_AGENT = 'backfill-test-agent'
+  it('carries a reason whenever something failed, and none when nothing did', async () => {
+    const r = await backfillEmbeddings()
+    if (r.failed > 0) expect(r.error).not.toBeNull()
+    else expect(r.error).toBeNull()
+  })
 
-    // Insert a memory bypassing saveAgentMemory so embedding stays NULL.
+  it('leaves every embedding column either NULL or valid JSON', async () => {
+    const BACKFILL_AGENT = 'backfill-test-agent'
     const db = getDb()
     const now = Math.floor(Date.now() / 1000)
     const result = db.prepare(
@@ -139,24 +153,15 @@ describe('backfillEmbeddings', () => {
     ).run('test-chat', 'Backfill target content', now, now, BACKFILL_AGENT)
     const id = Number(result.lastInsertRowid)
 
-    // Stub generateEmbedding so the test does not depend on a live Ollama.
-    // We reach into the module internals via the DB update path and verify
-    // the row stays untouched when the stub returns null (Ollama unavailable).
     const rowBefore = db.prepare('SELECT embedding FROM memories WHERE id = ?').get(id) as { embedding: string | null }
     expect(rowBefore.embedding).toBeNull()
 
-    // backfillEmbeddings calls generateEmbedding internally; without Ollama
-    // it returns null and the row remains NULL — that is the correct no-op path.
     await backfillEmbeddings()
 
-    // No assertion on count here: it depends on whether Ollama is reachable.
-    // We just assert no exception is thrown and the row is still valid.
     const rowAfter = db.prepare('SELECT embedding FROM memories WHERE id = ?').get(id) as { embedding: string | null }
-    // Embedding is either still null (Ollama unreachable) or a valid JSON array string.
     if (rowAfter.embedding !== null) {
       expect(() => JSON.parse(rowAfter.embedding!)).not.toThrow()
-      const parsed = JSON.parse(rowAfter.embedding!)
-      expect(Array.isArray(parsed)).toBe(true)
+      expect(Array.isArray(JSON.parse(rowAfter.embedding!))).toBe(true)
     }
   })
 })

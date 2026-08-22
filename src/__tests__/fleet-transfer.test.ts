@@ -56,7 +56,7 @@ vi.mock('../db.js', () => ({
     }),
     transaction: (fn: Function) => fn,
   }),
-  backfillEmbeddings: () => Promise.resolve(),
+  backfillEmbeddings: () => Promise.resolve({ ok: true, pending: 0, embedded: 0, failed: 0, aborted: false, remaining: 0, error: null }),
   initDatabase: () => {},
 }))
 
