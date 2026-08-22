@@ -23,6 +23,9 @@
 # busy agent measured 80+ minutes. At 3+ waiting the script says so on stderr and
 # tells the sender to use the card instead -- the number alone would arrive after
 # the send, when it can only help next time.
+# Every message gets a footer line: `[KULDVE: <ido> | sor: <n> | kuldo: <agens>]`.
+# See the KULDESI BELYEG block below for why it is KULDVE (not MERVE) and why it
+# is a footer (not a header).
 # Env: MARVEEN_WEB_PORT (default 3420).
 set -uo pipefail
 
@@ -63,7 +66,13 @@ if printf '%s' "$C" | grep -q '__STAMP__'; then
   fi
 fi
 
-BODY="$(FROM="$FROM" TO="$TO" C="$C" python3 -c 'import json,os; print(json.dumps({"from":os.environ["FROM"],"to":os.environ["TO"],"content":os.environ["C"]}))')"
+
+# A KET IDOBELYEG MEGFER EGYMAS MELLETT, es a SORREND szandekos (friday, a koteg
+# feloldasakor 2026-08-23): a `__STAMP__` a SZERZO szoveget javitja, tehat a
+# szerzo sajat tartalman kell futnia -- MIELOTT barmit hozzafuzunk. A lenti
+# `[KULDVE: ...]` labjegyzet ezutan kerul a vegere, es a `BODY` csak AKKOR epul,
+# amikor mar mindketto rajta van. Ket kulonbozo kerdesre valaszolnak: a
+# `__STAMP__` azt, AMIT a szerzo mert, a labjegyzet azt, AMIKOR a gep kuldott.
 
 # --- PREFLIGHT: the recipient's queue BEFORE we add to it (2026-08-21) ---
 # The post-send warning below is real but arrives too late: by the time the
@@ -84,6 +93,7 @@ BODY="$(FROM="$FROM" TO="$TO" C="$C" python3 -c 'import json,os; print(json.dump
 # FAIL-OPEN on measurement error, and SAY SO: a broken probe must not block a
 # message. Override a real backlog with --force as the 4th argument.
 FORCE="${4:-}"
+DEPTH_PRE=""
 if [ "$FORCE" != "--force" ]; then
   DEPTH_PRE="$(BASE="$BASE" TO="$TO" python3 -c '
 import os, sqlite3, sys
@@ -104,6 +114,51 @@ except Exception:
     exit 2
   fi
 fi
+
+# --- KULDESI BELYEG (2026-08-23) ---
+#
+# WHY: the fleet rule says every handed-over measurement carries WHEN it was
+# taken, ON WHAT STATE, and WHAT WOULD INVALIDATE IT. For kanban comments the
+# timestamp is already in the TOOL -- card-comment.sh substitutes __STAMP__, so
+# it cannot be forgotten. For inter-agent messages there was nothing, and that
+# is where most handovers happen. A rule that only holds where it was already
+# enforced is not a rule.
+#
+# `KULDVE`, NOT `MERVE`, and the difference is the whole point (Marveen caught
+# this before it shipped): the helper knows only when it SENT. Someone who
+# measures at 23:37 and sends at 23:44 would get a `MERVE: 23:44` header that
+# is FALSE -- and written by a machine, so more convincing than a human's
+# mistake. An automatism that labels the wrong field is worse than none: the
+# missing datum becomes a credible lie. Writing down when the MEASUREMENT
+# happened stays the author's job; the tool stamps only what it knows.
+#
+# And the pair is worth more than either half: with the measurement time in the
+# body and the send time here, THE DIFFERENCE IS ITSELF INFORMATION. Measured
+# tonight: 7 minutes in one case, 80 in another.
+#
+# FOOTER, NOT HEADER -- and this is a measured decision, not a preference.
+# Two consumers match on the START of the content:
+#   src/web/routes/messages.ts:210  !content.startsWith(COMPLETION_REPORT_PREFIX)
+#       -- the ping-pong breaker for completion reports
+#   src/db.ts getDispatchedPendingStats  content NOT LIKE '[Eredmény]%'
+#       -- feeds the soft-restart gate; on 2026-08-12 counting acks as blocking
+#          work made the main agent permanently ineligible for a soft restart
+# A prefix would shift any `[Eredmény] ...` sent through this helper out of both
+# patterns and re-open a documented incident. Nothing parses the END.
+STAMP_TIME="$(date '+%Y-%m-%d %H:%M %Z')"
+if [ "$FORCE" = "--force" ]; then
+  STAMP_QUEUE="sor: nem merve (--force)"
+elif [ -z "${DEPTH_PRE:-}" ]; then
+  # Say it, do not omit it: a missing field reads as "nothing to report".
+  STAMP_QUEUE="sor: nem merheto"
+else
+  STAMP_QUEUE="sor: $DEPTH_PRE"
+fi
+C="$C
+
+[KULDVE: $STAMP_TIME | $STAMP_QUEUE | kuldo: $FROM]"
+
+BODY="$(FROM="$FROM" TO="$TO" C="$C" python3 -c 'import json,os; print(json.dumps({"from":os.environ["FROM"],"to":os.environ["TO"],"content":os.environ["C"]}))')"
 
 attempt=0; max=3; CODE=""; ID=""
 while [ "$attempt" -lt "$max" ]; do
