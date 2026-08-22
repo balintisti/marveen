@@ -349,11 +349,11 @@ export function normalizeShellEvasion(seg) {
 // Pure decision: does this tool call set up self-pace / self-injection?
 export function gateDecision(toolName, toolInput) {
   const name = String(toolName ?? '')
-  if (SELF_PACE_TOOLS.has(name)) return { deny: true }
+  if (SELF_PACE_TOOLS.has(name)) return { deny: true, reason: 'self-pace-tool' }
   // Native file tools writing the self-schedule store would bypass any Bash regex.
   if (name === 'Write' || name === 'Edit' || name === 'NotebookEdit') {
     const fp = String(toolInput?.file_path ?? toolInput?.notebook_path ?? '')
-    if (SCHEDULE_STORE_RX.test(fp)) return { deny: true }
+    if (SCHEDULE_STORE_RX.test(fp)) return { deny: true, reason: 'store-write' }
   }
   if (name === 'Bash') {
     // Strip -d/--data payloads on the WHOLE command BEFORE splitting. A payload is
@@ -377,11 +377,11 @@ export function gateDecision(toolName, toolInput) {
       // what catches a real `subprocess.run(['tmux','send-keys',...])` inside a
       // heredoc body (measured 2026-08-05). Quote-aware segments here would have
       // dropped the detection of this gate's own founding incident vector.
-      if (SELF_PACE_BASH_PATTERNS.some((re) => re.test(normalizeShellEvasion(seg)))) return { deny: true }
+      if (SELF_PACE_BASH_PATTERNS.some((re) => re.test(normalizeShellEvasion(seg)))) return { deny: true, reason: 'bash-self-inject' }
       // self-schedule store: block WRITE only (a read/grep is legit diagnostics)
-      if (SCHEDULE_STORE_RX.test(seg) && WRITE_INTENT_RX.test(seg)) return { deny: true }
+      if (SCHEDULE_STORE_RX.test(seg) && WRITE_INTENT_RX.test(seg)) return { deny: true, reason: 'store-write-bash' }
       // dashboard schedule API: block WRITE methods only (GET list/pending is legit)
-      if (SCHEDULE_API_RX.test(seg) && HTTP_WRITE_RX.test(seg)) return { deny: true }
+      if (SCHEDULE_API_RX.test(seg) && HTTP_WRITE_RX.test(seg)) return { deny: true, reason: 'schedule-api-write' }
     }
     // The scheduler check is the ANCHORED one -- it fires on what sits at a
     // segment START -- so it is the one a fake segment boundary can mislead, and
@@ -390,7 +390,7 @@ export function gateDecision(toolName, toolInput) {
     const masked = maskInertLiterals(safeCommand)
     for (const seg of (masked == null ? naiveSegs : splitSegments(masked))) {
       // scheduler binaries: deny the exec/submit forms, allow pure read-listing
-      if (SCHEDULER_RX.test(seg) && !SCHEDULER_READ_RX.test(seg)) return { deny: true }
+      if (SCHEDULER_RX.test(seg) && !SCHEDULER_READ_RX.test(seg)) return { deny: true, reason: 'os-scheduler' }
     }
   }
   return { deny: false }
@@ -403,6 +403,35 @@ const GATE_MSG =
   'vagy: csak az operator (channel) vagy egy peer (inter-agent) uzenete inditson. Ha varakozol, ' +
   'maradj idle a prompt-on -- a beerkezo uzenet majd ujrainditja a turn-t. SOHA ne valaszolj ' +
   'magadnak es SOHA ne dontsd el az operator helyett egy hozza intezett kerdest.'
+
+// WHY this call was denied, in the reader's terms. One generic lecture for six
+// different triggers was measured to mislead: a PURE READ of the schedule store
+// that happened to end in `2>/dev/null` was denied with a self-pacing lecture,
+// and the reader concluded the FILE DID NOT EXIST (jarvis, 2026-08-22). The gate
+// blocked correctly -- `2>` is a redirect and the write-intent test is deliberately
+// broad -- but it explained something the reader had not tried to do.
+//
+// This names the trigger and, where one exists, the way out. It changes WHAT IS
+// SAID, never what is blocked: narrowing the write-intent test would open a real
+// hole (`cmd 2>&1 > store` survives an exclusion of `2>`), and at a security gate
+// an unproven heuristic is worse than friction. Friction is visible; a hole is not.
+const REASON_HINT = {
+  'self-pace-tool':
+    ' KIVALTO OK: ez az eszkoz onmagaban tiltott sub-agensnek (ScheduleWakeup/Cron*/RemoteTrigger).' +
+    ' Nincs kerulout -- a kovetkezo turn-t egy BEERKEZO uzenet inditja.',
+  'store-write':
+    ' KIVALTO OK: a scheduled_tasks.json-ra iranyulo Write/Edit/NotebookEdit hivas.',
+  'store-write-bash':
+    ' KIVALTO OK: ez a parancs EMLITI a scheduled_tasks.json-t ES tartalmaz iras-szandeku jelet' +
+    ' (atiranyitas, tee, sed -i, dd, cp, mv). HA CSAK OLVASNI AKARTAD: hagyd el az atiranyitast --' +
+    ' a `2>/dev/null` is annak szamit --, es a `cat`/`grep`/`jq` onmagaban atmegy.' +
+    ' A fajl LETEZIK; nem a hianya allitott meg, hanem ez a kapu.',
+  'schedule-api-write':
+    ' KIVALTO OK: iro HTTP-metodus a /api/schedules vegponton. A GET (listazas) atmegy.',
+  'os-scheduler':
+    ' KIVALTO OK: operacios rendszer szintu utemezo indito/beküldo alakja.' +
+    ' A tiszta listazas (crontab -l, launchctl list, atq) atmegy.',
+}
 
 function allow() { process.exit(0) }
 
@@ -433,7 +462,7 @@ if (isInvokedDirectly()) {
   } catch {
     allow() // malformed/empty input must never break the agent's tool calls
   }
-  const { deny: shouldDeny } = gateDecision(payload?.tool_name, payload?.tool_input)
-  if (shouldDeny) deny(GATE_MSG)
+  const { deny: shouldDeny, reason } = gateDecision(payload?.tool_name, payload?.tool_input)
+  if (shouldDeny) deny(GATE_MSG + (REASON_HINT[reason] ?? ''))
   allow()
 }
