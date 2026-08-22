@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { execFileSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -20,18 +20,44 @@ import { buildAgentPrompt } from '../heartbeat.js'
 const SCRIPT = join(__dirname, '..', '..', 'scripts', 'gmail-recent.py')
 const SENTINEL = 'sentinel-app-password-must-never-appear'
 
-function runWithHome(home: string): { stdout: string; status: number } {
+// STDERR IS CAPTURED, NOT DISCARDED (2026-08-23). This suite failed ONCE in
+// thirteen full-suite runs, on the assertion below, and left nothing to work
+// with: stderr was piped to /dev/null by `stdio: [..., 'ignore']`, so the
+// failure surfaced as a bare `JSON.parse` error on an empty string. The exit
+// status, the signal and python's own message -- everything that would say
+// WHY -- had already been thrown away.
+//
+// The cause is still unknown, and this does not claim to fix it. The leading
+// hypothesis (a slow DNS lookup for the unresolvable host, under parallel
+// load) was MEASURED AND CONTRADICTED: that path takes 0.11-0.21 s here,
+// indistinguishable from a refused connection to 127.0.0.1. Changing the test
+// on a disproven theory would have looked like a fix and measured nothing.
+// What this does instead is make the next occurrence explain itself.
+function runWithHome(home: string): { stdout: string; stderr: string; status: number } {
+  // spawnSync, not execFileSync: execFileSync only hands back stderr on the
+  // THROWING path, so a process that exits 0 while printing a diagnostic to
+  // stderr loses it -- measured, while checking that this very message works.
+  const r = spawnSync('python3', [SCRIPT, '--minutes', '5', '--limit', '1'], {
+    encoding: 'utf-8',
+    env: { ...process.env, HOME: home },
+    timeout: 30_000,
+  })
+  return {
+    stdout: r.stdout ?? '',
+    stderr: `${r.stderr ?? ''}${r.signal ? ` [signal: ${r.signal}]` : ''}${r.error ? ` [error: ${r.error.message}]` : ''}`,
+    status: r.status ?? -1,
+  }
+}
+
+/** Parse, and if it is not JSON say what the process actually did. */
+function parseOrExplain(r: { stdout: string; stderr: string; status: number }): Record<string, unknown> {
   try {
-    const stdout = execFileSync('python3', [SCRIPT, '--minutes', '5', '--limit', '1'], {
-      encoding: 'utf-8',
-      env: { ...process.env, HOME: home },
-      timeout: 30_000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
-    return { stdout, status: 0 }
-  } catch (e) {
-    const err = e as { stdout?: string; status?: number }
-    return { stdout: err.stdout ?? '', status: err.status ?? -1 }
+    return JSON.parse(r.stdout) as Record<string, unknown>
+  } catch {
+    throw new Error(
+      `a szkript nem JSON-t adott. status=${r.status} ` +
+        `stdout=${JSON.stringify(r.stdout.slice(0, 300))} stderr=${JSON.stringify(r.stderr.slice(0, 300))}`,
+    )
   }
 }
 
@@ -42,16 +68,16 @@ describe('scripts/gmail-recent.py -- caller contract', () => {
     // collector, and the collector would report "threw" instead of the real
     // reason.
     const empty = mkdtempSync(join(tmpdir(), 'gmail-noconfig-'))
-    const { stdout, status } = runWithHome(empty)
-    expect(status).toBe(0)
-    const parsed = JSON.parse(stdout)
+    const r = runWithHome(empty)
+    expect(r.status).toBe(0)
+    const parsed = parseOrExplain(r)
     expect(parsed.ok).toBe(false)
     expect(String(parsed.error)).toContain('config unreadable')
   })
 
   it('names the config PATH on failure, so the operator knows what to fix', () => {
     const empty = mkdtempSync(join(tmpdir(), 'gmail-noconfig-path-'))
-    const parsed = JSON.parse(runWithHome(empty).stdout)
+    const parsed = parseOrExplain(runWithHome(empty))
     expect(String(parsed.error)).toContain('gmail-imap.json')
   })
 
@@ -71,10 +97,12 @@ describe('scripts/gmail-recent.py -- caller contract', () => {
         password: SENTINEL,
       }),
     )
-    const { stdout, status } = runWithHome(home)
-    expect(status).toBe(0)
-    expect(stdout).not.toContain(SENTINEL)
-    const parsed = JSON.parse(stdout)
+    const r = runWithHome(home)
+    expect(r.status).toBe(0)
+    expect(r.stdout).not.toContain(SENTINEL)
+    // The password must not reach STDERR either -- a traceback prints there.
+    expect(r.stderr).not.toContain(SENTINEL)
+    const parsed = parseOrExplain(r)
     expect(parsed.ok).toBe(false)
     expect(String(parsed.error)).not.toContain(SENTINEL)
   })
@@ -89,7 +117,7 @@ describe('scripts/gmail-recent.py -- caller contract', () => {
       join(home, '.config', 'marveen', 'gmail-imap.json'),
       JSON.stringify({ host: 'imap.invalid.marveen-test.example', user: 'x', password: SENTINEL }),
     )
-    const parsed = JSON.parse(runWithHome(home).stdout)
+    const parsed = parseOrExplain(runWithHome(home))
     expect(parsed.ok).toBe(false)
     expect(parsed.messages).toBeUndefined()
   })
