@@ -89,7 +89,7 @@ interface CalendarListEntries {
 }
 
 // Token cache + mtime-invalidation. The cache spares us a JSON parse on
-// every getCalendarEvents call, but a stale cache kills the heartbeat after
+// every calendar fetch, but a stale cache kills the heartbeat after
 // an out-of-process re-auth (the OAuth-mcp `auth` subcommand writes a fresh
 // tokens.json from a separate process, our cache never re-reads it). Track
 // the file's mtime alongside the parsed payload; re-read whenever the mtime
@@ -329,12 +329,51 @@ async function forceNewAccessToken(): Promise<string> {
   return refreshAccessToken()
 }
 
-export async function getCalendarEvents(
+/**
+ * The outcome of a calendar read, as a value the caller cannot ignore.
+ *
+ * WHY THIS IS NOT `CalendarEvent[]` (2026-08-22). The previous shape returned
+ * `[]` on every failure -- missing key file, 403 on an unshared calendar, 404
+ * on a typo'd id, a 500 from Google -- and `[]` is also what a genuinely quiet
+ * day returns. The heartbeat then rendered "Nincs kozelgo esemeny." and the
+ * notification gate read `calendar.length > 0`, so a BROKEN calendar was
+ * indistinguishable from a free afternoon AND suppressed the very notification
+ * that would have surfaced it. The error was logged, and nothing reads the log.
+ *
+ * Email already learned this on 2026-08-20 (`emailError` in heartbeat.ts):
+ * "no mail" and "we could not look" must never render the same. Calendar was
+ * left on the old shape for two days. This closes that asymmetry, and it does
+ * it in the TYPE rather than in a convention, so the next caller cannot
+ * reintroduce the bug by forgetting to check.
+ */
+export type CalendarFetch =
+  | { ok: true; events: CalendarEvent[] }
+  | { ok: false; error: string }
+
+/** One short line, no newlines, no credentials -- safe to render into a prompt.
+ *  Exported for the test that pins that contract. */
+export function calendarApiError(status: number, body: string): string {
+  let detail = ''
+  try {
+    const parsed = JSON.parse(body) as { error?: { message?: string } }
+    detail = parsed.error?.message ?? ''
+  } catch {
+    detail = body
+  }
+  const flat = detail.replace(/\s+/g, ' ').trim().slice(0, 160)
+  return flat ? `HTTP ${status}: ${flat}` : `HTTP ${status}`
+}
+
+export async function fetchCalendarEvents(
   calendarId: string,
   timeMin: Date,
   timeMax: Date
-): Promise<CalendarEvent[]> {
-  const token = await getValidAccessToken()
+): Promise<CalendarFetch> {
+  // An unset id would hit `/calendars//events` and come back 404, which reads
+  // like a missing calendar rather than a missing setting. Name the real cause.
+  if (!calendarId.trim()) {
+    return { ok: false, error: 'HEARTBEAT_CALENDAR_ID nincs beallitva (ures)' }
+  }
 
   const params = new URLSearchParams({
     timeMin: timeMin.toISOString(),
@@ -346,33 +385,44 @@ export async function getCalendarEvents(
 
   const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`
 
-  const { status, data } = await httpsRequest(url, {
-    method: 'GET',
-    headers: { Authorization: `Bearer ${token}` },
-  })
+  try {
+    const token = await getValidAccessToken()
 
-  if (status === 401) {
-    // Token expired mid-flight, refresh and retry once
-    const newToken = await forceNewAccessToken()
-    const retry = await httpsRequest(url, {
+    const { status, data } = await httpsRequest(url, {
       method: 'GET',
-      headers: { Authorization: `Bearer ${newToken}` },
+      headers: { Authorization: `Bearer ${token}` },
     })
-    if (retry.status !== 200) {
-      logger.error({ status: retry.status, body: retry.data }, 'Google Calendar API error after refresh')
-      return []
+
+    if (status === 401) {
+      // Token expired mid-flight, refresh and retry once
+      const newToken = await forceNewAccessToken()
+      const retry = await httpsRequest(url, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${newToken}` },
+      })
+      if (retry.status !== 200) {
+        logger.error({ status: retry.status, body: retry.data }, 'Google Calendar API error after refresh')
+        return { ok: false, error: calendarApiError(retry.status, retry.data) }
+      }
+      const parsed: CalendarListResponse = JSON.parse(retry.data)
+      return { ok: true, events: parsed.items ?? [] }
     }
-    const parsed: CalendarListResponse = JSON.parse(retry.data)
-    return parsed.items ?? []
-  }
 
-  if (status !== 200) {
-    logger.error({ status, body: data }, 'Google Calendar API error')
-    return []
-  }
+    if (status !== 200) {
+      logger.error({ status, body: data }, 'Google Calendar API error')
+      return { ok: false, error: calendarApiError(status, data) }
+    }
 
-  const parsed: CalendarListResponse = JSON.parse(data)
-  return parsed.items ?? []
+    const parsed: CalendarListResponse = JSON.parse(data)
+    return { ok: true, events: parsed.items ?? [] }
+  } catch (err) {
+    // Missing credential file, DNS failure, a socket timeout, unparseable
+    // JSON. All of these used to surface as an empty calendar via the
+    // caller's catch. They are failures, and they say so now.
+    logger.error({ err }, 'Google Calendar fetch threw')
+    const msg = err instanceof Error ? err.message : String(err)
+    return { ok: false, error: msg.replace(/\s+/g, ' ').trim().slice(0, 160) }
+  }
 }
 
 /**

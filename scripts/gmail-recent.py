@@ -52,7 +52,7 @@ import imaplib
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
 
@@ -78,6 +78,17 @@ def decode_field(raw):
         else:
             out.append(text)
     return ''.join(out).strip()
+
+
+def imap_since(now_local, minutes):
+    """The IMAP SINCE date for a window of `minutes` ending at `now_local`.
+
+    Pulled out of main() so it can be tested without an IMAP server: this one
+    expression is where the bug lived, and the failure it produced
+    (`{"ok":true,"messages":[]}`) is indistinguishable from a quiet mailbox.
+    See the long note at the call site.
+    """
+    return (now_local - timedelta(minutes=minutes)).strftime('%d-%b-%Y')
 
 
 def main():
@@ -107,10 +118,25 @@ def main():
             M.select('INBOX', readonly=True)
 
             # IMAP SINCE is DAY-granular, so it cannot express "last 2 hours".
-            # Ask for a day's worth and filter on the real header date below --
-            # asking for a narrower window here would silently drop messages
-            # whenever the window straddles midnight.
-            since = (now.astimezone()).strftime('%d-%b-%Y')
+            # Ask for whole days and let the header-date filter below do the
+            # fine cut.
+            #
+            # ANCHOR IT TO THE START OF THE WINDOW, NOT TO TODAY (fixed
+            # 2026-08-22). The previous line asked for TODAY and then filtered
+            # on --minutes, so anything older than local midnight was invisible
+            # NO MATTER HOW LARGE --minutes WAS. The morning briefing runs at
+            # 07:30 with --minutes 720: more than half of that window is
+            # yesterday, and every message in it was silently dropped. The
+            # result was `{"ok":true,"messages":[]}` -- a successful-looking
+            # answer, which is the one failure shape this script exists to
+            # remove. Measured on this very server: [Gmail]/Kuka returned 0 for
+            # SINCE today and 9 for SINCE today-2, with all 9 inside the
+            # requested window.
+            #
+            # SINCE is inclusive of the named day, so flooring the window start
+            # to its calendar day can only ever ask for MORE than we need; the
+            # age filter below trims the surplus.
+            since = imap_since(now.astimezone(), args.minutes)
             criteria = ['SINCE', since]
             if args.unread_only:
                 criteria.append('UNSEEN')
