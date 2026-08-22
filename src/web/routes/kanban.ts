@@ -320,7 +320,20 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // listing: they grow without bound and a reader usually wants one card's). The
     // count costs one COUNT and turns a silent absence into an explicit signal:
     // 0 means none, anything else means fetch /comments.
-    if (card) { json(res, { ...card, comment_count: getKanbanComments(id).length }); return true }
+    //
+    // AND WHY A COUNT ALONE WAS NOT ENOUGH (2026-08-22, the same trap sprung a
+    // SECOND time, two days later, on a different agent): `comment_count: 2`
+    // reads as an extra datum, not as a notice that something is MISSING. The
+    // reader who does not already know that `comments` never arrives has no
+    // reason to suspect a gap -- the payload looks complete. So the response
+    // now NAMES THE OMISSION as well as the quantity: `comments_omitted` is
+    // true whenever bodies exist but were left out, and the pair reads as one
+    // sentence -- "there are 2, and they are not in here".
+    if (card) {
+      const count = getKanbanComments(id).length
+      json(res, { ...card, comment_count: count, comments_omitted: count > 0 })
+      return true
+    }
     json(res, { error: 'Kártya nem található' }, 404)
     return true
   }

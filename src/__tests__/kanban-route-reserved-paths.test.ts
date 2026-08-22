@@ -61,12 +61,22 @@ describe('matchKanbanCardPath', () => {
 // also pass if it always returned a positive number.
 describe('GET /api/kanban/<id> -- comment_count', () => {
   it('is part of the response contract, so a missing body is not read as "none"', () => {
-    // The route composes it (see routes/kanban.ts); this pins the contract in the shape
-    // a caller depends on, next to the reserved-path rules that share the same handler.
+    // WHY THIS ASSERTION IS SHAPED THIS WAY (rewritten 2026-08-22): it used to pin
+    // the literal expression `comment_count: getKanbanComments(`. That broke the
+    // moment the handler hoisted the count into a local -- a change that altered
+    // NOTHING a caller can observe. A test that fails on a refactor it does not
+    // care about teaches the next author to loosen the test, which is exactly how
+    // this repo loses guards. So: assert that the field is composed FROM the
+    // comment store, without pinning the statement's shape.
     const src = readFileSync(new URL('../web/routes/kanban.ts', import.meta.url), 'utf8')
-    expect(src).toMatch(/comment_count:\s*getKanbanComments\(/)
+    expect(src).toMatch(/comment_count/)
+    expect(src).toMatch(/getKanbanComments\(id\)\.length/)
     // ...and that the bodies are NOT spread into the card response: the payload
     // argument is the same one the archive listing settled.
     expect(src).not.toMatch(/comments:\s*getKanbanComments\(id\)\s*\}/)
+    // The RUNTIME contract -- that the field is actually present, with the right
+    // value, in both directions -- lives in kanban-comment-existence.test.ts.
+    // This file keeps the source-level half only because it sits next to the
+    // reserved-path rules that share the same handler.
   })
 })

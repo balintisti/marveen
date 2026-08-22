@@ -14,7 +14,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import http from 'node:http'
 import { Readable } from 'node:stream'
-import { initDatabase, createKanbanCard, getKanbanComments } from '../db.js'
+import { initDatabase, createKanbanCard, getKanbanComments, addKanbanComment } from '../db.js'
 import { tryHandleKanban } from '../web/routes/kanban.js'
 
 beforeEach(() => {
@@ -71,5 +71,50 @@ describe('POST /api/kanban/<id>/comments -- the card must exist', () => {
     createKanbanCard({ id: 'bbbb2222', title: 'valodi kartya', status: 'planned' })
     const { status } = await postComment('bbbb2222', { author: '', content: '' })
     expect(status).toBe(400)
+  })
+})
+
+/** Drives the real GET handler for one card. */
+async function getCard(cardId: string): Promise<{ status: number; payload: Record<string, unknown> }> {
+  let status = 0
+  let chunk = ''
+  const res = {
+    writeHead(code: number) { status = code; return res },
+    setHeader() { return res },
+    end(data?: string) { if (data) chunk = data },
+  } as unknown as http.ServerResponse
+  const handled = await tryHandleKanban({
+    req: {} as http.IncomingMessage, res,
+    path: `/api/kanban/${cardId}`,
+    method: 'GET',
+    url: new URL(`http://x/api/kanban/${cardId}`),
+  } as never)
+  expect(handled).toBe(true)
+  return { status, payload: chunk ? JSON.parse(chunk) : {} }
+}
+
+describe('GET /api/kanban/<id> -- the omission must be named, not only counted', () => {
+  // A count alone sprung the same trap twice in two days: `comment_count: 2` reads
+  // as an extra datum, not as "something is missing here". Two agents read the
+  // response, saw no `comments` key, and recorded "0 comments" on cards that had
+  // several. The flag says the quiet part out loud.
+  it('says comments_omitted when there ARE bodies it is not sending', async () => {
+    createKanbanCard({ id: 'cccc3333', title: 'van kommentje', status: 'planned' })
+    addKanbanComment('cccc3333', 'marveen', 'elso')
+    addKanbanComment('cccc3333', 'didi', 'masodik')
+    const { payload } = await getCard('cccc3333')
+    expect(payload.comment_count).toBe(2)
+    expect(payload.comments_omitted).toBe(true)
+    // The bodies stay out on purpose -- that is the whole point of the flag.
+    expect(payload.comments).toBeUndefined()
+  })
+
+  it('does NOT claim an omission when there is genuinely nothing to omit', async () => {
+    // The negative control: a flag that is always true would be noise, and a reader
+    // would learn to ignore it -- the failure mode this repo keeps measuring.
+    createKanbanCard({ id: 'dddd4444', title: 'nincs kommentje', status: 'planned' })
+    const { payload } = await getCard('dddd4444')
+    expect(payload.comment_count).toBe(0)
+    expect(payload.comments_omitted).toBe(false)
   })
 })
