@@ -31,6 +31,7 @@ noted in the summary/snapshot instead of raising.
 
 import argparse
 import glob
+import hashlib
 import json
 import os
 import subprocess
@@ -761,6 +762,31 @@ def _format_pace_suffix(pace):
 def render_summary(snapshot):
     lines = []
     lines.append(f"Quota status -- {snapshot['generated_at_local']}")
+    # WHICH COPY OF THIS SCRIPT ACTUALLY RAN, and a fingerprint of it.
+    #
+    # There are two copies: scripts/usage-collect.py (the repo one) and
+    # store/usage-collect.py (a deliberate copy -- the scheduled task runs THAT
+    # one, because the upstream PR is not merged and update.sh needs a clean
+    # tree). Nothing said when they diverged, and on 2026-08-22 they had been
+    # five days apart: the keychain-refresh fix went into the repo copy while
+    # the scheduled task kept running the August 17 one, 148 lines shorter and
+    # with zero refresh logic (didi measured it).
+    #
+    # What made it invisible was the PROOF, not the copy. The "estimate ->
+    # authoritative" evidence came from a MANUAL run -- of the repo copy. A
+    # manual run and the scheduled run are different programs here, and the
+    # output looked identical.
+    #
+    # So the output now names its own file and hashes it. Two copies may still
+    # diverge; they can no longer diverge SILENTLY, and the answer is in the
+    # log the scheduled run writes, not in a hand-run.
+    try:
+        _self = os.path.abspath(__file__)
+        with open(_self, "rb") as _f:
+            _digest = hashlib.sha256(_f.read()).hexdigest()[:12]
+        lines.append(f"  (running {_self} sha256:{_digest})")
+    except OSError:
+        pass
     lines.append("")
 
     codex = snapshot["codex"]
