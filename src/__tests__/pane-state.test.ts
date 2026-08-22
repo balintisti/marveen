@@ -774,6 +774,81 @@ describe('detectPaneState', () => {
   })
 })
 
+// A running turn UNDER a subagent panel. Copied from mandark's live pane on
+// 2026-08-22 (three running subagents); the rows below the footer are what
+// Claude Code renders when an agent has spawned subagents, and the panel grows
+// by one row per agent.
+//
+// This is the shape that broke the fixed trailing-line windows: counting back
+// from the END of the pane, the footer sat 7 lines up (outside the 5-line
+// footer window) and the spinner 12 (on the boundary of its own). The busy
+// signals had not moved -- the panel below them had grown.
+const subagentRows = (n: number): string[] =>
+  ['', '  ⏺ main', ...Array.from({ length: n }, (_, i) =>
+    `  ◯ triage-${i + 1}  Te mandark (QA) alágense vagy. Feladat:… 14s · ↓ 163.5k tokens`)]
+
+const BUSY_WITH_SUBAGENTS = (n: number) => [
+  '  ⎿  $ grep -rn "createWithPreferenceCheck" src',
+  '',
+  '✽ Architecting… (3m 41s · ↓ 6.2k tokens)',
+  '',
+  SEP,
+  '❯ ',
+  SEP,
+  '  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← for agents',
+  ...subagentRows(n),
+].join('\n')
+
+describe('detectPaneState with a subagent panel below the footer', () => {
+  it('reads a live turn as busy with three subagents', () => {
+    expect(detectPaneState(BUSY_WITH_SUBAGENTS(3))).toBe('busy')
+  })
+
+  // The regression this locks: the miss got WORSE as the fleet grew, so a
+  // one-agent test would have passed while the real case (many agents) failed.
+  // The direction is always the same -- busy misread as not-busy -- which is
+  // why the agent doing the most work was the one most likely to be woken.
+  it.each([1, 3, 6, 12, 25])('reads a live turn as busy with %i subagents', (n) => {
+    expect(detectPaneState(BUSY_WITH_SUBAGENTS(n))).toBe('busy')
+  })
+
+  it('does not report the pane ready for a prompt while subagents run', () => {
+    expect(isReadyForPrompt(BUSY_WITH_SUBAGENTS(8))).toBe(false)
+  })
+
+  // The other direction still has to hold: a genuinely idle agent whose
+  // subagents have finished must stay idle, or anchoring would have traded a
+  // missed-busy for a missed-idle and starved the scheduler instead.
+  it('still reads idle when the turn has ended and only the panel remains', () => {
+    const idleWithPanel = [
+      '  ⎿  done',
+      '',
+      SEP,
+      '❯ ',
+      SEP,
+      '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents',
+      ...subagentRows(4),
+    ].join('\n')
+    expect(detectPaneState(idleWithPanel)).toBe('idle')
+  })
+
+  // Anchoring must not resurrect the bug it replaced: a stale `esc to
+  // interrupt` quoted in scrollback ABOVE the live region stays invisible.
+  it('ignores an esc-to-interrupt quoted far above the footer', () => {
+    const quoted = [
+      '  I read the footer text "esc to interrupt" in the watchdog report.',
+      ...Array.from({ length: 20 }, () => '  ⎿  (more output)'),
+      '',
+      SEP,
+      '❯ ',
+      SEP,
+      '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents',
+      ...subagentRows(2),
+    ].join('\n')
+    expect(detectPaneState(quoted)).toBe('idle')
+  })
+})
+
 describe('isReadyForPrompt', () => {
   it('is true only when state === idle', () => {
     expect(isReadyForPrompt(IDLE_BYPASS)).toBe(true)

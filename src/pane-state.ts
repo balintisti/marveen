@@ -667,10 +667,34 @@ export function detectPaneState(
 
   const paneLines = pane.split('\n')
 
+  // Both live-region windows are anchored to the FOOTER line, not to the end
+  // of the pane.
+  //
+  // WHY (measured 2026-08-22, mandark's pane, 3 running subagents): when an
+  // agent has subagents, Claude Code renders a subagent panel BELOW the
+  // footer, one row per agent, and that panel grows with the number of
+  // agents. Counting back from the end of the pane then slides both windows
+  // off the very signals they exist to see. With three subagents the footer
+  // sat 7 lines from the end -- outside the 5-line footer window, so the
+  // `esc to interrupt` check missed a live turn -- and the spinner sat at
+  // exactly 12, on the boundary of its own window.
+  //
+  // THE ERROR HAS A DIRECTION, and that is what makes it worth fixing rather
+  // than widening: it only ever misreads BUSY as not-busy, and it does so in
+  // proportion to how many subagents are running. The agent doing the most
+  // work is the one most likely to be read as idle -- and then woken with new
+  // work, interrupting the turn we woke it for. Widening the constants only
+  // moves the threshold to a larger fleet of subagents; anchoring removes the
+  // dependency.
+  const footerAnchor = paneLines.findIndex(l => IDLE_FOOTER_RX.test(l))
+  const liveEnd = footerAnchor >= 0 ? footerAnchor + 1 : paneLines.length
+  const liveRegion = (lineCount: number): string =>
+    paneLines.slice(Math.max(0, liveEnd - lineCount), liveEnd).join('\n')
+
   // Spinner / token-counter busy signals, scoped to the live bottom region.
   // Whole-pane scanning let a completed turn's stale token-counter line pin
   // an idle session busy (see BUSY_LIVE_REGION_LINES).
-  const busyRegion = paneLines.slice(-BUSY_LIVE_REGION_LINES).join('\n')
+  const busyRegion = liveRegion(BUSY_LIVE_REGION_LINES)
   for (const rx of BUSY_INDICATORS) {
     if (rx.test(busyRegion)) return 'busy'
   }
@@ -679,7 +703,7 @@ export function detectPaneState(
   // Checking the whole pane would let a scrollback quote of the phrase
   // (e.g. in a watchdog report or a log analysis) permanently classify
   // an idle session as busy.
-  const footerRegion = paneLines.slice(-LIVE_FOOTER_REGION_LINES).join('\n')
+  const footerRegion = liveRegion(LIVE_FOOTER_REGION_LINES)
   if (BUSY_ESC_TO_INTERRUPT_RX.test(footerRegion)) return 'busy'
 
   // Pending-paste placeholder check runs BEFORE the idle-footer gate. The
