@@ -1666,6 +1666,13 @@ export interface KanbanCard {
   priority: 'low' | 'normal' | 'high' | 'urgent'
   project: string | null
   parent_id: string | null
+  /** Epoch SECONDS, like every other timestamp on this row -- NOT milliseconds.
+   *  The column is a bare INTEGER and nothing enforces the unit, so this comment is
+   *  the whole convention. Written down 2026-08-22 because the idle guard now reads
+   *  the field (a future date hides a deliberately deferred card), and a value in
+   *  milliseconds would not error -- the card would simply become due around the year
+   *  55000 and the guard would hide it forever, silently. (jarvis measured the gap:
+   *  today exactly one row carries a due_date, so the convention rests on that one row.) */
   due_date: number | null
   sort_order: number
   created_at: number
@@ -1716,6 +1723,7 @@ export function createKanbanCard(card: {
   priority?: KanbanCard['priority']
   project?: string
   parent_id?: string
+  /** Epoch SECONDS -- see KanbanCard.due_date. Nothing validates this. */
   due_date?: number
 }): void {
   const now = Math.floor(Date.now() / 1000)
