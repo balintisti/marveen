@@ -33,6 +33,15 @@ describe('self-pace-gate gateDecision', () => {
     // ...and the hidden-write forms that any narrowing would have let through.
     for (const cmd of [
       'echo x 2>&1 > scheduled_tasks.json',
+      // A WRITE PERFORMED ENTIRELY THROUGH stderr. This one is here because jarvis
+      // measured that the obvious narrowing ((?<!2) on the redirect) lets it through
+      // -- and because the list originally represented "stderr write" with `2>>`,
+      // which survives that narrowing for an INCIDENTAL reason: its second `>` is
+      // not preceded by a `2`. So the list looked like it covered stderr writes
+      // while the nearest real form was missing. A test that passes for the wrong
+      // reason is indistinguishable from coverage.
+      'node build.js 2> scheduled_tasks.json',
+      'echo x 2>> scheduled_tasks.json',
       'cat a | tee scheduled_tasks.json',
       'sed -i s/a/b/ scheduled_tasks.json',
       'cp a scheduled_tasks.json',
