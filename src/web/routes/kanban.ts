@@ -398,6 +398,15 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   }
   if (kanbanCommentsMatch && method === 'POST') {
     const cardId = decodeURIComponent(kanbanCommentsMatch[1])
+    // A comment on a card that does not exist is WORSE than a rejected one: the
+    // POST returned 200 with a real comment id, so the sender's success check
+    // (HTTP code AND id -- the rule this repo's CLAUDE.md prescribes) passed,
+    // while the comment never appeared on any board and could not be deleted
+    // (there is no comment-delete endpoint). Measured 2026-08-22 (card
+    // 2060668a): two full work reports were written to a card id that did not
+    // exist, and the loss was silent on both sides. The same one-line guard is
+    // already used by the card-labels POST above -- this endpoint simply lacked it.
+    if (!getKanbanCard(cardId)) { json(res, { error: 'Kártya nem található' }, 404); return true }
     const body = await readBody(req)
     const { author, content } = JSON.parse(body.toString())
     if (!author || !content) { json(res, { error: 'Szerző és tartalom kötelező' }, 400); return true }
