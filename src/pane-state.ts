@@ -120,13 +120,35 @@ const BUSY_INDICATORS: RegExp[] = [
   // 2026-06-30). The live spinner/token line renders just above the input
   // box during a real turn, so the bottom-region scope still catches it.
   //
-  // Tokens-down-arrow counter: "(52s · ↓ 2.6k tokens ..."
-  /\(\s*\d+s\s*·\s*↓\s*\d/,
+  // Tokens-down-arrow counter: "(52s · ↓ 2.6k tokens ...", and the minute /
+  // hour forms a long turn actually renders: "(3m 41s · ↓ 6.2k tokens)",
+  // "(1h 2m 5s · ↓ 40.1k tokens)".
+  //
+  // THE MINUTE FORM WAS NOT MATCHED UNTIL 2026-08-22, and this pattern is the
+  // one the comment above calls load-bearing. `\(\s*\d+s` demands digits then
+  // `s` immediately after the paren, so `(3m 41s · ↓` failed at the `m`.
+  // Measured on real fleet panes by jarvis: of 67 token-counter lines, 59 were
+  // minute-form -- 88% of them, and they are exactly the LONG turns, the ones
+  // most worth not interrupting.
+  //
+  // The comment 12 lines up quotes "Accomplishing… (3m 8s · ↓ 9.3k tokens)" as
+  // an example of what this catches. It did not. A comment describing a
+  // capability the regex lacks is worse than no comment: it is the reason
+  // nobody re-measured.
+  //
+  // AND THE TWO SIGNALS ARE NOT INDEPENDENT, which is what makes this more
+  // than a missed case. `esc to interrupt` is documented as the fallback for
+  // this pattern -- but it is footer-scoped, and on a pane with three or more
+  // subagents the footer sits outside its window (see the anchoring note in
+  // detectPaneState). On a long turn under a subagent panel BOTH signals were
+  // gone at once: one because the turn passed a minute, the other because the
+  // panel grew. Same turn, same direction, both silent.
+  /\(\s*(?:\d+h\s*)?(?:\d+m\s*)?\d+s\s*·\s*↓\s*\d/,
   // Known spinner labels paired with the turn-scoped `(Ns · ↓` tail on
   // the same line. The tail requirement kills the "Thinking…" prose
   // false positive. Non-exhaustive by design; the bare tokens pattern
   // above is the authoritative fallback.
-  /\b(?:Combobulating|Beaming|Thinking|Pondering|Reticulating|Configuring|Noodling|Ruminating|Percolating|Cogitating|Deliberating|Contemplating|Musing|Brewing|Synthesizing|Distilling|Refining|Simmering|Crafting|Formulating|Consulting|Unfurling|Unspooling|Unraveling)…\s*\(\s*\d+s\s*·\s*↓/,
+  /\b(?:Combobulating|Beaming|Thinking|Pondering|Reticulating|Configuring|Noodling|Ruminating|Percolating|Cogitating|Deliberating|Contemplating|Musing|Brewing|Synthesizing|Distilling|Refining|Simmering|Crafting|Formulating|Consulting|Unfurling|Unspooling|Unraveling)…\s*\(\s*(?:\d+h\s*)?(?:\d+m\s*)?\d+s\s*·\s*↓/,
 ]
 
 // `esc to interrupt` is a footer-region-only busy signal: Claude Code
@@ -674,10 +696,21 @@ export function detectPaneState(
   // agent has subagents, Claude Code renders a subagent panel BELOW the
   // footer, one row per agent, and that panel grows with the number of
   // agents. Counting back from the end of the pane then slides both windows
-  // off the very signals they exist to see. With three subagents the footer
-  // sat 7 lines from the end -- outside the 5-line footer window, so the
-  // `esc to interrupt` check missed a live turn -- and the spinner sat at
-  // exactly 12, on the boundary of its own window.
+  // off the very signals they exist to see.
+  //
+  // THE STABLE NUMBER IS THE THRESHOLD, NOT THE LINE DISTANCE (jarvis, same
+  // day): swept by subagent count, 0-2 agents read busy on both the old and
+  // new code; from THREE agents up -- 3, 6, 12, 25 -- the old code said `idle`
+  // for a live turn and the new one says `busy`. The line distance varies with
+  // the panel's shape (7 on the captured pane, 5 on the repo fixture), so it
+  // is the wrong thing to write down. Three subagents is the threshold, and
+  // above it the miss is not intermittent but total.
+  //
+  // The other direction was measured too, and is clean: an idle agent with a
+  // subagent panel reads idle at 0/1/2/3/6/12/25 agents, old and new alike.
+  // That mattered -- a false BUSY would be worse than the bug it replaced,
+  // because an agent would sit unwoken for hours instead of being interrupted
+  // once.
   //
   // THE ERROR HAS A DIRECTION, and that is what makes it worth fixing rather
   // than widening: it only ever misreads BUSY as not-busy, and it does so in

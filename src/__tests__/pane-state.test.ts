@@ -799,6 +799,54 @@ const BUSY_WITH_SUBAGENTS = (n: number) => [
   ...subagentRows(n),
 ].join('\n')
 
+// The token-counter forms a LONG turn actually renders. Before 2026-08-22 the
+// busy pattern required `(<digits>s`, so everything past one minute failed at
+// the `m`. jarvis measured 67 token-counter lines on real fleet panes: 59 were
+// minute-form. The 88% that fell out were exactly the long turns.
+const spinnerLine = (t: string) => `✽ Architecting… (${t} · ↓ 6.2k tokens)`
+
+const liveTurn = (t: string) => [
+  '  ⎿  $ grep -rn "createWithPreferenceCheck" src',
+  '',
+  spinnerLine(t),
+  '',
+  SEP,
+  '❯ ',
+  SEP,
+  // NO `esc to interrupt`: this isolates the token-counter signal. With the
+  // footer phrase present the pane reads busy either way and the test would
+  // pass against the broken regex -- which is how the existing fixture, whose
+  // spinner is already minute-form (see BUSY_WITH_SUBAGENTS), went green while
+  // the pattern it was meant to exercise matched nothing.
+  '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents',
+].join('\n')
+
+describe('detectPaneState token-counter durations', () => {
+  it.each([
+    ['7s', 'seconds'],
+    ['52s', 'seconds, two digits'],
+    ['3m 41s', 'minutes'],
+    ['11m 29s', 'minutes, two digits'],
+    ['1h 2m 5s', 'hours'],
+  ])('reads a live turn as busy at %s (%s)', (t) => {
+    expect(detectPaneState(liveTurn(t))).toBe('busy')
+  })
+
+  // The counter is the ONLY busy signal here, and it must not fire on prose.
+  // A completed turn's summary line carries a duration but no ↓ counter.
+  it('does not read a finished turn summary as busy', () => {
+    const done = [
+      '✻ Sautéed for 8m 32s',
+      '',
+      SEP,
+      '❯ ',
+      SEP,
+      '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents',
+    ].join('\n')
+    expect(detectPaneState(done)).toBe('idle')
+  })
+})
+
 describe('detectPaneState with a subagent panel below the footer', () => {
   it('reads a live turn as busy with three subagents', () => {
     expect(detectPaneState(BUSY_WITH_SUBAGENTS(3))).toBe('busy')
