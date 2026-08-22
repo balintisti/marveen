@@ -1337,19 +1337,64 @@ export function saveAgentMemory(
 // accessed memories" instead of "the N most recent <category> memories", so an
 // older-but-still-active memory would drop out of the list with no truncation
 // signal -- invisible to the caller, and worst right after a restart.
+//
+// OWN MEMORIES AND THE SHARED TIER ARE RANKED SEPARATELY, THEN INTERLEAVED.
+//
+// A single `WHERE (agent_id = ? OR category = 'shared') ORDER BY accessed_at`
+// looks right and quietly starves the caller. Measured 2026-08-22, on the real
+// store: of 535 memories, 76 are shared -- and 70 of those belong to ONE agent
+// (marveen, most of them written on two days). jarvis, with 13 memories of his
+// own, asked for his recall and got a 50-row window holding NINE of them; the
+// other 41 were somebody else's shared notes.
+//
+// The union also feeds back on itself: a `q` recall stamps accessed_at on what
+// it surfaces, so a shared memory gets hotter every time ANY agent recalls it,
+// and climbs further above the reader's own memories. The more the fleet uses
+// the shared tier, the less of your own recall you see.
+//
+// The fix takes no threshold, which is why it is this shape and not a quota:
+// rank each source by recency on its own, then alternate. An agent with fewer
+// own memories than half the window gets ALL of them plus shared to fill; an
+// agent with many gets a stable half. Nobody is crowded out, and no constant
+// has to be chosen or defended.
+//
+// NOT a filtering bug, and worth saying because it was first reported as one:
+// `agent=<nobody>` returning rows is correct -- those rows are the shared tier,
+// which is what shared MEANS. The defect was the ratio, not the WHERE clause.
 export function getAgentMemories(agentId: string, limit: number = 20, category?: string): Memory[] {
   const key = `${agentId}:${limit}:${category ?? ''}`
   const cached = memoryCacheGet(key)
   if (cached) return cached
-  const result = (category
-    ? db.prepare(
-        "SELECT * FROM memories WHERE (agent_id = ? OR category = 'shared') AND category = ? ORDER BY accessed_at DESC LIMIT ?"
-      ).all(agentId, category, limit)
-    : db.prepare(
-        "SELECT * FROM memories WHERE (agent_id = ? OR category = 'shared') ORDER BY accessed_at DESC LIMIT ?"
-      ).all(agentId, limit)) as Memory[]
-  memoryCacheSet(key, result)
-  return result
+
+  // 'shared' asked for explicitly is not a recall of your own memories at all:
+  // the caller wants that tier, so give it to them unsplit.
+  if (category === 'shared') {
+    const sharedOnly = db.prepare(
+      "SELECT * FROM memories WHERE (agent_id = ? OR category = 'shared') AND category = 'shared' ORDER BY accessed_at DESC LIMIT ?"
+    ).all(agentId, limit) as Memory[]
+    memoryCacheSet(key, sharedOnly)
+    return sharedOnly
+  }
+
+  const own = (category
+    ? db.prepare('SELECT * FROM memories WHERE agent_id = ? AND category = ? ORDER BY accessed_at DESC LIMIT ?')
+        .all(agentId, category, limit)
+    : db.prepare('SELECT * FROM memories WHERE agent_id = ? ORDER BY accessed_at DESC LIMIT ?')
+        .all(agentId, limit)) as Memory[]
+  // A category filter never matches 'shared' rows (a memory has one category),
+  // so a category-scoped recall is own-only by construction.
+  const shared = category
+    ? []
+    : (db.prepare("SELECT * FROM memories WHERE category = 'shared' AND agent_id != ? ORDER BY accessed_at DESC LIMIT ?")
+        .all(agentId, limit) as Memory[])
+
+  const merged: Memory[] = []
+  for (let i = 0; merged.length < limit && (i < own.length || i < shared.length); i++) {
+    if (i < own.length) merged.push(own[i])
+    if (merged.length < limit && i < shared.length) merged.push(shared[i])
+  }
+  memoryCacheSet(key, merged)
+  return merged
 }
 
 export function searchAgentMemories(agentId: string, query: string, limit: number = 10): Memory[] {
