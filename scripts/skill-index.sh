@@ -1,4 +1,15 @@
 #!/bin/bash
+
+# -v / --verbose: kiirja a siker-sort is. Alapertelmezesben csendes, lasd lentebb.
+VERBOSE=0
+_args=()
+for _a in "$@"; do
+  case "$_a" in
+    -v|--verbose) VERBOSE=1 ;;
+    *) _args+=("$_a") ;;
+  esac
+done
+set -- "${_args[@]+"${_args[@]}"}"
 # Skill Index Generator
 # Generates a Level 0 index of all available skills (name + description only)
 # This keeps token usage low while making all skills discoverable
@@ -88,7 +99,22 @@ fi
 echo "" >> "$OUTPUT"
 echo "_${SKILL_COUNT} skill indexelve. Generálva: $(date '+%Y-%m-%d %H:%M')_" >> "$OUTPUT"
 
-echo "Skill index generated: $OUTPUT ($SKILL_COUNT skills)"
+# CSENDES A SIKERES UTON (2026-08-22, didi javaslata, es a ket elnemitas okabol).
+# Ket agens egymastol fuggetlenul futtatta ezt a szkriptet `>/dev/null 2>&1` alakban --
+# NEM a figyelmeztetes miatt, hanem hogy EZT a sort elrejtse. A `2>&1` aztan a
+# figyelmeztetest is elvitte. A ket stream szetvalasztasa helyes volt, csak nem elegendo:
+# a hivo nem stream-enkent gondolkodik, hanem "ne irjon semmit"-ben.
+#
+# Ezert a siker-sor mostantol CSAK `-v`/`--verbose` eseten irodik ki. Igy a hivonak nincs
+# MIERT elnemitania, es a figyelmeztetes eleve nem kerul veszelybe. A reflexet nem tulelni
+# kell, hanem megszuntetni az okat.
+#
+# ES AMIERT EZ NEM NEMA SIKER: a "lefutott-e" kerdesre a KILEPESI KOD felel (0 = kesz,
+# 3 = kesz + hatar-atlepes, minden mas = hiba). Egy szkript, ami hallgat ES nincs
+# kilepesi kodja, tenyleg megkulonboztethetetlen lenne attol, hogy el sem indult.
+if [ "${VERBOSE:-0}" = "1" ]; then
+  echo "Skill index generated: $OUTPUT ($SKILL_COUNT skills)"
+fi
 
 # ---- meret-or -------------------------------------------------------------
 # MIERT: a skill-hatar (500 sor) eddig CSAK azon allt, hogy valakinek eszebe jut
@@ -119,7 +145,9 @@ elif [ "$OVER_LIMIT" -gt 0 ]; then
   echo "  -> references/ bontas javasolt. A LEGFRISSEBB szekciok vannak a fajl vegen," >&2
   echo "     tehat epp azok jutnak el a legkevesebb olvasohoz." >&2
 else
-  echo "MERET-OR: minden skill a ${SKILL_LINE_LIMIT} soros hatar alatt (pozitiv kontroll: OK)."
+  if [ "${VERBOSE:-0}" = "1" ]; then
+    echo "MERET-OR: minden skill a ${SKILL_LINE_LIMIT} soros hatar alatt (pozitiv kontroll: OK)."
+  fi
 fi
 
 # ES A LEPES, AMI NELKUL A FENTI EGESZ NEMA MARADHAT (2026-08-22, merve, es a hiba az enyem):
