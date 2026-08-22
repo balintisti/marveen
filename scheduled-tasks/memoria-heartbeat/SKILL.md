@@ -40,10 +40,22 @@ Lépések:
    - Globális: `~/.claude/skills/.skill-index.md` (szöveges keresés)
    - Ágensspecifikus (ha van): `./.claude/skills/.skill-index.md` a munkamappádban (szöveges keresés)
    - Az ágensspecifikus index mindkét szintet tartalmazza, tehát ha az létezik, elég azt nézegetni.
-2. Ha van releváns skill: PATCH (csak a megváltozott rész cseréje, ne az egész fájl).
+2. **MIELŐTT patchelsz: nézd meg, mi van már ott.**
+   ```bash
+   bash {{INSTALL_DIR}}/scripts/skill-index.sh --outline <skill-nev>
+   ```
+   Kiírja a szekció-címeket ÉS a félkövér bevezetőket (a referenciákkal együtt). Ez nem detektor,
+   hanem a **két lista második listája**. Mért eset (2026-08-22): két ágens ugyanazt a leckét írta
+   ugyanabba a skill-magba fél órán belül -- egyikük sem volt hanyag, csak mindketten a saját
+   fejükből dolgoztak, és nem volt mihez hasonlítani. Didi megmérte, hogy a kanban duplikátum-szűrője
+   ide NEM jó: egy prózás szekció SZÓ SZERINTI másolata 0.00 pontot kap (nincs benne fájlnév,
+   kártya-id, végpont), miközben húsz nem-duplikátum pár 10 fölött áll -- a rangsor fordított.
+   Egy lecke pedig éppen prózás.
+
+3. Ha van releváns skill: PATCH (csak a megváltozott rész cseréje, ne az egész fájl).
    - A `## Buktatók` szekciót preferáld ha hiba/recovery volt.
    - A `## Eljárás` szekciót ha a folyamat változott.
-3. Ha NINCS releváns skill: hozz létre újat:
+4. Ha NINCS releváns skill: hozz létre újat:
    ```bash
    mkdir -p ~/.claude/skills/<NEV>
    cat > ~/.claude/skills/<NEV>/SKILL.md <<EOF
@@ -66,7 +78,7 @@ Lépések:
    - ...
    EOF
    ```
-4. Index regen (mindkét szint) -- lásd a 2/b lépést is: ez MINDIG fut, nem csak skill-patch után.
+5. Index regen (mindkét szint) -- lásd a 2/b lépést is: ez MINDIG fut, nem csak skill-patch után.
    ```bash
    bash {{INSTALL_DIR}}/scripts/skill-index.sh          # globális index frissítése
    bash {{INSTALL_DIR}}/scripts/skill-index.sh "$(pwd)" # ágensspecifikus merged index frissítése

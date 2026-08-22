@@ -1,6 +1,37 @@
 #!/bin/bash
 
 # -v / --verbose: kiirja a siker-sort is. Alapertelmezesben csendes, lasd lentebb.
+# --outline <skill>: kiirja EGY skill szekcio-cimeit es a FELKOVER bevezetoit.
+#
+# Ez nem detektor, hanem a KET LISTA masodik listaja (didi merese, 2026-08-22). Aznap ket agens
+# ugyanazt a lecket irta ugyanabba a skill-magba fel oran belul -- egyikuk sem volt hanyag, csak
+# mindketten a sajat fejukbol dolgoztak, es NEM VOLT MIHEZ HASONLITANI.
+#
+# Miert nem a duplikatum-szuro: didi megmerte a skill-fan (47 skill, 271 szekcio). Egy PROZAS
+# szekcio SZO SZERINTI masolata 0.00 pontot kap (nincs benne fajlnev, kartya-id, vegpont), mikozben
+# husz-egynehany NEM-duplikatum par 10 folott all -- a rangsor FORDITOTT. Egy lecke pedig eppen
+# prozas. A szuro a kanbanra jo, ide nem.
+#
+# Miert nem a globalis indexbe: az Level 0 kontextus, minden korben betoltodik. 271 szekcio-cim
+# ott alland koltseg egy olyan informacioert, ami evente parszor kell.
+#
+# Es miert a FELKOVER bevezetok is: a mai eset egyik fele NEM `##` cim volt, hanem egy `**...**`
+# bekezdes egy meglevo szekcion belul. Egy csak-cimekre nezo lista azt sem fogta volna meg.
+if [ "${1:-}" = "--outline" ]; then
+  _skill="${2:-}"
+  if [ -z "$_skill" ]; then echo "hasznalat: skill-index.sh --outline <skill-nev>" >&2; exit 64; fi
+  _f="$HOME/.claude/skills/$_skill/SKILL.md"
+  if [ ! -f "$_f" ]; then echo "nincs ilyen skill: $_skill" >&2; exit 66; fi
+  echo "$_skill  ($(wc -l < "$_f" | tr -d ' ') sor)"
+  grep -nE '^#{2,3} |^\*\*[^*]+\*\*' "$_f" | sed 's/^/  /'
+  for _r in "$HOME/.claude/skills/$_skill/references/"*.md; do
+    [ -f "$_r" ] || continue
+    echo "  -- references/$(basename "$_r")  ($(wc -l < "$_r" | tr -d ' ') sor)"
+    grep -nE '^#{2,3} ' "$_r" | sed 's/^/    /'
+  done
+  exit 0
+fi
+
 VERBOSE=0
 _args=()
 for _a in "$@"; do
