@@ -544,6 +544,36 @@ describe('buildWakeMessage', () => {
     expect(msg).toMatch(/nem tudtam megnevezni/)
   })
 
+  // Measured 2026-08-22 on Didi's own wake: ONE message said "40 tetel var rád" and
+  // "Nincs felveheto munkad" at the same time. Her check is `testing_without_my_comment`
+  // -- for a reviewer the `testing` column IS the work, so the assignee-shaped rule
+  // (`status !== 'testing'`) classified every single item as "not work". A reviewer told
+  // she has no work is a reviewer who stops, which is the exact failure this guard exists
+  // to prevent. The positive control below is the point: the SAME items must still read as
+  // "no pickable work" for an assignee-kind check, or this test proves nothing.
+  it('for a REVIEW queue, the testing column IS the pickable work', () => {
+    const items = [
+      { ...card('rev11111', 'high', 'a card waiting for my review'), status: 'testing' },
+      { ...card('rev22222', 'urgent', 'another one'), status: 'testing' },
+    ]
+    const msg = buildWakeMessage('didi', 13, 40, items, 'testing_without_my_comment')
+    expect(msg).not.toMatch(/Nincs felveheto munkad/)
+    expect(msg).toMatch(/FELVEHETO ELLENORZES \(2\)/)
+    expect(msg).toContain('rev22222')
+
+    // POSITIVE CONTROL -- same items, assignee-shaped check: still nothing to pick up.
+    const asAssignee = buildWakeMessage('didi', 13, 40, items, 'assigned_open_cards')
+    expect(asAssignee).toMatch(/Nincs felveheto munkad/)
+  })
+
+  it('a review queue names more than three items, because they are the work', () => {
+    const many = Array.from({ length: 40 }, (_, i) => card(`id${i}`.padEnd(9, 'x'), 'normal', `t${i}`))
+    const lines = buildWakeMessage('didi', 13, 40, many, 'testing_without_my_comment')
+      .split('\n')
+      .filter((l) => l.startsWith('  '))
+    expect(lines.length).toBe(5)
+  })
+
   it('tells the agent that no human was alerted, so it does not go looking', () => {
     const msg = buildWakeMessage('didi', 13, 48, [card('aaaaaaaa1', 'high', 'x')])
     expect(msg).toContain('Isti NEM lett ertesitve')

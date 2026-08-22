@@ -362,11 +362,19 @@ export function buildWakeMessage(
   minutes: number,
   workCount: number,
   items: { id: string; title?: string | null; priority?: string | null; status?: string }[],
+  kind: WorkCheckKind = 'assigned_open_cards',
 ): string {
   const rank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 }
-  // Pickable first. Within each group, priority. A `testing` card is never something
-  // the assignee can start -- it is a review waiting for an answer.
-  const pickable = (c: { status?: string }) => c.status !== 'testing'
+  // Pickable first, then priority within each group. WHICH cards are pickable depends on
+  // WHY they were selected, and getting that backwards produced a self-contradicting wake:
+  // Didi (2026-08-22) received one message that said "40 tetel var rád" and "Nincs felveheto
+  // munkad" at the same time. Her check is `testing_without_my_comment` -- for a reviewer the
+  // `testing` column IS the work, so a rule written for an assignee's own queue inverts on her.
+  // A reviewer told "no pickable work" is a reviewer who stops, which is exactly what this
+  // guard exists to prevent.
+  const isReviewQueue = kind === 'testing_without_my_comment'
+  const pickable = (c: { status?: string }) =>
+    isReviewQueue ? c.status === 'testing' : c.status !== 'testing'
   const byPriority = (a: { priority?: string | null }, b: { priority?: string | null }) =>
     (rank[a.priority ?? 'normal'] ?? 2) - (rank[b.priority ?? 'normal'] ?? 2)
   const work = [...items].filter(pickable).sort(byPriority)
@@ -384,12 +392,19 @@ export function buildWakeMessage(
     '',
   ]
   if (work.length) {
-    out.push(`FELVEHETO MUNKA (${work.length}) -- ezekbe bele lehet kezdeni:`, ...work.slice(0, 5).map(line))
+    out.push(
+      isReviewQueue
+        ? `FELVEHETO ELLENORZES (${work.length}) -- ezek varnak a te valaszodra:`
+        : `FELVEHETO MUNKA (${work.length}) -- ezekbe bele lehet kezdeni:`,
+      ...work.slice(0, 5).map(line),
+    )
   }
   if (review.length) {
     out.push(
       '',
-      `VALASZRA VARO ELLENORZES (${review.length}) -- ezeken egy ellenorzo szolt utoljara, nem munka:`,
+      isReviewQueue
+        ? `EGYEB TETEL (${review.length}) -- nem a testing oszlopbol, nezd meg mit kerol:`
+        : `VALASZRA VARO ELLENORZES (${review.length}) -- ezeken egy ellenorzo szolt utoljara, nem munka:`,
       ...review.slice(0, 3).map(line),
     )
   }
@@ -400,7 +415,9 @@ export function buildWakeMessage(
     '',
     work.length
       ? 'Vedd fel a legfelso FELVEHETO tetelt. Ha egyik sem a tied, ird meg egy sorban, hogy miert --'
-      : 'Nincs felveheto munkad, csak valaszra varo ellenorzes. Ha ez sem a tied, ird meg egy sorban --',
+      : isReviewQueue
+        ? 'Nem tudtam megnevezni felveheto ellenorzest. Ha a szamlalod megsem nulla, ird meg egy sorban --'
+        : 'Nincs felveheto munkad, csak valaszra varo ellenorzes. Ha ez sem a tied, ird meg egy sorban --',
     'akkor a workcheck.json-od hazudik, es azt kell javitani, nem teged ebreszteni.',
   )
   return out.join('\n')

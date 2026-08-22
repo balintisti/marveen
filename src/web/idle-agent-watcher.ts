@@ -164,7 +164,7 @@ function tick(): void {
         const items = selectDeclaredWork(check as WorkCheck, agent, cards, comments, MAIN_AGENT_ID)
         const minutes = Math.round(decision.idleForMs / 60_000)
         try {
-          createAgentMessage('system', agent, buildWakeMessage(agent, minutes, decision.workCount, items))
+          createAgentMessage('system', agent, buildWakeMessage(agent, minutes, decision.workCount, items, (check as WorkCheck).kind))
           logger.info(
             { idleGuard: true, agent, workCount: decision.workCount, idleForMs: decision.idleForMs },
             'idle guard: woke the agent (stage 1) -- no human told yet',
