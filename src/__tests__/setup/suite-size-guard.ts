@@ -74,10 +74,19 @@ import type { File, Task } from 'vitest'
  * Ne vedd altalanos ovatossagnak -- pontosan azert all itt, hogy ne annak nezd.
  */
 
-/** Merve 2026-08-23, a fix/0114968c agon: `npx vitest run` -> 287 fajl / 3902 teszt.
- *  (Az or sajat teszt-fajljaval egyutt -- az is a keszlet resze.) */
-export const SUITE_BASELINE_FILES = 287
-export const SUITE_BASELINE_TESTS = 3902
+// === SUITE-BASELINE:BEGIN ===
+// EZT A BLOKKOT A `npm run test:baseline` GENERALJA. Ne ird at kezzel.
+//
+// MIERT GENERALT, ES MIERT EGY BLOKKBAN A SZAM ES A LEIRASA (kartya c0f10926):
+// amig kezi volt, a doc-komment szama es a konstans KULON tudott elavulni. Ma
+// meg is tortent egy szomszedos helyen: ket hatar-teszt beirt 78-cal dolgozott,
+// es a plafon bevezetesevel csendben elavult volna -- epp azok hazudtak volna
+// elsonek, amik a hatart orzik. Ha a szam es a mondat egy generalt blokkban all,
+// nem tudnak szetcsuszni.
+/** Merve 2026. 08. 23. 7:55:04 CEST -- `npx vitest run` -> 288 fajl / 3914 teszt. */
+export const SUITE_BASELINE_FILES = 288
+export const SUITE_BASELINE_TESTS = 3914
+// === SUITE-BASELINE:END ===
 
 /**
  * Az alapvonal env-bol felulirhato -- NEM kenyelembol, hanem mert kulonben az

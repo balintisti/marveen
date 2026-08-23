@@ -14,7 +14,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "syntax-check": "node --check web/app.js web/sw.js",
-    "smoke": "playwright test --config=playwright.config.ts"
+    "smoke": "playwright test --config=playwright.config.ts",
+    "test:baseline": "node scripts/update-suite-baseline.mjs"
   },
   "engines": {
     "node": ">=20 <24"
