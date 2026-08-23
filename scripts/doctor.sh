@@ -356,6 +356,35 @@ else
   warn "scripts/google-health.sh missing or not executable"
 fi
 
+# --- Playwright browser cache (shared by every agent's e2e) ---
+#
+# WHY IT IS HERE (card d1cf8ffb, measured 2026-08-23). A `playwright install`
+# stalled DURING EXTRACTION at 84 files / 448 KB and held the shared cache lock
+# for five and a half hours. The cache is shared, so that one stuck install
+# blocked every agent's e2e -- and the only way anyone found out was by trying to
+# run a test. A failure whose only signal is "someone eventually tries" is not a
+# signal. This section gives it one that fires without anyone running e2e.
+#
+# The check prints STATUS|text and always exits 0, so a missing cache shows up as
+# a named SKIP rather than as a silent pass.
+echo -e "\n${BOLD}Playwright cache${RESET}"
+if [ -x "scripts/playwright-cache-check.sh" ]; then
+  PW_LINES="$(bash scripts/playwright-cache-check.sh 2>/dev/null)"
+  if [ -z "$PW_LINES" ]; then
+    fail "playwright-cache-check.sh: no output"
+  else
+    while IFS='|' read -r status text; do
+      case "$status" in
+        OK)   ok "$text" ;;
+        FAIL) fail "$text" ;;
+        *)    echo "    $text" ;;
+      esac
+    done <<< "$PW_LINES"
+  fi
+else
+  warn "scripts/playwright-cache-check.sh missing or not executable"
+fi
+
 # --- Summary ---
 echo ""
 if [ "$FAIL" -eq 0 ]; then
