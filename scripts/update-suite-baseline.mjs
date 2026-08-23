@@ -9,29 +9,37 @@
  * fegyelem-hiany. Isti szabalya szerint pedig ami azon all, hogy a felhasznalo
  * megjegyez valamit, az nem megoldas.
  *
- * A LEGVESZELYESEBB RESZ, ES EZERT AZ ELSO SZABALY: HA A SUITE NEM ZOLD, NEM
- * IRUNK ALAPVONALAT. Egy frissito, ami egy CSONKA futasbol ir szamot, csendben
- * ERVENYESNEK ROGZITI pontosan azt a vesztest, amit az or fogni hivatott -- az
- * rosszabb lenne a mai kezi allapotnal. Ezert a rc != 0 eset nem figyelmeztetes,
- * hanem megallas, nem-nulla kilepessel.
+ * A LEGVESZELYESEBB RESZ, ES EZERT AZ ELSO SZABALY: HA A GYUJTES NEM TELJES, NEM
+ * IRUNK ALAPVONALAT. Egy frissito, ami egy CSONKA gyujtesbol ir szamot, csendben
+ * ERVENYESNEK ROGZITI pontosan azt a vesztest, amit az or fogni hivatott. Ezert a
+ * nem-nulla kilepes nem figyelmeztetes, hanem MEGALLAS.
  *
- * KET UT, ES KULONBOZOT GARANTALNAK (didi merese, 2026-08-23):
+ * A KIKOTES SZOVEGE 2026-08-23-AN PONTOSODOTT, ES SZIGORODOTT (marveen dontese).
+ * Eredetileg ez allt: "ha a suite RC-je nem nulla (BUKAS vagy betoltesi hiba)".
+ * Ez KET dolgot mosott ossze:
+ *     BUKAS          -> a GYUJTOTT szamot NEM valtoztatja meg. Egy buko teszt
+ *                       ugyanugy EGY teszt; a keszlet MERETE valtozatlan.
+ *     BETOLTESI HIBA -> EZ valtoztatja meg, es EZ tartozik ide.
+ * A regi szoveg tehat egy piros suite miatt is megtagadta a frissitest -- amire a
+ * valasz az lett volna, hogy valaki KEZZEL irja at a szamot. Vagyis eppen azt a
+ * kezi utat tartotta eletben, amit ez a kartya megszuntet. Az uj szoveg
+ * SZIGORUBB, nem lazabb.
  *
- *   ALAPERTELMEZES: `vitest run` -- a TELJES keszlet lefut (~20 mp). Ez tartja a
- *   kartya 1. kikoteset szo szerint: "ha a suite RC-je nem nulla (BUKAS vagy
- *   betoltesi hiba), NE irjon alapvonalat".
+ * EZERT A `vitest list` AZ ALAPERTELMEZES, ES NEM AZ IDO MIATT (13 vs 33 mp,
+ * mellekes). A dontő az, hogy a `list` A KERDESRE valaszol -- HANY TESZT VAN --,
+ * a `run` pedig egy MASIKRA is: ATMENNEK-E. A masodik valasz itt nem kell.
+ * Egy eszkoz, ami tobbet mer a szuksegesnel, nem alaposabb: csak TOBB OKBOL TUD
+ * ELBUKNI. Es a `list` epp a szamito hibara HANGOS: egy collect-hiban elhasal,
+ * mig a teljes futasban az ilyen fajl `tasks: []`-szel BENN MARAD.
  *
- *   `--fast`: `vitest list` -- csak GYUJTES, futtatas nelkul (~9-14 mp). Didi
- *   megmerte, hogy ugyanazt a ket szamot adja (3921/289, pontos egyezes), es hogy
- *   egy COLLECT-hiban HANGOSAN elhasal -- ami alapvonal-allitashoz JOBB, mint a
- *   teljes futas: ott az ilyen fajl `tasks: []`-szel BENN MARAD.
- *   AMIT VISZONT NEM GARANTAL: hogy a tesztek ATMENNEK. Egy piros teszt ugyanugy
- *   GYUJTOTT teszt, tehat a SZAM helyes marad -- de a kartya kikotese "bukas VAGY
- *   betoltesi hiba"-t mond, es ez az ut csak a masodikat fogja. Ezert OPT-IN, es
- *   ezert nem en dontom el, hogy alapertelmezes legyen-e.
+ * UJRANYITASI FELTETEL, AMIT NEM MERTUNK MEG: ha talalunk olyan esetet, ahol a
+ * GYUJTES teljes, de a FUTAS kevesebb tesztet lat (pl. egy worker osszeomlik
+ * futas kozben), akkor a `list` a MAGASABB szamot adna. Ez a BIZTONSAGOS irany --
+ * a kovetkezo valodi futas elbukna az oron, tehat zajt okoz, nem csendet --, de
+ * NEM mertuk meg. Ha ilyen eset elojon, ez a valasztas ujragondolando.
  *
  * Hasznalat:  npm run test:baseline
- *             npm run test:baseline -- --fast      # csak gyujtes, gyorsabb
+ *             npm run test:baseline -- --full      # a teljes keszlet is lefut
  *             npm run test:baseline -- --dry-run
  */
 import { spawnSync } from 'node:child_process'
@@ -54,10 +62,12 @@ export function decide(rc, counts) {
     return {
       write: false,
       reason:
-        `A suite NEM zold (kilepesi kod ${rc}). NEM irok alapvonalat.\n` +
-        '  Egy csonka futasbol irt alapvonal CSENDBEN ervenyesnek rogzitene azt a\n' +
-        '  vesztest, amit az or fogni hivatott -- rosszabb, mint a kezi allapot.\n' +
-        '  Eloszor javitsd a suite-ot, aztan futtasd ujra.',
+        `A GYUJTES NEM TELJES (kilepesi kod ${rc}). NEM irok alapvonalat.\n` +
+        '  Egy csonka gyujtesbol irt alapvonal CSENDBEN ervenyesnek rogzitene azt a\n' +
+        '  vesztest, amit az or fogni hivatott.\n' +
+        '  FIGYELEM: ez NEM azt jelenti, hogy egy teszt BUKIK -- egy buko teszt\n' +
+        '  ugyanugy egy GYUJTOTT teszt, es nem akadalya az alapvonalnak. Ez azt\n' +
+        '  jelenti, hogy egy fajl BE SEM TOLTODOTT. Eloszor azt javitsd.',
     }
   }
   if (!counts || !Number.isInteger(counts.files) || !Number.isInteger(counts.tests)) {
@@ -107,7 +117,9 @@ function main() {
   // alapvonalanak a felmeresebe. Egy regi, tul magas alapvonal kulonben
   // megakadalyozna, hogy valaha frissiteni lehessen -- az or befagyasztana
   // magat, es pontosan ez az a csapda-alak, amit mashol mar kimondtunk.
-  const fast = process.argv.includes('--fast')
+  // ALAPERTELMEZES A GYUJTES. A `--full` a regi, futtatasos ut -- akkor kell, ha
+  // valaki egy lepesben akarja latni azt is, hogy a keszlet zold.
+  const fast = !process.argv.includes('--full')
   const cmd = process.env['SUITE_BASELINE_CMD']
   const env = { ...process.env, SUITE_BASELINE_EMIT: emit, SUITE_SIZE_GUARD: 'off' }
   const opts = { cwd: ROOT, encoding: 'utf-8', env }

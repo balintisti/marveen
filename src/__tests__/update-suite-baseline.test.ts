@@ -11,16 +11,30 @@ import { decide, renderBlock, replaceBlock } from '../../scripts/update-suite-ba
 // allapotnal, mert ugy nezne ki, mintha megoldottuk volna.
 
 describe('decide -- mikor NEM szabad alapvonalat irni', () => {
-  it('BUKOTT suite utan NEM ir (ez a kartya legveszelyesebb resze)', () => {
+  it('CSONKA GYUJTES utan NEM ir (ez a kartya legveszelyesebb resze)', () => {
     const r = decide(1, { files: 200, tests: 3000 })
     expect(r.write).toBe(false)
-    expect(r.reason).toContain('NEM zold')
+    expect(r.reason).toContain('GYUJTES NEM TELJES')
   })
 
   it('a megallas indoka MEGMONDJA, miert rosszabb az iras a semminel', () => {
     // Egy "nem irtam" uzenet, ami nem mondja meg, MIERT, ugyanolyan konnyen
     // valik zajja, mint egy hamis riasztas.
     expect(decide(1, { files: 1, tests: 1 }).reason).toContain('CSENDBEN')
+  })
+
+  it('a megallas SZETVALASZTJA a buko tesztet a be nem toltodott fajltol', () => {
+    // A kikotes eredeti szovege ("RC nem nulla -- BUKAS vagy betoltesi hiba")
+    // ket dolgot mosott ossze:
+    //   BUKAS          -> a GYUJTOTT szamot nem valtoztatja (egy buko teszt
+    //                     ugyanugy egy teszt), tehat NEM akadalya az alapvonalnak
+    //   BETOLTESI HIBA -> EZ valtoztatja meg, es EZ tartozik ide
+    // A regi szoveg egy piros suite miatt is megtagadta a frissitest -- amire a
+    // valasz az lett volna, hogy valaki KEZZEL irja at a szamot. Vagyis eppen azt
+    // a kezi utat tartotta eletben, amit ez a kartya megszuntet.
+    const r = decide(1, { files: 1, tests: 1 })
+    expect(r.reason).toContain('NEM azt jelenti, hogy egy teszt BUKIK')
+    expect(r.reason).toContain('BE SEM TOLTODOTT')
   })
 
   it('megszakadt futas (null -> 1) utan sem ir', () => {
