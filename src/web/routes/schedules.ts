@@ -19,6 +19,8 @@ import {
 } from '../scheduled-tasks-io.js'
 import { runScheduledTaskNow } from '../schedule-runner.js'
 import type { RouteContext } from './types.js'
+import { readCommandHealth } from '../command-task.js'
+import { assessCommandHealth } from '../command-health-age.js'
 
 // Resolve a URL-supplied schedule name to an on-disk dir, blocking path
 // traversal. sanitizeScheduleName strips everything outside [a-z0-9-] (so no
@@ -110,7 +112,18 @@ Az eredmeny CSAK a kibovitett prompt szovege legyen, semmi mas. Ne hasznalj code
   }
 
   if (path === '/api/schedules' && method === 'GET') {
-    json(res, listScheduledTasks())
+    // A command-feladatok health-je SZARMAZTATVA megy vissza, nem nyersen.
+    // A tarolt `lastStatus` az utolso FUTAS eredmenye, es csak futaskor irodik
+    // ujra -- tehat egy soha tobbe nem futo feladat orokre "ok" marad. A kort a
+    // feladat SAJAT cronjabol szamoljuk (lasd command-health-age.ts); fix
+    // kuszob nem mukodne, mert egy tiz-percenkenti es egy heti feladat
+    // elavulasa nem ugyanaz a szam.
+    const tasks = listScheduledTasks().map((t) =>
+      t.type === 'command'
+        ? { ...t, health: assessCommandHealth(readCommandHealth(t.name), t.schedule, Date.now()) }
+        : t,
+    )
+    json(res, tasks)
     return true
   }
 
