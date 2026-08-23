@@ -1207,7 +1207,29 @@ export function importFleet(
     }
 
     // M3: fire-and-forget re-embed imported memories (embedding was stripped at export)
-    backfillEmbeddings().catch(err => logger.warn({ err: err?.message }, 'Fleet import: embedding backfill failed'))
+    //
+    // A `.then` KELL, NEM ELEG A `.catch` (didi lelete, 2026-08-23). Az uj
+    // `embedText` SOHA nem dob -- a hibas agon is `{ ok: false }`-t ad vissza --,
+    // tehat egy csupasz `.catch()` a halozati es backend-kudarcot NEM latja: azt
+    // az ELDOBOTT visszateresi ertek viszi. A `.catch` igy csak a varatlan
+    // kivetelekre marad, es a hallgatasa sikernek latszik.
+    //
+    // MIERT EPP ITT A LEGSULYOSABB: ez az EGYETLEN hivo, ami TOMEGESEN hoz be uj,
+    // vektorizalatlan sorokat. Enelkul a fleet-import utan pontosan a kartya
+    // eredeti hibaja all elo -- az emlekek vektor nelkul maradnak, es semmi nem
+    // szol rola. Ugyanaz az alak, mint a boot-hivonal (index.ts), csak ott mar
+    // javitva volt.
+    backfillEmbeddings()
+      .then(r => {
+        if (r.embedded > 0) logger.info({ embedded: r.embedded, remaining: r.remaining }, 'Fleet import: embedding backfill kesz')
+        if (!r.ok) {
+          logger.warn(
+            { pending: r.pending, embedded: r.embedded, failed: r.failed, aborted: r.aborted, remaining: r.remaining, err: r.error },
+            'Fleet import: embedding backfill NEM sikerult -- a behozott emlekek vektor nelkul maradtak',
+          )
+        }
+      })
+      .catch(err => logger.warn({ err: err?.message }, 'Fleet import: embedding backfill hiba'))
 
     // Identity takeover: write the source identity set into config-overrides.json so the
     // target install adopts the source persona (name, brand, owner) on next restart.

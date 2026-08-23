@@ -220,11 +220,19 @@ Respond ONLY with JSON, nothing else:
 
   if (path === '/api/memories/backfill' && method === 'POST') {
     try {
-      const count = await backfillEmbeddings()
-      json(res, { ok: true, count })
+      const result = await backfillEmbeddings()
+      // STATUS AND BODY MUST AGREE ON THE WORST CASE. The old handler answered
+      // `{"ok":true,"count":0}` with HTTP 200 whether every memory already had
+      // a vector or every single attempt had just failed -- and a caller that
+      // only looks at the status code (a probe, a shell `-f`) could never tell.
+      // 503 is reserved for the total failure: there was work, and none of it
+      // got done. A partial run stays 200 because something DID happen, and
+      // `ok:false` in the body carries the rest.
+      const totalFailure = result.pending > 0 && result.embedded === 0
+      json(res, result, totalFailure ? 503 : 200)
     } catch (err) {
       logger.error({ err }, 'Backfill failed')
-      json(res, { error: 'Backfill failed' }, 500)
+      json(res, { ok: false, error: 'Backfill failed' }, 500)
     }
     return true
   }

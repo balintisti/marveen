@@ -473,8 +473,20 @@ async function main(): Promise<void> {
 
   // Backfill embeddings for memories saved before Ollama was available.
   // Fire-and-forget: a missing or slow Ollama instance must not block startup.
-  backfillEmbeddings().then(count => {
-    if (count > 0) logger.info({ count }, 'Embedding backfill befejezve')
+  //
+  // THE OLD LINE LOGGED ONLY SUCCESS (`if (count > 0)`), so the one moment
+  // per process where this question is cheap to answer produced NOTHING when
+  // the answer was bad. Boot is exactly when an operator is looking. A failure
+  // here is WARN and says how many are waiting -- it runs once per start, so
+  // it cannot become noise.
+  backfillEmbeddings().then(r => {
+    if (r.embedded > 0) logger.info({ embedded: r.embedded, remaining: r.remaining }, 'Embedding backfill befejezve')
+    if (!r.ok) {
+      logger.warn(
+        { pending: r.pending, embedded: r.embedded, failed: r.failed, aborted: r.aborted, err: r.error },
+        'Embedding backfill NEM sikerult -- a vektoros kereses reszlegesen mukodik',
+      )
+    }
   }).catch(err => logger.warn({ err }, 'Embedding backfill hiba (Ollama nem elerheto)'))
 
   // Memory decay (24h cycle)

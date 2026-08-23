@@ -47,6 +47,11 @@ describe('encrypt/decrypt round-trip', () => {
 // importFleet: encrypted wrapper detection (with mocked FS / DB)
 // ---------------------------------------------------------------------------
 
+/** A fleet-import utani backfill eredmenye -- tesztenkent allithato. */
+const backfillResult = {
+  current: { ok: true, pending: 0, embedded: 0, failed: 0, aborted: false, remaining: 0, error: null as string | null },
+}
+
 vi.mock('../db.js', () => ({
   getDb: () => ({
     prepare: () => ({
@@ -56,7 +61,7 @@ vi.mock('../db.js', () => ({
     }),
     transaction: (fn: Function) => fn,
   }),
-  backfillEmbeddings: () => Promise.resolve(),
+  backfillEmbeddings: () => Promise.resolve(backfillResult.current),
   initDatabase: () => {},
 }))
 
@@ -103,8 +108,9 @@ vi.mock('../env.js', () => ({
   updateEnvFile: vi.fn(),
 }))
 
+const mockLogWarn = vi.fn()
 vi.mock('../logger.js', () => ({
-  logger: { info: () => {}, warn: () => {}, error: () => {} },
+  logger: { info: () => {}, warn: (...a: unknown[]) => mockLogWarn(...a), error: () => {} },
 }))
 
 // Minimal valid FleetJson for tests
@@ -359,5 +365,53 @@ describe('importFleet: avatarExt traversal rejected', () => {
     expect('dryRun' in result).toBe(true)
     const errors = (result as any).errors as string[]
     expect(errors.some(e => e.includes('avatarExt') && e.includes('testbot'))).toBe(true)
+  })
+})
+
+// A FLEET-IMPORT UTANI BACKFILL KUDARCA NEM LEHET NEMA (kartya a6685b0f, didi 3. lelete).
+//
+// A hivo `backfillEmbeddings().catch(...)` alakban allt. Az uj `embedText` SOHA
+// nem dob -- a hibas agon is `{ ok: false }`-t ad --, tehat a `.catch()` a
+// halozati es backend-kudarcot NEM latta: azt az ELDOBOTT visszateresi ertek
+// vitte. A hallgatas sikernek latszott.
+//
+// Ez az EGYETLEN hivo, ami TOMEGESEN hoz be uj, vektorizalatlan sorokat, tehat
+// pont itt all elo a kartya eredeti hibaja: az emlekek vektor nelkul maradnak,
+// es semmi nem szol rola.
+describe('fleet import: a backfill kudarca WARN-t ad, nem csendet', () => {
+  beforeEach(() => {
+    mockLogWarn.mockClear()
+    backfillResult.current = { ok: true, pending: 0, embedded: 0, failed: 0, aborted: false, remaining: 0, error: null }
+  })
+
+  /** A backfill fire-and-forget: a `.then` egy microtaskkal kesobb fut. */
+  const flush = () => new Promise(r => setTimeout(r, 0))
+
+  it('WARN, ha a backfill ok:false-szal ter vissza (dobas NELKUL)', async () => {
+    const { importFleet } = await import('../web/fleet-transfer.js')
+    backfillResult.current = {
+      ok: false, pending: 42, embedded: 0, failed: 42, aborted: true, remaining: 42,
+      error: 'ollama 500: overloaded',
+    }
+
+    importFleet(FLEET_WITH_SOURCE_ID, { apply: true })
+    await flush()
+
+    expect(mockLogWarn).toHaveBeenCalled()
+    const hit = mockLogWarn.mock.calls.find(c => String(c[1] ?? '').includes('embedding backfill NEM sikerult'))
+    expect(hit, 'a backfill kudarcara nem jott WARN').toBeTruthy()
+    // A szam is legyen ott: enelkul a WARN nem mondja meg, MENNYI maradt vektor nelkul.
+    expect((hit![0] as Record<string, unknown>)['remaining']).toBe(42)
+  })
+
+  it('NEM warnol, ha a backfill sikeres -- kulonben a jelzes zajja valik', async () => {
+    const { importFleet } = await import('../web/fleet-transfer.js')
+    backfillResult.current = { ok: true, pending: 5, embedded: 5, failed: 0, aborted: false, remaining: 0, error: null }
+
+    importFleet(FLEET_WITH_SOURCE_ID, { apply: true })
+    await flush()
+
+    const hit = mockLogWarn.mock.calls.find(c => String(c[1] ?? '').includes('embedding backfill NEM sikerult'))
+    expect(hit).toBeFalsy()
   })
 })

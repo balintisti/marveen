@@ -589,6 +589,7 @@ window._i18n.hu = {
   'memories.stat.vectors_btn':   'Vektorok generalasa',
   'memories.stat.vectors_gen':   'Generálás...',
   'memories.toast.vector_count': '{count} emlekhez vektor generalva',
+  'memories.toast.vector_failed': '{failed} emlek vektorizalasa NEM sikerult: {reason}',
   'memories.btn.new':            'Új emlék',
   'memories.btn.import':         'Költöztetés',
   'memories.search_placeholder': 'Keresés az emlékekben...',
