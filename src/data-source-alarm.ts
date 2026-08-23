@@ -138,13 +138,51 @@ export function detectTransitions(
   return out
 }
 
+/**
+ * How old the snapshot may be before staleness ITSELF counts as a failure.
+ *
+ * WHY THIS EXISTS (Marveen's condition on decision (B), 2026-08-23). The quota
+ * alarm reads a file that a scheduled task refreshes every 10 minutes. If that
+ * task stops, the file simply stops changing -- and an alarm that only looks at
+ * `source` would keep reporting the last known GOOD value forever. That would
+ * push the silent failure one level up, which is the exact shape this whole
+ * card exists to remove.
+ *
+ * 25 MINUTES, and the number is chosen against the 10-minute cadence: one
+ * missed run is normal (a slow API call, a busy box), two is a pattern. 25
+ * gives room for two misses plus slack, and still notices within half an hour.
+ * Larger would blur the signal; 10 or 15 would alarm on ordinary jitter, and an
+ * alarm that cries on jitter is one that gets muted.
+ */
+export const QUOTA_SNAPSHOT_MAX_AGE_MIN = 25
+
 /** The quota meter's own health, read from the snapshot it writes. */
-export function readQuotaSourceState(latestPath = join(STORE_DIR, 'usage-latest.json')): SourceState | null {
+export function readQuotaSourceState(
+  latestPath = join(STORE_DIR, 'usage-latest.json'),
+  nowMs = Date.now(),
+): SourceState | null {
   try {
     if (!existsSync(latestPath)) return null
-    const d = JSON.parse(readFileSync(latestPath, 'utf8')) as { claude?: { ok?: boolean; source?: string; auth_error?: string | null } }
+    const d = JSON.parse(readFileSync(latestPath, 'utf8')) as {
+      generated_at?: string
+      claude?: { ok?: boolean; source?: string; auth_error?: string | null }
+    }
     const c = d.claude
     if (!c) return null
+
+    // STALENESS FIRST, and deliberately BEFORE the source check: a stale file
+    // can still say `authoritative`, and that sentence is then about a world
+    // that may be hours old. From the outside "the meter stopped" and "the
+    // source degraded" are the same thing -- we do not know what is happening.
+    const ts = d.generated_at ? Date.parse(d.generated_at) : NaN
+    if (!Number.isNaN(ts)) {
+      const ageMin = Math.round((nowMs - ts) / 60_000)
+      if (ageMin > QUOTA_SNAPSHOT_MAX_AGE_MIN) {
+        return { ok: false, error: `elavult snapshot: ${ageMin} perce nem frissult (kuszob ${QUOTA_SNAPSHOT_MAX_AGE_MIN} perc) -- a mero valoszinuleg nem fut` }
+      }
+    } else if (d.generated_at !== undefined) {
+      return { ok: false, error: `a snapshot ideje nem ertelmezheto: ${String(d.generated_at).slice(0, 40)}` }
+    }
     // `authoritative_cached` still yields pace windows, so alerting survives --
     // it is degraded, not out. `estimate` is the one that silences alerting
     // completely, and that is what this alarm is for.
