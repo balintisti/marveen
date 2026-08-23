@@ -21,6 +21,10 @@ import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
 import { parseQualifiedId, formatQualifiedId, isQualifiedId } from '../federation/address.js'
 import { getFederationConfig } from '../federation/config.js'
 import type { RouteContext } from './types.js'
+import { unknownQueryParams, unknownQueryParamError } from '../query-params.js'
+
+/** Query parameters `GET /api/messages` accepts. */
+const MESSAGES_PARAMS: readonly string[] = ['agent', 'status', 'limit', 'before']
 
 export async function tryHandleMessages(ctx: RouteContext): Promise<boolean> {
   const { req, res, path, method, url } = ctx
@@ -178,6 +182,25 @@ export async function tryHandleMessages(ctx: RouteContext): Promise<boolean> {
   }
 
   if (path === '/api/messages' && method === 'GET') {
+    // UGYANAZ AZ OR, MINT A /api/kanban-on (kartya cf85d765) -- es ez a vegpont
+    // MEG DRAGABBAN nyelte el a hibat.
+    //
+    // A LELET, 2026-08-23 18:3x: computress egy valodi vizsgalatban a
+    // `?to=marveen&limit=200` hivast hasznalta, es 200 sort kapott 200-as
+    // valasszal. A `to` NEM SZURO -- a vegpont az `agent`-et olvassa --, tehat
+    // a GLOBALIS utolso 200 jott vissza. A belole szamolt "harom uzenet vart
+    // 60 percnel tovabb" tehat helyes szam volt egy MASIK populaciora: a harom
+    // kozul EGYIK SEM marveennek szolt (friday->didi, marveen->dexter x2).
+    // Nem tevedes volt: a vegpont valaszolt egy kerdesre, amit nem tettek fel neki.
+    //
+    // POZITIV KONTROLL, ami ezt kimondta: `?to=marveen` es
+    // `?to=NINCS_ILYEN_AGENS` BETU SZERINT AZONOS id-listat adott.
+    const ismeretlenM = unknownQueryParams(url, MESSAGES_PARAMS)
+    if (ismeretlenM.length) {
+      json(res, unknownQueryParamError(ismeretlenM, MESSAGES_PARAMS,
+        'A cimzett szurese: `agent=<nev>` (a beszelgetes MINDKET iranya). `to=` nem letezik.'), 400)
+      return true
+    }
     const agent = url.searchParams.get('agent') || ''
     const status = url.searchParams.get('status') || ''
     const limit = Math.min(parseInt(url.searchParams.get('limit') || '50', 10), 200)
