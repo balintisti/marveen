@@ -14,6 +14,7 @@ import {
   getHeartbeatKanbanSummary,
 } from '../../db.js'
 import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
+import { unknownQueryParams, unknownQueryParamError } from '../query-params.js'
 import { OWNER_NAME, BOT_NAME, MAIN_AGENT_ID, STORE_DIR, WEB_HOST, WEB_PORT, KANBAN_LABEL_COLORS } from '../../config.js'
 import { listAgentNames, readAgentDisplayName } from '../agent-config.js'
 import { isAgentRunning } from '../agent-process.js'
@@ -116,6 +117,12 @@ function fireKanbanDispatch(id: string, actor?: string | null): void {
   }
 }
 
+/** Query parameters `GET /api/kanban` accepts. Deliberately empty: it lists every live card. */
+const KANBAN_LIST_PARAMS: readonly string[] = []
+
+/** Query parameters `GET /api/kanban/archived` accepts. */
+const KANBAN_ARCHIVED_PARAMS: readonly string[] = ['q', 'project', 'label', 'from', 'to', 'limit']
+
 /** Literal sub-paths of /api/kanban that are NOT card ids. */
 export const KANBAN_RESERVED_SEGMENTS = ['archived', 'labels', 'assignees', 'heartbeat-summary'] as const
 
@@ -150,6 +157,15 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   const { req, res, path, method } = ctx
 
   if (path === '/api/kanban' && method === 'GET') {
+    // This endpoint takes no filters. Without the guard below, `?archived=1`
+    // answered 200 with the LIVE cards -- a different population, wearing the
+    // face of an honest empty result. See web/query-params.ts.
+    const ismeretlen = unknownQueryParams(ctx.url, KANBAN_LIST_PARAMS)
+    if (ismeretlen.length) {
+      json(res, unknownQueryParamError(ismeretlen, KANBAN_LIST_PARAMS,
+        'Archivalt kartyak: GET /api/kanban/archived. Heartbeat-osszegzo: GET /api/kanban/heartbeat-summary.'), 400)
+      return true
+    }
     // Embed each card's labels in one extra JOIN query (getLabelsForAllCards)
     // instead of an N+1 per-card lookup, so the footer-pill UI gets
     // everything it needs in a single round trip.
@@ -381,6 +397,15 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   }
 
   if (path === '/api/kanban/archived' && method === 'GET') {
+    // The same guard as on the unfiltered list. Fixing only one of the two
+    // would teach that the rule is population-dependent -- and this file has
+    // already paid for exactly that once (see the comments-existence guard,
+    // which existed on the labels branch and not on its neighbour).
+    const ismeretlenA = unknownQueryParams(ctx.url, KANBAN_ARCHIVED_PARAMS)
+    if (ismeretlenA.length) {
+      json(res, unknownQueryParamError(ismeretlenA, KANBAN_ARCHIVED_PARAMS), 400)
+      return true
+    }
     const sp      = ctx.url.searchParams
     const q       = sp.get('q')?.trim() || undefined
     const project = sp.get('project')?.trim() || undefined
