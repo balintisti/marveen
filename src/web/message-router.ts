@@ -36,7 +36,10 @@ import { maybeWakeSubAgentsForTelegram } from './telegram-inbox-wake.js'
 // exists / stays busy) is marked failed so it stops clogging the pending
 // queue and we stop re-scanning it forever. Matches the scheduled-task retry
 // window so a long turn that ate one also eats the other.
-const MESSAGE_ABANDON_WINDOW_MS = 60 * 60 * 1000
+// Exported (card bbb8557c): the sender is told how long a message to an absent
+// session will wait before it is abandoned, and a second copy of that number
+// somewhere else is a promise that drifts.
+export const MESSAGE_ABANDON_WINDOW_MS = 60 * 60 * 1000
 // How long a message must have waited before the stale-parked-input janitor is
 // allowed to clear the receiver's input box. Long enough that a brief, genuine
 // "agent parked a draft it is about to submit" never gets clobbered; short

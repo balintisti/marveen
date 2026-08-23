@@ -12,6 +12,9 @@ import { logger } from '../../logger.js'
 import { COORDINATOR_AGENT_ID } from '../../channel-coordinator/ingest.js'
 import { sanitizeAgentIdent } from '../../prompt-safety.js'
 import { isKnownAgent } from '../agent-config.js'
+import { agentRunState } from '../agent-process.js'
+import { MESSAGE_ABANDON_WINDOW_MS } from '../message-router.js'
+import { adviseSender } from '../recipient-advice.js'
 import { OWNER_NAME } from '../../config.js'
 import { readBody, json, jsonMaybeGzip } from '../http-helpers.js'
 import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
@@ -139,11 +142,23 @@ export async function tryHandleMessages(ctx: RouteContext): Promise<boolean> {
     // queue lives on the peer, so any number we computed here would be a local
     // artefact, and a wrong number is worse than none.
     const queue = isQualifiedId(storedTo) ? undefined : getRecipientQueueState(storedTo)
+    // IS THE RECIPIENT EVEN THERE -- card bbb8557c. The depth on its own is
+    // ambiguous: the same "4" means "they are working through a backlog, wait"
+    // and "nobody is listening, all four will be abandoned in an hour", and the
+    // sender's next move is the opposite in the two cases. Asked here, once,
+    // for the one agent this message is addressed to; the router already makes
+    // the same call per tick, so this is not a new class of cost.
+    const advice = queue
+      ? adviseSender(queue, agentRunState(storedTo), Math.round(MESSAGE_ABANDON_WINDOW_MS / 60000))
+      : undefined
     logger.info(
-      { id: msg.id, from: msg.from_agent, to: msg.to_agent, originNote: msg.origin_note, queueDepth: queue?.queueDepth },
+      {
+        id: msg.id, from: msg.from_agent, to: msg.to_agent, originNote: msg.origin_note,
+        queueDepth: queue?.queueDepth, recipientPresence: advice?.presence,
+      },
       'Agent message created',
     )
-    json(res, queue ? { ...msg, queue } : msg)
+    json(res, queue ? { ...msg, queue: { ...queue, ...advice } } : msg)
     return true
   }
 
