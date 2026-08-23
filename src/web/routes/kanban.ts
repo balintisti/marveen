@@ -431,6 +431,23 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   const kanbanCommentsMatch = path.match(/^\/api\/kanban\/([^/]+)\/comments$/)
   if (kanbanCommentsMatch && method === 'GET') {
     const cardId = decodeURIComponent(kanbanCommentsMatch[1])
+    // "NINCS ILYEN KARTYA" ES "VAN, DE NINCS KOMMENTJE" NEM LEHET UGYANAZ A VALASZ.
+    // Mindketto 200 + [] volt, tehat kivulrol megkulonboztethetetlen -- es ez ma
+    // ROSSZ IRANYBA vitt egy diagnozist (computress, 2026-08-23): egy leletet
+    // kapott egy kartyara hivatkozva, az ures tombbol elsore azt hitte, hogy a
+    // kartya LETEZIK es egy komment VESZETT EL. Csak azert derult ki az igazsag,
+    // mert a kartya-listaban is megnezte.
+    //
+    // ES EZ NEM UJ FELISMERES A REPOBAN, HANEM UGYANAZ, MASIK IRANYBAN. A POST
+    // ugyanezt a kaput mar viseli (cee465c): ott ket munkajelentes veszett el egy
+    // nem letezo id-n. Az abbol szuletett szabaly szo szerint ez: "a 200 nem azt
+    // jelenti, hogy megtortent; a VISSZAOLVASAS igen". Csakhogy a VISSZAOLVASAS
+    // EPP EZ A GET -- vagyis a POST-ra irt szabaly egy olyan ellenorzesre
+    // tamaszkodott, ami ugyanazt a ketertelmuseget hordozta.
+    //
+    // A testver-vegpont (`GET /api/kanban/<id>`) MAR MA IS 404-et ad; ez a sor
+    // OSSZEHANGOLJA a kettot, nem uj viselkedest vezet be.
+    if (!getKanbanCard(cardId)) { json(res, { error: 'Kártya nem található' }, 404); return true }
     json(res, getKanbanComments(cardId))
     return true
   }
@@ -459,6 +476,13 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   const kanbanEventsMatch = path.match(/^\/api\/kanban\/([^/]+)\/events$/)
   if (kanbanEventsMatch && method === 'GET') {
     const cardId = decodeURIComponent(kanbanEventsMatch[1])
+    // UGYANAZ AZ ALAK, MINT A /comments-nel -- megmerve ugyanabban a korben:
+    // nem letezo id -> 200 + [], letezo id -> 200 + 1 elem. A kartya a
+    // /comments-et nevezi meg, de ez a KETTO az egyetlen ket vegpont a fajlban,
+    // ami kartya-id alapjan listat ad kapu nelkul, es a ketertelmuseg azonos.
+    // Egy javitas, ami a testverét meghagyja, azt tanitja, hogy a szabaly
+    // vegpont-fuggo -- pedig nem az.
+    if (!getKanbanCard(cardId)) { json(res, { error: 'Kártya nem található' }, 404); return true }
     json(res, getKanbanCardEvents(cardId))
     return true
   }
