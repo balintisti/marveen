@@ -141,7 +141,7 @@ curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" \
 curl -s -X POST http://localhost:{{WEB_PORT}}/api/kanban \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $(cat store/.dashboard-token)" \
-  -d '{"title":"CÍM","status":"planned","assignee":"{{MAIN_AGENT_ID}}","priority":"normal"}'
+  -d '{"title":"CÍM","status":"planned","assignee":"{{MAIN_AGENT_ID}}","priority":"normal","project":"PROJEKT"}'
 ```
 
 Kártya mozgatása:
@@ -149,7 +149,7 @@ Kártya mozgatása:
 curl -s -X POST http://localhost:{{WEB_PORT}}/api/kanban/KARTYA_ID/move \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $(cat store/.dashboard-token)" \
-  -d '{"status":"in_progress"}'
+  -d '{"status":"in_progress","actor":"{{MAIN_AGENT_ID}}"}'
 ```
 
 Komment a kártyára (az eredmény ide kerül, a dashboardon ez látszik):
@@ -162,7 +162,15 @@ curl -s -X POST http://localhost:{{WEB_PORT}}/api/kanban/KARTYA_ID/comments \
 
 Archiválás: `POST /api/kanban/KARTYA_ID/archive`, üres törzzsel.
 
-Státuszok: planned, in_progress, waiting, done
+Státuszok: planned, in_progress, testing, waiting, done
+
+A `project` és az `actor` NEM elhagyható, és mindkettő azért van kiírva a példában, mert a
+hiányuk NÉMA:
+- **`project`**: e nélkül később nem lehet megmondani, MELYIK repóról szól a kártya. Mérve
+  2026-08-23-án egy élő táblán: 794 kártyából 445-nek üres volt ez a mezője (56%), és a
+  legnagyobb forrás maga a dokumentált példa volt, amiből ez a mondat hiányzott.
+- **`actor`**: e nélkül a saját kártyád felvétele megkülönböztethetetlen egy kiosztástól, és a
+  dispatcher visszadobja neked feladatként azt a munkát, amit épp elkezdtél.
 Prioritások: low, normal, high, urgent
 Ha {{OWNER_NAME}} ad feladatot Telegramon, vedd fel a kanban táblára is.
 
