@@ -4,5 +4,9 @@
   "enabled": true,
   "type": "heartbeat",
   "skipIfBusy": false,
-  "createdAt": 0
+  "createdAt": 0,
+  "stuckAfterMinutes": 45,
+  "stuckAfterMinutesNote": "A 15 perc a TASK-ot akarta merni, de a FORDULOT meri: az audit maga ~3 perc, utana viszont ugyanabban a fordulban rendszerint valodi munka fut (2026-08-22 20:00-as kor: az audit talalt egy beakadt kartyat, ket rosszul allo waiting-et, kozben Isti ket kerdest kuldott, es egy tetlen-or javitas is elkeszult teszttel es telepitessel -- osszesen ~25 perc, es EGYIK PERC SEM VOLT elakadas). 45 percre allitva 2026-08-22: ez meg mindig FOG szolni egy valodi elakadasra, de nem hivja Istit minden olyan korre, amiben az audit talalt valamit. Amit ez NEM old meg: a mero a task es a fordulo kozott nem tud kulonbseget tenni.",
+  "forceSend": true,
+  "forceSendNote": "2026-08-23: marveen dontese az e4157868-on. A :540-es EGYSZERI kapu HELYES marad (didi merese: a ciklus SOROS, :845 -- a kapu a ciklust vedi), a forceSend a hozza tartozo, feladatonkent valaszthato kijarat. Indok: ami ma fut, az NULLA lefutas (1636 halasztas), tehat a szigorubb ag nem vedelem, hanem maga a defektus. Torlodas-kockazat megmerve: a cron 0 8,12,16,20, tehat ket tuzeles kozott MINIMUM negy ora -- a 15 mp-es tick NEM azonos a tuzelessel. ELFOGADOTT CSERE: a prompt a dolgozo fordulo VEGERE kerul, nem az elejere -- 8:00-kor BEKERUL, nem feltetlenul lefut. UJRANYITASI FELTETEL: ha ez a feladat valaha oranként surubb cront kap, a torlodas kerdese elolrol kezdodik."
 }
