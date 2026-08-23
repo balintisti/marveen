@@ -145,12 +145,24 @@ describe('MINDEN hiba-megjelenites a fogalmazon at megy (szarmaztatott populacio
     .filter(({ line }) => /(innerHTML|textContent)[^=]*=/.test(line))
     .filter(({ line }) => /\b(err|e)\.message\b/.test(line) || /mvErrText\(/.test(line))
 
+  // A POPULACIO MERETE A JAVITAS ELOTT ES UTAN UGYANAZ: 15 sor. Elotte mind a
+  // 15 FEDETLEN volt, utana mind a 15 FEDETT -- nem 15 -> 0.
+  // Ez didi erosebb kontrollja, es a helyes populacio-definicio PROBAJA: ha a
+  // szam CSOKKENNE a javitastol, akkor a szures a HIBA alakjara ment, es a
+  // sikeres javitas megvakitana az ort.
+  const POPULACIO_ALAPVONAL = 15
+
   it('a populacio NEM URES -- kulonben a teszt semmit nem allit', () => {
-    // Pozitiv kontroll a mérőre magara: ha a minta elromlik es nullat talal,
-    // az alabbi `it.each` NULLA esetet futtatna, es ZOLD lenne. Egy or, ami
-    // nulla elemet ellenoriz, pontosan ugy nez ki, mint egy or, ami mindent
-    // rendben talal.
+    // Egy or, ami nulla elemet ellenoriz, pontosan ugy nez ki, mint egy or,
+    // ami mindent rendben talal.
     expect(domWrites.length).toBeGreaterThan(5)
+  })
+
+  it('a populacio MERETE nem csokken -- a javitas nem vakithatja meg az ort', () => {
+    // Uj hiba-megjelenites JOHET (a szam nohet); eltunnie viszont csak akkor
+    // szabad, ha valaki tenylegesen TOROL egy dobozt -- es akkor ezt a szamot
+    // ugyanabban a commitban kell frissiteni, latható modon.
+    expect(domWrites.length).toBeGreaterThanOrEqual(POPULACIO_ALAPVONAL)
   })
 
   it('EGYETLEN DOM-iras sem hasznal NYERS err.message-t', () => {
