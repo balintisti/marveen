@@ -1,12 +1,13 @@
 import { spawnSync } from "node:child_process"
 import { join } from "node:path"
 import { readFileSync } from "node:fs"
-import { STORE_DIR, TELEGRAM_BOT_TOKEN } from "../config.js"
+import { STORE_DIR, TELEGRAM_BOT_TOKEN, MAIN_AGENT_ID } from "../config.js"
 import { resolveOwnerChatId } from "../owner-chat.js"
 import { atomicWriteFileSync } from "./atomic-write.js"
 import { logger } from "../logger.js"
 import { sendTelegramMessage } from "./telegram.js"
-import { appendTaskRun } from "../db.js"
+import { appendTaskRun, createAgentMessage } from "../db.js"
+import { detectTransitions, readQuotaSourceState } from "../data-source-alarm.js"
 import type { ScheduledTask } from "./scheduled-tasks-io.js"
 
 // command-type scheduled tasks run a raw shell command directly (no LLM
@@ -93,6 +94,37 @@ export function runCommandTask(task: ScheduledTask, now: number): void {
   persist()
   try { appendTaskRun(task.name, task.agent || "system") } catch { /* non-fatal */ }
   logger.info({ task: task.name, ok, detail, fails: next.fails, action }, "command task ran")
+
+  // A KVOTA-FORRAS FIGYELESE ITT UL, NEM CSAK A HEARTBEATBEN (dontes (B),
+  // 2026-08-23). A heartbeat oran kent fut, es CSAK 9..23 kozott -- az ablakon
+  // kivul nulla tickje van. A kvota-forras allapota viszont FAJLBOL eldontheto,
+  // gyujtes nelkul, tehat rakothet o erre a 10 perces tickre: olcso, es epp azt
+  // a forrast fedi, amelyiknek a kiesese ma este a leletet adta.
+  //
+  // MINDEN command-task utan fut, nem csak a `usage-snapshot` utan, es ez
+  // szandekos: a nev szerinti kotes egy atnevezessel nemán megszunne.
+  // El-vezerelt, tehat egy valtozatlan allapot NEM termel uzenetet.
+  //
+  // ES A KET UT EGYUTT AD FEDEZETET: ez a tick gyors (10 perc, 24/7, amig a
+  // feladat fut), a heartbeate viszont TULELI, ha ez a feladat leall -- mert a
+  // snapshot ELAVULTSAGA maga is riasztasi feltetel. Egyik ut sem egyedul
+  // felelos, es epp ez volt a kikotes.
+  try {
+    // EGY ORA, NEM KETTO. Az elavultsag-merese es az atmenet idobelyege
+    // ugyanabbol a `now`-bol jojjon: kulon `Date.now()`-val a ketto elcsuszna
+    // egymastol, es ami ennel is rosszabb, a staleness-ag TESZTELHETETLEN
+    // lenne -- egy or, amit csak a valodi ora tud tuzelni, nem merheto.
+    const quota = readQuotaSourceState(undefined, now)
+    if (quota) {
+      for (const t of detectTransitions({ quota }, Math.floor(now / 1000))) {
+        createAgentMessage("system", MAIN_AGENT_ID, t.message)
+        logger.info({ source: t.source, via: task.name }, "kvota-forras allapota valtozott")
+      }
+    }
+  } catch (err) {
+    // A riasztas hibaja nem allithatja meg a command-task sajat jelzeset.
+    logger.warn({ err, task: task.name }, "kvota-forras riasztas hiba")
+  }
 
   if (action === "none") return
   const ownerChat = resolveOwnerChatId()

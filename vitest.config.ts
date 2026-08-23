@@ -17,5 +17,12 @@ export default defineConfig({
       './src/__tests__/setup/assert-not-live-install.ts',
       './src/__tests__/setup/assert-supported-node.ts',
     ],
+    // ALAPVONAL-OR a keszlet MERETERE (kartya 30e04d76). A `default` riporter
+    // mellett fut, tehat a megszokott kimenet valtozatlan -- csak akkor szolal
+    // meg, ha a lefutott fajlok/tesztek szama egy alapvonal ala esik.
+    // Riporterkent es NEM kulso wrapper-szkriptkent, mert az agensek `npx vitest
+    // run`-t irnak, nem az npm scriptet: egy wrapper pont a valodi uton nem
+    // futna. Reszhalmaz-futasnal hallgat, lasd `isFilteredRun`.
+    reporters: ['default', './src/__tests__/setup/suite-size-guard.ts'],
   },
 })

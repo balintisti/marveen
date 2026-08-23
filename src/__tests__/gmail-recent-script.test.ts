@@ -20,19 +20,40 @@ import { buildAgentPrompt } from '../heartbeat.js'
 const SCRIPT = join(__dirname, '..', '..', 'scripts', 'gmail-recent.py')
 const SENTINEL = 'sentinel-app-password-must-never-appear'
 
+// A login that fails WITHOUT a name lookup. See the note below: the previous
+// value was an unresolvable hostname, and the resolver is what hung for 30 s
+// under load. Port 1 on loopback is refused immediately by the kernel.
+const UNREACHABLE_HOST = '127.0.0.1'
+const UNREACHABLE_PORT = 1
+
 // STDERR IS CAPTURED, NOT DISCARDED (2026-08-23). This suite failed ONCE in
-// thirteen full-suite runs, on the assertion below, and left nothing to work
+// thirteen full-suite runs, on an assertion below, and left nothing to work
 // with: stderr was piped to /dev/null by `stdio: [..., 'ignore']`, so the
 // failure surfaced as a bare `JSON.parse` error on an empty string. The exit
 // status, the signal and python's own message -- everything that would say
 // WHY -- had already been thrown away.
 //
-// The cause is still unknown, and this does not claim to fix it. The leading
-// hypothesis (a slow DNS lookup for the unresolvable host, under parallel
-// load) was MEASURED AND CONTRADICTED: that path takes 0.11-0.21 s here,
-// indistinguishable from a refused connection to 127.0.0.1. Changing the test
-// on a disproven theory would have looked like a fix and measured nothing.
-// What this does instead is make the next occurrence explain itself.
+// AND THE NOTE THAT USED TO STAND HERE WAS WRONG. It said the DNS hypothesis
+// had been "MEASURED AND CONTRADICTED", because that path takes 0.05-0.21 s.
+// It does -- ON AN IDLE MACHINE. The failure only ever appeared under FULL
+// SUITE load, and that is the one condition the disproof never reproduced. I
+// measured the easy case and wrote down a conclusion about the hard one.
+//
+// CAUGHT IT, TWICE (2026-08-23, 40 full-suite runs across two branches):
+//     × never puts the password in the output ...   30016ms   status -1
+//     × never puts the password in the output ...   30017ms   status -1
+// 30 000 ms is the spawnSync `timeout` below, to the millisecond. The process
+// was killed by SIGTERM mid-lookup, so stdout was empty -- exactly the shape
+// the original bare JSON.parse error had. Two independent captures, both on
+// the resolver, both on the one test that resolves a name.
+//
+// SO THE FIX IS TO REMOVE THE RESOLVER, NOT TO RAISE THE TIMEOUT. These tests
+// need a login that FAILS; they never needed one that fails via DNS. A closed
+// port on 127.0.0.1 refuses instantly and, more to the point, has no name to
+// look up: getaddrinfo takes a numeric literal without touching the network,
+// so there is no unbounded wait left to lose the race on. That is a STRUCTURAL
+// argument, not a timing one -- and it has to be, because a fast measurement on
+// an idle machine is precisely what misled this comment the first time.
 function runWithHome(home: string): { stdout: string; stderr: string; status: number } {
   // spawnSync, not execFileSync: execFileSync only hands back stderr on the
   // THROWING path, so a process that exits 0 while printing a diagnostic to
@@ -91,8 +112,8 @@ describe('scripts/gmail-recent.py -- caller contract', () => {
     writeFileSync(
       join(home, '.config', 'marveen', 'gmail-imap.json'),
       JSON.stringify({
-        host: 'imap.invalid.marveen-test.example',
-        port: 993,
+        host: UNREACHABLE_HOST,
+        port: UNREACHABLE_PORT,
         user: 'nobody@example.invalid',
         password: SENTINEL,
       }),
@@ -115,7 +136,7 @@ describe('scripts/gmail-recent.py -- caller contract', () => {
     mkdirSync(join(home, '.config', 'marveen'), { recursive: true })
     writeFileSync(
       join(home, '.config', 'marveen', 'gmail-imap.json'),
-      JSON.stringify({ host: 'imap.invalid.marveen-test.example', user: 'x', password: SENTINEL }),
+      JSON.stringify({ host: UNREACHABLE_HOST, port: UNREACHABLE_PORT, user: 'x', password: SENTINEL }),
     )
     const parsed = parseOrExplain(runWithHome(home))
     expect(parsed.ok).toBe(false)
