@@ -40,16 +40,31 @@ import type { File, Task } from 'vitest'
  * jelentendo esemeny. Ugyanaz a szetvalasztas, mint a skill-meret-ornel.
  *
  * A TURESHATAR ES A HATARA, KIMONDVA. A 2% (de legalabb 5 teszt) elnyeli a
- * normalis apalyt. A mai megfigyelt kieses 97 teszt volt, a kuszob 78 -- tehat
- * a (B) ag megfogta volna, de csak 19 teszt tartalekkal. EGY KISEBB KIESEST A
- * (B) NEM FOGNA MEG, es pontosan ezert van (A): az a merettol fuggetlen. A ket
- * ag egyutt ad fedezetet, kulon-kulon egyik sem.
+ * normalis apalyt. A mai megfigyelt kieses 97 teszt volt -- a (B) ag megfogta
+ * volna. EGY KISEBB KIESEST A (B) NEM FOG MEG, es pontosan ezert van (A).
+ *
+ * ES EGY PLAFON IS, MERT A SZAZALEK NOTT VOLNA A KESZLETTEL (didi lelete,
+ * 2026-08-23). Plafon nelkul a tureshatar egyutt no azzal, amit ellenoriz: ma
+ * 78 teszt, egy ~4850-es keszletnel viszont mar 97 -- vagyis EPP AZ AZ ESET
+ * menne at, amelyik ezt a kartyat szulte. Egy or, ami annal engedekenyebb,
+ * minel nagyobb a vedendo felulet, rossz iranyba skalazodik.
+ *
+ * ES A MASIK AG NEM FEDI LE EZT A RESET: egy TOROLT fajl meg sem jelenik a
+ * lista'ban, tehat az (A) agnak nincs mit latnia. Didi megmerte: 287 -> 286 ->
+ * 285 -> 284 fajl, es egyszer sem szolalt meg semmi. A "tureshatar alatti
+ * torles" pontosan a ket ag KOZOTT esik -- ezert kell a plafon.
+ *
+ * AZ 50 ITELET, NEM MERES, ES EZ INTERIM. Nincs mogotte megfigyelt eloszlas:
+ * annyit tud, hogy a ma ismert egyetlen valodi eset (97) folott van, es hogy
+ * egy szandekos, 50-nel nagyobb torles ugyis alapvonal-frissitest erdemel.
+ * Ha valaha lesz adatunk arrol, mekkora a NORMALIS apaly egy refaktor utan, ez
+ * a szam arra cserelendo. Addig ne vegye senki magatol ertetodonek.
  */
 
-/** Merve 2026-08-23, a fix/0114968c agon: `npx vitest run` -> 287 fajl / 3899 teszt.
+/** Merve 2026-08-23, a fix/0114968c agon: `npx vitest run` -> 287 fajl / 3901 teszt.
  *  (Az or sajat teszt-fajljaval egyutt -- az is a keszlet resze.) */
 export const SUITE_BASELINE_FILES = 287
-export const SUITE_BASELINE_TESTS = 3899
+export const SUITE_BASELINE_TESTS = 3901
 
 /**
  * Az alapvonal env-bol felulirhato -- NEM kenyelembol, hanem mert kulonben az
@@ -62,9 +77,11 @@ function num(name: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback
 }
 
-/** 2%, de legalabb 5 -- az also korlat, ami alatt riasztunk. */
+/** 2%, de legalabb 5 es LEGFELJEBB 50 -- az also korlat, ami alatt riasztunk. */
+export const TOLERANCE_CAP = 50
+
 export function floorFor(baseline: number): number {
-  return baseline - Math.max(5, Math.ceil(baseline * 0.02))
+  return baseline - Math.min(TOLERANCE_CAP, Math.max(5, Math.ceil(baseline * 0.02)))
 }
 
 /**
