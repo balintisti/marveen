@@ -85,15 +85,42 @@ BODY="$(FROM="$FROM" TO="$TO" C="$C" python3 -c 'import json,os; print(json.dump
 # message. Override a real backlog with --force as the 4th argument.
 FORCE="${4:-}"
 if [ "$FORCE" != "--force" ]; then
-  DEPTH_PRE="$(BASE="$BASE" TO="$TO" python3 -c '
-import os, sqlite3, sys
+  # Three numbers out of one read: the ROW COUNT (today's threshold), the
+  # WAITING TEXT, and the TEXT DELIVERED IN THE LAST 3 HOURS across ALL senders.
+  #
+  # WHY THE LAST TWO (card 0e3959e4, marveen measured it, jarvis re-measured it
+  # independently): the threshold counts rows, but what fills a recipient's
+  # context is TEXT, and the load ADDS UP across senders. In the measured window
+  # jarvis took 40 131 characters from four senders, the queue never went above
+  # 3, and the agent restarted on context -- while every sender's own check
+  # stayed green the whole time. Each sender could only see its own traffic.
+  #
+  # THESE TWO ARE PRINTED, NOT ENFORCED. Which number should block a send, and
+  # at what value, is a policy decision about the coordination layer, and it is
+  # the coordinator's to make -- not something this helper should invent. What
+  # it can do is end the blindness: no sender could previously see the sum.
+  PRE="$(BASE="$BASE" TO="$TO" python3 -c '
+import os, sqlite3, time
 try:
     c = sqlite3.connect("file:" + os.environ["BASE"] + "/store/claudeclaw.db?mode=ro", uri=True)
-    n = c.execute("select count(*) from agent_messages where to_agent=? and status=?",
-                  (os.environ["TO"], "pending")).fetchone()[0]
-    print(n)
+    to = os.environ["TO"]
+    n, chars = c.execute(
+        "select count(*), coalesce(sum(length(content)),0) from agent_messages"
+        " where to_agent=? and status=?", (to, "pending")).fetchone()
+    since = int(time.time()) - 180 * 60
+    rc, rs = c.execute(
+        "select coalesce(sum(length(content)),0), count(distinct from_agent)"
+        " from agent_messages where to_agent=? and created_at>=?", (to, since)).fetchone()
+    print("\t".join(str(x) for x in (n, chars, rc, rs)))
 except Exception:
-    print("")' 2>/dev/null)"
+    print("\t\t\t")' 2>/dev/null)"
+  DEPTH_PRE="$(printf '%s' "$PRE" | cut -f1)"
+  CHARS_PRE="$(printf '%s' "$PRE" | cut -f2)"
+  RECENT_CHARS="$(printf '%s' "$PRE" | cut -f3)"
+  RECENT_SENDERS="$(printf '%s' "$PRE" | cut -f4)"
+  if [ -n "$RECENT_CHARS" ] && [ "$RECENT_CHARS" -gt 0 ] 2>/dev/null; then
+    echo "  [sor] $TO: $DEPTH_PRE var (${CHARS_PRE} kar) | 3 oraban ${RECENT_CHARS} kar ${RECENT_SENDERS} feladotol" >&2
+  fi
   if [ -z "$DEPTH_PRE" ]; then
     echo "FIGYELEM: a sor melyseget NEM tudtam megmerni (adatbazis nem olvashato). Kuldok, de vakon." >&2
   elif [ "$DEPTH_PRE" -ge 3 ] 2>/dev/null; then

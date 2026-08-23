@@ -2248,10 +2248,49 @@ export interface RecipientQueueState {
    * "we don't know yet" means.
    */
   estimatedDelaySec: number | null
+  /**
+   * Characters currently WAITING for this recipient, summed over every sender.
+   *
+   * WHY THIS EXISTS (card 0e3959e4, measured by marveen and re-measured
+   * independently by jarvis). The 3-message threshold counts ROWS, but what
+   * fills a recipient's context is TEXT. In the measured window jarvis received
+   * 40 131 characters from four senders and the queue never went above 3 -- the
+   * agent restarted on context while every sender's own check stayed green.
+   * `queueDepth` measures the dimension that happens not to be the scarce one.
+   */
+  pendingChars: number
+  /**
+   * Characters DELIVERED to this recipient in the recent window, summed over
+   * every sender, and the number of distinct senders behind them.
+   *
+   * WHY SEPARATE FROM `pendingChars`: a fast recipient drains the queue, so
+   * `pendingChars` stays near zero exactly while the load is highest. The
+   * delivered volume is what actually landed in the context, and it is the only
+   * one of the two that survives a queue that empties.
+   *
+   * WHY THE SENDER COUNT: the second, independent gap the card names is
+   * AGGREGATION. Each sender sees only its own traffic; the load adds up at the
+   * recipient. A number that says "four senders" tells a sender something its
+   * own view cannot.
+   */
+  recentChars: number
+  recentSenders: number
+  /** The window `recentChars` covers, so the number is never quoted without it. */
+  recentWindowMin: number
 }
 
 /** How many recent deliveries the latency estimate is drawn from. */
 const QUEUE_LATENCY_SAMPLE = 10
+/**
+ * The window `recentChars` sums over, in minutes.
+ *
+ * 180 is chosen to be LONGER than a single agent turn and shorter than a work
+ * session: the measured incident (card 0e3959e4) ran 23:10 -> 02:11, about
+ * three hours, and a window shorter than that would have shown four small
+ * numbers instead of one large one -- which is the blindness being fixed.
+ * It is a reporting window, not a limit; nothing is refused on account of it.
+ */
+const QUEUE_RECENT_WINDOW_MIN = 180
 
 export function getRecipientQueueState(toAgent: string): RecipientQueueState {
   const now = Math.floor(Date.now() / 1000)
@@ -2281,10 +2320,32 @@ export function getRecipientQueueState(toAgent: string): RecipientQueueState {
       : Math.round((sorted[mid - 1] + sorted[mid]) / 2)
   }
 
+  // The two aggregate measures the row-count cannot express (card 0e3959e4).
+  // Both are MEASUREMENTS, not limits: this function does not decide whether a
+  // send may proceed. Choosing a threshold on top of these is a policy call on
+  // the coordination layer, and it is deliberately left to the coordinator.
+  const chars = db.prepare(
+    `SELECT COALESCE(SUM(LENGTH(content)), 0) AS chars
+       FROM agent_messages
+      WHERE status = 'pending' AND to_agent = ?`,
+  ).get(toAgent) as { chars: number }
+
+  const since = now - QUEUE_RECENT_WINDOW_MIN * 60
+  const recent = db.prepare(
+    `SELECT COALESCE(SUM(LENGTH(content)), 0) AS chars,
+            COUNT(DISTINCT from_agent)        AS senders
+       FROM agent_messages
+      WHERE to_agent = ? AND created_at >= ?`,
+  ).get(toAgent, since) as { chars: number; senders: number }
+
   return {
     queueDepth: pending.n,
     oldestPendingSec: pending.oldest === null ? 0 : Math.max(0, now - pending.oldest),
     estimatedDelaySec,
+    pendingChars: chars.chars,
+    recentChars: recent.chars,
+    recentSenders: recent.senders,
+    recentWindowMin: QUEUE_RECENT_WINDOW_MIN,
   }
 }
 
