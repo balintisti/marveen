@@ -61,13 +61,35 @@ describe('SuiteSizeGuard -- a riporter tenyleg hivja az oroket', () => {
   it('(A) EGY nulla tesztes fajl -> a riporter ir stderr-re ES 1-re allitja a kilepesi kodot', () => {
     // Ez az EREDETI eset: egy fajl, ami collect-idoben elszallt, `tasks: []`-vel jut
     // el a riporterig -- bent marad a listaban, csak nem ad tesztet.
-    new SuiteSizeGuard().onFinished([
-      file('ep.test.ts', 5),
-      { name: 'elszallt.test.ts', tasks: [] },
-    ] as never)
-    expect(stderr).toMatch(/VAN FAJL, AMI EGYETLEN TESZTET SEM ADOTT/)
-    expect(stderr).toContain('elszallt.test.ts')
-    expect(process.exitCode).toBe(1)
+    //
+    // AZ ALAPVONAL ENV-BOL JON, ES EZ NEM MASOLAS A LENTI TESZTBOL -- MERT NELKULE EZ AZ
+    // ALLITAS HAMISAN ZOLD (didi merte, 2026-08-24). A beforditott alapvonallal (289/3929)
+    // ez a ket szintetikus fajl ZSUGORODAS, tehat a (B) ag IS tuzel, es AZ allitja 1-re a
+    // kilepesi kodot. Az `expect(process.exitCode).toBe(1)` igy akkor is teljesult, ha az
+    // (A) ag sajat sorat kivettuk -- vagyis a teszt neve allitott valamit, amit nem mert.
+    // Bizonyitva: az (A) ag exitCode-sorat torolve NEM ez a teszt bukott, hanem a lenti
+    // "CELZOTT futasban..." -- az volt az EGYETLEN, ami tenylegesen fogta.
+    //
+    // ES AMI EBBEN A LEGTANULSAGOSABB: ugyanez a mechanizmus az "EGESZSEGES lista"
+    // tesztnel HAMIS PIROSAT adott, es azt eszrevettem, mert a piros megallit. Itt HAMIS
+    // ZOLDET ad, es epp azert nem tunt fel, mert a zoldet senki nem vizsgalja meg.
+    // Ugyanaz az ok, ellentetes irany.
+    process.env['SUITE_BASELINE_FILES'] = '1'
+    process.env['SUITE_BASELINE_TESTS'] = '1'
+    try {
+      new SuiteSizeGuard().onFinished([
+        file('ep.test.ts', 5),
+        { name: 'elszallt.test.ts', tasks: [] },
+      ] as never)
+      expect(stderr).toMatch(/VAN FAJL, AMI EGYETLEN TESZTET SEM ADOTT/)
+      expect(stderr).toContain('elszallt.test.ts')
+      expect(process.exitCode).toBe(1)
+      // Es hogy a kilepesi kod TENYLEG az (A) agtol jon: a (B) ag uzenete NEM lehet ott.
+      expect(stderr).not.toMatch(/ALAPVONAL/)
+    } finally {
+      delete process.env['SUITE_BASELINE_FILES']
+      delete process.env['SUITE_BASELINE_TESTS']
+    }
   })
 
   it('EGESZSEGES lista -> NEM ir semmit, es NEM nyul a kilepesi kodhoz', () => {
