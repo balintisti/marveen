@@ -12,7 +12,7 @@ import {
   APP_TZ,
 } from './config.js'
 import { getHeartbeatKanbanSummary, getActiveScheduledTaskCount } from './db.js'
-import { getCalendarEvents, type CalendarEvent } from './google-api.js'
+import { fetchCalendarEvents, type CalendarEvent } from './google-api.js'
 import { runAgent } from './agent.js'
 import { notifyTelegram } from './notify.js'
 import { logger } from './logger.js'
@@ -297,7 +297,11 @@ interface RecentEmail {
 
 interface HeartbeatData {
   timestamp: Date
+  /** Empty when the day is genuinely clear OR when the fetch failed --
+   * `calendarError` separates the two. Same contract as `email`/`emailError`
+   * below; calendar was two days late in getting it (2026-08-22). */
   calendar: CalendarEvent[]
+  calendarError: string | null
   /** Empty when there is no mail OR when the fetch failed -- `emailError`
    * separates the two, because "no mail" and "we could not look" must never
    * read the same. */
@@ -310,15 +314,25 @@ interface HeartbeatData {
 
 // --- Data collection ---
 
-async function collectCalendar(): Promise<CalendarEvent[]> {
-  try {
-    const now = new Date()
-    const twoHoursLater = new Date(now.getTime() + 2 * 60 * 60 * 1000)
-    return await getCalendarEvents(HEARTBEAT_CALENDAR_ID, now, twoHoursLater)
-  } catch (err) {
-    logger.error({ err }, 'Heartbeat: calendar fetch failed')
-    return []
+/**
+ * Upcoming events, and -- separately -- whether we managed to look at all.
+ *
+ * The old version returned `[]` on any failure, which rendered as
+ * "Nincs kozelgo esemeny." A calendar that 403s on an unshared id therefore
+ * read exactly like a free afternoon. Measured 2026-08-22: the service-account
+ * path answers HTTP 200 with `accessRole: writer` on this install, so the empty
+ * calendar seen that day was real -- but nothing in the output could have told
+ * us that, and that is the defect.
+ */
+async function collectCalendar(): Promise<{ calendar: CalendarEvent[]; calendarError: string | null }> {
+  const now = new Date()
+  const twoHoursLater = new Date(now.getTime() + 2 * 60 * 60 * 1000)
+  const res = await fetchCalendarEvents(HEARTBEAT_CALENDAR_ID, now, twoHoursLater)
+  if (!res.ok) {
+    logger.error({ err: res.error }, 'Heartbeat: calendar fetch failed')
+    return { calendar: [], calendarError: res.error }
   }
+  return { calendar: res.events, calendarError: null }
 }
 
 /**
@@ -399,14 +413,23 @@ function collectSystem(): SystemInfo {
 }
 
 async function collectData(): Promise<HeartbeatData> {
-  const [calendar, kanban, system] = await Promise.all([
+  const [cal, kanban, system] = await Promise.all([
     collectCalendar(),
     Promise.resolve(collectKanban()),
     Promise.resolve(collectSystem()),
   ])
   const tasks = getActiveScheduledTaskCount()
   const { email, emailError } = collectEmail()
-  return { timestamp: new Date(), calendar, email, emailError, kanban, system, tasks }
+  return {
+    timestamp: new Date(),
+    calendar: cal.calendar,
+    calendarError: cal.calendarError,
+    email,
+    emailError,
+    kanban,
+    system,
+    tasks,
+  }
 }
 
 // --- Notification filter ---
@@ -453,7 +476,12 @@ function buildAgentPrompt(data: HeartbeatData): string {
   // Calendar -- event summaries and attendee names come from whoever sent the
   // invite, so every one is wrapped individually as untrusted data.
   prompt += `## Naptar (kovetkezo 2 ora)\n`
-  if (data.calendar.length === 0) {
+  if (data.calendarError) {
+    // Say it out loud, exactly as the email branch below does. A calendar we
+    // could not read must never render as a clear day.
+    prompt += `NEM SIKERULT lekerdezni: ${data.calendarError}\n`
+    prompt += `Ezt JELENTSD -- ne ird azt, hogy nincs esemeny, mert nem tudjuk.\n\n`
+  } else if (data.calendar.length === 0) {
     prompt += `Nincs kozelgo esemeny.\n\n`
   } else {
     for (const ev of data.calendar) {
