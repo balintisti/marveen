@@ -7,7 +7,43 @@ __pycache__/
 *.pyc
 
 # Secrets & personal data
-.env
+#
+# MINTA, NEM NEVSOR (kartya 8a79cddf, 2026-08-22). Korabban egyetlen `.env` allt
+# itt, es a testverprojektben KILENC konkret nev -- vagyis pontosan azok, amik a
+# felirasukkor leteztek. A tizedik valtozat atmegy: egy `.env.local.bak` ott
+# tenylegesen commitolhato volt (`git check-ignore` -> nem ignoralt).
+#
+# ES UGYANEZ A CSALAD EGGYEL FELJEBB IS ALL: a push elotti titok-ellenorzes is
+# LISTA. Computress megmerte, hogy nem azert engedett at, mert tiszta volt, hanem
+# mert a `.psql_history` / `.docker/config.json` alakokat NEM IS KERESTE. Egy
+# lista azt vedi, amire emlekeztunk; egy minta azt, amire nem.
+#
+# A `!.env.example` KELL, ES A MINTA UTAN: az a fajl KOVETETT, es szandekosan az.
+# Ez az egyetlen utkozes, amit a minta okoz (megmerve minden agon: 1 talalat).
+.env*
+!.env.example
+
+# Kulcsok, tanusitvanyok, hitelesito allomanyok -- alakra, nem nevre.
+*.pem
+*.p12
+*.pfx
+*.keystore
+id_rsa*
+id_ed25519*
+service-account*.json
+*service-account.json
+tokens.json
+credentials.json
+
+# Eszkozok hitelesito nyomai. Ezeket a push elotti checklist eddig NEM kereste
+# (computress merese), es epp ezert kerulnek IDE: ami mintaval elkaphato, azt ne
+# egy emberi lista orizze.
+.psql_history
+.pgpass
+.npmrc
+.netrc
+.docker/config.json
+
 store/
 workspace/
 agents/
