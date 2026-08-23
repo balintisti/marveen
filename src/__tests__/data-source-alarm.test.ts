@@ -203,30 +203,23 @@ describe('the heartbeat wiring', () => {
   })
 })
 
-describe('the command-task wiring -- the fast, 24/7 half', () => {
-  const src = readFileSync(join(__dirname, '..', 'web', 'command-task.ts'), 'utf-8')
-
-  it('checks the quota source after EVERY command task, not by task name', () => {
-    // A name-bound hook (`if (task.name === 'usage-snapshot')`) would vanish
-    // silently on a rename. The check is cheap -- one small JSON read -- and
-    // edge-triggered, so running it on every tick costs nothing in messages.
-    expect(src).toMatch(/readQuotaSourceState\(\)/)
-    expect(src).not.toMatch(/task\.name === ["']usage-snapshot["']/)
-  })
-
-  it('runs BEFORE the early return for "no action"', () => {
-    // `if (action === "none") return` fires on most ticks -- which is exactly
-    // the healthy case, and exactly when a degrading quota source must still be
-    // noticed.
-    const quotaAt = src.indexOf('readQuotaSourceState()')
-    const returnAt = src.indexOf('if (action === "none") return')
-    expect(quotaAt).toBeGreaterThan(-1)
-    expect(quotaAt).toBeLessThan(returnAt)
-  })
-
-  it('sends to the coordinator, and cannot break the task\'s own alerting', () => {
-    const block = src.slice(src.indexOf('A KVOTA-FORRAS FIGYELESE'), src.indexOf('if (action === "none") return'))
-    expect(block).toMatch(/createAgentMessage\("system", MAIN_AGENT_ID/)
-    expect(block).toMatch(/catch \(err\)/)
-  })
-})
+// A HUZAL TESZTJE ATKERULT A `command-task-quota-hook.test.ts`-BE, ES EZ NEM
+// ATSZERVEZES VOLT (2026-08-23).
+//
+// Itt korabban harom FORRASSZOVEGET grepelo allitas allt: `readQuotaSourceState()`
+// karakterre, plusz a hivas es a korai return sorrendje `indexOf`-fal. Stand-in
+// volt, amig a `runCommandTask`-nak egyaltalan nem letezett tesztje -- es
+// pontosan ugy bukott meg, ahogy az ilyen teszt szokott: egy HELYES javitas
+// torte el.
+//
+// Amikor a hook ket ora helyett egyre allt at (`readQuotaSourceState(undefined, now)`),
+// a viselkedes JOBB lett, a grep viszont pirosra valtott. Egy teszt, ami a
+// helyesbitest jelenti hibanak, arra tanit, hogy a teszt a zaj -- es a kovetkezo
+// VALODI talalatat is annak fogja nezni valaki. Ugyanaz az alak, amit a repo
+// CLAUDE.md-je a migracios checklistnel mar kimond ("egy ellenorzes, ami a
+// helyes megoldast jeloli hibanak, rosszabb, mint a semmi").
+//
+// A helyettesitok VISELKEDEST mernek, a valodi riaszto-modullal es egy
+// ideiglenes store-konyvtarral: a hook barmelyik command-taskra tuzel (nem nev
+// szerint kotott), a koordinatorhoz kuld, es akkor is fut, amikor a task maga
+// "nincs teendo"-t mond -- vagyis a korai return ELOTT.

@@ -144,6 +144,18 @@ describe('runCommandTask -- the quota alarm rides the command-task tick', () => 
     expect(mockCreateAgentMessage).toHaveBeenCalledTimes(1)
   })
 
+  it('fires even when the task itself reports "nothing to do" -- the healthy path', () => {
+    // `if (action === "none") return` is the branch taken on almost every tick,
+    // and it is exactly the tick on which a degrading meter must still be seen.
+    // The task command here exits 0, so the command-task policy yields 'none';
+    // the alarm must have spoken before that return.
+    writeSnapshot({ generated_at: new Date(NOW).toISOString(), claude: { ok: true, source: 'estimate' } })
+
+    runCommandTask(TASK, NOW)
+
+    expect(mockCreateAgentMessage).toHaveBeenCalledTimes(1)
+  })
+
   it('stays silent when there is no snapshot at all, instead of inventing a failure', () => {
     // No file means the meter has never run here (fresh install), which is not
     // the same claim as "the meter broke".
