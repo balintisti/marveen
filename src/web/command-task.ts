@@ -110,7 +110,11 @@ export function runCommandTask(task: ScheduledTask, now: number): void {
   // snapshot ELAVULTSAGA maga is riasztasi feltetel. Egyik ut sem egyedul
   // felelos, es epp ez volt a kikotes.
   try {
-    const quota = readQuotaSourceState()
+    // EGY ORA, NEM KETTO. Az elavultsag-merese es az atmenet idobelyege
+    // ugyanabbol a `now`-bol jojjon: kulon `Date.now()`-val a ketto elcsuszna
+    // egymastol, es ami ennel is rosszabb, a staleness-ag TESZTELHETETLEN
+    // lenne -- egy or, amit csak a valodi ora tud tuzelni, nem merheto.
+    const quota = readQuotaSourceState(undefined, now)
     if (quota) {
       for (const t of detectTransitions({ quota }, Math.floor(now / 1000))) {
         createAgentMessage("system", MAIN_AGENT_ID, t.message)
