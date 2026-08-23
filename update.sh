@@ -330,7 +330,28 @@ OLD_VERSION_FULL=$(git rev-parse HEAD 2>/dev/null || echo "")
 # Ahead-detect: local commits not on upstream make ff-only refuse. Report it
 # actionably instead of dying silently under set -e (the dominant failure).
 RESULT_PHASE="pull"
-AHEAD=$(git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)
+# A "NEM MERHETO" NEM NULLA (2026-08-23, kartya bae4df49). A korabbi alak
+# `2>/dev/null || echo 0` volt: ha a szamlalas BUKOTT, abbol NULLA lett, es ez a
+# kapu -- ami epp a divergalt checkoutot hivatott megfogni -- ATENGEDETT.
+# A `@{u}` akkor bukik, ha az agnak NINCS beallitott upstreamje. Megmerve ezen a
+# gepen: 130 helyi commit a HEAD-en, a kapu szerint 0. Nem okozott kart, mert a
+# fenti origin-ellenorzes elobb elutasit -- ket hiba fedte egymast, es a masik
+# javitasa felfedte volna ezt.
+# A hiba iranya allando: a nem-meres MINDIG a megnyugtato ertekke valt.
+if ! AHEAD=$(git rev-list --count '@{u}..HEAD' 2>&1); then
+  if [[ "${MARVEEN_LANG:-hu}" == "en" ]]; then
+    echo -e "${RED}ERROR:${NC} cannot measure how far this checkout is ahead of its upstream."
+  else
+    echo -e "${RED}HIBA:${NC} nem merheto, hogy a checkout mennyivel van elore az upstreamhez kepest."
+  fi
+  echo "       Ok: a '${CURRENT_BRANCH}' agnak nincs beallitott upstreamje (@{u})."
+  echo "       Ez NEM ugyanaz, mint a 'nulla helyi commit' -- a frissites innen nem biztonsagos."
+  echo "       Allitsd be, majd probald ujra:"
+  echo "         git branch --set-upstream-to=origin/${CURRENT_BRANCH} ${CURRENT_BRANCH}"
+  RESULT_MSG="Az ahead-szamlalas nem merheto (nincs upstream a(z) ${CURRENT_BRANCH} agon); a frissites elutasitva."
+  restore_stash_before_exit
+  exit 6
+fi
 if [ "${AHEAD:-0}" -gt 0 ]; then
   RESULT_MSG="A helyi checkout ${AHEAD} committal elore van az upstreamhez kepest; a fast-forward frissites nem lehetseges. Nezd meg: git log @{u}..HEAD"
   echo -e "${RED}HIBA:${NC} a helyi checkout ${AHEAD} committal elore van az upstreamhez kepest; fast-forward nem lehetseges. Nezd: git log @{u}..HEAD"
