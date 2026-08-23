@@ -21,10 +21,24 @@ import { describe, it, expect } from 'vitest'
 import { adviseSender, QUEUE_ADVICE_THRESHOLD } from '../web/recipient-advice.js'
 import type { RecipientQueueState } from '../db.js'
 
+// A HELPER TELJES, ES EZ NEM FORMASAG (friday, a koteg-feloldasnal 2026-08-23).
+// A `RecipientQueueState` kozben negy KOTELEZO mezot kapott (pendingChars,
+// recentChars, recentSenders, recentWindowMin -- kartya 0e3959e4). A kezenfekvo
+// javitas az lett volna, hogy a tipusban opcionalissa tesszuk oket, hogy ez a
+// helper leforduljon. AZ ROSSZ IRANY: a termelo (db.ts) MINDIG kitolti mind a
+// negyet, tehat a `?` nem egy valodi allapotot irna le, hanem megengedne, hogy
+// egy jovobeli termelo NEMAN kihagyja azt, amire a fogyaszto szamit.
+// Egy tipus, amit a teszt kenyelmeert lazitunk, mar nem a rendszert irja le.
 const queue = (over: Partial<RecipientQueueState> = {}): RecipientQueueState => ({
   queueDepth: 1,
   oldestPendingSec: 0,
   estimatedDelaySec: null,
+  // "Meg semmit nem mertunk" alapertek. A nulla itt MERT nulla: ures sor, ures
+  // ablak -- nem hianyzo adat. Ahol a kulonbseg szamit, az adott teszt felulirja.
+  pendingChars: 0,
+  recentChars: 0,
+  recentSenders: 0,
+  recentWindowMin: 60,
   ...over,
 })
 
