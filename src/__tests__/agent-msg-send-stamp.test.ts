@@ -176,3 +176,69 @@ describe('agent-msg.sh -- the send stamp', () => {
     expect(r.stdout.startsWith('OK id=4242')).toBe(true)
   })
 })
+
+// ===== A KOTEG-FELOLDAS BIZONYITEKA (friday, 2026-08-23) =====
+//
+// A `__STAMP__` helyettesites computress munkaja (81224f9, kartya a0fbeba0), es
+// UGYANEBBE a fajlba nyul, mint a kuldesi belyeg. A koteg-beolvasztaskor a ketto
+// utkozott, es a feloldas MINDKETTOT megtartja.
+//
+// AZERT VAN ITT TESZT, MERT COMPUTRESS SAJAT COMMITJA MONDJA KI, hogy a marveen
+// TS-keszletet NEM futtatta ("it refuses to run in a live install by design"), es
+// a szkript viselkedeset a keszlet addig nem merte. A harness fentebb viszont a
+// VALODI szkriptet hajtja egy hamis dashboard ellen -- tehat itt merheto.
+// Egy feloldas, ami csak forditasi ertelemben "megtartja" a masik szandekot,
+// pontosan ugy nez ki, mint egy jo feloldas.
+describe('agent-msg.sh -- a __STAMP__ es a kuldesi belyeg EGYUTT el', () => {
+  it('a __STAMP__ helyere valodi idobelyeg kerul, es nyers helyorzo NEM megy ki', async () => {
+    const { port, bodies } = await fakeDashboard()
+    const root = installRoot('stamp')
+    const r = await send(root, port, ['friday', 'marveen', 'MERVE: __STAMP__ -- a lelet'])
+    expect(r.status).toBe(0)
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0].content).not.toContain('__STAMP__')
+    expect(bodies[0].content).toMatch(/MERVE: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/)
+  })
+
+  it('NEGATIV KONTROLL: helyorzo nelkuli torzs valtozatlan marad', async () => {
+    // Kulonben a teszt attol is zold lenne, hogy a szkript mindenre ratesz egy
+    // idobelyeget -- ami mas hiba, csak eppen ugyanugy nez ki.
+    const { port, bodies } = await fakeDashboard()
+    const root = installRoot('nostamp')
+    const r = await send(root, port, ['friday', 'marveen', 'sima szoveg, nincs benne helyorzo'])
+    expect(r.status).toBe(0)
+    expect(bodies[0].content.split('\n')[0]).toBe('sima szoveg, nincs benne helyorzo')
+  })
+
+  it('MINDKET MECHANIZMUS EGYSZERRE: helyettesites ES labjegyzet, az eredeti szoveg elol', async () => {
+    // EZ A FELOLDAS ALLITASA. A `__STAMP__` a SZERZO szoveget javitja, a
+    // labjegyzet a gep kuldesi idejet teszi a VEGERE -- ket kulonbozo kerdes,
+    // es a sorrend szandekos: a helyettesites a hozzafuzes ELOTT fut.
+    const { port, bodies } = await fakeDashboard()
+    const root = installRoot('mindketto')
+    const r = await send(root, port, ['friday', 'marveen', '[Eredmény] MERVE: __STAMP__\n\nkesz'])
+    expect(r.status).toBe(0)
+    const c = bodies[0].content
+    expect(c.startsWith('[Eredmény]')).toBe(true)   // a prefix-fogyasztok miatt
+    expect(c).not.toContain('__STAMP__')            // computress fele
+    expect(c).toMatch(/\[KULDVE: /)                 // az en felem
+    expect(c.trimEnd().endsWith(']')).toBe(true)
+  })
+
+  it('HANGOS, ha nem tud belyegezni: a `date` bukasakor NEM kuld', async () => {
+    // computress kikotese, Marveen feltetele nyoman: nyers helyorzot kikuldeni
+    // ujraepitene azt a lyukat, amit ez bezar -- es a kuldes a visszafordithatatlan fel.
+    const { port, bodies } = await fakeDashboard()
+    const root = installRoot('nodate')
+    const stub = mkdtempSync(join(tmpdir(), 'nodate-bin-'))
+    writeFileSync(join(stub, 'date'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    const r = await new Promise<{ status: number }>((resolve) => {
+      const p = spawn('bash', [join(root, 'scripts', 'agent-msg.sh'), 'friday', 'marveen', 'MERVE: __STAMP__'], {
+        env: { ...process.env, MARVEEN_WEB_PORT: String(port), PATH: `${stub}:${process.env.PATH}` },
+      })
+      p.on('close', (code) => resolve({ status: code ?? -1 }))
+    })
+    expect(r.status).not.toBe(0)
+    expect(bodies, 'a kuldesnek EL SEM KELLETT VOLNA INDULNIA').toHaveLength(0)
+  })
+})
