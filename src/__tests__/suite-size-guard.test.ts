@@ -28,8 +28,14 @@ describe('floorFor -- also korlat, nem pontos egyezes', () => {
     expect(floorFor(100)).toBe(95)
   })
 
-  it('kozepes keszletnel a 2 szazalek dont', () => {
-    expect(floorFor(1000)).toBe(1000 - 20)
+  it('a 2 szazalek csak egy KESKENY savban dont (250 es 500 teszt kozott)', () => {
+    // A ket korlat kozott a szazalek csak akkor szamit, ha 5 < 2% < 10 -- vagyis
+    // ~250 es ~500 teszt kozott. Ezen kivul mindig az egyik korlat nyer, es ezt
+    // jobb kimondani, mint egy kozepes szammal illusztralni, ami barmelyik
+    // hatar mozdulasakor csendben elavul.
+    expect(floorFor(400)).toBe(400 - 8)
+    expect(floorFor(100)).toBe(100 - 5)      // ala: a minimum 5 nyer
+    expect(floorFor(3901)).toBe(3901 - 10)   // fole: a plafon 10 nyer
   })
 
   it('PLAFON: a tureshatar NEM no tovabb a keszlettel (didi lelete)', () => {
@@ -79,12 +85,20 @@ describe('evaluateSuiteSize -- a (B) alapvonal-ag', () => {
     expect(r.ok).toBe(false)
   })
 
-  it('ES KIMONDVA: egy KISEBB kieses a (B) agon ATMENNE', () => {
-    // Nem szepitjuk: a plafon miatt 50 teszt ala esik a res, es az ott is marad.
-    // Ezert letezik az (A) ag -- csakhogy az egy TOROLT fajlt nem lat (didi
-    // merte: 287 -> 284, egyszer sem szolalt meg semmi). A "50 teszt alatti
-    // torles" tehat tovabbra is a ket ag KOZOTT esik, es ezt tudni kell.
-    expect(evaluateSuiteSize(285, 3875 - 40, 285, 3875).ok).toBe(true)
+  it('a 40 tesztes kieses MAR NEM megy at (a plafon 10-re szorult)', () => {
+    // Ez a teszt korabban az ELLENKEZOJET allitotta, 50-es plafonnal. A szam nem
+    // ovatossagbol mozdult: didi 200 commitot nezett at, es teszt-fajlt TOROLO
+    // commit NULLA volt.
+    expect(evaluateSuiteSize(285, 3875 - 40, 285, 3875).ok).toBe(false)
+  })
+
+  it('ES A MARADEK RES, KIMONDVA: 10 teszt alatti torles meg mindig atmegy', () => {
+    // Nem szepitjuk. Az (A) ag ezt sem latja, mert egy TOROLT fajl meg sem
+    // jelenik a listaban (didi merte: 287 -> 284, egyszer sem szolalt meg semmi).
+    // A res tehat nem szunt meg, csak 50-rol 10-re zsugorodott -- es 0-ra akkor
+    // mehet, ha az alapvonal frissitese egy parancs lesz (c0f10926).
+    expect(evaluateSuiteSize(285, 3875 - 9, 285, 3875).ok).toBe(true)
+    expect(evaluateSuiteSize(285, 3875 - 11, 285, 3875).ok).toBe(false)
   })
 
   it('az uzenet megmondja, mit nezzen meg eloszor az olvaso', () => {
