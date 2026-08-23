@@ -116,6 +116,36 @@ function fireKanbanDispatch(id: string, actor?: string | null): void {
   }
 }
 
+/** Literal sub-paths of /api/kanban that are NOT card ids. */
+export const KANBAN_RESERVED_SEGMENTS = ['archived', 'labels', 'assignees', 'heartbeat-summary'] as const
+
+/** Match `/api/kanban/<id>` -- and NEVER match a literal sub-path.
+ *
+ *  Measured 2026-08-22, minutes after the GET arm went live: `/api/kanban/archived`
+ *  resolved as a card whose id is "archived", and the archive listing answered
+ *  "Kártya nem található" -- on the exact endpoint the change existed to make usable.
+ *  The suite was green; what caught it was a negative control against the running
+ *  service (a search for a nonsense word returned one "hit", which was the error body).
+ *
+ *  PUT and DELETE carried the same collision from the start; nobody had ever aimed
+ *  them at a literal, so it stayed invisible. Excluding the reserved segments fixes
+ *  all three arms, and a literal route added later is covered by one entry here --
+ *  not by remembering to order the handlers correctly.
+ */
+export function matchKanbanCardPath(path: string): RegExpMatchArray | null {
+  const m = path.match(/^\/api\/kanban\/([^/]+)$/)
+  if (!m) return null
+  let seg: string
+  try {
+    seg = decodeURIComponent(m[1])
+  } catch {
+    // A malformed escape is not a reserved word, and it is not our job to reject it
+    // here -- the id simply will not be found.
+    seg = m[1]
+  }
+  return (KANBAN_RESERVED_SEGMENTS as readonly string[]).includes(seg) ? null : m
+}
+
 export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   const { req, res, path, method } = ctx
 
@@ -261,7 +291,53 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     return true
   }
 
-  const kanbanCardMatch = path.match(/^\/api\/kanban\/([^/]+)$/)
+  // `/api/kanban/<id>` must never swallow a LITERAL sub-path. Measured 2026-08-22,
+  // minutes after deploying the GET arm below: `/api/kanban/archived` resolved as a
+  // card whose id is "archived", and the archive listing began answering
+  // "Kártya nem található" -- on the exact endpoint this change existed to make
+  // usable. A negative control caught it (a search for a nonsense word returned one
+  // "hit", which was the error object).
+  //
+  // PUT and DELETE carried the same collision all along; nobody had ever aimed them
+  // at a literal, so it stayed invisible. Excluding the reserved words fixes all
+  // three arms at once, and the next literal route added above will be covered by
+  // adding one entry here rather than by remembering to order the handlers.
+  const kanbanCardMatch = matchKanbanCardPath(path)
+  // Read ONE card, archived ones included. The archive listing deliberately does
+  // not carry `description` (see listArchivedKanbanCards -- the payload grows
+  // without bound), so `q` finds the card and this route reads its body. Without
+  // both halves a merged-away card is searchable but unreadable.
+  if (kanbanCardMatch && method === 'GET') {
+    const id = decodeURIComponent(kanbanCardMatch[1])
+    const card = getKanbanCard(id)
+    // `comment_count`, and the body deliberately NOT included. Measured 2026-08-22:
+    // didi read this endpoint, saw no `comments` key, and recorded "0 comments" on a
+    // card that had five. Absence and emptiness look identical to a reader -- in
+    // Python a missing key and an empty list both arrive as falsy -- and she caught it
+    // only because she ran a positive control against a card she KNEW had comments.
+    //
+    // The bodies stay out on purpose (the same payload argument as the archive
+    // listing: they grow without bound and a reader usually wants one card's). The
+    // count costs one COUNT and turns a silent absence into an explicit signal:
+    // 0 means none, anything else means fetch /comments.
+    //
+    // AND WHY A COUNT ALONE WAS NOT ENOUGH (2026-08-22, the same trap sprung a
+    // SECOND time, two days later, on a different agent): `comment_count: 2`
+    // reads as an extra datum, not as a notice that something is MISSING. The
+    // reader who does not already know that `comments` never arrives has no
+    // reason to suspect a gap -- the payload looks complete. So the response
+    // now NAMES THE OMISSION as well as the quantity: `comments_omitted` is
+    // true whenever bodies exist but were left out, and the pair reads as one
+    // sentence -- "there are 2, and they are not in here".
+    if (card) {
+      const count = getKanbanComments(id).length
+      json(res, { ...card, comment_count: count, comments_omitted: count > 0 })
+      return true
+    }
+    json(res, { error: 'Kártya nem található' }, 404)
+    return true
+  }
+
   if (kanbanCardMatch && method === 'PUT') {
     const id = decodeURIComponent(kanbanCardMatch[1])
     const body = await readBody(req)
@@ -335,6 +411,15 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   }
   if (kanbanCommentsMatch && method === 'POST') {
     const cardId = decodeURIComponent(kanbanCommentsMatch[1])
+    // A comment on a card that does not exist is WORSE than a rejected one: the
+    // POST returned 200 with a real comment id, so the sender's success check
+    // (HTTP code AND id -- the rule this repo's CLAUDE.md prescribes) passed,
+    // while the comment never appeared on any board and could not be deleted
+    // (there is no comment-delete endpoint). Measured 2026-08-22 (card
+    // 2060668a): two full work reports were written to a card id that did not
+    // exist, and the loss was silent on both sides. The same one-line guard is
+    // already used by the card-labels POST above -- this endpoint simply lacked it.
+    if (!getKanbanCard(cardId)) { json(res, { error: 'Kártya nem található' }, 404); return true }
     const body = await readBody(req)
     const { author, content } = JSON.parse(body.toString())
     if (!author || !content) { json(res, { error: 'Szerző és tartalom kötelező' }, 400); return true }

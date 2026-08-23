@@ -27,7 +27,18 @@ const SEND_PATTERNS = [
   /support-mail\/send\.py/i,
   /\bsend\.py\b/i,
   /api\.resend\.com/i,
-  /\bresend\b[^\n]*\b(email|send|message)\b/i,
+  // `resend` as a VENDOR CALL, not as part of a filename. Measured 2026-08-21 (twice,
+  // two agents, two days): the CRM's mail service file is called
+  // `resend-email.service.ts`, so ANY command naming that file -- `wc -l`, a grep, an
+  // `echo` of the token -- read as a send and was refused. It blocked Didi from
+  // REPORTING a security measurement for five attempts, and Dexter from reading the
+  // file he was hired to fix. A gate that also blocks the report about a finding keeps
+  // the knowledge in, and does it silently: a missing card comment and an unwritten one
+  // look the same. Card 92e3c22f.
+  // The negative lookahead excludes `resend-<word>` (a filename/identifier) while
+  // leaving `resend.emails.send(...)` and `npx resend send` gated -- both verified by
+  // the tests below.
+  /\bresend\b(?!-\w)[^\n]*\b(email|send|message)\b/i,
   /\bsendmail\b/i,
   /\bmsmtp\b/i,
   /\bswaks\b/i,
@@ -63,7 +74,19 @@ export function buildGateMsg(botName, ownerName) {
     'Email-kuldes sub-agentkent tiltott (governance hard-gate). ' +
     `Kuldd a tervezett emailt (CIMZETT + TARGY + TELJES SZOVEG) ${botName}nek inter-agent uzenetben ` +
     `jovahagyasra; a kimeno emailt ${botName} kuldi. Csak VERIFIKALT cimre (soha nem nevbol talalt cim). ` +
-    `Soha ne irj ala ${ownerName} nevevel, es soha ne kerj penzt senki neveben.`
+    `Soha ne irj ala ${ownerName} nevevel, es soha ne kerj penzt senki neveben. ` +
+    // The gate's matcher is `Bash|send_email`, so Grep/Read/Glob/the file-writer
+    // are untouched by it. Measured 2026-08-21 (card 92e3c22f): an agent lost four
+    // command blocks to this gate while doing a SOURCE SEARCH and writing a card
+    // comment -- never a send. It found the un-gated path on its own, after the
+    // fact. The patterns stay strict on purpose (see the card: the obvious
+    // narrowing was refuted by its own negative control), so the fix belongs
+    // here, in what the refusal TELLS you: a gate that blocks without naming the
+    // legitimate path spends someone's minutes every single time it fires.
+    'Ha NEM kuldeni akartal (forras-kereses, jelentes- vagy komment-iras): a kapu matchere ' +
+    'Bash|send_email, tehat MINDEN NEM-BASH eszkoz kivul esik rajta -- a fajl-olvaso, a ' +
+    'tartalom-kereso es a fajliro, barmelyik is all a sessionodben. Azt hasznald a ' +
+    'hej-parancs helyett: nem kerulout, hanem a helyes eszkoz.'
   )
 }
 

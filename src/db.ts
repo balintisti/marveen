@@ -1337,19 +1337,64 @@ export function saveAgentMemory(
 // accessed memories" instead of "the N most recent <category> memories", so an
 // older-but-still-active memory would drop out of the list with no truncation
 // signal -- invisible to the caller, and worst right after a restart.
+//
+// OWN MEMORIES AND THE SHARED TIER ARE RANKED SEPARATELY, THEN INTERLEAVED.
+//
+// A single `WHERE (agent_id = ? OR category = 'shared') ORDER BY accessed_at`
+// looks right and quietly starves the caller. Measured 2026-08-22, on the real
+// store: of 535 memories, 76 are shared -- and 70 of those belong to ONE agent
+// (marveen, most of them written on two days). jarvis, with 13 memories of his
+// own, asked for his recall and got a 50-row window holding NINE of them; the
+// other 41 were somebody else's shared notes.
+//
+// The union also feeds back on itself: a `q` recall stamps accessed_at on what
+// it surfaces, so a shared memory gets hotter every time ANY agent recalls it,
+// and climbs further above the reader's own memories. The more the fleet uses
+// the shared tier, the less of your own recall you see.
+//
+// The fix takes no threshold, which is why it is this shape and not a quota:
+// rank each source by recency on its own, then alternate. An agent with fewer
+// own memories than half the window gets ALL of them plus shared to fill; an
+// agent with many gets a stable half. Nobody is crowded out, and no constant
+// has to be chosen or defended.
+//
+// NOT a filtering bug, and worth saying because it was first reported as one:
+// `agent=<nobody>` returning rows is correct -- those rows are the shared tier,
+// which is what shared MEANS. The defect was the ratio, not the WHERE clause.
 export function getAgentMemories(agentId: string, limit: number = 20, category?: string): Memory[] {
   const key = `${agentId}:${limit}:${category ?? ''}`
   const cached = memoryCacheGet(key)
   if (cached) return cached
-  const result = (category
-    ? db.prepare(
-        "SELECT * FROM memories WHERE (agent_id = ? OR category = 'shared') AND category = ? ORDER BY accessed_at DESC LIMIT ?"
-      ).all(agentId, category, limit)
-    : db.prepare(
-        "SELECT * FROM memories WHERE (agent_id = ? OR category = 'shared') ORDER BY accessed_at DESC LIMIT ?"
-      ).all(agentId, limit)) as Memory[]
-  memoryCacheSet(key, result)
-  return result
+
+  // 'shared' asked for explicitly is not a recall of your own memories at all:
+  // the caller wants that tier, so give it to them unsplit.
+  if (category === 'shared') {
+    const sharedOnly = db.prepare(
+      "SELECT * FROM memories WHERE (agent_id = ? OR category = 'shared') AND category = 'shared' ORDER BY accessed_at DESC LIMIT ?"
+    ).all(agentId, limit) as Memory[]
+    memoryCacheSet(key, sharedOnly)
+    return sharedOnly
+  }
+
+  const own = (category
+    ? db.prepare('SELECT * FROM memories WHERE agent_id = ? AND category = ? ORDER BY accessed_at DESC LIMIT ?')
+        .all(agentId, category, limit)
+    : db.prepare('SELECT * FROM memories WHERE agent_id = ? ORDER BY accessed_at DESC LIMIT ?')
+        .all(agentId, limit)) as Memory[]
+  // A category filter never matches 'shared' rows (a memory has one category),
+  // so a category-scoped recall is own-only by construction.
+  const shared = category
+    ? []
+    : (db.prepare("SELECT * FROM memories WHERE category = 'shared' AND agent_id != ? ORDER BY accessed_at DESC LIMIT ?")
+        .all(agentId, limit) as Memory[])
+
+  const merged: Memory[] = []
+  for (let i = 0; merged.length < limit && (i < own.length || i < shared.length); i++) {
+    if (i < own.length) merged.push(own[i])
+    if (merged.length < limit && i < shared.length) merged.push(shared[i])
+  }
+  memoryCacheSet(key, merged)
+  return merged
 }
 
 export function searchAgentMemories(agentId: string, query: string, limit: number = 10): Memory[] {
@@ -1666,6 +1711,13 @@ export interface KanbanCard {
   priority: 'low' | 'normal' | 'high' | 'urgent'
   project: string | null
   parent_id: string | null
+  /** Epoch SECONDS, like every other timestamp on this row -- NOT milliseconds.
+   *  The column is a bare INTEGER and nothing enforces the unit, so this comment is
+   *  the whole convention. Written down 2026-08-22 because the idle guard now reads
+   *  the field (a future date hides a deliberately deferred card), and a value in
+   *  milliseconds would not error -- the card would simply become due around the year
+   *  55000 and the guard would hide it forever, silently. (jarvis measured the gap:
+   *  today exactly one row carries a due_date, so the convention rests on that one row.) */
   due_date: number | null
   sort_order: number
   created_at: number
@@ -1716,6 +1768,7 @@ export function createKanbanCard(card: {
   priority?: KanbanCard['priority']
   project?: string
   parent_id?: string
+  /** Epoch SECONDS -- see KanbanCard.due_date. Nothing validates this. */
   due_date?: number
 }): void {
   const now = Math.floor(Date.now() / 1000)
@@ -1803,6 +1856,20 @@ export function listArchivedKanbanCards(opts: {
   limit: number
 }): ArchivedKanbanCard[] {
   const { q, project, label, from, to, limit } = opts
+  // `q` searches the BODY, but the body is deliberately NOT in the projection.
+  //
+  // The house rule for a duplicate is: carry the content onto the surviving card,
+  // THEN archive the loser -- so the archive is the safety net under every merge.
+  // Until 2026-08-22 `q` searched title/project/assignee only, which made a
+  // merged-away body unfindable; searching it costs one more LIKE and no payload.
+  //
+  // Returning the body here would cost payload that grows without bound. Measured
+  // the same day: 634 cards carry 737 KB of descriptions (~1 KB each), 175 `done`
+  // cards are still queued for the 30-day archive sweep, and this endpoint's row
+  // cap defaults to 500 and allows 5000. The archive only ever grows, so a
+  // projection that carries bodies turns one listing into megabytes.
+  // Reading ONE body is a different request, and it has its own route:
+  // GET /api/kanban/<id> (routes/kanban.ts), which reaches archived cards too.
   let sql = `
     SELECT DISTINCT kc.id, kc.title, kc.status, kc.project, kc.priority, kc.assignee, kc.archived_at, kc.updated_at
     FROM kanban_cards kc
@@ -1820,9 +1887,9 @@ export function listArchivedKanbanCards(opts: {
   if (from)    { sql += ' AND kc.archived_at >= ?'; params.push(from) }
   if (to)      { sql += ' AND kc.archived_at <= ?'; params.push(to) }
   if (q) {
-    sql += ' AND (kc.title LIKE ? OR kc.project LIKE ? OR kc.assignee LIKE ?)'
+    sql += ' AND (kc.title LIKE ? OR kc.description LIKE ? OR kc.project LIKE ? OR kc.assignee LIKE ?)'
     const like = `%${q}%`
-    params.push(like, like, like)
+    params.push(like, like, like, like)
   }
   sql += ' ORDER BY kc.archived_at DESC LIMIT ?'
   params.push(limit)

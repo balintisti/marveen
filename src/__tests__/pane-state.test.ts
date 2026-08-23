@@ -18,6 +18,7 @@ import {
   parkedInputRowCount,
   submitLanded,
   paneShowsContextSaturation,
+  busyEvidence,
 } from '../pane-state.js'
 
 // Realistic pane fixtures modelled on actual `tmux capture-pane -p`
@@ -771,6 +772,183 @@ describe('detectPaneState', () => {
       '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
     ].join('\n')
     expect(detectPaneState(snap)).toBe('idle')
+  })
+})
+
+// A running turn UNDER a subagent panel. Copied from mandark's live pane on
+// 2026-08-22 (three running subagents); the rows below the footer are what
+// Claude Code renders when an agent has spawned subagents, and the panel grows
+// by one row per agent.
+//
+// This is the shape that broke the fixed trailing-line windows: counting back
+// from the END of the pane, the footer sat 7 lines up (outside the 5-line
+// footer window) and the spinner 12 (on the boundary of its own). The busy
+// signals had not moved -- the panel below them had grown.
+const subagentRows = (n: number): string[] =>
+  ['', '  ⏺ main', ...Array.from({ length: n }, (_, i) =>
+    `  ◯ triage-${i + 1}  Te mandark (QA) alágense vagy. Feladat:… 14s · ↓ 163.5k tokens`)]
+
+const BUSY_WITH_SUBAGENTS = (n: number) => [
+  '  ⎿  $ grep -rn "createWithPreferenceCheck" src',
+  '',
+  '✽ Architecting… (3m 41s · ↓ 6.2k tokens)',
+  '',
+  SEP,
+  '❯ ',
+  SEP,
+  '  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← for agents',
+  ...subagentRows(n),
+].join('\n')
+
+// The token-counter forms a LONG turn actually renders. Before 2026-08-22 the
+// busy pattern required `(<digits>s`, so everything past one minute failed at
+// the `m`. jarvis measured 67 token-counter lines on real fleet panes: 59 were
+// minute-form. The 88% that fell out were exactly the long turns.
+const spinnerLine = (t: string) => `✽ Architecting… (${t} · ↓ 6.2k tokens)`
+
+const liveTurn = (t: string) => [
+  '  ⎿  $ grep -rn "createWithPreferenceCheck" src',
+  '',
+  spinnerLine(t),
+  '',
+  SEP,
+  '❯ ',
+  SEP,
+  // NO `esc to interrupt`: this isolates the token-counter signal. With the
+  // footer phrase present the pane reads busy either way and the test would
+  // pass against the broken regex -- which is how the existing fixture, whose
+  // spinner is already minute-form (see BUSY_WITH_SUBAGENTS), went green while
+  // the pattern it was meant to exercise matched nothing.
+  '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents',
+].join('\n')
+
+describe('busyEvidence: which signal made the pane read busy', () => {
+  const withFooterEsc = [
+    '  ⎿  running',
+    '',
+    SEP, '❯ ', SEP,
+    '  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← for agents',
+  ].join('\n')
+
+  const counterOnly = [
+    '  ⎿  done',
+    '',
+    '✽ Architecting… (3m 41s · ↓ 6.2k tokens)',
+    '',
+    SEP, '❯ ', SEP,
+    // No `esc to interrupt`: the turn ENDED and the spinner line was simply not
+    // overwritten. This is the leftover-render case, and it is weaker evidence.
+    '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents',
+  ].join('\n')
+
+  it('reports the footer signal as the strong one', () => {
+    expect(busyEvidence(withFooterEsc)).toBe('footer')
+  })
+
+  it('reports a leftover counter as the weak one', () => {
+    expect(busyEvidence(counterOnly)).toBe('counter')
+  })
+
+  it('is null when the pane is not busy at all', () => {
+    expect(busyEvidence(IDLE_BYPASS)).toBeNull()
+  })
+
+  // Both are still 'busy' for anyone asking the plain question -- the weight is an
+  // ADDITION, not a replacement. If this ever flips, the widened pattern (dd3fec50)
+  // silently regresses and long turns read as idle again.
+  it('does not change the plain busy verdict for either', () => {
+    expect(detectPaneState(withFooterEsc)).toBe('busy')
+    expect(detectPaneState(counterOnly)).toBe('busy')
+  })
+})
+
+// jarvis proposed this one and it costs nothing: the whole counter/anchor defence
+// rests on the subagent panel rendering BELOW the footer. Nothing asserted that, and
+// the entire thread started because the panel's appearance MOVED the footer.
+describe('the subagent panel renders below the footer', () => {
+  it('the footer line comes before every panel row', () => {
+    const pane = BUSY_WITH_SUBAGENTS(4).split('\n')
+    const footerIdx = pane.findIndex(l => /on \(shift\+tab to cycle\)/.test(l))
+    const panelIdx = pane.findIndex(l => /^\s+[◯⏺]/.test(l))
+    expect(footerIdx).toBeGreaterThanOrEqual(0)
+    expect(panelIdx).toBeGreaterThanOrEqual(0)
+    expect(footerIdx).toBeLessThan(panelIdx)
+  })
+})
+
+describe('detectPaneState token-counter durations', () => {
+  it.each([
+    ['7s', 'seconds'],
+    ['52s', 'seconds, two digits'],
+    ['3m 41s', 'minutes'],
+    ['11m 29s', 'minutes, two digits'],
+    ['1h 2m 5s', 'hours'],
+  ])('reads a live turn as busy at %s (%s)', (t) => {
+    expect(detectPaneState(liveTurn(t))).toBe('busy')
+  })
+
+  // The counter is the ONLY busy signal here, and it must not fire on prose.
+  // A completed turn's summary line carries a duration but no ↓ counter.
+  it('does not read a finished turn summary as busy', () => {
+    const done = [
+      '✻ Sautéed for 8m 32s',
+      '',
+      SEP,
+      '❯ ',
+      SEP,
+      '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents',
+    ].join('\n')
+    expect(detectPaneState(done)).toBe('idle')
+  })
+})
+
+describe('detectPaneState with a subagent panel below the footer', () => {
+  it('reads a live turn as busy with three subagents', () => {
+    expect(detectPaneState(BUSY_WITH_SUBAGENTS(3))).toBe('busy')
+  })
+
+  // The regression this locks: the miss got WORSE as the fleet grew, so a
+  // one-agent test would have passed while the real case (many agents) failed.
+  // The direction is always the same -- busy misread as not-busy -- which is
+  // why the agent doing the most work was the one most likely to be woken.
+  it.each([1, 3, 6, 12, 25])('reads a live turn as busy with %i subagents', (n) => {
+    expect(detectPaneState(BUSY_WITH_SUBAGENTS(n))).toBe('busy')
+  })
+
+  it('does not report the pane ready for a prompt while subagents run', () => {
+    expect(isReadyForPrompt(BUSY_WITH_SUBAGENTS(8))).toBe(false)
+  })
+
+  // The other direction still has to hold: a genuinely idle agent whose
+  // subagents have finished must stay idle, or anchoring would have traded a
+  // missed-busy for a missed-idle and starved the scheduler instead.
+  it('still reads idle when the turn has ended and only the panel remains', () => {
+    const idleWithPanel = [
+      '  ⎿  done',
+      '',
+      SEP,
+      '❯ ',
+      SEP,
+      '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents',
+      ...subagentRows(4),
+    ].join('\n')
+    expect(detectPaneState(idleWithPanel)).toBe('idle')
+  })
+
+  // Anchoring must not resurrect the bug it replaced: a stale `esc to
+  // interrupt` quoted in scrollback ABOVE the live region stays invisible.
+  it('ignores an esc-to-interrupt quoted far above the footer', () => {
+    const quoted = [
+      '  I read the footer text "esc to interrupt" in the watchdog report.',
+      ...Array.from({ length: 20 }, () => '  ⎿  (more output)'),
+      '',
+      SEP,
+      '❯ ',
+      SEP,
+      '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents',
+      ...subagentRows(2),
+    ].join('\n')
+    expect(detectPaneState(quoted)).toBe('idle')
   })
 })
 

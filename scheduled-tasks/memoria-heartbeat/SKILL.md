@@ -40,10 +40,22 @@ Lépések:
    - Globális: `~/.claude/skills/.skill-index.md` (szöveges keresés)
    - Ágensspecifikus (ha van): `./.claude/skills/.skill-index.md` a munkamappádban (szöveges keresés)
    - Az ágensspecifikus index mindkét szintet tartalmazza, tehát ha az létezik, elég azt nézegetni.
-2. Ha van releváns skill: PATCH (csak a megváltozott rész cseréje, ne az egész fájl).
+2. **MIELŐTT patchelsz: nézd meg, mi van már ott.**
+   ```bash
+   bash {{INSTALL_DIR}}/scripts/skill-index.sh --outline <skill-nev>
+   ```
+   Kiírja a szekció-címeket ÉS a félkövér bevezetőket (a referenciákkal együtt). Ez nem detektor,
+   hanem a **két lista második listája**. Mért eset (2026-08-22): két ágens ugyanazt a leckét írta
+   ugyanabba a skill-magba fél órán belül -- egyikük sem volt hanyag, csak mindketten a saját
+   fejükből dolgoztak, és nem volt mihez hasonlítani. Didi megmérte, hogy a kanban duplikátum-szűrője
+   ide NEM jó: egy prózás szekció SZÓ SZERINTI másolata 0.00 pontot kap (nincs benne fájlnév,
+   kártya-id, végpont), miközben húsz nem-duplikátum pár 10 fölött áll -- a rangsor fordított.
+   Egy lecke pedig éppen prózás.
+
+3. Ha van releváns skill: PATCH (csak a megváltozott rész cseréje, ne az egész fájl).
    - A `## Buktatók` szekciót preferáld ha hiba/recovery volt.
    - A `## Eljárás` szekciót ha a folyamat változott.
-3. Ha NINCS releváns skill: hozz létre újat:
+4. Ha NINCS releváns skill: hozz létre újat:
    ```bash
    mkdir -p ~/.claude/skills/<NEV>
    cat > ~/.claude/skills/<NEV>/SKILL.md <<EOF
@@ -66,11 +78,38 @@ Lépések:
    - ...
    EOF
    ```
-4. Index regen (mindkét szint):
+5. Index regen (mindkét szint) -- lásd a 2/b lépést is: ez MINDIG fut, nem csak skill-patch után.
    ```bash
    bash {{INSTALL_DIR}}/scripts/skill-index.sh          # globális index frissítése
    bash {{INSTALL_DIR}}/scripts/skill-index.sh "$(pwd)" # ágensspecifikus merged index frissítése
    ```
+
+## 2/b. A méret-őr MINDEN körben fut, akkor is, ha A=B=C=NEM
+
+```bash
+bash {{INSTALL_DIR}}/scripts/skill-index.sh   # 0 = rendben, 3 = van 500 sor fölötti skill
+```
+
+**Ezt NE a fenti A/B/C ág alá tedd, és ne rejtsd el `>/dev/null 2>&1`-gyel.** Jarvis mérése
+(2026-08-22): az egész repóban EGYETLEN hívója volt ennek a szkriptnek, és az a skill-akció ága
+alatt állt -- vagyis az őr csak akkor futott, ha az ágens **maga** nyúlt skillhez abban a körben.
+Az őr viszont pontosan arra való, hogy MÁS növekedését is észrevegye. Aznap öt skill-patch készült
+és egyszer sem futott le; az index csak azért maradt friss, mert valaki kézzel ellenőrizte egy másik
+munkát. „Ha betartjuk" ilyenkor egy embert jelent, és Isti szabálya szerint az nem megoldás.
+
+A költsége mérve: **0,32-0,33 másodperc**, és idempotens (két futás után az index SHA-ja bitre
+azonos), tehát feltétel nélkül futtatható.
+
+**Miért csak itt, és miért nem minden ágensnél:** a skill-fa KÖZÖS. Ha mind az öt ágens minden
+körben jelentené ugyanazt a túllépést, abból körönként öt azonos riasztás lenne -- pontosan az az
+alak, amit a tétlen-őrnél ma reggel javítani kellett (nyolc üzenet egy helyzetről). Ez a feladat
+`agent: marveen`, tehát egy hang. A sub-ágensek a saját skill-patchük után továbbra is megkapják a
+kilépési kódot -- nekik az a pillanat számít.
+
+**Ha 3-at ad:** ne javítsd „gyorsan" a fájl megvágásával. A `references/` bontás a megoldás
+(minta: `felderites-ket-listas-proba`, 643 -> 249 sor + `references/alakok.md`), és a bontás után
+KÖTELEZŐ egy pozitív kontroll: végy elő tíz-húsz mért esetet, és nézd meg, hogy a **mag önmagában**
+választ ad-e rájuk. Ez a lépés egy valódi rossz vágást talált, nem elvi hiányt.
 
 **Ha kihagytad a skill akciót, pedig A/B/C valamelyike IGEN volt:** kötelezően írj `hot` tier memóriát "skip-skill: <konkrét ok>" tartalommal, hogy később lássuk miért. Ne csendben hagyd ki.
 

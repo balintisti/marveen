@@ -1,4 +1,46 @@
 #!/bin/bash
+
+# -v / --verbose: kiirja a siker-sort is. Alapertelmezesben csendes, lasd lentebb.
+# --outline <skill>: kiirja EGY skill szekcio-cimeit es a FELKOVER bevezetoit.
+#
+# Ez nem detektor, hanem a KET LISTA masodik listaja (didi merese, 2026-08-22). Aznap ket agens
+# ugyanazt a lecket irta ugyanabba a skill-magba fel oran belul -- egyikuk sem volt hanyag, csak
+# mindketten a sajat fejukbol dolgoztak, es NEM VOLT MIHEZ HASONLITANI.
+#
+# Miert nem a duplikatum-szuro: didi megmerte a skill-fan (47 skill, 271 szekcio). Egy PROZAS
+# szekcio SZO SZERINTI masolata 0.00 pontot kap (nincs benne fajlnev, kartya-id, vegpont), mikozben
+# husz-egynehany NEM-duplikatum par 10 folott all -- a rangsor FORDITOTT. Egy lecke pedig eppen
+# prozas. A szuro a kanbanra jo, ide nem.
+#
+# Miert nem a globalis indexbe: az Level 0 kontextus, minden korben betoltodik. 271 szekcio-cim
+# ott alland koltseg egy olyan informacioert, ami evente parszor kell.
+#
+# Es miert a FELKOVER bevezetok is: a mai eset egyik fele NEM `##` cim volt, hanem egy `**...**`
+# bekezdes egy meglevo szekcion belul. Egy csak-cimekre nezo lista azt sem fogta volna meg.
+if [ "${1:-}" = "--outline" ]; then
+  _skill="${2:-}"
+  if [ -z "$_skill" ]; then echo "hasznalat: skill-index.sh --outline <skill-nev>" >&2; exit 64; fi
+  _f="$HOME/.claude/skills/$_skill/SKILL.md"
+  if [ ! -f "$_f" ]; then echo "nincs ilyen skill: $_skill" >&2; exit 66; fi
+  echo "$_skill  ($(wc -l < "$_f" | tr -d ' ') sor)"
+  grep -nE '^#{2,3} |^\*\*[^*]+\*\*' "$_f" | sed 's/^/  /'
+  for _r in "$HOME/.claude/skills/$_skill/references/"*.md; do
+    [ -f "$_r" ] || continue
+    echo "  -- references/$(basename "$_r")  ($(wc -l < "$_r" | tr -d ' ') sor)"
+    grep -nE '^#{2,3} ' "$_r" | sed 's/^/    /'
+  done
+  exit 0
+fi
+
+VERBOSE=0
+_args=()
+for _a in "$@"; do
+  case "$_a" in
+    -v|--verbose) VERBOSE=1 ;;
+    *) _args+=("$_a") ;;
+  esac
+done
+set -- "${_args[@]+"${_args[@]}"}"
 # Skill Index Generator
 # Generates a Level 0 index of all available skills (name + description only)
 # This keeps token usage low while making all skills discoverable
@@ -88,4 +130,67 @@ fi
 echo "" >> "$OUTPUT"
 echo "_${SKILL_COUNT} skill indexelve. Generálva: $(date '+%Y-%m-%d %H:%M')_" >> "$OUTPUT"
 
-echo "Skill index generated: $OUTPUT ($SKILL_COUNT skills)"
+# CSENDES A SIKERES UTON (2026-08-22, didi javaslata, es a ket elnemitas okabol).
+# Ket agens egymastol fuggetlenul futtatta ezt a szkriptet `>/dev/null 2>&1` alakban --
+# NEM a figyelmeztetes miatt, hanem hogy EZT a sort elrejtse. A `2>&1` aztan a
+# figyelmeztetest is elvitte. A ket stream szetvalasztasa helyes volt, csak nem elegendo:
+# a hivo nem stream-enkent gondolkodik, hanem "ne irjon semmit"-ben.
+#
+# Ezert a siker-sor mostantol CSAK `-v`/`--verbose` eseten irodik ki. Igy a hivonak nincs
+# MIERT elnemitania, es a figyelmeztetes eleve nem kerul veszelybe. A reflexet nem tulelni
+# kell, hanem megszuntetni az okat.
+#
+# ES AMIERT EZ NEM NEMA SIKER: a "lefutott-e" kerdesre a KILEPESI KOD felel (0 = kesz,
+# 3 = kesz + hatar-atlepes, minden mas = hiba). Egy szkript, ami hallgat ES nincs
+# kilepesi kodja, tenyleg megkulonboztethetetlen lenne attol, hogy el sem indult.
+if [ "${VERBOSE:-0}" = "1" ]; then
+  echo "Skill index generated: $OUTPUT ($SKILL_COUNT skills)"
+fi
+
+# ---- meret-or -------------------------------------------------------------
+# MIERT: a skill-hatar (500 sor) eddig CSAK azon allt, hogy valakinek eszebe jut
+# megmerni. 2026-08-21 13:45-kor jelentettem, hogy a harom bontott skill 132/226/186
+# sor -- 2026-08-22 04:30-ra az egyik 576 lett, es a hatar-atlepes SEHOL nem latszott.
+# Isti szabalya: ha egy megoldas azon all, hogy valaki megjegyez valamit, az nem megoldas.
+SKILL_LINE_LIMIT="${SKILL_LINE_LIMIT:-500}"
+OVER_LIMIT=0
+OVER_LIST=""
+for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
+  [ -f "$f" ] || continue
+  n=$(wc -l < "$f" | tr -d ' ')
+  if [ "$n" -gt "$SKILL_LINE_LIMIT" ]; then
+    OVER_LIMIT=$((OVER_LIMIT+1))
+    OVER_LIST="${OVER_LIST}  $(basename "$(dirname "$f")")  ${n} sor\n"
+  fi
+done
+
+# POZITIV KONTROLL: egy or, ami sosem tud tuzelni, ugyanugy "mukodik", mint egy helyes.
+# Ellenorizzuk, hogy a szamlalo-ag EGYALTALAN elerheto-e egy biztosan tullepo bemenettel.
+_probe=$(printf 'x\n%.0s' $(seq 1 $((SKILL_LINE_LIMIT+1))) | wc -l | tr -d ' ')
+if [ "$_probe" -le "$SKILL_LINE_LIMIT" ]; then
+  echo "MERET-OR: a pozitiv kontroll ELBUKOTT (a szamlalas nem mukodik) -- az or NEM megbizhato." >&2
+elif [ "$OVER_LIMIT" -gt 0 ]; then
+  echo "" >&2
+  echo "MERET-OR: ${OVER_LIMIT} skill lepte tul a ${SKILL_LINE_LIMIT} soros hatart:" >&2
+  printf "%b" "$OVER_LIST" >&2
+  echo "  -> references/ bontas javasolt. A LEGFRISSEBB szekciok vannak a fajl vegen," >&2
+  echo "     tehat epp azok jutnak el a legkevesebb olvasohoz." >&2
+else
+  if [ "${VERBOSE:-0}" = "1" ]; then
+    echo "MERET-OR: minden skill a ${SKILL_LINE_LIMIT} soros hatar alatt (pozitiv kontroll: OK)."
+  fi
+fi
+
+# ES A LEPES, AMI NELKUL A FENTI EGESZ NEMA MARADHAT (2026-08-22, merve, es a hiba az enyem):
+# a figyelmeztetes stderr-re megy, ami HELYES -- de ma ejjel ketszer futtattam ezt a szkriptet
+# `>/dev/null 2>&1` alakban, hogy az "index generated" sort elrejtsem, es ezzel a FIGYELMEZTETEST
+# is eldobtam. Ugyanabban a ket fordulóban vittem a felderites-ket-listas-proba fajlt 611 -> 634 ->
+# 643 sorra. Az or hibatlanul dolgozott, es senki nem hallotta.
+#
+# Egy uzenet, ami CSAK szoveg, annyira hangos, amennyire a HIVO engedi. Egy kilepesi kod nem az:
+# tulel egy `>/dev/null 2>&1`-et is, es megallit egy `&&` lancot. Ezert a hatar-atlepes mostantol
+# 3-as kilepesi kod. A 3 SAJAT ertek, nem 1: egy valodi generalasi hiba tovabbra is megkulonboztetheto
+# marad attol, hogy az index elkeszult ES a hatar-or talalt valamit.
+if [ "${OVER_LIMIT}" -gt 0 ]; then
+  exit 3
+fi

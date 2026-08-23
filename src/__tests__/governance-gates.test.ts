@@ -9,6 +9,55 @@ import { MAIN_AGENT_ID } from '../config.js'
 
 // --- self-pace-gate: blocks the agent from scheduling its own future turns ---
 describe('self-pace-gate gateDecision', () => {
+  // Measured 2026-08-22 (jarvis, in a live session): a PURE READ of the schedule
+  // store that ended in `2>/dev/null` was denied -- correctly, `2>` is a redirect
+  // and the write-intent test is deliberately broad -- but the message lectured
+  // about self-pacing, and the reader concluded THE FILE DID NOT EXIST.
+  //
+  // The fix labels WHY, and changes nothing about WHAT is blocked. Narrowing the
+  // write-intent test would open a real hole (`cmd 2>&1 > store` survives an
+  // exclusion of `2>`), and at a security gate an unproven heuristic is worse than
+  // friction: friction is visible, a hole is not. These tests pin BOTH halves --
+  // the labels, and the fact that the blocking set did not move.
+  it('labels WHY it denied, so the message can name the trigger', () => {
+    expect(selfPaceDecision('ScheduleWakeup', {}).reason).toBe('self-pace-tool')
+    expect(selfPaceDecision('Write', { file_path: '/x/scheduled_tasks.json' }).reason).toBe('store-write')
+    expect(selfPaceDecision('Bash', { command: 'cat scheduled_tasks.json 2>/dev/null' }).reason).toBe('store-write-bash')
+    expect(selfPaceDecision('Bash', { command: 'curl -X POST http://x/api/schedules' }).reason).toBe('schedule-api-write')
+    expect(selfPaceDecision('Bash', { command: 'crontab -' }).reason).toBe('os-scheduler')
+  })
+
+  it('BLOCKS EXACTLY WHAT IT BLOCKED BEFORE -- the redirect stays write-intent', () => {
+    // The case that prompted the change is STILL denied. Only the wording moved.
+    expect(selfPaceDecision('Bash', { command: 'cat scheduled_tasks.json 2>/dev/null' }).deny).toBe(true)
+    // ...and the hidden-write forms that any narrowing would have let through.
+    for (const cmd of [
+      'echo x 2>&1 > scheduled_tasks.json',
+      // A WRITE PERFORMED ENTIRELY THROUGH stderr. This one is here because jarvis
+      // measured that the obvious narrowing ((?<!2) on the redirect) lets it through
+      // -- and because the list originally represented "stderr write" with `2>>`,
+      // which survives that narrowing for an INCIDENTAL reason: its second `>` is
+      // not preceded by a `2`. So the list looked like it covered stderr writes
+      // while the nearest real form was missing. A test that passes for the wrong
+      // reason is indistinguishable from coverage.
+      'node build.js 2> scheduled_tasks.json',
+      'echo x 2>> scheduled_tasks.json',
+      'cat a | tee scheduled_tasks.json',
+      'sed -i s/a/b/ scheduled_tasks.json',
+      'cp a scheduled_tasks.json',
+      'mv a scheduled_tasks.json',
+    ]) {
+      expect(selfPaceDecision('Bash', { command: cmd }).deny).toBe(true)
+    }
+  })
+
+  it('a pure read with NO redirect passes, which is what makes the hint honest', () => {
+    // The message tells the reader to drop the redirect. If this were denied too,
+    // the advice would send them in a circle.
+    expect(selfPaceDecision('Bash', { command: 'cat ~/.claude/scheduled_tasks.json' }).deny).toBe(false)
+    expect(selfPaceDecision('Bash', { command: 'grep name scheduled_tasks.json' }).deny).toBe(false)
+  })
+
   it('denies the ScheduleWakeup runtime tool', () => {
     expect(selfPaceDecision('ScheduleWakeup', { prompt: 'x' }).deny).toBe(true)
   })

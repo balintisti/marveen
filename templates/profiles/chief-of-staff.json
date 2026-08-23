@@ -1,0 +1,30 @@
+{
+  "id": "chief-of-staff",
+  "label": "Kabinetfőnök (bevétel, nyilvántartás, döntés-előkészítés)",
+  "description": "A koordinátort tehermentesítő ügynök: átveszi az ágensek jelentéseit, kártyára és kommentbe viszi őket, karbantartja a táblát és a napi naplót, és CSAK a valódi döntéseket adja fel. Permissive módban fut, mert a munkája a dashboard API (curl POST) és a repók OLVASÁSA -- de forráskódot NEM ír, és soha nem pusholl. A tiltás a FORRÁS-mappákra megy, nem a gyökérre: a saját munkakönyvtárában és a skillekben írnia kell tudnia, különben nem tud jegyzetelni és nem tud tanulni.",
+  "permissionMode": "permissive",
+  "filesystem": {
+    "allow": [],
+    "deny": [
+      "Read(${HOME}/.ssh/**)",
+      "Read(${HOME}/.aws/**)",
+      "Read(${HOME}/.gnupg/**)",
+      "Bash(sudo:*)",
+      "Bash(rm -rf ${HOME}:*)",
+      "Bash(rm -rf /:*)",
+      "Bash(git push:*)",
+      "Write(${HOME}/Projektek/sajat-crm/**)",
+      "Edit(${HOME}/Projektek/sajat-crm/**)",
+      "Write(${HOME}/marveen/src/**)",
+      "Edit(${HOME}/marveen/src/**)",
+      "Write(${HOME}/marveen/scripts/**)",
+      "Edit(${HOME}/marveen/scripts/**)",
+      "Write(${HOME}/marveen/agents/dexter/**)",
+      "Edit(${HOME}/marveen/agents/dexter/**)",
+      "Write(${HOME}/marveen/agents/didi/**)",
+      "Edit(${HOME}/marveen/agents/didi/**)",
+      "Write(${HOME}/marveen/agents/mandark/**)",
+      "Edit(${HOME}/marveen/agents/mandark/**)"
+    ]
+  }
+}

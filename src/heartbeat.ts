@@ -288,9 +288,21 @@ interface SystemInfo {
   dbWarning: boolean
 }
 
+interface RecentEmail {
+  from: string
+  subject: string
+  age_minutes: number | null
+  unread: boolean
+}
+
 interface HeartbeatData {
   timestamp: Date
   calendar: CalendarEvent[]
+  /** Empty when there is no mail OR when the fetch failed -- `emailError`
+   * separates the two, because "no mail" and "we could not look" must never
+   * read the same. */
+  email: RecentEmail[]
+  emailError: string | null
   kanban: { urgent: number; in_progress: number; waiting: number; urgentLabels: string[]; waitingLabels: string[] }
   system: SystemInfo
   tasks: { count: number; nextRun: number | null }
@@ -306,6 +318,45 @@ async function collectCalendar(): Promise<CalendarEvent[]> {
   } catch (err) {
     logger.error({ err }, 'Heartbeat: calendar fetch failed')
     return []
+  }
+}
+
+/**
+ * Recent INBOX mail, gathered HERE rather than delegated to the sub-agent.
+ *
+ * The prompt used to carry a line telling the sub-agent to fetch mail itself
+ * through an MCP tool (`search_emails`). That made email the only source in
+ * this heartbeat whose absence was invisible: calendar and kanban are gathered
+ * natively and a failure logs an error, but a missing MCP tool produced no
+ * email section at all, which reads exactly like "no mail". It had already
+ * failed that way once -- see the 2026-06-02 note above about Gmail OAuth
+ * being lost when the isolated config dir came up empty. Verified 2026-08-20:
+ * no Gmail MCP server is reachable from the fleet's agents at all, so that
+ * instruction had been a no-op.
+ *
+ * IMAP over an app password rather than the Gmail API, because the OAuth app
+ * is stuck in Google's "Testing" state where a refresh token dies weekly, and
+ * publishing it is gated behind verification (reading mail is a RESTRICTED
+ * scope). The app password does not expire.
+ */
+function collectEmail(): { email: RecentEmail[]; emailError: string | null } {
+  try {
+    const out = execFileSync(
+      'python3',
+      [join(PROJECT_ROOT, 'scripts', 'gmail-recent.py'), '--minutes', '120', '--limit', '15'],
+      { encoding: 'utf-8', timeout: 30_000, stdio: ['ignore', 'pipe', 'ignore'] },
+    )
+    const parsed = JSON.parse(out) as { ok: boolean; error?: string; messages?: RecentEmail[] }
+    if (!parsed.ok) {
+      logger.error({ err: parsed.error }, 'Heartbeat: email fetch failed')
+      return { email: [], emailError: parsed.error ?? 'unknown error' }
+    }
+    return { email: parsed.messages ?? [], emailError: null }
+  } catch (err) {
+    // A timeout or a crashed interpreter lands here. Still an ERROR, and still
+    // reported to the prompt -- silence is the failure mode this replaced.
+    logger.error({ err }, 'Heartbeat: email fetch threw')
+    return { email: [], emailError: err instanceof Error ? err.message.slice(0, 160) : 'unknown' }
   }
 }
 
@@ -354,7 +405,8 @@ async function collectData(): Promise<HeartbeatData> {
     Promise.resolve(collectSystem()),
   ])
   const tasks = getActiveScheduledTaskCount()
-  return { timestamp: new Date(), calendar, kanban, system, tasks }
+  const { email, emailError } = collectEmail()
+  return { timestamp: new Date(), calendar, email, emailError, kanban, system, tasks }
 }
 
 // --- Notification filter ---
@@ -396,7 +448,6 @@ function buildAgentPrompt(data: HeartbeatData): string {
   let prompt = UNTRUSTED_PREAMBLE + '\n'
   prompt += `Heartbeat ellenorzes -- ${timeStr}\n\n`
   prompt += `Az alabbi adatokat gyujtottem nativ modon (API/DB). Fogalmazz tomor, emberi osszefoglalot ${OWNER_NAME} szamara.\n`
-  prompt += `FONTOS: Nezd meg az emaileket is MCP-n keresztul (search_emails, utolso 2 ora, olvasatlanok).\n`
   prompt += `Hasznald a HEARTBEAT.md formatumot.\n\n`
 
   // Calendar -- event summaries and attendee names come from whoever sent the
@@ -413,6 +464,26 @@ function buildAgentPrompt(data: HeartbeatData): string {
       const summaryWrapped = wrapUntrusted('gcal-event-summary', ev.summary ?? '(cim nelkul)')
       const attendeesWrapped = wrapUntrusted('gcal-event-attendees', attendeesRaw)
       prompt += `- @ ${start}\n  summary: ${summaryWrapped}\n  attendees: ${attendeesWrapped}\n`
+    }
+    prompt += '\n'
+  }
+
+  // Email -- sender and subject are written by WHOEVER SENT THE MAIL, so this
+  // is the most openly attacker-controlled data in the whole prompt. Every
+  // field is wrapped individually.
+  prompt += `## Email (utolso 2 ora)\n`
+  if (data.emailError) {
+    // Say it out loud. The whole point of gathering mail natively is that a
+    // failure must not look like an empty inbox.
+    prompt += `NEM SIKERULT lekerdezni: ${data.emailError}\n`
+    prompt += `Ezt JELENTSD -- ne ird azt, hogy nincs level, mert nem tudjuk.\n\n`
+  } else if (data.email.length === 0) {
+    prompt += `Nincs uj level.\n\n`
+  } else {
+    for (const m of data.email) {
+      const age = m.age_minutes === null ? 'ismeretlen ideje' : `${m.age_minutes} perce`
+      const flag = m.unread ? 'OLVASATLAN' : 'olvasott'
+      prompt += `- ${age}, ${flag}\n  from: ${wrapUntrusted('email-from', m.from || '(ismeretlen)')}\n  subject: ${wrapUntrusted('email-subject', m.subject || '(targy nelkul)')}\n`
     }
     prompt += '\n'
   }

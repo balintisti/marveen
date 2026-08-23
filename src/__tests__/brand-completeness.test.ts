@@ -71,8 +71,33 @@ describe('buildGateMsg brands the email-gate deny message', () => {
       'Email-kuldes sub-agentkent tiltott (governance hard-gate). ' +
         'Kuldd a tervezett emailt (CIMZETT + TARGY + TELJES SZOVEG) Marveennek inter-agent uzenetben ' +
         'jovahagyasra; a kimeno emailt Marveen kuldi. Csak VERIFIKALT cimre (soha nem nevbol talalt cim). ' +
-        'Soha ne irj ala Szabolcs nevevel, es soha ne kerj penzt senki neveben.',
+        'Soha ne irj ala Szabolcs nevevel, es soha ne kerj penzt senki neveben. ' +
+        'Ha NEM kuldeni akartal (forras-kereses, jelentes- vagy komment-iras): a kapu matchere ' +
+        'Bash|send_email, tehat MINDEN NEM-BASH eszkoz kivul esik rajta -- a fajl-olvaso, a ' +
+        'tartalom-kereso es a fajliro, barmelyik is all a sessionodben. Azt hasznald a ' +
+        'hej-parancs helyett: nem kerulout, hanem a helyes eszkoz.',
     )
+  })
+
+  // Card 92e3c22f: the refusal must name the un-gated path. Four command blocks
+  // were lost to this gate during a source search + card write; the matcher is
+  // `Bash|send_email`, so Grep/Read/Glob/Write were available the whole time.
+  // A gate that refuses without saying where to go costs minutes on every fire.
+  it('names the un-gated alternative, so a refusal is actionable', () => {
+    const msg = buildGateMsg('Marveen', 'Szabolcs')
+    expect(msg).toContain('Bash|send_email')
+    expect(msg).toMatch(/NEM-BASH eszkoz/)
+  })
+
+  // The first version of the hint named Grep/Read/Glob by name. The agent it was
+  // written for reported back that Grep is not in its session at all -- so the
+  // advice named a door that is not in every room. The message keys off the
+  // MATCHER instead, which is a property of the gate and true in every install.
+  it('does not promise a specific tool by name (tool rosters differ per session)', () => {
+    const msg = buildGateMsg('Marveen', 'Szabolcs')
+    for (const toolName of ['Grep', 'Glob', 'Read(']) {
+      expect(msg).not.toContain(toolName)
+    }
   })
 
   it('substitutes a custom brand + owner and drops the stock names', () => {

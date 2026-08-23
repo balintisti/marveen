@@ -31,9 +31,11 @@ noted in the summary/snapshot instead of raising.
 
 import argparse
 import glob
+import hashlib
 import json
 import os
 import subprocess
+import time
 import sys
 import urllib.error
 import urllib.request
@@ -305,6 +307,182 @@ def collect_codex():
 # Claude collector -- authoritative endpoint, else local-transcript estimate
 # --------------------------------------------------------------------------
 
+KEYCHAIN_SERVICE = "Claude Code-credentials"
+
+# The Claude Code OAuth client. Same value the CLI's own login flow uses; it
+# is a public client id, not a secret.
+OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+OAUTH_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
+
+# Default ON: a collector that needs a human to run /login every eight hours
+# reports "unavailable" most of the time, which is the state this whole
+# function exists to end. Set MARVEEN_USAGE_NO_REFRESH=1 to disable.
+REFRESH_ENABLED = os.environ.get("MARVEEN_USAGE_NO_REFRESH", "") != "1"
+
+
+def _keychain_account():
+    """The account name on the existing keychain entry, or None.
+
+    THIS IS NOT COSMETIC, and it cost a stray credential to learn (2026-08-22):
+    `security add-generic-password -s SERVICE -a NAME` keyed by a DIFFERENT
+    account creates a SECOND entry rather than updating the first, and
+    `find-generic-password -s SERVICE` keeps returning the original. The write
+    reports success, the read returns the old value, and the refreshed token
+    lands somewhere nothing reads. Write back to the account that is there.
+    """
+    try:
+        out = subprocess.run(
+            ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in out.stdout.splitlines():
+            line = line.strip()
+            if line.startswith('"acct"'):
+                return line.split("=", 1)[1].strip().strip('"')
+    except (subprocess.SubprocessError, OSError):
+        pass
+    return None
+
+
+def _refresh_claude_macos_keychain():
+    """Refresh an expired keychain credential in place. Returns the new access
+    token, or None.
+
+    THE REFRESH TOKEN ROTATES -- measured, not assumed: the response carries a
+    new refresh_token and the old one stops working. That makes the write-back
+    the dangerous half, not the HTTP call: a successful refresh whose write
+    fails has destroyed the only credential on the machine, and the only way
+    back is a human running /login. So the write is checked, retried once, and
+    said out loud when it fails -- never silently.
+
+    The whole blob is rewritten, not just claudeAiOauth: the same entry also
+    holds mcpOAuth, and writing back a partial blob would drop it.
+
+    WHAT THIS DOES NOT TOUCH, and why that made it safe to turn on: the fleet's
+    running agents authenticate from CLAUDE_CODE_OAUTH_TOKEN with their own
+    CLAUDE_CONFIG_DIR (verified by reading their process environments), not
+    from this keychain entry. Rotating this credential does not log them out.
+    If that ever changes, this is the paragraph that stops being true.
+    """
+    if sys.platform != "darwin" or not REFRESH_ENABLED:
+        return None
+    account = _keychain_account()
+    if not account:
+        return None
+    try:
+        raw = subprocess.run(
+            ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if raw.returncode != 0 or not raw.stdout.strip():
+            return None
+        blob = json.loads(raw.stdout.strip())
+        oauth = blob.get("claudeAiOauth") or {}
+        refresh_token = oauth.get("refreshToken")
+        if not refresh_token:
+            return None
+
+        body = json.dumps({
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": OAUTH_CLIENT_ID,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            OAUTH_TOKEN_URL, data=body,
+            headers={"Content-Type": "application/json",
+                     "User-Agent": "marveen-usage-collect/1.0"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (subprocess.SubprocessError, OSError, ValueError,
+            urllib.error.URLError) as e:
+        print("  (keychain refresh failed, credential untouched: %s)" % type(e).__name__)
+        return None
+
+    access = data.get("access_token")
+    if not access:
+        return None
+    oauth["accessToken"] = access
+    if data.get("refresh_token"):
+        oauth["refreshToken"] = data["refresh_token"]
+    if data.get("expires_in"):
+        oauth["expiresAt"] = int((time.time() + int(data["expires_in"])) * 1000)
+    blob["claudeAiOauth"] = oauth
+
+    payload = json.dumps(blob)
+    for attempt in (1, 2):
+        try:
+            w = subprocess.run(
+                ["security", "add-generic-password", "-U",
+                 "-s", KEYCHAIN_SERVICE, "-a", account, "-w", payload],
+                capture_output=True, text=True, timeout=10,
+            )
+            if w.returncode == 0:
+                return access
+        except (subprocess.SubprocessError, OSError):
+            pass
+    # The rotated refresh token exists only in this process and is about to be
+    # lost. Say so at full volume -- the silent version of this leaves a
+    # machine that cannot refresh again and nobody knowing why.
+    print("  ALERT: keychain write-back FAILED after a successful token "
+          "refresh. The previous refresh token has been rotated away and the "
+          "new one could not be stored -- run `/login` in Claude Code to "
+          "restore it.")
+    return access
+
+
+def _read_claude_macos_keychain():
+    """Return the Claude Code session token from the macOS Keychain, or None.
+
+    WHY THIS EXISTS, and why its absence read as "no key on this machine"
+    (measured 2026-08-22): on macOS the Claude Code login credentials are NOT
+    in ~/.claude/.credentials.json -- that file does not exist -- they are in
+    the login Keychain under the service name "Claude Code-credentials", in
+    the SAME {"claudeAiOauth": {...}} shape. A collector that only knows the
+    file reports "no oauth token available", which is indistinguishable from
+    "this machine was never logged in", and sends whoever reads it looking for
+    a key that is already there.
+
+    AND THE SCOPE IS THE POINT. This token carries user:profile and
+    user:sessions:claude_code -- the ones /api/oauth/usage wants. A
+    `claude setup-token` long-lived token carries user:inference ONLY, so it
+    answers 403 on that endpoint: present, valid, and useless here. That is
+    why the keychain is tried BEFORE the .env token rather than after.
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        out = subprocess.run(
+            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode != 0 or not out.stdout.strip():
+            return None
+        data = json.loads(out.stdout.strip())
+        oauth = data.get("claudeAiOauth") or {}
+        token = oauth.get("accessToken")
+        if not token:
+            return None
+        # A 401 from the usage endpoint and an EXPIRED token look identical
+        # from the outside, and the difference is the whole answer: one means
+        # "wrong credential", the other means "right credential, log in
+        # again". expiresAt is right here in the same blob, so say which.
+        exp = oauth.get("expiresAt")
+        expired_for = None
+        if isinstance(exp, (int, float)):
+            delta = time.time() - (exp / 1000.0)
+            if delta > 0:
+                expired_for = int(delta // 3600)
+        return {"token": token, "expired_hours": expired_for}
+    except (subprocess.SubprocessError, OSError, ValueError):
+        # Missing `security` binary, locked keychain, non-JSON blob: these
+        # genuinely mean "no usable keychain credential". A NameError or
+        # TypeError does NOT -- it is a bug in this function, and swallowing
+        # it would report "no keychain entry" for code that never ran.
+        return None
+
+
 def _read_claude_token():
     """Return (token, token_source) or (None, None). Never logs the value."""
     cred_path = os.path.expanduser("~/.claude/.credentials.json")
@@ -318,6 +496,18 @@ def _read_claude_token():
                 return token, "credentials_file"
         except Exception:
             pass
+
+    kc = _read_claude_macos_keychain()
+    if kc:
+        if kc["expired_hours"] is not None:
+            refreshed = _refresh_claude_macos_keychain()
+            if refreshed:
+                return refreshed, "macos_keychain (refreshed)"
+            return kc["token"], (
+                "macos_keychain (EXPIRED %dh ago, refresh unavailable -- "
+                "run /login in Claude Code)" % kc["expired_hours"]
+            )
+        return kc["token"], "macos_keychain"
 
     if os.path.exists(ENV_PATH):
         try:
@@ -354,7 +544,7 @@ def _collect_claude_authoritative():
     """
     token, token_source = _read_claude_token()
     if not token:
-        return None, "no oauth token available (no credentials.json, no .env token)", "no_token"
+        return None, "no oauth token available (no credentials.json, no macOS keychain entry, no .env token)", "no_token"
 
     version = _claude_cli_version()
     req = urllib.request.Request(
@@ -572,6 +762,31 @@ def _format_pace_suffix(pace):
 def render_summary(snapshot):
     lines = []
     lines.append(f"Quota status -- {snapshot['generated_at_local']}")
+    # WHICH COPY OF THIS SCRIPT ACTUALLY RAN, and a fingerprint of it.
+    #
+    # There are two copies: scripts/usage-collect.py (the repo one) and
+    # store/usage-collect.py (a deliberate copy -- the scheduled task runs THAT
+    # one, because the upstream PR is not merged and update.sh needs a clean
+    # tree). Nothing said when they diverged, and on 2026-08-22 they had been
+    # five days apart: the keychain-refresh fix went into the repo copy while
+    # the scheduled task kept running the August 17 one, 148 lines shorter and
+    # with zero refresh logic (didi measured it).
+    #
+    # What made it invisible was the PROOF, not the copy. The "estimate ->
+    # authoritative" evidence came from a MANUAL run -- of the repo copy. A
+    # manual run and the scheduled run are different programs here, and the
+    # output looked identical.
+    #
+    # So the output now names its own file and hashes it. Two copies may still
+    # diverge; they can no longer diverge SILENTLY, and the answer is in the
+    # log the scheduled run writes, not in a hand-run.
+    try:
+        _self = os.path.abspath(__file__)
+        with open(_self, "rb") as _f:
+            _digest = hashlib.sha256(_f.read()).hexdigest()[:12]
+        lines.append(f"  (running {_self} sha256:{_digest})")
+    except OSError:
+        pass
     lines.append("")
 
     codex = snapshot["codex"]

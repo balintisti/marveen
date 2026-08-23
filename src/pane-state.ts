@@ -120,13 +120,35 @@ const BUSY_INDICATORS: RegExp[] = [
   // 2026-06-30). The live spinner/token line renders just above the input
   // box during a real turn, so the bottom-region scope still catches it.
   //
-  // Tokens-down-arrow counter: "(52s · ↓ 2.6k tokens ..."
-  /\(\s*\d+s\s*·\s*↓\s*\d/,
+  // Tokens-down-arrow counter: "(52s · ↓ 2.6k tokens ...", and the minute /
+  // hour forms a long turn actually renders: "(3m 41s · ↓ 6.2k tokens)",
+  // "(1h 2m 5s · ↓ 40.1k tokens)".
+  //
+  // THE MINUTE FORM WAS NOT MATCHED UNTIL 2026-08-22, and this pattern is the
+  // one the comment above calls load-bearing. `\(\s*\d+s` demands digits then
+  // `s` immediately after the paren, so `(3m 41s · ↓` failed at the `m`.
+  // Measured on real fleet panes by jarvis: of 67 token-counter lines, 59 were
+  // minute-form -- 88% of them, and they are exactly the LONG turns, the ones
+  // most worth not interrupting.
+  //
+  // The comment 12 lines up quotes "Accomplishing… (3m 8s · ↓ 9.3k tokens)" as
+  // an example of what this catches. It did not. A comment describing a
+  // capability the regex lacks is worse than no comment: it is the reason
+  // nobody re-measured.
+  //
+  // AND THE TWO SIGNALS ARE NOT INDEPENDENT, which is what makes this more
+  // than a missed case. `esc to interrupt` is documented as the fallback for
+  // this pattern -- but it is footer-scoped, and on a pane with three or more
+  // subagents the footer sits outside its window (see the anchoring note in
+  // detectPaneState). On a long turn under a subagent panel BOTH signals were
+  // gone at once: one because the turn passed a minute, the other because the
+  // panel grew. Same turn, same direction, both silent.
+  /\(\s*(?:\d+h\s*)?(?:\d+m\s*)?\d+s\s*·\s*↓\s*\d/,
   // Known spinner labels paired with the turn-scoped `(Ns · ↓` tail on
   // the same line. The tail requirement kills the "Thinking…" prose
   // false positive. Non-exhaustive by design; the bare tokens pattern
   // above is the authoritative fallback.
-  /\b(?:Combobulating|Beaming|Thinking|Pondering|Reticulating|Configuring|Noodling|Ruminating|Percolating|Cogitating|Deliberating|Contemplating|Musing|Brewing|Synthesizing|Distilling|Refining|Simmering|Crafting|Formulating|Consulting|Unfurling|Unspooling|Unraveling)…\s*\(\s*\d+s\s*·\s*↓/,
+  /\b(?:Combobulating|Beaming|Thinking|Pondering|Reticulating|Configuring|Noodling|Ruminating|Percolating|Cogitating|Deliberating|Contemplating|Musing|Brewing|Synthesizing|Distilling|Refining|Simmering|Crafting|Formulating|Consulting|Unfurling|Unspooling|Unraveling)…\s*\(\s*(?:\d+h\s*)?(?:\d+m\s*)?\d+s\s*·\s*↓/,
 ]
 
 // `esc to interrupt` is a footer-region-only busy signal: Claude Code
@@ -667,10 +689,45 @@ export function detectPaneState(
 
   const paneLines = pane.split('\n')
 
+  // Both live-region windows are anchored to the FOOTER line, not to the end
+  // of the pane.
+  //
+  // WHY (measured 2026-08-22, mandark's pane, 3 running subagents): when an
+  // agent has subagents, Claude Code renders a subagent panel BELOW the
+  // footer, one row per agent, and that panel grows with the number of
+  // agents. Counting back from the end of the pane then slides both windows
+  // off the very signals they exist to see.
+  //
+  // THE STABLE NUMBER IS THE THRESHOLD, NOT THE LINE DISTANCE (jarvis, same
+  // day): swept by subagent count, 0-2 agents read busy on both the old and
+  // new code; from THREE agents up -- 3, 6, 12, 25 -- the old code said `idle`
+  // for a live turn and the new one says `busy`. The line distance varies with
+  // the panel's shape (7 on the captured pane, 5 on the repo fixture), so it
+  // is the wrong thing to write down. Three subagents is the threshold, and
+  // above it the miss is not intermittent but total.
+  //
+  // The other direction was measured too, and is clean: an idle agent with a
+  // subagent panel reads idle at 0/1/2/3/6/12/25 agents, old and new alike.
+  // That mattered -- a false BUSY would be worse than the bug it replaced,
+  // because an agent would sit unwoken for hours instead of being interrupted
+  // once.
+  //
+  // THE ERROR HAS A DIRECTION, and that is what makes it worth fixing rather
+  // than widening: it only ever misreads BUSY as not-busy, and it does so in
+  // proportion to how many subagents are running. The agent doing the most
+  // work is the one most likely to be read as idle -- and then woken with new
+  // work, interrupting the turn we woke it for. Widening the constants only
+  // moves the threshold to a larger fleet of subagents; anchoring removes the
+  // dependency.
+  const footerAnchor = paneLines.findIndex(l => IDLE_FOOTER_RX.test(l))
+  const liveEnd = footerAnchor >= 0 ? footerAnchor + 1 : paneLines.length
+  const liveRegion = (lineCount: number): string =>
+    paneLines.slice(Math.max(0, liveEnd - lineCount), liveEnd).join('\n')
+
   // Spinner / token-counter busy signals, scoped to the live bottom region.
   // Whole-pane scanning let a completed turn's stale token-counter line pin
   // an idle session busy (see BUSY_LIVE_REGION_LINES).
-  const busyRegion = paneLines.slice(-BUSY_LIVE_REGION_LINES).join('\n')
+  const busyRegion = liveRegion(BUSY_LIVE_REGION_LINES)
   for (const rx of BUSY_INDICATORS) {
     if (rx.test(busyRegion)) return 'busy'
   }
@@ -679,7 +736,7 @@ export function detectPaneState(
   // Checking the whole pane would let a scrollback quote of the phrase
   // (e.g. in a watchdog report or a log analysis) permanently classify
   // an idle session as busy.
-  const footerRegion = paneLines.slice(-LIVE_FOOTER_REGION_LINES).join('\n')
+  const footerRegion = liveRegion(LIVE_FOOTER_REGION_LINES)
   if (BUSY_ESC_TO_INTERRUPT_RX.test(footerRegion)) return 'busy'
 
   // Pending-paste placeholder check runs BEFORE the idle-footer gate. The
@@ -751,6 +808,53 @@ export function detectPaneState(
  * definition rather than re-inlining `detectPaneState(...) === 'idle'`
  * (and, worse, the busy regex) in several files.
  */
+/** Which signal made a pane read 'busy' -- and they are NOT equally strong.
+ *
+ *  `esc to interrupt` is written into the footer only DURING a live turn and removed
+ *  when the turn ends, so it is direct evidence of a turn in flight. The spinner /
+ *  token-counter line is not: Claude Code does not always overwrite it on completion
+ *  (the reason BUSY_LIVE_REGION_LINES exists at all), so a finished turn can leave one
+ *  above an otherwise idle prompt.
+ *
+ *  THE SAME DETECTOR SERVES TWO PURPOSES WITH OPPOSITE COST PROFILES, which is why the
+ *  distinction is worth exposing rather than folding into one boolean:
+ *
+ *    "may I inject a message?"  -- a false BUSY costs one wait cycle; a false IDLE
+ *                                  interrupts a live turn. Prefer busy: use paneLooksIdle.
+ *    "is anyone standing idle
+ *     and unnoticed?"           -- a false BUSY costs SILENCE, possibly forever; a false
+ *                                  IDLE costs one unnecessary notice. Prefer idle: treat
+ *                                  counter-only evidence as not-busy.
+ *
+ *  Measured 2026-08-22 by jarvis, end to end: after the busy pattern was widened to
+ *  minute-form counters (dd3fec50), a stale minute-form counter above an idle footer
+ *  silenced the brand-new "idle with nothing assigned" notice (d23e8d8c) -- the exact
+ *  state that notice was built for. Not a new hole: before the widening the same gap
+ *  existed for second-form counters. The widening moved the door, it did not open it.
+ *
+ *  His structural observation is the reason this comment is long: the guard that must
+ *  catch "nobody notices an agent" was built on the detector whose failure mode is
+ *  "reads a quiet agent as working". Guard and danger shared a dependency, so the error
+ *  did not add up -- it hid itself.
+ */
+export type BusyEvidence = 'footer' | 'counter' | null
+
+export function busyEvidence(capture: string): BusyEvidence {
+  if (!capture || !capture.trim()) return null
+  if (detectPaneState(capture) !== 'busy') return null
+  const paneLines = capture.split('\n')
+  const footerAnchor = paneLines.findIndex(l => IDLE_FOOTER_RX.test(l))
+  const liveEnd = footerAnchor >= 0 ? footerAnchor + 1 : paneLines.length
+  const region = (n: number): string =>
+    paneLines.slice(Math.max(0, liveEnd - n), liveEnd).join('\n')
+  if (BUSY_ESC_TO_INTERRUPT_RX.test(region(LIVE_FOOTER_REGION_LINES))) return 'footer'
+  const busyRegion = region(BUSY_LIVE_REGION_LINES)
+  for (const rx of BUSY_INDICATORS) if (rx.test(busyRegion)) return 'counter'
+  // 'busy' from something else (a paste placeholder, a queued-messages hint): treat it
+  // as strong. Those are states where input IS waiting, not leftover render.
+  return 'footer'
+}
+
 export function paneLooksIdle(capture: string): boolean {
   return detectPaneState(capture) === 'idle'
 }
