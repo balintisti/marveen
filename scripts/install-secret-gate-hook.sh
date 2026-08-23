@@ -29,6 +29,24 @@ if ! command -v npx >/dev/null 2>&1; then
   echo "Install Node, or bypass knowingly with SKIP_SECRET_GATE=1 (the CI job will still catch it)." >&2
   exit 1
 fi
+# THE SCRIPT'S ABSENCE IS NOT A SECRET HIT (2026-08-23, measured).
+# `.git/hooks` is SHARED across worktrees, so installing this hook reaches every
+# branch at once -- including branches older than the gate itself. Measured that
+# night: 43 worktrees, 35 without `scripts/secret-gate.ts`. There the hook died
+# with a raw ERR_MODULE_NOT_FOUND stack that never mentioned the gate, and the
+# whole fleet lost `git commit` for 25 minutes.
+#
+# We do NOT block here, and that is not a weakening: on those branches the gate
+# never existed, so blocking is not protection -- it is an outage, and the signal
+# it gives is not even about secrets. This hook is the fast lane by design (see
+# the header); the authoritative check is the CI job. Say it loudly, name the way out.
+if [ ! -f scripts/secret-gate.ts ]; then
+  echo "pre-commit: the secret-gate script is NOT on this branch (scripts/secret-gate.ts)." >&2
+  echo "            THIS IS NOT A SECRET HIT -- the branch predates the gate." >&2
+  echo "            Bring it in:  git merge origin/develop   (or rebase onto it)." >&2
+  echo "            The CI job (secret-gate.yml) still checks on the PR." >&2
+  exit 0
+fi
 npx --no-install tsx scripts/secret-gate.ts --staged
 EOF
 chmod +x "$GUARD"
