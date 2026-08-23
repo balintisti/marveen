@@ -33,7 +33,7 @@ TOKEN_FILE=/Users/isti/marveen/store/.dashboard-token
 [ -r "$TOKEN_FILE" ] || { echo "NEM KULDTEM: nincs token ($TOKEN_FILE)" >&2; exit 1; }
 STAMP="$(date '+%Y-%m-%d %H:%M:%S %Z')"
 python3 - "$AGENT" "$CARD" "$SRC" "$STAMP" "$TOKEN_FILE" <<'PY'
-import sys, json, urllib.request, urllib.error
+import sys, json, re, urllib.request, urllib.error
 agent, card, src, stamp, tokfile = sys.argv[1:6]
 body = sys.stdin.read() if src == '-' else open(src, encoding='utf-8').read()
 body = body.replace('__STAMP__', stamp)
@@ -53,9 +53,20 @@ if r.status != 200:
 chk = urllib.request.Request(base, headers={'Authorization': 'Bearer ' + tok})
 cs = json.load(urllib.request.urlopen(chk))
 last = cs[-1]['content'] if cs else ''
-ok = last[:200] == body[:200]
+# A SZERVER JOGOSAN NORMALIZAL: egy LETEZO kartyara mutato `#<8hex>` hivatkozast atirja a
+# kartya olvashato sorszamara (`#779`). Merve 2026-08-23: 101 -> 96 karakter, `#7d50804c` ->
+# `#779`, mikozben a nem letezo `#deadbeef` valtozatlan maradt.
+# Bajt-osszehasonlitas ezert HAMIS RIASZTAST adott pontosan a HELYES hasznalatra -- es a
+# jelentes-sablonunk EPP ezt irja elo ("Kesz: <mit> (#<kartya>)"). Egy or, ami a helyes
+# hasznalatra riaszt, feleli a sajat bizalmat: a kovetkezo IGAZI elterest is zajnak nezik.
+# (computress talalta, marveen reprodukalta es javitotta.)
+def _canon(t):
+    return re.sub(r'#(?:[0-9a-f]{8}|[0-9]+)\b', '#REF', t)
+ok = _canon(last) == _canon(body)
 print('%s kartya=%s komment=%d stamp=%s' % ('OK' if ok else 'GYANUS', card, len(cs), stamp))
 if not ok:
     print('  a visszaolvasott utolso komment NEM egyezik a kuldottel -- nezd meg kezzel')
+    print('  (a `#<kartya>` -> `#<sorszam>` csere VARHATO, azt nem jelzi; barmi mas elteres valodi)')
+    print('  hossz: kuldott=%d visszaolvasott=%d' % (len(body), len(last)))
     sys.exit(1)
 PY
