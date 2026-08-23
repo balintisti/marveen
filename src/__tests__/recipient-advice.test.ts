@@ -18,7 +18,7 @@
  * nothing about which of the two situations the sender is in.
  */
 import { describe, it, expect } from 'vitest'
-import { adviseSender, QUEUE_ADVICE_THRESHOLD } from '../web/recipient-advice.js'
+import { adviseSender, isPullModelRecipient, QUEUE_ADVICE_THRESHOLD } from '../web/recipient-advice.js'
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -198,8 +198,36 @@ describe('a BEKOTES -- mert a hiba EPP itt ult, nem a fuggvenyben', () => {
   // kimondom, mert ez a hatara.
   const route = readFileSync(join(ROOT, 'src', 'web', 'routes', 'messages.ts'), 'utf-8')
 
-  it('a hivo atadja a pull-modell jelzest a fougynokre', () => {
-    expect(route).toMatch(/adviseSender\([\s\S]{0,400}MAIN_AGENT_ID/)
+  it('a hivo a PREDIKATUMOT hivja, pontosan ebben az argumentum-sorrendben', () => {
+    // A KORABBI ALAK NEM VOLT ELEG, es didi merte meg: az inline
+    // `storedTo === MAIN_AGENT_ID` feltetelt `!==`-re forditva MIND A 18 TESZT
+    // ZOLD MARADT, mert ez a rogzites a MAIN_AGENT_ID TOKEN jelenletet nezte,
+    // nem az osszehasonlitas IRANYAT.
+    // Az IRANYT most a fenti fuggveny-tesztek merik viselkedessel; itt csak az
+    // marad, amit szoveggel kell: hogy a hivo ezt a fuggvenyt hivja, es ebben a
+    // SORRENDBEN -- egy felcserelt argumentum-par ugyanigy nemán fordulna meg.
+    expect(route).toContain('isPullModelRecipient(storedTo, MAIN_AGENT_ID)')
+  })
+})
+
+describe('isPullModelRecipient -- az IRANY viselkedessel merve, nem szoveggel', () => {
+  it('a fougynok PULL-modellu', () => {
+    expect(isPullModelRecipient('marveen', 'marveen')).toBe(true)
+  })
+
+  it('minden MAS cimzett NEM az -- ez az az irany, amit az inverzio elvesztett', () => {
+    // Didi merese szerint a megfordult feltetel elesben azt jelentette volna,
+    // hogy minden SUB-agens elveszti a valodi "nem fut" figyelmeztetest.
+    for (const a of ['didi', 'jarvis', 'dexter', 'friday', '', 'marveen-channels']) {
+      expect(isPullModelRecipient(a, 'marveen'), `nem lehet pull-modellu: ${a}`).toBe(false)
+    }
+  })
+
+  it('a fougynok NEVE parameter, nem bedrotozott szo', () => {
+    // Egy masik telepitesen a fougynok mashogy hivjak; egy bedrotozott 'marveen'
+    // ott mindenkire hamisat adna.
+    expect(isPullModelRecipient('fonok', 'fonok')).toBe(true)
+    expect(isPullModelRecipient('marveen', 'fonok')).toBe(false)
   })
 })
 

@@ -53,6 +53,23 @@ export interface RecipientAdvice {
  *   rather than imported so this stays a pure function of its inputs, and so
  *   the caller cannot quietly disagree with the router about the number.
  */
+/**
+ * PULL-modellel kiszolgalt cimzett-e. Ma egyedul a fougynok ilyen.
+ *
+ * MIERT KULON, EXPORTALT FUGGVENY (didi lelete, 2026-08-23). A feltetel elobb
+ * inline allt a hivoban (`storedTo === MAIN_AGENT_ID`), es a bekotes-tesztje a
+ * MAIN_AGENT_ID TOKEN jelenletet rogzitette -- nem az osszehasonlitas IRANYAT.
+ * Didi megmerte: `===` -> `!==` cserevel MIND A 18 TESZT ZOLD MARADT.
+ * Elesben ez a legrosszabb inverzio: minden SUB-agens elvesziti a valodi
+ * "nem fut" figyelmeztetest, a fougynok pedig visszakapja a hamisat -- vagyis
+ * a javitas pontosan az ellenkezojere fordul, csendben.
+ *
+ * Fuggvenykent az IRANY viselkedessel merheto, nem szoveggel.
+ */
+export function isPullModelRecipient(recipient: string, mainAgentId: string): boolean {
+  return recipient === mainAgentId
+}
+
 export function adviseSender(
   queue: RecipientQueueState,
   presence: AgentRunState,
