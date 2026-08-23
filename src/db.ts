@@ -1800,15 +1800,44 @@ export function createKanbanCard(card: {
   )
 }
 
-export function updateKanbanCard(id: string, fields: Partial<Omit<KanbanCard, 'id' | 'created_at'>>): boolean {
+/** A kartya-frissites HAROM kimenete -- mert a "nem talaltam" es a "nem valtozott" nem ugyanaz. */
+export type KanbanUpdateResult = 'not-found' | 'unchanged' | 'updated'
+
+/** Azok a mezok, amiket egy PUT valoban modosithat. Ismeretlen kulcs nem valtozas. */
+const KANBAN_UPDATABLE = [
+  'title', 'description', 'status', 'assignee', 'priority',
+  'project', 'parent_id', 'due_date', 'sort_order', 'archived_at',
+] as const
+
+/**
+ * NEM EMELJUK AZ `updated_at`-ET, HA SEMMI NEM VALTOZOTT (kartya af9f6cd4).
+ *
+ * A LELET: egy URES torzsu PUT 200-at adott es MEGEMELTE az `updated_at`-et.
+ * A kartya ettol FRISSNEK latszott anelkul, hogy tortent volna vele barmi -- es
+ * ma ket kulonbozo meres epult a tablarol epp erre a mezore.
+ *
+ * A GYAKORIBB UT VISZONT NEM AZ URES TORZS, hanem a frontend: a szerkeszto modal
+ * MINDEN mentesnel a TELJES objektumot kuldi, tehat egy megnyitas-bezaras is
+ * "frissitette" a kartyat. Ezert nem eleg az ures torzset elutasitani -- a
+ * VALTOZATLAN mezokre is hallgatni kell.
+ *
+ * Az osszehasonlitas CSAK a hivo altal kuldott, ismert mezokre nez: egy
+ * ismeretlen kulcs nem valtozas, es nem is irodik ki az UPDATE-ben.
+ */
+export function updateKanbanCard(id: string, fields: Partial<Omit<KanbanCard, 'id' | 'created_at'>>): KanbanUpdateResult {
   const card = getKanbanCard(id)
-  if (!card) return false
+  if (!card) return 'not-found'
+  const kuldott = KANBAN_UPDATABLE.filter((k) => k in fields)
+  const valtozott = kuldott.filter((k) => (fields as Record<string, unknown>)[k] !== (card as unknown as Record<string, unknown>)[k])
+  if (valtozott.length === 0) return 'unchanged'
   const now = Math.floor(Date.now() / 1000)
   const f = { ...card, ...fields, updated_at: now }
   return db.prepare(
     `UPDATE kanban_cards SET title=?, description=?, status=?, assignee=?, priority=?, project=?, parent_id=?, due_date=?, sort_order=?, updated_at=?, archived_at=?
      WHERE id=?`
   ).run(f.title, f.description, f.status, f.assignee, f.priority, f.project, f.parent_id, f.due_date, f.sort_order, f.updated_at, f.archived_at, id).changes > 0
+    ? 'updated'
+    : 'not-found'
 }
 
 export function getChildCards(parentId: string): KanbanCard[] {

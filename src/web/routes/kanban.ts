@@ -363,8 +363,20 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     const id = decodeURIComponent(kanbanCardMatch[1])
     const body = await readBody(req)
     const data = JSON.parse(body.toString())
-    if (updateKanbanCard(id, data)) { json(res, { ok: true }); return true }
-    json(res, { error: 'Kártya nem található' }, 404)
+    // AZ URES TORZS KALLOI HIBA, NEM MUVELET (kartya af9f6cd4). Megmerve: nulla
+    // hivo kuld ilyet -- sem a frontend, sem az agens-lapok --, tehat a 400 nem
+    // tor el semmit, viszont megnevezi, mi hianyzik.
+    if (!data || typeof data !== 'object' || Object.keys(data).length === 0) {
+      json(res, { error: 'Ures torzsu PUT: nincs mit modositani. Add meg a valtoztatando mezot, pl. {"assignee":"..."}.' }, 400)
+      return true
+    }
+    const eredmeny = updateKanbanCard(id, data)
+    if (eredmeny === 'not-found') { json(res, { error: 'Kártya nem található' }, 404); return true }
+    // A `unchanged` NEM hiba: egy hivo joggal kuldheti ujra ugyanazt (a
+    // szerkeszto modal minden mentesnel a TELJES objektumot kuldi). De az
+    // `updated_at` NEM emelkedik, es a valasz KIMONDJA, hogy nem tortent semmi --
+    // kulonben a kartya frissnek latszana anelkul, hogy barmi valtozott volna.
+    json(res, eredmeny === 'unchanged' ? { ok: true, changed: false } : { ok: true, changed: true })
     return true
   }
 
