@@ -10,12 +10,29 @@
 #
 # Egy letezes-ellenorzes, ami nem tud nemet mondani.
 #
-# ES A CSAPDA A PATH ELSO BETUJEN MULIK, ezert kivulrol kiszamithatatlan:
-#     "$b:scripts/..."     -> `s` modosito  -> NEMAN nyel
-#     "$b:shared/..."      -> `s` modosito  -> hangosan bukik
-#     "$b:.gitignore"      -> `.` nem az    -> veletlenul HELYES
-#     "$b:docs/..."        -> `d` nem az    -> veletlenul HELYES
-# Vagyis ugyanaz a leirt alak hol mukodik, hol nem, es a kulonbseg egy betu.
+# ES A CSAPDA A KETTOSPONT UTANI ELSO **LITERAL** BETUN MULIK, ezert kivulrol
+# kiszamithatatlan (didi merte ujra 2026-08-23, zsh 5.9; sajat merssel megerositve,
+# b=myref):
+#     "$b:sajat-crm/x.ts"    -> myref                <- az EGESZ ut ELTUNT   (s)
+#     "$b:frontend/x.ts"     -> myrefontend/x.ts     <- csonkolt             (f)
+#     "$b:head/x.ts"         -> .ead/x.ts            <- a VALTOZO ERTEKE IS  (h)
+#     "$b:backend/x.ts"      -> myref:backend/x.ts   <- HELYES (b nem modosito)
+#     "$b:$P"                -> helyes  <- az UT VALTOZOBAN van, nincs csapda
+#     "${b}:sajat-crm/x.ts"  -> helyes
+#
+# HAROM DOLOG KOVETKEZIK EBBOL, ES MINDHAROM SZAMIT:
+#  1. NEM MINDEN `$var:` VESZELYES. Aki `backend/`-del probalja ki, azt latja, hogy
+#     mukodik -- es az EGESZ szabalyt zajnak konyveli el. Ez a szabaly legnagyobb
+#     ellensege, nem a csapda maga.
+#  2. HA AZ UT VALTOZOBAN VAN (`"$b:$P"`), NINCS CSAPDA. A hej csak LITERAL
+#     szoveget olvas modositokent.
+#  3. A `:h` ESET A LEGROSSZABB: az eredmeny tovabbra is UTVONALNAK NEZ KI, csak
+#     MASIK fajlra mutat. A tobbi alak legalabb feltunoen csonka.
+#
+# ES EZ A REPO KULONOSEN KITETT: a ket leggyakoribb utvonal-kezdet itt a
+# `sajat-crm/` es a `frontend/` -- MINDKETTO modosito-betuvel kezdodik. Nem
+# balszerencse, hogy harom agenst megfogott egy nap alatt.
+#
 # Ezt nem lehet fegyelemmel kezelni -- ezert nem szabaly lett, hanem parancs.
 #
 # HAROM AGENS FUTOTT BELE EGY NAP ALATT (2026-08-23), MINDHARMAN A SZABALY
