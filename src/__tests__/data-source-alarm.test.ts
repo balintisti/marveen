@@ -196,10 +196,24 @@ describe('the heartbeat wiring', () => {
   // of 17, the ordering assertion among them. So this is not a hole being
   // closed; it is a LATENT trap being removed before a future comment walks
   // into it. The concern was right even though the measurement did not hold.
+  //
+  // AND THE NAMES NOW SAY `SOURCE SHAPE`, WHICH IS DIDI'S OTHER FINDING.
+  // One of these used to be called `never lets an alarm failure stop the
+  // heartbeat` while asserting only that the text `catch (err)` was present.
+  // Didi measured the gap: with `throw err` inside that catch, every test
+  // stayed green and the heartbeat would die exactly as the name denied. Even
+  // comment-stripped, these three measure where text SITS, never what runs --
+  // so they are named for what they do.
+  //
+  // The behaviour itself is measured in `heartbeat-alarm-runs-before-gate.test.ts`,
+  // which calls executeHeartbeat with the gate closed and watches the alarm
+  // fire, throw, and be survived. These stay as a cheap second look at the
+  // source: mocked behaviour can drift from the real module graph, and this
+  // catches a stray second call site that mocks would never see.
   const src = stripComments(readFileSync(join(__dirname, '..', 'heartbeat.ts'), 'utf-8'))
   const GATE = 'if (!shouldNotify(data))'
 
-  it('runs the alarm BEFORE the shouldNotify gate', () => {
+  it('SOURCE SHAPE: the alarm call sits above the gate in the file', () => {
     // If it ran after, the alarm would go quiet exactly when the broken source
     // is the reason there is nothing else to report -- a failed calendar makes
     // `calendar.length === 0`, which is itself one of the gate's conditions.
@@ -210,14 +224,14 @@ describe('the heartbeat wiring', () => {
     expect(alarmAt).toBeLessThan(gateAt)
   })
 
-  it('sends to the COORDINATOR, not to the owner channel', () => {
+  it('SOURCE SHAPE: the owner channel is not used inside the alarm block', () => {
     expect(src).toMatch(/createAgentMessage\('system', MAIN_AGENT_ID/)
     // notifyTelegram is the owner path; the alarm must not use it.
     const block = src.slice(src.indexOf('detectTransitions('), src.indexOf(GATE))
     expect(block).not.toMatch(/notifyTelegram/)
   })
 
-  it('never lets an alarm failure stop the heartbeat', () => {
+  it('SOURCE SHAPE: the alarm call is wrapped in a catch', () => {
     // Anchored on the first line of the alarm block ITSELF, not on the comment
     // above it: a comment anchor cannot survive comment stripping, and an
     // anchor that vanishes turns this into a slice of the wrong region.
