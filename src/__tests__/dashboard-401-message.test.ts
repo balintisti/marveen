@@ -139,11 +139,30 @@ describe('MINDEN hiba-megjelenites a fogalmazon at megy (szarmaztatott populacio
    * az `it.each` nulla esetet futtatva ZOLD maradt volna. Egy or, ami nulla
    * elemet ellenoriz, pontosan ugy nez ki, mint egy or, ami mindent rendben
    * talal. A sajat pozitiv kontrollja fogta meg (`a populacio NEM URES`).
+   *
+   * ES A SZURES BARMI `.message`-re megy, NEM `(err|e).message`-re (didi
+   * eszrevetele nyoman, 2026-08-23 13:1x CEST -- de a lyuk mashol volt, mint
+   * ahova o mutatott). Didi azt irta, hogy a ket allitas EGYUTT teljes: a
+   * meret-korlat a csokkenest fogja, a "0 fedetlen" a novekedest. Ez csak a
+   * POPULACION BELUL igaz. Egy uj doboz, ami `catch (error)`-t ir, a szures
+   * MIATT be sem kerul -- tehat egyik allitas sem lat ra, es MINDKETTO zold
+   * marad. A hianyzo elem nem fedetlen: LATHATATLAN.
+   *
+   * Merve ugyanezen a fan: a tagabb minta MA IS PONTOSAN 15 sort ad (nulla
+   * kulonbseg, tehat az alapvonal valtozatlanul ervenyes), egy jovobeli
+   *   `box.textContent = 'Hiba: ' + error.message`
+   * sorra viszont a regi minta NEM tuzel, a tagabb IGEN.
+   * A catch-valtozok mai nevei ebben a fajlban: `err` (69), `e` (22) -- vagyis
+   * a regi minta ma veletlenul teljes volt, es epp ez a fajta teljesseg az,
+   * ami az elso `catch (error)`-nal nemán elromlik.
    */
+  /** Egy sor akkor HIBA-MEGJELENITES, ha DOM-ba ir ES hibaszoveget ad at. */
+  const hibaMegjelenites = (line: string) =>
+    /(innerHTML|textContent)[^=]*=/.test(line) && (/\.message\b/.test(line) || /mvErrText\(/.test(line))
+
   const domWrites = APP.split('\n')
     .map((line, i) => ({ line, no: i + 1 }))
-    .filter(({ line }) => /(innerHTML|textContent)[^=]*=/.test(line))
-    .filter(({ line }) => /\b(err|e)\.message\b/.test(line) || /mvErrText\(/.test(line))
+    .filter(({ line }) => hibaMegjelenites(line))
 
   // A POPULACIO MERETE A JAVITAS ELOTT ES UTAN UGYANAZ: 15 sor. Elotte mind a
   // 15 FEDETLEN volt, utana mind a 15 FEDETT -- nem 15 -> 0.
@@ -163,6 +182,20 @@ describe('MINDEN hiba-megjelenites a fogalmazon at megy (szarmaztatott populacio
     // szabad, ha valaki tenylegesen TOROL egy dobozt -- es akkor ezt a szamot
     // ugyanabban a commitban kell frissiteni, latható modon.
     expect(domWrites.length).toBeGreaterThanOrEqual(POPULACIO_ALAPVONAL)
+  })
+
+  it('a szures a HIBA-VALTOZO NEVETOL fuggetlen -- kulonben a lyuk lathatatlan', () => {
+    // EZ A TESZT A SZUREST MERI, NEM AZ APP.JS-T. Az elozo alak `(err|e).message`
+    // volt, es ma veletlenul teljes volt (a fajlban csak `err` es `e` szerepel
+    // catch-valtozokent). Egy uj doboz `catch (error)`-ral se a meret-korlatba,
+    // se a "0 fedetlen" allitasba nem kerulne bele -- MINDKETTO zold maradna.
+    expect(hibaMegjelenites("box.textContent = 'Hiba: ' + error.message")).toBe(true)
+    expect(hibaMegjelenites("box.textContent = 'Hiba: ' + ex.message")).toBe(true)
+    expect(hibaMegjelenites("box.textContent = 'Hiba: ' + err.message")).toBe(true)
+    // ES A HATARA: forditott ALLANDO nem hiba-megjelenites -- ha az is bekerulne,
+    // 51 tovabbi sort kovetelnenk a fogalmazon at, feleslegesen.
+    expect(hibaMegjelenites("errEl.textContent = t('agents.model.error')")).toBe(false)
+    expect(hibaMegjelenites("const msg = err.message")).toBe(false)
   })
 
   it('EGYETLEN DOM-iras sem hasznal NYERS err.message-t', () => {
