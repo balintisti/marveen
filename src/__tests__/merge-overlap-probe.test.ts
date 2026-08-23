@@ -85,6 +85,34 @@ describe('merge-overlap.py -- which shared files need a behaviour measurement', 
     expect(r.status).toBe(1)
   })
 
+  it('names the diff.context it used, and the band that follows from it', () => {
+    // The verdict carries its own validity condition. Without this a reader
+    // cannot tell WHICH band produced the answer, and a measurer of silent
+    // failures must not itself be quietly answering a different question.
+    const out = probe(repoWith([10], [14])).out
+    expect(out).toMatch(/diff\.context: 3 \(alapertelmezes\)/)
+    expect(out).toMatch(/csendes sav: 2\.\.6 sor/)
+  })
+
+  it('TRACKS diff.context -- the same gap flips class when the setting changes', () => {
+    // jarvis derived the rule and predicted it: band = 2 .. (2 x context),
+    // because a hunk is the change plus context on BOTH sides. A 7-line gap is
+    // disjoint at context=3 and overlapping at context=5.
+    //
+    // This is the test that matters: printing the number proves nothing on its
+    // own, and a tool that PRINTS 5 while still classifying by 3 would look
+    // right in every report it ever produced.
+    const wide = repoWith([10], [17])
+    expect(probe(wide).out).toMatch(/diszjunkt/)
+
+    const wide5 = repoWith([10], [17])
+    execFileSync('git', ['config', 'diff.context', '5'], { cwd: wide5 })
+    const out5 = probe(wide5).out
+    expect(out5).toMatch(/diff\.context: 5/)
+    expect(out5).toMatch(/csendes sav: 2\.\.10 sor/)
+    expect(out5).toMatch(/ATFEDO/)
+  })
+
   it('puts the boundary where git actually puts it: 1 conflicts, 4 overlaps, 10 is disjoint', () => {
     // Three points, because a single one cannot show that the tool tracks the
     // real boundary rather than some threshold of its own. Measured with the

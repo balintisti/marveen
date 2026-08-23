@@ -98,8 +98,28 @@ def main():
     conf = conflicting(ref_a, ref_b)
     risky = []
 
+    # SAY WHICH CONTEXT PRODUCED THIS VERDICT (jarvis derived the rule,
+    # 2026-08-23). The overlap boundary is not a constant in this file -- it
+    # comes out of `git diff`, which honours the repo's diff.context. Measured:
+    # at context=3 a 7-line gap reads disjoint, at context=5 the same gap reads
+    # overlapping. So the silent band is 2 .. (2 x context): a hunk is the
+    # change plus context on BOTH sides, and two such spans touch while their
+    # distance is under that width.
+    #
+    # The tool therefore never needed a threshold -- but a reader cannot tell
+    # WHICH band a verdict came from, and a measurer of silent failures must
+    # not itself be quietly answering a different question than the one asked.
+    # Printing it turns a stated limitation into a stated parameter.
+    #
+    # Note the direction of the error: a LARGER context widens the band, so the
+    # tool only ever becomes more cautious. It cannot go quiet on a real
+    # overlap by being misconfigured.
+    ctx_raw = git('config', 'diff.context').strip()
+    ctx = int(ctx_raw) if ctx_raw.isdigit() else 3
     if not quiet:
-        print(f'bazis: {base[:12]}   kozos fajl: {len(shared)}')
+        print(f'bazis: {base[:12]}   kozos fajl: {len(shared)}   '
+              f'diff.context: {ctx}{"" if ctx_raw else " (alapertelmezes)"}   '
+              f'csendes sav: 2..{2 * ctx} sor')
     for path in shared:
         ha, hb = hunks(base, ref_a, path), hunks(base, ref_b, path)
         ov = overlaps(ha, hb)
