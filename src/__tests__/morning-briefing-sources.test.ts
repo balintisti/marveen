@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { spawnSync } from 'node:child_process'
 
 // scripts/morning-briefing.sh is NOT dead code, and that is the point of this
 // file. On this macOS box nothing runs it -- there is no LaunchAgent and
@@ -56,11 +58,14 @@ describe('morning-briefing.sh -- the sources it tells the agent to use', () => {
     expect(SRC).toMatch(/ok:false,\s*\n?\s*#?\s*IRD KI/)
   })
 
-  it('refuses to run with no chat id instead of composing a briefing for chat 0', () => {
-    // The channel is allowlisted: a send to chat 0 fails with
-    // "chat 0 is not allowlisted", AFTER the whole briefing has been built.
+  it('SOURCE SHAPE: does not re-introduce the `:-0` fallback', () => {
+    // A szoveg-rogzites ITT helyes: azt orzi, hogy a szkript ne TALALJON KI egy
+    // nullat. Amit viszont NEM allit -- es a regi neve ("refuses to run ...")
+    // azt igerte --, az a "0" ERTEK elutasitasa. Didi megmerte: az
+    // `if [ -z "$CHAT_ID" ]` sort `if false`-ra cserelve, a ket szoveg-horgonyt
+    // erintetlenul hagyva, mind a hat allitas ZOLD maradt.
+    // A viselkedes-allitas most kulon all, lentebb.
     expect(SRC).not.toMatch(/ALLOWED_CHAT_ID:-0/)
-    expect(SRC).toMatch(/ALLOWED_CHAT_ID nincs beallitva/)
   })
 
   it('does not default the calendar to `primary`', () => {
@@ -68,5 +73,76 @@ describe('morning-briefing.sh -- the sources it tells the agent to use', () => {
     // calendar: 200, zero events, forever. A default that always answers
     // "free day" is worse than no default.
     expect(SRC).not.toMatch(/HEARTBEAT_CALENDAR_ID:-primary/)
+  })
+})
+
+// A KAPU VISELKEDESE -- ES MIERT EZ AZ EGY LEP KI A SZOVEG-ROGZITESBOL.
+//
+// A fajl fejlece kimondja, miert szoveg-rogzitett: a szkript egyetlen
+// viselkedese az, hogy atad egy promptot a `claude`-nak, es ami igaznak kell
+// maradnia, az a prompt TARTALMA. Az ot masik allitasnal ez HELYES.
+//
+// EZ AZ EGY KIVETEL, mert itt nem prompt-tartalom a kerdes, hanem hogy a
+// szkript MEGALL-E. Didi lelete: a teszt NEVE azt igerte, hogy a "0" ERTEKET
+// elutasitja, az allitasai viszont csak szoveg-horgonyok voltak. Mutacio:
+// `if [ -z "$CHAT_ID" ]` -> `if false`, a horgonyok erintetlenul -> 6/6 ZOLD.
+//
+// A `0` NEM elmeleti: ezen a telepitesen az `.env` tenylegesen `ALLOWED_CHAT_ID=0`-t
+// tartalmaz, es a repo sajat `owner-chat-fresh-install.test.ts`-e ezt nevezi meg
+// "no usable ALLOWED_CHAT_ID"-kent -- ez a FRISS TELEPITES alakja.
+describe('morning-briefing.sh -- a chat-id kapu VISELKEDESE', () => {
+  /**
+   * A szkriptet egy eldobhato telepitesben futtatja, hamis `claude`-dal.
+   * A `claude` stub egy fajlt ir, ha meghivjak -- igy megkerdezheto, hogy a
+   * briefing OSSZEALLT-E. Halozat nincs, valodi `claude` nincs.
+   */
+  function run(chatId: string | null) {
+    const home = mkdtempSync(join(tmpdir(), 'briefing-'))
+    mkdirSync(join(home, 'scripts'), { recursive: true })
+    mkdirSync(join(home, 'store'), { recursive: true })
+    // A STUB A `$HOME/.local/bin`-BE MEGY, ES EZ NEM STILUS-KERDES.
+    // A szkript 6. sora KIKENYSZERITI a sajat PATH-jat:
+    //     export PATH="$HOME/.local/bin:...:/opt/homebrew/bin:/usr/bin:/bin"
+    // vagyis egy hivo-oldali PATH-prefixet ELDOB. Az elso valtozatom igy a
+    // VALODI `claude`-ot inditotta el (a naplo "Not logged in"-t irt) -- egy
+    // teszt, ami eles binarist hiv. A `HOME` felulirasaval a szkript sajat
+    // elso PATH-eleme mutat a temp konyvtarba, tehat a stub nyer.
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true })
+    copyFileSync(join(__dirname, '..', '..', 'scripts', 'morning-briefing.sh'),
+                 join(home, 'scripts', 'morning-briefing.sh'))
+    writeFileSync(join(home, '.env'), chatId === null ? '' : `ALLOWED_CHAT_ID=${chatId}\n`)
+    // A stub NEM hiv semmit -- csak nyomot hagy, hogy eljutottunk-e idaig.
+    writeFileSync(join(home, '.local', 'bin', 'claude'), `#!/bin/bash\ntouch "${home}/store/.claude-hivva"\n`)
+    chmodSync(join(home, '.local', 'bin', 'claude'), 0o755)
+    const r = spawnSync('bash', [join(home, 'scripts', 'morning-briefing.sh')], {
+      encoding: 'utf-8',
+      env: { ...process.env, HOME: home, MORNING_FORCE: '1' },
+    })
+    const log = existsSync(join(home, 'store', 'morning.log'))
+      ? readFileSync(join(home, 'store', 'morning.log'), 'utf-8') : ''
+    const composed = existsSync(join(home, 'store', '.claude-hivva'))
+    rmSync(home, { recursive: true, force: true })
+    return { status: r.status, log, composed }
+  }
+
+  it('a "0" ERTEKRE megall, es NEM allit ossze briefinget', () => {
+    // Ez az allitas, amit a regi NEV igert, es amit egyetlen sor sem allitott.
+    const r = run('0')
+    expect(r.status).toBe(1)
+    expect(r.composed, 'a briefing OSSZEALLT chat 0-ra').toBe(false)
+    expect(r.log).toMatch(/nem hasznalhato/)
+  })
+
+  it('URES ertekre is megall (a korabbi eset, valtozatlanul)', () => {
+    const r = run(null)
+    expect(r.status).toBe(1)
+    expect(r.composed).toBe(false)
+  })
+
+  it('POZITIV KONTROLL: valodi chat-id mellett ATMEGY a kapun', () => {
+    // Enelkul a ket fenti attol is zold lenne, hogy a szkript MINDIG megall --
+    // es akkor a kapu nem mer semmit, csak mindent elutasit.
+    const r = run('8362010684')
+    expect(r.composed, 'valodi chat-id mellett sem jutott el a briefingig').toBe(true)
   })
 })
