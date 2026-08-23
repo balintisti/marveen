@@ -63,8 +63,24 @@ describe('doctor.sh -- a jogosultsagi or BE VAN KOTVE', () => {
     expect(sec()).not.toMatch(/permission-guard-check\.sh[^\n]*\|\|/)
   })
 
-  it('a hianyzo szkript sem nema: van kulon aga', () => {
-    expect(sec()).toMatch(/missing or not executable/)
-    expect(sec()).toMatch(/no output/)
+  it('a HAROM "nem tudom" ag MIND rogzitve van, es a sulyuk KULONBOZO', () => {
+    // didi mutalta (MD2, 2026-08-24): az URES KIMENET agat `fail`-rol `ok`-ra irva a
+    // keszlet ZOLD MARADT -- vagyis a legfontosabb megkulonboztetes nem volt rogzitve.
+    // Egy "legyen kevesbe zajos" atiras eleg lett volna hozza.
+    //
+    // A szekcio HAROM uton kerulhet "nem tudom" allapotba, es SZANDEKOSAN nem egyforma
+    // a suly:
+    //   (a) HIANYZIK a szkript  -> `warn`. Egy friss telepitesen ez VARHATO allapot;
+    //       nem mukodesi hiba, hanem hianyzo komponens.
+    //   (b) URES a kimenet      -> `fail`. Az or ELINDULT es NEM MONDOTT SEMMIT --
+    //       ez mukodesi hiba, es a legrosszabb fajta: a szekcio ugy nez ki, mintha
+    //       lefutott volna.
+    //   (c) ISMERETLEN statusz  -> `echo` (a `*)` ag). Ez NEM hiba: az `INFO` es az
+    //       `OSSZEGZES` sorok ide esnek, es azoknak nincs verdiktjuk.
+    // A kulonbseg eddig sehol nem volt kimondva -- didi kerdezte meg, es igaza volt,
+    // hogy egy sor komment eldonti.
+    expect(sec()).toMatch(/warn "scripts\/permission-guard-check\.sh missing or not executable"/)
+    expect(sec()).toMatch(/fail "permission-guard-check\.sh: no output"/)
+    expect(sec()).toMatch(/\*\)\s*echo/)
   })
 })
