@@ -181,24 +181,68 @@ describe('backfillEmbeddings -- "nothing to do" and "nothing worked" are differe
     expect(r.aborted).toBe(false)
   })
 
-  it('a PARTIAL run is not ok, and keeps the first reason', async () => {
+  it('a PARTIAL run is not ok, and keeps the FIRST reason -- not the last', async () => {
     // The nastiest shape: some rows got vectors, so `embedded > 0` looks like
     // success, while others silently did not.
+    //
+    // KET KULONBOZO HIBA KELL, ES EZ DIDI LELETE (2026-08-23). Korabban a
+    // fixture EGYETLEN hibat gyartott, tehat az ELSO es az UTOLSO ok UGYANAZ a
+    // string volt -- a `keeps the first reason` allitas a teszt NEVEBEN allt, es
+    // sehol az allitasokban. Didi megmerte: az `if (error === null)` sort
+    // last-wins-re forditva mind a 17 teszt ZOLD maradt.
+    //
+    // MIERT SZAMIT EPP ITT: a db.ts kommentje kimondja, miert az elso ok kell --
+    // a kesobbiek rendszerint ugyanannak a timeoutnak az ismetlesei, az elso van
+    // legkozelebb az okhoz. A kartya sajat forgatokonyveben ez a kulonbseg:
+    // ha az Ollama FUTAS KOZBEN all le, az elso hiba a valodi ok (connection
+    // refused), a tobbi mar a kovetkezmenye.
     clearAll()
-    insertUnvectorized(4)
+    insertUnvectorized(5)
     let call = 0
     const url = await fakeOllama(() => {
       call++
-      return call === 2
-        ? { status: 500, body: '{"error":"overloaded"}' }
-        : { status: 200, body: '{"embedding":[0.5,0.5]}' }
+      if (call === 2) return { status: 500, body: '{"error":"overloaded"}' }
+      if (call === 4) return { status: 404, body: '{"error":"model not found"}' }
+      return { status: 200, body: '{"embedding":[0.5,0.5]}' }
     })
     const r = await backfillEmbeddings(url)
     expect(r.ok).toBe(false)
     expect(r.embedded).toBe(3)
-    expect(r.failed).toBe(1)
-    expect(r.remaining).toBe(1)
+    expect(r.failed).toBe(2)
+    expect(r.remaining).toBe(2)
+    // A ket hiba NEM egymast koveti (2. es 4.), tehat a 3-as megszakitas nem
+    // lep be -- ezert all az `aborted: false`.
     expect(r.aborted).toBe(false)
+    // MINDKET IRANY, kulonben a fixture megint nem tud merni:
     expect(r.error).toContain('500')
+    expect(r.error).not.toContain('404')
+  })
+
+  it('a SIKERES sor nullazza a hibaszamlalot -- "harom EGYMAST KOVETO", nem "harom osszesen"', async () => {
+    // DIDI LELETE 2 (2026-08-23): a `consecutiveFailures = 0` visszaallitas
+    // fedetlen volt. Kivéve a sort, mind a 17 teszt zold maradt -- pedig ez az
+    // EGYETLEN sor, ami a "harom egymast koveto"-t megkulonbozteti a "harom
+    // osszesen"-tol.
+    //
+    // MIKOR OKOZ KART: szorvanyos hibaknal (egy tul hosszu tartalom, egy
+    // idozites) a backfill a 3. OSSZESITETT hiba utan feladna, mikozben a
+    // backend el. A valasz ilyenkor `ok:false`, tehat nem nema -- de a
+    // `remaining` indokolatlanul magas marad, es a kovetkezo hivas ugyanott
+    // all meg. Csendes helyben jaras.
+    clearAll()
+    insertUnvectorized(6)
+    let call = 0
+    const url = await fakeOllama(() => {
+      call++
+      // Minden MASODIK hivas bukik: harom hiba OSSZESEN, de sosem harom egymas
+      // utan -- a koztuk levo siker mindig nullaz.
+      return call % 2 === 0
+        ? { status: 500, body: '{"error":"overloaded"}' }
+        : { status: 200, body: '{"embedding":[0.5,0.5]}' }
+    })
+    const r = await backfillEmbeddings(url)
+    expect(r.aborted).toBe(false)
+    expect(r.embedded).toBe(3)
+    expect(r.failed).toBe(3)
   })
 })
