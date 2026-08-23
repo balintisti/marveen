@@ -18,7 +18,12 @@
  * nothing about which of the two situations the sender is in.
  */
 import { describe, it, expect } from 'vitest'
-import { adviseSender, QUEUE_ADVICE_THRESHOLD } from '../web/recipient-advice.js'
+import { adviseSender, isPullModelRecipient, QUEUE_ADVICE_THRESHOLD } from '../web/recipient-advice.js'
+import { readFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 import type { RecipientQueueState } from '../db.js'
 
 // A HELPER TELJES, ES EZ NEM FORMASAG (friday, a koteg-feloldasnal 2026-08-23).
@@ -143,3 +148,86 @@ describe('adviseSender', () => {
     expect(adviseSender(queue(), 'unreachable', ABANDON_MIN).presence).toBe('unreachable')
   })
 })
+
+describe('adviseSender -- a PULL-modellu cimzett (a fougynok)', () => {
+  // MERT DEFEKTUS, 2026-08-23. A jelenlet-ellenorzes az `agent-<nev>` sessiont
+  // keresi; a fougynok `<nev>-channels`-ben fut (a message-router.ts:515 sajat
+  // kommentje mondja ki). Megmerve: `agent-marveen` NINCS, `marveen-channels`
+  // LETEZIK -- es a tanacs kozben azt allitotta, hogy az uzenet NEM lesz
+  // kezbesitve. A hiba iranya a lehető legrosszabb: eppen a KOORDINATORNAK
+  // szolo jelentesrol beszeli le a kuldot.
+  //
+  // ES EGY MASODIK OK, ami akkor is allna, ha a nevfeloldas jo lenne: a fougynok
+  // fele a `pending` nem torlodas -- o maga veszi at a kovetkezo fordulojaban.
+  // A "60 perc utan lezarjak" mondat ott szerkezetileg hamis.
+  //
+  // A javitas alakja NEM uj otlet: a model-fallback-runner:100 es az
+  // auto-restart-runner:120 UGYANEZT a kivetelt kezeli (`name !== MAIN_AGENT_ID`).
+  // Ez volt a HARMADIK hivo, ami kimaradt belole.
+  it('NEM allitja, hogy nem lesz kezbesitve, ha a cimzettet pull-modell szolgalja', () => {
+    const a = adviseSender(queue({ queueDepth: 2 }), 'stopped', 60, true)
+    expect(a.advice ?? '').not.toMatch(/nem fut/)
+    expect(a.advice ?? '').not.toMatch(/NEM lesz kézbesítve/)
+  })
+
+  it('POZITIV KONTROLL: UGYANEZ az allapot egy sub-agensnel TOVABBRA IS figyelmeztet', () => {
+    // Enelkul a fenti teszt attol is zold lenne, hogy a figyelmeztetes teljesen
+    // eltunt -- ami mas hiba, csak eppen ugyanugy nez ki.
+    const a = adviseSender(queue({ queueDepth: 2 }), 'stopped', 60, false)
+    expect(a.advice ?? '').toMatch(/nem fut/)
+  })
+
+  it('az `unreachable` sem szol a pull-modellu cimzettre', () => {
+    expect(adviseSender(queue(), 'unreachable', 60, true).advice ?? '').not.toMatch(/FIGYELEM/)
+    expect(adviseSender(queue(), 'unreachable', 60, false).advice ?? '').toMatch(/FIGYELEM/)
+  })
+
+  it('a SOR-melysegre vonatkozo tanacs a pull-modellnel is megmarad', () => {
+    // A jelenlet-figyelmeztetes hamis volt rá; a torlodas-tanacs nem az.
+    // Egy javitas, ami az egesz tanacsot elnemitja, tobbet venne el, mint kell.
+    const a = adviseSender(queue({ queueDepth: 5 }), 'running', 60, true)
+    expect(a.advice ?? '').toBeTruthy()
+  })
+})
+
+describe('a BEKOTES -- mert a hiba EPP itt ult, nem a fuggvenyben', () => {
+  // A fenti fuggveny-tesztek MIND ZOLDEK LETTEK VOLNA az eredeti hiban is: az
+  // `adviseSender` helyesen mukodott, csak a hivo nem mondta meg neki, hogy a
+  // cimzettet pull-modell szolgalja ki. Egy tiszta-fuggveny teszt itt nem
+  // bizonyitek -- ezert all itt a hivo-oldal is, szoveg-rogzitesként, es ezt
+  // kimondom, mert ez a hatara.
+  const route = readFileSync(join(ROOT, 'src', 'web', 'routes', 'messages.ts'), 'utf-8')
+
+  it('a hivo a PREDIKATUMOT hivja, pontosan ebben az argumentum-sorrendben', () => {
+    // A KORABBI ALAK NEM VOLT ELEG, es didi merte meg: az inline
+    // `storedTo === MAIN_AGENT_ID` feltetelt `!==`-re forditva MIND A 18 TESZT
+    // ZOLD MARADT, mert ez a rogzites a MAIN_AGENT_ID TOKEN jelenletet nezte,
+    // nem az osszehasonlitas IRANYAT.
+    // Az IRANYT most a fenti fuggveny-tesztek merik viselkedessel; itt csak az
+    // marad, amit szoveggel kell: hogy a hivo ezt a fuggvenyt hivja, es ebben a
+    // SORRENDBEN -- egy felcserelt argumentum-par ugyanigy nemán fordulna meg.
+    expect(route).toContain('isPullModelRecipient(storedTo, MAIN_AGENT_ID)')
+  })
+})
+
+describe('isPullModelRecipient -- az IRANY viselkedessel merve, nem szoveggel', () => {
+  it('a fougynok PULL-modellu', () => {
+    expect(isPullModelRecipient('marveen', 'marveen')).toBe(true)
+  })
+
+  it('minden MAS cimzett NEM az -- ez az az irany, amit az inverzio elvesztett', () => {
+    // Didi merese szerint a megfordult feltetel elesben azt jelentette volna,
+    // hogy minden SUB-agens elveszti a valodi "nem fut" figyelmeztetest.
+    for (const a of ['didi', 'jarvis', 'dexter', 'friday', '', 'marveen-channels']) {
+      expect(isPullModelRecipient(a, 'marveen'), `nem lehet pull-modellu: ${a}`).toBe(false)
+    }
+  })
+
+  it('a fougynok NEVE parameter, nem bedrotozott szo', () => {
+    // Egy masik telepitesen a fougynok mashogy hivjak; egy bedrotozott 'marveen'
+    // ott mindenkire hamisat adna.
+    expect(isPullModelRecipient('fonok', 'fonok')).toBe(true)
+    expect(isPullModelRecipient('marveen', 'fonok')).toBe(false)
+  })
+})
+
