@@ -24,6 +24,27 @@ EXIT STATUS IS THE POINT: 1 when at least one file merges CLEANLY but has
 overlapping hunks -- the silent class. A conflict is loud and needs no help
 from this tool; the quiet case is what it exists to surface.
 
+KET HASZNALATI SZABALY, MINDKETTO MERT ESETBOL (2026-08-23):
+
+1. A HELYES PAROSITAS **BAZIS x AG**, A VALODI merge-base-SZEL -- ne kenyszeritsd
+   `--base`-szel a telepitesi agra. A bazis is mozdul a forkolas ota, es a
+   konfliktusok fele epp a bazis-oldali valtozasokbol jon. Merve: `--base`-szel a
+   `src/web/routes/kanban.ts` meg csak "kozos fajl"-kent sem jelent volna meg --
+   pedig az volt az egyetlen ismert konfliktus. A POZITIV KONTROLL fogta meg
+   (Marveen kerte, hogy a kanban.ts-nek KONFLIKTALT-nak kelljen kijonnie), nem a
+   figyelem: a kontroll nem formasag volt, hanem AZ javitotta a modszert.
+
+2. A "DISZJUNKT" NEM AZT JELENTI, HOGY BIZTONSAGOS. Azt jelenti, hogy a SZERKEZET
+   nem kenyszerit ki viselkedes-merest -- a viselkedes ettol meg utkozhet.
+   Merve ugyanaznap: `scripts/agent-msg.sh`, bazis x fix/bbb8557c. A hunkok
+   tenyleg nem ertek ossze (diszjunkt, helyesen), a merge tiszta volt, a `tsc`
+   0 hibat adott -- es KET TESZT MEGIS BUKOTT. Az egyik valtozas OUTPUTOT ad
+   hozza (egy figyelmeztetes a stderr-en, ha a sor-melyseg nem merheto), a masik
+   valtozas TESZTJEI pedig azt allitjak, hogy a stderr ures.
+   Ezt az eszkoz NEM tudja megtalalni, es nem is igeri. Amit igér: megmondja,
+   MELYIK fajlnal nem eleg a szerkezet. Egy zold futas ettol nem lesz "biztonsagos
+   merge" -- a teljes suite a beolvasztott allapoton tovabbra is kotelezo.
+
 Usage:  merge-overlap.py <ref-a> <ref-b> [--base <ref>] [--quiet]
         default base: git merge-base <ref-a> <ref-b>
 """
