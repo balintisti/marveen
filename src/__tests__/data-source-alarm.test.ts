@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { stripComments } from './helpers/strip-comments.js'
 import { detectTransitions, readQuotaSourceState, transitionMessage, QUOTA_SNAPSHOT_MAX_AGE_MIN } from '../data-source-alarm.js'
 
 // Cards 0114968c + 2b1e373a. Three data sources can fail quietly, and every one
@@ -178,28 +179,65 @@ describe('readQuotaSourceState -- which meter states still carry alerting', () =
 })
 
 describe('the heartbeat wiring', () => {
-  const src = readFileSync(join(__dirname, '..', 'heartbeat.ts'), 'utf-8')
+  // COMMENT-STRIPPED, AND THAT IS THE POINT (didi's finding, 2026-08-23).
+  // These three assertions locate code by text position. A comment is text, so
+  // an explanation that merely MENTIONS `detectTransitions(` would anchor the
+  // search at the prose instead of the call -- and the guard would then pass on
+  // a file where the call had moved behind the gate. The alarm block here is
+  // preceded by exactly that kind of explanatory comment.
+  //
+  // The third assertion had a sharper version of the same defect: its anchor
+  // WAS a comment (`EL-VEZERELT ADATFORRAS`), so stripping comments would have
+  // left it searching for text that no longer exists. It now anchors on code.
+  //
+  // WHAT THIS DOES NOT CLAIM. Didi measured that the whole block could be moved
+  // behind the gate with all 17 tests green. That result did NOT reproduce --
+  // re-run at didi's own commit (5440689) in an isolated copy, the move fails 2
+  // of 17, the ordering assertion among them. So this is not a hole being
+  // closed; it is a LATENT trap being removed before a future comment walks
+  // into it. The concern was right even though the measurement did not hold.
+  const src = stripComments(readFileSync(join(__dirname, '..', 'heartbeat.ts'), 'utf-8'))
+  const GATE = 'if (!shouldNotify(data))'
 
   it('runs the alarm BEFORE the shouldNotify gate', () => {
     // If it ran after, the alarm would go quiet exactly when the broken source
     // is the reason there is nothing else to report -- a failed calendar makes
     // `calendar.length === 0`, which is itself one of the gate's conditions.
     const alarmAt = src.indexOf('detectTransitions(')
-    const gateAt = src.indexOf('if (!shouldNotify(data))')
+    const gateAt = src.indexOf(GATE)
     expect(alarmAt).toBeGreaterThan(-1)
+    expect(gateAt).toBeGreaterThan(-1)
     expect(alarmAt).toBeLessThan(gateAt)
   })
 
   it('sends to the COORDINATOR, not to the owner channel', () => {
     expect(src).toMatch(/createAgentMessage\('system', MAIN_AGENT_ID/)
     // notifyTelegram is the owner path; the alarm must not use it.
-    const block = src.slice(src.indexOf('detectTransitions('), src.indexOf('if (!shouldNotify(data))'))
+    const block = src.slice(src.indexOf('detectTransitions('), src.indexOf(GATE))
     expect(block).not.toMatch(/notifyTelegram/)
   })
 
   it('never lets an alarm failure stop the heartbeat', () => {
-    const block = src.slice(src.indexOf('EL-VEZERELT ADATFORRAS'), src.indexOf('if (!shouldNotify(data))'))
+    // Anchored on the first line of the alarm block ITSELF, not on the comment
+    // above it: a comment anchor cannot survive comment stripping, and an
+    // anchor that vanishes turns this into a slice of the wrong region.
+    const startAt = src.indexOf('readQuotaSourceState()')
+    expect(startAt).toBeGreaterThan(-1)
+    const block = src.slice(startAt, src.indexOf(GATE))
     expect(block).toMatch(/catch \(err\)/)
+  })
+
+  it('POSITIVE CONTROL: a comment mentioning the call cannot move the anchor', () => {
+    // Without this, the hardening above is a claim rather than a property. The
+    // raw source is anchored by the comment; the stripped source is not.
+    const raw = [
+      '// a comment that mentions detectTransitions( before the real one',
+      'if (!shouldNotify(data)) { return }',
+      'detectTransitions({}, 0)',
+    ].join('\n')
+    expect(raw.indexOf('detectTransitions(')).toBeLessThan(raw.indexOf(GATE))
+    const code = stripComments(raw)
+    expect(code.indexOf('detectTransitions(')).toBeGreaterThan(code.indexOf(GATE))
   })
 })
 
