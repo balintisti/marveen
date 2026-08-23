@@ -19,9 +19,20 @@ fi
 # chat 0 dies with "chat 0 is not allowlisted" -- after the briefing has been
 # composed. An unset chat id is a configuration failure, and it should look
 # like one here rather than like a delivery that quietly went nowhere.
+#
+# AND `0` IS NOT THE SAME AS EMPTY -- MEASURED ON THIS INSTALL (2026-08-23).
+# Removing the `:-0` fallback stopped this script from INVENTING a zero, but the
+# guard still only asked whether the value was EMPTY. On this box `.env` actually
+# contains `ALLOWED_CHAT_ID=0`, which is a non-empty string: `[ -z "0" ]` is
+# FALSE, so the guard stayed silent and the script walked on with chat 0 -- the
+# exact silent non-delivery the fallback was removed to prevent, one step later.
+# The repo's own owner-chat-fresh-install.test.ts names this value "no usable
+# ALLOWED_CHAT_ID": it is the FRESH-INSTALL shape, not a hypothetical.
+#
+# So the question is not "is it empty" but "is it USABLE".
 CHAT_ID="${ALLOWED_CHAT_ID:-}"
-if [ -z "$CHAT_ID" ]; then
-  echo "=== Reggeli napindito $(date) -- KIHAGYVA: ALLOWED_CHAT_ID nincs beallitva ($INSTALL_DIR/.env) ===" >> "$LOG"
+if [ -z "$CHAT_ID" ] || [ "$CHAT_ID" = "0" ]; then
+  echo "=== Reggeli napindito $(date) -- KIHAGYVA: ALLOWED_CHAT_ID nem hasznalhato ('${CHAT_ID}') ($INSTALL_DIR/.env) ===" >> "$LOG"
   exit 1
 fi
 
