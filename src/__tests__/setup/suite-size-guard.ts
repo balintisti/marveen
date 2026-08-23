@@ -72,9 +72,16 @@ import type { File, Task } from 'vitest'
  * skip/todo-tol". Didi mindkettot elvegezte, es MINDKETTO NEM lett:
  *
  *   200 commit atnezve  ->  teszt-fajlt TOROLO commit 0, netto csokkenes 0
- *   5 valtozat (it.skip, it.todo, describe.skip, skipIf/runIf) -> a szam EGYIK
- *   esetben sem mozdult: a task `type === 'test'`-kent bent marad, csak a `mode`
- *   valtozik, es a `countTests` a `mode`-ot nem nezi
+ *   11 tortenelmi pont (08-01 -> 08-23) -> a gyujtott szam SZIGORUAN MONOTON no,
+ *   11/11. Ket fuggetlen modszer, kulonbozo vak foltokkal, ugyanaz az eredmeny.
+ *
+ *   ES A SKIP/TODO KERDES, sajat proba-riporterrel a VALODI riporter-fabol
+ *   kiiratva (nem a countTests forrasat olvasva -- az csak a SZANDEKOT mondja meg),
+ *   ugyanazon az 5 tesztes fajlon, negy valtozatban:
+ *       it.skip | it.todo | describe.skip | skipIf/runIf   ->  MINDEGYIK 5-ot ad
+ *   A task `type === 'test'`-kent bent marad, csak a `mode` valtozik, es a
+ *   `countTests` a `mode`-ot nem nezi. Ujramerve itt: 5 taskbol skip 3, todo 1,
+ *   tenylegesen futott 1.
  *
  * Vagyis a tureshatarnak NINCS MIT FEDNIE. Ami maradt volna, az nem ingadozas,
  * hanem az, hogy valaki elfelejtette frissiteni az alapvonalat -- es arra
@@ -94,9 +101,9 @@ import type { File, Task } from 'vitest'
 // es a plafon bevezetesevel csendben elavult volna -- epp azok hazudtak volna
 // elsonek, amik a hatart orzik. Ha a szam es a mondat egy generalt blokkban all,
 // nem tudnak szetcsuszni.
-/** Merve 2026. 08. 23. 9:56:55 CEST -- `npx vitest list --json` -> 289 fajl / 3921 teszt. */
+/** Merve 2026. 08. 23. 10:06:07 CEST -- `npx vitest run` -> 289 fajl / 3928 teszt. */
 export const SUITE_BASELINE_FILES = 289
-export const SUITE_BASELINE_TESTS = 3921
+export const SUITE_BASELINE_TESTS = 3928
 // === SUITE-BASELINE:END ===
 
 /**
@@ -150,11 +157,42 @@ export function isFilteredRun(argv: readonly string[]): boolean {
   return false
 }
 
+/**
+ * A GYUJTOTT tesztek szama -- NEM az, ahany lefutott.
+ *
+ * DIDI LELETE (2026-08-23), es cimke-hiba, nem kuszob-hiba: az or uzenete
+ * korabban azt allitotta, hogy ennyi teszt "lefutott". A `mode`-ot viszont sem ez
+ * a fuggveny, sem a (B) ag nem nezi -- egy `describe.skip` egy TELJES fajlon
+ * valtozatlanul hagyja a szamot, a `zeroTestFiles` ures marad, tehat MINDKET ag
+ * hallgat. Vagyis egy fajl, aminek egyetlen tesztje sem futott, atment, mikozben
+ * az uzenet azt mondta rola, hogy lefutott.
+ *
+ * A JAVITAS A NEV, NEM EGY UJ KUSZOB. Egy "skipelt <= X" hatar kezi
+ * kivetel-listat kivanna, es egy kezi kivetel-lista TARTALMAT semmi nem meri --
+ * ugyanaz a csapda, mint amit ez az or maga javit.
+ */
 export function countTests(tasks: readonly Task[]): number {
   let n = 0
   for (const t of tasks) {
     if (t.type === 'test') n++
     else if ('tasks' in t && Array.isArray(t.tasks)) n += countTests(t.tasks as Task[])
+  }
+  return n
+}
+
+/**
+ * Azok a tesztek, amik TENYLEGESEN lefutottak (van eredmeny-allapotuk).
+ * A `skip` es a `todo` `result` nelkul marad -- megmerve a valodi riporter-faban.
+ */
+export function countRanTests(tasks: readonly Task[]): number {
+  let n = 0
+  for (const t of tasks) {
+    if (t.type === 'test') {
+      const st = (t as { result?: { state?: string } }).result?.state
+      if (st === 'pass' || st === 'fail') n++
+    } else if ('tasks' in t && Array.isArray(t.tasks)) {
+      n += countRanTests(t.tasks as Task[])
+    }
   }
   return n
 }
@@ -170,6 +208,7 @@ export function evaluateSuiteSize(
   tests: number,
   baselineFiles = SUITE_BASELINE_FILES,
   baselineTests = SUITE_BASELINE_TESTS,
+  ran?: number,
 ): { ok: boolean; message: string | null } {
   const fileFloor = floorFor(baselineFiles)
   const testFloor = floorFor(baselineTests)
@@ -178,7 +217,10 @@ export function evaluateSuiteSize(
     ok: false,
     message:
       '\nSUITE-MERET OR: A KESZLET OSSZEZSUGORODOTT.\n' +
-      `  lefutott:  ${files} fajl / ${tests} teszt\n` +
+      `  gyujtott:  ${files} fajl / ${tests} teszt\n` +
+      (ran !== undefined && ran !== tests
+        ? `  ebbol FUTOTT: ${ran} -- ${tests - ran} teszt kihagyva (skip/todo)\n`
+        : '') +
       `  alapvonal: ${baselineFiles} fajl / ${baselineTests} teszt (also korlat ${fileFloor} / ${testFloor})\n` +
       '\n' +
       '  A ZOLD OSSZEGZO SOR EZT NEM MONDJA MEG. Egy be nem toltodott vagy eltunt\n' +
@@ -226,11 +268,25 @@ export default class SuiteSizeGuard implements Reporter {
 
     // (B) alapvonal -- csak teljes futason ertelmes
     if (isFilteredRun(process.argv)) return
+    const collected = countTests(files as unknown as Task[])
+    const ran = countRanTests(files as unknown as Task[])
+    // CIMKE, NEM KUSZOB: ha egy EGESZ fajl kihagyott, azt kimondjuk -- de nem
+    // buktatjuk el tole a futast. Egy hatar kezi kivetel-listat kivanna.
+    const allSkipped = (files as unknown as { name: string; tasks?: Task[] }[])
+      .filter(f => countTests(f.tasks ?? []) > 0 && countRanTests(f.tasks ?? []) === 0)
+      .map(f => f.name)
+    if (allSkipped.length > 0) {
+      process.stderr.write(
+        `\nSUITE-MERET OR (megjegyzes, NEM hiba): ${allSkipped.length} fajl minden tesztje kihagyva.\n` +
+        allSkipped.map(n => `  - ${n}\n`).join('') +
+        '  A darabszam ezeket GYUJTOTTKENT szamolja, tehat az alapvonal nem esik toluk.\n')
+    }
     const res = evaluateSuiteSize(
       files.length,
-      countTests(files as unknown as Task[]),
+      collected,
       num('SUITE_BASELINE_FILES', SUITE_BASELINE_FILES),
       num('SUITE_BASELINE_TESTS', SUITE_BASELINE_TESTS),
+      ran,
     )
     if (!res.ok) {
       process.stderr.write(res.message ?? '')

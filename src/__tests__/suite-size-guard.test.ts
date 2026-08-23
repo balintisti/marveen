@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  countRanTests,
   countTests,
   evaluateSuiteSize,
   floorFor,
@@ -120,6 +121,63 @@ describe('zeroTestFiles -- az (A) pontos ag', () => {
       { name: 'a.test.ts', tasks: [{ type: 'suite', tasks: [{ type: 'test' }] }] },
     ] as never
     expect(zeroTestFiles(files)).toEqual([])
+  })
+})
+
+describe('GYUJTOTT kontra FUTOTT -- didi cimke-lelete', () => {
+  // A LELET: az or uzenete azt allitotta, hogy ennyi teszt "lefutott". A `mode`-ot
+  // viszont sem a countTests, sem a (B) ag nem nezi -- egy `describe.skip` egy
+  // TELJES fajlon valtozatlanul hagyja a szamot, a zeroTestFiles ures marad,
+  // tehat MINDKET ag hallgat. Egy fajl, aminek egyetlen tesztje sem futott,
+  // atmegy, mikozben az uzenet azt mondja rola, hogy lefutott.
+  //
+  // MERVE a VALODI riporter-faban (sajat proba-riporterrel, 5 tesztes fajlon):
+  //     osszes task 5 | skip 3 | todo 1 | tenylegesen futott 1
+  const skipped = [
+    { type: 'test', result: undefined },
+    { type: 'test', result: { state: 'skip' } },
+    { type: 'test', result: { state: 'pass' } },
+    { type: 'test', result: { state: 'fail' } },
+  ] as never
+
+  it('a GYUJTOTT szam a kihagyottakat IS szamolja', () => {
+    expect(countTests(skipped)).toBe(4)
+  })
+
+  it('a FUTOTT szam CSAK azokat, amiknek van eredmenye', () => {
+    expect(countRanTests(skipped)).toBe(2)
+  })
+
+  it('describe.skip egy TELJES fajlon: gyujtott 2, futott 0', () => {
+    const file = [{ type: 'suite', tasks: [
+      { type: 'test', result: undefined },
+      { type: 'test', result: undefined },
+    ] }] as never
+    expect(countTests(file)).toBe(2)
+    expect(countRanTests(file)).toBe(0)
+  })
+
+  it('az uzenet CIMKEJE "gyujtott", nem "lefutott"', () => {
+    const m = evaluateSuiteSize(200, 2000, 286, 3879).message ?? ''
+    expect(m).toContain('gyujtott:')
+    expect(m).not.toContain('lefutott:')
+  })
+
+  it('ha a ketto ELTER, az uzenet KIMONDJA -- de nem buktat tole', () => {
+    const m = evaluateSuiteSize(200, 2000, 286, 3879, 1900).message ?? ''
+    expect(m).toContain('ebbol FUTOTT: 1900')
+    expect(m).toContain('100 teszt kihagyva')
+  })
+
+  it('ha nincs elteres, NEM ir felesleges sort', () => {
+    expect(evaluateSuiteSize(200, 2000, 286, 3879, 2000).message ?? '').not.toContain('ebbol FUTOTT')
+  })
+
+  it('NEM KUSZOB: a kihagyas onmagaban nem buktat', () => {
+    // Egy "skipelt <= X" hatar kezi kivetel-listat kivanna, es egy kezi
+    // kivetel-lista TARTALMAT semmi nem meri -- ugyanaz a csapda, amit ez az or
+    // maga javit. A kihagyas CIMKE marad, nem itelet.
+    expect(evaluateSuiteSize(289, 3921, 289, 3921, 0).ok).toBe(true)
   })
 })
 
