@@ -132,6 +132,38 @@ class Osztalyozo:
         return ('KETES' if t else 'NINCS_AZONOSITO'), t
 
 
+def eszkoz_ut(u):
+    """ESZKOZ-ut: valamit CSINAL, nem a targy sajat forrasa."""
+    b = u.rsplit('/', 1)[-1]
+    return (u.startswith('scripts/') or b.endswith('.sh') or b.endswith('.py')
+            or 'settings.json' in u or 'task-config.json' in u)
+
+
+def csak_eszkoz(bizonyitek):
+    """A HAROM ISMERT TEVEDES MECHANIZMUSA (--audit).
+
+    Mindharom tevedo kartya egy ESZKOZT idezett, amit a TARGYAN hasznalnak, nem a
+    targy sajat forrasat: `scripts/delta-crm-backup.sh`, `scripts/r2.py`,
+    `scripts/card-comment.sh`, `claude/settings.json`. Az eszkoz a marveen
+    repoban lakik, a targya a CRM.
+
+    POZITIV KONTROLL (2026-08-23): a minta mind a HAROM ismert esetet megtalalja
+    (3/3). Enelkul a "nulla talalat" es a "rossz minta" megkulonboztethetetlen.
+
+    ISMERT HAMIS POZITIV: amikor az eszkoz MAGA a targy. Merve ugyanakkor: a 13
+    marveen cimkebol egyet jelolt (`0e3959e4`, bizonyitek `scripts/agent-msg.sh`),
+    es az a kartya EPP az agent-msg.sh viselkedeserol szol -- a cimke helyes.
+    Ezert SZURO ez, nem itelet: atnezendot jelol ki, nem hibat allapit meg.
+
+    AMIT A NULLA TALALAT NEM BIZONYIT: hogy a tevedes iranya allando. Csak azt,
+    hogy EZ A MINTA nem talalt tobbet. Harom eset kicsi alap egy iranyra, es egy
+    olyan tevedes, ami a MASIK repo alkalmazas-forrasat idezi, ezen a szuron
+    atmegy.
+    """
+    utak = [u for v in bizonyitek.values() for u in v]
+    return bool(utak) and all(eszkoz_ut(u) for u in utak)
+
+
 def _api(path, method='GET', body=None):
     tok = open('/Users/isti/marveen/store/.dashboard-token').read().strip()
     req = urllib.request.Request(DASH + path, method=method,
@@ -154,6 +186,8 @@ def main():
     m.add_argument('--calibrate', action='store_true', help='onellenorzes a CIMKEZETT kartyakon')
     m.add_argument('--dry-run', action='store_true')
     m.add_argument('--apply', action='store_true')
+    m.add_argument('--audit', action='store_true',
+                   help='a MAR CIMKEZETT kartyak atszurese az ismert tevedes-osztalyra')
     a = ap.parse_args()
 
     o = Osztalyozo()
@@ -179,6 +213,21 @@ def main():
         # A kontroll, ami nelkul ez csak egy szam: ellentmondas nem lehet.
         print('\n  KONTROLL: ellentmondas nulla ->', 'OK' if el == 0 else 'BUKIK')
         return 0 if el == 0 else 1
+
+    if a.audit:
+        cel = [c for c in tabla if c['status'] == a.status and not ures(c)]
+        print(f"PREDIKATUM: status=='{a.status}' ES a project KITOLTOTT -> {len(cel)} kartya")
+        hit = 0
+        for c in cel:
+            _, t = o.osztaly(_torzs(c))
+            if csak_eszkoz(t):
+                hit += 1
+                utak = sorted(u for v in t.values() for u in v)
+                print(f"  ATNEZENDO {c['id']}  cimke={c['project']:10s} {c['title'][:55]}")
+                print(f"      csak eszkoz-utak: {utak[:4]}")
+        print(f"\n  megjelolve: {hit} / {len(cel)}")
+        print('  FIGYELEM: ez SZURO, nem itelet -- lasd a csak_eszkoz() docstringjet.')
+        return 0
 
     cel = [c for c in tabla if c['status'] == a.status and ures(c)]
     print(f"PREDIKATUM: status=='{a.status}' ES a project ures/hianyzik -> {len(cel)} kartya")
