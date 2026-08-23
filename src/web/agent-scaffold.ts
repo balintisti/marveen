@@ -377,6 +377,28 @@ export function agentGetsEmailGate(name: string): boolean {
   return name !== MAIN_AGENT_ID
 }
 
+// The matcher is a FULL-match regex against the tool name, and an MCP tool's
+// name is the qualified `mcp__<server>__<tool>` -- so a bare `send_email`
+// alternative never fires for an MCP server (verified live 2026-08-10: a
+// manage_email send went through while the gate script itself denied the same
+// payload, because the hook never ran). The `.*` wrappers are what make the gate
+// reach MCP tools at all. Exported so the startup migration can recognize a
+// stale matcher on an already-scaffolded agent.
+export const EMAIL_GATE_MATCHER = 'Bash|.*send_email.*|.*manage_email.*'
+
+// Does an existing PreToolUse array carry an email-gate entry whose matcher is
+// NOT the current one? Pure + exported: this is the predicate that lets
+// ensureGovernanceGateCommands repair installs scaffolded before the matcher
+// fix, where the hook COMMAND is correctly wired (so the wiring check passes)
+// but the matcher never matches the qualified MCP tool name.
+export function emailGateMatcherStale(preToolUse: unknown): boolean {
+  if (!Array.isArray(preToolUse)) return false
+  return preToolUse.some((e) => {
+    if (!JSON.stringify(e).includes('email-send-gate.mjs')) return false
+    return (e as { matcher?: unknown })?.matcher !== EMAIL_GATE_MATCHER
+  })
+}
+
 // Idempotently wire the email-send-gate PreToolUse hook into a settings.json
 // object. A deny-list rule alone would NOT enforce this: permissive profiles
 // launch with --dangerously-skip-permissions, which bypasses allow/deny --
@@ -390,7 +412,7 @@ export function injectEmailSendGate(existing: Record<string, unknown>): void {
   // Registration guard: a /tmp or missing path must never enter shared settings.
   if (isUnsafeHookCommand(command)) return
   const entry = {
-    matcher: 'Bash|send_email',
+    matcher: EMAIL_GATE_MATCHER,
     hooks: [{ type: 'command', command, timeout: 10 }],
   }
   const prev = Array.isArray(hooks.PreToolUse) ? (hooks.PreToolUse as unknown[]) : []
@@ -520,9 +542,47 @@ export function isPublicFetchHost(value: string): boolean {
   const labels = host.split('.')
   if (labels.length < 2) return false                 // single label: localhost and friends
   if (labels.some((l) => !l || l.length > 63 || l.startsWith('-') || l.endsWith('-'))) return false
-  const INTERNAL_SUFFIX = ['local', 'internal', 'localdomain', 'lan', 'intranet', 'home', 'arpa', 'test', 'invalid', 'localhost']
+  const INTERNAL_SUFFIX = ['local', 'internal', 'localdomain', 'lan', 'intranet', 'home', 'arpa', 'test', 'invalid', 'localhost', 'svc', 'cluster']
   if (INTERNAL_SUFFIX.includes(labels[labels.length - 1])) return false
+  // A public NAME can still resolve inward. Wildcard-DNS services (nip.io,
+  // sslip.io and friends) encode the address in the name itself, so
+  // 127.0.0.1.nip.io and 192-168-1-50.sslip.io pass every check above and then
+  // resolve to loopback/RFC1918. Reaching them needs an allowlist entry, so
+  // this is defence-in-depth rather than an open door -- but it is the same
+  // class of bypass the literal check already rejects, and it costs one pass.
+  if (labels.some((l) => isInwardDashQuad(l))) return false
+  for (let i = 0; i + 3 < labels.length; i++) {
+    if (isInwardQuad(labels[i], labels[i + 1], labels[i + 2], labels[i + 3])) return false
+  }
   return true
+}
+
+// True for an IPv4 that points back at us or into a private network. Kept
+// narrow on purpose: a PUBLIC address embedded in a name is not a bypass of
+// the loopback/RFC1918 guard, and rejecting every numeric label would break
+// legitimate hosts.
+function isInwardIPv4(o: number[]): boolean {
+  if (o.length !== 4 || o.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false
+  const [a, b] = o
+  if (a === 0 || a === 127) return true                      // this-host, loopback
+  if (a === 10) return true                                  // RFC1918
+  if (a === 172 && b >= 16 && b <= 31) return true           // RFC1918
+  if (a === 192 && b === 168) return true                    // RFC1918
+  if (a === 169 && b === 254) return true                    // link-local, cloud metadata
+  if (a === 100 && b >= 64 && b <= 127) return true          // CGNAT
+  return false
+}
+
+function isInwardQuad(a: string, b: string, c: string, d: string): boolean {
+  const parts = [a, b, c, d]
+  if (!parts.every((p) => /^\d{1,3}$/.test(p))) return false
+  return isInwardIPv4(parts.map((p) => parseInt(p, 10)))
+}
+
+function isInwardDashQuad(label: string): boolean {
+  const m = label.match(/^(\d{1,3})-(\d{1,3})-(\d{1,3})-(\d{1,3})$/)
+  if (!m) return false
+  return isInwardIPv4(m.slice(1).map((p) => parseInt(p, 10)))
 }
 
 export function ownerAllowedDomains(storeDir = STORE_DIR): string[] {
@@ -534,6 +594,32 @@ export function ownerAllowedDomains(storeDir = STORE_DIR): string[] {
       .filter((d: string) => isPublicFetchHost(d))
   } catch {
     return []   // no file, unreadable, or malformed: ship the template as-is
+  }
+}
+
+// The reader's effective allowlist, matching the egress-gate hook's semantics:
+// `domains` opens a host for every agent type (the hook's step 3), while
+// `quarantine_domains` opens it for the quarantine-reader only (step 4). The
+// rendered definition must carry the union, or a host granted at the
+// quarantine_domains level is honored by the hook but the reader's own prompt
+// still refuses it before a fetch is ever attempted -- which is exactly what
+// stranded a research task on 2026-08-16 (EGRESSKEY816).
+export function quarantineReaderDomains(storeDir = STORE_DIR): string[] {
+  const base = ownerAllowedDomains(storeDir)
+  try {
+    const raw = JSON.parse(readFileSync(join(storeDir, 'egress-allowlist.json'), 'utf-8'))
+    const list = Array.isArray(raw?.quarantine_domains) ? raw.quarantine_domains : []
+    const seen = new Set(base.map((d) => d.toLowerCase()))
+    for (const d of list) {
+      if (typeof d !== 'string') continue
+      const host = d.trim()
+      if (!isPublicFetchHost(host) || seen.has(host.toLowerCase())) continue
+      seen.add(host.toLowerCase())
+      base.push(host)
+    }
+    return base
+  } catch {
+    return base
   }
 }
 
@@ -587,6 +673,10 @@ export function renderQuarantineReader(template: string, domains: string[]): str
 // bare `node`, which is missing from the non-interactive hook PATH on nvm
 // installs -- exit 127 counts as a non-blocking hook error, so those gates were
 // silently non-enforcing. Called at server startup (alongside ensureEgressGate).
+// Also repairs a stale email-gate MATCHER (pre-2026-08-10 installs wrote a bare
+// `send_email|manage_email`, which never matches a qualified MCP tool name), so
+// an agent scaffolded before the fix is not left with a gate that looks wired
+// and enforces nothing.
 // NOTE: a running session does NOT re-read settings.json -- the rewritten
 // command takes effect at that agent's next (re)spawn; this call only makes
 // the migration zero-touch, not instantaneous.
@@ -602,8 +692,14 @@ export function ensureGovernanceGateCommands(name: string): boolean {
   const hooks = (settings.hooks && typeof settings.hooks === 'object')
     ? settings.hooks as Record<string, unknown>
     : {}
-  const ptuJson = JSON.stringify(Array.isArray(hooks.PreToolUse) ? hooks.PreToolUse : [])
-  const needEmail = agentGetsEmailGate(name) && !hookCommandWired(ptuJson, emailCmd)
+  const ptu = Array.isArray(hooks.PreToolUse) ? hooks.PreToolUse : []
+  const ptuJson = JSON.stringify(ptu)
+  // Two separate failure modes, both silently non-enforcing: the command is not
+  // wired at all, or it IS wired but under a pre-2026-08-10 matcher that cannot
+  // match a qualified MCP tool name. The second one is why the wiring check
+  // alone is not enough -- it would report the gate healthy forever.
+  const needEmail = agentGetsEmailGate(name)
+    && (!hookCommandWired(ptuJson, emailCmd) || emailGateMatcherStale(ptu))
   const needPace = agentGetsGovernanceGates(name) && !hookCommandWired(ptuJson, paceCmd)
   if (!needEmail && !needPace) return false
   // The injectors dedupe by script basename, so a stale bare-`node` entry is
@@ -638,7 +734,7 @@ export function ensureQuarantineReader(name: string): boolean {
   const destPath = join(destDir, 'quarantine-reader.md')
   let rendered: string
   try {
-    rendered = renderQuarantineReader(readFileSync(tplPath, 'utf-8'), ownerAllowedDomains())
+    rendered = renderQuarantineReader(readFileSync(tplPath, 'utf-8'), quarantineReaderDomains())
   } catch {
     return false
   }
@@ -944,6 +1040,62 @@ export function ensureFleetRosterSection(name: string): void {
   atomicWriteFileSync(claudeMdPath, updated)
 }
 
+// SKILLUTCSAPDA822: the near-identical `.claude-config/skills` path IS the
+// shared global directory (a symlink to ~/.claude/skills, single-copy
+// distribution -- deliberate, see skills-symlink-single-copy), and the
+// skill-run base directory even DISPLAYS that path. An agent writing "its
+// own" skill there writes to the whole fleet, and nothing says so. Measured
+// 2026-08-22: five third-party marketing skills landed in the shared dir and
+// only luck caught them. The symlink stays; the fix is naming the trap in
+// every agent's CLAUDE.md, idempotently, on every respawn.
+const SKILLS_TRAP_BEGIN = '<!-- BEGIN GENERATED: skills-path-trap (auto-generated, do not edit by hand) -->'
+const SKILLS_TRAP_END = '<!-- END GENERATED: skills-path-trap -->'
+const SKILLS_TRAP_BLOCK_RE = new RegExp(
+  `${SKILLS_TRAP_BEGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${SKILLS_TRAP_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+)
+
+function buildSkillsPathTrapBody(): string {
+  return [
+    '## Skill-útvonal csapda (KÖTELEZŐ elolvasni skill-írás előtt)',
+    '',
+    'A `.claude-config/skills` NEM a saját mappád: symlink a globális',
+    '`~/.claude/skills`-re, tehát ami oda kerül, az a TELJES flottánál megjelenik',
+    '-- akkor is, ha a skill-futtatás base directory-ja ezt az utat mutatja.',
+    'A saját, csak neked szóló vagy kipróbálatlan külső skill a munkakönyvtárad',
+    '`.claude/skills/` mappájába megy. A globálisba írás tudatos, flotta-szintű',
+    'döntés legyen, ne alapértelmezés.',
+  ].join('\n')
+}
+
+// Same five-rule idempotency contract as ensureFleetRosterSection /
+// ensureAutonomySection; called on every startAgentProcess() so existing
+// agents receive the warning automatically on respawn.
+export function ensureSkillsPathTrapSection(name: string): void {
+  const claudeMdPath = name === MAIN_AGENT_ID
+    ? join(PROJECT_ROOT, 'CLAUDE.md')
+    : join(agentDir(name), 'CLAUDE.md')
+  if (!existsSync(claudeMdPath)) return
+
+  const block = `${SKILLS_TRAP_BEGIN}\n${buildSkillsPathTrapBody()}\n${SKILLS_TRAP_END}`
+
+  let existing: string
+  try {
+    existing = readFileSync(claudeMdPath, 'utf-8')
+  } catch {
+    return
+  }
+
+  let updated: string
+  if (SKILLS_TRAP_BLOCK_RE.test(existing)) {
+    updated = existing.replace(SKILLS_TRAP_BLOCK_RE, block)
+  } else {
+    updated = existing.trimEnd() + '\n\n' + block + '\n'
+  }
+
+  if (updated === existing) return
+  atomicWriteFileSync(claudeMdPath, updated)
+}
+
 export async function generateClaudeMd(name: string, description: string, model: string): Promise<string> {
   // Distribution-safe default-drive line: only emit a concrete folder when this
   // install has one configured (OWNER_DRIVE_FOLDER). A fresh install with no
@@ -1016,6 +1168,7 @@ Te egy önfejlesztő ágens vagy. A munkád során tanulsz, és újrafelhasznál
 ### Skill-ek helye
 - Globális: ~/.claude/skills/ (minden ágens számára elérhető)
 - Egyéni: a te munkakönyvtárad .claude/skills/ mappája
+- CSAPDA: a .claude-config/skills NEM a tiéd -- az a globális mappa symlinken át; saját skill a .claude/skills alá menjen
 
 ### Automatikus skill generálás
 Komplex feladatok után (5+ tool hívás, hiba utáni recovery, user korrekció, többlépéses workflow) automatikusan hozz létre SKILL.md fájlt:

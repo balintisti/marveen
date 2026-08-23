@@ -1,12 +1,16 @@
 import Database from 'better-sqlite3'
 import { join } from 'node:path'
-import { existsSync, mkdirSync, readFileSync, renameSync, chmodSync, openSync, closeSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, chmodSync, openSync, closeSync, statSync } from 'node:fs'
 import { STORE_DIR, DB_FILENAME, ALLOWED_CHAT_ID, OLLAMA_URL, APP_TZ } from './config.js'
 import { getEffectiveSettingValue } from './settings-store.js'
 import { logger } from './logger.js'
 import { TOOL_TIMEOUTS } from './tool-timeouts.js'
 
 let db: Database.Database
+// The path the CURRENT handle was opened on (null for ':memory:'). Kept so
+// size reporting measures the database actually being served, not a
+// re-derived default path that an override would silently diverge from.
+let openedDbPath: string | null = null
 
 // Lock the DB file and its sidecars (WAL, SHM, rollback journal) down to
 // owner-only. better-sqlite3 opens the main file with the process umask
@@ -66,6 +70,7 @@ export function initDatabase(dbPathOverride?: string): void {
     }
   }
   db = new Database(dbPath)
+  openedDbPath = isMemory ? null : dbPath
   db.pragma('journal_mode = WAL')
   // Performance pragmas: safe with WAL, applied after journal_mode is set.
   // cache_size: negative value = kibibytes; -65536 → 64 MB page cache.
@@ -2122,11 +2127,79 @@ export const HEARTBEAT_IN_PROGRESS_SQL =
 export const HEARTBEAT_WAITING_SQL =
   "SELECT * FROM kanban_cards WHERE archived_at IS NULL AND status = 'waiting'"
 
+// HBKANBANDRIFT819 follow-up: the heartbeat report format asks for a planned
+// line, so the number needs a sanctioned server-side source like every other
+// count -- without it the agent manufactures the value (measured: planned: 0
+// reported against a real 305). COUNT only: no card list is served for
+// planned, the line is a bare number.
+export const HEARTBEAT_PLANNED_COUNT_SQL =
+  "SELECT COUNT(*) AS n FROM kanban_cards WHERE archived_at IS NULL AND status = 'planned'"
+
+export function countPlannedKanbanCards(): number {
+  const row = db.prepare(HEARTBEAT_PLANNED_COUNT_SQL).get() as { n: number } | undefined
+  return row?.n ?? 0
+}
+
 export function getHeartbeatKanbanSummary(): HeartbeatKanbanSummary {
   const urgent = db.prepare(HEARTBEAT_URGENT_SQL).all() as KanbanCard[]
   const in_progress = db.prepare(HEARTBEAT_IN_PROGRESS_SQL).all() as KanbanCard[]
   const waiting = db.prepare(HEARTBEAT_WAITING_SQL).all() as KanbanCard[]
   return { urgent, in_progress, waiting }
+}
+
+/**
+ * HBMEMBLIND819: the heartbeat's "new hot memories (1h)" number is computed
+ * HERE, server-side, and served over /api/kanban/heartbeat-summary -- the
+ * heartbeat agent copies it like the kanban counts, it never runs the query.
+ *
+ * This is the SECOND failure of the prescribe-the-query pattern for this
+ * metric. HBMEMBLIND807 (2026-08-07): the agent composed its own SQL and
+ * reported 0 beside three hot memories; the fix prescribed a ready-made query
+ * with "do not rewrite the query". HBMEMBLIND819 (2026-08-19): measured
+ * 14/14 rounds reporting 0 over 24h with real values of 2 in three of them --
+ * the agent ran the prescribed query SHAPE but with agent_id='heartbeat'
+ * substituted for the main agent's id. Timeline over 8 sessions / 196 runs:
+ * the identity rewrite appears on post-compact rounds (the agent reconstructs
+ * the query from memory as "count MY hot memories" instead of re-reading the
+ * prescription) and then persists as its own precedent. A prescription the
+ * measured party must re-copy every round is not a mechanism; the kanban
+ * counts on the SAME agent never drifted, because an endpoint number has no
+ * query to rewrite. Same closure as getHeartbeatKanbanSummary above.
+ */
+/** Exported so a test can execute the SHIPPED statement against a fixture DB
+ *  instead of re-typing an equivalent one and proving nothing. */
+export const HEARTBEAT_NEW_HOT_MEMORIES_SQL =
+  "SELECT COUNT(*) AS n FROM memories WHERE agent_id = ? AND category = 'hot' AND created_at > unixepoch() - 3600"
+
+export function countNewHotMemories(agentId: string): number {
+  const row = db.prepare(HEARTBEAT_NEW_HOT_MEMORIES_SQL).get(agentId) as { n: number } | undefined
+  return row?.n ?? 0
+}
+
+/**
+ * HBDBMERET822: the heartbeat's "DB size" number is computed HERE, server-side,
+ * and served over /api/kanban/heartbeat-summary -- same closure as the kanban
+ * counts and countNewHotMemories above. Before this, the scaffold's template
+ * had a bare `DB size: <X> MB` placeholder with no sanctioned source, so each
+ * session re-invented the measurement: the format drifted round to round
+ * (`158 MB` -> `160M`, a du -h shape) and on 2026-08-22 15:00 the report said
+ * `0.0 MB` against a real 159 MB. A zero here is the dangerous direction --
+ * the metric exists as a GROWTH signal, and a permanent 0.0 does not die
+ * loudly, it just looks calm.
+ *
+ * Returns null (never 0) when the size cannot be measured: for ':memory:'
+ * databases and on stat failure. 0 is a plausible reading; null is not --
+ * the consumer renders it as "nincs adat". Same lesson as the silent
+ * `catch { return 0 }` this replaces in heartbeat.ts collectSystem.
+ */
+export function getDbFileSizeMb(): number | null {
+  if (!openedDbPath) return null
+  try {
+    return Math.round((statSync(openedDbPath).size / (1024 * 1024)) * 10) / 10
+  } catch (err) {
+    logger.warn({ err, dbPath: openedDbPath }, 'DB size stat failed; serving null, not 0')
+    return null
+  }
 }
 
 // --- Agent Messages ---
@@ -3666,6 +3739,14 @@ export function resolveApproval(id: string, status: 'approved' | 'rejected' | 't
         telegram_message_id = COALESCE(?, telegram_message_id)
     WHERE id = ? AND status = 'pending'
   `).run(status, now, resolvedBy, telegramMessageId ?? null, id).changes > 0
+}
+
+// The CREATE path stamps the owner-notification message id onto the row
+// (APPROVALVAK821): until this existed, telegram_message_id was only writable
+// through resolveApproval, so a pending request could never carry it.
+export function setApprovalTelegramMessageId(id: string, telegramMessageId: number): boolean {
+  return db.prepare('UPDATE approvals SET telegram_message_id = ? WHERE id = ?')
+    .run(telegramMessageId, id).changes > 0
 }
 
 export function listApprovals(opts: {
