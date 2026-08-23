@@ -2173,7 +2173,13 @@ async function showCardDetail(card) {
   // Load comments
   try {
     const res = await fetch(`/api/kanban/${encodeURIComponent(card.id)}/comments`)
-    const comments = await res.json()
+    // `res.ok` ELLENORZES, mert a vegpont mostantol 404-et ad nem letezo
+    // kartyara (kartya bd795bc2). Enelkul a 404 torzse (`{error: ...}`) egy
+    // OBJEKTUM, a lenti `for...of` pedig TypeError-t dobna -- amit a kulso
+    // `catch { /* ignore */ }` CSENDBEN elnyelne, es a lista ures maradna.
+    // Az archivalt-kartya nezet (lentebb) mar igy csinalja; ez a ketto most
+    // ugyanugy viselkedik.
+    const comments = res.ok ? await res.json() : []
     const list = document.getElementById('commentsList')
     list.innerHTML = ''
     for (const c of comments) {
