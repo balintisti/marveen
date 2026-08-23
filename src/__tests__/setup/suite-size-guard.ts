@@ -54,17 +54,30 @@ import type { File, Task } from 'vitest'
  * 285 -> 284 fajl, es egyszer sem szolalt meg semmi. A "tureshatar alatti
  * torles" pontosan a ket ag KOZOTT esik -- ezert kell a plafon.
  *
- * AZ 50 ITELET, NEM MERES, ES EZ INTERIM. Nincs mogotte megfigyelt eloszlas:
- * annyit tud, hogy a ma ismert egyetlen valodi eset (97) folott van, es hogy
- * egy szandekos, 50-nel nagyobb torles ugyis alapvonal-frissitest erdemel.
- * Ha valaha lesz adatunk arrol, mekkora a NORMALIS apaly egy refaktor utan, ez
- * a szam arra cserelendo. Addig ne vegye senki magatol ertetodonek.
+ * A PLAFON 10, ES A SZAM MOSTANTOL MERESEN ALL (didi, 2026-08-23). Elobb 50
+ * volt, kimondottan INTERIM-kent, a merest megnevezve, ami eldontene. Didi
+ * elvegezte: 200 commit atnezve, teszt-fajlt TOROLO commit NULLA, netto
+ * csokkenes NULLA. Vagyis nem "keves" a legitim lefele mozgas ebben a repoban,
+ * hanem NINCS.
+ *
+ * Ez atforditja, hogy MIT nyel el a tolerancia. Nem zajt -- olyan nincs --,
+ * hanem azt, hogy valaki elfelejtette frissiteni az alapvonalat. Az fegyelem
+ * kerdese, es a fegyelem nem megoldas: ezert megy a szam 50-rol 10-re, es ezert
+ * van ra kulon kartya (c0f10926), hogy az alapvonal frissitese EGY PARANCS
+ * legyen. Ha az megvan, ez a szam 0-ra mehet.
+ *
+ * MIERT NEM MAR MOST 0 -- ES EZ NEM OVATOSSAG, HANEM EGY NEVESITETT ISMERETLEN.
+ * Egyetlen dolgot nem mert meg senki: valtozik-e a szamolt osszeg attol, ha egy
+ * teszt `skip`-re vagy `todo`-ra vall. A 10 EZ ELLEN fedezet, semmi mas ellen.
+ * AKI EZT A SZAMOT TAGITANI AKARJA: eloszor merd meg azt az egy dolgot. Ha a
+ * skip/todo nem valtoztat az osszegen, a helyes ertek 0, nem egy nagyobb szam.
+ * Ne vedd altalanos ovatossagnak -- pontosan azert all itt, hogy ne annak nezd.
  */
 
-/** Merve 2026-08-23, a fix/0114968c agon: `npx vitest run` -> 287 fajl / 3901 teszt.
+/** Merve 2026-08-23, a fix/0114968c agon: `npx vitest run` -> 287 fajl / 3902 teszt.
  *  (Az or sajat teszt-fajljaval egyutt -- az is a keszlet resze.) */
 export const SUITE_BASELINE_FILES = 287
-export const SUITE_BASELINE_TESTS = 3901
+export const SUITE_BASELINE_TESTS = 3902
 
 /**
  * Az alapvonal env-bol felulirhato -- NEM kenyelembol, hanem mert kulonben az
@@ -77,8 +90,8 @@ function num(name: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback
 }
 
-/** 2%, de legalabb 5 es LEGFELJEBB 50 -- az also korlat, ami alatt riasztunk. */
-export const TOLERANCE_CAP = 50
+/** 2%, de legalabb 5 es LEGFELJEBB 10 -- az also korlat, ami alatt riasztunk. */
+export const TOLERANCE_CAP = 10
 
 export function floorFor(baseline: number): number {
   return baseline - Math.min(TOLERANCE_CAP, Math.max(5, Math.ceil(baseline * 0.02)))
