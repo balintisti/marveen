@@ -80,6 +80,31 @@ import { tryHandleVoice } from './web/routes/voice.js'
 import { tryHandleVaultSsh } from './web/routes/vault-ssh.js'
 import { tryHandleFleet } from './web/routes/fleet.js'
 import { tryHandleVaultSshKeys } from './web/routes/vault-ssh-keys.js'
+
+/**
+ * A belepesi banner szovege -- tiszta fuggveny, hogy merheto legyen.
+ *
+ * MIERT KET CIM (kartya 6c8937d2). A `localStorage` ORIGIN-onkent kulon:
+ * `http://localhost:3420` es `http://127.0.0.1:3420` a bongeszonek KET KULON
+ * oldal, KET KULON tarolo -- ugyanaz a gep, ugyanaz a port, ugyanaz a folyamat,
+ * es a kulcs megsem kozos. Szerver oldalrol semmi nem jelzi a kulonbseget:
+ * mindket cim 200-at ad (megmerve). Aki a 127.0.0.1-es linkkel lepett be, majd
+ * kesobb `localhost`-ot gepel, egy kulcs nelkuli oldalra erkezik -- es kozben
+ * NEM ROMLOTT EL SEMMI. Ezert all itt mindketto, egy-egy soron.
+ *
+ * ES CSAK AKKOR ALL ITT MINDKETTO, HA A BIND TENYLEG LOOPBACK. Ha valaki a
+ * `WEB_HOST`-ot masra allitja, a `localhost` egy olyan cim lenne, amin a
+ * szolgaltatas nem is figyel -- egy magabiztos, de hamis sor rosszabb, mint egy.
+ */
+export function bootstrapBanner(port: number, host: string, token: string): string {
+  const isLoopback = host === '127.0.0.1' || host === '::1' || host === 'localhost'
+  const hosts = isLoopback ? ['localhost', '127.0.0.1'] : [host]
+  const lines = hosts.map(h => `  http://${h}:${port}/?token=${token}`)
+  const note = isLoopback
+    ? '  (A ket cim a bongeszonek KET KULON tarolo -- amelyiket hasznalod, azt nyisd meg.)\n'
+    : ''
+  return `\nDashboard access URL (paste into browser, token is stored afterward):\n${lines.join('\n')}\n${note}\n`
+}
 import type { RouteContext } from './web/routes/types.js'
 
 const WEB_DIR = join(PROJECT_ROOT, 'web')
@@ -284,14 +309,22 @@ export function startWebServer(port = 3420): http.Server {
 
   server.listen(port, WEB_HOST, () => {
     logger.info({ port }, `Web dashboard: http://localhost:${port}`)
-    // Do NOT log the bearer token: launchd/journal/pipe captures of the
-    // structured log would otherwise carry a root-equivalent credential.
-    // Print the bootstrap URL directly to stderr instead so it shows in the
-    // interactive terminal but does not land in the pino log stream.
-    const bootstrapUrl = `http://127.0.0.1:${port}/?token=${DASHBOARD_TOKEN}`
-    process.stderr.write(
-      `\nDashboard access URL (paste into browser, token is stored afterward):\n  ${bootstrapUrl}\n\n`
-    )
+    // Do NOT put the bearer token into the PINO stream: journal/pipe captures of
+    // the structured log would carry a root-equivalent credential, and that
+    // stream is the one that gets shipped and parsed.
+    //
+    // BUT STDERR WAS THE WRONG ALTERNATIVE (measured 2026-08-23, card 6c8937d2).
+    // The comment here used to say stderr "shows in the interactive terminal" --
+    // and under launchd there IS no interactive terminal: StandardErrorPath
+    // sends it to store/dashboard.error.log. Measured: the access URL appeared
+    // 18 times in the ERROR log and 0 times in the normal one, while the normal
+    // log carried `http://localhost:3420` 36 times WITHOUT a token.
+    // So the easy-to-find address was the one that cannot log you in, and the
+    // working link sat in a file nobody opens while everything works.
+    //
+    // Now it goes to STDOUT -- still outside the pino stream (so the original
+    // concern holds), but into store/dashboard.log, where someone actually looks.
+    process.stdout.write(bootstrapBanner(port, WEB_HOST, DASHBOARD_TOKEN))
   })
 
   // Self-heal a SILENT listener failure. Under launchd, a `kickstart -k` can
