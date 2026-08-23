@@ -56,6 +56,18 @@ describe('doctor.sh -- a jogosultsagi or BE VAN KOTVE', () => {
     expect(sec()).toMatch(/OK\)\s*ok "\$text"/)
   })
 
+  it('a ciklust AZ OR KIMENETE eteti -- nem eleg, hogy sorokat olvas', () => {
+    // didi mutalta (L1, 2026-08-24): a `done <<< "$PG_LINES"` lezarast `done < /dev/null`-ra
+    // irva a keszlet ZOLD MARADT -- es o VISELKEDESSEL is megmerte egy csonk-harness-ben:
+    // eredeti FAILS=1, mutalt FAILS=0. Vagyis az or BESZELT, csak senki nem olvasta.
+    //
+    // Az elozo allitasom azt rogzitette, hogy a ciklus SOROKAT olvas (`IFS='|' read`), azt
+    // nem, hogy MIT olvas. Ez ugyanaz az alak, amit ma este vegig kergetunk: a jel megvan,
+    // a kapcsolat nincs -- csak most a sajat tesztemben.
+    expect(sec()).toMatch(/PG_LINES="\$\(bash scripts\/permission-guard-check\.sh/)
+    expect(sec()).toMatch(/done <<< "\$PG_LINES"/)
+  })
+
   it('a SOROKAT olvassa, NEM a kilepesi kodot', () => {
     // A szkript szandekosan MINDIG 0-val lep ki (a hivo dont). Aki a kilepesi kodra
     // kotne, csendben atengedne minden talalatot -- didi kulon kiirta ezt a sort.
@@ -79,6 +91,11 @@ describe('doctor.sh -- a jogosultsagi or BE VAN KOTVE', () => {
     //       `OSSZEGZES` sorok ide esnek, es azoknak nincs verdiktjuk.
     // A kulonbseg eddig sehol nem volt kimondva -- didi kerdezte meg, es igaza volt,
     // hogy egy sor komment eldonti.
+    // A NEGYEDIK ag, amit didi mutalt (L2): a `WARN) warn "$text"` sort `ok`-ra irva a
+    // keszlet ZOLD maradt. A FAIL) es az OK) rogzitve volt, a WARN) nem -- ugyanaz a
+    // csendes lefokozas, eggyel kisebb sullyal. A szkript ma WARN-t ad az
+    // "ertelmezhetetlen megosztott konfig" esetre: az sem OK.
+    expect(sec()).toMatch(/WARN\)\s*warn "\$text"/)
     expect(sec()).toMatch(/warn "scripts\/permission-guard-check\.sh missing or not executable"/)
     expect(sec()).toMatch(/fail "permission-guard-check\.sh: no output"/)
     expect(sec()).toMatch(/\*\)\s*echo/)
