@@ -57,8 +57,27 @@ export function adviseSender(
   queue: RecipientQueueState,
   presence: AgentRunState,
   abandonWindowMin: number,
+  /**
+   * A cimzettet PULL-modell szolgalja ki: nem a router injektal a paneljebe,
+   * hanem o maga uriti a postaladajat minden fordulo elejen. Ma egyedul a
+   * fougynok ilyen.
+   *
+   * MIERT KELL EZ A PARAMETER (mert defektus, 2026-08-23). Az `agentRunState()`
+   * az `agent-<nev>` sessiont keresi, a fougynok viszont `<nev>-channels`-ben
+   * fut -- ezt a `message-router.ts:515` sajat kommentje mondja ki. A jelenlet
+   * tehat a fougynokre MINDIG 'stopped'-nak latszik, es a tanacs azt allitotta,
+   * hogy az uzenet NEM lesz kezbesitve. Merve: a `marveen-channels` session
+   * letezett es futott, mikozben a figyelmeztetes tuzelt.
+   * ES A MASODIK OK, ami akkor is allna, ha a nevfeloldas jo lenne: a fougynok
+   * fele a `pending` NEM torlodas es nem elveszes -- a kovetkezo fordulojaban
+   * o maga veszi at. A "nem lesz kezbesitve" mondat itt szerkezetileg hamis.
+   *
+   * A hiba iranya a legrosszabb, amit egy ilyen tanacs felvehet: eppen a
+   * KOORDINATORNAK szolo jelentesrol beszeli le a kuldot.
+   */
+  pullModel = false,
 ): RecipientAdvice {
-  if (presence === 'stopped') {
+  if (presence === 'stopped' && !pullModel) {
     const waiting = queue.queueDepth === 1
       ? 'Ez az üzenet'
       : `Ez az üzenet és a másik ${queue.queueDepth - 1} a sorában`
@@ -71,7 +90,7 @@ export function adviseSender(
     }
   }
 
-  if (presence === 'unreachable') {
+  if (presence === 'unreachable' && !pullModel) {
     return {
       presence,
       advice:

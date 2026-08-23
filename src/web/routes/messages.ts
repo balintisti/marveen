@@ -15,7 +15,7 @@ import { isKnownAgent } from '../agent-config.js'
 import { agentRunState } from '../agent-process.js'
 import { MESSAGE_ABANDON_WINDOW_MS } from '../message-router.js'
 import { adviseSender } from '../recipient-advice.js'
-import { OWNER_NAME } from '../../config.js'
+import { OWNER_NAME, MAIN_AGENT_ID } from '../../config.js'
 import { readBody, json, jsonMaybeGzip } from '../http-helpers.js'
 import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
 import { parseQualifiedId, formatQualifiedId, isQualifiedId } from '../federation/address.js'
@@ -149,7 +149,12 @@ export async function tryHandleMessages(ctx: RouteContext): Promise<boolean> {
     // for the one agent this message is addressed to; the router already makes
     // the same call per tick, so this is not a new class of cost.
     const advice = queue
-      ? adviseSender(queue, agentRunState(storedTo), Math.round(MESSAGE_ABANDON_WINDOW_MS / 60000))
+      ? adviseSender(queue, agentRunState(storedTo), Math.round(MESSAGE_ABANDON_WINDOW_MS / 60000),
+          // A fougynok `<nev>-channels`-ben fut, nem `agent-<nev>`-ben, tehat az
+          // agentRunState() rá MINDIG 'stopped'-ot ad. Ugyanezt a kiveteltt kezeli a
+          // model-fallback-runner:100 es az auto-restart-runner:120 is -- ez a
+          // HARMADIK hivo, ami kimaradt belole.
+          storedTo === MAIN_AGENT_ID)
       : undefined
     logger.info(
       {
