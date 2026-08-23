@@ -81,8 +81,12 @@ describe('a BEKOTES -- szoveg-rogzites, es ez a hatara', () => {
   })
 
   it('a kozponti toast MEGKERDEZI az okot', () => {
-    const fn = APP.slice(APP.indexOf('function showToast('))
-    expect(fn.slice(0, 400)).toContain('window.mvHumanError')
+    // A fuggveny TORZSEIG olvasunk, nem egy fix karakterszamig: az elso
+    // valtozat 400 karakterre vagott, es egy KOMMENT-bovites elbuktatta --
+    // vagyis a proza mozgatta a hatart, nem a kod.
+    const start = APP.indexOf('function showToast(')
+    const body = APP.slice(start, APP.indexOf('\n  }', start))
+    expect(body).toContain('window.mvHumanError')
   })
 
   it('a regi ANGOL alert() MAR NINCS a hitelesitesi agban', () => {
@@ -107,5 +111,73 @@ describe('a nyelvi fajlok', () => {
       expect(hu, `hu: ${k}`).toContain(`'${k}'`)
       expect(en, `en: ${k}`).toContain(`'${k}'`)
     }
+  })
+})
+
+// AZ OR: MINDEN HIBA-MEGJELENITES MENJEN AT A FOGALMAZON -- ES A POPULACIO
+// SZARMAZTATOTT, NEM FELSOROLT (didi lelete, 2026-08-23).
+//
+// A LELET: az elso javitasom a kozponti `showToast`-ba kotote be a fogalmazot,
+// es a kommentje azt allitotta, hogy a 28 gyarto hely "mind ide fut be".
+// NEM IGAZ: TIZENHET hely KOZVETLENUL ir DOM-ba, es soha nem ert a toasthoz --
+// es epp azok a DOBOZOK. A kartyat szulo kepernyokepen egy doboz allt
+// ("Aktivitas -- Hiba: HTTP 401"), nem egy toast: a toast atmeneti, a doboz
+// OTT MARAD.
+//
+// EZERT NEM EGY LISTA VAN ITT, HANEM EGY SZARMAZTATAS. Egy felsorolt lista
+// pontosan azokat a helyeket vedi, amik a felirasakor leteztek -- a tizennyolcadik
+// doboz holnap ugyanugy kimaradna. A teszt MEGKERESI az osszes DOM-irast, es
+// mindegyikre allitja, hogy a fogalmazon at megy.
+describe('MINDEN hiba-megjelenites a fogalmazon at megy (szarmaztatott populacio)', () => {
+  /**
+   * Minden sor, ami HIBAT ir DOM-ba -- akar a nyers `err.message`-dzsel, akar a
+   * fogalmazon at.
+   *
+   * A POPULACIOT NEM A DEFEKTUSBOL SZARMAZTATJUK, ES EZ MERT DEFEKTUS-JAVITAS:
+   * az elso valtozatom csak a `(err|e).message` alakra szurt -- vagyis pontosan
+   * arra, amit a javitas MEGSZUNTET. A javitas utan a populacio NULLA lett, es
+   * az `it.each` nulla esetet futtatva ZOLD maradt volna. Egy or, ami nulla
+   * elemet ellenoriz, pontosan ugy nez ki, mint egy or, ami mindent rendben
+   * talal. A sajat pozitiv kontrollja fogta meg (`a populacio NEM URES`).
+   */
+  const domWrites = APP.split('\n')
+    .map((line, i) => ({ line, no: i + 1 }))
+    .filter(({ line }) => /(innerHTML|textContent)[^=]*=/.test(line))
+    .filter(({ line }) => /\b(err|e)\.message\b/.test(line) || /mvErrText\(/.test(line))
+
+  it('a populacio NEM URES -- kulonben a teszt semmit nem allit', () => {
+    // Pozitiv kontroll a mérőre magara: ha a minta elromlik es nullat talal,
+    // az alabbi `it.each` NULLA esetet futtatna, es ZOLD lenne. Egy or, ami
+    // nulla elemet ellenoriz, pontosan ugy nez ki, mint egy or, ami mindent
+    // rendben talal.
+    expect(domWrites.length).toBeGreaterThan(5)
+  })
+
+  it('EGYETLEN DOM-iras sem hasznal NYERS err.message-t', () => {
+    const nyers = domWrites.filter(({ line }) => !/mvErrText\(/.test(line))
+    expect(nyers.map(x => `app.js:${x.no}`)).toEqual([])
+  })
+})
+
+describe('mvErrText -- a hibaobjektumot is kezeli', () => {
+  function errText(reason: string | undefined) {
+    const human = humanizer(reason)
+    const w = { mvHumanError: human } as Record<string, unknown>
+    const src = APP.slice(APP.indexOf('window.mvErrText = (err) =>'))
+    const body = src.slice(0, src.indexOf('\n\n'))
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    return (new Function('window', body + '\nreturn window.mvErrText') as (w: unknown) => (e: unknown) => string)(w)
+  }
+
+  it('Error objektumbol a MESSAGE-et veszi, es fogalmaz', () => {
+    expect(errText('no-key')(new Error('HTTP 401'))).toMatch(/[Nn]incs eltarolva/)
+  })
+
+  it('nyers stringet is elfogad', () => {
+    expect(errText('no-key')('HTTP 401')).toMatch(/[Nn]incs eltarolva/)
+  })
+
+  it('ismeretlen ok eseten a NYERS szoveget adja -- a hatar valtozatlan', () => {
+    expect(errText(undefined)(new Error('HTTP 500'))).toBe('HTTP 500')
   })
 })
