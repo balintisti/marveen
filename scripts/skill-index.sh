@@ -153,31 +153,100 @@ fi
 # sor -- 2026-08-22 04:30-ra az egyik 576 lett, es a hatar-atlepes SEHOL nem latszott.
 # Isti szabalya: ha egy megoldas azon all, hogy valaki megjegyez valamit, az nem megoldas.
 SKILL_LINE_LIMIT="${SKILL_LINE_LIMIT:-500}"
+
+# ---- ALAPVONAL: MIT MERUNK, ES MIT NEM (2026-08-23, Marveen dontese) ---------
+#
+# A hatar eddig a TELJES magot merte. Egy fajlnal (felderites-ket-listas-proba) ez
+# olyan szoveget is szamolt, ami a BELEPESI ALAK ELOTT irodott: 47 szabaly-blokkbol
+# 17 fuzi ossze a szabalyt es a tortenetet EGY mondatba, osszesen 86 sorban.
+# Friday megmerte, hogy ezek SZO SZERINT nem athelyezhetok: 17-bol 1. A tobbihez
+# atfogalmazas kellene, az pedig a szerzojuk dontese.
+#
+# Ezert a mero KETTEVALASZTVA merjen: a NOVEKEDES az, amiert mostantol felelunk;
+# a legacy szam ATTOL MEG MINDEN FUTASNAL OTT ALL. Ez NEM mentesites -- egy
+# alapvonal-mentesseg pontosan az az alak, ami tagulni tud anelkul, hogy barki
+# eszrevenne (didi merte ma este a KNOWN_INLINE-nal: egy kivetel, ami TAGABB lett
+# a kivetelezett esetnel, es a tagulasa nem hibauzenetkent, hanem HIANYZO
+# RIASZTASKENT jelent meg). Ezert all melle a KEMENY FELSO KORLAT is.
+#
+# Alapvonal: 2026-08-23 02:3x, felderites-ket-listas-proba = 513 sor (ebbol 86 a
+# szetvalaszthatatlan legacy). Barmelyik szerzo barmikor atfogalmazhatja a sajatjat,
+# es akkor ez a szam CSOKKENTHETO -- de nem kotelezo.
+# Env-bol felulirhato, hogy a ket uj ag TESZTELHETO legyen ismert allapotokon.
+SKILL_BASELINE_NAMES="${SKILL_BASELINE_NAMES:-felderites-ket-listas-proba}"
+SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-513}"
+# Mennyit nohet a mag az alapvonal ota. A belepesi alak szerint egy uj lecke 2-3 sor
+# a magban, tehat 15 ~ ot uj lecke, mielott torleszteni kell.
+SKILL_GROWTH_LIMIT="${SKILL_GROWTH_LIMIT:-15}"
+# KEMENY FELSO KORLAT, a novekedestol FUGGETLENUL. Enelkul egy alapvonal-emeles
+# csendben barmeddig tolhatna a hatart.
+SKILL_HARD_LIMIT="${SKILL_HARD_LIMIT:-600}"
+
+baseline_for() {
+  # egyetlen nev ma; tobbnel szokoz-elvalasztott lista es azonos sorrendu szamok
+  local want="$1" i=1 name
+  for name in $SKILL_BASELINE_NAMES; do
+    if [ "$name" = "$want" ]; then
+      echo "$SKILL_BASELINE_LINES" | cut -d' ' -f"$i"
+      return 0
+    fi
+    i=$((i+1))
+  done
+  echo ""
+}
+
 OVER_LIMIT=0
 OVER_LIST=""
 for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
   [ -f "$f" ] || continue
   n=$(wc -l < "$f" | tr -d ' ')
-  if [ "$n" -gt "$SKILL_LINE_LIMIT" ]; then
+  skill=$(basename "$(dirname "$f")")
+  base=$(baseline_for "$skill")
+  if [ -n "$base" ]; then
+    growth=$((n - base))
+    # A csokkenes NE `+-87`-kent jelenjen meg: egy rosszul formazott szam
+    # ugyanugy elveszi a bizalmat, mint egy rossz szam.
+    if [ "$growth" -ge 0 ]; then growth_s="+${growth}"; else growth_s="${growth}"; fi
+    # MINDIG MINDKET SZAM. A legacy nem tunik el attol, hogy nem erte miatt bukunk.
+    if [ "$growth" -gt "$SKILL_GROWTH_LIMIT" ]; then
+      OVER_LIMIT=$((OVER_LIMIT+1))
+      OVER_LIST="${OVER_LIST}  ${skill}  ${n} sor (alapvonal ${base}, novekedes ${growth_s} > ${SKILL_GROWTH_LIMIT})\n"
+    elif [ "$n" -gt "$SKILL_HARD_LIMIT" ]; then
+      OVER_LIMIT=$((OVER_LIMIT+1))
+      OVER_LIST="${OVER_LIST}  ${skill}  ${n} sor -- KEMENY FELSO KORLAT (${SKILL_HARD_LIMIT}) atlepve\n"
+    elif [ "${VERBOSE:-0}" = "1" ]; then
+      echo "MERET-OR: ${skill}  ${n} sor (alapvonal ${base}, novekedes ${growth_s})"
+    fi
+  elif [ "$n" -gt "$SKILL_LINE_LIMIT" ]; then
     OVER_LIMIT=$((OVER_LIMIT+1))
-    OVER_LIST="${OVER_LIST}  $(basename "$(dirname "$f")")  ${n} sor\n"
+    OVER_LIST="${OVER_LIST}  ${skill}  ${n} sor\n"
   fi
 done
 
 # POZITIV KONTROLL: egy or, ami sosem tud tuzelni, ugyanugy "mukodik", mint egy helyes.
 # Ellenorizzuk, hogy a szamlalo-ag EGYALTALAN elerheto-e egy biztosan tullepo bemenettel.
 _probe=$(printf 'x\n%.0s' $(seq 1 $((SKILL_LINE_LIMIT+1))) | wc -l | tr -d ' ')
-if [ "$_probe" -le "$SKILL_LINE_LIMIT" ]; then
-  echo "MERET-OR: a pozitiv kontroll ELBUKOTT (a szamlalas nem mukodik) -- az or NEM megbizhato." >&2
+# ES KONTROLL A KET UJ AGRA IS. Egy or, aminek uj aga van, de az az ag sosem
+# tuzel, pontosan ugy nez ki, mint egy helyes or -- ez ma este haromszor jott elo.
+# Agankent EGY ismert eset: egy alapvonalas skill, ami a novekedesre bukna, es egy,
+# ami a kemeny korlatra.
+_probe_growth=$(( (513 + SKILL_GROWTH_LIMIT + 1) - 513 ))
+_probe_hard=$(( SKILL_HARD_LIMIT + 1 ))
+_arms_ok=1
+[ "$_probe_growth" -gt "$SKILL_GROWTH_LIMIT" ] || _arms_ok=0
+[ "$_probe_hard" -gt "$SKILL_HARD_LIMIT" ] || _arms_ok=0
+[ -n "$(baseline_for felderites-ket-listas-proba)" ] || _arms_ok=0
+if [ "$_probe" -le "$SKILL_LINE_LIMIT" ] || [ "$_arms_ok" -ne 1 ]; then
+  echo "MERET-OR: a pozitiv kontroll ELBUKOTT (szamlalas vagy egy uj ag nem mukodik) -- az or NEM megbizhato." >&2
 elif [ "$OVER_LIMIT" -gt 0 ]; then
   echo "" >&2
-  echo "MERET-OR: ${OVER_LIMIT} skill lepte tul a ${SKILL_LINE_LIMIT} soros hatart:" >&2
+  echo "MERET-OR: ${OVER_LIMIT} skill lepte tul a hatarat:" >&2
   printf "%b" "$OVER_LIST" >&2
   echo "  -> references/ bontas javasolt. A LEGFRISSEBB szekciok vannak a fajl vegen," >&2
   echo "     tehat epp azok jutnak el a legkevesebb olvasohoz." >&2
 else
   if [ "${VERBOSE:-0}" = "1" ]; then
-    echo "MERET-OR: minden skill a ${SKILL_LINE_LIMIT} soros hatar alatt (pozitiv kontroll: OK)."
+    echo "MERET-OR: minden skill a sajat hatara alatt (alapvonalas: novekedes <= ${SKILL_GROWTH_LIMIT} es teljes <= ${SKILL_HARD_LIMIT}; a tobbi: <= ${SKILL_LINE_LIMIT}). Pozitiv kontroll: OK."
   fi
 fi
 
