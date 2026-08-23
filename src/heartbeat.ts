@@ -10,9 +10,11 @@ import {
   PROJECT_ROOT,
   OWNER_NAME,
   APP_TZ,
+  MAIN_AGENT_ID,
 } from './config.js'
-import { getHeartbeatKanbanSummary, getActiveScheduledTaskCount } from './db.js'
+import { getHeartbeatKanbanSummary, getActiveScheduledTaskCount, createAgentMessage } from './db.js'
 import { fetchCalendarEvents, type CalendarEvent } from './google-api.js'
+import { detectTransitions, readQuotaSourceState } from './data-source-alarm.js'
 import { runAgent } from './agent.js'
 import { notifyTelegram } from './notify.js'
 import { logger } from './logger.js'
@@ -589,6 +591,37 @@ async function executeHeartbeat(): Promise<void> {
 
   logger.info('Heartbeat ellenorzes indul...')
   const data = await collectData()
+
+  // EL-VEZERELT ADATFORRAS-RIASZTAS, SZANDEKOSAN A shouldNotify KAPU ELOTT.
+  //
+  // A kapu azt donti el, hogy ISTINEK van-e mit mondani. Egy elromlott
+  // adatforras nem az: neki 07:30-kor kell egy MUKODO napindito, nem egy
+  // ejszakai riasztas arrol, hogy 14:00-kor elromlott valami. A koordinatornak
+  // viszont pontosan ez kell, mert neki VAN tizenhet oraja megjavittatni.
+  // (0114968c + 2b1e373a, Marveen dontese 2026-08-22 22:57.)
+  //
+  // A kapu ELOTT fut, mert kulonben a jelzes epp akkor nemulna el, amikor a
+  // forras romlasa MIATT nincs mas jelenteni valo -- egy naptar-hiba
+  // `calendar.length === 0`-t ad, ami maga a kapu egyik feltetele.
+  try {
+    const quota = readQuotaSourceState()
+    const transitions = detectTransitions(
+      {
+        calendar: { ok: !data.calendarError, error: data.calendarError },
+        email: { ok: !data.emailError, error: data.emailError },
+        ...(quota ? { quota } : {}),
+      },
+      Math.floor(Date.now() / 1000),
+    )
+    for (const t of transitions) {
+      createAgentMessage('system', MAIN_AGENT_ID, t.message)
+      logger.info({ source: t.source }, 'Adatforras-allapot valtozott, ertesites a koordinatornak')
+    }
+  } catch (err) {
+    // A riasztas hibaja NEM allithatja meg a heartbeatet: az itt kovetkezo
+    // kor tobbet er, mint egy tokeletes jelzo-lanc.
+    logger.warn({ err }, 'Adatforras-riasztas hiba')
+  }
 
   if (!shouldNotify(data)) {
     logger.info('Heartbeat ellenorzes kesz -- nincs ertesitendo')
