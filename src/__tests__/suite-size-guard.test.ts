@@ -22,20 +22,13 @@ import {
 // adott; collect-hiba -> megnevezi a fajlt; reszhalmaz-futas -> hallgat.
 
 describe('floorFor -- also korlat, nem pontos egyezes', () => {
-  it('kis szamnal legalabb 5, kulonben egyetlen torles is riasztana', () => {
-    // 100 * 2% = 2, ami tul szoros: harom torolt teszt mar bukast adna, es egy
-    // or, ami a szokasos munkara sir, az, amit kikapcsolnak.
-    expect(floorFor(100)).toBe(95)
-  })
-
-  it('a 2 szazalek csak egy KESKENY savban dont (250 es 500 teszt kozott)', () => {
-    // A ket korlat kozott a szazalek csak akkor szamit, ha 5 < 2% < 10 -- vagyis
-    // ~250 es ~500 teszt kozott. Ezen kivul mindig az egyik korlat nyer, es ezt
-    // jobb kimondani, mint egy kozepes szammal illusztralni, ami barmelyik
-    // hatar mozdulasakor csendben elavul.
-    expect(floorFor(400)).toBe(400 - 8)
-    expect(floorFor(100)).toBe(100 - 5)      // ala: a minimum 5 nyer
-    expect(floorFor(3901)).toBe(3901 - 10)   // fole: a plafon 10 nyer
+  it('NULLA TURES: az also korlat MAGA az alapvonal, merettol fuggetlenul', () => {
+    // A plafon 0, tehat a `Math.max(5, 2%)` also ag hatastalan. Ez didi ket
+    // meresenek a kovetkezmenye: nincs legitim lefele mozgas (200 commit), es a
+    // skip/todo sem mozgatja a szamot -- vagyis a turesnek nincs mit fednie.
+    for (const b of [100, 400, 3901, 100_000]) {
+      expect(floorFor(b), `alapvonal=${b}`).toBe(b)
+    }
   })
 
   it('PLAFON: a tureshatar NEM no tovabb a keszlettel (didi lelete)', () => {
@@ -48,9 +41,9 @@ describe('floorFor -- also korlat, nem pontos egyezes', () => {
     expect(floorFor(100_000)).toBe(100_000 - TOLERANCE_CAP)
   })
 
-  it('a kartyat szulo 97-es eset egy 4850-es keszletnel IS bukna', () => {
-    // Ez a plafon egesz letjogosultsaga, szamban kimondva.
+  it('a kartyat szulo 97-es eset BARMEKKORA keszletnel bukik', () => {
     expect(evaluateSuiteSize(300, 4850 - 97, 300, 4850).ok).toBe(false)
+    expect(evaluateSuiteSize(300, 100_000 - 97, 300, 100_000).ok).toBe(false)
   })
 })
 
@@ -65,14 +58,11 @@ describe('evaluateSuiteSize -- a (B) alapvonal-ag', () => {
     expect(evaluateSuiteSize(300, 4200, 286, 3879).ok).toBe(true)
   })
 
-  it('hallgat PONTOSAN a tureshataron', () => {
-    // A hatar a plafon, nem a szazalek -- ezert a konstansbol szamolunk, nem
-    // beirt szambol. Egy beirt 78 csendben elavult volna a plafon bevezetesevel,
-    // es epp ez a teszt hazudott volna elsonek.
+  it('hallgat PONTOSAN az alapvonalon', () => {
     expect(evaluateSuiteSize(286, 3879 - TOLERANCE_CAP, 286, 3879).ok).toBe(true)
   })
 
-  it('MEGSZOLAL egy teszttel a hataron TUL', () => {
+  it('MEGSZOLAL EGYETLEN eltunt tesztre is', () => {
     const r = evaluateSuiteSize(286, 3879 - TOLERANCE_CAP - 1, 286, 3879)
     expect(r.ok).toBe(false)
     expect(r.message).toContain('OSSZEZSUGORODOTT')
@@ -92,13 +82,13 @@ describe('evaluateSuiteSize -- a (B) alapvonal-ag', () => {
     expect(evaluateSuiteSize(285, 3875 - 40, 285, 3875).ok).toBe(false)
   })
 
-  it('ES A MARADEK RES, KIMONDVA: 10 teszt alatti torles meg mindig atmegy', () => {
-    // Nem szepitjuk. Az (A) ag ezt sem latja, mert egy TOROLT fajl meg sem
-    // jelenik a listaban (didi merte: 287 -> 284, egyszer sem szolalt meg semmi).
-    // A res tehat nem szunt meg, csak 50-rol 10-re zsugorodott -- es 0-ra akkor
-    // mehet, ha az alapvonal frissitese egy parancs lesz (c0f10926).
-    expect(evaluateSuiteSize(285, 3875 - 9, 285, 3875).ok).toBe(true)
-    expect(evaluateSuiteSize(285, 3875 - 11, 285, 3875).ok).toBe(false)
+  it('A RES BEZARULT: az (A) ag vaksaga (torolt fajl) mostantol a (B) agon fennakad', () => {
+    // Ez a kartya vegallapota. Az (A) ag egy TOROLT fajlt nem lat (didi merte:
+    // 287 -> 284, egyszer sem szolalt meg semmi), mert az meg sem jelenik a
+    // listaban. Amig volt tures, egy kis torles a KET AG KOZE esett. Nulla
+    // turessel mar EGYETLEN teszt eltunese is fennakad a (B) agon.
+    expect(evaluateSuiteSize(285, 3875 - 1, 285, 3875).ok).toBe(false)
+    expect(evaluateSuiteSize(284, 3875, 285, 3875).ok).toBe(false)
   })
 
   it('az uzenet megmondja, mit nezzen meg eloszor az olvaso', () => {

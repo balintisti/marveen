@@ -17,6 +17,6 @@ export function decide(
   counts: SuiteCounts | null,
 ): { write: boolean; reason: string | null }
 
-export function renderBlock(counts: SuiteCounts, stamp: string): string
+export function renderBlock(counts: SuiteCounts, stamp: string, how?: string): string
 
 export function replaceBlock(source: string, block: string): string

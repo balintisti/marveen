@@ -15,8 +15,24 @@
  * rosszabb lenne a mai kezi allapotnal. Ezert a rc != 0 eset nem figyelmeztetes,
  * hanem megallas, nem-nulla kilepessel.
  *
+ * KET UT, ES KULONBOZOT GARANTALNAK (didi merese, 2026-08-23):
+ *
+ *   ALAPERTELMEZES: `vitest run` -- a TELJES keszlet lefut (~20 mp). Ez tartja a
+ *   kartya 1. kikoteset szo szerint: "ha a suite RC-je nem nulla (BUKAS vagy
+ *   betoltesi hiba), NE irjon alapvonalat".
+ *
+ *   `--fast`: `vitest list` -- csak GYUJTES, futtatas nelkul (~9-14 mp). Didi
+ *   megmerte, hogy ugyanazt a ket szamot adja (3921/289, pontos egyezes), es hogy
+ *   egy COLLECT-hiban HANGOSAN elhasal -- ami alapvonal-allitashoz JOBB, mint a
+ *   teljes futas: ott az ilyen fajl `tasks: []`-szel BENN MARAD.
+ *   AMIT VISZONT NEM GARANTAL: hogy a tesztek ATMENNEK. Egy piros teszt ugyanugy
+ *   GYUJTOTT teszt, tehat a SZAM helyes marad -- de a kartya kikotese "bukas VAGY
+ *   betoltesi hiba"-t mond, es ez az ut csak a masodikat fogja. Ezert OPT-IN, es
+ *   ezert nem en dontom el, hogy alapertelmezes legyen-e.
+ *
  * Hasznalat:  npm run test:baseline
- * Szarazon:   npm run test:baseline -- --dry-run
+ *             npm run test:baseline -- --fast      # csak gyujtes, gyorsabb
+ *             npm run test:baseline -- --dry-run
  */
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
@@ -56,7 +72,7 @@ export function decide(rc, counts) {
 }
 
 /** A generalt blokk szovege. A szam ES a mondat EGYUTT keletkezik, hogy ne tudjanak szetcsuszni. */
-export function renderBlock(counts, stamp) {
+export function renderBlock(counts, stamp, how = 'npx vitest run') {
   return [
     BEGIN,
     '// EZT A BLOKKOT A `npm run test:baseline` GENERALJA. Ne ird at kezzel.',
@@ -67,7 +83,7 @@ export function renderBlock(counts, stamp) {
     '// es a plafon bevezetesevel csendben elavult volna -- epp azok hazudtak volna',
     '// elsonek, amik a hatart orzik. Ha a szam es a mondat egy generalt blokkban all,',
     '// nem tudnak szetcsuszni.',
-    `/** Merve ${stamp} -- \`npx vitest run\` -> ${counts.files} fajl / ${counts.tests} teszt. */`,
+    `/** Merve ${stamp} -- \`${how}\` -> ${counts.files} fajl / ${counts.tests} teszt. */`,
     `export const SUITE_BASELINE_FILES = ${counts.files}`,
     `export const SUITE_BASELINE_TESTS = ${counts.tests}`,
     END,
@@ -91,23 +107,48 @@ function main() {
   // alapvonalanak a felmeresebe. Egy regi, tul magas alapvonal kulonben
   // megakadalyozna, hogy valaha frissiteni lehessen -- az or befagyasztana
   // magat, es pontosan ez az a csapda-alak, amit mashol mar kimondtunk.
+  const fast = process.argv.includes('--fast')
   const cmd = process.env['SUITE_BASELINE_CMD']
-  const run = cmd
-    ? spawnSync('bash', ['-lc', cmd], { cwd: ROOT, encoding: 'utf-8', stdio: 'inherit',
-        env: { ...process.env, SUITE_BASELINE_EMIT: emit, SUITE_SIZE_GUARD: 'off' } })
-    : spawnSync('npx', ['vitest', 'run', '--reporter=default',
-        '--reporter=./src/__tests__/setup/baseline-emit.ts'],
-        { cwd: ROOT, encoding: 'utf-8', stdio: 'inherit',
-          env: { ...process.env, SUITE_BASELINE_EMIT: emit, SUITE_SIZE_GUARD: 'off' } })
+  const env = { ...process.env, SUITE_BASELINE_EMIT: emit, SUITE_SIZE_GUARD: 'off' }
+  const opts = { cwd: ROOT, encoding: 'utf-8', env }
 
-  let counts = null
-  try {
-    if (existsSync(emit)) counts = JSON.parse(readFileSync(emit, 'utf-8'))
-  } catch { counts = null }
+  let run, counts = null
+  if (cmd) {
+    run = spawnSync('bash', ['-lc', cmd], { ...opts, stdio: 'inherit' })
+  } else if (fast) {
+    // `vitest list --json` a GYUJTOTT teszteket sorolja fel (az `it.each` tablakat
+    // kibontva), futtatas nelkul. A kimenetet nem a riporter adja, hanem mi
+    // szamoljuk -- ezert itt nincs `stdio: inherit`.
+    run = spawnSync('npx', ['vitest', 'list', '--json'], opts)
+    if (run.status === 0) {
+      try {
+        const rows = JSON.parse(run.stdout || '[]')
+        counts = { files: new Set(rows.map(r => r.file)).size, tests: rows.length }
+      } catch { counts = null }
+    }
+  } else {
+    run = spawnSync('npx', ['vitest', 'run', '--reporter=default',
+      '--reporter=./src/__tests__/setup/baseline-emit.ts'], { ...opts, stdio: 'inherit' })
+  }
+
+  if (counts === null) {
+    try {
+      if (existsSync(emit)) counts = JSON.parse(readFileSync(emit, 'utf-8'))
+    } catch { counts = null }
+  }
 
   const rc = run.status === null ? 1 : run.status
   const verdict = decide(rc, counts)
   if (!verdict.write) {
+    // DIDI FIGYELMEZTETESE, ES ITT SZAMIT A LEGTOBBET: node 26 alatt a `vitest
+    // list` a nativ modulon ERR_DLOPEN_FAILED-del elhasal. Az a KORNYEZET hibaja,
+    // nem a keszlete -- de a kimenete ugy nez ki, mintha a suite lenne rossz.
+    const dlopen = /ERR_DLOPEN_FAILED|was compiled against a different Node/.test(
+      `${run.stderr ?? ''}${run.stdout ?? ''}`)
+    if (dlopen) {
+      console.error('\nEZ A KORNYEZET HIBAJA, NEM A KESZLETE: a natív modul mas Node-verziora epult.')
+      console.error('  Probald node 22-vel:  export PATH="/opt/homebrew/opt/node@22/bin:$PATH"\n')
+    }
     console.error(`\nALAPVONAL NEM FRISSULT.\n  ${verdict.reason}\n`)
     rmSync(dir, { recursive: true, force: true })
     process.exit(1)
@@ -115,7 +156,11 @@ function main() {
 
   const stamp = new Date().toLocaleString('hu-HU', { timeZone: 'Europe/Budapest', hour12: false })
   const src = readFileSync(TARGET, 'utf-8')
-  const next = replaceBlock(src, renderBlock(counts, `${stamp} CEST`))
+  // A MERES MODJA IS A BLOKKBA KERUL. Enelkul a `--fast` utan a komment azt
+  // allitana, hogy `vitest run` merte -- vagyis a szam es a MONDATA csuszna szet,
+  // pontosan az a hiba, ami ellen ez a generalt blokk keszult.
+  const how = cmd ? 'SUITE_BASELINE_CMD' : fast ? 'npx vitest list --json' : 'npx vitest run'
+  const next = replaceBlock(src, renderBlock(counts, `${stamp} CEST`, how))
   if (dry) {
     console.log(`\n[--dry-run] uj alapvonal: ${counts.files} fajl / ${counts.tests} teszt (nem irtam)\n`)
   } else if (next === src) {

@@ -66,12 +66,23 @@ import type { File, Task } from 'vitest'
  * van ra kulon kartya (c0f10926), hogy az alapvonal frissitese EGY PARANCS
  * legyen. Ha az megvan, ez a szam 0-ra mehet.
  *
- * MIERT NEM MAR MOST 0 -- ES EZ NEM OVATOSSAG, HANEM EGY NEVESITETT ISMERETLEN.
- * Egyetlen dolgot nem mert meg senki: valtozik-e a szamolt osszeg attol, ha egy
- * teszt `skip`-re vagy `todo`-ra vall. A 10 EZ ELLEN fedezet, semmi mas ellen.
- * AKI EZT A SZAMOT TAGITANI AKARJA: eloszor merd meg azt az egy dolgot. Ha a
- * skip/todo nem valtoztat az osszegen, a helyes ertek 0, nem egy nagyobb szam.
- * Ne vedd altalanos ovatossagnak -- pontosan azert all itt, hogy ne annak nezd.
+ * A PLAFON MA 0, ES EZ A HARMADIK, VEGSO ALLAPOT. A ket korabbi szam (50, majd
+ * 10) mindketto ITELET volt, es mindketto MEGNEVEZTE a merest, ami eldontene --
+ * eloszor "van-e legitim lefele mozgas", aztan "valtozik-e a szamolt osszeg
+ * skip/todo-tol". Didi mindkettot elvegezte, es MINDKETTO NEM lett:
+ *
+ *   200 commit atnezve  ->  teszt-fajlt TOROLO commit 0, netto csokkenes 0
+ *   5 valtozat (it.skip, it.todo, describe.skip, skipIf/runIf) -> a szam EGYIK
+ *   esetben sem mozdult: a task `type === 'test'`-kent bent marad, csak a `mode`
+ *   valtozik, es a `countTests` a `mode`-ot nem nezi
+ *
+ * Vagyis a tureshatarnak NINCS MIT FEDNIE. Ami maradt volna, az nem ingadozas,
+ * hanem az, hogy valaki elfelejtette frissiteni az alapvonalat -- es arra
+ * `npm run test:baseline` van (kartya c0f10926), nem tolerancia.
+ *
+ * AKI EZT A SZAMOT MEGINT MEG AKARJA EMELNI: nevezze meg a MERHETO okot, ahogy
+ * a ket elozo szam is tette, es merje meg. Egy szam, ami mogott nincs meres,
+ * csak annyit ved, hogy ne kelljen a parancsot lefuttatni.
  */
 
 // === SUITE-BASELINE:BEGIN ===
@@ -83,7 +94,7 @@ import type { File, Task } from 'vitest'
 // es a plafon bevezetesevel csendben elavult volna -- epp azok hazudtak volna
 // elsonek, amik a hatart orzik. Ha a szam es a mondat egy generalt blokkban all,
 // nem tudnak szetcsuszni.
-/** Merve 2026. 08. 23. 8:47:35 CEST -- `npx vitest run` -> 289 fajl / 3921 teszt. */
+/** Merve 2026. 08. 23. 9:56:55 CEST -- `npx vitest list --json` -> 289 fajl / 3921 teszt. */
 export const SUITE_BASELINE_FILES = 289
 export const SUITE_BASELINE_TESTS = 3921
 // === SUITE-BASELINE:END ===
@@ -99,8 +110,12 @@ function num(name: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback
 }
 
-/** 2%, de legalabb 5 es LEGFELJEBB 10 -- az also korlat, ami alatt riasztunk. */
-export const TOLERANCE_CAP = 10
+/**
+ * A tureshatar felso korlatja. 0 = nincs tures: a keszlet NEM zsugorodhat.
+ * A `Math.max(5, ...)` also ag igy hatastalan marad -- szandekosan ott hagyva,
+ * hogy egy jovobeli nem-nulla plafon eseten ujra ertelmet nyerjen.
+ */
+export const TOLERANCE_CAP = 0
 
 export function floorFor(baseline: number): number {
   return baseline - Math.min(TOLERANCE_CAP, Math.max(5, Math.ceil(baseline * 0.02)))

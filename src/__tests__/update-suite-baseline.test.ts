@@ -66,6 +66,15 @@ describe('renderBlock -- a szam es a mondat EGYUTT keletkezik', () => {
   it('a DATUM is bekerul', () => {
     expect(renderBlock({ files: 1, tests: 1 }, '2026-08-23 07:57')).toContain('2026-08-23 07:57')
   })
+
+  it('a MERES MODJA is bekerul -- kulonben a --fast utan a komment hazudna', () => {
+    // A `--fast` ut a `vitest list`-tel mer. Ha a blokk fixen "vitest run"-t
+    // irna, a szam es a MONDATA csuszna szet -- pont az a hiba, ami ellen ez a
+    // generalt blokk keszult.
+    expect(renderBlock({ files: 1, tests: 1 }, 'x', 'npx vitest list --json'))
+      .toContain('npx vitest list --json')
+    expect(renderBlock({ files: 1, tests: 1 }, 'x')).toContain('npx vitest run')
+  })
 })
 
 describe('replaceBlock', () => {
