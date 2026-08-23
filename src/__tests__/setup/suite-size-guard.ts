@@ -101,9 +101,9 @@ import type { File, Task } from 'vitest'
 // es a plafon bevezetesevel csendben elavult volna -- epp azok hazudtak volna
 // elsonek, amik a hatart orzik. Ha a szam es a mondat egy generalt blokkban all,
 // nem tudnak szetcsuszni.
-/** Merve 2026. 08. 23. 10:27:55 CEST -- `npx vitest list --json` -> 289 fajl / 3929 teszt. */
-export const SUITE_BASELINE_FILES = 289
-export const SUITE_BASELINE_TESTS = 3929
+/** Merve 2026. 08. 23. 19:27:45 CEST -- `npx vitest list --json` -> 309 fajl / 4160 teszt. */
+export const SUITE_BASELINE_FILES = 309
+export const SUITE_BASELINE_TESTS = 4160
 // === SUITE-BASELINE:END ===
 
 /**
@@ -235,6 +235,53 @@ export function evaluateSuiteSize(
   }
 }
 
+/**
+ * (C) AZ OR SAJAT ELAVULASA -- mert egy also korlat, ami messze a valosag alatt
+ * all, nem szigor, hanem TEHETETLENSEG.
+ *
+ * MERVE 2026-08-23 (kartya 7c86006a). Az alapvonal `289 fajl / 3929 teszt` volt,
+ * a keszlet kozben `310 / 4166`-ra nott -- 237 teszt elteres. A also korlat igy
+ * `3929`-en allt (a `TOLERANCE_CAP` 0, tehat a korlat MAGA az alapvonal), vagyis:
+ *     237 teszt tunhetett volna el RIASZTAS NELKUL
+ *     az EREDETI incidens (97 elveszett teszt) sem szolaltatta volna meg
+ * Az or tehat MUKODOTT es NEM VEDETT. Egy pozitiv kontroll (11 tesztes fajl
+ * eltavolitasa) vegig zolden futott le.
+ *
+ * AZ ALAPVONAL FELFELE SODRODIK MAGATOL: minden uj teszt tavolabb tolja a
+ * korlatot, es semmi nem szol rola. Ez nem elfelejtett frissites, hanem a
+ * mechanizmus termeszete -- ezert kap sajat jelzest, nem emlekeztetot.
+ *
+ * SZANDEKOSAN FIGYELMEZTETES ES NEM BUKAS: egy uj teszt hozzaadasa NEM hiba, es
+ * egy or, ami a helyes valtozast bunteti, megtanitja az olvasot, hogy a jelzese
+ * zaj. A `npm run test:baseline` egy parancs -- a megfeleles ara egy sor.
+ */
+export function baselineStaleMessage(
+  tests: number,
+  baselineTests = SUITE_BASELINE_TESTS,
+  baselineFiles = SUITE_BASELINE_FILES,
+): string | null {
+  const drift = tests - baselineTests
+  // A KUSZOB SZARMAZTATOTT, NEM TIPPELT. A `TOLERANCE_CAP` itt nem hasznalhato:
+  // az 0, tehat barmelyik uj teszt "elavulast" jelentene -- egy jelzes, ami
+  // minden hozzaadaskor megszolal, egy heten belul zaj.
+  // Az anchor az, AMIT AZ OR VEDENI HIVATOTT: egy teszt-FAJL eltunese. Ha a
+  // sodrodas eleri egy ATLAGOS fajl mereteit, akkor egy egesz fajl kieshet
+  // eszrevetlenul -- ez a pont, ahol az or erdemben gyengul.
+  const atlagosFajl = baselineFiles > 0 ? Math.ceil(baselineTests / baselineFiles) : 10
+  if (drift < atlagosFajl) return null
+  return (
+    '\nSUITE-MERET OR: AZ ALAPVONAL ELAVULT, EZERT AZ ALSO KORLAT MAR NEM VED.\n' +
+    `  gyujtott:  ${tests} teszt\n` +
+    `  alapvonal: ${baselineTests} teszt (${drift} teszt elteres, also korlat ${floorFor(baselineTests)})\n` +
+    `  ennyi teszt tunhet el JELZES NELKUL: ${tests - floorFor(baselineTests)}\n` +
+    '\n' +
+    '  Ez NEM hiba, es nem is a te hibad: az alapvonal minden uj teszttol tavolabb\n' +
+    '  kerul a valosagtol. De amig nem frissul, ez az or CSAK LATSZIK ornek.\n' +
+    '\n' +
+    '  Egy parancs:  npm run test:baseline    (es a valtozas ugyanabba a commitba)\n'
+  )
+}
+
 export function zeroTestMessage(names: readonly string[]): string {
   return (
     '\nSUITE-MERET OR: VAN FAJL, AMI EGYETLEN TESZTET SEM ADOTT.\n' +
@@ -292,5 +339,14 @@ export default class SuiteSizeGuard implements Reporter {
       process.stderr.write(res.message ?? '')
       process.exitCode = 1
     }
+    // (C) Az OR SAJAT elavulasa. FIGYELMEZTETES, nem bukas: uj tesztet irni nem
+    // hiba. De amig az alapvonal nem frissul, a fenti also korlat csak LATSZIK
+    // ornek -- 2026-08-23-an 237 teszt tunhetett volna el jelzes nelkul.
+    const stale = baselineStaleMessage(
+      collected,
+      num('SUITE_BASELINE_TESTS', SUITE_BASELINE_TESTS),
+      num('SUITE_BASELINE_FILES', SUITE_BASELINE_FILES),
+    )
+    if (stale) process.stderr.write(stale)
   }
 }

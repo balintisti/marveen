@@ -9,6 +9,7 @@ import {
   zeroTestFiles,
   SUITE_BASELINE_FILES,
   SUITE_BASELINE_TESTS,
+  baselineStaleMessage,
 } from './setup/suite-size-guard.js'
 
 // AZ OR SAJAT TESZTJEI (kartya 30e04d76).
@@ -223,5 +224,46 @@ describe('az alapvonal maga', () => {
   it('szam, es pozitiv -- egy elgepelt env nem nullazhatja csendben', () => {
     expect(SUITE_BASELINE_FILES).toBeGreaterThan(0)
     expect(SUITE_BASELINE_TESTS).toBeGreaterThan(0)
+  })
+})
+
+describe('baselineStaleMessage -- az OR SAJAT elavulasa (kartya 7c86006a)', () => {
+  // MERVE 2026-08-23. Az alapvonal `289 / 3929` volt, a keszlet `310 / 4166` --
+  // 237 teszt elteres. A `TOLERANCE_CAP` 0, tehat a also korlat MAGA az
+  // alapvonal (3929), es igy:
+  //   237 teszt tunhetett volna el JELZES NELKUL
+  //   az EREDETI incidens (97 elveszett teszt) sem szolaltatta volna meg
+  // POZITIV KONTROLLAL merve: egy 11 tesztes fajl eltavolitasa utan a futas
+  // VEGIG ZOLD volt, es az or nem szolalt meg.
+  //
+  // Az or tehat MUKODOTT es NEM VEDETT -- es pontosan ez az, amit egy zold
+  // futas nem tud megmondani magarol.
+
+  it('a friss alapvonal CSENDBEN marad', () => {
+    expect(baselineStaleMessage(4160, 4160, 309)).toBeNull()
+  })
+
+  it('kis novekedes NEM jelzes -- kulonben minden uj teszt megszolaltatna', () => {
+    // Egy jelzes, ami minden hozzaadaskor tuzel, egy heten belul zaj.
+    expect(baselineStaleMessage(4165, 4160, 309)).toBeNull()
+  })
+
+  it('EGY ATLAGOS FAJLNYI sodrodas MAR jelzes -- ott mar egy egesz fajl kieshet eszrevetlenul', () => {
+    // A kuszob SZARMAZTATOTT: ceil(4160/309) = 14 teszt/fajl.
+    const uzenet = baselineStaleMessage(4160 + 14, 4160, 309)
+    expect(uzenet).toBeTruthy()
+    expect(uzenet).toContain('npm run test:baseline')
+  })
+
+  it('a MAI mert allapotot jelezte volna', () => {
+    // A javitas elotti valos szamok.
+    const uzenet = baselineStaleMessage(4166, 3929, 289)
+    expect(uzenet).toBeTruthy()
+    expect(uzenet).toContain('237')
+  })
+
+  it('megmondja, HANY teszt tunhet el jelzes nelkul -- a szam a lenyeg, nem a cimke', () => {
+    const uzenet = baselineStaleMessage(4166, 3929, 289) as string
+    expect(uzenet).toMatch(/ennyi teszt tunhet el JELZES NELKUL: 237/)
   })
 })
