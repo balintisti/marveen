@@ -34,6 +34,31 @@ FROM="${1:?from required}"; TO="${2:?to required}"; C="${3:?content required (or
 [ -r "$TOKEN_FILE" ] || { echo "FAIL: no token file at $TOKEN_FILE"; exit 1; }
 TOKEN="$(cat "$TOKEN_FILE")"
 
+# --- __STAMP__ SUBSTITUTION (2026-08-23, card a0fbeba0) ---
+# `card-comment.sh` fills this placeholder in; this script did not, and the two
+# take the SAME text from the SAME agent. Nine messages in the last 200 went out
+# with a raw `__STAMP__` where a timestamp belonged (mandark measured the queue;
+# my own estimate from my own files was five, and low). Nothing errored: the
+# placeholder looks exactly like a filled-in field, which is the whole defect.
+#
+# LOUD ON FAILURE, per Marveen's condition. If `date` cannot produce a stamp we
+# REFUSE rather than send the placeholder, because a silent fallback here would
+# rebuild the very hole being closed. Sending is the irreversible half.
+if printf '%s' "$C" | grep -q '__STAMP__'; then
+  STAMP="$(date '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null || true)"
+  if [ -z "$STAMP" ]; then
+    echo "NEM KULDTEM: a torzs __STAMP__ helyorzot tartalmaz, de a date nem adott idobelyeget." >&2
+    echo "  Ird bele az idopontot kezzel, vagy javitsd a kornyezetet -- nyers helyorzot nem kuldok el." >&2
+    exit 1
+  fi
+  C="$(C="$C" STAMP="$STAMP" python3 -c 'import os,sys; sys.stdout.write(os.environ["C"].replace("__STAMP__", os.environ["STAMP"]))')"
+  # Read back: a substitution that silently did nothing is the same class of bug.
+  if printf '%s' "$C" | grep -q '__STAMP__'; then
+    echo "NEM KULDTEM: a __STAMP__ helyettesites lefutott, de a helyorzo BENNMARADT." >&2
+    exit 1
+  fi
+fi
+
 BODY="$(FROM="$FROM" TO="$TO" C="$C" python3 -c 'import json,os; print(json.dumps({"from":os.environ["FROM"],"to":os.environ["TO"],"content":os.environ["C"]}))')"
 
 # --- PREFLIGHT: the recipient's queue BEFORE we add to it (2026-08-21) ---
