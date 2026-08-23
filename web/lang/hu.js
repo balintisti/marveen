@@ -1774,4 +1774,14 @@ window._i18n.hu = {
   'auth.bridge.bundle_hint':       'Másold ki most, és illeszd be a Bridge-be -- a csomag többé nem jeleníthető meg. Cél-cím: {host}.',
   'auth.bridge.err_empty':         'A kulcs-sor és az eszköznév is kötelező.',
 
+  'auth.nokey.title':             'Nincs belépési kulcs ehhez a címhez',
+  'auth.nokey.desc':              'A szolgáltatás fut és válaszol -- csak ez a böngésző nem tud belépni: ehhez a címhez nincs eltárolva kulcs.',
+  'auth.nokey.short':             'Nincs eltárolva belépési kulcs ehhez a címhez.',
+  'auth.nokey.how':               'Egyszeri belépési link kell hozzá. A link a szolgáltatás naplójában áll:',
+  'auth.nokey.hint':              'Keresd a "Dashboard access URL" sort, és nyisd meg azt a címet.',
+  'auth.nokey.close':             'Értem',
+  'auth.rejected.title':          'A belépési kulcs nem érvényes',
+  'auth.rejected.desc':           'Volt eltárolva kulcs, de a szolgáltatás elutasította. Valószínűleg lejárt vagy visszavonták.',
+  'auth.rejected.short':          'A belépési kulcs érvénytelen vagy lejárt.',
+
 }

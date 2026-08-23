@@ -128,9 +128,11 @@ function mainAgentId() {
     const isSameOriginApi =
       url.startsWith('/api/') ||
       (url.startsWith(window.location.origin + '/api/'))
+    let hadToken = false
     if (isSameOriginApi) {
       let token = sessionToken
       if (!token) { try { token = localStorage.getItem(TOKEN_KEY) } catch { token = '' } }
+      hadToken = !!token
       if (token) {
         init = init || {}
         const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined))
@@ -140,6 +142,14 @@ function mainAgentId() {
     }
     const res = await originalFetch(input, init)
     if (res.status === 401 && isSameOriginApi) {
+      // MIERT ITT DOL EL AZ OK, ES SEHOL MASHOL (kartya 3cc50c2a). Egy 401 tobb
+      // dolgot jelenthet: nincs eltarolva kulcs EHHEZ a cimhez, vagy volt kulcs
+      // es a szerver elutasitotta (lejart, visszavont). Kivulrol a ketto AZONOS
+      // -- es ez az EGYETLEN hely, ahol a kulonbseg meg megvan: itt meg tudjuk,
+      // hogy a kereshez csatoltunk-e egyaltalan tokent.
+      // Ket sorral lejjebb mar toroljuk a kulcsot, tehat innentol
+      // megkulonboztethetetlen. Ezert all a rogzites a torles ELE.
+      window.__marveenAuthReason = hadToken ? 'rejected' : 'no-key'
       // Token missing, wrong, or revoked. Wipe and prompt once per page load.
       // Keep a URL-provided session token so a transient 401 does not lock out
       // a session whose localStorage copy was purged.
@@ -151,6 +161,28 @@ function mainAgentId() {
       }
     }
     return res
+  }
+
+  /**
+   * Egy nyers hibaszoveget emberi mondatta alakit, HA tudjuk az okat.
+   *
+   * EGY HELY IR, SOK HELY OLVAS (marveen dontese). A `HTTP 401` szoveget 28
+   * kulon hely gyartja az app.js-ben, es mindegyik a sajat dobozaba irja ki.
+   * Huszonnyolc kulon megfogalmazas huszonnyolcfelekeppen avulna el, es a
+   * kovetkezo uj doboz megint statuszkodot irna. Ezert a MEGFOGALMAZAS all egy
+   * helyen, es a megjelenites csak KERDEZ.
+   *
+   * A HATAR, AMIT NEM LEP AT: csak akkor mondja, hogy "nincs kulcs", ha a
+   * burkolat tenylegesen ezt latta. Minden mas esetben visszaadja a nyers
+   * szoveget -- egy magabiztos, de rossz magyarazat rosszabb a statuszkodnal.
+   */
+  window.mvHumanError = (raw) => {
+    const text = String(raw == null ? '' : raw)
+    if (!/\b401\b/.test(text)) return text
+    const tr = (k, fb) => (typeof window.t === 'function' ? window.t(k) : fb) || fb
+    if (window.__marveenAuthReason === 'no-key') return tr('auth.nokey.short', 'Nincs eltarolva belepesi kulcs ehhez a cimhez.')
+    if (window.__marveenAuthReason === 'rejected') return tr('auth.rejected.short', 'A belepesi kulcs ervenytelen vagy lejart.')
+    return text
   }
 
   // On a 401, ask the public status probe whether a username+password login is
@@ -176,11 +208,53 @@ function mainAgentId() {
     if (isStandalone) {
       showStandaloneTokenPrompt(TOKEN_KEY)
     } else {
-      alert(
-        'Dashboard authentication failed. Check the server log for the access URL ' +
-        '(look for "Dashboard access URL" with ?token=...), then reopen it in your browser.'
-      )
+      showNoKeyOverlay()
     }
+  }
+
+  /**
+   * A "nincs hasznalhato kulcs" allapot EMBERI valasza (kartya 3cc50c2a).
+   *
+   * AMI ITT KORABBAN ALLT: egy ANGOL `alert()`. A gazda ebbol -- es a mogotte
+   * maradt "Hiba: HTTP 401" dobozokbol -- azt vezette le, hogy a szolgaltatas
+   * NEM MUKODIK. Pedig futott: a `GET /` 200-at adott, es a Bearer fejleccel
+   * kuldott `GET /api/kanban` is. Vagyis egy ELUTASITASBOL lett LEALLAS-diagnozis,
+   * es a kepernyo pont ezt allitotta.
+   *
+   * Egy statuszkod nem uzenet: a 401 a HTTP-nek szol, nem az embernek.
+   *
+   * A KET ALLAPOT KULON SZOVEGET KAP, es ez a kartya kikotese: csak akkor
+   * mondjuk, hogy "nincs kulcs", ha a burkolat tenylegesen ezt latta. Ha VOLT
+   * kulcs es a szerver utasitotta el (lejart, visszavont), az MAS mondat.
+   *
+   * A TOKENT NEM IRJUK KI. A naploban all, es a naplo ma is kiirja -- a
+   * kepernyore tenni feleslegesen sokszorozna a helyet, ahol megjelenik.
+   */
+  function showNoKeyOverlay() {
+    if (document.getElementById('mv-nokey-overlay')) return
+    const tr = (k, fb) => (typeof window.t === 'function' ? window.t(k) : fb) || fb
+    const noKey = window.__marveenAuthReason !== 'rejected'
+    const overlay = document.createElement('div')
+    overlay.id = 'mv-nokey-overlay'
+    overlay.className = 'mv-auth-overlay'
+    const title = noKey
+      ? tr('auth.nokey.title', 'Nincs belepesi kulcs ehhez a cimhez')
+      : tr('auth.rejected.title', 'A belepesi kulcs nem ervenyes')
+    const desc = noKey
+      ? tr('auth.nokey.desc', 'A szolgaltatas fut es valaszol -- csak ez a bongeszo nem tud belepni: ehhez a cimhez nincs eltarolva kulcs.')
+      : tr('auth.rejected.desc', 'Volt eltarolva kulcs, de a szolgaltatas elutasitotta. Valoszinuleg lejart vagy visszavontak.')
+    overlay.innerHTML =
+      '<div class="mv-auth-card">' +
+        '<h2>' + title + '</h2>' +
+        '<p class="mv-auth-desc">' + desc + '</p>' +
+        '<p class="mv-auth-desc">' + tr('auth.nokey.how', 'Egyszeri belepesi link kell hozza. A link a szolgaltatas naplojaban all:') + '</p>' +
+        '<p class="mv-auth-desc"><code>store/dashboard.log</code></p>' +
+        '<p class="mv-auth-desc">' + tr('auth.nokey.hint', 'Keresd a "Dashboard access URL" sort, es nyisd meg azt a cimet.') + '</p>' +
+        '<button type="button" id="mv-nokey-close">' + tr('auth.nokey.close', 'Ertem') + '</button>' +
+      '</div>'
+    document.body.appendChild(overlay)
+    const btn = overlay.querySelector('#mv-nokey-close')
+    if (btn) btn.addEventListener('click', () => { overlay.remove() })
   }
 
   // Full-screen username+password login overlay. Posts to /api/auth/login; on
@@ -2860,6 +2934,10 @@ document.getElementById('wizardCreateBtn').addEventListener('click', async () =>
 
 // === Toast ===
 function showToast(msg, duration = 3000) {
+  // A MEGJELENITES KERDEZI MEG AZ OKOT (kartya 3cc50c2a). Egy hely ir, sok hely
+  // olvas: a `HTTP 401` szoveget 28 kulon hely gyartja, es mind ide fut be.
+  // Ha az okot nem ismerjuk, a szoveg valtozatlanul megy tovabb.
+  if (typeof window.mvHumanError === 'function') msg = window.mvHumanError(msg)
   toast.textContent = msg
   toast.classList.add('visible')
   setTimeout(() => toast.classList.remove('visible'), duration)

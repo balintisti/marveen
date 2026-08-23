@@ -1772,4 +1772,14 @@ window._i18n.en = {
   'auth.bridge.bundle_hint':       'Copy it now and paste it into the Bridge -- the bundle cannot be displayed again. Target host: {host}.',
   'auth.bridge.err_empty':         'Both the key line and the device name are required.',
 
+  'auth.nokey.title':             'No access key stored for this address',
+  'auth.nokey.desc':              'The service is running and answering -- it is this browser that cannot sign in: no key is stored for this address.',
+  'auth.nokey.short':             'No access key stored for this address.',
+  'auth.nokey.how':               'It needs a one-time access link. The link is in the service log:',
+  'auth.nokey.hint':              'Look for the "Dashboard access URL" line and open that address.',
+  'auth.nokey.close':             'Got it',
+  'auth.rejected.title':          'The access key is not valid',
+  'auth.rejected.desc':           'A key was stored, but the service rejected it. It has probably expired or been revoked.',
+  'auth.rejected.short':          'The access key is invalid or expired.',
+
 }
