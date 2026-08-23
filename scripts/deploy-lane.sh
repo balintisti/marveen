@@ -142,4 +142,13 @@ if [ "$N_INSTALL" -gt 0 ]; then
   echo "ALLAPOT|INSTALL: TELEPITESRE VAR -- a plist beolvasztasa nem telepiti (launchctl kell)"
 fi
 
+# ES HA EGYIK SAV SEM ERINTETT: MONDJUK KI. Kulonben a szerszam NEM IR SEMMIT, es a
+# hivo oldalan a "nincs allapot-sor" megkulonboztethetetlen attol, hogy le sem futott.
+# Merve a sajat agaimon (2026-08-23): negy teszt-only ag ALLAPOT-sor nelkul jott vissza,
+# es a tablazatomban "nulla valtozas"-kent latszott -- pedig ket fajlt valtoztat.
+# A helyes valasz nem a csend, hanem: nincs telepitesi hatasa.
+if [ "$N_INSTANT" -eq 0 ] && [ "$N_BUILD" -eq 0 ] && [ "$N_INSTALL" -eq 0 ]; then
+  echo "ALLAPOT|NINCS TELEPITESI HATAS: mind a $N_NEUTRAL valtozott fajl semleges (teszt, doksi, seed)"
+fi
+
 exit 0

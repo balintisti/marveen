@@ -197,6 +197,23 @@ describe('deploy-lane -- az allapot, egy szintetikus telepitesi fan', () => {
     expect(line(lines, 'INFO')).toMatch(/tartomany:/)
   })
 
+  it('CSAK semleges fajlok: kimondja, hogy nincs telepitesi hatas -- nem hallgat', () => {
+    // A csend itt ugyanaz a hiba, mint mindenhol: a "nincs allapot-sor" nem
+    // kulonboztetheto meg attol, hogy a szerszam le sem futott. Merve a sajat
+    // teszt-only againmon: ALLAPOT-sor nelkul jottek vissza, es a tablazatomban
+    // "nulla valtozas"-kent latszottak -- pedig ket fajlt valtoztatnak.
+    git(install, 'checkout', '-q', '-b', 'feature')
+    mkdirSync(join(install, 'src', '__tests__'), { recursive: true })
+    writeFileSync(join(install, 'src', '__tests__', 'a.test.ts'), 'export {}\n')
+    writeFileSync(join(install, 'OLVASSEL.md'), '# doksi\n')
+    git(install, 'add', '-A'); git(install, 'commit', '-qm', 'test-only')
+    const feature = git(install, 'rev-parse', 'HEAD')
+    git(install, 'checkout', '-q', 'main')
+    const lines = run(feature)
+    expect(line(lines, 'ALLAPOT')).toMatch(/NINCS TELEPITESI HATAS: mind a 2 valtozott fajl semleges/)
+    expect(lines.some((l) => l.startsWith('INSTANT|') || l.startsWith('INSTALL|'))).toBe(false)
+  })
+
   it('hianyzo telepitesi fa -> SKIP, es SEMMILYEN allapot-allitas', () => {
     const lines = run('HEAD', join(install, 'nincs-ilyen'))
     expect(line(lines, 'SKIP')).toMatch(/NEM MERVE, nem 'rendben'/)
