@@ -4410,6 +4410,10 @@ document.getElementById('analyzeAllModelsBtn').addEventListener('click', async (
                 assignee: 'marveen',
                 priority: 'normal',
                 status: 'planned',
+                // These cards are always about agent model config, i.e. the
+                // Marveen framework itself -- derived, not guessed. Without it
+                // they were created with an empty project every single time.
+                project: 'marveen',
               }),
             })
             created++

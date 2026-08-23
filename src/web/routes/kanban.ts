@@ -15,6 +15,7 @@ import {
 } from '../../db.js'
 import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
 import { unknownQueryParams, unknownQueryParamError } from '../query-params.js'
+import { kanbanProjectWarning } from '../kanban-project-warning.js'
 import { OWNER_NAME, BOT_NAME, MAIN_AGENT_ID, STORE_DIR, WEB_HOST, WEB_PORT, KANBAN_LABEL_COLORS } from '../../config.js'
 import { listAgentNames, readAgentDisplayName } from '../agent-config.js'
 import { isAgentRunning } from '../agent-process.js'
@@ -303,7 +304,11 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     const data = JSON.parse(body.toString())
     const id = randomUUID().slice(0, 8)
     createKanbanCard({ id, ...data })
-    json(res, { ok: true, id })
+    // The card IS created either way -- see kanban-project-warning.ts for why
+    // this is not a 400 and why the warning travels in the response body.
+    const warning = kanbanProjectWarning(data.project)
+    if (warning) logger.warn({ id, title: data.title }, 'Kanban card created with an empty project field')
+    json(res, warning ? { ok: true, id, warning } : { ok: true, id })
     return true
   }
 
@@ -536,7 +541,10 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
       addKanbanComment(parentId, BOT_NAME, `Auto-breakdown: ${ids.length} subtask létrehozva (${ids.join(', ')})`)
       return ids
     })()
-    json(res, { ok: true, created })
+    // Sub-cards inherit `parent.project`, so an unattributed parent silently
+    // multiplies into unattributed children -- one breakdown, N new gaps.
+    const warning = kanbanProjectWarning(parent.project)
+    json(res, warning ? { ok: true, created, warning } : { ok: true, created })
     return true
   }
 
