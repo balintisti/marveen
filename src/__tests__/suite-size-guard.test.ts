@@ -3,6 +3,7 @@ import {
   countTests,
   evaluateSuiteSize,
   floorFor,
+  TOLERANCE_CAP,
   isFilteredRun,
   zeroTestFiles,
   SUITE_BASELINE_FILES,
@@ -21,14 +22,29 @@ import {
 // adott; collect-hiba -> megnevezi a fajlt; reszhalmaz-futas -> hallgat.
 
 describe('floorFor -- also korlat, nem pontos egyezes', () => {
-  it('nagy keszletnel 2 szazalek', () => {
-    expect(floorFor(3879)).toBe(3879 - 78)
-  })
-
   it('kis szamnal legalabb 5, kulonben egyetlen torles is riasztana', () => {
     // 100 * 2% = 2, ami tul szoros: harom torolt teszt mar bukast adna, es egy
     // or, ami a szokasos munkara sir, az, amit kikapcsolnak.
     expect(floorFor(100)).toBe(95)
+  })
+
+  it('kozepes keszletnel a 2 szazalek dont', () => {
+    expect(floorFor(1000)).toBe(1000 - 20)
+  })
+
+  it('PLAFON: a tureshatar NEM no tovabb a keszlettel (didi lelete)', () => {
+    // Plafon nelkul a tureshatar egyutt nott volna azzal, amit ellenoriz. A mai
+    // keszletnel 78, egy ~4850-esnel mar 97 -- vagyis EPP az az eset menne at,
+    // amelyik ezt a kartyat szulte. Egy or, ami annal engedekenyebb, minel
+    // nagyobb a vedendo felulet, rossz iranyba skalazodik.
+    expect(floorFor(3899)).toBe(3899 - TOLERANCE_CAP)
+    expect(floorFor(4850)).toBe(4850 - TOLERANCE_CAP)
+    expect(floorFor(100_000)).toBe(100_000 - TOLERANCE_CAP)
+  })
+
+  it('a kartyat szulo 97-es eset egy 4850-es keszletnel IS bukna', () => {
+    // Ez a plafon egesz letjogosultsaga, szamban kimondva.
+    expect(evaluateSuiteSize(300, 4850 - 97, 300, 4850).ok).toBe(false)
   })
 })
 
@@ -43,12 +59,15 @@ describe('evaluateSuiteSize -- a (B) alapvonal-ag', () => {
     expect(evaluateSuiteSize(300, 4200, 286, 3879).ok).toBe(true)
   })
 
-  it('hallgat a tureshataron belul', () => {
-    expect(evaluateSuiteSize(286, 3879 - 78, 286, 3879).ok).toBe(true)
+  it('hallgat PONTOSAN a tureshataron', () => {
+    // A hatar a plafon, nem a szazalek -- ezert a konstansbol szamolunk, nem
+    // beirt szambol. Egy beirt 78 csendben elavult volna a plafon bevezetesevel,
+    // es epp ez a teszt hazudott volna elsonek.
+    expect(evaluateSuiteSize(286, 3879 - TOLERANCE_CAP, 286, 3879).ok).toBe(true)
   })
 
-  it('MEGSZOLAL egy teszttel a korlat alatt', () => {
-    const r = evaluateSuiteSize(286, 3879 - 79, 286, 3879)
+  it('MEGSZOLAL egy teszttel a hataron TUL', () => {
+    const r = evaluateSuiteSize(286, 3879 - TOLERANCE_CAP - 1, 286, 3879)
     expect(r.ok).toBe(false)
     expect(r.message).toContain('OSSZEZSUGORODOTT')
   })
@@ -61,8 +80,10 @@ describe('evaluateSuiteSize -- a (B) alapvonal-ag', () => {
   })
 
   it('ES KIMONDVA: egy KISEBB kieses a (B) agon ATMENNE', () => {
-    // Nem szepitjuk: 40 teszt kiesese a tureshataron belul van. Ezert letezik az
-    // (A) ag, ami merettol fuggetlen. A ket ag egyutt ad fedezetet.
+    // Nem szepitjuk: a plafon miatt 50 teszt ala esik a res, es az ott is marad.
+    // Ezert letezik az (A) ag -- csakhogy az egy TOROLT fajlt nem lat (didi
+    // merte: 287 -> 284, egyszer sem szolalt meg semmi). A "50 teszt alatti
+    // torles" tehat tovabbra is a ket ag KOZOTT esik, es ezt tudni kell.
     expect(evaluateSuiteSize(285, 3875 - 40, 285, 3875).ok).toBe(true)
   })
 
