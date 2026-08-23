@@ -128,9 +128,11 @@ function mainAgentId() {
     const isSameOriginApi =
       url.startsWith('/api/') ||
       (url.startsWith(window.location.origin + '/api/'))
+    let hadToken = false
     if (isSameOriginApi) {
       let token = sessionToken
       if (!token) { try { token = localStorage.getItem(TOKEN_KEY) } catch { token = '' } }
+      hadToken = !!token
       if (token) {
         init = init || {}
         const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined))
@@ -140,6 +142,14 @@ function mainAgentId() {
     }
     const res = await originalFetch(input, init)
     if (res.status === 401 && isSameOriginApi) {
+      // MIERT ITT DOL EL AZ OK, ES SEHOL MASHOL (kartya 3cc50c2a). Egy 401 tobb
+      // dolgot jelenthet: nincs eltarolva kulcs EHHEZ a cimhez, vagy volt kulcs
+      // es a szerver elutasitotta (lejart, visszavont). Kivulrol a ketto AZONOS
+      // -- es ez az EGYETLEN hely, ahol a kulonbseg meg megvan: itt meg tudjuk,
+      // hogy a kereshez csatoltunk-e egyaltalan tokent.
+      // Ket sorral lejjebb mar toroljuk a kulcsot, tehat innentol
+      // megkulonboztethetetlen. Ezert all a rogzites a torles ELE.
+      window.__marveenAuthReason = hadToken ? 'rejected' : 'no-key'
       // Token missing, wrong, or revoked. Wipe and prompt once per page load.
       // Keep a URL-provided session token so a transient 401 does not lock out
       // a session whose localStorage copy was purged.
@@ -151,6 +161,37 @@ function mainAgentId() {
       }
     }
     return res
+  }
+
+  /**
+   * Egy nyers hibaszoveget emberi mondatta alakit, HA tudjuk az okat.
+   *
+   * EGY HELY IR, SOK HELY OLVAS (marveen dontese). A `HTTP 401` szoveget 28
+   * kulon hely gyartja az app.js-ben, es mindegyik a sajat dobozaba irja ki.
+   * Huszonnyolc kulon megfogalmazas huszonnyolcfelekeppen avulna el, es a
+   * kovetkezo uj doboz megint statuszkodot irna. Ezert a MEGFOGALMAZAS all egy
+   * helyen, es a megjelenites csak KERDEZ.
+   *
+   * A HATAR, AMIT NEM LEP AT: csak akkor mondja, hogy "nincs kulcs", ha a
+   * burkolat tenylegesen ezt latta. Minden mas esetben visszaadja a nyers
+   * szoveget -- egy magabiztos, de rossz magyarazat rosszabb a statuszkodnal.
+   */
+  /**
+   * Egy HIBA-OBJEKTUMBOL emberi szoveg. A `mvHumanError` string->string; ez a
+   * burkolat veszi le az `err.message`-t, hogy a megjelenitesi helyek NE
+   * ismetelgessek a `String(e.message || e)` alakot -- es hogy EGY nevet lehessen
+   * keresni, amikor azt kerdezzuk, atmegy-e minden hiba a fogalmazon.
+   */
+  window.mvErrText = (err) => window.mvHumanError(
+    err && typeof err === 'object' && 'message' in err ? err.message : err)
+
+  window.mvHumanError = (raw) => {
+    const text = String(raw == null ? '' : raw)
+    if (!/\b401\b/.test(text)) return text
+    const tr = (k, fb) => (typeof window.t === 'function' ? window.t(k) : fb) || fb
+    if (window.__marveenAuthReason === 'no-key') return tr('auth.nokey.short', 'Nincs eltarolva belepesi kulcs ehhez a cimhez.')
+    if (window.__marveenAuthReason === 'rejected') return tr('auth.rejected.short', 'A belepesi kulcs ervenytelen vagy lejart.')
+    return text
   }
 
   // On a 401, ask the public status probe whether a username+password login is
@@ -176,11 +217,53 @@ function mainAgentId() {
     if (isStandalone) {
       showStandaloneTokenPrompt(TOKEN_KEY)
     } else {
-      alert(
-        'Dashboard authentication failed. Check the server log for the access URL ' +
-        '(look for "Dashboard access URL" with ?token=...), then reopen it in your browser.'
-      )
+      showNoKeyOverlay()
     }
+  }
+
+  /**
+   * A "nincs hasznalhato kulcs" allapot EMBERI valasza (kartya 3cc50c2a).
+   *
+   * AMI ITT KORABBAN ALLT: egy ANGOL `alert()`. A gazda ebbol -- es a mogotte
+   * maradt "Hiba: HTTP 401" dobozokbol -- azt vezette le, hogy a szolgaltatas
+   * NEM MUKODIK. Pedig futott: a `GET /` 200-at adott, es a Bearer fejleccel
+   * kuldott `GET /api/kanban` is. Vagyis egy ELUTASITASBOL lett LEALLAS-diagnozis,
+   * es a kepernyo pont ezt allitotta.
+   *
+   * Egy statuszkod nem uzenet: a 401 a HTTP-nek szol, nem az embernek.
+   *
+   * A KET ALLAPOT KULON SZOVEGET KAP, es ez a kartya kikotese: csak akkor
+   * mondjuk, hogy "nincs kulcs", ha a burkolat tenylegesen ezt latta. Ha VOLT
+   * kulcs es a szerver utasitotta el (lejart, visszavont), az MAS mondat.
+   *
+   * A TOKENT NEM IRJUK KI. A naploban all, es a naplo ma is kiirja -- a
+   * kepernyore tenni feleslegesen sokszorozna a helyet, ahol megjelenik.
+   */
+  function showNoKeyOverlay() {
+    if (document.getElementById('mv-nokey-overlay')) return
+    const tr = (k, fb) => (typeof window.t === 'function' ? window.t(k) : fb) || fb
+    const noKey = window.__marveenAuthReason !== 'rejected'
+    const overlay = document.createElement('div')
+    overlay.id = 'mv-nokey-overlay'
+    overlay.className = 'mv-auth-overlay'
+    const title = noKey
+      ? tr('auth.nokey.title', 'Nincs belepesi kulcs ehhez a cimhez')
+      : tr('auth.rejected.title', 'A belepesi kulcs nem ervenyes')
+    const desc = noKey
+      ? tr('auth.nokey.desc', 'A szolgaltatas fut es valaszol -- csak ez a bongeszo nem tud belepni: ehhez a cimhez nincs eltarolva kulcs.')
+      : tr('auth.rejected.desc', 'Volt eltarolva kulcs, de a szolgaltatas elutasitotta. Valoszinuleg lejart vagy visszavontak.')
+    overlay.innerHTML =
+      '<div class="mv-auth-card">' +
+        '<h2>' + title + '</h2>' +
+        '<p class="mv-auth-desc">' + desc + '</p>' +
+        '<p class="mv-auth-desc">' + tr('auth.nokey.how', 'Egyszeri belepesi link kell hozza. A link a szolgaltatas naplojaban all:') + '</p>' +
+        '<p class="mv-auth-desc"><code>store/dashboard.log</code></p>' +
+        '<p class="mv-auth-desc">' + tr('auth.nokey.hint', 'Keresd a "Dashboard access URL" sort, es nyisd meg azt a cimet.') + '</p>' +
+        '<button type="button" id="mv-nokey-close">' + tr('auth.nokey.close', 'Ertem') + '</button>' +
+      '</div>'
+    document.body.appendChild(overlay)
+    const btn = overlay.querySelector('#mv-nokey-close')
+    if (btn) btn.addEventListener('click', () => { overlay.remove() })
   }
 
   // Full-screen username+password login overlay. Posts to /api/auth/login; on
@@ -738,7 +821,7 @@ async function loadActivity() {
     if (upd) upd.textContent = t('activity.updated', { time: new Date().toLocaleTimeString('hu-HU') })
   } catch (e) {
     const list = document.getElementById('activityList')
-    if (list) list.innerHTML = '<p class="activity-empty">' + t('activity.error_load') + ': ' + escapeHtml(String(e.message || e)) + '</p>'
+    if (list) list.innerHTML = '<p class="activity-empty">' + t('activity.error_load') + ': ' + escapeHtml(mvErrText(e)) + '</p>'
   }
 }
 
@@ -1885,7 +1968,7 @@ document.getElementById('saveCardBtn').addEventListener('click', async () => {
     closeModal(cardModalOverlay)
     loadKanban()
   } catch (err) {
-    showToast(t('kanban.toast.save_error_msg', { msg: err.message }))
+    showToast(t('kanban.toast.save_error_msg', { msg: mvErrText(err) }))
   }
 })
 
@@ -2866,6 +2949,17 @@ document.getElementById('wizardCreateBtn').addEventListener('click', async () =>
 
 // === Toast ===
 function showToast(msg, duration = 3000) {
+  // A MEGJELENITES KERDEZI MEG AZ OKOT (kartya 3cc50c2a).
+  //
+  // HELYESBITES (didi merese, 2026-08-23): itt korabban az allt, hogy a 28
+  // gyarto hely "MIND IDE FUT BE". EZ NEM VOLT IGAZ -- tizenot hely KOZVETLENUL
+  // ir DOM-ba (`innerHTML` / `textContent`), es soha nem er ide. Es epp azok a
+  // DOBOZOK: a kartyat szulo kepernyokepen egy doboz allt ("Aktivitas -- Hiba:
+  // HTTP 401"), nem egy toast. A toast atmeneti, a doboz OTT MARAD.
+  // Azok a helyek mostantol a `mvErrText`-et hivjak, es van rá OR, ami a
+  // populaciot SZARMAZTATJA -- lasd dashboard-401-message.test.ts.
+  // Ha az okot nem ismerjuk, a szoveg valtozatlanul megy tovabb.
+  if (typeof window.mvHumanError === 'function') msg = window.mvHumanError(msg)
   toast.textContent = msg
   toast.classList.add('visible')
   setTimeout(() => toast.classList.remove('visible'), duration)
@@ -8346,7 +8440,7 @@ async function loadGitHubRepos() {
       setTimeout(() => { status.hidden = true }, 4000)
     } catch (err) {
       status.className = 'github-repo-status error'
-      status.textContent = 'Hiba: ' + err.message
+      status.textContent = 'Hiba: ' + mvErrText(err)
     } finally {
       addBtn.disabled = false
       addBtn.textContent = 'Telepites'
@@ -10845,7 +10939,7 @@ async function loadTeamGraph() {
     const data = await res.json()
     renderTeamGraph(container, data, { editable: true })
   } catch (err) {
-    container.innerHTML = `<div class="team-empty">${t('team.error', { msg: err.message || err })}</div>`
+    container.innerHTML = `<div class="team-empty">${t('team.error', { msg: mvErrText(err) })}</div>`
   }
 }
 
@@ -11275,7 +11369,7 @@ async function loadChatAgentList() {
       if (first) first.click()
     }
   } catch (e) {
-    sidebar.innerHTML = `<div class="chat-sidebar-empty">${t('messages.sidebar_error', { msg: escapeHtml(String(e.message||e)) })}</div>`
+    sidebar.innerHTML = `<div class="chat-sidebar-empty">${t('messages.sidebar_error', { msg: escapeHtml(mvErrText(e)) })}</div>`
   }
 }
 
@@ -11420,7 +11514,7 @@ async function fetchChatPage(agentName, beforeId, limit, mode) {
   } catch (e) {
     if (loadingIndicator) loadingIndicator.style.display = 'none'
     if (mode === 'replace') {
-      container.innerHTML = `<p class="activity-empty">Hiba: ${escapeHtml(String(e.message||e))}</p>`
+      container.innerHTML = `<p class="activity-empty">Hiba: ${escapeHtml(mvErrText(e))}</p>`
     }
   } finally {
     chatThreadState.loading = false
@@ -11629,7 +11723,7 @@ async function loadOverview() {
       }
     }
   } catch (err) {
-    document.getElementById('overviewActivity').innerHTML = '<div style="color:var(--text-muted);font-size:13px">' + t('overview.error', { msg: escapeHtml(String(err.message || err)) }) + '</div>'
+    document.getElementById('overviewActivity').innerHTML = '<div style="color:var(--text-muted);font-size:13px">' + t('overview.error', { msg: escapeHtml(mvErrText(err)) }) + '</div>'
   }
 }
 
@@ -11877,7 +11971,7 @@ async function loadUpdates() {
     }
   } catch (err) {
     summary.className = 'updates-summary error'
-    summary.textContent = 'Hiba: ' + (err.message || err)
+    summary.textContent = 'Hiba: ' + mvErrText(err)
     applyBtn.hidden = true
   }
   renderDiagnoseOffer()
@@ -11922,7 +12016,7 @@ async function runDiagnose() {
     if (btn) { btn.hidden = true }
   } catch (err) {
     if (btn) btn.disabled = false
-    showToast(t('updates.diagnose.failed', { msg: err.message || err }))
+    showToast(t('updates.diagnose.failed', { msg: mvErrText(err) }))
   }
 }
 
@@ -15588,7 +15682,7 @@ async function loadFederationPage() {
     if (statusRes && Array.isArray(statusRes.peers)) federatedPeerStatus = statusRes.peers
     renderFederationPage()
   } catch (e) {
-    peersEl.innerHTML = `<p style="color:var(--danger)">${t('federation.error', { msg: escapeHtml(String(e.message || e)) })}</p>`
+    peersEl.innerHTML = `<p style="color:var(--danger)">${t('federation.error', { msg: escapeHtml(mvErrText(e)) })}</p>`
   }
 }
 
@@ -15978,7 +16072,7 @@ async function loadDocs() {
     docs = await res.json()
     if (!Array.isArray(docs)) docs = []
   } catch (e) {
-    listEl.innerHTML = '<p class="muted">' + t('docs.list_load_error') + ': ' + escapeHtml(String(e.message || e)) + '</p>'
+    listEl.innerHTML = '<p class="muted">' + t('docs.list_load_error') + ': ' + escapeHtml(mvErrText(e)) + '</p>'
     return
   }
   if (!docs.length) {
@@ -16022,7 +16116,7 @@ async function openDoc(name) {
     const dl = document.getElementById('docsDownloadBtn')
     if (dl) dl.addEventListener('click', () => downloadMarkdown(name, content))
   } catch (e) {
-    contentEl.innerHTML = '<p class="muted">' + t('docs.open_error') + ': ' + escapeHtml(String(e.message || e)) + '</p>'
+    contentEl.innerHTML = '<p class="muted">' + t('docs.open_error') + ': ' + escapeHtml(mvErrText(e)) + '</p>'
   }
 }
 
@@ -16059,7 +16153,7 @@ async function loadResearch() {
     groups = await res.json()
     if (!Array.isArray(groups)) groups = []
   } catch (e) {
-    listEl.innerHTML = '<p class="muted">' + t('research.list_load_error') + ': ' + escapeHtml(String(e.message || e)) + '</p>'
+    listEl.innerHTML = '<p class="muted">' + t('research.list_load_error') + ': ' + escapeHtml(mvErrText(e)) + '</p>'
     return
   }
   if (!groups.length) {
@@ -16105,7 +16199,7 @@ async function openResearchDoc(agent, name) {
     const dl = document.getElementById('researchDownloadBtn')
     if (dl) dl.addEventListener('click', () => downloadMarkdown(name, content))
   } catch (e) {
-    contentEl.innerHTML = '<p class="muted">' + t('research.open_error') + ': ' + escapeHtml(String(e.message || e)) + '</p>'
+    contentEl.innerHTML = '<p class="muted">' + t('research.open_error') + ': ' + escapeHtml(mvErrText(e)) + '</p>'
   }
 }
 
@@ -16161,7 +16255,7 @@ async function openResearchDoc(agent, name) {
       qr.make()
       qrBox.innerHTML = qr.createSvgTag({ cellSize: 6, margin: 4, scalable: true })
     } catch (e) {
-      qrBox.innerHTML = `<p class="muted">${t('mobile_login.qr_error', { msg: escapeHtml(String(e && e.message || e)) })}</p>`
+      qrBox.innerHTML = `<p class="muted">${t('mobile_login.qr_error', { msg: escapeHtml(mvErrText(e)) })}</p>`
     }
   }
 
@@ -16374,7 +16468,7 @@ async function openResearchDoc(agent, name) {
         })
       })
     } catch (err) {
-      list.innerHTML = '<p class="naplo-empty error">' + t('common.error_network', {msg: err.message}) + '</p>'
+      list.innerHTML = '<p class="naplo-empty error">' + t('common.error_network', {msg: mvErrText(err)}) + '</p>'
     }
   }
 
@@ -16475,7 +16569,7 @@ async function openResearchDoc(agent, name) {
       if (entries.length === 0) { timeline.innerHTML = `<p class="naplo-empty">${t('naplo.empty')}</p>`; return }
       timeline.innerHTML = entries.map(renderEntry).join('')
     } catch (err) {
-      timeline.innerHTML = `<p class="naplo-empty error">${t('naplo.error', { msg: err.message })}</p>`
+      timeline.innerHTML = `<p class="naplo-empty error">${t('naplo.error', { msg: mvErrText(err) })}</p>`
     }
   }
 
