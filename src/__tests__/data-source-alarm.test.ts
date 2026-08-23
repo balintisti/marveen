@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { detectTransitions, readQuotaSourceState, transitionMessage } from '../data-source-alarm.js'
+import { detectTransitions, readQuotaSourceState, transitionMessage, QUOTA_SNAPSHOT_MAX_AGE_MIN } from '../data-source-alarm.js'
 
 // Cards 0114968c + 2b1e373a. Three data sources can fail quietly, and every one
 // of them fails INTO the shape of calm: a 403 calendar renders as "no upcoming
@@ -134,6 +134,44 @@ describe('readQuotaSourceState -- which meter states still carry alerting', () =
     expect(s?.error).toContain('401')
   })
 
+  it('a STALE snapshot is a failure even when it still says authoritative', () => {
+    // Marveen's condition on decision (B): the alarm reads a file that a
+    // scheduled task refreshes. If the task stops, the file stops changing --
+    // and a check that only looked at `source` would happily report the last
+    // known GOOD value forever, pushing the silent failure one level up.
+    // A stale file saying "authoritative" is a sentence about a world that may
+    // be hours old.
+    const now = Date.parse('2026-08-23T05:00:00Z')
+    const p = withLatest('{"generated_at":"2026-08-23T04:00:00Z","claude":{"ok":true,"source":"authoritative"}}')
+    const s = readQuotaSourceState(p, now)
+    expect(s?.ok).toBe(false)
+    expect(s?.error).toContain('elavult')
+    expect(s?.error).toContain('60 perce')
+  })
+
+  it('a FRESH snapshot is fine -- the threshold must not alarm on ordinary jitter', () => {
+    // One missed 10-minute run is normal; two is a pattern. The threshold sits
+    // above two misses so that a slow API call does not produce a message.
+    const now = Date.parse('2026-08-23T05:00:00Z')
+    const p = withLatest('{"generated_at":"2026-08-23T04:45:00Z","claude":{"ok":true,"source":"authoritative"}}')
+    expect(readQuotaSourceState(p, now)?.ok).toBe(true)
+    expect(QUOTA_SNAPSHOT_MAX_AGE_MIN).toBeGreaterThan(20)
+  })
+
+  it('an unreadable timestamp is a failure, not a silent pass', () => {
+    // A snapshot whose time we cannot parse is a snapshot whose age we do not
+    // know -- and "we do not know" is the state this alarm exists to report.
+    const s = readQuotaSourceState(withLatest('{"generated_at":"tegnap","claude":{"ok":true,"source":"authoritative"}}'), Date.now())
+    expect(s?.ok).toBe(false)
+    expect(s?.error).toContain('nem ertelmezheto')
+  })
+
+  it('a snapshot with NO timestamp field is judged on its source alone', () => {
+    // Backward compatibility: an older meter that never wrote generated_at must
+    // not be reported as broken just for being old-format.
+    expect(readQuotaSourceState(withLatest('{"claude":{"ok":true,"source":"authoritative"}}'), Date.now())?.ok).toBe(true)
+  })
+
   it('returns null when there is no snapshot at all, rather than inventing health', () => {
     expect(readQuotaSourceState(join(tmpdir(), 'nincs-ilyen-usage-latest.json'))).toBeNull()
   })
@@ -161,6 +199,34 @@ describe('the heartbeat wiring', () => {
 
   it('never lets an alarm failure stop the heartbeat', () => {
     const block = src.slice(src.indexOf('EL-VEZERELT ADATFORRAS'), src.indexOf('if (!shouldNotify(data))'))
+    expect(block).toMatch(/catch \(err\)/)
+  })
+})
+
+describe('the command-task wiring -- the fast, 24/7 half', () => {
+  const src = readFileSync(join(__dirname, '..', 'web', 'command-task.ts'), 'utf-8')
+
+  it('checks the quota source after EVERY command task, not by task name', () => {
+    // A name-bound hook (`if (task.name === 'usage-snapshot')`) would vanish
+    // silently on a rename. The check is cheap -- one small JSON read -- and
+    // edge-triggered, so running it on every tick costs nothing in messages.
+    expect(src).toMatch(/readQuotaSourceState\(\)/)
+    expect(src).not.toMatch(/task\.name === ["']usage-snapshot["']/)
+  })
+
+  it('runs BEFORE the early return for "no action"', () => {
+    // `if (action === "none") return` fires on most ticks -- which is exactly
+    // the healthy case, and exactly when a degrading quota source must still be
+    // noticed.
+    const quotaAt = src.indexOf('readQuotaSourceState()')
+    const returnAt = src.indexOf('if (action === "none") return')
+    expect(quotaAt).toBeGreaterThan(-1)
+    expect(quotaAt).toBeLessThan(returnAt)
+  })
+
+  it('sends to the coordinator, and cannot break the task\'s own alerting', () => {
+    const block = src.slice(src.indexOf('A KVOTA-FORRAS FIGYELESE'), src.indexOf('if (action === "none") return'))
+    expect(block).toMatch(/createAgentMessage\("system", MAIN_AGENT_ID/)
     expect(block).toMatch(/catch \(err\)/)
   })
 })
