@@ -701,7 +701,7 @@ describe('assigned_open_cards -- the coordinator is not a reviewer', () => {
 // here would still be green. So the control reads the REAL source file, not a copy of
 // the call -- a fixture built from our own assumption cannot fail.
 describe('the watcher actually passes the coordinator id', () => {
-  it('both call sites hand MAIN_AGENT_ID to the work-selection', () => {
+  it('EVERY work-selection call site hands MAIN_AGENT_ID to it', () => {
     const src = readFileSync(
       new URL('../web/idle-agent-watcher.ts', import.meta.url),
       'utf8',
@@ -712,8 +712,20 @@ describe('the watcher actually passes the coordinator id', () => {
     // behaviour it guards was untouched (2026-08-22). A source-reading control should
     // pin WHAT is passed, not the argument order -- otherwise every later parameter
     // costs a false red, and the third one gets "fixed" by deleting the assertion.
-    expect(src).toMatch(/countDeclaredWork\([^)]*MAIN_AGENT_ID/)
-    expect(src).toMatch(/selectDeclaredWork\([^)]*MAIN_AGENT_ID/)
+    //
+    // AND NOT ANCHORED TO THE NUMBER OF CALL SITES EITHER (2026-08-24). This used to say
+    // "both call sites", naming countDeclaredWork and selectDeclaredWork separately. The
+    // watcher now selects ONCE and takes the count from that same list -- a deliberate
+    // change, because two calls were two chances to disagree -- and the old wording went
+    // red for a shape change while the property it guards was untouched. Same lesson as
+    // the paragraph above, one level up: pin the PROPERTY (every call passes it), not the
+    // arrangement that happens to satisfy it today.
+    const sites = [...src.matchAll(/(?:select|count)DeclaredWork\(/g)]
+    expect(sites.length).toBeGreaterThan(0)
+    for (const m of sites) {
+      const args = src.slice(m.index ?? 0, (m.index ?? 0) + 240)
+      expect(args, `call site at ${m.index} omits the coordinator`).toContain('MAIN_AGENT_ID')
+    }
     // And that the id is imported, not a stray local that happens to share the name.
     expect(src).toMatch(/import \{ MAIN_AGENT_ID \} from '\.\.\/config\.js'/)
   })
