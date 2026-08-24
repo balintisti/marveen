@@ -169,12 +169,19 @@ SKILL_LINE_LIMIT="${SKILL_LINE_LIMIT:-500}"
 # a kivetelezett esetnel, es a tagulasa nem hibauzenetkent, hanem HIANYZO
 # RIASZTASKENT jelent meg). Ezert all melle a KEMENY FELSO KORLAT is.
 #
-# Alapvonal: 2026-08-23 02:3x, felderites-ket-listas-proba = 513 sor (ebbol 86 a
-# szetvalaszthatatlan legacy). Barmelyik szerzo barmikor atfogalmazhatja a sajatjat,
+# Alapvonal: 2026-08-24 09:57, felderites-ket-listas-proba = 491 sor -- a `references/`
+# BONTAS UTANI mert meret. (Elotte 513 volt, egy 08-23 02:3x-i meresbol.)
+#
+# MIERT VALTOZOTT: a bontas 549 -> 491 volt, az alapvonal viszont 513 maradt, es ezzel a bontas
+# 58 soros nyeresege NOVEKEDESI KERETTE valt -- a fajl 528-ig nohetett volna hang nelkul, es ot
+# oran belul 510-en allt. A bontas igy nem a nyereseget rogzitette, hanem helyet csinalt az
+# ujranovesnek.
+# A SZABALY: minden sikeres `references/` bontas utan az alapvonal a bontas UTANI mert meret lesz.
+# A nyereseget a kapu rogziti, nem az emlekezet. Barmelyik szerzo barmikor atfogalmazhatja a sajatjat,
 # es akkor ez a szam CSOKKENTHETO -- de nem kotelezo.
 # Env-bol felulirhato, hogy a ket uj ag TESZTELHETO legyen ismert allapotokon.
 SKILL_BASELINE_NAMES="${SKILL_BASELINE_NAMES:-felderites-ket-listas-proba}"
-SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-513}"
+SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-491}"
 # Mennyit nohet a mag az alapvonal ota. A belepesi alak szerint egy uj lecke 2-3 sor
 # a magban, tehat 15 ~ ot uj lecke, mielott torleszteni kell.
 SKILL_GROWTH_LIMIT="${SKILL_GROWTH_LIMIT:-15}"
@@ -214,7 +221,19 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
     elif [ "$n" -gt "$SKILL_HARD_LIMIT" ]; then
       OVER_LIMIT=$((OVER_LIMIT+1))
       OVER_LIST="${OVER_LIST}  ${skill}  ${n} sor -- KEMENY FELSO KORLAT (${SKILL_HARD_LIMIT}) atlepve\n"
-    elif [ "${VERBOSE:-0}" = "1" ]; then
+    else
+      # FELTETEL NELKUL, NEM `-v` MOGOTT (didi merese, 2026-08-24). Ez az `if [ -n "$base" ]`
+      # agon BELUL all, tehat CSAK alapvonalas skillre fut -- ma pontosan EGY ilyen van, a
+      # kimenet EGY sorral no, nem 54-gyel.
+      #
+      # MIERT: a `-v` NELKUL csak a kilepesi kod latszik, a `VERBOSE=1` env pedig INERT (a :35
+      # feltetel nelkul nullazza). Aznap a mag 491->499->510->504->506->500->512-513 palyat jart
+      # be, es az or vegig `exit 0`-t mondott -- marveen tizenotnel tobbszor futtatta ugy, hogy
+      # a szamot egyszer sem latta. Az erdekes eset epp az, amikor a fajl a HATAR ALATT VAN es
+      # MOZOG; azt a `-v` mogott elrejteni annyi, mint nem merni.
+      #
+      # Ez az EGYETLEN lepcso a negybol, ami nem all a fegyelmen: nem kell hozza sem kapcsolo,
+      # sem env, sem proza, amit valakinek be kell gepelnie.
       echo "MERET-OR: ${skill}  ${n} sor (alapvonal ${base}, novekedes ${growth_s})"
     fi
   elif [ "$n" -gt "$SKILL_LINE_LIMIT" ]; then
