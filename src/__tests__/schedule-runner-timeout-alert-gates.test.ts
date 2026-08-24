@@ -22,8 +22,15 @@ const mockListScheduledTasks = vi.fn(() => [] as ScheduledTask[])
 let envToken = 'TELEGRAM_BOT_TOKEN=123:abc'
 let ownerChat: string | null = '1268077055'
 
+// Named so the card-moved line can be asserted: it is the only trace that the
+// board was updated, and nothing pinned whether it follows the move or
+// contradicts it.
+const mockInfo = vi.fn()
+/** What markScheduledTaskKanbanWaiting reports: a moved card id, or nothing. */
+let movedCardId: string | null = null
+
 vi.mock('../logger.js', () => ({
-  logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
+  logger: { info: (...a: unknown[]) => mockInfo(...a), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
 }))
 
 vi.mock('../web/atomic-write.js', () => ({ atomicWriteFileSync: vi.fn() }))
@@ -36,7 +43,7 @@ vi.mock('../db.js', () => ({
   insertPendingTaskRetryIfNew: vi.fn(),
   markPendingTaskRetryAlert: vi.fn(() => true),
   clearPendingTaskRetryAlert: vi.fn(),
-  markScheduledTaskKanbanWaiting: vi.fn(() => null),
+  markScheduledTaskKanbanWaiting: () => movedCardId,
 }))
 
 vi.mock('../web/telegram.js', () => ({
@@ -110,6 +117,7 @@ describe('task-timeout alert: configured delivers, a config gap suppresses', () 
     envToken = 'TELEGRAM_BOT_TOKEN=123:abc'
     ownerChat = '1268077055'
     paneCalls = 0
+    movedCardId = null
   })
 
   afterEach(() => {
@@ -135,5 +143,27 @@ describe('task-timeout alert: configured delivers, a config gap suppresses', () 
     await fireAndWaitPastTimeout()
 
     expect(mockTelegram).not.toHaveBeenCalled()
+  })
+
+  function cardMovedLines() {
+    return mockInfo.mock.calls.filter((c) => String(c[1] ?? '').includes('moved to waiting')).length
+  }
+
+  it('a MOVED card is reported with its id', async () => {
+    movedCardId = 'abc12345'
+    await fireAndWaitPastTimeout()
+
+    expect(cardMovedLines()).toBeGreaterThan(0)
+    const call = mockInfo.mock.calls.find((c) => String(c[1] ?? '').includes('moved to waiting'))
+    expect((call?.[0] as { cardId?: string })?.cardId).toBe('abc12345')
+  })
+
+  it('NO matching card means NO claim that one moved', async () => {
+    // The other direction: a line saying the board was updated when it was not
+    // sends the operator to a card that is still sitting in its old column.
+    movedCardId = null
+    await fireAndWaitPastTimeout()
+
+    expect(cardMovedLines()).toBe(0)
   })
 })
