@@ -178,6 +178,20 @@ describe('A BEKOTES -- a router TENYLEG atadja a haladas-jelet', () => {
     return out
   }
 
+  it('a harmadik argumentum A JEL, nem egy tetszoleges harmadik ertek', () => {
+    // JARVIS KIKOTESE, ES MERTEM IS (2026-08-24): a szerkezeti allitas (lent) HAROM
+    // argumentumot kovetel, de nem mondja meg, MI a harmadik. Megmutatva: a hivast
+    // `shouldEscalateStuckSession(paneState, stuckMs, 0)`-ra irva a keszlet ZOLD MARADT --
+    // es az a hivas SOHA nem riasztana a BUSY-agon (a "0 ms-a fagyott" mindig a kuszob alatt
+    // van). Vagyis a zaj helyett TELJES NEMASAG jonne, ami rosszabb a kiindulasnal.
+    //
+    // Ezert a ket allitas KET KULONBOZO KERDES, es egyik sem helyettesiti a masikat:
+    //   ez itt        -> a KONKRET argumentumot koti (frozenMs)
+    //   a kovetkezo   -> a SZERKEZETET koti (minden hivas harom argumentumot ad at)
+    // Jarvis nem cserekent javasolta, hanem melle -- es a meres ot igazolja.
+    expect(routerSrc).toMatch(/shouldEscalateStuckSession\(paneState, stuckMs, frozenMs\)/)
+  })
+
   it('MINDEN hivasi hely harom argumentumot ad at -- nem csak az elso', () => {
     const sites = callSites()
     // Kontroll a nema atmenes ellen: ha a kereso egy nap nullat adna, a ciklus semmit
