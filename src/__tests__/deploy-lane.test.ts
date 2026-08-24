@@ -56,6 +56,23 @@ describe('deploy-lane -- a besorolas', () => {
     expect(classify(['src/__tests__/idle-agent.test.ts'])['src/__tests__/idle-agent.test.ts']).toBe('NEUTRAL')
   })
 
+  it('a `.plist` INSTALL AKKOR IS, HA a scripts/ alatt van -- a sav nem a konyvtarbol kovetkezik', () => {
+    // DIDI LELETE (2026-08-24), sajat kezbol reprodukalva: az elso valtozatban a `scripts/*`
+    // minta illeszkedett ELOBB, tehat ez a fajl INSTANT-ot kapott.
+    // ES A POPULACIO TETTE SULYOSSA: `git ls-files | grep '.plist$'` -> EGY talalat, es EPP EZ.
+    // Vagyis az INSTALL ag NULLA valodi fajlra illeszkedett -- egy ag, ami sosem tuzel, ugy
+    // nez ki, mint egy ag, ami rendben van.
+    // Es ez ugyanaz a fajl, amivel a HARMADIK SAVOT bizonyitottuk (beolvadt, de sehol nem fut):
+    // a szerszam tehat pont arrol mondta volna, hogy "AZONNAL HAT" -- a megnyugtato iranyba.
+    // Ezert all itt a VALODI fajlnev, nem egy kitalalt.
+    expect(classify(['scripts/com.marveen.idle-reporter.plist'])['scripts/com.marveen.idle-reporter.plist'])
+      .toBe('INSTALL')
+    // es a gyoker-szintu is valtozatlanul INSTALL
+    expect(classify(['com.marveen.dashboard.plist'])['com.marveen.dashboard.plist']).toBe('INSTALL')
+    // KONTROLL: a scripts/ alatti NEM-plist tovabbra is INSTANT -- a javitas nem tolta at az egesz konyvtarat
+    expect(classify(['scripts/deploy-lane.sh'])['scripts/deploy-lane.sh']).toBe('INSTANT')
+  })
+
   it('a `web/` INSTANT, mert a futo szolgaltatas a MUNKAFABOL szolgalja ki', () => {
     // src/web.ts: WEB_DIR = join(PROJECT_ROOT, 'web'), es a PROJECT_ROOT a
     // dist/-bol `join(__dirname, "..")` -- vagyis a munkafa gyokere, nem a dist.

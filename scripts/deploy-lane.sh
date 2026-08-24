@@ -42,9 +42,22 @@ classify() {
   case "$1" in
     src/__tests__/*)  echo "NEUTRAL" ;;   # teszt: nem fut a szolgaltatasban
     src/*)            echo "BUILD" ;;
+    # A `*.plist` a KONYVTAR-mintak ELOTT all, es ez a sorrend maga a lelet (didi, 2026-08-24).
+    # Az elso valtozatban a `scripts/*` illeszkedett elobb, tehat a
+    # `scripts/com.marveen.idle-reporter.plist` INSTANT-ot kapott -- holott az a launchd sav.
+    # ES A POPULACIO TETTE SULYOSSA: a repo EGYETLEN kovetett .plist-je epp ez a fajl
+    # (`git ls-files | grep '\.plist$'` -> 1 db, a scripts/ alatt), vagyis az INSTALL ag NULLA
+    # valodi fajlra illeszkedett. Raadasul epp ezzel a fajllal bizonyitottuk a harmadik savot
+    # (beolvadt, de `launchctl list`-ben nincs; 04:00-kor ujramerve: negy com.marveen job fut,
+    # ez nincs kozottuk) -- a szerszam tehat pontosan arrol mondta volna, hogy "azonnal hat",
+    # amirol tudjuk, hogy sehol nem fut, es a tevedes a MEGNYUGTATO iranyba ment.
+    #
+    # A SZABALY, AMIT EBBOL KIMONDUNK: a SAV NEM A KONYVTARBOL KOVETKEZIK. A `web/` savot
+    # azert vettuk fel kulon, mert a konyvtar nem donti el a viselkedest; a plistnel ugyanez
+    # all, csak forditva -- a konyvtar `scripts/`, a viselkedes INSTALL.
+    *.plist)          echo "INSTALL" ;;
     scripts/*|web/*)  echo "INSTANT" ;;
     update.sh|*.sh)   echo "INSTANT" ;;   # gyoker-szintu szkript: futasidoben hivhato
-    *.plist)          echo "INSTALL" ;;
     *)                echo "NEUTRAL" ;;   # doksi, seed, konfig-minta, teszt-fixture
   esac
 }
