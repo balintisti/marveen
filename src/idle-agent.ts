@@ -344,6 +344,47 @@ export interface WorkCountCard {
    *  due_date means WE decided to do it later. Conflating them makes `waiting` mean
    *  two things again. (jarvis, 2026-08-22) */
   due_date?: number | null
+  /** The card's labels, as the LIST endpoint returns them. Optional, and that is a trap
+   *  worth naming: `GET /api/kanban` includes this field, `GET /api/kanban/<id>` does
+   *  NOT (measured 2026-08-24). A caller that fills these cards from the detail endpoint
+   *  sees no labels at all -- and the failure is silent, because "no labels" and "field
+   *  absent" look identical from here. Use the list endpoint. */
+  labels?: readonly { name?: string | null }[] | null
+}
+
+/**
+ * The one canonical label meaning "this card is blocked on the OWNER's decision".
+ *
+ * WHY A LABEL AND NOT THE TEXT (card 0fe791fb, measured 2026-08-24). The question is
+ * "who is this waiting on RIGHT NOW", and a comment cannot answer it: comments are
+ * append-only, so "waiting on Isti's decision" stays written after Isti has decided.
+ * Measured on the 64 waiting cards: a title keyword filter found 18 and missed real
+ * ones; widening it to description and last comment found 33 and swept in cards that
+ * were already settled -- including 0a15a0ea, whose last comment says the owner
+ * approved it that same morning. THE TEXT RECORDS THE HISTORY, NOT THE STATE.
+ *
+ * A label is a state because it can be TAKEN OFF when the answer arrives. That is the
+ * whole argument, and it is why `assignee` was not chosen instead: it already carries a
+ * contested meaning (card 2b9d69a9) and would carry two.
+ */
+export const WAITING_ON_OWNER_LABEL = 'varakozik:isti'
+
+/**
+ * Matched case-insensitively and trimmed, on purpose. An exact match would be stricter,
+ * but its failure is SILENT: a card labelled `Varakozik:Isti` would simply never appear,
+ * and "no cards await the owner" is exactly the reassuring answer nobody re-checks.
+ * A visible duplicate in the label list is the cheaper problem.
+ */
+export function isWaitingOnOwner(card: WorkCountCard): boolean {
+  if (card.status !== 'waiting') return false
+  return (card.labels ?? []).some(
+    (l) => (l?.name ?? '').trim().toLowerCase() === WAITING_ON_OWNER_LABEL,
+  )
+}
+
+/** The subset requirement: from every open card, the ones blocked on the owner. */
+export function selectWaitingOnOwner<T extends WorkCountCard>(cards: readonly T[]): T[] {
+  return cards.filter((c) => !c.archived_at && isWaitingOnOwner(c))
 }
 
 /**
