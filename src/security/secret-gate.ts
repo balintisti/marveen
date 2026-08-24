@@ -94,8 +94,17 @@ export const SECRET_PATTERNS: { name: string; pattern: RegExp }[] = [
   // base64. A pattern written around the value would fire on every blob in the
   // repository, which is the "cries wolf" failure this file's header rejects.
   // So the ANCHOR IS THE VARIABLE NAME and the value only has to be long enough
-  // not to be a placeholder. `<PLACEHOLDER>`, `${VAR}` and empty values cannot
-  // match: the value class excludes `<`, `$`, `{` and whitespace.
+  // to be worth looking at. An empty value, `<PLACEHOLDER>` and `${VAR}` cannot
+  // match, because the value class excludes `<`, `$`, `{` and whitespace.
+  //
+  // THAT IS A LIMIT, NOT A GUARANTEE, and the difference is deliberate (didi
+  // measured it 2026-08-24). A placeholder written in plain letters DOES match
+  // and DOES block: `REPLACE_ME_WITH_REAL_KEY`, `CHANGEME_BEFORE_DEPLOY`,
+  // `xxxxxxxx...`. We keep that -- a real secret and a filler are genuinely
+  // indistinguishable by shape, and on this gate the safe side is to stop.
+  // The escape hatch is the one this file already prescribes: allowlist the
+  // PATH, do not loosen the pattern. NOT a placeholder word list: a list that
+  // excused "EXAMPLE" would have waved through this card's own probe secret.
   { name: 'AWS secret access key assignment', pattern: /\b(AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)\s*[:=]\s*['"]?[A-Za-z0-9/+=_-]{20,}/ },
   // The same anchor generalises, and it was measured before it was widened:
   // across the 869 tracked files this family has ZERO hits, so it costs nothing

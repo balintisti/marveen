@@ -132,8 +132,9 @@ describe('detector 2: content', () => {
 
   it('does NOT fire on template values -- placeholder, empty, or shell substitution', () => {
     // The acceptance condition from the card: `.env.example` must keep working.
-    // These pass structurally, not by exception: the value class excludes
-    // `<`, `$`, `{` and whitespace, so a template can never reach the length.
+    // These pass because of the value class, which excludes `<`, `$`, `{` and
+    // whitespace -- so THESE template conventions cannot reach the length.
+    // That is a limit, not a blanket "templates never match": see the next test.
     const r = runGate([
       f('.env.example', 'AWS_SECRET_ACCESS_KEY=\nDB_PASSWORD=\n'),
       f('docs/setup.md', 'AWS_SECRET_ACCESS_KEY=<YOUR-SECRET-ACCESS-KEY>'),
@@ -145,6 +146,23 @@ describe('detector 2: content', () => {
     ]);
     expect(r.ok).toBe(true);
   });
+
+  it('a plain-letter placeholder DOES block -- fail-closed, and that is a choice', () => {
+    // Measured by didi 2026-08-24. `<PLACEHOLDER>` and `${VAR}` slip through on
+    // their punctuation, but a filler written in letters is indistinguishable
+    // from a real secret BY SHAPE, so the gate stops it. This test exists so
+    // that stays a decision rather than a surprise: whoever wants the other
+    // behaviour has to come here and argue for it.
+    //
+    // The remedy is the one this file already prescribes -- allowlist the PATH.
+    // NOT a placeholder word list: a list excusing "EXAMPLE" would have waved
+    // through AWS_SECRET_FIXTURE above, which is the very thing under test.
+    for (const filler of ['REPLACE_ME_WITH_REAL_KEY', 'CHANGEME_BEFORE_DEPLOY', 'x'.repeat(24)]) {
+      expect(runGate([f('docs/setup.md', `AWS_SECRET_ACCESS_KEY=${filler}`)]).ok).toBe(false)
+    }
+    // Control, same round: a prose MENTION of the variable is not an assignment.
+    expect(runGate([f('docs/setup.md', 'set the AWS_SECRET_ACCESS_KEY value before deploying')]).ok).toBe(true)
+  })
 
   it('never echoes the matched secret into the finding', () => {
     const titok = STRIPE_FIXTURE;
