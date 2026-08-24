@@ -214,6 +214,26 @@ describe('deploy-lane -- az allapot, egy szintetikus telepitesi fan', () => {
     expect(lines.some((l) => l.startsWith('INSTANT|') || l.startsWith('INSTALL|'))).toBe(false)
   })
 
+  it('ISMERETLEN REF -> SKIP, nem "nulla valtozas" (didi lelete)', () => {
+    // A hiba es a legitim ures eset kimenete AZONOS volt: egy elgepelt agnev ugyanazt a
+    // mondatot adta ("nulla valtozott fajl"), mint egy valodi, semmit nem hozo ag. Es a lenti
+    // REGRESSZIO-teszt epp azt a legitim esetet rogziti -- vagyis a keszlet MAGA dokumentalta
+    // a ket kimenet azonossagat, csak nem nevezte meg.
+    //
+    // Ugyanez a fegyelem a hianyzo TELEPITESI FARA mar allt ebben a szkriptben. Az elv MASODIK
+    // alkalmazasa kulon lepes, es itt elmaradt.
+    const lines = run('nincs-ilyen-ref-a-tesztben')
+    expect(line(lines, 'SKIP')).toMatch(/ismeretlen ref.*NEM MERVE/)
+    expect(lines.join(' ')).not.toMatch(/nulla valtozott fajl/)
+    expect(lines.some((l) => l.startsWith('INSTANT|') || l.startsWith('ALLAPOT|'))).toBe(false)
+  })
+
+  it('TARTOMANY romlott oldallal -> szinten SKIP', () => {
+    // A `<base>..<ref>` alak MINDKET oldalat ellenorizni kell: egy elgepelt bazis ugyanolyan
+    // nemán adna vissza egy ertelmetlen tartomanyt.
+    expect(line(run('HEAD..nincs-ilyen-oldal'), 'SKIP')).toMatch(/ismeretlen ref: nincs-ilyen-oldal/)
+  })
+
   it('hianyzo telepitesi fa -> SKIP, es SEMMILYEN allapot-allitas', () => {
     const lines = run('HEAD', join(install, 'nincs-ilyen'))
     expect(line(lines, 'SKIP')).toMatch(/NEM MERVE, nem 'rendben'/)

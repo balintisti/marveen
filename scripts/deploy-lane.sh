@@ -60,6 +60,27 @@ if [ "${1:-}" = "--classify" ]; then
 fi
 
 ARG="${1:-HEAD}"
+
+# A REF LETEZESE IS MERES, NEM PREMISSZA (didi lelete, 2026-08-24).
+#
+# Egy elgepelt agnev ugyanazt a mondatot adta, mint egy valodi, semmit nem hozo ag:
+#     deploy-lane.sh nincs-ilyen-ref  ->  "INFO|<tartomany>: nulla valtozott fajl"  (exit 0)
+# Mert a nem letezo ref az ancestor-proban is elbukik, a `merge-base` is ures, a tartomany
+# visszaesik a telepitesi HEAD-re, es a diff semmit nem talal. Vagyis a HIBA es a LEGITIM
+# ures eset kimenete AZONOS -- es a keszlet 8. tesztje epp azt a legitim esetet rogziti,
+# tehat a ket kimenet azonossaga BE VOLT DOKUMENTALVA, csak nem volt megnevezve.
+#
+# ES AMIERT EZ PONT ITT DRAGA: a hianyzo TELEPITESI FAT ugyanez a szkript mar helyesen kezeli
+# ("NEM MERVE, nem 'rendben'"). Ugyanaz a fegyelem a REF-re nem volt alkalmazva, UGYANABBAN a
+# fajlban -- az elv masodik alkalmazasa kulon lepes, es rendszeresen elmarad.
+for _ref in ${ARG//../ }; do
+  [ -z "$_ref" ] && continue
+  if ! git rev-parse --verify "${_ref}^{commit}" >/dev/null 2>&1; then
+    echo "SKIP|ismeretlen ref: ${_ref} -- NEM MERVE (nem 'nulla valtozas')"
+    exit 0
+  fi
+done
+
 if [[ "$ARG" == *".."* ]]; then RANGE="$ARG"; else
   INSTALL_HEAD="$(git -C "$INSTALL_ROOT" rev-parse HEAD 2>/dev/null)"
   if [ -z "$INSTALL_HEAD" ]; then
