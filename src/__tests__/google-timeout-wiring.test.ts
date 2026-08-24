@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { generateKeyPairSync } from 'node:crypto'
 import { TOOL_TIMEOUTS } from '../tool-timeouts.js'
 
 // The WIRING of timeoutForUrl into httpsRequest, and the host in the timeout
@@ -56,6 +57,19 @@ vi.mock('node:https', () => {
 const TOKENS = { normal: { access_token: 'stale', refresh_token: 'r', expiry_date: 0 } }
 const CREDS = { installed: { client_id: 'cid', client_secret: 'secret' } }
 
+// A real key, because buildServiceAccountJwt signs with it. Generated once per
+// run rather than checked in: a private key literal in the repo is the very
+// thing the secret gate exists to stop.
+const { privateKey } = generateKeyPairSync('rsa', {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  publicKeyEncoding: { type: 'spki', format: 'pem' },
+})
+const SERVICE_ACCOUNT = { client_email: 'sa@example.iam.gserviceaccount.com', private_key: privateKey }
+
+/** Which of the two token paths getValidAccessToken will take. */
+let serviceAccountPresent = false
+
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
   return {
@@ -65,12 +79,16 @@ vi.mock('node:fs', async (importOriginal) => {
     // stat keeps the real implementation.
     statSync: (p: unknown, ...rest: unknown[]) => {
       const s = String(p)
-      if (s.endsWith('service-account.json')) throw new Error('ENOENT')
+      if (s.endsWith('google-service-account.json')) {
+        if (!serviceAccountPresent) throw new Error('ENOENT')
+        return { mtimeMs: 1 } as never
+      }
       if (s.endsWith('tokens.json') || s.endsWith('gcp-oauth.keys.json')) return { mtimeMs: 1 } as never
       return (actual.statSync as (...a: unknown[]) => unknown)(p, ...rest) as never
     },
     readFileSync: (p: unknown, ...rest: unknown[]) => {
       const s = String(p)
+      if (s.endsWith('google-service-account.json')) return JSON.stringify(SERVICE_ACCOUNT)
       if (s.endsWith('tokens.json')) return JSON.stringify(TOKENS)
       if (s.endsWith('gcp-oauth.keys.json')) return JSON.stringify(CREDS)
       return (actual.readFileSync as (...a: unknown[]) => unknown)(p, ...rest) as never
@@ -87,10 +105,14 @@ function tokenCall() {
   return setTimeoutCalls.find((c) => c.url.includes('oauth2.googleapis.com'))
 }
 
-describe('the endpoint budget actually reaches req.setTimeout', () => {
+describe.each([
+  ['OAuth refresh', false],
+  ['service account', true],
+])('the endpoint budget reaches req.setTimeout -- %s path', (_label, saPresent) => {
   beforeEach(() => {
     setTimeoutCalls.length = 0
     lastDestroyError = null
+    serviceAccountPresent = saPresent as boolean
     vi.resetModules()
   })
 
