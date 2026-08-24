@@ -59,6 +59,28 @@ vi.mock('../web/scheduled-tasks-io.js', () => ({
   SCHEDULED_TASKS_DIR: '/tmp/marveen-resubmit-actions-no-tasks-dir',
 }))
 
+// The send lane. `ran: false` is the fail-closed skip: another delivery holds
+// this pane, so the resubmit chain must not measure or type. Mocking the lock
+// is the whole cost of reaching the skip-budget branch -- it needs no lane
+// machinery of its own.
+let laneRuns = true
+
+vi.mock('../web/session-send-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../web/session-send-lock.js')>()
+  return {
+    ...actual,
+    withSessionSendLock: async (
+      session: string,
+      host: string | null,
+      mode: string,
+      fn: () => Promise<unknown>,
+      opts?: unknown,
+    ) => (laneRuns
+      ? actual.withSessionSendLock(session, host, mode as never, fn as never, opts as never)
+      : { ran: false }),
+  }
+})
+
 vi.mock('../web/agent-process.js', () => ({
   agentSessionName: (name: string) => `agent-${name}`,
   isAgentRunning: () => true,
@@ -133,6 +155,7 @@ describe('post-send resubmit: what the caller DOES with each verdict', () => {
     mockCapturePane.mockReturnValue(PARKED_PANE)
     order.length = 0
     clearResult = true
+    laneRuns = true
   })
 
   afterEach(() => {
@@ -162,6 +185,32 @@ describe('post-send resubmit: what the caller DOES with each verdict', () => {
     expect(mockSendEnter).not.toHaveBeenCalled()
     expect(mockClearParked).not.toHaveBeenCalled()
     expect(mockSendPrompt.mock.calls.length).toBe(1)
+  })
+
+  it('a lane that never frees compensates once the skip budget runs out', async () => {
+    // The budget exists so a wedged lock-holder cannot chain timers forever.
+    // Exiting there takes NO measurement, so the prompt may be parked with the
+    // run-log already saying 'fired' -- the same silent loss the giveup branch
+    // compensates for, which is why this exit queues a retry too.
+    laneRuns = false
+    await fireAndEscalate(120_000)
+
+    const laneBusy = mockInsertPendingRetry.mock.calls.filter((c) => String(c[3]) === 'lane-busy')
+    expect(laneBusy.length).toBeGreaterThan(0)
+    // Nothing was typed: the whole point of the fail-closed skip.
+    expect(mockSendEnter).not.toHaveBeenCalled()
+    expect(mockClearParked).not.toHaveBeenCalled()
+  })
+
+  it('the budget is a BUDGET -- a busy lane does not compensate on the first skip', async () => {
+    // Without this case the branch reads the same whether the threshold is
+    // honoured or ignored: "eventually queues lane-busy" is satisfied by code
+    // that queues it immediately.
+    laneRuns = false
+    await fireAndEscalate(12_000)
+
+    const laneBusy = mockInsertPendingRetry.mock.calls.filter((c) => String(c[3]) === 'lane-busy')
+    expect(laneBusy).toEqual([])
   })
 
   it('the EARLY attempts are bare Enter -- the box is only cleared later', async () => {

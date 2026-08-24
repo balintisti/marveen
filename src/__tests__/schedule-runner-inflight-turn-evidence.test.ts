@@ -34,8 +34,10 @@ import type { ScheduledTask } from '../web/scheduled-tasks-io.js'
 //
 // Case 1 carries one too: inverting `!res.ran` in the post-send resubmit loop
 // fails it -- found by re-running the sweep after this file landed, not by
-// design. Recorded for the same reason: coverage nobody named is one edit away
-// from vanishing without a failing test to announce it.
+// design. That condition has since been given NAMED cases of its own in
+// schedule-runner-resubmit-actions.test.ts, so this file is no longer its only
+// guard; the note stays because the incidental coverage is still real and a
+// future edit here should know it is not free to break it.
 //
 // No production code changes.
 
