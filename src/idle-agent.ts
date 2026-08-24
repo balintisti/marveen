@@ -45,6 +45,14 @@ export interface IdleAgentThresholds {
    *  picks the work up, it goes busy and the spell ends on its own -- so this window
    *  only ever elapses when the wake genuinely did not work. */
   wakeGraceMs: number
+  /** How long an UNCHANGED work list may suppress the wake before the guard speaks
+   *  anyway. Without it the suppression is permanent: `sameWorkSet(['x'], ['x'])` is
+   *  true, and a one-item queue does not change for days -- so after a single wake the
+   *  guard would fall silent forever, precisely for the agents whose work is parked.
+   *  Measured by jarvis 2026-08-24 on the live board: with labels empty, five of six
+   *  agents drop to a 1-4 item list, and every one of those lists is stable.
+   *  A repeat is cheap once a shift; permanent silence is not. */
+  wakeStaleRearmMs?: number
   /** Floor between two wakes of the same agent, across spells. Without it, an agent
    *  that keeps finishing short turns would be woken every few minutes: each spell
    *  looks new, because going busy is exactly what ends the previous one. */
@@ -281,7 +289,17 @@ export function decideIdleAlert(
     //
     // A CHANGE re-arms immediately, including a REMOVAL -- the set is compared, not the
     // count, so "one closed, one opened" is news rather than silence.
-    if (input.ownWorkIds !== undefined && sameWorkSet(input.ownWorkIds, state.lastWakeWorkIds)) {
+    // ...unless the silence has lasted long enough to be its own problem. An unchanged
+    // list is not news the second time; it IS news again after a shift, because by then
+    // "nobody has touched this in hours" is the finding.
+    const staleRearm = thresholds.wakeStaleRearmMs
+    const suppressionIsFresh =
+      staleRearm === undefined || (lastWakeAt !== null && now - lastWakeAt < staleRearm)
+    if (
+      input.ownWorkIds !== undefined &&
+      sameWorkSet(input.ownWorkIds, state.lastWakeWorkIds) &&
+      suppressionIsFresh
+    ) {
       return { decision: { alert: false, reason: 'unchanged-since-wake' }, next: { ...state, idleSinceMs } }
     }
     return {

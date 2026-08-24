@@ -104,6 +104,38 @@ describe('the same work list is not news', () => {
   })
 })
 
+describe('the suppression must not become permanent', () => {
+  // Measured by jarvis 2026-08-24 on the live board: with no labels set, five of six
+  // agents drop to a 1-4 item queue, and those queues are STABLE for days. The fix for
+  // `sameWorkSet([], [])` does nothing here -- `['x']` equals `['x']` just as well -- so
+  // after a single wake the guard would fall silent forever, for exactly the agents
+  // whose work is parked in testing. A repeat is cheap once a shift; silence is not.
+  const TH_REARM: IdleAgentThresholds = { ...TH, wakeStaleRearmMs: 4 * 60 * 60_000 }
+
+  it('a ONE-ITEM unchanged list is still suppressed inside the window', () => {
+    const { decision } = decideIdleAlert(
+      { ...base, ownWorkCount: 1, ownWorkIds: ['x'] }, wokenWith(['x'], at(0)), TH_REARM, at(100),
+    )
+    expect(decision.reason).toBe('unchanged-since-wake')
+  })
+
+  it('...and wakes again once the silence outlasts the window', () => {
+    const { decision } = decideIdleAlert(
+      { ...base, ownWorkCount: 1, ownWorkIds: ['x'] }, wokenWith(['x'], at(0)), TH_REARM, at(300),
+    )
+    expect(decision.alert).toBe(true)
+    expect(decision.reason).toBe('wake-agent')
+  })
+
+  it('with NO re-arm configured the suppression is permanent -- the behaviour being replaced', () => {
+    // Pinned so that removing the threshold is a visible decision rather than a default.
+    const { decision } = decideIdleAlert(
+      { ...base, ownWorkCount: 1, ownWorkIds: ['x'] }, wokenWith(['x'], at(0)), TH, at(100_000),
+    )
+    expect(decision.reason).toBe('unchanged-since-wake')
+  })
+})
+
 describe('sameWorkSet -- compared as a SET, not a count and not an order', () => {
   it('order does not matter', () => { expect(sameWorkSet(['b', 'a'], ['a', 'b'])).toBe(true) })
   it('duplicates do not matter', () => { expect(sameWorkSet(['a', 'a', 'b'], ['a', 'b'])).toBe(true) })

@@ -52,6 +52,9 @@ const THRESHOLDS: IdleAgentThresholds = {
   // Floor between two wakes of the same agent. An agent finishing short turns ends a
   // spell every time it goes busy, so without this the wake would follow every turn.
   wakeCooldownMs: 30 * 60_000,
+  // A repeated identical list is not news -- but after four hours, "nobody has touched
+  // this" is. Without this the suppression is permanent on a stable queue.
+  wakeStaleRearmMs: 4 * 60 * 60_000,
 }
 
 const INITIAL_DELAY_MS = 90_000
