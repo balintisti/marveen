@@ -58,7 +58,22 @@ if printf '%s' "$C" | grep -q '__STAMP__'; then
     echo "  Ird bele az idopontot kezzel, vagy javitsd a kornyezetet -- nyers helyorzot nem kuldok el." >&2
     exit 1
   fi
-  C="$(C="$C" STAMP="$STAMP" python3 -c 'import os,sys; sys.stdout.write(os.environ["C"].replace("__STAMP__", os.environ["STAMP"]))')"
+  # LOUD ON SUCCESS TOO (card a0fbeba0, Marveen's condition 2). The failure
+  # paths above already shout; the success stayed silent, which is the same
+  # shape this card is about -- an operation whose "it worked" is
+  # indistinguishable from "it did not run". The line below is read back FROM
+  # THE RESULT: the count and the stamp come from the string that will actually
+  # be sent, not from what the substitution meant to do.
+  C="$(C="$C" STAMP="$STAMP" python3 -c '
+import os, sys
+body = os.environ["C"]
+stamp = os.environ["STAMP"]
+before = body.count("__STAMP__")
+out = body.replace("__STAMP__", stamp)
+after = out.count(stamp)
+sys.stderr.write("  __STAMP__ -> %s (%d helyen, visszaolvasva: %d)\n" % (stamp, before, after))
+sys.stdout.write(out)
+')"
   # Read back: a substitution that silently did nothing is the same class of bug.
   if printf '%s' "$C" | grep -q '__STAMP__'; then
     echo "NEM KULDTEM: a __STAMP__ helyettesites lefutott, de a helyorzo BENNMARADT." >&2
