@@ -32,6 +32,11 @@ import type { ScheduledTask } from '../web/scheduled-tasks-io.js'
 // on the private in-flight map; case 3 covers it for a real reason, and this
 // comment is the substitute for a name.
 //
+// Case 1 carries one too: inverting `!res.ran` in the post-send resubmit loop
+// fails it -- found by re-running the sweep after this file landed, not by
+// design. Recorded for the same reason: coverage nobody named is one edit away
+// from vanishing without a failing test to announce it.
+//
 // No production code changes.
 
 const mockAppendTaskRun = vi.fn()
