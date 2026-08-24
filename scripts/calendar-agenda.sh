@@ -61,11 +61,47 @@ else
   emit_error "dist/agenda-cli.js hianyzik (es a forras sem talalhato: $ROOT/src/agenda-cli.ts)"
 fi
 
-ERR_FILE="$(mktemp -t calendar-agenda)"
-OUT="$(AGENDA_VIA="$VIA" "${CMD[@]}" "$@" 2>"$ERR_FILE")"
-RC=$?
-STDERR="$(tr '\n' ' ' < "$ERR_FILE" | cut -c1-200)"
-rm -f "$ERR_FILE"
+# `"$@"` INSIDE a function is the FUNCTION's arguments, not the script's, so the
+# caller's flags have to be handed in explicitly. Getting this wrong drops every
+# flag silently -- the wrapper still answers, just for a different question. An
+# existing contract test (`--hours` validation) caught it; that is what it is for.
+run_once() {
+  ERR_FILE="$(mktemp -t calendar-agenda)"
+  OUT="$(AGENDA_VIA="$VIA" "${CMD[@]}" "$@" 2>"$ERR_FILE")"
+  RC=$?
+  STDERR="$(tr '\n' ' ' < "$ERR_FILE" | cut -c1-200)"
+  rm -f "$ERR_FILE"
+}
+
+# WHY A RETRY, AND WHY ONLY FOR SOME ERRORS (card f4c59571, measured 2026-08-24).
+# The CLI reports an API failure as `{"ok":false,"error":...}` with exit 0, and
+# this wrapper used to pass that straight through. So a SINGLE slow round trip
+# became a sentence in Isti's morning briefing saying the calendar could not be
+# reached. Measured that night: 7 runs, one failed on a 5000ms deadline, the
+# other 6 answered in 2.16-4.16s -- the failure was transient and the margin is
+# thin. The briefing runs ONCE, cold, in the morning: the one call that matters
+# most is the one with no second chance.
+#
+# ONLY TRANSPORT ERRORS ARE RETRIED. A 401/403, a missing file or a bad config
+# is deterministic: retrying it cannot change the answer, it only doubles the
+# wait and delays a real message. Retrying everything would turn this from a
+# repair into a way of hiding outages.
+TRANSIENT='timed out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|socket hang up'
+
+run_once "$@"
+if [ $RC -eq 0 ] && [ -n "$OUT" ] \
+   && printf '%s' "$OUT" | grep -q '"ok"[[:space:]]*:[[:space:]]*false' \
+   && printf '%s' "$OUT" | grep -qE "$TRANSIENT"; then
+  # One retry, not a loop: if the second attempt fails too, that is a real
+  # outage and the caller must hear about it now, not after four more waits.
+  sleep 1
+  FIRST_OUT="$OUT"
+  run_once "$@"
+  if [ $RC -ne 0 ] || [ -z "$OUT" ]; then
+    OUT="$FIRST_OUT"
+    RC=0
+  fi
+fi
 
 if [ $RC -ne 0 ]; then
   emit_error "a node $RC kodda halt: ${STDERR:-nincs stderr}"
