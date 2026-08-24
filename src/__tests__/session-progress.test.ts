@@ -142,8 +142,50 @@ describe('A BEKOTES -- a router TENYLEG atadja a haladas-jelet', () => {
     'utf-8',
   )
 
-  it('a hivas HAROM argumentumot ad at, nem kettot', () => {
-    expect(routerSrc).toMatch(/shouldEscalateStuckSession\(paneState, stuckMs, frozenMs\)/)
+  /**
+   * MINDEN hivasi hely, a DEFINICIO nelkul -- es a hozza tartozo argumentum-szam.
+   *
+   * Az elso valtozatom egyetlen `toMatch`-csel allitotta, hogy "a hivas harom argumentumot
+   * ad at". Jarvis megfogta: az JELENLETET mer, nem MEGFELELTETEST. Egy MASODIK, ket
+   * argumentumos hivas mellett a minta tovabbra is illeszkedik az elsore, es a teszt zold
+   * marad -- kozben az uj hivasi helyen csendben visszaall a regi viselkedes, mert az uj
+   * argumentumnak ALAPERTELMEZESE van.
+   *
+   * Ezert a populacio a FORRASBOL szarmazik, es MINDEN talalatra allitunk.
+   */
+  function callSites(): { args: number; text: string }[] {
+    const out: { args: number; text: string }[] = []
+    const rx = /shouldEscalateStuckSession\(/g
+    for (let m = rx.exec(routerSrc); m !== null; m = rx.exec(routerSrc)) {
+      const open = m.index + m[0].length - 1
+      // A DEFINICIOT kihagyjuk: azt az `export function` elozi meg.
+      if (/export function\s*$/.test(routerSrc.slice(Math.max(0, m.index - 40), m.index))) continue
+      let depth = 0, end = open
+      for (let i = open; i < routerSrc.length; i++) {
+        if (routerSrc[i] === '(') depth++
+        else if (routerSrc[i] === ')') { depth--; if (depth === 0) { end = i; break } }
+      }
+      const inner = routerSrc.slice(open + 1, end)
+      // Felso szintu vesszok szamolasa (egy beagyazott hivas vesszoi nem szamitanak).
+      let d = 0, commas = 0
+      for (const ch of inner) {
+        if (ch === '(' || ch === '[' || ch === '{') d++
+        else if (ch === ')' || ch === ']' || ch === '}') d--
+        else if (ch === ',' && d === 0) commas++
+      }
+      out.push({ args: inner.trim() ? commas + 1 : 0, text: inner.trim() })
+    }
+    return out
+  }
+
+  it('MINDEN hivasi hely harom argumentumot ad at -- nem csak az elso', () => {
+    const sites = callSites()
+    // Kontroll a nema atmenes ellen: ha a kereso egy nap nullat adna, a ciklus semmit
+    // nem allitana. (Ma pontosan egy hivas van; a szam NOHET, de nullara nem eshet.)
+    expect(sites.length).toBeGreaterThanOrEqual(1)
+    for (const site of sites) {
+      expect(site.args, `ket argumentumos hivas: shouldEscalateStuckSession(${site.text})`).toBe(3)
+    }
   })
 
   it('a jel UGYANABBOL a capture-bol jon, extra tmux-hivas nelkul', () => {
