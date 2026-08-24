@@ -23,6 +23,9 @@ import type { ScheduledTask } from '../web/scheduled-tasks-io.js'
 const mockAppendTaskRun = vi.fn()
 const mockSendPrompt = vi.fn((..._a: unknown[]) => 'sent')
 const mockListScheduledTasks = vi.fn(() => [] as ScheduledTask[])
+const mockTelegram = vi.fn(async (..._a: unknown[]) => {})
+let envToken = 'TELEGRAM_BOT_TOKEN=123:abc'
+let ownerChat: string | null = '1268077055'
 
 vi.mock('../logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
@@ -42,8 +45,21 @@ vi.mock('../db.js', () => ({
 }))
 
 vi.mock('../web/telegram.js', () => ({
-  sendTelegramMessage: vi.fn(async () => {}),
+  sendTelegramMessage: (...a: unknown[]) => mockTelegram(...a),
   sendTelegramPhoto: vi.fn(async () => {}),
+}))
+
+// The alert's two config gates. Both read outside the repo (an .env file and
+// the channel access.json), so the test controls the readers rather than the
+// filesystem.
+vi.mock('../web/agent-config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../web/agent-config.js')>()),
+  readFileOr: () => envToken,
+}))
+
+vi.mock('../owner-chat.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../owner-chat.js')>()),
+  resolveOwnerChatId: () => ownerChat,
 }))
 
 vi.mock('../web/scheduled-tasks-io.js', () => ({
@@ -100,6 +116,8 @@ describe('run status distinguishes a catch-up from an on-time fire', () => {
     vi.clearAllMocks()
     vi.useFakeTimers()
     mockListScheduledTasks.mockReturnValue([TASK])
+    envToken = 'TELEGRAM_BOT_TOKEN=123:abc'
+    ownerChat = '1268077055'
   })
 
   afterEach(() => {
@@ -115,6 +133,32 @@ describe('run status distinguishes a catch-up from an on-time fire', () => {
     expect(mockSendPrompt).toHaveBeenCalled()
     expect(statuses()).toContain('fired_late')
     expect(statuses()).not.toContain('fired')
+  })
+
+  it('the catch-up summary names what was recovered', async () => {
+    await runFromClock('2026-07-31T08:40:00.000Z')
+
+    expect(mockTelegram).toHaveBeenCalled()
+    const text = mockTelegram.mock.calls.map((c) => String(c[2] ?? c[1] ?? '')).join('\n')
+    expect(text).toContain('Pótlás elindítva')
+    expect(text).toContain(TASK.name)
+  })
+
+  it('NO token suppresses the summary instead of half-sending it', async () => {
+    // A config gap must not become a delivery attempt with an empty token: the
+    // operator hears nothing either way, but a suppressed send leaves a warn
+    // and no failed HTTP call.
+    envToken = ''
+    await runFromClock('2026-07-31T08:40:00.000Z')
+
+    expect(mockTelegram).not.toHaveBeenCalled()
+  })
+
+  it('NO owner chat suppresses it too -- never guess a recipient for an alert', async () => {
+    ownerChat = null
+    await runFromClock('2026-07-31T08:40:00.000Z')
+
+    expect(mockTelegram).not.toHaveBeenCalled()
   })
 
   it('an occurrence hit inside the tick window is an ordinary fired', async () => {
