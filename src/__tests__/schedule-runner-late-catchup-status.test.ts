@@ -144,6 +144,21 @@ describe('run status distinguishes a catch-up from an on-time fire', () => {
     expect(text).toContain(TASK.name)
   })
 
+  it('an occurrence PAST its budget is reported as stale, not silently dropped', async () => {
+    // The start-up scan window is 30 minutes, so anything older is never even
+    // seen -- a task type whose own budget is also 30 minutes can therefore
+    // never be reported stale. The per-task override is what makes the state
+    // reachable at all: budget 5 minutes, occurrence 20 minutes old, so it is
+    // inside the window and past its budget.
+    mockListScheduledTasks.mockReturnValue([{ ...TASK, catchUpMaxAgeMinutes: 5 } as ScheduledTask])
+    await runFromClock('2026-07-31T08:50:00.000Z')
+
+    expect(mockSendPrompt).not.toHaveBeenCalled()
+    const text = mockTelegram.mock.calls.map((c) => String(c[2] ?? c[1] ?? '')).join('\n')
+    expect(text).toContain('Nem pótolva, mert elavult')
+    expect(text).toContain(TASK.name)
+  })
+
   it('NO token suppresses the summary instead of half-sending it', async () => {
     // A config gap must not become a delivery attempt with an empty token: the
     // operator hears nothing either way, but a suppressed send leaves a warn
