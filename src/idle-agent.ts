@@ -62,10 +62,20 @@ export interface IdleAgentState {
   /** When the COORDINATOR was last told this agent is idle with nothing assigned.
    *  Survives the spell reset for the same reason lastWakeAt does. */
   lastNoWorkNoticeAt?: number | null
+  /** The work items named by the LAST wake. An unchanged list is not news: the agent
+   *  has already been handed exactly these and either could not act on them or chose
+   *  not to, and repeating them costs a whole turn to learn nothing. Survives the spell
+   *  reset, like lastWakeAt -- a spell ends every time the agent takes a turn, so a
+   *  per-spell record would reset precisely when the repetition starts. */
+  lastWakeWorkIds?: readonly string[] | null
 }
 
 export interface IdleAgentInput {
   agent: string
+  /** The IDs of the work items behind `ownWorkCount`. Optional: when it is absent the
+   *  guard behaves exactly as before, so a caller that does not supply it loses nothing
+   *  except the repeat-suppression. */
+  ownWorkIds?: readonly string[]
   /** detectPaneState says the pane is idle (prompt waiting, no spinner).
    *  `null` = could not tell (no session, capture failed, unknown pane). Deliberately
    *  NOT folded into `false`: an unreadable pane is not evidence of work, and treating
@@ -102,6 +112,9 @@ export type IdleDecision =
         | 'wake-pending'
         // Idle with work, but this agent was woken too recently to wake again.
         | 'wake-cooling-down'
+        // Idle with work, but it is the SAME work the last wake already named. Silence
+        // here is the point: a repeated identical list costs a turn and teaches nothing.
+        | 'unchanged-since-wake'
     }
   /** Stage 1: tell the AGENT, not a human. The agent is awake, its queue is empty and
    *  the condition is about itself -- it is the only party that can both be reached and
@@ -116,6 +129,27 @@ export type IdleDecision =
   | { alert: true; reason: 'idle-no-work'; idleForMs: number }
   | { alert: true; reason: 'no-work-check-declared' }
   | { alert: true; reason: 'pane-unreadable' }
+
+/**
+ * Is this the SAME work list as last time? Compared as a SET, deliberately -- not as a
+ * count, and not as an ordered list.
+ *
+ * A COUNT would be the wrong question, and that is measured rather than assumed: on
+ * 2026-08-24 a census of uncovered endpoints read 18 both before and after a change,
+ * while the population grew by one and the covered set grew by one. The total was
+ * stable and the content had moved. A guard that compares totals reports "nothing new"
+ * in exactly that case.
+ *
+ * ORDER is not signal either: the same cards re-sorted by a priority edit are the same
+ * news. So: deduplicated, sorted, compared element by element.
+ */
+export function sameWorkSet(a: readonly string[] | null | undefined, b: readonly string[] | null | undefined): boolean {
+  if (a == null || b == null) return false
+  const norm = (xs: readonly string[]) => [...new Set(xs)].sort()
+  const x = norm(a)
+  const y = norm(b)
+  return x.length === y.length && x.every((v, i) => v === y[i])
+}
 
 export const NO_IDLE_STATE: IdleAgentState = { idleSinceMs: null, lastAlertAt: null, lastWakeAt: null }
 
@@ -239,9 +273,20 @@ export function decideIdleAlert(
     if (lastWakeAt !== null && now - lastWakeAt < thresholds.wakeCooldownMs) {
       return { decision: { alert: false, reason: 'wake-cooling-down' }, next: { ...state, idleSinceMs } }
     }
+    // THE SAME LIST IS NOT NEWS. Measured 2026-08-24 on friday: five wakes in two and a
+    // half hours, every one naming the identical set, every one a no-op -- and each
+    // costs a full turn, which during a fleet-wide API outage was one of the few turns
+    // anyone could still spend. The cooldown alone cannot stop this, because a spell
+    // ends every time the agent takes a turn: answering the wake re-arms it.
+    //
+    // A CHANGE re-arms immediately, including a REMOVAL -- the set is compared, not the
+    // count, so "one closed, one opened" is news rather than silence.
+    if (input.ownWorkIds !== undefined && sameWorkSet(input.ownWorkIds, state.lastWakeWorkIds)) {
+      return { decision: { alert: false, reason: 'unchanged-since-wake' }, next: { ...state, idleSinceMs } }
+    }
     return {
       decision: { alert: true, reason: 'wake-agent', workCount: input.ownWorkCount, idleForMs },
-      next: { ...state, idleSinceMs, lastWakeAt: now },
+      next: { ...state, idleSinceMs, lastWakeAt: now, lastWakeWorkIds: input.ownWorkIds ?? null },
     }
   }
 
