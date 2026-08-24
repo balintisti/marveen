@@ -17,6 +17,9 @@ import type { ScheduledTask } from '../web/scheduled-tasks-io.js'
 // No production code changes.
 
 const mockTelegram = vi.fn(async (..._a: unknown[]) => {})
+const mockClearAlertStamp = vi.fn()
+/** Set to make the Telegram send reject with this message. */
+let sendError: string | null = null
 const mockListScheduledTasks = vi.fn(() => [] as ScheduledTask[])
 const mockListPendingRetries = vi.fn(() => [] as unknown[])
 let envToken = 'TELEGRAM_BOT_TOKEN=123:abc'
@@ -37,12 +40,15 @@ vi.mock('../db.js', () => ({
   // The claim succeeds: this test is about the config gates AFTER the claim,
   // not about the race the claim guards.
   markPendingTaskRetryAlert: vi.fn(() => true),
-  clearPendingTaskRetryAlert: vi.fn(),
+  clearPendingTaskRetryAlert: (...a: unknown[]) => mockClearAlertStamp(...a),
   markScheduledTaskKanbanWaiting: vi.fn(() => null),
 }))
 
 vi.mock('../web/telegram.js', () => ({
-  sendTelegramMessage: (...a: unknown[]) => mockTelegram(...a),
+  sendTelegramMessage: async (...a: unknown[]) => {
+    await mockTelegram(...a)
+    if (sendError) throw new Error(sendError)
+  },
   sendTelegramPhoto: vi.fn(async () => {}),
 }))
 
@@ -123,6 +129,7 @@ describe('pending-retry alert: configured delivers, a config gap suppresses', ()
     mockListPendingRetries.mockReturnValue([agedRow(Date.now())])
     envToken = 'TELEGRAM_BOT_TOKEN=123:abc'
     ownerChat = '1268077055'
+    sendError = null
   })
 
   afterEach(() => {
@@ -148,5 +155,26 @@ describe('pending-retry alert: configured delivers, a config gap suppresses', ()
     await runOneTick()
 
     expect(mockTelegram).not.toHaveBeenCalled()
+  })
+
+  // A failed DELIVERY is a third state, and which way it goes decides whether
+  // the alert ever arrives. The stamp is the throttle: cleared, the next tick
+  // retries; kept, it never fires again for this row.
+  it('a TRANSIENT failure clears the stamp so the next tick retries', async () => {
+    sendError = 'Telegram API 429 Too Many Requests'
+    await runOneTick()
+
+    expect(mockTelegram).toHaveBeenCalled()
+    expect(mockClearAlertStamp).toHaveBeenCalled()
+  })
+
+  it('a PERMANENT failure KEEPS the stamp -- no 60-second spin on a bad config', async () => {
+    // The other direction, and the reason the branch exists: retrying a 400
+    // every minute repeats the same rejection and buries the log.
+    sendError = 'Telegram API 400 Bad Request: chat not found'
+    await runOneTick()
+
+    expect(mockTelegram).toHaveBeenCalled()
+    expect(mockClearAlertStamp).not.toHaveBeenCalled()
   })
 })
