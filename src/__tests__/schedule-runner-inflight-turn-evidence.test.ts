@@ -24,6 +24,14 @@ import type { ScheduledTask } from '../web/scheduled-tasks-io.js'
 //   idle + fresh transcript -> evidence via the mtime fallback (kills `!sawTurn`)
 //   idle + nothing -> no evidence, and past the grace window the task IS lost
 //
+// WHAT CASE 3 ALSO CARRIES, stated so a future edit knows: inverting
+// `decision === 'clear'` (the entry-eviction test in the same loop) ALSO fails
+// case 3 -- measured. With it inverted the entry is evicted on the first
+// 'hold' sweep, so the loss is never reached at all. That condition has no
+// case of its own here because a test built to name it would have to assert
+// on the private in-flight map; case 3 covers it for a real reason, and this
+// comment is the substitute for a name.
+//
 // No production code changes.
 
 const mockAppendTaskRun = vi.fn()
@@ -31,13 +39,16 @@ const mockInsertPendingRetry = vi.fn()
 const mockSendPrompt = vi.fn((..._a: unknown[]) => 'sent')
 const mockListScheduledTasks = vi.fn(() => [] as ScheduledTask[])
 const mockCapturePane = vi.fn((): string | null => null)
+const mockAtomicWrite = vi.fn((..._a: unknown[]) => {})
 const mockTranscriptMtime = vi.fn((): number | null => null)
 
 vi.mock('../logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
 }))
 
-vi.mock('../web/atomic-write.js', () => ({ atomicWriteFileSync: vi.fn() }))
+vi.mock('../web/atomic-write.js', () => ({
+  atomicWriteFileSync: (...a: unknown[]) => mockAtomicWrite(...a),
+}))
 
 vi.mock('../db.js', () => ({
   appendTaskRun: (...a: unknown[]) => mockAppendTaskRun(...a),
@@ -169,5 +180,24 @@ describe('post-fire watchdog: a task is declared lost only with NO evidence of a
 
     expect(lostRuns().length).toBeGreaterThan(0)
     expect(lostRetries().length).toBeGreaterThan(0)
+  })
+
+  it('a loss UNSTAMPS the occurrence, so it is no longer considered served', async () => {
+    // The `scheduleLastRun.get(name) === injectedAt` guard exists so a loss only
+    // drops the stamp it wrote itself. If the stamp survives a loss, the
+    // occurrence still counts as served and the re-queued run has nothing to
+    // come back to -- a silent double failure: recorded lost, never re-run.
+    mockCapturePane.mockReturnValue(IDLE_PANE)
+    mockTranscriptMtime.mockReturnValue(null)
+    await fireThenSweep(120_000)
+
+    expect(lostRuns().length).toBeGreaterThan(0)
+    const lastRunWrites = mockAtomicWrite.mock.calls.filter((c) =>
+      String(c[0]).includes('schedule-last-run.json'),
+    )
+    expect(lastRunWrites.length).toBeGreaterThan(0)
+    // The final persisted map must not still claim this task ran.
+    const finalMap = JSON.parse(String(lastRunWrites[lastRunWrites.length - 1]?.[1] ?? '{}'))
+    expect(finalMap).not.toHaveProperty(TASK.name)
   })
 })
