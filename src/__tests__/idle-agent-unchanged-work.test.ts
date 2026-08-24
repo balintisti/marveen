@@ -136,6 +136,58 @@ describe('the suppression must not become permanent', () => {
   })
 })
 
+describe('the ORDER of the two gates, measured by behaviour rather than by their values', () => {
+  // Jarvis, reviewing the value-relation test (2026-08-24): its title said ORDER and its
+  // assertion checked `cooldown < rearm`, which is the VALUES. The order -- that the
+  // cooldown gate returns FIRST in the decision tree -- was not guarded at all, so
+  // swapping the two branches would leave it green while the premise of the whole
+  // constraint had changed. "A test can guard what FOLLOWS from a condition instead of
+  // what it FOLLOWS FROM."
+  //
+  // Unlike "nobody calls this", this one HAS a runtime shape, so it is measured rather
+  // than read from the source: invert the thresholds and see which gate speaks.
+  const TH_INVERTED: IdleAgentThresholds = {
+    ...TH, wakeCooldownMs: 8 * 60 * 60_000, wakeStaleRearmMs: 4 * 60 * 60_000,
+  }
+
+  it('the COOLDOWN gate answers first -- proven where BOTH gates would fire', () => {
+    // MY FIRST ATTEMPT AT THIS TEST DID NOT MEASURE THE ORDER, and the mutation said so:
+    // swapping the two branches left it green. The reason is worth keeping, because it is
+    // easy to repeat -- the stale gate only SUPPRESSES. When it declines to suppress,
+    // control simply falls through to the cooldown, so in any scenario where only one of
+    // them would fire, BOTH orderings give the same answer.
+    //
+    // The order is only observable where BOTH would fire and the winner names itself:
+    // 20 minutes since the last wake is inside the 30m cooldown AND inside the 4h re-arm
+    // window, with an unchanged list. Whichever gate stands first supplies the reason.
+    const TH_BOTH: IdleAgentThresholds = { ...TH, wakeStaleRearmMs: 4 * 60 * 60_000 }
+    const { decision } = decideIdleAlert(
+      { ...base, ownWorkCount: 1, ownWorkIds: ['x'] },
+      // 20 minutes since the last wake (400 -> 420), and the spell started at 405 so the
+      // wake branch is entered at all (it needs lastWakeAt < idleSinceMs).
+      { ...NO_IDLE_STATE, idleSinceMs: at(405), lastWakeAt: at(400), lastWakeWorkIds: ['x'] },
+      TH_BOTH,
+      at(420),
+    )
+    expect(decision.alert).toBe(false)
+    // Swap the two branches in idle-agent.ts and this becomes 'unchanged-since-wake'.
+    expect(decision.reason).toBe('wake-cooling-down')
+  })
+
+  it('past the cooldown, the re-arm is the gate that speaks', () => {
+    // The other side of the same pair: 5h out, the cooldown is long done, so the stale
+    // gate decides -- and with 5h > 4h it re-arms rather than suppressing.
+    const TH_REAL: IdleAgentThresholds = { ...TH, wakeStaleRearmMs: 4 * 60 * 60_000 }
+    const { decision } = decideIdleAlert(
+      { ...base, ownWorkCount: 1, ownWorkIds: ['x'] },
+      { ...NO_IDLE_STATE, idleSinceMs: at(400), lastWakeAt: at(300), lastWakeWorkIds: ['x'] },
+      TH_REAL,
+      at(600),
+    )
+    expect(decision.reason).toBe('wake-agent')
+  })
+})
+
 describe('sameWorkSet -- compared as a SET, not a count and not an order', () => {
   it('order does not matter', () => { expect(sameWorkSet(['b', 'a'], ['a', 'b'])).toBe(true) })
   it('duplicates do not matter', () => { expect(sameWorkSet(['a', 'a', 'b'], ['a', 'b'])).toBe(true) })
