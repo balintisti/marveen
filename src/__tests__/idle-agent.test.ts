@@ -6,6 +6,8 @@ import {
   buildNoWorkNotice,
   buildWakeMessage,
   selectDeclaredWork,
+  selectCoordinatorTriage,
+  WAITING_ON_ASSIGNEE_LABEL,
   buildFleetAlert,
   NO_IDLE_STATE,
   type IdleAgentInput,
@@ -304,13 +306,14 @@ const card = (
   id: string,
   status: string,
   assignee: string | null,
-  opts: { archived?: boolean; updatedAt?: number | null } = {},
+  opts: { archived?: boolean; updatedAt?: number | null; labels?: { name: string }[] } = {},
 ): Row => ({
   id,
   status,
   assignee,
   archived_at: opts.archived ? 1 : null,
   updated_at: opts.updatedAt === undefined ? 100 : opts.updatedAt,
+  labels: opts.labels ?? [],
 })
 
 /** card id -> (author -> timestamp of their last comment) */
@@ -342,22 +345,43 @@ describe('countDeclaredWork', () => {
     ['c', 'didi', 150],
     ['g', 'dexter', 150],
   ])
+  // 'c' also carries the mark: since 2026-08-24 the reviewer's last word is no longer
+  // enough on its own -- see the block below on why the author stopped being the signal.
+  const marked = cards.map((c) => (c.id === 'c' ? { ...c, labels: [{ name: WAITING_ON_ASSIGNEE_LABEL }] } : c))
 
   it('assigned_open_cards skips done, archived and waiting, and testing only while it awaits review', () => {
     // 'a' and 'b' are plain open work. 'c' is in testing with didi's comment as the
     // last word -- an unanswered finding, so it counts as dexter's. 'g' is in testing
     // with only dexter's own comment, so the ball is still with the reviewer.
-    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', cards, comments)).toBe(3)
+    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', marked, comments)).toBe(3)
   })
 
   // The gap Didi measured between the two rules: a card in testing whose last comment
   // is the reviewer's finding is waiting on the ASSIGNEE, but it used to fall out of
   // both queues -- hers because she had commented, his because testing was excluded
   // wholesale. 34 of 70 cards were in that state; 63 of 70 were in no queue at all.
-  it('a testing card whose last word came from someone else IS my work', () => {
-    const rows: Row[] = [card('t', 'testing', 'dexter')]
+  // REWRITTEN 2026-08-24, and the history matters more than the assertion (card
+  // 0fe791fb). This test used to read: "a testing card whose last word came from
+  // someone else IS my work" -- with no label, purely on the comment author. That rule
+  // closed a real gap (the paragraph above) and then over-fired: measured over friday's
+  // 11 such items, ZERO were questions to the assignee. Three were verifiers saying the
+  // card was closable, five were stale-hash bookkeeping that states the card's claim is
+  // UNCHANGED, three were confirmations. The guard woke him five times over that list.
+  //
+  // The author is not the signal; WHO IT WAITS ON is, and it is now a label.
+  it('a testing card MARKED for the assignee is his work when a reviewer spoke last', () => {
+    const rows: Row[] = [card('t', 'testing', 'dexter', { labels: [{ name: WAITING_ON_ASSIGNEE_LABEL }] })]
     const reviewerSpokeLast = commentsAt([['t', 'didi', 200]])
     expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, reviewerSpokeLast)).toBe(1)
+  })
+
+  it('...and the SAME card without the mark is not his -- it goes to triage instead', () => {
+    // The half the old rule could not express. Nothing falls silent: the card lands on
+    // the coordinator's list, because an untriaged item is a decision nobody made yet.
+    const rows: Row[] = [card('t', 'testing', 'dexter')]
+    const reviewerSpokeLast = commentsAt([['t', 'didi', 200]])
+    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, reviewerSpokeLast)).toBe(0)
+    expect(selectCoordinatorTriage(rows)).toHaveLength(1)
   })
 
   it('a testing card where I answered last is NOT my work -- the ball is back with the reviewer', () => {
@@ -378,12 +402,18 @@ describe('countDeclaredWork', () => {
     // which is exactly the ambiguity this invariant is meant to rule out.
     const rows: Row[] = [
       card('n', 'testing', 'dexter', { updatedAt: 100 }),   // no comments -> reviewer's
-      card('r', 'testing', 'dexter', { updatedAt: 200 }),   // reviewer spoke last -> assignee's
+      // marked for the assignee: since 2026-08-24 the mark is what puts it in his queue
+      card('r', 'testing', 'dexter', { updatedAt: 200, labels: [{ name: WAITING_ON_ASSIGNEE_LABEL }] }),
       card('a', 'testing', 'dexter', { updatedAt: 250 }),   // assignee answered last -> reviewer's
+      // UNTRIAGED, and this is the row the invariant grew a third queue for: nobody
+      // marked it, so it is neither the assignee's nor (necessarily) the reviewer's --
+      // and it must still land somewhere. It lands on the coordinator's triage list.
+      card('u', 'testing', 'dexter', { updatedAt: 300 })
     ]
     const cmts = commentsAt([
       ['r', 'didi', 200],
       ['a', 'didi', 200], ['a', 'dexter', 250],
+      ['u', 'didi', 300],
     ])
     const mine = countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, cmts)
     const hers = countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', rows, cmts)
@@ -401,7 +431,13 @@ describe('countDeclaredWork', () => {
       // fails for the right reason with the wrong message costs an hour to diagnose.
       const inMine = countDeclaredWork({ kind: 'assigned_open_cards' }, c.assignee ?? '', [c], cmts)
       const inHers = countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', [c], cmts)
-      expect(inMine + inHers, `card ${c.id} (assignee ${c.assignee}) is in no queue`).toBeGreaterThan(0)
+      // THE THIRD QUEUE (2026-08-24). When the assignee's rule stopped firing on the
+      // comment author, an UNTRIAGED card fell out of both of the original two -- and
+      // this invariant is what said so, immediately and by name. It is the whole reason
+      // "nobody's" was rejected as the resting place for an unmarked card: the guarantee
+      // here is not "exactly one queue", it is NOTHING MAY BE INVISIBLE.
+      const inTriage = selectCoordinatorTriage([c]).length
+      expect(inMine + inHers + inTriage, `card ${c.id} (assignee ${c.assignee}) is in no queue`).toBeGreaterThan(0)
     }
   })
 
@@ -411,10 +447,22 @@ describe('countDeclaredWork', () => {
   // on purpose -- with a third party talking, nobody can say from the data alone whose
   // move it is, and nudging both is the safe answer. Telling them apart would mean
   // reading what the comment SAYS, which is judgement, not mechanics.
-  it('a third party speaking last puts the card in BOTH queues, deliberately', () => {
+  // REWRITTEN 2026-08-24 (card 0fe791fb). This used to assert that a third party
+  // speaking last puts the card in BOTH queues -- and the reasoning above it says why:
+  // "nobody can say from the data alone whose move it is, and nudging both is the safe
+  // answer. Telling them apart would mean reading what the comment SAYS."
+  //
+  // That was right about the DATA and it is no longer true of it: the card can now carry
+  // who it waits on, so nobody has to read the comment or nudge two people to be safe.
+  // Nudging both was never free -- it is what put five identical wakes in front of an
+  // agent who could not act on any of them.
+  it('a third party speaking last no longer nudges BOTH -- the mark decides, and absence means triage', () => {
     const rows: Row[] = [card('x', 'testing', 'dexter', { updatedAt: 300 })]
     const coordinatorLast = commentsAt([['x', 'didi', 200], ['x', 'marveen', 300]])
-    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, coordinatorLast)).toBe(1)
+    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, coordinatorLast)).toBe(0)
+    expect(selectCoordinatorTriage(rows)).toHaveLength(1)
+    // The reviewer's own queue is untouched by any of this -- it asks a different
+    // question ("does my review cover the card's current state") and still answers yes.
     expect(countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', rows, coordinatorLast)).toBe(1)
   })
 
@@ -593,7 +641,13 @@ describe('assigned_open_cards -- the coordinator is not a reviewer', () => {
   const comments = (m: Record<string, Record<string, number>>) =>
     new Map(Object.entries(m).map(([k, v]) => [k, new Map(Object.entries(v))]))
 
-  const testingCard = (id: string) => ({ id, status: 'testing', assignee: 'dexter', updated_at: 100 })
+  // Marked for the assignee: since 2026-08-24 a testing card reaches him only when a
+  // reviewer says so with `varakozik:assignee`. These cases are about WHO the comment
+  // came from, so the mark is held constant and the comment author is what varies.
+  const testingCard = (id: string) => ({
+    id, status: 'testing', assignee: 'dexter', updated_at: 100,
+    labels: [{ name: WAITING_ON_ASSIGNEE_LABEL }],
+  })
 
   it('a testing card where the COORDINATOR spoke last is NOT the assignee’s work', () => {
     const n = countDeclaredWork(

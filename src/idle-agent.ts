@@ -367,7 +367,25 @@ export interface WorkCountCard {
  * whole argument, and it is why `assignee` was not chosen instead: it already carries a
  * contested meaning (card 2b9d69a9) and would carry two.
  */
+export const WAITING_LABEL_PREFIX = 'varakozik:'
+/** One scheme, three values, and each NAMES WHO IT WAITS ON rather than what happened.
+ *  A reader does not have to remember which word means what -- the label says it. */
 export const WAITING_ON_OWNER_LABEL = 'varakozik:isti'
+export const WAITING_ON_COORDINATOR_LABEL = 'varakozik:koordinator'
+export const WAITING_ON_ASSIGNEE_LABEL = 'varakozik:assignee'
+
+/** Normalised label names on a card: trimmed and lower-cased, for the reason given at
+ *  `isWaitingOnOwner` -- an exact match fails SILENTLY, and silence is the expensive
+ *  direction here. */
+function labelNames(card: WorkCountCard): string[] {
+  return (card.labels ?? []).map((l) => (l?.name ?? '').trim().toLowerCase()).filter(Boolean)
+}
+
+/** Does the card carry ANY label from the waiting family? Distinct from "waits on X":
+ *  a card with no such label has not been triaged at all, which is its own state. */
+export function hasWaitingLabel(card: WorkCountCard): boolean {
+  return labelNames(card).some((n) => n.startsWith(WAITING_LABEL_PREFIX))
+}
 
 /**
  * Matched case-insensitively and trimmed, on purpose. An exact match would be stricter,
@@ -377,9 +395,29 @@ export const WAITING_ON_OWNER_LABEL = 'varakozik:isti'
  */
 export function isWaitingOnOwner(card: WorkCountCard): boolean {
   if (card.status !== 'waiting') return false
-  return (card.labels ?? []).some(
-    (l) => (l?.name ?? '').trim().toLowerCase() === WAITING_ON_OWNER_LABEL,
-  )
+  return labelNames(card).includes(WAITING_ON_OWNER_LABEL)
+}
+
+/**
+ * What the COORDINATOR has to look at: every `testing` card that is either explicitly
+ * his (`varakozik:koordinator`) or has NOT BEEN TRIAGED AT ALL.
+ *
+ * The untriaged half is the deliberate part. Whoever did not mark the card did not
+ * decide, and an undecided item is triage -- which is the coordinator's job. Routing it
+ * to him means NOTHING falls silent, the assignee is not charged for someone else's
+ * bookkeeping, and the cost lands where the convention was declared.
+ *
+ * Measured on friday's board (2026-08-24): of 11 such items, zero were questions to the
+ * assignee and three had already been closed by hand by the coordinator that morning --
+ * so the untriaged ones were his in practice before they were his by rule.
+ */
+export function selectCoordinatorTriage<T extends WorkCountCard>(cards: readonly T[]): T[] {
+  return cards.filter((c) => {
+    if (c.archived_at || c.status !== 'testing') return false
+    const names = labelNames(c)
+    if (names.includes(WAITING_ON_ASSIGNEE_LABEL)) return false
+    return names.includes(WAITING_ON_COORDINATOR_LABEL) || !hasWaitingLabel(c)
+  })
 }
 
 /** The subset requirement: from every open card, the ones blocked on the owner. */
@@ -457,6 +495,26 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
       )
       return open.filter((c) => {
         if (c.status !== 'testing') return true
+        // THE RULE THAT USED TO BE HERE, AND WHY IT IS GONE (card 0fe791fb, 2026-08-24).
+        //
+        // It read: "if someone else spoke last, the assignee owes an answer" -- and the
+        // comment below it still explains the gap it was built to close, which was real.
+        // What it could not see is WHAT the other person said. Measured over friday's 11
+        // such items: ZERO were questions. Three were verifiers saying the card was
+        // closable (the coordinator's business, not the assignee's), five were jarvis
+        // resolving stale commit hashes -- bookkeeping that says "the card's claim is
+        // UNCHANGED" -- and three were confirmations. The guard woke the assignee five
+        // times over that list, every time a no-op.
+        //
+        // The author of the last comment is not the signal. WHO IT WAITS ON is, and that
+        // now has a label. A card the assignee genuinely owes an answer on carries
+        // `varakozik:assignee`; anything else is not his queue.
+        //
+        // AND THE ABSENT LABEL IS NOT SILENCE: an untriaged card goes to the COORDINATOR
+        // (see selectCoordinatorTriage). "Nobody's" was the tempting rule and it is the
+        // wrong one -- a missing `varakozik:assignee` would leave a real question waiting
+        // mutely, and the cost of that lands on whoever forgot, which is never a design.
+        if (!labelNames(c).includes(WAITING_ON_ASSIGNEE_LABEL)) return false
         const authors = lastCommentAtByCard.get(c.id)
         if (!authors || authors.size === 0) return false
         let latestAuthor: string | null = null
