@@ -34,8 +34,13 @@ const mockListScheduledTasks = vi.fn(() => [] as ScheduledTask[])
 
 let tmpRoot: string
 
+// Named so the ambiguity warn can be asserted: with two allowlist entries the
+// bound chat is a GUESS (first wins), and the warn is the only thing that says
+// so. Nothing pinned which way round it fires.
+const mockWarn = vi.fn()
+
 vi.mock('../logger.js', () => ({
-  logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
+  logger: { info: vi.fn(), warn: (...a: unknown[]) => mockWarn(...a), debug: vi.fn(), error: vi.fn() },
 }))
 
 vi.mock('../web/atomic-write.js', () => ({ atomicWriteFileSync: vi.fn() }))
@@ -103,12 +108,17 @@ function task(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
 }
 
 function writeBinding(chatId: string | null) {
+  writeAllowFrom(chatId ? [chatId] : [])
+}
+
+function writeAllowFrom(allowFrom: string[]) {
   const dir = join(tmpRoot, 'telegram')
   mkdirSync(dir, { recursive: true })
-  writeFileSync(
-    join(dir, 'access.json'),
-    JSON.stringify(chatId ? { allowFrom: [chatId], groups: {} } : { allowFrom: [], groups: {} }),
-  )
+  writeFileSync(join(dir, 'access.json'), JSON.stringify({ allowFrom, groups: {} }))
+}
+
+function ambiguityWarns() {
+  return mockWarn.mock.calls.filter((c) => String(c[1] ?? '').includes('ambiguous')).length
 }
 
 async function deliveredPrompt(): Promise<string> {
@@ -167,5 +177,27 @@ describe('prompt prefix: heartbeats stay silent, tasks get a concrete chat', () 
     // The dead sentinel class: never ship a placeholder chat id.
     expect(prompt).not.toContain('undefined')
     expect(prompt).not.toMatch(/chat_id:\s*0[,)]/)
+  })
+
+  it('TWO allowlist entries make the bound chat a guess, and the runner says so', async () => {
+    // First-entry-wins is a heuristic: access.json has no owner field, so a
+    // reordering silently redirects task results to another person. The warn is
+    // the only thing that makes the guess visible.
+    writeAllowFrom(['1268077055', '999888777'])
+    mockListScheduledTasks.mockReturnValue([task({ type: 'task' })])
+    const prompt = await deliveredPrompt()
+
+    expect(prompt).toContain('chat_id: 1268077055')
+    expect(ambiguityWarns()).toBeGreaterThan(0)
+  })
+
+  it('ONE entry is not ambiguous -- no warn, or the signal becomes noise', async () => {
+    // The other direction. A warn on every single-entry install would train the
+    // reader to ignore it, which is how a real ambiguity gets missed.
+    writeAllowFrom(['1268077055'])
+    mockListScheduledTasks.mockReturnValue([task({ type: 'task' })])
+    await deliveredPrompt()
+
+    expect(ambiguityWarns()).toBe(0)
   })
 })
