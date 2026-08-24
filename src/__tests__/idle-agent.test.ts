@@ -375,12 +375,13 @@ describe('countDeclaredWork', () => {
     expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, reviewerSpokeLast)).toBe(1)
   })
 
-  it('...and the SAME card without the mark is not his -- it goes to triage instead', () => {
-    // The half the old rule could not express. Nothing falls silent: the card lands on
-    // the coordinator's list, because an untriaged item is a decision nobody made yet.
+  it('...and the SAME card WITHOUT the mark also stays his, while the narrowing is off', () => {
+    // The triage selection is ready and correct -- and has no consumer, so nothing is
+    // taken away yet. Both halves asserted together, because the pair is the decision:
+    // a producer with no consumer must not narrow anything (marveen, 2026-08-24).
     const rows: Row[] = [card('t', 'testing', 'dexter')]
     const reviewerSpokeLast = commentsAt([['t', 'didi', 200]])
-    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, reviewerSpokeLast)).toBe(0)
+    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, reviewerSpokeLast)).toBe(1)
     expect(selectCoordinatorTriage(rows)).toHaveLength(1)
   })
 
@@ -417,7 +418,10 @@ describe('countDeclaredWork', () => {
     ])
     const mine = countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, cmts)
     const hers = countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', rows, cmts)
-    expect(mine).toBe(1)
+    // 'r' (marked) and 'u' (reviewer spoke last, unmarked) -- the second one only while
+    // the narrowing is off; when the triage gains a consumer this becomes 1 again, in
+    // the same commit that wires it.
+    expect(mine).toBe(2)
     expect(hers).toBe(2)
     // NOT a sum. Didi's catch: `mine + hers === rows.length` is satisfied just as well
     // by one card counted twice and another counted zero times -- the two errors cancel,
@@ -456,14 +460,17 @@ describe('countDeclaredWork', () => {
   // who it waits on, so nobody has to read the comment or nudge two people to be safe.
   // Nudging both was never free -- it is what put five identical wakes in front of an
   // agent who could not act on any of them.
-  it('a third party speaking last no longer nudges BOTH -- the mark decides, and absence means triage', () => {
+  it('a third party speaking last still nudges BOTH -- and that is now a KNOWN cost, not a shrug', () => {
+    // The original reasoning above stands while the narrowing is off. What changed is
+    // that we can now say what it costs: nudging both is what put five identical wakes
+    // in front of an agent who could not act on any of them. The label family is the
+    // way out, and it takes effect the day the triage list has somewhere to go.
     const rows: Row[] = [card('x', 'testing', 'dexter', { updatedAt: 300 })]
     const coordinatorLast = commentsAt([['x', 'didi', 200], ['x', 'marveen', 300]])
-    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, coordinatorLast)).toBe(0)
-    expect(selectCoordinatorTriage(rows)).toHaveLength(1)
-    // The reviewer's own queue is untouched by any of this -- it asks a different
-    // question ("does my review cover the card's current state") and still answers yes.
+    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, coordinatorLast)).toBe(1)
     expect(countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', rows, coordinatorLast)).toBe(1)
+    // Ready, and deliberately not yet consumed.
+    expect(selectCoordinatorTriage(rows)).toHaveLength(1)
   })
 
   // A KNOWN gap, asserted so it cannot change unnoticed: a card assigned to X where
@@ -641,13 +648,11 @@ describe('assigned_open_cards -- the coordinator is not a reviewer', () => {
   const comments = (m: Record<string, Record<string, number>>) =>
     new Map(Object.entries(m).map(([k, v]) => [k, new Map(Object.entries(v))]))
 
-  // Marked for the assignee: since 2026-08-24 a testing card reaches him only when a
-  // reviewer says so with `varakozik:assignee`. These cases are about WHO the comment
-  // came from, so the mark is held constant and the comment author is what varies.
-  const testingCard = (id: string) => ({
-    id, status: 'testing', assignee: 'dexter', updated_at: 100,
-    labels: [{ name: WAITING_ON_ASSIGNEE_LABEL }],
-  })
+  // NO label here on purpose: these cases are about the comment-author rule, which is
+  // what still decides while the narrowing is off (see idle-triage-coupling.test.ts).
+  // A `varakozik:assignee` mark would short-circuit every one of them and they would
+  // pass for the wrong reason.
+  const testingCard = (id: string) => ({ id, status: 'testing', assignee: 'dexter', updated_at: 100 })
 
   it('a testing card where the COORDINATOR spoke last is NOT the assignee’s work', () => {
     const n = countDeclaredWork(

@@ -36,13 +36,17 @@ describe('a testing card reaches the assignee only when it is marked for him', (
     expect(pick([card('a', { labels: lab(WAITING_ON_ASSIGNEE_LABEL) })])).toEqual(['a'])
   })
 
-  it('a verifier-said-closable card is NOT his -- even though a verifier spoke last', () => {
-    // The exact case the old rule got wrong, and the reason it is now a label.
-    expect(pick([card('b', { labels: lab(WAITING_ON_COORDINATOR_LABEL) })])).toEqual([])
+  // THE NARROWING IS OFF UNTIL THE TRIAGE HAS A CONSUMER (marveen's decision, 13:23).
+  // The POLICY -- an untriaged card is the coordinator's -- stands; what is missing is
+  // somewhere to deliver it. `selectCoordinatorTriage` has no production caller, so
+  // narrowing here would take 185 cards off the agents and drop them. Until then the
+  // label only ADDS, and these two cases keep the pre-2026-08-24 behaviour.
+  it('a coordinator-marked card STILL reaches the assignee for now -- nothing is dropped', () => {
+    expect(pick([card('b', { labels: lab(WAITING_ON_COORDINATOR_LABEL) })])).toEqual(['b'])
   })
 
-  it('an UNTRIAGED testing card is not his either', () => {
-    expect(pick([card('c', { labels: [] })])).toEqual([])
+  it('an UNTRIAGED testing card also stays with him, which is the status quo', () => {
+    expect(pick([card('c', { labels: [] })])).toEqual(['c'])
   })
 
   it('a non-testing card of his is unaffected by any of this', () => {
@@ -79,11 +83,12 @@ describe('what the coordinator has to look at', () => {
 })
 
 describe('THE PROBE marveen specified: today’s board, untriaged', () => {
-  it('11 untriaged testing items -> 0 to the assignee, 11 to the coordinator', () => {
-    // Today nothing carries a label, which is exactly the starting state: the whole
-    // list moves to triage rather than waking the person who cannot act on it.
+  it('11 untriaged testing items: the triage list is ready, the narrowing is not applied', () => {
+    // Both halves in one place, because the pair is the point. The triage SELECTION is
+    // correct and tested -- it just has nowhere to go yet, so the assignee still sees
+    // them. When the consumer lands, this expectation flips to 0 IN THE SAME COMMIT.
     const board = Array.from({ length: 11 }, (_, i) => card(`k${i}`, { labels: [] }))
-    expect(pick(board)).toHaveLength(0)
     expect(selectCoordinatorTriage(board)).toHaveLength(11)
+    expect(pick(board)).toHaveLength(11)
   })
 })

@@ -528,11 +528,24 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
         // now has a label. A card the assignee genuinely owes an answer on carries
         // `varakozik:assignee`; anything else is not his queue.
         //
-        // AND THE ABSENT LABEL IS NOT SILENCE: an untriaged card goes to the COORDINATOR
-        // (see selectCoordinatorTriage). "Nobody's" was the tempting rule and it is the
-        // wrong one -- a missing `varakozik:assignee` would leave a real question waiting
-        // mutely, and the cost of that lands on whoever forgot, which is never a design.
-        if (!labelNames(c).includes(WAITING_ON_ASSIGNEE_LABEL)) return false
+        // AND THE ABSENT LABEL IS NOT SILENCE: an untriaged card belongs to the
+        // COORDINATOR by policy (see selectCoordinatorTriage). "Nobody's" was the
+        // tempting rule and it is the wrong one -- a missing mark would leave a real
+        // question waiting mutely, at the cost of whoever forgot.
+        //
+        // THAT POLICY IS NOT ENFORCED HERE YET, AND THE REASON IS MEASURED, NOT TIMID
+        // (2026-08-24, jarvis). `selectCoordinatorTriage` has NO production caller: the
+        // coordinator has no `workcheck.json` at all, so there is no queue to route an
+        // untriaged card into. Narrowing here first would take 185 testing cards off the
+        // agents' lists and deliver them NOWHERE -- the exact silence the policy exists
+        // to prevent. So the label only ADDS for now; nothing is taken away.
+        //
+        // THE NARROWING COMES BACK WITH THE CONSUMER, IN THE SAME COMMIT (marveen's
+        // condition, and `idle-triage-coupling.test.ts` is what enforces it rather than
+        // leaving it to memory): a producer with no consumer must not be able to land on
+        // its own.
+        const markedForMe = labelNames(c).includes(WAITING_ON_ASSIGNEE_LABEL)
+        if (markedForMe) return true
         const authors = lastCommentAtByCard.get(c.id)
         if (!authors || authors.size === 0) return false
         let latestAuthor: string | null = null
