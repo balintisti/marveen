@@ -52,12 +52,36 @@ const INVOKE_RX = /bash\s+scripts\/[A-Za-z0-9_-]+\.(?:sh|py)/
 /** Egy uzenet SZOVEGEBEN allo szkriptnev nem hivas -- javaslat az olvasonak. */
 const MENTION_RX = /(?:echo|warn|fail|ok)\s+(?:-e\s+)?"/
 
+/**
+ * HIVAS-E EZ A SOR? A dontes NEM az idezojelen all, hanem a PARANCSHELYETTESITESEN.
+ *
+ * DIDI LELETE (2026-08-24), sajat kezbol ujramerve az ot jelolt soron: a puszta
+ * idezojel-vizsgalat KETTOT a VESZELYES iranyba tevesztett --
+ * `echo "$(bash scripts/x.sh)"` es `ok "$(bash scripts/x.sh | head -1)"` EMLITESNEK
+ * konyvelodott, pedig VALODI hivas. Egy ilyen sorral a szekcio kiesne a populaciobol, es az
+ * or rola tobbe SEMMIT nem allitana -- nemán, ami a legrosszabb kimenet.
+ *
+ * MA nincs ilyen sor a `doctor.sh`-ban (a ket kulon detektorunk a mai fajlon EGYETERT), tehat
+ * ez HOLNAPRA szolo javitas. Epp ezert kerult be: egy detektor, ami a MAI fajlon jol dolgozik,
+ * nem ugyanaz, mint egy detektor, ami HELYES.
+ */
+function isInvocation(line: string): boolean {
+  const m = INVOKE_RX.exec(line)
+  if (!m) return false
+  const before = line.slice(0, m.index)
+  // Nyitott `$(` a talalat elott -> parancshelyettesites, tehat HIVAS, akkor is, ha
+  // idezojelen belul all. (A zarojel-merleg kozelites, de a hej-idezojelnel eleg.)
+  const open = (before.match(/\$\(/g) ?? []).length - (before.match(/\)/g) ?? []).length
+  if (open > 0) return true
+  return !MENTION_RX.test(before)
+}
+
 function invokingSections(): { title: string; calls: number; body: string }[] {
   return sections()
     .map((s) => ({
       title: s.title,
       body: s.body,
-      calls: s.lines.filter((l) => INVOKE_RX.test(l.text) && !MENTION_RX.test(l.text)).length,
+      calls: s.lines.filter((l) => isInvocation(l.text)).length,
     }))
     .filter((s) => s.calls > 0)
 }
@@ -154,6 +178,17 @@ describe('doctor.sh -- minden szkript-hivas eredmenye FEL IS VAN HASZNALVA', () 
     expect(managed).toBeDefined()
     expect(INVOKE_RX.test(managed!.body)).toBe(true)          // a NEV ott van
     expect(invokingSections().some((s) => s.title.startsWith('Managed-settings'))).toBe(false) // de nem hivas
+  })
+
+  it('a HIVAS-FELISMERO ot mert eseten -- a dontes a parancshelyettesitesen all, nem az idezojelen', () => {
+    // Didi ot jelolt sora, valtozatlanul atveve. Az elso valtozatom a harmadikat es a
+    // negyediket EMLITESNEK vette -- mindketto VALODI hivas, es mindketto a VESZELYES
+    // iranyba tevedt: a szekcio kiesne a populaciobol, es az or nemán hallgatna rola.
+    expect(isInvocation('PG="$(bash scripts/x.sh)"')).toBe(true)
+    expect(isInvocation('warn "Fix: bash scripts/x.sh"')).toBe(false)
+    expect(isInvocation('echo "$(bash scripts/x.sh)"')).toBe(true)
+    expect(isInvocation('ok "$(bash scripts/x.sh | head -1)"')).toBe(true)
+    expect(isInvocation('bash scripts/x.sh | while read l; do :; done')).toBe(true)
   })
 
   it('a fogyasztas-felismero MINDHAROM szerzodest elfogadja, es a puszta ertekadast NEM', () => {
