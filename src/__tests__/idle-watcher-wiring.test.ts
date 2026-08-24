@@ -47,3 +47,27 @@ describe('the idle guard is actually fed what it needs', () => {
     expect(selections).toHaveLength(1)
   })
 })
+
+// A LATENT DEPENDENCY BETWEEN TWO THRESHOLDS, found by jarvis in review (2026-08-24).
+//
+// The cooldown gate runs BEFORE the stale re-arm and returns early. So if
+// `wakeCooldownMs` were ever raised above `wakeStaleRearmMs`, the re-arm would never get
+// a say -- the guard would go back to silencing itself on a stable list, and nothing
+// would say so. Neither value is wrong on its own; only their ORDER is.
+//
+// This is the kind of coupling that survives review precisely because both numbers look
+// reasonable in isolation. Pinned so that changing one is a decision about the pair.
+describe('the two wake thresholds are ordered, not merely set', () => {
+  it('the cooldown must be SHORTER than the stale re-arm, or the re-arm is dead code', () => {
+    const cooldown = Number(SRC.match(/wakeCooldownMs:\s*([\d\s*_]+),/)?.[1]?.replace(/[\s_]/g, '').split('*').reduce((a, b) => a * Number(b), 1))
+    const rearm = Number(SRC.match(/wakeStaleRearmMs:\s*([\d\s*_]+),/)?.[1]?.replace(/[\s_]/g, '').split('*').reduce((a, b) => a * Number(b), 1))
+    expect(cooldown, 'wakeCooldownMs not found in the watcher source').toBeGreaterThan(0)
+    expect(rearm, 'wakeStaleRearmMs not found in the watcher').toBeGreaterThan(0)
+    expect(
+      cooldown < rearm,
+      `wakeCooldownMs (${cooldown}ms) must stay BELOW wakeStaleRearmMs (${rearm}ms): the ` +
+        'cooldown gate returns first, so a longer cooldown makes the stale re-arm ' +
+        'unreachable and the guard silences itself on a stable list.',
+    ).toBe(true)
+  })
+})
