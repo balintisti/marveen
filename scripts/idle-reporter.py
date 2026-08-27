@@ -56,6 +56,9 @@ DEFAULT_T_MIN = 40
 # Ha ugyanaz a riasztas all fenn, ne menjen ki minden korben ujra. Allapotvaltasnal
 # mindig szolunk; valtozatlan allapotban csak ennyi ora utan ismetlunk.
 DEFAULT_REPEAT_H = 4
+# SZIVVERES: milyen surun irjon a naplo egy sort arrol, hogy a kor lefutott ES
+# MIT LATOTT. 60 perc -- lasd heartbeat_sec() es compose_heartbeat().
+DEFAULT_HEARTBEAT_MIN = 60
 
 
 def _env_int(name, default):
@@ -76,6 +79,10 @@ def threshold_sec():
 
 def repeat_sec():
     return _env_int("IDLE_REPORTER_REPEAT_H", DEFAULT_REPEAT_H) * 3600
+
+
+def heartbeat_sec():
+    return _env_int("IDLE_REPORTER_HEARTBEAT_MIN", DEFAULT_HEARTBEAT_MIN) * 60
 
 
 def roster(fleet_root=None):
@@ -204,6 +211,43 @@ def compose(silent, total, now, t_sec, activity):
     return "\n".join(lines)
 
 
+def compose_heartbeat(activity, silent, now, t_sec):
+    """A szivveres-sor: NEM azt mondja, hogy elek, hanem hogy MIT LATTAM.
+
+    MIERT NEM ELEG EGY "alive" SOR (Marveen kikotese, 2026-08-27). Egy szimpla
+    eletjel azt bizonyitja, hogy a FOLYAMAT futott -- nem azt, hogy a MERES
+    mukodott. Ha a roster valaha uresen jonne vissza, egy "alive" sor mellett a
+    flotta tokeletesen egeszsegesnek latszana, holott nulla agenst neztunk meg.
+    Ezert a sor MINDIG kiirja a megvizsgalt agensek szamat, es nulla eseten
+    kulon, felreerthetetlen szoveget ad.
+
+    Ugyanez a keret masik fele: a "meg semmit nem termelt" agens NEM riaszt
+    (lasd is_silent), tehat egy riasztas-szam onmagaban elrejtene, ha az egesz
+    flotta ilyen allapotban allna. Ezert a szamuk is itt van.
+
+    `activity` lehet None: akkor a meres el sem jutott az adatbazisig.
+    """
+    t_min = t_sec // 60
+    if activity is None:
+        return ("[tetlen-jelento] kor lefutott, de NEM MERT: az adatbazis nem "
+                "olvashato. Ez nem csend, hanem vak kor.")
+    total = len(activity)
+    if total == 0:
+        return ("[tetlen-jelento] kor lefutott, de NEM MERT: NULLA agenst talaltam "
+                "a rosterben. Ez nem azt jelenti, hogy mindenki dolgozik -- azt, "
+                "hogy nem neztem meg senkit.")
+    never = sum(1 for lo, _ in activity.values() if lo is None)
+    gaps = [(now - lo, a) for a, (lo, _) in activity.items() if lo is not None]
+    parts = [f"[tetlen-jelento] kor lefutott: {total} agens megnezve, "
+             f"{len(silent)} a {t_min} perces kuszob felett"]
+    if gaps:
+        longest, who = max(gaps)
+        parts.append(f"a leghosszabb csend {int(longest // 60)} perc ({who})")
+    if never:
+        parts.append(f"{never} agens meg semmit nem termelt")
+    return ", ".join(parts) + "."
+
+
 def db_error_text(err, t_min):
     """(b) A sajat vaksag IS jelentendo -- kulon szoveggel, hogy ne csendnek nezzek."""
     return ("[tetlen-jelento] NEM TUDTAM MERNI: a kanban-adatbazis nem olvashato. "
@@ -285,8 +329,46 @@ def send_telegram(text, token=None, chat_id=None):
         return False
 
 
-def run(now=None, send=send_telegram, state_path=None, db_path=None, fleet_root=None):
-    """Egy kor. A `send` es a `now` azert parameter, hogy tesztelheto legyen."""
+def note(text):
+    """A szivveres kimenete: MINDIG a stdout, sosem a `send`.
+
+    Ket kulon csatorna, ket kulon cimzett. A `send` a GAZDANAK szol (Telegram),
+    es oda egy oras eletjel zaj lenne. A szivveres az UZEMELTETESNEK szol, es a
+    launchd a stdoutot a unit StandardOutPath-jara iranyitja -- tehat a naplo
+    akkor is megkapja, ha a kuldo eppen `telegram`. Ha a `send`-en menne, a
+    naplo `telegram` modban ures maradna, es pont az az invarians veszne el,
+    amiert a szivveres letezik.
+    """
+    print(text, flush=True)
+
+
+def _merge_state(prev, updates, state_path):
+    """A meglevo allapot MELLE ir, nem HELYETTE.
+
+    Ket fuggetlen idozito osztozik egy fajlon: a riasztas ismetles-feke
+    (`key`/`sent_at`) es a szivveres (`hb_at`). Egy sima felulíras azt jelentene,
+    hogy minden riasztas TORLI a szivveres idobelyeget -- es a szivveres onnantol
+    minden riasztasos korben ujra tuzelne, vagyis eppen a ritkitas veszne el.
+    """
+    merged = dict(prev)
+    merged.update(updates)
+    save_state(merged, state_path)
+    return merged
+
+
+def _maybe_heartbeat(prev, activity, silent, now, t_sec, state_path, out):
+    """Oranként legfeljebb egy sor. Igazzal ter vissza, ha irt."""
+    last = float(prev.get("hb_at") or 0)
+    if now - last < heartbeat_sec():
+        return False
+    out(compose_heartbeat(activity, silent, now, t_sec))
+    _merge_state(prev, {"hb_at": now}, state_path)
+    return True
+
+
+def run(now=None, send=send_telegram, state_path=None, db_path=None, fleet_root=None,
+        out=note):
+    """Egy kor. A `send`, az `out` es a `now` azert parameter, hogy tesztelheto legyen."""
     now = now if now is not None else time.time()
     t_sec = threshold_sec()
     agents = roster(fleet_root)
@@ -298,7 +380,11 @@ def run(now=None, send=send_telegram, state_path=None, db_path=None, fleet_root=
         key = "db-unreadable"
         if should_send(key, prev, now, repeat_sec()):
             send(db_error_text(err, t_sec // 60))
-            save_state({"key": key, "sent_at": now}, state_path)
+            prev = _merge_state(prev, {"key": key, "sent_at": now}, state_path)
+        # A szivveres a VAK korrol is szol: kulonben egy tartosan olvashatatlan
+        # adatbazis mellett a naplo negy oranként egyszer szolalna meg, es kozben
+        # ugyanugy nezne ki, mint egy csendes, egeszseges flotta.
+        _maybe_heartbeat(prev, None, [], now, t_sec, state_path, out)
         return key
 
     silent = evaluate(activity, now, t_sec)
@@ -309,7 +395,11 @@ def run(now=None, send=send_telegram, state_path=None, db_path=None, fleet_root=
             # riaszt -> csend: a parja a riasztasnak, hogy ne maradjon nyitva
             text = "[tetlen-jelento] Rendben: minden agens ujra termel, vagy megkapta az ebresztest."
         send(text)
-        save_state({"key": key, "sent_at": now}, state_path)
+        prev = _merge_state(prev, {"key": key, "sent_at": now}, state_path)
+    # A szivveres FUGGETLEN attol, ment-e riasztas. `telegram` modban a riasztas
+    # nem a naplóba megy, tehat egy "ha riasztottam, nem irok" szabaly mellett a
+    # naplo orakra elnemulhatna ugy, hogy kozben minden kor lefutott.
+    _maybe_heartbeat(prev, activity, silent, now, t_sec, state_path, out)
     return key
 
 
