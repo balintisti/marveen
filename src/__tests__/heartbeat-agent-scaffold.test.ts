@@ -339,3 +339,26 @@ describe('kanban extraction is a shipped one-liner, never an improvised pipe+her
     expect(out).toMatch(/heredoc becomes python3's stdin/)
   })
 })
+
+describe('a rendelt CLAUDE.md megmondja magarol, hogy GENERALT (7a8d972b)', () => {
+  // A harom ALWAYS_WRITE fajl minden bootkor teljes egeszeben ujrairodik, es a
+  // forras-komment ki is mondja, hogy szandekosan. A szandek rendben; a
+  // LATHATATLANSAG nem volt az: a rendelt szovegben nulla jelzes allt errol.
+  // Ugyanaz az alak, mint a generalt blokkok belso fejlecenel, csak ott
+  // mellekhatas volt, itt szandek.
+
+  it('a jelzes az ELSO sorokban all, mielott barmi mas jonne', () => {
+    const out = renderHeartbeatClaudeMd(ID)
+    const head = out.split('\n').slice(0, 4).join('\n')
+    expect(head).toContain('GENERALT FAJL')
+    expect(head).toContain('NYOMTALANUL ELVESZ')
+    // es megnevezi a forrast, hogy ne kelljen keresni
+    expect(head).toContain('renderHeartbeatClaudeMd')
+  })
+
+  it('a jelzes a `# Heartbeat agent` fejlec ELE kerul, nem utana', () => {
+    // Ha utana allna, aki a fajl elejere ir, nem latna.
+    const out = renderHeartbeatClaudeMd(ID)
+    expect(out.indexOf('GENERALT FAJL')).toBeLessThan(out.indexOf('# Heartbeat agent'))
+  })
+})
