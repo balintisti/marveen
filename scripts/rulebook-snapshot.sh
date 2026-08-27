@@ -139,9 +139,18 @@ done
 printf '%s\n' "$PAIRS" > "$PREV"
 
 git -C "$RULEBOOK_REPO" add -A
-# No change -> `git commit` exits non-zero and writes nothing. Measured: an
-# empty cycle is 26 ms and leaves no empty commit, so no "did anything change?"
-# pre-check is needed.
+# No change -> `git commit` exits non-zero and writes nothing, so no "did
+# anything change?" pre-check is needed.
+#
+# THE COST, WITH ITS POPULATION -- the earlier note here said "26 ms" and named
+# no tree, which is how a number stops being an answer (friday, 2026-08-27):
+#     1 file, throwaway tree ....... 32 ms
+#     79 files, the LIVE set ....... 1.43-1.62 s   (5 runs, no change)
+# A single run of the live set once came back at 0.386 s and that was an
+# outlier, warm from the run before it; one measurement is not a measurement.
+# At 1800 s that is ~72 s of wall time a day. Anyone shortening the interval
+# should multiply by the 1.5 s figure, not the 26 ms one: 60 s would be ~36
+# minutes a day.
 if git -C "$RULEBOOK_REPO" commit -q -m "snapshot: ${NOW_COUNT} fajl" 2>/dev/null; then
   log "rulebook-snapshot: committed ${NOW_COUNT} files"
 else
