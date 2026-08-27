@@ -29,7 +29,6 @@ import {
 import { detectPaneState, type PaneState } from '../pane-state.js'
 import { setLastInboundModality } from './voice-modality.js'
 import { classifyAgentMessage, wrapAgentMessageForDelivery } from './agent-message-wrap.js'
-import { MAIN_CHANNELS_SESSION } from './main-agent.js'
 import { maybeWakeSubAgentsForTelegram } from './telegram-inbox-wake.js'
 
 // A message that cannot be delivered within this window (target session never
@@ -134,13 +133,6 @@ function notifyOrchestratorOfFailedHandoff(msg: AgentMessage, reason: string): v
     logger.warn({ err, id: msg.id }, 'Failed to enqueue handoff-failure notification')
   }
 }
-// Wakeup cooldown for the main agent: the router fires at most one
-// sendPromptToSession wakeup per COOLDOWN_MS window to avoid spamming the
-// channels session. 45s gives enough headroom that a normal turn (typically
-// 5-30s) ends and drain-inbox fires before we would retry.
-let lastMainAgentWakeupMs = 0
-const MAIN_AGENT_WAKEUP_COOLDOWN_MS = 45 * 1000
-
 // Bounce a terminal federated-delivery failure back to the SENDER's inbox as
 // a local 'system' notice, so a delegating agent learns its task never
 // arrived (otherwise the failure only flips a DB row nobody reads, and the
@@ -500,7 +492,6 @@ export async function runMessageRouterTick(): Promise<void> {
     // on their own budget so neither queue starves the other.
     await deliverFederatedBatch(federatedPending, now)
 
-    let mainAgentWakeupFiredThisTick = false
     for (const msg of pending) {
       // Skip messages already batched by the reconnect pre-pass: they are
       // 'done' in the DB now but still appear in our snapshot slice.
@@ -523,24 +514,22 @@ export async function runMessageRouterTick(): Promise<void> {
       // day. Leave the message pending; the next main-agent turn claims it
       // atomically. Sub-agents keep the tmux-inject path (they have idle gaps).
       //
-      // WAKEUP: without an active nudge the main agent only drains on the next
-      // user message or heartbeat -- up to 22+ min latency observed in prod.
-      // Fire one lightweight wakeup per cooldown window so an idle channels
-      // session starts a turn and drain-inbox claims the message immediately.
-      // Busy session: Claude Code queues the wakeup for the next turn boundary.
-      if (isMainAgent) {
-        if (!mainAgentWakeupFiredThisTick && now - lastMainAgentWakeupMs >= MAIN_AGENT_WAKEUP_COOLDOWN_MS) {
-          mainAgentWakeupFiredThisTick = true
-          lastMainAgentWakeupMs = now
-          try {
-            await sendPromptToSession(MAIN_CHANNELS_SESSION, '[inbox-wakeup: pending inter-agent messages]', null, { waitForIdle: false })
-            logger.info({ msgId: msg.id }, 'message-router: main-agent wakeup fired')
-          } catch (err) {
-            logger.warn({ err }, 'message-router: main-agent wakeup injection failed')
-          }
-        }
-        continue
-      }
+      // WAKEUP: moved out (card 835384e6, 2026-08-27). The router used to type
+      // `[inbox-wakeup: ...]` here every 45s while any main-agent message was
+      // pending, with NO idle gate (`waitForIdle: false`) -- so it re-typed the
+      // line while the previous copy was still queued unread, and every copy
+      // cost a full turn when the pane drained. Measured over 290,5 hours:
+      // 5 908 fires for 1 286 distinct messages (78,1% redundant), and 855 of
+      // the inbox-nudge watcher's 883 busy abstentions (96,8%) were overridden
+      // from here within 30s. Two writers on one pane meant the careful one's
+      // brakes -- busy-abort, hourly budget, stale-stop -- could not bind.
+      //
+      // Main-agent nudging now lives in ONE place, inbox-nudge-watcher, which
+      // has both entry points: the idle nudge, and a busy branch that queues at
+      // most one UNCONSUMED line (decideBusyWakeup + queuedPromptLines). The
+      // PULL model itself is unchanged -- the router never delivered content to
+      // the main agent, it only signalled; drain-inbox still does the claiming.
+      if (isMainAgent) continue
       // Use cached session data from the pre-pass (one sessionExistsOnHost call
       // per unique receiver per tick). Fall back to a direct call for agents not
       // in the pending set (shouldn't happen, but safe).
