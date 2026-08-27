@@ -260,3 +260,73 @@ describe('skill-index.sh -- graceful handling of missing global dir', () => {
     }
   })
 })
+
+describe('skill-index.sh -- a MARADEK KERET, nem csak az ertek (mandark, 2026-08-27)', () => {
+  // A sor eddig megmondta, MENNYI a novekedes, es nem mondta meg, MENNYI FER MEG.
+  // Aki a "+15"-ot latta, nem tudta belole, hogy egyetlen sor valasztja el a
+  // riasztastol -- es a riasztast nem az kapja, aki a keretet elhasznalta, hanem a
+  // KOVETKEZO, aki egy jogos sort beir.
+
+  function baselinedHome(lines: number) {
+    const home = mkdtempSync(join(tmpdir(), 'skill-room-'))
+    const dir = join(home, '.claude', 'skills', 'pinned')
+    mkdirSync(dir, { recursive: true })
+    const head = makeSkillMd('pinned', 'x')
+    const headLines = head.split('\n').length - 1
+    writeFileSync(join(dir, 'SKILL.md'), head + 'line\n'.repeat(Math.max(0, lines - headLines)))
+    return home
+  }
+
+  it('kiirja, hany sor fer meg -- es a szam a kerettel egyutt mozdul', () => {
+    const home = baselinedHome(100)
+    try {
+      const base = { HOME: home, SKILL_BASELINE_NAMES: 'pinned', SKILL_BASELINE_LINES: '90' }
+      // novekedes +10 mindharom esetben; csak a keret valtozik
+      expect(runScript([], { ...base, SKILL_GROWTH_LIMIT: '10' }).stdout).toContain('0 sor maradt')
+      expect(runScript([], { ...base, SKILL_GROWTH_LIMIT: '15' }).stdout).toContain('5 sor maradt')
+      expect(runScript([], { ...base, SKILL_GROWTH_LIMIT: '30' }).stdout).toContain('20 sor maradt')
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('a SZUKEBB korlatot mondja, es megnevezi, ha a KEMENY korlat kot', () => {
+    // Egy szam a kotoereje nelkul ugyanaz a hiba, mint egy szam populacio nelkul:
+    // "20 sor maradt" hamis igeret, ha a kemeny korlat 2 sorra van.
+    const home = baselinedHome(100)
+    try {
+      const base = { HOME: home, SKILL_BASELINE_NAMES: 'pinned', SKILL_BASELINE_LINES: '90',
+                     SKILL_GROWTH_LIMIT: '50' }
+      const laza = runScript([], { ...base, SKILL_HARD_LIMIT: '600' }).stdout
+      expect(laza).toContain('40 sor maradt')
+      expect(laza).not.toContain('KEMENY korlat kot')
+
+      const szoros = runScript([], { ...base, SKILL_HARD_LIMIT: '103' }).stdout
+      expect(szoros).toContain('3 sor maradt')
+      expect(szoros).toContain('KEMENY korlat kot')
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('a "0 sor maradt" AZT JELENTI, hogy a kovetkezo sor tuzel -- a szam es a kapu egyben', () => {
+    // EZ AZ, AMITOL A SZAM NEM DISZ. A ket elozo teszt a SZOVEGET meri; ez azt meri,
+    // hogy a szoveg IGAZAT mond a kapurol. Enelkul a maradek-szamot el lehetne rontani
+    // ugy, hogy minden szoveg-allitas zold marad.
+    const base = { SKILL_BASELINE_NAMES: 'pinned', SKILL_BASELINE_LINES: '90',
+                   SKILL_GROWTH_LIMIT: '10', SKILL_HARD_LIMIT: '600' }
+    const hatarOn = baselinedHome(100)   // novekedes +10, keret 10 -> 0 maradt
+    const eggyelTul = baselinedHome(101) // +11 -> tuzel
+    try {
+      const a = runScript([], { ...base, HOME: hatarOn })
+      expect(a.stdout).toContain('0 sor maradt')
+      expect(a.exitCode).toBe(0)
+
+      const b = runScript([], { ...base, HOME: eggyelTul })
+      expect(b.exitCode).toBe(3)
+    } finally {
+      rmSync(hatarOn, { recursive: true, force: true })
+      rmSync(eggyelTul, { recursive: true, force: true })
+    }
+  })
+})
