@@ -2334,11 +2334,28 @@ async function showCardDetail(card) {
   }
 
   // Archive
+  //
+  // The response body is READ, not discarded. The backend answers with a
+  // `warning` when the card carries a reopening condition nobody replied to
+  // (see src/web/reopen-condition-warning.ts, card ade4260a). Until this line
+  // existed the warning reached API callers only, and the dashboard -- where
+  // the owner and the coordinator actually archive -- showed the same fixed
+  // "archived" toast either way. A signal that stops before the screen is the
+  // silence this whole feature is about.
+  //
+  // Shown for longer than a normal toast because it asks for a DECISION (open a
+  // card for the condition) rather than acknowledging a finished action.
   document.getElementById('cardArchiveBtn').onclick = async () => {
     try {
-      await fetch(`/api/kanban/${encodeURIComponent(card.id)}/archive`, { method: 'POST' })
+      const res = await fetch(`/api/kanban/${encodeURIComponent(card.id)}/archive`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actor: kanbanMoveActor() }),
+      })
+      const body = await res.json().catch(() => ({}))
       closeModal(cardDetailOverlay)
-      showToast(t('kanban.toast.card_archived'))
+      if (body && body.warning) showToast(body.warning, 12000)
+      else showToast(t('kanban.toast.card_archived'))
       loadKanban()
     } catch {
       showToast(t('kanban.toast.archive_error'))

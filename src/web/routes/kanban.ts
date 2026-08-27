@@ -19,6 +19,8 @@ import {
 import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
 import { unknownQueryParams, unknownQueryParamError } from '../query-params.js'
 import { kanbanProjectWarning } from '../kanban-project-warning.js'
+import { scanUnansweredCondition, isDuplicateArchive, conditionWarningText } from '../reopen-condition-warning.js'
+import { appendReopenWarning } from '../reopen-condition-log.js'
 import { OWNER_NAME, BOT_NAME, MAIN_AGENT_ID, STORE_DIR, WEB_HOST, WEB_PORT, KANBAN_LABEL_COLORS } from '../../config.js'
 import { listAgentNames, readAgentDisplayName } from '../agent-config.js'
 import { isAgentRunning } from '../agent-process.js'
@@ -455,8 +457,45 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   const kanbanArchiveMatch = path.match(/^\/api\/kanban\/([^/]+)\/archive$/)
   if (kanbanArchiveMatch && method === 'POST') {
     const id = decodeURIComponent(kanbanArchiveMatch[1])
+    // The documented call sends an EMPTY body, and every existing caller does
+    // exactly that. So the body is optional in both directions: unparseable or
+    // absent means "no actor, no reason", never an error.
+    let actor = 'ismeretlen'
+    let reason: unknown
+    try {
+      const parsed = JSON.parse((await readBody(req)).toString())
+      if (parsed && typeof parsed === 'object') {
+        if (typeof parsed.actor === 'string' && parsed.actor.trim() !== '') actor = parsed.actor.trim()
+        reason = parsed.reason
+      }
+    } catch { /* empty or non-JSON body: the documented shape */ }
+
+    // Read the comments BEFORE archiving: the scan is about what the archive is
+    // taking out of sight. Archiving does not touch comments today, but the
+    // order states the intent instead of relying on that.
+    const comments = getKanbanComments(id)
+    const scan = isDuplicateArchive(reason, comments) ? null : scanUnansweredCondition(comments)
+
     revertIdeaFromKanban(id)
-    if (archiveKanbanCard(id)) { json(res, { ok: true }); return true }
+    if (archiveKanbanCard(id)) {
+      // The card IS archived either way -- see reopen-condition-warning.ts for
+      // why this warns instead of blocking.
+      if (scan) {
+        appendReopenWarning({
+          ts: Math.floor(Date.now() / 1000),
+          card: id,
+          matches: scan.matches,
+          condition_comment_id: scan.lastConditionCommentId,
+          actor,
+          last_comment_id_at_fire: scan.lastCommentId,
+        })
+        logger.warn({ id, matches: scan.matches, actor }, 'Archived a card with an unanswered reopening condition')
+        json(res, { ok: true, warning: conditionWarningText(scan) })
+        return true
+      }
+      json(res, { ok: true })
+      return true
+    }
     json(res, { error: 'Kártya nem található' }, 404)
     return true
   }
