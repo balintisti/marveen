@@ -64,6 +64,37 @@ describe('update.sh: the remote it pulls from', () => {
     expect(missing).toEqual([])
   })
 
+  it('measures "am I ahead" against the SAME remote it will pull from', () => {
+    // Found by jarvis 2026-08-27, after the remote switch and NOT covered by the
+    // questions I asked him. The ahead-check used `@{u}` -- the branch's own
+    // upstream -- which happened to equal the pull remote only while both were
+    // `origin`. Measured on the live checkout afterwards: `@{u}` does not
+    // resolve at all (the branch has no upstream), 5 of 6 local branches point
+    // theirs at the FOREIGN origin, and the checkout was 15 commits ahead of
+    // fork/<branch> while the guard reported 0.
+    expect(codeOnly.join('\n')).not.toMatch(/@\{u\}/)
+    const aheadLine = codeOnly.find((l) => /AHEAD=/.test(l) && /rev-list/.test(l))
+    expect(aheadLine, 'the ahead-check must still exist').toBeDefined()
+    expect(aheadLine!).toMatch(/FETCH_HEAD/)
+  })
+
+  it('does not turn an unmeasurable ahead-count into zero', () => {
+    // `|| echo 0` was the whole defect: a count we could not compute became the
+    // one value that lets the pull proceed. A guard that cannot measure must
+    // stop, not pick the reassuring answer.
+    const aheadLine = codeOnly.find((l) => /AHEAD=/.test(l) && /rev-list/.test(l))!
+    expect(aheadLine).not.toMatch(/\|\|\s*echo\s*0/)
+  })
+
+  it('fetches the update remote before asking whether we are ahead of it', () => {
+    // "Am I ahead of the remote" is unanswerable without knowing where the
+    // remote is; FETCH_HEAD is only meaningful after a fetch.
+    const fetchIdx = codeOnly.findIndex((l) => isCallSite(l) && /git\s+fetch/.test(l))
+    const aheadIdx = codeOnly.findIndex((l) => /AHEAD=/.test(l) && /rev-list/.test(l))
+    expect(fetchIdx).toBeGreaterThan(-1)
+    expect(aheadIdx).toBeGreaterThan(fetchIdx)
+  })
+
   it('is overridable, so a different install can point elsewhere without a patch', () => {
     expect(SRC).toContain('UPDATE_REMOTE="${UPDATE_REMOTE:-')
   })
