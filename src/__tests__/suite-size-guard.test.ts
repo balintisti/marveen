@@ -267,3 +267,35 @@ describe('baselineStaleMessage -- az OR SAJAT elavulasa (kartya 7c86006a)', () =
     expect(uzenet).toMatch(/ennyi teszt tunhet el JELZES NELKUL: 237/)
   })
 })
+
+describe('EZ ZSUGORODAS-OR, NEM LEFEDETTSEGI KAPU -- a korlat rogzitve (481efd24)', () => {
+  // AMI ITT ALL, ES AMI SZANDEKOSAN NEM.
+  //
+  // A fejlec kimondja, hogy a produkcios kod merete sehol nem szerepel a
+  // szamitasban. Ezt HAROM tesztet irtam ala, es MINDHAROM rossz volt -- a
+  // bukas csak az egyiket mutatta meg:
+  //
+  //   (1) "uj produkcios fajl atmegy": ugyanazokkal az argumentumokkal hivta
+  //       ketszer a fuggvenyt. Az `f(x) === f(x)` TAUTOLOGIA -- azt allitja,
+  //       hogy a fuggveny determinisztikus, nem azt, hogy a nevezo hianyzik.
+  //   (2) `evaluateSuiteSize.length === 4`: a `length` csak az ELSO
+  //       alapertelmezett ertek ELOTTI parametereket szamolja, tehat 2. De a
+  //       javitott szam sem ert volna semmit: egy KESOBB hozzaadott, szinten
+  //       alapertelmezett nevezo-parameter sem valtoztatna rajta.
+  //   (3) es ami maradt, a pozitiv kontroll, MAGABAN all -- lasd lent.
+  //
+  // A TANULSAG, AMI IDE TARTOZIK: a "nincs nevezo" nem VISELKEDES, hanem a
+  // szignatura tulajdonsaga. Egy egysegteszt viselkedest mer. Amit egy teszt
+  // nem tud allitani, azt ne ugy irjuk meg, hogy allitani LATSSZON -- az
+  // rosszabb, mint a hianya, mert a kovetkezo olvaso fedezetnek nezi.
+  // A tenyt ezert a fejlec mondja ki, meressel es pozitiv kontrollokkal, es a
+  // 481efd24 kartya orzi. Itt csak az all, ami tenyleg merheto:
+
+  it('POZITIV KONTROLL: az or EL -- egy eltunt teszt es egy eltunt FAJL is bukik', () => {
+    // Ez az, ami a fejlecben allo "uj produkcios fajl -> ZOLD" merest ertelmesse
+    // teszi. Enelkul a zold szin jelenthetne azt is, hogy az or halott.
+    expect(evaluateSuiteSize(337, 4528, 337, 4529).ok).toBe(false)
+    expect(evaluateSuiteSize(336, 4515, 337, 4529).ok).toBe(false)
+    expect(evaluateSuiteSize(337, 4529, 337, 4529).ok).toBe(true)
+  })
+})

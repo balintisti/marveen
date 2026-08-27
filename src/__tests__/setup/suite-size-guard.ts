@@ -90,6 +90,47 @@ import type { File, Task } from 'vitest'
  * AKI EZT A SZAMOT MEGINT MEG AKARJA EMELNI: nevezze meg a MERHETO okot, ahogy
  * a ket elozo szam is tette, es merje meg. Egy szam, ami mogott nincs meres,
  * csak annyit ved, hogy ne kelljen a parancsot lefuttatni.
+ *
+ * ===================================================================
+ * EZ ZSUGORODAS-OR, NEM LEFEDETTSEGI KAPU (kartya 481efd24, 2026-08-27)
+ * ===================================================================
+ *
+ * Amit ez az or mer, az a KESZLET MERETE. Amit NEM mer, az a produkcios kod
+ * merete -- az sehol nem szerepel a szamitasban. Nincs nevezo.
+ *
+ * MERVE, kozvetlenul az `evaluateSuiteSize`-on, POZITIV KONTROLLOKKAL:
+ *
+ *     alapvonal 337 fajl / 4529 teszt
+ *     uj 500 soros PRODUKCIOS fajl, NULLA teszt  ->  ZOLD   (mindket bemenet valtozatlan)
+ *     EGY teszt eltunik                          ->  BUKIK
+ *     EGY teszt-FAJL eltunik (~14 teszt)         ->  BUKIK
+ *
+ * A ket also sor nelkul a ket felso semmit nem bizonyitana (lehetne az or halott).
+ *
+ * MIERT ALL EZ ITT, ES NEM EGY KARTYAN: mert a felreertes MERT KAR. A kartya
+ * szerzoje (friday) harom napig olvasta ugy a SAJAT kommentjet, hogy "van kapu",
+ * es a marveen-oldalon NINCS lefedettsegi eszkoz sem: se `@vitest/coverage-v8`,
+ * se `coverage` blokk a vitest configban (ujramerve 2026-08-27). Aki ezt az ort
+ * latja zolden, ne higgye, hogy a lefedettseget valaki orzi.
+ *
+ * MIERT NEM KAPOTT NEVEZOT (dontes, marveen, 2026-08-27). Negy nap adata:
+ *
+ *     08-23   196 fajl / 55 736 sor / 3 899 teszt  ->  70,0 teszt / 1000 prod sor
+ *     08-24   202 fajl / 57 756 sor / 4 464 teszt  ->  77,3
+ *     08-27   202 fajl / 58 020 sor / 4 529 teszt  ->  78,1
+ *
+ * A produkcios kod +4,1%, a teszt +16,2%: az arany MONOTON JAVULT. Egy ma
+ * beallitott kuszob ma is teljesulne, tehat semmit nem fogna meg -- es egy or,
+ * ami soha nem tuzel, ugyanannyit er, mint egy kikapcsolt.
+ *
+ * A FELTETEL, AMI EZT UJRANYITJA: ha az arany KET egymast koveto meresen ROMLIK,
+ * jojjon egy arany-JELZES (figyelmeztetes, nem bukas -- ugyanaz a szetvalasztas,
+ * mint a `baselineStaleMessage`-nel), a padlo az akkor mert ertek.
+ *
+ * ES HA VALAHA ARANYT IR KI, A TORTET IRJA, NE A SZAZALEKOT: `4529/58020`, nem
+ * "78,1". A `66ebd558` kartya 2. pontja: egy szazalek elrejti, hogy a nevezo
+ * mozdult-e ket meres kozott. Ez az or epp arrol szol, hogy egy nevezo el tud
+ * veszni anelkul, hogy barmi szolna rola.
  */
 
 // === SUITE-BASELINE:BEGIN ===
