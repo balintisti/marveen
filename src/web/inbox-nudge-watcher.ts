@@ -219,7 +219,13 @@ export function decideNudgePreflight(
 
 export type BusyWakeupDecision =
   | { send: false; state: NudgeState; reason: 'no-mail' | 'too-soon' | 'already-queued'; suppressLog?: true }
-  | { send: true; state: NudgeState; reason: 'nothing-queued' | 'failsafe' }
+  // `suppressLog?: undefined` is not noise: without it the property does not
+  // exist on this arm at all, so a test reading `decision.suppressLog` fails to
+  // COMPILE even where the value is plainly absent -- and vitest does not
+  // type-check, so that lands as five red tsc errors nobody sees until a build.
+  // Declaring it also states the invariant in the type: a SEND never carries a
+  // suppression log, because nothing was suppressed.
+  | { send: true; state: NudgeState; reason: 'nothing-queued' | 'failsafe'; suppressLog?: undefined }
 
 /**
  * Should we type a wakeup into a BUSY main pane?
