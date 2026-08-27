@@ -1641,6 +1641,26 @@ function createCardEl(card, embeddedChildren = []) {
 // backend dispatches as it always did, never the opposite.
 function kanbanMoveActor() { return window._marveen?.ownerName || undefined }
 
+// A `warning` mezot HORDOZO valaszok egyetlen megjelenito helye.
+//
+// A backend harom kartya-letrehozo uton ad `warning`-ot (ures `project`, lasd
+// src/web/kanban-project-warning.ts), es a dashboard MINDHAROMBAN eldobta a
+// valasz torzset: a felulet fix "letrehozva" toastot mutatott, akkor is, ha a
+// szerver epp azt mondta, hogy a kartyarol kesobb nem lehet megmondani, melyik
+// repora vonatkozik. A figyelmeztetes tehat API-hivohoz eljutott, a gombot
+// nyomo emberhez SOHA -- pedig a kanban-project-warning.ts sajat indoklasa
+// szerint azert megy a valaszba, mert "a hivo ugyis a valaszt olvassa".
+// Kartya 4201ce4d.
+//
+// Egy helyen, mert harom masolat pontosan ugy szokott szetcsuszni, ahogy ez a
+// res keletkezett. (Az archivalas kezeloje ugyanezt a branch-et vegzi kezzel,
+// az ade4260a kartyan; az osszevonasa akkor esedekes, amikor az a kartya
+// lezarul -- most epp a build utani bongeszos ellenorzesere var.)
+function toastWithWarning(body, fallbackMsg) {
+  if (body && body.warning) showToast(body.warning, 12000)
+  else showToast(fallbackMsg)
+}
+
 // === Drag & Drop ===
 // Wires the drag/drop handlers for one column-body element. Used for the
 // 4 static flat-board columns at load time, and again for every swimlane
@@ -1963,7 +1983,7 @@ document.getElementById('saveCardBtn').addEventListener('click', async () => {
         body: JSON.stringify(data),
       })
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.status) }
-      showToast(t('kanban.toast.card_created'))
+      toastWithWarning(await res.json().catch(() => ({})), t('kanban.toast.card_created'))
     }
     closeModal(cardModalOverlay)
     loadKanban()
@@ -2398,7 +2418,7 @@ async function showCardDetail(card) {
             body: JSON.stringify({ title, parent_id: card.id, status: card.status, priority: card.priority, project: card.project || null, assignee: null }),
           })
           if (!r.ok) { showToast(t('kanban.toast.subtask_error')); return }
-          showToast(t('kanban.toast.subtask_created'))
+          toastWithWarning(await r.json().catch(() => ({})), t('kanban.toast.subtask_created'))
           loadKanban()
           showCardDetail(card)
         } catch { showToast(t('kanban.toast.subtask_error')) }
@@ -2573,7 +2593,7 @@ document.getElementById('breakdownAcceptBtn').addEventListener('click', async ()
     if (!res.ok) { showToast(data.error || 'Hiba'); return }
     closeModal(breakdownOverlay)
     closeModal(cardDetailOverlay)
-    showToast(t('kanban.breakdown.created_count', { count: data.created.length }))
+    toastWithWarning(data, t('kanban.breakdown.created_count', { count: data.created.length }))
     loadKanban()
   } catch {
     showToast(t('common.error_save'))
