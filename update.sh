@@ -371,7 +371,13 @@ if ! AHEAD=$(git rev-list --count FETCH_HEAD..HEAD 2>/dev/null); then
   restore_stash_before_exit
   exit 5
 fi
-if [ "${AHEAD:-0}" -gt 0 ]; then
+# NO `${AHEAD:-0}` HERE EITHER (jarvis, 2026-08-27). The `:-0` is the same
+# "cannot measure -> assume the reassuring value" that the `|| echo 0` above was
+# removed for, two lines apart. It is unreachable today -- the block above exits
+# unless AHEAD was assigned -- but a defaulting expansion left next to a guard is
+# a trap for the next edit: swap the computation, and the silent zero is back
+# without anyone touching this line. AHEAD is guaranteed set by then; say so.
+if [ "$AHEAD" -gt 0 ]; then
   RESULT_MSG="A helyi checkout ${AHEAD} committal elore van a ${UPDATE_REMOTE}/${CURRENT_BRANCH}-hoz kepest; a fast-forward frissites nem lehetseges. Nezd meg: git log ${UPDATE_REMOTE}/${CURRENT_BRANCH}..HEAD"
   echo -e "${RED}HIBA:${NC} a helyi checkout ${AHEAD} committal elore van a ${UPDATE_REMOTE}/${CURRENT_BRANCH}-hoz kepest; fast-forward nem lehetseges."
   restore_stash_before_exit

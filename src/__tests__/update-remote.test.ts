@@ -86,6 +86,18 @@ describe('update.sh: the remote it pulls from', () => {
     expect(aheadLine).not.toMatch(/\|\|\s*echo\s*0/)
   })
 
+  it('does not re-introduce the silent zero at the COMPARISON either', () => {
+    // jarvis, in the intersection check: the `|| echo 0` came out of the
+    // computation, but `${AHEAD:-0}` stayed two lines below it -- the same
+    // "cannot measure -> assume the reassuring value", in the comparison. It
+    // was unreachable, and that is exactly why it would have survived: a later
+    // edit to the computation brings the silent zero back without touching the
+    // line that carries it.
+    const cmp = codeOnly.find((l) => /\bAHEAD\b/.test(l) && /-gt/.test(l))
+    expect(cmp, 'the ahead comparison must still exist').toBeDefined()
+    expect(cmp!).not.toMatch(/\$\{AHEAD:-/)
+  })
+
   it('fetches the update remote before asking whether we are ahead of it', () => {
     // "Am I ahead of the remote" is unanswerable without knowing where the
     // remote is; FETCH_HEAD is only meaningful after a fetch.
