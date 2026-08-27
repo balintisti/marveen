@@ -95,7 +95,13 @@ function lastCommentAtByCard(): Map<string, Map<string, number>> {
  *  that agent -- a failure that looks exactly like health, which is the one shape this
  *  whole guard exists to avoid. Didi spotted it on my own code; the rule "not measured
  *  is not passing" applies here too, and here it means: say so, do not assume. */
-function readPane(agent: string): { idle: boolean | null; staleCounterOnly: boolean } {
+// EXPORTALVA A BEKOTES MERHETOSEGEERT (kartya b5bff340, didi merese 2026-08-27).
+// A ket VEG kulon-kulon vedve volt -- a `busyEvidence` a pane-state.test.ts-ben, a
+// dontesi oldal az idle-agent.test.ts-ben, KEZZEL adott `staleCounterOnly: true`-val --,
+// a KOZTUK LEVO BEKOTES viszont sehol. Merve: a `staleCounterOnly` szamitasat elvagva
+// mind a 3803 teszt ZOLD maradt.
+// Ez nem viselkedes-valtozas: csak lathatova teszi a fuggvenyt a tesztnek.
+export function readPane(agent: string): { idle: boolean | null; staleCounterOnly: boolean } {
   const session = resolveAgentSession(agent)
   if (!session) return { idle: null, staleCounterOnly: false }
   const pane = capturePane(session, readAgentRemoteHost(agent))
