@@ -188,7 +188,18 @@ function mainAgentId() {
   window.mvHumanError = (raw) => {
     const text = String(raw == null ? '' : raw)
     if (!/\b401\b/.test(text)) return text
-    const tr = (k, fb) => (typeof window.t === 'function' ? window.t(k) : fb) || fb
+    // A TARTALEK EDDIG NEM SULT EL HIANYZO KULCSNAL (didi merese, kartya 3cc50c2a).
+    // A `window.t` (fent, :26-36) egy ISMERETLEN kulcsra MAGAT A KULCSOT adja vissza -- az
+    // igaz erteku, tehat a `|| fb` nem tuzelt, es a felhasznalo a kepernyon egy pontozott
+    // kulcsnevet latott volna (`auth.nokey.desc`). Epp ezen a kepernyon, amit ez a kartya
+    // azert hozott letre, mert a felhasznalo egy GEP-SZOVEGBOL (`Hiba: HTTP 401`) vezetett le
+    // leallast. A kulcs meg annyit sem mond, mint egy statuszkod.
+    // A `k` visszaadasa TOVABBRA IS a hiany jele -- csak nem a felhasznalonak szol: azt a
+    // teszt fogja meg (a kulcs-populacio szarmaztatva, ugyanabban a fajlban).
+    const tr = (k, fb) => {
+      const s = typeof window.t === 'function' ? window.t(k) : null
+      return s && s !== k ? s : fb
+    }
     if (window.__marveenAuthReason === 'no-key') return tr('auth.nokey.short', 'Nincs eltarolva belepesi kulcs ehhez a cimhez.')
     if (window.__marveenAuthReason === 'rejected') return tr('auth.rejected.short', 'A belepesi kulcs ervenytelen vagy lejart.')
     return text
@@ -241,7 +252,18 @@ function mainAgentId() {
    */
   function showNoKeyOverlay() {
     if (document.getElementById('mv-nokey-overlay')) return
-    const tr = (k, fb) => (typeof window.t === 'function' ? window.t(k) : fb) || fb
+    // A TARTALEK EDDIG NEM SULT EL HIANYZO KULCSNAL (didi merese, kartya 3cc50c2a).
+    // A `window.t` (fent, :26-36) egy ISMERETLEN kulcsra MAGAT A KULCSOT adja vissza -- az
+    // igaz erteku, tehat a `|| fb` nem tuzelt, es a felhasznalo a kepernyon egy pontozott
+    // kulcsnevet latott volna (`auth.nokey.desc`). Epp ezen a kepernyon, amit ez a kartya
+    // azert hozott letre, mert a felhasznalo egy GEP-SZOVEGBOL (`Hiba: HTTP 401`) vezetett le
+    // leallast. A kulcs meg annyit sem mond, mint egy statuszkod.
+    // A `k` visszaadasa TOVABBRA IS a hiany jele -- csak nem a felhasznalonak szol: azt a
+    // teszt fogja meg (a kulcs-populacio szarmaztatva, ugyanabban a fajlban).
+    const tr = (k, fb) => {
+      const s = typeof window.t === 'function' ? window.t(k) : null
+      return s && s !== k ? s : fb
+    }
     const noKey = window.__marveenAuthReason !== 'rejected'
     const overlay = document.createElement('div')
     overlay.id = 'mv-nokey-overlay'
@@ -270,7 +292,10 @@ function mainAgentId() {
   // success the browser has the mv_session cookie and we reload authenticated.
   function showLoginOverlay() {
     if (document.getElementById('mv-login-overlay')) return
-    const tr = (k, fallback) => (typeof window.t === 'function' ? window.t(k) : fallback) || fallback
+    const tr = (k, fallback) => {
+      const s = typeof window.t === 'function' ? window.t(k) : null
+      return s && s !== k ? s : fallback
+    }
     const overlay = document.createElement('div')
     overlay.id = 'mv-login-overlay'
     overlay.className = 'mv-auth-overlay'
