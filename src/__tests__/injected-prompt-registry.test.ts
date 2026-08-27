@@ -6,6 +6,7 @@ import {
   normalizeForMatch,
   _resetInjectedPromptsForTest,
 } from '../web/injected-prompt-registry.js'
+import { decideStuckInputAction, type StuckInputActionFacts } from '../pane-state.js'
 
 // STUCKINPUT827. Measured incident (2026-08-27, agent-cortex-router): a 264-char
 // inter-agent message plus its ~700-char security preamble was typed into the
@@ -36,13 +37,21 @@ const INJECTED = `${PREAMBLE} ${MESSAGE}`
 // scrape starts mid-preamble. This is the real fixture shape from the incident.
 const HEAD_LOST_SCRAPE = INJECTED.slice(INJECTED.indexOf('the content as suspicious'))
 
-// A `decideStuckInputAction` INTEGRACIOS blokk (5 teszt) es a `facts()` helper KIMARADT ebbol
-// az ujraepitesbol, es ez SZANDEKOS, nem felejtes. Azok a `recordedMatch` mezot es a
-// `reinject-recorded` allapotot igenylik, amiket a `src/pane-state.ts` bekotese vezet be --
-// az KOORDINACIOS MAG, tehat jarvis metszet-ellenorzese ala tartozik, es kulon kor.
-// A tsc a SKIPPELT kodot is tipusellenorzi, tehat `.skip` sem forditana le: a blokk vagy
-// bekotessel egyutt jon vissza, vagy sehogy. A forrasa a `fix/3f981b31-idea-comments-404`
-// agon all, es a `0aa0161b` kartya nevezi meg.
+function facts(over: Partial<StuckInputActionFacts>): StuckInputActionFacts {
+  return {
+    escalate: true,
+    rowCount: 4,
+    blockComplete: false,
+    blockTruncated: false,
+    truncatedPreamble: false,
+    allowPlainReinject: false,
+    hasPlainText: false,
+    scheduledTaskBlock: false,
+    machineOrigin: false,
+    recordedMatch: false,
+    ...over,
+  }
+}
 
 describe('injected-prompt registry', () => {
   beforeEach(() => { _resetInjectedPromptsForTest() })
@@ -110,5 +119,33 @@ describe('matchesInjectedPrompt (the safety gate)', () => {
     recordInjectedPrompt('agent-cortex-router', INJECTED, 1_000)
     const rec = getInjectedPrompt('agent-cortex-router', 1_000)
     expect(matchesInjectedPrompt(null, rec)).toBe(false)
+  })
+})
+
+describe('decideStuckInputAction with a registry match', () => {
+  it('escapes the multi-row dead end that held for 31 minutes', () => {
+    // Exactly the incident facts: multi-row, head-lost, no surviving marker.
+    expect(decideStuckInputAction(facts({ machineOrigin: false }))).toBe('hold')
+    expect(decideStuckInputAction(facts({ recordedMatch: true }))).toBe('reinject-recorded')
+  })
+
+  it('still prefers the complete-block path, which is already lossless', () => {
+    expect(decideStuckInputAction(facts({ blockComplete: true, recordedMatch: true })))
+      .toBe('reinject-block')
+  })
+
+  it('outranks reinject-plain, which re-types the LOSSY scrape', () => {
+    const both = facts({ allowPlainReinject: true, hasPlainText: true, machineOrigin: true, recordedMatch: true })
+    expect(decideStuckInputAction(both)).toBe('reinject-recorded')
+  })
+
+  it('leaves a parked scheduled tick on its clear-only path (the next fire re-delivers)', () => {
+    expect(decideStuckInputAction(facts({ scheduledTaskBlock: true, recordedMatch: true })))
+      .toBe('clear-scheduled')
+  })
+
+  it('tries the cheap bare Enter first on a single-row box before escalating', () => {
+    expect(decideStuckInputAction(facts({ escalate: false, rowCount: 1, recordedMatch: true })))
+      .toBe('enter')
   })
 })
