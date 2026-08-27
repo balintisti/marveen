@@ -76,7 +76,15 @@ if [ "$TOPLEVEL" = "$PROD_ROOT" ] && [ "${MARVEEN_PROD_COMMIT_OK:-0}" != "1" ]; 
   echo "BLOCKED: commit on the running main checkout ($PROD_ROOT)." >&2
   echo "The dashboard serves static files from this tree and host updates pull into it." >&2
   echo "Work in a worktree instead:" >&2
-  echo "  git worktree add ../$(basename "$PROD_ROOT")-wt-<topic> -b <branch> origin/develop" >&2
+  # A SHA-t adjuk meg, NEM az `origin/develop`-ot. Merve 2026-08-27 (friday, a sajat
+  # again, push kozben): a `-b <ag> origin/develop` alak EGYUTT beallitja az
+  # `origin` upstreamet -- es ebben a repoban az `origin` a Szotasz/marveen, egy
+  # IDEGEN NYILVANOS PROJEKT. A dokumentalt biztonsagos szokas termelte a hibas
+  # konfiguraciot. Ot aznap NEM a figyelme vedte meg, hanem a `push.default=simple`,
+  # ami az ag-nev elteresen akadt fel; `develop` neven atment volna.
+  # A SHA-s alak egyaltalan nem allit upstreamet, tehat a csapda nem keletkezik.
+  echo "  git worktree add ../$(basename "$PROD_ROOT")-wt-<topic> -b <branch> \$(git rev-parse HEAD)" >&2
+  echo "  (SHA-val, NEM origin/develop-pal: az idegen upstreamet allitana be -- lasd CLAUDE.md)" >&2
   echo "Deliberate override: MARVEEN_PROD_COMMIT_OK=1 git commit ..." >&2
   exit 1
 fi
