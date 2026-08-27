@@ -27,6 +27,7 @@ import {
   BUSY_WAKEUP_DEBOUNCE_MS,
   BUSY_WAKEUP_SUPPRESS_FAILSAFE_MS,
   BUSY_WAKEUP_TEXT,
+  SUPPRESS_LOG_INTERVAL_MS,
   NUDGE_MAX_CHARS,
   MIN_PENDING_AGE_MS,
   type NudgeState,
@@ -139,6 +140,75 @@ describe('decideBusyWakeup: suppression is bounded, never permanent', () => {
     const d = decideBusyWakeup({ now: T0, oldestId: 42, oldestAgeMs: OLD_ENOUGH, alreadyQueued: false }, s)
     expect(d.send).toBe(true)
     expect(d.state.busySuppressedSince).toBe(0)
+  })
+})
+
+describe('suppression leaves a trace -- and the failsafe is never rate limited', () => {
+  // Measured 2026-08-27, on the deployed change: six fires in thirteen minutes,
+  // every one `nothing-queued`. The suppressing branch returned early with no
+  // log at all, so "we suppressed" and "there was nothing to do" were the same
+  // absence. The RESULT was measurable (1,0 fires per message, down from 4,6);
+  // the MECHANISM was not -- a 60s debounce alone would produce the same
+  // number. That is the exact shape this card exists to remove, sitting in the
+  // fix for it.
+
+  it('logs the FIRST tick of a suppression spell', () => {
+    const d = ask({ alreadyQueued: true })
+    expect(d.send).toBe(false)
+    expect(d.suppressLog).toBe(true)
+    expect(d.state.lastSuppressLogAt).toBe(T0)
+  })
+
+  it('stays quiet for the rest of the spell, so a long turn cannot flood the log', () => {
+    // A 20s watcher would otherwise write ~45 identical lines per long turn.
+    const after = ask({ alreadyQueued: true }).state
+    const d = decideBusyWakeup(
+      { now: T0 + SUPPRESS_LOG_INTERVAL_MS - 1, oldestId: 42, oldestAgeMs: OLD_ENOUGH, alreadyQueued: true },
+      after)
+    expect(d.send).toBe(false)
+    expect(d.suppressLog).toBeUndefined()
+  })
+
+  it('speaks again once the interval passes -- a long spell stays distinguishable from a dead watcher', () => {
+    const after = ask({ alreadyQueued: true }).state
+    const d = decideBusyWakeup(
+      { now: T0 + SUPPRESS_LOG_INTERVAL_MS, oldestId: 42, oldestAgeMs: OLD_ENOUGH, alreadyQueued: true },
+      after)
+    expect(d.suppressLog).toBe(true)
+  })
+
+  it('FIRES THE FAILSAFE even when a suppression line was just written', () => {
+    // The load-bearing case. The failsafe says the pane read was WRONG -- the
+    // safety net caught something. A rate-limited safety signal drops out
+    // exactly when it first fires: the first event never clears the threshold,
+    // and nobody ever learns it happened. So it must not share the log budget.
+    const s = base({
+      busySuppressedSince: T0 - BUSY_WAKEUP_SUPPRESS_FAILSAFE_MS,
+      lastSuppressLogAt: T0, // a suppression line went out THIS millisecond
+    })
+    const d = decideBusyWakeup({ now: T0, oldestId: 42, oldestAgeMs: OLD_ENOUGH, alreadyQueued: true }, s)
+    expect(d.send).toBe(true)
+    expect(d.reason).toBe('failsafe')
+  })
+
+  it('the failsafe is reported on EVERY occurrence, not on a cadence', () => {
+    // Two failsafes in a row, only the debounce between them: both must send.
+    const first = decideBusyWakeup(
+      { now: T0, oldestId: 42, oldestAgeMs: OLD_ENOUGH, alreadyQueued: true },
+      base({ busySuppressedSince: T0 - BUSY_WAKEUP_SUPPRESS_FAILSAFE_MS })).state
+    const second = decideBusyWakeup(
+      { now: T0 + BUSY_WAKEUP_SUPPRESS_FAILSAFE_MS, oldestId: 42, oldestAgeMs: OLD_ENOUGH, alreadyQueued: true },
+      first)
+    expect(second.send).toBe(true)
+    expect(second.reason).toBe('failsafe')
+  })
+
+  it('does not log for the quiet non-suppressing branches', () => {
+    // `too-soon` and `no-mail` are the normal cadence, not information.
+    expect(ask({ oldestAgeMs: MIN_PENDING_AGE_MS - 1 }).suppressLog).toBeUndefined()
+    const noMail = decideBusyWakeup(
+      { now: T0, oldestId: null, oldestAgeMs: 0, alreadyQueued: true }, base())
+    expect(noMail.suppressLog).toBeUndefined()
   })
 })
 

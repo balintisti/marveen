@@ -130,6 +130,10 @@ export const BUSY_WAKEUP_SUPPRESS_FAILSAFE_MS = 15 * 60_000
 // branch can recover on the MAIN pane. It is also what queuedPromptLines has to
 // match, so the two must not drift apart.
 export const BUSY_WAKEUP_TEXT = '[inbox-wakeup: pending inter-agent messages]'
+// Rate limit for the CONTINUING suppression log. Same cadence as the busy-wait
+// visibility log, and for the same reason: a long spell must stay
+// distinguishable from a dead watcher without filling the log.
+export const SUPPRESS_LOG_INTERVAL_MS = 10 * 60_000
 
 export interface NudgeState {
   lastNudgeAt: number
@@ -144,6 +148,9 @@ export interface NudgeState {
   // non-zero it dates the suppression so the failsafe can end it.
   lastBusyWakeupAt: number
   busySuppressedSince: number
+  // Rate limit for the suppression log ONLY. The failsafe is deliberately NOT
+  // rate limited -- see decideBusyWakeup.
+  lastSuppressLogAt: number
 }
 
 export const INITIAL_NUDGE_STATE: NudgeState = Object.freeze({
@@ -157,6 +164,7 @@ export const INITIAL_NUDGE_STATE: NudgeState = Object.freeze({
   absenceLogged: false,
   lastBusyWakeupAt: 0,
   busySuppressedSince: 0,
+  lastSuppressLogAt: 0,
 })
 
 export type NudgePreflight =
@@ -210,7 +218,7 @@ export function decideNudgePreflight(
 }
 
 export type BusyWakeupDecision =
-  | { send: false; state: NudgeState; reason: 'no-mail' | 'too-soon' | 'already-queued' }
+  | { send: false; state: NudgeState; reason: 'no-mail' | 'too-soon' | 'already-queued'; suppressLog?: true }
   | { send: true; state: NudgeState; reason: 'nothing-queued' | 'failsafe' }
 
 /**
@@ -246,10 +254,24 @@ export function decideBusyWakeup(
   // A copy is waiting. Suppress -- but start (or check) the clock, because a
   // pane we misread would otherwise suppress forever.
   if (state.busySuppressedSince === 0) {
-    return { send: false, reason: 'already-queued', state: { ...state, busySuppressedSince: now } }
+    // First tick of a suppression spell: always worth a line -- it is the only
+    // record that the queue check DID something, and it is not frequent.
+    return {
+      send: false, reason: 'already-queued', suppressLog: true,
+      state: { ...state, busySuppressedSince: now, lastSuppressLogAt: now },
+    }
   }
   if (now - state.busySuppressedSince >= BUSY_WAKEUP_SUPPRESS_FAILSAFE_MS) {
+    // NOT rate limited, on purpose. The failsafe says the pane read was WRONG
+    // -- the safety net caught something. A rate-limited safety signal drops
+    // out exactly when it first fires: the first event never clears the
+    // threshold, and we never learn it happened.
     return { send: true, reason: 'failsafe', state: { ...state, lastBusyWakeupAt: now, busySuppressedSince: now } }
+  }
+  // Continuing spell: rate limited, because here the PATTERN matters, not the
+  // individual tick (a 20s watcher would otherwise log 45 lines per turn).
+  if (now - state.lastSuppressLogAt >= SUPPRESS_LOG_INTERVAL_MS) {
+    return { send: false, reason: 'already-queued', suppressLog: true, state: { ...state, lastSuppressLogAt: now } }
   }
   return { send: false, reason: 'already-queued', state }
 }
@@ -300,7 +322,23 @@ async function runBusyWakeup(now: number, pendingCount: number, oldest: { id: nu
     state,
   )
   state = d.state
-  if (!d.send) return
+  if (!d.send) {
+    if (d.suppressLog) {
+      // The only record that the queue check fired. Without it "suppressed"
+      // and "nothing to do" are the same absence in the log -- which is the
+      // shape this whole card exists to remove, and it was in here too.
+      logger.info(
+        {
+          inboxWakeupSuppressed: true,
+          pending: pendingCount,
+          oldestId: oldest.id,
+          suppressedForMs: state.busySuppressedSince === 0 ? 0 : now - state.busySuppressedSince,
+        },
+        'inbox wakeup: our line is already queued unread; not typing again',
+      )
+    }
+    return
+  }
 
   const prev = state
   try {
