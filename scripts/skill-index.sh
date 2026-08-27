@@ -203,7 +203,18 @@ SKILL_BASELINE_NAMES="${SKILL_BASELINE_NAMES:-felderites-ket-listas-proba}"
 # Az uj alapvonal a bontas utani meret ES a regi alapvonal MINIMUMA (474 < 504),
 # a mai szabaly szerint: a nyereseget a kapu rogziti, nem az emlekezet. A masik
 # irany -- 504-en hagyni -- 30 sor nema visszanovest engedne.
-SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-474}"
+# 504 -> 474 -> 489 (2026-08-27). A HARMADIK emeles ugyanazon a napon, es KIMONDOTT dontes:
+# ma NEGY szerzo tett bele osszesen 15 sor VALODI uj szabalyt (nem atfogalmazast), es ketten
+# NEM tudtak beirni egy-egy jogos sort, mert a keret elfogyott. Marveen sajat sora is emiatt
+# kerult vissza a magbol a `references/`-be.
+# MIERT NEM VAGAS: friday es dexter FUGGETLENUL atnezte a sajat bejegyzeseit a kikotessel, hogy
+# tomoriteni CSAK akkor szabad, ha a rovidebb alak UGYANANNYIT mond -- es egyik sem fert bele.
+# "Ha vagok belole, nem tomoritek, hanem csonkitok." (dexter) Ma harom vagas mar volt ezen a
+# fajlon; a negyedik futoszalag lenne.
+# EZ NEM A KAPU KUDARCA: a keret pont azt erte el, hogy MINDEN betoldas kimondott dontes legyen.
+# A VALODI valasz a mag ATRENDEZESE (66 szabaly egy fajlban mar kategoria, nem fajl) -- az kulon
+# kartyan all. Ez az emeles addig old fel, nem helyette.
+SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-489}"
 # Mennyit nohet a mag az alapvonal ota. A belepesi alak szerint egy uj lecke 2-3 sor
 # a magban, tehat 15 ~ ot uj lecke, mielott torleszteni kell.
 SKILL_GROWTH_LIMIT="${SKILL_GROWTH_LIMIT:-15}"
