@@ -49,10 +49,7 @@ function world(skillCount: number) {
   // fire a real Telegram message on every run.
   writeFileSync(notify, '#!/usr/bin/env bash\nprintf "%s\\n" "$1" >> "$ALERT_FILE"\n', { mode: 0o755 })
 
-  const run = (extraEnv: Record<string, string> = {}) =>
-    spawnSync('bash', [SCRIPT], {
-      encoding: 'utf8',
-      env: {
+  const env = (extraEnv: Record<string, string> = {}) => ({
         ...process.env,
         RULEBOOK_REPO: repo,
         RULEBOOK_MARVEEN_ROOT: marveen,
@@ -62,9 +59,11 @@ function world(skillCount: number) {
         ALERT_FILE: alertFile,
         GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t',
         GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t',
-        ...extraEnv,
-      },
-    })
+    ...extraEnv,
+  })
+
+  const run = (extraEnv: Record<string, string> = {}) =>
+    spawnSync('bash', [SCRIPT], { encoding: 'utf8', env: env(extraEnv) })
 
   const commits = () => {
     const r = spawnSync('git', ['-C', repo, 'rev-list', '--count', 'HEAD'], { encoding: 'utf8' })
@@ -76,7 +75,7 @@ function world(skillCount: number) {
   }
   const alerts = () => (existsSync(alertFile) ? readFileSync(alertFile, 'utf8').trim().split('\n').filter(Boolean) : [])
 
-  return { root, skills, repo, run, commits, storedSkills, alerts }
+  return { root, skills, repo, run, env, commits, storedSkills, alerts }
 }
 
 describe('rulebook snapshot: the ordinary path', () => {
@@ -238,5 +237,106 @@ describe('rulebook snapshot: the deletion guard', () => {
     const r = w.run()
     expect(r.status).toBe(0)
     expect(w.alerts()).toEqual([])
+  })
+})
+
+// === The single-writer lock, and the count in the commit message (card c26193d7)
+//
+// didi measured three commits in two hours whose trees held 34, 24 and 19 files
+// while every one of them said "snapshot: 83 fajl". Each was PAIRED with an
+// intact commit in the same minute -- a race fingerprint. Two callers can start
+// this script (the launchd unit and the skills-write hook, whose second arm
+// runs in the background), there was no lock, and the mirror step is `rm -rf
+// store` followed by ~1.5 s of copying.
+//
+// Two independent defects, and they need two independent fixes:
+//   the RACE made the tree short   -> the lock
+//   the MESSAGE counted the source -> the count now comes from the index
+// didi's sentence is why both are here: "a guard that only protects while the
+// other mechanism is flawless is not a guard". The count check would have
+// caught all three cases on its own, with no lock at all.
+describe('rulebook snapshot: the lock and the honest count', () => {
+  const lockOf = (w: ReturnType<typeof world>) => `${w.repo}.lock`
+
+  it('the commit message states the COMMITTED count, and it matches the tree', () => {
+    const w = world(30)
+    expect(w.run().status).toBe(0)
+    const subject = spawnSync('git', ['-C', w.repo, 'log', '-1', '--format=%s'], { encoding: 'utf8' }).stdout.trim()
+    const tree = spawnSync('git', ['-C', w.repo, 'ls-tree', '-r', '--name-only', 'HEAD', '--', 'store'], { encoding: 'utf8' })
+      .stdout.trim().split('\n').filter(Boolean).length
+    // 30 skills x 2 files + 2 marveen files + 1 delta file
+    expect(tree).toBe(63)
+    expect(subject).toBe(`snapshot: ${tree} fajl`)
+    expect(subject).not.toMatch(/CSONKA/)
+    expect(w.alerts()).toEqual([])       // negative control: a normal run is silent
+  })
+
+  it('a SECOND instance exits 0 and leaves the repository untouched', () => {
+    const w = world(20)
+    w.run()
+    const before = w.commits()
+    writeFileSync(join(w.skills, 's0', 'SKILL.md'), 'changed\n')   // there IS something to commit
+    // A live holder: this test process itself. `kill -0` says it is alive, so
+    // the lock must be respected rather than broken.
+    mkdirSync(lockOf(w), { recursive: true })
+    writeFileSync(join(lockOf(w), 'pid'), `${process.pid}\n`)
+    const r = w.run()
+    expect(r.status).toBe(0)                       // quiet, not a failure
+    expect(r.stderr).toMatch(/another instance holds the lock/)
+    expect(w.commits()).toBe(before)               // nothing committed
+    rmSync(lockOf(w), { recursive: true, force: true })
+  })
+
+  it('a STALE lock is broken -- the hook kills a slow snapshot with -9, which runs no trap', () => {
+    const w = world(20)
+    w.run()
+    writeFileSync(join(w.skills, 's0', 'SKILL.md'), 'changed\n')
+    // A pid that cannot be running: spawn a process and let it exit first.
+    const dead = spawnSync('bash', ['-c', 'echo $$'], { encoding: 'utf8' }).stdout.trim()
+    mkdirSync(lockOf(w), { recursive: true })
+    writeFileSync(join(lockOf(w), 'pid'), `${dead}\n`)
+    const r = w.run()
+    expect(r.stderr).toMatch(/stale lock/)
+    expect(r.status).toBe(0)
+    expect(w.commits()).toBe(2)                    // it ran and committed
+  })
+
+  it('releases the lock on the way out, including on the guard REFUSAL path', () => {
+    const w = world(60)
+    w.run()
+    expect(existsSync(lockOf(w))).toBe(false)      // ordinary path
+    for (let i = 0; i < 30; i++) rmSync(join(w.skills, `s${i}`), { recursive: true })
+    expect(w.run().status).toBe(3)                 // the deletion guard refuses
+    expect(existsSync(lockOf(w))).toBe(false)      // and still lets go
+  })
+
+  it('the lock lives OUTSIDE the repository, so `git add -A` cannot commit it', () => {
+    const w = world(10)
+    w.run()
+    const tracked = spawnSync('git', ['-C', w.repo, 'ls-files'], { encoding: 'utf8' }).stdout
+    expect(tracked).not.toMatch(/\.lock/)
+  })
+
+  // The truncation branch itself. The real cause is the race, which is not
+  // deterministic enough for a test -- so the CONSEQUENCE is injected instead:
+  // a copy of the script with one line added that removes a file from the store
+  // just before `git add -A`, which is exactly what a competing instance's
+  // `rm -rf store` does to this one.
+  it('a truncated store is named CSONKA in the message, alerts, and exits 4', () => {
+    const w = world(20)
+    w.run()
+    writeFileSync(join(w.skills, 's0', 'SKILL.md'), 'changed\n')
+    const mutated = join(w.root, 'mutated-snapshot.sh')
+    const src = readFileSync(SCRIPT, 'utf8')
+      .replace('git -C "$RULEBOOK_REPO" add -A',
+               'rm -f "$RULEBOOK_REPO/store/skills/s1/SKILL.md"\ngit -C "$RULEBOOK_REPO" add -A')
+    expect(src).toMatch(/rm -f "\$RULEBOOK_REPO\/store/)   // the injection took
+    writeFileSync(mutated, src, { mode: 0o755 })
+    const r = spawnSync('bash', [mutated], { encoding: 'utf8', env: w.env() })
+    expect(r.status).toBe(4)
+    const subject = spawnSync('git', ['-C', w.repo, 'log', '-1', '--format=%s'], { encoding: 'utf8' }).stdout.trim()
+    expect(subject).toMatch(/CSONKA/)
+    expect(subject).toMatch(/^snapshot: 42 fajl/)          // 43 - 1, the truthful number
+    expect(w.alerts().join('\n')).toMatch(/CSONKA PILLANATFELVETEL/)
   })
 })
