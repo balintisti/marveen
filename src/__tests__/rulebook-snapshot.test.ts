@@ -35,8 +35,15 @@ function world(skillCount: number) {
   writeFileSync(join(marveen, 'agents', 'friday', 'CLAUDE.md'), 'friday persona\n')
   writeFileSync(join(root, 'delta.md'), 'delta rulebook\n')
   for (let i = 0; i < skillCount; i++) {
-    mkdirSync(join(skills, `s${i}`), { recursive: true })
+    mkdirSync(join(skills, `s${i}`, 'references'), { recursive: true })
+    // BOTH files, and the pair is deliberate: `SKILL.md` and
+    // `references/buktatok.md` collate in OPPOSITE orders under C (by byte,
+    // uppercase first) and under a UTF-8 locale (case-blind). A fixture of
+    // lowercase-only names sorts identically either way, so the locale test
+    // below would pass while exercising nothing -- measured: with such a
+    // fixture, deleting `LC_ALL=C` from the script left every test green.
     writeFileSync(join(skills, `s${i}`, 'SKILL.md'), `skill ${i}\n`)
+    writeFileSync(join(skills, `s${i}`, 'references', 'buktatok.md'), `notes ${i}\n`)
   }
   // Records every alert instead of sending one. Without this the test would
   // fire a real Telegram message on every run.
@@ -104,6 +111,69 @@ describe('rulebook snapshot: the ordinary path', () => {
   })
 })
 
+describe('rulebook snapshot: the manifest order must not depend on WHO ran it', () => {
+  // Measured in production 2026-08-27, hours after this file first went green:
+  // every run committed, with no content change. Five MANIFEST.tsv lines moved
+  // back and forth -- order, not content. A bare `sort` is locale-dependent:
+  //
+  //     LANG=hu_HU.UTF-8 -> references/buktatok.md, then SKILL.md  (case-blind)
+  //     LC_ALL=C         -> SKILL.md, then references/buktatok.md  (by byte)
+  //
+  // launchd runs under C/POSIX, an interactive shell under the user's locale,
+  // so the manifest order depended on who started the round -- and every switch
+  // wrote an empty commit. The cost is not the noise: it is that "nothing
+  // happened" stopped being a signal. 48 commits a day, with the one real
+  // change lost among them -- exactly the value the no-empty-commit test above
+  // exists to protect.
+  //
+  // The test above could not catch it, and is not wrong: ONE run has ONE
+  // locale. It measured its own run, not the installation. This one runs the
+  // same script twice under two different collations.
+
+  const collationsDiffer = (() => {
+    const r = (loc: string) => spawnSync('sort', [], {
+      input: 'SKILL.md\nreferences/buktatok.md\n', encoding: 'utf8',
+      env: { ...process.env, LC_ALL: loc },
+    }).stdout
+    return r('C') !== r('en_US.UTF-8')
+  })()
+
+  it('this environment can actually distinguish two collations (control)', () => {
+    // Without this the test below passes on a machine with no UTF-8 locales
+    // while exercising nothing -- a green that measures its own absence.
+    expect(collationsDiffer,
+      'no locale on this machine sorts differently from C, so the case below cannot run here',
+    ).toBe(true)
+  })
+
+  it('writes NO second commit when the same content is snapshotted under another locale', () => {
+    const w = world(30)
+    const first = w.run({ LC_ALL: 'C' })
+    expect(first.status).toBe(0)
+    expect(w.commits()).toBe(1)
+
+    const second = w.run({ LC_ALL: 'en_US.UTF-8' })
+    expect(second.status).toBe(0)
+    expect(w.commits()).toBe(1)   // the defect showed up here as 2
+  })
+
+  it('keeps each FIND-ORDERED group in byte order whatever the caller locale is', () => {
+    // The property that makes the above true, pinned directly -- but only where
+    // it exists. The manifest as a whole is NOT sorted: collect() emits fixed
+    // groups (marveen, delta-crm, agents, skills) in a deliberate order, and
+    // only the two find-driven groups are piped through sort. Asserting a
+    // globally sorted manifest failed here on the first run, and the test was
+    // the thing that was wrong -- its name claimed more than the script does.
+    const w = world(10)
+    w.run({ LC_ALL: 'en_US.UTF-8' })
+    const dests = readFileSync(join(w.repo, 'MANIFEST.tsv'), 'utf8')
+      .trim().split('\n').map((l) => l.split('\t')[0])
+    const skills = dests.filter((d) => d.startsWith('skills/'))
+    expect(skills.length).toBe(20)                 // the group is non-empty, so the check bites
+    expect(skills).toEqual([...skills].sort())     // JS string compare IS code-unit order
+  })
+})
+
 describe('rulebook snapshot: the deletion guard', () => {
   it('REFUSES and ALERTS when 40 of 63 files vanish, and leaves the repo untouched', () => {
     // The case Marveen asked for by name.
@@ -119,7 +189,7 @@ describe('rulebook snapshot: the deletion guard', () => {
     const a = w.alerts()
     expect(a.length).toBe(1)
     expect(a[0]).toContain('MEGTAGADVA')
-    expect(a[0]).toMatch(/6[0-9]%/)             // the measured share, not a vague word
+    expect(a[0]).toMatch(/\d\d%/)                // the measured share, not a vague word
   })
 
   it('the alert names the numbers, so the reader can judge without re-running', () => {
@@ -128,9 +198,15 @@ describe('rulebook snapshot: the deletion guard', () => {
     for (let i = 0; i < 40; i++) rmSync(join(w.skills, `s${i}`), { recursive: true })
     w.run()
     const a = w.alerts()[0]
-    expect(a).toContain('63')   // how many were in the previous snapshot
-    expect(a).toContain('40')   // how many are gone
-    expect(a).toContain('33')   // the threshold it was judged against
+    // Derived, not hardcoded: a fixture change must not silently turn these
+    // into assertions about nothing. 60 skills x 2 files + 3 others = 123;
+    // removing 40 skill dirs takes 80 of them.
+    const total = 60 * 2 + 3
+    const gone = 40 * 2
+    expect(a).toContain(String(total))                       // the previous snapshot's size
+    expect(a).toContain(String(gone))                        // how many are gone
+    expect(a).toContain(String(Math.floor(gone * 100 / total))) // the measured share
+    expect(a).toContain('33')                                // the threshold it was judged against
   })
 
   it('is a NUMBER, not a hardcoded condition -- a lower threshold refuses earlier', () => {
