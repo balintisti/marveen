@@ -857,6 +857,24 @@ export function scaffoldAgentDir(name: string) {
 // Do NOT change the marker strings without a coordinated migration: existing
 // CLAUDE.md files already contain them and ensureFleetRosterSection() relies
 // on exact string matching for idempotent replacement.
+// A BESZURASI PONTON KELL SZOLNI, NEM A BLOKK TETEJEN (kartya 7a8d972b, 2026-08-27).
+// Merve: mindharom generalt blokk `BEGIN` sora utan KOZVETLENUL egy `##` fejlec all --
+// es a termeszetes szerkesztesi mozdulat ("szurj be uj szakaszt a `## X` fejlec ELE")
+// pontosan a BEGIN es a fejlec koze esik, vagyis A BLOKKBA. Marveen ma HAROM
+// lap-szerkesztest vesztett igy el, es kozben egy urgent kartyat nyitott a rendszerre.
+//
+// A hiba RACSNIZ: minden bejutott szakasz TAVOLABB tolja a `BEGIN` markert a fejlectol
+// (a blokk 10 sorrol ~115-re nott), tehat minden hiba valoszinubbe teszi a kovetkezot.
+// Ezert nem eleg a `BEGIN` sor: kell egy jelzes KOZVETLENUL a fejlec FOLE, ott, ahol a
+// kez megall.
+//
+// Es azert generalt sor, nem konvencio: a kartya eredeti javaslata egy `awk`-parancs volt,
+// amit szerkesztes ELOTT kell lefuttatni. A lapunk sajat szabalya szerint egy megoldas,
+// ami azon all, hogy valaki megjegyez valamit, nem megoldas.
+const GENERATED_INSERT_WARNING =
+  '<!-- FIGYELEM: az alabbi szakasz GENERALT. Ide beszurt szoveg a kovetkezo agens-indulasnal'
+  + ' NYOMTALANUL ELVESZ. Uj szakaszt a fenti BEGIN sor FOLE irj. -->'
+
 const FLEET_ROSTER_BEGIN = '<!-- BEGIN GENERATED: fleet-roster (auto-generated, do not edit by hand) -->'
 const FLEET_ROSTER_END = '<!-- END GENERATED: fleet-roster -->'
 
@@ -929,6 +947,7 @@ function buildFleetRosterBody(selfName: string): string {
   const roster = lines.length > 0 ? lines.join('\n') : '(nincs regisztrált ágens)'
 
   return [
+    GENERATED_INSERT_WARNING,
     '## A flotta többi agense',
     '',
     'Ez a lista automatikusan generálódik az ágens indulásakor, ez a mérvadó és naprakész forrás.',
@@ -946,6 +965,7 @@ function buildFleetRosterBody(selfName: string): string {
 // guess.
 function buildAutonomyBody(name: string): string {
   return [
+    GENERATED_INSERT_WARNING,
     '## Autonómia és jóváhagyás',
     '',
     'Az autonóm műveletek fokozatait a store/autonomy-config.json szabályozza (level: 1=csak jelez, 2=javasol+jóváhagyás, 3=autonóm+jelent). Mielőtt önállóan cselekszel, nézd meg az adott kategória szintjét.',
@@ -1056,6 +1076,7 @@ const SKILLS_TRAP_BLOCK_RE = new RegExp(
 
 function buildSkillsPathTrapBody(): string {
   return [
+    GENERATED_INSERT_WARNING,
     '## Skill-útvonal csapda (KÖTELEZŐ elolvasni skill-írás előtt)',
     '',
     'A `.claude-config/skills` NEM a saját mappád: symlink a globális',
