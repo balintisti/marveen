@@ -314,7 +314,22 @@ export function _resetNudgeStateForTest(): void {
 /** IO shell for the busy branch: read the pane, ask the pure decision, type at
  *  most one unconsumed line. Kept separate so tick() stays readable and the
  *  decision stays testable without tmux. */
-async function runBusyWakeup(now: number, pendingCount: number, oldest: { id: number; created_at: number }): Promise<void> {
+async function runBusyWakeup(now: number, pendingCount: number, oldest: { id: number; created_at: number } | undefined): Promise<void> {
+  // NO MAIL is a state this function must handle, not one the caller may
+  // assume away. Measured 2026-08-27: the caller dereferenced `oldest` before
+  // reaching here, and on an empty inbox with a busy pane every tick threw
+  // `Cannot read properties of undefined (reading 'created_at')` -- 239 times
+  // in two hours. The throw was caught by the tick fence, so nothing visibly
+  // broke; what it actually cost is below.
+  // decideBusyWakeup already has a `no-mail` branch whose job is to clear the
+  // suppression clock, and the crash meant that branch was never reached: the
+  // clock could only ever be reset by the idle path. Handling it HERE makes the
+  // dereference impossible by construction instead of by the caller's care.
+  if (!oldest) {
+    const d = decideBusyWakeup({ now, oldestId: null, oldestAgeMs: 0, alreadyQueued: false }, state)
+    state = d.state
+    return
+  }
   // Cannot read the pane -> cannot prove a copy is queued. FAIL OPEN: a null
   // capture counts as nothing-queued, because the failure we must not have is
   // silence (capturePane already swallows the tmux error and returns null).
@@ -434,7 +449,7 @@ async function tick(): Promise<void> {
       // busy-wait spell at a slow rate so it is distinguishable from a dead
       // watcher.
       if (now - state.lastBusyLogAt > BUSY_WAIT_LOG_INTERVAL_MS) {
-        logger.info({ inboxNudgeWaiting: true, pending: pending.length, oldestAgeMs: now - oldest.created_at * 1000 }, 'inbox nudge: pending mail waiting; main session busy')
+        logger.info({ inboxNudgeWaiting: true, pending: pending.length, oldestAgeMs: oldest ? now - oldest.created_at * 1000 : null }, 'inbox nudge: pending mail waiting; main session busy')
         state = { ...state, lastBusyLogAt: now }
       }
       await runBusyWakeup(now, pending.length, oldest)
