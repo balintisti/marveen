@@ -313,5 +313,27 @@ def run(now=None, send=send_telegram, state_path=None, db_path=None, fleet_root=
     return key
 
 
+def send_log(text, token=None, chat_id=None):
+    """Naplo-kimenet Telegram helyett. A launchd a stdoutot a unit
+    StandardOutPath-jara iranyitja, tehat ez a fajlba kerul, idobelyeggel."""
+    import datetime
+    print(f"[{datetime.datetime.now().isoformat(timespec='seconds')}] JELENTENEM:\n{text}\n")
+    return True
+
+
+# A KULDO KIVALASZTASA KORNYEZETI VALTOZOBOL, es az ALAPERTELMEZES VALTOZATLAN
+# (telegram) -- szandekosan. Ha itt a `log` lenne az alapertelmezes, akkor egy
+# kesobbi telepito CSENDBEN kapna egy nemara allitott jelentot, es a "fut, de
+# soha nem szol" allapot megkulonboztethetetlen lenne a "nincs mit jelenteni"-tol.
+# Igy a nemitas a UNIT konfiguraciojaban all, lathatoan, es egy sor atirasaval
+# vissza is fordithato.
+SENDERS = {"telegram": send_telegram, "log": send_log}
+
 if __name__ == "__main__":
-    run()
+    mode = os.environ.get("IDLE_REPORTER_SEND", "telegram").strip().lower()
+    sender = SENDERS.get(mode)
+    if sender is None:
+        print(f"HIBA: ismeretlen IDLE_REPORTER_SEND={mode!r}; "
+              f"ervenyes: {', '.join(sorted(SENDERS))}", file=sys.stderr)
+        sys.exit(64)
+    run(send=sender)

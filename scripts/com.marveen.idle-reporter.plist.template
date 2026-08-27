@@ -36,6 +36,8 @@
     <dict>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>IDLE_REPORTER_SEND</key>
+        <string>log</string>
     </dict>
     <key>StartInterval</key>
     <integer>300</integer>
