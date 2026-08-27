@@ -194,7 +194,16 @@ SKILL_BASELINE_NAMES="${SKILL_BASELINE_NAMES:-felderites-ket-listas-proba}"
 #       az EGYBEESESBEN volt.
 # A kulonbseg nem a szam, hanem hogy le van-e irva, MIERT: bontas MELLEKHATASAKENT
 # tagulni SOHA; kimondott dontessel, valodi uj tartalomra IGEN. Kartya: d1190641.
-SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-504}"
+# 504 -> 474 (2026-08-27, friday). BONTAS utani rogzites, nem emeles.
+# A fajl 519-en allt (+15, PONT a kapun), es ma HAROM agens jelezte kulon-kulon;
+# ketten emiatt NEM irtak be egy-egy jogos sort. Ot alak (4., 5., 6., 7., 10.)
+# kikerult a `references/alakok.md`-be, a magban a NEVUK maradt: 519 -> 474.
+# A valasztas ISMETLODES szerint tortent, nem kor szerint -- a 2-3 esetes alakok
+# mentek ki, a 7-9 esetesek maradtak. A hely azoke, amik sokszor jottek elo.
+# Az uj alapvonal a bontas utani meret ES a regi alapvonal MINIMUMA (474 < 504),
+# a mai szabaly szerint: a nyereseget a kapu rogziti, nem az emlekezet. A masik
+# irany -- 504-en hagyni -- 30 sor nema visszanovest engedne.
+SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-474}"
 # Mennyit nohet a mag az alapvonal ota. A belepesi alak szerint egy uj lecke 2-3 sor
 # a magban, tehat 15 ~ ot uj lecke, mielott torleszteni kell.
 SKILL_GROWTH_LIMIT="${SKILL_GROWTH_LIMIT:-15}"
