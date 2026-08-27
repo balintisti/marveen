@@ -330,3 +330,61 @@ describe('skill-index.sh -- a MARADEK KERET, nem csak az ertek (mandark, 2026-08
     }
   })
 })
+
+describe('skill-index.sh -- a KEMENY ag ALSZIK a mai konstansokkal (didi, 2026-08-27)', () => {
+  // didi merte: a "KEMENY korlat kot" ag feltetelebol a FAJLMERET KIESIK --
+  //     HARD - n < LIMIT - (n - BASE)   <=>   HARD < LIMIT + BASE
+  // A mai ertekekkel (HARD 600, LIMIT 15, BASE 489): 600 < 504 -> HAMIS.
+  // Numerikus kontroll n=1..600-ra: nulla talalat.
+  //
+  // MIERT TESZT ES NEM TORLES. Az ag helyes, es az alapvonal MA HAROMSZOR mozdult;
+  // ha atlepi a kuszobot, a masik ag "35 sor maradt"-ot igerne, mikozben a kemeny
+  // korlat ket sorra van. De egy ag, ami sosem tuzel, megkulonboztethetetlen egy
+  // helyestol -- pontosan az az alak, amit a szomszedos pozitiv-kontroll blokk
+  // kommentje kimond, es amit az a blokk NEM fedett le erre az uj agra.
+  // Ez a teszt akkor bukik, amikor az ag FELEBRED: igy nem eszrevetlenul valik
+  // elove, hanem szolva.
+
+  function homeWith(lines: number) {
+    const home = mkdtempSync(join(tmpdir(), 'skill-dormant-'))
+    const dir = join(home, '.claude', 'skills', 'pinned')
+    mkdirSync(dir, { recursive: true })
+    const head = makeSkillMd('pinned', 'x')
+    writeFileSync(join(dir, 'SKILL.md'),
+      head + 'line\n'.repeat(Math.max(0, lines - (head.split('\n').length - 1))))
+    return home
+  }
+
+  it('a MAI konstansokkal a kemeny ag SOSEM szolal meg -- barmilyen fajlmeretnel', () => {
+    const home = homeWith(504)
+    try {
+      // a produkcios harmas: BASE 489, LIMIT 15, HARD 600
+      const env = { HOME: home, SKILL_BASELINE_NAMES: 'pinned', SKILL_BASELINE_LINES: '489',
+                    SKILL_GROWTH_LIMIT: '15', SKILL_HARD_LIMIT: '600' }
+      for (const n of [490, 495, 500, 504]) {
+        const h = homeWith(n)
+        try {
+          const out = runScript([], { ...env, HOME: h }).stdout
+          expect(out).not.toContain('KEMENY korlat kot')
+        } finally { rmSync(h, { recursive: true, force: true }) }
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('a KUSZOB pontosan BASE >= 586 -- ez a teszt ebreszt, ha a konstansok atlepik', () => {
+    // 585-nel meg 600 < 600 HAMIS; 586-nal 600 < 601 IGAZ. Egy sor a kulonbseg,
+    // es ez az a hatar, aminel a fenti teszt jelentese megvaltozik.
+    const mk = (base: number, lines: number) => {
+      const h = homeWith(lines)
+      try {
+        return runScript([], { HOME: h, SKILL_BASELINE_NAMES: 'pinned',
+          SKILL_BASELINE_LINES: String(base), SKILL_GROWTH_LIMIT: '15',
+          SKILL_HARD_LIMIT: '600' }).stdout
+      } finally { rmSync(h, { recursive: true, force: true }) }
+    }
+    expect(mk(585, 590)).not.toContain('KEMENY korlat kot')
+    expect(mk(586, 590)).toContain('KEMENY korlat kot')
+  })
+})

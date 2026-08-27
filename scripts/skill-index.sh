@@ -282,6 +282,18 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
       # felso korlat (HARD_LIMIT - sorok). Ha a kemeny korlat a szukebb, a sor ki is
       # mondja, melyik kotott meg -- egy szam a kotoereje nelkul ugyanaz a hiba,
       # mint egy szam populacio nelkul.
+      # A KEMENY AG MA ALSZIK, ES EZT KI KELL MONDANI (didi merte 2026-08-27).
+      # A feltetelbol a FAJLMERET KIESIK, tehat csak a harom konstanson mulik:
+      #     HARD - n < LIMIT - (n - BASE)   <=>   HARD < LIMIT + BASE
+      # Ma: 600 < 15 + 489 = 504 -> HAMIS, tehat az ag NEM TUD tuzelni. Numerikus
+      # kontroll n=1..600-ra: nulla talalat. Elove BASE >= 586-tol valik (585-nel
+      # meg 600 < 600, hamis).
+      # NEM torlom: az alapvonal MA HAROMSZOR mozdult (474 -> 489 -> ...), es ha
+      # atlepi a kuszobot, a "35 sor maradt" hamis igeret lenne. De egy ag, ami
+      # sosem tuzel, megkulonboztethetetlen egy helyestol -- ezert a dormancia
+      # TESZTTEL van rogzitve (suite-size... nem: skill-index.test.ts), es a
+      # teszt akkor bukik, amikor az ag FELEBRED. Igy nem eszrevetlenul valik
+      # elove, hanem szolva.
       _room_growth=$((SKILL_GROWTH_LIMIT - growth))
       _room_hard=$((SKILL_HARD_LIMIT - n))
       if [ "$_room_hard" -lt "$_room_growth" ]; then
