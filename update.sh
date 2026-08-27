@@ -242,16 +242,28 @@ if [ "$CURRENT_BRANCH" = "HEAD" ] || [ -z "$CURRENT_BRANCH" ]; then
   echo "         git checkout main"
   exit 2
 fi
-# The branch must exist on origin, otherwise 'git pull' below cannot find a
-# ref to fast-forward to (e.g. a local-only feature branch). Fail early with
-# a clear message instead of letting set -e abort mid-run.
-if ! git ls-remote --exit-code --heads origin "$CURRENT_BRANCH" >/dev/null 2>&1; then
+# WHICH REMOTE WE UPDATE FROM -- and why the default is NOT `origin`.
+# In this repository `origin` is the FOREIGN upstream (Szotasz/marveen); `fork`
+# is ours (balintisti/marveen). `origin` was hardcoded in both the check below
+# and the pull further down, so a successful run would have installed a third
+# party's code into the live installation.
+# Measured 2026-08-27 (card bae4df49): three gates stood in front of that, and
+# the one this card called a BUG was the only thing stopping it -- the checkout
+# is on a branch that does not exist on origin, so the check below refused. A
+# naive fix (move the checkout to a branch origin does have) would have opened
+# the gate and armed the pull. The fix belongs HERE, not on the branch name.
+UPDATE_REMOTE="${UPDATE_REMOTE:-fork}"
+
+# The branch must exist on the update remote, otherwise 'git pull' below cannot
+# find a ref to fast-forward to (e.g. a local-only feature branch). Fail early
+# with a clear message instead of letting set -e abort mid-run.
+if ! git ls-remote --exit-code --heads "$UPDATE_REMOTE" "$CURRENT_BRANCH" >/dev/null 2>&1; then
   if [[ "${MARVEEN_LANG:-hu}" == "en" ]]; then
-    echo -e "${RED}ERROR:${NC} Branch '${CURRENT_BRANCH}' does not exist on origin."
+    echo -e "${RED}ERROR:${NC} Branch '${CURRENT_BRANCH}' does not exist on '${UPDATE_REMOTE}'."
   else
-    echo -e "${RED}HIBA:${NC} A '${CURRENT_BRANCH}' branch nem létezik az origin-on."
+    echo -e "${RED}HIBA:${NC} A '${CURRENT_BRANCH}' branch nem létezik a '${UPDATE_REMOTE}' távolin."
   fi
-  echo "       Csak az origin-on is meglevo (kovetett) branchrol lehet frissiteni."
+  echo "       Csak a '${UPDATE_REMOTE}' tavolin is meglevo (kovetett) branchrol lehet frissiteni."
   echo "       Allj at egy release branchre, pl.:"
   echo "         git checkout main"
   exit 2
@@ -339,10 +351,10 @@ if [ "${AHEAD:-0}" -gt 0 ]; then
 fi
 
 # Pull latest, NON-fatal under set -e so a diverged/network failure is reported.
-echo -e "  Letoltes (origin/${CURRENT_BRANCH})..."
-if ! retry 3 3 git pull --ff-only origin "$CURRENT_BRANCH"; then
+echo -e "  Letoltes (${UPDATE_REMOTE}/${CURRENT_BRANCH})..."
+if ! retry 3 3 git pull --ff-only "$UPDATE_REMOTE" "$CURRENT_BRANCH"; then
   RESULT_MSG="git pull --ff-only sikertelen (divergencia vagy halozati hiba). Nezd: git status; git log @{u}..HEAD"
-  echo -e "${RED}HIBA:${NC} git pull --ff-only sikertelen origin/${CURRENT_BRANCH}."
+  echo -e "${RED}HIBA:${NC} git pull --ff-only sikertelen ${UPDATE_REMOTE}/${CURRENT_BRANCH}."
   restore_stash_before_exit
   exit 5
 fi
