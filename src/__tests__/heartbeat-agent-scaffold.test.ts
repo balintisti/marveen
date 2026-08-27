@@ -372,6 +372,13 @@ describe('a jelzes MIND A HAROM ALWAYS_WRITE fajlt megnevezi (7a8d972b, jarvis k
 
   it('a CLAUDE.md jelzese megnevezi a masik ket fajlt is', () => {
     const out = renderHeartbeatClaudeMd(ID)
+    // A HORGONY LETEZESET ELOSZOR (jarvis, 2026-08-27). Enelkul az `indexOf` -1-et ad,
+    // a `slice(0,-1)` majdnem az EGESZ fajlt visszaadja, es ez a HELY-allitas csendben
+    // JELENLET-teszte valik -- pontosan az az alak, ami ellen irodott.
+    // MERVE: a horgonyt atnevezve ez a teszt ATMENT, es csak a szomszed describe bukott.
+    // A ketto EGYUTT eros volt, de ez EGYMAGABAN nem -- es egy teszt, ami masik teszt
+    // fedezeteben all, akkor is zold marad, ha a szomszedjat torlik.
+    expect(out).toContain('# Heartbeat agent')
     const head = out.slice(0, out.indexOf('# Heartbeat agent'))
     expect(head).toContain('agent-config.json')
     expect(head).toContain('.claude/settings.json')
