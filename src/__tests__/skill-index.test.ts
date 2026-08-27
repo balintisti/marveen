@@ -355,13 +355,32 @@ describe('skill-index.sh -- a KEMENY ag ALSZIK a mai konstansokkal (didi, 2026-0
     return home
   }
 
+  // A KONSTANSOKAT A SZKRIPTBOL OLVASSUK KI, NEM HARDKODOLJUK. Az elso valtozat
+  // BASE=489-et irt be "a produkcios harmas" nevvel; harom oran belul 436 lett
+  // (alapvonal-racsni a references/ bontas utan). A teszt tovabbra is ZOLD maradt
+  // volna, csak mar NEM AZT allitotta volna, amit a neve mond -- ugyanaz az alak,
+  // mint egy szam a nevezoje nelkul, csak tesztben.
+  function prodConstants() {
+    const src = readFileSync(join(REPO_ROOT, 'scripts', 'skill-index.sh'), 'utf-8')
+    const pick = (name: string) => {
+      const m = src.match(new RegExp(`${name}="\\$\\{${name}:-(\\d+)\\}"`))
+      if (!m) throw new Error(`nem talalom a ${name} alapertelmezeset a szkriptben`)
+      return m[1]
+    }
+    return { base: pick('SKILL_BASELINE_LINES'), limit: pick('SKILL_GROWTH_LIMIT'),
+             hard: pick('SKILL_HARD_LIMIT') }
+  }
+
   it('a MAI konstansokkal a kemeny ag SOSEM szolal meg -- barmilyen fajlmeretnel', () => {
-    const home = homeWith(504)
+    const { base, limit, hard } = prodConstants()
+    // A dormancia feltetele: HARD < LIMIT + BASE. Ha ez egyszer megfordul, a
+    // ciklus alatti allitas HAMIS lesz -- es akkor ennek a tesztnek KELL buknia.
+    expect(Number(hard)).toBeGreaterThanOrEqual(Number(limit) + Number(base))
+    const home = homeWith(Number(base) + 15)
     try {
-      // a produkcios harmas: BASE 489, LIMIT 15, HARD 600
-      const env = { HOME: home, SKILL_BASELINE_NAMES: 'pinned', SKILL_BASELINE_LINES: '489',
-                    SKILL_GROWTH_LIMIT: '15', SKILL_HARD_LIMIT: '600' }
-      for (const n of [490, 495, 500, 504]) {
+      const env = { HOME: home, SKILL_BASELINE_NAMES: 'pinned', SKILL_BASELINE_LINES: base,
+                    SKILL_GROWTH_LIMIT: limit, SKILL_HARD_LIMIT: hard }
+      for (const n of [Number(base) + 1, Number(base) + 6, Number(base) + 11, Number(base) + 15]) {
         const h = homeWith(n)
         try {
           const out = runScript([], { ...env, HOME: h }).stdout
