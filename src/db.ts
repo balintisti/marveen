@@ -1805,15 +1805,68 @@ export function createKanbanCard(card: {
   )
 }
 
-export function updateKanbanCard(id: string, fields: Partial<Omit<KanbanCard, 'id' | 'created_at'>>): boolean {
+/** One field this write replaced, with the value it replaced. */
+export interface KanbanOverwrite {
+  field: string
+  from: string | number | null
+  to: string | number | null
+}
+
+export interface KanbanUpdateResult {
+  changed: boolean
+  /** Fields that already HELD a value and now hold a different one. Empty for
+   *  an ordinary edit that fills a blank or rewrites the same value. */
+  overwritten: KanbanOverwrite[]
+}
+
+/**
+ * LAST WRITE WINS, AND THE READ-BACK DOES NOT CATCH IT (card ddf11b94).
+ *
+ * Two agents editing the same card is the ordinary case here, and the loser
+ * never learns: the response is `{ok:true}`, and a read-back returns the text
+ * the caller just wrote. The fleet rule "the 200 is not proof, the read-back
+ * is" fails on this endpoint specifically -- the read-back confirms YOUR write
+ * while saying nothing about the one it replaced.
+ *
+ * WHAT COUNTS AS AN OVERWRITE, and why not simply "the value changed": every
+ * ordinary edit changes a value. The signal has to separate "I replaced
+ * something somebody had put there" from "I filled in a blank" -- otherwise it
+ * fires on every write, and a guard that fires on the correct state is worse
+ * than no guard (jarvis, and the same law as the CONCURRENTLY false alarm).
+ * So: the previous value was NON-EMPTY, and the new one differs from it.
+ *
+ * ONE COMPUTATION, NOT TWO. The old and new values already stand side by side
+ * here (`card` from :1809, `fields` from the caller), so no extra query is
+ * needed -- and the field-level write log of card b4811598, when it is built,
+ * takes THIS array rather than recomputing its own. Two mechanisms for one
+ * question would drift apart; that is why they share the array.
+ *
+ * The precedent is already in this file, 14 lines below: `moveKanbanCard` reads
+ * the previous status first and records an event ONLY on a real transition. The
+ * code already knew the rule; this function did not follow it.
+ */
+export function updateKanbanCard(id: string, fields: Partial<Omit<KanbanCard, 'id' | 'created_at'>>): KanbanUpdateResult {
   const card = getKanbanCard(id)
-  if (!card) return false
+  if (!card) return { changed: false, overwritten: [] }
   const now = Math.floor(Date.now() / 1000)
   const f = { ...card, ...fields, updated_at: now }
-  return db.prepare(
+
+  const overwritten: KanbanOverwrite[] = []
+  for (const key of Object.keys(fields) as Array<keyof KanbanCard>) {
+    if (key === 'updated_at') continue
+    const prev = card[key] as string | number | null | undefined
+    const next = fields[key as keyof typeof fields] as string | number | null | undefined
+    const wasEmpty = prev === null || prev === undefined || prev === ''
+    if (wasEmpty) continue
+    if (String(prev) === String(next ?? '')) continue
+    overwritten.push({ field: key as string, from: prev as string | number, to: (next ?? null) as string | number | null })
+  }
+
+  const changed = db.prepare(
     `UPDATE kanban_cards SET title=?, description=?, status=?, assignee=?, priority=?, project=?, parent_id=?, due_date=?, sort_order=?, updated_at=?, archived_at=?
      WHERE id=?`
   ).run(f.title, f.description, f.status, f.assignee, f.priority, f.project, f.parent_id, f.due_date, f.sort_order, f.updated_at, f.archived_at, id).changes > 0
+  return { changed, overwritten: changed ? overwritten : [] }
 }
 
 export function getChildCards(parentId: string): KanbanCard[] {
