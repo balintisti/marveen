@@ -149,7 +149,12 @@ export function renderHeartbeatClaudeMd(id: HeartbeatIdentity): string {
   // ALWAYS_WRITE, es JSON -- oda nem fer komment. Az a ket fajl jelzes NELKUL marad.
   return `<!-- GENERALT FAJL: minden agens-indulaskor TELJES EGESZEBEN ujrairodik.
      Ide irt kezi szerkesztes NYOMTALANUL ELVESZ. A forras:
-     src/web/heartbeat-agent-scaffold.ts renderHeartbeatClaudeMd(). -->
+     src/web/heartbeat-agent-scaffold.ts renderHeartbeatClaudeMd().
+
+     ES UGYANEZ ALL A KONYVTAR MASIK KET FAJLJARA IS:
+         agent-config.json          es    .claude/settings.json
+     Azok JSON-ok, tehat nem tudnak kommentet hordozni -- ezert allnak ITT.
+     Mindharom ugyanabbol az ALWAYS_WRITE listabol jon, ugyanabban a ciklusban. -->
 # Heartbeat agent
 
 You are the **heartbeat agent** -- a dedicated, headless worker that

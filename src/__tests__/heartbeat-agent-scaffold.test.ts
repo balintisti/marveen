@@ -362,3 +362,20 @@ describe('a rendelt CLAUDE.md megmondja magarol, hogy GENERALT (7a8d972b)', () =
     expect(out.indexOf('GENERALT FAJL')).toBeLessThan(out.indexOf('# Heartbeat agent'))
   })
 })
+
+describe('a jelzes MIND A HAROM ALWAYS_WRITE fajlt megnevezi (7a8d972b, jarvis kerdesere)', () => {
+  // A ket JSON nem tud kommentet hordozni. A zaro kommentem eloszor csak annyit
+  // mondott, hogy "jelzes nelkul marad, ha szamit, az kulon kartya" -- jarvis
+  // helyesen jelezte, hogy egy felteteles mondat sosem meri meg magat.
+  // A meres: a harom fajl UGYANABBAN a konyvtarban van es UGYANABBOL a ciklusbol
+  // jon, tehat a jelzes elhet abban az egyben, amelyik TUD kommentet vinni.
+
+  it('a CLAUDE.md jelzese megnevezi a masik ket fajlt is', () => {
+    const out = renderHeartbeatClaudeMd(ID)
+    const head = out.slice(0, out.indexOf('# Heartbeat agent'))
+    expect(head).toContain('agent-config.json')
+    expect(head).toContain('.claude/settings.json')
+    // es megmondja, MIERT ott all -- kulonben a kovetkezo olvaso azt hiszi, teved
+    expect(head).toContain('nem tudnak kommentet hordozni')
+  })
+})
