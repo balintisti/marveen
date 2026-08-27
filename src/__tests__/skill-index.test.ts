@@ -330,3 +330,145 @@ describe('skill-index.sh -- a MARADEK KERET, nem csak az ertek (mandark, 2026-08
     }
   })
 })
+
+describe('skill-index.sh -- a KEMENY ag ALSZIK a mai konstansokkal (didi, 2026-08-27)', () => {
+  // didi merte: a "KEMENY korlat kot" ag feltetelebol a FAJLMERET KIESIK --
+  //     HARD - n < LIMIT - (n - BASE)   <=>   HARD < LIMIT + BASE
+  // A mai ertekekkel (HARD 600, LIMIT 15, BASE 489): 600 < 504 -> HAMIS.
+  // Numerikus kontroll n=1..600-ra: nulla talalat.
+  //
+  // MIERT TESZT ES NEM TORLES. Az ag helyes, es az alapvonal MA HAROMSZOR mozdult;
+  // ha atlepi a kuszobot, a masik ag "35 sor maradt"-ot igerne, mikozben a kemeny
+  // korlat ket sorra van. De egy ag, ami sosem tuzel, megkulonboztethetetlen egy
+  // helyestol -- pontosan az az alak, amit a szomszedos pozitiv-kontroll blokk
+  // kommentje kimond, es amit az a blokk NEM fedett le erre az uj agra.
+  // Ez a teszt akkor bukik, amikor az ag FELEBRED: igy nem eszrevetlenul valik
+  // elove, hanem szolva.
+
+  function homeWith(lines: number) {
+    const home = mkdtempSync(join(tmpdir(), 'skill-dormant-'))
+    const dir = join(home, '.claude', 'skills', 'pinned')
+    mkdirSync(dir, { recursive: true })
+    const head = makeSkillMd('pinned', 'x')
+    writeFileSync(join(dir, 'SKILL.md'),
+      head + 'line\n'.repeat(Math.max(0, lines - (head.split('\n').length - 1))))
+    return home
+  }
+
+  // A KONSTANSOKAT A SZKRIPTBOL OLVASSUK KI, NEM HARDKODOLJUK. Az elso valtozat
+  // BASE=489-et irt be "a produkcios harmas" nevvel; harom oran belul 436 lett
+  // (alapvonal-racsni a references/ bontas utan). A teszt tovabbra is ZOLD maradt
+  // volna, csak mar NEM AZT allitotta volna, amit a neve mond -- ugyanaz az alak,
+  // mint egy szam a nevezoje nelkul, csak tesztben.
+  function prodConstants() {
+    const src = readFileSync(join(REPO_ROOT, 'scripts', 'skill-index.sh'), 'utf-8')
+    const pick = (name: string) => {
+      const m = src.match(new RegExp(`${name}="\\$\\{${name}:-(\\d+)\\}"`))
+      if (!m) throw new Error(`nem talalom a ${name} alapertelmezeset a szkriptben`)
+      return m[1]
+    }
+    return { base: pick('SKILL_BASELINE_LINES'), limit: pick('SKILL_GROWTH_LIMIT'),
+             hard: pick('SKILL_HARD_LIMIT') }
+  }
+
+  it('a MAI konstansokkal a kemeny ag SOSEM szolal meg -- barmilyen fajlmeretnel', () => {
+    const { base, limit, hard } = prodConstants()
+    // A dormancia feltetele: HARD < LIMIT + BASE. Ha ez egyszer megfordul, a
+    // ciklus alatti allitas HAMIS lesz -- es akkor ennek a tesztnek KELL buknia.
+    expect(Number(hard)).toBeGreaterThanOrEqual(Number(limit) + Number(base))
+    const home = homeWith(Number(base) + 15)
+    try {
+      const env = { HOME: home, SKILL_BASELINE_NAMES: 'pinned', SKILL_BASELINE_LINES: base,
+                    SKILL_GROWTH_LIMIT: limit, SKILL_HARD_LIMIT: hard }
+      for (const n of [Number(base) + 1, Number(base) + 6, Number(base) + 11, Number(base) + 15]) {
+        const h = homeWith(n)
+        try {
+          const out = runScript([], { ...env, HOME: h }).stdout
+          expect(out).not.toContain('KEMENY korlat kot')
+        } finally { rmSync(h, { recursive: true, force: true }) }
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('a KUSZOB pontosan BASE >= 586 -- ez a teszt ebreszt, ha a konstansok atlepik', () => {
+    // 585-nel meg 600 < 600 HAMIS; 586-nal 600 < 601 IGAZ. Egy sor a kulonbseg,
+    // es ez az a hatar, aminel a fenti teszt jelentese megvaltozik.
+    const mk = (base: number, lines: number) => {
+      const h = homeWith(lines)
+      try {
+        return runScript([], { HOME: h, SKILL_BASELINE_NAMES: 'pinned',
+          SKILL_BASELINE_LINES: String(base), SKILL_GROWTH_LIMIT: '15',
+          SKILL_HARD_LIMIT: '600' }).stdout
+      } finally { rmSync(h, { recursive: true, force: true }) }
+    }
+    expect(mk(585, 590)).not.toContain('KEMENY korlat kot')
+    expect(mk(586, 590)).toContain('KEMENY korlat kot')
+  })
+})
+
+describe('skill-index.sh -- a KARAKTER-MERO: a sorszam oszintesege (83cac1ed)', () => {
+  // didi merte 2026-08-27: egy fajl 504 sorrol 504 sorra "valtozott", kozben +300
+  // karakterrel. A sor-alapu or ebbol SEMMIT nem latott. A ket kontroll az o
+  // lezarasi felteteléből valo, a MERT szamokkal.
+
+  // Pontosan L soros es C bajtos fajl. A `wc -c` bajtot szamol, ezért csak ASCII.
+  function fileWith(lines: number, chars: number) {
+    const home = mkdtempSync(join(tmpdir(), 'skill-chars-'))
+    const dir = join(home, '.claude', 'skills', 'pinned')
+    mkdirSync(dir, { recursive: true })
+    // minden sor: (len-1) 'x' + '\n'; az utolso sor kapja a maradekot
+    const per = Math.floor(chars / lines)
+    const rows: string[] = []
+    let used = 0
+    for (let i = 0; i < lines - 1; i++) { rows.push('x'.repeat(per - 1)); used += per }
+    rows.push('x'.repeat(chars - used - 1))
+    const body = rows.join('\n') + '\n'
+    writeFileSync(join(dir, 'SKILL.md'), body)
+    return { home, actual: { lines: body.split('\n').length - 1, chars: Buffer.byteLength(body) } }
+  }
+
+  const BASE = { lines: 504, chars: 37453 }   // didi 15:50-es allapota
+  const env = (extra: Record<string, string>) => ({
+    SKILL_BASELINE_NAMES: 'pinned', SKILL_BASELINE_LINES: String(BASE.lines),
+    SKILL_BASELINE_CHARS: String(BASE.chars), SKILL_GROWTH_LIMIT: '15',
+    SKILL_HARD_LIMIT: '600', ...extra,
+  })
+  const MARKER = 'A SORSZAM NEM MONDJA MEG A MERETET'
+
+  it('POZITIV KONTROLL: +300 karakter / +0 sor -> TUZEL', () => {
+    // didi 16:18-as allapota: ugyanannyi sor, 320 karakterrel tobb.
+    const { home, actual } = fileWith(504, 37773)
+    try {
+      expect(actual).toEqual({ lines: 504, chars: 37773 })   // a fixture maga is merve
+      expect(runScript([], env({ HOME: home })).stdout).toContain(MARKER)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  it('NEGATIV KONTROLL: valodi BONTAS (sor ES karakter is csokken) -> NEM tuzel', () => {
+    // 504 -> 436 sor, 37453 -> 32848 karakter. A szimmetrikus keplet ITT bukna meg:
+    // +427 "excess"-t adna, mert az elvitt sorok az atlagnal rovidebbek voltak.
+    const { home, actual } = fileWith(436, 32848)
+    try {
+      expect(actual).toEqual({ lines: 436, chars: 32848 })
+      expect(runScript([], env({ HOME: home })).stdout).not.toContain(MARKER)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  it('a NORMAL munka nem tuzel: +10 sor atlagos hosszal', () => {
+    const { home } = fileWith(514, 37453 + 10 * Math.floor(37453 / 504))
+    try {
+      expect(runScript([], env({ HOME: home })).stdout).not.toContain(MARKER)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  it('a karakterszam OTT VAN az informativ sorban, nem csak riasztaskor', () => {
+    const { home } = fileWith(504, 37453)
+    try {
+      const out = runScript([], env({ HOME: home })).stdout
+      expect(out).toContain('504 sor / 37453 karakter')
+      expect(out).not.toContain(MARKER)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+})
