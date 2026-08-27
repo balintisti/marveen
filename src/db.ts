@@ -1835,6 +1835,15 @@ export interface KanbanUpdateResult {
  * than no guard (jarvis, and the same law as the CONCURRENTLY false alarm).
  * So: the previous value was NON-EMPTY, and the new one differs from it.
  *
+ * THE CASE THIS DELIBERATELY DOES NOT COVER (jarvis, on review): if somebody
+ * EMPTIED a field on purpose and the next write fills it in, that is not
+ * reported -- the previous value was empty, so the rule cannot tell an
+ * intentional clearing from a field nobody had filled yet. Saying it out loud
+ * because "not covered" and "cannot happen" read the same in silence: the day a
+ * deliberate clearing needs to be defended, this is the line that has to change,
+ * and it will need something the row does not carry today (who emptied it, and
+ * whether that was the intent).
+ *
  * ONE COMPUTATION, NOT TWO. The old and new values already stand side by side
  * here (`card` from :1809, `fields` from the caller), so no extra query is
  * needed -- and the field-level write log of card b4811598, when it is built,
