@@ -330,3 +330,68 @@ describe('skill-index.sh -- a MARADEK KERET, nem csak az ertek (mandark, 2026-08
     }
   })
 })
+
+describe('skill-index.sh -- a KARAKTER-MERO: a sorszam oszintesege (83cac1ed)', () => {
+  // didi merte 2026-08-27: egy fajl 504 sorrol 504 sorra "valtozott", kozben +300
+  // karakterrel. A sor-alapu or ebbol SEMMIT nem latott. A ket kontroll az o
+  // lezarasi felteteléből valo, a MERT szamokkal.
+
+  // Pontosan L soros es C bajtos fajl. A `wc -c` bajtot szamol, ezért csak ASCII.
+  function fileWith(lines: number, chars: number) {
+    const home = mkdtempSync(join(tmpdir(), 'skill-chars-'))
+    const dir = join(home, '.claude', 'skills', 'pinned')
+    mkdirSync(dir, { recursive: true })
+    // minden sor: (len-1) 'x' + '\n'; az utolso sor kapja a maradekot
+    const per = Math.floor(chars / lines)
+    const rows: string[] = []
+    let used = 0
+    for (let i = 0; i < lines - 1; i++) { rows.push('x'.repeat(per - 1)); used += per }
+    rows.push('x'.repeat(chars - used - 1))
+    const body = rows.join('\n') + '\n'
+    writeFileSync(join(dir, 'SKILL.md'), body)
+    return { home, actual: { lines: body.split('\n').length - 1, chars: Buffer.byteLength(body) } }
+  }
+
+  const BASE = { lines: 504, chars: 37453 }   // didi 15:50-es allapota
+  const env = (extra: Record<string, string>) => ({
+    SKILL_BASELINE_NAMES: 'pinned', SKILL_BASELINE_LINES: String(BASE.lines),
+    SKILL_BASELINE_CHARS: String(BASE.chars), SKILL_GROWTH_LIMIT: '15',
+    SKILL_HARD_LIMIT: '600', ...extra,
+  })
+  const MARKER = 'A SORSZAM NEM MONDJA MEG A MERETET'
+
+  it('POZITIV KONTROLL: +300 karakter / +0 sor -> TUZEL', () => {
+    // didi 16:18-as allapota: ugyanannyi sor, 320 karakterrel tobb.
+    const { home, actual } = fileWith(504, 37773)
+    try {
+      expect(actual).toEqual({ lines: 504, chars: 37773 })   // a fixture maga is merve
+      expect(runScript([], env({ HOME: home })).stdout).toContain(MARKER)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  it('NEGATIV KONTROLL: valodi BONTAS (sor ES karakter is csokken) -> NEM tuzel', () => {
+    // 504 -> 436 sor, 37453 -> 32848 karakter. A szimmetrikus keplet ITT bukna meg:
+    // +427 "excess"-t adna, mert az elvitt sorok az atlagnal rovidebbek voltak.
+    const { home, actual } = fileWith(436, 32848)
+    try {
+      expect(actual).toEqual({ lines: 436, chars: 32848 })
+      expect(runScript([], env({ HOME: home })).stdout).not.toContain(MARKER)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  it('a NORMAL munka nem tuzel: +10 sor atlagos hosszal', () => {
+    const { home } = fileWith(514, 37453 + 10 * Math.floor(37453 / 504))
+    try {
+      expect(runScript([], env({ HOME: home })).stdout).not.toContain(MARKER)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  it('a karakterszam OTT VAN az informativ sorban, nem csak riasztaskor', () => {
+    const { home } = fileWith(504, 37453)
+    try {
+      const out = runScript([], env({ HOME: home })).stdout
+      expect(out).toContain('504 sor / 37453 karakter')
+      expect(out).not.toContain(MARKER)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+})
