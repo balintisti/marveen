@@ -77,6 +77,29 @@ def strip_comment_lines(text: str) -> str:
     return "\n".join(out)
 
 
+# Az OSSZEGZO sor, SOR ELEJERE horgonyozva: `Tests  9 passed | 1 failed (10)`.
+#
+# MIERT NEM ELEG a `.split("Tests")[-1]` (merve 2026-08-27, ez a szerszam adott
+# rossz verdiktet tole): a vitest a bukas-reszletezot a STDERR-re irja, az
+# osszegzot a STDOUT-ra, es a ketto osszefuzese utan az UTOLSO "Tests" elofordulas
+# a `--- Failed Tests 1 ---` BANNERBEN van, nem az osszegzoben. A probа igy a
+# ` 1 ---` sztringben kereste a "failed" szot, nem talalta, es HAROM valodi
+# leletet jelentett TULELTNEK. Az iranya a rosszabbik: egy mukodo teszt-keszletrol
+# allitotta, hogy nem allit semmit.
+SUMMARY_RX = re.compile(r"^[^\S\n]*Tests[^\S\n]+(.*)$", re.M)
+
+
+def summary_line(out: str) -> str | None:
+    """A LEGUTOLSO olyan `Tests ...` sor, ami tenyleg osszegzes.
+
+    A banner (`--- Failed Tests 1 ---`) nem sor eleji, es nincs benne darabszam-
+    kulcsszo -- mindket szures kell, mert a banner behuzasa valtozhat.
+    """
+    hits = [m.group(1).strip() for m in SUMMARY_RX.finditer(out)]
+    hits = [h for h in hits if any(k in h for k in ("passed", "failed", "skipped", "no tests"))]
+    return hits[-1] if hits else None
+
+
 def count_tests(cmd: str, cwd: Path) -> tuple[int | None, str]:
     """A futtato kimenetebol kiolvassa az OSSZLETSZAMOT.
 
@@ -86,8 +109,9 @@ def count_tests(cmd: str, cwd: Path) -> tuple[int | None, str]:
     """
     r = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True)
     out = r.stdout + r.stderr
-    m = re.findall(r"Tests\s+.*?\((\d+)\)", out)
-    return (int(m[-1]) if m else None), out
+    line = summary_line(out)
+    m = re.search(r"\((\d+)\)", line) if line else None
+    return (int(m.group(1)) if m else None), out
 
 
 def line_is_covered(report: Path, target: Path, lineno: int) -> bool | None:
@@ -270,7 +294,7 @@ def main() -> int:
     if mut_n < base_n:
         return fail(f"az osszletszam CSOKKENT ({base_n} -> {mut_n}) -- a mutacio a BETOLTEST torte el")
 
-    summary = mut_out.split("Tests")[-1].split("\n")[0] if "Tests" in mut_out else ""
+    summary = summary_line(mut_out) or ""
     if "failed" in summary:
         print(f"DISZKRIMINAL: {a.file}:{lineno} -- a teszt megfogja a mutaciot ({base_n} teszt)")
         return OK_DISCRIMINATES

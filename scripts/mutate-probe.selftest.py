@@ -69,6 +69,18 @@ RUNNER_SHRINK = (
 )
 # A futtato, aminek a kimeneteben NINCS darabszam.
 RUNNER_NONUMBER = "print('nincs itt semmilyen szam')\n"
+# A VALODI vitest alak: az osszegzo a STDOUT-ra megy, a bukas-banner a STDERR-re,
+# es a banner IS tartalmazza a "Tests" szot. Osszefuzve tehat az UTOLSO "Tests"
+# elofordulas a BANNERBEN van. 2026-08-27-ig a probа ebbol olvasta ki a verdiktet,
+# es HAROM valodi leletet jelentett TULELTNEK -- a megnyugtato irany.
+RUNNER_VITEST_SHAPE = (
+    "import sys\n"
+    "src=open(sys.argv[1]).read()\n"
+    "bad = 'MUTALT' in src\n"
+    "print('Tests  %s (10)' % ('9 passed | 1 failed' if bad else '10 passed'))\n"
+    "if bad:\n"
+    "    sys.stderr.write('\\u23af\\u23af\\u23af Failed Tests 1 \\u23af\\u23af\\u23af\\n')\n"
+)
 
 SRC = "const a = 1\nif (x > 0) {\n  hasznos()\n}\n"
 
@@ -166,6 +178,8 @@ def main() -> int:
         run_case("a horgony NINCS SEHOL -> 2", SRC, "if (nincs ilyen)", "akarmi", RUNNER_SENSITIVE, INVALID),
         run_case("az OSSZLETSZAM CSOKKEN -> 2", SRC, "if (x > 0)", "if (MUTALT)", RUNNER_SHRINK, INVALID),
         run_case("nincs KIOLVASHATO darabszam -> 2", SRC, "if (x > 0)", "if (MUTALT)", RUNNER_NONUMBER, INVALID),
+        run_case("a bukas-BANNER a stderr-en NEM nyomja el az osszegzot -> 0",
+                 SRC, "if (x > 0)", "if (MUTALT)", RUNNER_VITEST_SHAPE, OK),
     ]
     results += sentinel_cases()
     bad = results.count(False)
