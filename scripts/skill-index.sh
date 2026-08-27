@@ -181,7 +181,20 @@ SKILL_LINE_LIMIT="${SKILL_LINE_LIMIT:-500}"
 # es akkor ez a szam CSOKKENTHETO -- de nem kotelezo.
 # Env-bol felulirhato, hogy a ket uj ag TESZTELHETO legyen ismert allapotokon.
 SKILL_BASELINE_NAMES="${SKILL_BASELINE_NAMES:-felderites-ket-listas-proba}"
-SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-491}"
+# 491 -> 504 (2026-08-27). KET KIMONDOTT dontes, ket szerzo, egy szamban -- es azert
+# all itt mindketto kulon, mert egy nevtelen alapvonal-emeles pontosan az az alak, amit
+# ez a kapu megelozni hivatott.
+#   +4  friday: uj 12. alak -- "egy szerszam, ami VERDIKTET ad, maga is kivan kontrollt"
+#       (835384e6). Ugyanabban a korben ket szakasz `references/`-be kerult, tehat a
+#       fajl 506 -> 495 lett: a BOVITES MELLETT IS CSOKKENT.
+#   +9  didi: a "tul szep nulla" harmadik jele -- amikor a SZAMLALO pont kiadja a
+#       NEVEZOT (100%, vagy a kiegeszito kontroll pont nulla). Valodi uj alak, nem
+#       atfogalmazas: a meglevo szabaly azert nem fogta volna meg, mert o LELETET
+#       keresett, tehat a 100% az ELLENKEZOJE volt annak, amit vart -- a jel kizarolag
+#       az EGYBEESESBEN volt.
+# A kulonbseg nem a szam, hanem hogy le van-e irva, MIERT: bontas MELLEKHATASAKENT
+# tagulni SOHA; kimondott dontessel, valodi uj tartalomra IGEN. Kartya: d1190641.
+SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-504}"
 # Mennyit nohet a mag az alapvonal ota. A belepesi alak szerint egy uj lecke 2-3 sor
 # a magban, tehat 15 ~ ot uj lecke, mielott torleszteni kell.
 SKILL_GROWTH_LIMIT="${SKILL_GROWTH_LIMIT:-15}"
