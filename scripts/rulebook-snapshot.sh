@@ -65,6 +65,12 @@ log() { printf '%s\n' "$*" >&2; }
 # attol fuggott, KI inditotta a kort. Minden valtas egy commitot szult valtozas NELKUL, es ezzel
 # a "nem tortent semmi" jelzes megszunt: 48 zaj-commit naponta, amiben egy VALODI valtozas
 # elveszik. A teszt ezt nem foghatta meg: egy futasban egy locale van.
+# ES A KIMENET SZANDEKOSAN NEM TELJESEN RENDEZETT -- a manifest ezt orokli.
+# Negy csoport megy ki FIX sorrendben (marveen, delta-crm, agents, skills), es csak a ket
+# find-es csoport megy at `LC_ALL=C sort`-on. A fix sorrend teszi a manifest-diffet olvashatova:
+# az egyetlen CLAUDE.md sor a tetejen marad, nem sodrodik 64 skill-utvonal koze.
+# Azert all itt, mert szuletett egy teszt, ami a TELJES manifest rendezettseget allitotta, elbukott,
+# es MAGA A TESZT volt a hibas (2026-08-27). A kovetkezo olvaso ugyanezt feltetelezne.
 collect() {
   [ -f "$MARVEEN_ROOT/CLAUDE.md" ] && printf 'marveen/CLAUDE.md\t%s\n' "$MARVEEN_ROOT/CLAUDE.md"
   [ -f "$DELTA_CLAUDE" ] && printf 'delta-crm/CLAUDE.md\t%s\n' "$DELTA_CLAUDE"
