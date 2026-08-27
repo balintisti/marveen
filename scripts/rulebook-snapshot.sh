@@ -57,18 +57,26 @@ MANIFEST_NAME="MANIFEST.tsv"
 log() { printf '%s\n' "$*" >&2; }
 
 # --- Collect (destination<TAB>source) pairs for every file in scope.
+# LC_ALL=C A RENDEZESEN, ES EZ MERT DEFEKTUS-JAVITAS (marveen, 2026-08-27 11:5x).
+# A csupasz `sort` LOCALE-FUGGO. Merve, ugyanazon a ket uton:
+#     LANG=hu_HU.UTF-8 -> references/buktatok.md, majd SKILL.md   (kis-nagybetu-erzeketlen)
+#     LC_ALL=C         -> SKILL.md, majd references/buktatok.md   (bajt szerint)
+# A launchd C/POSIX locale-lal fut, az interaktiv hej hu_HU-val -- tehat a manifest SORRENDJE
+# attol fuggott, KI inditotta a kort. Minden valtas egy commitot szult valtozas NELKUL, es ezzel
+# a "nem tortent semmi" jelzes megszunt: 48 zaj-commit naponta, amiben egy VALODI valtozas
+# elveszik. A teszt ezt nem foghatta meg: egy futasban egy locale van.
 collect() {
   [ -f "$MARVEEN_ROOT/CLAUDE.md" ] && printf 'marveen/CLAUDE.md\t%s\n' "$MARVEEN_ROOT/CLAUDE.md"
   [ -f "$DELTA_CLAUDE" ] && printf 'delta-crm/CLAUDE.md\t%s\n' "$DELTA_CLAUDE"
   if [ -d "$MARVEEN_ROOT/agents" ]; then
     find "$MARVEEN_ROOT/agents" -mindepth 2 -maxdepth 2 \( -name 'CLAUDE.md' -o -name 'SOUL.md' \) -type f 2>/dev/null \
-    | sort | while IFS= read -r f; do
+    | LC_ALL=C sort | while IFS= read -r f; do
         a=$(basename "$(dirname "$f")")
         printf 'agents/%s/%s\t%s\n' "$a" "$(basename "$f")" "$f"
       done
   fi
   if [ -d "$SKILLS_ROOT" ]; then
-    find "$SKILLS_ROOT" -type f 2>/dev/null | sort | while IFS= read -r f; do
+    find "$SKILLS_ROOT" -type f 2>/dev/null | LC_ALL=C sort | while IFS= read -r f; do
       printf 'skills/%s\t%s\n' "${f#"$SKILLS_ROOT"/}" "$f"
     done
   fi
