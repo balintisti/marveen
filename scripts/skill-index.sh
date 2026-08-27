@@ -267,7 +267,29 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
       #
       # Ez az EGYETLEN lepcso a negybol, ami nem all a fegyelmen: nem kell hozza sem kapcsolo,
       # sem env, sem proza, amit valakinek be kell gepelnie.
-      echo "MERET-OR: ${skill}  ${n} sor (alapvonal ${base}, novekedes ${growth_s})"
+      # ES A MARADEK KERET IS, NEM CSAK AZ ERTEK (mandark merte 2026-08-27, didi
+      # vette eszre). A sor eddig megmondta, MENNYI a novekedes, es nem mondta meg,
+      # hogy MENNYI FER MEG. Aki a "+15"-ot latta, nem tudta belole, hogy EGYETLEN
+      # sor valasztja el a riasztastol -- mandark ezt a hatart meg is merte, a
+      # fajlhoz nem nyulva: SKILL_GROWTH_LIMIT=14 mellett (ami aritmetikailag a
+      # +16-os eset) a kimenet MASIK agra valt, es a kilepesi kod 0 -> 3.
+      #
+      # A kar iranya az, ami miatt ez nem kozmetika: a riasztast NEM az kapja, aki a
+      # keretet elhasznalta, hanem a KOVETKEZO, aki egy jogos sort beir.
+      #
+      # KET korlat van, es a SZUKEBBET kell mondani, kulonben a szam megint tobbet
+      # iger, mint amennyi igaz: a novekedesi keret (limit - novekedes) es a kemeny
+      # felso korlat (HARD_LIMIT - sorok). Ha a kemeny korlat a szukebb, a sor ki is
+      # mondja, melyik kotott meg -- egy szam a kotoereje nelkul ugyanaz a hiba,
+      # mint egy szam populacio nelkul.
+      _room_growth=$((SKILL_GROWTH_LIMIT - growth))
+      _room_hard=$((SKILL_HARD_LIMIT - n))
+      if [ "$_room_hard" -lt "$_room_growth" ]; then
+        _room="${_room_hard} sor maradt (a KEMENY korlat kot: ${SKILL_HARD_LIMIT})"
+      else
+        _room="${_room_growth} sor maradt (keret ${SKILL_GROWTH_LIMIT})"
+      fi
+      echo "MERET-OR: ${skill}  ${n} sor (alapvonal ${base}, novekedes ${growth_s} -- ${_room})"
     fi
   elif [ "$n" -gt "$SKILL_LINE_LIMIT" ]; then
     OVER_LIMIT=$((OVER_LIMIT+1))
