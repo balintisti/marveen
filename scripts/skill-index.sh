@@ -289,47 +289,40 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
       # felso korlat (HARD_LIMIT - sorok). Ha a kemeny korlat a szukebb, a sor ki is
       # mondja, melyik kotott meg -- egy szam a kotoereje nelkul ugyanaz a hiba,
       # mint egy szam populacio nelkul.
-      # A KARAKTER-MERO: NEM MASODIK KERET, HANEM A SORSZAM OSZINTESEGE.
-      # Egy sima karakter-keret nem zarna be a rest: a mert eset +300 karakter volt,
-      # egy "15 sornyi" karakter-keret (~1100) atengedte volna. A kerdes nem az, hogy
-      # mennyi karakter jott, hanem hogy a SORSZAM MEGMAGYARAZZA-E.
-      #     A       = alapvonal_karakter / alapvonal_sor      (atlagos sorhossz)
-      #     excess  = d_karakter - d_sor * A                  (amit a sorszam NEM magyaraz)
-      # es CSAK NOVEKEDESRE nezzuk. A szimmetrikus alak megbukna a negativ kontrollon:
-      # a mai valodi bontas (504->436 sor, 37773->32848 kar) +427 excess-t ad, mert az
-      # elvitt sorok az ATLAGNAL ROVIDEBBEK voltak -- a kepletbol az jon ki, hogy "nem
-      # eleg karakter tunt el". Egy or, ami a BONTASRA tuzel, pont a helyes valtozast
-      # buntetne.
+      # A KARAKTER-MERO: SAJAT ALAPVONAL, UGYANUGY, MINT A SORSZAMNAK.
+      # (marveen dontese 2026-08-27, friday visszamenoleges meresere.)
       #
-      # MIERT FIGYELMEZTETES ES NEM BUKAS. A lelet az volt, hogy a sor-alapu or ebbol
-      # SEMMIT NEM LATOTT -- a hiany a LATHATOSAG, nem a tiltas. Es merve: a mai
-      # allapot (444 sor / 34032 kar) a 436/32848 alapvonalhoz kepest AZONNAL tuzelne,
-      # mert a `description:` EGYETLEN hosszu sor. Egy or, ami az elso napon jogos
-      # munkara blokkol, egy heten belul zaj. Ha a jelzes tul halknak bizonyul, a
-      # kilepesi kodra emelni egy sor -- visszafele viszont mar nem lehet.
+      # AZ ELSO VALTOZAT egy SZAMITOTT varakozashoz mert: excess = d_kar - d_sor * A.
+      # Merve 52 szerkesztesen: 50%-ban tuzelt, es a jelzes HALMOZODOTT -- a racsni ota
+      # MINDEN allapot megszolalt, 11 egymas utan. Az "excess" nem ennek a szerkesztesnek
+      # a surusege volt, hanem a racsni ota felgyult TAVOLSAG, es egy ilyen jelzes
+      # szerkezetileg nem tud ritka lenni.
+      #
+      # AZ OK VISZONT NEM AZ VOLT, amire elsore gondoltunk: az `A` nem beegetett
+      # konstans, hanem a ket alapvonal-szambol szarmazik -- es a feltevese IGAZ ezen a
+      # korpuszon (az uj tartalom median sorhossza 75, az alapvonalake 74; 1,02x).
+      # A hiba a KERET volt: `A` (egy sornyi) 15-szor szigorubb, mint a sor-kapu 15-os
+      # kerete. Ezert most a karakter-novekedes a SAJAT alapvonalahoz merodik, es a
+      # kerete a sor-keret ugyanabban a suruségben: SKILL_GROWTH_LIMIT * A.
+      #
+      # MERVE, ugyanazon az 52 szerkesztesen:
+      #     sor-kapu:            21/52 = 40%
+      #     karakter-kapu (uj):  21/52 = 40%
+      #     CSAK a karakter:      1/52 =  2%   <- a valodi zaj-novekmeny
+      # A 40% nem a karakter-mero tulajdonsaga: a MEGLEVO sor-kapu ugyanennyi ezen a
+      # korpuszon. Amit a karakter-mero HOZZATESZ, az egyetlen jelzes 52-bol -- es
+      # a harom mai valodi eset MINDEGYIKET CSAK ez fogja meg (+10..+15 sor a 15-os
+      # kereten belul, 1442..2019 karakterrel). Pontosan didi eredeti lelete.
       _chars=$(wc -c < "$f" | tr -d ' ')
       _basec="${SKILL_BASELINE_CHARS:-0}"
       if [ "${_basec:-0}" -gt 0 ] && [ "$base" -gt 0 ]; then
         _avg=$((_basec / base))
-        _dchar=$((_chars - _basec))
-        _excess=$((_dchar - growth * _avg))
-        if [ "$_dchar" -gt 0 ] && [ "$_excess" -gt "$_avg" ]; then
-          echo "MERET-OR: ${skill}  A SORSZAM NEM MONDJA MEG A MERETET: ${_excess} karakternyi tobblet, amit a ${growth_s} sor nem magyaraz (atlagos sorhossz ${_avg})."
+        _cgrowth=$((_chars - _basec))
+        _climit=$((SKILL_GROWTH_LIMIT * _avg))
+        if [ "$_cgrowth" -gt "$_climit" ]; then
+          echo "MERET-OR: ${skill}  A KARAKTER-KERET ELFOGYOTT: +${_cgrowth} karakter (keret ${_climit}), mikozben a sorszam csak ${growth_s}."
         fi
       fi
-      # A KEMENY AG MA ALSZIK, ES EZT KI KELL MONDANI (didi merte 2026-08-27).
-      # A feltetelbol a FAJLMERET KIESIK, tehat csak a harom konstanson mulik:
-      #     HARD - n < LIMIT - (n - BASE)   <=>   HARD < LIMIT + BASE
-      # Ma: 600 < 15 + 436 = 451 -> HAMIS, tehat az ag NEM TUD tuzelni. Numerikus
-      # kontroll n=1..600-ra: nulla talalat. A teszt a KONSTANSOKAT a szkriptbol
-      # olvassa, tehat ez a szam nem tud elavulni ugy, hogy a teszt zold marad. Elove BASE >= 586-tol valik (585-nel
-      # meg 600 < 600, hamis).
-      # NEM torlom: az alapvonal MA HAROMSZOR mozdult (474 -> 489 -> 436), es ha
-      # atlepi a kuszobot, a "35 sor maradt" hamis igeret lenne. De egy ag, ami
-      # sosem tuzel, megkulonboztethetetlen egy helyestol -- ezert a dormancia
-      # TESZTTEL van rogzitve (skill-index.test.ts), es a
-      # teszt akkor bukik, amikor az ag FELEBRED. Igy nem eszrevetlenul valik
-      # elove, hanem szolva.
       _room_growth=$((SKILL_GROWTH_LIMIT - growth))
       _room_hard=$((SKILL_HARD_LIMIT - n))
       if [ "$_room_hard" -lt "$_room_growth" ]; then
@@ -337,7 +330,7 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
       else
         _room="${_room_growth} sor maradt (keret ${SKILL_GROWTH_LIMIT})"
       fi
-      echo "MERET-OR: ${skill}  ${n} sor / ${_chars} karakter (alapvonal ${base}, novekedes ${growth_s} -- ${_room})"
+      echo "MERET-OR: ${skill}  ${n} sor / ${_chars} karakter (alapvonal ${base}/${_basec}, novekedes ${growth_s} / +${_cgrowth:-0} kar -- ${_room})"
     fi
   elif [ "$n" -gt "$SKILL_LINE_LIMIT" ]; then
     OVER_LIMIT=$((OVER_LIMIT+1))

@@ -408,17 +408,15 @@ describe('skill-index.sh -- a KEMENY ag ALSZIK a mai konstansokkal (didi, 2026-0
   })
 })
 
-describe('skill-index.sh -- a KARAKTER-MERO: a sorszam oszintesege (83cac1ed)', () => {
-  // didi merte 2026-08-27: egy fajl 504 sorrol 504 sorra "valtozott", kozben +300
-  // karakterrel. A sor-alapu or ebbol SEMMIT nem latott. A ket kontroll az o
-  // lezarasi felteteléből valo, a MERT szamokkal.
+describe('skill-index.sh -- a KARAKTER-KERET: sajat alapvonal (83cac1ed)', () => {
+  // didi merte: egy fajl 504 sorrol 504 sorra "valtozott", +300 karakterrel. A
+  // sor-alapu or semmit nem latott. A karakter-novekedes a SAJAT alapvonalahoz
+  // merodik, a kerete a sor-keret ugyanabban a suruségben (LIMIT * atlagos sorhossz).
 
-  // Pontosan L soros es C bajtos fajl. A `wc -c` bajtot szamol, ezért csak ASCII.
   function fileWith(lines: number, chars: number) {
     const home = mkdtempSync(join(tmpdir(), 'skill-chars-'))
     const dir = join(home, '.claude', 'skills', 'pinned')
     mkdirSync(dir, { recursive: true })
-    // minden sor: (len-1) 'x' + '\n'; az utolso sor kapja a maradekot
     const per = Math.floor(chars / lines)
     const rows: string[] = []
     let used = 0
@@ -429,29 +427,28 @@ describe('skill-index.sh -- a KARAKTER-MERO: a sorszam oszintesege (83cac1ed)', 
     return { home, actual: { lines: body.split('\n').length - 1, chars: Buffer.byteLength(body) } }
   }
 
-  const BASE = { lines: 504, chars: 37453 }   // didi 15:50-es allapota
+  const BASE = { lines: 504, chars: 37453 }       // A = 74, keret 15*74 = 1110
   const env = (extra: Record<string, string>) => ({
     SKILL_BASELINE_NAMES: 'pinned', SKILL_BASELINE_LINES: String(BASE.lines),
     SKILL_BASELINE_CHARS: String(BASE.chars), SKILL_GROWTH_LIMIT: '15',
     SKILL_HARD_LIMIT: '600', ...extra,
   })
-  const MARKER = 'A SORSZAM NEM MONDJA MEG A MERETET'
+  const MARKER = 'A KARAKTER-KERET ELFOGYOTT'
 
-  it('POZITIV KONTROLL: +300 karakter / +0 sor -> TUZEL', () => {
-    // didi 16:18-as allapota: ugyanannyi sor, 320 karakterrel tobb.
-    const { home, actual } = fileWith(504, 37773)
+  it('POZITIV KONTROLL: a sor-kereten BELUL, a karakter-kereten TUL -> TUZEL', () => {
+    // +10 sor (a 15-os kereten belul), +1442 karakter (a 1110-es kereten tul).
+    // Ez a mai valodi eset alakja: a sor-kapu nemán marad, a karakter szol.
+    const { home, actual } = fileWith(514, 37453 + 1442)
     try {
-      expect(actual).toEqual({ lines: 504, chars: 37773 })   // a fixture maga is merve
-      expect(runScript([], env({ HOME: home })).stdout).toContain(MARKER)
+      expect(actual.lines).toBe(514)
+      const out = runScript([], env({ HOME: home })).stdout
+      expect(out).toContain(MARKER)
     } finally { rmSync(home, { recursive: true, force: true }) }
   })
 
-  it('NEGATIV KONTROLL: valodi BONTAS (sor ES karakter is csokken) -> NEM tuzel', () => {
-    // 504 -> 436 sor, 37453 -> 32848 karakter. A szimmetrikus keplet ITT bukna meg:
-    // +427 "excess"-t adna, mert az elvitt sorok az atlagnal rovidebbek voltak.
-    const { home, actual } = fileWith(436, 32848)
+  it('NEGATIV KONTROLL: valodi BONTAS (mindketto csokken) -> NEM tuzel', () => {
+    const { home } = fileWith(436, 32848)
     try {
-      expect(actual).toEqual({ lines: 436, chars: 32848 })
       expect(runScript([], env({ HOME: home })).stdout).not.toContain(MARKER)
     } finally { rmSync(home, { recursive: true, force: true }) }
   })
@@ -463,11 +460,12 @@ describe('skill-index.sh -- a KARAKTER-MERO: a sorszam oszintesege (83cac1ed)', 
     } finally { rmSync(home, { recursive: true, force: true }) }
   })
 
-  it('a karakterszam OTT VAN az informativ sorban, nem csak riasztaskor', () => {
+  it('mindket szam ott van az informativ sorban (alapvonal-PAR es novekedes-PAR)', () => {
     const { home } = fileWith(504, 37453)
     try {
       const out = runScript([], env({ HOME: home })).stdout
-      expect(out).toContain('504 sor / 37453 karakter')
+      expect(out).toContain('alapvonal 504/37453')
+      expect(out).toContain('+0 kar')
       expect(out).not.toContain(MARKER)
     } finally { rmSync(home, { recursive: true, force: true }) }
   })
