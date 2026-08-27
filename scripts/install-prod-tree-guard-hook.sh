@@ -88,9 +88,94 @@ if [ "$TOPLEVEL" = "$PROD_ROOT" ] && [ "${MARVEEN_PROD_COMMIT_OK:-0}" != "1" ]; 
   echo "Deliberate override: MARVEEN_PROD_COMMIT_OK=1 git commit ..." >&2
   exit 1
 fi
+
+# THE OVERRIDE LEAVES A TRACE (card e81f0a5e, 2026-08-27). Until today the
+# bypass was an environment variable: no log, no trailer, nothing in git. The
+# question "how many commits went round this guard, and touching what?" had no
+# answer -- two agents counted two and three on the same day, and only from
+# their own session notes, which cannot be re-read a week later.
+#
+# The log records the INTENT: it is written here, in pre-commit, so an override
+# that is later aborted (empty commit, failed later hook, ctrl-C) still shows
+# up. The commit TRAILER records the outcome and is the durable half -- this
+# log lives under store/ and a `git clean -fdx` takes it.
+if [ "$TOPLEVEL" = "$PROD_ROOT" ] && [ "${MARVEEN_PROD_COMMIT_OK:-0}" = "1" ]; then
+  _log="$PROD_ROOT/store/prod-tree-override.log"
+  _branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+  _files="$(git diff --cached --name-only 2>/dev/null | tr '\n' ' ')"
+  _n="$(git diff --cached --name-only 2>/dev/null | grep -c . || true)"
+  mkdir -p "$(dirname "$_log")" 2>/dev/null || true
+  printf '%s\tbranch=%s\tfiles=%s\treason=%s\tpaths=%s\n' \
+    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$_branch" "${_n:-0}" \
+    "${MARVEEN_PROD_COMMIT_REASON:-(nincs indok)}" "$_files" >> "$_log" 2>/dev/null || true
+  # AND SAY SO OUT LOUD. A bypass that is silent for the person doing it is how
+  # the third one happens by reflex.
+  echo "prod-tree-guard: MEGKERULVE (${_n:-0} fajl, ag $_branch) -- naplozva: $_log" >&2
+  [ -n "${MARVEEN_PROD_COMMIT_REASON:-}" ] || \
+    echo "  indok nelkul; add meg: MARVEEN_PROD_COMMIT_REASON='miert' MARVEEN_PROD_COMMIT_OK=1 git commit ..." >&2
+fi
 exit 0
 EOF
 chmod +x "$GUARD"
+
+# 1b. THE COMMIT TRAILER -- the durable half of the trace (card e81f0a5e).
+# The log above records intent and lives under store/, which a `git clean -fdx`
+# removes. A trailer is in the commit object itself: it survives clones, clean
+# checkouts and a new machine, and `git log --grep` can count it a year later.
+#
+# WHY prepare-commit-msg AND NOT pre-commit: a pre-commit hook cannot touch the
+# message -- it runs before there is one. This is the only hook that can, and it
+# sees the message file for `-m`, `-F` and the editor alike.
+#
+# WHY A CHAIN and not a single file, when today there is exactly one consumer:
+# the same reason spelled out for pre-commit above. A monolithic hook couples
+# the end state to installer ORDER, and the next installer to arrive would
+# demote this one to a .bak without a word.
+PREPARE_DISPATCH="$HOOK_DIR/prepare-commit-msg"
+PREPARE_MARK="marveen-prepare-commit-msg-dispatcher"
+mkdir -p "$HOOK_DIR/prepare-commit-msg.d"
+cat > "$HOOK_DIR/prepare-commit-msg.d/05-prod-tree-override-trailer" <<'EOF'
+#!/usr/bin/env bash
+# marveen-prod-tree-guard : record a deliberate prod-tree override IN THE COMMIT.
+# Managed by scripts/install-prod-tree-guard-hook.sh -- edit there, not here.
+set -uo pipefail
+MSG_FILE="${1:-}"
+[ -n "$MSG_FILE" ] && [ -f "$MSG_FILE" ] || exit 0
+[ "${MARVEEN_PROD_COMMIT_OK:-0}" = "1" ] || exit 0
+PROD_ROOT="${MARVEEN_PROD_ROOT:-$(dirname "$(cd "$(git rev-parse --git-common-dir)" && pwd)")}"
+[ "$(git rev-parse --show-toplevel 2>/dev/null || echo)" = "$PROD_ROOT" ] || exit 0
+# Idempotent: an --amend must not stack a second trailer. MEASURED consequence,
+# so nobody reads it later as a bug: an amend carrying a DIFFERENT reason keeps
+# the FIRST one in the trailer (1 -> 1, verified). Nothing is lost -- the log
+# records every attempt separately, including the amend's own reason.
+grep -q '^Prod-tree-guard-override:' "$MSG_FILE" 2>/dev/null && exit 0
+printf '\nProd-tree-guard-override: %s\n' "${MARVEEN_PROD_COMMIT_REASON:-(nincs indok)}" >> "$MSG_FILE"
+exit 0
+EOF
+chmod +x "$HOOK_DIR/prepare-commit-msg.d/05-prod-tree-override-trailer"
+
+# Preserve a foreign prepare-commit-msg by demoting it INTO the chain, exactly
+# as the pre-commit installer does -- never delete what we did not write.
+if [ -f "$PREPARE_DISPATCH" ] && ! grep -q "$PREPARE_MARK" "$PREPARE_DISPATCH" 2>/dev/null; then
+  mv "$PREPARE_DISPATCH" "$HOOK_DIR/prepare-commit-msg.d/00-existing-prepare-commit-msg"
+  chmod +x "$HOOK_DIR/prepare-commit-msg.d/00-existing-prepare-commit-msg"
+  echo "  (preserved an existing prepare-commit-msg as a chain entry)"
+fi
+if [ ! -f "$PREPARE_DISPATCH" ] || ! grep -q "$PREPARE_MARK" "$PREPARE_DISPATCH" 2>/dev/null; then
+  cat > "$PREPARE_DISPATCH" <<'EOF'
+#!/usr/bin/env bash
+# marveen-prepare-commit-msg-dispatcher : run every executable in prepare-commit-msg.d/.
+set -uo pipefail
+HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
+status=0
+for h in "$HOOK_DIR"/prepare-commit-msg.d/*; do
+  [ -x "$h" ] || continue
+  "$h" "$@" || status=1
+done
+exit $status
+EOF
+  chmod +x "$PREPARE_DISPATCH"
+fi
 
 # 2. Dispatcher: byte-for-byte the same contract as install-secret-gate-hook.sh
 #    (same marker), so whichever installer runs first creates it and the other
