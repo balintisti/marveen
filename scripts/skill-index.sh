@@ -32,6 +32,35 @@ if [ "${1:-}" = "--outline" ]; then
   exit 0
 fi
 
+# ---- `--check <skill>`: A SZERZO A SAJAT FAJLJARA KAP SZAMOT, IRAS ELOTT ----
+# (kartya 0d0e3892, marveen dontese 2026-08-27 22:15.)
+#
+# A MERT PROBLEMA: a meret-or a fenti ciklusban MINDEN skillt vegignez (ma 56), tehat a
+# jelzest definicio szerint az kapja, aki legkozelebb futtatja -- fuggetlenul attol, KI irta
+# a novekedest. Merve ugyanaznap: negy futasom mind ugyanarra a fajlra figyelmeztetett, amit
+# nem en szerkesztettem. A szerzot semmi nem allitja meg; a kovetkezot terheli.
+#
+# AMIT EZ NEM CSINAL, ES MIERT NEM: nem blokkol iras kozben. A kapu minden skillt nez, tehat
+# egy iras-kozbeni blokk C-t allitana meg A tullepett fajlja miatt -- ma 56-bol 1 miatt
+# mindenkit. Egy or, ami miatt valaki NEM tud irni, ki lesz kapcsolva, es egy kikapcsolt or
+# nulla or. A ket tevedes-irany ara nem szimmetrikus: az utolagos jelzes tevedese egy
+# felesleges visszavagas, a blokke egy megkerult kapu.
+#
+# A KILEPESI KOD ITT MASKEPP MUKODIK, MINT A BROADCASTBAN, es ez szandekos. Broadcastban a
+# karakter-figyelmeztetes stdoutra megy es 0-val ter vissza (merve, kartya 83cac1ed) -- ott ez
+# a didi kartyajanak a kerdese, nem nyulok hozza. ITT viszont a mod EGYETLEN celja, hogy egy
+# `&&` lanc ele lehessen tenni, tehat MINDKET kapu 3-mal ter vissza, es minden szoveg stderrre
+# megy: ami eldobhato egy `>/dev/null`-lal, az nem or.
+CHECK_SKILL=""
+if [ "${1:-}" = "--check" ]; then
+  CHECK_SKILL="${2:-}"
+  if [ -z "$CHECK_SKILL" ]; then echo "hasznalat: skill-index.sh --check <skill-nev>" >&2; exit 64; fi
+  if [ ! -f "$HOME/.claude/skills/$CHECK_SKILL/SKILL.md" ]; then
+    echo "nincs ilyen skill: $CHECK_SKILL" >&2; exit 66
+  fi
+  shift 2
+fi
+
 VERBOSE=0
 _args=()
 for _a in "$@"; do
@@ -248,6 +277,8 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
   [ -f "$f" ] || continue
   n=$(wc -l < "$f" | tr -d ' ')
   skill=$(basename "$(dirname "$f")")
+  # check modban a TOBBI skill nem tartozik a szerzore -- epp ez a lelet lenyege
+  if [ -n "${CHECK_SKILL:-}" ] && [ "$skill" != "$CHECK_SKILL" ]; then continue; fi
   base=$(baseline_for "$skill")
   if [ -n "$base" ]; then
     growth=$((n - base))
@@ -320,7 +351,13 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
         _cgrowth=$((_chars - _basec))
         _climit=$((SKILL_GROWTH_LIMIT * _avg))
         if [ "$_cgrowth" -gt "$_climit" ]; then
-          echo "MERET-OR: ${skill}  A KARAKTER-KERET ELFOGYOTT: +${_cgrowth} karakter (keret ${_climit}), mikozben a sorszam csak ${growth_s}."
+          if [ -n "${CHECK_SKILL:-}" ]; then
+            # check modban ez BUKAS: a mod celja, hogy egy `&&` lanc ele lehessen tenni
+            echo "MERET-OR: ${skill}  A KARAKTER-KERET ELFOGYOTT: +${_cgrowth} karakter (keret ${_climit}), mikozben a sorszam csak ${growth_s}." >&2
+            OVER_LIMIT=$((OVER_LIMIT+1))
+          else
+            echo "MERET-OR: ${skill}  A KARAKTER-KERET ELFOGYOTT: +${_cgrowth} karakter (keret ${_climit}), mikozben a sorszam csak ${growth_s}."
+          fi
         fi
       fi
       _room_growth=$((SKILL_GROWTH_LIMIT - growth))
@@ -330,11 +367,21 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
       else
         _room="${_room_growth} sor maradt (keret ${SKILL_GROWTH_LIMIT})"
       fi
-      echo "MERET-OR: ${skill}  ${n} sor / ${_chars} karakter (alapvonal ${base}/${_basec}, novekedes ${growth_s} / +${_cgrowth:-0} kar -- ${_room})"
+      if [ -n "${CHECK_SKILL:-}" ]; then
+        echo "MERET-OR: ${skill}  ${n} sor / ${_chars} karakter (alapvonal ${base}/${_basec}, novekedes ${growth_s} / +${_cgrowth:-0} kar -- ${_room})" >&2
+      else
+        echo "MERET-OR: ${skill}  ${n} sor / ${_chars} karakter (alapvonal ${base}/${_basec}, novekedes ${growth_s} / +${_cgrowth:-0} kar -- ${_room})"
+      fi
     fi
   elif [ "$n" -gt "$SKILL_LINE_LIMIT" ]; then
     OVER_LIMIT=$((OVER_LIMIT+1))
     OVER_LIST="${OVER_LIST}  ${skill}  ${n} sor\n"
+  elif [ -n "${CHECK_SKILL:-}" ]; then
+    # ALAPVONAL NELKULI skill, a hatar alatt. Broadcastban ez CSEND (helyesen: 55 skillrol
+    # nem kell jelenteni). Check modban viszont a csend nem valasz: a szerzo azert futtatta,
+    # hogy SZAMOT kapjon a sajat fajljarol -- es egy or, ami csak akkor szolal meg, ha mar baj
+    # van, nem tudja megmondani, mennyi maradt.
+    echo "MERET-OR: ${skill}  ${n} sor / $(wc -c < "$f" | tr -d ' ') karakter (hatar ${SKILL_LINE_LIMIT} -- $((SKILL_LINE_LIMIT - n)) sor maradt)" >&2
   fi
 done
 
@@ -354,13 +401,29 @@ _arms_ok=1
 if [ "$_probe" -le "$SKILL_LINE_LIMIT" ] || [ "$_arms_ok" -ne 1 ]; then
   echo "MERET-OR: a pozitiv kontroll ELBUKOTT (szamlalas vagy egy uj ag nem mukodik) -- az or NEM megbizhato." >&2
 elif [ "$OVER_LIMIT" -gt 0 ]; then
-  echo "" >&2
-  echo "MERET-OR: ${OVER_LIMIT} skill lepte tul a hatarat:" >&2
-  printf "%b" "$OVER_LIST" >&2
-  echo "  -> references/ bontas javasolt. A LEGFRISSEBB szekciok vannak a fajl vegen," >&2
-  echo "     tehat epp azok jutnak el a legkevesebb olvasohoz." >&2
+  # Check modban a per-skill sorok MAR kimondtak mindent, es a broadcast-osszegzo itt
+  # egy URES listat mutatna (a karakter-ag nem tolti az OVER_LIST-et) -- egy "1 skill lepte
+  # tul" fejlec semmi alatt rosszabb, mint a csend: azt sugallja, hogy elveszett egy sor.
+  if [ -z "${CHECK_SKILL:-}" ]; then
+    echo "" >&2
+    echo "MERET-OR: ${OVER_LIMIT} skill lepte tul a hatarat:" >&2
+    printf "%b" "$OVER_LIST" >&2
+  else
+    # Check modban a FEJLEC marad el (egy "N skill lepte tul" mondat egyetlen megnezett
+    # skill mellett populaciot allitana) -- a SOR viszont nem maradhat el. Egy 3-as kilepesi
+    # kod indoklas nelkul pontosan az a nema kudarc, ami ellen ez az or keszult; a teszt,
+    # ami ezt megfogta, eloszor PIROS volt.
+    printf "%b" "$OVER_LIST" >&2
+  fi
+  if [ -n "${OVER_LIST}" ]; then
+    echo "  -> references/ bontas javasolt. A LEGFRISSEBB szekciok vannak a fajl vegen," >&2
+    echo "     tehat epp azok jutnak el a legkevesebb olvasohoz." >&2
+  fi
 else
-  if [ "${VERBOSE:-0}" = "1" ]; then
+  # A "minden skill a hatara alatt" mondat CHECK MODBAN HAMIS LENNE: ott EGY skillt neztunk
+  # meg, nem 56-ot. Egy ures populacio, ami tiszta bizonyitvanynak olvasodik -- pontosan az
+  # az alak, ami ellen ez az egesz or keszult.
+  if [ "${VERBOSE:-0}" = "1" ] && [ -z "${CHECK_SKILL:-}" ]; then
     echo "MERET-OR: minden skill a sajat hatara alatt (alapvonalas: novekedes <= ${SKILL_GROWTH_LIMIT} es teljes <= ${SKILL_HARD_LIMIT}; a tobbi: <= ${SKILL_LINE_LIMIT}). Pozitiv kontroll: OK."
   fi
 fi
