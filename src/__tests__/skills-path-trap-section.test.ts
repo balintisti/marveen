@@ -33,7 +33,8 @@ vi.mock('../web/atomic-write.js', () => ({
   atomicWriteFileSync: (path: string, content: string) => writeFileSync(path, content, 'utf-8'),
 }))
 
-const { ensureSkillsPathTrapSection } = await import('../web/agent-scaffold.js')
+const { ensureSkillsPathTrapSection, ensureAutonomySection, ensureFleetRosterSection } =
+  await import('../web/agent-scaffold.js')
 
 const MARKER_BEGIN = '<!-- BEGIN GENERATED: skills-path-trap (auto-generated, do not edit by hand) -->'
 const MARKER_END = '<!-- END GENERATED: skills-path-trap -->'
@@ -105,5 +106,71 @@ describe('wiring contracts', () => {
   it('the generated template names the trap inline too', () => {
     const src = readFileSync(join(__dirname, '../../src/web/agent-scaffold.ts'), 'utf-8')
     expect(src).toContain('CSAPDA: a .claude-config/skills NEM a tiéd')
+  })
+})
+
+describe('a generalt blokk a BESZURASI PONTON szol (kartya 7a8d972b)', () => {
+  // A mert eset: a `BEGIN` sor utan KOZVETLENUL egy `##` fejlec allt, es a
+  // termeszetes szerkesztesi mozdulat ("szurj be uj szakaszt a `## X` ELE") pontosan
+  // a BEGIN es a fejlec koze esik -- vagyis A BLOKKBA. Marveen igy vesztett el harom
+  // lap-szerkesztest 2026-08-27-en, es a hiba RACSNIZ: minden bejutott szakasz
+  // tavolabb tolja a markert (a blokk 10 sorrol ~115-re nott).
+
+  it('a BEGIN utani ELSO sor NEM `##` fejlec, hanem a figyelmeztetes', () => {
+    setup('agent-b', '# Agent B\n')
+    ensureSkillsPathTrapSection('agent-b')
+    const lines = read('agent-b').split('\n')
+    const i = lines.findIndex((l) => l === MARKER_BEGIN)
+    expect(i).toBeGreaterThanOrEqual(0)
+    // EZ a lenyeg: a fejlec nem tapadhat a markerhez.
+    expect(lines[i + 1].startsWith('## ')).toBe(false)
+    expect(lines[i + 1]).toContain('GENERALT')
+    expect(lines[i + 1]).toContain('NYOMTALANUL ELVESZ')
+    // es a fejlec kozvetlenul a figyelmeztetes UTAN jon -- tehat aki a fejlecre
+    // gorget, a sor folott latja
+    expect(lines[i + 2].startsWith('## ')).toBe(true)
+  })
+
+  it('a figyelmeztetes a blokkon BELUL van, tehat az iro karbantartja', () => {
+    // Ha kivul lenne, egy kezi torles utan sosem jonne vissza.
+    setup('agent-b', '# Agent B\n')
+    ensureSkillsPathTrapSection('agent-b')
+    const out = read('agent-b')
+    const block = out.slice(out.indexOf(MARKER_BEGIN), out.indexOf(MARKER_END))
+    expect(block).toContain('NYOMTALANUL ELVESZ')
+  })
+
+  it('idempotens marad a figyelmeztetessel egyutt', () => {
+    setup('agent-b', '# Agent B\n')
+    ensureSkillsPathTrapSection('agent-b')
+    const first = read('agent-b')
+    ensureSkillsPathTrapSection('agent-b')
+    expect(read('agent-b')).toBe(first)
+  })
+})
+
+describe('MIND A HAROM generalt blokk a beszurasi ponton szol (7a8d972b)', () => {
+  // Az elozo blokk CSAK a skills-path-trap-et rogziti. Harombol egy nem rogziti a
+  // masik kettot -- ugyanaz az alak, mint egy szam populacio nelkul, csak tesztben.
+  // Ez a teszt mind a harmat ugyanabban a fajlban renderli ki es meri.
+
+  it('egyik blokkban SEM tapad `##` fejlec a BEGIN markerhez', () => {
+    setup('agent-b', '# Agent B\n')
+    ensureAutonomySection('agent-b')
+    ensureFleetRosterSection('agent-b')
+    ensureSkillsPathTrapSection('agent-b')
+    const lines = read('agent-b').split('\n')
+
+    const begins = lines
+      .map((l, i) => ({ l, i }))
+      .filter(({ l }) => l.includes('BEGIN GENERATED:'))
+    // POZITIV KONTROLL a merore: ha nulla blokkot talal, az allitas ures.
+    expect(begins.length).toBe(3)
+
+    for (const { l, i } of begins) {
+      const nev = l.slice(l.indexOf('BEGIN GENERATED:') + 16, l.indexOf('(')).trim()
+      expect(lines[i + 1].startsWith('## '), `${nev}: fejlec tapad a markerhez`).toBe(false)
+      expect(lines[i + 1], `${nev}: hianyzik a figyelmeztetes`).toContain('NYOMTALANUL ELVESZ')
+    }
   })
 })
