@@ -452,8 +452,15 @@ export function buildNoWorkNotice(agent: string, minutes: number): string {
     'errol az esetrol -- azt figyelte, akinek VAN munkaja es megsem mozdul --, tehat epp a',
     'legdragabb allapot volt lathatatlan.',
     '',
-    'Amit tolem var: adj neki kartyat, vagy ha tenyleg nincs neki valo, mondd ki a kartyan,',
-    'hogy miert all -- kulonben a kovetkezo korben ugyanezt fogom kuldeni.',
+    // AZ OR KARTYAT SOSEM OLVAS -- ezert nem a kartyara kuldi az embert (kartya dc81d2af).
+    // jarvis merese 2026-08-28: 10 ertesites 4h48m alatt UGYANARROL az agensrol, mikozben a
+    // koordinator KETSZER is kartyara irta, hogy szandekosan all. A kartya-komment helyes
+    // szokas, csak epp nem az a csatorna, amit ez az or nez: a dontese a `workcheck.json`-on
+    // all. Egy uzenet, ami olyan valaszt ker, amit a kero fel sem tud olvasni, minden korben
+    // ujra elmegy -- es par kor utan a cimzett atlepi.
+    'Amit tolem var: adj neki kartyat, vagy ha tenyleg nincs neki valo, allitsd a',
+    'workcheck.json-jat `{"kind":"none"}`-ra -- EZT olvasom, a kartyat nem. Kulonben a',
+    'kovetkezo korben ugyanezt fogom kuldeni.',
   ].join('\n')
 }
 

@@ -843,6 +843,26 @@ describe('buildNoWorkNotice', () => {
   // It must NOT name cards: choosing them needs the board and the fleet's shape, which
   // the coordinator has and this function does not. A guessed card list would look
   // authoritative and be wrong.
+  // AZ UZENET AZT A CSATORNAT NEVEZZE MEG, AMIT AZ OR TENYLEGESEN OLVAS (kartya dc81d2af).
+  //
+  // A regi szoveg azt kerte: "mondd ki a KARTYAN, hogy miert all". Az or viszont kartyat SOSEM
+  // olvas -- a dontese a `workcheck.json`-on all. jarvis merte 2026-08-28: 10 ertesites 4h48m
+  // alatt UGYANARROL az agensrol, mikozben a koordinator KETSZER is kartyara irta, hogy
+  // szandekosan all. A kartya-komment helyes szokas; csak nem az a csatorna, amit ez az or nez.
+  // Egy uzenet, ami olyan valaszt ker, amit a KERO fel sem tud olvasni, minden korben ujra megy.
+  it('a `workcheck.json`-t nevezi meg, a konkret ertekkel', () => {
+    const msg = buildNoWorkNotice('mandark', 42)
+    expect(msg).toContain('workcheck.json')
+    expect(msg).toContain('{"kind":"none"}')
+  })
+
+  it('NEM keri, hogy a KARTYAN magyarazza el -- azt az or nem latja', () => {
+    // NEGATIV KONTROLL: a kartya mint MUNKA-forras tovabbra is helyes ker, es meg is marad.
+    const msg = buildNoWorkNotice('mandark', 42)
+    expect(msg).not.toMatch(/mondd ki a kartyan/i)
+    expect(msg.toLowerCase()).toContain('adj neki kartyat')
+  })
+
   it('does not pretend to know which cards to hand over', () => {
     const msg = buildNoWorkNotice('jarvis', 14)
     expect(msg).not.toMatch(/\b[0-9a-f]{8}\b/)
