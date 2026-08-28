@@ -444,6 +444,78 @@ export function countDeclaredWork(
  *  It names the agent and the duration, and asks for the one thing that ends the state.
  *  It does NOT name candidate cards -- picking them needs the board and the fleet's
  *  current shape, which is what the coordinator has and this function does not. */
+/** The ownerless pull-list: cards anyone may take (card 4cbc8af9).
+ *
+ *  The work counter asks `assignee === agent`, which is the right question for
+ *  "what is on my plate" and the wrong one for "is there anything to do". The
+ *  rulebook's third rule sends an agent with an empty plate to exactly these
+ *  cards -- and the guard, reading its own narrower question, told them there
+ *  was nothing. Measured 2026-08-28 21:02: a high-priority ownerless card had
+ *  been created twelve minutes earlier, and the notice still said "NINCS RA
+ *  KIOSZTVA SEMMI".
+ *
+ *  The rule and the tool disagreed, and everyone reads the tool.
+ *
+ *  Same exclusions as the assigned count, for the same reasons: `done` and
+ *  `waiting` are not pickable, and a future `due_date` means someone
+ *  deliberately deferred it. `testing` is excluded here too -- an ownerless
+ *  card in review is not work to pick up.
+ */
+// Generic over the caller's card type: the filter only needs these fields, and
+// forcing WorkCountCard here would strip the id/title/priority the message has
+// to print -- the guard would know WHICH cards and be unable to name them.
+export function orphanPullList<T extends {
+  status: string; assignee: string | null
+  archived_at?: number | null; due_date?: number | null
+}>(cards: T[], now?: number): T[] {
+  return cards.filter((c) =>
+    !c.archived_at &&
+    (c.assignee ?? '').trim() === '' &&
+    c.status === 'planned' &&
+    !(now !== undefined && c.due_date != null && c.due_date > now),
+  )
+}
+
+/** Highest-priority first, so the message can name ONE card and be right. */
+export function topOfPullList<T extends { priority?: string | null; updated_at?: number | null }>(cards: T[]): T[] {
+  const rank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 }
+  return [...cards].sort((a, b) =>
+    (rank[a.priority ?? 'normal'] ?? 2) - (rank[b.priority ?? 'normal'] ?? 2) ||
+    (b.updated_at ?? 0) - (a.updated_at ?? 0),
+  )
+}
+
+/** What an idle agent is told when the board HAS ownerless work (card 4cbc8af9).
+ *
+ *  Addressed to the AGENT, not the coordinator -- that is the whole point. The
+ *  old notice asked the coordinator to push a card; this one lets the agent
+ *  pull. Measured the cost of the old shape on 2026-08-28: the coordinator
+ *  handed out a card in response to the guard, which is the pattern rule 3
+ *  exists to end.
+ *
+ *  It says LOCK FIRST because two agents took the same card 19 seconds apart on
+ *  the morning the rule was written; naming a card without saying that invites
+ *  exactly that collision.
+ */
+export function buildPullNotice(
+  agent: string,
+  minutes: number,
+  items: { id: string; title?: string | null; priority?: string | null }[],
+): string {
+  const line = (c: { id: string; title?: string | null; priority?: string | null }) =>
+    `  ${c.id.slice(0, 8)}  ${(c.priority ?? 'normal').padEnd(6)}  ${(c.title ?? '').slice(0, 60)}`
+  return [
+    `[tetlen-or] A(z) "${agent}" ${minutes} perce ures prompton all, es a NEVEN nincs semmi --`,
+    `de a tablan ${items.length} GAZDATLAN kartya var, amit barki felvehet:`,
+    '',
+    ...items.slice(0, 5).map(line),
+    '',
+    'FOGLALD LE ELOSZOR, aztan merj: `assignee` + `in_progress`. Ket agens 19 masodperc',
+    'kulonbseggel vette fel ugyanazt a kartyat azon a napon, amikor ez a szabaly szuletett.',
+    'Ha egyik sem a te savod, sorold at egy soros indoklassal -- az is elvegzett munka.',
+  ].join('\n')
+}
+
 export function buildNoWorkNotice(agent: string, minutes: number): string {
   return [
     `[tetlen-or] A(z) "${agent}" ${minutes} perce ures prompton all, ES NINCS RA KIOSZTVA SEMMI.`,

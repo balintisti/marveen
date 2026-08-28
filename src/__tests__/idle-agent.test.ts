@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   decideIdleAlert,
   parseWorkCheck,
@@ -11,6 +13,10 @@ import {
   type IdleAgentInput,
   type IdleAgentState,
   type IdleAgentThresholds,
+
+  orphanPullList,
+  topOfPullList,
+  buildPullNotice,
 } from '../idle-agent.js'
 
 const TH: IdleAgentThresholds = {
@@ -902,5 +908,130 @@ describe('counter-only busy evidence is weak enough for the no-work notice', () 
     const s1 = decideIdleAlert(onCall, NO_IDLE_STATE, TH, at(0))
     const s2 = decideIdleAlert(onCall, s1.next, TH, at(11))
     expect(s2.decision.alert).toBe(false)
+  })
+})
+
+// THE PULL-LIST THE GUARD COULD NOT SEE (card 4cbc8af9).
+//
+// The work counter asks `assignee === agent`. Correct for "what is on my plate",
+// wrong for "is there anything to do" -- and the rulebook's third rule sends an
+// agent with an empty plate to exactly the cards that question excludes.
+// Measured 2026-08-28 21:02: a high-priority ownerless card had existed for
+// twelve minutes and the notice still said NINCS RA KIOSZTVA SEMMI. The rule and
+// the tool disagreed, and everyone reads the tool.
+describe('the ownerless pull-list (card 4cbc8af9)', () => {
+  const card = (o: Partial<{ id: string; status: string; assignee: string | null; priority: string; archived_at: number | null; due_date: number | null; title: string }>) => ({
+    id: 'x', status: 'planned', assignee: null, priority: 'normal',
+    archived_at: null, due_date: null, title: 't', ...o,
+  })
+
+  it('an unassigned planned card IS pickable -- the whole finding', () => {
+    expect(orphanPullList([card({ id: 'a' })]).map((c) => c.id)).toEqual(['a'])
+  })
+
+  it('an empty-string assignee counts as unassigned', () => {
+    // Both forms exist on the live board: 4 rows with null and 3 with ''.
+    // A filter that catches only one is silently short.
+    expect(orphanPullList([card({ id: 'b', assignee: '' })]).map((c) => c.id)).toEqual(['b'])
+  })
+
+  it("someone else's card is NOT in the pull-list", () => {
+    // The negative direction: without it, "return everything" would pass.
+    expect(orphanPullList([card({ id: 'c', assignee: 'dexter' })])).toEqual([])
+  })
+
+  it('and neither is a done, waiting, testing or archived one', () => {
+    expect(orphanPullList([
+      card({ id: 'd', status: 'done' }),
+      card({ id: 'e', status: 'waiting' }),
+      card({ id: 'f', status: 'testing' }),
+      card({ id: 'g', archived_at: 1 }),
+    ])).toEqual([])
+  })
+
+  it('a card deferred to a future date is not pickable today', () => {
+    // Same rule the assigned count already applies: a future due_date means WE
+    // decided to do it later, and offering it back spends the guard's credit.
+    const now = 1_000_000
+    expect(orphanPullList([card({ id: 'h', due_date: now + 60_000 })], now)).toEqual([])
+    expect(orphanPullList([card({ id: 'i', due_date: now - 60_000 })], now).map((c) => c.id)).toEqual(['i'])
+  })
+
+  it('orders by priority so the message can name ONE card and be right', () => {
+    const out = topOfPullList([
+      card({ id: 'low', priority: 'low' }),
+      card({ id: 'urgent', priority: 'urgent' }),
+      card({ id: 'normal', priority: 'normal' }),
+      card({ id: 'high', priority: 'high' }),
+    ])
+    expect(out.map((c) => c.id)).toEqual(['urgent', 'high', 'normal', 'low'])
+  })
+})
+
+describe('the notice an idle agent gets when the board has ownerless work', () => {
+  const items = [
+    { id: 'aaaaaaaa11', title: 'egy magas prioritasu tetel', priority: 'high' },
+    { id: 'bbbbbbbb22', title: 'egy masik', priority: 'normal' },
+  ]
+
+  it('NAMES the cards -- a count alone is what the old notice already was', () => {
+    const msg = buildPullNotice('jarvis', 20, items)
+    expect(msg).toContain('aaaaaaaa')
+    expect(msg).toContain('egy magas prioritasu tetel')
+  })
+
+  it('and tells the reader to LOCK first', () => {
+    // Two agents took the same card 19 seconds apart on the day the rule was
+    // written. Naming a card without saying this invites exactly that.
+    const msg = buildPullNotice('jarvis', 20, items)
+    expect(msg).toMatch(/assignee/)
+    expect(msg).toMatch(/in_progress/)
+  })
+
+  it('does NOT claim there is nothing assigned -- that was the false sentence', () => {
+    expect(buildPullNotice('jarvis', 20, items)).not.toContain('NINCS RA KIOSZTVA SEMMI')
+  })
+})
+
+// AND THAT THE WATCHER ACTUALLY ASKS (card 4cbc8af9).
+//
+// The cases above prove the pull-list is computed correctly. They do not prove
+// it is CONSULTED: measured by mutation -- disabling the branch in
+// idle-agent-watcher.ts left all 83 green. That is the third time today the same
+// gap appeared (skipIfBusy, the busy-stuck population, and here): a unit test
+// pins the function, and nothing pins its use.
+//
+// Source-reading is the weaker kind of test, so this asks the CORRESPONDENCE
+// question rather than the presence one: not "does the name appear in the
+// watcher" -- it would, in the import -- but "is the pull-list consulted inside
+// the idle-no-work branch, BEFORE the notice that tells the coordinator to push
+// a card". Order matters: after it, the agent is never told.
+describe('the watcher consults the pull-list before asking for a push', () => {
+  const SRC = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'web', 'idle-agent-watcher.ts'), 'utf-8')
+
+  it('the idle-no-work branch calls orphanPullList', () => {
+    const branch = SRC.slice(SRC.indexOf("decision.reason === 'idle-no-work'"))
+    const upToNext = branch.slice(0, branch.indexOf('continue\n      }'))
+    expect(upToNext, 'nem talaltam az idle-no-work agat').toBeTruthy()
+    expect(upToNext).toContain('orphanPullList')
+    expect(upToNext).toContain('buildPullNotice')
+  })
+
+  it('and it does so BEFORE buildNoWorkNotice, not after', () => {
+    const branchAt = SRC.indexOf("decision.reason === 'idle-no-work'")
+    const pullAt = SRC.indexOf('orphanPullList', branchAt)
+    const pushAt = SRC.indexOf('buildNoWorkNotice(agent', branchAt)
+    expect(pullAt).toBeGreaterThan(-1)
+    expect(pushAt).toBeGreaterThan(-1)
+    expect(pullAt).toBeLessThan(pushAt)
+  })
+
+  it('and the pull message goes to the AGENT, not to the coordinator', () => {
+    // The whole point of rule 3: the agent pulls. Sending the named list to the
+    // coordinator would reproduce the push it exists to replace.
+    const branch = SRC.slice(SRC.indexOf("decision.reason === 'idle-no-work'"))
+    const call = branch.slice(branch.indexOf('buildPullNotice') - 120, branch.indexOf('buildPullNotice'))
+    expect(call).toContain("createAgentMessage('system', agent")
   })
 })

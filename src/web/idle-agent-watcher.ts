@@ -14,6 +14,9 @@ import {
   countDeclaredWork,
   selectDeclaredWork,
   buildNoWorkNotice,
+  orphanPullList,
+  topOfPullList,
+  buildPullNotice,
   buildWakeMessage,
   buildFleetAlert,
   type FleetAlert,
@@ -181,6 +184,22 @@ function tick(): void {
 
       if (decision.reason === 'idle-no-work') {
         const minutes = Math.round(decision.idleForMs / 60_000)
+        // The board may hold work nobody owns. Before telling the coordinator to
+        // push a card, look at the pull-list the rulebook points the agent at --
+        // and if it has something, tell the AGENT instead (card 4cbc8af9).
+        const pull = topOfPullList(orphanPullList(cards, Date.now()))
+        if (pull.length > 0) {
+          try {
+            createAgentMessage('system', agent, buildPullNotice(agent, minutes, pull))
+            logger.info(
+              { idleGuard: true, agent, orphanCount: pull.length, top: pull[0]?.id },
+              'idle guard: agent idle with nothing assigned -- named the ownerless pull-list',
+            )
+          } catch (err) {
+            logger.warn({ err, agent }, 'idle guard: could not name the pull-list to the agent')
+          }
+          continue
+        }
         try {
           createAgentMessage('system', MAIN_AGENT_ID, buildNoWorkNotice(agent, minutes))
           logger.info(
