@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { execSync } from 'node:child_process'
+import { execSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -468,5 +468,51 @@ describe('skill-index.sh -- a KARAKTER-KERET: sajat alapvonal (83cac1ed)', () =>
       expect(out).toContain('+0 kar')
       expect(out).not.toContain(MARKER)
     } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+})
+
+// A MERET-OR EGYSEGE: KARAKTER, ES LOCALE-FUGGETLENUL -- kartya 38221eef, jarvis merese.
+//
+// A cimke "karakter"-t mondott, a mero `wc -c`-t hasznalt, ami BAJT. A kezenfekvo csere
+// `wc -m`-re UGYANEZT a hibat hozta volna vissza, csak rejtve: a `wc -m` LOCALE-FUGGO, es
+// `LC_ALL=C` alatt BAJTOT ad. Merve ugyanazon a fajlon: wc -c 35165 | wc -m C 35165 |
+// wc -m UTF-8 32582 | python3 32582.
+//
+// ES AMIERT EZ NEM ELMELETI: a `com.marveen.dashboard.plist` EnvironmentVariables-e CSAK HOME
+// es PATH -- locale NINCS. Locale nelkul az LC_CTYPE alapertelmezese `C`, tehat a `wc -m`
+// BAJTOT szamolt volna EPP OTT, AHOL AZ OR FUT, mikozben a fejleszto shelljeben helyesnek
+// latszik. Kezzel tesztelve jo, elesben rossz.
+describe('skill-index.sh -- a karakter-szam LOCALE-FUGGETLEN (38221eef)', () => {
+  function charCountUnder(locale: string, home: string): number | null {
+    const r = spawnSync('bash', [SCRIPT], {
+      encoding: 'utf-8',
+      env: { ...process.env, HOME: home, LC_ALL: locale, SKILL_BASELINE_NAMES: 'egy-skill', SKILL_BASELINE_LINES: '1', SKILL_BASELINE_CHARS: '1' },
+    })
+    const m = ((r.stdout ?? '') + (r.stderr ?? '')).match(/egy-skill\s+\d+ sor \/ (\d+) karakter/)
+    return m ? Number(m[1]) : null
+  }
+
+  it('ugyanazt a szamot adja `LC_ALL=C` es UTF-8 alatt -- ez a kartya elfogadasi probaja', () => {
+    const home = mkdtempSync(join(tmpdir(), 'skill-charcount-'))
+    mkdirSync(join(home, '.claude', 'skills', 'egy-skill'), { recursive: true })
+    // TENYLEG EKEZETES tartalom. Az elso valtozatom ASCII-t irt ide ("arvizturo"), es ezzel a
+    // ket egyseg EGYBEESETT -- a teszt zold volt a `wc -c`-vel ES a locale-fuggo `wc -m`-mel is,
+    // tehat SEMMIT nem mert. A sajat komment figyelmeztetett ra, es en irtam ala a fixture-t.
+    const BODY = '---\nname: egy-skill\ndescription: árvíztűrő tükörfúrógép\n---\nÁÉÍÓŐÚŰ öüó ééé\n'
+    writeFileSync(join(home, '.claude', 'skills', 'egy-skill', 'SKILL.md'), BODY)
+    const c = charCountUnder('C', home)
+    const utf8 = charCountUnder('en_US.UTF-8', home)
+    rmSync(home, { recursive: true, force: true })
+
+    expect(c, 'C locale alatt nem sikerult kiolvasni a szamot').not.toBeNull()
+    expect(utf8).not.toBeNull()
+    expect(c).toBe(utf8)
+    // ES A KONTROLL, ami nelkul a fenti egyenloseg semmit nem allit: a fixture-nek TENYLEG
+    // KEVESEBB karaktere van, mint bajtja. Ha ez a ketto egybeesne (ASCII fixture), akkor egy
+    // bajt-szamlalo ES a locale-fuggo `wc -m` is atmenne a fenti egyenlosegen.
+    const bytes = Buffer.byteLength(BODY, 'utf8')
+    const chars = [...BODY].length
+    expect(chars, 'a fixture nem tartalmaz tobb-bajtos karaktert -- a proba vak lenne').toBeLessThan(bytes)
+    expect(c).toBe(chars)
   })
 })

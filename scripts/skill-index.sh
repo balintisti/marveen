@@ -227,7 +227,43 @@ SKILL_HARD_LIMIT="${SKILL_HARD_LIMIT:-600}"
 # "valtozott", kozben +300 karakterrel -- egy ket sorra tordelt bekezdes egy sorra huzva,
 # es a felszabadult sorra egy uj bekezdes. A sor-alapu or ebbol SEMMIT nem latott.
 # A baseline PAR: a ket szam UGYANABBOL a fajl-allapotbol valo, kulonben az atlag hazudik.
-SKILL_BASELINE_CHARS="${SKILL_BASELINE_CHARS:-32848}"
+# RACSNI, KARAKTERBEN (kartya 38221eef): a regi 32 848 BAJT volt, a mai mert ertek
+# 32 582 KARAKTER -- a kettonek nem is ugyanaz az egysege. A minimum a szoros, ahogy a lap
+# keri: 32 582.
+#
+# ES EGY FESZULTSEG, AMIT JARVIS TALALT ES KI KELL MONDANI: a szkript sajat kommentje
+# megkoveteli, hogy a ket alapvonal UGYANABBOL a fajl-allapotbol valo legyen. A racsni viszont
+# SZAMONKENT minimalizal -- a 436 sor a 08-27-i allapotbol jon, a 32 582 karakter a mai, 448
+# sorosbol, tehat a par KEVERT. A hatasa merheto es kicsi: a szarmaztatott suruseg 74 kar/sor a
+# mai 72,7 helyett, vagyis a karakter-keret kb. 3%-kal bokezubb a szandekoltnal.
+# A ket kovetelmeny EGYSZERRE nem teljesitheto, es itt a RACSNI nyer: aki a part egyetlen
+# allapotra "javitana", a SOR-alapvonalat lazitana 436-rol 448-ra -- az a rosszabb csere.
+SKILL_BASELINE_CHARS="${SKILL_BASELINE_CHARS:-32582}"
+
+# --- KARAKTER-SZAMLALAS, LOCALE-FUGGETLENUL (kartya 38221eef, jarvis merese 2026-08-28).
+#
+# A KEZENFEKVO JAVITAS HIBAS LETT VOLNA. A cimke "karakter"-t mond, a mero eddig `wc -c`-t
+# hasznalt, ami BAJT. A nyilvanvalo csere `wc -m`-re UGYANEZT a hibat hozza vissza, csak
+# rejtve -- mert a `wc -m` LOCALE-FUGGO. Merve ugyanazon a fajlon:
+#     wc -c ................... 35 165   (bajt)
+#     wc -m  LC_ALL=C ......... 35 165   <- BAJT. Ugyanaz, mint a `wc -c`.
+#     wc -m  *.UTF-8 .......... 32 582   (karakter)
+#     python3, explicit utf-8 . 32 582
+#
+# ES A KORNYEZET, AMI EZT VALODIVA TESZI: a `com.marveen.dashboard.plist`
+# EnvironmentVariables-e CSAK `HOME` es `PATH` -- locale NINCS. Locale nelkul az `LC_CTYPE`
+# alapertelmezese `C`, tehat a `wc -m` BAJTOT szamolna EPP OTT, AHOL AZ OR FUT -- miközben a
+# fejleszto shelljeben (hu_HU.UTF-8) helyesen mukodne. Kezzel tesztelve jo, elesben rossz.
+#
+# Ezert python3 es nem `LC_ALL=... wc -m`: az explicit kodolas akkor sem tud csendben
+# elromlani, ha valaki kesobb kiveszi a locale-t a hivasi lancbol.
+#
+# HA A python3 NEM ELERHETO: NEM esunk vissza bajtra. Egy rossz egysegu szam rosszabb, mint a
+# hianya -- a karakter-kapu ilyenkor KIMONDOTTAN nem mer, es ezt ki is irja.
+char_count() {  # $1 = fajl; ures kimenet, ha nem merheto
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 -c 'import io,sys; print(len(io.open(sys.argv[1], encoding="utf-8", errors="strict").read()))' "$1" 2>/dev/null || true
+}
 
 baseline_for() {
   # egyetlen nev ma; tobbnel szokoz-elvalasztott lista es azonos sorrendu szamok
@@ -313,7 +349,7 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
       # korpuszon. Amit a karakter-mero HOZZATESZ, az egyetlen jelzes 52-bol -- es
       # a harom mai valodi eset MINDEGYIKET CSAK ez fogja meg (+10..+15 sor a 15-os
       # kereten belul, 1442..2019 karakterrel). Pontosan didi eredeti lelete.
-      _chars=$(wc -c < "$f" | tr -d ' ')
+      _chars=$(char_count "$f")
       _basec="${SKILL_BASELINE_CHARS:-0}"
       if [ "${_basec:-0}" -gt 0 ] && [ "$base" -gt 0 ]; then
         _avg=$((_basec / base))
