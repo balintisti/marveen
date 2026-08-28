@@ -142,9 +142,11 @@ import type { File, Task } from 'vitest'
 // es a plafon bevezetesevel csendben elavult volna -- epp azok hazudtak volna
 // elsonek, amik a hatart orzik. Ha a szam es a mondat egy generalt blokkban all,
 // nem tudnak szetcsuszni.
-/** Merve 2026. 08. 27. 13:42:54 CEST -- `npx vitest list --json` -> 337 fajl / 4529 teszt. */
-export const SUITE_BASELINE_FILES = 337
-export const SUITE_BASELINE_TESTS = 4529
+/** Merve 2026. 08. 28. 05:15 CEST -- `npx vitest list --json` -> 348 fajl / 4631 teszt.
+ *  A CEL-ALLAPOTON merve (torzs + a negy `bae4df49` ag), nem agankent: a ket kulon mert
+ *  alapvonal (337/4529 es 337/4521) egyike sem irja le azt a fat, ami a merge utan all. */
+export const SUITE_BASELINE_FILES = 348
+export const SUITE_BASELINE_TESTS = 4631
 // === SUITE-BASELINE:END ===
 
 /**
