@@ -72,7 +72,24 @@ MANIFEST_NAME="MANIFEST.tsv"
 # anyway, and a backup mechanism that reports failure teaches people to ignore it.
 LOCK_DIR="${RULEBOOK_LOCK_DIR:-${RULEBOOK_REPO%/}.lock}"
 
-log() { printf '%s\n' "$*" >&2; }
+# --- A NAPLOSOR MEGMONDJA, MIKOR ES KI (kartya 5b6a78eb, didi merese 2026-08-28).
+#
+# A MERT HIANY: a naplo egyetlen sora sem tartalmazott idobelyeget, es semmi nem mondta meg,
+# MELYIK hivo inditotta a kort. A ket hivo (a launchd egyseg es a skills-iras hook) kozul a
+# masodik ráadásul `>/dev/null 2>&1`-gyel indit, tehat a sorai SEHOVA nem jutottak el.
+#
+# MIERT SZAMIT, ES NEM ELMELETI: 2026-08-27 este HAROM kulonbozo, egyarant hiheto magyarazat
+# hangzott el a csonka commitok burstjere, es mindharmat MERESSEL kellett cafolni -- nem azert
+# volt nehez valasztani, mert keves adat volt, hanem mert NULLA. Es a mai kozbenso meresnel
+# (`c26193d7`) ugyanez tert vissza a masik iranybol: a zar SIKERE nem bizonyithato, mert a
+# vesztes peldany uzenete a semmibe megy. A "nem volt verseny" es a "volt, es a zar megfogta"
+# ma megkulonboztethetetlen.
+#
+# A HIVO NEVE: kimondott env-valtozobol, ha van; kulonben a hook sajat jelzojebol
+# (`SKILLS_SNAPSHOT_RUNNING=1`, amit a hook exportal). Ha egyik sincs, `ismeretlen` -- NEM
+# talalgatunk "launchd"-t, mert egy kezi futtatas ugyanigy nezne ki.
+RULEBOOK_CALLER="${RULEBOOK_CALLER:-$([ "${SKILLS_SNAPSHOT_RUNNING:-0}" = "1" ] && echo hook || echo ismeretlen)}"
+log() { printf '%s [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$RULEBOOK_CALLER" "$*" >&2; }
 
 # `mkdir` is the atomic primitive here: macOS ships no `flock`. The PID file is
 # for the STALE case, and the stale case is real, not theoretical -- the hook
