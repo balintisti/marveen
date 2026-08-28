@@ -37,7 +37,6 @@ import { listAgentNames, readFileOr, readAgentRemoteHost, agentDir, readAgentCla
 import { readTranscriptMtimeFromProjectDir } from './active-model.js'
 import { channelStateDir } from '../channel-provider.js'
 import {
-  agentSessionName,
   isAgentRunning,
   isSessionReadyForPrompt,
   sendPromptToSession,
@@ -47,7 +46,7 @@ import {
   sendEnterToSession,
   clearStaleParkedInput,
 } from './agent-process.js'
-import { MAIN_CHANNELS_SESSION } from './main-agent.js'
+import { sessionNameForAgent } from './session-names.js'
 import { sendTelegramMessage } from './telegram.js'
 import { runCommandTask } from './command-task.js'
 import { decideQuotaAction, type QuotaWorkClass } from '../quota-gate.js'
@@ -579,7 +578,7 @@ export function resolveTaskTarget(
   // Falls back to the standard agent session name derivation.
   const session = task.targetSession
     ? task.targetSession
-    : isMainAgent ? MAIN_CHANNELS_SESSION : agentSessionName(agentName)
+    : sessionNameForAgent(agentName)
 
   // A remote sub-agent's session lives on the laptop -- resolve its host so the
   // existence/readiness checks and the send cross the ssh boundary. A custom
