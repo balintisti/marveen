@@ -52,28 +52,59 @@ describe('a BEMENET feloldasa elozi meg az ellenorzest (dd5e07b4)', () => {
   })
 })
 
-describe('a szkript a KAPUT hivja, nem sajat mintat (horgonyzott)', () => {
+describe('KET TENGELY -- FUTTATVA, nem a forrasbol allitva (marveen onhelyesbitese, 06:16)', () => {
+  // AZ ELSO KET TESZTEM ITT JELENLET-TESZT VOLT: a mintat kerestem a forrasban, es ket
+  // mutacio -- a fajlnev-tengely kikapcsolasa (`if false`) es a verdikt szukiteSe csak a
+  // kapura -- MINDKETTO TULELTE. Egy szoveg jelenlete nem viselkedes.
+  // Ezert a szkript a fajl-listat egy MERHETO SEAM-en is elfogadja (PRE_PUSH_NAME_LIST), es
+  // ezek a tesztek a DONTEST futtatjak.
+  //
+  // A TENGELYEK KULONBSEGE MERVE (ideiglenes worktreeben, tehat a kapu OLVASTA a fajlt):
+  //   egy `.env`, benne `API_PASSWORD=nagyontitkos`  ->  a KAPU exit 0 ("no secret shape"),
+  //   a FAJLNEV-tengely viszont fogja. Ha csak a kapura epitunk, ez a fajl atmegy.
+  const BASE = 'd7b533e'   // valodi, nem ures tartomany: a kapu ilyenkor tenylegesen mer
+
+  function runWithList(list: string) {
+    const r = spawnSync('bash', [SCRIPT, 'HEAD', BASE], {
+      cwd: ROOT, encoding: 'utf-8', timeout: 120_000,
+      env: { ...process.env, PRE_PUSH_NAME_LIST: list },
+    })
+    return { code: r.status ?? -1, out: (r.stdout ?? '') + (r.stderr ?? '') }
+  }
+
+  it('egy `.env` a listaban MEGALLITJA a pusht -- pedig a kapu atengedi', () => {
+    const r = runWithList('src/a.ts\n.env')
+    expect(r.code).toBe(1)
+    expect(r.out).toMatch(/FAJLNEV-TALALAT/)
+    // A verdikt MEGNEVEZI, melyik tengely szolalt meg: kapu=0, fajlnev=1.
+    expect(r.out).toMatch(/kapu=0, fajlnev-talalat=1/)
+  })
+
+  it('tiszta lista -> mindket tengely tiszta, exit 0', () => {
+    const r = runWithList('src/a.ts\nREADME.md')
+    expect(r.code).toBe(0)
+    expect(r.out).toMatch(/mindket tengely tiszta/)
+  })
+
+  it('a mintat a fajlnev VEGE dönti el, nem egy reszkarakterlanc', () => {
+    // `environment.ts` NEM `.env`. Egy tul tag minta par kor utan zajja valna.
+    expect(runWithList('src/environment.ts\nsrc/tokens-ui.tsx').code).toBe(0)
+    expect(runWithList('config/id_rsa').code).toBe(1)
+    expect(runWithList('certs/server.pem').code).toBe(1)
+  })
+
+  // A maradek ket allitas SZERKEZETI (sorrend es hely) -- ezeket futtatassal nem lehet
+  // megfogni, es ezt kimondjuk: forrast olvasnak, kommentek nelkul.
   const SRC = readFileSync(SCRIPT, 'utf-8')
-
-  it('a `secret-gate.ts --range`-re delegal', () => {
-    expect(SRC).toMatch(/secret-gate\.ts" --range/)
-  })
-
-  it('NINCS sajat minta-grep -- kulonben egy MASODIK, gyengebb igazsag keletkezne', () => {
-    // marveen megfogalmazasa a lapon. Ha ide valaha visszakerul egy `grep -E '\\.env|id_rsa'`
-    // alaku sajat lista, az pontosan az a masolat, ami miatt ez a kartya letezik.
-    expect(SRC).not.toMatch(/grep -[a-zA-Z]*E .*id_rsa/)
-    expect(SRC).not.toMatch(/service-account\\\\.json\|/)
-  })
+  const CODE = SRC.split('\n').filter(l => !l.trimStart().startsWith('#')).join('\n')
 
   it('a ref-feloldas MEGELOZI a delegalast (sorrend, nem jelenlet)', () => {
     // A KOMMENTEKET ELOSZOR CSUPASZITJUK -- a repo sajat szabalya, es ez a teszt
     // elsore EPP ezen bukott el: a `secret-gate.ts` a FEJLEC-KOMMENTBEN all elobb
     // (748. karakter), a kodban kesobb (2724.), tehat a sorrend-allitas a
     // MAGYARAZATOT merte, nem a kodot.
-    const code = SRC.split('\n').filter(l => !l.trimStart().startsWith('#')).join('\n')
-    const resolve = code.indexOf('rev-parse --verify --quiet')
-    const gate = code.indexOf('secret-gate.ts')
+    const resolve = CODE.indexOf('rev-parse --verify --quiet')
+    const gate = CODE.indexOf('secret-gate.ts')
     expect(resolve).toBeGreaterThan(-1)
     expect(gate).toBeGreaterThan(resolve)
   })
