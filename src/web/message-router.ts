@@ -17,7 +17,9 @@ import {
 import { isQualifiedId } from './federation/address.js'
 import { sendFederatedMessage } from './federation/bridge.js'
 import { getFederationConfig, abandonWindowMsForPeer } from './federation/config.js'
-import { readAgentRemoteHost, readAgentVoiceConfig } from './agent-config.js'
+import { readAgentRemoteHost, readAgentVoiceConfig, listAgentNames, agentDir } from './agent-config.js'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   agentSessionName,
   isSessionReadyForPrompt,
@@ -186,6 +188,89 @@ const BUSY_STUCK_ESCALATE_MS = 30 * 60 * 1000  // busy pane: only after a much l
  */
 export function shouldEscalateStuckSession(paneState: PaneState | null, stuckMs: number): boolean {
   return stuckMs > (paneState === 'busy' ? BUSY_STUCK_ESCALATE_MS : STUCK_ESCALATE_MS)
+}
+
+/**
+ * Is this agent deliberately parked? (card bd7de2ba)
+ *
+ * `{"kind":"none"}` in agents/<name>/workcheck.json is how an agent declares it
+ * has no queue in this system. idle-agent.ts:190 already honours it; the
+ * busy-stuck sweep below must too, or every long legitimate turn on a parked
+ * agent produces an alert and the guard gets muted -- after which it protects
+ * nothing.
+ *
+ * THE PREDICATE IS DELIBERATELY NARROWER THAN THE IDLE GUARD'S, which asks for
+ * `ownWorkCount <= 0 AND kind === 'none'`. Card count answers "should this agent
+ * have something to do"; it says nothing about whether its pane is wedged. Here
+ * the only question is whether the operator declared the agent parked.
+ */
+export function declaresNoQueue(raw: string | null): boolean {
+  if (raw === null) return false
+  try {
+    return (JSON.parse(raw) as { kind?: unknown }).kind === 'none'
+  } catch {
+    return false
+  }
+}
+
+export function isDeliberatelyParked(agent: string): boolean {
+  try {
+    return declaresNoQueue(readFileSync(join(agentDir(agent), 'workcheck.json'), 'utf8'))
+  } catch {
+    // Missing or unreadable declaration is NOT a park. The idle guard treats an
+    // absent workcheck.json as a config gap worth reporting; here it must not
+    // silence the check, because "I could not read it" and "the operator parked
+    // this agent" are different answers and only one of them is a decision.
+    return false
+  }
+}
+
+/**
+ * Which agents does the busy-stuck check owe an answer about? (card bd7de2ba)
+ *
+ * The check used to live entirely inside the delivery loop, keyed on
+ * `msg.to_agent`, so its population was `receiversInTick` -- whoever happened to
+ * have mail waiting. That set is CORRECT for delivery: only an agent with
+ * something to hand over matters there. It was then reused as the denominator of
+ * a different question, and a wedged agent with an empty inbox never entered it.
+ *
+ * Confirmed live on 2026-08-28 20:01: the alert fired on computress BECAUSE she
+ * had three queued messages. Had the inbox been empty, the same 30-minute stall
+ * would have been silent -- and from outside a working pane and a wedged pane
+ * are the same picture, so nothing else would have told anyone.
+ *
+ * `receiversInTick` is excluded rather than merged: those agents are already
+ * evaluated by the delivery loop, and evaluating them twice in one tick would
+ * double the alert instead of widening the net.
+ */
+// The sweep's own cadence. The router ticks every 5 s, and running a readiness
+// probe per quiet agent at that rate would add ~70 tmux calls a MINUTE to the
+// healthy path -- for a question whose threshold is 30 MINUTES. Measured before
+// shipping, because the first version of this change did exactly that and the
+// comment above it claimed "one probe per quiet agent" without saying per WHAT.
+//
+// 60 s is 0.05% of the threshold, so nothing detectable is lost, and it keeps
+// the guard's cost proportional to the question it answers.
+const QUIET_SWEEP_INTERVAL_MS = 60 * 1000
+let lastQuietSweepMs = 0
+
+/** Should the quiet-agent sweep run on this tick? Pure, so the cadence is testable. */
+export function quietSweepDue(nowMs: number, lastSweepMs: number, intervalMs: number = QUIET_SWEEP_INTERVAL_MS): boolean {
+  return nowMs - lastSweepMs >= intervalMs
+}
+
+export function quietAgentsToCheck(
+  all: string[],
+  receiversInTick: ReadonlySet<string>,
+  mainAgentId: string,
+  // Injected so a test can prove the filter is APPLIED, not merely that the
+  // predicate is correct. Measured: with the parked filter deleted from this
+  // line, every test still passed -- the suite was pinning the predicate and
+  // nothing was pinning its use. That is the same gap the skipIfBusy card hit
+  // today, one file over.
+  isParked: (agent: string) => boolean = isDeliberatelyParked,
+): string[] {
+  return all.filter((a) => a !== mainAgentId && !receiversInTick.has(a) && !isParked(a))
 }
 
 // ---- reconnect-backlog batching (card 2922e380 thread b) --------------------
@@ -462,6 +547,41 @@ export async function runMessageRouterTick(): Promise<void> {
         absentNow.add(agent)
       }
     }
+    // ---- busy-stuck sweep over the QUIET agents (card bd7de2ba) ----
+    // The delivery loop below answers the stuck question only for agents that
+    // have mail. This covers the rest, with the same threshold, the same pane
+    // read and the same escalation rule -- the population is what was wrong,
+    // not the mechanism. Cost on the healthy path is one readiness probe per
+    // quiet agent; the pane is captured only past the threshold, as below.
+    if (quietSweepDue(now, lastQuietSweepMs)) {
+     lastQuietSweepMs = now
+     for (const agent of quietAgentsToCheck(listAgentNames(), receiversInTick, MAIN_AGENT_ID)) {
+      const host = readAgentRemoteHost(agent)
+      const session = agentSessionName(agent)
+      if (!sessionExistsOnHost(host, session)) {
+        // No session is a different alert with a different owner; clearing the
+        // timer keeps a restarted agent from inheriting the old clock.
+        agentStuckSince.delete(agent)
+        continue
+      }
+      if (await isSessionReadyForPrompt(session, host)) {
+        agentStuckSince.delete(agent)
+        continue
+      }
+      const since = agentStuckSince.get(agent)
+      if (!since) { agentStuckSince.set(agent, now); continue }
+      const stuckMs = now - since
+      if (stuckMs <= STUCK_ESCALATE_MS) continue
+      const pane = capturePane(session, host)
+      const paneState = pane != null ? detectPaneState(pane) : null
+      if (!shouldEscalateStuckSession(paneState, stuckMs)) continue
+      logger.warn({ to: agent, session, stuckDurationMs: stuckMs, pendingMsgCount: 0, paneState },
+        'message-router: session STUCK with an EMPTY inbox — found by the quiet-agent sweep')
+      notifyOrchestratorOfStuckSession(agent, session, stuckMs, 0, paneState)
+      agentStuckSince.set(agent, now)
+     }
+    }
+
     // Reconnect detection: agent was absent on the last tick, now present.
     for (const agent of presentNow) {
       if (agentWasAbsent.has(agent) && !agentBatchedThisReconnect.has(agent)) {
