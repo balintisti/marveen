@@ -56,7 +56,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/hooks/db-destructive-gate.py\"",
+            "command": "if [ -f \"$CLAUDE_PROJECT_DIR/scripts/hooks/db-destructive-gate.py\" ]; then python3 \"$CLAUDE_PROJECT_DIR/scripts/hooks/db-destructive-gate.py\"; fi",
             "timeout": 10
           }
         ]

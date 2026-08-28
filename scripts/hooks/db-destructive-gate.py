@@ -60,25 +60,148 @@ import time
 
 LOG = "/Users/isti/marveen/store/db-gate.log"
 
-# Short tokens get word boundaries; multi-word SQL forms are matched with flexible
-# whitespace because they legitimately span lines inside heredocs.
-PATTERNS = [
+# === WHAT IS MATCHED, AND WHY IT IS SPLIT IN TWO ===============================
+#
+# v1 matched every pattern against the raw command text. It went live, and the
+# FIRST thing it blocked was a command that merely CONTAINED the words -- a test
+# harness building a JSON payload. Writing documentation about the gate needed the
+# override, on the first attempt.
+#
+# That is fatal, and not because it is annoying: an override used routinely stops
+# being a deliberate act. The rulebook already says a checker that flags the
+# correct solution is worse than no checker, because the obvious fix is to remove
+# the checker. So the matching is now positional, in two classes with different
+# rules, and both fail toward DENY when the shape is unclear.
+#
+#   TOOL patterns  -- `prisma migrate reset`, `npm run db:reset`, `make db-...`
+#                     These are COMMANDS. They only count in command position, so
+#                     the same words inside a quoted argument or a heredoc body are
+#                     text. A tool name cannot arrive any other way.
+#
+#   SQL patterns   -- DROP TABLE, TRUNCATE, DELETE FROM without WHERE
+#                     These legitimately live INSIDE a quoted argument
+#                     (`psql -c "DROP TABLE x"`), so position cannot separate them
+#                     from prose. What separates them is the COMPANY they keep: the
+#                     segment has to invoke a database client. `DROP TABLE` in a
+#                     heredoc written to a markdown file invokes nothing.
+#
+# The residual hole is stated rather than hidden: a destructive statement passed to
+# a client through a variable the hook cannot see (`psql -f "$f"`, or a script that
+# builds SQL at runtime) is not caught. This gate is a guard rail against a typed
+# mistake, not a sandbox -- it cannot become one, because the hook sees a command
+# string and not the process that will run.
+
+TOOL_PATTERNS = [
     (r"prisma\s+migrate\s+reset", "prisma migrate reset -- drops and recreates the schema"),
-    (r"prisma\s+migrate\s+dev", "prisma migrate dev -- writes to whatever DATABASE_URL points at; production deploys use `migrate deploy` from the pipeline, never by hand"),
+    (r"prisma\s+migrate\s+dev", "prisma migrate dev -- writes to whatever DATABASE_URL points at; production deploys run `migrate deploy` from the pipeline, never by hand"),
     (r"prisma\s+db\s+push", "prisma db push -- applies the schema destructively, without a migration"),
     (r"supabase\s+db\s+reset", "supabase db reset"),
     (r"\bnpm\s+run\s+(db:reset|db:seed|dev:clean|dev:setup)\b", "an npm script that resets or seeds the database"),
+    (r"\byarn\s+(db:reset|db:seed|dev:clean|dev:setup)\b", "a yarn script that resets or seeds the database"),
     (r"\bmake\s+db-", "a make db-* target"),
+]
+
+SQL_PATTERNS = [
     (r"\bDROP\s+(TABLE|DATABASE|SCHEMA)\b", "DROP TABLE/DATABASE/SCHEMA"),
     (r"\bTRUNCATE\b", "TRUNCATE"),
-    # DELETE FROM <table> with no WHERE before the statement ends.
-    # The quote class allows BACKSLASHES: a psql call reaches the hook as
-    # `psql -c "DELETE FROM \"Task\";"`, and the first version of this pattern --
-    # which accepted a single optional quote -- did not match it. Caught by the
-    # control set, not by reading: the deny case silently returned exit 0 while
-    # every other deny case passed, so the gate looked healthy.
-    (r"\bDELETE\s+FROM\s+[\\\"'`]*[\w.]+[\\\"'`]*\s*(;|$)", "DELETE FROM without a WHERE clause"),
+    # DELETE FROM <table> with nothing before the statement ends. The quote class
+    # allows BACKSLASHES: a psql call arrives as `psql -c "DELETE FROM \"Task\";"`,
+    # and the first version -- one optional quote -- did not match it. The control
+    # set caught that; every other deny case passed, so the gate looked healthy.
+    (r"\bDELETE\s+FROM\s+[\\\"\'`]*[\w.]+[\\\"\'`]*\s*(;|$)", "DELETE FROM without a WHERE clause"),
 ]
+
+# Anything that can hand SQL to a server. `prisma`/`supabase` are here as well as in
+# the tool list: `prisma db execute --stdin` is a client, not just a CLI.
+DB_CLIENTS = re.compile(
+    r"(^|[\s;&|(])(psql|sqlite3|mysql|mariadb|mongo|mongosh|cockroach|pg_restore|pgcli|"
+    r"prisma|supabase|npx\s+prisma|dbmate|flyway|liquibase)([\s;&|)]|$)", re.I)
+
+# Segment separators. Splitting is deliberately crude -- it can only ever produce
+# MORE segments than a shell would, and an extra boundary can only cause an extra
+# check, never a missed one.
+_SEG = re.compile(r"(?:\|\||&&|[;\n|&])")
+_ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _command_position_text(segment: str) -> str:
+    """The part of a segment that a shell would treat as command + arguments,
+    with quoted strings blanked out so their CONTENTS cannot look like a command.
+
+    Quotes are replaced by spaces of the same length rather than removed, so the
+    word positions of everything after them stay put."""
+    out, quote = [], None
+    for ch in segment:
+        if quote:
+            out.append(" " if ch != quote else ch)
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+            out.append(ch)
+        else:
+            out.append(ch)
+    text = "".join(out)
+    # Drop leading VAR=value assignments so `FOO=1 prisma migrate reset` still reads
+    # as a prisma invocation.
+    parts = text.split()
+    while parts and _ENV_ASSIGN.match(parts[0]):
+        parts.pop(0)
+    return " ".join(parts)
+
+
+_HEREDOC = re.compile(r"<<-?\s*([\"\']?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+def strip_heredoc_bodies(command: str) -> str:
+    """Remove heredoc BODIES, unless the heredoc is being fed to something that
+    would execute it.
+
+    A heredoc body is data. `cat > notes.md <<'EOF' ... DROP TABLE ... EOF` writes
+    prose; splitting on newlines without this step puts that line in command
+    position and denies it. That was v1's first real false positive, and it hit
+    documentation about this very gate.
+
+    The carve-out is the whole point: `bash <<'EOF'` or `psql <<'EOF'` DOES execute
+    the body, so for those the body stays in scope. When in doubt the body is
+    KEPT -- an unrecognised opener leaves the text where it is, which can only
+    cause an extra check."""
+    lines = command.split("\n")
+    out, i = [], 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        m = _HEREDOC.search(line)
+        if m:
+            terminator = m.group(2)
+            executes = re.search(r"(^|[\s;&|])(bash|sh|zsh|psql|sqlite3|mysql|python3?|node)([\s;&|]|$)", line)
+            i += 1
+            while i < len(lines) and lines[i].strip() != terminator:
+                if executes:
+                    out.append(lines[i])
+                i += 1
+            if i < len(lines):
+                out.append(lines[i])  # the terminator itself
+        i += 1
+    return "\n".join(out)
+
+
+def find_hits(command: str):
+    hits = []
+    command = strip_heredoc_bodies(command)
+    for segment in _SEG.split(command):
+        if not segment.strip():
+            continue
+        cmdpos = _command_position_text(segment)
+        for pat, why in TOOL_PATTERNS:
+            if re.search(pat, cmdpos, re.I) and why not in hits:
+                hits.append(why)
+        if DB_CLIENTS.search(segment):
+            for pat, why in SQL_PATTERNS:
+                if re.search(pat, segment, re.I) and why not in hits:
+                    hits.append(why)
+    return hits
+
 
 OVERRIDE = re.compile(r"(^|\s)MARVEEN_DB_GATE=allow(\s|$)")
 
@@ -117,7 +240,7 @@ def main():
         if not command.strip():
             sys.exit(0)
 
-        hits = [why for pat, why in PATTERNS if re.search(pat, command, re.I)]
+        hits = find_hits(command)
         if not hits:
             sys.exit(0)
 
