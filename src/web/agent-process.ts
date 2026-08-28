@@ -53,6 +53,7 @@ import { getSecret } from './vault.js'
 import { resolveOpenRouterModel } from './openrouter-models.js'
 import { reapChannelOrphans, reapDetachedChannelClaudes } from './channel-poller-reap.js'
 import { MAIN_CHANNELS_SESSION } from './main-agent.js'
+import { agentSessionName, sessionNameForAgent } from './session-names.js'
 import { notifyChannel } from '../notify.js'
 
 // Lazy so a transient PATH gap at import time (e.g. the 04:00 auto-update
@@ -812,9 +813,10 @@ function resolveAgentProvider(name: string): ChannelProviderType {
   return CHANNEL_PROVIDER
 }
 
-export function agentSessionName(name: string): string {
-  return `agent-${name}`
-}
+// The session-name rules live in session-names.ts (card 228c9252); re-exported
+// here because callers -- and the test doubles that mock this module -- already
+// know `agentSessionName` by this path.
+export { agentSessionName, sessionNameForAgent } from './session-names.js'
 
 /**
  * POSIX single-quote a value for safe interpolation into a shell command STRING (card b7fa5281).
@@ -864,7 +866,7 @@ export function agentRunState(name: string): AgentRunState {
   const host = readAgentRemoteHost(name)
   try {
     const out = captureTmux(host, ['list-sessions', '-F', '#{session_name}'])
-    return classifyRunState(out, agentSessionName(name), host != null)
+    return classifyRunState(out, sessionNameForAgent(name), host != null)
   } catch (err) {
     // tmux list-sessions exits non-zero ("no server running") when there are
     // zero sessions -- on a REACHABLE remote that means 'stopped', not
