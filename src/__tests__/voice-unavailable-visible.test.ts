@@ -35,11 +35,19 @@ describe('a nem elerheto atirat KIMONDVA erkezik (477682a0)', () => {
     expect(out).toMatch(/irja le/)
   })
 
-  it('MEGNEVEZI, MELYIK kudarcrol van szo -- a ketto nem ugyanaz', () => {
-    // "nincs telepitve" allo allapot, amit ki lehet mondani; "a whisper hibazott" egyszeri.
-    expect(injectVoiceUnavailable(INBOUND, false)).toMatch(/NINCS TELEPITVE/)
-    expect(injectVoiceUnavailable(INBOUND, true)).toMatch(/sikertelen/)
-    expect(injectVoiceUnavailable(INBOUND, true)).not.toMatch(/NINCS TELEPITVE/)
+  it('MEGNEVEZI, MELYIK kudarcrol van szo, ES HOGY MIT ER AZ UJRAKULDES', () => {
+    // A ket eset nem azert kulon, mert ket kulonbozo OK -- hanem mert ket kulonbozo TEENDO
+    // (marveen, 2026-08-28): a "nincs telepitve" allo allapot, ott az ujrakuldes ERTELMETLEN;
+    // a "whisper hibazott" egyszeri, ott ERTELMES. Ha egy mondat fedne mindkettot, a
+    // felhasznalo vagy azt probalna ujra, ami rendszerszinten nem megy, vagy feladna azt,
+    // ami masodszorra menne.
+    const notInstalled = injectVoiceUnavailable(INBOUND, false)
+    const whisperFailed = injectVoiceUnavailable(INBOUND, true)
+    expect(notInstalled).toMatch(/NINCS TELEPITVE/)
+    expect(notInstalled).toMatch(/ujrakuldes NEM segit/)
+    expect(whisperFailed).toMatch(/sikertelen/)
+    expect(whisperFailed).toMatch(/ujrakuldes segithet/)
+    expect(whisperFailed).not.toMatch(/NINCS TELEPITVE/)
   })
 
   it('a hang-attributumok ELTUNNEK, kulonben az agens megint hang-blokkot lat', () => {

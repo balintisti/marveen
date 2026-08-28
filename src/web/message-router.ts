@@ -795,9 +795,15 @@ export function injectVoiceUnavailable(content: string, installed: boolean): str
   let result = content
     .replace(/\s*attachment_kind="voice"/, '')
     .replace(/\s*attachment_file_id="[^"]*"/, '')
+  // A KET ESET NEM AZERT KULON, MERT KET KULONBOZO OK -- HANEM MERT KET KULONBOZO TEENDO
+  // (marveen fogalmazta meg pontosabban, mint ahogy en irtam, 2026-08-28):
+  //     "nincs telepitve"    -> ALLO allapot: ujraprobalni ERTELMETLEN, a hang ma nem megy
+  //     "a whisper hibazott" -> EGYSZERI esemeny: ujrakuldeni ERTELMES, masodszorra sikerulhet
+  // Ha egy mondat fedne mindkettot, a felhasznalo vagy ujraprobalna azt, ami rendszerszinten
+  // nem fog menni, vagy feladna azt, ami masodszorra menne. Ket teendo, ket mondat.
   const why = installed
-    ? 'az atirat elkeszitese sikertelen volt (a helyi whisper hibaval tert vissza)'
-    : 'a hang-eszkozkeszlet NINCS TELEPITVE ezen a gepen'
+    ? 'az atirat elkeszitese sikertelen volt (a helyi whisper hibaval tert vissza) -- egy ujrakuldes segithet'
+    : 'a hang-eszkozkeszlet NINCS TELEPITVE ezen a gepen -- az ujrakuldes NEM segit, amig ez all'
   result = result.replace(
     /(<channel[^>]*>)[\s\S]*?(<\/channel>)/,
     (_m, open: string, close: string) =>
