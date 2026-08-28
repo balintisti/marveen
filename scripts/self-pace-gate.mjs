@@ -415,7 +415,7 @@ const GATE_MSG =
 // SAID, never what is blocked: narrowing the write-intent test would open a real
 // hole (`cmd 2>&1 > store` survives an exclusion of `2>`), and at a security gate
 // an unproven heuristic is worse than friction. Friction is visible; a hole is not.
-const REASON_HINT = {
+export const REASON_HINT = {
   'self-pace-tool':
     ' KIVALTO OK: ez az eszkoz onmagaban tiltott sub-agensnek (ScheduleWakeup/Cron*/RemoteTrigger).' +
     ' Nincs kerulout -- a kovetkezo turn-t egy BEERKEZO uzenet inditja.',
@@ -431,6 +431,32 @@ const REASON_HINT = {
   'os-scheduler':
     ' KIVALTO OK: operacios rendszer szintu utemezo indito/beküldo alakja.' +
     ' A tiszta listazas (crontab -l, launchctl list, atq) atmegy.',
+  // The only reason without a hint until now (card 97470e22, four measured
+  // occurrences: a deny-list rationale, an installation-lane finding, and twice
+  // a card comment). Every other reason tells the reader what DOES pass; this
+  // one left them to guess, and the obvious guess is to reword the document
+  // until it slips through -- turning a precise text into an imprecise one to
+  // satisfy a filter.
+  //
+  // NO NARROWING HERE, and that is measured, not caution. These patterns scan
+  // the naive segment on purpose, quoted regions and heredoc bodies included:
+  // verified 2026-08-28 that the naive scan is what catches a real
+  // `subprocess.run(['tmux','send-keys',...])` hidden in a python heredoc, in a bash
+  // heredoc writing a script, and inside a blanked -d payload via $(...). All
+  // four stay denied. Anchoring the pattern to a command position -- the fix
+  // this card originally asked for -- would have removed the detection of the
+  // very incident this gate was built for.
+  //
+  // So the residual false positive is a KNOWN COST, and the answer is to name
+  // the route out at the moment someone hits it.
+  'bash-self-inject':
+    ' KIVALTO OK: a parancs SZOVEGE tartalmaz egy self-inject alakot (tmux pane-iras,' +
+    ' nohup/setsid + claude, vagy claude + /loop). EZ A MINTA SZANDEKOSAN A TELJES' +
+    ' PARANCS-SZOVEGET NEZI, az idezett reszeket es a heredoc-torzset is -- mert egy valodi' +
+    ' vektor epp ott szokott elbujni.' +
+    ' HA DOKUMENTALSZ (a szoveg ADAT, nem hivas): NE fogalmazd at a szoveget, hanem valassz' +
+    ' MASIK UTAT -- a Write eszkozzel fajlba, vagy `-d`/`--data` payloadkent (azt a kapu' +
+    ' blankolja). Igy a parancssorban csak egy utvonal all, es a dokumentum pontos marad.',
 }
 
 function allow() { process.exit(0) }
