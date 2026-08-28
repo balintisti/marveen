@@ -72,6 +72,30 @@ export function computeNextRun(cronExpression: string, tz: string = CRON_TZ): nu
   return Math.floor(expr.next().getTime() / 1000)
 }
 
+/**
+ * Milliseconds from `fromMs` to the NEXT occurrence, or null when the
+ * expression cannot be parsed.
+ *
+ * Exists for the `skipIfBusy` decision (card 40b2f3a1). That flag's own comment
+ * states its precondition -- "a single missed tick is harmless because the next
+ * one is already on the way" -- and nothing checked it, so a WEEKLY task
+ * carrying the flag lost a whole week per busy minute. This is the number that
+ * makes the precondition testable instead of assumed.
+ *
+ * Returns null rather than throwing, and the caller must treat null as "do NOT
+ * skip": an unparseable schedule is exactly when silently dropping work is
+ * least defensible. Same direction as the other exemptions in schedule-runner
+ * -- could-not-tell means keep the task alive, never drop it.
+ */
+export function cronGapMs(cron: string, fromMs: number, tz: string = CRON_TZ): number | null {
+  try {
+    const expr = CronExpressionParser.parse(cron, { tz, currentDate: new Date(fromMs) })
+    return expr.next().getTime() - fromMs
+  } catch {
+    return null
+  }
+}
+
 // Accept 5-field (standard) and 6-field (with seconds) cron expressions;
 // cron-parser supports both. Anything else -- oversized strings, random
 // punctuation, empty fields -- gets rejected at the API boundary instead
