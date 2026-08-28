@@ -17,6 +17,9 @@ import {
   orphanPullList,
   topOfPullList,
   buildPullNotice,
+  stalePendingBySender,
+  buildPendingStillWaitingNotice,
+  type PendingRow,
   buildWakeMessage,
   buildFleetAlert,
   type FleetAlert,
@@ -62,6 +65,39 @@ const INITIAL_DELAY_MS = 90_000
 const INTERVAL_MS = 3 * 60_000
 
 const watchState = new Map<string, IdleAgentState>()
+
+// Message ids the sender has already been told about (card 979283a9). A message
+// still stuck an hour later must not produce a second notice every sweep -- the
+// guard would be loudest exactly when it is least useful. In memory on purpose:
+// the worst a restart costs is one repeated notice, and a table for it would be
+// state to maintain for a message that is by then already delivered.
+const pendingNoticed = new Set<number>()
+
+/** The sender-side queue sweep. Separated so the tick stays readable and this can
+ *  be exercised on its own. */
+function sweepStalePending(): void {
+  const rows = getDb()
+    .prepare("SELECT id, from_agent, to_agent, created_at FROM agent_messages WHERE status = 'pending'")
+    .all() as PendingRow[]
+  // Forget ids that are no longer pending, so the set cannot grow without bound
+  // and a message that queues again later is reported again.
+  const live = new Set(rows.map((r) => r.id))
+  for (const id of pendingNoticed) if (!live.has(id)) pendingNoticed.delete(id)
+
+  const now = Date.now()
+  for (const [sender, msgs] of stalePendingBySender(rows, now, pendingNoticed)) {
+    // 'system' is not an agent anyone can read a notice as; skip it rather than
+    // send into a void.
+    if (sender === 'system') continue
+    try {
+      createAgentMessage('system', sender, buildPendingStillWaitingNotice(sender, msgs, now))
+      for (const m of msgs) pendingNoticed.add(m.id)
+      logger.info({ idleGuard: true, sender, count: msgs.length }, 'message queue: told the SENDER their message is still pending')
+    } catch (err) {
+      logger.warn({ err, sender }, 'message queue: could not tell the sender about a stale pending message')
+    }
+  }
+}
 
 function readWorkCheckRaw(agent: string): string | null {
   try {
@@ -118,6 +154,10 @@ function tick(): void {
   try {
     const agents = listAgentNames()
     if (agents.length === 0) return
+
+    // The sender-side queue check rides this same 3-minute tick: it asks about
+    // MESSAGES, not agents, so it runs once and not per agent (card 979283a9).
+    sweepStalePending()
 
     // Loaded once per tick, not once per agent: the board is the same for everyone,
     // and re-reading it per agent turned a cheap tick into N table scans.

@@ -453,6 +453,86 @@ export function countDeclaredWork(
  *  nothing ownerless either, and then the coordinator really is the one who has to
  *  act. The old sentence is kept above rather than deleted, because a reader who
  *  meets the two functions side by side should see WHY there are two. */
+/** How long a message may sit in the queue before the SENDER is told (card 979283a9).
+ *
+ *  MEASURED, not chosen. Over 7133 delivered inter-agent messages: median 0.8
+ *  minutes, 75th percentile 6, 90th 16.6, 95th 31.6, 99th 135.9. Sixty minutes
+ *  sits above the 97th percentile, so it does not fire on the normal long tail --
+ *  and it clears the fleet's documented legitimate turn lengths (a 37-minute turn
+ *  is on record, a 58-minute one was measured on 2026-08-23). Below that the
+ *  notice would arrive while the recipient is simply still working, which is the
+ *  state the queue exists to absorb.
+ *
+ *  2.7% of messages crossed this line historically -- roughly one or two a day
+ *  per sender, each one actionable.
+ */
+export const PENDING_NOTICE_AFTER_MS = 60 * 60 * 1000
+
+export interface PendingRow {
+  id: number
+  from_agent: string
+  to_agent: string
+  created_at: number
+}
+
+/** Messages the sender should hear about, grouped by sender.
+ *
+ *  The `queue=<n>` figure the helper prints is produced at SEND time and nobody
+ *  looks again. Someone who sent something forty minutes ago gets no signal that
+ *  it still has not landed -- which is how an agent ends up waiting for a reply
+ *  that is sitting in a queue (measured 2026-08-18: dexter waited while the
+ *  answer was pending).
+ *
+ *  `alreadyNotified` is what keeps this from becoming a metronome: a message that
+ *  is still stuck an hour later must not produce a second notice every sweep.
+ *  Without it the guard would be loudest exactly when it is least useful.
+ */
+export function stalePendingBySender(
+  rows: PendingRow[],
+  nowMs: number,
+  alreadyNotified: ReadonlySet<number>,
+  thresholdMs: number = PENDING_NOTICE_AFTER_MS,
+): Map<string, PendingRow[]> {
+  const out = new Map<string, PendingRow[]>()
+  for (const r of rows) {
+    if (alreadyNotified.has(r.id)) continue
+    if (nowMs - r.created_at * 1000 < thresholdMs) continue
+    const list = out.get(r.from_agent) ?? []
+    list.push(r)
+    out.set(r.from_agent, list)
+  }
+  return out
+}
+
+/** What the sender is told. Deliberately not a nudge to resend.
+ *
+ *  `pending` lives in the database and survives a restart -- measured twice on
+ *  2026-08-28, once by accident -- so a second copy is a duplicate, not a retry.
+ *  The useful moves are to wait, or to put the content where it does not queue:
+ *  a card. That asymmetry is the whole lesson of the day this card was rescoped
+ *  -- a commit is visible to the recipient immediately, a message is not.
+ */
+export function buildPendingStillWaitingNotice(
+  sender: string,
+  rows: { to_agent: string; created_at: number }[],
+  nowMs: number,
+): string {
+  const line = (r: { to_agent: string; created_at: number }) =>
+    `  -> ${r.to_agent}: ${Math.round((nowMs - r.created_at * 1000) / 60_000)} perce all sorban`
+  return [
+    `[uzenet-or] A(z) "${sender}" ${rows.length} elkuldott uzenete MEG MINDIG nem kezbesult:`,
+    '',
+    ...rows.slice(0, 5).map(line),
+    '',
+    'A cimzett dolgozik -- a router csak IDLE panelbe tud injektalni, tehat ez nem hiba,',
+    'es nem is akadaly nala. Amit NE tegyel: ne kuldd ujra. A `pending` sor az adatbazisban',
+    'all es TULEL egy restartot is, tehat a masodik level duplikatum lenne.',
+    '',
+    'Amit erdemes: ha DONTES vagy LELET volt benne, tedd a KARTYARA is. A kartya nem all',
+    'sorba -- a cimzett akkor is latja, amikor a levelet meg nem olvasta el.',
+  ].join('\n')
+}
+
 /** The ownerless pull-list: cards anyone may take (card 4cbc8af9).
  *
  *  The work counter asks `assignee === agent`, which is the right question for

@@ -17,6 +17,9 @@ import {
   orphanPullList,
   topOfPullList,
   buildPullNotice,
+  stalePendingBySender,
+  buildPendingStillWaitingNotice,
+  PENDING_NOTICE_AFTER_MS,
 } from '../idle-agent.js'
 
 const TH: IdleAgentThresholds = {
@@ -1033,5 +1036,122 @@ describe('the watcher consults the pull-list before asking for a push', () => {
     const branch = SRC.slice(SRC.indexOf("decision.reason === 'idle-no-work'"))
     const call = branch.slice(branch.indexOf('buildPullNotice') - 120, branch.indexOf('buildPullNotice'))
     expect(call).toContain("createAgentMessage('system', agent")
+  })
+})
+
+// THE SENDER NEVER LOOKS AGAIN (card 979283a9).
+//
+// The `queue=<n>` figure the helper prints is produced at SEND time, and nothing
+// re-reads it. Somebody who sent something forty minutes ago has no signal that
+// it still has not landed -- which is how an agent ends up waiting for a reply
+// that is sitting in a queue (measured 2026-08-18: dexter waited while the answer
+// was pending).
+//
+// The threshold is measured, not chosen: over 7133 delivered messages the median
+// is 0.8 minutes and the 95th percentile 31.6, so 60 minutes sits above the 97th
+// and clears the fleet's documented 37- and 58-minute turns.
+describe('a message still queued long after it was sent (card 979283a9)', () => {
+  const MINUTE = 60_000
+  const NOW = 10_000 * MINUTE
+  const row = (o: Partial<{ id: number; from_agent: string; to_agent: string; agedMin: number }>) => ({
+    id: o.id ?? 1,
+    from_agent: o.from_agent ?? 'friday',
+    to_agent: o.to_agent ?? 'dexter',
+    created_at: Math.floor((NOW - (o.agedMin ?? 0) * MINUTE) / 1000),
+  })
+
+  it('reports one that has waited past the threshold', () => {
+    const out = stalePendingBySender([row({ agedMin: 61 })], NOW, new Set())
+    expect([...out.keys()]).toEqual(['friday'])
+  })
+
+  it('NEGATIVE CONTROL: a normally-delivered-speed message does NOT trigger it', () => {
+    // The closing condition marveen named. Without it, a notice-on-everything
+    // guard is indistinguishable from a working one -- and at the median of 0.8
+    // minutes almost every message would qualify.
+    expect(stalePendingBySender([row({ agedMin: 5 })], NOW, new Set()).size).toBe(0)
+    expect(stalePendingBySender([row({ agedMin: 31 })], NOW, new Set()).size).toBe(0)
+  })
+
+  it('does not repeat itself: an id already reported is skipped', () => {
+    // A message stuck two hours must not produce a notice every three minutes.
+    // The guard would be loudest exactly when it is least useful.
+    const rows = [row({ id: 7, agedMin: 90 })]
+    expect(stalePendingBySender(rows, NOW, new Set()).size).toBe(1)
+    expect(stalePendingBySender(rows, NOW, new Set([7])).size).toBe(0)
+  })
+
+  it('groups by sender, so nobody is told about someone else queue', () => {
+    const out = stalePendingBySender([
+      row({ id: 1, from_agent: 'friday', agedMin: 70 }),
+      row({ id: 2, from_agent: 'didi', agedMin: 70 }),
+      row({ id: 3, from_agent: 'friday', agedMin: 80 }),
+    ], NOW, new Set())
+    expect(out.get('friday')?.map((r) => r.id)).toEqual([1, 3])
+    expect(out.get('didi')?.map((r) => r.id)).toEqual([2])
+  })
+
+  it('the threshold is above the measured 95th percentile', () => {
+    // Pinned as a RELATION to the data that justified it: if someone lowers it to
+    // 30 minutes, that is 5.4% of all traffic and this says so.
+    expect(PENDING_NOTICE_AFTER_MS).toBeGreaterThan(32 * MINUTE)
+  })
+})
+
+describe('the notice itself must not send anyone back to the queue', () => {
+  const NOW = 600_000_000
+  const rows = [{ to_agent: 'dexter', created_at: Math.floor((NOW - 70 * 60_000) / 1000) }]
+
+  it('names the recipient and how long it has waited', () => {
+    const msg = buildPendingStillWaitingNotice('friday', rows, NOW)
+    expect(msg).toContain('dexter')
+    expect(msg).toMatch(/70 perce/)
+  })
+
+  it('EXPLICITLY says not to resend -- a resend is a duplicate, not a retry', () => {
+    // marveen measured this twice on 2026-08-28, once by accident: `pending`
+    // lives in the database and survives a restart.
+    const msg = buildPendingStillWaitingNotice('friday', rows, NOW)
+    expect(msg).toMatch(/ne kuldd ujra/i)
+    expect(msg).toMatch(/duplikatum/i)
+  })
+
+  it('and points at the card, which does not queue', () => {
+    expect(buildPendingStillWaitingNotice('friday', rows, NOW)).toMatch(/KARTYARA/)
+  })
+})
+
+// AND THAT THE TICK ACTUALLY CALLS IT (card 979283a9).
+//
+// Written BEFORE running the mutation this time. Three times today the same gap
+// appeared -- skipIfBusy, the busy-stuck population, the pull-list -- where the
+// unit tests pinned a function and nothing pinned its use, and each time the
+// mutation found it rather than the review. The pattern is predictable enough to
+// test for in advance.
+describe('the watcher tick runs the sender-side queue sweep', () => {
+  const SRC = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'web', 'idle-agent-watcher.ts'), 'utf-8')
+
+  it('tick() calls sweepStalePending', () => {
+    const tick = SRC.slice(SRC.indexOf('function tick()'))
+    expect(tick.slice(0, tick.indexOf('listKanbanCards'))).toContain('sweepStalePending()')
+  })
+
+  it('and the notice is addressed to the SENDER, not the recipient', () => {
+    // The recipient is by definition busy -- that is why the message is queued.
+    // Telling them would be the one delivery guaranteed to wait as well.
+    const fn = SRC.slice(SRC.indexOf('function sweepStalePending'))
+    const call = fn.slice(0, fn.indexOf('buildPendingStillWaitingNotice'))
+    expect(call).toContain("createAgentMessage('system', sender")
+  })
+
+  it('and an id is remembered only after the notice went out', () => {
+    // Marking first would lose the notice on a throw and never retry it: the
+    // sender would be told nothing, forever, about that message.
+    const fn = SRC.slice(SRC.indexOf('function sweepStalePending'))
+    const sendAt = fn.indexOf('createAgentMessage')
+    const markAt = fn.indexOf('pendingNoticed.add')
+    expect(sendAt).toBeGreaterThan(-1)
+    expect(markAt).toBeGreaterThan(sendAt)
   })
 })
