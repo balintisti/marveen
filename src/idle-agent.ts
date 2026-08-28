@@ -442,8 +442,17 @@ export function countDeclaredWork(
  *  make it happen faster.
  *
  *  It names the agent and the duration, and asks for the one thing that ends the state.
- *  It does NOT name candidate cards -- picking them needs the board and the fleet's
- *  current shape, which is what the coordinator has and this function does not. */
+ *
+ *  IT DOES NOT NAME CANDIDATE CARDS, and the reason USED TO BE that picking them
+ *  needs the board, which this function is not given. That limitation was real and
+ *  it is now gone: `buildPullNotice` names them, because the ownerless pull-list
+ *  needs no fleet judgement -- those cards are pickable by anyone by definition
+ *  (card 4cbc8af9).
+ *
+ *  So this notice is now the NARROWER case: it fires only when the board has
+ *  nothing ownerless either, and then the coordinator really is the one who has to
+ *  act. The old sentence is kept above rather than deleted, because a reader who
+ *  meets the two functions side by side should see WHY there are two. */
 /** The ownerless pull-list: cards anyone may take (card 4cbc8af9).
  *
  *  The work counter asks `assignee === agent`, which is the right question for
