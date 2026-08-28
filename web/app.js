@@ -11746,6 +11746,7 @@ async function loadOverview() {
     const res = await fetch('/api/overview')
     if (!res.ok) throw new Error('HTTP ' + res.status)
     const d = await res.json()
+    updateBuildFreshnessUI(d.build)
     // Stats
     document.getElementById('statAgents').textContent = d.agents.running
     document.getElementById('statAgentsSub').textContent = t('overview.stat.agents_sub', { n: d.agents.total })
@@ -11874,6 +11875,75 @@ function renderUpdatesBadge(status) {
 // to yet another branch re-warns) and a permanent notice on the Updates page.
 // Dev machines follow develop on purpose; one dismissal silences the banner
 // for them while the Updates-page notice stays as the quiet ground truth.
+// ---- build freshness banner (card b807c756) --------------------------------
+// The source is not evidence: the dashboard runs from dist/, and on 2026-08-20
+// three people read the same file believing it was live while a four-day-old
+// build was serving. The wording comes from the server (`build.detail`) so the
+// rule is stated once, and the command is spelled out because the person who
+// sees this is the person who can fix it.
+const BUILD_STALE_DISMISS_PREFIX = 'marveen.build-stale-dismissed.'
+const BUILD_HEAL_COMMAND = 'npm run build && launchctl kickstart -k gui/$(id -u)/com.marveen.dashboard'
+
+function buildStaleKey(build) {
+  // Keyed on the FACTS, not on a flag: dismiss it now and it returns the
+  // moment either side moves. A dismissal that outlives the situation would
+  // rebuild the silence this banner exists to break. The unpushed count is
+  // part of the key for the same reason -- pushing is one of the ways the
+  // situation changes.
+  const local = build.localOnly ? build.localOnly.commits : ''
+  return `${build.status}|${build.builtAt || 0}|${build.sourceAt || 0}|${local}`
+}
+
+function buildStaleDismissed(build) {
+  try { return localStorage.getItem(BUILD_STALE_DISMISS_PREFIX + buildStaleKey(build)) === '1' }
+  catch { return false }
+}
+
+function updateBuildFreshnessUI(build) {
+  const banner = document.getElementById('buildStaleBanner')
+  if (!banner) return
+  // A MISSING `build` IS NOT A HEALTHY ONE. An older server that does not send
+  // the field yet is exactly the state this card is about, so say so rather
+  // than render nothing -- silence here would be the bug wearing the fix.
+  const b = build || {
+    status: 'unknown',
+    detail: 'A futo szerver nem kuld build-informaciot, tehat NEM tudni, hogy a forrasbol fut-e.',
+  }
+  // TWO QUESTIONS, TWO ANSWERS, ONE BANNER. "The running copy is old" and "this
+  // code is on no remote at all" are both ways for a fix to be missing, they
+  // can be true at once, and they need different remedies -- so the banner
+  // shows whichever apply rather than picking one.
+  const localLine = b.localOnly && b.localOnly.detail ? b.localOnly.detail : ''
+  if (b.status === 'current' && !localLine) { banner.hidden = true; return }
+  if (buildStaleDismissed(b)) { banner.hidden = true; return }
+  const textEl = document.getElementById('buildStaleBannerText')
+  if (textEl) {
+    const parts = []
+    if (b.status !== 'current') {
+      const cmd = b.status === 'unknown' ? '' : ` <code>${escapeHtml(BUILD_HEAL_COMMAND)}</code>`
+      parts.push(`<strong>${escapeHtml(b.detail || '')}</strong>${cmd}`)
+    }
+    // No command offered for this one on purpose: pushing is a decision, not a
+    // repair, and a copy-paste `git push` here would make it look like one.
+    if (localLine) parts.push(`<strong>${escapeHtml(localLine)}</strong>`)
+    textEl.innerHTML = parts.join('<br>')
+  }
+  window._buildFreshness = b
+  banner.hidden = false
+}
+
+function wireBuildStaleBanner() {
+  const dismiss = document.getElementById('buildStaleDismiss')
+  if (!dismiss) return
+  dismiss.addEventListener('click', () => {
+    const banner = document.getElementById('buildStaleBanner')
+    const b = window._buildFreshness
+    try { if (b) localStorage.setItem(BUILD_STALE_DISMISS_PREFIX + buildStaleKey(b), '1') }
+    catch { /* storage blocked */ }
+    if (banner) banner.hidden = true
+  })
+}
+
 const BRANCH_DRIFT_DISMISS_PREFIX = 'marveen.branch-drift-dismissed.'
 const BRANCH_HEAL_COMMAND = 'git checkout main && bash update.sh'
 
@@ -13678,6 +13748,7 @@ document.addEventListener('DOMContentLoaded', () => {
   wireAuthBanner()
   initAuthBanner()
   wireBranchDriftBanner()
+  wireBuildStaleBanner()
 })
 
 async function loadSettings() {
