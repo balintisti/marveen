@@ -11849,17 +11849,36 @@ function escapeHtmlUpdates(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }
 
-function renderUpdatesBadge(status) {
-  const badge = document.getElementById('updatesBadge')
-  if (!badge) return
-  // Version-centric: show the number of NEW VERSIONS, not raw commits. Fall back
-  // to the behind count only in the rare pre-release state (unreleased commits
-  // but no new version tag yet).
+// A JELVENY DONTESE, DOM NELKUL -- hogy MERHETO legyen (kartya d3770ec4).
+//
+// A regi alak a dontest a rajzolassal egyutt tartotta, es a tesztje ezert csak azt
+// tudta allitani, hogy a KOD OTT VAN. Mutacioval merve: a feltetelt `false`-ra
+// cserelve MINDEN teszt zold maradt -- jelenlet-teszt volt, nem megfeleltetes.
+// Kulon fuggvenyben a dontes bemenet -> kimenet, tehat egy elrontott feltetel BUKIK.
+function updatesBadgeState(status) {
   const versionCount = status && Array.isArray(status.releases)
     ? status.releases.filter((r) => r.version).length : 0
   const count = versionCount > 0 ? versionCount : ((status && status.behind) || 0)
-  if (count > 0) {
-    badge.textContent = String(count)
+  // A NEM MERT ALLAPOT NEM UGYANAZ, MINT A NULLA.
+  // Merve az elo vegponton, ket alkalommal 16 ora kulonbseggel:
+  //     {"behind": 0, "error": "GitHub /commits/<ag> -> 422"}
+  // Az Updates OLDAL kezeli az `error`-t es kiirja, hogy nem sikerult; a JELVENY
+  // viszont az egyetlen felulet, amit megnyitas NELKUL latni -- es ott a kudarc
+  // megkulonboztethetetlen volt a "minden rendben"-tol.
+  const unmeasured = !!(status && (status.error || status.behind === null || status.behind === undefined))
+  if (count > 0) return { show: true, text: String(count), unknown: false }
+  if (unmeasured) return { show: true, text: '?', unknown: true, title: (status && status.error) ? String(status.error) : '' }
+  return { show: false, text: '', unknown: false }
+}
+
+function renderUpdatesBadge(status) {
+  const badge = document.getElementById('updatesBadge')
+  if (!badge) return
+  const state = updatesBadgeState(status)
+  badge.classList.toggle('updates-badge-unknown', state.unknown)
+  if (state.title !== undefined) badge.title = state.title
+  if (state.show) {
+    badge.textContent = state.text
     badge.hidden = false
   } else {
     badge.hidden = true
