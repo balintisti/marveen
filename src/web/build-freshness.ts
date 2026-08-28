@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { readdirSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { PROJECT_ROOT } from '../config.js'
 
@@ -70,6 +70,95 @@ export interface BuildFreshness {
    * between two facts that need two different actions.
    */
   localOnly?: LocalOnlyState
+  /**
+   * WHICH COMMIT the running build was made from -- a different question from
+   * the mtime comparison above, and the one the deploy runbook actually asks.
+   * Separate field for the same reason localOnly is: both can be true at once
+   * (a build can be current AND its marker unbelievable, which is exactly what
+   * happened on 2026-08-28).
+   */
+  builtCommit?: BuiltCommitState
+}
+
+/** What the `.built-commit` marker claims, and whether it may be believed.
+ *
+ *  THE MARKER IS A HAND-WRITTEN FILE. The deploy runbook says
+ *  `npm run build && git rev-parse HEAD > dist/.built-commit`, and on
+ *  2026-08-28 the second half was skipped: the build ran at 23:18 and the
+ *  marker went on saying `31f06313`, two days old. Two agents read it, both
+ *  concluded the work was not deployed, and agreed with each other -- the
+ *  artefact they trusted was the one lying.
+ *
+ *  A MISSING marker is conspicuous. A STALE one is indistinguishable from a
+ *  true "you are two days behind", which is why this returns NO COMMIT rather
+ *  than a warning beside one: tonight the failure was a confident, dated,
+ *  plausible wrong answer, and a caveat next to a concrete-looking hash reads
+ *  as noise. Refusing to answer is the only form that cannot be skimmed past.
+ */
+export type BuiltCommitStatus = 'known' | 'contradicted' | 'unknown'
+
+export interface BuiltCommitState {
+  /** The commit the build was made from -- null unless it can be believed. */
+  commit: string | null
+  status: BuiltCommitStatus
+  /** When the marker was written, ms. Null when unknown. */
+  markerAt: number | null
+  detail: string
+}
+
+/** How far the marker may lag the newest built file before it is disbelieved.
+ *
+ *  The build writes the marker AFTER tsc, so in the healthy case the marker is
+ *  the NEWER of the two and this margin is never reached. It exists for clock
+ *  skew and for a slow last write, not as a tolerance for staleness: the case
+ *  this guard is for was 34 hours out, four orders of magnitude past it.
+ *  CHOSEN, not measured -- there is no measurement of write skew here, and
+ *  saying so is cheaper than implying one. */
+export const MARKER_LAG_TOLERANCE_MS = 5 * 60 * 1000
+
+/** Pure: no filesystem, no clock. */
+export function judgeBuiltCommit(input: {
+  markerCommit: string | null
+  markerAt: number | null
+  builtAt: number | null
+}): BuiltCommitState {
+  const { markerCommit, markerAt, builtAt } = input
+
+  if (!markerCommit) {
+    return {
+      commit: null,
+      status: 'unknown',
+      markerAt,
+      detail: 'Nincs olvashato build-marker (dist/.built-commit). '
+        + 'Ez NEM azt jelenti, hogy a build naprakesz.',
+    }
+  }
+  if (markerAt === null || builtAt === null) {
+    return {
+      commit: null,
+      status: 'unknown',
+      markerAt,
+      detail: 'A build-marker megvan, de nem osszevetheto a dist/ koraval, '
+        + 'tehat nem tudni, ehhez a buildhez tartozik-e. Ez NEM azt jelenti, hogy igen.',
+    }
+  }
+  if (builtAt - markerAt > MARKER_LAG_TOLERANCE_MS) {
+    return {
+      commit: null,
+      status: 'contradicted',
+      markerAt,
+      detail: 'A build-marker REGEBBI, mint a legfrissebb lefordított fajl, tehat nem '
+        + 'ehhez a buildhez tartozik. A commitot NEM adom vissza: egy elavult hash '
+        + 'megkulonboztethetetlen egy valodi lemaradastol. Kell: npm run build (ez maga '
+        + 'irja a markert), vagy dist/.built-commit torlese.',
+    }
+  }
+  return {
+    commit: markerCommit,
+    status: 'known',
+    markerAt,
+    detail: `A futo build ebbol a commitbol keszult: ${markerCommit}.`,
+  }
 }
 
 export interface BuildFreshnessInput {
@@ -296,8 +385,30 @@ export function getBuildFreshness(now: number = Date.now()): BuildFreshness {
       : null,
     startedAt: now - Math.round(process.uptime() * 1000),
   })
-  cached = { at: now, value: { ...value, localOnly: readLocalOnly(now) } }
+  cached = {
+    at: now,
+    value: {
+      ...value,
+      localOnly: readLocalOnly(now),
+      builtCommit: judgeBuiltCommit({ ...readBuiltCommitMarker(), builtAt }),
+    },
+  }
   return cached.value
+}
+
+/** The marker file and when it was written. Both null when it is not there or
+ *  cannot be read -- which the judge reports as `unknown`, never as fresh. */
+function readBuiltCommitMarker(): { markerCommit: string | null; markerAt: number | null } {
+  const path = join(PROJECT_ROOT, 'dist', '.built-commit')
+  try {
+    const commit = readFileSync(path, 'utf8').trim()
+    // An empty or malformed file is NOT a commit. Returning it would put a
+    // blank where a hash belongs and let a reader fill the blank themselves.
+    if (!/^[0-9a-f]{7,40}$/.test(commit)) return { markerCommit: null, markerAt: null }
+    return { markerCommit: commit, markerAt: statSync(path).mtimeMs }
+  } catch {
+    return { markerCommit: null, markerAt: null }
+  }
 }
 
 /** Test seam: the cache must not carry one case's answer into the next. */

@@ -11891,7 +11891,10 @@ function buildStaleKey(build) {
   // part of the key for the same reason -- pushing is one of the ways the
   // situation changes.
   const local = build.localOnly ? build.localOnly.commits : ''
-  return `${build.status}|${build.builtAt || 0}|${build.sourceAt || 0}|${local}`
+  // The marker's verdict is part of the key too: a dismissal must not survive
+  // the moment the marker starts (or stops) being believable.
+  const marker = build.builtCommit ? build.builtCommit.status : ''
+  return `${build.status}|${build.builtAt || 0}|${build.sourceAt || 0}|${local}|${marker}`
 }
 
 function buildStaleDismissed(build) {
@@ -11914,7 +11917,14 @@ function updateBuildFreshnessUI(build) {
   // can be true at once, and they need different remedies -- so the banner
   // shows whichever apply rather than picking one.
   const localLine = b.localOnly && b.localOnly.detail ? b.localOnly.detail : ''
-  if (b.status === 'current' && !localLine) { banner.hidden = true; return }
+  // THE THIRD QUESTION, and the one that was silent on 2026-08-28: WHICH COMMIT
+  // is running. It is deliberately shown even when the mtime status is
+  // `current`, because that is exactly the combination that misled two agents
+  // for two hours -- the build genuinely was fresh AND the marker genuinely was
+  // lying, and a banner that hides on `current` would have hidden precisely
+  // then. Card 20498b42.
+  const commitLine = b.builtCommit && b.builtCommit.status !== 'known' ? (b.builtCommit.detail || '') : ''
+  if (b.status === 'current' && !localLine && !commitLine) { banner.hidden = true; return }
   if (buildStaleDismissed(b)) { banner.hidden = true; return }
   const textEl = document.getElementById('buildStaleBannerText')
   if (textEl) {
@@ -11926,6 +11936,11 @@ function updateBuildFreshnessUI(build) {
     // No command offered for this one on purpose: pushing is a decision, not a
     // repair, and a copy-paste `git push` here would make it look like one.
     if (localLine) parts.push(`<strong>${escapeHtml(localLine)}</strong>`)
+    // The command IS offered here: unlike a push, rebuilding is a repair, and
+    // the marker is written by the build itself now.
+    if (commitLine) {
+      parts.push(`<strong>${escapeHtml(commitLine)}</strong> <code>${escapeHtml(BUILD_HEAL_COMMAND)}</code>`)
+    }
     textEl.innerHTML = parts.join('<br>')
   }
   window._buildFreshness = b
