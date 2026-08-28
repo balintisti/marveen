@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import {
-  listKanbanCards, createKanbanCard, updateKanbanCard,
+  listKanbanCards, countArchivedKanbanCards, createKanbanCard, updateKanbanCard,
   deleteKanbanCard, moveKanbanCard, archiveKanbanCard, unarchiveKanbanCard,
   getKanbanComments, addKanbanComment, getKanbanCardEvents, listKanbanProjects,
   getKanbanCard, getChildCards, getDb,
@@ -236,7 +236,30 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // everything it needs in a single round trip.
     const labelsByCard = getLabelsForAllCards()
     const cards = listKanbanCards().map((card) => ({ ...card, labels: labelsByCard.get(card.id) ?? [] }))
-    jsonMaybeGzip(req, res, cards)
+    // X-Archived-Hidden: what this list is NOT showing (card 1785bb14).
+    //
+    // The filter is deliberate and stays. What was missing is that the response
+    // said nothing about it, so the list could be -- and was -- used to decide
+    // whether a card EXISTS. Measured 2026-08-28: 1157 live, 54 archived, and
+    // one archived id read as absent here and 200 from GET /api/kanban/<id>.
+    //
+    // ALWAYS SENT, ZERO INCLUDED. A header that appears only when non-zero
+    // cannot be told apart from an old build that never sends it -- which is
+    // the same silence one level up.
+    //
+    // Counted AFTER listKanbanCards(), never before: that call runs the
+    // auto-archive sweep first, so a count taken earlier would be short by
+    // exactly the cards this request archived, and the pair would contradict
+    // each other in the one response that produced them.
+    //
+    // WHAT THIS DOES NOT DO: it does not help the caller who never looks at
+    // headers -- the same limit the ?archived=1 guard has. Discovery is the
+    // recipe's job (the munkakezdes-elozetes-ellenorzes skill now asks both
+    // endpoints); this makes the gap visible to someone who IS looking, and in
+    // particular to an author writing their own archived_at filter: nine dead
+    // ones across seven skills were written by people who believed they were
+    // filtering something.
+    jsonMaybeGzip(req, res, cards, 200, { 'X-Archived-Hidden': String(countArchivedKanbanCards()) })
     return true
   }
 
@@ -520,7 +543,11 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     const labelsByCard = getLabelsForAllCards()
     const cards = listArchivedKanbanCards({ q, project, label, from, to, limit })
       .map(card => ({ ...card, labels: labelsByCard.get(card.id) ?? [] }))
-    json(res, { cards, total: cards.length, limit })
+    // Zero by construction: this endpoint IS the archive, so nothing is hidden
+    // from it. Sent rather than omitted for the same reason as above -- absence
+    // and zero must not look alike -- and it doubles as the negative control
+    // for the header itself.
+    json(res, { cards, total: cards.length, limit }, 200, { 'X-Archived-Hidden': '0' })
     return true
   }
 
