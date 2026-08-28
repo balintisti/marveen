@@ -167,6 +167,15 @@ export function tick(): void {
       let state = watchState.get(agent)
       if (!state) {
         const stored = loadIdleGuardState(agent, MAX_IDLE_AGE_MS, now)
+        if (stored?.staleIdleDropped) {
+          // A DISCARDED idle span leaves a line, or the next verdict lies by
+          // omission: `not-sustained` on a fresh window looks identical whether
+          // the agent just went idle or whether we threw away an hour of it.
+          logger.debug(
+            { idleGuard: true, agent, storedAgeMs: now - stored.updatedAt, maxIdleAgeMs: MAX_IDLE_AGE_MS },
+            `idle guard: ${agent} -> stored idle span discarded as stale, window restarts`,
+          )
+        }
         state = stored
           ? { idleSinceMs: stored.idleSinceMs, lastAlertAt: stored.lastAlertAt, lastWakeAt: stored.lastWakeAt }
           : NO_IDLE_STATE

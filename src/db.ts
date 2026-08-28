@@ -3894,6 +3894,16 @@ export interface IdleGuardStateRow {
   /** When this row was written. The age is what decides whether `idleSinceMs`
    *  may be trusted after a gap -- see loadIdleGuardState. */
   updatedAt: number
+  /**
+   * True when a stored `idleSinceMs` was DISCARDED here for being stale
+   * (jarvis, reviewing this card: dropping it left no trace at all).
+   *
+   * Without this the caller cannot tell "the row said nothing" from "the row
+   * said something and we threw it away", and the next log line reads
+   * `not-sustained` with no hint of WHY the window is fresh. That is this
+   * card's own lesson one level down: a negative decision with no output.
+   */
+  staleIdleDropped: boolean
 }
 
 export function saveIdleGuardState(
@@ -3936,5 +3946,11 @@ export function loadIdleGuardState(
   ).get(agent) as IdleGuardStateRow | undefined
   if (!row) return null
   const stale = now - row.updatedAt > maxIdleAgeMs
-  return { ...row, idleSinceMs: stale ? null : row.idleSinceMs }
+  return {
+    ...row,
+    idleSinceMs: stale ? null : row.idleSinceMs,
+    // Only true when something was actually thrown away: a stale row that held
+    // no idle span has nothing to report.
+    staleIdleDropped: stale && row.idleSinceMs !== null,
+  }
 }

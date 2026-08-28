@@ -21,6 +21,8 @@ describe('idle_guard_state -- iras es visszaolvasas', () => {
     saveIdleGuardState('x', { idleSinceMs: now - 60_000, lastAlertAt: now - 120_000, lastWakeAt: null }, now)
     expect(loadIdleGuardState('x', MAX_AGE, now)).toEqual({
       idleSinceMs: now - 60_000, lastAlertAt: now - 120_000, lastWakeAt: null, updatedAt: now,
+      // A jelzo egy FRISS sorra hamis: nem dobtunk el semmit.
+      staleIdleDropped: false,
     })
   })
 
@@ -72,6 +74,37 @@ describe('a KOR-HATAR aszimmetrikus, es ez a lenyege (jarvis kikoteSe, 5442)', (
   })
 })
 
+describe('az ELDOBAS NYOMOT HAGY (jarvis lelete a kartya sajat tanulsagabol)', () => {
+  // "Ha egy tarolt sort ELAVULTKENT dobunk el, az nem hagy nyomot. A hivo nem tudja
+  // megkulonboztetni a 'sorban eleve null allt' esettol, es a naplo sem mondja."
+  // Ez ugyanaz az alak, amit ez a kartya javit -- egy szinttel lejjebb: egy nemleges
+  // dontes kimenet nelkul.
+  const now = 1_000_000_000
+  const stale = now - 60 * 60_000
+
+  it('elavult sor VALODI idleSinceMs-szel -> a jelzo IGAZ', () => {
+    saveIdleGuardState('x', { idleSinceMs: stale, lastAlertAt: null, lastWakeAt: null }, stale)
+    const r = loadIdleGuardState('x', MAX_AGE, now)
+    expect(r?.idleSinceMs).toBeNull()
+    expect(r?.staleIdleDropped).toBe(true)
+  })
+
+  it('elavult sor, de eleve NULL idleSinceMs -> a jelzo HAMIS (nem dobtunk el semmit)', () => {
+    // Enelkul a jelzo azt is "eldobasnak" nevezne, amikor nem volt mit eldobni --
+    // es egy naplosor, ami minden elavult sorra tuzel, par kor utan zaj.
+    saveIdleGuardState('y', { idleSinceMs: null, lastAlertAt: stale, lastWakeAt: null }, stale)
+    expect(loadIdleGuardState('y', MAX_AGE, now)?.staleIdleDropped).toBe(false)
+  })
+
+  it('FRISS sor -> a jelzo HAMIS, es az ertek megmarad', () => {
+    const fresh = now - 30_000
+    saveIdleGuardState('z', { idleSinceMs: fresh - 600_000, lastAlertAt: null, lastWakeAt: null }, fresh)
+    const r = loadIdleGuardState('z', MAX_AGE, now)
+    expect(r?.staleIdleDropped).toBe(false)
+    expect(r?.idleSinceMs).toBe(fresh - 600_000)
+  })
+})
+
 describe('a watcher tenyleg hasznalja -- bekotes, nem csak a fuggveny letezese', () => {
   it('a tick betolti es visszairja az allapotot', async () => {
     // Horgonyzott forras-allitas: a ket hivas a `for (const agent` cikluson BELUL all,
@@ -84,6 +117,9 @@ describe('a watcher tenyleg hasznalja -- bekotes, nem csak a fuggveny letezese',
     const loop = src.slice(src.indexOf('for (const agent of agents)'), src.indexOf('// One message for the whole sweep'))
     expect(loop).toMatch(/loadIdleGuardState\(agent, MAX_IDLE_AGE_MS, now\)/)
     expect(loop).toMatch(/saveIdleGuardState\(agent, next, now\)/)
+    // es az eldobas NYOMOT hagy (jarvis lelete)
+    expect(loop).toMatch(/stored\?\.staleIdleDropped/)
+    expect(loop).toMatch(/discarded as stale/)
     // NEGATIV KONTROLL: a kor-hatart NEM a hivo talalja ki menet kozben.
     expect(loop).not.toMatch(/loadIdleGuardState\(agent, 0/)
   })
