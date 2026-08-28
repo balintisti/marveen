@@ -87,27 +87,49 @@ function fixture(withUpstream: boolean): string {
   return work
 }
 
-function runUpdate(work: string): { status: number; out: string } {
+function runUpdate(work: string, env: Record<string, string> = {}): { status: number; out: string } {
   const r = spawnSync('bash', [join(work, 'update.sh')], {
     cwd: work, encoding: 'utf-8', timeout: 60_000,
-    env: { ...process.env, MARVEEN_LANG: 'hu' },
+    // A fixture tavolija `origin` (a `git clone` adja a nevet), az eles alapertelmezes
+    // viszont `fork`. Enelkul a szkript MAR a "letezik-e az agon a tavolin" kapunal
+    // elutasit, es a lenti allitasok egy MASIK hibat mernenek -- zolden.
+    env: { ...process.env, MARVEEN_LANG: 'hu', UPDATE_REMOTE: 'origin', ...env },
   })
   return { status: r.status ?? -1, out: (r.stdout ?? '') + (r.stderr ?? '') }
 }
 
 describe('update.sh -- az ahead-kapu HANGOS, ha nem tud merni', () => {
-  it('upstream NELKUL: elutasit, es MEGNEVEZI az okot', () => {
-    const { status, out } = runUpdate(fixture(false))
-    expect(status).not.toBe(0)
-    expect(out).toMatch(/nem merheto/)
-    expect(out).toMatch(/nincs beallitott upstreamje/)
-    // A regi viselkedes bizonyiteka: enelkul a szkript TOVABBMENT volna.
-    expect(out).not.toMatch(/Letoltes \(origin/)
+  // EZ A TESZT MEGFORDULT, ES A MEGFORDULASA MAGA AZ EREDMENY (friday, 2026-08-28).
+  //
+  // Eredetileg azt allitotta, hogy upstream NELKUL a szkript ELUTASIT, es megnevezi az okot
+  // ("nincs beallitott upstreamje"). Ez a `@{u}`-ra epulo alakra volt igaz. A kesobbi javitas
+  // (`fix/bae4df49-update-remote`, 2bcb766 + 95b9268) a kapot ATTETTE arra a tavolira, amibol
+  // a pull tenylegesen tortenik: `git fetch $UPDATE_REMOTE`, majd `FETCH_HEAD..HEAD`.
+  // Vagyis az upstream HIANYA tobbe nem akadaly -- a kapu nem tole fugg.
+  //
+  // Ezt a KET agat kulon-kulon merve mindketto zold volt; egyutt merve derult ki, hogy az
+  // egyik teszt a masik ag altal MEGSZUNTETETT viselkedest rogzitette. Ezert kell a
+  // cel-allapotot EGY commiton merni (`koteg-celallapot-merese`).
+  it('upstream NELKUL is TOVABBMEGY: a kapu a frissito tavolihoz mer, nem az `@{u}`-hoz', () => {
+    const { out } = runUpdate(fixture(false))
+    expect(out).not.toMatch(/nem merheto/)
+    expect(out).not.toMatch(/nincs beallitott upstreamje/)
+    // POZITIV KONTROLL: a szkript tenyleg eljutott a letoltesig, nem valami masba halt bele.
+    expect(out).toMatch(/Letoltes \(origin\/main\)/)
   })
 
-  it('POZITIV KONTROLL: upstreammel a kapu ATENGED, es a szkript tovabbmegy', () => {
-    // Enelkul a fenti teszt attol is zold lenne, hogy a szkript BARMIERT elhasal.
+  it('a kapu MEGMARADT: ha az ag nincs meg a frissito tavolin, elutasit es MEGNEVEZI a tavolit', () => {
+    // A szomszedos ellenorzes (`update.sh` :260) -- ez az, ami a divergalt/ismeretlen
+    // allapotot ma megfogja. Az `UPDATE_REMOTE` alapertelmezese `fork`, es a fixture-ben
+    // ilyen tavoli nincs.
+    const { status, out } = runUpdate(fixture(true), { UPDATE_REMOTE: 'fork' })
+    expect(status).not.toBe(0)
+    expect(out).toMatch(/nem létezik a 'fork' távolin|does not exist on 'fork'/)
+  })
+
+  it('upstreammel is ugyanaz -- a ket eset kozott mar NINCS kulonbseg, es ez a javitas lenyege', () => {
     const { out } = runUpdate(fixture(true))
     expect(out).not.toMatch(/nem merheto/)
+    expect(out).toMatch(/Letoltes \(origin\/main\)/)
   })
 })
