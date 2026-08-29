@@ -435,9 +435,27 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // now NAMES THE OMISSION as well as the quantity: `comments_omitted` is
     // true whenever bodies exist but were left out, and the pair reads as one
     // sentence -- "there are 2, and they are not in here".
+    //
+    // AND `labels`, FOR THE SAME REASON, TWO ROUTES APART (card 2e493a4b, jarvis
+    // measured it, marveen re-measured independently). The list embeds `labels`
+    // on all 1184 cards; this route did not carry the key at all -- so an agent
+    // reading a card BY ID, which is the obvious move for one card, saw a
+    // complete-looking object with no marker and read it as "no labels". Same
+    // shape the comment above documents, and the same silence: no error, just a
+    // key that never arrives.
+    //
+    // Embedded whole rather than counted, unlike the comment bodies: labels are
+    // small and bounded (a handful per card), so the payload argument that keeps
+    // bodies out does not apply. This also makes the two routes agree -- a
+    // reader can move between them without the answer changing.
+    //
+    // It matters more AFTER a fix than before: since d3d11bef the `allando-sor`
+    // label is what excludes a card from the audit's stuck-detection. Anyone
+    // writing the next checker correctly filters on the label -- and inherits
+    // this blind spot if they fetch by id.
     if (card) {
       const count = getKanbanComments(id).length
-      json(res, { ...card, comment_count: count, comments_omitted: count > 0 })
+      json(res, { ...card, labels: getLabelsForCard(id), comment_count: count, comments_omitted: count > 0 })
       return true
     }
     json(res, { error: 'Kártya nem található' }, 404)
