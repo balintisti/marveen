@@ -405,6 +405,29 @@ export function initDatabase(dbPathOverride?: string): void {
   `)
   db.exec(`CREATE INDEX IF NOT EXISTS idx_kanban_events_card ON kanban_card_events(card_id, created_at)`)
 
+  // THE IDLE GUARD'S STATE ABOUT THE AGENTS -- card 60060415, marveen's decision.
+  //
+  // It used to live in a Map inside the watcher process, so every dashboard
+  // restart erased it. Measured 2026-08-27 (jarvis): two of that day's processes
+  // lived 8m12s and 2m28s -- BOTH under the 12-minute `sustainedMs` window. So
+  // during a deploy sequence the guard is not "sometimes forgetful", it is
+  // STRUCTURALLY unable to fire, and nothing says so. Three restarts in eleven
+  // minutes that day.
+  //
+  // marveen's reason for putting it here: "the guard's state is about the
+  // AGENTS, not about the watcher process. How long an agent has been idle does
+  // not stop being true because WE deployed." The in-memory Map was a side
+  // effect of the implementation, not a design decision.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS idle_guard_state (
+      agent TEXT PRIMARY KEY,
+      idle_since_ms INTEGER,
+      last_alert_at INTEGER,
+      last_wake_at INTEGER,
+      updated_at INTEGER NOT NULL
+    )
+  `)
+
   // listKanbanCards()'s auto-archive sweep (below) treats a card's updated_at
   // as "when did this card last change", and archives a done card once that
   // timestamp is older than KANBAN_ARCHIVE_DONE_DAYS. Both production status
@@ -1812,51 +1835,52 @@ export interface KanbanOverwrite {
   to: string | number | null
 }
 
+/** A kartya-frissites HAROM kimenete -- mert a "nem talaltam" es a "nem valtozott" nem ugyanaz. */
+export type KanbanUpdateOutcome = 'not-found' | 'unchanged' | 'updated'
+
+/**
+ * KET KARTYA EGY VISSZATERESI ERTEKEN, ES MINDKETTO KELL (af9f6cd4 + ddf11b94).
+ * A ket ag KULON-KULON tisztan olvad a torzsre, EGYUTT viszont utkozik: mindketto
+ * ujradefinialja ezt a tipust, kulonbozo alakban -- egy string-unio es egy objektum --,
+ * es egyik sem reszhalmaza a masiknak. A feloldas ezert nem valasztas, hanem OSSZETETEL:
+ * az `outcome` mondja meg, MI tortent, az `overwritten` azt, KINEK a munkajat irta felul.
+ */
 export interface KanbanUpdateResult {
-  changed: boolean
+  outcome: KanbanUpdateOutcome
   /** Fields that already HELD a value and now hold a different one. Empty for
    *  an ordinary edit that fills a blank or rewrites the same value. */
   overwritten: KanbanOverwrite[]
 }
 
+/** Azok a mezok, amiket egy PUT valoban modosithat. Ismeretlen kulcs nem valtozas. */
+const KANBAN_UPDATABLE = [
+  'title', 'description', 'status', 'assignee', 'priority',
+  'project', 'parent_id', 'due_date', 'sort_order', 'archived_at',
+] as const
+
 /**
+ * NEM EMELJUK AZ `updated_at`-ET, HA SEMMI NEM VALTOZOTT (kartya af9f6cd4).
+ * Egy URES torzsu PUT 200-at adott es MEGEMELTE az `updated_at`-et, tehat a kartya
+ * FRISSNEK latszott anelkul, hogy tortent volna vele barmi. A gyakoribb ut nem az ures
+ * torzs, hanem a szerkeszto modal, ami MINDEN mentesnel a TELJES objektumot kuldi.
+ *
  * LAST WRITE WINS, AND THE READ-BACK DOES NOT CATCH IT (card ddf11b94).
+ * The loser never learns: the response is `{ok:true}` and a read-back returns the text
+ * the caller just wrote. "The 200 is not proof, the read-back is" fails on this endpoint
+ * specifically -- the read-back confirms YOUR write and says nothing about the one it
+ * replaced. An overwrite is: the previous value was NON-EMPTY and the new one differs.
+ * Deliberately not covered (jarvis): a field somebody EMPTIED on purpose, then refilled.
  *
- * Two agents editing the same card is the ordinary case here, and the loser
- * never learns: the response is `{ok:true}`, and a read-back returns the text
- * the caller just wrote. The fleet rule "the 200 is not proof, the read-back
- * is" fails on this endpoint specifically -- the read-back confirms YOUR write
- * while saying nothing about the one it replaced.
- *
- * WHAT COUNTS AS AN OVERWRITE, and why not simply "the value changed": every
- * ordinary edit changes a value. The signal has to separate "I replaced
- * something somebody had put there" from "I filled in a blank" -- otherwise it
- * fires on every write, and a guard that fires on the correct state is worse
- * than no guard (jarvis, and the same law as the CONCURRENTLY false alarm).
- * So: the previous value was NON-EMPTY, and the new one differs from it.
- *
- * THE CASE THIS DELIBERATELY DOES NOT COVER (jarvis, on review): if somebody
- * EMPTIED a field on purpose and the next write fills it in, that is not
- * reported -- the previous value was empty, so the rule cannot tell an
- * intentional clearing from a field nobody had filled yet. Saying it out loud
- * because "not covered" and "cannot happen" read the same in silence: the day a
- * deliberate clearing needs to be defended, this is the line that has to change,
- * and it will need something the row does not carry today (who emptied it, and
- * whether that was the intent).
- *
- * ONE COMPUTATION, NOT TWO. The old and new values already stand side by side
- * here (`card` from :1809, `fields` from the caller), so no extra query is
- * needed -- and the field-level write log of card b4811598, when it is built,
- * takes THIS array rather than recomputing its own. Two mechanisms for one
- * question would drift apart; that is why they share the array.
- *
- * The precedent is already in this file, 14 lines below: `moveKanbanCard` reads
- * the previous status first and records an event ONLY on a real transition. The
- * code already knew the rule; this function did not follow it.
+ * A KET MECHANIZMUS SORRENDJE SZAMIT: a `unchanged` ag ELOBB all, es MEG AZ UPDATE ELOTT
+ * ter vissza -- kulonben az `updated_at` megemelkedne, ami epp az af9f6cd4 lelete.
+ * Ilyenkor az `overwritten` szuksegszeruen ures: felulirni csak azt lehet, ami valtozik.
  */
 export function updateKanbanCard(id: string, fields: Partial<Omit<KanbanCard, 'id' | 'created_at'>>): KanbanUpdateResult {
   const card = getKanbanCard(id)
-  if (!card) return { changed: false, overwritten: [] }
+  if (!card) return { outcome: 'not-found', overwritten: [] }
+  const kuldott = KANBAN_UPDATABLE.filter((k) => k in fields)
+  const valtozott = kuldott.filter((k) => (fields as Record<string, unknown>)[k] !== (card as unknown as Record<string, unknown>)[k])
+  if (valtozott.length === 0) return { outcome: 'unchanged', overwritten: [] }
   const now = Math.floor(Date.now() / 1000)
   const f = { ...card, ...fields, updated_at: now }
 
@@ -1875,7 +1899,7 @@ export function updateKanbanCard(id: string, fields: Partial<Omit<KanbanCard, 'i
     `UPDATE kanban_cards SET title=?, description=?, status=?, assignee=?, priority=?, project=?, parent_id=?, due_date=?, sort_order=?, updated_at=?, archived_at=?
      WHERE id=?`
   ).run(f.title, f.description, f.status, f.assignee, f.priority, f.project, f.parent_id, f.due_date, f.sort_order, f.updated_at, f.archived_at, id).changes > 0
-  return { changed, overwritten: changed ? overwritten : [] }
+  return { outcome: changed ? 'updated' : 'not-found', overwritten: changed ? overwritten : [] }
 }
 
 export function getChildCards(parentId: string): KanbanCard[] {
@@ -3942,3 +3966,72 @@ export function listOtelTraces(limit = 50): OtelTraceSummary[] {
   `).all(limit) as OtelTraceSummary[]
 }
 
+// === The idle guard's per-agent state (card 60060415) ===============================
+
+export interface IdleGuardStateRow {
+  idleSinceMs: number | null
+  lastAlertAt: number | null
+  lastWakeAt: number | null
+  /** When this row was written. The age is what decides whether `idleSinceMs`
+   *  may be trusted after a gap -- see loadIdleGuardState. */
+  updatedAt: number
+  /**
+   * True when a stored `idleSinceMs` was DISCARDED here for being stale
+   * (jarvis, reviewing this card: dropping it left no trace at all).
+   *
+   * Without this the caller cannot tell "the row said nothing" from "the row
+   * said something and we threw it away", and the next log line reads
+   * `not-sustained` with no hint of WHY the window is fresh. That is this
+   * card's own lesson one level down: a negative decision with no output.
+   */
+  staleIdleDropped: boolean
+}
+
+export function saveIdleGuardState(
+  agent: string,
+  state: { idleSinceMs: number | null; lastAlertAt: number | null; lastWakeAt: number | null },
+  now: number = Date.now(),
+): void {
+  getDb().prepare(
+    `INSERT INTO idle_guard_state (agent, idle_since_ms, last_alert_at, last_wake_at, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(agent) DO UPDATE SET
+       idle_since_ms = excluded.idle_since_ms,
+       last_alert_at = excluded.last_alert_at,
+       last_wake_at  = excluded.last_wake_at,
+       updated_at    = excluded.updated_at`,
+  ).run(agent, state.idleSinceMs, state.lastAlertAt, state.lastWakeAt, now)
+}
+
+/**
+ * Reads the stored state back, with an AGE RULE that is deliberately asymmetric
+ * (jarvis's condition on the card, comment 5442):
+ *
+ *     idleSinceMs   can only ACCELERATE an alert  -> dropped when the row is stale
+ *     lastAlertAt   can only SUPPRESS one         -> always restored
+ *     lastWakeAt    can only SUPPRESS one         -> always restored
+ *
+ * A yesterday `idleSinceMs` does not mean the agent has been idle since
+ * yesterday -- restored blindly it would fire immediately, which is the failure
+ * this card exists to prevent, arriving from the other side. The suppressors
+ * carry no such risk: the worst they can do is delay one alert by their own
+ * cooldown, and they expire on their own.
+ */
+export function loadIdleGuardState(
+  agent: string,
+  maxIdleAgeMs: number,
+  now: number = Date.now(),
+): IdleGuardStateRow | null {
+  const row = getDb().prepare(
+    'SELECT idle_since_ms as idleSinceMs, last_alert_at as lastAlertAt, last_wake_at as lastWakeAt, updated_at as updatedAt FROM idle_guard_state WHERE agent = ?',
+  ).get(agent) as IdleGuardStateRow | undefined
+  if (!row) return null
+  const stale = now - row.updatedAt > maxIdleAgeMs
+  return {
+    ...row,
+    idleSinceMs: stale ? null : row.idleSinceMs,
+    // Only true when something was actually thrown away: a stale row that held
+    // no idle span has nothing to report.
+    staleIdleDropped: stale && row.idleSinceMs !== null,
+  }
+}

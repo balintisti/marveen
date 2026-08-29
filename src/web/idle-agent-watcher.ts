@@ -7,7 +7,7 @@ import { isAgentRunning, capturePane } from './agent-process.js'
 import { resolveAgentSession } from './channel-mcp-reconnect.js'
 import { sendAlert } from './channel-monitor.js'
 import { busyEvidence, detectPaneState } from '../pane-state.js'
-import { getPendingMessages, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage } from '../db.js'
+import { getPendingMessages, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
 import {
   decideIdleAlert,
   parseWorkCheck,
@@ -66,6 +66,19 @@ const THRESHOLDS: IdleAgentThresholds = {
 const INITIAL_DELAY_MS = 90_000
 const INTERVAL_MS = 3 * 60_000
 
+// HOW OLD A STORED `idleSinceMs` MAY BE AND STILL BE BELIEVED (card 60060415).
+// Two ticks. A restart takes seconds, so the row is fresh and the 12-minute
+// sustained window CONTINUES across it -- which is the whole point. An hour of
+// downtime leaves a stale row, and then the agent starts a fresh window rather
+// than inheriting an idle span nobody observed.
+// The suppressors (`lastAlertAt`, `lastWakeAt`) are NOT age-limited: they can
+// only delay an alert, never cause one. See loadIdleGuardState.
+const MAX_IDLE_AGE_MS = 2 * INTERVAL_MS
+
+// In-process cache only. The truth lives in the database (card 60060415): this
+// Map used to BE the state, so every deploy erased it -- and two of that day's
+// watcher processes lived 8m12s and 2m28s, both under `sustainedMs`. A guard
+// that cannot fire during a deploy sequence, and says nothing about it.
 const watchState = new Map<string, IdleAgentState>()
 
 // Message ids the sender has already been told about (card 979283a9). A message
@@ -152,7 +165,10 @@ export function readPane(agent: string): { idle: boolean | null; staleCounterOnl
   return { idle: state === 'idle', staleCounterOnly: busyEvidence(pane) === 'counter' }
 }
 
-function tick(): void {
+// EXPORTALVA A NAPLOZAS MERHETOSEGEERT (kartya 60060415). A `readPane`-nel ugyanez a
+// dontes all: a kartya allitasa az, hogy MINDEN dontes naplozodik -- ezt csak ugy lehet
+// megmerni, ha a kort le lehet futtatni. Viselkedes nem mozdul, csak lathatosag.
+export function tick(): void {
   try {
     const agents = listAgentNames()
     if (agents.length === 0) return
@@ -204,7 +220,24 @@ function tick(): void {
         ? readPane(agent)
         : { idle: false as boolean | null, staleCounterOnly: false }
 
-      const state = watchState.get(agent) ?? NO_IDLE_STATE
+      // Memory first, then the database: after a restart the Map is empty and the
+      // row carries what this agent was doing before we deployed.
+      let state = watchState.get(agent)
+      if (!state) {
+        const stored = loadIdleGuardState(agent, MAX_IDLE_AGE_MS, now)
+        if (stored?.staleIdleDropped) {
+          // A DISCARDED idle span leaves a line, or the next verdict lies by
+          // omission: `not-sustained` on a fresh window looks identical whether
+          // the agent just went idle or whether we threw away an hour of it.
+          logger.debug(
+            { idleGuard: true, agent, storedAgeMs: now - stored.updatedAt, maxIdleAgeMs: MAX_IDLE_AGE_MS },
+            `idle guard: ${agent} -> stored idle span discarded as stale, window restarts`,
+          )
+        }
+        state = stored
+          ? { idleSinceMs: stored.idleSinceMs, lastAlertAt: stored.lastAlertAt, lastWakeAt: stored.lastWakeAt }
+          : NO_IDLE_STATE
+      }
       const { decision, next } = decideIdleAlert(
         {
           agent,
@@ -225,6 +258,42 @@ function tick(): void {
         now,
       )
       watchState.set(agent, next)
+      try {
+        saveIdleGuardState(agent, next, now)
+      } catch (err) {
+        // Never fatal to the sweep: a guard that stops guarding because it could
+        // not write a row would trade a diagnosability problem for a real one.
+        logger.warn({ err, agent }, 'idle guard: could not persist state')
+      }
+
+      // EVERY DECISION IS LOGGED, INCLUDING THE EIGHT THAT DO NOTHING (card 60060415).
+      //
+      // This line is unconditional and stands BEFORE the branches on purpose. The
+      // eight "nothing to do" reasons used to fall off the `continue` below with no
+      // output at all, and that is what made last night undiagnosable: the guard sent
+      // 10-12 messages about ONE agent while three others stood five hours, and
+      // nothing recorded whether their chain reached a verdict or stopped earlier.
+      //
+      // WHY IT SPREADS `decision` INSTEAD OF NAMING REASONS: a reason added later is
+      // logged without anyone remembering to come back here. A list would have to be
+      // maintained, and the failure mode of a stale list is exactly this silence.
+      //
+      // WHY `debug` AND NOT `info` (marveen's number, and it is the argument that
+      // belongs beside every "let us log everything"): six agents every three minutes
+      // is 120 lines an hour. At info that buries the real signals.
+      logger.debug(
+        {
+          idleGuard: true,
+          agent,
+          ...decision,
+          idleForMs: next.idleSinceMs !== null ? now - next.idleSinceMs : null,
+          sinceLastWakeMs: state.lastWakeAt !== null ? now - state.lastWakeAt : null,
+          sinceLastAlertMs: state.lastAlertAt !== null ? now - state.lastAlertAt : null,
+          pendingMessages: running ? getPendingMessages(agent).length : 0,
+          ownWorkCount,
+        },
+        `idle guard: ${agent} -> ${decision.reason}`,
+      )
 
       if (!decision.alert) continue
 

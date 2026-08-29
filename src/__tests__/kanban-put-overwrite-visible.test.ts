@@ -61,20 +61,34 @@ describe('PUT /api/kanban/:id -- jarvis acceptance criteria (spec 6005 §3)', ()
     // would be a false positive, and a few rounds of those retire the guard.
     await put('c1', { title: 'A cime' })
     const second = await put('c1', { assignee: 'friday' })
-    expect(second.payload).toEqual({ ok: true })
+    // af9f6cd4 merged in and legitimately adds `changed` to every 200. The intent of this
+    // NEGATIVE case is 'no OVERWRITE signal', so assert that directly instead of pinning
+    // the whole object -- and keep it exact rather than loosening to a truthy check.
+    expect(second.payload).toEqual({ ok: true, changed: true })
+    expect(second.payload).not.toHaveProperty('overwritten')
+    expect(second.payload).not.toHaveProperty('warning')
     expect(second.payload.overwritten).toBeUndefined()
   })
 
   it('NEGATIVE 2: writing the SAME value back -- NO signal', async () => {
     await put('c1', { title: 'ugyanaz' })
     const second = await put('c1', { title: 'ugyanaz' })
-    expect(second.payload).toEqual({ ok: true })
+    // TWO CARDS MEET HERE, AND THE RESULT IS STRICTLY BETTER THAN EITHER ALONE.
+    // ddf11b94 asked only: is there an overwrite signal? (no -- the value is identical)
+    // af9f6cd4 adds: writing the same value back is NOT a change at all, so `updated_at`
+    // is not bumped and the answer is `changed: false`. ddf11b94's test could not have
+    // predicted that field; it is the intersection, not a regression.
+    expect(second.payload).toEqual({ ok: true, changed: false })
+    expect(second.payload).not.toHaveProperty('overwritten')
+    expect(second.payload).not.toHaveProperty('warning')
   })
 
   it('filling a BLANK field is not an overwrite', async () => {
     // `assignee` starts null. Setting it is an ordinary edit, not a replacement.
     const r = await put('c1', { assignee: 'friday' })
-    expect(r.payload).toEqual({ ok: true })
+    expect(r.payload).toEqual({ ok: true, changed: true })
+    expect(r.payload).not.toHaveProperty('overwritten')
+    expect(r.payload).not.toHaveProperty('warning')
     // ... but replacing that same assignee IS one.
     const second = await put('c1', { assignee: 'didi' })
     expect(second.payload.overwritten).toEqual([{ field: 'assignee', from: 'friday', to: 'didi' }])
@@ -123,12 +137,15 @@ describe('updateKanbanCard -- the shared computation (spec 6019)', () => {
   it('returns the same array the response renders, so a future field log cannot drift', async () => {
     updateKanbanCard('c1', { title: 'elso' })
     const r = updateKanbanCard('c1', { title: 'masodik' })
-    expect(r.changed).toBe(true)
+    expect(r.outcome).toBe('updated')
     expect(r.overwritten).toEqual([{ field: 'title', from: 'elso', to: 'masodik' }])
   })
 
   it('a missing card changes nothing and reports nothing', () => {
     const r = updateKanbanCard('nincs-ilyen', { title: 'x' })
-    expect(r).toEqual({ changed: false, overwritten: [] })
+    // `outcome` replaced the boolean `changed` when this merged with af9f6cd4: that card's
+    // finding is precisely that 'not found' and 'nothing changed' are NOT the same answer,
+    // and a boolean cannot tell them apart. This assertion got STRONGER, not adjusted.
+    expect(r).toEqual({ outcome: 'not-found', overwritten: [] })
   })
 })
