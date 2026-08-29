@@ -42,6 +42,26 @@ describe('the in-flight registry', () => {
     expect(RESTART_INFLIGHT_MAX_MS).toBe(2 * 60_000)
   })
 
+  // OVERLAPPING RESTARTS. The guard and an API call can restart the same agent at once;
+  // an unconditional clear would let the FIRST finally open the window while the SECOND is
+  // still stopped -- the same defect, reached from inside the fix.
+  it('stays in flight until the LAST overlapping restart clears', () => {
+    markRestartStarted('computress')
+    markRestartStarted('computress')
+    clearRestart('computress')
+    expect(isRestartInFlight('computress')).toBe(true)
+    clearRestart('computress')
+    expect(isRestartInFlight('computress')).toBe(false)
+  })
+
+  // NEGATIVE CONTROL for the refcount: a clear with nothing in flight must not underflow
+  // into a state that swallows the next real mark.
+  it('a stray clear does not poison the next restart', () => {
+    clearRestart('computress')
+    markRestartStarted('computress')
+    expect(isRestartInFlight('computress')).toBe(true)
+  })
+
   it('forgets the expired entry rather than re-answering it every tick', () => {
     const t0 = 1_800_000_000_000
     markRestartStarted('computress', t0)
@@ -61,11 +81,19 @@ describe('both ends are wired (structural)', () => {
 
   it('restartAgentProcess marks and clears around the stop/start window', () => {
     const body = src('agent-process.ts')
-    const fn = body.slice(body.indexOf('export async function restartAgentProcess'))
-      .slice(0, 1200)
+    const start = body.indexOf('export async function restartAgentProcess')
+    expect(start, 'restartAgentProcess not found').toBeGreaterThan(-1)
+    // To the next top-level declaration, not a fixed number of characters: the first
+    // version sliced 1200 chars and went red when a COMMENT was added above the clear.
+    // A test that fails on a comment is noise, and noise is how a guard gets deleted.
+    const end = body.indexOf('\nexport ', start + 10)
+    const fn = body.slice(start, end === -1 ? undefined : end)
     expect(fn).toContain('markRestartStarted(name)')
     expect(fn).toContain('finally')
     expect(fn).toContain('clearRestart(name)')
+    // The await is load-bearing: without it the finally clears the mark before the start
+    // finishes, and most of the window reopens while the fix still reads as present.
+    expect(fn).toContain('return await startAgentProcess(name, opts)')
   })
 
   it('the reconciler consults it before starting a desired agent', () => {

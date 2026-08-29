@@ -17,12 +17,30 @@
 // the channel-monitor, so a restart from the guard, the model-fallback runner or the API
 // leaves no trace the reconciler can see.
 //
+// WHAT THIS COVERS, AND WHAT IT DOES NOT -- narrowed after jarvis's review, because a
+// claim of completeness is the one thing the next reader will not re-derive. Marking
+// inside restartAgentProcess covers its five callers (context-guard, auto-restart,
+// model-fallback, the API restart route, and any future one) by construction. It does NOT
+// cover a hand-rolled stop->start pair, and there were three of those:
+//     routes/agents.ts     the Google Chat provider switch
+//     routes/agents.ts     the generic provider switch
+//     channel-monitor.ts   the channel-plugin-down restart (an EIGHT second gap)
+// All three are now marked at their own call sites -- but that is a fact about today, not
+// a property of the design. A fourth hand-rolled pair would be unprotected again, and the
+// only thing standing between it and this defect is that its author reads this paragraph.
+//
 // A TIMESTAMP, NOT A FLAG, and the reason is the failure direction. A bare "in flight"
 // set that leaks -- a crash between mark and clear -- would make the reconciler refuse to
 // start that agent FOREVER, turning a half-second race into a permanent outage. With an
 // expiry the worst case is that the reconciler waits out the bound and then behaves
 // exactly as it does today.
-const inFlight = new Map<string, number>()
+// REFCOUNTED, not a boolean. Two restarts of the same agent can overlap -- the guard and
+// an API call, say -- and an unconditional clear would let the FIRST one's finally open
+// the window while the SECOND is still stopped. Depth plus the newest timestamp; the entry
+// disappears when the last holder clears it. (jarvis raised this in review; the shape is
+// his, the choice of refcount over owner tokens is mine -- refcount needs no plumbing at
+// the call sites, and the call sites are exactly where this gets forgotten.)
+const inFlight = new Map<string, { depth: number; at: number }>()
 
 /** How long a restart may be considered in progress. Generous next to a restart (stop +
  *  start is seconds), short next to an outage. CHOSEN, not measured: it is a leak bound,
@@ -30,19 +48,23 @@ const inFlight = new Map<string, number>()
 export const RESTART_INFLIGHT_MAX_MS = 2 * 60_000
 
 export function markRestartStarted(name: string, now: number = Date.now()): void {
-  inFlight.set(name, now)
+  const cur = inFlight.get(name)
+  inFlight.set(name, { depth: (cur?.depth ?? 0) + 1, at: now })
 }
 
 export function clearRestart(name: string): void {
-  inFlight.delete(name)
+  const cur = inFlight.get(name)
+  if (!cur) return
+  if (cur.depth <= 1) inFlight.delete(name)
+  else inFlight.set(name, { depth: cur.depth - 1, at: cur.at })
 }
 
 /** Is a restart of this agent in progress right now? Expired entries answer NO -- see the
  *  header on why the leak must heal itself rather than latch. */
 export function isRestartInFlight(name: string, now: number = Date.now()): boolean {
-  const at = inFlight.get(name)
-  if (at === undefined) return false
-  if (now - at >= RESTART_INFLIGHT_MAX_MS) {
+  const cur = inFlight.get(name)
+  if (cur === undefined) return false
+  if (now - cur.at >= RESTART_INFLIGHT_MAX_MS) {
     inFlight.delete(name)
     return false
   }

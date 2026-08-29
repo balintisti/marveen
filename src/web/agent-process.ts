@@ -1475,6 +1475,10 @@ export async function restartAgentProcess(name: string, opts: { fresh?: boolean 
       const stopResult = await stopAgentProcess(name)
       if (!stopResult.ok) return { ok: false, error: stopResult.error || 'Failed to stop running agent before restart' }
     }
+    // The `await` is LOAD-BEARING: returning the promise unawaited would run the finally
+    // -- and clear the mark -- before the start completes, leaving most of the window
+    // open while the fix still LOOKED present. Exactly the kind of thing a later tidy-up
+    // removes as redundant (jarvis flagged it in review).
     return await startAgentProcess(name, opts)
   } finally {
     clearRestart(name)
