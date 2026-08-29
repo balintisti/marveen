@@ -267,8 +267,29 @@ describe('both ends are wired (structural)', () => {
     // `code` has blanked it away. The cost is that a mention of this sentence in a COMMENT
     // inflates the count -- a false failure, fail-closed, and named here rather than measured
     // away, because the two anchors need opposite sources and that is the honest split.
+    //
+    // THIS COUNT IS FOR DRIFT, NOT FOR RESOLUTION AMBIGUITY -- didi asked which, and the code
+    // could not say (card comment 41). Stating it, because the answer changes whether a later
+    // duplicate firing is a defect or the design.
+    //
+    // `indexOf(END_ANCHOR, fnStart)` takes the FIRST match at or after fnStart, so the
+    // resolution can NEVER be ambiguous and a count could have nothing to say about it. What
+    // it says instead: this sentence must remain UNIQUE in the function's tail, because a
+    // later reorder can silently move the slice end -- and nothing else would notice.
+    //
+    // NARROWING IT TO THE LOOKUP'S OWN RANGE MAKES IT VACUOUS, and that is measured, not
+    // reasoned: counted over [fnStart, autoStartAt] there is exactly one match BY
+    // CONSTRUCTION, so R5 -- a duplicate placed INSIDE the loop, ahead of the real one, which
+    // silently truncates the slice -- comes back GREEN. The wide range catches R5; the narrow
+    // range is a tautology wearing a control's clothes.
+    //
+    // So a duplicate AFTER the real one (didi's S1) fires on CORRECT code, deliberately: an
+    // early warning that the anchor is no longer unique, fail-closed, before a reorder can
+    // make it wrong. The message below says "no longer unique" rather than "ambiguous",
+    // because the resolution is not ambiguous and saying so sent didi looking for the wrong
+    // thing.
     const endHits = body.slice(fnStart).split(END_ANCHOR).length - 1
-    expect(endHits, `the loop-end anchor must match exactly once after the function head, found ${endHits} -- 0 means it moved, more than 1 means the loop end is ambiguous`)
+    expect(endHits, `the loop-end anchor must be UNIQUE in the function tail, found ${endHits} -- 0 means it moved; more than 1 does NOT break today's lookup, it means a later reorder could silently move the slice end`)
       .toBe(1)
     const autoStartAt = body.indexOf(END_ANCHOR, fnStart)
     expect(autoStartAt, 'the options-less reconcile start not found after the function head')
