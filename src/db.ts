@@ -405,6 +405,29 @@ export function initDatabase(dbPathOverride?: string): void {
   `)
   db.exec(`CREATE INDEX IF NOT EXISTS idx_kanban_events_card ON kanban_card_events(card_id, created_at)`)
 
+  // THE IDLE GUARD'S STATE ABOUT THE AGENTS -- card 60060415, marveen's decision.
+  //
+  // It used to live in a Map inside the watcher process, so every dashboard
+  // restart erased it. Measured 2026-08-27 (jarvis): two of that day's processes
+  // lived 8m12s and 2m28s -- BOTH under the 12-minute `sustainedMs` window. So
+  // during a deploy sequence the guard is not "sometimes forgetful", it is
+  // STRUCTURALLY unable to fire, and nothing says so. Three restarts in eleven
+  // minutes that day.
+  //
+  // marveen's reason for putting it here: "the guard's state is about the
+  // AGENTS, not about the watcher process. How long an agent has been idle does
+  // not stop being true because WE deployed." The in-memory Map was a side
+  // effect of the implementation, not a design decision.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS idle_guard_state (
+      agent TEXT PRIMARY KEY,
+      idle_since_ms INTEGER,
+      last_alert_at INTEGER,
+      last_wake_at INTEGER,
+      updated_at INTEGER NOT NULL
+    )
+  `)
+
   // listKanbanCards()'s auto-archive sweep (below) treats a card's updated_at
   // as "when did this card last change", and archives a done card once that
   // timestamp is older than KANBAN_ARCHIVE_DONE_DAYS. Both production status
@@ -3943,3 +3966,72 @@ export function listOtelTraces(limit = 50): OtelTraceSummary[] {
   `).all(limit) as OtelTraceSummary[]
 }
 
+// === The idle guard's per-agent state (card 60060415) ===============================
+
+export interface IdleGuardStateRow {
+  idleSinceMs: number | null
+  lastAlertAt: number | null
+  lastWakeAt: number | null
+  /** When this row was written. The age is what decides whether `idleSinceMs`
+   *  may be trusted after a gap -- see loadIdleGuardState. */
+  updatedAt: number
+  /**
+   * True when a stored `idleSinceMs` was DISCARDED here for being stale
+   * (jarvis, reviewing this card: dropping it left no trace at all).
+   *
+   * Without this the caller cannot tell "the row said nothing" from "the row
+   * said something and we threw it away", and the next log line reads
+   * `not-sustained` with no hint of WHY the window is fresh. That is this
+   * card's own lesson one level down: a negative decision with no output.
+   */
+  staleIdleDropped: boolean
+}
+
+export function saveIdleGuardState(
+  agent: string,
+  state: { idleSinceMs: number | null; lastAlertAt: number | null; lastWakeAt: number | null },
+  now: number = Date.now(),
+): void {
+  getDb().prepare(
+    `INSERT INTO idle_guard_state (agent, idle_since_ms, last_alert_at, last_wake_at, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(agent) DO UPDATE SET
+       idle_since_ms = excluded.idle_since_ms,
+       last_alert_at = excluded.last_alert_at,
+       last_wake_at  = excluded.last_wake_at,
+       updated_at    = excluded.updated_at`,
+  ).run(agent, state.idleSinceMs, state.lastAlertAt, state.lastWakeAt, now)
+}
+
+/**
+ * Reads the stored state back, with an AGE RULE that is deliberately asymmetric
+ * (jarvis's condition on the card, comment 5442):
+ *
+ *     idleSinceMs   can only ACCELERATE an alert  -> dropped when the row is stale
+ *     lastAlertAt   can only SUPPRESS one         -> always restored
+ *     lastWakeAt    can only SUPPRESS one         -> always restored
+ *
+ * A yesterday `idleSinceMs` does not mean the agent has been idle since
+ * yesterday -- restored blindly it would fire immediately, which is the failure
+ * this card exists to prevent, arriving from the other side. The suppressors
+ * carry no such risk: the worst they can do is delay one alert by their own
+ * cooldown, and they expire on their own.
+ */
+export function loadIdleGuardState(
+  agent: string,
+  maxIdleAgeMs: number,
+  now: number = Date.now(),
+): IdleGuardStateRow | null {
+  const row = getDb().prepare(
+    'SELECT idle_since_ms as idleSinceMs, last_alert_at as lastAlertAt, last_wake_at as lastWakeAt, updated_at as updatedAt FROM idle_guard_state WHERE agent = ?',
+  ).get(agent) as IdleGuardStateRow | undefined
+  if (!row) return null
+  const stale = now - row.updatedAt > maxIdleAgeMs
+  return {
+    ...row,
+    idleSinceMs: stale ? null : row.idleSinceMs,
+    // Only true when something was actually thrown away: a stale row that held
+    // no idle span has nothing to report.
+    staleIdleDropped: stale && row.idleSinceMs !== null,
+  }
+}
