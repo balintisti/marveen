@@ -448,18 +448,22 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     const id = decodeURIComponent(kanbanCardMatch[1])
     const body = await readBody(req)
     const data = JSON.parse(body.toString())
+    // AZ URES TORZS HIVOI HIBA, NEM MUVELET (kartya af9f6cd4). Megmerve: nulla
+    // hivo kuld ilyet -- sem a frontend, sem az agens-lapok --, tehat a 400 nem
+    // tor el semmit, viszont megnevezi, mi hianyzik.
+    if (!data || typeof data !== 'object' || Object.keys(data).length === 0) {
+      json(res, { error: 'Ures torzsu PUT: nincs mit modositani. Add meg a valtoztatando mezot, pl. {"assignee":"..."}.' }, 400)
+      return true
+    }
 
     // A PRECONDITION THIS ENDPOINT CANNOT HONOUR MUST NOT ANSWER 200 (card ddf11b94).
     // Measured before this change: `If-Match: anything` -> 200, and
     // `expected_updated_at: 123` -> 200, both silently ignored. That is not a
     // missing feature, it is a false success handed to the one caller who was
     // trying to be careful -- the silent-success shape this board keeps finding.
-    // Repo usage of either is zero, so the 400 breaks nobody who is not already
-    // being deceived.
     // WHY 400 AND NOT 412 OR 501: a 412 would claim we evaluated the precondition
     // and found it stale, which is a different (and false) statement; a 501 reads
-    // as a server fault and invites a retry of the very same request. This is a
-    // request we will not serve as sent, which is what 400 says.
+    // as a server fault and invites a retry of the very same request.
     const ifMatch = req.headers['if-match']
     if (ifMatch !== undefined || data.expected_updated_at !== undefined) {
       json(res, {
@@ -472,26 +476,32 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     }
 
     const result = updateKanbanCard(id, data)
-    if (result.changed) {
-      // The overwrite travels in the response because that is where the caller
-      // already looks; a log nobody reads is the same silence in another file.
-      // The sentence is for the human, the array for the caller that parses.
-      if (result.overwritten.length > 0) {
-        const list = result.overwritten.map(o => `${o.field} (volt: ${JSON.stringify(o.from)})`).join(', ')
-        logger.warn({ id, overwritten: result.overwritten }, 'Kanban PUT overwrote existing values')
-        json(res, {
-          ok: true,
-          overwritten: result.overwritten,
-          warning: `Ez az iras MAS erteket irt felul: ${list}. Ha nem te irtad oda, nezd meg, `
-            + 'kinek a munkajat cserelted le -- a visszaolvasas ezt NEM mutatja meg, mert a '
-            + 'sajat szovegedet adja vissza.',
-        })
-      } else {
-        json(res, { ok: true })
-      }
+    if (result.outcome === 'not-found') { json(res, { error: 'Kártya nem található' }, 404); return true }
+
+    // A `unchanged` NEM hiba: egy hivo joggal kuldheti ujra ugyanazt (a szerkeszto
+    // modal minden mentesnel a TELJES objektumot kuldi). De az `updated_at` NEM
+    // emelkedik, es a valasz KIMONDJA, hogy nem tortent semmi -- kulonben a kartya
+    // frissnek latszana anelkul, hogy barmi valtozott volna. Felulirni ilyenkor
+    // nincs mit, tehat `overwritten` szuksegszeruen ures.
+    if (result.outcome === 'unchanged') { json(res, { ok: true, changed: false }); return true }
+
+    // The overwrite travels in the response because that is where the caller
+    // already looks; a log nobody reads is the same silence in another file.
+    // The sentence is for the human, the array for the caller that parses.
+    if (result.overwritten.length > 0) {
+      const list = result.overwritten.map(o => `${o.field} (volt: ${JSON.stringify(o.from)})`).join(', ')
+      logger.warn({ id, overwritten: result.overwritten }, 'Kanban PUT overwrote existing values')
+      json(res, {
+        ok: true,
+        changed: true,
+        overwritten: result.overwritten,
+        warning: `Ez az iras MAS erteket irt felul: ${list}. Ha nem te irtad oda, nezd meg, `
+          + 'kinek a munkajat cserelted le -- a visszaolvasas ezt NEM mutatja meg, mert a '
+          + 'sajat szovegedet adja vissza.',
+      })
       return true
     }
-    json(res, { error: 'Kártya nem található' }, 404)
+    json(res, { ok: true, changed: true })
     return true
   }
 

@@ -1812,14 +1812,40 @@ export interface KanbanOverwrite {
   to: string | number | null
 }
 
+/** A kartya-frissites HAROM kimenete -- mert a "nem talaltam" es a "nem valtozott" nem ugyanaz. */
+export type KanbanUpdateOutcome = 'not-found' | 'unchanged' | 'updated'
+
+/**
+ * KET KARTYA EGY VISSZATERESI ERTEKEN, ES MINDKETTO KELL (af9f6cd4 + ddf11b94).
+ * A merge-ben a ket oldal UGYANEZT a tipust definialta ujra, kulonbozo alakban:
+ * egy string-unio (nem-talalt / valtozatlan / frissitett) es egy objektum
+ * (`changed` + `overwritten`). Egyik sem reszhalmaza a masiknak, tehat a
+ * feloldas nem valasztas, hanem OSSZETETEL: az `outcome` mondja meg, MI tortent,
+ * az `overwritten` azt, KINEK a munkajat irta felul.
+ */
 export interface KanbanUpdateResult {
-  changed: boolean
+  outcome: KanbanUpdateOutcome
   /** Fields that already HELD a value and now hold a different one. Empty for
    *  an ordinary edit that fills a blank or rewrites the same value. */
   overwritten: KanbanOverwrite[]
 }
 
+/** Azok a mezok, amiket egy PUT valoban modosithat. Ismeretlen kulcs nem valtozas. */
+const KANBAN_UPDATABLE = [
+  'title', 'description', 'status', 'assignee', 'priority',
+  'project', 'parent_id', 'due_date', 'sort_order', 'archived_at',
+] as const
+
 /**
+ * NEM EMELJUK AZ `updated_at`-ET, HA SEMMI NEM VALTOZOTT (kartya af9f6cd4).
+ *
+ * A LELET: egy URES torzsu PUT 200-at adott es MEGEMELTE az `updated_at`-et.
+ * A kartya ettol FRISSNEK latszott anelkul, hogy tortent volna vele barmi.
+ * A GYAKORIBB UT VISZONT NEM AZ URES TORZS, hanem a frontend: a szerkeszto modal
+ * MINDEN mentesnel a TELJES objektumot kuldi, tehat egy megnyitas-bezaras is
+ * "frissitette" a kartyat. Ezert nem eleg az ures torzset elutasitani -- a
+ * VALTOZATLAN mezokre is hallgatni kell.
+ *
  * LAST WRITE WINS, AND THE READ-BACK DOES NOT CATCH IT (card ddf11b94).
  *
  * Two agents editing the same card is the ordinary case here, and the loser
@@ -1832,31 +1858,24 @@ export interface KanbanUpdateResult {
  * ordinary edit changes a value. The signal has to separate "I replaced
  * something somebody had put there" from "I filled in a blank" -- otherwise it
  * fires on every write, and a guard that fires on the correct state is worse
- * than no guard (jarvis, and the same law as the CONCURRENTLY false alarm).
- * So: the previous value was NON-EMPTY, and the new one differs from it.
+ * than no guard. So: the previous value was NON-EMPTY, and the new one differs.
  *
  * THE CASE THIS DELIBERATELY DOES NOT COVER (jarvis, on review): if somebody
  * EMPTIED a field on purpose and the next write fills it in, that is not
  * reported -- the previous value was empty, so the rule cannot tell an
- * intentional clearing from a field nobody had filled yet. Saying it out loud
- * because "not covered" and "cannot happen" read the same in silence: the day a
- * deliberate clearing needs to be defended, this is the line that has to change,
- * and it will need something the row does not carry today (who emptied it, and
- * whether that was the intent).
+ * intentional clearing from a field nobody had filled yet.
  *
- * ONE COMPUTATION, NOT TWO. The old and new values already stand side by side
- * here (`card` from :1809, `fields` from the caller), so no extra query is
- * needed -- and the field-level write log of card b4811598, when it is built,
- * takes THIS array rather than recomputing its own. Two mechanisms for one
- * question would drift apart; that is why they share the array.
- *
- * The precedent is already in this file, 14 lines below: `moveKanbanCard` reads
- * the previous status first and records an event ONLY on a real transition. The
- * code already knew the rule; this function did not follow it.
+ * A KET MECHANIZMUS SORRENDJE SZAMIT: a `unchanged` ag ELOBB all, es MEG AZ
+ * UPDATE ELOTT ter vissza -- kulonben az `updated_at` megemelkedne, ami epp az
+ * af9f6cd4 lelete. Ilyenkor az `overwritten` szuksegszeruen ures: felulirni
+ * csak azt lehet, ami valtozik.
  */
 export function updateKanbanCard(id: string, fields: Partial<Omit<KanbanCard, 'id' | 'created_at'>>): KanbanUpdateResult {
   const card = getKanbanCard(id)
-  if (!card) return { changed: false, overwritten: [] }
+  if (!card) return { outcome: 'not-found', overwritten: [] }
+  const kuldott = KANBAN_UPDATABLE.filter((k) => k in fields)
+  const valtozott = kuldott.filter((k) => (fields as Record<string, unknown>)[k] !== (card as unknown as Record<string, unknown>)[k])
+  if (valtozott.length === 0) return { outcome: 'unchanged', overwritten: [] }
   const now = Math.floor(Date.now() / 1000)
   const f = { ...card, ...fields, updated_at: now }
 
@@ -1875,7 +1894,7 @@ export function updateKanbanCard(id: string, fields: Partial<Omit<KanbanCard, 'i
     `UPDATE kanban_cards SET title=?, description=?, status=?, assignee=?, priority=?, project=?, parent_id=?, due_date=?, sort_order=?, updated_at=?, archived_at=?
      WHERE id=?`
   ).run(f.title, f.description, f.status, f.assignee, f.priority, f.project, f.parent_id, f.due_date, f.sort_order, f.updated_at, f.archived_at, id).changes > 0
-  return { changed, overwritten: changed ? overwritten : [] }
+  return { outcome: changed ? 'updated' : 'not-found', overwritten: changed ? overwritten : [] }
 }
 
 export function getChildCards(parentId: string): KanbanCard[] {
