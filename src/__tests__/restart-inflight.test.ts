@@ -210,10 +210,98 @@ describe('both ends are wired (structural)', () => {
     // From the function, not a 1500-character window: stripping comments shortens the file
     // by however much prose sits above the branch, so a fixed window is measuring the
     // comment density, not the code.
-    const fnStart = body.indexOf('async function reconcileDesiredAgents')
-    expect(fnStart, 'reconcileDesiredAgents not found -- did stripComments eat it?')
+    // THE ANCHOR CARRIES ITS OPEN PAREN, AND IT IS CHECKED FOR UNIQUENESS (didi, card comment
+    // 37). `indexOf` returns the FIRST match, so a SIBLING sharing the prefix -- and
+    // `reconcileDesiredAgentsForOrg` beside `reconcileDesiredAgents` is an ordinary name for a
+    // scoped variant -- silently moves every assertion onto the sibling. didi measured the
+    // consequence: a sibling with a correct-looking branch placed first, and the REAL reconciler
+    // stripped of its `continue`, goes 8/8 GREEN. That is a FALSE PASS on the original defect
+    // this whole card exists for: the guard checks a stage set while the running path is broken.
+    // Reproduced here before fixing.
+    //
+    // The `(` alone closes it. The COUNT is the general form, and it is the control that caught
+    // my own mutation harness tonight: an anchor that matches more than once has picked one
+    // arbitrarily, and the honest response is to fail rather than to choose. Same family as the
+    // `indexOf('{')` finding that started this -- a text locator landing on the wrong instance,
+    // one level up, on the function instead of the brace.
+    const ANCHOR = 'async function reconcileDesiredAgents('
+    // COUNTED ON `code`, NOT `body`. My commit message for the count CLAIMED it ran on
+    // comment-stripped, literal-blanked source. It did not -- it ran on raw text, and didi
+    // measured the consequence (R7): a template mentioning the anchor inflates the count and
+    // turns CORRECT code red. Second false claim I have made about my own code tonight, same
+    // shape as asserting a log clock was UTC. The claim is true now.
+    const anchorHits = code.split(ANCHOR).length - 1
+    expect(anchorHits, `the reconciler anchor must match exactly once, found ${anchorHits} -- 0 means it moved or was renamed, more than 1 means this guard would pick an instance at random`)
+      .toBe(1)
+    const fnStart = code.indexOf(ANCHOR)
+    expect(fnStart, 'reconcileDesiredAgents not found -- did codeOnly eat it?')
       .toBeGreaterThan(-1)
-    const autoStartAt = body.indexOf('Desired agent not running', fnStart)
+    // AND THE NAME DOES NOT PROVE WHICH FUNCTION RUNS -- THE SCHEDULER DOES (didi, card
+    // comment 39, fix direction measured before they proposed it). The uniqueness count above
+    // closes the TWO-match case and not the one-match-in-the-wrong-place case, which is the
+    // limit I named and they turned into a live false pass: rename the real sweep to
+    // ...Main (call site included), let a DECOY take the anchored name with a correct-looking
+    // branch, break the real one -- exactly one match, on the decoy, 8/8 GREEN. Reproduced
+    // here. It is the ordinary "keep the old name as a facade" refactor.
+    //
+    // So authenticate the WIRING rather than the name, which is what the whole card has been
+    // about: the scheduler calls THIS function.
+    expect(code, 'the anchored function must be the one the scheduler calls -- a name alone does not say which function runs')
+      .toContain('void reconcileDesiredAgents()')
+    // The SECOND anchor gets the same control -- didi named it as unmeasured. It is a log
+    // string, so a duplicate is less likely than a sibling function, but "less likely" is not
+    // a measurement and the check costs one line.
+    const END_ANCHOR = 'Desired agent not running'
+    // COUNTED OVER THE SEARCH RANGE, NOT THE WHOLE FILE. My first version counted every
+    // occurrence in the file and FALSE-ALARMED on correct code: this anchor is resolved with
+    // `indexOf(END_ANCHOR, fnStart)`, so a mention ANYWHERE EARLIER is not an ambiguity for
+    // this lookup at all. Measured -- an unrelated line carrying the same text above the
+    // function turned the guard red while the real resolution was still exact.
+    // I shipped that in the same commit where I argued a guard must reject the sibling-shaped
+    // LIE without rejecting the sibling. A control has to be held to the standard it enforces,
+    // and the false-alarm direction is the half I had not measured on my own check.
+    // Measured in all four directions: a duplicate BEFORE the function head is correct code and
+    // passes; a duplicate inside the range, before OR after the real one, is genuine ambiguity
+    // and fails; the anchor's removal fails with `found 0`.
+    // Counted on `body` ON PURPOSE, unlike the anchor above: this one IS a string literal, and
+    // `code` has blanked it away. The cost is that a mention of this sentence in a COMMENT
+    // inflates the count -- a false failure, fail-closed, and named here rather than measured
+    // away, because the two anchors need opposite sources and that is the honest split.
+    //
+    // THIS COUNT IS FOR DRIFT, NOT FOR RESOLUTION AMBIGUITY -- didi asked which, and the code
+    // could not say (card comment 41). Stating it, because the answer changes whether a later
+    // duplicate firing is a defect or the design.
+    //
+    // `indexOf(END_ANCHOR, fnStart)` takes the FIRST match at or after fnStart, so the
+    // resolution can NEVER be ambiguous and a count could have nothing to say about it. What
+    // it says instead: this sentence must remain UNIQUE in the function's tail, because a
+    // later reorder can silently move the slice end -- and nothing else would notice.
+    //
+    // NARROWING IT TO THE LOOKUP'S OWN RANGE MISSES THE ONE PLACEMENT NOTHING ELSE CATCHES --
+    // and that is PLACEMENT-DEPENDENT, which is didi's refinement of my own measurement (card
+    // comment 45). I first wrote "narrowing is vacuous", full stop. It is not, in general:
+    //
+    //   duplicate BEFORE the in-flight branch
+    //       narrowed -> RED, but from a DIFFERENT assertion ("must ask isRestartInFlight"),
+    //       because the slice end jumps forward and the branch falls outside it. Covered.
+    //   duplicate BETWEEN the branch and the real marker
+    //       narrowed -> 8/8 GREEN. The slice is truncated but LOOKS complete: every branch
+    //       assertion runs and passes, and nothing else says a word.
+    //
+    // So the wide count does work nothing else does in exactly ONE window. That does not
+    // weaken the choice, it PRICES it: the false alarm this costs -- a comment quoting that
+    // sentence in the function tail -- is what buys coverage of that window, and of nothing
+    // else. Measured both placements against both variants before writing this down.
+    //
+    // So a duplicate AFTER the real one (didi's S1) fires on CORRECT code, deliberately: an
+    // early warning that the anchor is no longer unique, fail-closed, before a reorder can
+    // make it wrong. The message below says "no longer unique" rather than "ambiguous",
+    // because the resolution is not ambiguous and saying so sent didi looking for the wrong
+    // thing.
+    const endHits = body.slice(fnStart).split(END_ANCHOR).length - 1
+    expect(endHits, `the loop-end anchor must be UNIQUE in the function tail, found ${endHits} -- 0 means it moved; more than 1 does NOT break today's lookup, it means a later reorder could silently move the slice end`)
+      .toBe(1)
+    const autoStartAt = body.indexOf(END_ANCHOR, fnStart)
     expect(autoStartAt, 'the options-less reconcile start not found after the function head')
       .toBeGreaterThan(fnStart)
     const loop = body.slice(fnStart, autoStartAt)
