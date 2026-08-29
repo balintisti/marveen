@@ -59,29 +59,89 @@ try: print(json.load(open('{{INSTALL_DIR}}/store/kanban-audit-state.json')).get(
 except Exception: print(0)
 ")"
    curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:$PORT/api/kanban" | python3 -c "
+# AUDIT-SNIPPET: beakadt
 import json,sys,time
 last=int('''$LAST''' or 0); now=int(time.time())
+# ALLANDO SOR: egy kartya, ami SZANDEKOSAN all in_progress-en orokke (egy agens
+# folyamatos munkasora, nem befejezendo feladat). Minden audit beakadtnak latja,
+# tehat 4 oraankent pingelne az assignee-t ugyanazzal, amire nincs mit valaszolni --
+# es a zaj pont azt tanitja meg, hogy a kanban-audit pingjet figyelmen kivul kell hagyni.
+def allando_sor(c):
+    t=(c.get('title') or '').upper()
+    return 'ALLANDO SORA' in t or '\u00c1LLAND\u00d3 SORA' in t
 rows=[c for c in json.load(sys.stdin)
-      if c.get('status')=='in_progress' and not c.get('archived_at') and (c.get('updated_at') or 0) < last]
+      if c.get('status')=='in_progress' and not c.get('archived_at')
+      and (c.get('updated_at') or 0) < last and not allando_sor(c)]
 rows.sort(key=lambda c: c.get('updated_at') or 0)
 for c in rows:
     print(c['id'], '|', (c.get('assignee') or '-'), '|', round((now-(c.get('updated_at') or now))/3600.0,1), 'h |', c.get('title'))
 "
    ```
 
-4. **Beakadt task -> ping**: minden beakadt kártyához küldj inter-agent message-t az assignee-nek (kivéve {{MAIN_AGENT_ID}}-nek és üres assignee-nek):
+4. **Beakadt task -> ping**: minden beakadt kártyához küldj inter-agent message-t az assignee-nek (kivéve a SAJÁT ágens-azonosítódra szóló kártyáknak és az üres assignee-nek -- a szabály a feladat FUTTATÓJÁRA vonatkozik, nem egy névre):
    ```
    "Kanban-audit: a {card_id} ({title}) {hours_stale}h-ja in_progress mozgás nélkül (előző audit óta). Frissítsd a státuszt (done/waiting) vagy adj komment-et hogy mit blokkol."
    ```
 
 5. **State-fájl frissítés** (a futás VÉGÉN): `store/kanban-audit-state.json` -> `{"last_audit_at": <current Unix timestamp>}`.
 
-6. **Delegálatlan kártyák**: in_progress/waiting/planned amiknek assignee NULL/üres -> log + Telegram csak akkor ha 3+ ilyen van.
+6. **Gazdátlan kártyák -- OSZLOPONKÉNT MÁS, ne egy számra riassz.**
 
-7. **Telegram csak akkor írj ha**:
-   - 3+ beakadt task van (kritikus)
-   - Új blokker (waiting > 48h)
-   - Egyébként csendben (heartbeat-stílus)
+   Egy `planned` + gazdátlan kártya nem hiba: épp azt jelenti, hogy BÁRKI FELVEHETI.
+   Egy őr, ami erre riaszt, a helyes állapotot jelöli meg hibaként -- és ezzel megtanítja
+   az olvasót, hogy a jelzése zaj. (Mérve egy élő telepítésen: egy „3+ gazdátlan" szabály
+   8 találatot adott, amiből 6 aznap SZÁNDÉKOSAN gazdátlanul nyitott `planned` kártya volt.)
+
+   | oszlop | gazdátlan = | teendő |
+   |---|---|---|
+   | `planned` | felvehető, bárki elviheti | **rendben, NE számold találatnak** |
+   | `in_progress` | senki nem dolgozik rajta, pedig azt állítja | találat |
+   | `testing` | SENKIÉ -- nincs, aki összesítse az ellenőrzést és lezárja | találat |
+
+   **A `high`/`urgent` gazdátlan `planned` kártyát NEVEZD MEG -- de HÚZÓ-LISTAKÉNT, nem
+   riasztásként.** Ha a nyilvántartásban a lelet alapértelmezésben gazdátlan (mert helyesen az),
+   akkor SENKI sorában nem látszik: egy `normal` nyugodtan várhat, egy `high` viszont
+   láthatatlanul áll. A forma egy sor a jelentésben -- *„ezt bárki elviheti, és sürgős: <id>
+   <cím>"* --, nem defektus-jelzés. A `normal`/`low` gazdátlanokra továbbra is NULLA riasztás.
+
+7. **Várakozó kártyák: a >48h MECHANIKUS SZŰRŐ, NEM TALÁLAT.**
+
+   Egy `waiting` kártya lehet SZÁNDÉKOSAN leparkolt megfigyelés, kiírt újranyitási feltétellel --
+   az nem rothad, hanem VÁR, és pontosan azt csinálja, amit kell. **Mielőtt blokkolónak jelented,
+   olvasd el a kártya UTOLSÓ KOMMENTJÉT ÉS a LEÍRÁSÁT.** Ha bármelyik megmondja, MIÉRT vár és MI
+   nyitná újra, akkor NEM blokkoló: maradj csendben.
+
+   A nulla komment önmagában NEM jel: egy kártya, ami első megírásakor teljes volt, sosem kap
+   kommentet, és épp ezért néz ki elhagyottnak. A kérdés nem az, hogy van-e komment, hanem hogy a
+   kártya BÁRHOL megmondja-e, mire vár.
+
+   Az osztályozás mind a hármat egyszerre adja (a `TALALAT` sorok számítanak a 8. lépés
+   küszöbébe, a `HUZO` és az `ELLENORZENDO` SOHA nem riaszt magától):
+
+   ```bash
+   curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:$PORT/api/kanban" | python3 -c "
+# AUDIT-SNIPPET: osztalyozas
+import json,sys,time
+now=int(time.time()); cards=[c for c in json.load(sys.stdin) if not c.get('archived_at')]
+def gazdatlan(c): return not (c.get('assignee') or '').strip()
+talalat=0
+for c in cards:
+    st=c.get('status'); pr=(c.get('priority') or 'normal')
+    if gazdatlan(c) and st in ('in_progress','testing'):
+        talalat+=1; print('TALALAT gazdatlan-%s %s %s' % (st, c['id'], c.get('title')))
+    elif gazdatlan(c) and st=='planned' and pr in ('high','urgent'):
+        print('HUZO %s %s %s' % (pr, c['id'], c.get('title')))
+    if st=='waiting' and (now-(c.get('updated_at') or now)) > 48*3600:
+        print('ELLENORZENDO varakozo %s %.0fh %s' % (c['id'], (now-(c.get('updated_at') or now))/3600.0, c.get('title')))
+print('TALALAT-OSSZESEN %d' % talalat)
+"
+   ```
+
+8. **Telegram csak akkor írj ha**:
+   - 3+ beakadt task van (kritikus), VAGY
+   - `TALALAT-OSSZESEN` >= 3, VAGY
+   - egy `ELLENORZENDO` kártya elolvasva TÉNYLEG nem mondja meg, mire vár (ez az „új blokkoló")
+   - Egyébként csendben (heartbeat-stílus). A `HUZO` sorok a naplóba/jelentésbe mennek, nem Telegramra.
 
 ## Buktatók
 - **NE `sqlite3` CLI-t és NE `jq`-t használj.** Egyik sincs telepítve egy átlagos Linux
@@ -92,11 +152,25 @@ for c in rows:
   mert ott a `sqlite3` gyárilag van.
 - Az "előző audit óta nem mozdult" feltétel azt jelenti: `updated_at < last_audit_at`. NE használj abszolút 24h-os küszöböt.
 - Ne archiválj done-t ha <7 nap (a felhasználó még látni akarja).
-- NE pingelj saját magadat (skip ha assignee='{{MAIN_AGENT_ID}}').
+- NE pingelj saját magadat (skip, ha az assignee a te SAJÁT ágens-azonosítód -- a szabály a
+  feladat FUTTATÓJÁRA vonatkozik, nem egy konkrét névre: a futtató telepítésenként más lehet).
 - Ne re-pingelj 4 órán belül ugyanazt: a state-fájlban tárolt `last_audit_at` automatikusan kezeli ezt.
 - Első futáskor (state-fájl üres) -> ne pingelj, csak inicializáld a state-et.
 - A státuszváltozás (in_progress -> done) is updated_at frissítést jelent, így a következő audit nem fogja megfogni a most-még-aktív taskokat.
+- **Egy őr, ami a HELYES állapotot is megjelöli, rosszabb a semminél.** Ez a lap három helyen
+  alkalmazza ugyanazt (gazdátlan `planned`, parkoló `waiting`, állandó sor-kártya), és mindhárom
+  ugyanabból a mért hibából jött: a riasztás igaz volt a szabály betűje szerint, és hamis
+  a valóságra. Ha egy új szabályt veszel fel ide, előbb kérdezd meg: **melyik EGÉSZSÉGES alak
+  ütközik bele?**
+- **A csend nem bizonyítja, hogy futott.** Egy `heartbeat`-típusú feladat sikere és a
+  teljes kimaradása kívülről azonos: mindkettő néma. Ezért írja a 3. lépés a state-fájlt a futás
+  VÉGÉN -- a `last_audit_at` az egyetlen nyom, ami megkülönbözteti a kettőt.
 
 ## Ellenőrzés
 - A state-fájl frissült a futás végén.
-- Inter-agent message-ek sikeresek (200 response).
+- Inter-agent message-ek sikeresek: a 200 önmagában NEM elég, a válaszban legyen `id`. (A curl
+  `0`-val tér vissza egy elutasított kérésre is, tehát a néma küldés-hiba sikernek látszik.)
+- **Az osztályozás pozitív kontrollja:** egy EGÉSZSÉGES tábla (gazdátlan `planned` + kiírt
+  indokkal parkoló `waiting`) `TALALAT-OSSZESEN 0`-t adjon. Ha nem nulla, a szűrő a helyes
+  állapotra riaszt. És fordítva: egy gazdátlan `in_progress`/`testing` kártyán MEG KELL szólalnia --
+  e nélkül csak elnémítottuk.
