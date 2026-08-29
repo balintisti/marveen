@@ -5,7 +5,6 @@ import {
   markRestartStarted, clearRestart, isRestartInFlight, resetRestartInFlight,
   RESTART_INFLIGHT_MAX_MS,
 } from '../web/restart-inflight.js'
-import { stripComments } from './helpers/strip-comments.js'
 
 // Card f65bc6ef. A saturation restart came back with `--continue` -- the guard asked for
 // `{ fresh: true }`, and a DIFFERENT starter won the race: restartAgentProcess stops
@@ -91,49 +90,78 @@ describe('the in-flight registry', () => {
 // The repo already had the answer and nobody wired it in: helpers/strip-comments.ts, whose
 // own docblock describes this exact failure (didi, card 0114968c, 2026-08-23). Reproduced
 // both probes here before fixing; both went green on ad43df4.
-// STRING CONTENTS BLANKED, LENGTH AND LINES PRESERVED. Comments were the first thing this
-// guard read as code (0d6a00a); string literals were the second, and didi measured that the
-// gap points BOTH ways (card comment 25) -- which is why "I named the limit" was not an
-// answer. A named limit that is noisy and one that is a silent pass need opposite responses,
-// and the name alone does not say which. This one was both:
+// ONE PASS OVER FOUR STATES: code, line comment, block comment, string/template.
+// Comments and literal CONTENTS are blanked to spaces; length and newlines are preserved.
 //
-//   T3, SILENT PASS: a multi-line template whose text contains the word `continue` on a line
-//     of its own satisfies the statement-shaped skip assertion while no `continue` statement
-//     exists -- 8/8 green. And the control is the sharpest form of it: the same code WITH the
-//     real `continue` is also 8/8 green, so on that axis the guard returned the same verdict
-//     for the correct and the defective version. Not measuring weakly -- not measuring.
-//   T4, FALSE FAILURE: a correct branch whose log message contains a literal `}` closes the
-//     block early, and the guard reports the missing skip. Control: the same edit with `X`
-//     is green, so the brace alone is the cause. That is the CONCURRENTLY shape, and the
-//     cheap response is to take the brace out of a log line or call the guard noise.
+// THIS IS THE THIRD ROUND OF ONE FAMILY, AND THE FIRST FIX AIMED AT THE FAMILY. The guard
+// read comments as code (0d6a00a), then string literals as code (8ed2544), and each was
+// patched with its own helper -- stripComments for the first, blankLiterals for the second,
+// run in sequence. That sequence CANNOT be right, and the measurement that showed it:
 //
-// I narrowed didi's bound while reproducing it: ending a line is NOT enough (`... restarter
-// continue\n` is caught, because the regex also needs its start anchor). The word has to be
-// alone on a line, or follow a `;{}` on one. A quoted string cannot hold a newline, so only
-// TEMPLATES can do it -- measured all four ways.
+//   `continue   // the restarter's job`   -> RED, "could not read the in-flight branch"
+//   `continue   // explain why`           -> RED, "the reconciler must SKIP, not merely log"
 //
-// Length is preserved because anchors are found in the original text (`Desired agent not
-// running` IS a string literal) and then indexed into this one.
-function blankLiterals(src: string): string {
+// Both are CORRECT code. The shared helpers/strip-comments.ts strips WHOLE-LINE comments
+// only -- which its own docblock states, correctly, for its own purpose -- so a trailing
+// comment survived into the slice. Then the apostrophe in it opened a string that never
+// closed (first case), or the comment text sat between `continue` and the end of line and
+// broke the statement-shaped match (second case). Everyday English comments carry
+// apostrophes, and THE MEASURED SLICE ALREADY CONTAINS A TRAILING COMMENT today
+// (`// Commit 3 v1: safe-mode / memory gate`) -- inert only because it holds no quote.
+//
+// The two concerns cannot be separated into two passes in either order: comments contain
+// quotes, and strings contain `//`. Strip comments first and an apostrophe in a comment is
+// gone but a `//` inside a string becomes a comment; blank strings first and the apostrophe
+// in the comment opens a literal. One pass, four states, is the only version that is right.
+//
+// NOT CHANGING THE SHARED HELPER: other specs depend on its documented bounds, and this is
+// a different contract, not a better version of the same one. Two implementations with two
+// stated purposes, rather than one silently widened under its other callers.
+//
+// LENGTH IS PRESERVED because the anchors are found in the RAW text -- `Desired agent not
+// running` is itself a string literal -- and then indexed into this one.
+//
+// KNOWN RESIDUAL, measured by didi (card comment 30) and deliberately left: a REGEX LITERAL
+// carrying a quote (`name.replace(/'/g, '')`) still desynchronises this scanner. Recognising
+// regex literals without a real parser needs the preceding token, which is where a hand
+// scanner stops being small. It fails in the good direction -- a false FAILURE, fail-closed,
+// with a message that says the guard could not READ rather than accusing the code -- and
+// there is no instance in the slice today.
+function codeOnly(src: string): string {
   const out = src.split('')
-  let quote: string | null = null
-  for (let i = 0; i < src.length; i++) {
+  let state: 'code' | 'line' | 'block' | 'str' = 'code'
+  let quote = ''
+  let i = 0
+  while (i < src.length) {
     const c = src[i]
-    if (quote) {
-      if (c === '\\') { if (src[i + 1] !== '\n') out[i + 1] = ' '; out[i] = ' '; i++; continue }
-      if (c === quote) { quote = null; continue }
-      if (c !== '\n') out[i] = ' '
-      continue
+    const d = src[i + 1]
+    if (state === 'code') {
+      if (c === '/' && d === '/') { out[i] = ' '; out[i + 1] = ' '; state = 'line'; i += 2; continue }
+      if (c === '/' && d === '*') { out[i] = ' '; out[i + 1] = ' '; state = 'block'; i += 2; continue }
+      if (c === "'" || c === '"' || c === '`') { state = 'str'; quote = c; i++; continue }
+      i++; continue
     }
-    if (c === "'" || c === '"' || c === '`') quote = c
+    if (state === 'line') {
+      if (c === '\n') { state = 'code'; i++; continue }
+      out[i] = ' '; i++; continue
+    }
+    if (state === 'block') {
+      if (c === '*' && d === '/') { out[i] = ' '; out[i + 1] = ' '; state = 'code'; i += 2; continue }
+      if (c !== '\n') out[i] = ' '
+      i++; continue
+    }
+    if (c === '\\') { out[i] = ' '; if (src[i + 1] !== '\n') out[i + 1] = ' '; i += 2; continue }
+    if (c === quote) { state = 'code'; i++; continue }
+    if (c !== '\n') out[i] = ' '
+    i++; continue
   }
   return out.join('')
 }
 
 // End of the STATEMENT that starts at `from`: the first `;` or newline at depth 0. Depth-aware
 // because the statement being read is a call -- `logger.info({ agent: name }, '...')` -- whose
-// own punctuation must not terminate it. NO quote handling: the input is already blanked, and
-// a second copy of that logic here would be one more thing to drift.
+// own punctuation must not terminate it. No quote or comment handling: the input is already
+// reduced to code, and a second copy of that logic here would be one more thing to drift.
 function endOfStatement(s: string, from: number): number {
   let depth = 0
   for (let i = from; i < s.length; i++) {
@@ -146,11 +174,10 @@ function endOfStatement(s: string, from: number): number {
 }
 
 describe('both ends are wired (structural)', () => {
-  const src = (p: string) =>
-    stripComments(readFileSync(join(import.meta.dirname, '..', 'web', p), 'utf8'))
+  const src = (p: string) => readFileSync(join(import.meta.dirname, '..', 'web', p), 'utf8')
 
   it('restartAgentProcess marks and clears around the stop/start window', () => {
-    const body = src('agent-process.ts')
+    const body = codeOnly(src('agent-process.ts'))
     const start = body.indexOf('export async function restartAgentProcess')
     expect(start, 'restartAgentProcess not found').toBeGreaterThan(-1)
     // To the next top-level declaration, not a fixed number of characters: the first
@@ -179,7 +206,7 @@ describe('both ends are wired (structural)', () => {
     // from one addresses the other. The split is the point: braces and the `continue`
     // statement are code and must not be found inside a string; `mid-restart` lives inside
     // a string ON PURPOSE and must not be blanked away.
-    const code = blankLiterals(body)
+    const code = codeOnly(body)
     // From the function, not a 1500-character window: stripping comments shortens the file
     // by however much prose sits above the branch, so a fixed window is measuring the
     // comment density, not the code.
