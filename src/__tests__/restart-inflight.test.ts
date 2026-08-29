@@ -211,7 +211,7 @@ describe('both ends are wired (structural)', () => {
     // by however much prose sits above the branch, so a fixed window is measuring the
     // comment density, not the code.
     const fnStart = body.indexOf('async function reconcileDesiredAgents')
-    expect(fnStart, 'reconcileDesiredAgents not found -- did stripComments eat it?')
+    expect(fnStart, 'reconcileDesiredAgents not found -- did codeOnly eat it?')
       .toBeGreaterThan(-1)
     const autoStartAt = body.indexOf('Desired agent not running', fnStart)
     expect(autoStartAt, 'the options-less reconcile start not found after the function head')
