@@ -168,6 +168,10 @@ const agentStuckSince = new Map<string, number>()  // agent -> first tick stuck 
 // A router amugy is elkapja a panelt az eszkalacio elott, tehat ez NULLA extra
 // tmux-hivas -- csak kiolvassuk, amit mar a kezunkben tartunk.
 const agentTokenSample = new Map<string, TokenSample>()
+/** Agensek, akiknel a SOPRES token-olvasasa null volt -- hogy a fail-open sor
+ *  stuck-szakaszonkent EGYSZER menjen ki, ne tickenkent. Sikeres olvasasra es tavolletre
+ *  torlodik, a mintaval egyutt. */
+const agentTokenReadFailed = new Set<string>()
 
 // A session in the middle of a long turn is NOT ready for a prompt, which is
 // exactly what a wedged session looks like from the queue side. On 2026-07-31
@@ -610,7 +614,40 @@ export async function runMessageRouterTick(): Promise<void> {
       if (stuckMs <= STUCK_ESCALATE_MS) continue
       const pane = capturePane(session, host)
       const paneState = pane != null ? detectPaneState(pane) : null
-      if (!shouldEscalateStuckSession(paneState, stuckMs)) continue
+      // A HALADAS-JEL UGYANEBBOL A CAPTURE-BOL, mint a kezbesitesi uton: nulla extra tmux-hivas.
+      // Enelkul ez az ut 2 argumentummal hivna a kaput, a `tokensFrozenMs` `null` lenne, es a
+      // `null` a 09906ebf SZANDEKOS dontese szerint FAIL-OPEN -- vagyis a sopres, ami epp a
+      // populaciot SZELESITI, megkerulne a token-fagyas kaput azon a feluleten, amit hozzaad.
+      // Kartya bd7de2ba, jarvis metszet-lelete cca3f289.
+      //
+      // A MAP MEGOSZTOTT, es a feltetel MERVE van, nem izles: a megosztas csak akkor helyes, ha
+      // a ket ut UGYANAZT a panelt figyeli ugyanarra az agensre -- kulonben az egyik mintaja
+      // NULLAZZA a masik altal gyujtott fagyas-orat, es a kapu csendben megint fail-open lesz.
+      // Mind a harom komponens egyezik:
+      //   session  a sopres `agentSessionName(agent)`; a kezbesitesi ut a cache-bol veszi, amit
+      //            a :577 pre-pass UGYANAZZAL a hivassal tolt fel -- memoizalas, nem mas feloldas
+      //   host     mindketto `readAgentRemoteHost(agent)`
+      //   KIVETEL  a :695 `isMainAgent ? null` -- es az NEM er ide: a `quietAgentsToCheck` szuroje
+      //            `a !== mainAgentId`, tehat a fo agens SOHA nincs ebben a hurokban
+      //
+      // HA NINCS MINTA, AZ MONDJA MEG MAGAT: `null` token -> `frozenMs: null` -> fail-open, a
+      // 09906ebf SZANDEKOLT szemantikaja szerint, nem hianyzo bekotes miatt -- es kivulrol a
+      // ketto AZONOS (jarvis kimondott hatara). EGYSZER stuck-szakaszonkent, nem tickenkent: ha
+      // a kapu nem eszkalal, az `agentStuckSince` nem all vissza, tehat egy per-tick sor 5
+      // masodpercenkent ismetlodne -- allapot-valtasonkent naplozunk (testver-kartya f3c6054e).
+      const tokens = parsePaneTokens(pane)
+      const { sample, frozenMs } = nextTokenSample(agentTokenSample.get(agent), tokens, now)
+      if (sample) agentTokenSample.set(agent, sample)
+      if (tokens == null) {
+        if (!agentTokenReadFailed.has(agent)) {
+          agentTokenReadFailed.add(agent)
+          logger.info({ agent, session, stuckDurationMs: stuckMs },
+            'message-router: quiet-agent sweep read no token count -- the freeze gate is fail-open for this agent')
+        }
+      } else {
+        agentTokenReadFailed.delete(agent)
+      }
+      if (!shouldEscalateStuckSession(paneState, stuckMs, frozenMs)) continue
       logger.warn({ to: agent, session, stuckDurationMs: stuckMs, pendingMsgCount: 0, paneState },
         'message-router: session STUCK with an EMPTY inbox — found by the quiet-agent sweep')
       notifyOrchestratorOfStuckSession(agent, session, stuckMs, 0, paneState)
@@ -640,6 +677,7 @@ export async function runMessageRouterTick(): Promise<void> {
       agentBatchedThisReconnect.delete(agent) // reset batched flag on new absence
       agentStuckSince.delete(agent)           // absent = not stuck, just gone
       agentTokenSample.delete(agent)          // es a haladas-jel is: uj session, uj szamlalo
+      agentTokenReadFailed.delete(agent)      // uj session: a token-olvasas jelzese is nullazodik
     }
     for (const agent of presentNow) {
       agentWasAbsent.delete(agent)

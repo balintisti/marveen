@@ -192,6 +192,53 @@ describe('A BEKOTES -- a router TENYLEG atadja a haladas-jelet', () => {
     expect(routerSrc).toMatch(/shouldEscalateStuckSession\(paneState, stuckMs, frozenMs\)/)
   })
 
+  /**
+   * A SOPRES NULL TOKEN-OLVASASA NAPLOZODJON (kartya bd7de2ba, jarvis kimondott hatara).
+   *
+   * Egy `null` token-olvasas `frozenMs: null`-t ad, az pedig FAIL-OPEN -- a 09906ebf
+   * SZANDEKOLT szemantikaja szerint, nem hianyzo bekotes miatt. Kivulrol a ketto AZONOS:
+   * mindketto ugy nez ki, hogy a kapu nem szol. Ha a sopres nemán fail-openre valt, az
+   * megkulonboztethetetlen attol, hogy a bekotes hianyzik -- es epp ezt a kulonbseget
+   * epitettuk ma ejjel a tetlen-or kiertekelesi soraba is.
+   *
+   * A sopres hivasi helyet a KULCSA azonositja: `agent`, nem `msg.to_agent`.
+   */
+  function sweepTokenBlock(): string {
+    const KEY = 'nextTokenSample(agentTokenSample.get(agent)'
+    const hits = routerSrc.split(KEY).length - 1
+    // Kontroll az egyediseg ellen: egy masodik, azonos kulcsu hivas eseten az `indexOf`
+    // onkenyesen valasztana. Ez ma ejjel egy MASIK oron valodi hamis atengedes volt.
+    expect(hits, `a sopres nextTokenSample hivasa pontosan egyszer szerepeljen, ${hits} talalat`).toBe(1)
+    const at = routerSrc.indexOf(KEY)
+    // A NULL-AG BLOKKJA, nem egy fix ablak. Az elso valtozatom 700 karaktert vagott ki innen
+    // es abban keresett `logger.`-t -- es a mutacio megfogta: a naplo-sorokat KITOROLVE a
+    // teszt ZOLD maradt, mert az ablakba beleert az ALATTA levo eszkalacios `logger.warn`.
+    // A mero hatoköre szelesebb volt a kerdesnel, es egy szomszedos ERVENYES peldany
+    // elegitette ki -- ugyanaz az alak, mint az `indexOf('{')` lelet a masik oron.
+    const nullAt = routerSrc.indexOf('if (tokens == null)', at)
+    expect(nullAt, 'a sopresben legyen egy `tokens == null` ag').toBeGreaterThan(at)
+    const open = routerSrc.indexOf('{', nullAt)
+    let depth = 0, end = -1
+    for (let i = open; i < routerSrc.length; i++) {
+      if (routerSrc[i] === '{') depth++
+      else if (routerSrc[i] === '}') { depth--; if (depth === 0) { end = i; break } }
+    }
+    expect(end, 'a null-ag blokkja nem zarodik').toBeGreaterThan(open)
+    return routerSrc.slice(open, end)
+  }
+
+  it('a sopres NULL token-olvasasa naplozodik -- kulonben a fail-open nema', () => {
+    const block = sweepTokenBlock()
+    expect(block, 'a null-agnak SZOLNIA kell -- egy nema fail-open ugyanugy nez ki, mint egy hianyzo bekotes')
+      .toContain('logger.')
+  })
+
+  it('KONTROLL: mindket ut hasznal token-mintat, nem csak a kezbesitesi', () => {
+    // Ha ez valaha 1-re esik, az egyik ut visszament fail-openbe.
+    const sites = routerSrc.split('nextTokenSample(').length - 1
+    expect(sites, 'ket hivasi hely kell: a kezbesitesi hurok es a csendes-agens sopres').toBe(2)
+  })
+
   it('MINDEN hivasi hely harom argumentumot ad at -- nem csak az elso', () => {
     const sites = callSites()
     // Kontroll a nema atmenes ellen: ha a kereso egy nap nullat adna, a ciklus semmit
