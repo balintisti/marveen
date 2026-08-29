@@ -875,7 +875,15 @@ export async function runMessageRouterTick(): Promise<void> {
               // TTS directive is injected by the UserPromptSubmit hook (voice-reply-directive.py)
               // which fires on every delivery path, not just coordinator-relay.
             } else {
-              logger.warn({ id: msg.id, agent: msg.to_agent }, 'message-router: STT failed, delivering raw voice block')
+              // NEM eleg a naplo: azt csak MI latjuk. A kezbesitett uzenet mondja ki,
+              // hogy nincs atirat -- kulonben az agens egy olvashatatlan blokkot kap,
+              // es a felhasznalo azt latja, hogy ertetlenul valaszolunk neki.
+              const { isVoiceInstalled } = await import('./routes/voice.js')
+              deliveryContent = injectVoiceUnavailable(msg.content, isVoiceInstalled())
+              logger.warn(
+                { id: msg.id, agent: msg.to_agent, voiceInstalled: isVoiceInstalled() },
+                'message-router: STT failed, delivering an explicit "no transcript" note',
+              )
             }
           }
         } else if (chatId) {
@@ -967,6 +975,44 @@ function injectTranscript(content: string, transcript: string): string {
   result = result.replace(
     /(<channel[^>]*>)[\s\S]*?(<\/channel>)/,
     (_m, open: string, close: string) => `${open}\n[Hang átirat]: ${transcript}\n${close}`,
+  )
+  return result
+}
+
+/**
+ * A voice message we could NOT transcribe says so IN THE MESSAGE (card 477682a0).
+ *
+ * Until now the failure was a `logger.warn` and nothing else: the agent received
+ * a raw voice block it cannot read, and the owner saw only that we answered his
+ * voice message without understanding it. The worst available conclusion -- that
+ * we did not understand HIM -- was the one the silence invited.
+ *
+ * The page's own rule: do not make the fault fixable, make it VISIBLE. What went
+ * missing should be shown by the system, not remembered by the user.
+ *
+ * This is INDEPENDENT of whether the toolkit gets installed. If it is installed
+ * tomorrow, the next outage puts us right back here -- the line is what makes
+ * that outage speakable instead of silent.
+ */
+export function injectVoiceUnavailable(content: string, installed: boolean): string {
+  let result = content
+    .replace(/\s*attachment_kind="voice"/, '')
+    .replace(/\s*attachment_file_id="[^"]*"/, '')
+  // A KET ESET NEM AZERT KULON, MERT KET KULONBOZO OK -- HANEM MERT KET KULONBOZO TEENDO
+  // (marveen fogalmazta meg pontosabban, mint ahogy en irtam, 2026-08-28):
+  //     "nincs telepitve"    -> ALLO allapot: ujraprobalni ERTELMETLEN, a hang ma nem megy
+  //     "a whisper hibazott" -> EGYSZERI esemeny: ujrakuldeni ERTELMES, masodszorra sikerulhet
+  // Ha egy mondat fedne mindkettot, a felhasznalo vagy ujraprobalna azt, ami rendszerszinten
+  // nem fog menni, vagy feladna azt, ami masodszorra menne. Ket teendo, ket mondat.
+  const why = installed
+    ? 'az atirat elkeszitese sikertelen volt (a helyi whisper hibaval tert vissza) -- egy ujrakuldes segithet'
+    : 'a hang-eszkozkeszlet NINCS TELEPITVE ezen a gepen -- az ujrakuldes NEM segit, amig ez all'
+  result = result.replace(
+    /(<channel[^>]*>)[\s\S]*?(<\/channel>)/,
+    (_m, open: string, close: string) =>
+      `${open}\n[Hang átirat NEM ELERHETO]: ${why}. A kuldott hangot NEM hallottuk es NEM olvastuk. `
+      + `Mondd meg neki, hogy a hangüzenete nem jutott el szovegkent, es kerd meg, hogy irja le -- `
+      + `ne talalgass a tartalmarol.\n${close}`,
   )
   return result
 }
