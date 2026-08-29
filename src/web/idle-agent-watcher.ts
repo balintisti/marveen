@@ -257,6 +257,22 @@ function tick(): void {
         // before the branch, so a 'told the coordinator' line with no 'evaluated' line above it
         // is the old code. And K/J falls out of one field -- K = lines with orphanCount,
         // J = lines with orphanCount > 0.
+        //
+        // APPLY THE PAIRING ONLY TO LINES AFTER THE BUILD -- didi measured why (card 4cbc8af9,
+        // comment 8), and without this the rule gives the WRONG answer on its first use. When
+        // this shipped, the running log already held 100 'told the coordinator' lines and ZERO
+        // 'evaluated' lines, all from the previous build. Applied to the whole log the rule finds
+        // a hundred unpaired lines and reads them as "the build never landed" -- exactly
+        // backwards, and most convincing right after a successful deploy.
+        //
+        //   anchor:  dist/.built-commit mtime, or the restart time
+        //   the deciding pair: the FIRST 'told the coordinator' AFTER that -- is there an
+        //     'evaluated' line above it?
+        //   before any post-build instance of either, the honest answer is NOT MEASURABLE YET.
+        //     That is a third state, not a failure, and it is what the first reading gave.
+        //
+        // The log clock is UTC while the build marker is local time; comparing them raw is how
+        // the anchor itself gets misread.
         logger.info(
           { idleGuard: true, agent, orphanCount: pull.length },
           'idle guard: evaluated the ownerless pull-list',
