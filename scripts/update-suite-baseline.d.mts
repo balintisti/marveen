@@ -14,9 +14,20 @@ export interface SuiteCounts {
 
 /** A megtagadas MERT oka, vagy null, ha nem tudjuk. Lasd a `.mjs` docblockjat:
  *  a kiirt ok is allitas, es ket ismert esetben hamis volt (kartya e065cf1c). */
-export type FailureCause = 'live-install' | 'node-abi' | null
+export type FailureCause = 'live-install' | 'node-abi' | 'capture-overflow' | null
 
-export function diagnose(output?: string): FailureCause
+/** A `spawnSync` eredmenye, amennyi a diagnozishoz kell. Azert ilyen szuk, hogy a
+ *  teszt ne a teljes `SpawnSyncReturns`-t kelljen felepitse egy ket mezos esethez. */
+export interface SpawnOutcome {
+  status?: number | null
+  signal?: string | null
+  error?: { code?: string } | null
+}
+
+/** A `run` a MERT kilepesi allapot: enelkul a kaptura-tulcsordulas (ENOBUFS)
+ *  megkulonboztethetetlen egy valodi gyujtesi hibatol, es 2026-08-29-ig annak is
+ *  latszott. Opcionalis, hogy a regi hivok valtozatlanul mukodjenek. */
+export function diagnose(output?: string, run?: SpawnOutcome | null): FailureCause
 
 export function decide(
   rc: number,
