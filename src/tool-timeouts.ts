@@ -11,6 +11,18 @@ export const TOOL_TIMEOUTS = {
   // export and a moderate download without letting a stalled connection hang
   // the caller forever.
   'google-drive': 60_000,
+  // The OAuth token exchange is NOT the calendar either, and it inherited the
+  // calendar's 5s the same way Drive once did -- by omitting the argument. On
+  // 2026-08-24 that produced a run where BOTH the calendar and the Drive leg
+  // reported "timed out after 5000ms", even though Drive budgets 60s: a 60s
+  // budget cannot fail at 5s, so the failure was the shared token step. Measured
+  // the same night, 7 runs: one died on the 5000ms deadline, the six others
+  // answered in 2.16-4.16s for the WHOLE pipeline. 15s is ~3x that worst case
+  // for a single small POST, and still far below Drive's 60s.
+  //
+  // This is on the critical path of every Google call, so a false timeout here
+  // does not look like an auth problem -- it looks like the calendar is down.
+  'google-auth': 15_000,
   'telegram':        10_000,
   'github':          10_000,
   'slack':           10_000,
