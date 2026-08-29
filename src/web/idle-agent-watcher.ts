@@ -7,11 +7,10 @@ import { isAgentRunning, capturePane } from './agent-process.js'
 import { resolveAgentSession } from './channel-mcp-reconnect.js'
 import { sendAlert } from './channel-monitor.js'
 import { busyEvidence, detectPaneState } from '../pane-state.js'
-import { getPendingMessages, listKanbanCards, getDb, createAgentMessage } from '../db.js'
+import { getPendingMessages, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage } from '../db.js'
 import {
   decideIdleAlert,
   parseWorkCheck,
-  countDeclaredWork,
   selectDeclaredWork,
   buildNoWorkNotice,
   buildWakeMessage,
@@ -53,6 +52,9 @@ const THRESHOLDS: IdleAgentThresholds = {
   // Floor between two wakes of the same agent. An agent finishing short turns ends a
   // spell every time it goes busy, so without this the wake would follow every turn.
   wakeCooldownMs: 30 * 60_000,
+  // A repeated identical list is not news -- but after four hours, "nobody has touched
+  // this" is. Without this the suppression is permanent on a stable queue.
+  wakeStaleRearmMs: 4 * 60 * 60_000,
 }
 
 const INITIAL_DELAY_MS = 90_000
@@ -118,7 +120,15 @@ function tick(): void {
 
     // Loaded once per tick, not once per agent: the board is the same for everyone,
     // and re-reading it per agent turned a cheap tick into N table scans.
-    const cards = listKanbanCards()
+    // LABELS ARE A SEPARATE TABLE, and leaving them out is a SILENT failure rather than a
+    // missing feature: every label test then reads `undefined` and answers "no", so the
+    // owner-decision list is always empty and EVERY testing card looks untriaged.
+    // `listKanbanCards()` alone is `SELECT * FROM kanban_cards`, and that table has no
+    // labels column -- the kanban route does this same join. Measured by jarvis
+    // 2026-08-24, on code already written and tested: the functions were right and
+    // NOTHING reached them.
+    const labelsByCard = getLabelsForAllCards()
+    const cards = listKanbanCards().map((c) => ({ ...c, labels: labelsByCard.get(c.id) ?? [] }))
     const comments = lastCommentAtByCard()
     const now = Date.now()
 
@@ -138,7 +148,12 @@ function tick(): void {
       // milliseconds. Passing the wrong unit would make every future date look long past
       // (or never reached) -- silently, since the filter would simply never fire.
       const nowSec = Math.floor(now / 1000)
-      const ownWorkCount = check ? countDeclaredWork(check, agent, cards, comments, MAIN_AGENT_ID, nowSec) : null
+      // ONE selection, then the count AND the ids come out of it. Two calls are two
+      // chances to disagree, and the repeat-suppression compares ids against what the
+      // last wake NAMED -- a count from a different list could suppress a wake for work
+      // the agent was never shown.
+      const ownItems = check ? selectDeclaredWork(check, agent, cards, comments, MAIN_AGENT_ID, nowSec) : null
+      const ownWorkCount = ownItems ? ownItems.length : null
 
       // One capture per agent per tick: the evidence strength comes from the same read
       // as the idle verdict, so the two can never disagree about what was on screen.
@@ -157,6 +172,9 @@ function tick(): void {
           staleCounterOnly: running ? paneRead.staleCounterOnly : false,
           pendingMessages: running ? getPendingMessages(agent).length : 0,
           ownWorkCount,
+          // Without this the repeat-suppression never fires -- it is skipped whenever the
+          // ids are absent, deliberately, because "unchanged" must be measured.
+          ownWorkIds: ownItems ? ownItems.map((c) => c.id) : undefined,
           workCheckKind: (check as WorkCheck | null)?.kind ?? null,
         },
         state,
@@ -194,7 +212,7 @@ function tick(): void {
       }
 
       if (decision.reason === 'wake-agent') {
-        const items = selectDeclaredWork(check as WorkCheck, agent, cards, comments, MAIN_AGENT_ID, nowSec)
+        const items = ownItems ?? []
         const minutes = Math.round(decision.idleForMs / 60_000)
         try {
           createAgentMessage('system', agent, buildWakeMessage(agent, minutes, decision.workCount, items, (check as WorkCheck).kind))

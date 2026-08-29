@@ -6,6 +6,8 @@ import {
   buildNoWorkNotice,
   buildWakeMessage,
   selectDeclaredWork,
+  selectCoordinatorTriage,
+  WAITING_ON_ASSIGNEE_LABEL,
   buildFleetAlert,
   NO_IDLE_STATE,
   type IdleAgentInput,
@@ -304,13 +306,14 @@ const card = (
   id: string,
   status: string,
   assignee: string | null,
-  opts: { archived?: boolean; updatedAt?: number | null } = {},
+  opts: { archived?: boolean; updatedAt?: number | null; labels?: { name: string }[] } = {},
 ): Row => ({
   id,
   status,
   assignee,
   archived_at: opts.archived ? 1 : null,
   updated_at: opts.updatedAt === undefined ? 100 : opts.updatedAt,
+  labels: opts.labels ?? [],
 })
 
 /** card id -> (author -> timestamp of their last comment) */
@@ -342,22 +345,44 @@ describe('countDeclaredWork', () => {
     ['c', 'didi', 150],
     ['g', 'dexter', 150],
   ])
+  // 'c' also carries the mark: since 2026-08-24 the reviewer's last word is no longer
+  // enough on its own -- see the block below on why the author stopped being the signal.
+  const marked = cards.map((c) => (c.id === 'c' ? { ...c, labels: [{ name: WAITING_ON_ASSIGNEE_LABEL }] } : c))
 
   it('assigned_open_cards skips done, archived and waiting, and testing only while it awaits review', () => {
     // 'a' and 'b' are plain open work. 'c' is in testing with didi's comment as the
     // last word -- an unanswered finding, so it counts as dexter's. 'g' is in testing
     // with only dexter's own comment, so the ball is still with the reviewer.
-    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', cards, comments)).toBe(3)
+    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', marked, comments)).toBe(3)
   })
 
   // The gap Didi measured between the two rules: a card in testing whose last comment
   // is the reviewer's finding is waiting on the ASSIGNEE, but it used to fall out of
   // both queues -- hers because she had commented, his because testing was excluded
   // wholesale. 34 of 70 cards were in that state; 63 of 70 were in no queue at all.
-  it('a testing card whose last word came from someone else IS my work', () => {
+  // REWRITTEN 2026-08-24, and the history matters more than the assertion (card
+  // 0fe791fb). This test used to read: "a testing card whose last word came from
+  // someone else IS my work" -- with no label, purely on the comment author. That rule
+  // closed a real gap (the paragraph above) and then over-fired: measured over friday's
+  // 11 such items, ZERO were questions to the assignee. Three were verifiers saying the
+  // card was closable, five were stale-hash bookkeeping that states the card's claim is
+  // UNCHANGED, three were confirmations. The guard woke him five times over that list.
+  //
+  // The author is not the signal; WHO IT WAITS ON is, and it is now a label.
+  it('a testing card MARKED for the assignee is his work when a reviewer spoke last', () => {
+    const rows: Row[] = [card('t', 'testing', 'dexter', { labels: [{ name: WAITING_ON_ASSIGNEE_LABEL }] })]
+    const reviewerSpokeLast = commentsAt([['t', 'didi', 200]])
+    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, reviewerSpokeLast)).toBe(1)
+  })
+
+  it('...and the SAME card WITHOUT the mark also stays his, while the narrowing is off', () => {
+    // The triage selection is ready and correct -- and has no consumer, so nothing is
+    // taken away yet. Both halves asserted together, because the pair is the decision:
+    // a producer with no consumer must not narrow anything (marveen, 2026-08-24).
     const rows: Row[] = [card('t', 'testing', 'dexter')]
     const reviewerSpokeLast = commentsAt([['t', 'didi', 200]])
     expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, reviewerSpokeLast)).toBe(1)
+    expect(selectCoordinatorTriage(rows)).toHaveLength(1)
   })
 
   it('a testing card where I answered last is NOT my work -- the ball is back with the reviewer', () => {
@@ -378,16 +403,25 @@ describe('countDeclaredWork', () => {
     // which is exactly the ambiguity this invariant is meant to rule out.
     const rows: Row[] = [
       card('n', 'testing', 'dexter', { updatedAt: 100 }),   // no comments -> reviewer's
-      card('r', 'testing', 'dexter', { updatedAt: 200 }),   // reviewer spoke last -> assignee's
+      // marked for the assignee: since 2026-08-24 the mark is what puts it in his queue
+      card('r', 'testing', 'dexter', { updatedAt: 200, labels: [{ name: WAITING_ON_ASSIGNEE_LABEL }] }),
       card('a', 'testing', 'dexter', { updatedAt: 250 }),   // assignee answered last -> reviewer's
+      // UNTRIAGED, and this is the row the invariant grew a third queue for: nobody
+      // marked it, so it is neither the assignee's nor (necessarily) the reviewer's --
+      // and it must still land somewhere. It lands on the coordinator's triage list.
+      card('u', 'testing', 'dexter', { updatedAt: 300 })
     ]
     const cmts = commentsAt([
       ['r', 'didi', 200],
       ['a', 'didi', 200], ['a', 'dexter', 250],
+      ['u', 'didi', 300],
     ])
     const mine = countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, cmts)
     const hers = countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', rows, cmts)
-    expect(mine).toBe(1)
+    // 'r' (marked) and 'u' (reviewer spoke last, unmarked) -- the second one only while
+    // the narrowing is off; when the triage gains a consumer this becomes 1 again, in
+    // the same commit that wires it.
+    expect(mine).toBe(2)
     expect(hers).toBe(2)
     // NOT a sum. Didi's catch: `mine + hers === rows.length` is satisfied just as well
     // by one card counted twice and another counted zero times -- the two errors cancel,
@@ -401,7 +435,13 @@ describe('countDeclaredWork', () => {
       // fails for the right reason with the wrong message costs an hour to diagnose.
       const inMine = countDeclaredWork({ kind: 'assigned_open_cards' }, c.assignee ?? '', [c], cmts)
       const inHers = countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', [c], cmts)
-      expect(inMine + inHers, `card ${c.id} (assignee ${c.assignee}) is in no queue`).toBeGreaterThan(0)
+      // THE THIRD QUEUE (2026-08-24). When the assignee's rule stopped firing on the
+      // comment author, an UNTRIAGED card fell out of both of the original two -- and
+      // this invariant is what said so, immediately and by name. It is the whole reason
+      // "nobody's" was rejected as the resting place for an unmarked card: the guarantee
+      // here is not "exactly one queue", it is NOTHING MAY BE INVISIBLE.
+      const inTriage = selectCoordinatorTriage([c]).length
+      expect(inMine + inHers + inTriage, `card ${c.id} (assignee ${c.assignee}) is in no queue`).toBeGreaterThan(0)
     }
   })
 
@@ -411,11 +451,26 @@ describe('countDeclaredWork', () => {
   // on purpose -- with a third party talking, nobody can say from the data alone whose
   // move it is, and nudging both is the safe answer. Telling them apart would mean
   // reading what the comment SAYS, which is judgement, not mechanics.
-  it('a third party speaking last puts the card in BOTH queues, deliberately', () => {
+  // REWRITTEN 2026-08-24 (card 0fe791fb). This used to assert that a third party
+  // speaking last puts the card in BOTH queues -- and the reasoning above it says why:
+  // "nobody can say from the data alone whose move it is, and nudging both is the safe
+  // answer. Telling them apart would mean reading what the comment SAYS."
+  //
+  // That was right about the DATA and it is no longer true of it: the card can now carry
+  // who it waits on, so nobody has to read the comment or nudge two people to be safe.
+  // Nudging both was never free -- it is what put five identical wakes in front of an
+  // agent who could not act on any of them.
+  it('a third party speaking last still nudges BOTH -- and that is now a KNOWN cost, not a shrug', () => {
+    // The original reasoning above stands while the narrowing is off. What changed is
+    // that we can now say what it costs: nudging both is what put five identical wakes
+    // in front of an agent who could not act on any of them. The label family is the
+    // way out, and it takes effect the day the triage list has somewhere to go.
     const rows: Row[] = [card('x', 'testing', 'dexter', { updatedAt: 300 })]
     const coordinatorLast = commentsAt([['x', 'didi', 200], ['x', 'marveen', 300]])
     expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, coordinatorLast)).toBe(1)
     expect(countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', rows, coordinatorLast)).toBe(1)
+    // Ready, and deliberately not yet consumed.
+    expect(selectCoordinatorTriage(rows)).toHaveLength(1)
   })
 
   // A KNOWN gap, asserted so it cannot change unnoticed: a card assigned to X where
@@ -593,6 +648,10 @@ describe('assigned_open_cards -- the coordinator is not a reviewer', () => {
   const comments = (m: Record<string, Record<string, number>>) =>
     new Map(Object.entries(m).map(([k, v]) => [k, new Map(Object.entries(v))]))
 
+  // NO label here on purpose: these cases are about the comment-author rule, which is
+  // what still decides while the narrowing is off (see idle-triage-coupling.test.ts).
+  // A `varakozik:assignee` mark would short-circuit every one of them and they would
+  // pass for the wrong reason.
   const testingCard = (id: string) => ({ id, status: 'testing', assignee: 'dexter', updated_at: 100 })
 
   it('a testing card where the COORDINATOR spoke last is NOT the assignee’s work', () => {
@@ -647,7 +706,7 @@ describe('assigned_open_cards -- the coordinator is not a reviewer', () => {
 // here would still be green. So the control reads the REAL source file, not a copy of
 // the call -- a fixture built from our own assumption cannot fail.
 describe('the watcher actually passes the coordinator id', () => {
-  it('both call sites hand MAIN_AGENT_ID to the work-selection', () => {
+  it('EVERY work-selection call site hands MAIN_AGENT_ID to it', () => {
     const src = readFileSync(
       new URL('../web/idle-agent-watcher.ts', import.meta.url),
       'utf8',
@@ -658,8 +717,20 @@ describe('the watcher actually passes the coordinator id', () => {
     // behaviour it guards was untouched (2026-08-22). A source-reading control should
     // pin WHAT is passed, not the argument order -- otherwise every later parameter
     // costs a false red, and the third one gets "fixed" by deleting the assertion.
-    expect(src).toMatch(/countDeclaredWork\([^)]*MAIN_AGENT_ID/)
-    expect(src).toMatch(/selectDeclaredWork\([^)]*MAIN_AGENT_ID/)
+    //
+    // AND NOT ANCHORED TO THE NUMBER OF CALL SITES EITHER (2026-08-24). This used to say
+    // "both call sites", naming countDeclaredWork and selectDeclaredWork separately. The
+    // watcher now selects ONCE and takes the count from that same list -- a deliberate
+    // change, because two calls were two chances to disagree -- and the old wording went
+    // red for a shape change while the property it guards was untouched. Same lesson as
+    // the paragraph above, one level up: pin the PROPERTY (every call passes it), not the
+    // arrangement that happens to satisfy it today.
+    const sites = [...src.matchAll(/(?:select|count)DeclaredWork\(/g)]
+    expect(sites.length).toBeGreaterThan(0)
+    for (const m of sites) {
+      const args = src.slice(m.index ?? 0, (m.index ?? 0) + 240)
+      expect(args, `call site at ${m.index} omits the coordinator`).toContain('MAIN_AGENT_ID')
+    }
     // And that the id is imported, not a stray local that happens to share the name.
     expect(src).toMatch(/import \{ MAIN_AGENT_ID \} from '\.\.\/config\.js'/)
   })
