@@ -14,7 +14,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import http from 'node:http'
 import { Readable } from 'node:stream'
-import { initDatabase, createKanbanCard, getKanbanComments, addKanbanComment } from '../db.js'
+import { initDatabase, createKanbanCard, getKanbanComments, addKanbanComment,
+  createLabel, addLabelToCard } from '../db.js'
 import { tryHandleKanban } from '../web/routes/kanban.js'
 
 beforeEach(() => {
@@ -116,5 +117,65 @@ describe('GET /api/kanban/<id> -- the omission must be named, not only counted',
     const { payload } = await getCard('dddd4444')
     expect(payload.comment_count).toBe(0)
     expect(payload.comments_omitted).toBe(false)
+  })
+})
+
+/** Drives the real GET handler for one path and returns the parsed payload. */
+async function getJson(path: string): Promise<{ status: number; payload: any }> {
+  const req = Object.assign(Readable.from([]), { method: 'GET', headers: {} }) as unknown as http.IncomingMessage
+  let status = 200
+  let chunk = ''
+  const res = {
+    writeHead(code: number) { status = code; return res },
+    setHeader() { return res },
+    end(data?: string) { if (data) chunk = data },
+  } as unknown as http.ServerResponse
+  const handled = await tryHandleKanban({
+    req, res, path, method: 'GET', url: new URL('http://x' + path),
+  } as never)
+  expect(handled).toBe(true)
+  return { status, payload: chunk ? JSON.parse(chunk) : null }
+}
+
+// THE SAME CARD, TWO SHAPES (card 2e493a4b). The list embedded `labels` on every
+// card; reading ONE card by id -- the obvious move for one card -- returned an
+// object without the key at all. No error, nothing missing-looking: an agent
+// simply saw a card with no marker.
+//
+// This is the defect the file header describes, one route further along: the
+// idea applied to one branch and not to its neighbour. And it bites hardest
+// AFTER a fix, because since d3d11bef the `allando-sor` label is what excludes a
+// card from the audit's stuck-detection -- so the next checker, written
+// correctly against the label, inherits the blind spot by fetching by id.
+describe('GET /api/kanban/<id> -- the labels must not disappear between routes', () => {
+  it('carries the labels that the list carries', async () => {
+    createKanbanCard({ id: 'card-l', title: 'labelled' })
+    createLabel({ id: 'lbl-x', name: 'allando-sor', color: '#3b82f6' })
+    addLabelToCard('card-l', 'lbl-x')
+    const { payload } = await getJson('/api/kanban/card-l')
+    expect(payload.labels).toEqual([expect.objectContaining({ id: 'lbl-x', name: 'allando-sor' })])
+  })
+
+  it('says [] for an unlabelled card rather than omitting the key', async () => {
+    // Absence and emptiness look identical to a reader -- in Python a missing
+    // key and an empty list both arrive as falsy. That is the whole reason this
+    // file exists, applied to a different field.
+    createKanbanCard({ id: 'card-n', title: 'plain' })
+    const { payload } = await getJson('/api/kanban/card-n')
+    expect(payload).toHaveProperty('labels')
+    expect(payload.labels).toEqual([])
+  })
+
+  it('AND THE INVARIANT: list and single agree on the label set for one card', async () => {
+    // Pinning the agreement, not the field. A future change that drops labels
+    // from either route breaks this without anyone having to remember which
+    // route was the odd one out.
+    createKanbanCard({ id: 'card-l', title: 'labelled' })
+    createLabel({ id: 'lbl-x', name: 'allando-sor', color: '#3b82f6' })
+    addLabelToCard('card-l', 'lbl-x')
+    const list = (await getJson('/api/kanban')).payload as Array<Record<string, any>>
+    const fromList = list.find((c) => c.id === 'card-l')
+    const fromSingle = (await getJson('/api/kanban/card-l')).payload
+    expect(fromSingle.labels).toEqual(fromList!.labels)
   })
 })

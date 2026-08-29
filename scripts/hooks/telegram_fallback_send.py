@@ -4,11 +4,33 @@ Telegram Bot API fallback SENDER (agent-invoked CLI, not a harness hook).
 
 When the in-session Telegram MCP `reply` tool is dropped mid-turn ("MCP servers
 have disconnected: plugin:telegram:telegram"), the agent must still reach the
-user. The telegram-botapi-fallback skill used to `curl` sendMessage directly --
-but a raw send does NOT clear the "✍️ Dolgozom rajta…" placeholder (only the
-reply TOOL's PostToolUse hook does that). So the Stop hook, seeing a still-
-pending placeholder, delivered the agent's final answer a SECOND time at turn
-end -> the user got the message twice.
+user. THIS FILE IS THAT ROUTE. Use it directly:
+
+    python3 <this file> <chat_id> "<text>" [--sid SID] [--state-dir DIR]
+    exit 0 -> delivered, and the placeholder was cleared
+    exit 2 -> NOT delivered, nothing cleared: escalate (per the skill, email)
+
+WHY THE USAGE IS SPELLED OUT HERE (card 471ea006, measured 2026-08-28). The
+paragraph below used to point at a `telegram-botapi-fallback` skill for the
+how. That skill does not exist: no `*fallback*` or `*botapi*` directory in the
+snapshot store's history, and the name appears in no skill's text (positive
+control: the same search finds `handoff`). It very likely DID exist -- the
+commit that added this file (#638, 2026-07-16) names it as the thing whose raw
+`curl` caused the duplicate-delivery bug -- and it has since vanished, which is
+what happens to anything under ~/.claude/skills/: that tree is outside every
+repo, so nothing could have tracked it.
+
+The result was an ORPHANED EMERGENCY EXIT: installed, tested (the hermetic
+dedup test passes 12/12 today), and unreachable -- no skill, no CLAUDE.md, no
+caller names it. It is needed exactly when the reply tool is gone, which is the
+worst moment to be searching for a document that is not there. So the how lives
+in the file that does the work.
+
+The historical reason this helper exists, unchanged: a RAW Bot API send does
+not clear the "✍️ Dolgozom rajta…" placeholder (only the reply TOOL's
+PostToolUse hook does). The Stop hook, seeing a still-pending placeholder,
+delivered the agent's final answer a SECOND time at turn end -> the user got
+the message twice.
 
 This helper closes that gap by making a manual fallback behave EXACTLY like the
 reply tool: it sends the message AND then clears the placeholder for that chat
@@ -31,7 +53,7 @@ TELEGRAM_STATE_DIR else ~/.claude/channels/telegram; token from <state_dir>/.env
 "default". Bot API base from TELEGRAM_API_BASE (default https://api.telegram.org)
 so tests can point it at a local stub.
 """
-import sys
+import sys, time
 import os
 import json
 import urllib.request
@@ -53,10 +75,14 @@ def session_id(cli_sid=None):
 
 
 def log(sd, msg):
+    # DATED prefix (card e9cc1fc2). Untimed lines cannot be lined up against
+    # anything -- not the conversation ledger, not each other, not a restart.
+    # A time WITHOUT a date is barely better: this file spans days, so the only
+    # way to place a line was to watch the clock run backwards.
     try:
         os.makedirs(os.path.join(sd, "progress"), exist_ok=True)
         with open(os.path.join(sd, "progress", "debug.log"), "a", encoding="utf-8") as f:
-            f.write(msg + "\n")
+            f.write(time.strftime("[%Y-%m-%d %H:%M:%S] ") + msg + "\n")
     except Exception:
         pass
 

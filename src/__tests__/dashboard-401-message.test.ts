@@ -104,13 +104,61 @@ describe('a BEKOTES -- szoveg-rogzites, es ez a hatara', () => {
 })
 
 describe('a nyelvi fajlok', () => {
-  it('mindket nyelv ismeri az uj kulcsokat', () => {
+  // A POPULACIO SZARMAZTATOTT, NEM FELSOROLT (didi lelete, 2026-08-27, komment 5963).
+  //
+  // Itt eddig egy KEZZEL IRT otelemu lista allt -- ugyanabban a fajlban, ugyanazon a napon,
+  // ahol a DOM-iras ora mar szarmaztatott populaciot hasznalt. Ket rigor egy fajlban, es
+  // pontosan az romlott el, amelyik listat hasznalt: a 401/auth ut `tr()` kulcsai az
+  // app.js-ben 18-an vannak, a lista otot fedett. NEM elavulas -- didi megmerte a javitas
+  // commitjan is (a2443df8): ott is 18 volt, tehat az or SOHA nem fedte az utat, amit vedeni
+  // hivatott.
+  //
+  // MIERT SZAMIT, ha ma egyik kulcs sem hianyzik: a `lang-parity.test.ts` azt fogja meg, ha
+  // valaki az EGYIK fajlbol torol egy kulcsot. Amit NEM fog meg: ha MINDKETTOBOL eltunik
+  // (atnevezes, egy szekcio kivagasa) -- akkor a parity zold marad, es a kepernyore a nyers
+  // kulcs kerul ki. A `tr()` tartaleka ezt azota felfogja (app.js), de a hianyt VALAKINEK
+  // hangosan jeleznie kell, es az ez a teszt.
+  const APP = readFileSync(join(ROOT, 'web', 'app.js'), 'utf-8')
+  const trKeys = [...new Set([...APP.matchAll(/\btr\(\s*'([a-z0-9_.]+)'/g)].map(m => m[1]))]
+
+  it('a kulcs-populacio a KODBOL jon, es nem ures', () => {
+    // Meret-invarians: egy elrontott regex ures halmazt adna, es akkor a kovetkezo teszt
+    // ures cikluson menne at zolden -- a "nulla hianyzo" es a "nem mertem" ugyanaz a szam.
+    expect(trKeys.length).toBeGreaterThanOrEqual(15)
+    expect(trKeys).toContain('auth.nokey.desc')      // a kartya sajat overlaye
+    expect(trKeys).toContain('auth.login.title')
+  })
+
+  it('MINDEN `tr()` kulcs szerepel mindket nyelvi fajlban', () => {
     const hu = readFileSync(join(ROOT, 'web', 'lang', 'hu.js'), 'utf-8')
     const en = readFileSync(join(ROOT, 'web', 'lang', 'en.js'), 'utf-8')
-    for (const k of ['auth.nokey.title', 'auth.nokey.short', 'auth.nokey.how', 'auth.rejected.title', 'auth.rejected.short']) {
-      expect(hu, `hu: ${k}`).toContain(`'${k}'`)
-      expect(en, `en: ${k}`).toContain(`'${k}'`)
+    // A hianyzokat NEVEN nevezi: egy `toEqual([])` bukasa azonnal hasznalhato.
+    expect(trKeys.filter(k => !hu.includes(`'${k}'`)), 'hianyzik a hu.js-bol').toEqual([])
+    expect(trKeys.filter(k => !en.includes(`'${k}'`)), 'hianyzik az en.js-bol').toEqual([])
+  })
+
+  it('POZITIV KONTROLL: egy nem letezo kulcsot a predikatum HIANYZONAK jelol', () => {
+    // Enelkul egy mindig-ures szuro ugyanigy zold lenne.
+    const hu = readFileSync(join(ROOT, 'web', 'lang', 'hu.js'), 'utf-8')
+    expect(['auth.nincs.ilyen.kulcs'].filter(k => !hu.includes(`'${k}'`))).toEqual(['auth.nincs.ilyen.kulcs'])
+  })
+})
+
+describe('a `tr()` tartaleka hianyzo KULCSNAL is elsul (didi 3cc50c2a/5963)', () => {
+  // A `window.t` egy ismeretlen kulcsra MAGAT A KULCSOT adja vissza (app.js:26-36), ami igaz
+  // erteku -- a regi `|| fb` alak ezert soha nem tuzelt hianyzo kulcsnal, csak akkor, ha a
+  // `window.t` egyaltalan nem letezett. A kepernyore igy egy pontozott kulcsnev kerult volna,
+  // epp azon a felületen, amit ez a kartya a gep-szoveg miatt hozott letre.
+  const APP = readFileSync(join(ROOT, 'web', 'app.js'), 'utf-8')
+
+  it('mindharom `tr` definicio a kulcs-visszaadast is tartaleknak veszi', () => {
+    const defs = [...APP.matchAll(/const tr = \((k), (fb|fallback)\) => \{[\s\S]{0,240}?\n {4}\}/g)]
+    expect(defs.length).toBe(3)
+    for (const d of defs) {
+      expect(d[0]).toMatch(/s !== k \? s : (fb|fallback)/)
     }
+    // NEGATIV KONTROLL: a regi, egysoros alak sehol nem maradt bent.
+    expect(APP).not.toMatch(/\? window\.t\(k\) : (fb|fallback)\) \|\| (fb|fallback)/)
   })
 })
 

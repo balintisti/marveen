@@ -401,7 +401,26 @@ TAG = re.compile(r"<[^>]+>")
 #   - a MONDATKOZI nagybetus szo azonosito/tulajdonnev -> kimarad; mondat
 #     elejen (. ! ? : ujsor vagy lista-jel utan) a nagybetu normal proza,
 #     ott tovabbra is vizsgaljuk.
-HYPHEN_WORD = re.compile(r"[a-záéíóöőúüűA-ZÁÉÍÓÖŐÚÜŰ]+(?:-[a-záéíóöőúüűA-ZÁÉÍÓÖŐÚÜŰ]+)*")
+# ADC93F84 (2026-08-28): a fenti tokenizalas-javitas a BETUVEL kezdodo alakra
+# terjedt ki, a SZAMMAL kezdodore nem -- pedig magyarban a szam utani toldalek
+# ugyanugy kotojellel kapcsolodik, es ugyanugy HELYES iras. Merve: `Drive-ot`
+# atment, `176-ot` es `19-es` ELBUKOTT (ot -> öt, es -> és), mert a betu-only
+# minta a kotojelnel vagott es a maradek toredeket onallo szonak nezte.
+#
+# ES A JAVASLATA HIBAS MAGYART ADOTT: a `176-öt` es a `19-és` rossz. Ez a kapu
+# epp azert letezik, mert egy ekezet nelkuli level kiment egy ugyfelnek -- egy
+# ROSSZ ekezetet javaslo kapu a sajat celjat asa ala. Aki szo szerint koveti,
+# javit egy valodi hibat es BEVEZET egy ujat.
+#
+# A masodik ag SZANDEKOSAN kotelezove teszi a kotojelet (`+`, nem `*`): egy
+# csupasz szam NEM lesz token, tehat a szamokra vonatkozo mai viselkedes nem
+# valtozik. Az `5-os` eddig is atment, de VELETLENUL -- az `os` nincs a
+# szotarban --; mostantol azert megy at, amiert a `Drive-ot`: egeszkent nezzuk.
+_HU_LETTER = "a-záéíóöőúüűA-ZÁÉÍÓÖŐÚÜŰ"
+HYPHEN_WORD = re.compile(
+    rf"[{_HU_LETTER}]+(?:-[{_HU_LETTER}0-9]+)*"
+    rf"|[0-9]+(?:-[{_HU_LETTER}0-9]+)+"
+)
 
 
 def _at_sentence_start(text: str, idx: int) -> bool:

@@ -180,9 +180,12 @@ def read_transcript(transcript_path):
 
 
 def log(progress_dir, msg):
+    # Was the only writer with a time, and it still had no DATE (card e9cc1fc2).
+    # Same prefix as the other three now, so the whole file sorts and every line
+    # can be placed.
     try:
         with open(os.path.join(progress_dir, "debug.log"), "a", encoding="utf-8") as f:
-            f.write(f"[watchdog {time.strftime('%H:%M:%S')}] {msg}\n")
+            f.write(time.strftime("[%Y-%m-%d %H:%M:%S] ") + "[watchdog] " + msg + "\n")
     except Exception:
         pass
 

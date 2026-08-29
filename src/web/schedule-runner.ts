@@ -27,7 +27,32 @@ import {
   SCHEDULED_TASK_PREAMBLE,
   wrapScheduledTask,
 } from '../prompt-safety.js'
-import { cronPrevOccurrence, effectiveCronTz } from './cron.js'
+import { cronPrevOccurrence, cronGapMs, effectiveCronTz } from './cron.js'
+
+// THE PRECONDITION `skipIfBusy` ALWAYS HAD, NOW CHECKED (card 40b2f3a1).
+//
+// The flag's own comment states why dropping a tick is harmless: "the next one
+// is already on the way". Nothing verified that. `bumblebee-hygiene-scan` is a
+// WEEKLY cron carrying the flag, and jarvis measured the result -- 2 occurrences
+// due, 2 dropped, 0 runs: the task has never executed since it was created.
+// One busy minute at 09:00 on a Monday costs a week, silently.
+//
+// The threshold is MEASURED, not chosen. Of the four tasks that set the flag
+// today, three fire every 10-30 minutes and one hourly; only the weekly one is
+// outside. 60 minutes therefore covers every legitimate current user and
+// excludes exactly the case that lost work.
+//
+// NULL MEANS DO NOT SKIP. An unparseable schedule is when silently dropping is
+// least defensible, and it matches the three exemptions already below: when the
+// runner cannot tell, it keeps the task alive rather than discarding it.
+export const SKIP_IF_BUSY_MAX_GAP_MS = 60 * 60 * 1000
+
+export function skipIfBusyIsSafe(schedule: string, nowMs: number): boolean {
+  const gap = cronGapMs(schedule, nowMs)
+  if (gap === null) return false
+  return gap <= SKIP_IF_BUSY_MAX_GAP_MS
+}
+
 import {
   listScheduledTasks,
   SCHEDULED_TASKS_DIR,
@@ -37,7 +62,6 @@ import { listAgentNames, readFileOr, readAgentRemoteHost, agentDir, readAgentCla
 import { readTranscriptMtimeFromProjectDir } from './active-model.js'
 import { channelStateDir } from '../channel-provider.js'
 import {
-  agentSessionName,
   isAgentRunning,
   isSessionReadyForPrompt,
   sendPromptToSession,
@@ -47,7 +71,7 @@ import {
   sendEnterToSession,
   clearStaleParkedInput,
 } from './agent-process.js'
-import { MAIN_CHANNELS_SESSION } from './main-agent.js'
+import { sessionNameForAgent } from './session-names.js'
 import { sendTelegramMessage } from './telegram.js'
 import { runCommandTask } from './command-task.js'
 import { decideQuotaAction, type QuotaWorkClass } from '../quota-gate.js'
@@ -579,7 +603,7 @@ export function resolveTaskTarget(
   // Falls back to the standard agent session name derivation.
   const session = task.targetSession
     ? task.targetSession
-    : isMainAgent ? MAIN_CHANNELS_SESSION : agentSessionName(agentName)
+    : sessionNameForAgent(agentName)
 
   // A remote sub-agent's session lives on the laptop -- resolve its host so the
   // existence/readiness checks and the send cross the ssh boundary. A custom
@@ -1479,7 +1503,7 @@ export function startScheduleRunner(): NodeJS.Timeout {
           // state is bypassed. Dropping that on skipIfBusy would turn the
           // deferral into a silent loss, so forceSend is exempt from the
           // skip and always queues the retry.
-          if (task.skipIfBusy && !task.forceSend) {
+          if (task.skipIfBusy && !task.forceSend && skipIfBusyIsSafe(task.schedule, now)) {
             // Opt-in skip for short-cadence tasks (e.g. 30-min heartbeats):
             // a single missed tick is harmless because the next one is
             // already on the way, and queueing them produces spurious

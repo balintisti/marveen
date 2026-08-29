@@ -105,10 +105,12 @@ import {
   capturePane,
   delay,
 } from '../agent-process.js'
+import { markRestartStarted, clearRestart } from '../restart-inflight.js'
 import { addDesiredAgent, removeDesiredAgent } from '../agent-desired-state.js'
 import { RemoteStatusCache } from '../remote-status-cache.js'
 import type { AgentRunState } from '../ssh-tmux.js'
 import { readActiveModelFromProjectDir, readContextTokensFromProjectDir } from '../active-model.js'
+import { contextPctFor } from '../context-pct.js'
 import { detectPaneState, detectPermissionMode } from '../../pane-state.js'
 import { checkAgentPutFields, checkConfigPutFields, AGENT_PUT_WRITABLE_FIELDS } from '../agent-put-fields.js'
 import { detectReauthNeeded } from '../reauth-detect.js'
@@ -427,6 +429,10 @@ interface AgentSummary {
   /** Live context size in tokens (input+cache_read+cache_creation of the last
    *  turn), or null when not running / no transcript yet. */
   contextTokens: number | null
+  /** Context fill as a fraction of the window; null when unmeasurable.
+   *  Kept BESIDE the raw token count, never instead of it: a wrong denominator
+   *  is only visible while the numerator is still in view (card d5798819). */
+  contextPct: number | null
   /** True when the running session's pane shows a login/401 auth failure --
    *  drives the dashboard "reauth needed" badge + one-click /login button. */
   needsReauth: boolean
@@ -475,6 +481,16 @@ function getAgentSummary(name: string): AgentSummary {
   // no pane to inspect). One capture-pane per running agent on the list poll.
   const reauth = running ? detectReauthNeeded(capturePane(agentSessionName(name))) : { needsReauth: false }
 
+  // ONE measurement feeds BOTH `contextTokens` and `contextPct`. Two separate
+  // reads could straddle a transcript write and report a ratio whose numerator
+  // and denominator never coexisted -- and the raw count is only a check on the
+  // percentage while the two describe the same instant.
+  const agentConfigDir = resolveAgentConfigDir(name).configDir ?? undefined
+  const activeModelNow = running
+    ? readActiveModelFromProjectDir(dir, runningSince ?? undefined, agentConfigDir)
+    : null
+  const contextTokensNow = running ? readContextTokensFromProjectDir(dir, agentConfigDir) : null
+
   return {
     name,
     displayName: readAgentDisplayName(name),
@@ -483,7 +499,7 @@ function getAgentSummary(name: string): AgentSummary {
     modelProfile: typeof agentModelConfig.modelProfile === 'string' ? agentModelConfig.modelProfile : null,
     modelSource: modelResolution.source,
     modelProfileError: modelResolution.error ?? null,
-    activeModel: running ? readActiveModelFromProjectDir(dir, runningSince ?? undefined, resolveAgentConfigDir(name).configDir ?? undefined) : null,
+    activeModel: activeModelNow,
     runningSince,
     authMode: readAgentAuthMode(name),
     securityProfile: readAgentSecurityProfile(name),
@@ -504,7 +520,13 @@ function getAgentSummary(name: string): AgentSummary {
     hasAvatar: findAvatarForAgent(name) !== null,
     autoRestart: readAutoRestartConfig(name),
     contextGuard: readContextGuardConfig(name),
-    contextTokens: running ? readContextTokensFromProjectDir(dir, resolveAgentConfigDir(name).configDir ?? undefined) : null,
+    contextTokens: contextTokensNow,
+    contextPct: contextPctFor(
+      contextTokensNow,
+      activeModelNow,
+      modelResolution.model,
+      readContextGuardConfig(name).limitTokens,
+    ),
     needsReauth: reauth.needsReauth,
     reauthReason: reauth.reason,
   }
@@ -1110,16 +1132,28 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
         setAgentEnabledPlugins(name, provider)
         gcWasRunning = isAgentRunning(name)
         if (gcWasRunning) {
-          const stopRes = await stopAgentProcess(name)
-          if (stopRes.ok) {
-            await delay(2000)
-            // 'Agent is already running' here means the 60s reconcile sweep
-            // raced us in the stop..start gap and started the agent with the
-            // NEW config (written above, before the stop) -- the end state is
-            // exactly what a restart promises, only the starter differs
-            // (PR1014KONFIG821).
-            const gcStartRes = await startAgentProcess(name)
-            gcRestarted = gcStartRes.ok || gcStartRes.error === 'Agent is already running'
+          markRestartStarted(name)
+          try {
+            const stopRes = await stopAgentProcess(name)
+            if (stopRes.ok) {
+              await delay(2000)
+              // 'Agent is already running' here means the 60s reconcile sweep raced us in
+              // the stop..start gap and started the agent with the NEW config (written
+              // above, before the stop).
+              //
+              // THE OLD COMMENT SAID THE END STATE IS "exactly what a restart promises".
+              // That was not safe to assert: the reconciler starts with NO options, and
+              // an options-less start adds `--continue` for an agent with a prior session
+              // and no channel token (card f65bc6ef, measured on computress). Whether it
+              // bites here depends on hasChannel at that instant -- which is precisely
+              // what this handler is in the middle of changing. So the race is now
+              // PREVENTED rather than argued about: the mark above makes the reconciler
+              // skip us, and the start below is ours.
+              const gcStartRes = await startAgentProcess(name)
+              gcRestarted = gcStartRes.ok || gcStartRes.error === 'Agent is already running'
+            }
+          } finally {
+            clearRestart(name)
           }
         }
       }
@@ -1213,14 +1247,19 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
       if (provider === 'telegram') sendWelcomeMessage(name, botToken.trim()).catch(() => {})
       wasRunning = isAgentRunning(name)
       if (wasRunning) {
-        const stopRes = await stopAgentProcess(name)
-        if (stopRes.ok) {
-          await delay(2000)
-          const startRes = await startAgentProcess(name)
-          // Same reconcile-race as the GC branch above: an 'already running'
-          // start after our own stop means the agent IS up with the new
-          // provider config (PR1014KONFIG821).
-          restarted = startRes.ok || startRes.error === 'Agent is already running'
+        markRestartStarted(name)
+        try {
+          const stopRes = await stopAgentProcess(name)
+          if (stopRes.ok) {
+            await delay(2000)
+            const startRes = await startAgentProcess(name)
+            // Same reconcile-race as the GC branch above, and the same correction: the
+            // reconciler's start carries no options, so the end state is not automatically
+            // ours (card f65bc6ef). Marked above so it does not come to that.
+            restarted = startRes.ok || startRes.error === 'Agent is already running'
+          }
+        } finally {
+          clearRestart(name)
         }
       }
     }

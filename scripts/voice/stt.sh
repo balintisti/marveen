@@ -1,4 +1,21 @@
 #!/usr/bin/env bash
+
+# EZ DIAGNOSZTIKAI ESZKOZ, NEM A PRODUKCIOS UT (kartya 477682a0, marveen dontese 2026-08-28).
+#
+# A HANG-ATIRAT PRODUKCIOS UTJA EZ:
+#     src/web/message-router.ts:668  ->  callVoiceSTT()
+#     -> src/web/routes/voice.ts     ->  transcribeVoiceFile()
+#     -> ~/.local/share/marveen-voice/venv/bin/python  _vtools.py transcribe
+# Ez a szkript ott NEM szerepel. Merve 2026-08-28, PONTOS nevre keresve (`stt\.sh`, nem
+# reszkarakterlanc): csak a sajat lancolata hivja -- install-voice.sh, canary.sh, _vtools.py --
+# es egy teszt. Nulla produkcios fogyaszto.
+#
+# EZERT A HIBAUZENETE RENDBEN VAN, sot ez a helyes viselkedes: ha a venv nincs meg, HANGOSAN
+# elhasal es MEGNEVEZI mindket keresett utat. Egy diagnosztikai eszkoznek pontosan ezt kell
+# tennie -- a csendes "nem talaltam semmit" lenne a hiba.
+#
+# HA A HANG-ATIRAT NEM MUKODIK, ez a szkript NEM a javitando pont: a produkcios utat kell
+# megnezni (a fenti lanc), es a telepitest (`scripts/install-voice.sh`).
 # STT wrapper for the fleet. Transcribes a Telegram voice message (Hungarian).
 # Usage: stt.sh <file_id> [state_dir]
 # state_dir defaults to the agent's own telegram channel dir (cwd-based) or global.

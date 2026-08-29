@@ -62,3 +62,51 @@ describe('outgoing-copy gate tokenization: prose vs identifier (GATEKOTOJEL817/G
     expect(probs[0]).toMatch(/"\.\.\.[^"]*a video nagyon[^"]*\.\.\." @\d+/)
   })
 })
+
+// ADC93F84: the same class, one step further along. The fix above covered a
+// LETTER-prefixed hyphenated form (`Drive-ot`); a NUMBER-prefixed one was still
+// cut at the hyphen, so `176-ot` and `19-es` were reported as missing accents.
+//
+// What made it worth fixing rather than tolerating: the suggestion was WRONG
+// HUNGARIAN. `176-öt` and `19-és` are errors. This gate exists because an
+// unaccented message once reached a customer -- a gate that proposes a bad
+// accent undermines its own purpose, and anyone following it literally fixes one
+// error and introduces another.
+//
+// Marveen also measured that the false hit only ever appeared ALONGSIDE a real
+// one, which is what limited the damage -- and what made it dangerous: a wrong
+// item arrives with the credibility of the correct item next to it.
+describe('outgoing-copy gate tokenization: number-prefixed hyphenated forms (ADC93F84)', () => {
+  it('a multi-digit number with a Hungarian suffix passes: 176-ot is correct', () => {
+    expect(auditAccent('Azt kell tudni, hogy 176-ot mértünk, és van rá magyarázat a naplóban.')).toEqual([])
+  })
+
+  it('and 19-es passes too -- the fragment `es` must not be read as a standalone word', () => {
+    expect(auditAccent('Azt kell tudni, hogy a 19-es mérés jó, és van rá magyarázat a naplóban.')).toEqual([])
+  })
+
+  it('a standalone `es` in prose STILL fails -- the fix must not widen into a whitelist', () => {
+    // The direction that makes the two above worth anything. Without it,
+    // deleting the accent check entirely would pass.
+    const probs = auditAccent('Azt kell tudni, hogy ez nem hiba, es van rá magyarázat a naplóban.')
+    expect(probs.length).toBe(1)
+    expect(probs[0]).toContain('es -> és')
+  })
+
+  it('and a standalone `ot` in prose still fails', () => {
+    const probs = auditAccent('Azt kell tudni, hogy ot nem hiba, és van rá magyarázat a naplóban.')
+    expect(probs.length).toBe(1)
+    expect(probs[0]).toContain('ot -> öt')
+  })
+
+  it('the letter-prefixed form is unchanged -- the older fix still holds', () => {
+    expect(auditAccent('Ha a Drive-ot választod, elég a mappába dobni, és köszönöm, hogy már átküldted.')).toEqual([])
+  })
+
+  it('a single-digit form passes for the RIGHT reason now, not by accident', () => {
+    // `5-os` passed before the fix too -- but only because `os` happens not to
+    // be in the accentless dictionary. Nothing tokenized it as one word. A
+    // dictionary that grows one entry would have started failing it.
+    expect(auditAccent('Azt kell tudni, hogy az 5-os mérés jó, és van rá magyarázat a naplóban.')).toEqual([])
+  })
+})

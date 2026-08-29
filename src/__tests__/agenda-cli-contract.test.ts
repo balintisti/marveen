@@ -45,6 +45,94 @@ function rootWithWrapperOnly(label: string): string {
   return root
 }
 
+/**
+ * A throwaway root with a FAKE compiled CLI that answers from a script, so a
+ * test can decide what the calendar call returns and count how many times the
+ * wrapper asked. `dist/agenda-cli.js` wins the wrapper's resolution, so this
+ * is the path the running system uses.
+ */
+function rootWithFakeCli(label: string, body: string): string {
+  const root = rootWithWrapperOnly(label)
+  mkdirSync(join(root, 'dist'), { recursive: true })
+  writeFileSync(join(root, 'dist', 'agenda-cli.js'), body)
+  return root
+}
+
+/** Counts invocations in a file next to the fake, so the test can assert them. */
+const COUNTING_FAKE = (firstOut: string, laterOut: string) => `
+const fs = require('node:fs')
+const c = __dirname + '/calls'
+const n = (fs.existsSync(c) ? Number(fs.readFileSync(c, 'utf-8')) : 0) + 1
+fs.writeFileSync(c, String(n))
+process.stdout.write(n === 1 ? ${JSON.stringify(firstOut)} : ${JSON.stringify(laterOut)})
+`
+
+function callCount(root: string): number {
+  return Number(readFileSync(join(root, 'dist', 'calls'), 'utf-8'))
+}
+
+// WHY THIS EXISTS (card f4c59571, measured 2026-08-24). The CLI reports an API
+// failure as {"ok":false,...} with exit 0, and the wrapper passed it straight
+// through. A SINGLE slow round trip therefore became a sentence in Isti's
+// morning briefing saying the calendar could not be reached. Measured: 7 runs,
+// one died on a 5000ms deadline, the other six answered in 2.16-4.16s.
+//
+// The briefing runs ONCE, cold, in the morning. The call that matters most is
+// the one with no second chance.
+describe('scripts/calendar-agenda.sh -- a transient failure gets a second chance', () => {
+  it('retries a TRANSPORT error once, and reports the successful second answer', () => {
+    const root = rootWithFakeCli(
+      'transient',
+      COUNTING_FAKE('{"ok":false,"error":"Google API request timed out after 5000ms"}',
+                    '{"ok":true,"count":0,"events":[]}'),
+    )
+    const { stdout, status } = runWrapper(root)
+    expect(status).toBe(0)
+    expect(JSON.parse(stdout).ok).toBe(true)
+    expect(callCount(root)).toBe(2)
+  })
+
+  it('does NOT retry a deterministic error -- one call, and the reason survives', () => {
+    // A 403 cannot become a 200 by asking again: a retry here would only double
+    // the wait before a real message. Retrying everything would turn a repair
+    // into a way of hiding outages.
+    const root = rootWithFakeCli(
+      'permission',
+      COUNTING_FAKE('{"ok":false,"error":"HTTP 403: insufficient permission"}',
+                    '{"ok":true,"count":0,"events":[]}'),
+    )
+    const { stdout } = runWrapper(root)
+    const parsed = JSON.parse(stdout)
+    expect(parsed.ok).toBe(false)
+    expect(String(parsed.error)).toContain('403')
+    expect(callCount(root)).toBe(1)
+  })
+
+  it('gives up after ONE retry and returns the error -- not a loop, not a silent success', () => {
+    const root = rootWithFakeCli(
+      'persistent',
+      COUNTING_FAKE('{"ok":false,"error":"Google API request timed out after 5000ms"}',
+                    '{"ok":false,"error":"Google API request timed out after 5000ms"}'),
+    )
+    const { stdout, status } = runWrapper(root)
+    expect(status).toBe(0)
+    const parsed = JSON.parse(stdout)
+    expect(parsed.ok).toBe(false)
+    expect(String(parsed.error)).toContain('timed out')
+    expect(callCount(root)).toBe(2)
+  })
+
+  it('a SUCCESSFUL first call is not repeated', () => {
+    const root = rootWithFakeCli(
+      'happy',
+      COUNTING_FAKE('{"ok":true,"count":0,"events":[]}', '{"ok":true,"count":99,"events":[]}'),
+    )
+    const { stdout } = runWrapper(root)
+    expect(JSON.parse(stdout).ok).toBe(true)
+    expect(callCount(root)).toBe(1)
+  })
+})
+
 describe('scripts/calendar-agenda.sh -- caller contract', () => {
   it('emits JSON and exits 0 when nothing has ever been built', () => {
     const { stdout, status } = runWrapper(rootWithWrapperOnly('nodist'))

@@ -35,7 +35,13 @@ export interface GitRunner {
   // diverged, so `git pull --ff-only` will refuse -- the dominant silent
   // failure. Returns 0 when there is no upstream or the probe fails (the
   // safe default: do not block on an uncertain count).
-  aheadCount(): number
+  /**
+   * Helyi commitok szama az upstreamhez kepest, vagy `null`, ha NEM MERHETO
+   * (pl. az agnak nincs beallitott upstreamje). A `null` szandekos: a korabbi
+   * alak `0`-t adott vissza mereси hibara is, tehat a kapu ATENGEDETT olyankor,
+   * amikor a legkevesbe tudta, hogy szabad-e. (Kartya bae4df49.)
+   */
+  aheadCount(): number | null
   // Porcelain status excluding untracked files. Non-empty = dirty tree.
   // Untracked files are excluded because the repo legitimately carries
   // ad-hoc backup files (CLAUDE.md.backup-*, SOUL.md mid-edit, etc.)
@@ -48,6 +54,7 @@ export type PreflightResult =
   | { ok: false; reason: 'dirty-tree'; message: string }
   | { ok: false; reason: 'detached-head'; message: string }
   | { ok: false; reason: 'local-commits'; message: string; ahead: number }
+  | { ok: false; reason: 'ahead-unmeasurable'; message: string }
 
 // Concurrency gate: refuse a second /api/updates/apply while the first
 // update.sh is still running. An in-memory timestamp would reset on the
@@ -173,6 +180,20 @@ export function checkUpdatePreflight(git: GitRunner): PreflightResult {
   // usual cause. The tree is clean (changes are committed), so the dirty-tree
   // stash cannot help; reconciliation is a separate, explicit step.
   const ahead = git.aheadCount()
+  // A "nem merheto" SAJAT eset, nem nulla. Ugyanaz a lyuk allt az update.sh
+  // 332. soraban is; egyiket javitani a masik nelkul azt tanitana, hogy a
+  // szabaly populacio-fuggo.
+  if (ahead === null) {
+    return {
+      ok: false,
+      reason: 'ahead-unmeasurable',
+      message:
+        'Cannot measure how far this checkout is ahead of its upstream (the branch ' +
+        'has no upstream configured). This is NOT the same as zero local commits: ' +
+        'a fast-forward update from here is not known to be safe. Set one with: ' +
+        'git branch --set-upstream-to=origin/<branch>',
+    }
+  }
   if (ahead > 0) {
     return {
       ok: false,
