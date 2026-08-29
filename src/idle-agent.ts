@@ -617,8 +617,169 @@ export function countDeclaredWork(
  *  make it happen faster.
  *
  *  It names the agent and the duration, and asks for the one thing that ends the state.
- *  It does NOT name candidate cards -- picking them needs the board and the fleet's
- *  current shape, which is what the coordinator has and this function does not. */
+ *
+ *  IT DOES NOT NAME CANDIDATE CARDS, and the reason USED TO BE that picking them
+ *  needs the board, which this function is not given. That limitation was real and
+ *  it is now gone: `buildPullNotice` names them, because the ownerless pull-list
+ *  needs no fleet judgement -- those cards are pickable by anyone by definition
+ *  (card 4cbc8af9).
+ *
+ *  So this notice is now the NARROWER case: it fires only when the board has
+ *  nothing ownerless either, and then the coordinator really is the one who has to
+ *  act. The old sentence is kept above rather than deleted, because a reader who
+ *  meets the two functions side by side should see WHY there are two. */
+/** How long a message may sit in the queue before the SENDER is told (card 979283a9).
+ *
+ *  MEASURED, not chosen. Over 7133 delivered inter-agent messages: median 0.8
+ *  minutes, 75th percentile 6, 90th 16.6, 95th 31.6, 99th 135.9. Sixty minutes
+ *  sits above the 97th percentile, so it does not fire on the normal long tail --
+ *  and it clears the fleet's documented legitimate turn lengths (a 37-minute turn
+ *  is on record, a 58-minute one was measured on 2026-08-23). Below that the
+ *  notice would arrive while the recipient is simply still working, which is the
+ *  state the queue exists to absorb.
+ *
+ *  2.7% of messages crossed this line historically -- roughly one or two a day
+ *  per sender, each one actionable.
+ */
+export const PENDING_NOTICE_AFTER_MS = 60 * 60 * 1000
+
+export interface PendingRow {
+  id: number
+  from_agent: string
+  to_agent: string
+  created_at: number
+}
+
+/** Messages the sender should hear about, grouped by sender.
+ *
+ *  The `queue=<n>` figure the helper prints is produced at SEND time and nobody
+ *  looks again. Someone who sent something forty minutes ago gets no signal that
+ *  it still has not landed -- which is how an agent ends up waiting for a reply
+ *  that is sitting in a queue (measured 2026-08-18: dexter waited while the
+ *  answer was pending).
+ *
+ *  `alreadyNotified` is what keeps this from becoming a metronome: a message that
+ *  is still stuck an hour later must not produce a second notice every sweep.
+ *  Without it the guard would be loudest exactly when it is least useful.
+ */
+export function stalePendingBySender(
+  rows: PendingRow[],
+  nowMs: number,
+  alreadyNotified: ReadonlySet<number>,
+  thresholdMs: number = PENDING_NOTICE_AFTER_MS,
+): Map<string, PendingRow[]> {
+  const out = new Map<string, PendingRow[]>()
+  for (const r of rows) {
+    if (alreadyNotified.has(r.id)) continue
+    if (nowMs - r.created_at * 1000 < thresholdMs) continue
+    const list = out.get(r.from_agent) ?? []
+    list.push(r)
+    out.set(r.from_agent, list)
+  }
+  return out
+}
+
+/** What the sender is told. Deliberately not a nudge to resend.
+ *
+ *  `pending` lives in the database and survives a restart -- measured twice on
+ *  2026-08-28, once by accident -- so a second copy is a duplicate, not a retry.
+ *  The useful moves are to wait, or to put the content where it does not queue:
+ *  a card. That asymmetry is the whole lesson of the day this card was rescoped
+ *  -- a commit is visible to the recipient immediately, a message is not.
+ */
+export function buildPendingStillWaitingNotice(
+  sender: string,
+  rows: { to_agent: string; created_at: number }[],
+  nowMs: number,
+): string {
+  const line = (r: { to_agent: string; created_at: number }) =>
+    `  -> ${r.to_agent}: ${Math.round((nowMs - r.created_at * 1000) / 60_000)} perce all sorban`
+  return [
+    `[uzenet-or] A(z) "${sender}" ${rows.length} elkuldott uzenete MEG MINDIG nem kezbesult:`,
+    '',
+    ...rows.slice(0, 5).map(line),
+    '',
+    'A cimzett dolgozik -- a router csak IDLE panelbe tud injektalni, tehat ez nem hiba,',
+    'es nem is akadaly nala. Amit NE tegyel: ne kuldd ujra. A `pending` sor az adatbazisban',
+    'all es TULEL egy restartot is, tehat a masodik level duplikatum lenne.',
+    '',
+    'Amit erdemes: ha DONTES vagy LELET volt benne, tedd a KARTYARA is. A kartya nem all',
+    'sorba -- a cimzett akkor is latja, amikor a levelet meg nem olvasta el.',
+  ].join('\n')
+}
+
+/** The ownerless pull-list: cards anyone may take (card 4cbc8af9).
+ *
+ *  The work counter asks `assignee === agent`, which is the right question for
+ *  "what is on my plate" and the wrong one for "is there anything to do". The
+ *  rulebook's third rule sends an agent with an empty plate to exactly these
+ *  cards -- and the guard, reading its own narrower question, told them there
+ *  was nothing. Measured 2026-08-28 21:02: a high-priority ownerless card had
+ *  been created twelve minutes earlier, and the notice still said "NINCS RA
+ *  KIOSZTVA SEMMI".
+ *
+ *  The rule and the tool disagreed, and everyone reads the tool.
+ *
+ *  Same exclusions as the assigned count, for the same reasons: `done` and
+ *  `waiting` are not pickable, and a future `due_date` means someone
+ *  deliberately deferred it. `testing` is excluded here too -- an ownerless
+ *  card in review is not work to pick up.
+ */
+// Generic over the caller's card type: the filter only needs these fields, and
+// forcing WorkCountCard here would strip the id/title/priority the message has
+// to print -- the guard would know WHICH cards and be unable to name them.
+export function orphanPullList<T extends {
+  status: string; assignee: string | null
+  archived_at?: number | null; due_date?: number | null
+}>(cards: T[], now?: number): T[] {
+  return cards.filter((c) =>
+    !c.archived_at &&
+    (c.assignee ?? '').trim() === '' &&
+    c.status === 'planned' &&
+    !(now !== undefined && c.due_date != null && c.due_date > now),
+  )
+}
+
+/** Highest-priority first, so the message can name ONE card and be right. */
+export function topOfPullList<T extends { priority?: string | null; updated_at?: number | null }>(cards: T[]): T[] {
+  const rank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 }
+  return [...cards].sort((a, b) =>
+    (rank[a.priority ?? 'normal'] ?? 2) - (rank[b.priority ?? 'normal'] ?? 2) ||
+    (b.updated_at ?? 0) - (a.updated_at ?? 0),
+  )
+}
+
+/** What an idle agent is told when the board HAS ownerless work (card 4cbc8af9).
+ *
+ *  Addressed to the AGENT, not the coordinator -- that is the whole point. The
+ *  old notice asked the coordinator to push a card; this one lets the agent
+ *  pull. Measured the cost of the old shape on 2026-08-28: the coordinator
+ *  handed out a card in response to the guard, which is the pattern rule 3
+ *  exists to end.
+ *
+ *  It says LOCK FIRST because two agents took the same card 19 seconds apart on
+ *  the morning the rule was written; naming a card without saying that invites
+ *  exactly that collision.
+ */
+export function buildPullNotice(
+  agent: string,
+  minutes: number,
+  items: { id: string; title?: string | null; priority?: string | null }[],
+): string {
+  const line = (c: { id: string; title?: string | null; priority?: string | null }) =>
+    `  ${c.id.slice(0, 8)}  ${(c.priority ?? 'normal').padEnd(6)}  ${(c.title ?? '').slice(0, 60)}`
+  return [
+    `[tetlen-or] A(z) "${agent}" ${minutes} perce ures prompton all, es a NEVEN nincs semmi --`,
+    `de a tablan ${items.length} GAZDATLAN kartya var, amit barki felvehet:`,
+    '',
+    ...items.slice(0, 5).map(line),
+    '',
+    'FOGLALD LE ELOSZOR, aztan merj: `assignee` + `in_progress`. Ket agens 19 masodperc',
+    'kulonbseggel vette fel ugyanazt a kartyat azon a napon, amikor ez a szabaly szuletett.',
+    'Ha egyik sem a te savod, sorold at egy soros indoklassal -- az is elvegzett munka.',
+  ].join('\n')
+}
+
 export function buildNoWorkNotice(agent: string, minutes: number): string {
   return [
     `[tetlen-or] A(z) "${agent}" ${minutes} perce ures prompton all, ES NINCS RA KIOSZTVA SEMMI.`,
