@@ -210,10 +210,34 @@ describe('both ends are wired (structural)', () => {
     // From the function, not a 1500-character window: stripping comments shortens the file
     // by however much prose sits above the branch, so a fixed window is measuring the
     // comment density, not the code.
-    const fnStart = body.indexOf('async function reconcileDesiredAgents')
+    // THE ANCHOR CARRIES ITS OPEN PAREN, AND IT IS CHECKED FOR UNIQUENESS (didi, card comment
+    // 37). `indexOf` returns the FIRST match, so a SIBLING sharing the prefix -- and
+    // `reconcileDesiredAgentsForOrg` beside `reconcileDesiredAgents` is an ordinary name for a
+    // scoped variant -- silently moves every assertion onto the sibling. didi measured the
+    // consequence: a sibling with a correct-looking branch placed first, and the REAL reconciler
+    // stripped of its `continue`, goes 8/8 GREEN. That is a FALSE PASS on the original defect
+    // this whole card exists for: the guard checks a stage set while the running path is broken.
+    // Reproduced here before fixing.
+    //
+    // The `(` alone closes it. The COUNT is the general form, and it is the control that caught
+    // my own mutation harness tonight: an anchor that matches more than once has picked one
+    // arbitrarily, and the honest response is to fail rather than to choose. Same family as the
+    // `indexOf('{')` finding that started this -- a text locator landing on the wrong instance,
+    // one level up, on the function instead of the brace.
+    const ANCHOR = 'async function reconcileDesiredAgents('
+    const anchorHits = body.split(ANCHOR).length - 1
+    expect(anchorHits, `the reconciler anchor must match exactly once, found ${anchorHits} -- 0 means it moved or was renamed, more than 1 means this guard would pick an instance at random`)
+      .toBe(1)
+    const fnStart = body.indexOf(ANCHOR)
     expect(fnStart, 'reconcileDesiredAgents not found -- did codeOnly eat it?')
       .toBeGreaterThan(-1)
-    const autoStartAt = body.indexOf('Desired agent not running', fnStart)
+    // The SECOND anchor gets the same control -- didi named it as unmeasured. It is a log
+    // string, so a duplicate is less likely than a sibling function, but "less likely" is not
+    // a measurement and the check costs one line.
+    const END_ANCHOR = 'Desired agent not running'
+    const endHits = body.split(END_ANCHOR).length - 1
+    expect(endHits, `the loop-end anchor must match exactly once, found ${endHits}`).toBe(1)
+    const autoStartAt = body.indexOf(END_ANCHOR, fnStart)
     expect(autoStartAt, 'the options-less reconcile start not found after the function head')
       .toBeGreaterThan(fnStart)
     const loop = body.slice(fnStart, autoStartAt)
