@@ -218,8 +218,7 @@ describe('both ends are wired (structural)', () => {
     // the log in place, and bb5d8db's test stayed green. That is the worse survivor: the
     // log is the ONLY thing separating "the race happened and the mark caught it" from
     // "the race did not happen", so after that mutation it PRINTS while the reconciler
-    // starts the agent anyway -- the discriminator this card's closing condition rests on
-    // would report success at the moment the original defect runs.
+    // starts the agent anyway -- it would report success at the moment the defect runs.
     // Statement-shaped, not `toContain`: `// continue is handled below` is not a skip.
     expect(branch, `the reconciler must SKIP, not merely log (read the ${form} branch)`)
       .toMatch(/(^|[;{}\n])\s*continue\s*(;|$)/m)
@@ -228,13 +227,22 @@ describe('both ends are wired (structural)', () => {
     // correct about the race and silent about it, and the two processes meeting is
     // otherwise unobservable -- nothing else distinguishes "the mark caught a real race"
     // from "the race did not recur".
-    // THE JUSTIFICATION THAT USED TO STAND HERE WAS STALE, and an assertion string is the
-    // worst place for that: it is what you read when the guard goes red. It said the log
-    // line IS the closing condition. It stopped being that at 04:48, when marveen demoted
-    // it to a hint (card comment 20, `SEGEDJEL`) -- and didi then measured the ps probe
-    // that replaced it as ~99% clean without the fix anyway (comment 17). So the log is
-    // not load-bearing for closing or refutation. The smaller reason above is the real one
-    // and is sufficient on its own; this is a judgement, argue with it on purpose.
+    // AND NOTE WHAT IS DELIBERATELY *NOT* WRITTEN HERE: where this log line sits in the
+    // card's closing condition. That fact churns. It was the closing condition, was demoted
+    // to an auxiliary hint at 04:48 (comment 20, `SEGEDJEL`) after didi's M2, and was
+    // promoted back to a closing condition at 05:22 by marveen's explicit decision
+    // (comment 23) -- three states in 34 minutes. I pinned an assertion to it twice and it
+    // was stale both times, the second time within two minutes of the commit, in the
+    // OPPOSITE direction from the first.
+    // didi's rule was right -- an assertion string is the most expensive place for a
+    // sentence that has gone stale, because it is what you read when the guard goes red.
+    // But keeping such a sentence CURRENT is not the fix, because the fact underneath it
+    // moves faster than the file: a status is not a mechanism. So the reason above is the
+    // mechanism, which does not move -- a silent skip is unobservable no matter how the
+    // card classifies it -- and the classification lives on the card, which is where it
+    // can be edited. Requiring the log is still a judgement; argue with it on the card.
+    // (marveen settled it at 05:22: the requirement stays, and they widened their own
+    // written condition to match rather than claim it had always said so.)
     expect(branch, `the in-flight skip must be observable -- otherwise nothing shows the two processes met (read the ${form} branch)`)
       .toContain('logger.')
     expect(branch.slice(branch.indexOf('logger.')), 'the log must name the reason: mid-restart')
