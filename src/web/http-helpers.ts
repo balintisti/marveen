@@ -53,13 +53,19 @@ export function readBody(
   })
 }
 
-export function json(res: http.ServerResponse, data: unknown, status = 200): void {
+export function json(
+  res: http.ServerResponse,
+  data: unknown,
+  status = 200,
+  extraHeaders?: Record<string, string>,
+): void {
   // Cache-Control: private, no-store prevents CDN / proxy caching of API
   // responses that may contain user-specific data or session state. Without
   // this header, intermediate caches can serve stale or cross-user data.
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'private, no-store',
+    ...extraHeaders,
   })
   res.end(JSON.stringify(data))
 }
@@ -88,12 +94,14 @@ export function jsonMaybeGzip(
   res: http.ServerResponse,
   data: unknown,
   status = 200,
+  extraHeaders?: Record<string, string>,
 ): void {
   const body = Buffer.from(JSON.stringify(data))
   const headers: Record<string, string> = {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'private, no-store',
     Vary: 'Accept-Encoding',
+    ...extraHeaders,
   }
   if (body.length > GZIP_MIN_BYTES && acceptsGzip(req)) {
     headers['Content-Encoding'] = 'gzip'

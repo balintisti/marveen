@@ -46,6 +46,7 @@ import {
   closeIngestDb,
   type InsertResult,
 } from './channel-coordinator/ingest.js'
+import { channelsSessionName } from './web/session-names.js'
 
 const SOURCE = 'telegram'
 const LONGPOLL_TIMEOUT_SEC = 30
@@ -53,7 +54,7 @@ const POLL_LIMIT = 100
 
 // The native main-agent channels session + its provider. The coordinator only
 // backfills for THIS session's channel.
-const SESSION = `${MAIN_AGENT_ID}-channels`
+const SESSION = channelsSessionName(MAIN_AGENT_ID)
 const PROVIDER = CHANNEL_PROVIDER
 
 // State-machine tick / liveness-probe cadence while IDLE.
