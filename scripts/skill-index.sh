@@ -243,7 +243,12 @@ SKILL_BASELINE_NAMES="${SKILL_BASELINE_NAMES:-felderites-ket-listas-proba}"
 # EZ NEM A KAPU KUDARCA: a keret pont azt erte el, hogy MINDEN betoldas kimondott dontes legyen.
 # A VALODI valasz a mag ATRENDEZESE (66 szabaly egy fajlban mar kategoria, nem fajl) -- az kulon
 # kartyan all. Ez az emeles addig old fel, nem helyette.
-SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-436}"
+SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-417}"   # racsni 2026-08-28: min(427, 417) a bontas utan
+# 427 -> 417 (2026-08-28, dexter). BONTAS UTANI ROGZITES, NEM EMELES. A 11. es a 12. alak
+# TORTENETE a `references/alakok.md`-be kerult; a magban a NEVUK es a TEHERHORDO MONDATUK maradt.
+# A valasztas a fajl SAJAT elve szerint tortent -- ISMETLODES szerint (4 es 1 eset), nem kor szerint.
+# Kontroll a bontasra: a magot ONMAGABAN elolvasva mindket lecke felismerheto marad (jarvis merte
+# korabban, hogy epp a teherhordo mondat szokott kiesni egy bontasnal).
 # Mennyit nohet a mag az alapvonal ota. A belepesi alak szerint egy uj lecke 2-3 sor
 # a magban, tehat 15 ~ ot uj lecke, mielott torleszteni kell.
 SKILL_GROWTH_LIMIT="${SKILL_GROWTH_LIMIT:-15}"
@@ -256,7 +261,41 @@ SKILL_HARD_LIMIT="${SKILL_HARD_LIMIT:-600}"
 # "valtozott", kozben +300 karakterrel -- egy ket sorra tordelt bekezdes egy sorra huzva,
 # es a felszabadult sorra egy uj bekezdes. A sor-alapu or ebbol SEMMIT nem latott.
 # A baseline PAR: a ket szam UGYANABBOL a fajl-allapotbol valo, kulonben az atlag hazudik.
-SKILL_BASELINE_CHARS="${SKILL_BASELINE_CHARS:-32848}"
+# RACSNI, KARAKTERBEN (kartya 38221eef): a regi 32 848 BAJT volt, a mai mert ertek
+# KARAKTER -- a kettonek nem is ugyanaz az egysege, tehat nem is osszehasonlithatoak.
+#
+# ES AMI A KONFLIKTUS-FELOLDASKOR MAJDNEM ELVESZETT (dexter kommentje, 2026-08-28, HEAD-oldal):
+# a racsni MINIMUM, es 08-28-an a mert ertek 33 225 volt a 32 848-as alapvonal MELLETT, tehat
+# min(32 848, 33 225) = 32 848: a regi maradt, es a NOVEKEDES ment +1101-rol +377-re. Ez a teny
+# a BAJT-vilagban all, es a mertekegyseg-valtassal NEM viheto at szamszeruen -- de az ELVE igen,
+# es az ervenyes: az alapvonal csak SZORULHAT. A ket oldal egyutt ezt jelenti, es nem azt, hogy
+# valamelyik szam gyoz.
+SKILL_BASELINE_CHARS="${SKILL_BASELINE_CHARS:-32582}"
+
+# --- KARAKTER-SZAMLALAS, LOCALE-FUGGETLENUL (kartya 38221eef, jarvis merese 2026-08-28).
+#
+# A KEZENFEKVO JAVITAS HIBAS LETT VOLNA. A cimke "karakter"-t mond, a mero eddig `wc -c`-t
+# hasznalt, ami BAJT. A nyilvanvalo csere `wc -m`-re UGYANEZT a hibat hozza vissza, csak
+# rejtve -- mert a `wc -m` LOCALE-FUGGO. Merve ugyanazon a fajlon:
+#     wc -c ................... 35 165   (bajt)
+#     wc -m  LC_ALL=C ......... 35 165   <- BAJT. Ugyanaz, mint a `wc -c`.
+#     wc -m  *.UTF-8 .......... 32 582   (karakter)
+#     python3, explicit utf-8 . 32 582
+#
+# ES A KORNYEZET, AMI EZT VALODIVA TESZI: a `com.marveen.dashboard.plist`
+# EnvironmentVariables-e CSAK `HOME` es `PATH` -- locale NINCS. Locale nelkul az `LC_CTYPE`
+# alapertelmezese `C`, tehat a `wc -m` BAJTOT szamolna EPP OTT, AHOL AZ OR FUT -- mikozben a
+# fejleszto shelljeben (hu_HU.UTF-8) helyesen mukodne. Kezzel tesztelve jo, elesben rossz.
+#
+# Ezert python3 es nem `LC_ALL=... wc -m`: az explicit kodolas akkor sem tud csendben
+# elromlani, ha valaki kesobb kiveszi a locale-t a hivasi lancbol.
+#
+# HA A python3 NEM ELERHETO: NEM esunk vissza bajtra. Egy rossz egysegu szam rosszabb, mint a
+# hianya -- a karakter-kapu ilyenkor KIMONDOTTAN nem mer, es ezt ki is irja.
+char_count() {  # $1 = fajl; ures kimenet, ha nem merheto
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 -c 'import io,sys; print(len(io.open(sys.argv[1], encoding="utf-8", errors="strict").read()))' "$1" 2>/dev/null || true
+}
 
 baseline_for() {
   # egyetlen nev ma; tobbnel szokoz-elvalasztott lista es azonos sorrendu szamok
@@ -344,7 +383,7 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
       # korpuszon. Amit a karakter-mero HOZZATESZ, az egyetlen jelzes 52-bol -- es
       # a harom mai valodi eset MINDEGYIKET CSAK ez fogja meg (+10..+15 sor a 15-os
       # kereten belul, 1442..2019 karakterrel). Pontosan didi eredeti lelete.
-      _chars=$(wc -c < "$f" | tr -d ' ')
+      _chars=$(char_count "$f")
       _basec="${SKILL_BASELINE_CHARS:-0}"
       if [ "${_basec:-0}" -gt 0 ] && [ "$base" -gt 0 ]; then
         _avg=$((_basec / base))
