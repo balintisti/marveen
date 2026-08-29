@@ -91,23 +91,54 @@ describe('the in-flight registry', () => {
 // The repo already had the answer and nobody wired it in: helpers/strip-comments.ts, whose
 // own docblock describes this exact failure (didi, card 0114968c, 2026-08-23). Reproduced
 // both probes here before fixing; both went green on ad43df4.
-// End of the STATEMENT that starts at `from`: the first `;` or newline at depth 0 and
-// outside a string literal. Depth-aware because the statement we are reading is a call --
-// `logger.info({ agent: name }, '...')` -- whose own punctuation must not terminate it.
-// NOT A PARSER and it does not need to be: it reads one branch statement out of a slice we
-// already located. Template-literal `${}` nesting is not handled; nothing here writes one.
-function endOfStatement(s: string, from: number): number {
-  let depth = 0
+// STRING CONTENTS BLANKED, LENGTH AND LINES PRESERVED. Comments were the first thing this
+// guard read as code (0d6a00a); string literals were the second, and didi measured that the
+// gap points BOTH ways (card comment 25) -- which is why "I named the limit" was not an
+// answer. A named limit that is noisy and one that is a silent pass need opposite responses,
+// and the name alone does not say which. This one was both:
+//
+//   T3, SILENT PASS: a multi-line template whose text contains the word `continue` on a line
+//     of its own satisfies the statement-shaped skip assertion while no `continue` statement
+//     exists -- 8/8 green. And the control is the sharpest form of it: the same code WITH the
+//     real `continue` is also 8/8 green, so on that axis the guard returned the same verdict
+//     for the correct and the defective version. Not measuring weakly -- not measuring.
+//   T4, FALSE FAILURE: a correct branch whose log message contains a literal `}` closes the
+//     block early, and the guard reports the missing skip. Control: the same edit with `X`
+//     is green, so the brace alone is the cause. That is the CONCURRENTLY shape, and the
+//     cheap response is to take the brace out of a log line or call the guard noise.
+//
+// I narrowed didi's bound while reproducing it: ending a line is NOT enough (`... restarter
+// continue\n` is caught, because the regex also needs its start anchor). The word has to be
+// alone on a line, or follow a `;{}` on one. A quoted string cannot hold a newline, so only
+// TEMPLATES can do it -- measured all four ways.
+//
+// Length is preserved because anchors are found in the original text (`Desired agent not
+// running` IS a string literal) and then indexed into this one.
+function blankLiterals(src: string): string {
+  const out = src.split('')
   let quote: string | null = null
-  for (let i = from; i < s.length; i++) {
-    const c = s[i]
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i]
     if (quote) {
-      if (c === '\\') { i++; continue }
-      if (c === quote) quote = null
+      if (c === '\\') { if (src[i + 1] !== '\n') out[i + 1] = ' '; out[i] = ' '; i++; continue }
+      if (c === quote) { quote = null; continue }
+      if (c !== '\n') out[i] = ' '
       continue
     }
-    if (c === "'" || c === '"' || c === '`') { quote = c }
-    else if (c === '(' || c === '[' || c === '{') depth++
+    if (c === "'" || c === '"' || c === '`') quote = c
+  }
+  return out.join('')
+}
+
+// End of the STATEMENT that starts at `from`: the first `;` or newline at depth 0. Depth-aware
+// because the statement being read is a call -- `logger.info({ agent: name }, '...')` -- whose
+// own punctuation must not terminate it. NO quote handling: the input is already blanked, and
+// a second copy of that logic here would be one more thing to drift.
+function endOfStatement(s: string, from: number): number {
+  let depth = 0
+  for (let i = from; i < s.length; i++) {
+    const c = s[i]
+    if (c === '(' || c === '[' || c === '{') depth++
     else if (c === ')' || c === ']' || c === '}') depth--
     else if (depth === 0 && (c === ';' || c === '\n')) return i
   }
@@ -144,6 +175,11 @@ describe('both ends are wired (structural)', () => {
 
   it('the reconciler consults it AND skips -- the log line alone is a false success', () => {
     const body = src('channel-monitor.ts')
+    // STRUCTURE is read from `code`, MESSAGE CONTENT from `body`. Same length, so an index
+    // from one addresses the other. The split is the point: braces and the `continue`
+    // statement are code and must not be found inside a string; `mid-restart` lives inside
+    // a string ON PURPOSE and must not be blanked away.
+    const code = blankLiterals(body)
     // From the function, not a 1500-character window: stripping comments shortens the file
     // by however much prose sits above the branch, so a fixed window is measuring the
     // comment density, not the code.
@@ -154,6 +190,7 @@ describe('both ends are wired (structural)', () => {
     expect(autoStartAt, 'the options-less reconcile start not found after the function head')
       .toBeGreaterThan(fnStart)
     const loop = body.slice(fnStart, autoStartAt)
+    const codeLoop = code.slice(fnStart, autoStartAt)
 
     const IF = 'if (isRestartInFlight(name))'
     const ifAt = loop.indexOf(IF)
@@ -172,19 +209,22 @@ describe('both ends are wired (structural)', () => {
     // all, indexOf returns -1 and the matcher counted braces from the START of the slice,
     // so `could not read the in-flight branch` could never fire where it was meant to.
     const rest = loop.slice(ifAt + IF.length)
+    const restCode = codeLoop.slice(ifAt + IF.length)
     const lead = rest.search(/\S/)
     let branch: string
+    let branchCode: string
     let form: string
     if (rest[lead] === '{') {
       form = 'block'
       let depth = 0
       let end = -1
-      for (let i = lead; i < rest.length; i++) {
-        if (rest[i] === '{') depth++
-        else if (rest[i] === '}') { depth--; if (depth === 0) { end = i; break } }
+      for (let i = lead; i < restCode.length; i++) {
+        if (restCode[i] === '{') depth++
+        else if (restCode[i] === '}') { depth--; if (depth === 0) { end = i; break } }
       }
       expect(end, 'could not read the in-flight branch: its block never closes').toBeGreaterThan(lead)
       branch = rest.slice(lead, end)
+      branchCode = restCode.slice(lead, end)
     } else {
       // Braceless: the branch is the ONE statement that follows -- and END OF LINE IS NOT
       // END OF STATEMENT. didi, card comment 22: reading to the newline swallowed a second
@@ -198,20 +238,21 @@ describe('both ends are wired (structural)', () => {
       // forever), except every agent, permanently, with no expiry -- and the guard called
       // it success.
       form = 'braceless'
-      const stop = endOfStatement(rest, lead)
+      const stop = endOfStatement(restCode, lead)
       branch = rest.slice(lead, stop)
+      branchCode = restCode.slice(lead, stop)
       // AND THE MERGED PAIR IS ITSELF THE SIGNAL. Reading short only ever produces false
       // failures; this is the one that reads LONG, so say so rather than quietly trimming.
-      if (rest[stop] === ';') {
-        const eol = rest.indexOf('\n', stop)
-        const trailer = rest.slice(stop + 1, eol === -1 ? undefined : eol).trim()
+      if (restCode[stop] === ';') {
+        const eol = restCode.indexOf('\n', stop)
+        const trailer = restCode.slice(stop + 1, eol === -1 ? undefined : eol).trim()
         expect(trailer, 'a second statement shares the line with the braceless branch -- a braceless `if` takes exactly ONE statement, so this one runs on every iteration')
           .toBe('')
       }
     }
     // CONTROL on the locator, and it is the mutation my first attempt survived: if the
     // branch we read runs into the guards BELOW it, their `continue` answers for this one.
-    expect(branch, `the located ${form} branch ran past the in-flight check into the later guards`)
+    expect(branchCode, `the located ${form} branch ran past the in-flight check into the later guards`)
       .not.toContain('AGENT_RESTART_GRACE_MS')
 
     // IT MUST ACT ON THE ANSWER. didi mutated away the `continue`, leaving the check and
@@ -220,7 +261,7 @@ describe('both ends are wired (structural)', () => {
     // "the race did not happen", so after that mutation it PRINTS while the reconciler
     // starts the agent anyway -- it would report success at the moment the defect runs.
     // Statement-shaped, not `toContain`: `// continue is handled below` is not a skip.
-    expect(branch, `the reconciler must SKIP, not merely log (read the ${form} branch)`)
+    expect(branchCode, `the reconciler must SKIP, not merely log (read the ${form} branch)`)
       .toMatch(/(^|[;{}\n])\s*continue\s*(;|$)/m)
     // AND IT MUST SAY SO. Deliberate, and it is why the braceless
     // `if (isRestartInFlight(name)) continue` does NOT satisfy this guard: that form is
@@ -243,7 +284,7 @@ describe('both ends are wired (structural)', () => {
     // can be edited. Requiring the log is still a judgement; argue with it on the card.
     // (marveen settled it at 05:22: the requirement stays, and they widened their own
     // written condition to match rather than claim it had always said so.)
-    expect(branch, `the in-flight skip must be observable -- otherwise nothing shows the two processes met (read the ${form} branch)`)
+    expect(branchCode, `the in-flight skip must be observable -- otherwise nothing shows the two processes met (read the ${form} branch)`)
       .toContain('logger.')
     expect(branch.slice(branch.indexOf('logger.')), 'the log must name the reason: mid-restart')
       .toContain('mid-restart')
