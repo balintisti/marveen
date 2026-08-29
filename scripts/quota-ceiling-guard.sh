@@ -51,7 +51,42 @@ SOFT_PCT="${QUOTA_CEILING_SOFT:-93}"
 HARD_PCT="${QUOTA_CEILING_HARD:-95}"
 # Agents this guard is allowed to stop. The standstill (card 11ef4c0a) covers everyone
 # else already; this list is who was let OUT of it.
-GUARDED_AGENTS="${QUOTA_CEILING_AGENTS:-dexter}"
+#
+# DERIVED, NOT ENUMERATED (card 8cbb7ce6). The default used to be the single
+# literal `dexter`, written when exactly one agent was working. By 2026-08-28 six
+# were, and the guard still stopped one: measured with
+# `--dry-run --force-percent 94`, the output named dexter and nobody else, while
+# the same probe with an explicit list named all six. The script's logic was
+# never wrong -- only the list had aged.
+#
+# A hardcoded list of six would reproduce the same defect at the SEVENTH agent,
+# silently, and nobody would look until a quota ceiling arrived. So the default
+# is derived from the directories that define the fleet.
+#
+# INCLUSIVE ON PURPOSE. Every directory counts; no marker file is required. The
+# two failure directions are not symmetric: a stray directory costs one message
+# to a name that does not answer, while a MISSED agent costs exactly the defect
+# this card is about -- an agent that keeps burning quota past the ceiling. When
+# the list can only be wrong in one direction, it should be the loud one.
+#
+# WHAT THIS DOES NOT COVER, and the card says so rather than leaving it to be
+# discovered: the coordinator (marveen) and the marveen-worker* sessions do not
+# live under agents/, so the derivation cannot see them. Deriving is better than
+# enumerating; it is not complete.
+#
+# The env override stays, and stays FIRST: it is the escape hatch for a one-off,
+# not the place the real list lives (a plist environment would put the fleet
+# roster outside version control -- the same mistake, later and harder to see).
+_derive_guarded_agents() {
+  local d name out=""
+  for d in "$INSTALL_DIR"/agents/*/; do
+    [ -d "$d" ] || continue
+    name="$(basename "$d")"
+    out="$out $name"
+  done
+  printf '%s' "${out# }"
+}
+GUARDED_AGENTS="${QUOTA_CEILING_AGENTS:-$(_derive_guarded_agents)}"
 # A snapshot older than this proves nothing about now.
 MAX_AGE_MIN="${QUOTA_CEILING_MAX_AGE_MIN:-30}"
 
@@ -259,6 +294,22 @@ try:
 except Exception:
     print('ismeretlen')
 ")"
+
+# THE ROSTER IS EVIDENCE, SO IT GOES IN THE LOG (card 8cbb7ce6). The defect this
+# card is about was invisible for days precisely because the list never appeared
+# anywhere: the guard ran, logged a percentage, stopped one agent, and looked
+# like it was working. A roster line makes an aged or truncated list readable
+# afterwards instead of only reproducible by re-running the probe.
+log "guarded=[${GUARDED_AGENTS}] source=$([ -n "${QUOTA_CEILING_AGENTS:-}" ] && echo env || echo derived)"
+say "guarded: ${GUARDED_AGENTS}"
+
+# AN EMPTY ROSTER IS NOT "NOTHING TO DO" -- it is a guard that cannot guard. The
+# loop below would simply find nobody and the run would end quietly, which is the
+# same output as a healthy fleet at 40% quota. Say it instead.
+if [ -z "$GUARDED_AGENTS" ]; then
+  log "REFUSING: the guarded list is EMPTY (no agents/*/ directories, and no QUOTA_CEILING_AGENTS override) -- this guard is protecting nobody"
+  say "FIGYELEM: ures az orzott lista -- a kapu senkit nem ved"
+fi
 
 # Who is actually running? Nothing to stop if the session is not there.
 running_agents=""
