@@ -53,6 +53,8 @@ import { getSecret } from './vault.js'
 import { resolveOpenRouterModel } from './openrouter-models.js'
 import { reapChannelOrphans, reapDetachedChannelClaudes } from './channel-poller-reap.js'
 import { MAIN_CHANNELS_SESSION } from './main-agent.js'
+import { agentSessionName, sessionNameForAgent } from './session-names.js'
+import { markRestartStarted, clearRestart } from './restart-inflight.js'
 import { notifyChannel } from '../notify.js'
 
 // Lazy so a transient PATH gap at import time (e.g. the 04:00 auto-update
@@ -812,9 +814,10 @@ function resolveAgentProvider(name: string): ChannelProviderType {
   return CHANNEL_PROVIDER
 }
 
-export function agentSessionName(name: string): string {
-  return `agent-${name}`
-}
+// The session-name rules live in session-names.ts (card 228c9252); re-exported
+// here because callers -- and the test doubles that mock this module -- already
+// know `agentSessionName` by this path.
+export { agentSessionName, sessionNameForAgent } from './session-names.js'
 
 /**
  * POSIX single-quote a value for safe interpolation into a shell command STRING (card b7fa5281).
@@ -864,7 +867,7 @@ export function agentRunState(name: string): AgentRunState {
   const host = readAgentRemoteHost(name)
   try {
     const out = captureTmux(host, ['list-sessions', '-F', '#{session_name}'])
-    return classifyRunState(out, agentSessionName(name), host != null)
+    return classifyRunState(out, sessionNameForAgent(name), host != null)
   } catch (err) {
     // tmux list-sessions exits non-zero ("no server running") when there are
     // zero sessions -- on a REACHABLE remote that means 'stopped', not
@@ -1460,11 +1463,26 @@ export function getAgentProcessInfo(name: string): { running: boolean; session?:
 }
 
 export async function restartAgentProcess(name: string, opts: { fresh?: boolean } = {}): Promise<{ ok: boolean; pid?: number; error?: string }> {
-  if (isAgentRunning(name)) {
-    const stopResult = await stopAgentProcess(name)
-    if (!stopResult.ok) return { ok: false, error: stopResult.error || 'Failed to stop running agent before restart' }
+  // The stop below opens a window in which this agent is DESIRED and NOT RUNNING, which
+  // is exactly what the channel-monitor reconciler exists to fix -- and it fixes it with
+  // an options-less start, dropping the `fresh` this caller asked for. Card f65bc6ef:
+  // measured on computress at 03:07, a saturation restart came back with `--continue`.
+  // Marked here rather than in the guard so EVERY caller is covered, and cleared in a
+  // finally so the mark cannot outlive the operation.
+  markRestartStarted(name)
+  try {
+    if (isAgentRunning(name)) {
+      const stopResult = await stopAgentProcess(name)
+      if (!stopResult.ok) return { ok: false, error: stopResult.error || 'Failed to stop running agent before restart' }
+    }
+    // The `await` is LOAD-BEARING: returning the promise unawaited would run the finally
+    // -- and clear the mark -- before the start completes, leaving most of the window
+    // open while the fix still LOOKED present. Exactly the kind of thing a later tidy-up
+    // removes as redundant (jarvis flagged it in review).
+    return await startAgentProcess(name, opts)
+  } finally {
+    clearRestart(name)
   }
-  return startAgentProcess(name, opts)
 }
 
 // Claude Code occasionally pops a "How is Claude doing this session? (optional)"
