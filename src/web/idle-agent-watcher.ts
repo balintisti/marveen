@@ -268,8 +268,19 @@ function tick(): void {
         //   ANCHOR ON THE PID, NOT ON THE CLOCK. Every line carries the process id
         //     (`[06:31:22.123] INFO (2413): ...`) and it changes on every restart, so it cannot
         //     be broken by midnight, a timezone, or a missing date.
-        //   the deciding pair: the FIRST 'told the coordinator' from the CURRENT pid -- is there
-        //     an 'evaluated' line above it, same pid?
+        //   THREE STRINGS ON THIS PATH, NOT TWO -- didi, card comment 13. The rule as I first
+        //     wrote it named only 'evaluated' and 'told the coordinator', and MISSED the one
+        //     that matters most: when ownerless cards DO exist this logs 'named the ownerless
+        //     pull-list' and `continue`s, so 'told the coordinator' below is unreachable
+        //     (control flow, not inference -- the `continue` is right there). A reader checking
+        //     only the two original strings after a SUCCESSFUL fire sees zero 'told' lines and
+        //     concludes "not measurable yet" while the fix has in fact fired. The most
+        //     informative outcome was the one the rule could not see, and it fails toward
+        //     "it never ran" -- the discouraging direction, which nobody double-checks.
+        //
+        //     'named' present ............ the fix RUNS and FIRED -- the strongest evidence
+        //     'evaluated' + 'told' ....... the fix runs, there were no ownerless cards
+        //     'told' with no 'evaluated' . the OLD build
         //   with no line of either kind from that pid yet, the honest answer is NOT MEASURABLE
         //     YET. A third state, not a failure. (Control: count ALL lines from that pid first
         //     -- a zero there means the anchor is wrong, not that the guard is silent.)
@@ -279,6 +290,11 @@ function tick(): void {
         //     reached. Without it, "the branch did not run" and "the guard is dead" are the same
         //     zero. Measured 06:41 on pid 2413: 128 lines, 1 idle-guard line (a stage-1 wake at
         //     06:38:01), 0 told-the-coordinator, 0 evaluated -- alive, branch not reached.
+        //     COUNT ENTRIES, NOT LINES: didi and I published 250 and 128 for the same thing at
+        //     the same moment. Neither meter was wrong -- a stateful matcher counts LINES
+        //     (676, of which 467 are continuation lines carrying no pid), a literal one counts
+        //     ENTRIES (209). Ratio ~3.2x. Harmless for a non-zero control, and off by 3x for
+        //     anything else: a number needs its UNIT, not just its command.
         //
         // THE TIMESTAMP ANCHOR THIS COMMENT FIRST PRESCRIBED DOES NOT WORK ON THIS LOG, and the
         // version of it I committed was worse than useless (didi measured both, card 4cbc8af9):
