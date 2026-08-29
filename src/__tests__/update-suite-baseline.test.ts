@@ -173,3 +173,43 @@ describe('a megtagadas OKA is mert allitas legyen, ne az altalanos tipp (e065cf1
     }
   })
 })
+
+describe('a kaptura tulcsordulasa NEM gyujtesi hiba (2026-08-29, merve a torzson)', () => {
+  // A MERT ESET: a `vitest list --json` kimenete 1 053 052 bajt lett -- 4476-tal TOBB
+  // a `spawnSync` 1 MiB-os alapertelmezett `maxBuffer`-enel. A node SIGTERM-mel megolte
+  // a gyereket, `status: null` + `error.code: ENOBUFS`, amit a hivo `rc = 1`-re kepez.
+  // A generator ebbol azt jelentette, hogy "egy fajl BE SEM TOLTODOTT. Eloszor azt
+  // javitsd." -- es egy nem letezo betoltesi hibat kuldott keresni, mikozben a gyujtes
+  // HIANYTALAN volt (400 fajl / 5110 teszt).
+  //
+  // Ez ugyanaz az alak, amit ez a fajl mar rogzit a `live-install` agra: az eszkoz a
+  // HELYES allapotot nevezi hibanak. A kulonbseg annyi, hogy ez a novekedessel jott el
+  // -- a keszlet atlepte az 1 MiB-ot --, tehat magatol NEM allt volna helyre.
+
+  it('ENOBUFS-t kaptura-tulcsordulasnak nevezi, nem betoltesi hibanak', () => {
+    expect(diagnose('', { error: { code: 'ENOBUFS' }, status: null })).toBe('capture-overflow')
+  })
+
+  it('a SIGTERM + null status ugyanaz az eset, `error` nelkul is', () => {
+    expect(diagnose('', { status: null, signal: 'SIGTERM' })).toBe('capture-overflow')
+  })
+
+  it('a megtagadas INDOKA kimondja, hogy a keszlettel nincs baj', () => {
+    const v = decide(1, null, 'capture-overflow')
+    expect(v.write).toBe(false)
+    expect(v.reason).toMatch(/A GYUJTES TELJES VOLT/)
+    expect(v.reason).toMatch(/EGYETLEN FAJL SEM HIBAZOTT/)
+    // ES A NEGATIV FELE, ami nelkul az allitas nem diszkriminal: a regi, felrevezeto
+    // mondat NEM lehet ott. Enelkul a teszt akkor is zold lenne, ha mindket szoveg
+    // kimenne egymas alatt -- pontosan az a hiba, amit az e065cf1c kartya javitott.
+    expect(v.reason).not.toMatch(/BE SEM TOLTODOTT/)
+  })
+
+  it('KONTROLL: egy valodi gyujtesi hiba TOVABBRA is az altalanos agra megy', () => {
+    // A `run` objektum nelkul (vagy sikeres kilepessel) a diagnozis null marad, es a
+    // decide az eredeti uzenetet adja -- kulonben az uj ag mindent felszivna.
+    expect(diagnose('valami mas hiba', { status: 1 })).toBeNull()
+    expect(decide(1, null, null).reason).toMatch(/BE SEM TOLTODOTT/)
+  })
+})
+

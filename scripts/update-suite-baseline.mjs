@@ -74,9 +74,16 @@ const END = '// === SUITE-BASELINE:END ==='
  * `console.error`-ban, a dontesen KIVUL, tehat nem volt tesztelheto, es a
  * felrevezeto mondat ALATTA is kiirodott. Itt a diagnozis a dontes RESZE lesz.
  */
-export function diagnose(output = '') {
+export function diagnose(output = '', run = null) {
   if (/ERR_DLOPEN_FAILED|was compiled against a different Node/.test(output)) return 'node-abi'
   if (/REFUSING TO RUN TESTS/.test(output)) return 'live-install'
+  // A KAPTURA TULCSORDULASA NEM GYUJTESI HIBA, ES EDDIG ANNAK LATSZOTT (2026-08-29).
+  // A `spawnSync` alapertelmezett `maxBuffer`-e 1 MiB; ha a gyerek tobbet ir a
+  // stdout-ra, a node SIGTERM-mel MEGOLI, `status: null` es `error.code: ENOBUFS`
+  // lesz belole -- amit a hivo `rc = 1`-re kepez. A keszlet HIANYTALANUL osszegyult;
+  // csak a CSATORNA nem fert el. A regi uzenet ilyenkor azt allitotta, hogy "egy fajl
+  // BE SEM TOLTODOTT", es egy nem letezo betoltesi hibat kuldott keresni.
+  if (run && (run.error?.code === 'ENOBUFS' || (run.status === null && run.signal === 'SIGTERM'))) return 'capture-overflow'
   return null
 }
 
@@ -94,6 +101,17 @@ export function decide(rc, counts, cause = null) {
           '  Egyetlen fajl sem "toltodott be rosszul" -- el sem indult a gyujtes.\n' +
           '  FUTTASD EGY WORKTREEBOL A HOME ALATT (ne /tmp-bol: a hook-path guard\n' +
           '  elutasitja a /tmp-elotagu gyokereket, es a kapu-tesztek hamisan pirosak).',
+      }
+    }
+    if (cause === 'capture-overflow') {
+      return {
+        write: false,
+        reason:
+          `A GYUJTES TELJES VOLT -- A KAPTURA CSORDULT TUL (kilepesi kod ${rc}).\n` +
+          '  A `spawnSync` 1 MiB-os alapertelmezett `maxBuffer`-ebe nem fert bele a\n' +
+          '  `vitest list --json` kimenete, ezert a node SIGTERM-mel megolte a gyereket.\n' +
+          '  EGYETLEN FAJL SEM HIBAZOTT, es nincs mit javitani a keszleten.\n' +
+          '  A javitas: `--json=<fajl>` (meret-fuggetlen), ne a stdout.',
       }
     }
     if (cause === 'node-abi') {
@@ -178,10 +196,19 @@ function main() {
     // `vitest list --json` a GYUJTOTT teszteket sorolja fel (az `it.each` tablakat
     // kibontva), futtatas nelkul. A kimenetet nem a riporter adja, hanem mi
     // szamoljuk -- ezert itt nincs `stdio: inherit`.
-    run = spawnSync('npx', ['vitest', 'list', '--json'], opts)
+    // `--json=<FAJL>` ES NEM a stdout, es ez MERT DEFEKTUS-JAVITAS (2026-08-29).
+    // A stdout-os alak a `spawnSync` 1 MiB-os `maxBuffer`-ebe futott: a kimenet
+    // 1 053 052 bajt lett (4476-tal TOBB a korlatnal), a node SIGTERM-mel megolte a
+    // gyereket, es a `status: null` `rc = 1`-re kepzodott. A generator ebbol azt
+    // jelentette, hogy "egy fajl BE SEM TOLTODOTT" -- HAMIS: a gyujtes hianytalan
+    // volt (400 fajl / 5110 teszt), csak a CSATORNA nem fert el.
+    // A nagyobb `maxBuffer` is mukodne, de az egy SZAM, ami a kovetkezo novekedesnel
+    // ujra rossz lesz. A fajlba iras MERET-FUGGETLEN, tehat nem tud megint elavulni.
+    const listJson = join(dir, 'list.json')
+    run = spawnSync('npx', ['vitest', 'list', `--json=${listJson}`], opts)
     if (run.status === 0) {
       try {
-        const rows = JSON.parse(run.stdout || '[]')
+        const rows = JSON.parse(readFileSync(listJson, 'utf-8'))
         counts = { files: new Set(rows.map(r => r.file)).size, tests: rows.length }
       } catch { counts = null }
     }
@@ -199,7 +226,7 @@ function main() {
   const rc = run.status === null ? 1 : run.status
   // A diagnozis a MERT kimenetbol jon, nem feltevesbol -- es a dontes RESZE, hogy
   // egyetlen uzenet menjen ki, ne egy helyes es egy felrevezeto egymas alatt.
-  const verdict = decide(rc, counts, diagnose(`${run.stderr ?? ''}${run.stdout ?? ''}`))
+  const verdict = decide(rc, counts, diagnose(`${run.stderr ?? ''}${run.stdout ?? ''}`, run))
   if (!verdict.write) {
     // DIDI FIGYELMEZTETESE, ES ITT SZAMIT A LEGTOBBET: node 26 alatt a `vitest
     // list` a nativ modulon ERR_DLOPEN_FAILED-del elhasal. Az a KORNYEZET hibaja,
