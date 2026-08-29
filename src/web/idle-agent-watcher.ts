@@ -265,14 +265,35 @@ function tick(): void {
         // a hundred unpaired lines and reads them as "the build never landed" -- exactly
         // backwards, and most convincing right after a successful deploy.
         //
-        //   anchor:  dist/.built-commit mtime, or the restart time
-        //   the deciding pair: the FIRST 'told the coordinator' AFTER that -- is there an
-        //     'evaluated' line above it?
-        //   before any post-build instance of either, the honest answer is NOT MEASURABLE YET.
-        //     That is a third state, not a failure, and it is what the first reading gave.
+        //   ANCHOR ON THE PID, NOT ON THE CLOCK. Every line carries the process id
+        //     (`[06:31:22.123] INFO (2413): ...`) and it changes on every restart, so it cannot
+        //     be broken by midnight, a timezone, or a missing date.
+        //   the deciding pair: the FIRST 'told the coordinator' from the CURRENT pid -- is there
+        //     an 'evaluated' line above it, same pid?
+        //   with no line of either kind from that pid yet, the honest answer is NOT MEASURABLE
+        //     YET. A third state, not a failure. (Control: count ALL lines from that pid first
+        //     -- a zero there means the anchor is wrong, not that the guard is silent.)
+        //   AND A SECOND CONTROL THAT SEPARATES THE TWO SILENCES: look for ANY 'idle guard' line
+        //     from that pid. One from a different path -- a wake, say -- proves the guard is
+        //     RUNNING under this build, so a missing 'evaluated' means the branch was not
+        //     reached. Without it, "the branch did not run" and "the guard is dead" are the same
+        //     zero. Measured 06:41 on pid 2413: 128 lines, 1 idle-guard line (a stage-1 wake at
+        //     06:38:01), 0 told-the-coordinator, 0 evaluated -- alive, branch not reached.
         //
-        // The log clock is UTC while the build marker is local time; comparing them raw is how
-        // the anchor itself gets misread.
+        // THE TIMESTAMP ANCHOR THIS COMMENT FIRST PRESCRIBED DOES NOT WORK ON THIS LOG, and the
+        // version of it I committed was worse than useless (didi measured both, card 4cbc8af9):
+        //   - the lines carry NO DATE, only a time -- `grep -cE '^\[[0-9]{4}-'` is 0 -- so in a
+        //     9 MB log spanning days, today's [03:07:18] and Tuesday's are indistinguishable.
+        //     A time-only prefix structurally cannot express "after the build".
+        //   - and I asserted the clock was UTC. It is LOCAL: last line [06:41:02] against local
+        //     06:41:14. I had inferred UTC from a single old timestamp that looked too old to be
+        //     recent -- a story fitted to one point, written down as a fact. A reader converting
+        //     UTC to local would shift the anchor two hours EARLIER and count pre-build lines as
+        //     post-build: exactly the backwards answer the anchor exists to prevent.
+        // Both of our first attempts at the anchored read failed the same way and in opposite
+        // directions -- a timestamp pattern that matched nothing put every line on one side
+        // (mine: all "after", a confident 100) or the other (didi's: all "before", a confident
+        // 0, agreeing with what we expected, which is the more dangerous half).
         logger.info(
           { idleGuard: true, agent, orphanCount: pull.length },
           'idle guard: evaluated the ownerless pull-list',
