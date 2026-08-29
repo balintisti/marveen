@@ -235,8 +235,20 @@ describe('both ends are wired (structural)', () => {
     // string, so a duplicate is less likely than a sibling function, but "less likely" is not
     // a measurement and the check costs one line.
     const END_ANCHOR = 'Desired agent not running'
-    const endHits = body.split(END_ANCHOR).length - 1
-    expect(endHits, `the loop-end anchor must match exactly once, found ${endHits}`).toBe(1)
+    // COUNTED OVER THE SEARCH RANGE, NOT THE WHOLE FILE. My first version counted every
+    // occurrence in the file and FALSE-ALARMED on correct code: this anchor is resolved with
+    // `indexOf(END_ANCHOR, fnStart)`, so a mention ANYWHERE EARLIER is not an ambiguity for
+    // this lookup at all. Measured -- an unrelated line carrying the same text above the
+    // function turned the guard red while the real resolution was still exact.
+    // I shipped that in the same commit where I argued a guard must reject the sibling-shaped
+    // LIE without rejecting the sibling. A control has to be held to the standard it enforces,
+    // and the false-alarm direction is the half I had not measured on my own check.
+    // Measured in all four directions: a duplicate BEFORE the function head is correct code and
+    // passes; a duplicate inside the range, before OR after the real one, is genuine ambiguity
+    // and fails; the anchor's removal fails with `found 0`.
+    const endHits = body.slice(fnStart).split(END_ANCHOR).length - 1
+    expect(endHits, `the loop-end anchor must match exactly once after the function head, found ${endHits} -- 0 means it moved, more than 1 means the loop end is ambiguous`)
+      .toBe(1)
     const autoStartAt = body.indexOf(END_ANCHOR, fnStart)
     expect(autoStartAt, 'the options-less reconcile start not found after the function head')
       .toBeGreaterThan(fnStart)
