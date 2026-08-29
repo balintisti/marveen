@@ -469,6 +469,80 @@ describe('skill-index.sh -- a KARAKTER-KERET: sajat alapvonal (83cac1ed)', () =>
       expect(out).not.toContain(MARKER)
     } finally { rmSync(home, { recursive: true, force: true }) }
   })
+
+  // A KAPU, NEM CSAK A HANG (card 07e5b171). Every test above asserts that the
+  // guard SPEAKS. None asserted that it STOPS anything -- and that was exactly
+  // the defect: the character branch printed its warning and returned 0, while
+  // the summary line in the SAME output said every skill was under its limit.
+  // Two contradicting statements, and the exit code sided with the comforting
+  // one. A guard whose tests only read its stdout cannot tell a gate from a
+  // narrator.
+
+  it('a karakter-tullepes SAJAT kilepesi kodot ad (4), nem 0-t', () => {
+    // The whole card in one assertion. Before the fix this returned 0, so an
+    // `&&` chain or a CI step walked straight past it -- and a warning the
+    // caller can silence with `>/dev/null` is worth what the caller allows.
+    const { home } = fileWith(514, 37453 + 1442)
+    try {
+      const r = runScript([], env({ HOME: home }))
+      expect(r.stdout).toContain(MARKER)
+      expect(r.exitCode).toBe(4)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  it('es 4, NEM 3 -- a ket allitas kulonbozo, a hivo meg tudja kulonboztetni', () => {
+    // 3 says a skill broke its LINE limit; 4 says it fits in lines and not in
+    // characters. Collapsing them would lose the distinction the second number
+    // was added for, and a caller that already handles 3 keeps its meaning.
+    const { home } = fileWith(514, 37453 + 1442)
+    try {
+      expect(runScript([], env({ HOME: home })).exitCode).not.toBe(3)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  it('a SOR-tullepes tovabbra is 3, es elozi a karakter-agat', () => {
+    // Precedence, pinned: a file over the HARD limit is also over its character
+    // frame, and the harder violation must be the one reported. Without this
+    // the new branch could quietly take over the older code.
+    const { home } = fileWith(650, 37453 + 40000)
+    try {
+      expect(runScript([], env({ HOME: home })).exitCode).toBe(3)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  it('a kereten BELUL 0 marad -- egy or, ami mindig tuzel, nem or', () => {
+    const { home } = fileWith(504, 37453)
+    try {
+      expect(runScript([], env({ HOME: home })).exitCode).toBe(0)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  it('az osszegzo sor NEM allitja, hogy minden rendben, amikor karakterben nincs', () => {
+    // The contradiction itself. `--verbose` because the reassuring line only
+    // prints there (the script forces VERBOSE=0 otherwise, so the env var is
+    // inert -- measured, and already documented at skill-index.sh:274).
+    const { home } = fileWith(514, 37453 + 1442)
+    try {
+      const out = runScript(['--verbose'], env({ HOME: home })).stdout
+      expect(out).not.toContain('minden skill a sajat hatara alatt')
+      expect(out + '').toContain(MARKER)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  it('es AKKOR allitja, amikor tenyleg rendben van -- kulonben a sor semmit nem mondana', () => {
+    // The other direction, and the one that makes the assertion above mean
+    // something: without it, deleting the summary line entirely would pass.
+    const { home } = fileWith(504, 37453)
+    try {
+      const out = runScript(['--verbose'], env({ HOME: home })).stdout
+      expect(out).toContain('minden skill a sajat hatara alatt')
+      // And the control must not be declaring itself broken. It used to: the
+      // arms check looked for a hardcoded skill name, so under this harness's
+      // own baseline ('pinned') the guard reported "NEM megbizhato" on every
+      // run -- and 25 tests passed anyway, because none of them read this line.
+      expect(out).not.toContain('pozitiv kontroll ELBUKOTT')
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
 })
 
 // === `--check <skill>`: a szerzo a SAJAT fajljara kap szamot, iras ELOTT (kartya 0d0e3892)

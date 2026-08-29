@@ -311,6 +311,11 @@ baseline_for() {
 }
 
 OVER_LIMIT=0
+# KULON szamlalo a karakter-agnak (kartya 07e5b171). Nem az OVER_LIMIT-be megy:
+# a sor/kemeny korlat es a karakter-keret KET KULONBOZO allitas, es a hivo
+# meg tudja kulonboztetni oket a kilepesi kodon (3 vs 4).
+CHAR_OVER=0
+CHAR_LIST=""
 OVER_LIST=""
 for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
   [ -f "$f" ] || continue
@@ -390,13 +395,20 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
         _cgrowth=$((_chars - _basec))
         _climit=$((SKILL_GROWTH_LIMIT * _avg))
         if [ "$_cgrowth" -gt "$_climit" ]; then
-          if [ -n "${CHECK_SKILL:-}" ]; then
-            # check modban ez BUKAS: a mod celja, hogy egy `&&` lanc ele lehessen tenni
-            echo "MERET-OR: ${skill}  A KARAKTER-KERET ELFOGYOTT: +${_cgrowth} karakter (keret ${_climit}), mikozben a sorszam csak ${growth_s}." >&2
-            OVER_LIMIT=$((OVER_LIMIT+1))
-          else
-            echo "MERET-OR: ${skill}  A KARAKTER-KERET ELFOGYOTT: +${_cgrowth} karakter (keret ${_climit}), mikozben a sorszam csak ${growth_s}."
-          fi
+            if [ -n "${CHECK_SKILL:-}" ]; then
+              # KET KARTYA EGY AGON (07e5b171 + 0d0e3892), es a MOD donti el, melyik szamit.
+              # check modban ez BUKAS: a mod celja, hogy egy `&&` lanc ele lehessen tenni,
+              # tehat a karakter-tullepes az OVER_LIMIT-be megy es a 3-as kilepesi kodot valtja.
+              echo "MERET-OR: ${skill}  A KARAKTER-KERET ELFOGYOTT: +${_cgrowth} karakter (keret ${_climit}), mikozben a sorszam csak ${growth_s}." >&2
+              OVER_LIMIT=$((OVER_LIMIT+1))
+            else
+              # broadcastban SAJAT agat kap (07e5b171): a sor-kapu rendben lehet, a
+              # karakter-keret megsem -- korabban ilyenkor a megnyugtato "minden skill a
+              # hatara alatt" ment ki UGYANABBAN a kimenetben a tullepes-sorral.
+              echo "MERET-OR: ${skill}  A KARAKTER-KERET ELFOGYOTT: +${_cgrowth} karakter (keret ${_climit}), mikozben a sorszam csak ${growth_s}."
+              CHAR_OVER=$((CHAR_OVER+1))
+              CHAR_LIST="${CHAR_LIST}  - ${skill}: +${_cgrowth} karakter (keret ${_climit}), sorban ${growth_s}\n"
+            fi
         fi
       fi
       _room_growth=$((SKILL_GROWTH_LIMIT - growth))
@@ -433,16 +445,33 @@ _probe=$(printf 'x\n%.0s' $(seq 1 $((SKILL_LINE_LIMIT+1))) | wc -l | tr -d ' ')
 # ami a kemeny korlatra.
 _probe_growth=$(( (513 + SKILL_GROWTH_LIMIT + 1) - 513 ))
 _probe_hard=$(( SKILL_HARD_LIMIT + 1 ))
+# ES A KARAKTER-AG ISMERT ESETE (kartya 07e5b171). Enelkul ez az ag pontosan ugy
+# nezett ki, mint egy helyes or: soha nem tuzelt, es senki nem tudta megmondani,
+# hogy azert-e, mert nincs tullepes, vagy azert, mert nem tud tuzelni.
+# Ugyanaz az aritmetika, mint a :322-n, egy SZANDEKOSAN tullepo bemenettel.
+_probe_avg=$(( SKILL_BASELINE_CHARS / $(echo "$SKILL_BASELINE_LINES" | cut -d" " -f1) ))
+_probe_climit=$(( SKILL_GROWTH_LIMIT * _probe_avg ))
+_probe_cgrowth=$(( _probe_climit + 1 ))
 _arms_ok=1
+[ "$_probe_cgrowth" -gt "$_probe_climit" ] || _arms_ok=0
+[ "$_probe_climit" -gt 0 ] || _arms_ok=0
 [ "$_probe_growth" -gt "$SKILL_GROWTH_LIMIT" ] || _arms_ok=0
 [ "$_probe_hard" -gt "$SKILL_HARD_LIMIT" ] || _arms_ok=0
-[ -n "$(baseline_for felderites-ket-listas-proba)" ] || _arms_ok=0
+# A NEV NE LEGYEN KODBA EGETVE (kartya 07e5b171). Ez a sor korabban a
+# `felderites-ket-listas-proba` nevet kereste, tehat BARMILYEN mas alapvonal-
+# beallitas mellett -- a projekt SAJAT teszt-harnesset is beleertve, ami
+# `pinned` nevet hasznal -- az or magarol jelentette, hogy NEM MEGBIZHATO.
+# Merve: 25 meglevo teszt kozul egy sem vette eszre, mert egyik sem nezte ezt
+# a sort. A kontroll azt kerdezze, hogy a `baseline_for` MUKODIK-e, ne azt,
+# hogy egy adott skill be van-e allitva.
+_probe_name=$(echo "$SKILL_BASELINE_NAMES" | cut -d" " -f1)
+[ -n "$_probe_name" ] && [ -n "$(baseline_for "$_probe_name")" ] || _arms_ok=0
 if [ "$_probe" -le "$SKILL_LINE_LIMIT" ] || [ "$_arms_ok" -ne 1 ]; then
   echo "MERET-OR: a pozitiv kontroll ELBUKOTT (szamlalas vagy egy uj ag nem mukodik) -- az or NEM megbizhato." >&2
 elif [ "$OVER_LIMIT" -gt 0 ]; then
   # Check modban a per-skill sorok MAR kimondtak mindent, es a broadcast-osszegzo itt
-  # egy URES listat mutatna (a karakter-ag nem tolti az OVER_LIST-et) -- egy "1 skill lepte
-  # tul" fejlec semmi alatt rosszabb, mint a csend: azt sugallja, hogy elveszett egy sor.
+  # egy URES listat mutatna -- egy "1 skill lepte tul" fejlec semmi alatt rosszabb, mint a
+  # csend: azt sugallja, hogy elveszett egy sor.
   if [ -z "${CHECK_SKILL:-}" ]; then
     echo "" >&2
     echo "MERET-OR: ${OVER_LIMIT} skill lepte tul a hatarat:" >&2
@@ -450,20 +479,30 @@ elif [ "$OVER_LIMIT" -gt 0 ]; then
   else
     # Check modban a FEJLEC marad el (egy "N skill lepte tul" mondat egyetlen megnezett
     # skill mellett populaciot allitana) -- a SOR viszont nem maradhat el. Egy 3-as kilepesi
-    # kod indoklas nelkul pontosan az a nema kudarc, ami ellen ez az or keszult; a teszt,
-    # ami ezt megfogta, eloszor PIROS volt.
+    # kod indoklas nelkul pontosan az a nema kudarc, ami ellen ez az or keszult.
     printf "%b" "$OVER_LIST" >&2
   fi
   if [ -n "${OVER_LIST}" ]; then
     echo "  -> references/ bontas javasolt. A LEGFRISSEBB szekciok vannak a fajl vegen," >&2
     echo "     tehat epp azok jutnak el a legkevesebb olvasohoz." >&2
   fi
+elif [ "$CHAR_OVER" -gt 0 ]; then
+  # A SOR-KAPU RENDBEN VAN, A KARAKTER-KERET NEM (07e5b171). Korabban ilyenkor az "minden
+  # skill a sajat hatara alatt" sor ment ki, UGYANABBAN a kimenetben a "A KARAKTER-KERET
+  # ELFOGYOTT" sorral. Ket egymasnak ellentmondo allitas, es a kilepesi kod a megnyugtato
+  # melle allt.
+  # EZ AZ AG CSAK BROADCASTBAN ERHETO EL: check modban a fenti `if` az OVER_LIMIT-et noveli,
+  # tehat a CHAR_OVER ott nulla marad. A ket kartya igy nem ir felul egymast.
+  echo "" >&2
+  echo "MERET-OR: ${CHAR_OVER} skill a SORSZAMBAN belefer, KARAKTERBEN nem:" >&2
+  printf "%b" "$CHAR_LIST" >&2
+  echo "  -> a sorszam a MERTEK, a karakter a VEDETT dolog: egy ket sorra tordelt" >&2
+  echo "     bekezdes egy sorra huzva helyet csinal, es a sor-or ebbol semmit nem lat." >&2
 else
   # A "minden skill a hatara alatt" mondat CHECK MODBAN HAMIS LENNE: ott EGY skillt neztunk
-  # meg, nem 56-ot. Egy ures populacio, ami tiszta bizonyitvanynak olvasodik -- pontosan az
-  # az alak, ami ellen ez az egesz or keszult.
+  # meg, nem 56-ot. Egy ures populacio, ami tiszta bizonyitvanynak olvasodik.
   if [ "${VERBOSE:-0}" = "1" ] && [ -z "${CHECK_SKILL:-}" ]; then
-    echo "MERET-OR: minden skill a sajat hatara alatt (alapvonalas: novekedes <= ${SKILL_GROWTH_LIMIT} es teljes <= ${SKILL_HARD_LIMIT}; a tobbi: <= ${SKILL_LINE_LIMIT}). Pozitiv kontroll: OK."
+    echo "MERET-OR: minden skill a sajat hatara alatt, SORBAN ES KARAKTERBEN (alapvonalas: novekedes <= ${SKILL_GROWTH_LIMIT} sor es <= ${SKILL_GROWTH_LIMIT}x atlagos sorhossz karakter, teljes <= ${SKILL_HARD_LIMIT}; a tobbi: <= ${SKILL_LINE_LIMIT}). Pozitiv kontroll: OK, mind a HAROM agra."
   fi
 fi
 
@@ -479,4 +518,11 @@ fi
 # marad attol, hogy az index elkeszult ES a hatar-or talalt valamit.
 if [ "${OVER_LIMIT}" -gt 0 ]; then
   exit 3
+fi
+# KULON KOD, NEM 3 (kartya 07e5b171). A ketto KET KULONBOZO allitas: a 3 azt mondja,
+# hogy egy skill tullepte a SOR-hatarat; a 4 azt, hogy sorban belefer, KARAKTERBEN nem.
+# Egy hivo, aki eddig a 3-at kezelte, valtozatlanul mukodik; aki csak a nem-nulla
+# kodot nezi, most a karakter-tullepest is megkapja -- ami eddig NEMA volt.
+if [ "${CHAR_OVER}" -gt 0 ]; then
+  exit 4
 fi
