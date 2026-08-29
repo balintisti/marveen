@@ -29,8 +29,13 @@ const mockSessionReady = vi.fn(async () => false)
 const mockClearParked = vi.fn(async () => true)
 const mockListScheduledTasks = vi.fn(() => [] as ScheduledTask[])
 
+// Named so the janitor's outcome log can be asserted: that warn is the only
+// observable difference between "the box was cleared" and "it was not", and
+// nothing pinned which way round it goes (card 9fc38d4b).
+const mockWarn = vi.fn()
+
 vi.mock('../logger.js', () => ({
-  logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
+  logger: { info: vi.fn(), warn: (...a: unknown[]) => mockWarn(...a), debug: vi.fn(), error: vi.fn() },
 }))
 
 // The runner persists its last-run map on every fire. Stub the writer so the
@@ -166,5 +171,39 @@ describe('schedule runner: stale-parked-input janitor on the retry queue', () =>
 
     expect(mockDeletePendingRetry).toHaveBeenCalledWith(TASK.name, 'parkedagent')
     expect(mockClearParked).not.toHaveBeenCalled()
+  })
+
+  // The janitor's CALL was already asserted above. What was not: whether the
+  // operator is told the truth about its OUTCOME. The condition wrapping the
+  // log is `await clearStaleParkedInput(...)` -- the call sits INSIDE the
+  // condition, so replacing that condition with a constant deletes the call
+  // and trips the call-assertion instead of the branch. Only these two cases,
+  // which differ solely in the janitor's return value, pin the direction.
+  const CLEARED_WARN = 'cleared stale parked input'
+
+  function clearedWarnCount() {
+    return mockWarn.mock.calls.filter((c) => String(c[1] ?? '').includes(CLEARED_WARN)).length
+  }
+
+  it('says it cleared the box only when the janitor actually cleared it', async () => {
+    mockListPendingRetries.mockReturnValue([retryRow(69 * 60_000)])
+    mockClearParked.mockResolvedValue(true)
+    await runOneTick()
+
+    expect(mockClearParked).toHaveBeenCalled()
+    // Count, not exact arity: how many sweeps fit in the advanced window is a
+    // property of the tick interval, not of the branch under test. Coupling to
+    // it would make this file fail on an unrelated timing change.
+    expect(clearedWarnCount()).toBeGreaterThan(0)
+  })
+
+  it('stays quiet when the janitor refused -- a refusal must not read as a fix', async () => {
+    mockListPendingRetries.mockReturnValue([retryRow(69 * 60_000)])
+    mockClearParked.mockResolvedValue(false)
+    await runOneTick()
+
+    // The call still happens; only its outcome differs.
+    expect(mockClearParked).toHaveBeenCalled()
+    expect(clearedWarnCount()).toBe(0)
   })
 })

@@ -1866,6 +1866,24 @@ export function markKanbanCardDispatched(id: string): boolean {
   return db.prepare('UPDATE kanban_cards SET dispatched_at=? WHERE id=?').run(now, id).changes > 0
 }
 
+/** How many cards `listKanbanCards()` is hiding right now (card 1785bb14).
+ *
+ *  The list endpoint answers with the live cards only, and its response used to
+ *  say nothing about that. Measured 2026-08-28: 1157 live, 54 archived, and the
+ *  same card could read as "does not exist" from the list and 200 from the card
+ *  endpoint -- with nothing to tell the two apart.
+ *
+ *  Counted from the same table and the same predicate as the listing's
+ *  `archived_at IS NULL`, inverted, so the two can never disagree about what
+ *  "hidden" means.
+ */
+export function countArchivedKanbanCards(): number {
+  const row = db
+    .prepare('SELECT COUNT(*) AS n FROM kanban_cards WHERE archived_at IS NOT NULL')
+    .get() as { n: number }
+  return row.n
+}
+
 export function archiveKanbanCard(id: string): boolean {
   const now = Math.floor(Date.now() / 1000)
   return db.prepare('UPDATE kanban_cards SET archived_at=?, updated_at=? WHERE id=?').run(now, now, id).changes > 0

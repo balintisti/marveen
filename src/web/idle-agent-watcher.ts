@@ -7,13 +7,18 @@ import { isAgentRunning, capturePane } from './agent-process.js'
 import { resolveAgentSession } from './channel-mcp-reconnect.js'
 import { sendAlert } from './channel-monitor.js'
 import { busyEvidence, detectPaneState } from '../pane-state.js'
-import { getPendingMessages, listKanbanCards, getDb, createAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
+import { getPendingMessages, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
 import {
   decideIdleAlert,
   parseWorkCheck,
-  countDeclaredWork,
   selectDeclaredWork,
   buildNoWorkNotice,
+  orphanPullList,
+  topOfPullList,
+  buildPullNotice,
+  stalePendingBySender,
+  buildPendingStillWaitingNotice,
+  type PendingRow,
   buildWakeMessage,
   buildFleetAlert,
   type FleetAlert,
@@ -53,6 +58,9 @@ const THRESHOLDS: IdleAgentThresholds = {
   // Floor between two wakes of the same agent. An agent finishing short turns ends a
   // spell every time it goes busy, so without this the wake would follow every turn.
   wakeCooldownMs: 30 * 60_000,
+  // A repeated identical list is not news -- but after four hours, "nobody has touched
+  // this" is. Without this the suppression is permanent on a stable queue.
+  wakeStaleRearmMs: 4 * 60 * 60_000,
 }
 
 const INITIAL_DELAY_MS = 90_000
@@ -72,6 +80,39 @@ const MAX_IDLE_AGE_MS = 2 * INTERVAL_MS
 // watcher processes lived 8m12s and 2m28s, both under `sustainedMs`. A guard
 // that cannot fire during a deploy sequence, and says nothing about it.
 const watchState = new Map<string, IdleAgentState>()
+
+// Message ids the sender has already been told about (card 979283a9). A message
+// still stuck an hour later must not produce a second notice every sweep -- the
+// guard would be loudest exactly when it is least useful. In memory on purpose:
+// the worst a restart costs is one repeated notice, and a table for it would be
+// state to maintain for a message that is by then already delivered.
+const pendingNoticed = new Set<number>()
+
+/** The sender-side queue sweep. Separated so the tick stays readable and this can
+ *  be exercised on its own. */
+function sweepStalePending(): void {
+  const rows = getDb()
+    .prepare("SELECT id, from_agent, to_agent, created_at FROM agent_messages WHERE status = 'pending'")
+    .all() as PendingRow[]
+  // Forget ids that are no longer pending, so the set cannot grow without bound
+  // and a message that queues again later is reported again.
+  const live = new Set(rows.map((r) => r.id))
+  for (const id of pendingNoticed) if (!live.has(id)) pendingNoticed.delete(id)
+
+  const now = Date.now()
+  for (const [sender, msgs] of stalePendingBySender(rows, now, pendingNoticed)) {
+    // 'system' is not an agent anyone can read a notice as; skip it rather than
+    // send into a void.
+    if (sender === 'system') continue
+    try {
+      createAgentMessage('system', sender, buildPendingStillWaitingNotice(sender, msgs, now))
+      for (const m of msgs) pendingNoticed.add(m.id)
+      logger.info({ idleGuard: true, sender, count: msgs.length }, 'message queue: told the SENDER their message is still pending')
+    } catch (err) {
+      logger.warn({ err, sender }, 'message queue: could not tell the sender about a stale pending message')
+    }
+  }
+}
 
 function readWorkCheckRaw(agent: string): string | null {
   try {
@@ -132,9 +173,21 @@ export function tick(): void {
     const agents = listAgentNames()
     if (agents.length === 0) return
 
+    // The sender-side queue check rides this same 3-minute tick: it asks about
+    // MESSAGES, not agents, so it runs once and not per agent (card 979283a9).
+    sweepStalePending()
+
     // Loaded once per tick, not once per agent: the board is the same for everyone,
     // and re-reading it per agent turned a cheap tick into N table scans.
-    const cards = listKanbanCards()
+    // LABELS ARE A SEPARATE TABLE, and leaving them out is a SILENT failure rather than a
+    // missing feature: every label test then reads `undefined` and answers "no", so the
+    // owner-decision list is always empty and EVERY testing card looks untriaged.
+    // `listKanbanCards()` alone is `SELECT * FROM kanban_cards`, and that table has no
+    // labels column -- the kanban route does this same join. Measured by jarvis
+    // 2026-08-24, on code already written and tested: the functions were right and
+    // NOTHING reached them.
+    const labelsByCard = getLabelsForAllCards()
+    const cards = listKanbanCards().map((c) => ({ ...c, labels: labelsByCard.get(c.id) ?? [] }))
     const comments = lastCommentAtByCard()
     const now = Date.now()
 
@@ -154,7 +207,12 @@ export function tick(): void {
       // milliseconds. Passing the wrong unit would make every future date look long past
       // (or never reached) -- silently, since the filter would simply never fire.
       const nowSec = Math.floor(now / 1000)
-      const ownWorkCount = check ? countDeclaredWork(check, agent, cards, comments, MAIN_AGENT_ID, nowSec) : null
+      // ONE selection, then the count AND the ids come out of it. Two calls are two
+      // chances to disagree, and the repeat-suppression compares ids against what the
+      // last wake NAMED -- a count from a different list could suppress a wake for work
+      // the agent was never shown.
+      const ownItems = check ? selectDeclaredWork(check, agent, cards, comments, MAIN_AGENT_ID, nowSec) : null
+      const ownWorkCount = ownItems ? ownItems.length : null
 
       // One capture per agent per tick: the evidence strength comes from the same read
       // as the idle verdict, so the two can never disagree about what was on screen.
@@ -190,6 +248,9 @@ export function tick(): void {
           staleCounterOnly: running ? paneRead.staleCounterOnly : false,
           pendingMessages: running ? getPendingMessages(agent).length : 0,
           ownWorkCount,
+          // Without this the repeat-suppression never fires -- it is skipped whenever the
+          // ids are absent, deliberately, because "unchanged" must be measured.
+          ownWorkIds: ownItems ? ownItems.map((c) => c.id) : undefined,
           workCheckKind: (check as WorkCheck | null)?.kind ?? null,
         },
         state,
@@ -250,6 +311,90 @@ export function tick(): void {
 
       if (decision.reason === 'idle-no-work') {
         const minutes = Math.round(decision.idleForMs / 60_000)
+        // The board may hold work nobody owns. Before telling the coordinator to
+        // push a card, look at the pull-list the rulebook points the agent at --
+        // and if it has something, tell the AGENT instead (card 4cbc8af9).
+        const pull = topOfPullList(orphanPullList(cards, Date.now()))
+        // LOGGED ON EVALUATION, NOT ONLY ON FIRING (marveen, card 4cbc8af9). Zero orphans is
+        // the EXPECTED case, so silence here used to mean two different things -- "evaluated,
+        // found none" and "this code was never deployed" -- and the old build logged the
+        // coordinator line either way, byte-identical. That is the indistinguishability that
+        // made the behavioural half of the closing condition unfalsifiable rather than merely
+        // unmeasured.
+        //
+        // The PAIRING is what makes deployment readable: the new build always emits this line
+        // before the branch, so a 'told the coordinator' line with no 'evaluated' line above it
+        // is the old code. And K/J falls out of one field -- K = lines with orphanCount,
+        // J = lines with orphanCount > 0.
+        //
+        // APPLY THE PAIRING ONLY TO LINES AFTER THE BUILD -- didi measured why (card 4cbc8af9,
+        // comment 8), and without this the rule gives the WRONG answer on its first use. When
+        // this shipped, the running log already held 100 'told the coordinator' lines and ZERO
+        // 'evaluated' lines, all from the previous build. Applied to the whole log the rule finds
+        // a hundred unpaired lines and reads them as "the build never landed" -- exactly
+        // backwards, and most convincing right after a successful deploy.
+        //
+        //   ANCHOR ON THE PID, NOT ON THE CLOCK. Every line carries the process id
+        //     (`[06:31:22.123] INFO (2413): ...`) and it changes on every restart, so it cannot
+        //     be broken by midnight, a timezone, or a missing date.
+        //   THREE STRINGS ON THIS PATH, NOT TWO -- didi, card comment 13. The rule as I first
+        //     wrote it named only 'evaluated' and 'told the coordinator', and MISSED the one
+        //     that matters most: when ownerless cards DO exist this logs 'named the ownerless
+        //     pull-list' and `continue`s, so 'told the coordinator' below is unreachable
+        //     (control flow, not inference -- the `continue` is right there). A reader checking
+        //     only the two original strings after a SUCCESSFUL fire sees zero 'told' lines and
+        //     concludes "not measurable yet" while the fix has in fact fired. The most
+        //     informative outcome was the one the rule could not see, and it fails toward
+        //     "it never ran" -- the discouraging direction, which nobody double-checks.
+        //
+        //     'named' present ............ the fix RUNS and FIRED -- the strongest evidence
+        //     'evaluated' + 'told' ....... the fix runs, there were no ownerless cards
+        //     'told' with no 'evaluated' . the OLD build
+        //   with no line of either kind from that pid yet, the honest answer is NOT MEASURABLE
+        //     YET. A third state, not a failure. (Control: count ALL lines from that pid first
+        //     -- a zero there means the anchor is wrong, not that the guard is silent.)
+        //   AND A SECOND CONTROL THAT SEPARATES THE TWO SILENCES: look for ANY 'idle guard' line
+        //     from that pid. One from a different path -- a wake, say -- proves the guard is
+        //     RUNNING under this build, so a missing 'evaluated' means the branch was not
+        //     reached. Without it, "the branch did not run" and "the guard is dead" are the same
+        //     zero. Measured 06:41 on pid 2413: 128 lines, 1 idle-guard line (a stage-1 wake at
+        //     06:38:01), 0 told-the-coordinator, 0 evaluated -- alive, branch not reached.
+        //     COUNT ENTRIES, NOT LINES: didi and I published 250 and 128 for the same thing at
+        //     the same moment. Neither meter was wrong -- a stateful matcher counts LINES
+        //     (676, of which 467 are continuation lines carrying no pid), a literal one counts
+        //     ENTRIES (209). Ratio ~3.2x. Harmless for a non-zero control, and off by 3x for
+        //     anything else: a number needs its UNIT, not just its command.
+        //
+        // THE TIMESTAMP ANCHOR THIS COMMENT FIRST PRESCRIBED DOES NOT WORK ON THIS LOG, and the
+        // version of it I committed was worse than useless (didi measured both, card 4cbc8af9):
+        //   - the lines carry NO DATE, only a time -- `grep -cE '^\[[0-9]{4}-'` is 0 -- so in a
+        //     9 MB log spanning days, today's [03:07:18] and Tuesday's are indistinguishable.
+        //     A time-only prefix structurally cannot express "after the build".
+        //   - and I asserted the clock was UTC. It is LOCAL: last line [06:41:02] against local
+        //     06:41:14. I had inferred UTC from a single old timestamp that looked too old to be
+        //     recent -- a story fitted to one point, written down as a fact. A reader converting
+        //     UTC to local would shift the anchor two hours EARLIER and count pre-build lines as
+        //     post-build: exactly the backwards answer the anchor exists to prevent.
+        // Both of our first attempts at the anchored read failed the same way and in opposite
+        // directions -- a timestamp pattern that matched nothing put every line on one side
+        // (mine: all "after", a confident 100) or the other (didi's: all "before", a confident
+        // 0, agreeing with what we expected, which is the more dangerous half).
+        logger.info(
+          { idleGuard: true, agent, orphanCount: pull.length },
+          'idle guard: evaluated the ownerless pull-list',
+        )
+        if (pull.length > 0) {
+          try {
+            createAgentMessage('system', agent, buildPullNotice(agent, minutes, pull))
+            logger.info(
+              { idleGuard: true, agent, orphanCount: pull.length, top: pull[0]?.id },
+              'idle guard: agent idle with nothing assigned -- named the ownerless pull-list',
+            )
+          } catch (err) {
+            logger.warn({ err, agent }, 'idle guard: could not name the pull-list to the agent')
+          }
+          continue
+        }
         try {
           createAgentMessage('system', MAIN_AGENT_ID, buildNoWorkNotice(agent, minutes))
           logger.info(
@@ -263,7 +408,7 @@ export function tick(): void {
       }
 
       if (decision.reason === 'wake-agent') {
-        const items = selectDeclaredWork(check as WorkCheck, agent, cards, comments, MAIN_AGENT_ID, nowSec)
+        const items = ownItems ?? []
         const minutes = Math.round(decision.idleForMs / 60_000)
         try {
           createAgentMessage('system', agent, buildWakeMessage(agent, minutes, decision.workCount, items, (check as WorkCheck).kind))
