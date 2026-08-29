@@ -101,6 +101,69 @@ describe('detector 2: content', () => {
     expect(r.ok).toBe(true);
   });
 
+  // ADDED 2026-08-24 (card ade1931c). `AKIA...` above is the ACCESS KEY ID --
+  // the half of the pair that also appears in logs. Its partner, the SECRET
+  // access key, had NO detector: on 2026-08-23 marveen staged one deliberately
+  // and the gate answered PASS. That is the shape this whole file exists to
+  // prevent, one detector short.
+  //
+  // Assembled at runtime, like STRIPE_FIXTURE above, for the same reason.
+  const AWS_SECRET_FIXTURE = ['wJalrXUtnFEMI', 'K7MDENG', 'bPxRfiCYEXAMPLEKEY'].join('/');
+
+  it.each([
+    ['aws secret access key', `AWS_SECRET_ACCESS_KEY=${AWS_SECRET_FIXTURE}`],
+    ['aws session token', 'AWS_SESSION_TOKEN=FwoGZXIvYXdzEBYaDHRlc3RzZXNzaW9u'],
+    ['app secret', 'MY_APP_SECRET=abcdefghijklmnopqrstuvwxyz012345'],
+    ['db password', 'DB_PASSWORD=sUp3rl0ngp4ssw0rdthatis30chars'],
+    ['private key var', 'SERVICE_PRIVATE_KEY: "abcdefghijklmnopqrstuvwxyz0123"'],
+  ])('blocks %s -- the ANCHOR is the variable name, not the value shape', (_name, body) => {
+    const r = runGate([f('docs/notes.md', body)]);
+    expect(r.ok).toBe(false);
+    expect(r.findings[0].detector).toBe('content');
+  });
+
+  it('the value has no shape of its own, so the NAME has to carry the anchor', () => {
+    // The secret access key is 40 characters of base64. Written as a value
+    // pattern it would fire on every blob in the repo -- the "cries wolf"
+    // failure this file's header rejects. Proof that we did NOT do that: the
+    // same 40 characters, with no telling variable name, must pass.
+    expect(runGate([f('docs/x.md', `const blob = "${AWS_SECRET_FIXTURE}"`)]).ok).toBe(true);
+  });
+
+  it('does NOT fire on template values -- placeholder, empty, or shell substitution', () => {
+    // The acceptance condition from the card: `.env.example` must keep working.
+    // These pass because of the value class, which excludes `<`, `$`, `{` and
+    // whitespace -- so THESE template conventions cannot reach the length.
+    // That is a limit, not a blanket "templates never match": see the next test.
+    const r = runGate([
+      f('.env.example', 'AWS_SECRET_ACCESS_KEY=\nDB_PASSWORD=\n'),
+      f('docs/setup.md', 'AWS_SECRET_ACCESS_KEY=<YOUR-SECRET-ACCESS-KEY>'),
+      f('scripts/run.sh', 'AWS_SECRET_ACCESS_KEY=${AWS_SECRET}'),
+      f('src/short.ts', 'MY_APP_SECRET=short0123456789abc'),
+      // Measured, and the reason TOKEN/API_KEY was NOT added to the family:
+      // here the 20+ characters after the `=` are a FUNCTION NAME.
+      f('src/web.ts', 'const DASHBOARD_TOKEN = loadOrCreateDashboardToken()'),
+    ]);
+    expect(r.ok).toBe(true);
+  });
+
+  it('a plain-letter placeholder DOES block -- fail-closed, and that is a choice', () => {
+    // Measured by didi 2026-08-24. `<PLACEHOLDER>` and `${VAR}` slip through on
+    // their punctuation, but a filler written in letters is indistinguishable
+    // from a real secret BY SHAPE, so the gate stops it. This test exists so
+    // that stays a decision rather than a surprise: whoever wants the other
+    // behaviour has to come here and argue for it.
+    //
+    // The remedy is the one this file already prescribes -- allowlist the PATH.
+    // NOT a placeholder word list: a list excusing "EXAMPLE" would have waved
+    // through AWS_SECRET_FIXTURE above, which is the very thing under test.
+    for (const filler of ['REPLACE_ME_WITH_REAL_KEY', 'CHANGEME_BEFORE_DEPLOY', 'x'.repeat(24)]) {
+      expect(runGate([f('docs/setup.md', `AWS_SECRET_ACCESS_KEY=${filler}`)]).ok).toBe(false)
+    }
+    // Control, same round: a prose MENTION of the variable is not an assignment.
+    expect(runGate([f('docs/setup.md', 'set the AWS_SECRET_ACCESS_KEY value before deploying')]).ok).toBe(true)
+  })
+
   it('never echoes the matched secret into the finding', () => {
     const titok = STRIPE_FIXTURE;
     const [hit] = scanFile(f('docs/x.md', `key: ${titok}`));
