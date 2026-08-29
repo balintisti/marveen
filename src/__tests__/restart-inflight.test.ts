@@ -277,11 +277,21 @@ describe('both ends are wired (structural)', () => {
     // it says instead: this sentence must remain UNIQUE in the function's tail, because a
     // later reorder can silently move the slice end -- and nothing else would notice.
     //
-    // NARROWING IT TO THE LOOKUP'S OWN RANGE MAKES IT VACUOUS, and that is measured, not
-    // reasoned: counted over [fnStart, autoStartAt] there is exactly one match BY
-    // CONSTRUCTION, so R5 -- a duplicate placed INSIDE the loop, ahead of the real one, which
-    // silently truncates the slice -- comes back GREEN. The wide range catches R5; the narrow
-    // range is a tautology wearing a control's clothes.
+    // NARROWING IT TO THE LOOKUP'S OWN RANGE MISSES THE ONE PLACEMENT NOTHING ELSE CATCHES --
+    // and that is PLACEMENT-DEPENDENT, which is didi's refinement of my own measurement (card
+    // comment 45). I first wrote "narrowing is vacuous", full stop. It is not, in general:
+    //
+    //   duplicate BEFORE the in-flight branch
+    //       narrowed -> RED, but from a DIFFERENT assertion ("must ask isRestartInFlight"),
+    //       because the slice end jumps forward and the branch falls outside it. Covered.
+    //   duplicate BETWEEN the branch and the real marker
+    //       narrowed -> 8/8 GREEN. The slice is truncated but LOOKS complete: every branch
+    //       assertion runs and passes, and nothing else says a word.
+    //
+    // So the wide count does work nothing else does in exactly ONE window. That does not
+    // weaken the choice, it PRICES it: the false alarm this costs -- a comment quoting that
+    // sentence in the function tail -- is what buys coverage of that window, and of nothing
+    // else. Measured both placements against both variants before writing this down.
     //
     // So a duplicate AFTER the real one (didi's S1) fires on CORRECT code, deliberately: an
     // early warning that the anchor is no longer unique, fail-closed, before a reorder can
