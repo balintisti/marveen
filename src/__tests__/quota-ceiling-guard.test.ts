@@ -57,11 +57,22 @@ interface Run {
 }
 
 /** Stage the real guard in a throwaway install with recording stubs. */
-function makeInstall(runningAgents: string[] = ['dexter']): string {
+function makeInstall(runningAgents: string[] = ['dexter'], deployed?: string[]): string {
   const base = mkdtempSync(join(tmpdir(), 'quota-ceiling-'))
   made.push(base)
   mkdirSync(join(base, 'scripts'))
   mkdirSync(join(base, 'store'))
+  // The guard derives its roster from agents/*/ (card 8cbb7ce6), so a throwaway
+  // install needs those directories or it guards nobody. DEPLOYED is not the
+  // same set as RUNNING: an agent can exist and have no session, which is what
+  // the last test in this file measures.
+  // `??` binds tighter than `?:`, so the compact form here parsed as
+  // `(deployed ?? runningAgents.length) ? ... : ...` and was right only by
+  // accident. Written out, because a reader should not have to check.
+  const deployedRoster = deployed ?? (runningAgents.length ? runningAgents : ['dexter'])
+  for (const a of deployedRoster) {
+    mkdirSync(join(base, 'agents', a), { recursive: true })
+  }
   copyFileSync(REAL_SCRIPT, join(base, 'scripts', 'quota-ceiling-guard.sh'))
 
   // Recorders, not no-ops: the assertion is what the guard TRIED to send.
@@ -142,9 +153,23 @@ function runGuard(base: string, snapshotPath: string): Run {
   }
 }
 
-function go(o: SnapOpts, runningAgents: string[] = ['dexter']): Run {
-  const base = makeInstall(runningAgents)
+function go(o: SnapOpts, runningAgents: string[] = ['dexter'], deployed?: string[]): Run {
+  const base = makeInstall(runningAgents, deployed)
   return runGuard(base, writeSnapshot(base, o))
+}
+
+/** Same, but with the roster forced through the environment override. */
+function goWithEnvRoster(o: SnapOpts, roster: string, runningAgents: string[]): Run {
+  const base = makeInstall(runningAgents, runningAgents)
+  const snap = writeSnapshot(base, o)
+  const prev = process.env.QUOTA_CEILING_AGENTS
+  process.env.QUOTA_CEILING_AGENTS = roster
+  try {
+    return runGuard(base, snap)
+  } finally {
+    if (prev === undefined) delete process.env.QUOTA_CEILING_AGENTS
+    else process.env.QUOTA_CEILING_AGENTS = prev
+  }
 }
 
 describe('quota-ceiling-guard: the threshold comparison', () => {
@@ -259,5 +284,55 @@ describe('quota-ceiling-guard: it only stops agents that are actually running', 
     expect(r.agent).toBe('')
     expect(r.owner).toContain('ELERTUK A PLAFONT')
     expect(r.owner).toContain('nincs futo agens')
+  })
+})
+
+// THE ROSTER ITSELF (card 8cbb7ce6). The guard's logic was never wrong; the list
+// was. `dexter` was hardcoded as the default when exactly one agent worked, and
+// by 2026-08-28 six did -- so a ceiling would have stopped one of six, and the
+// run would have looked entirely healthy.
+//
+// A hardcoded six reproduces that at the seventh agent, so the default is
+// derived from agents/*/. These tests pin the derivation, the override that must
+// still win, and the case where the derivation yields nothing -- which is the
+// one that would otherwise be indistinguishable from a quiet, healthy run.
+describe('quota-ceiling-guard: who it guards is DERIVED, not hardcoded', () => {
+  it('messages every deployed agent, not just the one the default used to name', () => {
+    const r = go({ percent: 95.0 }, ['dexter', 'didi', 'friday'])
+    for (const a of ['dexter', 'didi', 'friday']) {
+      expect(r.agent, a).toContain(`TO=${a}`)
+    }
+  })
+
+  it('and it is the DIRECTORIES that decide, not the sessions', () => {
+    // Deployed three, only one has a session: the roster still covers three, and
+    // the session check is what narrows it. Two different questions, and the
+    // defect came from conflating them once already.
+    const r = go({ percent: 95.0 }, ['didi'], ['dexter', 'didi', 'friday'])
+    expect(r.stdout + r.owner).toContain('didi')
+    expect(r.agent).toContain('TO=didi')
+    expect(r.agent).not.toContain('TO=dexter')
+  })
+
+  it('the environment override still wins -- it is the escape hatch', () => {
+    const r = goWithEnvRoster({ percent: 95.0 }, 'didi', ['dexter', 'didi'])
+    expect(r.agent).toContain('TO=didi')
+    expect(r.agent).not.toContain('TO=dexter')
+  })
+
+  it('SAYS SO when the roster is empty, instead of looking like a quiet run', () => {
+    // No agents/ directories and no override. Without this line the output is
+    // byte-identical to a healthy fleet under the threshold: nobody messaged,
+    // nothing wrong. A guard protecting nobody must not be silent about it.
+    const base = mkdtempSync(join(tmpdir(), 'quota-ceiling-empty-'))
+    made.push(base)
+    mkdirSync(join(base, 'scripts'))
+    mkdirSync(join(base, 'store'))
+    copyFileSync(REAL_SCRIPT, join(base, 'scripts', 'quota-ceiling-guard.sh'))
+    const r = runGuard(base, writeSnapshot(base, { percent: 95.0 }))
+    const log = readFileSync(join(base, 'store', 'quota-ceiling-guard.log'), 'utf8')
+    expect(log).toContain('REFUSING')
+    expect(log).toContain('protecting nobody')
+    expect(r.agent).toBe('')
   })
 })
