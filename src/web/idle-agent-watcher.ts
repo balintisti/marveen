@@ -228,6 +228,21 @@ function tick(): void {
         // push a card, look at the pull-list the rulebook points the agent at --
         // and if it has something, tell the AGENT instead (card 4cbc8af9).
         const pull = topOfPullList(orphanPullList(cards, Date.now()))
+        // LOGGED ON EVALUATION, NOT ONLY ON FIRING (marveen, card 4cbc8af9). Zero orphans is
+        // the EXPECTED case, so silence here used to mean two different things -- "evaluated,
+        // found none" and "this code was never deployed" -- and the old build logged the
+        // coordinator line either way, byte-identical. That is the indistinguishability that
+        // made the behavioural half of the closing condition unfalsifiable rather than merely
+        // unmeasured.
+        //
+        // The PAIRING is what makes deployment readable: the new build always emits this line
+        // before the branch, so a 'told the coordinator' line with no 'evaluated' line above it
+        // is the old code. And K/J falls out of one field -- K = lines with orphanCount,
+        // J = lines with orphanCount > 0.
+        logger.info(
+          { idleGuard: true, agent, orphanCount: pull.length },
+          'idle guard: evaluated the ownerless pull-list',
+        )
         if (pull.length > 0) {
           try {
             createAgentMessage('system', agent, buildPullNotice(agent, minutes, pull))
