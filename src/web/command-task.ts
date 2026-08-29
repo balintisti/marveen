@@ -37,6 +37,17 @@ function persist(): void {
   catch (err) { logger.warn({ err }, "command-task: failed to persist health map") }
 }
 
+/**
+ * Egy command-feladat tarolt health-bejegyzese, vagy `undefined`.
+ *
+ * Kiolvashato, mert eddig NEM VOLT OLVASOJA: a `command-task-health.json`-t
+ * csak ez a modul irta, es semmi nem adta vissza sehol. Egy allapot, amit
+ * senki nem kerdez le, nem allapot -- naplo. (Kartya bae4df49.)
+ */
+export function readCommandHealth(name: string): CommandHealth | undefined {
+  return load()[name]
+}
+
 export type CommandAction = "none" | "alert" | "recover"
 
 // Pure decision function so the failure/recovery policy is unit-testable

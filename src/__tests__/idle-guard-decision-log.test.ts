@@ -45,6 +45,12 @@ vi.mock('../web/channel-monitor.js', () => ({ sendAlert: () => {} }))
 vi.mock('../db.js', () => ({
   getPendingMessages: (...a: unknown[]) => pending(...a),
   listKanbanCards: () => [],
+  // A merge hozott egy UJ fuggoseget a tick utjara (getLabelsForAllCards, a 4cbc8af9 /
+  // gazdatlan pull-lista agrol). A mock enelkul `undefined`-ot ad, a tick eldobja magat,
+  // es a naplo URES marad -- ami PONTOSAN ugy nez ki, mint a lelet, amit ez a spec keres.
+  // A mockot egesziti ki, NEM a kodot lazitja: egy mock, amibol hianyzik, amit a modul MA
+  // igenyel, HELYESEN torik el, es a tores maga a jelzes.
+  getLabelsForAllCards: () => new Map(),
   getDb: () => ({ prepare: () => ({ all: () => [], get: () => undefined, run: () => ({ changes: 0 }) }) }),
   createAgentMessage: () => ({ id: 1 }),
   saveIdleGuardState: () => {},

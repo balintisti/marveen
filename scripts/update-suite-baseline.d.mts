@@ -12,9 +12,16 @@ export interface SuiteCounts {
   tests: number
 }
 
+/** A megtagadas MERT oka, vagy null, ha nem tudjuk. Lasd a `.mjs` docblockjat:
+ *  a kiirt ok is allitas, es ket ismert esetben hamis volt (kartya e065cf1c). */
+export type FailureCause = 'live-install' | 'node-abi' | null
+
+export function diagnose(output?: string): FailureCause
+
 export function decide(
   rc: number,
   counts: SuiteCounts | null,
+  cause?: FailureCause,
 ): { write: boolean; reason: string | null }
 
 export function renderBlock(counts: SuiteCounts, stamp: string, how?: string): string

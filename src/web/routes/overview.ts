@@ -8,6 +8,7 @@ import {
 } from '../agent-config.js'
 import { readAgentTeam } from '../agent-team.js'
 import { isAgentRunning } from '../agent-process.js'
+import { getBuildFreshness } from '../build-freshness.js'
 import { json, jsonMaybeGzip } from '../http-helpers.js'
 import type { RouteContext } from './types.js'
 
@@ -61,6 +62,11 @@ export async function tryHandleOverview(ctx: RouteContext): Promise<boolean> {
   const { req, res, path, method } = ctx
 
   if (path === '/api/overview' && method === 'GET') {
+    // Card b807c756: whether the running process is actually built from the
+    // source in this checkout. It rides on the overview because that is the
+    // page people already have open -- a signal on an endpoint nobody calls is
+    // not a signal.
+    const build = getBuildFreshness()
     const subAgents = listAgentNames()
     const running = subAgents.filter(n => isAgentRunning(n)).length + 1
     const total = subAgents.length + 1
@@ -151,6 +157,7 @@ export async function tryHandleOverview(ctx: RouteContext): Promise<boolean> {
       skills: { count: skillCount, today: skillsToday },
       team: agentsForTeam,
       activity: activity.slice(0, 8),
+      build,
     })
     return true
   }

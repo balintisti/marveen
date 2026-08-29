@@ -4,11 +4,11 @@ import { execFileSync } from 'node:child_process'
 import { logger } from '../logger.js'
 import { MAIN_AGENT_ID, PROJECT_ROOT } from '../config.js'
 import { listAgentNames, readAgentClaudeConfigDir } from './agent-config.js'
-import { agentSessionName, capturePane } from './agent-process.js'
+import { capturePane } from './agent-process.js'
+import { sessionNameForAgent } from './session-names.js'
 import { detectPaneState } from '../pane-state.js'
 import { detectsUsageLimit } from '../model-fallback.js'
 import { readContextTokensFromProjectDir } from './active-model.js'
-import { MAIN_CHANNELS_SESSION } from './main-agent.js'
 import { withSessionSendLock } from './session-send-lock.js'
 import { getHardGuardPhase } from './context-guard-runner.js'
 import { readGateConfig, readGateRunState, writeGateRunState } from './context-restart-gate-store.js'
@@ -87,7 +87,10 @@ export function isInfrastructureChild(childAgeS: number, claudeAgeS: number): bo
 }
 
 function sessionFor(name: string): string {
-  return name === MAIN_AGENT_ID ? MAIN_CHANNELS_SESSION : agentSessionName(name)
+  // One resolver, in agent-process.ts. This used to be five hand-copied
+  // ternaries; the copy that was never written is what broke the sender
+  // preflight (card 228c9252).
+  return sessionNameForAgent(name)
 }
 
 function workingDirFor(name: string): string {
