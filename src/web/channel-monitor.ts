@@ -29,6 +29,7 @@ import {
   answerFirstRunGates,
   shSingleQuote,
 } from './agent-process.js'
+import { isRestartInFlight, markRestartStarted, clearRestart } from './restart-inflight.js'
 import { withSessionSendLock } from './session-send-lock.js'
 import { reapChannelOrphans, reapDetachedChannelClaudes, collectPollerEvidence } from './channel-poller-reap.js'
 import { probeTelegramConflict } from './channel-conflict-probe.js'
@@ -148,6 +149,12 @@ function ensureAgentRestartFailuresInitialized(): void {
 // fleet-wide, so each fresh cold-boot completes in isolation.
 let lastChannelAgentRestartAt = 0
 const CHANNEL_RESTART_STAGGER_MS = 90_000
+// POST-HOC COOLDOWN, not a lock: it says "somebody restarted this recently, do not pile
+// on". It cannot cover a restart that is HAPPENING, because it is written only after the
+// start returns -- and only by this file. The in-flight mark (restart-inflight.ts) is the
+// other half: a lock held ACROSS the stop/start window, by whoever opens it. Two
+// mechanisms that each look sufficient is its own failure mode, so: this one bounds the
+// RATE, that one covers the GAP.
 const AGENT_RESTART_GRACE_MS = 90_000
 // Floor frequency for the backed-off restart: even a long-down plugin is still
 // retried at least this often, in case an external fix brings it back.
@@ -1851,6 +1858,10 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
         }
         logger.warn({ agent: t.agentName, provider: t.provider, failures }, 'Agent channel plugin down -- auto-restarting')
         try {
+          // Same window as restartAgentProcess opens, and the widest one in the codebase:
+          // the settle below is EIGHT seconds. Marked so the reconciler does not start the
+          // agent under us with an options-less call (card f65bc6ef).
+          markRestartStarted(t.agentName!)
           await stopAgentProcess(t.agentName!)
           // Settle before the fresh start. stopAgentProcess already reaps this
           // agent's channel orphans + waits 2s; add more so the shared plugin
@@ -1869,6 +1880,7 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
           // and no poller (verified: continue -> "Plugin not found" in /mcp; fresh
           // -> plugin loads + poller attaches). Context is dropped, memory persists.
           await startAgentProcess(t.agentName!, { fresh: true })
+          clearRestart(t.agentName!)
           agentLastRestart.set(t.agentName!, Date.now())
           agentDownSince.delete(t.session)
           agentBusyDeferAlerted.delete(t.session)
@@ -1956,6 +1968,16 @@ async function reconcileDesiredAgents(): Promise<void> {
   try {
     for (const name of down) {
       if (isAgentRunning(name)) continue
+      // NOT DOWN -- MID-RESTART. restartAgentProcess stops before it starts, and in that
+      // window this loop used to "rescue" the agent with an options-less start, which
+      // dropped the caller's `fresh` and brought a saturated session back with
+      // `--continue` (card f65bc6ef, measured on computress 2026-08-29 03:07). The 90s
+      // grace below cannot see it: agentLastRestart is written only here, never by the
+      // guard, the model-fallback runner or the API.
+      if (isRestartInFlight(name)) {
+        logger.info({ agent: name }, 'Reconcile: agent is mid-restart, leaving it to the restarter')
+        continue
+      }
       const last = agentLastRestart.get(name)
       if (last != null && Date.now() - last < AGENT_RESTART_GRACE_MS) continue
       if (!memGateAllowsStart(name)) continue   // Commit 3 v1: safe-mode / memory gate
