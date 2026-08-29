@@ -16,9 +16,14 @@
 #
 # A KAPU ALAKJA: `UPDATE <tabla> SET <oszlop> = <oszlop> WHERE false`
 #
-#   Se WHERE-literal, se tipus. A lap `WHERE id = -1` alakja UUID kulcson TIPUSHIBAT ad
-#   (`operator does not exist: uuid = integer`) -- az is „hiba", tehat a kontroll VELETLENUL
-#   mond igazat, kikapcsolt kapu mellett is. Merve ezen a vazon (t_int / t_uuid, PG 14):
+#   Se WHERE-literal, se tipus. A lap `WHERE id = -1` alakja NEM-EGESZ kulcson TIPUSHIBAT ad
+#   (`operator does not exist: uuid = integer`, `... text = integer`) -- az is „hiba", tehat a
+#   kontroll VELETLENUL mond igazat, kikapcsolt kapu mellett is.
+#
+#   A CSAPDA TAGABB, MINT AHOGY A LAP ELOSZOR LEIRTA: ott UUID-problemakent szerepelt, marveen
+#   viszont fuggetlenul ujramerte TEXT kulcson is, es ott ugyanugy tuzel. Vagyis BARMELY nem-egesz
+#   kulcs eleg hozza -- es ezert nem az a megoldas, hogy a helyes literalt valasztjuk tipusonkent,
+#   hanem hogy a kerdes megszunik. Merve ezen a vazon (t_int / t_uuid, PG 14):
 #
 #       read-only + WHERE false, int kulcs .... ERROR: cannot execute UPDATE ...   <- a kapu
 #       read-only + WHERE false, uuid kulcs ... ERROR: cannot execute UPDATE ...   <- a kapu
