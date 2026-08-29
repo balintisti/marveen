@@ -257,6 +257,59 @@ function tick(): void {
         // before the branch, so a 'told the coordinator' line with no 'evaluated' line above it
         // is the old code. And K/J falls out of one field -- K = lines with orphanCount,
         // J = lines with orphanCount > 0.
+        //
+        // APPLY THE PAIRING ONLY TO LINES AFTER THE BUILD -- didi measured why (card 4cbc8af9,
+        // comment 8), and without this the rule gives the WRONG answer on its first use. When
+        // this shipped, the running log already held 100 'told the coordinator' lines and ZERO
+        // 'evaluated' lines, all from the previous build. Applied to the whole log the rule finds
+        // a hundred unpaired lines and reads them as "the build never landed" -- exactly
+        // backwards, and most convincing right after a successful deploy.
+        //
+        //   ANCHOR ON THE PID, NOT ON THE CLOCK. Every line carries the process id
+        //     (`[06:31:22.123] INFO (2413): ...`) and it changes on every restart, so it cannot
+        //     be broken by midnight, a timezone, or a missing date.
+        //   THREE STRINGS ON THIS PATH, NOT TWO -- didi, card comment 13. The rule as I first
+        //     wrote it named only 'evaluated' and 'told the coordinator', and MISSED the one
+        //     that matters most: when ownerless cards DO exist this logs 'named the ownerless
+        //     pull-list' and `continue`s, so 'told the coordinator' below is unreachable
+        //     (control flow, not inference -- the `continue` is right there). A reader checking
+        //     only the two original strings after a SUCCESSFUL fire sees zero 'told' lines and
+        //     concludes "not measurable yet" while the fix has in fact fired. The most
+        //     informative outcome was the one the rule could not see, and it fails toward
+        //     "it never ran" -- the discouraging direction, which nobody double-checks.
+        //
+        //     'named' present ............ the fix RUNS and FIRED -- the strongest evidence
+        //     'evaluated' + 'told' ....... the fix runs, there were no ownerless cards
+        //     'told' with no 'evaluated' . the OLD build
+        //   with no line of either kind from that pid yet, the honest answer is NOT MEASURABLE
+        //     YET. A third state, not a failure. (Control: count ALL lines from that pid first
+        //     -- a zero there means the anchor is wrong, not that the guard is silent.)
+        //   AND A SECOND CONTROL THAT SEPARATES THE TWO SILENCES: look for ANY 'idle guard' line
+        //     from that pid. One from a different path -- a wake, say -- proves the guard is
+        //     RUNNING under this build, so a missing 'evaluated' means the branch was not
+        //     reached. Without it, "the branch did not run" and "the guard is dead" are the same
+        //     zero. Measured 06:41 on pid 2413: 128 lines, 1 idle-guard line (a stage-1 wake at
+        //     06:38:01), 0 told-the-coordinator, 0 evaluated -- alive, branch not reached.
+        //     COUNT ENTRIES, NOT LINES: didi and I published 250 and 128 for the same thing at
+        //     the same moment. Neither meter was wrong -- a stateful matcher counts LINES
+        //     (676, of which 467 are continuation lines carrying no pid), a literal one counts
+        //     ENTRIES (209). Ratio ~3.2x. Harmless for a non-zero control, and off by 3x for
+        //     anything else: a number needs its UNIT, not just its command.
+        //
+        // THE TIMESTAMP ANCHOR THIS COMMENT FIRST PRESCRIBED DOES NOT WORK ON THIS LOG, and the
+        // version of it I committed was worse than useless (didi measured both, card 4cbc8af9):
+        //   - the lines carry NO DATE, only a time -- `grep -cE '^\[[0-9]{4}-'` is 0 -- so in a
+        //     9 MB log spanning days, today's [03:07:18] and Tuesday's are indistinguishable.
+        //     A time-only prefix structurally cannot express "after the build".
+        //   - and I asserted the clock was UTC. It is LOCAL: last line [06:41:02] against local
+        //     06:41:14. I had inferred UTC from a single old timestamp that looked too old to be
+        //     recent -- a story fitted to one point, written down as a fact. A reader converting
+        //     UTC to local would shift the anchor two hours EARLIER and count pre-build lines as
+        //     post-build: exactly the backwards answer the anchor exists to prevent.
+        // Both of our first attempts at the anchored read failed the same way and in opposite
+        // directions -- a timestamp pattern that matched nothing put every line on one side
+        // (mine: all "after", a confident 100) or the other (didi's: all "before", a confident
+        // 0, agreeing with what we expected, which is the more dangerous half).
         logger.info(
           { idleGuard: true, agent, orphanCount: pull.length },
           'idle guard: evaluated the ownerless pull-list',
