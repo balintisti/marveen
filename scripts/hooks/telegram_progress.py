@@ -16,7 +16,7 @@ Token/state dir resolution mirrors the telegram plugin: honor TELEGRAM_STATE_DIR
 (set per-agent), else default to ~/.claude/channels/telegram. This keeps the
 hook correct even if installed globally across agents with different bots.
 """
-import sys, os, json, re, urllib.request
+import sys, os, json, re, urllib.request, time
 
 PLACEHOLDER = "✍️ Dolgozom rajta…"   # ✍️ Dolgozom rajta…
 REACTION = "✍️"                            # ✍️
@@ -30,10 +30,14 @@ def state_dir():
 
 
 def log(sd, msg):
+    # DATED prefix (card e9cc1fc2). Untimed lines cannot be lined up against
+    # anything -- not the conversation ledger, not each other, not a restart.
+    # A time WITHOUT a date is barely better: this file spans days, so the only
+    # way to place a line was to watch the clock run backwards.
     try:
         os.makedirs(os.path.join(sd, "progress"), exist_ok=True)
         with open(os.path.join(sd, "progress", "debug.log"), "a", encoding="utf-8") as f:
-            f.write(msg + "\n")
+            f.write(time.strftime("[%Y-%m-%d %H:%M:%S] ") + msg + "\n")
     except Exception:
         pass
 

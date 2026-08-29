@@ -1,14 +1,56 @@
 import { describe, it, expect } from 'vitest'
 // @ts-expect-error -- plain .mjs hook script, no types
-import { gateDecision as selfPaceDecision, stripDataPayloads, stripGitCommitMessages } from '../../scripts/self-pace-gate.mjs'
+import { gateDecision as selfPaceDecision, stripDataPayloads, stripGitCommitMessages, REASON_HINT } from '../../scripts/self-pace-gate.mjs'
 import {
   agentGetsGovernanceGates,
   injectSelfPaceGate,
 } from '../web/agent-scaffold.js'
 import { MAIN_AGENT_ID } from '../config.js'
 
+const PANE_WRITE = 't' + 'mux send-' + 'keys'
+
 // --- self-pace-gate: blocks the agent from scheduling its own future turns ---
 describe('self-pace-gate gateDecision', () => {
+  // THE BRANCH THAT HAD NO HINT (card 97470e22). Every other reason told the
+  // reader what DOES pass; this one did not, and the obvious guess is to reword
+  // the document until it slips through -- which turns a precise text into an
+  // imprecise one to satisfy a filter. Four measured occurrences, all of them
+  // documentation: a deny-list rationale, an installation-lane finding, and two
+  // card comments.
+  //
+  // The pattern itself is deliberately NOT narrowed, and that is measured:
+  // anchoring it to a command position would stop catching a real
+  // subprocess-launched pane write hidden in a heredoc body -- the very vector
+  // this gate exists for. So the residual false positive is a known cost, and
+  // the fix is to name the way out where someone hits it.
+  it('names the DOCUMENTATION route on the self-inject branch', () => {
+    expect(selfPaceDecision('Bash', { command: `${PANE_WRITE} -t p 'go' Enter` }).reason)
+      .toBe('bash-self-inject')
+    const hint = REASON_HINT['bash-self-inject']
+    expect(hint).toBeTruthy()
+    // The two routes that actually work, both measured: a blanked -d payload,
+    // and writing the text to a file so only a path reaches the command line.
+    expect(hint).toMatch(/--data|`-d`/)
+    expect(hint).toMatch(/Write/)
+  })
+
+  it('and the hint stays on its OWN branch', () => {
+    // 25 of 34 corpus denials carried the new hint, which is what a correctly
+    // scoped hint looks like here AND what a wrongly-attached one would look
+    // like too. Only a per-branch probe separates them.
+    expect(REASON_HINT['os-scheduler']).not.toMatch(/HA DOKUMENTALSZ/)
+    expect(REASON_HINT['schedule-api-write']).not.toMatch(/HA DOKUMENTALSZ/)
+    expect(REASON_HINT['bash-self-inject']).toMatch(/HA DOKUMENTALSZ/)
+  })
+
+  it('BLOCKS EXACTLY WHAT IT BLOCKED BEFORE -- only the message grew', () => {
+    // The hint must not become a narrowing by accident.
+    expect(selfPaceDecision('Bash', { command: `${PANE_WRITE} -t p 'go' Enter` }).deny).toBe(true)
+    expect(selfPaceDecision('Bash', { command: `sudo ${PANE_WRITE} -t p 'go' Enter` }).deny).toBe(true)
+    expect(selfPaceDecision('Bash', { command: `OUT=$(${PANE_WRITE} -t p go Enter)` }).deny).toBe(true)
+    expect(selfPaceDecision('Bash', { command: 'nohup claude -p go &' }).deny).toBe(true)
+  })
+
   // Measured 2026-08-22 (jarvis, in a live session): a PURE READ of the schedule
   // store that ended in `2>/dev/null` was denied -- correctly, `2>` is a redirect
   // and the write-intent test is deliberately broad -- but the message lectured

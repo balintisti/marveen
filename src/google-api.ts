@@ -235,14 +235,48 @@ async function getServiceAccountAccessToken(forceNew = false, scopes = SERVICE_A
   return entry.token
 }
 
+/**
+ * WHICH DEADLINE APPLIES, DERIVED FROM WHERE THE CALL GOES.
+ *
+ * This used to be a default parameter (`= TOOL_TIMEOUTS['google-calendar']`),
+ * and that shape has now cost us twice. Drive needed a longer budget and got
+ * the calendar's until someone passed the argument (2026-08-20); then the OAuth
+ * token exchange turned out to be doing the same thing, silently, because it
+ * also omits the argument -- and a token step capped at 5s makes every leg
+ * report that the CALENDAR timed out (2026-08-24, card f4c59571).
+ *
+ * A caller cannot forget a value it never supplies. The endpoint decides.
+ */
+export function timeoutForUrl(url: string): number {
+  // Parsed, not substring-matched. A calendar id is interpolated into the
+  // events URL, and `includes('/token')` would hand the AUTH budget to a
+  // calendar whose id merely contains that word. Path and host, nothing else.
+  let host = ''
+  let path = url
+  try {
+    const u = new URL(url)
+    host = u.host
+    path = u.pathname
+  } catch {
+    /* unparseable: fall through to the substring checks below */
+  }
+  if (host === 'oauth2.googleapis.com' || path === '/token') return TOOL_TIMEOUTS['google-auth']
+  // `/upload/drive/` matters as much as `/drive/`: the create path uploads a
+  // multipart body and is the slowest call we make.
+  if (path.startsWith('/drive/') || path.startsWith('/upload/drive/')) {
+    return TOOL_TIMEOUTS['google-drive']
+  }
+  return TOOL_TIMEOUTS['google-calendar']
+}
+
 function httpsRequest(
   url: string,
   options: https.RequestOptions,
   body?: string,
-  // Explicitly `number`, not inferred from the default: TS would otherwise
-  // narrow the parameter to the literal 5000 and reject every other timeout,
-  // which is what happened the first time a Drive call needed a longer one.
-  timeoutMs: number = TOOL_TIMEOUTS['google-calendar'],
+  // Still overridable, but no longer a HIDDEN default: when nothing is passed
+  // the deadline comes from the endpoint, not from whichever constant happened
+  // to be written here.
+  timeoutMs: number = timeoutForUrl(url),
 ): Promise<{ status: number; data: string }> {
   return new Promise((resolve, reject) => {
     const req = https.request(url, options, (res) => {
@@ -257,7 +291,11 @@ function httpsRequest(
       res.on('error', reject)
     })
     req.setTimeout(timeoutMs, () => {
-      req.destroy(new Error(`Google API request timed out after ${timeoutMs}ms`))
+      // Name the HOST. "Google API request timed out" sent every reader to the
+      // Calendar API, when the call that died was the token exchange.
+      let host = url
+      try { host = new URL(url).host } catch { /* keep the raw url */ }
+      req.destroy(new Error(`Google request to ${host} timed out after ${timeoutMs}ms`))
     })
     req.on('error', reject)
     if (body) req.write(body)
@@ -529,13 +567,13 @@ export async function listDriveFiles(query?: string, pageSize = 50): Promise<Dri
   const { status, data } = await httpsRequest(url, {
     method: 'GET',
     headers: { Authorization: `Bearer ${token}` },
-  }, undefined, TOOL_TIMEOUTS['google-drive'])
+  })
   if (status === 401) {
     const newToken = await forceNewAccessToken()
     const retry = await httpsRequest(url, {
       method: 'GET',
       headers: { Authorization: `Bearer ${newToken}` },
-    }, undefined, TOOL_TIMEOUTS['google-drive'])
+    })
     if (retry.status !== 200) {
       logger.error({ status: retry.status, body: retry.data }, 'Google Drive list error after refresh')
       return []
@@ -574,13 +612,13 @@ export async function readDriveFileText(fileId: string, mimeType?: string): Prom
   const { status, data } = await httpsRequest(url, {
     method: 'GET',
     headers: { Authorization: `Bearer ${token}` },
-  }, undefined, TOOL_TIMEOUTS['google-drive'])
+  })
   if (status === 401) {
     const newToken = await forceNewAccessToken()
     const retry = await httpsRequest(url, {
       method: 'GET',
       headers: { Authorization: `Bearer ${newToken}` },
-    }, undefined, TOOL_TIMEOUTS['google-drive'])
+    })
     if (retry.status !== 200) {
       logger.error({ status: retry.status, fileId }, 'Google Drive read error after refresh')
       return null
@@ -650,7 +688,6 @@ export async function createDriveDoc(
       },
     },
     body,
-    TOOL_TIMEOUTS['google-drive'],
   )
   if (status !== 200 && status !== 201) {
     logger.error({ status, body: data.slice(0, 300) }, 'Google Drive create failed')

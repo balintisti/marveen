@@ -32,6 +32,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const REAL = '1268077055'
 
+// The fake HOME has to reach os.homedir(), not just process.env -- see the note in
+// beforeEach for the measurement. vi.hoisted is what lets the (hoisted) mock factory
+// share a box with the test body; vi.spyOn cannot be used here because the node:os
+// namespace is not configurable ("Cannot redefine property: homedir", measured).
+const fake = vi.hoisted(() => ({ home: '' }))
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>()
+  return { ...actual, homedir: () => fake.home || actual.homedir() }
+})
+
 let home: string
 let sent: Array<{ url: string; chatId: unknown }>
 let originalHome: string | undefined
@@ -48,6 +58,19 @@ beforeEach(() => {
   originalHome = process.env['HOME']
   originalChat = process.env['ALLOWED_CHAT_ID']
   process.env['HOME'] = home
+  // AND the homedir() call itself, because setting HOME is NOT enough -- measured
+  // 2026-08-23. The code under test resolves the channel state dir through
+  // os.homedir() (channel-provider.ts), and in vitest's THREADS pool a worker gets a
+  // JS copy of process.env: the assignment above never reaches the native environment
+  // that uv_os_homedir reads, so homedir() keeps returning the REAL home.
+  //   pool=forks   -> HOME=/tmp/... homedir()=/tmp/...    (the redirect works)
+  //   pool=threads -> HOME=/tmp/... homedir()=/Users/isti (the redirect is ignored)
+  // This test then read the OWNER'S REAL access.json and failed on his real chat id --
+  // and, worse, would have PASSED for the wrong reason if his pairing happened to hold
+  // the fixture value. The isolation must come from the test, not from which pool
+  // somebody happens to run: the default is forks today, and switching it is exactly
+  // what a person debugging a suite-level problem tries first.
+  fake.home = home
 
   sent = []
   vi.stubGlobal('fetch', async (url: string, init?: { body?: string }) => {
@@ -64,6 +87,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  fake.home = ''
   if (originalHome === undefined) delete process.env['HOME']
   else process.env['HOME'] = originalHome
   if (originalChat === undefined) delete process.env['ALLOWED_CHAT_ID']

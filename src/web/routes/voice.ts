@@ -58,7 +58,14 @@ function voiceOnnxPath(model: string): string | null {
   return existsSync(p) ? p : null
 }
 
-function isVoiceInstalled(): boolean {
+/**
+ * Is the local voice toolkit present at all? EXPORTED (card 477682a0) so the
+ * message router can tell the two failures apart in the line the USER sees:
+ * "not installed" is a standing state we can name, while "whisper failed" is a
+ * one-off. Measured 2026-08-28: `~/.local/share/marveen-voice/` does not exist
+ * on this machine, so today every inbound voice message takes the first branch.
+ */
+export function isVoiceInstalled(): boolean {
   return existsSync(VENV_PY) && existsSync(VTOOLS_PY)
 }
 

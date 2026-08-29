@@ -356,6 +356,67 @@ else
   warn "scripts/google-health.sh missing or not executable"
 fi
 
+# --- Playwright browser cache (shared by every agent's e2e) ---
+#
+# WHY IT IS HERE (card d1cf8ffb, measured 2026-08-23). A `playwright install`
+# stalled DURING EXTRACTION at 84 files / 448 KB and held the shared cache lock
+# for five and a half hours. The cache is shared, so that one stuck install
+# blocked every agent's e2e -- and the only way anyone found out was by trying to
+# run a test. A failure whose only signal is "someone eventually tries" is not a
+# signal. This section gives it one that fires without anyone running e2e.
+#
+# The check prints STATUS|text and always exits 0, so a missing cache shows up as
+# a named SKIP rather than as a silent pass.
+echo -e "\n${BOLD}Playwright cache${RESET}"
+if [ -x "scripts/playwright-cache-check.sh" ]; then
+  PW_LINES="$(bash scripts/playwright-cache-check.sh 2>/dev/null)"
+  if [ -z "$PW_LINES" ]; then
+    fail "playwright-cache-check.sh: no output"
+  else
+    while IFS='|' read -r status text; do
+      case "$status" in
+        OK)   ok "$text" ;;
+        FAIL) fail "$text" ;;
+        *)    echo "    $text" ;;
+      esac
+    done <<< "$PW_LINES"
+  fi
+else
+  warn "scripts/playwright-cache-check.sh missing or not executable"
+fi
+
+# --- Coordinator permission brake ---
+#
+# WHY (card caaf32a4). The coordinator ran with ZERO deny entries while six
+# sub-agents had 13-24 -- and it is the coordinator that has the widest reach.
+# When the list was finally written, the SYSTEM deleted it 41 minutes later: the
+# main agent's start-up provisioning copies the shared settings.json over the
+# isolated one, and own keys survive only when the shared file does not name
+# them. The shared file DOES have `permissions`, so the whole block is replaced,
+# `deny` and all.
+#
+# THE EXIT CODE IS ALWAYS 0 HERE, ON PURPOSE, so this section reads the LINES.
+# Anyone wiring this into a gate must do the same: gating on the exit code would
+# pass silently on every finding.
+echo -e "\n${BOLD}Coordinator permissions${RESET}"
+if [ -x "scripts/permission-guard-check.sh" ]; then
+  PG_LINES="$(bash scripts/permission-guard-check.sh 2>/dev/null)"
+  if [ -z "$PG_LINES" ]; then
+    fail "permission-guard-check.sh: no output"
+  else
+    while IFS='|' read -r status text; do
+      case "$status" in
+        OK)   ok "$text" ;;
+        FAIL) fail "$text" ;;
+        WARN) warn "$text" ;;
+        *)    echo "    $text" ;;
+      esac
+    done <<< "$PG_LINES"
+  fi
+else
+  warn "scripts/permission-guard-check.sh missing or not executable"
+fi
+
 # --- Summary ---
 echo ""
 if [ "$FAIL" -eq 0 ]; then

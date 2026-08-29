@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { cronMatchesNow, cronDueBetween, computeNextRun, resolveCronTz } from '../web/cron.js'
+import { cronGapMs } from '../web/cron.js'
+import { skipIfBusyIsSafe, SKIP_IF_BUSY_MAX_GAP_MS } from '../web/schedule-runner.js'
+import { readFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // Regression for the 2026-07-13..15 silent scheduler outage: fixed-time cron
 // tasks (reggeli-napindito "30 7 * * *", dream-engine "7 2 * * *") stopped
@@ -193,5 +198,100 @@ describe('computeNextRun honours the passed timezone', () => {
     expect(computeNextRun('30 7 * * *', 'Europe/Budapest')).toBe(
       Math.floor(Date.parse('2026-07-16T05:30:00Z') / 1000),
     )
+  })
+})
+
+// THE PRECONDITION `skipIfBusy` ALWAYS HAD, AND NEVER CHECKED (card 40b2f3a1).
+//
+// The flag's comment in schedule-runner states exactly why dropping a tick is
+// harmless -- "the next one is already on the way" -- and nothing verified it.
+// `bumblebee-hygiene-scan` is a WEEKLY cron carrying the flag; jarvis measured
+// the outcome: 2 occurrences due, 2 dropped, 0 runs. The task had never run
+// once since it was created, and one busy minute on a Monday cost a week.
+//
+// The threshold is measured, not chosen: of the four tasks that set the flag,
+// three fire every 10-30 minutes and one hourly. 60 minutes covers every
+// legitimate user and excludes exactly the case that lost work.
+const at = (iso: string) => new Date(iso).getTime()
+// A Monday 09:00 in the operator zone -- the moment the weekly task is due and
+// the decision is actually taken. Measuring the gap at any OTHER moment answers
+// a different question: a minute earlier the same occurrence is "one minute
+// away", which is true and irrelevant, because the runner only reaches this
+// branch when the task is due NOW.
+const MONDAY_9 = at('2026-08-31T09:00:00+02:00')
+
+describe('skipIfBusy is only safe when the next tick really is on the way (40b2f3a1)', () => {
+  it('a weekly schedule is NOT skippable -- the case that lost two occurrences', () => {
+    expect(skipIfBusyIsSafe('0 9 * * 1', MONDAY_9)).toBe(false)
+  })
+
+  it('and it stays unskippable when the tick lands late', () => {
+    // The runner does not fire at the exact second; a late tick must not flip
+    // the answer, or the defect returns for the ticks that arrive on time.
+    expect(skipIfBusyIsSafe('0 9 * * 1', at('2026-08-31T09:04:00+02:00'))).toBe(false)
+  })
+
+  it('short-cadence tasks stay skippable -- the flag keeps doing its job', () => {
+    // Without this, "fix" and "disable the feature" would be indistinguishable.
+    // These are the three enabled/real users of the flag today.
+    expect(skipIfBusyIsSafe('*/10 * * * *', MONDAY_9)).toBe(true)
+    expect(skipIfBusyIsSafe('*/25 * * * *', MONDAY_9)).toBe(true)
+    expect(skipIfBusyIsSafe('*/30 * * * *', MONDAY_9)).toBe(true)
+  })
+
+  it('hourly sits exactly on the threshold and stays skippable', () => {
+    // 3 600 000 ms with a `<=` comparison. Pinned because an off-by-one here
+    // would silently turn the hourly collector into a queueing task.
+    expect(cronGapMs('0 * * * *', MONDAY_9)).toBe(SKIP_IF_BUSY_MAX_GAP_MS)
+    expect(skipIfBusyIsSafe('0 * * * *', MONDAY_9)).toBe(true)
+  })
+
+  it('a daily schedule is not skippable either', () => {
+    expect(skipIfBusyIsSafe('30 7 * * *', MONDAY_9)).toBe(false)
+  })
+
+  it('an UNPARSEABLE schedule is not skippable -- could-not-tell means keep it', () => {
+    // The fail direction. An unreadable schedule is when dropping work is least
+    // defensible, and it matches the three exemptions already in the runner.
+    expect(cronGapMs('ez nem cron', MONDAY_9)).toBeNull()
+    expect(skipIfBusyIsSafe('ez nem cron', MONDAY_9)).toBe(false)
+  })
+
+  it('cronGapMs measures to the NEXT occurrence, strictly after the given moment', () => {
+    // The subtlety the first probe got wrong: at 08:59 the weekly gap is one
+    // minute, and that is the SAME occurrence about to fire -- not a safety net.
+    // The function is correct; the question has to be asked at the due moment.
+    expect(cronGapMs('0 9 * * 1', at('2026-08-31T08:59:00+02:00'))).toBe(60_000)
+    expect(cronGapMs('0 9 * * 1', MONDAY_9)).toBe(7 * 24 * 60 * 60 * 1000)
+  })
+})
+
+// AND THAT IT IS ACTUALLY IN THE DECISION (card 40b2f3a1).
+//
+// The cases above prove the FUNCTION is right. They do not prove it is CALLED:
+// measured by mutation -- deleting the call from the drop branch left all 26
+// green. A guard nobody invokes looks exactly like a guard that works.
+//
+// This reads the source, which is the weaker kind of test, so it asks the
+// CORRESPONDENCE question rather than the presence one: not "does the name
+// appear in this file" -- it would, in its own definition -- but "is it inside
+// the condition that decides to drop the tick". Anchored on the neighbouring
+// terms of that same condition, so moving the check elsewhere fails too.
+describe('the cadence guard is wired into the drop decision, not just defined', () => {
+  const SRC = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'web', 'schedule-runner.ts'), 'utf-8')
+
+  it('the skipIfBusy drop condition calls skipIfBusyIsSafe', () => {
+    // The whole condition on one line, matched as a unit.
+    const cond = SRC.split('\n').find((l) => l.includes('task.skipIfBusy') && l.includes('forceSend'))
+    expect(cond, 'nem talaltam a skipIfBusy dontesi agat').toBeTruthy()
+    expect(cond).toContain('skipIfBusyIsSafe')
+  })
+
+  it('and there is exactly ONE such decision -- a second branch could drop silently', () => {
+    // If a future change adds another skipIfBusy drop path, this fails and asks
+    // for the guard there too, instead of leaving half the behaviour fixed.
+    const hits = SRC.split('\n').filter((l) => l.includes('task.skipIfBusy') && l.includes('forceSend'))
+    expect(hits.length).toBe(1)
   })
 })

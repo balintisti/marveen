@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 
 // Guards the SHIPPED kanban-audit scheduled task (card e4157868).
@@ -131,5 +132,129 @@ describe('az OR maga: minden vedett mezo elrontasa PIROSAT ad', () => {
     // elkerul -- ezert allitjuk, nem felteteleezzuk.
     expect(config.forceSend).toBe(true)
     expect(config.agent).toBe('{{MAIN_AGENT_ID}}')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// A SZALLITOTT SKILL.md OSZTALYOZO SZABALYAI (kartya 93f2dd69).
+//
+// A LELET: az egyetlen utemezett feladat, ami TANUL, epp az volt, aminek a
+// tanulsaga nem szallitodott. Az elo peldany kilenc nap alatt megtanulta, hogy
+// a gazdatlan `planned` es a szandekosan parkolo `waiting` EGESZSEGES allapot --
+// a seed viszont a regi valtozatot vitte tovabb, tehat egy UJ telepites elso
+// futasa HAMIS RIASZTASOKAT kapott volna a sajat helyes mukodesere.
+//
+// A DONTES (marveen) MASOLAS HELYETT KIVONAT volt: a SZABALYOK altalanosak es
+// szallitandok, a mert esetek, kartya-azonositok, agens-nevek es a mi
+// darabszamaink NEM. Ez a teszt azt meri, hogy a kivonat szabalyai TENYLEG
+// mukodnek -- es nem egy masolaton, hanem a SZALLITOTT fajlbol kiszedett kodon.
+// Egy fixture, amit a sajat feltetelezesunkbol epitunk, nem tud elbukni.
+const SKILL_PATH = join(__dirname, '..', '..', 'seed-scheduled-tasks', 'kanban-audit', 'SKILL.md')
+const skillSrc = readFileSync(SKILL_PATH, 'utf-8')
+
+/**
+ * A megnevezett python-reszlet a SZALLITOTT lapbol. Dob, ha nincs meg: egy
+ * kihagyott kivonat kulonben ures kodot adna, es minden alabbi allitas
+ * "atmenne" -- pontosan az a nema siker, amit ez a lap maga tilt.
+ */
+function auditSnippet(marker: string): string {
+  const at = skillSrc.indexOf(`# AUDIT-SNIPPET: ${marker}`)
+  if (at < 0) throw new Error(`nincs ilyen reszlet a szallitott SKILL.md-ben: ${marker}`)
+  const start = skillSrc.lastIndexOf('python3 -c "', at)
+  if (start < 0) throw new Error(`a(z) ${marker} reszlet nem python3 -c hivasban all`)
+  const from = skillSrc.indexOf('\n', start) + 1
+  const end = skillSrc.indexOf('\n"\n', from)
+  if (end < 0) throw new Error(`a(z) ${marker} reszlet nincs lezarva`)
+  return skillSrc.slice(from, end)
+}
+
+type Card = Record<string, unknown>
+const NOW = Math.floor(Date.now() / 1000)
+const card = (id: string, extra: Card = {}): Card => ({
+  id, status: 'planned', assignee: null, priority: 'normal', updated_at: NOW, archived_at: null, title: `card ${id}`, ...extra,
+})
+
+function runSnippet(marker: string, cards: Card[], subst?: [string, string]): string[] {
+  let code = auditSnippet(marker)
+  if (subst) code = code.replace(subst[0], subst[1])
+  const out = execFileSync('python3', ['-c', code], { input: JSON.stringify(cards), encoding: 'utf-8' })
+  return out.trim().split('\n').filter(Boolean)
+}
+
+describe('a szallitott osztalyozas NEM riaszt egy egeszseges tablara', () => {
+  it('a reszlet tenyleg megvan a szallitott lapon (kontroll az ures kivonat ellen)', () => {
+    expect(auditSnippet('osztalyozas')).toContain('TALALAT-OSSZESEN')
+    expect(() => auditSnippet('nincs-ilyen')).toThrow(/nincs ilyen reszlet/)
+  })
+
+  it('EGESZSEGES TABLA -> nulla talalat', () => {
+    // A ket alak, amire a regi szabaly riasztott volna, es amelyik ma HELYES:
+    //   - gazdatlan `planned`: azt jelenti, hogy barki felveheti
+    //   - `waiting`, ami 48 oranal regebb ota all, de kiirt indokkal parkol
+    // A parkolo kartya `ELLENORZENDO` sort kap -- az a MECHANIKUS szuro, nem a
+    // jelentes: a lap 7. lepese kimondja, hogy elolvasas utan csendben marad, ha
+    // a kartya megmondja, mire var. Mechanikusan ezt eldonteni nem lehet, ezert
+    // amit ez a teszt rogzit: TALALAT nem keletkezik belole.
+    const sorok = runSnippet('osztalyozas', [
+      card('p1'),
+      card('p2', { priority: 'low' }),
+      card('w1', { status: 'waiting', updated_at: NOW - 72 * 3600, assignee: 'valaki' }),
+      card('i1', { status: 'in_progress', assignee: 'valaki' }),
+      card('t1', { status: 'testing', assignee: 'valaki' }),
+    ])
+    expect(sorok.filter((l) => l.startsWith('TALALAT '))).toEqual([])
+    expect(sorok).toContain('TALALAT-OSSZESEN 0')
+  })
+
+  it('POZITIV KONTROLL: a gazdatlan in_progress ES testing MEGSZOLALTATJA', () => {
+    // E nelkul az elozo teszt csak annyit bizonyitana, hogy a szuro nema.
+    const sorok = runSnippet('osztalyozas', [
+      card('i2', { status: 'in_progress' }),
+      card('t2', { status: 'testing' }),
+      card('p3'),
+    ])
+    expect(sorok).toContain('TALALAT-OSSZESEN 2')
+    expect(sorok.some((l) => l.startsWith('TALALAT gazdatlan-in_progress i2'))).toBe(true)
+    expect(sorok.some((l) => l.startsWith('TALALAT gazdatlan-testing t2'))).toBe(true)
+  })
+
+  it('a HIGH gazdatlan planned HUZO-sort kap, es NEM talalatot', () => {
+    // A kulonbseg maga a dontes: megnevezni igen (kulonben lathatatlanul all),
+    // riasztani nem (mert a gazdatlansaga a helyes allapot).
+    const sorok = runSnippet('osztalyozas', [card('h1', { priority: 'high' }), card('u1', { priority: 'urgent' })])
+    expect(sorok).toContain('TALALAT-OSSZESEN 0')
+    expect(sorok.filter((l) => l.startsWith('HUZO ')).length).toBe(2)
+  })
+
+  it('az archivalt kartyak nem szamitanak', () => {
+    const sorok = runSnippet('osztalyozas', [card('a1', { status: 'in_progress', archived_at: NOW - 10 })])
+    expect(sorok).toEqual(['TALALAT-OSSZESEN 0'])
+  })
+})
+
+describe('a beakadt-detektalas kihagyja az ALLANDO SOR kartyat', () => {
+  const LAST = String(NOW - 3600)
+  const futtat = (cards: Card[]): string[] => runSnippet('beakadt', cards, ["'''$LAST'''", `'''${LAST}'''`])
+
+  it('egy szandekosan orokke in_progress kartya NEM beakadt', () => {
+    const sorok = futtat([
+      card('s1', { status: 'in_progress', assignee: 'valaki', updated_at: NOW - 7200, title: 'valaki ALLANDO SORA: napi munka' }),
+    ])
+    expect(sorok).toEqual([])
+  })
+
+  it('POZITIV KONTROLL: egy sima beakadt kartya viszont megjelenik', () => {
+    const sorok = futtat([
+      card('s2', { status: 'in_progress', assignee: 'valaki', updated_at: NOW - 7200, title: 'egy rendes feladat' }),
+    ])
+    expect(sorok.length).toBe(1)
+    expect(sorok[0]).toContain('s2')
+  })
+
+  it('az ekezetes ALLANDO SORA alak is kimarad', () => {
+    const sorok = futtat([
+      card('s3', { status: 'in_progress', assignee: 'valaki', updated_at: NOW - 7200, title: 'valaki ÁLLANDÓ SORA: napi munka' }),
+    ])
+    expect(sorok).toEqual([])
   })
 })
