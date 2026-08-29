@@ -643,6 +643,29 @@ describe('skill-index.sh -- `--check <skill>` (0d0e3892)', () => {
     expect(check(['--check']).code).toBe(64)
   })
 
+  // A 38221eef javitas az ALAPVONALAS agra landolt, es ez a TESTVER-SOR bajtot szamolt
+  // tovabb, "karakter" cimke alatt (megtalalva 2026-08-29). Magyar prozan 5,8-7,9% tulmeres
+  // ket valodi skillen merve -- es epp ezen az uton latja a SZERZO a sajat fajljanak a szamat.
+  // A tanulsag nem a sor volt, hanem hogy a javitas utan nem futtattam ujra az EREDETI
+  // detektort a teljes fajlon; egy testver-elofordulas igy elte tul a javitast.
+  it('a --check szam KARAKTER, nem BAJT -- ekezetes fixture-rel merve', () => {
+    // A fixture-nek TOBB bajtja kell legyen, mint karaktere, kulonben a ket egyseg EGYBEESIK
+    // es a teszt egy bajt-szamlalon is zold lenne. Ez a kontroll, nem dekoracio.
+    mkdirSync(join(skills(), 'ekezetes'), { recursive: true })
+    const BODY = '---\nname: ekezetes\ndescription: d\n---\narvizturo tukorfurogep: ÁÉÍÓŐÚŰ öüó ééé\n'
+    writeFileSync(join(skills(), 'ekezetes', 'SKILL.md'), BODY)
+    const bytes = Buffer.byteLength(BODY, 'utf8')
+    const chars = [...BODY].length
+    expect(chars, 'a fixture nem tobb-bajtos -- a proba vak lenne').toBeLessThan(bytes)
+
+    const r = check(['--check', 'ekezetes'])
+    expect(r.code).toBe(0)
+    const m = r.stderr.match(/ekezetes\s+\d+ sor \/ (\d+) karakter/)
+    expect(m, `nem talaltam a szamot: ${r.stderr}`).not.toBeNull()
+    expect(Number(m![1])).toBe(chars)
+    expect(Number(m![1])).not.toBe(bytes)
+  })
+
   it('a BROADCAST viselkedese valtozatlan (regresszio)', () => {
     write('masik-skill', 520)
     const b = check([])

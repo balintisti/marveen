@@ -432,7 +432,19 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
     # nem kell jelenteni). Check modban viszont a csend nem valasz: a szerzo azert futtatta,
     # hogy SZAMOT kapjon a sajat fajljarol -- es egy or, ami csak akkor szolal meg, ha mar baj
     # van, nem tudja megmondani, mennyi maradt.
-    echo "MERET-OR: ${skill}  ${n} sor / $(wc -c < "$f" | tr -d ' ') karakter (hatar ${SKILL_LINE_LIMIT} -- $((SKILL_LINE_LIMIT - n)) sor maradt)" >&2
+    # A KARAKTER-SZAM ITT IS `char_count`, NEM `wc -c` (2026-08-29). A 38221eef javitas az
+    # ALAPVONALAS agra landolt, ez a TESTVER-SOR pedig bajtot szamolt tovabb, "karakter"
+    # cimke alatt. Magyar prozan ez 5,8-7,9% TULMERES (merve ket valodi skillen), es epp
+    # ezen az uton latja a SZERZO a sajat fajljanak a szamat -- amiert a `--check` keszult.
+    # A javitas utan nem futtattam ujra az eredeti detektort a TELJES fajlon; ez a sor
+    # ezert elt tovabb. Most igen: `wc -c` egy skill-fajlra a scriptben mostantol nulla.
+    _ck=$(char_count "$f")
+    if [ -n "$_ck" ]; then
+      echo "MERET-OR: ${skill}  ${n} sor / ${_ck} karakter (hatar ${SKILL_LINE_LIMIT} -- $((SKILL_LINE_LIMIT - n)) sor maradt)" >&2
+    else
+      # NEM esunk vissza bajtra: egy rossz egysegu szam rosszabb, mint a hianya.
+      echo "MERET-OR: ${skill}  ${n} sor (hatar ${SKILL_LINE_LIMIT} -- $((SKILL_LINE_LIMIT - n)) sor maradt); a karakter-szam NEM MERHETO (nincs python3)." >&2
+    fi
   fi
 done
 
