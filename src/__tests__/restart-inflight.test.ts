@@ -5,6 +5,7 @@ import {
   markRestartStarted, clearRestart, isRestartInFlight, resetRestartInFlight,
   RESTART_INFLIGHT_MAX_MS,
 } from '../web/restart-inflight.js'
+import { stripComments } from './helpers/strip-comments.js'
 
 // Card f65bc6ef. A saturation restart came back with `--continue` -- the guard asked for
 // `{ fresh: true }`, and a DIFFERENT starter won the race: restartAgentProcess stops
@@ -76,8 +77,23 @@ describe('the in-flight registry', () => {
 // neither is reachable from a test: restartAgentProcess drives tmux, and the reconciler
 // is not exported. Nothing in the suite would notice either one being removed -- measured
 // on a different card tonight, where a reverted call site passed all 4637 tests.
+//
+// READ FROM COMMENT-STRIPPED SOURCE. didi mutated the two assertions bb5d8db added and
+// BOTH survived a second time (card comment 19, probes P1 and P4), by the same one cause:
+// these assertions locate code by TEXT POSITION, and a comment is text. P1 moved the mark
+// below the stop and left `// markRestartStarted(name) is called once the process is
+// actually down.` above it -- indexOf found the name in the prose, markAt < stopAt held,
+// and the 446 ms window was fully back at 8/8 green. P4 deleted the `continue` and left
+// `// mid-restart: the restarter owns it, so we do not continue past it here` -- a comment
+// documenting the OPPOSITE of what the code now does, and `toContain('continue')` matched
+// the word inside it. Both are the shape a tidy-up takes, in a file this densely commented.
+//
+// The repo already had the answer and nobody wired it in: helpers/strip-comments.ts, whose
+// own docblock describes this exact failure (didi, card 0114968c, 2026-08-23). Reproduced
+// both probes here before fixing; both went green on ad43df4.
 describe('both ends are wired (structural)', () => {
-  const src = (p: string) => readFileSync(join(import.meta.dirname, '..', 'web', p), 'utf8')
+  const src = (p: string) =>
+    stripComments(readFileSync(join(import.meta.dirname, '..', 'web', p), 'utf8'))
 
   it('restartAgentProcess marks and clears around the stop/start window', () => {
     const body = src('agent-process.ts')
@@ -94,11 +110,9 @@ describe('both ends are wired (structural)', () => {
     // The await is load-bearing: without it the finally clears the mark before the start
     // finishes, and most of the window reopens while the fix still reads as present.
     expect(fn).toContain('return await startAgentProcess(name, opts)')
-    // ORDER, not just presence -- didi mutated this and the test stayed green (comment 12).
-    // The mark has to come BEFORE the stop; moved below it, the 446 ms window reopens and
-    // every assertion above still passes. `toContain` cannot see position, and position is
-    // the entire point of this call. The likely future edit is a tidy-up moving it
-    // somewhere "more logical", which is precisely the mutation that survived.
+    // ORDER, not just presence. The mark has to come BEFORE the stop; moved below it the
+    // 446 ms window reopens and every assertion above still passes. `toContain` cannot see
+    // position, and position is the entire point of this call.
     const markAt = fn.indexOf('markRestartStarted(name)')
     const stopAt = fn.indexOf('stopAgentProcess(name)')
     expect(stopAt, 'stopAgentProcess not found in restartAgentProcess').toBeGreaterThan(-1)
@@ -107,30 +121,74 @@ describe('both ends are wired (structural)', () => {
 
   it('the reconciler consults it AND skips -- the log line alone is a false success', () => {
     const body = src('channel-monitor.ts')
-    const loop = body.slice(body.indexOf('Desired agent not running') - 1500,
-                            body.indexOf('Desired agent not running'))
-    const callAt = loop.indexOf('isRestartInFlight(name)')
-    expect(callAt, 'the reconciler must ask').toBeGreaterThan(-1)
-    // AND IT MUST ACT ON THE ANSWER. didi mutated away the `continue`, leaving the check
-    // and the log line in place, and this test stayed green (comment 12). That is the worse
-    // of the two survivors: the log line is the ONLY thing separating "the race happened
-    // and the mark caught it" from "the race did not happen", and after that mutation it
-    // PRINTS while the reconciler starts the agent anyway -- the discriminator the closing
-    // condition rests on would assert the fix is working at the moment the defect runs.
-    // THE BLOCK, not "somewhere after". My first attempt asserted a `continue` anywhere
-    // after the check, and didi's mutation STILL survived: the loop has later guards
-    // (the 90s grace, the memory gate) whose own `continue` satisfied that. The question
-    // is whether THIS branch skips, so the answer has to come from THIS branch.
-    const blockStart = loop.indexOf('{', callAt)
-    let depth = 0
-    let blockEnd = -1
-    for (let i = blockStart; i < loop.length; i++) {
-      if (loop[i] === '{') depth++
-      else if (loop[i] === '}') { depth--; if (depth === 0) { blockEnd = i; break } }
+    // From the function, not a 1500-character window: stripping comments shortens the file
+    // by however much prose sits above the branch, so a fixed window is measuring the
+    // comment density, not the code.
+    const fnStart = body.indexOf('async function reconcileDesiredAgents')
+    expect(fnStart, 'reconcileDesiredAgents not found -- did stripComments eat it?')
+      .toBeGreaterThan(-1)
+    const autoStartAt = body.indexOf('Desired agent not running', fnStart)
+    expect(autoStartAt, 'the options-less reconcile start not found after the function head')
+      .toBeGreaterThan(fnStart)
+    const loop = body.slice(fnStart, autoStartAt)
+
+    const IF = 'if (isRestartInFlight(name))'
+    const ifAt = loop.indexOf(IF)
+    expect(ifAt, 'the reconciler must ask isRestartInFlight before it starts anything')
+      .toBeGreaterThan(-1)
+
+    // READ THIS BRANCH, WHATEVER SHAPE IT TAKES. The previous version did
+    // `loop.indexOf('{', callAt)` and brace-matched from there -- which takes the next
+    // brace ANYWHERE, and with no block of its own that is the object literal in
+    // `logger.info({ agent: name }, ...)`. didi's P2/P3: the braceless form -- the style of
+    // the guards on either side of it (`if (isAgentRunning(name)) continue`) -- made this
+    // read `'{ agent: name '` as "the branch". P2 failed with `expected '{ agent: name ' to
+    // contain 'mid-restart'`: a guard whose message sends the reader to fix the log when
+    // the log is not the problem. P3, the braceless DEFECT, was caught by the same accident
+    // -- a right answer for the wrong reason, which is not an answer. And with no `{` at
+    // all, indexOf returns -1 and the matcher counted braces from the START of the slice,
+    // so `could not read the in-flight branch` could never fire where it was meant to.
+    const rest = loop.slice(ifAt + IF.length)
+    const lead = rest.search(/\S/)
+    let branch: string
+    let form: string
+    if (rest[lead] === '{') {
+      form = 'block'
+      let depth = 0
+      let end = -1
+      for (let i = lead; i < rest.length; i++) {
+        if (rest[i] === '{') depth++
+        else if (rest[i] === '}') { depth--; if (depth === 0) { end = i; break } }
+      }
+      expect(end, 'could not read the in-flight branch: its block never closes').toBeGreaterThan(lead)
+      branch = rest.slice(lead, end)
+    } else {
+      // Braceless: the branch is the one statement that follows, and it ends at the line.
+      form = 'braceless'
+      const nl = rest.indexOf('\n', lead)
+      branch = rest.slice(lead, nl === -1 ? undefined : nl)
     }
-    expect(blockEnd, 'could not read the in-flight branch').toBeGreaterThan(blockStart)
-    const branch = loop.slice(blockStart, blockEnd)
-    expect(branch, 'the skip should say so in the log').toContain('mid-restart')
-    expect(branch, 'the reconciler must SKIP, not merely log').toContain('continue')
+    // CONTROL on the locator, and it is the mutation my first attempt survived: if the
+    // branch we read runs into the guards BELOW it, their `continue` answers for this one.
+    expect(branch, `the located ${form} branch ran past the in-flight check into the later guards`)
+      .not.toContain('AGENT_RESTART_GRACE_MS')
+
+    // IT MUST ACT ON THE ANSWER. didi mutated away the `continue`, leaving the check and
+    // the log in place, and bb5d8db's test stayed green. That is the worse survivor: the
+    // log is the ONLY thing separating "the race happened and the mark caught it" from
+    // "the race did not happen", so after that mutation it PRINTS while the reconciler
+    // starts the agent anyway -- the discriminator this card's closing condition rests on
+    // would report success at the moment the original defect runs.
+    // Statement-shaped, not `toContain`: `// continue is handled below` is not a skip.
+    expect(branch, `the reconciler must SKIP, not merely log (read the ${form} branch)`)
+      .toMatch(/(^|[;{}\n])\s*continue\s*(;|$)/m)
+    // AND IT MUST SAY SO. This is deliberate and it is the reason the braceless
+    // `if (isRestartInFlight(name)) continue` does NOT satisfy this guard: that form is
+    // correct about the race and silent about it, and silence is indistinguishable from
+    // the race never having happened. Keep the block, log, then skip.
+    expect(branch, `the in-flight skip must be observable -- the log line IS the closing condition (read the ${form} branch)`)
+      .toContain('logger.')
+    expect(branch.slice(branch.indexOf('logger.')), 'the log must name the reason: mid-restart')
+      .toContain('mid-restart')
   })
 })
