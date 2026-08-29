@@ -94,12 +94,43 @@ describe('both ends are wired (structural)', () => {
     // The await is load-bearing: without it the finally clears the mark before the start
     // finishes, and most of the window reopens while the fix still reads as present.
     expect(fn).toContain('return await startAgentProcess(name, opts)')
+    // ORDER, not just presence -- didi mutated this and the test stayed green (comment 12).
+    // The mark has to come BEFORE the stop; moved below it, the 446 ms window reopens and
+    // every assertion above still passes. `toContain` cannot see position, and position is
+    // the entire point of this call. The likely future edit is a tidy-up moving it
+    // somewhere "more logical", which is precisely the mutation that survived.
+    const markAt = fn.indexOf('markRestartStarted(name)')
+    const stopAt = fn.indexOf('stopAgentProcess(name)')
+    expect(stopAt, 'stopAgentProcess not found in restartAgentProcess').toBeGreaterThan(-1)
+    expect(markAt, 'the mark must be set BEFORE the stop opens the window').toBeLessThan(stopAt)
   })
 
-  it('the reconciler consults it before starting a desired agent', () => {
+  it('the reconciler consults it AND skips -- the log line alone is a false success', () => {
     const body = src('channel-monitor.ts')
     const loop = body.slice(body.indexOf('Desired agent not running') - 1500,
                             body.indexOf('Desired agent not running'))
-    expect(loop).toContain('isRestartInFlight(name)')
+    const callAt = loop.indexOf('isRestartInFlight(name)')
+    expect(callAt, 'the reconciler must ask').toBeGreaterThan(-1)
+    // AND IT MUST ACT ON THE ANSWER. didi mutated away the `continue`, leaving the check
+    // and the log line in place, and this test stayed green (comment 12). That is the worse
+    // of the two survivors: the log line is the ONLY thing separating "the race happened
+    // and the mark caught it" from "the race did not happen", and after that mutation it
+    // PRINTS while the reconciler starts the agent anyway -- the discriminator the closing
+    // condition rests on would assert the fix is working at the moment the defect runs.
+    // THE BLOCK, not "somewhere after". My first attempt asserted a `continue` anywhere
+    // after the check, and didi's mutation STILL survived: the loop has later guards
+    // (the 90s grace, the memory gate) whose own `continue` satisfied that. The question
+    // is whether THIS branch skips, so the answer has to come from THIS branch.
+    const blockStart = loop.indexOf('{', callAt)
+    let depth = 0
+    let blockEnd = -1
+    for (let i = blockStart; i < loop.length; i++) {
+      if (loop[i] === '{') depth++
+      else if (loop[i] === '}') { depth--; if (depth === 0) { blockEnd = i; break } }
+    }
+    expect(blockEnd, 'could not read the in-flight branch').toBeGreaterThan(blockStart)
+    const branch = loop.slice(blockStart, blockEnd)
+    expect(branch, 'the skip should say so in the log').toContain('mid-restart')
+    expect(branch, 'the reconciler must SKIP, not merely log').toContain('continue')
   })
 })
