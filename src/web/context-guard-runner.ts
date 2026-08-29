@@ -284,9 +284,21 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
   }
 
   const session = sessionFor(name)
-  const running = name === MAIN_AGENT_ID
-    ? capturePane(session) !== null
-    : agentRunState(name) === 'running'
+  // ONE question, one path -- card f9aff0b5. The main agent used to be asked a
+  // DIFFERENT question here (does capture-pane succeed?) because agentRunState
+  // looked for `agent-<name>` and the coordinator does not run under that name.
+  // Card 228c9252 fixed the resolver, so the special branch became a second way
+  // to ask something both arms now answer.
+  //
+  // And they were never equivalent. Measured 2026-08-29 on a throwaway session:
+  // `tmux capture-pane -t <name>` resolves the target by PREFIX (exit 0 for
+  // `friday-probe-prefix` against a session actually called
+  // `friday-probe-prefix-xyz`), while sessionInList compares with
+  // `line.trim() === session`. `marveen` is a live prefix of three sessions, so
+  // the capture arm answers for a name that merely starts one -- silently, with a
+  // plausible pane. The capture arm also has one failure mode the list arm has
+  // not: a capture-pane timeout on a LIVE session reads as 'stopped'.
+  const running = agentRunState(name) === 'running'
 
   // Only pay for the tmux/transcript probes a decision can actually use.
   const needPct = state.phase === 'idle' || state.phase === 'await-handoff'
