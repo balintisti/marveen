@@ -29,6 +29,7 @@ import {
   answerFirstRunGates,
   shSingleQuote,
 } from './agent-process.js'
+import { isRestartInFlight } from './restart-inflight.js'
 import { withSessionSendLock } from './session-send-lock.js'
 import { reapChannelOrphans, reapDetachedChannelClaudes, collectPollerEvidence } from './channel-poller-reap.js'
 import { probeTelegramConflict } from './channel-conflict-probe.js'
@@ -1956,6 +1957,16 @@ async function reconcileDesiredAgents(): Promise<void> {
   try {
     for (const name of down) {
       if (isAgentRunning(name)) continue
+      // NOT DOWN -- MID-RESTART. restartAgentProcess stops before it starts, and in that
+      // window this loop used to "rescue" the agent with an options-less start, which
+      // dropped the caller's `fresh` and brought a saturated session back with
+      // `--continue` (card f65bc6ef, measured on computress 2026-08-29 03:07). The 90s
+      // grace below cannot see it: agentLastRestart is written only here, never by the
+      // guard, the model-fallback runner or the API.
+      if (isRestartInFlight(name)) {
+        logger.info({ agent: name }, 'Reconcile: agent is mid-restart, leaving it to the restarter')
+        continue
+      }
       const last = agentLastRestart.get(name)
       if (last != null && Date.now() - last < AGENT_RESTART_GRACE_MS) continue
       if (!memGateAllowsStart(name)) continue   // Commit 3 v1: safe-mode / memory gate
