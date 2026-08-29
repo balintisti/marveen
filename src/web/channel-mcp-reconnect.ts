@@ -3,8 +3,8 @@ import { resolveFromPath } from '../platform.js'
 import { logger } from '../logger.js'
 import { MAIN_AGENT_ID, CHANNEL_PROVIDER } from '../config.js'
 import { readAgentChannelProvider } from './agent-config.js'
-import { agentSessionName, capturePane } from './agent-process.js'
-import { MAIN_CHANNELS_SESSION } from './main-agent.js'
+import { capturePane } from './agent-process.js'
+import { sessionNameForAgent } from './session-names.js'
 import { getProvider, type ChannelProviderType } from '../channel-provider.js'
 import { tryAcquireSessionSendLane } from './session-send-lock.js'
 import { paneLooksIdle, detectPaneState, detectsBlockingMenu } from '../pane-state.js'
@@ -58,8 +58,9 @@ export interface ReconnectResult {
 }
 
 export function resolveAgentSession(agentName: string): string {
-  if (agentName === MAIN_AGENT_ID) return MAIN_CHANNELS_SESSION
-  return agentSessionName(agentName)
+  // Kept as a name its importers already use; the RULE lives in
+  // agent-process.ts so there is exactly one copy of it (card 228c9252).
+  return sessionNameForAgent(agentName)
 }
 
 export function resolveAgentProviderType(agentName: string): ChannelProviderType {

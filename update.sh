@@ -242,16 +242,28 @@ if [ "$CURRENT_BRANCH" = "HEAD" ] || [ -z "$CURRENT_BRANCH" ]; then
   echo "         git checkout main"
   exit 2
 fi
-# The branch must exist on origin, otherwise 'git pull' below cannot find a
-# ref to fast-forward to (e.g. a local-only feature branch). Fail early with
-# a clear message instead of letting set -e abort mid-run.
-if ! git ls-remote --exit-code --heads origin "$CURRENT_BRANCH" >/dev/null 2>&1; then
+# WHICH REMOTE WE UPDATE FROM -- and why the default is NOT `origin`.
+# In this repository `origin` is the FOREIGN upstream (Szotasz/marveen); `fork`
+# is ours (balintisti/marveen). `origin` was hardcoded in both the check below
+# and the pull further down, so a successful run would have installed a third
+# party's code into the live installation.
+# Measured 2026-08-27 (card bae4df49): three gates stood in front of that, and
+# the one this card called a BUG was the only thing stopping it -- the checkout
+# is on a branch that does not exist on origin, so the check below refused. A
+# naive fix (move the checkout to a branch origin does have) would have opened
+# the gate and armed the pull. The fix belongs HERE, not on the branch name.
+UPDATE_REMOTE="${UPDATE_REMOTE:-fork}"
+
+# The branch must exist on the update remote, otherwise 'git pull' below cannot
+# find a ref to fast-forward to (e.g. a local-only feature branch). Fail early
+# with a clear message instead of letting set -e abort mid-run.
+if ! git ls-remote --exit-code --heads "$UPDATE_REMOTE" "$CURRENT_BRANCH" >/dev/null 2>&1; then
   if [[ "${MARVEEN_LANG:-hu}" == "en" ]]; then
-    echo -e "${RED}ERROR:${NC} Branch '${CURRENT_BRANCH}' does not exist on origin."
+    echo -e "${RED}ERROR:${NC} Branch '${CURRENT_BRANCH}' does not exist on '${UPDATE_REMOTE}'."
   else
-    echo -e "${RED}HIBA:${NC} A '${CURRENT_BRANCH}' branch nem létezik az origin-on."
+    echo -e "${RED}HIBA:${NC} A '${CURRENT_BRANCH}' branch nem létezik a '${UPDATE_REMOTE}' távolin."
   fi
-  echo "       Csak az origin-on is meglevo (kovetett) branchrol lehet frissiteni."
+  echo "       Csak a '${UPDATE_REMOTE}' tavolin is meglevo (kovetett) branchrol lehet frissiteni."
   echo "       Allj at egy release branchre, pl.:"
   echo "         git checkout main"
   exit 2
@@ -327,22 +339,56 @@ OLD_VERSION=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 # of NEW, so reset --hard $OLD_VERSION_FULL reverts without a force-push.
 OLD_VERSION_FULL=$(git rev-parse HEAD 2>/dev/null || echo "")
 
-# Ahead-detect: local commits not on upstream make ff-only refuse. Report it
-# actionably instead of dying silently under set -e (the dominant failure).
+# Ahead-detect: local commits not on the update remote make ff-only refuse.
+# Report it actionably instead of dying silently under set -e.
+#
+# MEASURED AGAINST $UPDATE_REMOTE, NOT `@{u}` (jarvis, 2026-08-27). The branch's
+# own upstream and the remote we pull from used to be the same thing, because
+# both were `origin`. Once the pull moved to $UPDATE_REMOTE they came apart, and
+# `@{u}` measured a DIFFERENT remote than the one about to be pulled -- 5 of 6
+# local branches point their upstream at the foreign `origin`, and the main
+# checkout's branch has no upstream at all. Measured on that branch: `@{u}`
+# fails, the old `|| echo 0` turned that into AHEAD=0, and the check waved
+# through a checkout that was 15 commits ahead of fork/<branch>.
+# So the guard reported "nothing to worry about" for the one state it exists to
+# catch, and the failure surfaced later as a generic ff-only error.
+#
+# A fetch is required first: "am I ahead of the remote" cannot be answered
+# without knowing where the remote is. FETCH_HEAD is the remote's tip.
 RESULT_PHASE="pull"
-AHEAD=$(git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)
-if [ "${AHEAD:-0}" -gt 0 ]; then
-  RESULT_MSG="A helyi checkout ${AHEAD} committal elore van az upstreamhez kepest; a fast-forward frissites nem lehetseges. Nezd meg: git log @{u}..HEAD"
-  echo -e "${RED}HIBA:${NC} a helyi checkout ${AHEAD} committal elore van az upstreamhez kepest; fast-forward nem lehetseges. Nezd: git log @{u}..HEAD"
+if ! retry 3 3 git fetch "$UPDATE_REMOTE" "$CURRENT_BRANCH"; then
+  RESULT_MSG="git fetch ${UPDATE_REMOTE}/${CURRENT_BRANCH} sikertelen; a frissites elott nem lehet megallapitani, elore vagyunk-e."
+  echo -e "${RED}HIBA:${NC} git fetch ${UPDATE_REMOTE}/${CURRENT_BRANCH} sikertelen."
+  restore_stash_before_exit
+  exit 5
+fi
+# NO `|| echo 0` HERE, on purpose. A count we could not compute is not zero --
+# and zero is exactly the answer that lets the pull proceed. If this ever fails
+# the script must stop, not assume the safe-looking value.
+if ! AHEAD=$(git rev-list --count FETCH_HEAD..HEAD 2>/dev/null); then
+  RESULT_MSG="Nem sikerult megallapitani, hany committal vagyunk elore a ${UPDATE_REMOTE}/${CURRENT_BRANCH}-hoz kepest; a frissites nem folytathato vakon."
+  echo -e "${RED}HIBA:${NC} az elore-vagyunk-e ellenorzes nem futott le; nem frissitek."
+  restore_stash_before_exit
+  exit 5
+fi
+# NO `${AHEAD:-0}` HERE EITHER (jarvis, 2026-08-27). The `:-0` is the same
+# "cannot measure -> assume the reassuring value" that the `|| echo 0` above was
+# removed for, two lines apart. It is unreachable today -- the block above exits
+# unless AHEAD was assigned -- but a defaulting expansion left next to a guard is
+# a trap for the next edit: swap the computation, and the silent zero is back
+# without anyone touching this line. AHEAD is guaranteed set by then; say so.
+if [ "$AHEAD" -gt 0 ]; then
+  RESULT_MSG="A helyi checkout ${AHEAD} committal elore van a ${UPDATE_REMOTE}/${CURRENT_BRANCH}-hoz kepest; a fast-forward frissites nem lehetseges. Nezd meg: git log ${UPDATE_REMOTE}/${CURRENT_BRANCH}..HEAD"
+  echo -e "${RED}HIBA:${NC} a helyi checkout ${AHEAD} committal elore van a ${UPDATE_REMOTE}/${CURRENT_BRANCH}-hoz kepest; fast-forward nem lehetseges."
   restore_stash_before_exit
   exit 5
 fi
 
 # Pull latest, NON-fatal under set -e so a diverged/network failure is reported.
-echo -e "  Letoltes (origin/${CURRENT_BRANCH})..."
-if ! retry 3 3 git pull --ff-only origin "$CURRENT_BRANCH"; then
-  RESULT_MSG="git pull --ff-only sikertelen (divergencia vagy halozati hiba). Nezd: git status; git log @{u}..HEAD"
-  echo -e "${RED}HIBA:${NC} git pull --ff-only sikertelen origin/${CURRENT_BRANCH}."
+echo -e "  Letoltes (${UPDATE_REMOTE}/${CURRENT_BRANCH})..."
+if ! retry 3 3 git pull --ff-only "$UPDATE_REMOTE" "$CURRENT_BRANCH"; then
+  RESULT_MSG="git pull --ff-only sikertelen (divergencia vagy halozati hiba). Nezd: git status; git log ${UPDATE_REMOTE}/${CURRENT_BRANCH}..HEAD"
+  echo -e "${RED}HIBA:${NC} git pull --ff-only sikertelen ${UPDATE_REMOTE}/${CURRENT_BRANCH}."
   restore_stash_before_exit
   exit 5
 fi

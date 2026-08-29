@@ -68,9 +68,32 @@ if [ -n "${VITEST:-}" ] || [ "${NODE_ENV:-}" = "test" ]; then
   MESSAGE="[TESZT] ${MESSAGE}"
 fi
 
-curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-  -d "chat_id=${CHAT_ID}" \
-  -d "text=${MESSAGE}" \
-  -d "parse_mode=HTML" > /dev/null
+# A valaszt NEM dobjuk el, es NEM jelentunk sikert a nelkul, hogy megneznenk.
+# Mert eset (2026-08-25): az `ALLOWED_CHAT_ID` `0` volt, a Telegram minden hivasra
+# `{"ok":false,"description":"Bad Request: chat not found"}`-ot adott, ez a szkript
+# viszont `>/dev/null`-ba dobta es feltetel nelkul kiirta, hogy "Ertesites elkuldve.".
+# Hat futo `dist/` modul hivja (auth-gate, reauth-healer, schedule-runner, agent-worker,
+# channel-coordinator, unit-fail-notify) -- vagyis a rendszer TELJES riasztasi utja nemán
+# elveszett, es sikert jelentett. A curl `0`-val ter vissza egy 400-ra is, tehat a
+# kilepesi kod ONMAGABAN sem eleg: az `ok` mezot kell megnezni.
+RESPONSE=$(curl -s -w '\n%{http_code}' -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+  --data-urlencode "chat_id=${CHAT_ID}" \
+  --data-urlencode "text=${MESSAGE}" \
+  -d "parse_mode=HTML")
 
-echo "Ertesites elkuldve."
+HTTP_CODE=$(printf '%s' "$RESPONSE" | tail -n1)
+BODY=$(printf '%s' "$RESPONSE" | sed '$d')
+
+# `"ok":true` a torzsben ES 200-as kod -- mindketto kell.
+case "$BODY" in
+  *'"ok":true'*) OK_FIELD=1 ;;
+  *) OK_FIELD=0 ;;
+esac
+
+if [ "$HTTP_CODE" = "200" ] && [ "$OK_FIELD" = "1" ]; then
+  echo "Ertesites elkuldve."
+else
+  DESC=$(printf '%s' "$BODY" | sed -n 's/.*"description":"\([^"]*\)".*/\1/p')
+  echo "HIBA: az ertesites NEM ment el. HTTP=${HTTP_CODE} chat_id=${CHAT_ID} ok=${OK_FIELD}${DESC:+ -- $DESC}" >&2
+  exit 1
+fi

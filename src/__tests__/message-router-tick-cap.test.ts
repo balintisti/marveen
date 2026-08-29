@@ -53,6 +53,11 @@ vi.mock('../web/voice-directive.js', () => ({
 vi.mock('../web/agent-config.js', () => ({
   readAgentRemoteHost: () => null,
   readAgentVoiceConfig: () => ({ responseMode: 'text' }),
+  // Added for the quiet-agent busy-stuck sweep (card bd7de2ba). Empty on
+  // purpose: this file measures the per-tick MESSAGE cap, and a sweep with a
+  // population would add tmux probes that have nothing to do with that cap.
+  listAgentNames: () => [],
+  agentDir: (name: string) => `/tmp/nonexistent-agents/${name}`,
 }))
 
 vi.mock('../web/agent-process.js', () => ({

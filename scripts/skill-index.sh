@@ -32,6 +32,35 @@ if [ "${1:-}" = "--outline" ]; then
   exit 0
 fi
 
+# ---- `--check <skill>`: A SZERZO A SAJAT FAJLJARA KAP SZAMOT, IRAS ELOTT ----
+# (kartya 0d0e3892, marveen dontese 2026-08-27 22:15.)
+#
+# A MERT PROBLEMA: a meret-or a fenti ciklusban MINDEN skillt vegignez (ma 56), tehat a
+# jelzest definicio szerint az kapja, aki legkozelebb futtatja -- fuggetlenul attol, KI irta
+# a novekedest. Merve ugyanaznap: negy futasom mind ugyanarra a fajlra figyelmeztetett, amit
+# nem en szerkesztettem. A szerzot semmi nem allitja meg; a kovetkezot terheli.
+#
+# AMIT EZ NEM CSINAL, ES MIERT NEM: nem blokkol iras kozben. A kapu minden skillt nez, tehat
+# egy iras-kozbeni blokk C-t allitana meg A tullepett fajlja miatt -- ma 56-bol 1 miatt
+# mindenkit. Egy or, ami miatt valaki NEM tud irni, ki lesz kapcsolva, es egy kikapcsolt or
+# nulla or. A ket tevedes-irany ara nem szimmetrikus: az utolagos jelzes tevedese egy
+# felesleges visszavagas, a blokke egy megkerult kapu.
+#
+# A KILEPESI KOD ITT MASKEPP MUKODIK, MINT A BROADCASTBAN, es ez szandekos. Broadcastban a
+# karakter-figyelmeztetes stdoutra megy es 0-val ter vissza (merve, kartya 83cac1ed) -- ott ez
+# a didi kartyajanak a kerdese, nem nyulok hozza. ITT viszont a mod EGYETLEN celja, hogy egy
+# `&&` lanc ele lehessen tenni, tehat MINDKET kapu 3-mal ter vissza, es minden szoveg stderrre
+# megy: ami eldobhato egy `>/dev/null`-lal, az nem or.
+CHECK_SKILL=""
+if [ "${1:-}" = "--check" ]; then
+  CHECK_SKILL="${2:-}"
+  if [ -z "$CHECK_SKILL" ]; then echo "hasznalat: skill-index.sh --check <skill-nev>" >&2; exit 64; fi
+  if [ ! -f "$HOME/.claude/skills/$CHECK_SKILL/SKILL.md" ]; then
+    echo "nincs ilyen skill: $CHECK_SKILL" >&2; exit 66
+  fi
+  shift 2
+fi
+
 VERBOSE=0
 _args=()
 for _a in "$@"; do
@@ -169,18 +198,104 @@ SKILL_LINE_LIMIT="${SKILL_LINE_LIMIT:-500}"
 # a kivetelezett esetnel, es a tagulasa nem hibauzenetkent, hanem HIANYZO
 # RIASZTASKENT jelent meg). Ezert all melle a KEMENY FELSO KORLAT is.
 #
-# Alapvonal: 2026-08-23 02:3x, felderites-ket-listas-proba = 513 sor (ebbol 86 a
-# szetvalaszthatatlan legacy). Barmelyik szerzo barmikor atfogalmazhatja a sajatjat,
+# Alapvonal: 2026-08-24 09:57, felderites-ket-listas-proba = 491 sor -- a `references/`
+# BONTAS UTANI mert meret. (Elotte 513 volt, egy 08-23 02:3x-i meresbol.)
+#
+# MIERT VALTOZOTT: a bontas 549 -> 491 volt, az alapvonal viszont 513 maradt, es ezzel a bontas
+# 58 soros nyeresege NOVEKEDESI KERETTE valt -- a fajl 528-ig nohetett volna hang nelkul, es ot
+# oran belul 510-en allt. A bontas igy nem a nyereseget rogzitette, hanem helyet csinalt az
+# ujranovesnek.
+# A SZABALY: minden sikeres `references/` bontas utan az alapvonal a bontas UTANI mert meret lesz.
+# A nyereseget a kapu rogziti, nem az emlekezet. Barmelyik szerzo barmikor atfogalmazhatja a sajatjat,
 # es akkor ez a szam CSOKKENTHETO -- de nem kotelezo.
 # Env-bol felulirhato, hogy a ket uj ag TESZTELHETO legyen ismert allapotokon.
 SKILL_BASELINE_NAMES="${SKILL_BASELINE_NAMES:-felderites-ket-listas-proba}"
-SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-513}"
+# 491 -> 504 (2026-08-27). KET KIMONDOTT dontes, ket szerzo, egy szamban -- es azert
+# all itt mindketto kulon, mert egy nevtelen alapvonal-emeles pontosan az az alak, amit
+# ez a kapu megelozni hivatott.
+#   +4  friday: uj 12. alak -- "egy szerszam, ami VERDIKTET ad, maga is kivan kontrollt"
+#       (835384e6). Ugyanabban a korben ket szakasz `references/`-be kerult, tehat a
+#       fajl 506 -> 495 lett: a BOVITES MELLETT IS CSOKKENT.
+#   +9  didi: a "tul szep nulla" harmadik jele -- amikor a SZAMLALO pont kiadja a
+#       NEVEZOT (100%, vagy a kiegeszito kontroll pont nulla). Valodi uj alak, nem
+#       atfogalmazas: a meglevo szabaly azert nem fogta volna meg, mert o LELETET
+#       keresett, tehat a 100% az ELLENKEZOJE volt annak, amit vart -- a jel kizarolag
+#       az EGYBEESESBEN volt.
+# A kulonbseg nem a szam, hanem hogy le van-e irva, MIERT: bontas MELLEKHATASAKENT
+# tagulni SOHA; kimondott dontessel, valodi uj tartalomra IGEN. Kartya: d1190641.
+# 504 -> 474 (2026-08-27, friday). BONTAS utani rogzites, nem emeles.
+# A fajl 519-en allt (+15, PONT a kapun), es ma HAROM agens jelezte kulon-kulon;
+# ketten emiatt NEM irtak be egy-egy jogos sort. Ot alak (4., 5., 6., 7., 10.)
+# kikerult a `references/alakok.md`-be, a magban a NEVUK maradt: 519 -> 474.
+# A valasztas ISMETLODES szerint tortent, nem kor szerint -- a 2-3 esetes alakok
+# mentek ki, a 7-9 esetesek maradtak. A hely azoke, amik sokszor jottek elo.
+# Az uj alapvonal a bontas utani meret ES a regi alapvonal MINIMUMA (474 < 504),
+# a mai szabaly szerint: a nyereseget a kapu rogziti, nem az emlekezet. A masik
+# irany -- 504-en hagyni -- 30 sor nema visszanovest engedne.
+# 504 -> 474 -> 489 (2026-08-27). A HARMADIK emeles ugyanazon a napon, es KIMONDOTT dontes:
+# ma NEGY szerzo tett bele osszesen 15 sor VALODI uj szabalyt (nem atfogalmazast), es ketten
+# NEM tudtak beirni egy-egy jogos sort, mert a keret elfogyott. Marveen sajat sora is emiatt
+# kerult vissza a magbol a `references/`-be.
+# MIERT NEM VAGAS: friday es dexter FUGGETLENUL atnezte a sajat bejegyzeseit a kikotessel, hogy
+# tomoriteni CSAK akkor szabad, ha a rovidebb alak UGYANANNYIT mond -- es egyik sem fert bele.
+# "Ha vagok belole, nem tomoritek, hanem csonkitok." (dexter) Ma harom vagas mar volt ezen a
+# fajlon; a negyedik futoszalag lenne.
+# EZ NEM A KAPU KUDARCA: a keret pont azt erte el, hogy MINDEN betoldas kimondott dontes legyen.
+# A VALODI valasz a mag ATRENDEZESE (66 szabaly egy fajlban mar kategoria, nem fajl) -- az kulon
+# kartyan all. Ez az emeles addig old fel, nem helyette.
+SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-417}"   # racsni 2026-08-28: min(427, 417) a bontas utan
+# 427 -> 417 (2026-08-28, dexter). BONTAS UTANI ROGZITES, NEM EMELES. A 11. es a 12. alak
+# TORTENETE a `references/alakok.md`-be kerult; a magban a NEVUK es a TEHERHORDO MONDATUK maradt.
+# A valasztas a fajl SAJAT elve szerint tortent -- ISMETLODES szerint (4 es 1 eset), nem kor szerint.
+# Kontroll a bontasra: a magot ONMAGABAN elolvasva mindket lecke felismerheto marad (jarvis merte
+# korabban, hogy epp a teherhordo mondat szokott kiesni egy bontasnal).
 # Mennyit nohet a mag az alapvonal ota. A belepesi alak szerint egy uj lecke 2-3 sor
 # a magban, tehat 15 ~ ot uj lecke, mielott torleszteni kell.
 SKILL_GROWTH_LIMIT="${SKILL_GROWTH_LIMIT:-15}"
 # KEMENY FELSO KORLAT, a novekedestol FUGGETLENUL. Enelkul egy alapvonal-emeles
 # csendben barmeddig tolhatna a hatart.
 SKILL_HARD_LIMIT="${SKILL_HARD_LIMIT:-600}"
+
+# A MASODIK SZAM: KARAKTER A SOR MELLE (kartya 83cac1ed, didi merese 2026-08-27).
+# A sorszam a MERTEK, a karakter a VEDETT dolog. Mert eset: egy fajl 504 sorrol 504 sorra
+# "valtozott", kozben +300 karakterrel -- egy ket sorra tordelt bekezdes egy sorra huzva,
+# es a felszabadult sorra egy uj bekezdes. A sor-alapu or ebbol SEMMIT nem latott.
+# A baseline PAR: a ket szam UGYANABBOL a fajl-allapotbol valo, kulonben az atlag hazudik.
+# RACSNI, KARAKTERBEN (kartya 38221eef): a regi 32 848 BAJT volt, a mai mert ertek
+# KARAKTER -- a kettonek nem is ugyanaz az egysege, tehat nem is osszehasonlithatoak.
+#
+# ES AMI A KONFLIKTUS-FELOLDASKOR MAJDNEM ELVESZETT (dexter kommentje, 2026-08-28, HEAD-oldal):
+# a racsni MINIMUM, es 08-28-an a mert ertek 33 225 volt a 32 848-as alapvonal MELLETT, tehat
+# min(32 848, 33 225) = 32 848: a regi maradt, es a NOVEKEDES ment +1101-rol +377-re. Ez a teny
+# a BAJT-vilagban all, es a mertekegyseg-valtassal NEM viheto at szamszeruen -- de az ELVE igen,
+# es az ervenyes: az alapvonal csak SZORULHAT. A ket oldal egyutt ezt jelenti, es nem azt, hogy
+# valamelyik szam gyoz.
+SKILL_BASELINE_CHARS="${SKILL_BASELINE_CHARS:-32582}"
+
+# --- KARAKTER-SZAMLALAS, LOCALE-FUGGETLENUL (kartya 38221eef, jarvis merese 2026-08-28).
+#
+# A KEZENFEKVO JAVITAS HIBAS LETT VOLNA. A cimke "karakter"-t mond, a mero eddig `wc -c`-t
+# hasznalt, ami BAJT. A nyilvanvalo csere `wc -m`-re UGYANEZT a hibat hozza vissza, csak
+# rejtve -- mert a `wc -m` LOCALE-FUGGO. Merve ugyanazon a fajlon:
+#     wc -c ................... 35 165   (bajt)
+#     wc -m  LC_ALL=C ......... 35 165   <- BAJT. Ugyanaz, mint a `wc -c`.
+#     wc -m  *.UTF-8 .......... 32 582   (karakter)
+#     python3, explicit utf-8 . 32 582
+#
+# ES A KORNYEZET, AMI EZT VALODIVA TESZI: a `com.marveen.dashboard.plist`
+# EnvironmentVariables-e CSAK `HOME` es `PATH` -- locale NINCS. Locale nelkul az `LC_CTYPE`
+# alapertelmezese `C`, tehat a `wc -m` BAJTOT szamolna EPP OTT, AHOL AZ OR FUT -- mikozben a
+# fejleszto shelljeben (hu_HU.UTF-8) helyesen mukodne. Kezzel tesztelve jo, elesben rossz.
+#
+# Ezert python3 es nem `LC_ALL=... wc -m`: az explicit kodolas akkor sem tud csendben
+# elromlani, ha valaki kesobb kiveszi a locale-t a hivasi lancbol.
+#
+# HA A python3 NEM ELERHETO: NEM esunk vissza bajtra. Egy rossz egysegu szam rosszabb, mint a
+# hianya -- a karakter-kapu ilyenkor KIMONDOTTAN nem mer, es ezt ki is irja.
+char_count() {  # $1 = fajl; ures kimenet, ha nem merheto
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 -c 'import io,sys; print(len(io.open(sys.argv[1], encoding="utf-8", errors="strict").read()))' "$1" 2>/dev/null || true
+}
 
 baseline_for() {
   # egyetlen nev ma; tobbnel szokoz-elvalasztott lista es azonos sorrendu szamok
@@ -201,6 +316,8 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
   [ -f "$f" ] || continue
   n=$(wc -l < "$f" | tr -d ' ')
   skill=$(basename "$(dirname "$f")")
+  # check modban a TOBBI skill nem tartozik a szerzore -- epp ez a lelet lenyege
+  if [ -n "${CHECK_SKILL:-}" ] && [ "$skill" != "$CHECK_SKILL" ]; then continue; fi
   base=$(baseline_for "$skill")
   if [ -n "$base" ]; then
     growth=$((n - base))
@@ -214,12 +331,96 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
     elif [ "$n" -gt "$SKILL_HARD_LIMIT" ]; then
       OVER_LIMIT=$((OVER_LIMIT+1))
       OVER_LIST="${OVER_LIST}  ${skill}  ${n} sor -- KEMENY FELSO KORLAT (${SKILL_HARD_LIMIT}) atlepve\n"
-    elif [ "${VERBOSE:-0}" = "1" ]; then
-      echo "MERET-OR: ${skill}  ${n} sor (alapvonal ${base}, novekedes ${growth_s})"
+    else
+      # FELTETEL NELKUL, NEM `-v` MOGOTT (didi merese, 2026-08-24). Ez az `if [ -n "$base" ]`
+      # agon BELUL all, tehat CSAK alapvonalas skillre fut -- ma pontosan EGY ilyen van, a
+      # kimenet EGY sorral no, nem 54-gyel.
+      #
+      # MIERT: a `-v` NELKUL csak a kilepesi kod latszik, a `VERBOSE=1` env pedig INERT (a :35
+      # feltetel nelkul nullazza). Aznap a mag 491->499->510->504->506->500->512-513 palyat jart
+      # be, es az or vegig `exit 0`-t mondott -- marveen tizenotnel tobbszor futtatta ugy, hogy
+      # a szamot egyszer sem latta. Az erdekes eset epp az, amikor a fajl a HATAR ALATT VAN es
+      # MOZOG; azt a `-v` mogott elrejteni annyi, mint nem merni.
+      #
+      # Ez az EGYETLEN lepcso a negybol, ami nem all a fegyelmen: nem kell hozza sem kapcsolo,
+      # sem env, sem proza, amit valakinek be kell gepelnie.
+      # ES A MARADEK KERET IS, NEM CSAK AZ ERTEK (mandark merte 2026-08-27, didi
+      # vette eszre). A sor eddig megmondta, MENNYI a novekedes, es nem mondta meg,
+      # hogy MENNYI FER MEG. Aki a "+15"-ot latta, nem tudta belole, hogy EGYETLEN
+      # sor valasztja el a riasztastol -- mandark ezt a hatart meg is merte, a
+      # fajlhoz nem nyulva: SKILL_GROWTH_LIMIT=14 mellett (ami aritmetikailag a
+      # +16-os eset) a kimenet MASIK agra valt, es a kilepesi kod 0 -> 3.
+      #
+      # A kar iranya az, ami miatt ez nem kozmetika: a riasztast NEM az kapja, aki a
+      # keretet elhasznalta, hanem a KOVETKEZO, aki egy jogos sort beir.
+      #
+      # KET korlat van, es a SZUKEBBET kell mondani, kulonben a szam megint tobbet
+      # iger, mint amennyi igaz: a novekedesi keret (limit - novekedes) es a kemeny
+      # felso korlat (HARD_LIMIT - sorok). Ha a kemeny korlat a szukebb, a sor ki is
+      # mondja, melyik kotott meg -- egy szam a kotoereje nelkul ugyanaz a hiba,
+      # mint egy szam populacio nelkul.
+      # A KARAKTER-MERO: SAJAT ALAPVONAL, UGYANUGY, MINT A SORSZAMNAK.
+      # (marveen dontese 2026-08-27, friday visszamenoleges meresere.)
+      #
+      # AZ ELSO VALTOZAT egy SZAMITOTT varakozashoz mert: excess = d_kar - d_sor * A.
+      # Merve 52 szerkesztesen: 50%-ban tuzelt, es a jelzes HALMOZODOTT -- a racsni ota
+      # MINDEN allapot megszolalt, 11 egymas utan. Az "excess" nem ennek a szerkesztesnek
+      # a surusege volt, hanem a racsni ota felgyult TAVOLSAG, es egy ilyen jelzes
+      # szerkezetileg nem tud ritka lenni.
+      #
+      # AZ OK VISZONT NEM AZ VOLT, amire elsore gondoltunk: az `A` nem beegetett
+      # konstans, hanem a ket alapvonal-szambol szarmazik -- es a feltevese IGAZ ezen a
+      # korpuszon (az uj tartalom median sorhossza 75, az alapvonalake 74; 1,02x).
+      # A hiba a KERET volt: `A` (egy sornyi) 15-szor szigorubb, mint a sor-kapu 15-os
+      # kerete. Ezert most a karakter-novekedes a SAJAT alapvonalahoz merodik, es a
+      # kerete a sor-keret ugyanabban a suruségben: SKILL_GROWTH_LIMIT * A.
+      #
+      # MERVE, ugyanazon az 52 szerkesztesen:
+      #     sor-kapu:            21/52 = 40%
+      #     karakter-kapu (uj):  21/52 = 40%
+      #     CSAK a karakter:      1/52 =  2%   <- a valodi zaj-novekmeny
+      # A 40% nem a karakter-mero tulajdonsaga: a MEGLEVO sor-kapu ugyanennyi ezen a
+      # korpuszon. Amit a karakter-mero HOZZATESZ, az egyetlen jelzes 52-bol -- es
+      # a harom mai valodi eset MINDEGYIKET CSAK ez fogja meg (+10..+15 sor a 15-os
+      # kereten belul, 1442..2019 karakterrel). Pontosan didi eredeti lelete.
+      _chars=$(char_count "$f")
+      _basec="${SKILL_BASELINE_CHARS:-0}"
+      if [ "${_basec:-0}" -gt 0 ] && [ "$base" -gt 0 ]; then
+        _avg=$((_basec / base))
+        _cgrowth=$((_chars - _basec))
+        _climit=$((SKILL_GROWTH_LIMIT * _avg))
+        if [ "$_cgrowth" -gt "$_climit" ]; then
+          if [ -n "${CHECK_SKILL:-}" ]; then
+            # check modban ez BUKAS: a mod celja, hogy egy `&&` lanc ele lehessen tenni
+            echo "MERET-OR: ${skill}  A KARAKTER-KERET ELFOGYOTT: +${_cgrowth} karakter (keret ${_climit}), mikozben a sorszam csak ${growth_s}." >&2
+            OVER_LIMIT=$((OVER_LIMIT+1))
+          else
+            echo "MERET-OR: ${skill}  A KARAKTER-KERET ELFOGYOTT: +${_cgrowth} karakter (keret ${_climit}), mikozben a sorszam csak ${growth_s}."
+          fi
+        fi
+      fi
+      _room_growth=$((SKILL_GROWTH_LIMIT - growth))
+      _room_hard=$((SKILL_HARD_LIMIT - n))
+      if [ "$_room_hard" -lt "$_room_growth" ]; then
+        _room="${_room_hard} sor maradt (a KEMENY korlat kot: ${SKILL_HARD_LIMIT})"
+      else
+        _room="${_room_growth} sor maradt (keret ${SKILL_GROWTH_LIMIT})"
+      fi
+      if [ -n "${CHECK_SKILL:-}" ]; then
+        echo "MERET-OR: ${skill}  ${n} sor / ${_chars} karakter (alapvonal ${base}/${_basec}, novekedes ${growth_s} / +${_cgrowth:-0} kar -- ${_room})" >&2
+      else
+        echo "MERET-OR: ${skill}  ${n} sor / ${_chars} karakter (alapvonal ${base}/${_basec}, novekedes ${growth_s} / +${_cgrowth:-0} kar -- ${_room})"
+      fi
     fi
   elif [ "$n" -gt "$SKILL_LINE_LIMIT" ]; then
     OVER_LIMIT=$((OVER_LIMIT+1))
     OVER_LIST="${OVER_LIST}  ${skill}  ${n} sor\n"
+  elif [ -n "${CHECK_SKILL:-}" ]; then
+    # ALAPVONAL NELKULI skill, a hatar alatt. Broadcastban ez CSEND (helyesen: 55 skillrol
+    # nem kell jelenteni). Check modban viszont a csend nem valasz: a szerzo azert futtatta,
+    # hogy SZAMOT kapjon a sajat fajljarol -- es egy or, ami csak akkor szolal meg, ha mar baj
+    # van, nem tudja megmondani, mennyi maradt.
+    echo "MERET-OR: ${skill}  ${n} sor / $(wc -c < "$f" | tr -d ' ') karakter (hatar ${SKILL_LINE_LIMIT} -- $((SKILL_LINE_LIMIT - n)) sor maradt)" >&2
   fi
 done
 
@@ -239,13 +440,29 @@ _arms_ok=1
 if [ "$_probe" -le "$SKILL_LINE_LIMIT" ] || [ "$_arms_ok" -ne 1 ]; then
   echo "MERET-OR: a pozitiv kontroll ELBUKOTT (szamlalas vagy egy uj ag nem mukodik) -- az or NEM megbizhato." >&2
 elif [ "$OVER_LIMIT" -gt 0 ]; then
-  echo "" >&2
-  echo "MERET-OR: ${OVER_LIMIT} skill lepte tul a hatarat:" >&2
-  printf "%b" "$OVER_LIST" >&2
-  echo "  -> references/ bontas javasolt. A LEGFRISSEBB szekciok vannak a fajl vegen," >&2
-  echo "     tehat epp azok jutnak el a legkevesebb olvasohoz." >&2
+  # Check modban a per-skill sorok MAR kimondtak mindent, es a broadcast-osszegzo itt
+  # egy URES listat mutatna (a karakter-ag nem tolti az OVER_LIST-et) -- egy "1 skill lepte
+  # tul" fejlec semmi alatt rosszabb, mint a csend: azt sugallja, hogy elveszett egy sor.
+  if [ -z "${CHECK_SKILL:-}" ]; then
+    echo "" >&2
+    echo "MERET-OR: ${OVER_LIMIT} skill lepte tul a hatarat:" >&2
+    printf "%b" "$OVER_LIST" >&2
+  else
+    # Check modban a FEJLEC marad el (egy "N skill lepte tul" mondat egyetlen megnezett
+    # skill mellett populaciot allitana) -- a SOR viszont nem maradhat el. Egy 3-as kilepesi
+    # kod indoklas nelkul pontosan az a nema kudarc, ami ellen ez az or keszult; a teszt,
+    # ami ezt megfogta, eloszor PIROS volt.
+    printf "%b" "$OVER_LIST" >&2
+  fi
+  if [ -n "${OVER_LIST}" ]; then
+    echo "  -> references/ bontas javasolt. A LEGFRISSEBB szekciok vannak a fajl vegen," >&2
+    echo "     tehat epp azok jutnak el a legkevesebb olvasohoz." >&2
+  fi
 else
-  if [ "${VERBOSE:-0}" = "1" ]; then
+  # A "minden skill a hatara alatt" mondat CHECK MODBAN HAMIS LENNE: ott EGY skillt neztunk
+  # meg, nem 56-ot. Egy ures populacio, ami tiszta bizonyitvanynak olvasodik -- pontosan az
+  # az alak, ami ellen ez az egesz or keszult.
+  if [ "${VERBOSE:-0}" = "1" ] && [ -z "${CHECK_SKILL:-}" ]; then
     echo "MERET-OR: minden skill a sajat hatara alatt (alapvonalas: novekedes <= ${SKILL_GROWTH_LIMIT} es teljes <= ${SKILL_HARD_LIMIT}; a tobbi: <= ${SKILL_LINE_LIMIT}). Pozitiv kontroll: OK."
   fi
 fi

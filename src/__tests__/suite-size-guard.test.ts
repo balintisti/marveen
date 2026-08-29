@@ -9,6 +9,7 @@ import {
   zeroTestFiles,
   SUITE_BASELINE_FILES,
   SUITE_BASELINE_TESTS,
+  baselineStaleMessage,
 } from './setup/suite-size-guard.js'
 
 // AZ OR SAJAT TESZTJEI (kartya 30e04d76).
@@ -223,5 +224,78 @@ describe('az alapvonal maga', () => {
   it('szam, es pozitiv -- egy elgepelt env nem nullazhatja csendben', () => {
     expect(SUITE_BASELINE_FILES).toBeGreaterThan(0)
     expect(SUITE_BASELINE_TESTS).toBeGreaterThan(0)
+  })
+})
+
+describe('baselineStaleMessage -- az OR SAJAT elavulasa (kartya 7c86006a)', () => {
+  // MERVE 2026-08-23. Az alapvonal `289 / 3929` volt, a keszlet `310 / 4166` --
+  // 237 teszt elteres. A `TOLERANCE_CAP` 0, tehat a also korlat MAGA az
+  // alapvonal (3929), es igy:
+  //   237 teszt tunhetett volna el JELZES NELKUL
+  //   az EREDETI incidens (97 elveszett teszt) sem szolaltatta volna meg
+  // POZITIV KONTROLLAL merve: egy 11 tesztes fajl eltavolitasa utan a futas
+  // VEGIG ZOLD volt, es az or nem szolalt meg.
+  //
+  // Az or tehat MUKODOTT es NEM VEDETT -- es pontosan ez az, amit egy zold
+  // futas nem tud megmondani magarol.
+
+  it('a friss alapvonal CSENDBEN marad', () => {
+    expect(baselineStaleMessage(4160, 4160, 309)).toBeNull()
+  })
+
+  it('kis novekedes NEM jelzes -- kulonben minden uj teszt megszolaltatna', () => {
+    // Egy jelzes, ami minden hozzaadaskor tuzel, egy heten belul zaj.
+    expect(baselineStaleMessage(4165, 4160, 309)).toBeNull()
+  })
+
+  it('EGY ATLAGOS FAJLNYI sodrodas MAR jelzes -- ott mar egy egesz fajl kieshet eszrevetlenul', () => {
+    // A kuszob SZARMAZTATOTT: ceil(4160/309) = 14 teszt/fajl.
+    const uzenet = baselineStaleMessage(4160 + 14, 4160, 309)
+    expect(uzenet).toBeTruthy()
+    expect(uzenet).toContain('npm run test:baseline')
+  })
+
+  it('a MAI mert allapotot jelezte volna', () => {
+    // A javitas elotti valos szamok.
+    const uzenet = baselineStaleMessage(4166, 3929, 289)
+    expect(uzenet).toBeTruthy()
+    expect(uzenet).toContain('237')
+  })
+
+  it('megmondja, HANY teszt tunhet el jelzes nelkul -- a szam a lenyeg, nem a cimke', () => {
+    const uzenet = baselineStaleMessage(4166, 3929, 289) as string
+    expect(uzenet).toMatch(/ennyi teszt tunhet el JELZES NELKUL: 237/)
+  })
+})
+
+describe('EZ ZSUGORODAS-OR, NEM LEFEDETTSEGI KAPU -- a korlat rogzitve (481efd24)', () => {
+  // AMI ITT ALL, ES AMI SZANDEKOSAN NEM.
+  //
+  // A fejlec kimondja, hogy a produkcios kod merete sehol nem szerepel a
+  // szamitasban. Ezt HAROM tesztet irtam ala, es MINDHAROM rossz volt -- a
+  // bukas csak az egyiket mutatta meg:
+  //
+  //   (1) "uj produkcios fajl atmegy": ugyanazokkal az argumentumokkal hivta
+  //       ketszer a fuggvenyt. Az `f(x) === f(x)` TAUTOLOGIA -- azt allitja,
+  //       hogy a fuggveny determinisztikus, nem azt, hogy a nevezo hianyzik.
+  //   (2) `evaluateSuiteSize.length === 4`: a `length` csak az ELSO
+  //       alapertelmezett ertek ELOTTI parametereket szamolja, tehat 2. De a
+  //       javitott szam sem ert volna semmit: egy KESOBB hozzaadott, szinten
+  //       alapertelmezett nevezo-parameter sem valtoztatna rajta.
+  //   (3) es ami maradt, a pozitiv kontroll, MAGABAN all -- lasd lent.
+  //
+  // A TANULSAG, AMI IDE TARTOZIK: a "nincs nevezo" nem VISELKEDES, hanem a
+  // szignatura tulajdonsaga. Egy egysegteszt viselkedest mer. Amit egy teszt
+  // nem tud allitani, azt ne ugy irjuk meg, hogy allitani LATSSZON -- az
+  // rosszabb, mint a hianya, mert a kovetkezo olvaso fedezetnek nezi.
+  // A tenyt ezert a fejlec mondja ki, meressel es pozitiv kontrollokkal, es a
+  // 481efd24 kartya orzi. Itt csak az all, ami tenyleg merheto:
+
+  it('POZITIV KONTROLL: az or EL -- egy eltunt teszt es egy eltunt FAJL is bukik', () => {
+    // Ez az, ami a fejlecben allo "uj produkcios fajl -> ZOLD" merest ertelmesse
+    // teszi. Enelkul a zold szin jelenthetne azt is, hogy az or halott.
+    expect(evaluateSuiteSize(337, 4528, 337, 4529).ok).toBe(false)
+    expect(evaluateSuiteSize(336, 4515, 337, 4529).ok).toBe(false)
+    expect(evaluateSuiteSize(337, 4529, 337, 4529).ok).toBe(true)
   })
 })

@@ -93,8 +93,8 @@ describe('PUT /api/kanban/<id> -- a nem-valtozas nem frissites', () => {
 
   it('a fuggveny HAROM kimenete kulonvalik', () => {
     kartya('ffff6666')
-    expect(updateKanbanCard('nincsilyen', { assignee: 'x' })).toBe('not-found')
-    expect(updateKanbanCard('ffff6666', { assignee: 'friday' })).toBe('unchanged')
-    expect(updateKanbanCard('ffff6666', { assignee: 'didi' })).toBe('updated')
+    expect(updateKanbanCard('nincsilyen', { assignee: 'x' }).outcome).toBe('not-found')
+    expect(updateKanbanCard('ffff6666', { assignee: 'friday' }).outcome).toBe('unchanged')
+    expect(updateKanbanCard('ffff6666', { assignee: 'didi' }).outcome).toBe('updated')
   })
 })

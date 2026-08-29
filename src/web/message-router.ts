@@ -17,7 +17,9 @@ import {
 import { isQualifiedId } from './federation/address.js'
 import { sendFederatedMessage } from './federation/bridge.js'
 import { getFederationConfig, abandonWindowMsForPeer } from './federation/config.js'
-import { readAgentRemoteHost, readAgentVoiceConfig } from './agent-config.js'
+import { readAgentRemoteHost, readAgentVoiceConfig, listAgentNames, agentDir } from './agent-config.js'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   agentSessionName,
   isSessionReadyForPrompt,
@@ -27,9 +29,9 @@ import {
   capturePane,
 } from './agent-process.js'
 import { detectPaneState, type PaneState } from '../pane-state.js'
+import { parsePaneTokens, nextTokenSample, type TokenSample } from '../session-progress.js'
 import { setLastInboundModality } from './voice-modality.js'
 import { classifyAgentMessage, wrapAgentMessageForDelivery } from './agent-message-wrap.js'
-import { MAIN_CHANNELS_SESSION } from './main-agent.js'
 import { maybeWakeSubAgentsForTelegram } from './telegram-inbox-wake.js'
 
 // A message that cannot be delivered within this window (target session never
@@ -134,13 +136,6 @@ function notifyOrchestratorOfFailedHandoff(msg: AgentMessage, reason: string): v
     logger.warn({ err, id: msg.id }, 'Failed to enqueue handoff-failure notification')
   }
 }
-// Wakeup cooldown for the main agent: the router fires at most one
-// sendPromptToSession wakeup per COOLDOWN_MS window to avoid spamming the
-// channels session. 45s gives enough headroom that a normal turn (typically
-// 5-30s) ends and drain-inbox fires before we would retry.
-let lastMainAgentWakeupMs = 0
-const MAIN_AGENT_WAKEUP_COOLDOWN_MS = 45 * 1000
-
 // Bounce a terminal federated-delivery failure back to the SENDER's inbox as
 // a local 'system' notice, so a delegating agent learns its task never
 // arrived (otherwise the failure only flips a DB row nobody reads, and the
@@ -169,6 +164,14 @@ function notifyDelegationFailed(msg: AgentMessage, error: string): void {
 // message backlog grows large. State cleared when session becomes ready or absent.
 const STUCK_ESCALATE_MS = 10 * 60 * 1000  // 10 min continuously stuck -> escalate
 const agentStuckSince = new Map<string, number>()  // agent -> first tick stuck (Date.now)
+// A BUSY-ag haladas-jele: mikor lattuk eloszor EZT a token-szamot (kartya 09906ebf).
+// A router amugy is elkapja a panelt az eszkalacio elott, tehat ez NULLA extra
+// tmux-hivas -- csak kiolvassuk, amit mar a kezunkben tartunk.
+const agentTokenSample = new Map<string, TokenSample>()
+/** Agensek, akiknel a SOPRES token-olvasasa null volt -- hogy a fail-open sor
+ *  stuck-szakaszonkent EGYSZER menjen ki, ne tickenkent. Sikeres olvasasra es tavolletre
+ *  torlodik, a mintaval egyutt. */
+const agentTokenReadFailed = new Set<string>()
 
 // A session in the middle of a long turn is NOT ready for a prompt, which is
 // exactly what a wedged session looks like from the queue side. On 2026-07-31
@@ -192,8 +195,122 @@ const BUSY_STUCK_ESCALATE_MS = 30 * 60 * 1000  // busy pane: only after a much l
  * could not be read (remote host down, tmux gone). Unreadable is NOT treated as
  * busy: a pane we cannot see is a reason to look sooner, not later.
  */
-export function shouldEscalateStuckSession(paneState: PaneState | null, stuckMs: number): boolean {
-  return stuckMs > (paneState === 'busy' ? BUSY_STUCK_ESCALATE_MS : STUCK_ESCALATE_MS)
+// Mennyi ideig allhat a token-szam UGY, hogy a fordulo attol meg halad? Egy hosszu
+// tool-hivas alatt a szam termeszetesen nem no -- marveen 11:45-kor pontosan ezt merte
+// (32 perc porgo, valtozatlan 88.0k token, es az ok egy futo TELJES BACKEND E2E volt).
+// Ezert nem eleg "a token nem mozdult": ANNAK IS TARTANIA KELL egy ideig.
+//
+// A SZAM ITELET, ES MEGNEVEZEM A MEREST, AMI ELDONTENE: mintavetelezni a token-sort a
+// busy paneleken, es feljegyezni a LEGHOSSZABB olyan fagyast, ami utan a fordulo megis
+// haladt. Amig ez nincs meg, 15 perc a valasztas -- a mert leghosszabb tool-hivas folott,
+// es a 30 perces busy-kuszob alatt, tehat a ketto EGYUTT ker legalabb 30 perc busy-t
+// ES 15 perc mozdulatlansagot.
+const BUSY_TOKEN_FREEZE_MS = 15 * 60 * 1000
+
+/**
+ * Pure decision: may a continuously not-ready session escalate now?
+ *
+ * `paneState` is what the pane showed at the escalation check, or null when it
+ * could not be read (remote host down, tmux gone). Unreadable is NOT treated as
+ * busy: a pane we cannot see is a reason to look sooner, not later.
+ *
+ * `tokensFrozenMs`: a BUSY-ag harmadik bemenete (kartya 09906ebf). Azt mondja meg,
+ * mennyi ideje NEM MOZDUL a token-szam. `null` = ISMERETLEN (nem volt olvashato
+ * token-sor), es ilyenkor a REGI viselkedes marad ervenyben -- egy nem mert jel nem
+ * lehet ok a HALLGATASRA. Szandekosan fail-open: a mai riasztas zajos, de a hallgatas
+ * egy VALODI elakadasnal dragabb.
+ */
+export function shouldEscalateStuckSession(
+  paneState: PaneState | null,
+  stuckMs: number,
+  tokensFrozenMs: number | null = null,
+): boolean {
+  if (paneState !== 'busy') return stuckMs > STUCK_ESCALATE_MS
+  if (stuckMs <= BUSY_STUCK_ESCALATE_MS) return false
+  return tokensFrozenMs === null || tokensFrozenMs > BUSY_TOKEN_FREEZE_MS
+}
+
+/**
+ * Is this agent deliberately parked? (card bd7de2ba)
+ *
+ * `{"kind":"none"}` in agents/<name>/workcheck.json is how an agent declares it
+ * has no queue in this system. idle-agent.ts:190 already honours it; the
+ * busy-stuck sweep below must too, or every long legitimate turn on a parked
+ * agent produces an alert and the guard gets muted -- after which it protects
+ * nothing.
+ *
+ * THE PREDICATE IS DELIBERATELY NARROWER THAN THE IDLE GUARD'S, which asks for
+ * `ownWorkCount <= 0 AND kind === 'none'`. Card count answers "should this agent
+ * have something to do"; it says nothing about whether its pane is wedged. Here
+ * the only question is whether the operator declared the agent parked.
+ */
+export function declaresNoQueue(raw: string | null): boolean {
+  if (raw === null) return false
+  try {
+    return (JSON.parse(raw) as { kind?: unknown }).kind === 'none'
+  } catch {
+    return false
+  }
+}
+
+export function isDeliberatelyParked(agent: string): boolean {
+  try {
+    return declaresNoQueue(readFileSync(join(agentDir(agent), 'workcheck.json'), 'utf8'))
+  } catch {
+    // Missing or unreadable declaration is NOT a park. The idle guard treats an
+    // absent workcheck.json as a config gap worth reporting; here it must not
+    // silence the check, because "I could not read it" and "the operator parked
+    // this agent" are different answers and only one of them is a decision.
+    return false
+  }
+}
+
+/**
+ * Which agents does the busy-stuck check owe an answer about? (card bd7de2ba)
+ *
+ * The check used to live entirely inside the delivery loop, keyed on
+ * `msg.to_agent`, so its population was `receiversInTick` -- whoever happened to
+ * have mail waiting. That set is CORRECT for delivery: only an agent with
+ * something to hand over matters there. It was then reused as the denominator of
+ * a different question, and a wedged agent with an empty inbox never entered it.
+ *
+ * Confirmed live on 2026-08-28 20:01: the alert fired on computress BECAUSE she
+ * had three queued messages. Had the inbox been empty, the same 30-minute stall
+ * would have been silent -- and from outside a working pane and a wedged pane
+ * are the same picture, so nothing else would have told anyone.
+ *
+ * `receiversInTick` is excluded rather than merged: those agents are already
+ * evaluated by the delivery loop, and evaluating them twice in one tick would
+ * double the alert instead of widening the net.
+ */
+// The sweep's own cadence. The router ticks every 5 s, and running a readiness
+// probe per quiet agent at that rate would add ~70 tmux calls a MINUTE to the
+// healthy path -- for a question whose threshold is 30 MINUTES. Measured before
+// shipping, because the first version of this change did exactly that and the
+// comment above it claimed "one probe per quiet agent" without saying per WHAT.
+//
+// 60 s is 0.05% of the threshold, so nothing detectable is lost, and it keeps
+// the guard's cost proportional to the question it answers.
+const QUIET_SWEEP_INTERVAL_MS = 60 * 1000
+let lastQuietSweepMs = 0
+
+/** Should the quiet-agent sweep run on this tick? Pure, so the cadence is testable. */
+export function quietSweepDue(nowMs: number, lastSweepMs: number, intervalMs: number = QUIET_SWEEP_INTERVAL_MS): boolean {
+  return nowMs - lastSweepMs >= intervalMs
+}
+
+export function quietAgentsToCheck(
+  all: string[],
+  receiversInTick: ReadonlySet<string>,
+  mainAgentId: string,
+  // Injected so a test can prove the filter is APPLIED, not merely that the
+  // predicate is correct. Measured: with the parked filter deleted from this
+  // line, every test still passed -- the suite was pinning the predicate and
+  // nothing was pinning its use. That is the same gap the skipIfBusy card hit
+  // today, one file over.
+  isParked: (agent: string) => boolean = isDeliberatelyParked,
+): string[] {
+  return all.filter((a) => a !== mainAgentId && !receiversInTick.has(a) && !isParked(a))
 }
 
 // ---- reconnect-backlog batching (card 2922e380 thread b) --------------------
@@ -470,6 +587,74 @@ export async function runMessageRouterTick(): Promise<void> {
         absentNow.add(agent)
       }
     }
+    // ---- busy-stuck sweep over the QUIET agents (card bd7de2ba) ----
+    // The delivery loop below answers the stuck question only for agents that
+    // have mail. This covers the rest, with the same threshold, the same pane
+    // read and the same escalation rule -- the population is what was wrong,
+    // not the mechanism. Cost on the healthy path is one readiness probe per
+    // quiet agent; the pane is captured only past the threshold, as below.
+    if (quietSweepDue(now, lastQuietSweepMs)) {
+     lastQuietSweepMs = now
+     for (const agent of quietAgentsToCheck(listAgentNames(), receiversInTick, MAIN_AGENT_ID)) {
+      const host = readAgentRemoteHost(agent)
+      const session = agentSessionName(agent)
+      if (!sessionExistsOnHost(host, session)) {
+        // No session is a different alert with a different owner; clearing the
+        // timer keeps a restarted agent from inheriting the old clock.
+        agentStuckSince.delete(agent)
+        continue
+      }
+      if (await isSessionReadyForPrompt(session, host)) {
+        agentStuckSince.delete(agent)
+        continue
+      }
+      const since = agentStuckSince.get(agent)
+      if (!since) { agentStuckSince.set(agent, now); continue }
+      const stuckMs = now - since
+      if (stuckMs <= STUCK_ESCALATE_MS) continue
+      const pane = capturePane(session, host)
+      const paneState = pane != null ? detectPaneState(pane) : null
+      // A HALADAS-JEL UGYANEBBOL A CAPTURE-BOL, mint a kezbesitesi uton: nulla extra tmux-hivas.
+      // Enelkul ez az ut 2 argumentummal hivna a kaput, a `tokensFrozenMs` `null` lenne, es a
+      // `null` a 09906ebf SZANDEKOS dontese szerint FAIL-OPEN -- vagyis a sopres, ami epp a
+      // populaciot SZELESITI, megkerulne a token-fagyas kaput azon a feluleten, amit hozzaad.
+      // Kartya bd7de2ba, jarvis metszet-lelete cca3f289.
+      //
+      // A MAP MEGOSZTOTT, es a feltetel MERVE van, nem izles: a megosztas csak akkor helyes, ha
+      // a ket ut UGYANAZT a panelt figyeli ugyanarra az agensre -- kulonben az egyik mintaja
+      // NULLAZZA a masik altal gyujtott fagyas-orat, es a kapu csendben megint fail-open lesz.
+      // Mind a harom komponens egyezik:
+      //   session  a sopres `agentSessionName(agent)`; a kezbesitesi ut a cache-bol veszi, amit
+      //            a :577 pre-pass UGYANAZZAL a hivassal tolt fel -- memoizalas, nem mas feloldas
+      //   host     mindketto `readAgentRemoteHost(agent)`
+      //   KIVETEL  a :695 `isMainAgent ? null` -- es az NEM er ide: a `quietAgentsToCheck` szuroje
+      //            `a !== mainAgentId`, tehat a fo agens SOHA nincs ebben a hurokban
+      //
+      // HA NINCS MINTA, AZ MONDJA MEG MAGAT: `null` token -> `frozenMs: null` -> fail-open, a
+      // 09906ebf SZANDEKOLT szemantikaja szerint, nem hianyzo bekotes miatt -- es kivulrol a
+      // ketto AZONOS (jarvis kimondott hatara). EGYSZER stuck-szakaszonkent, nem tickenkent: ha
+      // a kapu nem eszkalal, az `agentStuckSince` nem all vissza, tehat egy per-tick sor 5
+      // masodpercenkent ismetlodne -- allapot-valtasonkent naplozunk (testver-kartya f3c6054e).
+      const tokens = parsePaneTokens(pane)
+      const { sample, frozenMs } = nextTokenSample(agentTokenSample.get(agent), tokens, now)
+      if (sample) agentTokenSample.set(agent, sample)
+      if (tokens == null) {
+        if (!agentTokenReadFailed.has(agent)) {
+          agentTokenReadFailed.add(agent)
+          logger.info({ agent, session, stuckDurationMs: stuckMs },
+            'message-router: quiet-agent sweep read no token count -- the freeze gate is fail-open for this agent')
+        }
+      } else {
+        agentTokenReadFailed.delete(agent)
+      }
+      if (!shouldEscalateStuckSession(paneState, stuckMs, frozenMs)) continue
+      logger.warn({ to: agent, session, stuckDurationMs: stuckMs, pendingMsgCount: 0, paneState },
+        'message-router: session STUCK with an EMPTY inbox — found by the quiet-agent sweep')
+      notifyOrchestratorOfStuckSession(agent, session, stuckMs, 0, paneState)
+      agentStuckSince.set(agent, now)
+     }
+    }
+
     // Reconnect detection: agent was absent on the last tick, now present.
     for (const agent of presentNow) {
       if (agentWasAbsent.has(agent) && !agentBatchedThisReconnect.has(agent)) {
@@ -491,6 +676,8 @@ export async function runMessageRouterTick(): Promise<void> {
       agentWasAbsent.add(agent)
       agentBatchedThisReconnect.delete(agent) // reset batched flag on new absence
       agentStuckSince.delete(agent)           // absent = not stuck, just gone
+      agentTokenSample.delete(agent)          // es a haladas-jel is: uj session, uj szamlalo
+      agentTokenReadFailed.delete(agent)      // uj session: a token-olvasas jelzese is nullazodik
     }
     for (const agent of presentNow) {
       agentWasAbsent.delete(agent)
@@ -500,7 +687,6 @@ export async function runMessageRouterTick(): Promise<void> {
     // on their own budget so neither queue starves the other.
     await deliverFederatedBatch(federatedPending, now)
 
-    let mainAgentWakeupFiredThisTick = false
     for (const msg of pending) {
       // Skip messages already batched by the reconnect pre-pass: they are
       // 'done' in the DB now but still appear in our snapshot slice.
@@ -523,24 +709,22 @@ export async function runMessageRouterTick(): Promise<void> {
       // day. Leave the message pending; the next main-agent turn claims it
       // atomically. Sub-agents keep the tmux-inject path (they have idle gaps).
       //
-      // WAKEUP: without an active nudge the main agent only drains on the next
-      // user message or heartbeat -- up to 22+ min latency observed in prod.
-      // Fire one lightweight wakeup per cooldown window so an idle channels
-      // session starts a turn and drain-inbox claims the message immediately.
-      // Busy session: Claude Code queues the wakeup for the next turn boundary.
-      if (isMainAgent) {
-        if (!mainAgentWakeupFiredThisTick && now - lastMainAgentWakeupMs >= MAIN_AGENT_WAKEUP_COOLDOWN_MS) {
-          mainAgentWakeupFiredThisTick = true
-          lastMainAgentWakeupMs = now
-          try {
-            await sendPromptToSession(MAIN_CHANNELS_SESSION, '[inbox-wakeup: pending inter-agent messages]', null, { waitForIdle: false })
-            logger.info({ msgId: msg.id }, 'message-router: main-agent wakeup fired')
-          } catch (err) {
-            logger.warn({ err }, 'message-router: main-agent wakeup injection failed')
-          }
-        }
-        continue
-      }
+      // WAKEUP: moved out (card 835384e6, 2026-08-27). The router used to type
+      // `[inbox-wakeup: ...]` here every 45s while any main-agent message was
+      // pending, with NO idle gate (`waitForIdle: false`) -- so it re-typed the
+      // line while the previous copy was still queued unread, and every copy
+      // cost a full turn when the pane drained. Measured over 290,5 hours:
+      // 5 908 fires for 1 286 distinct messages (78,1% redundant), and 855 of
+      // the inbox-nudge watcher's 883 busy abstentions (96,8%) were overridden
+      // from here within 30s. Two writers on one pane meant the careful one's
+      // brakes -- busy-abort, hourly budget, stale-stop -- could not bind.
+      //
+      // Main-agent nudging now lives in ONE place, inbox-nudge-watcher, which
+      // has both entry points: the idle nudge, and a busy branch that queues at
+      // most one UNCONSUMED line (decideBusyWakeup + queuedPromptLines). The
+      // PULL model itself is unchanged -- the router never delivered content to
+      // the main agent, it only signalled; drain-inbox still does the claiming.
+      if (isMainAgent) continue
       // Use cached session data from the pre-pass (one sessionExistsOnHost call
       // per unique receiver per tick). Fall back to a direct call for agents not
       // in the pending set (shouldn't happen, but safe).
@@ -583,7 +767,14 @@ export async function runMessageRouterTick(): Promise<void> {
           const stuckMs = now - stuckStart
           const pane = capturePane(session, host)
           const paneState = pane != null ? detectPaneState(pane) : null
-          if (shouldEscalateStuckSession(paneState, stuckMs)) {
+          // A haladas-jel UGYANEBBOL a capture-bol jon: nulla extra tmux-hivas.
+          const { sample, frozenMs } = nextTokenSample(
+            agentTokenSample.get(msg.to_agent),
+            parsePaneTokens(pane),
+            now,
+          )
+          if (sample) agentTokenSample.set(msg.to_agent, sample)
+          if (shouldEscalateStuckSession(paneState, stuckMs, frozenMs)) {
             // Session has been continuously stuck past the escalation threshold.
             // Log at warn level so monitoring/revival tooling can act — the
             // stuck-input-watcher and channel-monitor pick these patterns up.
@@ -632,6 +823,7 @@ export async function runMessageRouterTick(): Promise<void> {
 
       // Session is ready — clear stuck tracking.
       agentStuckSince.delete(msg.to_agent)
+      agentTokenSample.delete(msg.to_agent)
 
       // Classify (channel-inbound / trusted-peer / untrusted) + reject an empty
       // from_agent -- SINGLE SOURCE in agent-message-wrap so the router and the

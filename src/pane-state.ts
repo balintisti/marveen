@@ -886,6 +886,62 @@ export function idleConsideringDimGhost(plain: string, dimStripped: string | nul
   return dimStripped != null && paneLooksIdle(dimStripped)
 }
 
+/**
+ * The prompts currently QUEUED in a busy pane, in render order.
+ *
+ * Claude Code holds prompts typed during a running turn in a queue: the queued
+ * lines render ABOVE the input box, and the box itself shows the dim hint
+ * "Press up to edit queued messages". Anyone about to type into the pane wants
+ * to know whether the line they are about to send is ALREADY sitting there
+ * unread -- otherwise every retry cadence just deepens the queue, and each
+ * queued copy costs a full turn when the pane finally drains.
+ *
+ * Measured 2026-08-27: the router's main-agent wakeup re-typed
+ * `[inbox-wakeup: pending inter-agent messages]` every 45s while a previous
+ * copy was still queued -- 5 908 fires for 1 286 distinct messages (78,1%
+ * redundant). The 2026-08-04 work taught the pane to say "this is busy, not
+ * idle"; this says WHICH LINES are waiting, which is what a would-be writer
+ * actually needs. `busyEvidence` answers WHY a pane is busy; this answers WHAT
+ * is already in its queue -- the two do not overlap.
+ *
+ * Returns [] when the pane is not in the queued state at all -- the hint must
+ * be present INSIDE the live input box. That gate is what keeps an incident
+ * report (or this very comment) quoted in some agent's scrollback from
+ * inventing a queue on an idle pane: the same self-contamination the
+ * queued-hint check itself is box-scoped to avoid.
+ *
+ * Pure: a string transform over a capture, unit-tested against real fixtures.
+ */
+export function queuedPromptLines(pane: string): string[] {
+  if (!pane) return []
+  const box = liveInputBox(pane)
+  if (box == null || !QUEUED_MESSAGES_HINT_RX.test(box)) return []
+  const lines = pane.split('\n')
+  // The live box is the LAST separator pair in the capture (the idle footer is
+  // the final row), so everything before its opening rule is "above the box".
+  const seps: number[] = []
+  for (let i = 0; i < lines.length; i++) {
+    if (BOX_SEP_RX.test(lines[i])) seps.push(i)
+  }
+  if (seps.length < 2) return []
+  const topSep = seps[seps.length - 2]
+  const out: string[] = []
+  for (const line of lines.slice(0, topSep)) {
+    const m = /^\s*\u276F[^\S\r\n]+(\S.*)$/.exec(line)
+    if (m) out.push(m[1].trim())
+  }
+  return out
+}
+
+/**
+ * True when `text` is already queued, unread, in this pane. The question a
+ * writer asks before typing a line it has typed before.
+ */
+export function promptAlreadyQueued(pane: string, text: string): boolean {
+  if (!text) return false
+  return queuedPromptLines(pane).includes(text.trim())
+}
+
 // Locate the live Claude Code input box and return its inner content as
 // one string. Bounded strictly to the region between the two most
 // recent BOX_SEP_RX separators above the idle footer, so a parked input
