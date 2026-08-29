@@ -91,6 +91,29 @@ describe('the in-flight registry', () => {
 // The repo already had the answer and nobody wired it in: helpers/strip-comments.ts, whose
 // own docblock describes this exact failure (didi, card 0114968c, 2026-08-23). Reproduced
 // both probes here before fixing; both went green on ad43df4.
+// End of the STATEMENT that starts at `from`: the first `;` or newline at depth 0 and
+// outside a string literal. Depth-aware because the statement we are reading is a call --
+// `logger.info({ agent: name }, '...')` -- whose own punctuation must not terminate it.
+// NOT A PARSER and it does not need to be: it reads one branch statement out of a slice we
+// already located. Template-literal `${}` nesting is not handled; nothing here writes one.
+function endOfStatement(s: string, from: number): number {
+  let depth = 0
+  let quote: string | null = null
+  for (let i = from; i < s.length; i++) {
+    const c = s[i]
+    if (quote) {
+      if (c === '\\') { i++; continue }
+      if (c === quote) quote = null
+      continue
+    }
+    if (c === "'" || c === '"' || c === '`') { quote = c }
+    else if (c === '(' || c === '[' || c === '{') depth++
+    else if (c === ')' || c === ']' || c === '}') depth--
+    else if (depth === 0 && (c === ';' || c === '\n')) return i
+  }
+  return s.length
+}
+
 describe('both ends are wired (structural)', () => {
   const src = (p: string) =>
     stripComments(readFileSync(join(import.meta.dirname, '..', 'web', p), 'utf8'))
@@ -163,10 +186,28 @@ describe('both ends are wired (structural)', () => {
       expect(end, 'could not read the in-flight branch: its block never closes').toBeGreaterThan(lead)
       branch = rest.slice(lead, end)
     } else {
-      // Braceless: the branch is the one statement that follows, and it ends at the line.
+      // Braceless: the branch is the ONE statement that follows -- and END OF LINE IS NOT
+      // END OF STATEMENT. didi, card comment 22: reading to the newline swallowed a second
+      // statement sharing the line, and one such line went 8/8 green here:
+      //   if (isRestartInFlight(name)) logger.info({...}, '...mid-restart...'); continue
+      // A braceless `if` takes exactly one statement -- the logger.info. The `; continue`
+      // is SEPARATE and UNCONDITIONAL, so the loop skips every iteration and the reconciler
+      // never starts any desired agent again. Controlled by execution, not by reading:
+      // three items, one in flight, real control flow -> started []. That is the outcome
+      // the timestamped expiry exists to prevent (a leaked mark refusing one agent
+      // forever), except every agent, permanently, with no expiry -- and the guard called
+      // it success.
       form = 'braceless'
-      const nl = rest.indexOf('\n', lead)
-      branch = rest.slice(lead, nl === -1 ? undefined : nl)
+      const stop = endOfStatement(rest, lead)
+      branch = rest.slice(lead, stop)
+      // AND THE MERGED PAIR IS ITSELF THE SIGNAL. Reading short only ever produces false
+      // failures; this is the one that reads LONG, so say so rather than quietly trimming.
+      if (rest[stop] === ';') {
+        const eol = rest.indexOf('\n', stop)
+        const trailer = rest.slice(stop + 1, eol === -1 ? undefined : eol).trim()
+        expect(trailer, 'a second statement shares the line with the braceless branch -- a braceless `if` takes exactly ONE statement, so this one runs on every iteration')
+          .toBe('')
+      }
     }
     // CONTROL on the locator, and it is the mutation my first attempt survived: if the
     // branch we read runs into the guards BELOW it, their `continue` answers for this one.
@@ -182,11 +223,19 @@ describe('both ends are wired (structural)', () => {
     // Statement-shaped, not `toContain`: `// continue is handled below` is not a skip.
     expect(branch, `the reconciler must SKIP, not merely log (read the ${form} branch)`)
       .toMatch(/(^|[;{}\n])\s*continue\s*(;|$)/m)
-    // AND IT MUST SAY SO. This is deliberate and it is the reason the braceless
+    // AND IT MUST SAY SO. Deliberate, and it is why the braceless
     // `if (isRestartInFlight(name)) continue` does NOT satisfy this guard: that form is
-    // correct about the race and silent about it, and silence is indistinguishable from
-    // the race never having happened. Keep the block, log, then skip.
-    expect(branch, `the in-flight skip must be observable -- the log line IS the closing condition (read the ${form} branch)`)
+    // correct about the race and silent about it, and the two processes meeting is
+    // otherwise unobservable -- nothing else distinguishes "the mark caught a real race"
+    // from "the race did not recur".
+    // THE JUSTIFICATION THAT USED TO STAND HERE WAS STALE, and an assertion string is the
+    // worst place for that: it is what you read when the guard goes red. It said the log
+    // line IS the closing condition. It stopped being that at 04:48, when marveen demoted
+    // it to a hint (card comment 20, `SEGEDJEL`) -- and didi then measured the ps probe
+    // that replaced it as ~99% clean without the fix anyway (comment 17). So the log is
+    // not load-bearing for closing or refutation. The smaller reason above is the real one
+    // and is sufficient on its own; this is a judgement, argue with it on purpose.
+    expect(branch, `the in-flight skip must be observable -- otherwise nothing shows the two processes met (read the ${form} branch)`)
       .toContain('logger.')
     expect(branch.slice(branch.indexOf('logger.')), 'the log must name the reason: mid-restart')
       .toContain('mid-restart')
