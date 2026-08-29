@@ -239,6 +239,22 @@
       </span>
     </div>
 
+    <!-- Non-blocking warning shown when the RUNNING PROCESS is not built from
+         the source in this checkout -- either not compiled, or compiled and not
+         restarted (card b807c756). It lives here rather than on a page or an
+         endpoint because the failure it catches is precisely that nobody looked:
+         a fix existed in the source for four days, never ran, and nothing said
+         so. Dismissal is keyed to the BUILD/SOURCE PAIR, so it comes straight
+         back the moment either of them moves -- unlike the branch banner, a
+         stale build is never a state anyone chose to be in.
+         Populated by updateBuildFreshnessUI() from /api/overview. -->
+    <div id="buildStaleBanner" class="auth-setup-banner branch-drift-banner" hidden>
+      <span id="buildStaleBannerText"></span>
+      <span class="auth-setup-banner-actions">
+        <button class="auth-setup-banner-close" id="buildStaleDismiss" aria-label="Dismiss">&times;</button>
+      </span>
+    </div>
+
     <div id="authSetupBanner" class="auth-setup-banner" hidden>
       <span data-i18n="auth.banner.text">Add a username+password login for browser access.</span>
       <span class="auth-setup-banner-actions">

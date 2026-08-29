@@ -218,8 +218,9 @@ export async function tryHandleUpdates(ctx: RouteContext): Promise<boolean> {
             { cwd: PROJECT_ROOT, timeout: 3000, encoding: 'utf-8' },
           ).trim()
           const n = parseInt(out, 10)
-          return Number.isFinite(n) ? n : 0
-        } catch { return 0 }
+          // Egy ertelmezhetetlen kimenet sem nulla: `null` = nem merheto.
+          return Number.isFinite(n) ? n : null
+        } catch { return null }
       },
     }
     let preflight

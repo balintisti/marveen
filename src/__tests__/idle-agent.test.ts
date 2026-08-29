@@ -1,16 +1,27 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   decideIdleAlert,
   parseWorkCheck,
   buildNoWorkNotice,
   buildWakeMessage,
   selectDeclaredWork,
+  selectCoordinatorTriage,
+  WAITING_ON_ASSIGNEE_LABEL,
   buildFleetAlert,
   NO_IDLE_STATE,
   type IdleAgentInput,
   type IdleAgentState,
   type IdleAgentThresholds,
+
+  orphanPullList,
+  topOfPullList,
+  buildPullNotice,
+  stalePendingBySender,
+  buildPendingStillWaitingNotice,
+  PENDING_NOTICE_AFTER_MS,
 } from '../idle-agent.js'
 
 const TH: IdleAgentThresholds = {
@@ -304,13 +315,14 @@ const card = (
   id: string,
   status: string,
   assignee: string | null,
-  opts: { archived?: boolean; updatedAt?: number | null } = {},
+  opts: { archived?: boolean; updatedAt?: number | null; labels?: { name: string }[] } = {},
 ): Row => ({
   id,
   status,
   assignee,
   archived_at: opts.archived ? 1 : null,
   updated_at: opts.updatedAt === undefined ? 100 : opts.updatedAt,
+  labels: opts.labels ?? [],
 })
 
 /** card id -> (author -> timestamp of their last comment) */
@@ -342,22 +354,44 @@ describe('countDeclaredWork', () => {
     ['c', 'didi', 150],
     ['g', 'dexter', 150],
   ])
+  // 'c' also carries the mark: since 2026-08-24 the reviewer's last word is no longer
+  // enough on its own -- see the block below on why the author stopped being the signal.
+  const marked = cards.map((c) => (c.id === 'c' ? { ...c, labels: [{ name: WAITING_ON_ASSIGNEE_LABEL }] } : c))
 
   it('assigned_open_cards skips done, archived and waiting, and testing only while it awaits review', () => {
     // 'a' and 'b' are plain open work. 'c' is in testing with didi's comment as the
     // last word -- an unanswered finding, so it counts as dexter's. 'g' is in testing
     // with only dexter's own comment, so the ball is still with the reviewer.
-    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', cards, comments)).toBe(3)
+    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', marked, comments)).toBe(3)
   })
 
   // The gap Didi measured between the two rules: a card in testing whose last comment
   // is the reviewer's finding is waiting on the ASSIGNEE, but it used to fall out of
   // both queues -- hers because she had commented, his because testing was excluded
   // wholesale. 34 of 70 cards were in that state; 63 of 70 were in no queue at all.
-  it('a testing card whose last word came from someone else IS my work', () => {
+  // REWRITTEN 2026-08-24, and the history matters more than the assertion (card
+  // 0fe791fb). This test used to read: "a testing card whose last word came from
+  // someone else IS my work" -- with no label, purely on the comment author. That rule
+  // closed a real gap (the paragraph above) and then over-fired: measured over friday's
+  // 11 such items, ZERO were questions to the assignee. Three were verifiers saying the
+  // card was closable, five were stale-hash bookkeeping that states the card's claim is
+  // UNCHANGED, three were confirmations. The guard woke him five times over that list.
+  //
+  // The author is not the signal; WHO IT WAITS ON is, and it is now a label.
+  it('a testing card MARKED for the assignee is his work when a reviewer spoke last', () => {
+    const rows: Row[] = [card('t', 'testing', 'dexter', { labels: [{ name: WAITING_ON_ASSIGNEE_LABEL }] })]
+    const reviewerSpokeLast = commentsAt([['t', 'didi', 200]])
+    expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, reviewerSpokeLast)).toBe(1)
+  })
+
+  it('...and the SAME card WITHOUT the mark also stays his, while the narrowing is off', () => {
+    // The triage selection is ready and correct -- and has no consumer, so nothing is
+    // taken away yet. Both halves asserted together, because the pair is the decision:
+    // a producer with no consumer must not narrow anything (marveen, 2026-08-24).
     const rows: Row[] = [card('t', 'testing', 'dexter')]
     const reviewerSpokeLast = commentsAt([['t', 'didi', 200]])
     expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, reviewerSpokeLast)).toBe(1)
+    expect(selectCoordinatorTriage(rows)).toHaveLength(1)
   })
 
   it('a testing card where I answered last is NOT my work -- the ball is back with the reviewer', () => {
@@ -378,16 +412,25 @@ describe('countDeclaredWork', () => {
     // which is exactly the ambiguity this invariant is meant to rule out.
     const rows: Row[] = [
       card('n', 'testing', 'dexter', { updatedAt: 100 }),   // no comments -> reviewer's
-      card('r', 'testing', 'dexter', { updatedAt: 200 }),   // reviewer spoke last -> assignee's
+      // marked for the assignee: since 2026-08-24 the mark is what puts it in his queue
+      card('r', 'testing', 'dexter', { updatedAt: 200, labels: [{ name: WAITING_ON_ASSIGNEE_LABEL }] }),
       card('a', 'testing', 'dexter', { updatedAt: 250 }),   // assignee answered last -> reviewer's
+      // UNTRIAGED, and this is the row the invariant grew a third queue for: nobody
+      // marked it, so it is neither the assignee's nor (necessarily) the reviewer's --
+      // and it must still land somewhere. It lands on the coordinator's triage list.
+      card('u', 'testing', 'dexter', { updatedAt: 300 })
     ]
     const cmts = commentsAt([
       ['r', 'didi', 200],
       ['a', 'didi', 200], ['a', 'dexter', 250],
+      ['u', 'didi', 300],
     ])
     const mine = countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, cmts)
     const hers = countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', rows, cmts)
-    expect(mine).toBe(1)
+    // 'r' (marked) and 'u' (reviewer spoke last, unmarked) -- the second one only while
+    // the narrowing is off; when the triage gains a consumer this becomes 1 again, in
+    // the same commit that wires it.
+    expect(mine).toBe(2)
     expect(hers).toBe(2)
     // NOT a sum. Didi's catch: `mine + hers === rows.length` is satisfied just as well
     // by one card counted twice and another counted zero times -- the two errors cancel,
@@ -401,7 +444,13 @@ describe('countDeclaredWork', () => {
       // fails for the right reason with the wrong message costs an hour to diagnose.
       const inMine = countDeclaredWork({ kind: 'assigned_open_cards' }, c.assignee ?? '', [c], cmts)
       const inHers = countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', [c], cmts)
-      expect(inMine + inHers, `card ${c.id} (assignee ${c.assignee}) is in no queue`).toBeGreaterThan(0)
+      // THE THIRD QUEUE (2026-08-24). When the assignee's rule stopped firing on the
+      // comment author, an UNTRIAGED card fell out of both of the original two -- and
+      // this invariant is what said so, immediately and by name. It is the whole reason
+      // "nobody's" was rejected as the resting place for an unmarked card: the guarantee
+      // here is not "exactly one queue", it is NOTHING MAY BE INVISIBLE.
+      const inTriage = selectCoordinatorTriage([c]).length
+      expect(inMine + inHers + inTriage, `card ${c.id} (assignee ${c.assignee}) is in no queue`).toBeGreaterThan(0)
     }
   })
 
@@ -411,11 +460,26 @@ describe('countDeclaredWork', () => {
   // on purpose -- with a third party talking, nobody can say from the data alone whose
   // move it is, and nudging both is the safe answer. Telling them apart would mean
   // reading what the comment SAYS, which is judgement, not mechanics.
-  it('a third party speaking last puts the card in BOTH queues, deliberately', () => {
+  // REWRITTEN 2026-08-24 (card 0fe791fb). This used to assert that a third party
+  // speaking last puts the card in BOTH queues -- and the reasoning above it says why:
+  // "nobody can say from the data alone whose move it is, and nudging both is the safe
+  // answer. Telling them apart would mean reading what the comment SAYS."
+  //
+  // That was right about the DATA and it is no longer true of it: the card can now carry
+  // who it waits on, so nobody has to read the comment or nudge two people to be safe.
+  // Nudging both was never free -- it is what put five identical wakes in front of an
+  // agent who could not act on any of them.
+  it('a third party speaking last still nudges BOTH -- and that is now a KNOWN cost, not a shrug', () => {
+    // The original reasoning above stands while the narrowing is off. What changed is
+    // that we can now say what it costs: nudging both is what put five identical wakes
+    // in front of an agent who could not act on any of them. The label family is the
+    // way out, and it takes effect the day the triage list has somewhere to go.
     const rows: Row[] = [card('x', 'testing', 'dexter', { updatedAt: 300 })]
     const coordinatorLast = commentsAt([['x', 'didi', 200], ['x', 'marveen', 300]])
     expect(countDeclaredWork({ kind: 'assigned_open_cards' }, 'dexter', rows, coordinatorLast)).toBe(1)
     expect(countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', rows, coordinatorLast)).toBe(1)
+    // Ready, and deliberately not yet consumed.
+    expect(selectCoordinatorTriage(rows)).toHaveLength(1)
   })
 
   // A KNOWN gap, asserted so it cannot change unnoticed: a card assigned to X where
@@ -593,6 +657,10 @@ describe('assigned_open_cards -- the coordinator is not a reviewer', () => {
   const comments = (m: Record<string, Record<string, number>>) =>
     new Map(Object.entries(m).map(([k, v]) => [k, new Map(Object.entries(v))]))
 
+  // NO label here on purpose: these cases are about the comment-author rule, which is
+  // what still decides while the narrowing is off (see idle-triage-coupling.test.ts).
+  // A `varakozik:assignee` mark would short-circuit every one of them and they would
+  // pass for the wrong reason.
   const testingCard = (id: string) => ({ id, status: 'testing', assignee: 'dexter', updated_at: 100 })
 
   it('a testing card where the COORDINATOR spoke last is NOT the assignee’s work', () => {
@@ -647,7 +715,7 @@ describe('assigned_open_cards -- the coordinator is not a reviewer', () => {
 // here would still be green. So the control reads the REAL source file, not a copy of
 // the call -- a fixture built from our own assumption cannot fail.
 describe('the watcher actually passes the coordinator id', () => {
-  it('both call sites hand MAIN_AGENT_ID to the work-selection', () => {
+  it('EVERY work-selection call site hands MAIN_AGENT_ID to it', () => {
     const src = readFileSync(
       new URL('../web/idle-agent-watcher.ts', import.meta.url),
       'utf8',
@@ -658,8 +726,20 @@ describe('the watcher actually passes the coordinator id', () => {
     // behaviour it guards was untouched (2026-08-22). A source-reading control should
     // pin WHAT is passed, not the argument order -- otherwise every later parameter
     // costs a false red, and the third one gets "fixed" by deleting the assertion.
-    expect(src).toMatch(/countDeclaredWork\([^)]*MAIN_AGENT_ID/)
-    expect(src).toMatch(/selectDeclaredWork\([^)]*MAIN_AGENT_ID/)
+    //
+    // AND NOT ANCHORED TO THE NUMBER OF CALL SITES EITHER (2026-08-24). This used to say
+    // "both call sites", naming countDeclaredWork and selectDeclaredWork separately. The
+    // watcher now selects ONCE and takes the count from that same list -- a deliberate
+    // change, because two calls were two chances to disagree -- and the old wording went
+    // red for a shape change while the property it guards was untouched. Same lesson as
+    // the paragraph above, one level up: pin the PROPERTY (every call passes it), not the
+    // arrangement that happens to satisfy it today.
+    const sites = [...src.matchAll(/(?:select|count)DeclaredWork\(/g)]
+    expect(sites.length).toBeGreaterThan(0)
+    for (const m of sites) {
+      const args = src.slice(m.index ?? 0, (m.index ?? 0) + 240)
+      expect(args, `call site at ${m.index} omits the coordinator`).toContain('MAIN_AGENT_ID')
+    }
     // And that the id is imported, not a stray local that happens to share the name.
     expect(src).toMatch(/import \{ MAIN_AGENT_ID \} from '\.\.\/config\.js'/)
   })
@@ -843,6 +923,26 @@ describe('buildNoWorkNotice', () => {
   // It must NOT name cards: choosing them needs the board and the fleet's shape, which
   // the coordinator has and this function does not. A guessed card list would look
   // authoritative and be wrong.
+  // AZ UZENET AZT A CSATORNAT NEVEZZE MEG, AMIT AZ OR TENYLEGESEN OLVAS (kartya dc81d2af).
+  //
+  // A regi szoveg azt kerte: "mondd ki a KARTYAN, hogy miert all". Az or viszont kartyat SOSEM
+  // olvas -- a dontese a `workcheck.json`-on all. jarvis merte 2026-08-28: 10 ertesites 4h48m
+  // alatt UGYANARROL az agensrol, mikozben a koordinator KETSZER is kartyara irta, hogy
+  // szandekosan all. A kartya-komment helyes szokas; csak nem az a csatorna, amit ez az or nez.
+  // Egy uzenet, ami olyan valaszt ker, amit a KERO fel sem tud olvasni, minden korben ujra megy.
+  it('a `workcheck.json`-t nevezi meg, a konkret ertekkel', () => {
+    const msg = buildNoWorkNotice('mandark', 42)
+    expect(msg).toContain('workcheck.json')
+    expect(msg).toContain('{"kind":"none"}')
+  })
+
+  it('NEM keri, hogy a KARTYAN magyarazza el -- azt az or nem latja', () => {
+    // NEGATIV KONTROLL: a kartya mint MUNKA-forras tovabbra is helyes ker, es meg is marad.
+    const msg = buildNoWorkNotice('mandark', 42)
+    expect(msg).not.toMatch(/mondd ki a kartyan/i)
+    expect(msg.toLowerCase()).toContain('adj neki kartyat')
+  })
+
   it('does not pretend to know which cards to hand over', () => {
     const msg = buildNoWorkNotice('jarvis', 14)
     expect(msg).not.toMatch(/\b[0-9a-f]{8}\b/)
@@ -902,5 +1002,247 @@ describe('counter-only busy evidence is weak enough for the no-work notice', () 
     const s1 = decideIdleAlert(onCall, NO_IDLE_STATE, TH, at(0))
     const s2 = decideIdleAlert(onCall, s1.next, TH, at(11))
     expect(s2.decision.alert).toBe(false)
+  })
+})
+
+// THE PULL-LIST THE GUARD COULD NOT SEE (card 4cbc8af9).
+//
+// The work counter asks `assignee === agent`. Correct for "what is on my plate",
+// wrong for "is there anything to do" -- and the rulebook's third rule sends an
+// agent with an empty plate to exactly the cards that question excludes.
+// Measured 2026-08-28 21:02: a high-priority ownerless card had existed for
+// twelve minutes and the notice still said NINCS RA KIOSZTVA SEMMI. The rule and
+// the tool disagreed, and everyone reads the tool.
+describe('the ownerless pull-list (card 4cbc8af9)', () => {
+  const card = (o: Partial<{ id: string; status: string; assignee: string | null; priority: string; archived_at: number | null; due_date: number | null; title: string }>) => ({
+    id: 'x', status: 'planned', assignee: null, priority: 'normal',
+    archived_at: null, due_date: null, title: 't', ...o,
+  })
+
+  it('an unassigned planned card IS pickable -- the whole finding', () => {
+    expect(orphanPullList([card({ id: 'a' })]).map((c) => c.id)).toEqual(['a'])
+  })
+
+  it('an empty-string assignee counts as unassigned', () => {
+    // Both forms exist on the live board: 4 rows with null and 3 with ''.
+    // A filter that catches only one is silently short.
+    expect(orphanPullList([card({ id: 'b', assignee: '' })]).map((c) => c.id)).toEqual(['b'])
+  })
+
+  it("someone else's card is NOT in the pull-list", () => {
+    // The negative direction: without it, "return everything" would pass.
+    expect(orphanPullList([card({ id: 'c', assignee: 'dexter' })])).toEqual([])
+  })
+
+  it('and neither is a done, waiting, testing or archived one', () => {
+    expect(orphanPullList([
+      card({ id: 'd', status: 'done' }),
+      card({ id: 'e', status: 'waiting' }),
+      card({ id: 'f', status: 'testing' }),
+      card({ id: 'g', archived_at: 1 }),
+    ])).toEqual([])
+  })
+
+  it('a card deferred to a future date is not pickable today', () => {
+    // Same rule the assigned count already applies: a future due_date means WE
+    // decided to do it later, and offering it back spends the guard's credit.
+    const now = 1_000_000
+    expect(orphanPullList([card({ id: 'h', due_date: now + 60_000 })], now)).toEqual([])
+    expect(orphanPullList([card({ id: 'i', due_date: now - 60_000 })], now).map((c) => c.id)).toEqual(['i'])
+  })
+
+  it('orders by priority so the message can name ONE card and be right', () => {
+    const out = topOfPullList([
+      card({ id: 'low', priority: 'low' }),
+      card({ id: 'urgent', priority: 'urgent' }),
+      card({ id: 'normal', priority: 'normal' }),
+      card({ id: 'high', priority: 'high' }),
+    ])
+    expect(out.map((c) => c.id)).toEqual(['urgent', 'high', 'normal', 'low'])
+  })
+})
+
+describe('the notice an idle agent gets when the board has ownerless work', () => {
+  const items = [
+    { id: 'aaaaaaaa11', title: 'egy magas prioritasu tetel', priority: 'high' },
+    { id: 'bbbbbbbb22', title: 'egy masik', priority: 'normal' },
+  ]
+
+  it('NAMES the cards -- a count alone is what the old notice already was', () => {
+    const msg = buildPullNotice('jarvis', 20, items)
+    expect(msg).toContain('aaaaaaaa')
+    expect(msg).toContain('egy magas prioritasu tetel')
+  })
+
+  it('and tells the reader to LOCK first', () => {
+    // Two agents took the same card 19 seconds apart on the day the rule was
+    // written. Naming a card without saying this invites exactly that.
+    const msg = buildPullNotice('jarvis', 20, items)
+    expect(msg).toMatch(/assignee/)
+    expect(msg).toMatch(/in_progress/)
+  })
+
+  it('does NOT claim there is nothing assigned -- that was the false sentence', () => {
+    expect(buildPullNotice('jarvis', 20, items)).not.toContain('NINCS RA KIOSZTVA SEMMI')
+  })
+})
+
+// AND THAT THE WATCHER ACTUALLY ASKS (card 4cbc8af9).
+//
+// The cases above prove the pull-list is computed correctly. They do not prove
+// it is CONSULTED: measured by mutation -- disabling the branch in
+// idle-agent-watcher.ts left all 83 green. That is the third time today the same
+// gap appeared (skipIfBusy, the busy-stuck population, and here): a unit test
+// pins the function, and nothing pins its use.
+//
+// Source-reading is the weaker kind of test, so this asks the CORRESPONDENCE
+// question rather than the presence one: not "does the name appear in the
+// watcher" -- it would, in the import -- but "is the pull-list consulted inside
+// the idle-no-work branch, BEFORE the notice that tells the coordinator to push
+// a card". Order matters: after it, the agent is never told.
+describe('the watcher consults the pull-list before asking for a push', () => {
+  const SRC = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'web', 'idle-agent-watcher.ts'), 'utf-8')
+
+  it('the idle-no-work branch calls orphanPullList', () => {
+    const branch = SRC.slice(SRC.indexOf("decision.reason === 'idle-no-work'"))
+    const upToNext = branch.slice(0, branch.indexOf('continue\n      }'))
+    expect(upToNext, 'nem talaltam az idle-no-work agat').toBeTruthy()
+    expect(upToNext).toContain('orphanPullList')
+    expect(upToNext).toContain('buildPullNotice')
+  })
+
+  it('and it does so BEFORE buildNoWorkNotice, not after', () => {
+    const branchAt = SRC.indexOf("decision.reason === 'idle-no-work'")
+    const pullAt = SRC.indexOf('orphanPullList', branchAt)
+    const pushAt = SRC.indexOf('buildNoWorkNotice(agent', branchAt)
+    expect(pullAt).toBeGreaterThan(-1)
+    expect(pushAt).toBeGreaterThan(-1)
+    expect(pullAt).toBeLessThan(pushAt)
+  })
+
+  it('and the pull message goes to the AGENT, not to the coordinator', () => {
+    // The whole point of rule 3: the agent pulls. Sending the named list to the
+    // coordinator would reproduce the push it exists to replace.
+    const branch = SRC.slice(SRC.indexOf("decision.reason === 'idle-no-work'"))
+    const call = branch.slice(branch.indexOf('buildPullNotice') - 120, branch.indexOf('buildPullNotice'))
+    expect(call).toContain("createAgentMessage('system', agent")
+  })
+})
+
+// THE SENDER NEVER LOOKS AGAIN (card 979283a9).
+//
+// The `queue=<n>` figure the helper prints is produced at SEND time, and nothing
+// re-reads it. Somebody who sent something forty minutes ago has no signal that
+// it still has not landed -- which is how an agent ends up waiting for a reply
+// that is sitting in a queue (measured 2026-08-18: dexter waited while the answer
+// was pending).
+//
+// The threshold is measured, not chosen: over 7133 delivered messages the median
+// is 0.8 minutes and the 95th percentile 31.6, so 60 minutes sits above the 97th
+// and clears the fleet's documented 37- and 58-minute turns.
+describe('a message still queued long after it was sent (card 979283a9)', () => {
+  const MINUTE = 60_000
+  const NOW = 10_000 * MINUTE
+  const row = (o: Partial<{ id: number; from_agent: string; to_agent: string; agedMin: number }>) => ({
+    id: o.id ?? 1,
+    from_agent: o.from_agent ?? 'friday',
+    to_agent: o.to_agent ?? 'dexter',
+    created_at: Math.floor((NOW - (o.agedMin ?? 0) * MINUTE) / 1000),
+  })
+
+  it('reports one that has waited past the threshold', () => {
+    const out = stalePendingBySender([row({ agedMin: 61 })], NOW, new Set())
+    expect([...out.keys()]).toEqual(['friday'])
+  })
+
+  it('NEGATIVE CONTROL: a normally-delivered-speed message does NOT trigger it', () => {
+    // The closing condition marveen named. Without it, a notice-on-everything
+    // guard is indistinguishable from a working one -- and at the median of 0.8
+    // minutes almost every message would qualify.
+    expect(stalePendingBySender([row({ agedMin: 5 })], NOW, new Set()).size).toBe(0)
+    expect(stalePendingBySender([row({ agedMin: 31 })], NOW, new Set()).size).toBe(0)
+  })
+
+  it('does not repeat itself: an id already reported is skipped', () => {
+    // A message stuck two hours must not produce a notice every three minutes.
+    // The guard would be loudest exactly when it is least useful.
+    const rows = [row({ id: 7, agedMin: 90 })]
+    expect(stalePendingBySender(rows, NOW, new Set()).size).toBe(1)
+    expect(stalePendingBySender(rows, NOW, new Set([7])).size).toBe(0)
+  })
+
+  it('groups by sender, so nobody is told about someone else queue', () => {
+    const out = stalePendingBySender([
+      row({ id: 1, from_agent: 'friday', agedMin: 70 }),
+      row({ id: 2, from_agent: 'didi', agedMin: 70 }),
+      row({ id: 3, from_agent: 'friday', agedMin: 80 }),
+    ], NOW, new Set())
+    expect(out.get('friday')?.map((r) => r.id)).toEqual([1, 3])
+    expect(out.get('didi')?.map((r) => r.id)).toEqual([2])
+  })
+
+  it('the threshold is above the measured 95th percentile', () => {
+    // Pinned as a RELATION to the data that justified it: if someone lowers it to
+    // 30 minutes, that is 5.4% of all traffic and this says so.
+    expect(PENDING_NOTICE_AFTER_MS).toBeGreaterThan(32 * MINUTE)
+  })
+})
+
+describe('the notice itself must not send anyone back to the queue', () => {
+  const NOW = 600_000_000
+  const rows = [{ to_agent: 'dexter', created_at: Math.floor((NOW - 70 * 60_000) / 1000) }]
+
+  it('names the recipient and how long it has waited', () => {
+    const msg = buildPendingStillWaitingNotice('friday', rows, NOW)
+    expect(msg).toContain('dexter')
+    expect(msg).toMatch(/70 perce/)
+  })
+
+  it('EXPLICITLY says not to resend -- a resend is a duplicate, not a retry', () => {
+    // marveen measured this twice on 2026-08-28, once by accident: `pending`
+    // lives in the database and survives a restart.
+    const msg = buildPendingStillWaitingNotice('friday', rows, NOW)
+    expect(msg).toMatch(/ne kuldd ujra/i)
+    expect(msg).toMatch(/duplikatum/i)
+  })
+
+  it('and points at the card, which does not queue', () => {
+    expect(buildPendingStillWaitingNotice('friday', rows, NOW)).toMatch(/KARTYARA/)
+  })
+})
+
+// AND THAT THE TICK ACTUALLY CALLS IT (card 979283a9).
+//
+// Written BEFORE running the mutation this time. Three times today the same gap
+// appeared -- skipIfBusy, the busy-stuck population, the pull-list -- where the
+// unit tests pinned a function and nothing pinned its use, and each time the
+// mutation found it rather than the review. The pattern is predictable enough to
+// test for in advance.
+describe('the watcher tick runs the sender-side queue sweep', () => {
+  const SRC = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'web', 'idle-agent-watcher.ts'), 'utf-8')
+
+  it('tick() calls sweepStalePending', () => {
+    const tick = SRC.slice(SRC.indexOf('function tick()'))
+    expect(tick.slice(0, tick.indexOf('listKanbanCards'))).toContain('sweepStalePending()')
+  })
+
+  it('and the notice is addressed to the SENDER, not the recipient', () => {
+    // The recipient is by definition busy -- that is why the message is queued.
+    // Telling them would be the one delivery guaranteed to wait as well.
+    const fn = SRC.slice(SRC.indexOf('function sweepStalePending'))
+    const call = fn.slice(0, fn.indexOf('buildPendingStillWaitingNotice'))
+    expect(call).toContain("createAgentMessage('system', sender")
+  })
+
+  it('and an id is remembered only after the notice went out', () => {
+    // Marking first would lose the notice on a throw and never retry it: the
+    // sender would be told nothing, forever, about that message.
+    const fn = SRC.slice(SRC.indexOf('function sweepStalePending'))
+    const sendAt = fn.indexOf('createAgentMessage')
+    const markAt = fn.indexOf('pendingNoticed.add')
+    expect(sendAt).toBeGreaterThan(-1)
+    expect(markAt).toBeGreaterThan(sendAt)
   })
 })
