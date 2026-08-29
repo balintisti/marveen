@@ -745,6 +745,108 @@ describe('the watcher actually passes the coordinator id', () => {
   })
 })
 
+// The guard above pins ONE argument by name. Measured 2026-08-22 (jarvis, card b5bff340
+// and its twin 3b722cb5): the same file grew two more inputs -- `staleCounterOnly` and
+// the `kind` argument -- and cutting either at the call site left the whole suite green,
+// 3803 tests, because the guard only knew about MAIN_AGENT_ID. Knowing the principle and
+// applying it a second time are two different steps, and it is the second that is missed:
+// the first is deliberate (you are writing it down), the second is invisible precisely
+// because "we already have that".
+//
+// So this control does not add one more assertion; it DERIVES its population from the
+// input type. A field added to IdleAgentInput tomorrow is covered without anyone
+// remembering this file exists.
+describe('the watcher passes EVERY field the decision declares', () => {
+  /** Comments stripped, line count kept. Not cosmetic: every field name below also
+   *  appears in the JSDoc of IdleAgentInput, so a check that reads comments would find
+   *  each one "present" no matter what the call site actually passes -- a guard that
+   *  greps its own explanation. Blank-filling instead of deleting keeps line numbers
+   *  honest for anything that reports positions. */
+  const codeOnly = (src: string): string =>
+    src
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ''))
+      .replace(/(^|[^:])\/\/.*$/gm, '$1')
+
+  const idleSrc = readFileSync(new URL('../idle-agent.ts', import.meta.url), 'utf8')
+  const watcherSrc = readFileSync(new URL('../web/idle-agent-watcher.ts', import.meta.url), 'utf8')
+
+  /** Field names declared by the input type -- the population, taken from the source of
+   *  truth rather than from a list somebody has to maintain here. */
+  function declaredInputFields(src: string): string[] {
+    const body = /export interface IdleAgentInput \{([\s\S]*?)\n\}/.exec(codeOnly(src))
+    if (!body) throw new Error('IdleAgentInput not found in idle-agent.ts -- this control cannot report a pass')
+    return [...body[1].matchAll(/^\s*(\w+)\??:/gm)].map((m) => m[1])
+  }
+
+  /** The object literal handed to decideIdleAlert, by brace matching rather than by a
+   *  line-shaped regex: reformatting the call must not silently empty this control. */
+  function callSiteObject(src: string): string {
+    const code = codeOnly(src)
+    const at = code.indexOf('decideIdleAlert(')
+    if (at < 0) throw new Error('no decideIdleAlert( call in idle-agent-watcher.ts')
+    const open = code.indexOf('{', at)
+    let depth = 0
+    for (let i = open; i < code.length; i++) {
+      if (code[i] === '{') depth++
+      else if (code[i] === '}' && --depth === 0) return code.slice(open, i + 1)
+    }
+    throw new Error('unbalanced braces in the decideIdleAlert call')
+  }
+
+  it('the population is read from the type, and the parse itself is controlled', () => {
+    // A parser that quietly returned nothing would make the assertion below pass while
+    // asserting about no fields at all -- success indistinguishable from total failure.
+    // These seven are what the type declares today; the point of the check is not the
+    // list but that the extraction produced a real one.
+    // Deliberately NOT an exact-list equality: adding a legitimate field to the type
+    // would then land two reds, one of them saying "now edit this list" -- and a control
+    // that reports the correct solution as an error is the kind that gets deleted rather
+    // than answered. Anchors plus a floor catch the failure that matters (a parse that
+    // returned nothing or garbage) without punishing growth.
+    const fields = declaredInputFields(idleSrc)
+    expect(fields).toEqual(expect.arrayContaining(['agent', 'paneIdle', 'ownWorkCount', 'running']))
+    expect(fields.length).toBeGreaterThanOrEqual(7)
+    // Same control for the other extraction: brace matching that fell off the end would
+    // return the rest of the file, and one that found nothing would return '{}'.
+    const obj = callSiteObject(watcherSrc)
+    expect(obj.length).toBeGreaterThan(80)
+    expect(obj.length).toBeLessThan(1200)
+  })
+
+  it('every declared field appears at the call site -- shorthand or explicit', () => {
+    const obj = callSiteObject(watcherSrc)
+    for (const field of declaredInputFields(idleSrc)) {
+      expect(obj, `IdleAgentInput.${field} is declared but never passed by the watcher`).toMatch(
+        new RegExp(`(^|[\\s{,])${field}\\s*[:,}\\n]`),
+      )
+    }
+  })
+
+  // Presence is not correspondence. Both halves stay in the file when someone decouples
+  // them -- `staleCounterOnly: false` at the call site still reads as "the field is
+  // passed", and the pure function keeps its own tests green because the decision itself
+  // was never wrong. What this pins is where the VALUE comes from.
+  it('the evidence fields are BOUND to the pane read, not merely present', () => {
+    const code = codeOnly(watcherSrc)
+    // readPane: the flag is computed from the pane capture, and from the WEAK evidence
+    // ('counter'), not the strong one. An inverted comparison here would flip the guard's
+    // meaning while every assertion about presence stayed green.
+    expect(code).toMatch(/staleCounterOnly:\s*busyEvidence\([^)]*\)\s*===\s*'counter'/)
+    // call site: forwards that read instead of a literal
+    expect(code).toMatch(/staleCounterOnly:\s*[^,]*paneRead\.staleCounterOnly/)
+    expect(code).toMatch(/paneIdle:\s*[^,]*paneRead\.idle/)
+  })
+
+  // WHAT THIS CONTROL DOES NOT SEE, said out loud so nobody reads more into a green:
+  //  - it reads source text, so renaming `paneRead` turns it red without any behaviour
+  //    changing. That is the price of a structural control, not a defect -- but it is
+  //    the reason the assertions pin WHAT is passed, never the argument order.
+  //  - it says nothing about readPane's three early returns (no session, capture failed,
+  //    unknown pane), which all report staleCounterOnly: false. Covering those means
+  //    measuring readPane's BEHAVIOUR, which needs the tmux and db boundaries injected --
+  //    a change to the coordination core, not to its tests. Card b5bff340 carries it.
+})
+
 // Measured 2026-08-22: the watcher sent one Telegram message PER AGENT from inside its
 // sweep loop, so four standing agents produced four notifications -- and four more at
 // the next re-alert window. Eight messages for one situation, at 05:00, while the owner
