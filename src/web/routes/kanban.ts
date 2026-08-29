@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import {
-  listKanbanCards, createKanbanCard, updateKanbanCard,
+  listKanbanCards, countArchivedKanbanCards, createKanbanCard, updateKanbanCard,
   deleteKanbanCard, moveKanbanCard, archiveKanbanCard, unarchiveKanbanCard,
   getKanbanComments, addKanbanComment, getKanbanCardEvents, listKanbanProjects,
   getKanbanCard, getChildCards, getDb,
@@ -19,6 +19,8 @@ import {
 import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
 import { unknownQueryParams, unknownQueryParamError } from '../query-params.js'
 import { kanbanProjectWarning } from '../kanban-project-warning.js'
+import { scanUnansweredCondition, isDuplicateArchive, conditionWarningText } from '../reopen-condition-warning.js'
+import { appendReopenWarning } from '../reopen-condition-log.js'
 import { OWNER_NAME, BOT_NAME, MAIN_AGENT_ID, STORE_DIR, WEB_HOST, WEB_PORT, KANBAN_LABEL_COLORS } from '../../config.js'
 import { listAgentNames, readAgentDisplayName } from '../agent-config.js'
 import { isAgentRunning } from '../agent-process.js'
@@ -234,7 +236,30 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // everything it needs in a single round trip.
     const labelsByCard = getLabelsForAllCards()
     const cards = listKanbanCards().map((card) => ({ ...card, labels: labelsByCard.get(card.id) ?? [] }))
-    jsonMaybeGzip(req, res, cards)
+    // X-Archived-Hidden: what this list is NOT showing (card 1785bb14).
+    //
+    // The filter is deliberate and stays. What was missing is that the response
+    // said nothing about it, so the list could be -- and was -- used to decide
+    // whether a card EXISTS. Measured 2026-08-28: 1157 live, 54 archived, and
+    // one archived id read as absent here and 200 from GET /api/kanban/<id>.
+    //
+    // ALWAYS SENT, ZERO INCLUDED. A header that appears only when non-zero
+    // cannot be told apart from an old build that never sends it -- which is
+    // the same silence one level up.
+    //
+    // Counted AFTER listKanbanCards(), never before: that call runs the
+    // auto-archive sweep first, so a count taken earlier would be short by
+    // exactly the cards this request archived, and the pair would contradict
+    // each other in the one response that produced them.
+    //
+    // WHAT THIS DOES NOT DO: it does not help the caller who never looks at
+    // headers -- the same limit the ?archived=1 guard has. Discovery is the
+    // recipe's job (the munkakezdes-elozetes-ellenorzes skill now asks both
+    // endpoints); this makes the gap visible to someone who IS looking, and in
+    // particular to an author writing their own archived_at filter: nine dead
+    // ones across seven skills were written by people who believed they were
+    // filtering something.
+    jsonMaybeGzip(req, res, cards, 200, { 'X-Archived-Hidden': String(countArchivedKanbanCards()) })
     return true
   }
 
@@ -423,20 +448,54 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     const id = decodeURIComponent(kanbanCardMatch[1])
     const body = await readBody(req)
     const data = JSON.parse(body.toString())
-    // AZ URES TORZS KALLOI HIBA, NEM MUVELET (kartya af9f6cd4). Megmerve: nulla
-    // hivo kuld ilyet -- sem a frontend, sem az agens-lapok --, tehat a 400 nem
-    // tor el semmit, viszont megnevezi, mi hianyzik.
+    // AZ URES TORZS HIVOI HIBA, NEM MUVELET (kartya af9f6cd4). Megmerve: nulla hivo kuld
+    // ilyet -- sem a frontend, sem az agens-lapok --, tehat a 400 nem tor el semmit.
     if (!data || typeof data !== 'object' || Object.keys(data).length === 0) {
       json(res, { error: 'Ures torzsu PUT: nincs mit modositani. Add meg a valtoztatando mezot, pl. {"assignee":"..."}.' }, 400)
       return true
     }
-    const eredmeny = updateKanbanCard(id, data)
-    if (eredmeny === 'not-found') { json(res, { error: 'Kártya nem található' }, 404); return true }
-    // A `unchanged` NEM hiba: egy hivo joggal kuldheti ujra ugyanazt (a
-    // szerkeszto modal minden mentesnel a TELJES objektumot kuldi). De az
-    // `updated_at` NEM emelkedik, es a valasz KIMONDJA, hogy nem tortent semmi --
-    // kulonben a kartya frissnek latszana anelkul, hogy barmi valtozott volna.
-    json(res, eredmeny === 'unchanged' ? { ok: true, changed: false } : { ok: true, changed: true })
+
+    // A PRECONDITION THIS ENDPOINT CANNOT HONOUR MUST NOT ANSWER 200 (card ddf11b94).
+    // Measured before this change: `If-Match: anything` -> 200 and `expected_updated_at: 123`
+    // -> 200, both silently ignored -- a false success handed to the one caller who was
+    // trying to be careful. WHY 400 AND NOT 412 OR 501: a 412 would claim we evaluated the
+    // precondition and found it stale, which is a different and false statement; a 501 reads
+    // as a server fault and invites a retry of the very same request.
+    const ifMatch = req.headers['if-match']
+    if (ifMatch !== undefined || data.expected_updated_at !== undefined) {
+      json(res, {
+        error: 'Felteteles iras nem tamogatott ezen a vegponton: az `If-Match` fejlecet es az '
+          + '`expected_updated_at` mezot NEM ertekeljuk ki. Korabban ezek 200-at kaptak, '
+          + 'figyelmen kivul hagyva -- ez a valasz azert 400, hogy ne hidd, hogy vedve vagy. '
+          + 'A felulirás mostantol a valaszban latszik: `overwritten`.',
+      }, 400)
+      return true
+    }
+
+    const result = updateKanbanCard(id, data)
+    if (result.outcome === 'not-found') { json(res, { error: 'Kártya nem található' }, 404); return true }
+
+    // A `unchanged` NEM hiba: a szerkeszto modal minden mentesnel a TELJES objektumot kuldi.
+    // De az `updated_at` NEM emelkedik, es a valasz KIMONDJA, hogy nem tortent semmi.
+    // Felulirni ilyenkor nincs mit, tehat `overwritten` szuksegszeruen ures.
+    if (result.outcome === 'unchanged') { json(res, { ok: true, changed: false }); return true }
+
+    // The overwrite travels in the response because that is where the caller already looks;
+    // a log nobody reads is the same silence in another file.
+    if (result.overwritten.length > 0) {
+      const list = result.overwritten.map(o => `${o.field} (volt: ${JSON.stringify(o.from)})`).join(', ')
+      logger.warn({ id, overwritten: result.overwritten }, 'Kanban PUT overwrote existing values')
+      json(res, {
+        ok: true,
+        changed: true,
+        overwritten: result.overwritten,
+        warning: `Ez az iras MAS erteket irt felul: ${list}. Ha nem te irtad oda, nezd meg, `
+          + 'kinek a munkajat cserelted le -- a visszaolvasas ezt NEM mutatja meg, mert a '
+          + 'sajat szovegedet adja vissza.',
+      })
+      return true
+    }
+    json(res, { ok: true, changed: true })
     return true
   }
 
@@ -467,8 +526,45 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   const kanbanArchiveMatch = path.match(/^\/api\/kanban\/([^/]+)\/archive$/)
   if (kanbanArchiveMatch && method === 'POST') {
     const id = decodeURIComponent(kanbanArchiveMatch[1])
+    // The documented call sends an EMPTY body, and every existing caller does
+    // exactly that. So the body is optional in both directions: unparseable or
+    // absent means "no actor, no reason", never an error.
+    let actor = 'ismeretlen'
+    let reason: unknown
+    try {
+      const parsed = JSON.parse((await readBody(req)).toString())
+      if (parsed && typeof parsed === 'object') {
+        if (typeof parsed.actor === 'string' && parsed.actor.trim() !== '') actor = parsed.actor.trim()
+        reason = parsed.reason
+      }
+    } catch { /* empty or non-JSON body: the documented shape */ }
+
+    // Read the comments BEFORE archiving: the scan is about what the archive is
+    // taking out of sight. Archiving does not touch comments today, but the
+    // order states the intent instead of relying on that.
+    const comments = getKanbanComments(id)
+    const scan = isDuplicateArchive(reason, comments) ? null : scanUnansweredCondition(comments)
+
     revertIdeaFromKanban(id)
-    if (archiveKanbanCard(id)) { json(res, { ok: true }); return true }
+    if (archiveKanbanCard(id)) {
+      // The card IS archived either way -- see reopen-condition-warning.ts for
+      // why this warns instead of blocking.
+      if (scan) {
+        appendReopenWarning({
+          ts: Math.floor(Date.now() / 1000),
+          card: id,
+          matches: scan.matches,
+          condition_comment_id: scan.lastConditionCommentId,
+          actor,
+          last_comment_id_at_fire: scan.lastCommentId,
+        })
+        logger.warn({ id, matches: scan.matches, actor }, 'Archived a card with an unanswered reopening condition')
+        json(res, { ok: true, warning: conditionWarningText(scan) })
+        return true
+      }
+      json(res, { ok: true })
+      return true
+    }
     json(res, { error: 'Kártya nem található' }, 404)
     return true
   }
@@ -493,7 +589,11 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     const labelsByCard = getLabelsForAllCards()
     const cards = listArchivedKanbanCards({ q, project, label, from, to, limit })
       .map(card => ({ ...card, labels: labelsByCard.get(card.id) ?? [] }))
-    json(res, { cards, total: cards.length, limit })
+    // Zero by construction: this endpoint IS the archive, so nothing is hidden
+    // from it. Sent rather than omitted for the same reason as above -- absence
+    // and zero must not look alike -- and it doubles as the negative control
+    // for the header itself.
+    json(res, { cards, total: cards.length, limit }, 200, { 'X-Archived-Hidden': '0' })
     return true
   }
 

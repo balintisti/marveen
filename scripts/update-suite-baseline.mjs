@@ -57,8 +57,55 @@ const END = '// === SUITE-BASELINE:END ==='
  * A DONTES, kulonvalasztva a futtatastol, hogy tesztelheto legyen.
  * Visszaad: { write, reason } -- `write:false` eseten a `reason` a megallas oka.
  */
-export function decide(rc, counts) {
+/**
+ * MIERT NEM ELEG A HELYES MEGTAGADAS: A KIIRT OK IS ALLITAS (kartya e065cf1c).
+ *
+ * A megtagadas mindket ismert esetben HELYES -- nem irunk alapvonalat csonka
+ * gyujtesbol. A kiirt INDOK viszont az altalanos agon azt mondja, hogy „egy fajl
+ * BE SEM TOLTODOTT. Eloszor azt javitsd." Ez a fo checkoutban HAMIS: ott az
+ * elo-telepites-or tagadta meg a futast, es nincs mit javitani a keszleten.
+ *
+ * marveen merte 2026-08-29-en, es abbol a mondatbol egy nem letezo betoltesi
+ * hibat kezdett volna keresni. Ugyanaz az alak, mint a `CREATE INDEX
+ * CONCURRENTLY` hamis riasztasa: az eszkoz a HELYES allapotot nevezi hibanak,
+ * es az olvasot olyasmit javitani kuldi, ami nem romlott el.
+ *
+ * A node-ABI eset MAR kapott sajat uzenetet (didi figyelmeztetese) -- de a
+ * `console.error`-ban, a dontesen KIVUL, tehat nem volt tesztelheto, es a
+ * felrevezeto mondat ALATTA is kiirodott. Itt a diagnozis a dontes RESZE lesz.
+ */
+export function diagnose(output = '') {
+  if (/ERR_DLOPEN_FAILED|was compiled against a different Node/.test(output)) return 'node-abi'
+  if (/REFUSING TO RUN TESTS/.test(output)) return 'live-install'
+  return null
+}
+
+// `cause` OPCIONALIS es alapertelmezetten null: a hivok, akik nem tudjak az okot,
+// PONTOSAN a regi uzenetet kapjak. Az uj ag csak akkor lep be, ha MERTUK, mi tortent.
+export function decide(rc, counts, cause = null) {
   if (rc !== 0) {
+    if (cause === 'live-install') {
+      return {
+        write: false,
+        reason:
+          `NEM A KESZLET HIBAJA, ES NINCS MIT JAVITANI RAJTA (kilepesi kod ${rc}).\n` +
+          '  Az ELO-TELEPITES-OR tagadta meg a futast: ez a checkout elo telepites\n' +
+          '  (store/, .env), es a keszlet ir a checkoutba, amiben fut.\n' +
+          '  Egyetlen fajl sem "toltodott be rosszul" -- el sem indult a gyujtes.\n' +
+          '  FUTTASD EGY WORKTREEBOL A HOME ALATT (ne /tmp-bol: a hook-path guard\n' +
+          '  elutasitja a /tmp-elotagu gyokereket, es a kapu-tesztek hamisan pirosak).',
+      }
+    }
+    if (cause === 'node-abi') {
+      return {
+        write: false,
+        reason:
+          `EZ A KORNYEZET HIBAJA, NEM A KESZLETE (kilepesi kod ${rc}).\n` +
+          '  A nativ modul (better-sqlite3) mas Node-verziora epult, tehat a gyujtes\n' +
+          '  el sem indult. A keszleten nincs mit javitani.\n' +
+          '  Probald node 22-vel:  export PATH="/opt/homebrew/opt/node@22/bin:$PATH"',
+      }
+    }
     return {
       write: false,
       reason:
@@ -150,17 +197,13 @@ function main() {
   }
 
   const rc = run.status === null ? 1 : run.status
-  const verdict = decide(rc, counts)
+  // A diagnozis a MERT kimenetbol jon, nem feltevesbol -- es a dontes RESZE, hogy
+  // egyetlen uzenet menjen ki, ne egy helyes es egy felrevezeto egymas alatt.
+  const verdict = decide(rc, counts, diagnose(`${run.stderr ?? ''}${run.stdout ?? ''}`))
   if (!verdict.write) {
     // DIDI FIGYELMEZTETESE, ES ITT SZAMIT A LEGTOBBET: node 26 alatt a `vitest
     // list` a nativ modulon ERR_DLOPEN_FAILED-del elhasal. Az a KORNYEZET hibaja,
     // nem a keszlete -- de a kimenete ugy nez ki, mintha a suite lenne rossz.
-    const dlopen = /ERR_DLOPEN_FAILED|was compiled against a different Node/.test(
-      `${run.stderr ?? ''}${run.stdout ?? ''}`)
-    if (dlopen) {
-      console.error('\nEZ A KORNYEZET HIBAJA, NEM A KESZLETE: a natív modul mas Node-verziora epult.')
-      console.error('  Probald node 22-vel:  export PATH="/opt/homebrew/opt/node@22/bin:$PATH"\n')
-    }
     console.error(`\nALAPVONAL NEM FRISSULT.\n  ${verdict.reason}\n`)
     rmSync(dir, { recursive: true, force: true })
     process.exit(1)

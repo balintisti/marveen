@@ -105,6 +105,7 @@ import {
   capturePane,
   delay,
 } from '../agent-process.js'
+import { markRestartStarted, clearRestart } from '../restart-inflight.js'
 import { addDesiredAgent, removeDesiredAgent } from '../agent-desired-state.js'
 import { RemoteStatusCache } from '../remote-status-cache.js'
 import type { AgentRunState } from '../ssh-tmux.js'
@@ -1110,16 +1111,28 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
         setAgentEnabledPlugins(name, provider)
         gcWasRunning = isAgentRunning(name)
         if (gcWasRunning) {
-          const stopRes = await stopAgentProcess(name)
-          if (stopRes.ok) {
-            await delay(2000)
-            // 'Agent is already running' here means the 60s reconcile sweep
-            // raced us in the stop..start gap and started the agent with the
-            // NEW config (written above, before the stop) -- the end state is
-            // exactly what a restart promises, only the starter differs
-            // (PR1014KONFIG821).
-            const gcStartRes = await startAgentProcess(name)
-            gcRestarted = gcStartRes.ok || gcStartRes.error === 'Agent is already running'
+          markRestartStarted(name)
+          try {
+            const stopRes = await stopAgentProcess(name)
+            if (stopRes.ok) {
+              await delay(2000)
+              // 'Agent is already running' here means the 60s reconcile sweep raced us in
+              // the stop..start gap and started the agent with the NEW config (written
+              // above, before the stop).
+              //
+              // THE OLD COMMENT SAID THE END STATE IS "exactly what a restart promises".
+              // That was not safe to assert: the reconciler starts with NO options, and
+              // an options-less start adds `--continue` for an agent with a prior session
+              // and no channel token (card f65bc6ef, measured on computress). Whether it
+              // bites here depends on hasChannel at that instant -- which is precisely
+              // what this handler is in the middle of changing. So the race is now
+              // PREVENTED rather than argued about: the mark above makes the reconciler
+              // skip us, and the start below is ours.
+              const gcStartRes = await startAgentProcess(name)
+              gcRestarted = gcStartRes.ok || gcStartRes.error === 'Agent is already running'
+            }
+          } finally {
+            clearRestart(name)
           }
         }
       }
@@ -1213,14 +1226,19 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
       if (provider === 'telegram') sendWelcomeMessage(name, botToken.trim()).catch(() => {})
       wasRunning = isAgentRunning(name)
       if (wasRunning) {
-        const stopRes = await stopAgentProcess(name)
-        if (stopRes.ok) {
-          await delay(2000)
-          const startRes = await startAgentProcess(name)
-          // Same reconcile-race as the GC branch above: an 'already running'
-          // start after our own stop means the agent IS up with the new
-          // provider config (PR1014KONFIG821).
-          restarted = startRes.ok || startRes.error === 'Agent is already running'
+        markRestartStarted(name)
+        try {
+          const stopRes = await stopAgentProcess(name)
+          if (stopRes.ok) {
+            await delay(2000)
+            const startRes = await startAgentProcess(name)
+            // Same reconcile-race as the GC branch above, and the same correction: the
+            // reconciler's start carries no options, so the end state is not automatically
+            // ours (card f65bc6ef). Marked above so it does not come to that.
+            restarted = startRes.ok || startRes.error === 'Agent is already running'
+          }
+        } finally {
+          clearRestart(name)
         }
       }
     }

@@ -1805,8 +1805,29 @@ export function createKanbanCard(card: {
   )
 }
 
+/** One field this write replaced, with the value it replaced. */
+export interface KanbanOverwrite {
+  field: string
+  from: string | number | null
+  to: string | number | null
+}
+
 /** A kartya-frissites HAROM kimenete -- mert a "nem talaltam" es a "nem valtozott" nem ugyanaz. */
-export type KanbanUpdateResult = 'not-found' | 'unchanged' | 'updated'
+export type KanbanUpdateOutcome = 'not-found' | 'unchanged' | 'updated'
+
+/**
+ * KET KARTYA EGY VISSZATERESI ERTEKEN, ES MINDKETTO KELL (af9f6cd4 + ddf11b94).
+ * A ket ag KULON-KULON tisztan olvad a torzsre, EGYUTT viszont utkozik: mindketto
+ * ujradefinialja ezt a tipust, kulonbozo alakban -- egy string-unio es egy objektum --,
+ * es egyik sem reszhalmaza a masiknak. A feloldas ezert nem valasztas, hanem OSSZETETEL:
+ * az `outcome` mondja meg, MI tortent, az `overwritten` azt, KINEK a munkajat irta felul.
+ */
+export interface KanbanUpdateResult {
+  outcome: KanbanUpdateOutcome
+  /** Fields that already HELD a value and now hold a different one. Empty for
+   *  an ordinary edit that fills a blank or rewrites the same value. */
+  overwritten: KanbanOverwrite[]
+}
 
 /** Azok a mezok, amiket egy PUT valoban modosithat. Ismeretlen kulcs nem valtozas. */
 const KANBAN_UPDATABLE = [
@@ -1816,33 +1837,46 @@ const KANBAN_UPDATABLE = [
 
 /**
  * NEM EMELJUK AZ `updated_at`-ET, HA SEMMI NEM VALTOZOTT (kartya af9f6cd4).
+ * Egy URES torzsu PUT 200-at adott es MEGEMELTE az `updated_at`-et, tehat a kartya
+ * FRISSNEK latszott anelkul, hogy tortent volna vele barmi. A gyakoribb ut nem az ures
+ * torzs, hanem a szerkeszto modal, ami MINDEN mentesnel a TELJES objektumot kuldi.
  *
- * A LELET: egy URES torzsu PUT 200-at adott es MEGEMELTE az `updated_at`-et.
- * A kartya ettol FRISSNEK latszott anelkul, hogy tortent volna vele barmi -- es
- * ma ket kulonbozo meres epult a tablarol epp erre a mezore.
+ * LAST WRITE WINS, AND THE READ-BACK DOES NOT CATCH IT (card ddf11b94).
+ * The loser never learns: the response is `{ok:true}` and a read-back returns the text
+ * the caller just wrote. "The 200 is not proof, the read-back is" fails on this endpoint
+ * specifically -- the read-back confirms YOUR write and says nothing about the one it
+ * replaced. An overwrite is: the previous value was NON-EMPTY and the new one differs.
+ * Deliberately not covered (jarvis): a field somebody EMPTIED on purpose, then refilled.
  *
- * A GYAKORIBB UT VISZONT NEM AZ URES TORZS, hanem a frontend: a szerkeszto modal
- * MINDEN mentesnel a TELJES objektumot kuldi, tehat egy megnyitas-bezaras is
- * "frissitette" a kartyat. Ezert nem eleg az ures torzset elutasitani -- a
- * VALTOZATLAN mezokre is hallgatni kell.
- *
- * Az osszehasonlitas CSAK a hivo altal kuldott, ismert mezokre nez: egy
- * ismeretlen kulcs nem valtozas, es nem is irodik ki az UPDATE-ben.
+ * A KET MECHANIZMUS SORRENDJE SZAMIT: a `unchanged` ag ELOBB all, es MEG AZ UPDATE ELOTT
+ * ter vissza -- kulonben az `updated_at` megemelkedne, ami epp az af9f6cd4 lelete.
+ * Ilyenkor az `overwritten` szuksegszeruen ures: felulirni csak azt lehet, ami valtozik.
  */
 export function updateKanbanCard(id: string, fields: Partial<Omit<KanbanCard, 'id' | 'created_at'>>): KanbanUpdateResult {
   const card = getKanbanCard(id)
-  if (!card) return 'not-found'
+  if (!card) return { outcome: 'not-found', overwritten: [] }
   const kuldott = KANBAN_UPDATABLE.filter((k) => k in fields)
   const valtozott = kuldott.filter((k) => (fields as Record<string, unknown>)[k] !== (card as unknown as Record<string, unknown>)[k])
-  if (valtozott.length === 0) return 'unchanged'
+  if (valtozott.length === 0) return { outcome: 'unchanged', overwritten: [] }
   const now = Math.floor(Date.now() / 1000)
   const f = { ...card, ...fields, updated_at: now }
-  return db.prepare(
+
+  const overwritten: KanbanOverwrite[] = []
+  for (const key of Object.keys(fields) as Array<keyof KanbanCard>) {
+    if (key === 'updated_at') continue
+    const prev = card[key] as string | number | null | undefined
+    const next = fields[key as keyof typeof fields] as string | number | null | undefined
+    const wasEmpty = prev === null || prev === undefined || prev === ''
+    if (wasEmpty) continue
+    if (String(prev) === String(next ?? '')) continue
+    overwritten.push({ field: key as string, from: prev as string | number, to: (next ?? null) as string | number | null })
+  }
+
+  const changed = db.prepare(
     `UPDATE kanban_cards SET title=?, description=?, status=?, assignee=?, priority=?, project=?, parent_id=?, due_date=?, sort_order=?, updated_at=?, archived_at=?
      WHERE id=?`
   ).run(f.title, f.description, f.status, f.assignee, f.priority, f.project, f.parent_id, f.due_date, f.sort_order, f.updated_at, f.archived_at, id).changes > 0
-    ? 'updated'
-    : 'not-found'
+  return { outcome: changed ? 'updated' : 'not-found', overwritten: changed ? overwritten : [] }
 }
 
 export function getChildCards(parentId: string): KanbanCard[] {
@@ -1870,6 +1904,24 @@ export function moveKanbanCard(id: string, status: KanbanCard['status'], sortOrd
 export function markKanbanCardDispatched(id: string): boolean {
   const now = Math.floor(Date.now() / 1000)
   return db.prepare('UPDATE kanban_cards SET dispatched_at=? WHERE id=?').run(now, id).changes > 0
+}
+
+/** How many cards `listKanbanCards()` is hiding right now (card 1785bb14).
+ *
+ *  The list endpoint answers with the live cards only, and its response used to
+ *  say nothing about that. Measured 2026-08-28: 1157 live, 54 archived, and the
+ *  same card could read as "does not exist" from the list and 200 from the card
+ *  endpoint -- with nothing to tell the two apart.
+ *
+ *  Counted from the same table and the same predicate as the listing's
+ *  `archived_at IS NULL`, inverted, so the two can never disagree about what
+ *  "hidden" means.
+ */
+export function countArchivedKanbanCards(): number {
+  const row = db
+    .prepare('SELECT COUNT(*) AS n FROM kanban_cards WHERE archived_at IS NOT NULL')
+    .get() as { n: number }
+  return row.n
 }
 
 export function archiveKanbanCard(id: string): boolean {

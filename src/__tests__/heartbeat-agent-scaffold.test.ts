@@ -339,3 +339,50 @@ describe('kanban extraction is a shipped one-liner, never an improvised pipe+her
     expect(out).toMatch(/heredoc becomes python3's stdin/)
   })
 })
+
+describe('a rendelt CLAUDE.md megmondja magarol, hogy GENERALT (7a8d972b)', () => {
+  // A harom ALWAYS_WRITE fajl minden bootkor teljes egeszeben ujrairodik, es a
+  // forras-komment ki is mondja, hogy szandekosan. A szandek rendben; a
+  // LATHATATLANSAG nem volt az: a rendelt szovegben nulla jelzes allt errol.
+  // Ugyanaz az alak, mint a generalt blokkok belso fejlecenel, csak ott
+  // mellekhatas volt, itt szandek.
+
+  it('a jelzes az ELSO sorokban all, mielott barmi mas jonne', () => {
+    const out = renderHeartbeatClaudeMd(ID)
+    const head = out.split('\n').slice(0, 4).join('\n')
+    expect(head).toContain('GENERALT FAJL')
+    expect(head).toContain('NYOMTALANUL ELVESZ')
+    // es megnevezi a forrast, hogy ne kelljen keresni
+    expect(head).toContain('renderHeartbeatClaudeMd')
+  })
+
+  it('a jelzes a `# Heartbeat agent` fejlec ELE kerul, nem utana', () => {
+    // Ha utana allna, aki a fajl elejere ir, nem latna.
+    const out = renderHeartbeatClaudeMd(ID)
+    expect(out.indexOf('GENERALT FAJL')).toBeLessThan(out.indexOf('# Heartbeat agent'))
+  })
+})
+
+describe('a jelzes MIND A HAROM ALWAYS_WRITE fajlt megnevezi (7a8d972b, jarvis kerdesere)', () => {
+  // A ket JSON nem tud kommentet hordozni. A zaro kommentem eloszor csak annyit
+  // mondott, hogy "jelzes nelkul marad, ha szamit, az kulon kartya" -- jarvis
+  // helyesen jelezte, hogy egy felteteles mondat sosem meri meg magat.
+  // A meres: a harom fajl UGYANABBAN a konyvtarban van es UGYANABBOL a ciklusbol
+  // jon, tehat a jelzes elhet abban az egyben, amelyik TUD kommentet vinni.
+
+  it('a CLAUDE.md jelzese megnevezi a masik ket fajlt is', () => {
+    const out = renderHeartbeatClaudeMd(ID)
+    // A HORGONY LETEZESET ELOSZOR (jarvis, 2026-08-27). Enelkul az `indexOf` -1-et ad,
+    // a `slice(0,-1)` majdnem az EGESZ fajlt visszaadja, es ez a HELY-allitas csendben
+    // JELENLET-teszte valik -- pontosan az az alak, ami ellen irodott.
+    // MERVE: a horgonyt atnevezve ez a teszt ATMENT, es csak a szomszed describe bukott.
+    // A ketto EGYUTT eros volt, de ez EGYMAGABAN nem -- es egy teszt, ami masik teszt
+    // fedezeteben all, akkor is zold marad, ha a szomszedjat torlik.
+    expect(out).toContain('# Heartbeat agent')
+    const head = out.slice(0, out.indexOf('# Heartbeat agent'))
+    expect(head).toContain('agent-config.json')
+    expect(head).toContain('.claude/settings.json')
+    // es megmondja, MIERT ott all -- kulonben a kovetkezo olvaso azt hiszi, teved
+    expect(head).toContain('nem tudnak kommentet hordozni')
+  })
+})

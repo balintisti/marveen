@@ -193,10 +193,11 @@ class VegponttolVegpontig(unittest.TestCase):
         with open(os.path.join(self.fleet, ".env"), "w", encoding="utf-8") as fh:
             fh.write("MAIN_AGENT_ID=marveen\n")
         self.sent = []
+        self.logged = []
 
     def _run(self, now):
         return ir.run(now=now, send=self.sent.append, state_path=self.state,
-                      db_path=self.db, fleet_root=self.fleet)
+                      db_path=self.db, fleet_root=self.fleet, out=self.logged.append)
 
     def test_nema_agensrol_jelent_majd_nem_ismetel(self):
         make_db(self.db, comments=[
@@ -232,6 +233,164 @@ class VegponttolVegpontig(unittest.TestCase):
         self.assertEqual(key, "db-unreadable")
         self.assertEqual(len(self.sent), 1)
         self.assertIn("NEM TUDTAM MERNI", self.sent[0])
+
+
+class Szivveres(unittest.TestCase):
+    """A szivveres-sor. Az invarians: a NAPLOBOL el lehessen donteni, hogy a kor
+    lefutott-e ES hogy a meres mukodott-e.
+
+    A lelet, amibol szuletett (friday merte 2026-08-27, elo uniton): a csendes ag
+    semmit nem irt, tehat a naplo 0 bajt maradt fagyott mtime-mal, KET egymast
+    koveto igazolt futas utan is. A "fut, nincs mit jelenteni" es a "nem fut"
+    allapot a naplobol megkulonboztethetetlen volt.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.db = os.path.join(self.dir, "t.db")
+        self.state = os.path.join(self.dir, "state.json")
+        self.fleet = os.path.join(self.dir, "fleet")
+        os.makedirs(os.path.join(self.fleet, "agents", "mandark"))
+        os.makedirs(os.path.join(self.fleet, "agents", "didi"))
+        with open(os.path.join(self.fleet, ".env"), "w", encoding="utf-8") as fh:
+            fh.write("MAIN_AGENT_ID=marveen\n")
+        self.sent = []
+        self.logged = []
+
+    def _run(self, now):
+        return ir.run(now=now, send=self.sent.append, state_path=self.state,
+                      db_path=self.db, fleet_root=self.fleet, out=self.logged.append)
+
+    def _csendes_flotta(self):
+        make_db(self.db, comments=[
+            ("mandark", int(NOW - 2 * MIN)), ("didi", int(NOW - 2 * MIN)),
+            ("marveen", int(NOW - 2 * MIN)),
+        ])
+
+    def test_a_CSENDES_kor_is_ir_a_naploba(self):
+        # EZ A LENYEG: riasztas nelkul is legyen nyom.
+        self._csendes_flotta()
+        self._run(NOW)
+        self.assertEqual(self.sent, [], "csendben nem megy riasztas")
+        self.assertEqual(len(self.logged), 1, "de a naploba IGENIS kerul sor")
+
+    def test_a_sor_megmondja_MIT_LATOTT_nem_csak_hogy_el(self):
+        # Marveen kikotese: egy "alive" sor a folyamatot bizonyitja, nem a merest.
+        self._csendes_flotta()
+        self._run(NOW)
+        self.assertIn("3 agens megnezve", self.logged[0])
+        self.assertIn("0 a 40 perces kuszob felett", self.logged[0])
+
+    def test_egy_oran_belul_nem_ir_masodszor(self):
+        self._csendes_flotta()
+        self._run(NOW)
+        self._run(NOW + 300)
+        self._run(NOW + 59 * MIN)
+        self.assertEqual(len(self.logged), 1)
+
+    def test_egy_ora_utan_ujra_ir(self):
+        self._csendes_flotta()
+        self._run(NOW)
+        self._run(NOW + 60 * MIN)
+        self.assertEqual(len(self.logged), 2)
+
+    def test_URES_ROSTER_eseten_NEM_latszik_egeszsegesnek(self):
+        """A kikotes masik fele, KOZVETLENUL a szoveg-osszeallitora merve.
+
+        MIERT NEM A `run()`-on at: mert ugy NEM REPRODUKALHATO -- a `roster()`
+        vegen `... or "marveen"` all, tehat a lista sosem ures. Az elso valtozatom
+        mégis a run()-on at probalta, es ELBUKOTT: "1 agens megnezve" jott.
+        A bukas ERTEKES volt -- ez a ket teszt egyutt mondja ki, hogy a nulla ag
+        ma VEDELMI ag, nem elerheto allapot.
+        """
+        self.assertIn("NEM MERT", ir.compose_heartbeat({}, [], NOW, T))
+        self.assertIn("NULLA agenst", ir.compose_heartbeat({}, [], NOW, T))
+
+    def test_a_roster_MA_nem_tud_uresen_visszaterni(self):
+        """A fenti ag elerhetetlenseget ROGZITI, nem feltetelezi. Ha valaki egy
+        nap kiveszi a `or "marveen"` tartalekot, ez a teszt bukik -- es akkor a
+        nulla ag valodi allapotta valik, nem marad holt kod."""
+        ures = os.path.join(self.dir, "ures-fleet")
+        os.makedirs(os.path.join(ures, "agents"))
+        with open(os.path.join(ures, ".env"), "w", encoding="utf-8") as fh:
+            fh.write("MAIN_AGENT_ID=\n")
+        self.assertEqual(ir.roster(ures), ["marveen"])
+
+    def test_a_VAK_kor_is_szivverest_ad(self):
+        self.db = os.path.join(self.dir, "nincs.db")
+        self._run(NOW)
+        self.assertIn("NEM MERT", self.logged[0])
+        self.assertIn("nem olvashato", self.logged[0])
+
+    def test_a_RIASZTAS_NEM_TORLI_a_szivveres_idobelyeget(self):
+        """REGRESSZIO. Ket idozito osztozik egy allapotfajlon, es a `save_state`
+        eredetileg FELULIRTA az egeszet. Egy sima felulíras mellett minden
+        riasztas nullazna a `hb_at`-ot, tehat a szivveres a ritkitas ellenere
+        minden riasztasos korben ujra tuzelne."""
+        make_db(self.db, comments=[
+            ("mandark", int(NOW - 50 * MIN)), ("didi", int(NOW - 2 * MIN)),
+            ("marveen", int(NOW - 2 * MIN)),
+        ])
+        self._run(NOW)                       # riasztas + elso szivveres
+        self.assertEqual(len(self.logged), 1)
+        # mandark visszater: ez ALLAPOTVALTAS, tehat MEGY riasztas -- es a
+        # mentese nem nyulhat a hb_at-hoz.
+        make_db(self.db + "2", comments=[
+            ("mandark", int(NOW + 100)), ("didi", int(NOW + 100)), ("marveen", int(NOW + 100)),
+        ])
+        self.db = self.db + "2"
+        self._run(NOW + 300)
+        self.assertEqual(len(self.sent), 2, "a helyreallas kimegy")
+        self.assertEqual(len(self.logged), 1, "de a szivveres NEM indul ujra")
+
+    def test_a_szivveres_akkor_is_megy_ha_riasztas_ment(self):
+        """`telegram` modban a riasztas NEM a naploba megy. Egy "ha riasztottam,
+        nem irok" szabaly mellett a naplo orakra elnemulhatna ugy, hogy kozben
+        minden kor lefutott."""
+        make_db(self.db, comments=[
+            ("mandark", int(NOW - 50 * MIN)), ("didi", int(NOW - 2 * MIN)),
+            ("marveen", int(NOW - 2 * MIN)),
+        ])
+        self._run(NOW)
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(len(self.logged), 1)
+        self.assertIn("1 a 40 perces kuszob felett", self.logged[0])
+
+    def test_a_szivveres_SOSEM_a_kuldon_megy(self):
+        # Ket csatorna, ket cimzett. A gazda ne kapjon oras eletjelet.
+        self._csendes_flotta()
+        self._run(NOW)
+        self.assertEqual(self.sent, [])
+        self.assertTrue(self.logged)
+
+    def test_az_ALAPERTELMEZETT_utvonal_TENYLEG_a_stdoutra_ir(self):
+        """MUTACIOS MERESSEL TALALT HIANY (friday, 2026-08-27).
+
+        A tobbi teszt `out=`-ot injektal, tehat egyik sem futtatja a VALODI
+        kimeneti fuggvenyt. Merve: a `note()` torzset `pass`-ra cserelve mind a
+        41 teszt ZOLD maradt -- vagyis a produkcios utat, amin a naplo-sor
+        tenylegesen keletkezik, semmi nem fedte. Ez ugyanaz a hiba, amit ez az
+        egesz valtozas javitani hivatott, csak egy szinttel feljebb: a bizonyitek
+        nem azon az uton keletkezett, amin a rendszer fut.
+
+        Ezert ez a teszt `out` NELKUL hivja a `run()`-t, es a stdoutot fogja el.
+        """
+        import contextlib
+        import io
+        self._csendes_flotta()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ir.run(now=NOW, send=self.sent.append, state_path=self.state,
+                   db_path=self.db, fleet_root=self.fleet)
+        self.assertIn("[tetlen-jelento]", buf.getvalue())
+        self.assertIn("3 agens megnezve", buf.getvalue())
+
+    def test_a_MEG_SEMMIT_NEM_TERMELT_agens_LATSZIK(self):
+        # is_silent szerint nem riaszt (csak uj), tehat a riasztas-szam elrejtene,
+        # ha az egesz flotta ilyen allapotban allna.
+        make_db(self.db, comments=[("marveen", int(NOW - 2 * MIN))])
+        self._run(NOW)
+        self.assertIn("2 agens meg semmit nem termelt", self.logged[0])
 
 
 class Kezbesites(unittest.TestCase):

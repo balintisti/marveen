@@ -136,7 +136,26 @@ export function renderHeartbeatClaudeMd(id: HeartbeatIdentity): string {
   const calendarTarget = id.calendarAccount
     ? `against \`${id.calendarAccount}\``
     : 'against your primary calendar (whatever account the calendar MCP server is authenticated as)'
-  return `# Heartbeat agent
+  // A FAJL MONDJA MEG MAGAROL, HOGY GENERALT (kartya 7a8d972b, jarvis kerdesere).
+  // Ez a harom fajl minden bootkor TELJES EGESZEBEN ujrarendelodik (ALWAYS_WRITE), es
+  // a fenti komment ki is mondja, hogy szandekosan: "our boot rewrite wins".
+  // A SZANDEK rendben van. Ami nem volt rendben: a rendelt szovegben NULLA jelzes allt
+  // errol -- aki szerkeszti, ugyanolyan nemán vesziti el, mint ahogy marveen ma harom
+  // lap-szerkesztest vesztett a generalt blokkokban. Ott mellekhatas volt, itt szandek;
+  // a LATHATATLANSAG ugyanaz.
+  // MA MEG LATENS: az `agents/heartbeat` konyvtar NEM LETEZIK (merve 2026-08-27),
+  // tehat senki nem tud ma elveszteni benne semmit. Epp ezert olcso most beirni.
+  // AMIT EZ NEM FED: az `agent-config.json` es a `.claude/settings.json` szinten
+  // ALWAYS_WRITE, es JSON -- oda nem fer komment. Az a ket fajl jelzes NELKUL marad.
+  return `<!-- GENERALT FAJL: minden agens-indulaskor TELJES EGESZEBEN ujrairodik.
+     Ide irt kezi szerkesztes NYOMTALANUL ELVESZ. A forras:
+     src/web/heartbeat-agent-scaffold.ts renderHeartbeatClaudeMd().
+
+     ES UGYANEZ ALL A KONYVTAR MASIK KET FAJLJARA IS:
+         agent-config.json          es    .claude/settings.json
+     Azok JSON-ok, tehat nem tudnak kommentet hordozni -- ezert allnak ITT.
+     Mindharom ugyanabbol az ALWAYS_WRITE listabol jon, ugyanabban a ciklusban. -->
+# Heartbeat agent
 
 You are the **heartbeat agent** -- a dedicated, headless worker that
 runs on the hourly schedule and produces a structured summary of

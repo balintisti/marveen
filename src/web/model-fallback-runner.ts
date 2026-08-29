@@ -15,11 +15,10 @@ import {
 } from './agent-config.js'
 import {
   agentRunState,
-  agentSessionName,
   restartAgentProcess,
   capturePane,
 } from './agent-process.js'
-import { MAIN_CHANNELS_SESSION } from './main-agent.js'
+import { sessionNameForAgent } from './session-names.js'
 import { paneLooksIdle } from '../pane-state.js'
 import { readModelFallbackConfig } from './model-fallback-store.js'
 import { detectsUsageLimit, decideModelAction } from '../model-fallback.js'
@@ -72,7 +71,10 @@ function writeModelFor(name: string, model: string): void {
 }
 
 function sessionFor(name: string): string {
-  return name === MAIN_AGENT_ID ? MAIN_CHANNELS_SESSION : agentSessionName(name)
+  // One resolver, in agent-process.ts. This used to be five hand-copied
+  // ternaries; the copy that was never written is what broke the sender
+  // preflight (card 228c9252).
+  return sessionNameForAgent(name)
 }
 
 async function restartFor(name: string): Promise<void> {

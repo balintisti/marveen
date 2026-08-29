@@ -49,7 +49,8 @@ import { MAIN_AGENT_ID } from '../config.js'
 import { getPendingMessages } from '../db.js'
 import { getEffectiveSettingValue } from '../settings-store.js'
 import { MAIN_CHANNELS_SESSION } from './main-agent.js'
-import { isSessionReadyForPrompt, sendPromptToSession, sessionExistsOnHost } from './agent-process.js'
+import { capturePane, isSessionReadyForPrompt, sendPromptToSession, sessionExistsOnHost } from './agent-process.js'
+import { promptAlreadyQueued } from '../pane-state.js'
 import { sendAlert } from './channel-monitor.js'
 
 export const INBOX_NUDGE_INITIAL_DELAY_MS = 55_000 // free slot (taken: 5/10/20/25/30/35/40/45/50/90s)
@@ -89,6 +90,51 @@ export function nudgeText(lang: 'hu' | 'en'): string {
     : '[Inbox] Ha fent uj bejovo blokk van, dolgozd fel; ha nincs, hagyd.'
 }
 
+// ---------------------------------------------------------------------------
+// BUSY BRANCH (card 835384e6)
+//
+// Until 2026-08-27 there were TWO writers nudging this one pane. This watcher,
+// which abstains when the pane is busy, and the message router's main-agent
+// wakeup, which did not consult the idle gate at all (`waitForIdle: false`) and
+// re-typed `[inbox-wakeup: ...]` every 45s. Measured over 290,5 hours of
+// store/dashboard.log: the router fired 5 908 times for 1 286 distinct
+// messages, and in 855 of this watcher's 883 busy abstentions (96,8%) the
+// router typed anyway within 30s. Every brake in this module was decorative.
+//
+// The router block is gone. Its ONE genuine job moves here, because nothing
+// else does it: reaching a main agent that is mid-turn. The nudge aborts on
+// busy, and the */25 memoria-heartbeat carries skipIfBusy:true -- with the
+// router removed and no busy branch, a message arriving during a long turn
+// would wait for a human.
+//
+// The defect was never "it types into a busy pane". That is the one thing worth
+// doing. The defect was typing AGAIN while the previous copy still sat unread
+// in the queue: each copy costs a full turn when the pane finally drains.
+// So the busy branch types at most ONE unconsumed line at a time, which makes
+// it self-limiting -- one per drain cycle, no budget needed.
+//
+// FAILURE DIRECTION: SEND. Suppression is bounded by a failsafe and never
+// permanent, because MEASURED (nudge-stale-backstop.test.ts) there is no
+// guaranteed backstop behind it: once staleNudges hits MAX_STALE_NUDGES on an
+// unchanging oldest id, the idle branch stops for good -- the spell clears only
+// on an empty inbox, which needs the claim the stop prevented. A false "already
+// queued" reading must therefore cost a delay, never silence.
+export const BUSY_WAKEUP_DEBOUNCE_MS = 60_000
+// How long a suppression may last before we type again regardless. Longer than
+// a normal turn, shorter than an abandonment: the observed pathological turn in
+// the 2026-08-04 capture was 32 minutes and a genuine queue drains at its end,
+// so anything past this is far more likely a misread pane than a live queue.
+export const BUSY_WAKEUP_SUPPRESS_FAILSAFE_MS = 15 * 60_000
+// Deliberately the SAME text the router used: single visual row (46 chars, well
+// under NUDGE_MAX_CHARS), which is the only shape the stuck-input bare-Enter
+// branch can recover on the MAIN pane. It is also what queuedPromptLines has to
+// match, so the two must not drift apart.
+export const BUSY_WAKEUP_TEXT = '[inbox-wakeup: pending inter-agent messages]'
+// Rate limit for the CONTINUING suppression log. Same cadence as the busy-wait
+// visibility log, and for the same reason: a long spell must stay
+// distinguishable from a dead watcher without filling the log.
+export const SUPPRESS_LOG_INTERVAL_MS = 10 * 60_000
+
 export interface NudgeState {
   lastNudgeAt: number
   lastNudgeOldestId: number | null
@@ -98,6 +144,13 @@ export interface NudgeState {
   budgetLogged: boolean
   lastBusyLogAt: number
   absenceLogged: boolean
+  // Busy branch. `busySuppressedSince` is 0 when we are not suppressing; while
+  // non-zero it dates the suppression so the failsafe can end it.
+  lastBusyWakeupAt: number
+  busySuppressedSince: number
+  // Rate limit for the suppression log ONLY. The failsafe is deliberately NOT
+  // rate limited -- see decideBusyWakeup.
+  lastSuppressLogAt: number
 }
 
 export const INITIAL_NUDGE_STATE: NudgeState = Object.freeze({
@@ -109,6 +162,9 @@ export const INITIAL_NUDGE_STATE: NudgeState = Object.freeze({
   budgetLogged: false,
   lastBusyLogAt: 0,
   absenceLogged: false,
+  lastBusyWakeupAt: 0,
+  busySuppressedSince: 0,
+  lastSuppressLogAt: 0,
 })
 
 export type NudgePreflight =
@@ -161,6 +217,71 @@ export function decideNudgePreflight(
   return { proceed: true, state: { ...state, recentNudges: recent, budgetLogged: false } }
 }
 
+export type BusyWakeupDecision =
+  | { send: false; state: NudgeState; reason: 'no-mail' | 'too-soon' | 'already-queued'; suppressLog?: true }
+  // `suppressLog?: undefined` is not noise: without it the property does not
+  // exist on this arm at all, so a test reading `decision.suppressLog` fails to
+  // COMPILE even where the value is plainly absent -- and vitest does not
+  // type-check, so that lands as five red tsc errors nobody sees until a build.
+  // Declaring it also states the invariant in the type: a SEND never carries a
+  // suppression log, because nothing was suppressed.
+  | { send: true; state: NudgeState; reason: 'nothing-queued' | 'failsafe'; suppressLog?: undefined }
+
+/**
+ * Should we type a wakeup into a BUSY main pane?
+ *
+ * `alreadyQueued` comes from queuedPromptLines(capture) -- "is a copy of our
+ * line already sitting unread above the input box". That is the whole question
+ * the router never asked, and asking it is what turns 4,6 wakeups per message
+ * into one per drain cycle.
+ *
+ * Every branch that returns send:false must be BOUNDED. `already-queued` is the
+ * only suppressing branch, and the failsafe caps it: nothing behind this is
+ * guaranteed to fire later (see nudge-stale-backstop.test.ts), so a misread
+ * pane may delay a message but must never strand it.
+ */
+export function decideBusyWakeup(
+  input: { now: number; oldestId: number | null; oldestAgeMs: number; alreadyQueued: boolean },
+  state: NudgeState,
+): BusyWakeupDecision {
+  const { now, oldestId, oldestAgeMs, alreadyQueued } = input
+  if (oldestId === null) {
+    // No mail: clear the suppression clock so the next spell starts fresh.
+    return { send: false, reason: 'no-mail', state: state.busySuppressedSince === 0 ? state : { ...state, busySuppressedSince: 0 } }
+  }
+  // Same grace as the idle branch: a message seconds old may be claimed by a
+  // turn that is already starting.
+  if (oldestAgeMs < MIN_PENDING_AGE_MS) return { send: false, reason: 'too-soon', state }
+  if (now - state.lastBusyWakeupAt < BUSY_WAKEUP_DEBOUNCE_MS) return { send: false, reason: 'too-soon', state }
+
+  if (!alreadyQueued) {
+    return { send: true, reason: 'nothing-queued', state: { ...state, lastBusyWakeupAt: now, busySuppressedSince: 0 } }
+  }
+  // A copy is waiting. Suppress -- but start (or check) the clock, because a
+  // pane we misread would otherwise suppress forever.
+  if (state.busySuppressedSince === 0) {
+    // First tick of a suppression spell: always worth a line -- it is the only
+    // record that the queue check DID something, and it is not frequent.
+    return {
+      send: false, reason: 'already-queued', suppressLog: true,
+      state: { ...state, busySuppressedSince: now, lastSuppressLogAt: now },
+    }
+  }
+  if (now - state.busySuppressedSince >= BUSY_WAKEUP_SUPPRESS_FAILSAFE_MS) {
+    // NOT rate limited, on purpose. The failsafe says the pane read was WRONG
+    // -- the safety net caught something. A rate-limited safety signal drops
+    // out exactly when it first fires: the first event never clears the
+    // threshold, and we never learn it happened.
+    return { send: true, reason: 'failsafe', state: { ...state, lastBusyWakeupAt: now, busySuppressedSince: now } }
+  }
+  // Continuing spell: rate limited, because here the PATTERN matters, not the
+  // individual tick (a 20s watcher would otherwise log 45 lines per turn).
+  if (now - state.lastSuppressLogAt >= SUPPRESS_LOG_INTERVAL_MS) {
+    return { send: false, reason: 'already-queued', suppressLog: true, state: { ...state, lastSuppressLogAt: now } }
+  }
+  return { send: false, reason: 'already-queued', state }
+}
+
 /** Pure state advance for a nudge attempt. Called BEFORE the send so a send
  *  that THROWS still consumes the debounce (no 20s-tick retry storm); the
  *  shell restores the previous state only on a clean 'aborted-busy'. */
@@ -190,6 +311,81 @@ export function _resetNudgeStateForTest(): void {
   state = { ...INITIAL_NUDGE_STATE }
 }
 
+/** IO shell for the busy branch: read the pane, ask the pure decision, type at
+ *  most one unconsumed line. Kept separate so tick() stays readable and the
+ *  decision stays testable without tmux. */
+async function runBusyWakeup(now: number, pendingCount: number, oldest: { id: number; created_at: number } | undefined): Promise<void> {
+  // NO MAIL is a state this function must handle, not one the caller may
+  // assume away. Measured 2026-08-27: the caller dereferenced `oldest` before
+  // reaching here, and on an empty inbox with a busy pane every tick threw
+  // `Cannot read properties of undefined (reading 'created_at')` -- 239 times
+  // in two hours. The throw was caught by the tick fence, so nothing visibly
+  // broke; what it actually cost is below.
+  // decideBusyWakeup already has a `no-mail` branch whose job is to clear the
+  // suppression clock, and the crash meant that branch was never reached: the
+  // clock could only ever be reset by the idle path. Handling it HERE makes the
+  // dereference impossible by construction instead of by the caller's care.
+  if (!oldest) {
+    const d = decideBusyWakeup({ now, oldestId: null, oldestAgeMs: 0, alreadyQueued: false }, state)
+    state = d.state
+    return
+  }
+  // Cannot read the pane -> cannot prove a copy is queued. FAIL OPEN: a null
+  // capture counts as nothing-queued, because the failure we must not have is
+  // silence (capturePane already swallows the tmux error and returns null).
+  const capture = capturePane(MAIN_CHANNELS_SESSION, null)
+  if (capture == null) {
+    logger.warn({ session: MAIN_CHANNELS_SESSION }, 'inbox wakeup: pane capture failed; assuming nothing queued')
+  }
+  const alreadyQueued = capture != null && promptAlreadyQueued(capture, BUSY_WAKEUP_TEXT)
+  const d = decideBusyWakeup(
+    { now, oldestId: oldest.id, oldestAgeMs: now - oldest.created_at * 1000, alreadyQueued },
+    state,
+  )
+  state = d.state
+  if (!d.send) {
+    if (d.suppressLog) {
+      // The only record that the queue check fired. Without it "suppressed"
+      // and "nothing to do" are the same absence in the log -- which is the
+      // shape this whole card exists to remove, and it was in here too.
+      logger.info(
+        {
+          inboxWakeupSuppressed: true,
+          pending: pendingCount,
+          oldestId: oldest.id,
+          suppressedForMs: state.busySuppressedSince === 0 ? 0 : now - state.busySuppressedSince,
+        },
+        'inbox wakeup: our line is already queued unread; not typing again',
+      )
+    }
+    return
+  }
+
+  const prev = state
+  try {
+    // waitForIdle:false ON PURPOSE, and it is the only caller entitled to it
+    // here: the pane IS busy, and queueing one line for the next turn boundary
+    // is precisely the job. What made the old router path wrong was doing this
+    // again every 45s; decideBusyWakeup is the brake that was missing.
+    const result = await sendPromptToSession(MAIN_CHANNELS_SESSION, BUSY_WAKEUP_TEXT, null, { waitForIdle: false })
+    if (result !== 'sent') {
+      state = prev
+      logger.info({ inboxWakeupSkipped: result, pending: pendingCount }, 'inbox wakeup: nothing typed; will retry')
+      return
+    }
+  } catch (err) {
+    state = prev
+    logger.warn({ err, pending: pendingCount }, 'inbox wakeup: send threw; nothing typed, state restored')
+    return
+  }
+  logger.info(
+    { inboxWakeup: true, pending: pendingCount, oldestId: oldest.id, reason: d.reason },
+    d.reason === 'failsafe'
+      ? 'inbox wakeup: queued line looked stuck past the failsafe; typed again'
+      : 'inbox wakeup: queued one line into the busy main pane',
+  )
+}
+
 async function tick(): Promise<void> {
   // The whole body is fenced: sendPromptToSession/tmux helpers throw on tmux
   // failure, this is a setInterval callback (fired via a void wrapper), and an
@@ -206,17 +402,35 @@ async function tick(): Promise<void> {
     state = pre.state
     if (!pre.proceed) {
       if (pre.staleAlert) {
-        logger.warn({ inboxNudge: true, oldestId: oldest?.id, staleNudges: MAX_STALE_NUDGES }, 'inbox nudge: drain did not claim after repeated nudges; stopping and alerting owner')
+        // WHAT WAS MEASURED, NOT WHY (card 835384e6, 2026-08-27). This alert
+        // used to name causes -- "the drain hook is not wired", "install path
+        // mismatch", "the session is wedged" -- none of which the watcher can
+        // observe. On 2026-08-04 it escalated exactly this way while nothing
+        // was broken: the main agent was in a single 32-minute turn and three
+        // nudges had simply queued unread. An alert that names a cause it did
+        // not measure is worse than a silent one: the operator starts looking
+        // in the wrong place. Report the observation and let a human diagnose.
+        const staleAgeMin = oldest ? Math.round((now - oldest.created_at * 1000) / 60_000) : null
+        logger.warn(
+          { inboxNudge: true, oldestId: oldest?.id, staleNudges: MAX_STALE_NUDGES, oldestAgeMin: staleAgeMin },
+          'inbox nudge: message still pending after repeated nudges; pausing the idle branch',
+        )
         sendAlert(
-          `⚠️ A fő-ügynök inbox auto-drain ${MAX_STALE_NUDGES} noszogatás után sem vette át a függő üzenetet (#${oldest?.id}). ` +
-          'Valószínű okok: a UserPromptSubmit drain-hook nincs bekötve a session cwd-jéhez (inbox-drain.py), telepítési útvonal-eltérés, ' +
-          'vagy a channels-session beragadt. Kézi ellenőrzés kell; a noszogatás szünetel, amíg ez az üzenet függőben van.',
+          `⚠️ A fő-ügynök #${oldest?.id} üzenete ${MAX_STALE_NUDGES} noszogatás után is függőben van` +
+          (staleAgeMin != null ? ` (${staleAgeMin} perce érkezett)` : '') + '. ' +
+          'Ezt mértem, okot nem: a noszogatás elment, az átvétel nem történt meg. ' +
+          'A tétlen-ág szünetel, amíg ez az üzenet függőben van; a foglalt-ág (egy sorba tett ébresztés) tovább fut. ' +
+          'Kézi ellenőrzés kell.',
         )
       }
       if (pre.budgetLog) {
         logger.warn({ inboxNudge: true, pending: pending.length, budget: MAX_NUDGES_PER_HOUR }, 'inbox nudge: hourly budget exhausted; falling back to baseline drain cadence')
       }
-      return
+      // NOT an early return any more. The idle branch is done for this tick,
+      // but the BUSY branch must still run: the two brakes that stopped us here
+      // (stale spell, hourly budget) are exactly the ones measured to be able
+      // to silence delivery permanently, and the busy branch is what remains
+      // when the pane is mid-turn. It has its own debounce and its own bound.
     }
 
     if (!sessionExistsOnHost(null, MAIN_CHANNELS_SESSION)) {
@@ -231,14 +445,19 @@ async function tick(): Promise<void> {
     if (state.absenceLogged) state = { ...state, absenceLogged: false }
 
     if (!(await isSessionReadyForPrompt(MAIN_CHANNELS_SESSION, null))) {
-      // Busy is the NORMAL skip path (silent); surface a long busy-wait spell
-      // at a slow rate so it is distinguishable from a dead watcher.
+      // Busy is the NORMAL skip path for the NUDGE (silent); surface a long
+      // busy-wait spell at a slow rate so it is distinguishable from a dead
+      // watcher.
       if (now - state.lastBusyLogAt > BUSY_WAIT_LOG_INTERVAL_MS) {
-        logger.info({ inboxNudgeWaiting: true, pending: pending.length, oldestAgeMs: now - oldest.created_at * 1000 }, 'inbox nudge: pending mail waiting; main session busy')
+        logger.info({ inboxNudgeWaiting: true, pending: pending.length, oldestAgeMs: oldest ? now - oldest.created_at * 1000 : null }, 'inbox nudge: pending mail waiting; main session busy')
         state = { ...state, lastBusyLogAt: now }
       }
+      await runBusyWakeup(now, pending.length, oldest)
       return
     }
+    // Reaching the idle path means nothing of ours can be queued any more.
+    if (state.busySuppressedSince !== 0) state = { ...state, busySuppressedSince: 0 }
+    if (!pre.proceed) return
 
     const prev = state
     state = recordNudge(state, now, oldest.id)

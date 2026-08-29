@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  com.marveen.idle-reporter -- a tetlen-jelento launchd egysege (kartya ee4163be).
+  com.marveen.idle-reporter - a tetlen-jelento launchd egysege (kartya ee4163be).
 
   EZ A FAJL NINCS TELEPITVE, es szandekosan itt, a repoban all. A telepites
   (`launchctl bootstrap` / a ~/Library/LaunchAgents ala masolas) FELUGYELET
-  NELKULI RENDSZERMUVELET, tehat Isti dontese -- ugyanabban a kotegben, mint a
+  NELKULI RENDSZERMUVELET, tehat Isti dontese - ugyanabban a kotegben, mint a
   6e6e40ce napindito-koteg.
 
   Telepiteshez:
@@ -18,7 +18,7 @@
   kell tulelnie, amikor a node folyamat all. Egy oron beluli or nem or.
 
   StartInterval: 300 (5 perc). A kuszob 40 perc, tehat ennel surubb futas nem ad
-  tobb informaciot, csak terhelest -- a watchdog 60 mp-e ott indokolt, mert az
+  tobb informaciot, csak terhelest - a watchdog 60 mp-e ott indokolt, mert az
   masodperces esemenyekre valaszol. A jelento allapotot figyel, nem esemenyt.
 -->
 <plist version="1.0">
@@ -28,7 +28,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/opt/homebrew/bin/python3</string>
-        <string>/Users/isti/marveen/scripts/idle-reporter.py</string>
+        <string>__MARVEEN_ROOT__/scripts/idle-reporter.py</string>
     </array>
     <!-- launchd alapertelmezett PATH-ja minimalis. A szkript maga csak a python
          standard konyvtarat hasznalja, de a python3 megtalalasahoz kell. -->
@@ -36,16 +36,18 @@
     <dict>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>IDLE_REPORTER_SEND</key>
+        <string>log</string>
     </dict>
     <key>StartInterval</key>
     <integer>300</integer>
     <!-- RunAtLoad: NINCS. Egy betoltéskori azonnali futas a gep indulasakor
-         tuzelne, amikor meg egyetlen agens sem termelt semmit -- vagyis a
+         tuzelne, amikor meg egyetlen agens sem termelt semmit - vagyis a
          legrosszabb pillanatban adna "a teljes flotta nema" riasztast. Az elso
          kor 5 perccel kesobb boven eleg. -->
     <key>StandardOutPath</key>
-    <string>/Users/isti/.claude/channels/idle-reporter.log</string>
+    <string>__HOME__/.claude/channels/idle-reporter.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/isti/.claude/channels/idle-reporter.log</string>
+    <string>__HOME__/.claude/channels/idle-reporter.log</string>
 </dict>
 </plist>

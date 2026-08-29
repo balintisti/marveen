@@ -139,6 +139,20 @@ export async function tryHandleIdeas(ctx: RouteContext): Promise<boolean> {
     if (!content || typeof content !== 'string' || !content.trim()) {
       json(res, { error: 'content required' }, 400); return true
     }
+    // THE IDEA HAS TO EXIST -- card 3f981b31, didi's measurement.
+    //
+    // Without this the endpoint answered 200 with a real comment id for ANY
+    // string, and stored a row that no screen shows and no endpoint deletes
+    // (there is still no comment-delete route). The writer read back their own
+    // id and believed it landed.
+    //
+    // The database does not object either: `idea_comments` carries no foreign
+    // key and `PRAGMA foreign_keys` is set nowhere in this source.
+    //
+    // Every other write path in this file already asks, through this same
+    // `getIdea` helper. This was the one arm that did not, which is why it went
+    // unnoticed: the file reads as consistent until each branch is checked.
+    if (!getIdea(ideaId)) { json(res, { error: 'Ötlet nem található' }, 404); return true }
     const comment = addIdeaComment(ideaId, author?.trim() || MAIN_AGENT_ID, content.trim())
     json(res, { ok: true, comment })
     return true
