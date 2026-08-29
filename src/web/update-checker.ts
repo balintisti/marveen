@@ -29,7 +29,23 @@ export interface UpdateStatus {
    * fabricated version. */
   version?: string
   latest: string
-  behind: number
+  /**
+   * How many commits this checkout is behind the remote -- or `null` when the
+   * check DID NOT COMPLETE (card d3770ec4).
+   *
+   * It used to be plain `number`, initialised to 0 and left there on every
+   * failure path, so a check that never reached GitHub answered exactly like a
+   * checkout that is up to date. Measured 2026-08-27 and again 2026-08-28,
+   * 16 hours apart, on the live endpoint:
+   *     {"behind": 0, "error": "GitHub /commits/feat/google-service-account -> 422"}
+   * The zero in that response is not a measurement, it is the initialiser.
+   *
+   * The dashboard PAGE handles `error` first and says the check failed -- that
+   * part was right. The nav BADGE did not: `(status.behind) || 0` hid it, so on
+   * every surface except the page itself a failed check looked like "nothing to
+   * update". `null` is what makes the two distinguishable at all.
+   */
+  behind: number | null
   commits: UpdateCommit[]
   /** Commits grouped by release tag (newest first; the first group is the
    * not-yet-released "upcoming" commits with version=""). Derived from the
@@ -51,7 +67,8 @@ export interface UpdateStatus {
 let updateStatusCache: UpdateStatus = {
   current: '',
   latest: '',
-  behind: 0,
+  // NULL, nem 0: a friss indulas allapota "meg nem mertunk", nem "naprakesz".
+  behind: null,
   commits: [],
   remote: 'Szotasz/marveen',
   lastChecked: 0,
@@ -207,7 +224,9 @@ export async function refreshUpdateStatus(): Promise<UpdateStatus> {
   const status: UpdateStatus = {
     current,
     latest: '',
-    behind: 0,
+    // A meres MEG NEM tortent meg. Minden ag, ami eljut a valodi osszevetesig,
+    // FELULIRJA; ami nem jut el, azon `null` marad -- es a hivo latja a kulonbseget.
+    behind: null,
     commits: [],
     remote,
     lastChecked: Date.now(),
@@ -230,6 +249,8 @@ export async function refreshUpdateStatus(): Promise<UpdateStatus> {
     status.latest = latestJson.sha
 
     if (status.latest === current) {
+      // MERT nulla: a remote feje azonos a helyi HEAD-del.
+      status.behind = 0
       updateStatusCache = status
       return status
     }
@@ -247,11 +268,18 @@ export async function refreshUpdateStatus(): Promise<UpdateStatus> {
       // fork divergence.
       status.fork = true
       const base = upstreamMergeBase()
-      if (!base || base === status.latest) {
-        // No local upstream ref, or the fork point already is the upstream tip:
-        // nothing new upstream. A fork being ahead of upstream is expected, not
-        // an error.
+      if (base === status.latest) {
+        // MERT nulla: a fork-pont MAR az upstream feje, tehat nincs uj upstream
+        // commit. Egy fork elorebb lehet az upstreamnel -- ez nem hiba.
         status.behind = 0
+      } else if (!base) {
+        // NEM MERES (kartya d3770ec4). Ez az ag korabban szinten `behind = 0`-t
+        // adott, pedig itt a `git merge-base` BUKOTT (nincs helyi upstream ref) --
+        // vagyis nem tudjuk, hany commit van hatra. A nulla itt ugyanaz a
+        // megnyugtato alapertelmezes volt, mint a catch-agon: a hivo "naprakesz"-t
+        // olvasott ott, ahol a valasz "nem tudom" lett volna.
+        status.error = status.error
+          ?? 'Nem allapithato meg, hany committal vagyunk le: nincs helyi upstream ref (merge-base sikertelen).'
       } else {
         const baseCmp = await fetchCompare(remote, base, status.latest)
         if (baseCmp && !('notFound' in baseCmp)) {
