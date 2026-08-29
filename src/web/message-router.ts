@@ -27,6 +27,7 @@ import {
   capturePane,
 } from './agent-process.js'
 import { detectPaneState, type PaneState } from '../pane-state.js'
+import { parsePaneTokens, nextTokenSample, type TokenSample } from '../session-progress.js'
 import { setLastInboundModality } from './voice-modality.js'
 import { classifyAgentMessage, wrapAgentMessageForDelivery } from './agent-message-wrap.js'
 import { maybeWakeSubAgentsForTelegram } from './telegram-inbox-wake.js'
@@ -161,6 +162,10 @@ function notifyDelegationFailed(msg: AgentMessage, error: string): void {
 // message backlog grows large. State cleared when session becomes ready or absent.
 const STUCK_ESCALATE_MS = 10 * 60 * 1000  // 10 min continuously stuck -> escalate
 const agentStuckSince = new Map<string, number>()  // agent -> first tick stuck (Date.now)
+// A BUSY-ag haladas-jele: mikor lattuk eloszor EZT a token-szamot (kartya 09906ebf).
+// A router amugy is elkapja a panelt az eszkalacio elott, tehat ez NULLA extra
+// tmux-hivas -- csak kiolvassuk, amit mar a kezunkben tartunk.
+const agentTokenSample = new Map<string, TokenSample>()
 
 // A session in the middle of a long turn is NOT ready for a prompt, which is
 // exactly what a wedged session looks like from the queue side. On 2026-07-31
@@ -184,8 +189,39 @@ const BUSY_STUCK_ESCALATE_MS = 30 * 60 * 1000  // busy pane: only after a much l
  * could not be read (remote host down, tmux gone). Unreadable is NOT treated as
  * busy: a pane we cannot see is a reason to look sooner, not later.
  */
-export function shouldEscalateStuckSession(paneState: PaneState | null, stuckMs: number): boolean {
-  return stuckMs > (paneState === 'busy' ? BUSY_STUCK_ESCALATE_MS : STUCK_ESCALATE_MS)
+// Mennyi ideig allhat a token-szam UGY, hogy a fordulo attol meg halad? Egy hosszu
+// tool-hivas alatt a szam termeszetesen nem no -- marveen 11:45-kor pontosan ezt merte
+// (32 perc porgo, valtozatlan 88.0k token, es az ok egy futo TELJES BACKEND E2E volt).
+// Ezert nem eleg "a token nem mozdult": ANNAK IS TARTANIA KELL egy ideig.
+//
+// A SZAM ITELET, ES MEGNEVEZEM A MEREST, AMI ELDONTENE: mintavetelezni a token-sort a
+// busy paneleken, es feljegyezni a LEGHOSSZABB olyan fagyast, ami utan a fordulo megis
+// haladt. Amig ez nincs meg, 15 perc a valasztas -- a mert leghosszabb tool-hivas folott,
+// es a 30 perces busy-kuszob alatt, tehat a ketto EGYUTT ker legalabb 30 perc busy-t
+// ES 15 perc mozdulatlansagot.
+const BUSY_TOKEN_FREEZE_MS = 15 * 60 * 1000
+
+/**
+ * Pure decision: may a continuously not-ready session escalate now?
+ *
+ * `paneState` is what the pane showed at the escalation check, or null when it
+ * could not be read (remote host down, tmux gone). Unreadable is NOT treated as
+ * busy: a pane we cannot see is a reason to look sooner, not later.
+ *
+ * `tokensFrozenMs`: a BUSY-ag harmadik bemenete (kartya 09906ebf). Azt mondja meg,
+ * mennyi ideje NEM MOZDUL a token-szam. `null` = ISMERETLEN (nem volt olvashato
+ * token-sor), es ilyenkor a REGI viselkedes marad ervenyben -- egy nem mert jel nem
+ * lehet ok a HALLGATASRA. Szandekosan fail-open: a mai riasztas zajos, de a hallgatas
+ * egy VALODI elakadasnal dragabb.
+ */
+export function shouldEscalateStuckSession(
+  paneState: PaneState | null,
+  stuckMs: number,
+  tokensFrozenMs: number | null = null,
+): boolean {
+  if (paneState !== 'busy') return stuckMs > STUCK_ESCALATE_MS
+  if (stuckMs <= BUSY_STUCK_ESCALATE_MS) return false
+  return tokensFrozenMs === null || tokensFrozenMs > BUSY_TOKEN_FREEZE_MS
 }
 
 // ---- reconnect-backlog batching (card 2922e380 thread b) --------------------
@@ -483,6 +519,7 @@ export async function runMessageRouterTick(): Promise<void> {
       agentWasAbsent.add(agent)
       agentBatchedThisReconnect.delete(agent) // reset batched flag on new absence
       agentStuckSince.delete(agent)           // absent = not stuck, just gone
+      agentTokenSample.delete(agent)          // es a haladas-jel is: uj session, uj szamlalo
     }
     for (const agent of presentNow) {
       agentWasAbsent.delete(agent)
@@ -572,7 +609,14 @@ export async function runMessageRouterTick(): Promise<void> {
           const stuckMs = now - stuckStart
           const pane = capturePane(session, host)
           const paneState = pane != null ? detectPaneState(pane) : null
-          if (shouldEscalateStuckSession(paneState, stuckMs)) {
+          // A haladas-jel UGYANEBBOL a capture-bol jon: nulla extra tmux-hivas.
+          const { sample, frozenMs } = nextTokenSample(
+            agentTokenSample.get(msg.to_agent),
+            parsePaneTokens(pane),
+            now,
+          )
+          if (sample) agentTokenSample.set(msg.to_agent, sample)
+          if (shouldEscalateStuckSession(paneState, stuckMs, frozenMs)) {
             // Session has been continuously stuck past the escalation threshold.
             // Log at warn level so monitoring/revival tooling can act — the
             // stuck-input-watcher and channel-monitor pick these patterns up.
@@ -621,6 +665,7 @@ export async function runMessageRouterTick(): Promise<void> {
 
       // Session is ready — clear stuck tracking.
       agentStuckSince.delete(msg.to_agent)
+      agentTokenSample.delete(msg.to_agent)
 
       // Classify (channel-inbound / trusted-peer / untrusted) + reject an empty
       // from_agent -- SINGLE SOURCE in agent-message-wrap so the router and the
