@@ -225,12 +225,29 @@ describe('both ends are wired (structural)', () => {
     // `indexOf('{')` finding that started this -- a text locator landing on the wrong instance,
     // one level up, on the function instead of the brace.
     const ANCHOR = 'async function reconcileDesiredAgents('
-    const anchorHits = body.split(ANCHOR).length - 1
+    // COUNTED ON `code`, NOT `body`. My commit message for the count CLAIMED it ran on
+    // comment-stripped, literal-blanked source. It did not -- it ran on raw text, and didi
+    // measured the consequence (R7): a template mentioning the anchor inflates the count and
+    // turns CORRECT code red. Second false claim I have made about my own code tonight, same
+    // shape as asserting a log clock was UTC. The claim is true now.
+    const anchorHits = code.split(ANCHOR).length - 1
     expect(anchorHits, `the reconciler anchor must match exactly once, found ${anchorHits} -- 0 means it moved or was renamed, more than 1 means this guard would pick an instance at random`)
       .toBe(1)
-    const fnStart = body.indexOf(ANCHOR)
+    const fnStart = code.indexOf(ANCHOR)
     expect(fnStart, 'reconcileDesiredAgents not found -- did codeOnly eat it?')
       .toBeGreaterThan(-1)
+    // AND THE NAME DOES NOT PROVE WHICH FUNCTION RUNS -- THE SCHEDULER DOES (didi, card
+    // comment 39, fix direction measured before they proposed it). The uniqueness count above
+    // closes the TWO-match case and not the one-match-in-the-wrong-place case, which is the
+    // limit I named and they turned into a live false pass: rename the real sweep to
+    // ...Main (call site included), let a DECOY take the anchored name with a correct-looking
+    // branch, break the real one -- exactly one match, on the decoy, 8/8 GREEN. Reproduced
+    // here. It is the ordinary "keep the old name as a facade" refactor.
+    //
+    // So authenticate the WIRING rather than the name, which is what the whole card has been
+    // about: the scheduler calls THIS function.
+    expect(code, 'the anchored function must be the one the scheduler calls -- a name alone does not say which function runs')
+      .toContain('void reconcileDesiredAgents()')
     // The SECOND anchor gets the same control -- didi named it as unmeasured. It is a log
     // string, so a duplicate is less likely than a sibling function, but "less likely" is not
     // a measurement and the check costs one line.
@@ -246,6 +263,10 @@ describe('both ends are wired (structural)', () => {
     // Measured in all four directions: a duplicate BEFORE the function head is correct code and
     // passes; a duplicate inside the range, before OR after the real one, is genuine ambiguity
     // and fails; the anchor's removal fails with `found 0`.
+    // Counted on `body` ON PURPOSE, unlike the anchor above: this one IS a string literal, and
+    // `code` has blanked it away. The cost is that a mention of this sentence in a COMMENT
+    // inflates the count -- a false failure, fail-closed, and named here rather than measured
+    // away, because the two anchors need opposite sources and that is the honest split.
     const endHits = body.slice(fnStart).split(END_ANCHOR).length - 1
     expect(endHits, `the loop-end anchor must match exactly once after the function head, found ${endHits} -- 0 means it moved, more than 1 means the loop end is ambiguous`)
       .toBe(1)
