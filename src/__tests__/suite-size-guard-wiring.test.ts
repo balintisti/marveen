@@ -74,8 +74,14 @@ describe('SuiteSizeGuard -- a riporter tenyleg hivja az oroket', () => {
     // tesztnel HAMIS PIROSAT adott, es azt eszrevettem, mert a piros megallit. Itt HAMIS
     // ZOLDET ad, es epp azert nem tunt fel, mert a zoldet senki nem vizsgalja meg.
     // Ugyanaz az ok, ellentetes irany.
-    process.env['SUITE_BASELINE_FILES'] = '1'
-    process.env['SUITE_BASELINE_TESTS'] = '1'
+    // AZ ALAPVONAL A FIXTURE SAJAT MERETE, NEM egy tetszoleges 1/1 (javitva 2026-08-29).
+    // A trunk kozben kapott egy HARMADIK agat, az "ALAPVONAL ELAVULT" jelzest, ami akkor
+    // szolal meg, ha a sodrodas eleri egy ATLAGOS fajl mereteit: drift >= ceil(tests/files).
+    // 1/1-es alapvonal mellett ez a kuszob 1, tehat BARMELY fixture atlepi -- vagyis nem a
+    // KOVETELMENY avult el, hanem a FIXTURE. Az alapvonal ezert a fixture sajat merete:
+    // itt 2 fajl / 5 teszt -> drift 0, tehat a kilepesi kod bizonyithatoan az (A) agtol jon.
+    process.env['SUITE_BASELINE_FILES'] = '2'
+    process.env['SUITE_BASELINE_TESTS'] = '5'
     try {
       new SuiteSizeGuard().onFinished([
         file('ep.test.ts', 5),
@@ -99,8 +105,14 @@ describe('SuiteSizeGuard -- a riporter tenyleg hivja az oroket', () => {
     // a BEFORDITOTT alapvonalhoz (289 fajl / 3929 teszt) mert, es a ket szintetikus
     // fajl ahhoz kepest ZSUGORODASNAK latszott -- a (B) ag jogosan szolalt meg, es a
     // teszt piros lett egy olyan allitason, aminek semmi koze a bekoteshez.
-    process.env['SUITE_BASELINE_FILES'] = '1'
-    process.env['SUITE_BASELINE_TESTS'] = '1'
+    // AZ ALAPVONAL A FIXTURE SAJAT MERETE, NEM egy tetszoleges 1/1 (javitva 2026-08-29).
+    // A trunk kozben kapott egy HARMADIK agat, az "ALAPVONAL ELAVULT" jelzest, ami akkor
+    // szolal meg, ha a sodrodas eleri egy ATLAGOS fajl mereteit: drift >= ceil(tests/files).
+    // 1/1-es alapvonal mellett ez a kuszob 1, tehat BARMELY fixture atlepi -- vagyis nem a
+    // KOVETELMENY avult el, hanem a FIXTURE. Az alapvonal ezert a fixture sajat merete:
+    // itt 2 fajl / 7 teszt -> drift 0, egyik alapvonal-ag sem szolal meg.
+    process.env['SUITE_BASELINE_FILES'] = '2'
+    process.env['SUITE_BASELINE_TESTS'] = '7'
     try {
       process.exitCode = undefined
       new SuiteSizeGuard().onFinished([file('a.test.ts', 3), file('b.test.ts', 4)] as never)
