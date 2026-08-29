@@ -23,6 +23,10 @@
 # busy agent measured 80+ minutes. At 3+ waiting the script says so on stderr and
 # tells the sender to use the card instead -- the number alone would arrive after
 # the send, when it can only help next time.
+# A second stderr line reports the SENDER's own outbound in the same window --
+# total, rate against a documented saturating rate, and this sender's share of
+# the recipient's load (card f664f1a5). Every other number here is scoped to the
+# recipient; a sender could not see its own sum, and the sum is what saturates.
 # Every message gets a footer line: `[KULDVE: <ido> | sor: <n> | kuldo: <agens>]`.
 # See the KULDESI BELYEG block below for why it is KULDVE (not MERVE) and why it
 # is a footer (not a header).
@@ -124,11 +128,34 @@ if [ "$FORCE" != "--force" ]; then
   # at what value, is a policy decision about the coordination layer, and it is
   # the coordinator's to make -- not something this helper should invent. What
   # it can do is end the blindness: no sender could previously see the sum.
-  PRE="$(BASE="$BASE" TO="$TO" python3 -c '
+  #
+  # AND MY OWN OUTBOUND, WHICH NO SENDER COULD SEE AT ALL (card f664f1a5,
+  # marveen measured it on himself). The two lines above are both scoped to the
+  # RECIPIENT: the queue depth, and the recipient's total inbound. Neither says
+  # how much of it is MINE, and neither says what I am sending to EVERYONE ELSE.
+  # Measured 2026-08-28 07:2x on the live board, 3-hour window: marveen was at
+  # 126 073 chars to 7 recipients (42 024 chars/hour) while every single one of
+  # his per-send checks read green, because each one only ever showed the
+  # recipient's side. Of dexter's 42 373 inbound chars, 33 649 (79%) were his --
+  # and the line he saw said "3 senders", which reads like shared load.
+  #
+  # The reference rate is the one documented saturation in CLAUDE.md: 53
+  # messages / 92 889 chars / 6 hours = 15 481 chars/hour, the rate at which an
+  # agent measurably filled up on 2026-08-20. It is a HISTORICAL DATUM, not a
+  # threshold -- re-derive it if a better-measured saturation is recorded. Its
+  # only job is to give the number a denominator: "35 822 chars" says nothing,
+  # "0.8x the rate that saturated someone" is an assertion.
+  #
+  # PRINTED, NOT ENFORCED -- same discipline as the two numbers above. Whether a
+  # sender's own rate should ever BLOCK a send, and at what value, is a policy
+  # decision about the coordination layer and the coordinator's to make. What
+  # this ends is the blindness, which is what the card asked for.
+  PRE="$(BASE="$BASE" TO="$TO" FROM="$FROM" python3 -c '
 import os, sqlite3, time
 try:
     c = sqlite3.connect("file:" + os.environ["BASE"] + "/store/claudeclaw.db?mode=ro", uri=True)
     to = os.environ["TO"]
+    me = os.environ["FROM"]
     n, chars = c.execute(
         "select count(*), coalesce(sum(length(content)),0) from agent_messages"
         " where to_agent=? and status=?", (to, "pending")).fetchone()
@@ -136,15 +163,39 @@ try:
     rc, rs = c.execute(
         "select coalesce(sum(length(content)),0), count(distinct from_agent)"
         " from agent_messages where to_agent=? and created_at>=?", (to, since)).fetchone()
-    print("\t".join(str(x) for x in (n, chars, rc, rs)))
+    # Mine, same window: across ALL recipients, and this recipient only.
+    mc, mn, mt = c.execute(
+        "select coalesce(sum(length(content)),0), count(*), count(distinct to_agent)"
+        " from agent_messages where from_agent=? and created_at>=?", (me, since)).fetchone()
+    mh, = c.execute(
+        "select coalesce(sum(length(content)),0) from agent_messages"
+        " where from_agent=? and to_agent=? and created_at>=?", (me, to, since)).fetchone()
+    line = ""
+    if mc > 0:
+        rate = mc / 3.0
+        SATURATING_RATE = 15481.0  # 92889 chars / 6 h, CLAUDE.md 2026-08-20
+        share = ""
+        if rc > 0 and mh > 0:
+            share = " | ebbol %s-nek %d kar (%d%%)" % (to, mh, round(100.0 * mh / rc))
+        line = ("  [en] %s: 3 oraban %d kar %d db %d cimzettnek = %d kar/ora, "
+                "a telito rata %.1fx-e%s" % (me, mc, mn, mt, round(rate), rate / SATURATING_RATE, share))
+    print("\t".join(str(x) for x in (n, chars, rc, rs, mc, mn, mt, mh, line)))
 except Exception:
-    print("\t\t\t")' 2>/dev/null)"
+    print("\t" * 8)' 2>/dev/null)"
   DEPTH_PRE="$(printf '%s' "$PRE" | cut -f1)"
   CHARS_PRE="$(printf '%s' "$PRE" | cut -f2)"
   RECENT_CHARS="$(printf '%s' "$PRE" | cut -f3)"
   RECENT_SENDERS="$(printf '%s' "$PRE" | cut -f4)"
+  MINE_LINE="$(printf '%s' "$PRE" | cut -f9)"
   if [ -n "$RECENT_CHARS" ] && [ "$RECENT_CHARS" -gt 0 ] 2>/dev/null; then
     echo "  [sor] $TO: $DEPTH_PRE var (${CHARS_PRE} kar) | 3 oraban ${RECENT_CHARS} kar ${RECENT_SENDERS} feladotol" >&2
+  fi
+  # Printed INDEPENDENTLY of the recipient line: a first message to a quiet
+  # agent is exactly the case where my own running total is the only warning
+  # available, and hiding it behind the recipient's traffic would suppress it
+  # there.
+  if [ -n "$MINE_LINE" ]; then
+    printf '%s\n' "$MINE_LINE" >&2
   fi
   if [ -z "$DEPTH_PRE" ]; then
     echo "FIGYELEM: a sor melyseget NEM tudtam megmerni (adatbazis nem olvashato). Kuldok, de vakon." >&2
