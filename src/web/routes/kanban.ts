@@ -448,8 +448,54 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     const id = decodeURIComponent(kanbanCardMatch[1])
     const body = await readBody(req)
     const data = JSON.parse(body.toString())
-    if (updateKanbanCard(id, data)) { json(res, { ok: true }); return true }
-    json(res, { error: 'Kártya nem található' }, 404)
+    // AZ URES TORZS HIVOI HIBA, NEM MUVELET (kartya af9f6cd4). Megmerve: nulla hivo kuld
+    // ilyet -- sem a frontend, sem az agens-lapok --, tehat a 400 nem tor el semmit.
+    if (!data || typeof data !== 'object' || Object.keys(data).length === 0) {
+      json(res, { error: 'Ures torzsu PUT: nincs mit modositani. Add meg a valtoztatando mezot, pl. {"assignee":"..."}.' }, 400)
+      return true
+    }
+
+    // A PRECONDITION THIS ENDPOINT CANNOT HONOUR MUST NOT ANSWER 200 (card ddf11b94).
+    // Measured before this change: `If-Match: anything` -> 200 and `expected_updated_at: 123`
+    // -> 200, both silently ignored -- a false success handed to the one caller who was
+    // trying to be careful. WHY 400 AND NOT 412 OR 501: a 412 would claim we evaluated the
+    // precondition and found it stale, which is a different and false statement; a 501 reads
+    // as a server fault and invites a retry of the very same request.
+    const ifMatch = req.headers['if-match']
+    if (ifMatch !== undefined || data.expected_updated_at !== undefined) {
+      json(res, {
+        error: 'Felteteles iras nem tamogatott ezen a vegponton: az `If-Match` fejlecet es az '
+          + '`expected_updated_at` mezot NEM ertekeljuk ki. Korabban ezek 200-at kaptak, '
+          + 'figyelmen kivul hagyva -- ez a valasz azert 400, hogy ne hidd, hogy vedve vagy. '
+          + 'A felulirás mostantol a valaszban latszik: `overwritten`.',
+      }, 400)
+      return true
+    }
+
+    const result = updateKanbanCard(id, data)
+    if (result.outcome === 'not-found') { json(res, { error: 'Kártya nem található' }, 404); return true }
+
+    // A `unchanged` NEM hiba: a szerkeszto modal minden mentesnel a TELJES objektumot kuldi.
+    // De az `updated_at` NEM emelkedik, es a valasz KIMONDJA, hogy nem tortent semmi.
+    // Felulirni ilyenkor nincs mit, tehat `overwritten` szuksegszeruen ures.
+    if (result.outcome === 'unchanged') { json(res, { ok: true, changed: false }); return true }
+
+    // The overwrite travels in the response because that is where the caller already looks;
+    // a log nobody reads is the same silence in another file.
+    if (result.overwritten.length > 0) {
+      const list = result.overwritten.map(o => `${o.field} (volt: ${JSON.stringify(o.from)})`).join(', ')
+      logger.warn({ id, overwritten: result.overwritten }, 'Kanban PUT overwrote existing values')
+      json(res, {
+        ok: true,
+        changed: true,
+        overwritten: result.overwritten,
+        warning: `Ez az iras MAS erteket irt felul: ${list}. Ha nem te irtad oda, nezd meg, `
+          + 'kinek a munkajat cserelted le -- a visszaolvasas ezt NEM mutatja meg, mert a '
+          + 'sajat szovegedet adja vissza.',
+      })
+      return true
+    }
+    json(res, { ok: true, changed: true })
     return true
   }
 
