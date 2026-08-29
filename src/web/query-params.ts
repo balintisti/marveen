@@ -57,3 +57,38 @@ export function unknownQueryParamError(
     ].filter(Boolean).join(' '),
   }
 }
+
+/**
+ * MEGFIGYELO MOD: naplozza az ismeretlen parametert, de NEM utasit el.
+ *
+ * MIERT LETEZIK (computress javaslata, 2026-08-23). A szigoru or kiterjesztese
+ * tizennyolc tovabbi vegpontra egy dolgon akadt el: mindegyikhez ki kell deriteni
+ * a TAMOGATOTT listat, es egy TULBUZGO or -- ami a HELYES hivast utasitja el --
+ * rosszabb, mint a semmi, mert megtanitja az olvasot, hogy a jelzese zaj.
+ * A talalgatas helyett meres: elobb csak naplozunk, es egy nap mulva a naplo
+ * MEGMONDJA, mit hivnak valojaban. Utana lehet szigoritani, tudassal.
+ *
+ * A SORREND A LENYEG: `observe` -> (egy nap naplo) -> `reject`. Forditva egy
+ * kitalált lista alapjan zarnank ki valos hivokat.
+ *
+ * AMIT EZ NEM AD: vedelmet. Egy megfigyelo mod NEM akadalyoz meg semmit -- a
+ * hivo tovabbra is MAS populaciot kap ugyanazzal a 200-zal. Atmeneti allapot,
+ * nem vegallomas; ha egy vegpont fel evig `observe`-ben all, az nem ovatossag,
+ * hanem elfelejtett munka.
+ */
+export function observeUnknownQueryParams(
+  url: URL,
+  allowed: readonly string[],
+  endpoint: string,
+  log: (o: Record<string, unknown>, msg: string) => void,
+): string[] {
+  const unknown = unknownQueryParams(url, allowed)
+  if (unknown.length) {
+    log(
+      { endpoint, unknown, allowed, url: url.pathname + url.search },
+      'unknown query parameter observed (not rejected -- see observeUnknownQueryParams)',
+    )
+  }
+  return unknown
+}
+

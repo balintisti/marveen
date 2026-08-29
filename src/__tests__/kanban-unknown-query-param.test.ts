@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import http from 'node:http'
 import { initDatabase, createKanbanCard, archiveKanbanCard } from '../db.js'
 import { tryHandleKanban } from '../web/routes/kanban.js'
-import { unknownQueryParams, unknownQueryParamError } from '../web/query-params.js'
+import { unknownQueryParams, unknownQueryParamError, observeUnknownQueryParams } from '../web/query-params.js'
 
 // Card cf85d765. `GET /api/kanban?archived=1` answered 200 with the LIVE cards:
 // zero archived rows, which reads exactly like a truthful "there are none"
@@ -118,3 +118,46 @@ describe('GET /api/kanban/archived -- ugyanaz az or a SZOMSZED agon is', () => {
     expect(Array.isArray(payload.cards)).toBe(true)
   })
 })
+
+describe('observeUnknownQueryParams -- elobb merni, aztan szigoritani', () => {
+  // computress javaslata (2026-08-23), es egyenesen az EN kifogasomra valasz:
+  // a szigoru or kiterjesztese 18 tovabbi vegpontra azon akadt el, hogy
+  // mindegyikhez ki kell deriteni a TAMOGATOTT listat -- talalgatni pedig
+  // veszelyes, mert egy TULBUZGO or a HELYES hivast utasitja el.
+  // A megfigyelo mod ezt merésre valtja: egy nap naplo megmondja, mit hivnak.
+  const gyujto = () => {
+    const sorok: Array<{ o: Record<string, unknown>; msg: string }> = []
+    return { sorok, log: (o: Record<string, unknown>, msg: string) => { sorok.push({ o, msg }) } }
+  }
+
+  it('NAPLOZ, de nem utasit el -- a visszateresi ertek csak informacio', () => {
+    const g = gyujto()
+    const u = observeUnknownQueryParams(new URL('http://x/api/valami?to=marveen&limit=5'), ['limit'], '/api/valami', g.log)
+    expect(u).toEqual(['to'])
+    expect(g.sorok).toHaveLength(1)
+    expect(g.sorok[0].o.unknown).toEqual(['to'])
+    expect(g.sorok[0].o.endpoint).toBe('/api/valami')
+  })
+
+  it('a naplo a TAMOGATOTT listat is viszi -- kulonben a bejegyzes nem ertelmezheto', () => {
+    // Egy naplosor, ami csak azt mondja, hogy "ismeretlen", nem mondja meg,
+    // MIHEZ KEPEST -- es egy nap mulva epp abbol kene a listat osszerakni.
+    const g = gyujto()
+    observeUnknownQueryParams(new URL('http://x/a?z=1'), ['q', 'limit'], '/a', g.log)
+    expect(g.sorok[0].o.allowed).toEqual(['q', 'limit'])
+  })
+
+  it('CSENDBEN marad, ha minden parameter ismert -- kulonben a naplo hasznalhatatlan lenne', () => {
+    const g = gyujto()
+    const u = observeUnknownQueryParams(new URL('http://x/a?q=x&limit=5'), ['q', 'limit'], '/a', g.log)
+    expect(u).toEqual([])
+    expect(g.sorok).toHaveLength(0)
+  })
+
+  it('parameter nelkuli hivasra sem szol', () => {
+    const g = gyujto()
+    observeUnknownQueryParams(new URL('http://x/a'), ['q'], '/a', g.log)
+    expect(g.sorok).toHaveLength(0)
+  })
+})
+
