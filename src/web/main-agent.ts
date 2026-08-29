@@ -1,15 +1,12 @@
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { MAIN_AGENT_ID, SERVICE_ID } from '../config.js'
+import { channelsSessionName } from './session-names.js'
 
-// The channels tmux session name for a given main-agent id. The main agent
-// runs in a long-lived `${id}-channels` tmux session (managed by launchd /
-// systemd via channels.sh), not the `agent-${name}` template that sub-agents
-// use. Pure + parameterized so the derivation is provable for any id, not just
-// the default.
-export function channelsSessionName(mainAgentId: string): string {
-  return `${mainAgentId}-channels`
-}
+// The channels tmux session name now lives with its sibling template in
+// session-names.ts, so the CHOICE between the two shapes can live there too
+// (card 228c9252). Re-exported because importers already know it by this path.
+export { channelsSessionName } from './session-names.js'
 
 // The launchd label (`com.<serviceId>.channels`) and plist path for the
 // channels job. The OS service id is SEPARATE from the agent id: SERVICE_ID

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { decide, renderBlock, replaceBlock } from '../../scripts/update-suite-baseline.mjs'
+import { decide, diagnose, renderBlock, replaceBlock } from '../../scripts/update-suite-baseline.mjs'
 
 // AZ ALAPVONAL-FRISSITO TESZTJEI (kartya c0f10926).
 //
@@ -114,5 +114,62 @@ describe('a valodi forras-fajl', () => {
     const s = readFileSync(join(__dirname, 'setup', 'suite-size-guard.ts'), 'utf-8')
     expect(s).toContain('// === SUITE-BASELINE:BEGIN ===')
     expect(s).toContain('// === SUITE-BASELINE:END ===')
+  })
+})
+
+// A KIIRT OK IS ALLITAS, ES KET ISMERT ESETBEN HAMIS VOLT (kartya e065cf1c).
+//
+// A megtagadas mindig helyes volt -- csonka gyujtesbol nem irunk alapvonalat. Az
+// INDOK viszont azt mondta, hogy „egy fajl BE SEM TOLTODOTT. Eloszor azt javitsd",
+// ami a fo checkoutban HAMIS: ott az elo-telepites-or tagadta meg a futast, es a
+// keszleten nincs mit javitani. marveen ebbol egy nem letezo betoltesi hibat kezdett
+// volna keresni. Ugyanaz az alak, mint a `CREATE INDEX CONCURRENTLY` hamis riasztasa.
+describe('a megtagadas OKA is mert allitas legyen, ne az altalanos tipp (e065cf1c)', () => {
+  it('felismeri az elo-telepites-or elutasitasat a MERT kimenetbol', () => {
+    expect(diagnose('Error: REFUSING TO RUN TESTS: /Users/isti/marveen looks like a LIVE install'))
+      .toBe('live-install')
+  })
+
+  it('felismeri a node-ABI eltérest', () => {
+    expect(diagnose('ERR_DLOPEN_FAILED')).toBe('node-abi')
+    expect(diagnose('was compiled against a different Node.js version')).toBe('node-abi')
+  })
+
+  // NEGATIV KONTROLL: egy VALODI betoltesi hiba NEM kaphat specialis okot, kulonben a
+  // javitas pont azt az esetet nemitana el, amire az altalanos uzenet igaz.
+  it('egy valodi betoltesi hibara NEM talal ki okot', () => {
+    expect(diagnose('SyntaxError: Unexpected token in foo.test.ts')).toBe(null)
+    expect(diagnose('')).toBe(null)
+  })
+
+  it('elo-telepitesnel a keszletet NEM hibaztatja, es megmondja, hova menjen a futtato', () => {
+    const r = decide(1, null, 'live-install')
+    expect(r.write).toBe(false)
+    expect(r.reason).toContain('NINCS MIT JAVITANI')
+    expect(r.reason).toContain('WORKTREEBOL')
+    // EZ A LENYEG: a felrevezeto mondat NEM lehet ott.
+    expect(r.reason).not.toContain('BE SEM TOLTODOTT')
+  })
+
+  it('node-ABI-nal a kornyezetet nevezi meg, nem a keszletet', () => {
+    const r = decide(1, null, 'node-abi')
+    expect(r.reason).toContain('KORNYEZET HIBAJA')
+    expect(r.reason).toContain('node@22')
+    expect(r.reason).not.toContain('BE SEM TOLTODOTT')
+  })
+
+  // A REGI SZERZODES VALTOZATLAN: ok nelkul PONTOSAN a regi uzenet megy. Enelkul a
+  // javitas elnemitana azt az esetet is, amire az altalanos mondat IGAZ.
+  it('ismeretlen ok eseten a regi, altalanos indok all', () => {
+    const r = decide(1, { files: 1, tests: 1 })
+    expect(r.reason).toContain('BE SEM TOLTODOTT')
+    expect(decide(1, { files: 1, tests: 1 }, null).reason).toContain('BE SEM TOLTODOTT')
+  })
+
+  // ES A MEGTAGADAS MAGA SOSEM LAZUL: barmelyik ok mellett is, nem irunk alapvonalat.
+  it('egyik ok sem teszi irhatova az alapvonalat', () => {
+    for (const cause of ['live-install', 'node-abi', null] as const) {
+      expect(decide(1, { files: 300, tests: 4000 }, cause).write).toBe(false)
+    }
   })
 })

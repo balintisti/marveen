@@ -5,11 +5,10 @@ import { MAIN_AGENT_ID, SERVICE_ID } from '../config.js'
 import { listAgentNames, readAgentRemoteHost } from './agent-config.js'
 import {
   agentRunState,
-  agentSessionName,
   restartAgentProcess,
   capturePane,
 } from './agent-process.js'
-import { MAIN_CHANNELS_SESSION } from './main-agent.js'
+import { sessionNameForAgent } from './session-names.js'
 import { respawnMainSessionFresh } from './channel-monitor.js'
 import { paneLooksIdle } from '../pane-state.js'
 import { readAutoRestartConfig } from './auto-restart-store.js'
@@ -55,7 +54,10 @@ function computeDueAt(cfg: AutoRestartConfig, name: string, nowMs: number): numb
 }
 
 function sessionFor(name: string): string {
-  return name === MAIN_AGENT_ID ? MAIN_CHANNELS_SESSION : agentSessionName(name)
+  // One resolver, in agent-process.ts. This used to be five hand-copied
+  // ternaries; the copy that was never written is what broke the sender
+  // preflight (card 228c9252).
+  return sessionNameForAgent(name)
 }
 
 function paneIsIdle(session: string, host: string | null): boolean {

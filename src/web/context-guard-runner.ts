@@ -7,13 +7,12 @@ import { shouldDeferForRecentRespawn } from './stuck-tool-call-watcher.js'
 import { listAgentNames, listAllAgentNames, agentDir, readAgentModel, readAgentClaudeConfigDir, readAgentRemoteHost } from './agent-config.js'
 import {
   agentRunState,
-  agentSessionName,
   restartAgentProcess,
   capturePane,
   sendPromptToSession,
   isSessionReadyForPrompt,
 } from './agent-process.js'
-import { MAIN_CHANNELS_SESSION } from './main-agent.js'
+import { sessionNameForAgent } from './session-names.js'
 import { detectPaneState, paneShowsContextSaturation } from '../pane-state.js'
 import { readContextTokensFromProjectDir, readActiveModelFromProjectDir, readTranscriptMtimeFromProjectDir } from './active-model.js'
 import { readContextGuardConfig } from './context-guard-store.js'
@@ -87,7 +86,10 @@ function observedHighwater(name: string, model: string, observedNow: number): nu
 }
 
 function sessionFor(name: string): string {
-  return name === MAIN_AGENT_ID ? MAIN_CHANNELS_SESSION : agentSessionName(name)
+  // One resolver, in agent-process.ts. This used to be five hand-copied
+  // ternaries; the copy that was never written is what broke the sender
+  // preflight (card 228c9252).
+  return sessionNameForAgent(name)
 }
 
 function workingDirFor(name: string): string {

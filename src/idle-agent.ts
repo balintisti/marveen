@@ -45,6 +45,14 @@ export interface IdleAgentThresholds {
    *  picks the work up, it goes busy and the spell ends on its own -- so this window
    *  only ever elapses when the wake genuinely did not work. */
   wakeGraceMs: number
+  /** How long an UNCHANGED work list may suppress the wake before the guard speaks
+   *  anyway. Without it the suppression is permanent: `sameWorkSet(['x'], ['x'])` is
+   *  true, and a one-item queue does not change for days -- so after a single wake the
+   *  guard would fall silent forever, precisely for the agents whose work is parked.
+   *  Measured by jarvis 2026-08-24 on the live board: with labels empty, five of six
+   *  agents drop to a 1-4 item list, and every one of those lists is stable.
+   *  A repeat is cheap once a shift; permanent silence is not. */
+  wakeStaleRearmMs?: number
   /** Floor between two wakes of the same agent, across spells. Without it, an agent
    *  that keeps finishing short turns would be woken every few minutes: each spell
    *  looks new, because going busy is exactly what ends the previous one. */
@@ -62,10 +70,20 @@ export interface IdleAgentState {
   /** When the COORDINATOR was last told this agent is idle with nothing assigned.
    *  Survives the spell reset for the same reason lastWakeAt does. */
   lastNoWorkNoticeAt?: number | null
+  /** The work items named by the LAST wake. An unchanged list is not news: the agent
+   *  has already been handed exactly these and either could not act on them or chose
+   *  not to, and repeating them costs a whole turn to learn nothing. Survives the spell
+   *  reset, like lastWakeAt -- a spell ends every time the agent takes a turn, so a
+   *  per-spell record would reset precisely when the repetition starts. */
+  lastWakeWorkIds?: readonly string[] | null
 }
 
 export interface IdleAgentInput {
   agent: string
+  /** The IDs of the work items behind `ownWorkCount`. Optional: when it is absent the
+   *  guard behaves exactly as before, so a caller that does not supply it loses nothing
+   *  except the repeat-suppression. */
+  ownWorkIds?: readonly string[]
   /** detectPaneState says the pane is idle (prompt waiting, no spinner).
    *  `null` = could not tell (no session, capture failed, unknown pane). Deliberately
    *  NOT folded into `false`: an unreadable pane is not evidence of work, and treating
@@ -102,6 +120,9 @@ export type IdleDecision =
         | 'wake-pending'
         // Idle with work, but this agent was woken too recently to wake again.
         | 'wake-cooling-down'
+        // Idle with work, but it is the SAME work the last wake already named. Silence
+        // here is the point: a repeated identical list costs a turn and teaches nothing.
+        | 'unchanged-since-wake'
     }
   /** Stage 1: tell the AGENT, not a human. The agent is awake, its queue is empty and
    *  the condition is about itself -- it is the only party that can both be reached and
@@ -116,6 +137,27 @@ export type IdleDecision =
   | { alert: true; reason: 'idle-no-work'; idleForMs: number }
   | { alert: true; reason: 'no-work-check-declared' }
   | { alert: true; reason: 'pane-unreadable' }
+
+/**
+ * Is this the SAME work list as last time? Compared as a SET, deliberately -- not as a
+ * count, and not as an ordered list.
+ *
+ * A COUNT would be the wrong question, and that is measured rather than assumed: on
+ * 2026-08-24 a census of uncovered endpoints read 18 both before and after a change,
+ * while the population grew by one and the covered set grew by one. The total was
+ * stable and the content had moved. A guard that compares totals reports "nothing new"
+ * in exactly that case.
+ *
+ * ORDER is not signal either: the same cards re-sorted by a priority edit are the same
+ * news. So: deduplicated, sorted, compared element by element.
+ */
+export function sameWorkSet(a: readonly string[] | null | undefined, b: readonly string[] | null | undefined): boolean {
+  if (a == null || b == null) return false
+  const norm = (xs: readonly string[]) => [...new Set(xs)].sort()
+  const x = norm(a)
+  const y = norm(b)
+  return x.length === y.length && x.every((v, i) => v === y[i])
+}
 
 export const NO_IDLE_STATE: IdleAgentState = { idleSinceMs: null, lastAlertAt: null, lastWakeAt: null }
 
@@ -239,9 +281,30 @@ export function decideIdleAlert(
     if (lastWakeAt !== null && now - lastWakeAt < thresholds.wakeCooldownMs) {
       return { decision: { alert: false, reason: 'wake-cooling-down' }, next: { ...state, idleSinceMs } }
     }
+    // THE SAME LIST IS NOT NEWS. Measured 2026-08-24 on friday: five wakes in two and a
+    // half hours, every one naming the identical set, every one a no-op -- and each
+    // costs a full turn, which during a fleet-wide API outage was one of the few turns
+    // anyone could still spend. The cooldown alone cannot stop this, because a spell
+    // ends every time the agent takes a turn: answering the wake re-arms it.
+    //
+    // A CHANGE re-arms immediately, including a REMOVAL -- the set is compared, not the
+    // count, so "one closed, one opened" is news rather than silence.
+    // ...unless the silence has lasted long enough to be its own problem. An unchanged
+    // list is not news the second time; it IS news again after a shift, because by then
+    // "nobody has touched this in hours" is the finding.
+    const staleRearm = thresholds.wakeStaleRearmMs
+    const suppressionIsFresh =
+      staleRearm === undefined || (lastWakeAt !== null && now - lastWakeAt < staleRearm)
+    if (
+      input.ownWorkIds !== undefined &&
+      sameWorkSet(input.ownWorkIds, state.lastWakeWorkIds) &&
+      suppressionIsFresh
+    ) {
+      return { decision: { alert: false, reason: 'unchanged-since-wake' }, next: { ...state, idleSinceMs } }
+    }
     return {
       decision: { alert: true, reason: 'wake-agent', workCount: input.ownWorkCount, idleForMs },
-      next: { ...state, idleSinceMs, lastWakeAt: now },
+      next: { ...state, idleSinceMs, lastWakeAt: now, lastWakeWorkIds: input.ownWorkIds ?? null },
     }
   }
 
@@ -299,6 +362,85 @@ export interface WorkCountCard {
    *  due_date means WE decided to do it later. Conflating them makes `waiting` mean
    *  two things again. (jarvis, 2026-08-22) */
   due_date?: number | null
+  /** The card's labels, as the LIST endpoint returns them. Optional, and that is a trap
+   *  worth naming: `GET /api/kanban` includes this field, `GET /api/kanban/<id>` does
+   *  NOT (measured 2026-08-24). A caller that fills these cards from the detail endpoint
+   *  sees no labels at all -- and the failure is silent, because "no labels" and "field
+   *  absent" look identical from here. Use the list endpoint. */
+  labels?: readonly { name?: string | null }[] | null
+}
+
+/**
+ * The one canonical label meaning "this card is blocked on the OWNER's decision".
+ *
+ * WHY A LABEL AND NOT THE TEXT (card 0fe791fb, measured 2026-08-24). The question is
+ * "who is this waiting on RIGHT NOW", and a comment cannot answer it: comments are
+ * append-only, so "waiting on Isti's decision" stays written after Isti has decided.
+ * Measured on the 64 waiting cards: a title keyword filter found 18 and missed real
+ * ones; widening it to description and last comment found 33 and swept in cards that
+ * were already settled -- including 0a15a0ea, whose last comment says the owner
+ * approved it that same morning. THE TEXT RECORDS THE HISTORY, NOT THE STATE.
+ *
+ * A label is a state because it can be TAKEN OFF when the answer arrives. That is the
+ * whole argument, and it is why `assignee` was not chosen instead: it already carries a
+ * contested meaning (card 2b9d69a9) and would carry two.
+ */
+export const WAITING_LABEL_PREFIX = 'varakozik:'
+/** One scheme, three values, and each NAMES WHO IT WAITS ON rather than what happened.
+ *  A reader does not have to remember which word means what -- the label says it. */
+export const WAITING_ON_OWNER_LABEL = 'varakozik:isti'
+export const WAITING_ON_COORDINATOR_LABEL = 'varakozik:koordinator'
+export const WAITING_ON_ASSIGNEE_LABEL = 'varakozik:assignee'
+
+/** Normalised label names on a card: trimmed and lower-cased, for the reason given at
+ *  `isWaitingOnOwner` -- an exact match fails SILENTLY, and silence is the expensive
+ *  direction here. */
+function labelNames(card: WorkCountCard): string[] {
+  return (card.labels ?? []).map((l) => (l?.name ?? '').trim().toLowerCase()).filter(Boolean)
+}
+
+/** Does the card carry ANY label from the waiting family? Distinct from "waits on X":
+ *  a card with no such label has not been triaged at all, which is its own state. */
+export function hasWaitingLabel(card: WorkCountCard): boolean {
+  return labelNames(card).some((n) => n.startsWith(WAITING_LABEL_PREFIX))
+}
+
+/**
+ * Matched case-insensitively and trimmed, on purpose. An exact match would be stricter,
+ * but its failure is SILENT: a card labelled `Varakozik:Isti` would simply never appear,
+ * and "no cards await the owner" is exactly the reassuring answer nobody re-checks.
+ * A visible duplicate in the label list is the cheaper problem.
+ */
+export function isWaitingOnOwner(card: WorkCountCard): boolean {
+  if (card.status !== 'waiting') return false
+  return labelNames(card).includes(WAITING_ON_OWNER_LABEL)
+}
+
+/**
+ * What the COORDINATOR has to look at: every `testing` card that is either explicitly
+ * his (`varakozik:koordinator`) or has NOT BEEN TRIAGED AT ALL.
+ *
+ * The untriaged half is the deliberate part. Whoever did not mark the card did not
+ * decide, and an undecided item is triage -- which is the coordinator's job. Routing it
+ * to him means NOTHING falls silent, the assignee is not charged for someone else's
+ * bookkeeping, and the cost lands where the convention was declared.
+ *
+ * Measured on friday's board (2026-08-24): of 11 such items, zero were questions to the
+ * assignee and three had already been closed by hand by the coordinator that morning --
+ * so the untriaged ones were his in practice before they were his by rule.
+ */
+export function selectCoordinatorTriage<T extends WorkCountCard>(cards: readonly T[]): T[] {
+  return cards.filter((c) => {
+    if (c.archived_at || c.status !== 'testing') return false
+    const names = labelNames(c)
+    if (names.includes(WAITING_ON_ASSIGNEE_LABEL)) return false
+    return names.includes(WAITING_ON_COORDINATOR_LABEL) || !hasWaitingLabel(c)
+  })
+}
+
+/** The subset requirement: from every open card, the ones blocked on the owner. */
+export function selectWaitingOnOwner<T extends WorkCountCard>(cards: readonly T[]): T[] {
+  return cards.filter((c) => !c.archived_at && isWaitingOnOwner(c))
 }
 
 /**
@@ -371,6 +513,39 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
       )
       return open.filter((c) => {
         if (c.status !== 'testing') return true
+        // THE RULE THAT USED TO BE HERE, AND WHY IT IS GONE (card 0fe791fb, 2026-08-24).
+        //
+        // It read: "if someone else spoke last, the assignee owes an answer" -- and the
+        // comment below it still explains the gap it was built to close, which was real.
+        // What it could not see is WHAT the other person said. Measured over friday's 11
+        // such items: ZERO were questions. Three were verifiers saying the card was
+        // closable (the coordinator's business, not the assignee's), five were jarvis
+        // resolving stale commit hashes -- bookkeeping that says "the card's claim is
+        // UNCHANGED" -- and three were confirmations. The guard woke the assignee five
+        // times over that list, every time a no-op.
+        //
+        // The author of the last comment is not the signal. WHO IT WAITS ON is, and that
+        // now has a label. A card the assignee genuinely owes an answer on carries
+        // `varakozik:assignee`; anything else is not his queue.
+        //
+        // AND THE ABSENT LABEL IS NOT SILENCE: an untriaged card belongs to the
+        // COORDINATOR by policy (see selectCoordinatorTriage). "Nobody's" was the
+        // tempting rule and it is the wrong one -- a missing mark would leave a real
+        // question waiting mutely, at the cost of whoever forgot.
+        //
+        // THAT POLICY IS NOT ENFORCED HERE YET, AND THE REASON IS MEASURED, NOT TIMID
+        // (2026-08-24, jarvis). `selectCoordinatorTriage` has NO production caller: the
+        // coordinator has no `workcheck.json` at all, so there is no queue to route an
+        // untriaged card into. Narrowing here first would take 185 testing cards off the
+        // agents' lists and deliver them NOWHERE -- the exact silence the policy exists
+        // to prevent. So the label only ADDS for now; nothing is taken away.
+        //
+        // THE NARROWING COMES BACK WITH THE CONSUMER, IN THE SAME COMMIT (marveen's
+        // condition, and `idle-triage-coupling.test.ts` is what enforces it rather than
+        // leaving it to memory): a producer with no consumer must not be able to land on
+        // its own.
+        const markedForMe = labelNames(c).includes(WAITING_ON_ASSIGNEE_LABEL)
+        if (markedForMe) return true
         const authors = lastCommentAtByCard.get(c.id)
         if (!authors || authors.size === 0) return false
         let latestAuthor: string | null = null
@@ -442,8 +617,169 @@ export function countDeclaredWork(
  *  make it happen faster.
  *
  *  It names the agent and the duration, and asks for the one thing that ends the state.
- *  It does NOT name candidate cards -- picking them needs the board and the fleet's
- *  current shape, which is what the coordinator has and this function does not. */
+ *
+ *  IT DOES NOT NAME CANDIDATE CARDS, and the reason USED TO BE that picking them
+ *  needs the board, which this function is not given. That limitation was real and
+ *  it is now gone: `buildPullNotice` names them, because the ownerless pull-list
+ *  needs no fleet judgement -- those cards are pickable by anyone by definition
+ *  (card 4cbc8af9).
+ *
+ *  So this notice is now the NARROWER case: it fires only when the board has
+ *  nothing ownerless either, and then the coordinator really is the one who has to
+ *  act. The old sentence is kept above rather than deleted, because a reader who
+ *  meets the two functions side by side should see WHY there are two. */
+/** How long a message may sit in the queue before the SENDER is told (card 979283a9).
+ *
+ *  MEASURED, not chosen. Over 7133 delivered inter-agent messages: median 0.8
+ *  minutes, 75th percentile 6, 90th 16.6, 95th 31.6, 99th 135.9. Sixty minutes
+ *  sits above the 97th percentile, so it does not fire on the normal long tail --
+ *  and it clears the fleet's documented legitimate turn lengths (a 37-minute turn
+ *  is on record, a 58-minute one was measured on 2026-08-23). Below that the
+ *  notice would arrive while the recipient is simply still working, which is the
+ *  state the queue exists to absorb.
+ *
+ *  2.7% of messages crossed this line historically -- roughly one or two a day
+ *  per sender, each one actionable.
+ */
+export const PENDING_NOTICE_AFTER_MS = 60 * 60 * 1000
+
+export interface PendingRow {
+  id: number
+  from_agent: string
+  to_agent: string
+  created_at: number
+}
+
+/** Messages the sender should hear about, grouped by sender.
+ *
+ *  The `queue=<n>` figure the helper prints is produced at SEND time and nobody
+ *  looks again. Someone who sent something forty minutes ago gets no signal that
+ *  it still has not landed -- which is how an agent ends up waiting for a reply
+ *  that is sitting in a queue (measured 2026-08-18: dexter waited while the
+ *  answer was pending).
+ *
+ *  `alreadyNotified` is what keeps this from becoming a metronome: a message that
+ *  is still stuck an hour later must not produce a second notice every sweep.
+ *  Without it the guard would be loudest exactly when it is least useful.
+ */
+export function stalePendingBySender(
+  rows: PendingRow[],
+  nowMs: number,
+  alreadyNotified: ReadonlySet<number>,
+  thresholdMs: number = PENDING_NOTICE_AFTER_MS,
+): Map<string, PendingRow[]> {
+  const out = new Map<string, PendingRow[]>()
+  for (const r of rows) {
+    if (alreadyNotified.has(r.id)) continue
+    if (nowMs - r.created_at * 1000 < thresholdMs) continue
+    const list = out.get(r.from_agent) ?? []
+    list.push(r)
+    out.set(r.from_agent, list)
+  }
+  return out
+}
+
+/** What the sender is told. Deliberately not a nudge to resend.
+ *
+ *  `pending` lives in the database and survives a restart -- measured twice on
+ *  2026-08-28, once by accident -- so a second copy is a duplicate, not a retry.
+ *  The useful moves are to wait, or to put the content where it does not queue:
+ *  a card. That asymmetry is the whole lesson of the day this card was rescoped
+ *  -- a commit is visible to the recipient immediately, a message is not.
+ */
+export function buildPendingStillWaitingNotice(
+  sender: string,
+  rows: { to_agent: string; created_at: number }[],
+  nowMs: number,
+): string {
+  const line = (r: { to_agent: string; created_at: number }) =>
+    `  -> ${r.to_agent}: ${Math.round((nowMs - r.created_at * 1000) / 60_000)} perce all sorban`
+  return [
+    `[uzenet-or] A(z) "${sender}" ${rows.length} elkuldott uzenete MEG MINDIG nem kezbesult:`,
+    '',
+    ...rows.slice(0, 5).map(line),
+    '',
+    'A cimzett dolgozik -- a router csak IDLE panelbe tud injektalni, tehat ez nem hiba,',
+    'es nem is akadaly nala. Amit NE tegyel: ne kuldd ujra. A `pending` sor az adatbazisban',
+    'all es TULEL egy restartot is, tehat a masodik level duplikatum lenne.',
+    '',
+    'Amit erdemes: ha DONTES vagy LELET volt benne, tedd a KARTYARA is. A kartya nem all',
+    'sorba -- a cimzett akkor is latja, amikor a levelet meg nem olvasta el.',
+  ].join('\n')
+}
+
+/** The ownerless pull-list: cards anyone may take (card 4cbc8af9).
+ *
+ *  The work counter asks `assignee === agent`, which is the right question for
+ *  "what is on my plate" and the wrong one for "is there anything to do". The
+ *  rulebook's third rule sends an agent with an empty plate to exactly these
+ *  cards -- and the guard, reading its own narrower question, told them there
+ *  was nothing. Measured 2026-08-28 21:02: a high-priority ownerless card had
+ *  been created twelve minutes earlier, and the notice still said "NINCS RA
+ *  KIOSZTVA SEMMI".
+ *
+ *  The rule and the tool disagreed, and everyone reads the tool.
+ *
+ *  Same exclusions as the assigned count, for the same reasons: `done` and
+ *  `waiting` are not pickable, and a future `due_date` means someone
+ *  deliberately deferred it. `testing` is excluded here too -- an ownerless
+ *  card in review is not work to pick up.
+ */
+// Generic over the caller's card type: the filter only needs these fields, and
+// forcing WorkCountCard here would strip the id/title/priority the message has
+// to print -- the guard would know WHICH cards and be unable to name them.
+export function orphanPullList<T extends {
+  status: string; assignee: string | null
+  archived_at?: number | null; due_date?: number | null
+}>(cards: T[], now?: number): T[] {
+  return cards.filter((c) =>
+    !c.archived_at &&
+    (c.assignee ?? '').trim() === '' &&
+    c.status === 'planned' &&
+    !(now !== undefined && c.due_date != null && c.due_date > now),
+  )
+}
+
+/** Highest-priority first, so the message can name ONE card and be right. */
+export function topOfPullList<T extends { priority?: string | null; updated_at?: number | null }>(cards: T[]): T[] {
+  const rank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 }
+  return [...cards].sort((a, b) =>
+    (rank[a.priority ?? 'normal'] ?? 2) - (rank[b.priority ?? 'normal'] ?? 2) ||
+    (b.updated_at ?? 0) - (a.updated_at ?? 0),
+  )
+}
+
+/** What an idle agent is told when the board HAS ownerless work (card 4cbc8af9).
+ *
+ *  Addressed to the AGENT, not the coordinator -- that is the whole point. The
+ *  old notice asked the coordinator to push a card; this one lets the agent
+ *  pull. Measured the cost of the old shape on 2026-08-28: the coordinator
+ *  handed out a card in response to the guard, which is the pattern rule 3
+ *  exists to end.
+ *
+ *  It says LOCK FIRST because two agents took the same card 19 seconds apart on
+ *  the morning the rule was written; naming a card without saying that invites
+ *  exactly that collision.
+ */
+export function buildPullNotice(
+  agent: string,
+  minutes: number,
+  items: { id: string; title?: string | null; priority?: string | null }[],
+): string {
+  const line = (c: { id: string; title?: string | null; priority?: string | null }) =>
+    `  ${c.id.slice(0, 8)}  ${(c.priority ?? 'normal').padEnd(6)}  ${(c.title ?? '').slice(0, 60)}`
+  return [
+    `[tetlen-or] A(z) "${agent}" ${minutes} perce ures prompton all, es a NEVEN nincs semmi --`,
+    `de a tablan ${items.length} GAZDATLAN kartya var, amit barki felvehet:`,
+    '',
+    ...items.slice(0, 5).map(line),
+    '',
+    'FOGLALD LE ELOSZOR, aztan merj: `assignee` + `in_progress`. Ket agens 19 masodperc',
+    'kulonbseggel vette fel ugyanazt a kartyat azon a napon, amikor ez a szabaly szuletett.',
+    'Ha egyik sem a te savod, sorold at egy soros indoklassal -- az is elvegzett munka.',
+  ].join('\n')
+}
+
 export function buildNoWorkNotice(agent: string, minutes: number): string {
   return [
     `[tetlen-or] A(z) "${agent}" ${minutes} perce ures prompton all, ES NINCS RA KIOSZTVA SEMMI.`,
@@ -452,8 +788,15 @@ export function buildNoWorkNotice(agent: string, minutes: number): string {
     'errol az esetrol -- azt figyelte, akinek VAN munkaja es megsem mozdul --, tehat epp a',
     'legdragabb allapot volt lathatatlan.',
     '',
-    'Amit tolem var: adj neki kartyat, vagy ha tenyleg nincs neki valo, mondd ki a kartyan,',
-    'hogy miert all -- kulonben a kovetkezo korben ugyanezt fogom kuldeni.',
+    // AZ OR KARTYAT SOSEM OLVAS -- ezert nem a kartyara kuldi az embert (kartya dc81d2af).
+    // jarvis merese 2026-08-28: 10 ertesites 4h48m alatt UGYANARROL az agensrol, mikozben a
+    // koordinator KETSZER is kartyara irta, hogy szandekosan all. A kartya-komment helyes
+    // szokas, csak epp nem az a csatorna, amit ez az or nez: a dontese a `workcheck.json`-on
+    // all. Egy uzenet, ami olyan valaszt ker, amit a kero fel sem tud olvasni, minden korben
+    // ujra elmegy -- es par kor utan a cimzett atlepi.
+    'Amit tolem var: adj neki kartyat, vagy ha tenyleg nincs neki valo, allitsd a',
+    'workcheck.json-jat `{"kind":"none"}`-ra -- EZT olvasom, a kartyat nem. Kulonben a',
+    'kovetkezo korben ugyanezt fogom kuldeni.',
   ].join('\n')
 }
 
