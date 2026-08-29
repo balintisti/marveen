@@ -52,7 +52,14 @@ function arg(name: string): string | undefined {
 }
 
 function fail(error: string): never {
-  process.stdout.write(JSON.stringify({ ok: false, via: process.env.AGENDA_VIA ?? 'direct', error }) + '\n')
+  // LAST NET, card 7f3e1357: no path may emit `error: ""`. The morning
+  // briefing quotes this field verbatim (card f5aee23d), so an empty string
+  // reaches the owner as a failure with no explanation -- the very shape that
+  // instruction was written to remove. Callers should send something better;
+  // this only guarantees they cannot send nothing.
+  const text = error?.replace(/\s+/g, ' ').trim()
+  const safe = text || 'ismeretlen hiba (a hivo ures error-t adott) -- lasd a naplot'
+  process.stdout.write(JSON.stringify({ ok: false, via: process.env.AGENDA_VIA ?? 'direct', error: safe }) + '\n')
   process.exit(0)
 }
 

@@ -402,6 +402,43 @@ export function calendarApiError(status: number, body: string): string {
   return flat ? `HTTP ${status}: ${flat}` : `HTTP ${status}`
 }
 
+/**
+ * A thrown value rendered so the string is NEVER empty. Card 7f3e1357.
+ *
+ * Measured on the live install at 15:00:28 on 2026-08-27:
+ * `{"ok":false,"via":"dist","error":""}`, then green again in the same minute.
+ * `err.message` is empty often enough to matter -- an aborted socket, a
+ * `new Error()` with no text -- and the old line trimmed that to `''` and
+ * passed it on.
+ *
+ * An empty `error` is worse here than a vague one, because the morning
+ * briefing was changed (card f5aee23d) to stop saying "no calendar" and quote
+ * this string VERBATIM. Empty text turns that instruction into an empty
+ * explanation: the owner is told something failed and nothing else. The name
+ * of the exception is not much, but it is the difference between "AbortError"
+ * and silence.
+ */
+export function describeThrown(err: unknown): string {
+  if (err instanceof Error) {
+    const msg = err.message.replace(/\s+/g, ' ').trim()
+    const name = err.name?.trim() || 'Error'
+    // Name AND message when both exist, because the name is what survives a
+    // message that turns out to be useless.
+    return (msg ? `${name}: ${msg}` : name).slice(0, 160)
+  }
+  // A non-Error throw is labelled when its rendering carries nothing on its
+  // own. An emptiness check alone is not enough: `String(undefined)` is the
+  // non-empty string "undefined", and `String({})` is "[object Object]" --
+  // both pass a length test and still tell the reader nothing, which would be
+  // a fresh version of this very defect in a briefing that prints the field
+  // verbatim. A thrown string like "boom" IS its own explanation and is left
+  // alone. (Both halves are pinned by controls in the test; the first draft of
+  // this function failed one of them each way round.)
+  const text = String(err).replace(/\s+/g, ' ').trim()
+  const uninformative = text === '' || text === 'undefined' || text === 'null' || /^\[object \w+\]$/.test(text)
+  return (uninformative ? `nem-Error ertek dobva (${typeof err}): ${text || '<ures>'}` : text).slice(0, 160)
+}
+
 export async function fetchCalendarEvents(
   calendarId: string,
   timeMin: Date,
@@ -458,8 +495,7 @@ export async function fetchCalendarEvents(
     // JSON. All of these used to surface as an empty calendar via the
     // caller's catch. They are failures, and they say so now.
     logger.error({ err }, 'Google Calendar fetch threw')
-    const msg = err instanceof Error ? err.message : String(err)
-    return { ok: false, error: msg.replace(/\s+/g, ' ').trim().slice(0, 160) }
+    return { ok: false, error: describeThrown(err) }
   }
 }
 
