@@ -79,13 +79,20 @@ touch "$STAMP.new" 2>/dev/null || exit 0
 
 # (2) FAIL-OPEN AND BOUNDED. A backup mechanism must never stop the work: that is
 # a worse outcome than the gap it closes. Every failure path below exits 0.
+# A KIMENET A NAPLOBA MEGY, NEM A /dev/null-BA (kartya 5b6a78eb).
+# Eddig mindket ag `>/dev/null 2>&1`-gyel indult, tehat AMIT A SZKRIPT MOND -- koztuk az, hogy a
+# ZAR megtagadta a futast -- SEHOVA nem jutott el. A `c26193d7` merese ezen bukott el: 0 naplosor,
+# es a "nem volt verseny" megkulonboztethetetlen a "volt, es a zar megfogta" esettol.
+# Ugyanaz a fajl, amit a launchd egyseg is ir (a plist StandardOut/ErrorPath-ja), tehat a ket hivo
+# sorai EGY idorendben allnak -- es a `[hivo]` cimke mondja meg, melyik melyik.
+SNAPSHOT_LOG="${SKILLS_SNAPSHOT_LOG:-/Users/isti/marveen/store/rulebook-snapshot.log}"
 if command -v timeout >/dev/null 2>&1; then
-  SKILLS_SNAPSHOT_RUNNING=1 timeout "$TIMEOUT_S" bash "$SNAPSHOT" >/dev/null 2>&1
+  SKILLS_SNAPSHOT_RUNNING=1 timeout "$TIMEOUT_S" bash "$SNAPSHOT" >>"$SNAPSHOT_LOG" 2>&1
   rc=$?
 else
   # macOS has no coreutils `timeout` by default. Run it in the background and
   # poll, so a hung snapshot cannot hold the tool call open either.
-  SKILLS_SNAPSHOT_RUNNING=1 bash "$SNAPSHOT" >/dev/null 2>&1 &
+  SKILLS_SNAPSHOT_RUNNING=1 bash "$SNAPSHOT" >>"$SNAPSHOT_LOG" 2>&1 &
   pid=$!
   waited=0
   while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt "$TIMEOUT_S" ]; do
