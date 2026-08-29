@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { execSync } from 'node:child_process'
+import { execSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -468,5 +468,111 @@ describe('skill-index.sh -- a KARAKTER-KERET: sajat alapvonal (83cac1ed)', () =>
       expect(out).toContain('+0 kar')
       expect(out).not.toContain(MARKER)
     } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+})
+
+// === `--check <skill>`: a szerzo a SAJAT fajljara kap szamot, iras ELOTT (kartya 0d0e3892)
+//
+// A mert problema: a meret-or a `$GLOBAL_SKILLS_DIR/*/SKILL.md` cikluson megy vegig, tehat
+// MINDEN skillt nez (2026-08-27: 56), es a jelzest definicio szerint az kapja, aki legkozelebb
+// futtatja -- fuggetlenul attol, ki irta a novekedest. Merve ugyanaznap: negy futas, mind
+// ugyanarra a fajlra figyelmeztetett, amit a futtato nem szerkesztett.
+//
+// Amit a mod SZANDEKOSAN nem csinal: nem blokkol iras kozben. Egy blokk C-t allitana meg A
+// tullepett fajlja miatt; egy or, ami miatt valaki nem tud irni, ki lesz kapcsolva.
+describe('skill-index.sh -- `--check <skill>` (0d0e3892)', () => {
+  let tmpHome: string
+  const skills = () => join(tmpHome, '.claude', 'skills')
+
+  function write(skill: string, lines: number, pad = ''): void {
+    mkdirSync(join(skills(), skill), { recursive: true })
+    const body = Array.from({ length: lines - 4 }, (_, i) => `sor ${i}${pad}`).join('\n')
+    writeFileSync(join(skills(), skill, 'SKILL.md'), `---\nname: ${skill}\ndescription: d\n---\n${body}\n`)
+  }
+
+  function check(args: string[], env: Record<string, string> = {}) {
+    const r = spawnSync('bash', [SCRIPT, ...args], {
+      encoding: 'utf-8',
+      env: { ...process.env, HOME: tmpHome, ...env },
+    })
+    return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', code: r.status ?? -1 }
+  }
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), 'skill-check-'))
+    write('sajat-skill', 40)
+    write('masik-skill', 40)
+  })
+  afterEach(() => rmSync(tmpHome, { recursive: true, force: true }))
+
+  it('a hatar alatti sajat fajlrol SZAMOT ad, nem csendet', () => {
+    // Broadcastban ez csend (helyesen: 55 skillrol nem kell jelenteni). Check modban a csend
+    // nem valasz -- a szerzo azert futtatta, hogy megtudja, mennyi maradt.
+    const r = check(['--check', 'sajat-skill'])
+    expect(r.code).toBe(0)
+    expect(r.stderr).toMatch(/sajat-skill\s+40 sor \/ \d+ karakter \(hatar 500 -- 460 sor maradt\)/)
+  })
+
+  it('CSAK a kert skillt meri -- a masik fajl tullepese nem az o dolga', () => {
+    // Ez a lelet magva: broadcastban a masik skill tullepese MINDENKIT terhel.
+    write('masik-skill', 520)
+    const r = check(['--check', 'sajat-skill'])
+    expect(r.code).toBe(0)
+    expect(r.stderr).not.toMatch(/masik-skill/)
+    expect(r.stdout).not.toMatch(/masik-skill/)
+    // KONTROLL, hogy a fixture tenyleg tullepo: broadcastban ugyanez a fa PANASZKODIK
+    const b = check([])
+    expect(b.code).toBe(3)
+    expect(b.stderr).toMatch(/masik-skill/)
+  })
+
+  it('a sajat fajl tullepese 3-mal ter vissza, es a szoveg stderr-en van', () => {
+    write('sajat-skill', 520)
+    const r = check(['--check', 'sajat-skill'])
+    expect(r.code).toBe(3)
+    expect(r.stderr).toMatch(/sajat-skill/)
+  })
+
+  it('ALAPVONALAS skillnel a KARAKTER-kapu is 3-mal bukik -- broadcastban ez 0 volt', () => {
+    // A mod egyetlen celja, hogy egy `&&` lanc ele lehessen tenni. Broadcastban a
+    // karakter-figyelmeztetes stdoutra megy es 0-t ad (kartya 83cac1ed) -- ott ez didi
+    // kerdese; itt a 3 a szerzodés.
+    write('alapvonalas', 100, ' '.repeat(200))
+    const env = { SKILL_BASELINE_NAMES: 'alapvonalas', SKILL_BASELINE_LINES: '95', SKILL_BASELINE_CHARS: '1000' }
+    const r = check(['--check', 'alapvonalas'], env)
+    expect(r.code).toBe(3)
+    expect(r.stderr).toMatch(/A KARAKTER-KERET ELFOGYOTT/)
+    // NEGATIV KONTROLL: ugyanaz a fajl, tagas karakter-alapvonallal -> 0 es nincs panasz
+    const ok = check(['--check', 'alapvonalas'], { ...env, SKILL_BASELINE_CHARS: '30000' })
+    expect(ok.code).toBe(0)
+    expect(ok.stderr).not.toMatch(/ELFOGYOTT/)
+  })
+
+  it('check modban NEM allitja, hogy "minden skill a hatara alatt" -- egyet nezett meg', () => {
+    // Egy ures populacio, ami tiszta bizonyitvanynak olvasodik, pontosan az az alak, ami
+    // ellen ez az or keszult.
+    const r = check(['--check', 'sajat-skill', '-v'])
+    expect(r.stdout + r.stderr).not.toMatch(/minden skill a sajat hatara alatt/)
+    // KONTROLL: broadcastban ugyanez a mondat MEGJELENIK
+    const b = check(['-v'])
+    expect(b.stdout + b.stderr).toMatch(/minden skill a sajat hatara alatt/)
+  })
+
+  it('check modban nincs "N skill lepte tul" fejlec ures lista folott', () => {
+    write('sajat-skill', 520)
+    const r = check(['--check', 'sajat-skill'])
+    expect(r.stderr).not.toMatch(/skill lepte tul a hatarat/)
+  })
+
+  it('ismeretlen skill 66, hianyzo nev 64 -- ugyanaz a szerzodés, mint az `--outline`-nal', () => {
+    expect(check(['--check', 'nincs-ilyen']).code).toBe(66)
+    expect(check(['--check']).code).toBe(64)
+  })
+
+  it('a BROADCAST viselkedese valtozatlan (regresszio)', () => {
+    write('masik-skill', 520)
+    const b = check([])
+    expect(b.code).toBe(3)
+    expect(b.stderr).toMatch(/1 skill lepte tul a hatarat/)
   })
 })
