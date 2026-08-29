@@ -159,7 +159,15 @@ describe('src/agenda-cli.ts -- the shape it promises', () => {
     // where it came from sends the reader to the wrong file.
     const okBlock = src.slice(src.indexOf('ok: true'))
     expect(okBlock).toMatch(/via: process\.env\.AGENDA_VIA/)
-    const failBlock = src.slice(src.indexOf('function fail'), src.indexOf('function fail') + 300)
+    // The window is the FUNCTION, not a character count. It was `+ 300`, and a
+    // comment added inside `fail()` pushed the `via:` line past it -- the guard
+    // then failed while the property it checks was still true. A fixed-width
+    // window over a body that is allowed to grow measures the comment, not the
+    // contract. (Card 7f3e1357.)
+    const failStart = src.indexOf('function fail')
+    const failEnd = src.indexOf('\n}', failStart)
+    expect(failEnd).toBeGreaterThan(failStart)
+    const failBlock = src.slice(failStart, failEnd)
     expect(failBlock).toMatch(/via: process\.env\.AGENDA_VIA/)
   })
 
