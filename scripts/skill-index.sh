@@ -243,7 +243,18 @@ SKILL_BASELINE_NAMES="${SKILL_BASELINE_NAMES:-felderites-ket-listas-proba}"
 # EZ NEM A KAPU KUDARCA: a keret pont azt erte el, hogy MINDEN betoldas kimondott dontes legyen.
 # A VALODI valasz a mag ATRENDEZESE (66 szabaly egy fajlban mar kategoria, nem fajl) -- az kulon
 # kartyan all. Ez az emeles addig old fel, nem helyette.
-SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-417}"   # racsni 2026-08-28: min(427, 417) a bontas utan
+SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-415}"   # racsni 2026-09-02: min(415, 417) a bontas utan
+# 417 -> 415 (2026-09-02, friday, kartya 78124527). BONTAS UTANI ROGZITES, NEM EMELES.
+# A fajl 431-en allt, azaz EGY SORRA a kaputol. Kikerult: a 12. alak (1 eset) a megnevezett
+# listaba; a KET kulonbozo alak, ami mindketto a 13-as szamot viselte, EGY alakka vonva (a 14
+# mar foglalt volt, tehat az osszevonas atszamozas NELKUL oldotta fel az utkozest); es a harom
+# megnevezo lista eggye -- ket fejlec es ket bevezeto szunt meg, tetel egy sem.
+# ES EGY DUPLIKALT SZAM: a magban allo gyakorisagi lista a 8. alakra 7 esetet mondott, a fejlece
+# 10-et. Ugyanaz a szam ket helyen, ket ertekkel -- a MASODIK MASOLAT avult el. A lista kikerult,
+# a szabaly maradt (a suly a fejlec eset-szama). 431 -> 415 sor, 31941 -> 31308 karakter.
+# AMIT A BONTAS NEM AD: TOBB TARTALEKOT. A racsni miatt a kapuig hatralevo hely MINDIG pontosan a
+# keret (ma 15 sor), akar 415-re, akar 350-re bontasz -- a bontas merete a KEMENY korlattol (600)
+# valo tavolsagot es a betoltesi koltseget csokkenti, nem a tartalekot noveli.
 # 427 -> 417 (2026-08-28, dexter). BONTAS UTANI ROGZITES, NEM EMELES. A 11. es a 12. alak
 # TORTENETE a `references/alakok.md`-be kerult; a magban a NEVUK es a TEHERHORDO MONDATUK maradt.
 # A valasztas a fajl SAJAT elve szerint tortent -- ISMETLODES szerint (4 es 1 eset), nem kor szerint.
@@ -270,7 +281,11 @@ SKILL_HARD_LIMIT="${SKILL_HARD_LIMIT:-600}"
 # a BAJT-vilagban all, es a mertekegyseg-valtassal NEM viheto at szamszeruen -- de az ELVE igen,
 # es az ervenyes: az alapvonal csak SZORULHAT. A ket oldal egyutt ezt jelenti, es nem azt, hogy
 # valamelyik szam gyoz.
-SKILL_BASELINE_CHARS="${SKILL_BASELINE_CHARS:-32582}"
+# 32582 -> 31308 (2026-09-02, friday, kartya 78124527). UGYANABBOL A FAJL-ALLAPOTBOL, mint a
+# 415-os sor-alapvonal -- a PAR kikotese miatt: kulon frissitve a ket szam kozul csak az egyiket,
+# az atlagos sorhossz (CHARS/LINES) HAZUDNA, es epp a karakter-keretet tagitana (32582/415 = 78,5
+# a valos 31308/415 = 75,4 helyett). Racsni karakterben is: min(31308, 32582) = 31308.
+SKILL_BASELINE_CHARS="${SKILL_BASELINE_CHARS:-31308}"
 
 # --- KARAKTER-SZAMLALAS, LOCALE-FUGGETLENUL (kartya 38221eef, jarvis merese 2026-08-28).
 #
