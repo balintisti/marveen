@@ -18,8 +18,13 @@
 #                    .bak and silently disable it (review finding, msg 14196).
 #   post-checkout -- git has no pre-checkout, so a branch switch cannot be
 #                    blocked; this ALERTS the main agent and, when the tracked
-#                    tree is clean, auto-reverts to the default branch.
+#                    tree is clean, auto-reverts to THE BRANCH IT CAME FROM.
 #                    Override: MARVEEN_PROD_CHECKOUT_OK=1 git checkout ...
+#                    It used to revert to the first of develop/main/master that
+#                    existed. That premise expired: on 2026-08-29 `develop` was
+#                    510 commits behind the deployed tree and carried neither
+#                    scripts/secret-gate.ts nor scripts/card-comment.sh, so the
+#                    "restore" WAS the strip -- reproduced, see the block below.
 #
 # No operator-specific paths are baked in: the guarded root is derived from
 # the repository itself (the main worktree of the .git the hook lives in), so
@@ -221,31 +226,77 @@ cat > "$HOOK_DIR/post-checkout" <<'EOF'
 PROD_ROOT="${MARVEEN_PROD_ROOT:-$(dirname "$(cd "$(git rev-parse --git-common-dir)" && pwd)")}"
 TOPLEVEL="$(git rev-parse --show-toplevel 2>/dev/null || echo)"
 [ "$TOPLEVEL" = "$PROD_ROOT" ] || exit 0
+# RECURSION GUARD. Our own revert is itself a branch switch and re-enters this
+# hook. It used to be self-limiting because the revert always landed on a
+# develop/main/master name, where the hook exited -- that silence is exactly
+# what made the strip below quiet, so the exit is now explicit and narrow.
+[ "${MARVEEN_GUARD_REVERTING:-0}" = "1" ] && exit 0
 BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo ismeretlen)"
-case "$BRANCH" in develop|main|master) exit 0 ;; esac
 [ "${MARVEEN_PROD_CHECKOUT_OK:-0}" = "1" ] && exit 0
-# Revert target: the deployment's default branch, derived, not assumed.
+# REVERT TARGET: THE BRANCH WE CAME FROM, NOT A TRUNK NAME.
+#
+# Until 2026-08-29 this took the first existing of develop/main/master. The
+# comment claimed the target was "derived, not assumed"; the code assumed a
+# name list. When the deployment stopped living on those names the guard did
+# not merely fail to prevent a strip -- IT PERFORMED ONE. Reproduced in a
+# throwaway repo with this hook verbatim: asked for `some/other-branch`,
+# ended on `develop`, and secret-gate.ts + card-comment.sh were gone from the
+# working tree. (marveen found the premise; friday reproduced it.)
+#
+# The target is read from the HEAD REFLOG, which records the switch BY NAME
+# ("checkout: moving from <FROM> to <TO>") and is already written when this
+# hook runs. It needs no opinion about which branch is the trunk -- so this
+# fix does not depend on, and does not pre-empt, the separate decision about
+# the trunk names.
+#
+# TWO ALTERNATIVES WERE MEASURED AND REJECTED on 2026-08-29, both because they
+# answer a near-miss question:
+#   `@{-1}`  -- a SEMANTIC "previous branch". On develop -> feat -> develop it
+#               returned `develop`, the branch we had just switched TO.
+#   `$1` + `--points-at` -- $1 (the previous HEAD sha) is unambiguous, but
+#               mapping a sha back to a name is not: any second branch sitting
+#               on the same tip (a backup ref, a twin, or the `-b` we just
+#               created) makes it ambiguous. Refusing on that re-opened the
+#               strip -- measured: the files were gone and the guard declined.
+#               The reflog names the branch, so a twin ref cannot confuse it.
+#
+# $1 IS STILL USED, as a cross-check rather than as the answer: the resolved
+# branch must still point at the commit we actually left. If someone moved it
+# in between, restoring it would restore something else under a familiar name.
+#
+# Resolved to a branch NAME, never checked out as a sha: a detached prod tree
+# is its own outage. When the name is not knowable the guard REFUSES and says
+# why. A guard that restores the WRONG tree is worse than one that restores
+# nothing: an unreverted switch is visible, a wrongly "restored" tree is not.
+PREV_SHA="${1:-}"
 HOME_BRANCH=""
-for b in develop main master; do
-  if git show-ref --verify --quiet "refs/heads/$b"; then HOME_BRANCH="$b"; break; fi
-done
+HOME_WHY=""
+# Branch names cannot contain spaces (git check-ref-format), so " to " cannot
+# occur inside either name and this split has exactly one reading.
+PREV_REF="$(git reflog show HEAD -1 2>/dev/null | sed -n 's/.*checkout: moving from \(.*\) to .*/\1/p')"
+if [ -z "$PREV_REF" ]; then
+  HOME_WHY="a HEAD reflog nem mondja meg, honnan jottunk (ki van kapcsolva a reflog?)"
+elif ! git show-ref --verify --quiet "refs/heads/$PREV_REF"; then
+  HOME_WHY="'$PREV_REF' nem letezo lokalis ag (detached HEAD volt, vagy azota torolve)"
+elif [ -n "$PREV_SHA" ] && [ "$(git rev-parse "refs/heads/$PREV_REF" 2>/dev/null)" != "$PREV_SHA" ]; then
+  HOME_WHY="'$PREV_REF' azota elmozdult (mar nem a $(printf '%s' "$PREV_SHA" | cut -c1-8) commiton all)"
+else
+  HOME_BRANCH="$PREV_REF"
+fi
 # Auto-revert only when the TRACKED tree is clean: a guard must never lose
 # work. Untracked files deliberately do not count (--untracked-files=no): a
 # branch switch never touches them, and on a live tree untracked host-local
 # files are the steady state -- counting them would make this revert never
-# fire (measured 2026-08-22). Recursion is self-limiting: the revert lands on
-# the home branch, where this hook exits at the case-guard above.
+# fire (measured 2026-08-22).
 REVERTED="nem"
 if [ -z "$HOME_BRANCH" ]; then
-  REVERTED="nem (nincs develop/main/master ag)"
-elif [ -z "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
-  if git checkout "$HOME_BRANCH" -q 2>/dev/null; then
-    REVERTED="igen ($HOME_BRANCH)"
-  else
-    REVERTED="nem sikerult (checkout $HOME_BRANCH hibazott)"
-  fi
-else
+  REVERTED="NEM -- a visszateresi pont nem allapithato meg: $HOME_WHY (kezi beavatkozas)"
+elif [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
   REVERTED="nem (a fa DIRTY, kezi beavatkozas kell)"
+elif MARVEEN_GUARD_REVERTING=1 git checkout "$HOME_BRANCH" -q 2>/dev/null; then
+  REVERTED="igen ($HOME_BRANCH)"
+else
+  REVERTED="nem sikerult (checkout $HOME_BRANCH hibazott)"
 fi
 TOKEN_FILE="$PROD_ROOT/store/.dashboard-token"
 [ -r "$TOKEN_FILE" ] || exit 0
