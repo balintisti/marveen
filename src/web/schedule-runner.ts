@@ -340,6 +340,40 @@ function loadScheduleLastRun(): void {
   } catch { /* no file yet / unreadable -- start empty */ }
 }
 
+/**
+ * The last time the scheduler FIRED a task -- any type, read from disk.
+ *
+ * WHY THIS EXISTS (card 6b6c7e93). `/api/schedules` returned run evidence for
+ * `command` tasks only, because only those have an exit code to judge. So for every
+ * agent-prompt schedule -- task, heartbeat, dream-engine -- the endpoint said
+ * nothing at all, and an agent asking "did my scheduled task run?" got a clean
+ * silence indistinguishable from "it never fired".
+ *
+ * The data was already here the whole time: the runner persists this map so the
+ * catch-up window does not double-fire across a restart. It was recorded and never
+ * surfaced -- measured 2026-09-02, when `upstream-szinkron` (type task) held
+ * 2026-08-31 09:00:07 on disk while the API offered nothing for it. That same card
+ * had been closed hours earlier on other evidence, correctly, but on the belief
+ * that no run record existed.
+ *
+ * DELIVERY, NOT SUCCESS, and the name says so. The scheduler injects a prompt into
+ * a pane; it cannot know whether the agent did anything with it. Reporting this as
+ * a "last run OK" would repeat the `delivered` != `processed` error this fleet
+ * already has written down for inter-agent messages.
+ *
+ * Returns undefined when the task has never fired -- that distinction is the whole
+ * point, so it must not be flattened to 0 or to "now".
+ */
+export function readScheduleLastFired(name: string): number | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(SCHEDULE_LAST_RUN_PATH, 'utf-8')) as Record<string, unknown>
+    const v = raw[name]
+    return typeof v === 'number' && Number.isFinite(v) ? v : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function persistScheduleLastRun(): void {
   try {
     atomicWriteFileSync(SCHEDULE_LAST_RUN_PATH, JSON.stringify(Object.fromEntries(scheduleLastRun), null, 2))
