@@ -318,6 +318,50 @@ for a in $GUARDED_AGENTS; do
 done
 running_agents="${running_agents# }"
 
+# AND WHO HAS ALREADY STOPPED? A message is the ONLY thing that starts an agent turn,
+# so telling a stopped agent to stop COSTS a turn and changes nothing. On 2026-08-30
+# this guard fired at 16:32, 00:22 and 00:32 -- the last two ten minutes apart -- to all
+# six agents while the whole fleet had been parked since 16:20 with every workcheck.json
+# at {"kind":"none"}. Weekly went 93% -> 95% with nobody working. Four agents measured it
+# independently within one minute (card b3e2d79f), and marveen unloaded the guard.
+#
+# THE GUARD WAS SPENDING THE THING IT EXISTS TO PROTECT. Not a threshold bug: it had no
+# way to tell "still working" from "already stopped", so its own alarm was the load.
+#
+# `workcheck.json` is the field the idle-guard already reads to decide the same question
+# (src/web/idle-agent.ts), so this introduces no new mechanism and no new file.
+#
+# THE SKIP IS LOUD, NOT SILENT. A guard that quietly protects nobody looks exactly like a
+# guard with nothing to do -- that shape is why the empty-roster REFUSING branch above
+# exists, and a silent skip would reintroduce it one level down.
+_agent_parked() {
+  # Parked == the agent itself declared it has no work. Anything else (missing file,
+  # unreadable, unparseable, any other kind) is NOT parked: a guard must fail toward
+  # still being able to stop someone, never toward silence.
+  python3 - "$INSTALL_DIR/agents/$1/workcheck.json" <<'WCHK' 2>/dev/null
+import json,sys
+try:
+    sys.exit(0 if json.load(open(sys.argv[1])).get('kind') == 'none' else 1)
+except Exception:
+    sys.exit(1)
+WCHK
+}
+if [ -n "$running_agents" ]; then
+  awake="" parked=""
+  for a in $running_agents; do
+    if _agent_parked "$a"; then parked="$parked $a"; else awake="$awake $a"; fi
+  done
+  running_agents="${awake# }"
+  if [ -n "$parked" ]; then
+    log "SKIPPING already-parked agents (workcheck kind=none):${parked}"
+    say "kihagyva (mar all, workcheck kind=none):${parked}"
+  fi
+  if [ -z "$running_agents" ]; then
+    log "every running agent is already parked -- no agent message sent (the owner is still notified)"
+    say "MINDENKI ALL: agensnek nem megy uzenet, a gazda ertesitese valtozatlan"
+  fi
+fi
+
 if [ "$PCT_INT" -ge "$HARD_PCT" ]; then
   say "LEVEL: HARD"
   if [ "$(already_fired hard)" = "no" ]; then
