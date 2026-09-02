@@ -27,7 +27,8 @@ vi.mock('../web/agent-config.js', async (orig) => {
   return { ...actual, agentDir: () => agentRoot }
 })
 
-const { ensureAgentHooks } = await import('../web/agent-scaffold.js')
+const { ensureAgentHooks, ensureAgentStalenessHook, ensureEgressGate,
+        ensureGovernanceGateCommands } = await import('../web/agent-scaffold.js')
 
 describe('json-dup-keys BE VAN KOTVE az agent-settings olvasasaba (6872b0aa)', () => {
   beforeEach(() => {
@@ -58,4 +59,54 @@ describe('json-dup-keys BE VAN KOTVE az agent-settings olvasasaba (6872b0aa)', (
     ensureAgentHooks('proba-agens')
     expect(warns.find(w => String(w.msg).includes('duplicate JSON keys'))).toBeUndefined()
   })
+})
+
+// ---------------------------------------------------------------------------
+// A BEKOTES OTBOL KETTOT FEDETT -- kartya e3f8f2fd.
+//
+// Egy AST-cenzus megmerte, hany fuggveny irja a `settingsPath`-t EBBEN a fajlban:
+// OT, nem ketto. A masik harom ugyanazt a read-modify-write mintat vegezte egy
+// csupasz egysoros parse-szal, tehat pontosan ugyanaz a defektus allt fenn benne.
+// A javitas nem a beszurt blokk negyedik-otodik masolata, hanem egy kozos
+// ellenorzott olvasas: az OR AZ UTBAN van, nem a szerzo emlekezeteben.
+// ---------------------------------------------------------------------------
+describe('a dup-key or MIND AZ OT settingsPath-irot fedi (e3f8f2fd)', () => {
+  beforeEach(() => {
+    warns.length = 0
+    agentRoot = mkdtempSync(join(tmpdir(), 'dupwire5-'))
+    mkdirSync(join(agentRoot, '.claude'), { recursive: true })
+  })
+  afterEach(() => rmSync(agentRoot, { recursive: true, force: true }))
+
+  const DUP = '{\n "hooks": {\n  "PreToolUse": [{"a":1}],\n  "PreToolUse": [{"b":2}]\n }\n}\n'
+  const CLEAN = '{\n "hooks": {\n  "PreToolUse": [{"a":1}],\n  "PostToolUse": [{"b":2}]\n }\n}\n'
+  const write = (body: string) =>
+    writeFileSync(join(agentRoot, '.claude', 'settings.json'), body)
+  const fired = () => warns.filter(w => String(w.msg).includes('duplicate JSON keys'))
+
+  // Egyenkent, mert egy osszevont "valamelyik megszolal" allitas AKKOR IS zold lenne,
+  // ha csak az egyik van bekotve -- vagyis pont a mert defektust engedne at.
+  const SITES: Array<[string, (n: string) => boolean]> = [
+    ['ensureAgentStalenessHook', ensureAgentStalenessHook],
+    ['ensureEgressGate', ensureEgressGate],
+    ['ensureGovernanceGateCommands', ensureGovernanceGateCommands],
+  ]
+
+  for (const [label, fn] of SITES) {
+    it(`POZITIV: ${label} megszolal a duplikatumra, es megnevezi MAGAT`, () => {
+      write(DUP)
+      fn('proba-agens')
+      const hit = fired()
+      expect(hit.length, `nem szolalt meg; warns=${JSON.stringify(warns)}`).toBeGreaterThan(0)
+      // A `site` mezo azert kell, mert ot hivo eseten a puszta "megszolalt valaki"
+      // nem mondja meg, MELYIK -- es a naplo olvasoja ebbol dolgozik.
+      expect(hit.map(h => h.ctx.site)).toContain(label)
+    })
+
+    it(`NEGATIV KONTROLL: ${label} duplikatum NELKUL nem szolal meg`, () => {
+      write(CLEAN)
+      fn('proba-agens')
+      expect(fired()).toEqual([])
+    })
+  }
 })
