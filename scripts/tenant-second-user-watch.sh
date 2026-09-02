@@ -36,6 +36,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="/Users/isti/Projektek/sajat-crm/sajat-crm/backend/api/.env"
 SQL_FILE="$ROOT/scripts/sql/tenant-second-user.sql"
+DEFAULT_SQL="$ROOT/scripts/sql/tenant-second-user.sql"
 STATE_FILE="$ROOT/store/tenant-second-user-watch.state"
 # A riasztas cimzettje kapcsolo, KIZAROLAG azert, hogy a riaszto ut MAGA is tesztelheto legyen
 # hamis riasztas nelkul. Ugyanaz az indok, mint a vaz `RM_TEST_NO_READONLY` kapcsolojanal:
@@ -119,7 +120,25 @@ fi
 # AZ ATMENET az esemeny, nem az allapot: kulonben minden futas ujrakuldene ugyanazt, es a
 # huszadik utan senki nem olvasna el. Az ALLAPOT viszont minden futasban kiirodik (fent).
 echo "VALTOZAS: a nevezo MEGDOLT. Ertesites megy egyszer."
-SEND_OUT="$(printf '%s\n' "A tenant-nevezo megdolt: $SECOND berlonek van masodik felhasznaloja, $INVITES meghivas letezik. Tobb mai HIGH lelet sulya ezen a nullan allt (110 kapuzatlan iro vegpont, 4903 elsodleges cim, 729 arva ertek, Megtekinto-szerepkor). Ujra kell nezni oket." \
+# A SZAMOK EREDETE A TORZSBEN UTAZIK, NEM A FEJLECBEN -- ES EZ MERT DEFEKTUS-JAVITAS.
+# 2026-09-02 13:50-kor a sajat proba-riasztasom (fixture-SQL, kitalalt 3/7) VISSZAERT hozzam
+# egy kesobbi fordulóban, es SEMMI nem volt benne, ami elvalasztotta volna egy valoditol.
+# Ha marveenhez megy, vagy ha egy restart utan olvasom, tobb HIGH leletet sulyoztunk volna
+# ujra KITALALT szamokon. A lap sajat torvenye: a legerosebb mondat utazik, a fejlec nem --
+# tehat a proba-jelolesnek MAGABAN a mondatban kell allnia.
+PROV=""
+if [ "$SQL_FILE" != "$DEFAULT_SQL" ]; then
+  PROV="[PROBA -- NEM ELES SZAM] A szamok NEM az alapertelmezett lekerdezesbol jonnek, hanem innen: $SQL_FILE. Ne sulyozz ujra semmit ez alapjan. "
+fi
+# A KIKULDENDO SZOVEG MINDIG KIIRODIK, MIELOTT ELMEGY. Ket okbol, es mindketto mert:
+#  - a `exit 6` ag azt kéri, hogy "kezzel kell tovabbadni" -- eddig a szoveget NEM adta oda hozza
+#  - kulonben a proba-jeloles agat nem lehet ellenorizni kikuldes NELKUL, es egy jelolest, amit
+#    csak valodi kuldessel lehet tesztelni, senki nem fog tesztelni
+ALERT_BODY="${PROV}A tenant-nevezo megdolt: $SECOND berlonek van masodik felhasznaloja, $INVITES meghivas letezik. Tobb mai HIGH lelet sulya ezen a nullan allt (110 kapuzatlan iro vegpont, 4903 elsodleges cim, 729 arva ertek, Megtekinto-szerepkor). Ujra kell nezni oket."
+echo "--- a riasztas szovege, ahogy elmegy ---"
+echo "$ALERT_BODY"
+echo "----------------------------------------"
+SEND_OUT="$(printf '%s\n' "$ALERT_BODY" \
   | bash "$MARVEEN_ROOT/scripts/agent-msg.sh" mandark "$NOTIFY_TO" - 2>&1)"
 echo "$SEND_OUT" | grep -E 'OK id|FAIL|NEM KULDTEM' || true
 
