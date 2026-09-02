@@ -9,7 +9,7 @@
  */
 import Database from 'better-sqlite3'
 import { join } from 'node:path'
-import { STORE_DIR } from './config.js'
+import { STORE_DIR, formatLocalStamp } from './config.js'
 import {
   dailyCardFlow, cardFlowConvergence, CONVERGENCE_DEFAULT,
   type CardRow, type CardFlowEvent,
@@ -38,6 +38,7 @@ try {
     ok: true,
     via: process.env.CARDFLOW_VIA ?? 'ismeretlen',
     measured_at: new Date(now).toISOString(),
+    measured_at_local: formatLocalStamp(now),
     // A HAROM SZAM -- es kimondva, hogy KETTO FOLYAM es EGY SZINT.
     numbers: {
       created_last_full_day: utolso?.created ?? null,

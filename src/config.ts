@@ -104,6 +104,34 @@ export const APP_TZ = appTz.tz
 // -> circular), so the loud reporting lives in startScheduleRunner.
 export const APP_TZ_INVALID = appTz.invalid
 
+/**
+ * A human-readable stamp in the install's own zone: "2026-09-02 13:10:03 CEST".
+ *
+ * WHY IT LIVES HERE and not in each caller: this file is the zone authority, and
+ * its own comment above says the ~15 hardcoded 'Europe/Budapest' literals were
+ * replaced precisely so the zone changes in ONE place. A formatter that takes the
+ * zone from anywhere else re-introduces that.
+ *
+ * WHY IT EXISTS AT ALL (card 9ca92d74). The capacity and card-flow CLIs emitted
+ * `measured_at` as UTC only, while the snapshot they read carries BOTH
+ * `generated_at` (UTC) and `generated_at_local`. On 2026-08-29 two agents read two
+ * DIFFERENT real fields about the same instant and appeared to contradict each
+ * other for two hours; neither was wrong. The shape matches `generated_at_local`
+ * deliberately, so the two can be compared by eye without conversion.
+ *
+ * The UTC field stays: it is the machine-comparable one, and `Z` already says so.
+ * This is an ADDITION, never a replacement.
+ */
+export function formatLocalStamp(ms: number, tz: string = APP_TZ): string {
+  const p = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false, timeZoneName: 'short',
+  }).formatToParts(new Date(ms))
+  const g = (t: string) => p.find((x) => x.type === t)?.value ?? ''
+  return `${g('year')}-${g('month')}-${g('day')} ${g('hour')}:${g('minute')}:${g('second')} ${g('timeZoneName')}`
+}
+
 // The model new agents are scaffolded with, and the model the background worker
 // sessions run. One key so an install that standardises on a newer model does
 // not have to patch three separate literals in src/ (which an update would then
