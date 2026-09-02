@@ -93,6 +93,56 @@ fi
 # amikor mar mindketto rajta van. Ket kulonbozo kerdesre valaszolnak: a
 # `__STAMP__` azt, AMIT a szerzo mert, a labjegyzet azt, AMIKOR a gep kuldott.
 
+# --- KARTYA-ID FELOLDAS A KULDES ELOTT (2026-09-02, jarvis javaslata) ---
+# 2026-09-02-an NEGY azonosito-alaku hibat kovettem el egy napon, es MIND A NEGYET
+# lefele kaptak el, egyiket sem en. Az utolso egy KITALALT kartya-id volt egy
+# uzenetben, ami epp azt allitotta, hogy megnyitottam azt a kartyat.
+#
+# jarvis megfogalmazasa, es ezert kod es nem szokas: "egy kartya-id MECHANIKUSAN
+# feloldhato a kuldes elott". A `card-comment.sh` mar 404-el egy rossz kartyara;
+# ez a script eddig ranezett sem.
+#
+# MIERT CSAK KARTYA-ALLITO KORNYEZETBEN: egy kartya-id es egy rovid commit-hash
+# UGYANAZ a nyolc-hex alak. Minden 8-hexre tuzelve ez az or a commit-hasheken
+# allandoan szolna, es par kor alatt zajja valna -- pontosan az a bukas, amit a
+# lapunk mashol mar rogzit. Ezert CSAK azt nezzuk, amit a szoveg maga KARTYANAK
+# nevez (`card <id>` / `kartya <id>` / `kártya <id>`, backtickkel vagy anelkul).
+#
+# NEM BLOKKOL, FIGYELMEZTET: egy archivalt kartyara valo jogos hivatkozas is
+# feloldhatatlan, es egy fontos uzenetet nem allitunk meg egy labjegyzet miatt.
+#
+# ES HA NEM TUD MERNI, AZT KIMONDJA. Egy ellenorzes, ami elerhetetlen API mellett
+# CSENDBEN atenged, megkulonboztethetetlen attol, hogy nincs is -- ez a lap
+# vissza-visszatero alakja. Ilyenkor a sor azt mondja, hogy NEM ELLENORIZTE.
+#
+# A figyelmeztetes STDOUT-ra ES stderr-re is megy: a kuldok tobbsege
+# `grep -E 'OK id|FAIL|NEM KULDTEM'`-mel olvassa a kimenetet, es egy csak-stderr
+# sor abbol kiesik. A grep-horgony ezert: NEM FELOLDHATO KARTYA-ID.
+_CARD_IDS="$(printf '%s' "$C" | grep -oiE '(card|kartya|kártya)s?[[:space:]]+`?[0-9a-f]{8}`?' | grep -oE '[0-9a-f]{8}' | sort -u)"
+if [ -n "$_CARD_IDS" ]; then
+  # A valasz ~2 MB. NEM megy hej-valtozoba es NEM megy kornyezeten at: a
+  # kornyezet merethatara (ARG_MAX) alatt a python hivas E2BIG-gel elhal, es a
+  # 2026-09-02-i elso valtozatom pontosan ezen bukott -- a "nem futott le" agra
+  # esett MINDEN esetben, tehat sosem ellenorzott semmit. FAJLON keresztul megy.
+  _KBF="$(mktemp -t agentmsg-kb)"
+  curl -s --max-time 10 -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
+       "http://localhost:${PORT}/api/kanban" -o "$_KBF" 2>/dev/null || true
+  if [ ! -s "$_KBF" ] || [ "$(head -c1 "$_KBF")" != "[" ]; then
+    _m="NEM FELOLDHATO KARTYA-ID: az ellenorzes NEM FUTOTT LE (a kanban API nem valaszolt). A szovegben emlitett kartya-id-k nincsenek igazolva."
+    echo "$_m"; echo "$_m" >&2
+  else
+    _BAD="$(CARDS="$_CARD_IDS" KBF="$_KBF" python3 -c '
+import json,os
+ids={c["id"][:8] for c in json.load(open(os.environ["KBF"],encoding="utf-8"))}
+print(" ".join(t for t in os.environ["CARDS"].split() if t not in ids))' 2>/dev/null || true)"
+    if [ -n "$_BAD" ]; then
+      _m="NEM FELOLDHATO KARTYA-ID: $_BAD -- a szoveg kartyanak nevezi, de a tablan nincs ilyen. Ha commit-hash, fogalmazd at; ha archivalt kartya, hagyd figyelmen kivul."
+      echo "$_m"; echo "$_m" >&2
+    fi
+  fi
+  rm -f "$_KBF"
+fi
+
 # --- PREFLIGHT: the recipient's queue BEFORE we add to it (2026-08-21) ---
 # The post-send warning below is real but arrives too late: by the time the
 # sender reads it the message is already in the queue, so the rule depends on
