@@ -11,6 +11,48 @@ import { sanitizeCapabilityTag, CAPABILITY_TAG_MAX_PER_AGENT } from '../prompt-s
 import { logger } from '../logger.js'
 import { findDuplicateJsonKeys } from './json-dup-keys.js'
 
+/**
+ * Read + dup-key-check + parse an agent settings file, in that order.
+ *
+ * WHY A HELPER AND NOT THE INLINE PATTERN AGAIN. `JSON.parse` keeps only the LAST
+ * occurrence of a duplicated key, so a settings file with two "PreToolUse" blocks
+ * silently drops every hook in the earlier one -- guards die with no error and no
+ * symptom until the action they gated goes through unchecked. The evidence exists
+ * ONLY in the raw text, so it has to be checked BEFORE parsing.
+ *
+ * Card 6872b0aa added that check at two call sites. An AST census for card e3f8f2fd
+ * then measured how many functions in this file write `settingsPath`: FIVE, not two.
+ * The other three did the identical read-modify-write with a bare one-line parse.
+ * Copying the inline block a third, fourth and fifth time would leave the same trap
+ * for the sixth writer, so the check lives in the path itself -- a new writer gets
+ * it by calling this, not by remembering.
+ *
+ * Returns null when the file is absent or unparseable, which every caller already
+ * treats as "nothing to merge".
+ */
+function readAgentSettingsChecked(
+  settingsPath: string,
+  agent: string,
+  site: string,
+): Record<string, unknown> | null {
+  let raw: string
+  try {
+    raw = readFileSync(settingsPath, 'utf-8')
+  } catch {
+    return null
+  }
+  const dupKeys = findDuplicateJsonKeys(raw)
+  if (dupKeys.length > 0) {
+    logger.warn({ agent, settingsPath, dupKeys, site },
+      'duplicate JSON keys in agent settings -- JSON.parse keeps only the last occurrence, hooks in the earlier block are silently dead')
+  }
+  try {
+    return JSON.parse(raw) as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
 // Resolve the base URL agents should use to reach the dashboard API.
 // DASHBOARD_PUBLIC_URL wins when set (distributed / k3s deployment); falls
 // back to localhost for single-host installs. Exported so heartbeat-agent-
@@ -324,7 +366,9 @@ export function ensureAgentStalenessHook(name: string): boolean {
   const settingsPath = agentSettingsPath(name)
   let settings: Record<string, unknown> = {}
   if (existsSync(settingsPath)) {
-    try { settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) } catch { return false }
+    const parsed = readAgentSettingsChecked(settingsPath, name, 'ensureAgentStalenessHook')
+    if (parsed === null) return false
+    settings = parsed
   }
   const hooks = (settings.hooks && typeof settings.hooks === 'object')
     ? settings.hooks as Record<string, unknown>
@@ -519,7 +563,9 @@ export function ensureEgressGate(name: string): boolean {
   const settingsPath = agentSettingsPath(name)
   let settings: Record<string, unknown> = {}
   if (existsSync(settingsPath)) {
-    try { settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) } catch { return false }
+    const parsed = readAgentSettingsChecked(settingsPath, name, 'ensureEgressGate')
+    if (parsed === null) return false
+    settings = parsed
   }
   const command = hookCommand(join(PROJECT_ROOT, 'scripts', 'hooks', 'egress-gate.mjs'))
   const hooks = (settings.hooks && typeof settings.hooks === 'object')
@@ -714,7 +760,9 @@ export function ensureGovernanceGateCommands(name: string): boolean {
   const settingsPath = agentSettingsPath(name)
   if (!existsSync(settingsPath)) return false
   let settings: Record<string, unknown> = {}
-  try { settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) } catch { return false }
+  const parsed = readAgentSettingsChecked(settingsPath, name, 'ensureGovernanceGateCommands')
+    if (parsed === null) return false
+    settings = parsed
   const emailCmd = hookCommand(join(PROJECT_ROOT, 'scripts', 'email-send-gate.mjs'))
   const paceCmd = hookCommand(join(PROJECT_ROOT, 'scripts', 'self-pace-gate.mjs'))
   const hooks = (settings.hooks && typeof settings.hooks === 'object')
