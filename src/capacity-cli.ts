@@ -7,7 +7,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { STORE_DIR } from './config.js'
+import { STORE_DIR, formatLocalStamp } from './config.js'
 import { sustainedSpareCapacity, paceRatio, SPARE_CAPACITY_DEFAULT, type CapacitySnapshot } from './capacity-report.js'
 
 function emit(o: unknown): never { process.stdout.write(JSON.stringify(o) + '\n'); process.exit(0) }
@@ -48,6 +48,7 @@ try {
     ok: true,
     via: process.env.CAPACITY_VIA ?? 'ismeretlen',
     measured_at: new Date(now).toISOString(),
+    measured_at_local: formatLocalStamp(now),
     source: src ?? 'ismeretlen',
     windows: {
       five_hour: latest!.fiveHour?.usedPercent ?? null,
