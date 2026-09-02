@@ -1354,6 +1354,25 @@ describe('the pending notice measures the recipient pane instead of asserting it
     expect(msg).toMatch(/NEM MEGALLAPITHATO/)
     expect(msg).not.toMatch(/ne kuldd ujra/i)
   })
+
+  it('STAMPS the reading and says the notice itself may be stale', () => {
+    // Card 1d800670, didi 2026-09-02: notice 8164 sat 91 minutes in the very queue
+    // it reports (12:17:28 -> 13:49:25), and the message it named had been delivered
+    // 69 minutes before it arrived. Every line was true at birth and false on arrival.
+    const msg = withState('busy')
+    expect(msg).toMatch(/MERVE \d{2}:\d{2}:\d{2}-kor/)
+    expect(msg).toMatch(/avult lehet/)
+  })
+
+  it('hands over a FRESH measurement instead of asking the reader to discount a stale one', () => {
+    // The stamp alone would repeat the shape this board keeps rejecting: a fix that
+    // works only if the reader remembers to compensate. The notice must name the
+    // command that answers the question today.
+    const msg = withState('busy')
+    expect(msg).toMatch(/MERD UJRA/)
+    expect(msg).toContain('agent_messages')
+    expect(msg).toContain('friday')
+  })
 })
 
 // AND THAT THE WATCHER ACTUALLY MEASURES IT -- the function above can be perfect

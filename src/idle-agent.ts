@@ -724,12 +724,26 @@ export function buildPendingStillWaitingNotice(
         'el-e a cimzett munkamenete.',
       ]
 
+  // EVERY LINE ABOVE IS TRUE AT `nowMs` AND ONLY THEN -- card 1d800670, didi 2026-09-02.
+  // This notice RIDES THE QUEUE IT REPORTS, so it is slowest exactly when it fires, and
+  // slowest of all when the target session is ABSENT and nothing drains the queue at all --
+  // which is the one case where "do not resend" does harm. Measured instance: notice 8164
+  // sat 91 minutes (12:17:28 -> 13:49:25), and the message it named had been delivered 69
+  // minutes before it arrived. So the reading is stamped, and the closing advice hands over
+  // a FRESH measurement instead of asking the reader to discount a stale one.
+  const stamp = new Date(nowMs).toLocaleTimeString('hu-HU', { hour12: false })
   return [
-    `[uzenet-or] A(z) "${sender}" ${rows.length} elkuldott uzenete MEG MINDIG nem kezbesult:`,
+    `[uzenet-or] A(z) "${sender}" ${rows.length} elkuldott uzenete MEG MINDIG nem kezbesult`,
+    `            (MERVE ${stamp}-kor -- ez a jelentes maga is sorban all, tehat MOST mar avult lehet):`,
     '',
     ...rows.slice(0, 5).map(line),
     '',
     ...advice,
+    '',
+    'MIELOTT BARMIT TESZEL, MERD UJRA -- egy sor, es a mai allapotot adja:',
+    "  python3 -c \"import sqlite3;c=sqlite3.connect('file:store/claudeclaw.db?mode=ro',uri=True);"
+      + "print(list(c.execute(\\\"select id,to_agent,status from agent_messages where from_agent=?"
+      + " and status in ('pending','failed')\\\", ('" + '${sender}' + "',))))\"",
     '',
     'Amit erdemes: ha DONTES vagy LELET volt benne, tedd a KARTYARA is. A kartya nem all',
     'sorba -- a cimzett akkor is latja, amikor a levelet meg nem olvasta el.',
