@@ -103,7 +103,26 @@ echo "NEVEZO (kontroll): $ORGS szervezet / $USERS felhasznalo -- nem-nulla, teha
 PREV="none"; [ -f "$STATE_FILE" ] && PREV="$(cat "$STATE_FILE" 2>/dev/null || echo none)"
 # A 'breached-undelivered' SZANDEKOSAN nem szamit ertesitettnek: az ertesites megkiserlese
 # nem ertesites.
-mkdir -p "$(dirname "$STATE_FILE")" && printf '%s\n' "$VERDICT" > "$STATE_FILE"
+#
+# ES EZT A SAJAT KODOM SERTETTE MEG, KET SORRAL LEJJEBB (didi talalta, kod-olvasasbol; en
+# futassal reprodukaltam). A regi alak MAR ITT kiirta a 'breached'-et -- vagyis egy meg meg nem
+# tortent ertesitest jegyzett le megtortentkent. Ha a folyamat a kuldesi ablakban HAL MEG (az
+# agent-msg.sh beakad es az utemezo megoli, a gep elalszik, SIGKILL), az allapot 'breached'
+# marad, a kovetkezo futas "mar ertesitve"-t olvas, exit 2 -- **es SOHA nem kuld. Hat oranként,
+# orokre, csendben, mikozben a kartya azt allitja, hogy figyelve van.**
+#
+# Reprodukalva: beakado kuldes + SIGKILL -> az allapot 'breached'; a kovetkezo futas nem kuldott.
+#
+# A JAVITAS SORRENDI: itt a megdoles 'breached-undelivered'-kent iródik (= megkiserelve, nem
+# ertesitve), es a 'breached' KIZAROLAG az `OK id=` utan. **Ezzel a bukas iranya megfordul:**
+# eddig CSENDRE bukott, mostantol DUPLIKATUMRA. Egy figyelonel a duplikatum jobb a csendnel --
+# ugyanaz az ervelés, mint a heartbeat-alaku nemasagnal.
+mkdir -p "$(dirname "$STATE_FILE")"
+if [ "$VERDICT" = "clear" ]; then
+  printf '%s\n' "clear" > "$STATE_FILE"
+else
+  printf '%s\n' "breached-undelivered" > "$STATE_FILE"
+fi
 
 if [ "$VERDICT" = "clear" ]; then
   echo "OK: a nevezo all -- egyetlen berlon belul sincs masodik fel."
@@ -150,7 +169,11 @@ if ! printf '%s' "$SEND_OUT" | grep -q 'OK id='; then
   echo "A NEVEZO MEGDOLT, ES AZ ERTESITES NEM MENT KI. Kezzel kell tovabbadni." >&2
   # Az allapot NEM marad 'breached': kulonben a kovetkezo futas mar "mar ertesitve"-nek
   # olvasna, es az egyetlen kikuldesi kiserlet is elveszne.
-  printf '%s\n' "breached-undelivered" > "$STATE_FILE"
+  # az allapot mar 'breached-undelivered' (fent), tehat a kovetkezo futas UJRA PROBALJA
   exit 6
 fi
+
+# ES CSAK ITT: a kuldes IGAZOLTAN megtortent (`OK id=`). Ez az egyetlen hely, ahol az allapot
+# 'ertesitve'-re valthat.
+printf '%s\n' "breached" > "$STATE_FILE"
 exit 2
