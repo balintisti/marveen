@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import {
   listPendingTaskRetries, deletePendingTaskRetryById, listTaskRunHistory,
 } from '../../db.js'
-import { MAIN_AGENT_ID, currentBotName } from '../../config.js'
+import { MAIN_AGENT_ID, currentBotName, formatLocalStamp } from '../../config.js'
 import { runAgent } from '../../agent.js'
 import { logger } from '../../logger.js'
 import { toPendingRetryView } from '../../pending-retries.js'
@@ -17,7 +17,7 @@ import {
   SCHEDULED_TASKS_DIR, MAX_SCHEDULED_TASK_PROMPT_LEN,
   listScheduledTasks, writeScheduledTask,
 } from '../scheduled-tasks-io.js'
-import { runScheduledTaskNow } from '../schedule-runner.js'
+import { runScheduledTaskNow, readScheduleLastFired } from '../schedule-runner.js'
 import type { RouteContext } from './types.js'
 import { readCommandHealth } from '../command-task.js'
 import { assessCommandHealth } from '../command-health-age.js'
@@ -118,11 +118,31 @@ Az eredmeny CSAK a kibovitett prompt szovege legyen, semmi mas. Ne hasznalj code
     // feladat SAJAT cronjabol szamoljuk (lasd command-health-age.ts); fix
     // kuszob nem mukodne, mert egy tiz-percenkenti es egy heti feladat
     // elavulasa nem ugyanaz a szam.
-    const tasks = listScheduledTasks().map((t) =>
-      t.type === 'command'
-        ? { ...t, health: assessCommandHealth(readCommandHealth(t.name), t.schedule, Date.now()) }
-        : t,
-    )
+    // AND EVERY TYPE CARRIES ITS LAST FIRING (card 6b6c7e93). Run evidence used to
+    // exist for `command` only -- the one type with an exit code -- so an agent asking
+    // whether its own scheduled task fired got silence for `task`, `heartbeat` and
+    // `dream-engine` alike. The scheduler had the answer on disk the whole time; it
+    // was simply never returned.
+    //
+    // FIRED, NOT SUCCEEDED. For an agent-prompt schedule the runner injects text into
+    // a pane and cannot know what the agent did with it, so anything stronger would
+    // repeat the `delivered` != `processed` mistake this fleet already has written
+    // down. The field is ABSENT -- not zero, not "now" -- when a task never fired,
+    // because telling those two apart is the only reason to return it at all.
+    const tasks = listScheduledTasks().map((t) => {
+      const withHealth =
+        t.type === 'command'
+          ? { ...t, health: assessCommandHealth(readCommandHealth(t.name), t.schedule, Date.now()) }
+          : { ...t }
+      const firedAt = readScheduleLastFired(t.name)
+      return firedAt === undefined
+        ? withHealth
+        : {
+            ...withHealth,
+            last_fired_at: new Date(firedAt).toISOString(),
+            last_fired_at_local: formatLocalStamp(firedAt),
+          }
+    })
     json(res, tasks)
     return true
   }
