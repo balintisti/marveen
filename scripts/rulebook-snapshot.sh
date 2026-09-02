@@ -35,6 +35,11 @@ RULEBOOK_REPO="${RULEBOOK_REPO:-/Users/isti/Backups/rulebooks}"
 MARVEEN_ROOT="${RULEBOOK_MARVEEN_ROOT:-/Users/isti/marveen}"
 DELTA_CLAUDE="${RULEBOOK_DELTA_CLAUDE:-/Users/isti/CLAUDE.md}"
 SKILLS_ROOT="${RULEBOOK_SKILLS_ROOT:-$HOME/.claude/skills}"
+# The agent memory. Collected from the SHARED root once, not per agent: every
+# agent's .claude-config/projects is a symlink to this same directory (measured
+# 2026-09-02 on friday and dexter), so walking the six agent dirs would copy the
+# identical 127 files six times over.
+MEMORY_ROOT="${RULEBOOK_MEMORY_ROOT:-$HOME/.claude/projects}"
 NOTIFY_CMD="${RULEBOOK_NOTIFY:-$MARVEEN_ROOT/scripts/notify.sh}"
 
 # --- THE DELETION GUARD THRESHOLD.
@@ -136,10 +141,45 @@ collect() {
       printf 'skills/%s\t%s\n' "${f#"$SKILLS_ROOT"/}" "$f"
     done
   fi
+  # THE AGENT MEMORY -- the fleet's accumulated learning, and until 2026-09-02 the
+  # only artefact here that lived on exactly one disk: not in any git repository
+  # and not under Backups (card 4820b856, found by jarvis during a shutdown check).
+  # 127 .md files across seven projects, of which the marveen project's are read by
+  # ALL SIX agents.
+  #
+  # Fifth group, and its position is deliberate: the four groups above go out in a
+  # FIXED order so the manifest diff stays readable, and only the find-based ones
+  # are sorted internally. This follows that shape rather than merging into one
+  # sorted stream.
+  if [ -d "$MEMORY_ROOT" ]; then
+    find "$MEMORY_ROOT" -path '*/memory/*.md' -type f 2>/dev/null | LC_ALL=C sort | while IFS= read -r f; do
+      # <project>/memory/<file>.md -> memory/<project>/<file>.md. The source path
+      # already says "memory"; repeating it would put memory/X/memory/y.md in the
+      # manifest, and the manifest diff is what a human actually reads here.
+      # Derived the same way as the agents group above (basename/dirname) rather
+      # than by pattern substitution: an escaped ${x/\/a\//} wrote LITERAL
+      # backslashes into the destination path, caught by the dry run.
+      proj=${f#"$MEMORY_ROOT"/}; proj=${proj%%/*}
+      printf 'memory/%s/%s\t%s\n' "$proj" "$(basename "$f")" "$f"
+    done
+  fi
 }
 
 PAIRS=$(collect || true)
 NOW_COUNT=$(printf '%s' "$PAIRS" | grep -c . || true)
+
+# A MEMORY-SPECIFIC ZERO IS LOUD, and it is the whole reason card 4820b856 exists.
+# The total-zero refusal below cannot catch this one: 84 rulebook files keep the
+# total healthy while the memory group silently contributes nothing, which is
+# EXACTLY the state that went unnoticed until 2026-08-29 -- backed up in the
+# aggregate, absent in the part. A guard that only checks the total would report
+# success over the same hole it was added to close.
+MEM_COUNT=$(printf '%s' "$PAIRS" | grep -c '^memory/' || true)
+if [ "${MEM_COUNT:-0}" -eq 0 ]; then
+  log "rulebook-snapshot: WARNING -- zero agent-memory files collected from $MEMORY_ROOT"
+  log "  (the rest of the snapshot continues; this is the one group whose silent absence"
+  log "   is the defect card 4820b856 was opened for, so it does not pass unremarked)"
+fi
 if [ "${NOW_COUNT:-0}" -eq 0 ]; then
   log "rulebook-snapshot: ZERO source files found -- refusing to touch the repository."
   log "  (an empty set is what a wrong root or an unmounted volume looks like)"

@@ -26,6 +26,14 @@ function world(skillCount: number) {
   const root = mkdtempSync(join(tmpdir(), 'rulebook-'))
   const marveen = join(root, 'marveen')
   const skills = join(root, 'skills')
+  // A FAKE MEMORY ROOT IS MANDATORY, NOT TIDINESS. The script's default is
+  // $HOME/.claude/projects, so a harness that does not override it makes every
+  // case in this file walk and copy the operator's REAL agent memory -- 127 files
+  // per run, into a throwaway repo. Measured while adding the memory group: the
+  // suite slowed to a timeout, which is what made the leak visible at all.
+  // Same shape as card da9aacec: isolation that came from an ambient default
+  // rather than from the test.
+  const memory = join(root, 'memory')
   const repo = join(root, 'repo')
   const alertFile = join(root, 'alerts.txt')
   const notify = join(root, 'notify.sh')
@@ -34,6 +42,11 @@ function world(skillCount: number) {
   writeFileSync(join(marveen, 'CLAUDE.md'), 'marveen rulebook\n')
   writeFileSync(join(marveen, 'agents', 'friday', 'CLAUDE.md'), 'friday persona\n')
   writeFileSync(join(root, 'delta.md'), 'delta rulebook\n')
+  mkdirSync(join(memory, '-Users-isti-marveen', 'memory'), { recursive: true })
+  mkdirSync(join(memory, '-Users-isti-Projektek-sajat-crm', 'memory'), { recursive: true })
+  writeFileSync(join(memory, '-Users-isti-marveen', 'memory', 'MEMORY.md'), 'index\n')
+  writeFileSync(join(memory, '-Users-isti-marveen', 'memory', 'one-fact.md'), 'fact\n')
+  writeFileSync(join(memory, '-Users-isti-Projektek-sajat-crm', 'memory', 'other.md'), 'other\n')
   for (let i = 0; i < skillCount; i++) {
     mkdirSync(join(skills, `s${i}`, 'references'), { recursive: true })
     // BOTH files, and the pair is deliberate: `SKILL.md` and
@@ -55,6 +68,7 @@ function world(skillCount: number) {
         RULEBOOK_MARVEEN_ROOT: marveen,
         RULEBOOK_DELTA_CLAUDE: join(root, 'delta.md'),
         RULEBOOK_SKILLS_ROOT: skills,
+        RULEBOOK_MEMORY_ROOT: memory,
         RULEBOOK_NOTIFY: notify,
         ALERT_FILE: alertFile,
         GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t',
@@ -75,7 +89,11 @@ function world(skillCount: number) {
   }
   const alerts = () => (existsSync(alertFile) ? readFileSync(alertFile, 'utf8').trim().split('\n').filter(Boolean) : [])
 
-  return { root, skills, repo, run, env, commits, storedSkills, alerts }
+  const storedMemory = () => {
+    const r = spawnSync('git', ['-C', repo, 'ls-files', 'store/memory'], { encoding: 'utf8' })
+    return r.status === 0 ? r.stdout.trim().split('\n').filter(Boolean) : []
+  }
+  return { root, skills, memory, repo, run, env, commits, storedSkills, storedMemory, alerts }
 }
 
 describe('rulebook snapshot: the ordinary path', () => {
@@ -198,9 +216,12 @@ describe('rulebook snapshot: the deletion guard', () => {
     w.run()
     const a = w.alerts()[0]
     // Derived, not hardcoded: a fixture change must not silently turn these
-    // into assertions about nothing. 60 skills x 2 files + 3 others = 123;
-    // removing 40 skill dirs takes 80 of them.
-    const total = 60 * 2 + 3
+    // into assertions about nothing. 60 skills x 2 files + 3 others + 3 memory
+    // files = 126; removing 40 skill dirs takes 80 of them.
+    // The memory term was added with the memory group (card 4820b856) -- the
+    // formula is updated rather than the number, which is what keeps this
+    // assertion meaningful the next time the fixture set moves.
+    const total = 60 * 2 + 3 + 3
     const gone = 40 * 2
     expect(a).toContain(String(total))                       // the previous snapshot's size
     expect(a).toContain(String(gone))                        // how many are gone
@@ -226,6 +247,10 @@ describe('rulebook snapshot: the deletion guard', () => {
     rmSync(join(w.root, 'marveen', 'CLAUDE.md'))
     rmSync(join(w.root, 'marveen', 'agents', 'friday', 'CLAUDE.md'))
     rmSync(join(w.root, 'delta.md'))
+    // The memory group counts too: leaving it populated would make the source set
+    // non-empty and this test would pass for the wrong reason -- it asserts what
+    // happens when EVERY source is gone, not most of them.
+    rmSync(w.memory, { recursive: true })
     const r = w.run()
     expect(r.status).toBe(2)
     expect(w.commits()).toBe(0)
@@ -264,8 +289,8 @@ describe('rulebook snapshot: the lock and the honest count', () => {
     const subject = spawnSync('git', ['-C', w.repo, 'log', '-1', '--format=%s'], { encoding: 'utf8' }).stdout.trim()
     const tree = spawnSync('git', ['-C', w.repo, 'ls-tree', '-r', '--name-only', 'HEAD', '--', 'store'], { encoding: 'utf8' })
       .stdout.trim().split('\n').filter(Boolean).length
-    // 30 skills x 2 files + 2 marveen files + 1 delta file
-    expect(tree).toBe(63)
+    // 30 skills x 2 files + 2 marveen files + 1 delta file + 3 memory files
+    expect(tree).toBe(66)
     expect(subject).toBe(`snapshot: ${tree} fajl`)
     expect(subject).not.toMatch(/CSONKA/)
     expect(w.alerts()).toEqual([])       // negative control: a normal run is silent
@@ -336,7 +361,57 @@ describe('rulebook snapshot: the lock and the honest count', () => {
     expect(r.status).toBe(4)
     const subject = spawnSync('git', ['-C', w.repo, 'log', '-1', '--format=%s'], { encoding: 'utf8' }).stdout.trim()
     expect(subject).toMatch(/CSONKA/)
-    expect(subject).toMatch(/^snapshot: 42 fajl/)          // 43 - 1, the truthful number
+    expect(subject).toMatch(/^snapshot: 45 fajl/)          // 46 - 1, the truthful number
     expect(w.alerts().join('\n')).toMatch(/CSONKA PILLANATFELVETEL/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The agent memory group (card 4820b856). Until 2026-09-02 the fleet's entire
+// accumulated learning -- 127 .md files, the marveen project's read by all six
+// agents -- lived on exactly one disk: in no git repository and under no backup.
+// ---------------------------------------------------------------------------
+describe('rulebook snapshot: the agent memory', () => {
+  it('captures the memory files, flattening the redundant /memory/ segment', () => {
+    const w = world(1)
+    expect(w.run().status).toBe(0)
+    expect(w.storedMemory().sort()).toEqual([
+      'store/memory/-Users-isti-Projektek-sajat-crm/other.md',
+      'store/memory/-Users-isti-marveen/MEMORY.md',
+      'store/memory/-Users-isti-marveen/one-fact.md',
+    ])
+  })
+
+  it('collects ONLY the fixture root -- the operator\'s real memory must never appear', () => {
+    // THE TEST THAT WOULD HAVE CAUGHT THE LEAK. The script defaults MEMORY_ROOT to
+    // $HOME/.claude/projects, so a harness that forgets the override silently copies
+    // the operator's real 127 files into every throwaway repo -- measured while this
+    // group was being added, and only visible because the suite slowed to a timeout.
+    // An exact-set assertion fails on a leak; a "contains" or a count-greater-than
+    // would pass right through it.
+    const w = world(1)
+    w.run()
+    expect(w.storedMemory().length).toBe(3)
+  })
+
+  it('says so OUT LOUD when the memory group is empty, and still snapshots the rest', () => {
+    // The total-zero refusal cannot catch this: the rulebook files keep the total
+    // healthy while memory contributes nothing -- backed up in the aggregate,
+    // absent in the part, which is the exact state this card was opened for.
+    const w = world(1)
+    rmSync(w.memory, { recursive: true })
+    const r = w.run()
+    expect(r.status).toBe(0)                                  // not fatal
+    expect(r.stdout + r.stderr).toMatch(/zero agent-memory files/)
+    expect(w.storedSkills()).toBeGreaterThan(0)               // the rest still ran
+    expect(w.storedMemory()).toEqual([])
+  })
+
+  it('is silent about memory when memory IS present (negative control)', () => {
+    // Without this the warning could fire on every run and the test above would
+    // still pass -- an alarm that is always on is not an alarm.
+    const w = world(1)
+    const r = w.run()
+    expect(r.stdout + r.stderr).not.toMatch(/zero agent-memory files/)
   })
 })
