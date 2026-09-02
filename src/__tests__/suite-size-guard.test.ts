@@ -98,6 +98,23 @@ describe('evaluateSuiteSize -- a (B) alapvonal-ag', () => {
     expect(m).toContain('Test Files')
     expect(m).toContain('alapvonalat frissitsd')
   })
+
+  it('MEGNEVEZI A PARANCSOT, nem csak a kezzel szerkesztendo fajlt', () => {
+    // MERVE 2026-09-02: a 22 osztalyozhato prod-tree-guard megkerulesbol 17 EGYETLEN
+    // fajlra ment -- erre. A `scripts/update-suite-baseline.mjs` MAR LETEZETT, es
+    // sehol nem hivatkozott ra semmi, amit egy agens olvas: CLAUDE.md 0, skillek 0,
+    // es ez az uzenet sem. Kontroll: a `card-comment.sh` 3x szerepel a CLAUDE.md-ben,
+    // tehat a kereso lat. A szerzo maga HAROMSZOR irta at kezzel ezt a fajlt aznap,
+    // mert az uzenet a FAJLT nevezte meg es a parancsot nem.
+    //
+    // `letezes vs. eleres`: a szerszam megvolt, helyes volt, elerheto volt -- es a
+    // dontes pillanataban semmi nem mondta meg, hogy letezik.
+    const m = evaluateSuiteSize(200, 2000, 286, 3879).message ?? ''
+    expect(m).toContain('scripts/update-suite-baseline.mjs')
+    // ES AZT IS, MIERT jobb: kezi atiras nem tud megtagadni egy csonka gyujtest.
+    // Egy puszta parancsnev, indok nelkul, opcionalisnak olvasodik.
+    expect(m).toMatch(/MEGTAGADJA/)
+  })
 })
 
 describe('zeroTestFiles -- az (A) pontos ag', () => {
