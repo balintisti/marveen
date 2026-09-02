@@ -142,9 +142,9 @@ import type { File, Task } from 'vitest'
 // es a plafon bevezetesevel csendben elavult volna -- epp azok hazudtak volna
 // elsonek, amik a hatart orzik. Ha a szam es a mondat egy generalt blokkban all,
 // nem tudnak szetcsuszni.
-/** Merve 2026. 09. 02. 12:15:04 CEST -- `npx vitest list --json` -> 402 fajl / 5130 teszt. */
+/** Merve 2026. 09. 02. 12:56:17 CEST -- `npx vitest list --json` -> 402 fajl / 5131 teszt. */
 export const SUITE_BASELINE_FILES = 402
-export const SUITE_BASELINE_TESTS = 5130
+export const SUITE_BASELINE_TESTS = 5131
 // === SUITE-BASELINE:END ===
 
 /**
@@ -271,8 +271,12 @@ export function evaluateSuiteSize(
       '  MIT NEZZ MEG ELOSZOR: a "Test Files" sort. Ha ott "failed" all, egy fajl\n' +
       '  COLLECT-idoben szallt el (tipikusan kor-import), es a tesztjei el sem indultak.\n' +
       '\n' +
-      '  HA A CSOKKENES SZANDEKOS (tesztet toroltel), az alapvonalat frissitsd a\n' +
-      '  src/__tests__/setup/suite-size-guard.ts-ben, UGYANABBAN a commitban.\n',
+      '  HA A CSOKKENES SZANDEKOS (tesztet toroltel), az alapvonalat frissitsd\n' +
+      '  UGYANABBAN a commitban -- ES VAN RA PARANCS, ne kezzel ird at:\n' +
+      '      node scripts/update-suite-baseline.mjs\n' +
+      '  Az MEGTAGADJA az irast csonka gyujtesbol; egy kezi atiras nem tud megtagadni\n' +
+      '  semmit, es epp azt a vesztest rogzitene ervenyesnek, amit ez az or fog.\n' +
+      '  (A fajl, amit ir: src/__tests__/setup/suite-size-guard.ts)\n',
   }
 }
 
