@@ -123,3 +123,28 @@ describe('kanban move audit trail', () => {
     }
   })
 })
+
+// Card 8c03ef29, completeness. The first version of this change covered ONE of
+// five createKanbanCard call sites -- the API route that spreads the request
+// body. The other four build explicit objects (auto-breakdown subtasks, and
+// three idea-promotion paths) and would have recorded a null actor FOREVER, not
+// because a caller omitted one but because the code could not report one. Those
+// are different facts, and letting them share a value is the exact conflation
+// this card exists to end.
+describe('creation actor: system paths are attributed, not left null', () => {
+  it('a system-created card records an actor, so null keeps meaning ONE thing', () => {
+    // Stands in for the four internal call sites: what matters is that a caller
+    // which KNOWS the creator passes it, leaving null to mean "not reported".
+    createKanbanCard({ id: 'sys-a', title: 'Auto-breakdown subtask', actor: 'marveen' })
+    createKanbanCard({ id: 'api-b', title: 'Reported by nobody' })
+
+    const sys = getKanbanCardEvents('sys-a').filter((e) => e.from_status === null)
+    const api = getKanbanCardEvents('api-b').filter((e) => e.from_status === null)
+    expect(sys[0].actor).toBe('marveen')
+    expect(api[0].actor).toBeNull()
+    // Both have an event: "created before the mechanism existed" stays a third,
+    // separate state, expressed by having no event at all.
+    expect(sys).toHaveLength(1)
+    expect(api).toHaveLength(1)
+  })
+})

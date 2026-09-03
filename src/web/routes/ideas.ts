@@ -169,6 +169,13 @@ export async function tryHandleIdeas(ctx: RouteContext): Promise<boolean> {
     const idea = (getDb().prepare('SELECT * FROM idea_box WHERE id = ?').get(ideaId) as import('../../db.js').IdeaBoxRow | undefined)
     if (!idea) { json(res, { error: 'Ötlet nem található' }, 404); return true }
 
+    // SYSTEM-created, so the actor is KNOWN and must be recorded (card 8c03ef29).
+    // Leaving it null here would mean two different facts share one value: "the API
+    // caller did not report a creator" (fixable, and the gap worth counting) versus
+    // "this code path cannot report one" (not a gap at all). MAIN_AGENT_ID rather than
+    // BOT_NAME because actor is an agent ID everywhere else -- measured on the live
+    // board: dexter/marveen/friday/computress, all ids, never display names. A second
+    // spelling of the same actor would split the counts this card exists to make correct.
     const cardId = randomUUID().slice(0, 8)
     const status = phase === 'plan' ? 'planned' : 'waiting'
     const title = phase === 'plan' ? idea.title : `[Részlet kidolgozás] ${idea.title}`
@@ -180,6 +187,7 @@ export async function tryHandleIdeas(ctx: RouteContext): Promise<boolean> {
       priority: 'normal',
       assignee: BOT_NAME,
       project: 'Fejlesztési ötletek',
+      actor: MAIN_AGENT_ID,
     })
     logIdeaStatusChange(ideaId, idea.status, 'kanban', MAIN_AGENT_ID, `promote:${phase}`)
     updateIdea(ideaId, { status: 'kanban', kanban_id: cardId })
@@ -233,6 +241,7 @@ export async function tryHandleIdeas(ctx: RouteContext): Promise<boolean> {
       priority: 'normal',
       assignee: BOT_NAME,
       project: 'Fejlesztési ötletek',
+      actor: MAIN_AGENT_ID,
     })
     const childIds: string[] = []
     for (const st of subtasks) {
@@ -247,6 +256,7 @@ export async function tryHandleIdeas(ctx: RouteContext): Promise<boolean> {
         assignee: st.assignee || BOT_NAME,
         project: 'Fejlesztési ötletek',
         parent_id: parentId,
+        actor: MAIN_AGENT_ID,
       })
       childIds.push(childId)
     }

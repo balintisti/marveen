@@ -730,6 +730,13 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
       const ids: string[] = []
       for (const st of subtasks) {
         const id = randomUUID().slice(0, 8).toUpperCase()
+        // SYSTEM-created, so the actor is KNOWN and must be recorded (card 8c03ef29).
+        // Leaving it null here would mean two different facts share one value: "the API
+        // caller did not report a creator" (fixable, and the gap worth counting) versus
+        // "this code path cannot report one" (not a gap at all). MAIN_AGENT_ID rather than
+        // BOT_NAME because actor is an agent ID everywhere else -- measured on the live
+        // board: dexter/marveen/friday/computress, all ids, never display names. A second
+        // spelling of the same actor would split the counts this card exists to make correct.
         createKanbanCard({
           id,
           title: st.title,
@@ -738,6 +745,7 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
           priority: (st.priority as any) ?? 'normal',
           project: parent.project ?? undefined,
           parent_id: parentId,
+          actor: MAIN_AGENT_ID,
         })
         ids.push(id)
       }
