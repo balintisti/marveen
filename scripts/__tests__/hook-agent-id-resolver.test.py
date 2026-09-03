@@ -35,9 +35,12 @@ EXCEPTIONS = {
         "exactly this file after the copy drifted; the port is a judgement call, "
         "not a one-line swap, and it is not in this commit."),
     "taskstate-replay.py": (
-        "private copy AND different semantics: its resolver returns falsy for the "
-        "main agent, which the caller uses to mean 'not a sub-agent target'. The "
-        "adopted chain never returns falsy, so swapping it would change behaviour."),
+        "NOT OUTSTANDING WORK -- swapping this one CHANGES WHAT THE CALLER DECIDES. "
+        "Its resolver returns falsy for the main agent and the caller reads that as "
+        "'not a sub-agent target'; the adopted chain never returns falsy, so the "
+        "caller would start acting on main-agent sessions. A future round will see "
+        "one file left on the old resolver and read it as an unfinished migration: "
+        "it is not. Marked so the list carries the DANGER, not just the difference."),
 }
 
 CWD_CALL = re.compile(r"agent_id_from_cwd\s*\(")
