@@ -113,6 +113,55 @@ build-freshness, command-health-age, kanban project warning, query-param rejecti
 recipient-advice, reopen-condition warning+log, restart-inflight, data-source-alarm). One file
 (`web/session-names.ts`) is a refactor with no capability behind it.
 
+### 2b. WHICH OF THE 14 ARE PLAUSIBLE PRs -- JUDGEMENT, NOT MEASUREMENT
+
+The measurement behind each line is section 2's (upstream has no equivalent; controls on card
+`3b1fc14f`). **What is judgement is the FIT: whether the capability makes sense in a repo that has
+no six-agent fleet and no board conventions of ours.** Marked as judgement so nobody quotes it as
+measured.
+
+**STRONG -- general mechanism, upstream already has the surrounding surface:**
+
+    build-freshness ...... "is the code we are reading the code that is running". They ship from a
+                           build too. Their equivalent: none measured (built-commit / stale-process
+                           both 0 hits).
+    restart-inflight ..... who is mid-restart, so nobody starts them again. They have auto-restart
+                           and a restart gate; this is the missing lock. inflight|in-flight -> 0.
+    query-params ......... an unknown query parameter is not swallowed. Fully general HTTP hygiene;
+                           their routes/kanban.ts validates BODY fields but not unknown query keys.
+    session-progress ..... is a BUSY turn progressing, by token count rather than by clock. They
+                           have pane-state; this rides on it. 0 hits there.
+    command-health-age ... the AGE of a health field, so "ok" cannot be a memory. They store lastRun
+                           in command-task.ts and alert on consecutive failures, not on staleness --
+                           the smallest PR on this list.
+    capacity verdict ..... they already read the 5-hour and 7-day pool (quota-gate + quota-snapshot)
+                           and gate WORK on it; what is missing is the owner-facing "can a new
+                           project start" answer. The data layer is theirs; only the verdict is ours.
+
+**MEDIUM -- general idea, but its value depends on having a fleet:**
+
+    idle-work guard ...... needs agents AND a board; they have both (kanban-dispatch pushes on card
+                           move), so the pull-side guard would fit -- but its worth scales with the
+                           number of agents.
+    data-source-alarm .... edge-triggered decay/recovery alarm. General in shape; ours is wired to
+                           OUR three sources.
+    recipient-advice ..... what a queue number MEANS depends on whether the recipient is there.
+                           General reasoning, but it reads our session model.
+    agenda / google-health CLIs ... general commands, but they sit on our diverged google-api.ts
+                           (548 lines we have that they do not), so a PR would carry that argument too.
+
+**WEAK -- encodes OUR conventions, and a PR would export a house style:**
+
+    kanban-project-warning ... warns on an empty `project` field -- our field, our convention.
+    reopen-condition warning + log ... rescues a conditional last comment at archive time. It exists
+                           because THIS board writes reopen conditions into comments.
+    card-flow convergence .... measures whether discovery converges on our card lifecycle.
+
+**WHAT WOULD MAKE THIS MEASURED RATHER THAN JUDGED:** ask upstream. A PR that is declined costs one
+review; a capability we keep re-writing here costs every update. Under the new policy the cheap move
+is to offer the six STRONG ones and let Szotasz decide the fit -- that is his call to make, not ours
+to predict.
+
 ## 3. WHERE BOTH SOLVE THE SAME PROBLEM -- AND THIS IS THE HALF THAT NEEDS JUDGEMENT
 
 The honest shape first: **136 shared files differ, 12 231 lines, and BOTH sides grew on the same
