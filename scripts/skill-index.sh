@@ -243,7 +243,11 @@ SKILL_BASELINE_NAMES="${SKILL_BASELINE_NAMES:-felderites-ket-listas-proba}"
 # EZ NEM A KAPU KUDARCA: a keret pont azt erte el, hogy MINDEN betoldas kimondott dontes legyen.
 # A VALODI valasz a mag ATRENDEZESE (66 szabaly egy fajlban mar kategoria, nem fajl) -- az kulon
 # kartyan all. Ez az emeles addig old fel, nem helyette.
-SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-417}"   # racsni 2026-08-28: min(427, 417) a bontas utan
+SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-422}"   # racsni 2026-08-28: min(427, 417) a bontas utan
+# 2026-09-03: 417 -> 422, KIMONDOTT emeles, +5 = PONTOSAN a hozzaadott uj alak merete (20. alak:
+# "egy szam rossz egysegben, dontesi bemenetben", ket mert eset aznap). A keret ezzel NULLA marad
+# (437 - 422 = 15 = a hatar), tehat ez NEM ad uj mozgasteret -- a padlot emeli a bekerult
+# tartalommal, nem a plafont. Bontas MELLEKHATASAKENT tilos; ez uj mert tartalom, indokkal.
 # 427 -> 417 (2026-08-28, dexter). BONTAS UTANI ROGZITES, NEM EMELES. A 11. es a 12. alak
 # TORTENETE a `references/alakok.md`-be kerult; a magban a NEVUK es a TEHERHORDO MONDATUK maradt.
 # A valasztas a fajl SAJAT elve szerint tortent -- ISMETLODES szerint (4 es 1 eset), nem kor szerint.
