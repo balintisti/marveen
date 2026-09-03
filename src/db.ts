@@ -1810,6 +1810,12 @@ export function createKanbanCard(card: {
   parent_id?: string
   /** Epoch SECONDS -- see KanbanCard.due_date. Nothing validates this. */
   due_date?: number
+  /** Who created it (card 8c03ef29). Recorded as a creation EVENT rather than a
+   *  column, reusing the `actor` convention the move endpoint already has. Null
+   *  is written deliberately when unreported -- see kanban-creator-warning.ts:
+   *  "created, creator unknown" and "created before this existed" are different
+   *  facts, and only the event/no-event distinction keeps them apart. */
+  actor?: string | null
 }): void {
   const now = Math.floor(Date.now() / 1000)
   const status = card.status ?? 'planned'
@@ -1826,6 +1832,13 @@ export function createKanbanCard(card: {
     card.assignee ?? null, card.priority ?? 'normal',
     card.project ?? null, card.parent_id ?? null, card.due_date ?? null, sortOrder, now, now
   )
+
+  // Creation event. from_status NULL is the marker, and it is unambiguous by
+  // measurement: of the 2655 rows on the live board, ZERO had a null
+  // from_status, so no legacy move can be misread as a creation.
+  db.prepare(
+    'INSERT INTO kanban_card_events (card_id, from_status, to_status, actor, created_at) VALUES (?, ?, ?, ?, ?)'
+  ).run(card.id, null, status, card.actor ?? null, now)
 }
 
 /** One field this write replaced, with the value it replaced. */

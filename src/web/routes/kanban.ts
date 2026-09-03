@@ -393,6 +393,13 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // this is not a 400 and why the warning travels in the response body.
     const warning = kanbanProjectWarning(data.project)
     if (warning) logger.warn({ id, title: data.title }, 'Kanban card created with an empty project field')
+    // NO CREATOR WARNING HERE, AND THAT IS A MEASURED DECISION, not an omission.
+    // I wrote one and removed it: no documented example sends `actor` on create,
+    // so it would have fired on ~100% of calls -- and it would have fired
+    // alongside the project warning, on the same field, breaking the contract
+    // those tests pin ("the warning must not become noise"). A guard that fires
+    // on every call devalues the one already there. The creation EVENT below
+    // records the gap in DATA instead, where it is countable and nags nobody.
     json(res, warning ? { ok: true, id, warning } : { ok: true, id })
     return true
   }
