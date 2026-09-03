@@ -11,7 +11,7 @@ import {
 import { logger } from '../../logger.js'
 import { COORDINATOR_AGENT_ID } from '../../channel-coordinator/ingest.js'
 import { sanitizeAgentIdent } from '../../prompt-safety.js'
-import { isKnownAgent } from '../agent-config.js'
+import { isKnownAgent, listAllAgentNames } from '../agent-config.js'
 import { agentRunState } from '../agent-process.js'
 import { MESSAGE_ABANDON_WINDOW_MS } from '../message-router.js'
 import { adviseSender, isPullModelRecipient } from '../recipient-advice.js'
@@ -164,6 +164,44 @@ export async function tryHandleMessages(ctx: RouteContext): Promise<boolean> {
       // coordinator inserts directly into the DB, bypassing this endpoint.
       json(res, { error: 'Invalid recipient: use "<system>/<agent>" (slash) for a federated address, not the "federation:x:y" source form' }, 400)
       return true
+    } else {
+      // LOKALIS CIMZETT ELLENORZESE (kartya 4689f10b). A `from` ot kapun megy at ebben a
+      // fajlban; a slash-mentes `to` EDDIG EGYIKEN SEM -- a komment fent ki is mondta, hogy
+      // "Local (slash-free) recipients are untouched". Kovetkezmeny: egy ELGEPELT agens-nev
+      // 200-at es `pending`-et kap, majd ~1 ora mulva az elhagyasi ablakban bukik el. A kuldo
+      // addig azt hiszi, hogy sorban all -- es a lap sajat szabalya szerint a `pending` az az
+      // allapot, amire KIFEJEZETTEN azt mondjuk, hogy NE kuldd ujra.
+      //
+      // MERVE 2026-09-03, a teljes `agent_messages` tablan: 14 kulonbozo cimzettbol 7 valodi
+      // flotta-agens, a masik 7 kozul 6 szandekos proba -- es MIND A HAT `failed`. Vagyis ez a
+      // kapu a mert forgalombol semmit nem zart volna el, amit valaha kezbesitettunk.
+      //
+      // A HETEDIK a `system` (EGY uzenet, 2026-08-17, `done`): egy agens valasza egy
+      // system-uzenetre. A `system` 846 uzenetet KULDOTT, de azok KOZVETLENUL a DB-be irodnak
+      // (`src/db.ts`), nem ezen a vegponton -- tehat ez a kapu a tetlen-ort nem erinti. A
+      // szimmetria kedveert megis atengedjuk azt, amit a `from`-oldal is: OWNER es SYSTEM_SENDERS.
+      //
+      // A KIVETELEK PONTOSAN A `from`-GUARD KIVETELEI, es szandekosan: ket iranyban kulonbozo
+      // szabaly ugyanarra a nevre kesobb megmagyarazhatatlan.
+      const toIdent = sanitizeAgentIdent(storedTo)
+      const isOwnerRecipient = toIdent === sanitizeAgentIdent(OWNER_NAME)
+      const isSystemRecipient = SYSTEM_SENDERS.has(toIdent)
+      if (!isOwnerRecipient && !isSystemRecipient && !isKnownAgent(toIdent)) {
+        // A HIBAUZENET SOROLJA FEL A LEHETSEGES CIMZETTEKET. Egy "unknown agent" onmagaban
+        // ugyanolyan nema, mint a hallgatas volt: a leggyakoribb ok egy ELIRAS, es az elirast
+        // a helyes nevek listaja javitja, nem a tenye.
+        // `listAllAgentNames` es NEM `listAgentNames`: a REJTETT agens is ervenyes cimzett
+        // (`isKnownAgent` elfogadja), tehat a lathato lista KEVESEBB nevet sorolna fel, mint
+        // amennyit a kapu atenged -- egy hibauzenet, ami ellentmond a sajat kapujanak.
+        // A MAIN_AGENT_ID kulon jon: az `agents/`-en KIVUL el, de elsoosztalyu cimzett.
+        const known = [MAIN_AGENT_ID, ...listAllAgentNames()].sort().join(', ')
+        logger.warn({ from: from.trim(), to: storedTo }, 'Rejected /api/messages POST to unknown recipient')
+        json(res, {
+          error: `unknown recipient '${storedTo}' -- to must be a registered fleet agent id`
+            + (known ? ` (known: ${known})` : ''),
+        }, 400)
+        return true
+      }
     }
     // Code-side enforcement of the kanban-ref convention: rewrite any
     // `#<hex8>` token that maps to a real kanban_cards row into its

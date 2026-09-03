@@ -312,7 +312,11 @@ describe('/api/messages from-authentication', () => {
   const src = readFileSync(join(REPO_ROOT, 'src', 'web', 'routes', 'messages.ts'), 'utf8')
 
   it('imports isKnownAgent from agent-config', () => {
-    expect(src).toContain("import { isKnownAgent } from '../agent-config.js'")
+    // MINTA es nem szo szerinti sor (kartya 4689f10b). A SZANDEK az, hogy a from-ellenorzes a
+    // VALODI `isKnownAgent`-et hasznalja az `agent-config`-bol, ne egy helyi csonkot -- ezt a
+    // minta ugyanugy megkoveteli. A szo szerinti alak viszont BARMILYEN tovabbi named import
+    // hozzaadasatol elbukott (itt: `listAllAgentNames`), ami nem a vedett tulajdonsag.
+    expect(src).toMatch(/import \{[^}]*\bisKnownAgent\b[^}]*\} from '\.\.\/agent-config\.js'/)
   })
 
   it('calls isKnownAgent with the sanitized from field', () => {
