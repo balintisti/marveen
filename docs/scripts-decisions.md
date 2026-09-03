@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **196** kovetett fajl, ebbol
-**52** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **197** kovetett fajl, ebbol
+**53** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (1)
 
@@ -168,6 +168,11 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/main-agent-isolated-config.mjs`
 
 - Why: the main agent otherwise keeps the shared ~/.claude and authenticates
+
+### `scripts/memory-index-add.py`
+
+- WHY THIS IS CODE AND NOT A RULE, and the reason is measured rather than stylistic. The
+- WHY PREPEND. Measured 2026-09-03: the first 40 index lines had a median file mtime of
 
 ### `scripts/memory-save.sh`
 
