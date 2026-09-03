@@ -28,7 +28,7 @@ import {
   sessionExistsOnHost,
   capturePane,
 } from './agent-process.js'
-import { detectPaneState, type PaneState } from '../pane-state.js'
+import { detectPaneState, detectsPermissionPrompt, describePermissionPrompt, paneShowsContextSaturation, type PaneState } from '../pane-state.js'
 import { parsePaneTokens, nextTokenSample, type TokenSample } from '../session-progress.js'
 import { setLastInboundModality } from './voice-modality.js'
 import { classifyAgentMessage, wrapAgentMessageForDelivery } from './agent-message-wrap.js'
@@ -95,6 +95,7 @@ export function formatStuckSessionAlert(
   stuckMs: number,
   pendingCount: number,
   paneState: PaneState | null = null,
+  pane: string | null = null,
 ): string | null {
   if (agent === mainAgentId) return null
   const min = Math.round(stuckMs / 60000)
@@ -106,12 +107,45 @@ export function formatStuckSessionAlert(
   if (paneState === 'busy') {
     return `[session-stuck] Agent '${agent}' (tmux ${session}) has been BUSY (actively working, spinner up) for ${min} min with ${queue}. Not a stall by itself -- check whether the turn is progressing or a tool call is wedged. Do NOT restart on this alert alone.`
   }
-  return `[session-stuck] Agent '${agent}' (tmux ${session}) has been not-ready for ${min} min with ${queue}. Run the delivery-stall diagnosis: check the pane (busy vs idle vs full context) and restart the agent if it is wedged.`
+  // NOT-READY IS NOT ONE STATE, AND THE OLD TEXT PRESCRIBED THE ONE ACTION THAT
+  // IS HARMFUL IN MOST OF THEM (card b5a9f60a). Measured 2026-09-03: 17 alerts
+  // in a day, and of the ones actually checked, ZERO were a genuine wedge. What
+  // they were instead: mid-turn, parked on a permission prompt, context-saturated
+  // and already owned by the context-guard, or simply idle with mail about to be
+  // delivered. "restart the agent if it is wedged" is wrong in all four -- it
+  // destroys a running turn, spends a whole context for one keystroke, races the
+  // context-guard into a double restart, or beats the router by two seconds.
+  //
+  // So the alert now reports WHAT WAS SEEN and names the owner of the fix. The
+  // pane is already in the caller's hand at this point (it captured it to decide
+  // whether to escalate at all), so every branch below is zero extra tmux calls.
+  const alsoQuiet = pendingCount === 0
+    ? ' Nobody is queued behind it, so the urgency here is zero whatever the cause.'
+    : ''
+  // A PERMISSION PROMPT IS NOT A STUCK SESSION, AND THE TAG SAYS SO (marveen's
+  // (B) decision, 2026-09-03 14:46). Measured that day: 44 [session-stuck]
+  // alerts, 39 of them on the not-ready lane, and marveen answered twelve of
+  // those prompts by hand -- every one of them reported under a tag that tells
+  // the reader to go diagnose a stall. The classification, not the wording, is
+  // what made them cost a lookup each.
+  //
+  // CONSEQUENCE FOR ANY METER: a query counting `[session-stuck]` goes blind on
+  // these the day this ships, and the drop reads as "the fix worked" -- the
+  // flattering direction. Count the UNION of both tags across the change.
+  if (pane && detectsPermissionPrompt(pane)) {
+    const asked = describePermissionPrompt(pane)
+    const what = asked ? ` It is asking: "${asked}".` : ''
+    return `[approval-needed] Agent '${agent}' (tmux ${session}) has been waiting for a DECISION for ${min} min with ${queue}.${what} This is NOT a stall and NOT a wedge: the pane is parked on a TOOL-PERMISSION prompt. Do NOT restart -- that spends the entire context for one keystroke, and the question comes straight back. The answer IS the decision, so it belongs to a person, not to a watchdog.${alsoQuiet}`
+  }
+  if (pane && paneShowsContextSaturation(pane)) {
+    return `[session-stuck] Agent '${agent}' (tmux ${session}) has been not-ready for ${min} min with ${queue}. The pane shows CONTEXT SATURATION, which is the context-guard's territory -- it restarts on saturation by itself, after two sweeps. Do NOT restart it from here: a second restart lands mid-sweep and loses the guard's continuation prompt.${alsoQuiet}`
+  }
+  return `[session-stuck] Agent '${agent}' (tmux ${session}) has been not-ready for ${min} min with ${queue}. Run the delivery-stall diagnosis: READ THE PANE FIRST. Do NOT restart unless the pane shows a genuine wedge -- saturation belongs to the context-guard, a permission prompt needs a decision rather than a keystroke, and a queued message is often about to be delivered anyway.${alsoQuiet}`
 }
 
-function notifyOrchestratorOfStuckSession(agent: string, session: string, stuckMs: number, pendingCount: number, paneState: PaneState | null): void {
+function notifyOrchestratorOfStuckSession(agent: string, session: string, stuckMs: number, pendingCount: number, paneState: PaneState | null, pane: string | null): void {
   try {
-    const alert = formatStuckSessionAlert(agent, MAIN_AGENT_ID, session, stuckMs, pendingCount, paneState)
+    const alert = formatStuckSessionAlert(agent, MAIN_AGENT_ID, session, stuckMs, pendingCount, paneState, pane)
     if (!alert) return
     createAgentMessage('system', MAIN_AGENT_ID, alert)
     logger.info({ agent, session, stuckMs, pendingCount, paneState }, 'session-stuck surfaced to orchestrator')
@@ -650,7 +684,7 @@ export async function runMessageRouterTick(): Promise<void> {
       if (!shouldEscalateStuckSession(paneState, stuckMs, frozenMs)) continue
       logger.warn({ to: agent, session, stuckDurationMs: stuckMs, pendingMsgCount: 0, paneState },
         'message-router: session STUCK with an EMPTY inbox — found by the quiet-agent sweep')
-      notifyOrchestratorOfStuckSession(agent, session, stuckMs, 0, paneState)
+      notifyOrchestratorOfStuckSession(agent, session, stuckMs, 0, paneState, pane)
       agentStuckSince.set(agent, now)
      }
     }
@@ -789,7 +823,7 @@ export async function runMessageRouterTick(): Promise<void> {
             // stall to the main agent's inbox so it can run the delivery-stall
             // diagnosis (pane state, full context, restart). The escalation-window
             // reset below doubles as the notification cooldown.
-            notifyOrchestratorOfStuckSession(msg.to_agent, session, stuckMs, pendingMsgCount, paneState)
+            notifyOrchestratorOfStuckSession(msg.to_agent, session, stuckMs, pendingMsgCount, paneState, pane)
             // Reset timer so we don't spam every tick; re-escalate after another window.
             agentStuckSince.set(msg.to_agent, now)
           } else {

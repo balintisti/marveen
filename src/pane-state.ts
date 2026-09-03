@@ -635,6 +635,128 @@ export function detectsModelConsentDialog(pane: string): boolean {
     && MODEL_CONSENT_CONFIRM_RX.test(footerRegion)
 }
 
+// Claude Code TOOL-PERMISSION prompt: the gate the CLI raises when a tool call
+// needs a human decision (a configured deny rule, an unresolvable cwd after a
+// `cd`, a first-time command shape). Captured live on agent-dexter 2026-09-03:
+//
+//   Do you want to proceed?
+//   ❯ 1. Yes
+//     2. No
+//
+//   Esc to cancel · Tab to amend
+//
+// THIS NEEDS ITS OWN DETECTOR FOR EXACTLY THE FABLEFALL1 REASON, one dialog
+// over: the footer says "Esc to cancel", so detectsBlockingMenu already matches
+// it, and any recovery branch keyed on that alone reaches this pane with a
+// blind Escape. On THIS dialog Escape is `cancel` -- so the recovery DENIES the
+// tool call on the agent's behalf, at the one gate that exists so a person
+// decides. Measured on 2026-09-03: 15 blind-Escape firings in a day across four
+// sub-agents (dexter 6, didi 5, jarvis 3, mandark 1), one of them traced end to
+// end (prompt present 07:24 -> "sending Escape to recover" 07:26:45 -> prompt
+// gone 07:27:02, nobody answered it).
+//
+// The difference from the consent dialog is that there is NO safe automatic
+// answer here. Option 1 is not a benign default the way "keep the configured
+// model" was: the answer IS the decision. So this detector exists to make the
+// pane RECOGNISABLE (so callers can alert a human instead of pressing a key),
+// never to answer it.
+//
+// Matchers anchor on the INVARIANT, not on the question text. The question
+// varies with the tool ("Do you want to proceed?", "Do you want to make this
+// edit to X?"), so pinning one phrasing would go quietly blind on the next
+// variant -- the same reason IDLE_FOOTER_RX does not enumerate permission
+// modes. What is stable is the numbered Yes option plus the cancel footer.
+//
+// Guards follow detectsModelConsentDialog's discipline (busy pane is never a
+// dialog; a visible idle footer means the real prompt is live, so a message
+// QUOTING this text can never trip it; the cancel hint must sit in the live
+// footer region). The two sibling dialogs are excluded explicitly so the
+// predicate is self-contained rather than relying on the caller's ordering:
+// the first-run trust gate also renders "1. Yes, proceed", and the consent
+// dialog also renders "Esc to cancel".
+const PERMISSION_ASK_RX = /Do you want to [^\n?]{0,120}\?/
+const PERMISSION_YES_RX = /(?:^|\n)\s*(?:❯\s*)?1\.\s*Yes\b/
+const PERMISSION_CANCEL_RX = /\besc to cancel\b/i
+
+export function detectsPermissionPrompt(pane: string): boolean {
+  if (!pane || !pane.trim()) return false
+  const lines = pane.split('\n')
+  const busyRegion = lines.slice(-BUSY_LIVE_REGION_LINES).join('\n')
+  for (const rx of BUSY_INDICATORS) {
+    if (rx.test(busyRegion)) return false
+  }
+  const footerRegion = lines.slice(-LIVE_FOOTER_REGION_LINES).join('\n')
+  if (BUSY_ESC_TO_INTERRUPT_RX.test(footerRegion)) return false
+  if (IDLE_FOOTER_RX.test(pane)) return false
+  // Sibling dialogs that share the shape but have their own handling.
+  if (detectsFirstRunGate(pane) != null) return false
+  if (detectsModelConsentDialog(pane)) return false
+  return PERMISSION_ASK_RX.test(pane)
+    && PERMISSION_YES_RX.test(pane)
+    && PERMISSION_CANCEL_RX.test(footerRegion)
+}
+
+// AND THE ALERT HAS TO NAME WHAT IS BEING ASKED (marveen's (B) decision,
+// 2026-09-03 14:46). Reclassifying the pane is only half of it: "an approval is
+// pending" still makes the reader open the pane to find out what for, which is
+// the cost the reclassification was meant to remove.
+//
+// WHY THE BLOCK ABOVE THE QUESTION, and not the command box at the top. A tmux
+// capture holds only the VISIBLE pane, so the box is the part that gets cut off
+// by scrollback; the block immediately above the question is always on screen.
+// On the live 07:24 capture that block is the CLI's own explanation, and it
+// names both the command and the reason ("grep on
+// 'src/forms/submission.service.ts' ... a Read() deny rule is configured"). On a
+// prompt that renders no explanation, the same walk quotes the command box
+// itself. One rule, both shapes -- and neither depends on the wording of the
+// question, which varies per tool.
+//
+// COLLAPSED TO ONE LINE, AND CAPPED, deliberately. This string is pasted into an
+// inter-agent message, and pane content is not ours: a multi-line excerpt could
+// imitate the framing of the message that carries it. Control characters go for
+// the same reason. The cap is on the RESULT, so a pane that is one enormous line
+// cannot push the alert past a readable size.
+const PERMISSION_QUOTE_MAX_CHARS = 220
+const PERMISSION_QUOTE_MAX_LINES = 6
+// `[\s\S]*` and not `.*`: a tmux capture can carry a bare CR inside a line, and
+// JS treats CR as a line terminator that `.` refuses to cross -- so a `.*` body
+// would silently stop matching there and the walk would drop the rest of the
+// block. Found by a fixture that carries a CR, after the sanitiser mutation
+// survived against the clean capture.
+const BOX_LINE_RX = /^\s*\u2502\s?([\s\S]*)$/
+
+function collapseForAlert(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+export function describePermissionPrompt(pane: string): string | null {
+  if (!detectsPermissionPrompt(pane)) return null
+  const lines = pane.split('\n')
+  let qIdx = -1
+  let question = ''
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = lines[i].match(PERMISSION_ASK_RX)
+    if (m) { qIdx = i; question = m[0]; break }
+  }
+  if (qIdx < 0) return null
+  const context: string[] = []
+  let i = qIdx - 1
+  while (i >= 0 && lines[i].trim() === '') i--
+  while (i >= 0 && context.length < PERMISSION_QUOTE_MAX_LINES) {
+    const m = lines[i].match(BOX_LINE_RX)
+    if (!m) break
+    const body = m[1].trim()
+    if (body) context.unshift(body)
+    i--
+  }
+  const quoted = collapseForAlert(context.length ? `${context.join(' ')} -- ${question}` : question)
+  if (!quoted) return null
+  return quoted.length > PERMISSION_QUOTE_MAX_CHARS
+    ? `${quoted.slice(0, PERMISSION_QUOTE_MAX_CHARS - 3).trimEnd()}...`
+    : quoted
+}
+
 export interface DetectPaneStateOptions {
   /** If true, the 'typing' state (text parked in input box) is
    * merged into 'busy'. Default false -- callers that care about
