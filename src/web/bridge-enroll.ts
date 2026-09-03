@@ -209,6 +209,30 @@ export async function bridgeEnroll(
     }),
   )
 
+  // ENROLLMENT WAS UNLOGGED, AND THAT IS WHY THE PILE CANNOT BE TRIAGED (card 717ba23d).
+  // Measured 2026-09-03: ~/.ssh/authorized_keys held 646 marveen-remote lines, 646 DISTINCT
+  // install ids, 133 KB -- up from 431 lines on 08-25. Every line is a live grant. Meanwhile
+  // this module emitted no line on the success path at all, so nothing on disk says WHEN a
+  // key was added or WHICH device asked for it, and the log window covering the last five of
+  // those nine days contains a single enrolment line.
+  //
+  // The consequence is not noise, it is that the cleanup is undecidable: revocation is
+  // BY INSTALL ID (removeEnrolledKey), and no install id is recorded anywhere a person can
+  // read -- device_keys holds only CURRENT devices (revoke DELETEs the row) and its single
+  // row carries install_id NULL. So the mechanism to remove a key exists and works, while
+  // the identity needed to choose which one does not.
+  //
+  // This line does not clean anything and deliberately does not: removing live SSH grants is
+  // the owner's call. It makes the NEXT ones attributable, so the question stops growing while
+  // the decision is pending. keyCount is included because the growth rate is the argument.
+  logger.info({
+    installId: parsed.installId,
+    deviceName: input.name,
+    action: enrollResult.action,
+    replacedDeviceKey: prior !== null,
+    authorizedKeysCount: enrollResult.keyCount,
+  }, 'bridge enrolment: authorized_keys line written')
+
   return {
     action: enrollResult.action,
     warnings: enrollResult.warnings,

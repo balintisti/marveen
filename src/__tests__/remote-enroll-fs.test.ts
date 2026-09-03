@@ -55,6 +55,27 @@ describe('enrollAuthorizedKey (filesystem)', () => {
     expect(res.warnings).toEqual([])
   })
 
+  it('reports keyCount AFTER the merge -- the growth number the pile-up rests on', async () => {
+    // Card 717ba23d: ~/.ssh/authorized_keys stood at 646 lines / 646 distinct install ids
+    // on 2026-09-03, up from 431 on 08-25, and the enrolment path logged nothing -- so the
+    // growth could not be attributed. keyCount is counted here because this is the one place
+    // the merged content exists under the lock.
+    const first = await enrollAuthorizedKey({ sshDir, restrictedLine: RESTRICTED, installId: UUID })
+    expect(first.keyCount).toBe(1)
+
+    // A DIFFERENT install id adds a line -- this is the growth being measured.
+    const other = RESTRICTED.replace(UUID, '11111111-2222-4333-8444-555555555555')
+    const second = await enrollAuthorizedKey({
+      sshDir, restrictedLine: other, installId: '11111111-2222-4333-8444-555555555555',
+    })
+    expect(second.keyCount).toBe(2)
+
+    // The SAME install id replaces rather than appends, so the count must NOT move.
+    // Without this the field would look right while silently counting duplicates.
+    const again = await enrollAuthorizedKey({ sshDir, restrictedLine: RESTRICTED, installId: UUID })
+    expect(again.keyCount).toBe(2)
+  })
+
   it('appends and preserves an existing unrelated key byte-for-byte', async () => {
     mkdirSync(sshDir, { mode: 0o700 })
     const authPath = join(sshDir, 'authorized_keys')

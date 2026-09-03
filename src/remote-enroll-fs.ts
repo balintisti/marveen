@@ -46,6 +46,12 @@ export interface EnrollResult {
   action: MergeAction
   authorizedKeysPath: string
   warnings: string[]
+  /** Non-empty lines in authorized_keys AFTER the merge (card 717ba23d).
+   *  Counted here because this is the one place the merged content exists under
+   *  the lock -- a caller counting it afterwards would race another enrolment
+   *  and would need a second read of a file it just wrote. It is the growth
+   *  number the pile-up argument rests on, so it belongs in the enrolment log. */
+  keyCount: number
 }
 
 const defaultSleep = (ms: number): Promise<void> =>
@@ -175,8 +181,9 @@ export async function enrollAuthorizedKey(opts: EnrollOptions): Promise<EnrollRe
 
     const { content, action } = mergeAuthorizedKeys(existing, restrictedLine, installId)
     writeAtomic(sshDir, authPath, content)
+    const keyCount = content.split('\n').filter((l) => l.trim() !== '').length
 
-    return { action, authorizedKeysPath: authPath, warnings }
+    return { action, authorizedKeysPath: authPath, warnings, keyCount }
   } finally {
     releaseLock(fd, lockPath)
   }
