@@ -53,8 +53,13 @@ def check(name, got, want):
 
 
 # --- direction 1: nothing regressed ------------------------------------------
-check("no payload at all falls back to the cwd resolver",
-      lib.agent_id_from_payload({}), lib.agent_id_from_cwd(os.getcwd()))
+# NOT os.getcwd(): an empty payload carries no cwd, so the chain calls
+# agent_id_from_cwd(None) -- comparing it to the PROCESS cwd made this check pass
+# or fail depending on where the test was run. It was green from the repo root and
+# red from agents/friday, which is the same mutable-identity class the adopted code
+# exists to fix, reproduced inside its own test.
+check("an empty payload falls through to the cwd resolver with the same input",
+      lib.agent_id_from_payload({}), lib.agent_id_from_cwd(None))
 check("cwd-only payload matches the old resolver exactly",
       lib.agent_id_from_payload({"cwd": INSTALL}), lib.agent_id_from_cwd(INSTALL))
 check("a sub-agent's own cwd still resolves to that sub-agent",
