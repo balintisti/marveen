@@ -448,6 +448,62 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
   fi
 done
 
+# ===== A KET NEM MERT POPULACIO (kartya 6703a0ff, didi merte 2026-08-22, friday 2026-09-03) =====
+#
+# A fenti ciklus CSAK a `$GLOBAL_SKILLS_DIR/*/SKILL.md` fajlokat meri. Ket dolog marad kivul,
+# es mindketto MERT:
+#
+#   1. AZ AGENS-SAJAT SKILLEK. A konvencio megengedi az `agents/<nev>/.claude/skills/` helyet,
+#      es azok soha nem kerultek a merlegre. Merve 2026-09-03: HAT agensnek van ilyen konyvtara,
+#      de csak EGYIKBEN van skill (dexter, 42 sor) -- tehat ma artalmatlan. Azert kerul be MOST,
+#      hogy a res ne akkor derüljön ki, amikor a tizedik ilyen skill megszuletik.
+#
+#   2. A references/ FAJLOK. Ezeket semmi nem meri: 11 fajl / 8498 sor, a legnagyobb 5582 --
+#      TOBB, mint a masodik legnagyobb otszorose, es tobb, mint a MAGOK osszegenek a fele.
+#
+# ES AMIERT A references/ CSAK LATHATO LESZ, NEM KAPUZOTT: MERVE HALASZT. 2026-09-03-an
+# meghivtam egy skillt, aminek 347 sor references-e van (`writing-tests-for-existing-code`):
+# a MAG megerkezett (483 sor), a references-bol NULLA sor -- csak mutatok (`-> references/...`).
+# Vagyis a 8498 sor MERLEGELETLEN, de NEM BETOLTOTT: nem "mert es elrejtett", ami rosszabb
+# lelet lenne. Egy 5582 soros referencia nem feltetlenul hiba, ha senki nem tolti be
+# alapertelmezesben -- a keres az volt, hogy a SZAM LATSZODJON, nem az, hogy legyen kapu.
+#
+# A GYOKER NEM KODBA EGETETT: a szkript sajat helyebol szarmazik, es felulirhato.
+SKILL_AGENT_ROOT="${SKILL_AGENT_ROOT:-$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/agents}"
+
+AGENT_SKILL_COUNT=0
+AGENT_SKILL_LINES=0
+for f in "$SKILL_AGENT_ROOT"/*/.claude/skills/*/SKILL.md; do
+  [ -f "$f" ] || continue
+  n=$(wc -l < "$f" | tr -d ' ')
+  skill=$(basename "$(dirname "$f")")
+  _owner=$(basename "$(dirname "$(dirname "$(dirname "$(dirname "$f")")")")")
+  AGENT_SKILL_COUNT=$((AGENT_SKILL_COUNT + 1))
+  AGENT_SKILL_LINES=$((AGENT_SKILL_LINES + n))
+  # check modban a TOBBI skill nem tartozik a szerzore -- ugyanaz a szabaly, mint fent
+  if [ -n "${CHECK_SKILL:-}" ] && [ "$skill" != "$CHECK_SKILL" ]; then continue; fi
+  # Alapvonal NINCS agens-sajat skillre (a `baseline_for` a globalis nevekre all), tehat
+  # a sima sor-korlat vonatkozik rajuk. Ha valaha kell alapvonal, az KIMONDOTT dontes legyen.
+  if [ "$n" -gt "$SKILL_LINE_LIMIT" ]; then
+    OVER_LIMIT=$((OVER_LIMIT + 1))
+    OVER_LIST="${OVER_LIST}  ${_owner}:${skill}  ${n} sor (hatar ${SKILL_LINE_LIMIT}, AGENS-SAJAT)\n"
+  fi
+done
+
+# A references/ MERLEG: mindket populaciora, a magok MELLETT kiirva.
+REF_FILES=0
+REF_LINES=0
+CORE_LINES=0
+for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md "$SKILL_AGENT_ROOT"/*/.claude/skills/*/SKILL.md; do
+  [ -f "$f" ] || continue
+  CORE_LINES=$((CORE_LINES + $(wc -l < "$f" | tr -d ' ')))
+  for _r in "$(dirname "$f")"/references/*; do
+    [ -f "$_r" ] || continue
+    REF_FILES=$((REF_FILES + 1))
+    REF_LINES=$((REF_LINES + $(wc -l < "$_r" | tr -d ' ')))
+  done
+done
+
 # POZITIV KONTROLL: egy or, ami sosem tud tuzelni, ugyanugy "mukodik", mint egy helyes.
 # Ellenorizzuk, hogy a szamlalo-ag EGYALTALAN elerheto-e egy biztosan tullepo bemenettel.
 _probe=$(printf 'x\n%.0s' $(seq 1 $((SKILL_LINE_LIMIT+1))) | wc -l | tr -d ' ')
@@ -516,6 +572,27 @@ else
   if [ "${VERBOSE:-0}" = "1" ] && [ -z "${CHECK_SKILL:-}" ]; then
     echo "MERET-OR: minden skill a sajat hatara alatt, SORBAN ES KARAKTERBEN (alapvonalas: novekedes <= ${SKILL_GROWTH_LIMIT} sor es <= ${SKILL_GROWTH_LIMIT}x atlagos sorhossz karakter, teljes <= ${SKILL_HARD_LIMIT}; a tobbi: <= ${SKILL_LINE_LIMIT}). Pozitiv kontroll: OK, mind a HAROM agra."
   fi
+fi
+
+# A MERLEG-SOR: A NEM MERT POPULACIO SZAMA A MERT MELLETT (kartya 6703a0ff).
+# NEM verbose-fuggo, es szandekosan: a `-v` nelkuli futas a gyakori, es epp ez a szam volt
+# az, ami sehol nem latszott. Egy or, ami negy egymast koveto futason "minden skill a hatara
+# alatt"-ot mondott, IGAZAT mondott -- a MAGOKROL. A references oda MOZGATOTT sorok ugyanabban
+# a kimenetben nem szerepeltek, tehat a "zold a bontas utan" es a "a skill kisebb lett" ket
+# kulonbozo allitas volt BAJT-AZONOS kimenettel.
+# CHECK MODBAN NEM MEGY KI: ott egyetlen skillt neztunk, es egy flotta-szintu osszeg
+# populaciot allitana -- ugyanaz a szabaly, mint a "minden skill a hatara alatt" mondatnal.
+if [ -z "${CHECK_SKILL:-}" ]; then
+  # A NEM MERHETO ES A MERT NULLA NEM NEZHET KI EGYFORMAN. A gyoker a szkript sajat helyebol
+  # szarmazik; egy MASOLATBOL vagy worktreebol futtatva olyan `agents/`-re mutat, ami nem letezik,
+  # es a ciklus NEMAN nullat adna -- pontosan az az alak, amit ez az or maga tilt (merve
+  # 2026-09-03: worktreebol "0 skill", a valodi gyokerrel "1 skill / 42 sor").
+  if [ -d "$SKILL_AGENT_ROOT" ]; then
+    _agent_part="agens-sajat ${AGENT_SKILL_COUNT} skill / ${AGENT_SKILL_LINES} sor (a sor-korlatra MERVE)"
+  else
+    _agent_part="agens-sajat NEM MERHETO (nincs ilyen konyvtar: ${SKILL_AGENT_ROOT} -- allitsd a SKILL_AGENT_ROOT-tal)"
+  fi
+  echo "MERLEG: mag ${CORE_LINES} sor | references ${REF_FILES} fajl / ${REF_LINES} sor (NEM kapuzott -- merve halaszt, Level 2) | ${_agent_part}" >&2
 fi
 
 # ES A LEPES, AMI NELKUL A FENTI EGESZ NEMA MARADHAT (2026-08-22, merve, es a hiba az enyem):

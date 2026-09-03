@@ -720,3 +720,85 @@ describe('skill-index.sh -- a karakter-szam LOCALE-FUGGETLEN (38221eef)', () => 
     expect(c).toBe(chars)
   })
 })
+
+// ===== A KET NEM MERT POPULACIO (kartya 6703a0ff) =====
+// A meret-or eddig CSAK a globalis skillek SKILL.md-jet merte. Ket dolog maradt kivul:
+// az agens-sajat skillek, es a references/ fajlok (11 fajl / 8498 sor, a legnagyobb 5582).
+describe('skill-index.sh -- agens-sajat skillek es a references-merleg (6703a0ff)', () => {
+  let tmpHome: string
+  let agentRoot: string
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), 'skill-pop-'))
+    mkdirSync(join(tmpHome, '.claude', 'skills', 'globalis'), { recursive: true })
+    writeFileSync(
+      join(tmpHome, '.claude', 'skills', 'globalis', 'SKILL.md'),
+      makeSkillMd('globalis', 'Egy globalis skill'),
+    )
+    agentRoot = mkdtempSync(join(tmpdir(), 'skill-agents-'))
+  })
+
+  afterEach(() => {
+    rmSync(tmpHome, { recursive: true, force: true })
+    rmSync(agentRoot, { recursive: true, force: true })
+  })
+
+  function agentSkill(owner: string, name: string, lines: number) {
+    const d = join(agentRoot, owner, '.claude', 'skills', name)
+    mkdirSync(d, { recursive: true })
+    writeFileSync(join(d, 'SKILL.md'), 'x\n'.repeat(lines))
+  }
+
+  function runWithRoot(args: string[]) {
+    const r = spawnSync('bash', [SCRIPT, ...args], {
+      encoding: 'utf-8',
+      env: { ...process.env, HOME: tmpHome, SKILL_AGENT_ROOT: agentRoot },
+    })
+    return { code: r.status ?? -1, out: (r.stdout ?? '') + (r.stderr ?? '') }
+  }
+
+  it('AGENS-SAJAT skill a hatar FOLOTT: rc=3 es NEVESITVE (gazda:skill)', () => {
+    agentSkill('probaagens', 'tullepo', 501)
+    const r = runWithRoot([])
+    expect(r.code).toBe(3)
+    expect(r.out).toContain('probaagens:tullepo')
+    expect(r.out).toContain('AGENS-SAJAT')
+  })
+
+  // NEGATIV KONTROLL: egy ag, ami MINDIG tuzel, ugyanugy hasznalhatatlan, mint ami soha.
+  it('AGENS-SAJAT skill a hatar ALATT: rc=0, es nem nevezi meg', () => {
+    agentSkill('probaagens', 'belefer', 499)
+    const r = runWithRoot([])
+    expect(r.code).toBe(0)
+    expect(r.out).not.toContain('probaagens:belefer')
+  })
+
+  it('a MERLEG-sor kiirja a references OSSZEGET a mag MELLETT', () => {
+    const refs = join(tmpHome, '.claude', 'skills', 'globalis', 'references')
+    mkdirSync(refs, { recursive: true })
+    writeFileSync(join(refs, 'alakok.md'), 'y\n'.repeat(300))
+    const r = runWithRoot([])
+    expect(r.out).toMatch(/MERLEG: mag \d+ sor \| references 1 fajl \/ 300 sor/)
+    expect(r.out).toContain('NEM kapuzott')
+  })
+
+  // A MERT NULLA ES A NEM MERHETO NULLA NEM NEZHET KI EGYFORMAN. Merve 2026-09-03: egy
+  // worktreebol futtatva a szarmaztatott gyoker nem letezik, es a ciklus NEMAN nullat adott.
+  it('HIANYZO agens-gyoker: NEM MERHETO, nem "0 skill"', () => {
+    const r = { ...spawnSync('bash', [SCRIPT], {
+      encoding: 'utf-8',
+      env: { ...process.env, HOME: tmpHome, SKILL_AGENT_ROOT: join(agentRoot, 'nincs-ilyen') },
+    }) }
+    const out = (r.stdout ?? '') + (r.stderr ?? '')
+    expect(out).toContain('agens-sajat NEM MERHETO')
+    expect(out).not.toMatch(/agens-sajat 0 skill/)
+  })
+
+  // Check modban egy flotta-szintu osszeg POPULACIOT allitana egyetlen megnezett skill mellett --
+  // ugyanaz a szabaly, mint a "minden skill a hatara alatt" mondatnal.
+  it('--check modban a MERLEG-sor NEM megy ki', () => {
+    agentSkill('probaagens', 'belefer', 10)
+    const r = runWithRoot(['--check', 'globalis'])
+    expect(r.out).not.toContain('MERLEG:')
+  })
+})
