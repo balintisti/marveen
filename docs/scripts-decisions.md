@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **197** kovetett fajl, ebbol
-**53** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **200** kovetett fajl, ebbol
+**55** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (1)
 
@@ -31,9 +31,17 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - Why this exists (2026-07-29): the model was read ONLY from
 
+### `scripts/__tests__/hook-agent-id-resolver.test.py`
+
+- Why a shape check earns its place here: the swap is one line per file and the
+
 ### `scripts/__tests__/idle-reporter.test.py`
 
 - MIERT PYTHON-TESZT ES NEM VITEST: a szkript szandekosan ONALLO -- semmit nem
+
+### `scripts/__tests__/telegram-reply-guard-agent-id.test.py`
+
+- Why this hook first, and alone: it is the one on the path to Isti. The upstream
 
 ### `scripts/agent-msg.sh`
 
