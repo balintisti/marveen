@@ -61,7 +61,12 @@ if [ "${1:-}" = "--check" ]; then
   shift 2
 fi
 
-VERBOSE=0
+# A `VERBOSE=1` KORNYEZETI VALTOZO EDDIG INERT VOLT, es a hasznalati helyek
+# `${VERBOSE:-0}` alakja UGY NEZETT KI, mintha hatna -- didi ket kulon napon merte meg,
+# es a masodik alkalommal egy mar 'javitottnak' jelentett allapotot cafolt vele. A hiba
+# nem a kod olvashatosaga: a `-v`-t ismero hivo (a heartbeat) sosem talalkozott vele,
+# tehat csak az ad-hoc mero vesztett vele idot -- ketszer, merve.
+VERBOSE=${VERBOSE:-0}
 _args=()
 for _a in "$@"; do
   case "$_a" in
@@ -297,6 +302,14 @@ char_count() {  # $1 = fajl; ures kimenet, ha nem merheto
   python3 -c 'import io,sys; print(len(io.open(sys.argv[1], encoding="utf-8", errors="strict").read()))' "$1" 2>/dev/null || true
 }
 
+# A ciklus HASZNALJA, tehat a ciklus ELE kell definialni. Az elso valtozatban a ciklus
+# UTAN allt, es a kovetkezmeny NEMA volt: minden ujjlenyomat URES lett, ket ures hash
+# pedig EGYENLO -- vagyis a figyelo sosem jelentett valtozast, es pontosan ugy nezett ki,
+# mint egy nyugodt kor. A kartya sajat elfogadasi probaja fogta meg, nem az olvasas.
+skill_fingerprint() {  # $1 = fajl -> "cksum"; ures, ha nem merheto
+  cksum < "$1" 2>/dev/null | awk '{print $1}'
+}
+
 baseline_for() {
   # egyetlen nev ma; tobbnel szokoz-elvalasztott lista es azonos sorrendu szamok
   local want="$1" i=1 name
@@ -317,10 +330,18 @@ OVER_LIMIT=0
 CHAR_OVER=0
 CHAR_LIST=""
 OVER_LIST=""
+WATCH_NOW=""
 for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
   [ -f "$f" ] || continue
   n=$(wc -l < "$f" | tr -d ' ')
   skill=$(basename "$(dirname "$f")")
+  # A figyelo sora UGYANEBBOL a bejarasbol jon -- nulla extra fajl-olvasas a meresen felul.
+  if [ -z "${CHECK_SKILL:-}" ]; then
+    # VALODI tab/sortores, nem `\t` mint szoveg: egy dupla-idezojeles hozzafuzesben a
+    # `\t` LITERALIS marad, es akkor a lenti szetvalasztas nemán semmit nem talal --
+    # a delta soha nem jelenne meg, es a figyelo pontosan ugy nezne ki, mint egy nyugodt kor.
+    WATCH_NOW="${WATCH_NOW}${skill}"$'\t'"${n}"$'\t'"$(char_count "$f")"$'\t'"$(skill_fingerprint "$f")"$'\n'
+  fi
   # check modban a TOBBI skill nem tartozik a szerzore -- epp ez a lelet lenyege
   if [ -n "${CHECK_SKILL:-}" ] && [ "$skill" != "$CHECK_SKILL" ]; then continue; fi
   base=$(baseline_for "$skill")
@@ -447,6 +468,80 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
     fi
   fi
 done
+
+# ---- SKILL-VALTOZAS FIGYELO: mi mozdult AZ EN utolso futasom ota? (kartya 3002c468) ----
+#
+# A MERT PROBLEMA: 2026-08-24-en harom agens szerkesztette ugyanazt a skill-magot egy oran
+# belul, egyikuk sem tudott a masikrol, es ugyanaz a szabaly KETSZER kerult be, mert ketten
+# irtak be egymastol fuggetlenul. A fajl het allapoton ment at tizenegy perc alatt. Nem
+# hanyagsag volt: nem volt honnan tudniuk.
+#
+# ES NEM AZ UZENET A MEGOLDAS: az uzenet a fordulo VEGEN erkezik, a szerkesztes KOZBEN
+# tortenik. Ez viszont nulla fegyelmet kivan -- nincs bejelentes, nincs zar, nincs konvencio.
+#
+# PER-AGENS ALLAPOT, ES EZ ELTER A KARTYA EREDETI JAVASLATATOL. Egy KOZOS allapotfajl mellett
+# a delta-t az kapja, aki eloszor fut le a szerkesztes utan, es a masik ot agens SOHA nem latja
+# -- vagyis a jelzes egy veletlen cimzetthez menne. Ez ugyanaz a hiba, amit ennek a szkriptnek
+# a `--check` szakasza mar egyszer megnevez ("a jelzest az kapja, aki legkozelebb futtatja").
+# Per-agens allapottal a kerdes az, ami hasznos: mi valtozott AZ EN utolso futasom ota.
+# Az agens-azonossag a `CLAUDE_CONFIG_DIR`-bol jon (merve 2026-09-03: mind a hat agensnel be
+# van allitva es egyedi); ha nincs, egy kozos `shared` allomanyra esik vissza -- rosszabb, de
+# nem hibas, es igy egy sima shellbol futtatva is mukodik.
+#
+# TARTALOM-HASH, NEM MTIME (mandark erve, didi elfogadta 2026-08-24). Egy `touch` vagy egy
+# checkout elmozditja az mtime-ot valtozas nelkul; a tartalom nem hazudik.
+#
+# ES A SORSZAM NEM ELEG ONMAGABAN, ezert all a hash MELLETT a ket szam: 2026-08-24 12:13-kor
+# egy szerkesztes 505 -> 503 sorra vitte a fajlt, ES KOZBEN UJ SZABALYT ADOTT HOZZA (+3 sor a
+# magba, -6 sor a references-be). Aki csak a szamot latta, "vagast" olvasott ki belole. Ezert
+# ha a hash valtozott, de a szamok nem, a sor ezt KIMONDJA -- az a legfelrevezetobb eset.
+_watch_id="shared"
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+  _watch_id=$(basename "$(dirname "$CLAUDE_CONFIG_DIR")")
+fi
+SKILL_WATCH_DIR="${SKILL_WATCH_DIR:-$HOME/.claude/.skill-watch}"
+SKILL_WATCH_FILE="$SKILL_WATCH_DIR/${_watch_id}.tsv"
+
+
+# A `--check` mod NEM kor, hanem egy szerzo ad-hoc kerdese a sajat fajljarol -- ott sem irunk
+# allapotot, sem delta-t nem jelentunk, kulonben egy ad-hoc futas "elfogyasztana" a jelzest a
+# kovetkezo valodi kor elol.
+if [ -z "${CHECK_SKILL:-}" ]; then
+  _prev_state=""
+  [ -f "$SKILL_WATCH_FILE" ] && _prev_state=$(cat "$SKILL_WATCH_FILE" 2>/dev/null || true)
+  _changed=0
+  # ELSO FUTAS = CSEND. Allapot nelkul MINDEN skill "valtozott"-nak latszana, es egy or, ami
+  # az elso korben 56 sort kiabal, ugyanugy hasznalhatatlan, mint egy nema. Ezt a kartya
+  # kimondott mutacios probaja is keri: az allapot torlese utan az ELSO kor ne jelentsen deltat.
+  if [ -n "$_prev_state" ]; then
+    while IFS="$(printf '\t')" read -r _pname _plines _pchars _phash; do
+      [ -n "${_pname:-}" ] || continue
+      _cur=$(printf '%s\n' "$WATCH_NOW" | awk -F'\t' -v k="$_pname" '$1==k {print; exit}')
+      [ -n "$_cur" ] || continue          # eltunt skill: nem ennek az ornek a dolga
+      _clines=$(printf '%s' "$_cur" | awk -F'\t' '{print $2}')
+      _cchars=$(printf '%s' "$_cur" | awk -F'\t' '{print $3}')
+      _chash=$(printf '%s' "$_cur" | awk -F'\t' '{print $4}')
+      [ "$_chash" = "$_phash" ] && continue
+      _changed=$((_changed+1))
+      if [ "$_clines" = "$_plines" ] && [ "$_cchars" = "$_pchars" ]; then
+        echo "SKILL-VALTOZAS: ${_pname}  a TARTALOM valtozott, a meret NEM (${_clines} sor / ${_cchars} karakter valtozatlan) -- csere tortent, nem bovites"
+      else
+        echo "SKILL-VALTOZAS: ${_pname}  ${_plines} -> ${_clines} sor / ${_pchars} -> ${_cchars} karakter (a te utolso futasod ota)"
+      fi
+    done <<EOF
+$_prev_state
+EOF
+    if [ "$_changed" -gt 0 ]; then
+      echo "SKILL-VALTOZAS: ${_changed} skillhez nyult valaki MAS is a te utolso futasod ota -- nezd meg, mielott irsz."
+    fi
+  fi
+  mkdir -p "$SKILL_WATCH_DIR" 2>/dev/null || true
+  # Atomi iras: hat agens futtathatja egyszerre, es egy felkesz allapotfajl a kovetkezo korben
+  # hamis deltat adna.
+  if _tmp=$(mktemp "${SKILL_WATCH_FILE}.XXXXXX" 2>/dev/null); then
+    printf '%s\n' "$WATCH_NOW" > "$_tmp" && mv -f "$_tmp" "$SKILL_WATCH_FILE" || rm -f "$_tmp"
+  fi
+fi
 
 # POZITIV KONTROLL: egy or, ami sosem tud tuzelni, ugyanugy "mukodik", mint egy helyes.
 # Ellenorizzuk, hogy a szamlalo-ag EGYALTALAN elerheto-e egy biztosan tullepo bemenettel.

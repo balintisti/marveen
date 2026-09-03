@@ -519,8 +519,9 @@ describe('skill-index.sh -- a KARAKTER-KERET: sajat alapvonal (83cac1ed)', () =>
 
   it('az osszegzo sor NEM allitja, hogy minden rendben, amikor karakterben nincs', () => {
     // The contradiction itself. `--verbose` because the reassuring line only
-    // prints there (the script forces VERBOSE=0 otherwise, so the env var is
-    // inert -- measured, and already documented at skill-index.sh:274).
+    // prints there. (This comment used to add that the VERBOSE env var was inert
+    // -- true when written, fixed on 2026-09-03 with card 3002c468, and there is
+    // now a test for it below. A comment stating a defect outlives the defect.)
     const { home } = fileWith(514, 37453 + 1442)
     try {
       const out = runScript(['--verbose'], env({ HOME: home })).stdout
@@ -718,5 +719,107 @@ describe('skill-index.sh -- a karakter-szam LOCALE-FUGGETLEN (38221eef)', () => 
     const chars = [...BODY].length
     expect(chars, 'a fixture nem tartalmaz tobb-bajtos karaktert -- a proba vak lenne').toBeLessThan(bytes)
     expect(c).toBe(chars)
+  })
+})
+
+// ---- SKILL-VALTOZAS FIGYELO (card 3002c468) --------------------------------
+// Three agents edited the same skill core within an hour on 2026-08-24, none
+// aware of the others, and the same rule went in TWICE because two of them wrote
+// it independently. The file passed through seven states in eleven minutes.
+describe('skill-change watch: what moved since MY last run', () => {
+  function sandbox(skills: Record<string, string>) {
+    const home = mkdtempSync(join(tmpdir(), 'skill-watch-'))
+    for (const [name, body] of Object.entries(skills)) {
+      const dir = join(home, '.claude', 'skills', name)
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'SKILL.md'), body)
+    }
+    return home
+  }
+  // CLAUDE_CONFIG_DIR is pinned on purpose: runScript merges process.env, so an
+  // unpinned test would key its state on whichever agent happens to run it, and
+  // would pass or fail differently in CI. The agent id is the state's identity.
+  const asAgent = (home: string, agent: string) =>
+    ({ HOME: home, CLAUDE_CONFIG_DIR: `/x/agents/${agent}/.claude-config` })
+  const deltas = (out: string) =>
+    out.split('\n').filter(l => l.startsWith('SKILL-VALTOZAS:'))
+
+  it('says NOTHING on the first run, and that is the point', () => {
+    // Without stored state every skill looks "changed". A guard that shouts 56
+    // lines in its first round is as useless as a silent one -- this is the
+    // card's own required mutation.
+    const home = sandbox({ alpha: 'a\nb\nc\n' })
+    try {
+      expect(deltas(runScript([], asAgent(home, 'a1')).stdout)).toEqual([])
+      expect(deltas(runScript([], asAgent(home, 'a1')).stdout)).toEqual([])
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  it('reports the delta on the next run, then goes quiet again', () => {
+    const home = sandbox({ alpha: 'a\nb\nc\n' })
+    try {
+      runScript([], asAgent(home, 'a1'))
+      writeFileSync(join(home, '.claude', 'skills', 'alpha', 'SKILL.md'), 'a\nb\nc\nd\ne\n')
+      const after = deltas(runScript([], asAgent(home, 'a1')).stdout)
+      expect(after.join('\n')).toContain('alpha')
+      expect(after.join('\n')).toContain('3 -> 5 sor')
+      // Not sticky: a delta that repeats every round becomes noise and gets muted.
+      expect(deltas(runScript([], asAgent(home, 'a1')).stdout)).toEqual([])
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  it('names the case the SIZE cannot show: same lines, same chars, different content', () => {
+    // Measured 2026-08-24 12:13 -- an edit went 505 -> 503 lines while ADDING a
+    // rule (+3 in the core, -6 moved to references). Whoever read the number
+    // alone concluded "someone cut it". Size-based signals are blind here.
+    const home = sandbox({ alpha: 'xxx\nxxx\nxxx\n' })
+    try {
+      runScript([], asAgent(home, 'a1'))
+      writeFileSync(join(home, '.claude', 'skills', 'alpha', 'SKILL.md'), 'yyy\nyyy\nyyy\n')
+      const out = deltas(runScript([], asAgent(home, 'a1')).stdout).join('\n')
+      expect(out).toContain('a TARTALOM valtozott, a meret NEM')
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  it('gives the delta to EVERY agent, not just whoever runs first', () => {
+    // The card proposed one shared state file. Measured consequence: the first
+    // agent to run after an edit consumes the signal and the other five never
+    // see it -- a notice delivered to a random recipient. Per-agent state asks
+    // the useful question instead: what changed since *I* last looked.
+    const home = sandbox({ alpha: 'a\nb\n' })
+    try {
+      runScript([], asAgent(home, 'a1'))
+      runScript([], asAgent(home, 'a2'))
+      writeFileSync(join(home, '.claude', 'skills', 'alpha', 'SKILL.md'), 'a\nb\nc\n')
+      expect(deltas(runScript([], asAgent(home, 'a1')).stdout).length).toBeGreaterThan(0)
+      expect(deltas(runScript([], asAgent(home, 'a2')).stdout).length).toBeGreaterThan(0)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  it('--check neither reports nor CONSUMES the delta', () => {
+    // --check is an author asking about their own file, not a round. If it ate
+    // the signal, an ad-hoc call would silently spend the next real round's notice.
+    const home = sandbox({ alpha: 'a\nb\n' })
+    try {
+      runScript([], asAgent(home, 'a1'))
+      writeFileSync(join(home, '.claude', 'skills', 'alpha', 'SKILL.md'), 'a\nb\nc\n')
+      expect(deltas(runScript(['--check', 'alpha'], asAgent(home, 'a1')).stdout)).toEqual([])
+      // The real round still gets it.
+      expect(deltas(runScript([], asAgent(home, 'a1')).stdout).length).toBeGreaterThan(0)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  it('VERBOSE=1 in the environment now behaves like -v', () => {
+    // It used to be inert -- `VERBOSE=0` overwrote it unconditionally while every
+    // USE site read `${VERBOSE:-0}`, which looked like env support. didi measured
+    // it on two separate days, the second time disproving a "fixed" report.
+    const home = sandbox({ alpha: 'a\nb\n' })
+    try {
+      const plain = runScript([], { HOME: home, CLAUDE_CONFIG_DIR: '/x/agents/a1/.claude-config' })
+      const viaEnv = runScript([], { HOME: home, CLAUDE_CONFIG_DIR: '/x/agents/a2/.claude-config', VERBOSE: '1' })
+      const viaFlag = runScript(['-v'], { HOME: home, CLAUDE_CONFIG_DIR: '/x/agents/a3/.claude-config' })
+      expect(viaEnv.stdout.split('\n').length).toBe(viaFlag.stdout.split('\n').length)
+      expect(viaEnv.stdout.split('\n').length).toBeGreaterThan(plain.stdout.split('\n').length)
+    } finally { rmSync(home, { recursive: true, force: true }) }
   })
 })
