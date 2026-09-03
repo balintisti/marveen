@@ -132,7 +132,7 @@ describe('agent-msg.sh -- the send stamp', () => {
     const { port, bodies } = await fakeDashboard()
     const r = await send(installRoot('nodb'), port, ['friday', 'marveen', 'torzs'])
     expect(r.status).toBe(0)
-    expect(bodies[0].content).toContain('sor: nem merheto')
+    expect(bodies[0].content).toContain('cimzett sora: nem merheto')
     expect(r.stderr).toMatch(/NEM tudtam megmerni/)
   })
 
@@ -141,14 +141,14 @@ describe('agent-msg.sh -- the send stamp', () => {
     const { port, bodies } = await fakeDashboard()
     const r = await send(installRoot('depth', { to: 'marveen', count: 2 }), port, ['friday', 'marveen', 'torzs'])
     expect(r.status).toBe(0)
-    expect(bodies[0].content).toContain('sor: 2')
+    expect(bodies[0].content).toContain('cimzett sora: 2 (kuldes elott)')
   })
 
   it('counts only the RECIPIENT queue, not every pending message', async () => {
     const { port, bodies } = await fakeDashboard()
     const r = await send(installRoot('other', { to: 'dexter', count: 4 }), port, ['friday', 'marveen', 'torzs'])
     expect(r.status).toBe(0)
-    expect(bodies[0].content).toContain('sor: 0')
+    expect(bodies[0].content).toContain('cimzett sora: 0 (kuldes elott)')
   })
 
   it('still refuses at 3+ waiting -- the stamp did not weaken the gate', async () => {
@@ -167,7 +167,7 @@ describe('agent-msg.sh -- the send stamp', () => {
     const r = await send(installRoot('force', { to: 'marveen', count: 5 }), port, ['friday', 'marveen', 'torzs', '--force'])
     expect(r.status).toBe(0)
     expect(bodies[0].content).toContain('nem merve (--force)')
-    expect(bodies[0].content).not.toMatch(/sor: \d/)
+    expect(bodies[0].content).not.toMatch(/cimzett sora: \d/)
   })
 
   it('keeps the OK id= contract intact -- callers and CLAUDE.md grep for it', async () => {
@@ -240,5 +240,23 @@ describe('agent-msg.sh -- a __STAMP__ es a kuldesi belyeg EGYUTT el', () => {
     })
     expect(r.status).not.toBe(0)
     expect(bodies, 'a kuldesnek EL SEM KELLETT VOLNA INDULNIA').toHaveLength(0)
+  })
+
+  // Card 3caaaf62. The footnote is read by the RECIPIENT, so a bare `sor: 0` reads
+  // as "nothing is waiting for me" -- while the number is the recipient's depth
+  // BEFORE this message was added, so the one message they are holding is not in
+  // it. Measured on marveen's own misreading: it produced a correct conclusion
+  // with a false reason, which is the kind that travels because nothing catches it.
+  it('names WHOSE queue and WHEN -- not just a number', async () => {
+    const { port, bodies } = await fakeDashboard()
+    const r = await send(installRoot('label', { to: 'marveen', count: 2 }), port, ['friday', 'marveen', 'torzs'])
+    expect(r.status).toBe(0)
+    const stamp = /\[KULDVE:[^\]]*\]/.exec(bodies[0].content)![0]
+    // Both halves, because either alone still misleads: a number without an owner,
+    // or an owner without the timing (this message is not counted in it).
+    expect(stamp).toContain('cimzett sora')
+    expect(stamp).toContain('kuldes elott')
+    // And the bare form must be gone -- this is what a later "tidy up" restores.
+    expect(stamp).not.toMatch(/\| sor: /)
   })
 })

@@ -289,13 +289,24 @@ fi
 # A prefix would shift any `[Eredmény] ...` sent through this helper out of both
 # patterns and re-open a documented incident. Nothing parses the END.
 STAMP_TIME="$(date '+%Y-%m-%d %H:%M %Z')"
+# WHOSE queue, AND WHEN -- both, because the footnote is read by the RECIPIENT
+# (card 3caaaf62). `sor: 0` at the end of a delivered message reads as "nothing
+# is waiting for me", but the number is the RECIPIENT'S depth measured BEFORE
+# this message was added -- so the one message they are holding is not in it.
+# Measured on marveen's own misreading, 2026-08-25: a `sor: 0` footnote on
+# dexter's report was read as dexter's live queue, and produced a correct
+# conclusion with a false reason. That is the worse kind, because a wrong reason
+# attached to a right answer does not get caught -- it just travels.
+# The number is unchanged; only its label is. Nothing parses this footnote
+# (checked across src/, dist/, scripts/, web/), and nothing parses the END of a
+# message at all -- see the incident note above about PREFIXES.
 if [ "$FORCE" = "--force" ]; then
-  STAMP_QUEUE="sor: nem merve (--force)"
+  STAMP_QUEUE="cimzett sora: nem merve (--force)"
 elif [ -z "${DEPTH_PRE:-}" ]; then
   # Say it, do not omit it: a missing field reads as "nothing to report".
-  STAMP_QUEUE="sor: nem merheto"
+  STAMP_QUEUE="cimzett sora: nem merheto"
 else
-  STAMP_QUEUE="sor: $DEPTH_PRE"
+  STAMP_QUEUE="cimzett sora: $DEPTH_PRE (kuldes elott)"
 fi
 C="$C
 
