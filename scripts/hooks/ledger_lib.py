@@ -100,6 +100,120 @@ def owner_name():
     return "A felhasználó"
 
 
+# ADOPTED FROM Szotasz/marveen @ origin/develop (LEDGERCWD828), card bfd8d307.
+# Their incident, in their words: the shell cwd is MUTABLE within a session, so when the
+# main agent stepped into agents/<x>/ for a measurement its OWN replies ledgered under <x>,
+# the reply guard found no outbound under the real id, and it TRIPLE-SENT an already
+# answered link to the owner -- 51 outbound rows under 7 names.
+#
+# THIS IS A CHAIN, NOT A REPLACEMENT: step 3 is our existing agent_id_from_cwd below, so a
+# caller that has no transcript_path and no env override behaves exactly as it does today.
+# That is why it cannot be a downgrade for the nine hooks already on the cwd resolver.
+#
+# MEASURED HERE BEFORE ADOPTING (2026-09-03): conversation_log holds 1125 rows and EVERY
+# one is under `marveen` -- no directory names, no foreign agent names. So this is
+# PREVENTION, not repair: the upstream incident has no counterpart in our data.
+def agent_id_from_payload(payload):
+    """Session-stable agent identity from a hook payload (LEDGERCWD828).
+
+    The shell cwd is MUTABLE within a session: when the main agent stepped into
+    agents/iris/... for a measurement, its OWN replies to the owner ledgered
+    under iris, the reply guard then found no outbound under the real id and
+    triple-sent an already-answered link. Measured blast radius on the owner
+    chat: 51 outbound rows under 7 names, several of them plain directory
+    names, not agents.
+
+    The session's transcript_path is derived from the agent's own config dir
+    (CLAUDE_CONFIG_DIR), which never changes within a session -- that is the
+    identity anchor. Resolution order:
+      1. transcript_path  (immutable per session)
+      2. MARVEEN_AGENT_ID (explicit launcher override)
+      3. cwd              (last resort, for callers that have nothing else)
+    """
+    payload = payload or {}
+    agent = _agent_id_from_config_path(payload.get("transcript_path"))
+    if agent:
+        return agent
+    env_id = os.environ.get("MARVEEN_AGENT_ID", "").strip()
+    if env_id:
+        return env_id
+    return agent_id_from_cwd(payload.get("cwd"))
+
+
+def _agent_id_from_config_path(path):
+    """Map a transcript/config path to an agent id, or None when the path says
+    nothing (caller falls through to the env/cwd chain).
+
+      <install>/agents/<id>/...  -> <id>            (a sub-agent's config dir)
+      anywhere else in the tree  -> MAIN_AGENT_ID   (.channels-config etc.)
+      under ~/.claude            -> MAIN_AGENT_ID   (non-isolated main session)
+      anything else / empty      -> None
+    """
+    if not path or not isinstance(path, str):
+        return None
+    path = os.path.abspath(path.strip())
+    install = _install_dir().rstrip("/")
+    agents_root = os.path.join(install, "agents")
+    # 1. The CONFIG OWNER is authoritative: a transcript under
+    #    <install>/agents/<id>/... is that agent's isolated config dir, no
+    #    matter where the session's cwd wandered.
+    if path.startswith(agents_root + os.sep):
+        rel = path[len(agents_root) + 1:]
+        head = rel.split(os.sep)[0]
+        return head or None
+    # 2. Non-isolated config roots (~/.claude and friends) key the project dir
+    #    by the session's STARTING cwd, flattened: /a/b -> "-a-b". Every fleet
+    #    agent's tmux session runs this way (measured 2026-08-28: the live
+    #    samu session's transcript sits under
+    #    ~/.claude/projects/-Users-marvin-ClaudeClaw-agents-samu/), so the
+    #    agent id is IN the path -- mapping the whole family to the main agent
+    #    would be the original bug mirrored. Parse the segment instead.
+    seg_agent = _agent_id_from_project_segment(path, install)
+    if seg_agent is not None:
+        return seg_agent
+    if path == install or path.startswith(install + os.sep):
+        return main_agent_id()
+    home_claude = os.path.join(os.path.expanduser("~"), ".claude")
+    if path == home_claude or path.startswith(home_claude + os.sep):
+        return main_agent_id()
+    return None
+
+
+def _agent_id_from_project_segment(path, install):
+    """Read the agent id out of a flattened projects/<segment>/ component.
+
+      .../projects/-Users-...-ClaudeClaw-agents-<id>[-...]/x.jsonl -> <id>
+      .../projects/-Users-...-ClaudeClaw[-...]/x.jsonl             -> MAIN
+      no /projects/ component, or a foreign segment                -> None
+
+    Agent ids may in principle contain hyphens, which the flattening makes
+    ambiguous; when <install>/agents exists its entries disambiguate (longest
+    match wins), otherwise the first hyphen-delimited hunk is taken -- correct
+    for every current fleet name.
+    """
+    marker = os.sep + "projects" + os.sep
+    i = path.find(marker)
+    if i < 0:
+        return None
+    seg = path[i + len(marker):].split(os.sep)[0]
+    flat_install = install.replace(os.sep, "-")
+    agents_prefix = flat_install + "-agents-"
+    if seg.startswith(agents_prefix):
+        rest = seg[len(agents_prefix):]
+        try:
+            names = sorted(os.listdir(os.path.join(install, "agents")), key=len, reverse=True)
+        except OSError:
+            names = []
+        for name in names:
+            if rest == name or rest.startswith(name + "-"):
+                return name
+        head = rest.split("-")[0]
+        return head or None
+    if seg == flat_install or seg.startswith(flat_install + "-"):
+        return main_agent_id()
+    return None
+
+
 def agent_id_from_cwd(cwd):
     """Which channel agent is this session? Derived from cwd so the hooks are
     generic across all three agents and never cross-contaminate:
