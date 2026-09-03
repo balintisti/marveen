@@ -1,7 +1,7 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -99,6 +99,24 @@ function send(root: string, port: number, args: string[]): Promise<{ status: num
     let stderr = ''
     p.stdout.on('data', (c) => (stdout += c))
     p.stderr.on('data', (c) => (stderr += c))
+    p.on('close', (code) => resolve({ status: code ?? -1, stdout, stderr }))
+  })
+}
+
+// Same as send(), but feeds a file into STDIN -- the `- < "$f"` form the path
+// guard's refusal points people at. Needed so the guard's negative control runs
+// through the ACTUAL route, not a paraphrase of it.
+function sendStdin(root: string, port: number, args: string[], stdinFile: string): Promise<{ status: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const p = spawn('bash', [join(root, 'scripts', 'agent-msg.sh'), ...args], {
+      env: { ...process.env, MARVEEN_WEB_PORT: String(port) },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    p.stdout.on('data', (c) => (stdout += c))
+    p.stderr.on('data', (c) => (stderr += c))
+    p.stdin.end(readFileSync(stdinFile))
     p.on('close', (code) => resolve({ status: code ?? -1, stdout, stderr }))
   })
 }
@@ -275,10 +293,29 @@ describe('agent-msg.sh -- a __STAMP__ es a kuldesi belyeg EGYUTT el', () => {
     writeFileSync(tmp, 'the real message\n')
     try {
       const r = await send(installRoot('pathguard', { to: 'marveen', count: 0 }), port, ['friday', 'marveen', tmp])
-      expect(r.status).not.toBe(0)
+      // 3, not 2: exit 2 is already the queue-depth refusal in this script, and a
+      // caller reading the code needs to know WHICH -- wait, versus rewrite the call.
+      expect(r.status).toBe(3)
       expect(r.stderr).toContain('NEM KULDTEM')
       // The refusal must name the working form, or it only says no.
       expect(r.stderr).toContain('- < ')
+    } finally { rmSync(tmp, { force: true }) }
+  })
+
+  it('THE NEGATIVE CONTROL: the same file through the stdin branch still SENDS', async () => {
+    // Named on the card as load-bearing, and it is: without it a gate that refused
+    // EVERYTHING would look green here. The positive case proves the gate can say
+    // no; only this proves it can still say yes -- and through the very route the
+    // refusal tells people to use.
+    const { port, bodies } = await fakeDashboard()
+    const tmp = join(tmpdir(), `am-stdin-${Date.now()}`)
+    const body = 'x'.repeat(600)
+    writeFileSync(tmp, body + '\n')
+    try {
+      const r = await sendStdin(installRoot('stdinok', { to: 'marveen', count: 0 }), port, ['friday', 'marveen', '-'], tmp)
+      expect(r.status).toBe(0)
+      expect(bodies[0].content.length).toBeGreaterThan(500)
+      expect(bodies[0].content).toContain(body)
     } finally { rmSync(tmp, { force: true }) }
   })
 

@@ -76,7 +76,11 @@ case "$C" in
       echo "Ez a helper TARTALMAT var a 3. argumentumban; fajlbol igy kuldj:" >&2
       echo "  bash scripts/agent-msg.sh $FROM $TO - < \"$C\"" >&2
       echo "(Ha tenyleg csak ezt az utvonalat akartad elkuldeni: negyedik argumentumkent --force.)" >&2
-      exit 2
+      # EXIT 3, NEM 2, es ez nem izles: a 2 MAR FOGLALT ebben a szkriptben -- az a
+      # sorhossz-megtagadas (:295). Ket kulonbozo hir egy kilepesi kodon oszotozva
+      # megkulonboztethetetlen egy `if` szamara, es a hivo epp azert nezi a kodot,
+      # hogy tudja, MIT tegyen: a sorhossznal varni kell, itt at kell irni a hivast.
+      exit 3
     fi
     ;;
 esac
