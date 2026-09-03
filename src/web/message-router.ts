@@ -28,7 +28,7 @@ import {
   sessionExistsOnHost,
   capturePane,
 } from './agent-process.js'
-import { detectPaneState, detectsPermissionPrompt, paneShowsContextSaturation, type PaneState } from '../pane-state.js'
+import { detectPaneState, detectsPermissionPrompt, describePermissionPrompt, paneShowsContextSaturation, type PaneState } from '../pane-state.js'
 import { parsePaneTokens, nextTokenSample, type TokenSample } from '../session-progress.js'
 import { setLastInboundModality } from './voice-modality.js'
 import { classifyAgentMessage, wrapAgentMessageForDelivery } from './agent-message-wrap.js'
@@ -122,8 +122,20 @@ export function formatStuckSessionAlert(
   const alsoQuiet = pendingCount === 0
     ? ' Nobody is queued behind it, so the urgency here is zero whatever the cause.'
     : ''
+  // A PERMISSION PROMPT IS NOT A STUCK SESSION, AND THE TAG SAYS SO (marveen's
+  // (B) decision, 2026-09-03 14:46). Measured that day: 44 [session-stuck]
+  // alerts, 39 of them on the not-ready lane, and marveen answered twelve of
+  // those prompts by hand -- every one of them reported under a tag that tells
+  // the reader to go diagnose a stall. The classification, not the wording, is
+  // what made them cost a lookup each.
+  //
+  // CONSEQUENCE FOR ANY METER: a query counting `[session-stuck]` goes blind on
+  // these the day this ships, and the drop reads as "the fix worked" -- the
+  // flattering direction. Count the UNION of both tags across the change.
   if (pane && detectsPermissionPrompt(pane)) {
-    return `[session-stuck] Agent '${agent}' (tmux ${session}) has been not-ready for ${min} min with ${queue}. The pane is parked on a TOOL-PERMISSION prompt: it is waiting for a decision, NOT wedged. Do NOT restart -- that spends the entire context for one keystroke, and the question comes straight back. The answer IS the decision, so it belongs to a person, not to a watchdog.${alsoQuiet}`
+    const asked = describePermissionPrompt(pane)
+    const what = asked ? ` It is asking: "${asked}".` : ''
+    return `[approval-needed] Agent '${agent}' (tmux ${session}) has been waiting for a DECISION for ${min} min with ${queue}.${what} This is NOT a stall and NOT a wedge: the pane is parked on a TOOL-PERMISSION prompt. Do NOT restart -- that spends the entire context for one keystroke, and the question comes straight back. The answer IS the decision, so it belongs to a person, not to a watchdog.${alsoQuiet}`
   }
   if (pane && paneShowsContextSaturation(pane)) {
     return `[session-stuck] Agent '${agent}' (tmux ${session}) has been not-ready for ${min} min with ${queue}. The pane shows CONTEXT SATURATION, which is the context-guard's territory -- it restarts on saturation by itself, after two sweeps. Do NOT restart it from here: a second restart lands mid-sweep and loses the guard's continuation prompt.${alsoQuiet}`

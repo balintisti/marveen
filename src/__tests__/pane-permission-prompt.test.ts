@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   detectsPermissionPrompt, detectsBlockingMenu, detectPaneState,
-  detectsModelConsentDialog, detectsFirstRunGate,
+  detectsModelConsentDialog, detectsFirstRunGate, describePermissionPrompt,
 } from '../pane-state.js'
 
 // Card b5a9f60a / 296277e8.
@@ -214,5 +214,93 @@ describe('detectsPermissionPrompt', () => {
   it('says no to an empty pane', () => {
     expect(detectsPermissionPrompt('')).toBe(false)
     expect(detectsPermissionPrompt('   \n  ')).toBe(false)
+  })
+})
+
+// Card b5a9f60a, marveen's (B) decision 2026-09-03 14:46: the alert must NAME
+// what is being asked. Reclassifying without quoting still makes the reader
+// open the pane, which is the cost the reclassification exists to remove.
+describe('describePermissionPrompt', () => {
+  it('quotes the explanation block AND the question from the live capture', () => {
+    const quoted = describePermissionPrompt(PERMISSION_PROMPT_PANE)!
+    expect(quoted).toContain('Do you want to proceed?')
+    // The block above the question is what names the command and the reason.
+    expect(quoted).toContain('deny rule is configured')
+    expect(quoted).toContain('submission.service.ts')
+  })
+
+  it('returns ONE line, so it cannot imitate the framing of the message carrying it', () => {
+    // Pane content is not ours. An excerpt that kept its control characters
+    // could forge a header inside the inter-agent message that carries it.
+    //
+    // THE FIXTURE CARRIES THE CONTROL CHARACTERS ON PURPOSE, and that is a
+    // correction: the first version of this test asserted on the clean live
+    // capture, and the mutation that REMOVED the sanitiser stayed green -- the
+    // fixture could not express the state the assertion was about. A pane with
+    // a CR and a tab in the quoted block can.
+    const dirty = PERMISSION_PROMPT_PANE.replace(
+      'a Read() deny rule is',
+      'a Read()\u000d\u0009deny\u0009rule  is',
+    )
+    const quoted = describePermissionPrompt(dirty)!
+    expect(quoted).not.toContain('\n')
+    expect(quoted).not.toMatch(/[\u0000-\u001f]/)
+    // Collapsed, not merely stripped: the words survive with single spaces.
+    expect(quoted).toContain('Read() deny rule is configured')
+    // CONTROL: the same assertions on the clean capture, so a function that
+    // returned an empty string would not pass this test.
+    const clean = describePermissionPrompt(PERMISSION_PROMPT_PANE)!
+    expect(clean).toContain('deny rule is configured')
+  })
+
+  it('caps the excerpt, however long the pane line is', () => {
+    const long = PERMISSION_PROMPT_PANE.replace(
+      ' │ grep on ',
+      ` │ ${'x'.repeat(900)} grep on `,
+    )
+    const quoted = describePermissionPrompt(long)!
+    expect(quoted.length).toBeLessThanOrEqual(220)
+    expect(quoted.endsWith('...')).toBe(true)
+    // CONTROL: the uncapped one is genuinely shorter, so the cap is not simply
+    // truncating every input to the same string.
+    expect(describePermissionPrompt(PERMISSION_PROMPT_PANE)!.length).toBeLessThan(220)
+  })
+
+  it('still answers when the prompt renders no explanation block', () => {
+    // Not every prompt has one; the question alone is a valid answer, and the
+    // walk must not require a box to return something.
+    const bare = [
+      ' Do you want to make this edit to config.ts?',
+      ' ❯ 1. Yes',
+      '   2. No',
+      '',
+      ' Esc to cancel · Tab to amend',
+    ].join('\n')
+    expect(describePermissionPrompt(bare)).toBe('Do you want to make this edit to config.ts?')
+  })
+
+  it('says nothing about panes that are not a permission prompt', () => {
+    // The negative half: without this, a function that always returned the same
+    // sentence would pass every test above.
+    //
+    // THE QUOTING PANE IS THE ONE THAT MATTERS, and it was added after a
+    // mutation SURVIVED: dropping the detectsPermissionPrompt() guard left all
+    // of the panes below returning null anyway, because none of them contains
+    // the question at all -- so they proved nothing about the guard. An agent
+    // that merely PASTES the dialog into its scrollback does contain it, and
+    // without the guard that pane would be described as a live prompt.
+    const quotingIdlePane = [
+      'Do you want to proceed?',
+      ' \u276f 1. Yes',
+      '   2. No',
+      ' Esc to cancel \u00b7 Tab to amend',
+      IDLE_PANE,
+    ].join('\n')
+    expect(describePermissionPrompt(quotingIdlePane)).toBeNull()
+    expect(describePermissionPrompt(IDLE_PANE)).toBeNull()
+    expect(describePermissionPrompt(BUSY_PANE)).toBeNull()
+    expect(describePermissionPrompt(CONSENT_DIALOG_PANE)).toBeNull()
+    expect(describePermissionPrompt(TRUST_GATE_PANE)).toBeNull()
+    expect(describePermissionPrompt('')).toBeNull()
   })
 })

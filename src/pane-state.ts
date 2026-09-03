@@ -696,6 +696,67 @@ export function detectsPermissionPrompt(pane: string): boolean {
     && PERMISSION_CANCEL_RX.test(footerRegion)
 }
 
+// AND THE ALERT HAS TO NAME WHAT IS BEING ASKED (marveen's (B) decision,
+// 2026-09-03 14:46). Reclassifying the pane is only half of it: "an approval is
+// pending" still makes the reader open the pane to find out what for, which is
+// the cost the reclassification was meant to remove.
+//
+// WHY THE BLOCK ABOVE THE QUESTION, and not the command box at the top. A tmux
+// capture holds only the VISIBLE pane, so the box is the part that gets cut off
+// by scrollback; the block immediately above the question is always on screen.
+// On the live 07:24 capture that block is the CLI's own explanation, and it
+// names both the command and the reason ("grep on
+// 'src/forms/submission.service.ts' ... a Read() deny rule is configured"). On a
+// prompt that renders no explanation, the same walk quotes the command box
+// itself. One rule, both shapes -- and neither depends on the wording of the
+// question, which varies per tool.
+//
+// COLLAPSED TO ONE LINE, AND CAPPED, deliberately. This string is pasted into an
+// inter-agent message, and pane content is not ours: a multi-line excerpt could
+// imitate the framing of the message that carries it. Control characters go for
+// the same reason. The cap is on the RESULT, so a pane that is one enormous line
+// cannot push the alert past a readable size.
+const PERMISSION_QUOTE_MAX_CHARS = 220
+const PERMISSION_QUOTE_MAX_LINES = 6
+// `[\s\S]*` and not `.*`: a tmux capture can carry a bare CR inside a line, and
+// JS treats CR as a line terminator that `.` refuses to cross -- so a `.*` body
+// would silently stop matching there and the walk would drop the rest of the
+// block. Found by a fixture that carries a CR, after the sanitiser mutation
+// survived against the clean capture.
+const BOX_LINE_RX = /^\s*\u2502\s?([\s\S]*)$/
+
+function collapseForAlert(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+export function describePermissionPrompt(pane: string): string | null {
+  if (!detectsPermissionPrompt(pane)) return null
+  const lines = pane.split('\n')
+  let qIdx = -1
+  let question = ''
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = lines[i].match(PERMISSION_ASK_RX)
+    if (m) { qIdx = i; question = m[0]; break }
+  }
+  if (qIdx < 0) return null
+  const context: string[] = []
+  let i = qIdx - 1
+  while (i >= 0 && lines[i].trim() === '') i--
+  while (i >= 0 && context.length < PERMISSION_QUOTE_MAX_LINES) {
+    const m = lines[i].match(BOX_LINE_RX)
+    if (!m) break
+    const body = m[1].trim()
+    if (body) context.unshift(body)
+    i--
+  }
+  const quoted = collapseForAlert(context.length ? `${context.join(' ')} -- ${question}` : question)
+  if (!quoted) return null
+  return quoted.length > PERMISSION_QUOTE_MAX_CHARS
+    ? `${quoted.slice(0, PERMISSION_QUOTE_MAX_CHARS - 3).trimEnd()}...`
+    : quoted
+}
+
 export interface DetectPaneStateOptions {
   /** If true, the 'typing' state (text parked in input box) is
    * merged into 'busy'. Default false -- callers that care about

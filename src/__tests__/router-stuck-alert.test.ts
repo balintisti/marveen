@@ -123,6 +123,34 @@ describe('formatStuckSessionAlert: the not-ready branch names what it saw', () =
     expect(alert).toContain('belongs to a person')
   })
 
+  it('carries the approval TAG, not the stuck one -- and the other branches keep theirs', () => {
+    // marveen's (B) decision. This assertion exists because the branch text
+    // ALONE could not tell the two apart: when the tag was changed, every test
+    // in this file stayed green, since they all matched on body phrases. The
+    // classification is the part a reader sees first in an inbox.
+    const approval = formatStuckSessionAlert('dexter', MAIN, 'agent-dexter', 12 * MIN, 1, null, PERMISSION_PANE)!
+    expect(approval.startsWith('[approval-needed]')).toBe(true)
+    expect(approval).not.toContain('[session-stuck]')
+    // CONTROL, without which a build that tagged EVERYTHING [approval-needed]
+    // would pass: the branches that really are stall reports keep their tag.
+    const saturated = formatStuckSessionAlert('mandark', MAIN, 'agent-mandark', 12 * MIN, 0, null, SATURATED_PANE)!
+    const generic = formatStuckSessionAlert('prisma', MAIN, 'agent-prisma', 12 * MIN, 2, null, null)!
+    const busy = formatStuckSessionAlert('prisma', MAIN, 'agent-prisma', 35 * MIN, 2, 'busy', null)!
+    for (const other of [saturated, generic, busy]) {
+      expect(other.startsWith('[session-stuck]')).toBe(true)
+      expect(other).not.toContain('[approval-needed]')
+    }
+  })
+
+  it('NAMES what is being asked, so the reader does not have to open the pane', () => {
+    // Half the decision is the tag; the other half is that the alert quotes the
+    // question and the block above it, which is what identifies the command.
+    const alert = formatStuckSessionAlert('dexter', MAIN, 'agent-dexter', 12 * MIN, 1, null, PERMISSION_PANE)!
+    expect(alert).toContain('Do you want to proceed?')
+    expect(alert).toContain('deny rule is configured')
+    expect(alert).toContain('It is asking:')
+  })
+
   it('context saturation is named as the context-guard territory, not the reader s', () => {
     const alert = formatStuckSessionAlert('mandark', MAIN, 'agent-mandark', 12 * MIN, 0, null, SATURATED_PANE)!
     expect(alert).toContain('CONTEXT SATURATION')
