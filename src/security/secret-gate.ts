@@ -152,6 +152,24 @@ export const ALLOWLISTED_PATHS: { path: string; reason: string }[] = [
   { path: 'src/__tests__/secret-gate.test.ts', reason: 'the gate\'s own tests: synthetic secrets are the subject under test' },
   { path: 'src/__tests__/channel-inbound-framing.test.ts', reason: 'channel framing test: synthetic wrapper frames with sample ids are the subject under test' },
   { path: 'scripts/__tests__/conversation-ledger.test.sh', reason: 'ledger test: synthetic wrapper frames with sample ids' },
+  // Adopted with the marveen skill CLI (card 0024b92b). The SUBJECT of these two
+  // files is a key-shaped string: the scanner's `api-key-shaped` rule has to fire
+  // on something, and the golden output quotes the fixture verbatim because it is
+  // the original Python scanner's own output.
+  //
+  // RE-MEASURED HERE RATHER THAN INHERITED: upstream states it ran its gate over
+  // 896 fixture files and exactly these two trip. Ours ran over the 67 staged files
+  // of this adoption -- all 28 skill-scan fixtures and their .expected.json pairs
+  // among them -- and blocked on exactly the same two, four hits. The other
+  // deliberate fixtures (13-card-shaped, 16-hu-taj, 17-secret-assignment) carry
+  // shapes this gate does not look for, so they are NOT listed: an unnecessary
+  // entry only blinds the gate on a file it still checks today.
+  //
+  // ONE FRAGILITY, MEASURED ON OUR OWN PATTERN: `15-bearer.md` misses by three
+  // characters. Our `bearer token literal` starts at 24 and that token is 21. If
+  // the fixture ever grows or the threshold drops, it lands here for the same reason.
+  { path: 'src/__tests__/fixtures/skill-scan/14-api-key-shaped.md', reason: 'skill-scan fixture: an api-key-shaped string is the subject under test' },
+  { path: 'src/__tests__/fixtures/skill-scan/14-api-key-shaped.expected.json', reason: 'skill-scan golden output from the original Python scanner: it quotes the fixture above' },
 ];
 
 /**
