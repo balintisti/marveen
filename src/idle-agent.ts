@@ -775,6 +775,52 @@ export function topOfPullList<T extends { priority?: string | null; updated_at?:
   )
 }
 
+/** Narrow the ownerless pull-list to the asking agent's lane (card e4a1ff49).
+ *
+ *  The offer is the ONE moment an idle agent gets work without asking for it,
+ *  and the ranking was priority-only across the whole board. Measured
+ *  2026-09-03: friday was offered five ownerless cards and ALL FIVE were
+ *  `project=delta-crm`, explicitly not his lane. The pool that day was 87 --
+ *  49 delta-crm, 32 marveen, 6 with no project -- so the 49 permanently outrank
+ *  the 32 for an agent who will never pick any of them up.
+ *
+ *  FILTERING, NOT WEIGHTING, and that was measured too: a lane-foreign `high`
+ *  sits on top of a weighted ranking just the same.
+ *
+ *  MISSING CONFIG MEANS NO FILTERING, AND THAT DEFAULT IS LOAD-BEARING -- do
+ *  not "clean it up" into a stricter default. The error here is asymmetric:
+ *  a filter that shows too much is exactly today's behaviour, while one that
+ *  shows too little starves an agent of work and makes the guard do the
+ *  opposite of the thing it exists for. So an agent with no declared lane sees
+ *  everything, as before. Fail toward visibility.
+ *
+ *  AN UNCLASSIFIED CARD STAYS VISIBLE TO EVERYONE. An empty `project` is not a
+ *  lane, it is a missing answer (6 of 87 that day, and 27% of the whole board on
+ *  08-29), and hiding those would let a card with one unfilled field become
+ *  invisible to the entire fleet.
+ *
+ *  WHY THE LANE IS NOT DERIVED FROM THE AGENT'S OWN CARDS, which is the cheap
+ *  idea that needs no config: measured over 1433 assigned cards, the dominant
+ *  project is 98.5% for computress, 96.5% dexter, 92.4% friday, 86.8% mandark,
+ *  78.9% didi -- but 65.0% for marveen and 54.5% for jarvis. It works on the
+ *  specialists and fails on exactly the agents whose correct lane is BOTH.
+ *  jarvis is the fleet-wide verifier; pinning him 54/46 into one lane would take
+ *  half the verification away silently. Hence an explicit list, where "both" is
+ *  expressible by listing both or by declaring nothing at all.
+ */
+export function laneFilteredPullList<T extends { project?: string | null }>(
+  cards: T[],
+  lanes: readonly string[] | null | undefined,
+): T[] {
+  const declared = (lanes ?? []).map((l) => l.trim()).filter(Boolean)
+  if (declared.length === 0) return cards
+  const allowed = new Set(declared)
+  return cards.filter((c) => {
+    const project = (c.project ?? '').trim()
+    return project === '' || allowed.has(project)
+  })
+}
+
 /** What an idle agent is told when the board HAS ownerless work (card 4cbc8af9).
  *
  *  Addressed to the AGENT, not the coordinator -- that is the whole point. The
