@@ -5,6 +5,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { resolveFromPath } from '../platform.js'
 import { WEB_PORT } from '../config.js'
 import { logger } from '../logger.js'
+import { createAgentMessage } from '../db.js'
 import { MAIN_AGENT_ID, SERVICE_ID, BOT_NAME, CHANNEL_PROVIDER, PROJECT_ROOT, RESPAWN_ENABLED } from '../config.js'
 import { DISTRIBUTION_DEFAULT_AGENT_MODEL } from '../config-registry.js'
 import { agentDir, listAgentNames, readAgentChannelProvider } from './agent-config.js'
@@ -35,7 +36,7 @@ import { reapChannelOrphans, reapDetachedChannelClaudes, collectPollerEvidence }
 import { probeTelegramConflict } from './channel-conflict-probe.js'
 import { schedulePluginUnlockAfterRespawn, wasPluginConfirmedAbsent, clearPluginAbsent } from './channel-plugin-unlock.js'
 import {
-  detectPaneState, decidePaneErrorAlert, detectsBlockingMenu, detectsFirstRunGate, detectsModelConsentDialog, type PaneErrorAlertState, type PaneState,
+  detectPaneState, decidePaneErrorAlert, detectsBlockingMenu, detectsFirstRunGate, detectsModelConsentDialog, detectsPermissionPrompt, type PaneErrorAlertState, type PaneState,
   stuckInputSignature, decideStuckInputRecovery, parkedChannelInput,
   parkedInputText, shouldClearTruncatedPreamble,
   parkedInputRowCount, submitLanded, decideStuckInputAction,
@@ -1376,6 +1377,49 @@ function checkMainKeepaliveStaleness(): void {
   }
 }
 
+// Card 296277e8 / 53debafd. The menu-recovery Escape lands on tool-permission
+// prompts too, and there it means `cancel` -- a decision spent on the agent's
+// behalf by a watchdog that has no authority to make it. The keystroke itself is
+// left alone for now (see the call site for why); what this removes is its
+// SILENCE. An intervention that leaves no trace cannot be audited, and its
+// accuracy cannot be measured even in principle -- which is card 53debafd.
+//
+// Pure so it can be unit-tested against a real captured pane. Carries WHICH agent
+// and WHAT was being asked, because "a prompt was cancelled" without the question
+// is not something the coordinator can act on or judge.
+export function formatPermissionPromptCancelledNotice(
+  label: string,
+  session: string,
+  pane: string | null,
+): string {
+  const lines = (pane ?? '').split('\n').map(l => l.trim()).filter(Boolean)
+  const askIdx = lines.findIndex(l => /Do you want to [^\n?]{0,120}\?/.test(l))
+  const question = askIdx >= 0 ? lines[askIdx] : '(a kerdes nem volt kiolvashato a panelbol)'
+  // The reason lines sit ABOVE the question and say why the CLI asked at all
+  // (a deny rule, an unresolvable cwd). Box-drawing chrome stripped; capped so a
+  // long tool payload cannot flood the coordinator's inbox.
+  const why = askIdx > 0
+    ? lines.slice(Math.max(0, askIdx - 4), askIdx)
+        .map(l => l.replace(/^[│|]\s?/, '').trim())
+        .filter(l => l.length > 3)
+        .join(' ')
+        .slice(0, 240)
+    : ''
+  return [
+    `[permission-cancelled] A(z) '${label}' (tmux ${session}) TOOL-ENGEDELYKERESET a menu-helyreallito`,
+    `Escape TOROLTE -- - vagyis a rendszer ELUTASITOTTA a hivast az agens neveben, egy olyan kapunal,`,
+    `ami azert letezik, hogy ember dontson. Az agens ettol tovabbmegy, de a kert muveletet NEM`,
+    `hajtotta vegre, es valoszinuleg ujraprobalja.`,
+    ``,
+    `A KERDES: ${question}`,
+    why ? `AZ INDOK: ${why}` : `AZ INDOK: (nem volt kiolvashato)`,
+    ``,
+    `Ez NEM riasztas es nem ker beavatkozast: NYOM, hogy a beavatkozas ne legyen lathatatlan`,
+    `(kartya 53debafd). Hogy a rendszer egyaltalan nyomjon-e Escape-et ezekre, az a 296277e8-on`,
+    `all, es koordinacios dontes.`,
+  ].join('\n')
+}
+
 export function sendAlert(text: string): void {
   notifyChannel(text).catch(() => {})
 }
@@ -1653,13 +1697,48 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
             await dismissModelConsentDialogIfPresent(t.session)
             sendAlert(`🎛️ A(z) ${label} session a modell-hozzájárulás dialóguson parkolt; az 1-es opcióval (a beállított modell megtartása) továbbléptettem. Modellváltás NEM történt.`)
           } else {
-            logger.warn({ session: t.session, agent: label }, 'Session parked in a blocking interactive menu -- sending Escape to recover')
+            // A TOOL-PERMISSION prompt lands here too, and the recovery keystroke
+            // on THAT dialog is `cancel` -- so the watchdog denies a tool call on
+            // the agent's behalf, at the one gate that exists so a person decides.
+            // Measured 2026-09-03 (card 296277e8): 15 firings in a day across four
+            // sub-agents, one traced end to end -- prompt present 07:24, "sending
+            // Escape to recover" for agent-dexter 07:26:45, prompt gone 07:27:02,
+            // nobody had answered it.
+            //
+            // THE BEHAVIOUR IS DELIBERATELY UNCHANGED HERE, and that is a decision
+            // rather than an oversight: today the keystroke at least unblocks the
+            // agent, and there is no watcher who reliably answers these prompts --
+            // measured the same day, they sat 10-15 minutes before anyone noticed,
+            // and only by chance. Simply not pressing would trade a denied tool
+            // call for an agent parked indefinitely, which is not obviously better.
+            // Whether to stop pressing (and after what grace period) is coordination
+            // policy and belongs to the coordinator; card 296277e8 carries it.
+            //
+            // What IS fixed here is that the decision stops being invisible. The
+            // coordinator gets told WHICH agent had a permission decision spent on
+            // its behalf and WHAT was being asked -- so the intervention leaves a
+            // trace, which is the gap card 53debafd is about. It goes to the
+            // coordinator's inbox, NOT to sendAlert: sendAlert reaches the operator
+            // on Telegram, and at 15 a day that is spam, not a signal.
+            const permissionPrompt = paneNow != null && detectsPermissionPrompt(paneNow)
+            logger.warn({ session: t.session, agent: label, permissionPrompt },
+              permissionPrompt
+                ? 'Blocking "menu" is a TOOL-PERMISSION prompt -- the recovery Escape CANCELS it, spending the decision on the agent behalf'
+                : 'Session parked in a blocking interactive menu -- sending Escape to recover')
             try {
               execFileSync(TMUX, ['send-keys', '-t', t.session, 'Escape'], { timeout: 5000 })
             } catch (err) {
               logger.warn({ err, session: t.session }, 'Menu-recovery Escape failed')
             }
-            sendAlert(`⌨️ A(z) ${label} session beragadt egy interaktiv menube (pl. /mcp) es nem dolgozott fel uzeneteket. Kikuldtem egy Escape-et, visszateritettem a prompthoz. Ha ismetlodik: tmux attach -t ${t.session}`)
+            if (permissionPrompt) {
+              try {
+                createAgentMessage('system', MAIN_AGENT_ID, formatPermissionPromptCancelledNotice(label, t.session, paneNow))
+              } catch (err) {
+                logger.warn({ err, session: t.session }, 'permission-prompt cancellation notice could not be queued')
+              }
+            } else {
+              sendAlert(`⌨️ A(z) ${label} session beragadt egy interaktiv menube (pl. /mcp) es nem dolgozott fel uzeneteket. Kikuldtem egy Escape-et, visszateritettem a prompthoz. Ha ismetlodik: tmux attach -t ${t.session}`)
+            }
           }
         }
       }
