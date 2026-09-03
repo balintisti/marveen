@@ -1,7 +1,7 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -258,5 +258,34 @@ describe('agent-msg.sh -- a __STAMP__ es a kuldesi belyeg EGYUTT el', () => {
     expect(stamp).toContain('kuldes elott')
     // And the bare form must be gone -- this is what a later "tidy up" restores.
     expect(stamp).not.toMatch(/\| sor: /)
+  })
+
+  // A FILENAME IS NOT A MESSAGE (measured 2026-09-03). This helper takes CONTENT
+  // in argument 3; the file form is `- < "$f"`. Passing a path there made the
+  // helper answer `OK id=` for successfully delivering the WRONG thing -- the
+  // recipient got a path, the text reached nobody, and the sender believed it
+  // was sent. Eleven times in 9740 messages, six of them in one afternoon.
+  // Precision measured, not estimated: single word + starts with / + the file
+  // EXISTS matched 11 of 9740, and all 11 were the mistake. Existence is the
+  // load-bearing term -- a message merely MENTIONING a path that does not exist
+  // could not have been sent with `- < "$f"` and must pass.
+  it('refuses a bare EXISTING file path as the message body', async () => {
+    const { port } = await fakeDashboard()
+    const tmp = join(tmpdir(), `am-guard-${Date.now()}`)
+    writeFileSync(tmp, 'the real message\n')
+    try {
+      const r = await send(installRoot('pathguard', { to: 'marveen', count: 0 }), port, ['friday', 'marveen', tmp])
+      expect(r.status).not.toBe(0)
+      expect(r.stderr).toContain('NEM KULDTEM')
+      // The refusal must name the working form, or it only says no.
+      expect(r.stderr).toContain('- < ')
+    } finally { rmSync(tmp, { force: true }) }
+  })
+
+  it('lets a path that does NOT exist through -- that is a mention, not a mistake', async () => {
+    const { port, bodies } = await fakeDashboard()
+    const r = await send(installRoot('mention', { to: 'marveen', count: 0 }), port, ['friday', 'marveen', '/no/such/path/anywhere'])
+    expect(r.status).toBe(0)
+    expect(bodies[0].content).toContain('/no/such/path/anywhere')
   })
 })
