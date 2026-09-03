@@ -108,9 +108,15 @@ export function currentGitHead(): string {
 // that the update button could never deliver, while staying silent about the
 // commits that WERE coming. Falls back to `main` on a detached HEAD, which is
 // also the branch update.sh tells the operator to check out in that state.
-export function trackedBranch(): string {
+//
+// A `root` PARAMETER, UGYANAZZAL AZ INDOKKAL, MINT A `currentVersion`-nel FELJEBB (kartya
+// 53b497c9). A detached-HEAD tartalek EDDIG FEDETLEN VOLT, es nem azert, mert senki nem irt ra
+// tesztet: a meglevo teszt a VALODI checkoutban fut, ott a HEAD sosem detached, tehat a `: 'main'`
+// ag SOHA nem hajtodott vegre. Egy tartalek, ami csak akkor sul el, amikor mar baj van, es amit
+// soha nem probaltunk ki, nem tartalek -- remeny. A parameterrel eloallithato az az allapot.
+export function trackedBranch(root: string = PROJECT_ROOT): string {
   try {
-    const b = execFileSync('/usr/bin/git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: PROJECT_ROOT, timeout: 3000, encoding: 'utf-8' }).trim()
+    const b = execFileSync('/usr/bin/git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, timeout: 3000, encoding: 'utf-8' }).trim()
     return b && b !== 'HEAD' ? b : 'main'
   } catch {
     return 'main'
