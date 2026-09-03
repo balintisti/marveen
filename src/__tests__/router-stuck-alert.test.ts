@@ -79,6 +79,84 @@ describe('formatStuckSessionAlert: silent stall becomes a main-agent alert', () 
   })
 })
 
+// ---- card b5a9f60a: not-ready is FOUR states, and restart is right for one --
+// Measured 2026-09-03 by marveen across 17 alerts in a day: of those actually
+// checked, ZERO were a genuine wedge. The old text told the reader to "restart
+// the agent if it is wedged" in every one of them.
+describe('formatStuckSessionAlert: the not-ready branch names what it saw', () => {
+  // The live agent-dexter capture from 07:24, the one the menu-recovery Escape
+  // cancelled at 07:26:45 while nobody answered it.
+  const PERMISSION_PANE = [
+    ' │ grep on a path after a cd would search a directory that cannot be',
+    ' │ determined here, and a Read() deny rule is configured.',
+    '',
+    ' Do you want to proceed?',
+    ' ❯ 1. Yes',
+    '   2. No',
+    '',
+    ' Esc to cancel · Tab to amend',
+  ].join('\n')
+
+  const SATURATED_PANE = [
+    '  Some earlier output.',
+    '  100% context used',
+    '──────────',
+    '❯ ',
+    '──────────',
+    '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+  ].join('\n')
+
+  it('NEVER prescribes a blind restart on any not-ready branch', () => {
+    // The single regression that matters: this exact phrase sent the reader to
+    // do the one harmful thing in three of the four measured states.
+    for (const pane of [PERMISSION_PANE, SATURATED_PANE, null]) {
+      const alert = formatStuckSessionAlert('dexter', MAIN, 'agent-dexter', 12 * MIN, 1, null, pane)!
+      expect(alert).not.toContain('restart the agent if it is wedged')
+    }
+  })
+
+  it('a permission prompt is a DECISION, not a wedge -- and says so', () => {
+    const alert = formatStuckSessionAlert('dexter', MAIN, 'agent-dexter', 12 * MIN, 1, null, PERMISSION_PANE)!
+    expect(alert).toContain('TOOL-PERMISSION prompt')
+    expect(alert).toContain('Do NOT restart')
+    // Names the owner: a watchdog must not answer it.
+    expect(alert).toContain('belongs to a person')
+  })
+
+  it('context saturation is named as the context-guard territory, not the reader s', () => {
+    const alert = formatStuckSessionAlert('mandark', MAIN, 'agent-mandark', 12 * MIN, 0, null, SATURATED_PANE)!
+    expect(alert).toContain('CONTEXT SATURATION')
+    expect(alert).toContain("context-guard")
+    expect(alert).toContain('Do NOT restart')
+  })
+
+  it('reports zero urgency when nobody is queued behind the agent', () => {
+    // marveen 2026-09-03: `pending = 0` means the not-readiness is holding
+    // nobody up, whatever caused it -- but the old text read identically to the
+    // two-messages-queued case.
+    const quiet = formatStuckSessionAlert('mandark', MAIN, 'agent-mandark', 12 * MIN, 0, null, null)!
+    const busy2 = formatStuckSessionAlert('mandark', MAIN, 'agent-mandark', 12 * MIN, 2, null, null)!
+    expect(quiet).toContain('urgency here is zero')
+    expect(busy2).not.toContain('urgency here is zero')
+  })
+
+  it('still keeps the busy branch and the runbook pointer intact', () => {
+    // Regression guard for the two behaviours that were already correct.
+    const busy = formatStuckSessionAlert('prisma', MAIN, 'agent-prisma', 35 * MIN, 2, 'busy', null)!
+    expect(busy).toContain('BUSY')
+    const generic = formatStuckSessionAlert('prisma', MAIN, 'agent-prisma', 12 * MIN, 2, null, null)!
+    expect(generic).toContain('delivery-stall diagnosis')
+  })
+
+  it('falls back to the generic text when the pane could not be read', () => {
+    // Unreadable pane is a reason to look sooner, not a reason to claim a state.
+    const alert = formatStuckSessionAlert('prisma', MAIN, 'agent-prisma', 12 * MIN, 2, null, null)!
+    expect(alert).not.toContain('TOOL-PERMISSION')
+    expect(alert).not.toContain('CONTEXT SATURATION')
+    expect(alert).toContain('READ THE PANE FIRST')
+  })
+})
+
 // A session mid-turn is not ready for a prompt for the same reason a wedged one
 // is not, so the queue side alone cannot tell them apart. On 2026-07-31 that
 // cost three false alarms in one day, each one a main-agent diagnosis round

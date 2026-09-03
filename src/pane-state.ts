@@ -635,6 +635,67 @@ export function detectsModelConsentDialog(pane: string): boolean {
     && MODEL_CONSENT_CONFIRM_RX.test(footerRegion)
 }
 
+// Claude Code TOOL-PERMISSION prompt: the gate the CLI raises when a tool call
+// needs a human decision (a configured deny rule, an unresolvable cwd after a
+// `cd`, a first-time command shape). Captured live on agent-dexter 2026-09-03:
+//
+//   Do you want to proceed?
+//   ❯ 1. Yes
+//     2. No
+//
+//   Esc to cancel · Tab to amend
+//
+// THIS NEEDS ITS OWN DETECTOR FOR EXACTLY THE FABLEFALL1 REASON, one dialog
+// over: the footer says "Esc to cancel", so detectsBlockingMenu already matches
+// it, and any recovery branch keyed on that alone reaches this pane with a
+// blind Escape. On THIS dialog Escape is `cancel` -- so the recovery DENIES the
+// tool call on the agent's behalf, at the one gate that exists so a person
+// decides. Measured on 2026-09-03: 15 blind-Escape firings in a day across four
+// sub-agents (dexter 6, didi 5, jarvis 3, mandark 1), one of them traced end to
+// end (prompt present 07:24 -> "sending Escape to recover" 07:26:45 -> prompt
+// gone 07:27:02, nobody answered it).
+//
+// The difference from the consent dialog is that there is NO safe automatic
+// answer here. Option 1 is not a benign default the way "keep the configured
+// model" was: the answer IS the decision. So this detector exists to make the
+// pane RECOGNISABLE (so callers can alert a human instead of pressing a key),
+// never to answer it.
+//
+// Matchers anchor on the INVARIANT, not on the question text. The question
+// varies with the tool ("Do you want to proceed?", "Do you want to make this
+// edit to X?"), so pinning one phrasing would go quietly blind on the next
+// variant -- the same reason IDLE_FOOTER_RX does not enumerate permission
+// modes. What is stable is the numbered Yes option plus the cancel footer.
+//
+// Guards follow detectsModelConsentDialog's discipline (busy pane is never a
+// dialog; a visible idle footer means the real prompt is live, so a message
+// QUOTING this text can never trip it; the cancel hint must sit in the live
+// footer region). The two sibling dialogs are excluded explicitly so the
+// predicate is self-contained rather than relying on the caller's ordering:
+// the first-run trust gate also renders "1. Yes, proceed", and the consent
+// dialog also renders "Esc to cancel".
+const PERMISSION_ASK_RX = /Do you want to [^\n?]{0,120}\?/
+const PERMISSION_YES_RX = /(?:^|\n)\s*(?:❯\s*)?1\.\s*Yes\b/
+const PERMISSION_CANCEL_RX = /\besc to cancel\b/i
+
+export function detectsPermissionPrompt(pane: string): boolean {
+  if (!pane || !pane.trim()) return false
+  const lines = pane.split('\n')
+  const busyRegion = lines.slice(-BUSY_LIVE_REGION_LINES).join('\n')
+  for (const rx of BUSY_INDICATORS) {
+    if (rx.test(busyRegion)) return false
+  }
+  const footerRegion = lines.slice(-LIVE_FOOTER_REGION_LINES).join('\n')
+  if (BUSY_ESC_TO_INTERRUPT_RX.test(footerRegion)) return false
+  if (IDLE_FOOTER_RX.test(pane)) return false
+  // Sibling dialogs that share the shape but have their own handling.
+  if (detectsFirstRunGate(pane) != null) return false
+  if (detectsModelConsentDialog(pane)) return false
+  return PERMISSION_ASK_RX.test(pane)
+    && PERMISSION_YES_RX.test(pane)
+    && PERMISSION_CANCEL_RX.test(footerRegion)
+}
+
 export interface DetectPaneStateOptions {
   /** If true, the 'typing' state (text parked in input box) is
    * merged into 'busy'. Default false -- callers that care about
