@@ -282,7 +282,20 @@ SKILL_HARD_LIMIT="${SKILL_HARD_LIMIT:-600}"
 # a BAJT-vilagban all, es a mertekegyseg-valtassal NEM viheto at szamszeruen -- de az ELVE igen,
 # es az ervenyes: az alapvonal csak SZORULHAT. A ket oldal egyutt ezt jelenti, es nem azt, hogy
 # valamelyik szam gyoz.
-SKILL_BASELINE_CHARS="${SKILL_BASELINE_CHARS:-32582}"
+SKILL_BASELINE_CHARS="${SKILL_BASELINE_CHARS:-32159}"
+# 2026-09-04: 32582 -> 32159, RACSNI (marveen dontese). min(32582, 32159) a `references/` bontas
+# utan mert erteken. NEM emeles: a keret 1164 -> 1149 karakterre SZUKUL.
+# HONNAN JOTT A REGI SZAM, mert enelkul ujra ugy nezne ki, mintha a mai fajlbol valo lenne:
+# a 32582 VALODI meres volt -- egy **448 SOROS** fajl-allapote, 2026-08-27 21:54
+# (pillanatfelvetel-tar, `e083550`; KONTROLL: a ket szomszedja 32630 / 32291, tehat a mero
+# diszkrimināl). A sor-padlo 420, egy 415 soros meresbol -- vagyis a PAR ket, ot nappal es 28
+# sorral eltero allapotbol allt, es a szarmaztatott atlag ezert 77,6 volt a valos 72,7 helyett.
+# NEM VOLT EMELES ROSSZ ALAPRA (az a sor-oldal esete, `78124527`): itt a RACSNI nem tuzelt --
+# 2026-08-29 08:58-kor a fajl 31638 karaktert mert a 32582 mellett, 944-gyel alatta.
+# A MARADEK KIMONDVA: 32159 / 420 = 76,6 a valos 74,8 helyett, tehat a keret ~2%-kal tovabbra is
+# tagabb a valosagnal. Ez akkor zarul be, ha egy bontas a sorszamot 420 ALA viszi -- a par akkor
+# lesz ujra egy allapotbol. A par nullazasa enelkul a kapu ALAKJANAK valtoztatasa lenne.
+# NEM MERT: hogy ez a tagassag valaha atengedett-e olyan betoldast, amit kulonben megallitott volna.
 
 # --- KARAKTER-SZAMLALAS, LOCALE-FUGGETLENUL (kartya 38221eef, jarvis merese 2026-08-28).
 #
