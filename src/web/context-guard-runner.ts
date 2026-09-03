@@ -475,7 +475,15 @@ export function getContextGuardStatus(): Array<{
   enabled: boolean
   saturationRestart: boolean
 }> {
-  const names = [MAIN_AGENT_ID, ...listAgentNames()]
+  // DEDUPED (card c32ebf32). Latent today and not a defect yet: listAgentNames()
+  // reads agents/, the coordinator has no directory there, so he cannot appear
+  // twice -- measured 2026-09-03, six names, marveen not among them. It becomes a
+  // real one the moment anybody creates agents/<MAIN_AGENT_ID>/, which is the
+  // obvious way to give him a config file and was the FIRST thing card 6c1439ac
+  // proposed. He would then be processed twice here: two saturation checks, two
+  // restart decisions on one pane.
+  // The sibling at :516 already uses a Set. This line was the odd one out.
+  const names = [...new Set([MAIN_AGENT_ID, ...listAgentNames()])]
   return names.map((name) => {
     const cfg = readContextGuardConfig(name)
     const remote = name !== MAIN_AGENT_ID && !!readAgentRemoteHost(name)
