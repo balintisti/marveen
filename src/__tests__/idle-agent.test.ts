@@ -741,7 +741,11 @@ describe('the watcher actually passes the coordinator id', () => {
       expect(args, `call site at ${m.index} omits the coordinator`).toContain('MAIN_AGENT_ID')
     }
     // And that the id is imported, not a stray local that happens to share the name.
-    expect(src).toMatch(/import \{ MAIN_AGENT_ID \} from '\.\.\/config\.js'/)
+    // Anchored on the NAME being imported from config, not on the exact brace
+    // contents: card 6c1439ac added PROJECT_ROOT alongside it, and a regex that
+    // pins the whole import line fails on an unrelated addition while the thing
+    // it guards -- that the id is imported and not a stray local -- still holds.
+    expect(src).toMatch(/import \{[^}]*\bMAIN_AGENT_ID\b[^}]*\} from '\.\.\/config\.js'/)
   })
 })
 

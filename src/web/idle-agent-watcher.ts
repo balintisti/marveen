@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { logger } from '../logger.js'
-import { MAIN_AGENT_ID } from '../config.js'
+import { MAIN_AGENT_ID, PROJECT_ROOT } from '../config.js'
 import { listAgentNames, agentDir, readAgentRemoteHost } from './agent-config.js'
 import { isAgentRunning, capturePane } from './agent-process.js'
 import { resolveAgentSession } from './channel-mcp-reconnect.js'
@@ -116,7 +116,14 @@ function sweepStalePending(): void {
 
 function readWorkCheckRaw(agent: string): string | null {
   try {
-    return readFileSync(join(agentDir(agent), 'workcheck.json'), 'utf8')
+    // The coordinator has no agents/<name> directory, and creating one would make
+    // him show up in listAgentNames() -- which context-guard-runner:478 would then
+    // count TWICE, since it prepends MAIN_AGENT_ID without deduping. So his
+    // declaration lives at PROJECT_ROOT, following the pattern the codebase
+    // already uses for him in two places (context-guard-runner.ts:96 and
+    // schedule-runner.ts:855: `name === MAIN_AGENT_ID ? PROJECT_ROOT : agentDir(name)`).
+    const dir = agent === MAIN_AGENT_ID ? PROJECT_ROOT : agentDir(agent)
+    return readFileSync(join(dir, 'workcheck.json'), 'utf8')
   } catch {
     return null
   }
@@ -170,7 +177,22 @@ export function readPane(agent: string): { idle: boolean | null; staleCounterOnl
 // megmerni, ha a kort le lehet futtatni. Viselkedes nem mozdul, csak lathatosag.
 export function tick(): void {
   try {
-    const agents = listAgentNames()
+    // THE COORDINATOR IS IN THE POPULATION (card 6c1439ac, marveen's decision
+    // 2026-09-03). He was the only agent this guard never evaluated -- not
+    // "evaluated and found no workcheck", but never iterated at all, because
+    // listAgentNames() reads agents/ and he has no directory there.
+    //
+    // The two sibling guards already include him with the same one-liner:
+    // context-guard-runner.ts:478 and :516 prepend MAIN_AGENT_ID, and
+    // channel-monitor starts its targets with isMarveen. An asymmetry that no
+    // comment defends, in a file whose siblings do the opposite, is an oversight.
+    //
+    // The dedupe is not decoration: the coordinator has NO agents/ directory
+    // today, but if one is ever created he would appear twice here -- and
+    // context-guard-runner:478 has exactly that bug latent, because it prepends
+    // without a Set. Measured, not assumed: listAgentNames() returns six names
+    // and marveen is not among them.
+    const agents = [...new Set([MAIN_AGENT_ID, ...listAgentNames()])]
     if (agents.length === 0) return
 
     // The sender-side queue check rides this same 3-minute tick: it asks about

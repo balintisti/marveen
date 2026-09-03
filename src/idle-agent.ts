@@ -26,6 +26,19 @@ export type WorkCheckKind =
   // Cards sitting in testing that this agent has not commented on yet. The reviewer's
   // real queue -- "in testing" alone is not it, because a card stays there after review.
   | 'testing_without_my_comment'
+  // Cards in `waiting` whose named blocker is this agent -- the DECISION QUEUE.
+  // The coordinator's check (card 6c1439ac, marveen's own choice). His open-card
+  // count is always non-zero, so `assigned_open_cards` would be a constant and a
+  // constant is not a signal. What actually rots when he stalls is the queue of
+  // cards waiting on HIS decision: measured 2026-09-03, 26 such cards, 11 of them
+  // untouched for more than four days, and nothing anywhere reported it.
+  //
+  // The operational definition is `status = waiting` AND `assignee = the agent`,
+  // which is this board's convention for "the ball is with them". Stated because
+  // marveen counted 39 by hand that morning against my 26 the same afternoon --
+  // the board moved between the two, and I did not reconcile them, so this kind
+  // measures the TREND rather than reproducing either number.
+  | 'waiting_on_me'
   // The agent genuinely has no queue in this system (an outbound/on-call agent).
   // Declared silence: never alerted about idleness. This is the AgroTech case.
   | 'none'
@@ -324,7 +337,7 @@ export function decideIdleAlert(
   }
 }
 
-const VALID_KINDS: readonly WorkCheckKind[] = ['assigned_open_cards', 'testing_without_my_comment', 'none']
+const VALID_KINDS: readonly WorkCheckKind[] = ['assigned_open_cards', 'testing_without_my_comment', 'waiting_on_me', 'none']
 
 /**
  * Parse a declared work check. Returns null for "not declared" -- which is NOT the
@@ -474,6 +487,13 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
   switch (check.kind) {
     case 'none':
       return []
+    case 'waiting_on_me': {
+      // The MIRROR of assigned_open_cards, deliberately: that case EXCLUDES
+      // 'waiting' because for a worker it means blocked on someone else. For the
+      // blocker it is the opposite -- `waiting` is the only column that is
+      // actually his, and every other status on his name is work in flight.
+      return live.filter((c) => c.status === 'waiting' && (c.assignee ?? '') === agent)
+    }
     case 'assigned_open_cards': {
       // 'waiting' is excluded: on this board it means blocked on someone else's
       // decision. An agent whose whole queue is 'waiting' is behaving correctly by
