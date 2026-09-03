@@ -340,6 +340,28 @@ def mixed_script_words(text: str):
 
 EM_DASH = "—"
 
+# A NAPLO-SOR IDOBELYEGET VISZ (kartya 3c753513). Merve 2026-09-03: a
+# `store/outgoing-copy-gate.log` 9778 sor / 1,8 MB, MIND ugyanaz a mondat, es EGYIKEN SEM volt
+# idopont -- a fajl mtime-ja csak az UTOLSO irast mondja meg. Vagyis a "mikor kezdodott",
+# "mikor allt le", "surusodik-e" kerdesek megvalaszolhatatlanok voltak egy 1,8 MB-os naplobol.
+#
+# Ugyanaz a defektus-osztaly, mint a `10ba8fd4` kartyan a `dashboard.log`-nal (ott a datum
+# hianya EGY ejszaka OT hamis leolvasast okozott harom agensnel).
+#
+# AMIHEZ NEM NYULOK: a hangero. A hianyzo szabaly-fajl panasza SZANDEKOSAN minden hivasnal
+# kimegy; egy dedup vagy rotacio CSOKKENTENE a jelzest, es az mas dontes. Ez a valtozas csak
+# annyit tesz, hogy a meglevo sor MEGMONDJA, MIKOR keletkezett.
+def _gate_log(message: str) -> None:
+    try:
+        stamp = __import__("datetime").datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+        log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))), "store", "outgoing-copy-gate.log")
+        with open(log_path, "a", encoding="utf-8") as fh:
+            fh.write(f"{stamp} {message}" if message.endswith("\n") else f"{stamp} {message}\n")
+    except OSError:
+        pass
+
+
 # GATEPERSIST816: owner-specific NAME rules load from an UNTRACKED local file,
 # not from this (public-repo) script. The generic checks (accents, em dash,
 # double hyphen, mixed-script) are universal Hungarian-copy QA and ship in the
@@ -365,13 +387,8 @@ def load_bad_name():
         pass
     except Exception:
         pass
-    try:
-        log_path = os.path.join(os.path.dirname(_LOCAL_RULES), "outgoing-copy-gate.log")
-        with open(log_path, "a", encoding="utf-8") as fh:
-            fh.write(f"outgoing-copy-gate: NEV-SZABALY FAJL HIANYZIK/URES ({_LOCAL_RULES}) -- "
-                     "a nev-ellenorzes NEM fut; potold a store/outgoing-copy-gate-rules.json-t.\n")
-    except OSError:
-        pass
+    _gate_log(f"outgoing-copy-gate: NEV-SZABALY FAJL HIANYZIK/URES ({_LOCAL_RULES}) -- "
+              "a nev-ellenorzes NEM fut; potold a store/outgoing-copy-gate-rules.json-t.")
     return None
 
 
@@ -584,13 +601,7 @@ def telegram_gate(tool_input: dict) -> None:
     except Exception as exc:  # noqa: BLE001 -- deliberate blanket: fail-open path
         warn = f"outgoing-copy-gate: TELEGRAM-ag belso hiba, FAIL-OPEN atengedes: {exc!r}\n"
         sys.stderr.write(warn)
-        try:
-            log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-                os.path.abspath(__file__)))), "store", "outgoing-copy-gate.log")
-            with open(log_path, "a", encoding="utf-8") as fh:
-                fh.write(warn)
-        except OSError:
-            pass
+        _gate_log(warn)
         sys.exit(0)
     if problems:
         sys.stderr.write(
