@@ -498,6 +498,18 @@ done
 _watch_id="shared"
 if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
   _watch_id=$(basename "$(dirname "$CLAUDE_CONFIG_DIR")")
+  # AZ AZONOSITO EGY KORNYEZETI VALTOZOBOL JON, TEHAT MEGSZURJUK. Nem elmeleti:
+  # marveen 2026-09-03-an `ps eww`-vel idezojelekkel ES pontosvesszovel latta a ket
+  # worker erteket. Utanamerve az a PANEL-SHELL PARANCSSORA volt (macOS-en a `ps eww`
+  # az EXEC-KORI kornyezetet mutatja, az export pedig exec UTAN tortenik) -- a valodi
+  # `claude` gyerekfolyamat (pid 1245 / 1270) tiszta erteket hordoz, es a launcher
+  # alakjanak hu reproja is tisztat ad. TEHAT MA NEM ROMLIK EL.
+  # A szures megis marad, mert a bukas iranya nem szimmetrikus: egy `/` vagy egy
+  # idezojel az azonositoban azt jelenti, hogy az allapotfajl nem irodik ki, es a
+  # figyelo VEGLEG NEMA lesz -- megkulonboztethetetlenul egy nyugodt kortol. Pontosan
+  # az a bukasi mod, amit ez a kartya javitani hivatott.
+  _watch_id=$(printf '%s' "$_watch_id" | tr -c 'A-Za-z0-9._-' '_')
+  [ -n "$_watch_id" ] || _watch_id="shared"
 fi
 SKILL_WATCH_DIR="${SKILL_WATCH_DIR:-$HOME/.claude/.skill-watch}"
 SKILL_WATCH_FILE="$SKILL_WATCH_DIR/${_watch_id}.tsv"
@@ -535,12 +547,23 @@ EOF
       echo "SKILL-VALTOZAS: ${_changed} skillhez nyult valaki MAS is a te utolso futasod ota -- nezd meg, mielott irsz."
     fi
   fi
-  mkdir -p "$SKILL_WATCH_DIR" 2>/dev/null || true
-  # Atomi iras: hat agens futtathatja egyszerre, es egy felkesz allapotfajl a kovetkezo korben
-  # hamis deltat adna.
-  if _tmp=$(mktemp "${SKILL_WATCH_FILE}.XXXXXX" 2>/dev/null); then
-    printf '%s\n' "$WATCH_NOW" > "$_tmp" && mv -f "$_tmp" "$SKILL_WATCH_FILE" || rm -f "$_tmp"
+  # AZ IRAS BUKASA NEM LEHET NEMA. Az elso valtozatom minden hibat elnyelt
+  # (`2>/dev/null || true`), es a kovetkezmenye pontosan az lett volna, amit ez a kartya
+  # javit: allapot nelkul a figyelo MINDEN korben hallgat, es ez ugyanugy nez ki, mint a
+  # "nem valtozott semmi". Egy or, ami nem tudja megorizni az allapotat, MONDJA MEG.
+  # Nem fatalis: a meret-or tobbi resze fusson tovabb, a kilepesi kod valtozatlan.
+  _watch_ok=1
+  mkdir -p "$SKILL_WATCH_DIR" 2>/dev/null || _watch_ok=0
+  if [ "$_watch_ok" = "1" ]; then
+    # Atomi iras: hat agens futtathatja egyszerre, es egy felkesz allapotfajl a kovetkezo
+    # korben hamis deltat adna.
+    if _tmp=$(mktemp "${SKILL_WATCH_FILE}.XXXXXX" 2>/dev/null); then
+      printf '%s\n' "$WATCH_NOW" > "$_tmp" && mv -f "$_tmp" "$SKILL_WATCH_FILE" || { rm -f "$_tmp"; _watch_ok=0; }
+    else
+      _watch_ok=0
+    fi
   fi
+  [ "$_watch_ok" = "1" ] || echo "SKILL-VALTOZAS: FIGYELMEZTETES -- az allapot NEM MENTHETO ($SKILL_WATCH_FILE), tehat a valtozas-figyelo a kovetkezo korben is NEMA lesz. Ez NEM azt jelenti, hogy nem valtozott semmi." >&2
 fi
 
 # POZITIV KONTROLL: egy or, ami sosem tud tuzelni, ugyanugy "mukodik", mint egy helyes.

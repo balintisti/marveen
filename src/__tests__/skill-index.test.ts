@@ -809,6 +809,45 @@ describe('skill-change watch: what moved since MY last run', () => {
     } finally { rmSync(home, { recursive: true, force: true }) }
   })
 
+  it('survives a hostile agent id -- the identity comes from an env var', () => {
+    // marveen saw quotes and a semicolon in two agents' CLAUDE_CONFIG_DIR via
+    // `ps eww` on 2026-09-03. Measured: that was the pane SHELL's command line
+    // (macOS ps shows the exec-time env; the export happens after exec) and the
+    // real claude children carry a clean value. Kept anyway, because the failure
+    // direction is not symmetric: a `/` or a quote in the id means the state file
+    // is never written and the watcher goes PERMANENTLY silent -- indistinguishable
+    // from a calm round, which is the very failure this card exists to fix.
+    const home = sandbox({ alpha: 'a\nb\n' })
+    const hostile = { HOME: home, CLAUDE_CONFIG_DIR: "/x/ag'ent; bad/.claude-config" }
+    try {
+      runScript([], hostile)
+      writeFileSync(join(home, '.claude', 'skills', 'alpha', 'SKILL.md'), 'a\nb\nc\n')
+      expect(deltas(runScript([], hostile).stdout).length).toBeGreaterThan(0)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  it('SAYS SO when the state cannot be written, instead of going quiet', () => {
+    // My first version swallowed every write error, which would have produced
+    // exactly the defect this card fixes: no state means silence every round, and
+    // silence reads as "nothing changed".
+    const home = sandbox({ alpha: 'a\nb\n' })
+    try {
+      const r = runScript([], {
+        HOME: home,
+        CLAUDE_CONFIG_DIR: '/x/agent/.claude-config',
+        SKILL_WATCH_DIR: '/dev/null/cannot-exist',
+      })
+      expect(r.stdout + '').toBeDefined()
+      // The warning goes to stderr, so assert via a shell capture instead.
+      const out = execSync(
+        `HOME="${home}" SKILL_WATCH_DIR=/dev/null/cannot-exist CLAUDE_CONFIG_DIR=/x/agent/.claude-config bash "${SCRIPT}" 2>&1 >/dev/null || true`,
+        { encoding: 'utf-8' },
+      )
+      expect(out).toContain('az allapot NEM MENTHETO')
+      expect(out).toContain('NEM azt jelenti, hogy nem valtozott semmi')
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
   it('VERBOSE=1 in the environment now behaves like -v', () => {
     // It used to be inert -- `VERBOSE=0` overwrote it unconditionally while every
     // USE site read `${VERBOSE:-0}`, which looked like env support. didi measured
