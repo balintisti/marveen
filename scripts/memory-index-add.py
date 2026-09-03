@@ -291,6 +291,37 @@ def main():
                   f'-- cut by {which} at offset {cut}')
             for l in (cut_off + whole)[:5]:
                 print(f'    {l[:95]}')
+        # AND THE POPULATION THE LINE-COUNT CANNOT SEE: THE MEMORIES THEMSELVES.
+        # didi measured the gap on 2026-09-03: one write dropped 26 references while BOTH
+        # watched numbers said it went fine -- lines UNCHANGED (the 200 ceiling everyone
+        # watches) and characters DOWN (which reads as recovered headroom). The reference
+        # count is the thing that moved, and it was printed nowhere. That write was
+        # deliberate and cost zero real links, but an ACCIDENTAL one is byte-identical in
+        # both meters. So: count what the index points at, and what nothing points at.
+        try:
+            names = {f for f in os.listdir(MEM) if f.endswith('.md') and f != 'MEMORY.md'}
+            linked = set(re.findall(r'\(([^()\s]+\.md)\)', text)) & names
+            bodies = {}
+            for f in names:
+                try:
+                    bodies[f] = read(os.path.join(MEM, f))
+                except OSError:
+                    bodies[f] = ''
+            unreachable = [
+                f for f in sorted(names - linked)
+                if not any('[[%s]]' % f[:-3] in bodies[i] for i in linked)
+            ]
+            print(f'memories: {len(names)} | linked from the index: {len(linked)} | '
+                  f'reachable only via an inbound [[link]]: {len(names) - len(linked) - len(unreachable)} | '
+                  f'UNREACHABLE: {len(unreachable)}')
+            for f in unreachable[:5]:
+                print(f'    NO PATH: {f}')
+        except OSError as exc:
+            # A meter that cannot read says so; it does not report zero.
+            print(f'memories: NOT MEASURED ({exc})')
+
+        if total:
+            pass
         else:
             # NAME THE BINDING CEILING even when clean. A zero that does not say what it
             # measured is the state that produced this bug: the old line read "inside the
