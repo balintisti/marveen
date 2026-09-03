@@ -557,6 +557,31 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
       }
     }
 
+    // ARCHIVALT KARTYA SZERKESZTESE: ENGEDJUK, DE NEM HALLGATUNK ROLA (kartya 66454b7d,
+    // mert eset 2026-08-22 06:50, `4a9480b2`).
+    //
+    // AZ ESET: 03:21-kor valaki archivalta a kartyat, 03:59-kor MAS atirta rajta a cimet, a
+    // felelost es a prioritast. Az atiras a PUT-on ment, es nem erintette az `archived_at`-et.
+    // A kartya ezzel egyszerre volt `archived_at != NULL` ES `status = planned`; a
+    // `listKanbanCards()` `archived_at IS NULL`-ra szur, tehat AZ UJ FELELOS SOHA NEM LATTA
+    // VOLNA. Mindket muvelet sikert jelentett, es a res A KETTO KOZOTT keletkezett.
+    //
+    // MIERT NEM TILTAS (a kartya harom iranya kozul): egy archivalt kartya javitasa legitim
+    // (elgepelt cim, rossz projekt-cimke), es a 400 azt is elzarna. Es MIERT NEM AUTOMATIKUS
+    // FELOLDAS: az csendben visszahozna kartyakat, amiket valaki SZANDEKOSAN archivalt --
+    // ugyanaz a nema dontes-helyettesites, csak a masik iranyba. Marad a harmadik: a muvelet
+    // megtortenik, es a valasz KIMONDJA, hogy a kartya lathatatlan marad.
+    //
+    // A SZANDEK-SZURES UGYANAZ, MINT PAR SORRAL FELJEBB: ha a hivo MAGA kuldi az
+    // `archived_at`-et, akkor eppen az archivalasi allapotot kezeli -- annak nem szolunk.
+    // A figyelmeztetes annak jar, aki EGYEB mezot ir egy archivalt kartyan, es nem tud rola.
+    const archivedBefore = roCard && (roCard as { archived_at?: number | null }).archived_at != null
+    const archiveWarning = archivedBefore && !('archived_at' in data)
+      ? `FIGYELEM: ez a kartya ARCHIVALT (archived_at nem ures), es az marad -- a `
+        + `lista-nezetben NEM jelenik meg, tehat a felelos nem fogja latni. Ha elo kartyat `
+        + `akartal szerkeszteni, oldd fel: POST /api/kanban/${encodeURIComponent(id)}/unarchive.`
+      : null
+
     const result = updateKanbanCard(id, data)
     if (result.outcome === 'not-found') { json(res, { error: 'Kártya nem található' }, 404); return true }
 
@@ -565,7 +590,10 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // emelkedik, es a valasz KIMONDJA, hogy nem tortent semmi -- kulonben a kartya
     // frissnek latszana anelkul, hogy barmi valtozott volna. Felulirni ilyenkor
     // nincs mit, tehat `overwritten` szuksegszeruen ures.
-    if (result.outcome === 'unchanged') { json(res, { ok: true, changed: false }); return true }
+    if (result.outcome === 'unchanged') {
+      json(res, { ok: true, changed: false, ...(archiveWarning ? { archived: true, warning: archiveWarning } : {}) })
+      return true
+    }
 
     // The overwrite travels in the response because that is where the caller
     // already looks; a log nobody reads is the same silence in another file.
@@ -577,13 +605,17 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
         ok: true,
         changed: true,
         overwritten: result.overwritten,
+        // KET FIGYELMEZTETES EGY VALASZBAN: a felulirast es az archivaltsagot NEM olvasztjuk
+        // ossze egy mondatba -- ket kulonbozo dolgot kell tenni tolük, es egy osszevont szoveg
+        // az egyiket elnyeli.
         warning: `Ez az iras MAS erteket irt felul: ${list}. Ha nem te irtad oda, nezd meg, `
           + 'kinek a munkajat cserelted le -- a visszaolvasas ezt NEM mutatja meg, mert a '
           + 'sajat szovegedet adja vissza.',
+        ...(archiveWarning ? { archived: true, archivedWarning: archiveWarning } : {}),
       })
       return true
     }
-    json(res, { ok: true, changed: true })
+    json(res, { ok: true, changed: true, ...(archiveWarning ? { archived: true, warning: archiveWarning } : {}) })
     return true
   }
 
