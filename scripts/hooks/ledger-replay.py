@@ -202,13 +202,16 @@ def _fit_output(transcript, open_q, owner, byte_budget):
 
 
 def main():
-    cwd = None
+    payload = {}
     try:
         payload = json.load(sys.stdin)
-        cwd = payload.get("cwd")
     except Exception:
         pass
-    agent_id = ledger_lib.agent_id_from_cwd(cwd)
+    # SESSION identity, not the shell's (card bfd8d307, upstream LEDGERCWD828): the cwd is
+    # mutable within a session, so a `cd` into agents/<x>/ re-attributed every later row.
+    # The chain falls through to agent_id_from_cwd, so a payload with neither a transcript
+    # nor an override behaves exactly as before.
+    agent_id = ledger_lib.agent_id_from_payload(payload)
 
     try:
         rows = ledger_lib.recent(agent_id, _window_limit())

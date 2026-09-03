@@ -32,7 +32,11 @@ def main():
         payload = json.load(sys.stdin)
     except Exception:
         sys.exit(0)
-    agent_id = ledger_lib.agent_id_from_cwd(payload.get("cwd"))
+    # SESSION identity, not the shell's (card bfd8d307, upstream LEDGERCWD828): the cwd is
+    # mutable within a session, so a `cd` into agents/<x>/ re-attributed every later row.
+    # The chain falls through to agent_id_from_cwd, so a payload with neither a transcript
+    # nor an override behaves exactly as before.
+    agent_id = ledger_lib.agent_id_from_payload(payload)
     prompt = payload.get("prompt") or ""
     for m in CHANNEL_RX.finditer(prompt):
         attrs, text = m.group(1), m.group(2)
