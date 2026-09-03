@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { logger } from '../logger.js'
 import { MAIN_AGENT_ID } from '../config.js'
-import { listAgentNames, agentDir, readAgentRemoteHost } from './agent-config.js'
+import { listAgentNames, agentDir, readAgentRemoteHost, readAgentProjects } from './agent-config.js'
 import { isAgentRunning, capturePane } from './agent-process.js'
 import { resolveAgentSession } from './channel-mcp-reconnect.js'
 import { sendAlert } from './channel-monitor.js'
@@ -14,6 +14,7 @@ import {
   selectDeclaredWork,
   buildNoWorkNotice,
   orphanPullList,
+  laneFilteredPullList,
   topOfPullList,
   buildPullNotice,
   stalePendingBySender,
@@ -314,7 +315,13 @@ export function tick(): void {
         // The board may hold work nobody owns. Before telling the coordinator to
         // push a card, look at the pull-list the rulebook points the agent at --
         // and if it has something, tell the AGENT instead (card 4cbc8af9).
-        const pull = topOfPullList(orphanPullList(cards, Date.now()))
+        // Lane filter (card e4a1ff49): the offer is the one moment an idle agent gets work
+        // without asking, and a pool the agent will never pick from wastes it. An agent that
+        // declares no lane is filtered by NOTHING -- see laneFilteredPullList; that default
+        // is deliberate and must not be tightened.
+        const pull = topOfPullList(
+          laneFilteredPullList(orphanPullList(cards, Date.now()), readAgentProjects(agent)),
+        )
         // LOGGED ON EVALUATION, NOT ONLY ON FIRING (marveen, card 4cbc8af9). Zero orphans is
         // the EXPECTED case, so silence here used to mean two different things -- "evaluated,
         // found none" and "this code was never deployed" -- and the old build logged the

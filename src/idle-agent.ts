@@ -587,7 +587,33 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
         // No timestamp on the card means we cannot show the comment is stale; leave it
         // out rather than nag on a guess.
         if (c.updated_at == null) return false
-        return c.updated_at > mine
+        if (c.updated_at <= mine) return false
+        // THE COORDINATOR EXCLUSION, CARRIED OVER FROM THE SIBLING BRANCH (card 6a2ae0c7).
+        // `assigned_open_cards` already refuses to treat the coordinator's last word as an
+        // unanswered finding, with the reason spelled out on the `coordinator` parameter:
+        // its comments are COORDINATION -- an acknowledgement, a decision, a hand-off -- and
+        // it comments on nearly every card. This branch compared raw `updated_at`, so ANY
+        // movement re-armed the card, including a coordinator comment that usually means the
+        // card is SETTLED.
+        //
+        // Measured 2026-09-03 across all six agents: of 146 stale items, 10 were re-armed by
+        // the coordinator alone. (didi measured 7 on 2026-08-22; her sample was one agent and
+        // ten days older.) Small, and deliberately so -- see the limit below.
+        //
+        // WHAT THIS DELIBERATELY DOES NOT CHANGE, because it was not decided: a card whose
+        // `updated_at` moved with NO comment after mine (a label, a move) stays stale. That is
+        // didi's case (C), it has ZERO live instances today, and silencing it here would be an
+        // undeclared decision riding along with a declared one.
+        //
+        // AND NOT jarvis: his comments are mixed -- real independent measurement one hour,
+        // census bookkeeping the next -- so role alone cannot decide it. That question is worth
+        // 34 of the 44 items, i.e. most of the benefit, and it belongs to the coordinator.
+        const spokeAfterMe: string[] = []
+        for (const [author, at] of lastCommentAtByCard.get(c.id) ?? []) {
+          if (author !== agent && at > mine) spokeAfterMe.push(author)
+        }
+        if (spokeAfterMe.length > 0 && spokeAfterMe.every((a) => a === coordinator)) return false
+        return true
       })
   }
 }
@@ -747,6 +773,68 @@ export function topOfPullList<T extends { priority?: string | null; updated_at?:
     (rank[a.priority ?? 'normal'] ?? 2) - (rank[b.priority ?? 'normal'] ?? 2) ||
     (b.updated_at ?? 0) - (a.updated_at ?? 0),
   )
+}
+
+/** Narrow the ownerless pull-list to the asking agent's lane (card e4a1ff49).
+ *
+ *  The offer is the ONE moment an idle agent gets work without asking for it,
+ *  and the ranking was priority-only across the whole board. Measured
+ *  2026-09-03: friday was offered five ownerless cards and ALL FIVE were
+ *  `project=delta-crm`, explicitly not his lane. The pool that day was 87 --
+ *  49 delta-crm, 32 marveen, 6 with no project -- so the 49 permanently outrank
+ *  the 32 for an agent who will never pick any of them up.
+ *
+ *  FILTERING, NOT WEIGHTING, and that was measured too: a lane-foreign `high`
+ *  sits on top of a weighted ranking just the same.
+ *
+ *  MISSING CONFIG MEANS NO FILTERING, AND THAT DEFAULT IS LOAD-BEARING -- do
+ *  not "clean it up" into a stricter default. The error here is asymmetric,
+ *  and the two sides are not the same KIND of cost:
+ *
+ *    no declaration, a lane would have helped -> one offer lands beside the
+ *        point; the agent skips it and gets another next round. NOISY, CHEAP.
+ *    a declaration that is wrong -> a whole pool NEVER surfaces for that agent,
+ *        and nothing signals it. SILENT, EXPENSIVE.
+ *
+ *  AND THE LOOSE DEFAULT IS MEASURED, NOT MERELY ARGUED (marveen + friday,
+ *  independently, 2026-09-03): of seven agents, THREE are genuinely mixed --
+ *  jarvis 54.5% delta-crm, marveen 65.0%, didi 78.9% -- so a tightened default
+ *  would mis-serve nearly half the fleet. mandark is the sharpest case at 87.0%:
+ *  over any threshold worth picking, yet holding nine marveen cards that a
+ *  delta-crm declaration would make invisible.
+ *
+ *  This is also why no lane is DERIVED for anyone. That table measures past
+ *  ASSIGNMENT, most of it made by the coordinator; deriving a future offer
+ *  filter from it would freeze earlier routing as though it were preference,
+ *  and the meter would then confirm what the meter produced. It cannot separate
+ *  capability from who happened to be free. A lane is DECLARED by its agent or
+ *  it does not exist. Fail toward visibility.
+ *
+ *  AN UNCLASSIFIED CARD STAYS VISIBLE TO EVERYONE. An empty `project` is not a
+ *  lane, it is a missing answer (6 of 87 that day, and 27% of the whole board on
+ *  08-29), and hiding those would let a card with one unfilled field become
+ *  invisible to the entire fleet.
+ *
+ *  WHY THE LANE IS NOT DERIVED FROM THE AGENT'S OWN CARDS, which is the cheap
+ *  idea that needs no config: measured over 1433 assigned cards, the dominant
+ *  project is 98.5% for computress, 96.5% dexter, 92.4% friday, 86.8% mandark,
+ *  78.9% didi -- but 65.0% for marveen and 54.5% for jarvis. It works on the
+ *  specialists and fails on exactly the agents whose correct lane is BOTH.
+ *  jarvis is the fleet-wide verifier; pinning him 54/46 into one lane would take
+ *  half the verification away silently. Hence an explicit list, where "both" is
+ *  expressible by listing both or by declaring nothing at all.
+ */
+export function laneFilteredPullList<T extends { project?: string | null }>(
+  cards: T[],
+  lanes: readonly string[] | null | undefined,
+): T[] {
+  const declared = (lanes ?? []).map((l) => l.trim()).filter(Boolean)
+  if (declared.length === 0) return cards
+  const allowed = new Set(declared)
+  return cards.filter((c) => {
+    const project = (c.project ?? '').trim()
+    return project === '' || allowed.has(project)
+  })
 }
 
 /** What an idle agent is told when the board HAS ownerless work (card 4cbc8af9).

@@ -379,6 +379,29 @@ export function readAgentChannelProvider(name: string): string | null {
   return null
 }
 
+/** The agent's declared lanes, or null when it has not declared any (card e4a1ff49).
+ *
+ *  `null` is not "no lanes" -- it is "no filtering", and the caller must treat it
+ *  that way. See laneFilteredPullList for why the default fails toward showing
+ *  MORE rather than less.
+ *
+ *  A single string is accepted as well as an array, because that is what a human
+ *  editing this file by hand will write, and the alternative is a config that
+ *  silently does nothing.
+ */
+export function readAgentProjects(name: string): string[] | null {
+  const configPath = join(agentDir(name), 'agent-config.json')
+  try {
+    const config = JSON.parse(readFileOr(configPath, '{}'))
+    const raw = config.projects
+    const list = typeof raw === 'string' ? [raw] : Array.isArray(raw) ? raw : []
+    const lanes = list.filter((l: unknown): l is string => typeof l === 'string')
+      .map((l) => l.trim()).filter(Boolean)
+    if (lanes.length) return lanes
+  } catch { /* fall through */ }
+  return null
+}
+
 export function writeAgentChannelProvider(name: string, provider: string): void {
   const configPath = join(agentDir(name), 'agent-config.json')
   let config: Record<string, unknown> = {}
