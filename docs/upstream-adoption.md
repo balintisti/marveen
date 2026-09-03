@@ -8,6 +8,31 @@ sides solve the same thing and keep the better one, keep what we need regardless
 rather than trusting the newsletter. This document exists so the NEXT round is a diff, not a
 re-measurement.
 
+## THE POLICY THIS DOCUMENT NOW SERVES (Isti, 2026-09-03 21:43)
+
+His words: do not develop our own system much, unless something is overwhelmingly important; rely
+mainly on Szotasz's fixes; and if we do have something, send it UP to him -- if he approves it, it
+comes back to us with an update anyway.
+
+**That flips the default, and it changes what this document is FOR:**
+
+    a capability we lack ...... FIRST ask whether upstream already has it. If yes: ADOPT, do not write.
+    a real fix of ours ........ goes UP as a PR, and returns through an update.
+    our own development ....... only when overwhelmingly important, and the reason said out loud.
+
+So section 3 keeps its value but changes its OUTPUT: where theirs is equal or better the answer is
+ADOPT, not "compare"; and where OURS is better, that is a PR CANDIDATE upstream rather than
+something to keep quietly on our side.
+
+**SCOPE, and it would be expensive to get wrong: this is MARVEEN only, not Delta-CRM.** The CRM is
+Isti's product, Szotasz has nothing to do with it, and more than half the fleet works there.
+marveen read the policy that way, said so to Isti and invited a correction; if the correction comes,
+this section reopens.
+
+**THE WORKED EXAMPLE IS IN THIS DOCUMENT:** we designed a tag-anchored re-run recipe; they had
+already built the better one; the difference is a real mechanism, not taste. That is the shape the
+policy is asking for.
+
 ## THE RE-RUN PROCEDURE (start here next time)
 
 **They already built the tool for this, and it is better than the tag-anchored `git log` we were
@@ -75,9 +100,11 @@ Everything else they alone have, by area:
                   web/routes/desktop-lock.ts, web/routes/heartbeat.ts
     docs ........ upstream-ledger.md
 
-## 2. WHAT WE HAVE AND THEY DO NOT (75 non-test files)
+## 2. WHAT WE HAVE AND THEY DO NOT (75 non-test files) -- NOW READ AS THE PR-CANDIDATE LIST
 
     scripts 49 | src/web 11 | src 9 | scripts/hooks 2 | seed-skills, docs, templates, .lang 1 each
+
+Under the new policy this list is no longer "what we keep" -- it is **what we offer upstream**.
 
 Measured today on the `src` half (card `3b1fc14f`), by capability rather than by file: **14
 capabilities, of which 4 are portable (own CLI + wrapper: agenda, capacity, card-flow,
@@ -111,6 +138,11 @@ the area where a wrong adoption is most expensive. It needs a file-by-file round
 knows both sides' intent, not a diff reader.
 
 ## 4. WHAT STAYS OURS REGARDLESS -- MEASURED, NOT ASSUMED
+
+Under the new policy this section shrinks in meaning: "stays ours" no longer means "we keep
+developing it here", it means **upstream has no equivalent and no reason to want one**. A fleet
+guard that only makes sense with six agents and a kanban board is not a PR candidate; a general
+mechanism is.
 
 - **The fleet's own state**: `agents/` is **gitignored here**, so every agent's config, persona,
   workcheck and memory index is invisible to any tree diff. Nothing upstream can overwrite it, and
