@@ -114,6 +114,59 @@ describe('decision-index.py -- a --check tud PIROSAT is mondani', () => {
     expect(body).toContain('scripts/docstringes.py') // a docstring ag
   })
 
+  // BLOKK-KOMMENT ALAK (`/** * ... */`). Merve: az `update-suite-baseline.mjs` JSDoc-fejlece
+  // ` * MIERT LETEZIK.`-kel kezdodik, es a `#`/`//` minta azt szerkezetileg nem latta.
+  it('BLOKK-kommentes fejlec bekerul az indexbe', () => {
+    writeFileSync(
+      join(tmp, 'scripts', 'blokkos.mjs'),
+      '#!/usr/bin/env node\n/**\n * blokkos.mjs -- valami.\n *\n * MIERT LETEZIK: a blokk-komment is fejlec.\n */\nconsole.log(1)\n',
+    )
+    spawnSync('git', ['add', '-A'], { cwd: tmp })
+    expect(run(tmp, []).code).toBe(0)
+    const body = readFileSync(join(tmp, 'docs', 'scripts-decisions.md'), 'utf-8')
+    expect(body).toContain('scripts/blokkos.mjs')
+    expect(body).toContain('a blokk-komment is fejlec')
+  })
+
+  // A TAGITOTT FRAZIS: sor eleji WHY/MIERT, KULCSSZO-LISTA NELKUL. Ez fogja meg a
+  // `WHY a separate timer when the dashboard already has an in-process watchdog` alakot.
+  it('kulcsszo NELKULI, sor eleji WHY-fejlec bekerul', () => {
+    writeFileSync(
+      join(tmp, 'scripts', 'timer.sh'),
+      '#!/bin/bash\n# WHY a separate timer when the dashboard already has one: mert a masik\n# folyamat epp azt az esetet nem latja.\necho ok\n',
+    )
+    spawnSync('git', ['add', '-A'], { cwd: tmp })
+    expect(run(tmp, []).code).toBe(0)
+    expect(readFileSync(join(tmp, 'docs', 'scripts-decisions.md'), 'utf-8')).toContain('scripts/timer.sh')
+  })
+
+  // NEGATIV KONTROLL, ES EZ TARTJA A MINTAT SZUKEN. A `decision` PUSZTA SZAVAT probaltuk:
+  // 17 jeloltbol tobb mint a fele hamis volt (`log-decision --recommendation`, `review
+  // decision`, `decision JSON`) -- proza, nem fejlec. Ha valaki ujra betenné, ez pirosra megy.
+  it('a `decision` szo PROZABAN nem tesz be egy fajlt', () => {
+    writeFileSync(
+      join(tmp, 'scripts', 'prozas.sh'),
+      '#!/bin/bash\n# prozas.sh -- logs the review decision and prints a decision JSON blob.\n# Usage: prozas.sh log-decision --recommendation X\necho ok\n',
+    )
+    spawnSync('git', ['add', '-A'], { cwd: tmp })
+    expect(run(tmp, []).code).toBe(0)
+    expect(readFileSync(join(tmp, 'docs', 'scripts-decisions.md'), 'utf-8')).not.toContain('scripts/prozas.sh')
+  })
+
+  // NEM OLVASOTT FEJLEC-ALAK: kulon szakasz, gepiesen -- nem kezzel irt kivetel.
+  it('komment-alak NELKULI fajl a kulon szakaszba kerul, nem az indexbe', () => {
+    writeFileSync(
+      join(tmp, 'scripts', 'xmles.plist.template'),
+      '<?xml version="1.0"?>\n<!--\nMIERT KULON FOLYAMAT, ES NEM EGY TIMER: mert a masik nem latja.\n-->\n<plist/>\n',
+    )
+    spawnSync('git', ['add', '-A'], { cwd: tmp })
+    expect(run(tmp, []).code).toBe(0)
+    const body = readFileSync(join(tmp, 'docs', 'scripts-decisions.md'), 'utf-8')
+    expect(body).toContain('Nem olvasott fejlec-alak')
+    expect(body).toContain('scripts/xmles.plist.template')
+    expect(body).not.toContain('### `scripts/xmles.plist.template`')
+  })
+
   // NINCS IDOBELYEG: ket egymas utani generalas BAJT-AZONOS. Enelkul a `--check` sosem
   // tudna nullat mondani, es az egesz drift-or hasznalhatatlan lenne.
   it('ket generalas bajt-azonos (nincs idobelyeg a kimenetben)', () => {

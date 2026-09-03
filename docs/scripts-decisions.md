@@ -17,7 +17,15 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
 Populacio: `git ls-files scripts/` = **196** kovetett fajl, ebbol
-**38** hordoz dontes-fejlecet.
+**52** hordoz dontes-fejlecet.
+
+## Nem olvasott fejlec-alak (1)
+
+Ezek a fajlok egyik olvasott fejlec-alakot sem hasznaljak (sor-komment,
+docstring, blokk-komment), de a fejlec-tartomanyukban all dontes-alaku sor.
+Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
+
+- `scripts/com.marveen.idle-reporter.plist.template` -- MIERT KULON FOLYAMAT, ES NEM A DASHBOARDBAN EGY TIMER: mert epp azt az esetet
 
 ### `scripts/__tests__/channels-main-model.test.sh`
 
@@ -26,6 +34,14 @@ Populacio: `git ls-files scripts/` = **196** kovetett fajl, ebbol
 ### `scripts/__tests__/idle-reporter.test.py`
 
 - MIERT PYTHON-TESZT ES NEM VITEST: a szkript szandekosan ONALLO -- semmit nem
+
+### `scripts/agent-msg.sh`
+
+- WHY: the common `curl -s ... >/dev/null && echo sent` pattern is DANGEROUS -- curl exits 0 even when
+
+### `scripts/agent-progress.sh`
+
+- WHY: the [session-stuck] alert fires every 30 minutes for every agent that is
 
 ### `scripts/applies-cleanly.sh`
 
@@ -47,6 +63,14 @@ Populacio: `git ls-files scripts/` = **196** kovetett fajl, ebbol
 
 - WHY A WRAPPER AND NOT `node dist/card-flow-cli.js` DIRECTLY: three of the four
 
+### `scripts/channel-keepalive-probe.sh`
+
+- WHY: the keepalive freshness signal (store/.channel-keepalive mtime) has two
+
+### `scripts/channel-watchdog.sh`
+
+- WHY a separate timer when the dashboard already has an in-process watchdog:
+
 ### `scripts/ci-watch.sh`
 
 - MIERT LETEZIK: 2026-08-20-an a main CI-je elpirosodott, egy telepites emiatt kimaradt,
@@ -59,15 +83,26 @@ Populacio: `git ls-files scripts/` = **196** kovetett fajl, ebbol
 
 - MIERT LETEZIK (kartya 72edf070). A scripts/ fejlecei dontes-alaku valaszokat hordoznak
 - MIERT GENERALT ES NEM KEZI LISTA: egy kezi lista ugyanugy elavul, mint minden mas szam
+- MIERT NINCS IDOBELYEG A GENERALT FAJLBAN, es ez SZANDEKOS elteres a skill-index.sh-tol:
+- MIERT NINCS A "lapon nevezik-e" OSZLOP A GENERALT FAJLBAN. A bemenete a repon KIVUL van
 
 ### `scripts/deploy-lane.sh`
 
 - MIERT SZERSZAM ES NEM SZABALY. A repo dokumentacioja eddig egy SZAMOT mondott
 
+### `scripts/doc-commands.py`
+
+- WHY THIS IS ITS OWN FILE. The extraction plus the path resolution is a `case`
+- WHY THE RESOLUTION RULE MATTERS MORE THAN THE PATTERN (Marveen, 2026-08-22
+
 ### `scripts/email-send-gate.mjs`
 
 - Governance control (Szabi 2026-06-25, after the Boni incident: a sub-agent
 - Why a hook and not a permissions deny-list: permissive security profiles
+
+### `scripts/ensure-managed-channels-enabled.sh`
+
+- WHY: claude-code >= 2.1.205 SILENTLY drops channel-plugin INBOUND
 
 ### `scripts/git-at.sh`
 
@@ -94,8 +129,25 @@ Populacio: `git ls-files scripts/` = **196** kovetett fajl, ebbol
 
 ### `scripts/hooks/skills-snapshot-on-write.sh`
 
+- WHY (card de00fd2b, measured 2026-08-27). rulebook-snapshot.sh already versions
 - WHY THIS MATCHES Bash AND NOT JUST Write|Edit, which is the whole point.
 - WHY IT ASKS THE FILESYSTEM AND NOT THE COMMAND TEXT. Grepping the Bash command
+
+### `scripts/hooks/telegram_fallback_send.py`
+
+- WHY THE USAGE IS SPELLED OUT HERE (card 471ea006, measured 2026-08-28). The
+
+### `scripts/hooks/telegram_progress_reply_clear.py`
+
+- Why: a single long turn can pull a bigger task forward and emit several replies
+
+### `scripts/idle-reporter.py`
+
+- A KARTYA (ee4163be), es MIERT NEM ELEG A MEGLEVO TETLEN-OR. Egy agens fordulot
+
+### `scripts/install-launchd-unit.sh`
+
+- WHY (card 9f89c7e1, measured 2026-08-27). Every loaded com.marveen.* unit had an
 
 ### `scripts/install-skills-snapshot-hook.sh`
 
@@ -112,6 +164,14 @@ Populacio: `git ls-files scripts/` = **196** kovetett fajl, ebbol
 ### `scripts/limit-monitor.sh`
 
 - WHY bash and not a Claude scheduled-task: a Claude agent invocation itself
+
+### `scripts/main-agent-isolated-config.mjs`
+
+- Why: the main agent otherwise keeps the shared ~/.claude and authenticates
+
+### `scripts/memory-save.sh`
+
+- WHY: the pattern documented in CLAUDE.md is
 
 ### `scripts/merge-overlap.py`
 
@@ -140,6 +200,11 @@ Populacio: `git ls-files scripts/` = **196** kovetett fajl, ebbol
 ### `scripts/readonly-measure.sh`
 
 - MIERT LETEZIK. A CLAUDE.md „Eles adatbazis MERESE" receptje JO, es harman futtattuk egy
+
+### `scripts/rulebook-snapshot-audit.sh`
+
+- WHY A SEPARATE, SELF-CHECKING DETECTOR (didi, card c26193d7, 2026-08-27).
+- WHY THE TWO CAN DISAGREE AT ALL, and why the existing deletion guard could not
 
 ### `scripts/rulebook-snapshot.sh`
 
@@ -172,11 +237,19 @@ Populacio: `git ls-files scripts/` = **196** kovetett fajl, ebbol
 ### `scripts/update-readiness.sh`
 
 - MIERT KULON SZKRIPT, ES NEM `update.sh --check`. A felmeresemben meg az utobbit
+- MIERT KELL EGYALTALAN: a frissitesi ut hibaja definicio szerint KESON derul ki
+
+### `scripts/update-suite-baseline.mjs`
+
+- MIERT LETEZIK. A suite-meret or alapvonala eddig kezzel allt a forrasban, es a
 
 ### `scripts/upstream-sync-report.sh`
 
+- WHY (card c83eb6b6). The cost of falling behind does not grow linearly: ten
+- WHY IT FETCHES FIRST, AND WHY THAT IS THE WHOLE POINT (measured 2026-08-27).
 - WHY IT DOES NOT MERGE. An automatic `git merge` in the main checkout is
 
 ### `scripts/verify-context-pct.sh`
 
 - WHY A SCRIPT AND NOT A UNIT TEST. The route only computes contextTokens (and
+- WHY IT RE-IMPLEMENTS THE RULE. The model -> window mapping below is a second,

@@ -52,9 +52,19 @@ INSTALL_ROOT = '/Users/isti/marveen'
 PAGES = ['/Users/isti/CLAUDE.md', os.path.join(INSTALL_ROOT, 'CLAUDE.md')]
 OUT_REL = 'docs/scripts-decisions.md'
 
-CMT  = re.compile(r'^\s*(#|//)\s?(.*)$')
-HEAD = re.compile(r'^\s*(MIERT|MIÉRT|WHY|Miert|Miért|Why)\b[^.]{0,90}?'
-                  r'(LETEZIK|EXISTS|NEM |NOT |AND NOT|and not|nem a|SZERSZAM|KULON)', re.I)
+CMT  = re.compile(r'^\s*(#|//|/\*+|\*(?!/))\s?(.*?)\s*(?:\*/)?$')
+# A `/* ... */` ag MERT (2026-09-03): a `update-suite-baseline.mjs` JSDoc-fejlece
+# ` * MIERT LETEZIK.`-kel kezdodik, es a `#`/`//` minta azt SZERKEZETILEG nem latta.
+# Harom fejlec-alak van a scripts/-ben, nem ketto: sor-komment, docstring, blokk.
+# A FRAZIS-MINTA TAGITASA MERT, NEM ERZESRE (2026-09-03). Az elso alak WHY/MIERT UTAN
+# egy kulcsszo-listat is kovetelt (LETEZIK/EXISTS/NEM/...), es ezzel kihagyott olyan
+# tankonyvi dontes-fejleceket, mint a `WHY a separate timer when the dashboard already
+# has an in-process watchdog`. A tagitas precizitasa MERVE: 15 uj jelolt ezen a fan,
+# mind a 15 ELOLVASVA, mind valodi dontes-fejlec. A `decision`/`dontes` PUSZTA SZAVA
+# SZANDEKOSAN NINCS BENNE: azzal probalva 17 jeloltbol tobb mint a fele hamis volt
+# (`log-decision --recommendation`, `review decision`, `decision JSON`) -- proza, nem fejlec.
+HEAD = re.compile(r'^(WHY|MIERT|MIÉRT|Why|Miert|Miért)\b', re.I)
+NEG  = re.compile(r'\b(MIERT NEM|MIÉRT NEM|WHY NOT|Miert nem)\b', re.I)
 GOV  = re.compile(r'^\s*Governance control\b')
 DQ3 = chr(34) * 3
 SQ3 = chr(39) * 3
@@ -131,12 +141,12 @@ def scan(root):
     files = [f for f in subprocess.run(['git', 'ls-files', 'scripts/'], cwd=root,
              capture_output=True, text=True).stdout.split()
              if os.path.isfile(os.path.join(root, f))]
-    rows = []
+    rows, unparsed = [], []
     for f in files:
         hdr = header(os.path.join(root, f))
         dec = []
         for i, h in enumerate(hdr):
-            if not (HEAD.match(h) or GOV.match(h)):
+            if not (HEAD.match(h.strip()) or NEG.search(h) or GOV.match(h)):
                 continue
             # A CIM ONMAGABAN is allhat egy soron (quota-ceiling-guard.sh): ilyenkor a VALASZ
             # a kovetkezo nem-ures kommentsor. Mechanikus, tehat a generalt jelleg megmarad.
@@ -146,10 +156,28 @@ def scan(root):
             dec.append(line)
         if dec:
             rows.append((f, dec))
-    return sorted(rows), len(files)
+            continue
+        # NEM OLVASOTT FEJLEC-ALAK, NYERS FRAZIS-SZUROVEL. Harom alakot olvasunk
+        # (sor-komment, docstring, blokk); a `scripts/` 24 fajlja egyiket sem hasznalja
+        # (.template, .service, .timer, .txt, .sql, .md). Mervez 2026-09-03: kozuluk PONTOSAN
+        # EGY hordoz dontes-sort. Egy negyedik parser-ag egyetlen fajlert nem eri meg -- de a
+        # HALLGATAS sem: az index celja epp az, hogy a dontes MEGTALALHATO legyen. Ezert ezek
+        # GEPIESEN, kulon szakaszban jelennek meg, nem kezzel irt kivetelkent.
+        if not hdr:
+            try:
+                raw = open(os.path.join(root, f), encoding='utf-8',
+                           errors='replace').read().splitlines()[:60]
+            except OSError:
+                raw = []
+            for l in raw:
+                t = l.strip().lstrip('<!-').strip()
+                if HEAD.match(t) or NEG.search(t):
+                    unparsed.append((f, t[:120]))
+                    break
+    return sorted(rows), len(files), sorted(unparsed)
 
 
-def render(rows, nfiles):
+def render(rows, nfiles, unparsed):
     L = []
     L.append('# A `scripts/` fejleceiben allo dontesek')
     L.append('')
@@ -172,6 +200,16 @@ def render(rows, nfiles):
     L.append(f'Populacio: `git ls-files scripts/` = **{nfiles}** kovetett fajl, ebbol')
     L.append(f'**{len(rows)}** hordoz dontes-fejlecet.')
     L.append('')
+    if unparsed:
+        L.append(f'## Nem olvasott fejlec-alak ({len(unparsed)})')
+        L.append('')
+        L.append('Ezek a fajlok egyik olvasott fejlec-alakot sem hasznaljak (sor-komment,')
+        L.append('docstring, blokk-komment), de a fejlec-tartomanyukban all dontes-alaku sor.')
+        L.append('Nyers frazis-szuro, nem parser -- ezert kulon szakasz.')
+        L.append('')
+        for f, d in unparsed:
+            L.append(f'- `{f}` -- {d}')
+        L.append('')
     for f, dec in rows:
         L.append(f'### `{f}`')
         L.append('')
@@ -214,7 +252,7 @@ def main():
             print('MEGTAGADVA: a lap-mero elbukott a sajat kontrolljan, szamot nem irok ki.',
                   file=sys.stderr)
             return 3
-        rows, nfiles = scan(root)
+        rows, nfiles, _unp = scan(root)
         blob, _ = pages_blob()
         unnamed = [(f, d) for f, d in rows
                    if os.path.basename(f) not in blob and f not in blob]
@@ -225,8 +263,8 @@ def main():
                 print(f'      {d[:100]}')
         return 0
 
-    rows, nfiles = scan(root)
-    body = render(rows, nfiles)
+    rows, nfiles, unparsed = scan(root)
+    body = render(rows, nfiles, unparsed)
 
     if arg == '--check':
         try:
@@ -255,7 +293,8 @@ def main():
                                cwd=root, capture_output=True, text=True).stdout.split()
     pending = [f for f in untracked
                if os.path.isfile(os.path.join(root, f))
-               and any(HEAD.match(h) or GOV.match(h) for h in header(os.path.join(root, f)))]
+               and any(HEAD.match(h.strip()) or NEG.search(h) or GOV.match(h)
+                       for h in header(os.path.join(root, f)))]
     if pending:
         print(f'FIGYELEM: {len(pending)} KOVETETLEN scripts/ fajl hordoz dontes-fejlecet, tehat '
               f'NINCS BENNE a generalt indexben:', file=sys.stderr)
