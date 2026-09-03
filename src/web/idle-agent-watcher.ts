@@ -438,8 +438,32 @@ export function tick(): void {
       )
     }
 
-    // One message for the whole sweep, or none at all.
-    if (alerts.length > 0) sendAlert(buildFleetAlert(alerts))
+    // One message for the whole sweep, or none at all -- but SPLIT BY AUDIENCE.
+    //
+    // Only 'still-idle' is a fleet event the OWNER can act on: an agent got a wake and did not
+    // move. The other three are the guard reporting on ITSELF -- a pane it could not read (it is
+    // BLIND, which says nothing about the agent), a missing work-check (a config gap), and a wake
+    // it could not enqueue (a delivery failure). All three are the coordinator's to fix.
+    //
+    // Measured 2026-09-03: of four alerts that reached the owner's phone, THREE were
+    // 'pane-unreadable' -- and all three panes read fine when checked seconds later. The one true
+    // row arrived buried among the guard's own instrument failures. Nothing is silenced here:
+    // every kind is still reported, to whoever can act on it.
+    const ownerFacing = alerts.filter((a) => a.kind === 'still-idle')
+    const coordinatorFacing = alerts.filter((a) => a.kind !== 'still-idle')
+
+    if (ownerFacing.length > 0) sendAlert(buildFleetAlert(ownerFacing))
+    if (coordinatorFacing.length > 0) {
+      try {
+        createAgentMessage('system', MAIN_AGENT_ID, buildFleetAlert(coordinatorFacing))
+      } catch (err) {
+        // A coordinator alert that cannot be enqueued must not vanish. Falling back to the owner
+        // is noisier than the old behaviour for one tick, and that is the correct trade: a
+        // silently dropped guard-failure is the exact shape this routing change exists to remove.
+        logger.warn({ err }, 'idle guard: could not tell the coordinator -- falling back to the owner')
+        sendAlert(buildFleetAlert(coordinatorFacing))
+      }
+    }
   } catch (err) {
     logger.warn({ err }, 'idle guard: tick error')
   }
