@@ -788,11 +788,27 @@ export function topOfPullList<T extends { priority?: string | null; updated_at?:
  *  sits on top of a weighted ranking just the same.
  *
  *  MISSING CONFIG MEANS NO FILTERING, AND THAT DEFAULT IS LOAD-BEARING -- do
- *  not "clean it up" into a stricter default. The error here is asymmetric:
- *  a filter that shows too much is exactly today's behaviour, while one that
- *  shows too little starves an agent of work and makes the guard do the
- *  opposite of the thing it exists for. So an agent with no declared lane sees
- *  everything, as before. Fail toward visibility.
+ *  not "clean it up" into a stricter default. The error here is asymmetric,
+ *  and the two sides are not the same KIND of cost:
+ *
+ *    no declaration, a lane would have helped -> one offer lands beside the
+ *        point; the agent skips it and gets another next round. NOISY, CHEAP.
+ *    a declaration that is wrong -> a whole pool NEVER surfaces for that agent,
+ *        and nothing signals it. SILENT, EXPENSIVE.
+ *
+ *  AND THE LOOSE DEFAULT IS MEASURED, NOT MERELY ARGUED (marveen + friday,
+ *  independently, 2026-09-03): of seven agents, THREE are genuinely mixed --
+ *  jarvis 54.5% delta-crm, marveen 65.0%, didi 78.9% -- so a tightened default
+ *  would mis-serve nearly half the fleet. mandark is the sharpest case at 87.0%:
+ *  over any threshold worth picking, yet holding nine marveen cards that a
+ *  delta-crm declaration would make invisible.
+ *
+ *  This is also why no lane is DERIVED for anyone. That table measures past
+ *  ASSIGNMENT, most of it made by the coordinator; deriving a future offer
+ *  filter from it would freeze earlier routing as though it were preference,
+ *  and the meter would then confirm what the meter produced. It cannot separate
+ *  capability from who happened to be free. A lane is DECLARED by its agent or
+ *  it does not exist. Fail toward visibility.
  *
  *  AN UNCLASSIFIED CARD STAYS VISIBLE TO EVERYONE. An empty `project` is not a
  *  lane, it is a missing answer (6 of 87 that day, and 27% of the whole board on
