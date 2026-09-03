@@ -587,7 +587,33 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
         // No timestamp on the card means we cannot show the comment is stale; leave it
         // out rather than nag on a guess.
         if (c.updated_at == null) return false
-        return c.updated_at > mine
+        if (c.updated_at <= mine) return false
+        // THE COORDINATOR EXCLUSION, CARRIED OVER FROM THE SIBLING BRANCH (card 6a2ae0c7).
+        // `assigned_open_cards` already refuses to treat the coordinator's last word as an
+        // unanswered finding, with the reason spelled out on the `coordinator` parameter:
+        // its comments are COORDINATION -- an acknowledgement, a decision, a hand-off -- and
+        // it comments on nearly every card. This branch compared raw `updated_at`, so ANY
+        // movement re-armed the card, including a coordinator comment that usually means the
+        // card is SETTLED.
+        //
+        // Measured 2026-09-03 across all six agents: of 146 stale items, 10 were re-armed by
+        // the coordinator alone. (didi measured 7 on 2026-08-22; her sample was one agent and
+        // ten days older.) Small, and deliberately so -- see the limit below.
+        //
+        // WHAT THIS DELIBERATELY DOES NOT CHANGE, because it was not decided: a card whose
+        // `updated_at` moved with NO comment after mine (a label, a move) stays stale. That is
+        // didi's case (C), it has ZERO live instances today, and silencing it here would be an
+        // undeclared decision riding along with a declared one.
+        //
+        // AND NOT jarvis: his comments are mixed -- real independent measurement one hour,
+        // census bookkeeping the next -- so role alone cannot decide it. That question is worth
+        // 34 of the 44 items, i.e. most of the benefit, and it belongs to the coordinator.
+        const spokeAfterMe: string[] = []
+        for (const [author, at] of lastCommentAtByCard.get(c.id) ?? []) {
+          if (author !== agent && at > mine) spokeAfterMe.push(author)
+        }
+        if (spokeAfterMe.length > 0 && spokeAfterMe.every((a) => a === coordinator)) return false
+        return true
       })
   }
 }

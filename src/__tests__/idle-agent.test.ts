@@ -1348,3 +1348,65 @@ describe('the watcher tick runs the sender-side queue sweep', () => {
     expect(markAt).toBeGreaterThan(sendAt)
   })
 })
+
+// ===== A REVIEW-AG KOORDINATOR-KIZARASA (kartya 6a2ae0c7) =====
+//
+// A szomszed `assigned_open_cards` ag MAR kizarja a koordinatort, kimondott indoklassal: a
+// kommentje KOORDINACIO (nyugtazas, dontes, atadas), nem lelet. A review-ag nyers `updated_at`-et
+// hasonlitott, tehat BARMI ujraelesitette a kartyat -- egy koordinator-komment is, ami rendszerint
+// azt jelenti, hogy a kartya EL VAN INTEZVE.
+//
+// Merve 2026-09-03, mind a hat agensre: 146 elavult tetelbol 10-et a koordinator ELESITETT UJRA
+// egyedul. (didi 2026-08-22-en 7-et mert, egy agensre es tiz nappal korabban.)
+describe('selectDeclaredWork -- review-ag: a koordinator kommentje nem elesit ujra (6a2ae0c7)', () => {
+  const CHECK = { kind: 'testing_without_my_comment' } as const
+
+  // (1) A kommentem ota CSAK a koordinator szolt -> NEM elavult.
+  it('CSAK a koordinator szolt utanam -> nem kerul a sorba', () => {
+    const rows = [card('x', 'testing', 'dexter', { updatedAt: 300 })]
+    const cmts = commentsAt([['x', 'didi', 200], ['x', 'marveen', 300]])
+    expect(countDeclaredWork(CHECK, 'didi', rows, cmts, 'marveen')).toBe(0)
+  })
+
+  // (2) A LEGFONTOSABB ELLENIRANY: ha IMPLEMENTALO szolt, a kartya ELAVULT marad. Enelkul egy
+  // "mindent kizaro" javitas ugyanugy zold lenne -- es a mai adaton 146-bol 88 elavult tetel
+  // mogott implementalo all, tehat egy tul szeles kizaras nem zajt csokkentene, hanem vakfoltot
+  // csinalna.
+  it('IMPLEMENTALO szolt utanam -> ELAVULT marad', () => {
+    const rows = [card('x', 'testing', 'dexter', { updatedAt: 300 })]
+    const cmts = commentsAt([['x', 'didi', 200], ['x', 'dexter', 300]])
+    expect(countDeclaredWork(CHECK, 'didi', rows, cmts, 'marveen')).toBe(1)
+  })
+
+  it('koordinator ES implementalo is szolt -> ELAVULT marad', () => {
+    const rows = [card('x', 'testing', 'dexter', { updatedAt: 300 })]
+    const cmts = commentsAt([['x', 'didi', 200], ['x', 'marveen', 250], ['x', 'dexter', 300]])
+    expect(countDeclaredWork(CHECK, 'didi', rows, cmts, 'marveen')).toBe(1)
+  })
+
+  // (3) Sosem kommenteltem -> mindig a sorban, a koordinatortol fuggetlenul.
+  it('SOSEM kommenteltem -> a sorban marad akkor is, ha csak a koordinator szolt', () => {
+    const rows = [card('x', 'testing', 'dexter', { updatedAt: 300 })]
+    const cmts = commentsAt([['x', 'marveen', 300]])
+    expect(countDeclaredWork(CHECK, 'didi', rows, cmts, 'marveen')).toBe(1)
+  })
+
+  // A (C) ESET ERINTETLEN, ES EZ SZANDEKOS: ha a kartya `updated_at`-je mozdult, de UTANAM SENKI
+  // nem kommentelt (cimke, mozgatas), a kartya ELAVULT marad. didi ezt kulon esetkent nevezte meg,
+  // a koordinator NEM dontotte el, es ma NULLA elo peldanya van -- egy el nem dontott valtozast
+  // nem viszunk be egy eldontott mellett.
+  it('(C) csak a kartya mozdult, komment NELKUL -> valtozatlanul ELAVULT', () => {
+    const rows = [card('x', 'testing', 'dexter', { updatedAt: 300 })]
+    const cmts = commentsAt([['x', 'didi', 200]])
+    expect(countDeclaredWork(CHECK, 'didi', rows, cmts, 'marveen')).toBe(1)
+  })
+
+  // KONTROLL: koordinator NELKUL a kizaras nem szabad hogy tuzeljen -- kulonben egy hianyzo
+  // parameter csendben elnemitana a sort. A parameter docstringje ezt kimondja: "Omit it only
+  // where there is no coordinator to speak of."
+  it('KOORDINATOR NELKUL a kizaras nem tuzel', () => {
+    const rows = [card('x', 'testing', 'dexter', { updatedAt: 300 })]
+    const cmts = commentsAt([['x', 'didi', 200], ['x', 'marveen', 300]])
+    expect(countDeclaredWork(CHECK, 'didi', rows, cmts, undefined)).toBe(1)
+  })
+})
