@@ -11,19 +11,52 @@ A `cat {{INSTALL_DIR}}/DREAM.md` parancs visszaadja a tartalmat, abból emeld ki
 
 A többi szekció (email, naptár, AI hírek) maradnak a CLAUDE.md-ben leírt formátum szerint.
 
-**KÖTELEZŐ képesség-ellenőrzés az email/naptár szekció ELŐTT** (2026-08-18: kiderült, hogy
-a napindító hónapokig ígért email- és naptár-blokkot úgy, hogy egyiket sem tudta lekérni,
-és senkinek nem tűnt fel, mert a hiányzó adat ugyanúgy néz ki, mint a nyugodt reggel):
+**AZ EMAIL ÉS A NAPTÁR KÉT PARANCS. NE KERESS HOZZÁJUK ESZKÖZT** (javítva 2026-08-22, és a
+seedbe 2026-09-03-án, kártya `48940af0`: három dokumentum három különböző naptár-utat írt elő,
+és az ágens a nem létezőt választotta):
 
 ```bash
-ls ~/.config/google-calendar-mcp/tokens.json 2>/dev/null || echo "NAPTAR: nincs token"
+python3 {{INSTALL_DIR}}/scripts/gmail-recent.py --minutes 720 --limit 15
+bash    {{INSTALL_DIR}}/scripts/calendar-agenda.sh --hours 24
 ```
-Email-eszközhöz `ToolSearch` (mail/gmail). A CLAUDE.md-ben említett `search_emails` NEM
-garantált: ha az MCP nincs bekötve, a tool nem létezik.
 
-A szabály: **az ÜRES kategóriát hagyd ki, a NEM ELÉRHETŐT írd ki** egy sorban, az okkal
-(pl. "Naptár: nem elérhető, nincs Google-hitelesítés ezen a gépen"). Soha ne tűnjön úgy,
-hogy nincs esemény, amikor valójában nem tudtuk megnézni.
+Mindkettő ugyanazt a szerződést tartja: **mindig 0-val lép ki, mindig JSON-t ad**, és a JSON
+vagy `{"ok":true, ...}` (megnéztük, ez van), vagy `{"ok":false,"error":"..."}`. Üres naptárt
+vagy postafiókot **nem lehet `ok:true` nélkül kapni**. A naptár-JSON `via` mezője megmondja,
+melyik példány válaszolt (`dist` vagy `tsx-source`); ha `warning` mező van benne, azt is írd ki.
+
+**DE AZ `ok:false` NEM AZT JELENTI, HOGY „nem tudtuk megnézni" -- KÉT KÜLÖNBÖZŐ OKOT FED**
+(jarvis mérte forrásból, 2026-08-24). Három ág van, és csak KETTŐ különböztethető meg:
+
+    (a) üres                -> `{"ok":true,"count":0}`                 megkülönböztethető
+    (b) ELÉRHETETLEN        -> `{"ok":false,"error":"..."}`  a wrapperből
+    (c) ELÉRT, de HIBÁZOTT  -> `{"ok":false,"error":"..."}`  a CLI fail()-jéből
+
+A (b) és a (c) **bájt-azonos**: nincs `kind`, nincs `stage`, csak szabad szöveges `error`. Ha
+`ok:false` jön, NE írd ki, hogy „nincs naptár" -- írd ki, hogy a lekérdezés HIBÁVAL tért vissza,
+és idézd az `error` szövegét szó szerint.
+
+**ÉS AZ ÜRES NAPTÁR NEM UGYANAZ, MINT A VAK NAPTÁR** (friday mérte 2026-09-03). Az `ok:true,
+count:0` ugyanúgy néz ki akkor is, ha tényleg nincs esemény, és akkor is, ha a hitelesítés nem
+lát semmit. A wrapper szerződése a „nem tudtunk nézni" esetet zárja ki, a vak olvasást nem. Az
+EGYETLEN elérhető pozitív kontroll a legnagyobb megengedett ablak (a CLI csak előre néz, a
+negatív óra tiltva, a maximum 744):
+
+```bash
+bash {{INSTALL_DIR}}/scripts/calendar-agenda.sh --hours 744
+# count > 0  ->  a mérő LÁT, tehát a 24 órás nulla VALÓDI nemleges
+```
+
+A `warning` mező MÁS kérdésre válaszol: akkor szól, ha a beállított naptár a `primary`, ami
+szolgáltatásfiókkal a GÉPI fiók saját, mindig üres naptára. A `warning: null` ezt a csapdát
+zárja ki, NEM azt, hogy a mérő lát.
+
+**HA A PARANCS NEM LÉTEZIK** (`No such file or directory`): az NEM „nincs naptár" és NEM „nincs
+levél". A `{{INSTALL_DIR}}` telepítési fa, és csak a beolvasztott állapotot tartalmazza -- írd ki
+egy sorban, hogy a lekérdező szkript nincs beolvasztva, és nevezd meg, melyik.
+
+A szabály: **az ÜRES kategóriát hagyd ki, a NEM ELÉRHETŐT írd ki** egy sorban, az okkal. Soha ne
+tűnjön úgy, hogy nincs esemény, amikor valójában nem tudtuk megnézni.
 
 Mail.app AppleScripten át: időkorláttal futtasd. Ha `-1712` (Apple-esemény időkorlát) jön,
 az hiányzó Automation-engedély, nem üres postafiók -- ezt írd ki.
