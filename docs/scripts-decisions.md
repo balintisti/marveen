@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **196** kovetett fajl, ebbol
-**52** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **197** kovetett fajl, ebbol
+**53** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (1)
 
@@ -253,3 +253,9 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - WHY A SCRIPT AND NOT A UNIT TEST. The route only computes contextTokens (and
 - WHY IT RE-IMPLEMENTS THE RULE. The model -> window mapping below is a second,
+
+### `scripts/writecensus.mjs`
+
+- MIERT LETEZIK, ES MIERT NEM EGY grep. A `writeFileSync(...)` mintara kotott grep
+- MIERT NEM CSAK A PAROKAT IRJA KI. Egy csoport, ahol MINDEN iro hordozza az
+- MIERT VEZETI LE A GYOKERET ES NEM DROTOZZA BE. Az elso valtozat
