@@ -77,12 +77,19 @@ describe('PUT /api/kanban/<id> -- a nem-valtozas nem frissites', () => {
     expect(utana.updated_at).toBeGreaterThanOrEqual(c.updated_at)
   })
 
-  it('ISMERETLEN kulcs onmagaban nem valtozas', async () => {
-    // Egy ismeretlen mezo nem irodik ki az UPDATE-ben sem -- ha valtozasnak
-    // szamitana, egy elgepelt kulcs is "frissitene" a kartyat.
+  it('ISMERETLEN kulcs: NEM frissiti a kartyat -- es MOSTANTOL meg is mondja (5112c914)', async () => {
+    // A SZANDEK VALTOZATLAN, es a teszt sajat eredeti kommentje mondja ki: "ha valtozasnak
+    // szamitana, egy elgepelt kulcs is »frissitene« a kartyat". Az `updated_at` allitas ezert
+    // ITT MARAD -- az af9f6cd4 teherhordo fele.
+    //
+    // AMI VALTOZOTT: az 5112c914 ota az elgepelt kulcs nem CSENDBEN no-op, hanem 400. A regi
+    // `changed: false` a KOR viselkedeset rogzitette (a vegpont akkor semmi mast nem tudott),
+    // nem egy dontest arrol, hogy a hivonak ne kelljen megtudnia. A 400 ugyanazt a szandekot
+    // ERÔSEBBEN teljesiti: nem tortenik semmi, ES a hivo megtudja, hogy elgepelte.
     const c = kartya('eeee5555')
-    const { payload } = await put('eeee5555', { nincs_ilyen_mezo: 'x' })
-    expect(payload.changed).toBe(false)
+    const { status, payload } = await put('eeee5555', { nincs_ilyen_mezo: 'x' })
+    expect(status).toBe(400)
+    expect(payload.error).toContain('nincs_ilyen_mezo')
     expect(getKanbanCard('eeee5555')!.updated_at).toBe(c.updated_at)
   })
 

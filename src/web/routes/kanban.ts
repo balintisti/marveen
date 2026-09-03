@@ -15,6 +15,9 @@ import {
   countNewHotMemories,
   countPlannedKanbanCards,
   getDbFileSizeMb,
+  KANBAN_UPDATABLE,
+  KANBAN_SERVER_FIELDS,
+  KANBAN_ELSEWHERE_FIELDS,
 } from '../../db.js'
 import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
 import { unknownQueryParams, unknownQueryParamError } from '../query-params.js'
@@ -491,6 +494,67 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
           + 'A felulirás mostantol a valaszban latszik: `overwritten`.',
       }, 400)
       return true
+    }
+
+    // AZ ISMERETLEN TORZS-MEZO NEM MEHET AT NEMAN (kartya 5112c914, sajat meres 2026-08-24).
+    // Mert eset: `PUT {"labels":["varakozik:isti"]}` -> `{"ok":true}`, es a visszaolvasas
+    // `labels: []`. A mezo IRHATO, csak nem ezen az uton -- es a rossz ut nem mondott nemet.
+    // Ugyanaz az alak, mint a lenyelt query-parameter (cf85d765) es a csendben elfogadott
+    // letrehozas (b7b0f400).
+    //
+    // ES AMIERT NEM EGYSZERU "ismeretlen kulcs -> 400" (ez volt az elso alakom, es MERVE
+    // ELTORTE VOLNA A FELULETET): a dashboard KET inline szerkesztese a TELJES kartyat kuldi
+    // vissza -- `{ ...card, assignee: newVal }` es `{ ...card, parent_id: newParentId }`
+    // (`web/app.js`). A kartya-objektum pedig HAT nem-frissitheto mezot hordoz: `id`,
+    // `created_at`, `updated_at`, `seq`, `dispatched_at`, `labels`. Egy csupasz kulcs-tiltas
+    // MINDEN inline szerkesztesre 400-at adna -- egy or, ami a HELYES allapotra tuzel, es
+    // ezt a fajl mar kimondja par sorral lejjebb.
+    //
+    // A MEGKULONBOZTETO EZERT A SZANDEK, NEM A KULCS, es ugyanaz a logika, mint az
+    // `overwritten`-e: nem az szamit, hogy a mezo OTT VAN, hanem hogy a hivo MAST kuldott,
+    // mint ami tarolva van. Egy visszhangzott `{...card}` nem allit semmit; egy MEGVALTOZTATOTT
+    // ertek igen -- es akkor a hivo azt hiszi, irt valamit.
+    const roCard = getKanbanCard(id)
+    if (roCard) {
+      const sentKeys = Object.keys(data).filter((k) => !(KANBAN_UPDATABLE as readonly string[]).includes(k))
+      const unknownKeys = sentKeys.filter(
+        (k) => !(KANBAN_SERVER_FIELDS as readonly string[]).includes(k)
+             && !(KANBAN_ELSEWHERE_FIELDS as readonly string[]).includes(k),
+      )
+      // 1. A KARTYAN NEM IS LETEZO KULCS: eliras vagy kitalalt mezo. Ilyet egyetlen mert hivo
+      //    sem kuld (a dashboard a kartya sajat alakjat kuldi vissza), tehat a 400 nem tor el
+      //    semmit -- viszont megnevezi, mi nem tortent meg.
+      if (unknownKeys.length > 0) {
+        json(res, {
+          error: `Ismeretlen mezo(k): ${unknownKeys.join(', ')}. Ezeket a vegpont NEM tarolja el. `
+            + `Frissitheto mezok: ${KANBAN_UPDATABLE.join(', ')}.`,
+        }, 400)
+        return true
+      }
+      // 2. MASHOL IRHATO MEZO, MEGVALTOZTATOTT ERTEKKEL -> 400, a helyes vegpont nevevel.
+      //    A kulcs jelenlete ONMAGABAN nem eleg: ugyanaz a kulcs ott van a legitim `{...card}`
+      //    visszhangban is, valtozatlan ertekkel -- arra hallgatunk, mint eddig.
+      // ES A SZERVER-TULAJDONU MEZOKRE EZ NEM ALL, ezert kulon halmaz:
+      // ha a beküldött `updated_at` vagy `seq` eltér a tarolttol, az ELAVULT OLVASAS -- verseny,
+      // nem szandek. A felulet a lista-nezetbol kuldi vissza a kartyat; ha kozben mas irt ra, a
+      // visszhang elavul. Ezeket 400-zal elutasitani pontosan a FELTETELES IRAST valositana meg,
+      // amit ez a vegpont par sorral feljebb KIMONDOTTAN nem tamogat -- es a felulet inline
+      // szerkesztese torne el egy jóhiszemű versenyen.
+      // A `labels` MAS: ott van hova irni, tehat a valtozott ertek SZANDEK.
+      const stored: Record<string, unknown> = { labels: getLabelsForAllCards().get(id) ?? [] }
+      const ignored = (KANBAN_ELSEWHERE_FIELDS as readonly string[])
+        .filter((k) => k in data && JSON.stringify(data[k]) !== JSON.stringify(stored[k]))
+      if (ignored.length > 0) {
+        const hint = ignored.includes('labels')
+          ? ' A cimkekhez a dedikalt vegpont valo: POST /api/kanban/<id>/labels {"labelId":"..."}.'
+          : ''
+        logger.warn({ id, ignored }, 'Kanban PUT received non-updatable fields with changed values')
+        json(res, {
+          error: `Ezeket a mezoket ez a vegpont NEM irja: ${ignored.join(', ')} -- a keres NEM `
+            + `tortent meg, hogy ne hidd, hogy eltarolodott.${hint}`,
+        }, 400)
+        return true
+      }
     }
 
     const result = updateKanbanCard(id, data)

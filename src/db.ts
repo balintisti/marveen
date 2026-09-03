@@ -1854,10 +1854,25 @@ export interface KanbanUpdateResult {
 }
 
 /** Azok a mezok, amiket egy PUT valoban modosithat. Ismeretlen kulcs nem valtozas. */
-const KANBAN_UPDATABLE = [
+export const KANBAN_UPDATABLE = [
   'title', 'description', 'status', 'assignee', 'priority',
   'project', 'parent_id', 'due_date', 'sort_order', 'archived_at',
 ] as const
+
+// A KARTYA TOBBI MEZOJE, KET CSOPORTBAN -- es a kettonek MAS a helyes valasza, ha egy PUT
+// torzsben erkezik (kartya 5112c914). A dashboard inline szerkesztese a TELJES kartyat kuldi
+// vissza (`{ ...card, assignee: x }`), tehat MINDKETTO megjelenik legitim keresben is.
+//
+//   SERVER_FIELDS  a szerver irja. Ha a bekuldott ertek elter, az ELAVULT OLVASAS (verseny),
+//                  nem szandek -- ezeket figyelmen kivul hagyjuk, mint eddig. 400-zal
+//                  elutasitani feltetetes irast valositana meg, amit a PUT kimondottan nem
+//                  tamogat.
+//   ELSEWHERE      MASHOL irhato. Egy megvaltoztatott ertek itt SZANDEK: a hivo azt hiszi, irt
+//                  valamit, es nem irt. Ezek kapnak 400-at, a helyes vegpont nevevel.
+export const KANBAN_SERVER_FIELDS = [
+  'id', 'created_at', 'updated_at', 'seq', 'dispatched_at',
+] as const
+export const KANBAN_ELSEWHERE_FIELDS = ['labels'] as const
 
 /**
  * NEM EMELJUK AZ `updated_at`-ET, HA SEMMI NEM VALTOZOTT (kartya af9f6cd4).
