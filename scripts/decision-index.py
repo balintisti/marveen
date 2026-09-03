@@ -56,6 +56,8 @@ CMT  = re.compile(r'^\s*(#|//)\s?(.*)$')
 HEAD = re.compile(r'^\s*(MIERT|MIÉRT|WHY|Miert|Miért|Why)\b[^.]{0,90}?'
                   r'(LETEZIK|EXISTS|NEM |NOT |AND NOT|and not|nem a|SZERSZAM|KULON)', re.I)
 GOV  = re.compile(r'^\s*Governance control\b')
+DQ3 = chr(34) * 3
+SQ3 = chr(39) * 3
 
 
 def repo_root():
@@ -78,14 +80,43 @@ def pages_blob():
 
 
 def header(path):
+    """A fejlec-blokk kiolvasasa, KET alakban.
+
+    A DOCSTRING-AG MERT DEFEKTUS-JAVITAS (2026-09-03). Az elso valtozat csak `#` es `//`
+    kommentet olvasott. Megmerve: a `scripts/` 52 kovetett `.py` fajljabol MIND AZ 52
+    docstringgel fejlecel es EGY SEM `#`-kel -- vagyis a mero a konyvtar 27%-at
+    SZERKEZETILEG nem latta, es a hianya nem hibakent jelent meg, hanem egy kisebb,
+    teljesen hiheto szamkent. Az irany a kenyelmes fele vitt: kevesebb nevezetlen dontes,
+    mint amennyi van. Nyolc dontes esett ki, koztuk ket governance-kapu
+    (db-destructive-gate.py, outgoing-copy-gate.py).
+    """
     try:
         lines = open(path, encoding='utf-8', errors='replace').read().splitlines()
     except OSError:
         return []
+
+    body = lines[1:] if lines and lines[0].startswith('#!') else lines
+    first = next((i for i, l in enumerate(body[:10]) if l.strip()), None)
+    if first is not None:
+        q = body[first].lstrip()[:3]
+        if q in (DQ3, SQ3):
+            hdr, rest = [], body[first].lstrip()[3:]
+            if rest.strip().endswith(q):
+                one = rest.strip()[:-3].strip()
+                return [one] if one else []
+            if rest.strip():
+                hdr.append(rest.strip())
+            for l in body[first + 1:first + 61]:
+                if q in l:
+                    head = l.split(q)[0].strip()
+                    if head:
+                        hdr.append(head)
+                    break
+                hdr.append(l.strip())
+            return hdr
+
     hdr = []
-    for i, l in enumerate(lines[:60]):
-        if i == 0 and l.startswith('#!'):
-            continue
+    for i, l in enumerate(body[:60]):
         m = CMT.match(l)
         if m:
             hdr.append(m.group(2))
@@ -214,6 +245,24 @@ def main():
     os.makedirs(os.path.dirname(out_abs), exist_ok=True)
     open(out_abs, 'w', encoding='utf-8').write(body)
     print(f'{OUT_REL} generalva: {len(rows)} dontes-fejlec / {nfiles} kovetett scripts/ fajl.')
+
+    # A POPULACIO A GIT INDEX, NEM A LEMEZ -- es ez egy MERT csapdat rejt (2026-09-03, sajat
+    # eset). Aki uj scriptet ir es a `git add` ELOTT generál, olyan artefaktumot commitol, ami
+    # nem irja le azt a fat, amibe bekerul: a sajat fajlja meg nincs az indexben. A `--check`
+    # ezt utolag megfogja, de csak ha valaki lefuttatja -- egy PR nelkuli feature-agon semmi
+    # nem futtatja. Ezert a hiany itt, a generalas pillanataban kap NEVET.
+    untracked = subprocess.run(['git', 'ls-files', '--others', '--exclude-standard', 'scripts/'],
+                               cwd=root, capture_output=True, text=True).stdout.split()
+    pending = [f for f in untracked
+               if os.path.isfile(os.path.join(root, f))
+               and any(HEAD.match(h) or GOV.match(h) for h in header(os.path.join(root, f)))]
+    if pending:
+        print(f'FIGYELEM: {len(pending)} KOVETETLEN scripts/ fajl hordoz dontes-fejlecet, tehat '
+              f'NINCS BENNE a generalt indexben:', file=sys.stderr)
+        for f in pending:
+            print(f'  {f}', file=sys.stderr)
+        print('  -> `git add` UTAN generálj ujra, kulonben az artefaktum mast ir le, mint a commit.',
+              file=sys.stderr)
     return 0
 
 

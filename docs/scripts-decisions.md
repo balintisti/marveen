@@ -16,12 +16,16 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **195** kovetett fajl, ebbol
-**30** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **196** kovetett fajl, ebbol
+**38** hordoz dontes-fejlecet.
 
 ### `scripts/__tests__/channels-main-model.test.sh`
 
 - Why this exists (2026-07-29): the model was read ONLY from
+
+### `scripts/__tests__/idle-reporter.test.py`
+
+- MIERT PYTHON-TESZT ES NEM VITEST: a szkript szandekosan ONALLO -- semmit nem
 
 ### `scripts/applies-cleanly.sh`
 
@@ -51,6 +55,11 @@ Populacio: `git ls-files scripts/` = **195** kovetett fajl, ebbol
 
 - MIERT LETEZIK: az `/api/*` MINDEN hivasa hitelesitest kiван (nincs loopback-mentesseg,
 
+### `scripts/decision-index.py`
+
+- MIERT LETEZIK (kartya 72edf070). A scripts/ fejlecei dontes-alaku valaszokat hordoznak
+- MIERT GENERALT ES NEM KEZI LISTA: egy kezi lista ugyanugy elavul, mint minden mas szam
+
 ### `scripts/deploy-lane.sh`
 
 - MIERT SZERSZAM ES NEM SZABALY. A repo dokumentacioja eddig egy SZAMOT mondott
@@ -64,9 +73,24 @@ Populacio: `git ls-files scripts/` = **195** kovetett fajl, ebbol
 
 - MIERT LETEZIK (kartya e63ce68e). A `git show "$ag:$ut"` alak zsh-ban NEMAN
 
+### `scripts/gmail-recent.py`
+
+- WHY THIS EXISTS (2026-08-20). The heartbeat gathers calendar and kanban data
+- WHY PYTHON AND NOT NODE: Node has no IMAP client in its standard library, and
+- WHY IMAP AND NOT THE GMAIL API: the OAuth app is stuck in Google's "Testing"
+- WHY --with-body IS OPT-IN, AND WHY THE HEARTBEAT DOES NOT USE IT (2026-08-20):
+
 ### `scripts/heartbeat-metrics.sh`
 
 - Why a script and not a prescribed command, measured three times: the
+
+### `scripts/hooks/db-destructive-gate.py`
+
+- WHY THIS EXISTS, AND WHY THE PERMISSION LIST IS NOT ENOUGH (measured 2026-08-19,
+
+### `scripts/hooks/outgoing-copy-gate.py`
+
+- Why this exists (Szabi, 2026-08-10 12:57): a licence-delivery email went out to a
 
 ### `scripts/hooks/skills-snapshot-on-write.sh`
 
@@ -77,6 +101,10 @@ Populacio: `git ls-files scripts/` = **195** kovetett fajl, ebbol
 
 - WHY A SCRIPT AND NOT A VERSIONED settings.json (card de00fd2b, 2026-08-27).
 
+### `scripts/kanban-project-classify.py`
+
+- MIERT FAJLUT ES NEM CIMSZO. Egy fajlut ellenorizheto teny: vagy letezik az adott
+
 ### `scripts/lib/content-hash.sh`
 
 - Why this exists: `md5sum` does not exist on macOS, and the flagship host's
@@ -84,6 +112,14 @@ Populacio: `git ls-files scripts/` = **195** kovetett fajl, ebbol
 ### `scripts/limit-monitor.sh`
 
 - WHY bash and not a Claude scheduled-task: a Claude agent invocation itself
+
+### `scripts/merge-overlap.py`
+
+- WHY THIS EXISTS (2026-08-23). Two branches touching the same file, with git
+
+### `scripts/mutate-probe.py`
+
+- MIERT LETEZIK. Egy mutacios proba akkor er valamit, ha a ZOLD eredmeny EGY dolgot
 
 ### `scripts/permission-guard-check.sh`
 

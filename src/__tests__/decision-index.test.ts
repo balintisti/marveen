@@ -86,6 +86,34 @@ describe('decision-index.py -- a --check tud PIROSAT is mondani', () => {
     expect(body).not.toContain('kovetetlen.sh')
   })
 
+  // A FEJLEC KET ALAKBAN LETEZIK, ES A MASODIKAT AZ ELSO VALTOZAT NEM LATTA (2026-09-03).
+  // Merve: a scripts/ 52 kovetett .py fajljabol MIND AZ 52 docstringgel fejlecel es EGY SEM
+  // `#`-kel. A hiany nem hibakent jelentkezett, hanem egy kisebb, hiheto szamkent -- 30/23
+  // a valos 38/30 helyett. Mindket agra kell allitas, kulonben az egyik javitasa elveszi a masikat.
+  it('DOCSTRING-fejlecu .py fajl bekerul az indexbe', () => {
+    writeFileSync(
+      join(tmp, 'scripts', 'docstringes.py'),
+      '#!/usr/bin/env python3\n"""\nMIERT LETEZIK: docstringben all a dontes, nem # kommentben.\n"""\nprint(1)\n',
+    )
+    spawnSync('git', ['add', '-A'], { cwd: tmp })
+    expect(run(tmp, []).code).toBe(0)
+    const body = readFileSync(join(tmp, 'docs', 'scripts-decisions.md'), 'utf-8')
+    expect(body).toContain('scripts/docstringes.py')
+    expect(body).toContain('docstringben all a dontes')
+  })
+
+  it('REGRESSZIO: a # kommentes fejlec TOVABBRA IS bekerul (a docstring-ag nem veszi el)', () => {
+    writeFileSync(
+      join(tmp, 'scripts', 'docstringes.py'),
+      '#!/usr/bin/env python3\n"""\nMIERT LETEZIK: docstringes.\n"""\nprint(1)\n',
+    )
+    spawnSync('git', ['add', '-A'], { cwd: tmp })
+    expect(run(tmp, []).code).toBe(0)
+    const body = readFileSync(join(tmp, 'docs', 'scripts-decisions.md'), 'utf-8')
+    expect(body).toContain('scripts/proba.sh')      // a `#` ag
+    expect(body).toContain('scripts/docstringes.py') // a docstring ag
+  })
+
   // NINCS IDOBELYEG: ket egymas utani generalas BAJT-AZONOS. Enelkul a `--check` sosem
   // tudna nullat mondani, es az egesz drift-or hasznalhatatlan lenne.
   it('ket generalas bajt-azonos (nincs idobelyeg a kimenetben)', () => {
