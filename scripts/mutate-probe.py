@@ -246,7 +246,10 @@ def main() -> int:
     if sent.is_file():
         return fail(
             f"EGY KORABBI PROBA FELBESZAKADT es a fan MUTALT kod allhat ({sent}). "
-            f"Allitsd vissza eloszor:  {Path(sys.argv[0]).name} --file {a.file} --recover"
+            f"Allitsd vissza eloszor:  {Path(sys.argv[0]).name} --file {a.file} --recover\n"
+            f"NE `git checkout {a.file}`-tal: a fan a TE COMMITOLATLAN munkad is ott lehet, es azt "
+            f"a checkout nyomtalanul elviszi. A jelzo-fajl a mutacio ELOTTI szoveget orzi -- vagyis "
+            f"a te valtozasoddal EGYUTT --, a checkout viszont a COMMITOLT allapotot hozza vissza."
         )
 
     if not a.anchor_file or not a.replacement_file:
