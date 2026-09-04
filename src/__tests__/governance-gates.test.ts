@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 // @ts-expect-error -- plain .mjs hook script, no types
 import { gateDecision as selfPaceDecision, stripDataPayloads, stripGitCommitMessages, REASON_HINT } from '../../scripts/self-pace-gate.mjs'
 import {
@@ -6,6 +9,8 @@ import {
   injectSelfPaceGate,
 } from '../web/agent-scaffold.js'
 import { MAIN_AGENT_ID } from '../config.js'
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 const PANE_WRITE = 't' + 'mux send-' + 'keys'
 
@@ -34,13 +39,61 @@ describe('self-pace-gate gateDecision', () => {
     expect(hint).toMatch(/Write/)
   })
 
-  it('and the hint stays on its OWN branch', () => {
-    // 25 of 34 corpus denials carried the new hint, which is what a correctly
-    // scoped hint looks like here AND what a wrongly-attached one would look
-    // like too. Only a per-branch probe separates them.
-    expect(REASON_HINT['os-scheduler']).not.toMatch(/HA DOKUMENTALSZ/)
-    expect(REASON_HINT['schedule-api-write']).not.toMatch(/HA DOKUMENTALSZ/)
-    expect(REASON_HINT['bash-self-inject']).toMatch(/HA DOKUMENTALSZ/)
+  // EZ AZ ALLITAS 2026-09-04-EN MEGFORDULT, ES SZANDEKOSAN (kartya ae04c756).
+  //
+  // A regi alakja azt rogzitette, hogy a dokumentacios utmutatas CSAK a self-inject agon van --
+  // es akkor ez volt a helyes allitas: egyetlen ag kapta meg, es a teszt azt bizonyitotta, hogy
+  // nem lett szetkenve mindenhova. Most az ellenkezoje a helyes, mert MERVE lett, hogy a hianya
+  // kerul valamibe: hat REASON kozul OT nem mondta meg, hogy a szoveg ADAT lehet, es friday ma
+  // 12:0x-kor pontosan ezen akadt el (`os-scheduler`) -- a kartya-KOMMENTJE tartalmazta azokat a
+  // parancsalakokat, amikrol SZOLT, es az uzenet a MUVELETET nevezte meg okkent.
+  //
+  // NEM azert irtam at, mert a valtozasom megbuktatta. Azert, mert a MOGOTTE ALLO DONTES valtozott
+  // meg, es az uj allitas SZIGORUBB: nem egy agra koti a hintet, hanem MINDEGYIKTOL megkoveteli --
+  // ugy, hogy kozben megtartja a regi teszt lenyeget (a hint legyen AG-SPECIFIKUS, ne boilerplate).
+  //
+  // HELYESBITES a fenti bekezdeshez: az "es friday ma ezen akadt el" resz VISSZAVONVA. A
+  // megtagadas MEGTORTENT (12:0x, `os-scheduler` szoveggel), de a MECHANIZMUSAT nem mertem meg,
+  // es utolag NEM reprodukalhato: merve 2026-09-04, a `launchctl disable|bootout|load`
+  // PARANCS-POZICIOBAN tuzel, ugyanaz a szoveg egy heredoc TORZSEBEN viszont ATMEGY -- es a
+  // blokkolt hivasom legjobb rekonstrukcioja (heredoc + card-comment + ket curl) is ATMEGY.
+  // Tehat a valodi kivalto ok valami olyan volt, ami a rekonstrukciombol hianyzik.
+  // A JAVITAS INDOKA EZ NELKUL IS ALL: 6 reasonbol 1-nek volt ADAT-utmutatasa (merve), es
+  // mandark harom kontrollalt futasa (2026-09-02) fuggetlenul allapitotta meg ugyanezt.
+  it('MINDEN reason ad utmutatast, es az AGHOZ ILLOT -- nem boilerplate-et', () => {
+    // A ket csalad kulonbozo valaszt erdemel, es ez a kulonbseg maga az allitas:
+    //   SZOVEG-ILLESZTO ag  -> lehet, hogy csak DOKUMENTALTAL: nevezze meg a MASIK UTAT
+    //   STRUKTURALIS ag     -> a hivas TENYLEG megtortent: mondja ki, hogy itt nincs ilyen eset
+    const TEXT_MATCH = ['store-write-bash', 'schedule-api-write', 'os-scheduler', 'bash-self-inject']
+    const STRUCTURAL = ['self-pace-tool', 'store-write']
+
+    for (const r of [...TEXT_MATCH, ...STRUCTURAL]) {
+      expect(REASON_HINT[r], `${r}: nincs hint`).toBeTruthy()
+    }
+    for (const r of TEXT_MATCH) {
+      expect(REASON_HINT[r], `${r}: nem mondja meg, hogy a szoveg ADAT lehet`).toMatch(/HA DOKUMENTALSZ/)
+      expect(REASON_HINT[r], `${r}: nem nevez meg jarhato utat`).toMatch(/Write|--data|`-d`/)
+    }
+    for (const r of STRUCTURAL) {
+      // NEGATIV KONTROLL a boilerplate ellen: egy strukturalis megtagadasnal a "csak
+      // dokumentaltam" mentseg HAMIS lenne, es odairni pont a rossz utat javasolna.
+      expect(REASON_HINT[r], `${r}: strukturalis agra kerult a dokumentacios utmutatas`)
+        .not.toMatch(/HA DOKUMENTALSZ/)
+      expect(REASON_HINT[r], `${r}: nem mondja ki, hogy itt nincs "csak dokumentaltam" eset`)
+        .toMatch(/STRUKTURALIS/)
+    }
+  })
+
+  it('MINDEN kodban hasznalt deny-reason szerepel a hint-mapben', () => {
+    // A TARTOS FELE: a HETEDIK reason ne tudjon utmutatas nelkul kikerulni. A forrasbol
+    // szedjuk a reasonoket, nem egy kezzel irt listabol -- kulonben a lista es a kod elcsuszik,
+    // es epp az uj ag maradna ki, amelyikrol meg senki nem tudja, hogy hianyzik.
+    const src = readFileSync(join(ROOT, 'scripts', 'self-pace-gate.mjs'), 'utf8')
+    const used = [...new Set([...src.matchAll(/reason:\s*'([a-z0-9-]+)'/g)].map((m) => m[1]))]
+    expect(used.length).toBeGreaterThan(3)   // POZITIV KONTROLL: a mero talal reasonoket
+    for (const r of used) {
+      expect(REASON_HINT[r], `${r}: hasznaljuk denykent, de nincs hozza hint`).toBeTruthy()
+    }
   })
 
   it('BLOCKS EXACTLY WHAT IT BLOCKED BEFORE -- only the message grew', () => {
