@@ -35,6 +35,7 @@ beforeAll(() => {
   writeFileSync(join(dir, 'destructive.sql'), 'SELECT 1;\nDROP TABLE "FormField" CASCADE;\n')
   writeFileSync(join(dir, 'safe.sql'), 'SELECT count(*) FROM "Task";\n')
   writeFileSync(join(dir, 'compose.yml'), 'services:\n  db:\n    command: DROP TABLE x\n')
+  writeFileSync(join(dir, 'notes.md'), '# Jegyzet\nA DROP TABLE veszelyes, ezert nem hasznaljuk.\n')
 })
 afterAll(() => { if (dir) rmSync(dir, { recursive: true, force: true }) })
 
@@ -87,6 +88,20 @@ describe('db-destructive-gate: literal-utas fajl-argumentum', () => {
 
   it('nem letezo fajl ATMEGY (fail-open), ahogy a kapu 1. inverzioja eloirja', () => {
     expect(blocks(`psql "$URL" -f ${dir}/nincs-ilyen.sql`)).toBe(false)
+  })
+
+  it('proza .md fajl psql -f-fel BLOKKOL -- MERT viselkedes, DONTESSEL rogzitve', () => {
+    // Ez eredetileg MERT es nem TERVEZETT viselkedes volt: nem irtam ra tesztet, mert nem
+    // dontottem el, helyes-e. marveen dontese (2026-09-04): HELYES, es ezert pinelendo.
+    //
+    // AZ INDOK: egy `psql -f notes.md` amugy sem futna le ertelmesen -- a blokkolas egy
+    // MAR HIBAS parancsot allit meg. Es a kapu 2. inverzioja is ezt tamogatja: a hamis
+    // pozitiv HANGOS es egy soros overrideval feloldhato, a hamis negativ egy eldobott
+    // adatbazis.
+    //
+    // MIERT TESZT ES NEM KOMMENT: egy mert, de nem rogzitett viselkedes ELSODRODIK -- a
+    // kovetkezo ember veletlennek nezi es "kijavitja". Egy teszt DONTESSE teszi.
+    expect(blocks(`psql "$URL" -f ${dir}/notes.md`)).toBe(true)
   })
 
   // REGRESSZIO: a mar meglevo harom viselkedes valtozatlan.
