@@ -84,6 +84,18 @@ export function diagnose(output = '', run = null) {
   // csak a CSATORNA nem fert el. A regi uzenet ilyenkor azt allitotta, hogy "egy fajl
   // BE SEM TOLTODOTT", es egy nem letezo betoltesi hibat kuldott keresni.
   if (run && (run.error?.code === 'ENOBUFS' || (run.status === null && run.signal === 'SIGTERM'))) return 'capture-overflow'
+  // A FUGGOSEGEK NINCSENEK TELEPITVE, ES EZ EGY FRISS WORKTREE ALAPALLAPOTA (2026-09-04,
+  // kartya 4fa96cb5). A `git worktree add` NEM hoz `node_modules`-t, tehat az elso
+  // `npm run test:baseline` egy uj worktreeben MINDIG ide fut. A regi uzenet ilyenkor azt
+  // mondta, hogy "egy fajl BE SEM TOLTODOTT. Eloszor azt javitsd" -- es egy nem letezo
+  // betoltesi hibat kuldott keresni egy ep keszletben, holott csak a fuggoseg hianyzik.
+  //
+  // MIERT SZAMIT EZ TOBBET, MINT EGY UZENET: az alapvonal frissitesenek EZ az egyetlen
+  // szentesitett utja (a fo checkoutban az elo-telepites-or -- helyesen -- megtagadja).
+  // Ha a worktree-s ut is ertelmezhetetlen hibaval all meg, akkor a muveletnek NINCS
+  // jarhato utja, es ami marad, az a prod-tree or megkerulese. A felulbiralasi naplo 27
+  // sorabol 17 EPP a suite-alapvonal (kartya 8c08c0bc) -- ez a sor arrol szol.
+  if (/Cannot find package '?vitest'?|UNRESOLVED_IMPORT.*vitest\/config|failed to load config from/.test(output)) return 'missing-deps'
   return null
 }
 
@@ -91,6 +103,17 @@ export function diagnose(output = '', run = null) {
 // PONTOSAN a regi uzenetet kapjak. Az uj ag csak akkor lep be, ha MERTUK, mi tortent.
 export function decide(rc, counts, cause = null) {
   if (rc !== 0) {
+    if (cause === 'missing-deps') {
+      return {
+        write: false,
+        reason:
+          `NEM A KESZLET HIBAJA, ES NINCS MIT JAVITANI RAJTA (kilepesi kod ${rc}).\n` +
+          '  A FUGGOSEGEK NINCSENEK TELEPITVE ebben a fabban: a vitest maga nem oldhato fel,\n' +
+          '  tehat a gyujtes el sem indult. Egyetlen fajl sem "toltodott be rosszul".\n' +
+          '  Egy friss `git worktree add` NEM hoz node_modules-t -- ez a normal alapallapota.\n' +
+          '  TELEPITSD ELOSZOR:  npm ci    (vagy: ln -sfn <fo-checkout>/node_modules node_modules)',
+      }
+    }
     if (cause === 'live-install') {
       return {
         write: false,

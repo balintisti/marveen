@@ -135,6 +135,41 @@ describe('a megtagadas OKA is mert allitas legyen, ne az altalanos tipp (e065cf1
     expect(diagnose('was compiled against a different Node.js version')).toBe('node-abi')
   })
 
+  // A HARMADIK OK, ES EZ A FRISS WORKTREE ALAPALLAPOTA (kartya 4fa96cb5, 2026-09-04).
+  //
+  // A `git worktree add` NEM hoz `node_modules`-t, tehat az elso `test:baseline` egy uj
+  // worktreeben MINDIG ide fut. Merve, valodi worktreeben: `Cannot find package 'vitest'`
+  // + `failed to load config from .../vitest.config.ts`, es a regi uzenet erre is azt
+  // mondta, hogy "egy fajl BE SEM TOLTODOTT. Eloszor azt javitsd".
+  //
+  // MIERT TOBB EZ EGY UZENETNEL: a fo checkoutban az elo-telepites-or -- helyesen --
+  // megtagadja a futast, tehat a worktree AZ EGYETLEN szentesitett ut. Ha az is
+  // ertelmezhetetlen hibaval all meg, a muveletnek nincs jarhato utja, es ami marad, az a
+  // prod-tree or megkerulese (a felulbiralasi naplo 27 sorabol 17 epp a suite-alapvonal).
+  it('felismeri, hogy a FUGGOSEGEK hianyoznak -- egy friss worktree alapallapota', () => {
+    expect(diagnose("Cannot find package 'vitest' imported from /x/vitest.config.ts.timestamp.mjs"))
+      .toBe('missing-deps')
+    expect(diagnose('failed to load config from /Users/isti/wt/vitest.config.ts'))
+      .toBe('missing-deps')
+  })
+
+  it('az ELO-TELEPITES-OR ELOZI a hianyzo fuggoseget, ha valahogy mindketto latszana', () => {
+    // A sorrend nem veletlen: az elo-telepites a sulyosabb allitas (a keszlet ELES allapotot
+    // irna at), tehat annak kell nyernie. Egy elo telepitesben amugy is VAN node_modules,
+    // tehat a ket jel egyutt nem varhato -- de ha megis, a rosszabbik hirt mondjuk.
+    expect(diagnose("REFUSING TO RUN TESTS: /Users/isti/marveen looks like a LIVE install\nCannot find package 'vitest'"))
+      .toBe('live-install')
+  })
+
+  it('a hianyzo-fuggoseg uzenete a TELEPITEST mondja, nem betoltesi hibat', () => {
+    const d = decide(1, null, 'missing-deps')
+    expect(d.write).toBe(false)
+    expect(d.reason).toContain('npm ci')
+    expect(d.reason).toContain('node_modules')
+    // ES NE mondja azt, amit a regi uzenet: nincs mit javitani a keszleten.
+    expect(d.reason).not.toContain('Eloszor azt javitsd')
+  })
+
   // NEGATIV KONTROLL: egy VALODI betoltesi hiba NEM kaphat specialis okot, kulonben a
   // javitas pont azt az esetet nemitana el, amire az altalanos uzenet igaz.
   it('egy valodi betoltesi hibara NEM talal ki okot', () => {
