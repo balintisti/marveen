@@ -16,6 +16,8 @@ import { sessionNameForAgent } from './session-names.js'
 import { detectPaneState, paneShowsContextSaturation } from '../pane-state.js'
 import { readContextTokensFromProjectDir, readActiveModelFromProjectDir, readTranscriptMtimeFromProjectDir } from './active-model.js'
 import { readContextGuardConfig } from './context-guard-store.js'
+import { readAllContextGuardConfigs } from './context-guard-store.js'
+import { makeContextGuardConfigWarner } from './context-guard-config-warning.js'
 import { createAgentMessage } from '../db.js'
 import {
   decideGuard,
@@ -528,6 +530,7 @@ export function getHardGuardPhase(name: string): string {
 
 export function startContextGuardRunner(): NodeJS.Timeout {
   let tickRunning = false
+  const warnMissingConfig = makeContextGuardConfigWarner((msg) => logger.warn(msg))
   async function sweep() {
     // Re-entrancy guard: checkAgent's 'restart' action now awaits a real
     // restartAgentProcess (no longer a blocking execSync('sleep N')), so a
@@ -541,7 +544,15 @@ export function startContextGuardRunner(): NodeJS.Timeout {
     tickRunning = true
     try {
       const now = Date.now()
-      for (const name of guardSweepAgentNames()) {
+      const names = guardSweepAgentNames()
+      // An agent with no entry in store/context-guard.json falls back to the opt-in
+      // default, which means idleFlushEnabled=false while its peers run with it true --
+      // and the read path cannot distinguish that from a deliberate opt-out, because it
+      // is the same value. Say it out loud once, whenever the answer changes. Absence
+      // only, never contents; see context-guard-config-warning.ts for why the default is
+      // NOT being flipped instead (it is upstream code stating a deliberate choice).
+      warnMissingConfig(names, Object.keys(readAllContextGuardConfigs()))
+      for (const name of names) {
         try { await checkAgent(name, now) } catch (err) { logger.debug({ err, agent: name }, 'context-guard: agent check error') }
       }
     } finally {
