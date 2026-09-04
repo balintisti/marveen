@@ -18,6 +18,17 @@ print(d['finished_at_local'], d['files_run'], 'files,', d['failed'], 'failed')"
 If that timestamp is old, the RUNNER is dead -- and that is now a distinguishable state rather
 than an indistinguishable silence.
 
+THE RECORD NAMES ITS OWN INTERPRETER (added 2026-09-04, didi's finding). Without it a RED row
+means either "the scheduled, pinned run went red -- act" or "somebody hand-ran it on the system
+python -- noise", and no field separates them. Measured the day the runner shipped: the live record
+went red at 04:45 and green at 04:47 with nothing in it to explain the flip. `interpreter` and
+`python_version` are the parent's, and they are also the children's: :NN spawns [sys.executable, f],
+never the string "python3", so the children cannot re-resolve PATH away from the parent.
+
+DISCOVERY IS RECURSIVE (same date, same finding). `*.test.py` directly under the directory was the
+original glob; a file in a subdirectory dropped out SILENTLY, and since nobody expects files_run to
+rise, nothing would have noticed. Same class as the empty-glob case below, one level down.
+
 ZERO FILES IS A FAILURE, NOT A PASS (exit 2). A glob that matches nothing reports "0 failures",
 which reads as health. The same trap the rulebook records for a type-checker reporting zero
 diagnostics over zero files: a count of findings means nothing until you know how many files
@@ -55,7 +66,7 @@ def _tail(text, n=200):
 
 def run(test_dir, state_path, timeout, quiet=False):
     started = time.time()
-    files = sorted(glob.glob(os.path.join(test_dir, "*.test.py")))
+    files = sorted(glob.glob(os.path.join(test_dir, "**", "*.test.py"), recursive=True))
     results = []
     for f in files:
         t0 = time.time()
@@ -81,6 +92,10 @@ def run(test_dir, state_path, timeout, quiet=False):
         "finished_at_local": _local(finished),
         "seconds": round(finished - started, 2),
         "test_dir": os.path.relpath(test_dir, ROOT) if test_dir.startswith(ROOT) else test_dir,
+        # WHO ran it. A red row without this is indistinguishable between a real alarm and a
+        # hand-run on the wrong python -- both look the same in every other field.
+        "interpreter": sys.executable,
+        "python_version": sys.version.split()[0],
         "files_run": len(files),
         "passed": len(results) - len(failed),
         "failed": len(failed),
@@ -100,9 +115,9 @@ def run(test_dir, state_path, timeout, quiet=False):
             print("  [%s] %-46s rc=%-4s %5.1fs | %s"
                   % ("PASS" if r["ok"] else "FAIL", os.path.basename(r["file"]),
                      r["rc"], r["seconds"], r["tail"][:70]))
-        print("PYTHON-CONTRACT-TESTS: %d file(s), %d passed, %d failed  (%s)"
+        print("PYTHON-CONTRACT-TESTS: %d file(s), %d passed, %d failed  (%s)  python %s  %s"
               % (record["files_run"], record["passed"], record["failed"],
-                 record["finished_at_local"]))
+                 record["finished_at_local"], record["python_version"], record["interpreter"]))
 
     if not files:
         # UNCONDITIONAL, and the runner's own test pins it: --quiet suppresses the per-file PASS
