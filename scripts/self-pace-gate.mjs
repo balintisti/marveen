@@ -418,19 +418,28 @@ const GATE_MSG =
 export const REASON_HINT = {
   'self-pace-tool':
     ' KIVALTO OK: ez az eszkoz onmagaban tiltott sub-agensnek (ScheduleWakeup/Cron*/RemoteTrigger).' +
-    ' Nincs kerulout -- a kovetkezo turn-t egy BEERKEZO uzenet inditja.',
+    ' Nincs kerulout -- a kovetkezo turn-t egy BEERKEZO uzenet inditja.' +
+    ' Ez STRUKTURALIS megtagadas: az ESZKOZ NEVE dontott, nem egy szoveg-illesztes, tehat itt' +
+    ' nincs "csak dokumentaltam" eset. Ha OLVASNI akartad, mi van utemezve: a fajl-olvasas es a' +
+    ' `/api/schedules` GET atmegy.',
   'store-write':
-    ' KIVALTO OK: a scheduled_tasks.json-ra iranyulo Write/Edit/NotebookEdit hivas.',
+    ' KIVALTO OK: a scheduled_tasks.json-ra iranyulo Write/Edit/NotebookEdit hivas.' +
+    ' OLVASNI SZABAD: a Read eszkoz es a `cat`/`grep`/`jq` atmegy ezen a fajlon.' +
+    ' Ez STRUKTURALIS megtagadas -- a hivas TENYLEG erre a fajlra iranyult --, tehat itt nincs' +
+    ' "csak dokumentaltam" eset, es nincs mit atfogalmazni.',
   'store-write-bash':
     ' KIVALTO OK: ez a parancs EMLITI a scheduled_tasks.json-t ES tartalmaz iras-szandeku jelet' +
     ' (atiranyitas, tee, sed -i, dd, cp, mv). HA CSAK OLVASNI AKARTAD: hagyd el az atiranyitast --' +
     ' a `2>/dev/null` is annak szamit --, es a `cat`/`grep`/`jq` onmagaban atmegy.' +
-    ' A fajl LETEZIK; nem a hianya allitott meg, hanem ez a kapu.',
+    ' A fajl LETEZIK; nem a hianya allitott meg, hanem ez a kapu.' +
+    ' HA DOKUMENTALSZ (a szoveg ADAT, nem hivas): NE fogalmazd at a szoveget -- egy pontos leiras atirasa azert, hogy egy szuron atcsusszon, a DOKUMENTUMOT rontja el. Valassz MASIK UTAT: a fajlt a Write eszkozzel ird (ne hej-heredoccal), vagy add `-d`/`--data` payloadkent -- azt a kapu blankolja.',
   'schedule-api-write':
-    ' KIVALTO OK: iro HTTP-metodus a /api/schedules vegponton. A GET (listazas) atmegy.',
+    ' KIVALTO OK: iro HTTP-metodus a /api/schedules vegponton. A GET (listazas) atmegy.' +
+    ' HA DOKUMENTALSZ (a szoveg ADAT, nem hivas): NE fogalmazd at a szoveget -- egy pontos leiras atirasa azert, hogy egy szuron atcsusszon, a DOKUMENTUMOT rontja el. Valassz MASIK UTAT: a fajlt a Write eszkozzel ird (ne hej-heredoccal), vagy add `-d`/`--data` payloadkent -- azt a kapu blankolja.',
   'os-scheduler':
     ' KIVALTO OK: operacios rendszer szintu utemezo indito/beküldo alakja.' +
-    ' A tiszta listazas (crontab -l, launchctl list, atq) atmegy.',
+    ' A tiszta listazas (crontab -l, launchctl list, atq) atmegy.' +
+    ' HA DOKUMENTALSZ (a szoveg ADAT, nem hivas): NE fogalmazd at a szoveget -- egy pontos leiras atirasa azert, hogy egy szuron atcsusszon, a DOKUMENTUMOT rontja el. Valassz MASIK UTAT: a fajlt a Write eszkozzel ird (ne hej-heredoccal), vagy add `-d`/`--data` payloadkent -- azt a kapu blankolja.',
   // The only reason without a hint until now (card 97470e22, four measured
   // occurrences: a deny-list rationale, an installation-lane finding, and twice
   // a card comment). Every other reason tells the reader what DOES pass; this
