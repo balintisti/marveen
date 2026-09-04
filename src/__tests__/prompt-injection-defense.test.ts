@@ -6,6 +6,7 @@
  *   4. wrapUntrustedFetch + generateFetchNonce in prompt-safety.ts
  */
 import { describe, it, expect } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,6 +23,16 @@ import {
 } from '../prompt-safety.js'
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
+
+/** A git sajat valasza arra, hogy ignoralva lenne-e egy utvonal. */
+function ignoredByGit(p: string): boolean {
+  try {
+    execFileSync('git', ['check-ignore', '-q', '--no-index', p], { cwd: REPO_ROOT })
+    return true
+  } catch {
+    return false
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 1. Quarantine sub-agent definition
@@ -229,15 +240,26 @@ describe('loadRuntimeAllowlist', () => {
     expect(src).toContain('egress-allowlist.json')
   })
 
-  it('store/egress-allowlist.json is NOT committed (store/ is gitignored)', () => {
+  it('store/egress-allowlist.json is NOT committed (git decides, not the .gitignore text)', () => {
     // This file must never be committed upstream -- it is operator-managed at runtime.
-    // Verify it's in .gitignore (or absent from the git index).
-    const gitignore = readFileSync(join(REPO_ROOT, '.gitignore'), 'utf8')
-    const storeIgnored = gitignore.split('\n').some((line) => {
-      const trimmed = line.trim()
-      return trimmed === 'store/' || trimmed === 'store' || trimmed === '/store/' || trimmed === '/store'
-    })
-    expect(storeIgnored).toBe(true)
+    //
+    // MECHANIZMUS-CSERE 2026-09-04 (kartya de0989de). Ez az allitas eddig a `.gitignore`
+    // SZOVEGEBEN kereste a `store/` sort. Ket bajjal:
+    //
+    //   1. ALULMER: egy szoveg-illesztes ATMEGY akkor is, ha egy kesobbi `!store/...`
+    //      negalas kiuti a mintat -- vagyis pont azt a csendes elromlast nem latja,
+    //      amirol szol. (A testverfajl, gitignore-secret-shapes.test.ts, ezt az indoklast
+    //      mar leirja: "nem a .gitignore SZOVEGET nezzuk, hanem a VISELKEDESET".)
+    //   2. TULMER: a `store/context-guard.json` kovetese `store/*` alakot kivant (egy
+    //      KONYVTAR-minta megallitja a bejarast, tehat a negalas sosem tuzelne). Ettol a
+    //      SZOVEG megvaltozott, a VISELKEDES nem -- es ez a teszt a szovegre bukott el,
+    //      egy valtozason, ami az allitasat nem serti.
+    //
+    // A `git check-ignore` a git sajat dontese, tehat SZIGORUBB: barmilyen jovobeli
+    // atrendezes mellett is a valodi kerdesre valaszol.
+    expect(ignoredByGit('store/egress-allowlist.json')).toBe(true)
+    // POZITIV KONTROLL: enelkul egy mero, ami MINDENRE `true`-t mond, kielegitene a fentit.
+    expect(ignoredByGit('src/index.ts')).toBe(false)
   })
 })
 
