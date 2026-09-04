@@ -131,9 +131,40 @@ alert_owner() {
   if [ -z "$token" ] || [ -z "$chat" ]; then
     log "ALERT (no bot token or owner chat id configured, could not Telegram): $msg"; return 1
   fi
-  curl -s -m 10 -o /dev/null "https://api.telegram.org/bot${token}/sendMessage" \
-    --data-urlencode "chat_id=${chat}" --data-urlencode "text=${msg}" \
-    && log "owner alerted via direct Bot API" || log "ALERT sendMessage FAILED: $msg"
+  # A curl KILEPESI KODJA NEM MONDJA MEG, HOGY A TELEGRAM ELFOGADTA-E: 0-val ter vissza
+  # egy HTTP 400-ra is. A korabbi `curl ... && log "owner alerted"` alak ezert SIKERT
+  # naplozott egy elutasitott kuldesre -- pontosan az az alak, amit a `4be2027c` a
+  # notify.sh-ban mar megszuntetett (lasd scripts/notify.sh:71-93), csak ez a NAPLOBA
+  # hazudott, nem a stdoutra. Es ugyanabbol a forrasbol olvas (ALLOWED_CHAT_ID, :130),
+  # tehat a `0`-s chat-id koraban ez is nemán elveszett, sikert naplozva.
+  #
+  # Ez az EGYETLEN or, ami akkor szolal meg, amikor a lemez betelt. Ha a riasztasa nem
+  # megy ki, es kozben azt naplozza, hogy kiment, akkor a legrosszabb pillanatban vagyunk
+  # vakok -- ugy, hogy a naplo megnyugtat.
+  #
+  # NINCS ATMENETI FAJL: a valasz vegig valtozoban marad. A szkript fejlece kikoti, hogy
+  # ENOSPC alatt egy elbukott iras nem akaszthatja meg az ort -- egy tmp-fajl epp azt
+  # szegné meg, amiert ez a szkript letezik.
+  local resp code body okf rc desc
+  resp="$(curl -s -m 10 -w '\n%{http_code}' "https://api.telegram.org/bot${token}/sendMessage" \
+    --data-urlencode "chat_id=${chat}" --data-urlencode "text=${msg}")"
+  rc=$?
+  code="$(printf '%s' "$resp" | tail -n1)"
+  body="$(printf '%s' "$resp" | sed '$d')"
+  case "$body" in (*'"ok":true'*) okf=1;; (*) okf=0;; esac
+
+  # 200 ES `"ok":true` -- mindketto kell. A Telegram ad 200-at hibaval is, es ad
+  # `ok:false`-t 200 alatt is; kulon-kulon egyik sem eleg.
+  if [ "$rc" = "0" ] && [ "$code" = "200" ] && [ "$okf" = "1" ]; then
+    log "owner alerted via direct Bot API"
+    return 0
+  fi
+  # A `rc` valasztja szet a ket bukast, amit a regi alak egyformanak mutatott:
+  # rc!=0 = a curl el sem jutott odaig (6 nev, 7 kapcsolat, 28 idotullepes);
+  # rc=0 + code!=200 = elert, es a Telegram ELUTASITOTTA.
+  desc="$(printf '%s' "$body" | sed -n 's/.*"description":"\([^"]*\)".*/\1/p')"
+  log "ALERT sendMessage FAILED (curl_rc=${rc} HTTP=${code:-none} ok=${okf}${desc:+ -- $desc}): $msg"
+  return 1
 }
 
 main() {
@@ -161,8 +192,22 @@ main() {
     last=0; [ -f "$ALERT_STAMP" ] && last="$(cat "$ALERT_STAMP" 2>/dev/null || echo 0)"
     case "$last" in (''|*[!0-9]*) last=0;; esac
     if [ $(( now - last )) -ge "$ALERT_COOLDOWN" ]; then
-      alert_owner "🔴 Disk space critical: ${DISK_PATH} is at ${usage}% after reaping ${removed} scratch item(s). Manual cleanup needed -- a full disk can wedge the channel session (deafness)."
-      echo "$now" > "$ALERT_STAMP" 2>/dev/null || true
+      # A BELYEG CSAK SIKERRE MEGY KI. Korabban feltetel nelkul iródott, tehat egy
+      # ELBUKOTT riasztas is elhasznalta a teljes orat: a kovetkezo 59 tick "within
+      # alert cooldown"-t naplozott volna, es a gazda soha nem tudja meg, hogy tele a
+      # lemez. Ez nem kulon hiba, hanem UGYANANNAK a hianyzo visszateresi-ertek-
+      # ellenorzesnek a masodik fele -- amig az `alert_owner` nem tudott nemet mondani,
+      # ezt nem is lehetett megirni.
+      #
+      # AZ ARA, KIMONDVA: egy tartosan bukó riasztasi ut mostantol MINDEN ticken ujraprobal
+      # (a timer kadenciaja szerint), tehat elbukott alertenkent egy naplosor. Ez szandekos:
+      # a lemez ilyenkor TELE van, es egy nem kezbesitett veszjelzes ujraprobalasa pontosan
+      # az, amiert ez az or letezik. A csendes elhallgatas volt a hiba.
+      if alert_owner "🔴 Disk space critical: ${DISK_PATH} is at ${usage}% after reaping ${removed} scratch item(s). Manual cleanup needed -- a full disk can wedge the channel session (deafness)."; then
+        echo "$now" > "$ALERT_STAMP" 2>/dev/null || true
+      else
+        log "alert did NOT go out -- cooldown stamp NOT written, will retry next tick"
+      fi
     else
       log "disk ${usage}% critical but within alert cooldown ($(( now - last ))s) -- skip alert"
     fi
