@@ -95,6 +95,57 @@ if [ "$TOPLEVEL" = "$PROD_ROOT" ] && git rev-parse -q --verify MERGE_HEAD >/dev/
   exit 0
 fi
 
+# A MERGE ALTAL KIKENYSZERITETT ALAPVONAL-FRISSITES (kartya 832e2df6). MERVE, 18/18:
+# minden `suite-size-guard` megkerulesi esemeny olyan committal parosul, aminek a SZULOJE
+# merge-commit, es ami CSAK ezt az egy generalt fajlt erinti. Nem 18 kulon dontes volt, hanem
+# EGY allapot: a merge-elt fanak tobb tesztje van, tehat a merge MECHANIKUSAN kikenyszeriti a
+# kovetkezo commitot -- csak addigra a `MERGE_HEAD` mar nincs, tehat a fenti felreallas nem er ide.
+#
+# A HORGONY SZANDEKOSAN NEM FAJLNEV. Egy fajl-allowlista nev-alapu kivetel lenne, es egy
+# nev-kulcsos felsorolas szerkezetileg vak arra, aminek MAS a neve -- ezt a lap kulon rogziti.
+# Helyette ket ALLAPOT-horgony, es egy nev-fuggetlen TARTALOM-horgony:
+#   1. a HEAD MERGE-COMMIT (ket szulo)          -- szerkezeti
+#   2. minden staged fajl hordozza a GENERATOR sajat markeret (SUITE-BASELINE:BEGIN/END)
+#      -- egy MASIK nevu generalt alapvonal ugyanugy atmegy, es epp ez a kulonbseg
+#   3. minden valtozott sor a generalt blokkon BELUL van
+#   4. egyik ertek sem CSOKKEN -- az alapvonal LESZALLITASA epp az a mozdulat, amivel egy
+#      keszlet-zsugorodast el lehetne rejteni, tehat az soha nem megy at csendben
+# A negy feltetel EGYUTT kell. Barmelyik hianyzik -> a kapu ugyanugy blokkol.
+#
+# MERT SZELESET, amit a szabaly ENGED: a `379380f0` csak az idobelyeg-kommentet valtoztatta, a
+# szamok azonosak maradtak. Egy "a szamnak novekednie kell" feltetel ezt kizarna; a "nem csokken"
+# nem.
+_BL_BEGIN='=== SUITE-BASELINE:BEGIN ==='
+if [ "$TOPLEVEL" = "$PROD_ROOT" ] && [ "${MARVEEN_PROD_COMMIT_OK:-0}" != "1" ] \
+   && git rev-parse -q --verify 'HEAD^2' >/dev/null 2>&1; then
+  _staged="$(git diff --cached --name-only 2>/dev/null)"
+  _ok=1
+  [ -n "$_staged" ] || _ok=0
+  for _f in $_staged; do
+    # 2. a generator sajat markere -- a STAGED valtozatban, nem a munkafaban
+    git show ":0:$_f" 2>/dev/null | grep -qF "$_BL_BEGIN" || { _ok=0; break; }
+    # 3. minden valtozott sor a generalt blokkon belul: a diff CSAK a ket konstansot es a
+    #    mero kommentjet mozdithatja
+    _outside="$(git diff --cached -U0 -- "$_f" 2>/dev/null | grep -E '^[+-]' \
+        | grep -vE '^(\+\+\+|---)' \
+        | grep -vcE 'SUITE_BASELINE_(FILES|TESTS) = [0-9]+|Merve .*vitest list' || true)"
+    [ "${_outside:-1}" = "0" ] || { _ok=0; break; }
+    # 4. egyik ertek sem csokken
+    for _k in FILES TESTS; do
+      _o="$(git show "HEAD:$_f" 2>/dev/null | awk -v k="SUITE_BASELINE_${_k} = " 'index($0,k){print $NF}')"
+      _n="$(git show ":0:$_f"   2>/dev/null | awk -v k="SUITE_BASELINE_${_k} = " 'index($0,k){print $NF}')"
+      [ -n "$_n" ] || { _ok=0; break; }
+      [ "$_n" -ge "${_o:-0}" ] || { _ok=0; break; }
+    done
+    [ "$_ok" = "1" ] || break
+  done
+  if [ "$_ok" = "1" ]; then
+    echo "prod-tree-guard: MERGE ALTAL KIKENYSZERITETT alapvonal-frissites -- atengedve." >&2
+    echo "  (HEAD merge-commit, es minden staged fajl a generator markeret hordozza)" >&2
+    exit 0
+  fi
+fi
+
 if [ "$TOPLEVEL" = "$PROD_ROOT" ] && [ "${MARVEEN_PROD_COMMIT_OK:-0}" != "1" ]; then
   echo "" >&2
   echo "BLOCKED: commit on the running main checkout ($PROD_ROOT)." >&2
@@ -135,8 +186,21 @@ if [ "$TOPLEVEL" = "$PROD_ROOT" ] && [ "${MARVEEN_PROD_COMMIT_OK:-0}" = "1" ]; t
   # AND SAY SO OUT LOUD. A bypass that is silent for the person doing it is how
   # the third one happens by reflex.
   echo "prod-tree-guard: MEGKERULVE (${_n:-0} fajl, ag $_branch) -- naplozva: $_log" >&2
-  [ -n "${MARVEEN_PROD_COMMIT_REASON:-}" ] || \
-    echo "  indok nelkul; add meg: MARVEEN_PROD_COMMIT_REASON='miert' MARVEEN_PROD_COMMIT_OK=1 git commit ..." >&2
+  # AZ INDOK KOTELEZO (kartya 832e2df6). Eddig CSAK FIGYELMEZTETES volt, es a naplo megmerte,
+  # mit er egy felkinalt mezo: 29 megkerulesbol **26 indok NELKUL**. A tobbseg nem hanyagsag --
+  # egy opcionalis mezot a megkerules pillanataban senki nem tolt ki, mert epp valami mast csinal.
+  #
+  # A MEGKERULES MARAD, csak nem NEMA: a kapunak tovabbra is EGY kijarata van, es az most egy
+  # mondatot ker. Aki tenylegesen meg akarja kerulni, egy env-valtozoval megteszi; amit ez kizar,
+  # az a NYOMTALAN megkerules. A naplosor mar megirodott FELJEBB, tehat a kiserlet akkor is
+  # rogzul, ha ez a kapu itt megallitja -- a szandek nyoma nem vesz el.
+  if [ -z "${MARVEEN_PROD_COMMIT_REASON:-}" ]; then
+    echo "" >&2
+    echo "BLOCKED: MARVEEN_PROD_COMMIT_OK=1 indok NELKUL." >&2
+    echo "  A megkerules nyoma naplozva, de indok nelkul egy het mulva nem lehet megmondani, MIERT." >&2
+    echo "  MARVEEN_PROD_COMMIT_REASON='<egy mondat>' MARVEEN_PROD_COMMIT_OK=1 git commit ..." >&2
+    exit 1
+  fi
 fi
 exit 0
 EOF

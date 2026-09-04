@@ -123,7 +123,12 @@ describe('prod-tree-guard post-checkout: revert target', () => {
     git('add', '-A')
     execFileSync('git', ['commit', '-qm', 'detached only'], {
       cwd: repo, encoding: 'utf8', stdio: 'pipe',
-      env: { ...process.env, MARVEEN_PROD_COMMIT_OK: '1' },
+      env: { ...process.env, MARVEEN_PROD_COMMIT_OK: '1',
+        // AZ INDOK 2026-09-04 OTA KOTELEZO (kartya 832e2df6). Ez nem a teszt lazitasa:
+        // a felulbiralas SZERZODESE valtozott, es egy valodi felhasznalonak is ezt kell
+        // megadnia. Indok nelkul a kapu MEGTAGAD -- arra kulon eset all a
+        // prod-tree-guard-merge-baseline.test.ts-ben (8. es 9.).
+        MARVEEN_PROD_COMMIT_REASON: 'teszt-fixture: a felulbiralasi ut gyakorlasa' },
     })
     git('checkout', 'stale-trunk')
     expect(head()).toBe('stale-trunk')
