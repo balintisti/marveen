@@ -1636,9 +1636,30 @@ export function parkedClearSequence(rowCount: number): string[] {
     PARKED_CLEAR_ROUNDS_MAX,
     Math.max(PARKED_CLEAR_ROUNDS_MIN, Math.max(0, rowCount) * PARKED_CLEAR_ROUNDS_PER_ROW),
   )
-  // Home first: the first kill must start at the beginning even when the cursor
-  // was left mid-buffer by an earlier attempt.
-  const keys = ['C-a']
+  // ESCAPE FIRST, AND IT IS PURELY ADDITIVE (card 15bc4883, 2026-09-04).
+  //
+  // The 2026-08-28 didi case was a MULTI-LINE PASTE (`[Pasted text #1]`) parked in the box. The
+  // kill rounds below did not drain it, and the router therefore saw the session as busy: not one
+  // inter-agent message reached that agent for an hour, and the senders saw `delivered`. What
+  // cleared it by hand was Escape FIRST, then the same kill rounds -- the TUI has to leave the
+  // paste state before a kill bites on it.
+  //
+  // WHY IT GOES IN FRONT AND CHANGES NOTHING ELSE. clearStaleParkedInput() fires on ANY stable
+  // parked input, not only pastes -- so this Escape runs mostly on panes that never needed it,
+  // and that is the common case rather than the edge. The danger worth guarding is therefore NOT
+  // "Escape fails to help": it is "Escape makes a RECOVERABLE pane worse". Keeping it strictly
+  // additive is what bounds that -- every keystroke the previous sequence sent is still sent, in
+  // the same order, so a pane that did not need it receives exactly the old treatment plus one
+  // leading key. A regression test asserts that property directly: strip the Escape and the
+  // remainder is byte-identical to the previous sequence, for every row count.
+  //
+  // STATED LIMIT: the PASTE case itself is NOT verified end to end. That needs a genuinely parked
+  // multi-line pane, which is not manufacturable without wedging a live agent. The SAFETY case is
+  // proven here; the helpful case rests on one measured manual recovery.
+  //
+  // Home first (now second): the first kill must start at the beginning even when the cursor was
+  // left mid-buffer by an earlier attempt.
+  const keys = ['Escape', 'C-a']
   for (let i = 0; i < rounds; i++) keys.push('C-k', 'Delete')
   return keys
 }
