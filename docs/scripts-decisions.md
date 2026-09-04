@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **200** kovetett fajl, ebbol
-**55** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **205** kovetett fajl, ebbol
+**57** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (1)
 
@@ -224,6 +224,11 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - WHY THIS EXISTS (card 52edd21e, measured 2026-08-27). The files every agent
 - WHY COPIES AND NOT A BARE REPO OVER $HOME: the set spans three roots, so a
 
+### `scripts/run-python-contract-tests.py`
+
+- WHY THIS EXISTS (card 27975b85). Nothing ran scripts/__tests__/*.test.py: `npm test` is
+- WHY IT WRITES A STATE FILE EVEN WHEN EVERYTHING PASSES (marveen's condition on this card).
+
 ### `scripts/self-pace-gate.mjs`
 
 - Governance control (2026-06-26, after the autonom-kor incident: a sub-agent
@@ -266,3 +271,7 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - WHY A SCRIPT AND NOT A UNIT TEST. The route only computes contextTokens (and
 - WHY IT RE-IMPLEMENTS THE RULE. The model -> window mapping below is a second,
+
+### `scripts/write-census.mjs`
+
+- WHY IT EXISTS (card e3f8f2fd, then 99d3fef7). A destination written by SEVERAL functions
