@@ -35,6 +35,10 @@ RULEBOOK_REPO="${RULEBOOK_REPO:-/Users/isti/Backups/rulebooks}"
 MARVEEN_ROOT="${RULEBOOK_MARVEEN_ROOT:-/Users/isti/marveen}"
 DELTA_CLAUDE="${RULEBOOK_DELTA_CLAUDE:-/Users/isti/CLAUDE.md}"
 SKILLS_ROOT="${RULEBOOK_SKILLS_ROOT:-$HOME/.claude/skills}"
+# A lap KISZERVEZETT bizonyitek-anyaga (kartya c5fcc2b5). A `CLAUDE.md` egyetlen NEVESITETT
+# sorkent megy ki lentebb; egy melle tett konyvtarat viszont SEMMI nem globolt, tehat egy ide
+# mozgatott szakasz kikerult volna az EGYETLEN mentesebol. Ezert sajat, globolt csoport.
+REFS_ROOT="${RULEBOOK_REFS_ROOT:-$MARVEEN_ROOT/rulebook}"
 # The agent memory. Collected from the SHARED root once, not per agent: every
 # agent's .claude-config/projects is a symlink to this same directory (measured
 # 2026-09-02 on friday and dexter), so walking the six agent dirs would copy the
@@ -128,6 +132,11 @@ acquire_lock() {
 # es MAGA A TESZT volt a hibas (2026-08-27). A kovetkezo olvaso ugyanezt feltetelezne.
 collect() {
   [ -f "$MARVEEN_ROOT/CLAUDE.md" ] && printf 'marveen/CLAUDE.md\t%s\n' "$MARVEEN_ROOT/CLAUDE.md"
+  if [ -d "$REFS_ROOT" ]; then
+    find "$REFS_ROOT" -type f 2>/dev/null | LC_ALL=C sort | while IFS= read -r f; do
+      printf 'marveen/rulebook/%s\t%s\n' "${f#"$REFS_ROOT"/}" "$f"
+    done
+  fi
   [ -f "$DELTA_CLAUDE" ] && printf 'delta-crm/CLAUDE.md\t%s\n' "$DELTA_CLAUDE"
   if [ -d "$MARVEEN_ROOT/agents" ]; then
     find "$MARVEEN_ROOT/agents" -mindepth 2 -maxdepth 2 \( -name 'CLAUDE.md' -o -name 'SOUL.md' \) -type f 2>/dev/null \
