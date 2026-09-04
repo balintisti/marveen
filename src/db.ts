@@ -428,6 +428,33 @@ export function initDatabase(dbPathOverride?: string): void {
     )
   `)
 
+  // ESEMENY-NAPLO AZ ALLAPOT-TABLA MELLE, NEM HELYETTE (kartya 308a34f1, marveen engedelyevel).
+  //
+  // A fenti tabla ALLAPOT: agensenkent EGY sor, es minden riasztas FELULIRJA az elozot. Merve
+  // 2026-09-04: **1108 kikuldott tetlen-or ertesites all 6 soron.** Tehat nem csak a KIMENET
+  // hianyzik (helyes volt-e a jelzes) -- az ELOZMENY is elveszett, mert az allapot nem orzi meg
+  // a sajat tortenetet. Ugyanaz az allapot-kontra-esemeny torveny, amit a lap mashol mar rogzit,
+  // most a sajat orunk konyvelesen.
+  //
+  // Az alak SZANDEKOSAN a `kanban_card_events` precedense (agens | esemeny | actor | ido), hogy
+  // ne kelljen uj konvenciót kitalalni ahhoz, amire mar van egy a hazban.
+  //
+  // Az `idle_since_ms` azert kerul BELE minden sorba, mert ez az a BEMENET, amire az or a
+  // dontest hozta -- enelkul a naplo megmondja, hogy riasztott, de nem azt, hogy MIRE. Es ez
+  // teszi a KIMENETET utolag szarmaztathatova: ha egy kesobbi sor ugyanarra az agensre mar NULL
+  // idle_since_ms-t lat, az agens kozben ujra termelt.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS idle_guard_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent TEXT NOT NULL,
+      event TEXT NOT NULL,
+      idle_since_ms INTEGER,
+      actor TEXT,
+      created_at INTEGER NOT NULL
+    )
+  `)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_idle_guard_events_agent ON idle_guard_events(agent, created_at)`)
+
   // listKanbanCards()'s auto-archive sweep (below) treats a card's updated_at
   // as "when did this card last change", and archives a done card once that
   // timestamp is older than KANBAN_ARCHIVE_DONE_DAYS. Both production status
@@ -4005,11 +4032,45 @@ export interface IdleGuardStateRow {
   staleIdleDropped: boolean
 }
 
+/**
+ * ESEMENY-SOR, HA AZ OR TENYLEGESEN JELZETT (kartya 308a34f1).
+ *
+ * MIERT ITT, ES NEM A HIVASI HELYEN: a dontesi fahoz nem nyulunk. Ez a fuggveny ugyis lefut
+ * tickenkent agensenkent, es MAR ISMERI az uj allapotot -- a regit egyetlen SELECT-tel megkapja,
+ * tehat az esemeny a ket allapot KULONBSEGEBOL szarmaztathato, a `idle-agent-watcher.ts` egyetlen
+ * sorat sem kell megvaltoztatni. Ez azert szamit, mert a 2026-08-22-i eset szerint ezen a dontesi
+ * fan HAROM kulon-kulon helyes javitas METSZETE volt hibas.
+ *
+ * Csak VALTOZASRA ir: egy valtozatlan `lastAlertAt` nem esemeny, hanem ugyanaz a riasztas, amit
+ * egy kesobbi tick ujra lat. Enelkul percenkent keletkezne egy sor, es a naplo epp azt a
+ * kulonbseget mosna el, amiert letezik.
+ */
+function recordIdleGuardEvents(
+  agent: string,
+  prev: { lastAlertAt: number | null; lastWakeAt: number | null } | undefined,
+  next: { idleSinceMs: number | null; lastAlertAt: number | null; lastWakeAt: number | null },
+  now: number,
+): void {
+  const ins = getDb().prepare(
+    'INSERT INTO idle_guard_events (agent, event, idle_since_ms, actor, created_at) VALUES (?, ?, ?, ?, ?)',
+  )
+  if (next.lastAlertAt !== null && next.lastAlertAt !== (prev?.lastAlertAt ?? null)) {
+    ins.run(agent, 'alert', next.idleSinceMs, 'idle-guard', next.lastAlertAt)
+  }
+  if (next.lastWakeAt !== null && next.lastWakeAt !== (prev?.lastWakeAt ?? null)) {
+    ins.run(agent, 'wake', next.idleSinceMs, 'idle-guard', next.lastWakeAt)
+  }
+}
+
 export function saveIdleGuardState(
   agent: string,
   state: { idleSinceMs: number | null; lastAlertAt: number | null; lastWakeAt: number | null },
   now: number = Date.now(),
 ): void {
+  const prev = getDb().prepare(
+    'SELECT last_alert_at as lastAlertAt, last_wake_at as lastWakeAt FROM idle_guard_state WHERE agent = ?',
+  ).get(agent) as { lastAlertAt: number | null; lastWakeAt: number | null } | undefined
+  recordIdleGuardEvents(agent, prev, state, now)
   getDb().prepare(
     `INSERT INTO idle_guard_state (agent, idle_since_ms, last_alert_at, last_wake_at, updated_at)
      VALUES (?, ?, ?, ?, ?)
@@ -4035,6 +4096,22 @@ export function saveIdleGuardState(
  * carry no such risk: the worst they can do is delay one alert by their own
  * cooldown, and they expire on their own.
  */
+export interface IdleGuardEvent {
+  id: number
+  agent: string
+  event: string
+  idle_since_ms: number | null
+  actor: string | null
+  created_at: number
+}
+
+/** Az or sajat tortenete egy agensre, idorendben. Enelkul a tabla irodna es nem lenne kerdezheto. */
+export function listIdleGuardEvents(agent: string, limit = 200): IdleGuardEvent[] {
+  return getDb().prepare(
+    'SELECT * FROM idle_guard_events WHERE agent = ? ORDER BY created_at DESC, id DESC LIMIT ?',
+  ).all(agent, limit) as IdleGuardEvent[]
+}
+
 export function loadIdleGuardState(
   agent: string,
   maxIdleAgeMs: number,

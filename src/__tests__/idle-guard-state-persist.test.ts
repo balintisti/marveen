@@ -9,7 +9,7 @@
 // watcher folyamatrol. Hogy egy agens mennyi ideje tetlen, az nem szunik meg attol, hogy
 // MI telepitunk." A memoriaban tarolas nem terv volt, hanem a megvalositas mellekhatasa.
 import { describe, it, expect, beforeEach } from 'vitest'
-import { initDatabase, saveIdleGuardState, loadIdleGuardState } from '../db.js'
+import { initDatabase, saveIdleGuardState, loadIdleGuardState, listIdleGuardEvents, getDb } from '../db.js'
 
 const MAX_AGE = 6 * 60_000   // ket tick, ahogy a watcher hasznalja
 
@@ -122,5 +122,65 @@ describe('a watcher tenyleg hasznalja -- bekotes, nem csak a fuggveny letezese',
     expect(loop).toMatch(/discarded as stale/)
     // NEGATIV KONTROLL: a kor-hatart NEM a hivo talalja ki menet kozben.
     expect(loop).not.toMatch(/loadIdleGuardState\(agent, 0/)
+  })
+})
+
+/**
+ * AZ ESEMENY-NAPLO AZ ALLAPOT MELLE -- kartya 308a34f1, marveen engedelyevel.
+ *
+ * A fenti tabla ALLAPOT: agensenkent EGY sor, minden riasztas felulirja az elozot. Merve
+ * 2026-09-04: **1108 kikuldott ertesites all 6 soron.** Tehat nem csak a KIMENET hianyzik
+ * (helyes volt-e a jelzes), hanem az ELOZMENY is -- az allapot nem orzi meg a sajat tortenetet.
+ *
+ * A DEDUP-ESET A LENYEG. Az or tickenkent ujra latja UGYANAZT a `lastAlertAt`-ot; ha minden tick
+ * sort irna, percenkent keletkezne egy, es a naplo epp azt a kulonbseget mosna el, amiert
+ * letezik. Egy "ir-e sort" teszt ezt nem fogja meg -- ahhoz a MASODIK, valtozatlan mentes kell.
+ */
+describe('idle_guard_events -- az or sajat tortenete', () => {
+  const T = 1_700_000_000_000
+
+  it('egy RIASZTAS sort ir, a bemenettel egyutt', () => {
+    saveIdleGuardState('a', { idleSinceMs: T - 900_000, lastAlertAt: T, lastWakeAt: null }, T)
+    const ev = listIdleGuardEvents('a')
+    expect(ev).toHaveLength(1)
+    expect(ev[0].event).toBe('alert')
+    expect(ev[0].created_at).toBe(T)
+    // a BEMENET, amire az or dontott -- enelkul a naplo azt mondja meg, hogy riasztott,
+    // de nem azt, hogy MIRE
+    expect(ev[0].idle_since_ms).toBe(T - 900_000)
+  })
+
+  it('UGYANAZ a riasztas egy kesobbi ticken NEM ir ujabb sort', () => {
+    saveIdleGuardState('a', { idleSinceMs: T - 900_000, lastAlertAt: T, lastWakeAt: null }, T)
+    saveIdleGuardState('a', { idleSinceMs: T - 960_000, lastAlertAt: T, lastWakeAt: null }, T + 60_000)
+    expect(listIdleGuardEvents('a')).toHaveLength(1)
+  })
+
+  it('egy UJ riasztas ugyanarra az agensre MASODIK sort ir', () => {
+    saveIdleGuardState('a', { idleSinceMs: T - 900_000, lastAlertAt: T, lastWakeAt: null }, T)
+    saveIdleGuardState('a', { idleSinceMs: null, lastAlertAt: T + 3_600_000, lastWakeAt: null }, T + 3_600_000)
+    expect(listIdleGuardEvents('a').map(e => e.event)).toEqual(['alert', 'alert'])
+  })
+
+  it('az EBRESZTES kulon esemeny-tipus', () => {
+    saveIdleGuardState('a', { idleSinceMs: null, lastAlertAt: null, lastWakeAt: T }, T)
+    const ev = listIdleGuardEvents('a')
+    expect(ev).toHaveLength(1)
+    expect(ev[0].event).toBe('wake')
+  })
+
+  it('KONTROLL: az allapot-tabla VALTOZATLAN -- melle irtunk, nem helyette', () => {
+    saveIdleGuardState('a', { idleSinceMs: T - 900_000, lastAlertAt: T, lastWakeAt: null }, T)
+    saveIdleGuardState('a', { idleSinceMs: null, lastAlertAt: T + 3_600_000, lastWakeAt: null }, T + 3_600_000)
+    const rows = getDb().prepare('SELECT COUNT(*) as n FROM idle_guard_state WHERE agent = ?').get('a') as { n: number }
+    expect(rows.n).toBe(1)                              // tovabbra is EGY sor per agens
+    expect(listIdleGuardEvents('a')).toHaveLength(2)    // es a tortenet MELLETTE all
+  })
+
+  it('agensenkent kulon tortenet', () => {
+    saveIdleGuardState('a', { idleSinceMs: null, lastAlertAt: T, lastWakeAt: null }, T)
+    saveIdleGuardState('b', { idleSinceMs: null, lastAlertAt: T, lastWakeAt: null }, T)
+    expect(listIdleGuardEvents('a')).toHaveLength(1)
+    expect(listIdleGuardEvents('b')).toHaveLength(1)
   })
 })
