@@ -1161,6 +1161,12 @@ function buildSkillsPathTrapBody(): string {
     'A saját, csak neked szóló vagy kipróbálatlan külső skill a munkakönyvtárad',
     '`.claude/skills/` mappájába megy. A globálisba írás tudatos, flotta-szintű',
     'döntés legyen, ne alapértelmezés.',
+      '',
+      'AZ ÚT A TE MUNKAKÖNYVTÁRADHOZ KÉPEST RELATÍV. A repó gyökeréből nézve nem',
+      'létezik -- és az NEM azt jelenti, hogy ez a figyelmeztetés elavult. Mérve',
+      '2026-08-25: nyolc ilyen symlink van (hat ágens-mappa + két worker-home), és',
+      'a gyökérből egy sem látszik. Aki onnan ellenőrzi, egy IGAZ mondatot javít',
+      'hamisra -- ez egyszer már megtörtént, és a javítás konkrét volt és hiányos.',
   ].join('\n')
 }
 

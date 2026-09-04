@@ -61,6 +61,12 @@ describe('ensureSkillsPathTrapSection', () => {
     expect(out).toContain('.claude/skills/')
     // Existing content untouched.
     expect(out).toContain('Some persona.')
+    // A NEZOPONT is a szoveg resze: a figyelmeztetes RELATIV utat hasznal, es a repo
+    // gyokerebol nezve az az ut nem letezik. Enelkul a sor nelkul egy onnan ellenorzo
+    // olvaso elavultnak hiszi a blokkot es "kijavitja" -- ez 2026-08-25-en megtortent
+    // (kartya 12dffabf), es a javitas konkret es hianyos lett (nyolcbol ket ut).
+    expect(out).toContain('MUNKAKÖNYVTÁRADHOZ KÉPEST RELATÍV')
+    expect(out).toContain('nyolc ilyen symlink')
   })
 
   it('is idempotent: a second call changes nothing', () => {
