@@ -75,8 +75,20 @@ const END = '// === SUITE-BASELINE:END ==='
  * felrevezeto mondat ALATTA is kiirodott. Itt a diagnozis a dontes RESZE lesz.
  */
 export function diagnose(output = '', run = null) {
-  if (/ERR_DLOPEN_FAILED|was compiled against a different Node/.test(output)) return 'node-abi'
-  if (/REFUSING TO RUN TESTS/.test(output)) return 'live-install'
+  // A `REFUSING TO RUN TESTS` egy MEGOSZTOTT ELOTAG, NEM AZONOSITO (kartya a9a6ef5d, 2026-09-04).
+  // Ket setup-or hasznalja SZANDEKOSAN ugyanazt a mondatkezdetet:
+  //     assert-not-live-install.ts -> "... ${repoRoot} looks like a LIVE install"
+  //     node-abi.ts                -> "... node_modules were built for a different Node.js version"
+  // A regi sor az ELOTAGRA illesztett, tehat egy NODE-ABI eltérest ELO-TELEPITESKENT jelentett, es
+  // a valasza a worktree-nyitas volt -- ami egy Node-verzion nem valtoztat. marveen ketszer
+  // csinalta meg, a szerszamnak hive. (A :78 mintai a NYERS loader-hibara illeszkedtek
+  // -- ERR_DLOPEN_FAILED --, az or SAJAT szovegere nem: az "were built for", nem "was compiled".)
+  //
+  // EZERT A MEGKULONBOZTETO MARADEKRA ILLESZTUNK, nem az elotagra. Es ami ennel is fontosabb:
+  // egy ISMERETLEN megtagadas NEM kap talalgatott nevet -- sajat oka lesz, es a szkript kiirja a
+  // sort. Kulonben minden jovobeli or, ami ezt a mondatot hasznalja, hamis live-install lesz.
+  if (/ERR_DLOPEN_FAILED|was compiled against a different Node|were built for a different Node\.js version/.test(output)) return 'node-abi'
+  if (/looks like a LIVE install/.test(output)) return 'live-install'
   // A KAPTURA TULCSORDULASA NEM GYUJTESI HIBA, ES EDDIG ANNAK LATSZOTT (2026-08-29).
   // A `spawnSync` alapertelmezett `maxBuffer`-e 1 MiB; ha a gyerek tobbet ir a
   // stdout-ra, a node SIGTERM-mel MEGOLI, `status: null` es `error.code: ENOBUFS`
@@ -84,13 +96,70 @@ export function diagnose(output = '', run = null) {
   // csak a CSATORNA nem fert el. A regi uzenet ilyenkor azt allitotta, hogy "egy fajl
   // BE SEM TOLTODOTT", es egy nem letezo betoltesi hibat kuldott keresni.
   if (run && (run.error?.code === 'ENOBUFS' || (run.status === null && run.signal === 'SIGTERM'))) return 'capture-overflow'
+  // A FUGGOSEGEK NINCSENEK TELEPITVE, ES EZ EGY FRISS WORKTREE ALAPALLAPOTA (2026-09-04,
+  // kartya 4fa96cb5). A `git worktree add` NEM hoz `node_modules`-t, tehat az elso
+  // `npm run test:baseline` egy uj worktreeben MINDIG ide fut. A regi uzenet ilyenkor azt
+  // mondta, hogy "egy fajl BE SEM TOLTODOTT. Eloszor azt javitsd" -- es egy nem letezo
+  // betoltesi hibat kuldott keresni egy ep keszletben, holott csak a fuggoseg hianyzik.
+  //
+  // MIERT SZAMIT EZ TOBBET, MINT EGY UZENET: az alapvonal frissitesenek EZ az egyetlen
+  // szentesitett utja (a fo checkoutban az elo-telepites-or -- helyesen -- megtagadja).
+  // Ha a worktree-s ut is ertelmezhetetlen hibaval all meg, akkor a muveletnek NINCS
+  // jarhato utja, es ami marad, az a prod-tree or megkerulese. A felulbiralasi naplo 27
+  // sorabol 17 EPP a suite-alapvonal (kartya 8c08c0bc) -- ez a sor arrol szol.
+  if (/Cannot find package '?vitest'?|UNRESOLVED_IMPORT.*vitest\/config|failed to load config from/.test(output)) return 'missing-deps'
+  // ISMERETLEN MEGTAGADAS. Egy setup-or nemet mondott, de nem ismerjuk fel, melyik. Ez NEM
+  // `live-install` es NEM `null`: a `null` az altalanos "egy fajl be sem toltodott" uzenetet
+  // adna, ami itt ugyanolyan hamis, mint amilyen a live-install volt a node-ABI-ra.
+  if (/REFUSING TO RUN TESTS/.test(output)) return 'refusal-unknown'
   return null
+}
+
+/**
+ * A megtagadas SAJAT sorai a vitest kimenetebol.
+ *
+ * MIERT LETEZIK: a wrapper eddig ELNYELTE a vitest kimenetet -- `diagnose()` megkapta, a
+ * FELHASZNALO nem --, es ezzel megsemmisitette azt az egyetlen tenyt, amibol a hibat diagnozalni
+ * lehet. marveen ma pontosan ebbe futott: a tizenharom soros kimenetben egyetlen ut sem szerepelt,
+ * es a kerdes ("melyik gyokeret oldotta fel?") a szerszam sajat kimenetebol MEGVALASZOLHATATLAN
+ * volt. A valasz vegig ott allt a vitest kimeneteben, amit a wrapper eldobott.
+ */
+export function refusalLines(output = '') {
+  // EGYEDI SOROK. A vitest WORKERENKENT emeli a hibat, tehat ugyanaz a mondat annyiszor
+  // jelenik meg, ahany worker fut -- merve: hetszer. Egy hetszer megismetelt sor nem tobb
+  // informacio, csak zaj, es epp azt a hasznos sort temeti maga ala, amiert kiirjuk.
+  return [...new Set(
+    String(output)
+      .split('\n')
+      .filter((l) => l.includes('REFUSING TO RUN TESTS'))
+      .map((l) => l.trim()),
+  )]
 }
 
 // `cause` OPCIONALIS es alapertelmezetten null: a hivok, akik nem tudjak az okot,
 // PONTOSAN a regi uzenetet kapjak. Az uj ag csak akkor lep be, ha MERTUK, mi tortent.
 export function decide(rc, counts, cause = null) {
   if (rc !== 0) {
+    if (cause === 'refusal-unknown') {
+      return {
+        write: false,
+        reason:
+          `NEM A KESZLET HIBAJA (kilepesi kod ${rc}): egy SETUP-OR tagadta meg a futast,\n` +
+          '  es a szkript nem ismeri fel, melyik. NEM talalgatok nevet -- a sort lentebb\n' +
+          '  szo szerint kiirom. Ha ez egy uj or, vedd fel a `diagnose()`-ba.',
+      }
+    }
+    if (cause === 'missing-deps') {
+      return {
+        write: false,
+        reason:
+          `NEM A KESZLET HIBAJA, ES NINCS MIT JAVITANI RAJTA (kilepesi kod ${rc}).\n` +
+          '  A FUGGOSEGEK NINCSENEK TELEPITVE ebben a fabban: a vitest maga nem oldhato fel,\n' +
+          '  tehat a gyujtes el sem indult. Egyetlen fajl sem "toltodott be rosszul".\n' +
+          '  Egy friss `git worktree add` NEM hoz node_modules-t -- ez a normal alapallapota.\n' +
+          '  TELEPITSD ELOSZOR:  npm ci    (vagy: ln -sfn <fo-checkout>/node_modules node_modules)',
+      }
+    }
     if (cause === 'live-install') {
       return {
         write: false,
@@ -226,8 +295,19 @@ function main() {
   const rc = run.status === null ? 1 : run.status
   // A diagnozis a MERT kimenetbol jon, nem feltevesbol -- es a dontes RESZE, hogy
   // egyetlen uzenet menjen ki, ne egy helyes es egy felrevezeto egymas alatt.
-  const verdict = decide(rc, counts, diagnose(`${run.stderr ?? ''}${run.stdout ?? ''}`, run))
+  const combined = `${run.stderr ?? ''}${run.stdout ?? ''}`
+  const verdict = decide(rc, counts, diagnose(combined, run))
   if (!verdict.write) {
+    // A MEGTAGADAS SAJAT SORAT KIIRJUK. Eddig a wrapper elnyelte a vitest kimenetet: a
+    // `diagnose()` latta, a felhasznalo nem -- es ezzel megsemmisult az egyetlen teny, amibol a
+    // hiba diagnozalhato (kartya a9a6ef5d). Az or szovege tartalmazza a FELOLDOTT GYOKERET is,
+    // tehat epp azt, amire ma egy egesz kor rament. Ez fut minden okon, a felismertekre is:
+    // egy helyes diagnozis MELLE odaadni a nyers sort semmibe nem kerul, es hitelesiti.
+    const lines = refusalLines(combined)
+    if (lines.length > 0) {
+      console.error('\nAMIT A SETUP-OR MONDOTT (szo szerint, a vitest kimenetebol):')
+      for (const l of lines) console.error(`  ${l}`)
+    }
     // DIDI FIGYELMEZTETESE, ES ITT SZAMIT A LEGTOBBET: node 26 alatt a `vitest
     // list` a nativ modulon ERR_DLOPEN_FAILED-del elhasal. Az a KORNYEZET hibaja,
     // nem a keszlete -- de a kimenete ugy nez ki, mintha a suite lenne rossz.

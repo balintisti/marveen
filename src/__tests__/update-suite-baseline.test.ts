@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { decide, diagnose, renderBlock, replaceBlock } from '../../scripts/update-suite-baseline.mjs'
+import { decide, diagnose, renderBlock, replaceBlock, refusalLines } from '../../scripts/update-suite-baseline.mjs'
 
 // AZ ALAPVONAL-FRISSITO TESZTJEI (kartya c0f10926).
 //
@@ -133,6 +133,95 @@ describe('a megtagadas OKA is mert allitas legyen, ne az altalanos tipp (e065cf1
   it('felismeri a node-ABI eltérest', () => {
     expect(diagnose('ERR_DLOPEN_FAILED')).toBe('node-abi')
     expect(diagnose('was compiled against a different Node.js version')).toBe('node-abi')
+  })
+
+  // A HARMADIK OK, ES EZ A FRISS WORKTREE ALAPALLAPOTA (kartya 4fa96cb5, 2026-09-04).
+  //
+  // A `git worktree add` NEM hoz `node_modules`-t, tehat az elso `test:baseline` egy uj
+  // worktreeben MINDIG ide fut. Merve, valodi worktreeben: `Cannot find package 'vitest'`
+  // + `failed to load config from .../vitest.config.ts`, es a regi uzenet erre is azt
+  // mondta, hogy "egy fajl BE SEM TOLTODOTT. Eloszor azt javitsd".
+  //
+  // MIERT TOBB EZ EGY UZENETNEL: a fo checkoutban az elo-telepites-or -- helyesen --
+  // megtagadja a futast, tehat a worktree AZ EGYETLEN szentesitett ut. Ha az is
+  // ertelmezhetetlen hibaval all meg, a muveletnek nincs jarhato utja, es ami marad, az a
+  // prod-tree or megkerulese (a felulbiralasi naplo 27 sorabol 17 epp a suite-alapvonal).
+  it('felismeri, hogy a FUGGOSEGEK hianyoznak -- egy friss worktree alapallapota', () => {
+    expect(diagnose("Cannot find package 'vitest' imported from /x/vitest.config.ts.timestamp.mjs"))
+      .toBe('missing-deps')
+    expect(diagnose('failed to load config from /Users/isti/wt/vitest.config.ts'))
+      .toBe('missing-deps')
+  })
+
+  it('az ELO-TELEPITES-OR ELOZI a hianyzo fuggoseget, ha valahogy mindketto latszana', () => {
+    // A sorrend nem veletlen: az elo-telepites a sulyosabb allitas (a keszlet ELES allapotot
+    // irna at), tehat annak kell nyernie. Egy elo telepitesben amugy is VAN node_modules,
+    // tehat a ket jel egyutt nem varhato -- de ha megis, a rosszabbik hirt mondjuk.
+    expect(diagnose("REFUSING TO RUN TESTS: /Users/isti/marveen looks like a LIVE install\nCannot find package 'vitest'"))
+      .toBe('live-install')
+  })
+
+  it('a hianyzo-fuggoseg uzenete a TELEPITEST mondja, nem betoltesi hibat', () => {
+    const d = decide(1, null, 'missing-deps')
+    expect(d.write).toBe(false)
+    expect(d.reason).toContain('npm ci')
+    expect(d.reason).toContain('node_modules')
+    // ES NE mondja azt, amit a regi uzenet: nincs mit javitani a keszleten.
+    expect(d.reason).not.toContain('Eloszor azt javitsd')
+  })
+
+  // A `REFUSING TO RUN TESTS` MEGOSZTOTT ELOTAG, NEM AZONOSITO (kartya a9a6ef5d, 2026-09-04).
+  //
+  // Ket setup-or hasznalja SZANDEKOSAN ugyanazt a mondatkezdetet, es a regi `diagnose()` az
+  // ELOTAGRA illesztett -- tehat egy NODE-ABI eltérest ELO-TELEPITESKENT jelentett, es a valasza
+  // "nyiss egy worktreet a HOME alatt" volt, ami egy Node-verzion nem valtoztat. marveen ketszer
+  // csinalta meg, a szerszamnak hive. (A regi node-abi mintak a NYERS loader-hibara illeszkedtek,
+  // az or SAJAT szovegere nem: az "were built for", nem "was compiled against".)
+  it('a node-ABI or SAJAT szovege node-abi, NEM live-install -- ez a javitott defektus', () => {
+    expect(diagnose('Error: REFUSING TO RUN TESTS: node_modules were built for a different Node.js version than the one running.'))
+      .toBe('node-abi')
+  })
+
+  it('a live-install felismerese a MEGKULONBOZTETO maradekra megy, nem az elotagra', () => {
+    expect(diagnose('REFUSING TO RUN TESTS: /Users/isti/marveen looks like a LIVE install (found: store/claudeclaw.db)'))
+      .toBe('live-install')
+  })
+
+  it('EGY ISMERETLEN megtagadas sajat okot kap -- nem talalgatunk nevet', () => {
+    // EZ A TARTOS FELE. Minden jovobeli or, ami ezt a mondatot hasznalja, kulonben hamis
+    // live-install lenne -- ugyanaz a hiba, negyedszer. Igy a szkript kimondja, hogy nem tudja.
+    expect(diagnose('REFUSING TO RUN TESTS: valami teljesen uj or, amit meg nem ismerunk'))
+      .toBe('refusal-unknown')
+  })
+
+  it('az ismeretlen megtagadas uzenete NEM allit okot, es a felvetelre biztat', () => {
+    const d = decide(1, null, 'refusal-unknown')
+    expect(d.write).toBe(false)
+    expect(d.reason).toContain('nem ismeri fel')
+    expect(d.reason).not.toContain('LIVE install')
+    expect(d.reason).not.toContain('Eloszor azt javitsd')
+  })
+
+  // A WRAPPER ELNYELTE A VITEST KIMENETET, es ezzel megsemmisitette azt az EGYETLEN tenyt,
+  // amibol diagnozalni lehet. marveen kimenete tizenharom sor volt, egyetlen ut nelkul -- pedig
+  // az or szovege TARTALMAZZA a feloldott gyokeret.
+  it('refusalLines kiszedi a megtagadas sorat, DEDUPLIKALVA', () => {
+    // A vitest WORKERENKENT emeli a hibat: merve hetszer ugyanaz a sor. Egy hetszer megismetelt
+    // mondat nem tobb informacio, csak zaj.
+    const out = [
+      'valami mas kimenet',
+      'Error: REFUSING TO RUN TESTS: /Users/isti/marveen looks like a LIVE install',
+      'Error: REFUSING TO RUN TESTS: /Users/isti/marveen looks like a LIVE install',
+      'Error: REFUSING TO RUN TESTS: /Users/isti/marveen looks like a LIVE install',
+    ].join('\n')
+    const lines = refusalLines(out)
+    expect(lines).toHaveLength(1)
+    // ES A GYOKERET IS HOZZA -- ez volt a ma hianyzo egyetlen teny.
+    expect(lines[0]).toContain('/Users/isti/marveen')
+  })
+
+  it('refusalLines POZITIV KONTROLL: megtagadas nelkuli kimenetre ures', () => {
+    expect(refusalLines('3 tests failed\nno refusal here')).toEqual([])
   })
 
   // NEGATIV KONTROLL: egy VALODI betoltesi hiba NEM kaphat specialis okot, kulonben a
