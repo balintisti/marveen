@@ -15,7 +15,8 @@
  * eset ezt szegezi le, es azok a fontosak, nem az elso.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 
 const warn = vi.fn()
 const debug = vi.fn()
@@ -93,5 +94,55 @@ describe('bekotes: a hivasi hely tenyleg a helpert hasznalja', () => {
 
   it('a NYERS logger.warn ELTUNT innen -- kulonben visszater az elarasztas', () => {
     expect(body).not.toContain("logger.warn({ session }, 'dispatch: refusing prompt")
+  })
+})
+
+/**
+ * A TESZT-VARRAT MARADJON TESZT-VARRAT -- marveen kikotese (k6), es a kifogas valodi volt.
+ *
+ * A harom export (`noteSaturationRefusal`, `noteSaturationCleared`, `_resetSaturationEpisodesForTest`)
+ * azert van, hogy a VISELKEDESRE lehessen allitani. A kockazat, amit marveen megnevezett: egy
+ * exportalt fuggveny IDOVEL produkcios hivot szerezhet, es akkor a "csak teszt" jelzo prozava valik.
+ *
+ * Ezert nem konvencio orzi (`_ForTest` utotag az OLVASONAK szol), hanem ez a kapu: **egyetlen
+ * produkcios modul sem importalhatja oket.** Igy a felulet-kockazat MERT nulla, nem remelt nulla --
+ * es ha valaki kesobb behuzza, HANGOSAN bukik, nem csendben.
+ */
+describe('a teszt-varrat nem szivarog produkcios kodba', () => {
+  const SEAMS = ['noteSaturationRefusal', 'noteSaturationCleared', '_resetSaturationEpisodesForTest']
+  const SRC = new URL('../', import.meta.url).pathname
+
+  /** Minden .ts a `src/` alatt, a teszteket es magat a definialo fajlt KIVEVE. */
+  function productionFiles(dir: string, out: string[] = []): string[] {
+    for (const name of readdirSync(dir)) {
+      const full = join(dir, name)
+      if (statSync(full).isDirectory()) {
+        if (name !== '__tests__' && name !== 'node_modules') productionFiles(full, out)
+      } else if (name.endsWith('.ts') && !full.endsWith('web/agent-process.ts')) {
+        out.push(full)
+      }
+    }
+    return out
+  }
+
+  const files = productionFiles(SRC)
+
+  it('POZITIV KONTROLL: a mero LAT -- van mit atnezni, es a teszt-fajl IGENIS importalja', () => {
+    expect(files.length).toBeGreaterThan(50)          // kulonben a nulla ures halmazon allna
+    // ES A REKURZIO IS: egy darabszam onmagaban ATMEGY akkor is, ha a bejaras csak a felso
+    // szintet latja -- megmerve, a `src/` gyokere egymaga tobb mint 50 fajl. Egy ALKONYVTARBAN
+    // levo fajlnak is benne kell lennie, kulonben a cenzus a fa nagy reszet nem nezi meg.
+    expect(files.some(f => f.includes('/web/'))).toBe(true)
+    const self = readFileSync(new URL(import.meta.url), 'utf8')
+    for (const s of SEAMS) expect(self).toContain(s)  // a mero a sajat importunkat megtalalja
+  })
+
+  it('egyetlen produkcios modul sem importalja a varratokat', () => {
+    const leaks: string[] = []
+    for (const f of files) {
+      const body = readFileSync(f, 'utf8')
+      for (const s of SEAMS) if (body.includes(s)) leaks.push(`${f}: ${s}`)
+    }
+    expect(leaks).toEqual([])
   })
 })
