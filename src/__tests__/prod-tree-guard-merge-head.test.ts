@@ -27,7 +27,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, copyFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, copyFileSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -169,6 +169,49 @@ describe('prod-tree-guard: a folyamatban levo merge lezarasa atmegy', () => {
       rmSync(wt, { recursive: true, force: true })
       try { execFileSync('git', ['worktree', 'prune'], { cwd: repo, stdio: 'pipe' }) } catch { /* takaritas */ }
     }
+  })
+
+  /**
+   * A FELREALLAS IS NYOMOT HAGY -- didi vette eszre a szelesitest (2026-09-04).
+   *
+   * A felreallas felteteléhez a `MARVEEN_MERGE_COMMIT=1` HOZZAADASA azt jelenti, hogy egy
+   * GIT-VEZERELT feltetel (MERGE_HEAD letezik) melle egy HIVO-ALTAL-ALLITHATO is kerult. A
+   * naplozatlansag nem uj -- a MERGE_HEAD-es ag sem naplozott --, de egy megkerules, amit a hivo
+   * be tud kapcsolni ES amirol semmi nem marad, rosszabb, mint a `MARVEEN_PROD_COMMIT_OK` ut:
+   * AZ legalabb ir a naploba. Ezert ez az eset a NYOMOT rogziti, nem a felreallast.
+   */
+  it('a merge-felreallas SORT IR a naploba, es megnevezi, MELYIK feltetel tuzelt', () => {
+    startConflictingMerge()
+    expect(mergeInProgress()).toBe(true)
+    writeFileSync(join(repo, 'a.txt'), 'resolved\n')
+    git('add', '-A')
+    expect(tryCommit('merge lezarasa')).toBe(true)
+    const log = join(repo, 'store', 'prod-tree-override.log')
+    expect(existsSync(log)).toBe(true)
+    const body = readFileSync(log, 'utf8')
+    expect(body).toContain('reason=merge-stand-aside')
+    // A `via=` a lenyeg: a ket feltetel NEM egyenrangu. Egy utkozo merge lezarasakor a
+    // MERGE_HEAD letezik, tehat ANNAK kell szerepelnie -- ha itt a hivo-allitotta jelzot
+    // latnank, a naplo epp azt mosna ossze, aminek a megkulonbozteteseert kerult bele.
+    expect(body).toContain('via=MERGE_HEAD')
+    expect(body).not.toContain('via=MARVEEN_MERGE_COMMIT')
+  })
+
+  /**
+   * A MASIK AG -- es ez a mutacio miatt kerult ide, nem elovigyazatossagbol.
+   *
+   * Az elozo eset a MERGE_HEAD utat fedi. Megmerve: a `via=` szarmaztatast MINDIG-MERGE_HEAD-re
+   * rontva a keszlet ZOLD MARADT -- vagyis a `via=` megkulonbozteteset, amit az elozo eset
+   * ALLIT, valojaban semmi nem merte. Egy TISZTA merge a dispatcheren at megy, ahol a MERGE_HEAD
+   * meg NEM letezik, tehat ott a masik jelzonek kell megjelennie.
+   */
+  it('TISZTA merge eseten a via= a DISPATCHER jelzojet nevezi meg, nem a MERGE_HEAD-et', () => {
+    execFileSync('git', ['merge', '--no-edit', 'tiszta'], { cwd: repo, stdio: 'pipe' })
+    const log = join(repo, 'store', 'prod-tree-override.log')
+    expect(existsSync(log)).toBe(true)
+    const body = readFileSync(log, 'utf8')
+    expect(body).toContain('reason=merge-stand-aside')
+    expect(body).toContain('via=MARVEEN_MERGE_COMMIT')
   })
 
   it('a felulbiralas TOVABBRA IS mukodik, es a merge-ut nem valtja ki', () => {

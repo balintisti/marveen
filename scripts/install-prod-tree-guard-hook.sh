@@ -99,7 +99,26 @@ TOPLEVEL="$(git rev-parse --show-toplevel 2>/dev/null || echo)"
 # atolvasas. Ezert a merge-dispatcher exportal egy jelzot, es azt is elfogadjuk.
 if [ "$TOPLEVEL" = "$PROD_ROOT" ] && { git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 \
      || [ "${MARVEEN_MERGE_COMMIT:-0}" = "1" ]; }; then
-  echo "prod-tree-guard: folyamatban levo MERGE lezarasa -- atengedve (a merge ezen a fan szankcionalt)." >&2
+  # A FELREALLAS IS NYOMOT HAGY, ES EZ NEM AZ EN VALTOZASOM MIATT KELL, HANEM AZ OVE MIATT:
+  # a MERGE_HEAD-es ag EDDIG SEM naplozott, es en ezt a felreallast SZELESITETTEM ki egy
+  # git-vezerelt feltetelrol (MERGE_HEAD letezik) egy HIVO-ALTAL-ALLITHATORA
+  # (MARVEEN_MERGE_COMMIT=1). Egy megkerules, amit a hivo be tud kapcsolni es amirol semmi nem
+  # marad, rosszabb, mint a meglevo `MARVEEN_PROD_COMMIT_OK` ut -- AZ legalabb naploz.
+  # (didi vette eszre a szelesitest, 2026-09-04; a naplozatlansag mar elotte is igaz volt.)
+  # A `via=` azert kell, mert a ket feltetel NEM egyenrangu: az egyiket a git allitja be egy
+  # folyamatban levo merge alatt, a masikat barki, barmikor.
+  _sa_log="$PROD_ROOT/store/prod-tree-override.log"
+  if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then _sa_via=MERGE_HEAD
+  else _sa_via=MARVEEN_MERGE_COMMIT; fi
+  mkdir -p "$(dirname "$_sa_log")" 2>/dev/null || true
+  printf '%s\tbranch=%s\tfiles=%s\treason=merge-stand-aside via=%s\tpaths=%s\n' \
+    "$(date '+%Y-%m-%dT%H:%M:%S%z')" \
+    "$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')" \
+    "$(git diff --cached --name-only 2>/dev/null | grep -c . || true)" \
+    "$_sa_via" \
+    "$(git diff --cached --name-only 2>/dev/null | tr '\n' ' ')" \
+    >> "$_sa_log" 2>/dev/null || true
+  echo "prod-tree-guard: folyamatban levo MERGE lezarasa -- atengedve (via=$_sa_via, naplozva)." >&2
   exit 0
 fi
 
