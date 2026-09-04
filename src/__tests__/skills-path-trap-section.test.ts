@@ -66,7 +66,27 @@ describe('ensureSkillsPathTrapSection', () => {
     // olvaso elavultnak hiszi a blokkot es "kijavitja" -- ez 2026-08-25-en megtortent
     // (kartya 12dffabf), es a javitas konkret es hianyos lett (nyolcbol ket ut).
     expect(out).toContain('MUNKAKÖNYVTÁRADHOZ KÉPEST RELATÍV')
-    expect(out).toContain('nyolc ilyen symlink')
+    expect(out).toContain('KILENC ilyen symlink')
+  })
+
+  // A NEV SZERINTI FELSOROLAS EGYET KIHAGYOTT, ES EPP A KOORDINATORET (kartya 18ee950f).
+  // A blokk 2026-08-25 ota `nyolc`-at mondott es a `.claude-config` NEVET nevezte meg;
+  // a kilencedik ugyanaz a symlink ugyanarra a globalis fara, de `.channels-config`
+  // neven -- es 09-04-en marveen pontosan azon setalt be, a szabaly ISMERETEBEN.
+  // Merve 2026-09-04: 6 agens-mappa + 2 worker-home + 1 koordinator = 9, mind
+  // `-> /Users/isti/.claude/skills`.
+  it('names the coordinator path too, and gives a check that does not depend on the name', () => {
+    setup('agent-c', '# Agent C\n')
+    ensureSkillsPathTrapSection('agent-c')
+    const out = read('agent-c')
+    // A KIHAGYOTT ut, nevvel. Ez az allitas az, ami egy csak-`.claude-config` blokkon PIROS.
+    expect(out).toContain('.channels-config/skills')
+    // ES A KRITERIUM A TAGSAG HELYETT: a felsorolas elavul, a parancs nem. Enelkul a
+    // fenti sor csak a mai kilencedik utat rogziti, es a tizedik megint hianyozni fog.
+    expect(out).toContain('os.path.realpath')
+    // A DISZKRIMINATOR: a blokk mondja ki, hogy a NEV volt a csapda -- nelkule az
+    // olvaso ugyanugy nev szerint fog keresni, csak eggyel hosszabb listaval.
+    expect(out).toContain('A NEVE REJTETTE EL')
   })
 
   it('is idempotent: a second call changes nothing', () => {
