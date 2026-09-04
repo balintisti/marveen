@@ -13,8 +13,20 @@ export interface SuiteCounts {
 }
 
 /** A megtagadas MERT oka, vagy null, ha nem tudjuk. Lasd a `.mjs` docblockjat:
- *  a kiirt ok is allitas, es ket ismert esetben hamis volt (kartya e065cf1c). */
-export type FailureCause = 'live-install' | 'node-abi' | 'capture-overflow' | null
+ *  a kiirt ok is allitas, es ket ismert esetben hamis volt (kartya e065cf1c).
+ *
+ *  EZ A LISTA A `.mjs` `diagnose()`-aval EGYUTT MOZOG, es 2026-09-04-en NEM mozgott:
+ *  ket uj okot (`missing-deps`, `refusal-unknown`) es egy uj exportot (`refusalLines`)
+ *  vittem be a `.mjs`-be anelkul, hogy ide hozzanyultam volna -- a torzs igy HAROM
+ *  `tsc` hibaval allt. Ket peldany ugyanarrol a szerzodesrol, es csak az egyiket
+ *  szerkesztettem. Ha ide uj ok kerul, a `.mjs`-ben is legyen, es forditva. */
+export type FailureCause =
+  | 'live-install'
+  | 'node-abi'
+  | 'capture-overflow'
+  | 'missing-deps'
+  | 'refusal-unknown'
+  | null
 
 /** A `spawnSync` eredmenye, amennyi a diagnozishoz kell. Azert ilyen szuk, hogy a
  *  teszt ne a teljes `SpawnSyncReturns`-t kelljen felepitse egy ket mezos esethez. */
@@ -36,5 +48,10 @@ export function decide(
 ): { write: boolean; reason: string | null }
 
 export function renderBlock(counts: SuiteCounts, stamp: string, how?: string): string
+
+/** A megtagadas SAJAT sorai a vitest kimenetebol, DEDUPLIKALVA (a vitest
+ *  workerenkent emeli -- merve hetszer). A wrapper eddig elnyelte a kimenetet,
+ *  tehat a diagnozishoz kello egyetlen tenyt is megsemmisitette (kartya a9a6ef5d). */
+export function refusalLines(output?: string): string[]
 
 export function replaceBlock(source: string, block: string): string
