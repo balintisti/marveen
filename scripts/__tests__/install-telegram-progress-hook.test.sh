@@ -202,12 +202,37 @@ EOF
 # komment leirt, es amit a kod nem csinalt.
 SCRIPT_G="$INSTALL_G/scripts/$(basename "$SCRIPT")"
 cp "$SCRIPT" "$SCRIPT_G"
+
+# A TELEPITO `launchctl`-t HIV, ES AZ ATER AZ ELO GEPRE (kartya 8b7569db).
+#
+# A LELET (didi talalta, marveen es en fuggetlenul ujramertuk): a `HOME` felulirasa a PLIST HELYET
+# mozgatja, a launchd DOMAINT nem. A telepito :204-205 `launchctl unload/load "$PLIST"`-et hiv,
+# es az a LIVE `gui/501`-be regisztral -- egy temp konyvtarbol, amit a teszt utana TOROL.
+# Eredmeny: ket ELFOGLALT label (`com.marveen.` es `com.testbot.telegram-progress-watchdog`),
+# 60 masodpercenkent ujraindulva, `exit 2`-vel, egy mar nem letezo plistre mutatva.
+# Merve 2026-09-05: runs=25 mindkettonel, es NO. A fajl sajat kommentje az ellenkezojet feltetelezi
+# ("on macOS launchctl is a no-op here").
+#
+# A JAVITAS NEM A LEPES KIHAGYASA, HANEM EGY STUB A PATH-ON. Ket okbol jobb:
+#   - a produkcios telepitohoz NEM nyulunk (nincs teszt-only kapcsolo a szallitott kodban)
+#   - a daemon-lepes MERHETOVE valik: ma lathatatlan mellekhatas, ezutan allithato teny
+STUB_BIN="$CASE/bin"
+mkdir -p "$STUB_BIN"
+LC_LOG="$CASE/launchctl-calls.log"
+cat > "$STUB_BIN/launchctl" <<'STUBEOF'
+#!/usr/bin/env bash
+# Teszt-stub. NEM nyul a launchd domainhez; csak rogziti, mivel hivtak.
+printf '%s\n' "$*" >> "${LC_LOG:?}"
+exit 0
+STUBEOF
+chmod +x "$STUB_BIN/launchctl"
+export LC_LOG
 # A stub hookok MARADNAK: a masolas forrasa ez, nem a repo valodi hooks konyvtara.
 if [ -d "$HOOKS_SRC_G" ]; then pass "full script: a stub hookok megvannak a futtatas elott"
 else fail "full script: a stub hookok ELTUNTEK a futtatas elott (a fixture romlott el)"; fi
 
 # 1) A spaces-OWNER_NAME eset: a fentebb kiirt fixture .env-vel (OWNER_NAME='Foo Bar').
-OUT="$(HOME="$HOME_G" bash "$SCRIPT_G" 2>&1)"
+OUT="$(HOME="$HOME_G" PATH="$STUB_BIN:$PATH" bash "$SCRIPT_G" 2>&1)"
 assert_zero "full script: exits 0 spaces-t tartalmazo OWNER_NAME mellett" $?
 
 # 2) A "clean .env" eset: MOST TENYLEG oda irjuk, ahonnan a szkript olvas.
@@ -215,7 +240,7 @@ cat > "$INSTALL_G/.env" <<'ENVEOF'
 SERVICE_ID=testbot
 BOT_NAME=TestBot
 ENVEOF
-OUT2="$(HOME="$HOME_G" bash "$SCRIPT_G" 2>&1)"
+OUT2="$(HOME="$HOME_G" PATH="$STUB_BIN:$PATH" bash "$SCRIPT_G" 2>&1)"
 assert_zero "full script: exits 0 with clean .env" $?
 
 # ES A BIZONYITEK, HOGY A FIXTURE-BOL MASOLT, NEM A REPOBOL: a stubok tartalma felismerheto.
@@ -231,6 +256,23 @@ if grep -q '^# stub$' "$HOME_G/.claude/hooks/telegram_progress.py" 2>/dev/null; 
   pass "full script: a masolat a FIXTURE stubjabol jott, nem a repo valodi hookjabol"
 else
   fail "full script: a masolt fajl NEM a fixture stubja -- a szkript mashonnan masolt"
+fi
+
+# A DAEMON-LEPES MOSTANTOL MERT, NEM LATHATATLAN.
+# Ha ez az allitas valaha PIROS lesz ugy, hogy a naplo URES, az azt jelenti, hogy a telepito mar
+# nem hiv launchctl-t -- az VALTOZAS, nem hiba, es akkor ezt az esetet frissiteni kell.
+# Ha PIROS lesz ugy, hogy a stub NEM futott le, akkor a PATH-injekcio romlott el, es a hivas
+# megint az ELO gepre ment.
+if [ -s "$LC_LOG" ]; then
+  pass "full script: a launchctl hivas a STUB-ba ment ($(wc -l < "$LC_LOG" | tr -d ' ') hivas)"
+else
+  fail "full script: a stub NEM kapott hivast -- vagy nem hiv launchctl-t, vagy az ELO gepre ment"
+fi
+# ES A LENYEG: a hivas a FIXTURE plistjere vonatkozzon, ne egy elo utvonalra.
+if grep -q "$HOME_G" "$LC_LOG" 2>/dev/null; then
+  pass "full script: a launchctl a FIXTURE plistjere hivodott"
+else
+  fail "full script: a launchctl NEM a fixture plistjere hivodott -- $(head -2 "$LC_LOG" 2>/dev/null | tr '\n' ' ')"
 fi
 
 # ---------------------------------------------------------------------------
