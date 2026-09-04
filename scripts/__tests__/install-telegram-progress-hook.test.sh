@@ -179,33 +179,59 @@ OWNER_NAME=Foo Bar
 BOT_NAME=TestBot
 EOF
 
-# Run the real script with overridden HOME and a symlinked scripts/hooks.
-REAL_HOOKS="$REPO_ROOT/scripts/hooks"
-rm -rf "$INSTALL_G/scripts/hooks"
-mkdir -p "$INSTALL_G/scripts"
-# Use the stub hooks we created (not real ones), already in $HOOKS_SRC_G.
-OUT="$(HOME="$HOME_G" bash "$SCRIPT" 2>&1)" || true
-# The script resolves INSTALL_DIR from its own __dirname. We can't override that
-# via env, so we inject a .env next to the script's actual install dir for this
-# specific case we test via the run_env_parse helper above -- the full-run (g)
-# test focuses only on whether the copy + settings patch succeeds when a
-# spaced OWNER_NAME is present. Since the script resolves its own install dir,
-# we verify via run_env_parse that SERVICE_ID is read correctly (covered by b/f).
-# Here we just confirm the real script exits 0 with a clean .env (no spaces).
-cat > "/tmp/marveen-hook-fix/.env" <<'EOF'
+# A SZKRIPTET A FIXTURE INSTALL-DIRBE MASOLJUK, ES AZT FUTTATJUK (kartya 5ced33f1).
+#
+# AMI ITT KORABBAN ALLT, ES AMIERT NEM MERT SEMMIT. A `install-telegram-progress-hook.sh` a SAJAT
+# helyebol oldja fel az install-dirt (`INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"`, :38), es
+# a `.env`-et onnan olvassa (:44). A teszt viszont a REPO valodi szkriptjet futtatta, tehat:
+#
+#   - az `INSTALL_DIR` a REPO GYOKERE lett, nem a fentebb felepitett `$INSTALL_G`
+#   - a szkript az ELO `/Users/isti/marveen/.env`-et olvasta, nem a fixture-t
+#   - a fentebb kirakott stub hookokat a `rm -rf "$INSTALL_G/scripts/hooks"` TOROLTE, mikozben a
+#     kovetkezo komment azt allitotta, hogy azokat hasznaljuk -- a masolas a REPO valodi hookjaibol
+#     tortent
+#   - es a "clean .env" injektalas egy NEM LETEZO konyvtarba irt (`/tmp/marveen-hook-fix/`), tehat
+#     a `cat` ELHASALT; `set -e` nincs, igy a bukas nema maradt
+#
+# Merve 2026-09-05: a fajl igy is **23 passed, 0 failed** volt. Az `assert_zero "... with clean
+# .env"` allitas IGAZ volt -- csak nem azert, amit a NEVE mond: nem volt semmilyen injektalt .env.
+#
+# A JAVITAS a szandekot valositja meg, nem a tunetet takaritja el: a szkript MASOLATA a fixture
+# `scripts/` konyvtaraba kerul, tehat az `INSTALL_DIR` a `$INSTALL_G`-re oldodik fel, a fixture
+# `.env`-jet olvassa, es a fentebb kirakott STUB hookokat masolja. Ez az az alak, amit a regi
+# komment leirt, es amit a kod nem csinalt.
+SCRIPT_G="$INSTALL_G/scripts/$(basename "$SCRIPT")"
+cp "$SCRIPT" "$SCRIPT_G"
+# A stub hookok MARADNAK: a masolas forrasa ez, nem a repo valodi hooks konyvtara.
+if [ -d "$HOOKS_SRC_G" ]; then pass "full script: a stub hookok megvannak a futtatas elott"
+else fail "full script: a stub hookok ELTUNTEK a futtatas elott (a fixture romlott el)"; fi
+
+# 1) A spaces-OWNER_NAME eset: a fentebb kiirt fixture .env-vel (OWNER_NAME='Foo Bar').
+OUT="$(HOME="$HOME_G" bash "$SCRIPT_G" 2>&1)"
+assert_zero "full script: exits 0 spaces-t tartalmazo OWNER_NAME mellett" $?
+
+# 2) A "clean .env" eset: MOST TENYLEG oda irjuk, ahonnan a szkript olvas.
+cat > "$INSTALL_G/.env" <<'ENVEOF'
 SERVICE_ID=testbot
 BOT_NAME=TestBot
-EOF
-OUT2="$(HOME="$HOME_G" bash "$SCRIPT" 2>&1)"
-EXIT=$?
-assert_zero "full script: exits 0 with clean .env" $EXIT
+ENVEOF
+OUT2="$(HOME="$HOME_G" bash "$SCRIPT_G" 2>&1)"
+assert_zero "full script: exits 0 with clean .env" $?
+
+# ES A BIZONYITEK, HOGY A FIXTURE-BOL MASOLT, NEM A REPOBOL: a stubok tartalma felismerheto.
+# Enelkul ez az allitas akkor is atmenne, ha a szkript a repo valodi hookjait masolta volna --
+# epp az a hiba, amit ez a javitas zar be.
 for f in telegram_progress.py telegram_progress_clear.py \
           telegram_progress_reply_clear.py telegram_progress_watchdog.py \
           telegram_fallback_send.py; do
   if [ -f "$HOME_G/.claude/hooks/$f" ]; then pass "full script: $f copied"
   else fail "full script: $f NOT copied"; fi
 done
-rm -f "/tmp/marveen-hook-fix/.env"
+if grep -q '^# stub$' "$HOME_G/.claude/hooks/telegram_progress.py" 2>/dev/null; then
+  pass "full script: a masolat a FIXTURE stubjabol jott, nem a repo valodi hookjabol"
+else
+  fail "full script: a masolt fajl NEM a fixture stubja -- a szkript mashonnan masolt"
+fi
 
 # ---------------------------------------------------------------------------
 echo ""
