@@ -118,8 +118,27 @@ DB_CLIENTS = re.compile(
     r"prisma|supabase|npx\s+prisma|dbmate|flyway|liquibase)([\s;&|)]|$)", re.I)
 
 # Segment separators. Splitting is deliberately crude -- it can only ever produce
-# MORE segments than a shell would, and an extra boundary can only cause an extra
-# check, never a missed one.
+# MORE segments than a shell would.
+#
+# THE OLD CLAIM HERE WAS "an extra boundary can only cause an extra check, never a
+# missed one". THAT IS TRUE FOR THE TOOL CLASS AND FALSE FOR THE SQL CLASS, and the
+# difference is the co-occurrence requirement (card 63ab0d14, dexter observed it on
+# 2026-09-04 during ordinary migration work -- not by probing):
+#
+#   TOOL patterns need ONE thing in a segment -- more boundaries, more chances to hit.
+#   SQL patterns need TWO things in the SAME segment (a client AND a statement), so an
+#   extra boundary can SEPARATE them and cause a MISS.
+#
+# That is exactly what happened to an executed heredoc. `strip_heredoc_bodies` KEEPS
+# the body when the opener runs it (`psql <<'SQL'`), correctly, so it can be checked --
+# and then the newline split guaranteed the body could never share a segment with the
+# psql that executes it. Two individually correct mechanisms; the fault was in their
+# composition. `psql ... -c 'DROP TABLE x'` was refused while the same statement in a
+# heredoc to the same database ran.
+#
+# The fix is not to stop splitting (joining does not help: the body's own `;` re-splits
+# it). Each executed body line CARRIES its opener's client instead -- see
+# strip_heredoc_bodies.
 _SEG = re.compile(r"(?:\|\||&&|[;\n|&])")
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
@@ -175,10 +194,15 @@ def strip_heredoc_bodies(command: str) -> str:
         if m:
             terminator = m.group(2)
             executes = re.search(r"(^|[\s;&|])(bash|sh|zsh|psql|sqlite3|mysql|python3?|node)([\s;&|]|$)", line)
+            # Each kept body line is PREFIXED with the opener's client, so the SQL class
+            # (which needs client AND statement in one segment) still sees them together
+            # after the newline/semicolon split. Joining the body onto the opener line
+            # would NOT do it: the body's own `;` splits it apart again.
+            client = executes.group(2) if executes else ""
             i += 1
             while i < len(lines) and lines[i].strip() != terminator:
                 if executes:
-                    out.append(lines[i])
+                    out.append(f"{client} {lines[i]}")
                 i += 1
             if i < len(lines):
                 out.append(lines[i])  # the terminator itself
