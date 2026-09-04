@@ -29,7 +29,12 @@ const AGENT_PROCESS = readFileSync(join(ROOT, 'src', 'web', 'agent-process.ts'),
 
 describe('parkedClearSequence', () => {
   it('starts at the beginning of the buffer so the first kill has something ahead of it', () => {
-    expect(parkedClearSequence(1)[0]).toBe('C-a')
+    // A SORREND VALTOZOTT 2026-09-04-en (kartya 15bc4883): az `Escape` KERULT ELORE, tehat a
+    // `C-a` mar a MASODIK. Az allitas SZANDEKA valtozatlan -- a kill elott a kurzor a buffer
+    // elejen kell alljon --, csak a pozicio tolodott eggyel. Nem lazitas: az `Escape` semmit nem
+    // vesz el, lasd a lenti additivitas-kontrollt.
+    expect(parkedClearSequence(1)[0]).toBe('Escape')
+    expect(parkedClearSequence(1)[1]).toBe('C-a')
   })
 
   it('deletes FORWARD -- C-u is a no-op with the cursor at offset 0', () => {
@@ -50,6 +55,42 @@ describe('parkedClearSequence', () => {
 
   it('keeps a workable floor for a single-row box', () => {
     expect(parkedClearSequence(1).filter((k) => k === 'C-k').length).toBeGreaterThanOrEqual(8)
+  })
+
+  // A NEGATIV KONTROLL, ES EZ AZ, AMI A VALTOZAST BIZTONSAGOSSA TESZI (marveen kikotese,
+  // 2026-09-04). A `clearStaleParkedInput()` MINDEN stabil parkolt bemenetre tuzel, nem csak
+  // tobbsoros beillesztesre -- tehat az uj `Escape` tulnyomoreszt olyan paneleken fut le, amiknek
+  // nem volt ra szuksegük. **A vedendo eset nem az, hogy az Escape nem segit, hanem hogy egy MAR
+  // HELYREALLITHATO panelt ront el.**
+  //
+  // Amit ez bizonyit: az `Escape` PUSZTAN ADDITIV. Kiszurve a sorozatbol, a maradek BAJTRA az,
+  // amit a valtozas elotti algoritmus adott -- minden sor-szamra. Vagyis egy panel, aminek nem
+  // kellett az Escape, PONTOSAN a regi kezelest kapja, plusz egy leutest az elejen.
+  it('NEGATIV KONTROLL: az Escape additiv -- nelkule a sorozat a REGI sorozat, minden row-countra', () => {
+    const PER_ROW = 4, MIN = 12, MAX = 240
+    const legacy = (rowCount: number): string[] => {
+      const rounds = Math.min(MAX, Math.max(MIN, Math.max(0, rowCount) * PER_ROW))
+      const keys = ['C-a']
+      for (let i = 0; i < rounds; i++) keys.push('C-k', 'Delete')
+      return keys
+    }
+    for (const n of [0, 1, 2, 3, 7, 12, 59, 60, 61, 240, 9999]) {
+      const withEsc = parkedClearSequence(n)
+      expect(withEsc.filter((k) => k !== 'Escape'), `rowCount=${n}`).toEqual(legacy(n))
+      // PONTOSAN egy Escape, es AZ ELSO -- kesobb elhelyezve mar egy kill-kor UTAN futna,
+      // ami mas allapotot hagyna maga utan.
+      expect(withEsc.filter((k) => k === 'Escape').length, `rowCount=${n}`).toBe(1)
+      expect(withEsc[0], `rowCount=${n}`).toBe('Escape')
+    }
+  })
+
+  it('POZITIV KONTROLL a fenti merohoz: a legacy() TENYLEG kulonbozik az ujtol', () => {
+    // Enelkul az additivitas-allitas kielegitheto lenne egy olyan `legacy()`-vel, ami veletlenul
+    // ugyanazt adja, mint az uj sorozat -- akkor a szures semmit nem bizonyitana.
+    const PER_ROW = 4, MIN = 12, MAX = 240
+    const rounds = Math.min(MAX, Math.max(MIN, 7 * PER_ROW))
+    const legacyLen = 1 + rounds * 2
+    expect(parkedClearSequence(7).length).toBe(legacyLen + 1)
   })
 
   it('never returns an unbounded sequence for an absurd row count', () => {
