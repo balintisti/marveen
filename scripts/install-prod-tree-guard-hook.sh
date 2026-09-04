@@ -76,6 +76,25 @@ cat > "$GUARD" <<'EOF'
 set -euo pipefail
 PROD_ROOT="${MARVEEN_PROD_ROOT:-$(dirname "$(cd "$(git rev-parse --git-common-dir)" && pwd)")}"
 TOPLEVEL="$(git rev-parse --show-toplevel 2>/dev/null || echo)"
+
+# A MERGE EZEN A FAN SZANKCIONALT, TEHAT A MERGE BEFEJEZESE SEM MEGKERULES (kartya 8c08c0bc).
+# Merve 2026-09-04 a fo checkout SAJAT HEAD-reflogjabol, 2026-08-20 ota: 116 merge / 91 commit,
+# a 116-bol 82 kartya-id nevu agrol -- vagyis a koordinator napi kotegei. A build EBBOL a fabol
+# keszul, es a post-checkout or SZANDEKOSAN ide allitja vissza. A merge nem szivargas: ez a fa
+# dolga.
+#
+# Egy tiszta auto-merge amugy sem fut at itt (a git a `pre-merge-commit` hookot hivja, ami nincs
+# telepitve). Ami IDE er, az az UTKOZO merge feloldasa utani kezi `git commit` -- ugyanannak a
+# szankcionalt muveletnek a befejezese, es eddig megtagadva.
+#
+# A MERGE_HEAD PONTOSAN ADDIG LETEZIK, AMIG A MERGE BEFEJEZETLEN (merve: utkozo merge alatt es
+# `--no-commit` utan LETEZIK; a merge befejezese utan NEM). Tehat ez a kapu nem tagit tobbet, mint
+# a folyamatban levo merge lezarasa -- egy kesobbi, fuggetlen commit ugyanugy blokkolt marad.
+if [ "$TOPLEVEL" = "$PROD_ROOT" ] && git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+  echo "prod-tree-guard: folyamatban levo MERGE lezarasa -- atengedve (a merge ezen a fan szankcionalt)." >&2
+  exit 0
+fi
+
 if [ "$TOPLEVEL" = "$PROD_ROOT" ] && [ "${MARVEEN_PROD_COMMIT_OK:-0}" != "1" ]; then
   echo "" >&2
   echo "BLOCKED: commit on the running main checkout ($PROD_ROOT)." >&2
