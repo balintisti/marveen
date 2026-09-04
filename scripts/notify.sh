@@ -92,6 +92,36 @@ esac
 
 if [ "$HTTP_CODE" = "200" ] && [ "$OK_FIELD" = "1" ]; then
   echo "Ertesites elkuldve."
+  # A LEDGERBE IS BE KELL KERULNIE (kartya 44730c4c). Ez a szkript a TARTALEK ut: akkor fut,
+  # amikor az MCP `reply` tool nincs meg -- vagyis pont akkor, amikor a rendszer mar serult.
+  # Eddig SEMMIT nem irt a `conversation_log`-ba, tehat egy igy kikuldott uzenet SZERKEZETILEG
+  # lathatatlan maradt annak, aki a ledgerbol olvassa ki, mit tud mar a gazda -- es a lap epp
+  # arra tanit, hogy onnan olvassuk.
+  #
+  # FAIL-OPEN, ES EZ NEM LAZASAG: a levelet MAR ELKULDTUK. Ha a naplozas elbukik (nincs python3,
+  # zarolt DB, hianyzo tabla), a szkript akkor is SIKERT jelent, mert a kuldes tenyleg sikerult.
+  # Egy elbukott naplozasbol hibat csinalni annyi lenne, mint egy KEZBESITETT uzenetet
+  # elveszettnek jelenteni -- rosszabb, mint a lathatatlansag, amit javitunk.
+  # A hiba ettol nem nema: a stderr-re kimegy egy sor.
+  LEDGER_MSG_ID=$(printf '%s' "$BODY" | sed -n 's/.*"message_id":\([0-9]*\).*/\1/p' | head -1)
+  LEDGER_AGENT="${SENDER:-$MAIN_AGENT_ID}"
+  # A hooks-konyvtarat a BASH adja at: o tudja a sajat helyet (`SCRIPT_DIR`, :5). Egy python
+  # oldali kitalalas itt pont az a tippelt ut lenne, amirol ez a repo kulon kartyat vezet.
+  MSG_FOR_LEDGER="$MESSAGE" CHAT_FOR_LEDGER="$CHAT_ID" \
+  AGENT_FOR_LEDGER="$LEDGER_AGENT" MID_FOR_LEDGER="$LEDGER_MSG_ID" \
+  HOOKS_DIR="$SCRIPT_DIR/hooks" \
+  python3 - <<'PYLEDGER' 2>/dev/null || echo "FIGYELEM: az uzenet ELMENT, de a ledgerbe nem sikerult beirni." >&2
+import os, sys
+sys.path.insert(0, os.environ["HOOKS_DIR"])
+import ledger_lib
+mid = os.environ.get("MID_FOR_LEDGER") or None
+ledger_lib.log_outbound(
+    os.environ["AGENT_FOR_LEDGER"],
+    os.environ["CHAT_FOR_LEDGER"],
+    os.environ["MSG_FOR_LEDGER"],
+    int(mid) if mid and mid.isdigit() else None,
+)
+PYLEDGER
 else
   DESC=$(printf '%s' "$BODY" | sed -n 's/.*"description":"\([^"]*\)".*/\1/p')
   echo "HIBA: az ertesites NEM ment el. HTTP=${HTTP_CODE} chat_id=${CHAT_ID} ok=${OK_FIELD}${DESC:+ -- $DESC}" >&2
