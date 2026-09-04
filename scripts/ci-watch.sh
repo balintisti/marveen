@@ -15,7 +15,7 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_DIR="${CI_WATCH_REPO:-/Users/isti/Projektek/sajat-crm}"
 STATE="${CI_WATCH_STATE:-$DIR/store/ci-watch-state.json}"
-NOTIFY="$DIR/scripts/notify.sh"
+NOTIFY="${CI_WATCH_NOTIFY:-$DIR/scripts/notify.sh}"
 BRANCH="${CI_WATCH_BRANCH:-main}"
 # MELYIK munkafolyamatok szamitanak. Vesszovel elvalasztva; ures = MIND.
 # Miert nem mind: az elso eles futas a "Dependabot Updates" 08-20-i bukasat talalta meg.
@@ -57,9 +57,15 @@ state_path, key, msg, notify = sys.argv[1:5]
 try: st = json.load(open(state_path))
 except Exception: st = {}
 if st.get("last_key") != key:
+    # AZ ERTESITES ELOSZOR, AZ ALLAPOT CSAK UTANA. Forditva egy bukott kuldes utan a dedupe
+    # ORoKRE elnemitja ugyanezt a leletet, es a naplo kozben egeszsegesnek olvasodik.
+    rc = subprocess.run(["bash", notify, msg]).returncode
+    if rc != 0:
+        print(f"[ci-watch] AZ ERTESITES BUKOTT (notify rc={rc}) -- az allapotot NEM leptetem, "
+              "a kovetkezo futas ujraprobalja")
+        sys.exit(1)
     st["last_key"] = key
     json.dump(st, open(state_path, "w"))
-    subprocess.run([ "bash", notify, msg ])
 PY
   exit 1
 fi
@@ -100,10 +106,6 @@ if prev == key:
     print(f"[ci-watch] valtozatlan ({len(bad)} rossz) -- nem ertesitek")
     sys.exit(0)
 
-st["last_key"] = key
-st["last_seen"] = {wf: r["conclusion"] for wf, r in latest.items()}
-json.dump(st, open(state_path, "w"), indent=1)
-
 if bad:
     lines = [f"CI FIGYELMEZTETES a(z) {branch} agon:", ""]
     for wf, r in sorted(bad.items()):
@@ -119,5 +121,15 @@ else:
 
 print("[ci-watch] ALLAPOTVALTOZAS -> ertesites")
 print(msg)
-subprocess.run(["bash", notify, msg])
+# UGYANAZ A SORREND, MINT FENT, es ugyanabbol az okbol: a `last_key` az a mezo, ami a MASODIK
+# jelzest megakadalyozza. Ha a kuldes bukott, es MEGIS leptetjuk, a kovetkezo futas
+# "valtozatlan (N rossz) -- nem ertesitek"-et ir, ami HELYESNEK olvasodik, es a riasztas elveszett.
+rc = subprocess.run(["bash", notify, msg]).returncode
+if rc != 0:
+    print(f"[ci-watch] AZ ERTESITES BUKOTT (notify rc={rc}) -- az allapotot NEM leptetem, "
+          "a kovetkezo futas ujraprobalja")
+    sys.exit(1)
+st["last_key"] = key
+st["last_seen"] = {wf: r["conclusion"] for wf, r in latest.items()}
+json.dump(st, open(state_path, "w"), indent=1)
 PY
