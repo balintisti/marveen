@@ -22,7 +22,10 @@ describe('kanban move audit trail', () => {
     createKanbanCard({ id: 'card-a', title: 'Audited card' })
 
     const moved = moveKanbanCard('card-a', 'in_progress', 1, 'marveen')
-    expect(moved).toBe(true)
+    // A visszateres 2026-09-05 ota KIMENETEL, nem boolean (kartya aca11ba5): a regi `true` azt
+    // jelentette, hogy A SOR LETEZIK, nem azt, hogy mozdult -- a hivo nem tudta megkulonboztetni
+    // a valodi atmenetet egy no-optol.
+    expect(moved).toBe('moved')
 
     const events = getKanbanCardEvents('card-a')
     expect(events).toHaveLength(1)
@@ -36,15 +39,16 @@ describe('kanban move audit trail', () => {
   it('records no event when the status is unchanged (pure reorder)', () => {
     createKanbanCard({ id: 'card-b', title: 'Reordered card' })
 
-    // Same status (planned), only sort_order differs -> not a transition.
+    // Same status (planned), only sort_order differs -> not a transition, but IS a change:
+    // a reorder writes and bumps updated_at, it just records no event.
     const moved = moveKanbanCard('card-b', 'planned', 5, 'marveen')
-    expect(moved).toBe(true)
+    expect(moved).toBe('moved')
     expect(getKanbanCardEvents('card-b')).toHaveLength(0)
   })
 
   it('records no event when no row matches', () => {
     const moved = moveKanbanCard('nonexistent-card', 'done', 0, 'marveen')
-    expect(moved).toBe(false)
+    expect(moved).toBe('not-found')
     expect(getKanbanCardEvents('nonexistent-card')).toHaveLength(0)
   })
 
@@ -52,7 +56,7 @@ describe('kanban move audit trail', () => {
     createKanbanCard({ id: 'card-c', title: 'No actor' })
 
     const moved = moveKanbanCard('card-c', 'waiting', 0)
-    expect(moved).toBe(true)
+    expect(moved).toBe('moved')
 
     const events = getKanbanCardEvents('card-c')
     expect(events).toHaveLength(1)

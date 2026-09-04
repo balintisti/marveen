@@ -536,14 +536,21 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     const id = decodeURIComponent(kanbanMoveMatch[1])
     const body = await readBody(req)
     const { status, sort_order, actor } = JSON.parse(body.toString())
-    if (moveKanbanCard(id, status, sort_order ?? 0, actor)) {
-      // Wake the assigned agent once when the card enters in_progress -- unless
-      // that agent is the one who moved it (self-pickup needs no wake-up).
-      if (status === 'in_progress') fireKanbanDispatch(id, actor)
-      json(res, { ok: true })
-      return true
-    }
-    json(res, { error: 'Kártya nem található' }, 404)
+    const outcome = moveKanbanCard(id, status, sort_order ?? 0, actor)
+    if (outcome === 'not-found') { json(res, { error: 'Kártya nem található' }, 404); return true }
+
+    // A `changed:false` NEM hiba -- ugyanaz a dontes, mint a testver PUT-on: egy hivo joggal
+    // kuldheti ujra ugyanazt. De KIMONDJUK, mert a csendes `{ok:true}` mert kart okozott:
+    // dexter hat lezart kartyat jelentett, es harom a hatbol NO-OP volt (didi es mandark mar
+    // lezarta oket) -- a valasz nem adott semmit, amin ez latszott volna.
+    // A no-op itt sem ir semmit, tehat az `updated_at` sem emelkedik: egy kartya nem latszhat
+    // frissen attol, hogy valaki ujrakuldte a mar fennallo allapotat.
+    if (outcome === 'unchanged') { json(res, { ok: true, changed: false }); return true }
+
+    // Wake the assigned agent once when the card enters in_progress -- unless
+    // that agent is the one who moved it (self-pickup needs no wake-up).
+    if (status === 'in_progress') fireKanbanDispatch(id, actor)
+    json(res, { ok: true, changed: true })
     return true
   }
 

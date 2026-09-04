@@ -1924,20 +1924,53 @@ export function getChildCards(parentId: string): KanbanCard[] {
   return db.prepare('SELECT * FROM kanban_cards WHERE parent_id = ? AND archived_at IS NULL ORDER BY sort_order ASC').all(parentId) as KanbanCard[]
 }
 
-export function moveKanbanCard(id: string, status: KanbanCard['status'], sortOrder: number, actor?: string): boolean {
+export type KanbanMoveOutcome = 'not-found' | 'unchanged' | 'moved'
+
+/** Move a card, and SAY WHETHER ANYTHING MOVED (card aca11ba5).
+ *
+ *  THE OLD RETURN WAS A BOOLEAN NAMED `changed` THAT DID NOT MEAN CHANGED. The UPDATE always set
+ *  `updated_at`, so `changes > 0` meant "the row exists" -- it was true for a move onto the status
+ *  the card was ALREADY in. The route turned that into a flat `{ok:true}`, and the caller could not
+ *  tell a real transition from a no-op.
+ *
+ *  MEASURED COST (2026-09-04): dexter reported closing six cards; three of his moves were no-ops --
+ *  didi and mandark had already closed those -- and `{ok:true}` gave him nothing to notice it with.
+ *  A wrong report to the coordinator, out of a correct-looking response. mandark ran the same check
+ *  and his nine survived, but by ORDERING, not method: his verification was read-back, which proves
+ *  the card IS done, not that HE made it done.
+ *
+ *      read-back .......  the card IS in that state
+ *      /events row .....  I MADE it so
+ *      {ok:true} .......  neither
+ *
+ *  The information already existed -- the event row is written exactly when the move is real. It
+ *  just never reached the caller.
+ *
+ *  A NO-OP NOW WRITES NOTHING AT ALL, mirroring `updateKanbanCard`: `updated_at` does not rise, so
+ *  a card cannot look freshly touched because someone re-sent the state it was already in. That
+ *  false freshness is its own failure -- the idle guard and every staleness filter read that field.
+ *
+ *  A pure sort_order reorder IS a change (it writes, and bumps updated_at) but is NOT a status
+ *  transition, so it still records no event -- unchanged from before.
+ */
+export function moveKanbanCard(
+  id: string, status: KanbanCard['status'], sortOrder: number, actor?: string,
+): KanbanMoveOutcome {
+  const row = db.prepare('SELECT status, sort_order FROM kanban_cards WHERE id=?').get(id) as
+    { status: string; sort_order: number } | undefined
+  if (row === undefined) return 'not-found'
+  if (row.status === status && row.sort_order === sortOrder) return 'unchanged'
+
   const now = Math.floor(Date.now() / 1000)
-  // Read the previous status first so we only record an audit event on a real
-  // status transition (not a pure sort_order reorder within the same column).
-  const prev = (db.prepare('SELECT status FROM kanban_cards WHERE id=?').get(id) as { status: string } | undefined)?.status
-  const changed = db.prepare(
+  db.prepare(
     'UPDATE kanban_cards SET status=?, sort_order=?, updated_at=? WHERE id=?'
-  ).run(status, sortOrder, now, id).changes > 0
-  if (changed && prev !== undefined && prev !== status) {
+  ).run(status, sortOrder, now, id)
+  if (row.status !== status) {
     db.prepare(
       'INSERT INTO kanban_card_events (card_id, from_status, to_status, actor, created_at) VALUES (?, ?, ?, ?, ?)'
-    ).run(id, prev, status, actor ?? null, now)
+    ).run(id, row.status, status, actor ?? null, now)
   }
-  return changed
+  return 'moved'
 }
 
 // Stamp the once-only kanban -> agent dispatch guard. Returns false if the
