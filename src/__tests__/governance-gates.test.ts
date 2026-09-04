@@ -53,8 +53,15 @@ describe('self-pace-gate gateDecision', () => {
   // ugy, hogy kozben megtartja a regi teszt lenyeget (a hint legyen AG-SPECIFIKUS, ne boilerplate).
   //
   // HELYESBITES a fenti bekezdeshez: az "es friday ma ezen akadt el" resz VISSZAVONVA. A
-  // megtagadas MEGTORTENT (12:0x, `os-scheduler` szoveggel), de a MECHANIZMUSAT nem mertem meg,
-  // es utolag NEM reprodukalhato: merve 2026-09-04, a `launchctl disable|bootout|load`
+  // megtagadas MEGTORTENT (12:0x, `os-scheduler` szoveggel), de a MECHANIZMUSAT nem mertem meg.
+  //
+  // >>> ES EZ A SOR AZOTA MEGDOLT: A MECHANIZMUS IZOLALVA (kartya e5005c84, 2026-09-04 este).
+  // >>> Lasd a lenti "os-scheduler: az at PARANCS-POZICIOBAN" blokkot. A kivalto alak az
+  // >>> `at` + idopont KOZVETLENUL egy hatarolo utan; idezojelben es proza kozepen ATMEGY.
+  // >>> Azert nem sikerult a bisect, mert a tiltashoz KET dolog kell EGYMAS MELLETT, tehat
+  // >>> minden darabolas mindket felet atengedi. A "nem reprodukalhato" allitas visszavonva.
+  //
+  // A korabbi meres, ami akkor allt: a `launchctl disable|bootout|load`
   // PARANCS-POZICIOBAN tuzel, ugyanaz a szoveg egy heredoc TORZSEBEN viszont ATMEGY -- es a
   // blokkolt hivasom legjobb rekonstrukcioja (heredoc + card-comment + ket curl) is ATMEGY.
   // Tehat a valodi kivalto ok valami olyan volt, ami a rekonstrukciombol hianyzik.
@@ -570,5 +577,43 @@ describe('self-pace-gate: quoted prose cannot fake a command position', () => {
   it('fails CLOSED on an UNQUOTED heredoc tag whose body substitutes', () => {
     // <<PY (no quotes) expands the body, so its contents are not inert.
     expect(selfPaceDecision('Bash', { command: 'cat <<PY\n$(crontab -r)\nPY' }).deny).toBe(true)
+  })
+})
+
+/**
+ * os-scheduler: az `at` PARANCS-POZICIOBAN -- a dokumentacios hamis riasztas mert alakja.
+ * Kartya e5005c84. A kartya azzal nyilt, hogy KET valodi hivas megtagadva, es a bisect
+ * bounded idon belul NEM izolalta. A bisect azert bukott el, amiert a DB-kapu heredoc-lelete
+ * is nema volt: a tiltashoz KET dolog kell UGYANABBAN a szegmensben (hatarolo + at-ido), tehat
+ * barmely darabolas mindket felet atengedi -- kulon-kulon MINDEN darab "allow".
+ *
+ * A KAPU HELYES. Ezek az esetek nem defektust rogzitenek, hanem a HATART: egy hej-parancsban a
+ * `| at 14:16` tenyleg egy `at`-et hivo csovezetek. Amit rogzitenek: a proza NE dolje be.
+ */
+describe('self-pace: az os-scheduler at-aga a parancs-poziciora kot, nem a prozara', () => {
+  it('DENY: az at + idopont kozvetlenul egy hatarolo utan (cso, pontosvesszo)', () => {
+    expect(selfPaceDecision('Bash', { command: 'echo x | at 14:16' }).reason).toBe('os-scheduler')
+    expect(selfPaceDecision('Bash', { command: 'echo x; at 14:16' }).reason).toBe('os-scheduler')
+  })
+
+  it('DENY egy `#` kommentben is -- a komment NINCS kiparszolva, es ez szandekos', () => {
+    // Ugyanaz a dontes, mint a DB-kapunal: egy DENY kapunal a komment-strippeles hej-idezojel
+    // parsolast kivanna, es azt elrontva egy VALODI parancs tunne el csendben.
+    expect(selfPaceDecision('Bash', { command: 'bash x.sh   # sor | at 14:16 tortent' }).reason)
+      .toBe('os-scheduler')
+  })
+
+  // A NEGATIV ESETEK A SULY: enelkul a kapu minden magyar-angol vegyes kartya-kommentet megfogna.
+  it('ALLOW: idezojelben, proza kozepen, es magyar toldalekkal', () => {
+    expect(selfPaceDecision('Bash', { command: 'echo x | echo "at 14:16"' }).deny).toBeFalsy()
+    expect(selfPaceDecision('Bash', { command: 'echo "a merge at 14:16 tortent"' }).deny).toBeFalsy()
+    expect(selfPaceDecision('Bash', { command: 'echo "14:16-kor tortent"' }).deny).toBeFalsy()
+  })
+
+  it('a hint MEGNEVEZI ezt az alakot, hogy a kovetkezo embernek ne kelljen kinyomoznia', () => {
+    // Ez a kartya ket kort vitt el pontosan azert, mert az uzenet a MUVELETET nevezte meg okkent,
+    // az ALAKOT nem. A hint mostantol az alakot mondja.
+    expect(REASON_HINT['os-scheduler']).toMatch(/PARANCS-POZICIOBAN/)
+    expect(REASON_HINT['os-scheduler']).toMatch(/14:16-kor/)
   })
 })

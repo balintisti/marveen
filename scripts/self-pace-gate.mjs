@@ -439,7 +439,8 @@ export const REASON_HINT = {
   'os-scheduler':
     ' KIVALTO OK: operacios rendszer szintu utemezo indito/beküldo alakja.' +
     ' A tiszta listazas (crontab -l, launchctl list, atq) atmegy.' +
-    ' HA DOKUMENTALSZ (a szoveg ADAT, nem hivas): NE fogalmazd at a szoveget -- egy pontos leiras atirasa azert, hogy egy szuron atcsusszon, a DOKUMENTUMOT rontja el. Valassz MASIK UTAT: a fajlt a Write eszkozzel ird (ne hej-heredoccal), vagy add `-d`/`--data` payloadkent -- azt a kapu blankolja.',
+    ' HA DOKUMENTALSZ (a szoveg ADAT, nem hivas): NE fogalmazd at a szoveget -- egy pontos leiras atirasa azert, hogy egy szuron atcsusszon, a DOKUMENTUMOT rontja el. Valassz MASIK UTAT: a fajlt a Write eszkozzel ird (ne hej-heredoccal), vagy add `-d`/`--data` payloadkent -- azt a kapu blankolja.' +
+    ' A LEGGYAKORIBB DOKUMENTACIOS ESET, es NEM kapu-hiba: egy tablazat-sor, ahol egy cella kozvetlenul a cso utan idopont-alakkal kezdodik (| at 14:16). Ott az at PARANCS-POZICIOBAN all, tehat a hejben ez tenyleg at-hivas -- a kapu helyesen olvassa. Idezojelben, proza kozepen es magyar toldalekkal (14:16-kor) atmegy. Es ezert nem vezet ide bisect: a tiltashoz a hatarolo es az at-ido EGYMAS MELLETT kell, tehat minden darabolas mindket felet atengedi. (Merve: e5005c84.)',
   // The only reason without a hint until now (card 97470e22, four measured
   // occurrences: a deny-list rationale, an installation-lane finding, and twice
   // a card comment). Every other reason tells the reader what DOES pass; this
