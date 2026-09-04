@@ -962,7 +962,18 @@ export function buildWakeMessage(
       ? 'Vedd fel a legfelso FELVEHETO tetelt. Ha egyik sem a tied, ird meg egy sorban, hogy miert --'
       : isReviewQueue
         ? 'Nem tudtam megnevezni felveheto ellenorzest. Ha a szamlalod megsem nulla, ird meg egy sorban --'
-        : 'Nincs felveheto munkad, csak valaszra varo ellenorzes. Ha ez sem a tied, ird meg egy sorban --',
+        : // SCOPED ON PURPOSE, and the old wording was not (card 5a499a19). `isMine` counts
+          // only cards with this agent's name on them, so "nincs felveheto munkad" was a
+          // statement about the ASSIGNED column read as a statement about the board.
+          // Measured 2026-09-04: 52 unowned `planned` delta-crm cards were invisible to
+          // this count, and rule 3 of the fleet page calls exactly those the pull list.
+          // An agent who believes there is no work STOPS -- the one failure this guard
+          // exists to prevent, and the same shape as telling a reviewer she has nothing
+          // while 40 items wait. The fix is not to list everything: it is that the guard
+          // must not say "no work" when it means "none assigned to you".
+          'Nincs A TE NEVEDEN felveheto munka, csak valaszra varo ellenorzes. A GAZDATLAN `planned` kartyak\n' +
+            'NEM szerepelnek ebben a szamban -- ha egyik ellenorzes sem a tied, azok a pull-listad. Ha meg azok\n' +
+            'sem, ird meg egy sorban --',
     'akkor a workcheck.json-od hazudik, es azt kell javitani, nem teged ebreszteni.',
   )
   return out.join('\n')

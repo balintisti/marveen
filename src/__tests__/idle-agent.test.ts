@@ -596,7 +596,20 @@ describe('buildWakeMessage', () => {
 
   it('says so plainly when there is nothing pickable, only reviews', () => {
     const msg = buildWakeMessage('dexter', 13, 1, [{ ...card('rev11111', 'high', 'r'), status: 'testing' }])
-    expect(msg).toMatch(/Nincs felveheto munkad/)
+    expect(msg).toMatch(/Nincs A TE NEVEDEN felveheto munka/)
+  })
+
+  // THE SENTENCE HAS TO STAY SCOPED (card 5a499a19). `isMine` counts only cards carrying
+  // this agent's name, so the old absolute wording -- "nincs felveheto munkad" -- reported
+  // the ASSIGNED column as if it were the board. Measured 2026-09-04: 52 unowned `planned`
+  // cards sat outside that count while rule 3 of the fleet page calls exactly those the
+  // pull list. This is not a wording test: the absolute form is what makes an agent STOP,
+  // and nothing else in the suite would notice it coming back.
+  it('never claims there is no work at all, only none under this name', () => {
+    const msg = buildWakeMessage('dexter', 13, 1, [{ ...card('rev11111', 'high', 'r'), status: 'testing' }])
+    expect(msg).toContain('A TE NEVEDEN')
+    expect(msg).toContain('GAZDATLAN')
+    expect(msg).not.toMatch(/Nincs felveheto munkad/)
   })
 
   it('says the count and the idle time, because the agent cannot see either', () => {
@@ -627,13 +640,16 @@ describe('buildWakeMessage', () => {
       { ...card('rev22222', 'urgent', 'another one'), status: 'testing' },
     ]
     const msg = buildWakeMessage('didi', 13, 40, items, 'testing_without_my_comment')
-    expect(msg).not.toMatch(/Nincs felveheto munkad/)
+    // Re-pointed at the sentence as it reads now (card 5a499a19). Left on the OLD wording
+    // this negative would pass for the wrong reason -- the phrase exists nowhere any more,
+    // so it could not fail, and the negative IS the point of this test.
+    expect(msg).not.toMatch(/Nincs A TE NEVEDEN felveheto munka/)
     expect(msg).toMatch(/FELVEHETO ELLENORZES \(2\)/)
     expect(msg).toContain('rev22222')
 
     // POSITIVE CONTROL -- same items, assignee-shaped check: still nothing to pick up.
     const asAssignee = buildWakeMessage('didi', 13, 40, items, 'assigned_open_cards')
-    expect(asAssignee).toMatch(/Nincs felveheto munkad/)
+    expect(asAssignee).toMatch(/Nincs A TE NEVEDEN felveheto munka/)
   })
 
   it('a review queue names more than three items, because they are the work', () => {
