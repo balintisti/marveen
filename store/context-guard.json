@@ -1,0 +1,77 @@
+{
+  "jarvis": {
+    "idleFlushEnabled": true
+  },
+  "marveen": {
+    "enabled": false,
+    "saturationRestart": true,
+    "actPct": 0.9,
+    "hardPct": 0.97,
+    "limitTokens": null,
+    "cooldownMinutes": 15,
+    "handoffTimeoutMinutes": 20,
+    "idleFlushEnabled": true,
+    "idleFlushTokens": 400000,
+    "idleMinutes": 20
+  },
+  "dexter": {
+    "enabled": false,
+    "saturationRestart": true,
+    "actPct": 0.9,
+    "hardPct": 0.97,
+    "limitTokens": null,
+    "cooldownMinutes": 15,
+    "handoffTimeoutMinutes": 20,
+    "idleFlushEnabled": true,
+    "idleFlushTokens": 400000,
+    "idleMinutes": 20
+  },
+  "didi": {
+    "enabled": false,
+    "saturationRestart": true,
+    "actPct": 0.9,
+    "hardPct": 0.97,
+    "limitTokens": null,
+    "cooldownMinutes": 15,
+    "handoffTimeoutMinutes": 20,
+    "idleFlushEnabled": true,
+    "idleFlushTokens": 400000,
+    "idleMinutes": 20
+  },
+  "friday": {
+    "enabled": false,
+    "saturationRestart": true,
+    "actPct": 0.9,
+    "hardPct": 0.97,
+    "limitTokens": null,
+    "cooldownMinutes": 15,
+    "handoffTimeoutMinutes": 20,
+    "idleFlushEnabled": true,
+    "idleFlushTokens": 400000,
+    "idleMinutes": 20
+  },
+  "mandark": {
+    "enabled": false,
+    "saturationRestart": true,
+    "actPct": 0.9,
+    "hardPct": 0.97,
+    "limitTokens": null,
+    "cooldownMinutes": 15,
+    "handoffTimeoutMinutes": 20,
+    "idleFlushEnabled": true,
+    "idleFlushTokens": 400000,
+    "idleMinutes": 20
+  },
+  "computress": {
+    "enabled": false,
+    "saturationRestart": true,
+    "actPct": 0.9,
+    "hardPct": 0.97,
+    "limitTokens": null,
+    "cooldownMinutes": 15,
+    "handoffTimeoutMinutes": 20,
+    "idleFlushEnabled": true,
+    "idleFlushTokens": 400000,
+    "idleMinutes": 20
+  }
+}

@@ -48,7 +48,20 @@ credentials.json
 # ATVEVE AZ UPSTREAMBOL (GITIGNENV820, 2026-08-23): a `*~` BARMELY titkot hordozo
 # fajl szerkeszto-mentesét elkapja, nem csak a .env-ekét. A mi mintank ezt nem fedte.
 *~
-store/
+# CGTRACK904 (card de0989de): `store/` as a DIRECTORY pattern stops traversal, so a
+# `!store/<file>` negation can never fire -- the same trap CLAUDEIGN820 records a few
+# lines below, on `.claude/`. Measured 2026-09-04 on a throwaway repo:
+#   `store/`  + `!store/context-guard.json`  -> STILL IGNORED   (the naive fix, silently)
+#   `store/*` + `!store/context-guard.json`  -> trackable, and nothing else in store/
+#                                               becomes visible (.dashboard-token, *.db
+#                                               and store/sub/ all stay ignored)
+# WHY THIS ONE FILE. It is the only CONFIG under store/; the rest is runtime state. And
+# untracked it was one `git clean -fd` from gone -- losing it turns idleFlushEnabled OFF
+# for all seven agents, silently, because the code default is `false` and "no entry" is a
+# legitimate opt-in state. Measured: the whole 1446-byte file differs from
+# DEFAULT_CONTEXT_GUARD in exactly that one field, for every agent.
+store/*
+!store/context-guard.json
 workspace/
 agents/
 reports/
