@@ -31,11 +31,36 @@ set -euo pipefail
 AGENT="${1:?agens nev kell}"; CARD="${2:?kartya id kell}"; SRC="${3:?fajl vagy - kell}"
 TOKEN_FILE=/Users/isti/marveen/store/.dashboard-token
 [ -r "$TOKEN_FILE" ] || { echo "NEM KULDTEM: nincs token ($TOKEN_FILE)" >&2; exit 1; }
+# A DOKUMENTALT `-` (STDIN) MOD 2026-09-04-IG SZERKEZETILEG LEHETETLEN VOLT, es NEMAN.
+# A python PROGRAM MAGA megy a stdin-en (`python3 - ... <<'PY'`), tehat mire a `sys.stdin.read()`
+# lefutott volna, a stdin-t mar a heredoc foglalta: a torzs URES lett. Merve, kontrollal:
+#   fajl modban 22 bajt | `-` modban 0 bajt | ugyanaz a python heredoc NELKUL, stdin-rol 22 bajt
+# Az utolso sor a kontroll: az olvaso jo, a heredoc az ok.
+# ES HANGOSAN BUKIK, NEM NEMAN -- ezt friday merte elesben, es az en elso jellemzesem tobbet
+# allitott a mertnel. A szerver kapuzza az ures tartalmat (`kanban.ts:668`:
+# `if (!author || !content) -> 400`), tehat ures komment NEM keletkezik, es a visszaolvasas
+# szoba sem kerul: a script a HTTPError agon lep ki.
+# A KAR EZERT NEM ADATVESZTES, HANEM FELREVEZETES: a hibauzenet `Szerzo es tartalom kotelezo`,
+# vagyis a HIVOT okolja egy rossz argumentumert, mikozben az ok az, hogy a heredoc ette meg a
+# stdin-t. friday sajat szava: "the message blames missing author/content instead of naming the
+# cause". Ez a javitas ezert nem egy nema hibat tesz hangossa, hanem egy HANGOS, de ROSSZ FELE
+# MUTATO hibat tesz pontossa -- es a kaput a HTTP hivas ELE teszi.
+# A javitas: a stdin-t a HEJ olvassa be, mielott a heredoc elindul.
+if [ "$SRC" = "-" ]; then
+  STDIN_TMP="$(mktemp)"; trap 'rm -f "$STDIN_TMP"' EXIT
+  cat > "$STDIN_TMP"
+  SRC="$STDIN_TMP"
+fi
+[ -s "$SRC" ] || { echo "NEM KULDTEM: a komment-torzs URES ($SRC)" >&2; exit 1; }
 STAMP="$(date '+%Y-%m-%d %H:%M:%S %Z')"
 python3 - "$AGENT" "$CARD" "$SRC" "$STAMP" "$TOKEN_FILE" <<'PY'
 import sys, json, re, urllib.request, urllib.error
 agent, card, src, stamp, tokfile = sys.argv[1:6]
-body = sys.stdin.read() if src == '-' else open(src, encoding='utf-8').read()
+body = open(src, encoding='utf-8').read()
+# MASODIK, FUGGETLEN KAPU: a hej `-s`-e egy csupa-szokoz fajlra is igazat ad, es egy
+# whitespace-komment ugyanolyan hasznalhatatlan artefaktum egy append-only vegponton.
+if not body.strip():
+    print('NEM KULDTEM: a komment-torzs URES vagy csak szokoz'); sys.exit(1)
 body = body.replace('__STAMP__', stamp)
 tok = open(tokfile).read().strip()
 base = 'http://localhost:3420/api/kanban/%s/comments' % card
