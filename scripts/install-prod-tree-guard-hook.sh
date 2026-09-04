@@ -95,6 +95,38 @@ if [ "$TOPLEVEL" = "$PROD_ROOT" ] && git rev-parse -q --verify MERGE_HEAD >/dev/
   exit 0
 fi
 
+# ALAPVONAL-KIVETEL (kartya c3573fd6). MERVE: 29 felulbiralasbol 18 (62%) a koteg UTANI
+# alapvonal-frissites, ahol a MERGE_HEAD MAR NEM letezik, tehat a merge-kivetel szerkezetileg
+# nem er ide. Egy or, amit a NORMAL munkafolyamatban ki kell kapcsolni, rossz helyen huzza a
+# vonalat -- es a naplo mar gyujti a zajt: 29-bol 26 indok NELKUL, 6 pedig ures (files=0).
+#
+# marveen SZANDEKOSAN nem javasolta a kezenfekvo alakot (kivetel a fajlra), mert az engedne, hogy
+# a fo fa a VEDELMET HORDOZO fajlt szerkessze. Ez a valtozat szukebb, es a harom feltetel EGYUTT
+# kell: barmelyik hianyzik, a kapu ugyanugy blokkol.
+#   1. a staged halmaz PONTOSAN ez az egy fajl (barmi mas mellette -> nincs kivetel)
+#   2. minden valtozott sor a GENERALT blokkon belul van (a ket konstans + a mero kommentje)
+#   3. egyik ertek sem CSOKKEN  -- ez az, ami a veszelyes esetet kizarja: az alapvonal
+#      LESZALLITASA epp az a mozdulat, amivel egy keszlet-zsugorodast el lehetne rejteni
+# MERVE a jelen tortenetre: 56 nem-merge commitbol 43 CSAK a generalt blokkot erinti, es az
+# ertekek monoton nonek (404/5148 -> 415/5265). Vagyis a kivetel a tenyleges tobbsegi esetet
+# fedi, es semmit nem enged, amit ma barki csinalna.
+_BASE_F="src/__tests__/setup/suite-size-guard.ts"
+if [ "$TOPLEVEL" = "$PROD_ROOT" ] && [ "${MARVEEN_PROD_COMMIT_OK:-0}" != "1" ] \
+   && [ "$(git diff --cached --name-only 2>/dev/null)" = "$_BASE_F" ]; then
+  _outside="$(git diff --cached -U0 -- "$_BASE_F" 2>/dev/null | grep -E '^[+-]' \
+      | grep -vE '^(\+\+\+|---)' \
+      | grep -vcE 'SUITE_BASELINE_(FILES|TESTS) = [0-9]+|Merve .*vitest list' || true)"
+  _of="$(git show "HEAD:$_BASE_F" 2>/dev/null | awk '/SUITE_BASELINE_FILES = /{print $NF}')"
+  _nf="$(git show ":0:$_BASE_F" 2>/dev/null | awk '/SUITE_BASELINE_FILES = /{print $NF}')"
+  _ot="$(git show "HEAD:$_BASE_F" 2>/dev/null | awk '/SUITE_BASELINE_TESTS = /{print $NF}')"
+  _nt="$(git show ":0:$_BASE_F" 2>/dev/null | awk '/SUITE_BASELINE_TESTS = /{print $NF}')"
+  if [ "${_outside:-1}" = "0" ] && [ -n "$_nf" ] && [ -n "$_nt" ] \
+     && [ "$_nf" -ge "${_of:-0}" ] && [ "$_nt" -ge "${_ot:-0}" ]; then
+    echo "prod-tree-guard: GEPI ALAPVONAL-FRISSITES (${_of:-?}/${_ot:-?} -> $_nf/$_nt) -- atengedve." >&2
+    exit 0
+  fi
+fi
+
 if [ "$TOPLEVEL" = "$PROD_ROOT" ] && [ "${MARVEEN_PROD_COMMIT_OK:-0}" != "1" ]; then
   echo "" >&2
   echo "BLOCKED: commit on the running main checkout ($PROD_ROOT)." >&2
