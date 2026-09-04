@@ -589,7 +589,13 @@ describe('buildWakeMessage', () => {
       { ...card('rev11111', 'normal', 'r'), status: 'testing' },
     ])
     expect(msg).toMatch(/FELVEHETO MUNKA \(1\)/)
-    expect(msg).toMatch(/VALASZRA VARO ELLENORZES \(1\)/)
+    // A FEJLEC AZT MONDJA KI, AMIT MER, nem azt, amit sejt: egy ellenorzo utolso kommentje
+    // ugyanugy lehet "rendben, nincs teendo", mint kerdes. computress merte 2026-09-04:
+    // 25 ilyenbol 6 hordozott valodi kerest -- ~4x tulszamolas egy olyan meronel, ami EBRESZT.
+    // marveen dontese: a SZOVEG valtozik, ask-detektort NEM epitunk (negy korabbi detektor
+    // 79/89/93/97%-os hamis pozitivon bukott).
+    expect(msg).toMatch(/ELLENORZO SZOLT UTOLJARA \(1\)/)
+    expect(msg).not.toMatch(/VALASZRA VARO ELLENORZES/)
     expect(msg).toContain('planned')
     expect(msg).toContain('testing')
   })
@@ -599,9 +605,31 @@ describe('buildWakeMessage', () => {
     expect(msg).toMatch(/Nincs felveheto munkad/)
   })
 
+  it('does not call a checker-last card something that waits for the agent', () => {
+    // A FEJLEC volt a defektus, nem csak a blokk-cim: "N tetel var rád" a MEGSZOLITAS,
+    // es a workcheck szama a review-kartyakat is tartalmazza. Ket allapot, ket mondat.
+    const withReview = buildWakeMessage('dexter', 13, 5, [
+      { ...card('work1111', 'normal', 'w'), status: 'planned' },
+      { ...card('rev11111', 'normal', 'r'), status: 'testing' },
+    ])
+    const head = withReview.split('\n')[0]
+    expect(head).toContain('5')
+    expect(head).toMatch(/ELLENORZO szolt utoljara/i)
+    expect(head).not.toMatch(/5 tetel var rád/)
+
+    // KONTROLL: review nelkul a regi, egyszeru mondat marad -- kulonben a fenti allitas
+    // egy olyan valtoztatast is atengedne, ami MINDEN fejlecet atir.
+    const noReview = buildWakeMessage('dexter', 13, 5, [{ ...card('work1111', 'normal', 'w'), status: 'planned' }])
+    expect(noReview.split('\n')[0]).toMatch(/5 tetel var rád/)
+    expect(noReview).not.toMatch(/ELLENORZO szolt utoljara/i)
+  })
+
   it('says the count and the idle time, because the agent cannot see either', () => {
     const msg = buildWakeMessage('didi', 13, 48, [card('aaaaaaaa1', 'high', 'x')])
     expect(msg).toContain('13')
+    // A DEKLARALT szam, nem a megnevezett tetelek szama -- a ketto kulonbozik, es a fejlecben
+    // a deklaralt all, mert epp azt nem latja az agens. (Az elso atirasomban `work.length`-re
+    // csereltem, es ez a sor fogta meg: mas MENNYISEG ugyanazon a helyen.)
     expect(msg).toContain('48')
   })
 

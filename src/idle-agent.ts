@@ -929,7 +929,9 @@ export function buildWakeMessage(
     `  ${c.id.slice(0, 8)}  ${(c.status ?? '?').padEnd(11)} ${(c.priority ?? 'normal').padEnd(6)}  ${(c.title ?? '').slice(0, 60)}`
 
   const out = [
-    `[tetlen-or] ${minutes} perce allsz ureses prompton, es ${workCount} tetel var rád.`,
+    review.length
+      ? `[tetlen-or] ${minutes} perce allsz ureses prompton, es ${workCount} tetel all a nevedent -- ebbol ${review.length} olyan, amin egy ELLENORZO szolt utoljara. Az NEM feltetlenul kerdes: egy "rendben, nincs teendo" ugyanigy nez ki.`
+      : `[tetlen-or] ${minutes} perce allsz ureses prompton, es ${workCount} tetel var rád.`,
     '',
     'EZ NEM SZEMREHANYAS, ES NEM A TE HIBAD. Egy agens nem tud maganak uj fordulot inditani:',
     'a szandek a fordulo belsejeben el, es a fordulo vegen meghal vele. Az egyetlen dolog, ami',
@@ -949,7 +951,7 @@ export function buildWakeMessage(
       '',
       isReviewQueue
         ? `EGYEB TETEL (${review.length}) -- nem a testing oszlopbol, nezd meg mit kerol:`
-        : `VALASZRA VARO ELLENORZES (${review.length}) -- ezeken egy ellenorzo szolt utoljara, nem munka:`,
+        : `ELLENORZO SZOLT UTOLJARA (${review.length}) -- ez NEM azt jelenti, hogy valaszt kernek: egy "rendben, nincs teendo" ugyanigy nez ki. Nezd meg, mit mondanak:`,
       ...review.slice(0, 3).map(line),
     )
   }
