@@ -26,7 +26,7 @@
  * tobbnek, mint ami.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, copyFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -144,6 +144,31 @@ describe('prod-tree-guard: a folyamatban levo merge lezarasa atmegy', () => {
     writeFileSync(join(repo, 'e.txt'), 'kesobbi, fuggetlen\n')
     git('add', '-A')
     expect(tryCommit('a merge utani kovetkezo commit')).toBe(false)
+  })
+
+  it('EGY MASIK FABAN a merge-ag NEM SZOLAL MEG -- az uzenet a prod fara van szukitve', () => {
+    // MERT HIANY POTLASA: a `$TOPLEVEL = $PROD_ROOT` feltetelt a merge-agbol KIVEVE a batéria
+    // tobbi esete VALTOZATLANUL zold maradt (mutacio 3, 2026-09-04). Nem defektus -- egy nem-prod
+    // faban az or amugy is atengedne --, hanem REDUNDANS FELTETEL a BLOKKOLAS szempontjabol.
+    // Ami NEM redundans, az az UZENET: nelkule minden worktree minden merge-lezarasa kiirna egy
+    // "prod-tree-guard: ..." sort, ami nem rola szol. Ez az allitas azt a felet rogziti, es
+    // ezzel a 3. mutacio is diszkriminal.
+    const wt = mkdtempSync(join(tmpdir(), 'prod-guard-wt-'))
+    try {
+      execFileSync('git', ['worktree', 'add', '-q', '--detach', wt, 'main'], { cwd: repo, stdio: 'pipe' })
+      // Ugyanaz a befejezetlen merge, csak a CSATOLT worktreeben (ott TOPLEVEL != PROD_ROOT).
+      execFileSync('git', ['merge', '--no-commit', '--no-edit', 'tiszta'], { cwd: wt, stdio: 'pipe' })
+      // A GUARD A STDERR-RE IR, ES AZ `execFileSync` A STDOUT-TAL TER VISSZA. Az elso alakom
+      // a stdout-ot allitotta, tehat a mutacio (a prod-ellenorzes kivetele a merge-agbol) UGY IS
+      // tulelt, hogy az uzenet tenylegesen megjelent -- a lap sajat lecke je arrol, hogy egy
+      // burkolo eldobhatja azt a csatornat, amin az or beszel. Ezert `spawnSync` es stderr.
+      const r = spawnSync('git', ['commit', '-m', 'merge egy masik faban'], { cwd: wt, encoding: 'utf8' })
+      expect(r.status).toBe(0)
+      expect(r.stderr ?? '').not.toContain('prod-tree-guard')
+    } finally {
+      rmSync(wt, { recursive: true, force: true })
+      try { execFileSync('git', ['worktree', 'prune'], { cwd: repo, stdio: 'pipe' }) } catch { /* takaritas */ }
+    }
   })
 
   it('a felulbiralas TOVABBRA IS mukodik, es a merge-ut nem valtja ki', () => {
