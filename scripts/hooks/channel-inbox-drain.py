@@ -48,7 +48,9 @@ def _is_main_session(payload):
     cwd = (payload or {}).get("cwd") or ""
     if _HAS_LEDGER:
         try:
-            agent_id = ledger_lib.agent_id_from_cwd(cwd)
+            # SESSION identity, not the shell's (card bfd8d307, upstream LEDGERCWD828):
+            # a `cd` into agents/<x>/ used to make the main session look like a sub-agent.
+            agent_id = ledger_lib.agent_id_from_payload(payload)
             return agent_id == ledger_lib.main_agent_id()
         except Exception:
             pass

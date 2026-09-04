@@ -100,7 +100,13 @@ def main():
     except Exception:
         sys.exit(0)
 
-    agent_id = ledger_lib.agent_id_from_cwd(payload.get("cwd"))
+    # SESSION identity, not the shell's (card bfd8d307, upstream LEDGERCWD828).
+    # The cwd is mutable within a session: a `cd` into agents/<x>/ used to make this
+    # guard look up the open question under <x>, find no outbound under the real id,
+    # and block again -- upstream measured that shape as a TRIPLE-SEND to the owner.
+    # agent_id_from_payload falls through to agent_id_from_cwd when there is no
+    # transcript and no override, so a caller with neither behaves as before.
+    agent_id = ledger_lib.agent_id_from_payload(payload)
 
     try:
         oq = ledger_lib.open_question_with_age(agent_id)

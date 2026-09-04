@@ -102,7 +102,11 @@ def main():
     # Double-check (the matcher should already filter): only the telegram reply.
     if "telegram" not in tool or "reply" not in tool:
         sys.exit(0)
-    agent_id = ledger_lib.agent_id_from_cwd(payload.get("cwd"))
+    # SESSION identity, not the shell's (card bfd8d307, upstream LEDGERCWD828): the cwd is
+    # mutable within a session, so a `cd` into agents/<x>/ re-attributed every later row.
+    # The chain falls through to agent_id_from_cwd, so a payload with neither a transcript
+    # nor an override behaves exactly as before.
+    agent_id = ledger_lib.agent_id_from_payload(payload)
     tool_input = payload.get("tool_input") or {}
     chat_id = tool_input.get("chat_id")
     chat_id = "" if chat_id is None else str(chat_id).strip()
