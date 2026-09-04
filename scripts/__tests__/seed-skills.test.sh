@@ -147,10 +147,36 @@ else
   fail "unsubstituted {{placeholder}} left in seeded output: $(grep -rl '{{' "$SCHED_TARGET" | head -2 | tr '\n' ' ')"
 fi
 
-if grep -q "skip ha assignee='testbot'" "$SCHED_TARGET/kanban-audit/SKILL.md"; then
-  pass "MAIN_AGENT_ID substituted in SKILL.md buktatok"
+# A BUKTATOK-SZEKCIO A FUTTATOT MONDJA KI, NEM EGY NEVET (kartya aee395cc).
+#
+# A REGI allitas egy behelyettesitett AGENS-NEVET keresett itt ("skip ha assignee='testbot'").
+# Az elavult: a `213f8ad` ("ship the kanban-audit RULES, not the instance data") SZANDEKOSAN
+# vette ki a nevet a sablonbol -- a commit-uzenete kimondja, hogy "what stays behind is ours --
+# card ids, AGENT NAMES, our counts". A sablonban ma NULLA `{{MAIN_AGENT_ID}}` van (kontroll:
+# ugyanaz a mero LATJA ugyanezt a helyorzot a seed-scheduled-tasks tobbi reszen), es a mondat
+# NEVROL a FUTTATORA lett atirva.
+#
+# HAROM DOLOG, AMIT EZ AZ ALLITAS SZANDEKOSAN MASKEPP CSINAL A REGINEL:
+#
+# 1. EKEZETES ALAKRA ILLESZT, es ezt itt kimondjuk. A szabaly szovege ekezetes magyar; egy
+#    ASCII minta (`FUTTATOJARA`, `SAJAT agens`) magabiztos NULLAT ad egy JELEN LEVO szovegre.
+#    Merve ezen a fajlon: ASCII alak 0 talalat, ekezetes alak 2. Egy nemán nullazo grep olyan
+#    tesztet adna, ami azert zold, mert SOHA NEM NEZ ODA -- rosszabb, mint az elavult, amit
+#    lecserel.
+# 2. A `## Buktatok` SZEKCIORA SZUKIT. A szabaly a fajlban KETSZER szerepel (a 4. lepesben es a
+#    buktatoknal), tehat egy csupasz substring-illesztest a MASIK elofordulas is kielegitene, es
+#    tulelne annak a sornak a torleset, amit pinelni akarunk. Merve: a teljes fajlban 2 talalat,
+#    a szekcion belul 1.
+# 3. A SZEKCIO-HATART ASCII elotaggal fogja (`^## Buktat`), tehat maga a kivonas nem esik
+#    aldozatul ugyanannak az ekezet-csapdanak, amit a 1. pont ir le.
+#
+# MUTACIOVAL IGAZOLVA (aee395cc): a buktatok-szekciobol kivéve ezt a mondatot, ez az allitas
+# PIROSRA valt; a 4. lepesbeli masodik elofordulas NEM tartja zolden.
+_BUKTATOK="$(awk '/^## Buktat/{f=1;next} f&&/^## /{exit} f' "$SCHED_TARGET/kanban-audit/SKILL.md")"
+if printf '%s' "$_BUKTATOK" | grep -qF 'SAJÁT ágens-azonosítód'; then
+  pass "a buktatok-szekcio a FUTTATO-alapu szabalyt mondja ki (ekezetes alakra illesztve)"
 else
-  fail "MAIN_AGENT_ID NOT substituted in SKILL.md buktatok"
+  fail "a buktatok-szekcio NEM mondja ki a futtato-alapu szabalyt (vagy a szekcio-kivonas romlott el)"
 fi
 
 # No raw placeholders remain
