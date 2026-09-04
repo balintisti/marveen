@@ -12,8 +12,11 @@
  * not know" instead of with silence, because a missing value that looks like a
  * healthy one does not just fail to warn, it CLOSES the question.
  */
-import { describe, it, expect } from 'vitest'
-import { judgeBuildFreshness, judgeLocalOnly } from '../web/build-freshness.js'
+import { describe, it, expect, afterEach } from 'vitest'
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { judgeBuildFreshness, judgeLocalOnly, newestMtime, isTestDir } from '../web/build-freshness.js'
 
 const T = (h: number) => new Date(`2026-08-20T${String(h).padStart(2, '0')}:00:00Z`).getTime()
 
@@ -218,5 +221,91 @@ describe('judgeLocalOnly', () => {
     const v = judgeLocalOnly(args({ commits: 3, branch: 'develop' }))
     expect(v.commits).toBe(3)
     expect(v.branch).toBe('develop')
+  })
+})
+
+/**
+ * A `__tests__` KIZARASA A FRISSESSEG-MEROBOL -- kartya 390532b0.
+ *
+ * A mero MTIME-VISZONYT mer, tehat szerkezetileg nem tudja megkulonboztetni:
+ *     "a futo kod le van maradva"        <- VALODI, ujrainditast er
+ *     "egy teszt-fajl nincs leforditva"  <- a futo szolgaltatas SOHA nem tolt be
+ *                                           `__tests__` modult
+ * marveen merte 2026-09-04-en: ket teszt-fajl commitolasa `stale-source`-t adott, build utan
+ * `stale-process`-t. Aznap EGYSZER mar ment VALODI ujrainditasi keres Istihez ezen a jelzesen --
+ * egy jelzes, ami teszt-fajlra is tuzel, elkopik, es a kovetkezo valodit is vallrandítas fogadja.
+ *
+ * A KONTROLL (a masodik eset) a lenyeg: `skipDir` NELKUL ugyanaz a fa BEVESZI a teszt-fajlt.
+ * Enelkul mind a tobbi allitas igaz lenne egy olyan bejarora is, ami soha nem lat semmit.
+ */
+describe('newestMtime: a __tests__ kizarasa', () => {
+  const made: string[] = []
+  afterEach(() => { for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true }) })
+
+  /** Fa, ahol a LEGUJABB fajl szandekosan a `__tests__` alatt van. */
+  function tree(): string {
+    const d = mkdtempSync(join(tmpdir(), 'newest-mtime-'))
+    made.push(d)
+    mkdirSync(join(d, 'web'), { recursive: true })
+    mkdirSync(join(d, '__tests__'), { recursive: true })
+    writeFileSync(join(d, 'web', 'app.ts'), 'x')
+    utimesSync(join(d, 'web', 'app.ts'), new Date(1_000_000), new Date(1_000_000))
+    writeFileSync(join(d, '__tests__', 'spec.ts'), 'x')
+    utimesSync(join(d, '__tests__', 'spec.ts'), new Date(9_000_000), new Date(9_000_000))
+    return d
+  }
+
+  const ts = (n: string) => n.endsWith('.ts')
+  const notTests = isTestDir
+
+  it('a teszt-fajl NEM viszi fel a legujabb mtime-ot', () => {
+    const r = newestMtime(tree(), ts, notTests)
+    expect(r?.file).toBe('web/app.ts')
+    expect(r?.at).toBe(1_000_000)
+  })
+
+  it('KONTROLL: kizaras NELKUL ugyanaz a fa a teszt-fajlt adja', () => {
+    const r = newestMtime(tree(), ts)
+    expect(r?.file).toBe('__tests__/spec.ts')
+  })
+
+  it('a kizart fajlok az `all` tombbol is kimaradnak (a newerSourceCount ebbol szamol)', () => {
+    expect(newestMtime(tree(), ts, notTests)?.all).toHaveLength(1)
+    expect(newestMtime(tree(), ts)?.all).toHaveLength(2)
+  })
+
+  /**
+   * A BEKOTES, ES NEM A FUGGVENY -- ez a resz MERESBOL kerult ide, nem elovigyazatossagbol.
+   *
+   * A fenti esetek a BEJAROT merik, es zoldek maradnak akkor is, ha a hivasi hely NEM adja at a
+   * kizarast. Megmerve (mutacio, 2026-09-04): a `notTests` predikatumot `() => false`-ra cserelve
+   * mind a 28 teszt ZOLD MARADT -- vagyis a defektus visszaterhetne ugy, hogy semmi nem szol.
+   * Ezert allit ez a fajta MAGARA A HIVASRA. (A `getBuildFreshness` a valodi `PROJECT_ROOT`-ot
+   * jarja be, ezert nem viselkedessel, hanem a forrason allitunk -- ugyanaz az alak, mint a
+   * repo mas szerkezeti orjeinél.)
+   */
+  it('a getBuildFreshness MINDKET oldalon atadja a kizarast (bekotes, nem csak kepesseg)', () => {
+    const src = readFileSync(new URL('../web/build-freshness.ts', import.meta.url), 'utf8')
+    const body = src.slice(src.indexOf('export function getBuildFreshness'))
+    // SORONKENT, nem `[^)]*`-gal: a hivas beagyazott `join(...)`-t tartalmaz, tehat egy
+    // zarojelig tarto minta a `join(...)`-nal elvagna, es a talalat SOSEM tartalmazna a
+    // harmadik argumentumot -- vagyis a teszt mindig bukna, barmit is csinal a kod.
+    const calls = body.slice(0, body.indexOf('judgeBuildFreshness'))
+      .split('\n').filter(l => l.includes('newestMtime('))
+    expect(calls).toHaveLength(2)                      // a src/ es a dist/ oldal
+    for (const c of calls) expect(c).toContain('isTestDir')
+    // ES A VISELKEDESE, kulonben ez csak NEV-egyezes: egy `() => false`-ra irt predikatum
+    // atmenne a fenti sztring-ellenorzesen. Merve -- az elso valtozatomat pont ez a
+    // mutacio elte tul.
+    expect(isTestDir('__tests__')).toBe(true)
+    expect(isTestDir('web')).toBe(false)
+  })
+
+  it('a kizaras a NEVRE szol, nem az utvonalra: a mely __tests__ is kimarad', () => {
+    const d = tree()
+    mkdirSync(join(d, 'web', '__tests__'), { recursive: true })
+    writeFileSync(join(d, 'web', '__tests__', 'deep.ts'), 'x')
+    utimesSync(join(d, 'web', '__tests__', 'deep.ts'), new Date(8_000_000), new Date(8_000_000))
+    expect(newestMtime(d, ts, notTests)?.file).toBe('web/app.ts')
   })
 })

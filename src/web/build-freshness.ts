@@ -336,6 +336,7 @@ export function readLocalOnly(now: number = Date.now()): LocalOnlyState {
 export function newestMtime(
   dir: string,
   keep: (name: string) => boolean = () => true,
+  skipDir: (name: string) => boolean = () => false,
 ): { at: number; file: string; all: number[] } | null {
   let best: { at: number; file: string } | null = null
   const all: number[] = []
@@ -348,7 +349,7 @@ export function newestMtime(
       const childRel = rel ? `${rel}/${name}` : name
       let st: ReturnType<typeof statSync>
       try { st = statSync(childAbs) } catch { continue }
-      if (st.isDirectory()) { walk(childAbs, childRel); continue }
+      if (st.isDirectory()) { if (!skipDir(name)) walk(childAbs, childRel); continue }
       if (!keep(name)) continue
       all.push(st.mtimeMs)
       if (!best || st.mtimeMs > best.at) best = { at: st.mtimeMs, file: childRel }
@@ -367,13 +368,36 @@ export function newestMtime(
 const CACHE_TTL_MS = 60_000
 let cached: { at: number; value: BuildFreshness } | null = null
 
+/**
+ * A frissesseg-mero populaciojabol kizart konyvtarnev. EXPORTALVA, mert kulonben csak a
+ * NEVE lenne allithato a hivasi helyen, a VISELKEDESE nem -- es egy `() => false`-ra irt
+ * predikatum ugyanugy atmenne egy nev-alapu ellenorzesen. (Merve: pontosan ez a mutacio
+ * TULELTE az elso valtozatot.)
+ */
+export const isTestDir = (name: string): boolean => name === '__tests__'
+
 export function getBuildFreshness(now: number = Date.now()): BuildFreshness {
   if (cached && now - cached.at < CACHE_TTL_MS) return cached.value
 
   // `.ts` only: a stray `.map` or a copied asset under src/ is not something
   // anybody needs to recompile for.
-  const src = newestMtime(join(PROJECT_ROOT, 'src'), n => n.endsWith('.ts'))
-  const dist = newestMtime(join(PROJECT_ROOT, 'dist'), n => n.endsWith('.js'))
+  //
+  // AND `__tests__` IS EXCLUDED FROM BOTH SIDES -- kartya 390532b0, marveen merte a sajat
+  // munkamenetében 2026-09-04-en. Ez a mero MTIME-VISZONYT mer, tehat szerkezetileg nem tudja
+  // megkulonboztetni a ket allapotot:
+  //     "a futo kod le van maradva"        <- VALODI, ujrainditast er
+  //     "egy teszt-fajl nincs leforditva"  <- a futo szolgaltatas SOHA nem tolt be
+  //                                           `__tests__` modult, tehat semmit nem jelent
+  // Mert sorozat: ket teszt-fajl commitolasa `stale-source`-t adott, a build utan pedig
+  // `stale-process`-t -- vagyis ujrainditast kert egy valtozasra, ami a futo folyamatot el sem
+  // eri. Aznap EGYSZER mar ment valodi ujrainditasi keres Istihez ugyanezen a jelzesen; ha a
+  // jelzes teszt-fajlra is tuzel, elkopik, es a kovetkezo VALODI-t is vallrandítas fogadja.
+  //
+  // MINDKET OLDAL KELL. Csak a `src/` szurese a `stale-source`-t szuntetne meg, de a build utan
+  // a `dist/__tests__` friss .js-ei felvinnek a `builtAt`-ot a folyamat indulasa fole, tehat
+  // `stale-process` jonne -- ugyanaz az eszkalacio, egy lepessel kesobb.
+  const src = newestMtime(join(PROJECT_ROOT, 'src'), n => n.endsWith('.ts'), isTestDir)
+  const dist = newestMtime(join(PROJECT_ROOT, 'dist'), n => n.endsWith('.js'), isTestDir)
 
   const builtAt = dist?.at ?? null
   const value = judgeBuildFreshness({
