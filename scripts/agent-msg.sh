@@ -42,6 +42,48 @@ LOG="$BASE/store/agent-msg-failures.log"
 
 FROM="${1:?from required}"; TO="${2:?to required}"; C="${3:?content required (or - for STDIN)}"
 [ "$C" = "-" ] && C="$(cat)"
+
+# A FAJLNEV NEM UZENET (kartya 3caaaf62 kore, merve 2026-09-03).
+#
+# Ez a helper TARTALMAT var a 3. argumentumban; a FAJL-alak a `- < "$f"`. Aki
+# fajlnevet ad at ott, ahol tartalmat kellene, annak a helper `OK id=`-vel
+# nyugtazza, hogy SIKERESEN kikuldte a rossz dolgot -- a cimzett egy utvonalat
+# kap, a szoveg sehova nem jut el, es a kuldo azt hiszi, elment.
+#
+# NEM ELMELETI, ES NEM EGY EMBER FIGYELMETLENSEGE: a teljes uzenet-tortenetben
+# (9740 uzenet) ELEVEN ilyen van -- 08-28-on egy, 09-02-on negy, 09-03 delutan
+# HAT, egymas utan, ugyanattol a kuldotol, aki a legtobbet kuldi. A csapda a ket
+# testverhelper eltero szignaturajabol jon (a `card-comment.sh` FAJLT var, ez
+# TARTALMAT), es a sajat memoriajaban BENNE ALL, nevvel egyutt -- megis hatszor
+# futott bele egy delutan. Egy szabaly, amit ismerni kell hozza, nem szabaly.
+#
+# A SZURO PRECIZITASA MERVE, NEM BECSULVE: a feltetel az, hogy a torzs EGYETLEN
+# szo, `/`-rel kezdodik, ES a fajl LETEZIK. Erre a harom feltetelre a 9740
+# uzenetbol 11 illeszkedik, es MIND A 11 a hiba volt -- nulla hamis pozitiv a
+# teljes tortenetre. A LETEZES a dontő tag: egy nem letezo utat emlito uzenet
+# (idezet, hivatkozas) atmegy, mert azt nem lehetett volna `- < "$f"`-fel kuldeni.
+#
+# FAIL-CLOSED, mert a kar iranya nem szimmetrikus: egy visszautasitott kuldes
+# egy ujraprobalasba kerul, egy sikeresen kikuldott utvonal viszont EGY TELJES
+# KORT -- a cimzett elolvassa, nem ert semmit, visszakerdez, a kuldo ujrakuld.
+# Ma pontosan ez tortent, hatszor.
+case "$C" in
+  */*)
+    if [ "${4:-}" != "--force" ] && [ "$(printf '%s' "$C" | wc -l | tr -d ' ')" = "0" ] \
+       && [ "$(printf '%s' "$C" | wc -w | tr -d ' ')" = "1" ] && [ -e "$C" ]; then
+      echo "NEM KULDTEM. A tartalom egyetlen szo, es egy LETEZO fajl utvonala:" >&2
+      echo "  $C" >&2
+      echo "Ez a helper TARTALMAT var a 3. argumentumban; fajlbol igy kuldj:" >&2
+      echo "  bash scripts/agent-msg.sh $FROM $TO - < \"$C\"" >&2
+      echo "(Ha tenyleg csak ezt az utvonalat akartad elkuldeni: negyedik argumentumkent --force.)" >&2
+      # EXIT 3, NEM 2, es ez nem izles: a 2 MAR FOGLALT ebben a szkriptben -- az a
+      # sorhossz-megtagadas (:295). Ket kulonbozo hir egy kilepesi kodon oszotozva
+      # megkulonboztethetetlen egy `if` szamara, es a hivo epp azert nezi a kodot,
+      # hogy tudja, MIT tegyen: a sorhossznal varni kell, itt at kell irni a hivast.
+      exit 3
+    fi
+    ;;
+esac
 [ -r "$TOKEN_FILE" ] || { echo "FAIL: no token file at $TOKEN_FILE"; exit 1; }
 TOKEN="$(cat "$TOKEN_FILE")"
 
@@ -289,13 +331,24 @@ fi
 # A prefix would shift any `[Eredmény] ...` sent through this helper out of both
 # patterns and re-open a documented incident. Nothing parses the END.
 STAMP_TIME="$(date '+%Y-%m-%d %H:%M %Z')"
+# WHOSE queue, AND WHEN -- both, because the footnote is read by the RECIPIENT
+# (card 3caaaf62). `sor: 0` at the end of a delivered message reads as "nothing
+# is waiting for me", but the number is the RECIPIENT'S depth measured BEFORE
+# this message was added -- so the one message they are holding is not in it.
+# Measured on marveen's own misreading, 2026-08-25: a `sor: 0` footnote on
+# dexter's report was read as dexter's live queue, and produced a correct
+# conclusion with a false reason. That is the worse kind, because a wrong reason
+# attached to a right answer does not get caught -- it just travels.
+# The number is unchanged; only its label is. Nothing parses this footnote
+# (checked across src/, dist/, scripts/, web/), and nothing parses the END of a
+# message at all -- see the incident note above about PREFIXES.
 if [ "$FORCE" = "--force" ]; then
-  STAMP_QUEUE="sor: nem merve (--force)"
+  STAMP_QUEUE="cimzett sora: nem merve (--force)"
 elif [ -z "${DEPTH_PRE:-}" ]; then
   # Say it, do not omit it: a missing field reads as "nothing to report".
-  STAMP_QUEUE="sor: nem merheto"
+  STAMP_QUEUE="cimzett sora: nem merheto"
 else
-  STAMP_QUEUE="sor: $DEPTH_PRE"
+  STAMP_QUEUE="cimzett sora: $DEPTH_PRE (kuldes elott)"
 fi
 C="$C
 

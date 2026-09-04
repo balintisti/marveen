@@ -1,7 +1,7 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -103,6 +103,24 @@ function send(root: string, port: number, args: string[]): Promise<{ status: num
   })
 }
 
+// Same as send(), but feeds a file into STDIN -- the `- < "$f"` form the path
+// guard's refusal points people at. Needed so the guard's negative control runs
+// through the ACTUAL route, not a paraphrase of it.
+function sendStdin(root: string, port: number, args: string[], stdinFile: string): Promise<{ status: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const p = spawn('bash', [join(root, 'scripts', 'agent-msg.sh'), ...args], {
+      env: { ...process.env, MARVEEN_WEB_PORT: String(port) },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    p.stdout.on('data', (c) => (stdout += c))
+    p.stderr.on('data', (c) => (stderr += c))
+    p.stdin.end(readFileSync(stdinFile))
+    p.on('close', (code) => resolve({ status: code ?? -1, stdout, stderr }))
+  })
+}
+
 describe('agent-msg.sh -- the send stamp', () => {
   it('appends the stamp, and the ORIGINAL text still starts the message', async () => {
     // The regression this whole design is shaped around. `[Eredmény]` must stay
@@ -132,7 +150,7 @@ describe('agent-msg.sh -- the send stamp', () => {
     const { port, bodies } = await fakeDashboard()
     const r = await send(installRoot('nodb'), port, ['friday', 'marveen', 'torzs'])
     expect(r.status).toBe(0)
-    expect(bodies[0].content).toContain('sor: nem merheto')
+    expect(bodies[0].content).toContain('cimzett sora: nem merheto')
     expect(r.stderr).toMatch(/NEM tudtam megmerni/)
   })
 
@@ -141,14 +159,14 @@ describe('agent-msg.sh -- the send stamp', () => {
     const { port, bodies } = await fakeDashboard()
     const r = await send(installRoot('depth', { to: 'marveen', count: 2 }), port, ['friday', 'marveen', 'torzs'])
     expect(r.status).toBe(0)
-    expect(bodies[0].content).toContain('sor: 2')
+    expect(bodies[0].content).toContain('cimzett sora: 2 (kuldes elott)')
   })
 
   it('counts only the RECIPIENT queue, not every pending message', async () => {
     const { port, bodies } = await fakeDashboard()
     const r = await send(installRoot('other', { to: 'dexter', count: 4 }), port, ['friday', 'marveen', 'torzs'])
     expect(r.status).toBe(0)
-    expect(bodies[0].content).toContain('sor: 0')
+    expect(bodies[0].content).toContain('cimzett sora: 0 (kuldes elott)')
   })
 
   it('still refuses at 3+ waiting -- the stamp did not weaken the gate', async () => {
@@ -167,7 +185,7 @@ describe('agent-msg.sh -- the send stamp', () => {
     const r = await send(installRoot('force', { to: 'marveen', count: 5 }), port, ['friday', 'marveen', 'torzs', '--force'])
     expect(r.status).toBe(0)
     expect(bodies[0].content).toContain('nem merve (--force)')
-    expect(bodies[0].content).not.toMatch(/sor: \d/)
+    expect(bodies[0].content).not.toMatch(/cimzett sora: \d/)
   })
 
   it('keeps the OK id= contract intact -- callers and CLAUDE.md grep for it', async () => {
@@ -240,5 +258,71 @@ describe('agent-msg.sh -- a __STAMP__ es a kuldesi belyeg EGYUTT el', () => {
     })
     expect(r.status).not.toBe(0)
     expect(bodies, 'a kuldesnek EL SEM KELLETT VOLNA INDULNIA').toHaveLength(0)
+  })
+
+  // Card 3caaaf62. The footnote is read by the RECIPIENT, so a bare `sor: 0` reads
+  // as "nothing is waiting for me" -- while the number is the recipient's depth
+  // BEFORE this message was added, so the one message they are holding is not in
+  // it. Measured on marveen's own misreading: it produced a correct conclusion
+  // with a false reason, which is the kind that travels because nothing catches it.
+  it('names WHOSE queue and WHEN -- not just a number', async () => {
+    const { port, bodies } = await fakeDashboard()
+    const r = await send(installRoot('label', { to: 'marveen', count: 2 }), port, ['friday', 'marveen', 'torzs'])
+    expect(r.status).toBe(0)
+    const stamp = /\[KULDVE:[^\]]*\]/.exec(bodies[0].content)![0]
+    // Both halves, because either alone still misleads: a number without an owner,
+    // or an owner without the timing (this message is not counted in it).
+    expect(stamp).toContain('cimzett sora')
+    expect(stamp).toContain('kuldes elott')
+    // And the bare form must be gone -- this is what a later "tidy up" restores.
+    expect(stamp).not.toMatch(/\| sor: /)
+  })
+
+  // A FILENAME IS NOT A MESSAGE (measured 2026-09-03). This helper takes CONTENT
+  // in argument 3; the file form is `- < "$f"`. Passing a path there made the
+  // helper answer `OK id=` for successfully delivering the WRONG thing -- the
+  // recipient got a path, the text reached nobody, and the sender believed it
+  // was sent. Eleven times in 9740 messages, six of them in one afternoon.
+  // Precision measured, not estimated: single word + starts with / + the file
+  // EXISTS matched 11 of 9740, and all 11 were the mistake. Existence is the
+  // load-bearing term -- a message merely MENTIONING a path that does not exist
+  // could not have been sent with `- < "$f"` and must pass.
+  it('refuses a bare EXISTING file path as the message body', async () => {
+    const { port } = await fakeDashboard()
+    const tmp = join(tmpdir(), `am-guard-${Date.now()}`)
+    writeFileSync(tmp, 'the real message\n')
+    try {
+      const r = await send(installRoot('pathguard', { to: 'marveen', count: 0 }), port, ['friday', 'marveen', tmp])
+      // 3, not 2: exit 2 is already the queue-depth refusal in this script, and a
+      // caller reading the code needs to know WHICH -- wait, versus rewrite the call.
+      expect(r.status).toBe(3)
+      expect(r.stderr).toContain('NEM KULDTEM')
+      // The refusal must name the working form, or it only says no.
+      expect(r.stderr).toContain('- < ')
+    } finally { rmSync(tmp, { force: true }) }
+  })
+
+  it('THE NEGATIVE CONTROL: the same file through the stdin branch still SENDS', async () => {
+    // Named on the card as load-bearing, and it is: without it a gate that refused
+    // EVERYTHING would look green here. The positive case proves the gate can say
+    // no; only this proves it can still say yes -- and through the very route the
+    // refusal tells people to use.
+    const { port, bodies } = await fakeDashboard()
+    const tmp = join(tmpdir(), `am-stdin-${Date.now()}`)
+    const body = 'x'.repeat(600)
+    writeFileSync(tmp, body + '\n')
+    try {
+      const r = await sendStdin(installRoot('stdinok', { to: 'marveen', count: 0 }), port, ['friday', 'marveen', '-'], tmp)
+      expect(r.status).toBe(0)
+      expect(bodies[0].content.length).toBeGreaterThan(500)
+      expect(bodies[0].content).toContain(body)
+    } finally { rmSync(tmp, { force: true }) }
+  })
+
+  it('lets a path that does NOT exist through -- that is a mention, not a mistake', async () => {
+    const { port, bodies } = await fakeDashboard()
+    const r = await send(installRoot('mention', { to: 'marveen', count: 0 }), port, ['friday', 'marveen', '/no/such/path/anywhere'])
+    expect(r.status).toBe(0)
+    expect(bodies[0].content).toContain('/no/such/path/anywhere')
   })
 })
