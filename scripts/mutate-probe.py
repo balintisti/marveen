@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""mutate-probe.py -- egy mutacios proba HAROM kontrollal, HAROM kilepesi koddal.
+"""mutate-probe.py -- egy mutacios proba TOBB KONTROLLAL, HAROM kilepesi koddal.
+
+A KONTROLLOK SZAMA SZANDEKOSAN NEM ALL ITT: szamold meg a lentebbi
+"N. KONTROLL" blokkokat. Ez a cim "HAROM kontrollal"-t mondott, mikozben a torzse
+mar egy NEGYEDIKET (fedettseg) es egy OTODIKET (a SIGKILL-t tulelo jelzo) is
+dokumental -- a letrehozo commit (`41a9e43`) sajat targysora is OTOT mond. friday
+2026-09-04-en EBBOL a cimbol adta tovabb tevesen, hogy az eszkoznek harom kontrollja
+van. A szam eltavolitasa nem kozmetika: igy nincs mi elavuljon a kovetkezo
+hozzatoldaskor. (A HAROM KILEPESI KOD marad, mert az szerkezeti -- harom konstans.)
 
 MIERT LETEZIK. Egy mutacios proba akkor er valamit, ha a ZOLD eredmeny EGY dolgot
 jelent. 2026-08-24-en egy nap alatt HAROM kulonbozo mechanizmus adott zoldet
