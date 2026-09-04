@@ -60,6 +60,15 @@ DEFAULT_REPEAT_H = 4
 # MIT LATOTT. 60 perc -- lasd heartbeat_sec() es compose_heartbeat().
 DEFAULT_HEARTBEAT_MIN = 60
 
+# LEMEZ-RIASZTAS (3cf52601). CSAK RIASZT, NEM TAKARIT: a 06-03-i incidens MERT kara
+# az volt, hogy a bejovo uzenetek elvesztek, AMIG EGY EMBER ESZRE NEM VETTE -- a kar
+# a CSEND, nem a takaritas hianya. A torles kulon kerdes (0dcf8eef, Isti dontese).
+# A kuszobok a `disk-space-guard.sh` SAJAT szamai (90 reap / 95 alert). Szandekosan
+# NINCS alacsonyabb "korai figyelmeztetes": ez a sor Isti TELEFONJARA megy, ahol egy
+# hamis pozitiv ara nem egy naplosor.
+DISK_WARN_PCT = 90
+DISK_CRIT_PCT = 95
+
 
 def _env_int(name, default):
     v = os.environ.get(name)
@@ -83,6 +92,71 @@ def repeat_sec():
 
 def heartbeat_sec():
     return _env_int("IDLE_REPORTER_HEARTBEAT_MIN", DEFAULT_HEARTBEAT_MIN) * 60
+
+
+def disk_percent(path=None):
+    """A FLEET_ROOT-ot tarto kotet HASZNALT szazaleka. `None` = NEM MERHETO.
+
+    A `None` SOSEM szamit egeszsegesnek: a hivo nem veszi allapot-valtasnak, tehat
+    egy merhetetlen lemez sem nem riaszt, sem nem fegyverzi ujra a latchot. A
+    "nem tudjuk" es a "rendben van" ket kulon valasz.
+    """
+    try:
+        st = os.statvfs(path or FLEET_ROOT)
+    except OSError:
+        return None
+    total = st.f_blocks * st.f_frsize
+    if total <= 0:
+        return None
+    used = total - st.f_bavail * st.f_frsize
+    return int(used * 100 // total)
+
+
+def disk_level(pct):
+    """A riasztasi szint (`warn` / `crit`), vagy `None`, ha nincs mirol szolni."""
+    if pct is None:
+        return None
+    if pct >= DISK_CRIT_PCT:
+        return "crit"
+    if pct >= DISK_WARN_PCT:
+        return "warn"
+    return None
+
+
+def disk_alert_text(pct, level):
+    kuszob = DISK_CRIT_PCT if level == "crit" else DISK_WARN_PCT
+    szo = "MEGTELIK" if level == "crit" else "fogy"
+    return (f"[tetlen-jelento] LEMEZ {szo}: {pct}% hasznalt a(z) {FLEET_ROOT} koteten "
+            f"(kuszob {kuszob}%). Ez CSAK riasztas -- a szkript nem torol semmit.")
+
+
+def _maybe_disk_alert(prev, state_path, send, pct_fn=disk_percent):
+    """LATCHELT lemez-riasztas: allapot-VALTASRA szol, utana hallgat.
+
+    MIERT LATCH: 300 masodperces kadencia mellett egy ALLO 90%+ allapot 12 push/ora
+    lenne Isti telefonjara, es egy elnemitott riasztas ugyanaz, mint egy nem letezo.
+    MIERT FEGYVERZODIK UJRA: enelkul egy telik / kitakaritjak / ujra telik ciklus
+    EGYSZER szolna, aztan soha -- ez az a fele, amit el szoktak felejteni.
+    A VISSZAALLAS CSENDES: ez csak-riaszto ellenorzes, a gyogyulas nem uj kockazat,
+    es minden extra push a kovetkezo valodi riasztas eselyet csokkenti.
+    A `warn` -> `crit` atmenet KULON esemeny, mert a szint valtozik.
+    """
+    pct = pct_fn()
+    if pct is None:
+        # NEM MERHETO: se nem riaszt, se nem FEGYVERZI UJRA. Ez kulon ag, mert a
+        # `disk_level(None)` ugyanazt a `None`-t adja, mint az EGESZSEGES lemez --
+        # es egy kozos ag a latchot torolne. Merve (friday, 2026-09-04): 93% mellett
+        # egy megbicsaklo `statvfs` ujrafegyverzett, es a kovetkezo sikeres olvasas
+        # ISMET riasztott. Egy flappelo mero igy pontosan azt a telefon-spamot
+        # termelte volna, ami ellen a latch keszult.
+        return prev, False
+    level = disk_level(pct)
+    if level == prev.get("disk_level"):
+        return prev, False
+    if level is None:
+        return _merge_state(prev, {"disk_level": None}, state_path), False
+    send(disk_alert_text(pct, level))
+    return _merge_state(prev, {"disk_level": level}, state_path), True
 
 
 def roster(fleet_root=None):
@@ -367,12 +441,18 @@ def _maybe_heartbeat(prev, activity, silent, now, t_sec, state_path, out):
 
 
 def run(now=None, send=send_telegram, state_path=None, db_path=None, fleet_root=None,
-        out=note):
+        out=note, disk_pct=disk_percent):
     """Egy kor. A `send`, az `out` es a `now` azert parameter, hogy tesztelheto legyen."""
     now = now if now is not None else time.time()
     t_sec = threshold_sec()
     agents = roster(fleet_root)
     prev = load_state(state_path)
+
+    # A LEMEZ-ELLENORZES A DB-OLVASAS ELOTT FUT, es ez nem stilus: egy megtelt kotet
+    # EPP AZT teheti olvashatatlanna, a `DbUnreadable` ag pedig korai `return`-nel
+    # zarul -- ott a lemez-riasztas sosem menne ki, pontosan abban a helyzetben,
+    # amiert letezik.
+    prev, _ = _maybe_disk_alert(prev, state_path, send, disk_pct)
 
     try:
         activity = read_activity(agents, db_path=db_path)
