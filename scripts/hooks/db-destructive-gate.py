@@ -85,11 +85,25 @@ LOG = "/Users/isti/marveen/store/db-gate.log"
 #                     segment has to invoke a database client. `DROP TABLE` in a
 #                     heredoc written to a markdown file invokes nothing.
 #
-# The residual hole is stated rather than hidden: a destructive statement passed to
-# a client through a variable the hook cannot see (`psql -f "$f"`, or a script that
-# builds SQL at runtime) is not caught. This gate is a guard rail against a typed
-# mistake, not a sandbox -- it cannot become one, because the hook sees a command
-# string and not the process that will run.
+# FILE-DELIVERED SQL: the LITERAL-PATH case is covered since card 2e08a7e1, the
+# VARIABLE case is not, and the difference is not effort -- it is the tool's boundary.
+#
+#   psql -f ./x.sql   /   psql < ./x.sql      COVERED. The file is read and each line
+#       carries the client, exactly as an executed heredoc body does (see
+#       expand_file_args). Only inside a segment that already invokes a DB client, so
+#       `grep -f x.sql` and `docker compose -f x.yml` never reach it -- proved by
+#       mutation: removing that scope check turns both into refusals.
+#   psql -f "$f"      /   a script that builds SQL at runtime      NOT COVERED, and it
+#       cannot be: the hook sees a command string, not the process that will run. This
+#       gate is a guard rail against a typed mistake, not a sandbox.
+#
+# DO NOT DESCRIBE THIS AS "THE -f HOLE IS CLOSED". Our own prescribed recipe
+# (Delta-CRM rulebook: "Fajlbol futtasd (`psql -f`)") is implemented with the VARIABLE
+# form -- scripts/readonly-measure.sh:122, `psql "$URL" -f "$WRAPPED"` -- so the one
+# measured user of file delivery stays outside this check. It does not need it: it
+# wraps in BEGIN TRANSACTION READ ONLY and proves the gate fires before AND after.
+# A half-fix described as a whole one would let someone read `-f` as watched when the
+# prescribed shape is precisely the unwatched one.
 
 TOOL_PATTERNS = [
     (r"prisma\s+migrate\s+reset", "prisma migrate reset -- drops and recreates the schema"),
@@ -210,9 +224,89 @@ def strip_heredoc_bodies(command: str) -> str:
     return "\n".join(out)
 
 
-def find_hits(command: str):
+# --- LITERAL-PATH FILE ARGUMENTS (card 2e08a7e1) ------------------------------
+# Same shape as the heredoc carve-out above, with a different body SOURCE: when a
+# DB client is handed a file, the statements live in the FILE, so the command text
+# alone can never see them. Each read line is PREFIXED with the client, exactly as an
+# executed heredoc body is, so the SQL class still finds client and statement in one
+# segment after the split.
+#
+# WHAT THIS DOES **NOT** CLOSE, and the wording matters: this is the LITERAL-PATH case
+# only. `psql -f "$f"`, or any script that builds SQL at runtime, stays uncaught -- the
+# docblock above says why, and it is a property of the tool, not an omission: the hook
+# sees a command string, not the process that will run. Our own recipe
+# (`scripts/readonly-measure.sh:122`) uses the VARIABLE form, so it stays outside; it
+# also cannot be destructive by construction (BEGIN TRANSACTION READ ONLY, with the
+# gate proved before AND after). Do not describe this as "the -f hole is closed".
+#
+# OVER-BLOCKING is prevented structurally, not by a list: expansion happens only in a
+# segment that already invokes a DB client. `docker compose -f x.yml`, `grep -f pats`,
+# `make -f Makefile` never reach it, because those are not DB clients.
+_FILE_ARG = re.compile(
+    r"(?:^|\s)(?:-f|--file)(?:=|\s+)(\S+)"      # psql -f x.sql / --file=x.sql
+    r"|(?<!<)<(?!<)\s*(\S+)"                     # psql < x.sql  (never a heredoc)
+)
+# A path we can resolve without running anything. Anything with shell expansion in it
+# is deliberately skipped: guessing what `$f` held is how a gate starts lying.
+_LITERAL_PATH = re.compile(r"^[\w./~+-]+$")
+_MAX_FILE_LINES = 400
+_MAX_FILE_BYTES = 131072
+
+
+def _read_sql_file(path, cwd):
+    """Return the file's lines, or None if it cannot be read. Never raises."""
+    try:
+        import os
+        if path.startswith("~"):
+            path = os.path.expanduser(path)
+        if not os.path.isabs(path):
+            if not cwd:
+                return None
+            path = os.path.join(cwd, path)
+        if os.path.getsize(path) > _MAX_FILE_BYTES:
+            return None
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return fh.read().split("\n")[:_MAX_FILE_LINES]
+    except Exception:
+        return None
+
+
+def expand_file_args(command: str, cwd=None):
+    """Append client-prefixed lines for every literal file handed to a DB client.
+
+    Returns (expanded_command, unreadable) -- `unreadable` names the paths we could
+    not check, so a gate that silently saw nothing is distinguishable from one that
+    had nothing to see. That distinction is the whole point of inversion 1.
+    """
+    extra = []
+    unreadable = []
+    for segment in _SEG.split(command):
+        client = DB_CLIENTS.search(segment)
+        if not client:
+            continue
+        name = client.group(2)
+        for m in _FILE_ARG.finditer(segment):
+            raw = m.group(1) or m.group(2) or ""
+            raw = raw.strip().strip("\"'")
+            if not raw or not _LITERAL_PATH.match(raw):
+                continue
+            lines = _read_sql_file(raw, cwd)
+            if lines is None:
+                unreadable.append(raw)
+                continue
+            for line in lines:
+                extra.append("%s %s" % (name, line))
+    if not extra:
+        return command, unreadable
+    return command + "\n" + "\n".join(extra), unreadable
+
+
+def find_hits(command: str, cwd=None):
     hits = []
     command = strip_heredoc_bodies(command)
+    command, _unreadable = expand_file_args(command, cwd)
+    for _p in _unreadable:
+        log("UNCHECKED-FILE", "cannot read %s -- statements in it were NOT examined" % _p)
     for segment in _SEG.split(command):
         if not segment.strip():
             continue
@@ -264,7 +358,7 @@ def main():
         if not command.strip():
             sys.exit(0)
 
-        hits = find_hits(command)
+        hits = find_hits(command, str(payload.get("cwd") or "") or None)
         if not hits:
             sys.exit(0)
 
