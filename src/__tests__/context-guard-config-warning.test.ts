@@ -20,6 +20,9 @@
  *     (this is the scope boundary marveen set: absence, never misconfiguration)
  */
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   missingContextGuardEntries,
   contextGuardConfigWarningText,
@@ -114,5 +117,37 @@ describe('makeContextGuardConfigWarner: loud once, not loud forever', () => {
     const warn = makeContextGuardConfigWarner((m) => seen.push(m))
     for (let i = 0; i < 5; i++) warn(FLEET, FLEET)
     expect(seen).toEqual([])
+  })
+})
+
+describe('and it is actually WIRED -- a perfect module nobody calls is the same silence', () => {
+  // The module above could be flawless and never run. That is the state this repo keeps
+  // paying for, so the wire gets its own assertion.
+  //
+  // SOURCE-LEVEL, and that is a stated limit: startContextGuardRunner() installs a 300 s
+  // interval and sweeps real agents, so instantiating it in a unit test would measure the
+  // harness, not the wire. What this checks is that the runner imports the warner and calls
+  // it inside the sweep. It would NOT catch a call placed on a branch that never executes --
+  // for that, the honest evidence is the first real sweep after deploy.
+  const runner = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'web', 'context-guard-runner.ts'),
+    'utf8',
+  )
+
+  it('the runner imports the warner', () => {
+    expect(runner).toContain("from './context-guard-config-warning.js'")
+    expect(runner).toContain('makeContextGuardConfigWarner')
+  })
+
+  it('and CALLS it in the sweep, with the configured key set', () => {
+    expect(runner).toContain('warnMissingConfig(names, Object.keys(readAllContextGuardConfigs()))')
+  })
+
+  it('POSITIVE CONTROL: the meter can say no', () => {
+    // Without this, the two assertions above would also pass on a file that happens to
+    // contain those strings for any other reason -- and would pass just as happily if the
+    // meter were reading the wrong file and getting an empty string back.
+    expect(runner.length).toBeGreaterThan(1000)
+    expect(runner).not.toContain('makeContextGuardConfigWarnerThatDoesNotExist')
   })
 })
