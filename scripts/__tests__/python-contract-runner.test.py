@@ -91,7 +91,33 @@ def main():
         check("a rekord ilyenkor is megirodik", rec is not None, True)
         check("a stderr KIMONDJA, hogy ez bukas", "NO TEST FILES" in out, True)
 
-    # 4. BEAKADT teszt -> bukas, nem csend.
+    # 4. A REKORD MEGNEVEZI A SAJAT INTERPRETERET (didi lelete, 2026-09-04).
+    #    Nelkule egy PIROS sor ket teljesen mas dolgot jelenthet -- a pinnelt utemezett futas
+    #    bukott, vagy valaki kezzel futtatta a rendszer-pythonon --, es semmi nem valasztja szet.
+    with tempfile.TemporaryDirectory() as d:
+        td = os.path.join(d, "t"); os.makedirs(td)
+        fixture(td, "a.test.py", OK)
+        state = os.path.join(d, "state.json")
+        rc, rec, _ = run_runner(td, state)
+        check("a rekord tartalmazza az interpretert", bool(rec and rec.get("interpreter")), True)
+        check("a rekord tartalmazza a verziot", bool(rec and rec.get("python_version")), True)
+        # ES AZT az interpretert nevezi meg, amivel INDITOTTAK -- nem egy PATH-bol feloldottat.
+        check("az interpreter AZ, amivel futtattuk", rec and rec.get("interpreter"), sys.executable)
+
+    # 5. ALKONYVTARBAN levo teszt-fajl IS megtalalodik (ugyanaz a nema-kieses osztaly, egy szinttel
+    #    lejjebb: a nem rekurziv glob csendben kihagyta, es files_run nem emelkedik, tehat senki
+    #    nem varja, hogy emelkedjen).
+    with tempfile.TemporaryDirectory() as d:
+        td = os.path.join(d, "t"); os.makedirs(td)
+        fixture(td, "top.test.py", OK)
+        sub = os.path.join(td, "melyebben"); os.makedirs(sub)
+        fixture(sub, "nested.test.py", OK)
+        state = os.path.join(d, "state.json")
+        rc, rec, _ = run_runner(td, state)
+        check("alkonyvtarbeli teszt is lefut -> 2 fajl", rec and rec["files_run"], 2)
+        check("mindketto zold -> rc=0", rc, 0)
+
+    # 6. BEAKADT teszt -> bukas, nem csend.
     with tempfile.TemporaryDirectory() as d:
         td = os.path.join(d, "t"); os.makedirs(td)
         fixture(td, "slow.test.py", SLOW)
