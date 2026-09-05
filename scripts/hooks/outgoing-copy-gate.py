@@ -211,6 +211,29 @@ def is_send_invocation(cmd: str, _depth: int = 0) -> bool:
         # Konzervativ visszaeses: csak akkor auditalunk, ha eros kuldes-literal
         # all a szovegben -- igy egy fura, de valodi kuldes nem csuszik at
         # neman, a tipikus belso parancsok viszont nem kapnak hamis pozitivot.
+        #
+        # EZ SZUKEBB, MINT A PARSZOLT UT, ES A TESTVER-KAPU (email-send-gate.mjs)
+        # PONT AZ ELLENKEZOJET TESZI: az parse-hibanal a TELJES legacy keszletre
+        # esik vissza ("never weaker"). A ket kapu ELTER, es ez DONTES, nem
+        # elnezes -- didi merte 2026-09-06-an (kartya 9ebde77b), marveen dontott.
+        # Aki egy cenzusban ezt elteresnek talalja: NE igazitsa ossze. Harom ok,
+        # mindharom merve:
+        #
+        #   1. MAS POPULACIO. Az .mjs a SUB-AGENSEKET tiltja (kemeny deny,
+        #      governance); ez a kapu a FO agens sajat kimeno szovegen fut.
+        #   2. MAS AR. Ott egy hamis pozitiv egy fordulo a sub-agensnek. ITT a
+        #      kapu is fail-closed, tehat egy hamis pozitiv MEGALLITJA a
+        #      koordinator normal, csak-olvaso cenzus-munkajat.
+        #   3. AMIT A SZUK LISTA ELEJT, AZ NEM KULDO. A repo EGYETLEN Bash-uton
+        #      elerheto kuldoje a scripts/support-mail/send.py, es az BENNE VAN
+        #      (`send.py` ES `smtplib`). Ami kimarad -- csupasz `sendEmail`,
+        #      `mail.send` --, az ebben a repoban CENZUS-GREP alak, nem kuldes.
+        #
+        # ES AMIERT EZ OLCSO: a fo agens VALODI kuldesei (telegram __reply es a
+        # send_email MCP tool) a fenti entrypointban KULON agra mennek, es soha
+        # nem ernek ide -- tehat az akcentus-kockazat, amiert ez a kapu letezik,
+        # nem ezen a fallbacken utazik. (Merve: az entrypoint-blokkban
+        # is_send_invocation 1 elofordulas, a Bash agon.)
         return bool(_FALLBACK_LITERALS.search(cmd))
     return any(_segment_is_send(toks, _depth) for toks in segments)
 
