@@ -142,9 +142,9 @@ import type { File, Task } from 'vitest'
 // es a plafon bevezetesevel csendben elavult volna -- epp azok hazudtak volna
 // elsonek, amik a hatart orzik. Ha a szam es a mondat egy generalt blokkban all,
 // nem tudnak szetcsuszni.
-/** Merve 2026. 09. 05. 17:46:28 CEST -- `npx vitest list --json` -> 421 fajl / 5345 teszt. */
-export const SUITE_BASELINE_FILES = 421
-export const SUITE_BASELINE_TESTS = 5345
+/** Merve 2026. 09. 05. 17:52:06 CEST -- `npx vitest list --json` -> 422 fajl / 5351 teszt. */
+export const SUITE_BASELINE_FILES = 422
+export const SUITE_BASELINE_TESTS = 5351
 // === SUITE-BASELINE:END ===
 
 /**

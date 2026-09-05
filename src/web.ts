@@ -25,6 +25,7 @@ import { startChannelHealthMonitor } from './web/channel-health-monitor.js'
 import { startStuckInputWatcher } from './web/stuck-input-watcher.js'
 import { startInboxNudgeWatcher } from './web/inbox-nudge-watcher.js'
 import { startIdleAgentWatcher } from './web/idle-agent-watcher.js'
+import { startUptimeAlertWatcher } from './web/uptime-alert-watcher.js'
 import { startStuckToolCallWatcher } from './web/stuck-tool-call-watcher.js'
 import { startReauthHealer } from './web/reauth-healer.js'
 import { startAutoRestartRunner } from './web/auto-restart-runner.js'
@@ -434,6 +435,11 @@ export function startWebServer(port = 3420): http.Server {
   if (!webOnly) logger.info('Inbox nudge watcher started (20s poll, 55s offset)')
 
   const idleAgentInterval = webOnly ? undefined : startIdleAgentWatcher()
+  // Production uptime, surfaced to the FLEET and not only to Isti's inbox (card
+  // 71349fe1, his own request). Reads the raw uptime results rather than
+  // receiving GCP's notification, because the defect IS that the notification
+  // reaches one address -- see web/uptime-alert-watcher.ts.
+  const uptimeAlertInterval = webOnly ? undefined : startUptimeAlertWatcher()
   if (!webOnly) logger.info('Idle-agent guard started (3min poll, 90s offset)')
 
   const reauthHealerInterval = webOnly ? undefined : startReauthHealer()
@@ -596,6 +602,7 @@ export function startWebServer(port = 3420): http.Server {
     clearInterval(stuckToolCallInterval)
     if (inboxNudgeInterval) clearInterval(inboxNudgeInterval)
     if (idleAgentInterval) clearInterval(idleAgentInterval)
+    if (uptimeAlertInterval) clearInterval(uptimeAlertInterval)
     if (reauthHealerInterval) clearInterval(reauthHealerInterval)
     clearInterval(autoRestartInterval)
     clearInterval(modelFallbackInterval)
