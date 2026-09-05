@@ -2377,6 +2377,18 @@ export function getPendingMessages(toAgent?: string): AgentMessage[] {
     .all() as AgentMessage[]
 }
 
+/** The rows a restart could plausibly have cost, for the agent that was restarted.
+ *
+ *  Deliberately returns BOTH statuses and does NOT filter by time: the window arithmetic
+ *  lives in `buildRestartLossLine`, where it is testable on fixtures and its reasoning is
+ *  visible. A `sinceSec` bound in this SQL would put the one rule that matters (card
+ *  82d9b960: filter on the WINDOW, not the status) inside a string nobody tests. */
+export function getRestartLossCandidates(toAgent: string): AgentMessage[] {
+  return db.prepare(
+    "SELECT * FROM agent_messages WHERE to_agent = ? AND status IN ('pending','failed') ORDER BY created_at ASC",
+  ).all(toAgent) as AgentMessage[]
+}
+
 // Status-guarded (pending only): the federation removal path bulk-fails
 // pending rows CONCURRENTLY with an in-flight bridge send -- an unguarded
 // UPDATE would flip such a row failed->delivered after the fact. If the row

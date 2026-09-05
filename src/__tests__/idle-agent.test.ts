@@ -21,8 +21,10 @@ import {
   buildPullNotice,
   stalePendingBySender,
   buildPendingStillWaitingNotice,
+  type RecipientPaneState,
   PENDING_NOTICE_AFTER_MS,
 } from '../idle-agent.js'
+import { buildRestartLossLine } from '../context-guard.js'
 
 const TH: IdleAgentThresholds = {
   sustainedMs: 10 * 60_000,
@@ -541,6 +543,8 @@ describe('countDeclaredWork', () => {
 // names concrete items. Testing it here (rather than in the watcher) is why it lives in
 // this module -- the watcher is I/O, and I/O is not where a decision belongs.
 describe('buildWakeMessage', () => {
+  const WAKE_NOW = Date.UTC(2026, 8, 5, 11, 57, 9)
+
   const card = (id: string, priority: string, title: string) => ({
     id,
     priority,
@@ -554,7 +558,7 @@ describe('buildWakeMessage', () => {
       card('cccccccc1', 'low', 'a low one'),
       card('aaaaaaaa1', 'urgent', 'the urgent one'),
       card('bbbbbbbb1', 'normal', 'a normal one'),
-    ])
+    ], WAKE_NOW)
     const lines = msg.split('\n').filter((l) => l.startsWith('  '))
     expect(lines[0]).toContain('aaaaaaaa')
     expect(lines[0]).toContain('the urgent one')
@@ -563,7 +567,7 @@ describe('buildWakeMessage', () => {
 
   it('never dumps the whole board into a pane', () => {
     const many = Array.from({ length: 40 }, (_, i) => card(`id${i}`.padEnd(9, 'x'), 'normal', `t${i}`))
-    const lines = buildWakeMessage('didi', 13, 40, many).split('\n').filter((l) => l.startsWith('  '))
+    const lines = buildWakeMessage('didi', 13, 40, many, WAKE_NOW).split('\n').filter((l) => l.startsWith('  '))
     // All 40 are `testing`, so they land in the review section, which is capped tighter
     // than the work section: a reviewer's queue is not what the reader can act on.
     expect(lines.length).toBeLessThanOrEqual(3)
@@ -577,7 +581,7 @@ describe('buildWakeMessage', () => {
       { ...card('rev11111', 'high', 'a review waiting for an answer'), status: 'testing' },
       { ...card('rev22222', 'urgent', 'another review'), status: 'testing' },
       { ...card('work1111', 'low', 'something I can actually start'), status: 'planned' },
-    ])
+    ], WAKE_NOW)
     const lines = msg.split('\n').filter((l) => l.startsWith('  '))
     expect(lines[0]).toContain('work1111')
     expect(msg.indexOf('work1111')).toBeLessThan(msg.indexOf('rev22222'))
@@ -587,7 +591,7 @@ describe('buildWakeMessage', () => {
     const msg = buildWakeMessage('dexter', 13, 2, [
       { ...card('work1111', 'normal', 'w'), status: 'planned' },
       { ...card('rev11111', 'normal', 'r'), status: 'testing' },
-    ])
+    ], WAKE_NOW)
     expect(msg).toMatch(/FELVEHETO MUNKA \(1\)/)
     expect(msg).toMatch(/VALASZRA VARO ELLENORZES \(1\)/)
     expect(msg).toContain('planned')
@@ -595,7 +599,7 @@ describe('buildWakeMessage', () => {
   })
 
   it('says so plainly when there is nothing pickable, only reviews', () => {
-    const msg = buildWakeMessage('dexter', 13, 1, [{ ...card('rev11111', 'high', 'r'), status: 'testing' }])
+    const msg = buildWakeMessage('dexter', 13, 1, [{ ...card('rev11111', 'high', 'r'), status: 'testing' }], WAKE_NOW)
     expect(msg).toMatch(/Nincs A TE NEVEDEN felveheto munka/)
   })
 
@@ -606,14 +610,14 @@ describe('buildWakeMessage', () => {
   // pull list. This is not a wording test: the absolute form is what makes an agent STOP,
   // and nothing else in the suite would notice it coming back.
   it('never claims there is no work at all, only none under this name', () => {
-    const msg = buildWakeMessage('dexter', 13, 1, [{ ...card('rev11111', 'high', 'r'), status: 'testing' }])
+    const msg = buildWakeMessage('dexter', 13, 1, [{ ...card('rev11111', 'high', 'r'), status: 'testing' }], WAKE_NOW)
     expect(msg).toContain('A TE NEVEDEN')
     expect(msg).toContain('GAZDATLAN')
     expect(msg).not.toMatch(/Nincs felveheto munkad/)
   })
 
   it('says the count and the idle time, because the agent cannot see either', () => {
-    const msg = buildWakeMessage('didi', 13, 48, [card('aaaaaaaa1', 'high', 'x')])
+    const msg = buildWakeMessage('didi', 13, 48, [card('aaaaaaaa1', 'high', 'x')], WAKE_NOW)
     expect(msg).toContain('13')
     expect(msg).toContain('48')
   })
@@ -623,7 +627,7 @@ describe('buildWakeMessage', () => {
   // disagree. Saying so is the only honest option -- "you have 48 things" followed by
   // nothing at all is exactly the shape this fleet keeps getting burned by.
   it('when it can name nothing, it SAYS so instead of pretending', () => {
-    const msg = buildWakeMessage('didi', 13, 48, [])
+    const msg = buildWakeMessage('didi', 13, 48, [], WAKE_NOW)
     expect(msg).toMatch(/nem tudtam megnevezni/)
   })
 
@@ -639,7 +643,7 @@ describe('buildWakeMessage', () => {
       { ...card('rev11111', 'high', 'a card waiting for my review'), status: 'testing' },
       { ...card('rev22222', 'urgent', 'another one'), status: 'testing' },
     ]
-    const msg = buildWakeMessage('didi', 13, 40, items, 'testing_without_my_comment')
+    const msg = buildWakeMessage('didi', 13, 40, items, WAKE_NOW, 'testing_without_my_comment')
     // Re-pointed at the sentence as it reads now (card 5a499a19). Left on the OLD wording
     // this negative would pass for the wrong reason -- the phrase exists nowhere any more,
     // so it could not fail, and the negative IS the point of this test.
@@ -648,20 +652,20 @@ describe('buildWakeMessage', () => {
     expect(msg).toContain('rev22222')
 
     // POSITIVE CONTROL -- same items, assignee-shaped check: still nothing to pick up.
-    const asAssignee = buildWakeMessage('didi', 13, 40, items, 'assigned_open_cards')
+    const asAssignee = buildWakeMessage('didi', 13, 40, items, WAKE_NOW, 'assigned_open_cards')
     expect(asAssignee).toMatch(/Nincs A TE NEVEDEN felveheto munka/)
   })
 
   it('a review queue names more than three items, because they are the work', () => {
     const many = Array.from({ length: 40 }, (_, i) => card(`id${i}`.padEnd(9, 'x'), 'normal', `t${i}`))
-    const lines = buildWakeMessage('didi', 13, 40, many, 'testing_without_my_comment')
+    const lines = buildWakeMessage('didi', 13, 40, many, WAKE_NOW, 'testing_without_my_comment')
       .split('\n')
       .filter((l) => l.startsWith('  '))
     expect(lines.length).toBe(5)
   })
 
   it('tells the agent that no human was alerted, so it does not go looking', () => {
-    const msg = buildWakeMessage('didi', 13, 48, [card('aaaaaaaa1', 'high', 'x')])
+    const msg = buildWakeMessage('didi', 13, 48, [card('aaaaaaaa1', 'high', 'x')], WAKE_NOW)
     expect(msg).toContain('Isti NEM lett ertesitve')
   })
 })
@@ -1029,9 +1033,185 @@ describe('idle with no assigned work reaches the coordinator', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// card 7edc5839 -- a stamp repairs a DURATION and cannot repair a COUNT
+// ---------------------------------------------------------------------------
+describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
+  const NOW = Date.UTC(2026, 8, 5, 11, 57, 9)
+  const it3 = (id: string) => ({ id, title: 't', priority: 'normal', status: 'planned' })
+
+  // THE INVARIANT THIS DESCRIBE EXISTS TO PIN, AND IT IS NOT DECORATIVE.
+  //
+  // Three sibling tests identify the ITEM lines by `line.startsWith('  ')`. When the
+  // handover command was first added it was indented like a shell snippet, so four tests
+  // went red at once -- one of them counting 8 items where 5 exist. The indent is load-
+  // bearing in this file, and nothing said so anywhere. Now something does.
+  it('MINDEN behuzott sor TETEL-sor -- a behuzas ebben a fajlban jelentest hordoz', () => {
+    // MIND A NEGY EPITO, ES A TETEL-ALAK EPITONKENT MAS -- az elso alakom csak HARMAT jart korbe,
+    // es jarvis merte meg, hogy a negyedik HAROM ponton sertette az invarianst, fedetlenul
+    // (12 szokozos belyeg-sor, behuzott handover-parancs, plusz a sajat tetel-alakja).
+    // Az `id`-alaku minta rá nem illik: a pending ertesites CIMZETT szerint sorol, nem kartya
+    // szerint. Egy KOZOS, laza minta elrejtene ezt; ezert kap mindegyik SAJAT alakot.
+    const ids = ['aaaaaaaa1', 'bbbbbbbb2', 'cccccccc3']
+    const ID_ITEM = /^ {2}[0-9a-z]{8}\s/
+    const cases: { msg: string; item: RegExp }[] = [
+      { msg: buildPullNotice('jarvis', 20, ids.map(it3), NOW), item: ID_ITEM },
+      { msg: buildWakeMessage('jarvis', 20, 3, ids.map(it3), NOW), item: ID_ITEM },
+      { msg: buildNoWorkNotice('jarvis', 20, NOW), item: ID_ITEM },
+      {
+        msg: buildPendingStillWaitingNotice(
+          'jarvis',
+          [{ to_agent: 'didi', created_at: Math.floor(NOW / 1000) - 5400 }],
+          NOW,
+          new Map([['didi', 'busy' as const]]),
+        ),
+        item: /^ {2}-> \S+: /,
+      },
+      // AZ OTODIK EPITO, jarvis masodik olvasatabol: az or "fajl-szintunek" nevezte magat, es a
+      // SAJAT fajljaban hagyta ki ezt. Ez is a KOORDINATORNAK megy, es a csoportos alakja behuzott
+      // sorokat ir -- csak megint MAS alakut: agens-nev, nem kartya-id es nem cimzett-nyil.
+      {
+        msg: buildFleetAlert([
+          { kind: 'still-idle', agent: 'didi', minutes: 20, workCount: 3 },
+          { kind: 'pane-unreadable', agent: 'dexter' },
+        ]),
+        item: /^ {2}\S+( --)?/,
+      },
+    ]
+    for (const { msg, item } of cases) {
+      for (const line of msg.split('\n')) {
+        if (!/^\s+\S/.test(line)) continue
+        expect(line, `behuzott, de nem tetel-sor: ${JSON.stringify(line)}`).toMatch(item)
+      }
+    }
+  })
+
+  it('a PULL-ertesites megbelyegzi az idotartamot ES kimondja, hogy a DARABSZAM pillanatfelvetel', () => {
+    const msg = buildPullNotice('jarvis', 20, [it3('aaaaaaaa1')], NOW)
+    expect(msg).toMatch(/MERVE \d{2}:\d{2}:\d{2}-kor/)
+    expect(msg).toContain('PILLANATFELVETEL')
+    expect(msg).toMatch(/nem az ora avultatja el/)
+  })
+
+  it('a WAKE megbelyegzi az idotartamot ES kimondja, hogy a DARABSZAM pillanatfelvetel', () => {
+    const msg = buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW)
+    expect(msg).toMatch(/MERVE \d{2}:\d{2}:\d{2}-kor/)
+    expect(msg).toContain('PILLANATFELVETEL')
+    expect(msg).toMatch(/nem az ora avultatja/)
+  })
+
+  // TILOS CSAK BELYEGEZNI ES MEGALLNI (marveen, a kartya szukitese). A belyeg a DARABSZAMRA
+  // hamis biztonsagot ad: egy megbelyegzett, de elavult szam TEKINTELYESEBBNEK olvasodik,
+  // mint egy belyegzetlen. Ezert minden ertesites, ami SZAMOT allit, adja meg az
+  // UJRAKERDEZES modjat is -- es a horgony a PARANCS-sorokon van, nem az uzeneten:
+  // a `jarvis` nev az ELSO sorban is ott all, tehat egy `toContain('jarvis')` az
+  // egeszre akkor is zold lenne, ha a parancsbol hianyozna (ez a testver-teszt hibaja).
+  // ------------------------------------------------------------------------------------
+  // AZ OR PADLO VOLT, NEM HALMAZ -- es ez a ket teszt csinal belole halmazt (jarvis, 09-05)
+  // ------------------------------------------------------------------------------------
+  // Az elozo alakja KEZZEL IRT LISTA volt negy epitovel, mikozben a kommentje azt allitotta,
+  // hogy "fajl-szintu". A sajat fajljaban kihagyta a `buildFleetAlert`-et, es az UJ
+  // `buildRestartLossLine` egy MASIK fajlban van, tehat szerkezetileg kivul. Az a defektus-
+  // osztaly, ami a `9fcfb33`-ban tenylegesen kiszallt (aposztrofos `'${sender}'`, behelyettesites
+  // nelkul), igy egy fajllal arrebb ujra lehetseges volt, or nelkul.
+  const GUARDED: { name: string; msg: string }[] = [
+    { name: 'buildPullNotice', msg: buildPullNotice('jarvis', 20, [it3('aaaaaaaa1')], NOW) },
+    { name: 'buildWakeMessage', msg: buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW) },
+    { name: 'buildNoWorkNotice', msg: buildNoWorkNotice('jarvis', 20, NOW) },
+    {
+      name: 'buildPendingStillWaitingNotice',
+      msg: buildPendingStillWaitingNotice(
+        'jarvis', [{ to_agent: 'didi', created_at: Math.floor(NOW / 1000) - 5400 }],
+        NOW, new Map([['didi', 'busy' as const]]),
+      ),
+    },
+    { name: 'buildFleetAlert', msg: buildFleetAlert([{ kind: 'still-idle', agent: 'didi', minutes: 20, workCount: 3 }]) },
+    { name: 'buildRestartLossLine', msg: buildRestartLossLine([{ id: 918001, status: 'failed', created_at: Math.floor(NOW / 1000) - 60 }], NOW, undefined, '04:41:59') },
+  ]
+
+  it('EGYETLEN ertesites sem szivarogtat behelyettesitetlen jelolot', () => {
+    for (const { name, msg } of GUARDED) {
+      expect(msg, `${name} jelolot szivarogtat`).not.toMatch(/\$\{[a-zA-Z_]+\}/)
+    }
+  })
+
+  it('es a lista TELJES -- minden exportalt epito benne van, kulonben ez a teszt bukik', () => {
+    // EZ TESZI HALMAZZA A PADLOT. Ket HALMAZT vet ossze: amit az or ciklizal, es ami a
+    // forrasban EXPORTALVA van. Nem azt allitja, hogy egy nev SZEREPEL valahol (az a
+    // jelenlet-kontra-megfeleltetes csapda lenne) -- azt, hogy a ket halmaz EGYENLO.
+    // Aki hatodik epitot ir, ettol a teszttol tudja meg, hogy az orbe is fel kell vennie.
+    const here = dirname(fileURLToPath(import.meta.url))
+    const exported = ['../idle-agent.ts', '../context-guard.ts'].flatMap((rel) =>
+      [...readFileSync(join(here, rel), 'utf-8').matchAll(/^export function (build\w+)/gm)].map((m) => m[1]),
+    )
+    // KONTROLL: a mero lat egyaltalan exportot, es tobbet, mint egyet.
+    expect(exported.length, 'a forras-olvaso mero nem talalt epitot').toBeGreaterThan(3)
+    const covered = new Set(GUARDED.map((g) => g.name))
+    for (const name of exported) {
+      expect(covered.has(name), `${name} EXPORTALVA van, de az or nem ciklizza`).toBe(true)
+    }
+    // es forditva: az or ne nevezzen olyat, ami mar nem letezik
+    for (const name of covered) expect(exported, `${name} az orben van, de mar nincs exportalva`).toContain(name)
+  })
+
+  it('minden SZAMOT allito ertesites megadja az UJRAKERDEZES modjat is', () => {
+    // SCOPED, es az elso alakom NEM volt az: `toContain('jarvis')`-t kert MIND A HAROMTOL,
+    // es a pull-ertesites elbuktatta -- helyesen. Az o szama a GAZDATLAN kartyake, tehat a
+    // lekerdezese `not c.get('assignee')`-vel szur, es AGENS-NEVET NEM IS SZABAD tartalmaznia.
+    // Az allitasom volt tul eros, nem a kod hibas: a nev csak ott kovetelheto, ahol a szam
+    // AGENS-HATOKORU.
+    // A HORGONY A PARANCS ALAKJA, NEM EGY VEGPONT -- es az elso alakom az utobbi volt.
+    // A pending ertesites `python3 -c "import sqlite3..."`-t ad at (az uzenetsor a DB-ben van,
+    // nem a kanban API mogott), tehat egy `/api/kanban`-ra szurt mero URESET adott ra, es ugy
+    // olvasodott, mintha nem is adna at parancsot. A tulajdonsag, amit allitok, az, hogy VAN
+    // futtathato ujramero sor -- nem az, hogy melyik vegpontot hasznalja.
+    const cmdOf = (msg: string) =>
+      msg.split('\n').filter((l) => /^(curl |python3 |\| python3 )/.test(l.trim()) || l.includes('| python3')).join('\n')
+
+    // A NEGYEDIK EPITO IS BENNE VAN, es jarvis kimondta, miert szamit: az elso alakom EPP AZON A
+    // HARMON ciklizott, amelyiken a `${sender}` defektus SOHA nem volt. A valodi elofordulas a
+    // pending ertesitesben volt. Egyutt a ket fel lefedte, de a MIENK nem a fajlrol szolt.
+    const pending = buildPendingStillWaitingNotice(
+      'jarvis',
+      [{ to_agent: 'didi', created_at: Math.floor(NOW / 1000) - 5400 }],
+      NOW,
+      new Map([['didi', 'busy' as const]]),
+    )
+    for (const msg of [
+      buildPullNotice('jarvis', 20, [it3('aaaaaaaa1')], NOW),
+      buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW),
+      buildNoWorkNotice('jarvis', 20, NOW),
+      pending,
+    ]) {
+      expect(cmdOf(msg), 'nincs ujrakerdezo parancs').not.toBe('')
+      // A testver-defektus kipeckelve: behelyettesitetlen jelolo SEHOL az uzenetben.
+      expect(msg).not.toContain('${agent}')
+      expect(msg).not.toContain('${sender}')
+    }
+
+    // AGENS-HATOKORU szamok: a parancs NEVEZZE MEG az agenst.
+    for (const msg of [
+      buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW),
+      buildNoWorkNotice('jarvis', 20, NOW),
+    ]) {
+      expect(cmdOf(msg)).toContain("=='jarvis'")
+    }
+
+    // A PULL szama GAZDATLAN kartyakrol szol -- a lekerdezese az assignee HIANYARA szur,
+    // es NEM nevezhet meg agenst. Ez KONTROLL: megkulonbozteti a ket hatokort.
+    const pull = cmdOf(buildPullNotice('jarvis', 20, [it3('aaaaaaaa1')], NOW))
+    expect(pull).toContain("not c.get('assignee')")
+    expect(pull).not.toContain("=='jarvis'")
+  })
+})
+
 describe('buildNoWorkNotice', () => {
+  // Fixed instant, so the existing assertions stay deterministic. The stamp tests below
+  // deliberately do NOT use it -- see the comment there.
+  const NO_WORK_NOW = Date.UTC(2026, 8, 5, 11, 57, 9)
+
   it('names the agent, the duration, and what it wants from the coordinator', () => {
-    const msg = buildNoWorkNotice('jarvis', 14)
+    const msg = buildNoWorkNotice('jarvis', 14, NO_WORK_NOW)
     expect(msg).toContain('jarvis')
     expect(msg).toContain('14 perce')
     expect(msg).toContain('NINCS RA KIOSZTVA SEMMI')
@@ -1049,21 +1229,82 @@ describe('buildNoWorkNotice', () => {
   // szandekosan all. A kartya-komment helyes szokas; csak nem az a csatorna, amit ez az or nez.
   // Egy uzenet, ami olyan valaszt ker, amit a KERO fel sem tud olvasni, minden korben ujra megy.
   it('a `workcheck.json`-t nevezi meg, a konkret ertekkel', () => {
-    const msg = buildNoWorkNotice('mandark', 42)
+    const msg = buildNoWorkNotice('mandark', 42, NO_WORK_NOW)
     expect(msg).toContain('workcheck.json')
     expect(msg).toContain('{"kind":"none"}')
   })
 
   it('NEM keri, hogy a KARTYAN magyarazza el -- azt az or nem latja', () => {
     // NEGATIV KONTROLL: a kartya mint MUNKA-forras tovabbra is helyes ker, es meg is marad.
-    const msg = buildNoWorkNotice('mandark', 42)
+    const msg = buildNoWorkNotice('mandark', 42, NO_WORK_NOW)
     expect(msg).not.toMatch(/mondd ki a kartyan/i)
     expect(msg.toLowerCase()).toContain('adj neki kartyat')
   })
 
   it('does not pretend to know which cards to hand over', () => {
-    const msg = buildNoWorkNotice('jarvis', 14)
+    const msg = buildNoWorkNotice('jarvis', 14, NO_WORK_NOW)
     expect(msg).not.toMatch(/\b[0-9a-f]{8}\b/)
+  })
+
+  // --- card 7edc5839: the notice stamps its reading and hands over a fresh one ---
+
+  it('STAMPS the reading, zero-padded AT EVERY HOUR', () => {
+    // TWENTY-FOUR INSTANTS, NOT ONE, AND THAT IS THE WHOLE POINT OF THIS FIXTURE.
+    //
+    // The sibling notice (card 1d800670) asserts `/MERVE \d{2}:\d{2}:\d{2}-kor/` against a
+    // single fixed instant that happens to land on a two-digit local hour, so the assertion
+    // passes whether or not the hour is padded -- measured 2026-09-05: the shipped formatter
+    // renders 04:41 CEST as "4:41:59", and that test would not have noticed. A fixture only
+    // discriminates where the correct and the incorrect implementation DIVERGE, and for a
+    // zero-pad that is the single-digit hours. One instant cannot cover them in every
+    // timezone; twenty-four hourly ones put at least ten single-digit local hours in front
+    // of the assertion on any machine.
+    const pad = (n: number) => String(n).padStart(2, '0')
+    for (let h = 0; h < 24; h++) {
+      const now = Date.UTC(2026, 8, 5, h, 41, 59)
+      const msg = buildNoWorkNotice('jarvis', 14, now)
+      const d = new Date(now)
+      // Expected value derived WITHOUT Intl, so this asserts the padding rather than
+      // re-running the same formatter and agreeing with itself.
+      expect(msg).toContain(`MERVE ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}-kor`)
+      expect(msg).toMatch(/MERVE \d{2}:\d{2}:\d{2}-kor/)
+    }
+  })
+
+  it('says of ITSELF that it may be stale by the time it is read', () => {
+    const msg = buildNoWorkNotice('jarvis', 14, NO_WORK_NOW)
+    expect(msg).toMatch(/avult lehet/)
+    expect(msg).toMatch(/KOORDINATOR soraban all/)
+  })
+
+  it('hands over a fresh measurement, and the AGENT NAME IS IN THE COMMAND', () => {
+    // ANCHORED ON THE COMMAND LINES, NOT ON THE MESSAGE, AND THAT IS DELIBERATE.
+    //
+    // The sibling notice asserts `expect(msg).toContain('friday')` for the same property,
+    // and that assertion is satisfied by the FIRST line of the message -- so it stayed green
+    // while the query it hands over carried a literal `${sender}`. Measured 2026-09-05:
+    // pasted verbatim, that command exits 0 and prints `[]` for a sender who had fifteen
+    // stuck messages. A silent false negative, in the reassuring direction.
+    const msg = buildNoWorkNotice('jarvis', 14, NO_WORK_NOW)
+    const cmd = msg.split('\n').filter((l) => l.includes('/api/kanban') || l.includes('json.load'))
+    expect(cmd.length, 'nem talaltam a handover parancs sorait').toBeGreaterThan(0)
+    expect(cmd.join('\n')).toContain("=='jarvis'")
+    // The defect itself, pinned on the whole message: no un-interpolated placeholder anywhere.
+    expect(msg).not.toContain('${agent}')
+    expect(msg).not.toContain('${sender}')
+  })
+
+  it('says what an EMPTY answer does NOT prove -- the check is asymmetric', () => {
+    // A non-empty answer refutes this notice outright; an empty one does not reproduce the
+    // guard's decision, because the one-liner filters neither a future `due_date` nor the
+    // `varakozik:` labels. Handing over a command that LOOKS like the guard would answer the
+    // neighbouring question with the guard's authority behind it.
+    const msg = buildNoWorkNotice('jarvis', 14, NO_WORK_NOW)
+    expect(msg).toMatch(/Ha ez BARMIT ad vissza/)
+    expect(msg).toMatch(/ELAVULT/)
+    expect(msg).toMatch(/Ha URESET ad/)
+    expect(msg).toContain('due_date')
+    expect(msg).toContain('varakozik:')
   })
 })
 
@@ -1181,13 +1422,15 @@ describe('the ownerless pull-list (card 4cbc8af9)', () => {
 })
 
 describe('the notice an idle agent gets when the board has ownerless work', () => {
+  const PULL_NOW = Date.UTC(2026, 8, 5, 11, 57, 9)
+
   const items = [
     { id: 'aaaaaaaa11', title: 'egy magas prioritasu tetel', priority: 'high' },
     { id: 'bbbbbbbb22', title: 'egy masik', priority: 'normal' },
   ]
 
   it('NAMES the cards -- a count alone is what the old notice already was', () => {
-    const msg = buildPullNotice('jarvis', 20, items)
+    const msg = buildPullNotice('jarvis', 20, items, PULL_NOW)
     expect(msg).toContain('aaaaaaaa')
     expect(msg).toContain('egy magas prioritasu tetel')
   })
@@ -1195,13 +1438,13 @@ describe('the notice an idle agent gets when the board has ownerless work', () =
   it('and tells the reader to LOCK first', () => {
     // Two agents took the same card 19 seconds apart on the day the rule was
     // written. Naming a card without saying this invites exactly that.
-    const msg = buildPullNotice('jarvis', 20, items)
+    const msg = buildPullNotice('jarvis', 20, items, PULL_NOW)
     expect(msg).toMatch(/assignee/)
     expect(msg).toMatch(/in_progress/)
   })
 
   it('does NOT claim there is nothing assigned -- that was the false sentence', () => {
-    expect(buildPullNotice('jarvis', 20, items)).not.toContain('NINCS RA KIOSZTVA SEMMI')
+    expect(buildPullNotice('jarvis', 20, items, PULL_NOW)).not.toContain('NINCS RA KIOSZTVA SEMMI')
   })
 })
 
@@ -1310,23 +1553,127 @@ describe('a message still queued long after it was sent (card 979283a9)', () => 
 describe('the notice itself must not send anyone back to the queue', () => {
   const NOW = 600_000_000
   const rows = [{ to_agent: 'dexter', created_at: Math.floor((NOW - 70 * 60_000) / 1000) }]
+  const BUSY = new Map<string, RecipientPaneState>([['dexter', 'busy']])
 
   it('names the recipient and how long it has waited', () => {
-    const msg = buildPendingStillWaitingNotice('friday', rows, NOW)
+    const msg = buildPendingStillWaitingNotice('friday', rows, NOW, BUSY)
     expect(msg).toContain('dexter')
     expect(msg).toMatch(/70 perce/)
   })
 
   it('EXPLICITLY says not to resend -- a resend is a duplicate, not a retry', () => {
     // marveen measured this twice on 2026-08-28, once by accident: `pending`
-    // lives in the database and survives a restart.
-    const msg = buildPendingStillWaitingNotice('friday', rows, NOW)
+    // lives in the database and survives a restart. Note the precondition:
+    // this advice is only correct when the pane was MEASURED busy.
+    const msg = buildPendingStillWaitingNotice('friday', rows, NOW, BUSY)
     expect(msg).toMatch(/ne kuldd ujra/i)
     expect(msg).toMatch(/duplikatum/i)
   })
 
   it('and points at the card, which does not queue', () => {
-    expect(buildPendingStillWaitingNotice('friday', rows, NOW)).toMatch(/KARTYARA/)
+    expect(buildPendingStillWaitingNotice('friday', rows, NOW, BUSY)).toMatch(/KARTYARA/)
+  })
+})
+
+// THE NOTICE MUST REPORT WHAT IT MEASURED, NOT WHAT IT ASSUMES (card 1d800670).
+//
+// The old text said "a cimzett dolgozik" for every firing. friday's case had all
+// three messages already failed with the target session absent, and the notice
+// still forbade a resend. Measured twice on 2026-09-02 the claim happened to be
+// TRUE (didi 1h18m, computress 58m) -- which is the danger, not the defence: a
+// signal that is usually right earns the trust it spends on the case it cannot see.
+describe('the pending notice measures the recipient pane instead of asserting it', () => {
+  const NOW = 600_000_000
+  const rows = [{ to_agent: 'dexter', created_at: Math.floor((NOW - 70 * 60_000) / 1000) }]
+  const withState = (st: RecipientPaneState) =>
+    buildPendingStillWaitingNotice('friday', rows, NOW, new Map([['dexter', st]]))
+
+  it('says BUSY was measured, and only then forbids the resend', () => {
+    const msg = withState('busy')
+    expect(msg).toMatch(/BUSY \(merve\)/)
+    expect(msg).toMatch(/ne kuldd ujra/i)
+  })
+
+  it('an UNKNOWN pane does NOT forbid the resend -- that is the case where the session may be gone', () => {
+    const msg = withState('unknown')
+    expect(msg).toMatch(/NEM MEGALLAPITHATO/)
+    expect(msg).not.toMatch(/ne kuldd ujra/i)
+  })
+
+  it('an IDLE pane does NOT forbid the resend either -- the router should already have injected', () => {
+    const msg = withState('idle')
+    expect(msg).toMatch(/URES \(merve\)/)
+    expect(msg).not.toMatch(/ne kuldd ujra/i)
+  })
+
+  it('a recipient MISSING from the map is UNKNOWN, never assumed busy', () => {
+    // The default has to fail open: an absent measurement is not a measurement.
+    const msg = buildPendingStillWaitingNotice('friday', rows, NOW, new Map())
+    expect(msg).toMatch(/NEM MEGALLAPITHATO/)
+    expect(msg).not.toMatch(/ne kuldd ujra/i)
+  })
+
+  it('STAMPS the reading and says the notice itself may be stale', () => {
+    // Card 1d800670, didi 2026-09-02: notice 8164 sat 91 minutes in the very queue
+    // it reports (12:17:28 -> 13:49:25), and the message it named had been delivered
+    // 69 minutes before it arrived. Every line was true at birth and false on arrival.
+    // A FIXTURE HUSZONNEGY ORAI INSTANSRA BOVULT, ES EZ MERT DEFEKTUS-JAVITAS (kartya 7edc5839).
+    // A `NOW = 600_000_000` fix instans nalunk 23:40 helyi idore esik, tehat KET SZAMJEGYU orara,
+    // ahol a parnazott es a parnazatlan formazo EGYBEESIK. jarvis merte hat zonaban, es a teszt
+    // Asia/Tokyoban (07:40) PIROS volt -- vagyis nem a kod helyessege tartotta zolden, hanem a
+    // gep idozonaja. Futtatassal ujramerve ugyanezen a fan: Tokyo PIROS, negy masik zona zold.
+    const msg = withState('busy')
+    expect(msg).toMatch(/avult lehet/)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    for (let h = 0; h < 24; h++) {
+      const t = Date.UTC(2026, 8, 5, h, 41, 59)
+      const m = buildPendingStillWaitingNotice('friday', rows, t, new Map([['dexter', 'busy' as const]]))
+      const d = new Date(t)
+      expect(m).toContain(`MERVE ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}-kor`)
+      expect(m).toMatch(/MERVE \d{2}:\d{2}:\d{2}-kor/)
+    }
+  })
+
+  it('hands over a FRESH measurement instead of asking the reader to discount a stale one', () => {
+    // The stamp alone would repeat the shape this board keeps rejecting: a fix that
+    // works only if the reader remembers to compensate. The notice must name the
+    // command that answers the question today.
+    const msg = withState('busy')
+    expect(msg).toMatch(/MERD UJRA/)
+    expect(msg).toContain('agent_messages')
+
+    // THE ASSERTION MUST LAND ON THE COMMAND, NOT ON THE PROSE (card e6685c94, friday).
+    // `toContain('friday')` alone is satisfied by the notice's FIRST line, which names the
+    // sender in prose -- so it stayed green while the emitted command carried a literal
+    // `${sender}`. Pasted verbatim that query returns [] and exits 0 for a sender with 15
+    // queued messages: a silent false negative, in the reassuring direction, in the one
+    // line whose whole purpose is to hand over a fresh measurement.
+    const cmd = msg.split('\n').find((l) => l.includes('agent_messages')) ?? ''
+    expect(cmd).not.toContain('${sender}')
+    expect(cmd).toContain("('friday',")
+  })
+
+  it('and the command interpolates the ACTUAL sender -- a different sender gives a different command', () => {
+    // The negative control: without this, a hard-coded 'friday' in the command would pass
+    // the assertion above. Two senders, two commands, and neither contains the other's name.
+    const forDexter = buildPendingStillWaitingNotice('dexter', rows, NOW, new Map([['dexter', 'busy' as const]]))
+    expect(forDexter).toContain("('dexter',")
+    expect(forDexter).not.toContain("('friday',")
+  })
+})
+
+// AND THAT THE WATCHER ACTUALLY MEASURES IT -- the function above can be perfect
+// while the call site passes an empty map forever. Same shape the file already
+// tests for elsewhere: unit tests pin a function, nothing pins its use.
+describe('the watcher measures the pane before building the notice', () => {
+  const SRC = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'web', 'idle-agent-watcher.ts'), 'utf-8')
+
+  it('sweepStalePending calls detectPaneState before the notice', () => {
+    const fn = SRC.slice(SRC.indexOf('function sweepStalePending'))
+    const upToCall = fn.slice(0, fn.indexOf('buildPendingStillWaitingNotice'))
+    expect(upToCall).toContain('detectPaneState')
+    expect(upToCall).toContain('capturePane')
   })
 })
 

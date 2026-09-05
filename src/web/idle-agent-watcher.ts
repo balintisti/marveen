@@ -19,6 +19,7 @@ import {
   buildPullNotice,
   stalePendingBySender,
   buildPendingStillWaitingNotice,
+  type RecipientPaneState,
   type PendingRow,
   buildWakeMessage,
   buildFleetAlert,
@@ -105,8 +106,28 @@ function sweepStalePending(): void {
     // 'system' is not an agent anyone can read a notice as; skip it rather than
     // send into a void.
     if (sender === 'system') continue
+    // MEASURE the recipient's pane instead of asserting it (card 1d800670).
+    // The old text said "a cimzett dolgozik" unconditionally; friday's case had
+    // all three messages already failed with the session gone, and the notice
+    // still told the sender not to resend. Everything needed was already
+    // imported in this file -- the capability was present and unwired.
+    const paneStates = new Map<string, RecipientPaneState>()
+    for (const m of msgs) {
+      if (paneStates.has(m.to_agent)) continue
+      let st: RecipientPaneState = 'unknown'
+      try {
+        if (isAgentRunning(m.to_agent)) {
+          const pane = capturePane(resolveAgentSession(m.to_agent))
+          if (pane !== null) {
+            const detected = detectPaneState(pane)
+            st = detected === 'busy' ? 'busy' : detected === 'idle' ? 'idle' : 'unknown'
+          }
+        }
+      } catch { st = 'unknown' }
+      paneStates.set(m.to_agent, st)
+    }
     try {
-      createAgentMessage('system', sender, buildPendingStillWaitingNotice(sender, msgs, now))
+      createAgentMessage('system', sender, buildPendingStillWaitingNotice(sender, msgs, now, paneStates))
       for (const m of msgs) pendingNoticed.add(m.id)
       logger.info({ idleGuard: true, sender, count: msgs.length }, 'message queue: told the SENDER their message is still pending')
     } catch (err) {
@@ -392,7 +413,7 @@ export function tick(): void {
         )
         if (pull.length > 0) {
           try {
-            createAgentMessage('system', agent, buildPullNotice(agent, minutes, pull))
+            createAgentMessage('system', agent, buildPullNotice(agent, minutes, pull, Date.now()))
             logger.info(
               { idleGuard: true, agent, orphanCount: pull.length, top: pull[0]?.id },
               'idle guard: agent idle with nothing assigned -- named the ownerless pull-list',
@@ -403,7 +424,7 @@ export function tick(): void {
           continue
         }
         try {
-          createAgentMessage('system', MAIN_AGENT_ID, buildNoWorkNotice(agent, minutes))
+          createAgentMessage('system', MAIN_AGENT_ID, buildNoWorkNotice(agent, minutes, Date.now()))
           logger.info(
             { idleGuard: true, agent, idleForMs: decision.idleForMs },
             'idle guard: agent idle with nothing assigned -- told the coordinator',
@@ -418,7 +439,7 @@ export function tick(): void {
         const items = ownItems ?? []
         const minutes = Math.round(decision.idleForMs / 60_000)
         try {
-          createAgentMessage('system', agent, buildWakeMessage(agent, minutes, decision.workCount, items, (check as WorkCheck).kind))
+          createAgentMessage('system', agent, buildWakeMessage(agent, minutes, decision.workCount, items, Date.now(), (check as WorkCheck).kind))
           logger.info(
             { idleGuard: true, agent, workCount: decision.workCount, idleForMs: decision.idleForMs },
             'idle guard: woke the agent (stage 1) -- no human told yet',

@@ -713,21 +713,68 @@ export function stalePendingBySender(
  *  a card. That asymmetry is the whole lesson of the day this card was rescoped
  *  -- a commit is visible to the recipient immediately, a message is not.
  */
+export type RecipientPaneState = 'busy' | 'idle' | 'unknown'
+
 export function buildPendingStillWaitingNotice(
   sender: string,
   rows: { to_agent: string; created_at: number }[],
   nowMs: number,
+  paneStates: ReadonlyMap<string, RecipientPaneState>,
 ): string {
+  const label: Record<RecipientPaneState, string> = {
+    busy: 'a panelje BUSY (merve)',
+    idle: 'a panelje URES (merve) -- NEM a munka tartja fel',
+    unknown: 'a panel-allapota NEM MEGALLAPITHATO (nincs munkamenet, vagy a capture bukott)',
+  }
+  const stateOf = (name: string): RecipientPaneState => paneStates.get(name) ?? 'unknown'
   const line = (r: { to_agent: string; created_at: number }) =>
     `  -> ${r.to_agent}: ${Math.round((nowMs - r.created_at * 1000) / 60_000)} perce all sorban`
+    + ` -- ${label[stateOf(r.to_agent)]}`
+
+  // The advice branches on what was MEASURED. `busy` is the only state in which
+  // "do not resend" is an argument rather than an assumption: an idle pane means
+  // the router should already have injected, and an unknown one is exactly the
+  // case where the session may be gone and the message about to fail.
+  const allBusy = rows.every((r) => stateOf(r.to_agent) === 'busy')
+  const advice = allBusy
+    ? [
+        'Mind a cimzett panelje BUSY -- a router csak IDLE panelbe tud injektalni, tehat ez nem',
+        'hiba. Amit NE tegyel: ne kuldd ujra. A `pending` sor az adatbazisban all es TULEL egy',
+        'restartot is, tehat a masodik level duplikatum lenne.',
+      ]
+    : [
+        'FIGYELEM: NEM minden cimzett panelje BUSY (lasd a soronkenti merest). Ez NEM a szokasos',
+        '"dolgozik, varj" eset: egy URES panel azt jelenti, hogy a routernek mar be kellett volna',
+        'injektalnia, egy NEM MEGALLAPITHATO allapot pedig eppen az, amiben a munkamenet hianyozhat',
+        'es az uzenet `failed`-be fordulhat. Itt az ujrakuldest NEM tiltom -- eloszb nezd meg,',
+        'el-e a cimzett munkamenete.',
+      ]
+
+  // EVERY LINE ABOVE IS TRUE AT `nowMs` AND ONLY THEN -- card 1d800670, didi 2026-09-02.
+  // This notice RIDES THE QUEUE IT REPORTS, so it is slowest exactly when it fires, and
+  // slowest of all when the target session is ABSENT and nothing drains the queue at all --
+  // which is the one case where "do not resend" does harm. Measured instance: notice 8164
+  // sat 91 minutes (12:17:28 -> 13:49:25), and the message it named had been delivered 69
+  // minutes before it arrived. So the reading is stamped, and the closing advice hands over
+  // a FRESH measurement instead of asking the reader to discount a stale one.
+  // ONE STAMP HELPER FOR ALL FOUR NOTICES (card 7edc5839, jarvis's read of the merged tree).
+  // This builder carried its own inline formatter, and `toLocaleTimeString('hu-HU', {hour12:false})`
+  // drops the leading hour zero: measured on the merged tree in ONE process at ONE instant, the
+  // other three rendered `04:41:59` and this one `4:41:59`. The helper's own docblock names the
+  // defect a few hundred lines below, so the tree carried the diagnosis AND the defect together.
+  const stamp = stampOf(nowMs)
   return [
-    `[uzenet-or] A(z) "${sender}" ${rows.length} elkuldott uzenete MEG MINDIG nem kezbesult:`,
+    `[uzenet-or] A(z) "${sender}" ${rows.length} elkuldott uzenete MEG MINDIG nem kezbesult`,
+    `(MERVE ${stamp}-kor -- ez a jelentes maga is sorban all, tehat MOST mar avult lehet):`,
     '',
     ...rows.slice(0, 5).map(line),
     '',
-    'A cimzett dolgozik -- a router csak IDLE panelbe tud injektalni, tehat ez nem hiba,',
-    'es nem is akadaly nala. Amit NE tegyel: ne kuldd ujra. A `pending` sor az adatbazisban',
-    'all es TULEL egy restartot is, tehat a masodik level duplikatum lenne.',
+    ...advice,
+    '',
+    'MIELOTT BARMIT TESZEL, MERD UJRA -- egy sor, es a mai allapotot adja:',
+    "python3 -c \"import sqlite3;c=sqlite3.connect('file:store/claudeclaw.db?mode=ro',uri=True);"
+      + "print(list(c.execute(\\\"select id,to_agent,status from agent_messages where from_agent=?"
+      + " and status in ('pending','failed')\\\", ('" + sender + "',))))\"",
     '',
     'Amit erdemes: ha DONTES vagy LELET volt benne, tedd a KARTYARA is. A kartya nem all',
     'sorba -- a cimzett akkor is latja, amikor a levelet meg nem olvasta el.',
@@ -837,6 +884,19 @@ export function laneFilteredPullList<T extends { project?: string | null }>(
   })
 }
 
+/** The reading's own clock time, zero-padded at EVERY hour (card 7edc5839).
+ *
+ *  `toLocaleTimeString('hu-HU', { hour12: false })` alone drops the leading zero -- 04:41 CEST
+ *  renders as "4:41:59" -- so an assertion of the form /\d{2}:\d{2}:\d{2}/ against a single
+ *  fixed fixture passes or fails depending on which hour the fixture lands on, not on whether
+ *  the code pads. Measured 2026-09-05; the tests walk twenty-four hourly instants for exactly
+ *  that reason. */
+function stampOf(nowMs: number): string {
+  return new Date(nowMs).toLocaleTimeString('hu-HU', {
+    hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
+  })
+}
+
 /** What an idle agent is told when the board HAS ownerless work (card 4cbc8af9).
  *
  *  Addressed to the AGENT, not the coordinator -- that is the whole point. The
@@ -853,24 +913,68 @@ export function buildPullNotice(
   agent: string,
   minutes: number,
   items: { id: string; title?: string | null; priority?: string | null }[],
+  nowMs: number,
 ): string {
   const line = (c: { id: string; title?: string | null; priority?: string | null }) =>
     `  ${c.id.slice(0, 8)}  ${(c.priority ?? 'normal').padEnd(6)}  ${(c.title ?? '').slice(0, 60)}`
   return [
     `[tetlen-or] A(z) "${agent}" ${minutes} perce ures prompton all, es a NEVEN nincs semmi --`,
-    `de a tablan ${items.length} GAZDATLAN kartya var, amit barki felvehet:`,
+    `de a tablan ${items.length} GAZDATLAN kartya var, amit barki felvehet`,
+    `(MERVE ${stampOf(nowMs)}-kor):`,
     '',
     ...items.slice(0, 5).map(line),
     '',
     'FOGLALD LE ELOSZOR, aztan merj: `assignee` + `in_progress`. Ket agens 19 masodperc',
     'kulonbseggel vette fel ugyanazt a kartyat azon a napon, amikor ez a szabaly szuletett.',
     'Ha egyik sem a te savod, sorold at egy soros indoklassal -- az is elvegzett munka.',
+    '',
+    // A COUNT DOES NOT DECAY FROM THE CLOCK -- IT DECAYS BECAUSE SOMEONE ELSE ACTED, which is
+    // why the stamp above is necessary but NOT sufficient for this line (mandark, marveen, 7edc5839).
+    // Measured instance, and the measurer falsified it himself: a pull notice said "27 GAZDATLAN
+    // kartya var", he took one off that very list four minutes later, and the count is now 26. No
+    // delay was involved -- a stamp on that line would have been TRUE and useless.
+    // Worse than useless: a STAMPED but stale count reads as MORE authoritative than an unstamped
+    // one, because the stamp suggests the number is looked after. Stamping it and stopping would
+    // make this class look repaired while leaving it exactly as wrong.
+    `A fenti ${items.length} PILLANATFELVETEL, nem elo szam -- es nem az ora avultatja el, hanem`,
+    'egy MASIK AGENS, aki felvesz egyet. Ezert FOGLALJ ELOSZOR: ha a kartya mar nem gazdatlan, ez',
+    'a lista tevedett, nem te. Ujrakerdezni (gazdatlan `planned` darabszam MOST):',
+    `curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" http://localhost:3420/api/kanban \\`,
+    `| python3 -c "import json,sys;print(sum(1 for c in json.load(sys.stdin)`
+      + ` if not c.get('assignee') and c.get('status')=='planned' and not c.get('archived_at')))"`,
   ].join('\n')
 }
 
-export function buildNoWorkNotice(agent: string, minutes: number): string {
+export function buildNoWorkNotice(agent: string, minutes: number, nowMs: number): string {
+  // THIS NOTICE RIDES THE COORDINATOR'S QUEUE, AND THAT IS WHY IT IS STAMPED (card 7edc5839).
+  //
+  // Card 1d800670 stamped the sibling notice because it rides the queue it reports. The
+  // question this card asked was which OTHER builders in this file deserve the same, and
+  // the answer is not "all of them" -- it is decided by WHO RECEIVES the notice, measured
+  // on 2026-09-05 over the delivered rows in `agent_messages` (delivered_at - created_at):
+  //
+  //   buildWakeMessage      n=674  median 0.08  max 0.30 min   -> goes to the IDLE pane
+  //   buildPullNotice       n=50   median 0.08  max 6.27 min   -> goes to the IDLE pane
+  //   buildNoWorkNotice     n=138  median 0.37  p95 4.69  max 24.55 min, 6 over five minutes
+  //
+  // The wake and the pull notice are addressed to a pane the guard just measured as IDLE,
+  // so the router drains them in seconds -- stamping those would be noise, and the card
+  // said so. This one is addressed to MAIN_AGENT_ID, the busiest recipient on the board:
+  // all eight of its slowest deliveries went to the coordinator, the worst at 24.55 minutes.
+  // (The single pull-notice outlier went to the coordinator too, on a sweep where HE was
+  // the idle agent -- same mechanism, not a counterexample.)
+  //
+  // And the decay is not symmetric. What this notice asserts -- "nothing is assigned to
+  // him" -- is falsified by one card being assigned in the meantime, and the action it
+  // asks for is exactly the one that must not be taken on a stale reading: setting his
+  // `workcheck.json` to {"kind":"none"} SILENCES this guard for that agent, with no expiry
+  // and nothing to restore it. A stale "he has nothing" therefore does not waste a message;
+  // it can blind the guard for an agent who does have work.
+  const stamp = stampOf(nowMs)
   return [
     `[tetlen-or] A(z) "${agent}" ${minutes} perce ures prompton all, ES NINCS RA KIOSZTVA SEMMI.`,
+    `(MERVE ${stamp}-kor -- ez a jelentes a KOORDINATOR soraban all, ahol merve 24 percet is`,
+    'allt mar, tehat MOST mar avult lehet.)',
     '',
     'Ez nem az o hibaja es nem is akadaly: nincs mit felvennie. A tetlen-or eddig HALLGATOTT',
     'errol az esetrol -- azt figyelte, akinek VAN munkaja es megsem mozdul --, tehat epp a',
@@ -885,6 +989,21 @@ export function buildNoWorkNotice(agent: string, minutes: number): string {
     'Amit tolem var: adj neki kartyat, vagy ha tenyleg nincs neki valo, allitsd a',
     'workcheck.json-jat `{"kind":"none"}`-ra -- EZT olvasom, a kartyat nem. Kulonben a',
     'kovetkezo korben ugyanezt fogom kuldeni.',
+    '',
+    'MIELOTT BARMELYIKET TESZED, MERD UJRA -- egy sor, es a MAI allapotot adja:',
+    `curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" http://localhost:3420/api/kanban \\`,
+    `| python3 -c "import json,sys;print([(c['id'][:8],c['status']) for c in json.load(sys.stdin)`
+      + ` if c.get('assignee')=='${agent}' and c.get('status') not in ('done','waiting') and not c.get('archived_at')])"`,
+    '',
+    // ASYMMETRIC ON PURPOSE, and the message has to say so. This one-liner is a STALENESS
+    // check, not a re-run of my decision: it does not filter a future `due_date` or the
+    // `varakozik:` labels, so a NON-EMPTY answer refutes this notice outright, while an
+    // empty one only means I may still be right. Handing over a command that looks like it
+    // reproduces the guard would be worse than handing over none -- it would answer the
+    // neighbouring question with my authority behind it.
+    `Ha ez BARMIT ad vissza, ez a jelentes ELAVULT: a(z) "${agent}" kapott munkat, miota megmertem.`,
+    'Ha URESET ad, az meg NEM az en dontesem megismetlese -- a jovobeli `due_date`-et es a',
+    '`varakozik:` cimkeket ez a sor NEM szuri. Csak azt mondja meg, hogy a jelentes MEG all-e.',
   ].join('\n')
 }
 
@@ -907,6 +1026,7 @@ export function buildWakeMessage(
   minutes: number,
   workCount: number,
   items: { id: string; title?: string | null; priority?: string | null; status?: string }[],
+  nowMs: number,
   kind: WorkCheckKind = 'assigned_open_cards',
 ): string {
   const rank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 }
@@ -929,7 +1049,8 @@ export function buildWakeMessage(
     `  ${c.id.slice(0, 8)}  ${(c.status ?? '?').padEnd(11)} ${(c.priority ?? 'normal').padEnd(6)}  ${(c.title ?? '').slice(0, 60)}`
 
   const out = [
-    `[tetlen-or] ${minutes} perce allsz ureses prompton, es ${workCount} tetel var rád.`,
+    `[tetlen-or] ${minutes} perce allsz ureses prompton (MERVE ${stampOf(nowMs)}-kor), es`,
+    `${workCount} tetel var rád.`,
     '',
     'EZ NEM SZEMREHANYAS, ES NEM A TE HIBAD. Egy agens nem tud maganak uj fordulot inditani:',
     'a szandek a fordulo belsejeben el, es a fordulo vegen meghal vele. Az egyetlen dolog, ami',
@@ -956,6 +1077,22 @@ export function buildWakeMessage(
   if (!work.length && !review.length) {
     out.push('A szamlalod nem nulla, de tetelt nem tudtam megnevezni -- nezd meg a tablat.')
   }
+  // THE STAMP ABOVE FIXES THE DURATION AND NOT THE COUNT, AND THE MESSAGE HAS TO SAY WHICH.
+  // A duration decays from the CLOCK, so a stamp repairs it completely -- the reader subtracts.
+  // A count decays because ANOTHER AGENT ACTED, and no stamp can repair that: it only says the
+  // number is old. Measured 2026-09-05, and the measurer falsified it himself -- a pull notice
+  // said "27 GAZDATLAN kartya var", he took one off that list four minutes later, and it was 26.
+  // A stamped-but-stale count reads as MORE authoritative than an unstamped one, so stamping and
+  // stopping would make this class look repaired while leaving it exactly as wrong (card 7edc5839).
+  out.push(
+    '',
+    `A ${workCount} es a fenti lista PILLANATFELVETEL. Az ora-resze fent megbelyegezve; a SZAMOT`,
+    'viszont nem az ora avultatja, hanem egy masik szereplo -- egy statuszvaltas vagy egy foglalas.',
+    'Ezert FOGLALJ ELOSZOR (`assignee` + `in_progress`), es csak azutan merj. Ujrakerdezni:',
+    `curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" http://localhost:3420/api/kanban \\`,
+    `| python3 -c "import json,sys;print([(c['id'][:8],c['status']) for c in json.load(sys.stdin)`
+      + ` if c.get('assignee')=='${agent}' and c.get('status') not in ('done','waiting') and not c.get('archived_at')])"`,
+  )
   out.push(
     '',
     work.length

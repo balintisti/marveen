@@ -660,3 +660,72 @@ function handoffRequest(
     },
   }
 }
+
+/** How far back a restart's loss window reaches. Card 82d9b960.
+ *
+ *  THE WINDOW IS THE POINT, NOT THE STATUS -- and getting that backwards is actively
+ *  harmful, which is why it is a named constant with this note attached. Measured
+ *  2026-09-05: dexter carried twelve `failed` rows, and the first reading of that number
+ *  was "twelve were lost, resend them". Nine were from 08-19 and three from 08-29. Resending
+ *  them would have injected long-solved blockers into a fresh session -- consuming exactly
+ *  the context the restart was performed to reclaim. A restart can only have cost the
+ *  messages that were in flight AROUND it. */
+export const RESTART_LOSS_WINDOW_MS = 30 * 60_000
+
+/** What a restart actually cost, as a line the notice carries instead of a warning it
+ *  delegates (card 82d9b960).
+ *
+ *  The old text said: "messages sent to the old session in the last minutes MAY HAVE BEEN
+ *  LOST -- check and resend them." The notifier knows the agent's name and the restart time,
+ *  which are exactly the two inputs the reader uses to answer it -- so every recipient ran
+ *  the same three queries, and marveen measured six restarts in one evening with ZERO losses
+ *  each time. Six outsourced measurements for one answer that was always the same.
+ *
+ *  This does NOT claim losses never happen: the `failed` mechanism is real. It claims the
+ *  COMMON case is zero, and a warning that always states the rare case teaches the reader to
+ *  skim it.
+ *
+ *  Pure on purpose -- the rows come from the caller, so this is testable on fixtures without
+ *  a database, and the window arithmetic is visible rather than buried in SQL. */
+export function buildRestartLossLine(
+  rows: { id: number; status: string; created_at: number }[],
+  restartMs: number,
+  windowMs: number = RESTART_LOSS_WINDOW_MS,
+  stamp?: string,
+): string {
+  // ONE GRAMMAR FOR THE WORD `MERVE`, ACROSS EVERY NOTICE THE COORDINATOR RECEIVES.
+  // jarvis, 2026-09-05, reading the merged tree: the same word had two grammars in the same
+  // mailbox -- `MERVE 04:41:59-kor` (WHEN I read) in the idle-guard notices, and `MERVE:` +
+  // counts (WHAT I measured) here. Not two audiences: ONE audience, two grammars, so a reader
+  // who learns that `MERVE` is followed by a clock gets a colon and numbers instead.
+  //
+  // He also measured, field by field, that a stamp is NOT load-bearing here: a `failed` row
+  // stays failed, and `pending` decays toward zero while its advice ("do not resend") stays
+  // true. So this is a CONSISTENCY change and not a correctness fix -- said plainly, because
+  // the commit would otherwise claim to close a hole that was never open.
+  const sinceSec = (restartMs - windowMs) / 1000
+  const pending = rows.filter((r) => r.status === 'pending')
+  // `created_at` is epoch SECONDS in this table; the restart instant is millis. Mixing the
+  // two silently classifies EVERY historical row as in-window, which is the failure this
+  // whole card is about -- so the conversion happens once, here, next to its reason.
+  const failedInWindow = rows.filter((r) => r.status === 'failed' && r.created_at >= sinceSec)
+  const mins = Math.round(windowMs / 60_000)
+
+  const head = stamp ? ` MERVE ${stamp}-kor:` : ' MERVE:'
+  if (pending.length === 0 && failedInWindow.length === 0) {
+    return `${head} pending 0 | failed a restart ${mins} perces ablakaban: 0 -- NINCS mit ujrakuldeni.`
+  }
+  const parts: string[] = []
+  if (failedInWindow.length > 0) {
+    parts.push(
+      `failed AZ ABLAKBAN: ${failedInWindow.length} (id ${failedInWindow.map((r) => r.id).join(', ')})` +
+      ` -- EZEKET kuldd ujra`,
+    )
+  }
+  if (pending.length > 0) {
+    // Pending is NOT loss: the row is in the database and survives a restart. Saying so here
+    // stops the reader from resending a message the router will still deliver.
+    parts.push(`pending: ${pending.length} -- ezek a SORBAN allnak es TULELTEK a restartot, NE kuldd ujra`)
+  }
+  return `${head} ${parts.join(' | ')}.`
+}
