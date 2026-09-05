@@ -34,6 +34,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOOK_DIR="$(cd "$(git -C "$ROOT" rev-parse --git-common-dir)" && pwd)/hooks"
 DISPATCH="$HOOK_DIR/pre-commit"
+MERGE_DISPATCH="$HOOK_DIR/pre-merge-commit"
 GUARD="$HOOK_DIR/pre-commit.d/05-prod-tree-guard"
 DISPATCH_MARK="marveen-pre-commit-dispatcher"
 MARK="marveen-prod-tree-guard"
@@ -90,8 +91,34 @@ TOPLEVEL="$(git rev-parse --show-toplevel 2>/dev/null || echo)"
 # A MERGE_HEAD PONTOSAN ADDIG LETEZIK, AMIG A MERGE BEFEJEZETLEN (merve: utkozo merge alatt es
 # `--no-commit` utan LETEZIK; a merge befejezese utan NEM). Tehat ez a kapu nem tagit tobbet, mint
 # a folyamatban levo merge lezarasa -- egy kesobbi, fuggetlen commit ugyanugy blokkolt marad.
-if [ "$TOPLEVEL" = "$PROD_ROOT" ] && git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
-  echo "prod-tree-guard: folyamatban levo MERGE lezarasa -- atengedve (a merge ezen a fan szankcionalt)." >&2
+# ES A pre-merge-commit UTON A MERGE_HEAD MEG NEM LETEZIK -- MERVE (kartya 2033a2da):
+# egy tiszta merge alatt a hookban `MERGE_HEAD` NEM, `MERGE_MSG` NEM, viszont
+# `GIT_REFLOG_ACTION=merge <ag>` IGEN. Vagyis a fenti feltetel ott SZERKEZETILEG nem tud
+# tuzelni, es a kapu MINDEN tiszta merge-et blokkolna a fo checkouton. Ezt a sajat
+# pozitiv kontrollom fogta meg (blokkolo NELKULI merge -> megis blokkolva), nem az
+# atolvasas. Ezert a merge-dispatcher exportal egy jelzot, es azt is elfogadjuk.
+if [ "$TOPLEVEL" = "$PROD_ROOT" ] && { git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 \
+     || [ "${MARVEEN_MERGE_COMMIT:-0}" = "1" ]; }; then
+  # A FELREALLAS IS NYOMOT HAGY, ES EZ NEM AZ EN VALTOZASOM MIATT KELL, HANEM AZ OVE MIATT:
+  # a MERGE_HEAD-es ag EDDIG SEM naplozott, es en ezt a felreallast SZELESITETTEM ki egy
+  # git-vezerelt feltetelrol (MERGE_HEAD letezik) egy HIVO-ALTAL-ALLITHATORA
+  # (MARVEEN_MERGE_COMMIT=1). Egy megkerules, amit a hivo be tud kapcsolni es amirol semmi nem
+  # marad, rosszabb, mint a meglevo `MARVEEN_PROD_COMMIT_OK` ut -- AZ legalabb naploz.
+  # (didi vette eszre a szelesitest, 2026-09-04; a naplozatlansag mar elotte is igaz volt.)
+  # A `via=` azert kell, mert a ket feltetel NEM egyenrangu: az egyiket a git allitja be egy
+  # folyamatban levo merge alatt, a masikat barki, barmikor.
+  _sa_log="$PROD_ROOT/store/prod-tree-override.log"
+  if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then _sa_via=MERGE_HEAD
+  else _sa_via=MARVEEN_MERGE_COMMIT; fi
+  mkdir -p "$(dirname "$_sa_log")" 2>/dev/null || true
+  printf '%s\tbranch=%s\tfiles=%s\treason=merge-stand-aside via=%s\tpaths=%s\n' \
+    "$(date '+%Y-%m-%dT%H:%M:%S%z')" \
+    "$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')" \
+    "$(git diff --cached --name-only 2>/dev/null | grep -c . || true)" \
+    "$_sa_via" \
+    "$(git diff --cached --name-only 2>/dev/null | tr '\n' ' ')" \
+    >> "$_sa_log" 2>/dev/null || true
+  echo "prod-tree-guard: folyamatban levo MERGE lezarasa -- atengedve (via=$_sa_via, naplozva)." >&2
   exit 0
 fi
 
@@ -222,6 +249,45 @@ done
 exit \$status
 EOF
 chmod +x "$DISPATCH"
+
+# 2b. pre-merge-commit: THE SAME CHAIN, A SECOND ENTRY POINT.
+#     Git does NOT run pre-commit for a merge commit -- it runs pre-merge-commit.
+#     Measured in a throwaway repo (card 2033a2da), same hook, same repo, only the
+#     commit kind differing:
+#         normal commit, failing pre-commit ... rc=1, HEAD unmoved  -> BLOCKED
+#         CLEAN merge, the SAME hook .......... merge commit created, hook never ran
+#         with pre-merge-commit installed ..... the merge is BLOCKED
+#     So without this file every guard in pre-commit.d/ is silent on the one
+#     operation that lands whole batches at once. The live example that exposed it:
+#     a 233 KB crm-login.png rode in on merge 1d5de27, toward a PUBLIC repo.
+#
+#     WHY IT IS SAFE TO RUN THE WHOLE CHAIN HERE, and not a hand-picked subset:
+#     05-prod-tree-guard already steps aside when MERGE_HEAD is set (card 8c08c0bc),
+#     which is exactly the state during a merge -- so merging in the main checkout
+#     keeps working, while 10-secret-gate finally gets to look at merge content.
+#     A subset would have to be kept in sync with pre-commit.d/ by hand, and this
+#     page has measured what happens to lists that must be maintained twice.
+if [ -f "$MERGE_DISPATCH" ] && ! grep -q "$DISPATCH_MARK" "$MERGE_DISPATCH" 2>/dev/null; then
+  mv "$MERGE_DISPATCH" "$HOOK_DIR/pre-commit.d/00-existing-premergecommit"
+  chmod +x "$HOOK_DIR/pre-commit.d/00-existing-premergecommit"
+  echo "  (preserved existing pre-merge-commit as pre-commit.d/00-existing-premergecommit)"
+fi
+cat > "$MERGE_DISPATCH" <<EOF
+#!/usr/bin/env bash
+# $DISPATCH_MARK : run every executable in pre-commit.d/ for MERGE commits too.
+set -euo pipefail
+# A 05-prod-tree-guard MERGE_HEAD-re epulo atengedese itt nem tud tuzelni (a
+# pre-merge-commit ELOTT fut, mint ahogy a MERGE_HEAD letrejon), ezert jelzunk neki.
+export MARVEEN_MERGE_COMMIT=1
+HOOK_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+status=0
+for h in "\$HOOK_DIR"/pre-commit.d/*; do
+  [ -x "\$h" ] || continue
+  "\$h" "\$@" || status=1
+done
+exit \$status
+EOF
+chmod +x "$MERGE_DISPATCH"
 
 # 3. post-checkout: no chain exists for this hook type; a pre-existing foreign
 #    hook is preserved out of the way (a guard must not clobber, and the .bak
