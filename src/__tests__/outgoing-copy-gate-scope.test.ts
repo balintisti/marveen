@@ -147,4 +147,39 @@ describe('outgoing-copy gate: quoted tokens in OPERATION position still fire (ms
     expect(isSend(`echo "lezaratlan idezojel es sendmail emlitve`)).toBe(true)
     expect(isSend(`echo "lezaratlan idezojel, artalmatlan szoveg`)).toBe(false)
   })
+
+  // CARD de5e1709 -- WHY THE TEST ABOVE IS NOT ENOUGH, AND WHY THIS ONE IS THE PIN.
+  // `sendmail` is on BOTH gates' fallback lists, so the assertions above pin what
+  // the two gates AGREE on, and nothing about where they DIFFER. Measured
+  // 2026-09-06 on fe418df (didi): deleting the `sendEmail`/`mail.send` pattern
+  // from the sibling gate, and adding those same tokens to THIS gate's
+  // _FALLBACK_LITERALS, each left the whole suite (428 files / 5459 tests) green.
+  // A "let us make the two gates consistent" refactor passed in BOTH directions.
+  //
+  // DO NOT ALIGN THE GATES to make this red test pass. The narrow list is a
+  // ruling (card 9ebde77b), and the gate states its three measured reasons at the
+  // fallback itself: different population (this gate runs on the MAIN agent, the
+  // sibling hard-denies SUB-agents), different cost of a false positive (this gate
+  // is fail-closed too, so a false positive here stops the coordinator's own
+  // read-only census work), and the repo's only Bash-reachable sender
+  // (scripts/support-mail/send.py) is on the narrow list twice over. If this goes
+  // red, the change under it widened THIS gate -- fix the change, not the test.
+  it('the unparseable fallback stays NARROW: bare sendEmail / mail.send pass HERE (card de5e1709)', () => {
+    // THE DIVERGENCE TOKENS. On these exact inputs the sibling hard-gate denies
+    // (pinned in email-send-gate-scope.test.ts); this gate must let them through.
+    // In this repo they are census-grep shapes, not senders.
+    expect(isSend(`echo "lezaratlan idezojel es sendEmail emlitve`)).toBe(false)
+    expect(isSend(`echo "lezaratlan idezojel es mail.send emlitve`)).toBe(false)
+
+    // CONTROL 1 -- the fallback really runs: a token that IS on the narrow list
+    // gives true on the very same unparseable shape. Without it, the two falses
+    // above would be satisfied just as well by a fallback that never executes.
+    expect(isSend(`echo "lezaratlan idezojel es sendmail emlitve`)).toBe(true)
+
+    // CONTROL 2 -- and the true in CONTROL 1 comes from the FALLBACK, not from the
+    // parsed path: the same sentences with BALANCED quotes are parsed normally,
+    // where every one of these tokens is content and passes.
+    expect(isSend(`echo 'sendEmail emlitve egy zart idezojelben'`)).toBe(false)
+    expect(isSend(`echo 'sendmail emlitve egy zart idezojelben'`)).toBe(false)
+  })
 })

@@ -84,4 +84,38 @@ describe('gateDecision Bash: POSITIVE CONTROLS -- real send attempts still deny 
     expect(bash(`echo "unbalanced quote and sendmail mentioned`).deny).toBe(true)
     expect(bash(`echo "unbalanced quote, harmless text`).deny).toBe(false)
   })
+
+  // CARD de5e1709 -- WHY THE TEST ABOVE IS NOT ENOUGH, AND WHY THIS ONE IS THE PIN.
+  // `sendmail` is on BOTH gates' fallback lists, so the assertions above pin what
+  // the two gates AGREE on, and nothing about where they DIFFER. Measured
+  // 2026-09-06 on fe418df (didi): deleting the `sendEmail`/`mail.send` pattern
+  // from SEND_PATTERNS, and adding those same tokens to the sibling copy gate's
+  // _FALLBACK_LITERALS, each left the whole suite (428 files / 5459 tests) green.
+  // A "let us make the two gates consistent" refactor passed in BOTH directions.
+  //
+  // DO NOT ALIGN THE GATES to make this red test pass. The wide fallback is a
+  // ruling (card 9ebde77b): this is a HARD deny on sub-agents, and on the one path
+  // where it cannot say anything about command POSITION it must not get weaker
+  // than the pre-position-analysis gate was. The sibling's narrow list is correct
+  // FOR THE SIBLING (main agent, fail-closed on the coordinator's own census work)
+  // and wrong here. If this goes red, the change under it narrowed THIS gate --
+  // fix the change, not the test.
+  it('the unparseable fallback stays WIDE: bare sendEmail / mail.send still deny HERE (card de5e1709)', () => {
+    // THE DIVERGENCE TOKENS. On these exact inputs the sibling copy gate passes
+    // (pinned in outgoing-copy-gate-scope.test.ts); this hard-gate must deny.
+    expect(bash(`echo "unbalanced quote and sendEmail mentioned`).deny).toBe(true)
+    expect(bash(`echo "unbalanced quote and mail.send mentioned`).deny).toBe(true)
+
+    // CONTROL 1 -- the fallback really runs, and CONTROL 0 above already shows it
+    // can say no: an unparseable command with NO send token passes.
+    expect(bash(`echo "unbalanced quote and sendmail mentioned`).deny).toBe(true)
+    expect(bash(`echo "unbalanced quote, harmless text`).deny).toBe(false)
+
+    // CONTROL 2 -- and the denies come from the FALLBACK, not from the parsed
+    // path: the same sentences with BALANCED quotes are parsed normally, where
+    // every one of these tokens is content and passes. That difference IS the
+    // fallback, so widening or narrowing it cannot hide behind these lines.
+    expect(bash(`echo 'sendEmail mentioned inside a closed quote'`).deny).toBe(false)
+    expect(bash(`echo 'sendmail mentioned inside a closed quote'`).deny).toBe(false)
+  })
 })

@@ -14,10 +14,19 @@ import { isSendInvocation } from '../../scripts/email-send-gate.mjs'
 // fails here as a test, instead of surfacing weeks later as an incident.
 //
 // Deliberately NOT in the shared list: unparseable-input fallbacks. The two
-// gates fall back differently by design (copy-gate: strong literals only;
-// hard-gate: its full legacy pattern set, because it is a hard-deny that must
-// never get weaker on that path) -- each pins its own fallback in its scope
-// test. If that difference ever becomes a problem, unify there first.
+// gates fall back differently BY RULING, not by omission (copy-gate: strong
+// literals only; hard-gate: its full legacy pattern set, because it is a
+// hard-deny that must never get weaker on that path) -- card 9ebde77b, with
+// the three measured reasons stated at the fallback in outgoing-copy-gate.py.
+//
+// Each gate pins ITS OWN SIDE of that difference in its scope test, and the
+// pin stands on a DIVERGENCE token (`sendEmail` / `mail.send`), never on the
+// shared `sendmail` -- card de5e1709. That distinction is the entire
+// protection: until 2026-09-06 both pins used `sendmail`, which is on BOTH
+// lists, so they pinned what the gates AGREE on and left the ruling
+// undefended -- measured, a mutation aligning EITHER gate to the other kept
+// the full suite green. So if a census flags the difference: do not unify it.
+// Read the ruling first -- the difference IS the decision.
 
 const ROOT = join(__dirname, '..', '..')
 const GATE_PY = join(ROOT, 'scripts', 'hooks', 'outgoing-copy-gate.py')
