@@ -89,6 +89,11 @@ export function shouldGiveUpOnInject(failCount: number, maxFailures: number): bo
 //
 // Pure part exported for tests: returns the alert text, or null when no alert
 // may be sent (the main agent must never alert itself about itself).
+/** Every tag `formatStuckSessionAlert` can emit. Exported so a meter can count the
+ *  UNION rather than one tag, and so ADDING a tag fails a test instead of silently
+ *  invalidating the paragraph above it. */
+export const ALERT_TAGS = ['[session-stuck]', '[approval-needed]', '[input-parked]'] as const
+
 export function formatStuckSessionAlert(
   agent: string,
   mainAgentId: string,
@@ -132,7 +137,17 @@ export function formatStuckSessionAlert(
   //
   // CONSEQUENCE FOR ANY METER: a query counting `[session-stuck]` goes blind on
   // these the day this ships, and the drop reads as "the fix worked" -- the
-  // flattering direction. Count the UNION of both tags across the change.
+  // flattering direction. Count the UNION of ALL THREE tags across the change:
+  //   [session-stuck] · [approval-needed] · [input-parked]
+  //
+  // THIS SENTENCE SAID "BOTH TAGS" UNTIL 2026-09-05 AND WAS TRUE WHEN WRITTEN.
+  // Card cb062949 added the third, so the instruction silently began undercounting
+  // -- in the flattering direction it warns about, which is why jarvis caught it
+  // in review and not a meter. A comment that names a SET goes stale the moment
+  // someone extends the set, and nothing about the comment looks wrong afterwards.
+  // ALERT_TAGS below is the mechanical half: a fourth tag breaks a test rather
+  // than quietly widening the gap between this paragraph and the code.
+
   // ONE predicate decides what the reader should DO, because both known
   // misreadings of this alert live in this layer and point opposite ways: a
   // PARKED pane reported as idle (waking it is useless) and a WORKING pane
@@ -144,6 +159,15 @@ export function formatStuckSessionAlert(
   // above already caught the clear cases; this catches a pane whose busy
   // evidence the state gate missed, and it is what stops an [approval-needed]
   // going out about a session that is mid-turn.
+  // UNREACHABLE VIA TODAY'S CALLERS, AND KEPT DELIBERATELY (jarvis, 2026-09-05).
+  // Measured: `busyEvidence(p) != null` implies `detectPaneState(p) === 'busy'`, and
+  // both call sites derive paneState from the SAME capture -- so the busy branch
+  // above always wins first. It is NOT dead in the sense the counter/parked branch
+  // was: that one asserted a state of the world that cannot exist, while this is the
+  // honest answer for a caller that has a pane but no paneState, which the
+  // `PaneState | null = null` parameter explicitly permits. Removing it would let
+  // such a caller fall through to answer-it. Documented so nobody reads a firing
+  // count of zero here as a defect.
   if (remedy.remedy === 'leave-it') {
     return `[session-stuck] Agent '${agent}' (tmux ${session}) has been not-ready for ${min} min with ${queue}, but the pane shows it is WORKING (${remedy.why}). Do NOT restart and do NOT type into it -- an intervention lands inside a live turn. Check again if it is still here in another window.${alsoQuiet}`
   }
@@ -160,6 +184,13 @@ export function formatStuckSessionAlert(
   // simply holds an un-submitted line -- six such notices on 2026-09-05 while
   // the queue behind it grew 0 -> 2. A restart here throws away a live context
   // for a keystroke.
+  // SATURATION IS CHECKED FIRST, SO A SATURATED PANE NEVER REPORTS [input-parked]
+  // (jarvis, 2026-09-05). That ordering is deliberate and predates this card -- the
+  // context-guard owns saturation -- but it has a consequence worth naming: a pane
+  // that is BOTH saturated and parked gets restarted by the guard, and the
+  // un-submitted message is already 'delivered', so the restart loses it. Not
+  // changed here, because reordering saturation is the context-guard's contract and
+  // not this card's. Card raised separately.
   if (remedy.remedy === 'press-enter') {
     const quoted = remedy.parkedText && remedy.parkedText.length > 120
       ? `${remedy.parkedText.slice(0, 117)}...`

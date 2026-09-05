@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { paneRemedy } from '../web/parked-pane-remedy.js'
 import { detectPaneState, parkedInputText } from '../pane-state.js'
-import { formatStuckSessionAlert } from '../web/message-router.js'
+import { formatStuckSessionAlert, ALERT_TAGS } from '../web/message-router.js'
 
 // Real-shaped fixtures. The 25-line window is not arbitrary: measured
 // 2026-09-05, all nine live fleet panes captured exactly 25 lines.
@@ -161,6 +161,33 @@ describe('formatStuckSessionAlert: the remedy reaches the reader', () => {
 
   it('the empty-box case keeps the existing generic text', () => {
     expect(call(EMPTY_PANE)!).toContain('delivery-stall diagnosis')
+  })
+
+  // THE MECHANICAL HALF OF A COMMENT THAT WENT STALE. The router's meter note said
+  // "count the UNION of both tags" -- true when written, and card cb062949 added a
+  // third, so the instruction began undercounting in the flattering direction it
+  // warns about. jarvis caught it in review; no meter would have. This pins the SET,
+  // so a fourth tag fails here instead of widening that gap in silence.
+  it('every tag the alert can emit is declared in ALERT_TAGS', () => {
+    const emitted = new Set<string>()
+    const parked = parkedPane(4)
+    const saturated = pane(['s', 'Context left until auto-compact: 2%', RULE, '❯ ', RULE, FOOTER])
+    for (const p of [EMPTY_PANE, parked, WORKING_PANE, PERMISSION_PANE, parkedPane(22), saturated, null]) {
+      for (const st of [null, 'busy'] as const) {
+        const a = formatStuckSessionAlert('a', 'marveen', 'sess', 60000, 1, st, p)
+        const m = a && a.match(/^\[[a-z-]+\]/)
+        if (m) emitted.add(m[0])
+      }
+    }
+    // CONTROL: the sweep must actually reach more than one branch, or a set of size
+    // one would pass while measuring nothing.
+    expect(emitted.size).toBeGreaterThan(1)
+    // BOTH DIRECTIONS, and the second one is not decoration: asserting only
+    // "emitted ⊆ declared" lets the list be widened with a tag nothing emits, and a
+    // mutation proved it (M11 survived until this line existed). Set EQUALITY also
+    // forces the sweep above to reach every branch, so the fixtures cannot rot into
+    // covering two of three while the assertion still passes.
+    expect([...emitted].sort()).toEqual([...ALERT_TAGS].sort())
   })
 
   it('an explicitly busy paneState still short-circuits first, unchanged', () => {
