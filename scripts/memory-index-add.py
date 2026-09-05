@@ -226,7 +226,10 @@ def evict_tail(text, protect=None):
     if not big_enough:
         raise SystemExit(
             f'REFUSING: over by {over_by} characters, and no single unpinned line is that '
-            'long. This needs an editorial pass on hook length, not an eviction.')
+            'long. This needs an editorial pass on hook length, not an eviction.\n'
+            'THE TOOL FOR THAT IS scripts/memory-index-trim.py -- it shrinks ONE line in '
+            'place and refuses prose edits. Do NOT hand-edit MEMORY.md: six agents share '
+            'that one file.')
 
     victim_i = min(big_enough, key=rank)
 
@@ -508,6 +511,7 @@ def main():
             tail_note = (
                 '\n*** PAST THE CHEAP TRIMS: this add needs more than the 30 longest hooks can '
                 'give\n*** (top 10 ~%d, next 20 ~%d). Trimming further eats AVERAGE lines.\n'
+                '*** The trimming tool is scripts/memory-index-trim.py (one line, in place).\n'
                 '*** This is the signal the index wants GENERATING, not another trim.'
                 % (recover, recover30 - recover)
             ) if exhausted else ''
