@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import {
   listKanbanCards, countArchivedKanbanCards, createKanbanCard, updateKanbanCard,
   deleteKanbanCard, moveKanbanCard, archiveKanbanCard, unarchiveKanbanCard,
-  getKanbanComments, addKanbanComment, getKanbanCardEvents, listKanbanProjects,
+  getKanbanComments, addKanbanComment, getKanbanCardHistory, listKanbanProjects,
   getKanbanCard, getChildCards, getDb,
   createAgentMessage, markKanbanCardDispatched,
   getKanbanSeqByIdPrefix,
@@ -493,7 +493,17 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
       return true
     }
 
-    const result = updateKanbanCard(id, data)
+    // AZ `actor` A TORZSBOL JON, ES OPCIONALIS -- card 4e27d5ad, ugyanaz az alak,
+    // mint a `/move`-nal. Kotelezove tenni azt jelentene, hogy a mai hivok
+    // (a dashboard harom PUT helye es minden agens-lap dokumentalt peldaja)
+    // egyik naprol a masikra 400-at kapnanak egy iras helyett -- egy audit-nyom
+    // kedveert eltorni az irast rosszabb, mint egy NULL actor.
+    //
+    // Nem kell kiszurni a `data`-bol: a KANBAN_UPDATABLE lista zart, es az
+    // `actor` nincs benne, tehat sem a valtozas-detektalasba, sem az UPDATE-be
+    // nem jut el. Megmerve: `{"actor":"x"}` egyedul -> `unchanged`.
+    const actor = typeof data.actor === 'string' && data.actor.trim() !== '' ? data.actor.trim() : undefined
+    const result = updateKanbanCard(id, data, actor)
     if (result.outcome === 'not-found') { json(res, { error: 'Kártya nem található' }, 404); return true }
 
     // A `unchanged` NEM hiba: egy hivo joggal kuldheti ujra ugyanazt (a szerkeszto
@@ -684,7 +694,7 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // Egy javitas, ami a testverét meghagyja, azt tanitja, hogy a szabaly
     // vegpont-fuggo -- pedig nem az.
     if (!getKanbanCard(cardId)) { json(res, { error: 'Kártya nem található' }, 404); return true }
-    json(res, getKanbanCardEvents(cardId))
+    json(res, getKanbanCardHistory(cardId))
     return true
   }
 

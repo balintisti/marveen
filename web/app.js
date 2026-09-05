@@ -1996,7 +1996,10 @@ document.getElementById('saveCardBtn').addEventListener('click', async () => {
       const res = await fetch(`/api/kanban/${encodeURIComponent(editId)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        // AZ `actor` ITT `dashboard`, NEM 'Isti' -- card 4e27d5ad. A panelen nincs
+        // bejelentkezes, tehat egy szemelynevet ide irni olyan azonossagot allitana,
+        // amit senki nem ellenorzott. Amit tudunk, es amit ez mond: a feluletrol jott.
+        body: JSON.stringify({ ...data, actor: 'dashboard' }),
       })
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.status) }
       showToast(t('kanban.toast.card_updated'))
@@ -2239,7 +2242,7 @@ async function showCardDetail(card) {
         const r = await fetch(`/api/kanban/${encodeURIComponent(card.id)}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...card, assignee: newVal }),
+          body: JSON.stringify({ ...card, assignee: newVal, actor: 'dashboard' }),
         })
         if (!r.ok) throw new Error('PUT failed')
         card.assignee = newVal
@@ -2288,7 +2291,7 @@ async function showCardDetail(card) {
       const label = newParentId ? t('kanban.toast.parent_updated') : t('kanban.toast.parent_unset')
       const r = await fetch(`/api/kanban/${encodeURIComponent(card.id)}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...card, parent_id: newParentId }),
+        body: JSON.stringify({ ...card, parent_id: newParentId, actor: 'dashboard' }),
       })
       if (r.ok) { card.parent_id = newParentId; showToast(label); loadKanban(); showCardDetail(card) }
       else showToast(t('kanban.toast.save_error'))

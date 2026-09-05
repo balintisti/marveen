@@ -405,6 +405,34 @@ export function initDatabase(dbPathOverride?: string): void {
   `)
   db.exec(`CREATE INDEX IF NOT EXISTS idx_kanban_events_card ON kanban_card_events(card_id, created_at)`)
 
+  // FIELD-CHANGE audit trail -- card 4e27d5ad. The table above records STATUS
+  // transitions and nothing else: measured 2026-09-04 (marveen), its columns are
+  // exactly id/card_id/from_status/to_status/actor/created_at, so a
+  // `PUT /api/kanban/<id>` that rewrites the TITLE leaves no trace at all. That
+  // is the worst field for it: the list view shows the title and nothing else,
+  // so the one field everybody reads is the one field with no history -- and
+  // this board's own title conventions (the "0 ELES HASZNALAT" suffix, the
+  // `(card xxxx)` marker) are built on the title being trustworthy.
+  //
+  // A SEPARATE TABLE, NOT NEW COLUMNS ON kanban_card_events: `to_status` is NOT
+  // NULL there, and two existing readers take every row of that table to be a
+  // status transition (`card-flow-cli.ts` selects to_status across all rows,
+  // `fleet-transfer.ts` de-dupes on card_id+created_at+to_status). Squeezing a
+  // title into `to_status` would corrupt both silently -- the exact shape this
+  // file keeps closing elsewhere.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS kanban_card_field_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      card_id TEXT NOT NULL,
+      field TEXT NOT NULL,
+      from_value TEXT,
+      to_value TEXT,
+      actor TEXT,
+      created_at INTEGER NOT NULL
+    )
+  `)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_kanban_field_events_card ON kanban_card_field_events(card_id, created_at)`)
+
   // THE IDLE GUARD'S STATE ABOUT THE AGENTS -- card 60060415, marveen's decision.
   //
   // It used to live in a Map inside the watcher process, so every dashboard
@@ -1893,7 +1921,11 @@ const KANBAN_UPDATABLE = [
  * af9f6cd4 lelete. Ilyenkor az `overwritten` szuksegszeruen ures: felulirni
  * csak azt lehet, ami valtozik.
  */
-export function updateKanbanCard(id: string, fields: Partial<Omit<KanbanCard, 'id' | 'created_at'>>): KanbanUpdateResult {
+export function updateKanbanCard(
+  id: string,
+  fields: Partial<Omit<KanbanCard, 'id' | 'created_at'>>,
+  actor?: string,
+): KanbanUpdateResult {
   const card = getKanbanCard(id)
   if (!card) return { outcome: 'not-found', overwritten: [] }
   const kuldott = KANBAN_UPDATABLE.filter((k) => k in fields)
@@ -1917,6 +1949,43 @@ export function updateKanbanCard(id: string, fields: Partial<Omit<KanbanCard, 'i
     `UPDATE kanban_cards SET title=?, description=?, status=?, assignee=?, priority=?, project=?, parent_id=?, due_date=?, sort_order=?, updated_at=?, archived_at=?
      WHERE id=?`
   ).run(f.title, f.description, f.status, f.assignee, f.priority, f.project, f.parent_id, f.due_date, f.sort_order, f.updated_at, f.archived_at, id).changes > 0
+
+  // THE HISTORY IS WRITTEN FROM `valtozott`, NOT FROM `overwritten` -- card 4e27d5ad.
+  // They answer different questions and the difference is a whole class of edits:
+  // `overwritten` deliberately SKIPS a field whose previous value was empty
+  // (documented above -- it cannot tell an intentional clearing from a field
+  // nobody had filled). For a WARNING that is right; for a HISTORY it would drop
+  // exactly the events worth keeping, e.g. an unowned card being claimed
+  // (assignee null -> "friday"). Measured on the live board 2026-09-05: 23 of the
+  // 1785 cards sit at assignee NULL right now, so this is the common case, not
+  // the corner.
+  if (changed) {
+    for (const key of valtozott) {
+      const prev = card[key] as string | number | null | undefined
+      const next = fields[key as keyof typeof fields] as string | number | null | undefined
+      if (key === 'status') {
+        // Status goes into the EXISTING table, in the shape moveKanbanCard already
+        // writes -- because a status change through PUT is the same event, and the
+        // /events endpoint claims to cover it. Measured 2026-09-05 before this fix:
+        // 7 live cards whose last recorded event disagrees with their current
+        // status (4 of them testing -> done), i.e. the endpoint under-reports its
+        // OWN subject. Control: 1263 cards where the two agree, so the measure can
+        // say "match".
+        db.prepare(
+          'INSERT INTO kanban_card_events (card_id, from_status, to_status, actor, created_at) VALUES (?, ?, ?, ?, ?)'
+        ).run(id, (prev ?? null) as string | null, String(next), actor ?? null, now)
+        continue
+      }
+      // `sort_order` is column position, not content: the board writes it on every
+      // drag, and a history of it answers no question anyone asks. Excluded on
+      // purpose, and named here so the omission is a decision rather than a gap.
+      if (key === 'sort_order') continue
+      db.prepare(
+        'INSERT INTO kanban_card_field_events (card_id, field, from_value, to_value, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+      ).run(id, key, prev === null || prev === undefined ? null : String(prev), next === null || next === undefined ? null : String(next), actor ?? null, now)
+    }
+  }
+
   return { outcome: changed ? 'updated' : 'not-found', overwritten: changed ? overwritten : [] }
 }
 
@@ -2079,6 +2148,60 @@ export interface KanbanCardEvent {
 
 export function getKanbanCardEvents(cardId: string): KanbanCardEvent[] {
   return db.prepare('SELECT * FROM kanban_card_events WHERE card_id = ? ORDER BY created_at ASC, id ASC').all(cardId) as KanbanCardEvent[]
+}
+
+export interface KanbanCardFieldEvent {
+  id: number
+  card_id: string
+  field: string
+  from_value: string | null
+  to_value: string | null
+  actor: string | null
+  created_at: number
+}
+
+export function getKanbanCardFieldEvents(cardId: string): KanbanCardFieldEvent[] {
+  return db.prepare('SELECT * FROM kanban_card_field_events WHERE card_id = ? ORDER BY created_at ASC, id ASC')
+    .all(cardId) as KanbanCardFieldEvent[]
+}
+
+/** One row of the merged card history: a status transition or a field rewrite. */
+export type KanbanHistoryEntry =
+  | (KanbanCardEvent & { kind: 'status' })
+  | (KanbanCardFieldEvent & { kind: 'field' })
+
+/**
+ * ONE ARRAY, WITH A `kind` DISCRIMINATOR -- card 4e27d5ad, and the alternative
+ * is worse in a way this file already documents.
+ *
+ * The obvious shape is to leave `/events` alone and add `/history` beside it.
+ * That hands a reader of `/events` a complete-looking answer that silently omits
+ * every title rewrite -- byte-identical to a card whose title was never touched.
+ * It is the same silence the card endpoint closed with `comments_omitted`, and an
+ * array cannot carry that marker, so the omission would have no way to speak.
+ *
+ * The documented meaning of a status row survives verbatim (`from_status` /
+ * `to_status` / `actor`), so the one documented consumer -- the fleet CLAUDE.md
+ * line "mikor LEPETT BE az oszlopba, actor-ral egyutt" -- still reads true; a
+ * filter on `to_status` skips field rows because they carry none.
+ */
+export function getKanbanCardHistory(cardId: string): KanbanHistoryEntry[] {
+  const merged: KanbanHistoryEntry[] = [
+    ...getKanbanCardEvents(cardId).map((e) => ({ ...e, kind: 'status' as const })),
+    ...getKanbanCardFieldEvents(cardId).map((e) => ({ ...e, kind: 'field' as const })),
+  ]
+  // created_at is second-resolution, so a single PUT that changes three fields
+  // produces three rows with the SAME timestamp. `id` breaks the tie so the sort
+  // is total and deterministic instead of leaving equal keys to the engine.
+  //
+  // WHAT THE TIE-BREAK DOES NOT GIVE, said out loud because the obvious reading is
+  // wrong: the two tables have SEPARATE autoincrement sequences, so comparing a
+  // status row's id with a field row's id orders nothing real. Within one table it
+  // is insertion order; across them, for rows sharing a second, there is no
+  // defined order -- and there is nothing to define, because they came from one
+  // write. Do not read the position of a status row among same-second field rows
+  // as "the status changed first".
+  return merged.sort((a, b) => a.created_at - b.created_at || a.id - b.id)
 }
 
 // Lookup a kanban card's `seq` (its sqlite rowid) by the 8-char hex id stored
