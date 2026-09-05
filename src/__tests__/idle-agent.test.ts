@@ -1371,7 +1371,24 @@ describe('the pending notice measures the recipient pane instead of asserting it
     const msg = withState('busy')
     expect(msg).toMatch(/MERD UJRA/)
     expect(msg).toContain('agent_messages')
-    expect(msg).toContain('friday')
+
+    // THE ASSERTION MUST LAND ON THE COMMAND, NOT ON THE PROSE (card e6685c94, friday).
+    // `toContain('friday')` alone is satisfied by the notice's FIRST line, which names the
+    // sender in prose -- so it stayed green while the emitted command carried a literal
+    // `${sender}`. Pasted verbatim that query returns [] and exits 0 for a sender with 15
+    // queued messages: a silent false negative, in the reassuring direction, in the one
+    // line whose whole purpose is to hand over a fresh measurement.
+    const cmd = msg.split('\n').find((l) => l.includes('agent_messages')) ?? ''
+    expect(cmd).not.toContain('${sender}')
+    expect(cmd).toContain("('friday',")
+  })
+
+  it('and the command interpolates the ACTUAL sender -- a different sender gives a different command', () => {
+    // The negative control: without this, a hard-coded 'friday' in the command would pass
+    // the assertion above. Two senders, two commands, and neither contains the other's name.
+    const forDexter = buildPendingStillWaitingNotice('dexter', rows, NOW, new Map([['dexter', 'busy' as const]]))
+    expect(forDexter).toContain("('dexter',")
+    expect(forDexter).not.toContain("('friday',")
   })
 })
 

@@ -743,7 +743,7 @@ export function buildPendingStillWaitingNotice(
     'MIELOTT BARMIT TESZEL, MERD UJRA -- egy sor, es a mai allapotot adja:',
     "  python3 -c \"import sqlite3;c=sqlite3.connect('file:store/claudeclaw.db?mode=ro',uri=True);"
       + "print(list(c.execute(\\\"select id,to_agent,status from agent_messages where from_agent=?"
-      + " and status in ('pending','failed')\\\", ('" + '${sender}' + "',))))\"",
+      + " and status in ('pending','failed')\\\", ('" + sender + "',))))\"",
     '',
     'Amit erdemes: ha DONTES vagy LELET volt benne, tedd a KARTYARA is. A kartya nem all',
     'sorba -- a cimzett akkor is latja, amikor a levelet meg nem olvasta el.',
