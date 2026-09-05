@@ -18,7 +18,7 @@ import { readContextTokensFromProjectDir, readActiveModelFromProjectDir, readTra
 import { readContextGuardConfig } from './context-guard-store.js'
 import { readAllContextGuardConfigs } from './context-guard-store.js'
 import { makeContextGuardConfigWarner } from './context-guard-config-warning.js'
-import { createAgentMessage } from '../db.js'
+import { createAgentMessage, getRestartLossCandidates } from '../db.js'
 import {
   decideGuard,
   contextLimitForModel,
@@ -30,6 +30,7 @@ import {
   type GuardState,
   type HandoffStaleness,
   type GuardInputs,
+  buildRestartLossLine,
 } from '../context-guard.js'
 
 // Fleet context guard (kanban #81): acts BEFORE a session drowns in its own
@@ -426,13 +427,29 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
           logger.warn({ err, name }, 'context-guard: pre-restart pane snapshot failed')
         }
         await performRestart(name)
+        // MEASURED AFTER THE RESTART, ON PURPOSE: a delivery that the restart itself killed is
+        // recorded during it, so a reading taken before would miss exactly the rows this line
+        // exists to report (card 82d9b960).
+        //
+        // AND A FAILURE TO MEASURE MUST NOT READ AS ZERO. If the query throws, the notice says
+        // it could not measure and falls back to asking -- the old behaviour. A guard that
+        // degrades into a confident "nothing was lost" is worse than one that admits it is blind.
+        let lossLine: string
+        try {
+          lossLine = buildRestartLossLine(getRestartLossCandidates(name), Date.now())
+        } catch (err) {
+          logger.warn({ err, name }, 'context-guard: could not measure the restart loss window')
+          lossLine = ' A VESZTESEGET NEM TUDTAM MEGMERNI (a lekerdezes hibazott)'
+            + ' -- ellenorizd kezzel a `pending`/`failed` sorokat erre az agensre.'
+        }
         try {
           createAgentMessage(
             name,
             MAIN_AGENT_ID,
             `[CONTEXT-GUARD] Ujrainditottam a(z) "${name}" agentet -- ok: ${decision.reason}` +
             (pctRound !== null ? ` (kontextus ~${pctRound}%)` : '') +
-            `. A regi sessionbe az utolso percekben kuldott uzenetek/utasitasok ELVESZHETTEK -- ellenorizd es kuldd ujra oket.` +
+            `. A regi sessionbe kuldott uzenetek elveszhetnek egy restartnal, ezert MEGMERTEM:` +
+            lossLine +
             (typeof decision.nextState.handoffStaleMinutes === 'number'
               // The generic "messages may be lost" line invites the wrong
               // conclusion when the real gap is the ARTIFACT: say explicitly
