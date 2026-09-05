@@ -582,7 +582,18 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // keres-statuszt: 0 talalat 349 274 sorban, merve).
     const stillThere = getKanbanCard(id)
     logger.warn(
-      { id, status, exists: stillThere != null, currentStatus: stillThere?.status ?? null },
+      {
+        id,
+        status,
+        exists: stillThere != null,
+        currentStatus: stillThere?.status ?? null,
+        // SERVER uptime, and it does NOT test the reported "cold first call from a
+        // fresh CLIENT process" pattern -- the server cannot see the caller's age.
+        // It is here because the four failures on 2026-09-05 landed six minutes
+        // after a restart, so the server's own age is the one temporal fact this
+        // side can contribute. Read it as context, not as that hypothesis.
+        serverUptimeSec: Math.round(process.uptime()),
+      },
       'Kanban move affected zero rows',
     )
     json(res, { error: moveFailureMessage(stillThere != null) }, 404)

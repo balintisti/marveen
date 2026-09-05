@@ -245,6 +245,21 @@ export function startWebServer(port = 3420): http.Server {
       if (await tryHandleFleet(routeCtx)) return
       if (await tryHandleStatic(routeCtx, WEB_DIR)) return
 
+      // AN UNROUTED REQUEST USED TO VANISH SILENTLY, and that ambiguity cost a
+      // night of measurement on card 83fd3115. There are TWO 404 sources on an
+      // /api/ path: a handler that matched and refused (JSON body, its own log
+      // line), and THIS one -- nothing claimed the request (plain `Not found`,
+      // no trace at all). The two are byte-distinguishable in the RESPONSE BODY
+      // and were indistinguishable in the LOG, so nine reported 404s could not
+      // be attributed to either.
+      //
+      // Scoped to /api/ ON PURPOSE: browsers probe for favicons and other paths
+      // that legitimately miss, and a warn on every one of those would be noise
+      // that teaches people to ignore the line. An unrouted /api/ call is always
+      // worth a sentence -- either a caller has the path wrong, or we do.
+      if (path.startsWith('/api/')) {
+        logger.warn({ method, path, serverUptimeSec: Math.round(process.uptime()) }, 'Unrouted /api/ request -> 404')
+      }
       res.writeHead(404)
       res.end('Not found')
     } catch (err) {
