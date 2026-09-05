@@ -21,6 +21,7 @@ import {
   buildPullNotice,
   stalePendingBySender,
   buildPendingStillWaitingNotice,
+  type RecipientPaneState,
   PENDING_NOTICE_AFTER_MS,
 } from '../idle-agent.js'
 
@@ -1464,23 +1465,115 @@ describe('a message still queued long after it was sent (card 979283a9)', () => 
 describe('the notice itself must not send anyone back to the queue', () => {
   const NOW = 600_000_000
   const rows = [{ to_agent: 'dexter', created_at: Math.floor((NOW - 70 * 60_000) / 1000) }]
+  const BUSY = new Map<string, RecipientPaneState>([['dexter', 'busy']])
 
   it('names the recipient and how long it has waited', () => {
-    const msg = buildPendingStillWaitingNotice('friday', rows, NOW)
+    const msg = buildPendingStillWaitingNotice('friday', rows, NOW, BUSY)
     expect(msg).toContain('dexter')
     expect(msg).toMatch(/70 perce/)
   })
 
   it('EXPLICITLY says not to resend -- a resend is a duplicate, not a retry', () => {
     // marveen measured this twice on 2026-08-28, once by accident: `pending`
-    // lives in the database and survives a restart.
-    const msg = buildPendingStillWaitingNotice('friday', rows, NOW)
+    // lives in the database and survives a restart. Note the precondition:
+    // this advice is only correct when the pane was MEASURED busy.
+    const msg = buildPendingStillWaitingNotice('friday', rows, NOW, BUSY)
     expect(msg).toMatch(/ne kuldd ujra/i)
     expect(msg).toMatch(/duplikatum/i)
   })
 
   it('and points at the card, which does not queue', () => {
-    expect(buildPendingStillWaitingNotice('friday', rows, NOW)).toMatch(/KARTYARA/)
+    expect(buildPendingStillWaitingNotice('friday', rows, NOW, BUSY)).toMatch(/KARTYARA/)
+  })
+})
+
+// THE NOTICE MUST REPORT WHAT IT MEASURED, NOT WHAT IT ASSUMES (card 1d800670).
+//
+// The old text said "a cimzett dolgozik" for every firing. friday's case had all
+// three messages already failed with the target session absent, and the notice
+// still forbade a resend. Measured twice on 2026-09-02 the claim happened to be
+// TRUE (didi 1h18m, computress 58m) -- which is the danger, not the defence: a
+// signal that is usually right earns the trust it spends on the case it cannot see.
+describe('the pending notice measures the recipient pane instead of asserting it', () => {
+  const NOW = 600_000_000
+  const rows = [{ to_agent: 'dexter', created_at: Math.floor((NOW - 70 * 60_000) / 1000) }]
+  const withState = (st: RecipientPaneState) =>
+    buildPendingStillWaitingNotice('friday', rows, NOW, new Map([['dexter', st]]))
+
+  it('says BUSY was measured, and only then forbids the resend', () => {
+    const msg = withState('busy')
+    expect(msg).toMatch(/BUSY \(merve\)/)
+    expect(msg).toMatch(/ne kuldd ujra/i)
+  })
+
+  it('an UNKNOWN pane does NOT forbid the resend -- that is the case where the session may be gone', () => {
+    const msg = withState('unknown')
+    expect(msg).toMatch(/NEM MEGALLAPITHATO/)
+    expect(msg).not.toMatch(/ne kuldd ujra/i)
+  })
+
+  it('an IDLE pane does NOT forbid the resend either -- the router should already have injected', () => {
+    const msg = withState('idle')
+    expect(msg).toMatch(/URES \(merve\)/)
+    expect(msg).not.toMatch(/ne kuldd ujra/i)
+  })
+
+  it('a recipient MISSING from the map is UNKNOWN, never assumed busy', () => {
+    // The default has to fail open: an absent measurement is not a measurement.
+    const msg = buildPendingStillWaitingNotice('friday', rows, NOW, new Map())
+    expect(msg).toMatch(/NEM MEGALLAPITHATO/)
+    expect(msg).not.toMatch(/ne kuldd ujra/i)
+  })
+
+  it('STAMPS the reading and says the notice itself may be stale', () => {
+    // Card 1d800670, didi 2026-09-02: notice 8164 sat 91 minutes in the very queue
+    // it reports (12:17:28 -> 13:49:25), and the message it named had been delivered
+    // 69 minutes before it arrived. Every line was true at birth and false on arrival.
+    const msg = withState('busy')
+    expect(msg).toMatch(/MERVE \d{2}:\d{2}:\d{2}-kor/)
+    expect(msg).toMatch(/avult lehet/)
+  })
+
+  it('hands over a FRESH measurement instead of asking the reader to discount a stale one', () => {
+    // The stamp alone would repeat the shape this board keeps rejecting: a fix that
+    // works only if the reader remembers to compensate. The notice must name the
+    // command that answers the question today.
+    const msg = withState('busy')
+    expect(msg).toMatch(/MERD UJRA/)
+    expect(msg).toContain('agent_messages')
+
+    // THE ASSERTION MUST LAND ON THE COMMAND, NOT ON THE PROSE (card e6685c94, friday).
+    // `toContain('friday')` alone is satisfied by the notice's FIRST line, which names the
+    // sender in prose -- so it stayed green while the emitted command carried a literal
+    // `${sender}`. Pasted verbatim that query returns [] and exits 0 for a sender with 15
+    // queued messages: a silent false negative, in the reassuring direction, in the one
+    // line whose whole purpose is to hand over a fresh measurement.
+    const cmd = msg.split('\n').find((l) => l.includes('agent_messages')) ?? ''
+    expect(cmd).not.toContain('${sender}')
+    expect(cmd).toContain("('friday',")
+  })
+
+  it('and the command interpolates the ACTUAL sender -- a different sender gives a different command', () => {
+    // The negative control: without this, a hard-coded 'friday' in the command would pass
+    // the assertion above. Two senders, two commands, and neither contains the other's name.
+    const forDexter = buildPendingStillWaitingNotice('dexter', rows, NOW, new Map([['dexter', 'busy' as const]]))
+    expect(forDexter).toContain("('dexter',")
+    expect(forDexter).not.toContain("('friday',")
+  })
+})
+
+// AND THAT THE WATCHER ACTUALLY MEASURES IT -- the function above can be perfect
+// while the call site passes an empty map forever. Same shape the file already
+// tests for elsewhere: unit tests pin a function, nothing pins its use.
+describe('the watcher measures the pane before building the notice', () => {
+  const SRC = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'web', 'idle-agent-watcher.ts'), 'utf-8')
+
+  it('sweepStalePending calls detectPaneState before the notice', () => {
+    const fn = SRC.slice(SRC.indexOf('function sweepStalePending'))
+    const upToCall = fn.slice(0, fn.indexOf('buildPendingStillWaitingNotice'))
+    expect(upToCall).toContain('detectPaneState')
+    expect(upToCall).toContain('capturePane')
   })
 })
 

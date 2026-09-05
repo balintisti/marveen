@@ -19,6 +19,7 @@ import {
   buildPullNotice,
   stalePendingBySender,
   buildPendingStillWaitingNotice,
+  type RecipientPaneState,
   type PendingRow,
   buildWakeMessage,
   buildFleetAlert,
@@ -105,8 +106,28 @@ function sweepStalePending(): void {
     // 'system' is not an agent anyone can read a notice as; skip it rather than
     // send into a void.
     if (sender === 'system') continue
+    // MEASURE the recipient's pane instead of asserting it (card 1d800670).
+    // The old text said "a cimzett dolgozik" unconditionally; friday's case had
+    // all three messages already failed with the session gone, and the notice
+    // still told the sender not to resend. Everything needed was already
+    // imported in this file -- the capability was present and unwired.
+    const paneStates = new Map<string, RecipientPaneState>()
+    for (const m of msgs) {
+      if (paneStates.has(m.to_agent)) continue
+      let st: RecipientPaneState = 'unknown'
+      try {
+        if (isAgentRunning(m.to_agent)) {
+          const pane = capturePane(resolveAgentSession(m.to_agent))
+          if (pane !== null) {
+            const detected = detectPaneState(pane)
+            st = detected === 'busy' ? 'busy' : detected === 'idle' ? 'idle' : 'unknown'
+          }
+        }
+      } catch { st = 'unknown' }
+      paneStates.set(m.to_agent, st)
+    }
     try {
-      createAgentMessage('system', sender, buildPendingStillWaitingNotice(sender, msgs, now))
+      createAgentMessage('system', sender, buildPendingStillWaitingNotice(sender, msgs, now, paneStates))
       for (const m of msgs) pendingNoticed.add(m.id)
       logger.info({ idleGuard: true, sender, count: msgs.length }, 'message queue: told the SENDER their message is still pending')
     } catch (err) {

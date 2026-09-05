@@ -713,21 +713,63 @@ export function stalePendingBySender(
  *  a card. That asymmetry is the whole lesson of the day this card was rescoped
  *  -- a commit is visible to the recipient immediately, a message is not.
  */
+export type RecipientPaneState = 'busy' | 'idle' | 'unknown'
+
 export function buildPendingStillWaitingNotice(
   sender: string,
   rows: { to_agent: string; created_at: number }[],
   nowMs: number,
+  paneStates: ReadonlyMap<string, RecipientPaneState>,
 ): string {
+  const label: Record<RecipientPaneState, string> = {
+    busy: 'a panelje BUSY (merve)',
+    idle: 'a panelje URES (merve) -- NEM a munka tartja fel',
+    unknown: 'a panel-allapota NEM MEGALLAPITHATO (nincs munkamenet, vagy a capture bukott)',
+  }
+  const stateOf = (name: string): RecipientPaneState => paneStates.get(name) ?? 'unknown'
   const line = (r: { to_agent: string; created_at: number }) =>
     `  -> ${r.to_agent}: ${Math.round((nowMs - r.created_at * 1000) / 60_000)} perce all sorban`
+    + ` -- ${label[stateOf(r.to_agent)]}`
+
+  // The advice branches on what was MEASURED. `busy` is the only state in which
+  // "do not resend" is an argument rather than an assumption: an idle pane means
+  // the router should already have injected, and an unknown one is exactly the
+  // case where the session may be gone and the message about to fail.
+  const allBusy = rows.every((r) => stateOf(r.to_agent) === 'busy')
+  const advice = allBusy
+    ? [
+        'Mind a cimzett panelje BUSY -- a router csak IDLE panelbe tud injektalni, tehat ez nem',
+        'hiba. Amit NE tegyel: ne kuldd ujra. A `pending` sor az adatbazisban all es TULEL egy',
+        'restartot is, tehat a masodik level duplikatum lenne.',
+      ]
+    : [
+        'FIGYELEM: NEM minden cimzett panelje BUSY (lasd a soronkenti merest). Ez NEM a szokasos',
+        '"dolgozik, varj" eset: egy URES panel azt jelenti, hogy a routernek mar be kellett volna',
+        'injektalnia, egy NEM MEGALLAPITHATO allapot pedig eppen az, amiben a munkamenet hianyozhat',
+        'es az uzenet `failed`-be fordulhat. Itt az ujrakuldest NEM tiltom -- eloszb nezd meg,',
+        'el-e a cimzett munkamenete.',
+      ]
+
+  // EVERY LINE ABOVE IS TRUE AT `nowMs` AND ONLY THEN -- card 1d800670, didi 2026-09-02.
+  // This notice RIDES THE QUEUE IT REPORTS, so it is slowest exactly when it fires, and
+  // slowest of all when the target session is ABSENT and nothing drains the queue at all --
+  // which is the one case where "do not resend" does harm. Measured instance: notice 8164
+  // sat 91 minutes (12:17:28 -> 13:49:25), and the message it named had been delivered 69
+  // minutes before it arrived. So the reading is stamped, and the closing advice hands over
+  // a FRESH measurement instead of asking the reader to discount a stale one.
+  const stamp = new Date(nowMs).toLocaleTimeString('hu-HU', { hour12: false })
   return [
-    `[uzenet-or] A(z) "${sender}" ${rows.length} elkuldott uzenete MEG MINDIG nem kezbesult:`,
+    `[uzenet-or] A(z) "${sender}" ${rows.length} elkuldott uzenete MEG MINDIG nem kezbesult`,
+    `            (MERVE ${stamp}-kor -- ez a jelentes maga is sorban all, tehat MOST mar avult lehet):`,
     '',
     ...rows.slice(0, 5).map(line),
     '',
-    'A cimzett dolgozik -- a router csak IDLE panelbe tud injektalni, tehat ez nem hiba,',
-    'es nem is akadaly nala. Amit NE tegyel: ne kuldd ujra. A `pending` sor az adatbazisban',
-    'all es TULEL egy restartot is, tehat a masodik level duplikatum lenne.',
+    ...advice,
+    '',
+    'MIELOTT BARMIT TESZEL, MERD UJRA -- egy sor, es a mai allapotot adja:',
+    "  python3 -c \"import sqlite3;c=sqlite3.connect('file:store/claudeclaw.db?mode=ro',uri=True);"
+      + "print(list(c.execute(\\\"select id,to_agent,status from agent_messages where from_agent=?"
+      + " and status in ('pending','failed')\\\", ('" + sender + "',))))\"",
     '',
     'Amit erdemes: ha DONTES vagy LELET volt benne, tedd a KARTYARA is. A kartya nem all',
     'sorba -- a cimzett akkor is latja, amikor a levelet meg nem olvasta el.',
