@@ -541,6 +541,8 @@ describe('countDeclaredWork', () => {
 // names concrete items. Testing it here (rather than in the watcher) is why it lives in
 // this module -- the watcher is I/O, and I/O is not where a decision belongs.
 describe('buildWakeMessage', () => {
+  const WAKE_NOW = Date.UTC(2026, 8, 5, 11, 57, 9)
+
   const card = (id: string, priority: string, title: string) => ({
     id,
     priority,
@@ -554,7 +556,7 @@ describe('buildWakeMessage', () => {
       card('cccccccc1', 'low', 'a low one'),
       card('aaaaaaaa1', 'urgent', 'the urgent one'),
       card('bbbbbbbb1', 'normal', 'a normal one'),
-    ])
+    ], WAKE_NOW)
     const lines = msg.split('\n').filter((l) => l.startsWith('  '))
     expect(lines[0]).toContain('aaaaaaaa')
     expect(lines[0]).toContain('the urgent one')
@@ -563,7 +565,7 @@ describe('buildWakeMessage', () => {
 
   it('never dumps the whole board into a pane', () => {
     const many = Array.from({ length: 40 }, (_, i) => card(`id${i}`.padEnd(9, 'x'), 'normal', `t${i}`))
-    const lines = buildWakeMessage('didi', 13, 40, many).split('\n').filter((l) => l.startsWith('  '))
+    const lines = buildWakeMessage('didi', 13, 40, many, WAKE_NOW).split('\n').filter((l) => l.startsWith('  '))
     // All 40 are `testing`, so they land in the review section, which is capped tighter
     // than the work section: a reviewer's queue is not what the reader can act on.
     expect(lines.length).toBeLessThanOrEqual(3)
@@ -577,7 +579,7 @@ describe('buildWakeMessage', () => {
       { ...card('rev11111', 'high', 'a review waiting for an answer'), status: 'testing' },
       { ...card('rev22222', 'urgent', 'another review'), status: 'testing' },
       { ...card('work1111', 'low', 'something I can actually start'), status: 'planned' },
-    ])
+    ], WAKE_NOW)
     const lines = msg.split('\n').filter((l) => l.startsWith('  '))
     expect(lines[0]).toContain('work1111')
     expect(msg.indexOf('work1111')).toBeLessThan(msg.indexOf('rev22222'))
@@ -587,7 +589,7 @@ describe('buildWakeMessage', () => {
     const msg = buildWakeMessage('dexter', 13, 2, [
       { ...card('work1111', 'normal', 'w'), status: 'planned' },
       { ...card('rev11111', 'normal', 'r'), status: 'testing' },
-    ])
+    ], WAKE_NOW)
     expect(msg).toMatch(/FELVEHETO MUNKA \(1\)/)
     expect(msg).toMatch(/VALASZRA VARO ELLENORZES \(1\)/)
     expect(msg).toContain('planned')
@@ -595,7 +597,7 @@ describe('buildWakeMessage', () => {
   })
 
   it('says so plainly when there is nothing pickable, only reviews', () => {
-    const msg = buildWakeMessage('dexter', 13, 1, [{ ...card('rev11111', 'high', 'r'), status: 'testing' }])
+    const msg = buildWakeMessage('dexter', 13, 1, [{ ...card('rev11111', 'high', 'r'), status: 'testing' }], WAKE_NOW)
     expect(msg).toMatch(/Nincs A TE NEVEDEN felveheto munka/)
   })
 
@@ -606,14 +608,14 @@ describe('buildWakeMessage', () => {
   // pull list. This is not a wording test: the absolute form is what makes an agent STOP,
   // and nothing else in the suite would notice it coming back.
   it('never claims there is no work at all, only none under this name', () => {
-    const msg = buildWakeMessage('dexter', 13, 1, [{ ...card('rev11111', 'high', 'r'), status: 'testing' }])
+    const msg = buildWakeMessage('dexter', 13, 1, [{ ...card('rev11111', 'high', 'r'), status: 'testing' }], WAKE_NOW)
     expect(msg).toContain('A TE NEVEDEN')
     expect(msg).toContain('GAZDATLAN')
     expect(msg).not.toMatch(/Nincs felveheto munkad/)
   })
 
   it('says the count and the idle time, because the agent cannot see either', () => {
-    const msg = buildWakeMessage('didi', 13, 48, [card('aaaaaaaa1', 'high', 'x')])
+    const msg = buildWakeMessage('didi', 13, 48, [card('aaaaaaaa1', 'high', 'x')], WAKE_NOW)
     expect(msg).toContain('13')
     expect(msg).toContain('48')
   })
@@ -623,7 +625,7 @@ describe('buildWakeMessage', () => {
   // disagree. Saying so is the only honest option -- "you have 48 things" followed by
   // nothing at all is exactly the shape this fleet keeps getting burned by.
   it('when it can name nothing, it SAYS so instead of pretending', () => {
-    const msg = buildWakeMessage('didi', 13, 48, [])
+    const msg = buildWakeMessage('didi', 13, 48, [], WAKE_NOW)
     expect(msg).toMatch(/nem tudtam megnevezni/)
   })
 
@@ -639,7 +641,7 @@ describe('buildWakeMessage', () => {
       { ...card('rev11111', 'high', 'a card waiting for my review'), status: 'testing' },
       { ...card('rev22222', 'urgent', 'another one'), status: 'testing' },
     ]
-    const msg = buildWakeMessage('didi', 13, 40, items, 'testing_without_my_comment')
+    const msg = buildWakeMessage('didi', 13, 40, items, WAKE_NOW, 'testing_without_my_comment')
     // Re-pointed at the sentence as it reads now (card 5a499a19). Left on the OLD wording
     // this negative would pass for the wrong reason -- the phrase exists nowhere any more,
     // so it could not fail, and the negative IS the point of this test.
@@ -648,20 +650,20 @@ describe('buildWakeMessage', () => {
     expect(msg).toContain('rev22222')
 
     // POSITIVE CONTROL -- same items, assignee-shaped check: still nothing to pick up.
-    const asAssignee = buildWakeMessage('didi', 13, 40, items, 'assigned_open_cards')
+    const asAssignee = buildWakeMessage('didi', 13, 40, items, WAKE_NOW, 'assigned_open_cards')
     expect(asAssignee).toMatch(/Nincs A TE NEVEDEN felveheto munka/)
   })
 
   it('a review queue names more than three items, because they are the work', () => {
     const many = Array.from({ length: 40 }, (_, i) => card(`id${i}`.padEnd(9, 'x'), 'normal', `t${i}`))
-    const lines = buildWakeMessage('didi', 13, 40, many, 'testing_without_my_comment')
+    const lines = buildWakeMessage('didi', 13, 40, many, WAKE_NOW, 'testing_without_my_comment')
       .split('\n')
       .filter((l) => l.startsWith('  '))
     expect(lines.length).toBe(5)
   })
 
   it('tells the agent that no human was alerted, so it does not go looking', () => {
-    const msg = buildWakeMessage('didi', 13, 48, [card('aaaaaaaa1', 'high', 'x')])
+    const msg = buildWakeMessage('didi', 13, 48, [card('aaaaaaaa1', 'high', 'x')], WAKE_NOW)
     expect(msg).toContain('Isti NEM lett ertesitve')
   })
 })
@@ -1029,6 +1031,91 @@ describe('idle with no assigned work reaches the coordinator', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// card 7edc5839 -- a stamp repairs a DURATION and cannot repair a COUNT
+// ---------------------------------------------------------------------------
+describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
+  const NOW = Date.UTC(2026, 8, 5, 11, 57, 9)
+  const it3 = (id: string) => ({ id, title: 't', priority: 'normal', status: 'planned' })
+
+  // THE INVARIANT THIS DESCRIBE EXISTS TO PIN, AND IT IS NOT DECORATIVE.
+  //
+  // Three sibling tests identify the ITEM lines by `line.startsWith('  ')`. When the
+  // handover command was first added it was indented like a shell snippet, so four tests
+  // went red at once -- one of them counting 8 items where 5 exist. The indent is load-
+  // bearing in this file, and nothing said so anywhere. Now something does.
+  it('MINDEN behuzott sor TETEL-sor -- a behuzas ebben a fajlban jelentest hordoz', () => {
+    const ids = ['aaaaaaaa1', 'bbbbbbbb2', 'cccccccc3']
+    const msgs = [
+      buildPullNotice('jarvis', 20, ids.map(it3), NOW),
+      buildWakeMessage('jarvis', 20, 3, ids.map(it3), NOW),
+      buildNoWorkNotice('jarvis', 20, NOW),
+    ]
+    for (const msg of msgs) {
+      for (const line of msg.split('\n')) {
+        if (!/^\s+\S/.test(line)) continue
+        expect(line, `behuzott, de nem tetel-sor: ${JSON.stringify(line)}`)
+          .toMatch(/^ {2}[0-9a-z]{8}\s/)
+      }
+    }
+  })
+
+  it('a PULL-ertesites megbelyegzi az idotartamot ES kimondja, hogy a DARABSZAM pillanatfelvetel', () => {
+    const msg = buildPullNotice('jarvis', 20, [it3('aaaaaaaa1')], NOW)
+    expect(msg).toMatch(/MERVE \d{2}:\d{2}:\d{2}-kor/)
+    expect(msg).toContain('PILLANATFELVETEL')
+    expect(msg).toMatch(/nem az ora avultatja el/)
+  })
+
+  it('a WAKE megbelyegzi az idotartamot ES kimondja, hogy a DARABSZAM pillanatfelvetel', () => {
+    const msg = buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW)
+    expect(msg).toMatch(/MERVE \d{2}:\d{2}:\d{2}-kor/)
+    expect(msg).toContain('PILLANATFELVETEL')
+    expect(msg).toMatch(/nem az ora avultatja/)
+  })
+
+  // TILOS CSAK BELYEGEZNI ES MEGALLNI (marveen, a kartya szukitese). A belyeg a DARABSZAMRA
+  // hamis biztonsagot ad: egy megbelyegzett, de elavult szam TEKINTELYESEBBNEK olvasodik,
+  // mint egy belyegzetlen. Ezert minden ertesites, ami SZAMOT allit, adja meg az
+  // UJRAKERDEZES modjat is -- es a horgony a PARANCS-sorokon van, nem az uzeneten:
+  // a `jarvis` nev az ELSO sorban is ott all, tehat egy `toContain('jarvis')` az
+  // egeszre akkor is zold lenne, ha a parancsbol hianyozna (ez a testver-teszt hibaja).
+  it('minden SZAMOT allito ertesites megadja az UJRAKERDEZES modjat is', () => {
+    // SCOPED, es az elso alakom NEM volt az: `toContain('jarvis')`-t kert MIND A HAROMTOL,
+    // es a pull-ertesites elbuktatta -- helyesen. Az o szama a GAZDATLAN kartyake, tehat a
+    // lekerdezese `not c.get('assignee')`-vel szur, es AGENS-NEVET NEM IS SZABAD tartalmaznia.
+    // Az allitasom volt tul eros, nem a kod hibas: a nev csak ott kovetelheto, ahol a szam
+    // AGENS-HATOKORU.
+    const cmdOf = (msg: string) =>
+      msg.split('\n').filter((l) => l.includes('/api/kanban') || l.includes('json.load')).join('\n')
+
+    for (const msg of [
+      buildPullNotice('jarvis', 20, [it3('aaaaaaaa1')], NOW),
+      buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW),
+      buildNoWorkNotice('jarvis', 20, NOW),
+    ]) {
+      expect(cmdOf(msg), 'nincs ujrakerdezo parancs').not.toBe('')
+      // A testver-defektus kipeckelve: behelyettesitetlen jelolo SEHOL az uzenetben.
+      expect(msg).not.toContain('${agent}')
+      expect(msg).not.toContain('${sender}')
+    }
+
+    // AGENS-HATOKORU szamok: a parancs NEVEZZE MEG az agenst.
+    for (const msg of [
+      buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW),
+      buildNoWorkNotice('jarvis', 20, NOW),
+    ]) {
+      expect(cmdOf(msg)).toContain("=='jarvis'")
+    }
+
+    // A PULL szama GAZDATLAN kartyakrol szol -- a lekerdezese az assignee HIANYARA szur,
+    // es NEM nevezhet meg agenst. Ez KONTROLL: megkulonbozteti a ket hatokort.
+    const pull = cmdOf(buildPullNotice('jarvis', 20, [it3('aaaaaaaa1')], NOW))
+    expect(pull).toContain("not c.get('assignee')")
+    expect(pull).not.toContain("=='jarvis'")
+  })
+})
+
 describe('buildNoWorkNotice', () => {
   // Fixed instant, so the existing assertions stay deterministic. The stamp tests below
   // deliberately do NOT use it -- see the comment there.
@@ -1246,13 +1333,15 @@ describe('the ownerless pull-list (card 4cbc8af9)', () => {
 })
 
 describe('the notice an idle agent gets when the board has ownerless work', () => {
+  const PULL_NOW = Date.UTC(2026, 8, 5, 11, 57, 9)
+
   const items = [
     { id: 'aaaaaaaa11', title: 'egy magas prioritasu tetel', priority: 'high' },
     { id: 'bbbbbbbb22', title: 'egy masik', priority: 'normal' },
   ]
 
   it('NAMES the cards -- a count alone is what the old notice already was', () => {
-    const msg = buildPullNotice('jarvis', 20, items)
+    const msg = buildPullNotice('jarvis', 20, items, PULL_NOW)
     expect(msg).toContain('aaaaaaaa')
     expect(msg).toContain('egy magas prioritasu tetel')
   })
@@ -1260,13 +1349,13 @@ describe('the notice an idle agent gets when the board has ownerless work', () =
   it('and tells the reader to LOCK first', () => {
     // Two agents took the same card 19 seconds apart on the day the rule was
     // written. Naming a card without saying this invites exactly that.
-    const msg = buildPullNotice('jarvis', 20, items)
+    const msg = buildPullNotice('jarvis', 20, items, PULL_NOW)
     expect(msg).toMatch(/assignee/)
     expect(msg).toMatch(/in_progress/)
   })
 
   it('does NOT claim there is nothing assigned -- that was the false sentence', () => {
-    expect(buildPullNotice('jarvis', 20, items)).not.toContain('NINCS RA KIOSZTVA SEMMI')
+    expect(buildPullNotice('jarvis', 20, items, PULL_NOW)).not.toContain('NINCS RA KIOSZTVA SEMMI')
   })
 })
 

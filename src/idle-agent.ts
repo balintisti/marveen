@@ -837,6 +837,19 @@ export function laneFilteredPullList<T extends { project?: string | null }>(
   })
 }
 
+/** The reading's own clock time, zero-padded at EVERY hour (card 7edc5839).
+ *
+ *  `toLocaleTimeString('hu-HU', { hour12: false })` alone drops the leading zero -- 04:41 CEST
+ *  renders as "4:41:59" -- so an assertion of the form /\d{2}:\d{2}:\d{2}/ against a single
+ *  fixed fixture passes or fails depending on which hour the fixture lands on, not on whether
+ *  the code pads. Measured 2026-09-05; the tests walk twenty-four hourly instants for exactly
+ *  that reason. */
+function stampOf(nowMs: number): string {
+  return new Date(nowMs).toLocaleTimeString('hu-HU', {
+    hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
+  })
+}
+
 /** What an idle agent is told when the board HAS ownerless work (card 4cbc8af9).
  *
  *  Addressed to the AGENT, not the coordinator -- that is the whole point. The
@@ -853,18 +866,35 @@ export function buildPullNotice(
   agent: string,
   minutes: number,
   items: { id: string; title?: string | null; priority?: string | null }[],
+  nowMs: number,
 ): string {
   const line = (c: { id: string; title?: string | null; priority?: string | null }) =>
     `  ${c.id.slice(0, 8)}  ${(c.priority ?? 'normal').padEnd(6)}  ${(c.title ?? '').slice(0, 60)}`
   return [
     `[tetlen-or] A(z) "${agent}" ${minutes} perce ures prompton all, es a NEVEN nincs semmi --`,
-    `de a tablan ${items.length} GAZDATLAN kartya var, amit barki felvehet:`,
+    `de a tablan ${items.length} GAZDATLAN kartya var, amit barki felvehet`,
+    `(MERVE ${stampOf(nowMs)}-kor):`,
     '',
     ...items.slice(0, 5).map(line),
     '',
     'FOGLALD LE ELOSZOR, aztan merj: `assignee` + `in_progress`. Ket agens 19 masodperc',
     'kulonbseggel vette fel ugyanazt a kartyat azon a napon, amikor ez a szabaly szuletett.',
     'Ha egyik sem a te savod, sorold at egy soros indoklassal -- az is elvegzett munka.',
+    '',
+    // A COUNT DOES NOT DECAY FROM THE CLOCK -- IT DECAYS BECAUSE SOMEONE ELSE ACTED, which is
+    // why the stamp above is necessary but NOT sufficient for this line (mandark, marveen, 7edc5839).
+    // Measured instance, and the measurer falsified it himself: a pull notice said "27 GAZDATLAN
+    // kartya var", he took one off that very list four minutes later, and the count is now 26. No
+    // delay was involved -- a stamp on that line would have been TRUE and useless.
+    // Worse than useless: a STAMPED but stale count reads as MORE authoritative than an unstamped
+    // one, because the stamp suggests the number is looked after. Stamping it and stopping would
+    // make this class look repaired while leaving it exactly as wrong.
+    `A fenti ${items.length} PILLANATFELVETEL, nem elo szam -- es nem az ora avultatja el, hanem`,
+    'egy MASIK AGENS, aki felvesz egyet. Ezert FOGLALJ ELOSZOR: ha a kartya mar nem gazdatlan, ez',
+    'a lista tevedett, nem te. Ujrakerdezni (gazdatlan `planned` darabszam MOST):',
+    `curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" http://localhost:3420/api/kanban \\`,
+    `| python3 -c "import json,sys;print(sum(1 for c in json.load(sys.stdin)`
+      + ` if not c.get('assignee') and c.get('status')=='planned' and not c.get('archived_at')))"`,
   ].join('\n')
 }
 
@@ -893,13 +923,11 @@ export function buildNoWorkNotice(agent: string, minutes: number, nowMs: number)
   // `workcheck.json` to {"kind":"none"} SILENCES this guard for that agent, with no expiry
   // and nothing to restore it. A stale "he has nothing" therefore does not waste a message;
   // it can blind the guard for an agent who does have work.
-  const stamp = new Date(nowMs).toLocaleTimeString('hu-HU', {
-    hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
-  })
+  const stamp = stampOf(nowMs)
   return [
     `[tetlen-or] A(z) "${agent}" ${minutes} perce ures prompton all, ES NINCS RA KIOSZTVA SEMMI.`,
-    `            (MERVE ${stamp}-kor -- ez a jelentes a KOORDINATOR soraban all, ahol merve 24`,
-    '             percet is allt mar, tehat MOST mar avult lehet.)',
+    `(MERVE ${stamp}-kor -- ez a jelentes a KOORDINATOR soraban all, ahol merve 24 percet is`,
+    'allt mar, tehat MOST mar avult lehet.)',
     '',
     'Ez nem az o hibaja es nem is akadaly: nincs mit felvennie. A tetlen-or eddig HALLGATOTT',
     'errol az esetrol -- azt figyelte, akinek VAN munkaja es megsem mozdul --, tehat epp a',
@@ -916,8 +944,8 @@ export function buildNoWorkNotice(agent: string, minutes: number, nowMs: number)
     'kovetkezo korben ugyanezt fogom kuldeni.',
     '',
     'MIELOTT BARMELYIKET TESZED, MERD UJRA -- egy sor, es a MAI allapotot adja:',
-    `  curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" http://localhost:3420/api/kanban \\`,
-    `    | python3 -c "import json,sys;print([(c['id'][:8],c['status']) for c in json.load(sys.stdin)`
+    `curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" http://localhost:3420/api/kanban \\`,
+    `| python3 -c "import json,sys;print([(c['id'][:8],c['status']) for c in json.load(sys.stdin)`
       + ` if c.get('assignee')=='${agent}' and c.get('status') not in ('done','waiting') and not c.get('archived_at')])"`,
     '',
     // ASYMMETRIC ON PURPOSE, and the message has to say so. This one-liner is a STALENESS
@@ -951,6 +979,7 @@ export function buildWakeMessage(
   minutes: number,
   workCount: number,
   items: { id: string; title?: string | null; priority?: string | null; status?: string }[],
+  nowMs: number,
   kind: WorkCheckKind = 'assigned_open_cards',
 ): string {
   const rank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 }
@@ -973,7 +1002,8 @@ export function buildWakeMessage(
     `  ${c.id.slice(0, 8)}  ${(c.status ?? '?').padEnd(11)} ${(c.priority ?? 'normal').padEnd(6)}  ${(c.title ?? '').slice(0, 60)}`
 
   const out = [
-    `[tetlen-or] ${minutes} perce allsz ureses prompton, es ${workCount} tetel var rád.`,
+    `[tetlen-or] ${minutes} perce allsz ureses prompton (MERVE ${stampOf(nowMs)}-kor), es`,
+    `${workCount} tetel var rád.`,
     '',
     'EZ NEM SZEMREHANYAS, ES NEM A TE HIBAD. Egy agens nem tud maganak uj fordulot inditani:',
     'a szandek a fordulo belsejeben el, es a fordulo vegen meghal vele. Az egyetlen dolog, ami',
@@ -1000,6 +1030,22 @@ export function buildWakeMessage(
   if (!work.length && !review.length) {
     out.push('A szamlalod nem nulla, de tetelt nem tudtam megnevezni -- nezd meg a tablat.')
   }
+  // THE STAMP ABOVE FIXES THE DURATION AND NOT THE COUNT, AND THE MESSAGE HAS TO SAY WHICH.
+  // A duration decays from the CLOCK, so a stamp repairs it completely -- the reader subtracts.
+  // A count decays because ANOTHER AGENT ACTED, and no stamp can repair that: it only says the
+  // number is old. Measured 2026-09-05, and the measurer falsified it himself -- a pull notice
+  // said "27 GAZDATLAN kartya var", he took one off that list four minutes later, and it was 26.
+  // A stamped-but-stale count reads as MORE authoritative than an unstamped one, so stamping and
+  // stopping would make this class look repaired while leaving it exactly as wrong (card 7edc5839).
+  out.push(
+    '',
+    `A ${workCount} es a fenti lista PILLANATFELVETEL. Az ora-resze fent megbelyegezve; a SZAMOT`,
+    'viszont nem az ora avultatja, hanem egy masik szereplo -- egy statuszvaltas vagy egy foglalas.',
+    'Ezert FOGLALJ ELOSZOR (`assignee` + `in_progress`), es csak azutan merj. Ujrakerdezni:',
+    `curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" http://localhost:3420/api/kanban \\`,
+    `| python3 -c "import json,sys;print([(c['id'][:8],c['status']) for c in json.load(sys.stdin)`
+      + ` if c.get('assignee')=='${agent}' and c.get('status') not in ('done','waiting') and not c.get('archived_at')])"`,
+  )
   out.push(
     '',
     work.length

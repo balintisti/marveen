@@ -392,7 +392,7 @@ export function tick(): void {
         )
         if (pull.length > 0) {
           try {
-            createAgentMessage('system', agent, buildPullNotice(agent, minutes, pull))
+            createAgentMessage('system', agent, buildPullNotice(agent, minutes, pull, Date.now()))
             logger.info(
               { idleGuard: true, agent, orphanCount: pull.length, top: pull[0]?.id },
               'idle guard: agent idle with nothing assigned -- named the ownerless pull-list',
@@ -418,7 +418,7 @@ export function tick(): void {
         const items = ownItems ?? []
         const minutes = Math.round(decision.idleForMs / 60_000)
         try {
-          createAgentMessage('system', agent, buildWakeMessage(agent, minutes, decision.workCount, items, (check as WorkCheck).kind))
+          createAgentMessage('system', agent, buildWakeMessage(agent, minutes, decision.workCount, items, Date.now(), (check as WorkCheck).kind))
           logger.info(
             { idleGuard: true, agent, workCount: decision.workCount, idleForMs: decision.idleForMs },
             'idle guard: woke the agent (stage 1) -- no human told yet',
