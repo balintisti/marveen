@@ -34,7 +34,7 @@ WHAT IT REFUSES TO DO, deliberately:
     eats the foundations in creation order.
 
 Usage:
-    memory-index-add.py <file.md> <title> <hook>
+    memory-index-add.py [--evict] <file.md> <title> <hook>
     memory-index-add.py --check                 # report state, write nothing
 """
 import fcntl
@@ -125,6 +125,12 @@ def in_degree():
 
 def archive_path():
     return os.path.join(MEM, f'index-farkak-{datetime.date.today().isoformat()}.md')
+
+
+def usage():
+    lines = __doc__.strip().splitlines()
+    i = next(i for i, l in enumerate(lines) if l.strip() == 'Usage:')
+    return '\n'.join(lines[i:])
 
 
 def read(p):
@@ -344,10 +350,25 @@ def main():
                   f'binding: {which})')
         return
 
-    if len(sys.argv) != 4:
-        raise SystemExit(__doc__.strip().splitlines()[-3].strip())
+    # `--evict` WAS NAMED BY THE REFUSAL BELOW AND NEVER EXISTED (card 4b94fefa, measured
+    # 2026-09-05). argv accepted only `--check` or exactly three arguments, so BOTH
+    # `--evict` and `--evict f t h` fell through to the usage line, and `evict_tail()` --
+    # complete, defensive, and already carrying three fixed bugs -- was never called.
+    # Two agents hit that wall the same day and each responded by NOT saving a measured
+    # lesson. A refusal that names an exit which does not exist costs more than a refusal
+    # with no exit at all: the reader believes the door is there and stops looking.
+    argv = sys.argv[1:]
+    allow_evict = '--evict' in argv
+    if allow_evict:
+        argv = [a for a in argv if a != '--evict']
+    if len(argv) != 3:
+        # AND THE USAGE MESSAGE NOW PRINTS THE USAGE. It was `splitlines()[-3]`, a
+        # POSITIONAL anchor into the docstring, which resolves to the bare word "Usage:"
+        # -- the whole output an agent got for a wrong invocation. It is also why adding a
+        # line to that block silently shifts what the error prints. Anchored on the marker.
+        raise SystemExit(usage())
 
-    fname, title, hook = sys.argv[1], sys.argv[2], sys.argv[3]
+    fname, title, hook = argv
     if not os.path.exists(os.path.join(MEM, fname)):
         raise SystemExit(f'REFUSING: {fname} does not exist in {MEM}')
 
@@ -389,6 +410,29 @@ def main():
         # the kind of thing a script must not make silently. So this refuses and shows the
         # trim candidates instead. Use --evict only when a human has decided.
         evicted = None
+        # THE WIRING (card 4b94fefa). Deliberately ONE eviction and no more: the docstring
+        # promises "it will not write if the result is still over the limit after one
+        # eviction", and a loop would quietly spend several memories on a single add.
+        #
+        # It runs BEFORE both refusals rather than inside either, because the two ceilings
+        # want the same remedy from `--evict` and only differ in what they say when it is
+        # absent. The LINE ceiling is the reason this is not restricted to characters:
+        # trimming is powerless against it, so removal is one of the only two answers the
+        # docstring names, and refusing there while naming `--evict` would rebuild exactly
+        # the bug this card is about.
+        #
+        # protect=new_line keeps the entry being added from becoming its own victim -- a
+        # measured bug the function already guards, passed explicitly so it stays true here.
+        if allow_evict and (len(s) > LIMIT or len(index_lines(s)) > LINE_LIMIT):
+            s, evicted = evict_tail(s, protect=new_line)
+            if len(s) > LIMIT or len(index_lines(s)) > LINE_LIMIT:
+                raise SystemExit(
+                    f'REFUSING: still over after one eviction '
+                    f'({len(index_lines(s))}/{LINE_LIMIT} lines, {len(s)}/{LIMIT} chars). '
+                    f'One add must not spend two memories.\n'
+                    f'The evicted line IS already recorded in '
+                    f'{os.path.basename(archive_path())} -- the archive write happens '
+                    f'first by design, so nothing was lost, but the index was NOT changed.')
         # LINE overflow first, because the advice is DIFFERENT and trimming cannot help.
         # COUNTED WITH index_lines(), NOT `s.count('\n- [')`. The file's FIRST line is an
         # index line, so the newline-prefixed count misses it and the guard was off by one --
