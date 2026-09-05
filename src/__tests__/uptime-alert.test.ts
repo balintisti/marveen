@@ -4,6 +4,7 @@ import {
   decideUptimeAlerts,
   buildUptimeNotice,
   buildUnreadableNotice,
+  BLIND_REANNOUNCE_MS,
   NO_UPTIME_STATE,
   type UptimeSeries,
   type UptimeCondition,
@@ -169,5 +170,83 @@ describe('the notices say what a reader must not conclude', () => {
     const d = decideUptimeAlerts([series(Array(11).fill(true))], COND, NO_UPTIME_STATE, NOW)
     expect(buildUptimeNotice(d, 12)).toBeNull()
     expect(buildUnreadableNotice(d, 12)).toBeNull()
+  })
+})
+
+// THE RE-ANNOUNCE WINDOW (card 71349fe1, reopened on didi's finding).
+//
+// The outage path announces on the EDGE; before this, the unreadable path
+// announced on the LEVEL -- every tick, ~30/hour, unbounded. Neither extreme is
+// right, and the two tests below are deliberately a PAIR: one goes red if the
+// window collapses to 0 (back to the level), the other goes red if it grows to
+// Infinity (a bare edge, which is the silent failure this card removes). A
+// one-directional mutation would leave exactly the half didi argued about
+// uncovered.
+describe('a blind spell re-announces on a window, not on the level and not once ever', () => {
+  const blind: UptimeSeries[] = []
+
+  // Its own assertion, because every other test here now uses a literal hour.
+  it('the window is one hour', () => {
+    expect(BLIND_REANNOUNCE_MS).toBe(3_600_000)
+  })
+
+  it('announces on the EDGE of a blind spell', () => {
+    const d = decideUptimeAlerts(blind, COND, NO_UPTIME_STATE, NOW)
+    expect(d.announceBlind).toBe(true)
+    expect(buildUnreadableNotice(d, 0, NOW)).toContain('NO UPTIME DATA AT ALL')
+  })
+
+  // RED if BLIND_REANNOUNCE_MS becomes 0.
+  it('stays SILENT on the next tick inside the window', () => {
+    const first = decideUptimeAlerts(blind, COND, NO_UPTIME_STATE, NOW)
+    const twoMinLater = decideUptimeAlerts(blind, COND, first.next, NOW + 120_000)
+    expect(twoMinLater.announceBlind).toBe(false)
+    expect(buildUnreadableNotice(twoMinLater, 0, NOW + 120_000)).toBeNull()
+  })
+
+  // RED if BLIND_REANNOUNCE_MS becomes Infinity. This is the half that matters
+  // most: "I cannot measure" has no RECOVERED event to close it, so going quiet
+  // leaves the fleet believing the watcher works.
+  it('RE-ANNOUNCES once the window has passed, because blindness has no recovery event', () => {
+    const first = decideUptimeAlerts(blind, COND, NO_UPTIME_STATE, NOW)
+    // LITERAL, not NOW + BLIND_REANNOUNCE_MS. Deriving the fixture from the
+    // constant makes it move WITH a mutation of that constant: the Infinity
+    // mutation SURVIVED the first version of this test for exactly that reason
+    // (measured, 2026-09-05). The constant gets its own assertion below instead.
+    const later = NOW + 3_600_000
+    const d = decideUptimeAlerts(blind, COND, first.next, later)
+    expect(d.announceBlind).toBe(true)
+    const n = buildUnreadableNotice(d, 0, later)!
+    // and the repeat is LABELLED, or identical hourly notices read as flapping
+    expect(n).toContain('STILL BLIND since')
+    expect(n).toContain('this is a repeat, not a new event')
+  })
+
+  // The window must not survive the spell that opened it: a spell that ends and
+  // a new one that starts 10 minutes later is a NEW event, not a suppressed repeat.
+  it('resets when sight returns, so the next blind spell announces on its own edge', () => {
+    const first = decideUptimeAlerts(blind, COND, NO_UPTIME_STATE, NOW)
+    const sighted = decideUptimeAlerts([series(Array(11).fill(true))], COND, first.next, NOW + 60_000)
+    expect(sighted.announceBlind).toBe(false)
+    expect(sighted.blindSinceMs).toBeNull()
+    const blindAgain = decideUptimeAlerts(blind, COND, sighted.next, NOW + 600_000)
+    expect(blindAgain.announceBlind).toBe(true)
+  })
+
+  // CONTROL: the window must not turn the loud path into a quiet one for a
+  // HEALTHY fetch -- otherwise "silent" and "capped" become the same output.
+  it('CONTROL: a healthy tick is silent for its own reason, not the window', () => {
+    const healthy = decideUptimeAlerts([series(Array(11).fill(true))], COND, NO_UPTIME_STATE, NOW)
+    expect(healthy.announceBlind).toBe(false)
+    expect(healthy.noSeries).toBe(false)
+    expect(buildUnreadableNotice(healthy, 1, NOW)).toBeNull()
+  })
+
+  // The unknown path shares the window: it is the same "cannot measure" claim.
+  it('applies to the unknown path too, not only to zero series', () => {
+    const first = decideUptimeAlerts([series([])], COND, NO_UPTIME_STATE, NOW)
+    expect(first.announceBlind).toBe(true)
+    const soon = decideUptimeAlerts([series([])], COND, first.next, NOW + 120_000)
+    expect(buildUnreadableNotice(soon, 1, NOW + 120_000)).toBeNull()
   })
 })

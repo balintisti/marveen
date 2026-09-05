@@ -159,7 +159,11 @@ export async function uptimeTick(now = Date.now()): Promise<void> {
   // the failure that looked like silence looked like health for months.
   if (token == null || proj == null) {
     const decision = decideUptimeAlerts([], FALLBACK_CONDITION, state, now)
-    const notice = buildUnreadableNotice(decision, 0)
+    // PERSIST ON THIS PATH TOO. Without it the re-announce window never advances
+    // here -- and this is the likeliest blind path of all (missing/expired token),
+    // so the one branch that most needs the cap would have been the one without it.
+    state = decision.next
+    const notice = buildUnreadableNotice(decision, 0, now)
     if (notice != null) {
       enqueueVerified(
         `${notice} (poller could not ${token == null ? 'obtain a gcloud access token' : 'resolve the gcloud project'})`,
@@ -185,7 +189,7 @@ export async function uptimeTick(now = Date.now()): Promise<void> {
   const decision = decideUptimeAlerts(series, cond, state, now)
   state = decision.next
 
-  const unreadable = buildUnreadableNotice(decision, series.length)
+  const unreadable = buildUnreadableNotice(decision, series.length, now)
   if (unreadable != null) {
     enqueueVerified(usingFallback ? `${unreadable} (ALSO: the alert policy could not be read, so the condition above is a FALLBACK, not the policy's)` : unreadable)
   }
