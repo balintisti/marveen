@@ -133,6 +133,12 @@ import type { File, Task } from 'vitest'
  * veszni anelkul, hogy barmi szolna rola.
  */
 
+// HOL MERD, mert a szam kulonben HAMISAN alacsony: a frissitot HOME-gyokeru
+// worktreeben futtasd. `/tmp` alatt a hook-path guard MINDEN hook-utat elutasit,
+// es 22 kapu-teszt HAMISAN pirosra megy (az `assert-not-live-install.ts` ki is
+// mondja). Ez a mondat SZANDEKOSAN a generalt blokkon KIVUL all: egyszer mar
+// bennallt, es a kovetkezo `npm run test:baseline` felulirta -- egy generalt
+// blokk csak a SZAMOT tudja megorizni, a MERES MODJAT nem.
 // === SUITE-BASELINE:BEGIN ===
 // EZT A BLOKKOT A `npm run test:baseline` GENERALJA. Ne ird at kezzel.
 //
@@ -142,14 +148,9 @@ import type { File, Task } from 'vitest'
 // es a plafon bevezetesevel csendben elavult volna -- epp azok hazudtak volna
 // elsonek, amik a hatart orzik. Ha a szam es a mondat egy generalt blokkban all,
 // nem tudnak szetcsuszni.
-/** Merve 2026. 09. 05. 18:25:32 CEST -- `npx vitest list --json` -> 427 fajl / 5433 teszt AZ OSSZEOLVASZTOTT fan
- *  (koteg + 71349fe1, ami a cb062949-et is hordozza).
- *  A koteg 424/5396-ot, a 71349fe1 422/5351-et allitott; MINDKETTO a SAJAT fajan volt helyes,
- *  es EGYIK SEM allt ra a mergere. Az alapvonal a MERT ertek, nem a ket szam kozul valasztott.
- *  MERVE egy HOME-gyokeru worktreeben: /tmp alatt a hook-path guard minden hook-utat elutasit,
- *  es 22 kapu-teszt HAMISAN pirosra megy (az assert-not-live-install.ts ezt ki is mondja). */
+/** Merve 2026. 09. 05. 20:02:34 CEST -- `npx vitest list --json` -> 427 fajl / 5440 teszt. */
 export const SUITE_BASELINE_FILES = 427
-export const SUITE_BASELINE_TESTS = 5433
+export const SUITE_BASELINE_TESTS = 5440
 // === SUITE-BASELINE:END ===
 
 /**
