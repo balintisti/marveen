@@ -24,6 +24,7 @@ import {
   type RecipientPaneState,
   PENDING_NOTICE_AFTER_MS,
 } from '../idle-agent.js'
+import { buildRestartLossLine } from '../context-guard.js'
 
 const TH: IdleAgentThresholds = {
   sustainedMs: 10 * 60_000,
@@ -1066,6 +1067,16 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
         ),
         item: /^ {2}-> \S+: /,
       },
+      // AZ OTODIK EPITO, jarvis masodik olvasatabol: az or "fajl-szintunek" nevezte magat, es a
+      // SAJAT fajljaban hagyta ki ezt. Ez is a KOORDINATORNAK megy, es a csoportos alakja behuzott
+      // sorokat ir -- csak megint MAS alakut: agens-nev, nem kartya-id es nem cimzett-nyil.
+      {
+        msg: buildFleetAlert([
+          { kind: 'still-idle', agent: 'didi', minutes: 20, workCount: 3 },
+          { kind: 'pane-unreadable', agent: 'dexter' },
+        ]),
+        item: /^ {2}\S+( --)?/,
+      },
     ]
     for (const { msg, item } of cases) {
       for (const line of msg.split('\n')) {
@@ -1095,6 +1106,54 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
   // UJRAKERDEZES modjat is -- es a horgony a PARANCS-sorokon van, nem az uzeneten:
   // a `jarvis` nev az ELSO sorban is ott all, tehat egy `toContain('jarvis')` az
   // egeszre akkor is zold lenne, ha a parancsbol hianyozna (ez a testver-teszt hibaja).
+  // ------------------------------------------------------------------------------------
+  // AZ OR PADLO VOLT, NEM HALMAZ -- es ez a ket teszt csinal belole halmazt (jarvis, 09-05)
+  // ------------------------------------------------------------------------------------
+  // Az elozo alakja KEZZEL IRT LISTA volt negy epitovel, mikozben a kommentje azt allitotta,
+  // hogy "fajl-szintu". A sajat fajljaban kihagyta a `buildFleetAlert`-et, es az UJ
+  // `buildRestartLossLine` egy MASIK fajlban van, tehat szerkezetileg kivul. Az a defektus-
+  // osztaly, ami a `9fcfb33`-ban tenylegesen kiszallt (aposztrofos `'${sender}'`, behelyettesites
+  // nelkul), igy egy fajllal arrebb ujra lehetseges volt, or nelkul.
+  const GUARDED: { name: string; msg: string }[] = [
+    { name: 'buildPullNotice', msg: buildPullNotice('jarvis', 20, [it3('aaaaaaaa1')], NOW) },
+    { name: 'buildWakeMessage', msg: buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW) },
+    { name: 'buildNoWorkNotice', msg: buildNoWorkNotice('jarvis', 20, NOW) },
+    {
+      name: 'buildPendingStillWaitingNotice',
+      msg: buildPendingStillWaitingNotice(
+        'jarvis', [{ to_agent: 'didi', created_at: Math.floor(NOW / 1000) - 5400 }],
+        NOW, new Map([['didi', 'busy' as const]]),
+      ),
+    },
+    { name: 'buildFleetAlert', msg: buildFleetAlert([{ kind: 'still-idle', agent: 'didi', minutes: 20, workCount: 3 }]) },
+    { name: 'buildRestartLossLine', msg: buildRestartLossLine([{ id: 918001, status: 'failed', created_at: Math.floor(NOW / 1000) - 60 }], NOW, undefined, '04:41:59') },
+  ]
+
+  it('EGYETLEN ertesites sem szivarogtat behelyettesitetlen jelolot', () => {
+    for (const { name, msg } of GUARDED) {
+      expect(msg, `${name} jelolot szivarogtat`).not.toMatch(/\$\{[a-zA-Z_]+\}/)
+    }
+  })
+
+  it('es a lista TELJES -- minden exportalt epito benne van, kulonben ez a teszt bukik', () => {
+    // EZ TESZI HALMAZZA A PADLOT. Ket HALMAZT vet ossze: amit az or ciklizal, es ami a
+    // forrasban EXPORTALVA van. Nem azt allitja, hogy egy nev SZEREPEL valahol (az a
+    // jelenlet-kontra-megfeleltetes csapda lenne) -- azt, hogy a ket halmaz EGYENLO.
+    // Aki hatodik epitot ir, ettol a teszttol tudja meg, hogy az orbe is fel kell vennie.
+    const here = dirname(fileURLToPath(import.meta.url))
+    const exported = ['../idle-agent.ts', '../context-guard.ts'].flatMap((rel) =>
+      [...readFileSync(join(here, rel), 'utf-8').matchAll(/^export function (build\w+)/gm)].map((m) => m[1]),
+    )
+    // KONTROLL: a mero lat egyaltalan exportot, es tobbet, mint egyet.
+    expect(exported.length, 'a forras-olvaso mero nem talalt epitot').toBeGreaterThan(3)
+    const covered = new Set(GUARDED.map((g) => g.name))
+    for (const name of exported) {
+      expect(covered.has(name), `${name} EXPORTALVA van, de az or nem ciklizza`).toBe(true)
+    }
+    // es forditva: az or ne nevezzen olyat, ami mar nem letezik
+    for (const name of covered) expect(exported, `${name} az orben van, de mar nincs exportalva`).toContain(name)
+  })
+
   it('minden SZAMOT allito ertesites megadja az UJRAKERDEZES modjat is', () => {
     // SCOPED, es az elso alakom NEM volt az: `toContain('jarvis')`-t kert MIND A HAROMTOL,
     // es a pull-ertesites elbuktatta -- helyesen. Az o szama a GAZDATLAN kartyake, tehat a

@@ -436,7 +436,15 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
         // degrades into a confident "nothing was lost" is worse than one that admits it is blind.
         let lossLine: string
         try {
-          lossLine = buildRestartLossLine(getRestartLossCandidates(name), Date.now())
+          const restartMs = Date.now()
+          lossLine = buildRestartLossLine(
+            getRestartLossCandidates(name),
+            restartMs,
+            undefined,
+            new Date(restartMs).toLocaleTimeString('hu-HU', {
+              hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
+            }),
+          )
         } catch (err) {
           logger.warn({ err, name }, 'context-guard: could not measure the restart loss window')
           lossLine = ' A VESZTESEGET NEM TUDTAM MEGMERNI (a lekerdezes hibazott)'
@@ -448,7 +456,7 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
             MAIN_AGENT_ID,
             `[CONTEXT-GUARD] Ujrainditottam a(z) "${name}" agentet -- ok: ${decision.reason}` +
             (pctRound !== null ? ` (kontextus ~${pctRound}%)` : '') +
-            `. A regi sessionbe kuldott uzenetek elveszhetnek egy restartnal, ezert MEGMERTEM:` +
+            `. A regi sessionbe kuldott uzenetek elveszhetnek egy restartnal.` +
             lossLine +
             (typeof decision.nextState.handoffStaleMinutes === 'number'
               // The generic "messages may be lost" line invites the wrong

@@ -691,7 +691,18 @@ export function buildRestartLossLine(
   rows: { id: number; status: string; created_at: number }[],
   restartMs: number,
   windowMs: number = RESTART_LOSS_WINDOW_MS,
+  stamp?: string,
 ): string {
+  // ONE GRAMMAR FOR THE WORD `MERVE`, ACROSS EVERY NOTICE THE COORDINATOR RECEIVES.
+  // jarvis, 2026-09-05, reading the merged tree: the same word had two grammars in the same
+  // mailbox -- `MERVE 04:41:59-kor` (WHEN I read) in the idle-guard notices, and `MERVE:` +
+  // counts (WHAT I measured) here. Not two audiences: ONE audience, two grammars, so a reader
+  // who learns that `MERVE` is followed by a clock gets a colon and numbers instead.
+  //
+  // He also measured, field by field, that a stamp is NOT load-bearing here: a `failed` row
+  // stays failed, and `pending` decays toward zero while its advice ("do not resend") stays
+  // true. So this is a CONSISTENCY change and not a correctness fix -- said plainly, because
+  // the commit would otherwise claim to close a hole that was never open.
   const sinceSec = (restartMs - windowMs) / 1000
   const pending = rows.filter((r) => r.status === 'pending')
   // `created_at` is epoch SECONDS in this table; the restart instant is millis. Mixing the
@@ -700,8 +711,9 @@ export function buildRestartLossLine(
   const failedInWindow = rows.filter((r) => r.status === 'failed' && r.created_at >= sinceSec)
   const mins = Math.round(windowMs / 60_000)
 
+  const head = stamp ? ` MERVE ${stamp}-kor:` : ' MERVE:'
   if (pending.length === 0 && failedInWindow.length === 0) {
-    return ` MERVE: pending 0 | failed a restart ${mins} perces ablakaban: 0 -- NINCS mit ujrakuldeni.`
+    return `${head} pending 0 | failed a restart ${mins} perces ablakaban: 0 -- NINCS mit ujrakuldeni.`
   }
   const parts: string[] = []
   if (failedInWindow.length > 0) {
@@ -715,5 +727,5 @@ export function buildRestartLossLine(
     // stops the reader from resending a message the router will still deliver.
     parts.push(`pending: ${pending.length} -- ezek a SORBAN allnak es TULELTEK a restartot, NE kuldd ujra`)
   }
-  return ` MERVE: ${parts.join(' | ')}.`
+  return `${head} ${parts.join(' | ')}.`
 }
