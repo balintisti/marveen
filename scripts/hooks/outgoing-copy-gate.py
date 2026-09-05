@@ -92,7 +92,7 @@ _CURLISH = re.compile(r"^(curl|wget|http)$", re.I)
 # process-inditast ES kuldo-programnevet egyutt tartalmaz); ennel tobbet nem
 # allit, es nem is allithat.
 _CODE_SEND = re.compile(
-    r"\bsmtplib\b|SMTP\s*\(|\bsendMail\s*\(|\bsendEmail\b|\bmail\.send\b", re.I
+    r"\bsmtplib\b|SMTP\s*\(|\bsendMail\s*\(|\bsendEmail\s*\(|\bmail\.send\b", re.I
 )
 _CODE_EXECISH = re.compile(
     r"\bsubprocess\b|os\.system|\bpopen\b|child_process|\bexec[A-Za-z]*\s*\(|\bspawn[A-Za-z]*\s*\(",

@@ -100,7 +100,7 @@ const RESEND_TARGET = /^(https?:\/\/)?([^/@\s]*\.)?api\.resend\.com(\/|$)/i
 // SENDER_PROG nem fogja meg, a tartalmat pedig csak ez a minta nezi. Ket kulon-kulon zold
 // valtozat (a mi f017043-unk es az upstream tokenizalasa) EGYUTT nyitotta a lyukat.
 // A `(?!-\w)` a mi 2026-08-21-i meresunk: a `resend-email.service.ts` FAJLNEV nem kuldes.
-const CODE_SEND = /\bsmtplib\b|SMTP\s*\(|\bsendMail\s*\(|\bsendEmail\b|\bmail\.send\b|\bresend\b(?!-\w)[^\n]{0,80}\.\s*send\s*\(/i
+const CODE_SEND = /\bsmtplib\b|SMTP\s*\(|\bsendMail\s*\(|\bsendEmail\s*\(|\bmail\.send\b|\bresend\b(?!-\w)[^\n]{0,80}\.\s*send\s*\(/i
 // Naive-shape exec heuristic (msg 14298): process-spawn AND a known mailer
 // name together in one interpreter code string. Covers the accidental shapes;
 // see the STATED LIMIT in the header for what it deliberately does not claim.

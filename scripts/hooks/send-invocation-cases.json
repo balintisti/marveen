@@ -255,6 +255,16 @@
       "name": "[marveen:hatar-node-execfile-list] interpreter-kodbol inditott kuldo, node execFileSync listaval",
       "cmd": "node -e \"require('child_process').execFileSync('sendmail',['-t','a@b.hu'])\"",
       "expected": true
+    },
+    {
+      "name": "[dexter:fp-didi-readonly-scan] read-only szkennelés, ami CSAK EMLÍTI a sendEmail-t (didi 980ebc8c #3, valódi blokkolt parancs)",
+      "cmd": "python3 -c \"import pathlib;[print(p) for p in pathlib.Path('src').rglob('*.ts') if 'sendEmail' in p.read_text()]\"",
+      "expected": false
+    },
+    {
+      "name": "[dexter:pos-inline-sendEmail-call] interpreter-kódból HÍVOTT sendEmail -- a szűkítés UTÁN is blokkolandó",
+      "cmd": "node -e \"require('./src/mailer.js').sendEmail({to:'a@b.hu',subject:'X'})\"",
+      "expected": true
     }
   ]
 }
