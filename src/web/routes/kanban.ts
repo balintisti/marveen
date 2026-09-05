@@ -145,6 +145,22 @@ export const KANBAN_RESERVED_SEGMENTS = ['archived', 'labels', 'assignees', 'hea
  *  all three arms, and a literal route added later is covered by one entry here --
  *  not by remembering to order the handlers correctly.
  */
+/**
+ * A move that changed no rows, put into words that name WHICH condition failed.
+ *
+ * Exported and pure so the distinction is testable: the whole point is that the two
+ * states STOP SHARING A STRING. An inline ternary would be untestable without an HTTP
+ * harness, and this file's other route tests are built on exported helpers for the same
+ * reason.
+ *
+ * The 404 is unchanged on both branches -- callers are bound to it. Only the words move.
+ */
+export function moveFailureMessage(cardStillExists: boolean): string {
+  return cardStillExists
+    ? 'A mozgatás nulla sort változtatott, pedig a kártya létezik -- próbáld újra, és utána OLVASD VISSZA a státuszt'
+    : 'Kártya nem található'
+}
+
 export function matchKanbanCardPath(path: string): RegExpMatchArray | null {
   const m = path.match(/^\/api\/kanban\/([^/]+)$/)
   if (!m) return null
@@ -553,7 +569,23 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
       json(res, { ok: true })
       return true
     }
-    json(res, { error: 'Kártya nem található' }, 404)
+    // `moveKanbanCard` FALSE erteke azt jelenti, hogy NULLA SOR VALTOZOTT -- NEM azt,
+    // hogy a kartya nem letezik (db.ts: `UPDATE ... WHERE id=?`.changes > 0, semmilyen
+    // archived/status predikatum nelkul). 2026-09-05-ig a ket allapot UGYANAZT a szoveget
+    // kapta, es mandark OT alkalommal olvasta "a kartya eltunt"-nek -- egyszer ket
+    // ujraprobalast is igenyelve --, mikozben a sor VEGIG ott volt: id jelen,
+    // archived_at null, es a `GET /api/kanban/<id>` 200-at adott ugyanabban a percben.
+    //
+    // A 404 SZANDEKOSAN MARAD: a hivok arra vannak kotve. Ami valtozik, az az, hogy a
+    // valasz es a naplo MEGNEVEZI, MELYIK feltetel bukott -- kulonben a kovetkezo
+    // elofordulas is pontosan annyi nyomot hagy, mint az elozo ot (a dashboard NEM naploz
+    // keres-statuszt: 0 talalat 349 274 sorban, merve).
+    const stillThere = getKanbanCard(id)
+    logger.warn(
+      { id, status, exists: stillThere != null, currentStatus: stillThere?.status ?? null },
+      'Kanban move affected zero rows',
+    )
+    json(res, { error: moveFailureMessage(stillThere != null) }, 404)
     return true
   }
 
