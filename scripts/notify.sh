@@ -76,7 +76,13 @@ fi
 # channel-coordinator, unit-fail-notify) -- vagyis a rendszer TELJES riasztasi utja nemán
 # elveszett, es sikert jelentett. A curl `0`-val ter vissza egy 400-ra is, tehat a
 # kilepesi kod ONMAGABAN sem eleg: az `ok` mezot kell megnezni.
-RESPONSE=$(curl -s -w '\n%{http_code}' -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+# TIME BOUND, added 2026-09-05 (didi measured it on card 900f88ec). This curl had no
+# --max-time and no --connect-timeout: measured still waiting at 45s against an
+# unreachable host, where the sibling calls in this repo use -m 10 and return on time.
+# It matters more than it looks because this script is now called from the BACKUP
+# FAILURE path -- an unbounded outbound call inside a failure handler turns one slow
+# network into a hung scheduled job. Five other scripts here already bound their curls.
+RESPONSE=$(curl -s --connect-timeout 10 --max-time 20 -w '\n%{http_code}' -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
   --data-urlencode "chat_id=${CHAT_ID}" \
   --data-urlencode "text=${MESSAGE}" \
   -d "parse_mode=HTML")

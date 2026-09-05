@@ -78,8 +78,25 @@ fail() {
 [ -r "$ENV_FILE" ] || fail "nincs meg a .env: $ENV_FILE"
 command -v pg_dump >/dev/null 2>&1 || fail "pg_dump nem talalhato ($PG_BIN)"
 
-# postgresql://... with Prisma-only query params stripped (psql/pg_dump reject them)
-DBURL=$(grep -m1 '^DATABASE_URL=' "$ENV_FILE" | sed 's/^DATABASE_URL=//; s/^"//; s/"$//' | sed 's/?.*$//')
+# postgresql://..., keeping the query params pg_dump ACCEPTS and dropping only the
+# Prisma-only ones.
+#
+# The old form was `sed 's/?.*$//'` -- it threw the WHOLE query away as "Prisma-only",
+# and that was wrong for one of the three. Measured on pg_dump 18.4 (didi, card 900f88ec):
+#     connection_limit  REJECTED  "invalid URI query parameter"
+#     pool_timeout      REJECTED
+#     connect_timeout   ACCEPTED AND HONOURED
+# and the .env already sets connect_timeout=60, so we were discarding a bound we had.
+#
+# It matters because of the retry, not despite it: the loop bounds the NUMBER of
+# attempts and nothing bounded the TIME, so three attempts against a blackhole host
+# tripled the exposure. Measured against one: no connect_timeout -> still waiting at
+# 40s; connect_timeout=5 -> clean "timeout expired" at 5s.
+#
+# 15s, not the .env's 60: this runs unattended once a day with two retries behind it.
+DBURL_RAW=$(grep -m1 '^DATABASE_URL=' "$ENV_FILE" | sed 's/^DATABASE_URL=//; s/^"//; s/"$//')
+DBURL_BASE=${DBURL_RAW%%\?*}
+DBURL="${DBURL_BASE}?connect_timeout=${PGCONNECT_TIMEOUT:-15}"
 [ -n "$DBURL" ] || fail "DATABASE_URL nem olvashato ki a .env-bol"
 
 STAMP=$(date +%Y%m%d-%H%M%S)
