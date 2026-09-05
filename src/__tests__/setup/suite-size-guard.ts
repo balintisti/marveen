@@ -139,6 +139,17 @@ import type { File, Task } from 'vitest'
 // mondja). Ez a mondat SZANDEKOSAN a generalt blokkon KIVUL all: egyszer mar
 // bennallt, es a kovetkezo `npm run test:baseline` felulirta -- egy generalt
 // blokk csak a SZAMOT tudja megorizni, a MERES MODJAT nem.
+//
+// MELYIK FAN MERD -- es ez a mondat MASODSZOR all itt kivul, ugyanabbol az okbol
+// (marveen merte 2026-09-06: a lecke a generalt blokkban allt, es a kovetkezo
+// `npm run test:baseline` letorolte; a fenti figyelmeztetes akkor mar TIZENKET
+// SORRAL feljebb allt. Egy csapda melle irt figyelmeztetes nem zarja be a
+// csapdat -- csak a szerkezet):
+//
+//   A 21:11-es 427/5455 KET AG KOTEGEBOL jott, es egyik ag szama sem volt helyes
+//   (5445 es 5450) -- mindketto olyan fan merte magat, ami a masikat nem
+//   tartalmazta. Egy racsni-alapvonalat SOHA nem valasztunk ket ag erteke kozul:
+//   azon a fan merjuk, amit vedeni fog.
 // === SUITE-BASELINE:BEGIN ===
 // EZT A BLOKKOT A `npm run test:baseline` GENERALJA. Ne ird at kezzel.
 //
