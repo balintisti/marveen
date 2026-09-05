@@ -60,8 +60,30 @@ credentials.json
 # for all seven agents, silently, because the code default is `false` and "no entry" is a
 # legitimate opt-in state. Measured: the whole 1446-byte file differs from
 # DEFAULT_CONTEXT_GUARD in exactly that one field, for every agent.
+# ES EGY MASODIK FAJL, UGYANEZEN AZ INDOKON (didi merte 2026-09-05, kartya 0024b92b).
+# A fenti "az EGYETLEN config store/ alatt" mondat 09-05-ig igaz volt. A `docs/upstream-ledger.md`
+# szerint a `store/upstream-ported.json` "the missing memory: every SHA that was ported or
+# consciously skipped" -- vagyis DONTES-NYILVANTARTAS, nem futasido-allapot, es epp ezert
+# ugyanaz a kategoria, mint a context-guard.json.
+# A KAR ALAKJA AZONOS ES NEMA: a `scripts/upstream-new.sh` HELYESEN kezeli a hianyt -- letrehoz
+# egy ureset es ki is mondja --, es epp ez a baj: egy `git clean -fdx` vagy egy uj gep utan MINDEN
+# porting-dontes eltunik, a szkript pedig egy teljesen normalisnak latszo elso futast jelent be.
+# Pontosan az, amit a doksi szerint a mechanizmus MEGELOZ ("the list only grows, and every review
+# has to re-read commits it already decided on").
+# MOST A LEGOLCSOBB: a fajl MEG NEM LETEZIK, tehat nulla dontes van kockazatban.
+# A KONTROLL, ES A KEZENFEKVO ALAKJA HAMISAT MOND (marveen merte magan a bevezeteskor):
+# a `git check-ignore -v` a NEGACIOS sort IS kiirja talalatkent -- a javitas utan
+# `.gitignore:79:!store/upstream-ported.json`, ami ranezesre "meg mindig egy szabaly fogja"-nak
+# olvasodik. A KIMENET tehat nem valaszol; a KILEPESI KOD igen (0 = ignoralva, 1 = nem).
+# ES A DONTO PROBA MAGA A MUVELET:
+#   git add --dry-run store/upstream-ported.json    -> `add 'store/...'`      = kovetheto
+#   NEGATIV KONTROLL egy masik store-fajlra          -> "paths are ignored"   = ignoralva MARAD
+# Merve mindketto: a ledger hozzaadhato, a `.dashboard-token`, a `*.db` es minden mas store-fajl
+# ignoralva marad. A negativ kontroll itt NEM formalitas: egy tul tag negacio TITKOT tenne
+# kovethetove.
 store/*
 !store/context-guard.json
+!store/upstream-ported.json
 workspace/
 agents/
 reports/
