@@ -152,12 +152,25 @@ def evict_tail(text, protect=None):
     takes the freshest lesson -- the first run would have archived one written 8 minutes
     earlier -- which is the pathology prepend was introduced to stop.
 
-    Selecting by mtime is correct in both regimes, so there is no transition to finish
+    Selecting by AGE is correct in both regimes, so there is no transition to finish
     and no one-time reversal of a contested shared file.
 
-    LIMIT, stated because it changes what gets protected: mtime is LAST WRITE, not
-    creation. An old memory edited today survives longer. That is a defensible bias --
-    recently touched is recently used -- but it is a bias, not neutrality.
+    AND THE AGE KEY IS first_seen(), NOT mtime -- these two paragraphs said mtime until
+    2026-09-05, describing an implementation this file no longer has. The primary path
+    reads FIRST APPEARANCE from the snapshot history (see first_seen); mtime is the
+    FALLBACK, taken only when that history is missing, and it announces itself on stderr.
+    The correction is didi's measurement of my sentence, and the mistake is the shape this
+    repo names elsewhere: a docblock that keeps describing the code it was written against.
+
+    THE LIMIT THEREFORE MOVED, and it now belongs to the fallback: mtime is LAST WRITE,
+    not creation, so an old memory edited today survives longer -- a defensible bias, but
+    a bias. jarvis quantified it, 2026-09-03: mtime gives 49/199 non-monotonic steps
+    against first-seen's 3/199. On the primary path that bias is gone.
+
+    WHAT LIMITS THE PRIMARY PATH INSTEAD: the history starts 09-02 12:23, so everything
+    older shares that timestamp and the in-degree tie-break decides among them. A memory
+    never seen in the history sorts as NEWEST (10**9), which protects a just-written line
+    from being evicted by the run that added it.
     """
     lines = text.split('\n')
     # THE NEW LINE IS NEVER ITS OWN VICTIM, and this is a bug the test found rather than
