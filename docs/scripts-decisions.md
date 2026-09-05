@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **208** kovetett fajl, ebbol
-**57** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **210** kovetett fajl, ebbol
+**58** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (1)
 
@@ -238,6 +238,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - Miert nem a duplikatum-szuro: didi megmerte a skill-fan (47 skill, 271 szekcio). Egy PROZAS
 - Miert nem a globalis indexbe: az Level 0 kontextus, minden korben betoltodik. 271 szekcio-cim
+
+### `scripts/skill.ts`
+
+- MIERT A CLI SAJAT FOLYAMATABAN SZKENNEL (spec, msg 16930/b): a hatokor
 
 ### `scripts/task-last-run.sh`
 

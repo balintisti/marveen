@@ -136,3 +136,83 @@ describe('git-at.sh show / which', () => {
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 })
+
+// A MERT LELET (kartya d8d5b92c, mandark 2026-09-03): a segéd az AKTUALIS
+// konyvtar repojara fut, es egy agens-cwd sosem az a repo, amire a kerdes
+// vonatkozik. Egy Delta-CRM utat a marveen repoban keresett -> `rc=1 NINCS`,
+// NULLA stderrel, bajt-azonosan egy igaz nemlegessel.
+//
+// ES AMI A JAVITAS KOZBEN DOLT MEG: az elso javitasom egy ref-ellenorzes volt,
+// ami a mert esetet NEM fogja meg -- az `origin/main` MINDKET repoban feloldodik,
+// csak mas fara. Ezert a nemleges valasz mostantol MEGNEVEZI a fat, es van `-C`.
+describe('git-at.sh -- melyik FAT kerdeztuk (kartya d8d5b92c)', () => {
+  it('a NEMLEGES valasz megnevezi a repot es a refet a stderr-en', () => {
+    const dir = fixture()
+    try {
+      const r = runHelper(dir, ['exists', 'main', 'scripts/secret-gate.ts'])
+      expect(r.status).toBe(1)                    // valodi nemleges: a kod nem valtozik
+      // EGYETLEN sor, es MINDHAROM adat RAJTA. A `toContain` onmagaban nem eleg:
+      // a printf UJRAHASZNALJA a formatumot, ha tobb argumentumot kap, mint
+      // ahany %s van benne -- egy elrontott uzenet igy HAROM sort ir ki, es a
+      // szavak kulon-kulon mind ott vannak. Ezt egy mutacio mutatta meg: a
+      // formatum-sztring szetverese TULELTE az elso valtozatot.
+      const lines = r.stderr.trim().split('\n').filter(Boolean)
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain('main')          // MELYIK ref
+      expect(lines[0]).toContain(dir)             // MELYIK fa -- ez a hianyzo fel
+      expect(lines[0]).toContain('scripts/secret-gate.ts')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('-C egy MASIK repot kerdez, idegen cwd-bol -- ez maga a mert eset', () => {
+    // `here` egy MASIK repo, ami nem ismeri a `van-benne` agat -- pontosan az az
+    // allapot, amibe egy agens-cwd tesz: ervenyes repo, rossz fa.
+    const here = mkdtempSync(join(tmpdir(), 'git-at-masik-'))
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: here })
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: here })
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: here })
+    writeFileSync(join(here, 'x.txt'), 'x\n')
+    execFileSync('git', ['add', '-A'], { cwd: here })
+    execFileSync('git', ['commit', '-qm', 'x'], { cwd: here })
+    const there = fixture()
+    try {
+      const withoutC = runHelper(here, ['exists', 'van-benne', 'scripts/secret-gate.ts'])
+      const withC = runHelper(here, ['-C', there, 'exists', 'van-benne', 'scripts/secret-gate.ts'])
+      // A -C nelkuli valasz NEM "nincs" (1), hanem "nem merheto" (3), es megnevezi a fat.
+      expect(withoutC.status).toBe(3)
+      expect(withoutC.stderr).toContain(here)
+      // A -C-vel ugyanabbol a cwd-bol a HELYES valasz jon.
+      expect(withC.status).toBe(0)
+    } finally {
+      rmSync(here, { recursive: true, force: true }); rmSync(there, { recursive: true, force: true })
+    }
+  })
+
+  it('fel nem oldodo ref: exit 3, NEM 1 -- a "nem merheto" nem "nincs"', () => {
+    const dir = fixture()
+    try {
+      const r = runHelper(dir, ['exists', 'nincs-ilyen-ref-xyz', 'alap.txt'])
+      expect(r.status).toBe(3)
+      expect(r.stderr).toContain('nincs-ilyen-ref-xyz')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('nem-git konyvtarban: exit 3, es kimondja, hogy nem merheto', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'git-at-nem-repo-'))
+    try {
+      const r = runHelper(dir, ['exists', 'main', 'alap.txt'])
+      expect(r.status).toBe(3)
+      expect(r.stderr).toMatch(/NEM MERHETO|NEM git repo/)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('which: egy fel nem oldodo ref NEM csendben marad ki -- exit 3 es nevesitve', () => {
+    const dir = fixture()
+    try {
+      const r = runHelper(dir, ['which', 'scripts/secret-gate.ts', 'van-benne', 'nincs-ilyen-ref-xyz'])
+      expect(r.stdout.trim().split('\n').filter(Boolean)).toEqual(['van-benne'])
+      expect(r.status).toBe(3)                    // a listat NEM szabad tisztanak olvasni
+      expect(r.stderr).toContain('nincs-ilyen-ref-xyz')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})

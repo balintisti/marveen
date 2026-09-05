@@ -721,6 +721,30 @@ export interface PendingRow {
  *  `alreadyNotified` is what keeps this from becoming a metronome: a message that
  *  is still stuck an hour later must not produce a second notice every sweep.
  *  Without it the guard would be loudest exactly when it is least useful.
+ *
+ *  THAT HOLDS WITHIN ONE PROCESS LIFETIME, AND THE SENTENCE ABOVE USED TO SAY IT
+ *  WITHOUT THE QUALIFIER (card 72cc2172). The caller's set lives in memory, so a
+ *  restart clears it and every message still over the threshold is reported once
+ *  more. Measured 2026-09-05 across all four notices of that day:
+ *
+ *      09:16:26  msg A -- first crossing of the threshold
+ *      09:18:07  RESTART
+ *      09:19:37  msg A again
+ *      09:27:07  msg B -- its own first crossing
+ *      10:17:41  RESTART
+ *      10:19:11  msg B again
+ *
+ *  Every repeat was immediately preceded by a restart; there were no others. So the
+ *  suppression works and its scope is the process, and the cost is bounded by how
+ *  often the service restarts -- two deploys that day, two duplicates, zero on a
+ *  quiet one.
+ *
+ *  This qualifier is the whole fix, and the reason is not the duplicate messages.
+ *  It is that the unqualified sentence reads as "a repeat is impossible", so the
+ *  first repeat anyone sees looks like a defect: it cost the same reader two
+ *  separate rounds of measuring on the day this was written. Whether the set
+ *  should SURVIVE a restart is a design question, deliberately left open on the
+ *  card -- it changes behaviour in the coordination core, and this does not.
  */
 export function stalePendingBySender(
   rows: PendingRow[],
