@@ -413,7 +413,7 @@ export function tick(): void {
         )
         if (pull.length > 0) {
           try {
-            createAgentMessage('system', agent, buildPullNotice(agent, minutes, pull, Date.now()))
+            createAgentMessage('system', agent, buildPullNotice(agent, minutes, pull, Date.now(), readAgentProjects(agent)))
             logger.info(
               { idleGuard: true, agent, orphanCount: pull.length, top: pull[0]?.id },
               'idle guard: agent idle with nothing assigned -- named the ownerless pull-list',

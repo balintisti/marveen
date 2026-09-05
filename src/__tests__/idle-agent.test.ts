@@ -1086,6 +1086,38 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
     }
   })
 
+  // --- card 6958fca0: az ujrakerdezes AZT a kerdest tegye fel, amit az OR feltett ---
+
+  it('a PULL ujrakerdezese a SAV-SZUROT is tartalmazza -- kulonben a szomszed kerdesre valaszol', () => {
+    // MERVE 2026-09-05, egy pillanatban, az elo tablan: az ertesites 1-et mondott, a sajat
+    // ujrakerdezo parancsa 24-et, es mind a 23 tobblet olyan projekthez tartozott, amibol ez az
+    // agens sosem valaszt. Az or a `laneFilteredPullList`-tel szur (watcher :344), a parancsbol
+    // ez hianyzott. Az irany a rosszabbik: TULBECSUL, tehat aki koveti, nem letezo ajanlatot keres.
+    const cmd = buildPullNotice('friday', 12, [it3('aaaaaaaa1')], NOW, ['marveen'])
+      .split('\n').filter((l) => l.includes('json.load')).join(' ')
+    expect(cmd).toContain("c.get('project')")
+    expect(cmd).toContain("'marveen'")
+  })
+
+  it('NINCS deklaralt sav -> NINCS zaradek, mert az or is NULLAVAL szur ilyenkor', () => {
+    // A `laneFilteredPullList` kimondja: "An agent that declares no lane is filtered by NOTHING --
+    // that default is deliberate and must not be tightened." A parancsnak ugyanezt kell tennie,
+    // kulonben a javitas az ELLENKEZO iranyba teved: ALULbecsul.
+    const cmd = buildPullNotice('friday', 12, [it3('aaaaaaaa1')], NOW, [])
+      .split('\n').filter((l) => l.includes('json.load')).join(' ')
+    expect(cmd).not.toContain("c.get('project')")
+    // KONTROLL: a parancs egyebkent OTT VAN -- nem azert nincs zaradek, mert nincs parancs
+    expect(cmd).toContain("c.get('assignee')")
+  })
+
+  it('es kimondja, MIT NEM szur -- a zaradek nem allitja, hogy reprodukalja az ort', () => {
+    const msg = buildPullNotice('friday', 12, [it3('aaaaaaaa1')], NOW, ['marveen'])
+    expect(msg).toMatch(/Ha ez NAGYOBBAT ad/)
+    expect(msg).toMatch(/NEM az en dontesem megismetlese/)
+    expect(msg).toContain('due_date')
+    expect(msg).toContain('testing')
+  })
+
   it('a PULL-ertesites megbelyegzi az idotartamot ES kimondja, hogy a DARABSZAM pillanatfelvetel', () => {
     const msg = buildPullNotice('jarvis', 20, [it3('aaaaaaaa1')], NOW)
     expect(msg).toMatch(/MERVE \d{2}:\d{2}:\d{2}-kor/)

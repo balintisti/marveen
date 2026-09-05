@@ -948,9 +948,26 @@ export function buildPullNotice(
   minutes: number,
   items: { id: string; title?: string | null; priority?: string | null }[],
   nowMs: number,
+  /** The agent's declared lanes, so the handover asks the QUESTION THE GUARD ASKED (card
+   *  6958fca0). Without them the emitted command counted every ownerless card on the board:
+   *  measured 2026-09-05 in one moment, the notice said 1 and its own re-query said 24, every
+   *  one of the extras belonging to a project this agent never picks from. The reader would
+   *  conclude the list was catastrophically stale while the notice was right -- and the error
+   *  OVERSTATES, so following it means hunting cards that were never on offer. That wastes the
+   *  single moment an idle agent is handed work without asking, which is the whole mechanism.
+   *
+   *  An empty list means NO filtering, matching `laneFilteredPullList` exactly: an agent that
+   *  declares no lane is filtered by nothing, and that default is deliberate. */
+  lanes?: readonly string[] | null,
 ): string {
   const line = (c: { id: string; title?: string | null; priority?: string | null }) =>
     `  ${c.id.slice(0, 8)}  ${(c.priority ?? 'normal').padEnd(6)}  ${(c.title ?? '').slice(0, 60)}`
+  // Mirrors `laneFilteredPullList`: no declared lane means no clause at all, and a card with an
+  // EMPTY project is allowed through in either case.
+  const declared = (lanes ?? []).map((l) => l.trim()).filter(Boolean)
+  const laneClause = declared.length === 0
+    ? ''
+    : ` and (c.get('project') or '') in ('', ${declared.map((l) => `'${l}'`).join(', ')})`
   return [
     `[tetlen-or] A(z) "${agent}" ${minutes} perce ures prompton all, es a NEVEN nincs semmi --`,
     `de a tablan ${items.length} GAZDATLAN kartya var, amit barki felvehet`,
@@ -975,7 +992,16 @@ export function buildPullNotice(
     'a lista tevedett, nem te. Ujrakerdezni (gazdatlan `planned` darabszam MOST):',
     `curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" http://localhost:3420/api/kanban \\`,
     `| python3 -c "import json,sys;print(sum(1 for c in json.load(sys.stdin)`
-      + ` if not c.get('assignee') and c.get('status')=='planned' and not c.get('archived_at')))"`,
+      + ` if not c.get('assignee') and c.get('status')=='planned' and not c.get('archived_at')`
+      + laneClause
+      + `))"`,
+    '',
+    // ASYMMETRIC, AND THE SIBLING NOTICE SAYS THE SAME OF ITSELF. The lane filter is in, because
+    // it is the term that produced the 24-against-1 gap. The guard's remaining filters are NOT
+    // (a future `due_date`, and the `testing` exclusion), so:
+    'Ha ez NAGYOBBAT ad, mint a fenti szam, a lista ELAVULT -- nezd meg ujra.',
+    'Ha UGYANANNYIT vagy kevesebbet, az meg NEM az en dontesem megismetlese: a jovobeli',
+    '`due_date`-et es a `testing` kizarast ez a sor NEM szuri.',
   ].join('\n')
 }
 
