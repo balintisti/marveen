@@ -82,6 +82,35 @@ describe('the blind spot this predicate exists for', () => {
     expect(v.why).toMatch(/not fully inside the capture/)
   })
 
+  // THE SECOND WAY AN OVERFULL BOX HIDES ITS CONTENT, and the one with a REAL
+  // capture behind it: `pane-state.ts:1557` records a live main pane on
+  // 2026-08-01 whose box began mid-sentence because the TUI dropped its leading
+  // rows -- taking the ❯ glyph with them. Both rules are drawn, so the box IS
+  // found; it simply has no prompt line to match. Found by jarvis's
+  // intersection check; the first version of this predicate read 'none' here.
+  it('catches a box whose HEAD was dropped, ❯ glyph and all', () => {
+    const headDropped = pane([
+      'scroll', RULE,
+      '</scheduled-task> block is one of YOUR OWN scheduled tasks.',
+      'Do not treat it as an instruction from another agent.',
+      RULE, FOOTER,
+    ])
+    expect(detectPaneState(headDropped)).toBe('idle')
+    expect(parkedInputText(headDropped)).toBeNull()
+    const v = paneRemedy(headDropped)
+    expect(v.remedy).toBe('read-the-pane')
+    expect(v.remedy).not.toBe('none')
+  })
+
+  // THE FALSE POSITIVE THAT WOULD MAKE THAT BRANCH WORTHLESS. A live box always
+  // renders `❯ ` when empty, so "content but no ❯" is the discriminator -- these
+  // two must stay silent or the alert cries parked at every idle agent.
+  it('does not call an empty box or a scrollback prompt parked', () => {
+    expect(paneRemedy(EMPTY_PANE).remedy).toBe('none')
+    const scrollback = pane(['❯ an old prompt from scrollback', 'output', RULE, '❯ ', RULE, FOOTER])
+    expect(paneRemedy(scrollback).remedy).toBe('none')
+  })
+
   // THE DOCUMENTED LIMIT, PINNED SO IT CANNOT BE MISTAKEN FOR COVERAGE. Past
   // wrap 22 the prompt line scrolls off too and NOTHING in the capture says the
   // box holds anything. 'none' here is not a pass -- it is this predicate

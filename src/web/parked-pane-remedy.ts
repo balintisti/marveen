@@ -103,6 +103,21 @@ export interface PaneRemedyVerdict {
 const BOX_RULE_RX = /^─{10,}/
 const PROMPT_WITH_TEXT_RX = /❯[^\S\r\n]+\S/
 
+// The inner lines of the live input box: between the last two rules above the
+// idle footer. Returns null when the box is not fully in the capture. Mirrors
+// `liveInputBox` in pane-state.ts, which is module-private there.
+function liveBoxInnerLines(lines: string[]): string[] | null {
+  const footerIdx = lines.findIndex(l => /(?:[A-Za-z][\w-]* ){1,3}on(?: \(shift\+tab to cycle\)| · )|\? for shortcuts/.test(l))
+  if (footerIdx < 0) return null
+  let bottom = -1
+  for (let i = footerIdx - 1; i >= 0; i--) { if (BOX_RULE_RX.test(lines[i])) { bottom = i; break } }
+  if (bottom <= 0) return null
+  let top = -1
+  for (let i = bottom - 1; i >= 0; i--) { if (BOX_RULE_RX.test(lines[i])) { top = i; break } }
+  if (top < 0) return null
+  return lines.slice(top + 1, bottom)
+}
+
 export function paneRemedy(pane: string | null): PaneRemedyVerdict {
   if (pane == null || pane.trim() === '') {
     return { remedy: 'read-the-pane', parkedText: null, why: 'no pane capture was available' }
@@ -130,14 +145,38 @@ export function paneRemedy(pane: string | null): PaneRemedyVerdict {
     return { remedy: 'press-enter', parkedText: parked, why: 'text is sitting un-submitted in the live input box' }
   }
 
-  // The blind spot, made loud rather than silently answered.
+  // TWO WAYS AN OVERFULL BOX HIDES ITS OWN CONTENT, and they need different
+  // reads. Both end at `idle` with parkedInputText null, which is why neither
+  // can be answered by the box-scoped reader alone.
   const lines = pane.split('\n')
   const rules = lines.reduce((n, l) => (BOX_RULE_RX.test(l) ? n + 1 : n), 0)
+
+  // (a) The box's TOP RULE scrolled off. The prompt line survives, so the
+  //     contradiction is visible: a ❯ carrying text while the box reader says
+  //     there is none.
   if (rules < 2 && lines.some(l => PROMPT_WITH_TEXT_RX.test(l))) {
     return {
       remedy: 'read-the-pane',
       parkedText: null,
       why: 'a prompt line carries text but the input box is not fully inside the capture, so the pane reads idle when it is actually parked',
+    }
+  }
+
+  // (b) The box's HEAD was dropped: both rules are drawn, but the TUI discarded
+  //     the leading rows, taking the ❯ glyph with them. `pane-state.ts:1557`
+  //     records this on a LIVE main pane (2026-08-01) whose box began
+  //     mid-sentence -- so unlike (a) this shape has a real capture behind it.
+  //     A live box ALWAYS renders `❯ ` when it is empty, so box content with no
+  //     ❯ anywhere in it is not an empty box: it is a box that lost its head.
+  //     Found by jarvis's intersection check on card cb062949; the first version
+  //     of this file went blind exactly here, which is the shape jarvis warned
+  //     the new predicate would inherit.
+  const inner = liveBoxInnerLines(lines)
+  if (inner != null && inner.some(l => l.trim() !== '') && !inner.some(l => l.includes('❯'))) {
+    return {
+      remedy: 'read-the-pane',
+      parkedText: null,
+      why: 'the input box holds text but its head (including the prompt glyph) was dropped by the TUI, so the pane reads idle when it is actually parked',
     }
   }
 
