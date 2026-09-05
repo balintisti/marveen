@@ -1046,17 +1046,31 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
   // went red at once -- one of them counting 8 items where 5 exist. The indent is load-
   // bearing in this file, and nothing said so anywhere. Now something does.
   it('MINDEN behuzott sor TETEL-sor -- a behuzas ebben a fajlban jelentest hordoz', () => {
+    // MIND A NEGY EPITO, ES A TETEL-ALAK EPITONKENT MAS -- az elso alakom csak HARMAT jart korbe,
+    // es jarvis merte meg, hogy a negyedik HAROM ponton sertette az invarianst, fedetlenul
+    // (12 szokozos belyeg-sor, behuzott handover-parancs, plusz a sajat tetel-alakja).
+    // Az `id`-alaku minta rá nem illik: a pending ertesites CIMZETT szerint sorol, nem kartya
+    // szerint. Egy KOZOS, laza minta elrejtene ezt; ezert kap mindegyik SAJAT alakot.
     const ids = ['aaaaaaaa1', 'bbbbbbbb2', 'cccccccc3']
-    const msgs = [
-      buildPullNotice('jarvis', 20, ids.map(it3), NOW),
-      buildWakeMessage('jarvis', 20, 3, ids.map(it3), NOW),
-      buildNoWorkNotice('jarvis', 20, NOW),
+    const ID_ITEM = /^ {2}[0-9a-z]{8}\s/
+    const cases: { msg: string; item: RegExp }[] = [
+      { msg: buildPullNotice('jarvis', 20, ids.map(it3), NOW), item: ID_ITEM },
+      { msg: buildWakeMessage('jarvis', 20, 3, ids.map(it3), NOW), item: ID_ITEM },
+      { msg: buildNoWorkNotice('jarvis', 20, NOW), item: ID_ITEM },
+      {
+        msg: buildPendingStillWaitingNotice(
+          'jarvis',
+          [{ to_agent: 'didi', created_at: Math.floor(NOW / 1000) - 5400 }],
+          NOW,
+          new Map([['didi', 'busy' as const]]),
+        ),
+        item: /^ {2}-> \S+: /,
+      },
     ]
-    for (const msg of msgs) {
+    for (const { msg, item } of cases) {
       for (const line of msg.split('\n')) {
         if (!/^\s+\S/.test(line)) continue
-        expect(line, `behuzott, de nem tetel-sor: ${JSON.stringify(line)}`)
-          .toMatch(/^ {2}[0-9a-z]{8}\s/)
+        expect(line, `behuzott, de nem tetel-sor: ${JSON.stringify(line)}`).toMatch(item)
       }
     }
   })
@@ -1087,13 +1101,28 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
     // lekerdezese `not c.get('assignee')`-vel szur, es AGENS-NEVET NEM IS SZABAD tartalmaznia.
     // Az allitasom volt tul eros, nem a kod hibas: a nev csak ott kovetelheto, ahol a szam
     // AGENS-HATOKORU.
+    // A HORGONY A PARANCS ALAKJA, NEM EGY VEGPONT -- es az elso alakom az utobbi volt.
+    // A pending ertesites `python3 -c "import sqlite3..."`-t ad at (az uzenetsor a DB-ben van,
+    // nem a kanban API mogott), tehat egy `/api/kanban`-ra szurt mero URESET adott ra, es ugy
+    // olvasodott, mintha nem is adna at parancsot. A tulajdonsag, amit allitok, az, hogy VAN
+    // futtathato ujramero sor -- nem az, hogy melyik vegpontot hasznalja.
     const cmdOf = (msg: string) =>
-      msg.split('\n').filter((l) => l.includes('/api/kanban') || l.includes('json.load')).join('\n')
+      msg.split('\n').filter((l) => /^(curl |python3 |\| python3 )/.test(l.trim()) || l.includes('| python3')).join('\n')
 
+    // A NEGYEDIK EPITO IS BENNE VAN, es jarvis kimondta, miert szamit: az elso alakom EPP AZON A
+    // HARMON ciklizott, amelyiken a `${sender}` defektus SOHA nem volt. A valodi elofordulas a
+    // pending ertesitesben volt. Egyutt a ket fel lefedte, de a MIENK nem a fajlrol szolt.
+    const pending = buildPendingStillWaitingNotice(
+      'jarvis',
+      [{ to_agent: 'didi', created_at: Math.floor(NOW / 1000) - 5400 }],
+      NOW,
+      new Map([['didi', 'busy' as const]]),
+    )
     for (const msg of [
       buildPullNotice('jarvis', 20, [it3('aaaaaaaa1')], NOW),
       buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW),
       buildNoWorkNotice('jarvis', 20, NOW),
+      pending,
     ]) {
       expect(cmdOf(msg), 'nincs ujrakerdezo parancs').not.toBe('')
       // A testver-defektus kipeckelve: behelyettesitetlen jelolo SEHOL az uzenetben.
@@ -1529,9 +1558,21 @@ describe('the pending notice measures the recipient pane instead of asserting it
     // Card 1d800670, didi 2026-09-02: notice 8164 sat 91 minutes in the very queue
     // it reports (12:17:28 -> 13:49:25), and the message it named had been delivered
     // 69 minutes before it arrived. Every line was true at birth and false on arrival.
+    // A FIXTURE HUSZONNEGY ORAI INSTANSRA BOVULT, ES EZ MERT DEFEKTUS-JAVITAS (kartya 7edc5839).
+    // A `NOW = 600_000_000` fix instans nalunk 23:40 helyi idore esik, tehat KET SZAMJEGYU orara,
+    // ahol a parnazott es a parnazatlan formazo EGYBEESIK. jarvis merte hat zonaban, es a teszt
+    // Asia/Tokyoban (07:40) PIROS volt -- vagyis nem a kod helyessege tartotta zolden, hanem a
+    // gep idozonaja. Futtatassal ujramerve ugyanezen a fan: Tokyo PIROS, negy masik zona zold.
     const msg = withState('busy')
-    expect(msg).toMatch(/MERVE \d{2}:\d{2}:\d{2}-kor/)
     expect(msg).toMatch(/avult lehet/)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    for (let h = 0; h < 24; h++) {
+      const t = Date.UTC(2026, 8, 5, h, 41, 59)
+      const m = buildPendingStillWaitingNotice('friday', rows, t, new Map([['dexter', 'busy' as const]]))
+      const d = new Date(t)
+      expect(m).toContain(`MERVE ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}-kor`)
+      expect(m).toMatch(/MERVE \d{2}:\d{2}:\d{2}-kor/)
+    }
   })
 
   it('hands over a FRESH measurement instead of asking the reader to discount a stale one', () => {

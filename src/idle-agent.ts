@@ -757,17 +757,22 @@ export function buildPendingStillWaitingNotice(
   // sat 91 minutes (12:17:28 -> 13:49:25), and the message it named had been delivered 69
   // minutes before it arrived. So the reading is stamped, and the closing advice hands over
   // a FRESH measurement instead of asking the reader to discount a stale one.
-  const stamp = new Date(nowMs).toLocaleTimeString('hu-HU', { hour12: false })
+  // ONE STAMP HELPER FOR ALL FOUR NOTICES (card 7edc5839, jarvis's read of the merged tree).
+  // This builder carried its own inline formatter, and `toLocaleTimeString('hu-HU', {hour12:false})`
+  // drops the leading hour zero: measured on the merged tree in ONE process at ONE instant, the
+  // other three rendered `04:41:59` and this one `4:41:59`. The helper's own docblock names the
+  // defect a few hundred lines below, so the tree carried the diagnosis AND the defect together.
+  const stamp = stampOf(nowMs)
   return [
     `[uzenet-or] A(z) "${sender}" ${rows.length} elkuldott uzenete MEG MINDIG nem kezbesult`,
-    `            (MERVE ${stamp}-kor -- ez a jelentes maga is sorban all, tehat MOST mar avult lehet):`,
+    `(MERVE ${stamp}-kor -- ez a jelentes maga is sorban all, tehat MOST mar avult lehet):`,
     '',
     ...rows.slice(0, 5).map(line),
     '',
     ...advice,
     '',
     'MIELOTT BARMIT TESZEL, MERD UJRA -- egy sor, es a mai allapotot adja:',
-    "  python3 -c \"import sqlite3;c=sqlite3.connect('file:store/claudeclaw.db?mode=ro',uri=True);"
+    "python3 -c \"import sqlite3;c=sqlite3.connect('file:store/claudeclaw.db?mode=ro',uri=True);"
       + "print(list(c.execute(\\\"select id,to_agent,status from agent_messages where from_agent=?"
       + " and status in ('pending','failed')\\\", ('" + sender + "',))))\"",
     '',
