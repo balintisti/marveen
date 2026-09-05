@@ -148,9 +148,10 @@ import type { File, Task } from 'vitest'
 // es a plafon bevezetesevel csendben elavult volna -- epp azok hazudtak volna
 // elsonek, amik a hatart orzik. Ha a szam es a mondat egy generalt blokkban all,
 // nem tudnak szetcsuszni.
-/** Merve 2026. 09. 05. 20:58:31 CEST -- `npx vitest list --json` -> 427 fajl / 5450 teszt. */
+/** Merve 2026. 09. 05. 21:11:46 CEST -- `npx vitest list --json` -> 427 fajl / 5455 teszt (a MERGE-ELT fan merve:
+ *  a ket ag 5445-ot es 5450-et hozott, egyik sem volt helyes -- lasd a merge-commitot). */
 export const SUITE_BASELINE_FILES = 427
-export const SUITE_BASELINE_TESTS = 5450
+export const SUITE_BASELINE_TESTS = 5455
 // === SUITE-BASELINE:END ===
 
 /**
