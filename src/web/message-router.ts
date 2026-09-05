@@ -28,7 +28,7 @@ import {
   sessionExistsOnHost,
   capturePane,
 } from './agent-process.js'
-import { detectPaneState, detectsPermissionPrompt, describePermissionPrompt, paneShowsContextSaturation, type PaneState } from '../pane-state.js'
+import { detectPaneState, detectsPermissionPrompt, describePermissionPrompt, paneShowsContextSaturation, busyEvidence, type PaneState } from '../pane-state.js'
 import { paneRemedy } from './parked-pane-remedy.js'
 import { parsePaneTokens, nextTokenSample, type TokenSample } from '../session-progress.js'
 import { setLastInboundModality } from './voice-modality.js'
@@ -110,8 +110,36 @@ export function formatStuckSessionAlert(
   // "wedged, restart it" -- that framing is what turned the earlier busy-pane
   // alerts into wasted restarts-in-waiting. It says what it is: a long turn,
   // worth a look, not a restart on sight.
+  //
+  // THE WHY IS NOW SOURCED, AND THAT IS THE WHOLE CHANGE (card e490d081). The
+  // branch order, the verdict and the prescription are untouched: only the
+  // evidence clause differs, because "actively working, spinner up" was being
+  // asserted about panes where the ONLY busy evidence is a possibly-stale
+  // spinner line over a parked box.
+  //
+  // `idle-agent.ts:230-243` documents a per-question weighting of exactly this
+  // signal and names TWO consumers with cost profiles: wake (strict -- a false
+  // IDLE interrupts a live turn) and no-work (lenient -- a false BUSY costs
+  // SILENCE). This alert is a THIRD consumer and inherited "strict" by default
+  // from detectPaneState, never having had its own cost analysis -- and its
+  // profile matches neither: a false BUSY here costs no silence (the alert goes
+  // out either way) and interrupts no turn (it is text to a person). What it
+  // costs is a WRONG PRESCRIPTION, which is why only the wording moves here.
+  //
+  // Free: the pane is already in the caller's hand, so this is zero extra tmux
+  // calls. But `pane` DEFAULTS TO NULL -- a caller may pass paneState alone --
+  // and that null path is pinned by router-stuck-alert.test.ts. Reading it
+  // unguarded is exactly the regression this same file produced on card
+  // cb062949 (my own 13 tests green, the full suite caught it in 3).
   if (paneState === 'busy') {
-    return `[session-stuck] Agent '${agent}' (tmux ${session}) has been BUSY (actively working, spinner up) for ${min} min with ${queue}. Not a stall by itself -- check whether the turn is progressing or a tool call is wedged. Do NOT restart on this alert alone.`
+    const evidence = pane ? busyEvidence(pane) : null
+    const seen =
+      evidence === 'counter'
+        ? 'BUSY (a spinner/token line is up -- weaker than a live turn: the same reading is produced by a STALE spinner left rendered above a parked input box)'
+        : evidence === 'footer'
+          ? 'BUSY (a live turn is in flight -- the footer says so, which is written only during a turn)'
+          : 'BUSY (actively working, spinner up)'
+    return `[session-stuck] Agent '${agent}' (tmux ${session}) has been ${seen} for ${min} min with ${queue}. Not a stall by itself -- check whether the turn is progressing or a tool call is wedged. Do NOT restart on this alert alone.`
   }
   // NOT-READY IS NOT ONE STATE, AND THE OLD TEXT PRESCRIBED THE ONE ACTION THAT
   // IS HARMFUL IN MOST OF THEM (card b5a9f60a). Measured 2026-09-03: 17 alerts
