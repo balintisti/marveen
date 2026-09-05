@@ -52,7 +52,13 @@ function scanSource(files: string[]): { hits: Hit[]; literals: number } {
 }
 
 describe('egy jelolo sima sztringben SOHA nem helyettesitodik be', () => {
-  const tracked = execSync("git ls-files 'src/**/*.ts'", { encoding: 'utf8' }).split('\n').filter(Boolean)
+  // `src/*.ts`, NOT `src/**/*.ts`, AND THAT ONE CHARACTER EXCLUDED THE TWO FILES THIS WHOLE
+  // THREAD IS ABOUT (jarvis, 2026-09-05). In a git pathspec `*` already crosses directory
+  // separators, while `**/` REQUIRES an intermediate directory -- so the `**/` form silently
+  // dropped everything sitting directly under `src/`. Measured: 587 files against 638, with
+  // src/idle-agent.ts and src/context-guard.ts matching ZERO under the old pattern. The first is
+  // where 9fcfb33 actually shipped the defect this guard exists to catch.
+  const tracked = execSync("git ls-files 'src/*.ts'", { encoding: 'utf8' }).split('\n').filter(Boolean)
   // A TESZTEK KIZARASA MERT DONTES, NEM KEZLEGYINTES. Ugyanez a szkenner a `__tests__` alatt 20
   // talalatot ad, es MIND JOGOS: allitas-literalok (`not.toContain('${agent}')`) es shell-heredocok
   // teszt-fixture-okben. Bevéve a mero 100% hamis pozitiv lenne -- pontosan az a detektor, amit
@@ -89,9 +95,17 @@ describe('egy jelolo sima sztringben SOHA nem helyettesitodik be', () => {
 
   it('a TELJES forrasfaban egyetlen sima sztring sem hordoz jelolot', () => {
     const { hits, literals } = scanSource(production)
-    // A mero LATOTT valamit: enelkul egy elgepelt glob is nullat adna, es a nulla tisztanak
-    // olvasodna. (Merve 2026-09-05: 162 fajl, 8495 string-literal, 126 ms.)
-    expect(production.length, 'a fajl-lista ures -- a glob a rossz').toBeGreaterThan(50)
+    // TAGSAG, NEM MERET -- ES AZ ELSO ALAKOM MERET VOLT, EZ PEDIG PONTOSAN A HIBA, AMIT NEM FOG MEG.
+    // A regi kontroll `> 50` es `> 1000` volt, es a torott glob mellett KENYELMESEN atment (162 es
+    // 8495), mikozben 51 nem-teszt fajl hianyzott -- koztuk az, amelyikben a defektus kiszallt.
+    // A kommentje pontosan ezt a bukast nevezte meg, es kozben azt kerdezte, NAGY-e a halmaz, nem
+    // azt, hogy TELJES. Egy kuszob a mero LETEZESET igazolja, a HATOKORET nem.
+    //
+    // A ket alak KULON-KULON is szuk, ezert mindketto rajta van: egy top-level fajl (amit a `**/`
+    // alak elvesztett) ES egy melyen fekvo (amit egy csak-top-level alak vesztene el).
+    for (const must of ['src/idle-agent.ts', 'src/context-guard.ts', 'src/web/routes/approvals.ts']) {
+      expect(production, `${must} KIMARADT a szken populaciojabol`).toContain(must)
+    }
     expect(literals, 'nulla string-literal -- a parser nem latott semmit').toBeGreaterThan(1000)
     expect(
       hits.map((h) => `${h.file}:${h.line} ${JSON.stringify(h.text)}`),
