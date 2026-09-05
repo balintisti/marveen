@@ -191,6 +191,19 @@ describe('formatStuckSessionAlert: the remedy reaches the reader', () => {
   })
 
   it('an explicitly busy paneState still short-circuits first, unchanged', () => {
-    expect(call(WORKING_PANE, 'busy')!).toContain('BUSY (actively working')
+    // ANCHOR UPDATED, INTENT UNCHANGED (card e490d081). This test asks whether the
+    // busy branch wins BEFORE paneRemedy is consulted; it used the exact evidence
+    // wording as its proxy, and that wording is now sourced from busyEvidence.
+    // So it anchors on what it actually claims: the busy verdict, and the ABSENCE
+    // of every remedy branch's text. Re-pinning it to the new wording instead
+    // would just move the same brittleness one string along.
+    const a = call(WORKING_PANE, 'busy')!
+    expect(a).toContain('[session-stuck]')
+    expect(a).toContain('BUSY')
+    expect(a).toContain('Do NOT restart on this alert alone')
+    // none of paneRemedy's branches ran
+    expect(a).not.toContain('the pane shows it is WORKING')
+    expect(a).not.toContain('[approval-needed]')
+    expect(a).not.toContain('CONTEXT SATURATION')
   })
 })

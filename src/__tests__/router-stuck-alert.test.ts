@@ -15,7 +15,7 @@ import { describe, it, expect } from 'vitest'
 import { formatStuckSessionAlert, shouldEscalateStuckSession,
   quietAgentsToCheck, isDeliberatelyParked, declaresNoQueue,
   quietSweepDue } from '../web/message-router.js'
-import { detectPaneState } from '../pane-state.js'
+import { detectPaneState, busyEvidence } from '../pane-state.js'
 
 const MAIN = 'marveen'
 
@@ -345,5 +345,70 @@ describe('the sweep has its own cadence, not the router tick (card bd7de2ba)', (
     // toward the sweep interval, the guard starts missing windows and this says
     // so instead of the two constants drifting past each other silently.
     expect(shouldEscalateStuckSession('busy', 30 * MIN + 60_000)).toBe(true)
+  })
+})
+
+// ---- card e490d081: the WHY comes from busyEvidence, the verdict does not ----
+//
+// The alert is a THIRD consumer of the busy signal. idle-agent.ts:230-243 weights
+// this signal per question and names exactly TWO consumers with cost profiles;
+// this one inherited "strict" from detectPaneState without its own analysis, and
+// its cost is neither silence nor an interrupted turn -- it is a WRONG PRESCRIPTION
+// in text a person reads. So only the evidence clause moves. Every case below
+// asserts the verdict and the prescription are UNCHANGED, or this stopped being a
+// wording change.
+describe('the busy alert sources its WHY from the pane, without changing the verdict', () => {
+  // A STALE spinner left rendered above a parked box: counter line present, and
+  // NO 'esc to interrupt' in the footer region -- which is the whole point, since
+  // the footer is written only during a live turn.
+  const STALE_COUNTER_PANE = [
+    '✢ Combobulating… (52s · ↓ 2.6k tokens · thinking some more)',
+    '',
+    SEP,
+    '❯ ',
+    SEP,
+    '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+  ].join('\n')
+
+  // FIXTURE CONTROL: prove the fixtures carry the property before asserting on
+  // the wording. Without this the wording tests could both be measuring the same
+  // evidence value and neither would say so.
+  it('CONTROL: the two fixtures really do carry different busy evidence', () => {
+    expect(busyEvidence(BUSY_PANE)).toBe('footer')
+    expect(busyEvidence(STALE_COUNTER_PANE)).toBe('counter')
+  })
+
+  it('a live turn is named as one', () => {
+    const a = formatStuckSessionAlert('prisma', MAIN, 'agent-prisma', 35 * MIN, 2, 'busy', BUSY_PANE)!
+    expect(a).toContain('a live turn is in flight')
+    expect(a).toContain('Do NOT restart on this alert alone')
+  })
+
+  // THE POINT OF THE CARD: this pane may be BLOCKED, and the old text asserted
+  // "actively working, spinner up" about it.
+  it('a counter-only pane says the reading can be a stale render, not a turn', () => {
+    const a = formatStuckSessionAlert('prisma', MAIN, 'agent-prisma', 35 * MIN, 2, 'busy', STALE_COUNTER_PANE)!
+    expect(a).toContain('STALE')
+    expect(a).toContain('parked input box')
+    expect(a).not.toContain('a live turn is in flight')
+    // UNCHANGED: same tag, same verdict, same prescription
+    expect(a).toContain('[session-stuck]')
+    expect(a).toContain('BUSY')
+    expect(a).toContain('Do NOT restart on this alert alone')
+  })
+
+  // THE GUARD. `pane` defaults to null and a caller may pass paneState alone.
+  // Reading it unguarded is precisely the regression this file caught on card
+  // cb062949 -- there the author's own 13 tests were green and the full suite
+  // found it in 3.
+  it('a caller with NO pane keeps the original wording, unguarded reads excluded', () => {
+    const a = formatStuckSessionAlert('prisma', MAIN, 'agent-prisma', 35 * MIN, 2, 'busy')!
+    expect(a).toContain('BUSY (actively working, spinner up)')
+    expect(a).toContain('Do NOT restart on this alert alone')
+  })
+
+  it('an EMPTY pane string is treated as no pane, not as evidence', () => {
+    const a = formatStuckSessionAlert('prisma', MAIN, 'agent-prisma', 35 * MIN, 2, 'busy', '')!
+    expect(a).toContain('BUSY (actively working, spinner up)')
   })
 })
