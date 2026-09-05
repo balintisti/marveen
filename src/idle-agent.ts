@@ -166,6 +166,41 @@ export const NO_IDLE_STATE: IdleAgentState = { idleSinceMs: null, lastAlertAt: n
  * no logic at all -- the whole point is that this is unit-testable without tmux,
  * a database, or a clock.
  */
+/** Is `due_date` still in the future, whatever unit either side arrived in?
+ *
+ *  MEASURED DEFECT, not a tidy-up (computress, card 9fe77f07, 2026-09-05): the
+ *  `due_date` column is epoch SECONDS, and `idle-agent-watcher.ts` called
+ *  `orphanPullList(cards, Date.now())` -- MILLISECONDS. `due_date > now` is then
+ *  never true for any real date, so the clause removed ZERO cards from the
+ *  ownerless offer list. Controls she ran: the same call with `due_date*1000`
+ *  DOES drop the card, and dropping `now` leaves the list unchanged.
+ *
+ *  WHY THE FIX IS HERE AND NOT AT THE CALL SITE, which is the part worth
+ *  carrying: caller discipline was ALREADY TRIED IN THAT SAME FILE AND LOST.
+ *  Line 207 carries a comment naming this exact trap and derives a `nowSec` for
+ *  the sibling call -- and it even predicts the failure, "silently, since the
+ *  filter would simply never fire". The second call site, added later, 110
+ *  lines below, passed raw `Date.now()` anyway. A comment protects the line it
+ *  sits on; it does not protect the next caller.
+ *
+ *  THE THRESHOLD IS NOT A GUESS. 1e11 as milliseconds is 1973-03-03; as seconds
+ *  it is the year 5138. Every epoch value this board will ever hold is on one
+ *  side or the other by a factor of a thousand, so there is no ambiguous middle
+ *  to get wrong. Measured on the live table (computress, same card): all 1709
+ *  cards store `due_date` and `updated_at` in seconds -- zero ms-shaped rows --
+ *  so this normalises today's convention rather than inventing one.
+ *
+ *  AND IT IS DELIBERATELY NOT A DATA MIGRATION. Rewriting the column to
+ *  milliseconds also works today and sets a trap: a later, CORRECT move to
+ *  normalisation would scale those rows by another thousand and park the card
+ *  until the year 58000. A fix that breaks a future right answer is not a fix.
+ */
+function isDeferred(dueDate: number | null | undefined, now: number | undefined): boolean {
+  if (now === undefined || dueDate == null) return false
+  const ms = (t: number) => (t < 1e11 ? t * 1000 : t)
+  return ms(dueDate) > ms(now)
+}
+
 export function decideIdleAlert(
   input: IdleAgentInput,
   state: IdleAgentState,
@@ -506,8 +541,7 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
       // writing it, and it is not the reason. The reason is that the guard must not
       // teach anyone to skim its list.
       const isMine = (c: WorkCountCard) => c.assignee === agent
-      const deferred = (c: WorkCountCard) =>
-        now !== undefined && c.due_date != null && c.due_date > now
+      const deferred = (c: WorkCountCard) => isDeferred(c.due_date, now)
       const open = live.filter(
         (c) => isMine(c) && c.status !== 'done' && c.status !== 'waiting' && !deferred(c),
       )
@@ -809,7 +843,7 @@ export function orphanPullList<T extends {
     !c.archived_at &&
     (c.assignee ?? '').trim() === '' &&
     c.status === 'planned' &&
-    !(now !== undefined && c.due_date != null && c.due_date > now),
+    !isDeferred(c.due_date, now),
   )
 }
 
