@@ -18,6 +18,8 @@ DASHBOARD_TOKEN_FILE="/Users/isti/marveen/store/.dashboard-token"
 R2_KEY_FILE="/Users/isti/marveen/store/.r2-key"
 R2_SCRIPT="/Users/isti/marveen/scripts/r2.py"
 R2_BUCKET="delta-crm-backup"
+NOTIFY_SCRIPT="/Users/isti/marveen/scripts/notify.sh"
+PGDUMP_TRIES="${PGDUMP_TRIES:-3}"
 DAILY_KEEP=14          # keep this many recent dumps regardless of age
 export PATH="$PG_BIN:$PATH"
 
@@ -26,15 +28,50 @@ chmod 700 "$BACKUP_DIR"
 
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG_FILE"; }
 
-fail() {
-  log "FAIL: $*"
-  # Tell Marveen so the failure is not silent. Best effort only.
+# MEASURED 2026-09-05, card 900f88ec: the previous version of this function posted to
+# /api/messages with from="delta-crm-backup" and threw the response away with
+# `>/dev/null 2>&1`. That endpoint answers
+#     HTTP 403 {"error":"unknown agent 'delta-crm-backup' -- from must be a registered fleet agent id"}
+# so the alert had never once been delivered, and the discarded response meant the
+# delivery failure was itself silent. Today's 03:30 DNS failure went unnoticed for
+# thirteen hours and was found by accident during an unrelated check.
+#
+# Two channels now, in this order, and BOTH report whether they worked:
+#   1. notify.sh -> Telegram, straight to Isti. It already fails loudly (HTTP 200 AND
+#      ok:true required, otherwise exit 1 plus Telegram's own error text).
+#   2. the fleet queue, with from="marveen" -- a REGISTERED id, which is the whole
+#      reason the old one bounced. Verified by reading the HTTP code back.
+notify_failure() {
+  local reason="$1"
+  local msg="[MENTES HIBA] A Delta-CRM napi adatbazis-mentes elszallt: $reason -- $LOG_FILE"
+
+  if [ -x "$NOTIFY_SCRIPT" ]; then
+    if bash "$NOTIFY_SCRIPT" "$msg" >>"$LOG_FILE" 2>&1; then
+      log "RIASZTAS: Telegram OK"
+    else
+      log "RIASZTAS: Telegram BUKOTT (a notify.sh nem nullaval tert vissza)"
+    fi
+  else
+    log "RIASZTAS: nincs notify.sh ($NOTIFY_SCRIPT)"
+  fi
+
   if [ -r "$DASHBOARD_TOKEN_FILE" ]; then
-    curl -s -m 10 -X POST http://localhost:3420/api/messages \
+    local code
+    code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' -X POST http://localhost:3420/api/messages \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer $(cat "$DASHBOARD_TOKEN_FILE")" \
-      -d "{\"from\":\"delta-crm-backup\",\"to\":\"marveen\",\"content\":\"[MENTES HIBA] A Delta-CRM napi adatbazis-mentes elszallt: $1 -- nezd meg a $LOG_FILE vegét es szolj Istinek.\"}" >/dev/null 2>&1
+      -d "{\"from\":\"marveen\",\"to\":\"marveen\",\"content\":\"$msg\"}" 2>/dev/null)
+    if [ "$code" = "200" ] || [ "$code" = "201" ]; then
+      log "RIASZTAS: flotta-sor OK"
+    else
+      log "RIASZTAS: flotta-sor BUKOTT (HTTP ${code:-nincs valasz})"
+    fi
   fi
+}
+
+fail() {
+  log "FAIL: $*"
+  notify_failure "$*"
   exit 1
 }
 
@@ -49,11 +86,26 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 OUT="$BACKUP_DIR/delta-crm-$STAMP-public.dump"
 
 log "START -> $(basename "$OUT")"
-if ! pg_dump "$DBURL" --format=custom --compress=9 --no-owner --no-privileges \
-      --schema=public --file="$OUT" 2>>"$LOG_FILE"; then
+# RETRY, measured reason: 2026-09-05 03:30 this failed on a transient DNS lookup
+# ("could not translate host name ... to address") and was decided in 30 seconds.
+# The unit fires once a day, so one blink cost a whole day of backup. The dump
+# itself is ~100s, so the retries are cheap next to the thing they protect.
+DUMP_OK=0
+for ATTEMPT in $(seq 1 "$PGDUMP_TRIES"); do
+  if pg_dump "$DBURL" --format=custom --compress=9 --no-owner --no-privileges \
+        --schema=public --file="$OUT" 2>>"$LOG_FILE"; then
+    DUMP_OK=1
+    [ "$ATTEMPT" -gt 1 ] && log "pg_dump OK a(z) $ATTEMPT. probalkozasra"
+    break
+  fi
   rm -f "$OUT"
-  fail "pg_dump hiba"
-fi
+  if [ "$ATTEMPT" -lt "$PGDUMP_TRIES" ]; then
+    BACKOFF=$((ATTEMPT * 30))
+    log "pg_dump hiba ($ATTEMPT/$PGDUMP_TRIES), ujraprobalas ${BACKOFF}s mulva"
+    sleep "$BACKOFF"
+  fi
+done
+[ "$DUMP_OK" = "1" ] || fail "pg_dump hiba $PGDUMP_TRIES probalkozas utan"
 chmod 600 "$OUT"
 
 # Verify: the archive must parse end to end and contain table data sections.
@@ -109,12 +161,11 @@ if [ -r "$R2_KEY_FILE" ]; then
     fi
   else
     log "R2 HIBA: a feltoltes nem sikerult, a helyi mentes megvan"
-    if [ -r "$DASHBOARD_TOKEN_FILE" ]; then
-      curl -s -m 10 -X POST http://localhost:3420/api/messages \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer $(cat "$DASHBOARD_TOKEN_FILE")" \
-        -d "{\"from\":\"delta-crm-backup\",\"to\":\"marveen\",\"content\":\"[MENTES FIGYELMEZTETES] A helyi mentes rendben, de az R2 feltoltes elszallt. Csak a Macen van masolat. Nezd meg a $LOG_FILE veget.\"}" >/dev/null 2>&1
-    fi
+    # SECOND instance of the same defect, and the REGRESSION TEST is what found it:
+    # I fixed fail() first and this path still carried from="delta-crm-backup" with
+    # its response discarded. One defect, two call sites -- the test asked the file,
+    # not me, and my own grep had matched the explanatory comment instead.
+    notify_failure "az R2 feltoltes elszallt, csak a Macen van masolat"
   fi
 else
   log "R2 kihagyva: nincs kulcs ($R2_KEY_FILE)"
