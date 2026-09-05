@@ -110,10 +110,37 @@ export function seriesVerdict(
   return { series: s, verdict: 'firing', why: `all ${inWindow.length} checks failed for the full ${cond.durationSeconds}s window` }
 }
 
+/**
+ * How long a CONTINUOUS blind spell stays quiet between notices.
+ *
+ * NOT the same rule as an outage, and the asymmetry is the point (didi found the
+ * gap, marveen decided the shape). An outage has a RECOVERY event that closes
+ * the story, so announcing it on the edge alone is safe: silence after a firing
+ * notice ends with a "RECOVERED" line. "I cannot measure" has no such closing
+ * event -- announce it once on the edge and then go quiet, and the fleet is left
+ * believing the watcher is working. That is the silent failure this whole card
+ * exists to remove, rebuilt one level up.
+ *
+ * So: neither the level (every 2-minute tick, ~30/hour, unbounded) nor a bare
+ * edge (once, ever). The hour comes from this module's own worked example, the
+ * outage "lasting an hour" in decideUptimeAlerts.
+ *
+ * WHY 30/hour was not merely noisy: `message-router.ts:830` skips expiry for the
+ * main agent (`if (isMainAgent) continue`), so these pile up rather than age out,
+ * and `agent-msg.sh:295` refuses to send at >=3 pending PER RECIPIENT. Roughly six
+ * minutes of an undrained queue cuts every other agent off from the coordinator --
+ * over a notice whose content is "I can see nothing".
+ */
+export const BLIND_REANNOUNCE_MS = 3_600_000
+
 /** What the poller remembers between ticks, so an ongoing outage is announced once. */
 export interface UptimeAlertState {
   /** `checkId::checkerLocation` for every series currently announced as firing. */
   firing: string[]
+  /** When the current blind spell was last announced. Absent = not currently blind. */
+  blindAnnouncedAtMs?: number
+  /** When the current blind spell STARTED, so a repeat can say how long it has run. */
+  blindSinceMs?: number
 }
 
 export const NO_UPTIME_STATE: UptimeAlertState = { firing: [] }
@@ -149,6 +176,14 @@ export interface UptimeDecision {
   noSeries: boolean
   /** True when the policy's trigger threshold is met across all series. */
   policyWouldFire: boolean
+  /**
+   * Whether the unreadable notice is DUE this tick -- the edge of a blind spell,
+   * or an hour of continuous blindness since the last one. The builder formats;
+   * this decides, so the window is testable without touching I/O.
+   */
+  announceBlind: boolean
+  /** Start of the current blind spell, or null when this tick can see. */
+  blindSinceMs: number | null
   next: UptimeAlertState
 }
 
@@ -181,16 +216,33 @@ export function decideUptimeAlerts(
     v => v.verdict === 'clear' && was.has(seriesKey(v.series)),
   )
 
+  const unknown = verdicts.filter(v => v.verdict === 'unknown')
+  const blindNow = all.length === 0 || unknown.length > 0
+  // A spell that ENDS resets both marks, so the next blind spell announces on its
+  // own edge instead of serving out a window that started an hour ago.
+  const blindSinceMs = blindNow ? (prev.blindSinceMs ?? nowMs) : null
+  const announceBlind =
+    blindNow &&
+    (prev.blindAnnouncedAtMs == null || nowMs - prev.blindAnnouncedAtMs >= BLIND_REANNOUNCE_MS)
+
   return {
     newlyFiring,
     recovered,
-    unknown: verdicts.filter(v => v.verdict === 'unknown'),
+    unknown,
     noSeries: all.length === 0,
     policyWouldFire: firingNow.length >= cond.triggerCount,
+    announceBlind,
+    blindSinceMs,
     // An 'unknown' series keeps whatever state it had: we did not learn that it
     // recovered, so dropping it here would silently retract an open outage and
     // then re-announce it on the next readable tick.
     next: {
+      ...(blindNow
+        ? {
+            blindSinceMs: blindSinceMs ?? nowMs,
+            blindAnnouncedAtMs: announceBlind ? nowMs : prev.blindAnnouncedAtMs,
+          }
+        : {}),
       firing: [
         ...firingKeys,
         ...prev.firing.filter(k => {
@@ -244,7 +296,18 @@ export function buildUptimeNotice(d: UptimeDecision, totalSeries: number): strin
  * token, or an API that answers with nothing, must produce THIS -- never
  * silence, and never a clear verdict.
  */
-export function buildUnreadableNotice(d: UptimeDecision, totalSeries: number): string | null {
+export function buildUnreadableNotice(d: UptimeDecision, totalSeries: number, nowMs = Date.now()): string | null {
+  // THE WINDOW, not the level. Speaking on every tick is what made this path a
+  // fleet-queue hazard; speaking once and never again is the silent failure it
+  // was built to remove. See BLIND_REANNOUNCE_MS for why those are different
+  // questions from the outage path's.
+  if (!d.announceBlind) return null
+  // On a repeat the reader must be able to tell an hour-old blind spell from a
+  // fresh one -- otherwise identical hourly notices read as flapping.
+  const ongoing =
+    d.blindSinceMs != null && nowMs - d.blindSinceMs >= BLIND_REANNOUNCE_MS
+      ? ` STILL BLIND since ${new Date(d.blindSinceMs).toISOString()} -- this is a repeat, not a new event.`
+      : ''
   // CHECKED FIRST, because this is the case that was silent. An empty result has
   // no series to report as unknown, so an unknown-only check reads it as nothing
   // to say.
@@ -253,13 +316,14 @@ export function buildUnreadableNotice(d: UptimeDecision, totalSeries: number): s
       '[uptime] NO UPTIME DATA AT ALL -- zero series returned. Either the API call failed ' +
       '(missing/expired token, 401, network) or no uptime checks exist. This is NOT a clear ' +
       'result and must not be read as one: production may be down right now and this path ' +
-      'cannot see it. Check the token first -- a silent poller looks exactly like a healthy one.'
+      'cannot see it. Check the token first -- a silent poller looks exactly like a healthy one.' +
+      ongoing
     )
   }
   if (d.unknown.length === 0) return null
   return (
     `[uptime] CANNOT MEASURE ${d.unknown.length}/${totalSeries} uptime series: ` +
     `${d.unknown[0].why}. This is NOT a clear result -- production may be fine or may be down, ` +
-    `and this path cannot currently tell you which.`
+    `and this path cannot currently tell you which.${ongoing}`
   )
 }
