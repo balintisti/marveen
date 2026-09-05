@@ -31,6 +31,9 @@ export default defineConfig({
     //    native modules were not built for, which otherwise reds out 40 files
     //    with errors that look like bugs in those files (2026-08-17).
     setupFiles: [
+      // Elso, mert a tobbi setup es minden teszt-modul MAR a rogzitett zonaban fusson
+      // (kartya 39151cd4: a keszlet eddig a gep zonajat OROKOLTE, es pontosan egyben volt zold).
+      './src/__tests__/setup/pin-timezone.ts',
       './src/__tests__/setup/assert-not-live-install.ts',
       './src/__tests__/setup/assert-supported-node.ts',
     ],
