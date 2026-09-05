@@ -868,9 +868,38 @@ export function buildPullNotice(
   ].join('\n')
 }
 
-export function buildNoWorkNotice(agent: string, minutes: number): string {
+export function buildNoWorkNotice(agent: string, minutes: number, nowMs: number): string {
+  // THIS NOTICE RIDES THE COORDINATOR'S QUEUE, AND THAT IS WHY IT IS STAMPED (card 7edc5839).
+  //
+  // Card 1d800670 stamped the sibling notice because it rides the queue it reports. The
+  // question this card asked was which OTHER builders in this file deserve the same, and
+  // the answer is not "all of them" -- it is decided by WHO RECEIVES the notice, measured
+  // on 2026-09-05 over the delivered rows in `agent_messages` (delivered_at - created_at):
+  //
+  //   buildWakeMessage      n=674  median 0.08  max 0.30 min   -> goes to the IDLE pane
+  //   buildPullNotice       n=50   median 0.08  max 6.27 min   -> goes to the IDLE pane
+  //   buildNoWorkNotice     n=138  median 0.37  p95 4.69  max 24.55 min, 6 over five minutes
+  //
+  // The wake and the pull notice are addressed to a pane the guard just measured as IDLE,
+  // so the router drains them in seconds -- stamping those would be noise, and the card
+  // said so. This one is addressed to MAIN_AGENT_ID, the busiest recipient on the board:
+  // all eight of its slowest deliveries went to the coordinator, the worst at 24.55 minutes.
+  // (The single pull-notice outlier went to the coordinator too, on a sweep where HE was
+  // the idle agent -- same mechanism, not a counterexample.)
+  //
+  // And the decay is not symmetric. What this notice asserts -- "nothing is assigned to
+  // him" -- is falsified by one card being assigned in the meantime, and the action it
+  // asks for is exactly the one that must not be taken on a stale reading: setting his
+  // `workcheck.json` to {"kind":"none"} SILENCES this guard for that agent, with no expiry
+  // and nothing to restore it. A stale "he has nothing" therefore does not waste a message;
+  // it can blind the guard for an agent who does have work.
+  const stamp = new Date(nowMs).toLocaleTimeString('hu-HU', {
+    hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
+  })
   return [
     `[tetlen-or] A(z) "${agent}" ${minutes} perce ures prompton all, ES NINCS RA KIOSZTVA SEMMI.`,
+    `            (MERVE ${stamp}-kor -- ez a jelentes a KOORDINATOR soraban all, ahol merve 24`,
+    '             percet is allt mar, tehat MOST mar avult lehet.)',
     '',
     'Ez nem az o hibaja es nem is akadaly: nincs mit felvennie. A tetlen-or eddig HALLGATOTT',
     'errol az esetrol -- azt figyelte, akinek VAN munkaja es megsem mozdul --, tehat epp a',
@@ -885,6 +914,21 @@ export function buildNoWorkNotice(agent: string, minutes: number): string {
     'Amit tolem var: adj neki kartyat, vagy ha tenyleg nincs neki valo, allitsd a',
     'workcheck.json-jat `{"kind":"none"}`-ra -- EZT olvasom, a kartyat nem. Kulonben a',
     'kovetkezo korben ugyanezt fogom kuldeni.',
+    '',
+    'MIELOTT BARMELYIKET TESZED, MERD UJRA -- egy sor, es a MAI allapotot adja:',
+    `  curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" http://localhost:3420/api/kanban \\`,
+    `    | python3 -c "import json,sys;print([(c['id'][:8],c['status']) for c in json.load(sys.stdin)`
+      + ` if c.get('assignee')=='${agent}' and c.get('status') not in ('done','waiting') and not c.get('archived_at')])"`,
+    '',
+    // ASYMMETRIC ON PURPOSE, and the message has to say so. This one-liner is a STALENESS
+    // check, not a re-run of my decision: it does not filter a future `due_date` or the
+    // `varakozik:` labels, so a NON-EMPTY answer refutes this notice outright, while an
+    // empty one only means I may still be right. Handing over a command that looks like it
+    // reproduces the guard would be worse than handing over none -- it would answer the
+    // neighbouring question with my authority behind it.
+    `Ha ez BARMIT ad vissza, ez a jelentes ELAVULT: a(z) "${agent}" kapott munkat, miota megmertem.`,
+    'Ha URESET ad, az meg NEM az en dontesem megismetlese -- a jovobeli `due_date`-et es a',
+    '`varakozik:` cimkeket ez a sor NEM szuri. Csak azt mondja meg, hogy a jelentes MEG all-e.',
   ].join('\n')
 }
 

@@ -1030,8 +1030,12 @@ describe('idle with no assigned work reaches the coordinator', () => {
 })
 
 describe('buildNoWorkNotice', () => {
+  // Fixed instant, so the existing assertions stay deterministic. The stamp tests below
+  // deliberately do NOT use it -- see the comment there.
+  const NO_WORK_NOW = Date.UTC(2026, 8, 5, 11, 57, 9)
+
   it('names the agent, the duration, and what it wants from the coordinator', () => {
-    const msg = buildNoWorkNotice('jarvis', 14)
+    const msg = buildNoWorkNotice('jarvis', 14, NO_WORK_NOW)
     expect(msg).toContain('jarvis')
     expect(msg).toContain('14 perce')
     expect(msg).toContain('NINCS RA KIOSZTVA SEMMI')
@@ -1049,21 +1053,82 @@ describe('buildNoWorkNotice', () => {
   // szandekosan all. A kartya-komment helyes szokas; csak nem az a csatorna, amit ez az or nez.
   // Egy uzenet, ami olyan valaszt ker, amit a KERO fel sem tud olvasni, minden korben ujra megy.
   it('a `workcheck.json`-t nevezi meg, a konkret ertekkel', () => {
-    const msg = buildNoWorkNotice('mandark', 42)
+    const msg = buildNoWorkNotice('mandark', 42, NO_WORK_NOW)
     expect(msg).toContain('workcheck.json')
     expect(msg).toContain('{"kind":"none"}')
   })
 
   it('NEM keri, hogy a KARTYAN magyarazza el -- azt az or nem latja', () => {
     // NEGATIV KONTROLL: a kartya mint MUNKA-forras tovabbra is helyes ker, es meg is marad.
-    const msg = buildNoWorkNotice('mandark', 42)
+    const msg = buildNoWorkNotice('mandark', 42, NO_WORK_NOW)
     expect(msg).not.toMatch(/mondd ki a kartyan/i)
     expect(msg.toLowerCase()).toContain('adj neki kartyat')
   })
 
   it('does not pretend to know which cards to hand over', () => {
-    const msg = buildNoWorkNotice('jarvis', 14)
+    const msg = buildNoWorkNotice('jarvis', 14, NO_WORK_NOW)
     expect(msg).not.toMatch(/\b[0-9a-f]{8}\b/)
+  })
+
+  // --- card 7edc5839: the notice stamps its reading and hands over a fresh one ---
+
+  it('STAMPS the reading, zero-padded AT EVERY HOUR', () => {
+    // TWENTY-FOUR INSTANTS, NOT ONE, AND THAT IS THE WHOLE POINT OF THIS FIXTURE.
+    //
+    // The sibling notice (card 1d800670) asserts `/MERVE \d{2}:\d{2}:\d{2}-kor/` against a
+    // single fixed instant that happens to land on a two-digit local hour, so the assertion
+    // passes whether or not the hour is padded -- measured 2026-09-05: the shipped formatter
+    // renders 04:41 CEST as "4:41:59", and that test would not have noticed. A fixture only
+    // discriminates where the correct and the incorrect implementation DIVERGE, and for a
+    // zero-pad that is the single-digit hours. One instant cannot cover them in every
+    // timezone; twenty-four hourly ones put at least ten single-digit local hours in front
+    // of the assertion on any machine.
+    const pad = (n: number) => String(n).padStart(2, '0')
+    for (let h = 0; h < 24; h++) {
+      const now = Date.UTC(2026, 8, 5, h, 41, 59)
+      const msg = buildNoWorkNotice('jarvis', 14, now)
+      const d = new Date(now)
+      // Expected value derived WITHOUT Intl, so this asserts the padding rather than
+      // re-running the same formatter and agreeing with itself.
+      expect(msg).toContain(`MERVE ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}-kor`)
+      expect(msg).toMatch(/MERVE \d{2}:\d{2}:\d{2}-kor/)
+    }
+  })
+
+  it('says of ITSELF that it may be stale by the time it is read', () => {
+    const msg = buildNoWorkNotice('jarvis', 14, NO_WORK_NOW)
+    expect(msg).toMatch(/avult lehet/)
+    expect(msg).toMatch(/KOORDINATOR soraban all/)
+  })
+
+  it('hands over a fresh measurement, and the AGENT NAME IS IN THE COMMAND', () => {
+    // ANCHORED ON THE COMMAND LINES, NOT ON THE MESSAGE, AND THAT IS DELIBERATE.
+    //
+    // The sibling notice asserts `expect(msg).toContain('friday')` for the same property,
+    // and that assertion is satisfied by the FIRST line of the message -- so it stayed green
+    // while the query it hands over carried a literal `${sender}`. Measured 2026-09-05:
+    // pasted verbatim, that command exits 0 and prints `[]` for a sender who had fifteen
+    // stuck messages. A silent false negative, in the reassuring direction.
+    const msg = buildNoWorkNotice('jarvis', 14, NO_WORK_NOW)
+    const cmd = msg.split('\n').filter((l) => l.includes('/api/kanban') || l.includes('json.load'))
+    expect(cmd.length, 'nem talaltam a handover parancs sorait').toBeGreaterThan(0)
+    expect(cmd.join('\n')).toContain("=='jarvis'")
+    // The defect itself, pinned on the whole message: no un-interpolated placeholder anywhere.
+    expect(msg).not.toContain('${agent}')
+    expect(msg).not.toContain('${sender}')
+  })
+
+  it('says what an EMPTY answer does NOT prove -- the check is asymmetric', () => {
+    // A non-empty answer refutes this notice outright; an empty one does not reproduce the
+    // guard's decision, because the one-liner filters neither a future `due_date` nor the
+    // `varakozik:` labels. Handing over a command that LOOKS like the guard would answer the
+    // neighbouring question with the guard's authority behind it.
+    const msg = buildNoWorkNotice('jarvis', 14, NO_WORK_NOW)
+    expect(msg).toMatch(/Ha ez BARMIT ad vissza/)
+    expect(msg).toMatch(/ELAVULT/)
+    expect(msg).toMatch(/Ha URESET ad/)
+    expect(msg).toContain('due_date')
+    expect(msg).toContain('varakozik:')
   })
 })
 
