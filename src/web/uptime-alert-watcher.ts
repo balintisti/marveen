@@ -45,39 +45,105 @@ const FALLBACK_CONDITION: UptimeCondition = { durationSeconds: 600, triggerCount
 // a real outage is the cheap direction to be wrong in.
 let state: UptimeAlertState = NO_UPTIME_STATE
 
-function accessToken(): string | null {
+const GCLOUD_TIMEOUT_MS = 15_000
+/** Cap on any borrowed text (stderr, HTTP body) that can reach a log or the fleet queue. */
+const MAX_REASON_CHARS = 300
+
+export type Probe<T> = { ok: true; value: T } | { ok: false; reason: string }
+
+/**
+ * Strip anything credential-shaped before it can reach a log line or the queue.
+ *
+ * NOT paranoia in general, but specific to this file: the command whose failure
+ * we are now quoting is `gcloud auth print-access-token`. The token itself goes
+ * to stdout and we never quote stdout -- but a future gcloud could warn on
+ * stderr with a token fragment in it, and this notice is fleet-visible. The
+ * module already refuses to put the token on a command line (see the header);
+ * capturing stderr must not become the hole that rule closed.
+ */
+export function redactSecrets(text: string): string {
+  return text
+    .replace(/ya29\.[A-Za-z0-9._-]+/g, 'ya29.[REDACTED]')
+    .replace(/\b[A-Za-z0-9_-]{40,}\b/g, '[REDACTED]')
+}
+
+/**
+ * Turn a failed execFileSync into a sentence that names ONE cause.
+ *
+ * THE DEFECT THIS FIXES (card 8fe678ef): stderr went to 'ignore' and the catch
+ * was bare, so "gcloud is not installed", "gcloud timed out" and "gcloud said
+ * you are not authenticated" all arrived as the same `null`. The notice then had
+ * to list three possibilities and could rule out none of them -- which is what
+ * marveen had to close BY HAND tonight (production was up; 12 series, 275 points,
+ * zero failures; the token worked in the service's own environment; ~30x timeout
+ * headroom). The poller was RIGHT to be loud. It just could not say why.
+ */
+export function describeExecFailure(err: unknown, timeoutMs = GCLOUD_TIMEOUT_MS): string {
+  const e = err as NodeJS.ErrnoException & {
+    status?: number | null
+    signal?: string | null
+    stderr?: Buffer | string | null
+  }
+  if (e?.code === 'ENOENT') return `gcloud is not on PATH for this process (ENOENT)`
+  if (e?.code === 'ETIMEDOUT' || e?.signal === 'SIGTERM') return `gcloud timed out after ${timeoutMs} ms`
+  const stderr = redactSecrets(String(e?.stderr ?? '').trim()).slice(0, MAX_REASON_CHARS)
+  const status = typeof e?.status === 'number' ? `gcloud exited ${e.status}` : 'gcloud failed'
+  return stderr.length > 0 ? `${status}: ${stderr}` : `${status}, and printed nothing to stderr`
+}
+
+/**
+ * stdio[2] is 'pipe', NOT 'ignore' -- this IS the card.
+ *
+ * Named and exported ON PURPOSE. As a bare literal inside the options object it
+ * was untestable: reverting it to 'ignore' left all fifteen tests green, because
+ * they feed describeExecFailure a synthetic error that already HAS a .stderr.
+ * They proved the formatter, never the wiring -- the subject was narrower than
+ * the claim. As a value, the revert is a red test.
+ */
+export const GCLOUD_STDIO = ['ignore', 'pipe', 'pipe'] as const
+
+/** Runs gcloud with stderr CAPTURED, so the failure can name its own cause. */
+function runGcloud(args: string[], what: string): Probe<string> {
   try {
-    const t = execFileSync('gcloud', ['auth', 'print-access-token'], {
-      encoding: 'utf8', timeout: 15_000, stdio: ['ignore', 'pipe', 'ignore'],
+    const out = execFileSync('gcloud', args, {
+      encoding: 'utf8', timeout: GCLOUD_TIMEOUT_MS, stdio: [...GCLOUD_STDIO],
     }).trim()
-    return t.length > 0 ? t : null
-  } catch {
-    return null
+    if (out.length === 0) return { ok: false, reason: `${what}: gcloud exited 0 but printed nothing` }
+    return { ok: true, value: out }
+  } catch (err) {
+    return { ok: false, reason: `${what}: ${describeExecFailure(err)}` }
   }
 }
 
-function project(): string | null {
-  try {
-    const p = execFileSync('gcloud', ['config', 'get-value', 'project'], {
-      encoding: 'utf8', timeout: 15_000, stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim()
-    return p.length > 0 && p !== '(unset)' ? p : null
-  } catch {
-    return null
-  }
+function accessToken(): Probe<string> {
+  return runGcloud(['auth', 'print-access-token'], 'access token')
 }
 
-async function getJson(url: string, token: string): Promise<unknown | null> {
+function project(): Probe<string> {
+  const p = runGcloud(['config', 'get-value', 'project'], 'project')
+  if (!p.ok) return p
+  // '(unset)' is gcloud SUCCEEDING and telling us there is no project -- a
+  // different cause from a failed call, and it used to collapse into the same null.
+  if (p.value === '(unset)') return { ok: false, reason: 'project: gcloud reports the project is (unset)' }
+  return p
+}
+
+async function getJson(url: string, token: string): Promise<Probe<unknown>> {
+  const where = url.split('?')[0]
   try {
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
     if (!res.ok) {
-      logger.warn({ status: res.status, url: url.split('?')[0] }, 'uptime poller: API call failed')
-      return null
+      logger.warn({ status: res.status, url: where }, 'uptime poller: API call failed')
+      // The STATUS is the diagnosis: 401/403 is the credential, 404 is the
+      // project or the path, 5xx is Google. Collapsing them into null is the
+      // same defect as discarding stderr, one layer out.
+      return { ok: false, reason: `HTTP ${res.status} from ${where}` }
     }
-    return await res.json()
+    return { ok: true, value: await res.json() }
   } catch (err) {
-    logger.warn({ err, url: url.split('?')[0] }, 'uptime poller: API call threw')
-    return null
+    logger.warn({ err, url: where }, 'uptime poller: API call threw')
+    const msg = redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, MAX_REASON_CHARS)
+    return { ok: false, reason: `request to ${where} threw: ${msg}` }
   }
 }
 
@@ -152,12 +218,12 @@ function enqueueVerified(content: string): boolean {
 }
 
 export async function uptimeTick(now = Date.now()): Promise<void> {
-  const token = accessToken()
-  const proj = project()
+  const tokenProbe = accessToken()
+  const projProbe = project()
 
   // NO TOKEN IS AN ALERT, NOT A QUIET SKIP. This is the whole point of the card:
   // the failure that looked like silence looked like health for months.
-  if (token == null || proj == null) {
+  if (!tokenProbe.ok || !projProbe.ok) {
     const decision = decideUptimeAlerts([], FALLBACK_CONDITION, state, now)
     // PERSIST ON THIS PATH TOO. Without it the re-announce window never advances
     // here -- and this is the likeliest blind path of all (missing/expired token),
@@ -165,15 +231,22 @@ export async function uptimeTick(now = Date.now()): Promise<void> {
     state = decision.next
     const notice = buildUnreadableNotice(decision, 0, now)
     if (notice != null) {
-      enqueueVerified(
-        `${notice} (poller could not ${token == null ? 'obtain a gcloud access token' : 'resolve the gcloud project'})`,
-      )
+      // ONE NAMED CAUSE, not a disjunction the reader cannot close. Before this
+      // the suffix said only WHICH CALL failed, never WHY -- so a reader had to
+      // rule out "not installed", "timed out" and "not authenticated" by hand.
+      // Narrowed explicitly: inside this branch TS knows ONE probe failed but not
+      // which, so a ternary over both does not narrow either.
+      const why = !tokenProbe.ok ? tokenProbe.reason : !projProbe.ok ? projProbe.reason : 'cause unavailable'
+      enqueueVerified(`${notice} (poller could not reach gcloud -- ${why})`)
     }
     return
   }
 
+  const token = tokenProbe.value
+  const proj = projProbe.value
   const base = `https://monitoring.googleapis.com/v3/projects/${encodeURIComponent(proj)}`
-  const policyPayload = await getJson(`${base}/alertPolicies`, token)
+  const policyProbe = await getJson(`${base}/alertPolicies`, token)
+  const policyPayload = policyProbe.ok ? policyProbe.value : null
   const cond = conditionFromPolicies(policyPayload) ?? FALLBACK_CONDITION
   const usingFallback = conditionFromPolicies(policyPayload) == null
 
@@ -184,14 +257,21 @@ export async function uptimeTick(now = Date.now()): Promise<void> {
     'interval.startTime': start,
     'interval.endTime': end,
   })
-  const series = seriesFromPayload(await getJson(`${base}/timeSeries?${q}`, token))
+  const seriesProbe = await getJson(`${base}/timeSeries?${q}`, token)
+  const series = seriesFromPayload(seriesProbe.ok ? seriesProbe.value : null)
 
   const decision = decideUptimeAlerts(series, cond, state, now)
   state = decision.next
 
   const unreadable = buildUnreadableNotice(decision, series.length, now)
   if (unreadable != null) {
-    enqueueVerified(usingFallback ? `${unreadable} (ALSO: the alert policy could not be read, so the condition above is a FALLBACK, not the policy's)` : unreadable)
+    // Name the fetch failure when there was one: "zero series" with a measured
+    // HTTP 403 is a different instruction to the reader than "zero series" with
+    // a clean 200 and an empty list (which means no checks are configured).
+    const parts = [unreadable]
+    if (!seriesProbe.ok) parts.push(`(the timeSeries call FAILED -- ${seriesProbe.reason}, so "no checks configured" is NOT ruled in)`)
+    if (usingFallback) parts.push(`(ALSO: the alert policy could not be read${policyProbe.ok ? '' : ` -- ${policyProbe.reason}`}, so the condition above is a FALLBACK, not the policy's)`)
+    enqueueVerified(parts.join(' '))
   }
   const outage = buildUptimeNotice(decision, series.length)
   if (outage != null) enqueueVerified(outage)

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { conditionFromPolicies, seriesFromPayload } from '../web/uptime-alert-watcher.js'
+import { conditionFromPolicies, seriesFromPayload, describeExecFailure, redactSecrets, GCLOUD_STDIO } from '../web/uptime-alert-watcher.js'
 
 // VERBATIM SHAPES from the live project, 2026-09-05, GET
 // /v3/projects/delta-crm-483922/{alertPolicies,timeSeries}. Trimmed to the
@@ -86,5 +86,82 @@ describe('seriesFromPayload', () => {
     expect(seriesFromPayload(null)).toEqual([])
     expect(seriesFromPayload({})).toEqual([])
     expect(seriesFromPayload({ timeSeries: [] })).toEqual([])
+  })
+})
+
+// ---- card 8fe678ef: three causes must stop arriving as one null ----
+//
+// The notice on 2026-09-05 20:43 had to list three possibilities and could rule
+// out none, because stderr went to 'ignore' and the catch was bare. marveen
+// closed it BY HAND: production was up (12 series / 275 points / zero failures),
+// the token worked in the service's own environment, ~30x timeout headroom. The
+// poller was right to be loud -- it just could not say why.
+describe('describeExecFailure names ONE cause instead of a disjunction', () => {
+  it('a missing binary is named, not guessed at', () => {
+    const r = describeExecFailure(Object.assign(new Error('spawn gcloud ENOENT'), { code: 'ENOENT' }))
+    expect(r).toContain('not on PATH')
+    expect(r).toContain('ENOENT')
+  })
+
+  it('a timeout is named, with the budget it blew', () => {
+    expect(describeExecFailure(Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }), 15_000))
+      .toContain('timed out after 15000 ms')
+  })
+
+  // node kills a timed-out child with SIGTERM and reports the SIGNAL, not the
+  // code -- so matching only on ETIMEDOUT would misfile the commonest timeout.
+  it('a SIGTERM kill is read as the timeout it is, not as an unknown failure', () => {
+    expect(describeExecFailure({ signal: 'SIGTERM', status: null }, 15_000)).toContain('timed out')
+  })
+
+  it('a non-zero exit carries the exit code AND what gcloud actually said', () => {
+    const r = describeExecFailure({ status: 1, stderr: 'ERROR: (gcloud.auth) You do not currently have an active account' })
+    expect(r).toContain('exited 1')
+    expect(r).toContain('do not currently have an active account')
+  })
+
+  it('an empty stderr says so, rather than implying gcloud was silent by choice', () => {
+    expect(describeExecFailure({ status: 2, stderr: '' })).toContain('printed nothing to stderr')
+  })
+
+  it('truncates, so a runaway stderr cannot flood the fleet queue', () => {
+    const r = describeExecFailure({ status: 1, stderr: 'x'.repeat(5000) })
+    expect(r.length).toBeLessThan(400)
+  })
+})
+
+// THE SAFETY PROPERTY, and the reason it is not paranoia here: the command whose
+// stderr we now quote is `gcloud auth print-access-token`, and this notice is
+// fleet-visible. The module's header already forbids putting the token on a
+// command line; capturing stderr must not become the hole that rule closed.
+describe('redactSecrets keeps a credential out of a fleet-visible notice', () => {
+  it('redacts a Google access token', () => {
+    const out = redactSecrets('warning: reusing ya29.a0ARrdaM9xKfQ2bLm3nPqRsTuVwXyZ0123456789abcdef for auth')
+    expect(out).not.toContain('a0ARrdaM9xKfQ2')
+    expect(out).toContain('[REDACTED]')
+  })
+
+  it('redacts a long opaque secret that does not look like ya29.', () => {
+    const secret = 'A'.repeat(64)
+    expect(redactSecrets(`token=${secret}`)).not.toContain(secret)
+  })
+
+  // CONTROL, and it is the load-bearing half: a redactor that ate everything
+  // would pass both tests above while destroying the diagnosis the card exists
+  // to deliver. Ordinary gcloud prose must survive intact.
+  it('CONTROL: ordinary error prose survives untouched', () => {
+    const msg = 'ERROR: (gcloud.auth) You do not currently have an active account selected'
+    expect(redactSecrets(msg)).toBe(msg)
+  })
+})
+
+// THE WIRING, not the formatter. Reverting stdio[2] to 'ignore' -- the exact
+// defect this card names -- left all fifteen tests above GREEN, because they hand
+// describeExecFailure an error that already carries .stderr. Measured, not
+// assumed: the mutation survived, so this test exists.
+describe('gcloud stderr is CAPTURED, which is the defect itself', () => {
+  it('stdio[2] is pipe, not ignore', () => {
+    expect(GCLOUD_STDIO[2]).toBe('pipe')
+    expect(GCLOUD_STDIO[1]).toBe('pipe') // stdout still needed: it carries the token
   })
 })
