@@ -79,6 +79,38 @@ else
   no 'a riasztas szovege nem azonosithato'
 fi
 
+# --- 6. TIME BOUNDS. didi measured that the previous fix bounded the NUMBER of attempts
+#        and nothing bounded the TIME -- on either path. Both are asserted on the FILE,
+#        because the end-to-end case above stubs notify.sh and can never see the real curl.
+NOTIFY="$(cd "$(dirname "$0")/.." && pwd)/notify.sh"
+if grep -qE 'curl .*(--max-time|--connect-timeout)' "$NOTIFY"; then
+  ok 'notify.sh curl-jenek VAN idokorlatja'
+else
+  no 'notify.sh curl-je KORLATLAN -- es a mentes bukasi utjabol hivjuk'
+fi
+# NEGATIVE CONTROL: the same measure must be able to say NO
+if printf '%s\n' 'RESPONSE=$(curl -s -X POST https://x)' | grep -qE 'curl .*(--max-time|--connect-timeout)'; then
+  no 'KONTROLL: a mero egy korlatlan curl-re is IGENT mond'
+else
+  ok 'KONTROLL: a mero egy korlatlan curl-re NEMET mond'
+fi
+grep -q 'connect_timeout=' "$SCRIPT" \
+  && ok 'a DBURL connect_timeout-ot visz (a pg_dump ELFOGADJA)' || no 'nincs connect_timeout a DBURL-ben'
+# anchor on the ASSIGNMENT, not the bare string: the comment that EXPLAINS the old form
+# quotes it, and this assertion fired on that comment before it was anchored. Third time
+# today a detector of mine matched its own documentation.
+if grep -E "^\s*DBURL=" "$SCRIPT" | grep -qF "sed 's/?"; then
+  no 'a REGI alak meg ott van: az EGESZ query-t eldobja, a connect_timeout-tal egyutt'
+else
+  ok 'KONTROLL: a mindent-eldobo regi ERTEKADAS eltunt (a kommentbeli idezet nem szamit)'
+fi
+# and the Prisma-only params must NOT survive into the URL the script builds
+if grep -qE 'DBURL=.*connection_limit|DBURL=.*pool_timeout' "$SCRIPT"; then
+  no 'a Prisma-only parameterek bekerulnenek a DBURL-be'
+else
+  ok 'a Prisma-only parameterek nem kerulnek a DBURL-be'
+fi
+
 echo
 echo "  $PASS ok, $FAIL bukott"
 [ "$FAIL" -eq 0 ]
