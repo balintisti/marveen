@@ -141,6 +141,30 @@ describe('the notices say what a reader must not conclude', () => {
     expect(u).toMatch(/NOT a clear result/)
   })
 
+  // MARVEEN'S REQUIREMENT, AND IT FOUND A HOLE THE OTHER 14 TESTS DID NOT.
+  // "A missing or expired gcloud token must NEVER read as no alerts." A total
+  // fetch failure hands in ZERO series -- and before this, every field then
+  // reported the shape of good news: nothing firing, nothing unknown,
+  // policyWouldFire false, both notices null. Silence, which is what health
+  // looks like, and byte-for-byte the backup alert that sat on a 403 for months.
+  //
+  // The 14 tests and 7 caught mutations all missed it because every one handed
+  // in at least one series. The gap was in the INPUT SPACE, not the logic.
+  it('ZERO series -- the no-token path -- is LOUD, not silent', () => {
+    const d = decideUptimeAlerts([], COND, NO_UPTIME_STATE, NOW)
+    expect(d.noSeries).toBe(true)
+    const n = buildUnreadableNotice(d, 0)
+    expect(n).not.toBeNull()
+    expect(n).toContain('NO UPTIME DATA AT ALL')
+    expect(n).toMatch(/NOT a clear result/)
+    // CONTROL: a populated, healthy fetch must NOT trip this -- otherwise the
+    // loud path fires forever and gets ignored, which is the same silence by
+    // another route.
+    const healthy = decideUptimeAlerts([series(Array(11).fill(true))], COND, NO_UPTIME_STATE, NOW)
+    expect(healthy.noSeries).toBe(false)
+    expect(buildUnreadableNotice(healthy, 1)).toBeNull()
+  })
+
   it('nothing happening produces no notice at all', () => {
     const d = decideUptimeAlerts([series(Array(11).fill(true))], COND, NO_UPTIME_STATE, NOW)
     expect(buildUptimeNotice(d, 12)).toBeNull()

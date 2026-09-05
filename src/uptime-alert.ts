@@ -129,6 +129,24 @@ export interface UptimeDecision {
   recovered: SeriesVerdict[]
   /** Series we could not read. Never silent: the caller must say so. */
   unknown: SeriesVerdict[]
+  /**
+   * NO SERIES CAME BACK AT ALL -- and this field exists because its absence was
+   * a hole. A total fetch failure (no token, 401, network down) hands in an
+   * empty array, and every other field then reports the shape of good news:
+   * zero firing, zero unknown, policyWouldFire false, both notices null.
+   * **Silence, which is what health looks like.** That is byte-for-byte the
+   * backup alert that sat on a 403 for months.
+   *
+   * Fourteen tests and seven caught mutations did not find this, because every
+   * one of them handed in at least one series: the gap was in the INPUT SPACE,
+   * not the logic. It was found by taking "the no-token path must be as loud as
+   * a real alert" as a requirement and asking what the code actually does.
+   *
+   * Zero series is loud under BOTH readings: either the fetch failed, or no
+   * uptime checks are configured -- and "we have no monitoring" is not a state
+   * anyone should learn about by silence either.
+   */
+  noSeries: boolean
   /** True when the policy's trigger threshold is met across all series. */
   policyWouldFire: boolean
   next: UptimeAlertState
@@ -167,6 +185,7 @@ export function decideUptimeAlerts(
     newlyFiring,
     recovered,
     unknown: verdicts.filter(v => v.verdict === 'unknown'),
+    noSeries: all.length === 0,
     policyWouldFire: firingNow.length >= cond.triggerCount,
     // An 'unknown' series keeps whatever state it had: we did not learn that it
     // recovered, so dropping it here would silently retract an open outage and
@@ -226,6 +245,17 @@ export function buildUptimeNotice(d: UptimeDecision, totalSeries: number): strin
  * silence, and never a clear verdict.
  */
 export function buildUnreadableNotice(d: UptimeDecision, totalSeries: number): string | null {
+  // CHECKED FIRST, because this is the case that was silent. An empty result has
+  // no series to report as unknown, so an unknown-only check reads it as nothing
+  // to say.
+  if (d.noSeries) {
+    return (
+      '[uptime] NO UPTIME DATA AT ALL -- zero series returned. Either the API call failed ' +
+      '(missing/expired token, 401, network) or no uptime checks exist. This is NOT a clear ' +
+      'result and must not be read as one: production may be down right now and this path ' +
+      'cannot see it. Check the token first -- a silent poller looks exactly like a healthy one.'
+    )
+  }
   if (d.unknown.length === 0) return null
   return (
     `[uptime] CANNOT MEASURE ${d.unknown.length}/${totalSeries} uptime series: ` +
