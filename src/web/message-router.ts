@@ -29,6 +29,7 @@ import {
   capturePane,
 } from './agent-process.js'
 import { detectPaneState, detectsPermissionPrompt, describePermissionPrompt, paneShowsContextSaturation, type PaneState } from '../pane-state.js'
+import { paneRemedy } from './parked-pane-remedy.js'
 import { parsePaneTokens, nextTokenSample, type TokenSample } from '../session-progress.js'
 import { setLastInboundModality } from './voice-modality.js'
 import { classifyAgentMessage, wrapAgentMessageForDelivery } from './agent-message-wrap.js'
@@ -88,6 +89,11 @@ export function shouldGiveUpOnInject(failCount: number, maxFailures: number): bo
 //
 // Pure part exported for tests: returns the alert text, or null when no alert
 // may be sent (the main agent must never alert itself about itself).
+/** Every tag `formatStuckSessionAlert` can emit. Exported so a meter can count the
+ *  UNION rather than one tag, and so ADDING a tag fails a test instead of silently
+ *  invalidating the paragraph above it. */
+export const ALERT_TAGS = ['[session-stuck]', '[approval-needed]', '[input-parked]'] as const
+
 export function formatStuckSessionAlert(
   agent: string,
   mainAgentId: string,
@@ -131,14 +137,77 @@ export function formatStuckSessionAlert(
   //
   // CONSEQUENCE FOR ANY METER: a query counting `[session-stuck]` goes blind on
   // these the day this ships, and the drop reads as "the fix worked" -- the
-  // flattering direction. Count the UNION of both tags across the change.
-  if (pane && detectsPermissionPrompt(pane)) {
+  // flattering direction. Count the UNION of ALL THREE tags across the change:
+  //   [session-stuck] · [approval-needed] · [input-parked]
+  //
+  // THIS SENTENCE SAID "BOTH TAGS" UNTIL 2026-09-05 AND WAS TRUE WHEN WRITTEN.
+  // Card cb062949 added the third, so the instruction silently began undercounting
+  // -- in the flattering direction it warns about, which is why jarvis caught it
+  // in review and not a meter. A comment that names a SET goes stale the moment
+  // someone extends the set, and nothing about the comment looks wrong afterwards.
+  // ALERT_TAGS below is the mechanical half: a fourth tag breaks a test rather
+  // than quietly widening the gap between this paragraph and the code.
+
+  // ONE predicate decides what the reader should DO, because both known
+  // misreadings of this alert live in this layer and point opposite ways: a
+  // PARKED pane reported as idle (waking it is useless) and a WORKING pane
+  // reported as parked (answering it types into a live turn). See
+  // ./parked-pane-remedy.ts for the measurements behind each branch.
+  const remedy = paneRemedy(pane)
+
+  // Checked BEFORE the permission branch on purpose. `paneState === 'busy'`
+  // above already caught the clear cases; this catches a pane whose busy
+  // evidence the state gate missed, and it is what stops an [approval-needed]
+  // going out about a session that is mid-turn.
+  // UNREACHABLE VIA TODAY'S CALLERS, AND KEPT DELIBERATELY (jarvis, 2026-09-05).
+  // Measured: `busyEvidence(p) != null` implies `detectPaneState(p) === 'busy'`, and
+  // both call sites derive paneState from the SAME capture -- so the busy branch
+  // above always wins first. It is NOT dead in the sense the counter/parked branch
+  // was: that one asserted a state of the world that cannot exist, while this is the
+  // honest answer for a caller that has a pane but no paneState, which the
+  // `PaneState | null = null` parameter explicitly permits. Removing it would let
+  // such a caller fall through to answer-it. Documented so nobody reads a firing
+  // count of zero here as a defect.
+  if (remedy.remedy === 'leave-it') {
+    return `[session-stuck] Agent '${agent}' (tmux ${session}) has been not-ready for ${min} min with ${queue}, but the pane shows it is WORKING (${remedy.why}). Do NOT restart and do NOT type into it -- an intervention lands inside a live turn. Check again if it is still here in another window.${alsoQuiet}`
+  }
+  if (remedy.remedy === 'answer-it' && pane) {
     const asked = describePermissionPrompt(pane)
     const what = asked ? ` It is asking: "${asked}".` : ''
     return `[approval-needed] Agent '${agent}' (tmux ${session}) has been waiting for a DECISION for ${min} min with ${queue}.${what} This is NOT a stall and NOT a wedge: the pane is parked on a TOOL-PERMISSION prompt. Do NOT restart -- that spends the entire context for one keystroke, and the question comes straight back. The answer IS the decision, so it belongs to a person, not to a watchdog.${alsoQuiet}`
   }
   if (pane && paneShowsContextSaturation(pane)) {
     return `[session-stuck] Agent '${agent}' (tmux ${session}) has been not-ready for ${min} min with ${queue}. The pane shows CONTEXT SATURATION, which is the context-guard's territory -- it restarts on saturation by itself, after two sweeps. Do NOT restart it from here: a second restart lands mid-sweep and loses the guard's continuation prompt.${alsoQuiet}`
+  }
+  // THE REMEDY IS ONE ENTER, AND SAYING SO IS THE WHOLE POINT. The old text
+  // below sent the reader to "diagnose a stall" for a pane whose input box
+  // simply holds an un-submitted line -- six such notices on 2026-09-05 while
+  // the queue behind it grew 0 -> 2. A restart here throws away a live context
+  // for a keystroke.
+  // SATURATION IS CHECKED FIRST, SO A SATURATED PANE NEVER REPORTS [input-parked]
+  // (jarvis, 2026-09-05). That ordering is deliberate and predates this card -- the
+  // context-guard owns saturation -- but it has a consequence worth naming: a pane
+  // that is BOTH saturated and parked gets restarted by the guard, and the
+  // un-submitted message is already 'delivered', so the restart loses it. Not
+  // changed here, because reordering saturation is the context-guard's contract and
+  // not this card's. Card raised separately.
+  if (remedy.remedy === 'press-enter') {
+    const quoted = remedy.parkedText && remedy.parkedText.length > 120
+      ? `${remedy.parkedText.slice(0, 117)}...`
+      : remedy.parkedText
+    const what = quoted ? ` The un-submitted line is: "${quoted}".` : ''
+    return `[input-parked] Agent '${agent}' (tmux ${session}) has been not-ready for ${min} min with ${queue}, and the pane is NOT stalled: a message is sitting in its input box, never submitted.${what} The fix is ONE Enter, not a restart. Send it atomically so the pane cannot submit it first: \`tmux capture-pane -p -t ${session} | grep -q '<a fragment of the line>' && tmux send-keys -t ${session} Enter\`.${alsoQuiet}`
+  }
+  // NOT A DIAGNOSIS -- AN ADMISSION. Saying "idle" here would be the flattering
+  // half of a signal we know to be ambiguous, and that is the failure this whole
+  // branch set exists to stop.
+  // `pane &&` ON PURPOSE. A MISSING capture is not the ambiguity this branch is
+  // for: the generic text below already says READ THE PANE FIRST, and
+  // router-stuck-alert.test.ts pins that fallback by name. Without this guard
+  // the new wording silently took over the no-pane path -- caught by the FULL
+  // suite, three tests, while this file's own 13 stayed green.
+  if (pane && remedy.remedy === 'read-the-pane') {
+    return `[session-stuck] Agent '${agent}' (tmux ${session}) has been not-ready for ${min} min with ${queue}, and the capture does NOT settle what is wrong: ${remedy.why}. Read the pane before doing anything -- in particular do not read this as idle, and do not restart on it.${alsoQuiet}`
   }
   return `[session-stuck] Agent '${agent}' (tmux ${session}) has been not-ready for ${min} min with ${queue}. Run the delivery-stall diagnosis: READ THE PANE FIRST. Do NOT restart unless the pane shows a genuine wedge -- saturation belongs to the context-guard, a permission prompt needs a decision rather than a keystroke, and a queued message is often about to be delivered anyway.${alsoQuiet}`
 }

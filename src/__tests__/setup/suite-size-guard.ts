@@ -142,9 +142,14 @@ import type { File, Task } from 'vitest'
 // es a plafon bevezetesevel csendben elavult volna -- epp azok hazudtak volna
 // elsonek, amik a hatart orzik. Ha a szam es a mondat egy generalt blokkban all,
 // nem tudnak szetcsuszni.
-/** Merve 2026. 09. 05. 15:28:13 CEST -- `npx vitest list --json` -> 424 fajl / 5396 teszt (a koteg 419/5314 es a 0024b92b 413/5273 osszeolvasztva; egyik sem allt ra). */
-export const SUITE_BASELINE_FILES = 424
-export const SUITE_BASELINE_TESTS = 5396
+/** Merve 2026. 09. 05. 18:25:32 CEST -- `npx vitest list --json` -> 427 fajl / 5433 teszt AZ OSSZEOLVASZTOTT fan
+ *  (koteg + 71349fe1, ami a cb062949-et is hordozza).
+ *  A koteg 424/5396-ot, a 71349fe1 422/5351-et allitott; MINDKETTO a SAJAT fajan volt helyes,
+ *  es EGYIK SEM allt ra a mergere. Az alapvonal a MERT ertek, nem a ket szam kozul valasztott.
+ *  MERVE egy HOME-gyokeru worktreeben: /tmp alatt a hook-path guard minden hook-utat elutasit,
+ *  es 22 kapu-teszt HAMISAN pirosra megy (az assert-not-live-install.ts ezt ki is mondja). */
+export const SUITE_BASELINE_FILES = 427
+export const SUITE_BASELINE_TESTS = 5433
 // === SUITE-BASELINE:END ===
 
 /**
