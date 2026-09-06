@@ -5,6 +5,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { resolveFromPath } from '../platform.js'
 import { WEB_PORT } from '../config.js'
 import { logger } from '../logger.js'
+import { probeParkedRecord, PROBE_FRESHNESS_MS } from './parked-record-probe.js'
 import { MAIN_AGENT_ID, SERVICE_ID, BOT_NAME, CHANNEL_PROVIDER, PROJECT_ROOT, RESPAWN_ENABLED } from '../config.js'
 import { DISTRIBUTION_DEFAULT_AGENT_MODEL } from '../config-registry.js'
 import { agentDir, listAgentNames, readAgentChannelProvider } from './agent-config.js'
@@ -334,6 +335,11 @@ export async function recoverStuckInputForSession(
     // opens the 'reinject-recorded' path (see decideStuckInputAction).
     const recorded = getInjectedPrompt(session)
     const recordedMatch = matchesInjectedPrompt(parkedInputText(pane), recorded)
+    // (b) PHASE 1, OBSERVE ONLY: log which record-freshness verdict this pane
+    // would get. Never branches; the rate + breakdown decide whether phase 2 is
+    // worth writing. Logic lives in parked-record-probe.ts on purpose -- fifteen
+    // unmerged branches touch this file.
+    probeParkedRecord(session, PROBE_FRESHNESS_MS)
     const facts: StuckInputActionFacts = {
       escalate: attempt > MAIN_STUCK_ENTER_ATTEMPTS,
       rowCount: parkedInputRowCount(pane),
