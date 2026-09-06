@@ -1,7 +1,4 @@
 import { logger } from '../logger.js'
-import { MAIN_AGENT_ID } from '../config.js'
-import { listAgentNames } from './agent-config.js'
-import { sessionNameForAgent } from './session-names.js'
 import { getDb } from '../db.js'
 import { getInjectedPrompt } from './injected-prompt-registry.js'
 import { parkedRecordVerdict, type ParkedRecordVerdict } from './parked-record-evidence.js'
@@ -41,26 +38,24 @@ const SEC_TO_MS = 1000
  *  at its own boundary. Reading past it would mean changing the registry. */
 export const PROBE_FRESHNESS_MS = 2 * 60 * 1000
 
-export type ParkedRecordProbeOutcome = ParkedRecordVerdict | 'unknown-session'
+export type ParkedRecordProbeOutcome = ParkedRecordVerdict | 'unknown-agent'
 
-/** Session -> agent, by ENUMERATING the forward resolver -- never by parsing the
- *  session string.
+/** THERE IS NO session -> agent INVERSION HERE, AND THAT IS THE DESIGN.
  *
- *  session-names.ts exports only the forward direction, in TWO shapes, and its
- *  own docblock says a wrong name there is SILENT BY CONSTRUCTION. A hand-rolled
- *  inverse (strip 'agent-') would yield a plausible name for the main agent that
- *  matches no from_agent row -- lastAgentSendAt null -> verdict 'act-on-record'.
- *  That is the EAGER direction, on exactly the panes we would act on.
+ *  An earlier draft inverted the mapping by enumerating the forward resolver.
+ *  Safe, but unnecessary: ALL THREE call sites of recoverStuckInputForSession
+ *  already hold the agent id, and one of them derives the session FROM it
+ *  (targets.push({ session: agentSessionName(a), agentName: a })). So the value
+ *  is one frame up, already correct.
  *
- *  So we invert the only mapping that is authoritative, and a session we cannot
- *  place returns null and is reported as 'unknown-session' -- LOUD, not a null
- *  that flows into the verdict. */
-export function agentForSession(session: string): string | null {
-  for (const name of [MAIN_AGENT_ID, ...listAgentNames()]) {
-    if (sessionNameForAgent(name) === session) return name
-  }
-  return null
-}
+ *  Threading it down instead of inverting deletes the failure class rather than
+ *  making it loud: a wrong inverse yields a plausible name matching no
+ *  from_agent row -> lastAgentSendAt null -> verdict 'act-on-record'. Silent AND
+ *  toward acting. There is no safe version of that; there is a version where the
+ *  question never arises. (marveen's ruling, card c29aaf14.)
+ *
+ *  `agent` is nullable only because Target.agentName is optional in the type --
+ *  that is the CALLER not having the value, which is reported, never guessed. */
 
 /** Newest message SENT BY this agent, in ms, or null if it never sent one.
  *
@@ -80,13 +75,13 @@ export function lastAgentSendAt(agent: string): number | null {
  *  no caller is expected to branch on the result in phase 1. */
 export function probeParkedRecord(
   session: string,
+  agent: string | null,
   freshnessMs: number,
   now: number = Date.now(),
 ): ParkedRecordProbeOutcome {
-  const agent = agentForSession(session)
   if (agent == null) {
-    logger.warn({ session }, 'parked-record probe: session does not resolve to any agent (phase 1, no action)')
-    return 'unknown-session'
+    logger.warn({ session }, 'parked-record probe: caller passed no agent id (phase 1, no action)')
+    return 'unknown-agent'
   }
   const record = getInjectedPrompt(session, now)
   const verdict = parkedRecordVerdict({
