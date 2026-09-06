@@ -35,12 +35,22 @@ EXCEPTIONS = {
         "exactly this file after the copy drifted; the port is a judgement call, "
         "not a one-line swap, and it is not in this commit."),
     "taskstate-replay.py": (
-        "NOT OUTSTANDING WORK -- swapping this one CHANGES WHAT THE CALLER DECIDES. "
-        "Its resolver returns falsy for the main agent and the caller reads that as "
-        "'not a sub-agent target'; the adopted chain never returns falsy, so the "
-        "caller would start acting on main-agent sessions. A future round will see "
-        "one file left on the old resolver and read it as an unfinished migration: "
-        "it is not. Marked so the list carries the DANGER, not just the difference."),
+        "NOT OUTSTANDING WORK, AND NOT AN ADOPTION -- upstream 29a1bd9 uses the shared "
+        "chain and WE put the private resolver back (+22/-8), so the move would be "
+        "WITHDRAWING our divergence. Ruled NO, not as-is (2026-09-06, marveen). "
+        "THE DANGER, RE-MEASURED -- the earlier wording here said the resolver 'returns "
+        "falsy for the main agent'; that has been FALSE since 2026-07-27, and both "
+        "resolvers agree on the main agent (marveen) and on sub-agents. Both resolvers "
+        "RUN on identical payloads, MARVEEN_AGENT_ID unset: worker -> None vs "
+        "'.marveen-worker'; worker-fast -> None vs '.marveen-worker-fast'; unknown cwd "
+        "-> None vs a directory name. The shared chain never goes falsy, so the caller "
+        "would act on WORKER and UNKNOWN-cwd sessions under ids derived from directory "
+        "names -- the exact failure ledger_lib's own docstring exists to prevent "
+        "('plain directory names, not agents'). Its tree model has no concept of a "
+        "config dir OUTSIDE the install, and the worker homes are outside it. "
+        "CONDITION THAT MAKES IT SAFE: the shared resolver learns the worker homes, or "
+        "we keep a local override for exactly those two. NOT MEASURED: the dashboard's "
+        "behaviour on such ids, and whether upstream has a worker-home layout at all."),
 }
 
 CWD_CALL = re.compile(r"agent_id_from_cwd\s*\(")

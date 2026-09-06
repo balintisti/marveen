@@ -104,7 +104,12 @@ def main():
     source = payload.get("source") or ""
     agent = _agent_id_from_cwd(payload.get("cwd"))
     if not agent:
-        sys.exit(0)  # main agent / unknown -> not a sub-agent task-state target
+        # UNKNOWN ONLY. The main agent does NOT land here: the resolver returns
+        # _main_agent_id() for the project root (2026-07-27), so `agent` is truthy
+        # for it. This comment said "main agent / unknown" on an already-fixed tree,
+        # and the EXCEPTIONS entry in hook-agent-id-resolver.test.py inherited that
+        # premise as its stated danger (measured 2026-09-06, card f626b725).
+        sys.exit(0)  # unknown cwd -> no task-state target
     token = _token()
     if not token:
         sys.exit(0)
