@@ -110,6 +110,64 @@ def _code_string_sends(code: str) -> bool:
 _RESEND_TARGET = re.compile(r"^(https?://)?([^/@\s]*\.)?api\.resend\.com(/|$|\s|$)", re.I)
 # A tovabbi kuldes-jellegu literalok, amikre a parse-hiba eseten (es CSAK
 # akkor) konzervativan visszaesunk -- lasd is_send_invocation vegen.
+#
+# === A PARSZOLT UT ES EZ A LISTA ELTERNEK, ES EZ DONTES (kartya 980ebc8c) =====
+#
+# marveen dontese, 2026-09-06, jarvis meresebol es dexter ujramerésébol. A
+# bekezdes azert all itt, mert egy kesobbi cenzus KI FOGJA MERNI ezt az elterest,
+# es allitas nelkul DEFEKTUSNAK olvassa -- ugyanaz az ok, amiert a ket
+# mail-kapu divergenciaja is le van irva (fe418df).
+#
+# A SZAMOK, es a metrikajuk kiirva, mert ket ertelmes olvasat van es ELTERO
+# szamot adnak. Korpusz: a kapu SAJAT eset-keszlete (send-invocation-cases.json),
+# minden esetet a fo uton ES egy paratlan idezojellel (ami a fallbackbe kenyszerit):
+#
+#                        esetek   fallback TOBBET   fallback KEVESEBBET   osszes
+#                                   blokkol           blokkol
+#   ez a fa (fe418df)       51          16                 1               17
+#   + a 980ebc8c javitas    57          18                 2               20
+#
+#   KONTROLL: `ls -la` egy paratlan idezojellel -> a fallback False. Enelkul a
+#   fenti szamok a meroröl szolnanak. Es a fo ut MINDKET fan hibatlan a SAJAT
+#   korpuszan (51/51, illetve 57/57 az `expected` cimke ellen).
+#
+#   A KET SZAM-PAR NEM ELLENTMONDAS: 16/18 az EGYIRANYU olvasat (jarvise),
+#   17/20 a KETIRANYU (dexteré). Ugyanaz a fa, ugyanaz a korpusz, mas metrika --
+#   megmerve, nem kibekitve. Aki ujramer, irja oda, MELYIKET szamolja.
+#
+# MIERT MARAD IGY -- marveen negy indoka:
+#   1. ez az ag KIZAROLAG parszolhatatlan bemeneten fut: ritka, sajat okozasu, es
+#      HANGOS. Az agens latja a blokkot es ujraidezi.
+#   2. a szukitese azt jelentene, hogy "nem tudtuk elolvasni, tehat KEVESEBBET
+#      ellenorzunk" -- a NOT SCANNED THEREFORE NOT CLEARED megforditva. E fajl
+#      sajat kommentje mondja ki, hogy a fallback azert van, hogy egy
+#      furcsa-de-valodi kuldes ne csusszon at csendben.
+#   3. aszimmetria: egy hamis pozitiv ara EGY lathato blokkolt parancs,
+#      kezenfekvo orvossaggal; a szukitese ara egy atcsuszo kuldes PONTOSAN azon
+#      a bemeneten, amit nem tudtunk elemezni.
+#   4. a cenzus-esetnek van olcsobb javitasa, ami a kaput nem erinti: egy
+#      paratlan idezojelu cenzus-grep maga is torott parancs, es a hej amugy is
+#      kikenyszeriti a javitasat.
+#
+# ES AMIT A KETIRANYU OLVASAT MUTAT MEG, AMIT AZ EGYIRANYU NEM LAT: ez a lista
+# nem egyszeruen SZELESEBB a parszolt utnal. Ket eseten SZUKEBB, es mindketto
+# `expected: true` -- vagyis valodi kuldes, amit a fallback ATENGED:
+#
+#   `node -e "...sendEmail({...})"`  -- a fo ut ismeri a `sendEmail` alakot,
+#                                      ez a lista `sendMail\s*\(`-t ismer, ami MAS token
+#   egy M365 CLI kimeno alparancs   -- mar a fe418df-en is, a 980ebc8c elott
+#
+# Ez NEM cafolja a fenti dontest (a 2. indok epp ez ellen ved), de kimondja a
+# hataraat: a fallback nem "mindig biztonsagosabb", hanem MASIK halmazt fog meg.
+# Ha valaha bovul, ez a ket alak a bemenet -- es akkor is a fenti negy indok
+# marad ervenyben arra, hogy SZUKITENI nem szabad.
+#
+# DEXTER KIMONDOTT MERESI HIBAJA, mert a szam nelkule ujratermelodne: az elso
+# futasomban a MODULT mindket farol toltottem be, de a KORPUSZT csak a futo
+# farol -- holott a 980ebc8c aga HAT esettel bovíti. A kereszt-parositas 17/17-et
+# adott, vagyis "a ket fa azonos"-t, es epp a novekedest tuntette el. Ket bemenet,
+# ket fa: mindket bemenetet UGYANARROL a farol kell venni.
+# =============================================================================
 _FALLBACK_LITERALS = re.compile(
     r"send\.py|api\.resend\.com|\bsendmail\b|\bmsmtp\b|\bswaks\b"
     r"|\bsmtplib\b|\bsendMail\s*\(", re.I
