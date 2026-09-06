@@ -108,8 +108,12 @@ describe('bekotes: a hivasi helyek TENYLEG atadjak az okot', () => {
     const calls = argsOf('buildUnreadableNotice(')
     expect(calls).toHaveLength(2)                       // a populacio, kimondva
 
-    // STRUKTURA 1 -- ARITY: mindket hivas NEGY argumentumot ad at. Ez fogja azt az esetet,
-    // amikor az ok KIESIK a hivasbol.
+    // STRUKTURA 1 -- ARITY: mindket hivas NEGY argumentumot ad at.
+    // AMIT EGYEDUL O FOG, es ez didi matrixabol derult ki (2026-09-06): NEM az "ok kiesik a
+    // hivasbol" eset -- azt NEGY assert fogja, tehat ott az arity nem teherhordo. Az egyetlen
+    // csalad, ahol egyedul all: egy OTODIK argumentum (`..., reason, extra)`) -- ott a backtick,
+    // a sortores es a kotes MIND ZOLD. Egy parameter hozzaadasa hetkoznapi refaktor, tehat ez
+    // nem diszlet; csak nem azon a csaladon keresi meg a helyet, amit a nevehez irtunk.
     for (const args of calls) expect(args).toHaveLength(4)
 
     // STRUKTURA 2 -- A VAGAS EPSEGE, es ez didi merese nyoman kerult ide (f3808792, 2026-09-06).
