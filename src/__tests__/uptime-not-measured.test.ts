@@ -108,15 +108,31 @@ describe('bekotes: a hivasi helyek TENYLEG atadjak az okot', () => {
     const calls = argsOf('buildUnreadableNotice(')
     expect(calls).toHaveLength(2)                       // a populacio, kimondva
 
-    // A KOTES: mindket hivas NEGY argumentumot ad at. EZ az allitas, amiert a pin letezik, es ez
-    // az egyetlen, ami a NEMA iranyt fogja (az ok kiesik a hivasbol, a literal a fajlban marad).
+    // STRUKTURA 1 -- ARITY: mindket hivas NEGY argumentumot ad at. Ez fogja azt az esetet,
+    // amikor az ok KIESIK a hivasbol.
     for (const args of calls) expect(args).toHaveLength(4)
 
-    // Az OK AZONOSSAGA, ARGUMENTUM-hatokorben. KIMONDOTT KORLAT: ez SZANDEKOSAN szigoru es
-    // forras-alaku, tehat a literal valtozoba emelese MEGBUKTATJA, pedig az helyes refaktor volna.
-    // Ez a HANGOS irany -- egy hamis riasztas, amit az ember azonnal lat --, es a fenti arity-assert
-    // ilyenkor ZOLD marad, tehat a kimenetbol kiolvashato, hogy a KOTES ep es csak az ALAK valtozott.
-    expect(calls[0]![3]).toContain('poller could not reach gcloud -- ${why}')
-    expect(calls[1]![3]).toContain('seriesProbe.ok ? null : `the timeSeries call FAILED')
+    // STRUKTURA 2 -- A VAGAS EPSEGE, es ez didi merese nyoman kerult ide (f3808792, 2026-09-06).
+    // Az `argsOf` zarojelet SZAMOL es nem tud sztringrol: egy paratlan zarojel a UZENET-SZOVEGBEN
+    // korabban (vagy kesobb) vagja el az argumentumot. Merve: a vagas ilyenkor is NEGY argumentumot
+    // ad, tehat az arity ZOLD marad -- a hibas vagas jele az, hogy a toredek PARATLAN szamu
+    // backtickot hordoz. Ez az allitas PROZA-FUGGETLEN.
+    // KORAI vagas (paratlan ZARO zarojel): a toredek paratlan szamu backtickot hordoz.
+    for (const args of calls) expect(args[3]!.split('`').length % 2).toBe(1)
+    // KESEI vagas (paratlan NYITO zarojel): a toredek ATFUT a hivason es SORTOREST nyel. Merve:
+    // ott az arity 4 MARAD es a zarojelek is kiegyensulyozottak (3/3), tehat sem az arity, sem a
+    // zarojel-parositas nem fogja -- ez a ket assert egyutt hatarolja a vagast MINDKET iranybol.
+    // KIMONDOTT KORLAT: ma mindket hivas 4. argumentuma EGY soros. Egy szandekosan tobbsoros
+    // negyedik argumentum ezt megbuktatna -- HANGOS, alak-valtozasra, nem prozara.
+    for (const args of calls) expect(args[3]!).not.toContain('\n')
+
+    // KOTES-AZONOSSAG: a 4. argumentum azt az AZONOSITOT hordozza, ami az OKOT viszi -- nem egy
+    // konkret megfogalmazast. didi merte, hogy a regi, PROZARA horgonyzott alak egy sima
+    // ATFOGALMAZASRA is pirosra ment, es az sokkal kozonsegesebb szerkesztes, mint egy hoist:
+    // egy hamis riasztas, aminek a kezenfekvo "javitasa" az azonossag fellazitasa -- utana a
+    // null-helyettesites es a hibas vagas NEMAN atmegy, mikozben az arity zolden orzottnek latszik.
+    // KIMONDOTT KORLAT: a literal valtozoba emelese ezt TOVABBRA IS megbuktatja (a hangos irany).
+    expect(calls[0]![3]).toContain('${why}')
+    expect(calls[1]![3]).toContain('seriesProbe.reason')
   })
 })
