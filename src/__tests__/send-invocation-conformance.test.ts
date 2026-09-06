@@ -132,6 +132,24 @@ describe('the two gates diverge on unparseable input BY DESIGN, in a named direc
   /** The same command with an unbalanced quote: neither gate can tokenize it. */
   const unparseable = (cmd: string) => `${cmd} '`
 
+  // A NATURALLY unbalanced command -- no forcing at all. jarvis's point, and
+  // the better fixture: in production the fallback runs on commands that are
+  // ALREADY unbalanced, so the fixture should BE one rather than be made one.
+  //
+  // This shape is not invented either: it is what TRUNCATION produces from a
+  // real sending command. Measured on two independent logs -- db-gate.log cuts
+  // at 400 and tool_call_log at 200 -- cutting a balanced command at an
+  // arbitrary point yields an unbalanced prefix at 27% and 26% of cut
+  // positions respectively. A censor or a log reader meets this shape without
+  // anyone constructing it.
+  //
+  // NOT in the shared list on purpose: the conformance block above runs every
+  // shared case through BOTH gates and asserts both equal `expected`. A case
+  // the two gates answer DIFFERENTLY would make that block red by construction.
+  // Divergence fixtures belong here, locally.
+  const NATURAL_UNBALANCED =
+    "npx tsx scripts/graph-mail.ts send --to a@b.hu --subject 'X"
+
   const inputs = [OUTBOUND, PAYLOAD, AGREED_BLOCK, AGREED_PASS].map((c) =>
     unparseable(c.cmd),
   )
@@ -151,6 +169,24 @@ describe('the two gates diverge on unparseable input BY DESIGN, in a named direc
     // "the hard-gate is simply better", which is not the ruling.
     expect(js[PAY], `hard-gate on: ${inputs[PAY]}`).toBe(true)
     expect(py[PAY], `copy-gate on: ${inputs[PAY]}`).toBe(false)
+  })
+
+  it('the same divergence holds on a NATURALLY unbalanced command, unforced', () => {
+    // The forcing above can only reach the fallback from a BALANCED command.
+    // This case needs no forcing at all, so it exercises the path in the shape
+    // production actually produces. If the two ever agree here, the divergence
+    // was an artifact of how we reached the fallback rather than a property of
+    // the fallback.
+    expect(isSendInvocation(NATURAL_UNBALANCED) as boolean).toBe(true)
+    expect(pythonVerdicts([NATURAL_UNBALANCED])[0]).toBe(false)
+  })
+
+  it('CONTROL: a naturally unbalanced HARMLESS command still passes both', () => {
+    // Without it, the assertion above could equally mean "everything
+    // unbalanced blocks in the hard-gate", which would be a different finding.
+    const harmless = "echo 'hello vilag"
+    expect(isSendInvocation(harmless) as boolean).toBe(false)
+    expect(pythonVerdicts([harmless])[0]).toBe(false)
   })
 
   it('CONTROL: where they agree to BLOCK, both still block', () => {
@@ -189,6 +225,13 @@ describe('the two gates diverge on unparseable input BY DESIGN, in a named direc
       expect(unbalanced(c.cmd), `case is ALREADY unbalanced, forcing would balance it: ${c.name}`).toBe(false)
       expect(unbalanced(unparseable(c.cmd)), `forcing did not make it unparseable: ${c.name}`).toBe(true)
     }
+
+    // And the opposite requirement for the unforced fixture: it must arrive
+    // unbalanced ON ITS OWN. Appending to it would BALANCE it and quietly move
+    // the assertion to the parsed path -- the exact failure this control exists
+    // for, in the other direction.
+    expect(unbalanced(NATURAL_UNBALANCED), 'the unforced fixture is not unbalanced').toBe(true)
+    expect(unbalanced(unparseable(NATURAL_UNBALANCED)), 'appending would balance it -- do not force this one').toBe(false)
   })
 
   it('CONTROL: on the PARSED path the two gates agree on these very cases', () => {
