@@ -94,6 +94,22 @@ describe('send-invocation conformance: both gates agree with the shared contract
 // HOW THE FALLBACK IS REACHED: appending an unbalanced quote. That is OUR
 // method for routing control to the fallback, not an observed production
 // shape -- stated because the numbers below are only as general as that.
+//
+// AND THE METHOD ONLY WORKS ON A BALANCED COMMAND (jarvis measured it, dexter
+// reproduced: card 84c7fe5f / 980ebc8c c18). Append a quote to a command that
+// is ALREADY unbalanced and you BALANCE it -- so it takes the PARSED path,
+// which is the opposite of what the forcing intends. Measured directly, not
+// inferred from a verdict:
+//
+//   `echo 'smtplib`     unbalanced BEFORE: true   AFTER appending: FALSE
+//   control, balanced   unbalanced BEFORE: false  AFTER appending: true
+//
+// In production the fallback runs exactly when a command does NOT tokenize --
+// precisely where this forcing flips to the parsed path. So the method cannot
+// sample the fallback's natural traffic, and the four cases below are valid
+// ONLY because each is balanced to begin with. That is not a fact to trust: it
+// is asserted, below, so swapping in an already-unbalanced case fails loudly
+// instead of quietly measuring the other path.
 // ===========================================================================
 describe('the two gates diverge on unparseable input BY DESIGN, in a named direction', () => {
   // Taken from the shared list BY NAME rather than written out here, so the pin
@@ -149,6 +165,30 @@ describe('the two gates diverge on unparseable input BY DESIGN, in a named direc
     // reached at all rather than everything blocking on a parse error.
     expect(js[PSS]).toBe(false)
     expect(py[PSS]).toBe(false)
+  })
+
+  it('CONTROL ON THE METHOD: every case here is balanced, so the forcing actually forces', () => {
+    // The pin's own meter, checked rather than trusted. Appending a quote only
+    // reaches the fallback if the command was balanced first; on an already
+    // unbalanced one it BALANCES it and silently measures the parsed path.
+    // Without this, a future case swap would degrade the four assertions above
+    // into parsed-path assertions with nothing saying so.
+    const unbalanced = (cmd: string) => {
+      let quote: string | null = null
+      for (const ch of cmd) {
+        if (quote) {
+          if (ch === quote) quote = null
+        } else if (ch === "'" || ch === '"') {
+          quote = ch
+        }
+      }
+      return quote !== null
+    }
+
+    for (const c of [OUTBOUND, PAYLOAD, AGREED_BLOCK, AGREED_PASS]) {
+      expect(unbalanced(c.cmd), `case is ALREADY unbalanced, forcing would balance it: ${c.name}`).toBe(false)
+      expect(unbalanced(unparseable(c.cmd)), `forcing did not make it unparseable: ${c.name}`).toBe(true)
+    }
   })
 
   it('CONTROL: on the PARSED path the two gates agree on these very cases', () => {
