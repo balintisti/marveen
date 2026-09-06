@@ -171,7 +171,15 @@ describe('isSessionReadyForPrompt wiring (dim-ghost tolerant idle)', () => {
     )
     const start = src.indexOf('export async function isSessionReadyForPrompt')
     expect(start).toBeGreaterThan(-1)
-    const fn = src.slice(start, start + 2600)
+    // SZERKEZETI hatar, NEM fix ablak. Eredetileg `start + 2600` allt itt, es az egy NEMA
+    // meret-fuggoseg: barmely komment-novekedes a fuggveny FEJEBEN kitolja az allitasok
+    // targyat az ablakbol (ez tortent 2026-09-06-an, kartya 4dc05974), a masik iranyban
+    // pedig egy ROVID fuggvenynel a KOVETKEZO fuggveny torzse csuszik BE -- olyankor az
+    // allitas a SZOMSZEDROL szol, es zolden. A `\nexport ` hatarolo ugyanaz az idiom, amit
+    // a `dispatch-saturation-log.test.ts` mar hasznal ugyanerre a fuggvenyre.
+    const end = src.indexOf('\nexport ', start + 10)
+    expect(end).toBeGreaterThan(start)
+    const fn = src.slice(start, end)
     // typing-vs-idle-box is decided through the dim-ghost-tolerant path, which
     // scrapes the GHOST-STRIPPED captureParkedInputView (so the dim
     // example-suggestion never reads as parked):
