@@ -1,0 +1,9 @@
+{
+  "ported": {},
+  "skipped": {},
+  "pending": {
+    "2d29496277d9d2c84d16d999fbf7c1963e054b52": "branch fix/c29aaf14-adoption-on-74c09fd7 built and pushed (bd2254e); waits on merge -- card c29aaf14",
+    "7fe99fc4a0dd456e93f136283e5ea4f98eea71cb": "same branch; (b) depends on this one shipping -- measured on card c29aaf14 c18"
+  },
+  "updated": "2026-09-06"
+}
