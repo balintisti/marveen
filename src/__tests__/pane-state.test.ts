@@ -2346,3 +2346,89 @@ describe('parkedPasteSignature (stuck [Pasted text #N] recovery)', () => {
     expect(parkedPasteSignature(auraShape)).not.toBeNull()
   })
 })
+
+/**
+ * A TELITETTSEG-ABLAK A FOOTERHEZ HORGONYZ, NEM A PANEL VEGEHEZ (kartya 74c09fd7).
+ *
+ * A MERT DEFEKTUS: egy panel hordozhat TRANZIENS ertesites-sorokat a footer ALATT
+ * ("Update installed - Restart to update", "new task? /clear to save 132.2k tokens"). Azok
+ * lejjebb tolják a bannert, mint ameddig a farok-ablak elert. Elo paneleken merve 2026-09-06 a
+ * SZALLITOTT detektorral: a marveen-worker 8-as melysegre tette a bannert -> DETECTED false,
+ * mikozben ket agens-panel 5-osre -> true.
+ *
+ * ES A TEVESZTESEK KORRELALNAK A MERT ALLAPOTTAL: a "/clear to save 132.2k tokens" sor
+ * KONTEXTUS-NYOMASRA jelenik meg. Vagyis ami megvakitja az ellenorzest, EPPEN akkor valoszinubb,
+ * amikor a panel a telitettseg fele megy -- mas osztaly, mint egy fix teveszteési arany.
+ *
+ * A geometria MERT, nem feltetelezett: az egyetlen valodi saturalt capture-unk
+ * (context-guard-last-pane-marveen, 09-04) igy all -- banner / szeparator / prompt /
+ * szeparator / footer --, tehat a banner a footer folott NEGY sorral, nem eggyel.
+ */
+describe('paneShowsContextSaturation: a footerhez horgonyzott ablak (74c09fd7)', () => {
+  const FOOTER = '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents'
+  const BANNER = '                                                             100% context used'
+  // a valodi capture geometriaja: banner / szeparator / prompt / szeparator / footer
+  const core = (...below: string[]) => [
+    'scrollback', 'munka', '✻ Cogitated for 1m 40s · done',
+    BANNER,
+    '─────────────────────────────────────────── Marveen ─',
+    '❯ ',
+    '────────────────────────────────────────────────────',
+    FOOTER,
+    ...below,
+  ].join('\n')
+
+  // A FIXTURE GEOMETRIAJA MAGA IS ALLITAS, ES ELOSZOR ROSSZ VOLT. Az elso valtozat harom sort
+  // tett a footer ala, amivel a banner 7-es melysegre kerult -- a REGI, 8-as farok-ablak MEG
+  // ELERTE, tehat az M1 mutacio (vissza panel-veg-horgonyra) TULELT: a fixture osszeejtette a
+  // helyes es a helytelen megvalositast pontosan azon a tengelyen, amit mer. Ugyanaz a
+  // fixture-torveny, amit ma este didi merese kapcsan magam mondtam ki.
+  // Ezert a melyseg MOST ALLITVA VAN, nem remelve.
+  const withNotices = core(
+    '                    ✔ Update installed · Restart to update',
+    '                    new task? /clear to save 132.2k tokens',
+    '                    ↑ these two are what push the banner out of a tail window',
+    '')
+
+  it('KONTROLL A FIXTURE-RE: a banner tenyleg a REGI ablakon KIVUL van (>= 8)', () => {
+    const lines = withNotices.split('\n')
+    const depth = lines.length - 1 - lines.findIndex((l) => l.includes('100% context used'))
+    expect(depth).toBeGreaterThanOrEqual(8)      // kulonben a lenti teszt semmit nem mer
+    expect(lines.slice(-8).join('\n')).not.toContain('100% context used')
+  })
+
+  it('a footer ALATTI tranziens sorok NEM vakitjak meg -- EZ a lelet', () => {
+    expect(paneShowsContextSaturation(withNotices)).toBe(true)
+  })
+
+  it('KONTROLL: tranziens sorok NELKUL ugyanaz a panel is true (nem valtozott a jo eset)', () => {
+    expect(paneShowsContextSaturation(core())).toBe(true)
+  })
+
+  it('KONTROLL: banner NELKUL false, barmennyi tranziens sorral', () => {
+    expect(paneShowsContextSaturation(core().replace(BANNER, '  semmi kulonos'))).toBe(false)
+  })
+
+  it('a footer ALATTI sor NEM tuzel, meg ha a frazist tartalmazza is', () => {
+    // AZ M4 MUTACIO TULELT NELKULE: a vegig-szeletelés (footerIdx+1 helyett a panel vegeig)
+    // visszaengedi a footer alatti sorokat, es ma egyik ertesites sem tartalmazza a frazist,
+    // tehat a kulonbseg lathatatlan volt. A hatar NEM dekoracio: a footer alatti sorok EPP a
+    // kontextus-nyomasrol szolnak ("/clear to save 132.2k tokens"), tehat egy jovobeli valtozat
+    // konnyen mondhat "context limit"-et -- es akkor a detektor a SAJAT ertesitesere tuzelne.
+    const spoof = core('  hint: context limit reached -- consider /clear')
+      .replace(BANNER, '  semmi kulonos')
+    expect(paneShowsContextSaturation(spoof)).toBe(false)
+  })
+
+  it('scrollback-idezet MESSZE a footer folott NEM tuzel -- az ablak tovabbra is farok-hatókörű', () => {
+    const far = [BANNER, ...Array(20).fill('filler'), FOOTER].join('\n')
+    expect(paneShowsContextSaturation(far)).toBe(false)
+  })
+
+  it('FOOTER NELKULI capture: a torteneti farok-ablakra esik vissza, nem talal ki verdiktet', () => {
+    // fail-open irany: false-t adni itt epp azokat a paneleket vakitana meg, amiket nem tudunk
+    // parszolni; true-t adni egeszsegeseknek tagadna meg a kezbesitest.
+    expect(paneShowsContextSaturation(['a', 'b', BANNER, 'c'].join('\n'))).toBe(true)
+    expect(paneShowsContextSaturation([BANNER, ...Array(20).fill('x')].join('\n'))).toBe(false)
+  })
+})
