@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **215** kovetett fajl, ebbol
-**61** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **217** kovetett fajl, ebbol
+**62** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (1)
 
@@ -138,6 +138,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/hooks/db-destructive-gate.py`
 
 - WHY THIS EXISTS, AND WHY THE PERMISSION LIST IS NOT ENOUGH (measured 2026-08-19,
+
+### `scripts/hooks/memory-index-write-gate.py`
+
+- WHY THIS EXISTS (card c837502c, didi's finding d85cfbb4 c8). The index overflow rule had
 
 ### `scripts/hooks/outgoing-copy-gate.py`
 

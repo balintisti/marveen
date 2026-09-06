@@ -388,6 +388,66 @@ export function ensureAgentStalenessHook(name: string): boolean {
   return true
 }
 
+const _memoryGateScript = join(PROJECT_ROOT, 'scripts', 'hooks', 'memory-index-write-gate.py')
+// FAIL-OPEN ON A MISSING SCRIPT, and that is the opposite of the governance gates ON PURPOSE.
+// This matcher includes `Bash`, so a `test -x ... || exit 2` form would block EVERY shell call
+// the moment the script is absent (a fresh clone, a pruned worktree). The staleness hook uses
+// exactly this `[ -f ] && exec ...; exit 0` shape for the same reason. The gate's own internal
+// failures are fail-open too (see its docblock), so the two halves agree.
+const MEMORY_GATE_HOOK_CMD = `bash -c '[ -f ${_memoryGateScript} ] && exec python3 ${_memoryGateScript} "$@"; exit 0' --`
+
+// Idempotent migration: every agent's settings.json carries the MEMORY.md write gate
+// (card c837502c). Called at server startup in the same loop as ensureEgressGate.
+//
+// WHY A CODE-WRITTEN `ensure*` AND NOT A SETTINGS FILE -- marveen's ruling, on a measurement.
+// There is NO settings file that reaches all six agents AND is versioned: the project-level
+// `marveen/.claude/settings.json` is tracked but reaches only the main agent, and everything
+// under `agents/` is gitignored. `db-destructive-gate` is not the precedent it looks like --
+// it has exactly one reference under `src/` and that is a test, so it was hand-wired.
+// `ensureEgressGate` is the real precedent: versioned source, deterministic across every agent,
+// and it survives a `git clean`.
+//
+// WHEN IT RUNS -- the limit marveen put on his own ruling, now measured. `src/web.ts` calls this
+// family ONCE at DASHBOARD STARTUP, in a loop over `[MAIN_AGENT_ID, ...listAgentNames()]`,
+// inside a try/catch that logs 'Agent hook backfill skipped'. It does NOT run on agent start.
+// So delivery is TWO hops: a dashboard restart writes the settings, and each agent picks them
+// up at ITS next session start -- six different times, none of them ours to choose.
+//
+// Returns true if the file was updated, false if already wired.
+export function ensureMemoryIndexWriteGate(name: string): boolean {
+  const settingsPath = agentSettingsPath(name)
+  let settings: Record<string, unknown> = {}
+  if (existsSync(settingsPath)) {
+    const parsed = readAgentSettingsChecked(settingsPath, name, 'ensureMemoryIndexWriteGate')
+    if (parsed === null) return false
+    settings = parsed
+  }
+  const hooks = (settings.hooks && typeof settings.hooks === 'object')
+    ? settings.hooks as Record<string, unknown>
+    : {}
+  const ptu = Array.isArray(hooks.PreToolUse) ? hooks.PreToolUse as unknown[] : []
+  // Idempotency by SCRIPT NAME, not by the whole command: the command embeds PROJECT_ROOT,
+  // so a path-only change must re-write rather than duplicate.
+  const ptuJson = JSON.stringify(ptu)
+  if (ptuJson.includes('memory-index-write-gate.py')
+      && hookCommandWired(ptuJson, MEMORY_GATE_HOOK_CMD)) return false
+  // Registration guard: never write a /tmp or non-existent path into shared settings.
+  if (isUnsafeHookCommand(MEMORY_GATE_HOOK_CMD)) return false
+  hooks.PreToolUse = [
+    ...ptu.filter((e) => !JSON.stringify(e).includes('memory-index-write-gate.py')),
+    {
+      // NotebookEdit is deliberately absent: the gate cannot size a notebook edit and would
+      // fail open anyway, so matching it would only buy an interpreter start per call.
+      matcher: 'Write|Edit|Bash',
+      hooks: [{ type: 'command', command: MEMORY_GATE_HOOK_CMD, timeout: 10 }],
+    },
+  ]
+  settings.hooks = hooks
+  if (name !== MAIN_AGENT_ID) mkdirSync(join(agentDir(name), '.claude'), { recursive: true })
+  atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2))
+  return true
+}
+
 export function writeAgentSettingsFromProfile(name: string, profile: ProfileTemplate): void {
   const agentRoot = agentDir(name)
   const settingsDir = join(agentRoot, '.claude')
