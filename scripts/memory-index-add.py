@@ -63,6 +63,19 @@ LINE_LIMIT = 200       # AND a separate LINE ceiling: "MEMORY.md is 205 lines (l
 # somebody merged them.** That is why 7 of the 10 longest are long, and why a naive median
 # trim would drop 8 -- the trim attacks the very mechanism holding 21 memories in.
 PIN_MARKER = '<!-- pin -->'
+# THE ARCHIVE POINTER'S OWN MARKER. It exists so the tool can find and rewrite ITS OWN line and
+# nothing else: a human may legitimately mention an archive from a content line (one does today,
+# on the "memoria-fajlok helye" entry), and a tool matching on the link target alone would
+# rewrite that person's sentence.
+#
+# AND THE POINTER IS DELIBERATELY NOT AN INDEX LINE -- it does not start with "- [". Measured on
+# a fixture, 2026-09-06, because all three consequences are load-bearing and none is obvious:
+#   * `--check` still counts it as "linked from the index" (2 linked, UNREACHABLE 0) -- that
+#     scan regexes the WHOLE file, not just index lines;
+#   * it costs ZERO of the 200-line ceiling (`index lines: 1` with the pointer present);
+#   * it can never be evicted, because eviction candidates must start with "- [" -- so it needs
+#     no pin, and cannot archive ITSELF.
+ARCHIVE_MARKER = '<!-- arch -->'
 SNAPSHOTS = os.environ.get('MARVEEN_SNAPSHOT_REPO', '/Users/isti/Backups/rulebooks')
 SNAP_INDEX = 'store/memory/-Users-isti-marveen/MEMORY.md'
 
@@ -125,6 +138,108 @@ def in_degree():
 
 def archive_path():
     return os.path.join(MEM, f'index-farkak-{datetime.date.today().isoformat()}.md')
+
+
+def archive_pointer_line(arch_name):
+    return f'{ARCHIVE_MARKER} ARCHIVUM: [levagott index-sorok]({arch_name})'
+
+
+def apply_archive_pointer(text, arch_name):
+    """Point the tool-owned index line at `arch_name`. Returns (text, delta_chars).
+
+    Idempotent: rewrites the existing pointer if there is one, inserts it immediately ABOVE the
+    first index line otherwise. Above, because the loader cuts at the TAIL -- a pointer written
+    at the end would be the first thing to fall off the prefix, and an archive pointer nobody
+    loads is the bug this function exists to close.
+
+    ONE MAINTAINED LINE, NOT ONE PER DAY, and that is a measured choice rather than a tidiness
+    one. A line per archive costs ~110 characters and one LINE_LIMIT slot every day a first
+    eviction happens, taken from the single tightest file in the system -- the same pressure
+    that causes the evictions. Rewriting one line costs that once, then nothing.
+    """
+    lines = text.split('\n')
+    want = archive_pointer_line(arch_name)
+    for i, l in enumerate(lines):
+        if ARCHIVE_MARKER in l:
+            if l == want:
+                return text, 0
+            lines[i] = want
+            break
+    else:
+        j = next((i for i, l in enumerate(lines) if l.startswith('- [')), len(lines))
+        lines.insert(j, want)
+    new = '\n'.join(lines)
+    return new, len(new) - len(text)
+
+
+BACKLINK_BEGIN = '<!-- korabbi-archivumok:BEGIN -->'
+BACKLINK_END = '<!-- korabbi-archivumok:END -->'
+
+
+def archive_backlinks(arch):
+    """`[[wiki]]` links from this archive to every other archive AND to the memories they hold.
+
+    WHY THE NEWEST ARCHIVE IS THE HUB AND NOT A DATE CHAIN. `--check` resolves exactly two
+    hops: a markdown `(file.md)` link from MEMORY.md, then `[[stem]]` links inside a file that
+    is DIRECTLY linked from it. Measured on a fixture, 2026-09-06: with MEMORY.md linking only
+    the newest and each archive naming just its predecessor, the third one back reports
+    `NO PATH` -- the chain looks right and goes dark on day three. Control on the same fixture:
+    the depth-2 file was NOT reported, so the meter was not simply blind.
+
+    So every archive is named by the hub, keeping the whole history at depth 2.
+
+    AND THE HUB MUST NAME THE MEMORIES TOO, NOT ONLY THE ARCHIVE FILES -- didi measured the gap
+    on 2026-09-06, and it is THIS FUNCTION'S OWN TRAP one day later. Naming just the archives
+    keeps the FILES at depth 2, but yesterday's victim is reachable only through the `[[handle]]`
+    written inside YESTERDAY's archive, and that archive is itself at depth 2 -- so the handle
+    sits at THREE. Reproduced independently on a two-day fixture with the shipped `--check`:
+    day one's victim reports `NO PATH` while both archives report reachable.
+
+    That is exactly the shape this file's eviction path already carries a warning about: the
+    container stops being orphaned while its contents stay `NO PATH`, and the meter goes green
+    ONE LEVEL UP. The first fix closed it for the SAME day only.
+
+    Both link forms are read, because the archives written BEFORE the handle existed hold their
+    entries as the original markdown index lines (09-03: 1039 lines, 09-05: 184) and would never
+    otherwise get a handle -- so this heals the past as well as the future.
+
+    THE COST LANDS WHERE THERE IS NO CEILING. Measured 2026-09-06: the union across every
+    archive is 280 names, ~11 KB, and it goes into an ARCHIVE file. MEMORY.md is the scarce
+    budget -- this costs it nothing, which is the same reasoning that keeps the pointer to one
+    maintained line. The block is REGENERATED between its markers, not appended, so it does not
+    grow without bound.
+    """
+    others = sorted(f for f in os.listdir(MEM)
+                    if f.startswith('index-farkak-') and f.endswith('.md')
+                    and os.path.join(MEM, f) != arch)
+    if not others:
+        return ''
+    on_disk = set(os.listdir(MEM))
+    held = set()
+    for f in others:
+        try:
+            other = read(os.path.join(MEM, f))
+        except OSError:
+            continue                      # a meter that cannot read skips, it does not invent
+        held |= set(re.findall(r'\]\(([^()\s]+\.md)\)', other))
+        held |= {m + '.md' for m in re.findall(r'\[\[([^\]]+)\]\]', other)}
+    held = {n for n in held
+            if n in on_disk and n != 'MEMORY.md' and not n.startswith('index-farkak-')}
+    body = ''.join('- [[%s]]\n' % f[:-3] for f in others)
+    if held:
+        body += ''.join('- [[%s]]\n' % n[:-3] for n in sorted(held))
+    return (BACKLINK_BEGIN + '\nKorabbi archivumok -- ez a fajl a HUB, ezek a hivatkozasok\n'
+            'tartjak oket a `--check` altal merheto ket hopon belul:\n' + body
+            + BACKLINK_END + '\n')
+
+
+def with_backlinks(body, arch):
+    """Insert or refresh the backlink block at the TOP of an archive. Idempotent."""
+    block = archive_backlinks(arch)
+    if BACKLINK_BEGIN in body:
+        return re.sub(re.escape(BACKLINK_BEGIN) + r'.*?' + re.escape(BACKLINK_END) + r'\n?',
+                      block, body, flags=re.S)
+    return block + body
 
 
 def usage():
@@ -221,26 +336,53 @@ def evict_tail(text, protect=None):
     # and take the oldest of THOSE. If none qualifies, refuse rather than evict something
     # that does not fix the problem -- an eviction that leaves the file over the limit has
     # spent a memory and bought nothing.
-    over_by = len(text) - LIMIT
+    # THE POINTER IS PART OF THE BILL, and it has to be counted BEFORE the victim is chosen.
+    # `over_by` used to be the whole story; now the same motion also writes an index line, so a
+    # victim picked against the old figure can be evicted, the pointer added, and the file left
+    # over the limit anyway -- a memory spent for nothing, which is precisely the outcome the
+    # `big_enough` filter below exists to prevent. Counting it here keeps that guarantee true.
+    arch = archive_path()
+    _, pointer_cost = apply_archive_pointer(text, os.path.basename(arch))
+    over_by = len(text) - LIMIT + pointer_cost
     big_enough = [i for i in candidates if len(lines[i]) + 1 >= over_by]
     if not big_enough:
+        # NAME THE SURCHARGE WHEN IT IS PART OF THE BILL. Without this the reader is sent to
+        # trim hooks -- an editorial pass that CANNOT close a gap the pointer opened, because
+        # the pointer is written on the next run too. A refusal that names the wrong remedy is
+        # the failure mode this file already carries a card for (4b94fefa).
+        surcharge = ('' if not pointer_cost else
+                     f'\n{pointer_cost} of those characters are the one-off archive pointer '
+                     f'this run must also write (there is none yet). It is written ONCE; after '
+                     f'that it is rewritten in place at zero cost. If the trim below cannot '
+                     f'free the room, the pointer needs {pointer_cost} characters from '
+                     f'somewhere before --evict can complete.')
         raise SystemExit(
             f'REFUSING: over by {over_by} characters, and no single unpinned line is that '
             'long. This needs an editorial pass on hook length, not an eviction.\n'
             'THE TOOL FOR THAT IS scripts/memory-index-trim.py -- it shrinks ONE line in '
             'place and refuses prose edits. Do NOT hand-edit MEMORY.md: six agents share '
-            'that one file.')
+            'that one file.' + surcharge)
 
     victim_i = min(big_enough, key=rank)
 
     victim = lines[victim_i]
-    arch = archive_path()
     header = f'\n## Levagva {datetime.datetime.now():%Y-%m-%d %H:%M} -- a betoltesi hatar miatt\n'
     existing = read(arch) if os.path.exists(arch) else ''
     if victim in existing:
         body = existing                      # already recorded; do not duplicate
     else:
         body = existing + header + victim + '\n'
+    # AND THE ARCHIVED ENTRY NEEDS A [[wiki]] HANDLE, not just its original line. The line is
+    # preserved verbatim -- but verbatim means a markdown `(name.md)` link, and `--check`
+    # follows only `[[stem]]` on its second hop. Without this the ARCHIVE stops being orphaned
+    # while every memory INSIDE it stays `NO PATH`: the meter goes green one level up and the
+    # thing the card is about is untouched. Caught by test 7 asserting through the shipped
+    # meter instead of a substring. Consolidated lines name several memories, so take them all.
+    handles = [f'[[{t[:-3]}]]' for t in re.findall(r'\(([^()\s]+\.md)\)', victim)]
+    handles = [h for h in handles if h not in body]
+    if handles:
+        body += '  ' + ' '.join(handles) + '\n'
+    body = with_backlinks(body, arch)
     with open(arch, 'w', encoding='utf-8') as fh:
         fh.write(body)
     # ONLY after the archive write succeeded -- the eviction must never outrun the record.
@@ -248,7 +390,13 @@ def evict_tail(text, protect=None):
         raise SystemExit('REFUSING: archive does not contain the victim after writing')
 
     del lines[victim_i]
-    return '\n'.join(lines), victim
+    # AND ONLY NOW THE POINTER, for the same reason the archive is written first: the index must
+    # never name an archive that does not yet hold the line. Before this, `--evict` created a
+    # dated archive that NOTHING linked -- the eviction succeeded, the text was preserved in
+    # full, and it was unreachable. Measured 2026-09-06: the day's archive had 1 inbound
+    # reference and it was a hand repair; the tool wrote none (card cc666d39).
+    out, _ = apply_archive_pointer('\n'.join(lines), os.path.basename(arch))
+    return out, victim
 
 
 def main():
