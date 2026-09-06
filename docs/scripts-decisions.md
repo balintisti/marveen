@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **212** kovetett fajl, ebbol
-**59** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **215** kovetett fajl, ebbol
+**61** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (1)
 
@@ -38,6 +38,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/__tests__/idle-reporter.test.py`
 
 - MIERT PYTHON-TESZT ES NEM VITEST: a szkript szandekosan ONALLO -- semmit nem
+
+### `scripts/__tests__/memory-index-add-check-hop2.test.py`
+
+- WHY THAT IS THE DANGEROUS DIRECTION, and not just an inaccurate number: NO PATH is the input to
 
 ### `scripts/__tests__/outgoing-gate-entry-seam.test.py`
 
@@ -185,6 +189,11 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - WHY THIS IS CODE AND NOT A RULE, and the reason is measured rather than stylistic. The
 - WHY PREPEND. Measured 2026-09-03: the first 40 index lines had a median file mtime of
+
+### `scripts/memory-index-fold.py`
+
+- why: "pretending otherwise is how a tool grows a capability nobody asked for." So the caller
+- WHY THE LOCK IS LOAD-BEARING, not ceremony: six agents write MEMORY.md through a shared inode,
 
 ### `scripts/memory-save.sh`
 
