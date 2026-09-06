@@ -30,6 +30,21 @@ export type WorkCheckKind =
   // Declared silence: never alerted about idleness. This is the AgroTech case.
   | 'none'
 
+/** A KOTELEZO ASZIMMETRIA-DEKLARACIO JELOLOJE (kartya ef696f05).
+ *
+ *  Minden ertesites, ami BEAGYAZOTT UJRAMERO PARANCSOT ad, egy PROXYT ad az or dontese helyett --
+ *  es a proxy SOHA nem azonos a dontessel: az or tobb bemenetbol dolgozik, mint amennyi egy
+ *  egysorosba belefer. A `6958fca0` ezt egyszer mar javitotta EGY ertesitesen, es a kovetkezo
+ *  ketto ugyanabban az alakban szuletett ujra -- masodik elofordulas, ugyanaz a mechanizmus.
+ *
+ *  A megoldas NEM egy kozos szarmaztatas: az elpusztitana a SZANDEKOS elteréseket (a pull-lista
+ *  lane-szurojet, a review-sor mas predikatumat). Az, hogy az eltérés KI VAN MONDVA -- es hogy
+ *  ezt egy teszt gepileg tudja ellenorizni, ne egy proza-egyezes.
+ *
+ *  Ezert egyetlen konstans, amit MINDEN ilyen ertesites kiir a parancsa mellett. A pin ehhez
+ *  koti magat: ha egy uzenet `python3 -c`-t tartalmaz, ezt is tartalmaznia kell. */
+export const ASYMMETRY_NOTE = 'AMIT EZ A SOR NEM SZUR:'
+
 export interface WorkCheck {
   kind: WorkCheckKind
 }
@@ -908,9 +923,19 @@ export function buildPendingStillWaitingNotice(
     ...advice,
     '',
     'MIELOTT BARMIT TESZEL, MERD UJRA -- egy sor, es a mai allapotot adja:',
+    // A JELENTES VALODI FORRASA `status = 'pending'` (`idle-agent-watcher.ts:137`), es ez a
+    // sor `('pending','failed')`-et kerdezett. A ketto NEM ugyanaz a kerdes: a `pending` azt
+    // mondja, hogy a cimzett MEG NEM OLVASTA EL; a `failed` azt, hogy a kezbesites egyszer
+    // MAR MEGHIUSULT -- az sosem fog leurulni magatol, es a lap kulon kimondja, hogy a ketto
+    // ELLENTETES teendot ir elo (varj / kuldd ujra). Mert ar: a `failed` sorok tobbsege EGY
+    // kuldoe, tehat ez a parancs neki tizenot ujrakuldendo uzenetet mutatott volna, amirol ez
+    // a jelentes soha nem szolt. Kartya ef696f05, es ez a `6958fca0` MASODIK elofordulasa.
     "python3 -c \"import sqlite3;c=sqlite3.connect('file:store/claudeclaw.db?mode=ro',uri=True);"
       + "print(list(c.execute(\\\"select id,to_agent,status from agent_messages where from_agent=?"
-      + " and status in ('pending','failed')\\\", ('" + sender + "',))))\"",
+      + " and status='pending'\\\", ('" + sender + "',))))\"",
+    '',
+    `${ASYMMETRY_NOTE} a MEGHIUSULT (status='failed') kezbesiteseket. Azok NEM ebbe a`,
+    'jelentesbe tartoznak es nem is urulnek le maguktol -- kulon kerdes, kulon teendovel.',
     '',
     'Amit erdemes: ha DONTES vagy LELET volt benne, tedd a KARTYARA is. A kartya nem all',
     'sorba -- a cimzett akkor is latja, amikor a levelet meg nem olvasta el.',
@@ -1105,8 +1130,9 @@ export function buildPullNotice(
     // it is the term that produced the 24-against-1 gap. The guard's remaining filters are NOT
     // (a future `due_date`, and the `testing` exclusion), so:
     'Ha ez NAGYOBBAT ad, mint a fenti szam, a lista ELAVULT -- nezd meg ujra.',
-    'Ha UGYANANNYIT vagy kevesebbet, az meg NEM az en dontesem megismetlese: a jovobeli',
-    '`due_date`-et es a `testing` kizarast ez a sor NEM szuri.',
+    'Ha UGYANANNYIT vagy kevesebbet, az meg NEM az en dontesem megismetlese.',
+    `${ASYMMETRY_NOTE} a jovobeli \`due_date\`-et (az orphanPullList szuri), es a`,
+    'munka-szamlalo `testing` al-szurojet, ami a felajanlas ELOFELTETELE volt.',
   ].join('\n')
 }
 
@@ -1167,8 +1193,23 @@ export function buildNoWorkNotice(agent: string, minutes: number, nowMs: number)
     // reproduces the guard would be worse than handing over none -- it would answer the
     // neighbouring question with my authority behind it.
     `Ha ez BARMIT ad vissza, ez a jelentes ELAVULT: a(z) "${agent}" kapott munkat, miota megmertem.`,
-    'Ha URESET ad, az meg NEM az en dontesem megismetlese -- a jovobeli `due_date`-et es a',
-    '`varakozik:` cimkeket ez a sor NEM szuri. Csak azt mondja meg, hogy a jelentes MEG all-e.',
+    'Ha URESET ad, az meg NEM az en dontesem megismetlese.',
+    `${ASYMMETRY_NOTE} a jovobeli \`due_date\`-et, a \`varakozik:\` cimkeket, ES a`,
+    // A KIND-FUGGES, AMI EDDIG KIMONDATLAN VOLT (kartya ef696f05). A `selectDeclaredWork` a
+    // `workcheck.json` `kind`-jara KAPCSOL, es a fenti egysoros a HAROM kozul csak az EGYIKET
+    // reprodukalja (`assigned_open_cards`). Egy `testing_without_my_comment` agensnel az or
+    // egeszen mas halmazt szamolt (a `testing` oszlop, amire O nem szolt hozza), egy `none`
+    // agensnel pedig NULLAT, barmennyi kartya all a neven. Enelkul a sor a szomszed kerdesre
+    // valaszol -- az or tekintelyevel a hata mogott.
+    '`workcheck.json` `kind`-jat: ez a sor az `assigned_open_cards` alakot kerdezi, es',
+    'egy `testing_without_my_comment` vagy `none` deklaracio mellett MAS halmazt ad, mint amit',
+    'en szamoltam.',
+    // ES A `testing` AL-SZURO, ami eddig SEHOL nem volt kimondva -- marveen ezt az egy sort
+    // nevezte meg (k30). A fenti sor a `testing` kartyakat MIND beszamitja; a szamlalo csak
+    // azokat, ahol a labda meg az ellenorzonel van. Tehat egy NEM-URES valasz onmagaban meg
+    // nem cafol: allhat csupa olyan `testing` kartyabol, amit en HELYESEN nem szamoltam.
+    'Es a `testing` AL-SZUROT sem: a sor minden `testing` kartyat beszamit, en viszont csak',
+    'azokat, ahol a labda meg az ellenorzonel van.',
   ].join('\n')
 }
 
@@ -1257,6 +1298,19 @@ export function buildWakeMessage(
     `curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" http://localhost:3420/api/kanban \\`,
     `| python3 -c "import json,sys;print([(c['id'][:8],c['status']) for c in json.load(sys.stdin)`
       + ` if c.get('assignee')=='${agent}' and c.get('status') not in ('done','waiting') and not c.get('archived_at')])"`,
+    '',
+    // UGYANAZ A KIND-FUGGES, MINT A NO-WORK ERTESITESBEN -- es itt MERVE: ez a fuggveny ISMERI
+    // a kind-ot (`isReviewQueue` fentebb dönti el, mi szamit felvehetonek), de a fenti parancs
+    // BAJT-AZONOS a ket kind kozott. Megmerve 2026-09-06: `assigned_open_cards` es
+    // `testing_without_my_comment` mellett a parancs-sor azonos, mikozben az uzenet TOBBI resze
+    // elter -- tehat a fuggveny hasznalja a kind-ot, csak epp itt nem.
+    `${ASYMMETRY_NOTE} a jovobeli \`due_date\`-et, es a \`workcheck.json\` \`kind\`-jat.`,
+    isReviewQueue
+      ? 'A te deklaraciod `testing_without_my_comment`, tehat en a `testing` oszlopot szamoltam, amire'
+      : 'A te deklaraciod `assigned_open_cards`, tehat ez a sor ugyanazt a halmazt kerdezi, amit szamoltam --',
+    isReviewQueue
+      ? 'meg nem szoltal hozza. A fenti sor a NEVEDEN allo nyitott kartyakat adja: MASIK halmaz.'
+      : 'a fenti ketto kivetelevel.',
   )
   out.push(
     '',
