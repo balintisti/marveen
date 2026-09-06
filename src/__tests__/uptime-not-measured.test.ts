@@ -79,10 +79,44 @@ describe('bekotes: a hivasi helyek TENYLEG atadjak az okot', () => {
     // a `GCLOUD_STDIO` azert lett nevesitett export, mert bare literalkent a bekotest semmi nem
     // allitotta -- tizenot teszt maradt zold egy visszavont javitas mellett.
     const src = readFileSync(new URL('../web/uptime-alert-watcher.ts', import.meta.url), 'utf-8')
-    const calls = src.split('buildUnreadableNotice(').slice(1)
+
+    // ARGUMENTUM-HATOKOR, nem fajl-hatokor (didi merte 2026-09-06, f3808792 komment 3): egy
+    // fajl-hatokoru `toContain` NEMAN atengedi azt a refaktort, ami a literalt a helyen hagyja
+    // (kommentben, konstansban) es a HIVASBOL veszi ki -- vagyis pontosan azt az iranyt, amiert
+    // ez a pin letezik. Merve: az ok kivetele az 1. hivasbol 5/5 ZOLDET hagyott.
+    const argsOf = (needle: string): string[][] =>
+      src.split(needle).slice(1).map((tail) => {
+        let depth = 1
+        let i = 0
+        for (; i < tail.length && depth > 0; i++) {
+          if ('([{'.includes(tail[i]!)) depth++
+          else if (')]}'.includes(tail[i]!)) depth--
+        }
+        const inner = tail.slice(0, i - 1)
+        const args: string[] = []
+        let d = 0
+        let cur = ''
+        for (const ch of inner) {
+          if ('([{'.includes(ch)) d++
+          else if (')]}'.includes(ch)) d--
+          if (ch === ',' && d === 0) { args.push(cur.trim()); cur = '' } else cur += ch
+        }
+        if (cur.trim() !== '') args.push(cur.trim())
+        return args
+      })
+
+    const calls = argsOf('buildUnreadableNotice(')
     expect(calls).toHaveLength(2)                       // a populacio, kimondva
-    // az elso hivas egysoros, a masodik tobbsoros -- mindkettonek hordoznia kell az okot
-    expect(src).toContain('`poller could not reach gcloud -- ${why}`')
-    expect(src).toContain('seriesProbe.ok ? null : `the timeSeries call FAILED')
+
+    // A KOTES: mindket hivas NEGY argumentumot ad at. EZ az allitas, amiert a pin letezik, es ez
+    // az egyetlen, ami a NEMA iranyt fogja (az ok kiesik a hivasbol, a literal a fajlban marad).
+    for (const args of calls) expect(args).toHaveLength(4)
+
+    // Az OK AZONOSSAGA, ARGUMENTUM-hatokorben. KIMONDOTT KORLAT: ez SZANDEKOSAN szigoru es
+    // forras-alaku, tehat a literal valtozoba emelese MEGBUKTATJA, pedig az helyes refaktor volna.
+    // Ez a HANGOS irany -- egy hamis riasztas, amit az ember azonnal lat --, es a fenti arity-assert
+    // ilyenkor ZOLD marad, tehat a kimenetbol kiolvashato, hogy a KOTES ep es csak az ALAK valtozott.
+    expect(calls[0]![3]).toContain('poller could not reach gcloud -- ${why}')
+    expect(calls[1]![3]).toContain('seriesProbe.ok ? null : `the timeSeries call FAILED')
   })
 })
