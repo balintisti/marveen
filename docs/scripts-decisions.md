@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **211** kovetett fajl, ebbol
-**58** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **212** kovetett fajl, ebbol
+**59** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (1)
 
@@ -38,6 +38,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/__tests__/idle-reporter.test.py`
 
 - MIERT PYTHON-TESZT ES NEM VITEST: a szkript szandekosan ONALLO -- semmit nem
+
+### `scripts/__tests__/outgoing-gate-entry-seam.test.py`
+
+- WHY NOT `elif` (marveen's ruling, didi's mechanism). `elif` closes the chain, so control resumes
 
 ### `scripts/__tests__/telegram-reply-guard-agent-id.test.py`
 

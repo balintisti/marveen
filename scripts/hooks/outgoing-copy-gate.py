@@ -714,7 +714,29 @@ def main():
     tool_input = payload.get("tool_input") or {}
 
     if re.search(r"telegram.*__reply$", tool, re.I):
-        telegram_gate(tool_input)  # exits; never falls through
+        telegram_gate(tool_input)
+        # UNREACHABLE TODAY, AND THAT IS THE POINT (card 9106d8e6). Every path in
+        # telegram_gate exits -- measured 2026-09-06: five exits, all hard (bare return 0,
+        # sys.exit 4, raise 1), so a return would be a deliberate edit, not a slip.
+        #
+        # But if one is ever added, control falls PAST this branch: a telegram tool name
+        # does not match `send_email`, is not `Bash`, and lands in `else: sys.exit(0)` --
+        # a SILENT pass-through on precisely the path that inspects user-facing text.
+        #
+        # `elif` does NOT fix that (marveen's ruling; didi measured the mechanism): it
+        # closes the chain, control resumes after it with `text`/`unreadable` unassigned,
+        # and the hook dies with exit 1 + traceback. Per this file's own contract that is
+        # not a block -- it is a hook error, and the call proceeds. Loud pass-through
+        # instead of silent, with the pass-through intact.
+        #
+        # So the fail-closed form is an explicit exit 2 -- NOT merely "non-zero", which
+        # would ship exactly the exit-1 behaviour this card rejects.
+        sys.stderr.write(
+            "KIMENO-SZOVEG KAPU: TILTVA -- a telegram_gate visszatert.\n"
+            "Ez nem tortenhet meg: a telegram-ag minden utja kilep. Ha valaki `return`-t\n"
+            "irt bele, a kapu innentol NEM vizsgalja a kimeno szoveget, ezert megtagadom.\n"
+        )
+        sys.exit(2)
     if re.search(r"send_email", tool, re.I):
         text, unreadable = collect_mcp_body(tool_input), None
     elif tool == "Bash":
