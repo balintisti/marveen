@@ -79,10 +79,64 @@ describe('bekotes: a hivasi helyek TENYLEG atadjak az okot', () => {
     // a `GCLOUD_STDIO` azert lett nevesitett export, mert bare literalkent a bekotest semmi nem
     // allitotta -- tizenot teszt maradt zold egy visszavont javitas mellett.
     const src = readFileSync(new URL('../web/uptime-alert-watcher.ts', import.meta.url), 'utf-8')
-    const calls = src.split('buildUnreadableNotice(').slice(1)
+
+    // ARGUMENTUM-HATOKOR, nem fajl-hatokor (didi merte 2026-09-06, f3808792 komment 3): egy
+    // fajl-hatokoru `toContain` NEMAN atengedi azt a refaktort, ami a literalt a helyen hagyja
+    // (kommentben, konstansban) es a HIVASBOL veszi ki -- vagyis pontosan azt az iranyt, amiert
+    // ez a pin letezik. Merve: az ok kivetele az 1. hivasbol 5/5 ZOLDET hagyott.
+    const argsOf = (needle: string): string[][] =>
+      src.split(needle).slice(1).map((tail) => {
+        let depth = 1
+        let i = 0
+        for (; i < tail.length && depth > 0; i++) {
+          if ('([{'.includes(tail[i]!)) depth++
+          else if (')]}'.includes(tail[i]!)) depth--
+        }
+        const inner = tail.slice(0, i - 1)
+        const args: string[] = []
+        let d = 0
+        let cur = ''
+        for (const ch of inner) {
+          if ('([{'.includes(ch)) d++
+          else if (')]}'.includes(ch)) d--
+          if (ch === ',' && d === 0) { args.push(cur.trim()); cur = '' } else cur += ch
+        }
+        if (cur.trim() !== '') args.push(cur.trim())
+        return args
+      })
+
+    const calls = argsOf('buildUnreadableNotice(')
     expect(calls).toHaveLength(2)                       // a populacio, kimondva
-    // az elso hivas egysoros, a masodik tobbsoros -- mindkettonek hordoznia kell az okot
-    expect(src).toContain('`poller could not reach gcloud -- ${why}`')
-    expect(src).toContain('seriesProbe.ok ? null : `the timeSeries call FAILED')
+
+    // STRUKTURA 1 -- ARITY: mindket hivas NEGY argumentumot ad at.
+    // AMIT EGYEDUL O FOG, es ez didi matrixabol derult ki (2026-09-06): NEM az "ok kiesik a
+    // hivasbol" eset -- azt NEGY assert fogja, tehat ott az arity nem teherhordo. Az egyetlen
+    // csalad, ahol egyedul all: egy OTODIK argumentum (`..., reason, extra)`) -- ott a backtick,
+    // a sortores es a kotes MIND ZOLD. Egy parameter hozzaadasa hetkoznapi refaktor, tehat ez
+    // nem diszlet; csak nem azon a csaladon keresi meg a helyet, amit a nevehez irtunk.
+    for (const args of calls) expect(args).toHaveLength(4)
+
+    // STRUKTURA 2 -- A VAGAS EPSEGE, es ez didi merese nyoman kerult ide (f3808792, 2026-09-06).
+    // Az `argsOf` zarojelet SZAMOL es nem tud sztringrol: egy paratlan zarojel a UZENET-SZOVEGBEN
+    // korabban (vagy kesobb) vagja el az argumentumot. Merve: a vagas ilyenkor is NEGY argumentumot
+    // ad, tehat az arity ZOLD marad -- a hibas vagas jele az, hogy a toredek PARATLAN szamu
+    // backtickot hordoz. Ez az allitas PROZA-FUGGETLEN.
+    // KORAI vagas (paratlan ZARO zarojel): a toredek paratlan szamu backtickot hordoz.
+    for (const args of calls) expect(args[3]!.split('`').length % 2).toBe(1)
+    // KESEI vagas (paratlan NYITO zarojel): a toredek ATFUT a hivason es SORTOREST nyel. Merve:
+    // ott az arity 4 MARAD es a zarojelek is kiegyensulyozottak (3/3), tehat sem az arity, sem a
+    // zarojel-parositas nem fogja -- ez a ket assert egyutt hatarolja a vagast MINDKET iranybol.
+    // KIMONDOTT KORLAT: ma mindket hivas 4. argumentuma EGY soros. Egy szandekosan tobbsoros
+    // negyedik argumentum ezt megbuktatna -- HANGOS, alak-valtozasra, nem prozara.
+    for (const args of calls) expect(args[3]!).not.toContain('\n')
+
+    // KOTES-AZONOSSAG: a 4. argumentum azt az AZONOSITOT hordozza, ami az OKOT viszi -- nem egy
+    // konkret megfogalmazast. didi merte, hogy a regi, PROZARA horgonyzott alak egy sima
+    // ATFOGALMAZASRA is pirosra ment, es az sokkal kozonsegesebb szerkesztes, mint egy hoist:
+    // egy hamis riasztas, aminek a kezenfekvo "javitasa" az azonossag fellazitasa -- utana a
+    // null-helyettesites es a hibas vagas NEMAN atmegy, mikozben az arity zolden orzottnek latszik.
+    // KIMONDOTT KORLAT: a literal valtozoba emelese ezt TOVABBRA IS megbuktatja (a hangos irany).
+    expect(calls[0]![3]).toContain('${why}')
+    expect(calls[1]![3]).toContain('seriesProbe.reason')
   })
 })
