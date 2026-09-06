@@ -23,8 +23,10 @@
 // MEASURED, so it is not assumed: the token answers 200 to the issues endpoint
 // and 403 to a status write (2026-09-06). This reader cannot change anything in
 // Sentry even if it tried.
+import { readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { logger } from '../logger.js'
-import { MAIN_AGENT_ID } from '../config.js'
+import { MAIN_AGENT_ID, PROJECT_ROOT } from '../config.js'
 import { createAgentMessage, getAgentMessage } from '../db.js'
 import { getSecret } from './vault.js'
 import { redactSecrets, type Probe } from './uptime-alert-watcher.js'
@@ -66,14 +68,54 @@ const STATS_PERIOD = '90d'
 /** Sentry's own page cap for this endpoint. */
 const PAGE_LIMIT = 100
 
-// In-memory: a dashboard restart re-seeds, so the next tick reports the standing
-// total once rather than replaying the backlog issue by issue. DELIBERATE --
-// the alternative is a table whose only job is to suppress one summary line.
-let state: SentryIssueState = NO_SENTRY_STATE
+/**
+ * Where the ONE surviving number lives -- card 65a324b2.
+ *
+ * Everything else stays in memory on purpose: a restart re-seeds, so the next
+ * tick reports the standing total once rather than replaying the backlog issue
+ * by issue. What that rule also swallowed was an issue that FIRST APPEARED
+ * while the process was down, and a single watermark is enough to stop it,
+ * because `firstSeen` already travels with every issue. A file with one field,
+ * not a table.
+ */
+export const SENTRY_WATERMARK_PATH = join(PROJECT_ROOT, 'store', 'sentry-issue-watermark.json')
+
+/**
+ * Read the watermark. EVERY failure means "no watermark", never a crash and
+ * never a zero: a missing file is a first run, and a corrupt one must not be
+ * read as 1970, which would classify the entire backlog as arrivals.
+ */
+export function loadWatermark(path = SENTRY_WATERMARK_PATH): number | undefined {
+  try {
+    const raw: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    const v = (raw as { lastReadAtMs?: unknown } | null)?.lastReadAtMs
+    return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Persist the watermark. A failure here is logged and NOT thrown: losing the
+ * watermark costs one gap's worth of silence, while throwing would take down
+ * the tick that was about to report actual issues.
+ */
+export function saveWatermark(ms: number | undefined, path = SENTRY_WATERMARK_PATH): void {
+  if (ms == null) return
+  try {
+    writeFileSync(path, `${JSON.stringify({ lastReadAtMs: ms }, null, 2)}\n`, 'utf8')
+  } catch (err) {
+    logger.warn(`[sentry] could not persist the read watermark: ${String(err)}`)
+  }
+}
+
+// In-memory apart from the watermark above, which is loaded once at module
+// start so the FIRST tick of a new process can tell a gap arrival from backlog.
+let state: SentryIssueState = { ...NO_SENTRY_STATE, lastReadAtMs: loadWatermark() }
 
 /** Test seam: reset the module's memory between cases. */
-export function __resetSentryState(): void {
-  state = NO_SENTRY_STATE
+export function __resetSentryState(watermark?: number): void {
+  state = watermark == null ? NO_SENTRY_STATE : { ...NO_SENTRY_STATE, lastReadAtMs: watermark }
 }
 
 function token(): Probe<string> {
@@ -200,6 +242,7 @@ export async function sentryTick(now = Date.now()): Promise<void> {
     // likeliest blind path of all -- and the branch that most needs the hourly
     // cap would be the one branch without it.
     state = decision.next
+    saveWatermark(state.lastReadAtMs)
     const notice = buildUnreadableSentryNotice(decision, reading, now)
     if (notice != null) enqueueVerified(`${notice} (cause: ${tokenProbe.reason})`)
     return
@@ -213,6 +256,7 @@ export async function sentryTick(now = Date.now()): Promise<void> {
     const reading: SentryReading = { issues: [], orgsQueried: [], orgsFailed: [] }
     const decision = decideSentryIssues(reading, state, now)
     state = decision.next
+    saveWatermark(state.lastReadAtMs)
     const notice = buildUnreadableSentryNotice(decision, reading, now)
     if (notice != null) {
       // The org list FAILING and the account having no orgs are different facts.
@@ -244,6 +288,7 @@ export async function sentryTick(now = Date.now()): Promise<void> {
   const reading: SentryReading = { issues, orgsQueried: orgs, orgsFailed }
   const decision = decideSentryIssues(reading, state, now)
   state = decision.next
+  saveWatermark(state.lastReadAtMs)
 
   const unreadable = buildUnreadableSentryNotice(decision, reading, now)
   if (unreadable != null) enqueueVerified(unreadable)

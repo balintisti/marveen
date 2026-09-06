@@ -10,7 +10,15 @@ import {
   type SentryIssue,
   type SentryReading,
 } from '../sentry-issues.js'
-import { orgsFromPayload, issuesFromPayload } from '../web/sentry-issue-watcher.js'
+import {
+  orgsFromPayload,
+  issuesFromPayload,
+  loadWatermark,
+  saveWatermark,
+} from '../web/sentry-issue-watcher.js'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const NOW = 1_788_000_000_000
 
@@ -253,5 +261,152 @@ describe('payload parsing keeps ABSENT distinct from zero', () => {
     expect(orgsFromPayload([{ slug: 'delta-crm' }, { slug: 'agrotech-cv' }])).toEqual(['delta-crm', 'agrotech-cv'])
     expect(orgsFromPayload([{ slug: 1 }, { slug: '' }, {}, null])).toEqual([])
     expect(orgsFromPayload(null)).toEqual([])
+  })
+})
+
+
+/**
+ * CARD 65a324b2 -- an issue that first appears while the poller is DOWN.
+ *
+ * The seeding rule (above) is right and stays: a restart must not replay the
+ * backlog. What it also swallowed is an ARRIVAL during the gap, because a cold
+ * start called everything standing "history". One persisted watermark separates
+ * the two, and `firstSeen` was already in the payload.
+ *
+ * EVERY CASE HERE PUTS A GAP ARRIVAL AND A PRE-GAP ISSUE IN THE SAME READING.
+ * With only arrivals, an implementation that announced the whole backlog on a
+ * cold start would pass -- which is the exact behaviour the seeding rule exists
+ * to prevent, so the fixture has to be able to fail in both directions.
+ */
+describe('an arrival during a restart gap is not backlog (card 65a324b2)', () => {
+  const WATERMARK = Date.parse('2026-09-05T00:00:00Z')
+  const BEFORE = { firstSeen: '2026-09-01T00:00:00Z' }
+  const AFTER = { firstSeen: '2026-09-05T12:00:00Z' }
+
+  it('announces ONLY what first appeared after the watermark, and seeds the rest', () => {
+    const old1 = issue('1', 'delta-crm', BEFORE)
+    const old2 = issue('2', 'delta-crm', BEFORE)
+    const gap = issue('3', 'delta-crm', AFTER)
+    const d = decideSentryIssues(
+      reading({ issues: [old1, old2, gap] }),
+      { ...NO_SENTRY_STATE, lastReadAtMs: WATERMARK },
+      NOW,
+    )
+    expect(d.coldStart).toBe(true)
+    expect(d.gapArrivals).toBe(1)
+    expect(d.newlySeen.map(i => i.id)).toEqual(['3'])
+    // The backlog is still counted and still not listed.
+    expect(d.totalIssues).toBe(3)
+    expect(d.suppressed).toBe(0)
+  })
+
+  it('WITHOUT a watermark the seeding behaviour is unchanged -- a genuine first run', () => {
+    const d = decideSentryIssues(
+      reading({ issues: [issue('1', 'delta-crm', BEFORE), issue('3', 'delta-crm', AFTER)] }),
+      NO_SENTRY_STATE,
+      NOW,
+    )
+    expect(d.coldStart).toBe(true)
+    expect(d.gapArrivals).toBe(0)
+    expect(d.newlySeen).toEqual([])
+  })
+
+  it('an UNREADABLE firstSeen counts as history, never as an arrival', () => {
+    const d = decideSentryIssues(
+      reading({
+        issues: [
+          issue('1', 'delta-crm', { firstSeen: null }),
+          issue('2', 'delta-crm', { firstSeen: 'not-a-date' }),
+          issue('3', 'delta-crm', AFTER),
+        ],
+      }),
+      { ...NO_SENTRY_STATE, lastReadAtMs: WATERMARK },
+      NOW,
+    )
+    // The control is the third issue: the meter CAN say yes, so the two zeros
+    // are about the timestamps and not about a filter that rejects everything.
+    expect(d.newlySeen.map(i => i.id)).toEqual(['3'])
+  })
+
+  it('EXACTLY AT the watermark is history -- we had already read that tick', () => {
+    // Without this case a `>` / `>=` mutation is a tautology: no fixture would
+    // sit between the two thresholds, so the probe could not fail either way.
+    const d = decideSentryIssues(
+      reading({
+        issues: [
+          issue('at', 'delta-crm', { firstSeen: '2026-09-05T00:00:00Z' }),
+          issue('after', 'delta-crm', AFTER),
+        ],
+      }),
+      { ...NO_SENTRY_STATE, lastReadAtMs: WATERMARK },
+      NOW,
+    )
+    expect(d.newlySeen.map(i => i.id)).toEqual(['after'])
+  })
+
+  it('caps the listing like any other tick, and reports the remainder as a count', () => {
+    const many = Array.from({ length: MAX_ANNOUNCE_PER_TICK + 3 }, (_, n) =>
+      issue(`gap-${n}`, 'delta-crm', AFTER),
+    )
+    const d = decideSentryIssues(
+      reading({ issues: [issue('old', 'delta-crm', BEFORE), ...many] }),
+      { ...NO_SENTRY_STATE, lastReadAtMs: WATERMARK },
+      NOW,
+    )
+    expect(d.gapArrivals).toBe(MAX_ANNOUNCE_PER_TICK + 3)
+    expect(d.newlySeen).toHaveLength(MAX_ANNOUNCE_PER_TICK)
+    expect(d.suppressed).toBe(3)
+  })
+
+  it('the notice says the arrivals are arrivals, and still reports the standing total', () => {
+    const d = decideSentryIssues(
+      reading({ issues: [issue('1', 'delta-crm', BEFORE), issue('3', 'delta-crm', AFTER)] }),
+      { ...NO_SENTRY_STATE, lastReadAtMs: WATERMARK },
+      NOW,
+    )
+    const notice = buildSentryNotice(d)
+    expect(notice).toContain('FIRST READ: 2 unresolved')
+    expect(notice).toContain('NOT RUNNING')
+    expect(notice).toContain('BACKEND-3')
+    // and the pre-gap issue is NOT listed -- the half that makes this a fix
+    // rather than "announce everything after a restart".
+    expect(notice).not.toContain('BACKEND-1')
+  })
+
+  it('a BLIND tick does not move the watermark -- that would erase the gap it measures', () => {
+    const before = { ...NO_SENTRY_STATE, lastReadAtMs: WATERMARK }
+    const blind = decideSentryIssues(
+      reading({ orgsQueried: [], orgsFailed: [{ org: 'delta-crm', reason: '403' }] }),
+      before,
+      NOW,
+    )
+    expect(blind.next.lastReadAtMs).toBe(WATERMARK)
+    // CONTROL: a tick that DID read moves it, so the assertion above is about
+    // the blind branch and not about a watermark that never moves at all.
+    const ok = decideSentryIssues(reading({ issues: [issue('1')] }), before, NOW)
+    expect(ok.next.lastReadAtMs).toBe(NOW)
+  })
+})
+
+describe('the watermark file (card 65a324b2)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sentry-wm-'))
+
+  it('round-trips a value', () => {
+    const path = join(dir, 'ok.json')
+    saveWatermark(1_788_000_000_000, path)
+    expect(loadWatermark(path)).toBe(1_788_000_000_000)
+  })
+
+  it('a MISSING file is a first run, not a zero', () => {
+    expect(loadWatermark(join(dir, 'nope.json'))).toBeUndefined()
+  })
+
+  it('a CORRUPT file is a first run, not 1970 -- which would announce the backlog', () => {
+    const path = join(dir, 'bad.json')
+    writeFileSync(path, '{ this is not json', 'utf8')
+    expect(loadWatermark(path)).toBeUndefined()
+    const wrongType = join(dir, 'wrong.json')
+    writeFileSync(wrongType, JSON.stringify({ lastReadAtMs: 'yesterday' }), 'utf8')
+    expect(loadWatermark(wrongType)).toBeUndefined()
   })
 })

@@ -55,6 +55,21 @@ export function issueKey(i: SentryIssue): string {
 }
 
 /**
+ * Did this issue first appear AFTER the given watermark? (card 65a324b2)
+ *
+ * UNPARSEABLE OR ABSENT `firstSeen` COUNTS AS HISTORY, NOT AS AN ARRIVAL, and
+ * the direction is deliberate. The opposite default would turn one malformed
+ * payload into a burst of announcements about a backlog nobody asked for --
+ * the exact outcome the seeding rule exists to prevent. The cost is the stated
+ * one: an arrival whose timestamp we cannot read stays silent.
+ */
+export function firstSeenAfter(i: SentryIssue, sinceMs: number): boolean {
+  if (i.firstSeen == null) return false
+  const t = Date.parse(i.firstSeen)
+  return Number.isFinite(t) && t > sinceMs
+}
+
+/**
  * How many individual issues one tick may announce.
  *
  * NOT arbitrary, and not a tuning knob: the fleet queue is the same queue the
@@ -90,6 +105,23 @@ export interface SentryIssueState {
    * module reports arrivals, which is what a watcher is for.
    */
   seeded: boolean
+  /**
+   * When the last SUCCESSFUL read happened -- the only field that survives a
+   * restart, and the whole of card 65a324b2.
+   *
+   * The rest of this state is per-process, and that is deliberate: a restart
+   * re-seeds, so whatever stands at that moment is backlog rather than 66
+   * notices at once. The cost didi measured is that an issue which FIRST
+   * APPEARS while the process is DOWN is absorbed by the same rule and never
+   * announced -- the mirror of card 72cc2172, where per-process state caused
+   * repeats instead of silence.
+   *
+   * One timestamp is enough to close it, because `firstSeen` already travels
+   * with every issue: on a cold start anything newer than this watermark is an
+   * ARRIVAL, not history. Keeping the whole `seen` set would buy nothing more
+   * and would put 69 keys on disk to say what one number says.
+   */
+  lastReadAtMs?: number
   /** When the current blind spell was last announced. Absent = not blind. */
   blindAnnouncedAtMs?: number
   /** When the current blind spell STARTED, so a repeat can say how long. */
@@ -119,6 +151,13 @@ export interface SentryIssueDecision {
   suppressed: number
   /** True on the seeding tick: report the standing total, not each issue. */
   coldStart: boolean
+  /**
+   * How many issues first appeared AFTER the last successful read -- non-zero
+   * only on a cold start that had a watermark to compare against. Separate from
+   * `newlySeen.length` because the cap applies to what is LISTED, never to what
+   * is counted (card 65a324b2).
+   */
+  gapArrivals: number
   /** Unresolved issues visible this tick, across every org that answered. */
   totalIssues: number
   /**
@@ -171,9 +210,21 @@ export function decideSentryIssues(
   const fresh = unique.filter(i => !was.has(issueKey(i)))
   const coldStart = !prev.seeded
 
-  // On the seeding tick nothing is "new" -- everything standing is history.
-  const announced = coldStart ? [] : fresh.slice(0, MAX_ANNOUNCE_PER_TICK)
-  const suppressed = coldStart ? 0 : Math.max(0, fresh.length - announced.length)
+  // A COLD START IS NOT ALWAYS A FIRST RUN -- card 65a324b2. With a watermark
+  // from a previous process, the issues that appeared DURING the gap are news;
+  // without one (a genuine first run) every standing issue is backlog, which is
+  // the behaviour this module shipped with and which stays unchanged.
+  const since = prev.lastReadAtMs
+  const gapArrivals = coldStart && since != null ? fresh.filter(i => firstSeenAfter(i, since)) : []
+
+  // On the seeding tick nothing is "new" -- everything standing is history,
+  // EXCEPT what arrived while nobody was looking.
+  const announced = coldStart
+    ? gapArrivals.slice(0, MAX_ANNOUNCE_PER_TICK)
+    : fresh.slice(0, MAX_ANNOUNCE_PER_TICK)
+  const suppressed = coldStart
+    ? Math.max(0, gapArrivals.length - announced.length)
+    : Math.max(0, fresh.length - announced.length)
 
   // BLIND covers both halves: an org that failed, and a tick that could not ask
   // anyone at all. The second is the likelier one in practice (no token, vault
@@ -189,6 +240,7 @@ export function decideSentryIssues(
     newlySeen: announced,
     suppressed,
     coldStart,
+    gapArrivals: gapArrivals.length,
     totalIssues: unique.length,
     noIssues: unique.length === 0,
     blind,
@@ -201,6 +253,14 @@ export function decideSentryIssues(
       // the cap would turn into a rolling drip instead of a one-off summary.
       seen: [...prev.seen, ...fresh.map(issueKey)].filter((k, n, a) => a.indexOf(k) === n),
       seeded: prev.seeded || orgsQueried.length > 0,
+      // ONLY A SUCCESSFUL READ MOVES THE WATERMARK. A blind tick that advanced
+      // it would erase the very gap the watermark exists to measure -- the same
+      // shape as a global cursor that a zero-result round still costs.
+      ...(orgsQueried.length > 0
+        ? { lastReadAtMs: nowMs }
+        : prev.lastReadAtMs != null
+          ? { lastReadAtMs: prev.lastReadAtMs }
+          : {}),
       ...(blind
         ? {
             blindSinceMs: blindSinceMs ?? nowMs,
@@ -229,11 +289,29 @@ function describe(i: SentryIssue): string {
 export function buildSentryNotice(d: SentryIssueDecision): string | null {
   if (d.coldStart) {
     if (d.totalIssues === 0) return null // the zero case is the unreadable notice's job
+    const head =
+      `[sentry] FIRST READ: ${d.totalIssues} unresolved issue(s) standing in the silent band. `
+    if (d.newlySeen.length === 0) {
+      return (
+        head +
+        'Nobody was notified about any of them -- there is no Sentry seat, so this poller is the ' +
+        'only reader. Not announcing them one by one: they are backlog, not news. ' +
+        'From here on this poller reports ARRIVALS.'
+      )
+    }
+    // THE GAP HALF IS SAID FIRST-CLASS, not as a footnote on the backlog line:
+    // these are the only issues in the payload that nobody could have seen.
+    const gapLines = d.newlySeen.map(i => `  - ${describe(i)}`)
+    const gapTail =
+      d.suppressed > 0
+        ? `\n  ...and ${d.suppressed} more that also arrived during the gap, not listed so this ` +
+          'notice cannot flood the fleet queue. They are recorded and will not repeat.'
+        : ''
     return (
-      `[sentry] FIRST READ: ${d.totalIssues} unresolved issue(s) standing in the silent band. ` +
-      'Nobody was notified about any of them -- there is no Sentry seat, so this poller is the ' +
-      'only reader. Not announcing them one by one: they are backlog, not news. ' +
-      'From here on this poller reports ARRIVALS.'
+      head +
+      `${d.gapArrivals} of them FIRST APPEARED while this poller was NOT RUNNING, so they are ` +
+      `ARRIVALS, not backlog:\n${gapLines.join('\n')}${gapTail}\n` +
+      'The rest stands as backlog; from here on this poller reports arrivals.'
     )
   }
   if (d.newlySeen.length === 0) return null
