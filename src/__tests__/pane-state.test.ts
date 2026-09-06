@@ -2420,6 +2420,29 @@ describe('paneShowsContextSaturation: a footerhez horgonyzott ablak (74c09fd7)',
     expect(paneShowsContextSaturation(spoof)).toBe(false)
   })
 
+  it('a footer-alaku sor FELJEBB nem nyeri el a horgonyt -- ALULROL keresunk', () => {
+    // EGY FOOTER-ALAKU SOROS FIXTURE NEM TUD KULONBSEGET TENNI fent es lent kozott -- ugyanaz a
+    // csapda, mint a 7-es melysegu banner: a helyes es a helytelen megvalositas egybeesik.
+    // Ezert all ITT egy MASODIK footer-alaku sor, a valodi FOLOTT.
+    //
+    // Nem elmeleti: a `capture-pane -p` csak a lathato kepernyot adja, de egy agens, aki
+    // footer-alaku sort ir ki egy jelentesben, EPP ilyen panelt allit elo. A fajl (c) ore
+    // ugyanezt a "sajat kepernyon idezett chrome" esetet vedi.
+    const quoted = [
+      'jelentes: a panel igy nezett ki:',
+      '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents',   // IDEZET, nem az elo footer
+      'tovabbi szoveg',
+      BANNER,
+      '─────────────────────────────────────────── Marveen ─',
+      '❯ ',
+      '────────────────────────────────────────────────────',
+      FOOTER,                                                              // az ELO footer
+      '                    ✔ Update installed · Restart to update',
+      '',
+    ].join('\n')
+    expect(paneShowsContextSaturation(quoted)).toBe(true)
+  })
+
   it('scrollback-idezet MESSZE a footer folott NEM tuzel -- az ablak tovabbra is farok-hatókörű', () => {
     const far = [BANNER, ...Array(20).fill('filler'), FOOTER].join('\n')
     expect(paneShowsContextSaturation(far)).toBe(false)

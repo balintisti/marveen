@@ -2212,7 +2212,22 @@ const CTX_SAT_RX = /100% context used|context (?:is |limit reached|window )?full
 export function paneShowsContextSaturation(capture: string): boolean {
   if (!capture || !capture.trim()) return false
   const lines = capture.split('\n')
-  const footerIdx = lines.findIndex((l) => IDLE_FOOTER_RX.test(l))
+  // FROM THE BOTTOM, and that is not a style choice (marveen's ruling, jarvis found it).
+  // `findIndex` takes the FIRST match, so a footer-shaped line quoted higher in the pane would
+  // anchor the window there and the real footer below it would never be reached -- a SECOND blind
+  // spot, on a different axis, introduced by the very change that exists to remove one. Measured
+  // on jarvis's synthetic pane: pane-end anchoring said true, top-search said FALSE.
+  //
+  // Scrollback is not the only source: `capture-pane -p` shows the visible screen, but an agent
+  // printing a footer-shaped line in a report puts one on the SAME screen. This file already
+  // guards that case at (c) below, and already uses this idiom at detectsThinkingBlockError.
+  //
+  // Free today, which is a side effect and not the reason: all seven saved captures carry exactly
+  // ONE footer match (line 23 of 25), so top and bottom agree on every real capture we hold.
+  let footerIdx = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (IDLE_FOOTER_RX.test(lines[i])) { footerIdx = i; break }
+  }
   const region = footerIdx < 0
     ? lines.slice(-CTX_SAT_FOOTER_REGION_LINES)
     : lines.slice(Math.max(0, footerIdx - CTX_SAT_LINES_ABOVE_FOOTER), footerIdx + 1)
