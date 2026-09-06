@@ -51,6 +51,12 @@ INDEX = os.path.join(MEM, 'MEMORY.md')
 LIMIT = 25000          # CHARACTERS, not bytes -- didi retracted the byte reading 2026-09-03
 LINE_LIMIT = 200       # AND a separate LINE ceiling: "MEMORY.md is 205 lines (limit: 200)"
 
+# THE TWO LINK FORMS THE REACHABILITY WALK FOLLOWS -- ONE definition, used at BOTH hops.
+# They are constants because hop 1 and hop 2 must not drift apart: the moment they use
+# two copies of the pattern, "reachable" means two different things in one output.
+MD_LINK = r'\(([^()\s]+\.md)\)'      # [title](file.md)
+WIKI_LINK = '[[%s]]'                   # [[stem]]
+
 # THE TWO CEILINGS BEHAVE DIFFERENTLY, and this script knew only one of them until
 # didi measured it (2026-09-03):
 #
@@ -322,20 +328,48 @@ def main():
         # both meters. So: count what the index points at, and what nothing points at.
         try:
             names = {f for f in os.listdir(MEM) if f.endswith('.md') and f != 'MEMORY.md'}
-            linked = set(re.findall(r'\(([^()\s]+\.md)\)', text)) & names
-            bodies = {}
+            linked = set(re.findall(MD_LINK, text)) & names
+            # A BODY THAT COULD NOT BE READ IS NOT AN EMPTY BODY. The handler below already
+            # refuses to report zero when the DIRECTORY cannot be read; the per-file read
+            # used to degrade to '' silently, which is the same zero one level down -- an
+            # unreadable body contributes no outbound links, so it pushes OTHER files
+            # toward NO PATH. Counted now, and the verdict says the number is a FLOOR.
+            bodies, unread = {}, []
             for f in names:
                 try:
                     bodies[f] = read(os.path.join(MEM, f))
                 except OSError:
                     bodies[f] = ''
-            unreachable = [
-                f for f in sorted(names - linked)
-                if not any('[[%s]]' % f[:-3] in bodies[i] for i in linked)
-            ]
+                    unread.append(f)
+            # HOP 2 FOLLOWS BOTH LINK FORMS -- marveen's ruling, card a22c40d5 (2026-09-06
+            # 05:28, one of its reasons corrected 05:35). It used to follow `[[stem]]` only,
+            # while the ARCHIVES name their contents in MARKDOWN -- so the meter reported
+            # NO PATH for files a reader reaches in a single click.
+            # THE DECISION DID NOT REST ON THE SIZE OF THE ERROR but on WHO follows these
+            # links: recall is a KEYWORD SEARCH (`GET /api/memories?q=`), so the link graph
+            # has NO machine consumer. Its consumer is a READER, and a reader follows both
+            # forms identically. (The price was measured twice and moved: 146 files on the
+            # pre-merge tree, 3 after -- and the ruling is independent of which.)
+            # NUMBERS MEASURED BEFORE THIS CHANGE ARE NOT COMPARABLE WITH NUMBERS AFTER IT:
+            # 176 / 30 / 27 / 181 all come from the wiki-only definition.
+            outbound = {i: set(re.findall(MD_LINK, bodies[i])) for i in linked}
+            def reachable_at_hop2(f):
+                stem = WIKI_LINK % f[:-3]
+                return any(stem in bodies[i] or f in outbound[i] for i in linked)
+            unreachable = [f for f in sorted(names - linked) if not reachable_at_hop2(f)]
             print(f'memories: {len(names)} | linked from the index: {len(linked)} | '
-                  f'reachable only via an inbound [[link]]: {len(names) - len(linked) - len(unreachable)} | '
+                  f'reachable only via an inbound link: {len(names) - len(linked) - len(unreachable)} | '
                   f'UNREACHABLE: {len(unreachable)}')
+            # A NUMBER WITHOUT ITS DEFINITION IS NOT A CLAIM (marveen's second condition on
+            # the same card). This line is not cosmetic: the change above re-interprets every
+            # earlier count, and without it the two definitions are indistinguishable in the
+            # output.
+            print('    definition: hop 1 = markdown link from the index; '
+                  'hop 2 = inbound [[wiki]] OR markdown link from a directly linked memory; '
+                  'depth 3+ counts as NO PATH')
+            if unread:
+                print(f'    UNREACHABLE IS A FLOOR: {len(unread)} memory file(s) could not be '
+                      f'read, so their outbound links are invisible to this walk')
             for f in unreachable[:5]:
                 print(f'    NO PATH: {f}')
         except OSError as exc:
