@@ -177,7 +177,7 @@ BACKLINK_END = '<!-- korabbi-archivumok:END -->'
 
 
 def archive_backlinks(arch):
-    """`[[wiki]]` links from this archive to every OTHER archive.
+    """`[[wiki]]` links from this archive to every other archive AND to the memories they hold.
 
     WHY THE NEWEST ARCHIVE IS THE HUB AND NOT A DATE CHAIN. `--check` resolves exactly two
     hops: a markdown `(file.md)` link from MEMORY.md, then `[[stem]]` links inside a file that
@@ -187,13 +187,47 @@ def archive_backlinks(arch):
     the depth-2 file was NOT reported, so the meter was not simply blind.
 
     So every archive is named by the hub, keeping the whole history at depth 2.
+
+    AND THE HUB MUST NAME THE MEMORIES TOO, NOT ONLY THE ARCHIVE FILES -- didi measured the gap
+    on 2026-09-06, and it is THIS FUNCTION'S OWN TRAP one day later. Naming just the archives
+    keeps the FILES at depth 2, but yesterday's victim is reachable only through the `[[handle]]`
+    written inside YESTERDAY's archive, and that archive is itself at depth 2 -- so the handle
+    sits at THREE. Reproduced independently on a two-day fixture with the shipped `--check`:
+    day one's victim reports `NO PATH` while both archives report reachable.
+
+    That is exactly the shape this file's eviction path already carries a warning about: the
+    container stops being orphaned while its contents stay `NO PATH`, and the meter goes green
+    ONE LEVEL UP. The first fix closed it for the SAME day only.
+
+    Both link forms are read, because the archives written BEFORE the handle existed hold their
+    entries as the original markdown index lines (09-03: 1039 lines, 09-05: 184) and would never
+    otherwise get a handle -- so this heals the past as well as the future.
+
+    THE COST LANDS WHERE THERE IS NO CEILING. Measured 2026-09-06: the union across every
+    archive is 280 names, ~11 KB, and it goes into an ARCHIVE file. MEMORY.md is the scarce
+    budget -- this costs it nothing, which is the same reasoning that keeps the pointer to one
+    maintained line. The block is REGENERATED between its markers, not appended, so it does not
+    grow without bound.
     """
     others = sorted(f for f in os.listdir(MEM)
                     if f.startswith('index-farkak-') and f.endswith('.md')
                     and os.path.join(MEM, f) != arch)
     if not others:
         return ''
+    on_disk = set(os.listdir(MEM))
+    held = set()
+    for f in others:
+        try:
+            other = read(os.path.join(MEM, f))
+        except OSError:
+            continue                      # a meter that cannot read skips, it does not invent
+        held |= set(re.findall(r'\]\(([^()\s]+\.md)\)', other))
+        held |= {m + '.md' for m in re.findall(r'\[\[([^\]]+)\]\]', other)}
+    held = {n for n in held
+            if n in on_disk and n != 'MEMORY.md' and not n.startswith('index-farkak-')}
     body = ''.join('- [[%s]]\n' % f[:-3] for f in others)
+    if held:
+        body += ''.join('- [[%s]]\n' % n[:-3] for n in sorted(held))
     return (BACKLINK_BEGIN + '\nKorabbi archivumok -- ez a fajl a HUB, ezek a hivatkozasok\n'
             'tartjak oket a `--check` altal merheto ket hopon belul:\n' + body
             + BACKLINK_END + '\n')
