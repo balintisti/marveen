@@ -26,6 +26,7 @@ import { startStuckInputWatcher } from './web/stuck-input-watcher.js'
 import { startInboxNudgeWatcher } from './web/inbox-nudge-watcher.js'
 import { startIdleAgentWatcher } from './web/idle-agent-watcher.js'
 import { startUptimeAlertWatcher } from './web/uptime-alert-watcher.js'
+import { startSentryIssueWatcher } from './web/sentry-issue-watcher.js'
 import { startStuckToolCallWatcher } from './web/stuck-tool-call-watcher.js'
 import { startReauthHealer } from './web/reauth-healer.js'
 import { startAutoRestartRunner } from './web/auto-restart-runner.js'
@@ -455,6 +456,12 @@ export function startWebServer(port = 3420): http.Server {
   // receiving GCP's notification, because the defect IS that the notification
   // reaches one address -- see web/uptime-alert-watcher.ts.
   const uptimeAlertInterval = webOnly ? undefined : startUptimeAlertWatcher()
+  // Sentry's unresolved issues, read rather than delivered (card 21634d17).
+  // There is no Sentry seat, so nobody receives Sentry's own notifications --
+  // 66 unresolved issues stood in that silent band when this was measured.
+  // A POLLER and not the `sentry-or` schedule: that schedule runs on an agent
+  // turn, and on 09-05 it retried 628 times against `busy` and never ran.
+  const sentryIssueInterval = webOnly ? undefined : startSentryIssueWatcher()
   if (!webOnly) logger.info('Idle-agent guard started (3min poll, 90s offset)')
 
   const reauthHealerInterval = webOnly ? undefined : startReauthHealer()
@@ -618,6 +625,7 @@ export function startWebServer(port = 3420): http.Server {
     if (inboxNudgeInterval) clearInterval(inboxNudgeInterval)
     if (idleAgentInterval) clearInterval(idleAgentInterval)
     if (uptimeAlertInterval) clearInterval(uptimeAlertInterval)
+    if (sentryIssueInterval) clearInterval(sentryIssueInterval)
     if (reauthHealerInterval) clearInterval(reauthHealerInterval)
     clearInterval(autoRestartInterval)
     clearInterval(modelFallbackInterval)
