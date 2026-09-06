@@ -100,3 +100,49 @@ describe('a MEMORY.md iras-kapu bekotese', () => {
     expect(src).toMatch(/if \(ensureMemoryIndexWriteGate\(agentName\)\)/)
   })
 })
+
+/**
+ * A FRISSEN LETREHOZOTT AGENS IS MEGKAPJA A KAPUKAT (kartya 5967c260).
+ *
+ * MERVE 2026-09-06: a sablon a staleness-hookot hordozza (1) es SEMMI MAST -- `egress-gate` 0,
+ * `self-pace-gate` 0, `memory-index-write-gate` 0 (kontroll: `PreCompact` 1, tehat a mero
+ * OLVASSA a sablont). Minden mas kaput az `ensure*` csalad ir be, es annak EGYETLEN hivasi helye
+ * volt: a `src/web.ts` hurokja a `startWebServer`-ben. Vagyis egy DASHBOARD-INDULASOK KOZOTT
+ * letrehozott agens kapu nelkul futott a kovetkezo restartig, es semmi nem szolt rola.
+ *
+ * A res PRE-EXISTING es nem a memoria-kapu sajatja: az `ensureEgressGate` ugyanigy hianyzott.
+ * Elo kitettseg a meres pillanataban NULLA volt (6/6 agens hordozza oket a legutobbi
+ * indulasbol) -- a res a KOVETKEZO, futas kozben letrehozott agenst erinti.
+ */
+describe('a frissen scaffoldolt agens is megkapja a kapukat (5967c260)', () => {
+  it('7. a `scaffoldAgentDir` a sablon UTAN futtatja az `ensure*` csaladot', () => {
+    const src = readFileSync(new URL('../web/agent-scaffold.ts', import.meta.url), 'utf-8')
+    const i = src.indexOf('export function scaffoldAgentDir')
+    expect(i).toBeGreaterThan(-1)
+    const body = src.slice(i, src.indexOf('\nexport ', i + 10))   // SZERKEZETI hatar, nem fix ablak
+    for (const fn of ['ensureAgentHooks', 'ensureAgentStalenessHook', 'ensureEgressGate',
+                      'ensureGovernanceGateCommands', 'ensureMemoryIndexWriteGate']) {
+      expect(body, `hianyzik a scaffoldbol: ${fn}`).toContain(`${fn}(name)`)
+    }
+    // A SORREND TEHERHORDO: mindegyik OLVASSA a settings-fajlt es beleolvaszt, tehat a
+    // sablon-vetesnek ELOTTUK kell allnia -- kulonben felulirja oket.
+    //
+    // AZ ELSO ALAKOM ITT GYENGE VOLT, es egy mutacio mutatta meg: a
+    // `indexOf('settings.json.template') < indexOf('ensureEgressGate')` allitas ATENGEDETT egy
+    // olyan valtozast, ami a kapuk UTAN irt MEGIS a settings-fajlba -- mert a sablon-SZTRING
+    // helye valtozatlan maradt. Egy pozicio-allitas a SZTRINGROL nem allitas az IRASROL.
+    // Ezert most azt merem, ami szamit: az ELSO `ensure*` hivas utan NINCS settings-iras.
+    const firstEnsure = body.indexOf('ensureAgentHooks(name)')
+    expect(firstEnsure).toBeGreaterThan(-1)
+    expect(body.slice(firstEnsure)).not.toContain('atomicWriteFileSync(settingsJson')
+    expect(body.indexOf('settings.json.template')).toBeLessThan(firstEnsure)
+  })
+
+  it('8. KONTROLL: a SABLON tenyleg nem hordozza oket -- ezert kell a 7.', () => {
+    // Ha a sablon egyszer megkapja oket, ez az eset bukik, es akkor a 7. duplikacio, nem hiany.
+    const tpl = readFileSync(new URL('../../templates/settings.json.template', import.meta.url), 'utf-8')
+    expect(tpl).toContain('PreCompact')          // a mero OLVASSA a sablont
+    expect(tpl).not.toContain('egress-gate')
+    expect(tpl).not.toContain('memory-index-write-gate')
+  })
+})

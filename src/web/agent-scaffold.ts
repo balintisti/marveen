@@ -985,6 +985,28 @@ export function scaffoldAgentDir(name: string) {
       atomicWriteFileSync(settingsJson, resolved)
     }
   }
+
+  // THE GATES, HERE AND NOT ONLY AT SERVER STARTUP (card 5967c260).
+  //
+  // MEASURED 2026-09-06: the template carries the staleness hook (1) and NOTHING ELSE --
+  // `egress-gate` 0, `self-pace-gate` 0, `db-destructive-gate` 0, `memory-index-write-gate` 0
+  // (control: `PreCompact` is 1, so the meter does read the template). Every other gate is
+  // written by the `ensure*` family, and that family has EXACTLY ONE call site: the loop in
+  // `src/web.ts` inside `startWebServer`. So an agent created BETWEEN dashboard restarts ran
+  // with no egress gate and no governance gate until somebody restarted the dashboard --
+  // and nothing said so.
+  //
+  // Zero live exposure when this was written (6/6 agents carry them, from the last startup);
+  // the gap is about the NEXT agent created at runtime. It is also PRE-EXISTING and not
+  // specific to the memory gate: `ensureEgressGate` had the same hole.
+  //
+  // AFTER the template seed, never before: each of these READS the settings file and merges
+  // into it, so seeding afterwards would overwrite them.
+  ensureAgentHooks(name)
+  ensureAgentStalenessHook(name)
+  ensureEgressGate(name)
+  ensureGovernanceGateCommands(name)
+  ensureMemoryIndexWriteGate(name)
 }
 
 // HTML comment markers that delimit the auto-generated fleet roster block.
