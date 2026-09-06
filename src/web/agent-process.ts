@@ -23,6 +23,7 @@ import {
   detectsModelConsentDialog,
   type FirstRunGateKind,
 } from '../pane-state.js'
+import { paneRemedy } from './parked-pane-remedy.js'
 import { agentDir, listAgentNames, readAgentModel, readAgentClaudeConfigDir, readAgentClaudePlan, readAgentChannelProvider, readAgentAuthMode, readAgentDisplayName, readAgentRemoteConfig, readAgentRemoteHost, readAgentMemoryIsolation } from './agent-config.js'
 import { resolveAgentConfigDir } from './claude-plans.js'
 import { provisionMemoryBoundaryDir } from './memory-boundary.js'
@@ -2166,7 +2167,35 @@ export async function isSessionReadyForPrompt(session: string, host: string | nu
   // the plain view says 'typing' do we pay for the second (-e, dim-stripped)
   // capture to decide whether anything REAL is parked (see
   // idleConsideringDimGhost / captureParkedInputView).
+  // A `read-the-pane` VERDIKT AZ EGYETLEN, AMI KIMONDJA MAGAROL, HOGY A PANEL HAZUDIK.
+  // `paneRemedy` sajat `why`-ja szo szerint: "the pane reads idle when it is actually parked".
+  // Enelkul a router a keszenleti agon `agentStuckSince.delete()`-et hiv es `continue`-zik, tehat
+  // az ESZKALACIO EL SEM INDUL azon a panelen, ahol a veszteseg tortenik (kartya 4dc05974).
+  //
+  // A KOLTSEGE NULLA, es ez merve van, nem feltetelezve: a `paneRemedy` es mind a harom
+  // fuggvenye, amit hiv (`busyEvidence`, `parkedInputText`, `detectsPermissionPrompt`), TISZTA
+  // string-fuggveny -- `execSync` 0, `spawn` 0, `capture-pane` 0 a `parked-pane-remedy.ts`-ben,
+  // es mindharom szignaturaja `(pane: string)`. A panelt ez a fuggveny MAR elfogta; a verdikt
+  // ugyanabbol a sztringbol keszul.
+  //
+  // CSAK a `read-the-pane` kerul ide, es a tobbi verdikt szandekosan NEM:
+  //   leave-it / press-enter ... a panel ilyenkor `busy` vagy `typing`, tehat az `idleOrGhost`
+  //                              MAR hamisat ad -- egy masodik kapu ugyanarra nem tesz hozza
+  //   answer-it ................ engedely-prompt, sajat utja van
+  //   none ..................... keszen all, VAGY a doboz annyira tulcsordult, hogy a capture-ben
+  //                              NINCS mit olvasni -- lasd a KIMONDOTT HATART lentebb
+  //
+  // A KIMONDOTT HATAR, MERVE (friday, 2026-09-06, mind a KILENC elo panel 24x80):
+  // ez a kapu EGY wrap-savot nyer vissza, nem az egesz vak tartomanyt. A vaksag NEM a
+  // `paneRemedy` tulajdonsaga, hanem a CAPTURE MAGASSAGAE -- `capture-pane -e -p` `-S` nelkul a
+  // LATHATO panelt adja, es a hatar a magassaggal egyutt mozog:
+  //     magassag 24 (a valosag) -> vak wrap 22-tol   |   25 -> 23   |   30 -> 28   |   40 -> 38
+  // Vagyis wrap<=20 mar ma is mukodik (`typing`), wrap 21 az, amit EZ a sor visszanyer, es
+  // wrap>=22 tovabbra is BAJT-AZONOS egy ures dobozzal (kontroll: ures doboz -> idle/none).
+  // A magassag emelese a savot MOZGATJA, nem szunteti meg, es MINDEN `capturePane`-fogyasztot
+  // erint -- ezert az kulon kartya, nem ennek a sornak a hatokore.
   const idleOrGhost = (plain: string): boolean =>
+    paneRemedy(plain).remedy !== 'read-the-pane' &&
     idleConsideringDimGhost(plain, detectPaneState(plain) === 'typing' ? captureParkedInputView(session, host) : null)
   const first = capturePane(session, host)
   if (first == null) { noteSaturationUnobserved(session); return false }
