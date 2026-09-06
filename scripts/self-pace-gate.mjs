@@ -440,6 +440,10 @@ export const REASON_HINT = {
     ' KIVALTO OK: operacios rendszer szintu utemezo indito/beküldo alakja.' +
     ' A tiszta listazas (crontab -l, launchctl list, atq) atmegy.' +
     ' HA DOKUMENTALSZ (a szoveg ADAT, nem hivas): NE fogalmazd at a szoveget -- egy pontos leiras atirasa azert, hogy egy szuron atcsusszon, a DOKUMENTUMOT rontja el. Valassz MASIK UTAT: a fajlt a Write eszkozzel ird (ne hej-heredoccal), vagy add `-d`/`--data` payloadkent -- azt a kapu blankolja.',
+  // ABOUT 'os-scheduler', THE ENTRY ABOVE. (Spelled out because the two comment
+  // blocks here document DIFFERENT detectors -- see the note below. dexter read
+  // the second one as belonging to the scheduler pattern and filed a
+  // contradiction that is not one: card d0ccaf9d, 2026-09-06.)
   // The only reason without a hint until now (card 97470e22, four measured
   // occurrences: a deny-list rationale, an installation-lane finding, and twice
   // a card comment). Every other reason tells the reader what DOES pass; this
@@ -447,7 +451,9 @@ export const REASON_HINT = {
   // until it slips through -- turning a precise text into an imprecise one to
   // satisfy a filter.
   //
-  // NO NARROWING HERE, and that is measured, not caution. These patterns scan
+  // ABOUT 'bash-self-inject', THE ENTRY BELOW -- NOT the scheduler entry above.
+  // NO NARROWING IN THE SELF-INJECT PATTERNS, and that is measured, not caution.
+  // These patterns scan
   // the naive segment on purpose, quoted regions and heredoc bodies included:
   // verified 2026-08-28 that the naive scan is what catches a real
   // `subprocess.run(['tmux','send-keys',...])` hidden in a python heredoc, in a bash
