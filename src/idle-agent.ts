@@ -725,19 +725,35 @@ export interface PendingRow {
  *  THAT HOLDS WITHIN ONE PROCESS LIFETIME, AND THE SENTENCE ABOVE USED TO SAY IT
  *  WITHOUT THE QUALIFIER (card 72cc2172). The caller's set lives in memory, so a
  *  restart clears it and every message still over the threshold is reported once
- *  more. Measured 2026-09-05 across all four notices of that day:
+ *  more. Measured 2026-09-05 -- and the FIRST version of this paragraph said "across
+ *  all four notices of that day ... there were no others", which was a PER-RECIPIENT
+ *  view of a PER-SENDER mechanism (didi, card 72cc2172). The guard tells the SENDER,
+ *  so one agent's inbox structurally contains only the groups where that agent was
+ *  the sender. That day produced SIXTEEN notices to FIVE senders; four of them were
+ *  mine, and I read my own inbox as the population.
  *
- *      09:16:26  msg A -- first crossing of the threshold
- *      09:18:07  RESTART
- *      09:19:37  msg A again
- *      09:27:07  msg B -- its own first crossing
- *      10:17:41  RESTART
- *      10:19:11  msg B again
+ *  Re-measured over all sixteen, grouping by (sender, reconstructed origin minute):
  *
- *  Every repeat was immediately preceded by a restart; there were no others. So the
- *  suppression works and its scope is the process, and the cost is bounded by how
- *  often the service restarts -- two deploys that day, two duplicates, zero on a
- *  quiet one.
+ *      dexter  origin ~06:40   07:42:29 (62m)   07:56:56 (76m)
+ *      friday  origin ~08:14   09:16:26 (62m)   09:19:37 (65m)
+ *      friday  origin ~08:26   09:27:07 (61m)   10:19:11 (113m)
+ *
+ *      THREE repeat groups, TEN single ones -- the ten are the control: the grouper
+ *      can say "not a repeat". The dexter pair is confirmed against the raw queue,
+ *      not just the notice text: message 11923 (dexter -> didi) was created 06:40:41
+ *      and delivered 08:49:44, so the SAME row was pending across both notices.
+ *
+ *  THE MECHANISM SURVIVED THE CORRECTION; ONLY THE DENOMINATOR CHANGED. All three
+ *  repeats are still restart-bracketed, and the third one on independent evidence
+ *  rather than assumption: this notice's pane-state suffix ("-- a panelje BUSY")
+ *  appears at exactly ONE clean boundary across all 51 notices ever sent (41 without,
+ *  10 with, changeover at id=11960 07:56:56, no interleaving), so a new build entered
+ *  service between 07:42:29 and 07:56:56. The notices' own text format is the proof.
+ *
+ *  So: THREE deploys that day, THREE duplicates, zero on a quiet one -- and the 3/3
+ *  correspondence comes from a fact already on the card, which recorded three
+ *  deployments. The suppression works, its scope is the process, and the cost is
+ *  bounded by how often the service restarts.
  *
  *  This qualifier is the whole fix, and the reason is not the duplicate messages.
  *  It is that the unqualified sentence reads as "a repeat is impossible", so the
