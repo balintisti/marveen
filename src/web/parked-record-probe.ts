@@ -63,7 +63,22 @@ export type ParkedRecordProbeOutcome = ParkedRecordVerdict | 'unknown-session'
  *  either finds the real name or finds nothing.
  *
  *  A session neither path can place returns null and is reported as
- *  'unknown-session' -- loud, never a null that flows into the verdict. */
+ *  'unknown-session' -- loud, never a null that flows into the verdict.
+ *
+ *  THE THREADED HALF IS A STRUCTURAL CHOICE AND IS NOT PINNED. Deleting the
+ *  `agent ??` and enumerating unconditionally leaves EVERY TEST GREEN -- measured,
+ *  not assumed (mutation: threading removed -> 9 passed, survives). At every call
+ *  site that exists today the two paths AGREE, so no test can separate them;
+ *  showing a difference would need a session name colliding across agents, which
+ *  is pathological and was not manufactured.
+ *
+ *  It stays for a reason that is about the tree, not the code: fifteen unmerged
+ *  fork branches touch channel-monitor.ts, so removing it buys an unmeasurable
+ *  simplification at the price of a real merge conflict, N times over. Keeping it
+ *  costs one `??`.
+ *
+ *  So: if you are here to simplify, this is the line to take -- and know that no
+ *  test will stop you, because none can. That is known, not overlooked. */
 export function agentForSession(session: string): string | null {
   for (const name of [MAIN_AGENT_ID, ...listAgentNames()]) {
     if (sessionNameForAgent(name) === session) return name
