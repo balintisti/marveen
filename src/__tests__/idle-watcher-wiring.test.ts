@@ -71,3 +71,31 @@ describe('the two wake thresholds are ordered, not merely set', () => {
     ).toBe(true)
   })
 })
+
+/**
+ * A VISSZAALLITAS TENYLEG LEFUT, ES A HELYES PONTON (kartya 72cc2172).
+ *
+ * A tiszta fuggveny (`coveredIdsStillPending`) unit-tesztelt -- de egy megvalositott es BE NEM
+ * KOTOTT kepesseg pontosan az a hiba, amiert ez a fajl letezik. Ezert a hivas is allitva van.
+ *
+ * ES POZICIOT ALLIT, NEM CSAK JELENLETET, es ez nem stilus: 2026-09-06-an ugyanebben a
+ * kodbazisban egy review megmerte, hogy egy `toContain`-alapu bekotes-allitas ATENGEDI a hivas
+ * ATHELYEZESET egy korai `return` ala -- a fuggveny ott van, es soha nem fut le hasznosan. A
+ * seed a szelekcio ELOTT kell fusson, kulonben a keszlet meg ures, amikor donteni kellene belole.
+ *
+ * KIMONDOTT HATAR, mint a fenti blokknal: ez FORRAS-allitas. Azt bizonyitja, hogy a ket sor
+ * egymashoz kepest jo sorrendben all, nem azt, hogy a futo folyamat helyesen viselkedik.
+ */
+describe('a megtagadas-keszlet visszaallitasa be van kotve', () => {
+  it('a watcher hivja a tiszta visszaallitot', () => {
+    expect(SRC).toMatch(/coveredIdsStillPending\(/)
+  })
+
+  it('a seed a SZELEKCIO ELOTT fut, nem utana', () => {
+    const seed = SRC.indexOf('seedPendingNoticed(live)')
+    const select = SRC.indexOf('stalePendingBySender(rows, now, pendingNoticed)')
+    expect(seed).toBeGreaterThan(-1)
+    expect(select).toBeGreaterThan(-1)      // KONTROLL: mindket horgony letezik, kulonben a
+    expect(seed).toBeLessThan(select)       // -1 < N osszehasonlitas trivialisan atmenne
+  })
+})

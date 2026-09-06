@@ -1061,7 +1061,7 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
       {
         msg: buildPendingStillWaitingNotice(
           'jarvis',
-          [{ to_agent: 'didi', created_at: Math.floor(NOW / 1000) - 5400 }],
+          [{ id: 1, to_agent: 'didi', created_at: Math.floor(NOW / 1000) - 5400 }],
           NOW,
           new Map([['didi', 'busy' as const]]),
         ),
@@ -1153,7 +1153,7 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
     {
       name: 'buildPendingStillWaitingNotice',
       msg: buildPendingStillWaitingNotice(
-        'jarvis', [{ to_agent: 'didi', created_at: Math.floor(NOW / 1000) - 5400 }],
+        'jarvis', [{ id: 1, to_agent: 'didi', created_at: Math.floor(NOW / 1000) - 5400 }],
         NOW, new Map([['didi', 'busy' as const]]),
       ),
     },
@@ -1205,7 +1205,7 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
     // pending ertesitesben volt. Egyutt a ket fel lefedte, de a MIENK nem a fajlrol szolt.
     const pending = buildPendingStillWaitingNotice(
       'jarvis',
-      [{ to_agent: 'didi', created_at: Math.floor(NOW / 1000) - 5400 }],
+      [{ id: 1, to_agent: 'didi', created_at: Math.floor(NOW / 1000) - 5400 }],
       NOW,
       new Map([['didi', 'busy' as const]]),
     )
@@ -1584,7 +1584,7 @@ describe('a message still queued long after it was sent (card 979283a9)', () => 
 
 describe('the notice itself must not send anyone back to the queue', () => {
   const NOW = 600_000_000
-  const rows = [{ to_agent: 'dexter', created_at: Math.floor((NOW - 70 * 60_000) / 1000) }]
+  const rows = [{ id: 1, to_agent: 'dexter', created_at: Math.floor((NOW - 70 * 60_000) / 1000) }]
   const BUSY = new Map<string, RecipientPaneState>([['dexter', 'busy']])
 
   it('names the recipient and how long it has waited', () => {
@@ -1616,7 +1616,7 @@ describe('the notice itself must not send anyone back to the queue', () => {
 // signal that is usually right earns the trust it spends on the case it cannot see.
 describe('the pending notice measures the recipient pane instead of asserting it', () => {
   const NOW = 600_000_000
-  const rows = [{ to_agent: 'dexter', created_at: Math.floor((NOW - 70 * 60_000) / 1000) }]
+  const rows = [{ id: 1, to_agent: 'dexter', created_at: Math.floor((NOW - 70 * 60_000) / 1000) }]
   const withState = (st: RecipientPaneState) =>
     buildPendingStillWaitingNotice('friday', rows, NOW, new Map([['dexter', st]]))
 

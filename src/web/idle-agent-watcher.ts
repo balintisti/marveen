@@ -26,6 +26,7 @@ import {
   type FleetAlert,
   NO_IDLE_STATE,
   type IdleAgentState,
+  coveredIdsStillPending,
   type IdleAgentThresholds,
   type WorkCheck,
 } from '../idle-agent.js'
@@ -85,10 +86,49 @@ const watchState = new Map<string, IdleAgentState>()
 
 // Message ids the sender has already been told about (card 979283a9). A message
 // still stuck an hour later must not produce a second notice every sweep -- the
-// guard would be loudest exactly when it is least useful. In memory on purpose:
-// the worst a restart costs is one repeated notice, and a table for it would be
-// state to maintain for a message that is by then already delivered.
+// guard would be loudest exactly when it is least useful.
+//
+// THE "IN MEMORY ON PURPOSE" NOTE THAT USED TO STAND HERE SAID THE WORST A RESTART COSTS IS ONE
+// REPEATED NOTICE, AND THAT A TABLE FOR IT WOULD BE STATE TO MAINTAIN. The second half was the
+// load-bearing one and it was true; the first half was measured on 2026-09-05 and it is three
+// duplicates on a three-deploy day, one per restart (card 72cc2172).
+//
+// No table was added. The notice is ALREADY a durable row in `agent_messages`, and it now records
+// which ids it covered, so the set is rebuilt from the rows that already exist -- the dedup is an
+// id join, not a (sender, recipient, minute) heuristic. This stays a CACHE: the seed runs once per
+// process and the prune below still bounds it.
 const pendingNoticed = new Set<number>()
+let pendingNoticedSeeded = false
+
+/** Restore the suppression set from the notices already on record (card 72cc2172).
+ *
+ *  Scoped to ids that are STILL PENDING, which is what bounds it: a covered id whose message has
+ *  since been delivered is irrelevant, and the prune in the sweep would drop it on the next tick
+ *  anyway. No LIMIT and no time horizon on purpose -- a capped scan would reintroduce exactly the
+ *  silent-boundary shape this card is about, and the population is small (measured 2026-09-06:
+ *  12 767 rows total, 1 304 of them from 'system').
+ *
+ *  A notice written before the marker existed parses to [], so it covers nothing. That direction
+ *  is deliberate: the failure mode of an unreadable old notice must be one extra message, never a
+ *  suppressed one. */
+function seedPendingNoticed(live: Set<number>): void {
+  if (pendingNoticedSeeded) return
+  pendingNoticedSeeded = true
+  try {
+    const rows = getDb()
+      .prepare("SELECT content FROM agent_messages WHERE from_agent = 'system' AND content LIKE '%covered-ids:%'")
+      .all() as { content: string }[]
+    let restored = 0
+    for (const id of coveredIdsStillPending(rows.map((r) => r.content), live)) {
+      if (!pendingNoticed.has(id)) { pendingNoticed.add(id); restored++ }
+    }
+    if (restored) logger.info({ idleGuard: true, restored }, 'message queue: suppression set restored from the notices on record')
+  } catch (err) {
+    // A meter that cannot read says so. Failing OPEN here costs one duplicate notice; failing
+    // closed would silence a real one, and that is the direction this guard exists to avoid.
+    logger.warn({ err }, 'message queue: could not restore the suppression set -- a stale message may be reported once more')
+  }
+}
 
 /** The sender-side queue sweep. Separated so the tick stays readable and this can
  *  be exercised on its own. */
@@ -99,6 +139,7 @@ function sweepStalePending(): void {
   // Forget ids that are no longer pending, so the set cannot grow without bound
   // and a message that queues again later is reported again.
   const live = new Set(rows.map((r) => r.id))
+  seedPendingNoticed(live)
   for (const id of pendingNoticed) if (!live.has(id)) pendingNoticed.delete(id)
 
   const now = Date.now()

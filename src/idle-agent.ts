@@ -763,6 +763,65 @@ export function stalePendingBySender(
   return out
 }
 
+/** THE COVERED-ID MARKER: the notice records WHICH messages it is about (card 72cc2172).
+ *
+ *  The suppression set lives in the watcher's memory, so a restart clears it and every message
+ *  still over the threshold is reported once more. Measured 2026-09-05: three deploys, three
+ *  duplicates. The durable record already exists -- the notice is itself a row in
+ *  `agent_messages` -- but nothing in it said which message it covered, so "have we already
+ *  told this sender" was only answerable by (sender, recipient, origin-minute), a heuristic
+ *  resting on a minute of rounding. Measured before building: 779 system rows say "sorban",
+ *  and ZERO carry a message id (marveen). With the id in the text it is an id join, and still
+ *  no new state.
+ *
+ *  IT LISTS EVERY COVERED ID, NOT THE ONES THE READER SEES. The human listing truncates at five
+ *  (`rows.slice(0, 5)`, and the same cap sits on two sibling notices), so a marker built from
+ *  the visible lines would silently stop covering the sixth message onward. Today that is
+ *  theoretical -- of 51 notices ever, 49 cover one message, one covers two, one covers three,
+ *  max 3 against a cap of 5 -- but it is cheap here and archaeology later.
+ *
+ *  A DEDICATED MARKER RATHER THAN THE PROSE, for the reason this repo has already paid for
+ *  once: a parser anchored on Hungarian wording breaks the moment someone rewords the sentence,
+ *  and the failure is a silent zero, not an error.
+ */
+const COVERED_IDS_PREFIX = '<!-- covered-ids: '
+
+export function coveredIdsMarker(ids: number[]): string {
+  return `${COVERED_IDS_PREFIX}${[...ids].sort((a, b) => a - b).join(',')} -->`
+}
+
+/** Ids a previous notice recorded. Returns [] for anything unparseable -- a notice written
+ *  before this marker existed must read as "covers nothing", never as "covers everything". */
+export function parseCoveredIds(text: string): number[] {
+  const out: number[] = []
+  for (const m of text.matchAll(/<!-- covered-ids: ([0-9,]*) -->/g)) {
+    for (const part of m[1].split(',')) {
+      const n = Number(part)
+      if (Number.isInteger(n) && n > 0) out.push(n)
+    }
+  }
+  return out
+}
+
+/** Which covered ids are worth restoring: the pure half of the restart fix (card 72cc2172).
+ *
+ *  It lives HERE and not in the watcher because that module's own docblock says so -- the
+ *  decision logic is unit-tested without tmux or a database, and the watcher is I/O. Left in the
+ *  watcher this would be reachable only by a source assertion, and this repo measured on
+ *  2026-09-06 what those are worth: they pin PRESENCE, not POSITION, so a call moved below an
+ *  early return keeps every one of them green.
+ *
+ *  Scoped to ids that are STILL PENDING, which is what bounds the set: a covered id whose
+ *  message has since been delivered is not suppression, it is history.
+ */
+export function coveredIdsStillPending(noticeTexts: string[], live: ReadonlySet<number>): Set<number> {
+  const out = new Set<number>()
+  for (const text of noticeTexts) {
+    for (const id of parseCoveredIds(text)) if (live.has(id)) out.add(id)
+  }
+  return out
+}
+
 /** What the sender is told. Deliberately not a nudge to resend.
  *
  *  `pending` lives in the database and survives a restart -- measured twice on
@@ -775,7 +834,10 @@ export type RecipientPaneState = 'busy' | 'idle' | 'unknown'
 
 export function buildPendingStillWaitingNotice(
   sender: string,
-  rows: { to_agent: string; created_at: number }[],
+  // `id` JOINED THIS SIGNATURE for the covered-id marker (card 72cc2172). The caller already
+  // passes PendingRow[], which carries it -- the parameter type was simply narrower than the
+  // argument, so nothing at any call site changes.
+  rows: { id: number; to_agent: string; created_at: number }[],
   nowMs: number,
   paneStates: ReadonlyMap<string, RecipientPaneState>,
 ): string {
@@ -836,6 +898,9 @@ export function buildPendingStillWaitingNotice(
     '',
     'Amit erdemes: ha DONTES vagy LELET volt benne, tedd a KARTYARA is. A kartya nem all',
     'sorba -- a cimzett akkor is latja, amikor a levelet meg nem olvasta el.',
+    '',
+    // From `rows`, NOT from the five printed above: see coveredIdsMarker's docblock.
+    coveredIdsMarker(rows.map((r) => r.id)),
   ].join('\n')
 }
 
