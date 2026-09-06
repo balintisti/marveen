@@ -1,4 +1,7 @@
 import { logger } from '../logger.js'
+import { MAIN_AGENT_ID } from '../config.js'
+import { listAgentNames } from './agent-config.js'
+import { sessionNameForAgent } from './session-names.js'
 import { getDb } from '../db.js'
 import { getInjectedPrompt } from './injected-prompt-registry.js'
 import { parkedRecordVerdict, type ParkedRecordVerdict } from './parked-record-evidence.js'
@@ -38,24 +41,35 @@ const SEC_TO_MS = 1000
  *  at its own boundary. Reading past it would mean changing the registry. */
 export const PROBE_FRESHNESS_MS = 2 * 60 * 1000
 
-export type ParkedRecordProbeOutcome = ParkedRecordVerdict | 'unknown-agent'
+export type ParkedRecordProbeOutcome = ParkedRecordVerdict | 'unknown-session'
 
-/** THERE IS NO session -> agent INVERSION HERE, AND THAT IS THE DESIGN.
+/** RESOLUTION ORDER: THREAD FIRST, ENUMERATE AS FALLBACK, LOUD IF NEITHER.
  *
- *  An earlier draft inverted the mapping by enumerating the forward resolver.
- *  Safe, but unnecessary: ALL THREE call sites of recoverStuckInputForSession
- *  already hold the agent id, and one of them derives the session FROM it
- *  (targets.push({ session: agentSessionName(a), agentName: a })). So the value
- *  is one frame up, already correct.
+ *  Two rulings landed on this, and they crossed in flight rather than
+ *  disagreeing. Both properties are real and this keeps both:
  *
- *  Threading it down instead of inverting deletes the failure class rather than
- *  making it loud: a wrong inverse yields a plausible name matching no
- *  from_agent row -> lastAgentSendAt null -> verdict 'act-on-record'. Silent AND
- *  toward acting. There is no safe version of that; there is a version where the
- *  question never arises. (marveen's ruling, card c29aaf14.)
+ *    THREADED (marveen 13462): every call site today already holds the agent id,
+ *      and one derives the session FROM it
+ *      (targets.push({ session: agentSessionName(a), agentName: a })). Taking
+ *      the value that is already in scope cannot be wrong.
+ *    ENUMERATED (marveen 13468): a FUTURE caller that does not hold the name
+ *      still gets an answer, instead of a loud null.
  *
- *  `agent` is nullable only because Target.agentName is optional in the type --
- *  that is the CALLER not having the value, which is reported, never guessed. */
+ *  What is forbidden either way is PARSING the session string. That is the one
+ *  that fails silently AND toward acting: a hand-rolled inverse yields a
+ *  plausible name for the main agent that matches no from_agent row ->
+ *  lastAgentSendAt null -> verdict 'act-on-record'. Enumeration is not parsing:
+ *  it matches against the ONLY authoritative map (sessionNameForAgent), so it
+ *  either finds the real name or finds nothing.
+ *
+ *  A session neither path can place returns null and is reported as
+ *  'unknown-session' -- loud, never a null that flows into the verdict. */
+export function agentForSession(session: string): string | null {
+  for (const name of [MAIN_AGENT_ID, ...listAgentNames()]) {
+    if (sessionNameForAgent(name) === session) return name
+  }
+  return null
+}
 
 /** Newest message SENT BY this agent, in ms, or null if it never sent one.
  *
@@ -79,17 +93,18 @@ export function probeParkedRecord(
   freshnessMs: number,
   now: number = Date.now(),
 ): ParkedRecordProbeOutcome {
-  if (agent == null) {
-    logger.warn({ session }, 'parked-record probe: caller passed no agent id (phase 1, no action)')
-    return 'unknown-agent'
+  const resolved = agent ?? agentForSession(session)
+  if (resolved == null) {
+    logger.warn({ session }, 'parked-record probe: session resolves to no agent (phase 1, no action)')
+    return 'unknown-session'
   }
   const record = getInjectedPrompt(session, now)
   const verdict = parkedRecordVerdict({
     recordAt: record?.at ?? null,
     now,
-    lastAgentSendAt: lastAgentSendAt(agent),
+    lastAgentSendAt: lastAgentSendAt(resolved),
     freshnessMs,
   })
-  logger.info({ session, agent, verdict }, 'parked-record probe (phase 1, observe only)')
+  logger.info({ session, agent: resolved, verdict }, 'parked-record probe (phase 1, observe only)')
   return verdict
 }

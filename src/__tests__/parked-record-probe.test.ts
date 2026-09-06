@@ -8,6 +8,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 let lastSendSecs: number | null = null
 
+vi.mock('../config.js', () => ({ MAIN_AGENT_ID: 'marveen' }))
+vi.mock('../web/agent-config.js', () => ({ listAgentNames: () => ['friday', 'didi'] }))
+vi.mock('../web/session-names.js', () => ({
+  sessionNameForAgent: (n: string) => (n === 'marveen' ? 'marveen-channels' : `agent-${n}`),
+}))
+
 vi.mock('../db.js', () => ({
   getDb: () => ({
     prepare: () => ({ get: () => (lastSendSecs == null ? undefined : { created_at: lastSendSecs }) }),
@@ -17,7 +23,7 @@ vi.mock('../logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn() },
 }))
 
-const { lastAgentSendAt, probeParkedRecord, PROBE_FRESHNESS_MS } =
+const { agentForSession, lastAgentSendAt, probeParkedRecord, PROBE_FRESHNESS_MS } =
   await import('../web/parked-record-probe.js')
 const { recordInjectedPrompt, getInjectedPrompt, _resetInjectedPromptsForTest } =
   await import('../web/injected-prompt-registry.js')
@@ -30,16 +36,26 @@ describe('parked-record probe (phase 1)', () => {
     lastSendSecs = null
   })
 
-  it('a caller that has no agent id is LOUD, and nothing is guessed from the session', () => {
-    expect(probeParkedRecord('agent-nobody', null, PROBE_FRESHNESS_MS, NOW)).toBe('unknown-agent')
+  it('threads the caller-supplied agent when it has one', () => {
+    lastSendSecs = null
+    recordInjectedPrompt('agent-friday', 'hi', NOW)
+    expect(probeParkedRecord('agent-friday', 'friday', PROBE_FRESHNESS_MS, NOW)).toBe('act-on-record')
   })
 
-  /** THE POINT OF THE REFACTOR: the probe must not be able to recover an agent
-   *  from the session string. If a future edit reintroduces an inverse, this
-   *  goes green for the wrong reason -- so the session here is one that WOULD
-   *  parse ('agent-friday') while the caller passes null. */
-  it('does NOT fall back to parsing the session when the caller passes null', () => {
-    expect(probeParkedRecord('agent-friday', null, PROBE_FRESHNESS_MS, NOW)).toBe('unknown-agent')
+  /** THE FALLBACK: a caller with no name still gets a real answer, because the
+   *  session is matched against the ONLY authoritative forward map. */
+  it('falls back to ENUMERATION when the caller has no agent id', () => {
+    recordInjectedPrompt('marveen-channels', 'hi', NOW)
+    expect(agentForSession('marveen-channels')).toBe('marveen')
+    expect(probeParkedRecord('marveen-channels', null, PROBE_FRESHNESS_MS, NOW)).toBe('act-on-record')
+  })
+
+  /** AND WHAT IS FORBIDDEN EITHER WAY: guessing. A session that is NOT in the
+   *  forward map must not be parsed into a plausible name -- it must be loud.
+   *  'agent-ghost' WOULD parse to 'ghost'; enumeration finds nothing. */
+  it('never parses an unknown session into a plausible name', () => {
+    expect(agentForSession('agent-ghost')).toBeNull()
+    expect(probeParkedRecord('agent-ghost', null, PROBE_FRESHNESS_MS, NOW)).toBe('unknown-session')
   })
 
   it('reads created_at as SECONDS and hands the gate MILLISECONDS', () => {
