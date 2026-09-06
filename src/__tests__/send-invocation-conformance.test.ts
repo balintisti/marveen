@@ -62,11 +62,32 @@ print(json.dumps([g.is_send_invocation(c) for c in cmds]))
  *
  * THE TWO APPROXIMATIONS FAIL DIFFERENTLY, and only one of them fails safely:
  *
- *   gate-failures are a STRICT SUBSET of shlex-failures. Measured in BOTH
- *   directions: commands the gate cannot tokenize but shlex can -> 0; the
- *   reverse -> 10. So raw shlex OVER-estimates the fallback population and
- *   never under-estimates it, which makes it a safe upper bound but a wrong
- *   count. A naive counter has no such guarantee in either direction.
+ *   ON THIS CORPUS gate-failures are a subset of shlex-failures. Measured in
+ *   BOTH directions over ~2187 rows: commands the gate cannot tokenize but
+ *   shlex can -> 0; the reverse -> 10. So on this traffic raw shlex
+ *   OVER-estimates the fallback population, which makes it a usable upper
+ *   bound but a wrong count. A naive counter is not bounded in either
+ *   direction.
+ *
+ *   THAT IS AN OBSERVATION, NOT A GUARANTEE, and the difference matters if
+ *   anyone leans on it. A gate-stricter shape EXISTS (jarvis, 980ebc8c c24):
+ *
+ *     echo "a <<EOF        shlex PARSES, the gate FAILS
+ *     b"
+ *     EOF
+ *
+ *   Mechanism, read off the code rather than inferred: `_mask_subshell_markers`
+ *   tracks quote state character by character, while `_HEREDOC` is a bare
+ *   regex and does not. It deletes a region that happens to carry the CLOSING
+ *   quote, leaving `echo "a <<EOF` -- unbalanced. Controls: an ordinary heredoc
+ *   and a plain balanced command parse on both sides.
+ *
+ *   The honest limit is jarvis's own: he could not produce it from a REALISTIC
+ *   shape. A heredoc writing notes ABOUT heredocs -- something this fleet does
+ *   constantly -- does NOT reproduce it, because the outer heredoc swallows the
+ *   body first (measured: shlex fails, the gate does not). The counterexample
+ *   is constructed. So the bound holds in practice and is not a theorem, and
+ *   nothing here should be quoted as one.
  *
  *   The mechanism behind those 10 is `#`: all ten contain one, and the gate
  *   correctly treats what follows as a comment a shell would never run. Not
