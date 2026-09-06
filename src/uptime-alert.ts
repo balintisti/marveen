@@ -296,7 +296,23 @@ export function buildUptimeNotice(d: UptimeDecision, totalSeries: number): strin
  * token, or an API that answers with nothing, must produce THIS -- never
  * silence, and never a clear verdict.
  */
-export function buildUnreadableNotice(d: UptimeDecision, totalSeries: number, nowMs = Date.now()): string | null {
+export function buildUnreadableNotice(
+  d: UptimeDecision,
+  totalSeries: number,
+  nowMs = Date.now(),
+  /** NON-NULL WHEN THE POLLER NEVER REACHED THE API -- the named cause (card f3808792).
+   *
+   *  "Zero series returned" is a claim about what the API ANSWERED. When the token probe or the
+   *  timeSeries call failed, the API was never asked, and the reader is owed the OTHER sentence:
+   *  nothing was observed. The two prescribe opposite actions -- "no uptime checks are configured,
+   *  go create one" versus "the poller is blind, production may be down right now".
+   *
+   *  THE FILE ALREADY KNEW THIS AND SAID IT IN THE WRONG PLACE. Both call sites APPENDED the cause
+   *  after the notice, and the caller's own comment spells the distinction out. But an appended
+   *  qualifier does not travel: what gets quoted, and what a severity filter matches, is the
+   *  HEADLINE -- and the headline asserted a measurement that never happened. */
+  unreachable: string | null = null,
+): string | null {
   // THE WINDOW, not the level. Speaking on every tick is what made this path a
   // fleet-queue hazard; speaking once and never again is the silent failure it
   // was built to remove. See BLIND_REANNOUNCE_MS for why those are different
@@ -312,11 +328,23 @@ export function buildUnreadableNotice(d: UptimeDecision, totalSeries: number, no
   // no series to report as unknown, so an unknown-only check reads it as nothing
   // to say.
   if (d.noSeries) {
+    // NOT MEASURED, and it says so in the HEADLINE. The old text opened with "zero series
+    // returned" on this path too, which is an assertion about an answer nobody received.
+    if (unreachable != null && unreachable !== '') {
+      return (
+        '[uptime] NOT MEASURED -- the poller never reached the monitoring API: ' + unreachable +
+        '. This is NOT "zero uptime checks are configured" and NOT "production is down": it is ' +
+        'NO OBSERVATION AT ALL, so nothing here rules either of them in or out. Production may ' +
+        'be down right now and this path cannot see it. Fix the reach first -- an unreachable ' +
+        'poller looks exactly like a healthy one.' +
+        ongoing
+      )
+    }
     return (
-      '[uptime] NO UPTIME DATA AT ALL -- zero series returned. Either the API call failed ' +
-      '(missing/expired token, 401, network) or no uptime checks exist. This is NOT a clear ' +
-      'result and must not be read as one: production may be down right now and this path ' +
-      'cannot see it. Check the token first -- a silent poller looks exactly like a healthy one.' +
+      '[uptime] NO UPTIME DATA AT ALL -- zero series returned. The API answered and returned ' +
+      'nothing, so either no uptime checks exist or none reported in this window. This is NOT a ' +
+      'clear result and must not be read as one: production may be down right now and this path ' +
+      'cannot see it.' +
       ongoing
     )
   }

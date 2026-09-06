@@ -229,16 +229,16 @@ export async function uptimeTick(now = Date.now()): Promise<void> {
     // here -- and this is the likeliest blind path of all (missing/expired token),
     // so the one branch that most needs the cap would have been the one without it.
     state = decision.next
-    const notice = buildUnreadableNotice(decision, 0, now)
-    if (notice != null) {
-      // ONE NAMED CAUSE, not a disjunction the reader cannot close. Before this
-      // the suffix said only WHICH CALL failed, never WHY -- so a reader had to
-      // rule out "not installed", "timed out" and "not authenticated" by hand.
-      // Narrowed explicitly: inside this branch TS knows ONE probe failed but not
-      // which, so a ternary over both does not narrow either.
-      const why = !tokenProbe.ok ? tokenProbe.reason : !projProbe.ok ? projProbe.reason : 'cause unavailable'
-      enqueueVerified(`${notice} (poller could not reach gcloud -- ${why})`)
-    }
+    // ONE NAMED CAUSE, not a disjunction the reader cannot close. Before this
+    // the suffix said only WHICH CALL failed, never WHY -- so a reader had to
+    // rule out "not installed", "timed out" and "not authenticated" by hand.
+    // Narrowed explicitly: inside this branch TS knows ONE probe failed but not
+    // which, so a ternary over both does not narrow either.
+    const why = !tokenProbe.ok ? tokenProbe.reason : !projProbe.ok ? projProbe.reason : 'cause unavailable'
+    // THE CAUSE GOES IN, NOT AFTER (card f3808792). It used to be appended, which left the
+    // HEADLINE saying "zero series returned" -- a claim about an answer the poller never got.
+    const notice = buildUnreadableNotice(decision, 0, now, `poller could not reach gcloud -- ${why}`)
+    if (notice != null) enqueueVerified(notice)
     return
   }
 
@@ -263,13 +263,17 @@ export async function uptimeTick(now = Date.now()): Promise<void> {
   const decision = decideUptimeAlerts(series, cond, state, now)
   state = decision.next
 
-  const unreadable = buildUnreadableNotice(decision, series.length, now)
+  // THE SAME SPLIT ON THIS PATH (card f3808792). A failed timeSeries call also produced an
+  // EMPTY list, so `noSeries` was true and the headline said "zero series returned" -- the very
+  // conflation the comment below already named, but fixed only in an APPENDED clause. The
+  // distinction now lives in the headline; the clause below stays for the policy axis, which is
+  // a different question (WHICH condition was used, not whether anything was observed).
+  const unreadable = buildUnreadableNotice(
+    decision, series.length, now,
+    seriesProbe.ok ? null : `the timeSeries call FAILED -- ${seriesProbe.reason}`,
+  )
   if (unreadable != null) {
-    // Name the fetch failure when there was one: "zero series" with a measured
-    // HTTP 403 is a different instruction to the reader than "zero series" with
-    // a clean 200 and an empty list (which means no checks are configured).
     const parts = [unreadable]
-    if (!seriesProbe.ok) parts.push(`(the timeSeries call FAILED -- ${seriesProbe.reason}, so "no checks configured" is NOT ruled in)`)
     if (usingFallback) parts.push(`(ALSO: the alert policy could not be read${policyProbe.ok ? '' : ` -- ${policyProbe.reason}`}, so the condition above is a FALLBACK, not the policy's)`)
     enqueueVerified(parts.join(' '))
   }
