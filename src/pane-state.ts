@@ -2174,16 +2174,47 @@ export function decideStuckToolCallRecovery(
 // a caller that only checks idleness will happily dispatch new work into a
 // pane that cannot act on it. paneShowsContextSaturation() closes that gap.
 //
-// The banner renders one row ABOVE the bypass-mode footer, so the window is a
-// little wider than LIVE_FOOTER_REGION_LINES (which anchors on the footer line
-// itself); still tail-scoped, so a scrollback quote of the same phrase does
-// not trip it.
+// THE WINDOW IS ANCHORED ON THE FOOTER LINE, NOT ON THE END OF THE PANE (card 74c09fd7),
+// and the two sentences that used to stand here were both measured wrong on 2026-09-06.
+//
+//   "renders one row ABOVE the footer"  -- it is FOUR. The real saturated capture we hold
+//   (context-guard-last-pane-marveen, 09-04) reads: banner / separator / prompt / separator /
+//   footer. The banner sits at footer-4, and the old window's whole margin rested on that "one".
+//
+//   "LIVE_FOOTER_REGION_LINES (which anchors on the footer line itself)" -- that constant is used
+//   BOTH ways in this file: footer-anchored via findIndex at the liveInputBox/idle sites, and
+//   PANE-END anchored at five others (the `slice(-LIVE_FOOTER_REGION_LINES)` call sites). So the
+//   remedy here is the IDIOM, not the constant: findIndex on IDLE_FOOTER_RX, then slice relative
+//   to that index. Swapping constants would have inherited the ambiguity.
+//
+// WHY IT MATTERS, measured rather than reasoned: a pane can carry TRANSIENT NOTICE ROWS BELOW the
+// footer ("Update installed · Restart to update", "new task? /clear to save 132.2k tokens"). Those
+// push the banner deeper than the tail window reaches. Measured on live panes 2026-09-06 with the
+// shipped detector: marveen-worker put the banner at depth 8 -> DETECTED false, while two agent
+// panes at depth 5 -> true. Controls: banner at the very end -> true, no banner -> false.
+//
+// AND THE MISSES ARE CORRELATED WITH THE CONDITION. One of those rows -- "/clear to save 132.2k
+// tokens" -- appears under CONTEXT PRESSURE. So the thing that blinds the check gets MORE likely
+// as a pane approaches saturation. That is a different class from a fixed miss rate: a detector
+// failing at random misses some events; one failing more often as the condition approaches fails
+// exactly when it is needed.
+//
+// Still tail-scoped: seven rows above the footer, so a scrollback quote of the same phrase does
+// not trip it. The reach ABOVE the footer is not reduced (the old tail window covered six), and
+// what is gained is immunity to whatever sits BELOW it.
+const CTX_SAT_LINES_ABOVE_FOOTER = 7
+// Fallback only, for a capture with no recognisable footer at all: keep the historical tail
+// window rather than inventing a verdict. Returning false there would BLIND the check on exactly
+// the panes we cannot parse, and returning true would refuse delivery to healthy ones.
 const CTX_SAT_FOOTER_REGION_LINES = 8
 const CTX_SAT_RX = /100% context used|context (?:is |limit reached|window )?full\b|context limit|auto-?compact required/i
 
 export function paneShowsContextSaturation(capture: string): boolean {
   if (!capture || !capture.trim()) return false
   const lines = capture.split('\n')
-  const footerRegion = lines.slice(-CTX_SAT_FOOTER_REGION_LINES).join('\n')
-  return CTX_SAT_RX.test(footerRegion)
+  const footerIdx = lines.findIndex((l) => IDLE_FOOTER_RX.test(l))
+  const region = footerIdx < 0
+    ? lines.slice(-CTX_SAT_FOOTER_REGION_LINES)
+    : lines.slice(Math.max(0, footerIdx - CTX_SAT_LINES_ABOVE_FOOTER), footerIdx + 1)
+  return CTX_SAT_RX.test(region.join('\n'))
 }
