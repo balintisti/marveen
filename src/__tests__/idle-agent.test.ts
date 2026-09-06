@@ -1065,7 +1065,10 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
           NOW,
           new Map([['didi', 'busy' as const]]),
         ),
-        item: /^ {2}-> \S+: /,
+        // A MINTA SZIGORODOTT, NEM LAZULT (kartya 2c420c7a): a sor mostantol az uzenet
+        // ID-jat is megnevezi, es ez a pin megkoveteli. A regi `/^ {2}-> \S+: /` egy
+        // ID NELKULI sort is atengedne -- vagyis a javitas visszavonasat.
+        item: /^ {2}-> #\d+ \S+: /,
       },
       // AZ OTODIK EPITO, jarvis masodik olvasatabol: az or "fajl-szintunek" nevezte magat, es a
       // SAJAT fajljaban hagyta ki ezt. Ez is a KOORDINATORNAK megy, es a csoportos alakja behuzott

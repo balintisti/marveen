@@ -34,7 +34,11 @@ describe('a jelolo: mit rogzit az ertesites', () => {
     const rows = [1, 2, 3, 4, 5, 6, 7].map((i) => row(i))
     const text = buildPendingStillWaitingNotice('friday', rows, NOW, new Map())
     // a lathato lista vag...
-    expect(text.split('\n').filter((l) => l.includes('-> didi')).length).toBe(5)
+    // FORMATUM-FUGGETLEN szamlalas (kartya 2c420c7a): a regi `includes('-> didi')` a
+    // cimzett-nyil SZOMSZEDOSSAGARA epult, es az uzenet-ID beszurasatol NULLARA esett --
+    // vagyis a `toBe(5)` nem a vagast merte volna, hanem a formatumot. A tetel-sor
+    // PREFIXE az, ami a vagas kerdesere valaszol.
+    expect(text.split('\n').filter((l) => l.startsWith('  -> ')).length).toBe(5)
     // ...a jelolo NEM
     expect(parseCoveredIds(text)).toEqual([1, 2, 3, 4, 5, 6, 7])
   })
