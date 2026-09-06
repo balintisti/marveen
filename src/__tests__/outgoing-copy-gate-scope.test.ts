@@ -182,4 +182,36 @@ describe('outgoing-copy gate: quoted tokens in OPERATION position still fire (ms
     expect(isSend(`echo 'sendEmail emlitve egy zart idezojelben'`)).toBe(false)
     expect(isSend(`echo 'sendmail emlitve egy zart idezojelben'`)).toBe(false)
   })
+
+  // CARD b6f78436 -- THE OTHER SIDE OF THE SAME LINE, AND WHY THE PIN ABOVE DOES
+  // NOT COVER IT. The de5e1709 pin fixes the MENTION side (`sendEmail` bare) and
+  // says the narrow list must stay narrow. It says nothing about the CALL side,
+  // because its fixtures carry no parentheses -- and on the call side the fallback
+  // contradicted its OWN stated purpose: `node -e "...sendEmail({...})"` with an
+  // unbalanced quote is a weird but REAL send, and it slipped through silently.
+  // The parsed path (_CODE_SEND) has known `sendEmail(` and `mail.send(` all along;
+  // only the fallback listed `sendMail(` and not the other two. That token
+  // asymmetry -- not a policy difference -- is what these assertions close.
+  //
+  // THE FIXTURE IS CHOSEN WHERE THE TWO CANDIDATE PATTERNS DIVERGE: a paren-anchored
+  // pattern passes these AND leaves the de5e1709 pin above green; a bare-token
+  // pattern passes these and turns that pin RED. So the pair of tests, read
+  // together, admits exactly one shape of fix. Do not "simplify" either one.
+  it('the unparseable fallback catches the CALL shape of the two divergence tokens (card b6f78436)', () => {
+    expect(isSend(`node -e "require('./src/mailer.js').sendEmail({to:'a@b.hu'})`)).toBe(true)
+    expect(isSend(`python3 -c "mail.send({'to':'a@b.hu'})`)).toBe(true)
+
+    // CONTROL 1 -- these fire from the FALLBACK, not the parsed path: the SAME
+    // calls with balanced quotes parse fine, and there _CODE_SEND answers true
+    // anyway. Both paths now agree on the call shape; before this card they did
+    // not, and that disagreement was invisible on an unparseable command.
+    expect(isSend(`node -e "require('./src/mailer.js').sendEmail({to:'a@b.hu'})"`)).toBe(true)
+    expect(isSend(`python3 -c "mail.send({'to':'a@b.hu'})"`)).toBe(true)
+
+    // CONTROL 2 -- the paren is load-bearing, stated here as well as in the pin
+    // above: an unparseable command that merely NAMES the call shape without
+    // calling it stays out. Written with the token split so it cannot be read as
+    // a call by a future widened pattern.
+    expect(isSend(`echo "lezaratlan idezojel, a sendEmail fuggveny neve emlitve`)).toBe(false)
+  })
 })

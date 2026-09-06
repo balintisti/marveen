@@ -122,9 +122,26 @@ def _code_string_sends(code: str) -> bool:
 _RESEND_TARGET = re.compile(r"^(https?://)?([^/@\s]*\.)?api\.resend\.com(/|$|\s|$)", re.I)
 # A tovabbi kuldes-jellegu literalok, amikre a parse-hiba eseten (es CSAK
 # akkor) konzervativan visszaesunk -- lasd is_send_invocation vegen.
+#
+# A HATAR EZEN A LISTAN A HIVAS-ALAK, NEM A TOKEN (kartya b6f78436). A `\s*\(`
+# horgony valasztja szet a HASZNALATOT az EMLITESTOL, es ez a repo mar eldontotte
+# ezt a hatart: a kozos eset-korpusz (`send-invocation-cases.json`) a
+# `...sendEmail({...})` hivast `expected: true`-nak, a `'sendEmail' in ...` alaku
+# cenzus-szkennelest `expected: false`-nak veszi. A parszolt ut (`_CODE_SEND`) ezt
+# megvalositja; a fallback 2026-09-06-ig CSAK a `sendMail(`-re -- a masik ket
+# hivas-alak kimaradt, es ezzel ket VALODI kuldest atengedett parszolhatatlan
+# bemeneten. Ez a fallback SAJAT kikotesenek mondott ellent („egy fura, de valodi
+# kuldes nem csuszik at neman").
+#
+# AMI SZANDEKOSAN KIMARAD, ES AMIT NE TEGYEL BE: a CSUPASZ `sendEmail` / `mail.send`
+# token. Az ebben a repoban cenzus-grep alak, es a `de5e1709` pin ezt kifejezetten
+# rogziti (`outgoing-copy-gate-scope.test.ts`). Merve a valtoztatas elott es utan:
+# a ket csupasz eset MINDKET allapotban `false`, a `sendmail` kontroll MINDKETTOBEN
+# `true` -- tehat ez a sor a KET MEGNEVEZETT ALAKOT celozta, nem a politikat.
+# A `9ebde77b` dontes (a ket kapu ELTER, ne igazitsd ossze) ERINTETLEN.
 _FALLBACK_LITERALS = re.compile(
     r"send\.py|api\.resend\.com|\bsendmail\b|\bmsmtp\b|\bswaks\b"
-    r"|\bsmtplib\b|\bsendMail\s*\(", re.I
+    r"|\bsmtplib\b|\bsendMail\s*\(|\bsendEmail\s*\(|\bmail\.send\s*\(", re.I
 )
 
 
@@ -238,8 +255,13 @@ def is_send_invocation(cmd: str, _depth: int = 0) -> bool:
         #      koordinator normal, csak-olvaso cenzus-munkajat.
         #   3. AMIT A SZUK LISTA ELEJT, AZ NEM KULDO. A repo EGYETLEN Bash-uton
         #      elerheto kuldoje a scripts/support-mail/send.py, es az BENNE VAN
-        #      (`send.py` ES `smtplib`). Ami kimarad -- csupasz `sendEmail`,
+        #      (`send.py` ES `smtplib`). Ami kimarad -- CSUPASZ `sendEmail`,
         #      `mail.send` --, az ebben a repoban CENZUS-GREP alak, nem kuldes.
+        #      **A CSUPASZ SZO A KIKOTES, NEM A TOKEN** (kartya b6f78436): a
+        #      HIVAS-alak (`sendEmail(`, `mail.send(`) 2026-09-06 ota RAJTA VAN a
+        #      listan, mert az hasznalat, nem emlites -- ugyanaz a hatar, amit a
+        #      parszolt ut es a kozos eset-korpusz mar hasznal. A csupasz alak
+        #      tovabbra sem szerepel, es a `de5e1709` pin ezt orzi.
         #
         # ES AMIERT EZ OLCSO: a fo agens VALODI kuldesei (telegram __reply es a
         # send_email MCP tool) a fenti entrypointban KULON agra mennek, es soha
