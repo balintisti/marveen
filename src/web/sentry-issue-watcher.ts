@@ -181,6 +181,10 @@ export function issuesFromPayload(payload: unknown, org: string): SentryIssue[] 
     const id = o?.id
     if (typeof id !== 'string' || id.length === 0) continue
     const str = (k: string): string | null => (typeof o?.[k] === 'string' ? (o[k] as string) : null)
+    const slug = (k: string): string | null => {
+      const v = o?.[k] as Record<string, unknown> | null | undefined
+      return v && typeof v.slug === 'string' && v.slug.length > 0 ? v.slug : null
+    }
     // `count` arrives as a STRING from this endpoint. Number(null) is 0, which
     // would read as "harmless" -- so an absent count stays null, not zero.
     const rawCount = o?.count
@@ -201,6 +205,10 @@ export function issuesFromPayload(payload: unknown, org: string): SentryIssue[] 
       firstSeen: str('firstSeen'),
       lastSeen: str('lastSeen'),
       permalink: str('permalink'),
+      // NOT `str('project')`: the endpoint sends an OBJECT here, so the flat
+      // string reader returns null on every entry -- a plausible-looking zero
+      // that reads exactly like "Sentry omitted it" (card 2b78538c).
+      project: slug('project'),
     })
   }
   return out

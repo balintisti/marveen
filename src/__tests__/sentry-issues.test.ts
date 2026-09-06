@@ -27,6 +27,7 @@ function issue(id: string, org = 'delta-crm', over: Partial<SentryIssue> = {}): 
     id,
     org,
     shortId: `BACKEND-${id}`,
+    project: 'backend',
     title: `PrismaClientKnownRequestError ${id}`,
     culprit: 'Array.$allOperations(prisma-cache-invalidation)',
     level: 'error',
@@ -255,6 +256,49 @@ describe('payload parsing keeps ABSENT distinct from zero', () => {
   it('returns an empty list for a non-array payload rather than throwing', () => {
     expect(issuesFromPayload(null, 'x')).toEqual([])
     expect(issuesFromPayload({ detail: 'forbidden' }, 'x')).toEqual([])
+  })
+
+  /**
+   * CARD 2b78538c -- `org` alone cannot say what a count is about.
+   *
+   * One org carries a DEAD project, the live backend and a mobile client at once,
+   * so an org-level total merges three surfaces. The payload has carried `project`
+   * all along (measured 69/69 on 2026-09-06); the flattener dropped it.
+   *
+   * THE FIXTURE PUTS THREE DIFFERENT PROJECTS IN ONE PAYLOAD ON PURPOSE. With a
+   * single entry, an implementation that hardcodes a slug -- or returns the ORG --
+   * passes; the merge is only expressible when the projects have to stay apart.
+   */
+  it('keeps the project slug and holds three projects APART in one payload -- card 2b78538c', () => {
+    const out = issuesFromPayload(
+      [
+        { id: '1', title: 'a', project: { id: '10', slug: 'backend' } },
+        { id: '2', title: 'b', project: { id: '11', slug: 'sajat-crm-backend' } },
+        { id: '3', title: 'c', project: { id: '12', slug: 'mobile' } },
+      ],
+      'delta-crm',
+    )
+    expect(out.map(i => i.project)).toEqual(['backend', 'sajat-crm-backend', 'mobile'])
+    // and the org is still the org -- the two fields answer different questions
+    expect(new Set(out.map(i => i.org))).toEqual(new Set(['delta-crm']))
+  })
+
+  it('leaves an absent or malformed project NULL, and never substitutes the org name', () => {
+    // Substituting the org would be the ALARMING failure: a null would read as a
+    // real project, and the merge this card exists to expose would look repaired.
+    const out = issuesFromPayload(
+      [
+        { id: '1', title: 'no project at all' },
+        { id: '2', title: 'not an object', project: 'backend' },
+        { id: '3', title: 'object without slug', project: { id: '10' } },
+        { id: '4', title: 'empty slug', project: { slug: '' } },
+        { id: '5', title: 'the CONTROL -- a real one in the same call', project: { slug: 'mobile' } },
+      ],
+      'delta-crm',
+    )
+    expect(out.slice(0, 4).map(i => i.project)).toEqual([null, null, null, null])
+    // CONTROL: the extractor is not simply always-null
+    expect(out[4].project).toBe('mobile')
   })
 
   it('orgsFromPayload keeps string slugs and drops everything else', () => {

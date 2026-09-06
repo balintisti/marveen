@@ -48,6 +48,18 @@ export interface SentryIssue {
   firstSeen: string | null
   lastSeen: string | null
   permalink: string | null
+  /**
+   * Which Sentry PROJECT it came from, as a slug -- null when the payload omits it.
+   *
+   * Card 2b78538c. `org` alone is not enough to say what a count is about: one org
+   * carries a DEAD project, the live backend and a mobile client at the same time,
+   * so an org-level total silently merges three surfaces and cannot answer the
+   * question anyone actually asks ("is something getting worse on the LIVE one?").
+   * The field is kept rather than fetched: the issues endpoint already sends it on
+   * every entry (measured 69/69, 2026-09-06), so dropping it discarded information
+   * we had, and recovering it needed a separate query.
+   */
+  project: string | null
 }
 
 export function issueKey(i: SentryIssue): string {
