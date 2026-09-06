@@ -229,7 +229,7 @@ function bareEnterRecovery(label: string, session: string, host: string | null):
 // plain re-inject (an inter-agent message the TUI failed to submit) is safe.
 async function checkLocalSession(label: string, session: string, alertOnGiveUp: boolean, allowPlainReinject: boolean): Promise<void> {
   const prev = watchState.get(session) ?? NO_STATE
-  const next = await recoverStuckInputForSession(session, prev, LOCAL_FAST_THRESHOLDS, allowPlainReinject)
+  const next = await recoverStuckInputForSession(session, label, prev, LOCAL_FAST_THRESHOLDS, allowPlainReinject)
 
   if (next.parkedSig === null) {
     watchState.delete(session)

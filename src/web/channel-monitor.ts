@@ -5,6 +5,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { resolveFromPath } from '../platform.js'
 import { WEB_PORT } from '../config.js'
 import { logger } from '../logger.js'
+import { probeParkedRecord, PROBE_FRESHNESS_MS } from './parked-record-probe.js'
 import { MAIN_AGENT_ID, SERVICE_ID, BOT_NAME, CHANNEL_PROVIDER, PROJECT_ROOT, RESPAWN_ENABLED } from '../config.js'
 import { DISTRIBUTION_DEFAULT_AGENT_MODEL } from '../config-registry.js'
 import { agentDir, listAgentNames, readAgentChannelProvider } from './agent-config.js'
@@ -311,6 +312,7 @@ export function applyStuckRestartBusyGuard(
 //      safe; the main session stays conservative (Enter / <channel>-only).
 export async function recoverStuckInputForSession(
   session: string,
+  agent: string | null,
   prev: StuckInputState,
   thresholds: StuckInputThresholds,
   allowPlainReinject: boolean,
@@ -334,6 +336,11 @@ export async function recoverStuckInputForSession(
     // opens the 'reinject-recorded' path (see decideStuckInputAction).
     const recorded = getInjectedPrompt(session)
     const recordedMatch = matchesInjectedPrompt(parkedInputText(pane), recorded)
+    // (b) PHASE 1, OBSERVE ONLY: log which record-freshness verdict this pane
+    // would get. Never branches; the rate + breakdown decide whether phase 2 is
+    // worth writing. Logic lives in parked-record-probe.ts on purpose -- fifteen
+    // unmerged branches touch this file.
+    probeParkedRecord(session, agent, PROBE_FRESHNESS_MS)
     const facts: StuckInputActionFacts = {
       escalate: attempt > MAIN_STUCK_ENTER_ATTEMPTS,
       rowCount: parkedInputRowCount(pane),
@@ -1701,7 +1708,7 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
     // escalate to clear+re-inject only after MAIN_STUCK_ENTER_ATTEMPTS, and
     // only when the captured block looks COMPLETE -- a truncated capture stays
     // on Enter rather than risk a partial re-inject to the wrong chat_id.
-    mainStuckInput = await recoverStuckInputForSession(MAIN_CHANNELS_SESSION, mainStuckInput, MAIN_STUCK_THRESHOLDS, false)
+    mainStuckInput = await recoverStuckInputForSession(MAIN_CHANNELS_SESSION, MAIN_AGENT_ID, mainStuckInput, MAIN_STUCK_THRESHOLDS, false)
     // Reliable backstop: if the soft recovery is exhausted and the input is
     // STILL parked, the TUI is hard-wedged -- escalate to a respawn-pane (the
     // automated form of the manual `systemctl restart channels`). Rate-limited.
@@ -1713,7 +1720,7 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
     for (const t of targets) {
       if (t.isMarveen) continue
       const prev = agentStuckInput.get(t.session) ?? { parkedSig: null, firstSeenAt: null, lastRecoverAt: null, attempts: 0 }
-      const next = await recoverStuckInputForSession(t.session, prev, MAIN_STUCK_THRESHOLDS, true)
+      const next = await recoverStuckInputForSession(t.session, t.agentName ?? null, prev, MAIN_STUCK_THRESHOLDS, true)
       if (next.parkedSig === null) agentStuckInput.delete(t.session)
       else agentStuckInput.set(t.session, next)
     }
