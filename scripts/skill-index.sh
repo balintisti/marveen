@@ -501,6 +501,55 @@ _arms_ok=1
 # Merve: 25 meglevo teszt kozul egy sem vette eszre, mert egyik sem nezte ezt
 # a sort. A kontroll azt kerdezze, hogy a `baseline_for` MUKODIK-e, ne azt,
 # hogy egy adott skill be van-e allitva.
+# =====================================================================================
+# HELYI KEMENYITES-OR (kartya aaef2106). KET kozos skill-fajl hordoz olyan HELYI
+# kiegeszitest, ami NEM az upstream fajlbol jon, es amit egy `npm run skill -- update`
+# NYOMTALANUL felulir: a `writeSkillFiles` (src/skill-cli-fs.ts) `writeFileSync`-et hiv,
+# letezes-ellenorzes, merge es mentes NELKUL. Az `update` ALAPERTELMEZETT celpontja a
+# KOZOS fa -- a `--project` az, ami helyben tartja --, tehat egy rutin frissites het agens
+# alol viszi el mindkettot, csendben.
+#
+# EZ NEM SZABALY, HANEM KAPU, es szandekosan. Egy "ne futtass skill -- update-et" mondat
+# pontosan az az alak, amit ez a tabla ismetelten HATASTALANNAK mer: a dontes pillanataban
+# senki nem olvassa el. Egy kilepesi kod viszont tulel egy `>/dev/null 2>&1`-et is.
+#
+# A JELENLETET pineli, NEM a tartalmat: a szoveg fejlodhet, a kemenyites megletet viszont
+# egy felulirás azonnal hangossa teszi.
+#
+# SORREND, KIMONDVA: ez a blokk a MERET-OR ELOTT all, tehat egy elveszett kemenyites
+# ELFEDI ugyanabban a futasban a meret-leletet. Szandekos: a tartalom-vesztes
+# visszafordithatatlan (nincs verziokezelve a kozos fa), a hatar-atlepes nem.
+_HARDEN_MISS=""
+_harden_check() {   # $1 = skill konyvtar, $2 = a pinelt marker
+  _hf="$HOME/.claude/skills/$1/SKILL.md"
+  if [ ! -f "$_hf" ]; then
+    _HARDEN_MISS="${_HARDEN_MISS}  HIANYZIK A FAJL: $1/SKILL.md\n"; return
+  fi
+  grep -qF -- "$2" "$_hf" || _HARDEN_MISS="${_HARDEN_MISS}  ELVESZETT A KEMENYITES: $1/SKILL.md -- nincs benne: $2\n"
+}
+_harden_check marveen-agent-api    "quarantine-reader"
+_harden_check marveen-skill-upload "NE HASZNALJ HTTP-T"
+# POZITIV KONTROLL: a mero talaljon meg egy BIZTOSAN meglevo sztringet ugyanezen az uton.
+# Nelkule egy elgepelt utvonal vagy egy ures HOME csendben "minden rendben"-t adna -- a
+# nulla talalat megkulonboztethetetlen lenne a "nincs mit talalni"-tol.
+_HARDEN_ARMED=1
+grep -qF -- "name:" "$HOME/.claude/skills/marveen-skill-upload/SKILL.md" 2>/dev/null || _HARDEN_ARMED=0
+# KIMONDOTT HATAR, mert kulonben ez a kontroll tobbet igerne, mint amennyit fed: ha a KOZOS
+# skill-fa EGYALTALAN nem letezik, ez a szkript a :98-nal `exit 0`-val megall, MIELOTT ide erne --
+# tehat a lenti kontroll arra az esetre SOHA nem fut le. Merve: ures HOME-mal rc=0 es a
+# `KEMENYITES-OR` egyetlen sora sem jelenik meg.
+# A :98-as korai kilepes NEM ennek a kartyanak a hatokore (mas hivoi is vannak, es stdout-ra
+# beszel, amit egy `>/dev/null` elnyel -- ugyanaz az alak, amit ez a fajl a 546-557 soraiban
+# mar sajat magarol rogzit). Kulon lelet, kulon dontes; itt csak kimondom, hogy ide nem er el.
+if [ "$_HARDEN_ARMED" -ne 1 ]; then
+  echo "KEMENYITES-OR: a pozitiv kontroll ELBUKOTT (a kozos skill-fa nem olvashato innen) -- az or NEM megbizhato." >&2
+elif [ -n "$_HARDEN_MISS" ]; then
+  printf "KEMENYITES-OR: helyi kemenyites veszett el a KOZOS skill-fabol (kartya aaef2106):\n%b" "$_HARDEN_MISS" >&2
+  echo "  A legvaloszinubb ok egy \`npm run skill -- enroll|update\` a kozos fara (--project nelkul)." >&2
+  echo "  A fajlok NINCSENEK verziokezelve: a helyreallitas a snapshot-tarbol vagy kezzel megy." >&2
+  exit 5
+fi
+
 _probe_name=$(echo "$SKILL_BASELINE_NAMES" | cut -d" " -f1)
 [ -n "$_probe_name" ] && [ -n "$(baseline_for "$_probe_name")" ] || _arms_ok=0
 if [ "$_probe" -le "$SKILL_LINE_LIMIT" ] || [ "$_arms_ok" -ne 1 ]; then
