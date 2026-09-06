@@ -46,15 +46,24 @@ EXCEPTIONS = {
 CWD_CALL = re.compile(r"agent_id_from_cwd\s*\(")
 HAS_PAYLOAD = re.compile(r"json\.load\(sys\.stdin\)|def \w+\(payload")
 
+
+def cwd_calls(src):
+    """The CALL lines only; a definition or a comment naming the function is not one.
+
+    ONE definition, used by BOTH loops below. Two copies of this filter would be
+    free to drift, and a drifted copy is what makes the two directions disagree
+    about what "still calls the resolver" means.
+    """
+    return [l for l in src.split("\n")
+            if CWD_CALL.search(l) and not l.strip().startswith("#") and "def " not in l]
+
 failures = []
 checked = 0
 for name in sorted(os.listdir(HOOKS)):
     if not name.endswith(".py") or name == "ledger_lib.py":
         continue
     src = open(os.path.join(HOOKS, name), encoding="utf-8").read()
-    # Only the CALL matters; a definition or a comment naming the function does not.
-    calls = [l for l in src.split("\n")
-             if CWD_CALL.search(l) and not l.strip().startswith("#") and "def " not in l]
+    calls = cwd_calls(src)
     if not calls:
         continue
     checked += 1
@@ -62,6 +71,30 @@ for name in sorted(os.listdir(HOOKS)):
         continue
     if HAS_PAYLOAD.search(src):
         failures.append(f"{name}: has a payload but still calls the cwd resolver -> {calls[0].strip()}")
+
+# THE LIST IS CHECKED IN BOTH DIRECTIONS, and this half is the one that was missing.
+# The loop above walks files that STILL call the resolver, so a file that MOVES OFF it
+# drops out of the population at `if not calls: continue` and the test stays green --
+# which is precisely the direction taskstate-replay.py's own entry calls dangerous.
+#
+# MEASURED 2026-09-06 (didi, card f626b725), on a throwaway copy, with the anchor's
+# uniqueness asserted: swapping taskstate-replay.py onto the adopted chain left this
+# test at exit 0. The only trace was the success line contradicting itself --
+# "2 hooks ... all 3 of them listed exceptions" -- and prose is not a gate.
+#
+# It also closes the second silent case: a STALE entry. Today an obsolete list item and
+# an unauthorised adoption are byte-identical, because both end as "no call, no failure".
+for name in sorted(EXCEPTIONS):
+    path = os.path.join(HOOKS, name)
+    if not os.path.exists(path):
+        failures.append(f"{name}: listed as an exception, but the file does not exist "
+                        f"-- stale entry; remove it and say so in the commit")
+        continue
+    if not cwd_calls(open(path, encoding="utf-8").read()):
+        failures.append(f"{name}: listed as an exception, but it NO LONGER calls the cwd "
+                        f"resolver. Either the swap was deliberate (drop the entry AND "
+                        f"record why the listed danger no longer applies) or it was not "
+                        f"(revert it). This test will not decide that for you.")
 
 # CONTROL: the meter must be able to SEE a violation, otherwise "0 failures" is
 # indistinguishable from a regex that matches nothing.
