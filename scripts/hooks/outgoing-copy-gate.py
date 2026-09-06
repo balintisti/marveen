@@ -91,8 +91,20 @@ _CURLISH = re.compile(r"^(curl|wget|http)$", re.I)
 # elszant kikerulot. A lenti exec-heurisztika a NAIV alakokat fedi (a kod
 # process-inditast ES kuldo-programnevet egyutt tartalmaz); ennel tobbet nem
 # allit, es nem is allithat.
+# A `smtplib\.` es a `mail\.send\s*\(` HASZNALAT-horgony, nem EMLITES-horgony (card 980ebc8c):
+# a ket csupasz alak 4 valodi, CSAK-OLVASO cenzus-parancsot blokkolt (didi N2-N5, attribucioval
+# es mutacioval: `imaplib` es `mailsend` atengedve, tehat pontosan ez a ket token fogott).
+# Az `import\s+smtplib` ag MERES ALAPJAN KELL, es a k5-ben becsult ara NEM all fenn:
+# a `smtplib\.` horgony ONMAGABAN ATENGEDTE ezt a VALODI kuldest --
+#     python3 -c "import smtplib as m; c=m.SMTP_SSL('h',465); c.login(...); c.send_message(msg)"
+# nincs benne `smtplib.` (aliasolva) es nincs benne `SMTP(` (mert `SMTP_SSL(`), tehat a csupasz
+# alak eltavolitasa UJ rest nyitott volna. A becsult ar (`grep 'import smtplib'` blokkolodik) azert
+# nem all fenn, mert ez a minta KIZAROLAG interpreter-kod-sztringre fut, nem a teljes parancsra --
+# merve: a grep-alaku cenzusok ATENGEDNEK. KIMONDOTT MARADEK: egy `python3 -c "import smtplib; ..."`
+# alaku introspekcio blokkolodik; egy `grep`/`rg` alaku nem.
 _CODE_SEND = re.compile(
-    r"\bsmtplib\b|SMTP\s*\(|\bsendMail\s*\(|\bsendEmail\b|\bmail\.send\b", re.I
+    r"\bsmtplib\.|\bimport\s+smtplib\b|SMTP\s*\(|\bsendMail\s*\(|\bsendEmail\s*\(|\bmail\.send\s*\(",
+    re.I,
 )
 _CODE_EXECISH = re.compile(
     r"\bsubprocess\b|os\.system|\bpopen\b|child_process|\bexec[A-Za-z]*\s*\(|\bspawn[A-Za-z]*\s*\(",
