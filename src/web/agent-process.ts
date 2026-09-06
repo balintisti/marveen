@@ -2127,6 +2127,34 @@ export function noteSaturationCleared(session: string): void {
     'dispatch: context saturation cleared — prompts resume')
 }
 
+/**
+ * AZ EPIZODNAK HAROM KIJARATA VAN, NEM KETTO, es a harmadik hianya NEMITETTE A KOVETKEZOT.
+ *
+ * A telitettseg-epizod eddig ket modon zarult: megtagadassal (szamlal) es tisztulassal (zar).
+ * A pane viszont el is TUNHET -- `capturePane` `null`-t ad, ha a tmux/host elerhetetlen --, es
+ * azon az uton a hivo a zaras ELOTT tert vissza, tehat az epizod NYITVA MARADT.
+ *
+ * ES A KAR NEM A HIANYZO ZARO SOR. Merve (didi lelete f3c6054e c10, es ez a kovetkezmeny, amit
+ * o nem nevezett meg): amig az epizod nyitva all, a `noteSaturationRefusal` `prev`-et talal,
+ * tehat egy KESOBBI, VALODI telitettseg `debug`-ot ir es NULLA `warn`-t. Kontroll ugyanabban a
+ * probaban: zarassal ugyanaz a sorozat 1 `warn`-t ad.
+ *
+ * Vagyis egy pane-eltunes UTANI uj epizod NEMA lett volna warn szinten -- pontosan az `afdd2bd7`
+ * alak, amit ennek a fajlnak a docblockja fentebb maga idez: egy javitas atsorol egy bukast
+ * alacsonyabb sulyossagra, es minden severity-szuresu riasztast megvakit.
+ *
+ * A ZARO SOR SZANDEKOSAN NEM "cleared". Nem lattuk a felepulest -- csak azt, hogy nem tudjuk
+ * megnezni. A ket allapotot kulon kell tudni olvasni a naplobol, kulonben a "prompts resume"
+ * olyasmit allit, amit senki nem mert meg.
+ */
+export function noteSaturationUnobserved(session: string): void {
+  const prev = saturationEpisodes.get(session)
+  if (!prev) return
+  saturationEpisodes.delete(session)
+  logger.warn({ session, refusals: prev.refusals, episodeMs: Date.now() - prev.since },
+    'dispatch: context saturation episode ended WITHOUT observing recovery (pane unreadable)')
+}
+
 /** Teszt-varrat: az epizod-allapot folyamat-szintu, tehat esetek kozott nullazni kell. */
 export function _resetSaturationEpisodesForTest(): void {
   saturationEpisodes.clear()
@@ -2141,18 +2169,23 @@ export async function isSessionReadyForPrompt(session: string, host: string | nu
   const idleOrGhost = (plain: string): boolean =>
     idleConsideringDimGhost(plain, detectPaneState(plain) === 'typing' ? captureParkedInputView(session, host) : null)
   const first = capturePane(session, host)
-  if (first == null) return false
+  if (first == null) { noteSaturationUnobserved(session); return false }
   if (paneShowsContextSaturation(first)) {
     noteSaturationRefusal(session)
     return false
   }
+  // A SORREND TEHERHORDO: a zaras a TELITETTSEG-ellenorzes utan all, es a foglaltsag-ellenorzes
+  // ELOTT. Lejjebb tolva egy session, ami felepult DE eppen dolgozik, soha nem zarna le az
+  // epizodjat -- osszemosna a "nem telitett"-et az "uresjarat"-tal, ami ket kulon kerdes.
+  // A lenti `zarja az epizodot akkor is, ha a session FOGLALT` eset ezt a pozíciot pineli:
+  // a jelenlet-allitasok (count/toContain) az athelyezest ATENGEDIK -- didi megmerte.
   noteSaturationCleared(session)
   if (!idleOrGhost(first)) return false
 
   await delay(PANE_READY_CONFIRM_DELAY_MS)
 
   const second = capturePane(session, host)
-  if (second == null) return false
+  if (second == null) { noteSaturationUnobserved(session); return false }
   if (paneShowsContextSaturation(second)) {
     noteSaturationRefusal(session)
     return false

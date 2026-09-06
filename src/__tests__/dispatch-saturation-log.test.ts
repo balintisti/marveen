@@ -109,7 +109,11 @@ describe('bekotes: a hivasi hely tenyleg a helpert hasznalja', () => {
  * es ha valaki kesobb behuzza, HANGOSAN bukik, nem csendben.
  */
 describe('a teszt-varrat nem szivarog produkcios kodba', () => {
-  const SEAMS = ['noteSaturationRefusal', 'noteSaturationCleared', '_resetSaturationEpisodesForTest']
+  // `noteSaturationUnobserved` KERULT IDE NEGYEDIKKENT, es nem formalitas: egy uj export ugyanabbol
+  // a csaladbol AUTOMATIKUSAN kivul esne ezen a kapun, tehat a kapu zoldet mondana, mikozben a
+  // fedese szukult. Ugyanaz az alak, mint egy cenzus elavult populacioja.
+  const SEAMS = ['noteSaturationRefusal', 'noteSaturationCleared', 'noteSaturationUnobserved',
+    '_resetSaturationEpisodesForTest']
   const SRC = new URL('../', import.meta.url).pathname
 
   /** Minden .ts a `src/` alatt, a teszteket es magat a definialo fajlt KIVEVE. */
@@ -144,5 +148,72 @@ describe('a teszt-varrat nem szivarog produkcios kodba', () => {
       for (const s of SEAMS) if (body.includes(s)) leaks.push(`${f}: ${s}`)
     }
     expect(leaks).toEqual([])
+  })
+})
+/**
+ * A HIVASI HELY, VEZERELVE -- didi lelete (c10). A fenti hat eset a HELPERT hajtja KEZZEL
+ * megadott, TISZTA allapot-atmenetekkel, es az `isSessionReadyForPrompt` EGYETLEN tesztben sem
+ * szerepelt. Ket dolog bujt meg emiatt, es a masodikat a jelenlet-allitasok SZERKEZETILEG nem
+ * lathatjak:
+ *
+ *   (1) a `capturePane` `null`-ja (pane eltunt, tmux/host elerhetetlen) a zaras ELOTT tert
+ *       vissza, tehat az epizod NYITVA maradt -- es egy nyitott epizod mellett a KOVETKEZO,
+ *       valodi telitettseg `debug`-ot ir es NULLA `warn`-t. Merve, kontrollal.
+ *   (2) a `noteSaturationCleared` POZICIOJA: didi lejjebb tolta a `!idleOrGhost` korai
+ *       visszateres ala, es MIND A HAROM forras-allitas (count==2 / toContain / not.toContain)
+ *       ZOLD maradt -- mert azok JELENLETET pinelnek, nem POZICIOT. Negativ kontroll ugyanott:
+ *       a hivas TORLESE pirosra viszi a masodikat, tehat a mero diszkriminal.
+ *
+ * Ezek a tesztek a `node:child_process` varraton at hajtjak a valodi fuggvenyt.
+ */
+const execFileSync = vi.fn()
+vi.mock('node:child_process', () => ({ execFileSync: (...a: unknown[]) => execFileSync(...a) }))
+
+describe('a hivasi hely: isSessionReadyForPrompt es az epizod-eletciklus', () => {
+  const SAT = ['work', 'more', '100% context used', 'footer'].join('\n')
+  const IDLE = ['work', 'done', '', '>', ''].join('\n')
+
+  const pane = (text: string | null) => {
+    execFileSync.mockImplementation(() => { if (text == null) throw new Error('no server running'); return text })
+  }
+  const ready = async () => {
+    const m = await import('../web/agent-process.js')
+    return m.isSessionReadyForPrompt('s-caller')
+  }
+
+  beforeEach(() => { execFileSync.mockReset() })
+
+  it('telitett pane -> megtagadas, es az epizod NYITVA marad', async () => {
+    pane(SAT)
+    expect(await ready()).toBe(false)
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('OLVASHATATLAN pane ZARJA az epizodot -- kulonben a KOVETKEZO telitettseg nema', async () => {
+    pane(SAT); await ready()                       // epizod nyitva, 1 warn
+    warn.mockClear(); debug.mockClear()
+    pane(null); expect(await ready()).toBe(false)   // a pane eltunik
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][1]).toContain('WITHOUT observing recovery')
+    // ES A LENYEG: a jelzes UJRAFEGYVERZODIK
+    warn.mockClear()
+    pane(SAT); await ready()
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('a zaro sor NEM allitja, hogy tisztult -- a ket allapot kulon olvashato', async () => {
+    pane(SAT); await ready(); warn.mockClear()
+    pane(null); await ready()
+    expect(warn.mock.calls[0][1]).not.toContain('prompts resume')
+  })
+
+  it('POZICIO: egy felepult DE FOGLALT session IS lezarja az epizodot', async () => {
+    // Ez az az eset, amit didi athelyezese elnemitana: a pane mar nem telitett, de nem uresjarat,
+    // tehat a `!idleOrGhost` korai visszateres eloTT kell zarni.
+    pane(SAT); await ready(); warn.mockClear()
+    pane(['building...', 'esc to interrupt', 'x'].join('\n'))
+    expect(await ready()).toBe(false)               // foglalt -> nem kesz
+    expect(warn).toHaveBeenCalledTimes(1)           // de az epizod LEZARULT
+    expect(warn.mock.calls[0][1]).toContain('cleared')
   })
 })
