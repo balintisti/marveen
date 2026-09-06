@@ -100,7 +100,18 @@ const RESEND_TARGET = /^(https?:\/\/)?([^/@\s]*\.)?api\.resend\.com(\/|$)/i
 // SENDER_PROG nem fogja meg, a tartalmat pedig csak ez a minta nezi. Ket kulon-kulon zold
 // valtozat (a mi f017043-unk es az upstream tokenizalasa) EGYUTT nyitotta a lyukat.
 // A `(?!-\w)` a mi 2026-08-21-i meresunk: a `resend-email.service.ts` FAJLNEV nem kuldes.
-const CODE_SEND = /\bsmtplib\b|SMTP\s*\(|\bsendMail\s*\(|\bsendEmail\s*\(|\bmail\.send\b|\bresend\b(?!-\w)[^\n]{0,80}\.\s*send\s*\(/i
+// A `smtplib\.` es a `mail\.send\s*\(` HASZNALAT-horgony, nem EMLITES-horgony (card 980ebc8c):
+// a ket csupasz alak 4 valodi, CSAK-OLVASO cenzus-parancsot blokkolt (didi N2-N5, attribucioval
+// es mutacioval: `imaplib` es `mailsend` atengedve, tehat pontosan ez a ket token fogott).
+// Az `import\s+smtplib` ag MERES ALAPJAN KELL, es a k5-ben becsult ara NEM all fenn:
+// a `smtplib\.` horgony ONMAGABAN ATENGEDTE ezt a VALODI kuldest --
+//     python3 -c "import smtplib as m; c=m.SMTP_SSL('h',465); c.login(...); c.send_message(msg)"
+// nincs benne `smtplib.` (aliasolva) es nincs benne `SMTP(` (mert `SMTP_SSL(`), tehat a csupasz
+// alak eltavolitasa UJ rest nyitott volna. A becsult ar (`grep 'import smtplib'` blokkolodik) azert
+// nem all fenn, mert ez a minta KIZAROLAG interpreter-kod-sztringre fut, nem a teljes parancsra --
+// merve: a grep-alaku cenzusok ATENGEDNEK. KIMONDOTT MARADEK: egy `python3 -c "import smtplib; ..."`
+// alaku introspekcio blokkolodik; egy `grep`/`rg` alaku nem.
+const CODE_SEND = /\bsmtplib\.|\bimport\s+smtplib\b|SMTP\s*\(|\bsendMail\s*\(|\bsendEmail\s*\(|\bmail\.send\s*\(|\bresend\b(?!-\w)[^\n]{0,80}\.\s*send\s*\(/i
 // Naive-shape exec heuristic (msg 14298): process-spawn AND a known mailer
 // name together in one interpreter code string. Covers the accidental shapes;
 // see the STATED LIMIT in the header for what it deliberately does not claim.
