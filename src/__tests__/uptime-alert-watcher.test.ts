@@ -108,10 +108,29 @@ describe('describeExecFailure names ONE cause instead of a disjunction', () => {
       .toContain('timed out after 15000 ms')
   })
 
-  // node kills a timed-out child with SIGTERM and reports the SIGNAL, not the
-  // code -- so matching only on ETIMEDOUT would misfile the commonest timeout.
-  it('a SIGTERM kill is read as the timeout it is, not as an unknown failure', () => {
-    expect(describeExecFailure({ signal: 'SIGTERM', status: null }, 15_000)).toContain('timed out')
+  // THE PREMISE THAT USED TO STAND HERE IS FALSE, and it is why the code lied (card f3a2b3d9).
+  // It read: "node kills a timed-out child with SIGTERM and reports the SIGNAL, not the code".
+  // Measured on node 22.23.2, four shapes, two of them controls:
+  //   node's own timeout -> code=ETIMEDOUT AND signal=SIGTERM   (it reports BOTH)
+  //   external SIGTERM   -> code=undefined,   signal=SIGTERM
+  //   exit 3             -> code=undefined,   signal=null       (control)
+  //   ENOENT             -> code=ENOENT,      signal=null       (control)
+  // So matching on ETIMEDOUT alone misfiles NOTHING, and the extra disjunct's only unique case
+  // was the external kill -- reported as a timeout that never happened.
+  it("node's own timeout carries BOTH, and is still named as a timeout", () => {
+    const r = describeExecFailure({ code: 'ETIMEDOUT', signal: 'SIGTERM', status: null }, 15_000)
+    expect(r).toContain('timed out after 15000 ms')
+    expect(r).not.toContain('killed by')
+  })
+
+  it('a signal WITHOUT ETIMEDOUT is named as a kill, and explicitly NOT as a timeout', () => {
+    const r = describeExecFailure({ signal: 'SIGTERM', status: null }, 15_000)
+    expect(r).toContain('killed by SIGTERM')
+    expect(r).not.toContain('timed out')
+  })
+
+  it('the signal is named whatever it is -- SIGKILL is not silently a generic failure', () => {
+    expect(describeExecFailure({ signal: 'SIGKILL', status: null }, 15_000)).toContain('killed by SIGKILL')
   })
 
   it('a non-zero exit carries the exit code AND what gcloud actually said', () => {

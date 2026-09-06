@@ -85,7 +85,21 @@ export function describeExecFailure(err: unknown, timeoutMs = GCLOUD_TIMEOUT_MS)
     stderr?: Buffer | string | null
   }
   if (e?.code === 'ENOENT') return `gcloud is not on PATH for this process (ENOENT)`
-  if (e?.code === 'ETIMEDOUT' || e?.signal === 'SIGTERM') return `gcloud timed out after ${timeoutMs} ms`
+  if (e?.code === 'ETIMEDOUT') return `gcloud timed out after ${timeoutMs} ms`
+  // A SIGNAL IS NOT A TIMEOUT, and the disjunction that used to be on the line above could only
+  // ever produce a FALSE sentence. Measured on node 22 (card f3a2b3d9), four shapes with controls:
+  //   node's OWN timeout kill   -> code=ETIMEDOUT  signal=SIGTERM   <- the branch above ALREADY has it
+  //   an EXTERNAL SIGTERM       -> code=undefined  signal=SIGTERM   <- only this reached the old
+  //                                disjunct, and it reported "timed out after 15000 ms" for a
+  //                                budget that never expired
+  //   control, plain exit 3     -> code=undefined  signal=null
+  //   control, ENOENT           -> code=ENOENT     signal=null
+  // So the old `|| signal === 'SIGTERM'` added NOTHING to real-timeout coverage and its only
+  // unique case was the lie. The test that pinned it carried the premise "node reports the SIGNAL,
+  // not the code" -- that is what the measurement refutes.
+  if (typeof e?.signal === 'string' && e.signal.length > 0) {
+    return `gcloud was killed by ${e.signal}, NOT by our ${timeoutMs} ms timeout (that path sets ETIMEDOUT too)`
+  }
   const stderr = redactSecrets(String(e?.stderr ?? '').trim()).slice(0, MAX_REASON_CHARS)
   const status = typeof e?.status === 'number' ? `gcloud exited ${e.status}` : 'gcloud failed'
   return stderr.length > 0 ? `${status}: ${stderr}` : `${status}, and printed nothing to stderr`
