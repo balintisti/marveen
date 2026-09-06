@@ -47,6 +47,33 @@ print(json.dumps([g.is_send_invocation(c) for c in cmds]))
   return JSON.parse(out.trim())
 }
 
+/**
+ * Whether the copy-gate can TOKENIZE a command -- i.e. whether it routes to the
+ * fallback at all. This is the authoritative meter for "unparseable": it is the
+ * very call whose ValueError sends `is_send_invocation` down the fallback
+ * branch.
+ *
+ * A hand-written quote counter is only an APPROXIMATION of it. Measured on 2180
+ * real Bash commands: a naive counter differs from this on 72 rows, raw
+ * `shlex.split` on 10 (jarvis, card 980ebc8c c21). The pin's fixtures happen to
+ * agree on all of them today, which is a property of those fixtures and not of
+ * the counter -- so the control below asks the gate rather than approximating it.
+ */
+function pythonUnparseable(cmds: string[]): boolean[] {
+  const out = execFileSync('python3', ['-c', `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("gate", ${JSON.stringify(GATE_PY)})
+g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+def unparseable(c):
+    try:
+        g._segments_tokens(c); return False
+    except ValueError:
+        return True
+print(json.dumps([unparseable(c) for c in json.load(sys.stdin)]))
+`], { encoding: 'utf-8', input: JSON.stringify(cmds) })
+  return JSON.parse(out.trim())
+}
+
 describe('send-invocation conformance: both gates agree with the shared contract on every case', () => {
   const py = pythonVerdicts(CASES.cases.map((c) => c.cmd))
 
@@ -209,29 +236,28 @@ describe('the two gates diverge on unparseable input BY DESIGN, in a named direc
     // unbalanced one it BALANCES it and silently measures the parsed path.
     // Without this, a future case swap would degrade the four assertions above
     // into parsed-path assertions with nothing saying so.
-    const unbalanced = (cmd: string) => {
-      let quote: string | null = null
-      for (const ch of cmd) {
-        if (quote) {
-          if (ch === quote) quote = null
-        } else if (ch === "'" || ch === '"') {
-          quote = ch
-        }
-      }
-      return quote !== null
-    }
+    // The AUTHORITATIVE meter, not a hand-written quote counter: this is the
+    // call whose failure routes to the fallback. See pythonUnparseable above
+    // for why the difference is not academic (72 rows in 2180).
+    const forced = [OUTBOUND, PAYLOAD, AGREED_BLOCK, AGREED_PASS]
+    const verdicts = pythonUnparseable([
+      ...forced.map((c) => c.cmd),
+      ...forced.map((c) => unparseable(c.cmd)),
+      NATURAL_UNBALANCED,
+      unparseable(NATURAL_UNBALANCED),
+    ])
 
-    for (const c of [OUTBOUND, PAYLOAD, AGREED_BLOCK, AGREED_PASS]) {
-      expect(unbalanced(c.cmd), `case is ALREADY unbalanced, forcing would balance it: ${c.name}`).toBe(false)
-      expect(unbalanced(unparseable(c.cmd)), `forcing did not make it unparseable: ${c.name}`).toBe(true)
-    }
+    forced.forEach((c, i) => {
+      expect(verdicts[i], `case is ALREADY unparseable, forcing would balance it: ${c.name}`).toBe(false)
+      expect(verdicts[forced.length + i], `forcing did not make it unparseable: ${c.name}`).toBe(true)
+    })
 
     // And the opposite requirement for the unforced fixture: it must arrive
-    // unbalanced ON ITS OWN. Appending to it would BALANCE it and quietly move
+    // unparseable ON ITS OWN. Appending to it would BALANCE it and quietly move
     // the assertion to the parsed path -- the exact failure this control exists
     // for, in the other direction.
-    expect(unbalanced(NATURAL_UNBALANCED), 'the unforced fixture is not unbalanced').toBe(true)
-    expect(unbalanced(unparseable(NATURAL_UNBALANCED)), 'appending would balance it -- do not force this one').toBe(false)
+    expect(verdicts[2 * forced.length], 'the unforced fixture is not unparseable').toBe(true)
+    expect(verdicts[2 * forced.length + 1], 'appending would balance it -- do not force this one').toBe(false)
   })
 
   it('CONTROL: on the PARSED path the two gates agree on these very cases', () => {
