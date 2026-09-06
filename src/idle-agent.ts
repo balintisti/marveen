@@ -863,8 +863,16 @@ export function buildPendingStillWaitingNotice(
     unknown: 'a panel-allapota NEM MEGALLAPITHATO (nincs munkamenet, vagy a capture bukott)',
   }
   const stateOf = (name: string): RecipientPaneState => paneStates.get(name) ?? 'unknown'
-  const line = (r: { to_agent: string; created_at: number }) =>
-    `  -> ${r.to_agent}: ${Math.round((nowMs - r.created_at * 1000) / 60_000)} perce all sorban`
+  // A SOR MEGNEVEZI AZ UZENET ID-JAT (kartya 2c420c7a). Enelkul az olvaso a CIMZETTET es egy
+  // KEREKITETT PERCET kap, es abbol kell kitalalnia, MELYIK uzenetrol van szo -- ket uzenet
+  // ugyanannak a cimzettnek ugyanabban a percben BAJT-AZONOS sort ad. A mert ar: egy hianyzo id
+  // ket agens koret vitte el egy napon (dexter a merest, friday az ellenorzest), mert a jelentes
+  // ket KULONBOZO uzenetrol szolt es ugy olvasodott, mintha egyrol.
+  //
+  // A TIPUS MAR HORDOZTA: a `rows` parameter `id: number`-t is kap (a `72cc2172` vitte bele a
+  // covered-id jelolohoz), csak EZ a formazo volt nala SZUKEBB. Egyetlen hivasi hely sem valtozik.
+  const line = (r: { id: number; to_agent: string; created_at: number }) =>
+    `  -> #${r.id} ${r.to_agent}: ${Math.round((nowMs - r.created_at * 1000) / 60_000)} perce all sorban`
     + ` -- ${label[stateOf(r.to_agent)]}`
 
   // The advice branches on what was MEASURED. `busy` is the only state in which
