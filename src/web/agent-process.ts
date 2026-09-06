@@ -2086,6 +2086,80 @@ export function captureParkedInputView(session: string, host: string | null = nu
 // design: Claude Code's auto-compact only runs when a new turn starts, and
 // this refusal is exactly what prevents a new turn -- so a saturated session
 // never self-heals and MUST be restarted from outside.
+/**
+ * A TELITETTSEG ALLAPOT, A KISERLET ESEMENY -- es eddig minden kiserlet ujra leirta az allapotot.
+ *
+ * MERVE (kartya f3c6054e, 2026-09-04): a `store/dashboard.log` 311 730 sorabol **16 975** ez az
+ * egyetlen sor -- **5,4%** --, 465 aktiv percben atlag 36,5/perc, csucson **326 sor egyetlen
+ * percben**, 21 folyamatbol. (Kontroll: 'error' ugyanabban a naploban 983.)
+ *
+ * Ket kar, es a masodik a nagyobb: egy HELYES dontes 326-szor egy percben hibanak olvasodik, es
+ * a naplo 5,4%-a egyetlen VALTOZATLAN tenyt ismetel, betemetve mindent, ami mellette tortenik.
+ *
+ * A MEGTAGADAS VALTOZATLAN. Csak a naplozas gyakorisaga valtozik, es a JELZES SZANDEKOSAN `warn`
+ * marad az allapot-VALTASOKON. A fajl sajat docblockja szerint ez a sor az egyetlen jel, hogy egy
+ * sessiont KIVULROL kell ujrainditani -- ha az egesz `debug`-ra menne, egy 100%-on beragadt session
+ * NEMA lenne. Ez az `afdd2bd7` mert esete: ott egy javitas ERROR-rol WARN-ra sorolt at egy bukast,
+ * es minden severity-szuresu riasztast megvakitott, mikozben a javitas merese helyes volt.
+ *
+ * A KILEPES IS `warn`, es magaval viszi a szamlalot: ma 16 975 sor mondja ugyanazt, es abbol nem
+ * derul ki, HANY kulon EPIZOD volt. Igy a szam maga lesz a valasz.
+ */
+const saturationEpisodes = new Map<string, { since: number; refusals: number }>()
+
+export function noteSaturationRefusal(session: string): void {
+  const prev = saturationEpisodes.get(session)
+  if (!prev) {
+    saturationEpisodes.set(session, { since: Date.now(), refusals: 1 })
+    logger.warn({ session }, 'dispatch: refusing prompt — session shows context saturation (100% context)')
+    return
+  }
+  prev.refusals += 1
+  logger.debug({ session, refusals: prev.refusals },
+    'dispatch: still refusing prompt (context saturation, unchanged)')
+}
+
+export function noteSaturationCleared(session: string): void {
+  const prev = saturationEpisodes.get(session)
+  if (!prev) return
+  saturationEpisodes.delete(session)
+  logger.warn({ session, refusals: prev.refusals, episodeMs: Date.now() - prev.since },
+    'dispatch: context saturation cleared — prompts resume')
+}
+
+/**
+ * AZ EPIZODNAK HAROM KIJARATA VAN, NEM KETTO, es a harmadik hianya NEMITETTE A KOVETKEZOT.
+ *
+ * A telitettseg-epizod eddig ket modon zarult: megtagadassal (szamlal) es tisztulassal (zar).
+ * A pane viszont el is TUNHET -- `capturePane` `null`-t ad, ha a tmux/host elerhetetlen --, es
+ * azon az uton a hivo a zaras ELOTT tert vissza, tehat az epizod NYITVA MARADT.
+ *
+ * ES A KAR NEM A HIANYZO ZARO SOR. Merve (didi lelete f3c6054e c10, es ez a kovetkezmeny, amit
+ * o nem nevezett meg): amig az epizod nyitva all, a `noteSaturationRefusal` `prev`-et talal,
+ * tehat egy KESOBBI, VALODI telitettseg `debug`-ot ir es NULLA `warn`-t. Kontroll ugyanabban a
+ * probaban: zarassal ugyanaz a sorozat 1 `warn`-t ad.
+ *
+ * Vagyis egy pane-eltunes UTANI uj epizod NEMA lett volna warn szinten -- pontosan az `afdd2bd7`
+ * alak, amit ennek a fajlnak a docblockja fentebb maga idez: egy javitas atsorol egy bukast
+ * alacsonyabb sulyossagra, es minden severity-szuresu riasztast megvakit.
+ *
+ * A ZARO SOR SZANDEKOSAN NEM "cleared". Nem lattuk a felepulest -- csak azt, hogy nem tudjuk
+ * megnezni. A ket allapotot kulon kell tudni olvasni a naplobol, kulonben a "prompts resume"
+ * olyasmit allit, amit senki nem mert meg.
+ */
+export function noteSaturationUnobserved(session: string): void {
+  const prev = saturationEpisodes.get(session)
+  if (!prev) return
+  saturationEpisodes.delete(session)
+  logger.warn({ session, refusals: prev.refusals, episodeMs: Date.now() - prev.since },
+    'dispatch: context saturation episode ended WITHOUT observing recovery (pane unreadable)')
+}
+
+/** Teszt-varrat: az epizod-allapot folyamat-szintu, tehat esetek kozott nullazni kell. */
+export function _resetSaturationEpisodesForTest(): void {
+  saturationEpisodes.clear()
+}
+
 export async function isSessionReadyForPrompt(session: string, host: string | null = null): Promise<boolean> {
   // Dim-ghost tolerant idle read: CC >=2.1.202 paints a dim placeholder into
   // the empty input box, which a plain capture reads as parked text. Only when
@@ -2095,19 +2169,25 @@ export async function isSessionReadyForPrompt(session: string, host: string | nu
   const idleOrGhost = (plain: string): boolean =>
     idleConsideringDimGhost(plain, detectPaneState(plain) === 'typing' ? captureParkedInputView(session, host) : null)
   const first = capturePane(session, host)
-  if (first == null) return false
+  if (first == null) { noteSaturationUnobserved(session); return false }
   if (paneShowsContextSaturation(first)) {
-    logger.warn({ session }, 'dispatch: refusing prompt — session shows context saturation (100% context)')
+    noteSaturationRefusal(session)
     return false
   }
+  // A SORREND TEHERHORDO: a zaras a TELITETTSEG-ellenorzes utan all, es a foglaltsag-ellenorzes
+  // ELOTT. Lejjebb tolva egy session, ami felepult DE eppen dolgozik, soha nem zarna le az
+  // epizodjat -- osszemosna a "nem telitett"-et az "uresjarat"-tal, ami ket kulon kerdes.
+  // A lenti `zarja az epizodot akkor is, ha a session FOGLALT` eset ezt a pozíciot pineli:
+  // a jelenlet-allitasok (count/toContain) az athelyezest ATENGEDIK -- didi megmerte.
+  noteSaturationCleared(session)
   if (!idleOrGhost(first)) return false
 
   await delay(PANE_READY_CONFIRM_DELAY_MS)
 
   const second = capturePane(session, host)
-  if (second == null) return false
+  if (second == null) { noteSaturationUnobserved(session); return false }
   if (paneShowsContextSaturation(second)) {
-    logger.warn({ session }, 'dispatch: refusing prompt — session shows context saturation (100% context)')
+    noteSaturationRefusal(session)
     return false
   }
   return idleOrGhost(second)
