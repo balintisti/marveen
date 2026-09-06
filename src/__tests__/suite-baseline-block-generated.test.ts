@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-// @ts-expect-error -- plain .mjs generator, no types; it IS the oracle on purpose
 import { renderBlock } from '../../scripts/update-suite-baseline.mjs'
 
 // THE GENERATOR IS THE ORACLE (card c28d103d). Prose written INSIDE the
