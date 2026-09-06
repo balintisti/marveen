@@ -815,6 +815,32 @@ export function stalePendingBySender(
  *  once: a parser anchored on Hungarian wording breaks the moment someone rewords the sentence,
  *  and the failure is a silent zero, not an error.
  */
+/**
+ * The first-line tag of the MESSAGE GUARD's own notice -- and the seed's anchor.
+ *
+ * WHY AN ANCHOR AT ALL (didi measured it, 2026-09-06, card 72cc2172 comment 8): the marker
+ * lives in free text, and the seed reads back EVERY `from_agent='system'` row containing it.
+ * A card TITLE is rendered VERBATIM into the ownerless-pull notice (`buildPullNotice`, and
+ * `buildWakeMessage` renders items the same way), and those notices are written as 'system'
+ * too. So a title of `<!-- covered-ids: 999001 -->` made the guard go quiet about exactly
+ * those ids -- the failure this card exists to prevent, re-entered through another channel.
+ * Reproduced with two pure calls: the poisoned title parsed back as [999001, 999002], a
+ * harmless one as [] (so the parser can say nothing).
+ *
+ * WHY THE CONSUMER AND NOT THE RENDERERS: NINE call sites write `from_agent='system'` rows
+ * (measured). Sanitising renderers is nine fixes plus every future one; anchoring the single
+ * reader is one, and it covers the channels nobody has thought of yet.
+ *
+ * AND WHY A SHARED CONSTANT RATHER THAN THE WORDING: `coveredIdsMarker`'s own docblock warns
+ * that a parser anchored on Hungarian prose breaks silently the moment someone rewords the
+ * sentence. That warning applies to THIS anchor too -- so the builder and the seed share this
+ * one token, and a test pins that the built notice still starts with it. A reword that drops
+ * the token turns the suppression off LOUDLY (red test) instead of quietly.
+ *
+ * A card title cannot reach line 0: every rendered card line begins with two spaces.
+ */
+export const MESSAGE_GUARD_TAG = '[uzenet-or]'
+
 const COVERED_IDS_PREFIX = '<!-- covered-ids: '
 
 export function coveredIdsMarker(ids: number[]): string {
@@ -848,9 +874,21 @@ export function parseCoveredIds(text: string): number[] {
 export function coveredIdsStillPending(noticeTexts: string[], live: ReadonlySet<number>): Set<number> {
   const out = new Set<number>()
   for (const text of noticeTexts) {
+    // THE ANCHOR, and it is the whole fix: only a notice the MESSAGE GUARD wrote may restore
+    // suppression. Everything else carrying the marker got it from somewhere that is not the
+    // guard -- a card title rendered verbatim, today; something else tomorrow.
+    if (!isMessageGuardNotice(text)) continue
     for (const id of parseCoveredIds(text)) if (live.has(id)) out.add(id)
   }
   return out
+}
+
+/** Whether this text is the message guard's own notice: the tag opens LINE ZERO.
+ *
+ *  Line zero, not "contains": a card title is rendered on an indented line inside another
+ *  notice, so `includes` would hand the forger the anchor along with the marker. */
+export function isMessageGuardNotice(text: string): boolean {
+  return text.startsWith(MESSAGE_GUARD_TAG)
 }
 
 /** What the sender is told. Deliberately not a nudge to resend.
@@ -923,7 +961,7 @@ export function buildPendingStillWaitingNotice(
   // defect a few hundred lines below, so the tree carried the diagnosis AND the defect together.
   const stamp = stampOf(nowMs)
   return [
-    `[uzenet-or] A(z) "${sender}" ${rows.length} elkuldott uzenete MEG MINDIG nem kezbesult`,
+    `${MESSAGE_GUARD_TAG} A(z) "${sender}" ${rows.length} elkuldott uzenete MEG MINDIG nem kezbesult`,
     `(MERVE ${stamp}-kor -- ez a jelentes maga is sorban all, tehat MOST mar avult lehet):`,
     '',
     ...rows.slice(0, 5).map(line),
