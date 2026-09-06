@@ -129,6 +129,67 @@ DB_CLIENTS = re.compile(
 #   SQL patterns need TWO things in the SAME segment (a client AND a statement), so an
 #   extra boundary can SEPARATE them and cause a MISS.
 #
+# AND THE TOOL HALF OF THAT SENTENCE HIDES A THIRD CASE (card ffa3b565, dexter,
+# 2026-09-06 -- again during ordinary work, not by probing). "More chances to hit"
+# reads as harmless: an extra check on text that would not have matched anyway. It
+# is not harmless. On the TOOL class an extra boundary does not merely give the
+# matcher another look -- it MANUFACTURES the hit that the position rule exists to
+# prevent, and it does so on exactly the input the rule was written for.
+#
+# THE MECHANISM IS THE ORDER OF TWO STEPS IN `find_hits`, and each step is correct
+# on its own:
+#
+#   1. `_SEG.split(command)`        -- splits, and is QUOTE-BLIND by construction
+#   2. `_command_position_text(seg)` -- blanks quoted spans, WITHIN a segment
+#
+# Step 2 can only blank a quoted span it can SEE. When step 1 runs first, a quoted
+# argument that happens to contain a separator is already torn into fragments, and
+# no fragment holds a matching pair of quotes any more. Each fragment then starts
+# in command position with nothing left to blank -- so the very words the docblock
+# above promises are "text inside a quoted argument" are read as a command.
+#
+# The measured instance: a mutation driver passing its edits as quoted arguments,
+# denied 2026-09-06 02:50:51. Nothing in it was a command; the separator inside a
+# quoted string was.
+#
+# THE PRICE OF A QUOTE-AWARE SPLIT, MEASURED ON THIS GATE'S OWN LOG rather than on
+# invented cases -- every command it ever produced a DENY or an OVERRIDE for:
+#
+#   32 distinct commands, of which 15 are faithfully replayable
+#   denials LOST with a quote-aware split ............ 0 / 15
+#   commands newly DENIED by it ...................... 0 / 15
+#   positive control (the meter CAN say "newly denied"): a synthetic command whose
+#     client and statement sit in separate segments but inside one quoted string
+#     -- PASS today, DENY under a quote-aware split. Without it the two zeroes
+#     above would be describing the meter, not the corpus.
+#
+#   MY FIRST CONTROL FAILED, AND THE FAILURE IS THE USEFUL PART: it put the client
+#   directly after a quote (`'psql ...`), and `DB_CLIENTS` anchors on
+#   `(^|[\s;&|(])`, so the client was never recognised and the split was not what
+#   decided the verdict. A control that fails is worth more than one that passes:
+#   this one was measuring the wrong variable. (That anchor is a separate property
+#   of this file, unchanged and not a regression -- stated here only so the next
+#   person does not lose an hour to it as I did.)
+#
+# WHAT THAT PRICE CANNOT ANSWER, AND IT IS THE HALF THAT MATTERS FOR THE OPEN
+# QUESTION. The unparseable branch -- what to do when quotes do not balance --
+# never runs on this corpus: 0 of the 15 carry an unbalanced quote. So the zeroes
+# above are NOT "the direction is free"; they are "this corpus cannot decide the
+# direction". The two sibling gates already answer it in OPPOSITE directions, each
+# correct for its own population (see `email-send-gate.mjs` and
+# `outgoing-copy-gate.py`, and the comment-only ruling in fe418df) -- so it is not
+# inheritable either, and it stays open on the card.
+#
+# AND THE 17 TRUNCATED LOG ENTRIES CANNOT BE PRESSED INTO SERVICE FOR IT. The log
+# stores `command[:400]`, 8 of those 17 carry an unbalanced quote, and that 8 is an
+# artifact: cutting a balanced command at an arbitrary point produces an unbalanced
+# prefix at 193 of the 716 cut positions across the 15 replayable commands (27%),
+# on 8 of the 15. Measuring the branch there would report it as common precisely
+# because the log truncates -- a number that rises with the cut, not with reality.
+#
+# NOTHING ABOVE CHANGES BEHAVIOUR. The ordering fix is a decision, not a cleanup,
+# and it is not made here.
+#
 # That is exactly what happened to an executed heredoc. `strip_heredoc_bodies` KEEPS
 # the body when the opener runs it (`psql <<'SQL'`), correctly, so it can be checked --
 # and then the newline split guaranteed the body could never share a segment with the
