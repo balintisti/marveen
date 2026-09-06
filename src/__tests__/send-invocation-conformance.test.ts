@@ -53,11 +53,28 @@ print(json.dumps([g.is_send_invocation(c) for c in cmds]))
  * very call whose ValueError sends `is_send_invocation` down the fallback
  * branch.
  *
- * A hand-written quote counter is only an APPROXIMATION of it. Measured on 2180
+ * A hand-written quote counter is only an APPROXIMATION of it. Measured on ~2180
  * real Bash commands: a naive counter differs from this on 72 rows, raw
- * `shlex.split` on 10 (jarvis, card 980ebc8c c21). The pin's fixtures happen to
- * agree on all of them today, which is a property of those fixtures and not of
- * the counter -- so the control below asks the gate rather than approximating it.
+ * `shlex.split` on 10 (jarvis, card 980ebc8c c21/c23). The pin's fixtures happen
+ * to agree on all of them today, which is a property of those fixtures and not
+ * of the counter -- so the control below asks the gate rather than approximating
+ * it.
+ *
+ * THE TWO APPROXIMATIONS FAIL DIFFERENTLY, and only one of them fails safely:
+ *
+ *   gate-failures are a STRICT SUBSET of shlex-failures. Measured in BOTH
+ *   directions: commands the gate cannot tokenize but shlex can -> 0; the
+ *   reverse -> 10. So raw shlex OVER-estimates the fallback population and
+ *   never under-estimates it, which makes it a safe upper bound but a wrong
+ *   count. A naive counter has no such guarantee in either direction.
+ *
+ *   The mechanism behind those 10 is `#`: all ten contain one, and the gate
+ *   correctly treats what follows as a comment a shell would never run. Not
+ *   every `#` does this -- 177 of the rows contain one -- so the rule is
+ *   narrower than the character: a `#` that actually OPENS a comment. Verified
+ *   on the gate: `echo a#b` and `curl 'http://x/y#frag'` both parse (mid-word
+ *   and quoted `#` are not comment starts), `echo hi # <sender>` is NOT a send,
+ *   and the control `echo hi ; <sender>` still is.
  */
 function pythonUnparseable(cmds: string[]): boolean[] {
   const out = execFileSync('python3', ['-c', `
@@ -258,6 +275,13 @@ describe('the two gates diverge on unparseable input BY DESIGN, in a named direc
     // for, in the other direction.
     expect(verdicts[2 * forced.length], 'the unforced fixture is not unparseable').toBe(true)
     expect(verdicts[2 * forced.length + 1], 'appending would balance it -- do not force this one').toBe(false)
+
+    // The case that proves this control is worth its cost:
+    // `grep -c 'x' file.txt # don't` is called unparseable by BOTH
+    // approximations (naive true, shlex true) and parses fine for the gate.
+    // It is not an illustration of the gap -- it IS the gap, the `#` case
+    // above. Swapping it in for the unforced fixture reddens this control,
+    // and would have passed under either approximation.
   })
 
   it('CONTROL: on the PARSED path the two gates agree on these very cases', () => {
