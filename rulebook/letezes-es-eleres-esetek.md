@@ -186,3 +186,112 @@ figyelmeztetés, hanem a MEGTAGADÁS: ha a marker és a `dist` ellentmond, ne ad
 A ma esti kár egy magabiztos, dátumozott, hihető rossz VÁLASZ volt; egy figyelmeztetés MELLETTE
 zajnak olvasódott volna a konkrétnak látszó szám mellett.)*
 
+
+---
+
+# A HOOK-SÁV -- a teljes mért eset
+
+*(Kivéve a `CLAUDE.md`-ből 2026-09-10-én. A TÖRVÉNY és a PARANCS a lapon maradt, a
+`### A HOOK-SÁV` szakaszban. Ez a szakasz eredeti, változtatás nélküli szövege: a három
+egymást váltó állítás, a bélyeg-alapú passzív mérés és annak aszimmetriája.)*
+
+### A HOOK-SÁV: NEM „AZONNAL" ÉS NEM IS „TELEPÍTÉSKOR" HAT, HANEM ÁGENSENKÉNT MÁSKOR
+*(A cím szándékosan nem sorszámoz: a táblázat sorai nőnek, és egy sorszám a címben ugyanúgy elavul, mint bárhol máshol. didi mérte 2026-08-27-én, hogy a „HATODIK SÁV" cím öt táblázatsor mellett állt -- az elcsúszás abból jött, hogy valaki az ÖTÖDIK ÁLLAPOT szakaszt sávnak számolta, holott az kimondja magáról, hogy nem az.)*
+(friday találta 2026-08-27-én, marveen mérte, jarvis újramérte függetlenül ugyanazokkal a számokkal.)
+
+A `~/.claude/settings.json` hookjai a munkamenet INDULÁSAKOR töltődnek be. Egy bekötött hook tehát
+nem akkor kezd hatni, amikor beírtuk, hanem amikor az adott ágens legközelebb újraindul -- és ez
+**ágensenként külön időpont**. Ez nem a többi sáv „még nem ért oda" állapota: itt a változás KÉSZ,
+és a kézbesítésének **nincs egy időpontja**.
+
+Mérve 2026-08-27 16:0x-kor, a `skills-snapshot-on-write` hook bekötése (15:41:24) ellen:
+
+    dexter 15:12:29 | didi 15:32:29 | friday 14:22:29 | jarvis 12:08:31 | mandark 11:38:32
+    computress 2026-08-24 16:45:02  -- HÁROM NAP
+    marveen-worker 2026-08-19 13:06 -- NYOLC NAP
+
+Egyetlen ágens sem indult a bekötés óta. Vagyis a mechanizmus, amit épp bekötöttünk, aznap
+SENKINÉL nem volt aktív.
+
+**A parancs, amivel bármikor újramérhető** (a fájl saját szabálya szerint: ha ide szám kerül,
+jöjjön vele a parancs):
+
+```bash
+stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S' ~/.claude/settings.json      # a bekötés ideje
+for a in dexter didi friday jarvis mandark computress; do
+  pid=$(tmux list-panes -t "agent-$a" -F '#{pane_pid}' 2>/dev/null | head -1)
+  [ -n "$pid" ] && printf '%-12s %s\n' "$a" "$(ps -o lstart= -p "$pid" | sed 's/^ *//')"
+done
+```
+
+**ÉS A CSAPDA A SAJÁT PARANCSUNKBAN: A KOORDINÁTOR NEM `agent-<név>`.** A fenti ciklus
+`marveen`-re ÜRESET ad, mert a session-jei `marveen-channels`, `marveen-worker` és
+`marveen-worker-fast`. Az üres találat itt pontosan úgy néz ki, mint egy „nincs ilyen ágens" --
+és épp a leghosszabb ideje futó példány esik ki belőle (`marveen-worker`, nyolc nap). Aki a
+koordinátort is mérni akarja, `tmux list-sessions`-ből induljon, ne a névminta-tippből.
+
+**A KIKÖTÉS, AMI NÉLKÜL EZ A SOR RIASZTÓNAK LÁTSZIK: ez NEM védelmi rés.** A skills-pillanatfelvétel
+30 perces pollozása a munkamenettől FÜGGETLENÜL fut, tehát mindenkire hat. Ez a sáv a hook
+KÉZBESÍTÉSÉT írja le, nem egy lyukat. Épp ezért maradt a poll a hook mellett.
+
+**ÉS EGY JAVÍTÁS UGYANEHHEZ A SORHOZ, EGY ÓRÁVAL KÉSŐBB (jarvis mérte 16:1x-kor, marveen
+kérdésére, hogy a workerek betöltik-e a user-szintű fájlt): A SÁV NEM AZ, AMINEK ELSŐRE LÁTSZOTT.**
+
+Minden ágens SAJÁT `CLAUDE_CONFIG_DIR`-rel fut, nem a `~/.claude`-dal:
+
+    jarvis .............. /Users/isti/marveen/agents/jarvis/.claude-config
+    marveen-worker ...... /Users/isti/.marveen-worker/.claude-config
+    marveen-worker-fast . /Users/isti/.marveen-worker-fast/.claude-config
+
+És a hook-készletek összevetve (`hooks` blokk, parancs szerint):
+
+    ~/.claude/settings.json ........... 12 egyedi hook
+    minden ágens .claude-config ....... 11 egyedi hook, ugyanazok
+    A KÜLÖNBSÉG PONTOSAN EGY, ÉS EZ AZ:
+        PostToolUse -> bash /Users/isti/marveen/scripts/hooks/skills-snapshot-on-write.sh
+
+Vagyis a hook **KIZÁRÓLAG a `~/.claude/settings.json`-ben van**, és egyetlen ágens konfigjában
+sincs benne. Ha az ágensek a saját `CLAUDE_CONFIG_DIR`-jükből olvassák a user-szintű beállítást,
+akkor ez a hook **nem „a következő indulástól" hat, hanem SEHOGY** -- egy újraindítás önmagában
+nem kézbesíti. A kézbesítés útja egy ÁGENSENKÉNTI MÁSOLÁS.
+
+**AMIT EBBŐL NEM MÉRTEM MEG, ÉS EZÉRT NEM ÁLLÍTOM:** hogy egy `CLAUDE_CONFIG_DIR`-rel induló
+munkamenet olvassa-e MELLETTE a `~/.claude/settings.json`-t is (rétegzés). Két közvetett jel szól
+ellene: (1) a flotta TELJES hook-készlet-másolatot tart minden ágens konfigjában -- rétegzés esetén
+mind a 11 hook kétszer tüzelne minden eseményre, ami zajos és feltűnő lenne; (2) az ágensek
+`projects/` és memória-adata is a saját konfig-könyvtárukban él.
+**A mérés, ami eldöntené** (nem futtattam, mert újraindítást igényel, az pedig nem a mi döntésünk):
+tegyünk egy ártalmatlan jelölő hookot KIZÁRÓLAG a `~/.claude/settings.json`-be, és nézzük meg, hogy
+egy frissen újraindult ágensnél tüzel-e.
+
+**ÉS NEM IS KELL ELINDÍTANUNK: A VÁLASZ MAGÁTÓL MEG FOG ÉRKEZNI** (marveen javaslata, 16:1x).
+A hook a `~/.claude/.skills-snapshot-stamp` fájlt írja (`skills-snapshot-on-write.sh:32`, promoválás
+a :99-en), és ezt a bélyeget **rajta kívül SEMMI nem írja** -- ellenőrizve: a 30 perces poll
+(`rulebook-snapshot.sh`) nem nyúl hozzá. A bélyeg jelen állása: **2026-08-27 15:42:05**.
+
+    PASSZÍV MÉRÉS: a következő ágens, akit a context-guard telítettségre újraindít, eldönti.
+    Ha a bélyeg egy restart UTÁN mozdul  ->  a `~/.claude/settings.json` IS betöltődik (rétegzés).
+
+**ÉS A MÉRÉS ASZIMMETRIÁJA, AMIT KI KELL MONDANI, KÜLÖNBEN A NEGATÍVJA FÉLREVEZET:**
+a hook a :60-62-n **KILÉP a bélyeg érintése nélkül**, ha a skills-fa nem változott a bélyeg óta.
+Tehát:
+
+    a bélyeg MOZDUL      ->  BIZONYÍT: a hook tüzelt, tehát rétegződik
+    a bélyeg NEM MOZDUL  ->  NEM BIZONYÍT: lehet, hogy a hook el sem indult (nincs rétegzés),
+                             de lehet, hogy elindult és nem volt mit menteni
+
+A nemleges válasz csak akkor ér valamit, ha **a restart óta VOLT skills-írás** -- a hook saját
+fejléce szerint ez a flottában napi több tucat (2026-08-27: friday 7, mandark 3, dexter 2, didi 1).
+Vagyis a helyes alak: *"a bélyeg nem mozdult, PEDIG X ágens írt a skills-fába a restart óta"*.
+
+*(Ez ugyanaz a törvény, mint mindenhol máshol ezen a lapon: egy nulla addig nem állítás, amíg nem
+tudjuk, hogy a kérdés egyáltalán fel lett-e téve.)*
+
+**A HOOK-SÁV TEHÁT KÉT ÁLLÍTÁST TARTALMAZ, ÉS CSAK AZ ELSŐ MÉRT:**
+az, hogy egy settings-változás a KÖVETKEZŐ munkamenet-indulástól hat, ÁLL. Az viszont, hogy ez a
+konkrét hook bármelyik ágenshez eljut, MA NEM ÁLL -- mert nincs benne a konfigjukban.
+
+**ÉS A KÖVETKEZMÉNY, AMIVEL SZÁMOLNI KELL:** egy ágens újraindítása **nem a mi döntésünk** -- a
+context-guard telítettségre indít. Ennek a sávnak a kézbesítési ideje tehát NEM TERVEZHETŐ.
+Aki hook-alapú mechanizmust épít, ne feltételezze, hogy a bekötés napján bárkinél hat;
+és ha a mechanizmus fontos, legyen mellette egy munkamenettől független út (itt: a poll).
