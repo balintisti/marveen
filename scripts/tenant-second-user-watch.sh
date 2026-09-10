@@ -47,6 +47,15 @@ NOTIFY_TO="marveen"
 # lefutott, az uzenet NEM ment ki, es a script kilepesi kodja ettol meg helyes maradt volna.
 MARVEEN_ROOT="/Users/isti/marveen"
 
+# AZ OSSZES ALAPERTELMEZES ELMENTVE, A KAPCSOLO-FELDOLGOZAS ELOTT (didi merte 2026-09-10,
+# kartya 915e0d02). Enelkul a proba-jeloles CSAK a `--sql` tengelyen tud kerdezni, es a
+# tobbi NEGY kapcsolo ugyanugy megvaltoztatja a futast -- a legelesebb az `--env`, ami a
+# DATABASE_URL-t csereli, tehat VALOSNAK LATSZO szamok EGY MASIK ADATBAZISBOL mennenek ki
+# jelöletlenul, a `NOTIFY_TO` alapertelmezese szerint EGYENESEN a koordinatorhoz.
+DEFAULT_ENV="$ENV_FILE"
+DEFAULT_STATE="$STATE_FILE"
+DEFAULT_NOTIFY="$NOTIFY_TO"
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --env)   ENV_FILE="${2:-}"; shift 2 ;;
@@ -167,9 +176,21 @@ echo "VALTOZAS: a nevezo MEGDOLT. Ertesites megy egyszer."
 # Ha marveenhez megy, vagy ha egy restart utan olvasom, tobb HIGH leletet sulyoztunk volna
 # ujra KITALALT szamokon. A lap sajat torvenye: a legerosebb mondat utazik, a fejlec nem --
 # tehat a proba-jelolesnek MAGABAN a mondatban kell allnia.
+# ES A JELOLES MINDEN FELULIRT ALAPERTELMEZESRE KERDEZ, NEM CSAK A `--sql`-RE (didi merte
+# 2026-09-10, kartya 915e0d02). A regi alak a `--sql` tengelyre volt kotve -- arra, amin a hiba
+# ELOSZOR megjelent --, es didi a `--state` tengelyen sétált be: a proba-riasztasa BAJT-AZONOS
+# volt egy valodival. A mero SZUKEBB lett, mint a kerdes.
+# ES AMIERT NEM KOZMETIKAI: a `d2c25619` kartya azert letezik, mert valaki MEGSZAMOLTA a
+# riasztasokat es abbol kovetkeztetett az adat viselkedesere. Egy jeloletlen proba pontosan azt
+# a szamlalot szennyezi.
 PROV=""
-if [ "$SQL_FILE" != "$DEFAULT_SQL" ]; then
-  PROV="[PROBA -- NEM ELES SZAM] A szamok NEM az alapertelmezett lekerdezesbol jonnek, hanem innen: $SQL_FILE. Ne sulyozz ujra semmit ez alapjan. "
+OVERRIDDEN=""
+[ "$SQL_FILE"   != "$DEFAULT_SQL"    ] && OVERRIDDEN="$OVERRIDDEN --sql=$SQL_FILE"
+[ "$ENV_FILE"   != "$DEFAULT_ENV"    ] && OVERRIDDEN="$OVERRIDDEN --env=$ENV_FILE"
+[ "$STATE_FILE" != "$DEFAULT_STATE"  ] && OVERRIDDEN="$OVERRIDDEN --state=$STATE_FILE"
+[ "$NOTIFY_TO"  != "$DEFAULT_NOTIFY" ] && OVERRIDDEN="$OVERRIDDEN --notify-to=$NOTIFY_TO"
+if [ -n "$OVERRIDDEN" ]; then
+  PROV="[PROBA -- NEM ELES SZAM] A futas NEM alapertelmezett beallitassal ment. Felulirva:$OVERRIDDEN. Ne sulyozz ujra semmit ez alapjan, es NE szamold bele a riasztas-szamlaloba. "
 fi
 # A KIKULDENDO SZOVEG MINDIG KIIRODIK, MIELOTT ELMEGY. Ket okbol, es mindketto mert:
 #  - a `exit 6` ag azt kéri, hogy "kezzel kell tovabbadni" -- eddig a szoveget NEM adta oda hozza
