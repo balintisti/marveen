@@ -84,19 +84,59 @@ cat > "$GUARD" <<'EOF'
 #
 # FLAG-INDEPENDENT ON PURPOSE: it never looks at the command line, so
 # --force-with-lease and a `+main` refspec are caught exactly like --force.
+#
+# PROTECTED: `main`, `master`, and the branch the MAIN WORKTREE currently sits
+# on -- the latter DERIVED, never named (card 33b40c03, measured 2026-09-10).
+# This repo's list guarded two refs that DO NOT MOVE: main's last commit is
+# 2026-08-11 and master does not exist locally, while the branch the running
+# system is BUILT FROM stood 801 commits ahead of fork/develop and is actively
+# pushed. A name list also cannot be finished, only extended -- the deploy
+# branch's NAME changes -- which is the same family as the text-matching deny
+# list this hook exists to replace.
+#
+# WHY NOT `git rev-parse --abbrev-ref HEAD`: .git/hooks is SHARED with linked
+# worktrees, and this hook runs with the PUSHING worktree's cwd (measured with
+# a real push against a local bare remote). From an agent's worktree that
+# expression yields the AGENT'S OWN branch, so the naive form would block the
+# feature-branch rewrites we deliberately allow AND leave the deploy branch
+# open -- while looking correct in the main checkout, which is where anyone
+# would test it.
+#
+# WHY `cd`+`pwd` AND NOT AN ANCHOR: `--git-common-dir` is relative from the main
+# checkout and absolute from a linked worktree. Measured 2026-09-10: the
+# relative form is relative to the CWD, not to the repo root -- from a
+# subdirectory it is `../.git`, so resolving it against `--show-toplevel` gives
+# `<root>/../.git`, which does not exist. `cd`+`pwd` needs no anchor at all.
 set -euo pipefail
 ZERO="0000000000000000000000000000000000000000"
+
+DEPLOY_REF=""
+if COMMON="$(git rev-parse --git-common-dir 2>/dev/null)" \
+   && COMMON="$(cd "$COMMON" 2>/dev/null && pwd)" \
+   && [ -r "$COMMON/HEAD" ]; then
+  # `ref: refs/heads/<branch>` -> `refs/heads/<branch>`; a DETACHED main worktree
+  # holds a bare SHA, so this yields the empty string and nothing extra is guarded.
+  DEPLOY_REF="$(sed -n 's|^ref: ||p' "$COMMON/HEAD" || true)"
+fi
+
 fail=0
 while read -r local_ref local_sha remote_ref remote_sha; do
   [ "$local_sha" = "$ZERO" ] && continue            # branch deletion
-  case "$remote_ref" in refs/heads/main|refs/heads/master) ;; *) continue ;; esac
+  case "$remote_ref" in
+    refs/heads/main|refs/heads/master) ;;
+    *)
+      if [ -z "$DEPLOY_REF" ] || [ "$remote_ref" != "$DEPLOY_REF" ]; then continue; fi
+      ;;
+  esac
   [ "$remote_sha" = "$ZERO" ] && continue           # brand-new branch
   if ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
     if [ "${ALLOW_FORCE_PUSH:-0}" = "1" ]; then
       echo "pre-push: ALLOW_FORCE_PUSH=1 set; permitting force-push to ${remote_ref#refs/heads/}." >&2
     else
+      why="protected branch"
+      [ "$remote_ref" = "$DEPLOY_REF" ] && why="the branch this installation is BUILT FROM"
       echo "" >&2
-      echo "BLOCKED: non-fast-forward (force) push to ${remote_ref#refs/heads/}." >&2
+      echo "BLOCKED: non-fast-forward (force) push to ${remote_ref#refs/heads/} ($why)." >&2
       echo "This rewrites shared history. If truly intended: ALLOW_FORCE_PUSH=1 git push ..." >&2
       fail=1
     fi
