@@ -99,10 +99,60 @@ PY
     echo "$pdir"
 }
 pend_exists() { [ -f "$1/SID.json" ] && echo yes || echo no; }
+pend_exists_named() { [ -f "$1/$2.json" ] && echo yes || echo no; }
 # REQLOG always exists (recreated per run); grep -c prints exactly one integer
 # line ("0" on no match) -- no `|| echo 0` fallback (that would double the 0).
 count() { grep -c "^$1 " "$REQLOG" 2>/dev/null; }
 body_has() { grep -q "$1" "$REQLOG" && echo yes || echo no; }
+# --- tmux stub on PATH (case (g)) -------------------------------------------
+# The DEFAULT progress dir resolves its session from `tmux list-sessions`, so a
+# real-tmux probe would make this test depend on the host's live fleet. The stub
+# answers from TMUX_STUB_SESSIONS, so the down/up verdict is set by the test.
+mkdir -p "$TMP/bin"
+cat > "$TMP/bin/tmux" <<'TMUXEOF'
+#!/usr/bin/env bash
+case "$1" in
+  list-sessions) printf '%s\n' ${TMUX_STUB_SESSIONS:-} ;;
+  has-session)   for s in ${TMUX_STUB_SESSIONS:-}; do [ "$s" = "$3" ] && exit 0; done; exit 1 ;;
+esac
+exit 0
+TMUXEOF
+chmod +x "$TMP/bin/tmux"
+
+# Same as run_wd but WITHOUT the force seam: the agent-up verdict has to come
+# from the resolver + the stub, which is the whole point of case (g).
+# The coordinator's id comes from FLEET_ROOT/.env, as it does on a real host.
+mkdir -p "$TMP/root"
+printf 'MAIN_AGENT_ID=marveen\n' > "$TMP/root/.env"
+mkdir -p "$TMP/noconfig"
+
+run_wd_resolved() { # sessions [fleet_root]
+    : > "$REQLOG"
+    PATH="$TMP/bin:$PATH" HOME="$TMP" MARVEEN_ROOT="${2:-$TMP/root}" TELEGRAM_API_BASE="$API_BASE" \
+      TMUX_STUB_SESSIONS="$1" TELEGRAM_WATCHDOG_WEDGED_UP_SEC=1 \
+      python3 "$WATCHDOG"
+}
+
+# A pending placeholder in the DEFAULT dir ($HOME/.claude/...), i.e. the
+# coordinator's own chat -- the one with no agent name in its path.
+make_default_case() { # age_seconds
+    local age="$1"
+    local pdir="$TMP/.claude/channels/telegram/progress"
+    local sdir="$TMP/.claude/channels/telegram"
+    mkdir -p "$pdir"
+    printf 'TELEGRAM_BOT_TOKEN=TESTTOKEN\n' > "$sdir/.env"
+    local tr="$sdir/transcript.jsonl"
+    { printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"'"$ANSWER"'"}]}}';
+      printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tuBash1","name":"Bash"}]}}';
+      printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tuBash1"}]}}'; } > "$tr"
+    printf '[{"chat_id":"%s","message_id":777,"transcript_path":"%s"}]\n' "$CHAT" "$tr" > "$pdir/COORD.json"
+    python3 - "$pdir/COORD.json" "$age" <<'PY2'
+import os, sys, time
+os.utime(sys.argv[1], (time.time()-int(sys.argv[2]),)*2)
+PY2
+    echo "$pdir"
+}
+
 run_wd() { # force_up wedged_up_sec
     : > "$REQLOG"
     HOME="$TMP" MARVEEN_ROOT="$TMP/root" TELEGRAM_API_BASE="$API_BASE" \
@@ -190,6 +240,49 @@ assert_eq "falls back to an edit when delete is refused" "1" "$(count editMessag
 assert_eq "the edit says the answer arrived (not the generic error)" "yes" "$(body_has "lentebb")"
 assert_eq "does NOT reuse the generic error text" "no" "$(body_has "Valami elakadt")"
 assert_eq "state file removed (the turn is finished either way)" "no" "$(pend_exists "$PF")"
+
+# ---------------------------------------------------------------------------
+# (g) The COORDINATOR's own dir: no agent name in the path, so until card
+#     574c9f0f the agent-up verdict was hardcoded TRUE there and the 120 s
+#     down branch could never fire -- on the one directory Isti's messages
+#     land in. The session is resolved from `tmux list-sessions` instead
+#     (the coordinator runs as `<id>-channels`, not `agent-<name>`).
+#
+#     The CONTROL is the load-bearing half: with the session PRESENT the same
+#     placeholder at the same age must NOT fire, which is what proves the fire
+#     below comes from the DOWN verdict and not merely from age.
+# ---------------------------------------------------------------------------
+echo ""
+echo "(g) Coordinator dir: the down branch is reachable now"
+PG="$(make_default_case 200)"          # 200s > DOWN_GRACE_SEC (120), < WEDGED_SEC (900)
+run_wd_resolved "agent-friday marveen-worker"          # NO *-channels session -> down
+assert_eq "session gone: fires on the down branch" "1" "$(count sendMessage)"
+assert_eq "state file removed" "no" "$(pend_exists_named "$PG" COORD)"
+
+echo ""
+echo "(g2) CONTROL: with the channels session alive, the same age does NOT fire"
+PG2="$(make_default_case 200)"
+run_wd_resolved "agent-friday marveen-channels marveen-worker"
+assert_eq "session alive: no delivery below the 15-min backstop" "0" "$(count sendMessage)"
+assert_eq "placeholder preserved" "yes" "$(pend_exists_named "$PG2" COORD)"
+
+echo ""
+echo "(g3) CONTROL: no config AND an ambiguous list -> conservative, no fire"
+PG3="$(make_default_case 200)"
+run_wd_resolved "a-channels b-channels" "$TMP/noconfig"
+assert_eq "ambiguous: does not guess, so no down verdict" "0" "$(count sendMessage)"
+assert_eq "placeholder preserved" "yes" "$(pend_exists_named "$PG3" COORD)"
+
+echo ""
+echo "(g4) A FOREIGN channels session is alive, ours is not -> still DOWN"
+# This is the case that pins the ORDER, and nothing else here does: with the
+# resolution reversed (live list first, config second) the hook would probe the
+# foreign `other-channels`, find it alive, and stay silent while OUR coordinator
+# is gone. Cases (g)-(g3) all pass under that inversion -- measured.
+PG4="$(make_default_case 200)"
+run_wd_resolved "other-channels agent-friday"
+assert_eq "a foreign channels session does not stand in for ours" "1" "$(count sendMessage)"
+assert_eq "state file removed" "no" "$(pend_exists_named "$PG4" COORD)"
 
 # ---------------------------------------------------------------------------
 echo ""

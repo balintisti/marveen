@@ -21,8 +21,9 @@ Two delivery modes, best-effort per pending placeholder:
     placeholder into a clear error (editMessageText), as before.
 
 Detection (per pending placeholder, keyed by its session state file):
-  - agent DOWN (its tmux `agent-<name>` session is gone) and the placeholder is
-    older than DOWN_GRACE_SEC -> fire (crash / unreachable), or
+  - agent DOWN (its tmux session is gone -- `agent-<name>` for a fleet agent,
+    the single `*-channels` session for the coordinator's own chat) and the
+    placeholder is older than DOWN_GRACE_SEC -> fire (crash / unreachable), or
   - agent UP but the transcript shows a HUNG reply -- the most recent tool call
     is the Telegram `reply` and it has no result yet -- and the placeholder is
     older than WEDGED_UP_SEC -> fire FAST. This precisely targets the dropped-
@@ -106,6 +107,72 @@ def agent_name_from(progress_dir):
         if i + 1 < len(parts):
             return parts[i + 1]
     return None
+
+
+def pick_channels_session(names):
+    """The tmux session that owns the DEFAULT (non per-agent) progress dir.
+
+    That dir is the coordinator's, and the coordinator does NOT follow the
+    `agent-<name>` pattern -- it runs as `<id>-channels` (plus -worker and
+    -worker-fast, which do not carry the Telegram chat). Derived from the LIVE
+    session list rather than a guessed name, which is the fleet page's own rule
+    for measuring the coordinator.
+
+    Returns None unless EXACTLY ONE candidate exists. With none there is
+    nothing to probe; with several we cannot tell which one owns this chat --
+    and a wrong guess is not a harmless miss, it makes the DOWN branch fire on
+    a healthy session, which rewrites a live placeholder and tells the user
+    something is stuck while the agent is working. None keeps today's
+    conservative behaviour (never take the fast path).
+    """
+    cands = [n for n in names if n.endswith("-channels")]
+    return cands[0] if len(cands) == 1 else None
+
+
+def tmux_sessions():
+    try:
+        r = subprocess.run(["tmux", "list-sessions", "-F", "#{session_name}"],
+                           capture_output=True, text=True, timeout=5)
+        return r.stdout.split() if r.returncode == 0 else []
+    except Exception:
+        return []
+
+
+def main_agent_id():
+    """The coordinator's id, from FLEET_ROOT/.env -- CONFIG, not the live list.
+
+    This distinction is the whole fix. A name DERIVED from what is currently
+    running cannot detect absence: with the coordinator crashed there are zero
+    `*-channels` candidates, which is byte-identical to "this host has no such
+    install", so the down branch could never fire -- the exact defect card
+    574c9f0f is about, one level deeper. A name read from config is stable, so
+    its absence from the session list MEANS something.
+    """
+    for key in ("MAIN_AGENT_ID", "SERVICE_ID"):
+        try:
+            for line in open(os.path.join(FLEET_ROOT, ".env"), encoding="utf-8"):
+                line = line.strip()
+                if line.startswith(key + "="):
+                    v = line.split("=", 1)[1].strip()
+                    if v:
+                        return v
+        except Exception:
+            return None
+    return None
+
+
+def session_for(progress_dir):
+    """Which tmux session to probe for this progress dir, or None if unknown."""
+    name = agent_name_from(progress_dir)
+    if name:
+        return f"agent-{name}"
+    mid = main_agent_id()
+    if mid:
+        return f"{mid}-channels"
+    # Fallback only: with no config to read we can still name the session when
+    # exactly one exists -- but absence stays ambiguous here, so this path can
+    # confirm UP and never DOWN. That is the conservative direction.
+    return pick_channels_session(tmux_sessions())
 
 
 def tmux_session_alive(session):
@@ -235,8 +302,20 @@ def deliver(tok, chat_id, message_id, answer, progress_dir):
 
 def handle_dir(progress_dir):
     state_dir = os.path.dirname(progress_dir)           # .../telegram
-    name = agent_name_from(progress_dir)
-    agent_up = tmux_session_alive(f"agent-{name}") if name else True
+    # Card 574c9f0f: this used to hardcode True whenever the dir carried no
+    # agent name -- which is exactly the DEFAULT dir, the one Isti's own
+    # Telegram messages land in. The agent-down branch (DOWN_GRACE_SEC, 120 s)
+    # was therefore structurally unreachable there and only the 15-minute
+    # backstop applied. Measured 2026-09-10: 4/4 fires that morning were
+    # `wedged-backstop`, none `agent-down`.
+    #
+    # The payoff is a LATENCY CUT, not a silence fixed: 2 minutes instead of 15
+    # on a crashed coordinator turn. A WEDGED turn still renders exactly like a
+    # live one -- one snapshot cannot separate them, only time can -- so this
+    # deliberately does not touch how wedged is detected. That question already
+    # has two working instruments (reply-hung and the age backstop).
+    sess = session_for(progress_dir)
+    agent_up = tmux_session_alive(sess) if sess else True
     now = time.time()
     # Sweep orphan dedup markers (normally removed by the Stop hook).
     for m in glob.glob(os.path.join(progress_dir, "seen-*.marker")):
