@@ -197,6 +197,106 @@ finally:
     ns.subprocess.run = _real_run
 
 print()
+
+# =============================================================================
+# 4. DREAM: a HARMADIK allapot -- nem hianyzik, nem ures, hanem REGI
+# =============================================================================
+# A napindito SKILL kihagyas-feltetele "nem letezik vagy ures". Egy negy napos
+# DREAM.md MINDKETTON atmegy, es a digest legelso blokkjakent kerul Isti ele,
+# elen a "Top-3 HOLNAPI javaslat" bucketjével. Merve 2026-09-10: a fajl 09-06-i
+# es 5347 bajt.
+def _dream_root(first_line, mtime=None):
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "DREAM.md")
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(first_line + "\n\n## bucket\n- tartalom\n")
+    if mtime is not None:
+        os.utime(p, (mtime, mtime))
+    return d
+
+TODAY = "2026-09-10"
+
+def first(lines):
+    """Az ELSO sor, vagy ures sztring.
+
+    NEM kenyelmi fuggveny: egy `out[0]` egy URES listan IndexError-t dob, az
+    pedig MEGALLITJA az egesz fajlt -- tehat minden utana allo eset MERETLEN
+    marad, miközben a futas "elbukott"-nak latszik. Merve 2026-09-10 egy
+    mutacios koron: a B mutacio utan a fajl a 222. soron elszallt, es az
+    mtime-kontroll -- epp az, amit a mutacio celzott -- SOHA nem futott le."""
+    return lines[0] if lines else ""
+
+
+r = _dream_root("# 💭 Dream Engine — 2026-09-06 02:12")
+out = ns.section_dream(r, today=TODAY)
+check_true("dream: egy REGI fajl figyelmeztet", len(out) == 1)
+check_true("dream: a figyelmeztetes a fajl SAJAT datumat nevezi meg", "2026-09-06" in first(out))
+check_true("dream: kimondja, hogy a szekcio maradjon ki", "HAGYD KI" in first(out))
+
+# KONTROLL: mai fajlra NEMA -- kulonben minden reggel ugyanaz a sor, es par nap
+# alatt olvasatlan zaj lenne belole.
+r = _dream_root("# 💭 Dream Engine — 2026-09-10 02:12")
+check("dream KONTROLL: mai fajlra nema", ns.section_dream(r, today=TODAY), [])
+
+# KONTROLL: a HIANYZO fajl SEM nema -- mas sort kap, mint a regi.
+d = tempfile.mkdtemp()
+out_missing = ns.section_dream(d, today=TODAY)
+check_true("dream KONTROLL: hianyzo fajl sajat sort kap", len(out_missing) == 1 and "nincs" in first(out_missing))
+
+# A datum nelkuli elso sor: egy NEM MERHETO kor nem friss kor. Enelkul a naiv
+# alak (nincs datum -> nem ter el a mai datumtol -> nema) csendben atengedne.
+r = _dream_root("# Dream Engine")
+out_nodate = ns.section_dream(r, today=TODAY)
+check_true("dream: datum nelkuli elso sor NEM olvasodik frissnek", len(out_nodate) == 1 and "NINCS datum" in first(out_nodate))
+
+# A DONTO KONTROLL: a kort a TARTALOM adja, nem az mtime. Egy `git checkout`,
+# egy masolas vagy egy szerkesztes az mtime-ot frissiti, a tartalmat nem.
+r = _dream_root("# 💭 Dream Engine — 2026-09-06 02:12", mtime=time.time())
+check_true("dream: FRISS mtime + REGI tartalom -> figyelmeztet", len(ns.section_dream(r, today=TODAY)) == 1)
+r = _dream_root("# 💭 Dream Engine — 2026-09-10 02:12", mtime=time.time() - 40 * 86400)
+check("dream: REGI mtime + MAI tartalom -> nema", ns.section_dream(r, today=TODAY), [])
+
+# =============================================================================
+# 5. KERET: a szazalek kiirasa, es a harom ok, ami helyett SOSEM becsulunk
+# =============================================================================
+def _quota_root(payload, mtime=None):
+    d = tempfile.mkdtemp()
+    os.makedirs(os.path.join(d, "store"))
+    p = os.path.join(d, "store", "usage-latest.json")
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(payload, f)
+    if mtime is not None:
+        os.utime(p, (mtime, mtime))
+    return d
+
+AUTH = {"claude": {"source": "authoritative", "ok": True,
+                   "windows": {"five_hour": {"used_percent": 13.0, "resets_at": NOW + 3600},
+                               "seven_day": {"used_percent": 12.0, "resets_at": NOW + 86400},
+                               "seven_day_opus": {"used_percent": 0, "resets_at": NOW + 86400}}}}
+
+out = ns.section_quota(_quota_root(AUTH))
+check_true("keret: hiteles forrasnal kiirja a szazalekot", any("13%" in x for x in out))
+check_true("keret: mind a harom ablak sort kap", len([x for x in out if "%" in x]) == 3)
+
+# A becsles NEM ad szazalekot es reset-idot -- pontosan ettol volt vak a flotta
+# egy hetig (dbc06e8c). Ha ez a sor elnemul, a szekcio egy BECSULT szamot irna ki
+# ugyanabban az alakban, mint a hiteleset.
+est = {"claude": {"source": "estimate", "ok": True, "windows": {}}}
+out_est = ns.section_quota(_quota_root(est))
+check_true("keret: becslesre NEM MERHETO", "NEM MERHETO" in first(out_est))
+check_true("keret KONTROLL: becslesnel NINCS szazalek a kimenetben", not any("%" in x for x in out_est))
+
+# Egy ALLO 10 perces feladat mellett a szam ORAKIG ugyanaz marad, es a regi szam
+# ugyanugy nez ki, mint egy friss. A 30 perces plafon a `quota-ceiling-guard.sh`-e.
+out_old = ns.section_quota(_quota_root(AUTH, mtime=NOW - 3 * 3600))
+check_true("keret: ELAVULT pillanatfelvetelre NEM MERHETO", "NEM MERHETO" in first(out_old))
+check_true("keret: a sor kimondja a kort is", "perces" in first(out_old))
+
+out_none = ns.section_quota(tempfile.mkdtemp())
+check_true("keret: hianyzo pillanatfelvetel sajat sort kap", "NEM MERHETO" in first(out_none))
+
+# AZ OSSZEGZO A FAJL VEGEN ALL, es ez nem stilus: 2026-09-10-ig a 200. soron
+# allt, tehat minden UTANA irt eset ugy bukhatott volna, hogy a futas exit 0-t ad.
 if failed:
     print(f"{len(failed)} FAILED: {failed}", file=sys.stderr); sys.exit(1)
 print("All napindito-section tests passed.")

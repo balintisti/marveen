@@ -8,6 +8,17 @@ wrapper adja meg. A `0` NEM működik: a csatorna allowlistes, és a küldés el
 
 **FONTOS — Dream Engine override**: a napindító ELEJÉRE (még az email/naptár szekciók ELŐTT) tedd be a `{{INSTALL_DIR}}/DREAM.md` fájl tartalmából az 5 bucket-et — `💡 Skill-javaslatok`, `🧹 Memória-egészség`, `🎯 Top-3 holnapi javaslat`, `🌐 External opportunity`, `🛠 Skill-flotta health`. Ha a DREAM.md nem létezik vagy üres (pl. a Dream Engine valamiért nem futott le), kihagyod ezt a szekciót.
 
+**ES A KIHAGYAS HARMADIK OKA, ami 2026-09-10-ig nem allt itt: HA A DREAM.md REGI.** A fenti
+ket feltetel -- "nem letezik vagy ures" -- egy NEGY NAPOS fajlon MINDKETTON atmegy (merve
+2026-09-10: a DREAM.md 09-06 02:12-i es 5347 bajt, mert a `dream-engine` feladat azota
+`enabled:false`), tehat a digest valtozatlanul kiirna, az elen a "Top-3 HOLNAPI javaslat"
+bucketjevel, negy nappal az utan a holnap utan.
+
+A `napindito-sections.py` kimenetenek ELSO blokkja `DREAM:`-mel kezdodik, ha a fajl NEM mai.
+**Ha ott az a sor: a bucketeket NE masold be, hanem AZT AZ EGY SORT ird ki.** Ugyanaz a szabaly,
+mint az emailnel es a naptarnal: az URES es a NEM MERHETO nem ugyanaz, es egy negy napos alom
+nem a mai nap.
+
 A `cat {{INSTALL_DIR}}/DREAM.md` parancs visszaadja a tartalmat, abból emeld ki a kulcs-szekciókat MarkdownV2-formátumra escape-elve.
 
 A többi szekció (email, naptár, AI hírek) maradnak a CLAUDE.md-ben leírt formátum szerint.

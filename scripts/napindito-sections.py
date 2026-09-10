@@ -283,14 +283,104 @@ def section_broken(con, hours, tasks_dir=None, root=None, drift_state=None, writ
     return [f"MI TORT EL AZ EJJEL (utolso {hours} ora):"] + out
 
 
-def section_quota():
-    """4. KERET -- SZANDEKOSAN KIMARAD, es ez a sor a kihagyas indoka.
+def section_quota(root=DEFAULT_ROOT, now=None, max_age_min=30):
+    """4. KERET -- MOSTANTOL KIIRJA, ES EZ A SOR AZ INDOK, HOGY MIERT VALTOZOTT.
 
-    A keret-mero allapota NYITOTT KARTYAN all (dbc06e8c: a hitelesnek jelolt
-    forras nem lathato). Egy becsult keret-szam rosszabb a hianyanal: ugy nezne
-    ki, mint egy meres."""
-    return ["KERET: nem irom ki -- a keret-mero megbizhatosaga nyitott kartyan all (dbc06e8c). "
-            "Becsulni nem fogom."]
+    2026-09-10-ig ez a szekcio SZANDEKOSAN kimaradt: a keret-mero megbizhatosaga
+    nyitott kartyan allt (`dbc06e8c`, "a hitelesnek jelolt forras nem lathato").
+    A kartya AZNAP lezarult, meressel: a `store/usage-history.jsonl` UTOLSO
+    `estimate` sora 2026-08-22 18:44 -- azota 19 napon at napi ~144 sor, mind
+    `authoritative`. Az indok tehat megszunt, es egy elavult indok epp olyan
+    csendben tart eletben egy kihagyast, mint egy elavult "allj meg" emlek.
+
+    AMI NEM VALTOZOTT: BECSULNI TOVABBRA SEM FOGUNK. Harom kulon ok teheti a
+    szamot ertelmetlenné, es MINDHAROM SAJAT SORT kap ahelyett, hogy szazalekot
+    irnank ki:
+      - nincs pillanatfelvetel        -> a mero nem futott
+      - a pillanatfelvetel ELAVULT    -> a 10 perces feladat allt (ez a mai eset
+                                         alakja: a `usage-snapshot` egyike a het
+                                         `command` tipusu feladatnak, amelyik
+                                         VEGIG futott, de ezt merni kell, nem hinni)
+      - `source != authoritative`     -> a becsles NEM ad szazalekot es reset-idot,
+                                         epp ezert volt vak a flotta egy hetig
+    A 30 perces frissesseg-plafon nem talalt szam: a `quota-ceiling-guard.sh`
+    ugyanezt hasznalja (`QUOTA_CEILING_MAX_AGE_MIN=30`), es ket kulonbozo plafon
+    ugyanarra az adatra ket kulonbozo valaszt adna ugyanabban a percben."""
+    path = os.path.join(root, "store", "usage-latest.json")
+    now = time.time() if now is None else now
+    if not os.path.exists(path):
+        return ["KERET: NEM MERHETO -- nincs " + path + " (a kvota-pillanatfelvetel nem futott le)."]
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception as e:
+        return [f"KERET: NEM MERHETO -- a pillanatfelvetel olvashatatlan ({type(e).__name__})."]
+    age_min = (now - os.path.getmtime(path)) / 60
+    if age_min > max_age_min:
+        return [f"KERET: NEM MERHETO -- a pillanatfelvetel {age_min:.0f} perces "
+                f"(a hatar {max_age_min}); a 10 perces `usage-snapshot` feladat all."]
+    cl = d.get("claude") or {}
+    if cl.get("source") != "authoritative" or not cl.get("ok"):
+        why = cl.get("error") or cl.get("source") or "ismeretlen ok"
+        return [f"KERET: NEM MERHETO -- a mero nem hiteles forrasbol dolgozik ({str(why)[:80]}). "
+                "Becsulni nem fogom: a becsles se szazalekot, se reset-idot nem ad."]
+    w = cl.get("windows") or {}
+    def one(key, label):
+        x = w.get(key) or {}
+        pct = x.get("used_percent")
+        if pct is None:
+            return f"  - {label}: NEM MERHETO (hianyzo mezo)"
+        r = x.get("resets_at")
+        when = datetime.fromtimestamp(r).strftime("%H:%M") if r else "?"
+        return f"  - {label}: {pct:g}% (reset {when})"
+    return ["KERET:", one("five_hour", "5 oras"), one("seven_day", "heti"),
+            one("seven_day_opus", "heti opus")]
+
+
+def section_dream(root=DEFAULT_ROOT, today=None):
+    """5. DREAM -- CSAK AKKOR SZOLAL MEG, HA A `DREAM.md` ELAVULT.
+
+    A napindito SKILL a DREAM.md ot bucketjet a digest LEGELEJERE teszi, es a
+    kihagyas felteteleként ezt mondja: "ha a DREAM.md nem letezik vagy ures".
+    **EGYIK SEM all egy REGI fajlra.** Merve 2026-09-10 19:08: a DREAM.md
+    2026-09-06 02:12-rol valo es 5347 bajt -- letezik ES nem ures --, mert a
+    `dream-engine` feladat `enabled:false` allapotban all 09-06 ota. A digest
+    tehat valtozatlanul kiirna, az elen a "Top-3 HOLNAPI javaslat" bucketjével,
+    negy nappal az utan a holnap utan.
+
+    A HARMADIK ALLAPOT, amit a SKILL feltetele nem ismer: nem HIANYZIK, nem URES,
+    hanem REGI. Ez ugyanaz az alak, mint a zold or egy leallt mero mellett -- es
+    itt az ELSO dolog, amit Isti reggel lat.
+
+    A KORT A FAJL SAJAT ELSO SORA MONDJA MEG (`# ... Dream Engine — <datum> <ido>`),
+    nem az mtime: egy `git checkout`, egy masolas vagy egy szerkesztes az mtime-ot
+    frissiti, a TARTALMAT nem. Ha az elso sorban nincs datum, azt is kimondjuk --
+    egy nem-olvashato kor NEM friss kor.
+
+    NEMA, HA FRISS, es ez szandekos (a `section_broken` precedense): ilyenkor a
+    bizonyitek maga a digest elejen allo dream-szekcio. Ez FIGYELMEZTETO csatorna,
+    nem allapot-jelentes; egy naponta ismetlodo "a DREAM.md friss" sor nehany nap
+    alatt olvasatlan zajja valna."""
+    path = os.path.join(root, "DREAM.md")
+    today = today or datetime.now().strftime("%Y-%m-%d")
+    if not os.path.exists(path):
+        return ["DREAM: nincs " + path + " -- a napindito dream-szekcioja KIMARAD (a SKILL igy is keri)."]
+    head = ""
+    try:
+        with open(path, encoding="utf-8") as f:
+            head = f.readline()
+    except Exception as e:
+        return [f"DREAM: a {path} elso sora nem olvashato ({type(e).__name__}) -- a dream-szekcio KIMARAD."]
+    m = re.search(r"(\d{4}-\d{2}-\d{2})", head)
+    if not m:
+        return ["DREAM: a DREAM.md elso soraban NINCS datum, tehat a kora nem allapithato meg "
+                "-- a dream-szekciot HAGYD KI (egy nem merheto kor nem friss kor)."]
+    when = m.group(1)
+    if when == today:
+        return []
+    return [f"DREAM: a DREAM.md {when}-i, tehat a Dream Engine ma NEM futott le "
+            f"-- a dream-szekciot HAGYD KI a napinditobol, ne masold be a bucketeket. "
+            f"(A `dream-engine` utemezett feladat allapotat nezd meg: 09-06 ota `enabled:false` volt.)"]
 
 
 def main():
@@ -310,9 +400,9 @@ def main():
     except Exception as e:
         print(f"MIND A HAROM SZEKCIO KIMARAD: az adatbazis nem olvashato ({e})")
         return 1
-    blocks = [section_isti(con), section_delta(con, snap, not a.no_write),
+    blocks = [section_dream(a.root), section_isti(con), section_delta(con, snap, not a.no_write),
               section_broken(con, a.since_hours, a.tasks_dir, a.root, None, not a.no_write),
-              section_quota()]
+              section_quota(a.root)]
     print("\n\n".join("\n".join(b) for b in blocks if b))
     return 0
 
