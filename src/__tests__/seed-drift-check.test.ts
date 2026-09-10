@@ -64,26 +64,29 @@ describe('condition 3: an untouched seed must not be flagged', () => {
     expect(d).toEqual({ onlyTemplate: [], onlyLive: [] })
   })
   it('CONTROL: but a CHANGED value the template declares IS drift', () => {
-    const d = jsonDrift('{"agent":"marveen"}', '{"agent":"jarvis","stuckAfterMinutes":30}')
+    const d = jsonDrift('{"type":"task"}', '{"type":"heartbeat","stuckAfterMinutes":30}')
     expect(d.onlyTemplate.length).toBe(1)
-    expect(d.onlyTemplate[0]).toContain('marveen')
-    expect(d.onlyTemplate[0]).toContain('jarvis')
+    expect(d.onlyTemplate[0]).toContain('task')
+    expect(d.onlyTemplate[0]).toContain('heartbeat')
   })
   it('a field the SEEDER assigns is not drift, even though the template declares it', () => {
     // createdAt ships as 0 and gets a real timestamp at seed time, so a
     // template declaring it drifts FOREVER on every seeded task. Found AFTER
     // shipping the checker: two of its four live "drifts" were this and
     // nothing else -- condition 3 broken by the tool that carries it.
-    const d = jsonDrift('{"createdAt":0,"agent":"marveen"}', '{"createdAt":1788727901,"agent":"marveen"}')
+    const d = jsonDrift('{"createdAt":0,"schedule":"0 7 * * *"}', '{"createdAt":1788727901,"schedule":"0 7 * * *"}')
     expect(d).toEqual({ onlyTemplate: [], onlyLive: [] })
   })
   it('CONTROL: the exclusion is NARROW -- a real difference next to it still fires', () => {
-    const d = jsonDrift('{"createdAt":0,"agent":"marveen"}', '{"createdAt":1788727901,"agent":"jarvis"}')
+    // `schedule`, NEM `agent`: az agent azota maga is kizart mezo, tehat rossz
+    // kontroll lenne -- egy kontroll, ami a kizart halmazbol valaszt peldat,
+    // nem a szukesseget meri, hanem sajat magat.
+    const d = jsonDrift('{"createdAt":0,"schedule":"0 7 * * *"}', '{"createdAt":1788727901,"schedule":"0 9 * * *"}')
     expect(d.onlyTemplate.length).toBe(1)
-    expect(d.onlyTemplate[0]).toContain('agent')
+    expect(d.onlyTemplate[0]).toContain('schedule')
   })
   it('CONTROL: the excluded set is small and named, not a catch-all', () => {
-    expect([...RUNTIME_ASSIGNED_FIELDS]).toEqual(['createdAt'])
+    expect([...RUNTIME_ASSIGNED_FIELDS]).toEqual(['createdAt', 'agent'])
   })
   it('CONTROL: another NUMERIC field still drifts -- the exclusion is by NAME, not by type', () => {
     // A mutation probe caught this one: widening the exclusion to "any number"
