@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { rootMismatchMessage, jsonDrift, lineDrift, UNRESOLVED } from '../seed-drift.js'
+import { rootMismatchMessage, jsonDrift, lineDrift, UNRESOLVED, RUNTIME_ASSIGNED_FIELDS } from '../seed-drift.js'
 
 // A seeded scheduled task never receives a later template fix
 // (`if (existsSync(dest)) continue`), and that early exit is NOT a bug -- it
@@ -69,6 +69,33 @@ describe('condition 3: an untouched seed must not be flagged', () => {
     expect(d.onlyTemplate[0]).toContain('marveen')
     expect(d.onlyTemplate[0]).toContain('jarvis')
   })
+  it('a field the SEEDER assigns is not drift, even though the template declares it', () => {
+    // createdAt ships as 0 and gets a real timestamp at seed time, so a
+    // template declaring it drifts FOREVER on every seeded task. Found AFTER
+    // shipping the checker: two of its four live "drifts" were this and
+    // nothing else -- condition 3 broken by the tool that carries it.
+    const d = jsonDrift('{"createdAt":0,"agent":"marveen"}', '{"createdAt":1788727901,"agent":"marveen"}')
+    expect(d).toEqual({ onlyTemplate: [], onlyLive: [] })
+  })
+  it('CONTROL: the exclusion is NARROW -- a real difference next to it still fires', () => {
+    const d = jsonDrift('{"createdAt":0,"agent":"marveen"}', '{"createdAt":1788727901,"agent":"jarvis"}')
+    expect(d.onlyTemplate.length).toBe(1)
+    expect(d.onlyTemplate[0]).toContain('agent')
+  })
+  it('CONTROL: the excluded set is small and named, not a catch-all', () => {
+    expect([...RUNTIME_ASSIGNED_FIELDS]).toEqual(['createdAt'])
+  })
+  it('CONTROL: another NUMERIC field still drifts -- the exclusion is by NAME, not by type', () => {
+    // A mutation probe caught this one: widening the exclusion to "any number"
+    // passed all sixteen assertions, because the narrowness control next to it
+    // used a STRING field. A type-based exclusion would hide a changed
+    // threshold or port -- exactly the kind of drift worth reporting. Third
+    // time today a mutation found MY TEST rather than the code.
+    const d = jsonDrift('{"createdAt":0,"stuckAfterMinutes":30}', '{"createdAt":1788727901,"stuckAfterMinutes":60}')
+    expect(d.onlyTemplate.length).toBe(1)
+    expect(d.onlyTemplate[0]).toContain('stuckAfterMinutes')
+  })
+
   it('CONTROL: and a MISSING key the template declares is drift too', () => {
     const d = jsonDrift('{"enabled":true}', '{}')
     expect(d.onlyTemplate.length).toBe(1)
