@@ -49,7 +49,10 @@ const GCLOUD_TIMEOUT_MS = 15_000
 /** Cap on any borrowed text (stderr, HTTP body) that can reach a log or the fleet queue. */
 const MAX_REASON_CHARS = 300
 
-export type Probe<T> = { ok: true; value: T } | { ok: false; reason: string }
+export type Probe<T> =
+  | { ok: true; value: T }
+  /** `transient` marks a failure worth ATTEMPTING AGAIN -- see PROBE_ATTEMPTS. */
+  | { ok: false; reason: string; transient?: boolean }
 
 /**
  * Strip anything credential-shaped before it can reach a log line or the queue.
@@ -117,6 +120,75 @@ export function describeExecFailure(err: unknown, timeoutMs = GCLOUD_TIMEOUT_MS)
 export const GCLOUD_STDIO = ['ignore', 'pipe', 'pipe'] as const
 
 /**
+ * A FAILURE IS NOT BELIEVED FROM ONE SAMPLE (card 213abf0d).
+ *
+ * Measured, three independent ways, before this existed:
+ *   - gcloud n=40 across two load states (quiet, and a full vitest at loadavg
+ *     5.20): 0.25-0.57 s, ZERO samples above 15 s
+ *   - gcloud n=8 inside the SERVICE's own environment (pulled off the running
+ *     process, 9 vars against an interactive shell's 36): 0.33-0.66 s
+ *   - the token refresh itself, caught mid-batch: 0.66 s, so "it landed on a
+ *     refresh" cannot explain a 15-second overrun either
+ * and the shape: five blind ticks in a day, none carrying the STILL BLIND
+ * marker, so five SEPARATE spells each shorter than the 2-minute poll interval,
+ * each ended by a successful tick on its own.
+ *
+ * That is a transient fault asserted from n=1, and it errs in the ALARMING
+ * direction -- the same shape as an `ls-remote` that returns empty on a blip
+ * and reads as "the branch does not exist".
+ *
+ * WHY THE ATTEMPT COUNT IS IN THE REASON STRING: a retry that hides itself
+ * trades one wrong answer for a quieter one. A notice that survived two
+ * attempts is a different claim from one that did not, and the reader cannot
+ * see the difference unless it is written down.
+ */
+export const PROBE_ATTEMPTS = 2
+const DEFAULT_PROBE_RETRY_DELAY_MS = 1_000
+
+/** Env-tunable so the suite does not sleep; production keeps the default. */
+export function probeRetryDelayMs(): number {
+  const raw = Number(process.env.UPTIME_PROBE_RETRY_DELAY_MS)
+  return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_PROBE_RETRY_DELAY_MS
+}
+
+/**
+ * Which gcloud failures are worth a second attempt.
+ *
+ * NARROW ON PURPOSE. ENOENT means gcloud is not on this process's PATH -- that
+ * is not a blip and a retry only doubles the delay before an accurate notice.
+ * A non-zero exit is gcloud SAYING no (bad flags, no credentials), and repeating
+ * a refused command is how a poller turns a clear diagnosis into a slow one.
+ * Only our own expired budget and an external kill are treated as transient.
+ */
+export function isTransientExecFailure(err: unknown): boolean {
+  const e = err as NodeJS.ErrnoException & { signal?: string | null }
+  if (e?.code === 'ENOENT') return false
+  if (e?.code === 'ETIMEDOUT') return true
+  return typeof e?.signal === 'string' && e.signal.length > 0
+}
+
+/** Runs a probe up to PROBE_ATTEMPTS times while it keeps failing TRANSIENTLY. */
+export async function withRetry<T>(
+  attempt: () => Probe<T> | Promise<Probe<T>>,
+  attempts = PROBE_ATTEMPTS,
+): Promise<Probe<T>> {
+  let last: Probe<T> = { ok: false, reason: 'probe never ran' }
+  for (let i = 1; i <= attempts; i++) {
+    last = await attempt()
+    if (last.ok) return last
+    if (!last.transient) return last            // a refusal is not a blip
+    if (i < attempts) {
+      const wait = probeRetryDelayMs()
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait))
+    }
+  }
+  if (!last.ok && attempts > 1) {
+    return { ...last, reason: `${last.reason} (${attempts} attempts)` }
+  }
+  return last
+}
+
+/**
  * Runs gcloud with stderr CAPTURED, so the failure can name its own cause.
  *
  * `timeoutMs` IS A PARAMETER SO THE TIMEOUT PATH CAN BE PROVEN END TO END in a fifth of a
@@ -165,21 +237,31 @@ export function runGcloud(args: string[], what: string, timeoutMs = GCLOUD_TIMEO
     if (out.length === 0) return { ok: false, reason: `${what}: gcloud exited 0 but printed nothing` }
     return { ok: true, value: out }
   } catch (err) {
-    return { ok: false, reason: `${what}: ${describeExecFailure(err, timeoutMs)}` }
+    // A KET VALTOZAS OSSZETEVE, es egyik sem nyeli el a masikat: a `timeoutMs` a MERT koretet
+    // nevezi meg a hibauzenetben (kulonben egy 200 ms-os proba 15000-et allitana), a `transient`
+    // pedig azt mondja meg, erdemes-e masodszor probalni. Kulon kerdesek, kulon mezok.
+    return {
+      ok: false,
+      reason: `${what}: ${describeExecFailure(err, timeoutMs)}`,
+      transient: isTransientExecFailure(err),
+    }
   }
 }
 
-function accessToken(): Probe<string> {
-  return runGcloud(['auth', 'print-access-token'], 'access token')
+function accessToken(): Promise<Probe<string>> {
+  return withRetry(() => runGcloud(['auth', 'print-access-token'], 'access token'))
 }
 
-function project(): Probe<string> {
+function project(): Promise<Probe<string>> {
+  return withRetry(() => {
   const p = runGcloud(['config', 'get-value', 'project'], 'project')
   if (!p.ok) return p
   // '(unset)' is gcloud SUCCEEDING and telling us there is no project -- a
   // different cause from a failed call, and it used to collapse into the same null.
+  // NOT transient: gcloud answered, and the answer is "there is no project".
   if (p.value === '(unset)') return { ok: false, reason: 'project: gcloud reports the project is (unset)' }
   return p
+  })
 }
 
 /**
@@ -246,6 +328,7 @@ export async function getJson(url: string, token: string): Promise<Probe<unknown
       // The STATUS is the diagnosis: 401/403 is the credential, 404 is the
       // project or the path, 5xx is Google. Collapsing them into null is the
       // same defect as discarding stderr, one layer out.
+      // Deliberately NOT transient: 401/403/404 are answers, not blips.
       return { ok: false, reason: `HTTP ${res.status} from ${where}` }
     }
     // The body is read INSIDE the measurement: a response whose headers arrive fast and whose
@@ -258,7 +341,7 @@ export async function getJson(url: string, token: string): Promise<Probe<unknown
     done('threw')
     logger.warn({ err, url: where }, 'uptime poller: API call threw')
     const msg = redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, MAX_REASON_CHARS)
-    return { ok: false, reason: `request to ${where} threw: ${msg}` }
+    return { ok: false, reason: `request to ${where} threw: ${msg}`, transient: true }
   }
 }
 
@@ -334,18 +417,18 @@ function enqueueVerified(content: string): boolean {
 
 export async function uptimeTick(now = Date.now()): Promise<void> {
   // A call still running as this tick starts cannot complete inside its own tick any more, so
-  // it is the hang this card is about -- and it is only visible HERE, because the hung call
+  // it is the hang card 77c305a4 is about -- and it is only visible HERE, because the hung call
   // itself never reaches its own logging. Warn, do not abort: we have no measured basis for
   // deciding it is dead rather than slow, and killing a slow-but-working call is the alarming
-  // direction this card's ruling rules out.
+  // direction that card's ruling rules out.
   for (const c of overdueCalls(inFlight, now)) {
     logger.warn(
       { url: c.url, msSoFar: now - c.startedAt, limitMs: INTERVAL_MS },
       'uptime poller: an API call is still in flight as the next tick begins -- no timeout exists on this path (card 77c305a4)',
     )
   }
-  const tokenProbe = accessToken()
-  const projProbe = project()
+  const tokenProbe = await accessToken()
+  const projProbe = await project()
 
   // NO TOKEN IS AN ALERT, NOT A QUIET SKIP. This is the whole point of the card:
   // the failure that looked like silence looked like health for months.
@@ -371,7 +454,7 @@ export async function uptimeTick(now = Date.now()): Promise<void> {
   const token = tokenProbe.value
   const proj = projProbe.value
   const base = `https://monitoring.googleapis.com/v3/projects/${encodeURIComponent(proj)}`
-  const policyProbe = await getJson(`${base}/alertPolicies`, token)
+  const policyProbe = await withRetry(() => getJson(`${base}/alertPolicies`, token))
   const policyPayload = policyProbe.ok ? policyProbe.value : null
   const cond = conditionFromPolicies(policyPayload) ?? FALLBACK_CONDITION
   const usingFallback = conditionFromPolicies(policyPayload) == null
@@ -383,7 +466,7 @@ export async function uptimeTick(now = Date.now()): Promise<void> {
     'interval.startTime': start,
     'interval.endTime': end,
   })
-  const seriesProbe = await getJson(`${base}/timeSeries?${q}`, token)
+  const seriesProbe = await withRetry(() => getJson(`${base}/timeSeries?${q}`, token))
   const series = seriesFromPayload(seriesProbe.ok ? seriesProbe.value : null)
 
   const decision = decideUptimeAlerts(series, cond, state, now)
