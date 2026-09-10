@@ -39,6 +39,16 @@ class H(BaseHTTPRequestHandler):
         method = self.path.rsplit("/", 1)[-1]
         with open(reqlog, "a", encoding="utf-8") as f:
             f.write(f"{method} {body}\n")
+        # The real Bot API refuses to DELETE a message older than 48 h (400) but
+        # still allows an EDIT. Message id 4444 is the test's "too old" sentinel;
+        # every other id keeps the old always-200 behaviour, so cases (a)-(e) are
+        # untouched.
+        if method == "deleteMessage" and '"message_id": 4444' in body.replace("\n", ""):
+            err = json.dumps({"ok": False, "error_code": 400,
+                              "description": "Bad Request: message can't be deleted"}).encode()
+            self.send_response(400); self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(err))); self.end_headers()
+            self.wfile.write(err); return
         out = {"ok": True, "result": {"message_id": 9001}}
         payload = json.dumps(out).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json")
@@ -62,8 +72,8 @@ ANSWER="EZ_A_VALODI_VALASZ amit a usernek latnia kell"
 # kind = hung  -> last tool_use is a Telegram reply with NO result (round hung)
 # kind = work  -> last tool_use is a Bash WITH a result (legit long task)
 # kind = noans -> hung reply but NO assistant text (nothing to deliver)
-make_case() { # name kind age_seconds
-    local name="$1" kind="$2" age="$3"
+make_case() { # name kind age_seconds [message_id]
+    local name="$1" kind="$2" age="$3" mid="${4:-555}"
     local pdir="$TMP/root/agents/$name/.claude/channels/telegram/progress"
     local sdir="$TMP/root/agents/$name/.claude/channels/telegram"
     mkdir -p "$pdir"
@@ -79,7 +89,7 @@ make_case() { # name kind age_seconds
         { printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"'"$ANSWER"'"},{"type":"tool_use","id":"tuBash1","name":"Bash"}]}}';
           printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tuBash1"}]}}'; } > "$tr" ;;
     esac
-    printf '[{"chat_id":"%s","message_id":555,"transcript_path":"%s"}]\n' "$CHAT" "$tr" \
+    printf '[{"chat_id":"%s","message_id":%s,"transcript_path":"%s"}]\n' "$CHAT" "$mid" "$tr" \
         > "$pdir/SID.json"
     # Backdate the state file so its age exceeds the tested threshold.
     python3 - "$pdir/SID.json" "$age" <<'PY'
@@ -157,6 +167,29 @@ run_wd 1 1
 assert_eq "no real-answer send (nothing to deliver)" "0" "$(count sendMessage)"
 assert_eq "rewrites placeholder into a generic error" "1" "$(count editMessageText)"
 assert_eq "error text used" "yes" "$(body_has "Valami elakadt")"
+
+# ---------------------------------------------------------------------------
+# (f) Placeholder older than 48 h: deleteMessage is refused (400) -> the
+#     placeholder MUST be edited instead. Without the fallback the "Dolgozom
+#     rajta" line stays for ever directly ABOVE the answer we just delivered --
+#     a permanent false "still working" marker, which is worse than silence.
+#     Measured on the live log 2026-09-10: 14 such 400s in one watchdog run.
+# ---------------------------------------------------------------------------
+echo ""
+echo "(f) Delete refused (>48h): placeholder is EDITED, not left standing"
+PF="$(make_case wf hung 100 4444)"
+run_wd 1 1
+assert_eq "still delivers the real answer" "1" "$(count sendMessage)"
+assert_eq "delete was attempted first" "1" "$(count deleteMessage)"
+assert_eq "falls back to an edit when delete is refused" "1" "$(count editMessageText)"
+# ASCII-only anchor on purpose: the payload says "megérkezett" and an
+# unaccented pattern matches NOTHING. This assertion was written unaccented
+# first and went red for that reason alone -- the accent blind spot on our own
+# meter, caught here only because it is a POSITIVE assertion. "lentebb" is
+# ASCII, unique to DELIVERED_TEXT, and absent from ERROR_TEXT.
+assert_eq "the edit says the answer arrived (not the generic error)" "yes" "$(body_has "lentebb")"
+assert_eq "does NOT reuse the generic error text" "no" "$(body_has "Valami elakadt")"
+assert_eq "state file removed (the turn is finished either way)" "no" "$(pend_exists "$PF")"
 
 # ---------------------------------------------------------------------------
 echo ""
