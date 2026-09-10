@@ -32,6 +32,15 @@
  *     still there after substitution the tool STOPS rather than reporting. His
  *     three misses (INSTALL_DIR only, then MAIN_AGENT_ID, then BOT_NAME) each
  *     produced a confident, wrong drift report.
+ *
+ * AND WHY (4) IS DANGEROUS RATHER THAN MERELY WRONG -- didi's sentence, and the
+ * part neither this docblock nor its author had. An unresolved placeholder makes
+ * the diff report IDENTITY-BEARING lines as live-only: the owner's name, the
+ * install paths, the agent id. Those are precisely the lines that most RESEMBLE
+ * a decision or a risk, so the false positives do NOT scatter -- they pile up
+ * exactly where the reviewer is already looking, wearing the shape of the thing
+ * the tool exists to find. A wrong report that lands in the noise gets ignored;
+ * this one gets ACTED ON.
  */
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
