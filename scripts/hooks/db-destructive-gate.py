@@ -226,6 +226,101 @@ CLOUD_PATTERNS = [
      "says `delete`, and the failure it causes surfaces as a broken pipeline"),
 ]
 
+# === FORCE-PUSH: the fourth class, and it is here because the deny list can express
+# the flag ONLY WHERE IT DOES NOT USUALLY STAND (card 9e3f2f5c, group G2) ========
+#
+# Unlike the CLOUD class, the deny list DOES bite here, and that was measured rather
+# than assumed (computress, four probes with a positive control, 2026-09-06): a
+# `Bash(...)` pattern ending in `:*` is a LITERAL PREFIX, one WITHOUT `:*` is an EXACT
+# match. Both forms ship, in developer-senior and developer-junior:
+#
+#     Bash(git push --force)       exact  -> the bare `git push --force`
+#     Bash(git push --force :*)    prefix -> `git push --force origin main`
+#     Bash(git push -f:*)          prefix -> `git push -f ...`
+#
+# ALL THREE ANCHOR THE FLAG IMMEDIATELY AFTER `push`, AND THE ORDINARY FORM DOES NOT:
+#
+#     git push fork feat/x --force      <- matches none of them
+#
+# That limit was written down by hand on the card the day those rules shipped, and it
+# cannot be closed by adding orderings. `git push <remote> <ref> --force`,
+# `git push --no-verify --force`, `git push -q fork x -f` are ONE shape with the
+# arguments permuted; a prefix matcher needs one rule per permutation, and a permutation
+# nobody thought of is missed SILENTLY. That is the same failure the CLOUD class exists
+# to avoid, so the same answer applies: two conditions in one segment, no list.
+#
+#     `git` in command position AND `push` as a standalone token
+#     AND a force-shaped ARGUMENT anywhere among the arguments
+#
+# THE BOUNDARY IS **NOT** THE ONE THE CLOUD CLASS USES, and reusing it would produce a
+# rule that compiles, reads correctly, passes review and NEVER FIRES. `(?<![\w-])X`
+# has that lookbehind precisely to keep `--delete-labels` out -- and a FLAG is exactly
+# that shape: the character before `force` in `--force` IS a hyphen. So the flag rules
+# below match the WHOLE flag token, hyphens included. The look-AHEAD stays, and it is
+# what keeps `--force-with-lease` out: the safe variant has to remain usable, or the
+# gate would be pushing people toward the dangerous one.
+#
+# BLAST RADIUS, measured before it went in, on the denominator the CLOUD class used --
+# the production checkout's `.bash_history`, 567 lines, i.e. what Isti actually typed:
+#
+#     `git` in command position .................. 33
+#     of those with a standalone `push` ..........  4  -- all four `git push -u origin main`
+#     of those, force-shaped .....................  0
+#     CONTROL, one per axis: the same three matchers say TRUE on synthetic
+#         `git push fork feat/x --force`, `git push -fu origin main` and
+#         `git push origin +main:main`, so no axis is blind
+#     AND THE REASON THE CLASS IS SCOPED TO A PUSH SEGMENT, from the same history:
+#         2 lines carry a bare `--force` (`npm run dev -- --force`) and 9 carry a short
+#         option containing an f (`rm -rf node_modules`). Un-scoped, this rule would
+#         refuse eleven lines of ordinary work on day one.
+#     the fleet tool log (`tool_call_log`), 753 Bash calls: 154 mention `git`, ONE has a
+#         standalone `push` (`git push fork "$BR"`), 0 force-shaped. PARTIAL in the same
+#         two ways as before, said plainly: 826/826 rows are the coordinator's, the
+#         window is one 12-hour day (2026-09-10 08:01-20:04), and the column is a summary
+#         that may be truncated.
+#
+# AND HERE THE FALSE-REFUSAL COST IS NEAR ZERO BY **POLICY**, NOT BY LUCK -- a stronger
+# footing than a usage count, which only says what happened to be typed: force-push is a
+# forbidden form in this fleet, stated outright in the rulebook, and the three deny rules
+# above exist to enforce it. A gate that refuses one refuses something nobody should be
+# doing; the override is one line away for the day it is genuinely needed.
+#
+# WHAT IS DELIBERATELY NOT COVERED:
+#   - `git push --delete <branch>` and `git push origin :branch`. Deleting a merged
+#     feature branch on the remote is ORDINARY HOUSEKEEPING. A rule against it would
+#     flag the correct action, which this file argues is worse than no rule at all.
+#   - `--force-with-lease` / `--force-if-includes`: the safe variants, excluded by the
+#     same boundary that keeps `--delete-labels` out of the CLOUD class.
+#   - `git push --mirror`, which force-updates every ref and deletes the ones missing
+#     locally. Not force-push but a MODE, zero occurrences in both denominators, and
+#     covering it starts a mode list -- exactly the enumeration this class avoids. It is
+#     named here so the next reader inherits the argument instead of the omission.
+#   - a flag that arrives through a quoted argument or a variable (`git push fork x
+#     "$FLAGS"`): quoted text is blanked before matching, so the hook cannot see it.
+#     Same residual as every other class here, for the same reason.
+GIT_CLI = re.compile(r"(^|[\s;&|(])git([\s;&|)]|$)")
+GIT_PUSH_VERB = re.compile(r"(?<![\w-])push(?![\w-])")
+
+GIT_PUSH_PATTERNS = [
+    (r"(?<![\w-])--force(?![\w-])",
+     "git push --force -- rewrites the remote branch; the fleet rulebook lists it as a "
+     "forbidden form, and `--force-with-lease` is the variant that stays allowed"),
+    # Short options can be GROUPED (`git push -fu origin main` is `-f` plus `-u`), so the
+    # `f` is looked for inside a single-dash token rather than only on its own. In a
+    # `git push` segment the only tokens of this shape are its short options, and the
+    # only one containing an f is the force flag.
+    (r"(?<![\w-])-[A-Za-z]*f[A-Za-z]*(?![\w-])",
+     "git push -f (also grouped, e.g. -fu) -- the short form of --force, and the one a "
+     "prefix rule anchors hardest, so it is the likeliest to arrive after the arguments"),
+    # git's own equivalent of --force for a single ref, and it shares NOT ONE WORD with
+    # the other two: a rule shaped around the word `force` is structurally blind to it.
+    # `(?<!\S)` requires the `+` to open a whitespace-delimited argument, so `A+B:C`
+    # inside some other value is not a refspec.
+    (r"(?<!\S)\+[\w./*^~-]+:",
+     "a `+<src>:<dst>` refspec -- git's own force-update form for one ref, which never "
+     "contains the word `force` and so no force-shaped rule would ever see it"),
+]
+
 # Segment separators. Splitting is deliberately crude -- it can only ever produce
 # MORE segments than a shell would.
 #
@@ -344,6 +439,12 @@ def find_hits(command: str):
             for pat, why in CLOUD_PATTERNS:
                 if re.search(pat, cmdpos, re.I) and why not in hits:
                     hits.append(why)
+        # Same positional discipline again: `git commit -m "never force-push to main"`
+        # has its quoted text blanked here, so the `push` token is already gone.
+        if GIT_CLI.search(cmdpos) and GIT_PUSH_VERB.search(cmdpos):
+            for pat, why in GIT_PUSH_PATTERNS:
+                if re.search(pat, cmdpos, re.I) and why not in hits:
+                    hits.append(why)
         if DB_CLIENTS.search(segment):
             for pat, why in SQL_PATTERNS:
                 if re.search(pat, segment, re.I) and why not in hits:
@@ -406,7 +507,7 @@ def main():
         sys.exit(0)
 
     sys.stderr.write(
-        "DB-KAPU: TILTVA -- destruktiv muvelet (adatbazis vagy felho-eroforras).\n\n"
+        "DB-KAPU: TILTVA -- destruktiv muvelet (adatbazis, felho-eroforras vagy force-push).\n\n"
         + "\n".join("  - %s" % h for h in hits)
         + "\n\n"
         "MIERT KODBAN ES NEM JOGOSULTSAGBAN: a `Bash(...)` szabaly LITERALIS ELOTAG a\n"
@@ -415,6 +516,11 @@ def main():
         "idezojeles argumentumban (`psql -c ...`). Egy elotag-minta csak felsorolassal\n"
         "erne oda, es amit a felsorolas kihagy, azt CSENDBEN hagyja ki.\n"
         "Ez a kapu barhol illeszt, es bypass modban is fut, mert KOD.\n\n"
+        "A FORCE-PUSHNAL UGYANEZ MASIK ALAKBAN: a deny-szabalyok a kapcsolot KOZVETLENUL\n"
+        "a `push` utan horgonyozzak (`git push --force ...`), a szokasos alak viszont\n"
+        "`git push fork <ag> --force`, ahol a kapcsolo az ARGUMENTUMOK UTAN all. Nem\n"
+        "kifelejtettek: egy elotag-minta permutacionkent egy szabalyt kivan.\n"
+        "A `--force-with-lease` SZANDEKOSAN atmegy -- az a biztonsagos valtozat.\n\n"
         "HA A PARANCS TENYLEG KELL -- es a felelosseg a tied, a naplo megorzi:\n"
         "    MARVEEN_DB_GATE=allow <a parancs>\n\n"
         "HA CSAK MERNI AKARSZ eles adaton, NE ezt az utat valaszd: a szabalykonyv\n"
