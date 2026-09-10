@@ -157,8 +157,12 @@ assert_eq   "MAIN_AGENT_ID fallback: SERVICE_ID resolves to myagent" \
 # ---------------------------------------------------------------------------
 # (g) Hook files are copied when the full script runs (behaviour preserved)
 # We drive the full script with a fake INSTALL_DIR + HOME + stub hook sources.
-# Daemon install is left to run; on macOS launchctl is a no-op here, on Linux
-# systemd --user is unavailable so it prints a warning and exits 0.
+# Daemon install is left to run. FIGYELEM: ez a sor 2026-09-05-ig azt allitotta, hogy
+# "on macOS launchctl is a no-op here" -- HAMIS volt, es epp ez a hit engedte, hogy a teszt
+# KET LABELT elfoglaljon a valodi `gui/501`-ben (merve: runs=25 mindkettonel). A HOME a plist
+# HELYET allitja at, a launchd DOMAINT nem. Ma egy PATH-on ulo stub fogja el a hivast, lasd a
+# case (g) reszletes kommentjet lentebb. Linuxon a systemd --user tovabbra sem elerheto, tehat
+# ott figyelmeztetest ir es 0-val lep ki.
 # ---------------------------------------------------------------------------
 echo ""
 echo "(g) Full script: hook files are copied to DEST_DIR"
