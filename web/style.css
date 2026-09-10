@@ -2600,6 +2600,13 @@ main.kanban-active { padding-left: 16px; padding-right: 16px; }
    both badge-active and badge-paused on purpose: card 0518d542 made this status
    routine (every retry-queue delivery), and reusing the paused amber would have
    shown a fire that happened as if it had been skipped. */
+/* DELIBERATELY SEPARATE FROM .badge-warn -- do not merge them (ruling,
+   2026-09-10). Once both land these two rules are byte-identical, and they
+   serve UNRELATED things: this one is a scheduled-run STATUS (fired_late),
+   badge-warn is a channel-request COUNT (index.html #chRequestBadge). Folding
+   them into one rule would not remove a duplication, it would create a
+   coupling: making the late-run badge louder would silently restyle an
+   unrelated counter, and no test would say a word. */
 .badge-warning {
   background: rgba(200, 180, 100, 0.18);
   color: #9a8a30;
