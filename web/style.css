@@ -3104,6 +3104,22 @@ main.kanban-active { padding-left: 16px; padding-right: 16px; }
 .badge-warm { background: rgba(217, 119, 87, 0.12); color: var(--accent); }
 .badge-cold { background: var(--info-soft); color: var(--info); }
 .badge-shared { background: rgba(200, 180, 100, 0.18); color: #9a8a30; }
+/* Emitted since long before this rule existed, and an undefined class emits ZERO
+   rules WITHOUT erroring: card 6a4067f7. `badge-danger` carries the `error` run
+   status (web/app.js RUN_STATUS_CLASS), so a FAILED scheduled run rendered
+   indistinguishably from a neutral one -- the same shape as a late run looking
+   skipped, running the other way. `badge-warn` marks pending channel requests
+   (web/index.html #chRequestBadge). The --danger vars already existed. */
+.badge-danger { background: var(--danger-soft); color: var(--danger); }
+/* DELIBERATELY SEPARATE FROM .badge-warning -- do not merge them (ruling,
+   2026-09-10). They are byte-identical today and serve UNRELATED things:
+   badge-warn is a channel-request COUNT (index.html #chRequestBadge),
+   badge-warning is a scheduled-run STATUS (fired_late). Folding them into one
+   rule would not remove a duplication, it would create a coupling: restyling
+   the late-run badge would silently restyle an unrelated counter. The guard in
+   badge-class-coverage.test.ts CANNOT catch that -- it checks that every
+   emitted class HAS a rule, never that two things sharing one should. */
+.badge-warn { background: rgba(200, 180, 100, 0.18); color: #9a8a30; }
 
 .mem-agent-badge {
   font-size: 10px;
