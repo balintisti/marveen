@@ -39,7 +39,9 @@ describe('schedule-runner wiring', () => {
     const block = gate.slice(0, gate.indexOf('const cronPc'))
     expect(block).toContain('scheduleLastRun.set(task.name, now)')
     expect(block).toContain('persistScheduleLastRun()')
-    expect(block).toContain("appendTaskRun(task.name, agentName, 'skipped')")
+    // The reason is part of the wiring, not decoration: `skipped` has four
+    // producers and only THIS one is a candidate for catch-up (card 34b2f8a3).
+    expect(block).toContain("appendTaskRun(task.name, agentName, 'skipped', 'quota')")
   })
 
   it('gates before the pre-check, so a deferred task never spawns its script', () => {
