@@ -56,9 +56,19 @@ const all = walk(WEB)
 const cssFiles = all.filter((f) => f.endsWith('.css'))
 const emitFiles = all.filter((f) => f.endsWith('.js') || f.endsWith('.html'))
 
+// COMMENTS ARE STRIPPED FIRST, and that is not tidiness. Measured while adding
+// a deliberate note next to two rules (marveen's ruling, 2026-09-10): a class
+// merely NAMED in a `/* ... */` comment counted as DEFINED, so an emitted class
+// with no rule passed green. The very comment this file's sibling rules needed
+// would have created the masking. A guard whose own documentation can blind it
+// is worse than none, so the parse sees declarations only.
+const stripCssComments = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, ' ')
+
 const defined = new Set<string>()
 for (const f of cssFiles) {
-  for (const m of readFileSync(f, 'utf-8').matchAll(/\.((?<![\w-])badge-[a-z0-9-]+)/g)) defined.add(m[1])
+  for (const m of stripCssComments(readFileSync(f, 'utf-8')).matchAll(/\.((?<![\w-])badge-[a-z0-9-]+)/g)) {
+    defined.add(m[1])
+  }
 }
 
 const emitted = new Map<string, Set<string>>()
