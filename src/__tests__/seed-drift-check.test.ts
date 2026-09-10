@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { rootMismatchMessage, jsonDrift, lineDrift, UNRESOLVED, RUNTIME_ASSIGNED_FIELDS } from '../seed-drift.js'
 
 // A seeded scheduled task never receives a later template fix
@@ -116,5 +116,57 @@ describe('condition 4: an unresolved placeholder stops the tool', () => {
   })
   it('CONTROL: a lone brace pair is not a placeholder', () => {
     expect('{{lowercase}} and { {SPACED} }'.match(UNRESOLVED)).toBeNull()
+  })
+})
+
+// --- a template-side DATA directory is not drift ----------------------------
+// The tool's FIRST live run reported `bumblebee-hygiene-scan/threat-intel` as
+// "the whole file is missing from the live task". True, harmless, and the
+// obvious remedy would have been damaging: the skill reads that catalog from
+// the SEED path and copies it to ~/.claude/tools, so installing it into the
+// task dir would have made a THIRD copy of 272 KB, ageing on its own.
+//
+// The rule is not invented for this case: ensureDefaultScheduledTasks skips
+// nested directories in so many words. The tool now follows the seeder rather
+// than keeping a hand-maintained exception list, which would have needed an
+// entry for every future data dir and silently missed the one nobody added.
+import { compareTask } from '../seed-drift.js'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join as j } from 'node:path'
+
+describe('a template subdirectory is the seeder working, not drift', () => {
+  let root: string, seed: string, live: string
+  beforeEach(() => {
+    root = mkdtempSync(j(tmpdir(), 'drift-dir-'))
+    seed = j(root, 'seed', 'task'); live = j(root, 'live', 'task')
+    mkdirSync(seed, { recursive: true }); mkdirSync(live, { recursive: true })
+    writeFileSync(j(seed, 'SKILL.md'), 'same\n'); writeFileSync(j(live, 'SKILL.md'), 'same\n')
+  })
+  afterEach(() => rmSync(root, { recursive: true, force: true }))
+
+  it('a data directory present only in the template is NOT reported', () => {
+    mkdirSync(j(seed, 'threat-intel')); writeFileSync(j(seed, 'threat-intel', 'a.json'), '{}')
+    expect(compareTask('task', seed, live).drifts).toEqual([])
+  })
+
+  it('CONTROL: a FILE present only in the template IS reported', () => {
+    writeFileSync(j(seed, 'extra.md'), 'only here\n')
+    const d = compareTask('task', seed, live).drifts
+    expect(d.length).toBe(1)
+    expect(d[0].file).toBe('extra.md')
+  })
+
+  it('CONTROL: and identical files yield nothing, so the meter can say no', () => {
+    expect(compareTask('task', seed, live).drifts).toEqual([])
+  })
+
+  it('CONTROL: a real content difference still fires alongside a skipped dir', () => {
+    // Both at once: the directory must not swallow the finding next to it.
+    mkdirSync(j(seed, 'threat-intel')); writeFileSync(j(seed, 'threat-intel', 'a.json'), '{}')
+    writeFileSync(j(live, 'SKILL.md'), 'changed\n')
+    const d = compareTask('task', seed, live).drifts
+    expect(d.length).toBe(1)
+    expect(d[0].file).toBe('SKILL.md')
   })
 })

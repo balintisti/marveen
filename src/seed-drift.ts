@@ -42,7 +42,7 @@
  * the tool exists to find. A wrong report that lands in the noise gets ignored;
  * this one gets ACTED ON.
  */
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
@@ -142,6 +142,43 @@ function installRootMismatch(): string | null {
   return rootMismatchMessage(resolvedRoot, mainWorktree);
 }
 
+/** One task's files, compared. Exported so the directory rule can be tested
+ *  without loosening the install-root guard that `check` performs first. */
+export function compareTask(task: string, seedTask: string, liveTask: string):
+    { drifts: Drift[]; stopped: string | null } {
+  const drifts: Drift[] = [];
+  for (const file of readdirSync(seedTask).sort()) {
+    // A SUBDIRECTORY IN A TEMPLATE IS NOT MEANT TO BE INSTALLED, and the rule
+    // is not mine: `ensureDefaultScheduledTasks` skips nested directories in
+    // so many words ("Seeded task dirs are flat; skip any nested directory").
+    // So a template subdir absent from the live task is the seeder working,
+    // not drift.
+    //
+    // MEASURED CASE (didi, first live run of this tool): I reported
+    // `bumblebee-hygiene-scan/threat-intel` as "the whole file is missing
+    // from the live task". True, harmless, and the obvious remedy would have
+    // been damaging -- the skill reads that catalog from the SEED path and
+    // copies it to ~/.claude/tools, so installing it into the task dir would
+    // have created a THIRD copy of 272 KB that then ages on its own. A
+    // detector that flags correct behaviour is worse than none precisely
+    // because the natural fix makes things worse.
+    if (statSync(join(seedTask, file)).isDirectory()) continue;
+    const liveFile = join(liveTask, file);
+    if (!existsSync(liveFile)) { drifts.push({ task, file, onlyTemplate: ['(the whole file is missing from the live task)'], onlyLive: [] }); continue; }
+    const resolved = resolveTemplatePlaceholders(readFileSync(join(seedTask, file), 'utf-8'));
+    const left = resolved.match(UNRESOLVED);
+    if (left) {
+      // CONDITION 4. Reporting here would mean reporting the installer's own
+      // normal behaviour as drift, confidently.
+      return { drifts: [], stopped: `${task}/${file}: unresolved placeholder(s) ${[...new Set(left)].join(', ')} -- the resolver does not know them, so no comparison is possible` };
+    }
+    const liveText = readFileSync(liveFile, 'utf-8');
+    const d = file.endsWith('.json') ? jsonDrift(resolved, liveText) : lineDrift(resolved, liveText);
+    if (d.onlyTemplate.length || d.onlyLive.length) drifts.push({ task, file, ...d });
+  }
+  return { drifts, stopped: null };
+}
+
 export function check(): { drifts: Drift[]; unseeded: string[]; stopped: string | null } {
   if (!existsSync(SEED_DIR)) return { drifts: [], unseeded: [], stopped: `no ${SEED_DIR}` };
   const wrongRoot = installRootMismatch();
@@ -152,20 +189,9 @@ export function check(): { drifts: Drift[]; unseeded: string[]; stopped: string 
     const seedTask = join(SEED_DIR, task);
     const liveTask = join(LIVE_DIR, task);
     if (!existsSync(liveTask)) { unseeded.push(task); continue; }
-    for (const file of readdirSync(seedTask).sort()) {
-      const liveFile = join(liveTask, file);
-      if (!existsSync(liveFile)) { drifts.push({ task, file, onlyTemplate: ['(the whole file is missing from the live task)'], onlyLive: [] }); continue; }
-      const resolved = resolveTemplatePlaceholders(readFileSync(join(seedTask, file), 'utf-8'));
-      const left = resolved.match(UNRESOLVED);
-      if (left) {
-        // CONDITION 4. Reporting here would mean reporting the installer's own
-        // normal behaviour as drift, confidently.
-        return { drifts: [], unseeded, stopped: `${task}/${file}: unresolved placeholder(s) ${[...new Set(left)].join(', ')} -- the resolver does not know them, so no comparison is possible` };
-      }
-      const liveText = readFileSync(liveFile, 'utf-8');
-      const d = file.endsWith('.json') ? jsonDrift(resolved, liveText) : lineDrift(resolved, liveText);
-      if (d.onlyTemplate.length || d.onlyLive.length) drifts.push({ task, file, ...d });
-    }
+    const r = compareTask(task, seedTask, liveTask);
+    if (r.stopped) return { drifts: [], unseeded, stopped: r.stopped };
+    drifts.push(...r.drifts);
   }
   return { drifts, unseeded, stopped: null };
 }
