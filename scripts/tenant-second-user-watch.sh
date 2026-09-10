@@ -196,7 +196,15 @@ fi
 #  - a `exit 6` ag azt kéri, hogy "kezzel kell tovabbadni" -- eddig a szoveget NEM adta oda hozza
 #  - kulonben a proba-jeloles agat nem lehet ellenorizni kikuldes NELKUL, es egy jelolest, amit
 #    csak valodi kuldessel lehet tesztelni, senki nem fog tesztelni
-ALERT_BODY="${PROV}A tenant-nevezo megdolt: $SECOND berlonek van masodik felhasznaloja, $INVITES meghivas letezik. Tobb mai HIGH lelet sulya ezen a nullan allt (110 kapuzatlan iro vegpont, 4903 elsodleges cim, 729 arva ertek, Megtekinto-szerepkor). Ujra kell nezni oket."
+# A KULDO NEVE NEM AZ, AKI KULDTE -- ES EZT A TORZSNEK KELL MEGMONDANIA (didi merte 2026-09-10,
+# kartya 915e0d02). Az `agent-msg.sh` elso argumentuma technikai kenyszerbol `mandark`, de
+# mandarknak KOZBEN NINCS FUTO SESSIONJE: a riasztas olyan agens neveben erkezik, aki nem kuldte
+# es nem tud felelni erte. didi probaja REPRODUKALTA az eredeti zavart -- a `d2c25619` kartya
+# szo szerint azzal kezdodott, hogy "mandarknak nincs futo sessionje, megneztem, mi kuldi".
+#
+# A javitas ugyanaz az alak, amit ket sorral feljebb a PROV-nal mar hasznalunk: ami szamit, az a
+# TORZSBEN utazik, nem a fejlecben. A fejlec (a kuldo mezo) nem a mienk; a mondat igen.
+ALERT_BODY="${PROV}[FORRAS: scripts/tenant-second-user-watch.sh, utemezett or -- NEM mandark irta, az csak a kuldo-mezo] A tenant-nevezo megdolt: $SECOND berlonek van masodik felhasznaloja, $INVITES meghivas letezik. Tobb mai HIGH lelet sulya ezen a nullan allt (110 kapuzatlan iro vegpont, 4903 elsodleges cim, 729 arva ertek, Megtekinto-szerepkor). Ujra kell nezni oket."
 echo "--- a riasztas szovege, ahogy elmegy ---"
 echo "$ALERT_BODY"
 echo "----------------------------------------"
