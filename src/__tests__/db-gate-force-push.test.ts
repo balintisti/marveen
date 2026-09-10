@@ -158,6 +158,17 @@ describe('db-destructive-gate: force-push (G2)', () => {
     expect(blocks('rm -rf node_modules package-lock.json')).toBe(false)
   })
 
+  it('A NEGATIV PROBA CSAK IDEZOJEL NELKUL ERVENYES -- a ketto KET KULONBOZO teszt', () => {
+    // marveen merte magan, percekkel a beolvasztas utan (2026-09-10 20:2x): az elso
+    // negativ probaja IDEZOJELES volt, LEFUTOTT, es tiz masodpercig ugy nezett ki, mint
+    // egy halott kapu. A kapunak volt igaza, a proba a dokumentalt KIVETELT merte.
+    // A ket alak nem gyenge es eros valtozata egymasnak: az idezojeles a KIVETELT
+    // allitja, az idezojel nelkuli a SZABALYT. Ha a ket verdikt EGYEZIK, az egyik nem
+    // azt meri, amit hiszel rola.
+    expect(blocks('echo "git push fork feat/x --force"')).toBe(false)
+    expect(blocks('git push fork feat/x --force')).toBe(true)
+  })
+
   it('KONTROLL: PROZA egy idezojeles argumentumban ATMEGY -- a parancs-pozicio proba', () => {
     // Ez a diszkriminalo kontroll: szokoz all a `git` elott, tehat a nyers szegmensre
     // illeszkedne. Csak a kiuresitett idezojel-tartalom menti meg.

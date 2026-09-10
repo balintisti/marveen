@@ -13,6 +13,16 @@ both `echo marveen-flag-probe --force x` and `git push nonexistent-remote-xyz-12
 came back REFUSED (card 9e3f2f5c). Until that day this paragraph said "allow/deny ...
 IRRELEVANT", which reads as "do not bother writing deny rules" -- and an afternoon was
 spent on that reading before the second per-agent settings file turned up.
+
+AND WHAT THAT SENTENCE DOES **NOT** SAY, spelled out because it reads as though a bare
+`--force` token were refused anywhere, which would make the FORCE-PUSH class below look
+redundant: both probes ran against PURPOSE-ADDED deny rules. jarvis's config carried
+`Bash(echo marveen-flag-probe --force:*)` that afternoon (deny=4), and the paired control
+is on the card -- the SAME command RAN for dexter, whose config did not carry the rule.
+Re-measured 2026-09-10 in a dexter session: `echo marveen-flag-probe --force x` RUNS, with
+the positive control (`marveen-permission-probe-do-not-run --x`) DENIED, so the deny list
+was loaded and the negative is real. What those probes established is that a MULTI-WORD
+PREFIX binds in bypass mode. Not that a force flag is refused wherever it stands.
 Measured alongside: the production repo's settings.local.json has allow=490 / deny=0,
 while three agent configs carry deny=13..14. The one checkout that touches production
 is the one with no deny list at all.
@@ -56,6 +66,26 @@ itself in the shell history, and every use is logged with the full command. A ca
 based on "the connection looks like a test database" was considered and rejected: it
 would have to parse DATABASE_URL out of the environment the command has not run in yet,
 and a wrong guess there fails in the direction that costs a production database.
+
+=== HOW TO PROBE THIS GATE AFTER A CHANGE, AND THE ONE MISTAKE THAT LOOKS EXACTLY LIKE A
+=== DEAD GATE (marveen, on the merge of the force-push class, 2026-09-10)
+
+**A NEGATIVE PROBE MUST BE UNQUOTED.** Matching is positional, and quoted strings are
+blanked before anything is compared (`_command_position_text`) on purpose, so that prose
+ABOUT a destructive command is not itself treated as one. So this happens:
+
+    echo "git push fork feat/x --force"    -> RUNS. The documented exemption.
+    git push fork feat/x --force           -> REFUSED.
+
+The first probe anyone reaches for is the quoted one, because printing a string is how you
+show a string -- and for about ten seconds after the merge it looked like a gate that had
+stopped firing. The gate was right and the probe was the exemption.
+
+A quoted probe and an unquoted one are **two different tests, not a weak and a strong
+version of one**: the quoted form asserts the exemption, the unquoted form asserts the
+rule. Run both and expect OPPOSITE verdicts; a pair that agrees means one of them is not
+measuring what you think. Both are pinned as controls in
+`src/__tests__/db-gate-force-push.test.ts`.
 """
 import json
 import os
