@@ -1362,7 +1362,8 @@ export function startScheduleRunner(): NodeJS.Timeout {
       const retryPc = runPreCheck(taskDef)
       if (retryPc.skip) {
         deletePendingTaskRetry(row.task_name, row.agent_name)
-        appendTaskRun(row.task_name, row.agent_name, 'skipped')
+        // Nothing to do NOW either: catching this up later would be wrong.
+        appendTaskRun(row.task_name, row.agent_name, 'skipped', 'precheck-retry')
         continue
       }
 
@@ -1502,7 +1503,9 @@ export function startScheduleRunner(): NodeJS.Timeout {
         )
         scheduleLastRun.set(task.name, now)
         persistScheduleLastRun()
-        for (const agentName of targetAgents) appendTaskRun(task.name, agentName, 'skipped')
+        // There WAS work; we deliberately did not do it -- this one is a
+        // candidate for catch-up when the window recovers.
+        for (const agentName of targetAgents) appendTaskRun(task.name, agentName, 'skipped', 'quota')
         continue
       }
 
@@ -1513,7 +1516,8 @@ export function startScheduleRunner(): NodeJS.Timeout {
         scheduleLastRun.set(task.name, now)
         persistScheduleLastRun()
         for (const agentName of targetAgents) {
-          appendTaskRun(task.name, agentName, 'skipped')
+          // Nothing to do: catching this up later would be wrong.
+          appendTaskRun(task.name, agentName, 'skipped', 'precheck-cron')
         }
         continue
       }
@@ -1546,7 +1550,9 @@ export function startScheduleRunner(): NodeJS.Timeout {
             // Daily/weekly schedules keep skipIfBusy=false so the queue
             // + alert path catches a long-running busy state.
             logger.info({ task: task.name, agent: agentName }, 'Schedule busy, skipIfBusy=true: dropping tick silently')
-            appendTaskRun(task.name, agentName, 'skipped')
+            // The agent was working; the tick is DROPPED, not deferred. A third
+            // answer again: the next tick is already on the way.
+            appendTaskRun(task.name, agentName, 'skipped', 'busy')
             continue
           }
           // First encounter -- insert a new pending row. If somehow a
