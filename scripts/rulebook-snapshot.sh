@@ -5,7 +5,9 @@
 # loads at the start of every session are in no repository at all:
 #
 #     /Users/isti/marveen/CLAUDE.md   gitignored (.gitignore:82)
-#     /Users/isti/CLAUDE.md           gitignored
+#     rulebook/delta-crm.md           2026-09-10-ig /Users/isti/CLAUDE.md volt, KOVETETLENUL
+#                                     ES minden projektnek betoltodott (HOME-szint). Athelyezve:
+#                                     mostantol KOVETETT es csak az olvassa, aki keri.
 #     agents/*/CLAUDE.md, SOUL.md     12 persona files
 #     ~/.claude/skills/**             64 files -- ~/.claude is not a repo either
 #
@@ -33,7 +35,7 @@ set -euo pipefail
 # --- throwaway tree; production runs use the defaults.
 RULEBOOK_REPO="${RULEBOOK_REPO:-/Users/isti/Backups/rulebooks}"
 MARVEEN_ROOT="${RULEBOOK_MARVEEN_ROOT:-/Users/isti/marveen}"
-DELTA_CLAUDE="${RULEBOOK_DELTA_CLAUDE:-/Users/isti/CLAUDE.md}"
+DELTA_CLAUDE="${RULEBOOK_DELTA_CLAUDE:-/Users/isti/marveen/rulebook/delta-crm.md}"
 SKILLS_ROOT="${RULEBOOK_SKILLS_ROOT:-$HOME/.claude/skills}"
 # A lap KISZERVEZETT bizonyitek-anyaga (kartya c5fcc2b5). A `CLAUDE.md` egyetlen NEVESITETT
 # sorkent megy ki lentebb; egy melle tett konyvtarat viszont SEMMI nem globolt, tehat egy ide
