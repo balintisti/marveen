@@ -113,6 +113,32 @@ check("CONTROL: agent_name_from still yields None for the default dir",
 check("CONTROL: and a real name for a per-agent dir",
       wd.agent_name_from(AGENT_DIR), "friday")
 
+# --- THE SUFFIX IS NOT AN ASSUMPTION, AND THIS IS WHAT KEEPS IT THAT WAY -----
+# `<id>-channels` is built in ONE canonical place, src/web/session-names.ts
+# (card 228c9252), whose own header says it exists because that rule used to
+# live in FIVE hand-written copies and one caller never got it -- which told the
+# fleet in writing that the coordinator was not running.
+#
+# This Python hook cannot import that module, so it is now another copy of the
+# same rule, in another language, outside the module's reach. That is the drift
+# shape, so the template is pinned here instead: if session-names.ts ever
+# changes the suffix, this goes red rather than the hook silently probing a
+# session that has never existed.
+import re
+TS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
+                  "src", "web", "session-names.ts")
+try:
+    ts_src = open(TS, encoding="utf-8").read()
+except OSError:
+    ts_src = ""
+m = re.search(r"return `\$\{mainAgentId\}(-[A-Za-z-]+)`", ts_src)
+# Positive control FIRST: without it a moved or renamed file yields None and the
+# assertion below would be "satisfied" by having found nothing.
+check("CONTROL: the canonical template was located in session-names.ts",
+      bool(m), True)
+check("the hook's suffix still matches session-names.ts",
+      m.group(1) if m else None, "-channels")
+
 print()
 if failed:
     print(f"{len(failed)} FAILED: {failed}", file=sys.stderr)
