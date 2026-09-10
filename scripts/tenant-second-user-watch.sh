@@ -3,12 +3,22 @@
 # tenant-second-user-watch.sh -- a NEVEZO, amin tobb mai HIGH lelet sulya all.
 #
 # MIERT LETEZIK. didi merte 2026-09-02-an: minden szervezetnek PONTOSAN EGY felhasznaloja van
-# (29 user / 29 org), es a `UserInvitation` tablanak SOHA nem volt sora. Ez a nevezo tobb mai
-# lelet alatt: a 110 kapuzatlan iro vegpont, a 4903 elsodleges cim, a 729 arva ertek, a
-# Megtekinto-szerepkor leletei -- MA egyikhez sincs masodik fel a berlon belul, aki kihasznalja.
+# (29 user / 29 org), es a `UserInvitation` tablanak SOHA nem volt sora. Tobb akkori HIGH lelet
+# sulya allt ezen a nullan: nem volt masodik fel a berlon belul, aki kihasznalja.
 #
 # **Ez ALLAPOT-allitas, tehat romlando** -- es az elso ELFOGADOTT MEGHIVASSAL fordul, csendben.
 # Semmi nem figyelte. Ez a script figyeli.
+#
+# ES 2026-09-10-EN MEGFORDULT, MERVE (mandark): 1 org / 2 user, a masodik meghivasa ELFOGADVA
+# harom napja, es het napon belul be is jelentkezett. A fenti bekezdes tehat TORTENET, nem mai
+# allapot -- jelen idoben olvasva hamis. A script nem lett feleslegesse: a nevezo mostantol NEM
+# nulla, es ugyanez a kapu fog szolni, ha tovabb no.
+#
+# A LELETEK NEVSORA SZANDEKOSAN NINCS SEM ITT, SEM A RIASZTASBAN. A korabbi alakja negy tetelt
+# nevezett meg; harom azota done, a negyedik szama (110) pedig mar a sajat kartyajan sem all
+# (a cim 76-ot mond, a kommentek 120 -> 108 -> 44-re szukitik). Egy befagyasztott lista neman
+# elavul, es a cimzett ugyis ujra levezeti a mai tablarol -- ezt a kort mandark egyszer mar
+# vegigcsinalta (kartya 4d509c5d). A helyes horgony a KERDES, nem a lista.
 #
 # MIERT `command`-TIPUSU UTEMEZES, ES NEM HEARTBEAT. friday merte 2026-09-02-an, en
 # ujramertem a `/api/schedules`-bol: 13 utemezesbol PONTOSAN 2 `command`-tipusu, es PONTOSAN
@@ -204,7 +214,7 @@ fi
 #
 # A javitas ugyanaz az alak, amit ket sorral feljebb a PROV-nal mar hasznalunk: ami szamit, az a
 # TORZSBEN utazik, nem a fejlecben. A fejlec (a kuldo mezo) nem a mienk; a mondat igen.
-ALERT_BODY="${PROV}[FORRAS: scripts/tenant-second-user-watch.sh, utemezett or -- NEM mandark irta, az csak a kuldo-mezo] A tenant-nevezo megdolt: $SECOND berlonek van masodik felhasznaloja, $INVITES meghivas letezik. Tobb mai HIGH lelet sulya ezen a nullan allt (110 kapuzatlan iro vegpont, 4903 elsodleges cim, 729 arva ertek, Megtekinto-szerepkor). Ujra kell nezni oket."
+ALERT_BODY="${PROV}[FORRAS: scripts/tenant-second-user-watch.sh, utemezett or -- NEM mandark irta, az csak a kuldo-mezo] A tenant-nevezo megdolt: $SECOND berlonek van masodik felhasznaloja, $INVITES meghivas letezik. SZANDEKOSAN NINCS ITT LISTA arrol, mely leletek sulya allt ezen a nullan: egy befagyasztott lista neman elavul (a korabbi alakja negy tetelt nevezett meg, harom azota done, a negyedik szama pedig mar a sajat kartyajan sem all), es a cimzett ugyis ujra levezeti. A KERDES, amit fel kell tenni: mely nyitott kartyak indoklasa hivatkozik EGY berlore vagy EGY felhasznalora? Azokat kell ujranezni, a mai tablan, nem ebbol az uzenetbol."
 echo "--- a riasztas szovege, ahogy elmegy ---"
 echo "$ALERT_BODY"
 echo "----------------------------------------"
