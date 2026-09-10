@@ -23,6 +23,14 @@ for c in d.get('categories',[]):
 
 A két kategória szintje szabályozza a 2. és 4. lépést:
 - **`kanban_archive_done`** (2. lépés): level 3 → archiváld magától (alapért). level 2 → NE archiválj, Telegramon javasold ("X db 7+ napos done archiválásra vár, mehet?") és várj jóváhagyást. level 1 → csak jelezd a számot.
+
+  **ISTI DÖNTÉSE 2026-08-28: SOHA NINCS AUTOMATIKUS ARCHIVÁLÁS. A `kanban_archive_done` TARTÓSAN
+  level 1 -- ez LEZÁRT kérdés, nem függőben lévő.** Az indoka nem a mi mérésünk volt, hanem egy
+  termék-elv: *egy kártya nem csúszhat ki anélkül, hogy be lenne fejezve.* A 7+ napos done-okat
+  {{MAIN_AGENT_ID}} tisztítja kézzel, kötegekben.
+  **Amit ez a futtatásra jelent:** a számot továbbra is írd ki (mérés), de NE úgy fogalmazd, mintha
+  egy kapcsolóra várna. Egy 4 óránként ismételt "X vár archiválásra, mehet?" egy MÁR ELDÖNTÖTT
+  kérdést tenne fel újra -- ugyanaz a zaj-alak, mint a többi mindig-tüzelő őré ezen a lapon.
 - **`kanban_stuck_nudge`** (4. lépés): level 3 → pingeld az assignee-t magától, és CSAK 2 eredménytelen audit-kör után eszkalálj a tulajdonoshoz ({{OWNER_NAME}}) (a komment-történetből látod hányszor pingelted). level 2 → ne pingelj magadtól, Telegramon javasold a tulajdonosnak ({{OWNER_NAME}}). level 1 → csak listázd a beakadt taskokat.
 
 Ha a config hiányzik vagy a kulcs nincs benne → default level 3 (régi viselkedés).
