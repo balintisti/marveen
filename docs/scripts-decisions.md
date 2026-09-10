@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **217** kovetett fajl, ebbol
-**62** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **219** kovetett fajl, ebbol
+**63** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (1)
 
@@ -210,6 +210,11 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/mutate-probe.py`
 
 - MIERT LETEZIK. Egy mutacios proba akkor er valamit, ha a ZOLD eredmeny EGY dolgot
+
+### `scripts/napindito-sections.py`
+
+- MIERT SZKRIPT ES NEM PROMPT: mind a harom szekcio szamlalas, es egy LLM-fordulo
+- hogy az ellenorzes miert nem futott le. A napindito pontosan ezen bukott el
 
 ### `scripts/permission-guard-check.sh`
 

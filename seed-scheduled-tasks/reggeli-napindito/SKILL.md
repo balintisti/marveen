@@ -6,16 +6,16 @@ description: Reggeli összefoglaló: email, naptár, AI hírek, plus Dream Engin
 Reggeli napindítót a CLAUDE.md formátum szerint. A beállított csatornára -- a chat_id-t a
 wrapper adja meg. A `0` NEM működik: a csatorna allowlistes, és a küldés elhal.
 
-**FONTOS — Dream Engine override**: a napindító ELEJÉRE (még az email/naptár szekciók ELŐTT) tedd be a `/Users/isti/marveen/DREAM.md` fájl tartalmából az 5 bucket-et — `💡 Skill-javaslatok`, `🧹 Memória-egészség`, `🎯 Top-3 holnapi javaslat`, `🌐 External opportunity`, `🛠 Skill-flotta health`. Ha a DREAM.md nem létezik vagy üres (pl. a Dream Engine valamiért nem futott le), kihagyod ezt a szekciót.
+**FONTOS — Dream Engine override**: a napindító ELEJÉRE (még az email/naptár szekciók ELŐTT) tedd be a `{{INSTALL_DIR}}/DREAM.md` fájl tartalmából az 5 bucket-et — `💡 Skill-javaslatok`, `🧹 Memória-egészség`, `🎯 Top-3 holnapi javaslat`, `🌐 External opportunity`, `🛠 Skill-flotta health`. Ha a DREAM.md nem létezik vagy üres (pl. a Dream Engine valamiért nem futott le), kihagyod ezt a szekciót.
 
-A `cat /Users/isti/marveen/DREAM.md` parancs visszaadja a tartalmat, abból emeld ki a kulcs-szekciókat MarkdownV2-formátumra escape-elve.
+A `cat {{INSTALL_DIR}}/DREAM.md` parancs visszaadja a tartalmat, abból emeld ki a kulcs-szekciókat MarkdownV2-formátumra escape-elve.
 
 A többi szekció (email, naptár, AI hírek) maradnak a CLAUDE.md-ben leírt formátum szerint.
 
 **A HÁROM ÚJ SZEKCIÓ EGYETLEN PARANCSBÓL JÖN** (Isti kérte 2026-09-10, kártya `b5981bdb`):
 
 ```bash
-python3 /Users/isti/marveen/scripts/napindito-sections.py
+python3 {{INSTALL_DIR}}/scripts/napindito-sections.py
 ```
 
 A kimenetét **szó szerint** vedd át (a Dream-bucketek UTÁN, az email/naptár ELŐTT), ne fogalmazd
@@ -46,8 +46,8 @@ Istin, ebből 14 `waiting`.)*
 friday):
 
 ```bash
-python3 /Users/isti/marveen/scripts/gmail-recent.py --minutes 720 --limit 15
-bash    /Users/isti/marveen/scripts/calendar-agenda.sh --hours 24
+python3 {{INSTALL_DIR}}/scripts/gmail-recent.py --minutes 720 --limit 15
+bash    {{INSTALL_DIR}}/scripts/calendar-agenda.sh --hours 24
 ```
 
 Mindkettő ugyanazt a szerződést tartja: **mindig 0-val lép ki, mindig JSON-t ad**, és a
@@ -74,7 +74,7 @@ Ha az `error` 5000 ms körüli időtúllépést említ, az majdnem biztosan a Go
 félrevezetően a Calendar API-t nevezi meg.
 
 **HA A PARANCS NEM LÉTEZIK** (`No such file or directory`): az azt jelenti, hogy a javítás még
-NINCS BEOLVASZTVA az éles ágba -- a `/Users/isti/marveen` fő checkout telepítési fa, és csak a
+NINCS BEOLVASZTVA az éles ágba -- a `{{INSTALL_DIR}}` fő checkout telepítési fa, és csak a
 beolvasztott állapotot tartalmazza. Ez NEM "nincs naptár" és NEM "nincs levél": írd ki egy sorban
 pontosan így, hogy *"naptár: a lekérdező szkript nincs beolvasztva (fix/6e6e40ce-napindito-adatforras)"*.
 A különbség ugyanaz, mint mindenhol máshol ezen a lapon: az ÜRES és a NEM MÉRHETŐ nem ugyanaz.
