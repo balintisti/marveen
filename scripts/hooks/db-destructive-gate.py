@@ -166,26 +166,64 @@ DB_CLIENTS = re.compile(
 # `--remove-env-vars` are FLAGS on otherwise ordinary commands, and `\b` matches
 # inside them. `(?<![\w-])delete(?![\w-])` does not.
 #
-# WHAT IS DELIBERATELY NOT COVERED, written down rather than left to be discovered:
-#   - `gh repo delete`, `gh secret set`, `kubectl delete`: the same shape, one
-#     alternation away, left out because this card measured gcloud and nothing else.
-#     Measured usage of all three in that history: 0. Widening is a one-line change;
-#     doing it unmeasured is how a gate starts claiming more than it checked.
+# WIDENED ON THE SAME DAY, and the reasoning is worth keeping because it reverses a
+# decision made three hours earlier. The first version left `gh` and `kubectl` out on
+# the grounds that this card had measured gcloud and nothing else. marveen ruled the
+# other way, and the argument is the one this very class is built on: the objection to
+# the deny-list route was that a FAMILY ENUMERATION has things to silently forget.
+# Leaving three named families out of a rule whose SHAPE already covers them is that
+# same failure with extra steps -- and `gh secret` was named explicitly in the finding
+# that opened the card, so it was an open item, cheap to do and easy to never do.
+#
+# THE BLAST RADIUS FOR THE NEW FAMILIES, and BOTH denominators are partial -- said
+# plainly, because a zero from a narrow window reads exactly like a zero from a wide one:
+#
+#     the production checkout`s `.bash_history` (532 lines, what Isti typed):
+#         `gh` 0, `kubectl` 0 -- so nothing there to break, and the instrument is
+#         known to fire, because the OLD gate already refused 15 of those 532 lines
+#     the fleet tool log (`tool_call_log`), 484 Bash calls:
+#         1 mentions any of the four CLIs, 0 with a destructive verb
+#         BUT: that table holds ONLY the coordinator`s calls (534/534 rows are
+#         marveen`s) and only 09-10 08:01-16:21. The capture hook lives in the
+#         PROJECT-level settings, whose scope is the coordinator alone. So it is one
+#         agent for eight hours, NOT the fleet, and it cannot say what dexter or
+#         computress ran last week.
+#
+# So: no evidence of real destructive `gh`/`kubectl` use, from two partial windows.
+# That is weaker than the gcloud number and it is not the same claim.
+#
+# WHAT IS STILL DELIBERATELY NOT COVERED:
+#   - `gh secret list`, `gh secret --help`: reads, and the `set` pattern is written
+#     narrowly enough to leave them alone.
+#   - `gh pr close`, `gh run cancel`, `kubectl drain`, `kubectl scale --replicas=0`:
+#     destructive in effect, no destructive VERB in the string. Adding them means
+#     enumerating families again, which is the trap this class exists to avoid --
+#     they need a different mechanism, not another alternation.
 #   - hyphenated destructive flags (`--delete-unmatched-destination-objects`,
 #     `--remove-iam-policy-binding`): excluded by the token boundary above, on
 #     purpose, because catching them means catching every ordinary `--remove-*` flag.
 #   - `gcloud auth revoke`, and any verb assembled at runtime (`gcloud $VERB delete`,
 #     `bash deploy.sh`). Same residual as the SQL class, for the same reason: the hook
 #     sees a command STRING, never the process that will run.
-CLOUD_CLIS = re.compile(r"(^|[\s;&|(])(gcloud|gsutil)([\s;&|)]|$)")
+CLOUD_CLIS = re.compile(r"(^|[\s;&|(])(gcloud|gsutil|gh|kubectl)([\s;&|)]|$)")
 
 CLOUD_PATTERNS = [
     (r"(?<![\w-])(delete|destroy)(?![\w-])",
-     "a destructive gcloud/gsutil verb (delete/destroy) -- a deleted Cloud Run "
-     "service, SQL instance or secret version does not come back from this side"),
+     "a destructive verb (delete/destroy) on a platform CLI -- a deleted Cloud Run "
+     "service, SQL instance, secret version, repository or Kubernetes object does "
+     "not come back from this side"),
     (r"(?<![\w-])rm(?![\w-])",
      "gcloud storage / gsutil rm -- object deletion, which never contains the word "
      "`delete` and so no delete-shaped rule would ever see it"),
+    # The one entry that is NOT a delete, and the reason it is here: didi named
+    # `Bash(gh secret:*)` in the finding that opened this card, beside `sudo rm`
+    # and `gcloud`. `gh secret set` OVERWRITES a CI credential in place -- there is
+    # no destructive verb anywhere in the string, so every rule above is blind to
+    # it, and the damage is a pipeline that starts failing with a valid-looking
+    # config. `gh secret list` and `gh secret --help` are deliberately untouched.
+    (r"(?<![\w-])gh\s+secret\s+set(?![\w-])",
+     "gh secret set -- overwrites a CI credential in place; nothing in the command "
+     "says `delete`, and the failure it causes surfaces as a broken pipeline"),
 ]
 
 # Segment separators. Splitting is deliberately crude -- it can only ever produce

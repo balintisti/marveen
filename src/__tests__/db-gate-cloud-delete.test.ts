@@ -120,6 +120,60 @@ describe('db-destructive-gate: destruktiv felho-muvelet (G3)', () => {
     expect(blocks('rm -rf node_modules && npm ci')).toBe(false)
   })
 
+  // === A BOVITES: gh es kubectl (marveen rendelkezese, ugyanaznap) ==================
+  //
+  // Az elso valtozat SZANDEKOSAN kihagyta oket ("ez a kartya gcloudot mert es mast
+  // nem"). marveen megforditotta, es az erve az, amire ez az egesz osztaly epul: a
+  // deny-lista elleni kifogas az volt, hogy egy CSALAD-FELSOROLAS-bol ki lehet
+  // felejteni valamit CSENDBEN. Harom NEVESITETT csaladot kihagyni egy szabalybol,
+  // aminek az ALAKJA amugy is fedi oket, ugyanaz a hiba, tobb lepesben.
+
+  it('gh repo delete BLOKKOLVA', () => {
+    expect(blocks('gh repo delete balintisti/valami --yes')).toBe(true)
+  })
+
+  it('kubectl delete BLOKKOLVA', () => {
+    expect(blocks('kubectl delete pod api-7d9f --namespace prod')).toBe(true)
+  })
+
+  it('gh api -X DELETE is -- az ige NAGYBETUS es nem alparancs', () => {
+    expect(blocks('gh api -X DELETE repos/o/r/actions/caches/12')).toBe(true)
+  })
+
+  it('gh secret set BLOKKOLVA, PEDIG NINCS BENNE DESTRUKTIV IGE', () => {
+    // Ez az egyetlen minta, ami nem torlesre szol. didi a kartyat inditó leletben
+    // NEVESITETTE a `Bash(gh secret:*)`-ot, a `sudo rm` es a `gcloud` mellett. Egy
+    // CI-kredencialt ir felul helyben: a parancsban sehol nem all az, hogy `delete`,
+    // tehat MINDEN masik minta vak ra, es a kar egy hibas config-gal futo pipeline.
+    expect(blocks('gh secret set DATABASE_URL --body xxx')).toBe(true)
+  })
+
+  it('KONTROLL: a `gh secret` OLVASO alakjai atmennek', () => {
+    // A `set`-minta szandekosan szuk. Ha ez a ketto pirosra valtana, a minta
+    // `gh secret`-re szelesedett, es a kapu egy listazast tiltana.
+    expect(blocks('gh secret list')).toBe(false)
+    expect(blocks('gh secret list --repo balintisti/marveen')).toBe(false)
+  })
+
+  it('KONTROLL: a lap SAJAT gh-receptjei atmennek', () => {
+    // A szabalykonyv a push elotti CI-perc-ellenorzest ezzel az alakkal irja elo.
+    // Ha ez elbukik, a kapu a sajat dokumentalt szokasunkat tiltja meg -- pontosan
+    // az az alak, amit ez a lap "a helyes megoldast jeloli hibanak" neven tilt.
+    expect(blocks('gh pr list --state open --head fix/abc')).toBe(false)
+    expect(blocks('gh pr create --title Fix --body Text')).toBe(false)
+    expect(blocks('gh run watch 12345')).toBe(false)
+    expect(blocks('kubectl get pods -n prod')).toBe(false)
+  })
+
+  it('KONTROLL: kotojeles cimke a gh mellett sem ige', () => {
+    expect(blocks('gh issue list --label delete-me')).toBe(false)
+  })
+
+  it('KONTROLL: idezojelben a gh-alak is proza marad', () => {
+    expect(blocks('echo "run: gh repo delete x"')).toBe(false)
+    expect(blocks('git commit -m "drop the gh repo delete step"')).toBe(false)
+  })
+
   // === A DB-OSZTALYOK VALTOZATLANOK =================================================
 
   it('REGRESSZIO: a DB-osztalyok verdiktje nem valtozott', () => {
