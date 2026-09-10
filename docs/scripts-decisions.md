@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **220** kovetett fajl, ebbol
-**63** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **221** kovetett fajl, ebbol
+**64** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (1)
 
@@ -90,6 +90,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/ci-watch.sh`
 
 - MIERT LETEZIK: 2026-08-20-an a main CI-je elpirosodott, egy telepites emiatt kimaradt,
+
+### `scripts/contrast-both-themes.js`
+
+- WHY IT EXISTS IN THIS SHAPE. marveen made it a standing rule on 2026-09-10
 
 ### `scripts/dashboard-user-add.sh`
 

@@ -51,11 +51,27 @@ type Drift = { task: string; file: string; onlyTemplate: string[]; onlyLive: str
  *  declares. Measured on this repo -- all three live task-config.json files
  *  carry `stuckAfterMinutes`, which no template has, and treating that as
  *  drift would flag every task forever (condition 3). */
+/**
+ * Fields the SEEDER assigns, which a template cannot meaningfully assert.
+ *
+ * `createdAt` ships as 0 in most templates and gets a real timestamp when the
+ * task is seeded, so a template that declares it drifts FOREVER, on every
+ * seeded task, from the first minute. Measured after shipping the checker: two
+ * of its four "drifts" were this and nothing else -- my own condition 3 (an
+ * untouched seed must not be flagged) broken by the tool that carries it.
+ *
+ * Same class as the live-only `stuckAfterMinutes` the comparison already
+ * ignores; the difference is only that this one is DECLARED by the template,
+ * so a key-based comparison walks straight into it.
+ */
+export const RUNTIME_ASSIGNED_FIELDS = new Set(['createdAt']);
+
 export function jsonDrift(tpl: string, live: string): { onlyTemplate: string[]; onlyLive: string[] } {
   const t = JSON.parse(tpl) as Record<string, unknown>;
   const l = JSON.parse(live) as Record<string, unknown>;
   const onlyTemplate: string[] = [];
   for (const [k, v] of Object.entries(t)) {
+    if (RUNTIME_ASSIGNED_FIELDS.has(k)) continue;
     const seen = JSON.stringify(l[k]);
     if (seen !== JSON.stringify(v)) onlyTemplate.push(`${k}: template ${JSON.stringify(v)} / live ${seen ?? '(missing)'}`);
   }
