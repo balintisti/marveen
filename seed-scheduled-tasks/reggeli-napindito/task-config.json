@@ -1,0 +1,8 @@
+{
+  "schedule": "0 7 * * *",
+  "agent": "marveen",
+  "enabled": true,
+  "type": "task",
+  "createdAt": 1776153060,
+  "stuckAfterMinutes": 20
+}
