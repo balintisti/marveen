@@ -1202,6 +1202,7 @@ window._i18n.en = {
   'tasks.modal.new_title':			'New scheduled task',
   'tasks.run_status.error':			'Error',
   'tasks.run_status.fired':			'OK',
+  'tasks.run_status.fired_late':			'Late',
   'tasks.run_status.skipped':			'Skipped',
   'team.empty':			'No sub-agents created.',
   'team.error':			'Error: {msg}',

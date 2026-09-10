@@ -652,6 +652,7 @@ async function attemptFireTask(
   now: number,
   preCheckPrefix?: string,
   lateCatchUpMs?: number,
+  lateReason?: string,
 ): Promise<'fired' | 'busy' | 'missing' | 'starting' | 'error' | 'mcp-missing' | 'first-run'> {
   const { session, host } = resolveTaskTarget(task, agentName)
 
@@ -828,7 +829,7 @@ async function attemptFireTask(
     // caught up, without any new alert/polling path that could race other
     // running tasks. Read-only w.r.t. everything else in this function.
     if (lateCatchUpMs != null) {
-      appendTaskRun(task.name, agentName, 'fired_late')
+      appendTaskRun(task.name, agentName, 'fired_late', lateReason)
       logger.warn(
         { task: task.name, agent: agentName, session, lateCatchUpMinutes: Math.round(lateCatchUpMs / 60000) },
         'Scheduled task fired via restart catch-up window -- missed its normal tick',
@@ -1368,7 +1369,32 @@ export function startScheduleRunner(): NodeJS.Timeout {
       }
 
       const view = toPendingRetryView(row, now)
-      const result = await attemptFireTask(taskDef, row.agent_name, now, retryPc.prefix)
+      // A QUEUED miss loses its SIZE at exactly this point (card 0518d542).
+      // `deletePendingTaskRetry` below drops the only record of how long the
+      // task was held: attempt_count, first_attempt, last_attempt. Measured
+      // 2026-09-05 on `sentry-or`: 628 attempts over ~2h45m, and after the
+      // delivery the history held ONE 'fired' row -- indistinguishable from a
+      // tick that fired on time.
+      //
+      // This is NOT the same hole as a DROPPED tick, which already leaves a
+      // skipped-status row via the skipIfBusy branch (7041 such rows on
+      // 2026-09-10). Only the QUEUED path destroys the count.
+      //
+      // The wording above is deliberate: the skip-reason census in
+      // task-run-skip-reason.test.ts matches CALL SHAPES in this file, so
+      // spelling the call out in prose registers as a fifth, anonymous
+      // producer. Its own docblock warns that a word search would match a
+      // comment; this is the same trap from the writing side.
+      //
+      // Reusing `fired_late` rather than inventing a status: its own docblock
+      // above says a catch-up must not be folded into 'fired' so the existing
+      // run-history view surfaces it. A retry-queue delivery IS that -- it
+      // missed its normal tick and is only firing now. `reason` (card
+      // 34b2f8a3) carries the size, so this stays ONE row and never inflates
+      // a fire count.
+      const heldMs = Math.max(0, now - row.first_attempt)
+      const heldReason = `retry-queue:${row.attempt_count}`
+      const result = await attemptFireTask(taskDef, row.agent_name, now, retryPc.prefix, heldMs, heldReason)
       if (result === 'fired') {
         deletePendingTaskRetry(row.task_name, row.agent_name)
         continue

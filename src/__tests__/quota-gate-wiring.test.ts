@@ -39,7 +39,10 @@ describe('schedule-runner wiring', () => {
     const block = gate.slice(0, gate.indexOf('const cronPc'))
     expect(block).toContain('scheduleLastRun.set(task.name, now)')
     expect(block).toContain('persistScheduleLastRun()')
-    expect(block).toContain("appendTaskRun(task.name, agentName, 'skipped')")
+    // 6c7f152 (card 34b2f8a3) gave this call site an explicit reason, so the
+    // bare three-argument form pinned here no longer exists. Asserting the
+    // REASON as well, because that is what the merge deliberately added.
+    expect(block).toContain("appendTaskRun(task.name, agentName, 'skipped', 'quota')")
   })
 
   it('gates before the pre-check, so a deferred task never spawns its script', () => {
