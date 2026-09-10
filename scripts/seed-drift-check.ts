@@ -11,6 +11,23 @@ import { check, SEED_DIR } from '../src/seed-drift.js';
 
 function main(): number {
   const { drifts, unseeded, stopped } = check();
+  // --json: gepnek. A napindito ebbol epiti a HIR/ALLANDO megkulonboztetest,
+  // es egy kimenet-parseolas ott pontosan az az alak lenne, amit ez a fajl
+  // mashol elutasit -- a szoveg az EMBERNEK szol, nem szerzodes.
+  if (process.argv.includes('--json')) {
+    console.log(JSON.stringify({
+      stopped,
+      unseeded,
+      drifts: drifts.map((d) => ({
+        key: `${d.task}/${d.file}`,
+        direction: d.onlyTemplate.length && d.onlyLive.length ? 'both'
+          : d.onlyTemplate.length ? 'template-only' : 'live-only',
+        onlyTemplate: d.onlyTemplate.length,
+        onlyLive: d.onlyLive.length,
+      })),
+    }));
+    return stopped ? 1 : drifts.length ? 3 : 0;
+  }
   if (stopped) { console.log(`seed-drift: NEM MERHETO -- ${stopped}`); return 1; }
   if (!drifts.length) {
     console.log(`seed-drift: nincs elteres (${readdirSync(SEED_DIR).length} sablon-feladat${unseeded.length ? `, ${unseeded.length} meg nincs telepitve: ${unseeded.join(', ')}` : ''}).`);
