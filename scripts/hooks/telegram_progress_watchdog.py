@@ -53,6 +53,12 @@ WEDGED_SEC = 15 * 60        # agent up, no hung-reply signal, this old -> fire (
 DEFAULT_WEDGED_UP_SEC = 180
 ERROR_TEXT = ("⚠️ Valami elakadt, és erre nem érkezett válasz. "
               "Lehet, hogy újra kell indítani az ügynököt, vagy próbáld újra kicsit később.")
+# Shown INSTEAD of deleting the placeholder when the Bot API refuses the delete.
+# It refuses for anything older than 48 h -- and an untouched "✍️ Dolgozom
+# rajta…" sitting directly above a delivered answer reads as "still working",
+# which is worse than silence. Editing is allowed past 48 h, so the placeholder
+# can always be neutralised even when it cannot be removed.
+DELIVERED_TEXT = "✅ A válasz megérkezett, lentebb olvasható."
 
 
 def _env_int(name, default):
@@ -203,7 +209,20 @@ def deliver(tok, chat_id, message_id, answer, progress_dir):
         try:
             api(tok, "deleteMessage", {"chat_id": chat_id, "message_id": message_id})
         except Exception as e:
+            # Measured 2026-09-10: one watchdog run hit this 14 times, all HTTP
+            # 400 -- the Bot API will not delete a message older than 48 h. The
+            # answer HAS gone out by now, so leaving the placeholder standing
+            # turns it into a permanent false "still working" marker. Edit is
+            # still permitted at that age, so neutralise it instead (card
+            # 074431bf).
             log(progress_dir, f"placeholder delete failed (mid={message_id}): {e}")
+            try:
+                api(tok, "editMessageText", {"chat_id": chat_id,
+                                             "message_id": message_id,
+                                             "text": DELIVERED_TEXT})
+            except Exception as e2:
+                log(progress_dir,
+                    f"placeholder edit fallback failed (mid={message_id}): {e2}")
         return "real-answer"
     # No recoverable answer -> generic error, keep the (edited) placeholder.
     try:
