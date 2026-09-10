@@ -133,6 +133,23 @@ fi
 # huszadik utan senki nem olvasna el. Az ALLAPOT viszont minden futasban kiirodik (fent).
 if [ "$PREV" = "breached" ]; then
   echo "VALTOZATLANUL megdolt (mar ertesitve) -- nem kuldok ujra."
+  # ES VISSZA KELL ALLITANI, KULONBEN EZ AZ AG MAGA TERMELI A DUPLIKATUMOT (marveen merte
+  # 2026-09-10). A fenti sorrendi javitas MINDEN megdolt futason kiirja a
+  # 'breached-undelivered'-et, MIELOTT ide erne -- helyesen, mert a kuldes meg nem tortent meg.
+  # De ez az ag NEM kuld, es eddig ugy lepett ki, hogy az allapot 'breached-undelivered' maradt.
+  # A KOVETKEZO futas ezt NEM 'breached'-nek olvassa, tehat UJ ATMENETNEK veszi es UJRA KULD.
+  #
+  # MERVE a naplobol: 32 futas, es a meres EGYETLEN EGYSZER valtott (0 x17 majd 1 x15 --
+  # Isti meghivta deepert). Egy atmenet, ami EGY riasztast er. A valosag: 8 riasztas es
+  # 7 kihagyas, pontosan valtakozva -> 12 orankent egy hamis "ez most valtozott meg" uzenet,
+  # negy napon at, egy allapotra, ami VALTOZATLAN.
+  #
+  # A bukas iranya megmaradt annak, aminek a fenti komment szanta (duplikatum, nem csend) --
+  # csak eddig a NORMAL uton is duplikalt, nem csak osszeomlaskor. Egy or, ami minden masodik
+  # futasban "valtozas"-t kialt egy valtozatlan allapotra, pontosan azt a bizalmat eli fel,
+  # amiert letezik: a huszadik utan senki nem olvassa el -- ezt a sajat kommentje mondja ki
+  # ket sorral feljebb.
+  printf '%s\n' "breached" > "$STATE_FILE"
   exit 2
 fi
 
