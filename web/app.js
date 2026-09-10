@@ -6302,11 +6302,18 @@ attachOverlayCloseGuard(scheduleRunHistoryOverlay)
 
 const RUN_STATUS_LABEL = {
   fired: () => t('tasks.run_status.fired'),
+  // fired_late: it DID fire, just not on its own tick. Two producers -- the
+  // restart catch-up window, and (card 0518d542) a retry-queue delivery, whose
+  // `reason` carries how many attempts it was held for. Without this entry the
+  // row fell back to the raw token AND to `badge-paused`, i.e. it read as "did
+  // not run" for a run that happened.
+  fired_late: () => t('tasks.run_status.fired_late'),
   error: () => t('tasks.run_status.error'),
   skipped: () => t('tasks.run_status.skipped'),
 }
 const RUN_STATUS_CLASS = {
   fired: 'badge-active',
+  fired_late: 'badge-warning',
   error: 'badge-danger',
   skipped: 'badge-paused',
 }

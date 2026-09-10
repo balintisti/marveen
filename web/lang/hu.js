@@ -518,6 +518,7 @@ window._i18n.hu = {
   'tasks.history.status':        'Állapot',
   'tasks.history.tokens':        'Token (kb.)',
   'tasks.run_status.fired':      'Rendben',
+  'tasks.run_status.fired_late': 'Kesve futott',
   'tasks.run_status.error':      'Hiba',
   'tasks.run_status.skipped':    'Kihagyva',
   'tasks.expand.generating':     'Kérdések generálása...',

@@ -21,8 +21,14 @@ describe('schedule-runner auto-starts a stopped agent for its scheduled task', (
   it('attemptFireTask can return a distinct "starting" state', () => {
     // The return union must carry 'starting' so the caller can tell an
     // auto-start apart from a genuine busy session.
+    // Sliced to the END OF THE SIGNATURE, not to a fixed width. A 200-char
+    // window used to stand here and it broke on a LEGITIMATE change: card
+    // 0518d542 added one parameter, which pushed the return union past the
+    // boundary. The test then reported a missing 'starting' state that was
+    // still right there -- a fixed-width extractor measures the neighbour.
     const sig = SRC.slice(SRC.indexOf('function attemptFireTask'))
-    expect(sig.slice(0, 200)).toMatch(/'starting'/)
+    const signature = sig.slice(0, sig.indexOf('{'))
+    expect(signature).toMatch(/'starting'/)
   })
 
   it('the missing-session branch auto-starts the agent instead of skipping', () => {

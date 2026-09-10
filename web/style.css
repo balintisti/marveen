@@ -2596,6 +2596,14 @@ main.kanban-active { padding-left: 16px; padding-right: 16px; }
   background: rgba(217, 119, 87, 0.12);
   color: var(--accent);
 }
+/* A run that DID happen, just not on its own tick (`fired_late`). Distinct from
+   both badge-active and badge-paused on purpose: card 0518d542 made this status
+   routine (every retry-queue delivery), and reusing the paused amber would have
+   shown a fire that happened as if it had been skipped. */
+.badge-warning {
+  background: rgba(200, 180, 100, 0.18);
+  color: #9a8a30;
+}
 .badge-heartbeat {
   background: rgba(200, 80, 120, 0.12);
   color: #c85078;
