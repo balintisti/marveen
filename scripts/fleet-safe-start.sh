@@ -52,7 +52,16 @@ agents_json="$(curl -s --max-time 10 -H "Authorization: Bearer $TOKEN" "$DASH/ap
 [[ -z "$agents_json" ]] && { log "could not reach $DASH/api/agents"; exit 1; }
 
 # Emit "name running" lines. running is true/false.
-mapfile -t rows < <(printf '%s' "$agents_json" | python3 -c "
+# bash 3.2 COMPAT -- merve 2026-09-10 (marveen). Itt `mapfile` allt, ami BASH 4+.
+# Ezen a gepen CSAK /bin/bash 3.2.57 van (nincs homebrew bash), tehat a szkript
+# `mapfile: command not found`-dal elhasalt, majd `rows: unbound variable`-lel --
+# vagyis a flotta helyreallitasanak EGYETLEN dokumentalt eszkoze nem futott azon a
+# gepen, amire irtak. Pont akkor derult ki, amikor hatbol hat agens allt.
+# A ciklus-alak bash 3-ban is mukodik; a process substitution (`< <(...)`) igen.
+rows=()
+while IFS= read -r _row_line; do
+  [ -n "$_row_line" ] && rows+=("$_row_line")
+done < <(printf '%s' "$agents_json" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
 a=d if isinstance(d,list) else d.get('agents',[])

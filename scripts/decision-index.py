@@ -19,7 +19,8 @@ nem lehet diffelni, nem ellenorizheto -- es akkor pontosan az a kezi lista, ami 
 keszult, csak egy generatorral mellette.
 
 MIERT NINCS A "lapon nevezik-e" OSZLOP A GENERALT FAJLBAN. A bemenete a repon KIVUL van
-(`/Users/isti/CLAUDE.md`) es KOVETETLEN (`/Users/isti/marveen/CLAUDE.md` a .gitignore 82.
+(`rulebook/delta-crm.md` -- 2026-09-10-ig `/Users/isti/CLAUDE.md`, kovetetlenul ES minden
+projektnek automatikusan betoltve) es KOVETETLEN (`/Users/isti/marveen/CLAUDE.md` a .gitignore 82.
 soraban all). Egy repo-kovetett fajl, aminek a tartalma egy repon kivuli, verziozatlan
 fajltol fugg, minden gepen mast adna, es a drift-ellenorzes a repon kivuli valtozastol
 bukna. Ezert a lap-oszlop ELO LEKERDEZES marad (`--unnamed`), nem artefaktum.
@@ -49,7 +50,8 @@ import os, re, subprocess, sys
 INSTALL_ROOT = '/Users/isti/marveen'
 # Checkout-FUGGETLEN: egy worktreebol a `<checkout>/CLAUDE.md` nem letezik, es a hianya
 # nem hiba, hanem egy csendben szukebb populacio. Lasd a docstring mert eseteet.
-PAGES = ['/Users/isti/CLAUDE.md', os.path.join(INSTALL_ROOT, 'CLAUDE.md')]
+PAGES = [os.path.join(INSTALL_ROOT, 'rulebook', 'delta-crm.md'),
+         os.path.join(INSTALL_ROOT, 'CLAUDE.md')]
 OUT_REL = 'docs/scripts-decisions.md'
 
 CMT  = re.compile(r'^\s*(#|//|/\*+|\*(?!/))\s?(.*?)\s*(?:\*/)?$')

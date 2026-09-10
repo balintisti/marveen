@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **221** kovetett fajl, ebbol
-**64** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **223** kovetett fajl, ebbol
+**66** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (1)
 
@@ -38,6 +38,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/__tests__/idle-reporter.test.py`
 
 - MIERT PYTHON-TESZT ES NEM VITEST: a szkript szandekosan ONALLO -- semmit nem
+
+### `scripts/__tests__/install-no-force-push-hook.test.sh`
+
+- MIERT SCRATCH REPO ES NEM A SAJAT FANK: ez a telepito a `.git/hooks` ala ir.
 
 ### `scripts/__tests__/memory-index-add-check-hop2.test.py`
 
@@ -172,6 +176,11 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/install-launchd-unit.sh`
 
 - WHY (card 9f89c7e1, measured 2026-08-27). Every loaded com.marveen.* unit had an
+
+### `scripts/install-no-force-push-hook.sh`
+
+- WHY THIS FILE EXISTS AT ALL (card f2b369ff, measured 2026-09-10 19:5x).
+- WHY THE HOOK AND NOT THE DENY-LIST (the card's own point 3, now measured).
 
 ### `scripts/install-skills-snapshot-hook.sh`
 
