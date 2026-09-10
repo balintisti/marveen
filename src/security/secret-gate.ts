@@ -63,6 +63,58 @@ export const DENIED_PATH_PATTERNS: { pattern: RegExp; reason: string }[] = [
 ];
 
 /**
+ * CREDENTIAL FILENAMES -- A SECOND AXIS, NOT A STRONGER FIRST ONE (card 5cf210d6).
+ *
+ * The list above names DIRECTORIES that should never be committed. This one
+ * names FILES whose very name says what they hold. The gate bit hard on content
+ * shapes (measured 2026-08-24: `sk_live_` blocked, a private-key header blocked,
+ * clean source passed) and was blind on this axis: a `.env` or a
+ * `service-account.json` with no recognised shape inside it went through, and a
+ * gate that reads the bytes but not the name is not the stronger of two
+ * detectors -- it is one of two.
+ *
+ * THE PATTERNS ARE NOT INVENTED. They are the fleet page's own push-check
+ * recipe, which carries its own measurement: the narrower `\.env$` form missed
+ * FIVE of seven env files, which is why the anchor is `($|\.)`.
+ *
+ * PRE-FLIGHT, and this is the half that matters here: of 1140 tracked files
+ * exactly ONE matches -- `.env.example` -- and the exception list below removes
+ * it, so ZERO tracked files start blocking. That check is not optional
+ * ceremony: a previous change to this same gate cost the fleet 25 minutes of
+ * `git commit` across 35 worktrees (card 6414366f), and this file is imported
+ * through `tsx` by the pre-commit hook, so it goes live the moment it merges --
+ * no build, no restart, no second chance to notice.
+ */
+export const CREDENTIAL_FILE_PATTERNS: { pattern: RegExp; reason: string }[] = [
+  { pattern: /(^|\/)\.env($|\.)/, reason: 'environment file (.env)' },
+  { pattern: /(^|\/)service-account\.json$/, reason: 'Google service-account key file' },
+  { pattern: /(^|\/)tokens\.json$/, reason: 'stored OAuth tokens' },
+  { pattern: /\.pem$/, reason: 'PEM key or certificate' },
+  { pattern: /(^|\/)id_rsa($|\.)/, reason: 'SSH private key' },
+  { pattern: /(^|\/)\.(bash|zsh|psql)_history$/, reason: 'shell or psql history' },
+  { pattern: /(^|\/)docker\/config\.json$/, reason: 'docker registry credentials' },
+  { pattern: /(^|\/)\.netrc$/, reason: 'netrc credentials' },
+  { pattern: /(^|\/)\.npmrc$/, reason: 'npm auth token file' },
+];
+
+/**
+ * The NOT-list, and it lands in the SAME change as the patterns on purpose:
+ * introducing the rule without its exceptions would block `.env.example`, which
+ * this repo has tracked since its first commit. Half of this pair is worse than
+ * neither half.
+ *
+ * IT EXEMPTS THE NAME RULE ONLY -- the file is still scanned for content, which
+ * is why these are not entries in ALLOWLISTED_PATHS: that list exempts a file
+ * from EVERYTHING. A real key pasted into `.env.example` must still be caught,
+ * and putting the exception here is the difference between "we know this name
+ * is fine" and "stop looking at this file".
+ */
+export const CREDENTIAL_FILE_EXCEPTIONS: { pattern: RegExp; reason: string }[] = [
+  { pattern: /\.env\.(example|sample|template)$/, reason: 'documented template, not a real env file' },
+  { pattern: /(^|\/)__tests__\/fixtures\//, reason: 'test fixture: the shape is the subject under test' },
+];
+
+/**
  * Content shapes. Kept deliberately anchored: measured against this repo on
  * 2026-08-18, a bare `sk_` matches `task_name` and `skipIfBusy`, and a bare
  * `Bearer ` matches 64 files of `Bearer ${token}`. A gate that cries wolf gets
@@ -204,6 +256,18 @@ export function scanFile(input: ScanInput): Finding[] {
     if (pattern.test(path)) {
       findings.push({ file: path, detector: 'path', severity: 'blocked', reason });
       break;
+    }
+  }
+
+  // The credential-NAME axis, checked separately so its exceptions cannot
+  // weaken the directory rule above: an `evidence/.env.example` is still a
+  // committed evidence directory and still blocks.
+  if (!CREDENTIAL_FILE_EXCEPTIONS.some((e) => e.pattern.test(path))) {
+    for (const { pattern, reason } of CREDENTIAL_FILE_PATTERNS) {
+      if (pattern.test(path)) {
+        findings.push({ file: path, detector: 'path', severity: 'blocked', reason: `credential filename: ${reason}` });
+        break;
+      }
     }
   }
 
