@@ -47,6 +47,15 @@ export const ASYMMETRY_NOTE = 'AMIT EZ A SOR NEM SZUR:'
 
 export interface WorkCheck {
   kind: WorkCheckKind
+  /** Does THIS agent's comment move somebody ELSE's queue? (card 02ba43e7)
+   *
+   *  Two different questions, which is why it is a second field rather than a
+   *  fourth `kind`: `kind` says WHAT MY OWN queue is, `reviewer` says whether my
+   *  last word on a card counts as an unanswered finding for its assignee.
+   *  mandark is the case that proves they are independent -- a real reviewer
+   *  (live browser measurement) whose own queue is `assigned_open_cards`, exactly
+   *  like a worker's. No existing signal carries the role. */
+  reviewer?: boolean
 }
 
 export interface IdleAgentThresholds {
@@ -397,7 +406,11 @@ export function parseWorkCheck(raw: string | null | undefined): WorkCheck | null
   const kind = (parsed as { kind?: unknown }).kind
   if (typeof kind !== 'string') return null
   if (!VALID_KINDS.includes(kind as WorkCheckKind)) return null
-  return { kind: kind as WorkCheckKind }
+  // STRICTLY `true`. A truthy string ("yes", "1") is a typo, not a declaration,
+  // and coercing it would grant the role by accident -- in the direction that
+  // INVENTS work for someone else, which is the expensive one here.
+  const reviewer = (parsed as { reviewer?: unknown }).reviewer === true
+  return reviewer ? { kind: kind as WorkCheckKind, reviewer: true } : { kind: kind as WorkCheckKind }
 }
 
 export interface WorkCountCard {
@@ -519,6 +532,20 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
   /** Now, in epoch SECONDS (the column's unit). Injected rather than read from the
    *  clock so this function stays pure and testable on fixtures. */
   now?: number,
+  /** The agents who have DECLARED `reviewer: true` (card 02ba43e7).
+   *
+   *  The old rule excluded the coordinator BY NAME, so every coordinator-shaped
+   *  agent had to be added by hand. Measured 2026-08-22: jarvis became last
+   *  commenter on EIGHT of dexter's cards in one night and every one counted as an
+   *  unanswered finding. Naming roles instead of people is what stops the next
+   *  such agent from reopening this.
+   *
+   *  UNDEFINED OR EMPTY MEANS "NOT CONFIGURED", AND THEN THE OLD NAME-BASED RULE
+   *  STANDS. That asymmetry is deliberate: treating an unconfigured fleet as "no
+   *  one is a reviewer" would take every such card out of every queue at once and
+   *  deliver them nowhere -- the same silence this file refuses elsewhere. The
+   *  narrowing switches on when the declarations exist, not before. */
+  reviewers?: ReadonlySet<string>,
 ): T[] {
   const live = cards.filter((c) => !c.archived_at)
   switch (check.kind) {
@@ -615,7 +642,10 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
         // A REVIEWER had the last word -> an unanswered finding is waiting on me.
         // "Someone else" was too wide: it swept in the coordinator, whose comment is
         // the opposite signal -- it usually means the card is settled, not open.
-        return latestAuthor !== null && latestAuthor !== agent && latestAuthor !== coordinator
+        if (latestAuthor === null || latestAuthor === agent) return false
+        // Role, not name -- but only once anybody has declared one. See `reviewers`.
+        if (reviewers && reviewers.size > 0) return reviewers.has(latestAuthor)
+        return latestAuthor !== coordinator
       })
     }
     case 'testing_without_my_comment':

@@ -16,16 +16,17 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **223** kovetett fajl, ebbol
+Populacio: `git ls-files scripts/` = **224** kovetett fajl, ebbol
 **66** hordoz dontes-fejlecet.
 
-## Nem olvasott fejlec-alak (1)
+## Nem olvasott fejlec-alak (2)
 
 Ezek a fajlok egyik olvasott fejlec-alakot sem hasznaljak (sor-komment,
 docstring, blokk-komment), de a fejlec-tartomanyukban all dontes-alaku sor.
 Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - `scripts/com.marveen.idle-reporter.plist.template` -- MIERT KULON FOLYAMAT, ES NEM A DASHBOARDBAN EGY TIMER: mert epp azt az esetet
+- `scripts/sql/tasks-reopen-grant.sql` -- MIERT ALL EZ ITT, ES NEM CSAK A KARTYAN: a fajlt UJRAFUTTATTAK nyitott kerdeskent,
 
 ### `scripts/__tests__/channels-main-model.test.sh`
 

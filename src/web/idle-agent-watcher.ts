@@ -261,6 +261,17 @@ export function tick(): void {
     // agents means more copies of the same news.
     const alerts: FleetAlert[] = []
 
+    // WHO IS A REVIEWER, read once per tick from the same declarations the loop
+    // below uses for `kind` (card 02ba43e7). Built BEFORE the loop on purpose: the
+    // question "does X's comment move Y's queue" is about X, so it cannot be
+    // answered while iterating Y. An empty set means nobody has declared the role,
+    // and selectDeclaredWork then keeps the old name-based rule rather than
+    // emptying every queue at once.
+    const reviewers = new Set<string>()
+    for (const other of agents) {
+      if (parseWorkCheck(readWorkCheckRaw(other))?.reviewer) reviewers.add(other)
+    }
+
     for (const agent of agents) {
       const running = isAgentRunning(agent)
       const check = parseWorkCheck(readWorkCheckRaw(agent))
@@ -274,7 +285,9 @@ export function tick(): void {
       // chances to disagree, and the repeat-suppression compares ids against what the
       // last wake NAMED -- a count from a different list could suppress a wake for work
       // the agent was never shown.
-      const ownItems = check ? selectDeclaredWork(check, agent, cards, comments, MAIN_AGENT_ID, nowSec) : null
+      const ownItems = check
+        ? selectDeclaredWork(check, agent, cards, comments, MAIN_AGENT_ID, nowSec, reviewers)
+        : null
       const ownWorkCount = ownItems ? ownItems.length : null
 
       // One capture per agent per tick: the evidence strength comes from the same read
