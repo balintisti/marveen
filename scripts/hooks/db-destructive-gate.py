@@ -6,8 +6,13 @@ re-confirmed 2026-08-28; cards aae333c1 / caaf32a4 / 0b32c5da).
 
 Every agent in this fleet runs with `--dangerously-skip-permissions`
 (scripts/channels.sh, channel-watchdog.sh; the pane shows "bypass permissions on").
-In that mode Claude Code asks nothing, so the contents of any allow/deny list are
-IRRELEVANT -- a bare `npx prisma migrate reset --force` would run without a question.
+In that mode Claude Code asks nothing, so an ALLOW list decides nothing -- a bare
+`npx prisma migrate reset --force` would run without a question. The DENY list is the
+exception, and that is measured, not assumed: in bypass-mode sessions on 2026-09-06
+both `echo marveen-flag-probe --force x` and `git push nonexistent-remote-xyz-12345`
+came back REFUSED (card 9e3f2f5c). Until that day this paragraph said "allow/deny ...
+IRRELEVANT", which reads as "do not bother writing deny rules" -- and an afternoon was
+spent on that reading before the second per-agent settings file turned up.
 Measured alongside: the production repo's settings.local.json has allow=490 / deny=0,
 while three agent configs carry deny=13..14. The one checkout that touches production
 is the one with no deny list at all.
@@ -117,6 +122,72 @@ DB_CLIENTS = re.compile(
     r"(^|[\s;&|(])(psql|sqlite3|mysql|mariadb|mongo|mongosh|cockroach|pg_restore|pgcli|"
     r"prisma|supabase|npx\s+prisma|dbmate|flyway|liquibase)([\s;&|)]|$)", re.I)
 
+# === CLOUD patterns: the third class, and it is here because a DENY LIST CANNOT
+# EXPRESS IT (card 9e3f2f5c, group G3) =========================================
+#
+# didi's finding, 2026-08-19: the production checkout's permission list carries
+# `Bash(gcloud:*)` next to an EMPTY deny list, so deleting a Cloud Run service or a
+# secret needs no question from anyone. The card then spent three weeks arriving at a
+# MECHANISM instead of an opinion (jarvis and computress, four probes and a positive
+# control, 2026-09-06):
+#
+#     a `Bash(...)` rule is a LITERAL PREFIX on the raw command string. The only
+#     wildcard is the closing `:*`; a `*` written INSIDE the pattern matches the
+#     CHARACTER `*`. `Bash(gcloud * delete:*)` waits for a literal asterisk and
+#     returns a confident, silent nothing.
+#
+# And the destructive verb of a gcloud invocation is its LAST word --
+# `gcloud run services delete`, `gcloud secrets versions destroy`,
+# `gcloud sql instances delete`. A prefix matcher can only reach it by ENUMERATING
+# every command family, and an enumeration that forgets one forgets it SILENTLY.
+# This card's own words for that: a pattern too narrow is worse than no pattern,
+# because it buys a false sense of cover.
+#
+# A hook has the one property the deny list lacks -- it matches ANYWHERE in the
+# string. So this class is positional but NOT a prefix: the CLI in command position,
+# a destructive verb as a STANDALONE TOKEN anywhere among its arguments. There is no
+# family list, so there is nothing to forget.
+#
+# WHAT IT COSTS, MEASURED BEFORE IT WENT IN, against the only real denominator there
+# is -- the production checkout`s own `.bash_history`, i.e. what was actually typed:
+#
+#     gcloud invocations ......................... 81
+#     of those with a standalone delete/destroy ..  0
+#     what actually runs: run deploy 39, builds submit 34, config get-value 12,
+#                         sql connect 7, secrets versions 1
+#     the three CI workflows (deploy / rollback / maintenance): 0
+#     CONTROL: the same measure over a synthetic `gcloud run services delete foo`
+#              returns 1, so the zero is a real negative and not a blind matcher
+#
+# The blocking risk against today`s actual work is therefore zero, and the override
+# stays one line away for the day someone genuinely needs the operation.
+#
+# THE TOKEN BOUNDARY IS A HYPHEN CLASS, NOT `\b`: `--delete-labels` and
+# `--remove-env-vars` are FLAGS on otherwise ordinary commands, and `\b` matches
+# inside them. `(?<![\w-])delete(?![\w-])` does not.
+#
+# WHAT IS DELIBERATELY NOT COVERED, written down rather than left to be discovered:
+#   - `gh repo delete`, `gh secret set`, `kubectl delete`: the same shape, one
+#     alternation away, left out because this card measured gcloud and nothing else.
+#     Measured usage of all three in that history: 0. Widening is a one-line change;
+#     doing it unmeasured is how a gate starts claiming more than it checked.
+#   - hyphenated destructive flags (`--delete-unmatched-destination-objects`,
+#     `--remove-iam-policy-binding`): excluded by the token boundary above, on
+#     purpose, because catching them means catching every ordinary `--remove-*` flag.
+#   - `gcloud auth revoke`, and any verb assembled at runtime (`gcloud $VERB delete`,
+#     `bash deploy.sh`). Same residual as the SQL class, for the same reason: the hook
+#     sees a command STRING, never the process that will run.
+CLOUD_CLIS = re.compile(r"(^|[\s;&|(])(gcloud|gsutil)([\s;&|)]|$)")
+
+CLOUD_PATTERNS = [
+    (r"(?<![\w-])(delete|destroy)(?![\w-])",
+     "a destructive gcloud/gsutil verb (delete/destroy) -- a deleted Cloud Run "
+     "service, SQL instance or secret version does not come back from this side"),
+    (r"(?<![\w-])rm(?![\w-])",
+     "gcloud storage / gsutil rm -- object deletion, which never contains the word "
+     "`delete` and so no delete-shaped rule would ever see it"),
+]
+
 # Segment separators. Splitting is deliberately crude -- it can only ever produce
 # MORE segments than a shell would.
 #
@@ -140,6 +211,7 @@ DB_CLIENTS = re.compile(
 # it). Each executed body line CARRIES its opener's client instead -- see
 # strip_heredoc_bodies.
 _SEG = re.compile(r"(?:\|\||&&|[;\n|&])")
+_LINE_CONT = re.compile(r"\\\n")
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
@@ -213,6 +285,14 @@ def strip_heredoc_bodies(command: str) -> str:
 def find_hits(command: str):
     hits = []
     command = strip_heredoc_bodies(command)
+    # Join shell line continuations BEFORE splitting. A backslash-newline is ONE
+    # command to any shell, but `_SEG` splits on `\n` -- so `prisma migrate \<nl>
+    # reset` and `gcloud run services \<nl>delete x` each arrived in two segments,
+    # and every class here needs its words in ONE. Joining can only merge, never
+    # separate, so it cannot cost a check that the old form made. It runs AFTER
+    # strip_heredoc_bodies on purpose: inside a heredoc a trailing backslash is body
+    # text, not a continuation.
+    command = _LINE_CONT.sub(" ", command)
     for segment in _SEG.split(command):
         if not segment.strip():
             continue
@@ -220,6 +300,12 @@ def find_hits(command: str):
         for pat, why in TOOL_PATTERNS:
             if re.search(pat, cmdpos, re.I) and why not in hits:
                 hits.append(why)
+        # Command position, like the TOOL class: `echo "gcloud run services delete x"`
+        # is a string being printed, and its quotes are already blanked out here.
+        if CLOUD_CLIS.search(cmdpos):
+            for pat, why in CLOUD_PATTERNS:
+                if re.search(pat, cmdpos, re.I) and why not in hits:
+                    hits.append(why)
         if DB_CLIENTS.search(segment):
             for pat, why in SQL_PATTERNS:
                 if re.search(pat, segment, re.I) and why not in hits:
@@ -282,11 +368,15 @@ def main():
         sys.exit(0)
 
     sys.stderr.write(
-        "DB-KAPU: TILTVA -- destruktiv adatbazis-muvelet.\n\n"
+        "DB-KAPU: TILTVA -- destruktiv muvelet (adatbazis vagy felho-eroforras).\n\n"
         + "\n".join("  - %s" % h for h in hits)
         + "\n\n"
-        "MIERT KODBAN ES NEM JOGOSULTSAGBAN: minden agens bypass modban fut, ahol a\n"
-        "jogosultsagi lista tartalma nem szamit. Ez a kapu akkor is fog.\n\n"
+        "MIERT KODBAN ES NEM JOGOSULTSAGBAN: a `Bash(...)` szabaly LITERALIS ELOTAG a\n"
+        "nyers parancs-sztringen (merve 2026-09-06, kartya 9e3f2f5c), a destruktiv ige\n"
+        "viszont gyakran a parancs VEGEN all (`gcloud run services delete`) vagy egy\n"
+        "idezojeles argumentumban (`psql -c ...`). Egy elotag-minta csak felsorolassal\n"
+        "erne oda, es amit a felsorolas kihagy, azt CSENDBEN hagyja ki.\n"
+        "Ez a kapu barhol illeszt, es bypass modban is fut, mert KOD.\n\n"
         "HA A PARANCS TENYLEG KELL -- es a felelosseg a tied, a naplo megorzi:\n"
         "    MARVEEN_DB_GATE=allow <a parancs>\n\n"
         "HA CSAK MERNI AKARSZ eles adaton, NE ezt az utat valaszd: a szabalykonyv\n"
