@@ -63,8 +63,21 @@ type Drift = { task: string; file: string; onlyTemplate: string[]; onlyLive: str
  * Same class as the live-only `stuckAfterMinutes` the comparison already
  * ignores; the difference is only that this one is DECLARED by the template,
  * so a key-based comparison walks straight into it.
+ *
+ * `agent` joins it for a STRONGER reason than "it is per-install", and the
+ * reason is code, not preference: `copyTaskConfigWithAgentRewrite` in
+ * agent-scaffold.ts OVERWRITES the template's agent with MAIN_AGENT_ID at seed
+ * time whenever the key is a string. The template's value is therefore never
+ * what lands, so comparing it against the live value asks a question the
+ * seeder has already answered. Measured: `scheduled-tasks-io.ts` also defaults
+ * a MISSING agent to MAIN_AGENT_ID, so the key is not required either.
+ *
+ * NOT the same as "treat the difference as expected", which would leave a
+ * true-forever drift in the report and teach its readers to skip that line.
+ * The comparison is dropped because it is meaningless, not tolerated because
+ * it is inconvenient.
  */
-export const RUNTIME_ASSIGNED_FIELDS = new Set(['createdAt']);
+export const RUNTIME_ASSIGNED_FIELDS = new Set(['createdAt', 'agent']);
 
 export function jsonDrift(tpl: string, live: string): { onlyTemplate: string[]; onlyLive: string[] } {
   const t = JSON.parse(tpl) as Record<string, unknown>;
