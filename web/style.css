@@ -3089,6 +3089,14 @@ main.kanban-active { padding-left: 16px; padding-right: 16px; }
 .badge-warm { background: rgba(217, 119, 87, 0.12); color: var(--accent); }
 .badge-cold { background: var(--info-soft); color: var(--info); }
 .badge-shared { background: rgba(200, 180, 100, 0.18); color: #9a8a30; }
+/* Emitted since long before this rule existed, and an undefined class emits ZERO
+   rules WITHOUT erroring: card 6a4067f7. `badge-danger` carries the `error` run
+   status (web/app.js RUN_STATUS_CLASS), so a FAILED scheduled run rendered
+   indistinguishably from a neutral one -- the same shape as a late run looking
+   skipped, running the other way. `badge-warn` marks pending channel requests
+   (web/index.html #chRequestBadge). The --danger vars already existed. */
+.badge-danger { background: var(--danger-soft); color: var(--danger); }
+.badge-warn { background: rgba(200, 180, 100, 0.18); color: #9a8a30; }
 
 .mem-agent-badge {
   font-size: 10px;
