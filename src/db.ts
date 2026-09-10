@@ -626,6 +626,13 @@ export function initDatabase(dbPathOverride?: string): void {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_ts ON task_runs(ts)`)
   // Migration: add status column to task_runs (introduced 2026-06-13)
   try { db.exec(`ALTER TABLE task_runs ADD COLUMN status TEXT NOT NULL DEFAULT 'fired'`) } catch { /* already present */ }
+  // Migration: add reason to task_runs (card 34b2f8a3, 2026-09-10). 'skipped'
+  // has FOUR producers and the stored record named none of them, so a quota
+  // hold, a pre-check that found nothing, and a silently dropped busy tick were
+  // one indistinguishable word -- and they call for OPPOSITE catch-up
+  // decisions. Nullable on purpose: every pre-existing row is an honest
+  // "unknown", not a fabricated reason.
+  try { db.exec(`ALTER TABLE task_runs ADD COLUMN reason TEXT`) } catch { /* already present */ }
 
   // --- Pending Scheduled Task Retries ---
   // Busy-skipped scheduled tasks used to live in an in-memory Map. On a
@@ -2934,21 +2941,25 @@ export function getAgentConversationThreads(): AgentThread[] {
 
 export interface TaskRunEntry { name: string; agent: string; ts: number; status: string }
 
-export interface TaskRunHistoryEntry { ts: number; status: string; tokens_est: number | null }
+export interface TaskRunHistoryEntry { ts: number; status: string; reason: string | null; tokens_est: number | null }
 
 const TASK_RUN_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
-export function appendTaskRun(name: string, agent: string, status = 'fired'): void {
+// `reason` narrows a status that has several producers. It is required in
+// practice only for 'skipped' (see the migration note above); everything else
+// passes it as undefined and stores NULL.
+export function appendTaskRun(name: string, agent: string, status = 'fired', reason?: string): void {
   const now = Date.now()
-  db.prepare('INSERT INTO task_runs (name, agent, ts, status) VALUES (?, ?, ?, ?)').run(name, agent, now, status)
+  db.prepare('INSERT INTO task_runs (name, agent, ts, status, reason) VALUES (?, ?, ?, ?, ?)')
+    .run(name, agent, now, status, reason ?? null)
   // Opportunistic TTL prune: cheap indexed DELETE, keeps the table bounded.
   db.prepare('DELETE FROM task_runs WHERE ts < ?').run(now - TASK_RUN_TTL_MS)
 }
 
 export function listTaskRunHistory(name: string, limit: number): TaskRunHistoryEntry[] {
   const rows = db.prepare(
-    'SELECT ts, status, agent FROM task_runs WHERE name = ? ORDER BY ts DESC LIMIT ?'
-  ).all(name, limit) as { ts: number; status: string; agent: string }[]
+    'SELECT ts, status, reason, agent FROM task_runs WHERE name = ? ORDER BY ts DESC LIMIT ?'
+  ).all(name, limit) as { ts: number; status: string; reason: string | null; agent: string }[]
 
   // token_usage.timestamp is in seconds; task_runs.ts is in ms -- divide by 1000
   const tokenStmt = db.prepare(
@@ -2962,7 +2973,7 @@ export function listTaskRunHistory(name: string, limit: number): TaskRunHistoryE
     const newerTs = i > 0 ? rows[i - 1].ts : undefined
     const windowEnd = newerTs !== undefined ? Math.min(row.ts + 3600000, newerTs) : row.ts + 3600000
     const tokenRow = tokenStmt.get(row.agent, Math.floor(row.ts / 1000), Math.floor(windowEnd / 1000)) as { total: number }
-    return { ts: row.ts, status: row.status, tokens_est: tokenRow.total > 0 ? tokenRow.total : null }
+    return { ts: row.ts, status: row.status, reason: row.reason, tokens_est: tokenRow.total > 0 ? tokenRow.total : null }
   })
 }
 
