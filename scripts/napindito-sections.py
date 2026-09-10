@@ -25,7 +25,7 @@ Ezredmasodpercben olvasva egy masodperces oszlop 20 685 NAPOS kort ad -- eleg
 nagy ahhoz, hogy feltunjon, de csak ha kiirjuk. Ezert van rajta futasidejuu
 ellenorzes: lasd `_assert_units`.
 """
-import argparse, collections, json, os, re, sqlite3, sys, time
+import argparse, collections, json, os, re, sqlite3, subprocess, sys, time
 from datetime import datetime
 
 # A gyoker a SZKRIPT helyebol jon, nem a munkakonyvtarbol: elesben a `scripts/`
@@ -135,7 +135,91 @@ def section_delta(con, snapshot_path, write):
     return out
 
 
-def section_broken(con, hours, tasks_dir=None):
+def drift_lines(cur, prev, now):
+    """A HIR/ALLANDO dontes, tisztan -- ezert tesztelheto alprocessz nelkul.
+
+    Visszaad: (sorok, first_seen). A `first_seen` MEGORZI a korabbi idobelyeget,
+    kulonben a "legregebbi kora" minden reggel nullarol indulna, es pont azt a
+    tulajdonsagot veszitenenk el, amiert ez a sor letezik: hogy egy figyelmen
+    kivul hagyott allapot LATHATOAN oregszik.
+    """
+    first_seen = {k: prev.get(k, now) for k in cur}
+    entered = [k for k in cur if k not in prev]
+    left = [k for k in prev if k not in cur]
+    out = []
+    if entered or left:
+        for k in sorted(entered):
+            out.append(f"  - UJ sablon-elcsuszas: {k} ({cur[k]['direction']})")
+        for k in sorted(left):
+            out.append(f"  - MEGSZUNT sablon-elcsuszas: {k}")
+    elif cur:
+        oldest = min(first_seen.values())
+        out.append(f"  - sablon-elcsuszas: {len(cur)} fajl, valtozatlan; a legregebbi "
+                   f"{(now - oldest)/86400:.0f} napja all")
+    return out, first_seen
+
+
+def _seed_drift(root, state_path, write):
+    """A sablon-elcsuszas HIRKENT, nem jelenlet szerint (kartya a22c9fe8).
+
+    marveen rulingja, es a sajat ervem dontotte el, amit a "9 letiltva" sorra
+    irtam le, mielott az valaha tuzelt volna: egy napi sor, ami JELENLETET
+    jelent, minden reggel ugyanazt a negy fajlt nevezne meg, es egy heten belul
+    zaj lenne belole.
+
+    DE A CSAK-HIR JELENTES LATHATATLANNA TESZ EGY ALLANDO PROBLEMAT, es epp az
+    ellen keszult ez az egesz. Ezert ket fele van:
+        a HALMAZ VALTOZIK (be- vagy kilep egy fajl) -> HIR, iranyostul
+        VALTOZATLAN es NEM URES -> EGY sor: a darabszam es a LEGREGEBBI KORA.
+            Nem lista. Egy szam egy korral eleg olcso ahhoz, hogy soha ne
+            valjon zajja, es lathatova teszi, hogy egy figyelmen kivul hagyott
+            allapot minden reggel OREGEBB.
+        URES -> a szekcio elhagyja
+    """
+    exe = os.path.join(root, "scripts", "seed-drift-check.ts")
+    if not os.path.exists(exe):
+        return ["  - a sablon-elcsuszas ellenorzes NEM FUTOTT LE: nincs " + exe]
+    try:
+        r = subprocess.run(["npx", "--no-install", "tsx", exe, "--json"], cwd=root,
+                           capture_output=True, text=True, timeout=120)
+    except Exception as e:
+        return [f"  - a sablon-elcsuszas ellenorzes NEM FUTOTT LE: {e}"]
+    last = (r.stdout or "").strip().splitlines()[-1:] or [""]
+    try:
+        data = json.loads(last[0])
+    except Exception:
+        # A `json.loads` sajat hibaja ("Expecting value: line 1 column 5") NEM
+        # mondja meg az OKOT. A leggyakoribb ok az, hogy a szerszam meg nem
+        # ismeri a `--json` kapcsolot -- ilyenkor EMBERI szoveget ir, es azt
+        # kell idezni, nem a parser panaszat.
+        # Az ELSO nem-ures sor idezendo, a stdoutbol, kulonben a stderrbol.
+        # (Elso alakomban `last[0][0]`-t vett, ami egy STRING elso KARAKTERE --
+        # az uzenet igy nevezte meg az okot es nem mutatott semmit belole.)
+        lines = [l.strip() for l in ((r.stdout or "") + "\n" + (r.stderr or "")).splitlines() if l.strip()]
+        head = lines[0] if lines else ""
+        return ["  - a sablon-elcsuszas ellenorzes NEM ADOTT JSON-t (regebbi valtozat, `--json` nelkul?): "
+                + (head[:120] or "ures kimenet")]
+    if data.get("stopped"):
+        # A szerszam megtagadta az osszehasonlitast. Ez NEM "nincs elcsuszas".
+        return [f"  - a sablon-elcsuszas NEM MERHETO: {data['stopped'][:160]}"]
+
+    now = int(time.time())
+    cur = {d["key"]: d for d in data.get("drifts", [])}
+    prev = {}
+    if os.path.exists(state_path):
+        try:
+            prev = json.load(open(state_path, encoding="utf-8")).get("first_seen", {})
+        except Exception:
+            prev = {}
+    out, first_seen = drift_lines(cur, prev, now)
+    if write:
+        tmp = state_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"first_seen": first_seen}, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, state_path)
+    return out
+
+def section_broken(con, hours, tasks_dir=None, root=None, drift_state=None, write_drift=True):
     """3. MI TORT EL AZ EJJEL.
 
     HAROM FORRAS, es a masodik-harmadik nelkul az elso megtevesztо.
@@ -190,6 +274,10 @@ def section_broken(con, hours, tasks_dir=None):
     except Exception as e:
         out.append(f"  - az or-jelzes-ellenorzes NEM FUTOTT LE: {e}")
 
+    if root:
+        out.extend(_seed_drift(root, drift_state or os.path.join(root, "store", "seed-drift-state.json"),
+                               write_drift))
+
     if not out:
         return []          # a spec szerint: ha nincs mit mondani, a szekcio KIMARAD
     return [f"MI TORT EL AZ EJJEL (utolso {hours} ora):"] + out
@@ -223,7 +311,8 @@ def main():
         print(f"MIND A HAROM SZEKCIO KIMARAD: az adatbazis nem olvashato ({e})")
         return 1
     blocks = [section_isti(con), section_delta(con, snap, not a.no_write),
-              section_broken(con, a.since_hours, a.tasks_dir), section_quota()]
+              section_broken(con, a.since_hours, a.tasks_dir, a.root, None, not a.no_write),
+              section_quota()]
     print("\n\n".join("\n".join(b) for b in blocks if b))
     return 0
 

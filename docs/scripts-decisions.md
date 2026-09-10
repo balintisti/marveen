@@ -16,7 +16,7 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **219** kovetett fajl, ebbol
+Populacio: `git ls-files scripts/` = **220** kovetett fajl, ebbol
 **63** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (1)

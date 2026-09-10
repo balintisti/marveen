@@ -120,6 +120,82 @@ try:
 except RuntimeError as e:
     failed.append("4 kontroll"); print(f"FAIL 4 KONTROLL: a helyes egyseget is elutasitja: {e}")
 
+
+# --- 5. SABLON-ELCSUSZAS: HIR KONTRA ALLANDO (kartya a22c9fe8) --------------
+# marveen rulingja, es a sajat ervem dontotte el: egy JELENLET-alapu napi sor
+# minden reggel ugyanazt a negy fajlt nevezne meg. De a csak-hir jelentes
+# LATHATATLANNA tenne egy allando problemat -- epp azt, ami ellen keszult.
+print()
+D = lambda k, d="both": {k: {"key": k, "direction": d}}
+
+out, fs = ns.drift_lines(D("a/x.md"), {}, NOW)
+check_true("5: egy UJ elteres HIRKENT jelenik meg, iranyostul",
+           len(out) == 1 and "UJ" in out[0] and "both" in out[0])
+out, _ = ns.drift_lines({}, {"a/x.md": NOW - 100}, NOW)
+check_true("5: egy MEGSZUNT elteres is hir", len(out) == 1 and "MEGSZUNT" in out[0])
+
+# A LENYEG: valtozatlan halmazra NEM listaz, de NEM is hallgat.
+prev = {"a/x.md": NOW - 9 * 86400, "b/y.json": NOW - 2 * 86400}
+out, fs = ns.drift_lines({**D("a/x.md"), **D("b/y.json")}, prev, NOW)
+check("5: valtozatlan halmaz -> PONTOSAN EGY sor", len(out), 1)
+check_true("5: es abban a DARABSZAM all, nem a lista", "2 fajl" in out[0] and "a/x.md" not in out[0])
+check_true("5: es a LEGREGEBBI kora, hogy lathatoan oregedjen", "9 napja" in out[0])
+check_true("5: a first_seen MEGORZI a regi idobelyeget (kulonben minden reggel 0 nap)",
+           fs["a/x.md"] == prev["a/x.md"])
+
+out, _ = ns.drift_lines({}, {}, NOW)
+check("5: ures halmaz -> a szekcio nem kap sort", out, [])
+
+# KONTROLL: a mero szet tudja valasztani a harom kimenetet ugyanazon a halmazon
+kinds = {
+    "uj":         len(ns.drift_lines(D("z/1"), {}, NOW)[0]),
+    "valtozatlan": len(ns.drift_lines(D("z/1"), {"z/1": NOW - 86400}, NOW)[0]),
+    "ures":       len(ns.drift_lines({}, {}, NOW)[0]),
+}
+check_true("5 KONTROLL: harom bemenet, harom KULONBOZO kimenet",
+           kinds["uj"] == 1 and kinds["valtozatlan"] == 1 and kinds["ures"] == 0
+           and "UJ" in ns.drift_lines(D("z/1"), {}, NOW)[0][0]
+           and "valtozatlan" in ns.drift_lines(D("z/1"), {"z/1": NOW - 86400}, NOW)[0][0])
+
+
+# --- 5b. AZ ALPROCESSZ-UT: harom kimenet, harom KULONBOZO mondat -----------
+# A tiszta logikat fent fedtuk; itt az a kerdes, mit tesz a szerszam VALASZAVAL.
+import stat as _stat
+def _fake_root(payload):
+    root = tempfile.mkdtemp()
+    os.makedirs(os.path.join(root, "scripts"))
+    p = os.path.join(root, "scripts", "seed-drift-check.ts")
+    open(p, "w").write("x")            # a letezese a feltetel; a futtatast stubolјuk
+    return root, p
+
+_real_run = ns.subprocess.run
+class _R:
+    def __init__(self, out): self.stdout, self.stderr = out, ""
+try:
+    root, _ = _fake_root(None)
+    st = tempfile.mktemp(suffix=".json")
+    ns.subprocess.run = lambda *a, **k: _R('{"stopped":null,"unseeded":[],"drifts":[{"key":"a/x","direction":"both"}]}')
+    out = ns._seed_drift(root, st, write=False)
+    check_true("5b: ervenyes JSON -> a HIR-sor all elo", len(out) == 1 and "UJ sablon-elcsuszas" in out[0])
+
+    ns.subprocess.run = lambda *a, **k: _R('{"stopped":"not the install","unseeded":[],"drifts":[]}')
+    out = ns._seed_drift(root, st, write=False)
+    check_true("5b: a `stopped` NEM MERHETO-t ad, NEM 'nincs elcsuszas'-t",
+               len(out) == 1 and "NEM MERHETO" in out[0])
+
+    ns.subprocess.run = lambda *a, **k: _R('seed-drift: nincs elteres (6 sablon-feladat).')
+    out = ns._seed_drift(root, st, write=False)
+    check_true("5b: NEM-JSON kimenet -> megnevezi az OKOT, nem a parser panaszat",
+               len(out) == 1 and "NEM ADOTT JSON" in out[0] and "Expecting value" not in out[0])
+
+    # KONTROLL: a harom valasz HAROM KULONBOZO mondat -- egy mero, ami mindig
+    # ugyanazt mondja, nem valaszol.
+    ns.subprocess.run = lambda *a, **k: _R('{"stopped":null,"unseeded":[],"drifts":[]}')
+    empty = ns._seed_drift(root, st, write=False)
+    check("5b KONTROLL: ures elcsuszas -> nulla sor", empty, [])
+finally:
+    ns.subprocess.run = _real_run
+
 print()
 if failed:
     print(f"{len(failed)} FAILED: {failed}", file=sys.stderr); sys.exit(1)
