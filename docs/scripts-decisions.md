@@ -242,6 +242,8 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/lib/pg-argv-safe.sh`
 
 - WHY THE SCRIPTS WERE NOT CARELESS. `delta-crm-backup.sh`'s own header says
+- WHY A VARIABLE AND NOT AN ECHOED RESULT: `$(...)` strips trailing newlines, so
+- WHY NOT `printf %b "${s//%/\\x}"`, the usual one-liner: it also interprets
 
 ### `scripts/limit-monitor.sh`
 

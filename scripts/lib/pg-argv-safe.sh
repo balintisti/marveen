@@ -25,6 +25,38 @@
 # Splits a postgres URL. Sets PG_URL_NOPASS, and exports PGPASSWORD when there
 # was one. Leaves both untouched shapes alone: a URL with no userinfo and a URL
 # with a user but no password come back unchanged, with PGPASSWORD unset.
+# Percent-decodes a URI component into PG_DECODED.
+#
+# WHY A VARIABLE AND NOT AN ECHOED RESULT: `$(...)` strips trailing newlines, so
+# a password ending in %0A would come back one character shorter -- silently,
+# and only for that one password.
+#
+# WHY NOT `printf %b "${s//%/\\x}"`, the usual one-liner: it also interprets
+# every OTHER backslash escape, so a password containing a literal backslash
+# gets rewritten. This walks the string and touches ONLY `%` followed by two hex
+# digits; a stray `%` is left exactly as it stands.
+pg_percent_decode() {
+  local s="$1" out='' i=0 n c hex ch
+  n="${#s}"
+  while [ "$i" -lt "$n" ]; do
+    c="${s:i:1}"
+    if [ "$c" = '%' ] && [ "$((i + 3))" -le "$n" ]; then
+      hex="${s:i+1:2}"
+      case "$hex" in
+        [0-9A-Fa-f][0-9A-Fa-f])
+          printf -v ch "\\x${hex}"
+          out="${out}${ch}"
+          i=$((i + 3))
+          continue
+          ;;
+      esac
+    fi
+    out="${out}${c}"
+    i=$((i + 1))
+  done
+  PG_DECODED="$out"
+}
+
 pg_split_password() {
   local url="$1"
   PG_URL_NOPASS="$url"
@@ -57,5 +89,24 @@ pg_split_password() {
   pass="${userinfo#*:}"
 
   PG_URL_NOPASS="${scheme}${user}@${hostpart}"
-  export PGPASSWORD="$pass"
+
+  # PERCENT-DECODE, AND IT IS NOT COSMETIC: the two channels disagree.
+  # libpq percent-DECODES the userinfo of a connection URI, but takes
+  # PGPASSWORD LITERALLY. Handing over the raw substring therefore changes the
+  # password whenever it contains an encoded character -- `p%40ss` in the URL
+  # means `p@ss`, and exporting `p%40ss` authenticates with a different string
+  # and FAILS. Measured by didi on a throwaway scram-sha-256 cluster (card
+  # 87cfe5ae): URL-encoded CONNECTS, the same value as PGPASSWORD FAILS, the
+  # decoded value CONNECTS; controls: a wrong password FAILS, and a raw `@` in
+  # the URL parses as a hostname.
+  #
+  # The trap was written INTO the comment above: it says a password may contain
+  # `%40`, which is exactly the case this line used to break. The split was
+  # right and the handover was not.
+  #
+  # This did not bite while the live password happened to be free of encoded
+  # characters. The next ROTATION is where one arrives, and then the nightly
+  # backup and readonly-measure.sh both stop.
+  pg_percent_decode "$pass"
+  export PGPASSWORD="$PG_DECODED"
 }
