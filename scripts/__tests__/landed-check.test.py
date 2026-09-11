@@ -225,5 +225,61 @@ class LandedCheck(unittest.TestCase):
         self.assertIn("EGYSZER SEM mondott nemet", p.stdout)
 
 
+    # --- A SZIGORU SZABALY KULONBSEGE, KULON OSZLOPBAN (didi merese 2026-09-11) ----------
+    #
+    # didi megmerte a teljes tablan, amit en meretlennek neveztem: a LOOSE szabaly
+    # ("barmelyik megnevezett commit landolt -> LANDED") es a SZIGORU ("MINDEN landoljon")
+    # 534 kartyan mond mast -- 37% a loose halmazbol. Ez a NEZETELTERES rataja, NEM a
+    # szigoru alak hamis-pozitiv rataja: egy `LANDED`, ami mellett all egy nem-landolt SHA,
+    # ketfele lehet (idezett idegen commit kontra kint maradt sajat munka), es a kettot csak
+    # a kartya elolvasasa valasztja szet.
+    #
+    # EZERT OSZLOP ES NEM VERDIKT. A ket alabbi teszt pontosan ezt rogziti: a szam megjelenik,
+    # a VERDIKT pedig NEM valtozik. Aki a szigorura cserelne a szabalyt, az elso tesztet tori el.
+
+    def test_a_quoted_unlanded_sha_does_not_change_the_verdict(self):
+        """A kartya KET commitot nevez: egyik landolt, a masik nem -> a verdikt LANDED marad."""
+        landed = self.commit("az en munkam")
+        git(self.repo, "checkout", "-q", "-b", "oldalag")
+        kint = self.commit("valaki mase, sosem olvadt be")
+        git(self.repo, "checkout", "-q", "trunk")
+        self.card("77777777", f"kesz: {landed[:8]}, es idezem ezt is: {kint[:8]}")
+        rc, out = self.run_tool()
+        self.assertEqual(rc, NO_CANDIDATE, out)
+        self.assertEqual(out["counts"]["LANDED"], 1)
+        self.assertEqual(out["counts"]["CANDIDATE"], 0)
+
+    def test_the_same_card_is_counted_as_a_strict_disagreement(self):
+        """...ES ugyanaz a kartya megjelenik a szigoru nezetelteres oszlopban."""
+        landed = self.commit("az en munkam")
+        git(self.repo, "checkout", "-q", "-b", "oldalag")
+        kint = self.commit("valaki mase, sosem olvadt be")
+        git(self.repo, "checkout", "-q", "trunk")
+        self.card("88888888", f"kesz: {landed[:8]}, es idezem ezt is: {kint[:8]}")
+        rc, out = self.run_tool()
+        self.assertEqual(out["strict_disagreement"], 1, out)
+        self.assertEqual(out["strict_disagreement_cards"], ["88888888"])
+
+    def test_a_card_whose_every_named_commit_landed_is_no_disagreement(self):
+        """KONTROLL: ha MINDEN megnevezett commit a fan van, a ket szabaly EGYETERT."""
+        a = self.commit("elso")
+        b = self.commit("masodik")
+        self.card("99999999", f"kesz: {a[:8]} es {b[:8]}")
+        rc, out = self.run_tool()
+        self.assertEqual(out["counts"]["LANDED"], 1)
+        self.assertEqual(out["strict_disagreement"], 0, out)
+
+    def test_a_candidate_is_not_a_disagreement(self):
+        """KONTROLL a MASIK iranyba: ahol EGYIK sem landolt, a ket szabaly szinten EGYETERT."""
+        self.commit("alap")
+        git(self.repo, "checkout", "-q", "-b", "oldalag")
+        kint = self.commit("sosem olvadt be")
+        git(self.repo, "checkout", "-q", "trunk")
+        self.card("aaaa1111", f"commit {kint[:8]}")
+        rc, out = self.run_tool()
+        self.assertEqual(rc, CANDIDATE_FOUND, out)
+        self.assertEqual(out["strict_disagreement"], 0, out)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

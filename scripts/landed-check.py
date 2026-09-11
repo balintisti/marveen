@@ -118,7 +118,7 @@ def classify(repo, trunk, subjects, body, card_ids):
     """
     toks = [t for t in dict.fromkeys(HEX.findall(body)) if t not in card_ids]
     if not toks:
-        return NO_REF, []
+        return NO_REF, [], []
     # DEDUPE A TELJES SHA-N, NEM A LEIRT ALAKON. Egy kartya ugyanazt a commitot gyakran ket
     # hosszban idezi (`92465f5` es `92465f54`), es a jelentesben ketszer jelent meg -- ket
     # hianyzo commitnak latszott ott, ahol egy van.
@@ -131,17 +131,20 @@ def classify(repo, trunk, subjects, body, card_ids):
             seen.add(full)
             shas.append(t)
     if not shas:
-        return SHA_UNKNOWN, []
-    missing = []
+        return SHA_UNKNOWN, [], []
+    # A VERDIKT VALTOZATLAN (barmelyik landolt -> LANDED). Ami valtozott: NEM terunk vissza az
+    # ELSO landolt SHA-nal, mert akkor a tobbirol semmit nem tudnank -- es epp az a kulonbseg,
+    # amit a SZIGORU szabaly ("MINDEN megnevezett landoljon") mer. Lasd a `strict` oszlopot.
+    landed, missing = [], []
     for s in shas:
-        if is_ancestor(repo, s, trunk):
-            return LANDED, []
-        missing.append(s)
+        (landed if is_ancestor(repo, s, trunk) else missing).append(s)
+    if landed:
+        return LANDED, missing, landed
     for s in missing:
         rc, subj = git(repo, 'log', '-1', '--format=%s', s)
         if rc == 0 and subj.strip() and subj.strip() in subjects:
-            return OTHER_SHA, missing
-    return CANDIDATE, missing
+            return OTHER_SHA, missing, landed
+    return CANDIDATE, missing, landed
 
 
 def control(repo, trunk, subjects):
@@ -204,8 +207,13 @@ def main():
     cards, card_ids = load_cards(a.db, a.project)
     buckets = {k: [] for k in (LANDED, OTHER_SHA, CANDIDATE, NO_REF, SHA_UNKNOWN)}
     detail = {}
+    strict_gap = []
     for cid, title, body in cards:
-        st, missing = classify(a.repo, a.trunk, subjects, body, card_ids)
+        st, missing, landed = classify(a.repo, a.trunk, subjects, body, card_ids)
+        # SZIGORU NEZETELTERES: a LOOSE szabaly szerint LANDED, de NEM minden megnevezett
+        # commit van a fan. Ez a ket szabaly kulonbsegenek a SZAMA -- NEM hiba-lista.
+        if st == LANDED and missing:
+            strict_gap.append((cid, len(landed), len(missing)))
         buckets[st].append(cid)
         if st in (CANDIDATE, OTHER_SHA):
             detail[cid] = {'title': title[:90], 'shas': missing}
@@ -216,6 +224,13 @@ def main():
         'done_cards': len(cards),
         'counts': {k: len(v) for k, v in buckets.items()},
         'ancestry_leg_said_no': len(buckets[CANDIDATE]) + len(buckets[OTHER_SHA]),
+        # A KET SZABALY KULONBSEGE, KULON OSZLOPBAN ES VERDIKT NELKUL (didi merese 2026-09-11:
+        # a teljes tablan 37% a nezetelteres). Azert NEM verdikt, mert egy `LANDED`, ami mellett
+        # all egy nem-landolt SHA, KETFELE lehet: a kartya IDEGEN commitot IDEZ (a loose szabaly
+        # helyes), vagy a SAJAT munkaja maradt kint (a szigoru lenne helyes). A kettot csak a
+        # kartya elolvasasa valasztja szet -- egy automatikus cimke itt proxy lenne.
+        'strict_disagreement': len(strict_gap),
+        'strict_disagreement_cards': [c for c, _, _ in sorted(strict_gap)],
         'candidates': [{'card': c, **detail[c]} for c in cand],
     }
     if a.json:
@@ -224,6 +239,10 @@ def main():
         print(f'`done` kartya ({a.project}): {len(cards)} | trunk: {a.trunk} @ {a.repo}')
         for k in (LANDED, OTHER_SHA, CANDIDATE, SHA_UNKNOWN, NO_REF):
             print(f'  {k:<26} {len(buckets[k])}')
+        sg = payload['strict_disagreement']
+        print(f'  -- a SZIGORU szabaly ("MINDEN megnevezett commit landoljon") {sg} kartyan')
+        print(f'     mondana mast. NEM hiba-lista: egy idezett idegen SHA ugyanigy nez ki,')
+        print(f'     mint a kartya sajat, kint maradt munkaja -- a ketto csak olvasassal valik szet.')
         neg = payload['ancestry_leg_said_no']
         print(f'  -- az ossodes-lab {neg} kartyara mondott NEMET; ebbol {len(buckets[OTHER_SHA])}-at'
               f' a targy-lab zart ki (a munka MAS SHA alatt leszallt).')
