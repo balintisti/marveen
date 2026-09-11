@@ -3,7 +3,7 @@
 
 Stdlib only. Wraps a command:  assert-isolated.py --scratch DIR --live DIR [...] -- CMD...
 
-WHAT WENT WRONG, AND WHY "READ THE VARIABLE" IS NOT THE FIX. On 2026-09-11 I measured
+WHY "READ THE VARIABLE" IS NOT THE FIX, AND WHAT WENT WRONG. On 2026-09-11 I measured
 whether a hook would fire in a worker session. I redirected its state with
 CHANNEL_STATE_DIR; the hook reads TELEGRAM_STATE_DIR. The redirect never took, the run
 used the LIVE channel directory, and it made a real outbound API call. Zero damage --

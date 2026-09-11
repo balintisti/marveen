@@ -17,7 +17,7 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
 Populacio: `git ls-files scripts/` = **236** kovetett fajl, ebbol
-**70** hordoz dontes-fejlecet.
+**71** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (2)
 
@@ -71,6 +71,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/applies-cleanly.sh`
 
 - WHY IT EXISTS (card 64968e12, measured 2026-08-29). mandark reviewed 15 commits against
+
+### `scripts/assert-isolated.py`
+
+- WHY "READ THE VARIABLE" IS NOT THE FIX, AND WHAT WENT WRONG. On 2026-09-11 I measured
 
 ### `scripts/calendar-agenda.sh`
 
