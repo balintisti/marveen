@@ -562,3 +562,226 @@ sosem bizonyitja onmagat -- egy ismerten letezo elem hianya viszont azonnal cafo
 Kulcsok: `id, from_agent, to_agent, content, status, created_at, delivered_at, completed_at,
 result, origin_note, trace_id, span_id, parent_span_id`.
 
+
+---
+
+# KIEGESZITES 2026-09-11: a lapbol kiszervezett tovabbi BIZONYITEK-anyag
+
+*(Kartya `ed1c9734`, Isti kerte: keret-fajdalom. A TORVENY a `CLAUDE.md`-ben maradt; ami itt
+all, az a meresek reszlete. Ha ellentmondast latsz, a lap az ervenyes.)*
+
+
+## A HÉJ NEM ELHARAPJA A SZÖVEGET, HANEM LEFUTTATJA -- ÉS AZ `OK id=` UTÁNA IS KIÍRÓDIK
+
+Dupla idézőjelben a héj behelyettesít, aposztrófban nem:
+
+idézőjel, vagy bármi, amit nem te írtál szó szerint, STDIN-en megy -- ott nincs héj-értelmezés:
+
+Ugyanez áll BÁRMILYEN idézőjeles héj-argumentumra.
+
+**ÉS A `git commit -m` ESETE NEM „CSENDESEBB" -- EZ A SOR 2026-09-10-IG AZT MONDTA, ÉS MÉRVE
+MÁS** (marveen mérte magán, egy commit-üzenetben, órákkal azután, hogy ezt a szakaszt olvasta).
+A héj HANGOSAN panaszkodik (`(eval):3: command not found: in`), **de a commit LÉTREJÖN** -- tehát
+a hibaüzenet egy SIKERES művelet mellett áll, és a siker elnyomja. A `secret-gate` PASS-t ad, a
+`git log --oneline -1` a várt sort mutatja, és semmi nem hívja fel rá a figyelmet.
+
+    a NÉMA hiba ....... nincs jelzés          -> nincs mit észrevenni
+    EZ ................ VAN jelzés, egy SIKER mellett -> van mit észrevenni, és nem nézed meg
+
+**ÉS VAN VISSZAOLVASÁS, csak nem `id` alakú:**
+
+**A MÉRŐT IS EL LEHET RONTANI UGYANOTT, és én elrontottam:** a `grep -c 'Python , plus'` NULLÁT
+adott, miközben a szöveg hiányzott -- mert a törölt szó helyén a maradék KÉT SORRA tördelődött, és
+egy soronkénti minta ezt nem látja. Több soros ellenőrzéshez `python3` + `re.search(..., DOTALL)`,
+vagy egyszerűen olvasd el a `%B` kimenetét.
+
+**ÉS A KÖVETKEZMÉNY, AMIÉRT ÉRDEMES ELSŐRE ELKERÜLNI: a force-push nálunk tiltott alak**, tehát
+egy megcsonkított commit-üzenet VÉGLEGES. A helyesbítés csak a kártyán vagy egy későbbi commitban
+tud állni -- ellentétben az üzenetküldéssel, ahol újra lehet küldeni.
+
+**ÉS A MUNKAFÁJL A SESSION-SCRATCHPADBE MENJEN, NE A `/tmp`-BE.** A `/tmp` közös névtér: egy
+ott hagyott, órákkal korábbi fájl beolvasható, és MÁS ÁGENS szövegét postázza a te neveden,
+`OK id=`-vel. Két szerkezeti javítás, figyelem nélkül:
+1. Munkafájl a session-scratchpadbe -- konstrukcióból izolált.
+2. **Ha egy összetett parancs ELHAL, a benne lévő fájl-írásokat tekintsd MEG NEM TÖRTÉNTNEK.**
+   Írd újra a fájlt; ne csak a küldést ismételd meg.
+
+**ES HA EGY SZOVEG KET CIMZETTNEK MEGY, NEVEZD MEG AZ EMBERT -- SOHA NE „TE"** (dexter fogta meg
+marveenen, 2026-09-10).
+
+Egy rendelkezes ugyanabban a szovegben ment ki dexternek es didinek, benne ezzel: *„igazad volt,
+amikor kimondtad..."*. A lelet didie volt. **didinek helyes attributokent olvasodott, dexternek
+masvalaki munkajaert jaro elismeresnek.**
+
+Ez az ALAK hibaja, nem a tartalome, es minden broadcastnal ujra elofordul -- vagyis minden olyan
+rendelkezesnel, ami ket ember kartyajat erinti. A javitas harom szo, es ez az egyetlen, amitol a
+szoveg UGYANAZT jelenti mindket olvasonak.
+
+*(A megtalalas iranya a ritka: dexter azt jelezte, hogy hozza NEM jaro elismerest kapott. Az
+attribucio itt teherhordo, es ez csak akkor mukodik, ha MINDKET iranyba helyesbitik -- a hizelgo
+irany az, amit senki nem ellenoriz.)*
+
+
+## AZ "ELKÜLDVE" NEM "MEGÉRKEZETT" -- A SOR ÁLLAPOTA
+
+A `failed` esetben a rendszer SZÓL: `[handoff-failure]` értesítés érkezik a küldőnek. Aki azt
+látja, ne a „ne küldd újra" szabályt kövesse -- az a MÁSIK esetre szól.
+
+**DE A `failed` -> KÜLDD ÚJRA NEM MECHANIKUS, ÉS EZ 2026-09-10-IG ÍGY ÁLLT ITT** (didi mérte
+magán; ez a KÜLDŐ-oldali tükörképe a dexter-12 esetnek, ami közvetlenül fentebb áll).
+
+didi hat `failed` üzenete: **öt** beszélgetős válasz dexternek 08-19-ből, régen befejezett
+munkáról, és **egy** szándékos próba egy NEM LÉTEZŐ ágensnek. Mechanikusan újraküldve ez öt
+zavarba ejtő levelet termelne lezárt munkáról, plusz egy próbát, aminek soha nem volt címzettje.
+
+    a `failed` SOHA nem avul el ..... ugyanaz a tulajdonság, ami a dexter-12 esetet okozta,
+                                      csak a küldő oldalán
+    a szabály betűje ............... „elveszett, küldd újra"
+    ami hiányzott ................. a KOR és a TÁRGY megítélése
+
+**A HELYES ALAK: a `failed` azt mondja meg, hogy a kézbesítés NEM TÖRTÉNT MEG. Azt NEM, hogy a
+TARTALOM ma is érvényes.** Mielőtt újraküldesz, nézd meg, MIKOR keletkezett és MIRŐL szól: ha a
+munka azóta lezárult, az újraküldés nem helyreállítás, hanem zaj. A helyes lépés ilyenkor a
+CSEND, és -- ha marad belőle bármi -- egy MAI mondat, nem a régi levél.
+
+*(didi NEM küldte újra egyiket sem, és ezt kimondta. A lap ezért javult: a szabály eddig egy
+mechanikus lépést írt elő ott, ahol ítélet kell.)*
+
+**A SOR MÉLYSÉGÉT NE AZ API-BÓL MÉRD: 50 SOROS ABLAKA VAN, ÉS HAMIS NULLÁT AD.** Egy régebbi
+`pending` kiesik belőle, és az „üres a sora" válasz engedi, hogy negyedszer is ráküldj valakire,
+akinek három olvasatlan levele áll. A DB-ből mérd:
+
+**A `status in ('pending','failed')` ALAK 2026-09-06 06:4x-IG ITT ALLT, ES HIBAS VOLT -- HALOTT
+UZENETEKET SZAMOLT** (didi merte dexteren, marveen bezarta mindket kimondott korlatjat).
+
+    a REGI recept dexterre ..... **12**
+    ebbol `pending` ............   **0**
+    ebbol `failed` .............  **12**, a legregebbi napokkal ezelottrol
+    a HELPER sajat szama ....... `queue=0`
+    KONTROLL: minden agensre lefuttatva -- CSAK dexter erintett; didin es mandarkon 1-1 `pending`
+      es 0 `failed`, tehat a mero nem mindenkire mond ugyanazt
+
+**A szabaly (3+ var -> ne kuldj, ird a kartyara) ezzel dexterre ORÖKRE tiltana** tizenket halott
+uzenet erejeig, mikozben SENKI nem var. Es a kar iranya a csendes fele: aki koveti a lapot, KARTYAT
+ir egy DONTES helyett -- es a kartya nem kezbesit.
+
+**MIERT NEM SZABAD OSSZEVONNI OKET -- ES A KULONBSEG KILENC SORRAL FELJEBB MAR OTT ALL:**
+
+    `pending`  a sorban all, TULELI a restartot   -> NE kuldd ujra; a cimzett TENYLEG terhelt
+    `failed`   a munkamenet hianyzott a teljes ujraproba-ablakban -> ELVESZETT, KULDD UJRA
+
+**A `failed` tehat SEMMIT nem mond a cimzett terhelesérol** -- egy MULTBELI kezbesitesi kudarcot
+rogzit, es az ELLENKEZO teendot irja elo, mint amit a sor-kapu levezet belole. Es soha nem avul el:
+egy halott uzenet orokre bent marad a szamban.
+
+**A MASODIK KERDES, KULON SORON** („van-e mit ujrakuldenem"):
+
+print(list(c.execute(\"select id,to_agent from agent_messages where from_agent=? and status='failed'\", ('<sajat-nev>',))))"
+
+*(ES A SZERSZAM MAR HELYESEN CSINALTA -- a lap volt a hibas, nem a kod. Az `agent-msg.sh:253`
+`status='pending'`-gel kerdez, es a `:200` kommentje KI IS MONDJA: „status='pending' ONLY --
+`!= 'delivered'` also counts `failed`, which never...". Vagyis a dokumentacio mondott ellent a
+szerszamnak, es a dokumentaciot masoljak. Aki a ket szamot elteronek latja, a LAPOT javitsa, ne a
+helpert.)*
+
+KONTROLL, ami azonnal megfogja: keresd meg a SAJÁT, épp elküldött üzenetedet a válaszban. Ha a
+sajátod sincs benne, a LEKÉRDEZÉS rossz, nem a sor üres.
+
+
+## EGY BURKOLÓ VISSZACSINÁLHATJA A HELPER EGYETLEN ÉRTELMÉT -- MINDKÉT IRÁNYBAN
+
+**A szabály: a helper kimenetét ne `tail`-lel nézd, hanem SZŰRD A JELRE**, és a kilépési kódot
+nézd meg:
+
+
+## A ZSH NEM TÖRDEL SZÓRA -- ÉS A HIÁNYZÓ ITERÁCIÓ ÜRES KIMENETET AD
+
+*(A repó saját scriptjeit ez nem érinti: 96 követett `.sh`, mind bash shebanggel, `${=` nulla
+előfordulás. A csapda az AD-HOC mérő parancsokban él, mert a Bash tool zsh-t futtat.)*
+
+**ÉS A CIKLUS NEM AZ EGYETLEN ALAK: EGY ARGUMENTUM-LISTA UGYANÍGY EGYBEN ÉRKEZIK -- DE CSAK
+VÁLTOZÓN KERESZTÜL, KÖZVETLEN `$(...)`-BŐL NEM** (friday mérte magán 2026-09-06, marveen
+izolálta a mechanizmust; kártya `72cc2172`).
+
+A fenti szabály CIKLUSRÓL szól, és a remedy is ciklus-alakú („írasd ki, hány elemet jár be").
+friday esetében nem volt ciklus: egy ref-listát adott át `git rev-list --not <lista>` ARGUMENTUMKÉNT,
+a git `fatal: failed to stat`-tal elhasalt, és **a kiírt darabszám ÜRES lett** -- ami nulla
+kitettségnek olvasódik, vagyis a megnyugtató irányba.
+
+**A MEGKÜLÖNBÖZTETŐ NEM A ZSH, HANEM HOGY VÁLTOZÓN ÁT MEGY-E. Mérve, ugyanabban a héjban,
+ugyanazon a 155 refen:**
+
+    git rev-list --count HEAD --not $(git for-each-ref ... refs/remotes/origin/)   ->  680
+    R=$(git for-each-ref ... refs/remotes/origin/); git rev-list --count HEAD --not $R
+        -> `fatal: failed to stat` -- a 155 ref EGY argumentumként
+
+nem. Vagyis a kettő nem ugyanaz az alak, és a különbség sehol nem látszik.
+
+**AMI EBBŐL A LAP SAJÁT RECEPTJÉRE KÖVETKEZIK, ÉS AMIÉRT EZ ITT ÁLL:** a „mi létezik KIZÁRÓLAG
+itt" recept a Delta-CRM lapján KÖZVETLEN `$(...)` alakban van leírva -- **az HELYES, és NE
+`javítsd ki`.** Aki friday bukásába fut és a receptet hibáztatja, egy működő receptet ír át.
+A csapda a hoistolás: amint valaki újrafelhasználhatóvá teszi és változóba emeli, elnémul.
+
+**A VÁLTOZÓ-MENTES ALAK MINDKÉT BAJT MEGSZÜNTETI, és rövidebb is:**
+
+git rev-list --count HEAD --not --remotes=fork --remotes=origin
+
+*(A második néma fél ugyanabban a sorban: friday számát egy `| tail` mögül olvasta, tehát az
+`rc` a `tail`-é lett -- a git hibája `rc=0`-ként érkezett. A két némítás EGYMÁST fedte: a hibás
+argumentum nem adott számot, a cső pedig nem adott hibakódot.)*
+
+**ÉS UGYANEZ AZ ELNYELT `rc` EGY `&&` LÁNCBAN NEM ROSSZ SZÁMOT AD, HANEM ÁTÍRJA, MIRŐL SZÓL A
+MÉRÉS** (friday mérte magán 2026-09-11, másodszor aznap; ez a KÖVETKEZMÉNY új, a mechanizmus nem).
+
+    a `worktree add` ELHASALT (`already exists`)  ->  de az `rc` a `tail`-é: **0**
+
+**A különbség a fenti esethez képest nem fokozat, hanem osztály.** Egy elnyelt `rc` a szám HELYÉN
+egy hibás számot ad, amit utólag meg lehet kérdőjelezni. Egy elnyelt `rc` egy `&&` LÁNCBAN a
+KÖVETKEZŐ parancsot futtatja le rossz helyen -- és az egy **tökéletesen hihető mérést** ad egy
+MÁSIK alanyról. Nincs mit megkérdőjelezni: a szám önmagában rendben van.
+
+**AMI MEGFOGTA, ÉS NEM A GONDOSSÁG:** a merge kimenete olyan fájlt nevezett meg
+(`workcheck.json`), ami friday commitjában nem szerepel. `git show --name-only` -> 19 fájl, nulla
+`workcheck` -- **tehát a COMMIT tiszta volt és a FA nem.** Ez a lap „ha az állításod ellentmond
+valaminek, ami már a képernyődön van" törvénye, egy merge-kimenetre alkalmazva.
+
+**A GYAKORLATI ALAK: környezetet ÉPÍTŐ parancs SOHA ne álljon cső mögött egy `&&` láncban.** Ha
+rövid kimenet kell, a kimenetet szűrd, az `rc`-t ne add el:
+
+# es a meres UTAN: a fa allapota alljon vissza oda, ahol talaltad (friday megtette:
+# `merge --abort`, `checkout --detach <eredeti>`, porcelain 0)
+
+
+## ÉS UGYANEZ A HÉJ EGY MÁSODIK MÉRŐT IS ELRONT: A ZSH BEÉPÍTETT `echo`-JA ÉRTELMEZI A
+
+### ÉS UGYANEZ A HÉJ EGY MÁSODIK MÉRŐT IS ELRONT: A ZSH BEÉPÍTETT `echo`-JA ÉRTELMEZI A
+### VISSZAPERJELES ESCAPE-EKET -- TEHÁT `echo "$S" | wc -l` NEM SORSZÁMLÁLÓ
+(dexter mérte és javította magán, 2026-09-05; marveen újramérte kontrollal)
+
+Egy fájl hosszát négy mérővel mérve, UGYANAZON a fán:
+
+    python splitlines .......................... 872
+    S=$(git show ...); echo "$S" | wc -l ....... **876**   <- amit használt
+
+**A mechanizmus:** a Bash tool zsh-t futtat, a zsh BEÉPÍTETT `echo`-ja pedig **kibontja a `\n`
+literálokat valódi sortörésre**. A mért fájl egy CSV-építő, tehát `\n` literálokat tartalmaz.
+
+    report-pdf-generator.service.ts ... wc=872  echo=876  delta=4  |  `\n` literál a fájlban: **4**
+    pdf-generator.service.ts .......... wc=540  echo=540  delta=0  |  `\n` literál: **0**
+
+Négy literál, négy többlet-sor. Nulla literál, nulla eltérés. *(marveen újramérte egy két soros
+próbán: egy `\n` literál -> 3 kontra 4; kontroll, literál nélküli fájlon -> 3 = 3.)*
+
+parancs a SZOMSZÉD fájlon HELYES számot adott (540 = 540), tehát a mérő pontosan abban a körben
+látszott működni, amelyikben használták -- **és a két fájl ÖSSZEVETÉSE volt maga a mérés.**
+
+**A HELYES ALAK, ÉS SOHA VÁLTOZÓN KERESZTÜL:**
+
+python3 -c "print(len(open(f).read().splitlines()))"
+# KONTROLL, ingyen: ha a fájl tartalmazhat `\n` literált, mérd MINDKÉT alakkal, és ha eltérnek,
+# a `wc -l` nyer -- az eltérés MAGA a literálok száma
+
+*(A megtalálás oka külön tanulságos, és nem a gondosság volt: didi NYITVA HAGYTA a 872/876
+eltérést ahelyett, hogy kibékítette volna. A TIPPELT oka -- ág kontra szállított fa -- HAMIS volt,
+mindkét mérés az `origin/main`-en futott. **A tipp nem számított; az számított, hogy nem simította
+el.** Ez a lap „gyártott egyetértés" bejegyzésének a pozitív oldala: a nézeteltérés mérőeszköz.)*
