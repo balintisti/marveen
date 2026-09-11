@@ -153,6 +153,67 @@ class Sweep(unittest.TestCase):
         self.assertIn("NINCS A LELTARBAN", out)
         self.assertIn("NEM TELJES", out)
 
+    def test_an_unreadable_dir_is_not_the_same_as_an_empty_one(self):
+        """THE FOURTH STATE (didi, 2026-09-11). The first cut separated three: readable,
+        missing, and "0 files". But "exists and is genuinely empty" and "exists, unreadable,
+        hiding any number of credentials" both produced `0 fajl` -- byte-identical, and the
+        second one is the dangerous half.
+
+        THE FIXTURE IS ASSERTED FIRST, because a chmod that did not take would make this
+        test pass while proving nothing -- the exact failure mode it is about."""
+        unreadable = os.path.join(self.d, "locked")
+        os.makedirs(unreadable)
+        with open(os.path.join(unreadable, "secret.json"), "w") as fh:
+            fh.write("{}")
+        os.chmod(unreadable, 0)
+        try:
+            # FIXTURE CONTROL: prove the directory really is unreadable, and that the same
+            # call succeeds on a readable one. Without both halves this proves nothing.
+            with self.assertRaises(OSError, msg="the chmod did not take -- fixture is void"):
+                os.listdir(unreadable)
+            self.assertIn("known.json", os.listdir(self.d),
+                          "the same call must succeed on a readable dir")
+
+            rc, out, _ = run([self._claimed()],
+                             scan=[{"dir": unreadable, "glob": "*.json", "why": "t"}])
+            d = json.loads(out)
+            self.assertEqual(rc, 5, "an unreadable location must not read as a clean sweep")
+            self.assertEqual(d["sweep_failed"], 1)
+            self.assertTrue(any("NEM OLVASHATO" in s for s in d["swept"]),
+                            f"the swept line must say so, got {d['swept']}")
+        finally:
+            os.chmod(unreadable, 0o700)
+
+    def test_unreadable_empty_and_missing_produce_three_different_lines(self):
+        """All three must be distinguishable in the OUTPUT, not only in the exit code --
+        the exit code collapses two of them into 5 by design."""
+        empty = os.path.join(self.d, "empty"); os.makedirs(empty)
+        locked = os.path.join(self.d, "locked2"); os.makedirs(locked)
+        os.chmod(locked, 0)
+        missing = os.path.join(self.d, "gone")
+        try:
+            lines = {}
+            for tag, path in (("empty", empty), ("locked", locked), ("missing", missing)):
+                _, out, _ = run([self._claimed()],
+                                scan=[{"dir": path, "glob": "*.json", "why": "t"}])
+                lines[tag] = json.loads(out)["swept"][0].split(": ", 1)[1]
+            self.assertEqual(lines["empty"], "0 fajl")
+            self.assertNotEqual(lines["locked"], lines["empty"],
+                                "unreadable must not look like empty")
+            self.assertNotEqual(lines["locked"], lines["missing"],
+                                "unreadable must not look like missing either")
+        finally:
+            os.chmod(locked, 0o700)
+
+    def test_a_genuinely_empty_dir_is_still_a_clean_sweep(self):
+        """The negative control for the two above: tightening the unreadable case must not
+        turn an honestly empty location into a finding."""
+        empty = os.path.join(self.d, "really-empty")
+        os.makedirs(empty)
+        rc, out, _ = run([self._claimed()], scan=[{"dir": empty, "glob": "*.json", "why": "t"}])
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out)["sweep_failed"], 0)
+
     def test_a_newly_appearing_credential_breaks_the_silence(self):
         """The sweep result is part of the remembered state.
 

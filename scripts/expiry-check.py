@@ -61,10 +61,26 @@ to make it a fleet credential; every item may declare `covers` for the paths it 
 for. Anything seen and unclaimed is reported. Measured when this was written: the inventory's
 own directory held two files and the inventory named one.
 
-A SWEEP THAT SWEEPS NOTHING LOOKS EXACTLY LIKE A CLEAN SWEEP, so a scan entry whose
-directory is missing is reported as FAILED rather than contributing a silent zero. Rename
-the directory and this gate would otherwise go quiet in the reassuring direction -- the same
-shape it exists to catch.
+A SWEEP THAT SWEEPS NOTHING LOOKS EXACTLY LIKE A CLEAN SWEEP, so a scan location that
+could not actually be read is reported as FAILED rather than contributing a silent zero.
+There are FOUR states, and the first cut of this code separated only three (didi, 2026-09-11):
+
+    readable, N files ........ N > 0    reported normally
+    exists, GENUINELY EMPTY .. 0 files  nothing to claim -- fine
+    exists, UNREADABLE ....... 0 files  <- was BYTE-IDENTICAL to the line above, and it
+                                           can be hiding any number of real credentials
+    MISSING .................. --       reported from the start
+
+AND THE OBVIOUS FIX FOR THE THIRD ONE IS INERT, which is why it is spelled out here.
+`glob.glob` over an unreadable directory returns ZERO FILES AND RAISES NOTHING (measured
+in both directions: readable -> 2 files, unreadable -> 0 files, no exception). A `try/except`
+wrapped around the glob therefore never fires, the gap stays open, and the code now LOOKS
+handled -- which is worse than leaving it visibly unhandled.
+
+So the listing is done with `os.scandir`, which raises PermissionError. The point is not that
+scandir is nicer: it makes the READABILITY CHECK AND THE LISTING THE SAME ACT. An
+`os.access()` pre-check would discriminate too, but it is a separate syscall from the listing
+(a gap between asking and doing) and it answers about the real uid, which lies for root.
 
 AND THE SCOPE IS DELIBERATELY NARROW, which is a limit, not an oversight: this is NOT a
 machine-wide credential census. Other tools' own credentials are out of scope, and whether
@@ -91,7 +107,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import glob
+import fnmatch
 import json
 import os
 import re
@@ -336,7 +352,16 @@ def sweep_declared_locations(inv):
             findings.append((FAILED, f"a deklaralt hely NEM LETEZIK: {raw} -- a sopres nem futott le"))
             swept.append(f"{raw}/{pattern}: A KONYVTAR HIANYZIK")
             continue
-        seen = sorted(glob.glob(os.path.join(d, pattern)))
+        try:
+            # scandir, NOT glob: glob returns an empty list for an unreadable directory
+            # without raising, so the failure would arrive as a clean sweep.
+            seen = sorted(e.path for e in os.scandir(d) if fnmatch.fnmatch(e.name, pattern))
+        except OSError as err:
+            findings.append((FAILED, f"a deklaralt hely NEM OLVASHATO: {raw} "
+                                     f"({type(err).__name__}) -- a sopres nem futott le, "
+                                     f"es barhany fajlt rejthet"))
+            swept.append(f"{raw}/{pattern}: A KONYVTAR NEM OLVASHATO")
+            continue
         swept.append(f"{raw}/{pattern}: {len(seen)} fajl")
         for f in seen:
             if os.path.realpath(f) not in claimed:
