@@ -89,6 +89,25 @@ check "an encoded at-sign AND a multi-byte character in one password" \
   "postgresql://appuser@db.example.test/mydb" "á@b" \
   "postgresql://appuser:%C3%A1%40b@db.example.test/mydb"
 
+# AN UNENCODED `@` IN A QUERY PARAMETER -- didi found this on the SHIPPED code,
+# and it is the same catastrophic shape as the reversed-order bug below, reached
+# by a different input.
+#
+# `@` needs no escaping in a URI query (RFC 3986 `pchar`), so this DSN is not
+# malformed and nothing warns about it. With the search running over the whole
+# string, the last `@` lands in the query:
+#
+#     url  -> "postgresql://u@box"                              THE WRONG HOST
+#     pass -> "titok@db.example.test:6543/postgres?applicat..."  THE WHOLE DSN
+#
+# Latent rather than active when it was found -- the live DSN has exactly one
+# `@` and nothing after it -- so the trigger is a later, entirely legitimate
+# config change, which is the same structure as the decode defect this card
+# started from.
+check "an UNENCODED at-sign in the query does not move the split" \
+  "postgresql://u@db.example.test:6543/postgres?application_name=svc@box" "titok" \
+  "postgresql://u:titok@db.example.test:6543/postgres?application_name=svc@box"
+
 # THIS is the one that pins the ORDER, and it took a refuted guess to find it.
 #
 # The split must happen BEFORE the decoding. Reverse them -- "decode the userinfo

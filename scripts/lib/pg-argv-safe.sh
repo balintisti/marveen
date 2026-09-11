@@ -63,18 +63,40 @@ pg_split_password() {
 
   case "$url" in *://*) ;; *) return 0 ;; esac
 
-  local scheme rest userinfo hostpart
+  local scheme rest authority tail userinfo hostpart
   scheme="${url%%://*}://"
   rest="${url#*://}"
 
-  # No userinfo at all -> nothing to strip.
-  case "$rest" in *@*) ;; *) return 0 ;; esac
+  # THE SEARCH IS CONFINED TO THE AUTHORITY, and that is a fix, not tidiness --
+  # didi measured the old form breaking on the SHIPPED code (card 87cfe5ae).
+  #
+  # The rule below picks the LAST `@`. Applied to the whole string, a single
+  # UNENCODED `@` anywhere later -- in a query parameter, where `@` is legal and
+  # needs no escaping (RFC 3986 `pchar`) -- moves the split off the authority.
+  # Measured on the trunk:
+  #
+  #   ...:6543/postgres?application_name=svc@box
+  #     url  -> "postgresql://u@box"                             THE WRONG HOST
+  #     pass -> "titok@db.example.test:6543/postgres?applicat..." THE WHOLE DSN
+  #
+  # So the failure is a connection attempt to a different host carrying the
+  # connection string as the credential, from a DSN that is not malformed and
+  # that nothing warns about.
+  #
+  # The authority ends at the first `/`, `?` or `#` after `//`. Everything after
+  # it is carried through verbatim, so query parameters survive untouched.
+  authority="${rest%%[/?#]*}"
+  tail="${rest#"$authority"}"
+
+  # No userinfo in the authority -> nothing to strip. Deliberately NOT `$rest`:
+  # an `@` in a query must not make this look like a credentialed URL.
+  case "$authority" in *@*) ;; *) return 0 ;; esac
 
   # SPLIT ON THE LAST `@`, not the first. A password may legitimately contain an
   # encoded `@` (`%40`), and a host may not contain one at all, so the last `@`
   # is the only separator that cannot be fooled by the secret's own content.
-  userinfo="${rest%@*}"
-  hostpart="${rest##*@}"
+  userinfo="${authority%@*}"
+  hostpart="${authority##*@}"
 
   # A user with no password: leave it, and do NOT export an empty PGPASSWORD --
   # an empty one is a VALUE to libpq, not an absence, and would override a
@@ -88,7 +110,7 @@ pg_split_password() {
   user="${userinfo%%:*}"
   pass="${userinfo#*:}"
 
-  PG_URL_NOPASS="${scheme}${user}@${hostpart}"
+  PG_URL_NOPASS="${scheme}${user}@${hostpart}${tail}"
 
   # PERCENT-DECODE, AND IT IS NOT COSMETIC: the two channels disagree.
   # libpq percent-DECODES the userinfo of a connection URI, but takes
