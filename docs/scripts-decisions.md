@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **236** kovetett fajl, ebbol
-**72** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **238** kovetett fajl, ebbol
+**73** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -221,6 +221,15 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/kanban-project-classify.py`
 
 - MIERT FAJLUT ES NEM CIMSZO. Egy fajlut ellenorizheto teny: vagy letezik az adott
+
+### `scripts/landed-check.py`
+
+- WHY THIS EXISTS, AND WHY IT REPORTS INSTEAD OF BLOCKING. Measured 2026-08-25 (card b53a0836):
+- WHY NOT THE HARD GATE THE CARD ORIGINALLY ASKED FOR ("not on the trunk -> waiting, not done"):
+- WHY TWO LEGS AND NOT ONE. Ancestry is NECESSARY but not SUFFICIENT: after a rebase or a
+- WHY SUBJECT AND NOT PATCH-ID: patch-id was measured unreliable here on 2026-08-23, and a rebase
+- WHY THE CARD-ID EXCLUSION IS NOT COSMETIC. Our card ids are 8 hex characters, so a bare
+- WHY A CARD COUNTS AS LANDED IF ANY named commit landed. Cards quote other people's commits and
 
 ### `scripts/lib/content-hash.sh`
 
