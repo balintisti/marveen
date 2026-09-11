@@ -12,7 +12,13 @@ import type { RouteContext } from '../web/routes/types.js'
 
 // Fixture agent directories required by the from-auth check in /api/messages.
 // 'localboss' is the fictional test sender used throughout this suite.
-const FIXTURE_AGENTS = ['localboss']
+//
+// 'localmate' KESOBB KERULT IDE (kartya 4689f10b): a slash-mentes `to` MOSTANTOL ugyanazon a
+// `isKnownAgent` kapun megy at, mint a `from`. Ez a teszt addig azert ment at regisztralatlan
+// cimzettel, mert a cimzettet SEMMI nem ellenorizte -- vagyis a REGI vilagot rogzitette,
+// mellekesen. A SZANDEKA valtozatlan (a kettospont-kapu ne vegye el a normal lokalis
+// cimzettet), es most is pontosan azt meri; csak a vilag lett szigorubb.
+const FIXTURE_AGENTS = ['localboss', 'localmate']
 
 const TMP = mkdtempSync(join(tmpdir(), 'fed-feedback-test-'))
 const IN_TOKEN = 'b'.repeat(64)
