@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **230** kovetett fajl, ebbol
-**69** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **233** kovetett fajl, ebbol
+**70** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (2)
 
@@ -136,6 +136,13 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/ensure-managed-channels-enabled.sh`
 
 - WHY: claude-code >= 2.1.205 SILENTLY drops channel-plugin INBOUND
+
+### `scripts/expiry-check.py`
+
+- WHY THIS EXISTS AT ALL. friday's SOUL.md has carried this as a STANDING duty since
+- WHY FIVE OUTCOMES AND NOT TWO. The failure this card documents is not "a date passed
+- WHY A FAILED PROBE IS NOT 'NO EXPIRY'. A command that errors, returns non-JSON, or
+- WHY THE SUMMARY CANNOT SAY 'ALL CLEAR' WHILE ANYTHING IS UNMEASURED. A checker whose
 
 ### `scripts/git-at.sh`
 

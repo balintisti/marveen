@@ -1,0 +1,112 @@
+{
+  "_doc": [
+    "WHAT EXPIRES, WHERE IT LIVES, HOW TO ASK IT, AND WHO RENEWS IT.",
+    "",
+    "Read by scripts/expiry-check.py. Card b91eb75f.",
+    "",
+    "WHY A DECLARED PROBE AND NOT A DATE FIELD: a stored date drifts silently the",
+    "moment a credential is renewed, and nothing reports the drift -- the file keeps",
+    "showing a plausible number. A probe is re-asked at every run, so it cannot go",
+    "stale without the command itself failing, and a failing command is LOUD.",
+    "",
+    "WHY 'not_queryable' IS A FIRST-CLASS KIND AND NOT AN OMISSION: an item left out",
+    "of this file is indistinguishable from an item that has no expiry. Declaring it",
+    "keeps the gap countable. These are the finding of this card, not its residue.",
+    "",
+    "EVERY entry below was MEASURED on 2026-09-11 on this machine, not assumed.",
+    "The measurement is recorded in 'measured'; re-running the probe is how you",
+    "check whether it still holds."
+  ],
+  "threshold_days": 14,
+  "items": [
+    {
+      "id": "tacit-assistant-session",
+      "what": "TACIT assistant CLI session (Google-verified, scope content:read)",
+      "where": "~/.tacit/assistant-cli.json",
+      "renewed_by": "Isti",
+      "renew": "~/.tacit/bin/tacit-assistant setup --api https://api.tacitproject.hu",
+      "probe": {
+        "kind": "json_cmd",
+        "cmd": ["~/.tacit/bin/tacit-assistant", "doctor", "--json"],
+        "path": "session.expiresAt"
+      },
+      "measured": "2026-09-11: expiresAt 2026-08-07T18:20:49Z -- ALREADY EXPIRED, 35 days. This is the card's proven cost: it died 08-07 and Isti noticed on 09-08.",
+      "trap": "doctor reports loggedIn:true while the session is dead and connection.statusCode is 401. loggedIn is a stale LOCAL read. Probe expiresAt, never loggedIn."
+    },
+    {
+      "id": "google-service-account-key",
+      "what": "Google service account private key used for Calendar/Drive/Gmail",
+      "where": "~/.config/marveen/google-service-account.json",
+      "renewed_by": "friday",
+      "renew": "gcloud iam service-accounts keys create -- then replace the file and re-run the calendar probe",
+      "probe": {
+        "kind": "gcloud_sa_key",
+        "key_file": "~/.config/marveen/google-service-account.json"
+      },
+      "measured": "2026-09-11: the key IN USE (private_key_id 0b1e1812...) has validBeforeTime 9999-12-31 -- it does not expire.",
+      "trap": "The account carries THREE keys; the two NOT in use expire 2028-08-19 and 2028-08-22. A probe that takes the first key in the list reports a date that belongs to a key nothing reads. The probe matches on private_key_id from the key file."
+    },
+    {
+      "id": "github-cli-token",
+      "what": "GitHub token used by gh (scopes: gist, read:org, repo, user, workflow)",
+      "where": "gh auth (keychain)",
+      "renewed_by": "Isti",
+      "renew": "gh auth login",
+      "probe": {
+        "kind": "http_header",
+        "cmd": ["gh", "api", "-i", "user"],
+        "header": "github-authentication-token-expiration"
+      },
+      "measured": "2026-09-11: the response carries no expiration header, so GitHub reports no expiry for this token.",
+      "trap": "An ABSENT header is not the same claim as a queried 'never'. The probe reports NO_EXPIRY_REPORTED, which is weaker on purpose: if GitHub starts sending the header, the same probe picks up a real date with no edit here."
+    },
+    {
+      "id": "telegram-bot-token",
+      "what": "Telegram bot token -- the only channel to Isti",
+      "where": ".env TELEGRAM_BOT_TOKEN",
+      "renewed_by": "Isti",
+      "renew": "BotFather -- revoke and reissue; the old token dies immediately",
+      "probe": {
+        "kind": "none_by_construction",
+        "why": "Bot tokens have no expiry. getMe returns no expiry field (measured 2026-09-11); a token dies only when revoked, which is an event, not a date."
+      },
+      "measured": "2026-09-11: getMe ok:true, zero fields matching 'exp' in the result."
+    },
+    {
+      "id": "dashboard-token",
+      "what": "Bearer token for the local dashboard /api/*",
+      "where": "store/.dashboard-token",
+      "renewed_by": "friday",
+      "renew": "regenerate the file and restart com.marveen.dashboard",
+      "probe": {
+        "kind": "none_by_construction",
+        "why": "A local opaque file token with no issued/expires metadata. It dies only when the file is rewritten."
+      },
+      "measured": "2026-09-11: the file carries an opaque token and nothing else."
+    },
+    {
+      "id": "claude-code-credentials",
+      "what": "Claude Code OAuth/API credentials, one keychain entry per agent",
+      "where": "macOS keychain, service 'Claude Code-credentials-<id>'",
+      "renewed_by": "Isti",
+      "renew": "claude /login for the affected agent",
+      "probe": {
+        "kind": "not_queryable",
+        "why": "13 entries are readable and 2 of them carry an expiresAt, BOTH already past (2026-08-19 and 2026-09-07) while the fleet runs normally. The other 11 have no expiresAt field at all. WHICH keychain entry serves WHICH agent is UNMEASURED, so a past date here cannot be turned into 'agent X is about to break' -- reporting it as due would be crying wolf, and reporting it as fine would be the silence this card is about. It is therefore counted as NOT MEASURABLE until someone maps entry to agent."
+      },
+      "measured": "2026-09-11: 13 entries, 2 with a queryable expiresAt (both in the past), 11 without the field."
+    },
+    {
+      "id": "vault-entries",
+      "what": "Encrypted vault secrets: marveen_io_agent_api_kulcs, sentry_olvaso_token, DEEPSEEK_API_KEY, DEEPER_DELTACRM_JELSZO",
+      "where": "store/vault.json",
+      "renewed_by": "Isti",
+      "renew": "per provider -- reissue and re-import into the vault",
+      "probe": {
+        "kind": "not_queryable",
+        "why": "The vault schema has no expiry field. Each entry carries createdAt, updatedAt, label, id and the ciphertext -- nothing else (measured 2026-09-11 on all 4). Reading a provider-side expiry would mean decrypting the secret and calling out per provider, which this checker deliberately does not do: it never handles secret values."
+      },
+      "measured": "2026-09-11: 4 entries, 0 with any expiry field."
+    }
+  ]
+}
