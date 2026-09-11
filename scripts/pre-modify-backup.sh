@@ -30,11 +30,51 @@ fi
 
 # Small critical state git does not track. Explicit list -- store/ also holds
 # ~1.7G of large/regenerable data we deliberately do NOT copy.
+# A NAMED FILE THAT IS NOT THERE MUST NOT PASS IN SILENCE (card 965f3ee6).
+# `[ -f ] && cp` skipped over a named file and the run still reported success,
+# so the backup could not be told apart from a complete one. Measured
+# 2026-09-11: two of the nine names were absent and nothing said so -- and the
+# gate installed that morning made this script mandatory before every merge, so
+# a silent hole now ships on every snapshot.
+#
+# THE FIX IS NOT TO COPY THEM. Some absences are correct: on this install the
+# vault master key is NOT a file at all (it migrated to the macOS Keychain, and
+# neither store/.vault-key nor .vault-key.migrated exists while vault.json still
+# decrypts). A `cp` could never capture it. So the backup STATES what it did not
+# save, and an intended absence is declared rather than inferred:
+#   store/backup-exclude.txt -- one name per line, `name  reason`, # comments ok
+# Whether the key belongs in a backup at all is a separate, open decision
+# (card 989e1171). This output is correct either way: if the answer is NO the
+# name is EXCLUDED with a reason, and if it is YES the name simply starts saving.
+EXCLUDE_LIST="$STORE/backup-exclude.txt"
+STATE="$DEST/STATE.txt"
+: > "$STATE"
+SAVED=0; ABSENT=0; EXCLUDED=0; ABSENT_NAMES=""
 for f in vault.json .vault-key .dashboard-token \
          openrouter-models.json agents-desired.json autonomy-config.json \
          auto-restart.json command-task-health.json schedule-last-run.json; do
-  [ -f "$STORE/$f" ] && cp -p "$STORE/$f" "$DEST/" 2>/dev/null
+  reason=""
+  if [ -f "$EXCLUDE_LIST" ]; then
+    reason="$(grep -vE '^\s*(#|$)' "$EXCLUDE_LIST" | awk -v n="$f" '$1==n {$1=""; sub(/^ +/,""); print; exit}')"
+  fi
+  if [ -f "$STORE/$f" ]; then
+    cp -p "$STORE/$f" "$DEST/" 2>/dev/null
+    printf 'SAVED      %s\n' "$f" >> "$STATE"
+    SAVED=$((SAVED + 1))
+  elif [ -n "$reason" ]; then
+    printf 'EXCLUDED   %s  -- %s\n' "$f" "$reason" >> "$STATE"
+    EXCLUDED=$((EXCLUDED + 1))
+  else
+    printf 'NOT SAVED  %s  -- named, but not present in store/\n' "$f" >> "$STATE"
+    ABSENT=$((ABSENT + 1))
+    ABSENT_NAMES="$ABSENT_NAMES $f"
+  fi
 done
+echo "  state files: $SAVED saved, $EXCLUDED deliberately excluded, $ABSENT NOT saved"
+if [ "$ABSENT" -gt 0 ]; then
+  echo "  WARNING these named files were NOT saved and are NOT declared excluded:$ABSENT_NAMES"
+  echo "           (declare them in store/backup-exclude.txt, or this stays loud)"
+fi
 
 # Personal, untracked scripts -- the ones git will NOT bring back.
 #
