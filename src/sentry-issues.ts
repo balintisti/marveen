@@ -411,21 +411,29 @@ export function buildSentryNotice(d: SentryIssueDecision): string | null {
       'The rest stands as backlog; from here on this poller reports arrivals.'
     )
   }
-  if (d.newlySeen.length === 0) {
-    // AN ABSORPTION IS STILL WORTH ONE LINE. Saying nothing here would make the
-    // tick where an org first becomes readable indistinguishable from a quiet
-    // one, and that org's backlog would vanish without any reader ever learning
-    // it existed -- the silent-success shape this module exists to prevent.
-    if (d.absorbedBacklog > 0) {
-      return (
-        `[sentry] ${d.absorbedOrgs.join(', ')} answered for the first time since this poller ` +
+  // AN ABSORPTION IS WORTH ONE LINE ON EVERY WARM TICK, NOT ONLY A QUIET ONE.
+  //
+  // It first shipped INSIDE the `newlySeen.length === 0` branch, and didi measured
+  // what that cost (card f248371b, review on the built module, four cases with
+  // controls both ways): with 31 absorbed AND one genuinely new issue on the same
+  // tick, the notice was BYTE-IDENTICAL to the one for zero absorbed and one new
+  // issue -- 70 characters, same text. Control: the zero-new case did differ, so
+  // the meter could tell them apart and these two really were the same string.
+  //
+  // The reason written two paragraphs down applies verbatim to the branch that
+  // did not have it: that org's backlog would vanish without any reader ever
+  // learning it existed. A two-branch case where one branch inherited the
+  // rationale and the other did not -- and the silent one is the likelier shape,
+  // because an org coming back after an outage is exactly when new issues arrive.
+  const absorbedLine =
+    d.absorbedBacklog > 0
+      ? `[sentry] ${d.absorbedOrgs.join(', ')} answered for the first time since this poller ` +
         `started: ${d.absorbedBacklog} standing issue(s) absorbed as BACKLOG, not listed. ` +
         'They were unreadable when everything else was seeded, so they are old news arriving ' +
         'late, not new failures. From here on this org reports ARRIVALS like the others.'
-      )
-    }
-    return null
-  }
+      : null
+
+  if (d.newlySeen.length === 0) return absorbedLine
   const lines = d.newlySeen.map(i => `  - ${describe(i)}`)
   const tail =
     d.suppressed > 0
@@ -433,7 +441,13 @@ export function buildSentryNotice(d: SentryIssueDecision): string | null {
         'flood the fleet queue. They ARE recorded, so they will not be repeated next tick -- ' +
         'read them in Sentry.'
       : ''
-  return `[sentry] ${d.newlySeen.length + d.suppressed} NEW unresolved issue(s):\n${lines.join('\n')}${tail}`
+  const announcement =
+    `[sentry] ${d.newlySeen.length + d.suppressed} NEW unresolved issue(s):\n${lines.join('\n')}${tail}`
+  // SEPARATE PARAGRAPH, NOT A CLAUSE: the two say different things and call for
+  // different actions -- read these, and ignore those. One merged sentence
+  // swallows whichever half the reader is not looking for, which is the same
+  // argument the archived-card warning makes about travelling in its own field.
+  return absorbedLine ? `${announcement}\n\n${absorbedLine}` : announcement
 }
 
 /**

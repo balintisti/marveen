@@ -560,6 +560,39 @@ describe('an org unreadable at seeding does not replay its backlog (card f248371
     expect(second.newlySeen.map(i => i.id)).toEqual(['z'])
   })
 
+  it('SAYS THE ABSORPTION EVEN WHEN A GENUINELY NEW ISSUE ARRIVES ON THE SAME TICK', () => {
+    // didi's review of the first version, measured on the BUILT module: the
+    // absorption line sat inside the `newlySeen.length === 0` branch, so a tick
+    // with 31 absorbed AND one new issue produced a notice BYTE-IDENTICAL to the
+    // one for zero absorbed and one new issue. The likelier shape, too: an org
+    // coming back after an outage is exactly when new issues arrive.
+    const seed = seedWithOneOrgDown()
+    const both = decideSentryIssues(
+      reading({
+        issues: [other('1'), other('9'), crm('a'), crm('b')],
+        orgsQueried: ['other-org', 'delta-crm'],
+      }),
+      seed.next,
+      NOW,
+    )
+    expect(both.newlySeen.map(i => i.id)).toEqual(['9'])   // the real arrival is announced
+    expect(both.absorbedBacklog).toBe(2)                    // and the backlog is absorbed
+    const notice = buildSentryNotice(both) ?? ''
+    expect(notice).toContain('1 NEW unresolved issue(s)')
+    expect(notice).toContain('2 standing issue(s) absorbed as BACKLOG')
+
+    // THE CONTROL IS THE WHOLE TEST: the same tick WITHOUT an absorption must
+    // produce a DIFFERENT string. Asserting only the two substrings above would
+    // still pass on the old code for the first half, and byte-equality is what
+    // the defect actually was.
+    const onlyNew = decideSentryIssues(
+      reading({ issues: [other('1'), other('9')], orgsQueried: ['other-org'] }),
+      { ...seed.next, seededOrgs: ['delta-crm', 'other-org'] },
+      NOW,
+    )
+    expect(buildSentryNotice(onlyNew)).not.toBe(notice)
+  })
+
   it('a still-failing org stays unseeded -- and does NOT turn every tick into a cold start', () => {
     // The rejected one-word fix (close `seeded` only on a flawless read) would
     // have made this tick coldStart again, repeating FIRST READ/RESUMED forever.
