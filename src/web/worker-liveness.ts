@@ -11,6 +11,17 @@ import { workerContexts, isWorkerSessionAlive } from './agent-worker.js'
 // worker dies, NOTHING notices, nothing logs it, and the operator only finds
 // out by running `tmux ls` and seeing it absent.
 //
+// AND THE watchdog.sh CLAUSE UNDERSTATES IT, in the reassuring direction
+// (measured 2026-09-11, card e479b940, didi found this line): "only covers
+// <agent>-channels" reads as a SCOPE LIMIT, so the reader concludes the
+// channels sessions ARE covered. Nothing starts watchdog.sh -- zero call sites
+// under an anchored search of scripts/ src/ dist/ web/ (control:
+// channel-watchdog.sh -> 18 files), no running process, no launchd plist, no
+// settings hook, no scheduled task. The conclusion this file draws is
+// therefore still correct and BROADER than it says; the clause is kept because
+// it records what the boundary was designed to be. NOT MEASURED: whether
+// watchdog.sh ever ran.
+//
 // Measured on a live host 2026-07-30: both sessions were created at 11:42
 // (two "launched interactive worker session" lines, which only run AFTER a
 // successful tmux new-session), and by 18:00 neither existed -- with zero log
