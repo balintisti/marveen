@@ -124,6 +124,99 @@ eq "missing workflow: exit 2" "$?" "2"
 python3 "$TOOL" "$WF" --job backend-e2e --env-file "$TMP/nope.env" >/dev/null 2>&1
 eq "missing --env-file: exit 2, not a fake gap" "$?" "2"
 
+# ---- 6. A `run: |` BLOCK IS A SHELL SCRIPT, NOT YAML -------------------------
+#      Measured 2026-09-11: a run block containing the literal text `env:` and an
+#      indented KEY: value made this tool report a PHANTOM env key as a gap. The
+#      real ci.yml carries 24 block scalars, so this is live, not theoretical --
+#      and a wrong answer here is shaped exactly like a parity finding.
+TRAP="$TMP/trap.yml"
+cat > "$TRAP" <<'YML'
+jobs:
+  victim:
+    runs-on: ubuntu-latest
+    env:
+      REAL_KEY: 1
+    steps:
+      - run: |
+          echo "setting up"
+          env:
+            PHANTOM_FROM_RUN_BLOCK: yes
+YML
+OUT6="$(python3 "$TOOL" "$TRAP" --job victim --no-process-env 2>&1)"
+eq "a run: | block does not yield phantom env keys" \
+   "$(printf '%s' "$OUT6" | grep -c 'PHANTOM')" "0"
+eq "...and the REAL key is still found (the mask is not too greedy)" \
+   "$(printf '%s' "$OUT6" | grep -c 'REAL_KEY')" "1"
+
+# ---- 7. UNMODELLED YAML -> NOT MEASURABLE, never a partial comparison -------
+#      A hand-rolled parser is right most of the time; the times it is wrong look
+#      like findings. So it refuses on what it cannot read.
+for frag in 'env: &shared' 'env: *shared' '<<: *base' 'env: {A: 1}'; do
+  cat > "$TMP/un.yml" <<YML
+jobs:
+  a:
+    runs-on: x
+    $frag
+YML
+  python3 "$TOOL" "$TMP/un.yml" --job a --no-process-env >/dev/null 2>&1
+  eq "unmodelled [$frag]: exit 2, not a partial answer" "$?" "2"
+done
+# NEGATIVE CONTROL: ordinary YAML must NOT trip the refusal, or the tool refuses
+# everything and the exit-2 cases above prove nothing.
+eq "ordinary job does NOT trigger the refusal" \
+   "$(python3 "$TOOL" "$WF" --job backend-e2e --no-process-env >/dev/null 2>&1; echo $?)" "1"
+
+# ---- 8. THE INVENTORY AXIS, from a REAL RUN ---------------------------------
+#      The file says what SHOULD run; a parser bug silently shortens that list,
+#      which is the very failure this axis exists to catch. So the inventory
+#      comes from what DID run.
+WF2="$TMP/named.yml"
+cat > "$WF2" <<'YML'
+jobs:
+  backend-e2e:
+    name: Backend E2E Tests
+    runs-on: x
+  ci-summary:
+    runs-on: x
+YML
+# THE DISPLAY-NAME TRAP: a run reports "Backend E2E Tests", the file says
+# "backend-e2e". Compared as raw sets they never match and EVERY job reads as
+# "never ran" -- right names present, no correspondence between them.
+printf 'Backend E2E Tests\nci-summary\n' > "$TMP/ran-ok.txt"
+O8="$(python3 "$TOOL" "$WF2" --no-process-env --run-jobs "$TMP/ran-ok.txt" 2>&1)"
+eq "display name maps to the job id (no false 'never ran')" \
+   "$(printf '%s' "$O8" | grep -c 'file and run agree')" "1"
+
+# ...and it must be able to DISAGREE, or the line above proves nothing.
+printf 'Backend E2E Tests\n' > "$TMP/ran-missing.txt"
+O9="$(python3 "$TOOL" "$WF2" --no-process-env --run-jobs "$TMP/ran-missing.txt" 2>&1)"
+eq "a job in the file that never ran is named" \
+   "$(printf '%s' "$O9" | grep -c 'IN THE FILE BUT NOT IN THE RUN: ci-summary')" "1"
+# ...and the reassuring line must be ABSENT. Printing a disagreement AND
+# "file and run agree" together is read at skim depth as agreement -- the same
+# contradictory-output shape as a GAP label next to exit 0. A mutation that made
+# this line unconditional survived until this assertion existed.
+eq "a disagreement does NOT also print 'file and run agree'" \
+   "$(printf '%s' "$O9" | grep -c 'file and run agree')" "0"
+printf 'Backend E2E Tests\nci-summary\nSurprise Job\n' > "$TMP/ran-extra.txt"
+O10="$(python3 "$TOOL" "$WF2" --no-process-env --run-jobs "$TMP/ran-extra.txt" 2>&1)"
+eq "a job in the run that is not in the file is named" \
+   "$(printf '%s' "$O10" | grep -c 'IN THE RUN BUT NOT IN THE FILE: Surprise Job')" "1"
+
+# NOT MEASURABLE beats a guess: an unreadable run must not silently become
+# "file and run agree".
+# Hide `gh` WITHOUT hiding python3 -- a bare PATH=/nonexistent also hides the
+# interpreter, so nothing runs and the empty output reads as a pass for the
+# wrong reason. (It did exactly that on the first try.)
+PY3="$(command -v python3)"
+O11="$(PATH=/nonexistent "$PY3" "$TOOL" "$WF2" --no-process-env --gh-run 999 2>&1)"
+eq "gh unavailable: says NOT MEASURABLE" \
+   "$(printf '%s' "$O11" | grep -c 'inventory: NOT MEASURABLE')" "1"
+eq "gh unavailable: does NOT claim agreement" \
+   "$(printf '%s' "$O11" | grep -c 'file and run agree')" "0"
+python3 "$TOOL" "$WF2" --no-process-env --run-jobs "$TMP/nope.txt" >/dev/null 2>&1
+eq "missing --run-jobs file: exit 2" "$?" "2"
+
 echo
 echo "ci-env-parity: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

@@ -86,6 +86,65 @@ def parse_jobs(lines):
     return jobs
 
 
+SCALAR_RE = re.compile(r"^(\s*)(?:[A-Za-z0-9_.-]+|-\s+[A-Za-z0-9_.-]+):\s*[|>][-+0-9]*\s*(?:#.*)?$")
+
+# Constructs this parser does NOT model. Meeting one means the answer would be a
+# PARTIAL comparison, and a partial comparison here is indistinguishable from a
+# parity finding -- so we refuse instead. (Ruling from marveen, 2026-09-11, and
+# this page's own law from the `wc -c` case: a guard that degrades into a wrong
+# NUMBER is worse than one that refuses.)
+UNMODELLED = [
+    (re.compile(r"(^|\s)&[A-Za-z0-9_-]+\s*$"), "YAML anchor (&name)"),
+    (re.compile(r"(^|\s)\*[A-Za-z0-9_-]+\s*$"), "YAML alias (*name)"),
+    (re.compile(r"^\s*<<\s*:"), "YAML merge key (<<:)"),
+    (re.compile(r"^\s*(env|services):\s*\{"), "flow mapping on env:/services:"),
+    (re.compile(r"^\s*[\"\']([^\"\']+)[\"\']\s*:"), "quoted mapping key"),
+]
+
+
+def scalar_ranges(lines, lo, hi):
+    """Line ranges of block scalars (`run: |`, `script: >`).
+
+    Their CONTENT is a shell script, not YAML. Measured 2026-09-11: a `run: |`
+    step containing the literal text `env:` and two indented `KEY: value` lines
+    made this tool report two PHANTOM env keys as a gap -- and the real ci.yml
+    carries 24 block scalars, so this is live, not theoretical.
+    """
+    out = []
+    i = lo
+    while i < hi:
+        m = SCALAR_RE.match(lines[i])
+        if m:
+            base = len(m.group(1))
+            j = i + 1
+            while j < hi:
+                n = lines[j]
+                if n.strip() and indent_of(n) <= base:
+                    break
+                j += 1
+            out.append((i, j))
+            i = j
+            continue
+        i += 1
+    return out
+
+
+def unmodelled_in(lines, lo, hi, masked):
+    """Constructs inside [lo,hi) that this parser cannot faithfully read."""
+    hits = []
+    for i in range(lo, hi):
+        if any(a <= i < b for a, b in masked):
+            continue
+        l = lines[i]
+        if not l.strip() or l.lstrip().startswith("#"):
+            continue
+        for rx, name in UNMODELLED:
+            if rx.search(l):
+                hits.append((i + 1, name))
+                break
+    return hits
+
+
 def block_ranges(lines, lo, hi, key):
     """Line ranges of every `<key>:` block inside [lo,hi)."""
     out = []
@@ -161,6 +220,56 @@ def mapping_keys(lines, lo, hi, key, direct_only, skip=()):
     return out
 
 
+def job_display_name(lines, lo, hi, masked):
+    """The job's `name:` if it has one, else None.
+
+    THE RUN AND THE FILE DO NOT SPEAK THE SAME LANGUAGE: `gh run view` returns
+    DISPLAY names ("Backend E2E Tests"), the file has job IDs ("backend-e2e").
+    Comparing those two lists as sets gives an empty intersection for jobs that
+    are plainly the same, and every job reads as "never ran" -- presence of the
+    right names is not correspondence between them.
+    """
+    for i in range(lo, hi):
+        if any(a <= i < b for a, b in masked):
+            continue
+        m = re.match(r"^    name:\s*(.+?)\s*(?:#.*)?$", lines[i])
+        if m:
+            return m.group(1).strip().strip("'\"")
+    return None
+
+
+def run_job_names(path, gh_run, workflow_repo):
+    """Names of the jobs a REAL run executed, or None if not measurable.
+
+    Taken from an actual run rather than the file on purpose: the file says what
+    SHOULD run, and a parser bug silently shortens that list -- which is the very
+    failure this axis exists to catch. A real run says what DID run.
+    """
+    if path:
+        if not os.path.exists(path):
+            die(f"--run-jobs file not found: {path}")
+        with open(path, encoding="utf-8") as fh:
+            return [l.strip() for l in fh if l.strip()]
+    if not gh_run:
+        return None
+    import shutil, subprocess, json as _json
+    if not shutil.which("gh"):
+        return None                      # NOT MEASURABLE -- never a guess
+    cmd = ["gh", "run", "view", str(gh_run), "--json", "jobs"]
+    if workflow_repo:
+        cmd += ["--repo", workflow_repo]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    try:
+        return [j["name"] for j in _json.loads(out.stdout).get("jobs", [])]
+    except Exception:
+        return None
+
+
 def load_env_files(paths):
     env = {}
     for p in paths:
@@ -181,6 +290,9 @@ def main():
     ap.add_argument("--job")
     ap.add_argument("--env-file", action="append", default=[])
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--run-jobs", help="file of job names a real run executed, one per line")
+    ap.add_argument("--gh-run", help="run id; ask gh what that run actually executed")
+    ap.add_argument("--repo", help="owner/name, passed to gh")
     ap.add_argument("--no-process-env", action="store_true",
                     help="ignore os.environ; compare only against --env-file")
     a = ap.parse_args()
@@ -215,9 +327,18 @@ def main():
         # false gap on a genuinely complete environment (measured: the "silent on
         # a complete environment" case failed on POSTGRES_DB). A tool that flags
         # correct setups is worse than no tool, so services blocks are excluded.
+        scalars = scalar_ranges(lines, lo, hi)
+        bad = unmodelled_in(lines, lo, hi, scalars)
+        if bad:
+            where = "; ".join(f"line {ln}: {why}" for ln, why in bad[:3])
+            die(f"job {n!r} uses YAML this parser does not model ({where}). "
+                "Refusing to print a partial comparison -- a partial answer here "
+                "is indistinguishable from a parity finding.")
         svc_ranges = block_ranges(lines, lo, hi, "services")
-        declared = mapping_keys(lines, lo, hi, "env", direct_only=False, skip=svc_ranges)
-        services = mapping_keys(lines, lo, hi, "services", direct_only=True)
+        declared = mapping_keys(lines, lo, hi, "env", direct_only=False,
+                                skip=svc_ranges + scalars)
+        services = mapping_keys(lines, lo, hi, "services", direct_only=True,
+                                skip=scalars)
         missing = sorted(k for k in declared if k not in have)
         # The label must agree with the exit code. It used to read GAP whenever a
         # job had services, while `gap` was set only by missing env -- so a
@@ -246,6 +367,30 @@ def main():
     unaddressed = [n for n in jobs if n not in names]
     if unaddressed:
         print("  NO STATEMENT about: " + ", ".join(unaddressed))
+
+    # ---- THE INVENTORY AXIS, taken from a REAL RUN, never from this parser ----
+    ran = run_job_names(a.run_jobs, a.gh_run, a.repo)
+    if ran is None:
+        if a.gh_run:
+            print("  inventory: NOT MEASURABLE -- gh is unavailable or the run "
+                  "could not be read. No fallback: a guessed job list is exactly "
+                  "the incomplete list this axis exists to catch.")
+    else:
+        # Map file job IDs to the display name a run would show, or the ID itself.
+        want = {}
+        for jn, (lo, hi) in jobs.items():
+            disp = job_display_name(lines, lo, hi, scalar_ranges(lines, lo, hi))
+            want[jn] = disp or jn
+        ran_set = set(ran)
+        never = [jn for jn, disp in want.items() if disp not in ran_set]
+        extra = [r for r in ran if r not in set(want.values())]
+        print(f"  inventory: the run executed {len(ran)} job(s); the file declares {len(jobs)}")
+        if never:
+            print("  IN THE FILE BUT NOT IN THE RUN: " + ", ".join(never))
+        if extra:
+            print("  IN THE RUN BUT NOT IN THE FILE: " + ", ".join(extra))
+        if not never and not extra:
+            print("  inventory: file and run agree")
 
     return 1 if gap else 0
 
