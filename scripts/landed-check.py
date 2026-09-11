@@ -94,12 +94,15 @@ def load_cards(db, project):
     where = 'status=? and project=?' if project else 'status=?'
     args = ('done', project) if project else ('done',)
     cards = []
-    for cid, title, desc in c.execute(
-            f'select id, title, description from kanban_cards where {where}', args):
+    for cid, title, desc, proj in c.execute(
+            f'select id, title, description, project from kanban_cards where {where}', args):
         body = ' '.join([title or '', desc or ''] +
                         [r[0] or '' for r in c.execute(
                             'select content from kanban_comments where card_id=?', (cid,))])
-        cards.append((cid, title or '', body))
+        # A PROJECT AZERT UTAZIK EGYUTT A KARTYAVAL, mert ez a mero EGY REPOT mer, es egy
+        # MASIK repo kartyaja itt szerkezetileg merhetetlen -- nem hibas. Lasd a
+        # `unresolved_by_project` oszlopot lentebb.
+        cards.append((cid, title or '', body, proj or ''))
     return cards, ids
 
 
@@ -208,8 +211,13 @@ def main():
     buckets = {k: [] for k in (LANDED, OTHER_SHA, CANDIDATE, NO_REF, SHA_UNKNOWN)}
     detail = {}
     strict_gap = []
-    for cid, title, body in cards:
+    unresolved_by_project = {}
+    cards_by_project = {}
+    for cid, title, body, proj in cards:
+        cards_by_project[proj] = cards_by_project.get(proj, 0) + 1
         st, missing, landed = classify(a.repo, a.trunk, subjects, body, card_ids)
+        if st == SHA_UNKNOWN:
+            unresolved_by_project[proj] = unresolved_by_project.get(proj, 0) + 1
         # SZIGORU NEZETELTERES: a LOOSE szabaly szerint LANDED, de NEM minden megnevezett
         # commit van a fan. Ez a ket szabaly kulonbsegenek a SZAMA -- NEM hiba-lista.
         if st == LANDED and missing:
@@ -231,6 +239,17 @@ def main():
         # kartya elolvasasa valasztja szet -- egy automatikus cimke itt proxy lenne.
         'strict_disagreement': len(strict_gap),
         'strict_disagreement_cards': [c for c, _, _ in sorted(strict_gap)],
+        # A MERO EGY REPOT MER, ES EZ EDDIG SEHOL NEM ALLT A KIMENETBEN. Egy MASIK repo
+        # kartyaja itt `NAMES_NO_KNOWN_COMMIT`-ba esik -- ami LELET-ALAKU, pedig a helyes
+        # olvasata "NEM MERHETO ITT". Merve 2026-09-11, `--project ''` mellett: 1242 `done`
+        # kartyabol 685 delta-crm, es abbol 633 kerult ebbe a rekeszbe (92%), miközben a
+        # marveen szeleten ugyanez 25/345 (7%). Az ARANY a diszkriminator, es a szerszam
+        # semmit nem tud a repo-terkeprol: a SZAM mondja meg.
+        'unresolved_by_project': {
+            k: {'cards': cards_by_project[k], 'unresolved': v,
+                'rate': round(v / cards_by_project[k], 3)}
+            for k, v in sorted(unresolved_by_project.items())
+        },
         'candidates': [{'card': c, **detail[c]} for c in cand],
     }
     if a.json:
@@ -243,6 +262,17 @@ def main():
         print(f'  -- a SZIGORU szabaly ("MINDEN megnevezett commit landoljon") {sg} kartyan')
         print(f'     mondana mast. NEM hiba-lista: egy idezett idegen SHA ugyanigy nez ki,')
         print(f'     mint a kartya sajat, kint maradt munkaja -- a ketto csak olvasassal valik szet.')
+        # CSAK TOBB-PROJEKTES FUTASNAL: egy szuk futasnal a bontas onmagat ismetelne, es egy
+        # minden korben megjeleno sor par kor utan zaj.
+        ubp = payload['unresolved_by_project']
+        if len(cards_by_project) > 1:
+            print('  -- FELOLDATLAN HASH projektenkent (ez a mero EGY repot mer):')
+            for k, v in sorted(ubp.items(), key=lambda kv: -kv[1]['rate']):
+                print(f"     {k or '(nincs project)':<14} {v['unresolved']:>4} / {v['cards']:<5}"
+                      f" {v['rate']:.0%}")
+            print('     Egy majdnem TELJES arany itt nem hanyagsag es nem lelet: azok a')
+            print('     kartyak MASIK repo commitjait nevezik meg, tehat ezen a fan NEM')
+            print('     MERHETOK. A verdikt es a kilepesi kod valtozatlan.')
         neg = payload['ancestry_leg_said_no']
         print(f'  -- az ossodes-lab {neg} kartyara mondott NEMET; ebbol {len(buckets[OTHER_SHA])}-at'
               f' a targy-lab zart ki (a munka MAS SHA alatt leszallt).')
