@@ -10,7 +10,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-HOOK_DIR="$(cd "$(git -C "$ROOT" rev-parse --git-common-dir)" && pwd)/hooks"
+# `--git-common-dir` is RELATIVE from the main checkout and ABSOLUTE from a linked
+# worktree, and git resolves the relative form against ITS OWN cwd -- so `cd` on the
+# result lands in the CALLER's cwd and dies with "cd: .git: Not a directory" from any
+# directory but $ROOT (card 2b07f542, reproduced 2026-09-11). Enter $ROOT first: that
+# anchors the relative form correctly and leaves the absolute one untouched.
+HOOK_DIR="$(cd "$ROOT" && cd "$(git rev-parse --git-common-dir)" && pwd)/hooks"
 DISPATCH="$HOOK_DIR/pre-push"
 GUARD="$HOOK_DIR/pre-push.d/10-no-force-push-protected"
 MARK="marveen-pre-push-dispatcher"
