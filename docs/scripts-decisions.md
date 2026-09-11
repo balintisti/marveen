@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **224** kovetett fajl, ebbol
-**66** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **230** kovetett fajl, ebbol
+**69** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (2)
 
@@ -39,6 +39,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/__tests__/idle-reporter.test.py`
 
 - MIERT PYTHON-TESZT ES NEM VITEST: a szkript szandekosan ONALLO -- semmit nem
+
+### `scripts/__tests__/install-hooks-cwd-independence.test.sh`
+
+- WHY THIS TEST IS CLASS-LEVEL AND NOT THREE PER-INSTALLER CASES: each of those
 
 ### `scripts/__tests__/install-no-force-push-hook.test.sh`
 
@@ -91,6 +95,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/channel-watchdog.sh`
 
 - WHY a separate timer when the dashboard already has an in-process watchdog:
+
+### `scripts/ci-env-parity.py`
+
+- WHY A TOOL AND NOT A CHECKLIST LINE. The rule "copy the whole job, not just the
 
 ### `scripts/ci-watch.sh`
 
@@ -173,6 +181,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/idle-reporter.py`
 
 - A KARTYA (ee4163be), es MIERT NEM ELEG A MEGLEVO TETLEN-OR. Egy agens fordulot
+
+### `scripts/install-backup-gate-hook.sh`
+
+- WHY THIS EXISTS -- the rule was already written, and measured not to work.
 
 ### `scripts/install-launchd-unit.sh`
 
