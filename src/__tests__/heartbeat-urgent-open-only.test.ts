@@ -4,6 +4,7 @@ import { readFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { HEARTBEAT_URGENT_SQL, HEARTBEAT_WAITING_SQL } from '../db.js'
+import { anchorNth } from './anchor-once.js'
 
 // The most prominent line of an hourly report is the one nobody reads.
 //
@@ -126,7 +127,7 @@ describe('there is ONE definition, and both consumers read it', () => {
   })
 
   it('the definition itself excludes finished and archived work, and nothing else', () => {
-    const fn = DB_SRC.slice(DB_SRC.indexOf('HEARTBEAT_URGENT_SQL'), DB_SRC.indexOf('getHeartbeatKanbanSummary('))
+    const fn = DB_SRC.slice(anchorNth(DB_SRC, 'HEARTBEAT_URGENT_SQL', { nth: 1, of: 2 }), DB_SRC.indexOf('getHeartbeatKanbanSummary('))
     expect(fn).toMatch(/archived_at IS NULL/)
     expect(fn).toMatch(/status != 'done'/)
     // no status allowlist: narrowing to waiting/in_progress would hide an

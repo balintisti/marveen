@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { anchorNth } from './anchor-once.js'
 
 // Contract tests for the 2026-06-02 14:27 hb-fire regression (#252 follow-up):
 //   - Sub-agent ran without 'Not logged in' (Claude API auth fine), but
@@ -26,7 +27,7 @@ describe('heartbeat ~/.claude.json bridge (2026-06-02 14:27 regression fix)', ()
     // The auth-equivalent file must have the same 0600 mode as
     // .credentials.json -- a world-readable .claude.json with the
     // oauthAccount key would leak the user id.
-    const start = HB_SRC.indexOf('heartbeatClaudeJsonPath')
+    const start = anchorNth(HB_SRC, 'heartbeatClaudeJsonPath', { nth: 1, of: 2 })
     expect(start).toBeGreaterThan(0)
     // The next writeFileSync that targets heartbeatClaudeJsonPath must
     // pass mode 0o600. Slice from the first `writeFileSync(heartbeatClaudeJsonPath`
@@ -82,7 +83,7 @@ describe('dashboard-hide sentinel (Szabi 2026-06-02 14:31 ask)', () => {
   })
 
   it('sentinel write is idempotent (skip if already present)', () => {
-    const idx = HB_SRC.indexOf('sentinelPath')
+    const idx = anchorNth(HB_SRC, 'sentinelPath', { nth: 1, of: 3 })
     expect(idx).toBeGreaterThan(0)
     const window = HB_SRC.slice(idx, idx + 400)
     expect(window).toMatch(/!existsSync\(sentinelPath\)/)

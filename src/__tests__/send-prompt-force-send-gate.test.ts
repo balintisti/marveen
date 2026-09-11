@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { anchorNth } from './anchor-once.js'
 
 // Contract tests for Finding 4: forceSend must skip the pre-flight
 // wait-until-idle gate inside sendPromptToSession.
@@ -48,7 +49,7 @@ describe('sendPromptToSession waitForIdle gate', () => {
   })
 
   it('the forceSend scheduled-task path opts out of the idle wait', () => {
-    const callIdx = SCHEDULE_RUNNER.indexOf('sendPromptToSession(session, fullPrompt, host')
+    const callIdx = anchorNth(SCHEDULE_RUNNER, 'sendPromptToSession(session, fullPrompt, host', { nth: 1, of: 2 })
     expect(callIdx).toBeGreaterThan(0)
     const call = SCHEDULE_RUNNER.slice(callIdx, callIdx + 120)
     // waitForIdle is the negation of forceSend: ON for normal tasks, OFF for
@@ -57,7 +58,7 @@ describe('sendPromptToSession waitForIdle gate', () => {
   })
 
   it('documents WHY forceSend skips the gate', () => {
-    const callIdx = SCHEDULE_RUNNER.indexOf('sendPromptToSession(session, fullPrompt, host')
+    const callIdx = anchorNth(SCHEDULE_RUNNER, 'sendPromptToSession(session, fullPrompt, host', { nth: 1, of: 2 })
     const rationale = SCHEDULE_RUNNER.slice(Math.max(0, callIdx - 500), callIdx)
     expect(rationale).toMatch(/forceSend/)
     expect(rationale).toMatch(/idle|busy|queue/i)

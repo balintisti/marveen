@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { anchorNth } from './anchor-once.js'
 
 // Security regression test (2026-06-08).
 //
@@ -33,7 +34,7 @@ describe('schedule-runner heartbeat prefix is injection-free', () => {
   })
 
   it('does not branch the heartbeat prefix by agentName (one clean prefix)', () => {
-    const heartbeatBlockStart = SRC.indexOf("if (task.type === 'heartbeat')")
+    const heartbeatBlockStart = anchorNth(SRC, "if (task.type === 'heartbeat')", { nth: 1, of: 2 })
     expect(heartbeatBlockStart).toBeGreaterThan(0)
     const outerElseMarker = SRC.indexOf('[Utemezett feladat:', heartbeatBlockStart)
     expect(outerElseMarker).toBeGreaterThan(heartbeatBlockStart)

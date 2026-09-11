@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { taskInjectionRank } from '../web/schedule-runner.js'
+import { anchorNth } from './anchor-once.js'
 
 // Same-minute injection starvation (2026-07-20 incident): several tasks due in
 // one scan window are fired sequentially, and a single injection takes seconds
@@ -59,7 +60,7 @@ describe('taskInjectionRank: forceSend outranks tasks outranks heartbeats', () =
 
 describe('forceSend defers on context saturation instead of injecting', () => {
   it('checks paneShowsContextSaturation inside the forceSend branch and returns busy', () => {
-    const idx = SRC.indexOf('if (task.forceSend) {')
+    const idx = anchorNth(SRC, 'if (task.forceSend) {', { nth: 1, of: 2 })
     expect(idx).toBeGreaterThan(0)
     const branch = SRC.slice(idx, idx + 1800)
     expect(branch).toMatch(/paneShowsContextSaturation/)
