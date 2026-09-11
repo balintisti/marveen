@@ -3406,7 +3406,7 @@ function renderAgents() {
       <div class="agent-card-footer">
         <span class="agent-model-badge ${escapeHtml(mainModelClass)}">${escapeHtml(mainModelLabel)}</span>
         <span class="process-indicator" title="${t('agents.marveen_process_tip')}"><span class="process-dot running"></span>${t('agents.status.running')}</span>
-        <span class="tg-status" title="${t('agents.marveen_channel_tip')}"><span class="tg-dot connected"></span>${t('agents.status.online')}</span>
+        <span class="tg-status" title="${t('agents.marveen_channel_tip')}"><span class="tg-dot connected"></span>${t('agents.channel.label_linked')}</span>
       </div>
       <div class="agent-card-actions">
         <button class="btn-secondary btn-compact agent-conversation-btn" title="${t('agents.btn.conversation')}">
@@ -3446,7 +3446,13 @@ function renderAgents() {
     const modelLabel = agent.model || 'inherit'
     const chConnected = agentIsConnected(agent)
     const chDotClass = chConnected ? 'connected' : 'disconnected'
-    const chLabel = chConnected ? t('agents.status.online') : t('agents.status.offline')
+    // The word "Offline" reads as THE AGENT IS DOWN. It was never about the
+    // agent: `agentIsConnected` only asks whether a channel token is configured,
+    // and the tooltip has always said so. Isti read the LABEL, not the hover, and
+    // asked twice in three minutes whether two working agents had died (card
+    // 4ce22556). Both were running. So the label names its own subject; the
+    // process indicator beside it is the one that speaks about the agent.
+    const chLabel = chConnected ? t('agents.channel.label_linked') : t('agents.channel.label_none')
     const isRunning = agent.running || false
     const runDotClass = isRunning ? 'running' : 'stopped'
     const runLabel = isRunning ? t('agents.status.running') : t('agents.status.stopped')

@@ -940,11 +940,11 @@ window._i18n.en = {
   'agents.status.online':          'Online',
   'agents.status.offline':         'Offline',
   'agents.marveen_process_tip':    'Running: the main assistant always runs in the --channels session. This card always shows Running -- no per-agent tmux check.',
-  'agents.marveen_channel_tip':    'Online: the main assistant channel is managed by the --channels session, so it is always online (no separate token check).',
+  'agents.marveen_channel_tip':    'Channel: the main assistant channel is managed by the --channels session, so it is always linked (no separate token check).',
   'agents.running_tip':            'Running: the agent has a live tmux session (Claude Code process running). Source: tmux list-sessions.',
   'agents.stopped_tip':            'Stopped: no live tmux session for this agent. Source: tmux list-sessions.',
-  'agents.online_tip':             'Online: a channel token is configured (own bot). Note: this is not a live connection check, only confirms the token exists.',
-  'agents.offline_tip':            'Offline: no channel configured (channel-less, inter-agent only).',
+  'agents.online_tip':             'Channel: a channel token is configured (own bot). Note: this is not a live connection check, only confirms the token exists, and says nothing about whether the agent is running.',
+  'agents.offline_tip':            'No channel configured (channel-less, inter-agent only). This does NOT mean the agent is down -- the Running/Stopped indicator beside it says that.',
   'agents.tmux_copy_aria':         'Copy tmux attach command',
   'agents.tmux_copied':            'copied',
   'agents.tmux_copy_failed':       'Copy failed',
@@ -1319,6 +1319,10 @@ window._i18n.en = {
   'agents.toast.auth_mode_saved':'Auth mode saved (restart required)',
 
   // --- Agent status/labels ---
+  // The card label names its own subject (card 4ce22556): the old Online/Offline
+  // pair appeared to speak about the AGENT while reporting channel-token presence.
+  'agents.channel.label_linked': 'Channel: linked',
+  'agents.channel.label_none':   'Channel: none',
   'agents.channel.connected':    'Connected',
   'agents.channel.disconnected': 'Not connected',
   'agents.strict_mode':          ' (strict)',
