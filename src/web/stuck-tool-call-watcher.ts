@@ -209,6 +209,20 @@ async function checkSession(label: string, session: string): Promise<void> {
     // week, each leaving a fresh residual footer that re-armed the loop). Clear
     // the stale spell so the residual stops re-triggering every poll. Fail-open:
     // a null pane (capture failed) does NOT block recovery.
+    // DO NOT SUBSTITUTE `mayActOnPane` HERE -- THIS IS THE ONE SITE WHERE IT IS
+    // WRONG, and it will look like one that was missed (card d3f92923). Five
+    // siblings now ask the shared "may I act on this pane" question; this line
+    // does a raw comparison right next to them, so the most likely person to
+    // break it is someone tidying up the inconsistency, believing they are
+    // fixing it.
+    //
+    // THE COST DIRECTION IS REVERSED HERE. Everywhere else a false IDLE means
+    // ACTING when you should not. Here `=== 'idle'` VETOES a recovery, so a
+    // "safer" predicate means RECOVERING when you should not. `mayActOnPane` is
+    // false on a usage-limit-paused pane -- and on such a pane the user CAN still
+    // interact (the input box is live, merely rate limited), so the user-facing
+    // freeze this watcher targets is absent and the respawn is the pure churn
+    // described above: ~150 spurious respawns/week.
     if (pane != null && detectPaneState(pane) === 'idle') {
       logger.info(
         { label, session, tag: next.tag, seconds: next.lastSeconds, spellPeakSeconds: next.spellPeakSeconds },

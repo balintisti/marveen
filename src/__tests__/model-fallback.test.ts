@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import {
-  detectsUsageLimit,
   nextFallbackModel,
   decideModelAction,
   normalizeModelFallbackConfig,
   DEFAULT_MODEL_CHAIN,
   DEFAULT_MODEL_FALLBACK,
 } from '../model-fallback.js'
+import { detectsUsageLimit } from '../pane-state.js'
 
 const CHAIN = [...DEFAULT_MODEL_CHAIN]
 const PRIMARY = CHAIN[0]
