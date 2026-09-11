@@ -27,7 +27,10 @@ paragraph above concludes that replays leave a trace. They do not.
     an unanchored `watchdog.sh` also matches inside `channel-watchdog.sh`):
         4 hits -- this docblock, two lines of watchdog.sh's OWN contract
         test, and a comment in src/web/worker-liveness.ts. ZERO call sites,
-        and this file has no test of its own.
+        and this file has no test of its own. (The anchored form also has to
+        survive TRUNCATION: a separate claim in the same round came out false
+        because a 32-line result went through `head -20` and the refutation
+        was on lines 27-30.)
     CONTROL, same meter on channel-watchdog.sh -> 18 files, so it is not blind.
     (didi added the axes a reference census cannot see, same day: no running
      process, no launchd plist under an ANCHORED match, no settings hook in any
