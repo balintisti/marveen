@@ -94,6 +94,29 @@ KIKOTESEK:
           ?field=sum(quantity)&groupBy=outcome&statsPeriod=24h&category=error&interval=1d
       (a mi `sentry_olvaso_token`-unkkel, vaultbol; merve 2026-09-11: HTTP 200)
 
+      **ELOSZOR A HTTP STATUSZT NEZD, ES CSAK UTANA A TORZSET -- KULONBEN EGY ELBUKOTT HIVAS
+      A HARMADIK ALLAPOTBA ESIK** (didi merte 2026-09-11, en ujramertem kontrollal):
+
+          HTTP != 200, vagy nincs valasz (halozat, egress-tiltas, lejart token)
+              -> **A MERO NEM VOLT ELERHETO.** Ird ezt ki, es ALLJ meg ezen a labon.
+                 NE olvasd a torzset, es NE vezess le belole allapotot.
+
+      **MIERT KELL EZ KULON SOR, pedig a KIKOTESEK elso pontja mar tiltja a tippelest:** az a
+      sor az MCP-ESZKOZRE szol, es azzal indokol, hogy a nem-elerheto eszkoz HIBAT ad, tehat
+      LATSZIK. **Ez a lab mas ut** -- HTTP a sentry.io-ra, vault-token, egress-allowlist --, es
+      ott a bukas NEM hiba, hanem egy ervenyes kinezetu valasz. Merve, mindket iranyban:
+
+          rossz token -> HTTP **401**, felso kulcsok `['detail']`
+                         `accepted` NINCS, `rate_limited` NINCS
+                         -> a lenti tabla szerint ez "mindketto 0", azaz
+                            **"nem erkezik semmi a kuldo oldalrol sem"** -- a MEGNYUGTATO irany
+          KONTROLL, valodi token -> HTTP 200, kulcsok `['end','groups','intervals','start']`,
+                         `rate_limited` JELEN -> a ket eset megkulonboztetheto, ha a statuszt nezed
+
+      *(KIMONDOTT KORLAT, didi szavaival, es nem simitom el: csak a 401 van MERVE. Hogy egy
+      halozati szakadas vagy egy egress-tiltas UGYANIGY nez-e ki, az NINCS megmerve -- ezert
+      szol a szabaly a STATUSZRA es a VALASZ HIANYARA, nem egy konkret hibakodra.)*
+
       `accepted` > 0  ...........  a csatorna EL, a nulla issue VALODI nyugalom
       `accepted` HIANYZIK vagy 0, es `rate_limited` > 0
                       ...........  **A CSATORNA BE VAN ZARVA: a Sentry ELDOBJA az esemenyeket.**
