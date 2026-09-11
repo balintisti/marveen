@@ -15,6 +15,9 @@ import {
   countNewHotMemories,
   countPlannedKanbanCards,
   getDbFileSizeMb,
+  KANBAN_UPDATABLE,
+  KANBAN_SERVER_FIELDS,
+  KANBAN_ELSEWHERE_FIELDS,
 } from '../../db.js'
 import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
 import { unknownQueryParams, unknownQueryParamError } from '../query-params.js'
@@ -509,6 +512,103 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
       return true
     }
 
+    // AZ ISMERETLEN TORZS-MEZO NEM MEHET AT NEMAN (kartya 5112c914, sajat meres 2026-08-24).
+    // Mert eset: `PUT {"labels":["varakozik:isti"]}` -> `{"ok":true}`, es a visszaolvasas
+    // `labels: []`. A mezo IRHATO, csak nem ezen az uton -- es a rossz ut nem mondott nemet.
+    // Ugyanaz az alak, mint a lenyelt query-parameter (cf85d765) es a csendben elfogadott
+    // letrehozas (b7b0f400).
+    //
+    // ES AMIERT NEM EGYSZERU "ismeretlen kulcs -> 400" (ez volt az elso alakom, es MERVE
+    // ELTORTE VOLNA A FELULETET): a dashboard KET inline szerkesztese a TELJES kartyat kuldi
+    // vissza -- `{ ...card, assignee: newVal }` es `{ ...card, parent_id: newParentId }`
+    // (`web/app.js`). A kartya-objektum pedig HAT nem-frissitheto mezot hordoz: `id`,
+    // `created_at`, `updated_at`, `seq`, `dispatched_at`, `labels`. Egy csupasz kulcs-tiltas
+    // MINDEN inline szerkesztesre 400-at adna -- egy or, ami a HELYES allapotra tuzel, es
+    // ezt a fajl mar kimondja par sorral lejjebb.
+    //
+    // A MEGKULONBOZTETO EZERT A SZANDEK, NEM A KULCS, es ugyanaz a logika, mint az
+    // `overwritten`-e: nem az szamit, hogy a mezo OTT VAN, hanem hogy a hivo MAST kuldott,
+    // mint ami tarolva van. Egy visszhangzott `{...card}` nem allit semmit; egy MEGVALTOZTATOTT
+    // ertek igen -- es akkor a hivo azt hiszi, irt valamit.
+    const roCard = getKanbanCard(id)
+    if (roCard) {
+      // AZ `actor` NEM KARTYA-MEZO, HANEM VEZERLO MEZO, es ez a sor a KET AG SEAM-JE
+      // (kartya 5112c914 x 4e27d5ad). Ez az or azelott keszult, hogy a PUT torzse
+      // egyaltalan fogadott volna `actor`-t; kulon-kulon mindket ag ZOLD volt, es EGYUTT
+      // PIROS: a `{"actor":"..."}` ismeretlen kulcsnak minosult es 400-at kapott, tehat a
+      // mezo-tortenet "ki" fele nemán elveszett volna. A `merge-tree` errol semmit nem
+      // mondott -- a ket valtozas a fajl KET KULONBOZO regiojaban all.
+      // MERVE a seam-en: a `kanban-field-history.test.ts` ket esete 400-at kapott 200 helyett.
+      const PUT_CONTROL_FIELDS = ['actor'] as const
+      const sentKeys = Object.keys(data).filter(
+        (k) => !(KANBAN_UPDATABLE as readonly string[]).includes(k)
+             && !(PUT_CONTROL_FIELDS as readonly string[]).includes(k),
+      )
+      const unknownKeys = sentKeys.filter(
+        (k) => !(KANBAN_SERVER_FIELDS as readonly string[]).includes(k)
+             && !(KANBAN_ELSEWHERE_FIELDS as readonly string[]).includes(k),
+      )
+      // 1. A KARTYAN NEM IS LETEZO KULCS: eliras vagy kitalalt mezo. Ilyet egyetlen mert hivo
+      //    sem kuld (a dashboard a kartya sajat alakjat kuldi vissza), tehat a 400 nem tor el
+      //    semmit -- viszont megnevezi, mi nem tortent meg.
+      if (unknownKeys.length > 0) {
+        json(res, {
+          error: `Ismeretlen mezo(k): ${unknownKeys.join(', ')}. Ezeket a vegpont NEM tarolja el. `
+            + `Frissitheto mezok: ${KANBAN_UPDATABLE.join(', ')}.`,
+        }, 400)
+        return true
+      }
+      // 2. MASHOL IRHATO MEZO, MEGVALTOZTATOTT ERTEKKEL -> 400, a helyes vegpont nevevel.
+      //    A kulcs jelenlete ONMAGABAN nem eleg: ugyanaz a kulcs ott van a legitim `{...card}`
+      //    visszhangban is, valtozatlan ertekkel -- arra hallgatunk, mint eddig.
+      // ES A SZERVER-TULAJDONU MEZOKRE EZ NEM ALL, ezert kulon halmaz:
+      // ha a beküldött `updated_at` vagy `seq` eltér a tarolttol, az ELAVULT OLVASAS -- verseny,
+      // nem szandek. A felulet a lista-nezetbol kuldi vissza a kartyat; ha kozben mas irt ra, a
+      // visszhang elavul. Ezeket 400-zal elutasitani pontosan a FELTETELES IRAST valositana meg,
+      // amit ez a vegpont par sorral feljebb KIMONDOTTAN nem tamogat -- es a felulet inline
+      // szerkesztese torne el egy jóhiszemű versenyen.
+      // A `labels` MAS: ott van hova irni, tehat a valtozott ertek SZANDEK.
+      const stored: Record<string, unknown> = { labels: getLabelsForAllCards().get(id) ?? [] }
+      const ignored = (KANBAN_ELSEWHERE_FIELDS as readonly string[])
+        .filter((k) => k in data && JSON.stringify(data[k]) !== JSON.stringify(stored[k]))
+      if (ignored.length > 0) {
+        const hint = ignored.includes('labels')
+          ? ' A cimkekhez a dedikalt vegpont valo: POST /api/kanban/<id>/labels {"labelId":"..."}.'
+          : ''
+        logger.warn({ id, ignored }, 'Kanban PUT received non-updatable fields with changed values')
+        json(res, {
+          error: `Ezeket a mezoket ez a vegpont NEM irja: ${ignored.join(', ')} -- a keres NEM `
+            + `tortent meg, hogy ne hidd, hogy eltarolodott.${hint}`,
+        }, 400)
+        return true
+      }
+    }
+
+    // ARCHIVALT KARTYA SZERKESZTESE: ENGEDJUK, DE NEM HALLGATUNK ROLA (kartya 66454b7d,
+    // mert eset 2026-08-22 06:50, `4a9480b2`).
+    //
+    // AZ ESET: 03:21-kor valaki archivalta a kartyat, 03:59-kor MAS atirta rajta a cimet, a
+    // felelost es a prioritast. Az atiras a PUT-on ment, es nem erintette az `archived_at`-et.
+    // A kartya ezzel egyszerre volt `archived_at != NULL` ES `status = planned`; a
+    // `listKanbanCards()` `archived_at IS NULL`-ra szur, tehat AZ UJ FELELOS SOHA NEM LATTA
+    // VOLNA. Mindket muvelet sikert jelentett, es a res A KETTO KOZOTT keletkezett.
+    //
+    // MIERT NEM TILTAS (a kartya harom iranya kozul): egy archivalt kartya javitasa legitim
+    // (elgepelt cim, rossz projekt-cimke), es a 400 azt is elzarna. Es MIERT NEM AUTOMATIKUS
+    // FELOLDAS: az csendben visszahozna kartyakat, amiket valaki SZANDEKOSAN archivalt --
+    // ugyanaz a nema dontes-helyettesites, csak a masik iranyba. Marad a harmadik: a muvelet
+    // megtortenik, es a valasz KIMONDJA, hogy a kartya lathatatlan marad.
+    //
+    // A SZANDEK-SZURES UGYANAZ, MINT PAR SORRAL FELJEBB: ha a hivo MAGA kuldi az
+    // `archived_at`-et, akkor eppen az archivalasi allapotot kezeli -- annak nem szolunk.
+    // A figyelmeztetes annak jar, aki EGYEB mezot ir egy archivalt kartyan, es nem tud rola.
+    const archivedBefore = roCard && (roCard as { archived_at?: number | null }).archived_at != null
+    const archiveWarning = archivedBefore && !('archived_at' in data)
+      ? `FIGYELEM: ez a kartya ARCHIVALT (archived_at nem ures), es az marad -- a `
+        + `lista-nezetben NEM jelenik meg, tehat a felelos nem fogja latni. Ha elo kartyat `
+        + `akartal szerkeszteni, oldd fel: POST /api/kanban/${encodeURIComponent(id)}/unarchive.`
+      : null
+
     // AZ `actor` A TORZSBOL JON, ES OPCIONALIS -- card 4e27d5ad, ugyanaz az alak,
     // mint a `/move`-nal. Kotelezove tenni azt jelentene, hogy a mai hivok
     // (a dashboard harom PUT helye es minden agens-lap dokumentalt peldaja)
@@ -527,7 +627,10 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // emelkedik, es a valasz KIMONDJA, hogy nem tortent semmi -- kulonben a kartya
     // frissnek latszana anelkul, hogy barmi valtozott volna. Felulirni ilyenkor
     // nincs mit, tehat `overwritten` szuksegszeruen ures.
-    if (result.outcome === 'unchanged') { json(res, { ok: true, changed: false }); return true }
+    if (result.outcome === 'unchanged') {
+      json(res, { ok: true, changed: false, ...(archiveWarning ? { archived: true, warning: archiveWarning } : {}) })
+      return true
+    }
 
     // The overwrite travels in the response because that is where the caller
     // already looks; a log nobody reads is the same silence in another file.
@@ -539,13 +642,17 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
         ok: true,
         changed: true,
         overwritten: result.overwritten,
+        // KET FIGYELMEZTETES EGY VALASZBAN: a felulirast es az archivaltsagot NEM olvasztjuk
+        // ossze egy mondatba -- ket kulonbozo dolgot kell tenni tolük, es egy osszevont szoveg
+        // az egyiket elnyeli.
         warning: `Ez az iras MAS erteket irt felul: ${list}. Ha nem te irtad oda, nezd meg, `
           + 'kinek a munkajat cserelted le -- a visszaolvasas ezt NEM mutatja meg, mert a '
           + 'sajat szovegedet adja vissza.',
+        ...(archiveWarning ? { archived: true, archivedWarning: archiveWarning } : {}),
       })
       return true
     }
-    json(res, { ok: true, changed: true })
+    json(res, { ok: true, changed: true, ...(archiveWarning ? { archived: true, warning: archiveWarning } : {}) })
     return true
   }
 
