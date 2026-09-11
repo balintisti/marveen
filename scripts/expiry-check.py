@@ -56,6 +56,23 @@ one. That is this file's opening sentence, one level in, and it landed on the fi
 
     NOT_IN_INVENTORY   a file sits in a declared credential location and no item claims it
 
+WHERE THE TRACE GOES, AND THE OBLIGATION THAT COMES WITH IT (marveen's ruling, 2026-09-11).
+There is no "standing card" and there should not be: EVERY CARD CLOSES. A stream that outlives
+every possible host does not have a card-shaped home. So the two halves live apart --
+
+    the FULL history .. the state file behind --quiet-unless-changed. Permanent by
+                        construction, needs no column and no owner.
+    the CARD .......... where a CHANGE goes to be SEEN. Not the stream, the event.
+
+--card therefore points at the card that owns whatever the change is ABOUT, and falls back to
+the watcher's own card when there is no better owner.
+
+WHEN THAT CARD CLOSES, ITS CLOSING COMMENT MUST NAME THE SUCCESSOR, and --card must be
+repointed. Without it the traces keep posting to a closed card SUCCESSFULLY -- HTTP 200, read
+back, byte-perfect -- and nobody reads them. That is this tool's own defect in a different hat,
+and it is written in the --card HELP TEXT as well as here, because the person who closes the
+target card is not the person who read the message where this was decided.
+
 The inventory's `scan` section names locations where a file's EXISTENCE is by itself enough
 to make it a fleet credential; every item may declare `covers` for the paths it accounts
 for. Anything seen and unclaimed is reported. Measured when this was written: the inventory's
@@ -495,7 +512,11 @@ def main(argv=None):
     ap.add_argument("--card", metavar="ID", default=None,
                     help="on a CHANGE, append the changed items as a comment to this kanban "
                          "card. Requires --quiet-unless-changed (the change detection lives "
-                         "there). Silent when nothing changed -- that is the point.")
+                         "there). Silent when nothing changed -- that is the point. "
+                         "WHEN THIS CARD IS CLOSED, ITS CLOSING COMMENT MUST NAME THE "
+                         "SUCCESSOR and this flag must be repointed: traces keep posting to a "
+                         "closed card SUCCESSFULLY, with a 200, and nobody reads them -- which "
+                         "is this tool's own defect wearing a different hat.")
     ap.add_argument("--scheduler-exit", action="store_true",
                     help="map the ladder onto a SCHEDULER's failure semantics: 0 when the "
                          "check RAN and produced a valid report (0/3/4/5), 1 only when the "

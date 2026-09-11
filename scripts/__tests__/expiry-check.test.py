@@ -165,6 +165,22 @@ class CardTrace(unittest.TestCase):
         self.assertFalse(os.path.exists(log), "without change detection it must not write")
         self.assertIn("ATUGORVA", out)
 
+    def test_the_help_text_carries_the_successor_obligation(self):
+        """marveen's ruling: there is no standing card, because EVERY CARD CLOSES. The trace
+        therefore has a target that will one day be closed, and the obligation that keeps this
+        from going quiet -- name the successor in the closing comment -- has to live where the
+        person who closes it will be, not in the message where it was decided.
+
+        Pinned because prose in a help string is exactly the kind of thing a later edit drops
+        without anything turning red."""
+        p = subprocess.run([sys.executable, SCRIPT, "--help"], capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0)
+        flat = " ".join(p.stdout.split())          # argparse rewraps; match on the flat text
+        self.assertIn("MUST NAME THE SUCCESSOR", flat)
+        self.assertIn("repointed", flat)
+        # and WHY, not only what: a closed card accepts the post and returns success
+        self.assertIn("SUCCESSFULLY", flat)
+
     def test_no_card_flag_means_no_helper_call_at_all(self):
         helper, log = fake_helper(self.d)
         run([self.item], as_json=False, env={"EXPIRY_CARD_HELPER": helper},
