@@ -66,10 +66,10 @@ class LandedCheck(unittest.TestCase):
         git(self.repo, "commit", "-q", "-m", subject)
         return git(self.repo, "rev-parse", "HEAD").stdout.strip()
 
-    def card(self, cid, body, title="proba"):
+    def card(self, cid, body, title="proba", project="marveen"):
         c = sqlite3.connect(self.db)
         c.execute("insert into kanban_cards values (?,?,?,?,?)",
-                  (cid, title, body, "done", "marveen"))
+                  (cid, title, body, "done", project))
         c.commit()
         c.close()
 
@@ -268,6 +268,69 @@ class LandedCheck(unittest.TestCase):
         rc, out = self.run_tool()
         self.assertEqual(out["counts"]["LANDED"], 1)
         self.assertEqual(out["strict_disagreement"], 0, out)
+
+    # --- A MERO EGY REPOT MER, es ez eddig sehol nem allt a kimenetben ----------------
+    #
+    # Egy MASIK repo kartyaja itt `NAMES_NO_KNOWN_COMMIT`-ba esik, ami LELET-ALAKU, pedig a
+    # helyes olvasata "NEM MERHETO ITT". Elesben merve 2026-09-11: 1242 `done` kartyabol 685
+    # delta-crm, abbol 633 ebbe a rekeszbe (92%), mikozben a marveen szeleten 25/345 (7%).
+    # A szerszam semmit nem tud a repo-terkeprol -- az ARANY a diszkriminator.
+
+    def test_a_single_project_run_prints_no_breakdown_and_the_counts_do_not_move(self):
+        # A TEHERHORDO FELE: egy uj oszlop, ami elmozditja a meglevo szamokat, nem oszlop
+        # hanem valtozas. Ez a par ugyanaz az alak, mint a szigoru oszlopnal.
+        sha = self.commit("landolt")
+        self.card("aaaaaaaa", f"kesz: {sha}")
+        rc, d = self.run_tool()
+        self.assertEqual(rc, 0)
+        self.assertEqual(d["counts"]["LANDED"], 1)
+        self.assertEqual(d["unresolved_by_project"], {})
+
+    def test_two_projects_are_broken_out_with_their_rates(self):
+        landed = self.commit("landolt")
+        self.card("aaaaaaaa", f"kesz: {landed}", project="marveen")
+        # Egy IDEGEN repo commitja: szintaktikailag hash, itt nem letezik.
+        self.card("bbbbbbbb", "kesz: 5f2e91c4a7d3b608e1f4", project="delta-crm")
+        self.card("cccccccc", "kesz: 9a1b3c5d7e9f2468ace0", project="delta-crm")
+        rc, d = self.run_tool("--project", "")
+        # rc=0, es ezt ELROSSZUL TIPPELTEM eloszor (3-at vartam): a ket idegen hash
+        # `NAMES_NO_KNOWN_COMMIT`, nem JELOLT, tehat nincs mire 3-at adni. A teszt fogta meg,
+        # nem a szerszamot igazitottam hozza.
+        self.assertEqual(rc, 0)
+        ubp = d["unresolved_by_project"]
+        self.assertEqual(ubp["delta-crm"], {"cards": 2, "unresolved": 2, "rate": 1.0})
+        # ES A KONTROLL A MASIK IRANYBA: a marveen szelet NEM jelenik meg, mert ott nulla
+        # feloldatlan van. Enelkul a fenti sor egy olyan bontasrol is allna, ami MINDENT
+        # bejegyez, ratol fuggetlenul.
+        self.assertNotIn("marveen", ubp)
+
+    def test_the_breakdown_line_stays_off_on_a_single_project_run(self):
+        # A PAYLOAD ES A NYOMTATOTT SOR KET KULON KAPU, es a JSON-allitasok a masikat nem
+        # erintik: a bontas MINDIG felepul, csak a SOR feltételes. Enelkul a nyomtatasi
+        # feltetelt semmi nem pinelné, es egy minden korben megjeleno sor par kor utan zaj.
+        self.commit("elso")
+        self.card("ffffffff", "kesz: 5f2e91c4a7d3b608e1f4", project="marveen")
+        p = subprocess.run([sys.executable, SCRIPT, "--db", self.db, "--repo", self.repo,
+                            "--trunk", "trunk"], capture_output=True, text=True, timeout=120)
+        self.assertNotIn("FELOLDATLAN HASH", p.stdout)
+        # KONTROLL, ugyanabban a tesztben: egy MASODIK projekttel a sor MEGJELENIK, tehat a
+        # fenti hiany a feltetelrol szol es nem arrol, hogy a sort sosem nyomtatjuk ki.
+        self.card("11111111", "kesz: 9a1b3c5d7e9f2468ace0", project="delta-crm")
+        p2 = subprocess.run([sys.executable, SCRIPT, "--db", self.db, "--repo", self.repo,
+                             "--trunk", "trunk", "--project", ""],
+                            capture_output=True, text=True, timeout=120)
+        self.assertIn("FELOLDATLAN HASH", p2.stdout)
+
+    def test_the_verdict_and_the_exit_code_do_not_follow_the_breakdown(self):
+        # Ugyanaz a ket kartya, ugyanaz a verdikt-rekesz, ket KULONBOZO projektben. Ha az uj
+        # oszlop barhogy visszahatna a besorolasra, ez a ket szam eltavolodna.
+        self.card("dddddddd", "kesz: 5f2e91c4a7d3b608e1f4", project="marveen")
+        self.card("eeeeeeee", "kesz: 5f2e91c4a7d3b608e1f4", project="delta-crm")
+        self.commit("elso")
+        rc, d = self.run_tool("--project", "")
+        self.assertEqual(d["counts"]["NAMES_NO_KNOWN_COMMIT"], 2)
+        self.assertEqual(d["counts"]["CANDIDATE"], 0)
+        self.assertEqual(rc, 0)
 
     def test_a_candidate_is_not_a_disagreement(self):
         """KONTROLL a MASIK iranyba: ahol EGYIK sem landolt, a ket szabaly szinten EGYETERT."""
