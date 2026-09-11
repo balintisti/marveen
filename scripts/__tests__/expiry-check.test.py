@@ -38,7 +38,7 @@ def emit_raw(text, rc=0):
     return ["python3", "-c", f"import sys;sys.stdout.write({text!r});sys.exit({rc})"]
 
 
-def run(items, threshold=14, now=NOW, as_json=True, env=None):
+def run(items, threshold=14, now=NOW, as_json=True, env=None, extra=None):
     inv = {"threshold_days": threshold, "items": items}
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
         json.dump(inv, fh)
@@ -47,6 +47,7 @@ def run(items, threshold=14, now=NOW, as_json=True, env=None):
         cmd = [sys.executable, SCRIPT, "--inventory", path, "--now", now]
         if as_json:
             cmd.append("--json")
+        cmd.extend(extra or [])
         e = dict(os.environ, **(env or {}))
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=e)
         return p.returncode, p.stdout, p.stderr
@@ -180,6 +181,91 @@ class ExpiryCheck(unittest.TestCase):
         rc, out, _ = run([item("gh", probe)])
         self.assertEqual(rc, 3, "a date inside the window must be due even though it came from a header")
         self.assertEqual(json.loads(out)["items"][0]["state"], "DUE")
+
+    # --- --quiet-unless-changed: suppression that cannot go silent ---------
+    #
+    # This is the most dangerous code in the script, because its failure mode is
+    # silence -- a broken suppressor produces no output to be suspicious of. Every
+    # path to silence is pinned, and so is every path that must REFUSE to be silent.
+
+    DUE_ITEM = staticmethod(lambda: item("old", json_probe_at("2026-01-01T00:00:00Z")))
+
+    def _state_path(self):
+        d = tempfile.mkdtemp()
+        return os.path.join(d, "nested", "state.json")   # nested: dir must be created
+
+    def test_first_run_reports_and_records(self):
+        """With no previous state there is nothing to compare, so it must report."""
+        sp = self._state_path()
+        rc, out, _ = run([self.DUE_ITEM()], as_json=False, extra=["--quiet-unless-changed", sp])
+        self.assertEqual(rc, 3, "a first run must never be silent")
+        self.assertIn("nincs korabbi allapot", out)
+        self.assertTrue(os.path.exists(sp), "the snapshot must be written")
+        with open(sp, encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["states"], {"old": "DUE"})
+
+    def test_second_identical_run_is_silent_but_says_so(self):
+        sp = self._state_path()
+        run([self.DUE_ITEM()], as_json=False, extra=["--quiet-unless-changed", sp])
+        rc, out, _ = run([self.DUE_ITEM()], as_json=False, extra=["--quiet-unless-changed", sp])
+        self.assertEqual(rc, 0, "an unchanged state must not re-fire")
+        self.assertIn("ELNEMITVA", out)
+        self.assertIn("A kilepesi kod 3 helyett 0", out,
+                      "the withheld verdict must be named, not just hidden")
+        self.assertIn("LEJART", out, "the table itself must still be printed")
+
+    def test_changed_state_reports_again(self):
+        sp = self._state_path()
+        run([self.DUE_ITEM()], as_json=False, extra=["--quiet-unless-changed", sp])
+        rc, out, _ = run([self.DUE_ITEM(), item("new", {"kind": "not_queryable", "why": "x"})],
+                         as_json=False, extra=["--quiet-unless-changed", sp])
+        self.assertEqual(rc, 3)
+        self.assertIn("valtozott az allapot", out)
+
+    def test_silence_has_a_ceiling(self):
+        """Identical state, but the last report is older than the ceiling: report."""
+        sp = self._state_path()
+        run([self.DUE_ITEM()], as_json=False, now="2026-09-01T00:00:00Z",
+            extra=["--quiet-unless-changed", sp])
+        # 6 days later: still silent. 8 days later: forced out of silence.
+        rc6, out6, _ = run([self.DUE_ITEM()], as_json=False, now="2026-09-07T00:00:00Z",
+                           extra=["--quiet-unless-changed", sp])
+        self.assertEqual(rc6, 0, "inside the ceiling it may stay silent")
+        self.assertIn("ELNEMITVA", out6)
+        # re-seed the old timestamp, since the run above refreshed it
+        with open(sp, "w", encoding="utf-8") as fh:
+            json.dump({"checked_at": "2026-09-01T00:00:00+00:00", "states": {"old": "DUE"}}, fh)
+        rc8, out8, _ = run([self.DUE_ITEM()], as_json=False, now="2026-09-09T00:00:00Z",
+                           extra=["--quiet-unless-changed", sp])
+        self.assertEqual(rc8, 3, "past the ceiling the report is forced")
+        self.assertIn("napos", out8)
+
+    def test_corrupt_or_unreadable_state_reports(self):
+        for content in ("{not json", '{"states": "not a dict"}', '{"states": {"old": "DUE"}}'):
+            with self.subTest(content=content[:20]):
+                sp = self._state_path()
+                os.makedirs(os.path.dirname(sp), exist_ok=True)
+                with open(sp, "w", encoding="utf-8") as fh:
+                    fh.write(content)
+                rc, out, _ = run([self.DUE_ITEM()], as_json=False,
+                                 extra=["--quiet-unless-changed", sp])
+                self.assertEqual(rc, 3, f"a state file it cannot trust must not buy silence: {content[:20]}")
+                self.assertNotIn("ELNEMITVA", out)
+
+    def test_unwritable_state_reports(self):
+        """If it cannot remember this run, it must not be silent about this one
+        either -- otherwise the next run compares against a stale snapshot."""
+        sp = os.path.join(tempfile.mkdtemp(), "state.json")
+        os.makedirs(sp)  # a DIRECTORY where the file should go: open() for write fails
+        rc, out, _ = run([self.DUE_ITEM()], as_json=False, extra=["--quiet-unless-changed", sp])
+        self.assertEqual(rc, 3)
+        self.assertIn("nem mentheto", out)
+
+    def test_suppression_is_opt_in(self):
+        """Without the flag nothing is ever suppressed, whatever files exist."""
+        rc, out, _ = run([self.DUE_ITEM()], as_json=False)
+        self.assertEqual(rc, 3)
+        self.assertNotIn("ELNEMITVA", out)
 
     # --- gcloud_sa_key: the key IN USE, not the first one listed -----------
 

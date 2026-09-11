@@ -34,6 +34,21 @@ look" is worse than no checker, because it converts a gap into a reassurance. Th
 summary prints the unmeasured count unconditionally, and the exit code is non-zero
 whenever it is not zero.
 
+WHY --quiet-unless-changed EXISTS, AND WHY THE SILENCE HAS A CEILING. Run daily,
+this checker would report the same expired TACIT session and the same two
+unmeasurable items every morning forever. This repo has measured what happens to a
+guard that always fires: it becomes wallpaper, and a permanently-firing guard is
+indistinguishable in practice from a disabled one. So the scheduled path reports on
+CHANGE. The obvious danger is the mirror image -- a state file that silently
+suppresses a real expiry -- so the silence cannot last: past max_silence_days the
+report is forced regardless, a missing or unreadable state file reports, and every
+suppressed run still PRINTS the full table and says out loud that it is suppressing
+and until when. Silence here is always visible and always bounded.
+
+An item that stays DUE for weeks is not a notification problem, it is an unactioned
+one, and this repo's own rule sends that to a card -- which does not queue and is not
+re-read every turn -- not to a daily ping.
+
 EXIT CODES (the worst state wins; everything is still printed):
     0  every item answered, nothing inside the threshold
     3  at least one DUE (expired, or expiring within threshold_days)
@@ -56,6 +71,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_INVENTORY = os.path.join(HERE, "expiry-inventory.json")
 PROBE_TIMEOUT = 30  # seconds; `timeout(1)` does not exist on this machine
+MAX_SILENCE_DAYS = 7  # --quiet-unless-changed can never hold its tongue longer
 
 DUE, OK, NO_EXPIRY, UNKNOWN, FAILED = "DUE", "OK", "NO_EXPIRY", "UNKNOWN", "FAILED"
 NEEDS_ATTENTION = (UNKNOWN, FAILED)
@@ -211,6 +227,50 @@ def evaluate(item, now, threshold_days):
     return OK, when, ""
 
 
+def _suppression(args, rows, now):
+    """-> (suppress: bool, why: str). Writes the new snapshot as a side effect.
+
+    Reports (suppress=False) on every uncertainty: no state file, unreadable state
+    file, unparseable timestamp, or an age past the ceiling. The only path to
+    silence is a successfully read, recent snapshot whose per-item states match.
+    """
+    path = getattr(args, "quiet_unless_changed", None)
+    if not path:
+        return False, ""
+    current = {r["id"]: r["state"] for r in rows}
+    snapshot = {"checked_at": now.isoformat(), "states": current}
+
+    previous, prev_when, reason = None, None, ""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            old = json.load(fh)
+        previous = old.get("states")
+        prev_when = _parse_iso(old.get("checked_at"))
+    except OSError:
+        reason = "nincs korabbi allapot"
+    except ValueError:
+        reason = "a korabbi allapot olvashatatlan"
+
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(snapshot, fh, indent=2, ensure_ascii=False)
+    except OSError as e:
+        # Cannot remember -> must not stay silent, or the next run forgets too.
+        return False, f"az allapot nem mentheto ({type(e).__name__})"
+
+    if not isinstance(previous, dict):
+        return False, reason or "nincs korabbi allapot"
+    if prev_when is None:
+        return False, "a korabbi idobelyeg ertelmezhetetlen"
+    age_days = (now - prev_when).days
+    if age_days >= args.max_silence_days:
+        return False, f"a korabbi jelentes {age_days} napos"
+    if previous != current:
+        return False, "valtozott az allapot"
+    return True, f"valtozatlan a(z) {prev_when.isoformat(timespec='seconds')} ota"
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Report credential expiry from the inventory.")
     ap.add_argument("--inventory", default=DEFAULT_INVENTORY)
@@ -219,6 +279,13 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("--now", default=None,
                     help="ISO-8601 instant to evaluate against (testing only)")
+    ap.add_argument("--quiet-unless-changed", metavar="STATEFILE", default=None,
+                    help="for scheduled runs: exit 0 when the per-item states are "
+                         "identical to the previous run recorded in STATEFILE. The "
+                         "table is still printed and the suppression is announced. "
+                         f"Forced to report after {MAX_SILENCE_DAYS} days regardless.")
+    ap.add_argument("--max-silence-days", type=int, default=MAX_SILENCE_DAYS,
+                    help="ceiling on how long --quiet-unless-changed may stay silent")
     args = ap.parse_args(argv)
 
     try:
@@ -293,6 +360,8 @@ def main(argv=None):
                 print(f"                ujitja: {r['renewed_by']} -- {r['renew']}")
         print()
 
+    suppress, why = _suppression(args, rows, now)
+
     fine = len(rows) - len(due) - len(unmeasured)
     # The unmeasured count is printed unconditionally and on its own clause: a
     # summary that can read as "all clear" while anything is unmeasured is the
@@ -302,6 +371,17 @@ def main(argv=None):
     if unmeasured:
         print(f"           A {len(unmeasured)} nem merheto tetel NEM 'rendben' -- "
               f"rola semmit nem tudunk. Ez a b91eb75f kartya harmadik resze.")
+    if args.quiet_unless_changed:
+        # BOTH directions are announced. Suppression must never be invisible -- but
+        # neither must a REFUSAL to suppress: a checker that reports every single day
+        # because it cannot write its state file looks exactly like one whose state
+        # legitimately changes every day. Printing the reason is what separates them.
+        if suppress:
+            print(f"ELNEMITVA (--quiet-unless-changed): {why}. "
+                  f"A kilepesi kod {rc} helyett 0. Kenyszeritett jelentes "
+                  f"legkesobb {args.max_silence_days} nap utan.")
+            return 0
+        print(f"JELENTEK (--quiet-unless-changed): {why}.")
     return rc
 
 

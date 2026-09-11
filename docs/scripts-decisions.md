@@ -143,6 +143,7 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - WHY FIVE OUTCOMES AND NOT TWO. The failure this card documents is not "a date passed
 - WHY A FAILED PROBE IS NOT 'NO EXPIRY'. A command that errors, returns non-JSON, or
 - WHY THE SUMMARY CANNOT SAY 'ALL CLEAR' WHILE ANYTHING IS UNMEASURED. A checker whose
+- WHY --quiet-unless-changed EXISTS, AND WHY THE SILENCE HAS A CEILING. Run daily,
 
 ### `scripts/git-at.sh`
 
