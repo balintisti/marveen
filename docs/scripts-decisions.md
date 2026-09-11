@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **224** kovetett fajl, ebbol
-**66** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **233** kovetett fajl, ebbol
+**70** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (2)
 
@@ -39,6 +39,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/__tests__/idle-reporter.test.py`
 
 - MIERT PYTHON-TESZT ES NEM VITEST: a szkript szandekosan ONALLO -- semmit nem
+
+### `scripts/__tests__/install-hooks-cwd-independence.test.sh`
+
+- WHY THIS TEST IS CLASS-LEVEL AND NOT THREE PER-INSTALLER CASES: each of those
 
 ### `scripts/__tests__/install-no-force-push-hook.test.sh`
 
@@ -92,6 +96,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - WHY a separate timer when the dashboard already has an in-process watchdog:
 
+### `scripts/ci-env-parity.py`
+
+- WHY A TOOL AND NOT A CHECKLIST LINE. The rule "copy the whole job, not just the
+
 ### `scripts/ci-watch.sh`
 
 - MIERT LETEZIK: 2026-08-20-an a main CI-je elpirosodott, egy telepites emiatt kimaradt,
@@ -128,6 +136,14 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/ensure-managed-channels-enabled.sh`
 
 - WHY: claude-code >= 2.1.205 SILENTLY drops channel-plugin INBOUND
+
+### `scripts/expiry-check.py`
+
+- WHY THIS EXISTS AT ALL. friday's SOUL.md has carried this as a STANDING duty since
+- WHY FIVE OUTCOMES AND NOT TWO. The failure this card documents is not "a date passed
+- WHY A FAILED PROBE IS NOT 'NO EXPIRY'. A command that errors, returns non-JSON, or
+- WHY THE SUMMARY CANNOT SAY 'ALL CLEAR' WHILE ANYTHING IS UNMEASURED. A checker whose
+- WHY --quiet-unless-changed EXISTS, AND WHY THE SILENCE HAS A CEILING. Run daily,
 
 ### `scripts/git-at.sh`
 
@@ -173,6 +189,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/idle-reporter.py`
 
 - A KARTYA (ee4163be), es MIERT NEM ELEG A MEGLEVO TETLEN-OR. Egy agens fordulot
+
+### `scripts/install-backup-gate-hook.sh`
+
+- WHY THIS EXISTS -- the rule was already written, and measured not to work.
 
 ### `scripts/install-launchd-unit.sh`
 
