@@ -367,7 +367,11 @@ async function runBusyWakeup(now: number, pendingCount: number, oldest: { id: nu
     // here: the pane IS busy, and queueing one line for the next turn boundary
     // is precisely the job. What made the old router path wrong was doing this
     // again every 45s; decideBusyWakeup is the brake that was missing.
-    const result = await sendPromptToSession(MAIN_CHANNELS_SESSION, BUSY_WAKEUP_TEXT, null, { waitForIdle: false })
+    const result = await sendPromptToSession(MAIN_CHANNELS_SESSION, BUSY_WAKEUP_TEXT, null, {
+      waitForIdle: false,
+      survival: 'redelivered',
+      survivalReason: 'per-tick wakeup; a non-sent result restores state = prev below and the next tick retries',
+    })
     if (result !== 'sent') {
       state = prev
       logger.info({ inboxWakeupSkipped: result, pending: pendingCount }, 'inbox wakeup: nothing typed; will retry')
@@ -466,6 +470,8 @@ async function tick(): Promise<void> {
       result = await sendPromptToSession(MAIN_CHANNELS_SESSION, nudgeText(resolveLang()), null, {
         onBusyTimeout: 'abort',
         idleTimeoutMs: 2_000,
+        survival: 'redelivered',
+        survivalReason: 'per-tick nudge; an abort restores state = prev so the next tick re-derives and re-sends',
       })
     } catch (err) {
       // A tmux throw means NOTHING was typed -- same as aborted-busy. Restore

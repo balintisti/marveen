@@ -37,6 +37,7 @@ import { reapChannelOrphans, reapDetachedChannelClaudes, collectPollerEvidence }
 import { probeTelegramConflict } from './channel-conflict-probe.js'
 import { schedulePluginUnlockAfterRespawn, wasPluginConfirmedAbsent, clearPluginAbsent } from './channel-plugin-unlock.js'
 import { getInjectedPrompt, matchesInjectedPrompt } from './injected-prompt-registry.js'
+import { paneSourceSurvivesDrop, getPaneSource } from './pane-source-survival.js'
 import {
   detectPaneState, decidePaneErrorAlert, detectsBlockingMenu, detectsFirstRunGate, detectsModelConsentDialog, detectsPermissionPrompt, type PaneErrorAlertState, type PaneState,
   stuckInputSignature, decideStuckInputRecovery, parkedChannelInput,
@@ -352,6 +353,10 @@ export async function recoverStuckInputForSession(
       hasPlainText: allowPlainReinject && parkedInputText(pane) != null,
       scheduledTaskBlock: parkedScheduledTaskInput(pane),
       machineOrigin: parkedMachineOriginInput(pane),
+      // c4b99fa7: what the PRODUCER of our last injection into this pane declared about
+      // its source. False when nothing is on record (fresh process / never written to),
+      // which is the fail-safe direction.
+      sourceSurvives: paneSourceSurvivesDrop(session),
       recordedMatch,
     }
     const action = decideStuckInputAction(facts)
@@ -393,7 +398,11 @@ async function performStuckInputAction(
         // evaporates (two different keys never contend).
         const res = await withSessionSendLock(session, null, 'recover', async () => {
           await clearInputBuffer(session)
-          await sendPromptToSession(session, block!.block!, null, { lockMode: 'held' })
+          await sendPromptToSession(session, block!.block!, null, {
+            lockMode: 'held',
+            survival: 'lost',
+            survivalReason: 'clears the box before re-injecting, so it destroys its own source; it survives only via the injected-prompt registry, which is the mechanism that READS this declaration -- so the honest unconditional value is lost',
+          })
         })
         if (!res.ran) {
           logger.info({ session, attempt }, 'Stuck-input recovery (reinject-block) skipped: a delivery is in flight into this pane (fail-closed)')
@@ -408,7 +417,11 @@ async function performStuckInputAction(
           logger.warn({ session, attempt }, 'Stuck input (non-channel) -- clear + re-inject parked text')
           const res = await withSessionSendLock(session, null, 'recover', async () => {
             await clearInputBuffer(session)
-            await sendPromptToSession(session, text, null, { lockMode: 'held' })
+            await sendPromptToSession(session, text, null, {
+              lockMode: 'held',
+              survival: 'lost',
+              survivalReason: 'clears the box before re-injecting; survives only via the registry that reads this declaration, and not at all when that registry is empty',
+            })
           })
           if (!res.ran) {
             logger.info({ session, attempt }, 'Stuck-input recovery (reinject-plain) skipped: a delivery is in flight into this pane (fail-closed)')
@@ -437,7 +450,11 @@ async function performStuckInputAction(
         logger.warn({ session, attempt }, 'Stuck input -- clear + re-inject the recorded prompt (registry-proven)')
         const res = await withSessionSendLock(session, null, 'recover', async () => {
           await clearInputBuffer(session)
-          await sendPromptToSession(session, recordedText, null, { lockMode: 'held' })
+          await sendPromptToSession(session, recordedText, null, {
+            lockMode: 'held',
+            survival: 'lost',
+            survivalReason: 'replays the registry record, then clears; if this send is dropped with the registry empty nothing brings it back',
+          })
         })
         if (!res.ran) {
           logger.info({ session, attempt }, 'Stuck-input recovery (reinject-recorded) skipped: a delivery is in flight into this pane (fail-closed)')
@@ -454,6 +471,19 @@ async function performStuckInputAction(
         logger.warn({ session, attempt }, 'Stuck input -- parked scheduled-task tick, clearing buffer (no re-inject; next schedule fire re-delivers)')
         await clearInputBuffer(session)
         break
+      case 'clear-redelivered': {
+        // c4b99fa7: the producer DECLARED this pane's last injection re-delivered, so a
+        // clear costs one cycle of delay rather than destroying the only copy. Logged with
+        // the declared reason so a wrong declaration is visible here, not just at the call
+        // site that made it.
+        const declared = getPaneSource(session)
+        logger.warn(
+          { session, attempt, declaredReason: declared?.reason ?? null },
+          'Stuck input -- producer declares its source is re-delivered, clearing buffer (no re-inject)',
+        )
+        await clearInputBuffer(session)
+        break
+      }
       case 'enter':
         // FABLEFALL1: same guard as the reinject-plain fallback above -- a bare
         // Enter must never reach the model consent dialog (its default SWITCHES
@@ -567,7 +597,10 @@ async function triggerMarveenMemorySave(): Promise<void> {
     'Ha kesz vagy, irj egy rovid napi naplo bejegyzest is a /api/daily-log-ra. Utana eleg.',
   ].join(' ')
   try {
-    await sendPromptToSession(MAIN_CHANNELS_SESSION, prompt)
+    await sendPromptToSession(MAIN_CHANNELS_SESSION, prompt, null, {
+      survival: 'lost',
+      survivalReason: 'fires once before a hard restart with no fallback (severity: what is lost is a REQUEST, not data -- but the source does not come back)',
+    })
     logger.info(`${BOT_NAME} memory-save prompt dispatched before hard restart`)
   } catch (err) {
     logger.warn({ err }, `Failed to dispatch ${BOT_NAME} memory-save prompt`)

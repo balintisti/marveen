@@ -211,7 +211,10 @@ export async function maybeWakeSubAgentsForTelegram(now: number): Promise<void> 
         maxDebounceMs: SUB_TELEGRAM_WAKE_MAX_DEBOUNCE_MS,
       })) continue
 
-      sendPromptToSession(session, SUB_TELEGRAM_WAKE_NUDGE, host)
+      sendPromptToSession(session, SUB_TELEGRAM_WAKE_NUDGE, host, {
+        survival: 'redelivered',
+        survivalReason: 'per-tick wake nudge; state.attempts increments and the next tick re-nudges while the inbox stays pending',
+      })
       state.lastWakeAt = now
       state.attempts += 1
       logger.info({ agent: name, session, ageMs: Math.round(inboxAgeMs), attempt: state.attempts }, 'telegram-inbox-wake: nudged idle sub-agent (pending inbox)')

@@ -64,6 +64,9 @@ describe('welcome-screen wedge: detection -> recovery decision (real fixture)', 
       rowCount: parkedInputRowCount(QWEN_WELCOME_WEDGE),
       blockComplete: false,
       blockTruncated: false,
+      // c4b99fa7: nothing on record for this pane, so the survival half is absent and the
+      // hands-off verdict below stands for the same reason it did before.
+      sourceSurvives: false,
       truncatedPreamble: false,
       allowPlainReinject: true,
       hasPlainText: parkedInputText(QWEN_WELCOME_WEDGE) != null,

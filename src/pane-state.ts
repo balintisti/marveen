@@ -1886,6 +1886,7 @@ export type StuckInputAction =
   | 'reinject-plain'   // clear + re-inject collapsed parked text (sub-agents only)
   | 'clear-preamble'   // clear a truncated/stale safety preamble, never re-inject
   | 'clear-scheduled'  // clear a parked scheduled-task tick, never re-inject (next fire re-delivers)
+  | 'clear-redelivered' // clear a park whose PRODUCER re-delivers it (declared, not sniffed)
   | 'reinject-recorded' // clear + re-inject the EXACT text the sender typed (registry-proven)
   | 'enter'            // a single bare Enter -- ONLY safe at rowCount <= 1
   | 'hold'             // do nothing this tick (multi-row truncated / truncation-guard)
@@ -1915,6 +1916,17 @@ export interface StuckInputActionFacts {
   /** parkedScheduledTaskInput(pane): a scheduled-task tick is parked. Clear-only
    * is safe on ANY session (the next schedule fire re-delivers). */
   scheduledTaskBlock: boolean
+  /** c4b99fa7: the producer of the last prompt THIS process injected into the pane
+   * declared that its source is RE-DELIVERED -- dropping it costs one cycle, nothing else.
+   *
+   * This is a DECLARATION, not a text test, and that distinction is the whole point: a
+   * `[tetlen-or]` notice and a `[handoff-failure]` notice are byte-identical in SHAPE and
+   * have OPPOSITE answers, so no prefix list or cleverer pattern can recover it. See
+   * pane-source-survival.ts.
+   *
+   * FALSE whenever nothing is on record (a fresh process, or a pane this process never
+   * wrote to). That is the fail-safe direction: no record -> assume dropping destroys. */
+  sourceSurvives: boolean
   /** STUCKINPUT827: the parked scrape MATCHES the text the sender recorded for
    * this pane (injected-prompt-registry). This is stronger evidence than any
    * scrape-shape heuristic: it proves both the ORIGIN (we typed it, so it is
@@ -1981,6 +1993,21 @@ export function decideStuckInputAction(f: StuckInputActionFacts): StuckInputActi
   if (f.allowPlainReinject && f.hasPlainText && !f.blockTruncated && f.machineOrigin) {
     return f.escalate || multiRow ? 'reinject-plain' : 'enter'
   }
+  // c4b99fa7: THE DEAD END THIS EXISTS FOR. A multi-row park with no complete block, no
+  // registry match and no scheduled-task prefix falls through to 'hold' below and stays
+  // there -- the 2026-07-25 hermes incident, where the channel stayed mute until the box
+  // was cleared by hand. When the producer of the last thing we typed into this pane
+  // DECLARED its source re-delivered, clearing costs one cycle of delay and destroys
+  // nothing, which is exactly the argument that already licenses clear-scheduled.
+  //
+  // machineOrigin is STILL REQUIRED, and not as belt-and-braces: the declaration says what
+  // WE last sent into this pane, not that the parked text IS that thing. A human draft
+  // typed afterwards (agent-terminal reaches these panes too) would otherwise be cleared on
+  // the strength of an unrelated injection. Positive machine origin is the identity half;
+  // the declaration is the survival half, and neither alone is sufficient.
+  if (f.machineOrigin && f.sourceSurvives) {
+    return f.escalate || multiRow ? 'clear-redelivered' : 'enter'
+  }
   // Truncated safety preamble: clear only (never re-inject a stale preamble).
   if (f.truncatedPreamble && f.escalate) return 'clear-preamble'
   // Truncated <channel> block: hold a multi-row (Enter would corrupt; re-inject
@@ -2010,6 +2037,10 @@ export function parkedMainInputHasRemedy(pane: string): boolean {
     hasPlainText: false,
     scheduledTaskBlock: parkedScheduledTaskInput(pane),
     machineOrigin: parkedMachineOriginInput(pane),
+    // Deliberately false for the same reason as recordedMatch below: this helper takes
+    // only a pane, not a session, so it cannot consult the per-pane survival record
+    // either. Under-claiming keeps the hard-restart guard conservative.
+    sourceSurvives: false,
     // Deliberately false: this helper takes only a pane, not a session, so it
     // cannot consult the injected-prompt registry. Claiming a remedy we have
     // not verified would let a genuinely wedged main session defer its

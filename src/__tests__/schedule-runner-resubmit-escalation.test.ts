@@ -50,7 +50,10 @@ describe('schedule-runner: resubmit wiring uses the real clear + re-inject', () 
     // lockMode 'held' is load-bearing: the re-inject runs INSIDE the recover
     // critical section below; re-acquiring the promise-chain mutex would
     // deadlock the lane.
-    expect(SRC).toMatch(/sendPromptToSession\(session, fullPrompt, host, \{ waitForIdle: false, lockMode: 'held' \}\)/)
+    // c4b99fa7 made this call multi-line, so the single-literal pin no longer
+    // matches. Both load-bearing options are still asserted, plus the survival
+    // declaration this path must carry.
+    expect(SRC).toMatch(/sendPromptToSession\(session, fullPrompt, host, \{[\s\S]{0,400}?waitForIdle: false,[\s\S]{0,400}?lockMode: 'held',[\s\S]{0,400}?survival: 'redelivered',/)
   })
 
   it('routes the resubmit action through the pure decision function', () => {

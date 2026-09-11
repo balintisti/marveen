@@ -51,6 +51,7 @@ import { resolveAgentSecurityProfile } from './agent-team.js'
 import { writeAgentSettingsFromProfile, ensureFleetRosterSection, ensureAutonomySection, ensureSkillsPathTrapSection } from './agent-scaffold.js'
 import { schedulePluginUnlockAfterRespawn } from './channel-plugin-unlock.js'
 import { recordInjectedPrompt } from './injected-prompt-registry.js'
+import { recordPaneSource, type SourceSurvival } from './pane-source-survival.js'
 import { getSecret } from './vault.js'
 import { resolveOpenRouterModel } from './openrouter-models.js'
 import { reapChannelOrphans, reapDetachedChannelClaudes } from './channel-poller-reap.js'
@@ -1807,7 +1808,22 @@ export async function sendPromptToSession(
   session: string,
   text: string,
   host: string | null = null,
-  opts: { waitForIdle?: boolean; onBusyTimeout?: 'send' | 'abort'; idleTimeoutMs?: number; lockMode?: SendLockMode } = {},
+  opts: {
+    /** REQUIRED, no default. What happens to this prompt's SOURCE if the prompt never
+     *  lands -- see SourceSurvival. There is deliberately no default: a default is the
+     *  per-task guard that never arrives for the 15th caller, and the recovery stack
+     *  cannot re-derive this from the text (see pane-source-survival.ts for the measured
+     *  proof that two byte-identical notices have opposite answers). */
+    survival: SourceSurvival
+    /** REQUIRED. One line saying WHY, so a wrong declaration is reviewable later instead
+     *  of invisible. Name the mechanism, not the intent -- e.g. "markMessageDelivered on
+     *  the next line" or "next schedule fire re-delivers". Never branched on. */
+    survivalReason: string
+    waitForIdle?: boolean
+    onBusyTimeout?: 'send' | 'abort'
+    idleTimeoutMs?: number
+    lockMode?: SendLockMode
+  },
 ): Promise<'sent' | 'aborted-busy' | 'skipped-locked'> {
   const lockMode: SendLockMode = opts.lockMode ?? 'deliver'
   // PANEWRITERS805: the three modal dismissals are probe+act keystroke writers
@@ -1899,6 +1915,10 @@ export async function sendPromptToSession(
   // instead of guessing from a lossy screen scrape. Recorded before the send so
   // a delivery that parks mid-stream is recoverable too.
   recordInjectedPrompt(session, oneLine)
+  // c4b99fa7: alongside the matching record, remember what the CALLER declared about this
+  // prompt's source. Recorded at the same choke point and for the same reason -- every
+  // machine delivery passes here, so no caller has to remember to do it separately.
+  recordPaneSource(session, opts.survival, opts.survivalReason)
   const CHUNK = 80
   // Stream oneLine into the pane as CHUNK-sized literal send-keys writes,
   // followed by a submitting Enter. Extracted as a closure so the

@@ -407,6 +407,15 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
               // -- critical". The idle tier states the token count it measured.
               ? idleFlushHandoffPrompt(inputs.contextTokens ?? 0, cfg.idleMinutes, handoffPathFor(name))
               : handoffPrompt(pctRound ?? 0, handoffPathFor(name)),
+          null,
+          {
+            survival: 'degrades',
+            // Never re-issued: nextState is phase 'await-handoff' (context-guard.ts). But a
+            // dropped prompt is not silent either -- on deadlineMs the guard force-restarts,
+            // and its own comment expects exactly this ("agent wedged or ignored the prompt").
+            // Worse outcome, not a lost one: that is what 'degrades' means.
+            survivalReason: 'phase -> await-handoff and never re-issued, but the handoff deadline force-restarts instead of going quiet',
+          },
         )
         break
       case 'restart': {
@@ -485,6 +494,14 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
         await sendPromptToSession(
           session,
           resumePrompt(name, handoffPathFor(name), hadHandoff, state.handoffStaleMinutes),
+          null,
+          {
+            survival: 'lost',
+            // The await-ready branch returns this action with nextState phase 'cooldown'
+            // UNCONDITIONALLY (context-guard.ts) -- on the decision, not on observing the send
+            // land. So a dropped resume prompt is silently gone, with no deadline to bring it back.
+            survivalReason: 'phase -> cooldown unconditionally on the decision; nothing re-issues the resume prompt',
+          },
         )
         break
       }
