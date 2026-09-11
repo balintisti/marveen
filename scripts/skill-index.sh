@@ -183,6 +183,44 @@ fi
 # Isti szabalya: ha egy megoldas azon all, hogy valaki megjegyez valamit, az nem megoldas.
 SKILL_LINE_LIMIT="${SKILL_LINE_LIMIT:-500}"
 
+# ---- LAGY KUSZOB: KORAI JELZES, AMI NEM BUKTAT (kartya 2dce876b, 2026-09-11) --
+#
+# A BUKAS ALAKJA, amiert ez letezik: a sor-kapu akkor tuzel, ha valaki TULLEPI az
+# 500-at. De aki a kapu kozeleben akarna irni, nem lepi tul -- KIHAGYJA a beirast.
+# Nincs piros, nincs `exit 3`, a lecke egyszeruen nem kerul be. marveen harom mert
+# esetet rogzitett egyetlen ejszakan, harom kulonbozo skillen, es MINDHAROMSZOR a
+# helyes dontes volt nem beleirni -- tehat az or vegig zold volt.
+#   az OR azt kerdezte:  "tullepte-e valaki a kaput?"      -> NEM, tehat ZOLD
+#   a valodi kerdes:     "be tud-e meg kerulni ide lecke?" -> hat skillnel NEM
+#
+# EZ AZ AG JELENT, NEM BUKTAT. A kilepesi kodot nem erinti (a 3 es a 4 marad, amit
+# jelentett) -- marveen kimondott politikaja: a bontas NYUGODT korben tortenjen, soha
+# nem abban, amikor valakinek epp irnia kell. Egy buktato korai jelzes pontosan azt a
+# kort torne meg, amit vedeni akar.
+#
+# A 460 MERESBOL JON, NEM BECSLESBOL. A `~/Backups/rulebooks` pillanatfelvetel-repo
+# 952 commitjabol kinyerve 228 VALODI novekedesi esemeny 64 skill-fajlon:
+#     novekedes/valtozas:  median +18 | 75p +29 | 90p +36 | 95p +40 | max +120
+# A kuszob annyit er, amennyi KERETET hagy a kapuig -- vagyis hany novekedes fer meg
+# bele a jelzes UTAN, mielott a kapu tuzel:
+#     kuszob 470 -> 30 sor keret -> a novekedesek **78,5%**-a fer bele | 6 skill a listan
+#     kuszob 460 -> 40 sor keret ->                **95,2%**           | 8
+#     kuszob 450 -> 50 sor keret ->                  97,8%             | 10
+# 470-rol 460-ra: +2 skill a listan, +16,7 PONT lefedettseg. 460-rol 450-re: +2 skill,
+# mindossze +2,6 pont. A gorbe terde 460-nal van.
+#
+# ES AMIERT A 470 NEM JO, PEDIG ez volt a kezenfekvo javaslat: 30 sor keret mellett a
+# novekedesek TOBB MINT OTODE atugorja a jelzest -- a skill a kuszob alol egyenesen a
+# kapun TULRA kerul, jelzes nelkul. Az pontosan az a nema bukas, ami ellen ez az ag
+# keszult, csak egy szinttel arrebb tolva. A 460 ezt 1/5-rol 1/20-ra viszi, ket sor aran
+# egy jelentesben.
+#
+# UJRANYITASI FELTETEL (GATE, nem WATCH): ha a skill-populacio erdemben valtozik, a fenti
+# ket szamot EGYUTT kell ujramerni -- a lefedettseget ES a listahosszat. A recept a
+# kartyan all. Egy kuszob, ami tul sok skillt sorol fel, ugyanugy nem jut el az olvasohoz,
+# mint egy, ami keveset.
+SKILL_SOFT_LIMIT="${SKILL_SOFT_LIMIT:-460}"
+
 # ---- ALAPVONAL: MIT MERUNK, ES MIT NEM (2026-08-23, Marveen dontese) ---------
 #
 # A hatar eddig a TELJES magot merte. Egy fajlnal (felderites-ket-listas-proba) ez
@@ -342,6 +380,8 @@ OVER_LIMIT=0
 CHAR_OVER=0
 CHAR_LIST=""
 OVER_LIST=""
+SOFT_COUNT=0
+SOFT_LIST=""
 for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
   [ -f "$f" ] || continue
   n=$(wc -l < "$f" | tr -d ' ')
@@ -452,7 +492,16 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
   elif [ "$n" -gt "$SKILL_LINE_LIMIT" ]; then
     OVER_LIMIT=$((OVER_LIMIT+1))
     OVER_LIST="${OVER_LIST}  ${skill}  ${n} sor\n"
-  elif [ -n "${CHECK_SKILL:-}" ]; then
+  else
+    # ALAPVONAL NELKULI skill, a hatar alatt. A LAGY KUSZOB ITT tuzel -- es BROADCASTBAN is,
+    # nem csak check modban: eddig pontosan ez a nema ag engedte, hogy hat skill 490+ sorra
+    # csusszon anelkul, hogy barmi szolt volna.
+    if [ "$n" -gt "$SKILL_SOFT_LIMIT" ]; then
+      SOFT_COUNT=$((SOFT_COUNT+1))
+      SOFT_LIST="${SOFT_LIST}  ${skill}  ${n} sor -- a kapuig $((SKILL_LINE_LIMIT - n)) sor\n"
+    fi
+  fi
+  if [ -z "$base" ] && [ "$n" -le "$SKILL_LINE_LIMIT" ] && [ -n "${CHECK_SKILL:-}" ]; then
     # ALAPVONAL NELKULI skill, a hatar alatt. Broadcastban ez CSEND (helyesen: 55 skillrol
     # nem kell jelenteni). Check modban viszont a csend nem valasz: a szerzo azert futtatta,
     # hogy SZAMOT kapjon a sajat fajljarol -- es egy or, ami csak akkor szolal meg, ha mar baj
@@ -503,6 +552,36 @@ _arms_ok=1
 # hogy egy adott skill be van-e allitva.
 _probe_name=$(echo "$SKILL_BASELINE_NAMES" | cut -d" " -f1)
 [ -n "$_probe_name" ] && [ -n "$(baseline_for "$_probe_name")" ] || _arms_ok=0
+# ES A LAGY AG ISMERT ESETE (kartya 2dce876b). Ennek az agnak a nema elromlasa a
+# LEGKONNYEBB az egesz orben: ha valaki a lagy kuszobot a kapura vagy fole allitja,
+# az ag SOHA nem tuzel -- es akkor pontosan ugy nez ki, mint amikor egyetlen skill
+# sem kozelit. A ket allapot kimenete BAJT-AZONOS, tehat itt kell szetvalasztani.
+# A KET SOR ATFEDESE SZANDEKOS, ES MERVE VAN (2026-09-11): kulon-kulon MINDKETTO
+# elegendo (egyiket kivenni sem buktatja a teszteket), EGYUTT kivenni viszont piros.
+# Egy kontrollnal ez a helyes irany: itt a legrosszabb hibamod az, ha maga a kontroll
+# nem tud tuzelni, tehat egyetlen pontra bizni epp azt a kockazatot novelne, ami ellen
+# az egesz blokk keszult. Aki "takaritana", ezt a bekezdest olvassa el eloszor: a
+# redundancia MERT, nem maradek.
+_probe_soft=$(( SKILL_SOFT_LIMIT + 1 ))
+[ "$SKILL_SOFT_LIMIT" -lt "$SKILL_LINE_LIMIT" ] || _arms_ok=0
+[ "$_probe_soft" -gt "$SKILL_SOFT_LIMIT" ] && [ "$_probe_soft" -le "$SKILL_LINE_LIMIT" ] || _arms_ok=0
+# A LAGY LISTA A SUMMARY-LANC ELOTT MEGY KI, es szandekosan NEM annak egyik agakent:
+# a lanc `if/elif/else`, tehat barmelyik agba tenni azt jelentene, hogy a korai jelzes
+# ELTUNIK, amint egy MASIK, sulyosabb dolog is igaz -- pontosan akkor, amikor a fajl amugy
+# is mozgasban van. A korai jelzes nem versenyezhet a kesoi jelzessel ugyanazert a helyert.
+#
+# CHECK MODBAN NINCS FEJLEC: ott egy skillt neztunk meg, es egy "N skill kozelit" mondat
+# populaciot allitana egyetlen meres mellett (ugyanaz az indok, mint az OVER_LIST-nel).
+if [ "$SOFT_COUNT" -gt 0 ] && [ -z "${CHECK_SKILL:-}" ]; then
+  echo "" >&2
+  echo "MERET-OR (KORAI JELZES, nem hiba): ${SOFT_COUNT} skill a ${SKILL_SOFT_LIMIT} soros lagy kuszob felett:" >&2
+  printf "%b" "$SOFT_LIST" >&2
+  echo "  -> references/ bontas EGY NYUGODT KORBEN. Ez a lista NEM buktat es nem surgos;" >&2
+  echo "     a celja, hogy a bontas ne akkor keruljon elo, amikor valakinek epp irnia kell." >&2
+  echo "     A bontas utan az alapvonal a bontas utani meret ES a regi alapvonal MINIMUMA --" >&2
+  echo "     egy sikeres bontas soha nem hagyhat TAGABB kaput maga utan." >&2
+fi
+
 if [ "$_probe" -le "$SKILL_LINE_LIMIT" ] || [ "$_arms_ok" -ne 1 ]; then
   echo "MERET-OR: a pozitiv kontroll ELBUKOTT (szamlalas vagy egy uj ag nem mukodik) -- az or NEM megbizhato." >&2
 elif [ "$OVER_LIMIT" -gt 0 ]; then
@@ -539,7 +618,14 @@ else
   # A "minden skill a hatara alatt" mondat CHECK MODBAN HAMIS LENNE: ott EGY skillt neztunk
   # meg, nem 56-ot. Egy ures populacio, ami tiszta bizonyitvanynak olvasodik.
   if [ "${VERBOSE:-0}" = "1" ] && [ -z "${CHECK_SKILL:-}" ]; then
-    echo "MERET-OR: minden skill a sajat hatara alatt, SORBAN ES KARAKTERBEN (alapvonalas: novekedes <= ${SKILL_GROWTH_LIMIT} sor es <= ${SKILL_GROWTH_LIMIT}x atlagos sorhossz karakter, teljes <= ${SKILL_HARD_LIMIT}; a tobbi: <= ${SKILL_LINE_LIMIT}). Pozitiv kontroll: OK, mind a HAROM agra."
+    # A SZAM A MONDATBAN VAN, NEM ALATTA (kartya 2dce876b). Egy "minden skill a hatara
+    # alatt" mondat IGAZ marad akkor is, ha hat skill nyolc soron belul van a kaputol --
+    # es pontosan ugy olvasodik, hogy nincs mit nezni. Az idezheto mondat vigye magaval.
+    if [ "$SOFT_COUNT" -gt 0 ]; then
+      echo "MERET-OR: minden skill a sajat hatara alatt, SORBAN ES KARAKTERBEN -- DE ${SOFT_COUNT} skill a ${SKILL_SOFT_LIMIT} soros lagy kuszob felett all (lasd a korai jelzest fent). Pozitiv kontroll: OK, mind a NEGY agra."
+    else
+      echo "MERET-OR: minden skill a sajat hatara alatt, SORBAN ES KARAKTERBEN (alapvonalas: novekedes <= ${SKILL_GROWTH_LIMIT} sor es <= ${SKILL_GROWTH_LIMIT}x atlagos sorhossz karakter, teljes <= ${SKILL_HARD_LIMIT}; a tobbi: <= ${SKILL_LINE_LIMIT}), es EGY sem all a ${SKILL_SOFT_LIMIT} soros lagy kuszob felett. Pozitiv kontroll: OK, mind a NEGY agra."
+    fi
   fi
 fi
 

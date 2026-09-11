@@ -720,3 +720,107 @@ describe('skill-index.sh -- a karakter-szam LOCALE-FUGGETLEN (38221eef)', () => 
     expect(c).toBe(chars)
   })
 })
+
+// --- LAGY KUSZOB: korai jelzes, ami NEM buktat (kartya 2dce876b) ---------------
+//
+// A BUKAS ALAKJA, amiert ez az ag letezik: a sor-kapu akkor tuzel, ha valaki TULLEPI
+// az 500-at. Aki a kapu kozeleben akarna irni, nem lepi tul -- KIHAGYJA a beirast, es
+// akkor nincs piros, nincs `exit 3`, a lecke nem kerul be. Hat skill csuszott 490+
+// sorra anelkul, hogy barmi szolt volna.
+//
+// AMIT EZEK PINNELNEK, es miert ezek: a jelzes LEGYEN MEG broadcastban (ez volt a nema
+// ag), NE valtoztassa a kilepesi kodot (marveen kimondott politikaja: a bontas nyugodt
+// korben tortenjen, egy buktato korai jelzes epp azt a kort torne meg), es NE TUNJON EL,
+// amikor valami sulyosabb is igaz -- a korai jelzes nem versenyezhet a kesoivel ugyanazert
+// a helyert.
+
+function runWithStderr(args: string[], env: Record<string, string>) {
+  const p = spawnSync('bash', [SCRIPT, ...args], {
+    encoding: 'utf-8',
+    env: { ...process.env, ...env },
+  })
+  return { stdout: p.stdout ?? '', stderr: p.stderr ?? '', exitCode: p.status ?? 1 }
+}
+
+function makeSkillOfLines(home: string, name: string, lines: number): void {
+  mkdirSync(join(home, '.claude', 'skills', name), { recursive: true })
+  const head = `---\nname: ${name}\ndescription: ${name} description\n---\n`   // 4 lines
+  const body = Array.from({ length: Math.max(0, lines - 4) }, (_, i) => `line ${i}`).join('\n')
+  writeFileSync(join(home, '.claude', 'skills', name, 'SKILL.md'), head + body + '\n')
+}
+
+describe('skill-index.sh -- soft threshold (early warning)', () => {
+  let tmpHome: string
+  const ENV = { SKILL_LINE_LIMIT: '100', SKILL_SOFT_LIMIT: '80' }
+
+  beforeEach(() => { tmpHome = mkdtempSync(join(tmpdir(), 'skill-soft-')) })
+  afterEach(() => rmSync(tmpHome, { recursive: true, force: true }))
+
+  it('reports a skill above the soft threshold in BROADCAST mode -- the branch that was silent', () => {
+    makeSkillOfLines(tmpHome, 'nearly-full', 90)
+    const r = runWithStderr([], { HOME: tmpHome, ...ENV })
+    expect(r.stderr).toContain('KORAI JELZES')
+    expect(r.stderr).toContain('nearly-full')
+    expect(r.stderr).toMatch(/a kapuig 10 sor/)
+  })
+
+  it('does NOT change the exit code -- it reports, it does not fail', () => {
+    makeSkillOfLines(tmpHome, 'nearly-full', 90)
+    expect(runWithStderr([], { HOME: tmpHome, ...ENV }).exitCode).toBe(0)
+  })
+
+  it('stays silent for a skill below the threshold -- the meter discriminates', () => {
+    makeSkillOfLines(tmpHome, 'small-one', 40)
+    const r = runWithStderr([], { HOME: tmpHome, ...ENV })
+    expect(r.stderr).not.toContain('KORAI JELZES')
+    expect(r.exitCode).toBe(0)
+  })
+
+  it('a skill OVER the gate still exits 3 and is not also counted as approaching', () => {
+    makeSkillOfLines(tmpHome, 'over-gate', 120)
+    const r = runWithStderr([], { HOME: tmpHome, ...ENV })
+    expect(r.exitCode).toBe(3)
+    expect(r.stderr).toContain('lepte tul')
+    expect(r.stderr).not.toMatch(/KORAI JELZES.*over-gate/s)
+  })
+
+  it('still reports the approaching skill when ANOTHER skill is over the gate', () => {
+    // The design point: the soft block is NOT an arm of the summary if/elif chain. Put it
+    // there and the early warning vanishes exactly when the tree is already moving -- which
+    // is when it is most needed.
+    makeSkillOfLines(tmpHome, 'over-gate', 120)
+    makeSkillOfLines(tmpHome, 'nearly-full', 90)
+    const r = runWithStderr([], { HOME: tmpHome, ...ENV })
+    expect(r.exitCode).toBe(3)
+    expect(r.stderr).toContain('lepte tul')
+    expect(r.stderr).toContain('KORAI JELZES')
+    expect(r.stderr).toContain('nearly-full')
+  })
+
+  it('omits the "N skill" header in --check mode -- one measurement cannot claim a population', () => {
+    makeSkillOfLines(tmpHome, 'nearly-full', 90)
+    const r = runWithStderr(['--check', 'nearly-full'], { HOME: tmpHome, ...ENV })
+    expect(r.stderr).not.toContain('KORAI JELZES')
+  })
+
+  it('the summary sentence carries the count, so it cannot read as "nothing to see"', () => {
+    // "every skill is under its limit" stays TRUE while six skills sit eight lines from the
+    // gate. The quotable sentence has to carry the number with it.
+    makeSkillOfLines(tmpHome, 'nearly-full', 90)
+    const r = runWithStderr(['-v'], { HOME: tmpHome, ...ENV })
+    expect(r.stdout + r.stderr).toMatch(/minden skill a sajat hatara alatt.*DE 1 skill/s)
+  })
+
+  it('the positive control FAILS LOUDLY if the soft branch could never fire', () => {
+    // The easiest silent break in the whole guard: set the soft threshold at or above the
+    // gate and the branch never fires -- output byte-identical to "nothing is approaching".
+    makeSkillOfLines(tmpHome, 'nearly-full', 90)
+    for (const soft of ['100', '150']) {
+      const r = runWithStderr([], { HOME: tmpHome, SKILL_LINE_LIMIT: '100', SKILL_SOFT_LIMIT: soft })
+      expect(r.stderr, `soft=${soft} must be rejected`).toContain('pozitiv kontroll ELBUKOTT')
+    }
+    // control: the same run with a valid threshold does NOT claim a broken guard
+    const ok = runWithStderr([], { HOME: tmpHome, ...ENV })
+    expect(ok.stderr).not.toContain('pozitiv kontroll ELBUKOTT')
+  })
+})
