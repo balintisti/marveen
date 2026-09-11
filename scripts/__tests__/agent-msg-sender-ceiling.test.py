@@ -147,6 +147,32 @@ class SenderCeiling(unittest.TestCase):
         self.assertIn("nem minosites", err,
                       "it must not read as a judgement about this message")
 
+    def test_the_refusal_keeps_the_debt_rather_than_closing_it(self):
+        """didi, 2026-09-11. Both refusal branches quoted the half of the page's rule that
+        sounds like a SOLUTION ("write it on the card") and dropped the half that says it is
+        not one: the card only pulls someone ALREADY LOOKING, so the comment STORES rather
+        than delivers, and the letter REMAINS A DEBT.
+
+        Worse on this branch than on the recipient one: the ceiling justifies itself in TIME
+        and the window ROLLS, so the message is due LATER -- and that was precisely the branch
+        that did not say the debt survives."""
+        d = self.tree([("friday", "marveen", 100 + i) for i in range(7)])
+        _, _, err = run(d)
+        self.assertIn("TAROL, nem kezbesit", err)
+        self.assertIn("TARTOZAS", err)
+        self.assertIn("amint a PLAFON FELENGED", err,
+                      "the sender ceiling releases on a rolling window, not on a drained queue")
+        self.assertIn("ABLAK GORDUL", err)
+
+    def test_the_caveat_says_the_saving_partly_defers(self):
+        """If the deflected message is still owed, the ceiling DEFERS rather than DROPS, so
+        part of the measured saving comes back later. The caveat used to name only the frame
+        question, which reads as if every caught message were a message not written."""
+        d = self.tree([("friday", "marveen", 100 + i) for i in range(7)])
+        _, _, err = run(d)
+        self.assertIn("HALASZTODIK", err)
+        self.assertIn("HALASZT, nem DOB EL", err)
+
     def test_force_still_gets_through(self):
         d = self.tree([("friday", "marveen", 100 + i) for i in range(7)])
         rc, _, err = run(d, extra=["--force"])
