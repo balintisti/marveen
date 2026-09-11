@@ -987,6 +987,68 @@ export function paneLooksIdle(capture: string): boolean {
  * in the input box and a new prompt would concatenate into it. Thin alias
  * over paneLooksIdle kept for its existing call sites / tests.
  */
+// The Claude Code usage-limit banner appears at the bottom of the pane (above
+// the footer) when the plan budget is exhausted or nearly so. Match only the
+// live banner region so a message body or scrollback that merely quotes the
+// phrase does not trip a downgrade.
+const USAGE_LIMIT_BANNER_REGION_LINES = 15
+
+// Distinctive plan-limit phrasings. Deliberately NARROW: a generic "rate limit"
+// / "API Error: 429" (transient overload, handled elsewhere) must NOT match --
+// that is a momentary blip, not a plan-budget exhaustion that warrants a model
+// switch.
+// "session limit" variant observed in production (2026-08-08):
+//   "You hit your session limit · resets 5:50pm"
+// The original regex only covered "usage limit"; "session" was missing.
+const USAGE_LIMIT_RX =
+  /(usage limit reached|reached your usage limit|hit (?:your|the) (?:session|usage) limit|approaching (?:your )?usage limit|usage limit (?:will )?reset|limit will reset at|\d+-hour limit reached|upgrade to increase your usage limit)/i
+
+/**
+ * True when the live pane shows a Claude *plan usage-limit* banner (not a
+ * transient API 429). Pure + dependency-free. Restricted to the bottom region
+ * so quoted text in scrollback or a reply body cannot trigger it.
+ */
+export function detectsUsageLimit(pane: string): boolean {
+  if (!pane || !pane.trim()) return false
+  const lines = pane.split('\n')
+  const region = lines.slice(-USAGE_LIMIT_BANNER_REGION_LINES).join('\n')
+  return USAGE_LIMIT_RX.test(region)
+}
+
+/**
+ * MAY I ACT ON THIS PANE? -- the question five callers were asking `paneLooksIdle`
+ * (card d3f92923).
+ *
+ * NOT A NEW DISTINCTION: the `busyEvidence` docblock above already names the two
+ * questions and their OPPOSITE cost profiles, and already names `paneLooksIdle`
+ * as the answer to "may I inject a message?". What was missing is that an idle
+ * pane is not always a pane you may act on, and the one state that breaks it was
+ * detectable in a different module the whole time.
+ *
+ * THE SPECIFICATION CAME FROM THE CALLERS, NOT FROM DESIGN. Read in their own
+ * words: agent-process's waitForPaneIdle guards against "blast[ing] a prompt into
+ * a busy pane"; channel-mcp-reconnect asserts the POSITIVE idle state because the
+ * failure mode is an `unknown` pane that is not a blocking menu; auto-restart
+ * gates a restart. And model-fallback-runner names the gap outright --
+ * "Downgrade may run on a limit-paused pane (WHICH READS IDLE)" -- and works
+ * around it by hand. A caller that already found the hole and patched around it
+ * locally is better evidence that the shared answer was missing than any census.
+ *
+ * WHAT IS DELIBERATELY NOT IN HERE: a parked input. It reads as `typing`
+ * (parkedInputText returns null unless the state is 'typing'), so `paneLooksIdle`
+ * already excludes it -- measured before adding a conjunct that would have looked
+ * obviously right and done nothing.
+ *
+ * AND ONE SITE MUST NOT USE THIS, which is the reverse of the usual warning: see
+ * the marker at stuck-tool-call-watcher.ts, where `=== 'idle'` vetoes a recovery
+ * rather than permitting an action. There a limit-paused pane is one the user CAN
+ * still interact with, so this predicate would let through the respawn that guard
+ * exists to prevent.
+ */
+export function mayActOnPane(pane: string): boolean {
+  return paneLooksIdle(pane) && !detectsUsageLimit(pane)
+}
+
 export function isReadyForPrompt(pane: string): boolean {
   return paneLooksIdle(pane)
 }

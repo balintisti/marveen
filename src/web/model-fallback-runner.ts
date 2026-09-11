@@ -21,7 +21,8 @@ import {
 import { sessionNameForAgent } from './session-names.js'
 import { paneLooksIdle } from '../pane-state.js'
 import { readModelFallbackConfig } from './model-fallback-store.js'
-import { detectsUsageLimit, decideModelAction } from '../model-fallback.js'
+import { decideModelAction } from '../model-fallback.js'
+import { detectsUsageLimit } from '../pane-state.js'
 
 // Drives the model-fallback-on-limit feature (see src/model-fallback.ts for the
 // why and the pure decision logic). Mirrors the auto-restart runner: a 60s

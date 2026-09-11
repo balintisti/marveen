@@ -59,33 +59,14 @@ export function normalizeModelFallbackConfig(raw: unknown): ModelFallbackConfig 
   return { enabled, chain, revertAfterMinutes }
 }
 
-// The Claude Code usage-limit banner appears at the bottom of the pane (above
-// the footer) when the plan budget is exhausted or nearly so. Match only the
-// live banner region so a message body or scrollback that merely quotes the
-// phrase does not trip a downgrade.
-const USAGE_LIMIT_BANNER_REGION_LINES = 15
-
-// Distinctive plan-limit phrasings. Deliberately NARROW: a generic "rate limit"
-// / "API Error: 429" (transient overload, handled elsewhere) must NOT match --
-// that is a momentary blip, not a plan-budget exhaustion that warrants a model
-// switch.
-// "session limit" variant observed in production (2026-08-08):
-//   "You hit your session limit · resets 5:50pm"
-// The original regex only covered "usage limit"; "session" was missing.
-const USAGE_LIMIT_RX =
-  /(usage limit reached|reached your usage limit|hit (?:your|the) (?:session|usage) limit|approaching (?:your )?usage limit|usage limit (?:will )?reset|limit will reset at|\d+-hour limit reached|upgrade to increase your usage limit)/i
-
-/**
- * True when the live pane shows a Claude *plan usage-limit* banner (not a
- * transient API 429). Pure + dependency-free. Restricted to the bottom region
- * so quoted text in scrollback or a reply body cannot trigger it.
- */
-export function detectsUsageLimit(pane: string): boolean {
-  if (!pane || !pane.trim()) return false
-  const lines = pane.split('\n')
-  const region = lines.slice(-USAGE_LIMIT_BANNER_REGION_LINES).join('\n')
-  return USAGE_LIMIT_RX.test(region)
-}
+// `detectsUsageLimit` MOVED TO pane-state.ts (card d3f92923). It asks a question
+// OF PANE TEXT -- split, take the last N lines, run a regex -- and reads nothing
+// about models, fallback policy or configuration. It lived here because this is
+// who needed it first, not because it is about model fallback, and that shelving
+// is what let a pane-text fact go unnoticed by the module that owns pane text.
+// Re-export deliberately NOT added: one symbol reachable from two places would
+// leave the next reader finding a pane predicate under `model-fallback`, which is
+// the exact mis-shelving the move exists to end.
 
 /**
  * The next model one step down the chain from `current`, or null if already at

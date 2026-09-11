@@ -19,6 +19,9 @@ import {
   submitLanded,
   paneShowsContextSaturation,
   busyEvidence,
+  mayActOnPane,
+  detectsUsageLimit,
+  paneLooksIdle,
 } from '../pane-state.js'
 
 // Realistic pane fixtures modelled on actual `tmux capture-pane -p`
@@ -2453,5 +2456,52 @@ describe('paneShowsContextSaturation: a footerhez horgonyzott ablak (74c09fd7)',
     // parszolni; true-t adni egeszsegeseknek tagadna meg a kezbesitest.
     expect(paneShowsContextSaturation(['a', 'b', BANNER, 'c'].join('\n'))).toBe(true)
     expect(paneShowsContextSaturation([BANNER, ...Array(20).fill('x')].join('\n'))).toBe(false)
+  })
+})
+
+
+/**
+ * `mayActOnPane` -- the question five callers were asking `paneLooksIdle` (card d3f92923).
+ *
+ * The specification came from the callers' own docblocks, and model-fallback-runner names the
+ * gap outright: "Downgrade may run on a limit-paused pane (WHICH READS IDLE)". So the ONE state
+ * that separates the two predicates is a usage-limit banner, and the tests are built around it.
+ */
+describe('mayActOnPane (card d3f92923)', () => {
+  // REUSE THE FILE'S OWN IDLE FIXTURE. My first attempt hand-rolled a pane from
+  // what an idle screen "obviously" looks like; `paneLooksIdle` returned false on
+  // it, because the real predicate needs the mode footer this file already
+  // encodes. A guessed fixture would have tested my mental model, not the code.
+  const idlePane = IDLE_BYPASS
+  // The same pane with the production banner observed 2026-08-08, inserted ABOVE
+  // the footer where the live banner actually appears.
+  const limitPane = IDLE_BYPASS.replace('❯ ', 'You hit your session limit · resets 5:50pm\n❯ ')
+  const busyPane = BUSY_FULL_FOOTER
+
+  it('agrees with paneLooksIdle on a plain idle pane', () => {
+    expect(paneLooksIdle(idlePane)).toBe(true)
+    expect(mayActOnPane(idlePane)).toBe(true)
+  })
+
+  it('THE WHOLE POINT: a limit-paused pane READS IDLE and is NOT actionable', () => {
+    // Both halves asserted on ONE fixture: without the first line this test would
+    // pass on a predicate that simply calls every pane non-actionable.
+    expect(paneLooksIdle(limitPane)).toBe(true)
+    expect(detectsUsageLimit(limitPane)).toBe(true)
+    expect(mayActOnPane(limitPane)).toBe(false)
+  })
+
+  it('a busy pane is not actionable either -- and for the OTHER reason', () => {
+    expect(paneLooksIdle(busyPane)).toBe(false)
+    expect(detectsUsageLimit(busyPane)).toBe(false)
+    expect(mayActOnPane(busyPane)).toBe(false)
+  })
+
+  it('CONTROL: the two predicates DISAGREE on exactly one of the three fixtures', () => {
+    // A single number that fails if mayActOnPane ever collapses into paneLooksIdle
+    // (disagreement 0) or starts refusing everything (disagreement 2).
+    const panes = [idlePane, limitPane, busyPane]
+    const disagree = panes.filter((p) => paneLooksIdle(p) !== mayActOnPane(p))
+    expect(disagree).toEqual([limitPane])
   })
 })
