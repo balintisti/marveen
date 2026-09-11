@@ -335,6 +335,8 @@ except Exception:
     echo "NEM KULDTEM. $TO soraban mar $DEPTH_PRE uzenet var, es a pending azt jelenti, hogy az" >&2
     echo "  elozot EL SEM OLVASTA -- egy ujabb level nem gyorsitja, csak a telitest hozza kozelebb." >&2
     echo "  Ird a kartyara kommentkent. Az uzenet tol, a kartya huzat." >&2
+    echo "  DE a kartya csak azt huzatja, aki MAR ODANEZ: a komment TAROL, nem kezbesit." >&2
+    echo "  A komment a NYOM; a level tovabbra is TARTOZAS -- kuldd el, amint a sor urul." >&2
     echo "  Ha tenyleg most kell mennie:  bash scripts/agent-msg.sh $FROM $TO \"...\" --force" >&2
     exit 2
   elif [ -n "$HOUR_N" ] && [ "$HOUR_N" -ge "$SENDER_HOUR_CEILING" ] 2>/dev/null; then
@@ -343,8 +345,14 @@ except Exception:
     echo "  Azt, hogy oda ma mar nem fer be tobb figyelem. Ugyanaz a logika, mint a fenti" >&2
     echo "  cimzett-oldali kapue, csak a KULDO vegen -- es az elso hat uzenetet semmi nem allitja meg." >&2
     echo "  Ird a kartyara kommentkent. Az uzenet tol, a kartya huzat." >&2
+    echo "  DE a kartya csak azt huzatja, aki MAR ODANEZ: a komment TAROL, nem kezbesit." >&2
+    echo "  A komment a NYOM; a level tovabbra is TARTOZAS -- kuldd el, amint a PLAFON FELENGED." >&2
+    echo "  (Itt az ABLAK GORDUL: ez a kapu az idoben indokol, tehat az uzenet KESOBB esedekes," >&2
+    echo "   nem targytalan. Ez a kulonbseg a fenti cimzett-oldali kapuhoz kepest.)" >&2
     echo "  ES AMIT EZ NEM OLD MEG: a KERETET. Merve 2026-09-11 a valodi 24 oras forgalmon:" >&2
     echo "  ez a plafon 49 uzenetet fog meg 842-bol (5,8%), ~31 e tokent a napi ~524 e irasbol." >&2
+    echo "  ES EGY RESZE CSAK HALASZTODIK, nem tunik el: ha a kiterelt uzenet tovabbra is" >&2
+    echo "  tartozas, akkor a megtakaritas egy resze kesobb visszajon. A kapu HALASZT, nem DOB EL." >&2
     echo "  Aki ugy olvassa, hogy 'a keret rendben van'," >&2
     echo "  pontosan azt a hibat koveti el, amit ez a flotta egesz ejjel mert." >&2
     echo "  Ha tenyleg most kell mennie:  bash scripts/agent-msg.sh $FROM $TO \"...\" --force" >&2
