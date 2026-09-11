@@ -27,9 +27,12 @@ bukna. Ezert a lap-oszlop ELO LEKERDEZES marad (`--unnamed`), nem artefaktum.
 
 A DEFINICIO, KIIRVA, mert egy szam a populacioja nelkul nem allitas:
   DONTES-FEJLEC = a fajl fejleckommentjeben all egy sor, ami
-    (a) MIERT/WHY-val kezdodik ES a "letezik / exists / nem / not / and not /
-        kulon / szerszam" valamelyiket tartalmazza, VAGY
-    (b) "Governance control"-lal kezdodik.
+    (a) MIERT/WHY-val KEZDODIK, vagy a tagado alakot hordozza barhol a sorban, VAGY
+    (b) "Governance control"-lal kezdodik, VAGY
+    (c) a nagybetus nyitanyaban hordoz egy WHY/MIERT-et, azaz nincs elotte ASCII kisbetu.
+        Az indoka es a hamis-pozitiv merese a `CAPS` mintanal all, nem itt.
+        (A pelda szandekosan nincs ideirva nagybetuvel: ez a fajl a sajat populaciojanak
+        tagja, tehat egy nagybetus minta-sor bekerulne a generalt indexbe DONTESKENT.)
   A fejlec = a shebang utani osszefuggo komment-blokk (max 60 sor).
   A populacio = `git ls-files scripts/` (KOVETETT fajlok), nem a lemez tartalma.
 
@@ -68,6 +71,37 @@ CMT  = re.compile(r'^\s*(#|//|/\*+|\*(?!/))\s?(.*?)\s*(?:\*/)?$')
 HEAD = re.compile(r'^(WHY|MIERT|MIÉRT|Why|Miert|Miért)\b', re.I)
 NEG  = re.compile(r'\b(MIERT NEM|MIÉRT NEM|WHY NOT|Miert nem)\b', re.I)
 GOV  = re.compile(r'^\s*Governance control\b')
+# A NAGYBETUS NYITANY AGA MERT (2026-09-11, kartya 6819ff25, didi lelete). A `^WHY` horgony
+# a SZORENDRE bukik: a `WHAT WENT WRONG, AND WHY "READ THE VARIABLE" IS NOT THE FIX.` fejlec
+# dontes-sor, es a kinyero SZERKEZETILEG nem latta -- kozben a `--check` `naprakesz`-t mond,
+# rc=0. Ez a legdragabb alak: nem hianyzo kapu, hanem olyan, ami zoldet mond arra, amit nem lat.
+# A KEZENFEKVO TAGITAS MEGMERVE ES ELVETVE: `\bWHY\b` BARHOL a sorban 18 uj jelolt-sort ad
+# (16 fajl), mind a 18 ELOLVASVA, es 11 proza, tordelt mondat-toredek vagy szerzodes-tablazat
+# sora -> **61% hamis pozitiv**, a lap 50%-os kuszobe folott, tehat a DETEKTOR a lelet.
+# EZ AZ ALAK SZUKEBB: a WHY a sor NAGYBETUS NYITANYABAN all, azaz NINCS ELOTTE KISBETU.
+# Merve ugyanazon a populacion: 4 jelolt, mind a 4 valodi dontes-sor, **0 hamis pozitiv**,
+# es KET eddig nem indexelt fajl (`assert-isolated.py`, `__tests__/expiry-check.test.py`) --
+# az utobbi egy HARMADIK elofordulas, amirol addig senki nem tudott.
+# KIS/NAGYBETU-ERZEKENY, SZANDEKOSAN: egy kisbetus `why` a mondat KOZEPEN all, nem nyitanyban,
+# es epp az adta a 11 hamis pozitiv tulnyomo reszet.
+# KIMONDOTT KORLAT: a `[^a-z]` osztaly CSAK ASCII kisbetut zar ki, tehat egy ekezetes kisbetus
+# szo (`es miert ...`) elvben atcsuszhat. A mai populacion ez 0 sor. Es amit ez SEM lat: a
+# `skill-index.sh` `Es miert a FELKOVER bevezetok is:` sora valodi dontes es kimarad -- a fajl
+# viszont mar indexelt, tehat hianyzo BULLET, nem hianyzo fajl. Tovabb tagitani nem szabad:
+# ott mar a 61%-os savba lepnenk.
+CAPS = re.compile(r'^[^a-z]{0,90}\b(WHY|MIERT|MIÉRT)\b')
+
+
+def is_decision(line):
+    """A DONTES-SOR PREDIKATUMA, EGY HELYEN.
+
+    HAROM hivasi helye van (a fejlec-olvaso ag, a nyers frazis-szuro es a KOVETETLEN
+    fajlok figyelmeztetese), es korabban MINDHAROM sajat kezzel irt feltetel-lancot vitt.
+    Egy negyedik ag hozzaadasa igy harom helyen kell, es amelyik kimarad, az CSENDBEN
+    szukebb marad a tobbinel -- ugyanaz az alak, amit ez a szerszam epp mer.
+    """
+    t = line.strip()
+    return bool(HEAD.match(t) or CAPS.match(t) or NEG.search(line) or GOV.match(line))
 DQ3 = chr(34) * 3
 SQ3 = chr(39) * 3
 
@@ -148,7 +182,7 @@ def scan(root):
         hdr = header(os.path.join(root, f))
         dec = []
         for i, h in enumerate(hdr):
-            if not (HEAD.match(h.strip()) or NEG.search(h) or GOV.match(h)):
+            if not is_decision(h):
                 continue
             # A CIM ONMAGABAN is allhat egy soron (quota-ceiling-guard.sh): ilyenkor a VALASZ
             # a kovetkezo nem-ures kommentsor. Mechanikus, tehat a generalt jelleg megmarad.
@@ -173,7 +207,7 @@ def scan(root):
                 raw = []
             for l in raw:
                 t = l.strip().lstrip('<!-').strip()
-                if HEAD.match(t) or NEG.search(t):
+                if is_decision(t):
                     unparsed.append((f, t[:120]))
                     break
     return sorted(rows), len(files), sorted(unparsed)
@@ -295,8 +329,7 @@ def main():
                                cwd=root, capture_output=True, text=True).stdout.split()
     pending = [f for f in untracked
                if os.path.isfile(os.path.join(root, f))
-               and any(HEAD.match(h.strip()) or NEG.search(h) or GOV.match(h)
-                       for h in header(os.path.join(root, f)))]
+               and any(is_decision(h) for h in header(os.path.join(root, f)))]
     if pending:
         print(f'FIGYELEM: {len(pending)} KOVETETLEN scripts/ fajl hordoz dontes-fejlecet, tehat '
               f'NINCS BENNE a generalt indexben:', file=sys.stderr)
@@ -307,4 +340,10 @@ def main():
     return 0
 
 
-sys.exit(main())
+# A GUARD MERT DEFEKTUS-JAVITAS (2026-09-11, kartya 6819ff25). Guard nelkul egy `import`
+# LEFUTTATTA a `main()`-t, vagyis a fo checkoutban UJRAGENERALTA a `docs/scripts-decisions.md`-t.
+# 2026-09-11-en egy oran belul KETTEN futottunk bele (didi, majd friday), mindketten epp azert
+# importaltuk, hogy a kinyerot EMPIRIKUSAN merjuk. A populacio: 55 kovetett `scripts/*.py`
+# hordoz `def main(`-t, ebbol **54** hivja `if __name__` guard alatt, es EZ AZ EGY nem.
+if __name__ == '__main__':
+    sys.exit(main())
