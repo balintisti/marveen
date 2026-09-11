@@ -532,7 +532,18 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // ertek igen -- es akkor a hivo azt hiszi, irt valamit.
     const roCard = getKanbanCard(id)
     if (roCard) {
-      const sentKeys = Object.keys(data).filter((k) => !(KANBAN_UPDATABLE as readonly string[]).includes(k))
+      // AZ `actor` NEM KARTYA-MEZO, HANEM VEZERLO MEZO, es ez a sor a KET AG SEAM-JE
+      // (kartya 5112c914 x 4e27d5ad). Ez az or azelott keszult, hogy a PUT torzse
+      // egyaltalan fogadott volna `actor`-t; kulon-kulon mindket ag ZOLD volt, es EGYUTT
+      // PIROS: a `{"actor":"..."}` ismeretlen kulcsnak minosult es 400-at kapott, tehat a
+      // mezo-tortenet "ki" fele nemán elveszett volna. A `merge-tree` errol semmit nem
+      // mondott -- a ket valtozas a fajl KET KULONBOZO regiojaban all.
+      // MERVE a seam-en: a `kanban-field-history.test.ts` ket esete 400-at kapott 200 helyett.
+      const PUT_CONTROL_FIELDS = ['actor'] as const
+      const sentKeys = Object.keys(data).filter(
+        (k) => !(KANBAN_UPDATABLE as readonly string[]).includes(k)
+             && !(PUT_CONTROL_FIELDS as readonly string[]).includes(k),
+      )
       const unknownKeys = sentKeys.filter(
         (k) => !(KANBAN_SERVER_FIELDS as readonly string[]).includes(k)
              && !(KANBAN_ELSEWHERE_FIELDS as readonly string[]).includes(k),
