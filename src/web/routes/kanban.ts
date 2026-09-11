@@ -669,41 +669,37 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     const id = decodeURIComponent(kanbanMoveMatch[1])
     const body = await readBody(req)
     const { status, sort_order, actor } = JSON.parse(body.toString())
-    if (moveKanbanCard(id, status, sort_order ?? 0, actor)) {
-      // Wake the assigned agent once when the card enters in_progress -- unless
-      // that agent is the one who moved it (self-pickup needs no wake-up).
-      if (status === 'in_progress') fireKanbanDispatch(id, actor)
-      json(res, { ok: true })
+    // A HAROM-ALLAPOTU KIMENET ES A TORZS DIAGNOSZTIKAJA EGYUTT MARAD, es a sorrend a lenyeg
+    // (kartya aca11ba5 x a 09-05-i /move-naplozas). A torzs azert naplozott, mert a BOOLEAN
+    // hamis erteke KET dolgot fedett -- "nincs ilyen kartya" es "nulla sor valtozott" --, es
+    // mandark otszor olvasta "a kartya eltunt"-nek. Ez a valtozat a FORRASNAL valasztja szet
+    // oket (a db elobb OLVASSA a sort), tehat a naplo eredeti MUNKAJAT mar a visszateresi
+    // ertek elvegzi. A `warn` megis marad a `not-found` agon: egy valodi nem-talalt kartya
+    // tovabbra is megerdemel egy sort, es a `serverUptimeSec` az egyetlen idobeli teny, amit
+    // ez az oldal hozza tud tenni. Ami KIKERULT: a `getKanbanCard` ujra-lekerdezese, mert az
+    // `outcome` mar megmondta, amit az meg akart tudni.
+    const outcome = moveKanbanCard(id, status, sort_order ?? 0, actor)
+    if (outcome === 'not-found') {
+      logger.warn(
+        { id, status, exists: false, serverUptimeSec: Math.round(process.uptime()) },
+        'Kanban move: no such card',
+      )
+      json(res, { error: moveFailureMessage(false) }, 404)
       return true
     }
-    // `moveKanbanCard` FALSE erteke azt jelenti, hogy NULLA SOR VALTOZOTT -- NEM azt,
-    // hogy a kartya nem letezik (db.ts: `UPDATE ... WHERE id=?`.changes > 0, semmilyen
-    // archived/status predikatum nelkul). 2026-09-05-ig a ket allapot UGYANAZT a szoveget
-    // kapta, es mandark OT alkalommal olvasta "a kartya eltunt"-nek -- egyszer ket
-    // ujraprobalast is igenyelve --, mikozben a sor VEGIG ott volt: id jelen,
-    // archived_at null, es a `GET /api/kanban/<id>` 200-at adott ugyanabban a percben.
-    //
-    // A 404 SZANDEKOSAN MARAD: a hivok arra vannak kotve. Ami valtozik, az az, hogy a
-    // valasz es a naplo MEGNEVEZI, MELYIK feltetel bukott -- kulonben a kovetkezo
-    // elofordulas is pontosan annyi nyomot hagy, mint az elozo ot (a dashboard NEM naploz
-    // keres-statuszt: 0 talalat 349 274 sorban, merve).
-    const stillThere = getKanbanCard(id)
-    logger.warn(
-      {
-        id,
-        status,
-        exists: stillThere != null,
-        currentStatus: stillThere?.status ?? null,
-        // SERVER uptime, and it does NOT test the reported "cold first call from a
-        // fresh CLIENT process" pattern -- the server cannot see the caller's age.
-        // It is here because the four failures on 2026-09-05 landed six minutes
-        // after a restart, so the server's own age is the one temporal fact this
-        // side can contribute. Read it as context, not as that hypothesis.
-        serverUptimeSec: Math.round(process.uptime()),
-      },
-      'Kanban move affected zero rows',
-    )
-    json(res, { error: moveFailureMessage(stillThere != null) }, 404)
+
+    // A `changed:false` NEM hiba -- ugyanaz a dontes, mint a testver PUT-on: egy hivo joggal
+    // kuldheti ujra ugyanazt. De KIMONDJUK, mert a csendes `{ok:true}` mert kart okozott:
+    // dexter hat lezart kartyat jelentett, es harom a hatbol NO-OP volt (didi es mandark mar
+    // lezarta oket) -- a valasz nem adott semmit, amin ez latszott volna.
+    // A no-op itt sem ir semmit, tehat az `updated_at` sem emelkedik: egy kartya nem latszhat
+    // frissen attol, hogy valaki ujrakuldte a mar fennallo allapotat.
+    if (outcome === 'unchanged') { json(res, { ok: true, changed: false }); return true }
+
+    // Wake the assigned agent once when the card enters in_progress -- unless
+    // that agent is the one who moved it (self-pickup needs no wake-up).
+    if (status === 'in_progress') fireKanbanDispatch(id, actor)
+    json(res, { ok: true, changed: true })
     return true
   }
 

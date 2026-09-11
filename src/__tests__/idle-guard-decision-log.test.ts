@@ -77,7 +77,14 @@ describe('a tetlen-or MINDEN dontest naplozza (60060415)', () => {
     paneState.mockReturnValue('busy')
     tick()
     expect(loggedReasons()).toContain('busy')
-    const call = debug.mock.calls.find(c => (c[0] as { reason?: string })?.reason === 'busy')
+    // Matched on the AGENT as well as the reason (card 6c1439ac): the coordinator
+    // is now first in the population, so "the first busy entry" is no longer
+    // agent x. The assertion was never about ordering -- it is that x's decision
+    // gets logged -- so it now says that instead of relying on position.
+    const call = debug.mock.calls.find(
+      c => (c[0] as { reason?: string; agent?: string })?.reason === 'busy'
+        && (c[0] as { agent?: string })?.agent === 'x',
+    )
     expect(call?.[0]).toMatchObject({ idleGuard: true, agent: 'x' })
     // Az uzenet is nevezze meg az agenst es a dontest -- egy `{}`-be rejtett reason
     // nem kereshetо a naplobol.
