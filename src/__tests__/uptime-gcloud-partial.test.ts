@@ -44,9 +44,22 @@ describe('runGcloud -- the real timeout path, end to end', () => {
 
   // A CONTROL FIRST: without it the two assertions below would describe an environment where
   // nothing works at all, and a fake binary that is never actually reached looks identical.
+  //
+  // AND THE CONTROL CARRIES NO BUDGET OF ITS OWN -- MEASURED DEFECT, 2026-09-11, hours after
+  // this file shipped. It originally passed 2000 ms. Standalone the spawn took 921 ms, a margin
+  // of 2.2x, and inside the FULL suite it exceeded the budget and went red on the trunk:
+  // `expected false to be 'gyors-ertek'` -- r.ok was false because the control itself timed out.
+  //
+  // The direction matters and it is why only THIS test flaked: the other three assert that a
+  // timeout HAPPENS, and load pushes them further into passing. Only the control has to SUCCEED
+  // inside a window, so only the control can be starved by a parallel suite.
+  //
+  // The fix is not a bigger number of my choosing: it uses GCLOUD_TIMEOUT_MS, the PRODUCTION
+  // budget. If a fast child cannot finish inside that, the production path is broken anyway --
+  // so the control stops asserting anything about timing and goes back to asserting reach.
   it('CONTROL: a fast, normally exiting gcloud returns its value', () => {
     fakeGcloud('echo gyors-ertek')
-    const r = runGcloud(['whatever'], 'kontroll', 2000)
+    const r = runGcloud(['whatever'], 'kontroll')   // <- a termelesi koret, nem sajat szam
     expect(r.ok && r.value).toBe('gyors-ertek')
   })
 
