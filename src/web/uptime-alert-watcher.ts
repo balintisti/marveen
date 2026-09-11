@@ -116,16 +116,56 @@ export function describeExecFailure(err: unknown, timeoutMs = GCLOUD_TIMEOUT_MS)
  */
 export const GCLOUD_STDIO = ['ignore', 'pipe', 'pipe'] as const
 
-/** Runs gcloud with stderr CAPTURED, so the failure can name its own cause. */
-function runGcloud(args: string[], what: string): Probe<string> {
+/**
+ * Runs gcloud with stderr CAPTURED, so the failure can name its own cause.
+ *
+ * `timeoutMs` IS A PARAMETER SO THE TIMEOUT PATH CAN BE PROVEN END TO END in a fifth of a
+ * second instead of fifteen -- and it exists because of a MEASUREMENT THAT REFUTED A PLANNED
+ * FIX (card 3d038bac). The refutation is worth more than the fix would have been:
+ *
+ *   Of sixteen `gcloud timed out after 15000 ms` notices, FIVE have a COMPLETE gcloud log --
+ *   the value was printed within a second and the call still consumed the whole 15 s. The
+ *   obvious remedy is therefore "on timeout, use the stdout we already captured".
+ *
+ *   IT IS NOT RELIABLY POSSIBLE, and the way that came out is the part worth keeping. Measured
+ *   on node v22 against a fake gcloud that prints a value and then keeps running -- same child,
+ *   same options, same 200 ms budget -- the answer FLIPS with the runtime:
+ *
+ *                      plain `node` run        under vitest
+ *       execFileSync   err.stdout = ""         err.stdout = "delta-crm-483922\n"
+ *       spawnSync      stdout = "delta-..."    stdout = ""
+ *
+ *   Both APIs were tried, and each delivered the bytes in exactly the environment where the
+ *   other did not. A remedy whose firing depends on which runtime is asking is worse than no
+ *   remedy: it would work in the test and not in production, or the reverse, and nothing about
+ *   its output would say which.
+ *
+ *   THE COST OF FINDING OUT, recorded because it is the reusable part: the first version was a
+ *   pure helper with nine green unit tests over synthetic error objects. It was a NO-OP. Only
+ *   running it against a real process said so, and only running it TWICE, in two runtimes, said
+ *   why. A pure test of a salvage proves the shape of the salvage, never that anything hands it
+ *   the bytes.
+ *
+ * A working remedy would need an ASYNC spawn, where stdout arrives as data events and is in hand
+ * before any timer fires. That is a larger change than this card is worth while the retry
+ * (card 213abf0d, already written) answers the 10 of 16 cases that are real hangs.
+ *
+ * This file already
+ * records why that matters: GCLOUD_STDIO had to become a named value because as a bare literal
+ * inside the options object, reverting it left every test green -- they proved the formatter
+ * and never the wiring. The same trap caught the salvage above: a pure helper can be perfect
+ * and still never fire, and whether node even DELIVERS stdout on a timeout is an assumption
+ * until a real process is run against it.
+ */
+export function runGcloud(args: string[], what: string, timeoutMs = GCLOUD_TIMEOUT_MS): Probe<string> {
   try {
     const out = execFileSync('gcloud', args, {
-      encoding: 'utf8', timeout: GCLOUD_TIMEOUT_MS, stdio: [...GCLOUD_STDIO],
+      encoding: 'utf8', timeout: timeoutMs, stdio: [...GCLOUD_STDIO],
     }).trim()
     if (out.length === 0) return { ok: false, reason: `${what}: gcloud exited 0 but printed nothing` }
     return { ok: true, value: out }
   } catch (err) {
-    return { ok: false, reason: `${what}: ${describeExecFailure(err)}` }
+    return { ok: false, reason: `${what}: ${describeExecFailure(err, timeoutMs)}` }
   }
 }
 
