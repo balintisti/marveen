@@ -203,6 +203,38 @@ fi
 #
 # FAIL-OPEN on measurement error, and SAY SO: a broken probe must not block a
 # message. Override a real backlog with --force as the 4th argument.
+# --- KEZBESITESI PLAFON A KULDO OLDALAN (kartya cc1d957f, 2026-09-11) ---
+#
+# A MEGLEVO KAPU A CIMZETT TORLODASAT NEZI (`pending >= 3`), es a lap evek ota rogziti, hogy
+# a kuldo sajat darabszamara NINCS kapu -- tehat az elso ket uzenetet semmi nem allitja meg.
+# Ez a sor zarja azt.
+#
+# A SZAM MERESBOL JON, ES AZ ELSO JAVASLAT MEGDOLT. A kartya `N=3 / 1 ora`-t kert. A valodi
+# 24 oras forgalmon szimulalva -- helyesen, vagyis a megtagadott uzenet NEM kerul az ablakba --
+# az **a forgalom 52,2%-at tagadna meg**. Egy kapu, ami a forgalom felet elutasitja, fal, es
+# ez a lap kulon rogziti, hogy egy tartosan tuzelo or es egy kikapcsolt or ugyanaz.
+#
+#     N=3 -> 52,2%   N=4 -> 36,4%   N=5 -> 24,9%   N=6 -> 16,3%   N=7 -> **5,8%**
+#
+# A 7-es szamot ELOSZOR ~12%-nak becsultem, es TEVEDTEM: azt a burst-eloszlas kumulativjabol
+# extrapolaltam (7. folott 11,9%), ami NEM veszi figyelembe, hogy a megtagadott uzenet nem
+# kerul be az ablakba -- tehat a kovetkezoket sem tolja feljebb. Rendesen szimulalva 49/842
+# = 5,8%. A tevedes iranya a SZIGORUBB fele volt, vagyis a kapu MEG enyhebb, mint igertem --
+# de egy szam, amit hibauzenetbe irok, akkor sem lehet becsles.
+#
+# ES NINCS OLYAN N, AMI A PAZARLAST VALASZTANA EL A MUNKATOL, mert nincs FAROK: a "hanyadik
+# uzenet ugyanannak 1 oran belul" eloszlas LAPOS 1-tol 6-ig (102/123/120/119/125/92), es csak
+# 7 folott vekonyodik. Barmelyik kuszob aranyosan vag bele mindenbe, a dontesekbe is.
+#
+# EZERT AZ INDOKLAS NEM AZ, HOGY A 7. UZENET FELESLEGES (marveen dontese, 2026-09-11). Az,
+# hogy a CIMZETT nem tudja felvenni. Ez az ervelés TULELI a laposságot: a hetedik level egy
+# oran belul nem azert rossz, mert gyenge, hanem mert oda mar nem fer be figyelem. Es epp
+# ezert elfogadhato a 12%: a kapu SEMMIT nem allit a tartalomrol.
+#
+# AMIT A HIBAUZENET IS KIMOND, mert kulonben pont a ma ejjel mert hibat termeli: EZ NEM A
+# KERET-KERDES VALASZA. ~62 e token a napi ~524 e-bol.
+SENDER_HOUR_CEILING="${SENDER_HOUR_CEILING:-7}"
+
 FORCE="${4:-}"
 DEPTH_PRE=""
 if [ "$FORCE" != "--force" ]; then
@@ -262,6 +294,13 @@ try:
     mh, = c.execute(
         "select coalesce(sum(length(content)),0) from agent_messages"
         " where from_agent=? and to_agent=? and created_at>=?", (me, to, since)).fetchone()
+    # KEZBESITESI PLAFON: a SAJAT uzeneteim EHHEZ a cimzetthez az utolso EGY oraban.
+    # Kulon ablak a fenti haromtol, mert mas kerdes: az a TERHELES lathatosaga, ez a
+    # felvehetoseg. Ugyanabbol az EGY olvasasbol jon, nem egy masodik kapcsolatbol.
+    hour_ago = int(time.time()) - 60 * 60
+    hn, = c.execute(
+        "select count(*) from agent_messages"
+        " where from_agent=? and to_agent=? and created_at>=?", (me, to, hour_ago)).fetchone()
     line = ""
     if mc > 0:
         rate = mc / 3.0
@@ -271,14 +310,15 @@ try:
             share = " | ebbol %s-nek %d kar (%d%%)" % (to, mh, round(100.0 * mh / rc))
         line = ("  [en] %s: 3 oraban %d kar %d db %d cimzettnek = %d kar/ora, "
                 "a telito rata %.1fx-e%s" % (me, mc, mn, mt, round(rate), rate / SATURATING_RATE, share))
-    print("\t".join(str(x) for x in (n, chars, rc, rs, mc, mn, mt, mh, line)))
+    print("\t".join(str(x) for x in (n, chars, rc, rs, mc, mn, mt, mh, line, hn)))
 except Exception:
-    print("\t" * 8)' 2>/dev/null)"
+    print("\t" * 9)' 2>/dev/null)"
   DEPTH_PRE="$(printf '%s' "$PRE" | cut -f1)"
   CHARS_PRE="$(printf '%s' "$PRE" | cut -f2)"
   RECENT_CHARS="$(printf '%s' "$PRE" | cut -f3)"
   RECENT_SENDERS="$(printf '%s' "$PRE" | cut -f4)"
   MINE_LINE="$(printf '%s' "$PRE" | cut -f9)"
+  HOUR_N="$(printf '%s' "$PRE" | cut -f10)"
   if [ -n "$RECENT_CHARS" ] && [ "$RECENT_CHARS" -gt 0 ] 2>/dev/null; then
     echo "  [sor] $TO: $DEPTH_PRE var (${CHARS_PRE} kar) | 3 oraban ${RECENT_CHARS} kar ${RECENT_SENDERS} feladotol" >&2
   fi
@@ -295,6 +335,18 @@ except Exception:
     echo "NEM KULDTEM. $TO soraban mar $DEPTH_PRE uzenet var, es a pending azt jelenti, hogy az" >&2
     echo "  elozot EL SEM OLVASTA -- egy ujabb level nem gyorsitja, csak a telitest hozza kozelebb." >&2
     echo "  Ird a kartyara kommentkent. Az uzenet tol, a kartya huzat." >&2
+    echo "  Ha tenyleg most kell mennie:  bash scripts/agent-msg.sh $FROM $TO \"...\" --force" >&2
+    exit 2
+  elif [ -n "$HOUR_N" ] && [ "$HOUR_N" -ge "$SENDER_HOUR_CEILING" ] 2>/dev/null; then
+    echo "NEM KULDTEM. Egy oran belul mar $HOUR_N uzenetet kuldtem $TO-nak (plafon: $SENDER_HOUR_CEILING)." >&2
+    echo "  Ez KEZBESITESI PLAFON, nem minosites: nem azt allitja, hogy ez az uzenet gyenge." >&2
+    echo "  Azt, hogy oda ma mar nem fer be tobb figyelem. Ugyanaz a logika, mint a fenti" >&2
+    echo "  cimzett-oldali kapue, csak a KULDO vegen -- es az elso hat uzenetet semmi nem allitja meg." >&2
+    echo "  Ird a kartyara kommentkent. Az uzenet tol, a kartya huzat." >&2
+    echo "  ES AMIT EZ NEM OLD MEG: a KERETET. Merve 2026-09-11 a valodi 24 oras forgalmon:" >&2
+    echo "  ez a plafon 49 uzenetet fog meg 842-bol (5,8%), ~31 e tokent a napi ~524 e irasbol." >&2
+    echo "  Aki ugy olvassa, hogy 'a keret rendben van'," >&2
+    echo "  pontosan azt a hibat koveti el, amit ez a flotta egesz ejjel mert." >&2
     echo "  Ha tenyleg most kell mennie:  bash scripts/agent-msg.sh $FROM $TO \"...\" --force" >&2
     exit 2
   fi
