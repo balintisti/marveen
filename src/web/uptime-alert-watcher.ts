@@ -142,19 +142,80 @@ function project(): Probe<string> {
   return p
 }
 
-async function getJson(url: string, token: string): Promise<Probe<unknown>> {
+/**
+ * THE CALL HAS NO TIMEOUT, AND THIS INSTRUMENTATION IS DELIBERATELY NOT ONE (card 77c305a4).
+ *
+ * The gap is real: `getJson` is a bare fetch while the two gcloud calls in this same file
+ * carry GCLOUD_TIMEOUT_MS, so the author knew the concept and this one path was missed. A
+ * hung fetch never returns, so the retry added by card 213abf0d never even gets its turn:
+ *
+ *     no timeout    -> the tick STOPS, and the next tick starts beside it two minutes later
+ *     timeout hit   -> the tick FAILS, and the failure NAMES ITSELF
+ *
+ * WHY NOT JUST ADD A TIMEOUT. marveen's ruling on this card forbids guessing the threshold,
+ * and the reason is in his words: an UNMEASURED number inside a guard is worse than no guard,
+ * because the guard's verdict then travels as if it had been measured. A too-tight limit would
+ * call a SLOW BUT WORKING API unreachable -- the alarming direction, and it lands in other
+ * people's rounds. Nothing here retains a response-time distribution for this API, so there is
+ * nothing to set a limit from.
+ *
+ * SO THIS IS THE CHEAP FIRST STEP THE CARD NAMES: record how long the call takes. With the
+ * distribution the threshold is one line; without it, it is a guess.
+ *
+ * AND THE PART THAT IS EASY TO LEAVE OUT: a duration is only recorded when the call RETURNS,
+ * so a hang -- the very thing we are looking for -- leaves NO sample. The in-flight registry is
+ * the other half: a call still running when the next tick begins is, BY OUR OWN CONFIGURATION,
+ * overdue. That threshold is not a guess about Google; it is INTERVAL_MS, which we chose.
+ */
+export type InFlightCall = { url: string; startedAt: number }
+
+let inFlight: InFlightCall[] = []
+
+/** Pure, so the overdue rule is testable without a clock or a socket. */
+export function overdueCalls(calls: InFlightCall[], now: number, limitMs = INTERVAL_MS): InFlightCall[] {
+  return calls.filter((c) => now - c.startedAt >= limitMs)
+}
+
+/** Test seam: the registry is module state, and a test must be able to see and clear it. */
+export function pollerInFlight(): InFlightCall[] {
+  return [...inFlight]
+}
+
+export function resetPollerInFlight(): void {
+  inFlight = []
+}
+
+// Exported for the contract test: the whole point is what this function RECORDS, and that
+// cannot be asserted from the tick without also standing up gcloud.
+export async function getJson(url: string, token: string): Promise<Probe<unknown>> {
   const where = url.split('?')[0]
+  const startedAt = Date.now()
+  const entry: InFlightCall = { url: where, startedAt }
+  inFlight.push(entry)
+  const done = (outcome: string) => {
+    inFlight = inFlight.filter((c) => c !== entry)
+    // INFO, not DEBUG, ON PURPOSE: the default level is info (src/logger.ts), so a debug line
+    // would leave NOTHING retained -- and a retained distribution is the entire deliverable.
+    logger.info({ ms: Date.now() - startedAt, url: where, outcome }, 'uptime poller: API call latency')
+  }
   try {
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
     if (!res.ok) {
+      done(`http-${res.status}`)
       logger.warn({ status: res.status, url: where }, 'uptime poller: API call failed')
       // The STATUS is the diagnosis: 401/403 is the credential, 404 is the
       // project or the path, 5xx is Google. Collapsing them into null is the
       // same defect as discarding stderr, one layer out.
       return { ok: false, reason: `HTTP ${res.status} from ${where}` }
     }
-    return { ok: true, value: await res.json() }
+    // The body is read INSIDE the measurement: a response whose headers arrive fast and whose
+    // body never finishes is the same hang, one layer down, and stopping the clock at the
+    // header would hide exactly that case.
+    const value = await res.json()
+    done('ok')
+    return { ok: true, value }
   } catch (err) {
+    done('threw')
     logger.warn({ err, url: where }, 'uptime poller: API call threw')
     const msg = redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, MAX_REASON_CHARS)
     return { ok: false, reason: `request to ${where} threw: ${msg}` }
@@ -232,6 +293,17 @@ function enqueueVerified(content: string): boolean {
 }
 
 export async function uptimeTick(now = Date.now()): Promise<void> {
+  // A call still running as this tick starts cannot complete inside its own tick any more, so
+  // it is the hang this card is about -- and it is only visible HERE, because the hung call
+  // itself never reaches its own logging. Warn, do not abort: we have no measured basis for
+  // deciding it is dead rather than slow, and killing a slow-but-working call is the alarming
+  // direction this card's ruling rules out.
+  for (const c of overdueCalls(inFlight, now)) {
+    logger.warn(
+      { url: c.url, msSoFar: now - c.startedAt, limitMs: INTERVAL_MS },
+      'uptime poller: an API call is still in flight as the next tick begins -- no timeout exists on this path (card 77c305a4)',
+    )
+  }
   const tokenProbe = accessToken()
   const projProbe = project()
 
