@@ -320,6 +320,75 @@ function lstatSyncSafe(p: string): ReturnType<typeof lstatSync> | null {
 
 interface WorkerSettings { enabledPlugins?: Record<string, boolean>; [k: string]: unknown }
 
+/** One entry of a settings `hooks` event array: a matcher plus its hook commands. */
+type HookMatcher = { matcher?: string; hooks?: unknown[]; [k: string]: unknown }
+type HookBlock = Record<string, HookMatcher[]>
+
+/**
+ * Read the shared `~/.claude/settings.json` `hooks` block.
+ *
+ * WHY THIS READ EXISTS AT ALL. The worker config dir symlinks every entry of
+ * ~/.claude EXCEPT settings.json -- deliberately, because the worker needs its own
+ * enabledPlugins and skipDangerousModePermissionPrompt (WORKER_CONFIG_SKIP). That
+ * exclusion is correct and is NOT overridden here. What it took with it was the
+ * shared `hooks` key, which is where every governance gate in this fleet lives, by
+ * absolute path. Measured 2026-09-11 by didi and computress independently, matching
+ * numbers: both worker settings.json were 417 bytes with NO hooks key at all, while
+ * the shared file and every agent config carried the full block.
+ *
+ * AND THE OBVIOUS ALTERNATIVE IS STRUCTURALLY IMPOSSIBLE, which is why the fix has
+ * to be here: the symlinked `hooks/` DIRECTORY has zero gate references -- on BOTH
+ * sides, shared and worker. That directory was never the gates' home. The gates are
+ * referenced from the `hooks` KEY of settings, so extending the directory symlink
+ * could not have closed the gap.
+ *
+ * FAIL-SOFT ON PURPOSE. This runs on the worker boot path. A missing or malformed
+ * shared settings file must not stop a worker from starting, so it degrades to
+ * "no shared hooks" -- the behaviour that was in place before this function
+ * existed, not a worse one.
+ */
+export function readSharedHooks(claudeDir: string): HookBlock | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(join(claudeDir, 'settings.json'), 'utf-8'))
+    const hooks = (parsed as { hooks?: unknown } | null)?.hooks
+    if (!hooks || typeof hooks !== 'object' || Array.isArray(hooks)) return undefined
+    return hooks as HookBlock
+  } catch { return undefined }
+}
+
+/**
+ * Merge the shared hooks block into whatever the worker's settings already had.
+ *
+ * ADDITIVE, NOT REPLACING, and the direction is argued: the worker's own entries are
+ * whatever Claude Code wrote there in a prior run, and the existing code deliberately
+ * merge-preserves them. Shared entries go FIRST (they are the fleet contract), local
+ * ones follow, and an entry already present on both sides is not doubled -- a
+ * duplicated PreToolUse gate would run twice per Bash call, which is not a
+ * correctness bug but is a per-call cost on every command the worker ever issues.
+ *
+ * Dedup is by serialised equality, which is exact rather than clever: two entries
+ * that differ only in key order would both survive. That is the safe direction --
+ * a duplicate is wasteful, a dropped gate is the defect this card is about.
+ */
+export function mergeSharedHooks(
+  shared: HookBlock | undefined,
+  local: unknown,
+): HookBlock | undefined {
+  const localBlock: HookBlock = (local && typeof local === 'object' && !Array.isArray(local))
+    ? local as HookBlock
+    : {}
+  if (!shared) return Object.keys(localBlock).length ? localBlock : undefined
+
+  const out: HookBlock = {}
+  for (const event of new Set([...Object.keys(shared), ...Object.keys(localBlock)])) {
+    const s = Array.isArray(shared[event]) ? shared[event] : []
+    const l = Array.isArray(localBlock[event]) ? localBlock[event] : []
+    const seen = new Set(s.map(e => JSON.stringify(e)))
+    out[event] = [...s, ...l.filter(e => !seen.has(JSON.stringify(e)))]
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
 /**
  * Build (idempotently) the worker's isolated cwd + CLAUDE_CONFIG_DIR:
  *  - empty project .mcp.json (defense in depth);
@@ -374,7 +443,9 @@ export function ensureWorkerCwd(ctx: WorkerCtx = ctxSlow): void {
   }
 
   // settings.json: own it; force all channel plugins off (merge-preserve any
-  // hook config Claude Code wrote in a prior run).
+  // hook config Claude Code wrote in a prior run) AND carry the shared `hooks`
+  // block, which WORKER_CONFIG_SKIP would otherwise strip along with the file.
+  // See readSharedHooks/mergeSharedHooks above for why the fix has to live here.
   const settingsPath = join(ctx.configDir, 'settings.json')
   let current: WorkerSettings = {}
   const sst = lstatSyncSafe(settingsPath)
@@ -391,7 +462,13 @@ export function ensureWorkerCwd(ctx: WorkerCtx = ctxSlow): void {
   // skipDangerousModePermissionPrompt: suppress the "Bypass Permissions mode"
   // first-run warning so the headless worker (launched with
   // --dangerously-skip-permissions) reaches its prompt without a blocking modal.
-  writeFileSync(settingsPath, JSON.stringify({ ...current, enabledPlugins, skipDangerousModePermissionPrompt: true }, null, 2) + '\n')
+  const hooks = mergeSharedHooks(readSharedHooks(realClaude), current.hooks)
+  writeFileSync(settingsPath, JSON.stringify({
+    ...current,
+    enabledPlugins,
+    ...(hooks ? { hooks } : {}),
+    skipDangerousModePermissionPrompt: true,
+  }, null, 2) + '\n')
 
   // Subscription auth: materialise the host login JSON as .credentials.json AND
   // clear the stale path-hashed Keychain entry that would shadow it (see the
