@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -175,5 +175,136 @@ describe('decision-index.py -- a --check tud PIROSAT is mondani', () => {
     run(tmp, [])
     const b = readFileSync(join(tmp, 'docs', 'scripts-decisions.md'), 'utf-8')
     expect(b).toBe(a)
+  })
+})
+
+// ============================================================================================
+// A NAGYBETUS NYITANY AGA (kartya 6819ff25, didi lelete, friday merese 2026-09-11)
+//
+// A `^WHY` horgony a SZORENDRE bukott: egy `WHAT WENT WRONG, AND WHY ... IS NOT THE FIX.`
+// fejlec dontes-sor, es a kinyero szerkezetileg nem latta -- kozben a `--check` `naprakesz`-t
+// mondott, rc=0. Nem hianyzo kapu, hanem olyan, ami ZOLDET mond arra, amit nem lat.
+//
+// A KEZENFEKVO TAGITAS MERVE ES ELVETVE: `\bWHY\b` barhol a sorban 18 uj jelolt-sort ad,
+// mind a 18 elolvasva, 11 proza -> 61% hamis pozitiv. Ezert all itt KET negativ teszt is:
+// azok rogzitik, hogy a horgony NEM tagult el addig. Ha valaki `\bWHY\b`-ra csereli, ezek
+// mennek pirosra -- nem a pozitivak.
+// ============================================================================================
+describe('decision-index.py -- a NAGYBETUS NYITANY, es ameddig NEM tagul', () => {
+  let tmp: string
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'decidx-caps-'))
+    spawnSync('git', ['init', '-q'], { cwd: tmp })
+    mkdirSync(join(tmp, 'scripts'), { recursive: true })
+    mkdirSync(join(tmp, 'docs'), { recursive: true })
+  })
+
+  afterEach(() => rmSync(tmp, { recursive: true, force: true }))
+
+  function generate(): string {
+    spawnSync('git', ['add', '-A'], { cwd: tmp })
+    expect(run(tmp, []).code).toBe(0)
+    return readFileSync(join(tmp, 'docs', 'scripts-decisions.md'), 'utf-8')
+  }
+
+  // A MERT ESET MAGA: `scripts/assert-isolated.py` a torzson, es 0 talalat az indexben.
+  it('a WHY NEM a sor elejen all, de a NAGYBETUS nyitanyban -- bekerul', () => {
+    writeFileSync(
+      join(tmp, 'scripts', 'izolalt.py'),
+      '#!/usr/bin/env python3\n"""Proba.\n\nWHAT WENT WRONG, AND WHY "READ THE VARIABLE" IS NOT THE FIX. Egy mechanizmus kell.\n"""\nprint(1)\n',
+    )
+    const body = generate()
+    expect(body).toContain('scripts/izolalt.py')
+    expect(body).toContain('WHAT WENT WRONG, AND WHY')
+  })
+
+  // A MASIK FELE, es ezt egy FAJL-szintu cenzus sosem latja: a fajl MAR indexelt egy masik
+  // sora miatt, es ez a SZEKCIO-CIME marad ki. A `===` elotag miatt bukott a `^WHY`.
+  it('`===` elotagu szekcio-cim is bekerul, a fajl mar meglevo sora MELLE', () => {
+    writeFileSync(
+      join(tmp, 'scripts', 'kapu.py'),
+      '#!/usr/bin/env python3\n"""Proba.\n\nWHY THIS EXISTS: az elso indok.\n\n=== WHY THE TARGET IS MATCHED BY realpath AND NOT BY NAME\n\nMert tiz ut vezet ide.\n"""\nprint(1)\n',
+    )
+    const body = generate()
+    expect(body).toContain('WHY THIS EXISTS: az elso indok.')
+    expect(body).toContain('=== WHY THE TARGET IS MATCHED BY realpath')
+  })
+
+  // NEGATIV 1 -- TORDELT PROZA. Ez volt a 11 hamis pozitiv tobbsege.
+  it('mondat KOZEPEN allo `why` NEM tesz be egy fajlt', () => {
+    writeFileSync(
+      join(tmp, 'scripts', 'prozas2.sh'),
+      '#!/bin/bash\n# prozas2.sh -- a kimenet nem volt bizonyitek arra, amit allitottunk;\n# evidence. That is why test 3 exists at all.\necho ok\n',
+    )
+    expect(generate()).not.toContain('scripts/prozas2.sh')
+  })
+
+  // NEGATIV 2 -- SZERZODES-TABLAZAT SORA. Harom fajl hordozza ugyanezt a sort a torzson
+  // (calendar-agenda.sh, capacity-report.sh, card-flow-report.sh), es egyik sem dontes.
+  it('szerzodes-tablazat sora NEM tesz be egy fajlt', () => {
+    writeFileSync(
+      join(tmp, 'scripts', 'szerzodes.sh'),
+      '#!/bin/bash\n# szerzodes.sh -- a ket kimenet:\n#     {"ok":false,"error":"..."}   we could not look, and this is why\necho ok\n',
+    )
+    expect(generate()).not.toContain('scripts/szerzodes.sh')
+  })
+})
+
+// ============================================================================================
+// A MODUL-SZINTU FUTAS GUARDJA (ugyanaz a kartya). Guard nelkul egy `import` LEFUTTATTA a
+// `main()`-t, vagyis UJRAGENERALTA a `docs/scripts-decisions.md`-t abban a faban, ahonnan
+// importaltak. 2026-09-11-en egy oran belul KETTEN futottunk bele (didi, majd friday),
+// mindketten epp azert importaltuk, hogy a kinyerot empirikusan merjuk.
+// A POPULACIO: 55 kovetett `scripts/*.py` hordoz `def main(`-t, ebbol 54 hivja `if __name__`
+// guard alatt, es EZ AZ EGY nem hivta.
+// A BIZONYITEK a FAJL HIANYA, nem a kilepesi kod: az import sikeres mindket valtozatban.
+// ============================================================================================
+describe('decision-index.py -- az import nem ir fajlt', () => {
+  let tmp: string
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'decidx-import-'))
+    spawnSync('git', ['init', '-q'], { cwd: tmp })
+    mkdirSync(join(tmp, 'scripts'), { recursive: true })
+    mkdirSync(join(tmp, 'docs'), { recursive: true })
+    writeFileSync(
+      join(tmp, 'scripts', 'proba.sh'),
+      '#!/bin/bash\n# MIERT LETEZIK: hogy legyen mit generalni.\necho ok\n',
+    )
+    spawnSync('git', ['add', '-A'], { cwd: tmp })
+  })
+
+  afterEach(() => rmSync(tmp, { recursive: true, force: true }))
+
+  it('importkor NEM keletkezik docs/scripts-decisions.md', () => {
+    const prog = [
+      'import importlib.util, sys',
+      `spec = importlib.util.spec_from_file_location('di', ${JSON.stringify(SCRIPT)})`,
+      'm = importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(m)',
+      "print('IMPORT_OK', callable(m.header), callable(m.is_decision))",
+    ].join('\n')
+    const r = spawnSync('python3', ['-c', prog], { cwd: tmp, encoding: 'utf-8' })
+    expect(r.status, r.stderr ?? '').toBe(0)
+    expect(r.stdout).toContain('IMPORT_OK True True')
+    expect(existsSync(join(tmp, 'docs', 'scripts-decisions.md'))).toBe(false)
+  })
+
+  // POZITIV KONTROLL: ugyanaz a proba a GUARD NELKULI alakon MEGIRJA a fajlt. Enelkul a
+  // fenti allitas egy olyan szkripttel is zold lenne, ami egyaltalan nem tud generalni.
+  it('KONTROLL: a guard nelkuli masolat UGYANEZZEL a probaval megirja', () => {
+    const src = readFileSync(SCRIPT, 'utf-8')
+    const noGuard = src.replace("if __name__ == '__main__':\n    sys.exit(main())", 'sys.exit(main())')
+    expect(noGuard, 'a guard horgonya elmozdult -- a kontroll nem mer semmit').not.toBe(src)
+    const copy = join(tmp, 'noguard.py')
+    writeFileSync(copy, noGuard)
+    spawnSync('python3', ['-c', [
+      'import importlib.util',
+      `spec = importlib.util.spec_from_file_location('di2', ${JSON.stringify('__COPY__')})`,
+      'm = importlib.util.module_from_spec(spec)',
+      'try:\n    spec.loader.exec_module(m)\nexcept SystemExit:\n    pass',
+    ].join('\n').replace('__COPY__', copy)], { cwd: tmp, encoding: 'utf-8' })
+    expect(existsSync(join(tmp, 'docs', 'scripts-decisions.md'))).toBe(true)
   })
 })

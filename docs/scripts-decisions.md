@@ -17,20 +17,25 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
 Populacio: `git ls-files scripts/` = **236** kovetett fajl, ebbol
-**70** hordoz dontes-fejlecet.
+**72** hordoz dontes-fejlecet.
 
-## Nem olvasott fejlec-alak (2)
+## Nem olvasott fejlec-alak (3)
 
 Ezek a fajlok egyik olvasott fejlec-alakot sem hasznaljak (sor-komment,
 docstring, blokk-komment), de a fejlec-tartomanyukban all dontes-alaku sor.
 Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - `scripts/com.marveen.idle-reporter.plist.template` -- MIERT KULON FOLYAMAT, ES NEM A DASHBOARDBAN EGY TIMER: mert epp azt az esetet
+- `scripts/expiry-inventory.json` -- "WHY A DECLARED PROBE AND NOT A DATE FIELD: a stored date drifts silently the",
 - `scripts/sql/tasks-reopen-grant.sql` -- MIERT ALL EZ ITT, ES NEM CSAK A KARTYAN: a fajlt UJRAFUTTATTAK nyitott kerdeskent,
 
 ### `scripts/__tests__/channels-main-model.test.sh`
 
 - Why this exists (2026-07-29): the model was read ONLY from
+
+### `scripts/__tests__/expiry-check.test.py`
+
+- WHAT THESE PIN, AND WHY THESE AND NOT THE HAPPY PATH. The defect this checker
 
 ### `scripts/__tests__/hook-agent-id-resolver.test.py`
 
@@ -71,6 +76,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/applies-cleanly.sh`
 
 - WHY IT EXISTS (card 64968e12, measured 2026-08-29). mandark reviewed 15 commits against
+
+### `scripts/assert-isolated.py`
+
+- WHAT WENT WRONG, AND WHY "READ THE VARIABLE" IS NOT THE FIX. On 2026-09-11 I measured
 
 ### `scripts/calendar-agenda.sh`
 
@@ -163,10 +172,12 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/hooks/db-destructive-gate.py`
 
 - WHY THIS EXISTS, AND WHY THE PERMISSION LIST IS NOT ENOUGH (measured 2026-08-19,
+- === THE OVERRIDE, AND WHY IT IS A TOKEN AND NOT A CARVE-OUT
 
 ### `scripts/hooks/memory-index-write-gate.py`
 
 - WHY THIS EXISTS (card c837502c, didi's finding d85cfbb4 c8). The index overflow rule had
+- === WHY THE TARGET IS MATCHED BY realpath AND NOT BY NAME
 
 ### `scripts/hooks/outgoing-copy-gate.py`
 
