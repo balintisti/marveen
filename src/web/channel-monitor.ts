@@ -37,6 +37,7 @@ import { reapChannelOrphans, reapDetachedChannelClaudes, collectPollerEvidence }
 import { probeTelegramConflict } from './channel-conflict-probe.js'
 import { schedulePluginUnlockAfterRespawn, wasPluginConfirmedAbsent, clearPluginAbsent } from './channel-plugin-unlock.js'
 import { getInjectedPrompt, matchesInjectedPrompt } from './injected-prompt-registry.js'
+import { probeSigTransition, sigTransitionFacts } from './stuck-sig-transition-probe.js'
 import {
   detectPaneState, decidePaneErrorAlert, detectsBlockingMenu, detectsFirstRunGate, detectsModelConsentDialog, detectsPermissionPrompt, type PaneErrorAlertState, type PaneState,
   stuckInputSignature, decideStuckInputRecovery, parkedChannelInput,
@@ -323,7 +324,14 @@ export async function recoverStuckInputForSession(
   // (phantom prompt-injection). See captureParkedInputView / stripGhostSuggestion.
   const pane = captureParkedInputView(session)
   const sig = pane != null ? stuckInputSignature(pane) : null
-  const decision = decideStuckInputRecovery(sig, prev, Date.now(), thresholds)
+  const nowMs = Date.now()
+  const decision = decideStuckInputRecovery(sig, prev, nowMs, thresholds)
+  // DIAGNOSTIC (card 7406eb1f, observe only): the deferral log records `attempts` but not
+  // why it moves, and `attempts: 0` forever has two opposite causes -- a signature that
+  // keeps changing, or a confirm window that never elapses. Emits facts, not a verdict.
+  probeSigTransition(session, agent, sigTransitionFacts(
+    sig, prev.parkedSig, prev.firstSeenAt, prev.attempts, decision.recover, nowMs,
+  ))
   if (decision.recover && pane != null) {
     const attempt = decision.next.attempts
     const block = parkedChannelInput(pane)
