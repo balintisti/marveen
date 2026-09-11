@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **239** kovetett fajl, ebbol
-**74** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **241** kovetett fajl, ebbol
+**75** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -238,6 +238,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/lib/content-hash.sh`
 
 - Why this exists: `md5sum` does not exist on macOS, and the flagship host's
+
+### `scripts/lib/pg-argv-safe.sh`
+
+- WHY THE SCRIPTS WERE NOT CARELESS. `delta-crm-backup.sh`'s own header says
 
 ### `scripts/limit-monitor.sh`
 
