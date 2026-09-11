@@ -60,6 +60,16 @@ sed -e "s|^ENV_FILE=.*|ENV_FILE=\"$ENVF\"|" \
     -e "s|^NOTIFY_SCRIPT=.*|NOTIFY_SCRIPT=\"$STUB\"|" \
     -e "s|^DASHBOARD_TOKEN_FILE=.*|DASHBOARD_TOKEN_FILE=\"$TMP/nincs-ilyen-token\"|" \
     "$SCRIPT" > "$TMP/under-test.sh"
+# THE FIFTH PATH THIS HARNESS HAS TO SUPPLY, for the same reason as the other
+# four: it builds a RUNNABLE COPY, and the script now sources
+# `scripts/lib/pg-argv-safe.sh` (card 38bd8366, the password off argv). The copy
+# sits in a temp dir, so the script's first resolution finds no `lib/` beside it
+# and its second is an absolute path that only exists once this branch is merged.
+# Without this line the copy REFUSES -- correctly, by that guard's own design --
+# and every assertion below about the retry loop fails for a reason that has
+# nothing to do with retrying.
+mkdir -p "$TMP/lib"
+cp "$(cd "$(dirname "$0")/.." && pwd)/lib/pg-argv-safe.sh" "$TMP/lib/"
 mkdir -p "$TMP/backups"
 # no `timeout` on stock macOS (rc=127 looks exactly like a failing dump, which is
 # how this test lied to itself once already). Use it only when it exists.
