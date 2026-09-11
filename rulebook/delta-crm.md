@@ -1969,7 +1969,8 @@ ROLLBACK TO SAVEPOINT gate_before;
 
 -- ... a mérés, UGYANEBBEN a tranzakcióban ...
 -- ÉS MINDEN SPEKULATÍV LEKÉRDEZÉS SAJÁT SAVEPOINTOT KAP -- lásd a blokk alatt:
---   SAVEPOINT p1;  SELECT ... ;  RELEASE SAVEPOINT p1;   (hiba esetén: ROLLBACK TO p1)
+--   \set ON_ERROR_ROLLBACK on   <- EZ, es NEM kezi SAVEPOINT/RELEASE par (lasd lentebb:
+--   a kezi alak MERVE 1/2 kapu-tuzelest ad egy elgepelt nev utan, es a helper MEGTAGADJA)
 
 SAVEPOINT gate_after;
 UPDATE "<tabla>" SET "<oszlop>" = "<oszlop>" WHERE false;     -- ennek is HIBÁT kell adnia
@@ -2005,6 +2006,8 @@ jelenti be magát: a recept minden látható eleme a helyén marad.
 2026-09-05 20:0x, KÉT ÓRÁVAL azután, hogy ezt a bekezdést ideírta.** A kézzel írt pár így néz ki:
 
 ```sql
+-- ⚠ EZ A ROSSZ ALAK. NE MASOLD KI INNEN -- ez a DEFEKTUS bemutatasa, nem recept.
+-- A helyes alak harom bekezdessel lentebb all: \set ON_ERROR_ROLLBACK on
 SAVEPOINT p1;
 SELECT count(*) FROM "<amiben nem vagy biztos>";
 RELEASE SAVEPOINT p1;        -- siker esetén; HIBA esetén: ROLLBACK TO SAVEPOINT p1;
