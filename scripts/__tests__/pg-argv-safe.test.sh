@@ -31,9 +31,41 @@ check "query params are preserved" \
   "postgresql://appuser:pw-invented@db.example.test:5432/mydb?sslmode=require&connect_timeout=15"
 
 # The reason the split is on the LAST `@`: an encoded one inside the secret.
+#
+# THE EXPECTED PASSWORD IS THE DECODED ONE, AND THAT IS THE POINT -- card 87cfe5ae.
+# Until then this line asserted `a%40b%40c`, i.e. it PINNED a defect: libpq
+# percent-decodes the URI userinfo but reads PGPASSWORD literally, so handing
+# over the raw substring authenticates with a different string than the URL
+# meant. The test NAME was always right; the assertion was the wrong half.
+# If a later change makes this go red, the change is wrong, not this line.
 check "password containing an encoded at-sign" \
-  "postgresql://appuser@db.example.test/mydb" "a%40b%40c" \
+  "postgresql://appuser@db.example.test/mydb" "a@b@c" \
   "postgresql://appuser:a%40b%40c@db.example.test/mydb"
+
+# %25 is the only way a literal `%` can appear in a URI, so it MUST come back
+# as one -- otherwise a password containing `%` round-trips to something else.
+check "encoded percent sign decodes to one percent sign" \
+  "postgresql://appuser@db.example.test/mydb" "100%" \
+  "postgresql://appuser:100%25@db.example.test/mydb"
+
+# A `%` that is NOT valid encoding is left EXACTLY as it stands. Rewriting it
+# would be a guess about what the author meant, and a guess about a password is
+# an authentication failure.
+check "stray percent sign is left alone" \
+  "postgresql://appuser@db.example.test/mydb" "a%zzb" \
+  "postgresql://appuser:a%zzb@db.example.test/mydb"
+
+check "trailing percent sign is left alone" \
+  "postgresql://appuser@db.example.test/mydb" "vege%" \
+  "postgresql://appuser:vege%@db.example.test/mydb"
+
+# THE ONE THAT RULES OUT THE OBVIOUS IMPLEMENTATION. The usual one-line decoder
+# is `printf %b "${s//%/\\x}"`, which also interprets every other backslash
+# escape -- so a password containing a literal backslash would be rewritten and
+# the failure would look like a wrong password, not like a decoder bug.
+check "a literal backslash survives decoding" \
+  "postgresql://appuser@db.example.test/mydb" 'back\slash' \
+  'postgresql://appuser:back\slash@db.example.test/mydb'
 
 # A password may contain a colon; only the FIRST colon separates user from pass.
 check "password containing a colon" \
