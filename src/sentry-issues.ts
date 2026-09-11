@@ -158,6 +158,19 @@ export interface SentryIssueDecision {
    * is counted (card 65a324b2).
    */
   gapArrivals: number
+  /**
+   * On a COLD START THAT HAD A WATERMARK: how long the poller was not reading,
+   * in ms. Null on a genuine first run (no watermark to compare against) and on
+   * every warm tick.
+   *
+   * ONE FIELD, TWO JOBS, AND THE FIRST ONE IS THE POINT (card 1dec3f4b): null
+   * versus non-null is the only thing that separates a FIRST READ from a
+   * RESTART, and `coldStart` alone cannot -- every process start is a cold
+   * start, while the watermark survives (card 65a324b2). `gapArrivals` does not
+   * separate them either: it is zero both on a first run and on a restart
+   * during which nothing arrived.
+   */
+  restartGapMs: number | null
   /** Unresolved issues visible this tick, across every org that answered. */
   totalIssues: number
   /**
@@ -216,6 +229,9 @@ export function decideSentryIssues(
   // the behaviour this module shipped with and which stays unchanged.
   const since = prev.lastReadAtMs
   const gapArrivals = coldStart && since != null ? fresh.filter(i => firstSeenAfter(i, since)) : []
+  // The same condition, kept as a number so the notice can tell a restart from a
+  // first read WITHOUT re-deriving it from state it does not receive.
+  const restartGapMs = coldStart && since != null ? Math.max(0, nowMs - since) : null
 
   // On the seeding tick nothing is "new" -- everything standing is history,
   // EXCEPT what arrived while nobody was looking.
@@ -241,6 +257,7 @@ export function decideSentryIssues(
     suppressed,
     coldStart,
     gapArrivals: gapArrivals.length,
+    restartGapMs,
     totalIssues: unique.length,
     noIssues: unique.length === 0,
     blind,
@@ -289,9 +306,29 @@ function describe(i: SentryIssue): string {
 export function buildSentryNotice(d: SentryIssueDecision): string | null {
   if (d.coldStart) {
     if (d.totalIssues === 0) return null // the zero case is the unreadable notice's job
+    // A COLD START IS NOT A FIRST READ -- card 1dec3f4b, and the label was the
+    // whole of the defect. Every process start is a cold start, so this notice
+    // announced itself as the FIRST READ on every restart, for the Nth time,
+    // saying "from here on this poller reports ARRIVALS" to a reader who had
+    // already been told that. The discriminator was already in the decision
+    // (`restartGapMs`, from the watermark of card 65a324b2); only the text
+    // ignored it. Nothing about WHAT is announced changes here.
+    const gapMin =
+      d.restartGapMs != null ? Math.max(0, Math.round(d.restartGapMs / 60_000)) : null
     const head =
-      `[sentry] FIRST READ: ${d.totalIssues} unresolved issue(s) standing in the silent band. `
+      gapMin != null
+        ? `[sentry] RESUMED after ${gapMin} min not reading: ${d.totalIssues} unresolved issue(s) standing. `
+        : `[sentry] FIRST READ: ${d.totalIssues} unresolved issue(s) standing in the silent band. `
     if (d.newlySeen.length === 0) {
+      // AND THE TAIL SPLITS WITH THE HEAD, or the restart line would still end
+      // in a sentence that only makes sense the first time.
+      if (gapMin != null) {
+        return (
+          head +
+          'NOTHING first appeared during the gap, so there is nothing to announce: the same ' +
+          'backlog stands, and it was already reported. Still reporting ARRIVALS.'
+        )
+      }
       return (
         head +
         'Nobody was notified about any of them -- there is no Sentry seat, so this poller is the ' +

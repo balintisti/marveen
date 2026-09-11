@@ -282,6 +282,8 @@ describe('an arrival during a restart gap is not backlog (card 65a324b2)', () =>
   const WATERMARK = Date.parse('2026-09-05T00:00:00Z')
   const BEFORE = { firstSeen: '2026-09-01T00:00:00Z' }
   const AFTER = { firstSeen: '2026-09-05T12:00:00Z' }
+  /** A "now" that actually follows the watermark: 154 minutes after it. */
+  const AFTER_NOW = WATERMARK + 154 * 60_000
 
   it('announces ONLY what first appeared after the watermark, and seeds the rest', () => {
     const old1 = issue('1', 'delta-crm', BEFORE)
@@ -359,13 +361,20 @@ describe('an arrival during a restart gap is not backlog (card 65a324b2)', () =>
   })
 
   it('the notice says the arrivals are arrivals, and still reports the standing total', () => {
+    // NOTE THE CLOCK: this case feeds a watermark, so it is a RESTART, and the
+    // label follows (card 1dec3f4b). It used to read "FIRST READ" here -- on a
+    // tick that by construction is not one. `AFTER_NOW` is used instead of the
+    // file-wide `NOW` because that constant predates the watermark, which would
+    // clamp the gap to zero minutes and hide the number this line checks.
     const d = decideSentryIssues(
       reading({ issues: [issue('1', 'delta-crm', BEFORE), issue('3', 'delta-crm', AFTER)] }),
       { ...NO_SENTRY_STATE, lastReadAtMs: WATERMARK },
-      NOW,
+      AFTER_NOW,
     )
     const notice = buildSentryNotice(d)
-    expect(notice).toContain('FIRST READ: 2 unresolved')
+    expect(notice).toContain('RESUMED after 154 min')
+    expect(notice).toContain('2 unresolved issue(s) standing')
+    expect(notice).not.toContain('FIRST READ')
     expect(notice).toContain('NOT RUNNING')
     expect(notice).toContain('BACKEND-3')
     // and the pre-gap issue is NOT listed -- the half that makes this a fix
@@ -385,6 +394,77 @@ describe('an arrival during a restart gap is not backlog (card 65a324b2)', () =>
     // the blind branch and not about a watermark that never moves at all.
     const ok = decideSentryIssues(reading({ issues: [issue('1')] }), before, NOW)
     expect(ok.next.lastReadAtMs).toBe(NOW)
+  })
+})
+
+/**
+ * THE LABEL, WHICH IS A SEPARATE QUESTION FROM WHAT GETS ANNOUNCED.
+ *
+ * `coldStart` is true on EVERY process start, so the notice announced itself as
+ * the FIRST READ every time the dashboard restarted -- and then promised that
+ * "from here on this poller reports ARRIVALS" to a reader who had been told the
+ * same thing on the previous restart. Nothing was lost (the gap path works, card
+ * 65a324b2); the text was simply describing a different tick than the one that
+ * ran.
+ *
+ * THE TWO CASES ARE PINNED TOGETHER ON PURPOSE. A test that only pinned the
+ * restart wording would pass just as well if the FIRST READ label disappeared
+ * altogether, and the genuine first run is the case the original text was right
+ * about.
+ */
+describe('FIRST READ is not the same tick as a RESTART (card 1dec3f4b)', () => {
+  const WATERMARK = Date.parse('2026-09-05T00:00:00Z')
+  const LATER = WATERMARK + 154 * 60_000
+  const OLD = { firstSeen: '2026-09-01T00:00:00Z' }
+  const standing = () => reading({ issues: [issue('1', 'delta-crm', OLD)] })
+
+  it('a GENUINE first run -- no watermark -- still says FIRST READ', () => {
+    const d = decideSentryIssues(standing(), NO_SENTRY_STATE, LATER)
+    expect(d.coldStart).toBe(true)
+    expect(d.restartGapMs).toBeNull()
+    const notice = buildSentryNotice(d)
+    expect(notice).toContain('FIRST READ')
+    expect(notice).not.toContain('RESUMED')
+  })
+
+  it('a RESTART whose gap was EMPTY does NOT say FIRST READ', () => {
+    // The same reading and the same cold start as above; the ONE difference is
+    // a surviving watermark. This is the common case -- most restarts happen
+    // while nothing new is arriving -- and it is the tick the card is about.
+    const d = decideSentryIssues(
+      standing(),
+      { ...NO_SENTRY_STATE, lastReadAtMs: WATERMARK },
+      LATER,
+    )
+    expect(d.coldStart).toBe(true)
+    // AND `gapArrivals` CANNOT TELL THEM APART: it is 0 in both cases. That is
+    // why the decision carries the gap itself and not just its yield.
+    expect(d.gapArrivals).toBe(0)
+    expect(d.restartGapMs).toBe(LATER - WATERMARK)
+    const notice = buildSentryNotice(d)
+    expect(notice).not.toContain('FIRST READ')
+    expect(notice).toContain('RESUMED after 154 min')
+    expect(notice).toContain('1 unresolved issue(s) standing')
+  })
+
+  it('the RESTART tail drops the promise that only makes sense the first time', () => {
+    // The head and the tail are two separate strings, so fixing one and leaving
+    // the other would still announce a restart that ends "from here on this
+    // poller reports ARRIVALS" -- the sentence that made the label wrong.
+    const restart = buildSentryNotice(
+      decideSentryIssues(standing(), { ...NO_SENTRY_STATE, lastReadAtMs: WATERMARK }, LATER),
+    )
+    expect(restart).not.toContain('From here on')
+    // CONTROL: the first run KEEPS it, so this is about the branch and not
+    // about a sentence that was deleted everywhere.
+    const first = buildSentryNotice(decideSentryIssues(standing(), NO_SENTRY_STATE, LATER))
+    expect(first).toContain('From here on')
+  })
+
+  it('a WARM tick carries no gap at all -- the field is cold-start only', () => {
+    const d = decideSentryIssues(standing(), seeded(issue('1', 'delta-crm', OLD)), LATER)
+    expect(d.coldStart).toBe(false)
+    expect(d.restartGapMs).toBeNull()
   })
 })
 
