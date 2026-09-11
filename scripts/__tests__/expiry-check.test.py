@@ -38,6 +38,22 @@ def emit_raw(text, rc=0):
     return ["python3", "-c", f"import sys;sys.stdout.write({text!r});sys.exit({rc})"]
 
 
+def fake_helper(d, rc=0, out="OK kartya=TEST komment=1"):
+    """A stand-in for card-comment.sh that records its argv and stdin.
+
+    A REAL helper would post to a REAL card. That is the mistake card b786b93b records, and I
+    made it; a test that writes live state is not a test."""
+    path = os.path.join(d, "fake-helper.sh")
+    log = os.path.join(d, "helper.log")
+    with open(path, "w") as fh:
+        fh.write("#!/bin/bash\n"
+                 f'{{ printf "ARGV:%s\\n" "$*"; cat; }} > {log!r}\n'
+                 f'echo {out!r}\n'
+                 f"exit {rc}\n")
+    os.chmod(path, 0o755)
+    return path, log
+
+
 def run(items, threshold=14, now=NOW, as_json=True, env=None, extra=None, scan=None):
     inv = {"threshold_days": threshold, "items": items}
     if scan is not None:
@@ -68,6 +84,92 @@ def json_probe_at(iso):
 
 
 NO_EXPIRY_ITEM = item("static", {"kind": "none_by_construction", "why": "no expiry"})
+
+
+class CardTrace(unittest.TestCase):
+    """--card: a durable trace on a CHANGE, never on an unchanged run.
+
+    marveen's ruling: a card comment is the only channel here that both PERSISTS and PULLS,
+    and it moves updated_at, which is what the sweeps read. Its KNOWN weakness is written into
+    the comment body rather than left to be discovered: it reaches only someone already
+    looking at that card. It is a trace, not a notification."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.state = os.path.join(self.d, "state.json")
+        self.item = item("static", {"kind": "none_by_construction", "why": "x"})
+
+    def _run(self, items, rc=0, extra_env=None):
+        helper, log = fake_helper(self.d, rc=rc)
+        env = {"EXPIRY_CARD_HELPER": helper}
+        env.update(extra_env or {})
+        code, out, err = run(items, as_json=False, env=env,
+                             extra=["--quiet-unless-changed", self.state, "--card", "CARD1"])
+        body = open(log).read() if os.path.exists(log) else None
+        return code, out, body
+
+    def test_a_change_writes_the_trace(self):
+        code, out, body = self._run([self.item])
+        self.assertIsNotNone(body, "a first run is a change and must write")
+        self.assertIn("ARGV:friday CARD1 -", body)
+        self.assertIn("LEJARAT-FIGYELO, VALTOZAS", body)
+        self.assertIn("KARTYA-NYOM CARD1: OK kartya=", out)
+
+    def test_an_unchanged_run_writes_NOTHING(self):
+        self._run([self.item])                       # seed
+        helper, log = fake_helper(self.d)
+        os.remove(log)
+        code, out, _ = run([self.item], as_json=False, env={"EXPIRY_CARD_HELPER": helper},
+                           extra=["--quiet-unless-changed", self.state, "--card", "CARD1"])
+        self.assertFalse(os.path.exists(log), "an unchanged run must not touch the card")
+        self.assertIn("nem valtozott semmi", out)
+
+    def test_the_body_names_its_own_weakness(self):
+        """It must not read as a notification -- its reach is the sweep, not a person."""
+        _, _, body = self._run([self.item])
+        self.assertIn("nem ertesites", body)
+        self.assertIn("aki amugy is ezt a kartyat nezi", body)
+        # The third sentence of the same paragraph -- it names WHAT the reach actually is
+        # (the sweep, via updated_at) rather than only what it is not. A mutation removing it
+        # survived until this line existed.
+        self.assertIn("A hatokore a sopres", body)   # mondatkezdo NAGY A -- merve, nem tippelve
+        self.assertIn("updated_at", body)
+
+    def test_the_diff_names_what_changed(self):
+        self._run([self.item])                       # seed: one item
+        helper, log = fake_helper(self.d)
+        run([self.item, item("newbie", {"kind": "not_queryable", "why": "x"})],
+            as_json=False, env={"EXPIRY_CARD_HELPER": helper},
+            extra=["--quiet-unless-changed", self.state, "--card", "CARD1"])
+        body = open(log).read()
+        self.assertIn("UJ TETEL    newbie", body)
+        self.assertNotIn("static", body.split("NINCS A LELTARBAN")[0].replace("Elso futas", ""))
+
+    def test_a_failed_post_is_LOUD_and_reaches_the_alarm(self):
+        """A trace that did not land must not be quieter than one that did -- that silence is
+        the shape this whole tool exists to close."""
+        code, out, _ = self._run([self.item], rc=1)
+        self.assertIn("NEM SIKERULT", out)
+        self.assertEqual(code, 2, "a failed delivery means the run did not do its job")
+        sched_helper, _ = fake_helper(self.d, rc=1)
+        s2 = os.path.join(self.d, "s2.json")
+        code2, _, _ = run([self.item], as_json=False, env={"EXPIRY_CARD_HELPER": sched_helper},
+                          extra=["--quiet-unless-changed", s2, "--card", "CARD1",
+                                 "--scheduler-exit"])
+        self.assertEqual(code2, 1, "and under --scheduler-exit it must ALARM")
+
+    def test_card_without_quiet_unless_changed_is_skipped_and_says_so(self):
+        helper, log = fake_helper(self.d)
+        code, out, _ = run([self.item], as_json=False, env={"EXPIRY_CARD_HELPER": helper},
+                           extra=["--card", "CARD1"])
+        self.assertFalse(os.path.exists(log), "without change detection it must not write")
+        self.assertIn("ATUGORVA", out)
+
+    def test_no_card_flag_means_no_helper_call_at_all(self):
+        helper, log = fake_helper(self.d)
+        run([self.item], as_json=False, env={"EXPIRY_CARD_HELPER": helper},
+            extra=["--quiet-unless-changed", self.state])
+        self.assertFalse(os.path.exists(log))
 
 
 class SchedulerExit(unittest.TestCase):

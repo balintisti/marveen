@@ -301,6 +301,87 @@ def evaluate(item, now, threshold_days):
     return OK, when, ""
 
 
+def _previous_states(args):
+    """The snapshot as it was BEFORE this run, or None. Read before _suppression writes."""
+    path = getattr(args, "quiet_unless_changed", None)
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            old = json.load(fh)
+        return old.get("states") if isinstance(old.get("states"), dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _changed_lines(prev, rows, unlisted, sweep_failed):
+    """Human-readable diff. On a first run (prev is None) everything is 'new'."""
+    cur = {r["id"]: r["state"] for r in rows}
+    out = []
+    if prev is None:
+        out.append("Elso futas ezen az allapotfajlon -- a teljes kep:")
+        for r in rows:
+            out.append(f"  {r['state']:<11} {r['id']}")
+    else:
+        for k in sorted(set(prev) | set(cur)):
+            if k.startswith("sweep:"):
+                continue
+            a, b = prev.get(k), cur.get(k)
+            if a == b:
+                continue
+            if a is None:
+                out.append(f"  UJ TETEL    {k}: {b}")
+            elif b is None:
+                out.append(f"  ELTUNT      {k} (volt: {a})")
+            else:
+                out.append(f"  VALTOZOTT   {k}: {a} -> {b}")
+    for d in unlisted:
+        out.append(f"  NINCS A LELTARBAN  {d}")
+    for d in sweep_failed:
+        out.append(f"  A SOPRES ELBUKOTT  {d}")
+    return out or ["  (nincs tetel-szintu valtozas; a sopres allapota mozdult)"]
+
+
+def post_card_comment(card, lines, now):
+    """Append a change note to a kanban card. -> (ok: bool, detail: str).
+
+    WHY A CARD COMMENT AND NOT A MESSAGE (marveen's ruling, 2026-09-11): it is the only
+    channel here that both PERSISTS and PULLS. The printed report persists and nobody opens
+    it; a Telegram message pulls and does not persist, and it spends the attention of the one
+    person whose attention is scarce. A comment does both, and it moves `updated_at`, which is
+    what the freshness sweeps and the idle guard actually read -- the trace and the signal are
+    the same write.
+
+    AND THE WEAKNESS IS NAMED RATHER THAN DISCOVERED LATER: a card comment delivers only to
+    someone ALREADY LOOKING AT THAT CARD. Otherwise it STORES rather than delivers. So this is
+    NOT a notification: it is a durable trace whose reach is the sweep, not a person.
+
+    Posted through scripts/card-comment.sh rather than a hand-rolled POST: that helper already
+    owns the token, the timestamp and the read-back, and a second implementation of an API
+    contract is a second thing to drift.
+    """
+    # A HELPER UTJA FELULIRHATO, es ez NEM kenyelmi kapcsolo: enelkul minden teszt, ami ezt
+    # az agat meri, VALODI kartyara irna. Egy teszt, ami eles allapotot modosit, pontosan az
+    # az alak, amit a `b786b93b` kartya rogzit -- es azt en kovettem el ma hajnalban.
+    helper = os.environ.get("EXPIRY_CARD_HELPER") or os.path.join(HERE, "card-comment.sh")
+    body = (f"LEJARAT-FIGYELO, VALTOZAS {now.isoformat(timespec='seconds')}\n\n"
+            + "\n".join(lines)
+            + "\n\nEz a komment AUTOMATIKUS nyom, nem ertesites: csak akkor keletkezik, ha a\n"
+              "figyelt allapot VALTOZOTT. A hatokore a sopres (az `updated_at` mozdul), nem egy\n"
+              "ember -- egy kartya-komment csak ahhoz jut el, aki amugy is ezt a kartyat nezi.\n")
+    try:
+        p = subprocess.run(["bash", helper, "friday", card, "-"],
+                           input=body, capture_output=True, text=True, timeout=30)
+    except OSError as e:
+        return False, f"{type(e).__name__}: {e}"
+    except subprocess.TimeoutExpired:
+        return False, "a helper idotullepesbe futott"
+    out = (p.stdout or "") + (p.stderr or "")
+    if p.returncode != 0 or "OK kartya=" not in out:
+        return False, out.strip().splitlines()[-1] if out.strip() else f"rc={p.returncode}"
+    return True, out.strip().splitlines()[-1]
+
+
 def _suppression(args, rows, now):
     """-> (suppress: bool, why: str). Writes the new snapshot as a side effect.
 
@@ -411,6 +492,10 @@ def main(argv=None):
                          f"Forced to report after {MAX_SILENCE_DAYS} days regardless.")
     ap.add_argument("--max-silence-days", type=int, default=MAX_SILENCE_DAYS,
                     help="ceiling on how long --quiet-unless-changed may stay silent")
+    ap.add_argument("--card", metavar="ID", default=None,
+                    help="on a CHANGE, append the changed items as a comment to this kanban "
+                         "card. Requires --quiet-unless-changed (the change detection lives "
+                         "there). Silent when nothing changed -- that is the point.")
     ap.add_argument("--scheduler-exit", action="store_true",
                     help="map the ladder onto a SCHEDULER's failure semantics: 0 when the "
                          "check RAN and produced a valid report (0/3/4/5), 1 only when the "
@@ -500,7 +585,31 @@ def main(argv=None):
         print()
 
     args._sweep_ids = unlisted + [f"MISSING:{d}" for d in sweep_failed]
+    prev_states = _previous_states(args)
     suppress, why = _suppression(args, rows, now)
+
+    # KARTYA-NYOM: CSAK VALTOZASKOR. A feltetel ugyanaz, ami az elnemitast dönti el -- egy
+    # masodik, sajat valtozas-detektor ket dolog lenne, ami kulon tud elromlani.
+    card_note = ""
+    if args.card:
+        if not args.quiet_unless_changed:
+            card_note = ("A --card ATUGORVA: --quiet-unless-changed nelkul nincs mihez kepest "
+                         "valtozast merni, es minden futas kommentet irna.")
+        elif suppress:
+            card_note = "A --card nem irt: nem valtozott semmi."
+        else:
+            changed = _changed_lines(prev_states, rows, unlisted, sweep_failed)
+            ok_post, detail = post_card_comment(args.card, changed, now)
+            card_note = (f"KARTYA-NYOM {args.card}: {detail}" if ok_post
+                         else f"KARTYA-NYOM {args.card}: NEM SIKERULT -- {detail}")
+            if not ok_post:
+                # A KEZBESITESI HIBA FELULIRJA A JELENTES-KODOT, es ez szandekos: ha a nyom
+                # nem landolt, a futas nem vegezte el a dolgat. A 2 az "az ellenorzo nem
+                # tudott dolgozni" kod, tehat `--scheduler-exit` alatt RIASZT -- a 3 nem
+                # riasztana, es akkor egy elmaradt nyom pontosan olyan csendes lenne, mint
+                # a hiba, ami ellen ez az egesz szerszam keszult. A leleteket a kinyomtatott
+                # jelentes tovabbra is hordozza, tehat a kod feluliras nem veszit informaciot.
+                rc = 2
 
     if swept:
         print("DEKLARALT HELYEK SOPRESE (NEM gep-szintu cenzus -- csak az alabbiak):")
@@ -528,6 +637,9 @@ def main(argv=None):
     if unmeasured:
         print(f"           A {len(unmeasured)} nem merheto tetel NEM 'rendben' -- "
               f"rola semmit nem tudunk. Ez a b91eb75f kartya harmadik resze.")
+    if card_note:
+        print(card_note)
+
     if args.quiet_unless_changed:
         # BOTH directions are announced. Suppression must never be invisible -- but
         # neither must a REFUSAL to suppress: a checker that reports every single day
