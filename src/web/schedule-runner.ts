@@ -816,7 +816,11 @@ async function attemptFireTask(
     // task aimed at a long-busy session would block on the 12s idle wait every
     // tick -- defeating the very purpose of forceSend (inject regardless, let
     // Claude Code queue it). All non-forceSend tasks keep the gate ON.
-    await sendPromptToSession(session, fullPrompt, host, { waitForIdle: !task.forceSend })
+    await sendPromptToSession(session, fullPrompt, host, {
+      waitForIdle: !task.forceSend,
+      survival: 'redelivered',
+      survivalReason: 'scheduled tasks recur -- the next schedule fire re-delivers the same instruction whole',
+    })
     scheduleLastRun.set(task.name, now)
     persistScheduleLastRun()
     // A lateCatchUpMs value means this tick only matched because of the
@@ -911,7 +915,12 @@ async function attemptFireTask(
             // lockMode 'held': we are already inside this pane's lane; taking
             // the lock again would deadlock the promise-chain mutex.
             if (await clearStaleParkedInput(session, host)) {
-              await sendPromptToSession(session, fullPrompt, host, { waitForIdle: false, lockMode: 'held' })
+              await sendPromptToSession(session, fullPrompt, host, {
+                waitForIdle: false,
+                lockMode: 'held',
+                survival: 'redelivered',
+                survivalReason: 'same recurring task as the primary send -- the next schedule fire re-delivers it whole',
+              })
               logger.info({ task: task.name, session, attempt }, 'Scheduled prompt re-injected after swallowed Enter')
             } else {
               sendEnterToSession(session, host)

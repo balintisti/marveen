@@ -1031,7 +1031,10 @@ export async function runMessageRouterTick(): Promise<void> {
         const { prefix, wrapped } = wrapAgentMessageForDelivery(category, safeFromAgent, msg.from_agent, content, msg.id, msg.origin_note)
         // Inline preamble so a fresh session (post hard-restart) doesn't miss
         // the context that explains the tag semantics.
-        await sendPromptToSession(session, prefix + wrapped, host)
+        await sendPromptToSession(session, prefix + wrapped, host, {
+          survival: 'lost',
+          survivalReason: 'markMessageDelivered(msg.id) runs on the next line -- the queue never re-sends a delivered message',
+        })
         if (!markMessageDelivered(msg.id)) {
           logger.warn({ id: msg.id }, 'markMessageDelivered affected 0 rows (deleted concurrently?)')
         }

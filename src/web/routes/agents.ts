@@ -1784,7 +1784,10 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
     const session = agentSessionName(name)
     const host = readAgentRemoteHost(name)
     try {
-      await sendPromptToSession(session, '/login', host)
+      await sendPromptToSession(session, '/login', host, {
+        survival: 'lost',
+        survivalReason: 'one-shot /login; nothing re-issues it (severity: a human is the recovery path and can retry, but no producer brings it back)',
+      })
       // Wait for Claude Code to render the auth URL (typically 3-6s)
       let authUrl: string | null = null
       for (let i = 0; i < 12; i++) {

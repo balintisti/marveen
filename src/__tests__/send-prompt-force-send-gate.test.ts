@@ -20,12 +20,25 @@ describe('sendPromptToSession waitForIdle gate', () => {
   it('sendPromptToSession accepts a waitForIdle option', () => {
     const sigIdx = AGENT_PROCESS.indexOf('export async function sendPromptToSession(')
     expect(sigIdx).toBeGreaterThan(0)
-    const sig = AGENT_PROCESS.slice(sigIdx, sigIdx + 300)
+    const sig = AGENT_PROCESS.slice(sigIdx, sigIdx + 2400)
     // The opts bag grew onBusyTimeout/idleTimeoutMs for the inbox-nudge
     // watcher (an OPTIONAL prompt aborts instead of best-effort-typing into a
-    // busy pane); waitForIdle stays the first, default-ON member. DELIVLOCK805
-    // added lockMode (per-pane delivery mutex: deliver/recover/held).
-    expect(sig).toMatch(/opts:\s*\{\s*waitForIdle\?:\s*boolean;\s*onBusyTimeout\?:\s*'send'\s*\|\s*'abort';\s*idleTimeoutMs\?:\s*number;\s*lockMode\?:\s*SendLockMode\s*\}/)
+    // busy pane); waitForIdle stays a default-ON member. DELIVLOCK805 added
+    // lockMode (per-pane delivery mutex: deliver/recover/held).
+    //
+    // c4b99fa7 made the bag MULTI-LINE and added two REQUIRED members, so the
+    // old single-line regex could no longer match. Pinned member-by-member
+    // instead of as one literal: the previous form also asserted the ORDER and
+    // the exact whitespace, neither of which this contract is about, and it
+    // would break again on the next formatting change.
+    expect(sig).toMatch(/waitForIdle\?:\s*boolean/)
+    expect(sig).toMatch(/onBusyTimeout\?:\s*'send'\s*\|\s*'abort'/)
+    expect(sig).toMatch(/idleTimeoutMs\?:\s*number/)
+    expect(sig).toMatch(/lockMode\?:\s*SendLockMode/)
+    // And the two c4b99fa7 members are REQUIRED -- no `?`. That is the whole
+    // point of the design: a default is the guard that never reaches caller 15.
+    expect(sig).toMatch(/\n\s*survival:\s*SourceSurvival\n/)
+    expect(sig).toMatch(/\n\s*survivalReason:\s*string\n/)
   })
 
   it('the gate defaults ON (waitForIdle !== false) so all other callers keep it', () => {
@@ -50,10 +63,15 @@ describe('sendPromptToSession waitForIdle gate', () => {
   it('the forceSend scheduled-task path opts out of the idle wait', () => {
     const callIdx = SCHEDULE_RUNNER.indexOf('sendPromptToSession(session, fullPrompt, host')
     expect(callIdx).toBeGreaterThan(0)
-    const call = SCHEDULE_RUNNER.slice(callIdx, callIdx + 120)
+    // Widened from 120 chars: c4b99fa7 made this call multi-line.
+    const call = SCHEDULE_RUNNER.slice(callIdx, callIdx + 500)
     // waitForIdle is the negation of forceSend: ON for normal tasks, OFF for
     // forceSend so a long-busy session is not blocked on the 12s gate.
-    expect(call).toMatch(/\{\s*waitForIdle:\s*!task\.forceSend\s*\}/)
+    expect(call).toMatch(/waitForIdle:\s*!task\.forceSend/)
+    // And this caller declares its source re-delivered -- a scheduled task recurs,
+    // so a dropped tick costs one cycle. Pinned because the classification is the
+    // load-bearing half of the declaration, not decoration.
+    expect(call).toMatch(/survival:\s*'redelivered'/)
   })
 
   it('documents WHY forceSend skips the gate', () => {

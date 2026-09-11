@@ -21,9 +21,24 @@
 //     headless channels pane is tmux-default 80 columns (channels.sh
 //     new-session has no -x), and MAIN's only parked-plain-text recovery is
 //     the stuck-input watcher's bare-Enter branch, which submits single-row
-//     text but permanently HOLDS multi-row text (pane-state.ts
-//     decideStuckInputAction default branch; clearStaleParkedInput never
-//     touches MAIN). Single-row is the only self-recoverable shape.
+//     text while multi-row text falls through to the HOLD default
+//     (pane-state.ts decideStuckInputAction; clearStaleParkedInput never
+//     touches MAIN).
+//
+//     CORRECTED (jarvis measured it, card c4b99fa7): this used to say multi-row
+//     is held PERMANENTLY, and that has not been true for a while. Three named
+//     branches now escape the multi-row dead end before the default is reached
+//     -- `clear-scheduled`, `reinject-recorded` (STUCKINPUT827), and
+//     `clear-redelivered` (c4b99fa7). Two of them predate this note.
+//
+//     THE CONCLUSION BELOW SURVIVES ANYWAY, and for a reason worth stating
+//     rather than leaving implicit: every one of those escapes needs evidence
+//     this text cannot be relied on to have. `reinject-recorded` needs a live
+//     registry record, whose TTL is 10 minutes and which does not survive a
+//     dashboard restart; `clear-scheduled` needs a scheduler prefix this is
+//     not; `clear-redelivered` needs a producer declaration AND positive
+//     machine origin. So single-row remains the only shape that recovers
+//     UNCONDITIONALLY, which is what this argument actually rests on.
 //   - One nudge consumes the wall-clock-global debounce whether or not it
 //     lands; a nudge that provably did not lead to a claim (same oldest id
 //     still pending) escalates through a 5-min cooldown, then STOPS after
@@ -367,7 +382,11 @@ async function runBusyWakeup(now: number, pendingCount: number, oldest: { id: nu
     // here: the pane IS busy, and queueing one line for the next turn boundary
     // is precisely the job. What made the old router path wrong was doing this
     // again every 45s; decideBusyWakeup is the brake that was missing.
-    const result = await sendPromptToSession(MAIN_CHANNELS_SESSION, BUSY_WAKEUP_TEXT, null, { waitForIdle: false })
+    const result = await sendPromptToSession(MAIN_CHANNELS_SESSION, BUSY_WAKEUP_TEXT, null, {
+      waitForIdle: false,
+      survival: 'redelivered',
+      survivalReason: 'per-tick wakeup; a non-sent result restores state = prev below and the next tick retries',
+    })
     if (result !== 'sent') {
       state = prev
       logger.info({ inboxWakeupSkipped: result, pending: pendingCount }, 'inbox wakeup: nothing typed; will retry')
@@ -466,6 +485,8 @@ async function tick(): Promise<void> {
       result = await sendPromptToSession(MAIN_CHANNELS_SESSION, nudgeText(resolveLang()), null, {
         onBusyTimeout: 'abort',
         idleTimeoutMs: 2_000,
+        survival: 'redelivered',
+        survivalReason: 'per-tick nudge; an abort restores state = prev so the next tick re-derives and re-sends',
       })
     } catch (err) {
       // A tmux throw means NOTHING was typed -- same as aborted-busy. Restore

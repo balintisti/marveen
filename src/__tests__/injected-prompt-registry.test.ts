@@ -44,6 +44,7 @@ function facts(over: Partial<StuckInputActionFacts>): StuckInputActionFacts {
     blockComplete: false,
     blockTruncated: false,
     truncatedPreamble: false,
+    sourceSurvives: false,
     allowPlainReinject: false,
     hasPlainText: false,
     scheduledTaskBlock: false,

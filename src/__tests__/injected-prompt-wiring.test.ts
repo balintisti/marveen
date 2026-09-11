@@ -36,6 +36,8 @@ describe('the write gate records what it types (card c29aaf14)', () => {
     const session = 'agent-seam-probe'
     await sendPromptToSession(session, 'hello from the seam probe, long enough to be a real frame', null, {
       waitForIdle: false,
+      survival: 'lost',
+      survivalReason: 'test probe; nothing re-delivers it',
     })
     const rec = getInjectedPrompt(session)
     expect(rec).not.toBeNull()

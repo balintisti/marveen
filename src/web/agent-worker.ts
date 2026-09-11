@@ -747,7 +747,11 @@ async function runWorkerAttempt(ctx: WorkerCtx, message: string, timeoutMs: numb
   // deliver; on a wedged holder we fail open past the budget, logged.
   const sendRes = await withSessionSendLock(ctx.session, null, 'deliver', async () => {
     clearWorkerContext(ctx)
-    await sendPromptToSession(ctx.session, buildWorkerPrompt(message, outPath, donePath), null, { lockMode: 'held' })
+    await sendPromptToSession(ctx.session, buildWorkerPrompt(message, outPath, donePath), null, {
+      lockMode: 'held',
+      survival: 'lost',
+      survivalReason: 'a dropped prompt times out the poll below -> {kind:"fail"}; the job is not requeued',
+    })
   })
   if (sendRes.failedOpen) {
     logger.warn({ session: ctx.session, reqId }, 'agent-worker: dispatch ran without the send lane (fail-open past wait budget)')
