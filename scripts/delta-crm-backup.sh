@@ -99,6 +99,26 @@ DBURL_BASE=${DBURL_RAW%%\?*}
 DBURL="${DBURL_BASE}?connect_timeout=${PGCONNECT_TIMEOUT:-15}"
 [ -n "$DBURL" ] || fail "DATABASE_URL nem olvashato ki a .env-bol"
 
+# THE PASSWORD MUST NOT REACH argv -- card 38bd8366. `pg_dump "$DBURL"` puts the
+# whole connection string where `ps -eo args` can read it, for the ~100 seconds
+# this runs every day plus every manual run. `pg_split_password` moves the secret
+# into PGPASSWORD and leaves everything else -- host, database, the
+# connect_timeout tuned two lines above -- byte-identical.
+#
+# THE HELPER IS RESOLVED IN TWO PLACES AND ITS ABSENCE IS FATAL, not a fallback.
+# This script is COPIED before it runs (the retry test rewrites its paths into a
+# temp dir, and a person may do the same), so `dirname "$BASH_SOURCE"` alone is
+# not enough -- measured: the copy died under `set -e` before reaching the retry
+# loop, which is how the existing test caught it. And if neither path resolves we
+# REFUSE: silently continuing would put the password back on argv, which is the
+# whole defect.
+PG_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/pg-argv-safe.sh"
+[ -f "$PG_LIB" ] || PG_LIB="/Users/isti/marveen/scripts/lib/pg-argv-safe.sh"
+[ -f "$PG_LIB" ] || fail "hianyzik: scripts/lib/pg-argv-safe.sh -- a jelszo az argv-n maradna, ezert nem futok"
+# shellcheck source=/dev/null
+. "$PG_LIB"
+pg_split_password "$DBURL"
+
 STAMP=$(date +%Y%m%d-%H%M%S)
 OUT="$BACKUP_DIR/delta-crm-$STAMP-public.dump"
 
@@ -109,7 +129,7 @@ log "START -> $(basename "$OUT")"
 # itself is ~100s, so the retries are cheap next to the thing they protect.
 DUMP_OK=0
 for ATTEMPT in $(seq 1 "$PGDUMP_TRIES"); do
-  if pg_dump "$DBURL" --format=custom --compress=9 --no-owner --no-privileges \
+  if pg_dump "$PG_URL_NOPASS" --format=custom --compress=9 --no-owner --no-privileges \
         --schema=public --file="$OUT" 2>>"$LOG_FILE"; then
     DUMP_OK=1
     [ "$ATTEMPT" -gt 1 ] && log "pg_dump OK a(z) $ATTEMPT. probalkozasra"

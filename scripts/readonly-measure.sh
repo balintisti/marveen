@@ -74,12 +74,33 @@ fi
 BASE_URL="${URL%%\?*}"
 if [ "$BASE_URL" != "$URL" ]; then URL="${BASE_URL}?sslmode=require"; fi
 
+# THE PASSWORD MUST NOT REACH argv -- card 38bd8366. This helper runs against
+# PRODUCTION by design and is invoked whenever anyone measures it, so its window
+# is wider than the daily backup's even though each run is shorter. Same split,
+# same one definition.
+#
+# WHAT THIS DOES NOT COVER, said plainly: a caller who passes `--url` with a
+# password on ITS OWN command line has already put it on argv before this script
+# runs. Prefer `--env-file` or `DATABASE_URL` in the environment.
+# Two paths, and a missing helper REFUSES rather than falling through -- the
+# same reasoning as in `delta-crm-backup.sh`: continuing would put the password
+# back on argv, which is the defect.
+PG_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/pg-argv-safe.sh"
+[ -f "$PG_LIB" ] || PG_LIB="/Users/isti/marveen/scripts/lib/pg-argv-safe.sh"
+if [ ! -f "$PG_LIB" ]; then
+  echo "readonly-measure: hianyzik scripts/lib/pg-argv-safe.sh -- a jelszo az argv-n maradna, nem futok" >&2
+  exit 2
+fi
+# shellcheck source=/dev/null
+. "$PG_LIB"
+pg_split_password "$URL"
+
 # --- Kapu-cel. Ha a hivo nem adja meg, keresunk egy alaptablat a public semaban. A tablat es az
 # oszlopot KIIRJUK: a kontroll ervenyessege azon all, hogy tudjuk, MIT irt volna.
 if [ -z "$GATE_TABLE" ] || [ -z "$GATE_COLUMN" ]; then
   # A felderito lekerdezes IS csak-olvaso tranzakcioban megy: ne legyen egyetlen
   # kapcsolat sem, amit ez a script nyit es amelyik irni tudna.
-  found="$(psql "$URL" -tAF'|' -c "
+  found="$(psql "$PG_URL_NOPASS" -tAF'|' -c "
     BEGIN TRANSACTION READ ONLY;
     SELECT c.table_name, c.column_name
     FROM information_schema.columns c
@@ -119,7 +140,7 @@ trap 'rm -f "$WRAPPED" "$OUT"' EXIT
 } > "$WRAPPED"
 
 echo "kapu-cel: \"$GATE_TABLE\".\"$GATE_COLUMN\"  (SET oszlop = oszlop WHERE false)"
-psql "$URL" -f "$WRAPPED" > "$OUT" 2>&1
+psql "$PG_URL_NOPASS" -f "$WRAPPED" > "$OUT" 2>&1
 cat "$OUT"
 
 GATE_HITS="$(grep -c 'cannot execute UPDATE in a read-only transaction' "$OUT" || true)"
