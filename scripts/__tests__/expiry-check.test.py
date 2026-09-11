@@ -70,6 +70,55 @@ def json_probe_at(iso):
 NO_EXPIRY_ITEM = item("static", {"kind": "none_by_construction", "why": "no expiry"})
 
 
+class SchedulerExit(unittest.TestCase):
+    """--scheduler-exit: the ladder is a REPORT SHAPE, an alarm threshold is a FAILURE signal,
+    and binding one to the other mislabels every real finding as a broken tool.
+
+    Measured on src/web/command-task.ts: a non-zero exit makes the runner treat the command as
+    FAILED, the alert fires once and then goes quiet, it reaches the OWNER's Telegram as
+    "<label> nem valaszol", the detail carries only stderr (this tool prints to stdout), and a
+    later success sends "Helyreallt" -- a false all-clear. So the alarm must mean "the checker
+    broke", nothing else."""
+
+    def test_a_finding_is_not_a_failure(self):
+        for probe, name in ((json_probe_at("2026-01-01T00:00:00Z"), "due"),
+                            ({"kind": "not_queryable", "why": "x"}, "unknown")):
+            with self.subTest(case=name):
+                bare, _, _ = run([item(name, probe)], as_json=False)
+                self.assertNotEqual(bare, 0, "control: the report code is non-zero on its own")
+                sched, _, err = run([item(name, probe)], as_json=False,
+                                    extra=["--scheduler-exit"])
+                self.assertEqual(sched, 0, "a run that found something is not a broken run")
+                self.assertIn("a meres LEFUTOTT", err)
+
+    def test_a_broken_checker_IS_a_failure(self):
+        """The hole my own first cut had: main() has five separate `return 2` paths, and a
+        mapping written next to the final return misses every one of them."""
+        p = subprocess.run([sys.executable, SCRIPT, "--scheduler-exit",
+                            "--inventory", "/definitely/not/here.json"],
+                           capture_output=True, text=True)
+        self.assertEqual(p.returncode, 1, "an unreadable inventory must reach the alarm")
+        self.assertIn("AZ ELLENORZO TORT EL", p.stderr)
+
+    def test_the_flag_is_opt_in_and_the_raw_ladder_is_untouched(self):
+        p = subprocess.run([sys.executable, SCRIPT, "--inventory", "/definitely/not/here.json"],
+                           capture_output=True, text=True)
+        self.assertEqual(p.returncode, 2, "without the flag the report code is unchanged")
+        self.assertNotIn("SCHEDULER:", p.stderr)
+
+    def test_a_clean_run_is_zero_either_way(self):
+        it = item("static", {"kind": "none_by_construction", "why": "x"})
+        self.assertEqual(run([it], as_json=False)[0], 0)
+        self.assertEqual(run([it], as_json=False, extra=["--scheduler-exit"])[0], 0)
+
+    def test_the_mapping_announces_itself(self):
+        """A translated exit code that says nothing is how the meaning gets lost again."""
+        _, _, err = run([item("old", json_probe_at("2026-01-01T00:00:00Z"))],
+                        as_json=False, extra=["--scheduler-exit"])
+        self.assertIn("a belso kilepesi kod 3", err,
+                      "the original code must stay visible in the log")
+
+
 class Sweep(unittest.TestCase):
     """The SIXTH state: a credential that exists and is not on the list.
 

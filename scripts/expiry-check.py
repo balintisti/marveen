@@ -88,6 +88,33 @@ they belong here is a SCOPE DECISION rather than a measurement. The report there
 prints what it swept -- a completeness claim without its denominator would repeat the error
 it fixes.
 
+AND THE LADDER IS A REPORT SHAPE, NOT A FAILURE SIGNAL -- which matters the moment anything
+binds an alarm to it (measured 2026-09-11 on `src/web/command-task.ts`, after marveen
+reported that he had wired this task up without measuring what the codes mean):
+
+    ok = (status === 0)                  -> 3, 4 and 5 all count as FAILURE
+    fails >= failThreshold && !alerted   -> alert fires ONCE, then stays quiet
+    the alert goes to the OWNER's Telegram, verbatim:
+        "Hiba: <label> nem valaszol (N. egymas utani hiba). Reszlet: <detail>"
+    detail = up to 200 chars of STDERR -- and this tool prints its report to STDOUT
+        (measured: 28 lines stdout, 0 stderr), so the alert would carry "exit 3" and nothing
+    and a later success fires "Helyreallt: <label> ismet OK"
+
+So a perfectly correct run that FOUND an expired credential would reach the owner as a red
+"the tool is not responding", with no content, once -- and the next unchanged run (which exits
+0 by design) would send a green "recovered", which is false: nothing was fixed, the state
+merely stopped changing. Wrong in both directions, to the person who can act.
+
+`--scheduler-exit` exists for exactly that binding: it reports 0 whenever the CHECK RAN, and 1
+only when the checker itself broke. It deliberately does NOT turn findings into alarms -- a
+failure channel cannot carry news without mislabelling it, and this repo has measured what a
+guard that cries "broken" on correct behaviour becomes.
+
+WHAT THAT LEAVES OPEN, said here because the silence would otherwise look like coverage: with
+--scheduler-exit the scheduled run notifies NOBODY about a new finding. The task becomes a
+HEALTH check. Anyone assuming "expiry notifications are handled" because the task exists is
+making exactly this card's original mistake, one layer up.
+
 EXIT CODES (the worst state wins; everything is still printed):
     0  every item answered, nothing inside the threshold, nothing unclaimed
     3  at least one DUE (expired, or expiring within threshold_days)
@@ -384,6 +411,10 @@ def main(argv=None):
                          f"Forced to report after {MAX_SILENCE_DAYS} days regardless.")
     ap.add_argument("--max-silence-days", type=int, default=MAX_SILENCE_DAYS,
                     help="ceiling on how long --quiet-unless-changed may stay silent")
+    ap.add_argument("--scheduler-exit", action="store_true",
+                    help="map the ladder onto a SCHEDULER's failure semantics: 0 when the "
+                         "check RAN and produced a valid report (0/3/4/5), 1 only when the "
+                         "checker itself broke. The report is printed either way.")
     args = ap.parse_args(argv)
 
     try:
@@ -511,5 +542,23 @@ def main(argv=None):
     return rc
 
 
+def scheduler_exit_code(rc):
+    """Map the report ladder onto a scheduler's failure semantics.
+
+    APPLIED AT THE ENTRY POINT, NOT INSIDE main(), and that placement is the point: main()
+    has five separate `return 2` paths for an unreadable or malformed inventory, and a
+    mapping written next to the final return silently misses all of them. Measured on my own
+    first cut: `--scheduler-exit --inventory /does/not/exist` returned 2, i.e. exactly the
+    broken-checker case the flag exists to catch leaked through unmapped. One place that every
+    return must pass through beats five places that each have to remember.
+    """
+    ran_fine = rc in (0, 3, 4, 5)
+    print(f"SCHEDULER: a belso kilepesi kod {rc} "
+          f"({'a meres LEFUTOTT' if ran_fine else 'AZ ELLENORZO TORT EL'})"
+          f" -> a futtatonak {0 if ran_fine else 1}", file=sys.stderr)
+    return 0 if ran_fine else 1
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    _rc = main()
+    sys.exit(scheduler_exit_code(_rc) if "--scheduler-exit" in sys.argv[1:] else _rc)
