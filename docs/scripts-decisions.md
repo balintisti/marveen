@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **238** kovetett fajl, ebbol
-**73** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **239** kovetett fajl, ebbol
+**74** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -60,6 +60,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/__tests__/outgoing-gate-entry-seam.test.py`
 
 - WHY NOT `elif` (marveen's ruling, didi's mechanism). `elif` closes the chain, so control resumes
+
+### `scripts/__tests__/script-import-guard.test.py`
+
+- WHY A POSITIVE CONTROL IS THE WHOLE TEST. "Nothing happened" is exactly what a
 
 ### `scripts/__tests__/telegram-reply-guard-agent-id.test.py`
 
