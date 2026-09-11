@@ -23,6 +23,15 @@ know exists -- a list can only watch its known members, and what changed was the
 MEMBERSHIP. So with no --job, this reports EVERY job and says which ones it has
 no statement about.
 
+ADDING AN OUTPUT LINE? READ THIS FIRST. Twice in one night this tool printed a
+human-readable word that contradicted its own machine-readable verdict: a "GAP"
+label beside exit 0, and "file and run agree" printed next to a listed
+disagreement. AT SKIM DEPTH A CONTRADICTION READS AS THE REASSURING HALF. It is
+not carelessness -- it is what happens when the human line and the machine line
+are written at different moments. So: every status word must be derived from the
+same value the exit code is, and any reassuring line must be conditional on
+there being nothing to reassure about.
+
 EXIT CODES ARE THREE-VALUED, deliberately (the shape didi hit on the openapi
 gate): a tool that cannot answer must not be readable as "clean".
     0  no gap
@@ -284,6 +293,11 @@ def load_env_files(paths):
     return env
 
 
+def extra_overlap(want, ran_set):
+    """True if ANY file job matches ANY executed job name."""
+    return any(disp in ran_set for disp in want.values())
+
+
 def main():
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("workflow")
@@ -385,6 +399,23 @@ def main():
         never = [jn for jn, disp in want.items() if disp not in ran_set]
         extra = [r for r in ran if r not in set(want.values())]
         print(f"  inventory: the run executed {len(ran)} job(s); the file declares {len(jobs)}")
+
+        # NAMESPACE MISMATCH IS NOT A FINDING, and it wears the most alarming
+        # face there is: "every job never ran". If the two lists share NOTHING
+        # while both are non-empty, they are almost certainly naming the same
+        # things in different namespaces (display names vs job ids) -- a genuine
+        # "nothing ran" leaves the run side EMPTY, not full of other names, and
+        # equal lengths make it near-certain. The ordinary control passes this
+        # case happily: both sides non-empty, both the same size, the meter
+        # plainly "sees". Measured 2026-09-11: before ids were mapped through
+        # `name:`, this tool reported 15 of 15 jobs as never having run while
+        # both lists were complete and correct.
+        if never and len(never) == len(jobs) and ran and not extra_overlap(want, ran_set):
+            print("  inventory: NOT MEASURABLE -- the file and the run share NO job "
+                  f"names at all ({len(jobs)} vs {len(ran)}, both non-empty). That is a "
+                  "namespace mismatch, not a finding: a real 'nothing ran' leaves the "
+                  "run side EMPTY. Check that job ids map through their `name:`.")
+            return 1 if gap else 0
         if never:
             print("  IN THE FILE BUT NOT IN THE RUN: " + ", ".join(never))
         if extra:

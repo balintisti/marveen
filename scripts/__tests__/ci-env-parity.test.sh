@@ -217,6 +217,33 @@ eq "gh unavailable: does NOT claim agreement" \
 python3 "$TOOL" "$WF2" --no-process-env --run-jobs "$TMP/nope.txt" >/dev/null 2>&1
 eq "missing --run-jobs file: exit 2" "$?" "2"
 
+# ---- 9. NAMESPACE MISMATCH IS NOT A FINDING ---------------------------------
+#      Zero overlap between two NON-EMPTY lists means they name the same things
+#      differently; a real "nothing ran" leaves the run side EMPTY. Before ids
+#      were mapped through `name:`, this tool reported 15 of 15 jobs as never
+#      having run while both lists were complete -- the most alarming face a bug
+#      can wear, and the ordinary control passes it (both sides non-empty, same
+#      size, meter plainly working).
+printf 'Totally Different One\nTotally Different Two\n' > "$TMP/ran-other-ns.txt"
+O12="$(python3 "$TOOL" "$WF2" --no-process-env --run-jobs "$TMP/ran-other-ns.txt" 2>&1)"
+eq "zero overlap between non-empty lists: NOT MEASURABLE" \
+   "$(printf '%s' "$O12" | grep -c 'namespace mismatch, not a finding')" "1"
+eq "...and it does NOT claim every job never ran" \
+   "$(printf '%s' "$O12" | grep -c 'IN THE FILE BUT NOT IN THE RUN')" "0"
+
+# NEGATIVE CONTROL: a REAL total miss -- the run side EMPTY -- must still report
+# the jobs as never run, or the guard above would swallow the true finding.
+: > "$TMP/ran-empty.txt"
+O13="$(python3 "$TOOL" "$WF2" --no-process-env --run-jobs "$TMP/ran-empty.txt" 2>&1)"
+eq "an EMPTY run side is still a real finding, not a mismatch" \
+   "$(printf '%s' "$O13" | grep -c 'IN THE FILE BUT NOT IN THE RUN')" "1"
+eq "...and is NOT called a namespace mismatch" \
+   "$(printf '%s' "$O13" | grep -c 'namespace mismatch')" "0"
+# PARTIAL overlap must not trip it either -- one genuinely missing job is a
+# finding, not a mismatch.
+eq "partial overlap still reports the one missing job" \
+   "$(printf '%s' "$O9" | grep -c 'IN THE FILE BUT NOT IN THE RUN: ci-summary')" "1"
+
 echo
 echo "ci-env-parity: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
