@@ -219,7 +219,19 @@ SKILL_LINE_LIMIT="${SKILL_LINE_LIMIT:-500}"
 # ket szamot EGYUTT kell ujramerni -- a lefedettseget ES a listahosszat. A recept a
 # kartyan all. Egy kuszob, ami tul sok skillt sorol fel, ugyanugy nem jut el az olvasohoz,
 # mint egy, ami keveset.
-SKILL_SOFT_LIMIT="${SKILL_SOFT_LIMIT:-460}"
+# HEADROOM, NEM POZICIO -- ES EZ A JAVITAS, NEM A KEZDETI ALAK (didi merte 2026-09-11).
+# A 228 novekedesi esemeny "40 SOR KERETET" adott. Eloszor `SKILL_SOFT_LIMIT=460`-kent irtam
+# be, ami CSAK 500-as kapu mellett jelent 40-et -- vagyis egy TAVOLSAG-merest POZICIOKENT
+# kodoltam. A fa ket rezsimet tart, es a masikban a kapu nem 500:
+#     alapvonalas skill valodi kapuja = min(alapvonal + SKILL_GROWTH_LIMIT, SKILL_HARD_LIMIT)
+#     ma: min(420 + 15, 600) = **435**, es a fajl 435 soron all -> keret **0**
+# **A teljes populacio LEGKISEBB keretu skillje esett ki a listarol**, mikozben a listan a
+# legrosszabb 1 sor kerettel allt. Es nem a szam miatt: a lagy ag az `if [ -n "$base" ]`
+# UTANI `else`-ben ult, tehat egy alapvonalas skill EL SEM ERTE. Merve: `SKILL_SOFT_LIMIT=1`
+# mellett 64-bol 63 skill a listan, ez az egy NEM -- kontrollal, hogy a mero lat.
+# ES EPP EZ A KARTYA ELSO DOKUMENTALT ESETE (marveen k2, 1166-os emlek): "0 sor novekedesi
+# keret" -- a kihagyott beiras, amiert az egesz ag keszult.
+SKILL_SOFT_HEADROOM="${SKILL_SOFT_HEADROOM:-40}"
 
 # ---- ALAPVONAL: MIT MERUNK, ES MIT NEM (2026-08-23, Marveen dontese) ---------
 #
@@ -389,6 +401,14 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
   # check modban a TOBBI skill nem tartozik a szerzore -- epp ez a lelet lenyege
   if [ -n "${CHECK_SKILL:-}" ] && [ "$skill" != "$CHECK_SKILL" ]; then continue; fi
   base=$(baseline_for "$skill")
+  # A SKILL SAJAT KAPUJA. Ket rezsim, ket kapu -- a lagy jelzes MINDKETTOT ugyanazzal a
+  # KERETTEL meri, es a tavolsagot ATTOL a szamtol irja ki, nem egy globalis 500-tol.
+  if [ -n "$base" ]; then
+    _gate=$((base + SKILL_GROWTH_LIMIT))
+    [ "$_gate" -gt "$SKILL_HARD_LIMIT" ] && _gate="$SKILL_HARD_LIMIT"
+  else
+    _gate="$SKILL_LINE_LIMIT"
+  fi
   if [ -n "$base" ]; then
     growth=$((n - base))
     # A csokkenes NE `+-87`-kent jelenjen meg: egy rosszul formazott szam
@@ -492,14 +512,20 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
   elif [ "$n" -gt "$SKILL_LINE_LIMIT" ]; then
     OVER_LIMIT=$((OVER_LIMIT+1))
     OVER_LIST="${OVER_LIST}  ${skill}  ${n} sor\n"
-  else
-    # ALAPVONAL NELKULI skill, a hatar alatt. A LAGY KUSZOB ITT tuzel -- es BROADCASTBAN is,
-    # nem csak check modban: eddig pontosan ez a nema ag engedte, hogy hat skill 490+ sorra
-    # csusszon anelkul, hogy barmi szolt volna.
-    if [ "$n" -gt "$SKILL_SOFT_LIMIT" ]; then
-      SOFT_COUNT=$((SOFT_COUNT+1))
-      SOFT_LIST="${SOFT_LIST}  ${skill}  ${n} sor -- a kapuig $((SKILL_LINE_LIMIT - n)) sor\n"
-    fi
+  fi
+  # A LAGY JELZES A LANCON KIVUL ALL, es ez a javitas lenyege: a lanc elso aga az
+  # ALAPVONALAS skilleke, tehat amig a lagy ellenorzes az `else`-ben ult, egy alapvonalas
+  # skill EL SEM ERTE -- barmilyen kuszob mellett. Itt MINDKET rezsim athalad rajta.
+  #
+  # Feltetel: a skill MEG NEM lepte tul a SAJAT kapujat (`n <= _gate` -- ez egyszerre fedi a
+  # novekedes- es a kemeny korlatot), es a maradek keret kisebb, mint a mert 40 sor.
+  if [ "$n" -le "$_gate" ] && [ $((_gate - n)) -lt "$SKILL_SOFT_HEADROOM" ]; then
+    SOFT_COUNT=$((SOFT_COUNT+1))
+    # RENDEZHETO ELOTAG: a lista SORRENDJE hordozza a surgosseget, nem az abc. A dontesi
+    # pillanatban a legkisebb keretu skillt kell eloszor latni -- a glob-sorrendben a 0 keretu
+    # a lista ALJARA kerult, es a lap sajat szabalya szerint a megkulonbozteto a NEZETT
+    # artefaktumba valo, ne az olvaso fejebe.
+    SOFT_LIST="${SOFT_LIST}$((_gate - n))|  ${skill}  ${n} sor -- a SAJAT kapujaig ($_gate) $((_gate - n)) sor\n"
   fi
   if [ -z "$base" ] && [ "$n" -le "$SKILL_LINE_LIMIT" ] && [ -n "${CHECK_SKILL:-}" ]; then
     # ALAPVONAL NELKULI skill, a hatar alatt. Broadcastban ez CSEND (helyesen: 55 skillrol
@@ -562,9 +588,10 @@ _probe_name=$(echo "$SKILL_BASELINE_NAMES" | cut -d" " -f1)
 # nem tud tuzelni, tehat egyetlen pontra bizni epp azt a kockazatot novelne, ami ellen
 # az egesz blokk keszult. Aki "takaritana", ezt a bekezdest olvassa el eloszor: a
 # redundancia MERT, nem maradek.
-_probe_soft=$(( SKILL_SOFT_LIMIT + 1 ))
-[ "$SKILL_SOFT_LIMIT" -lt "$SKILL_LINE_LIMIT" ] || _arms_ok=0
-[ "$_probe_soft" -gt "$SKILL_SOFT_LIMIT" ] && [ "$_probe_soft" -le "$SKILL_LINE_LIMIT" ] || _arms_ok=0
+_probe_soft=$(( SKILL_LINE_LIMIT - SKILL_SOFT_HEADROOM + 1 ))
+[ "$SKILL_SOFT_HEADROOM" -gt 0 ] || _arms_ok=0
+[ "$SKILL_SOFT_HEADROOM" -lt "$SKILL_LINE_LIMIT" ] || _arms_ok=0
+[ "$_probe_soft" -le "$SKILL_LINE_LIMIT" ] && [ $((SKILL_LINE_LIMIT - _probe_soft)) -lt "$SKILL_SOFT_HEADROOM" ] || _arms_ok=0
 # A LAGY LISTA A SUMMARY-LANC ELOTT MEGY KI, es szandekosan NEM annak egyik agakent:
 # a lanc `if/elif/else`, tehat barmelyik agba tenni azt jelentene, hogy a korai jelzes
 # ELTUNIK, amint egy MASIK, sulyosabb dolog is igaz -- pontosan akkor, amikor a fajl amugy
@@ -574,8 +601,11 @@ _probe_soft=$(( SKILL_SOFT_LIMIT + 1 ))
 # populaciot allitana egyetlen meres mellett (ugyanaz az indok, mint az OVER_LIST-nel).
 if [ "$SOFT_COUNT" -gt 0 ] && [ -z "${CHECK_SKILL:-}" ]; then
   echo "" >&2
-  echo "MERET-OR (KORAI JELZES, nem hiba): ${SOFT_COUNT} skill a ${SKILL_SOFT_LIMIT} soros lagy kuszob felett:" >&2
-  printf "%b" "$SOFT_LIST" >&2
+  echo "MERET-OR (KORAI JELZES, nem hiba): ${SOFT_COUNT} skillnek ${SKILL_SOFT_HEADROOM} sornal kevesebb kerete maradt a SAJAT kapujaig:" >&2
+  # LC_ALL=C A TELJES CSOVEZETEK ELE, nem egy tagja ele: a `VAR=ertek parancs` elotag EGY
+  # parancsra hat, es ezen a gepen a locale-kollacio mert modon torzit. Itt numerikus
+  # rendezes megy, de az alak akkor is a helyes -- egy fel-javitas rosszabb a javitatlannal.
+  LC_ALL=C bash -c 'printf "%b" "$1" | sort -t"|" -k1,1n | cut -d"|" -f2-' _ "$SOFT_LIST" >&2
   echo "  -> references/ bontas EGY NYUGODT KORBEN. Ez a lista NEM buktat es nem surgos;" >&2
   echo "     a celja, hogy a bontas ne akkor keruljon elo, amikor valakinek epp irnia kell." >&2
   echo "     A bontas utan az alapvonal a bontas utani meret ES a regi alapvonal MINIMUMA --" >&2
@@ -622,9 +652,9 @@ else
     # alatt" mondat IGAZ marad akkor is, ha hat skill nyolc soron belul van a kaputol --
     # es pontosan ugy olvasodik, hogy nincs mit nezni. Az idezheto mondat vigye magaval.
     if [ "$SOFT_COUNT" -gt 0 ]; then
-      echo "MERET-OR: minden skill a sajat hatara alatt, SORBAN ES KARAKTERBEN -- DE ${SOFT_COUNT} skill a ${SKILL_SOFT_LIMIT} soros lagy kuszob felett all (lasd a korai jelzest fent). Pozitiv kontroll: OK, mind a NEGY agra."
+      echo "MERET-OR: minden skill a sajat hatara alatt, SORBAN ES KARAKTERBEN -- DE ${SOFT_COUNT} skillnek ${SKILL_SOFT_HEADROOM} sornal kevesebb kerete maradt a sajat kapujaig (lasd a korai jelzest fent). Pozitiv kontroll: OK, mind a NEGY agra."
     else
-      echo "MERET-OR: minden skill a sajat hatara alatt, SORBAN ES KARAKTERBEN (alapvonalas: novekedes <= ${SKILL_GROWTH_LIMIT} sor es <= ${SKILL_GROWTH_LIMIT}x atlagos sorhossz karakter, teljes <= ${SKILL_HARD_LIMIT}; a tobbi: <= ${SKILL_LINE_LIMIT}), es EGY sem all a ${SKILL_SOFT_LIMIT} soros lagy kuszob felett. Pozitiv kontroll: OK, mind a NEGY agra."
+      echo "MERET-OR: minden skill a sajat hatara alatt, SORBAN ES KARAKTERBEN (alapvonalas: novekedes <= ${SKILL_GROWTH_LIMIT} sor es <= ${SKILL_GROWTH_LIMIT}x atlagos sorhossz karakter, teljes <= ${SKILL_HARD_LIMIT}; a tobbi: <= ${SKILL_LINE_LIMIT}), es MINDEGYIKNEK legalabb ${SKILL_SOFT_HEADROOM} sor kerete van a sajat kapujaig. Pozitiv kontroll: OK, mind a NEGY agra."
     fi
   fi
 fi

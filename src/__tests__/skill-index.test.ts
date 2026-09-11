@@ -751,7 +751,7 @@ function makeSkillOfLines(home: string, name: string, lines: number): void {
 
 describe('skill-index.sh -- soft threshold (early warning)', () => {
   let tmpHome: string
-  const ENV = { SKILL_LINE_LIMIT: '100', SKILL_SOFT_LIMIT: '80' }
+  const ENV = { SKILL_LINE_LIMIT: '100', SKILL_SOFT_HEADROOM: '20' }
 
   beforeEach(() => { tmpHome = mkdtempSync(join(tmpdir(), 'skill-soft-')) })
   afterEach(() => rmSync(tmpHome, { recursive: true, force: true }))
@@ -761,7 +761,7 @@ describe('skill-index.sh -- soft threshold (early warning)', () => {
     const r = runWithStderr([], { HOME: tmpHome, ...ENV })
     expect(r.stderr).toContain('KORAI JELZES')
     expect(r.stderr).toContain('nearly-full')
-    expect(r.stderr).toMatch(/a kapuig 10 sor/)
+    expect(r.stderr).toMatch(/a SAJAT kapujaig \(100\) 10 sor/)
   })
 
   it('does NOT change the exit code -- it reports, it does not fail', () => {
@@ -812,15 +812,83 @@ describe('skill-index.sh -- soft threshold (early warning)', () => {
   })
 
   it('the positive control FAILS LOUDLY if the soft branch could never fire', () => {
-    // The easiest silent break in the whole guard: set the soft threshold at or above the
-    // gate and the branch never fires -- output byte-identical to "nothing is approaching".
+    // The easiest silent break in the whole guard: a headroom of zero (nothing can ever be
+    // inside it) or one that swallows the whole gate -- output byte-identical to "nothing is
+    // approaching".
     makeSkillOfLines(tmpHome, 'nearly-full', 90)
-    for (const soft of ['100', '150']) {
-      const r = runWithStderr([], { HOME: tmpHome, SKILL_LINE_LIMIT: '100', SKILL_SOFT_LIMIT: soft })
-      expect(r.stderr, `soft=${soft} must be rejected`).toContain('pozitiv kontroll ELBUKOTT')
+    for (const hr of ['0', '100', '150']) {
+      const r = runWithStderr([], { HOME: tmpHome, SKILL_LINE_LIMIT: '100', SKILL_SOFT_HEADROOM: hr })
+      expect(r.stderr, `headroom=${hr} must be rejected`).toContain('pozitiv kontroll ELBUKOTT')
     }
-    // control: the same run with a valid threshold does NOT claim a broken guard
     const ok = runWithStderr([], { HOME: tmpHome, ...ENV })
     expect(ok.stderr).not.toContain('pozitiv kontroll ELBUKOTT')
+  })
+
+  // --- the two regimes (didi, 2026-09-11) ---------------------------------------
+  //
+  // The tree has TWO gates: a baselined skill's real gate is baseline+growth, everything
+  // else is SKILL_LINE_LIMIT. The first cut measured a raw line count against one absolute
+  // number and reported distance to the global gate -- so the skill with the SMALLEST
+  // headroom in the whole population fell off the list, because its gate is lower. Worse,
+  // the check sat in the `else` arm after `if [ -n "$base" ]`, so a baselined skill never
+  // reached it AT ALL, at any threshold.
+
+  const BASELINE_ENV = {
+    SKILL_LINE_LIMIT: '500', SKILL_SOFT_HEADROOM: '40',
+    SKILL_BASELINE_NAMES: 'pinned', SKILL_BASELINE_LINES: '200', SKILL_GROWTH_LIMIT: '15',
+  }
+
+  it('a baselined skill at its OWN gate is listed, though far below the global one', () => {
+    // gate = 200 + 15 = 215. At 215 lines the headroom is 0, while the global gate is 500.
+    makeSkillOfLines(tmpHome, 'pinned', 215)
+    const r = runWithStderr([], { HOME: tmpHome, ...BASELINE_ENV })
+    expect(r.stderr).toContain('KORAI JELZES')
+    expect(r.stderr).toMatch(/pinned.*a SAJAT kapujaig \(215\) 0 sor/)
+  })
+
+  it('the distance is reported from the skill OWN gate, not the global limit', () => {
+    makeSkillOfLines(tmpHome, 'pinned', 210)        // 5 lines from 215, 290 from 500
+    const r = runWithStderr([], { HOME: tmpHome, ...BASELINE_ENV })
+    expect(r.stderr).toMatch(/pinned.*\(215\) 5 sor/)
+    expect(r.stderr).not.toMatch(/pinned.*290/)
+  })
+
+  it('a baselined skill with room is NOT listed -- the meter discriminates', () => {
+    makeSkillOfLines(tmpHome, 'pinned', 150)        // 65 lines of headroom
+    const r = runWithStderr([], { HOME: tmpHome, ...BASELINE_ENV })
+    expect(r.stderr).not.toContain('KORAI JELZES')
+  })
+
+  it('a skill already PAST its own gate is not also reported as approaching', () => {
+    // It is over: the hard branch fires rc=3. Listing it as "approaching" too would put two
+    // contradictory statements about the same skill in one run.
+    makeSkillOfLines(tmpHome, 'pinned', 230)        // past 215
+    const r = runWithStderr([], { HOME: tmpHome, ...BASELINE_ENV })
+    expect(r.exitCode).toBe(3)
+    expect(r.stderr).not.toMatch(/KORAI JELZES[\s\S]*pinned/)
+  })
+
+  it('the hard ceiling still binds when baseline+growth would exceed it', () => {
+    // With today's constants (420+15 vs 600) this clamp never binds, so nothing exercised
+    // it -- a mutation removing it survived. It is not dead code: it encodes "the hard limit
+    // always wins", and an untested invariant is one refactor from being dropped.
+    makeSkillOfLines(tmpHome, 'pinned', 295)
+    const r = runWithStderr([], {
+      HOME: tmpHome, SKILL_LINE_LIMIT: '500', SKILL_SOFT_HEADROOM: '20',
+      SKILL_BASELINE_NAMES: 'pinned', SKILL_BASELINE_LINES: '290', SKILL_GROWTH_LIMIT: '50',
+      SKILL_HARD_LIMIT: '300',                       // 290+50 = 340, clamped to 300
+    })
+    expect(r.stderr).toMatch(/pinned.*a SAJAT kapujaig \(300\) 5 sor/)
+    expect(r.stderr).not.toMatch(/pinned.*\(340\)/)
+  })
+
+  it('the list is ordered by REMAINING headroom, tightest first', () => {
+    // The decision-time artefact has to carry the discriminator: in glob order the
+    // zero-headroom skill landed at the BOTTOM.
+    makeSkillOfLines(tmpHome, 'aaa-roomy', 470)     // 30 left
+    makeSkillOfLines(tmpHome, 'zzz-tight', 499)     //  1 left
+    const r = runWithStderr([], { HOME: tmpHome, SKILL_LINE_LIMIT: '500', SKILL_SOFT_HEADROOM: '40' })
+    const block = r.stderr.slice(r.stderr.indexOf('KORAI JELZES'))
+    expect(block.indexOf('zzz-tight')).toBeLessThan(block.indexOf('aaa-roomy'))
   })
 })
