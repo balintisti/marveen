@@ -38,8 +38,26 @@ def emit_raw(text, rc=0):
     return ["python3", "-c", f"import sys;sys.stdout.write({text!r});sys.exit({rc})"]
 
 
-def run(items, threshold=14, now=NOW, as_json=True, env=None, extra=None):
+def fake_helper(d, rc=0, out="OK kartya=TEST komment=1"):
+    """A stand-in for card-comment.sh that records its argv and stdin.
+
+    A REAL helper would post to a REAL card. That is the mistake card b786b93b records, and I
+    made it; a test that writes live state is not a test."""
+    path = os.path.join(d, "fake-helper.sh")
+    log = os.path.join(d, "helper.log")
+    with open(path, "w") as fh:
+        fh.write("#!/bin/bash\n"
+                 f'{{ printf "ARGV:%s\\n" "$*"; cat; }} > {log!r}\n'
+                 f'echo {out!r}\n'
+                 f"exit {rc}\n")
+    os.chmod(path, 0o755)
+    return path, log
+
+
+def run(items, threshold=14, now=NOW, as_json=True, env=None, extra=None, scan=None):
     inv = {"threshold_days": threshold, "items": items}
+    if scan is not None:
+        inv["scan"] = scan
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
         json.dump(inv, fh)
         path = fh.name
@@ -66,6 +84,339 @@ def json_probe_at(iso):
 
 
 NO_EXPIRY_ITEM = item("static", {"kind": "none_by_construction", "why": "no expiry"})
+
+
+class CardTrace(unittest.TestCase):
+    """--card: a durable trace on a CHANGE, never on an unchanged run.
+
+    marveen's ruling: a card comment is the only channel here that both PERSISTS and PULLS,
+    and it moves updated_at, which is what the sweeps read. Its KNOWN weakness is written into
+    the comment body rather than left to be discovered: it reaches only someone already
+    looking at that card. It is a trace, not a notification."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.state = os.path.join(self.d, "state.json")
+        self.item = item("static", {"kind": "none_by_construction", "why": "x"})
+
+    def _run(self, items, rc=0, extra_env=None):
+        helper, log = fake_helper(self.d, rc=rc)
+        env = {"EXPIRY_CARD_HELPER": helper}
+        env.update(extra_env or {})
+        code, out, err = run(items, as_json=False, env=env,
+                             extra=["--quiet-unless-changed", self.state, "--card", "CARD1"])
+        body = open(log).read() if os.path.exists(log) else None
+        return code, out, body
+
+    def test_a_change_writes_the_trace(self):
+        code, out, body = self._run([self.item])
+        self.assertIsNotNone(body, "a first run is a change and must write")
+        self.assertIn("ARGV:friday CARD1 -", body)
+        self.assertIn("LEJARAT-FIGYELO, VALTOZAS", body)
+        self.assertIn("KARTYA-NYOM CARD1: OK kartya=", out)
+
+    def test_an_unchanged_run_writes_NOTHING(self):
+        self._run([self.item])                       # seed
+        helper, log = fake_helper(self.d)
+        os.remove(log)
+        code, out, _ = run([self.item], as_json=False, env={"EXPIRY_CARD_HELPER": helper},
+                           extra=["--quiet-unless-changed", self.state, "--card", "CARD1"])
+        self.assertFalse(os.path.exists(log), "an unchanged run must not touch the card")
+        self.assertIn("nem valtozott semmi", out)
+
+    def test_the_body_names_its_own_weakness(self):
+        """It must not read as a notification -- its reach is the sweep, not a person."""
+        _, _, body = self._run([self.item])
+        self.assertIn("nem ertesites", body)
+        self.assertIn("aki amugy is ezt a kartyat nezi", body)
+        # The third sentence of the same paragraph -- it names WHAT the reach actually is
+        # (the sweep, via updated_at) rather than only what it is not. A mutation removing it
+        # survived until this line existed.
+        self.assertIn("A hatokore a sopres", body)   # mondatkezdo NAGY A -- merve, nem tippelve
+        self.assertIn("updated_at", body)
+
+    def test_the_diff_names_what_changed(self):
+        self._run([self.item])                       # seed: one item
+        helper, log = fake_helper(self.d)
+        run([self.item, item("newbie", {"kind": "not_queryable", "why": "x"})],
+            as_json=False, env={"EXPIRY_CARD_HELPER": helper},
+            extra=["--quiet-unless-changed", self.state, "--card", "CARD1"])
+        body = open(log).read()
+        self.assertIn("UJ TETEL    newbie", body)
+        self.assertNotIn("static", body.split("NINCS A LELTARBAN")[0].replace("Elso futas", ""))
+
+    def test_a_failed_post_is_LOUD_and_reaches_the_alarm(self):
+        """A trace that did not land must not be quieter than one that did -- that silence is
+        the shape this whole tool exists to close."""
+        code, out, _ = self._run([self.item], rc=1)
+        self.assertIn("NEM SIKERULT", out)
+        self.assertEqual(code, 2, "a failed delivery means the run did not do its job")
+        sched_helper, _ = fake_helper(self.d, rc=1)
+        s2 = os.path.join(self.d, "s2.json")
+        code2, _, _ = run([self.item], as_json=False, env={"EXPIRY_CARD_HELPER": sched_helper},
+                          extra=["--quiet-unless-changed", s2, "--card", "CARD1",
+                                 "--scheduler-exit"])
+        self.assertEqual(code2, 1, "and under --scheduler-exit it must ALARM")
+
+    def test_card_without_quiet_unless_changed_is_skipped_and_says_so(self):
+        helper, log = fake_helper(self.d)
+        code, out, _ = run([self.item], as_json=False, env={"EXPIRY_CARD_HELPER": helper},
+                           extra=["--card", "CARD1"])
+        self.assertFalse(os.path.exists(log), "without change detection it must not write")
+        self.assertIn("ATUGORVA", out)
+
+    def test_the_help_text_carries_the_successor_obligation(self):
+        """marveen's ruling: there is no standing card, because EVERY CARD CLOSES. The trace
+        therefore has a target that will one day be closed, and the obligation that keeps this
+        from going quiet -- name the successor in the closing comment -- has to live where the
+        person who closes it will be, not in the message where it was decided.
+
+        Pinned because prose in a help string is exactly the kind of thing a later edit drops
+        without anything turning red."""
+        p = subprocess.run([sys.executable, SCRIPT, "--help"], capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0)
+        flat = " ".join(p.stdout.split())          # argparse rewraps; match on the flat text
+        self.assertIn("MUST NAME THE SUCCESSOR", flat)
+        self.assertIn("repointed", flat)
+        # and WHY, not only what: a closed card accepts the post and returns success
+        self.assertIn("SUCCESSFULLY", flat)
+
+    def test_no_card_flag_means_no_helper_call_at_all(self):
+        helper, log = fake_helper(self.d)
+        run([self.item], as_json=False, env={"EXPIRY_CARD_HELPER": helper},
+            extra=["--quiet-unless-changed", self.state])
+        self.assertFalse(os.path.exists(log))
+
+
+class SchedulerExit(unittest.TestCase):
+    """--scheduler-exit: the ladder is a REPORT SHAPE, an alarm threshold is a FAILURE signal,
+    and binding one to the other mislabels every real finding as a broken tool.
+
+    Measured on src/web/command-task.ts: a non-zero exit makes the runner treat the command as
+    FAILED, the alert fires once and then goes quiet, it reaches the OWNER's Telegram as
+    "<label> nem valaszol", the detail carries only stderr (this tool prints to stdout), and a
+    later success sends "Helyreallt" -- a false all-clear. So the alarm must mean "the checker
+    broke", nothing else."""
+
+    def test_a_finding_is_not_a_failure(self):
+        for probe, name in ((json_probe_at("2026-01-01T00:00:00Z"), "due"),
+                            ({"kind": "not_queryable", "why": "x"}, "unknown")):
+            with self.subTest(case=name):
+                bare, _, _ = run([item(name, probe)], as_json=False)
+                self.assertNotEqual(bare, 0, "control: the report code is non-zero on its own")
+                sched, _, err = run([item(name, probe)], as_json=False,
+                                    extra=["--scheduler-exit"])
+                self.assertEqual(sched, 0, "a run that found something is not a broken run")
+                self.assertIn("a meres LEFUTOTT", err)
+
+    def test_a_broken_checker_IS_a_failure(self):
+        """The hole my own first cut had: main() has five separate `return 2` paths, and a
+        mapping written next to the final return misses every one of them."""
+        p = subprocess.run([sys.executable, SCRIPT, "--scheduler-exit",
+                            "--inventory", "/definitely/not/here.json"],
+                           capture_output=True, text=True)
+        self.assertEqual(p.returncode, 1, "an unreadable inventory must reach the alarm")
+        self.assertIn("AZ ELLENORZO TORT EL", p.stderr)
+
+    def test_the_flag_is_opt_in_and_the_raw_ladder_is_untouched(self):
+        p = subprocess.run([sys.executable, SCRIPT, "--inventory", "/definitely/not/here.json"],
+                           capture_output=True, text=True)
+        self.assertEqual(p.returncode, 2, "without the flag the report code is unchanged")
+        self.assertNotIn("SCHEDULER:", p.stderr)
+
+    def test_a_clean_run_is_zero_either_way(self):
+        it = item("static", {"kind": "none_by_construction", "why": "x"})
+        self.assertEqual(run([it], as_json=False)[0], 0)
+        self.assertEqual(run([it], as_json=False, extra=["--scheduler-exit"])[0], 0)
+
+    def test_the_mapping_announces_itself(self):
+        """A translated exit code that says nothing is how the meaning gets lost again."""
+        _, _, err = run([item("old", json_probe_at("2026-01-01T00:00:00Z"))],
+                        as_json=False, extra=["--scheduler-exit"])
+        self.assertIn("a belso kilepesi kod 3", err,
+                      "the original code must stay visible in the log")
+
+
+class Sweep(unittest.TestCase):
+    """The SIXTH state: a credential that exists and is not on the list.
+
+    The five states partition WHAT WE ASKED ABOUT. An unlisted credential yields no DUE, no
+    UNKNOWN, no FAILED -- nothing at all -- and therefore looks exactly like a healthy one,
+    which is this checker's own opening sentence turned on itself.
+
+    The load-bearing test here is test_missing_scan_dir_is_loud: a sweep over a directory that
+    does not exist finds nothing, and "found nothing" is byte-identical to "everything is
+    claimed". Rename the directory and the gate goes quiet in the reassuring direction.
+    """
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        with open(os.path.join(self.d, "known.json"), "w") as fh:
+            fh.write("{}")
+
+    def _scan(self, d=None):
+        return [{"dir": d or self.d, "glob": "*.json", "why": "test"}]
+
+    def _claimed(self, extra_cover=None):
+        it = item("static", {"kind": "none_by_construction", "why": "x"})
+        it["covers"] = [os.path.join(self.d, "known.json")] + (extra_cover or [])
+        return it
+
+    def test_unclaimed_file_is_reported_and_sets_exit_5(self):
+        rc, out, _ = run([item("static", {"kind": "none_by_construction", "why": "x"})],
+                         scan=self._scan())
+        d = json.loads(out)
+        self.assertEqual(rc, 5, "an existing, unlisted credential must not be a clean run")
+        self.assertEqual(d["unlisted"], 1)
+
+    def test_a_claimed_file_produces_no_finding(self):
+        rc, out, _ = run([self._claimed()], scan=self._scan())
+        d = json.loads(out)
+        self.assertEqual(rc, 0)
+        self.assertEqual(d["unlisted"], 0)
+        self.assertEqual(d["sweep_failed"], 0)
+
+    def test_missing_scan_dir_is_loud(self):
+        """A sweep that sweeps nothing must never read as a clean sweep."""
+        rc, out, _ = run([self._claimed()], scan=self._scan(d=os.path.join(self.d, "gone")))
+        d = json.loads(out)
+        self.assertEqual(rc, 5, "a sweep that could not run must not contribute a silent zero")
+        self.assertEqual(d["sweep_failed"], 1)
+        self.assertEqual(d["unlisted"], 0, "a missing dir is not the same claim as an unlisted file")
+
+    def test_no_scan_section_means_no_sweep(self):
+        """Backward compatible: an inventory without `scan` behaves exactly as before."""
+        rc, out, _ = run([item("static", {"kind": "none_by_construction", "why": "x"})])
+        d = json.loads(out)
+        self.assertEqual(rc, 0)
+        self.assertEqual(d["unlisted"], 0)
+        self.assertEqual(d["swept"], [])
+
+    def test_the_swept_population_is_always_printed(self):
+        """A completeness claim without its denominator repeats the bug it fixes."""
+        rc, out, _ = run([self._claimed()], scan=self._scan(), as_json=False)
+        self.assertIn("DEKLARALT HELYEK SOPRESE", out)
+        self.assertIn("NEM gep-szintu cenzus", out, "the limit of the sweep must be stated")
+        self.assertRegex(out, r"1 fajl")
+
+    def test_due_outranks_unlisted_but_unlisted_is_still_counted(self):
+        rc, out, _ = run([item("old", json_probe_at("2026-01-01T00:00:00Z"))], scan=self._scan())
+        d = json.loads(out)
+        self.assertEqual(rc, 3, "a concrete expiry leads")
+        self.assertEqual(d["unlisted"], 1, "and the incomplete list is still reported")
+
+    def test_unlisted_outranks_unknown(self):
+        """An UNKNOWN is a gap we chose to carry; an unlisted file means the POPULATION is
+        wrong, and every other number is conditional on it."""
+        rc, out, _ = run([item("opaque", {"kind": "not_queryable", "why": "x"})],
+                         scan=self._scan())
+        d = json.loads(out)
+        self.assertEqual(rc, 5)
+        self.assertEqual(d["unmeasured"], 1)
+
+    def test_summary_says_the_list_is_incomplete(self):
+        rc, out, _ = run([self._claimed()], scan=self._scan(d=os.path.join(self.d, "gone")),
+                         as_json=False)
+        self.assertIn("NINCS A LELTARBAN", out)
+        self.assertIn("NEM TELJES", out)
+
+    def test_an_unreadable_dir_is_not_the_same_as_an_empty_one(self):
+        """THE FOURTH STATE (didi, 2026-09-11). The first cut separated three: readable,
+        missing, and "0 files". But "exists and is genuinely empty" and "exists, unreadable,
+        hiding any number of credentials" both produced `0 fajl` -- byte-identical, and the
+        second one is the dangerous half.
+
+        THE FIXTURE IS ASSERTED FIRST, because a chmod that did not take would make this
+        test pass while proving nothing -- the exact failure mode it is about."""
+        unreadable = os.path.join(self.d, "locked")
+        os.makedirs(unreadable)
+        with open(os.path.join(unreadable, "secret.json"), "w") as fh:
+            fh.write("{}")
+        os.chmod(unreadable, 0)
+        try:
+            # FIXTURE CONTROL: prove the directory really is unreadable, and that the same
+            # call succeeds on a readable one. Without both halves this proves nothing.
+            with self.assertRaises(OSError, msg="the chmod did not take -- fixture is void"):
+                os.listdir(unreadable)
+            self.assertIn("known.json", os.listdir(self.d),
+                          "the same call must succeed on a readable dir")
+
+            rc, out, _ = run([self._claimed()],
+                             scan=[{"dir": unreadable, "glob": "*.json", "why": "t"}])
+            d = json.loads(out)
+            self.assertEqual(rc, 5, "an unreadable location must not read as a clean sweep")
+            self.assertEqual(d["sweep_failed"], 1)
+            self.assertTrue(any("NEM OLVASHATO" in s for s in d["swept"]),
+                            f"the swept line must say so, got {d['swept']}")
+        finally:
+            os.chmod(unreadable, 0o700)
+
+    def test_unreadable_empty_and_missing_produce_three_different_lines(self):
+        """All three must be distinguishable in the OUTPUT, not only in the exit code --
+        the exit code collapses two of them into 5 by design."""
+        empty = os.path.join(self.d, "empty"); os.makedirs(empty)
+        locked = os.path.join(self.d, "locked2"); os.makedirs(locked)
+        os.chmod(locked, 0)
+        missing = os.path.join(self.d, "gone")
+        try:
+            lines = {}
+            for tag, path in (("empty", empty), ("locked", locked), ("missing", missing)):
+                _, out, _ = run([self._claimed()],
+                                scan=[{"dir": path, "glob": "*.json", "why": "t"}])
+                lines[tag] = json.loads(out)["swept"][0].split(": ", 1)[1]
+            self.assertEqual(lines["empty"], "0 fajl")
+            self.assertNotEqual(lines["locked"], lines["empty"],
+                                "unreadable must not look like empty")
+            self.assertNotEqual(lines["locked"], lines["missing"],
+                                "unreadable must not look like missing either")
+        finally:
+            os.chmod(locked, 0o700)
+
+    def test_a_genuinely_empty_dir_is_still_a_clean_sweep(self):
+        """The negative control for the two above: tightening the unreadable case must not
+        turn an honestly empty location into a finding."""
+        empty = os.path.join(self.d, "really-empty")
+        os.makedirs(empty)
+        rc, out, _ = run([self._claimed()], scan=[{"dir": empty, "glob": "*.json", "why": "t"}])
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out)["sweep_failed"], 0)
+
+    def test_a_newly_appearing_credential_breaks_the_silence(self):
+        """The sweep result is part of the remembered state.
+
+        Without this the daily run would report a new unlisted credential ONCE and then fall
+        silent about it -- and a suppressed finding on a credential nobody listed is exactly
+        the silence this whole card is about, rebuilt inside the noise control."""
+        sp = os.path.join(tempfile.mkdtemp(), "state.json")
+        claimed = self._claimed()
+        # first run: everything claimed, and it records that
+        rc1, out1, _ = run([claimed], scan=self._scan(), as_json=False,
+                           extra=["--quiet-unless-changed", sp])
+        # second run, unchanged -> silent
+        rc2, out2, _ = run([claimed], scan=self._scan(), as_json=False,
+                           extra=["--quiet-unless-changed", sp])
+        self.assertEqual(rc2, 0)
+        self.assertIn("ELNEMITVA", out2)
+        # now a new credential appears in the swept directory
+        with open(os.path.join(self.d, "surprise.json"), "w") as fh:
+            fh.write("{}")
+        rc3, out3, _ = run([claimed], scan=self._scan(), as_json=False,
+                           extra=["--quiet-unless-changed", sp])
+        self.assertEqual(rc3, 5, "a credential appearing on disk is a CHANGE, not noise")
+        self.assertNotIn("ELNEMITVA", out3)
+        self.assertIn("valtozott az allapot", out3)
+
+    def test_shipped_inventory_declares_a_scan_and_covers_what_it_names(self):
+        inv_path = os.path.join(HERE, "..", "expiry-inventory.json")
+        with open(inv_path, encoding="utf-8") as fh:
+            inv = json.load(fh)
+        self.assertTrue(inv.get("scan"), "the shipped inventory must declare where it sweeps")
+        for sc in inv["scan"]:
+            for field in ("dir", "glob", "why"):
+                self.assertIn(field, sc, "a scan location without a stated reason is a guess")
+        covers = [c for it in inv["items"] for c in it.get("covers", [])]
+        self.assertIn("~/.config/marveen/gmail-imap.json", covers,
+                      "the entry that was found MISSING must stay claimed")
 
 
 class ExpiryCheck(unittest.TestCase):

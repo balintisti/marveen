@@ -15,7 +15,23 @@
     "",
     "EVERY entry below was MEASURED on 2026-09-11 on this machine, not assumed.",
     "The measurement is recorded in 'measured'; re-running the probe is how you",
-    "check whether it still holds."
+    "check whether it still holds.",
+    "",
+    "ES A HATODIK ALLAPOT, AMIT AZ OT NEM TUD SZETVALASZTANI (didi merte 2026-09-11, es a",
+    "sajat torvenyem az alapja): az ot allapot azt PARTICIONALJA, AMIT MEGKERDEZTUNK. Egy",
+    "hitelesito, ami LETEZIK es nincs a listan, nem ad DUE-t, nem ad UNKNOWN-t es nem ad",
+    "FAILED-et -- SEMMIT nem ad. Es ezzel PONTOSAN UGY NEZ KI, MINT EGY EGESZSEGES, ami",
+    "szo szerint ennek a kartyanak a nyito mondata volt.",
+    "",
+    "A `scan` szakasz ezert van. Megnevezi azokat a HELYEKET, ahol egy fajl LETEZESE mar",
+    "onmagaban flotta-hitelesitot jelent, es a checker minden ottani fajlt, amit egyetlen",
+    "tetel sem VALLAL (`covers`), NOT_IN_INVENTORY-kent jelent.",
+    "",
+    "A HATOKORE KIMONDOTTAN SZUK, ES EZ NEM HIANYOSSAG, HANEM A MERES HATARA: ez NEM",
+    "gep-szintu hitelesito-cenzus. Mas eszkozok sajat hitelesitoi (pl. ~/.gemini) NEM",
+    "tartoznak ide, es hogy beletartoznanak-e, az HATOKOR-DONTES, nem meres. A checker",
+    "ezert MINDIG kiirja, MIT sopert vegig -- egy teljessegi allitas a nevezoje nelkul",
+    "ugyanaz a hiba lenne, mint amit javit."
   ],
   "threshold_days": 14,
   "items": [
@@ -27,7 +43,11 @@
       "renew": "~/.tacit/bin/tacit-assistant setup --api https://api.tacitproject.hu",
       "probe": {
         "kind": "json_cmd",
-        "cmd": ["~/.tacit/bin/tacit-assistant", "doctor", "--json"],
+        "cmd": [
+          "~/.tacit/bin/tacit-assistant",
+          "doctor",
+          "--json"
+        ],
         "path": "session.expiresAt"
       },
       "measured": "2026-09-11: expiresAt 2026-08-07T18:20:49Z -- ALREADY EXPIRED, 35 days. This is the card's proven cost: it died 08-07 and Isti noticed on 09-08.",
@@ -44,7 +64,26 @@
         "key_file": "~/.config/marveen/google-service-account.json"
       },
       "measured": "2026-09-11: the key IN USE (private_key_id 0b1e1812...) has validBeforeTime 9999-12-31 -- it does not expire.",
-      "trap": "The account carries THREE keys; the two NOT in use expire 2028-08-19 and 2028-08-22. A probe that takes the first key in the list reports a date that belongs to a key nothing reads. The probe matches on private_key_id from the key file."
+      "trap": "The account carries THREE keys; the two NOT in use expire 2028-08-19 and 2028-08-22. A probe that takes the first key in the list reports a date that belongs to a key nothing reads. The probe matches on private_key_id from the key file.",
+      "covers": [
+        "~/.config/marveen/google-service-account.json"
+      ]
+    },
+    {
+      "id": "gmail-imap-app-password",
+      "what": "Gmail IMAP app password used by the daily starter's email section",
+      "where": "~/.config/marveen/gmail-imap.json",
+      "covers": [
+        "~/.config/marveen/gmail-imap.json"
+      ],
+      "renewed_by": "Isti",
+      "renew": "Google account -> App passwords: revoke and issue a new one, then rewrite the file",
+      "probe": {
+        "kind": "none_by_construction",
+        "why": "A Google app password has no expiry date -- it dies by REVOCATION, which is an event, not a date. The file carries host/user/password/port and zero expiry fields (measured 2026-09-11, values never read)."
+      },
+      "measured": "2026-09-11: keys host/user/password/port, 0 fields matching 'exp'. Consumer: scripts/gmail-recent.py -- the daily starter's email path, named on the page.",
+      "trap": "This entry exists because it was MISSING, not because it expires. didi found it in the first place he looked: the inventory's own directory. Today's verdict does not change by one number -- it lands as NO_EXPIRY beside telegram-bot-token. What changed is that an unlisted credential no longer reads as a healthy one."
     },
     {
       "id": "github-cli-token",
@@ -54,7 +93,12 @@
       "renew": "gh auth login",
       "probe": {
         "kind": "http_header",
-        "cmd": ["gh", "api", "-i", "user"],
+        "cmd": [
+          "gh",
+          "api",
+          "-i",
+          "user"
+        ],
         "header": "github-authentication-token-expiration"
       },
       "measured": "2026-09-11: the response carries no expiration header, so GitHub reports no expiry for this token.",
@@ -107,6 +151,13 @@
         "why": "The vault schema has no expiry field. Each entry carries createdAt, updatedAt, label, id and the ciphertext -- nothing else (measured 2026-09-11 on all 4). Reading a provider-side expiry would mean decrypting the secret and calling out per provider, which this checker deliberately does not do: it never handles secret values."
       },
       "measured": "2026-09-11: 4 entries, 0 with any expiry field."
+    }
+  ],
+  "scan": [
+    {
+      "dir": "~/.config/marveen",
+      "glob": "*.json",
+      "why": "A FLOTTA SAJAT hitelesito-konyvtara: ide MI teszunk fajlt, es ami itt all, az konstrukciobol flotta-hitelesito. Ezert itt a LETEZES onmagaban elegendo ok arra, hogy a leltarban is szerepeljen. Merve 2026-09-11: ket fajl allt itt, es a leltar csak az egyiket nevezte meg."
     }
   ]
 }
