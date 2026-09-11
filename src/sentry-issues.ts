@@ -122,6 +122,24 @@ export interface SentryIssueState {
    * and would put 69 keys on disk to say what one number says.
    */
   lastReadAtMs?: number
+  /**
+   * Orgs whose STANDING BACKLOG has already been absorbed -- one entry per org
+   * that has ANSWERED at least once in this process (card f248371b).
+   *
+   * WHY PER ORG AND NOT ONE BOOLEAN. `seeded` closes on orgs ASKED, while `seen`
+   * fills from orgs that ANSWERED, and those are not the same set the moment one
+   * org times out. Measured 2026-09-11 14:1x, on a real restart: delta-crm threw
+   * a timeout on the seeding tick, the other org answered, `seeded` went true --
+   * and on the first tick delta-crm came back, its entire standing backlog was
+   * missing from `seen`, so 31 issues were announced ONE BY ONE as NEW. Every one
+   * of them was stale; the newest `last` was four days old.
+   *
+   * AND THE OBVIOUS ONE-WORD FIX IS WORSE: closing `seeded` only on a FLAWLESS
+   * read would make a permanently failing org turn every tick into a cold start,
+   * repeating the FIRST READ / RESUMED notice forever. Same alert fatigue, other
+   * direction. Seeding is per-population, and the population is per-org.
+   */
+  seededOrgs?: string[]
   /** When the current blind spell was last announced. Absent = not blind. */
   blindAnnouncedAtMs?: number
   /** When the current blind spell STARTED, so a repeat can say how long. */
@@ -171,6 +189,14 @@ export interface SentryIssueDecision {
    * during which nothing arrived.
    */
   restartGapMs: number | null
+  /**
+   * Standing issues absorbed as BACKLOG because their org answered for the first
+   * time this process -- counted, never listed (card f248371b). Zero on almost
+   * every tick; non-zero exactly once per org, on the tick it first answers.
+   */
+  absorbedBacklog: number
+  /** Which orgs that absorption came from, so the notice can name them. */
+  absorbedOrgs: string[]
   /** Unresolved issues visible this tick, across every org that answered. */
   totalIssues: number
   /**
@@ -223,6 +249,30 @@ export function decideSentryIssues(
   const fresh = unique.filter(i => !was.has(issueKey(i)))
   const coldStart = !prev.seeded
 
+  // AN ORG THAT WAS UNREADABLE WHEN WE SEEDED HAS ITS OWN FIRST TICK (card
+  // f248371b). `answered` is what came back, NOT what we asked: the difference is
+  // the whole defect. An issue from an org nobody has read yet is BACKLOG, and it
+  // is counted rather than listed -- the same rule the seeding tick applies, just
+  // scoped to the org it is true for.
+  const failedOrgs = new Set(orgsFailed.map(f => f.org))
+  const answered = orgsQueried.filter(o => !failedOrgs.has(o))
+  // BACK-COMPAT, AND THE EXISTING TESTS FOUND IT TWICE. A state written before
+  // this field exists is `seeded: true` with NO per-org record, and reading that
+  // as "no org is seeded" makes the fix ABSORB a genuinely new issue -- swallowing
+  // the one thing this module exists to report. My first attempt derived the set
+  // from `seen`, which is wrong for the seeded-but-empty case ("we looked, nothing
+  // was standing"): there a later issue IS new, and the derivation called it
+  // backlog. So a legacy state keeps the OLD semantics exactly -- every org counts
+  // as seeded -- and the per-org protection starts from the first tick this code
+  // writes the field. That costs nothing in production: `seeded` is per-process,
+  // so a restart always re-seeds and always writes it.
+  const legacySeeded = prev.seededOrgs === undefined && prev.seeded
+  const seededOrgs = new Set(prev.seededOrgs ?? [])
+  const isSeededOrg = (org: string) => legacySeeded || seededOrgs.has(org)
+  const freshFromSeeded = fresh.filter(i => isSeededOrg(i.org))
+  const absorbed = fresh.filter(i => !isSeededOrg(i.org))
+  const absorbedOrgs = [...new Set(absorbed.map(i => i.org))].sort()
+
   // A COLD START IS NOT ALWAYS A FIRST RUN -- card 65a324b2. With a watermark
   // from a previous process, the issues that appeared DURING the gap are news;
   // without one (a genuine first run) every standing issue is backlog, which is
@@ -235,12 +285,14 @@ export function decideSentryIssues(
 
   // On the seeding tick nothing is "new" -- everything standing is history,
   // EXCEPT what arrived while nobody was looking.
+  // The warm path announces only what came from an org we have already read. The
+  // rest is that org's backlog and travels as a COUNT.
   const announced = coldStart
     ? gapArrivals.slice(0, MAX_ANNOUNCE_PER_TICK)
-    : fresh.slice(0, MAX_ANNOUNCE_PER_TICK)
+    : freshFromSeeded.slice(0, MAX_ANNOUNCE_PER_TICK)
   const suppressed = coldStart
     ? Math.max(0, gapArrivals.length - announced.length)
-    : Math.max(0, fresh.length - announced.length)
+    : Math.max(0, freshFromSeeded.length - announced.length)
 
   // BLIND covers both halves: an org that failed, and a tick that could not ask
   // anyone at all. The second is the likelier one in practice (no token, vault
@@ -258,6 +310,11 @@ export function decideSentryIssues(
     coldStart,
     gapArrivals: gapArrivals.length,
     restartGapMs,
+    // On a cold start EVERYTHING standing is already treated as backlog by the
+    // seeding rule, so reporting an absorption there would double-count the same
+    // silence. This number is about the warm path only.
+    absorbedBacklog: coldStart ? 0 : absorbed.length,
+    absorbedOrgs: coldStart ? [] : absorbedOrgs,
     totalIssues: unique.length,
     noIssues: unique.length === 0,
     blind,
@@ -270,6 +327,9 @@ export function decideSentryIssues(
       // the cap would turn into a rolling drip instead of a one-off summary.
       seen: [...prev.seen, ...fresh.map(issueKey)].filter((k, n, a) => a.indexOf(k) === n),
       seeded: prev.seeded || orgsQueried.length > 0,
+      // ONLY AN ORG THAT ANSWERED IS SEEDED. A failed org keeps its backlog
+      // unabsorbed until it actually answers -- which is the point.
+      seededOrgs: [...new Set([...(prev.seededOrgs ?? []), ...answered])].sort(),
       // ONLY A SUCCESSFUL READ MOVES THE WATERMARK. A blind tick that advanced
       // it would erase the very gap the watermark exists to measure -- the same
       // shape as a global cursor that a zero-result round still costs.
@@ -351,7 +411,21 @@ export function buildSentryNotice(d: SentryIssueDecision): string | null {
       'The rest stands as backlog; from here on this poller reports arrivals.'
     )
   }
-  if (d.newlySeen.length === 0) return null
+  if (d.newlySeen.length === 0) {
+    // AN ABSORPTION IS STILL WORTH ONE LINE. Saying nothing here would make the
+    // tick where an org first becomes readable indistinguishable from a quiet
+    // one, and that org's backlog would vanish without any reader ever learning
+    // it existed -- the silent-success shape this module exists to prevent.
+    if (d.absorbedBacklog > 0) {
+      return (
+        `[sentry] ${d.absorbedOrgs.join(', ')} answered for the first time since this poller ` +
+        `started: ${d.absorbedBacklog} standing issue(s) absorbed as BACKLOG, not listed. ` +
+        'They were unreadable when everything else was seeded, so they are old news arriving ' +
+        'late, not new failures. From here on this org reports ARRIVALS like the others.'
+      )
+    }
+    return null
+  }
   const lines = d.newlySeen.map(i => `  - ${describe(i)}`)
   const tail =
     d.suppressed > 0

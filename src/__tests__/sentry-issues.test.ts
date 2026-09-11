@@ -468,6 +468,116 @@ describe('FIRST READ is not the same tick as a RESTART (card 1dec3f4b)', () => {
   })
 })
 
+/**
+ * AN ORG THAT WAS UNREADABLE WHEN WE SEEDED (card f248371b).
+ *
+ * THE MEASURED INCIDENT, 2026-09-11 14:0x-14:1x, after a real dashboard restart:
+ * delta-crm threw a timeout on the seeding tick, the other org answered, and the
+ * poller reported a correct "RESUMED after 11 min, nothing arrived in the gap".
+ * On the next tick delta-crm answered -- and 31 standing issues were announced
+ * ONE BY ONE as NEW. Every one was stale, the newest four days old.
+ *
+ * THE MECHANISM IS ONE LINE APART: `seeded` closes on orgs ASKED, `seen` fills
+ * from orgs that ANSWERED. An org absent from the second keeps a backlog nothing
+ * has absorbed, and the warm path is pure set-membership on `seen` -- it never
+ * consults `firstSeen`, so no timestamp could have saved it.
+ */
+describe('an org unreadable at seeding does not replay its backlog (card f248371b)', () => {
+  const other = (id: string) => issue(id, 'other-org')
+  const crm = (id: string) => issue(id, 'delta-crm')
+
+  /** The seeding tick exactly as it happened: one org answers, one times out. */
+  function seedWithOneOrgDown() {
+    return decideSentryIssues(
+      reading({
+        issues: [other('1'), other('2')],
+        orgsQueried: ['other-org', 'delta-crm'],
+        orgsFailed: [{ org: 'delta-crm', reason: 'timeout' }],
+      }),
+      NO_SENTRY_STATE,
+      NOW,
+    )
+  }
+
+  it('REPRODUCES THE INCIDENT SHAPE: the failed org is not seeded by a tick it missed', () => {
+    const seed = seedWithOneOrgDown()
+    expect(seed.coldStart).toBe(true)
+    // The whole defect in one assertion: `seeded` closes anyway...
+    expect(seed.next.seeded).toBe(true)
+    // ...but the org that never answered is NOT in the seeded set.
+    expect(seed.next.seededOrgs).toEqual(['other-org'])
+  })
+
+  it('its backlog is COUNTED, not listed, on the tick it first answers', () => {
+    const seed = seedWithOneOrgDown()
+    const back = decideSentryIssues(
+      reading({
+        issues: [other('1'), other('2'), crm('a'), crm('b'), crm('c')],
+        orgsQueried: ['other-org', 'delta-crm'],
+      }),
+      seed.next,
+      NOW,
+    )
+    expect(back.coldStart).toBe(false)
+    // BEFORE THE FIX this was 3 announced issues, one line each.
+    expect(back.newlySeen).toEqual([])
+    expect(back.absorbedBacklog).toBe(3)
+    expect(back.absorbedOrgs).toEqual(['delta-crm'])
+    // and the notice says it once, naming the org, without listing anything
+    const notice = buildSentryNotice(back)
+    expect(notice).toContain('delta-crm')
+    expect(notice).toContain('3 standing issue(s) absorbed as BACKLOG')
+    expect(notice).not.toContain('BACKEND-a')
+  })
+
+  it('CONTROL -- a genuinely new issue from an ALREADY SEEDED org is still announced', () => {
+    // Without this the fix could be "announce nothing", which would be a worse
+    // module than the defect: the absorbing rule must not swallow real arrivals.
+    const seed = seedWithOneOrgDown()
+    const next = decideSentryIssues(
+      reading({ issues: [other('1'), other('2'), other('9')], orgsQueried: ['other-org'] }),
+      seed.next,
+      NOW,
+    )
+    expect(next.newlySeen.map(i => i.id)).toEqual(['9'])
+    expect(next.absorbedBacklog).toBe(0)
+  })
+
+  it('absorbs ONCE -- the org is seeded afterwards, so the next tick is ordinary', () => {
+    const seed = seedWithOneOrgDown()
+    const first = decideSentryIssues(
+      reading({ issues: [crm('a'), crm('b')], orgsQueried: ['other-org', 'delta-crm'] }),
+      seed.next,
+      NOW,
+    )
+    expect(first.absorbedBacklog).toBe(2)
+    const second = decideSentryIssues(
+      reading({ issues: [crm('a'), crm('b'), crm('z')], orgsQueried: ['other-org', 'delta-crm'] }),
+      first.next,
+      NOW,
+    )
+    expect(second.absorbedBacklog).toBe(0)
+    expect(second.newlySeen.map(i => i.id)).toEqual(['z'])
+  })
+
+  it('a still-failing org stays unseeded -- and does NOT turn every tick into a cold start', () => {
+    // The rejected one-word fix (close `seeded` only on a flawless read) would
+    // have made this tick coldStart again, repeating FIRST READ/RESUMED forever.
+    const seed = seedWithOneOrgDown()
+    const again = decideSentryIssues(
+      reading({
+        issues: [other('1')],
+        orgsQueried: ['other-org', 'delta-crm'],
+        orgsFailed: [{ org: 'delta-crm', reason: 'timeout' }],
+      }),
+      seed.next,
+      NOW,
+    )
+    expect(again.coldStart).toBe(false)
+    expect(again.next.seededOrgs).toEqual(['other-org'])
+  })
+})
+
 describe('the watermark file (card 65a324b2)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'sentry-wm-'))
 
