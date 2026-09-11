@@ -394,6 +394,136 @@ function persistScheduleLastRun(): void {
   }
 }
 
+// --- Enabled-state transitions ---
+//
+// A scheduled task that has gone quiet has two opposite explanations, and until
+// now neither left a trace: it was DISABLED (a decision -- nothing to fix), or
+// it FAILED TO DELIVER (the task or its session is broken). Those call for
+// opposite responses, and after the fact they were indistinguishable, because
+// `enabled` has no history -- task-config.json's mtime proves a WRITE, not
+// which way the flag went. Measured 2026-09-07..09: six tasks, four days of
+// silence, and afterwards no way to tell which of the two had been the case.
+//
+// WHY THE TRACE IS HERE AND NOT IN THE WRITER. Logging inside the write path
+// was the obvious design and it was measured down twice. First, the toggle
+// route does its own read-modify-write and never calls writeScheduledTask, so
+// a trace in the shared writer would sit in a function the toggle never
+// enters. Second and decisively: an operator who edits task-config.json
+// directly -- a script, python, an editor -- runs no TypeScript at all, so NO
+// writer-side log can see them. That is not an edge case here; it is how the
+// changes that prompted this were actually made.
+//
+// So the trace is OBSERVED rather than instrumented. The runner already reads
+// `enabled` for every task on every tick, so it remembers the previous value
+// and logs TRANSITIONS only. That is independent of who changed the flag and
+// how -- API, script, or hand-edit.
+//
+// PERSISTED, for the same reason scheduleLastRun is: an in-memory map sees
+// nothing that happened while the process was down. With the map on disk the
+// next boot compares what it remembers against what the files now say, so a
+// flip during downtime is reported on the first tick after startup. The one
+// case no state diff can catch is a flip AND a flip back entirely within the
+// downtime -- net zero, nothing to observe. Said out loud so the next reader
+// neither over-trusts this nor re-derives the limit.
+const SCHEDULE_LAST_ENABLED_PATH = join(PROJECT_ROOT, 'store', 'schedule-last-enabled.json')
+const scheduleLastEnabled: Map<string, boolean> = new Map()
+
+function loadScheduleLastEnabled(): void {
+  try {
+    const raw = JSON.parse(readFileSync(SCHEDULE_LAST_ENABLED_PATH, 'utf-8'))
+    if (raw && typeof raw === 'object') {
+      for (const [name, v] of Object.entries(raw)) {
+        if (typeof v === 'boolean') scheduleLastEnabled.set(name, v)
+      }
+    }
+  } catch { /* no file yet / unreadable -- start empty */ }
+}
+
+function persistScheduleLastEnabled(): void {
+  try {
+    atomicWriteFileSync(
+      SCHEDULE_LAST_ENABLED_PATH,
+      JSON.stringify(Object.fromEntries(scheduleLastEnabled), null, 2),
+    )
+  } catch (err) {
+    logger.warn({ err }, 'schedule-runner: failed to persist last-enabled map')
+  }
+}
+
+/**
+ * Diff each task's current `enabled` against the last value observed for it.
+ *
+ * Pure on purpose. The caller owns the map, the log line and the disk write,
+ * so the only thing that actually needs deciding -- what counts as a change --
+ * is testable without a runner, a filesystem or a clock.
+ *
+ * A FIRST OBSERVATION IS NOT A TRANSITION. A task the map has never seen (just
+ * created, or every task at once on the first boot after this ships, or after
+ * the state file is deleted) is recorded silently. Without that rule a missing
+ * state file writes one false "changed" line per task in the fleet, which is
+ * precisely the noise that teaches a reader to skip this message.
+ *
+ * A task that has DISAPPEARED is pruned, not logged: its config is gone, so
+ * there is no flag left to have a state, and reporting a deletion as a
+ * disable would be a different event wearing this one's name. Pruning also
+ * means a task later recreated under the same name comes back as a first
+ * observation instead of a fabricated transition.
+ */
+export function diffEnabledTransitions(
+  tasks: ReadonlyArray<Pick<ScheduledTask, 'name' | 'enabled'>>,
+  remembered: ReadonlyMap<string, boolean>,
+): {
+  transitions: Array<{ name: string; from: boolean; to: boolean }>
+  firstSeen: Array<{ name: string; enabled: boolean }>
+  removed: string[]
+} {
+  const transitions: Array<{ name: string; from: boolean; to: boolean }> = []
+  const firstSeen: Array<{ name: string; enabled: boolean }> = []
+  const present = new Set<string>()
+  // Destructured deliberately. Three source-level specs locate the CRON loop by
+  // searching this file for the text of its `for` header and taking the FIRST
+  // match (schedule-runner-precheck, schedule-runner-injection-priority). This
+  // function sits ~1300 lines above that loop, so writing the header here in the
+  // same shape -- iterating `tasks` with the element bound to `task` -- silently
+  // redirects those specs to this loop. Measured: it did, and all three went red.
+  for (const { name, enabled } of tasks) {
+    present.add(name)
+    const prev = remembered.get(name)
+    if (prev === undefined) {
+      firstSeen.push({ name, enabled })
+      continue
+    }
+    if (prev !== enabled) transitions.push({ name, from: prev, to: enabled })
+  }
+  const removed: string[] = []
+  for (const name of remembered.keys()) if (!present.has(name)) removed.push(name)
+  return { transitions, firstSeen, removed }
+}
+
+/**
+ * Apply one tick's worth of enabled-state observations: log the transitions,
+ * update the remembered map, and persist it only when it actually moved.
+ *
+ * A tick on which nothing changed writes no line and touches no file -- at a
+ * 15 s cadence anything else would be 5.7k writes a day to say "still the
+ * same", and a log line per tick is not a signal.
+ */
+function recordEnabledTransitions(tasks: ReadonlyArray<ScheduledTask>): void {
+  const { transitions, firstSeen, removed } = diffEnabledTransitions(tasks, scheduleLastEnabled)
+  for (const t of transitions) {
+    logger.info(
+      { task: t.name, from: t.from, to: t.to },
+      'Scheduled task enabled-state changed (observed by the runner; the source of the change is not known here)',
+    )
+    scheduleLastEnabled.set(t.name, t.to)
+  }
+  for (const f of firstSeen) scheduleLastEnabled.set(f.name, f.enabled)
+  for (const name of removed) scheduleLastEnabled.delete(name)
+  if (transitions.length > 0 || firstSeen.length > 0 || removed.length > 0) {
+    persistScheduleLastEnabled()
+  }
+}
+
 // --- Downtime catch-up ---
 //
 // The scan window's left edge used to be a flat `now - 30 min` on startup, so
@@ -1452,6 +1582,10 @@ export function startScheduleRunner(): NodeJS.Timeout {
   // Reload the persisted last-run times so a restart inside a task's catch-up
   // window does not re-fire an already-run task.
   loadScheduleLastRun()
+  // Reload the remembered enabled-flags so a flip that happened while the
+  // process was down is reported on the first tick instead of being absorbed
+  // as the new normal.
+  loadScheduleLastEnabled()
 
   // Surface the effective cron timezone at startup. A silent UTC fallback (no
   // SCHEDULER_TZ/TZ in the env) shifts every fixed-time cron off its intended
@@ -1519,6 +1653,10 @@ export function startScheduleRunner(): NodeJS.Timeout {
     try {
     const tasks = listScheduledTasks()
     const now = Date.now()
+    // Before anything is filtered: every task is compared, enabled or not,
+    // because a disable is exactly as reportable as an enable and the firing
+    // loop below drops disabled tasks on its first line.
+    recordEnabledTransitions(tasks)
     // Scan the real interval elapsed since the previous tick (30 min on the
     // first tick), not a fixed 60s window -- a late/dropped tick must not let a
     // sparse daily cron's single occurrence slip through a gap unscanned (#621).
