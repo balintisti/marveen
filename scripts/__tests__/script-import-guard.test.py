@@ -19,6 +19,15 @@ The discriminator is deliberately the FIRST argv-driven read in each module, not
 the destructive call: pointing it at a path that does not exist makes an
 unguarded import raise, and a guarded one import cleanly. Nothing is written,
 no tmux exists in the loop, and the test stays fast.
+
+THIS FILE NEEDS NO WIRING, AND THE COMMIT THAT ADDED IT SAID OTHERWISE.
+`src/__tests__/scripts-shell-tests.test.ts` (card 4df370d9) DISCOVERS every
+`*.test.(sh|py)` in this directory and runs one `it` per file -- 45 before this
+one, 46 after, visible in the suite output. The wrapper spec that shipped
+alongside this file was redundant and ran the contract twice per suite; it is
+removed. Its own docblock argues against per-file wrappers in as many words.
+
+Run it alone with:  python3 scripts/__tests__/script-import-guard.test.py
 """
 import re
 import subprocess
