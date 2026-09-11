@@ -59,6 +59,18 @@ check "trailing percent sign is left alone" \
   "postgresql://appuser@db.example.test/mydb" "vege%" \
   "postgresql://appuser:vege%@db.example.test/mydb"
 
+# MULTI-BYTE UTF-8, and this case exists because it was the one thing left as a
+# DERIVATION rather than a measurement. didi proved the fix end-to-end against a
+# real scram-sha-256 cluster and stated plainly that she had not tried a
+# multi-byte password -- byte-wise concatenation is "correct by construction",
+# which is an argument, not a result. It is measured here instead: the decoder
+# emits one raw byte per %XX and bash strings are byte strings, so `%C3%A1`
+# reassembles into a single character. Pinned so that the next rewrite of the
+# decoder cannot quietly lose it.
+check "multi-byte UTF-8 password decodes byte-wise" \
+  "postgresql://appuser@db.example.test/mydb" "jélszó" \
+  "postgresql://appuser:j%C3%A9lsz%C3%B3@db.example.test/mydb"
+
 # THE ONE THAT RULES OUT THE OBVIOUS IMPLEMENTATION. The usual one-line decoder
 # is `printf %b "${s//%/\\x}"`, which also interprets every other backslash
 # escape -- so a password containing a literal backslash would be rewritten and
