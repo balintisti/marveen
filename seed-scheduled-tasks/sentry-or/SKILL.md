@@ -77,12 +77,45 @@ KIKOTESEK:
       a 24 oras ablak URES  ES  a 7 naposban is friss a `lastSeen`
           -> valodi nyugalom, ez a 2. eset: NE irj.
       a 7 napos ablak is URES
-          -> **NEM MERHETO ebbol**: egy uj vagy tenyleg nema projekt ugyanigy nez ki. Mondd ki,
-             hogy nem tudod eldonteni, ne valassz.
+          -> ebbol MAGABOL **NEM MERHETO**: egy uj vagy tenyleg nema projekt ugyanigy nez ki.
+             **DE EZ AZ ESET MOSTANTOL NEM AZ UT VEGE -- lasd a KVOTA-LABAT lentebb.**
 
-  ES AMIT EZ NEM ALLIT: nem mondja meg, MIERT hallgat a csatorna (DSN, SDK-init, kvota). Az a
-  backend gazdajae. Ez a lepes csak annyit allit, hogy a NULLA nem nyugalom -- es epp ez az,
-  amit harom napig nem tudtunk.
+  **ES A CSUSZO ABLAK EL IS FOGY ALOLAD: EZERT KELL EGY LAB, AMI NEM ABLAKBOL JON**
+  (kartya `0fff734b`, merve 2026-09-11). A fenti megkulonboztetes azon all, hogy a 7 NAPOS
+  ablakban VAN issue. Az az ablak CSUSZIK: ha a csatorna nema marad, a benne levo issue-k
+  kiesnek, es akkor a muszer PONTOSAN AKKOR veszti el a megkulonbozteto kepesseget, amikor a
+  csend a leghosszabb es a legjelentosebb. Mert eset: 2026-09-14 08:11 CEST-re mind a 23 kiesett
+  volna. **Az ablak SZELESITESE nem javitas** -- merve, a 14 napos ablakban UGYANAZ a legfrissebb
+  esemeny, tehat napokat vesz, nem kepesseget, es hozza a sajat kesobbi lejaratat.
+
+      **A KVOTA-LAB (ezt kerdezd meg, amikor a 24h URES -- MINDIG, nem csak ha a 7d is ures):**
+
+      GET https://sentry.io/api/0/organizations/delta-crm/stats_v2/
+          ?field=sum(quantity)&groupBy=outcome&statsPeriod=24h&category=error&interval=1d
+      (a mi `sentry_olvaso_token`-unkkel, vaultbol; merve 2026-09-11: HTTP 200)
+
+      `accepted` > 0  ...........  a csatorna EL, a nulla issue VALODI nyugalom
+      `accepted` HIANYZIK vagy 0, es `rate_limited` > 0
+                      ...........  **A CSATORNA BE VAN ZARVA: a Sentry ELDOBJA az esemenyeket.**
+                                   Ez nem "hallgat" -- ez egy MEGNEVEZETT ok, es ki kell irni.
+      mindketto 0 ...............  tenyleg nem erkezik semmi a kuldo oldalrol sem
+
+  **MIERT ER TOBBET, MINT A MASODIK ABLAK:** ez akkor is valaszol, ha NULLA issue van BARMELYIK
+  ablakban -- vagyis pontosan abban az allapotban, ahol a ket-ablakos megkulonboztetes csodot
+  mond. Es nem csak azt mondja meg, hogy a csatorna nema, hanem hogy MIERT.
+
+  MERT PELDA, es ez a lab elso hasznalata volt: 2026-09-07-en fordult at a delta-crm szervezet.
+      09-06  accepted 2567 | rate_limited    0
+      09-07  accepted  775 | rate_limited  929   <- az atmenet napja
+      09-08  accepted    0 | rate_limited 1468
+  A legfrissebb issue `lastSeen`-je 2026-09-07 06:11:01Z -- ket fuggetlen mero, ugyanaz a nap.
+
+  **ES AMIT A KVOTA-LAB SEM MOND MEG:** hogy MIKOR all helyre. A `subscription` es a `quotas`
+  vegpont a mi olvaso tokenunkkel **404** (merve), tehat a szamlazasi idoszak fordulasa innen nem
+  lathato. Ird ki, hogy nem merheto -- ne tippelj datumot.
+
+  ES AMIT A HAROM-ALLAPOTOS RESZ NEM ALLIT: a `rate_limited` megnevezi a MECHANIZMUST (a Sentry
+  dobja el), de nem mondja meg, MI ette meg a kvotat. Az a backend gazdajae.
 - A 4 oras ablak SZANDEKOSAN szelesebb a 3 oras cronnal: az atfedes duplikatumot adhat, a res
   viszont kihagyast. A duplikatumot az allapotfajl szuri.
 - Semmit ne minositsits resolved-nak es ne modosits Sentry-oldali allapotot. CSAK OLVASAS.
