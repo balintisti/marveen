@@ -38,8 +38,10 @@ def emit_raw(text, rc=0):
     return ["python3", "-c", f"import sys;sys.stdout.write({text!r});sys.exit({rc})"]
 
 
-def run(items, threshold=14, now=NOW, as_json=True, env=None, extra=None):
+def run(items, threshold=14, now=NOW, as_json=True, env=None, extra=None, scan=None):
     inv = {"threshold_days": threshold, "items": items}
+    if scan is not None:
+        inv["scan"] = scan
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
         json.dump(inv, fh)
         path = fh.name
@@ -66,6 +68,127 @@ def json_probe_at(iso):
 
 
 NO_EXPIRY_ITEM = item("static", {"kind": "none_by_construction", "why": "no expiry"})
+
+
+class Sweep(unittest.TestCase):
+    """The SIXTH state: a credential that exists and is not on the list.
+
+    The five states partition WHAT WE ASKED ABOUT. An unlisted credential yields no DUE, no
+    UNKNOWN, no FAILED -- nothing at all -- and therefore looks exactly like a healthy one,
+    which is this checker's own opening sentence turned on itself.
+
+    The load-bearing test here is test_missing_scan_dir_is_loud: a sweep over a directory that
+    does not exist finds nothing, and "found nothing" is byte-identical to "everything is
+    claimed". Rename the directory and the gate goes quiet in the reassuring direction.
+    """
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        with open(os.path.join(self.d, "known.json"), "w") as fh:
+            fh.write("{}")
+
+    def _scan(self, d=None):
+        return [{"dir": d or self.d, "glob": "*.json", "why": "test"}]
+
+    def _claimed(self, extra_cover=None):
+        it = item("static", {"kind": "none_by_construction", "why": "x"})
+        it["covers"] = [os.path.join(self.d, "known.json")] + (extra_cover or [])
+        return it
+
+    def test_unclaimed_file_is_reported_and_sets_exit_5(self):
+        rc, out, _ = run([item("static", {"kind": "none_by_construction", "why": "x"})],
+                         scan=self._scan())
+        d = json.loads(out)
+        self.assertEqual(rc, 5, "an existing, unlisted credential must not be a clean run")
+        self.assertEqual(d["unlisted"], 1)
+
+    def test_a_claimed_file_produces_no_finding(self):
+        rc, out, _ = run([self._claimed()], scan=self._scan())
+        d = json.loads(out)
+        self.assertEqual(rc, 0)
+        self.assertEqual(d["unlisted"], 0)
+        self.assertEqual(d["sweep_failed"], 0)
+
+    def test_missing_scan_dir_is_loud(self):
+        """A sweep that sweeps nothing must never read as a clean sweep."""
+        rc, out, _ = run([self._claimed()], scan=self._scan(d=os.path.join(self.d, "gone")))
+        d = json.loads(out)
+        self.assertEqual(rc, 5, "a sweep that could not run must not contribute a silent zero")
+        self.assertEqual(d["sweep_failed"], 1)
+        self.assertEqual(d["unlisted"], 0, "a missing dir is not the same claim as an unlisted file")
+
+    def test_no_scan_section_means_no_sweep(self):
+        """Backward compatible: an inventory without `scan` behaves exactly as before."""
+        rc, out, _ = run([item("static", {"kind": "none_by_construction", "why": "x"})])
+        d = json.loads(out)
+        self.assertEqual(rc, 0)
+        self.assertEqual(d["unlisted"], 0)
+        self.assertEqual(d["swept"], [])
+
+    def test_the_swept_population_is_always_printed(self):
+        """A completeness claim without its denominator repeats the bug it fixes."""
+        rc, out, _ = run([self._claimed()], scan=self._scan(), as_json=False)
+        self.assertIn("DEKLARALT HELYEK SOPRESE", out)
+        self.assertIn("NEM gep-szintu cenzus", out, "the limit of the sweep must be stated")
+        self.assertRegex(out, r"1 fajl")
+
+    def test_due_outranks_unlisted_but_unlisted_is_still_counted(self):
+        rc, out, _ = run([item("old", json_probe_at("2026-01-01T00:00:00Z"))], scan=self._scan())
+        d = json.loads(out)
+        self.assertEqual(rc, 3, "a concrete expiry leads")
+        self.assertEqual(d["unlisted"], 1, "and the incomplete list is still reported")
+
+    def test_unlisted_outranks_unknown(self):
+        """An UNKNOWN is a gap we chose to carry; an unlisted file means the POPULATION is
+        wrong, and every other number is conditional on it."""
+        rc, out, _ = run([item("opaque", {"kind": "not_queryable", "why": "x"})],
+                         scan=self._scan())
+        d = json.loads(out)
+        self.assertEqual(rc, 5)
+        self.assertEqual(d["unmeasured"], 1)
+
+    def test_summary_says_the_list_is_incomplete(self):
+        rc, out, _ = run([self._claimed()], scan=self._scan(d=os.path.join(self.d, "gone")),
+                         as_json=False)
+        self.assertIn("NINCS A LELTARBAN", out)
+        self.assertIn("NEM TELJES", out)
+
+    def test_a_newly_appearing_credential_breaks_the_silence(self):
+        """The sweep result is part of the remembered state.
+
+        Without this the daily run would report a new unlisted credential ONCE and then fall
+        silent about it -- and a suppressed finding on a credential nobody listed is exactly
+        the silence this whole card is about, rebuilt inside the noise control."""
+        sp = os.path.join(tempfile.mkdtemp(), "state.json")
+        claimed = self._claimed()
+        # first run: everything claimed, and it records that
+        rc1, out1, _ = run([claimed], scan=self._scan(), as_json=False,
+                           extra=["--quiet-unless-changed", sp])
+        # second run, unchanged -> silent
+        rc2, out2, _ = run([claimed], scan=self._scan(), as_json=False,
+                           extra=["--quiet-unless-changed", sp])
+        self.assertEqual(rc2, 0)
+        self.assertIn("ELNEMITVA", out2)
+        # now a new credential appears in the swept directory
+        with open(os.path.join(self.d, "surprise.json"), "w") as fh:
+            fh.write("{}")
+        rc3, out3, _ = run([claimed], scan=self._scan(), as_json=False,
+                           extra=["--quiet-unless-changed", sp])
+        self.assertEqual(rc3, 5, "a credential appearing on disk is a CHANGE, not noise")
+        self.assertNotIn("ELNEMITVA", out3)
+        self.assertIn("valtozott az allapot", out3)
+
+    def test_shipped_inventory_declares_a_scan_and_covers_what_it_names(self):
+        inv_path = os.path.join(HERE, "..", "expiry-inventory.json")
+        with open(inv_path, encoding="utf-8") as fh:
+            inv = json.load(fh)
+        self.assertTrue(inv.get("scan"), "the shipped inventory must declare where it sweeps")
+        for sc in inv["scan"]:
+            for field in ("dir", "glob", "why"):
+                self.assertIn(field, sc, "a scan location without a stated reason is a guess")
+        covers = [c for it in inv["items"] for c in it.get("covers", [])]
+        self.assertIn("~/.config/marveen/gmail-imap.json", covers,
+                      "the entry that was found MISSING must stay claimed")
 
 
 class ExpiryCheck(unittest.TestCase):

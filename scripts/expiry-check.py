@@ -49,11 +49,40 @@ An item that stays DUE for weeks is not a notification problem, it is an unactio
 one, and this repo's own rule sends that to a card -- which does not queue and is not
 re-read every turn -- not to a daily ping.
 
+AND THE SIXTH STATE, WHICH THE FIVE ABOVE CANNOT SEPARATE (didi, 2026-09-11). Those five
+partition WHAT WE ASKED ABOUT. A credential that EXISTS and is not on the list yields no
+DUE, no UNKNOWN, no FAILED -- it yields NOTHING, and therefore looks exactly like a healthy
+one. That is this file's opening sentence, one level in, and it landed on the file itself.
+
+    NOT_IN_INVENTORY   a file sits in a declared credential location and no item claims it
+
+The inventory's `scan` section names locations where a file's EXISTENCE is by itself enough
+to make it a fleet credential; every item may declare `covers` for the paths it accounts
+for. Anything seen and unclaimed is reported. Measured when this was written: the inventory's
+own directory held two files and the inventory named one.
+
+A SWEEP THAT SWEEPS NOTHING LOOKS EXACTLY LIKE A CLEAN SWEEP, so a scan entry whose
+directory is missing is reported as FAILED rather than contributing a silent zero. Rename
+the directory and this gate would otherwise go quiet in the reassuring direction -- the same
+shape it exists to catch.
+
+AND THE SCOPE IS DELIBERATELY NARROW, which is a limit, not an oversight: this is NOT a
+machine-wide credential census. Other tools' own credentials are out of scope, and whether
+they belong here is a SCOPE DECISION rather than a measurement. The report therefore always
+prints what it swept -- a completeness claim without its denominator would repeat the error
+it fixes.
+
 EXIT CODES (the worst state wins; everything is still printed):
-    0  every item answered, nothing inside the threshold
+    0  every item answered, nothing inside the threshold, nothing unclaimed
     3  at least one DUE (expired, or expiring within threshold_days)
-    4  nothing due, but at least one UNKNOWN or FAILED
+    5  nothing due, but something EXISTS that the inventory does not name
+    4  nothing due and nothing unclaimed, but at least one UNKNOWN or FAILED
     2  the inventory itself could not be read (usage/parse error)
+
+WHY 5 OUTRANKS 4 AND BOTH SIT UNDER 3. A DUE item is a concrete fact about the system, so it
+leads. Between the other two: an UNKNOWN is a declared gap we chose to carry, while a
+NOT_IN_INVENTORY means the POPULATION is wrong -- every other number in the report is
+conditional on a list that has just been shown to be incomplete.
 
 THIS SCRIPT NEVER HANDLES SECRET VALUES. Probes read one named field out of a
 command's output. Nothing it prints is derived from a credential's value.
@@ -62,6 +91,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import glob
 import json
 import os
 import re
@@ -74,6 +104,7 @@ PROBE_TIMEOUT = 30  # seconds; `timeout(1)` does not exist on this machine
 MAX_SILENCE_DAYS = 7  # --quiet-unless-changed can never hold its tongue longer
 
 DUE, OK, NO_EXPIRY, UNKNOWN, FAILED = "DUE", "OK", "NO_EXPIRY", "UNKNOWN", "FAILED"
+UNLISTED = "NOT_IN_INVENTORY"
 NEEDS_ATTENTION = (UNKNOWN, FAILED)
 
 
@@ -238,6 +269,10 @@ def _suppression(args, rows, now):
     if not path:
         return False, ""
     current = {r["id"]: r["state"] for r in rows}
+    # The sweep result is part of the state: a credential appearing on disk is a CHANGE,
+    # and without this the daily run would report it once and then fall silent about it.
+    for d in getattr(args, "_sweep_ids", []) or []:
+        current[f"sweep:{d}"] = UNLISTED
     snapshot = {"checked_at": now.isoformat(), "states": current}
 
     previous, prev_when, reason = None, None, ""
@@ -269,6 +304,44 @@ def _suppression(args, rows, now):
     if previous != current:
         return False, "valtozott az allapot"
     return True, f"valtozatlan a(z) {prev_when.isoformat(timespec='seconds')} ota"
+
+
+def sweep_declared_locations(inv):
+    """-> (findings, swept) over the inventory's declared credential locations.
+
+    findings: list of (kind, detail) where kind is UNLISTED or FAILED.
+    swept:    list of human-readable "<dir>/<glob>: N file(s)" lines, printed ALWAYS.
+
+    The swept list is not decoration. A completeness statement without its denominator is
+    the same defect this whole file is about, so the reader is always told what was looked
+    at -- and, by omission made explicit in the summary, what was not.
+    """
+    findings, swept = [], []
+    scans = inv.get("scan") or []
+    if not scans:
+        return findings, swept
+
+    claimed = set()
+    for it in inv.get("items", []):
+        for c in it.get("covers", []) or []:
+            claimed.add(os.path.realpath(_expand(c)))
+
+    for sc in scans:
+        raw = sc.get("dir", "")
+        d = _expand(raw)
+        pattern = sc.get("glob", "*")
+        if not os.path.isdir(d):
+            # LOUD, never a silent zero: a scan over a missing directory finds nothing,
+            # which is byte-identical to a scan that found everything claimed.
+            findings.append((FAILED, f"a deklaralt hely NEM LETEZIK: {raw} -- a sopres nem futott le"))
+            swept.append(f"{raw}/{pattern}: A KONYVTAR HIANYZIK")
+            continue
+        seen = sorted(glob.glob(os.path.join(d, pattern)))
+        swept.append(f"{raw}/{pattern}: {len(seen)} fajl")
+        for f in seen:
+            if os.path.realpath(f) not in claimed:
+                findings.append((UNLISTED, f"{raw}/{os.path.basename(f)}"))
+    return findings, swept
 
 
 def main(argv=None):
@@ -323,9 +396,16 @@ def main(argv=None):
             "note": note,
         })
 
+    sweep_findings, swept = sweep_declared_locations(inv)
+    unlisted = [d for k, d in sweep_findings if k == UNLISTED]
+    sweep_failed = [d for k, d in sweep_findings if k == FAILED]
+
     due = [r for r in rows if r["state"] == DUE]
     unmeasured = [r for r in rows if r["state"] in NEEDS_ATTENTION]
-    rc = 3 if due else (4 if unmeasured else 0)
+    # A missing scan directory is a FAILED sweep, and it must not be quieter than an
+    # unclaimed file: both mean the population cannot be trusted.
+    population_broken = unlisted or sweep_failed
+    rc = 3 if due else (5 if population_broken else (4 if unmeasured else 0))
 
     if args.json:
         print(json.dumps({
@@ -334,6 +414,9 @@ def main(argv=None):
             "total": len(rows),
             "due": len(due),
             "unmeasured": len(unmeasured),
+            "unlisted": len(unlisted),
+            "sweep_failed": len(sweep_failed),
+            "swept": swept,
             "exit_code": rc,
             "items": rows,
         }, indent=2, ensure_ascii=False))
@@ -360,14 +443,32 @@ def main(argv=None):
                 print(f"                ujitja: {r['renewed_by']} -- {r['renew']}")
         print()
 
+    args._sweep_ids = unlisted + [f"MISSING:{d}" for d in sweep_failed]
     suppress, why = _suppression(args, rows, now)
+
+    if swept:
+        print("DEKLARALT HELYEK SOPRESE (NEM gep-szintu cenzus -- csak az alabbiak):")
+        for line in swept:
+            print(f"  {line}")
+        for kind, detail in sweep_findings:
+            tag = "NINCS A LELTARBAN" if kind == UNLISTED else "A SOPRES ELBUKOTT"
+            print(f"  {tag}  {detail}")
+        if not sweep_findings:
+            print("  minden itt talalt fajlt vallal egy leltar-tetel")
+        print()
 
     fine = len(rows) - len(due) - len(unmeasured)
     # The unmeasured count is printed unconditionally and on its own clause: a
     # summary that can read as "all clear" while anything is unmeasured is the
     # exact failure this card is about.
     print(f"OSSZEGZES: {len(rows)} tetel | {len(due)} esedekes vagy lejart "
-          f"| {len(unmeasured)} NEM MERHETO | {fine} rendben")
+          f"| {len(unmeasured)} NEM MERHETO | {fine} rendben "
+          f"| {len(unlisted) + len(sweep_failed)} NINCS A LELTARBAN")
+    if population_broken:
+        # The quotable line must carry this: every number above is conditional on a list
+        # that has just been shown to be incomplete.
+        print(f"           A leltar NEM TELJES -- a fenti szamok egy olyan listarol szolnak, "
+              f"amirol az iment derult ki, hogy hianyzik belole valami.")
     if unmeasured:
         print(f"           A {len(unmeasured)} nem merheto tetel NEM 'rendben' -- "
               f"rola semmit nem tudunk. Ez a b91eb75f kartya harmadik resze.")
