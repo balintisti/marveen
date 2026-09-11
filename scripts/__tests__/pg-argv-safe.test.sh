@@ -139,6 +139,28 @@ check "password containing a colon" \
   "postgresql://appuser@db.example.test/mydb" "a:b:c" \
   "postgresql://appuser:a:b:c@db.example.test/mydb"
 
+# THE TWO CASES THE "LEFT ALONE" GROUP BELOW COULD NOT MAKE -- didi measured
+# that both of its inputs PASS against the BROKEN lib, so they are structurally
+# unable to tell fixed from broken on this axis. Today's behaviour was right and
+# nothing would have said so if it regressed.
+#
+# WHAT THEY WERE MISSING IS A PORT, and that is the whole shape: without a `:`
+# before the stray `@` there is nothing to read as `user:pass`, so the old code
+# left those URLs alone by accident rather than by rule. Every real DSN we have
+# carries a port -- the live pooler is on :6543 -- so the DANGEROUS shape is the
+# ordinary one and the safe shape is the exotic one.
+#
+# The first case is the sharpest thing this defect did: with no userinfo at all,
+# the broken version INVENTED a credential.
+#   trunk -> url `postgresql://host.example.test@b`, PGPASSWORD `5432/db?x=a`
+check "no userinfo, but a port and a stray at-sign -> no credential is invented" \
+  "postgresql://host.example.test:5432/db?x=a@b" "-" \
+  "postgresql://host.example.test:5432/db?x=a@b"
+
+check "user without password, with a port and a stray at-sign -> unchanged" \
+  "postgresql://appuser@host.example.test:5432/db?x=a@b" "-" \
+  "postgresql://appuser@host.example.test:5432/db?x=a@b"
+
 # --- the three shapes that must be left ALONE -------------------------------
 check "user with NO password -> unchanged, PGPASSWORD unset" \
   "postgresql://appuser@db.example.test/mydb" "-" \
