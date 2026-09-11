@@ -98,15 +98,35 @@ else
   fail=$((fail+1)); echo "FAIL: readonly-measure did not refuse (rc=$rc): $(printf '%s' "$out" | head -1)"
 fi
 
+# EVERY OUTBOUND LEG IS STUBBED, and the first version of this case did not do
+# that -- it sent THREE REAL backup-failure alerts to the owner's phone, and the
+# first one wrote a FAIL line into the REAL backup log. The refusal branch is
+# SUPPOSED to shout; a harness that exercises it therefore has to make the shout
+# land somewhere harmless, or it is indistinguishable from a failed backup.
+# The rewrite list is the same one the retry suite already uses -- I copied two
+# of its four entries and not the two that reach outside.
+printf '#!/bin/bash\necho "STUB NOTIFY: $*" >> "%s/notified.txt"\nexit 0\n' "$TMPD" > "$TMPD/notify.sh"
+chmod +x "$TMPD/notify.sh"
 break_lib "$SCRIPTS_DIR/delta-crm-backup.sh" \
   | sed -e "s|^ENV_FILE=.*|ENV_FILE=\"$TMPD/.env\"|" \
-        -e "s|^BACKUP_DIR=.*|BACKUP_DIR=\"$TMPD/backups\"|" > "$TMPD/delta-crm-backup.sh"
+        -e "s|^BACKUP_DIR=.*|BACKUP_DIR=\"$TMPD/backups\"|" \
+        -e "s|^NOTIFY_SCRIPT=.*|NOTIFY_SCRIPT=\"$TMPD/notify.sh\"|" \
+        -e "s|^DASHBOARD_TOKEN_FILE=.*|DASHBOARD_TOKEN_FILE=\"$TMPD/no-such-token\"|" > "$TMPD/delta-crm-backup.sh"
 mkdir -p "$TMPD/backups"
 out="$(cd "$TMPD" && PATH="$TMPD:$PATH" bash ./delta-crm-backup.sh 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && { printf '%s' "$out" | grep -q 'pg-argv-safe' || grep -q 'pg-argv-safe' "$TMPD/backups/backup.log" 2>/dev/null; }; then
   pass=$((pass+1))
 else
   fail=$((fail+1)); echo "FAIL: delta-crm-backup did not refuse (rc=$rc): $(printf '%s' "$out" | head -1)"
+fi
+
+# The alert must have gone to the STUB, not outward. Asserting the stub RECEIVED
+# it is stronger than asserting nothing was sent: it proves the notify leg still
+# runs end-to-end, which is the thing this case exists to exercise.
+if [ -s "$TMPD/notified.txt" ]; then
+  pass=$((pass+1))
+else
+  fail=$((fail+1)); echo "FAIL: the refusal did not reach the stubbed notifier -- the leg is not being exercised"
 fi
 
 echo "pg-argv-safe: $pass passed, $fail failed"
