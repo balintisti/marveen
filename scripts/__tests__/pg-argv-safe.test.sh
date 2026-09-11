@@ -71,6 +71,42 @@ check "multi-byte UTF-8 password decodes byte-wise" \
   "postgresql://appuser@db.example.test/mydb" "jélszó" \
   "postgresql://appuser:j%C3%A9lsz%C3%B3@db.example.test/mydb"
 
+# BOTH MECHANISMS ON ONE PASSWORD -- and the comment that first stood here was
+# WRONG, which the mutation probe caught before this landed.
+#
+# It claimed this case pinned the ORDER of split-then-decode. It does not:
+# decoding before splitting still produces the right answer here, because the
+# split is on the LAST `@` and a HOSTNAME cannot contain one. The mutation
+# survived, so the claim was refuted rather than confirmed, and the case that
+# genuinely pins the order is the one below it.
+#
+# What this case IS worth: the two mechanisms coexist on a single password -- an
+# encoded separator and a multi-byte character -- and didi measured the same
+# password authenticating against a real scram-sha-256 server (card 87cfe5ae,
+# comment 5). That matters because "the decoder emits the right bytes" and "the
+# server accepts them" are two claims: SCRAM runs the password through SASLprep.
+check "an encoded at-sign AND a multi-byte character in one password" \
+  "postgresql://appuser@db.example.test/mydb" "á@b" \
+  "postgresql://appuser:%C3%A1%40b@db.example.test/mydb"
+
+# THIS is the one that pins the ORDER, and it took a refuted guess to find it.
+#
+# The split must happen BEFORE the decoding. Reverse them -- "decode the userinfo
+# first, then split it", which reads tidier -- and an encoded `@` ANYWHERE LATER
+# IN THE URL becomes a real one, moving the last `@` out of its place. Measured
+# with the reversed implementation on this exact URL:
+#
+#     pass -> "titok@db.example.test/mydb?application_name=svc"   (the whole DSN)
+#     url  -> "postgresql://appuser@host"                          (the wrong host)
+#
+# So the failure is not a garbled password: it is a connection attempt to a
+# DIFFERENT HOST with the connection string as the credential. A query parameter
+# like `application_name=svc%40host` is ordinary, which is what makes it worth a
+# case rather than a comment.
+check "an encoded at-sign in the QUERY does not move the split" \
+  "postgresql://appuser@db.example.test/mydb?application_name=svc%40host" "titok" \
+  "postgresql://appuser:titok@db.example.test/mydb?application_name=svc%40host"
+
 # THE ONE THAT RULES OUT THE OBVIOUS IMPLEMENTATION. The usual one-line decoder
 # is `printf %b "${s//%/\\x}"`, which also interprets every other backslash
 # escape -- so a password containing a literal backslash would be rewritten and
