@@ -83,6 +83,29 @@ def is_ancestor(repo, sha, trunk):
                           cwd=repo, capture_output=True).returncode == 0
 
 
+def out_of_scope_counts(db, project):
+    """Hany `done` kartya esik a MERT projekten KIVUL, es mennyi belőlük MERHETETLEN.
+
+    UGYANAZON A POPULACION szamol, mint a `load_cards` (`status='done'`, az archivaltakat
+    IS beleertve) -- kulonben a ket szam KET NEVEZORE vonatkozna, es a kulonbseguk
+    ertelmezhetetlen lenne. Ez a fajl mashol is ezt a hibat rogziti.
+
+    A `projectless` NEM egyszeruen kimaradt: a `--project` egy hozza tartozo `--repo`-t
+    kivan, es egy project nelkuli kartyahoz nincs fa, amihez merni lehetne -- tehat ezek
+    EGYETLEN futassal sem merhetok, nem csak ezzel.
+    """
+    c = sqlite3.connect(f'file:{db}?mode=ro', uri=True)
+    total = c.execute("select count(*) from kanban_cards where status='done'").fetchone()[0]
+    none_proj = c.execute(
+        "select count(*) from kanban_cards where status='done'"
+        " and (project is null or trim(project)='')").fetchone()[0]
+    in_scope = total if not project else c.execute(
+        "select count(*) from kanban_cards where status='done' and project=?",
+        (project,)).fetchone()[0]
+    c.close()
+    return total - in_scope, none_proj
+
+
 def load_cards(db, project):
     """A `done` kartyak, a szovegukkel EGYUTT -- leiras + MINDEN komment.
 
@@ -185,6 +208,13 @@ def main():
     ap.add_argument('--state', default=None)
     a = ap.parse_args()
 
+    # A `--project` ALAPERTELMEZESE NEM VALASZTAS, ES EDDIG UGY NEZETT KI (didi merte
+    # 2026-09-12). Kapcsolo nelkul futtatva a kimenet `marveen`-t irt, mintha valaki
+    # azt kerte volna -- a szerszam egy HATOKORT allitott, amit senki nem valasztott.
+    # Ugyanaz az alak, amit ez a fajl mashol mar rogzit: egy szam a nevezoje nelkul.
+    project_explicit = any(x == '--project' or x.startswith('--project=')
+                           for x in sys.argv[1:])
+
     if not os.path.exists(a.db):
         print(f'a tabla nem olvashato: {a.db}', file=sys.stderr)
         return 2
@@ -255,7 +285,28 @@ def main():
     if a.json:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
     else:
-        print(f'`done` kartya ({a.project}): {len(cards)} | trunk: {a.trunk} @ {a.repo}')
+        outside, projectless = out_of_scope_counts(a.db, a.project)
+        scope = a.project or '(mind)'
+        if not project_explicit:
+            scope += ' -- ALAPERTELMEZES, nem valasztas'
+        print(f'`done` kartya ({scope}): {len(cards)} | trunk: {a.trunk} @ {a.repo}')
+        # ES AMI EZEN A FUTASON KIVUL ESIK -- KULONBEN A SZAM TELJESNEK OLVASODIK.
+        # A project NELKULI kartyak nem csak kimaradnak: NEM IS MERHETOK, mert a
+        # `--project` egy hozza tartozo `--repo`-t kivan, es egy project nelkuli
+        # kartyahoz nincs fa, amihez merni lehetne. Ez a lap "ures project mezo"
+        # torvenye, ezen a szerszamon: egy egesz foliens csendben kiesik a fedesbol.
+        # KET KULON TENY, NEM RESZHALMAZ. Az elso alakom "{outside} kartya, EBBOL
+        # {projectless}"-t irt, es `--project ''` mellett ez "0, ebbol 213"-at adott --
+        # a projectlenek ott BENNE vannak a merésben, csak attol meg nem merhetok.
+        # Egy reszhalmaz-allitas ket fuggetlen szamra: a cimke lett hamis, nem a szam.
+        if outside:
+            print(f'  HATOKORON KIVUL: {outside} `done` kartya MAS projekten -- ez a futas'
+                  f' nem mond roluk semmit.')
+        if projectless:
+            print(f'  ES SEHOGY NEM MERHETO: {projectless} `done` kartya NEM HORDOZ'
+                  f' projectet. A `--project` egy hozza tartozo `--repo`-t kivan, tehat'
+                  f' hozzajuk nincs fa -- EGYETLEN futassal sem merhetok, nem csak ezzel.'
+                  f' Ez NEM lelet, hanem a meres hatara.')
         for k in (LANDED, OTHER_SHA, CANDIDATE, SHA_UNKNOWN, NO_REF):
             print(f'  {k:<26} {len(buckets[k])}')
         sg = payload['strict_disagreement']
