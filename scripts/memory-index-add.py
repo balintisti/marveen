@@ -406,7 +406,16 @@ def evict_tail(text, protect=None):
 
 
 def main():
-    if len(sys.argv) == 2 and sys.argv[1] == '--check':
+    if len(sys.argv) >= 2 and sys.argv[1] == '--check':
+        # `--unreachable` is a MODIFIER of --check, not a second command, and an unknown
+        # extra argument is refused rather than ignored. Both halves are deliberate: the
+        # 2026-09-05 incident in this file was a refusal that NAMED an exit which did not
+        # exist, and silently treating `--unreachabl` as plain --check would be the same
+        # shape -- the reader believes the door is there and reads a truncated list.
+        extra = sys.argv[2:]
+        if extra not in ([], ['--unreachable']):
+            raise SystemExit(usage())
+        show_all = extra == ['--unreachable']
         text, lines, n = state()
         print(f'index lines: {len(lines)} | characters: {n} | '
               f'{"OVER by " + str(n - LIMIT) if n > LIMIT else "headroom " + str(LIMIT - n)}')
@@ -514,12 +523,26 @@ def main():
             # output.
             print('    definition: hop 1 = markdown link from the index; '
                   'hop 2 = inbound [[wiki]] OR markdown link from a directly linked memory; '
-                  'depth 3+ counts as NO PATH')
+                  'depth 3+ is unreachable')
+            # THE LEGEND NO LONGER SPELLS THE TOKEN. It used to end "counts as NO PATH",
+            # so the cheapest possible check -- `--check | grep -c 'NO PATH'` -- counted
+            # the DEFINITION as a finding and returned one more than the listed names.
+            # A meter whose own output lands in the measured set (card 3bdaa5e8).
             if unread:
                 print(f'    UNREACHABLE IS A FLOOR: {len(unread)} memory file(s) could not be '
                       f'read, so their outbound links are invisible to this walk')
-            for f in unreachable[:5]:
+            # A DELIBERATE CUT MUST SAY SO. Five names were printed out of any number, with
+            # nothing marking the cut, so the list read as the population -- and the damage
+            # is in the REASSURING direction: someone checking whether `--evict` broke a
+            # link looks for it here, does not find it, and reads that as 'nothing broke'.
+            # Measured 2026-09-10 by didi on exactly that question, and again 09-12: five
+            # shown against 72 real.
+            shown = unreachable if show_all else unreachable[:5]
+            for f in shown:
                 print(f'    NO PATH: {f}')
+            if len(shown) < len(unreachable):
+                print(f'    ... and {len(unreachable) - len(shown)} more NOT SHOWN -- this list is '
+                      f'TRUNCATED, absence from it proves nothing. Full list: --check --unreachable')
         except OSError as exc:
             # A meter that cannot read says so; it does not report zero.
             print(f'memories: NOT MEASURED ({exc})')

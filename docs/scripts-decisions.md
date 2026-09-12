@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **242** kovetett fajl, ebbol
-**75** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **243** kovetett fajl, ebbol
+**76** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -56,6 +56,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/__tests__/memory-index-add-check-hop2.test.py`
 
 - WHY THAT IS THE DANGEROUS DIRECTION, and not just an inaccurate number: NO PATH is the input to
+
+### `scripts/__tests__/memory-index-add-unreachable-truncation.test.py`
+
+- WHY THAT IS THE DANGEROUS DIRECTION: the question people bring to this list is "did my
 
 ### `scripts/__tests__/outgoing-gate-entry-seam.test.py`
 
