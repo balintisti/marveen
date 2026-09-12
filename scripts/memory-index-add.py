@@ -358,7 +358,9 @@ def evict_tail(text, protect=None):
     # `big_enough` filter below exists to prevent. Counting it here keeps that guarantee true.
     arch = archive_path()
     _, pointer_cost = apply_archive_pointer(text, os.path.basename(arch))
-    over_by = len(text) - LIMIT + pointer_cost
+    # AND THE ADVICE UNDER-STATED THE RECOVERY (didi's third site, the least obvious):
+    # sized against LIMIT, it names an eviction that still leaves the file inside the band.
+    over_by = len(text) - LIMIT_LO + pointer_cost
     big_enough = [i for i in candidates if len(lines[i]) + 1 >= over_by]
     if not big_enough:
         # NAME THE SURCHARGE WHEN IT IS PART OF THE BILL. Without this the reader is sent to
@@ -699,8 +701,13 @@ def main():
                 f'-- or removal,\nwhich is editorial. 19 lines already carry 2+ references; '
                 f'that is the corpus\nanswering this same ceiling.')
 
-        if len(s) > LIMIT:
-            over = len(s) - LIMIT
+        # A REFUSAL MUST USE THE SAME END AS THE CHECKER, OR ONE SCRIPT CONTRADICTS ITSELF
+        # (didi measured it 2026-09-12, both directions, seconds apart): a write landing at
+        # 24978 was ACCEPTED here and printed "headroom 22", and `--check` on the very same
+        # file then said "NOT MEASURABLE: 24978 sits INSIDE the band". Two halves of one tool,
+        # one file, opposite verdicts. The adder was the optimistic half.
+        if len(s) > LIMIT_LO:
+            over = len(s) - LIMIT_LO
             # THE NEW LINE IS EXCLUDED FROM THE STATISTICS ABOUT EXISTING LINES -- the same
             # contamination as the self-eviction bug, found the same way. A long new hook
             # otherwise lands in its own "10 longest" list, inflates the recoverable figure
@@ -786,8 +793,11 @@ def main():
     print(f'added: {new_line[:90]}')
     if evicted:
         print(f'evicted to {os.path.basename(archive_path())}: {evicted[:90]}')
+    # THE SUCCESS LINE REPORTS AGAINST THE CONSERVATIVE END TOO. It used to print
+    # `LIMIT - len(s)`, i.e. the exact word `--check` was fixed to stop using -- so the adder
+    # handed the writer a number the checker would immediately contradict.
     print(f'index lines: {len(index_lines(s))} | characters: {len(s)} '
-          f'| headroom {LIMIT - len(s)}')
+          f'| headroom {LIMIT_LO - len(s)} against the CONSERVATIVE end ({LIMIT_LO})')
 
 
 if __name__ == '__main__':
