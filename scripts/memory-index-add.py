@@ -49,6 +49,15 @@ MEM = os.environ.get(
 )
 INDEX = os.path.join(MEM, 'MEMORY.md')
 LIMIT = 25000          # CHARACTERS, not bytes -- didi retracted the byte reading 2026-09-03
+# AND 25000 IS A POINT INSIDE AN UNCERTAINTY BAND, NOT THE CUT (didi measured the band,
+# marveen built this in 2026-09-12). The loader's real cut lies somewhere in
+# [LIMIT_LO, LIMIT_HI]: the harness prints "MEMORY.md is 24.8KB (limit: 24.4KB)", and 24.8KB
+# matches the CHARACTER count over 1024 while the BYTE count fails on both divisors -- so
+# 24.4KB is a ROUNDED display and the true cut is an interval, not a number.
+# CONSEQUENCE, and it is why `--check` cannot just compare against LIMIT: a file at 24990 is
+# under 25000 and may still be cut. The only cut that is never optimistic is LIMIT_LO.
+LIMIT_LO = 24934       # conservative end -- below this, every line provably loads
+LIMIT_HI = 25037       # above this, the file provably loses lines
 LINE_LIMIT = 200       # AND a separate LINE ceiling: "MEMORY.md is 205 lines (limit: 200)"
 
 # THE TWO LINK FORMS THE REACHABILITY WALK FOLLOWS -- ONE definition, used at BOTH hops.
@@ -417,8 +426,26 @@ def main():
             raise SystemExit(usage())
         show_all = extra == ['--unreachable']
         text, lines, n = state()
-        print(f'index lines: {len(lines)} | characters: {n} | '
-              f'{"OVER by " + str(n - LIMIT) if n > LIMIT else "headroom " + str(LIMIT - n)}')
+        # THE HEADROOM IS REPORTED AGAINST THE CONSERVATIVE END, AND THE VERDICT NAMES WHICH
+        # END IT HOLDS AGAINST. Reporting `LIMIT - n` was a point estimate inside the band:
+        # on 2026-09-12 it printed "headroom 89" while the PLANNABLE headroom was 23, and the
+        # difference is exactly one index line.
+        if n > LIMIT_HI:
+            verdict = f'OVER by {n - LIMIT_LO} against the conservative end -- LINES ARE BEING LOST'
+        elif n > LIMIT_LO:
+            verdict = (f'NOT MEASURABLE: {n} sits INSIDE the band [{LIMIT_LO}, {LIMIT_HI}] -- '
+                       f'it may or may not lose lines, and this tool cannot tell you which')
+        else:
+            verdict = f'headroom {LIMIT_LO - n} against the CONSERVATIVE end ({LIMIT_LO})'
+        print(f'index lines: {len(lines)} | characters: {n} | {verdict}')
+        # AND THE BYTE READING IS THE CHEAPEST MISTAKE AVAILABLE HERE, so the tool says it
+        # rather than leaving `wc -c` to be reached for (didi retracted it 2026-09-03 and
+        # re-flagged it 2026-09-12: 26170 bytes against 24911 characters is a 1259 gap, which
+        # reads as "1170 over" on a file that is 23 UNDER).
+        nbytes = len(text.encode('utf-8'))
+        if nbytes != n:
+            print(f'    (bytes: {nbytes} -- NOT the meter. The loader counts CHARACTERS; '
+                  f'the {nbytes - n} difference is accents, not overflow.)')
 
         # THE THIRD CONDITION (jarvis, 2026-09-03). Reachability is not enough, and
         # neither is transitive reachability: a line can be present, resolvable through
@@ -449,7 +476,7 @@ def main():
         # sentence -- two statements that cannot both be true, which is exactly the
         # self-contradiction that flags a broken meter elsewhere on this page.
         n_lines = len(all_lines) - 1 if all_lines and all_lines[-1] == '' else len(all_lines)
-        char_cut = LIMIT
+        char_cut = LIMIT_LO   # the only cut that is never optimistic
         line_cut = float('inf')
         if n_lines > LINE_LIMIT:
             # offset one past the end of the LINE_LIMIT-th line (newlines included)
@@ -554,8 +581,22 @@ def main():
             # measured is the state that produced this bug: the old line read "inside the
             # limit", singular, and nobody asked which one.
             print(f'beyond the loaded prefix: 0 -- every index line is inside BOTH ceilings '
-                  f'({n_lines}/{LINE_LIMIT} lines, {n}/{LIMIT} chars; '
-                  f'binding: {which})')
+                  f'({n_lines}/{LINE_LIMIT} lines, {n}/{LIMIT_LO} chars against the '
+                  f'CONSERVATIVE end; binding: {which})')
+
+        # AND THE EXIT CODE, WHICH IS THE WHOLE POINT (didi's lelet, 2026-09-12; jarvis argued
+        # it first). Until today this branch PRINTED "OVER by 49" and exited 0. A `--check`
+        # that reports an overage and returns success is not a gate, it is a reporter wearing
+        # a gate's flag name -- and `scripts/decision-index.py --check` in this same repo
+        # returns 3 for the same word. Two conventions, one flag, and the separation is SILENT:
+        # on 09-11 the file was UNDER, so reporter and gate were byte-identical and nothing
+        # showed. 3 is chosen to match the repo's other --check, not invented here.
+        #
+        # THE CONDITION IS "CANNOT PROVE EVERY LINE LOADS", NOT "IS OVER". A file inside the
+        # band is NOT MEASURABLE, and reporting it as success would be the empty-vs-unmeasured
+        # collapse this repo refuses everywhere else.
+        if total or n > LIMIT_LO or n_lines > LINE_LIMIT:
+            raise SystemExit(3)
         return
 
     # `--evict` WAS NAMED BY THE REFUSAL BELOW AND NEVER EXISTED (card 4b94fefa, measured
