@@ -27,13 +27,18 @@ describe('kanban move audit trail', () => {
     // a valodi atmenetet egy no-optol.
     expect(moved).toBe('moved')
 
+    // TWO events since card d624222e: creation writes one (from_status NULL), then
+    // the move. The creation row is asserted explicitly rather than filtered out --
+    // filtering would hide a regression where creation stops being recorded.
     const events = getKanbanCardEvents('card-a')
-    expect(events).toHaveLength(1)
-    expect(events[0].card_id).toBe('card-a')
-    expect(events[0].from_status).toBe('planned')
-    expect(events[0].to_status).toBe('in_progress')
-    expect(events[0].actor).toBe('marveen')
-    expect(typeof events[0].created_at).toBe('number')
+    expect(events).toHaveLength(2)
+    expect(events[0].from_status).toBeNull()
+    expect(events[0].to_status).toBe('planned')
+    expect(events[1].card_id).toBe('card-a')
+    expect(events[1].from_status).toBe('planned')
+    expect(events[1].to_status).toBe('in_progress')
+    expect(events[1].actor).toBe('marveen')
+    expect(typeof events[1].created_at).toBe('number')
   })
 
   it('records no event when the status is unchanged (pure reorder)', () => {
@@ -41,9 +46,13 @@ describe('kanban move audit trail', () => {
 
     // Same status (planned), only sort_order differs -> not a transition, but IS a change:
     // a reorder writes and bumps updated_at, it just records no event.
+    // The claim is that the REORDER records nothing -- so measure the delta, not the
+    // total. Before d624222e those were the same number because creation wrote no
+    // event; asserting the total would now test creation instead of the reorder.
+    const before = getKanbanCardEvents('card-b').length
     const moved = moveKanbanCard('card-b', 'planned', 5, 'marveen')
     expect(moved).toBe('moved')
-    expect(getKanbanCardEvents('card-b')).toHaveLength(0)
+    expect(getKanbanCardEvents('card-b')).toHaveLength(before)
   })
 
   it('records no event when no row matches', () => {
@@ -59,8 +68,8 @@ describe('kanban move audit trail', () => {
     expect(moved).toBe('moved')
 
     const events = getKanbanCardEvents('card-c')
-    expect(events).toHaveLength(1)
-    expect(events[0].actor).toBeNull()
+    expect(events).toHaveLength(2)          // creation + the move
+    expect(events[1].actor).toBeNull()
   })
 
   it('returns events in chronological order across multiple moves', () => {
@@ -71,8 +80,9 @@ describe('kanban move audit trail', () => {
     moveKanbanCard('card-d', 'done', 0, 'marveen')
 
     const events = getKanbanCardEvents('card-d')
-    expect(events.map((e) => e.to_status)).toEqual(['in_progress', 'waiting', 'done'])
-    expect(events.map((e) => e.from_status)).toEqual(['planned', 'in_progress', 'waiting'])
+    // The leading 'planned' / null pair is the CREATION event (card d624222e).
+    expect(events.map((e) => e.to_status)).toEqual(['planned', 'in_progress', 'waiting', 'done'])
+    expect(events.map((e) => e.from_status)).toEqual([null, 'planned', 'in_progress', 'waiting'])
     // created_at is monotonically non-decreasing and the id ordering breaks ties.
     for (let i = 1; i < events.length; i++) {
       expect(events[i].created_at).toBeGreaterThanOrEqual(events[i - 1].created_at)
