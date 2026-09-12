@@ -293,7 +293,7 @@ SKILL_BASELINE_NAMES="${SKILL_BASELINE_NAMES:-felderites-ket-listas-proba nema-s
 # EZ NEM A KAPU KUDARCA: a keret pont azt erte el, hogy MINDEN betoldas kimondott dontes legyen.
 # A VALODI valasz a mag ATRENDEZESE (66 szabaly egy fajlban mar kategoria, nem fajl) -- az kulon
 # kartyan all. Ez az emeles addig old fel, nem helyette.
-SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-420 413}"   # racsni 2026-09-02: min(417, 415) = 415, + 5 uj tartalom
+SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-380 413}"   # racsni 2026-09-12: min(380, 420) = 380   # racsni 2026-09-02: min(417, 415) = 415, + 5 uj tartalom
 # A MASODIK SZAM (nema-siker-ellenorzes, 413): BONTAS UTANI ROGZITES, 2026-09-12, friday.
 # A fajl 493 soron allt egy 500-as sima kapuval; hat szakasz elbeszelo torzse a
 # `references/mert-esetek.md`-be kerult, a magban a megkulonbozteto ALAK es a cselekvesi
@@ -346,7 +346,7 @@ SKILL_HARD_LIMIT="${SKILL_HARD_LIMIT:-600}"
 # szerint: `alapvonal 413/32159, novekedes +0 / +-6798 kar` -- idegen nevezo, es meg a `+-`
 # elojel-alak is az, amit ez a script mashol kifejezetten kerul.
 # Mostantol LISTA, ugyanabban a sorrendben, mint a nevek es a sorok.
-SKILL_BASELINE_CHARS="${SKILL_BASELINE_CHARS:-32159 25361}"
+SKILL_BASELINE_CHARS="${SKILL_BASELINE_CHARS:-27452 25361}" # racsni 2026-09-12: min(27452, 32159)
 # 2026-09-04: 32582 -> 32159, RACSNI (marveen dontese). min(32582, 32159) a `references/` bontas
 # utan mert erteken. NEM emeles: a keret 1164 -> 1149 karakterre SZUKUL.
 # HONNAN JOTT A REGI SZAM, mert enelkul ujra ugy nezne ki, mintha a mai fajlbol valo lenne:
