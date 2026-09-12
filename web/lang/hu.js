@@ -349,11 +349,11 @@ window._i18n.hu = {
   'agents.status.online':          'Online',
   'agents.status.offline':         'Offline',
   'agents.marveen_process_tip':    'Fut: a fő asszisztens mindig a --channels session-ben fut. Ez a kártya fixen Fut állapotot mutat, nincs per-ágens tmux-ellenőrzés.',
-  'agents.marveen_channel_tip':    'Online: a fő asszisztens csatornáját a --channels session kezeli, ezért fixen online (nincs külön token-ellenőrzés).',
+  'agents.marveen_channel_tip':    'Csatorna: a fő asszisztens csatornáját a --channels session kezeli, ezért mindig bekötött (nincs külön token-ellenőrzés).',
   'agents.running_tip':            'Fut: él az ágens tmux session-je (a Claude Code folyamat fut). Forrás: tmux list-sessions.',
   'agents.stopped_tip':            'Leállva: nincs élő tmux session az ágensnek. Forrás: tmux list-sessions.',
-  'agents.online_tip':             'Online: van bekonfigurált csatorna-token (saját bot). Figyelem: ez nem élő kapcsolat, csak a token meglétét jelzi.',
-  'agents.offline_tip':            'Offline: nincs csatorna bekötve (channel-less, csak inter-agent ágens).',
+  'agents.online_tip':             'Csatorna: van bekonfigurált csatorna-token (saját bot). Figyelem: ez nem élő kapcsolat, csak a token meglétét jelzi, és semmit nem mond arról, hogy az ügynök fut-e.',
+  'agents.offline_tip':            'Nincs csatorna bekötve (channel-less, csak inter-agent ügynök). Ez NEM azt jelenti, hogy az ügynök áll -- azt a mellette lévő Fut/Leállva jelzés mondja meg.',
   'agents.tmux_copy_aria':         'tmux attach parancs másolása',
   'agents.tmux_copied':            'másolva',
   'agents.tmux_copy_failed':       'Másolás sikertelen',
@@ -1322,6 +1322,11 @@ window._i18n.hu = {
   'agents.toast.auth_mode_saved':'Hitelesítési mód mentve (újraindítás szükséges)',
 
   // --- Agent status/labels ---
+  // A KARTYA-FELIRAT MEGNEVEZI A SAJAT TARGYAT (4ce22556). A regi 'Online'/'Offline'
+  // par az AGENSROL latszott beszelni, kozben a CSATORNA-token meglétét jelzi. A
+  // sugo ezt eddig is helyesen mondta -- de a feliratot olvassak, nem a sugot.
+  'agents.channel.label_linked': 'Csatorna: bekötve',
+  'agents.channel.label_none':   'Csatorna: nincs',
   'agents.channel.connected':    'Csatlakozva',
   'agents.channel.disconnected': 'Nincs bekötve',
   'agents.strict_mode':          ' (szigorú)',
