@@ -362,19 +362,30 @@ describe('skill-index.sh -- a KEMENY ag ALSZIK a mai konstansokkal (didi, 2026-0
   // mint egy szam a nevezoje nelkul, csak tesztben.
   function prodConstants() {
     const src = readFileSync(join(REPO_ROOT, 'scripts', 'skill-index.sh'), 'utf-8')
+    // A SOR-ALAPVONAL 2026-09-12 ota LISTA (tobb alapvonalas skill). A regi `(\d+)` alak
+    // EGYETLEN szamot feltetelezett, es a masodik skill bekerulesekor NEM rosszabb szamot
+    // adott, hanem kivetelt dobott -- ez a jo irany, de a teszt allitasa attol meg a REGI
+    // vilagrol szolt. Most a LISTAT olvassa, es a dormancia MINDEN alapvonalra allitodik.
     const pick = (name: string) => {
-      const m = src.match(new RegExp(`${name}="\\$\\{${name}:-(\\d+)\\}"`))
+      const m = src.match(new RegExp(`${name}="\\$\\{${name}:-([\\d ]+)\\}"`))
       if (!m) throw new Error(`nem talalom a ${name} alapertelmezeset a szkriptben`)
-      return m[1]
+      return m[1].trim()
     }
-    return { base: pick('SKILL_BASELINE_LINES'), limit: pick('SKILL_GROWTH_LIMIT'),
-             hard: pick('SKILL_HARD_LIMIT') }
+    const bases = pick('SKILL_BASELINE_LINES').split(/\s+/)
+    return { bases, base: String(Math.max(...bases.map(Number))),
+             limit: pick('SKILL_GROWTH_LIMIT'), hard: pick('SKILL_HARD_LIMIT') }
   }
 
   it('a MAI konstansokkal a kemeny ag SOSEM szolal meg -- barmilyen fajlmeretnel', () => {
-    const { base, limit, hard } = prodConstants()
+    const { bases, base, limit, hard } = prodConstants()
     // A dormancia feltetele: HARD < LIMIT + BASE. Ha ez egyszer megfordul, a
     // ciklus alatti allitas HAMIS lesz -- es akkor ennek a tesztnek KELL buknia.
+    // MINDEN alapvonalra allitjuk, nem csak egyre: a kemeny ag skillenkent kulon alszik,
+    // es a KOTO eset a LEGNAGYOBB alapvonal -- azzal megy a ciklus is lentebb.
+    expect(bases.length).toBeGreaterThan(0)
+    for (const b of bases) {
+      expect(Number(hard)).toBeGreaterThanOrEqual(Number(limit) + Number(b))
+    }
     expect(Number(hard)).toBeGreaterThanOrEqual(Number(limit) + Number(base))
     const home = homeWith(Number(base) + 15)
     try {
@@ -620,6 +631,54 @@ describe('skill-index.sh -- `--check <skill>` (0d0e3892)', () => {
     const ok = check(['--check', 'alapvonalas'], { ...env, SKILL_BASELINE_CHARS: '30000' })
     expect(ok.code).toBe(0)
     expect(ok.stderr).not.toMatch(/ELFOGYOTT/)
+  })
+
+  it('a KARAKTER-alapvonal a SAJAT skille, nem az ELSO-e (a par egyben marad)', () => {
+    // MERT DEFEKTUS, 2026-09-12: a `SKILL_BASELINE_LINES` mar pozicionalis lista volt, a
+    // `SKILL_BASELINE_CHARS` viszont EGYETLEN ertek. Egy MASODIK alapvonalas skill igy az
+    // ELSO karakter-alapvonalahoz mert volna -- a script sajat kikotese ellenere ("a baseline
+    // PAR: a ket szam UGYANABBOL a fajl-allapotbol valo"). A kar NEM hibauzenet: egy idegen,
+    // nagyobb nevezo mellett a keret CSENDBEN tagul.
+    write('elso',    100, ' '.repeat(200))   // 100 sor, ~200 kar/sor
+    write('masodik', 100, ' '.repeat(200))
+    const env = {
+      SKILL_BASELINE_NAMES: 'elso masodik',
+      SKILL_BASELINE_LINES: '95 95',
+      // az ELSO tagas, a MASODIK szuk -> ha a masodik az ELSOT hasznalja, NEM bukik
+      SKILL_BASELINE_CHARS: '30000 1000',
+    }
+    const r = check(['--check', 'masodik'], env)
+    expect(r.code).toBe(3)
+    expect(r.stderr).toMatch(/A KARAKTER-KERET ELFOGYOTT/)
+
+    // NEGATIV KONTROLL, ES EZ A LENYEG: ugyanez az ELSO skillre NEM bukik, mert AZ tagas.
+    // Ha a kiolvaso megint "mindig az elso"-t adna, ez a ket allitas EGYUTT nem allhatna fenn.
+    const ok = check(['--check', 'elso'], env)
+    expect(ok.code).toBe(0)
+    expect(ok.stderr).not.toMatch(/ELFOGYOTT/)
+
+    // ES A SORREND SEM VELETLEN: megforditva a ket szamot, a verdikt is megfordul.
+    const swapped = { ...env, SKILL_BASELINE_CHARS: '1000 30000' }
+    expect(check(['--check', 'elso'], swapped).code).toBe(3)
+    expect(check(['--check', 'masodik'], swapped).code).toBe(0)
+
+    // ES UGYANEZ A SOR-ALAPVONALRA. Ez a fele MAR pozicionalis volt, de SENKI nem allitotta:
+    // egy mutacio, ami a sor-kiolvasot "mindig az elso"-re allitja, a fenti allitasokon
+    // TULELT (merve 2026-09-12). Ket KULONBOZO, de mindketto TAGAS alapvonal, hogy a
+    // kapu ne tuzeljen -- igy a lagy sor MEGNEVEZI a part, es a par az, amit allitunk.
+    const pairEnv = {
+      SKILL_BASELINE_NAMES: 'elso masodik',
+      SKILL_BASELINE_LINES: '98 96',
+      SKILL_BASELINE_CHARS: '30000 30000',
+    }
+    const e = check(['--check', 'elso'], pairEnv)
+    const m = check(['--check', 'masodik'], pairEnv)
+    expect(e.code).toBe(0)
+    expect(m.code).toBe(0)
+    expect(e.stdout + e.stderr).toMatch(/alapvonal 98\/30000/)
+    expect(m.stdout + m.stderr).toMatch(/alapvonal 96\/30000/)
+    // KONTROLL, hogy a minta nem vak: a MASIK skill szama NE alljon ott
+    expect(m.stdout + m.stderr).not.toMatch(/alapvonal 98\//)
   })
 
   it('check modban NEM allitja, hogy "minden skill a hatara alatt" -- egyet nezett meg', () => {

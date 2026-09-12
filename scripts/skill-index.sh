@@ -259,7 +259,7 @@ SKILL_SOFT_HEADROOM="${SKILL_SOFT_HEADROOM:-40}"
 # A nyereseget a kapu rogziti, nem az emlekezet. Barmelyik szerzo barmikor atfogalmazhatja a sajatjat,
 # es akkor ez a szam CSOKKENTHETO -- de nem kotelezo.
 # Env-bol felulirhato, hogy a ket uj ag TESZTELHETO legyen ismert allapotokon.
-SKILL_BASELINE_NAMES="${SKILL_BASELINE_NAMES:-felderites-ket-listas-proba}"
+SKILL_BASELINE_NAMES="${SKILL_BASELINE_NAMES:-felderites-ket-listas-proba nema-siker-ellenorzes}"
 # 491 -> 504 (2026-08-27). KET KIMONDOTT dontes, ket szerzo, egy szamban -- es azert
 # all itt mindketto kulon, mert egy nevtelen alapvonal-emeles pontosan az az alak, amit
 # ez a kapu megelozni hivatott.
@@ -293,7 +293,14 @@ SKILL_BASELINE_NAMES="${SKILL_BASELINE_NAMES:-felderites-ket-listas-proba}"
 # EZ NEM A KAPU KUDARCA: a keret pont azt erte el, hogy MINDEN betoldas kimondott dontes legyen.
 # A VALODI valasz a mag ATRENDEZESE (66 szabaly egy fajlban mar kategoria, nem fajl) -- az kulon
 # kartyan all. Ez az emeles addig old fel, nem helyette.
-SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-420}"   # racsni 2026-09-02: min(417, 415) = 415, + 5 uj tartalom
+SKILL_BASELINE_LINES="${SKILL_BASELINE_LINES:-420 413}"   # racsni 2026-09-02: min(417, 415) = 415, + 5 uj tartalom
+# A MASODIK SZAM (nema-siker-ellenorzes, 413): BONTAS UTANI ROGZITES, 2026-09-12, friday.
+# A fajl 493 soron allt egy 500-as sima kapuval; hat szakasz elbeszelo torzse a
+# `references/mert-esetek.md`-be kerult, a magban a megkulonbozteto ALAK es a cselekvesi
+# szabaly maradt. MAG 493 -> 413, MAG+REFERENCES 666 -> 856 (tehat BONTAS, nem vagas).
+# Regi alapvonal NEM VOLT, tehat a racsni min(413, 500) = 413: a kapu 500-rol 428-ra SZUKUL.
+# Enelkul a 80 soros nyereseg NEMA UJRANOVESI KERET lenne -- pontosan az az alak, amit a
+# fenti 549->491 eset rogzit. Kartya: 3817c55e.
 # 2026-09-04: 420, es a szam TORTENETE fontosabb, mint a szam.
 #   09-02  b97f344, bontas utani MERT meret, COMMITOLVA .......... 415   <- a VALODI padlo
 #   09-03  +5 KIMONDOTT emeles, uj mert tartalomert (20. alak:
@@ -332,7 +339,14 @@ SKILL_HARD_LIMIT="${SKILL_HARD_LIMIT:-600}"
 # a BAJT-vilagban all, es a mertekegyseg-valtassal NEM viheto at szamszeruen -- de az ELVE igen,
 # es az ervenyes: az alapvonal csak SZORULHAT. A ket oldal egyutt ezt jelenti, es nem azt, hogy
 # valamelyik szam gyoz.
-SKILL_BASELINE_CHARS="${SKILL_BASELINE_CHARS:-32159}"
+# 2026-09-12 (friday): EZ A SOR EDDIG EGYETLEN ERTEK VOLT, mikozben a `SKILL_BASELINE_LINES`
+# MAR pozicionalis lista. Amint egy MASODIK alapvonalas skill bekerult, a karakter-aga az ELSO
+# skill alapvonalahoz mert volna -- es a fenti sajat kikotes ("a baseline PAR: a ket szam
+# UGYANABBOL a fajl-allapotbol valo") NEMAN serul. MERVE a bevezetes elott, a kimenet szo
+# szerint: `alapvonal 413/32159, novekedes +0 / +-6798 kar` -- idegen nevezo, es meg a `+-`
+# elojel-alak is az, amit ez a script mashol kifejezetten kerul.
+# Mostantol LISTA, ugyanabban a sorrendben, mint a nevek es a sorok.
+SKILL_BASELINE_CHARS="${SKILL_BASELINE_CHARS:-32159 25361}"
 # 2026-09-04: 32582 -> 32159, RACSNI (marveen dontese). min(32582, 32159) a `references/` bontas
 # utan mert erteken. NEM emeles: a keret 1164 -> 1149 karakterre SZUKUL.
 # HONNAN JOTT A REGI SZAM, mert enelkul ujra ugy nezne ki, mintha a mai fajlbol valo lenne:
@@ -373,11 +387,25 @@ char_count() {  # $1 = fajl; ures kimenet, ha nem merheto
 }
 
 baseline_for() {
-  # egyetlen nev ma; tobbnel szokoz-elvalasztott lista es azonos sorrendu szamok
+  # szokoz-elvalasztott lista, a nevekkel AZONOS sorrendben
   local want="$1" i=1 name
   for name in $SKILL_BASELINE_NAMES; do
     if [ "$name" = "$want" ]; then
       echo "$SKILL_BASELINE_LINES" | cut -d' ' -f"$i"
+      return 0
+    fi
+    i=$((i+1))
+  done
+  echo ""
+}
+
+# A KARAKTER-PARJA. Kulon fuggveny, ugyanazzal az indexelessel -- a ket szam
+# UGYANARROL A SKILLROL szoljon, kulonben az atlag (`_avg`) egy idegen fajlbol jon.
+baseline_chars_for() {
+  local want="$1" i=1 name
+  for name in $SKILL_BASELINE_NAMES; do
+    if [ "$name" = "$want" ]; then
+      echo "$SKILL_BASELINE_CHARS" | cut -d' ' -f"$i"
       return 0
     fi
     i=$((i+1))
@@ -474,7 +502,8 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
       # a harom mai valodi eset MINDEGYIKET CSAK ez fogja meg (+10..+15 sor a 15-os
       # kereten belul, 1442..2019 karakterrel). Pontosan didi eredeti lelete.
       _chars=$(char_count "$f")
-      _basec="${SKILL_BASELINE_CHARS:-0}"
+      _basec=$(baseline_chars_for "$skill")
+      _basec="${_basec:-0}"
       if [ "${_basec:-0}" -gt 0 ] && [ "$base" -gt 0 ]; then
         _avg=$((_basec / base))
         _cgrowth=$((_chars - _basec))
@@ -496,6 +525,10 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
             fi
         fi
       fi
+      # ELOJEL a karakter-szamnak is: a script fent kimondja, hogy a csokkenes ne `+-87`
+      # alakban alljon. A sor-agnak mar volt ilyen (`growth_s`), a karakter-agnak nem --
+      # es a ket-alapvonalas meres ezt azonnal elo is hozta (`+-6798 kar`).
+      if [ "${_cgrowth:-0}" -ge 0 ]; then _cgrowth_s="+${_cgrowth:-0}"; else _cgrowth_s="${_cgrowth}"; fi
       _room_growth=$((SKILL_GROWTH_LIMIT - growth))
       _room_hard=$((SKILL_HARD_LIMIT - n))
       if [ "$_room_hard" -lt "$_room_growth" ]; then
@@ -504,9 +537,9 @@ for f in "$GLOBAL_SKILLS_DIR"/*/SKILL.md; do
         _room="${_room_growth} sor maradt (keret ${SKILL_GROWTH_LIMIT})"
       fi
       if [ -n "${CHECK_SKILL:-}" ]; then
-        echo "MERET-OR: ${skill}  ${n} sor / ${_chars} karakter (alapvonal ${base}/${_basec}, novekedes ${growth_s} / +${_cgrowth:-0} kar -- ${_room})" >&2
+        echo "MERET-OR: ${skill}  ${n} sor / ${_chars} karakter (alapvonal ${base}/${_basec}, novekedes ${growth_s} / ${_cgrowth_s:-+0} kar -- ${_room})" >&2
       else
-        echo "MERET-OR: ${skill}  ${n} sor / ${_chars} karakter (alapvonal ${base}/${_basec}, novekedes ${growth_s} / +${_cgrowth:-0} kar -- ${_room})"
+        echo "MERET-OR: ${skill}  ${n} sor / ${_chars} karakter (alapvonal ${base}/${_basec}, novekedes ${growth_s} / ${_cgrowth_s:-+0} kar -- ${_room})"
       fi
     fi
   elif [ "$n" -gt "$SKILL_LINE_LIMIT" ]; then
@@ -561,7 +594,7 @@ _probe_hard=$(( SKILL_HARD_LIMIT + 1 ))
 # nezett ki, mint egy helyes or: soha nem tuzelt, es senki nem tudta megmondani,
 # hogy azert-e, mert nincs tullepes, vagy azert, mert nem tud tuzelni.
 # Ugyanaz az aritmetika, mint a :322-n, egy SZANDEKOSAN tullepo bemenettel.
-_probe_avg=$(( SKILL_BASELINE_CHARS / $(echo "$SKILL_BASELINE_LINES" | cut -d" " -f1) ))
+_probe_avg=$(( $(echo "$SKILL_BASELINE_CHARS" | cut -d" " -f1) / $(echo "$SKILL_BASELINE_LINES" | cut -d" " -f1) ))
 _probe_climit=$(( SKILL_GROWTH_LIMIT * _probe_avg ))
 _probe_cgrowth=$(( _probe_climit + 1 ))
 _arms_ok=1
