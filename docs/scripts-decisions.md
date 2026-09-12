@@ -16,10 +16,10 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **245** kovetett fajl, ebbol
-**76** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **247** kovetett fajl, ebbol
+**77** hordoz dontes-fejlecet.
 
-## Nem olvasott fejlec-alak (4)
+## Nem olvasott fejlec-alak (3)
 
 Ezek a fajlok egyik olvasott fejlec-alakot sem hasznaljak (sor-komment,
 docstring, blokk-komment), de a fejlec-tartomanyukban all dontes-alaku sor.
@@ -28,7 +28,6 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - `scripts/com.marveen.idle-reporter.plist.template` -- MIERT KULON FOLYAMAT, ES NEM A DASHBOARDBAN EGY TIMER: mert epp azt az esetet
 - `scripts/expiry-inventory.json` -- "WHY A DECLARED PROBE AND NOT A DATE FIELD: a stored date drifts silently the",
 - `scripts/sql/tasks-reopen-grant.sql` -- MIERT ALL EZ ITT, ES NEM CSAK A KARTYAN: a fajlt UJRAFUTTATTAK nyitott kerdeskent,
-- `scripts/verdict-parse.py` -- WHY THIS FILE EXISTS. didi measured it on 2026-09-12: the mandatory parser form exists ONLY as
 
 ### `scripts/__tests__/channels-main-model.test.sh`
 
@@ -89,6 +88,11 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/assert-isolated.py`
 
 - WHAT WENT WRONG, AND WHY "READ THE VARIABLE" IS NOT THE FIX. On 2026-09-11 I measured
+
+### `scripts/batch-candidates.py`
+
+- WHY THIS EXISTS. The batch rule lived only in prose and was re-derived by hand every
+- WHY THE COUPLING MUST BE DECLARED AND NOT INFERRED (marveen measured 2026-09-12, on
 
 ### `scripts/calendar-agenda.sh`
 
