@@ -267,6 +267,12 @@ def main():
     cand = sorted(buckets[CANDIDATE])
     payload = {
         'project': a.project, 'repo': a.repo, 'trunk': a.trunk,
+        # A HATOKOR PROVENIENCIAJA A GEPI KIMENETBEN IS. A `-- ALAPERTELMEZES, nem
+        # valasztas" cimke 2026-09-12 ota ott all az EMBERI uton, es a `--json` uton
+        # NEM allt -- vagyis pontosan azon a kimeneten hianyzott, amit MASIK szerszam
+        # olvas be es TOVABBAD. Egy hatokor, amit senki nem valasztott, igy utazik
+        # tovabb nevezo nelkul. Additiv kulcs: regi fogyasztot nem tor el.
+        'project_source': 'explicit' if project_explicit else 'default',
         'done_cards': len(cards),
         'counts': {k: len(v) for k, v in buckets.items()},
         'ancestry_leg_said_no': len(buckets[CANDIDATE]) + len(buckets[OTHER_SHA]),

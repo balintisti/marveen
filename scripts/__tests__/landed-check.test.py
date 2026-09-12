@@ -343,6 +343,26 @@ class LandedCheck(unittest.TestCase):
         self.assertEqual(rc, CANDIDATE_FOUND, out)
         self.assertEqual(out["strict_disagreement"], 0, out)
 
+    # --- a HATOKOR PROVENIENCIAJA a GEPI kimeneten ------------------------------------
+
+    def test_json_says_the_project_scope_was_a_default_not_a_choice(self):
+        """A `--project` alapertelmezese `marveen`. A gepi kimenet mondja meg, hogy senki
+        nem valasztotta -- kulonben a hatokor nevezo nelkul utazik tovabb egy masik
+        szerszamba. Az emberi uton ez a cimke mar ott allt; ez a JSON-parbja."""
+        self.commit("alap")
+        rc, out = self.run_tool()
+        self.assertEqual(out.get("project_source"), "default", out)
+        self.assertEqual(out.get("project"), "marveen", out)
+
+    def test_json_says_explicit_when_the_flag_is_given(self):
+        """KONTROLL a MASIK iranyba: a mezo tud `explicit`-et is mondani, kulonben az
+        elozo teszt egy beragadt konstansra is atmenne. Mindket alak (kulon szo es
+        `--project=`) ugyanazt adja."""
+        self.commit("alap")
+        for args in (("--project", "marveen"), ("--project=marveen",)):
+            rc, out = self.run_tool(*args)
+            self.assertEqual(out.get("project_source"), "explicit", (args, out))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
