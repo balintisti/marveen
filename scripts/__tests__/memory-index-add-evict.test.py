@@ -51,8 +51,37 @@ def run(mem, *args):
     return p.returncode, p.stdout + p.stderr
 
 
-def fixture(mem, entries, pad_to=25000, pin=None):
+def _write_limit():
+    """The WRITE-PATH limit, read FROM THE SCRIPT rather than repeated here.
+
+    IT WAS REPEATED HERE, AND THAT TURNED THE TRUNK RED ON 2026-09-12. This helper
+    padded every fixture to a hardcoded 25000 -- the old `LIMIT`. The write path then
+    moved to `LIMIT_LO` (24934, the conservative end where every line provably loads),
+    and 66 characters of headroom vanished from EVERY fixture at once. Case 12 needed
+    75 more characters for the one-off archive pointer and crossed from the SUCCESS
+    side of the boundary to the REFUSAL side -- so a case written to prove that a
+    second eviction day WORKS started proving that it refuses, which is case 11's job.
+
+    Measured both ways: at e2a7883b (before the limit change) this file exits 0 with
+    zero FAIL lines; at the commit after, rc=1 with three. Nothing was wrong with the
+    limit change or with the scenario -- the fixture was pinned to a number that moved.
+
+    A second copy of a constant is not a smaller problem than no constant: the two
+    disagree eventually, and the disagreement surfaces as a test that fails for a
+    reason unrelated to what it tests.
+    """
+    import re
+    src = open(SCRIPT, encoding="utf-8").read()
+    m = re.search(r"^LIMIT_LO\s*=\s*(\d+)", src, re.M)
+    if not m:                       # fail LOUD: a silent fallback to 25000 rebuilds the bug
+        raise SystemExit("NEM MERHETO: LIMIT_LO nem talalhato a %s-ben" % SCRIPT)
+    return int(m.group(1))
+
+
+def fixture(mem, entries, pad_to=None, pin=None):
     """entries: list of (filename, hook_len, age_seconds). Oldest age == eviction candidate."""
+    if pad_to is None:
+        pad_to = _write_limit()
     shutil.rmtree(mem, ignore_errors=True)
     os.makedirs(mem)
     lines = []
