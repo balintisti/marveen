@@ -53,7 +53,12 @@ import unicodedata
 
 DB = os.environ.get('MARVEEN_DB', '/Users/isti/marveen/store/claudeclaw.db')
 
-ANCHOR = re.compile(r'^\*{0,2}VERDIKT:', re.M)
+# `\**`, NOT `\*{0,2}` -- didi measured 2026-09-12 that the two select the SAME 235 live
+# cards today, difference 0, because ZERO live comments start with three or more asterisks.
+# That is law 4: the meter is correct BY A COINCIDENCE OF HABIT, not by construction, and
+# nothing would announce the first three-asterisk comment. Widening costs nothing and makes
+# this byte-match the documented form, so the next reader does not re-derive the question.
+ANCHOR = re.compile(r'^\**VERDIKT:', re.M)
 NINCS, NYITOTT, UNMEASURABLE = 'NINCS NYITOTT TETEL', 'NYITOTT TETEL', 'NEM MERHETO'
 
 
