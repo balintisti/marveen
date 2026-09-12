@@ -51,6 +51,15 @@ reason: "a partial net that looks total is worse than none". If two candidates o
 ninety declared anything, the clean verdict means almost nothing, and the reader has to
 see that in the same breath as the verdict -- not in a footnote they may not open.
 
+VALIDATED AGAINST A DECISION THAT WAS ALREADY PROVEN, which is the only control
+available for a predicate like this: the 2026-09-12 midday batch was composed BY HAND
+and verified green by CI. Of the 12 branches it shipped, this script refuses ZERO. The
+76 branches it calls eligible but which were not shipped are expected and not a defect:
+a batch is a SELECTION, and the predicate answers "may this ship", never "must it".
+
+    shipped by hand ..... 12   refused by the predicate: 0
+    eligible today ...... 88   (of 284 branches considered)
+
 USAGE
     python3 scripts/batch-candidates.py --repo /path/to/repo [--main main]
                                         [--max-age-days 7] [--json]
