@@ -69,6 +69,15 @@ function world(skillCount: number) {
         RULEBOOK_DELTA_CLAUDE: join(root, 'delta.md'),
         RULEBOOK_SKILLS_ROOT: skills,
         RULEBOOK_MEMORY_ROOT: memory,
+        // POINTED AT A PATH THAT DOES NOT EXIST, DELIBERATELY. The sixth group
+        // (scheduled tasks) defaults to the OPERATOR'S REAL ~/.claude/scheduled-tasks,
+        // and when it was added without this line every fixture run silently collected
+        // 36 real files: the counts below went 66 -> 102 and 45 -> 81 (both deltas
+        // exactly 36), and the EMPTY-SOURCE refusal stopped firing altogether -- the
+        // one test whose entire point is that a wrong root looks like an empty set.
+        // The group's own fixture lives in its dedicated test below, so the counts
+        // here stay the numbers they were measured to be.
+        RULEBOOK_SCHED_ROOT: join(root, 'no-such-scheduled-tasks'),
         RULEBOOK_NOTIFY: notify,
         ALERT_FILE: alertFile,
         GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t',
@@ -93,7 +102,11 @@ function world(skillCount: number) {
     const r = spawnSync('git', ['-C', repo, 'ls-files', 'store/memory'], { encoding: 'utf8' })
     return r.status === 0 ? r.stdout.trim().split('\n').filter(Boolean) : []
   }
-  return { root, skills, memory, repo, run, env, commits, storedSkills, storedMemory, alerts }
+  const storedSched = () => {
+    const r = spawnSync('git', ['-C', repo, 'ls-files', 'store/scheduled-tasks'], { encoding: 'utf8' })
+    return r.status === 0 ? r.stdout.trim().split('\n').filter(Boolean) : []
+  }
+  return { root, skills, memory, repo, run, env, commits, storedSkills, storedMemory, storedSched, alerts }
 }
 
 describe('rulebook snapshot: the ordinary path', () => {
@@ -392,6 +405,59 @@ describe('rulebook snapshot: the agent memory', () => {
     const w = world(1)
     w.run()
     expect(w.storedMemory().length).toBe(3)
+  })
+
+  it('collects the scheduled tasks, and ONLY from the fixture root', () => {
+    // THE SIXTH GROUP, AND THE SAME LEAK AS THE FIFTH -- which is the finding, not the
+    // fix. The memory test three cases up is titled "THE TEST THAT WOULD HAVE CAUGHT
+    // THE LEAK", because exactly this happened when THAT group was added. It was then
+    // given an isolation test OF ITS OWN, and the scheduled-task group arrived without
+    // one: the harness kept every existing override, every existing test stayed green,
+    // and the new default quietly pulled 36 real files out of the operator's home into
+    // every throwaway repo (66 -> 102, 45 -> 81, both deltas exactly 36).
+    //
+    // That is the guard-set law on this page, verbatim: the set grows by ONE GUARD PER
+    // TASK and never by one guard for the CLASS. So this case is the per-group half,
+    // and the case below it is the class-level half that makes the SEVENTH group safe
+    // without anyone remembering to write this one again.
+    const w = world(1)
+    mkdirSync(join(w.root, 'sched', 'sentry-or'), { recursive: true })
+    writeFileSync(join(w.root, 'sched', 'sentry-or', 'SKILL.md'), 'watcher\n')
+    writeFileSync(join(w.root, 'sched', 'sentry-or', 'task-config.json'), '{}\n')
+    writeFileSync(join(w.root, 'sched', 'sentry-or', 'SKILL.md.bak-1'), 'old\n')
+    w.run({ RULEBOOK_SCHED_ROOT: join(w.root, 'sched') })
+    // EXACT SET, not a count and not a "contains": a leak passes right through both,
+    // and the `.bak-1` file pins that the filter takes .md and .json only -- a bak copy
+    // beside a live file is the shape that would otherwise double every task.
+    expect(w.storedSched().sort()).toEqual([
+      'store/scheduled-tasks/sentry-or/SKILL.md',
+      'store/scheduled-tasks/sentry-or/task-config.json',
+    ])
+  })
+
+  it('every source root the script reads is overridable, and the harness overrides ALL of them', () => {
+    // THE CLASS-LEVEL GUARD. Every case above protects ONE group; this one protects the
+    // NEXT group, which nobody has written yet. It reads the script for root variables
+    // that default into the operator's real filesystem and asserts the harness has an
+    // override for each -- so a seventh group cannot leak the way the fifth and sixth
+    // both did.
+    // A PROPERTY, NOT A LIST: not "has an override" but "its default ESCAPES THE
+    // FIXTURE". My first version required an override for EVERY RULEBOOK_* variable
+    // and failed on the correct tree -- RULEBOOK_REFS_ROOT defaults to
+    // $MARVEEN_ROOT/rulebook, DERIVED from a root the harness already overrides, and
+    // MAX_MISSING_PCT / CALLER are a number and a label. A failing positive control is
+    // a finding either way; here the METER was wrong, not the world, and "fixing" it by
+    // widening the harness would have added three pointless overrides and buried the
+    // actual rule.
+    const src = readFileSync(SCRIPT, 'utf8')
+    const escaping = [...src.matchAll(/^[A-Z_]+="\$\{(RULEBOOK_[A-Z_]+):-([^}]*)\}"/gm)]
+      .filter(m => m[2].includes('$HOME') || m[2].startsWith('/'))
+      .map(m => m[1])
+    // Positive control: an empty list passes vacuously, and a regex that silently stops
+    // matching after a refactor is exactly how that happens.
+    expect(escaping.length).toBeGreaterThanOrEqual(5)
+    const harness = Object.keys(world(1).env())
+    expect(escaping.filter(r => !harness.includes(r))).toEqual([])
   })
 
   it('says so OUT LOUD when the memory group is empty, and still snapshots the rest', () => {
