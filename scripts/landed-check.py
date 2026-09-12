@@ -90,9 +90,17 @@ def out_of_scope_counts(db, project):
     IS beleertve) -- kulonben a ket szam KET NEVEZORE vonatkozna, es a kulonbseguk
     ertelmezhetetlen lenne. Ez a fajl mashol is ezt a hibat rogziti.
 
-    A `projectless` NEM egyszeruen kimaradt: a `--project` egy hozza tartozo `--repo`-t
-    kivan, es egy project nelkuli kartyahoz nincs fa, amihez merni lehetne -- tehat ezek
-    EGYETLEN futassal sem merhetok, nem csak ezzel.
+    A `projectless` NEM esik ki a populaciobol: a `load_cards` URES project eseten
+    `where = 'status=?'`-re valt, tehat egy `--project ''` futas BELEERTI oket, megszamolja
+    es oszinte aranyt ad rajuk. Amit NEM lehet, az a REPO MEGVALASZTASA: project nelkul
+    nincs mihez kotni a `--repo`-t, tehat AHHOZ a fahoz merodnek, amit az adott futas
+    hasznalt.
+
+    A KET ALLITAS KULON: BENNE VAN-E a merésben (igen) es VALASZTHATO-E hozza fa (nem).
+    Az elso alakomban ezek ossze voltak mosva -- didi vonta vissza a sajat allitasat es
+    az enyemet is, 2026-09-12 04:28 (kartya 7eb6a490, 22. komment). Merve: a nem-szukitett
+    futasban a nem-marveen populaciobol 39 kartya LANDED-kent oldodik fel (314 - 275),
+    tehat a „merhetetlen" atalanyban tul eros volt.
     """
     c = sqlite3.connect(f'file:{db}?mode=ro', uri=True)
     total = c.execute("select count(*) from kanban_cards where status='done'").fetchone()[0]
@@ -303,9 +311,10 @@ def main():
             print(f'  HATOKORON KIVUL: {outside} `done` kartya MAS projekten -- ez a futas'
                   f' nem mond roluk semmit.')
         if projectless:
-            print(f'  ES SEHOGY NEM MERHETO: {projectless} `done` kartya NEM HORDOZ'
-                  f' projectet. A `--project` egy hozza tartozo `--repo`-t kivan, tehat'
-                  f' hozzajuk nincs fa -- EGYETLEN futassal sem merhetok, nem csak ezzel.'
+            print(f'  ES NEM VALASZTHATO HOZZAJUK FA: {projectless} `done` kartya NEM HORDOZ'
+                  f' projectet, tehat nincs mihez kotni a `--repo`-t -- ahhoz a fahoz'
+                  f' merodnek, amit EZ a futas hasznalt. BENNE VANNAK a nem-szukitett'
+                  f" (`--project ''`) futasban; amit nem lehet, az a repo MEGVALASZTASA."
                   f' Ez NEM lelet, hanem a meres hatara.')
         for k in (LANDED, OTHER_SHA, CANDIDATE, SHA_UNKNOWN, NO_REF):
             print(f'  {k:<26} {len(buckets[k])}')
