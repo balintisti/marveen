@@ -1897,6 +1897,25 @@ export function createKanbanCard(card: {
    * than a regression -- such a card is invisible to the metric today unless it is
    * archived -- and the population is tiny: 7 cards in the whole history were
    * created straight into done. Nothing is backfilled, so no existing number moves.
+   *
+   * AND THE EFFECT I MISSED, WHICH IS WIDER THAN THAT ONE CONSUMER (mandark, 04:01):
+   * this EXPIRES THE PROXY `no events = never moved`. Every new card is now born
+   * with a row, so a query written that way silently returns ZERO for new cards --
+   * and a zero there reads as "everything has moved", the comfortable direction.
+   *
+   * It does not appear anywhere in the tracked tree (checked; control: 7 files
+   * mention the table), which makes it MORE dangerous rather than less: it lives in
+   * ad-hoc queries typed from memory, so there is no file to fix and this docblock
+   * is the only place the next person will meet the warning.
+   *
+   * THE REPAIRED PREDICATE, correct in BOTH eras -- the birth row is the only one
+   * with a NULL `from_status` (measured: 4505 rows, 0 NULL, values planned /
+   * in_progress / waiting / testing / done), so the two eras separate cleanly:
+   *
+   *     not exists (select 1 from kanban_card_events e
+   *                 where e.card_id = k.id AND e.from_status IS NOT NULL)
+   *
+   * Verified identical on today's data: old form 548, repaired form 548.
    */
   db.prepare(
     'INSERT INTO kanban_card_events (card_id, from_status, to_status, actor, created_at) VALUES (?, ?, ?, ?, ?)'
