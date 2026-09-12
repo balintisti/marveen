@@ -71,7 +71,11 @@ describe('withRetry', () => {
     expect(got.ok).toBe(false)
     // The count is the CONTROL the reader gets: a notice that survived two
     // attempts is a different claim from one that did not.
-    expect(!got.ok && got.reason).toBe(`gcloud timed out after 15000 ms (${PROBE_ATTEMPTS} attempts)`)
+    // The suffix DENIES the inference the bare count invited: two attempts are
+    // 15 s + 1 s apart, inside a single blind spell, so surviving both is not
+    // evidence of persistence (mandark, 2026-09-12). It claims no duration either.
+    expect(!got.ok && got.reason).toBe(
+      `gcloud timed out after 15000 ms (${PROBE_ATTEMPTS} attempts -- transient vs persistent NOT determined)`)
   })
 
   it('LOAD-BEARING NEGATIVE: a refusal is attempted ONCE and its reason is left alone', async () => {

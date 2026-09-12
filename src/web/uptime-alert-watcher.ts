@@ -141,6 +141,21 @@ export const GCLOUD_STDIO = ['ignore', 'pipe', 'pipe'] as const
  * trades one wrong answer for a quieter one. A notice that survived two
  * attempts is a different claim from one that did not, and the reader cannot
  * see the difference unless it is written down.
+ *
+ * AND WHY THE COUNT ALONE MISLEADS (mandark measured it, 2026-09-12): "2
+ * attempts" reads as "the fault PERSISTED", and that does not follow. The second
+ * attempt starts GCLOUD_TIMEOUT_MS + the retry delay after the first one began --
+ * 15 s + 1 s -- while the blind spells run on a tens-of-seconds-to-minutes scale.
+ * Both samples therefore land INSIDE THE SAME SPELL. The retry samples BELOW the
+ * timescale of the very thing it exists to discriminate, so surviving it is not
+ * evidence of persistence.
+ *
+ * THE SUFFIX THEREFORE SAYS WHAT IS NOT DETERMINED, AND CLAIMS NO DURATION either.
+ * "brief" would be just as wrong in the other direction: the alert fires on the
+ * spell EDGE, so one notice covers a 2-minute tick and a 58-minute spell
+ * identically, and a restart resets the in-memory mark. Two causes, one symptom.
+ * The count stays because the reason above still holds; only the inference it
+ * invited is now denied in the text.
  */
 export const PROBE_ATTEMPTS = 2
 const DEFAULT_PROBE_RETRY_DELAY_MS = 1_000
@@ -183,7 +198,7 @@ export async function withRetry<T>(
     }
   }
   if (!last.ok && attempts > 1) {
-    return { ...last, reason: `${last.reason} (${attempts} attempts)` }
+    return { ...last, reason: `${last.reason} (${attempts} attempts -- transient vs persistent NOT determined)` }
   }
   return last
 }
