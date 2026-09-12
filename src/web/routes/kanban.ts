@@ -20,6 +20,7 @@ import {
   KANBAN_ELSEWHERE_FIELDS,
 } from '../../db.js'
 import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
+import { kanbanCreateError } from '../kanban-create-validation.js'
 import { unknownQueryParams, unknownQueryParamError } from '../query-params.js'
 import { kanbanProjectWarning } from '../kanban-project-warning.js'
 import { scanUnansweredCondition, isDuplicateArchive, conditionWarningText } from '../reopen-condition-warning.js'
@@ -406,6 +407,12 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   if (path === '/api/kanban' && method === 'POST') {
     const body = await readBody(req)
     const data = JSON.parse(body.toString())
+    // The row cannot be created with a bad `status`/`priority` or no `title` --
+    // SQLite's NOT NULL and CHECK see to that. Without this line the caller was
+    // told so by an anonymous 500 while the field name went to the log, which is
+    // indistinguishable from the server crashing. See kanban-create-validation.ts.
+    const invalid = kanbanCreateError(data)
+    if (invalid) { json(res, { error: invalid }, 400); return true }
     const id = randomUUID().slice(0, 8)
     createKanbanCard({ id, ...data })
     // The card IS created either way -- see kanban-project-warning.ts for why
