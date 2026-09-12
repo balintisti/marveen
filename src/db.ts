@@ -1845,6 +1845,23 @@ export function createKanbanCard(card: {
   parent_id?: string
   /** Epoch SECONDS -- see KanbanCard.due_date. Nothing validates this. */
   due_date?: number
+  /**
+   * WHO created it. Callers have been sending this in the POST body all along and
+   * it was dropped on the floor: the field was absent from this signature, so the
+   * route's `createKanbanCard({ id, ...data })` spread it in and nothing read it.
+   *
+   * MEASURED 2026-09-12 (mandark, confirmed from source): of 2096 live cards, 820
+   * carry a description, 222 of those have NO event at all, and for 97 the author
+   * is recoverable from NOWHERE -- no event and no comment. The other 125 survive
+   * only because `kanban_comments.author` is NOT NULL, which is why the page calls
+   * the comment the WORKING attribution channel and `actor` the one that vanishes.
+   *
+   * Optional on purpose: a write must not start failing because a caller omits it.
+   * An absent actor becomes a NULL actor on the event -- unknown, but the event
+   * itself still exists, so "when was it created, in what status" stops being lost
+   * along with "by whom".
+   */
+  actor?: string
 }): void {
   const now = Math.floor(Date.now() / 1000)
   const status = card.status ?? 'planned'
@@ -1861,6 +1878,29 @@ export function createKanbanCard(card: {
     card.assignee ?? null, card.priority ?? 'normal',
     card.project ?? null, card.parent_id ?? null, card.due_date ?? null, sortOrder, now, now
   )
+
+  /**
+   * THE CREATION EVENT. Until now this table only learned about a card when
+   * somebody MOVED it, so a card created and never moved had no history at all --
+   * and a description written AT CREATION was structurally anonymous.
+   *
+   * `from_status` NULL is the shape the schema already allows (`from_status TEXT`,
+   * nullable, while `to_status` is NOT NULL) and it reads correctly: the card came
+   * into existence AT this status, it did not move from anything. Measured before
+   * writing it: 0 of 4500 existing rows have a NULL from_status, so this is the
+   * first of its kind -- but `KanbanCardEvent.from_status` is already typed
+   * `string | null`, and `getKanbanCardHistory` labels it `kind: 'status'`.
+   *
+   * KNOWN AND MEASURED EFFECT ON ONE CONSUMER: `dailyCardFlow` counts a closure per
+   * event with `toStatus === 'done'`. A card created DIRECTLY as done therefore
+   * starts counting as a closure on its creation day. That is a correction rather
+   * than a regression -- such a card is invisible to the metric today unless it is
+   * archived -- and the population is tiny: 7 cards in the whole history were
+   * created straight into done. Nothing is backfilled, so no existing number moves.
+   */
+  db.prepare(
+    'INSERT INTO kanban_card_events (card_id, from_status, to_status, actor, created_at) VALUES (?, ?, ?, ?, ?)'
+  ).run(card.id, null, status, card.actor ?? null, now)
 }
 
 /** One field this write replaced, with the value it replaced. */

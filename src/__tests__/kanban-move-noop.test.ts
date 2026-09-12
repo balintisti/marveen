@@ -48,7 +48,9 @@ describe('POST /kanban/<id>/move -- a valasz megmondja, tortent-e valami', () =>
     const r = await move('c1', { status: 'in_progress', actor: 'friday' })
     expect(r.status).toBe(200)
     expect(r.payload).toEqual({ ok: true, changed: true })
-    expect(getKanbanCardEvents('c1')).toHaveLength(1)
+    // KETTO: a letrehozas sora (`d624222e`) + ez a move. A move-e a masodik.
+    expect(getKanbanCardEvents('c1')).toHaveLength(2)
+    expect(getKanbanCardEvents('c1')[1].from_status).toBe('planned')
   })
 
   it('NO-OP (mar abban az allapotban) -> changed:false, es NINCS uj esemeny', async () => {
@@ -57,8 +59,10 @@ describe('POST /kanban/<id>/move -- a valasz megmondja, tortent-e valami', () =>
     const again = await move('c2', { status: 'done', actor: 'friday' })
     expect(again.status).toBe(200)
     expect(again.payload).toEqual({ ok: true, changed: false })
-    // EGY esemeny, nem ketto: a masodik hivas nem tortent meg.
-    expect(getKanbanCardEvents('c2')).toHaveLength(1)
+    // EGY MOVE-esemeny, nem ketto: a masodik hivas nem tortent meg. (A teljes szam
+    // 2, mert a letrehozas is ir egy sort a `d624222e` ota -- az allitas targya a
+    // MOVE-ok szama, ezert a nem-null from_status-ra szurunk.)
+    expect(getKanbanCardEvents('c2').filter((e) => e.from_status !== null)).toHaveLength(1)
   })
 
   it('a NO-OP nem emeli az `updated_at`-et -- a kartya nem latszhat frissnek ok nelkul', async () => {
@@ -79,7 +83,9 @@ describe('POST /kanban/<id>/move -- a valasz megmondja, tortent-e valami', () =>
     createKanbanCard({ id: 'c4', title: 'x' })
     const r = await move('c4', { status: 'planned', sort_order: 7, actor: 'friday' })
     expect(r.payload).toEqual({ ok: true, changed: true })
-    expect(getKanbanCardEvents('c4')).toHaveLength(0)
+    // A puszta atrendezes NEM ir esemenyt -- tehat MOVE-sor nincs. A meglevo egyetlen
+    // sor a letrehozase (`d624222e`), amit ez az allitas nem merne.
+    expect(getKanbanCardEvents('c4').filter((e) => e.from_status !== null)).toHaveLength(0)
   })
 
   it('nem letezo kartya -> 404, valtozatlanul', async () => {

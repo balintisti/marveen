@@ -113,9 +113,12 @@ describe('G2 -- a nem-statusz mezok valtozasa nyomot hagy', () => {
 
   it('egy `unchanged` PUT SEMMILYEN sort nem ir -- nincs fantom-tortenet', () => {
     createKanbanCard({ id: 'card-u', title: 'Cim', status: 'planned' })
+    // A DELTA a kerdes, nem a TOTAL: a `d624222e` ota a letrehozas MAGA ir egy sort,
+    // tehat egy 0-ra szolo allitas mostantol a LETREHOZAST merne, nem a PUT-ot.
+    const before = getKanbanCardEvents('card-u').length
     expect(updateKanbanCard('card-u', { title: 'Cim' }, 'friday').outcome).toBe('unchanged')
     expect(getKanbanCardFieldEvents('card-u')).toHaveLength(0)
-    expect(getKanbanCardEvents('card-u')).toHaveLength(0)
+    expect(getKanbanCardEvents('card-u')).toHaveLength(before)
   })
 })
 
@@ -128,8 +131,9 @@ describe('G1 -- a PUT-tal valtoztatott statusz a MEGLEVO esemeny-tablaba kerul',
     // (es a `card-flow-cli`, ami a to_status-t olvassa MINDEN sorbol) tovabbra
     // sem latna ezt az atmenetet.
     const ev = getKanbanCardEvents('card-p')
-    expect(ev).toHaveLength(1)
-    expect(ev[0]).toMatchObject({ from_status: 'planned', to_status: 'done', actor: 'friday' })
+    expect(ev).toHaveLength(2)                                  // letrehozas + a PUT
+    expect(ev[0]).toMatchObject({ from_status: null, to_status: 'planned' })
+    expect(ev[1]).toMatchObject({ from_status: 'planned', to_status: 'done', actor: 'friday' })
     // es NEM a mezo-tablaba
     expect(getKanbanCardFieldEvents('card-p')).toHaveLength(0)
   })
@@ -139,7 +143,8 @@ describe('G1 -- a PUT-tal valtoztatott statusz a MEGLEVO esemeny-tablaba kerul',
     moveKanbanCard('card-m', 'in_progress', 0, 'marveen')
     updateKanbanCard('card-m', { status: 'testing' }, 'friday')
 
-    expect(getKanbanCardEvents('card-m').map((e) => e.to_status)).toEqual(['in_progress', 'testing'])
+    // A vezeto 'planned' a LETREHOZAS sora (`d624222e`).
+    expect(getKanbanCardEvents('card-m').map((e) => e.to_status)).toEqual(['planned', 'in_progress', 'testing'])
   })
 })
 
@@ -157,8 +162,9 @@ describe('a /events vegpont EGY tombot ad, `kind` diszkriminatorral', () => {
     // irja le, hogy "mikor LEPETT BE az oszlopba, actor-ral egyutt". Egy
     // to_status-ra szuro olvaso tovabbra is PONTOSAN a statusz-sorokat kapja.
     const statusRows = rows.filter((r) => r.to_status !== undefined)
-    expect(statusRows).toHaveLength(1)
-    expect(statusRows[0]).toMatchObject({ kind: 'status', from_status: 'planned', to_status: 'in_progress', actor: 'marveen' })
+    expect(statusRows).toHaveLength(2)                          // letrehozas + a move
+    expect(statusRows[0]).toMatchObject({ kind: 'status', from_status: null, to_status: 'planned' })
+    expect(statusRows[1]).toMatchObject({ kind: 'status', from_status: 'planned', to_status: 'in_progress', actor: 'marveen' })
 
     const fieldRows = rows.filter((r) => r.kind === 'field')
     expect(fieldRows).toHaveLength(1)
@@ -173,9 +179,12 @@ describe('a /events vegpont EGY tombot ad, `kind` diszkriminatorral', () => {
     expect((put.payload as { changed?: boolean }).changed).toBe(true)
 
     const { payload } = await call('GET', '/api/kanban/cccc3333/events')
+    // A MEZO-sor az allitas targya; a statusz-sor a letrehozase (`d624222e`).
     const rows = payload as Array<Record<string, unknown>>
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ kind: 'field', field: 'title', to_value: 'Uj', actor: 'dashboard' })
+    expect(rows).toHaveLength(2)
+    const fieldRow = rows.filter((r) => r.kind === 'field')
+    expect(fieldRow).toHaveLength(1)
+    expect(fieldRow[0]).toMatchObject({ kind: 'field', field: 'title', to_value: 'Uj', actor: 'dashboard' })
   })
 
   it('az `actor` NEM valik mezove: egyedul kuldve a kartya VALTOZATLAN', async () => {
@@ -183,13 +192,23 @@ describe('a /events vegpont EGY tombot ad, `kind` diszkriminatorral', () => {
     const put = await call('PUT', '/api/kanban/dddd4444', { actor: 'dashboard' })
     expect(put.status).toBe(200)
     expect((put.payload as { changed?: boolean }).changed).toBe(false)
-    expect(getKanbanCardHistory('dddd4444')).toHaveLength(0)
+    // Megint DELTA: a PUT nem irt semmit. A meglevo sor a letrehozase.
+    expect(getKanbanCardHistory('dddd4444')).toHaveLength(1)
+    expect(getKanbanCardHistory('dddd4444')[0]).toMatchObject({ kind: 'status', from_status: null })
   })
 
-  it('KONTROLL: erintetlen kartya -> ures tomb, nem hiba', async () => {
-    createKanbanCard({ id: 'eeee5555', title: 'Erintetlen', status: 'planned' })
+  it('KONTROLL: erintetlen kartya -> 200 es TOMB, a letrehozas soraval', async () => {
+    // A `d624222e` ELOTT ez ures tombot vart, mert egy meg nem mozgatott kartyanak
+    // nem volt egyetlen sora sem -- pontosan az a 222 kartya, ahol a szerzo
+    // visszanyerhetetlen volt. Az allitas EREDETI celja (a vegpont TOMBOT ad es nem
+    // hibazik egy soha nem mozgatott kartyara) valtozatlanul all; a VART tartalom az,
+    // ami megvaltozott, es ez a valtozas maga a javitas.
+    createKanbanCard({ id: 'eeee5555', title: 'Erintetlen', status: 'planned', actor: 'friday' })
     const { status, payload } = await call('GET', '/api/kanban/eeee5555/events')
     expect(status).toBe(200)
-    expect(payload).toEqual([])
+    expect(Array.isArray(payload)).toBe(true)
+    expect(payload).toHaveLength(1)
+    expect((payload as Array<Record<string, unknown>>)[0])
+      .toMatchObject({ kind: 'status', from_status: null, to_status: 'planned', actor: 'friday' })
   })
 })
