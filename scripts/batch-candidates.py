@@ -108,6 +108,25 @@ def declared_deps(bodies):
     return ids, malformed
 
 
+def card_declared_deps(description):
+    """Dependencies declared on the CARD, not in a commit.
+
+    TWO SITES, ONE TOKEN, and the reason is measured. The commit trailer is the durable
+    form, but it only exists once someone writes a commit -- and the coupling is usually
+    known BEFORE that, at the moment the cards are split. The card description is where
+    it actually gets written: dexter put `*** CSATOLT KARTYA -- NE MOZGASD EGYEDUL ***`
+    as the first line of both coupled cards on 2026-09-12, and that banner is correct
+    and load-bearing FOR A HUMAN -- the person moving a card reads the description.
+
+    It is invisible to a parser, which is the same split the rulebook already records
+    for `workcheck.json`: the card keeps the reason for the human, and a machine-shaped
+    line carries it for the tool. So the banner stays and a `Depends-On:` line is added
+    beside it, rather than the parser learning to read prose -- a prose detector is the
+    false-positive family this fleet has stopped eight times.
+    """
+    return declared_deps(description)
+
+
 def classify(branch, own_status, dep_status, age_days, max_age_days, malformed=()):
     """The predicate itself. Pure, so the tests do not need a repo or a database.
 
@@ -144,10 +163,13 @@ def _is_ancestor(repo, a, b):
 
 def load_cards():
     con = sqlite3.connect('file:%s?mode=ro' % DB, uri=True)
-    return {r[0][:8]: r[1] for r in con.execute('select id, status from kanban_cards')}
+    rows = list(con.execute('select id, status, description from kanban_cards'))
+    return ({r[0][:8]: r[1] for r in rows},
+            {r[0][:8]: (r[2] or '') for r in rows})
 
 
-def scan(repo, main, max_age_days, cards):
+def scan(repo, main, max_age_days, cards, descriptions=None):
+    descriptions = descriptions or {}
     main_sha = _git(repo, 'rev-parse', main).strip()
     if not main_sha:
         raise SystemExit('NEM MERHETO: a `%s` ref nem oldodik fel a %s repoban' % (main, repo))
@@ -168,6 +190,12 @@ def scan(repo, main, max_age_days, cards):
         bodies = _git(repo, 'log', '--first-parent', '--no-merges', '--format=%B',
                       main_sha + '..' + sha)
         deps, malformed = declared_deps(bodies)
+        # The card is the SECOND declaration site -- see card_declared_deps. A coupling
+        # is usually known when the cards are split, which is before any commit exists.
+        if oc and oc in descriptions:
+            cd, cm = card_declared_deps(descriptions[oc])
+            deps |= cd
+            malformed += cm
         dep_status = {d: cards.get(d) for d in deps}
         verdict, why = classify(name, cards.get(oc) if oc else None, dep_status,
                                 (now - int(when)) / 86400.0, max_age_days, malformed)
@@ -185,7 +213,8 @@ def main():
     a = p.parse_args()
     if not os.path.isdir(a.repo):
         raise SystemExit('NEM MERHETO: nincs ilyen konyvtar: %s' % a.repo)
-    rows = scan(a.repo, a.main, a.max_age_days, load_cards())
+    cards, descriptions = load_cards()
+    rows = scan(a.repo, a.main, a.max_age_days, cards, descriptions)
     considered = [r for r in rows if r['verdict'] != NO_OWN_CARD]
     declared = [r for r in considered if r['declared']]
     elig = [r for r in considered if r['verdict'] == ELIGIBLE]

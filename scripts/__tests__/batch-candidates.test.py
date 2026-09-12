@@ -117,6 +117,38 @@ class Classify(unittest.TestCase):
         self.assertEqual(v, bc.ELIGIBLE)
 
 
+class CardSite(unittest.TestCase):
+    """The card description is the second declaration site."""
+
+    # dexter's real banner, 2026-09-12, verbatim first line of both coupled cards.
+    BANNER = ('*** CSATOLT KARTYA -- NE MOZGASD EGYEDUL: `1c99e33f` ***\n'
+              'Ennek az agnak a tortenetebe BE VAN OLVASZTVA a 1c99e33f javitasa.')
+
+    def test_the_human_banner_alone_declares_NOTHING(self):
+        # Deliberate, and the point of the whole design: the banner is correct and
+        # load-bearing for a PERSON moving the card. Teaching the parser to read prose
+        # is the false-positive family this fleet has stopped eight times, so the
+        # banner stays for humans and a machine line is added beside it.
+        ids, bad = bc.card_declared_deps(self.BANNER)
+        self.assertEqual(ids, set())
+        self.assertEqual(bad, [])
+
+    def test_a_trailer_line_on_the_card_declares(self):
+        ids, bad = bc.card_declared_deps(self.BANNER + '\nDepends-On: 1c99e33f\n')
+        self.assertEqual(ids, {'1c99e33f'})
+        self.assertEqual(bad, [])
+
+    def test_same_anchoring_rule_as_the_commit_site(self):
+        # One token, two sites, ONE rule -- a second definition of the same rule is not
+        # a smaller problem than no rule.
+        ids, _ = bc.card_declared_deps('  Depends-On: 1c99e33f')
+        self.assertEqual(ids, set())
+
+    def test_empty_description_is_not_an_error(self):
+        self.assertEqual(bc.card_declared_deps(''), (set(), []))
+        self.assertEqual(bc.card_declared_deps(None), (set(), []))
+
+
 class Slug(unittest.TestCase):
     def test_reads_the_card_from_the_branch_name(self):
         self.assertEqual(bc.own_card('fix/1c99e33f-formula-validation'), '1c99e33f')
