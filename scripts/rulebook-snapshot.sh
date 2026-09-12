@@ -46,6 +46,16 @@ REFS_ROOT="${RULEBOOK_REFS_ROOT:-$MARVEEN_ROOT/rulebook}"
 # 2026-09-02 on friday and dexter), so walking the six agent dirs would copy the
 # identical 127 files six times over.
 MEMORY_ROOT="${RULEBOOK_MEMORY_ROOT:-$HOME/.claude/projects}"
+# HATODIK CSOPORT. A `~/.claude/skills` fat ez a szkript 2026-08 ota viszi, es a lap ebbol
+# azt a megnyugtato altalanositast termelte, hogy "a ~/.claude alatti prompt-fajljaink
+# mentve vannak". A `~/.claude/scheduled-tasks` UGYANOTT lakik, UGYANOLYAN SKILL.md
+# fajlokbol all, es a schedule runner 60 masodpercenkent OLVASSA oket -- 2026-09-12-ig
+# megis EGYETLEN fajlja sem volt mentve sehol: 17 SKILL.md, ebbol 16 nulla talalat a
+# pillanatfelvetelben (KONTROLL: `skills/` 91 fajl, tehat a mero lat). Kartya: ed970155.
+# A megtalalas modja a hordozhato resz: nem cenzusbol jott, hanem egy SAJAT szerkesztes
+# utani ellenorzesbol ("megvan-e a mai valtoztatasom?"), es a valasz a SZOMSZED fara volt
+# nem. Egy allitas, ami az egyik fara igaz, a mellette allora nem az.
+SCHED_ROOT="${RULEBOOK_SCHED_ROOT:-$HOME/.claude/scheduled-tasks}"
 NOTIFY_CMD="${RULEBOOK_NOTIFY:-$MARVEEN_ROOT/scripts/notify.sh}"
 
 # --- THE DELETION GUARD THRESHOLD.
@@ -174,6 +184,17 @@ collect() {
       printf 'memory/%s/%s\t%s\n' "$proj" "$(basename "$f")" "$f"
     done
   fi
+  # HATODIK CSOPORT: az utemezett feladatok. Ezek ELNEK ES FUTNAK -- a runner percenkent
+  # olvassa oket --, tehat nem "meg nem ert oda", hanem MAR OTT VAN es nem lehet
+  # visszahozni. Ugyanaz a `find | sort | printf` alak, mint fent. A `.md` MELLE a `.json`
+  # is megy: a `task-config.json` hordozza az utemezest es a tipust, tehat egy SKILL.md
+  # onmagaban nem allitja vissza a feladatot.
+  if [ -d "$SCHED_ROOT" ]; then
+    find "$SCHED_ROOT" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null \
+    | LC_ALL=C sort | while IFS= read -r f; do
+        printf 'scheduled-tasks/%s\t%s\n' "${f#"$SCHED_ROOT"/}" "$f"
+      done
+  fi
 }
 
 PAIRS=$(collect || true)
@@ -186,6 +207,17 @@ NOW_COUNT=$(printf '%s' "$PAIRS" | grep -c . || true)
 # aggregate, absent in the part. A guard that only checks the total would report
 # success over the same hole it was added to close.
 MEM_COUNT=$(printf '%s' "$PAIRS" | grep -c '^memory/' || true)
+# UGYANEZ A CSOPORT-SPECIFIKUS NULLA A HATODIKRA, ugyanabbol az okbol: a TELJES-nulla
+# megtagadas nem fogja meg, mert 800+ masik fajl egeszsegesnek mutatja az osszeget,
+# mikozben EZ a csoport nemán semmit nem ad. Pontosan ez volt az allapot 2026-09-12-ig,
+# csak akkor meg a csoport sem letezett -- a hiany tehat nem nullakent latszott, hanem
+# sehogy, ami rosszabb: egy nulla legalabb sor a kimenetben.
+SCHED_COUNT=$(printf '%s' "$PAIRS" | grep -c '^scheduled-tasks/' || true)
+if [ "${SCHED_COUNT:-0}" -eq 0 ]; then
+  log "rulebook-snapshot: WARNING -- zero scheduled-task files collected from $SCHED_ROOT"
+  log "  (card ed970155: these files run every minute and lived on exactly one disk until"
+  log "   2026-09-12; an aggregate-only guard reports success over exactly this hole)"
+fi
 if [ "${MEM_COUNT:-0}" -eq 0 ]; then
   log "rulebook-snapshot: WARNING -- zero agent-memory files collected from $MEMORY_ROOT"
   log "  (the rest of the snapshot continues; this is the one group whose silent absence"
