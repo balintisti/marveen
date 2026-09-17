@@ -175,4 +175,26 @@ describe('beagyazott parancs = kimondott aszimmetria', () => {
     expect(known).not.toBe(unknown)
     expect(buildNoWorkNotice('jarvis', 20, 0, 'assigned_open_cards')).toContain('`assigned_open_cards`')
   })
+
+  it('9. a GENERIKUS ag csak azt mondja, ami MINDEN kindre igaz (didi, faa6003a k6)', () => {
+    // didi merte: az elozo alak a `waiting` oszlopot nevezte meg INDOKKENT az alapertelmezett agon.
+    // Egy JOVOBELI otodik kindnel, `planned` statuszu felajanlott tetellel, az a mondat HAMIS
+    // lenne -- a re-query `status not in ('done','waiting')`, tehat egy `planned` tetel BENNE
+    // LENNE. Es a folotte allo kommentem azt allitotta, hogy egy otodik kind "hamisat nem tud
+    // allitani": a CIMKERE igaz volt, erre a MONDATRA nem. Ugyanaz az alak, egy reteggel lejjebb.
+    //
+    // A `as never` SZANDEKOS: a generikus ag ma ELERHETETLEN a VALID_KINDS-bol, tehat csak igy
+    // lehet megnezni, mit mondana. Ez a teszt a JOVOT pineli, nem a jelent.
+    const items = [{ id: 'aaaaaaaa', title: 't', priority: 'high', status: 'planned' }]
+    const future = buildWakeMessage('didi', 12, 1, items as never, 0, 'future_kind' as never)
+    expect(future).toContain('`future_kind`')          // megnevezi, amit kapott
+    expect(future).toContain('MASIK halmaz')           // es kimondja az elterest
+    expect(future).not.toContain('kihagyja a')         // de NEM indokolja `waiting`-gel
+
+    // KONTROLL, hogy a pin diszkriminal: a `waiting_on_me` ag TOVABBRA IS megnevezi az okot,
+    // mert ott IGAZ. Ha valaki egyszeruen kivenne az indoklast mindenhonnan, ez pirosra megy.
+    const wom = buildWakeMessage('didi', 12, 1, items as never, 0, 'waiting_on_me')
+    expect(wom).toContain('kihagyja a')
+    expect(wom).toContain('`waiting` oszlopot')
+  })
 })

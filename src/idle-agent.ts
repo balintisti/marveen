@@ -1433,10 +1433,22 @@ export function buildWakeMessage(
             'A te deklaraciod `assigned_open_cards`, tehat ez a sor ugyanazt a halmazt kerdezi, amit szamoltam --',
             'a fenti ketto kivetelevel.',
           ]
-        : [
-            `A te deklaraciod \`${kind}\`, es a fenti sor NEM ezt reprodukalja: kihagyja a \`waiting\``,
-            'oszlopot, tehat a fent felajanlott tetelek NEM lesznek benne. MASIK halmaz.',
-          ]),
+        : kind === 'waiting_on_me'
+          ? [
+              'A te deklaraciod `waiting_on_me`, es a fenti sor NEM ezt reprodukalja: kihagyja a',
+              '`waiting` oszlopot, tehat a fent felajanlott tetelek NEM lesznek benne. MASIK halmaz.',
+            ]
+          : [
+              // EZ AZ AG SZANDEKOSAN SZUKSZAVU (didi merte 2026-09-17, faa6003a k6). Az elozo
+              // alakja a `waiting` oszlopot nevezte meg INDOKKENT -- ami a `waiting_on_me`-re igaz,
+              // egy JOVOBELI otodik kindre viszont nem: egy `planned` tetelt a re-query
+              // (`status not in ('done','waiting')`) BELEVENNE, tehat a mondat masodik fele
+              // hamis lenne, a megnyugtato iranyba. A fenti komment ("hamisat nem tud allitani")
+              // a CIMKERE igaz volt, erre a MONDATRA nem -- ugyanaz az alak, egy reteggel lejjebb.
+              // Ezert itt csak az all, ami MINDEN kindre igaz: a sor nem ezt a deklaraciot
+              // reprodukalja. Hogy MIT hagy ki, azt a kind sajat aga mondja meg, ha van.
+              `A te deklaraciod \`${kind}\`, es a fenti sor NEM ezt reprodukalja. MASIK halmaz.`,
+            ]),
   )
   out.push(
     '',
