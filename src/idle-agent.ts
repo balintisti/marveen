@@ -1401,12 +1401,30 @@ export function buildWakeMessage(
     // `testing_without_my_comment` mellett a parancs-sor azonos, mikozben az uzenet TOBBI resze
     // elter -- tehat a fuggveny hasznalja a kind-ot, csak epp itt nem.
     `${ASYMMETRY_NOTE} a jovobeli \`due_date\`-et, es a \`workcheck.json\` \`kind\`-jat.`,
-    isReviewQueue
-      ? 'A te deklaraciod `testing_without_my_comment`, tehat en a `testing` oszlopot szamoltam, amire'
-      : 'A te deklaraciod `assigned_open_cards`, tehat ez a sor ugyanazt a halmazt kerdezi, amit szamoltam --',
-    isReviewQueue
-      ? 'meg nem szoltal hozza. A fenti sor a NEVEDEN allo nyitott kartyakat adja: MASIK halmaz.'
-      : 'a fenti ketto kivetelevel.',
+    // A CIMKE KIND-ENKENT IRODOTT, ES A KOVETKEZO KIND SAJAT AG NELKUL ERKEZETT (kartya faa6003a).
+    // 2026-09-06-an (5f36f85c) ez TELJES volt: harom kind letezett, es a fenti komment is "a HAROM
+    // kozul csak az EGYIKET"-et mond. 2026-09-11-en a `waiting_on_me` bekerult (b2516432, "a
+    // koordinator belep a populacioba"), es a cimke nem kovette. Ot napig minden `waiting_on_me`
+    // agens KET hamis allitast olvasott magarol: hogy a deklaracioja `assigned_open_cards`, es hogy
+    // a fenti sor "ugyanazt a halmazt kerdezi" -- mikozben a ketto DISZJUNKT (merve 2026-09-17: a
+    // felajanlott top5-bol 0 szerepelt a re-query 305-os listajaban).
+    // EZERT NEM TERNARY TOBBE: az ALAPERTELMEZES a szukszavu, IGAZ alak, es CSAK az
+    // `assigned_open_cards` allit kozel-azonossagot. Egy otodik kind igy NEMA tud maradni, de
+    // HAMISAT nem tud allitani -- ez a kulonbseg a hianyzo es a megteveszto valasz kozott.
+    ...(isReviewQueue
+      ? [
+          'A te deklaraciod `testing_without_my_comment`, tehat en a `testing` oszlopot szamoltam, amire',
+          'meg nem szoltal hozza. A fenti sor a NEVEDEN allo nyitott kartyakat adja: MASIK halmaz.',
+        ]
+      : kind === 'assigned_open_cards'
+        ? [
+            'A te deklaraciod `assigned_open_cards`, tehat ez a sor ugyanazt a halmazt kerdezi, amit szamoltam --',
+            'a fenti ketto kivetelevel.',
+          ]
+        : [
+            `A te deklaraciod \`${kind}\`, es a fenti sor NEM ezt reprodukalja: kihagyja a \`waiting\``,
+            'oszlopot, tehat a fent felajanlott tetelek NEM lesznek benne. MASIK halmaz.',
+          ]),
   )
   out.push(
     '',

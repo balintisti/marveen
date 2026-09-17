@@ -102,4 +102,27 @@ describe('beagyazott parancs = kimondott aszimmetria', () => {
     // ...es MINDKETTO deklaral.
     for (const o of [assigned, review]) expect(o).toContain(ASYMMETRY_NOTE)
   })
+
+  it('6. a `waiting_on_me` NEM allitja magat `assigned_open_cards`-nak (kartya faa6003a)', () => {
+    // AZ 5. ESET KET KINDOT PINELT, ES A HARMADIK KESOBB ERKEZETT. A cimke 2026-09-06-an
+    // (5f36f85c) TELJES volt -- harom kind letezett, a kommentje is "a HAROM kozul csak az
+    // EGYIKET"-et mondja. 2026-09-11-en a `waiting_on_me` negyedikkent bekerult (b2516432),
+    // es a KETAGU ternary ELSE-age ota azt allitotta rola, hogy a deklaracioja
+    // `assigned_open_cards`, ES hogy a beagyazott parancs "ugyanazt a halmazt kerdezi".
+    // Merve 2026-09-17 a koordinatoron: a felajanlott top5 (mind `waiting`) kozul NULLA
+    // szerepelt a parancs 305-os listajaban -- ket DISZJUNKT halmaz, kozel-azonossagnak
+    // nevezve. Ez a lap "egy uj tag or nelkul erkezik" alakja, egy uzenet-cimken.
+    const items = [{ id: 'aaaaaaaa', title: 't', priority: 'high', status: 'waiting' }]
+    const wom = buildWakeMessage('marveen', 12, 74, items as never, 0, 'waiting_on_me')
+    expect(wom).toContain('`waiting_on_me`')            // a SAJAT kindjet nevezi meg
+    expect(wom).not.toContain('`assigned_open_cards`')  // es nem a masikat
+    expect(wom).toContain('MASIK halmaz')               // az oszinte alak, a review-agrol atveve
+
+    // KONTROLL, MERT ENELKUL A PIN FELE TRIVIALISAN TELJESULNE: az `assigned_open_cards`
+    // agensnek TOVABBRA IS a kozel-azonossagot kell mondania. Ha valaki a cimket egyszeruen
+    // elnemitana, ez a fele PIROSRA megy.
+    const aoc = buildWakeMessage('didi', 12, 74, items as never, 0, 'assigned_open_cards')
+    expect(aoc).toContain('`assigned_open_cards`')
+    expect(aoc).not.toContain('MASIK halmaz')
+  })
 })
