@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **247** kovetett fajl, ebbol
-**77** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **248** kovetett fajl, ebbol
+**78** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -93,6 +93,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - WHY THIS EXISTS. The batch rule lived only in prose and was re-derived by hand every
 - WHY THE COUPLING MUST BE DECLARED AND NOT INFERRED (marveen measured 2026-09-12, on
+
+### `scripts/bontas-horgony-check.py`
+
+- MIERT LETEZIK. 2026-09-17-en hat szakaszt bontottam ki a `CLAUDE.md`-bol, es a bontas utani
 
 ### `scripts/calendar-agenda.sh`
 
