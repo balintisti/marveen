@@ -24,7 +24,9 @@
 # (A KOVETKEZO SOR SZANDEKOSAN EGYETLEN FIZIKAI SOR, ~300 karakter. A decision-index.py
 #  bulletenkent EGY forrassort vesz, tehat egy tordelt folytatas -- itt a MERES, a 8/1 --
 #  kimaradna az indexbol, es az allitas bizonyitek nelkul maradna. Ha valaha sor-hossz lint
-#  jon a scripts/-re, EZ A SOR A KIVETEL, nem a javitando. didi merte 2026-09-17.)
+#  jon a scripts/-re, EZ A SOR A KIVETEL, nem a javitando. didi merte 2026-09-17.
+#  Es ez a megjegyzes SZANDEKOSAN nem MIERT-tel kezdodik: a decision-index CAPS-mintaja
+#  bulletté tenne, es egy tordelesi jegyzet a DONTESEK koze kerulne. didi merte 15:0x-kor.)
 # MIERT KERJUK A NYOM-KARTYAT, HA A KOMMENT SZAMOT HORDOZ: egy meres N kartyara mehet EGY beillesztessel, es a javitas helyerol ez az N LATHATATLAN -- didi merte 2026-09-17: egy sablon 8 kartyara ment, a helyesbites 1-re jutott el. Aki szamot illeszt be, nevezze meg a kartyat, ahol a helyesbitese elne.
 #
 # HASZNALAT:
