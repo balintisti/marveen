@@ -109,6 +109,7 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/card-comment.sh`
 
 - MIERT LETEZIK. Ket ismetlodo hibat zar le egyszerre, es mindketto MERT eset
+- MIERT KERJUK A NYOM-KARTYAT, HA A KOMMENT SZAMOT HORDOZ: egy meres N kartyara mehet EGY beillesztessel, es a javitas helyerol ez az N LATHATATLAN -- didi merte 2026-09-17: egy sablon 8 kartyara ment, a helyesbites 1-re jutott el. Aki szamot illeszt be, nevezze meg a kartyat, ahol a helyesbitese elne.
 
 ### `scripts/card-flow-report.sh`
 
