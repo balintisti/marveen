@@ -21,6 +21,10 @@
 # A megoldas egyik esetben sem "figyelj jobban": a fajl BINARISAN megy at pythonba (nincs hej-
 # ertelmezes sehol), az idobelyeget pedig a script teszi ki egy __STAMP__ helyorzore.
 #
+# (A KOVETKEZO SOR SZANDEKOSAN EGYETLEN FIZIKAI SOR, ~300 karakter. A decision-index.py
+#  bulletenkent EGY forrassort vesz, tehat egy tordelt folytatas -- itt a MERES, a 8/1 --
+#  kimaradna az indexbol, es az allitas bizonyitek nelkul maradna. Ha valaha sor-hossz lint
+#  jon a scripts/-re, EZ A SOR A KIVETEL, nem a javitando. didi merte 2026-09-17.)
 # MIERT KERJUK A NYOM-KARTYAT, HA A KOMMENT SZAMOT HORDOZ: egy meres N kartyara mehet EGY beillesztessel, es a javitas helyerol ez az N LATHATATLAN -- didi merte 2026-09-17: egy sablon 8 kartyara ment, a helyesbites 1-re jutott el. Aki szamot illeszt be, nevezze meg a kartyat, ahol a helyesbitese elne.
 #
 # HASZNALAT:
