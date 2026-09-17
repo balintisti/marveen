@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **247** kovetett fajl, ebbol
-**77** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **248** kovetett fajl, ebbol
+**78** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -370,6 +370,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - WHY A SCRIPT AND NOT A UNIT TEST. The route only computes contextTokens (and
 - WHY IT RE-IMPLEMENTS THE RULE. The model -> window mapping below is a second,
+
+### `scripts/worktree-uj.sh`
+
+- MIERT LETEZIK. 2026-09-17 09:3x-kor marveen ezt irta:
 
 ### `scripts/write-census.mjs`
 
