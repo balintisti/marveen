@@ -20,7 +20,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import {
-  ASYMMETRY_NOTE, buildWakeMessage, buildNoWorkNotice, buildPullNotice,
+  ASYMMETRY_NOTE, VALID_KINDS, buildWakeMessage, buildNoWorkNotice, buildPullNotice,
 } from '../idle-agent.js'
 
 const SRC = readFileSync(new URL('../idle-agent.ts', import.meta.url), 'utf-8')
@@ -124,5 +124,55 @@ describe('beagyazott parancs = kimondott aszimmetria', () => {
     const aoc = buildWakeMessage('didi', 12, 74, items as never, 0, 'assigned_open_cards')
     expect(aoc).toContain('`assigned_open_cards`')
     expect(aoc).not.toContain('MASIK halmaz')
+  })
+
+  it('7. OSZTALY-SZINTU: MINDEN kind a SAJAT nevet kapja, es csak azt (kartya faa6003a)', () => {
+    // MIERT ITERAL, ES MIERT NEM SOROL FEL: a ket eddigi hiba UGYANAZ volt -- egy KEZZEL irt
+    // felsorolas, ami a sajat pillanataban TELJES volt, es egy kesobb hozzaadott kind mellett
+    // nemán hamissa valt (a cimke 09-06-an, a `buildNoWorkNotice` prozaja ugyanakkor; a negyedik
+    // kind 09-11-en erkezett). Egy `VALID_KINDS`-en futo ciklus egy OTODIK kindtol magatol
+    // pirosra megy -- ez az, amit egy per-eset pin nem tud.
+    //
+    // ES MEGFELELTETES, NEM JELENLET: nem az a kerdes, hogy a kind neve OTT VAN-E valahol,
+    // hanem hogy a SAJATJAT kapja-e ES a tobbit NEM. Egy "tartalmazza a kindot" assert atmenne
+    // egy olyan uzeneten is, ami MINDET felsorolja.
+    expect([...VALID_KINDS].sort()).toEqual(
+      ['assigned_open_cards', 'none', 'testing_without_my_comment', 'waiting_on_me'],
+    )
+    const items = [{ id: 'aaaaaaaa', title: 't', priority: 'high', status: 'waiting' }]
+    const woken = VALID_KINDS.filter(k => k !== 'none')   // a `none` agens nem kap ebresztest
+    expect(woken.length).toBe(3)                          // KONTROLL: a szures nem uritette ki
+    for (const k of woken) {
+      const msg = buildWakeMessage('didi', 12, 1, items as never, 0, k)
+      expect(msg, `a(z) ${k} uzenete nem nevezi meg a sajat kindjat`).toContain('`' + k + '`')
+      for (const other of woken) {
+        if (other === k) continue
+        expect(msg, `a(z) ${k} uzenete a(z) ${other} kindot emliti`).not.toContain('`' + other + '`')
+      }
+    }
+  })
+
+  it('8. a NO-WORK ertesites sem sorol fel kezzel -- ez a MASODIK helyszin (kartya faa6003a)', () => {
+    // didi merte 2026-09-17: ugyanaz a defektus `buildNoWorkNotice`-ban, es ott SULYOSABB, mert
+    // a fuggveny meg csak MEG SEM KAPTA a kindot -- tehat PARAMETER kellett, nem uj ag. Es a
+    // javitas utan MUTACIOVAL merve (M3: a kezi felsorolas visszaallitva) a TELJES keszlet
+    // 468 fajl / 5937 teszt / 0 bukas mellett TULELT -- vagyis SEMMI nem pinelte. Ez az a pin.
+    //
+    // A KIKOTES, amiert ez nem "ne emlitsen mas kindot": ez az ertesites JOGGAL emliti a
+    // `{"kind":"none"}`-t, mert azt TANACSOLJA a koordinatornak. A tiltas ezert a felsorolo
+    // alakra szol: ha a SUBJECT kindja ISMERT, egy MASIK deklaraciot ne nevezzen meg.
+    const known = buildNoWorkNotice('jarvis', 20, 0, 'waiting_on_me')
+    expect(known).toContain('`waiting_on_me`')                       // a sajatjat megnevezi
+    expect(known).not.toContain('`testing_without_my_comment`')      // idegen deklaraciot nem
+
+    // ES A KIND NELKULI AG: ott nem lehet megnevezni, tehat NEM felsorol, hanem altalanosit.
+    const unknown = buildNoWorkNotice('jarvis', 20, 0)
+    expect(unknown).toContain('MINDEN MAS')
+    expect(unknown).not.toContain('`testing_without_my_comment`')
+
+    // KONTROLL, hogy a mero TUD kulonbseget mondani: a ket kimenet ne legyen azonos, es az
+    // `assigned_open_cards` ag TOVABBRA is nevezze meg magat.
+    expect(known).not.toBe(unknown)
+    expect(buildNoWorkNotice('jarvis', 20, 0, 'assigned_open_cards')).toContain('`assigned_open_cards`')
   })
 })

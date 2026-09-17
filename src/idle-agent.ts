@@ -396,7 +396,7 @@ export function decideIdleAlert(
   }
 }
 
-const VALID_KINDS: readonly WorkCheckKind[] = ['assigned_open_cards', 'testing_without_my_comment', 'waiting_on_me', 'none']
+export const VALID_KINDS: readonly WorkCheckKind[] = ['assigned_open_cards', 'testing_without_my_comment', 'waiting_on_me', 'none']
 
 /**
  * Parse a declared work check. Returns null for "not declared" -- which is NOT the
@@ -1232,7 +1232,7 @@ export function buildPullNotice(
   ].join('\n')
 }
 
-export function buildNoWorkNotice(agent: string, minutes: number, nowMs: number): string {
+export function buildNoWorkNotice(agent: string, minutes: number, nowMs: number, kind?: WorkCheckKind | null): string {
   // THIS NOTICE RIDES THE COORDINATOR'S QUEUE, AND THAT IS WHY IT IS STAMPED (card 7edc5839).
   //
   // Card 1d800670 stamped the sibling notice because it rides the queue it reports. The
@@ -1297,9 +1297,21 @@ export function buildNoWorkNotice(agent: string, minutes: number, nowMs: number)
     // egeszen mas halmazt szamolt (a `testing` oszlop, amire O nem szolt hozza), egy `none`
     // agensnel pedig NULLAT, barmennyi kartya all a neven. Enelkul a sor a szomszed kerdesre
     // valaszol -- az or tekintelyevel a hata mogott.
-    '`workcheck.json` `kind`-jat: ez a sor az `assigned_open_cards` alakot kerdezi, es',
-    'egy `testing_without_my_comment` vagy `none` deklaracio mellett MAS halmazt ad, mint amit',
-    'en szamoltam.',
+    // ITT KORABBAN KEZZEL FEL VOLT SOROLVA A TOBBI KIND, ES AZ ELAVULT (kartya faa6003a).
+    // A felsorolas 2026-09-06-an (5f36f85c) TELJES volt -- harom kind letezett. 2026-09-11-en a
+    // `waiting_on_me` negyedikkent beolvadt (b2516432), es ez a mondat nem kovette: ot napon at
+    // egy `waiting_on_me` agensrol szolo ertesites ugy olvasodott, mintha a kind-ja a felsorolt
+    // harom egyike lenne. **EZERT NINCS TOBBE FELSOROLAS: "MINDEN MAS" nem tud elavulni**, es ha
+    // a kind ISMERT, a mondat MEGNEVEZI -- akkor nem kell altalanositani.
+    ...(kind && kind !== 'assigned_open_cards'
+      ? [
+          `\`workcheck.json\` \`kind\`-jat: a(z) "${agent}" deklaracioja \`${kind}\`, tehat ez a sor`,
+          'MAS halmazt ad, mint amit en szamoltam.',
+        ]
+      : [
+          '`workcheck.json` `kind`-jat: ez a sor az `assigned_open_cards` alakot kerdezi, es',
+          'MINDEN MAS deklaracio mellett MAS halmazt ad, mint amit en szamoltam.',
+        ]),
     // ES A `testing` AL-SZURO, ami eddig SEHOL nem volt kimondva -- marveen ezt az egy sort
     // nevezte meg (k30). A fenti sor a `testing` kartyakat MIND beszamitja; a szamlalo csak
     // azokat, ahol a labda meg az ellenorzonel van. Tehat egy NEM-URES valasz onmagaban meg

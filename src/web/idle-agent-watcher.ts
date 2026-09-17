@@ -500,7 +500,7 @@ export function tick(): void {
           continue
         }
         try {
-          createAgentMessage('system', MAIN_AGENT_ID, buildNoWorkNotice(agent, minutes, Date.now()))
+          createAgentMessage('system', MAIN_AGENT_ID, buildNoWorkNotice(agent, minutes, Date.now(), (check as WorkCheck | null)?.kind ?? null))
           logger.info(
             { idleGuard: true, agent, idleForMs: decision.idleForMs },
             'idle guard: agent idle with nothing assigned -- told the coordinator',
