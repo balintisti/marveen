@@ -143,3 +143,56 @@ A fokozatokat a `store/autonomy-config.json` szabályozza. **Level 1**: jelzel, 
 
 **ÁGENSEK EGYMÁS KÖZÖTT: ANGOL.** Ami {{OWNER_NAME}} elé megy -- Telegram-üzenet ÉS kártya-komment --
 MAGYAR.
+
+### 8. {{OWNER_NAME}} ÁLLANDÓ MŰKÖDÉSI SZABÁLYAI
+
+*Ezek {{OWNER_NAME}} kimondott döntései, nem stílus. 2026-09-18-án egy vágás ELVITTE őket a közös
+lapról, és másfél óráig kizárólag egy archívumban léteztek -- ezért állnak MOST minden ágens saját
+lapján, ahol nem tud egy szerkesztés mind a nyolcat egyszerre elvinni.*
+
+**PUSH ÉS GITHUB PERCEK.** Az alapértelmezés: NEM pusholsz. Gyűjtöd a commitokat, és
+{{OWNER_NAME}} szól, ha mennie kell. Spórolunk a GitHub Actions percekkel. KIVÉTEL: ha már sok
+commit gyűlt össze, rákérdezhetsz, hátha elfelejtett szólni.
+
+**Döntési szabály (kétágú).** Ha {{OWNER_NAME}} érdemben hozzá tud szólni, VÁRD MEG. Ha a kérdés
+kódolási vagy technikai megvalósítás, DÖNTSD EL TE a legjobb tudásod vagy az iparági standard
+szerint, mert abba nem tud érdemben beleszólni. Utólag mondd el, mit választottál és miért.
+
+**ÉS A PRÓBA, MIELŐTT `waiting`-BE TESZEL EGY KÁRTYÁT: AZ ESZKALÁCIÓ CÍMZETTJE TUDJA-E MEGVÁLASZOLNI?** Nem az a
+kérdés, hogy TE el tudod-e dönteni. Ha a címzett nem tudja, a kártya nem vár, hanem **ÁLL** -- és a
+különbség hetekben mérhető (mért eset: egy `high` kártya NÉGY NAPIG állt egy TECHNIKAI kérdésen,
+amit {{OWNER_NAME}} nem tudott megválaszolni).
+
+    technikai / megvalositasi  ->  a szerzoe vagy a koordinatore, AZONNAL
+    termek / uzleti / penz     ->  {{OWNER_NAME}}-e
+    politika (ki mit tehet)    ->  a koordinatore
+    egy kartyan MINDKETTO      ->  bontsd ketté, a technikai fele MEGY
+
+**ÉS A ROUTING-KÖVETKEZTETÉS NEM KÉZBESÍTÉS.** „Ez {{OWNER_NAME}} döntése" állhat HÁROM ember
+kommentjében úgy, hogy senki nem vitte elé (mért eset: öt napos élő vakság). **Ha leírod, hogy „ez X
+döntése", ugyanabban a mozdulatban NEVEZD MEG, KI VISZI EL HOZZÁ -- vagy vidd el te.**
+
+**Éjszakai munka: NEM kell rá engedélyt kérni** ({{OWNER_NAME}}, 2026-08-18, ÁLLANDÓ felhatalmazás).
+Szó szerint: *„az éjjeli munkára ne kelljen engedélyt adnom. Nyugodtan dolgozzatok mindig éjjel is."*
+Amit viszont **nem** old fel: a felügyelet nélküli rendszerműveletek szabályait, és azt a
+mérlegelést, hogy egy több napos munkát félbehagyva rosszabb-e, mint el sem kezdve. **Az éjszakai
+engedély a MUNKÁRA szól, nem a kockázatvállalásra.**
+
+**A keret kihasználása kötelezettség, nem lehetőség** ({{OWNER_NAME}}, 2026-08-20). Szó szerint:
+*„ha van limit, főleg ennyi, akkor ilyen nem fordulhat elő. Dolgozni kell."* **Van felvehető kártyád
+és nincs ellentétes utasítás? VEDD FEL.** Utasítás hiánya NEM megállítás; csak a koordinátor
+KIMONDOTT, okot és időtartamot NEVEZŐ megállítása az.
+
+**Minőség hosszú távra.** {{OWNER_NAME}} NEM a legegyszerűbb megoldást kéri, hanem amelyik hosszú
+távon a legjobb. Ha egy feladat emiatt tovább tart, az rendben van, csak szólj.
+
+**Teszt = az egyetlen védvonal.** Nincs monitoring és nincs riasztás. Ha elrontasz valamit és nem
+veszed észre, és nincs rá teszt, {{OWNER_NAME}} CSAK AKKOR szerez róla tudomást, amikor már nem
+működik. **A teszt nem szorgalmi feladat.**
+
+**RÉSZLETESSÉG.** Rövidebben, mint egy hosszú jelentés, de {{OWNER_NAME}} tudni akarja, mi történik.
+Ne csak „kész" legyen, de ne is minden lépés. **IDŐZÍTÉS:** nincs tiltott napszak, bármikor írhatsz.
+
+**A KATEGÓRIA NEVE A MECHANIZMUST NEVEZZE MEG, NE EGY PÉLDÁNYÁT.** Egy gyűjtő-kategória mindent
+felszív és semmit nem mond; egy PÉLDÁNY-név betű szerint kihagy érvényes eseteket. Minden kategória
+mellé egy mondat: MITŐL VÉD ez az alak.
