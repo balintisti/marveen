@@ -453,3 +453,204 @@ válasz** -- és a megnyugtató irányba tévedt volna. Ezért áll a `cd "$(git
 a recept első soraként. A `store/` gitignore-ban van, de egy `git add -f` vagy egy másik útvonal
 ezt megkerülheti, és **egy nyilvános forkból nem lehet visszavenni semmit.**
 
+
+
+<!-- kivive a kozos CLAUDE.md-bol 2026-09-18 22:03 (kartya 2028900e) -->
+### PUSH ELŐTT: CI-PERC ÉS TITOK -- KÉT KÜLÖN TENGELY
+
+**A CI-t nem az ág NEVE indítja, hanem hogy van-e rá NYITOTT PR.** A csupasz `pull_request:`
+alapértelmezése `[opened, synchronize, reopened]`, és a `synchronize` MINDEN pusholásra tüzel
+egy olyan ágra, amire nyitott PR van -- az ág nevétől függetlenül.
+
+```bash
+gh pr list --state open --head <ág>                             # Delta-CRM
+gh pr list --state open --repo Szotasz/marveen --head <ág>      # marveen UPSTREAM
+gh pr list --state open --repo balintisti/marveen --head <ág>   # marveen FORK -- ide pusholunk
+# URES = SZUKSEGES, DE NEM ELEGSEGES (lasd a masodik utat lentebb). A `--head` szurjon, NE a
+# `--limit` (51 nyitott PR volt, egy `--limit 20` HAMIS nemlegest adott)
+```
+
+**ÉS AZ ÜRES VÁLASZ ITT IS LEHET HÁLÓZATI HIBA, NEM NEMLEGES -- UGYANAZ AZ ALAK, MINT AZ
+`ls-remote`-NÁL** (dexter mérte magán 2026-09-18: a `gh pr list --head` **i/o timeoutot írt a
+stderr-re**, a kimenet ÜRES lett, és a `--head` hívás értékelődik ki előbb, tehát a nulla úgy
+olvasódott, mint valódi nemleges). **A hiba iránya a MEGNYUGTATÓ: „nincs nyitott PR, tehát a push
+ingyenes".**
+
+```bash
+gh pr list --state open --repo <o/r> --head <ág> 2>/tmp/pr.err; command grep -c . /tmp/pr.err
+# a stderr NEM lehet elnyelve; ha nem üres, a nulla NEM válasz -- futtasd újra (3x)
+# KONTROLL ugyanabban a körben: `--head main` (vagy egy ismerten nyitott PR ága) -> nem-nulla
+```
+
+*(dexter háromszor futtatta újra, mind üres, kontrollal, ami ugyanabban a körben 5-öt adott --
+tehát VALÓDI nemleges volt. De a saját szava a hordozható rész: „egy ellenőrizetlen nullát
+szállítottam volna, ha nem nézem meg a stderr-t.")*
+
+**ÉS NE TERJESZD KI VAKON A SZOMSZÉD PARANCSRA: a `gh api` HANGOSAN bukik ott, ahol a `gh pr list`
+NÉMÁN** (didi mérte 2026-09-18). Egy nem létező repóra: **rc=1**, a stdout **NEM üres** (a nyers
+`{"message":"Not Found",...}` hiba-JSON), és **a `--jq` el sem alkalmazódik** -- tehát aki
+`.ahead_by`-ra vár, objektumot kap szám helyett, nem csendes nullát. A két eset ott MÁR
+megkülönböztethető. **Egy fölösleges rituálé ugyanannyiba kerül, mint egy hiányzó ellenőrzés.**
+
+⚠ **KIMONDOTT HATÁR: ez EGY hibafajtára mérve (HTTP 404).** A HÁLÓZATI hibát (i/o timeout, amibe
+a `gh pr list` futott) didi NEM tudta előidézni, és ott a `gh api` is adhat üres stdoutot. Tehát:
+a két parancs a HTTP-hibán bizonyítottan különbözik; a TIMEOUT-on **méretlen**.
+
+**ÉS A KÉT KÖTELEZŐ MÉRÉS NEM EGYENRANGÚ -- A MÁSODIK AZ ERŐSEBB, ÉS EDDIG CSAK AZ ELSŐ KAPOTT
+VÉDELMET** (computress mérte magán 2026-09-18, négy saját push visszamenőleges ellenőrzésével):
+
+    `gh pr list` a push ELŐTT ..... **JÓSLAT** -- „indulna-e CI?"
+    `gh run list` a push UTÁN ..... **MEGFIGYELÉS** -- „indult-e CI?"
+
+A megfigyelés akkor is megfogja a hamis nullát, ha a jóslat elbukott -- **de csak akkor, ha Ő maga
+nem hamis nulla.** Ugyanaz a hibamód, tehát **ugyanaz a két kikötés kell rá: a stderr NEM lehet
+elnyelve, ÉS kontroll ugyanabban a körben** (a `main` nem-nullát ad). A kontroll már előírás volt
+fent; a stderr nem. **Enélkül épp a gyengébbik mérést védjük.**
+
+*(computress négy pusht szállított ma „0 CI-perc" állítással, és a stderr-t egyszer sem nézte meg.
+Újramérve mind a négy IGAZ volt -- de a saját szava a hordozható rész: „egy négyszer megismételt
+ellenőrizetlen nulla nem lesz ellenőrzötté attól, hogy négyszer bejött.")*
+
+**ES A NYITOTT PR CSAK AZ EGYIK UT -- A MASODIKHOZ NEM KELL PR SEMMILYEN ALAKBAN** (dexter merte
+2026-09-17, marveen hianyos premisszajat egeszitve ki; marveen mondta ki, hogy „nincs nyitott PR,
+tehat ingyenes", es az fele igazsag volt).
+
+    `pull_request:` .... kell hozza NYITOTT PR   -> ezt meri a `gh pr list --head`
+    **`push:`** ........ NEM kell hozza PR, csak hogy az AGNEV illeszkedjen a listajara
+
+**Tehat az ures `gh pr list` SZUKSEGES, de NEM ELEGSEGES.** A masodik utat a workflow-fajlokban kell
+megnezni, mielott pusholsz:
+
+```bash
+# MINDEN workflow `on:`-blokkja -- OLVASD EL, ne regexeld (lasd alább, miert)
+gh api "repos/<owner>/<repo>/contents/.github/workflows?ref=main" --jq '.[].name'
+# es a push UTAN, mert a joslat nem meres:
+gh run list --repo <owner>/<repo> --branch <ag> --limit 5     # 0 futas = tenyleg ingyenes volt
+# KONTROLL, hogy a lekerdezes tud NEM-NULLAT mondani: ugyanez `main`-re -> nem-nulla
+```
+
+**MERVE A DELTA-CRM-EN (2026-09-17), es ez ALLAPOT, nem tulajdonsag:** `ci.yml` -> `push:
+branches: [main, develop]`; `ci-timing-probe.yml` -> `[chore/ci-timing-probe]`; a masik het
+workflow-ban NINCS push-trigger. Vagyis MA egy `fix/*` ag pusholasa mindket uton tiszta -- de ezt
+egy uj workflow vagy egy bovitett branch-lista BARMIKOR megvaltoztatja, es semmi nem szol.
+
+**ES A MERO, AMI ELOSZOR ELTORT, A RIASZTO IRANYBA -- EZ A HORDOZHATO RESZ:** dexter eloszor
+REGEXSZEL szedte ki az `on:` blokkot, es a ket push-triggeres fajlra **URES branch-listat** irt ki.
+Egy ures branch-lista viszont ugy olvasodik, hogy **„nincs korlatozas, tehat MINDEN agon tuzel"** --
+azaz egy hamis ~70 perces riasztas egy PRIVAT repon. A javitas nem a regex megjavitasa volt, hanem
+hogy ELOLVASTA a ket fajlt.
+
+> **Egy URES kinyert ertek, aminak van HIHETO JELENTESE, veszelyesebb annal, amelyik tortenek
+> latszik.** A hianyzo ertek itt nem „nem tudom"-ra fordult, hanem egy KONKRET, riaszto allitasra --
+> es a konfiguracio-parszolasban az ures majdnem mindig ilyen (ures lista = nincs szures = minden).
+
+**A KÖLTSÉG viszont csak az egyik repóban van:** `balintisti/Delta-CRM` **PRIVÁT** (~70
+számlázott perc futásonként), a két marveen repó **PUBLIKUS**, ott standard runneren ingyenes.
+A mechanizmus közös, a számla nem -- a „ne pusholj" szabály a Delta-CRM-re szól.
+
+**ÉS EGY SZABÁLY INDOKA UGYANÚGY HATÓKÖRÖS, MINT EGY SZÁM -- ÉS UGYANÚGY HAMISSÁ VÁLIK, HA A
+HATÓKÖR LEMARAD RÓLA.** Itt a MECHANIZMUS közös mindkét repóban, a SZÁMLA nem. Egy átvitt „ne
+pusholj" tehát egy HELYES mechanizmust köt egy indokhoz, ami a másik repóban nem áll fenn -- és
+ez a legkézenfekvőbb következtetés a két tényből, tehát valaki újra le fogja vezetni.
+*(Mért eset: marveen pontosan így terjesztette ki a tiltást MINDKÉT repóra „ugyanaz a
+mechanizmus" alapon, és tévedett. A mechanizmus tényleg ugyanaz; a számla nem.)*
+
+**A TITOK-ELLENŐRZÉS KÉT TENGELY, ÉS EGYIK SEM VÁLTJA KI A MÁSIKAT:**
+
+```bash
+npx tsx scripts/secret-gate.ts --range origin/main..<ág>   # TARTALOM -- MARVEEN-repo szkript!
+```
+
+A kapu fail-closed, és kimondja: *„NOT SCANNED, therefore NOT CLEARED"*. **A korlátja:** a
+fájlNEVEKET a diffből veszi, a TARTALMAT a MUNKAFÁBÓL, tehát egy ki nem csekkolt ágra
+`NOT SCANNED`-et ad.
+
+**⚠ ÉS A DELTA-CRM-RŐL ITT 2026-09-14-IG AZ ÁLLT, HOGY NINCS KAPUJA. HAMIS, ÉS ABBA AZ IRÁNYBA,
+AHOL VALAKI KIHAGY EGY VALÓDIT** (dexter mérte 2026-09-14 01:0x, marveen újramérte `origin/main`-ről).
+A Delta-CRM-nek VAN titok-kapuja, **2026-09-11 05:19 óta** (`aa1643e6f`), és két fájlt hoz:
+`scripts/secret-gate.py` + `scripts/hooks/pre-push.d/50-secret-gate`. **PYTHON, nem `npx tsx`**, tehát
+a marveen-recept átvitele itt tényleg elhasal -- a RÉGI szakasz IRÁNYA jó volt, a KÖVETKEZTETÉSE nem.
+
+**ÉS A MÉRŐ VOLT A HIBÁS, NEM CSAK AZ ADAT -- ezért nem elég a számot javítani.** A régi alak
+(`git ls-files | grep secret-gate`) a KICSEKKOLT indexet olvassa, nem azt, ami a törzsön van, tehát
+egy elmaradt munkafában TOVÁBBRA IS nullát ad. Mérve ma, ugyanabban a percben:
+
+    /Users/isti/batch-trial3-ban:  `git ls-files | grep -ci secret-gate`  ->  **0**
+    ugyanott, ugyanabban a fában:  `git cat-file -e origin/main:scripts/secret-gate.py`  ->  **rc=0**
+    a magyarazat: az a munkafa **388 committal** all `origin/main` mogott (HEAD 09-04, a kapu 09-11)
+    KONTROLL: `origin/main:scripts/secret-gate.ts` -> NINCS (tehat a mero tud nemet is mondani),
+              `origin/main:package.json` -> rc=0
+
+```bash
+# LETEZIK-E: a TORZSET kerdezd, ne a munkafa indexet
+git cat-file -e origin/main:scripts/secret-gate.py; echo $?     # 0 = van kapu
+# HASZNALAT (Delta-CRM), es a KONTROLL mellette:
+python3 scripts/secret-gate.py --range <base>..<head>
+python3 scripts/secret-gate.py --self-test        # 72 ellenorzes, PASS = a kapu maga mukodik
+```
+
+*(A `--range` a tartalmat B-bol olvassa; van meg `--staged`, `--all` es `--review-allowlist`.)*
+
+**⚠ ÉS A MARVEEN-KAPU FENTI KORLÁTJA A DELTA-CRM-RE **NEM** ÉRVÉNYES -- EZ A MÁSODIK HELYESBÍTÉS
+UGYANAZON AZ OBJEKTUMON** (dexter mérte 2026-09-17, marveen forrásból igazolta). A 09-14-i javítás
+azt tisztázta, hogy VAN kapuja és PYTHON; ez eggyel mélyebb, és ez az, ami a napi munkát érinti.
+
+    marveen `secret-gate.ts` .... a neveket a DIFFBOL, a TARTALMAT a MUNKAFABOL -> egy ki nem
+                                  csekkolt agra `NOT SCANNED`
+    Delta-CRM `secret-gate.py` .. **BLOBOT olvas** (`git show {rev}:{path}`, :327), es a sajat
+                                  docblockja kimondja: *„this gate can scan any ref, checked out
+                                  or not"*
+
+**Vagyis a „csekkold ki az agat, kulonben nem szkennel" szabaly atvitele ide HAMIS, es munkat gyart
+egy nem letezo korlat korul.** Ugyanaz a NEV, mas viselkedes -- es a lap mar egyszer tevedett ezen
+az objektumon, az ellenkezo iranyba.
+
+**ÉS A HOOK EGY MÁSIK MENNYISÉGET OLD FEL, MINT AMIT PUSHOLSZ** (ugyanez a mérés): a
+`pre-push.d/50-secret-gate` **`ROOT="$(git rev-parse --show-toplevel)"`** alakban dolgozik -- vagyis
+AHONNAN ÁLLSZ, nem AMIT KÜLDESZ.
+
+    a fo checkoutbol pusholva ....... a kapu-fajl MEGVAN -> atmegy, akkor is, ha az AGON nincs ott
+    az AG SAJAT worktree-jebol ...... `NOT SCANNED, therefore NOT CLEARED` -> megtagadva
+
+**MÉRT ESET: dexter agan (es a3e17030-on) a `secret-gate.py` HIANYZOTT, es mind a harom mai pushja
+ATMENT** -- mert a fo checkoutbol pusholt. Kontroll: `origin/main`-en a fajl jelen van.
+
+    a `29f0cd5c`-n leirt elavulasi csapda tehat VALODI, de **FELTETELES**: a HELYTOL fugg, ahonnan
+    pusholsz, nem az agtol. Aki a fo checkoutbol dolgozik, SOSEM talalkozik vele -- es epp ezert
+    nem is javitja.
+
+**A SZKENNELÉS MAGA ETTŐL FÜGGETLENÜL HELYES VOLT:** a kapu a REFET olvasta, tehát a 15 fájl az ÁG
+tartalma volt, nem a fő checkouté. **A `29f0cd5c` üzenet-hibája CSAK a kapu-fájl hiányára áll, nem a
+szkennelés eredményére.** A kettőt külön kell tartani, különben egy jó szkennelést vonunk kétségbe.
+
+A második tengely a FÁJLNÉV, és a kapu három detektora közül EGYIK SEM fájlnév-alapú a titkokra:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"     # KOTELEZO: a ls-tree az AKTUALIS konyvtarra szukit
+# ES EZ A `cd` GYENGE ALAK -- a git MINDEN pathspec-es parancsa a CWD-hez old fel, es ha semmire
+# nem illeszkedik, URES kimenetet ad rc=0-val. Aki mashonnan hivja, a CSENDET olvassa valasznak.
+# A MECHANIKUS alak, ami barhonnan mukodik (didi merte 2026-09-17), es a `cd`-vel ellentetben HANGOS:
+git ls-files --error-unmatch <pathspec> >/dev/null || { echo "ROSSZ UT -- ALLJ"; exit 1; }
+# MERVE UGYANAZON A NAPON, KET AGENSNEL, KET PARANCSON, MINDKETTO FAIL-OPEN:
+#   marveen  `git diff --stat origin/main -- prisma/schema.prisma` a repo gyokerebol -> URES
+#            ("a sema egyezik"-nek olvasva), a helyes utrol 106 sor
+#   dexter   `git ls-tree` repo-gyoker pathspeckel `backend/api`-bol -> 0 ("nincs precedens"),
+#            a gyokerbol UGYANARRA a kerdesre 3
+# ES EZ A SOR MAR ITT ALLT, PONTOSAN AZ `ls-tree`-RE -- egyikuknel sem tuzelt. A `cd` egy
+# ELOFELTETEL, amit el lehet felejteni; a fenti kapu MEGALL.
+git ls-tree -r --name-only <ág> | grep -iE \
+  '(^|/)\.env($|\.)|service-account\.json|tokens\.json|\.pem$|id_rsa|(^|/)\.(bash|zsh|psql)_history$|docker/config\.json|(^|/)\.netrc$|(^|/)\.npmrc$' \
+  | grep -vE '\.env\.(example|sample|template)$'
+```
+
+**A FELTÉTEL NEM AZ ÜRES KIMENET, HANEM A NULLA KÜLÖNBSÉG AZ `origin/main`-HEZ KÉPEST.** A repó
+három dotfile-t KÖVET az Initial commit óta, tehát a minta MINDIG ad találatot -- egy őr, ami
+minden alkalommal riaszt, pár kör után zaj. A helyes kérdés: **az ÉN ÁGAM hozzátesz-e?**
+Fájlonként vesd össze a blob-hasht az `origin/main`-ével; `AZONOS` = nulla kitettség, minden
+`BLOKKOLO` (új vagy megváltozott) blokkol. **És pozitív kontroll nélkül ez sem ér semmit:** egy
+fájl, amit TÉNYLEG átírtál, adjon `BLOKKOLO`-t -- különben egy elrontott hash-összevetés csupa
+`AZONOS`-t mond, és a csend megint jelent mindent és semmit.
+
+*(A `.env` horgony `($|\.)`-re bővült: a szűkebb `\.env$` alak hét env-fájlból ötöt nem látott.
+A `.env.example` kivétel KÜLÖN lépés, mert `grep -E`-ben nincs negatív lookahead -- és a bővítés
+meg a kivétel EGY CSOMAG: csak az egyiket bevezetni rosszabb, mint egyiket sem.)*

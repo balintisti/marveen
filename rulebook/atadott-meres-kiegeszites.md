@@ -198,3 +198,109 @@ megváltoztatott.**
 *(A teljes eset-anyag, a visszavonásokkal és a kontrollokkal: `rulebook/atadott-meres.md`.
 81 309 karakter volt itt.)*
 
+
+
+<!-- kivive a kozos CLAUDE.md-bol 2026-09-18 22:07 (kartya 2028900e) -->
+### MIÉRT TÉR EL KÉT SZÁM -- ÉS CSAK AZ ELSŐ KETTŐT SZOKTUK KERESNI
+*(A fejléc szándékosan nem mond számot: a lista nőtt már egyszer. Számold meg a sorokat.)*
+
+1. **MÁS A NEVEZŐ** (más populáció)
+2. **MÁS A MÉRŐ** (más definíció)
+3. **MÁS A FA** -- azonos definíció, azonos egység, MÁSIK COMMIT. Ez a legkönnyebben átsikló
+   változó: mindkét szám helyes a saját fáján, és semmi nem hívja fel rá a figyelmet.
+4. **VÉLETLENÜL EGYEZNEK** -- és ez a rosszabb, mert nem szül vitát. Két szám ugyanazzal az
+   értékkel, MÁS EGYSÉGBEN (fájl kontra hívási hely, sor kontra tétel), megerősítésnek látszik.
+   **A próba: ha valaki más ugyanezt a számot kapja, abból következik-e, hogy ugyanazt MÉRTE?**
+5. **TÖLCSÉR-ÁLLOMÁST OLVASUNK VÉGEREDMÉNYNEK** (`191 jelölt -> 47 gyanús -> 0 élő`): egy ÁLLOMÁS
+   soha nem adódik hozzá semmihez, benne van az előtte állóban.
+6. **A POPULÁCIÓBAN KÉT KÜLÖNBÖZŐ ELŐÁLLÍTÓ VAN: GÉP ÉS EMBER** -- és összevonva a GÉPET méred,
+   miközben az EMBERRŐL állítasz. **A hiba iránya a MEGNYUGTATÓ: 100%-ot jelent.**
+7. **A JAVÍTÁS MEGNÖVELI A NEVEZŐT, ÉS EMIATT A HIBASZÁM IS NŐ.** Egy teszt-suite, ami BE SEM
+   TÖLTŐDIK, **NULLA tesztet ad a nevezőhöz** -- tehát a bukó TESZTEK száma nem alulméri a
+   defektust, hanem ELREJTI:
+
+       buko SUITE ..... 11 -> 3        <- a javitas FELREERTHETETLEN
+       buko TESZT ..... 16 -> **20**   <- ugyanaz a javitas REGRESSZIONAK latszik
+       KONTROLL: 546 suite mindket futasban, UJ buko suite: nincs
+
+   **Aki bukó TESZT-számra kapuz, egy MŰKÖDŐ javítást olvas regressziónak.** Általánosan: ha a
+   vizsgált defektus maga csökkenti a populációt, **arra kell kapuzni, ami a defektustól
+   FÜGGETLENÜL számolható** (itt: a suite-ok, nem a tesztek).
+8. **EGY CSONKOLT NÉZETET OLVASUNK POPULÁCIÓNAK** -- `head -5`, `--limit 100`, egy lista első
+   képernyője. A szám HELYES arról, amit visszaadtak, és HAMIS arról, amit kérdeztél.
+   **A PRÓBA EGY SOR, ÉS INGYEN VAN: ha a visszakapott darabszám PONTOSAN EGYENLŐ a limittel,
+   csonkolt.** (Mérve kétszer egy éjjel; mindkettő a KÉNYELMES irányba tévedt -- a kisebb szám
+   kevesebb munkát ígér.)
+
+**A 6. DETEKTÁLÁSI MÓDJA A LEGHASZNÁLHATÓBB RÉSZE, mert nem ítélet kell hozzá, hanem egy oszlop: AZ
+ÉRTÉK PONTOSSÁGA MEGMONDJA, KI ÁLLÍTOTTA ELŐ.** MÁSODPERC-pontos fejléc = GÉPI bélyeg (senki nem
+gépeli be ezerszer); PERC-pontos = ott a szerző VÁLASZTOTT, és CSAK ez hordoz jelet. Összevonva
+~100% „pontosság" jön ki mindenkire; szétválasztva a valódi, EMBERI szám **94%**.
+
+**ÉS EBBŐL KÖVETKEZIK A „CITÁLTSÁG NEM OLVASÁS" POZITÍV FELE:** ahol egy VISELKEDÉSI törvény
+betartása MÉRHETŐ NYOMOT hagy (itt egy ELŐJELET), ott a megfelelés KÖZVETLENÜL mérhető, és nem kell
+idézettséggel közelíteni. Ahol nem hagy, ott a válasz **NEM MÉRHETŐ, nem nulla.**
+
+**HA KÉT MÉRÉS ELTÉR, A NÉZETELTÉRÉS MARADJON NYITVA**, amíg valaki meg nem méri, MELYIK POPULÁCIÓ.
+Egy magyarázat, ami mindkét számot igazzá teszi, nem feloldás -- és a GYÁRTOTT EGYETÉRTÉS eltünteti
+a jelet, ami épp a hibát fogta volna meg. **A nézeteltérés mérőeszköz.**
+
+**ÉS A PRÓBA, AMI EZT MECHANIKUSSÁ TESZI: EGY FELAJÁNLOTT MAGYARÁZAT TAGSÁGÁT SZÁMOLD MEG, MIELŐTT
+KIMONDOD** (deeper mérte magán 2026-09-17, marveen eltérésén; és a második futás az övé volt).
+
+Két cenzus ugyanarról a tábláról, két perc különbséggel: **469** kontra **467** üres leírás, azonos
+872-es populáción. deeper magyarázatot ajánlott -- *„az én üresség-tesztem whitespace-t vág"* --,
+ami MINDKÉT számot igazzá tette volna. Aztán lefuttatta rá azt, amit előbb kellett volna:
+
+    872 elo | 467 ures (strip utan) | 405-nek VAN leirasa
+    NEM ures, de csak-whitespace:  **0**      <- a felajanlott mechanizmus TAGSAGA
+
+**Nulla. A magyarázatnak egyetlen tagja sem volt.** A valódi ok a MÉRŐ volt: marveen a két futás
+között írt le két leírást (469 - 2 = 467, és a két kártya pontosan az a kettő).
+
+> **Egy magyarázat, aminek nincs megszámolt tagsága, nem magyarázat, hanem javaslat.** És a kérdés
+> nem az, hogy HIHETŐ-e, hanem hogy **HÁNY ESETET FED -- és ha nullát, akkor semmit nem magyaráz.**
+
+**ÉS A KÖLTSÉG NEM A SZÁM VOLT: mindkét mérő HELYESEN mért.** A költség az lett volna, hogy egy
+hihető magyarázat LEZÁRJA a kérdést anélkül, hogy megválaszolná -- épp azt a jelet fedve el, amelyik
+mindjárt megmagyarázta volna. *(deeper szava: „a jel, ami mindjárt megmagyarázta volna a dolgot,
+pont az volt, amit eltakartam.")*
+
+**MIÉRT KELL EZ A SOR, HA A LAP MÁR ELŐÍRJA, HOGY AZ OKHOZ BIZONYÍTÉK JÁR:** az a szabály ÍRÁSKOR
+tüzel. Ez OLVASÁSKOR, abban a pillanatban, amikor egy eltérésre magyarázatot ajánlasz -- és nem
+ítéletet kíván, hanem egy DARABSZÁMOT.
+
+**ÉS A GYÁRTOTT EGYETÉRTÉSNEK VAN EGY TERMÉSZETES IKRE, AMIT SENKI NEM GYÁRT, ÉS ÉPP EZÉRT
+VESZÉLYESEBB: KÉT FÜGGETLEN MÉRŐ, EGY KÖZÖS MŰSZER** (didi és dexter, egymástól függetlenül,
+2026-09-17).
+
+    dexter ...... `tsc` -> **21 hiba**, es „21 = alapvonal"-kent idezte egesz nap, a PR torzseben is
+    didi ........ fuggetlenul ujramerte -> **21 hiba**, es MEGEROSITESKENT irta a kartyara
+    a valosag ... a 21 nem a FA tulajdonsaga volt, hanem egy HAT NAPOS, MEGOSZTOTT Prisma-kliense
+                  ugyanabban a faban `prisma generate` utan: **0 hiba, rc=0**
+
+**A FÜGGETLENSÉG KÖZTÜK ÁLLT FENN, NEM A MÉRÉSBEN.** Két ember, két külön munkamenet, ugyanaz a
+romlott műszer -- és az eredmény bájtra ugyanaz, tehát pontosan úgy olvasódik, mint a legerősebb
+bizonyíték, amit ismerünk.
+
+> **A megerősítés FÜGGETLEN MŰSZERT kíván, nem független megfigyelőt.**
+> A kérdés nem az, hogy „ketten mérték-e", hanem hogy **UGYANAZT a szerszámot, fát, klienst,
+> cache-t vagy fixture-t használták-e.**
+
+**ÉS UGYANEZ EGY MÁSODIK ARCON, UGYANAZ A NAP, UGYANAZ AZ OK:** a „10 bukó suite / 2 bukó teszt"
+alapvonal ÉS a „21 tsc hiba" **KÉT FÜGGETLENNEK LÁTSZÓ JEL VOLT, AMIK EGYETÉRTETTEK** -- és egy
+okuk volt. dexter mondata: *„egy ok, két arc"*. Két egybehangzó tanú meggyőzőbb egynél; itt egy
+tanú volt, kétszer meghallgatva.
+
+*(És ami ebből a gyakorlatra következik: amikor egy számot MÁSODSZOR mérsz meg, a kérdés nem
+„ugyanazt kapom-e", hanem „MÁS ÚTON kapom-e". Ha a második mérés ugyanazt a generált klienst,
+ugyanazt a `node_modules`-t vagy ugyanazt a cache-t olvassa, akkor nem meres, hanem ismetles.)*
+
+**A KATEGÓRIA NEVE A MECHANIZMUST NEVEZZE MEG, NE EGY PÉLDÁNYÁT.** Egy gyűjtő-kategória mindent
+felszív és semmit nem mond; egy PÉLDÁNY-név betű szerint kihagy érvényes eseteket. Minden kategória
+mellé egy mondat: MITŐL VÉD ez az alak.
+
+**EGY SZABÁLY, AMI ÍRÁSKOR TÜZEL, CSAK A HANYAGON SEGÍT. AMI OLVASÁSKOR, AZ A GONDOSAT IS
+MEGFOGJA.** Mért eset: három ágens futott ugyanabba a csapdába egy éjszakán, és a szabály MÁR LE
+VOLT ÍRVA, névvel. Mindhárman figyeltek; írás közben egyikük sem hibázott. Ezért: amikor egy
+leletből szabályt írsz, kérdezd meg, MIKOR tüzel -- és keress hozzá egy olcsó, olvasáskori próbát.

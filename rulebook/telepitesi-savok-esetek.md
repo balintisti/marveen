@@ -343,3 +343,97 @@ zöld, a commit létrejön -- a piros törzs pedig addig áll, amíg valaki más
 
 **Nem kérünk visszamenőleges javítást** a tizenegy kártyán: a nagy részük a build után úgyis
 lezárul. A konvenció a KÖVETKEZŐ kötegnél számít.
+
+
+<!-- kivive a kozos CLAUDE.md-bol 2026-09-18 22:06 (kartya 2028900e) -->
+### TÖBB TELEPÍTÉSI SÁV VAN, MINT AHÁNYRA SZÁMÍTASZ -- ÉS A „KÉSZ" MINDEGYIKBEN MÁST JELENT
+(kártya `576a4b21`.) *A cím szándékosan nem mond számot: számold meg a sorokat.*
+
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['build']['builtCommit']['commit'])")
+| sáv | mikor hat | mérve |
+|---|---|---|
+| `scripts/` | a beolvasztással **AZONNAL** | **18** `dist/` modul futásidőben a munkafát hívja (a korábbi „nyolc" elavult volt) |
+| `web/` | a beolvasztással **AZONNAL** | `src/web.ts:111`: `WEB_DIR = join(PROJECT_ROOT, 'web')`, és egyedi jelölővel élesben igazolva |
+| `src/` | csak `npm run build` + újraindítás után | a szolgáltatás a `dist/`-ből megy |
+| `*.plist` / launchd | csak KÜLÖN telepítéssel (`launchctl`) | a repó `scripts/*.plist.template` fájlokat követ (8 db), a TELEPÍTETT példány a `~/Library/LaunchAgents/` alatt él |
+| `.claude/settings.json` hookjai | **ÁGENSENKÉNTI MÁSOLÁSSAL, a következő provisioningkor** (nem rétegződés, és nem is „sehogy") | minden ágens SAJÁT `CLAUDE_CONFIG_DIR`-rel fut; a `provisionIsolatedConfigDir` a MEGOSZTOTT settingset olvassa BE ALAPNAK, és az ágens régi settingséből csak a MÉG NEM létező kulcsokat húzza át (`!(key in settings)`). **MÉG NEM MÉRT: lefut-e a provisioning MINDEN ágens-indulásnál, vagy csak bizonyos utakon.** |
+| `.git/hooks/` | csak `bash scripts/sync-hooks.sh` után | a telepítő MÁSOLJA a tartalmat, tehát DRIFTELHET |
+
+**A HOOK-SOR HÁROMSZOR ÁLLT MÁSKÉPP, ÉS EGYIK ÁLLÍTÁS SEM VOLT HAMIS** -- mindhárom EGY-EGY
+RÉTEGGEL mért mélyebbre (a viselkedést, a konfig-dirt, majd a kódot), és egyik sem volt hamis a
+SAJÁT rétegében. Ami változott, az nem az igazság, hanem hogy MEDDIG mentünk le.
+
+**A „TELEPÍTVE VAN-E" KÉRDÉS CSAK AZ EGYIK HOOK-SÁVRA ÉRTELMES:**
+
+    git-hook (`.git/hooks/`) ....... a telepito MASOLJA -> **DRIFT**: egy regi, telepitett hook
+                                     ugyanolyan nema, mint egy hianyzo, csak megtevesztobb
+    Claude Code hook (`scripts/hooks/`) . a settings UTVONALLAL hivatkozik a munkafa fajljara
+                                     -> nem tud driftelni, DE minden szerkesztes AZONNAL eles
+
+**ÉS A `.git/hooks` MEGOSZTOTT A LINKELT WORKTREE-KKEL** (mérve valódi pusholással): egy
+worktree-ből indított push a FŐ CHECKOUT hookját futtatja, a WORKTREE cwd-jével.
+
+    egy telepites  ->  MINDEN agens worktree-jere hat, kulon telepites nelkul
+    kockazatnal viszont a robbanasi sugar a TELJES flotta
+
+**ÉS EBBŐL SORREND-SZABÁLY KÖVETKEZIK: HOOK-TELEPÍTÉS SOHA NE ÁLLJON KÖZVETLENÜL AZ ELÉ AZ ESEMÉNY
+ELÉ, AMIT VÉDENI HIVATOTT.** Egy `pre-push` hook újratelepítése a hét EGYETLEN push-eseménye ELŐTT
+azt jelenti, hogy egy rossz telepítés pontosan azt blokkolja, amiért az egész köteg van -- és úgy
+nézne ki, mintha a KÖTEG lenne rossz, nem a hook. **A köteg megy fel ELŐSZÖR**, utána a telepítés,
+és annak ellenőrzése scratch repóval + HELYI bare remote-tal.
+
+Ami a hook MEGÍRÁSÁRA következik: **ami a worktree cwd-jéből olvas, az az ÁGENS ágát látja**, nem a
+telepítési ágat -- a fő checkoutban tesztelve viszont helyesnek látszik. **A helyes alak HORGONY
+NÉLKÜLI** (a `--show-toplevel`-horgonyos alak MÉRVE ROSSZ: alkönyvtárból nem létező utat ad):
+
+```bash
+COMMON="$(cd "$(git rev-parse --git-common-dir)" && pwd)"    # nem kell horgony
+cat "$COMMON/HEAD"                                            # a FO worktree aga, barhonnan
+```
+
+**ÉS EGY ŐR-HALMAZNAK IS LEHET LYUKA, ANÉLKÜL HOGY BÁRMELYIK ŐR HIBÁS LENNE** -- és a lyuk helye
+előre megjósolható. Három identitás-őr futott, mind HELYES, mind ZÖLD, és öt szivárgás állt a fából.
+Az ok: **mindhárom PER-FELADAT, és mindegyiket a SAJÁT feladatával EGYÜTT írták.**
+
+    a halmaz igy feladatonkent EGY orrel no  ->  es SOHA nem no egy ORREL AZ OSZTALYRA
+    egy uj feladat or nelkul erkezik         ->  es minden meglevo or ZOLD marad
+
+**A PRÓBA:** amikor egy őrt a védett dologgal EGYÜTT írsz, kérdezd meg, hogy a KÖVETKEZŐ ilyen dolog
+hozza-e majd a saját őrét. Ha a válasz „csak ha valaki emlékszik rá", akkor az őr az OSZTÁLY
+szintjére való.
+
+**A 18-as szám parancsa** (ha ide szám kerül, jöjjön vele a parancs; a `__tests__` KIMARAD):
+
+```bash
+grep -rlE "scripts/[a-z0-9_-]+\.(sh|py|ts|mjs)" dist/ | grep -v '__tests__' | wc -l   # 18 (KONKRET hivas)
+grep -rl  "scripts/" dist/ | grep -v '__tests__' | wc -l                              # 23 (barmilyen emlites)
+```
+
+A két szám KÉT KÉRDÉSRE válaszol; a különbség nem hiba, hanem a populáció.
+
+**ÉS A `scripts/` FEJLÉCEI DÖNTÉSEKET HORDOZNAK** -- a kereshető listájuk GENERÁLT:
+`docs/scripts-decisions.md`; újragenerálás `python3 scripts/decision-index.py`, elavulás-ellenőrzés
+`--check` (exit 3). Kártya: `72edf070`.
+
+**A TELEPÍTÉSI ÁLLAPOT IS MÉRÉS, NEM PREMISSZA.** Egy `dist/…js` létezése nem bizonyítja, hogy a futó
+folyamat betöltötte. *(Az ára megvolt: egy ügynök többször leírta, hogy „nincs telepítve" -- olyan
+munkára, ami a `web/` sávon MÁR ÉLESBEN FUTOTT. Nem hanyagság: két sávval számolt, mert csak kettő
+volt leírva. **Egy hiányzó sor a dokumentációban ugyanúgy hamis állítást termel, mint egy hibás
+mérés.**)*
+
+**ÉS A `launchctl list | grep -c` HAMIS ZÖLDET AD EGY ELFOGLALT LABELRE:** a `grep -c` a label
+JELENLÉTÉT számolja, és a label ott van akkor is, ha egy TÖRÖLT temp-könyvtárból származó plist
+foglalja el. A három mérő közül csak a harmadik diszkriminál:
+
+    grep -c <label> ............... csak JELENLET -> egy elfoglalt labelre EGESZSEGESET mond
+    a STATUSZ oszlop .............. JEL, de nem diszkriminator: egy buko LEGITIM unit is `2`
+    launchctl print ... 'path =' .. **EZ dont**
+
+```bash
+# a helyes ellenőrzés, kontrollal együtt (a kontroll a lényeg: a mérő tudjon IGENT is mondani)
+for L in $(launchctl list | awk '/com\.(marveen|testbot)/{print $3}'); do
+  P=$(launchctl print "gui/$(id -u)/$L" 2>/dev/null | grep -m1 'path =' | sed 's/.*path = //')
+  case "$P" in /Users/*/Library/LaunchAgents/*) echo "OK   $L";; *) echo "TEMP $L -- $P";; esac
+done
+# MÉRVE 2026-09-05: 8 betöltött unitból 6 OK, 2 TEMP -- tehát a mérő tud egészségeset mondani
+```

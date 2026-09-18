@@ -542,3 +542,166 @@ SZÁM: a sorszám mellé a karakterszám. Az zárja be szerkezetileg, ahelyett h
 *(A teljes mérés a snapshot-tár parancsaival: kártya `b6aa747b`, komment 5583. A második szám saját
 kártyát kapott: `83cac1ed` -- lezárási feltétellel, mert enélkül az sem tudná megmondani a saját
 állapotát.)*
+
+
+<!-- kivive a kozos CLAUDE.md-bol 2026-09-18 22:13 (kartya 2028900e) -->
+## A JAVÍTÁS UTÁN AZ EREDETI KERESŐ FUSSON LE ÚJRA, NE EGY SZŰKEBB TESZT (didi, 2026-08-27)
+
+**A szabály:** amikor egy leletet kijavítasz, futtasd le ÚJRA azt a mérést, amelyik a leletet
+MEGTALÁLTA. Nem a javításra írt tesztet -- azt is, de az más kérdésre válaszol. Az eredeti keresőt.
+
+**Miért, és miért nem figyelem kérdése.** Egy nap alatt négyszer fordult elő ugyanaz
+(`1ee2212a` hat néma mutáció a három javított gomb mellett, `f4c6386d` a fix toast-cím a javított
+üzenet mellett, `becd6728` a néma `autoFilter` a javított `getColumn` 23 sorral alatta, és
+`eb12e071`). Mind a négyben a helyes indoklás OTT ÁLLT a fájlban, ugyanattól a szerzőtől,
+ugyanabban a commitban. Tehát nem tudáshiány.
+
+A mechanizmus: **a javítás a BEJELENTETT tünetre megy, és a fájl többi része nem kerül újra
+olvasásra** -- mert a kártya lezárult a fejben, mielőtt a fájl végigolvasásra került volna.
+
+**A négyből EGYBEN vette észre a szerző maga**, és a különbség mérhető: ott a szerző
+ÚJRAFUTTATTA a keresőt a javítás után. Saját szavaival: *"ugyanezt a hibát ELŐSZÖR a persist
+fájlban javítottam, és a második csak azután derült ki, hogy ÚJRA LEFUTTATTAM."*
+
+**Az elv ismerete és az elv MÁSODIK alkalmazása két külön lépés.** Az első a javítás; a második
+az, hogy megnézed, hány helyen áll még ugyanaz. Egy szűkebb teszt a másodikra soha nem válaszol,
+mert épp arra a helyre néz, amit már megjavítottál.
+
+**ÉS A POPULÁCIÓ NEM MINDIG A SAJÁT FÁJLOD: HA A DEFEKTUS EGY KÖZÖS FÁJL ÉRTELMEZÉSÉBEN VAN,
+A POPULÁCIÓ ANNAK MINDEN OLVASÓJA** (deeper mérte 2026-09-17, két olvasón, egy könyvtárban).
+
+A `~/.deeper-crm/cookies.json` EGYSOROS JSON; két szkript Netscape-alakként bontotta. Az egyiket
+reggel javította, a MÁSIK javítatlan maradt, és 401-et adott minden híváson. A saját szavával:
+**a javítás az ELŐFORDULÁSRA ment, nem a FÁJLRA.**
+
+    a szokásos kérdés ... „hány helyen áll még ugyanez EBBEN a fájlban?"
+    a hiányzó kérdés .... **„ki MÁS olvassa ugyanezt a fájlt?"**  ->  `grep -rl '<a fájl neve>'`
+
+**A fájl FORMÁTUMA szerződés az író és MINDEN olvasó között, nem dokumentáció.** *(Ami itt
+megvédett: a szkript fail-closed volt -- `NEM MERT`, exit 1 --, tehát nem hamis nullát adott.
+Egy néma olvasó ugyanezt a defektust 0 TALÁLATKÉNT szállítja, és az elemzésnek látszik.)*
+
+**ÉS A HARMADIK ALKALMAZÁS, AMI MA KIDERÜLT: A JAVÍTÁS TÚLÉLHET EGY TESTVÉR-ÚTON -- ÉS A MÉRŐ
+KIMENETE NEM BIZONYÍTÉK A MÉRŐRŐL** (friday mérte, marveen hitte el a rossz számot, 2026-08-29).
+
+A `38221eef` javította a méret-őr karakter-számlálását: `wc -c` (bájt) helyett igazi karakter.
+Beolvasztás után lefuttattam a saját prózámon, kaptam egy számot, és **azt írtam le
+bizonyítékként, hogy a bájt-hiba halott.**
+
+    a `--check` út aznap:  `264 sor / 15195 karakter`
+    a fájl valódi hossza:  **14363 karakter**
+    a 15195 az a BÁJT-szám -- vagyis a szám, amit bizonyítéknak idéztem, MAGA VOLT A HIBA
+
+**A javítás a BASELINE-os ágon landolt; a `--check` ág megtartotta a `wc -c`-t a „karakter" szó
+alatt.** És ez a rosszabbik fele: a `--check` az az út, amit egy skill SZERZŐJE futtat a SAJÁT
+fájlján -- pontosan az, amiért a `0d0e3892` megépítette.
+
+**KÉT KÜLÖN TANULSÁG, ÉS MINDKETTŐ MECHANIKUS:**
+
+1. **A javítás után az EREDETI detektort futtasd újra a TELJES fájlon, ne csak a javított helyen.**
+   friday nem tette, a saját kártyáján. Ma `wc -c` **nulla** előfordulás abban a szkriptben --
+   ez az, amit „az eredeti kereső újrafuttatása" jelent.
+2. **Egy mérő kimenete nem bizonyíték a mérőről.** Én lefuttattam, kaptam egy hihető számot, és
+   soha nem vetettem össze azzal, amit a mérő állítása szerint mér. Egy sor eldöntötte volna:
+   `python3 -c "len(open(f,encoding='utf-8').read())"`.
+
+**ÉS A DEGRADÁLÓ ÁG A LEGROSSZABB:** `python3` nélkül a régi változat CSENDBEN bájtot jelent
+karakterként, a javított MEGTAGADJA (*„a karakter-szam NEM MERHETO"*). **Egy őr, ami rossz számmá
+degradálódik, rosszabb, mint amelyik megtagadja** -- és ez csak akkor derül ki, ha a kontroll
+tényleg előállítja a degradált állapotot. friday két első próbája NEM vette el a `python3`-at
+(a macOS tart egyet a `/usr/bin`-ben, egy csonk pedig a `basename`-en tört el); csak a harmadikat
+fogadta el.
+
+*(A regressziós teszt fixture-je ÉKEZETES, és először azt állítja, hogy karakter < bájt. ASCII
+fixture-rel a két egység EGYBEESIK, tehát a teszt egy bájt-számlálón is átmenne -- ez a
+fixture-választás törvénye, pontosan azon a defektuson, amiért íródott.)*
+
+
+<!-- kivive a kozos CLAUDE.md-bol 2026-09-18 22:13 (kartya 2028900e) -->
+### ÉS AMIÉRT A SAJÁT, MA ÍROTT SZABÁLYUNKBA IS BELEFUTUNK: A DÖNTÉS LÉPÉSÉBEN NEM A SZABÁLYT
+### OLVASSUK (computress fogalmazta meg magán, 2026-08-27 21:21)
+
+Egy kártyán 13:58-kor ez állt: a lefedettségi válogatásnál a *„van rá teszt"* NEM záró ok -- egy
+fájlt nevezhet három teszt és állhat 0%-on. **19:2x-kor ugyanaz a szerző négy jelöltet vett ki
+pontosan ezzel az indokkal.** És a cáfoló számok a SAJÁT kommentjében álltak, hat sorral feljebb
+(újramérve: `useForms.ts` 8% -- teszt-fájllal, szó szerint a kártya címében álló alak).
+
+**A diagnózisa a lényeg, nem az eset:**
+
+> A szabály leírása nem változtatta meg a VÁLOGATÁS LÉPÉSÉT -- mert válogatás közben nem a
+> kártyát olvassuk, hanem a listát nézzük.
+
+Ma este ez négyszer fordult elő különböző szerzőknél (kétszer nála, egyszer a saját ratchet-jelzőn,
+egyszer egy saját javaslat naiv alakján), és mindannyiszor UGYANAZNAP írt szabályba.
+
+**A gyakorlati javítás nem „legyél figyelmesebb", hanem SZERKEZETI:** a megkülönböztető SZÁMOT tedd
+bele abba az artefaktumba, amit a döntés pillanatában NÉZEL -- a listába, a kimenetbe, a jelölt
+sorába. Egy szabály, ami egy másik dokumentumban él, a döntés pillanatában nincs jelen.
+
+*(És a lezárási feltétel is ezért változott: nem az, hogy a szabály LE VAN ÍRVA, hanem hogy a
+válogatás lépésében ott áll a százalék, és a kizárás indoka soha nem „van teszt-fájlja". Egy
+ellenőrizhetetlen indok mellett a hibás döntés cáfolhatatlan; egy szám mellett cáfolható.)*
+
+
+<!-- kivive a kozos CLAUDE.md-bol 2026-09-18 22:13 (kartya 2028900e) -->
+### ÉS AMI VISZONT KIVÁLTJA AZ ELLENŐRZÉST: HOGY A MONDAT KIMEGY (dexter, 2026-08-27 21:22)
+
+Ez a lap túlnyomórészt hibákat gyűjt. Egy dolgot érdemes a másik oldalról is felírni: mi az, ami
+tényleg mérésre késztet.
+
+Egy hamis magyarázat este óta állt egy kártyán, és a koordinátor is továbbadta -- **egyikünk sem
+ellenőrizte.** Ami végül lefuttatta a fordítási próbát, az nem a gyanú volt, hanem hogy a mondat
+**a gazda elé készült menni.** dexter szavaival:
+
+> „a »megy Isti elé« volt az, ami méréshez vezetett."
+
+**Ez használható lévén, nem csak megfigyelés.** Ha egy állítás fontos, a legolcsóbb mód a
+verifikálására nem több figyelem, hanem az, hogy KIMONDJUK, hova megy: *ezt továbbadom / ez
+kártyára kerül / ezt a gazda fogja olvasni.* A külső olvasó puszta kilátása más olvasási módot
+kapcsol be, mint a belső jegyzet.
+
+*(Ugyanez fordítva is igaz, és ezért nem elég a szándék: ami „csak nekünk" készül -- egy komment,
+egy helyi mérés, egy jelölt-lista -- ugyanazt a figyelmet kapja, mint egy magánfeljegyzés. Ma
+este a legtöbb hibás állítás ilyen helyen keletkezett, és akkor dőlt meg, amikor valaki kifelé
+készült vele.)*
+
+**ÉS A HASZNÁLHATÓ ALAKJA EGY MONDAT, friday-tól, KÉT MÉRT ESETTEL UGYANAZON A NAPON -- ÉS A
+MÁSODIK AZÉ, AKI AZ ELSŐT HELYESBÍTETTE** (2026-09-11):
+
+> **MÉRD MEG A LEGHANGOSABB MONDATOT ELŐSZÖR, NE UTOLJÁRA.**
+
+    friday, 11:2x .... „ha nincs a fán, akkor NEM VÉDI ISTIT" -- egy biztonsági őrről.
+                       A mérése (`is-ancestor` rc=1) IGAZ volt; a rá következő mondat egy MÁSODIK
+                       állítás volt, semmi alátámasztással. Két ellenőrzés, amivel elbukott volna
+                       (`git ls-files`, `launchctl print ... path =`), A LAPON ÁLL, és egyiket sem
+                       futtatta le a leghangosabb mondat leírása előtt.
+    marveen, 11:4x ... „a poller SOHA nem jut el ARRIVALS-módba", egy monitoring-résről. A mérése
+                       (hat korreláció, a megjósolt hatodik előfordulás) IGAZ volt; a következtetés
+                       hamis. A cáfolat a `coldStart` HASZNÁLATI helyein állt -- én csak az
+                       ÉRTÉKADÁSÁT olvastam el. `grep -n coldStart` öt sort ad, kettő cáfol.
+
+**A KÖZÖS ALAK: a MÉRÉS jó, a rá épülő EGY MONDAT megy egy lépéssel tovább, mint ameddig a mérő lát
+-- és pont az az egy mondat az, amit idézni fognak.** A sorrend a hiba: a leghangosabb állítás
+születik utoljára, amikor a mérés már „kész", és ezért ő az EGYETLEN, ami mérés nélkül marad.
+
+**A PRÓBA, ÉS ÍRÁSKOR TÜZEL, NEM OLVASÁSKOR:** amikor megvan a szöveged, keresd meg benne azt az
+egy mondatot, ami a legtöbbet állítja -- kárt, védtelenséget, hiányt --, és kérdezd meg, MELYIK
+PARANCS támasztja alá. Ha nincs ilyen parancs, az a mondat nem lelet, hanem következtetés, és úgy
+is kell leírni.
+
+**ÉS EGY VÁLTOZÓRA KÜLÖN: ha azt állítod, hogy egy változó egy KÉPESSÉGET letilt, olvasd el MINDEN
+HASZNÁLATI HELYÉT, ne csak az értékadását.** A két mért eset közül a második pontosan ezen bukott:
+a `seeded` tényleg nem perzisztál, és a belőle levezetett „tehát nincs arrivals-jelentés" azért
+hamis, mert egy MÁSIK, perzisztált mező (`lastReadAtMs`) hordozza a képességet.
+
+
+**ÉS AZ ELSŐ ESET, AHOL VALAKI ÚJRAFUTTATTA -- ÉS TALÁLT IS VELE: 18 / 41** (mandark, 2026-08-27,
+kártya `d996934a`, komment 5775). A fenti négy eset arról szól, hogy valaki NEM futtatta újra; ez
+az ellenpélda. A saját mintám (`\)\s*:`) **18** típus-műterméket talált egy mérőeszköz kimenetében;
+a javítás után az EREDETI mérőt futtattam újra, és **41** tétel esett ki. A különbség 23, mind
+`(props: BarChartProps` alakú -- **azokban nincs `):`**, tehát a saját mintám vissza-tesztelése
+zöldet adott volna, miközben 23 műtermék bent marad. A szűkebb teszt nem a hibát vitte volna el,
+hanem a bizonyítékot.
+
+<!-- BEGIN GENERATED: skills-path-trap (auto-generated, do not edit by hand) -->
+<!-- FIGYELEM: az alabbi szakasz GENERALT. Ide beszurt szoveg a kovetkezo agens-indulasnal NYOMTALANUL ELVESZ. Uj szakaszt a fenti BEGIN sor FOLE irj. -->

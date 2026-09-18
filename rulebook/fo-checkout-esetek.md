@@ -515,3 +515,104 @@ Nem „beolvadt", hanem:
 Három szó, és utána a kártya önmagában eldönthető. Enélkül a „beolvadt" mindhárom esetben igaznak
 látszik, és csak az elsőben jelenti azt, hogy a felhasználó számára megtörtént.
 
+
+
+<!-- kivive a kozos CLAUDE.md-bol 2026-09-18 22:04 (kartya 2028900e) -->
+### A HÁROM RÉTEG, AMIT A „KÉSZ" ÖSSZEMOS
+
+    MERGED ..... a tartalom a torzson van
+    BUILT ...... a tartalom a `dist/`-ben van    <- EZT meri a `.built-commit`, es igazat mond
+    RUNNING .... a tartalom abban a FOLYAMATBAN van, amit a felhasznalo hasznal
+
+**ÉS A DELTA-CRM-BEN A RUNNING RÉTEG MÉRŐJE MÁS, A RÉS HORDOZÓJA PEDIG NÉMA** (marveen mérte magán
+2026-09-17, egy ÉLES biztonsági javításon, amiről MÁR MEGÍRTA a gazdának, hogy kiszállt).
+
+A `deploy.yml` a `github.sha`-val címkézi a képet, tehát **a kép-címke MAGA a commit SHA** -- ez a
+RUNNING réteg olvasható mérője, és nem kell hozzá se marker, se build-mező:
+
+```bash
+gcloud run services describe delta-crm-backend --region europe-west1 --project delta-crm-483922 \
+  --format='value(spec.template.spec.containers[0].image)'        # a cimke = a FUTO commit
+gh api repos/balintisti/Delta-CRM/compare/<az a sha>...main --jq '.ahead_by'   # 0 = KI VAN SZALLITVA
+# KONTROLL: compare(<sha>, UGYANAZ) -> "identical", kulonben a mero nem tud nullat mondani
+```
+
+**A HORDOZÓ, AMIÉRT EZ NEM A FENTI ISMÉTLÉSE: a `Deploy to Cloud Run` `workflow_run`-ra fut, tehát
+egy PIROS CI mellett `skipped` lesz.** Nem bukik, nem riaszt, és nem hagy nyomot a kártyán: a merge
+megtörtént, a merge-commit ott ül a törzsön, és a telepítés SOHA nem indult el.
+
+    egy BUKO deploy ....... van futas, van piros, valaki ranez
+    egy SKIPPED deploy .... nincs mit megnezni, es egy SIKERES merge mellett all
+
+**A MÉRT ESET ÁRA:** a tenant-határ javítása 14:37-kor olvadt be, 14:40-kor azt írtam a gazdának,
+hogy az éles rés bezárult, és 16:0x-kor az éles kép MÉG MINDIG a 12:32-es commité volt. EGY teszt
+bukott 802-ből (bájt-azonos fán két órával korábban ÁTMENT, tehát flake), és az az egy teszt
+tartotta élesen kívül a biztonsági javítást.
+
+> **Egy `main`-re való merge után a kérdés nem az, hogy ZÖLD-E A CI, hanem hogy MOZDULT-E A
+> KÉP-CÍMKE.** A kettő között egy némán kihagyható munkafolyamat áll.
+
+**ÉS NE ÍRJ RÁ DETEKTORT A `skipped`-RE: AZ A GYAKORI ESET.** Mérve ugyanaznap, 100 `Deploy to
+Cloud Run` futáson a `main`-en: **45 skipped, 50 success, 3 failure, 2 cancelled**. És a kihagyás
+ÖNMAGÁT GYÓGYÍTJA, mert a telepítés KUMULATÍV -- három mintavett kihagyott commit (852933b02,
+d5d7a1912, 0183f20be) MIND benne van a rá következő sikeres telepítésben.
+
+    a `skipped` sorok 45%-a ..... RUTIN, es a kovetkezo sikeres deploy lefedi -> NEM jel
+    a res, ami SZAMIT ........... kizarolag a CSUCSON: main feje kontra az ELES kep-cimke
+
+**Vagyis a mai eset nem azért maradt észrevétlen, mert rejtve volt, hanem mert a jelzés alakja a
+LEGGYAKORIBB kimenettel azonos.** A kérdés ezért ÁLLAPOT, nem esemény: nem „kihagyott-e egy
+deploy", hanem „ELŐTTE ÁLL-E MA a törzs az éles képnek".
+
+**A marker nem hazudik: MÁS kérdésre válaszol.** Mért eset: nyolc `marker == HEAD` ellenőrzés, mind a
+nyolc igaz, miközben a futó folyamat **41 perccel** a saját buildje mögött állt.
+
+**ÉS NE A `build.status` MEZŐ LEGYEN A MÉRŐ:** az EGY mezőben KÉT független feltételt hordoz, és a
+`stale-source` ág ELŐBB tér vissza. Ha mindkettő áll, a mező ELHALLGATJA a RUNNING-rést -- épp azt
+az esetet, amikor fordítani ÉS újraindítani is kell.
+
+```bash
+curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" http://localhost:3420/api/overview \
+  | python3 -c "import json,sys; b=json.load(sys.stdin)['build']; \
+      print('RUNNING elavult?' , b['startedAt'] < b['builtAt'], '| status:', b['status'])"
+# a `status` EMBERNEK szol, a ket idobelyeg OSSZEHASONLITASA a gepi valasz
+```
+
+**ÉS EZ A MÉRŐ IS SZŰKEBB KÉRDÉSRE VÁLASZOL, MINT AMIT AZ EMBER FELTESZ:** a `startedAt < builtAt`
+azt mondja meg, hogy „a FOLYAMAT nem maradt le a SAJÁT buildjétől" -- nem azt, hogy „a FUTÓ KÓD
+tartalmazza-e, amit ma beolvasztottam". A kettő EGYÜTT is lehet zöld egy MÁSIK build mellett.
+
+**A HÁROM KÉRDÉS, ÉS MINDHÁRMAT KÜLÖN KELL FELTENNI:**
+
+    lemaradt-e a FOLYAMAT a sajat buildjetol? .... `startedAt < builtAt`
+    lemaradt-e a BUILD a torzstol? ............... `git rev-list --count <builtCommit>..HEAD -- src/`
+    ott van-e a KONKRET valtozas a dist-ben? ..... `ls dist/<ut>` -- parancs nelkul is olvashato
+
+```bash
+ls dist/web/<az-uj-modul>.js    # "No such file or directory" = a merge NINCS a futo fában
+```
+
+**ÉS A `stale-source` ÚTVONAL-FÜGGETLEN, tehát ELLENTÉTES választ ad:** a `status` pontosan és
+helyesen válaszol arra, hogy a forrás mozdult-e (mért eset: 18 commit, ebből **0** érinti a `src/`-t)
+-- csak nem ez az a kérdés, amitől bárki buildel és újraindít.
+
+```bash
+B=$(curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" http://localhost:3420/api/overview \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['build']['builtCommit']['commit'])")
+git rev-list --count $B..HEAD -- src/     # 0 = egy build SEMMIT nem valtoztatna
+# KONTROLL, mindket iranyba: HEAD..HEAD -> 0, es ugyanez a mero a teljes tortenetre -> nem-nulla
+```
+
+**AMIT EZ NEM MOND: hogy soha nem tartozunk builddel.** Amint egy `src/`-t érintő ág beolvad,
+ugyanez a mérő NEM-NULLÁT ad. A recept értelme épp ez: a válasz naponta változik, tehát MÉRNI kell.
+
+**A SZOKÁS, AMI OLCSÓ, ÉS EGY HAJNALON HÁROM ÓRÁT SPÓROLT VOLNA:**
+
+```bash
+git log --all --oneline --grep=<kulcsszó>     # MIELŐTT védelmet írsz, nézd meg, megírták-e
+```
+
+**ÉS A TÖRVÉNY NEM REPÓK KÖZÖTT A LEGÉLESEBB, HANEM EGY REPÓN BELÜL.** A mért eset: egy PONTOSAN
+erre a hibaalakra írt, KÖVETETT helyi fájl használatlanul állt HÁROM KÖNYVTÁRRA attól a spectől,
+ami ugyanabba a hibába futott. Ott a „megvan-e egyáltalán" kérdésre a válasz IGEN, tehát fel sem
+merül, hogy megkérdezzük.
