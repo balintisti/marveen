@@ -151,7 +151,13 @@ collect() {
   fi
   [ -f "$DELTA_CLAUDE" ] && printf 'delta-crm/CLAUDE.md\t%s\n' "$DELTA_CLAUDE"
   if [ -d "$MARVEEN_ROOT/agents" ]; then
-    find "$MARVEEN_ROOT/agents" -mindepth 2 -maxdepth 2 \( -name 'CLAUDE.md' -o -name 'SOUL.md' \) -type f 2>/dev/null \
+    # `-L`: KOVESD A SYMLINKET. 2026-09-18-an mind a 7 agens munkakonyvtara kikerult a repo alol
+    # (`agents/<nev>` -> `/Users/Shared/marveen-<nev>`, a kozos CLAUDE.md hierarchiajabol valo
+    # kilepteteshez). A `find` ALAPBOL NEM megy be egy symlinkbe, tehat a personak NEMAN kiestek a
+    # mentesbol: a szkript `no change (995 files)`-t irt ki, ami SIKERNEK latszik. Merve ugyanabban
+    # a percben: `-L` nelkul 0 talalat, `-L`-lel 7. Es epp azok a lapok estek ki, amik a
+    # levalasztas ota az EGYETLEN peldanyt hordozzak minden agens biztonsagi szabalyaibol.
+    find -L "$MARVEEN_ROOT/agents" -mindepth 2 -maxdepth 2 \( -name 'CLAUDE.md' -o -name 'SOUL.md' \) -type f 2>/dev/null \
     | LC_ALL=C sort | while IFS= read -r f; do
         a=$(basename "$(dirname "$f")")
         printf 'agents/%s/%s\t%s\n' "$a" "$(basename "$f")" "$f"
@@ -329,6 +335,44 @@ if git -C "$RULEBOOK_REPO" commit -q -m "$MSG" 2>/dev/null; then
   fi
 else
   log "rulebook-snapshot: no change (${STAGED_COUNT} files)"
+fi
+
+# --- OFF-DISK COPY (card 11294c6a, Isti's decision 2026-09-18 20:28: "Legyen uj github repo").
+#
+# WHY. Until today this repo had NO remote: 1243 commits and 1003 files stood on a
+# single physical disk. `df` and /Volumes both say there is no second one, so the
+# protection against a disk failure was exactly zero. The repo is now mirrored to
+# the PRIVATE github.com/balintisti/marveen-rulebooks. Private is not decoration:
+# the snapshot carries personal data (chat_id, home town, e-mail addresses).
+#
+# WHY THIS IS BEST-EFFORT AND MUST NOT FAIL THE SCRIPT. The PostToolUse hook runs
+# this, and its own docblock explains that a non-zero exit makes every subsequent
+# Bash call in the fleet pay for it. A network blip must not do that. The LOCAL
+# commit is the primary artefact and it has already happened above.
+#
+# AND THIS IS WHY A LOG LINE IS NOT THE SIGNAL. A failed push that only writes to
+# a log is the silent-failure shape this file exists to avoid. Two things carry it
+# instead:
+#   1. a MARKER FILE that survives until a push succeeds, and
+#   2. the AUTHORITATIVE check, which never lies and needs no marker:
+#
+#        git -C /Users/isti/Backups/rulebooks rev-list --count origin/master..master
+#        # 0 = the off-disk copy is current. Non-zero = that many commits exist
+#        #     ONLY on this disk. CONTROL: the same meter on HEAD..HEAD -> 0.
+#
+# The push runs unconditionally (not only after a commit), so a run that changes
+# nothing still repairs a backlog left by an earlier failure.
+PUSH_MARK="${RULEBOOK_PUSH_MARK:-/Users/isti/marveen/store/rulebook-push-failed}"
+if git -C "$RULEBOOK_REPO" remote get-url origin >/dev/null 2>&1; then
+  if PUSH_ERR=$(git -C "$RULEBOOK_REPO" push -q origin HEAD 2>&1); then
+    rm -f "$PUSH_MARK" 2>/dev/null || true
+  else
+    BEHIND=$(git -C "$RULEBOOK_REPO" rev-list --count origin/master..HEAD 2>/dev/null || echo '?')
+    printf '%s  push FAILED (%s commit csak ezen a lemezen): %s\n' \
+      "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$BEHIND" "$(printf '%s' "$PUSH_ERR" | tr '\n' ' ' | cut -c1-200)" \
+      > "$PUSH_MARK" 2>/dev/null || true
+    log "rulebook-snapshot: PUSH FAILED -- ${BEHIND} commit csak ezen a lemezen. Marker: $PUSH_MARK"
+  fi
 fi
 
 if [ "$TRUNCATED" = "1" ]; then
