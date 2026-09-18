@@ -32,7 +32,12 @@ import argparse, fcntl, os, subprocess, sys, time
 
 PAGE = os.environ.get("CLAUDE_MD_PATH", "/Users/isti/marveen/CLAUDE.md")
 BASE = os.environ.get("CLAUDE_MD_BASELINE", "/Users/isti/marveen/scripts/claude-md-baseline.txt")
-LOG  = "/Users/isti/marveen/store/claude-md-size.log"
+# A LOG-ot is env-bol lehet feluldefinialni. didi merte 2026-09-18 (kartya 144cb784):
+# a `PAGE`/`BASE`/`CANARY` mind feluldefinialhato volt, a `LOG` NEM -- tehat a proba-futasok
+# a VALODI naplóba irtak (`WRITE 73 -> 51`, `53 -> 32`), mikozben a lap 196 190 karakteren allt.
+# Ez pont azt a kerdest teszi megvalaszolhatatlanna, amiert a naplo letezik: a lap
+# meret-tortenetet. Egy mero, aminek a PROBAJA meghamisitja a mert mennyiseget.
+LOG  = os.environ.get("CLAUDE_MD_LOG", "/Users/isti/marveen/store/claude-md-size.log")
 
 def size(p):
     with open(p, encoding="utf-8") as f:
