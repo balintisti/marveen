@@ -268,3 +268,91 @@ Amikor egy sub-ágens inter-agent üzenetet küld neked ilyen formában:
 
 Lényeg: KIZÁRÓLAG az `allowFrom`-on szereplő (általad már párosított) sendert engedélyezd auto; minden más Isti-döntés. Ez az ARANYSZABÁLY szellemének (default-deny) betartása, csak a már-párosított esetekre gyorsítva — a senderId a végső azonosító, NEM a self-claimed név.
 
+
+
+<!-- kivive a kozos CLAUDE.md-bol 2026-09-18 22:34 (kartya 2028900e) -->
+### AZ "ELKÜLDVE" NEM "MEGÉRKEZETT" -- A SOR ÁLLAPOTA
+
+A router csak a címzett paneljének IDLE réseibe tud injektálni, tehát egy dolgozó ágens sora
+annyira ürül, amennyire a fordulói véget érnek. Egy hosszú forduló alatt nulla kézbesítés
+lehetséges, és ez nem hiba.
+
+    0-2 queue ... mehet
+    3+ queue .... a helper FIGYELMEZTET, es igaza van. NE kuldj ujabbat -- ird a kartyara.
+                  A `pending` azt jelenti, hogy az elozot EL SEM OLVASTA.
+
+**Az üzenet TOL, a kártya HÚZAT. De a kártya csak azt húzatja, aki MÁR ODANÉZ:** ha a címzett épp
+nem azon a kártyán dolgozik, a komment TÁROL, nem kézbesít.
+
+**ÉS A SZABÁLYNAK VAN EGY RÉSE, AMI MA 36 PERCBE KERÜLT, EGY ÉLES ADATVESZTÉS-CSAPDA MELLETT**
+(marveen mérte magán, 2026-09-17): a „3+ vár -> írd a kártyára" HELYES egy INFORMÁCIÓRA, és
+ELÉGTELEN egy IDŐKRITIKUS ENGEDÉLYRE. Egy jóváhagyás, amit azért tettem kártyára, mert a sor tele
+volt, 36 percig nem ért el a címzetthez -- ő közben MÁS kártyákon dolgozott, teljesen helyesen --,
+és eközben a csapda élesben állt.
+
+    INFORMACIO / NYOM ....... a kartya a helyes hely, es ha kesve olvassak, nem tortent semmi
+    IDOKRITIKUS ENGEDELY .... a kartya NEM kezbesit, es a keses MAGA a kar
+
+**A HARMADIK LEHETŐSÉG, amit a szabály eddig nem adott: ellenőrizd vissza.** Ha egy ENGEDÉLYT vagy
+egy MEGÁLLÍTÁST kell kártyára írnod, mert a sor tele van, nézd meg pár perc múlva, ürült-e a sor, és
+akkor küldd el EGY SOROSAN is. **A kártya a nyom, az üzenet a kézbesítés** -- időkritikusnál mindkettő
+kell, nem a kettő közül az egyik.
+
+*(A mért eset: a jóváhagyás 09:15-kor került a kártyára, a sor 09:4x-re kiürült, és 09:51-ig senki
+nem küldte el. A címzett hibátlanul dolgozott végig; a rés a küldő oldalán volt.)*
+
+**RESTART UTÁN A HÁROM ÁLLAPOT ELLENTÉTES TEENDŐT KÍVÁN:**
+
+    `pending`   -> a SORBAN van (adatbazisban), TULELI a restartot   -> NE kuldd ujra
+    `delivered` -> a panelbe MAR beinjektalodott                      -> EZT viheti el a restart
+    `failed`    -> a munkamenet HIANYZOTT a teljes ujraproba-ablakban -> ELVESZETT, kuldd ujra
+
+**DE A `failed` -> KÜLDD ÚJRA NEM MECHANIKUS.** Mért eset: hat `failed` üzenetből öt egy RÉGEN
+LEZÁRT munkáról szóló beszélgetős válasz volt, egy pedig próba egy NEM LÉTEZŐ ágensnek.
+Mechanikusan újraküldve ez öt zavarba ejtő levelet termelne lezárt munkáról.
+
+> **A `failed` azt mondja meg, hogy a KÉZBESÍTÉS nem történt meg. Azt NEM, hogy a TARTALOM ma is
+> érvényes.** Mielőtt újraküldesz, nézd meg, MIKOR keletkezett és MIRŐL szól.
+
+**ÉS UGYANEZ A FOGADÓ OLDALÁN, AMIT A FENTI TÖRVÉNY NEM FED: EGY SORBAN ÁLLÓ ÜZENET FÉNYKÉP, NEM
+KÉRDÉS** (dexter fogalmazta meg 2026-09-17, marveen kárán; a fenti sor a KÜLDŐRŐL szól, ez a
+CÍMZETTRŐL).
+
+    14:52:27  marveen negy dontese MEGERKEZIK dexterhez
+    14:58:06  dexter MAR CSELEKSZIK ralyuk (a generalt fajl mtime-ja, nem allitas)
+    15:01:02  dexter „a #155 MEG MINDIG nem tud beolvadni" kerdese KEZBESUL marveenhez
+              -- de 14:5x-kor IRODOTT, a valasz LETEZESE ELOTT, es a 7/7 plafon tartotta vissza
+
+**Marveen elo kerdest latott, megallapitotta, hogy dexter beragadt, es kuldott egy plafon-kerulo
+uzenetet egy MEGAKADASRA, AMI NEM LETEZETT.** A koltseg a fogadonal landolt.
+
+> **Amikor egy sorban allo uzenet ugy erkezik, hogy te mar megvalaszoltad: NEM a kuldo var. A LEVEL
+> var.** Es ez OLVASASKOR eldontheto, ingyen: minden uzenet viseli a `[KULDVE: <ido>]` sort --
+> vesd ossze azzal, MIKOR valaszoltal.
+
+*(A plafon es a sor-kapu ezt SULYOSBITJA, nem okozza: minel jobban lassitja a kezbesitest egy
+vedelem, annal oregebb a level, amikor megerkezik -- tehat epp a legterheltebb oraban a legnagyobb
+az esely, hogy egy mar megvalaszolt kerdest olvasol elonek.)*
+
+**A SOR MÉLYSÉGÉT NE AZ API-BÓL MÉRD: 50 SOROS ABLAKA VAN, ÉS HAMIS NULLÁT AD.**
+
+```bash
+# A SOR MELYSEGE: `pending` CSAK. A `failed` MAS KERDES -- lasd alatta.
+python3 -c "
+import sqlite3
+c=sqlite3.connect('file:/Users/isti/marveen/store/claudeclaw.db?mode=ro',uri=True)
+print(list(c.execute(\"select id from agent_messages where to_agent=? and status='pending'\", ('<agens>',))))"
+```
+
+**A `status in ('pending','failed')` ALAK HIBÁS, ÉS HALOTT ÜZENETEKET SZÁMOL.** Mért eset: a régi
+recept **12**-t adott, ebből `pending` **0**, `failed` 12, a legrégebbi napokkal korábbról. **A
+szabály (3+ vár -> ne küldj) ezzel ÖRÖKRE tiltana** egy ágenst, miközben SENKI nem vár -- és a kár
+a csendes fele: aki követi a lapot, KÁRTYÁT ír egy DÖNTÉS helyett. **A `failed` SEMMIT nem mond a
+címzett terheléséről**, és soha nem avul el.
+
+**ÉS A `pending` KORA IS MÉRENDŐ, NEM CSAK A MÉLYSÉGE.** Mért eset: 98 perces `pending` egy élő,
+termelő ágensnél. **Egy helyesbítés értéke időfüggő: a késés nem gyengíti, hanem MEGFORDÍTJA.**
+
+**ÉS A MEZŐNEVEK `from_agent` / `to_agent`, NEM `from` / `to`.** Egy `?to=...` szűrésű lekérdezés
+HTTP 200-at és ÜRES listát ad -- bájt-azonos egy valódi „nincs várakozó üzenet" válasszal.
+KONTROLL: keresd meg a SAJÁT, épp elküldött üzenetedet a válaszban.

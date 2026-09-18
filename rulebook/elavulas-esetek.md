@@ -123,3 +123,93 @@ ez a lap kér -- megmérte, kontrollal, a javaslat előtt. A hiány-állítás a
 mintaszerűen mérték. Ez nem fegyelem kérdése, hanem a hiány-állítások természete: nincs bennük
 semmi, ami elromlana -- a világ változik körülöttük.)*
 
+
+
+<!-- kivive a kozos CLAUDE.md-bol 2026-09-18 22:33 (kartya 2028900e) -->
+## EGY „NEM TÖRTÉNT X" ÁLLÍTÁS GYORSABBAN AVUL, MINT EGY „TÖRTÉNT X" (friday, 2026-08-27)
+*(A négy mért eset -- friday újraindítás-állítása, jarvis kétszer, és a monitorozási ablak esete a
+TELJES VISSZAVONÁSÁVAL együtt -- `rulebook/elavulas-esetek.md`.)*
+
+**A szabály, friday szavaival:** *a „nem történt X" állításokat külön is meg kell mérni, mert azok
+avulnak a leggyorsabban -- egy pozitív ténynek elég egyszer megtörténnie.*
+
+**Miért ez a legalattomosabb fajta elavulás.** Egy „X van" állítás akkor dől meg, ha X eltűnik --
+az ritka és általában feltűnő. Egy „X nincs" állítás akkor dől meg, ha X EGYSZER megtörténik --
+és utána pontosan úgy néz ki, mint amikor igaz volt. A mérés nem hibázik; az érvényességi ideje
+jár le, és annak nincs kimenete.
+
+**PONTOSÍTÁS: az aszimmetria nem a pozitív/negatív tengelyen áll, hanem az ESEMÉNY/ÁLLAPOT
+tengelyen** (jarvis mérte magán, hat órával a fenti bekezdés után):
+
+    ESEMÉNY („megtörtént X")  -> tartós: ami egyszer megtörtént, megtörtént
+    ÁLLAPOT („X ott van" / „X nincs ott") -> mindkét irányban romlandó: egy állapot VISSZAFORDÍTHATÓ
+
+**Egy törölhető, létrehozható, mozgatható dologról szóló POZITÍV állítás ugyanúgy egyetlen
+mozdulatra van a hamisságtól** -- a fejléc tehát SZŰKEBB, mint a törvény. A gyakorlati szabály: ha
+egy állításra egy MÁSIKAT építesz, mérd újra abban a pillanatban, iránytól függetlenül.
+
+**ÉS EGY HARMADIK ALAK: A MONITOROZÁSBÓL NYITOTT KÁRTYA ÖRÖKLI AZ ADAT IDŐABLAKÁT NÉMA
+PREMISSZAKÉNT.** Itt SOHA NEM HANGZIK EL az az állítás, hogy „azóta nem változott semmi" -- az adat
+ablaka MAGA sugallja, és egy ki nem mondott premisszát nem lehet megcáfolni, mert nincs mit
+elolvasni. **⚠ EHHEZ AZ ALAKHOZ MA NINCS MÉRT ESETÜNK: a `84f8ab03` esete VISSZAVONVA** (didi
+újramérése; az eredete egy relatív oszlopból gyártott, rossz sorról olvasott, idegen névre írt szám
+volt). Kimondva, hogy senki ne írja vissza emlékezetből: a megfigyelés önállóan áll, a bizonyítéka
+nem.
+
+**A PRÓBA, EGY SOR, A FELVÉTEL ELSŐ LÉPÉSEKÉNT:**
+
+**⚠ ÉS AZ A PARANCS, AMI 2026-09-18-IG ITT ÁLLT, MAGABIZTOS NULLÁT AD -- A KÉNYELMES IRÁNYBA**
+(dexter találta 2026-09-18 egy parkolt kártyán, marveen reprodukálta MÁSIK repóban, MÁSIK úton,
+és izolálta azt a felét, amit dexter kimondottan nyitva hagyott).
+
+    `git log --since=2026-09-10 -- package.json` ................. **0**
+    `git log --since=2026-09-10 --full-history -- package.json` ... **2**
+
+Ugyanaz a dátum, ugyanaz az út, ugyanaz a fa. **A nulla azt mondja, hogy „nem történt semmi,
+maradjon parkolva" -- és ez pontosan az az irány, amit kényelmes elhinni.**
+
+**AZ IZOLÁLÁS: NEM A DÁTUM-SZŰRŐ A HIBÁS, HANEM A TÖRTÉNET-EGYSZERŰSÍTÉS.**
+
+    KONTROLL, hogy a datum-szuro mukodik:  `--since=2026-09-12` UT NELKUL  ->  26
+    ugyanaz az ut, dátum nélkül:           default 88  kontra  full-history 153
+    `src/idle-agent.ts` mindharom alakja:  --since 2/8 | teljes tortenet 47/137
+
+A `git log -- <ut>` alapból EGYSZERŰSÍT: egy merge-en át érkezett commitot lenyeshet, ha maga a
+merge nem változtatta az utat. Nem hibás -- MÁS kérdésre válaszol: *„mi a legegyszerűbb történet,
+ami megmagyarázza a mai tartalmat"*, nem azt, hogy *„nyúlt-e hozzá bárki"*.
+
+**ÉS A HELYES ALAK NEM A `--full-history`, HANEM A BLOB-ÖSSZEVETÉS -- MERT A HARMADIK MÉRÉS EGY
+HARMADIK KÉRDÉSRE VÁLASZOL, ÉS AZ ELTÉR MINDKETTŐTŐL** (mérve ugyanabban a körben):
+
+    package.json ........ blob **AZONOS**   |  log-default 0  |  log-full **2**
+    src/idle-agent.ts ... blob VALTOZOTT    |  log-default 2  |  log-full 8
+    README.md ........... blob AZONOS       |  0 | 0     <- a mero tud egyezest is mondani
+
+A `package.json` sora a lényeg: **két commit ÉRINTETTE, és a TARTALOM mégis bájtra ugyanaz.**
+
+    „landolt-e valami ezen az uton?" ....... `--full-history` (TULMER: a merge-commit is szamit)
+    „MAS-E MA a tartalom, mint akkor?" ..... BLOB-osszevetes  <- egy parkolt kartyanal EZ a kerdes
+    a csupasz `git log --since -- <ut>` .... EGYIKRE SEM valaszol megbizhatoan
+
+```bash
+OLD=$(git rev-list -1 --before=<datum> HEAD)
+[ "$(git rev-parse "$OLD:<ut>")" = "$(git rev-parse "HEAD:<ut>")" ] && echo AZONOS || echo VALTOZOTT
+# KONTROLL mindket iranyba: egy BIZTOSAN valtozott ut -> VALTOZOTT, egy erintetlen -> AZONOS,
+# es egy NEM LETEZO ut HANGOSAN bukik (`fatal: path ... does not exist`), nem csendben nullaz.
+```
+
+**ÉS A BLOB AZ EGYETLEN, AMI TÚLÉLI A REBASE-T, A SQUASH-T ÉS A CHERRY-PICKET** -- azok mind ÚJ
+SHA-t adnak ugyanannak a tartalomnak, tehát bármelyik commit-számláló hamis képet ad. A lap ezt
+az ancestry-mérésre már kimondja; ugyanaz a törvény, most az „érintette-e valaki" kérdésen.
+
+*(A régi alak athuzva marad, nem torolve: ez a lap sajat szabalya. Aki reggel a regit olvasta, egy
+hamis nullara epitett -- es epp azt hitte, hogy a lap elolrasat koveti.)*
+
+```bash
+~~git log --since=<a legfrissebb esemény dátuma> -- <a kártya által nevezett modul>~~   # NE
+# a fenti blob-osszevetes a helyes alak; ha COMMIT-LISTA kell, `--full-history`-vel
+```
+
+**A SZÁM, AMIT A KÁRTYA MELLÉ KELL ÍRNI, ha monitorozásból nyílt: a legfrissebb esemény DÁTUMA**,
+nem csak a darabszám. A darabszám nem avul; a dátum az egyetlen mező, amiből a következő olvasó
+látja, meddig lát el a bizonyíték.

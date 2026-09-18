@@ -1,5 +1,5 @@
 # A kozos CLAUDE.md meret-alapvonala KARAKTERBEN (kartya 30169f86).
 # RACSNI: alapvonal := min(mert, regi). Novelni csak kimondott indokkal szabad.
-# elozo: 185701  uj: 186816  indok: kimondott noveles: VISSZAALLITAS: a darabszam-blokk kivitele elvitte Isti VISELKEDESI szabalyait -- ezek a magban a helyuk, nem archivumban
-# 2026-09-18 22:29:10 CEST
-186816
+# elozo: 185093  uj: 183976  indok: sor-allapot esetei kivive
+# 2026-09-18 22:34:30 CEST
+183976

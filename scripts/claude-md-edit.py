@@ -149,6 +149,11 @@ def main():
         os.lseek(fd, 0, 0); os.ftruncate(fd, 0)
         os.write(fd, new_s.encode("utf-8"))
         print(f"OK: {len(s):,} -> {new_n:,} karakter ({new_n - len(s):+,})")
+        # MINDEN irast naplozunk merettel. didi merte 2026-09-18: a snapshot-hook 60 PERCES
+        # lyukat hagyott PONT a vagas folott (21:23:40 -> 22:23:56), tehat a lap merete egy adott
+        # percben nem volt visszakereshero -- es emiatt egy pont-becslesbol BRACKET lett
+        # (1,70-2,36 kar/token 2,0 helyett). Egy sor ide olcsobb, mint egy elveszett meres.
+        log(f"WRITE {len(s)} -> {new_n} ({new_n - len(s):+d})")
         if a.grow:
             print(f"NOVEKEDES KIMONDVA: {a.grow}")
             log(f"GROW {len(s)} -> {new_n} :: {a.grow}")
