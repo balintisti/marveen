@@ -62,13 +62,36 @@ def write_baseline(n, reason):
 
 CANARY = os.environ.get("CLAUDE_MD_CANARY", "/Users/isti/marveen/scripts/claude-md-canary.txt")
 
+class CanaryUnavailable(RuntimeError):
+    """A kanari-lista nem olvashato -- FAIL-CLOSED, nem ures lista."""
+
+
 def canary_lines():
+    """A teherhordo mondatok. HIANYZO FAJLRA KIVETELT DOB, NEM URES LISTAT.
+
+    didi merte 2026-09-18, egyetlen valtozoval, a FUTO valtozaton:
+        letezo kanarival ... rc=69, NEM irt
+        a fajl hianyzik .... `OK: 53 -> 32 karakter` -- a teherhordo sor ELTUNT,
+                             a kapu SIKERT jelentett, es a racsni meg szorult is
+    Vagyis az ures lista a MEGNYUGTATO iranyba degradalt: a `--check` sem fogta meg.
+    Ez a lap sajat torvenye -- egy or, ami ROSSZ SZAMMA degradalodik, rosszabb annal,
+    amelyik MEGTAGADJA --, a sajat oromon. Es a hordozo is lelet volt: a fajl
+    KOVETETLEN allt (`git ls-files` -> 0; kontroll: a baseline-fajl KOVETETT), tehat
+    egy `git clean` vagy egy uj gep nyomtalanul elvitte volna a vedelmet.
+    """
     try:
         with open(CANARY, encoding="utf-8") as f:
-            return [l.rstrip("\n") for l in f
-                    if l.strip() and not l.lstrip().startswith("#")]
-    except FileNotFoundError:
-        return []
+            lines = [l.rstrip("\n") for l in f
+                     if l.strip() and not l.lstrip().startswith("#")]
+    except OSError as e:
+        raise CanaryUnavailable(
+            f"a kanari-lista NEM OLVASHATO ({CANARY}): {e}. "
+            f"Egy hianyzo lista NEM ures lista -- nem tudom, mit vinnel el, tehat nem irok.") from e
+    if not lines:
+        raise CanaryUnavailable(
+            f"a kanari-lista URES ({CANARY}). Ha tenyleg nincs vedendo mondat, az DONTES -- "
+            f"irj bele egy kommentet es legalabb egy sort.")
+    return lines
 
 def check_canary(text):
     """A HIANYZO teherhordo mondatok listaja. Ures lista = minden megvan."""
@@ -137,7 +160,11 @@ def main():
             return 2
         # KANARI: a teherhordo mondatok NE tunhessenek el egy vagassal. 2026-09-18-an egy
         # blokk kivitele elvitte Isti viselkedesi szabalyait, es csak veletlenul vettem eszre.
-        missing = check_canary(new_s)
+        try:
+            missing = check_canary(new_s)
+        except CanaryUnavailable as e:
+            print(f"NEM IRTAM: {e}", file=sys.stderr)
+            return 70
         if missing:
             print(f"NEM IRTAM: a valtozas {len(missing)} TEHERHORDO mondatot vinne el:", file=sys.stderr)
             for m in missing:
