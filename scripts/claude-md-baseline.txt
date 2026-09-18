@@ -1,5 +1,5 @@
 # A kozos CLAUDE.md meret-alapvonala KARAKTERBEN (kartya 30169f86).
 # RACSNI: alapvonal := min(mert, regi). Novelni csak kimondott indokkal szabad.
-# elozo: 185093  uj: 183976  indok: sor-allapot esetei kivive
-# 2026-09-18 22:34:30 CEST
-183976
+# elozo: 195572  uj: 196190  indok: kimondott noveles: VISSZAALLITAS (mandark merte az elsot): a MIERT TER EL magom KET iraskori torvenyt ejtett el -- a kategoria-nevezest ES az iraskor/olvasaskor tuzelo szabaly kulonbseget
+# 2026-09-18 22:55:45 CEST
+196190

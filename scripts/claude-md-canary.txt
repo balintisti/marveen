@@ -40,3 +40,22 @@ scripts/notify.sh
 
 # --- a ket sav, ami AZONNAL eles ---
 AZONNAL
+
+# --- ISTI ALLANDO MUKODESI SZABALYAI (a `## Mukodesi szabalyok` torzse) ---
+# 2026-09-18 22:02: egy kivitel elvitte EZT A TELJES BLOKKOT -- Isti 11 allando szabalyat --, es a
+# kanari NEM fogta meg, mert a listat 29 PERCCEL KESOBB irtam, es CSAK azt vettem bele, amit AZNAP
+# eszrevettem (a kimenet alakja + biztonsag). mandark merte ki, mar a veszteseg allasa kozben.
+# EZ A LAP SAJAT TORVENYE: egy or-halmaz FELADATONKENT no egy orrel, es SOHA nem egy orrel az
+# OSZTALYRA. A javitas ezert nem egy ujabb sor, hanem a SZABALY-OSZTALY lefedese: ami Istitol
+# SZO SZERINTI idezet vagy az o kimondott dontese, annak van itt egy horgonya.
+Az alapértelmezés: NEM pusholsz
+Döntési szabály (kétágú)
+AZ ESZKALÁCIÓ CÍMZETTJE TUDJA-E MEGVÁLASZOLNI
+Éjszakai munka: NEM kell rá engedélyt kérni
+Teszt = az egyetlen védvonal
+A keret kihasználása kötelezettség
+Minőség hosszú távra
+melyik ágens PANELJE áll üresen
+
+# --- IRASKORI TORVENY, ami ma pont hianyzott, amikor szuksegem lett volna ra ---
+A KATEGÓRIA NEVE A MECHANIZMUST NEVEZZE MEG
