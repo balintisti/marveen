@@ -54,6 +54,18 @@ def main():
 
         print(f"blokk: {len(block):,} kar.  ->  {a.archive}")
         print(f"mag helyere: {len(core):,} kar.   NYERESEG: {len(block)-len(core):+,}")
+
+        # A KIVITEL IS NOVESZTHETI A LAPOT, ES KETSZER MEG IS TETTE (2026-09-18): a `##` szakasz
+        # merete a KOVETKEZO `##`-ig szamol, a blokk viszont a kovetkezo `###`-nel VEGET er --
+        # tehat egy kondenzalt mag, ami a lentebbi `###` alszakaszokat is osszefoglalja, DUPLIKAL.
+        # Mindketszer en irtam, es a meret-kapu fogta meg, nem en. Ezert a kapu IDE is kell:
+        # egy kivitel, ami NOVELI a lapot, majdnem biztosan duplikatum.
+        if len(core) > len(block):
+            print(f"NEM MOZGATTAM: a mag NAGYOBB a blokknal ({len(core):,} > {len(block):,}).", file=sys.stderr)
+            print("  Ez tipikusan azt jelenti, hogy a mag olyan `###` alszakaszokat is osszefoglal,", file=sys.stderr)
+            print("  amik a lapon LENTEBB MEG MEGVANNAK -- tehat duplikalnal. Ellenorizd a `###`", file=sys.stderr)
+            print("  fejleceket a szakaszban, mielott ujraprobalod.", file=sys.stderr)
+            return 68
         print(f"assert-horgony: {probe[:90]}")
         if a.dry_run:
             print("(dry-run, nem irtam)"); return 0

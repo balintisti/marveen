@@ -256,3 +256,32 @@ Ez a lap egy SZABÁLYKÖNYV, tehát ez a lépés itt állandóan meg fog törté
 *(A három teljes esete -- a 25,2%-os szóhossz-eloszlás, mandark 512 specje, a `populacion` kontra
 `A MEGNEVEZETT` kontroll-lecke -- `rulebook/meresi-vakfoltok.md`. 15 638 karakter volt itt.)*
 
+
+
+<!-- kivive a kozos CLAUDE.md-bol 2026-09-18 22:19 (kartya 2028900e) -->
+## Időkezelés
+*(A mért esetek TELJES szövege -- a hét próbapont, a Tokió-mérés, a CI-idobelyeg esete, a `.env`
+permission-mérés és a sodródás-sorozat -- `rulebook/idokezeles-esetek.md`. 15 211 karakter volt itt.)*
+
+MINDIG a megfelelő lokális időt használd. **DE A GÉP NEM A LAPOT MONDJA:** a lap
+`Europe/Budapest`-et ír, a FUTÓ FOLYAMAT `Europe/Belgrade`-et (`Intl.DateTimeFormat()`;
+a `TZ` nincs beállítva, a `SCHEDULER_TZ` 0 a `.env`-ben ÉS a `config-overrides.json`-ban).
+
+**MA EZ NULLA KÜLÖNBSÉG, ÉS EZ MÉRVE VAN** (didi hét próbaponton, mindkét DST-átmenettel;
+kontroll: Budapest kontra Tokió ELTÉR, tehát a mérő tud különbséget mondani). Isti Magyarkanizsán
+él, Szerbiában -- a `Belgrade` a pontosabb azonosító, a `Budapest` örökölt egyszerűsítés. **Amit
+NEM szabad belőle olvasni: hogy a rendszer ezt az azonosítót HASZNÁLJA.**
+
+**A MECHANIZMUS, AMI EZT VESZÉLYESSÉ TEHETI: MAGYARORSZÁG EU-TAG, SZERBIA NEM.** Ma ugyanazt a
+DST-naptárt követik; ha az EU megszünteti az óraátállítást, a két zóna SZÉTVÁLIK, és egy
+`Budapest`-et pinelő teszt-készlet egy `Belgrade`-en futó rendszert állít -- két óra eltéréssel,
+évente kétszer, és semmi nem szól.
+
+**ÚJRANYITÁSI FELTÉTEL (GATE, nem WATCH):** ha valaki a `SCHEDULER_TZ`-t BEÁLLÍTJA, az értéke
+EGYEZZEN a teszt-pinnel. Ma egyik sincs beállítva, tehát nincs mit összevetni -- és épp ezért nem
+tüzel semmi. A döntési pont a beállítás pillanata:
+
+```bash
+node -e "console.log(Intl.DateTimeFormat().resolvedOptions().timeZone)"   # amit a futo fa hasznal
+grep -c '^SCHEDULER_TZ=' .env                                             # 0 = oroklott, nem kimondott
+```
