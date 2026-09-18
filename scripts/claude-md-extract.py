@@ -84,8 +84,24 @@ def main():
             print("NEM TOROLTEM: az archivum NEM tartalmazza a horgonyt az iras utan.", file=sys.stderr); return 67
         print(f"assert OK: az archivum tartalmazza ({len(got):,} kar.)")
 
-        # 3. csak MOST toroljuk a magbol
+        # 3. KANARI: a kivitel NE vihessen el teherhordo mondatot. Ez a PATH okozta a
+        # 2026-09-18-i veszteseget (Isti viselkedesi szabalyai), ezert itt is kell.
         new_s = s[:start] + core + s[end:]
+        try:
+            import importlib.util as _u
+            _sp = _u.spec_from_file_location("_cme", os.path.join(os.path.dirname(os.path.abspath(__file__)), "claude-md-edit.py"))
+            _m = _u.module_from_spec(_sp); _sp.loader.exec_module(_m)
+            missing = _m.check_canary(new_s)
+        except Exception as e:
+            print(f"NEM TOROLTEM: a kanari-ellenorzes nem futott le ({type(e).__name__}) -- "
+                  f"fail-closed, mert enelkul nem tudom, mit vinnel el.", file=sys.stderr)
+            return 70
+        if missing:
+            print(f"NEM TOROLTEM: a kivitel {len(missing)} TEHERHORDO mondatot vinne el:", file=sys.stderr)
+            for mm in missing:
+                print(f"    - {mm}", file=sys.stderr)
+            print("  (az archivumba MAR bekerult -- a lapot nem modositottam, tehat nincs vesztes)", file=sys.stderr)
+            return 69
         os.lseek(fd, 0, 0); os.ftruncate(fd, 0); os.write(fd, new_s.encode("utf-8"))
         print(f"lap: {len(s):,} -> {len(new_s):,} ({len(new_s)-len(s):+,})")
         return 0

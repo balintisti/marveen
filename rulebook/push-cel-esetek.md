@@ -654,3 +654,102 @@ fájl, amit TÉNYLEG átírtál, adjon `BLOKKOLO`-t -- különben egy elrontott 
 *(A `.env` horgony `($|\.)`-re bővült: a szűkebb `\.env$` alak hét env-fájlból ötöt nem látott.
 A `.env.example` kivétel KÜLÖN lépés, mert `grep -E`-ben nincs negatív lookahead -- és a bővítés
 meg a kivétel EGY CSOMAG: csak az egyiket bevezetni rosszabb, mint egyiket sem.)*
+
+
+<!-- kivive a kozos CLAUDE.md-bol 2026-09-18 22:24 (kartya 2028900e) -->
+## (friday mérte 2026-08-28, marveen rossz refet adott neki egy másik repóból)
+
+    develop         (helyi)   f82a98b   ->  275 commit
+    fork/develop              6b59dc4   ->  270
+    origin/develop            29a1bd9   ->  222
+    origin/main               1f13ff1   ->  222
+
+Ugyanaz a kérdés (`git rev-list --count <ref>..<tip>`), négy ref, három különböző szám. **Egyik
+sem hibás; egyik sem mondja meg magától, melyikre gondoltál.**
+
+A Delta-CRM lapján ez a `main` szóra van kimondva; itt a `develop` ugyanez, három példányban --
+és a marveenben rosszabb, mert a `fork` és az `origin` KÜLÖNBÖZŐ TERMÉSZETŰ (az egyik Istié, a
+másik idegen upstream), tehát a rossz választás nem csak rossz számot ad, hanem rossz repóról szól.
+
+**ÉS EGY MÁSIK REPÓ REFJE ÜRES VÁLASZT AD, NEM HIBÁT.** Ugyanabban a körben egy
+`integration/2026-08-27-batch` refet adtam mérendőnek -- **az egy Delta-CRM ágnév, a marveenben
+nem létezik.** A marveen batch neve `integration/2026-08-28-bae4df49`.
+
+    git ls-remote fork 'refs/heads/integration/*'   ->  akkor EGYETLEN ref, és nem az
+    *(MA, 2026-09-04: KETTO -- `2026-08-28-bae4df49` és `2026-08-29-friday-four`. A szám avult,
+      a példa NEM: a keresett `2026-08-27-batch` MA SEM létezik a marveenben (0), és az
+      `origin`-on sincs integration ref (0). KONTROLL: ugyanaz a mérő lát `develop`-ot (1),
+      tehát nem vak. jarvis mérte újra.)*
+    git ls-remote origin 'refs/heads/integration/*' ->  nulla találat
+
+Ha friday vakon lemérte volna, **üres eredményt kap, és az üres eredmény nullának olvasódik** --
+vagyis „nincs különbség a köteghez képest", ami épp az ellenkezője az igazságnak. A helyes
+refhez mérve 6 commit, és 13 BEHIND (tehát valódi merge, nem fast-forward).
+
+**A gyakorlati szabály, két sorban:**
+
+```bash
+git ls-remote <remote> 'refs/heads/<minta>'   # LÉTEZIK-E a ref, mielőtt mérnél vele
+```
+
+**ÉS AZ `ls-remote` ÁTMENETI ÜRESET AD EZEN A GÉPEN -- KÉTSZER MÉRVE EGY ÉJSZAKA, ÉS A RIASZTÓ
+IRÁNYBA TÉVED** (friday mérte 2026-09-05 00:58, marveen ugyanabba futott 01:1x-kor).
+
+    marveen:  `ls-remote origin refs/heads/fix/e5f46eb1-guard-colon-form`  ->  **ÜRES**
+              ugyanaz a parancs, ugyanaz az alak, percekkel később, 4 próbából 4:  `885903ff`
+    friday:   ugyanez egy feature-ágra, és ő MÁR tudta, hogy a parancs átmeneti üreset ad,
+              ezért NÉGY újrapróbálással futtatta, MIELŐTT következtetett
+
+**Az üres válasz és a valódi „nincs ilyen ref" BÁJT-AZONOS**, és az üresből az következik, hogy az
+ág NINCS a távolin -- vagyis hogy a munka EGY LEMEZEN áll. Ez a lap külön szakaszt szentel annak,
+milyen drága egy ilyen (elveszett bizonyíték, újraírt munka). **Egy átmeneti hálózati hiba tehát
+pontosan azt a vészjelzést hamisítja, amit a legkomolyabban veszünk.**
+
+*(marveen majdnem azt jelentette, hogy két ág -- amin valódi, ellenőrzött munka áll -- nem létezik
+az originon. A cáfolat egy `git branch -a --contains` volt, ami a REMOTE-TRACKING refet is látta:
+két mérő, ellentétes válasz, és a második volt az igaz.)*
+
+**A SZABÁLY: egy `ls-remote` ÜRES válaszára SOHA ne építs állítást első futásra.** Futtasd újra
+(3-4x), és csak akkor mondd ki, hogy a ref nem létezik, ha MINDEN próba üres. Egy NEM-üres válasz
+egyszer is elég a létezéshez -- az aszimmetria a mi javunkra dolgozik.
+
+**A KONTROLL, ami ingyen van:** ugyanabban a futásban kérdezz le egy BIZTOSAN létező refet is
+(`refs/heads/main`). Ha az is üres, a hálózat a hibás, nem a ref.
+
+```bash
+git ls-remote <remote> 'refs/heads/main' 'refs/heads/<a keresett>'   # a main a KONTROLL
+```
+
+**ÉS A KONTROLL AZ ELSŐ HASZNÁLATÁN TÜZELT, PERCEKKEL A MEGÍRÁSA UTÁN** (dexter, 2026-09-05 01:22).
+A hét ma esti ágát ellenőrizte újra, a `refs/heads/main` kontrollal együtt -- és az ELSŐ sor ÜRESET
+adott MINDKÉT refre:
+
+    fix/bc695fb6-delete-dead-product-cache   helyi 2301e359   távoli (üres)   A KONTROLL IS ÜRES
+
+**Kontroll nélkül ez a sor azt mondja, hogy a ma esti rbac-munkát vivő ág nincs a távolin** -- és
+dexter le is írta volna. A kontrollal a verdikt az, hogy *ebben a hívásban a hálózat mondott csődöt*,
+ami ÚJRAPRÓBÁLÁS, nem lelet. Egy újrapróba: `2301e359`, egyezik. A másik hat elsőre tiszta volt.
+
+**Vagyis nem ritka és nem elméleti: egy hét ágas ellenőrzésben egyszer elsült.**
+
+**ÉS A MEGKÜLÖNBÖZTETŐ, amit dexter tett hozzá (ugyanaznap KÉT `Could not resolve host` bukása volt
+PUSH közben):**
+
+    egy PUSH hangosan bukik ......... `fatal:`, exit != 0, azonnal látod
+    egy `ls-remote` NÉMÁN bukik ..... üres kimenetet ad, exit 0, és úgy néz ki, mint egy válasz
+
+Ugyanaz a hálózati hiba, két teljesen különböző láthatóság. **Ezért kell kontroll ehhez az egy
+parancshoz, és nem kell a pushhoz.**
+
+*(A költség-aszimmetria dexter megfogalmazásában, és ez az, amiért ez a fajta sürgősebb: az ő
+`{"ok":true}` hibája a MEGNYUGTATÓ irányba tévedett -- azt hitte, lezárt kártyákat, amiket nem. Az
+üres `ls-remote` a RIASZTÓ irányba: igazolt munka látszik elveszettnek. A riasztóra gyorsabban
+cselekszünk, és több ember idejét viszi el.)*
+```bash
+git rev-list --count <TELJES ref>..<tip>      # és írd ki mindkét oldalt a számmal együtt
+```
+
+*(A hiba az enyém volt, és ma harmadszor ugyanabban az alakban: egy MÁSIK REPÓ bizonyítékát,
+indoklását, majd refjét adtam át ehhez a repóhoz. Mindháromszor másvalaki mérte ki. A közös
+jegy: a marveen és a Delta-CRM elég hasonló ahhoz, hogy egy ágnév vagy egy workflow-fájl
+átvihetőnek LÁTSSZON -- és az átvitel nem hibát ad, hanem üres vagy hihető választ.)*

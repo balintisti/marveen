@@ -1,0 +1,42 @@
+# TEHERHORDO MONDATOK, amiknek MINDIG a kozos lapon kell allniuk (kartya 2028900e).
+# Minden sor egy SZO SZERINTI reszlet. A `claude-md-edit.py` minden iras UTAN ellenorzi;
+# ha barmelyik eltunne, a valtozas NEM MEGY AT.
+#
+# MIERT LETEZIK: 2026-09-18-an egy blokk kivitele elvitte Isti VISELKEDESI szabalyait
+# (nincs csillag, nincs gondolatjel, nincs AI klise). Csak azert vettem eszre, mert az
+# assert-horgony veletlenul kiirt egy sort beloluk. mandark merese elore megmondta ezt:
+# a viselkedesi szakaszokat SENKI NEM IDEZI, mikozben mindenki betartja -- tehat barmilyen
+# meret- vagy idezettseg-alapu vagas EPP EZEKET celozza meg eloszor.
+#
+# IDE az kerul, amit egy elvesztes eseten NEM vennenk eszre magatol: viselkedes es biztonsag.
+# NEM ide valo a mert eset vagy az indoklas -- azok kiszervezhetok.
+
+# --- Isti viselkedesi szabalyai (a kimenet alakja, minden uzeneten) ---
+Nincs gondolatjel (em dash). Soha.
+NINCS CSILLAG AZ ISTINEK SZÓLÓ ÜZENETEKBEN
+Nincs AI klisé
+Nincs túlzott bocsánatkérés
+Ne meséld el mit fogsz csinálni
+
+# EKEZET-CSAPDA: a sorok SZO SZERINT illeszkednek. A lap nagybetus cimei EKEZETESEK
+# (`NYILVÁNOS`), es egy ekezet nelkuli kanari-sor NEM TALAL -- vagyis a MERO mond hamisat,
+# nem a lap. Elsore epp ezen bukott (2026-09-18).
+
+# --- biztonsag: hova megy a push (egy idegen NYILVANOS upstream all a masik oldalon) ---
+DISABLED_NO_PUSH_TO_FOREIGN_UPSTREAM
+git push fork
+IDEGEN, NYILVÁNOS upstream
+
+# --- biztonsag: eles ugyfeladat ---
+OLVASNI SZABAD, HA KELL. ÍRNI CSAK ISTI KÜLÖN SZAVÁVAL
+
+# --- biztonsag: a titok-kapu es a DB-kapu ---
+secret-gate
+mode=ro
+
+# --- a gazdahoz vezeto ut ---
+8362010684
+scripts/notify.sh
+
+# --- a ket sav, ami AZONNAL eles ---
+AZONNAL

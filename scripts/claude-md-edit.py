@@ -60,6 +60,20 @@ def write_baseline(n, reason):
         f.write(f"{n}\n")
     return prev
 
+CANARY = os.environ.get("CLAUDE_MD_CANARY", "/Users/isti/marveen/scripts/claude-md-canary.txt")
+
+def canary_lines():
+    try:
+        with open(CANARY, encoding="utf-8") as f:
+            return [l.rstrip("\n") for l in f
+                    if l.strip() and not l.lstrip().startswith("#")]
+    except FileNotFoundError:
+        return []
+
+def check_canary(text):
+    """A HIANYZO teherhordo mondatok listaja. Ures lista = minden megvan."""
+    return [c for c in canary_lines() if c not in text]
+
 def log(msg):
     try:
         with open(LOG, "a", encoding="utf-8") as f:
@@ -121,6 +135,17 @@ def main():
             print("  Ha tenyleg uj MERT alak (nem atfogalmazas): --grow \"<indok>\"", file=sys.stderr)
             log(f"REFUSED {len(s)} -> {new_n} (baseline {base})")
             return 2
+        # KANARI: a teherhordo mondatok NE tunhessenek el egy vagassal. 2026-09-18-an egy
+        # blokk kivitele elvitte Isti viselkedesi szabalyait, es csak veletlenul vettem eszre.
+        missing = check_canary(new_s)
+        if missing:
+            print(f"NEM IRTAM: a valtozas {len(missing)} TEHERHORDO mondatot vinne el:", file=sys.stderr)
+            for m in missing:
+                print(f"    - {m}", file=sys.stderr)
+            print("  Ezek a `scripts/claude-md-canary.txt`-ben vannak felsorolva. Ha egy sor", file=sys.stderr)
+            print("  SZANDEKOSAN valtozik, eloszor a kanari-listat javitsd, aztan a lapot.", file=sys.stderr)
+            log(f"CANARY REFUSED: {missing}")
+            return 69
         os.lseek(fd, 0, 0); os.ftruncate(fd, 0)
         os.write(fd, new_s.encode("utf-8"))
         print(f"OK: {len(s):,} -> {new_n:,} karakter ({new_n - len(s):+,})")

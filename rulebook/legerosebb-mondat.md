@@ -296,3 +296,91 @@ meg, hogy SZÓR-e ott, ahol szórnia kellene.
 *(Ugyanaznap ugyanattól a szerzőtől a testvér-hiba: `grep -A4` egy olyan `return` fölött, amit a
 saját ötsoros kommentje kitolt az ablakból. Az ABLAK túl szűk, ez a MINTA túl szűk -- két külön
 mechanizmus, azonos néma nulla.)*
+
+
+<!-- kivive a kozos CLAUDE.md-bol 2026-09-18 22:24 (kartya 2028900e) -->
+### (deeper fogalmazta meg 2026-09-17, két saját leletén; a nevet tőle vettem át)
+
+    a kiirt mondat ..... „a szovegben »Tibor Toth«, a CRM-ben »Tibor Toth« (83637). Ugyanaz a vevo?"
+    a ket nev .......... **BAJT-AZONOS**
+    ami TENYLEG dontott . a telefon egyezett, es az EKEZET-ERZEKENY nev-kereses NEM hozta vissza
+                          azt a kontaktot -- **ez a mondatban SEHOL nem szerepel**
+
+A mondat szó szerint IGAZ, és **a nevet önmaga ellen állítja**: az olvasó egy olyan eltérést keres,
+ami nem létezhet, miközben a valódi diszkriminátor egyetlen felületen sem látszik.
+
+**A MÁSODIK PÉLDÁNY UGYANAZON A NAPON, UGYANEBBEN AZ ESZKÖZ-CSALÁDBAN:** egy kimenet, ami a NEVET a
+kontakt-oldali listából, a MEZŐKET egy projekt-oldali hívásból szedte, és EGY válaszként nyomtatta
+-- ettől „részleges írásnak" olvastam, holott egy FORRÁS késett. *(Ez a lap egy másik helyén
+áll részletesen; ide a KÖZÖS alak miatt kerül.)*
+
+> **A PRÓBA, ÉS ÍRÁSKOR TÜZEL: amit a mondat ÖSSZEVET, az-e az, ami DÖNTÖTT?**
+> Ha nem, a mondat nem hibás -- csak elvezeti az olvasót az októl, és minél pontosabb, annál jobban.
+
+**ÉS EZ NEM CSAK ESZKÖZ-KIMENETRE ÁLL: A MI HÁZI STÍLUSUNK IS ILYEN.** Majdnem minden
+kártya-kommentünk `X kontra Y` alakban ír -- és ugyanaz a veszély: **a KIÍRT összevetés nem mindig
+az, amelyik DÖNTÖTT.**
+
+**ÉS A HELYESBÍTÉS NEM UTAZIK -- ÖT KÜLÖNBÖZŐ TÁVOLSÁGRA, MIND MÉRVE:**
+
+    a FEJLÉC nem utazik a MONDATTAL          -> a környezet a mondatba, ne fölé
+    a CÁFOLAT nem utazik a KOMMENTTEL        -> a kanban-komment APPEND-ONLY; ha kommentet
+                                                idézel, nézd meg, van-e UTÁNA helyesbítés
+                                                UGYANATTÓL a szerzőtől
+    a HELYESBÍTÉS nem utazik a MÁR ELKÜLDÖTT ÜZENETTEL -> küldd el a helyesbítést is, ÜZENETBEN,
+                                                ugyanannak. A komment nem elég: az elküldött
+                                                üzenet VISSZAHÍVHATATLAN
+    a HELYESBÍTÉS utazik, csak LASSABBAN     -> egy COMMIT azonnal látszik, egy üzenet SORBA ÁLL.
+                                                Ezért: ha egy döntés commitba kerül, kerüljön a
+                                                KÁRTYÁRA is -- a kártya nem áll sorba
+    a HELYESBÍTÉS ROSSZ EMBERHEZ ér          -> annak IS menjen, akitől az állítás SZÁRMAZOTT
+                                                vagy aki TOVÁBBVISZI (tipikusan a koordinátor).
+                                                A munkatárs a MÉRÉSSEL megy tovább; a
+                                                koordinátor a MONDATTAL
+
+**ÉS A TÜKÖRKÉPE: A HOZZÁFŰZÖTT MINŐSÍTŐ SEM UTAZIK.** Egy fejléc, ami mérést állít, plusz egy
+utána fűzött tagmondat, ami kimondja, hogy a mérés meg sem történt -- a SZŰRŐ, az IDÉZET és az
+ember a FEJLÉCET látja. A javítás nem hosszabb magyarázat, hanem a FEJLÉC szétvágása:
+`NEM MÉRT -- <ok>` az egyik úton, és a mért nulla a másikon, hedge nélkül.
+
+**EGY ÉLŐ, VÁLTOZÓ ARTEFAKTUM A KÁRTYA LEÍRÁSÁBA MEGY, ÉS A CÍM MONDJA MEG, HOGY OTT VAN.** A
+leírás SZERKESZTHETŐ, a komment nem: egy változó lista kommentekben minden korrekcióval egy
+további meghaladott példányt hagy maga után, és az olvasó ott áll meg, ahol épp. A mutató az
+első 60 karakterbe kerüljön. *(A komment marad a NYOM: a mérés, a kontroll, a kimondott határ.)*
+
+**ÉS EGY KOORDINÁTORI DÖNTÉS LÁTHATATLAN A VERDIKT-PARSERNEK, mert nem verdikt.** Ha
+koordinátorként megválaszolsz egy kártya nyitott kérdését, írj MELLÉ saját verdikt-sort. És egy
+handoff „X-re vár" sora DÁTUMOZOTT ÁLLÍTÁS, nem tényállás -- olvasd el a kártyát, mielőtt
+rátámaszkodsz.
+
+**ÉS A HATODIK KIADÁS EGY COMMIT-ÜZENETEN, NEM EGY LELETEN: A SUBJECT UTAZIK, A DIFF NEM**
+(friday mérte 2026-09-11, a `bd48915` ejtésekor; marveen ROSSZUL olvasta el ugyanezt a commitot
+néhány órával korábban, és „szemantikus ütközésnek" nevezte).
+
+    a `2203a78` SUBJECT-je ....... "unpin the bare skipped call"
+    a `2203a78` DIFFJE ........... az ELLENKEZŐJE: a csupasz háromargumentumos alakot CSERÉLI
+                                   a reason-hordozó alakra -- vagyis PONTOSAN azt az állítást,
+                                   amit a `bd48915` is meg akart írni
+
+    a vitatott assert a törzsön :45  és a `bd48915`-ön :44  ->  **BÁJT-AZONOS**
+    `git diff HEAD bd48915 -- <fájl>`  ->  csak a FÖLÖTTE álló komment tér el (3 sor kontra 2)
+    KONTROLL: ugyanaz a diff a teljes fára 72 fájlt ad -> a differ nem vak
+
+**Vagyis nem volt mit feloldani: a törzs MÁR hordozta, amit az ág akart, és az ág redundáns volt.**
+Nem ütközés-feloldás kellett, hanem EJTÉS.
+
+**A HORDOZHATÓ ALAK: egy MERGE-DÖNTÉS, amit a törzsön MÁR OTT ÁLLÓ commit SUBJECT-jéből hozol,
+ugyanaz a hibaosztály, mint egy fejlécet idézni a kikötése nélkül.** A subject a szerző SZÁNDÉKÁT
+mondja el egy mondatban; a diff azt, ami megtörtént. A kettő eltérhet -- és épp a `git log --oneline`
+az, amit merge előtt mindenki megnéz, mert olcsó.
+
+    `git log --oneline` ......... a SUBJECT-eket adja  -> ebből ütközést LEVEZETNI nem lehet
+    `git diff <a>..<b> -- <fájl>`  a tartalmat adja     -> EZ dönt
+    `git merge-tree` ............ a mergelhetőséget     -> és EZ a harmadik, külön kérdés
+
+*(És a saját hibám iránya itt a MUNKÁT GYÁRTÓ volt: egy nem létező szemantikus ütközést állítottam,
+amit valakinek fel kellett volna oldania. A lap külön rögzíti, hogy a riasztó irányú tévedés a
+következő kör bizalmát viszi el -- itt egy egész ág ejtése helyett egy feloldási kört rendeltem
+volna el.)*
+
+*(Az öt kiadás mért esetei: `rulebook/legerosebb-mondat.md`.)*

@@ -256,3 +256,94 @@ kimondasa. Ha kiderul, hogy egymagaban kitolt egy embert, akkor jon az uj ugynok
 
 **A jövőbeli kódoló ágens.** Isti külön, kizárólag kódolással foglalkozó ágenst tervez.
 A kódolási tudást és kontextust tedd félre, hogy át lehessen adni neki.
+
+
+<!-- kivive a kozos CLAUDE.md-bol 2026-09-18 22:28 (kartya 2028900e) -->
+### HA EGY ÁGENS SZÁNDÉKOSAN ÁLL: `workcheck.json` -> `{"kind":"none"}` (marveen döntése, 2026-08-28)
+*(A mért esetek -- jarvis 10 értesítése 4 óra 48 perc alatt, deeper próza-mérése, a két elsodródott
+sorszám-horgony, a router hatókör-mérése -- `rulebook/workcheck-esetek.md`.)*
+
+**A tétlen-őrnek VAN néma állapota** (a horgony a FELTÉTEL-PÁR, nem sorszám: `src/idle-agent.ts`,
+`(input.ownWorkCount ?? 0) <= 0 && (input.workCheckKind ?? '') === 'none'`): ha a `workcheck.json`
+`kind`-ja `'none'`, az őr hallgat.
+
+**⚠ ES A KOVETKEZO MONDAT ITT 2026-09-12 08:3x-IG HAMIS VOLT, PEDIG BIZTONSAGI ALLITAS** (friday
+merte magan, marveen ujramerte a TELJES hivasi lancon). Az allt itt, hogy *"ket feltetel, tehat
+NYITOTT MUNKAVAL NEM LEHET ELNEMITANI -- ezert biztonsagos konvencio"*. **Nem ket fuggetlen
+feltetel: a masodik MEGHATAROZZA az elsot.**
+
+    idle-agent.ts:565        `case 'none': return []`          <- a lista URES lesz
+    idle-agent-watcher.ts:311  ownItems = selectDeclaredWork(check, ...)
+    idle-agent-watcher.ts:313  `const ownWorkCount = ownItems ? ownItems.length : null`
+    -> `kind='none'` eseten ownWorkCount **MINDIG 0**, barhany nyitott kartya all a nevén
+    ugyanez a FUTO retegben: dist/idle-agent.js:383 `case 'none': return []` | :155 a feltetel-par
+    KONTROLL, hogy a parser diszkriminal: `VALID_KINDS.includes(kind)` -> ervenytelen kind -> null
+
+**VAGYIS A `none` ONMAGABAN, TELJESEN ES AZONNAL ELNEMIT.** A ket feltetel egyutt all vagy sehogy.
+
+**A KIÚT ROSSZ HELYEN VOLT HIRDETVE, és ez mért kár.** A `buildNoWorkNotice` azt kéri, hogy *„mondd
+ki A KÁRTYÁN, hogy miért állsz"* -- az őr viszont **kártyát sosem olvas**. Aki pontosan azt teszi,
+amit az üzenet kér, semmit nem változtat.
+
+    A KÁRTYA azt őrzi meg, MIT döntöttünk.
+    A `workcheck.json` az, amit az ŐR OLVAS.
+    És eddig az üzenet az elsőt kérte.
+
+**A konvenció:** aki szándékosan áll, a saját `workcheck.json`-jába `{"kind":"none"}`-t ír. A
+kártyán ettől függetlenül maradjon ott az INDOK -- az embernek szól, a JSON a gépnek.
+
+**ÉS A `workcheck.json` PRÓZÁJÁT SEMMI NEM OLVASSA -- EZT ÉN ÍRTAM ELŐ ROSSZUL, deeper MÉRTE MEG**
+(2026-09-11). Azt kértem, hogy a `{"kind":"none"}` mellé írjon FELOLDÁSI FELTÉTELT és DÁTUM-PADLÓT
+a fájlba. Megtette -- és megmérte, hogy **a parser (`parseWorkCheck`) KIZÁRÓLAG a `kind` és a
+`reviewer` mezőt olvassa.** Minden más mező PRÓZA, amit egyetlen kódsor sem néz meg.
+*(KONTROLL, hogy a parser diszkriminál: `kind:"bogus"` -> null, hibás JSON -> null.)*
+
+> deeper mondata a pontos: **a próza AUDITÁLHATÓVÁ tesz, nem ÖNJAVÍTÓVÁ.**
+> Egy feltétel mechanizmus nélkül nem feltétel, hanem szándék -- ezért a `none` mellé **KÁRTYA**
+> jár dátum-padlóval, nem csak egy JSON-mező. A kártyát a tábla mutatja, a JSON prózáját senki.
+
+**ÉS A `none` NEM SEMLEGES CSERE.** Elnémítja a no-work értesítést az adott ágensre, LEJÁRAT
+NÉLKÜL -- vagyis amíg áll, **senkit nem fog emlékeztetni semmi arra, hogy munkát adjon neki.** Egy
+ügyeletes ágensnél ez helyes csere (a forrás nevesíti is ezt az esetet), de CSERE.
+
+**ÉS SOHA NEM ÁLL VISSZA MAGÁTÓL** (jarvis mérte forrásból): a `workcheck.json`-ra az egész
+kódbázisban EGYETLEN fájlművelet áll, egy `readFileSync` (`src/web/idle-agent-watcher.ts`, a
+`readWorkCheckRaw()` függvényben); írásra NULLA találat. Pozitív kontroll: ugyanaz a keresés
+megtalálja az olvasót. **A fájlt kizárólag KÉZ írja.**
+
+**A HORGONY SZIMBÓLUM, NEM SORSZÁM, és ez mért példány a lap saját szabályára:** a korábban itt
+állt `idle-agent-watcher.ts:65` és `idle-agent.ts:190` **+117 és +92 sorral sodródott el**. A
+MECHANIZMUS-állítások igazak voltak, csak a koordináták nem -- és a javítás nem két új szám (az újra
+elsodródik), hanem a szimbólum-horgony. *(Mérő-kikötés: ehhez a két fájlhoz az `origin/main` NEM
+érvényes alapvonal -- `git cat-file -e origin/main:<fájl>` rc=128, miközben `origin/main:package.json`
+rc=0. Az `origin` itt az IDEGEN upstream; a horgonyokat a FUTÓ fán kell mérni.)*
+
+**A KOCKÁZAT HATÁROLT, és ezt ki kell mondani, mert egy korábbi alakom többet állított:**
+
+    elfelejtett `none` + VAN munkája   -> **AZ OR HALLGAT. NINCS VEDVE.**
+    elfelejtett `none` + NINCS munkája -> a koordinátor sosem tudja meg
+
+**ITT KORABBAN AZ ALLT, hogy az elso eset VEDVE van, es hogy a res "hatarolt". MINDKETTO HAMIS.**
+Egy elfelejtett `none` PONTOSAN azt az esetet rejti el, amit a legfontosabb latni: van nyitott
+munkaja, all, es semmi nem szol. A res NEM hatarolt.
+
+**AMI EBBOL A GYAKORLATRA KOVETKEZIK: a `none` nem "biztonsagos konvencio", hanem EGY KAPCSOLO,
+ami mindent lekapcsol.** Aki `none`-t ir, vegye vissza, amint felvesz valamit -- es aki flottat
+allit le, MERJE MEG a `kind` mezot, ne a kartya-szamot: a kartya-szam az API-bol MAS valaszt ad,
+mint amit az or lat. *(marveen pontosan ebbe futott 2026-09-12 07:4x-kor: a kanban API-bol szamolt
+`ownWork=11`-et friday-ra, es azt irta, hogy "az or meg ebresztheti" -- az or ekkor mar hallgatott.
+A mero a TABLAT kerdezte, az or a `selectDeclaredWork`-ot.)*
+
+```bash
+for a in agents/*/; do printf '%s %s\n' "$(basename $a)" "$(tr -d '\n ' < $a/workcheck.json)"; done
+```
+
+*(Alapvonal a bevezetés napján, 2026-08-28: mind a hat ágensnek VAN fájlja, és egyik sem `none`.
+Ha valaki `none`-ra áll, ez a „mihez képest".)*
+
+**ÉS A PARK HATÓKÖRE SZŰKEBB, MINT HINNÉD: a `{"kind":"none"}` NEM némítja el az üzenet-KÉZBESÍTÉST.**
+Három fájl olvassa a `workcheck.json`-t, és a router egyetlen produkciós hívási helye
+(`message-router.ts`, `quietAgentsToCheck`) a BUSY-STUCK RIASZTÁS populációját szűri, nem a
+kézbesítést -- a kód döntötte el, nem a docblock.
+
+**A gyakorlati szabály: aki `none`-t ír, vegye vissza, amint felvesz valamit.**
