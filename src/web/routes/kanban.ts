@@ -842,7 +842,51 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // A testver-vegpont (`GET /api/kanban/<id>`) MAR MA IS 404-et ad; ez a sor
     // OSSZEHANGOLJA a kettot, nem uj viselkedest vezet be.
     if (!getKanbanCard(cardId)) { json(res, { error: 'Kártya nem található' }, 404); return true }
-    json(res, getKanbanComments(cardId))
+    const alle = getKanbanComments(cardId)
+
+    // `?limit=N` -- OPT-IN CSONKOLAS, ES A VALASZ MEGNEVEZI A SAJAT HIANYAT.
+    //
+    // MIERT KELL. Egy kartya kommentjeinek elolvasasa ma a TELJES halmazt hozza, es a
+    // lap ELO is irja, hogy felveteelkor olvasd vegig. Merve 2026-09-19, elesben:
+    // 900 elo kartya 19 057 038 karakternyi kommentet tart (~4,76 M token), es az
+    // eloszlas extrem ferde -- a median kartya 9 154 karakter (~2,3 e token), de
+    // `a65623ef` egymaga 804 261 (~201 e token). Vagyis EGY kartya elolvasasa ma
+    // elviheti egy agens teljes kontextusablakat.
+    //
+    // MIERT BORITEK ES NEM CSUPASZ TOMB. Egy nema csonkolas pontosan azt a hibat
+    // termelne, ami ellen ez keszult: a hianyzo sorok NEM-LETEZESNEK olvasodnak, es
+    // a lap ket kulon torvenye is ezt mondja ki (a csonkolt nezet mint populacio, es
+    // hogy a 200-as valasz onmagaban nem bizonyitek). Ezert aki limitet KER, MAS
+    // ALAKU valaszt kap: egy boritekot, amiben ott a `total`, a `returned` es az
+    // `omitted`. Aki nem ker limitet, BAJTRA a mai valaszt kapja -- a csonkolas nem
+    // tortenhet meg veletlenul.
+    //
+    // A TESTVER-VEGPONT MAR IGY VISELKEDIK: a `GET /api/kanban/<id>` a
+    // `comments_omitted` mezovel NEVEZI MEG, hogy kihagyta oket. Ez ugyanaz az alak,
+    // egy szinttel lejjebb.
+    const limitRaw = ctx.url.searchParams.get('limit')
+    if (limitRaw === null) { json(res, alle); return true }
+    const limit = Number.parseInt(limitRaw, 10)
+    if (!Number.isFinite(limit) || limit < 1) {
+      json(res, { error: '`limit` pozitiv egesz legyen' }, 400); return true
+    }
+    // `from=start` az ELSO N-et adja (a kartya eredete), `from=end` (alapertelmezes)
+    // az UTOLSO N-et (a friss dontesek). A boritek KIIRJA, melyiket kaptad: egy
+    // reszhalmaz a kivalasztasi szabalya nelkul nem rekonstrualhato.
+    const from = (ctx.url.searchParams.get('from') ?? 'end') === 'start' ? 'start' : 'end'
+    const valasztott = from === 'start' ? alle.slice(0, limit) : alle.slice(Math.max(0, alle.length - limit))
+    // `order` CSAK a visszaadott sorrendet forditja, a KIVALASZTAST nem. A ketto
+    // szetvalasztasa szandekos: kulonben a `desc` csendben mas reszhalmazt adna.
+    const order = (ctx.url.searchParams.get('order') ?? 'asc') === 'desc' ? 'desc' : 'asc'
+    const sorok = order === 'desc' ? [...valasztott].reverse() : valasztott
+    json(res, {
+      comments: sorok,
+      total: alle.length,
+      returned: sorok.length,
+      omitted: alle.length - sorok.length,
+      from,
+      order,
+    })
     return true
   }
   if (kanbanCommentsMatch && method === 'POST') {
