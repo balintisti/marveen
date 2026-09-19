@@ -109,6 +109,48 @@ def log(msg):
     except OSError:
         pass
 
+def check_generated_markers(path=None):
+    """A GENERALT blokkok BEGIN/END jeloloi parban es SORRENDBEN alljanak.
+
+    MIERT LETEZIK (merve 2026-09-19). A `claude-md-extract.py` 2026-09-18-an KETSZER
+    elvitte egy generalt blokk `BEGIN` jelolojet, es ARVA `END` maradt a lapon. A szkriptet
+    kijavitottak (a `BEGIN GENERATED` ma blokk-hatar), de a TORMELEKET senki nem takaritotta
+    ki -- es a defektus HATASA ettol meg elt:
+
+        a kovetkezo dashboard-ujrainditas nem talalt ervenyes BEGIN..END part,
+        ugy dontott, hogy a blokk HIANYZIK, es UJRA HOZZAFUZTE a lap vegehez.
+        +2019 karakter, a meret-racsni MEGKERULESEVEL, es a naploban RES marad,
+        mert ez az ut nem ezen a szkripten at ir.
+
+    Vagyis a lap NEMAN nott minden ujrainditaskor. Ez a legvaloszinubb magyarazat arra,
+    amit a modul fenti docblockja rogzit: hogy a lapot ketszer levagtuk es ketszer visszanott.
+
+    A javitas ott ment, ahol a hibat BEJELENTETTEK (a kivonatolo), es soha nem futott le
+    ujra az a meres, amelyik a leletet MEGTALALTA (a lap allapota). Ezert all ez itt: a
+    `--check` MINDEN hivasnal ujrafuttatja azt a merest.
+
+    A KONTROLL, ami ingyen van: a HIBA IRANYA a megnyugtato. Egy arva `END` semmit nem tor
+    el -- a lap olvashato marad, a szoveg a helyen van, es csak a KOVETKEZO generalaskor
+    derul ki, akkor is csak egy meret-ugrasbol, amit senki nem nez.
+    """
+    import re as _re
+    with open(path or PAGE, encoding="utf-8") as f:
+        s = f.read()
+    jelolok = [(m.group(1), m.group(2).split(" (")[0], m.start())
+               for m in _re.finditer(r"<!-- (BEGIN|END) GENERATED: ([^>]+?) -->", s)]
+    bajok = []
+    nevek = sorted({n for _, n, _ in jelolok})
+    for nev in nevek:
+        sajat = [(t, o) for t, n, o in jelolok if n == nev]
+        be = [o for t, o in sajat if t == "BEGIN"]
+        en = [o for t, o in sajat if t == "END"]
+        if len(be) != 1 or len(en) != 1:
+            bajok.append(f"{nev}: BEGIN={len(be)} END={len(en)} (1-1 kell)")
+        elif en[0] < be[0]:
+            bajok.append(f"{nev}: az END a BEGIN ELOTT all (offset {en[0]} < {be[0]})")
+    return nevek, bajok
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true")
@@ -126,6 +168,14 @@ def main():
         d = cur - base
         print(f"alapvonal: {base:,}   kulonbseg: {d:+,}")
         print("OK, a plafon alatt." if d <= 0 else f"A LAP {d:,} KARAKTERREL A PLAFON FOLOTT.")
+        nevek, bajok = check_generated_markers()
+        print(f"generalt blokk: {len(nevek)} ({', '.join(nevek) if nevek else 'nincs'})")
+        if bajok:
+            for b in bajok:
+                print(f"  JELOLO-HIBA: {b}", file=sys.stderr)
+            print("  Egy arva jelolo a KOVETKEZO ujrainditaskor UJRA HOZZAFUZI a blokkot,", file=sys.stderr)
+            print("  a racsni megkerulesevel. Javitsd, mielott a lapot tovabb szerkeszted.", file=sys.stderr)
+            return 4
         return 0 if d <= 0 else 3
 
     if a.set_baseline:

@@ -400,7 +400,14 @@ def _refresh_claude_macos_keychain():
             data = json.loads(resp.read().decode("utf-8"))
     except (subprocess.SubprocessError, OSError, ValueError,
             urllib.error.URLError) as e:
-        print("  (keychain refresh failed, credential untouched: %s)" % type(e).__name__)
+        # STDERR, NEM STDOUT. A modul docstringje azt igeri, hogy `--json` "prints only
+        # the snapshot JSON", es ez a sor megszegte: a hivo `json.loads()`-ja azonnal
+        # elhasal rajta. MERVE 2026-09-19: a `scripts/hooks/claude-usage.py` (nulla-tokenes
+        # /usage parancs) emiatt MINDIG a GENERIC_ERROR_REPLY-t kuldte volna, vagyis a
+        # kepesseg megvan es nem er oda. Egy FIGYELMEZTETES amugy is a stderr-re valo:
+        # ott mindket modban lathato marad, es egyik modban sem szennyezi az adatot.
+        print("  (keychain refresh failed, credential untouched: %s)" % type(e).__name__,
+              file=sys.stderr)
         return None
 
     access = data.get("access_token")
@@ -707,6 +714,17 @@ def _collect_claude_estimate():
 
 
 def collect_claude():
+    """Burkolo: MINDEN visszateresi utat bejelol a lejart ablakokkal.
+
+    SZANDEKOSAN BURKOLO, NEM HAROM HIVAS. A belso fuggvenynek ma harom `return`-je van
+    (hiteles / gyorsitotarazott / becsult), es az elso valtozatomat CSAK a gyorsitotarazott
+    agba kotottem be. A proba azonnal megfogta: a kovetkezo futas az `estimate` agon ment,
+    es mind a negy uj mezo `None` lett. Egy negyedik `return` ugyanigy esne ki -- nemán.
+    """
+    return _mark_expired_windows(_collect_claude_raw())
+
+
+def _collect_claude_raw():
     result = {"provider": "claude", "source": "estimate", "ok": True}
     windows, err, err_kind = _collect_claude_authoritative()
     if windows is not None:
@@ -735,6 +753,56 @@ def collect_claude():
     except Exception as e:
         result["ok"] = False
         result["error"] = str(e)
+    return result
+
+
+def _mark_expired_windows(result, now=None):
+    """Kimondja, hogy a SZAMOK hany oraja allnak -- nem azt, hogy a FAJL mikor keszult.
+
+    MIERT LETEZIK (merve 2026-09-19, kartya d7c57d12). A kulcstarto-hitelesites 129 oraja
+    lejart, es a lekerdezo azota `ok: true`-t adott `authoritative_cached` forrasbol. Harom
+    fuggetlen reteg mondott "friss"-et ugyanarra a het napos adatra:
+
+        a lekerdezo ..... `ok: true`                       -> sikernek latszik
+        a `cache_age_minutes` ... 8,3                      -> a CACHE-BEJEGYZES kora, nem az ADATE
+        a fogyasztok frissesseg-orei ... `generated_at`    -> MINDEN futas MOSTRA allitja
+
+    Es kozben mind a harom keret-ablak `resets_at`-je a MULTBAN volt. AZ INGYENES KONTROLL,
+    amit barki lefuttathatott volna es senki nem: EGY KERET-ABLAK, AMINEK A RESET-IDEJE ELMULT,
+    NEM LEHET AZ AKTUALIS ABLAK. Egy osszehasonlitas.
+
+    Az ara ot nap volt: harom agens feloldasi feltetele az volt, hogy a keret-meres ELO
+    forrasra terjen vissza, es a feltetel nemán nem tudott teljesulni.
+
+    AMIT EZ A FUGGVENY SZANDEKOSAN NEM TESZ: NEM allitja at az `ok`-ot. A `quota-ceiling-guard`
+    bizonytalansagra FAIL-OPEN, szandekosan ("uncertainty never silences the fleet"); egy
+    `ok: false` ott azt jelentene, hogy a plafon-or abbahagyja az orzest. Ez a fuggveny ADATOT
+    ad hozza, nem iteletet -- a dontes a fogyasztoe.
+    """
+    import time as _time
+    if now is None:
+        now = _time.time()
+    windows = (result.get("windows") or {})
+    lejart, legfrissebb = [], None
+    for nev, w in windows.items():
+        if not isinstance(w, dict):
+            continue
+        r = w.get("resets_at")
+        try:
+            r = float(r)
+        except (TypeError, ValueError):
+            continue
+        if r < now:
+            kor = (now - r) / 3600.0
+            w["expired_hours_ago"] = round(kor, 1)
+            lejart.append(nev)
+            if legfrissebb is None or kor < legfrissebb:
+                legfrissebb = kor
+    if windows:
+        result["windows_expired"] = sorted(lejart)
+        result["all_windows_expired"] = len(lejart) == len(windows)
+        # A LEGFRISSEBB lejart ablak adja az ALSO KORLATOT: az adat legalabb ennyi orAs.
+        result["data_age_hours_min"] = round(legfrissebb, 1) if legfrissebb is not None else 0.0
     return result
 
 

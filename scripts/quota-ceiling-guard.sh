@@ -146,19 +146,35 @@ if [ "$AGE" -gt "$MAX_AGE_MIN" ]; then
 fi
 
 # --- read the weekly window ---------------------------------------------------------
-read -r SOURCE PCT RESETS <<EOF
+# DATA_AGE: az ADAT kora, NEM a fajle. A `snapshot_age_min()` fentebb a `generated_at`-et
+# nezi, amit MINDEN `usage-collect.py` futas MOSTRA allit -- tehat egy 9 perces fajl tobb
+# napos szamokat hordozhat, es a 30 perces kuszobon ATMEGY. Merve 2026-09-19: a hitelesites
+# 129 oraja lejart, a forras `authoritative_cached`, es mind a harom keret-ablak reset-ideje
+# a MULTBAN allt -- ot napon at, csendben. Harom agens feloldasi feltetele ez a mennyiseg volt.
+# Ez a sor NEM valtoztat a dontesen (a kuszob tovabbra is a PCT), csak LATHATOVA teszi.
+read -r SOURCE PCT RESETS DATA_AGE ALL_EXPIRED <<EOF
 $(python3 - "$SNAPSHOT" <<'PY'
 import sys, json
 try:
     d = json.load(open(sys.argv[1]))
     c = d.get('claude') or {}
     w = (c.get('windows') or {}).get('seven_day') or {}
-    print(c.get('source') or 'none', w.get('used_percent'), w.get('resets_at') or 0)
+    # `-` ha nincs mit mondani: egy `0` itt "friss"-nek olvasodna, ami a megnyugtato irany.
+    age = c.get('data_age_hours_min')
+    expired = c.get('all_windows_expired')
+    print(c.get('source') or 'none', w.get('used_percent'), w.get('resets_at') or 0,
+          ('-' if age is None else age), ('yes' if expired else 'no'))
 except Exception:
-    print('none', 'None', 0)
+    print('none', 'None', 0, '-', 'no')
 PY
 )
 EOF
+# A FIGYELMEZTETES a naploba ES a say()-be: egy lejart ablakbol szarmazo szam nem az aktualis
+# ablakrol beszel, barmilyen kicsi is.
+if [ "${DATA_AGE:--}" != "-" ]; then
+  log "FIGYELEM: az adat legalabb ${DATA_AGE} oras (lejart keret-ablakbol) -- forras=$SOURCE"
+  say "FIGYELEM: az adat legalabb ${DATA_AGE} oras, lejart keret-ablakbol (forras=$SOURCE)"
+fi
 
 if [ -n "$FORCE_PCT" ]; then
   log "FORCED weekly percent: $FORCE_PCT (real: $PCT)"
@@ -213,6 +229,38 @@ PY
 }
 
 # --- BLIND CHECK: the guard must never imply "below the ceiling" when it cannot see ---
+# AZ `authoritative_cached` ONMAGABAN NEM ELEG, ES EZ EGY MERT RES (2026-09-19, kartya
+# d7c57d12). A fenti felsorolas szandekosan elfogadja a gyorsitotarazott HITELES leolvasast --
+# egy par perces cache tenyleg megbizhato. Amit SEMMI nem korlatozott: hogy az a cache milyen
+# REGI ADATOT hordoz. A kulcstarto-hitelesites 129 oraja lejart, a forras vegig
+# `authoritative_cached` maradt, es az or ot napon at "under soft threshold, nothing to do"-t
+# irt egy olyan szambol, aminek MIND A HAROM keret-ablaka mar lejart.
+#
+# A HATAR ITT NEM ONKENYES KUSZOB, HANEM LOGIKAI IGAZSAG: ha MINDEN keret-ablak reset-ideje
+# elmult, akkor az a szam definicio szerint nem az AKTUALIS ablakrol beszel. Nem "regi", hanem
+# MAS KERDESRE VALASZ.
+#
+# Es a kovetkezmenye pont a helyes: az or FAIL-OPEN marad (nem allit le senkit), de a
+# `notify_owner` ablakonkent EGYSZER szol -- tehat ez a res az elso napon riasztott volna.
+if [ "${ALL_EXPIRED:-no}" = "yes" ]; then
+  log "BLIND: minden keret-ablak LEJART (adat legalabb ${DATA_AGE:--}h oras, source=$SOURCE)"
+  say "BLIND: minden keret-ablak lejart -- az adat nem az aktualis ablakrol szol"
+  if [ "$(already_fired blind)" = "no" ]; then
+    notify_owner "KERET-OR: NEM LATOK.
+
+A heti keret szama egy MAR LEJART ablakbol valo (legalabb ${DATA_AGE:--} oras), tehat nem
+az aktualis hetrol beszel. A forras hiteles volt, de gyorsitotarazott, es azota nem
+sikerult friss leolvasas.
+
+A leggyakoribb ok: lejart hitelesites. Egy \`/login\` a Claude Code-ban megujitja.
+
+Ez NEM azt jelenti, hogy baj van. Azt jelenti, hogy az or vak, es amig az, addig nem
+tudom bizonyitani, hogy a plafon alatt vagyunk."
+    mark_fired blind
+  fi
+  exit 0
+fi
+
 if [ "$SOURCE" != "authoritative" ] && [ "$SOURCE" != "authoritative_cached" ]; then
   log "BLIND: source=$SOURCE (not authoritative) -- cannot prove we are under the ceiling"
   say "BLIND: source=$SOURCE"
@@ -285,7 +333,7 @@ bizonyitani, hogy a 95%-os plafon alatt vagyunk. Az or vak, nem nyugodt.
   exit 0
 fi
 log "weekly=${PCT}% source=$SOURCE age=${AGE}min soft=$SOFT_PCT hard=$HARD_PCT window=$WINDOW_ID"
-say "weekly=${PCT}%  source=$SOURCE  age=${AGE}min  soft=$SOFT_PCT  hard=$HARD_PCT"
+say "weekly=${PCT}%  source=$SOURCE  age=${AGE}min  data_age=${DATA_AGE:--}h  soft=$SOFT_PCT  hard=$HARD_PCT"
 
 RESET_HUMAN="$(python3 -c "
 import sys, datetime
