@@ -6,7 +6,8 @@ MIERT LETEZIK. A lapot ketszer vagtuk le es ketszer nott vissza, MERVE:
     09-17       242 966 -> 206 545           ->  EGY EJSZAKA alatt 245 325 (a TELJES nyereseg)
 Egyik hozzaadas sem latszott irasakor tulzasnak. A problema az OSSZEG, es az osszeget SOHA nem
 latja az, aki a kovetkezo bekezdest irja. Egy skill-fajlt (EGY olvaso) or ved; ezt a lapot
-(NYOLC olvaso, tehat 8x koltseg) eddig SEMMI.
+(EGY olvaso: a koordinator sessionje -- a flotta agensei a SAJAT lapjukat toltik, lasd
+lent) eddig SEMMI.
 
 EZERT NEM FIGYELMEZTET, HANEM MEGTAGAD. A lap sajat merese: az "irj kevesebbet" SZANDEK ket meres
 kozott nem mozditott semmit; a `exit 2` MECHANIZMUS ugyanaznap otszor teritette at a forgalmat.
@@ -293,7 +294,20 @@ def main():
         if base is not None and new_n > base and not a.grow:
             print(f"NEM IRTAM: {len(s):,} -> {new_n:,}, az alapvonal {base:,}.", file=sys.stderr)
             print(f"  A valtozas {new_n - base:,} karakterrel vinne a plafon fole.", file=sys.stderr)
-            print("  Ez NYOLC olvasot terhel minden fordulóban, nem egyet.", file=sys.stderr)
+            # MERVE 2026-09-19: EZ A LAP EGY OLVASOT TERHEL, NEM NYOLCAT.
+            # Itt tizenket napig az allt, hogy "NYOLC olvasot terhel minden fordulóban".
+            # HAMIS 2026-09-07 ota: a flotta agensei akkor koltoztek ki a
+            # /Users/isti/marveen hierarchiabol (Deeper 265,4k betoltott lapja = a sajat
+            # ablakanak 133%-a), es azota a /Users/Shared/marveen-<nev>/ alatt futnak, ahol
+            # a SAJAT lapjukat toltik. Merve mind a HET agensre a nyilvantartasbol
+            # (agents/*/), nem nev-mintabol: 39 135 .. 143 026 karakter, es a fo lap szovege
+            # EGYIKBEN SINCS benne (kontroll: a fo lapon 1 talalat).
+            #
+            # A DONTES (szorits, ha lehet) VALTOZATLAN -- de az INDOKA nem a 8x koltseg,
+            # hanem hogy ez a 179 e karakter EGY session ablakabol megy el, es az a session
+            # az, amelyik a flottat routeolja. A kovetkezo dontest az INDOKBOL hozzak.
+            print("  Ez a lap EGY olvasot terhel -- a koordinator sessionjet -- minden fordulóban.", file=sys.stderr)
+            print("  (A flotta tobbi agense a SAJAT lapjat tolti, /Users/Shared/marveen-<nev>/.)", file=sys.stderr)
             print("  Ha tenyleg uj MERT alak (nem atfogalmazas): --grow \"<indok>\"", file=sys.stderr)
             log(f"REFUSED {len(s)} -> {new_n} (baseline {base})")
             return 2
