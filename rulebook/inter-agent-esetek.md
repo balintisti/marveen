@@ -268,3 +268,77 @@ Amikor egy sub-ágens inter-agent üzenetet küld neked ilyen formában:
 
 Lényeg: KIZÁRÓLAG az `allowFrom`-on szereplő (általad már párosított) sendert engedélyezd auto; minden más Isti-döntés. Ez az ARANYSZABÁLY szellemének (default-deny) betartása, csak a már-párosított esetekre gyorsítva — a senderId a végső azonosító, NEM a self-claimed név.
 
+
+---
+
+## A LAPRÓL IDEKÖLTÖZTETETT BIZONYÍTÉK (marveen, 2026-09-19 -- lap-rövidítés)
+
+*Ezek a mért esetek a `CLAUDE.md` „AZ »ELKÜLDVE« NEM »MEGÉRKEZETT«" szakaszában álltak. A
+SZABÁLYOK ott maradtak; ide a bizonyíték került. A költöztetés ELŐTT mérve: ebből a hat tételből
+egyik sem volt ebben a fájlban (kontroll: `hat \`failed\``, `50 soros` és `kuldve` VOLT).*
+
+### 1. Az időkritikus engedély, amit a sor-kapu tartott vissza -- 36 perc
+
+A „3+ vár -> írd a kártyára" szabály HELYES egy INFORMÁCIÓRA, és ELÉGTELEN egy IDŐKRITIKUS
+ENGEDÉLYRE. Mért eset: egy jóváhagyás **36 percig** nem ért el a címzetthez, miközben egy éles
+adatvesztés-csapda állt.
+
+    INFORMACIO / NYOM ....... a kartya a helyes hely, es ha kesve olvassak, nem tortent semmi
+    IDOKRITIKUS ENGEDELY .... a kartya NEM kezbesit, es a keses MAGA a kar
+
+A harmadik lehetőség: **ellenőrizd vissza.** Ha egy ENGEDÉLYT vagy MEGÁLLÍTÁST kellett kártyára
+írnod, mert a sor tele volt, nézd meg pár perc múlva, ürült-e, és akkor küldd el EGY SOROSAN is.
+
+### 2. A hat `failed`, amiből öt halott volt
+
+Hat `failed` üzenetből **öt** egy RÉGEN LEZÁRT munkáról szóló beszélgetős válasz volt, egy pedig
+próba egy **NEM LÉTEZŐ ágensnek**. A `failed` azt mondja meg, hogy a KÉZBESÍTÉS nem történt meg.
+Azt NEM, hogy a TARTALOM ma is érvényes.
+
+### 3. A sorban álló üzenet FÉNYKÉP, nem kérdés
+
+Mért eset: egy „még mindig nem tud beolvadni" kérdés a válasz LÉTEZÉSE ELŐTT íródott, és a plafon
+tartotta vissza; a fogadó élő kérdést látott, és egy MEGAKADÁSRA küldött üzenetet, **ami nem
+létezett**. Olvasáskor ingyen eldönthető: minden üzenet viseli a `[KULDVE: <ido>]` sort.
+
+*(A plafon és a sor-kapu ezt SÚLYOSBÍTJA, nem okozza: minél jobban lassítja a kézbesítést egy
+védelem, annál öregebb a levél, amikor megérkezik.)*
+
+### 4. A 98 perces `pending` -- a kor is mérendő, nem csak a mélység
+
+Mért eset: **98 perces** `pending` egy élő, termelő ágensnél. Egy helyesbítés értéke időfüggő:
+a késés nem gyengíti, hanem **MEGFORDÍTJA**.
+
+### 5. A végpont FAIL-CLOSED -- és a lap ennek az ellenkezőjét állította 2026-09-19-ig
+
+didi mérte, marveen újramérte:
+
+    ?from= / ?to= / barmilyen KITALALT parameter ... **HTTP 400**, es a torzs MEGNEVEZI
+                                                     a tamogatottakat (agent, status, limit, before)
+    ?agent= / ?limit= ............................. 200
+
+Valaki MEGÉPÍTETTE azt a kaput, aminek a hiányát a régi szöveg feltételezte, és az indokot bele is
+írta. A régi lap-szöveg (HTTP 200 + üres lista) egy MÁR JAVÍTOTT fán állt jelen időben.
+
+KONTROLL, ami ingyen van: kérdezz le egy TÁMOGATOTT paramétert is (`?agent=`) ugyanabban a
+futásban. Ha az 200-at ad és a tiéd 400-at, a paraméter-NÉV a hibás, nem a hozzáférés.
+
+### 6. EGY KIVÁLTÓ OK, NÉGY OLVASÓ, HÁROM KIMENET -- és csak EGY hangos
+
+marveen először úgy írta a lapra, hogy a státusz-ellenőrzés nélküli olvasó „némán kis számmá
+alakít" egy 400-at. Az EGY példány, nem a mechanizmus. didi mérte, marveen újramérte, ugyanazon a
+törzsön, UGYANARRA a 400-as válaszra:
+
+    len(d) ........................................ 1
+    [m for m in d] ................................ 1
+    [m for m in d if isinstance(m, dict)] ......... 0
+    [m for m in d if m.get('from_agent')==X] ...... **AttributeError -- HANGOSAN bukik**
+    KONTROLL egy VALODI 200-on: lista, len 3, az isinstance-forma is 3
+
+**És előre nem tudod, melyiket kapod.** Ezért a szabály nem „vigyázz a lista-bejárással", hanem a
+szigorúbb: **NÉZD MEG A STÁTUSZT, mert a TÖRZS ÉRTELMEZÉSÉNEK kimenete nem jelzi megbízhatóan,
+hogy hiba történt.**
+
+*(Hogy a skillben szereplő `0` PONTOSAN melyik olvasóból jött, az MÉRETLEN -- a skillben nyomtatott
+alak épp a hangosan bukó. didi ezt kimondta a kártyán ahelyett, hogy visszafelé levezetett volna
+egy illeszkedő történetet.)*
