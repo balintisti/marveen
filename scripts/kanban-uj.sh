@@ -177,7 +177,15 @@ PY
     return 1
   fi
   echo "OK id=$id created_at=$created ($(date -r "$created" '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null || date -d "@$created" '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null))"
-  printf '%s' "$card" | python3 -c 'import sys,json;c=json.load(sys.stdin);print("   visszaolvasva: status=%s assignee=%s priority=%s project=%s" % (c.get("status"),c.get("assignee"),c.get("priority"),c.get("project")))'
+  # A CIM IS KIIRODIK, ES EZ NEM KOZMETIKA. A visszaolvaso OSSZEHASONLITO SZERKEZETILEG
+  # NEM TUDJA MEGFOGNI a hej-rontast: a hej a hivas ELOTT helyettesit, tehat amit a helper
+  # KULD es amit a szerver TAROL, bajtra AZONOS -- az osszehasonlitas helyesen hallgat.
+  # Merve marveen-en 2026-09-19 13:01: egy backtickes `comments_omitted` a cimben lefutott
+  # parancskent, a cim "a  embernek szol" alakban tarolodott, es a helper OK-t adott.
+  #
+  # Egy visszaolvasas a SZALLITAS hűsegét bizonyitja, nem a BEMENETET. Amit tehetunk: a
+  # tarolt cimet a HIVO SZEME ELE tesszuk, mert ellenorzesi pontunk nincs, csak tanunk.
+  printf '%s' "$card" | python3 -c 'import sys,json;c=json.load(sys.stdin);print("   visszaolvasva: status=%s assignee=%s priority=%s project=%s" % (c.get("status"),c.get("assignee"),c.get("priority"),c.get("project")));print("   a TAROLT cim: %s" % c.get("title"))'
   return 0
 }
 
