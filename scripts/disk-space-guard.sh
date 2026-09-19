@@ -29,13 +29,26 @@ set -u
 
 # --- thresholds (tunable constants) ---
 # DISK_PATH is NOT a constant any more -- see below, right after SCRATCH_DIR.
-REAP_THRESHOLD=90        # >= this %: reap safe scratch
+# >= this %: reap safe scratch. Env-overridable for ONE reason: without it no test
+# can exercise main()'s OWN decision on a real measurement -- it would have to fake
+# the measurement instead, which is exactly how the /-vs-data-volume defect stayed
+# green (didi, 2026-09-19). NOTE THE DIFFERENCE IN KIND between the two hooks:
+# DISK_GUARD_USAGE_OVERRIDE REPLACES the thing under test; this one only moves an
+# unrelated constant so the real thing runs. A test may use this one and still be
+# a measurement.
+REAP_THRESHOLD="${DISK_GUARD_REAP_THRESHOLD:-90}"
 ALERT_THRESHOLD=95       # >= this % (after reap): alert the owner directly
 REAP_MIN_AGE_MIN="${DISK_GUARD_REAP_MIN_AGE_MIN:-30}"   # only reap orphans older than this
 # Numeric-validate the age guard BEFORE use: a malformed env (e.g. "abc", "-1")
 # OR literal 0 must NOT degrade into "reap everything" (-mmin +0 matches an
 # in-progress export). Fall back to a very conservative day.
 case "$REAP_MIN_AGE_MIN" in (''|0|*[!0-9]*) REAP_MIN_AGE_MIN=1440;; esac
+# Same validation for the threshold, and for the same reason -- but note the two
+# bad values fail in OPPOSITE directions, so neither may survive: 0 (or "abc"
+# read as 0) means REAP EVERY TICK, while 900 means NEVER REAP, silently, on a
+# guard whose whole job is to act. Both fall back to the documented default.
+case "$REAP_THRESHOLD" in (''|0|*[!0-9]*) REAP_THRESHOLD=90;; esac
+[ "$REAP_THRESHOLD" -gt 100 ] && REAP_THRESHOLD=90
 ALERT_COOLDOWN=3600      # at most one disk-full alert per hour
 
 # Explicit allowlist of scratch globs reaped under SCRATCH_DIR (maxdepth 1).
@@ -200,7 +213,12 @@ main() {
   # 0 every tick, and a stuck-full disk re-alerts up to 60x/hour.
   mkdir -p "$STATE_DIR" 2>/dev/null || true
   usage="$(disk_usage)"
-  case "$usage" in (''|*[!0-9]*) log "could not read disk usage (got '$usage') -- no-op"; return 0;; esac
+  # A DERIVED DISK_PATH CAN CEASE TO EXIST, which the old constant "/" could not:
+  # point DISK_GUARD_SCRATCH_DIR at a missing dir and df has nothing to report.
+  # The guard then does nothing -- correct (it must not guess a volume), but it
+  # must SAY WHICH PATH it could not read, or the log blames the number instead of
+  # the configuration. Pinned by test (m).
+  case "$usage" in (''|*[!0-9]*) log "could not read disk usage of '$DISK_PATH' (got '$usage') -- no-op"; return 0;; esac
 
   if [ "$usage" -lt "$REAP_THRESHOLD" ]; then
     return 0   # plenty of room
