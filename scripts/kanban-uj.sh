@@ -71,6 +71,14 @@ PY
 
 self_test() {
   local bad=0 out rc
+  # A KAPU AZ EGESZ FUTASRA, NEM HIVASONKENT. Ez a szkript a sajat negativ kontrolljaval
+  # KET VALODI KARTYAT irt az ELES tablara (337031c2, 75c2293b), mert a hivasonkenti
+  # felulirast elnyelte a betolteskor bekototott ROOT. marveen a bekotest javitotta
+  # (6de2afab) -- ez a sor a MASIK fele: ettol a HIANYZO felulirás is artalmatlan, tehat a
+  # kovetkezo eset, amit barki idear, nem tud az eles tablara irni azzal, hogy elfelejti.
+  # Ugyanaz az alak, amit a lemez-or teszt-fajlja az ALERT_DRYRUN-nal hasznal.
+  export KANBAN_UJ_BASE_URL="${KANBAN_UJ_BASE_URL:-http://127.0.0.1:1}"
+  export KANBAN_UJ_SELFTEST=1
   # 1. hasznalati hiba -> rc 2, NEM csendes siker
   out="$(main 2>&1)"; rc=$?
   [ "$rc" = 2 ] && echo "  OK    argumentum nelkul -> rc=2" || { echo "  BUKO  argumentum nelkul: rc=$rc, vart 2"; bad=1; }
@@ -92,11 +100,24 @@ self_test() {
     echo "        Worktreebol:  MARVEEN_STORE=/Users/isti/marveen/store bash $0 --self-test"
     bad=1
   else
-    out="$(KANBAN_UJ_BASE_URL='http://127.0.0.1:1' main proba - "proba cim" 2>&1)"; rc=$?
-    if [ "$rc" = 1 ] && ! printf '%s' "$out" | grep -q '^OK ' && printf '%s' "$out" | grep -q 'a letrehozas HTTP'; then
-      echo "  OK    elerhetetlen szerver -> rc=1, es a KAPCSOLAT bukott (nem a token)"
+    # SZANDEKOSAN NINCS hivasonkenti felulirás: a fenti export-nak kell vinnie. Ha valaki
+    # kiveszi, ez az eset menne elsokent az eles tablara -- ezert allitjuk, HOVA ment.
+    out="$(main proba - "proba cim" 2>&1)"; rc=$?
+    if [ "$rc" = 1 ] && ! printf '%s' "$out" | grep -q '^OK ' \
+       && printf '%s' "$out" | grep -q 'a letrehozas HTTP' \
+       && printf '%s' "$out" | grep -q 'ide: http://127.0.0.1:1/api/kanban'; then
+      echo "  OK    a hivas a HALOTT cimre ment (nem az eles tablara), es a KAPCSOLAT bukott"
     else echo "  BUKO  elerhetetlen szerver: rc=$rc out=$out"; bad=1; fi
   fi
+  # 2b. A ZAR MAGA: ha valaki az exportot veszi ki, a self-test akkor se irhasson az eles
+  #     cimre. A probat ugy allitjuk be, hogy MINDKET allapotban biztonsagos legyen: a
+  #     MARVEEN_WEB_PORT=1 miatt az "eles" alapertelmezes egy HALOTT port, tehat ha a zar
+  #     el van rontva, a keres akkor sem er el sehova. Egy zar tesztje legyen artalmatlan
+  #     abban az allapotban is, amikor a zar nem mukodik.
+  out="$(KANBAN_UJ_BASE_URL= MARVEEN_WEB_PORT=1 main proba - "zar-proba" 2>&1)"; rc=$?
+  if [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'NEM irok az ELES tablara'; then
+    echo "  OK    a zar megtagadja az alapertelmezett (eles) cimet self-test kozben"
+  else echo "  BUKO  a zar nem fogott: rc=$rc out=$out"; bad=1; fi
   # 3. a VISSZAOLVASO OSSZEHASONLITAS tud-e elterest mondani (pozitiv kontroll)
   out="$(_compare '{"title":"A","status":"planned"}' '{"title":"A","status":"done"}')"
   printf '%s' "$out" | grep -q 'ELTERES status' \
@@ -105,7 +126,7 @@ self_test() {
   # 4. es tud-e NEM-et mondani (negativ kontroll): azonos mezokre ures
   out="$(_compare '{"title":"A","status":"planned"}' '{"title":"A","status":"planned","extra":1}')"
   [ -z "$out" ] && echo "  OK    azonos mezokre hallgat" || { echo "  BUKO  hamis elteres: '$out'"; bad=1; }
-  [ "$bad" = 0 ] && echo "SELF-TEST PASS (4/4)" || echo "SELF-TEST FAIL"
+  [ "$bad" = 0 ] && echo "SELF-TEST PASS (5/5)" || echo "SELF-TEST FAIL"
   return "$bad"
 }
 
@@ -116,6 +137,16 @@ main() {
   # 2026-09-19 12:18: ket self-test futas ket VALODI kartyat hagyott a tablan (337031c2,
   # 75c2293b). A teszt becsuletes volt (BUKO-t irt es rc=1-et adott); a teszt-HOROG nem ert oda.
   local ROOT="${KANBAN_UJ_BASE_URL:-http://localhost:${MARVEEN_WEB_PORT:-3420}}"
+  # ES A ZAR, NEM CSAK A VALOSZINUTLENSEG (didi kerdese: "tenyleg zarva, vagy csak nem
+  # valoszinu?"). Az export lentebb egy ELFELEJTETT felulirast tesz artalmatlanna -- ez a
+  # sor azt az esetet is, amikor valaki magat az exportot veszi ki. Self-test kozben az
+  # ELES cim nem irhato, es a megtagadas a HALOZAT ELOTT all, tehat nem keletkezik kartya,
+  # amit utana takaritani kell. Mas (halott vagy csonk) cim tovabbra is mehet, kulonben a
+  # negativ kontroll maga valna futtathatatlanna.
+  if [ "${KANBAN_UJ_SELFTEST:-}" = "1" ] && [ "$ROOT" = "http://localhost:${MARVEEN_WEB_PORT:-3420}" ]; then
+    echo "FAIL: self-test kozben NEM irok az ELES tablara ($ROOT). Allits KANBAN_UJ_BASE_URL-t."
+    return 1
+  fi
   local agent="${1:-}" project="${2:-}" title="${3:-}"
   if [ -z "$agent" ] || [ -z "$project" ] || [ -z "$title" ]; then
     sed -n '/^# Usage:/,/^# Env:/p' "${BASH_SOURCE[0]}" >&2
@@ -154,7 +185,7 @@ PY
   out="$(printf '%s' "$resp" | sed '$d')"
   # A curl 0-val ter vissza 400-ra es 500-ra is; a kod ES az id kell, kulon-kulon egyik sem eleg.
   if [ "$code" != "200" ] && [ "$code" != "201" ]; then
-    echo "FAIL: a letrehozas HTTP ${code:-nincs} -- a szerver valasza: ${out:-<ures>}"
+    echo "FAIL: a letrehozas HTTP ${code:-nincs} ide: ${ROOT}/api/kanban -- a szerver valasza: ${out:-<ures>}"
     return 1
   fi
   local id; id="$(printf '%s' "$out" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id",""))' 2>/dev/null)"
