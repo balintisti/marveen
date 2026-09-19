@@ -542,3 +542,172 @@ SZÁM: a sorszám mellé a karakterszám. Az zárja be szerkezetileg, ahelyett h
 *(A teljes mérés a snapshot-tár parancsaival: kártya `b6aa747b`, komment 5583. A második szám saját
 kártyát kapott: `83cac1ed` -- lezárási feltétellel, mert enélkül az sem tudná megmondani a saját
 állapotát.)*
+
+
+---
+
+# A 2026-09-19-I ROVIDITES ELOTTI SZAKASZ: „A JAVITAS UTAN AZ EREDETI KERESO FUSSON LE UJRA"
+
+*(Isti kerese, Telegram 3206. A MAGBAN maradt mind a HAT torveny, amit alkalmazunk; IDE kerult
+a negy elofordulas narrativaja, a meret-or wc -c esete es a ket alszakasz teljes szovege.
+5 327 -> a magban rovidebb alak. Az eredeti valtozatlanul all alabb.)*
+
+## A JAVÍTÁS UTÁN AZ EREDETI KERESŐ FUSSON LE ÚJRA, NE EGY SZŰKEBB TESZT (didi, 2026-08-27)
+
+**A szabály:** amikor egy leletet kijavítasz, futtasd le ÚJRA azt a mérést, amelyik a leletet
+MEGTALÁLTA. Nem a javításra írt tesztet -- azt is, de az MÁS kérdésre válaszol. Az eredeti keresőt.
+
+**Miért nem figyelem kérdése.** Egy nap alatt NÉGYSZER fordult elő (`1ee2212a`, `f4c6386d`,
+`becd6728`, `eb12e071`), és mind a négyben a helyes indoklás OTT ÁLLT a fájlban, ugyanattól a
+szerzőtől, ugyanabban a commitban. A mechanizmus: **a javítás a BEJELENTETT tünetre megy, és a fájl
+többi része nem kerül újra olvasásra** -- mert a kártya lezárult a fejben, mielőtt a fájl
+végigolvasásra került volna. A négyből EGYBEN vette észre a szerző, és ott ÚJRAFUTTATTA a keresőt.
+
+**Az elv ismerete és az elv MÁSODIK alkalmazása két külön lépés.** Az első a javítás; a második az,
+hogy megnézed, hány helyen áll még ugyanaz. Egy szűkebb teszt a másodikra soha nem válaszol, mert
+épp arra a helyre néz, amit már megjavítottál.
+
+**A POPULÁCIÓ NEM MINDIG A SAJÁT FÁJLOD: HA A DEFEKTUS EGY KÖZÖS FÁJL ÉRTELMEZÉSÉBEN VAN, A
+POPULÁCIÓ ANNAK MINDEN OLVASÓJA.** Mért eset: egy egysoros JSON-t két szkript bontott
+Netscape-alakként; az egyik reggel javítva, a MÁSIK javítatlan maradt és 401-et adott minden híváson.
+**A javítás az ELŐFORDULÁSRA ment, nem a FÁJLRA.**
+
+    a szokasos kerdes ... „hany helyen all meg ugyanez EBBEN a fajlban?"
+    a hianyzo kerdes .... **„ki MAS olvassa ugyanezt a fajlt?"**  ->  `grep -rl '<a fajl neve>'`
+
+**A fájl FORMÁTUMA szerződés az író és MINDEN olvasó között, nem dokumentáció.**
+
+**ÉS A JAVÍTÁS TÚLÉLHET EGY TESTVÉR-ÚTON -- A MÉRŐ KIMENETE NEM BIZONYÍTÉK A MÉRŐRŐL.** Mért eset:
+egy méret-őr `wc -c`-ről (bájt) igazi karakterre javítva; a javítás a BASELINE-os ágon landolt, a
+`--check` ág megtartotta a `wc -c`-t a „karakter" szó alatt. **A szám, amit bizonyítéknak idéztem
+(15 195), MAGA VOLT A HIBA** -- a fájl valódi hossza 14 363. Egy sor eldöntötte volna:
+`python3 -c "len(open(f,encoding='utf-8').read())"`.
+
+**ÉS A DEGRADÁLÓ ÁG A LEGROSSZABB:** `python3` nélkül a régi változat CSENDBEN bájtot jelent
+karakterként, a javított MEGTAGADJA. **Egy őr, ami rossz számmá degradálódik, rosszabb, mint
+amelyik megtagadja** -- és ez csak akkor derül ki, ha a kontroll tényleg ELŐÁLLÍTJA a degradált
+állapotot. *(A regressziós fixture ÉKEZETES legyen: ASCII-n a két egység EGYBEESIK, tehát a teszt
+egy bájt-számlálón is átmenne -- a fixture-választás törvénye, épp azon a defektuson.)*
+
+**ÉS AZ ELLENPÉLDA, AMIÉRT EZ MEGÉRI: 18 / 41.** A saját minta (`\)\s*:`) 18 műterméket talált; a
+javítás után az EREDETI mérőt újrafuttatva **41** tétel esett ki. A különbség 23, mind
+`(props: BarChartProps` alakú -- **azokban nincs `):`**, tehát a minta vissza-tesztelése zöldet
+adott volna, miközben 23 műtermék bent marad. **A szűkebb teszt nem a hibát vitte volna el, hanem
+a bizonyítékot.**
+
+### ÉS AMIÉRT A SAJÁT, MA ÍROTT SZABÁLYUNKBA IS BELEFUTUNK: A DÖNTÉS LÉPÉSÉBEN NEM A SZABÁLYT OLVASSUK
+
+Egy kártyán 13:58-kor ez állt: a lefedettségi válogatásnál a *„van rá teszt"* NEM záró ok. **19:2x-kor
+ugyanaz a szerző négy jelöltet vett ki pontosan ezzel az indokkal**, és a cáfoló számok a SAJÁT
+kommentjében álltak, hat sorral feljebb.
+
+> A szabály leírása nem változtatta meg a VÁLOGATÁS LÉPÉSÉT -- mert válogatás közben nem a kártyát
+> olvassuk, hanem a listát nézzük.
+
+**A javítás nem „legyél figyelmesebb", hanem SZERKEZETI:** a megkülönböztető SZÁMOT tedd bele abba
+az artefaktumba, amit a döntés pillanatában NÉZEL -- a listába, a kimenetbe, a jelölt sorába. Egy
+szabály, ami egy másik dokumentumban él, a döntés pillanatában nincs jelen. *(Egy ellenőrizhetetlen
+indok mellett a hibás döntés cáfolhatatlan; egy szám mellett cáfolható.)*
+
+### ÉS AMI KIVÁLTJA AZ ELLENŐRZÉST: HOGY A MONDAT KIMEGY
+
+Egy hamis magyarázat este óta állt egy kártyán, a koordinátor is továbbadta, és egyikünk sem
+ellenőrizte. Ami végül lefuttatta a próbát, nem a gyanú volt, hanem hogy a mondat **a gazda elé
+készült menni**. *(Fordítva is igaz, és ezért nem elég a szándék: ami „csak nekünk" készül -- egy
+komment, egy helyi mérés -- ugyanazt a figyelmet kapja, mint egy magánfeljegyzés.)*
+
+**A HASZNÁLHATÓ ALAKJA EGY MONDAT: MÉRD MEG A LEGHANGOSABB MONDATOT ELŐSZÖR, NE UTOLJÁRA.** Két
+mért eset egy napon, és a második azé, aki az elsőt helyesbítette: mindkettőnél a MÉRÉS jó volt, és
+a rá épülő EGY mondat ment egy lépéssel tovább, mint ameddig a mérő lát. **A sorrend a hiba: a
+leghangosabb állítás születik utoljára, amikor a mérés már „kész", ezért ő az EGYETLEN, ami mérés
+nélkül marad.** A próba ÍRÁSKOR tüzel: keresd meg a szövegedben azt az egy mondatot, ami a legtöbbet
+állítja, és kérdezd meg, MELYIK PARANCS támasztja alá.
+
+**ÉS EGY VÁLTOZÓRA KÜLÖN: ha azt állítod, hogy egy változó egy KÉPESSÉGET letilt, olvasd el MINDEN
+HASZNÁLATI HELYÉT, ne csak az értékadását.** *(A mért eset ezen bukott: a `seeded` tényleg nem
+perzisztál, és a belőle levezetett következtetés azért hamis, mert egy MÁSIK, perzisztált mező
+hordozza a képességet.)*
+
+*(A mért esetek: `rulebook/mero-es-szandek.md`.)*
+
+<!-- BEGIN GENERATED: skills-path-trap (auto-generated, do not edit by hand) -->
+<!-- FIGYELEM: az alabbi szakasz GENERALT. Ide beszurt szoveg a kovetkezo agens-indulasnal NYOMTALANUL ELVESZ. Uj szakaszt a fenti BEGIN sor FOLE irj. -->
+
+---
+
+### KET MINTA NEZETELTERESE MAGA A MUSZER -- ES AZ IRANYA DONTI EL, HOGY UTANANEZUNK-E (didi, 2026-09-19)
+
+**Az eset.** didi a sajat regi munkafait auditalta hitelesito-kitettsegre. Egy `.bash_history`
+23 peldanyaban 36 postgres URL allt, literal jelszavakkal. A kerdes, ami a sulyossagot eldonti:
+**mire mutatnak a hosztok?** Ket mintat futtatott ugyanarra:
+
+    a @-ig illeszto minta ................................ **36** talalat
+    ugyanaz, a HOSZT-tal egyutt (`[^:/\s]+`) ............. **28** talalat
+
+A szorosabb minta **NEMAN eldobott nyolcat**, mert a hoszt-resz utan alloknal a karakter-osztaly
+nem illeszkedett. Ha didi a 28-at jelenti, az allitas ez lett volna: *„0 potencialisan tavoli
+hoszt"* -- egy BIZTONSAGI kerdesre.
+
+**Ami megfogta:** a ket szam nem egyezett, es didi a KULONBSEGET oldotta fel, MIELOTT barmelyiket
+jelentette volna. Egy harmadik, tagabb minta mind a 36-ot megtalalta, 0 ures hoszttal, es igy
+jott ki a valodi osztalyozas: 28 localhost + 8 csupasz docker-alias, 0 IP, 0 FQDN.
+
+**A szabaly:** ha ket minta ugyanarra a kerdesre KULONBOZO szamot ad, az nem zaj es nem
+izlés-kerdes: **az a nezeteltérés az egyetlen muszer, ami rendelkezesre all**, amikor mindket
+minta onmagaban hihetonek latszik. Feloldani KELL, es a feloldas ELOZZE MEG a jelentest -- mert
+utana mar egy leirt szam vedelmeben allsz.
+
+**ES AMIERT EZ KULON SZAKASZT ER, NEM EGY SORT: AZ IRANY.** A szorosabb minta a MEGNYUGTATO
+iranyba tevedt. Ez az az irany, amit az egesz fegyelmunk bizalmatlansagra epitve kezel -- es
+egyben az, amit egy gondos ember a LEGKEVESBE valoszinu, hogy ujraellenoriz:
+
+> Egy biztonsagi kerdesre kapott MEGNYUGTATO valasz ugy olvasodik, mint egy TISZTA EREDMENY.
+> Aki ujrafuttatna, azt erzi, hogy egy mar lezart ellenorzest ismetel feleslegesen.
+> A riaszto valasz maga kenyszeriti ki a masodik merest; a megnyugtato nem.
+
+Tehat a ket irany NEM szimmetrikus a kockazatban. Ugyanaz a mero-hiba a riaszto oldalon egy
+elpazarolt orat jelent, a megnyugtato oldalon egy le nem zart kitettséget.
+
+**A kontroll, ami ezt olcson megadja:** minden szuk mintahoz tartozzon egy TAGABB par, es a
+jelentesben alljon ott, hany talalatot dobott el a szuk. Ha a ket szam egyezik, a mondat egy
+szo; ha nem, akkor van egy leleted, mielott barki mast felreveznel.
+
+**Amit ez NEM allit.** Nem a szuk kereses a hiba -- egy szuk kereses, amirol TUDJUK hogy szuk,
+hasznos. A hiba a ZARASI SZO: „ennyi van", „a lelet zart", „0 potencialisan tavoli". Aki azt
+irja, hogy *„ennyit talaltam EZZEL a mintaval"*, az nem tevedett, csak meg nem vegzett.
+
+**A csaladja.** Ez a lap mar kimondja, hogy KET EGYETERTO fuggetlen meres semmit nem er, ha
+ugyanazt az ALAKOT keresik (a `webhookSecret` esete). Ez a szakasz a KOMPLEMENTERE: amikor a
+ket meres NEM ert egyet, es a nezeteltérés maga a lelet. A ketto egyutt adja ki a hasznalhato
+alakot: **az egyetertés nem bizonyitek, a nezeteltérés viszont mindig informacio.**
+
+*(MI TENNE ERVENYTELENNE: ha egy esetben kiderul, hogy ket minta rendszeresen, ARTALMATLANUL
+ter el -- pl. mert az egyik szandekosan szur --, akkor a „mindig informacio" tulzas, es a
+szabalyt szukiteni kell arra, hogy a kulonbseget MEG KELL MAGYARAZNI, nem feltetlenul
+megszuntetni.)*
+
+**ÉS EGY FÜGGETLEN MÁSODIK PÉLDÁNY UGYANAZON A NAPON, ELLENTÉTES IRÁNYBÓL** (dexter, 2026-09-19,
+két esettel a 753685bd kártyán). didi mérője a MEGNYUGTATÓ irányba tévedt egy biztonsági
+kérdésen; dexteré ugyanígy, kétszer:
+
+    `npm run endpoint-inventory -- --check` ... NINCS ilyen szkript. URES kimenet, exit 0,
+                                                es majdnem "nincs drift"-kent olvasta.
+                                                (A valodi nev: `inventory:endpoints`.)
+    egy git pathspec ROSSZ cwd-hez oldva ...... HAROM magabiztos hamis valasz egymas utan:
+                                                ures diff egy 6208 soros valtozasra;
+                                                `ls-files --error-unmatch` szerint egy KOVETETT
+                                                fajl kovetetlen; `show`+`cmp` szerint "elter".
+                                                MINDEGYIK exit 0.
+
+**dexter megfogalmazasa, es ez a hordozhato alak:**
+
+> **MINDEN MERES, AMI URESEN TER VISSZA, KIVAN EGY POZITIV KONTROLLT, AMI NEM TUD.**
+> Enelkul a *„nem talaltam semmit"* es a *„rossz kerdest tettem fel"* UGYANAZ A BAJTSOR es
+> UGYANAZ AZ EXIT KOD.
+
+**A ket eset EGYUTT adja ki a tengelyt, es kulon egyik sem:** didi esete azt mutatja, hogy a
+nezeteltérés MUSZER; dexteré azt, hogy amikor NINCS masodik mero, az uresseg nemán hihetove
+valik. Mindketten azt mondtak, hogy ami vegul szetvalasztotta, egy MASODIK meres volt, amit
+csak azert futtattak le, mert a szam *tul kenyelmesnek* latszott -- vagyis SZOKAS, nem
+mechanizmus. A mechanizmus a pozitiv kontroll.
+

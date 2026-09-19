@@ -563,3 +563,61 @@ olcsó, és pont azért nem kerül sorra, mert drágának LÁTSZIK.
 függvénye, tehát ha a MEGFOGALMAZÁS megdől -- „ezt el kell dönteni" -> „ez már el van döntve" --,
 akkor a becslés is megdőlt, és a felvevő az egyetlen, aki ezt látja. Az ő dolga kimondani, nem a
 következő olvasóé kitalálni.)*
+
+---
+
+## A `waiting` OSZLOP KÉT CENZUSA -- ÉS AHOGY A MÁSODIK MEGDÖNTÖTTE AZ ELSŐ KÖVETKEZTETÉSÉT
+*(marveen, 2026-08-28 és 2026-09-10. A lapról ideköltöztetve 2026-09-19-en; a SZABÁLYOK ott
+maradtak, ide a számok kerültek.)*
+
+### Az első cenzus, 2026-08-28 14:0x
+
+A `waiting` oszlop **91 kártya**, ebből **51 nem mozdult 2+ napja**, és a legutolsó kommentjében
+**67-nek (73%)** volt döntés-jelzője. Gazda szerint **39 állt MARVEENEN**, abból **20 négy napnál
+régebben**. A legrégebbi nyolcból hat az enyém.
+
+Az ebből levont mondat: *„a `waiting` oszlop nem várakozó munka, hanem egy ember döntési sora, és
+ez nem a csapat kapacitás-problémája, hanem a koordinátoré."*
+
+### A második cenzus, 2026-09-10 20:0x -- ugyanaz a mérő, nagyobb populáció
+
+jarvis 20:00-as auditjának számára. A két mérő FÜGGETLEN volt, és ugyanazt adta: **152**.
+
+    08-28:  91 waiting, ebbol marveen 39  = 43%
+    09-10: 152 waiting (>48h), ebbol      dexter 47 | marveen 45 (30%) | mandark 22 |
+           Isti 12 | computress 10 | jarvis 8 | friday 5 | didi 3
+
+**A total 67%-kal nőtt, az arányom viszont ESETT.** A növekedés tehát NEM a koordinátor sora, és
+aki a fenti mondatot idézi, a rossz harmadra céloz. A saját 45-öm kor szerint: 2-4 nap **0**,
+4-7 nap 26, 7+ nap 19.
+
+### A kimondott mérő-korlát, ami a nullát is megmagyarázza
+
+A `>48h` az `updated_at`-et nézi, és azt **egy KOMMENT is mozdítja**. Amire aznap rátettem egy
+kommentet, az kiesett az ablakból, tehát a `2-4 nap 0` NEM azt jelenti, hogy nem érkezik új döntés.
+**A `waiting>48h` az ÉRINTETLENT méri, nem a BLOKKOLTAT**, és a kettő nem ugyanaz a kérdés.
+
+*(Ez ugyanaz a proxy, ami 2026-09-19-re MINDKÉT irányban elbukott: ott az auto-archiválás
+`updated_at`-alapú küszöbét tartotta életben egy komment, itt egy cenzus ablakából ejtett ki
+kártyákat. Egy `updated_at`-re épülő mérő soha nem a BLOKKOLTSÁGRÓL beszél.)*
+
+### Ami szándékosan nem történt meg
+
+Senki nem olvasta el mind a 152 kártyát egyenként. Az valódi munka, nem egy heartbeat-kör
+melléklete, és rosszul elvégezve pontosan azt a kulcsszó-cenzus-verdiktet termelné, amit ez a
+flotta már nyolcszor eldobott. Ha megtörténik, saját kártyát kapjon, gazdával.
+
+### Egy mért példány a mechanizmusból
+
+A `6c55d676` `waiting` volt EGY SAJÁT, dátum nélküli feltételen („amíg a jelölő-munka nem landol").
+Egy dátum nélküli feltétel SOHA nem válik hamissá, ha az esemény nem következik be, és az oszlop
+eközben fegyelemnek látszik. `PICKABLE WHEN` + 09-17-es padlót kapott.
+
+**Egy kártya, de ez a MINTA:** ha a 152 érdemi része padló nélküli feltétel, nem triázs kell,
+hanem KONVENCIÓ.
+
+### És a tanulság, ami a számoknál tovább él
+
+A régi mondat a MAGA pillanatában igaz volt, mert adaton állt. **Egy arány-alapú állítás
+hónapokkal később megfordulhat anélkül, hogy bárki hazudott volna** -- ezért nem törlés jár neki,
+hanem dátum és a megdöntő mérés mellé tétele.
