@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **248** kovetett fajl, ebbol
-**78** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **261** kovetett fajl, ebbol
+**87** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -72,6 +72,23 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/__tests__/telegram-reply-guard-agent-id.test.py`
 
 - Why this hook first, and alone: it is the one on the path to Isti. The upstream
+
+### `scripts/__tests__/usage-collect-expired-windows.test.py`
+
+- MIERT LETEZIK. 2026-09-19-en kiderult, hogy a kulcstarto-hitelesites 129 oraja lejart,
+- MIERT MESTERSEGES BEMENET, KIMONDVA: az elo lekerdezes MA egyaltalan nem ad `windows`-t
+
+### `scripts/__tests__/usage-collect-json-purity.test.py`
+
+- MIERT LETEZIK. A modul sajat docstringje azt igeri: "--json prints only the snapshot
+
+### `scripts/agent-core-check.py`
+
+- MIERT: Isti dontese (2026-09-18) szerint minden agens a SAJAT lapjat olvassa, nem a kozoset.
+
+### `scripts/agent-cwd-detach.sh`
+
+- MIERT. A Claude Code a cwd-tol a GYOKERIG minden szinten betolti a CLAUDE.md-t, es erre NINCS
 
 ### `scripts/agent-msg.sh`
 
@@ -129,6 +146,14 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/ci-watch.sh`
 
 - MIERT LETEZIK: 2026-08-20-an a main CI-je elpirosodott, egy telepites emiatt kimaradt,
+
+### `scripts/claude-md-canary.txt`
+
+- MIERT LETEZIK: 2026-09-18-an egy blokk kivitele elvitte Isti VISELKEDESI szabalyait
+
+### `scripts/claude-md-edit.py`
+
+- MIERT LETEZIK. A lapot ketszer vagtuk le es ketszer nott vissza, MERVE:
 
 ### `scripts/contrast-both-themes.js`
 
@@ -239,6 +264,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - MIERT FAJLUT ES NEM CIMSZO. Egy fajlut ellenorizheto teny: vagy letezik az adott
 
+### `scripts/kanban-uj.sh`
+
+- MIERT LETEZIK. A `CLAUDE.md`-ben het curl-pelda all a kartya-nyitasra, es a valasz,
+
 ### `scripts/landed-check.py`
 
 - WHY THIS EXISTS, AND WHY IT REPORTS INSTEAD OF BLOCKING. Measured 2026-08-25 (card b53a0836):
@@ -342,6 +371,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - MIERT A CLI SAJAT FOLYAMATABAN SZKENNEL (spec, msg 16930/b): a hatokor
 
+### `scripts/statusline-ratelimit.sh`
+
+- WHY THIS EXISTS: the owner asked to be warned when the 5-hour or the weekly
+
 ### `scripts/task-last-run.sh`
 
 - Miert letezik ez a szkript: a task_runs.ts oszlop MILLISZEKUNDUM epoch, a
@@ -374,6 +407,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - WHY A SCRIPT AND NOT A UNIT TEST. The route only computes contextTokens (and
 - WHY IT RE-IMPLEMENTS THE RULE. The model -> window mapping below is a second,
+
+### `scripts/worktree-uj.sh`
+
+- MIERT LETEZIK. 2026-09-17 09:3x-kor marveen ezt irta:
 
 ### `scripts/write-census.mjs`
 
