@@ -120,5 +120,9 @@
     "slack-channel@marveen-marketplace": false,
     "telegram@claude-plugins-official": true,
     "telegram@marveen-marketplace": true
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "bash /Users/isti/marveen/scripts/statusline-ratelimit.sh"
   }
 }
