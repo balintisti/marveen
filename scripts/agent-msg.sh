@@ -169,14 +169,42 @@ if [ -n "$_CARD_IDS" ]; then
   _KBF="$(mktemp -t agentmsg-kb)"
   curl -s --max-time 10 -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
        "http://localhost:${PORT}/api/kanban" -o "$_KBF" 2>/dev/null || true
+  # A FELTETEL HAROM OKOT FED, A REGI UZENET EGYET NEVEZETT MEG (dexter merte 2026-09-19).
+  # `! -s` = nincs valasz VAGY URES valasz; a first-byte proba = CSONKA valasz VAGY MEGVALTOZOTT
+  # ALAK. A regi szoveg mindharomra azt mondta, hogy "a kanban API nem valaszolt" -- tehat ha a
+  # `/api/kanban` valaha objektumot ad tomb helyett, MINDEN kuldot a HALOZAT fele kuldunk, mikozben
+  # az ok a TORZSBEN ul. Ugyanaz a csalad, mint a `card-comment.sh` esete, ahol egy ures stdin
+  # "hianyzo szerzo"-kent jelent meg.
+  # Ezert a sor most KIIRJA, AMIT LATOTT: meret es elso bajt. Egy `0 bajt` es egy `412 bajt, elso
+  # bajt "{"` ket teljesen kulonbozo teendo, es a kulonbseg eddig lathatatlan volt.
   if [ ! -s "$_KBF" ] || [ "$(head -c1 "$_KBF")" != "[" ]; then
-    _m="NEM FELOLDHATO KARTYA-ID: az ellenorzes NEM FUTOTT LE (a kanban API nem valaszolt). A szovegben emlitett kartya-id-k nincsenek igazolva."
+    _sz="$(wc -c < "$_KBF" 2>/dev/null | tr -d ' ')"; _fb="$(head -c1 "$_KBF" 2>/dev/null)"
+    _m="NEM FELOLDHATO KARTYA-ID: az ellenorzes NEM FUTOTT LE. A kanban API valasza: ${_sz:-0} bajt, elso bajt: '${_fb}' (tomb kellene, '['). Ok lehet: nincs valasz, CSONKA valasz, vagy MEGVALTOZOTT valasz-ALAK. A szovegben emlitett kartya-id-k nincsenek igazolva."
     echo "$_m"; echo "$_m" >&2
   else
+    # A `2>/dev/null || true` EGY HANGOS BUKAST NEMA ATENGEDESSE ALAKIT (marveen merte
+    # 2026-09-19, dexter jelentese kozben, es ez SULYOSABB annal, amit o jelentett).
+    # A fenti first-byte proba NEM fogja meg a CSONKA valaszt: egy felbevagott tomb is
+    # `[`-tel kezdodik, tehat IDAIG jut. Itt a `json.load` kivetelt dob, a `|| true` elnyeli,
+    # `_BAD` URES lesz -- es az pontosan ugy nez ki, mint a "minden id rendben".
+    # Fail-open, nemán, egy oron, amit epp ellenorzesnek hivunk.
+    # MERVE mind a negy alakon: ures -> JSONDecodeError | csonka -> JSONDecodeError |
+    # objektum tomb helyett -> TypeError | ep tomb -> a hianyzo id-k.
     _BAD="$(CARDS="$_CARD_IDS" KBF="$_KBF" python3 -c '
-import json,os
-ids={c["id"][:8] for c in json.load(open(os.environ["KBF"],encoding="utf-8"))}
-print(" ".join(t for t in os.environ["CARDS"].split() if t not in ids))' 2>/dev/null || true)"
+import json,os,sys
+try:
+    ids={c["id"][:8] for c in json.load(open(os.environ["KBF"],encoding="utf-8"))}
+except Exception as e:
+    print("__PARSE_FAIL__ " + type(e).__name__); sys.exit(0)
+print(" ".join(t for t in os.environ["CARDS"].split() if t not in ids))' 2>/dev/null || echo "__PARSE_FAIL__ subprocess")"
+    case "$_BAD" in
+      __PARSE_FAIL__*)
+        _sz="$(wc -c < "$_KBF" 2>/dev/null | tr -d ' ')"
+        _m="NEM FELOLDHATO KARTYA-ID: az ellenorzes NEM FUTOTT LE. A valasz \`[\`-tel kezdodik, de NEM ertelmezheto (${_sz:-0} bajt, ${_BAD#__PARSE_FAIL__ }) -- tipikusan CSONKA valasz. A szovegben emlitett kartya-id-k nincsenek igazolva."
+        echo "$_m"; echo "$_m" >&2
+        _BAD=""
+        ;;
+    esac
     if [ -n "$_BAD" ]; then
       _m="NEM FELOLDHATO KARTYA-ID: $_BAD -- a szoveg kartyanak nevezi, de a tablan nincs ilyen. Ha commit-hash, fogalmazd at; ha archivalt kartya, hagyd figyelmen kivul."
       echo "$_m"; echo "$_m" >&2
