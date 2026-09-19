@@ -109,6 +109,61 @@ def log(msg):
     except OSError:
         pass
 
+def baseline_uncommitted(base_path=None):
+    """Az alapvonal-fajl elter-e a HEAD-tol? Egy sor, es a SZERKESZTES UTAN tuzel.
+
+    MIERT LETEZIK (merve 2026-09-19, KETSZER UGYANAZON A NAPON). Ez a fajl a racsni
+    OPERATIV erteke, es a szerszam MINDEN szerkesztesnel ujrairja -- a FO CHECKOUTBA, ahol a
+    `prod-tree-guard` a commitot TILTJA. Tehat konstrukciobol gyulik: reggel 22 794 karakternyi
+    szoritas allt egyetlen commitolatlan munkafa-fajlban, delelott ujabb 3 544 negy kimondott
+    novekedesbol. Mindket alkalommal MAS vette eszre, nem a szerszam.
+
+    Ez az "otodik allapot" egy valtozata: nem egy elfelejtett fajl, hanem egy MINDEN
+    HASZNALATTAL UJRATERMELODO allapot. Fegyelemmel nem javithato, mert nem a figyelem fogy el,
+    hanem a commit-lehetoseg hianyzik ott, ahol az ertek keletkezik.
+
+    NEM BLOKKOL, es ez szandekos: a szerkesztes mar megtortent, a lap mar helyes. Ami hianyzik,
+    az a TARTOSSAG -- es egy `exit`, ami egy sikeres irast hibanak mutat, rosszabb a resnel.
+    """
+    import subprocess as _sp, os as _os
+    p = base_path or BASE
+    try:
+        root = _sp.run(["git", "-C", _os.path.dirname(p) or ".", "rev-parse", "--show-toplevel"],
+                       capture_output=True, text=True, timeout=10)
+        if root.returncode != 0:
+            # NEM `None`. A "nem tudom megmondani" es a "rendben van" KET KULONBOZO allitas, es
+            # a `None` a hivonal "rendben"-kent olvasodik -- a MEGNYUGTATO iranyba. Merve
+            # 2026-09-19: a sajat pozitiv kontrollom egy repon KIVULI fajlra "commitolva: igen"-t
+            # adott, tehat a detektor NEM TUDOTT tuzelni, es ezt nem mondta meg.
+            return "NEM MERHETO: az alapvonal-fajl nincs git-repoban"
+        top = root.stdout.strip()
+        rel = _os.path.relpath(p, top)
+        head = _sp.run(["git", "-C", top, "show", f"HEAD:{rel}"],
+                       capture_output=True, text=True, timeout=10)
+        if head.returncode != 0:
+            return "a fajl NINCS a HEAD-en"
+        with open(p, encoding="utf-8") as f:
+            cur = f.read()
+        if cur != head.stdout:
+            def _val(t):
+                for line in t.splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        return line.split()[0]
+                return "?"
+            cv, hv = _val(cur), _val(head.stdout)
+            # A MONDAT NE ALLITSON OLYAN OSSZEVETEST, AMIT NEM VEGZETT EL (deeper torvenye):
+            # a tartalom elterhet ugy is, hogy a SZAM azonos -- egy kommentsor eleg hozza. Ha
+            # ilyenkor "munkafa X kontra HEAD X"-et irnank, az olvaso egy nem letezo
+            # szam-eltereset keresne, es a valodi ok (a fajl tobbi resze) sehol nem latszana.
+            if cv == hv:
+                return f"a szam AZONOS ({cv}), de a fajl TARTALMA elter a HEAD-tol"
+            return f"munkafa {cv} kontra HEAD {hv}"
+        return None
+    except Exception as e:
+        return f"NEM MERHETO: {type(e).__name__}"
+
+
 def check_generated_markers(path=None):
     """A GENERALT blokkok BEGIN/END jeloloi parban es SORRENDBEN alljanak.
 
@@ -168,6 +223,8 @@ def main():
         d = cur - base
         print(f"alapvonal: {base:,}   kulonbseg: {d:+,}")
         print("OK, a plafon alatt." if d <= 0 else f"A LAP {d:,} KARAKTERREL A PLAFON FOLOTT.")
+        drift = baseline_uncommitted()
+        print(f"alapvonal commitolva: {'NEM -- ' + drift if drift else 'igen'}")
         nevek, bajok = check_generated_markers()
         print(f"generalt blokk: {len(nevek)} ({', '.join(nevek) if nevek else 'nincs'})")
         if bajok:
@@ -243,6 +300,13 @@ def main():
         elif base is not None and new_n < base:
             write_baseline(new_n, "racsni: csokkenes utan automatikusan szorul")
             print(f"alapvonal szorult: {base:,} -> {new_n:,}")
+        drift = baseline_uncommitted()
+        if drift:
+            print(f"FIGYELEM: az alapvonal COMMITOLATLAN ({drift}).", file=sys.stderr)
+            print("  A racsni operativ erteke egy munkafa-fajlban all. Egy agvaltas elviszi.",
+                  file=sys.stderr)
+            print("  Commitold, vagy vidd worktree-be. (Ez NEM hiba: az iras sikerult.)",
+                  file=sys.stderr)
         return 0
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN); os.close(fd)
