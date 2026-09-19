@@ -632,3 +632,82 @@ hordozza a képességet.)*
 
 <!-- BEGIN GENERATED: skills-path-trap (auto-generated, do not edit by hand) -->
 <!-- FIGYELEM: az alabbi szakasz GENERALT. Ide beszurt szoveg a kovetkezo agens-indulasnal NYOMTALANUL ELVESZ. Uj szakaszt a fenti BEGIN sor FOLE irj. -->
+
+---
+
+### KET MINTA NEZETELTERESE MAGA A MUSZER -- ES AZ IRANYA DONTI EL, HOGY UTANANEZUNK-E (didi, 2026-09-19)
+
+**Az eset.** didi a sajat regi munkafait auditalta hitelesito-kitettsegre. Egy `.bash_history`
+23 peldanyaban 36 postgres URL allt, literal jelszavakkal. A kerdes, ami a sulyossagot eldonti:
+**mire mutatnak a hosztok?** Ket mintat futtatott ugyanarra:
+
+    a @-ig illeszto minta ................................ **36** talalat
+    ugyanaz, a HOSZT-tal egyutt (`[^:/\s]+`) ............. **28** talalat
+
+A szorosabb minta **NEMAN eldobott nyolcat**, mert a hoszt-resz utan alloknal a karakter-osztaly
+nem illeszkedett. Ha didi a 28-at jelenti, az allitas ez lett volna: *„0 potencialisan tavoli
+hoszt"* -- egy BIZTONSAGI kerdesre.
+
+**Ami megfogta:** a ket szam nem egyezett, es didi a KULONBSEGET oldotta fel, MIELOTT barmelyiket
+jelentette volna. Egy harmadik, tagabb minta mind a 36-ot megtalalta, 0 ures hoszttal, es igy
+jott ki a valodi osztalyozas: 28 localhost + 8 csupasz docker-alias, 0 IP, 0 FQDN.
+
+**A szabaly:** ha ket minta ugyanarra a kerdesre KULONBOZO szamot ad, az nem zaj es nem
+izlés-kerdes: **az a nezeteltérés az egyetlen muszer, ami rendelkezesre all**, amikor mindket
+minta onmagaban hihetonek latszik. Feloldani KELL, es a feloldas ELOZZE MEG a jelentest -- mert
+utana mar egy leirt szam vedelmeben allsz.
+
+**ES AMIERT EZ KULON SZAKASZT ER, NEM EGY SORT: AZ IRANY.** A szorosabb minta a MEGNYUGTATO
+iranyba tevedt. Ez az az irany, amit az egesz fegyelmunk bizalmatlansagra epitve kezel -- es
+egyben az, amit egy gondos ember a LEGKEVESBE valoszinu, hogy ujraellenoriz:
+
+> Egy biztonsagi kerdesre kapott MEGNYUGTATO valasz ugy olvasodik, mint egy TISZTA EREDMENY.
+> Aki ujrafuttatna, azt erzi, hogy egy mar lezart ellenorzest ismetel feleslegesen.
+> A riaszto valasz maga kenyszeriti ki a masodik merest; a megnyugtato nem.
+
+Tehat a ket irany NEM szimmetrikus a kockazatban. Ugyanaz a mero-hiba a riaszto oldalon egy
+elpazarolt orat jelent, a megnyugtato oldalon egy le nem zart kitettséget.
+
+**A kontroll, ami ezt olcson megadja:** minden szuk mintahoz tartozzon egy TAGABB par, es a
+jelentesben alljon ott, hany talalatot dobott el a szuk. Ha a ket szam egyezik, a mondat egy
+szo; ha nem, akkor van egy leleted, mielott barki mast felreveznel.
+
+**Amit ez NEM allit.** Nem a szuk kereses a hiba -- egy szuk kereses, amirol TUDJUK hogy szuk,
+hasznos. A hiba a ZARASI SZO: „ennyi van", „a lelet zart", „0 potencialisan tavoli". Aki azt
+irja, hogy *„ennyit talaltam EZZEL a mintaval"*, az nem tevedett, csak meg nem vegzett.
+
+**A csaladja.** Ez a lap mar kimondja, hogy KET EGYETERTO fuggetlen meres semmit nem er, ha
+ugyanazt az ALAKOT keresik (a `webhookSecret` esete). Ez a szakasz a KOMPLEMENTERE: amikor a
+ket meres NEM ert egyet, es a nezeteltérés maga a lelet. A ketto egyutt adja ki a hasznalhato
+alakot: **az egyetertés nem bizonyitek, a nezeteltérés viszont mindig informacio.**
+
+*(MI TENNE ERVENYTELENNE: ha egy esetben kiderul, hogy ket minta rendszeresen, ARTALMATLANUL
+ter el -- pl. mert az egyik szandekosan szur --, akkor a „mindig informacio" tulzas, es a
+szabalyt szukiteni kell arra, hogy a kulonbseget MEG KELL MAGYARAZNI, nem feltetlenul
+megszuntetni.)*
+
+**ÉS EGY FÜGGETLEN MÁSODIK PÉLDÁNY UGYANAZON A NAPON, ELLENTÉTES IRÁNYBÓL** (dexter, 2026-09-19,
+két esettel a 753685bd kártyán). didi mérője a MEGNYUGTATÓ irányba tévedt egy biztonsági
+kérdésen; dexteré ugyanígy, kétszer:
+
+    `npm run endpoint-inventory -- --check` ... NINCS ilyen szkript. URES kimenet, exit 0,
+                                                es majdnem "nincs drift"-kent olvasta.
+                                                (A valodi nev: `inventory:endpoints`.)
+    egy git pathspec ROSSZ cwd-hez oldva ...... HAROM magabiztos hamis valasz egymas utan:
+                                                ures diff egy 6208 soros valtozasra;
+                                                `ls-files --error-unmatch` szerint egy KOVETETT
+                                                fajl kovetetlen; `show`+`cmp` szerint "elter".
+                                                MINDEGYIK exit 0.
+
+**dexter megfogalmazasa, es ez a hordozhato alak:**
+
+> **MINDEN MERES, AMI URESEN TER VISSZA, KIVAN EGY POZITIV KONTROLLT, AMI NEM TUD.**
+> Enelkul a *„nem talaltam semmit"* es a *„rossz kerdest tettem fel"* UGYANAZ A BAJTSOR es
+> UGYANAZ AZ EXIT KOD.
+
+**A ket eset EGYUTT adja ki a tengelyt, es kulon egyik sem:** didi esete azt mutatja, hogy a
+nezeteltérés MUSZER; dexteré azt, hogy amikor NINCS masodik mero, az uresseg nemán hihetove
+valik. Mindketten azt mondtak, hogy ami vegul szetvalasztotta, egy MASODIK meres volt, amit
+csak azert futtattak le, mert a szam *tul kenyelmesnek* latszott -- vagyis SZOKAS, nem
+mechanizmus. A mechanizmus a pozitiv kontroll.
+
