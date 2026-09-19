@@ -75,10 +75,28 @@ self_test() {
   out="$(main 2>&1)"; rc=$?
   [ "$rc" = 2 ] && echo "  OK    argumentum nelkul -> rc=2" || { echo "  BUKO  argumentum nelkul: rc=$rc, vart 2"; bad=1; }
   # 2. NEGATIV KONTROLL: elerhetetlen szerver -> rc 1 es HANGOS, nem 'OK'
-  out="$(KANBAN_UJ_BASE_URL='http://127.0.0.1:1' main proba - "proba cim" 2>&1)"; rc=$?
-  if [ "$rc" = 1 ] && ! printf '%s' "$out" | grep -q '^OK '; then
-    echo "  OK    elerhetetlen szerver -> rc=1, nincs 'OK'"
-  else echo "  BUKO  elerhetetlen szerver: rc=$rc out=$out"; bad=1; fi
+  #
+  # EZ AZ ESET KETSZER MENT AT ROSSZ OKBOL, es a ketto egyutt adta ki a kart:
+  #   (a) a ROOT fajl-betolteskor oldodott fel, tehat a fenti felulirast elnyelte a globalis
+  #       ertek, es a hivas AZ ELES TABLARA ment (marveen javitotta, 6de2afab -- ket valodi
+  #       kartya maradt a tablan, 337031c2 es 75c2293b);
+  #   (b) egy WORKTREE-ben viszont nincs token, tehat a hivas MAR ELOBB elhasalt, rc=1 lett,
+  #       'OK' nem volt -- es az eset ATMENT, anelkul hogy barmit mert volna. A sajat
+  #       bizonyitekom ("self-test 4/4") ezert ket jelentesben is tobbet allitott a valosagnal.
+  #
+  # A ket javitas egyutt kell: a ROOT a hivaskor oldodjon fel (az mar megvan), ES az eset
+  # nezze meg, MIERT bukott. Egy "rc=1 es nincs OK" allitas minden hibara igaz, a hianyzo
+  # tokenre is -- egy negativ kontroll, ami barmilyen kudarcot elfogad, nem kontroll.
+  if [ ! -r "$TOKEN_FILE" ]; then
+    echo "  BUKO  a 2. eset nem futtathato: nincs olvashato token ($TOKEN_FILE)."
+    echo "        Worktreebol:  MARVEEN_STORE=/Users/isti/marveen/store bash $0 --self-test"
+    bad=1
+  else
+    out="$(KANBAN_UJ_BASE_URL='http://127.0.0.1:1' main proba - "proba cim" 2>&1)"; rc=$?
+    if [ "$rc" = 1 ] && ! printf '%s' "$out" | grep -q '^OK ' && printf '%s' "$out" | grep -q 'a letrehozas HTTP'; then
+      echo "  OK    elerhetetlen szerver -> rc=1, es a KAPCSOLAT bukott (nem a token)"
+    else echo "  BUKO  elerhetetlen szerver: rc=$rc out=$out"; bad=1; fi
+  fi
   # 3. a VISSZAOLVASO OSSZEHASONLITAS tud-e elterest mondani (pozitiv kontroll)
   out="$(_compare '{"title":"A","status":"planned"}' '{"title":"A","status":"done"}')"
   printf '%s' "$out" | grep -q 'ELTERES status' \

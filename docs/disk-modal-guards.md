@@ -74,6 +74,12 @@
 > The real number, 62% against a 90% threshold, still leaves the port unhurried -- the
 > margin is 28 points, not 82.
 >
+> **That 62 is a reading, not a constant** (didi, 2026-09-19): the same volume read 63%
+> an hour later. Nowhere near the threshold either way, but a card or a decision that
+> quotes a level needs the timestamp with it, or the next reader finds a different number
+> and concludes the page is wrong. The 6.60 -> 6.68 control above does not move, which is
+> why the argument rests on it and not on the level.
+>
 > **NEITHER SCRIPT IS BEING DROPPED.** The 2026-06-03 failure happened, the scripts are
 > written and tested, and on a Linux host the shape is already correct. What was wrong
 > was this page claiming, in the present tense, that the host was covered.
