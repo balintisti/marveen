@@ -1,5 +1,5 @@
 # A kozos CLAUDE.md meret-alapvonala KARAKTERBEN (kartya 30169f86).
 # RACSNI: alapvonal := min(mert, regi). Novelni csak kimondott indokkal szabad.
-# elozo: 176514  uj: 177529  indok: kimondott noveles: friday alakja: a MAR MEGLEVO fan-out szabaly MASODIK formaja (szam helyett LELET). Nem uj torveny, hanem ugyanannak a csaladnak a masodik mert esete -- es epp ezert eri meg: az elso (mandark, szam) mar a lapon all. Merve masodpercre: didi 11:01:11 es 11:01:25, ket kartya 11:03:21 es 11:04:00 -- 39 masodperc, amit semmilyen tabla-olvasas nem elozhet meg. +14 sor.
-# 2026-09-19 11:20:00 CEST
-177529
+# elozo: 177959  uj: 178297  indok: kimondott noveles: 338
+# 2026-09-19 12:26:18 CEST
+178297
