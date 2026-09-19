@@ -18,6 +18,15 @@ assert_eq() { if [ "$2" = "$3" ]; then pass "$1"; else fail "$1 (expected '$2', 
 INSTALL_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 GUARD="$INSTALL_DIR/scripts/disk-space-guard.sh"
 
+# EVERY child bash inherits this, so the eighth invocation someone adds cannot
+# message the owner by forgetting a flag (didi, 2026-09-19). It was safe by
+# discipline at six call sites -- and four of those six were added in the same
+# hour as this line, each one remembering it. The per-call settings below are now
+# harmless redundancy; nothing weakens, because the asserts read the ALERT_DRYRUN
+# marker, which is still produced. A case that needs the real alert path (n) turns
+# it off explicitly, which is a visible act rather than an omission.
+export DISK_GUARD_ALERT_DRYRUN=1
+
 # SHTEST807: GNU `touch_aged` is not portable -- BSD (macOS) touch
 # rejects it, the fixture files were never created, and every "survives the
 # reap" assert read the missing file as "deleted" (3 false FAILs + 2 more).
@@ -274,6 +283,41 @@ OUTM="$(DISK_GUARD_SCRATCH_DIR="$TMPDIR_BASE/nincs-ilyen-dir" DISK_GUARD_STATE_D
 [ "$RCM" = 0 ] && pass "m: missing measure path is a no-op, not a crash (rc=0)" || fail "m: rc=$RCM"
 printf '%s' "$OUTM" | grep -q "could not read disk usage of '$TMPDIR_BASE/nincs-ilyen-dir'" && pass "m: the log names the path it could not read" || fail "m: log does not name the path -- got: $OUTM"
 printf '%s' "$OUTM" | grep -q "reaping scratch" && fail "m: reaped on an unreadable measurement" || pass "m: nothing reaped on an unreadable measurement"
+
+# ---------------------------------------------------------------------------
+# (n) A PLANTED PERCENTAGE MUST NOT REACH THE OWNER
+#
+# DISK_GUARD_USAGE_OVERRIDE exists for tests. Without the dryrun flag it used to
+# carry a fake full disk all the way to the Telegram Bot API. This case turns the
+# dryrun OFF on purpose -- the only place in the file that does -- and proves the
+# guard refuses on its own rather than because someone remembered a flag.
+#
+# TG env is pointed at an EMPTY file, so even if the refusal is broken the alert
+# cannot send: alert_owner finds no token and returns before curl. A test of a
+# refusal has to be safe in the state where the refusal is broken.
+# ---------------------------------------------------------------------------
+echo ""
+echo "(n) a planted percentage cannot alert the owner"
+NSCR="$SCRATCH_BASE/case-n"; mkdir -p "$NSCR"
+NSTATE="$TMPDIR_BASE/n-state"; mkdir -p "$NSTATE"
+NTG="$TMPDIR_BASE/n-empty-telegram.env"; : > "$NTG"
+
+OUTN="$(DISK_GUARD_SCRATCH_DIR="$NSCR" DISK_GUARD_STATE_DIR="$NSTATE" \
+        DISK_GUARD_USAGE_OVERRIDE=96 DISK_GUARD_TG_ENV="$NTG" \
+        DISK_GUARD_ALERT_DRYRUN= bash "$GUARD" 2>&1)"
+printf '%s' "$OUTN" | grep -q "ALERT REFUSED" && pass "n: refuses to alert on a planted percentage" || fail "n: no refusal -- got: $(printf '%s' "$OUTN" | tail -2)"
+printf '%s' "$OUTN" | grep -q "owner alerted" && fail "n: it alerted the owner on a fake disk" || pass "n: the owner was not alerted"
+printf '%s' "$OUTN" | grep -q "DISK_GUARD_ALLOW_FAKE_ALERT=1" && pass "n: the refusal names the way out" || fail "n: refusal does not say how to test the wiring on purpose"
+[ -f "$NSTATE/.disk-guard-alerted" ] && fail "n: a refused alert consumed the cooldown hour" || pass "n: a refused alert does not consume the cooldown"
+
+# The way out must actually work, or the refusal is a wall. With consent given the
+# guard proceeds to the real alert path -- and stops at the empty TG env, which is
+# why this is safe to assert. It must NOT be the refusal that stops it.
+OUTN2="$(DISK_GUARD_SCRATCH_DIR="$NSCR" DISK_GUARD_STATE_DIR="$NSTATE" \
+         DISK_GUARD_USAGE_OVERRIDE=96 DISK_GUARD_TG_ENV="$NTG" \
+         DISK_GUARD_ALLOW_FAKE_ALERT=1 DISK_GUARD_ALERT_DRYRUN= bash "$GUARD" 2>&1)"
+printf '%s' "$OUTN2" | grep -q "ALERT REFUSED" && fail "n: consent did not open the gate" || pass "n: consent opens the gate"
+printf '%s' "$OUTN2" | grep -q "no bot token or owner chat id configured" && pass "n: with consent it reaches the real alert path (stopped by the empty env, not by the gate)" || fail "n: did not reach the alert path -- got: $(printf '%s' "$OUTN2" | tail -2)"
 
 # ---------------------------------------------------------------------------
 echo ""

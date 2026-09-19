@@ -79,7 +79,12 @@ SCRATCH_DIR="${DISK_GUARD_SCRATCH_DIR:-/tmp}"
 DISK_PATH="$SCRATCH_DIR"
 STATE_DIR="${DISK_GUARD_STATE_DIR:-$INSTALL_DIR/store}"
 ALERT_STAMP="$STATE_DIR/.disk-guard-alerted"
-TG_ENV="$HOME/.claude/channels/telegram/.env"
+# Overridable for ONE reason: the alert path is the only path in this guard that
+# reaches the outside world, and a test of it must not be able to send. Pointed at
+# an empty file, alert_owner finds no token and returns before curl -- so the test
+# is safe even if the refusal below is broken, which is the state a test of a
+# refusal has to survive. Also lets a manual end-to-end check run against a test bot.
+TG_ENV="${DISK_GUARD_TG_ENV:-$HOME/.claude/channels/telegram/.env}"
 LOG_TAG="disk-space-guard"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [$LOG_TAG] $*" || true; }
@@ -158,6 +163,20 @@ alert_owner() {
   local msg="$1" token chat
   if [ "${DISK_GUARD_ALERT_DRYRUN:-}" = "1" ]; then
     echo "ALERT_DRYRUN: $msg"; return 0
+  fi
+  # A PLANTED PERCENTAGE IS NOT A DISK. DISK_GUARD_USAGE_OVERRIDE exists for tests,
+  # and a test that forgets DISK_GUARD_ALERT_DRYRUN would otherwise send the owner a
+  # real Telegram about a fake full disk -- which nearly happened while this very
+  # file was being tested (friday, 2026-09-19: a new case ran the guard without the
+  # dryrun flag, reached here with a planted 101%, and only missed because the chat
+  # id happened to be empty). Discipline held six times and had to hold a seventh.
+  #
+  # The refusal NAMES THE WAY OUT, because the one legitimate use of a planted
+  # percentage is checking that the Telegram wiring really works end to end -- on a
+  # guard whose entire job is to alert, that is a thing you must be able to do.
+  if [ -n "${DISK_GUARD_USAGE_OVERRIDE:-}" ] && [ "${DISK_GUARD_ALLOW_FAKE_ALERT:-}" != "1" ]; then
+    log "ALERT REFUSED: usage is a planted value (DISK_GUARD_USAGE_OVERRIDE=${DISK_GUARD_USAGE_OVERRIDE}), not a real disk. Set DISK_GUARD_ALLOW_FAKE_ALERT=1 if you mean to test the wiring for real: $msg"
+    return 1
   fi
   # Token + owner chat id both come from config, never hardcoded: token from the
   # channels env, chat id from .env ALLOWED_CHAT_ID (or TELEGRAM_CHAT_ID in the

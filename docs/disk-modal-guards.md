@@ -49,12 +49,19 @@
 > df -P /tmp    -> 62%    /System/Volumes/Data   (where /tmp, /Users and this repo live)
 > ```
 >
-> APFS shares free space inside the container, so `/`'s Capacity is
-> `used_system/(used_system+free)` and only crosses the 90% reap threshold when about
-> **1.4 GB of free space is left** -- around 99.7% of the data volume. The 2026-06-03
-> incident this guard exists for (a 2.2 GB orphan under `/tmp`) moves `df /` by **zero**
-> percentage points. So the pre-fix guard, if ported as it stood, would have reaped
-> nothing and alerted nobody, on the one event it was built for.
+> APFS shares free space inside the container -- `avail` is **identical** on the two
+> volumes (178.8 GB on each, didi) -- so `/`'s Capacity is
+> `used_system/(used_system + shared_free)`. `/` therefore DOES climb as the data volume
+> fills; it just climbs on the wrong scale. It crosses the 90% reap threshold only when
+> about **1.4 GB of free space is left**, i.e. somewhere around 99.5-99.7% of the data
+> volume (the spread is the assumption about system usage holding constant, and is not
+> worth narrowing).
+>
+> **The number that settles it without any assumption:** the 2026-06-03 incident this
+> guard exists for, a 2.2 GB orphan under `/tmp`, moves `df /` from **6.60% to 6.68%**.
+> Eight hundredths of one point. The event the guard was built for is invisible on the
+> number the guard was reading. So the pre-fix guard, ported as it stood, would have
+> reaped nothing and alerted nobody.
 >
 > **Fixed 2026-09-19:** the measured volume is now derived from `SCRATCH_DIR` instead of a
 > separate `DISK_PATH` constant, so the volume measured and the volume reaped cannot drift
