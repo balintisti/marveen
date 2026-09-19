@@ -320,6 +320,44 @@ printf '%s' "$OUTN2" | grep -q "ALERT REFUSED" && fail "n: consent did not open 
 printf '%s' "$OUTN2" | grep -q "no bot token or owner chat id configured" && pass "n: with consent it reaches the real alert path (stopped by the empty env, not by the gate)" || fail "n: did not reach the alert path -- got: $(printf '%s' "$OUTN2" | tail -2)"
 
 # ---------------------------------------------------------------------------
+# (o) ONLY ONE MEASUREMENT IMPLEMENTATION MAY EXIST
+#
+# WHAT 40/40 DOES NOT MEAN, and this is the sentence to read before trusting the
+# number: it does not mean the volume choice is pinned in production. Case (l)
+# runs with DISK_GUARD_REAP_THRESHOLD SET, so a defect conditioned on that hook
+# being ABSENT is invisible to it -- and such a defect appears only in production,
+# where the hook is never set. didi measured both halves on 2026-09-19: wrong
+# volume only when the hook is unset gives 39/40 (caught by (m), which is the one
+# case that runs hook-free -- the edge case turned out to carry part of the
+# binding), and wrong volume when the hook is unset AND the measured path exists
+# gives 40/40, fully green. Reproduced here before this case was written.
+#
+# This case is deliberately the WEAKER kind -- it reads the source instead of
+# running it -- because the property being protected is not behaviour but
+# UNIQUENESS: there must be no second measurement implementation for a hook to
+# hide behind. A behavioural test cannot express "and nowhere else".
+#
+# Populations are DERIVED, not listed: every df invocation and every DISK_PATH
+# assignment in the file, so a new one cannot be added without this case seeing
+# it. Comments are stripped first, or the guard riots on its own explanation.
+# ---------------------------------------------------------------------------
+echo ""
+echo "(o) one measurement implementation (source-level)"
+GSRC="$(grep -v '^[[:space:]]*#' "$GUARD")"
+DF_ALL="$(printf '%s\n' "$GSRC" | grep 'df ' || true)"
+DF_N="$(printf '%s\n' "$DF_ALL" | grep -c 'df ' || true)"
+DF_BAD="$(printf '%s\n' "$DF_ALL" | grep -v '"\$DISK_PATH"' | grep 'df ' || true)"
+DP_ALL="$(printf '%s\n' "$GSRC" | grep -E '(^|[[:space:]])DISK_PATH=' || true)"
+DP_N="$(printf '%s\n' "$DP_ALL" | grep -c 'DISK_PATH=' || true)"
+
+# Positive control FIRST: a meter that finds no df at all would pass every assert
+# below by emptiness, and a stripped-to-nothing source looks exactly like a clean one.
+[ "$DF_N" -ge 1 ] && pass "o: the meter sees the df calls ($DF_N of them)" || fail "o: found no df call at all -- the meter is broken, not the source clean"
+[ -z "$DF_BAD" ] && pass "o: every df measures \$DISK_PATH, no literal path" || fail "o: a df call does not measure \$DISK_PATH: $DF_BAD"
+[ "$DP_N" = "1" ] && pass "o: DISK_PATH is assigned exactly once" || fail "o: DISK_PATH assigned $DP_N times -- two assignments can drift: $DP_ALL"
+printf '%s' "$DP_ALL" | grep -q 'DISK_PATH="\$SCRATCH_DIR"' && pass "o: and it is derived from SCRATCH_DIR" || fail "o: DISK_PATH is not derived from SCRATCH_DIR: $DP_ALL"
+
+# ---------------------------------------------------------------------------
 echo ""
 echo "======================"
 TOTAL=$((PASS + FAIL))
