@@ -128,7 +128,22 @@ function fireKanbanDispatch(id: string, actor?: string | null): void {
 }
 
 /** Query parameters `GET /api/kanban` accepts. Deliberately empty: it lists every live card. */
-const KANBAN_LIST_PARAMS: readonly string[] = []
+/** Query parameters `GET /api/kanban` accepts.
+ *
+ *  `fields=summary` drops `description` and `labels` from every row. It does NOT
+ *  change WHICH cards come back -- same sweep, same population, same
+ *  X-Archived-Hidden -- so a caller cannot use it to ask a narrower question by
+ *  accident. That is the whole point: the ?archived=1 incident this guard exists
+ *  for was a DIFFERENT POPULATION wearing an honest face, and a field filter
+ *  must not be able to repeat it.
+ *
+ *  MEASURED 2026-09-19 09:24 CEST, 2307 live cards: the full payload is
+ *  3 964 380 chars (~991k tokens) and `description` alone is 2 841 766 of it
+ *  (72%). Every agent that lists the board pays that, every listing. The
+ *  dashboard UI needs the descriptions and keeps getting them by default; the
+ *  agents do not, and now have a way to say so.
+ */
+const KANBAN_LIST_PARAMS: readonly string[] = ['fields']
 
 /** Query parameters `GET /api/kanban/archived` accepts. */
 const KANBAN_ARCHIVED_PARAMS: readonly string[] = ['q', 'project', 'label', 'from', 'to', 'limit']
@@ -279,7 +294,22 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // particular to an author writing their own archived_at filter: nine dead
     // ones across seven skills were written by people who believed they were
     // filtering something.
-    jsonMaybeGzip(req, res, cards, 200, { 'X-Archived-Hidden': String(countArchivedKanbanCards()) })
+    // `?fields=summary`: same rows, fewer columns. See KANBAN_LIST_PARAMS for the
+    // measurement. Built by OMITTING two keys rather than by listing the keepers,
+    // so a column added to kanban_cards later shows up here automatically instead
+    // of silently vanishing from the slim view -- a missing field reads as an
+    // empty value, and this endpoint has already been bitten once by a response
+    // that looked honest while answering something else.
+    const slim = (ctx.url.searchParams.get('fields') ?? '') === 'summary'
+    const payload = slim
+      ? cards.map(({ description: _description, labels: _labels, ...rest }) => rest)
+      : cards
+    jsonMaybeGzip(req, res, payload, 200, {
+      'X-Archived-Hidden': String(countArchivedKanbanCards()),
+      // ALWAYS SENT, both modes -- a header that appears only in slim mode cannot
+      // be told apart from an old build that never sends it.
+      'X-Fields': slim ? 'summary' : 'full',
+    })
     return true
   }
 
