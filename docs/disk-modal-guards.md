@@ -38,8 +38,34 @@
 >
 > **THAT PORT IS NOT A FREE DECISION and is not taken.** The disk guard runs `rm -rf`
 > on an allowlist every minute on Isti's machine; that needs his explicit yes.
-> Tracked separately, `waiting` on him. Disk today: 8% against a 90% reap threshold,
-> so nothing is pressing.
+> Tracked separately, `waiting` on him.
+>
+> **THE "8%" IN THE LINE ABOVE WAS THE WRONG VOLUME, and it is the number the decision
+> was resting on** (didi, 2026-09-19, card `fbbbca3c`). The guard measured `/`, which on
+> macOS is the read-only system volume, while it reaps under `/tmp`:
+>
+> ```
+> df -P /       ->  7%    /dev/disk3s1s1   (read-only system volume)
+> df -P /tmp    -> 62%    /System/Volumes/Data   (where /tmp, /Users and this repo live)
+> ```
+>
+> APFS shares free space inside the container, so `/`'s Capacity is
+> `used_system/(used_system+free)` and only crosses the 90% reap threshold when about
+> **1.4 GB of free space is left** -- around 99.7% of the data volume. The 2026-06-03
+> incident this guard exists for (a 2.2 GB orphan under `/tmp`) moves `df /` by **zero**
+> percentage points. So the pre-fix guard, if ported as it stood, would have reaped
+> nothing and alerted nobody, on the one event it was built for.
+>
+> **Fixed 2026-09-19:** the measured volume is now derived from `SCRATCH_DIR` instead of a
+> separate `DISK_PATH` constant, so the volume measured and the volume reaped cannot drift
+> apart. `scripts/disk-space-guard.sh --probe` prints what it sees without acting:
+>
+> ```
+> PROBE scratch=/tmp mount=/System/Volumes/Data usage=62 reap_at=90 alert_at=95
+> ```
+>
+> The real number, 62% against a 90% threshold, still leaves the port unhurried -- the
+> margin is 28 points, not 82.
 >
 > **NEITHER SCRIPT IS BEING DROPPED.** The 2026-06-03 failure happened, the scripts are
 > written and tested, and on a Linux host the shape is already correct. What was wrong
