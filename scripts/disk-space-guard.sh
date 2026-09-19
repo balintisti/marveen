@@ -28,7 +28,7 @@
 set -u
 
 # --- thresholds (tunable constants) ---
-DISK_PATH="/"
+# DISK_PATH is NOT a constant any more -- see below, right after SCRATCH_DIR.
 REAP_THRESHOLD=90        # >= this %: reap safe scratch
 ALERT_THRESHOLD=95       # >= this % (after reap): alert the owner directly
 REAP_MIN_AGE_MIN="${DISK_GUARD_REAP_MIN_AGE_MIN:-30}"   # only reap orphans older than this
@@ -50,6 +50,20 @@ fi
 
 INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SCRATCH_DIR="${DISK_GUARD_SCRATCH_DIR:-/tmp}"
+# THE VOLUME WE MEASURE MUST BE THE VOLUME WE REAP FROM -- derived, never a
+# separate constant that can drift away from SCRATCH_DIR unnoticed.
+#
+# It WAS a separate constant (`DISK_PATH="/"`), and on macOS that is the wrong
+# volume: `/` is the read-only system volume while /tmp (-> /private/tmp) and
+# /Users live on /System/Volumes/Data. Measured 2026-09-19 on this host (didi,
+# card fbbbca3c): df / = 7%, df /tmp = 62%. Worse than a wrong label -- APFS
+# shares free space inside the container, so `/`'s Capacity is
+# used_system/(used_system+free) and only reaches the 90% reap threshold when
+# ~1.4 GB of free space is left, i.e. at ~99.7% of the data volume. The original
+# 2026-06-03 incident (a 2.2 GB orphan under /tmp) moves df / by 0 percentage
+# points, so the guard would have reaped nothing and alerted nobody.
+# On Linux /tmp is normally on / and this derivation changes nothing.
+DISK_PATH="$SCRATCH_DIR"
 STATE_DIR="${DISK_GUARD_STATE_DIR:-$INSTALL_DIR/store}"
 ALERT_STAMP="$STATE_DIR/.disk-guard-alerted"
 TG_ENV="$HOME/.claude/channels/telegram/.env"
@@ -57,12 +71,24 @@ LOG_TAG="disk-space-guard"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [$LOG_TAG] $*" || true; }
 
+# REAL usage% of the measured volume (0-100). No override reaches this: it is the
+# line the whole test suite used to hide, so `--probe` calls it directly.
+real_disk_usage() {
+  df -P "$DISK_PATH" 2>/dev/null | awk 'NR==2 {gsub("%","",$5); print $5}'
+}
+
+# Mount point of the measured volume -- what the probe and the alert text name,
+# so "which volume did you look at" is answerable from the output alone.
+disk_mount() {
+  df -P "$DISK_PATH" 2>/dev/null | awk 'NR==2 {print $6}'
+}
+
 # Current usage% of DISK_PATH (0-100), or the test override.
 disk_usage() {
   if [ -n "${DISK_GUARD_USAGE_OVERRIDE:-}" ]; then
     echo "$DISK_GUARD_USAGE_OVERRIDE"; return
   fi
-  df -P "$DISK_PATH" 2>/dev/null | awk 'NR==2 {gsub("%","",$5); print $5}'
+  real_disk_usage
 }
 
 # Reap age-guarded scratch matching the allowlist. Prints how many entries it
@@ -203,7 +229,7 @@ main() {
       # (a timer kadenciaja szerint), tehat elbukott alertenkent egy naplosor. Ez szandekos:
       # a lemez ilyenkor TELE van, es egy nem kezbesitett veszjelzes ujraprobalasa pontosan
       # az, amiert ez az or letezik. A csendes elhallgatas volt a hiba.
-      if alert_owner "🔴 Disk space critical: ${DISK_PATH} is at ${usage}% after reaping ${removed} scratch item(s). Manual cleanup needed -- a full disk can wedge the channel session (deafness)."; then
+      if alert_owner "🔴 Disk space critical: ${SCRATCH_DIR} (volume $(disk_mount)) is at ${usage}% after reaping ${removed} scratch item(s). Manual cleanup needed -- a full disk can wedge the channel session (deafness)."; then
         echo "$now" > "$ALERT_STAMP" 2>/dev/null || true
       else
         log "alert did NOT go out -- cooldown stamp NOT written, will retry next tick"
@@ -213,6 +239,14 @@ main() {
     fi
   fi
 }
+
+# --probe: report what this guard WOULD measure, and act on nothing. It bypasses
+# DISK_GUARD_USAGE_OVERRIDE on purpose -- a probe that could be fed a fake number
+# would let the test suite "cover" the df line without ever running it.
+if [ "${1:-}" = "--probe" ]; then
+  echo "PROBE scratch=$SCRATCH_DIR mount=$(disk_mount) usage=$(real_disk_usage) reap_at=${REAP_THRESHOLD} alert_at=${ALERT_THRESHOLD}"
+  exit 0
+fi
 
 main "$@"
 exit 0

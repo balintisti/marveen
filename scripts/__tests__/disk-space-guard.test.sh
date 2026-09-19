@@ -177,6 +177,45 @@ OUTJ2="$(run_guard 96 "$JBASE/scratch" "$JSTATE")"
 if printf '%s' "$OUTJ2" | grep -q "ALERT_DRYRUN"; then fail "B: re-alerted within cooldown (stamp not honoured)"; else pass "B: second tick suppressed by cooldown"; fi
 
 # ---------------------------------------------------------------------------
+# (k) THE df LINE ITSELF -- the one line every other case in this file hides
+#
+# Every case above goes through run_guard, which sets DISK_GUARD_USAGE_OVERRIDE,
+# so the VOLUME CHOICE was the only uncovered line in the guard -- and it was the
+# wrong one: DISK_PATH="/" while the reaper works under SCRATCH_DIR. On macOS /
+# is the read-only system volume (7%) and /tmp -> /private/tmp lives on
+# /System/Volumes/Data (62%), measured 2026-09-19, card fbbbca3c (didi found it).
+# These cases run `--probe`, which deliberately IGNORES the override, so the real
+# `df` executes.
+#
+# ON A SINGLE-VOLUME HOST (typical Linux, /tmp on /) the mount assert is VACUOUS.
+# That is correct and intended -- the defect is macOS-shaped. What is not vacuous
+# anywhere is the last assert: that the probe refuses the override, i.e. that df
+# really ran. Without it the three asserts above could all pass on a fake number.
+# ---------------------------------------------------------------------------
+echo ""
+echo "(k) real df path (no usage override)"
+KSCR="$SCRATCH_BASE/case-k"; mkdir -p "$KSCR"
+
+PROBE="$(DISK_GUARD_SCRATCH_DIR="$KSCR" DISK_GUARD_USAGE_OVERRIDE=101 DISK_GUARD_ALERT_DRYRUN=1 bash "$GUARD" --probe 2>&1)"
+P_MOUNT="$(printf '%s' "$PROBE" | sed -n 's/.*mount=\([^ ]*\).*/\1/p')"
+P_USAGE="$(printf '%s' "$PROBE" | sed -n 's/.*usage=\([0-9]*\).*/\1/p')"
+EXP_MOUNT="$(df -P "$KSCR" | awk 'NR==2 {print $6}')"
+EXP_USAGE="$(df -P "$KSCR" | awk 'NR==2 {gsub("%","",$5); print $5}')"
+ROOT_MOUNT="$(df -P / | awk 'NR==2 {print $6}')"
+
+[ -n "$P_MOUNT" ] && pass "k: probe reports a mount point ($P_MOUNT)" || fail "k: probe printed no mount -- got: $PROBE"
+[ "$P_MOUNT" = "$EXP_MOUNT" ] && pass "k: measures the SCRATCH_DIR volume, not a constant" || fail "k: measures '$P_MOUNT' but the scratch dir lives on '$EXP_MOUNT'"
+[ "$P_USAGE" = "$EXP_USAGE" ] && pass "k: usage equals df of the scratch volume (${P_USAGE}%)" || fail "k: usage '$P_USAGE' != df '$EXP_USAGE'"
+case "$P_USAGE" in
+  (''|*[!0-9]*) fail "k: probe reported no numeric usage ('$P_USAGE') -- the assert below would pass on emptiness" ;;
+  (101|10[2-9]|1[1-9][0-9]|[2-9][0-9][0-9]*) fail "k: probe usage '$P_USAGE' is not a percentage -- the override leaked through" ;;
+  (*) pass "k: probe ignores DISK_GUARD_USAGE_OVERRIDE, real percentage (${P_USAGE}%)" ;;
+esac
+if [ "$EXP_MOUNT" = "$ROOT_MOUNT" ]; then
+  echo "  NOTE: single-volume host ($ROOT_MOUNT) -- the mount assert is vacuous here, by design"
+fi
+
+# ---------------------------------------------------------------------------
 echo ""
 echo "======================"
 TOTAL=$((PASS + FAIL))
