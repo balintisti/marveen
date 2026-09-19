@@ -1432,11 +1432,20 @@ export function buildWakeMessage(
 }
 
 /** One human-facing alert raised during a single sweep, before it is sent. */
+/** WHICH of readPane's three null-producing branches fired. The message named two of
+ *  them for weeks; the third (`unknown-state`) is the pane read FINE and the classifier
+ *  could not decide -- a different problem with a different fix, and the one the wording
+ *  sent people away from. Measured 2026-09-19: 33 such alerts, 16 about the coordinator,
+ *  and four hypotheses eliminated at tmux before anyone looked at the classifier. */
+export type PaneUnreadableReason = 'no-session' | 'capture-failed' | 'unknown-state'
+
 export interface FleetAlert {
   kind: 'still-idle' | 'pane-unreadable' | 'no-work-check' | 'wake-enqueue-failed'
   agent: string
   minutes?: number
   workCount?: number
+  /** Only for 'pane-unreadable'. Absent means the caller did not say which branch. */
+  paneReason?: PaneUnreadableReason
 }
 
 /** Collapse a sweep's alerts into ONE owner-facing message.
@@ -1460,10 +1469,19 @@ export function buildFleetAlert(alerts: FleetAlert[]): string {
     `FELEBRESZTETTEM -- az ebreszto uzenetet megkapta, megsem mozdult. Ezert szolok: nem az a hir, ` +
     `hogy all valaki, hanem hogy egy ebresztes nem hatott. Nezd meg a panelt (elakadt turn, telitett ` +
     `kontextus), vagy ha tenyleg nincs mit tennie, az a workcheck.json-jaban latszodjon.`
+  const paneReasonText: Record<PaneUnreadableReason, string> = {
+    'no-session': 'a session-nev nem oldodott fel -- NEZD MEG a tmux session-t',
+    'capture-failed': 'a capture elszallt (a session letezhet) -- NEZD MEG a tmux session-t',
+    'unknown-state':
+      'a panelt SIKERULT beolvasni, az OSZTALYOZO nem tudta eldonteni (`unknown`) -- ' +
+      'ez NEM tmux-problema; tipikus oka egy kituzott session-cim-banner (stripSessionTitleBanner)',
+  }
   const paneUnreadable = (a: FleetAlert) =>
-    `A(z) "${a.agent}" panelje NEM OLVASHATO (nincs session, vagy a capture elszallt), ezert nem ` +
-    `tudom megmondani, dolgozik-e. Ez NEM azt jelenti, hogy dolgozik -- azt jelenti, hogy az or VAK ` +
-    `erre az agensre. Nezd meg a tmux session-jet.`
+    `A(z) "${a.agent}" panelje NEM OLVASHATO, ezert nem tudom megmondani, dolgozik-e. Ez NEM azt ` +
+    `jelenti, hogy dolgozik -- azt jelenti, hogy az or VAK erre az agensre. OK: ` +
+    (a.paneReason
+      ? paneReasonText[a.paneReason]
+      : 'NEM JELENTETTE a hivo (harom ag lehetseges: no-session / capture-failed / unknown-state)')
   const noWorkCheck = (a: FleetAlert) =>
     `A(z) "${a.agent}" agensnek NINCS workcheck.json-ja, ezert nem tudom megmondani, van-e dolga. ` +
     `Ez konfiguracios hiany, NEM az agens hibaja -- amig nincs, a tetlenseg-or rá nem mukodik. ` +

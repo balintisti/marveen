@@ -29,6 +29,7 @@ import {
   coveredIdsStillPending,
   type IdleAgentThresholds,
   type WorkCheck,
+  type PaneUnreadableReason,
 } from '../idle-agent.js'
 
 // The guard for the agent that HAS work and is not doing it.
@@ -225,13 +226,22 @@ function lastCommentAtByCard(): Map<string, Map<string, number>> {
 // a KOZTUK LEVO BEKOTES viszont sehol. Merve: a `staleCounterOnly` szamitasat elvagva
 // mind a 3803 teszt ZOLD maradt.
 // Ez nem viselkedes-valtozas: csak lathatova teszi a fuggvenyt a tesztnek.
-export function readPane(agent: string): { idle: boolean | null; staleCounterOnly: boolean } {
+export function readPane(agent: string): {
+  idle: boolean | null
+  staleCounterOnly: boolean
+  paneReason?: PaneUnreadableReason
+} {
+  // WHICH branch produced `idle: null` -- three of them do, and the owner-facing
+  // message named only two. Measured 2026-09-19: 33 'pane unreadable' alerts, 16 of
+  // them about the coordinator, and the investigation started at tmux because the
+  // text said "no session, or the capture failed". The third branch (the pane read
+  // fine and classified as 'unknown') was never a candidate, because nothing said so.
   const session = resolveAgentSession(agent)
-  if (!session) return { idle: null, staleCounterOnly: false }
+  if (!session) return { idle: null, staleCounterOnly: false, paneReason: 'no-session' }
   const pane = capturePane(session, readAgentRemoteHost(agent))
-  if (!pane) return { idle: null, staleCounterOnly: false }
+  if (!pane) return { idle: null, staleCounterOnly: false, paneReason: 'capture-failed' }
   const state = detectPaneState(pane)
-  if (state === 'unknown') return { idle: null, staleCounterOnly: false }
+  if (state === 'unknown') return { idle: null, staleCounterOnly: false, paneReason: 'unknown-state' }
   return { idle: state === 'idle', staleCounterOnly: busyEvidence(pane) === 'counter' }
 }
 
@@ -396,8 +406,11 @@ export function tick(): void {
       if (!decision.alert) continue
 
       if (decision.reason === 'pane-unreadable') {
-        alerts.push({ kind: 'pane-unreadable', agent })
-        logger.warn({ idleGuard: true, agent }, 'idle guard: pane unreadable, guard blind for this agent')
+        alerts.push({ kind: 'pane-unreadable', agent, paneReason: paneRead.paneReason })
+        logger.warn(
+          { idleGuard: true, agent, paneReason: paneRead.paneReason ?? null },
+          'idle guard: pane unreadable, guard blind for this agent',
+        )
         continue
       }
 
