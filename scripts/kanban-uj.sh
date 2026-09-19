@@ -92,6 +92,12 @@ self_test() {
 }
 
 main() {
+  # A ROOT a HIVASKOR oldodik fel, nem fajl-betolteskor. Kulonben a `KANBAN_UJ_BASE_URL=... main
+  # ...` alaku felulirast -- ami EPP A SAJAT NEGATIV KONTROLLUNK alakja -- a fent mar bekototott
+  # globalis ertek elnyeli, es a "elerhetetlen szerver" eset AZ ELES TABLARA megy. Merve
+  # 2026-09-19 12:18: ket self-test futas ket VALODI kartyat hagyott a tablan (337031c2,
+  # 75c2293b). A teszt becsuletes volt (BUKO-t irt es rc=1-et adott); a teszt-HOROG nem ert oda.
+  local ROOT="${KANBAN_UJ_BASE_URL:-http://localhost:${MARVEEN_WEB_PORT:-3420}}"
   local agent="${1:-}" project="${2:-}" title="${3:-}"
   if [ -z "$agent" ] || [ -z "$project" ] || [ -z "$title" ]; then
     sed -n '/^# Usage:/,/^# Env:/p' "${BASH_SOURCE[0]}" >&2
