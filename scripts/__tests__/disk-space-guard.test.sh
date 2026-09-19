@@ -216,6 +216,66 @@ if [ "$EXP_MOUNT" = "$ROOT_MOUNT" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# (l) THE DECISION ITSELF -- main(), on a real measurement, with NO usage override
+#
+# Case (k) above proves the right measurement EXISTS in the script. It does not
+# prove the GUARD USES IT: --probe is a separate path. didi mutated only the
+# non-override branch of disk_usage() to `df -P /` -- leaving --probe and the
+# DISK_PATH derivation untouched -- and the suite stayed 26/26 green while the
+# guard measured the system volume again. Presence, not correspondence; the same
+# shape as the original defect, one level up.
+#
+# So this case sets NO DISK_GUARD_USAGE_OVERRIDE and instead lowers the reap
+# threshold, which makes main() act on the REAL df reading and log its own
+# decision. The assert is against that line, not against a probe.
+#
+# Vacuous on a single-volume host, like (k), and for the same reason.
+# ---------------------------------------------------------------------------
+echo ""
+echo "(l) main() decides on the real measurement (no usage override)"
+LSCR="$SCRATCH_BASE/case-l"; mkdir -p "$LSCR"
+LSTATE="$TMPDIR_BASE/l-state"; mkdir -p "$LSTATE"
+EXP_L="$(df -P "$LSCR" | awk 'NR==2 {gsub("%","",$5); print $5}')"
+OUTL="$(DISK_GUARD_SCRATCH_DIR="$LSCR" DISK_GUARD_STATE_DIR="$LSTATE" \
+        DISK_GUARD_REAP_THRESHOLD=1 DISK_GUARD_ALERT_DRYRUN=1 bash "$GUARD" 2>&1)"
+L_USAGE="$(printf '%s' "$OUTL" | sed -n 's/.*\] disk \([0-9]*\)% >=.*/\1/p' | head -1)"
+
+case "$L_USAGE" in
+  (''|*[!0-9]*) fail "l: main() logged no decision line -- got: $(printf '%s' "$OUTL" | head -2)" ;;
+  (*) pass "l: main() acted on a real reading (${L_USAGE}%), no override set" ;;
+esac
+[ "$L_USAGE" = "$EXP_L" ] && pass "l: the DECISION used the scratch volume (df says ${EXP_L}%)" || fail "l: main() decided on '$L_USAGE'% but the scratch volume is at '${EXP_L}'%"
+printf '%s' "$OUTL" | grep -q "reaping scratch under $LSCR" && pass "l: reaps under the same dir it measured" || fail "l: reap target is not the measured dir"
+
+# The threshold hook must not become a way to disable the guard by typo. Both bad
+# directions: a non-number must not read as 0 (reap every tick), and 900 must not
+# silently mean never. Both fall back to 90, so at 62% neither reaps.
+OUTL2="$(DISK_GUARD_SCRATCH_DIR="$LSCR" DISK_GUARD_STATE_DIR="$LSTATE" \
+         DISK_GUARD_REAP_THRESHOLD=abc DISK_GUARD_ALERT_DRYRUN=1 bash "$GUARD" 2>&1)"
+printf '%s' "$OUTL2" | grep -q "reaping scratch" && fail "l: garbage threshold read as 0 -- would reap every tick" || pass "l: garbage threshold falls back to the default (no reap)"
+# 900 needs the usage override, and here it is the RIGHT tool: the thing under
+# test is the threshold validation, not the volume choice. Without the override
+# this assert cannot fail at all -- at any real usage (<= 100) both a clamped 90
+# and an unclamped 900 produce the same silence, so the test would measure
+# nothing. (It did. Caught by mutation, 2026-09-19: removing the clamp left the
+# suite 34/34 green.)
+OUTL3="$(DISK_GUARD_SCRATCH_DIR="$LSCR" DISK_GUARD_STATE_DIR="$LSTATE" \
+         DISK_GUARD_USAGE_OVERRIDE=95 DISK_GUARD_REAP_THRESHOLD=900 \
+         DISK_GUARD_ALERT_DRYRUN=1 bash "$GUARD" 2>&1)"
+printf '%s' "$OUTL3" | grep -q "reaping scratch" && pass "l: out-of-range threshold falls back to the default (95% still reaps)" || fail "l: 900 accepted -- the guard would never reap, silently"
+
+# ---------------------------------------------------------------------------
+# (m) a DERIVED measure path can be missing -- say which path, do nothing
+# ---------------------------------------------------------------------------
+echo ""
+echo "(m) missing scratch dir names itself and no-ops"
+OUTM="$(DISK_GUARD_SCRATCH_DIR="$TMPDIR_BASE/nincs-ilyen-dir" DISK_GUARD_STATE_DIR="$LSTATE" \
+        DISK_GUARD_ALERT_DRYRUN=1 bash "$GUARD" 2>&1)"; RCM=$?
+[ "$RCM" = 0 ] && pass "m: missing measure path is a no-op, not a crash (rc=0)" || fail "m: rc=$RCM"
+printf '%s' "$OUTM" | grep -q "could not read disk usage of '$TMPDIR_BASE/nincs-ilyen-dir'" && pass "m: the log names the path it could not read" || fail "m: log does not name the path -- got: $OUTM"
+printf '%s' "$OUTM" | grep -q "reaping scratch" && fail "m: reaped on an unreadable measurement" || pass "m: nothing reaped on an unreadable measurement"
+
+# ---------------------------------------------------------------------------
 echo ""
 echo "======================"
 TOTAL=$((PASS + FAIL))
