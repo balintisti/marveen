@@ -1,5 +1,5 @@
 # A kozos CLAUDE.md meret-alapvonala KARAKTERBEN (kartya 30169f86).
 # RACSNI: alapvonal := min(mert, regi). Novelni csak kimondott indokkal szabad.
-# elozo: 178297  uj: 179047  indok: kimondott noveles: 683
-# 2026-09-19 12:34:14 CEST
-179047
+# elozo: 179047  uj: 180397  indok: kimondott noveles: dexter merte es marveen fuggetlenul ujramerte 17 valodi ag feltoltesevel: egy feature-agra valo push NYITOTT PR NELKUL nulla szamlazott percbe kerul a Delta-CRM-en. A lap eddig a ~70 percet egy PUSH aranak mutatta, es ettol honapokig egy lemezen tartottuk a munkat egy koltseg miatt, ami erre a muveletre sosem allt fenn. A mechanizmus mar helyesen allt a lapon; a MERT KOVETKEZMENY hianyzott.
+# 2026-09-19 14:25:16 CEST
+180397
