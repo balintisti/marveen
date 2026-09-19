@@ -400,7 +400,14 @@ def _refresh_claude_macos_keychain():
             data = json.loads(resp.read().decode("utf-8"))
     except (subprocess.SubprocessError, OSError, ValueError,
             urllib.error.URLError) as e:
-        print("  (keychain refresh failed, credential untouched: %s)" % type(e).__name__)
+        # STDERR, NEM STDOUT. A modul docstringje azt igeri, hogy `--json` "prints only
+        # the snapshot JSON", es ez a sor megszegte: a hivo `json.loads()`-ja azonnal
+        # elhasal rajta. MERVE 2026-09-19: a `scripts/hooks/claude-usage.py` (nulla-tokenes
+        # /usage parancs) emiatt MINDIG a GENERIC_ERROR_REPLY-t kuldte volna, vagyis a
+        # kepesseg megvan es nem er oda. Egy FIGYELMEZTETES amugy is a stderr-re valo:
+        # ott mindket modban lathato marad, es egyik modban sem szennyezi az adatot.
+        print("  (keychain refresh failed, credential untouched: %s)" % type(e).__name__,
+              file=sys.stderr)
         return None
 
     access = data.get("access_token")
