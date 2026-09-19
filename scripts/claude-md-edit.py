@@ -214,6 +214,33 @@ def main():
     ap.add_argument("--reason", default="")
     a = ap.parse_args()
 
+    # A `--grow` ELLENORZESE ITT ALL, A PARSE UTAN, ES NEM AZ IRAS MELLETT.
+    # Elso alakjaban a kapu az iras UTAN tuzelt: helyes hibauzenetet adott, exit 5-ot
+    # adott -- es a lap KOZBEN MAR AT VOLT IRVA. Egy or, ami pontosan jelent es kesve
+    # cselekszik, a kart nem elozi meg, csak dokumentalja. A sajat tesztje fogta meg.
+    #
+    # MIERT LETEZIK (marveen magan, 2026-09-19): harom novekedest `--grow 430`,
+    # `--grow 338`, `--grow 683` alakban hivtam meg -- a szam kezenfekvobb volt --, es a
+    # valodi indokot a `--reason`-be irtam, amit az iras-ag SOSEM OLVAS. A naploba igy
+    # szam kerult oda, ahol korabban tobb mondatos indoklas all, es egy szam abban az
+    # oszlopban HIHETONEK latszik. A meret a fajlbol visszamerheto; az INDOK nem.
+    if a.grow:
+        _csak_szam = lambda x: x.replace(",", "").replace(" ", "").isdigit()
+        indok = a.grow.strip()
+        if a.reason.strip() and (_csak_szam(indok) or len(indok) < 25):
+            # A hivo LEIRTA az indokot, csak rossz kapcsoloba. Ne dobjuk el.
+            indok = a.reason.strip() if _csak_szam(indok) else f"{indok} -- {a.reason.strip()}"
+        if _csak_szam(indok):
+            print("NEM IRTAM: a --grow az INDOK SZOVEGE, nem a novekmeny szama.", file=sys.stderr)
+            print(f"  Kaptam: {a.grow!r}. A meret a fajlbol barmikor visszamerheto; az OK nem.", file=sys.stderr)
+            print('  Helyesen: --grow "miert no a lap, egy MERT alakkal"', file=sys.stderr)
+            sys.exit(5)
+        if len(indok) < 25:
+            print(f"NEM IRTAM: a --grow indoka tul rovid ({len(indok)} karakter, a minimum 25).", file=sys.stderr)
+            print("  Egy indok, amit a kovetkezo olvaso nem tud ertelmezni, nem indok.", file=sys.stderr)
+            sys.exit(5)
+        a.grow = indok
+
     cur = size(PAGE); base = read_baseline()
 
     if a.check:
