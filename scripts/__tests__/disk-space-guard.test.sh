@@ -340,13 +340,37 @@ printf '%s' "$OUTN2" | grep -q "no bot token or owner chat id configured" && pas
 # Populations are DERIVED, not listed: every df invocation and every DISK_PATH
 # assignment in the file, so a new one cannot be added without this case seeing
 # it. Comments are stripped first, or the guard riots on its own explanation.
+#
+# AND WHAT THIS CASE STILL DOES NOT MEAN, measured rather than assumed
+# (2026-09-19, didi raised the question, three variants run here):
+#
+#   assembled command name (local D=d; D="${D}f"), RIGHT volume ..... 44/44 green
+#                                                                     -- and harmless: it measures
+#                                                                        the right thing
+#   assembled name, WRONG volume, unconditional ..................... 41/44 RED via (k) and (l)
+#   assembled name + conditioned on the hook being absent
+#     + on the path existing + WRONG volume ......................... 44/44 GREEN -- survives
+#
+# So the defect can still be reintroduced, but only with ALL THREE pieces at once:
+# the command name hidden from the source pattern, the defect conditioned on the
+# test hook's absence, AND conditioned on the path existing. Any two of the three
+# are caught. That is the limit of every regex-based structural guard, and it
+# takes intent -- pasting a literal df back is the realistic regression, and that
+# one is red. 44/44 does not mean the defect cannot come back; it means it cannot
+# come back by accident.
 # ---------------------------------------------------------------------------
 echo ""
 echo "(o) one measurement implementation (source-level)"
 GSRC="$(grep -v '^[[:space:]]*#' "$GUARD")"
 DF_ALL="$(printf '%s\n' "$GSRC" | grep 'df ' || true)"
 DF_N="$(printf '%s\n' "$DF_ALL" | grep -c 'df ' || true)"
-DF_BAD="$(printf '%s\n' "$DF_ALL" | grep -v '"\$DISK_PATH"' | grep 'df ' || true)"
+# THE ARGUMENT, NOT A MENTION OF IT. The first version of this line asked whether
+# the df line CONTAINS "$DISK_PATH", which `df -P "$(dirname "$DISK_PATH")"` also
+# satisfies -- a plausible well-meaning edit ("measure the parent so it works when
+# the dir does not exist yet"), not an evasion. Measured 2026-09-19: that shape left
+# (o) silent and only (m) caught it. Presence instead of correspondence, inside the
+# guard written to stop exactly that.
+DF_BAD="$(printf '%s\n' "$DF_ALL" | grep -vF 'df -P "$DISK_PATH"' | grep 'df ' || true)"
 DP_ALL="$(printf '%s\n' "$GSRC" | grep -E '(^|[[:space:]])DISK_PATH=' || true)"
 DP_N="$(printf '%s\n' "$DP_ALL" | grep -c 'DISK_PATH=' || true)"
 
