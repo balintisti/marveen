@@ -66,13 +66,34 @@ describe('readPane -- a staleCounterOnly BEKOTESE (b5bff340)', () => {
     expect(busyEvidence).toHaveBeenCalledTimes(parok.length)
   })
 
-  it('a korai kilepesek MIND hamisat adnak (nincs pane / ismeretlen allapot)', () => {
+  // ES A KET KORAI KILEPES MEGKULONBOZTETHETO, NEM CSAK EGYFORMAN HAMIS (kartya 5b711bbc).
+  // A `staleCounterOnly: false` mindkettore ugyanaz, es HETEKIG ez volt az EGYETLEN, amit a
+  // hivo latott -- az owner-facing uzenet ezert nevezett meg KET okot, mikozben HAROM van.
+  // A `paneReason` az, amitol a 33 riasztasbol ADAT lesz: melyik ag tuzelt, hanyszor.
+  it('a korai kilepesek MIND hamisat adnak, de MEGMONDJAK, MELYIK ag tuzelt', () => {
     detectPaneState.mockReturnValue('unknown')
     busyEvidence.mockReturnValue('counter')          // meg IGY sem lehet igaz
-    expect(readPane('x')).toEqual({ idle: null, staleCounterOnly: false })
+    expect(readPane('x')).toEqual({
+      idle: null,
+      staleCounterOnly: false,
+      paneReason: 'unknown-state',
+    })
 
     capturePane.mockReturnValue(null)
-    expect(readPane('x')).toEqual({ idle: null, staleCounterOnly: false })
+    expect(readPane('x')).toEqual({
+      idle: null,
+      staleCounterOnly: false,
+      paneReason: 'capture-failed',
+    })
+
+    // A DISZKRIMINACIO MAGA AZ ALLITAS: ha a ket ag ugyanazt az okot adna, a mezo
+    // ugyanolyan hasznalhatatlan lenne, mint a `staleCounterOnly` volt.
+    detectPaneState.mockReturnValue('unknown')
+    capturePane.mockReturnValue('barmi')
+    const a = readPane('x').paneReason
+    capturePane.mockReturnValue(null)
+    const b = readPane('x').paneReason
+    expect(a).not.toBe(b)
   })
 })
 
