@@ -320,6 +320,91 @@ printf '%s' "$OUTN2" | grep -q "ALERT REFUSED" && fail "n: consent did not open 
 printf '%s' "$OUTN2" | grep -q "no bot token or owner chat id configured" && pass "n: with consent it reaches the real alert path (stopped by the empty env, not by the gate)" || fail "n: did not reach the alert path -- got: $(printf '%s' "$OUTN2" | tail -2)"
 
 # ---------------------------------------------------------------------------
+# (o) ONLY ONE MEASUREMENT IMPLEMENTATION MAY EXIST
+#
+# WHAT 40/40 DOES NOT MEAN, and this is the sentence to read before trusting the
+# number: it does not mean the volume choice is pinned in production. Case (l)
+# runs with DISK_GUARD_REAP_THRESHOLD SET, so a defect conditioned on that hook
+# being ABSENT is invisible to it -- and such a defect appears only in production,
+# where the hook is never set. didi measured both halves on 2026-09-19: wrong
+# volume only when the hook is unset gives 39/40 (caught by (m), which is the one
+# case that runs hook-free -- the edge case turned out to carry part of the
+# binding), and wrong volume when the hook is unset AND the measured path exists
+# gives 40/40, fully green. Reproduced here before this case was written.
+#
+# This case is deliberately the WEAKER kind -- it reads the source instead of
+# running it -- because the property being protected is not behaviour but
+# UNIQUENESS: there must be no second measurement implementation for a hook to
+# hide behind. A behavioural test cannot express "and nowhere else".
+#
+# Populations are DERIVED, not listed: every df invocation and every DISK_PATH
+# assignment in the file, so a new one cannot be added without this case seeing
+# it. Comments are stripped first, or the guard riots on its own explanation.
+#
+# AND WHAT THIS CASE STILL DOES NOT MEAN, measured rather than assumed
+# (2026-09-19, didi raised the question, three variants run here):
+#
+#   assembled command name (local D=d; D="${D}f"), RIGHT volume ..... 44/44 green
+#                                                                     -- and harmless: it measures
+#                                                                        the right thing
+#   assembled name, WRONG volume, unconditional ..................... 41/44 RED via (k) and (l)
+#   assembled name + conditioned on the hook being absent
+#     + on the path existing + WRONG volume ......................... 44/44 GREEN -- survives
+#
+# So the defect can still be reintroduced, but only with ALL THREE pieces at once:
+# the command name hidden from the source pattern, the defect conditioned on the
+# test hook's absence, AND conditioned on the path existing. Any two of the three
+# are caught. That is the limit of every regex-based structural guard, and it
+# takes intent -- pasting a literal df back is the realistic regression, and that
+# one is red. 44/44 does not mean the defect cannot come back; it means it cannot
+# come back by accident.
+# ---------------------------------------------------------------------------
+echo ""
+echo "(o) one measurement implementation (source-level)"
+GSRC="$(grep -v '^[[:space:]]*#' "$GUARD")"
+DF_ALL="$(printf '%s\n' "$GSRC" | grep 'df ' || true)"
+DF_N="$(printf '%s\n' "$DF_ALL" | grep -c 'df ' || true)"
+# THE ARGUMENT, NOT A MENTION OF IT. The first version of this line asked whether
+# the df line CONTAINS "$DISK_PATH", which `df -P "$(dirname "$DISK_PATH")"` also
+# satisfies -- a plausible well-meaning edit ("measure the parent so it works when
+# the dir does not exist yet"), not an evasion. Measured 2026-09-19: that shape left
+# (o) silent and only (m) caught it. Presence instead of correspondence, inside the
+# guard written to stop exactly that.
+#
+# AND THE OTHER SIDE OF THAT BORDER, which cost one more round (didi): pinning the
+# exact literal makes a CORRECT edit fail -- `df -P "${DISK_PATH}"` measures exactly
+# the same thing and is rejected. The strictness stays, because a grep cannot parse
+# shell and one canonical spelling is the only thing it can check. What must not stay
+# is one message for both: telling someone their line "does not measure $DISK_PATH"
+# when it plainly does sends them to look for a bug that is not there, and the honest
+# conclusion from that reading is that the TEST is broken. So the two cases are two
+# asserts with two messages: a different SPELLING of the right variable, and a df
+# that does not go through it at all.
+# The canonical set is exactly two spellings of the same thing. Anything else --
+# a literal, a second variable, or a TRANSFORMATION of the right one like
+# "${DISK_PATH%/*}" -- lands in DF_BAD, and that direction is deliberate: a
+# classifier built on grep cannot tell "$DISK_PATH" spelled differently from
+# "$DISK_PATH" cut down to its parent, and of the two ways to be wrong, calling a
+# real defect a style issue is the dangerous one. Measured: the first split did
+# exactly that to "${DISK_PATH%/*}".
+DF_BAD="$(printf '%s\n' "$DF_ALL" | grep -vF 'df -P "$DISK_PATH"' | grep -vF 'df -P "${DISK_PATH}"' | grep 'df ' || true)"
+DP_ALL="$(printf '%s\n' "$GSRC" | grep -E '(^|[[:space:]])DISK_PATH=' || true)"
+DP_N="$(printf '%s\n' "$DP_ALL" | grep -c 'DISK_PATH=' || true)"
+
+# Positive control FIRST: a meter that finds no df at all would pass every assert
+# below by emptiness, and a stripped-to-nothing source looks exactly like a clean one.
+[ "$DF_N" -ge 1 ] && pass "o: the meter sees the df calls ($DF_N of them)" || fail "o: found no df call at all -- the meter is broken, not the source clean"
+# THE MESSAGE NAMES THE CHECK'S LIMIT, NOT A VERDICT ON THE LINE. It used to say
+# the line "does not measure $DISK_PATH", which for `df -P "${DISK_PATH}"` is
+# simply false -- and someone who reads a false diagnosis, checks the line and
+# finds it correct concludes the TEST is broken, which is the quiet tightening
+# that reads as a broken feature. This cannot tell a different spelling from a
+# transformation, so it says that instead of guessing.
+[ -z "$DF_BAD" ] && pass "o: every df uses the canonical \$DISK_PATH form" || fail "o: this df is not the canonical form, so (o) cannot verify WHICH volume it measures -- write it as df -P \"\$DISK_PATH\" (a grep cannot parse shell, so one form is all it can check). If it deliberately measures something else, that is a second source of truth that can drift from DISK_PATH: $DF_BAD"
+[ "$DP_N" = "1" ] && pass "o: DISK_PATH is assigned exactly once" || fail "o: DISK_PATH assigned $DP_N times -- two assignments can drift: $DP_ALL"
+printf '%s' "$DP_ALL" | grep -q 'DISK_PATH="\$SCRATCH_DIR"' && pass "o: and it is derived from SCRATCH_DIR" || fail "o: DISK_PATH is not derived from SCRATCH_DIR: $DP_ALL"
+
+# ---------------------------------------------------------------------------
 echo ""
 echo "======================"
 TOTAL=$((PASS + FAIL))
