@@ -17,7 +17,7 @@ import {
   SCHEDULED_TASKS_DIR, MAX_SCHEDULED_TASK_PROMPT_LEN,
   listScheduledTasks, writeScheduledTask,
 } from '../scheduled-tasks-io.js'
-import { runScheduledTaskNow, readScheduleLastFired } from '../schedule-runner.js'
+import { runScheduledTaskNow, readScheduleLastFired, readScheduleLastOutcome } from '../schedule-runner.js'
 import type { RouteContext } from './types.js'
 import { readCommandHealth } from '../command-task.js'
 import { assessCommandHealth } from '../command-health-age.js'
@@ -129,18 +129,42 @@ Az eredmeny CSAK a kibovitett prompt szovege legyen, semmi mas. Ne hasznalj code
     // repeat the `delivered` != `processed` mistake this fleet already has written
     // down. The field is ABSENT -- not zero, not "now" -- when a task never fired,
     // because telling those two apart is the only reason to return it at all.
+    //
+    // AND FIRED vs. NEVER STARTED, which the paragraph above does NOT cover -- that
+    // gap is what card 0376e54f is (measured 2026-09-20). The number this used to
+    // read, `scheduleLastRun`, is written on FOUR paths and two of them are skips:
+    // the quota gate and the cron pre-check both stamp the occurrence so it is not
+    // caught up later. So five meters that had been dark for eight to eighteen days
+    // all reported `last_fired_at` minutes ago, and a dark meter was byte-identical
+    // to a healthy one. The runner now records the outcome separately; a skip can
+    // never overwrite a real firing, and a held-back tick surfaces as
+    // `last_skipped_at` + `last_skip_reason` instead of masquerading as a run.
     const tasks = listScheduledTasks().map((t) => {
       const withHealth =
         t.type === 'command'
           ? { ...t, health: assessCommandHealth(readCommandHealth(t.name), t.schedule, Date.now()) }
           : { ...t }
-      const firedAt = readScheduleLastFired(t.name)
-      return firedAt === undefined
+      const outcome = readScheduleLastOutcome(t.name)
+      // Fall back to the legacy map ONLY while a task has no outcome record yet
+      // (nothing has ticked since this shipped). Dropping the field there would
+      // turn a real past firing into a claim that it never ran -- the opposite
+      // error, and the one the paragraph above exists to prevent.
+      const firedAt = outcome ? outcome.lastFiredAt : readScheduleLastFired(t.name)
+      const withFired = firedAt === undefined
         ? withHealth
         : {
             ...withHealth,
             last_fired_at: new Date(firedAt).toISOString(),
             last_fired_at_local: formatLocalStamp(firedAt),
+          }
+      const skippedAt = outcome?.lastSkippedAt
+      return skippedAt === undefined
+        ? withFired
+        : {
+            ...withFired,
+            last_skipped_at: new Date(skippedAt).toISOString(),
+            last_skipped_at_local: formatLocalStamp(skippedAt),
+            ...(outcome?.lastSkipReason ? { last_skip_reason: outcome.lastSkipReason } : {}),
           }
     })
     json(res, tasks)

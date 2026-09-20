@@ -329,6 +329,34 @@ export function isScheduledPromptStuck(pane: string | null, marker: string): boo
 const SCHEDULE_LAST_RUN_PATH = join(PROJECT_ROOT, 'store', 'schedule-last-run.json')
 const scheduleLastRun: Map<string, number> = new Map()
 
+/**
+ * What the LAST TICK of a task actually did -- fired, or was held back.
+ *
+ * WHY THIS IS A SECOND FILE (card 0376e54f). `scheduleLastRun` above answers the
+ * catch-up question -- "is this occurrence used up?" -- and for that it is CORRECT
+ * that a deliberately skipped tick counts: a quota-deferred occurrence must not
+ * re-fire later as a catch-up. Its meaning is a contract with that window, so it
+ * is left alone.
+ *
+ * The bug was reading that same number as evidence of a RUN. Two of the four write
+ * sites are skips (quota gate, cron pre-check), so `/api/schedules` reported
+ * `last_fired_at` minutes ago for meters that had not run in over a week -- and a
+ * meter that has been dark for eight days looked exactly like one that just ran
+ * (measured 2026-09-20 on five scheduled tasks, cards 1fe8e8c5 / 0376e54f).
+ *
+ * The docblock on readScheduleLastFired already guards the neighbouring axis --
+ * fired vs. SUCCEEDED -- and says nothing about fired vs. NEVER STARTED. A present,
+ * careful exception is evidence about its own text, never about the population.
+ *
+ * `lastFiredAt` is only ever written by a real dispatch, so a skip can never
+ * overwrite it; `lastSkippedAt` carries its reason. Both are absent until the
+ * first tick of their kind -- absent, not zero, because telling those apart is the
+ * whole point.
+ */
+type ScheduleOutcome = { lastFiredAt?: number; lastSkippedAt?: number; lastSkipReason?: string }
+const SCHEDULE_LAST_OUTCOME_PATH = join(PROJECT_ROOT, 'store', 'schedule-last-outcome.json')
+const scheduleLastOutcome: Map<string, ScheduleOutcome> = new Map()
+
 function loadScheduleLastRun(): void {
   try {
     const raw = JSON.parse(readFileSync(SCHEDULE_LAST_RUN_PATH, 'utf-8'))
@@ -379,6 +407,73 @@ function persistScheduleLastRun(): void {
     atomicWriteFileSync(SCHEDULE_LAST_RUN_PATH, JSON.stringify(Object.fromEntries(scheduleLastRun), null, 2))
   } catch (err) {
     logger.warn({ err }, 'schedule-runner: failed to persist last-run map')
+  }
+}
+
+function loadScheduleLastOutcome(): void {
+  try {
+    const raw = JSON.parse(readFileSync(SCHEDULE_LAST_OUTCOME_PATH, 'utf-8'))
+    if (raw && typeof raw === 'object') {
+      for (const [name, v] of Object.entries(raw as Record<string, unknown>)) {
+        if (!v || typeof v !== 'object') continue
+        const o = v as Record<string, unknown>
+        const entry: ScheduleOutcome = {}
+        if (typeof o.lastFiredAt === 'number' && Number.isFinite(o.lastFiredAt)) entry.lastFiredAt = o.lastFiredAt
+        if (typeof o.lastSkippedAt === 'number' && Number.isFinite(o.lastSkippedAt)) entry.lastSkippedAt = o.lastSkippedAt
+        if (typeof o.lastSkipReason === 'string') entry.lastSkipReason = o.lastSkipReason
+        if (entry.lastFiredAt != null || entry.lastSkippedAt != null) scheduleLastOutcome.set(name, entry)
+      }
+    }
+  } catch { /* no file yet / unreadable -- start empty */ }
+}
+
+function persistScheduleLastOutcome(): void {
+  try {
+    atomicWriteFileSync(SCHEDULE_LAST_OUTCOME_PATH, JSON.stringify(Object.fromEntries(scheduleLastOutcome), null, 2))
+  } catch (err) {
+    logger.warn({ err }, 'schedule-runner: failed to persist last-outcome map')
+  }
+}
+
+/**
+ * Record what a tick DID. `fired` never overwrites nothing and a skip never
+ * overwrites a firing -- the two live in separate fields on purpose, so that a
+ * task deferred every tick for a week still reports when it last really ran.
+ */
+function recordScheduleOutcome(name: string, tsMs: number, kind: 'fired' | 'skipped', reason?: string): void {
+  const prev = scheduleLastOutcome.get(name) ?? {}
+  const next: ScheduleOutcome = { ...prev }
+  if (kind === 'fired') {
+    next.lastFiredAt = tsMs
+  } else {
+    next.lastSkippedAt = tsMs
+    if (reason) next.lastSkipReason = reason
+  }
+  scheduleLastOutcome.set(name, next)
+  persistScheduleLastOutcome()
+}
+
+/**
+ * The outcome record for a task, or undefined when no tick has been recorded yet.
+ *
+ * Undefined means "this build has not seen a tick of this task", NOT "it never
+ * ran" -- entries written before card 0376e54f have no outcome at all, and the
+ * caller falls back to the legacy last-run map for them rather than turning a real
+ * past firing into a claim that it never happened.
+ */
+export function readScheduleLastOutcome(name: string): ScheduleOutcome | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(SCHEDULE_LAST_OUTCOME_PATH, 'utf-8')) as Record<string, unknown>
+    const v = raw[name]
+    if (!v || typeof v !== 'object') return undefined
+    const o = v as Record<string, unknown>
+    const entry: ScheduleOutcome = {}
+    if (typeof o.lastFiredAt === 'number' && Number.isFinite(o.lastFiredAt)) entry.lastFiredAt = o.lastFiredAt
+    if (typeof o.lastSkippedAt === 'number' && Number.isFinite(o.lastSkippedAt)) entry.lastSkippedAt = o.lastSkippedAt
+    if (typeof o.lastSkipReason === 'string') entry.lastSkipReason = o.lastSkipReason
+    return entry.lastFiredAt != null || entry.lastSkippedAt != null ? entry : undefined
+  } catch {
+    return undefined
   }
 }
 
@@ -823,6 +918,7 @@ async function attemptFireTask(
     })
     scheduleLastRun.set(task.name, now)
     persistScheduleLastRun()
+    recordScheduleOutcome(task.name, now, 'fired')
     // A lateCatchUpMs value means this tick only matched because of the
     // enlarged first-run catch-up window (see startScheduleRunner), i.e. the
     // task missed its normal tick (e.g. the process was down/restarting at
@@ -1209,6 +1305,7 @@ export function startScheduleRunner(): NodeJS.Timeout {
   // Reload the persisted last-run times so a restart inside a task's catch-up
   // window does not re-fire an already-run task.
   loadScheduleLastRun()
+  loadScheduleLastOutcome()
 
   // Surface the effective cron timezone at startup. A silent UTC fallback (no
   // SCHEDULER_TZ/TZ in the env) shifts every fixed-time cron off its intended
@@ -1332,6 +1429,14 @@ export function startScheduleRunner(): NodeJS.Timeout {
         if (scheduleLastRun.get(entry.taskName) === entry.injectedAt) {
           scheduleLastRun.delete(entry.taskName)
           persistScheduleLastRun()
+        }
+        // Same rollback on the outcome record: the prompt was typed but no turn
+        // ever started, so this must not stand as the task's last real firing.
+        const lostOutcome = scheduleLastOutcome.get(entry.taskName)
+        if (lostOutcome?.lastFiredAt === entry.injectedAt) {
+          const { lastFiredAt: _dropped, ...rest } = lostOutcome
+          scheduleLastOutcome.set(entry.taskName, rest)
+          persistScheduleLastOutcome()
         }
         insertPendingTaskRetryIfNew(entry.taskName, entry.agentName, now, 'lost-injection')
         taskInflightMap.delete(key)
@@ -1505,6 +1610,7 @@ export function startScheduleRunner(): NodeJS.Timeout {
         runCommandTask(task, now)
         scheduleLastRun.set(task.name, now)
         persistScheduleLastRun()
+        recordScheduleOutcome(task.name, now, 'fired')
         continue
       }
 
@@ -1538,6 +1644,9 @@ export function startScheduleRunner(): NodeJS.Timeout {
         )
         scheduleLastRun.set(task.name, now)
         persistScheduleLastRun()
+        // The tick is used up for catch-up purposes, but NOTHING RAN -- record
+        // that separately so `/api/schedules` cannot report this as a firing.
+        recordScheduleOutcome(task.name, now, 'skipped', 'quota')
         // There WAS work; we deliberately did not do it -- this one is a
         // candidate for catch-up when the window recovers.
         for (const agentName of targetAgents) appendTaskRun(task.name, agentName, 'skipped', 'quota')
@@ -1550,6 +1659,7 @@ export function startScheduleRunner(): NodeJS.Timeout {
       if (cronPc.skip) {
         scheduleLastRun.set(task.name, now)
         persistScheduleLastRun()
+        recordScheduleOutcome(task.name, now, 'skipped', 'precheck-cron')
         for (const agentName of targetAgents) {
           // Nothing to do: catching this up later would be wrong.
           appendTaskRun(task.name, agentName, 'skipped', 'precheck-cron')
