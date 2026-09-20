@@ -162,13 +162,23 @@ fi
 # sor abbol kiesik. A grep-horgony ezert: NEM FELOLDHATO KARTYA-ID.
 _CARD_IDS="$(printf '%s' "$C" | grep -oiE '(card|kartya|kártya)s?[[:space:]]+`?[0-9a-f]{8}`?' | grep -oE '[0-9a-f]{8}' | sort -u)"
 if [ -n "$_CARD_IDS" ]; then
-  # A valasz ~2 MB. NEM megy hej-valtozoba es NEM megy kornyezeten at: a
+  # A valasz NEM megy hej-valtozoba es NEM megy kornyezeten at: a
   # kornyezet merethatara (ARG_MAX) alatt a python hivas E2BIG-gel elhal, es a
   # 2026-09-02-i elso valtozatom pontosan ezen bukott -- a "nem futott le" agra
   # esett MINDEN esetben, tehat sosem ellenorzott semmit. FAJLON keresztul megy.
+  #
+  # `?fields=summary`, MERVE 2026-09-20 (marveen), 1080 kartyan:
+  #   csupasz ....... 2 277 936 bajt   summary ....... 476 442 bajt   (-79%)
+  #   az ID-HALMAZ AZONOS: 1080 = 1080, csak-csupaszban 0, csak-summaryban 0,
+  #   es a valasz TOMBBEL kezdodik, tehat a lenti first-byte proba valtozatlanul all.
+  # Ez a hivas KIZAROLAG id-ket old fel; a `description` es a `labels` a valasz 79%-a
+  # es ehhez a kerdeshez semmit nem ad.
+  # AMIT EZ NEM ALLIT: hogy ettol megszunik a "0 bajt" hamis riasztas. friday ketszer
+  # latta 2026-09-20-an, es az ujramerese szerint a vegpont EGESZSEGES volt (3x HTTP 200,
+  # 2,2 MB, 4 ms). A kisebb valasz a VALOSZINUSEGET csokkenti; az OKOT nem mertuk meg.
   _KBF="$(mktemp -t agentmsg-kb)"
   curl -s --max-time 10 -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
-       "http://localhost:${PORT}/api/kanban" -o "$_KBF" 2>/dev/null || true
+       "http://localhost:${PORT}/api/kanban?fields=summary" -o "$_KBF" 2>/dev/null || true
   # A FELTETEL HAROM OKOT FED, A REGI UZENET EGYET NEVEZETT MEG (dexter merte 2026-09-19).
   # `! -s` = nincs valasz VAGY URES valasz; a first-byte proba = CSONKA valasz VAGY MEGVALTOZOTT
   # ALAK. A regi szoveg mindharomra azt mondta, hogy "a kanban API nem valaszolt" -- tehat ha a
