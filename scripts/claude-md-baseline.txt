@@ -1,5 +1,5 @@
 # A kozos CLAUDE.md meret-alapvonala KARAKTERBEN (kartya 30169f86).
 # RACSNI: alapvonal := min(mert, regi). Novelni csak kimondott indokkal szabad.
-# elozo: 183255  uj: 184354  indok: kimondott noveles: az 'uzenet-torlo vegpont nincs' allitas tul eros volt: a PUT letezik, csak a VEGREHAJTO utja (merve 09-20, kartya 4f2b2d8e)
-# 2026-09-20 13:38:08 CEST
-184354
+# elozo: 184354  uj: 186110  indok: kimondott noveles: negyedik nevter-par (uzenet-id kontra komment-id), es a hibaja ERVENYES REKORD, nem ures -- merve 99,9%; plusz a cselekvest eloiro komment lejarat-szabalya
+# 2026-09-20 13:42:27 CEST
+186110
