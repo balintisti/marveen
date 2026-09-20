@@ -1504,21 +1504,41 @@ describe('the watcher consults the pull-list before asking for a push', () => {
   const SRC = readFileSync(
     join(dirname(fileURLToPath(import.meta.url)), '..', 'web', 'idle-agent-watcher.ts'), 'utf-8')
 
-  it('the idle-no-work branch calls orphanPullList', () => {
+  // THE ANCHOR MOVED, THE QUESTION DID NOT (card 88998fea, 2026-09-20). The
+  // orphanPullList call used to sit INSIDE the branch; it is now computed once
+  // above the decision, because the repeat-suppression has to compare the very
+  // set the message will name -- two computations would be two chances to
+  // disagree, silently, by suppressing a notice for a list nobody was shown.
+  //
+  // So these two no longer look for the CALL inside the branch. They ask the same
+  // correspondence question about the BINDING that carries it: is the pull-list
+  // consulted, and does the branch have it in hand before the notice that tells
+  // the coordinator to push a card.
+  it('the idle-no-work branch consults the pull-list it was handed', () => {
     const branch = SRC.slice(SRC.indexOf("decision.reason === 'idle-no-work'"))
     const upToNext = branch.slice(0, branch.indexOf('continue\n      }'))
     expect(upToNext, 'nem talaltam az idle-no-work agat').toBeTruthy()
-    expect(upToNext).toContain('orphanPullList')
+    expect(upToNext).toContain('pullPreview')
     expect(upToNext).toContain('buildPullNotice')
+    // And the list itself is really built from the board, not invented: the
+    // computation is above the branch now, so it is asserted where it lives.
+    expect(SRC.slice(0, SRC.indexOf("decision.reason === 'idle-no-work'"))).toContain('orphanPullList')
   })
 
-  it('and it does so BEFORE buildNoWorkNotice, not after', () => {
+  it('and the branch has it BEFORE buildNoWorkNotice, not after', () => {
     const branchAt = SRC.indexOf("decision.reason === 'idle-no-work'")
-    const pullAt = SRC.indexOf('orphanPullList', branchAt)
+    const pullAt = SRC.indexOf('pullPreview', branchAt)
     const pushAt = SRC.indexOf('buildNoWorkNotice(agent', branchAt)
     expect(pullAt).toBeGreaterThan(-1)
     expect(pushAt).toBeGreaterThan(-1)
     expect(pullAt).toBeLessThan(pushAt)
+  })
+
+  // The suppression is what makes the hoist necessary, so it is pinned here too:
+  // if the ids stop being handed to the decision, the branch silently goes back
+  // to a time-only gate and the repeats come back with nothing failing.
+  it('the ids the suppression compares are handed to the decision', () => {
+    expect(SRC).toContain('pullWorkIds: pullPreview')
   })
 
   it('and the pull message goes to the AGENT, not to the coordinator', () => {

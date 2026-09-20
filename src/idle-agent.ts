@@ -113,6 +113,11 @@ export interface IdleAgentState {
    *  reset, like lastWakeAt -- a spell ends every time the agent takes a turn, so a
    *  per-spell record would reset precisely when the repetition starts. */
   lastWakeWorkIds?: readonly string[] | null
+  /**
+   * What the LAST ownerless-pull-list notice named (card 88998fea). The sibling of
+   * lastWakeWorkIds, for the branch that returns before the wake path is reachable.
+   */
+  lastNoWorkNoticeIds?: readonly string[] | null
 }
 
 export interface IdleAgentInput {
@@ -121,6 +126,12 @@ export interface IdleAgentInput {
    *  guard behaves exactly as before, so a caller that does not supply it loses nothing
    *  except the repeat-suppression. */
   ownWorkIds?: readonly string[]
+  /**
+   * The ownerless pull-list this tick would NAME, already lane-filtered -- the set the
+   * repeat-suppression on the idle-no-work branch compares. Absent means "not measured",
+   * and then the suppression is skipped, deliberately: the same rule ownWorkIds follows.
+   */
+  pullWorkIds?: readonly string[]
   /** detectPaneState says the pane is idle (prompt waiting, no spinner).
    *  `null` = could not tell (no session, capture failed, unknown pane). Deliberately
    *  NOT folded into `false`: an unreadable pane is not evidence of work, and treating
@@ -160,6 +171,7 @@ export type IdleDecision =
         // Idle with work, but it is the SAME work the last wake already named. Silence
         // here is the point: a repeated identical list costs a turn and teaches nothing.
         | 'unchanged-since-wake'
+  | 'unchanged-pull-list'
     }
   /** Stage 1: tell the AGENT, not a human. The agent is awake, its queue is empty and
    *  the condition is about itself -- it is the only party that can both be reached and
@@ -332,9 +344,37 @@ export function decideIdleAlert(
     if (lastNotice !== null && now - lastNotice < thresholds.realertMs) {
       return { decision: { alert: false, reason: 'recently-alerted' }, next: { ...state, idleSinceMs } }
     }
+    // THE SAME LIST IS NOT NEWS HERE EITHER (card 88998fea). The wake path below has
+    // said this since 2026-08-24, and this branch never reached it: it returns first,
+    // so its only gate was realertMs -- TIME, where the question is CONTENT. Measured
+    // 2026-09-20 by deeper: ten notices in five hours on a ~30 minute cadence (exactly
+    // realertMs), every one naming the identical nine cards, every one a full turn.
+    //
+    // This branch is not MISSING a dedupe, it was BYPASSING one -- deeper's wording,
+    // and it is why nothing new is compared here: sameWorkSet is the same call the
+    // wake path makes, set-based, so a REMOVAL re-arms just like an addition.
+    //
+    // The stale re-arm is kept for the same reason it exists above: an unchanged list
+    // is not news the second time, but after hours of silence "nobody has touched this"
+    // is itself the finding.
+    const staleRearm = thresholds.wakeStaleRearmMs
+    const suppressionIsFresh =
+      staleRearm === undefined || (lastNotice !== null && now - lastNotice < staleRearm)
+    if (
+      input.pullWorkIds !== undefined &&
+      sameWorkSet(input.pullWorkIds, state.lastNoWorkNoticeIds) &&
+      suppressionIsFresh
+    ) {
+      return { decision: { alert: false, reason: 'unchanged-pull-list' }, next: { ...state, idleSinceMs } }
+    }
     return {
       decision: { alert: true, reason: 'idle-no-work', idleForMs },
-      next: { ...state, idleSinceMs, lastNoWorkNoticeAt: now },
+      next: {
+        ...state,
+        idleSinceMs,
+        lastNoWorkNoticeAt: now,
+        lastNoWorkNoticeIds: input.pullWorkIds ?? null,
+      },
     }
   }
 

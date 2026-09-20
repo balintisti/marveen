@@ -322,11 +322,28 @@ export function tick(): void {
         : null
       const ownWorkCount = ownItems ? ownItems.length : null
 
+
       // One capture per agent per tick: the evidence strength comes from the same read
       // as the idle verdict, so the two can never disagree about what was on screen.
       const paneRead = running
         ? readPane(agent)
         : { idle: false as boolean | null, staleCounterOnly: false }
+
+      // ONE computation of the ownerless pull-list, used by BOTH the repeat-suppression
+      // and the message that names it (card 88998fea). Two calls would be two chances to
+      // disagree -- the same argument the ownItems comment above makes -- and here the
+      // disagreement would be SILENT: suppressing a notice for a list the agent was
+      // never shown.
+      //
+      // Placed after paneRead so it can carry the cheap pre-conditions of the only
+      // branch that consumes it (running, pane idle, nothing assigned). readAgentProjects
+      // touches the filesystem and a running fleet ticks this every three minutes, so
+      // this is deliberately NOT computed for every agent. It is still WIDER than the
+      // branch -- sustained-ness and the pending queue are decided later -- and that is
+      // the honest description: a cheap over-approximation, not an exact match.
+      const pullPreview = running && paneRead.idle && ownWorkCount !== null && ownWorkCount <= 0
+        ? topOfPullList(laneFilteredPullList(orphanPullList(cards, now), readAgentProjects(agent)))
+        : null
 
       // Memory first, then the database: after a restart the Map is empty and the
       // row carries what this agent was doing before we deployed.
@@ -359,6 +376,11 @@ export function tick(): void {
           // Without this the repeat-suppression never fires -- it is skipped whenever the
           // ids are absent, deliberately, because "unchanged" must be measured.
           ownWorkIds: ownItems ? ownItems.map((c) => c.id) : undefined,
+          // Same contract as ownWorkIds: absent means not measured, and the suppression
+          // is skipped rather than guessed.
+          pullWorkIds: pullPreview ? pullPreview.map((c) => c.id) : undefined,
+          // Same contract as ownWorkIds: absent means not measured, and the suppression
+          // is skipped rather than guessed.
           workCheckKind: (check as WorkCheck | null)?.kind ?? null,
         },
         state,
@@ -429,9 +451,11 @@ export function tick(): void {
         // without asking, and a pool the agent will never pick from wastes it. An agent that
         // declares no lane is filtered by NOTHING -- see laneFilteredPullList; that default
         // is deliberate and must not be tightened.
-        const pull = topOfPullList(
-          laneFilteredPullList(orphanPullList(cards, Date.now()), readAgentProjects(agent)),
-        )
+        // Computed once, above, so the set the suppression compared is byte-for-byte
+        // the set this message names. `?? []` is unreachable on this branch (the decision
+        // only says idle-no-work when ownWorkCount <= 0, which is exactly when the
+        // preview is built) and is here so the type is honest rather than asserted.
+        const pull = pullPreview ?? []
         // LOGGED ON EVALUATION, NOT ONLY ON FIRING (marveen, card 4cbc8af9). Zero orphans is
         // the EXPECTED case, so silence here used to mean two different things -- "evaluated,
         // found none" and "this code was never deployed" -- and the old build logged the

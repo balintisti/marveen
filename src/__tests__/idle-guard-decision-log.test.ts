@@ -36,6 +36,11 @@ vi.mock('../web/agent-config.js', () => ({
   listAgentNames: () => ['x'],
   agentDir: () => '/tmp/nincs-ilyen-konyvtar-60060415',
   readAgentRemoteHost: () => null,
+  // Added 2026-09-20 (card 88998fea): the watcher now reads the agent's lane before
+  // the decision, to compare the pull-list it is about to name against the last one.
+  // `null` is the documented "declares no lane" value -- filtered by NOTHING -- so this
+  // mock widens nothing and no assertion below changes.
+  readAgentProjects: () => null,
 }))
 vi.mock('../pane-state.js', () => ({
   detectPaneState: (...a: unknown[]) => paneState(...a),
