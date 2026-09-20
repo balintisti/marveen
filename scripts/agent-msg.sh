@@ -176,9 +176,25 @@ if [ -n "$_CARD_IDS" ]; then
   # AMIT EZ NEM ALLIT: hogy ettol megszunik a "0 bajt" hamis riasztas. friday ketszer
   # latta 2026-09-20-an, es az ujramerese szerint a vegpont EGESZSEGES volt (3x HTTP 200,
   # 2,2 MB, 4 ms). A kisebb valasz a VALOSZINUSEGET csokkenti; az OKOT nem mertuk meg.
+  #
+  # A `2>/dev/null || true` ELDOBTA A STDERR-T ES AZ EXIT-KODOT IS (friday fogta meg 2026-09-20,
+  # es a legerosebb ervet ez a fajl adta hozza: TIZENKET SORRAL LEJJEBB a sajat docblockom
+  # mondja ki, hogy ez az alak egy hangos bukast nema atengedesse alakit -- ugyanaz a konstrukcio,
+  # javitatlanul). A kar IDORENDI: egy INTERMITTENS halozati hiba nyoma KIZAROLAG abban a
+  # masodpercben letezik, amikor megtortenik. "Majd elokaparjuk" = reprodukaljuk, es epp az ilyen
+  # hibat nem lehet parancsra eloallitani.
+  #
+  # A curl SAJAT kodjai MAGUK a diszkriminator, es ket olyan van kozottuk, amit a MERET soha nem
+  # valaszt szet -- mindketto 0 bajtos fajlt hagy egy sikeresnek latszo kapcsolat utan:
+  #     7  = nem tudott csatlakozni      28 = IDOTULLEPES
+  #     52 = URES valasz a szervertol    56 = megszakadt atvitel
+  # A `set -e` NINCS bekapcsolva (`set -uo pipefail`, 34. sor), tehat a `|| true` elhagyasa nem
+  # allitja meg a szkriptet -- az rc a kovetkezo sorban olvashato.
   _KBF="$(mktemp -t agentmsg-kb)"
+  _KBE="$(mktemp -t agentmsg-kberr)"
   curl -s --max-time 10 -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
-       "http://localhost:${PORT}/api/kanban?fields=summary" -o "$_KBF" 2>/dev/null || true
+       "http://localhost:${PORT}/api/kanban?fields=summary" -o "$_KBF" 2>"$_KBE"
+  _KBRC=$?
   # A FELTETEL HAROM OKOT FED, A REGI UZENET EGYET NEVEZETT MEG (dexter merte 2026-09-19).
   # `! -s` = nincs valasz VAGY URES valasz; a first-byte proba = CSONKA valasz VAGY MEGVALTOZOTT
   # ALAK. A regi szoveg mindharomra azt mondta, hogy "a kanban API nem valaszolt" -- tehat ha a
@@ -189,7 +205,16 @@ if [ -n "$_CARD_IDS" ]; then
   # bajt "{"` ket teljesen kulonbozo teendo, es a kulonbseg eddig lathatatlan volt.
   if [ ! -s "$_KBF" ] || [ "$(head -c1 "$_KBF")" != "[" ]; then
     _sz="$(wc -c < "$_KBF" 2>/dev/null | tr -d ' ')"; _fb="$(head -c1 "$_KBF" 2>/dev/null)"
-    _m="NEM FELOLDHATO KARTYA-ID: az ellenorzes NEM FUTOTT LE. A kanban API valasza: ${_sz:-0} bajt, elso bajt: '${_fb}' (tomb kellene, '['). Ok lehet: nincs valasz, CSONKA valasz, vagy MEGVALTOZOTT valasz-ALAK. A szovegben emlitett kartya-id-k nincsenek igazolva."
+    case "${_KBRC:-?}" in
+      0)  _why="a curl SIKERES volt, tehat a valasz ALAKJA a baj, nem a halozat" ;;
+      7)  _why="curl 7: nem tudott CSATLAKOZNI (nem fut a szolgaltatas, vagy rossz port)" ;;
+      28) _why="curl 28: IDOTULLEPES (a fenti --max-time)" ;;
+      52) _why="curl 52: URES valasz -- a kapcsolat letrejott, a szerver valasz nelkul zarta" ;;
+      56) _why="curl 56: MEGSZAKADT atvitel (reset / recv failure)" ;;
+      *)  _why="curl ${_KBRC:-?}: ismeretlen kod" ;;
+    esac
+    _err="$(head -1 "$_KBE" 2>/dev/null | cut -c1-160)"
+    _m="NEM FELOLDHATO KARTYA-ID: az ellenorzes NEM FUTOTT LE. A kanban API valasza: ${_sz:-0} bajt, elso bajt: '${_fb}' (tomb kellene, '['). OK: ${_why}.${_err:+ curl stderr: ${_err}} A szovegben emlitett kartya-id-k nincsenek igazolva."
     echo "$_m"; echo "$_m" >&2
   else
     # A `2>/dev/null || true` EGY HANGOS BUKAST NEMA ATENGEDESSE ALAKIT (marveen merte
@@ -220,7 +245,7 @@ print(" ".join(t for t in os.environ["CARDS"].split() if t not in ids))' 2>/dev/
       echo "$_m"; echo "$_m" >&2
     fi
   fi
-  rm -f "$_KBF"
+  rm -f "$_KBF" "$_KBE"
 fi
 
 # --- PREFLIGHT: the recipient's queue BEFORE we add to it (2026-08-21) ---
