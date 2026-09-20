@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterAll } from 'vitest'
 import { join } from 'node:path'
+import { mkdtempSync, mkdirSync, symlinkSync, rmSync, realpathSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { projectsDirFor } from '../web/active-model.js'
 
 describe('projectsDirFor', () => {
@@ -28,5 +30,34 @@ describe('projectsDirFor', () => {
     const a = projectsDirFor('/w', '/home/u/.claude', '/home/u')
     const b = projectsDirFor('/w', '/home/u/.claude-coding', '/home/u')
     expect(a).not.toBe(b)
+  })
+
+  // Card 5c094718: every detached fleet agent's working dir is a symlink
+  // (`agents/<name>` -> `/Users/Shared/marveen-<name>`). Claude Code keys the
+  // project dir off the RESOLVED cwd, so encoding the unresolved path pointed
+  // the guard at a directory that existed and held yesterday's transcripts --
+  // a reading that never changed, and therefore restarted the agent forever.
+  describe('symlinked working dirs', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'projdir-')))
+    const real = join(root, 'real-home')
+    const link = join(root, 'link-to-home')
+    mkdirSync(real)
+    symlinkSync(real, link)
+    afterAll(() => { rmSync(root, { recursive: true, force: true }) })
+
+    it('keys off the RESOLVED path, so a symlink and its target agree', () => {
+      const viaLink = projectsDirFor(link, '/cfg')
+      const viaReal = projectsDirFor(real, '/cfg')
+      // Guards against the defect: keying the unresolved path makes these differ.
+      expect(viaLink).toBe(viaReal)
+      expect(viaLink).toBe(join('/cfg', 'projects', real.replace(/[/.]/g, '-')))
+    })
+
+    it('falls back to the raw path when the working dir does not exist', () => {
+      const missing = join(root, 'no-such-dir')
+      expect(projectsDirFor(missing, '/cfg')).toBe(
+        join('/cfg', 'projects', missing.replace(/[/.]/g, '-')),
+      )
+    })
   })
 })
