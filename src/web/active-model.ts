@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -22,9 +22,28 @@ const TTL_MS = 3000
 // config root is ~/.claude by default but an alternate one when the agent was
 // launched with CLAUDE_CONFIG_DIR. Pass that absolute config root as configDir
 // so we read the right project dir for agents on a non-default config.
+/**
+ * Claude Code keys the project dir off the process's RESOLVED cwd, so a
+ * symlinked working dir must be resolved before it is encoded. Measured
+ * 2026-09-19 (card 5c094718): every detached fleet agent lives behind
+ * `agents/<name>` -> `/Users/Shared/marveen-<name>`. Encoding the UNRESOLVED
+ * path yields `-Users-isti-marveen-agents-<name>`, a directory that EXISTS and
+ * holds YESTERDAY's transcripts -- so the reading never changed, the guard saw
+ * the same over-threshold number every sweep, and didi/computress were
+ * restarted for hours on a dead file. A missing directory would have been
+ * loud; a stale one is silent.
+ *
+ * Falls back to the raw path when realpath fails (path does not exist yet):
+ * an unresolvable working dir must not throw here, it must key exactly as
+ * before.
+ */
+function resolveWorkingDir(workingDir: string): string {
+  try { return realpathSync(workingDir) } catch { return workingDir }
+}
+
 export function projectsDirFor(workingDir: string, configDir?: string, homeDirOverride?: string): string {
   const base = configDir ?? join(homeDirOverride ?? homedir(), '.claude')
-  const encoded = workingDir.replace(/[/.]/g, '-')
+  const encoded = resolveWorkingDir(workingDir).replace(/[/.]/g, '-')
   return join(base, 'projects', encoded)
 }
 
