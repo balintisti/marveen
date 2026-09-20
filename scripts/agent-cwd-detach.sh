@@ -27,11 +27,33 @@ say(){ printf '  %s\n' "$*"; }
 [ -e "$DST" ] && { say "A CEL MAR LETEZIK: $DST -- ALLJ"; exit 1; }
 
 # 1. ELOFELTETEL: a sajat lap teljes-e
-if ! python3 "$ROOT/scripts/agent-core-check.py" 2>/dev/null | grep -q "^  $A .*22/22"; then
-  say "NEM VISZEM KI: $A sajat lapja NEM teljes (agent-core-check)."
-  say "A levalasztas utan a kozos lap nem potolja -- eloszor a mag."; exit 3
+#
+# A HORGONY A KAPU SAJAT JELOLOJE, NEM EGY SZAM. Itt eddig `grep -q "22/22"` allt, es az a
+# szam a kanari-lista MERETE volt -- vagyis minden egyes uj teherhordo mondattal elavult.
+# deeper merte 2026-09-20 (17520): a lista 23-ra nott, a kapu `23/23`-at nyomtat, tehat a
+# `22/22` minta MAR EGYETLEN AGENSRE SEM illeszkedett.
+#
+# A hiba IRANYA FAIL-CLOSED volt, es ezt kulon meg kellett merni, mert nem magatol ertetodo:
+#     minden mondat megvan  -> `23/23`  -> a regi minta NEM illeszkedik -> MEGTAGAD
+#     egy mondat hianyzik   -> `22/23`  -> a regi minta NEM illeszkedik -> MEGTAGAD
+# Vagyis nem engedett at rosszat; MINDENT megtagadott volna, egy FELREVEZETO indoklassal
+# ("a lapja NEM teljes"), miutan a lap teljes. Az koltsege nem adatveszteés, hanem hogy valaki
+# elkezdene "javitani" egy hibatlan lapot.
+#
+# EZERT A SZAMOT A JELOLO VALTJA FEL: a kapu a hianyt `HIANYZIK:` elotaggal irja ki. Egy URES
+# sor (nincs ilyen agens a kimenetben) szinten MEGTAGADAS -- a csend itt nem valasz.
+LINE=$(python3 "$ROOT/scripts/agent-core-check.py" 2>/dev/null | grep "^  $A ")
+if [ -z "$LINE" ]; then
+  say "NEM VISZEM KI: $A NEM SZEREPEL az agent-core-check kimeneteben."
+  say "Vedd fel az AGENTS listaba (scripts/agent-core-check.py), kulonben a kapu vak ra."; exit 3
 fi
-say "eloferteltel OK: $A lapja 22/22"
+case "$LINE" in
+  *HIANYZIK*)
+    say "NEM VISZEM KI: $A sajat lapja NEM teljes (agent-core-check):"
+    say "  $LINE"
+    say "A levalasztas utan a kozos lap nem potolja -- eloszor a mag."; exit 3 ;;
+esac
+say "eloferteltel OK: $LINE"
 
 # 2. A CEL-HIERARCHIA legyen TISZTA (kulonben a kivitel semmit nem er)
 for d in /Users/Shared /Users /; do

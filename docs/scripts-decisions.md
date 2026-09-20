@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **262** kovetett fajl, ebbol
-**87** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **264** kovetett fajl, ebbol
+**88** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -195,6 +195,11 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - WHY A FAILED PROBE IS NOT 'NO EXPIRY'. A command that errors, returns non-JSON, or
 - WHY THE SUMMARY CANNOT SAY 'ALL CLEAR' WHILE ANYTHING IS UNMEASURED. A checker whose
 - WHY --quiet-unless-changed EXISTS, AND WHY THE SILENCE HAS A CEILING. Run daily,
+
+### `scripts/fleet-page-guard.sh`
+
+- MIERT LETEZIK. 2026-09-20-an megmertem, hogy mind a het agens LE VAN VALASZTVA
+- MIERT NEM BLOKKOL, HANEM JELEZ. A drift nem a futas pillanataban keletkezik, hanem amikor
 
 ### `scripts/git-at.sh`
 
