@@ -1,1 +1,14 @@
-{"kind":"waiting_on_me"}
+{
+  "kind": "none",
+  "why": "2026-09-20 13:3x CEST -- UJRAMERVE es AZ INDOKLAS SZUKITVE. A heti keret 96,0% (authoritative_cached, reset 2026-09-24 08:00), Isti plafonja 95-96%, tehat a keret-ag ALL. AMI VISZONT MA MEGDOLT: az elozo indoklas azt mondta, hogy `a koordinator sem vesz fel munkat` -- ez 09-20-tol HAMIS. Isti 12:48-kor kimondott munkat adott (\"Ezt oldd meg, dolgozni akarok vele\"), es egesz delutan azon dolgoztam. A `none` tehat MA KIZAROLAG az ONKENT VALLALT kartya-felvetelre all, nem a munkara.",
+  "release_condition": "KET ag. (1) ONMUKODO: a heti keret UJUL 2026-09-24 08:00-kor. (2) DONTES-FUGGO: Isti kimondottan munkat ad -- EZ 2026-09-20 12:48-kor MAR TUZELT, es a kimondott munkara a `none` nem vonatkozik. A `kind` azert marad `none`, mert a tetlen-or SAJAT kezdemenyezesu kartya-ajanlasa 96%-os hetin tovabbra is a keretet koltene.",
+  "date_floor": "2026-09-24.",
+  "previous": "waiting_on_me",
+  "restore_from": "workcheck.json.bak-stop-*",
+  "what_does_NOT_block": "ISTI TELEGRAM-UZENETEI ERINTETLENEK. A `workcheck.json` KIZAROLAG azt szabja meg, mit ajanl fel a TETLEN-OR; a csatorna-uzenetek fuggetlen uton injektalodnak. Tehat ez nem vagja el a gazdat a koordinatortol.",
+  "what_would_invalidate": "A `kind:none` ONMAGABAN, TELJESEN elnemiti a tetlen-ort, es SOHA nem all vissza magatol (egyetlen readFileSync all ra a kodbazisban). ES NALAM SULYOSABB, MINT MASNAL: ha a koordinator nemul el, senki nem routol Istihez, es a panel-osztalyozo 30/30 esetben epp RAM vak (kartya 596dff90) -- tehat az or sem tud szolni. dexter atvallalta volna a figyelest, de o is all. Kartya: 02eb57a1.",
+  "set_by": "marveen",
+  "set_at": "2026-09-19 17:5x CEST",
+  "correction_18_2x": "AMIT ELOSZOR IDEIRTAM, ES MERVE HAMIS: hogy ez megallitja a ~35 percenkenti 'a panel NEM OLVASHATO' ertesiteseket. NEM allitja meg. Merve: a fajl 17:55:34-kor modosult, a kovetkezo ertesites 18:24:08-kor jott. AZ OK: a `pane-unreadable` KULON flotta-riasztas (src/idle-agent.ts:1516), nem a munka-ajanlasi ag. A `kind:none` a `selectDeclaredWork`-ot nemiti el. ES EZ HELYES VISELKEDES: egy or, ami NEM LAT egy agenst, ezt mondja meg akkor is, ha az parkolt -- elnemitani epp a vaksagot rejtene el. Tehat nincs mit javitani rajta; az en varakozasom volt rossz. A sajat hibam alakja: egesz delutan azt katalogizaltam, hogy a `none` a HAROM utbol EGYET zar, aztan felteteleztem, hogy egy NEGYEDIKET is zar.",
+  "correction_09_20": "Az elozo alak pontosan az a minta, amit a lap `elavult ALLJ MEG` neven ir le: az indok EGYIK fele (keret) ma is igaz, a MASIK fele (senki nem dolgozik) kozben hamis lett, es a fajl szovege ettol nem valtozott. Egy AND-del osszekotott indoklasnal MINDKET tagot ujra kell merni, nem csak azt, amelyik eszunkbe jut. Merve: usage-collect.py 13:31:48-kor."
+}

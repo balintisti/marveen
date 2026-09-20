@@ -11,8 +11,9 @@
     "cooldownMinutes": 15,
     "handoffTimeoutMinutes": 20,
     "idleFlushEnabled": true,
-    "idleFlushTokens": 400000,
-    "idleMinutes": 20
+    "idleFlushTokens": 250000,
+    "idleMinutes": 8,
+    "_marveen_note": "2026-09-20 17:3x CEST -- marveen, Isti celjabol (Telegram 3324: \"legyes surgos kartyan, jovo heten szeretnem ha erdemben tudna a csapat dolgozni\"). KOLTSEG-dontes, nem kontextus-biztonsagi: a regi 400k/20perc MERVE azt eredmenyezte, hogy munka kozben a kontextus korlat nelkul no (ma 168k -> 581k, 398 fordulo, atlag 372k/fordulo), mert a 20 perc tetlenseg dolgos savban soha nem teljesul. MODELL a mert novekedesbol (1,04k token/fordulo): plafon 250k -> atlag ~209k, azaz -44%. VISSZAALLITAS: idleFlushTokens 400000, idleMinutes 20, vagy a scratchpad .bak fajlbol. Kartya a85a9acd."
   },
   "dexter": {
     "enabled": false,
@@ -34,9 +35,10 @@
     "limitTokens": null,
     "cooldownMinutes": 15,
     "handoffTimeoutMinutes": 20,
-    "idleFlushEnabled": true,
+    "idleFlushEnabled": false,
     "idleFlushTokens": 400000,
-    "idleMinutes": 20
+    "idleMinutes": 20,
+    "_marveen_note": "2026-09-19 17:3x CEST -- marveen. KIKAPCSOLVA, amig a stop tart. HELYESBITVE 2026-09-20 21:5x CEST: a KET indokbol az EGYIK MA MEGDOLT. (1) ALL: az idle-flush hozama a KESOBBI fordulokban terul meg, es egy leallitott agensnek nincs kesobbi forduloja. Merve 21:5x-kor: didi utolso nyoma 09-19 17:27, computresse 09-19 17:02 -- a stop tart. (2) MEGSZUNT: a guard TEGNAPI, halott atiratot mert (agents/<nev> symlink, feloldatlan ut). Ez 2026-09-20 16:07-kor JAVITVA ES TELEPITVE -- didi tetlensege 1085 perc -> 50, computress 793k -> 107k token. Kartya 5c094718. AKI UJRAENGEDELYEZ (date_floor 2026-09-24, a heti keret resetje): a (2)-re MAR NEM kell varni, csak az (1)-re. VISSZAALLITAS: idleFlushEnabled true, vagy git checkout store/context-guard.json."
   },
   "friday": {
     "enabled": false,
@@ -70,8 +72,9 @@
     "limitTokens": null,
     "cooldownMinutes": 15,
     "handoffTimeoutMinutes": 20,
-    "idleFlushEnabled": true,
+    "idleFlushEnabled": false,
     "idleFlushTokens": 400000,
-    "idleMinutes": 20
+    "idleMinutes": 20,
+    "_marveen_note": "2026-09-19 17:3x CEST -- marveen. KIKAPCSOLVA, amig a stop tart. HELYESBITVE 2026-09-20 21:5x CEST: a KET indokbol az EGYIK MA MEGDOLT. (1) ALL: az idle-flush hozama a KESOBBI fordulokban terul meg, es egy leallitott agensnek nincs kesobbi forduloja. Merve 21:5x-kor: didi utolso nyoma 09-19 17:27, computresse 09-19 17:02 -- a stop tart. (2) MEGSZUNT: a guard TEGNAPI, halott atiratot mert (agents/<nev> symlink, feloldatlan ut). Ez 2026-09-20 16:07-kor JAVITVA ES TELEPITVE -- didi tetlensege 1085 perc -> 50, computress 793k -> 107k token. Kartya 5c094718. AKI UJRAENGEDELYEZ (date_floor 2026-09-24, a heti keret resetje): a (2)-re MAR NEM kell varni, csak az (1)-re. VISSZAALLITAS: idleFlushEnabled true, vagy git checkout store/context-guard.json."
   }
 }
