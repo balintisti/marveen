@@ -43,7 +43,17 @@ SENDER=""
 # nelkul (ahogy egy launchd job latja) `agent-deeper`-t -- mert az volt a legfrissebb aktivitasu
 # session. A keret-or launchd-bol fut, tehat a gazda uzenetei `🤖 Deeper:` prefixszel mentek ki,
 # es a gazda EGY AGENSNEK tulajdonitotta a rendszer sajat riasztasat. A hiba NEM allando: a
-# prefix attol fugg, melyik agens dolgozott utoljara, tehat futasonkent MAS nevet allithat.
+# prefix attol fugg, melyik session `session_activity` mezoje a legfrissebb, tehat futasonkent
+# MAS nevet allithat.
+#
+# ES A "LEGFRISSEBB" ITT NEM AZT JELENTI, HOGY "AKI EPPEN DOLGOZIK" -- ezt kulon megmertem
+# (2026-09-20 12:20), mert az elso megfogalmazasom ("melyik agens dolgozott utoljara") pont
+# erre a rossz olvasatra csabit:
+#     agent-deeper `session_activity` = 03:00:17, azaz **559 PERCE**
+#     a tobbi session tegnap ~21:00
+#     es deeper KOZBEN, 12:09-kor is dolgozott (kartyat zart le), anelkul hogy ez a mezo mozdult
+# A `session_activity` tehat NEM az agens munkajat meri, hanem egy tmux-belso rendezest, ami
+# akar fel napos is lehet. A prefix egy VELETLENSZERU nevet allitott, nem a legaktivabbat.
 # A javitas: csak akkor kerdezzuk a tmux-ot, ha tenylegesen egy tmux-panelbol futunk.
 SESS=""
 [ -n "${TMUX:-}" ] && SESS=$(tmux display-message -p '#S' 2>/dev/null)
