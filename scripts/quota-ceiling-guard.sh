@@ -77,12 +77,44 @@ HARD_PCT="${QUOTA_CEILING_HARD:-95}"
 # The env override stays, and stays FIRST: it is the escape hatch for a one-off,
 # not the place the real list lives (a plist environment would put the fleet
 # roster outside version control -- the same mistake, later and harder to see).
+# ES EGY HARMADIK ESET, AMIT A FENTI KET IRANY NEM FED (Isti mondta ki 2026-09-20 08:53,
+# marveen merte meg es javitotta): egy agens, aki VALASZOL, de NEM EZT az eroforrast kolti.
+#
+# A fenti indoklas ket kimenetet mer ossze: egy felesleges uzenet egy nevnek, ami nem valaszol,
+# kontra egy KIHAGYOTT agens, aki tovabb egeti a keretet. Van egy harmadik: `deeper`
+# `deepseek-flash`-en fut, tehat a CLAUDE heti keretbol NULLAT fogyaszt -- rajta ez az or nem
+# egy felesleges uzenetet koltott, hanem egy DOLGOZO agenst allitott volna le egy olyan szamla
+# miatt, amire nem o kolt. Isti szava: "Deeperre nem vonatkozik a keret, o masik modellen fut,
+# neki dolgoznia kell."
+#
+# EZ A LAP SAJAT TORVENYE, MASODSZOR: "MELYIK SZAMLARA MEGY A CIMZETT MUNKAJA? Egy KOLTSEG-alapu
+# parkolas csak akkor all, ha a gazda tenyleg AZT az eroforrast kolti." Eloszor egy KARTYA
+# parkolasanal fogott meg minket, most egy ORBEN.
+#
+# A JAVITAS IRANYA VALTOZATLANUL A HANGOS: a `model` mezo HIANYA, egy olvashatatlan config vagy
+# egy ismeretlen ertek NEM zar ki senkit -- aki nem mond modellt, BENNE MARAD. Csak az esik ki,
+# aki KIMONDOTTAN nem-Claude modellt nevez meg. Igy a lista tovabbra is csak a hangos iranyba
+# tud tevedni, es egy uj agens alapertelmezesben VEDETT.
+#
+# MERVE a valodi fan, MIELOTT ez a fuggveny a helyere kerult (7 agens):
+#   regi -> [computress deeper dexter didi friday jarvis mandark]
+#   uj   -> [computress dexter didi friday jarvis mandark]     a kulonbseg PONTOSAN {deeper}
+# ES egy szintetikus fan, a negativ kontrollokra: hibas JSON -> BENNE, ures model -> BENNE,
+#   `deepseek-flash` -> KIMARAD.
 _derive_guarded_agents() {
-  local d name out=""
+  local d name model out=""
   for d in "$INSTALL_DIR"/agents/*/; do
     [ -d "$d" ] || continue
     name="$(basename "$d")"
-    out="$out $name"
+    model="$(python3 -c "
+import json,sys
+try: print(json.load(open(sys.argv[1])).get('model',''))
+except Exception: print('')
+" "$d/agent-config.json" 2>/dev/null)"
+    case "$model" in
+      claude*|'') out="$out $name" ;;
+      *) : ;;
+    esac
   done
   printf '%s' "${out# }"
 }
