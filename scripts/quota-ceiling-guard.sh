@@ -232,15 +232,32 @@ stop_agent() {
 # when the quota rolls over, the id changes and the guard arms itself again -- no manual
 # state reset, and no way for a stale "already alerted" flag to silence the next window.
 WINDOW_ID="$(num_int "${RESETS:-0}")"
+# A WINDOW-EGYEZES TURESSEL MEGY, NEM BAJTRA -- MERVE 2026-09-20, ES ISTI KAPTA AZ ARAT.
+# A `RESETS` a keret-ablak reset-idobelyege, es a forras +/-1 MASODPERCET ingadozik rajta.
+# Bajtra osszehasonlitva ez UJ ABLAKNAK latszik, a "mar tuzeltem" jelolo ervenyet veszti, es a
+# szint UJRA riaszt -- ugyanazon a napon, valtozatlan helyzetben.
+#   merve aznap: 75 futas, a `window` HAROMSZOR valtozott (..600 -> ..601 -> ..600 -> ..601),
+#   es a 12:01-es valtozas pillanataban ment ki a masodik SOFT-riasztas a gazdanak.
+#   a bizonyitek a state-fajl volt: {"window":"1790229601","fired":["soft"]}
+# KEREKITENI NEM LEHET: a reset PONT ora-hataron all (08:00:00), tehat egy `//3600` a -1s-es
+# ingadozast MAS ablaknak olvassa. A tures nem hataresetes, es egy VALODI uj ablak 7 NAPRA van.
+# A romlott vagy hianyzo state-ertek szandekosan NEM nemit el (inkabb egy folosleges riasztas,
+# mint egy elnyelt).
+QUOTA_CEILING_WINDOW_TOLERANCE_SEC="${QUOTA_CEILING_WINDOW_TOLERANCE_SEC:-120}"
 already_fired() {
-  python3 - "$STATE" "$WINDOW_ID" "$1" <<'PY'
-import sys, json, os
-p, win, lvl = sys.argv[1], sys.argv[2], sys.argv[3]
+  python3 - "$STATE" "$WINDOW_ID" "$1" "$QUOTA_CEILING_WINDOW_TOLERANCE_SEC" <<'PY'
+import sys, json
+p, win, lvl, tol = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 try:
     d = json.load(open(p))
 except Exception:
     d = {}
-print('yes' if d.get('window') == win and lvl in (d.get('fired') or []) else 'no')
+def same_window(stored, current, tolerance):
+    try:
+        return abs(int(stored) - int(current)) <= int(tolerance)
+    except (TypeError, ValueError):
+        return str(stored) == str(current)
+print('yes' if same_window(d.get('window'), win, tol) and lvl in (d.get('fired') or []) else 'no')
 PY
 }
 mark_fired() {

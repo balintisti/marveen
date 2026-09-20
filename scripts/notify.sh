@@ -38,7 +38,15 @@ fi
 # reader can see who it came from. Distribution-safe: the main agent id is read
 # from .env (default marveen), no hardcoded names.
 SENDER=""
-SESS=$(tmux display-message -p '#S' 2>/dev/null)
+# A `tmux display-message` KLIENS NELKUL NEM URESET AD, HANEM A LEGUTOBB AKTIV SESSION NEVET.
+# Merve 2026-09-20: ugyanez a sor tmux-on BELUL `marveen-channels`-t ad, a `$TMUX` valtozo
+# nelkul (ahogy egy launchd job latja) `agent-deeper`-t -- mert az volt a legfrissebb aktivitasu
+# session. A keret-or launchd-bol fut, tehat a gazda uzenetei `🤖 Deeper:` prefixszel mentek ki,
+# es a gazda EGY AGENSNEK tulajdonitotta a rendszer sajat riasztasat. A hiba NEM allando: a
+# prefix attol fugg, melyik agens dolgozott utoljara, tehat futasonkent MAS nevet allithat.
+# A javitas: csak akkor kerdezzuk a tmux-ot, ha tenylegesen egy tmux-panelbol futunk.
+SESS=""
+[ -n "${TMUX:-}" ] && SESS=$(tmux display-message -p '#S' 2>/dev/null)
 case "$SESS" in
   agent-*)
     SENDER="${SESS#agent-}"
