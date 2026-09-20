@@ -9,9 +9,32 @@
 # when an id came back.
 #
 # Usage:  bash scripts/agent-msg.sh <from> <to> "<content>"
-#   content: plain text (quotes / newlines OK) -- the body is built with json.dumps (no quoting pitfalls).
-#   large / multi-line content may come from STDIN when the 3rd arg is "-":
-#     echo "<long text>" | bash scripts/agent-msg.sh <from> <to> -
+#
+# CONTENT, AND WHICH LAYER PROTECTS IT (card 16d66942). This line used to read
+# "content: plain text (quotes / newlines OK) -- the body is built with json.dumps
+# (no quoting pitfalls)". TRUE OF THE BODY, FALSE OF THE SHELL -- and a reassurance
+# read from the wrong layer is worse than no warning at all.
+#
+#   json.dumps ... protects the BODY. A quote or a newline in the text cannot break
+#                  the JSON payload this script builds.
+#   the SHELL .... has ALREADY expanded your argument before this script starts. A
+#                  backtick, a `$` or a quote inside a double-quoted argument is
+#                  eaten by the shell -- or RUN as a command substitution -- before
+#                  anything reaches this script. The send still answers "OK id=",
+#                  so the loss is silent and the recipient cannot detect it either.
+#                  Measured four times in one night (2026-09-19): three lost
+#                  identifiers, one a 120-second hang waiting on stdin.
+#
+#   THE SAFE SHAPE: the content must NEVER pass through double quotes anywhere in
+#   the pipeline. A QUOTED HEREDOC or a FILE guarantees that. A `-` plus a PIPE does
+#   not -- if the pipe is assembled from double-quoted arguments, the expansion has
+#   already happened upstream, and the loss looks exactly like a clean send:
+#     bash scripts/agent-msg.sh <from> <to> - <<'EOF'
+#     ...text with `backticks`, $vars, "quotes"...
+#     EOF
+#     bash scripts/agent-msg.sh <from> <to> - < /path/to/body.txt
+#   Plain prose holding none of those characters may still go in as the 3rd
+#   argument. A body that is empty or only whitespace is REFUSED (gate below).
 # Output: success -> "OK id=<n> queue=<depth> (~<n> perc)"; failure -> "FAIL <reason>"
 # When the recipient is not running -- or could not be asked -- the server also
 # returns a line saying so, and it is printed on stderr (card bbb8557c). The
@@ -42,6 +65,42 @@ LOG="$BASE/store/agent-msg-failures.log"
 
 FROM="${1:?from required}"; TO="${2:?to required}"; C="${3:?content required (or - for STDIN)}"
 [ "$C" = "-" ] && C="$(cat)"
+
+# --- A TORZS NEM LEHET URES (kartya 16d66942, 2. tetel; merve 2026-09-19) ---
+#
+# MIERT: a level TARTALMA a torzs. Egy ures torzsre ez a helper eddig `OK id=<n>`-t
+# adott, es a levelbe KIZAROLAG a lenti `[KULDVE: ...]` labjegyzet kerult -- a cimzett
+# egy idobelyeget kapott tartalom helyett, a kuldo pedig sikeresnek olvasta. Ez a fajl
+# sajat visszatero alakja: egy hangos siker, ami megkulonboztethetetlen attol, hogy
+# ertelmes tartalom ment el.
+#
+# MIERT NEM ELEG A `-n "$C"`: egy csupa-szokoz torzs atmegy rajta, es ugyanugy
+# hasznalhatatlan. A `card-comment.sh` ugyanezert tesz MASODIK kaput a whitespace-re;
+# ott azert kell ketto, mert az elso a FAJL meretet nezi (`-s`), a masodik a TARTALMAT.
+# Itt a torzs mar a hejban all, tehat EGY kapu mind a kettot fedi.
+#
+# A HELY SZANDEKOS: a fenti STDIN-beolvasas UTAN, mert a `-` modban a torzs csak ott all
+# elo; es a lenti FAJLNEV-OR ELOTT, mert a ketto nem fedi egymast (az egy EGY SZAVAS
+# bemenetre tuzel, ez a SEMMILYENRE).
+#
+# AMIT EZ A KAPU FED, ES AMIT NEM: a SZOSZERINT ures pozicios argumentumot MAR a
+# feljebbi `:?` kapu elkapja (`content required`), tehat ez a kapu a CSAK-SZOKOZ /
+# csak-TAB / csak-ujsor torzset es a `-` mod URES stdin-jet fogja meg. Egyik kapu sem
+# tud a masik helyett elsulni, es egyik sem allit semmit a torzs TARTALMAROL.
+# Viselkedes-proba (2026-09-21, dummy vegpont ellen, valodi uzenet nelkul): 5 negativ
+# eset exit 1 + a dummyhoz NULLA POST; 4 pozitiv eset exit 0 + PONTOSAN 1 POST; a
+# fajlnev-or kontrollja valtozatlanul exit 3. Merve `bash` 3.2.57-en, ami a gepen a
+# `bash` -- ures / szokoz / TAB / ujSor mind ide esik, a ` x ` es a TAB-koruli szo nem.
+case "$C" in
+  *[![:space:]]*) ;;
+  *)
+    echo "NEM KULDTEM: az uzenet-torzs URES vagy csak szokoz." >&2
+    echo "  A torzs a TARTALOM. Ures torzsbol egy kizarolag-labjegyzet level lesz," >&2
+    echo "  amit a cimzett tartalomkent olvas -- a kuldo pedig OK-t lat." >&2
+    echo "  A --force ezt NEM nyitja ki: az a sor- es plafon-kapukat oldja." >&2
+    exit 1
+    ;;
+esac
 
 # A FAJLNEV NEM UZENET (kartya 3caaaf62 kore, merve 2026-09-03).
 #
