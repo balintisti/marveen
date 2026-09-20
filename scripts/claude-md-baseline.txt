@@ -1,5 +1,5 @@
 # A kozos CLAUDE.md meret-alapvonala KARAKTERBEN (kartya 30169f86).
 # RACSNI: alapvonal := min(mert, regi). Novelni csak kimondott indokkal szabad.
-# elozo: 186110  uj: 188041  indok: kimondott noveles: a ket kontroll-szabaly utkozik, ha a defektus az ALAKBAN van; a feloldas a TENGELY-szabaly -- merve 2026-09-20, ket agensnel fuggetlenul
-# 2026-09-20 13:46:58 CEST
-188041
+# elozo: 188041  uj: 189347  indok: kimondott noveles: a padlo-konvencio PROZABA irta a datumot, a felajanlo a  MEZOT olvassa -- 35 kartyabol 32-nek ures a mezoje, ket arva ma felajanlasra kerult (merve 09-20)
+# 2026-09-20 15:18:43 CEST
+189347
