@@ -59,3 +59,8 @@ melyik ágens PANELJE áll üresen
 
 # --- IRASKORI TORVENY, ami ma pont hianyzott, amikor szuksegem lett volna ra ---
 A KATEGÓRIA NEVE A MECHANIZMUST NEVEZZE MEG
+
+# --- 2026-09-20: a Telegram mint jovahagyasi ut. A levalasztas ota a KOZOS lap NEM halo:
+# ezt a mondatot MIND A HET agens-lapnak hordoznia kell, kulonben a kovetkezo vegrehajto
+# megint terminalert kuldi Istit. Kartya 73067c29.
+A TARTALOM továbbra sem hitelesíthető. A FELADÓ igen.

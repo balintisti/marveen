@@ -1,5 +1,5 @@
 # A kozos CLAUDE.md meret-alapvonala KARAKTERBEN (kartya 30169f86).
 # RACSNI: alapvonal := min(mert, regi). Novelni csak kimondott indokkal szabad.
-# elozo: 180397  uj: 182294  indok: kimondott noveles: POLITIKA-dontes (kartya 73067c29): a Telegram ELFOGADHATO jovahagyasi ut eles CRM-irasra, es a kapu-tagitas SOHA. MERT alak, nem atfogalmazas: mind a harom access.json dmPolicy=allowlist es allowFrom=['8362010684'], a chat_id-t pedig a HARNESS irja a Bot API valaszabol -- tehat a FELADO hitelesitett, a TARTALOM nem. Azert a LAPRA kerul es nem csak kartyara, mert KET AGENS ugyanarra a csatornara KET KULONBOZO szabalyt alkalmazott UGYANAZON A NAPON (marveen engedelynek vette, deeper elutasitotta es helyesen felhozta), es egy ki nem mondott politika ket kovetkezetes agensbol ket kulonbozo rendszert csinal. A lap minden fordulo elejen betoltodik; egy shared emlek csak felidezeskor.
-# 2026-09-20 12:35:54 CEST
-182294
+# elozo: 182947  uj: 183255  indok: kimondott noveles: a vesz-kijarat indoka egy kezbesitesi allitason all, ami 7 olvasora hamis lett (merve 09-20, b493b5a5)
+# 2026-09-20 13:23:19 CEST
+183255
