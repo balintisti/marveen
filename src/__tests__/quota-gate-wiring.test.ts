@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { quotaWorkClass } from '../web/schedule-runner.js'
 import { parseQuotaSnapshot } from '../quota-snapshot.js'
+import { parseQuotaExempt } from '../web/scheduled-tasks-io.js'
 
 // The gate itself is covered in quota-gate.test.ts. This file covers the two
 // seams around it: how a scheduled task is classified, and how the collector's
@@ -23,6 +24,50 @@ describe('quotaWorkClass', () => {
     expect(quotaWorkClass({ type: 'task' })).toBe('owner-facing')
     expect(quotaWorkClass({ type: 'dream-engine' } as never)).toBe('owner-facing')
     expect(quotaWorkClass({} as never)).toBe('owner-facing')
+  })
+
+  // Isti, 2026-09-21: "mehet a crm-smoke-teszt naponta". A DAILY heartbeat
+  // deferred by the gate is not postponed, it is lost for a day -- eight days
+  // of that left the CRM with no smoke test at all. The flag buys exactly one
+  // thing: the task is no longer held back by quota pressure.
+  it('lifts an owner-exempted heartbeat out of background', () => {
+    expect(quotaWorkClass({ type: 'heartbeat', quotaExempt: true })).toBe('owner-facing')
+  })
+
+  // The two polarity controls the assertion above cannot make on its own: an
+  // absent or explicitly-false flag must leave the classification untouched,
+  // otherwise "exempt" would be the default and the gate would be decoration.
+  it('leaves an unflagged heartbeat in background', () => {
+    expect(quotaWorkClass({ type: 'heartbeat', quotaExempt: undefined })).toBe('background')
+    expect(quotaWorkClass({ type: 'heartbeat', quotaExempt: false })).toBe('background')
+  })
+
+  // A shell command already costs nothing; the flag must not relabel it, or
+  // the gate's reason string would claim a model cost that does not exist.
+  it('does not relabel a free shell command', () => {
+    expect(quotaWorkClass({ type: 'command', quotaExempt: true })).toBe('free')
+  })
+})
+
+describe('parseQuotaExempt', () => {
+  it('accepts only a real boolean true', () => {
+    expect(parseQuotaExempt(true)).toBe(true)
+  })
+
+  // Every one of these is a plausible hand-edit typo, and every one of them
+  // is truthy in JS. A cost guard must not open on a typo.
+  it('rejects truthy look-alikes, so a typo cannot open the gate', () => {
+    for (const raw of ['true', 1, 'yes', 'TRUE', {}, [], 'false']) {
+      expect(parseQuotaExempt(raw)).toBeUndefined()
+    }
+  })
+
+  it('reports an unset field as undefined, not false', () => {
+    // undefined keeps the key out of the JSON the schedules API echoes back,
+    // so only a real exemption is visible to a reader of that list.
+    expect(parseQuotaExempt(undefined)).toBeUndefined()
+    expect(parseQuotaExempt(false)).toBeUndefined()
+    expect(parseQuotaExempt(null)).toBeUndefined()
   })
 })
 

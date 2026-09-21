@@ -653,9 +653,14 @@ export function resolveBoundChatId(agentName: string): string | null {
 // all; heartbeats are background checks nobody is waiting for; everything else
 // (task, dream-engine, unknown future types) reports to the owner and is never
 // held back.
-export function quotaWorkClass(task: Pick<ScheduledTask, 'type'>): QuotaWorkClass {
+export function quotaWorkClass(task: Pick<ScheduledTask, 'type' | 'quotaExempt'>): QuotaWorkClass {
   if (task.type === 'command') return 'free'
-  if (task.type === 'heartbeat') return 'background'
+  // An owner-granted exemption only ever moves a task OUT of 'background'.
+  // It is checked after the 'free' branch on purpose: a shell command costs
+  // no tokens, so there is nothing to exempt, and letting the flag reclassify
+  // it would only make the reason string lie. See ScheduledTask.quotaExempt
+  // for who may set this and why the API cannot.
+  if (task.type === 'heartbeat') return task.quotaExempt === true ? 'owner-facing' : 'background'
   return 'owner-facing'
 }
 

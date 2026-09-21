@@ -72,6 +72,31 @@ export interface ScheduledTask {
   // target session before injecting the prompt; a dead server defers the task
   // with a reasoned alert instead of a silent runtime failure.
   requires?: { mcp_servers?: string[] }
+  // Owner-granted exemption from the shared-quota gate (quota-gate.ts).
+  //
+  // WHY THIS EXISTS. The gate classifies work by TYPE alone: every
+  // type='heartbeat' task is 'background' and is held back once the weekly
+  // window is at/above the defer threshold. That is right for a 25-minute
+  // memory heartbeat -- losing one tick costs nothing. It is wrong for a
+  // DAILY task that guards a live system: held back at 98% for eight days,
+  // crm-smoke-teszt meant eight days with no smoke test on the CRM, and
+  // nothing in the schedule list said so.
+  //
+  // The axis the gate was missing is not importance, it is CADENCE: a daily
+  // occurrence that is deferred is not postponed, it is LOST for a day.
+  //
+  // Set ONLY on the owner's explicit word, and name the decision in the
+  // task's `description`. Isti, 2026-09-21 06:21 CEST, on Telegram, asked
+  // for exactly one task: "mehet a crm-smoke-teszt naponta". Card 4f9c0c8a.
+  //
+  // DELIBERATELY NOT WRITABLE VIA writeScheduledTask / the schedules API:
+  // punching a hole in a cost guard should be a deliberate file edit that
+  // leaves a diff, not a side effect of a POST that anything holding the
+  // dashboard token can make. If a later reader finds this asymmetry and
+  // thinks it is an oversight -- it is not, it is the point. The field
+  // survives an API edit because writeScheduledTask merges into the
+  // existing config rather than rewriting it.
+  quotaExempt?: boolean
 }
 
 function readFileOr(path: string, fallback: string): string {
@@ -104,7 +129,7 @@ export function readScheduledTask(taskName: string): ScheduledTask | null {
   const skillContent = hasSkill ? readFileOr(skillPath, '') : ''
   const { name, description, body } = parseSkillMdFrontmatter(skillContent)
 
-  let config: { schedule?: string; agent?: string; enabled?: boolean; createdAt?: number; type?: string; skipIfBusy?: boolean; forceSend?: boolean; targetSession?: string; description?: string; command?: string; timeoutMs?: number; failThreshold?: number; preCheck?: string; catchUpMaxAgeMinutes?: unknown; stuckAfterMinutes?: unknown; requires?: { mcp_servers?: unknown } } = {}
+  let config: { schedule?: string; agent?: string; enabled?: boolean; createdAt?: number; type?: string; skipIfBusy?: boolean; forceSend?: boolean; targetSession?: string; description?: string; command?: string; timeoutMs?: number; failThreshold?: number; preCheck?: string; catchUpMaxAgeMinutes?: unknown; stuckAfterMinutes?: unknown; requires?: { mcp_servers?: unknown }; quotaExempt?: unknown } = {}
   try {
     config = JSON.parse(readFileOr(configPath, '{}'))
   } catch { /* use defaults */ }
@@ -128,6 +153,7 @@ export function readScheduledTask(taskName: string): ScheduledTask | null {
     catchUpMaxAgeMinutes: parseCatchUpMaxAge(config.catchUpMaxAgeMinutes),
     stuckAfterMinutes: parseFiniteMinutes(config.stuckAfterMinutes),
     requires: parseRequires(config.requires),
+    quotaExempt: parseQuotaExempt(config.quotaExempt),
   }
 }
 
@@ -151,6 +177,16 @@ export function parseRequires(raw: { mcp_servers?: unknown } | undefined): Sched
   if (!raw || !Array.isArray(raw.mcp_servers)) return undefined
   const servers = raw.mcp_servers.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
   return servers.length ? { mcp_servers: servers } : undefined
+}
+
+// Strict boolean `true` only. A hand-edited config is the ONLY way this flag
+// gets set (see ScheduledTask.quotaExempt), so the parse has to be the narrow
+// end of Postel's law: "true", 1, "yes" and a stray non-empty string are all
+// typos, and a typo must never silently open a cost guard. Returning
+// `undefined` rather than `false` keeps an unset field out of the JSON the
+// schedules API echoes back, so only a real exemption is visible there.
+export function parseQuotaExempt(raw: unknown): true | undefined {
+  return raw === true ? true : undefined
 }
 
 export function listScheduledTasks(): ScheduledTask[] {
