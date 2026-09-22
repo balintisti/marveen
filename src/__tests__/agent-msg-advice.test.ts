@@ -44,10 +44,11 @@ function run(responseJson: string, httpCode = '200'): { stdout: string; stderr: 
   chmodSync(curl, 0o755)
 
   try {
-    const stdout = execFileSync('bash', [join(base, 'scripts', 'agent-msg.sh'), 'a', 'b', 'szia'], {
+    const stdout = execFileSync('bash', [join(base, 'scripts', 'agent-msg.sh'), 'a', 'b', '-'], {
       encoding: 'utf-8',
       env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      input: 'szia',
+      stdio: ['pipe', 'pipe', 'pipe'],
     })
     return { stdout, stderr: '', code: 0 }
   } catch (e) {
@@ -105,7 +106,7 @@ function runCapturingStderr(responseJson: string, withDb = false): { stdout: str
 
   const errFile = join(base, 'stderr.txt')
   const stdout = execFileSync(
-    'bash', ['-c', `"${join(base, 'scripts', 'agent-msg.sh')}" a b szia 2>"${errFile}"`],
+    'bash', ['-c', `"${join(base, 'scripts', 'agent-msg.sh')}" a b - 2>"${errFile}" <<'VEGE'\nszia\nVEGE`],
     { encoding: 'utf-8', env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` } })
   return { stdout, stderr: execFileSync('cat', [errFile], { encoding: 'utf-8' }) }
 }

@@ -8,7 +8,11 @@
 # the HTTP status AND the returned message id, and RETRIES on failure. A message counts as sent only
 # when an id came back.
 #
-# Usage:  bash scripts/agent-msg.sh <from> <to> "<content>"
+# Usage:  bash scripts/agent-msg.sh <from> <to> -        (body on STDIN)
+#           ... <to> - <<'VEGE'   /   echo "..." | ... -   /   ... - < "$f"
+#         The third argument is `-`-ONLY since 2026-09-22 (card 16d66942, item 1):
+#         a positional body is REFUSED with exit 4 -- see the gate below, and why
+#         the refusal is the only honest answer rather than a wording preference.
 #
 # CONTENT, AND WHICH LAYER PROTECTS IT (card 16d66942). This line used to read
 # "content: plain text (quotes / newlines OK) -- the body is built with json.dumps
@@ -64,7 +68,28 @@ URL="http://localhost:${PORT}/api/messages"
 LOG="$BASE/store/agent-msg-failures.log"
 
 FROM="${1:?from required}"; TO="${2:?to required}"; C="${3:?content required (or - for STDIN)}"
-[ "$C" = "-" ] && C="$(cat)"
+
+# A 3. ARGUMENTUM ALAKJA: `-` VAGY SEMMI MAS (kartya 16d66942, 1. tetel; marveen 17647).
+#
+# MIERT: a pozicios alakban a szoveg EGY HEJ-IDEOZOJELEN megy at, MIELOTT ez a szkript
+# egyaltalan latna. A visszaperjel, a `$` es a backtick ott mar eldolt: resze eltunik,
+# resze LEFUT. A szkript ezutan csak a mar megcsonkult szoveget latja, tehat nem tud
+# ellene tenni semmit -- es a kuldes `OK id=`-vel ter vissza, mint egy sikeres kuldes.
+#
+# MERVE (2026-09-19): az aznapi 258 inter-agent uzenetbol 111 hordozott backticket vagy
+# `$`-t. ES A VEDELEM NEM A STDIN ONMAGABAN: a `17255` komment (marveen) azt rogziti,
+# hogy didi KOVETTE a szabalyt, es a szoveg megis elveszitette az azonositoit -- a
+# vedelem az idezojel nelkuli heredoc vagy a fajl. A `17273` (didi) ugyanezt a masik
+# iranybol mondja ki: a szabaly a CSATORNAROL szol, nem a tartalomrol.
+#
+# EZERT A MODOT ITT ROGZITJUK, A `-` CSERE ELOTT: a lenti `C="$(cat)"` utan a `-` mar
+# nem latszik, tehat a kesobbi kapu a vegso `$C`-bol nem tudna megkulonboztetni a
+# ket alakot. A kapu maga LENT all, a fajlnev-or UTAN -- lasd ott, hogy miert.
+if [ "$C" = "-" ]; then
+  MOD="stdin"; C="$(cat)"
+else
+  MOD="positional"
+fi
 
 # --- A TORZS NEM LEHET URES (kartya 16d66942, 2. tetel; merve 2026-09-19) ---
 #
@@ -143,6 +168,32 @@ case "$C" in
     fi
     ;;
 esac
+
+# --- CSAK `-`: A POZICIOS TORZS MEGTAGADVA (kartya 16d66942, 1. tetel) ---
+#
+# A `-` modban a szoveg idezojel nelkuli heredocbol vagy fajlbol jon, tehat a hej nem
+# ertekeli ki. A pozicios alak ezt nem tudja: ott a hivas PILLANATABAN eldolt, mi veszik
+# el, es a szkript ehhez nem tud hozzanyulni. Ezert itt nem lehet javitani, csak megtagadni.
+#
+# A HELY SZANDEKOS: a FAJLNEV-OR UTAN. Az or ugyanarra a pozicios argumentumra a sajat,
+# pontos uzenetet adja (`- < `), es az a 11/9740 eset valtozatlanul exit 3 marad. Ez a
+# kapu az OSSZES TOBBI pozicios argumentumot fogja meg, tehat a ketto NEM fedi egymast,
+# es a sorrend forditva elvenne az or szoveget.
+#
+# A KOD 4: az 1 (ures torzs), a 2 (cimzett-sor) es a 3 (fajlnev-or) mar foglalt, es a
+# hivo a kodbol donti el, MIT tegyen -- itt a hivast kell atirni, nem varni.
+if [ "$MOD" != "stdin" ]; then
+  echo "NEM KULDTEM: a 3. argumentum csak \`-\` lehet; a torzs STDIN-en vagy fajlbol jon." >&2
+  echo "  A pozicios alakban a szoveg egy HEJ-IDEOZOJELEN megy at, es a visszaperjel," >&2
+  echo "  a \$ es a backtick meg ELOTTE eltunik vagy LEFUT. A szkript ezt nem tudja megerni." >&2
+  echo "  Helyette (a szoveg igy egyetlen hej-ertekelesen sem megy at):" >&2
+  echo "    bash scripts/agent-msg.sh $FROM $TO - <<'VEGE'" >&2
+  echo "    a szoveg, benne \$valtozo es \`backtick\` is nyugodtan" >&2
+  echo "    VEGE" >&2
+  echo "  vagy fajlbol:  bash scripts/agent-msg.sh $FROM $TO - < \"\$f\"" >&2
+  echo "  (A --force ezt NEM nyitja ki: az a sor- es plafon-kapukat oldja.)" >&2
+  exit 4
+fi
 [ -r "$TOKEN_FILE" ] || { echo "FAIL: no token file at $TOKEN_FILE"; exit 1; }
 TOKEN="$(cat "$TOKEN_FILE")"
 

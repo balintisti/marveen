@@ -65,8 +65,11 @@ c.commit()
   chmodSync(join(binDir, 'curl'), 0o755)
 
   const errFile = join(base, 'stderr.txt')
+  // argv[3] is `-`-only since 2026-09-22 (card 16d66942, item 1); the body arrives
+  // on stdin. The heredoc is unquoted-EXCEPT-for-'VEGE', which is exactly the shape
+  // the script's own refusal message recommends.
   const stdout = execFileSync(
-    'bash', ['-c', `"${join(base, 'scripts', 'agent-msg.sh')}" ${from} ${to} szia 2>"${errFile}"`],
+    'bash', ['-c', `"${join(base, 'scripts', 'agent-msg.sh')}" ${from} ${to} - 2>"${errFile}" <<'VEGE'\nszia\nVEGE`],
     { encoding: 'utf-8', env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` } })
   return { stdout, stderr: execFileSync('cat', [errFile], { encoding: 'utf-8' }) }
 }
@@ -157,7 +160,7 @@ describe('agent-msg.sh -- the sender sees its OWN load at the moment of sending'
       `#!/usr/bin/env bash\ncat <<'JSON'\n{"id":1}\nJSON\nprintf '%s' '200'\n`)
     chmodSync(join(binDir, 'curl'), 0o755)
     const errFile = join(base, 'stderr.txt')
-    execFileSync('bash', ['-c', `"${join(base, 'scripts', 'agent-msg.sh')}" a b szia 2>"${errFile}"`],
+    execFileSync('bash', ['-c', `"${join(base, 'scripts', 'agent-msg.sh')}" a b - 2>"${errFile}" <<'VEGE'\nszia\nVEGE`],
       { encoding: 'utf-8', env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` } })
     const stderr = execFileSync('cat', [errFile], { encoding: 'utf-8' })
     expect(stderr).toContain('NEM tudtam megmerni')

@@ -28,10 +28,32 @@ curl -s -X POST http://localhost:3420/api/messages \
 **MEGBÍZHATÓ KÜLDÉS (verify + retry) — KÖTELEZŐ:** a gyakori `curl -s ... >/dev/null && echo sent` minta VESZÉLYES: a curl `0`-val tér vissza akkor is, ha a szerver ELUTASÍTOTTA a kérést (401/400/5xx), így NÉMA küldés-hiba keletkezik — a címzett sosem kapja meg az üzenetet, és két ágens végtelenül várhat egymásra. Egy üzenet CSAK akkor számít elküldöttnek, ha a válaszban visszajött egy `id` (`{"id":<n>,"status":"pending",...}` HTTP 200-zal). Vagy használd a `scripts/agent-msg.sh` helpert (HTTP-státusz + `id` ellenőrzés + 3x újraküldés + hiba-napló), vagy nyers curl-nél KÖTELEZŐ ellenőrizni a HTTP-kódot ÉS az `id`-t, és újraküldeni ha nincs:
 
 ```bash
-bash scripts/agent-msg.sh marveen TARGET_AGENT "Feladat leírása."
+bash scripts/agent-msg.sh marveen TARGET_AGENT - <<'VEGE'
+Feladat leírása.
+VEGE
 # -> OK id=<n> queue=<hányan várnak> (~<perc> késés)   vagy   FAIL
-# nagy/soktoros üzenethez a content jöhet STDIN-en:  echo "..." | bash scripts/agent-msg.sh marveen TARGET_AGENT -
+# A 3. argumentum CSAK `-` lehet (2026-09-22); fájlból:  ... TARGET_AGENT - < "$f"
 ```
+
+**A POZÍCIÓS TORZS MEGTAGADVA (exit 4), ÉS EZ NEM SZIGORÍTÁS, HANEM A HIBA MEGSZÜNTETÉSE
+(2026-09-22, kártya `16d66942` 1. tétel).** A `bash scripts/agent-msg.sh ... "szöveg"` alakban a
+szöveg egy héj-idézőjelen megy át, MIELŐTT a szkript egyáltalán látná. A visszaperjel, a `$` és a
+backtick ott **már eldőlt**: részben eltűnik, részben LEFUT. A szkript ezután csak a megcsonkult
+szöveget látja, tehát nem tud ellene tenni semmit -- és a küldés `OK id=`-vel tér vissza, mint egy
+sikeres küldés.
+
+    a héj ELHARAPJA  -> egy szó kiesik, az `OK id=` megjön, a küldés SIKERESNEK látszik
+    a héj VÉGREHAJTJA -> egy PARANCS fut le, ott, ahol állsz (egy közös checkoutban másvalaki fáján)
+    a szkript erre  -> exit 4, és a hibaüzenet megmutatja a helyes alakot
+
+**ÉS A VÉDELEM NEM A STDIN ÖNMAGÁBAN.** A `17255` komment (marveen) azt rögzíti, hogy **didi
+KÖVETTE a szabályt, és a szöveg mégis elveszítette az azonosítóit** -- a védelem az
+**aposztrófos heredoc vagy a fájl**, nem a csatorna puszta megnevezése. A `17273` (didi)
+ugyanezt a másik irányból mondja ki: a szabály a CSATORNÁRÓL szól, nem a tartalomról.
+
+**MÉRVE, MIÉRT NEM ELMÉLETI (2026-09-19):** az aznapi **258 inter-agent üzenetből 111** hordozott
+backticket vagy `$`-t. A kártyakommenteknél ugyanez **260-ból 242**. Aki a pozíciós alakot
+használja, az ebben a halmazban dolgozik, nem a szerencsés kisebbségben.
 
 **A HÉJ ELHARAPJA AZ ÜZENETET, ÉS AZ `OK id=` UTÁNA IS KIÍRÓDIK (2026-08-20, három eset egy nap).**
 A `bash scripts/agent-msg.sh ... "szöveg"` alakban a szöveg egy héj-idézőjelen megy át. Ha visszaperjel
@@ -42,9 +64,17 @@ fele. Mérve: Didi 12:58-kor egy backtickes kódrészleten veszítette el az üz
 („bad substitution"); nálam 14:35-kor a `` `failure` `` szó tűnt el pont abból a mondatból, ami a
 `failure` és a `cancelled` közti különbséget magyarázta.
 
+*(A bekezdés TÖRTÉNELEM, nem lehetőség: a pozíciós alakot a szkript 2026-09-22 óta megtagadja,
+tehát a fenti kimenet ma nem áll elő. Azért marad, mert a mérést rögzíti, és mert megmutatja,
+MIÉRT nem elég figyelmeztetés: a hiba a küldés sikerességének látszatában élt.)*
+
 **Ezért a szabály nem az, hogy „vigyázz a backtickre", és nem is az, hogy „a HOSSZABB üzenet
-menjen STDIN-en": A HOSSZ NEM SZEMPONT -- A TARTALOM AZ.** Ha van benne visszaperjel, `$`,
-idézőjel vagy bármi, amit nem te írtál szó szerint, STDIN-en megy. Ott nincs héj-értelmezés:
+menjen STDIN-en": A HOSSZ NEM SZEMPONT -- A TARTALOM AZ.** 2026-09-22 óta **minden** üzenet
+STDIN-en megy (a 3. argumentum csak `-` lehet), tehát a kérdés nem az, hogy ez a szöveg átmegy-e
+a héjon: nem megy át, egyik sem. A korábbi szabály maradéka viszont a helyes reflexet írja le,
+és arra az esetre kell, ha valaki MÁS idézőjeles argumentumot ad át egy másik szkriptnek:
+ha van benne visszaperjel, `$`, idézőjel vagy bármi, amit nem te írtál szó szerint, a heredoc
+vagy a fájl a helyes út. Ott nincs héj-értelmezés:
 
 ```bash
 f=$(mktemp)          # NE fix nevet: a /tmp KOZOS, lasd a munkafajl-szakaszt

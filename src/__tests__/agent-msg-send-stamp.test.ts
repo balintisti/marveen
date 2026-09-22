@@ -89,16 +89,30 @@ c.commit()
  * connection. The helper then burns its three retries against a server that is
  * listening but cannot answer, and the suite takes 420 seconds to report
  * nothing useful. Measured twice before the cause was obvious.
+ *
+ * THE BODY GOES IN ON STDIN, ALWAYS (card 16d66942, item 1, landed 2026-09-22).
+ * The third argument is a literal `-` and the text rides the pipe. This is not a
+ * style the harness happens to use: the positional form is REFUSED with exit 4,
+ * because in that form the text passes through a shell quoting layer BEFORE the
+ * script sees it, and a backslash, `$` or backtick is already gone or already
+ * executed by then. A test still passing the body as argv[3] would be asserting
+ * the refusal while reading like it asserts the feature.
  */
-function send(root: string, port: number, args: string[]): Promise<{ status: number; stdout: string; stderr: string }> {
+function send(root: string, port: number, args: string[], body = ''): Promise<{ status: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const p = spawn('bash', [join(root, 'scripts', 'agent-msg.sh'), ...args], {
       env: { ...process.env, MARVEEN_WEB_PORT: String(port) },
+      stdio: ['pipe', 'pipe', 'pipe'],
     })
     let stdout = ''
     let stderr = ''
     p.stdout.on('data', (c) => (stdout += c))
     p.stderr.on('data', (c) => (stderr += c))
+    // A child that refuses (exit 4, 3, 1) can close the pipe before we finish
+    // writing; without this the EPIPE arrives as an unhandled 'error' event and
+    // takes the whole suite down with a stack trace instead of a failed assert.
+    p.stdin.on('error', () => { /* EPIPE on a child that refused early */ })
+    p.stdin.end(body)
     p.on('close', (code) => resolve({ status: code ?? -1, stdout, stderr }))
   })
 }
@@ -128,7 +142,7 @@ describe('agent-msg.sh -- the send stamp', () => {
     // soft-restart gate both stop matching.
     const { port, bodies } = await fakeDashboard()
     const root = installRoot('prefix')
-    const r = await send(root, port, ['friday', 'marveen', '[Eredmény] msg_id:7 status:done\n\nkesz'])
+    const r = await send(root, port, ['friday', 'marveen', '-'], '[Eredmény] msg_id:7 status:done\n\nkesz')
     expect(r.status).toBe(0)
     expect(bodies).toHaveLength(1)
     const content = bodies[0].content
@@ -139,7 +153,7 @@ describe('agent-msg.sh -- the send stamp', () => {
 
   it('names the sender and a real timestamp, not a placeholder', async () => {
     const { port, bodies } = await fakeDashboard()
-    const r = await send(installRoot('stamp'), port, ['friday', 'marveen', 'torzs'])
+    const r = await send(installRoot('stamp'), port, ['friday', 'marveen', '-'], 'torzs')
     expect(r.status).toBe(0)
     expect(bodies[0].content).toMatch(/\[KULDVE: \d{4}-\d{2}-\d{2} \d{2}:\d{2} \S+ \| .* \| kuldo: friday\]/)
   })
@@ -148,7 +162,7 @@ describe('agent-msg.sh -- the send stamp', () => {
     // A missing field reads as "nothing to report". With no database present
     // the depth is unknown, and unknown must look different from zero.
     const { port, bodies } = await fakeDashboard()
-    const r = await send(installRoot('nodb'), port, ['friday', 'marveen', 'torzs'])
+    const r = await send(installRoot('nodb'), port, ['friday', 'marveen', '-'], 'torzs')
     expect(r.status).toBe(0)
     expect(bodies[0].content).toContain('cimzett sora: nem merheto')
     expect(r.stderr).toMatch(/NEM tudtam megmerni/)
@@ -157,21 +171,21 @@ describe('agent-msg.sh -- the send stamp', () => {
   it('carries the depth measured BEFORE the send, not after', async () => {
     // Two pending for the recipient: the number the message is joining.
     const { port, bodies } = await fakeDashboard()
-    const r = await send(installRoot('depth', { to: 'marveen', count: 2 }), port, ['friday', 'marveen', 'torzs'])
+    const r = await send(installRoot('depth', { to: 'marveen', count: 2 }), port, ['friday', 'marveen', '-'], 'torzs')
     expect(r.status).toBe(0)
     expect(bodies[0].content).toContain('cimzett sora: 2 (kuldes elott)')
   })
 
   it('counts only the RECIPIENT queue, not every pending message', async () => {
     const { port, bodies } = await fakeDashboard()
-    const r = await send(installRoot('other', { to: 'dexter', count: 4 }), port, ['friday', 'marveen', 'torzs'])
+    const r = await send(installRoot('other', { to: 'dexter', count: 4 }), port, ['friday', 'marveen', '-'], 'torzs')
     expect(r.status).toBe(0)
     expect(bodies[0].content).toContain('cimzett sora: 0 (kuldes elott)')
   })
 
   it('still refuses at 3+ waiting -- the stamp did not weaken the gate', async () => {
     const { port, bodies } = await fakeDashboard()
-    const r = await send(installRoot('full', { to: 'marveen', count: 5 }), port, ['friday', 'marveen', 'torzs'])
+    const r = await send(installRoot('full', { to: 'marveen', count: 5 }), port, ['friday', 'marveen', '-'], 'torzs')
     expect(r.status).toBe(2)
     expect(bodies).toHaveLength(0)
     expect(r.stderr).toMatch(/NEM KULDTEM/)
@@ -182,7 +196,7 @@ describe('agent-msg.sh -- the send stamp', () => {
     // there would be the same failure the whole change exists to prevent: a
     // number that was never measured, wearing the shape of one that was.
     const { port, bodies } = await fakeDashboard()
-    const r = await send(installRoot('force', { to: 'marveen', count: 5 }), port, ['friday', 'marveen', 'torzs', '--force'])
+    const r = await send(installRoot('force', { to: 'marveen', count: 5 }), port, ['friday', 'marveen', '-', '--force'], 'torzs')
     expect(r.status).toBe(0)
     expect(bodies[0].content).toContain('nem merve (--force)')
     expect(bodies[0].content).not.toMatch(/cimzett sora: \d/)
@@ -190,7 +204,7 @@ describe('agent-msg.sh -- the send stamp', () => {
 
   it('keeps the OK id= contract intact -- callers and CLAUDE.md grep for it', async () => {
     const { port } = await fakeDashboard()
-    const r = await send(installRoot('contract'), port, ['friday', 'marveen', 'torzs'])
+    const r = await send(installRoot('contract'), port, ['friday', 'marveen', '-'], 'torzs')
     expect(r.stdout.startsWith('OK id=4242')).toBe(true)
   })
 })
@@ -211,7 +225,7 @@ describe('agent-msg.sh -- a __STAMP__ es a kuldesi belyeg EGYUTT el', () => {
   it('a __STAMP__ helyere valodi idobelyeg kerul, es nyers helyorzo NEM megy ki', async () => {
     const { port, bodies } = await fakeDashboard()
     const root = installRoot('stamp')
-    const r = await send(root, port, ['friday', 'marveen', 'MERVE: __STAMP__ -- a lelet'])
+    const r = await send(root, port, ['friday', 'marveen', '-'], 'MERVE: __STAMP__ -- a lelet')
     expect(r.status).toBe(0)
     expect(bodies).toHaveLength(1)
     expect(bodies[0].content).not.toContain('__STAMP__')
@@ -223,7 +237,7 @@ describe('agent-msg.sh -- a __STAMP__ es a kuldesi belyeg EGYUTT el', () => {
     // idobelyeget -- ami mas hiba, csak eppen ugyanugy nez ki.
     const { port, bodies } = await fakeDashboard()
     const root = installRoot('nostamp')
-    const r = await send(root, port, ['friday', 'marveen', 'sima szoveg, nincs benne helyorzo'])
+    const r = await send(root, port, ['friday', 'marveen', '-'], 'sima szoveg, nincs benne helyorzo')
     expect(r.status).toBe(0)
     expect(bodies[0].content.split('\n')[0]).toBe('sima szoveg, nincs benne helyorzo')
   })
@@ -234,7 +248,7 @@ describe('agent-msg.sh -- a __STAMP__ es a kuldesi belyeg EGYUTT el', () => {
     // es a sorrend szandekos: a helyettesites a hozzafuzes ELOTT fut.
     const { port, bodies } = await fakeDashboard()
     const root = installRoot('mindketto')
-    const r = await send(root, port, ['friday', 'marveen', '[Eredmény] MERVE: __STAMP__\n\nkesz'])
+    const r = await send(root, port, ['friday', 'marveen', '-'], '[Eredmény] MERVE: __STAMP__\n\nkesz')
     expect(r.status).toBe(0)
     const c = bodies[0].content
     expect(c.startsWith('[Eredmény]')).toBe(true)   // a prefix-fogyasztok miatt
@@ -251,9 +265,12 @@ describe('agent-msg.sh -- a __STAMP__ es a kuldesi belyeg EGYUTT el', () => {
     const stub = mkdtempSync(join(tmpdir(), 'nodate-bin-'))
     writeFileSync(join(stub, 'date'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
     const r = await new Promise<{ status: number }>((resolve) => {
-      const p = spawn('bash', [join(root, 'scripts', 'agent-msg.sh'), 'friday', 'marveen', 'MERVE: __STAMP__'], {
+      const p = spawn('bash', [join(root, 'scripts', 'agent-msg.sh'), 'friday', 'marveen', '-'], {
         env: { ...process.env, MARVEEN_WEB_PORT: String(port), PATH: `${stub}:${process.env.PATH}` },
+        stdio: ['pipe', 'pipe', 'pipe'],
       })
+      p.stdin.on('error', () => { /* EPIPE on an early refusal */ })
+      p.stdin.end('MERVE: __STAMP__')
       p.on('close', (code) => resolve({ status: code ?? -1 }))
     })
     expect(r.status).not.toBe(0)
@@ -267,7 +284,7 @@ describe('agent-msg.sh -- a __STAMP__ es a kuldesi belyeg EGYUTT el', () => {
   // with a false reason, which is the kind that travels because nothing catches it.
   it('names WHOSE queue and WHEN -- not just a number', async () => {
     const { port, bodies } = await fakeDashboard()
-    const r = await send(installRoot('label', { to: 'marveen', count: 2 }), port, ['friday', 'marveen', 'torzs'])
+    const r = await send(installRoot('label', { to: 'marveen', count: 2 }), port, ['friday', 'marveen', '-'], 'torzs')
     expect(r.status).toBe(0)
     const stamp = /\[KULDVE:[^\]]*\]/.exec(bodies[0].content)![0]
     // Both halves, because either alone still misleads: a number without an owner,
@@ -287,6 +304,13 @@ describe('agent-msg.sh -- a __STAMP__ es a kuldesi belyeg EGYUTT el', () => {
   // EXISTS matched 11 of 9740, and all 11 were the mistake. Existence is the
   // load-bearing term -- a message merely MENTIONING a path that does not exist
   // could not have been sent with `- < "$f"` and must pass.
+  //
+  // AND AFTER 2026-09-22 THE ORDER OF THE TWO GATES IS PINNED BY THESE TESTS
+  // (card 16d66942, item 1). Argument 3 is `-` or nothing (exit 4), but that gate
+  // sits AFTER this one, so the existing-path case still exits 3 with the
+  // filename message. Reversing them would leave both exit codes green while
+  // emptying the filename refusal of its text -- which is why the two tests below
+  // assert on DIFFERENT SENTENCES of the two refusals, not merely on the codes.
   it('refuses a bare EXISTING file path as the message body', async () => {
     const { port } = await fakeDashboard()
     const tmp = join(tmpdir(), `am-guard-${Date.now()}`)
@@ -299,6 +323,9 @@ describe('agent-msg.sh -- a __STAMP__ es a kuldesi belyeg EGYUTT el', () => {
       expect(r.stderr).toContain('NEM KULDTEM')
       // The refusal must name the working form, or it only says no.
       expect(r.stderr).toContain('- < ')
+      // And it must still be THIS gate's sentence, not the shape gate's -- see the
+      // next-but-one test for the other direction of the same check.
+      expect(r.stderr).not.toContain('HEJ-IDEOZOJELEN')
     } finally { rmSync(tmp, { force: true }) }
   })
 
@@ -319,10 +346,32 @@ describe('agent-msg.sh -- a __STAMP__ es a kuldesi belyeg EGYUTT el', () => {
     } finally { rmSync(tmp, { force: true }) }
   })
 
-  it('lets a path that does NOT exist through -- that is a mention, not a mistake', async () => {
+  it('refuses a NON-EXISTENT path in argv[3] -- with the SHAPE gate, not the filename one', async () => {
+    // This test used to assert the opposite (`status` 0: a mention goes through),
+    // and the change is honest rather than cosmetic. A mention never reached the
+    // filename guard, because existence is that guard's load-bearing term, so
+    // before 2026-09-22 it simply sent. Now argv[3] is `-`-only and it is refused
+    // -- but by a DIFFERENT gate, and the tests name the different SENTENCE from
+    // each refusal, so a reordering that kept both codes intact could not pass.
     const { port, bodies } = await fakeDashboard()
     const r = await send(installRoot('mention', { to: 'marveen', count: 0 }), port, ['friday', 'marveen', '/no/such/path/anywhere'])
+    expect(r.status).toBe(4)
+    expect(bodies).toHaveLength(0)
+    expect(r.stderr).toContain('HEJ-IDEOZOJELEN')
+    expect(r.stderr).not.toContain('LETEZO fajl utvonala')
+  })
+
+  it('THE SAME MENTION THROUGH STDIN STILL SENDS -- the capability moved, it did not vanish', async () => {
+    // The positive control for the test above, and for the whole item: without it
+    // a gate that refused every mention would look green there, and the one thing
+    // this change exists for -- that `$`, backticks and paths survive INTO the
+    // body -- would be asserted nowhere.
+    const { port, bodies } = await fakeDashboard()
+    const mention = 'lasd /no/such/path/anywhere, a $VALTOZO es a `backtick` is'
+    const r = await send(installRoot('mentionok', { to: 'marveen', count: 0 }), port, ['friday', 'marveen', '-'], mention)
     expect(r.status).toBe(0)
     expect(bodies[0].content).toContain('/no/such/path/anywhere')
+    expect(bodies[0].content).toContain('$VALTOZO')
+    expect(bodies[0].content).toContain('`backtick`')
   })
 })
