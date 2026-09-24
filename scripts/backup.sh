@@ -30,6 +30,11 @@
 
 set -euo pipefail
 
+# The archive holds tokens (dashboard bearer, bot tokens, .env). Everything this run creates --
+# the backups/ dir, the staging copies, the archive -- is owner-only from the first byte, not
+# chmod-ed afterwards (card fb315ca6: the 09-14 archive was 0644).
+umask 077
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKUP_DIR="${REPO_ROOT}/backups"
 STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -122,8 +127,23 @@ if [[ -d "${HOME}/Library/LaunchAgents" ]]; then
   ( cd "${HOME}" && find Library/LaunchAgents -maxdepth 1 -name "com.${MAIN_AGENT_ID}.*.plist" -print ) >> "${HOMELIST}"
 fi
 
+# THE AGENT-FILE COUNT IS A SUCCESS CONDITION, NOT A DETAIL (card fb315ca6, marveen's ruling).
+# From 09-18 this block collected ZERO agent files and the run still printed "backup: wrote":
+# a backup that silently stops covering the agents looks exactly like one that works. If agent
+# directories exist and none of their files were collected, the archive is STILL written (the
+# database and tokens in it are worth keeping) but the run exits 3, so the scheduler's health
+# verdict turns red instead of green.
+AGENT_DIRS=0
+AGENT_FILES=0
+if [[ -d agents ]]; then
+  for a in agents/*; do [[ -d "${a}" ]] && AGENT_DIRS=$((AGENT_DIRS + 1)); done
+  AGENT_FILES=$(grep -c '^agents/' "${REPOLIST}" || true)
+fi
+
 if [[ ! -s "${REPOLIST}" && ! -s "${HOMELIST}" ]]; then
   echo "backup: nothing to archive" >&2
+  # nothing at all is a fresh machine -- unless agents exist, which is the silent failure above
+  [[ "${AGENT_DIRS}" -gt 0 ]] && exit 3
   exit 0
 fi
 
@@ -167,7 +187,7 @@ stage_group "${HOMELIST}" "${HOME}" home
 # stay clean (no leading "./").
 ( cd "${STAGE}" && tar -czf "${ARCHIVE}" MANIFEST.txt \
     $( [[ -d repo ]] && echo repo ) $( [[ -d home ]] && echo home ) )
-echo "backup: wrote ${ARCHIVE} ($(wc -c < "${ARCHIVE}" | awk '{print $1}') bytes)"
+echo "backup: wrote ${ARCHIVE} ($(wc -c < "${ARCHIVE}" | awk '{print $1}') bytes; agent dirs ${AGENT_DIRS}, agent files ${AGENT_FILES})"
 
 # The archive contains sensitive tokens (dashboard bearer, channel bot tokens,
 # project .env secrets). Do not auto-sync ${BACKUP_DIR} to iCloud, Dropbox,
@@ -181,3 +201,8 @@ ls -1t "${BACKUP_DIR}"/claudeclaw-*.tar.gz 2>/dev/null | tail -n +$((KEEP + 1)) 
   rm -f "${f}"
   echo "backup: pruned $(basename "${f}")"
 done
+
+if [[ "${AGENT_DIRS}" -gt 0 && "${AGENT_FILES}" -eq 0 ]]; then
+  echo "backup: FAILED CONDITION -- ${AGENT_DIRS} agent dir(s) exist and 0 agent files were collected; the archive was written but does NOT cover the agents." >&2
+  exit 3
+fi
