@@ -70,11 +70,27 @@ add_if "${REPOLIST}" "${REPO_ROOT}" .env
 add_if "${REPOLIST}" "${REPO_ROOT}" scheduled-tasks.json
 add_if "${REPOLIST}" "${REPO_ROOT}" assets/meetings
 # Per-agent identity + channel secrets (glob; missing dir is not an error).
+#
+# EACH agents/<n> MAY BE A SYMLINK, and since 2026-09-18 all seven are (-> /Users/Shared/...).
+# A plain `find agents` does not descend into a symlinked directory, so this block skipped deeper
+# from 09-07 and collected ZERO files once all seven were links -- and nothing said so: the archive
+# was written, "backup: wrote" was printed, and five agents' own bot tokens were in no backup
+# (card ef6a93dc, measured 2026-09-24).
+#
+# `-H` follows ONLY the start point -- the agents/<n> link itself -- and no symlink below it:
+# an agent's .claude-config/channels points at the SHARED ~/.claude/channels (already in the
+# home/ group) and its plugin caches hold unrelated .mcp.json files; `-L` would pull in both.
+# The -path list is the documented layout from the header, not a name search: an agent dir can
+# later hold a project checkout with its own .env, and a recursive name match would copy that
+# secret into the archive without anyone deciding to.
 if [[ -d agents ]]; then
-  find agents -type f \
-    \( -name 'CLAUDE.md' -o -name 'SOUL.md' -o -name '.mcp.json' \
-       -o -name 'access.json' -o -name '.env' \) \
-    -print >> "${REPOLIST}"
+  for a in agents/*; do
+    [[ -d "${a}" ]] || continue
+    find -H "${a}" -maxdepth 4 -type f \
+      \( -path "${a}/CLAUDE.md" -o -path "${a}/SOUL.md" -o -path "${a}/.mcp.json" \
+         -o -path "${a}/.claude/channels/*/.env" -o -path "${a}/.claude/channels/*/access.json" \) \
+      -print >> "${REPOLIST}"
+  done
 fi
 
 # home/ group (relative to $HOME)
