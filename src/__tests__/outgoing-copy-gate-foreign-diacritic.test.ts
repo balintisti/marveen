@@ -101,6 +101,54 @@ describe('outgoing-copy gate: a Latin letter with a diacritic Hungarian does not
   })
 })
 
+// THE COVERAGE BOUNDARY, MEASURED RATHER THAN ASSUMED.
+//
+// Measured 2026-09-24 against the six CP1250->CP1252 pairs documented on card
+// 6151a160 (the CRM contact-name corruption census), plus that card's EXTRA
+// class. This gate catches HALF of them, and the half it misses is not random.
+//
+// WHY, and it is the same mechanism as everything else here: the gate fires only
+// when the base letter is in `aeiou` AND the character decomposes into base+mark.
+// `æ` is a ligature, `ð` has no decomposition at all, and the bases of `c`, `d`
+// and `n` carry no Hungarian accent to be mistaken for -- so those three pairs
+// go straight through.
+//
+// THIS IS NOT A DEFECT AND NOT A GAP TO CLOSE. The gate's assertion is narrow:
+// a Hungarian vowel carrying the wrong accent. Widening it to "any mojibake"
+// would be a DIFFERENT gate with a different false-positive profile. What made
+// this worth pinning is that the six pairs are exactly the characters in the
+// CRM's own corruption census -- so the natural reading, "the gate catches the
+// corrupted customer names", is half true, and a half-true coverage claim is
+// how a gate gets trusted for work it does not do.
+describe('outgoing-copy gate, third class: the coverage boundary against known mojibake (GATEHARMADIK924)', () => {
+  // the three pairs it MISSES: base not in aeiou, or no base+mark decomposition
+  const AE_LIG = cp(0x00e6) // ae ligature      -- `a` is accentable, but this is a ligature
+  const ETH = cp(0x00f0) // eth              -- no decomposition
+  const N_TILDE = cp(0x00f1) // n with tilde     -- `n` is not an accentable base
+  // the three pairs it CATCHES: accentable base, real mark
+  const E_GRAVE = cp(0x00e8) // e with grave
+  const O_TILDE = cp(0x00f5) // o with tilde
+  const U_CIRC = cp(0x00fb) // u with circumflex
+
+  it('MEASURED BLIND SPOT: the ae ligature (`c-acute` -> `ae`) passes', () => {
+    expect(auditForeign(`Vlado Glu${AE_LIG}evi${AE_LIG}, rendben.`)).toEqual([])
+  })
+
+  it('MEASURED BLIND SPOT: eth (`d-stroke` -> `eth`) passes', () => {
+    expect(auditForeign(`Ra${ETH}ovan ${ETH}uri${ETH}ev, rendben.`)).toEqual([])
+  })
+
+  it('MEASURED BLIND SPOT: n-tilde (`n-acute` -> `n-tilde`) passes', () => {
+    expect(auditForeign(`Stevan Ma${N_TILDE}a${N_TILDE}i, rendben.`)).toEqual([])
+  })
+
+  it('the same census, the half it DOES catch -- so the boundary is a line, not a failure', () => {
+    expect(auditForeign(`Stefan Kova${E_GRAVE}, rendben.`).length).toBe(1)
+    expect(auditForeign(`Gy${O_TILDE}z${O_TILDE} Adanko, rendben.`).length).toBe(1)
+    expect(auditForeign(`Sz${U_CIRC}gyi Arpad, rendben.`).length).toBe(1)
+  })
+})
+
 // GATEHARMADIK924, the INTER-AGENT arm. This one is not decoration: my own
 // specimen came from MY outgoing text, and `agent-msg.sh` and card comments are
 // Bash commands, not email sends -- so putting the check only in audit() would
