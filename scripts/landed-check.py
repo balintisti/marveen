@@ -48,12 +48,13 @@ upstream hashes that will never be on our trunk; requiring every named SHA would
 conservative form -- candidate only when NOTHING it names reached the trunk -- is the one the
 pre-measurement used, and its numbers are the ones above.
 
-Usage:
-  python3 scripts/landed-check.py                     -- report, exit 3 if any candidate
-  python3 scripts/landed-check.py --json              -- machine-readable
-  python3 scripts/landed-check.py --control           -- self-check of both meters
+Usage (`--project` is REQUIRED for a measurement -- card c18b116b, marveen's ruling 2026-09-12):
+  python3 scripts/landed-check.py --project marveen            -- report, exit 3 if any candidate
+  python3 scripts/landed-check.py --project ''                 -- ALL projects, incl. cards with NO project
+  python3 scripts/landed-check.py --project marveen --json     -- machine-readable
+  python3 scripts/landed-check.py --control                    -- self-check of both meters (no project needed)
   python3 scripts/landed-check.py --project delta-crm --repo /path --trunk origin/main
-  python3 scripts/landed-check.py --state FILE        -- print only when the candidate set CHANGES
+  python3 scripts/landed-check.py --project marveen --state FILE  -- print only when the candidate set CHANGES
 
 Exit codes:  0 = no candidate   3 = at least one candidate   2 = input unreadable
              4 = the candidate set could not be established (meter did not discriminate)
@@ -206,22 +207,34 @@ def control(repo, trunk, subjects):
 
 
 def main():
-    ap = argparse.ArgumentParser(add_help=True)
-    ap.add_argument('--db', default=DB)
-    ap.add_argument('--repo', default=REPO)
-    ap.add_argument('--trunk', default='HEAD')
-    ap.add_argument('--project', default='marveen')
-    ap.add_argument('--json', action='store_true')
-    ap.add_argument('--control', action='store_true')
-    ap.add_argument('--state', default=None)
+    ap = argparse.ArgumentParser(add_help=True, description=(
+        'Did the commit each CLOSED card names reach the trunk? Read-only.'))
+    ap.add_argument('--db', default=DB, help='kanban database (default: the live store)')
+    ap.add_argument('--repo', default=REPO, help='the git repo the project lives in')
+    ap.add_argument('--trunk', default='HEAD', help='the ref to measure against (default: HEAD)')
+    ap.add_argument('--project', default=None, help=(
+        "REQUIRED for a measurement: which project's `done` cards to check, e.g. marveen or "
+        "delta-crm (with its own --repo). --project '' (empty string) = ALL projects, including "
+        'cards with no project at all; each project then gets its own unresolved rate.'))
+    ap.add_argument('--json', action='store_true', help='machine-readable output')
+    ap.add_argument('--control', action='store_true', help='self-check of both meters only')
+    ap.add_argument('--state', default=None, help='print only when the candidate set changes')
     a = ap.parse_args()
 
-    # A `--project` ALAPERTELMEZESE NEM VALASZTAS, ES EDDIG UGY NEZETT KI (didi merte
-    # 2026-09-12). Kapcsolo nelkul futtatva a kimenet `marveen`-t irt, mintha valaki
-    # azt kerte volna -- a szerszam egy HATOKORT allitott, amit senki nem valasztott.
-    # Ugyanaz az alak, amit ez a fajl mashol mar rogzit: egy szam a nevezoje nelkul.
-    project_explicit = any(x == '--project' or x.startswith('--project=')
-                           for x in sys.argv[1:])
+    # A HATOKOR VALASZTAS, NEM ALAPERTELMEZES (kartya c18b116b, marveen dontese 2026-09-12).
+    # Ez a szerszam `default='marveen'`-nel futott: kapcsolo nelkul egy hatokorrol adott
+    # magabiztos valaszt, amit senki nem valasztott, es a teljes-populacio mod (`''`)
+    # felfedezhetetlen volt. Ugyanaz az elv, mint a secret gate "NOT SCANNED, therefore NOT
+    # CLEARED" alakja: a hianyzo valasztas legyen HANGOS. A tiltas a kiutat is megnevezi --
+    # egy tilalom alternativa nelkul csak addig tart, amig valakinek tenyleg kell.
+    # A `--control` kivetel: a meroket ellenorzi, nem kartyakat, projekt nem kell hozza.
+    if a.project is None and not a.control:
+        print("a --project KOTELEZO: melyik projekt `done` kartyait merjem?\n"
+              "  --project marveen      -- a marveen kartyai, ebben a repoban\n"
+              "  --project delta-crm    -- a delta-crm kartyai (a sajat --repo-javal)\n"
+              "  --project ''           -- MINDEN projekt, a projekt nelkuli kartyakkal egyutt",
+              file=sys.stderr)
+        return 2
 
     if not os.path.exists(a.db):
         print(f'a tabla nem olvashato: {a.db}', file=sys.stderr)
@@ -267,12 +280,6 @@ def main():
     cand = sorted(buckets[CANDIDATE])
     payload = {
         'project': a.project, 'repo': a.repo, 'trunk': a.trunk,
-        # A HATOKOR PROVENIENCIAJA A GEPI KIMENETBEN IS. A `-- ALAPERTELMEZES, nem
-        # valasztas" cimke 2026-09-12 ota ott all az EMBERI uton, es a `--json` uton
-        # NEM allt -- vagyis pontosan azon a kimeneten hianyzott, amit MASIK szerszam
-        # olvas be es TOVABBAD. Egy hatokor, amit senki nem valasztott, igy utazik
-        # tovabb nevezo nelkul. Additiv kulcs: regi fogyasztot nem tor el.
-        'project_source': 'explicit' if project_explicit else 'default',
         'done_cards': len(cards),
         'counts': {k: len(v) for k, v in buckets.items()},
         'ancestry_leg_said_no': len(buckets[CANDIDATE]) + len(buckets[OTHER_SHA]),
@@ -301,8 +308,6 @@ def main():
     else:
         outside, projectless = out_of_scope_counts(a.db, a.project)
         scope = a.project or '(mind)'
-        if not project_explicit:
-            scope += ' -- ALAPERTELMEZES, nem valasztas'
         print(f'`done` kartya ({scope}): {len(cards)} | trunk: {a.trunk} @ {a.repo}')
         # ES AMI EZEN A FUTASON KIVUL ESIK -- KULONBEN A SZAM TELJESNEK OLVASODIK.
         # A project NELKULI kartyak nem csak kimaradnak: NEM IS MERHETOK, mert a

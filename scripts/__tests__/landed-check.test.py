@@ -74,8 +74,11 @@ class LandedCheck(unittest.TestCase):
         c.close()
 
     def run_tool(self, *extra):
+        # --project is REQUIRED since c18b116b. These fixtures are a marveen-project board, so the
+        # scope is stated ONCE here; a call that passes its own --project overrides it.
+        scope = [] if any(x == "--project" or x.startswith("--project=") for x in extra) else ["--project", "marveen"]
         p = subprocess.run([sys.executable, SCRIPT, "--db", self.db, "--repo", self.repo,
-                            "--trunk", "trunk", "--json", *extra],
+                            "--trunk", "trunk", "--json", *scope, *extra],
                            capture_output=True, text=True, timeout=120)
         try:
             return p.returncode, json.loads(p.stdout)
@@ -204,15 +207,19 @@ class LandedCheck(unittest.TestCase):
     def test_a_missing_db_is_2_not_0(self):
         self.commit("alap")
         p = subprocess.run([sys.executable, SCRIPT, "--db", os.path.join(self.root, "nincs.db"),
-                            "--repo", self.repo, "--trunk", "trunk"],
+                            "--repo", self.repo, "--trunk", "trunk", "--project", "marveen"],
                            capture_output=True, text=True)
+        # rc=2 is ALSO the missing-project refusal: without this line the test would pass for
+        # the wrong reason (it did, for one run, while --project was being made required)
+        self.assertNotIn("KOTELEZO", p.stderr)
         self.assertEqual(p.returncode, UNREADABLE, p.stdout + p.stderr)
 
     def test_an_unknown_trunk_ref_is_2_not_0(self):
         self.commit("alap")
         p = subprocess.run([sys.executable, SCRIPT, "--db", self.db, "--repo", self.repo,
-                            "--trunk", "nincs-ilyen-ag"], capture_output=True, text=True)
+                            "--trunk", "nincs-ilyen-ag", "--project", "marveen"], capture_output=True, text=True)
         self.assertEqual(p.returncode, UNREADABLE, p.stdout + p.stderr)
+        self.assertNotIn("KOTELEZO", p.stderr)
 
     # --- es a nulla, aminek nincs kontrollja, nem allitas ------------------------------
 
@@ -220,7 +227,7 @@ class LandedCheck(unittest.TestCase):
         sha = self.commit("minden rendben")
         self.card("66666666", f"commit {sha[:8]}")
         p = subprocess.run([sys.executable, SCRIPT, "--db", self.db, "--repo", self.repo,
-                            "--trunk", "trunk"], capture_output=True, text=True)
+                            "--trunk", "trunk", "--project", "marveen"], capture_output=True, text=True)
         self.assertEqual(p.returncode, NO_CANDIDATE, p.stdout + p.stderr)
         self.assertIn("EGYSZER SEM mondott nemet", p.stdout)
 
@@ -311,7 +318,8 @@ class LandedCheck(unittest.TestCase):
         self.commit("elso")
         self.card("ffffffff", "kesz: 5f2e91c4a7d3b608e1f4", project="marveen")
         p = subprocess.run([sys.executable, SCRIPT, "--db", self.db, "--repo", self.repo,
-                            "--trunk", "trunk"], capture_output=True, text=True, timeout=120)
+                            "--trunk", "trunk", "--project", "marveen"], capture_output=True, text=True, timeout=120)
+        self.assertEqual(p.returncode in (0, 3), True, p.stderr)  # a measurement ran, not a refusal
         self.assertNotIn("FELOLDATLAN HASH", p.stdout)
         # KONTROLL, ugyanabban a tesztben: egy MASODIK projekttel a sor MEGJELENIK, tehat a
         # fenti hiany a feltetelrol szol es nem arrol, hogy a sort sosem nyomtatjuk ki.
@@ -343,25 +351,39 @@ class LandedCheck(unittest.TestCase):
         self.assertEqual(rc, CANDIDATE_FOUND, out)
         self.assertEqual(out["strict_disagreement"], 0, out)
 
-    # --- a HATOKOR PROVENIENCIAJA a GEPI kimeneten ------------------------------------
+    # --- a HATOKOR VALASZTAS, NEM ALAPERTELMEZES (c18b116b) -------------------------------
 
-    def test_json_says_the_project_scope_was_a_default_not_a_choice(self):
-        """A `--project` alapertelmezese `marveen`. A gepi kimenet mondja meg, hogy senki
-        nem valasztotta -- kulonben a hatokor nevezo nelkul utazik tovabb egy masik
-        szerszamba. Az emberi uton ez a cimke mar ott allt; ez a JSON-parbja."""
+    def raw(self, *args):
+        p = subprocess.run([sys.executable, SCRIPT, "--db", self.db, "--repo", self.repo,
+                            "--trunk", "trunk", *args], capture_output=True, text=True, timeout=120)
+        return p.returncode, p.stdout, p.stderr
+
+    def test_no_project_is_a_loud_refusal_that_names_the_way_out(self):
         self.commit("alap")
-        rc, out = self.run_tool()
-        self.assertEqual(out.get("project_source"), "default", out)
-        self.assertEqual(out.get("project"), "marveen", out)
+        rc, out, err = self.raw("--json")
+        self.assertEqual(rc, 2, (out, err))
+        self.assertEqual(out, "", "a refusal must not ALSO print a measurement")
+        self.assertIn("--project ''", err)
+        self.assertIn("MINDEN projekt", err)
 
-    def test_json_says_explicit_when_the_flag_is_given(self):
-        """KONTROLL a MASIK iranyba: a mezo tud `explicit`-et is mondani, kulonben az
-        elozo teszt egy beragadt konstansra is atmenne. Mindket alak (kulon szo es
-        `--project=`) ugyanazt adja."""
+    def test_CONTROL_an_explicit_project_still_measures(self):
         self.commit("alap")
         for args in (("--project", "marveen"), ("--project=marveen",)):
             rc, out = self.run_tool(*args)
-            self.assertEqual(out.get("project_source"), "explicit", (args, out))
+            self.assertEqual(out.get("project"), "marveen", (args, out))
+            self.assertNotIn("project_source", out, "a constant field is noise, not provenance")
+
+    def test_control_mode_needs_no_project(self):
+        self.commit("alap")
+        rc, out, err = self.raw("--control")
+        self.assertNotEqual(rc, 2, (out, err))
+        self.assertIn("KONTROLL:", out)
+
+    def test_help_documents_the_all_projects_form(self):
+        p = subprocess.run([sys.executable, SCRIPT, "--help"], capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("--project ''", p.stdout)
+        self.assertIn("REQUIRED", p.stdout)
 
 
 if __name__ == "__main__":
