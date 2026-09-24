@@ -2635,6 +2635,15 @@ export function createAgentMessage(
   }
 }
 
+/** The last time `fromAgent` SENT an inter-agent message (unix seconds), or null if never.
+ *  Card 9b28c2f7: a turn that emits messages is progressing, and this is free evidence the
+ *  session-stuck alert did not use. */
+export function getLastOutboundMessageAt(fromAgent: string): number | null {
+  const row = db.prepare('SELECT MAX(created_at) AS t FROM agent_messages WHERE from_agent = ?')
+    .get(fromAgent) as { t: number | null } | undefined
+  return row?.t ?? null
+}
+
 export function getPendingMessages(toAgent?: string): AgentMessage[] {
   if (toAgent) {
     return db.prepare("SELECT * FROM agent_messages WHERE status = 'pending' AND to_agent = ? ORDER BY created_at ASC")
