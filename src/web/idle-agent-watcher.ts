@@ -65,6 +65,10 @@ const THRESHOLDS: IdleAgentThresholds = {
   // A repeated identical list is not news -- but after four hours, "nobody has touched
   // this" is. Without this the suppression is permanent on a stable queue.
   wakeStaleRearmMs: 4 * 60 * 60_000,
+  // A letter to the coordinator still undelivered after this long is stuck, not on its way.
+  // Measured 2026-09-24 over 24 h (card 9cc3410a): 315 letters delivered to him, p99 719 s,
+  // max 837 s, NONE over 15 minutes -- so this never fires on his normal traffic.
+  pendingStaleMs: 15 * 60_000,
 }
 
 const INITIAL_DELAY_MS = 90_000
@@ -368,6 +372,15 @@ export function tick(): void {
           ? { idleSinceMs: stored.idleSinceMs, lastAlertAt: stored.lastAlertAt, lastWakeAt: stored.lastWakeAt }
           : NO_IDLE_STATE
       }
+      // One read of this agent's queue per tick, used by the decision AND the log line below.
+      const pending = running ? getPendingMessages(agent) : []
+      // THE AGE IS SUPPLIED FOR THE COORDINATOR ONLY (card 9cc3410a). For the others a letter
+      // pending over 15 minutes is ordinary -- they are in long turns (measured the same day:
+      // deeper 11, dexter 14, computress 6 such letters in 24 h) -- and marveen scoped the card
+      // to him. created_at is epoch SECONDS; the queue comes back oldest first.
+      const oldestPendingAgeMs = agent === MAIN_AGENT_ID && pending.length > 0
+        ? now - pending[0].created_at * 1000
+        : undefined
       const { decision, next } = decideIdleAlert(
         {
           agent,
@@ -376,7 +389,8 @@ export function tick(): void {
           // settled it -- a running fleet ticks this every three minutes.
           paneIdle: running ? paneRead.idle : false,
           staleCounterOnly: running ? paneRead.staleCounterOnly : false,
-          pendingMessages: running ? getPendingMessages(agent).length : 0,
+          pendingMessages: pending.length,
+          oldestPendingAgeMs,
           ownWorkCount,
           // Without this the repeat-suppression never fires -- it is skipped whenever the
           // ids are absent, deliberately, because "unchanged" must be measured.
@@ -424,7 +438,8 @@ export function tick(): void {
           idleForMs: next.idleSinceMs !== null ? now - next.idleSinceMs : null,
           sinceLastWakeMs: state.lastWakeAt !== null ? now - state.lastWakeAt : null,
           sinceLastAlertMs: state.lastAlertAt !== null ? now - state.lastAlertAt : null,
-          pendingMessages: running ? getPendingMessages(agent).length : 0,
+          pendingMessages: pending.length,
+          oldestPendingAgeMs: oldestPendingAgeMs ?? null,
           ownWorkCount,
         },
         `idle guard: ${agent} -> ${decision.reason}`,

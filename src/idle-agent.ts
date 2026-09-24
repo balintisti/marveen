@@ -94,6 +94,9 @@ export interface IdleAgentThresholds {
    *  that keeps finishing short turns would be woken every few minutes: each spell
    *  looks new, because going busy is exactly what ends the previous one. */
   wakeCooldownMs: number
+  /** How old the oldest undelivered letter may get before it stops meaning "waiting on the
+   *  router". Only consulted when the caller supplies `oldestPendingAgeMs` (card 9cc3410a). */
+  pendingStaleMs?: number
 }
 
 export interface IdleAgentState {
@@ -140,6 +143,11 @@ export interface IdleAgentInput {
   /** Undelivered inbound messages. If the agent is waiting on the router, that is the
    *  router's problem, not idleness -- alerting here would blame the wrong component. */
   pendingMessages: number
+  /** Age of the OLDEST undelivered inbound letter, in ms. Absent = not measured, and then any
+   *  pending letter means waiting-on-router, as before. When present and at least
+   *  `pendingStaleMs`, the letter is STUCK rather than on its way, and the agent is judged on
+   *  its pane like any other (card 9cc3410a). */
+  oldestPendingAgeMs?: number
   /** Result of the agent's own declared work check. null = the agent declared nothing. */
   ownWorkCount: number | null
   /** True when the pane's only busy evidence is a leftover spinner / token-counter
@@ -295,7 +303,16 @@ export function decideIdleAlert(
   const countsAsIdleForNoWork = input.paneIdle || input.staleCounterOnly === true
   if (!input.paneIdle && !countsAsIdleForNoWork) return clear('busy')
   if (!input.paneIdle && (input.ownWorkCount ?? 0) > 0) return clear('busy')
-  if (input.pendingMessages > 0) return clear('waiting-on-router')
+  // A LETTER THAT HAS WAITED TOO LONG IS NOT ON ITS WAY (card 9cc3410a, jarvis's finding on
+  // 1b997345). 'waiting-on-router' is right while the router is about to deliver; it is wrong
+  // once a letter has sat undelivered beside an idle pane, because clear() also RESETS the idle
+  // spell -- so a stuck queue kept the guard from ever seeing the agent standing. Whether the
+  // age is supplied is the caller's decision (today: the coordinator only).
+  const pendingStuck =
+    input.oldestPendingAgeMs !== undefined &&
+    thresholds.pendingStaleMs !== undefined &&
+    input.oldestPendingAgeMs >= thresholds.pendingStaleMs
+  if (input.pendingMessages > 0 && !pendingStuck) return clear('waiting-on-router')
 
   // Undeclared is a configuration gap, not an idleness verdict. Reported on its own
   // rail, rate-limited by the same realert window so it cannot become a drumbeat.
