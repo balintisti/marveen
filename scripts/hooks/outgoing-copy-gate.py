@@ -626,6 +626,23 @@ def _gate_log(message: str) -> None:
         pass
 
 
+def _gate_warn(message: str) -> None:
+    """Record a finding WITHOUT blocking: gate log + the session's systemMessage.
+
+    GATEHARMADIK924-WARN (card ff3236b3, 2026-09-24). The deciding rule is about
+    the CHANNEL, not the defect: a block belongs where there is NO second chance,
+    a warning where there is one. Every outbound channel except the card comment
+    has a way back -- a Telegram message is editable, a card DESCRIPTION is
+    editable, a commit is amendable. The card comment is write-once
+    (src/web/routes/kanban.ts:858 knows only GET and POST), so a comment cannot
+    be corrected or removed. That is why the foreign-diacritic class WARNS
+    everywhere except the card-comment target, where it still BLOCKS: see
+    _ia_card_comment_target().
+    """
+    _gate_log(message)
+    print(json.dumps({"systemMessage": message}))
+
+
 # CLCOPYGATEHIANY902 (owner decision, TG 14442) MERGED WITH GATEPERSIST816/3
 # (PDB install, 2026-08-19). Two independent fixes to the same question, from
 # opposite directions, so the merged policy has FIVE states:
@@ -1154,8 +1171,15 @@ def audit(text: str):
             f"{ch!r} {name} ({ctx}), {n} helyen" for ch, name, ctx, n in foreign[:5]
         )
         more = f" (+{len(foreign) - 5} tovabbi karakter)" if len(foreign) > 5 else ""
-        problems.append(
-            f"MAGYARUL NEM HASZNALT EKEZET LATIN BETUN, {len(foreign)} fele: {shown}{more}. "
+        # GATEHARMADIK924-WARN (card ff3236b3, 2026-09-24): FIGYELMEZTETES, nem
+        # `problems`-tetel. A `problems` blokkol, es ez az ag olyan csatornakra
+        # fut, amelyeknek VAN visszautjuk (a Telegram-uzenet szerkesztheto, a
+        # kartyaleiras szerkesztheto). A blokk egyetlen helye a kartya-komment,
+        # es azt az inter-agent ag viszi, celpont szerint -- lasd
+        # _ia_card_comment_target() es a fenti GATEHARMADIK924-TARGET megjegyzest.
+        _gate_warn(
+            f"FIGYELMEZTETES (nem blokkolo) -- MAGYARUL NEM HASZNALT EKEZET LATIN BETUN, "
+            f"{len(foreign)} fele: {shown}{more}. "
             "A betu olvasva majdnem azonos a helyessel, ezert szemre nem tunik fel. "
             "A javitas SZO-FUGGO, ezert a kapu szandekosan NEM javasol alakot: egy rossz "
             "javaslat egy valodi hibat javitana es egy ujat vezetne be."
@@ -1231,7 +1255,17 @@ EMAIL_TOOL_RE = re.compile(
 #                                   attacker, so fail-open-loud is the right side.
 # All three shapes are covered, or the concept is not closed: quoted heredoc
 # (`--data-binary @- <<'JSON'`), `@file`, and inline `-d '...'`.
-_IA_TARGET = re.compile(r"^(https?://)?[^/\s]*/api/messages/?(\?\S*)?$", re.I)
+# GATEHARMADIK924-TARGET (card ff3236b3, 2026-09-24): the card-comment endpoint
+# is a SEPARATE regex, not merely folded into the filter. It is the ONE target
+# whose defect BLOCKS instead of warning, because it is the one target with no
+# way back -- so the arm has to be able to tell which target it matched, not
+# just that it matched one.
+_IA_CARD_COMMENT = re.compile(
+    r"^(https?://)?[^/\s]*/api/kanban/[^/\s]+/comments/?(\?\S*)?$", re.I
+)
+_IA_TARGET = re.compile(
+    r"^(https?://)?[^/\s]*/api/(messages|kanban/[^/\s]+/comments)/?(\?\S*)?$", re.I
+)
 _IA_DATA_FLAGS = ("-d", "--data", "--data-binary", "--data-raw", "--data-ascii", "--json")
 _IA_SUBST = re.compile(r"\$\(|`|\$\{?\w")
 
@@ -1327,20 +1361,39 @@ def _ia_payload(cmd: str, toks):
     return "\n".join(strings), None
 
 
+def _ia_card_comment_target(toks) -> bool:
+    """True when this command POSTs to the card-comment endpoint.
+
+    The one target whose defect blocks. Kept as its own question because the
+    arm must distinguish "matched a target" from "matched THIS target": the
+    widened filter covers both, and the two do not share a failure direction.
+    """
+    return any(_IA_CARD_COMMENT.match(t) for t in toks[1:])
+
+
 def inter_agent_homoglyph_gate(cmd: str) -> None:
-    """Exit 2 on a codepoint-substitution defect (homoglyph or a Latin letter
-    carrying a diacritic Hungarian does not use), exit 0 otherwise (loudly when
-    unreadable). Only called for a command that is NOT an email send.
+    """Exit 2 on a HOMOGLYPH (a mixed-script word) -- and, since card ff3236b3
+    landed, on the foreign-diacritic class too WHEN the target is the card
+    comment. Exit 0 otherwise, warning loudly on that second class. Only called
+    for a command that is NOT an email send.
 
     GATEHARMADIK924: the second class is here because THIS is the arm my own
     `forditott` specimen would have travelled through (agent-msg.sh and card
     comments are Bash, not sends). Putting it only in audit() would leave the
     path where the defect actually appeared unguarded.
 
+    GATEHARMADIK924-WARN/TARGET (card ff3236b3, 2026-09-24): the second class
+    is split by TARGET, not uniform. It BLOCKS on the card comment -- the one
+    outbound channel that is write-once, so a block is the only thing that can
+    still prevent the damaged text from landing -- and WARNS everywhere else,
+    including /api/messages, because every other channel has a way back.
+    The homoglyph blocks everywhere in this arm: a substituted codepoint in an
+    id, an agent name or a path misroutes SILENTLY, which is a wrong action
+    rather than a typo the reader can see past.
+
     The failure directions follow the arm's own structure: an UNREADABLE payload
-    is NEM MERT and fails open loudly, a MEASURED defect blocks. The two new
-    chars are the same class as the homoglyph -- a codepoint substitution the eye
-    reads past -- so they block the same way, not differently."""
+    is NEM MERT and fails open loudly; a MEASURED defect blocks or warns
+    according to the channel, as above."""
     toks = _ia_segment(cmd)
     if toks is None:
         sys.exit(0)
@@ -1369,13 +1422,25 @@ def inter_agent_homoglyph_gate(cmd: str) -> None:
     if foreign:
         shown = "; ".join(f"{ch!r} {name} ({n} helyen)" for ch, name, _ctx, n in foreign[:5])
         more = f" (+{len(foreign) - 5} tovabbi karakter)" if len(foreign) > 5 else ""
-        sys.stderr.write(
-            "KIMENO-SZOVEG KAPU (inter-agent): TILTVA -- MAGYARUL NEM HASZNALT EKEZET "
-            f"LATIN BETUN, {len(foreign)} fele: {shown}{more}.\n"
+        detail = (
             "A betu olvasva majdnem azonos a helyessel, ezert a masik fel olvasva sem tunik fel. "
-            "Javitsd a szoveget es kuldd ujra.\n"
         )
-        sys.exit(2)
+        if _ia_card_comment_target(toks):
+            # IRAS-MEGYSSZOR: a komment-uton nincs PUT es nincs DELETE, tehat a
+            # kapunak EPP ITT nincs masodik eselye -- ezert itt blokkol.
+            sys.stderr.write(
+                "KIMENO-SZOVEG KAPU (inter-agent, kartya-komment): TILTVA -- MAGYARUL NEM "
+                f"HASZNALT EKEZET LATIN BETUN, {len(foreign)} fele: {shown}{more}.\n"
+                + detail +
+                "EZ A CSATORNA IRAS-MEGYSSZOR (nincs PUT, nincs DELETE), tehat egy bement "
+                "komment javithatatlan: ezert itt BLOKKOL, nem figyelmeztet.\n"
+            )
+            sys.exit(2)
+        _gate_warn(
+            "FIGYELMEZTETES (nem blokkolo) -- MAGYARUL NEM HASZNALT EKEZET LATIN BETUN, "
+            f"{len(foreign)} fele: {shown}{more}. " + detail +
+            "Az uzenet ATMEGY. A kartya-komment az EGYETLEN celpont, ahol ez blokkol."
+        )
     sys.exit(0)
 
 

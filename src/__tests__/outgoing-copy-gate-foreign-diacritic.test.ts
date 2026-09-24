@@ -34,14 +34,34 @@ const ACUTE_C = cp(0x0107) // LATIN SMALL LETTER C WITH ACUTE  -- Serbian, legit
 const STROKE_D = cp(0x0111) // LATIN SMALL LETTER D WITH STROKE -- Serbian, no decomposition
 const CIRC_O = cp(0x00f4) // LATIN SMALL LETTER O WITH CIRCUMFLEX
 
+// GATEHARMADIK924-WARN (card ff3236b3, 2026-09-24): this class is no longer a
+// `problems` entry -- it is a WARNING, so it leaves through `_gate_warn`, which
+// prints a systemMessage line to stdout. The audit() RETURN VALUE is therefore
+// the wrong place to look now, and a probe that kept reading it would report
+// zero findings on a defect that did fire -- the silent-null shape this whole
+// card is about. So the probe captures stdout and reads the warning itself.
 function auditForeign(text: string): string[] {
   const out = execFileSync('python3', ['-c', `
-import importlib.util, json, sys
+import contextlib, importlib.util, io, json, sys
 spec = importlib.util.spec_from_file_location("gate", ${JSON.stringify(GATE)})
 g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
-print(json.dumps([p for p in g.audit(sys.argv[1]) if "NEM HASZNALT EKEZET" in p]))
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    g.audit(sys.argv[1])
+msgs = []
+for line in buf.getvalue().splitlines():
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        obj = json.loads(line)
+    except ValueError:
+        continue
+    if isinstance(obj, dict) and "systemMessage" in obj:
+        msgs.append(obj["systemMessage"])
+print(json.dumps([m for m in msgs if "NEM HASZNALT EKEZET" in m]))
 `, text], { encoding: 'utf-8' })
-  return JSON.parse(out.trim())
+  return JSON.parse(out.trim().split('\n').pop()!)
 }
 
 describe('outgoing-copy gate: a Latin letter with a diacritic Hungarian does not use (GATEHARMADIK924)', () => {
@@ -155,33 +175,39 @@ describe('outgoing-copy gate, third class: the coverage boundary against known m
 // leave the path where the defect actually appeared unguarded.
 //
 // The failure directions follow that arm's own structure: an UNREADABLE body is
-// NEM MERT and fails open loudly, a MEASURED defect blocks. The two new
-// characters are the same class as the homoglyph -- a codepoint substitution the
-// eye reads past -- so they block the same way rather than differently.
-function iaArm(cmd: string): { code: number; stderr: string } {
+// NEM MERT and fails open loudly. A MEASURED defect is then split BY TARGET --
+// it BLOCKS on the card comment, the one write-once channel, and WARNS
+// everywhere else including /api/messages, because every other channel has a
+// way back. BOTH directions are pinned below, so neither can quietly become
+// the other.
+function iaArm(cmd: string): { code: number; stderr: string; stdout: string } {
   const out = execFileSync('python3', ['-c', `
-import importlib.util, io, json, sys
+import contextlib, importlib.util, io, json, sys
 spec = importlib.util.spec_from_file_location("gate", ${JSON.stringify(GATE)})
 g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
-buf = io.StringIO(); sys.stderr = buf; code = 0
+err = io.StringIO(); cap = io.StringIO(); sys.stderr = err; code = 0
 try:
-    g.inter_agent_homoglyph_gate(sys.argv[1])
+    with contextlib.redirect_stdout(cap):
+        g.inter_agent_homoglyph_gate(sys.argv[1])
 except SystemExit as e:
     code = e.code if e.code is not None else 0
-print(json.dumps({"code": code, "stderr": buf.getvalue()}))
+print(json.dumps({"code": code, "stderr": err.getvalue(), "stdout": cap.getvalue()}))
 `, cmd], { encoding: 'utf-8' })
-  return JSON.parse(out.trim())
+  return JSON.parse(out.trim().split('\n').pop()!)
 }
 
 const postTo = (body: string) =>
   `curl -s -X POST http://localhost:3420/api/messages -H 'Content-Type: application/json' -d '${body}'`
 
 describe('outgoing-copy gate, inter-agent arm: the same third class (GATEHARMADIK924)', () => {
-  it('a POST whose body carries the defect is blocked, and the message names the character', () => {
+  it('/api/messages: the defect WARNS and the message passes -- that channel has a way back', () => {
+    // The card's closing shape, pinned rather than assumed: a block belongs
+    // where there is NO second chance, and an agent message can be corrected.
     const r = iaArm(postTo(`{"from":"deeper","to":"marveen","content":"A cim ford${GRAVE_I}tott."}`))
-    expect(r.code).toBe(2)
-    expect(r.stderr).toContain('U+00EC')
-    expect(r.stderr).toContain('LATIN SMALL LETTER I WITH GRAVE')
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('U+00EC')
+    expect(r.stdout).toContain('LATIN SMALL LETTER I WITH GRAVE')
+    expect(r.stdout).toContain('FIGYELMEZTETES')
   })
 
   it('the same POST with the correct Hungarian form passes -- the block must not be unconditional', () => {
@@ -204,8 +230,22 @@ describe('outgoing-copy gate, inter-agent arm: the same third class (GATEHARMADI
     expect(r.code).toBe(0)
   })
 
-  it('MEASURED SCOPE LIMIT: a card comment goes to /api/kanban, a different endpoint, so it is not scanned either', () => {
+  it('a card comment carrying the defect BLOCKS -- the one channel with no second chance', () => {
+    // GATEHARMADIK924-TARGET. This is the exact INVERSE of the test it replaces:
+    // the measurement then was "a different endpoint, so it is not scanned", and
+    // the card closed by making it scanned. The comment channel is write-once
+    // (no PUT, no DELETE), so here the gate must REFUSE rather than warn -- a
+    // warning would let the damaged text land where nothing can correct it.
     const r = iaArm(`curl -s -X POST http://localhost:3420/api/kanban/abc/comments -d '{"author":"deeper","content":"A cim ford${GRAVE_I}tott."}'`)
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('U+00EC')
+    expect(r.stderr).toContain('IRAS-MEGYSSZOR')
+  })
+
+  it('the card-comment block is NOT unconditional: correct Hungarian passes there too', () => {
+    // Without this, the test above would also pass on a gate that blocks EVERY
+    // comment -- strictly worse than the defect it guards.
+    const r = iaArm(`curl -s -X POST http://localhost:3420/api/kanban/abc/comments -d '{"author":"deeper","content":"A cim ford${ACUTE_I}tott."}'`)
     expect(r.code).toBe(0)
   })
 })
