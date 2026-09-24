@@ -2652,14 +2652,15 @@ export function getPendingMessages(toAgent?: string): AgentMessage[] {
  *  82d9b960: filter on the WINDOW, not the status) inside a string nobody tests. */
 export function getRestartLossCandidates(
   toAgent: string,
-): Pick<AgentMessage, 'id' | 'status' | 'created_at' | 'delivered_at' | 'from_agent'>[] {
+): (Pick<AgentMessage, 'id' | 'status' | 'created_at' | 'delivered_at' | 'from_agent'> & { head: string })[] {
   // `delivered` joined the set for card 18c382df: it is the state a restart actually takes.
   // Narrow columns because that status is the table's whole history for the agent (17 928
-  // rows fleet-wide on 2026-09-24), and the message bodies are not needed to count them.
+  // rows fleet-wide on 2026-09-24): only the first 40 characters of the body, which carry the
+  // `[tag]` the line uses to recognise the one moot kind of row.
   return db.prepare(
-    "SELECT id, status, created_at, delivered_at, from_agent FROM agent_messages"
+    "SELECT id, status, created_at, delivered_at, from_agent, substr(content, 1, 40) AS head FROM agent_messages"
     + " WHERE to_agent = ? AND status IN ('pending','failed','delivered') ORDER BY created_at ASC",
-  ).all(toAgent) as Pick<AgentMessage, 'id' | 'status' | 'created_at' | 'delivered_at' | 'from_agent'>[]
+  ).all(toAgent) as (Pick<AgentMessage, 'id' | 'status' | 'created_at' | 'delivered_at' | 'from_agent'> & { head: string })[]
 }
 
 // Status-guarded (pending only): the federation removal path bulk-fails

@@ -37,6 +37,8 @@ describe('getRestartLossCandidates hands the restart line what a restart takes',
     expect(byId.get(delivered.id)?.status).toBe('delivered')
     expect(byId.get(delivered.id)?.delivered_at).toEqual(expect.any(Number))
     expect(byId.get(delivered.id)?.from_agent).toBe('marveen')
+    // the body prefix travels (the line's one moot class is recognised by it), and ONLY a prefix
+    expect(byId.get(delivered.id)?.head).toBe('beinjektalva')
     expect(byId.has(done.id)).toBe(false)
     expect(byId.has(other.id)).toBe(false)
   })

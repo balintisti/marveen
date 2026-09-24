@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildRestartLossLine, RESTART_LOSS_WINDOW_MS, RESTART_DELIVERED_LIST_MAX } from '../context-guard.js'
+import { buildWakeMessage } from '../idle-agent.js'
 
 // Card 82d9b960. The restart notice used to say "messages may have been lost -- check and
 // resend them", and every recipient ran the same three queries to answer it. marveen measured
@@ -82,8 +83,10 @@ describe('a restart-ertesites hordozza a sajat mereset', () => {
   // panelbe, ami megszunt. Merve 2026-09-24, 411 restart-ertesitesen: 178 mondta, hogy "NINCS mit
   // ujrakuldeni", es ebbol 75-ben (42%) volt delivered sor az ablakban.
   describe('delivered: amit a restart TENYLEG elvisz', () => {
-    const dRow = (id: number, from: string, deliveredMs: number, createdMs = deliveredMs) =>
-      ({ id, status: 'delivered', created_at: sec(createdMs), delivered_at: sec(deliveredMs), from_agent: from })
+    const dRow = (id: number, from: string, deliveredMs: number, createdMs = deliveredMs, head = 'kerdes') =>
+      ({ id, status: 'delivered', created_at: sec(createdMs), delivered_at: sec(deliveredMs), from_agent: from, head })
+    // the REAL wake-up text, not a copy: a reworded builder must fail here, not start alarming
+    const wakeHead = buildWakeMessage('friday', 12, 3, [], RESTART).slice(0, 40)
 
     it('egy ablakon beluli, KULDO altal irt delivered sor MEGAKADALYOZZA a "NINCS mit ujrakuldeni"-t', () => {
       const line = buildRestartLossLine([dRow(716972, 'didi', RESTART - 10 * 60_000)], RESTART)
@@ -118,21 +121,41 @@ describe('a restart-ertesites hordozza a sajat mereset', () => {
       expect(line).toContain('NINCS mit ujrakuldeni')
     })
 
-    it('a rendszer-jelzes (from_agent=system) SZAMOLVA van, de nem listazva, es egyedul nem riaszt', () => {
-      const line = buildRestartLossLine([dRow(700060, 'system', RESTART - 3 * 60_000)], RESTART)
+    it('a tetlen-or ONMAGANAK szolo ebresztoje targytalan: szamolva, nem listazva, egyedul nem riaszt', () => {
+      const line = buildRestartLossLine([dRow(700060, 'system', RESTART - 3 * 60_000, undefined, wakeHead)], RESTART)
       expect(line).toContain('NINCS mit ujrakuldeni')
       expect(line).toContain('delivered az ablakban: 1')
-      expect(line).toContain('rendszer-jelzes')
+      expect(line).toContain('tetlen-or ebreszto')
       expect(line).not.toContain('700060')
     })
 
-    it('rendszer-jelzes MELLETT a kuldoi sor igenis riaszt, es a ket szam kulon all', () => {
+    // A JAVITAS ELSO ALAKJA MINDEN `system` sort kihagyott "ujratermelodik" cimkevel. HAMIS volt:
+    // nyolc kodut kuld `system`-kent, es az approval, a sentry/uptime el es a handoff-failure
+    // EGYSZER megy ki. Egy restartban elveszett sentry-erkezes soha nem jon vissza.
+    it('az EGYSZERI rendszer-uzenet (sentry, APPROVAL_REQUEST) IGENIS riaszt, a cimkejevel', () => {
+      const line = buildRestartLossLine([
+        dRow(700061, 'system', RESTART - 3 * 60_000, undefined, '[sentry] 1 NEW unresolved issue(s):'),
+        dRow(700062, 'system', RESTART - 4 * 60_000, undefined, '[APPROVAL_REQUEST] friday ker: ...'),
+      ], RESTART)
+      expect(line).not.toContain('NINCS mit ujrakuldeni')
+      expect(line).toContain('700061<-system[sentry]')
+      expect(line).toContain('700062<-system[APPROVAL_REQUEST]')
+    })
+
+    it('KONTROLL: a MARVEENNEK szolo tetlen-or lista (mas agensrol) NEM targytalan -- 4 oraig nem ismetlodik', () => {
       const line = buildRestartLossLine(
-        [dRow(700070, 'system', RESTART - 3 * 60_000), dRow(700071, 'mandark', RESTART - 4 * 60_000)], RESTART)
+        [dRow(700063, 'system', RESTART - 3 * 60_000, undefined, '[tetlen-or] A(z) "jarvis" 12 perce ures p')], RESTART)
+      expect(line).toContain('700063<-system[tetlen-or]')
+      expect(line).not.toContain('NINCS mit ujrakuldeni')
+    })
+
+    it('targytalan ebreszto MELLETT a kuldoi sor riaszt, es a ket szam kulon all', () => {
+      const line = buildRestartLossLine(
+        [dRow(700070, 'system', RESTART - 3 * 60_000, undefined, wakeHead), dRow(700071, 'mandark', RESTART - 4 * 60_000)], RESTART)
       expect(line).toContain('delivered AZ ABLAKBAN: 1')
       expect(line).toContain('700071<-mandark')
       expect(line).not.toContain('700070')
-      expect(line).toContain('plusz 1 rendszer-jelzes')
+      expect(line).toContain('plusz 1 targytalan tetlen-or ebreszto')
     })
 
     it('delivered_at NELKULI delivered sort nem szamol (az injektalas ideje ismeretlen)', () => {
