@@ -37,6 +37,16 @@
 #   Any OTHER error is real. On a target that already holds data, stop: this
 #   loads into it, it does not replace it.
 #
+#   MEASURED 2026-09-24 on a real restore (the 20260901 monthly, from R2, into a
+#   throwaway PostgreSQL 15): 114/114 tables and every row landed (Contact 5402,
+#   Project 7125, Activity 7454, Task 5249 -- equal to the dump's own COPY
+#   rows). NINE SEARCH INDEXES DID NOT: the idx_*_trgm indexes on Company and
+#   Contact use extensions.gin_trgm_ops and extensions.immutable_unaccent, and
+#   this dump is --schema=public, so it carries neither. The DATA is complete;
+#   fuzzy search is slow until they exist. On a new Supabase project the
+#   `extensions` schema is there, but immutable_unaccent comes from a MIGRATION,
+#   so run the migrations on the target first, or recreate those indexes after.
+#
 # A wrong key or a damaged file makes step 2 fail with an error and write no
 # file; it never produces a plausible-looking wrong dump.
 # ---------------------------------------------------------------------------
