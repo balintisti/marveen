@@ -1,66 +1,113 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { routeFleetAlerts, deliverFleetAlerts, type FleetAlert } from '../idle-agent.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..', '..')
 const SRC = readFileSync(join(ROOT, 'src', 'web', 'idle-agent-watcher.ts'), 'utf-8')
 
 /**
- * The guard raises four kinds of alert and only ONE of them is a fleet event the
- * owner can act on. The other three report on the guard ITSELF: a pane it could
- * not read, a missing work-check, a wake it could not enqueue.
+ * The guard raises four kinds of alert. Three report on the guard ITSELF (a pane it could not
+ * read, a missing work-check, a wake it could not enqueue) and have gone to the coordinator since
+ * 2026-09-03, when THREE of four owner alerts turned out to be 'pane-unreadable' on panes that
+ * read fine seconds later.
  *
- * Measured 2026-09-03: four alerts reached the owner's phone, THREE of them
- * 'pane-unreadable' -- and all three panes read fine when checked seconds later.
- * The one true row arrived buried among the guard's own instrument failures.
- *
- * These assertions pin the MEANING, not the wording: the owner path must carry a
- * FILTERED set, the coordinator path must exist, and the bare form -- every kind
- * to the owner -- must not come back under a later tidy-up.
+ * The fourth, 'still-idle', went to the owner until card 1b997345: 45 messages on 2026-09-24,
+ * and its remedy (a card, a workcheck) is the coordinator's. Now everything goes to the
+ * coordinator, and the owner is the fallback -- tick() itself is driven end to end in
+ * idle-guard-still-idle-routing.test.ts; these pin the rule and the delivery on their own.
  */
-describe('idle guard: alerts are split by audience, not broadcast', () => {
-  // Window: from the tick() declaration to its own column-0 closing brace.
-  // Anchored on the function, not on any string this test is looking for.
+const C = 'marveen'
+const still = (agent: string): FleetAlert => ({ kind: 'still-idle', agent, minutes: 40, workCount: 2 })
+const blind: FleetAlert = { kind: 'pane-unreadable', agent: 'y', paneReason: 'capture-failed' }
+const noCheck: FleetAlert = { kind: 'no-work-check', agent: 'z' }
+
+describe('routeFleetAlerts: the coordinator by default, the owner only when he cannot act', () => {
+  it('coordinator running and not himself stuck: every kind to him, nothing to the owner', () => {
+    const r = routeFleetAlerts([still('x'), blind, noCheck], C, true)
+    expect(r.owner).toEqual([])
+    expect(r.coordinator).toEqual([still('x'), blind, noCheck])
+  })
+
+  it('the coordinator is among the still-idle: the still-idle rows go to the owner', () => {
+    const r = routeFleetAlerts([still('x'), still(C), blind], C, true)
+    expect(r.owner).toEqual([still('x'), still(C)])
+    expect(r.coordinator).toEqual([blind])
+  })
+
+  it('the coordinator is not running: the still-idle rows go to the owner', () => {
+    const r = routeFleetAlerts([still('x'), noCheck], C, false)
+    expect(r.owner).toEqual([still('x')])
+    expect(r.coordinator).toEqual([noCheck])
+  })
+
+  it("the guard's reports on itself NEVER reach the owner by rule (the 2026-09-03 defect)", () => {
+    for (const running of [true, false]) {
+      for (const set of [[blind, noCheck], [blind, still(C)], [noCheck, still('x')]]) {
+        const r = routeFleetAlerts(set, C, running)
+        expect(r.owner.filter((a) => a.kind !== 'still-idle'), `running=${running}`).toEqual([])
+      }
+    }
+  })
+
+  it('nothing is dropped: owner + coordinator is always the whole sweep', () => {
+    const all = [still('x'), still(C), blind, noCheck]
+    for (const running of [true, false]) {
+      for (let n = 0; n <= all.length; n++) {
+        const set = all.slice(0, n)
+        const r = routeFleetAlerts(set, C, running)
+        expect([...r.owner, ...r.coordinator].sort((a, b) => a.agent.localeCompare(b.agent)))
+          .toEqual([...set].sort((a, b) => a.agent.localeCompare(b.agent)))
+      }
+    }
+  })
+})
+
+describe('deliverFleetAlerts: one message per audience, and an enqueue failure falls back', () => {
+  const io = () => ({ toCoordinator: vi.fn(), toOwner: vi.fn(), onCoordinatorFailed: vi.fn() })
+
+  it('empty sweep: nothing is sent', () => {
+    const o = io()
+    expect(deliverFleetAlerts([], C, true, o)).toEqual({ owner: [], coordinator: [] })
+    expect(o.toCoordinator).not.toHaveBeenCalled()
+    expect(o.toOwner).not.toHaveBeenCalled()
+  })
+
+  it('ONE coordinator message for the whole sweep', () => {
+    const o = io()
+    const d = deliverFleetAlerts([still('x'), still('w'), blind], C, true, o)
+    expect(o.toCoordinator).toHaveBeenCalledTimes(1)
+    expect(o.toOwner).not.toHaveBeenCalled()
+    expect(d.coordinator).toHaveLength(3)
+  })
+
+  it('the coordinator enqueue throws: the WHOLE coordinator batch goes to the owner, and it is reported', () => {
+    const o = io()
+    o.toCoordinator.mockImplementation(() => { throw new Error('queue down') })
+    const d = deliverFleetAlerts([still('x'), blind], C, true, o)
+    expect(o.onCoordinatorFailed).toHaveBeenCalledTimes(1)
+    expect(o.toOwner).toHaveBeenCalledTimes(1)
+    expect(d).toEqual({ owner: [still('x'), blind], coordinator: [] })
+  })
+
+  it('owner rows by rule and by fallback arrive in ONE owner message', () => {
+    const o = io()
+    o.toCoordinator.mockImplementation(() => { throw new Error('queue down') })
+    const d = deliverFleetAlerts([still(C), blind], C, true, o)
+    expect(o.toOwner).toHaveBeenCalledTimes(1)
+    expect(d.owner).toEqual([still(C), blind])
+  })
+})
+
+describe('tick() uses the delivery, not a route of its own', () => {
   const start = SRC.indexOf('export function tick(): void {')
   const fnBody = SRC.slice(start, SRC.indexOf('\n}', start))
 
-  it('tick() exists and separates owner-facing from coordinator-facing alerts', () => {
+  it('no direct sendAlert(buildFleetAlert(...)) is left in tick()', () => {
     expect(start).toBeGreaterThanOrEqual(0)
-    expect(fnBody).toMatch(/ownerFacing\s*=\s*alerts\.filter/)
-    expect(fnBody).toMatch(/coordinatorFacing\s*=\s*alerts\.filter/)
-  })
-
-  it("only 'still-idle' reaches the owner", () => {
-    // The owner filter must name the one actionable kind. If a future edit adds a
-    // second kind here it should be a deliberate change to this line, not a silent
-    // widening of what lands on a phone.
-    expect(fnBody).toMatch(/ownerFacing\s*=\s*alerts\.filter\(\(a\) => a\.kind === 'still-idle'\)/)
-  })
-
-  it('sendAlert receives the FILTERED set, never the whole sweep', () => {
-    // This is the mutation that matters: reverting to sendAlert(buildFleetAlert(alerts))
-    // restores the exact defect -- three instrument failures per true row.
-    expect(fnBody).toMatch(/sendAlert\(buildFleetAlert\(ownerFacing\)\)/)
-    expect(fnBody).not.toMatch(/sendAlert\(buildFleetAlert\(alerts\)\)/)
-  })
-
-  it('the coordinator is told about the guard\'s own failures', () => {
-    expect(fnBody).toMatch(/createAgentMessage\('system',\s*MAIN_AGENT_ID,\s*buildFleetAlert\(coordinatorFacing\)\)/)
-  })
-
-  it('a coordinator alert that cannot be enqueued falls back rather than vanishing', () => {
-    // Dropping it would be the same silent-loss shape this routing change removes.
-    const coordIdx = fnBody.indexOf('coordinatorFacing.length > 0')
-    const tail = fnBody.slice(coordIdx)
-    expect(tail).toMatch(/catch/)
-    expect(tail).toMatch(/sendAlert\(buildFleetAlert\(coordinatorFacing\)\)/)
-  })
-
-  it('all four kinds still exist -- nothing was silenced, only routed', () => {
-    expect(SRC).toMatch(/still-idle/)
-    // The other three are raised in this file and consumed by buildFleetAlert.
-    expect(SRC).toMatch(/pane-unreadable|no-work-check|wake-enqueue-failed/)
+    expect(fnBody).toMatch(/deliverFleetAlerts\(alerts, MAIN_AGENT_ID,/)
+    expect(fnBody).not.toMatch(/sendAlert\(buildFleetAlert\(/)
   })
 })

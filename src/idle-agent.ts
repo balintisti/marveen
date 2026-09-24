@@ -1588,3 +1588,62 @@ export function buildFleetAlert(alerts: FleetAlert[]): string {
   }
   return out.join('\n')
 }
+
+/** WHO GETS A SWEEP'S ALERTS (card 1b997345, marveen's decision 2026-09-24).
+ *
+ *  'still-idle' used to go to the owner's Telegram: 45 messages on 2026-09-24 between 09:09 and
+ *  22:09 (didi 22, friday 9, mandark 6, jarvis 6, computress 4, dexter 2), and the owner said so.
+ *  The owner cannot act on one: the remedy is assigning a card or fixing a workcheck.json, and both
+ *  are the coordinator's. So every kind goes to the COORDINATOR -- in one message per sweep.
+ *
+ *  THE OWNER STAYS THE FALLBACK, for exactly the cases where the coordinator cannot act:
+ *    - the coordinator's OWN still-idle is in this sweep: he got a wake and did not move, so a
+ *      letter in his queue is the one thing known not to work;
+ *    - the coordinator is not running: the letter would wait for him, and the fleet with it.
+ *  In both cases the still-idle rows go to the owner, and the guard's reports on itself keep
+ *  going to the coordinator, as before this card. The third fallback -- the coordinator's
+ *  message cannot be enqueued -- is in deliverFleetAlerts, because it is an outcome, not a rule. */
+export function routeFleetAlerts(
+  alerts: FleetAlert[],
+  coordinator: string,
+  coordinatorRunning: boolean,
+): { owner: FleetAlert[]; coordinator: FleetAlert[] } {
+  const stillIdle = alerts.filter((a) => a.kind === 'still-idle')
+  const coordinatorCannotAct = !coordinatorRunning || stillIdle.some((a) => a.agent === coordinator)
+  if (coordinatorCannotAct) {
+    return { owner: stillIdle, coordinator: alerts.filter((a) => a.kind !== 'still-idle') }
+  }
+  return { owner: [], coordinator: alerts }
+}
+
+/** Send a sweep's alerts along routeFleetAlerts, and return who ACTUALLY got which rows.
+ *
+ *  The return value is what the caller logs, so a 'human alerted' line means the owner was
+ *  sent something, not that the rule said so. A coordinator message that cannot be enqueued
+ *  falls back to the owner whole: a silently dropped alert is the shape the audience split was
+ *  built to remove (card comment in idle-agent-watcher's tick). */
+export function deliverFleetAlerts(
+  alerts: FleetAlert[],
+  coordinator: string,
+  coordinatorRunning: boolean,
+  io: {
+    toCoordinator: (text: string) => void
+    toOwner: (text: string) => void
+    onCoordinatorFailed?: (err: unknown) => void
+  },
+): { owner: FleetAlert[]; coordinator: FleetAlert[] } {
+  const route = routeFleetAlerts(alerts, coordinator, coordinatorRunning)
+  const owner = [...route.owner]
+  let toCoordinator = route.coordinator
+  if (toCoordinator.length > 0) {
+    try {
+      io.toCoordinator(buildFleetAlert(toCoordinator))
+    } catch (err) {
+      io.onCoordinatorFailed?.(err)
+      owner.push(...toCoordinator)
+      toCoordinator = []
+    }
+  }
+  if (owner.length > 0) io.toOwner(buildFleetAlert(owner))
+  return { owner, coordinator: toCoordinator }
+}

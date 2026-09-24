@@ -22,7 +22,7 @@ import {
   type RecipientPaneState,
   type PendingRow,
   buildWakeMessage,
-  buildFleetAlert,
+  deliverFleetAlerts,
   type FleetAlert,
   NO_IDLE_STATE,
   type IdleAgentState,
@@ -304,8 +304,13 @@ export function tick(): void {
       if (parseWorkCheck(readWorkCheckRaw(other))?.reviewer) reviewers.add(other)
     }
 
+    // Read from the loop below, which always visits the coordinator first. null would mean it
+    // did not, and the delivery then treats him as not running: the owner is the loud side.
+    let coordinatorRunning: boolean | null = null
+
     for (const agent of agents) {
       const running = isAgentRunning(agent)
+      if (agent === MAIN_AGENT_ID) coordinatorRunning = running
       const check = parseWorkCheck(readWorkCheckRaw(agent))
       // MAIN_AGENT_ID is passed so the coordinator's own comments are not mistaken for
       // a reviewer's unanswered finding -- see selectDeclaredWork for the measurement.
@@ -575,35 +580,40 @@ export function tick(): void {
       alerts.push({ kind: 'still-idle', agent, minutes, workCount: decision.workCount })
       logger.warn(
         { idleGuard: true, agent, workCount: decision.workCount, idleForMs: decision.idleForMs },
-        'idle guard: agent still idle AFTER a wake (stage 2) -- human alerted',
+        'idle guard: agent still idle AFTER a wake (stage 2) -- escalating',
       )
     }
 
-    // One message for the whole sweep, or none at all -- but SPLIT BY AUDIENCE.
-    //
-    // Only 'still-idle' is a fleet event the OWNER can act on: an agent got a wake and did not
-    // move. The other three are the guard reporting on ITSELF -- a pane it could not read (it is
-    // BLIND, which says nothing about the agent), a missing work-check (a config gap), and a wake
-    // it could not enqueue (a delivery failure). All three are the coordinator's to fix.
+    // One message per audience for the whole sweep, or none at all.
     //
     // Measured 2026-09-03: of four alerts that reached the owner's phone, THREE were
-    // 'pane-unreadable' -- and all three panes read fine when checked seconds later. The one true
-    // row arrived buried among the guard's own instrument failures. Nothing is silenced here:
-    // every kind is still reported, to whoever can act on it.
-    const ownerFacing = alerts.filter((a) => a.kind === 'still-idle')
-    const coordinatorFacing = alerts.filter((a) => a.kind !== 'still-idle')
-
-    if (ownerFacing.length > 0) sendAlert(buildFleetAlert(ownerFacing))
-    if (coordinatorFacing.length > 0) {
-      try {
-        createAgentMessage('system', MAIN_AGENT_ID, buildFleetAlert(coordinatorFacing))
-      } catch (err) {
-        // A coordinator alert that cannot be enqueued must not vanish. Falling back to the owner
-        // is noisier than the old behaviour for one tick, and that is the correct trade: a
-        // silently dropped guard-failure is the exact shape this routing change exists to remove.
-        logger.warn({ err }, 'idle guard: could not tell the coordinator -- falling back to the owner')
-        sendAlert(buildFleetAlert(coordinatorFacing))
-      }
+    // 'pane-unreadable' -- the guard reporting on itself -- so those went to the coordinator.
+    // Measured 2026-09-24: 'still-idle' alone was 45 owner messages in a day, and its remedy (a
+    // card, a workcheck) is the coordinator's too (card 1b997345). The owner is now the fallback:
+    // see routeFleetAlerts for when, and deliverFleetAlerts for the enqueue failure.
+    //
+    // The log line follows DELIVERY, not the rule: 'human alerted' is written only when the owner
+    // was actually sent the row, so counting it measures the owner's phone.
+    const delivered = deliverFleetAlerts(alerts, MAIN_AGENT_ID, coordinatorRunning === true, {
+      toCoordinator: (text) => createAgentMessage('system', MAIN_AGENT_ID, text),
+      toOwner: (text) => sendAlert(text),
+      onCoordinatorFailed: (err) =>
+        logger.warn({ err }, 'idle guard: could not tell the coordinator -- falling back to the owner'),
+    })
+    const stillIdleAgents = (xs: FleetAlert[]) => xs.filter((a) => a.kind === 'still-idle').map((a) => a.agent)
+    const toOwner = stillIdleAgents(delivered.owner)
+    const toCoordinator = stillIdleAgents(delivered.coordinator)
+    if (toOwner.length > 0) {
+      logger.warn(
+        { idleGuard: true, agents: toOwner, coordinatorRunning },
+        'idle guard: still idle AFTER a wake (stage 2) -- human alerted',
+      )
+    }
+    if (toCoordinator.length > 0) {
+      logger.info(
+        { idleGuard: true, agents: toCoordinator },
+        'idle guard: still idle AFTER a wake (stage 2) -- coordinator told',
+      )
     }
   } catch (err) {
     logger.warn({ err }, 'idle guard: tick error')
