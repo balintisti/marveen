@@ -244,7 +244,9 @@ export const NO_IDLE_STATE: IdleAgentState = { idleSinceMs: null, lastAlertAt: n
  *  normalisation would scale those rows by another thousand and park the card
  *  until the year 58000. A fix that breaks a future right answer is not a fix.
  */
-function isDeferred(dueDate: number | null | undefined, now: number | undefined): boolean {
+// Exported for kanban-due-date.test.ts, which runs THIS predicate on the value the
+// write path stored -- a copy of it in the test would agree with itself forever.
+export function isDeferred(dueDate: number | null | undefined, now: number | undefined): boolean {
   if (now === undefined || dueDate == null) return false
   const ms = (t: number) => (t < 1e11 ? t * 1000 : t)
   return ms(dueDate) > ms(now)

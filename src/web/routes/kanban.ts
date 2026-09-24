@@ -21,6 +21,7 @@ import {
 } from '../../db.js'
 import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
 import { kanbanCreateError } from '../kanban-create-validation.js'
+import { normalizeDueDate, DUE_DATE_ZONE, DUE_DATE_ACCEPTED } from '../kanban-due-date.js'
 import { unknownQueryParams, unknownQueryParamError } from '../query-params.js'
 import { kanbanProjectWarning } from '../kanban-project-warning.js'
 import { scanUnansweredCondition, isDuplicateArchive, conditionWarningText } from '../reopen-condition-warning.js'
@@ -149,7 +150,7 @@ const KANBAN_LIST_PARAMS: readonly string[] = ['fields']
 const KANBAN_ARCHIVED_PARAMS: readonly string[] = ['q', 'project', 'label', 'from', 'to', 'limit']
 
 /** Literal sub-paths of /api/kanban that are NOT card ids. */
-export const KANBAN_RESERVED_SEGMENTS = ['archived', 'labels', 'assignees', 'heartbeat-summary'] as const
+export const KANBAN_RESERVED_SEGMENTS = ['archived', 'labels', 'assignees', 'heartbeat-summary', 'due-date-rules'] as const
 
 /** Match `/api/kanban/<id>` -- and NEVER match a literal sub-path.
  *
@@ -434,6 +435,14 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     return true
   }
 
+  // The due-date contract, readable by the edit modal so the zone lives in ONE
+  // place (DUE_DATE_ZONE). The modal fetches it instead of carrying a copy; the
+  // 400 for a bad due_date points here.
+  if (path === '/api/kanban/due-date-rules' && method === 'GET') {
+    json(res, { zone: DUE_DATE_ZONE, accepted: DUE_DATE_ACCEPTED })
+    return true
+  }
+
   if (path === '/api/kanban' && method === 'POST') {
     const body = await readBody(req)
     const data = JSON.parse(body.toString())
@@ -443,6 +452,13 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // indistinguishable from the server crashing. See kanban-create-validation.ts.
     const invalid = kanbanCreateError(data)
     if (invalid) { json(res, { error: invalid }, 400); return true }
+    // due_date is normalised or refused BEFORE the row exists: a garbage value
+    // used to create the card anyway (mandark's probe 2cecb0ac). See kanban-due-date.ts.
+    if ('due_date' in data) {
+      const due = normalizeDueDate(data.due_date)
+      if (!due.ok) { json(res, { error: due.error }, 400); return true }
+      data.due_date = due.value
+    }
     const id = randomUUID().slice(0, 8)
     createKanbanCard({ id, ...data })
     // The card IS created either way -- see kanban-project-warning.ts for why
@@ -656,6 +672,15 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // `actor` nincs benne, tehat sem a valtozas-detektalasba, sem az UPDATE-be
     // nem jut el. Megmerve: `{"actor":"x"}` egyedul -> `unchanged`.
     const actor = typeof data.actor === 'string' && data.actor.trim() !== '' ? data.actor.trim() : undefined
+    // THE LAST GUARD BEFORE THE WRITE, so a refused due_date leaves the WHOLE card
+    // untouched, not just that field: a PUT that changed the priority and failed
+    // on the date must not half-apply. The value a caller sees on success is the
+    // stored one -- the reason this is normalised here and not in the reader.
+    if ('due_date' in data) {
+      const due = normalizeDueDate(data.due_date)
+      if (!due.ok) { json(res, { error: due.error }, 400); return true }
+      data.due_date = due.value
+    }
     const result = updateKanbanCard(id, data, actor)
     if (result.outcome === 'not-found') { json(res, { error: 'Kártya nem található' }, 404); return true }
 

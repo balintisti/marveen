@@ -32,7 +32,7 @@ describe('matchKanbanCardPath', () => {
     // added and not registered here, the id route will swallow it silently -- the same
     // failure, one endpoint later.
     expect([...KANBAN_RESERVED_SEGMENTS].sort()).toEqual(
-      ['archived', 'assignees', 'heartbeat-summary', 'labels'].sort(),
+      ['archived', 'assignees', 'due-date-rules', 'heartbeat-summary', 'labels'].sort(),
     )
   })
 
