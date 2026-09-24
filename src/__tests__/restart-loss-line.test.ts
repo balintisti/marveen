@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildRestartLossLine, RESTART_LOSS_WINDOW_MS } from '../context-guard.js'
+import { buildRestartLossLine, RESTART_LOSS_WINDOW_MS, RESTART_DELIVERED_LIST_MAX } from '../context-guard.js'
 
 // Card 82d9b960. The restart notice used to say "messages may have been lost -- check and
 // resend them", and every recipient ran the same three queries to answer it. marveen measured
@@ -76,5 +76,99 @@ describe('a restart-ertesites hordozza a sajat mereset', () => {
     expect(line).toContain('100')
     expect(line).toContain('pending: 1')
     expect(line).not.toContain('300')
+  })
+
+  // Kartya 18c382df. A restart a `delivered` allapotot viszi el: a szoveg mar BE VOLT injektalva a
+  // panelbe, ami megszunt. Merve 2026-09-24, 411 restart-ertesitesen: 178 mondta, hogy "NINCS mit
+  // ujrakuldeni", es ebbol 75-ben (42%) volt delivered sor az ablakban.
+  describe('delivered: amit a restart TENYLEG elvisz', () => {
+    const dRow = (id: number, from: string, deliveredMs: number, createdMs = deliveredMs) =>
+      ({ id, status: 'delivered', created_at: sec(createdMs), delivered_at: sec(deliveredMs), from_agent: from })
+
+    it('egy ablakon beluli, KULDO altal irt delivered sor MEGAKADALYOZZA a "NINCS mit ujrakuldeni"-t', () => {
+      const line = buildRestartLossLine([dRow(716972, 'didi', RESTART - 10 * 60_000)], RESTART)
+      expect(line).not.toContain('NINCS mit ujrakuldeni')
+      expect(line).toContain('delivered AZ ABLAKBAN: 1')
+      expect(line).toContain('716972<-didi 10 perce')
+      expect(line).toContain('a KULDO dontese')
+    })
+
+    it('az ablakot a KEZBESITES ideje adja, nem a letrehozase', () => {
+      // 40 perce sorba allt, 5 perce injektalodott -> BENNE van
+      const late = buildRestartLossLine(
+        [dRow(700001, 'marveen', RESTART - 5 * 60_000, RESTART - 40 * 60_000)], RESTART)
+      expect(late).toContain('700001')
+      // KONTROLL: 40 perce kezbesult (41 perce jott letre) -> KIVUL van
+      const early = buildRestartLossLine(
+        [dRow(700002, 'marveen', RESTART - 40 * 60_000, RESTART - 41 * 60_000)], RESTART)
+      expect(early).not.toContain('700002')
+      expect(early).toContain('NINCS mit ujrakuldeni')
+    })
+
+    it('a hatar mindket oldala: pontosan az ablak szelen kezbesitett sor meg szamit', () => {
+      expect(buildRestartLossLine([dRow(700042, 'jarvis', RESTART - RESTART_LOSS_WINDOW_MS)], RESTART))
+        .toContain('700042')
+      expect(buildRestartLossLine([dRow(700042, 'jarvis', RESTART - RESTART_LOSS_WINDOW_MS - 1000)], RESTART))
+        .not.toContain('700042')
+    })
+
+    it('a restart UTAN kezbesitett sor az UJ sessione, nem veszteseg', () => {
+      const line = buildRestartLossLine([dRow(700050, 'dexter', RESTART + 60_000)], RESTART)
+      expect(line).not.toContain('700050')
+      expect(line).toContain('NINCS mit ujrakuldeni')
+    })
+
+    it('a rendszer-jelzes (from_agent=system) SZAMOLVA van, de nem listazva, es egyedul nem riaszt', () => {
+      const line = buildRestartLossLine([dRow(700060, 'system', RESTART - 3 * 60_000)], RESTART)
+      expect(line).toContain('NINCS mit ujrakuldeni')
+      expect(line).toContain('delivered az ablakban: 1')
+      expect(line).toContain('rendszer-jelzes')
+      expect(line).not.toContain('700060')
+    })
+
+    it('rendszer-jelzes MELLETT a kuldoi sor igenis riaszt, es a ket szam kulon all', () => {
+      const line = buildRestartLossLine(
+        [dRow(700070, 'system', RESTART - 3 * 60_000), dRow(700071, 'mandark', RESTART - 4 * 60_000)], RESTART)
+      expect(line).toContain('delivered AZ ABLAKBAN: 1')
+      expect(line).toContain('700071<-mandark')
+      expect(line).not.toContain('700070')
+      expect(line).toContain('plusz 1 rendszer-jelzes')
+    })
+
+    it('delivered_at NELKULI delivered sort nem szamol (az injektalas ideje ismeretlen)', () => {
+      const line = buildRestartLossLine(
+        [{ id: 700080, status: 'delivered', created_at: sec(RESTART - 60_000), delivered_at: null, from_agent: 'didi' }],
+        RESTART)
+      expect(line).not.toContain('700080')
+    })
+
+    it('a `done` sor feldolgozott (completed_at), nem kerul bele', () => {
+      const line = buildRestartLossLine(
+        [{ id: 700090, status: 'done', created_at: sec(RESTART - 60_000), delivered_at: sec(RESTART - 60_000), from_agent: 'didi' }],
+        RESTART)
+      expect(line).not.toContain('700090')
+      expect(line).toContain('NINCS mit ujrakuldeni')
+    })
+
+    it('sok sornal a LEGFRISSEBB kezbesiteseket listazza, a tobbit megszamolja', () => {
+      const n = RESTART_DELIVERED_LIST_MAX + 3
+      // szandekosan forditott created_at-sorrend: a lista a KEZBESITES szerint rendez
+      const rows = Array.from({ length: n }, (_, i) =>
+        dRow(710000 + i, 'dexter', RESTART - (i + 1) * 60_000, RESTART - (29 - i) * 60_000))
+      const line = buildRestartLossLine(rows, RESTART)
+      expect(line).toContain(`delivered AZ ABLAKBAN: ${n}`)
+      expect(line).toContain('+3 korabbi')
+      // a legfrissebb (1 perce) benne, a harom legregebbi nem
+      expect(line).toContain('710000<-dexter 1 perce')
+      for (let i = n - 3; i < n; i++) expect(line).not.toContain(`${710000 + i}<-`)
+    })
+
+    it('a failed es a delivered EGYUTT: mindketto kulon tetelkent all', () => {
+      const line = buildRestartLossLine(
+        [row(720001, 'failed', RESTART - 60_000), dRow(720002, 'computress', RESTART - 2 * 60_000)], RESTART)
+      expect(line).toContain('failed AZ ABLAKBAN: 1')
+      expect(line).toContain('delivered AZ ABLAKBAN: 1')
+      expect(line).toContain('720002<-computress')
+    })
   })
 })

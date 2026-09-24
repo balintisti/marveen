@@ -2646,14 +2646,20 @@ export function getPendingMessages(toAgent?: string): AgentMessage[] {
 
 /** The rows a restart could plausibly have cost, for the agent that was restarted.
  *
- *  Deliberately returns BOTH statuses and does NOT filter by time: the window arithmetic
+ *  Deliberately returns ALL THREE statuses and does NOT filter by time: the window arithmetic
  *  lives in `buildRestartLossLine`, where it is testable on fixtures and its reasoning is
  *  visible. A `sinceSec` bound in this SQL would put the one rule that matters (card
  *  82d9b960: filter on the WINDOW, not the status) inside a string nobody tests. */
-export function getRestartLossCandidates(toAgent: string): AgentMessage[] {
+export function getRestartLossCandidates(
+  toAgent: string,
+): Pick<AgentMessage, 'id' | 'status' | 'created_at' | 'delivered_at' | 'from_agent'>[] {
+  // `delivered` joined the set for card 18c382df: it is the state a restart actually takes.
+  // Narrow columns because that status is the table's whole history for the agent (17 928
+  // rows fleet-wide on 2026-09-24), and the message bodies are not needed to count them.
   return db.prepare(
-    "SELECT * FROM agent_messages WHERE to_agent = ? AND status IN ('pending','failed') ORDER BY created_at ASC",
-  ).all(toAgent) as AgentMessage[]
+    "SELECT id, status, created_at, delivered_at, from_agent FROM agent_messages"
+    + " WHERE to_agent = ? AND status IN ('pending','failed','delivered') ORDER BY created_at ASC",
+  ).all(toAgent) as Pick<AgentMessage, 'id' | 'status' | 'created_at' | 'delivered_at' | 'from_agent'>[]
 }
 
 // Status-guarded (pending only): the federation removal path bulk-fails
