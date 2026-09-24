@@ -52,6 +52,27 @@ F="${T}/empty"; fixture "${F}"; rm "${F}/agents/a1/CLAUDE.md" "${F}/.env"
 rc=$(run "${F}")
 [ "${rc}" = "3" ] && ok "agents but nothing to archive at all -> exit 3, not a quiet 0" || bad "early path rc=${rc}"
 
+# 4. PER AGENT (didi): two agent dirs, one collected -> exit 3, and the empty one is NAMED
+F="${T}/half"; fixture "${F}"; mkdir -p "${F}/agents/a2"; echo x > "${F}/agents/a2/notes.txt"
+rc=$(run "${F}")
+[ "${rc}" = "3" ] && ok "one of two agents with no files -> exit 3 (the total 1 used to pass)" || bad "half rc=${rc}: $(cat "${F}/out")"
+grep -q "no files collected for agent(s): a2" "${F}/out" && ok "the empty agent is named" || bad "empty agent not named: $(cat "${F}/out")"
+grep -q "agents with NO files: a2" "${F}/out" && ok "the summary line names it too" || bad "summary: $(cat "${F}/out")"
+# 4b. CONTROL: both agents contribute -> 0, and a prefix-sharing name does not cover for another
+F="${T}/both"; fixture "${F}"; mkdir -p "${F}/agents/a10"; echo p > "${F}/agents/a10/CLAUDE.md"
+rc=$(run "${F}")
+[ "${rc}" = "0" ] && ok "every agent contributes -> exit 0" || bad "both rc=${rc}: $(cat "${F}/out")"
+F="${T}/prefix"; fixture "${F}"; rm "${F}/agents/a1/CLAUDE.md"; mkdir -p "${F}/agents/a10"; echo p > "${F}/agents/a10/CLAUDE.md"
+rc=$(run "${F}")
+[ "${rc}" = "3" ] && grep -q "agent(s): a1 " "${F}/out" && ok "a10's files do not count for a1" || bad "prefix rc=${rc}: $(cat "${F}/out")"
+
+# 5. agent-config.json is collected (ef6a93dc): an agent whose ONLY file is its config still counts
+F="${T}/cfg"; fixture "${F}"; rm "${F}/agents/a1/CLAUDE.md"; echo '{"model":"x"}' > "${F}/agents/a1/agent-config.json"
+rc=$(run "${F}")
+arc="$(ls "${F}"/backups/claudeclaw-*.tar.gz | head -1)"
+[ "${rc}" = "0" ] && ok "agent-config.json alone counts for its agent" || bad "cfg rc=${rc}: $(cat "${F}/out")"
+tar -tzf "${arc}" | grep -q '^repo/agents/a1/agent-config.json$' && ok "agent-config.json is IN the archive" || bad "not archived: $(tar -tzf "${arc}")"
+
 # 3b. CONTROL: no agents dir at all (a fresh machine) is not that failure
 F="${T}/fresh"; fixture "${F}"; rm -rf "${F}/agents"
 rc=$(run "${F}")

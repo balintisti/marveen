@@ -10,7 +10,7 @@
 #     .env                     (project root secrets)
 #     scheduled-tasks.json     (legacy, if present)
 #     assets/meetings/**       (meeting transcripts/memos)
-#     agents/*/CLAUDE.md, SOUL.md, .mcp.json
+#     agents/*/CLAUDE.md, SOUL.md, .mcp.json, agent-config.json
 #     agents/*/.claude/channels/{telegram,slack,discord}/.env, access.json
 #
 #   home/   -> extract under $HOME
@@ -93,7 +93,8 @@ if [[ -d agents ]]; then
     [[ -d "${a}" ]] || continue
     find -H "${a}" -maxdepth 4 -type f \
       \( -path "${a}/CLAUDE.md" -o -path "${a}/SOUL.md" -o -path "${a}/.mcp.json" \
-         -o -path "${a}/.claude/channels/*/.env" -o -path "${a}/.claude/channels/*/access.json" \) \
+         -o -path "${a}/.claude/channels/*/.env" -o -path "${a}/.claude/channels/*/access.json" \
+         -o -path "${a}/agent-config.json" \) \
       -print >> "${REPOLIST}"
   done
 fi
@@ -133,11 +134,23 @@ fi
 # directories exist and none of their files were collected, the archive is STILL written (the
 # database and tokens in it are worth keeping) but the run exits 3, so the scheduler's health
 # verdict turns red instead of green.
+#
+# PER AGENT, NOT IN TOTAL (didi, 2026-09-24): with two agent dirs and one of them collected, the
+# total was 1 and the run was green -- the same silent gap, one agent at a time. So every agent
+# dir must contribute at least one file, and the ones that did not are NAMED. Measured the same
+# night on the live tree: all 7 agents contribute 3-5 files and all 7 have agent-config.json.
 AGENT_DIRS=0
 AGENT_FILES=0
+EMPTY_AGENTS=""
 if [[ -d agents ]]; then
-  for a in agents/*; do [[ -d "${a}" ]] && AGENT_DIRS=$((AGENT_DIRS + 1)); done
-  AGENT_FILES=$(grep -c '^agents/' "${REPOLIST}" || true)
+  for a in agents/*; do
+    [[ -d "${a}" ]] || continue
+    AGENT_DIRS=$((AGENT_DIRS + 1))
+    # index()==1, not a regex: an agent name is data, and `agents/a1/` must not match `agents/a10/`
+    n=$(awk -v p="${a}/" 'index($0, p) == 1' "${REPOLIST}" | wc -l | tr -d ' ')
+    AGENT_FILES=$((AGENT_FILES + n))
+    [[ "${n}" -eq 0 ]] && EMPTY_AGENTS="${EMPTY_AGENTS} ${a#agents/}"
+  done
 fi
 
 if [[ ! -s "${REPOLIST}" && ! -s "${HOMELIST}" ]]; then
@@ -187,7 +200,7 @@ stage_group "${HOMELIST}" "${HOME}" home
 # stay clean (no leading "./").
 ( cd "${STAGE}" && tar -czf "${ARCHIVE}" MANIFEST.txt \
     $( [[ -d repo ]] && echo repo ) $( [[ -d home ]] && echo home ) )
-echo "backup: wrote ${ARCHIVE} ($(wc -c < "${ARCHIVE}" | awk '{print $1}') bytes; agent dirs ${AGENT_DIRS}, agent files ${AGENT_FILES})"
+echo "backup: wrote ${ARCHIVE} ($(wc -c < "${ARCHIVE}" | awk '{print $1}') bytes; agent dirs ${AGENT_DIRS}, agent files ${AGENT_FILES}${EMPTY_AGENTS:+; agents with NO files:${EMPTY_AGENTS}})"
 
 # The archive contains sensitive tokens (dashboard bearer, channel bot tokens,
 # project .env secrets). Do not auto-sync ${BACKUP_DIR} to iCloud, Dropbox,
@@ -202,7 +215,7 @@ ls -1t "${BACKUP_DIR}"/claudeclaw-*.tar.gz 2>/dev/null | tail -n +$((KEEP + 1)) 
   echo "backup: pruned $(basename "${f}")"
 done
 
-if [[ "${AGENT_DIRS}" -gt 0 && "${AGENT_FILES}" -eq 0 ]]; then
-  echo "backup: FAILED CONDITION -- ${AGENT_DIRS} agent dir(s) exist and 0 agent files were collected; the archive was written but does NOT cover the agents." >&2
+if [[ -n "${EMPTY_AGENTS}" ]]; then
+  echo "backup: FAILED CONDITION -- no files collected for agent(s):${EMPTY_AGENTS} (${AGENT_FILES} agent files from ${AGENT_DIRS} dirs in total); the archive was written but does NOT cover them." >&2
   exit 3
 fi
