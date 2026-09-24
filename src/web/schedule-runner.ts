@@ -436,6 +436,91 @@ function persistScheduleLastOutcome(): void {
 }
 
 /**
+ * A pre-check HIT: it returned content for the agent to act on. SKIP is not a
+ * hit, and neither is an empty or failed-open run (no prefix) -- those carry
+ * no evidence that anyone is waiting.
+ */
+export function isPreCheckHit(pc: { skip: boolean; prefix?: string }): boolean {
+  return !pc.skip && typeof pc.prefix === 'string' && pc.prefix.trim().length > 0
+}
+
+/**
+ * May a busy tick be DROPPED instead of queued? Only for opt-in short-cadence
+ * tasks, never for forceSend, and never when the tick carries a pre-check hit.
+ *
+ * WHY THE HIT CLAUSE (card 22d7f41e, measured 2026-09-24): the skipIfBusy
+ * premise is "the next tick is already on the way". A CONSUMING pre-check
+ * breaks it -- ledger-live-drain marks a message surfaced when it prints it,
+ * so the next tick's dedup hands back SKIP and the message never comes up
+ * again. Live instance: the drain surfaced message 3368 at 08:28:10 and the
+ * same second's tick was dropped as busy.
+ */
+export function shouldDropBusyTick(
+  task: Pick<ScheduledTask, 'skipIfBusy' | 'forceSend' | 'schedule'>,
+  nowMs: number,
+  preCheckHit: boolean,
+): boolean {
+  if (preCheckHit) return false
+  // The pre-existing condition, moved here VERBATIM from the busy branch.
+  return !!(task.skipIfBusy && !task.forceSend && skipIfBusyIsSafe(task.schedule, nowMs))
+}
+
+/**
+ * THE RETRY MUST CARRY THE PREFIX (card 22d7f41e). The retry loop used to
+ * re-run the pre-check "because state may have changed" -- true for a
+ * read-only check, destructive for a consuming one: the dedup answers SKIP,
+ * and exempting the first tick would only move the drop one step later.
+ *
+ * Keyed `task@agent`, persisted beside the other runner state so a dashboard
+ * restart between the hit and the delivery cannot lose it -- the stored text IS
+ * the rescued message. Invariant: an entry exists only while its pending retry
+ * row does, or until the hit is fired this same tick.
+ */
+const SCHEDULE_RETRY_PREFIX_PATH = join(PROJECT_ROOT, 'store', 'schedule-retry-prefix.json')
+const retryPrefix: Map<string, string> = new Map()
+
+/**
+ * Pure: fold a new hit into what is already waiting. A second question that
+ * arrives while the first is still queued must not overwrite it -- both stay,
+ * oldest first. An identical re-surface is a no-op.
+ */
+export function mergeRetryPrefix(existing: string | undefined, incoming: string): string {
+  if (existing === undefined || existing === '') return incoming
+  if (existing === incoming || existing.split('\n\n').includes(incoming)) return existing
+  return `${existing}\n\n${incoming}`
+}
+
+function loadRetryPrefixes(): void {
+  try {
+    const raw = JSON.parse(readFileSync(SCHEDULE_RETRY_PREFIX_PATH, 'utf-8'))
+    if (raw && typeof raw === 'object') {
+      for (const [key, v] of Object.entries(raw as Record<string, unknown>)) {
+        if (typeof v === 'string' && v.trim()) retryPrefix.set(key, v)
+      }
+    }
+  } catch { /* no file yet / unreadable -- start empty */ }
+}
+
+function persistRetryPrefixes(): void {
+  try {
+    atomicWriteFileSync(SCHEDULE_RETRY_PREFIX_PATH, JSON.stringify(Object.fromEntries(retryPrefix), null, 2))
+  } catch (err) {
+    logger.warn({ err }, 'schedule-runner: failed to persist retry-prefix map')
+  }
+}
+
+function rememberRetryPrefix(key: string, prefix: string): void {
+  const merged = mergeRetryPrefix(retryPrefix.get(key), prefix)
+  if (retryPrefix.get(key) === merged) return
+  retryPrefix.set(key, merged)
+  persistRetryPrefixes()
+}
+
+function clearRetryPrefix(key: string): void {
+  if (retryPrefix.delete(key)) persistRetryPrefixes()
+}
+
+/**
  * Record what a tick DID. `fired` never overwrites nothing and a skip never
  * overwrites a firing -- the two live in separate fields on purpose, so that a
  * task deferred every tick for a week still reports when it last really ran.
@@ -653,8 +738,15 @@ export function resolveBoundChatId(agentName: string): string | null {
 // all; heartbeats are background checks nobody is waiting for; everything else
 // (task, dream-engine, unknown future types) reports to the owner and is never
 // held back.
-export function quotaWorkClass(task: Pick<ScheduledTask, 'type' | 'quotaExempt'>): QuotaWorkClass {
+export function quotaWorkClass(
+  task: Pick<ScheduledTask, 'type' | 'quotaExempt'>,
+  preCheckHit = false,
+): QuotaWorkClass {
   if (task.type === 'command') return 'free'
+  // A pre-check HIT is owner-facing by definition (card 22d7f41e): the gate
+  // holds back background work that has nothing to do, and a hit has already
+  // proved both halves false -- there IS work, and it is answering someone.
+  if (task.type === 'heartbeat' && preCheckHit) return 'owner-facing'
   // An owner-granted exemption only ever moves a task OUT of 'background'.
   // It is checked after the 'free' branch on purpose: a shell command costs
   // no tokens, so there is nothing to exempt, and letting the flag reclassify
@@ -1311,6 +1403,7 @@ export function startScheduleRunner(): NodeJS.Timeout {
   // window does not re-fire an already-run task.
   loadScheduleLastRun()
   loadScheduleLastOutcome()
+  loadRetryPrefixes()
 
   // Surface the effective cron timezone at startup. A silent UTC fallback (no
   // SCHEDULER_TZ/TZ in the env) shifts every fixed-time cron off its intended
@@ -1456,6 +1549,13 @@ export function startScheduleRunner(): NodeJS.Timeout {
     // the UI if a retry has become obsolete.
     const pendingRows = listPendingTaskRetries()
     const pendingKeys = new Set<string>()
+    // A stored hit outlives its pending row only when the row went away for a
+    // reason that wins over delivery (operator cancel, deleted task). Drop
+    // those here, so a later, unrelated retry can never deliver a stale question.
+    {
+      const live = new Set(pendingRows.map(r => `${r.task_name}@${r.agent_name}`))
+      for (const k of [...retryPrefix.keys()]) if (!live.has(k)) clearRetryPrefix(k)
+    }
     for (const row of pendingRows) {
       // Locate the task definition. If it was deleted meanwhile, drop the
       // retry silently -- nothing to fire.
@@ -1478,8 +1578,13 @@ export function startScheduleRunner(): NodeJS.Timeout {
       pendingKeys.add(key)
 
       // Re-run pre-check on retry: state may have changed since the task
-      // was first scheduled (e.g. kanban cards already processed).
-      const retryPc = runPreCheck(taskDef)
+      // was first scheduled (e.g. kanban cards already processed). UNLESS a hit
+      // is already waiting for this key: re-running a CONSUMING pre-check would
+      // answer SKIP from its own dedup and swallow the very message the retry
+      // exists to deliver (card 22d7f41e).
+      const storedHit = retryPrefix.get(key)
+      const retryPc = storedHit !== undefined ? { skip: false, prefix: storedHit } : runPreCheck(taskDef)
+      if (storedHit === undefined && isPreCheckHit(retryPc)) rememberRetryPrefix(key, retryPc.prefix as string)
       if (retryPc.skip) {
         deletePendingTaskRetry(row.task_name, row.agent_name)
         // Nothing to do NOW either: catching this up later would be wrong.
@@ -1516,6 +1621,7 @@ export function startScheduleRunner(): NodeJS.Timeout {
       const result = await attemptFireTask(taskDef, row.agent_name, now, retryPc.prefix, heldMs, heldReason)
       if (result === 'fired') {
         deletePendingTaskRetry(row.task_name, row.agent_name)
+        clearRetryPrefix(key)
         continue
       }
       // 'missing' used to DELETE the retry row here -- a silent abandonment
@@ -1629,6 +1735,33 @@ export function startScheduleRunner(): NodeJS.Timeout {
         targetAgents = [task.agent || MAIN_AGENT_ID]
       }
 
+      // PRE-CHECK FIRST, THEN THE QUOTA GATE (card 22d7f41e, reversing the
+      // 2026-08-17 order that kept a deferred task from spawning its script).
+      // The script it saved was a pre-check: a model-free check whose whole job
+      // is to spend a turn only when there is something to do. Holding THAT back
+      // saved nothing and cost the rescue -- ledger-live-drain sat under the
+      // gate from 2026-09-12 to 09-24 without once looking. Now: SKIP costs nothing and is
+      // never gated; a HIT is owner-facing (quotaWorkClass); only a task that
+      // has no pre-check, or whose pre-check proved nothing, meets the gate as
+      // background. An empty tick under pressure therefore records
+      // `precheck-cron` (not caught up) instead of `quota` (caught up) --
+      // correct, since there was nothing to catch up.
+      //
+      // Run pre-check once per task (not per agent) since it queries shared
+      // state (DB, filesystem) that does not vary by target agent.
+      const cronPc = runPreCheck(task)
+      if (cronPc.skip) {
+        scheduleLastRun.set(task.name, now)
+        persistScheduleLastRun()
+        recordScheduleOutcome(task.name, now, 'skipped', 'precheck-cron')
+        for (const agentName of targetAgents) {
+          // Nothing to do: catching this up later would be wrong.
+          appendTaskRun(task.name, agentName, 'skipped', 'precheck-cron')
+        }
+        continue
+      }
+      const preCheckHit = isPreCheckHit(cronPc)
+
       // Quota gate. Every heartbeat across the fleet spends from the same
       // subscription pool as the owner's own turns, so a routine background
       // check must not burn the tail of a window minutes before real work
@@ -1640,7 +1773,7 @@ export function startScheduleRunner(): NodeJS.Timeout {
       const quota = decideQuotaAction({
         snapshot: quotaSnapshot,
         nowMs: now,
-        workClass: quotaWorkClass(task),
+        workClass: quotaWorkClass(task, preCheckHit),
       })
       if (quota.action === 'defer') {
         logger.info(
@@ -1658,27 +1791,23 @@ export function startScheduleRunner(): NodeJS.Timeout {
         continue
       }
 
-      // Run pre-check once per task (not per agent) since it queries shared
-      // state (DB, filesystem) that does not vary by target agent.
-      const cronPc = runPreCheck(task)
-      if (cronPc.skip) {
-        scheduleLastRun.set(task.name, now)
-        persistScheduleLastRun()
-        recordScheduleOutcome(task.name, now, 'skipped', 'precheck-cron')
-        for (const agentName of targetAgents) {
-          // Nothing to do: catching this up later would be wrong.
-          appendTaskRun(task.name, agentName, 'skipped', 'precheck-cron')
-        }
-        continue
-      }
-
       for (const agentName of targetAgents) {
         const key = `${task.name}@${agentName}`
+        // A hit is remembered BEFORE anything can drop it: the pre-check above
+        // has already consumed it, so from here on this map is its only copy.
+        if (preCheckHit) rememberRetryPrefix(key, cronPc.prefix as string)
         // If already queued for retry from an earlier tick, leave it to
-        // the retry handler -- don't re-queue or double-fire.
-        if (pendingKeys.has(key)) continue
+        // the retry handler -- don't re-queue or double-fire. A NEW hit still
+        // needs a row to ride on: the retry loop may have delivered and deleted
+        // the old one earlier in this same tick.
+        if (pendingKeys.has(key)) {
+          if (preCheckHit) insertPendingTaskRetryIfNew(task.name, agentName, now, 'precheck-hit')
+          continue
+        }
         const result = await attemptFireTask(task, agentName, now, cronPc.prefix, lateCatchUpMs)
-        if (result === 'starting') {
+        if (result === 'fired') {
+          clearRetryPrefix(key)
+        } else if (result === 'starting') {
           // Agent was auto-started this tick. ALWAYS enqueue the retry that
           // delivers the prompt once the session is ready -- skipIfBusy must
           // NOT drop it (that flag is for genuinely-busy short-cadence tasks;
@@ -1691,7 +1820,7 @@ export function startScheduleRunner(): NodeJS.Timeout {
           // state is bypassed. Dropping that on skipIfBusy would turn the
           // deferral into a silent loss, so forceSend is exempt from the
           // skip and always queues the retry.
-          if (task.skipIfBusy && !task.forceSend && skipIfBusyIsSafe(task.schedule, now)) {
+          if (shouldDropBusyTick(task, now, preCheckHit)) {
             // Opt-in skip for short-cadence tasks (e.g. 30-min heartbeats):
             // a single missed tick is harmless because the next one is
             // already on the way, and queueing them produces spurious
@@ -1723,6 +1852,11 @@ export function startScheduleRunner(): NodeJS.Timeout {
           // actual blocker instead of a generic "busy".
           insertPendingTaskRetryIfNew(task.name, agentName, now, 'first-run')
         }
+        // 'missing' and 'error' queue nothing on their own. For a hit that is
+        // a silent loss -- the only copy is in retryPrefix, and the next tick's
+        // prune would drop it for want of a row. No-op when a branch above
+        // already inserted one.
+        if (preCheckHit && result !== 'fired') insertPendingTaskRetryIfNew(task.name, agentName, now, result)
       }
     }
 

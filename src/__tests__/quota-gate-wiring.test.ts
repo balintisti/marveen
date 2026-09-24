@@ -81,7 +81,14 @@ describe('schedule-runner wiring', () => {
   it('records a held-back occurrence so the catch-up window cannot re-fire it', () => {
     // Mirrors the pre-check skip: mark the tick as run, log a task-run row.
     const gate = RUNNER_SRC.slice(RUNNER_SRC.indexOf("if (quota.action === 'defer')"))
-    const block = gate.slice(0, gate.indexOf('const cronPc'))
+    // Bounded by the per-agent loop that FOLLOWS the gate. It used to be bounded
+    // by `const cronPc`, which card 22d7f41e moved in front of the gate -- that
+    // bound would now be missing, and a missing indexOf (-1) makes the slice run
+    // to the end of the file, where every string below appears somewhere. The
+    // bound is asserted so the block can never silently become the whole file.
+    const end = gate.indexOf('for (const agentName of targetAgents) {')
+    expect(end).toBeGreaterThan(0)
+    const block = gate.slice(0, end)
     expect(block).toContain('scheduleLastRun.set(task.name, now)')
     expect(block).toContain('persistScheduleLastRun()')
     // 6c7f152 (card 34b2f8a3) gave this call site an explicit reason, so the
@@ -90,9 +97,15 @@ describe('schedule-runner wiring', () => {
     expect(block).toContain("appendTaskRun(task.name, agentName, 'skipped', 'quota')")
   })
 
-  it('gates before the pre-check, so a deferred task never spawns its script', () => {
-    expect(RUNNER_SRC.indexOf("if (quota.action === 'defer')")).toBeLessThan(
-      RUNNER_SRC.indexOf('const cronPc = runPreCheck(task)'),
+  it('runs the pre-check BEFORE the gate, because the script it spares is free (card 22d7f41e)', () => {
+    // This pinned the OPPOSITE order from 2026-08-17: "a deferred task never
+    // spawns its script". The script is a pre-check -- model-free by design --
+    // so sparing it saved nothing, and ledger-live-drain sat under the gate from
+    // 2026-09-12 to 09-24 without once looking for an unanswered message. The
+    // gate now sees the pre-check's verdict: SKIP never reaches it, a hit is
+    // owner-facing.
+    expect(RUNNER_SRC.indexOf('const cronPc = runPreCheck(task)')).toBeLessThan(
+      RUNNER_SRC.indexOf("if (quota.action === 'defer')"),
     )
   })
 })
