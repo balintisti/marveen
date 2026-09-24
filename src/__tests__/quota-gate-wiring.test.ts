@@ -104,9 +104,13 @@ describe('schedule-runner wiring', () => {
     // 2026-09-12 to 09-24 without once looking for an unanswered message. The
     // gate now sees the pre-check's verdict: SKIP never reaches it, a hit is
     // owner-facing.
-    expect(RUNNER_SRC.indexOf('const cronPc = runPreCheck(task)')).toBeLessThan(
-      RUNNER_SRC.indexOf("if (quota.action === 'defer')"),
-    )
+    // Both positions FOUND first: -1 is less than anything, so a vanished
+    // pre-check call would otherwise pass this order check vacuously.
+    const pc = RUNNER_SRC.indexOf('const cronPc = runPreCheck(task)')
+    const gate = RUNNER_SRC.indexOf("if (quota.action === 'defer')")
+    expect(pc).toBeGreaterThan(0)
+    expect(gate).toBeGreaterThan(0)
+    expect(pc).toBeLessThan(gate)
   })
 })
 

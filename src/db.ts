@@ -1068,6 +1068,36 @@ function migrateTaskRunsFromJson(): void {
   } catch { /* corrupt file, skip */ }
 }
 
+/**
+ * Has this ledger inbound been answered since it arrived? READ-ONLY.
+ *
+ * Card 22d7f41e: a pre-check hit carried across a retry must be re-checked at
+ * delivery time, or a question the agent already answered gets delivered again
+ * as "still unanswered" -- and the ledger-live-drain prompt then tells the agent
+ * to reply NOW, i.e. a duplicate reply in the owner's channel.
+ *
+ * "Answered" is EXACTLY the drain's own definition (ledger_lib.open_question_with_age):
+ * any outbound by the same agent after the inbound, ties broken by row id. Not
+ * restricted to the chat -- using a stricter rule here would let the two disagree
+ * about the same message.
+ *
+ * Returns null when the inbound is not in the ledger: the caller cannot tell, and
+ * must not treat "unknown" as "answered" -- that would silently drop the message.
+ */
+export function isLedgerInboundAnswered(agentId: string, chatId: string, messageId: string): boolean | null {
+  const inbound = db
+    .prepare("SELECT id, created_at FROM conversation_log WHERE agent_id = ? AND chat_id = ? AND direction = 'in' AND message_id = ?")
+    .get(agentId, chatId, messageId) as { id: number; created_at: number } | undefined
+  if (!inbound) return null
+  const later = db
+    .prepare(
+      "SELECT 1 FROM conversation_log WHERE agent_id = ? AND direction = 'out'" +
+      ' AND (created_at > ? OR (created_at = ? AND id > ?)) LIMIT 1',
+    )
+    .get(agentId, inbound.created_at, inbound.created_at, inbound.id)
+  return later !== undefined
+}
+
 export function getDb(): Database.Database {
   return db
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -6,7 +6,10 @@ import {
   mergeRetryPrefix,
   quotaWorkClass,
   shouldDropBusyTick,
+  stillOpenHits,
+  decideRetryPreCheck,
 } from '../web/schedule-runner.js'
+import { getDb, initDatabase, isLedgerInboundAnswered } from '../db.js'
 import { decideQuotaAction, type QuotaSnapshot } from '../quota-gate.js'
 
 // Card 22d7f41e. A pre-check HIT is owner-facing work, and it could still be
@@ -115,12 +118,159 @@ describe('mergeRetryPrefix', () => {
     expect(mergeRetryPrefix('A', 'A')).toBe('A')
     expect(mergeRetryPrefix('A\n\nB', 'A')).toBe('A\n\nB')
   })
+
+  it('a question whose TEXT has blank lines is still recognised as held', () => {
+    // A blank-line split would cut this one question into pieces and append it again.
+    const q = 'OPEN_QUESTION chat_id=100000001 message_id=7\nfirst paragraph\n\nsecond paragraph'
+    expect(mergeRetryPrefix(q, q)).toBe(q)
+    expect(mergeRetryPrefix(`${q}\n\nOPEN_QUESTION chat_id=100000001 message_id=8\nx`, q)).toContain(q)
+    expect(mergeRetryPrefix(`${q}\n\nOPEN_QUESTION chat_id=100000001 message_id=8\nx`, q).split(q).length).toBe(2)
+  })
+})
+
+// THE STALE-DELIVERY HALF. Carrying a hit across a delay fixes the lost message
+// and opens the opposite hole: measured 2026-09-24, 19 of 20 historical busy-hits
+// were answered through the normal channel within 1-9 minutes, and the drain's
+// prompt calls its block "still unanswered" and orders an immediate reply. So a
+// carried hit is re-checked, read-only, at delivery time.
+describe('stillOpenHits', () => {
+  const q = (id: number, text = 'q') => `OPEN_QUESTION chat_id=100000001 message_id=${id}\n${text}`
+
+  it('drops an answered question and keeps an open one', () => {
+    const answered = (_c: string, m: string) => m === '1'
+    expect(stillOpenHits(`${q(1)}\n\n${q(2)}`, answered)).toBe(q(2))
+  })
+
+  it('returns empty when everything was answered -- nothing to deliver', () => {
+    expect(stillOpenHits(`${q(1)}\n\n${q(2)}`, () => true)).toBe('')
+  })
+
+  it('NEGATIVE: an UNKNOWN answer (not in the ledger) is kept, never dropped', () => {
+    // Treating "could not tell" as "answered" would silently drop the message --
+    // the very defect this card closes, one layer down.
+    expect(stillOpenHits(q(1), () => null)).toBe(q(1))
+  })
+
+  it('a multi-paragraph question stays ONE entry', () => {
+    const one = q(5, 'para one\n\npara two')
+    const seen: string[] = []
+    expect(stillOpenHits(one, (_c, m) => { seen.push(m); return false })).toBe(one)
+    expect(seen).toEqual(['5'])
+  })
+
+  it('an ANSWERED multi-paragraph question disappears ENTIRELY -- no orphan paragraph', () => {
+    // With a blank-line boundary the answered question's header is dropped but
+    // its second paragraph has no header, is kept as "not a ledger question",
+    // and goes out as if it were open. Only the answered case shows it: an open
+    // question re-joins to the identical string either way.
+    expect(stillOpenHits(q(5, 'para one\n\npara two'), () => true)).toBe('')
+    expect(stillOpenHits(`${q(5, 'para one\n\npara two')}\n\n${q(6)}`, (_c, m) => m === '5')).toBe(q(6))
+  })
+
+  it('a prefix that is not a ledger question passes through untouched', () => {
+    expect(stillOpenHits('3 actionable cards found', () => true)).toBe('3 actionable cards found')
+  })
+})
+
+describe('decideRetryPreCheck -- the retry carries the hit, and never re-runs a consuming pre-check', () => {
+  const q = (id: number) => `OPEN_QUESTION chat_id=100000001 message_id=${id}\nq`
+  const counted = (result: { skip: boolean; prefix?: string }) => {
+    let calls = 0
+    return { run: () => { calls++; return result }, calls: () => calls }
+  }
+
+  it('a stored, still-open hit is delivered WITHOUT re-running the pre-check', () => {
+    // The whole card in one assertion: re-running would hit the drain's dedup and SKIP.
+    const fresh = counted({ skip: true })
+    const d = decideRetryPreCheck(q(1), () => false, fresh.run)
+    expect(fresh.calls()).toBe(0)
+    expect(d.pc).toEqual({ skip: false, prefix: q(1) })
+    expect(d.stored).toBeUndefined()
+  })
+
+  it('a stored hit that was answered meanwhile is NOT delivered, and the store is cleared', () => {
+    const fresh = counted({ skip: true })
+    const d = decideRetryPreCheck(q(1), () => true, fresh.run)
+    expect(fresh.calls()).toBe(0)
+    expect(d.pc.skip).toBe(true)
+    expect(d.stored).toBeNull()
+  })
+
+  it('of two stored, only the still-open one goes out, and the store shrinks to it', () => {
+    const d = decideRetryPreCheck(`${q(1)}\n\n${q(2)}`, (_c, m) => m === '1', counted({ skip: true }).run)
+    expect(d.pc).toEqual({ skip: false, prefix: q(2) })
+    expect(d.stored).toBe(q(2))
+  })
+
+  it('CONTROL: nothing stored -> the old behaviour, the pre-check IS re-run', () => {
+    const fresh = counted({ skip: true })
+    const d = decideRetryPreCheck(undefined, () => false, fresh.run)
+    expect(fresh.calls()).toBe(1)
+    expect(d.pc.skip).toBe(true)
+    expect(d.stored).toBeUndefined()
+  })
+
+  it('nothing stored, and the fresh run is a hit -> it becomes the stored one', () => {
+    const d = decideRetryPreCheck(undefined, () => false, counted({ skip: false, prefix: q(9) }).run)
+    expect(d.pc).toEqual({ skip: false, prefix: q(9) })
+    expect(d.stored).toBe(q(9))
+  })
+})
+
+describe('isLedgerInboundAnswered (the drain\'s own definition, read-only)', () => {
+  beforeAll(() => { initDatabase(':memory:') })
+  const put = (agent: string, dir: 'in' | 'out', mid: string, createdAt: number) =>
+    getDb()
+      .prepare('INSERT INTO conversation_log (agent_id, chat_id, direction, message_id, text, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(agent, '100000001', dir, mid, 'x', createdAt)
+
+  it('open when nothing went out after it', () => {
+    put('a1', 'in', 'm1', 100)
+    expect(isLedgerInboundAnswered('a1', '100000001', 'm1')).toBe(false)
+  })
+
+  it('answered by any later outbound of the same agent', () => {
+    put('a2', 'in', 'm2', 100)
+    put('a2', 'out', 'o2', 200)
+    expect(isLedgerInboundAnswered('a2', '100000001', 'm2')).toBe(true)
+  })
+
+  it('ORDER matters: an outbound BEFORE the inbound does not answer it', () => {
+    put('a3', 'out', 'o3', 50)
+    put('a3', 'in', 'm3', 100)
+    expect(isLedgerInboundAnswered('a3', '100000001', 'm3')).toBe(false)
+  })
+
+  it('a same-second outbound answers it only if it is the LATER row', () => {
+    put('a4', 'in', 'm4', 100)
+    put('a4', 'out', 'o4', 100)
+    expect(isLedgerInboundAnswered('a4', '100000001', 'm4')).toBe(true)
+  })
+
+  it('CONTROL: another agent\'s outbound does not answer it', () => {
+    put('a5', 'in', 'm5', 100)
+    put('someone-else', 'out', 'o5', 200)
+    expect(isLedgerInboundAnswered('a5', '100000001', 'm5')).toBe(false)
+  })
+
+  it('NEGATIVE: an inbound that is not in the ledger is null, not false', () => {
+    expect(isLedgerInboundAnswered('a6', '100000001', 'nope')).toBeNull()
+  })
 })
 
 // Wiring. ORDER, not presence: every name below already exists somewhere in the
 // file, so a presence check would pass on the old code too. Each assertion is
 // scoped to one loop and compares positions inside it.
 describe('schedule-runner wiring (order inside each loop)', () => {
+  // Every position is FOUND before it is compared. A missing anchor is -1, and
+  // -1 is less than any position, so an unguarded "a before b" passes vacuously
+  // exactly when a is gone -- measured on this file: replacing the retry's
+  // stored-hit condition with `if (false)` left every order check green.
+  const at = (hay: string, needle: string): number => {
+    const i = hay.indexOf(needle)
+    expect(i, `anchor not found: ${needle}`).toBeGreaterThanOrEqual(0)
+    return i
+  }
   const cronStart = SRC.indexOf('for (const task of tasks)')
   const retryStart = SRC.indexOf('for (const row of pendingRows)')
   const cron = SRC.slice(cronStart)
@@ -133,16 +283,14 @@ describe('schedule-runner wiring (order inside each loop)', () => {
   })
 
   it('cron: the pre-check runs BEFORE the quota gate, and the hit reaches the gate', () => {
-    expect(cron.indexOf('const cronPc = runPreCheck(task)')).toBeLessThan(cron.indexOf("if (quota.action === 'defer')"))
-    expect(cron.indexOf('const preCheckHit = isPreCheckHit(cronPc)')).toBeLessThan(cron.indexOf('workClass: quotaWorkClass(task, preCheckHit)'))
-    expect(cron).toContain('workClass: quotaWorkClass(task, preCheckHit)')
+    expect(at(cron, 'const cronPc = runPreCheck(task)')).toBeLessThan(at(cron, "if (quota.action === 'defer')"))
+    expect(at(cron, 'const preCheckHit = isPreCheckHit(cronPc)')).toBeLessThan(at(cron, 'workClass: quotaWorkClass(task, preCheckHit)'))
   })
 
   it('cron: the hit is remembered BEFORE the pending-key shortcut and before firing', () => {
-    const remember = cron.indexOf('if (preCheckHit) rememberRetryPrefix(key, cronPc.prefix as string)')
-    expect(remember).toBeGreaterThan(0)
-    expect(remember).toBeLessThan(cron.indexOf('if (pendingKeys.has(key))'))
-    expect(remember).toBeLessThan(cron.indexOf('attemptFireTask(task,'))
+    const remember = at(cron, 'if (preCheckHit) rememberRetryPrefix(key, cronPc.prefix as string)')
+    expect(remember).toBeLessThan(at(cron, 'if (pendingKeys.has(key))'))
+    expect(remember).toBeLessThan(at(cron, 'attemptFireTask(task,'))
   })
 
   it('cron: the busy drop goes through shouldDropBusyTick with the hit', () => {
@@ -154,17 +302,29 @@ describe('schedule-runner wiring (order inside each loop)', () => {
     expect(cron).toContain("if (preCheckHit && result !== 'fired') insertPendingTaskRetryIfNew(task.name, agentName, now, result)")
   })
 
-  it('retry: a stored hit is used INSTEAD of re-running the pre-check', () => {
-    const stored = retry.indexOf('const storedHit = retryPrefix.get(key)')
-    expect(stored).toBeGreaterThan(0)
-    expect(stored).toBeLessThan(retry.indexOf('runPreCheck(taskDef)'))
-    expect(retry).toContain('storedHit !== undefined ? { skip: false, prefix: storedHit } : runPreCheck(taskDef)')
+  it('retry: the loop decides through decideRetryPreCheck, fed the STORED hit, before firing', () => {
+    // The decision itself is covered behaviourally above; this pins that the loop
+    // actually hands it the stored hit and the ledger check, and obeys it.
+    const call = at(retry, 'const decided = decideRetryPreCheck(')
+    const block = retry.slice(call, at(retry, 'const retryPc = decided.pc'))
+    expect(block).toContain('retryPrefix.get(key),')
+    expect(block).toContain('isLedgerInboundAnswered(row.agent_name, chatId, messageId)')
+    expect(block).toContain('() => runPreCheck(taskDef),')
+    expect(block).toContain('if (decided.stored === null) clearRetryPrefix(key)')
+    expect(block).toContain('else if (decided.stored !== undefined) replaceRetryPrefix(key, decided.stored)')
+    expect(call).toBeLessThan(at(retry, 'attemptFireTask(taskDef,'))
+  })
+
+  it('retry: the decided prefix actually reaches the injection', () => {
+    // Computing the right prefix and then firing without it would pass every
+    // check above. The cron loop has this pin already; the retry loop had none.
+    expect(retry).toContain('attemptFireTask(taskDef, row.agent_name, now, retryPc.prefix, heldMs, heldReason)')
   })
 
   it('both loops clear the stored hit when it is delivered', () => {
-    const retryFired = retry.slice(retry.indexOf("if (result === 'fired')"))
-    expect(retryFired.slice(0, retryFired.indexOf('continue'))).toContain('clearRetryPrefix(key)')
-    const cronFired = cron.slice(cron.indexOf("if (result === 'fired')"))
-    expect(cronFired.slice(0, cronFired.indexOf("else if (result === 'starting')"))).toContain('clearRetryPrefix(key)')
+    const retryFired = retry.slice(at(retry, "if (result === 'fired')"))
+    expect(retryFired.slice(0, at(retryFired, 'continue'))).toContain('clearRetryPrefix(key)')
+    const cronFired = cron.slice(at(cron, "if (result === 'fired')"))
+    expect(cronFired.slice(0, at(cronFired, "else if (result === 'starting')"))).toContain('clearRetryPrefix(key)')
   })
 })

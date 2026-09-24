@@ -21,6 +21,7 @@ import {
   markPendingTaskRetryAlert,
   clearPendingTaskRetryAlert,
   markScheduledTaskKanbanWaiting,
+  isLedgerInboundAnswered,
 } from '../db.js'
 import { toPendingRetryView, classifyTelegramSendError, type PendingRetryView } from '../pending-retries.js'
 import {
@@ -482,12 +483,48 @@ const retryPrefix: Map<string, string> = new Map()
 /**
  * Pure: fold a new hit into what is already waiting. A second question that
  * arrives while the first is still queued must not overwrite it -- both stay,
- * oldest first. An identical re-surface is a no-op.
+ * oldest first. Something already held is a no-op.
+ *
+ * "Already held" is CONTAINMENT, not a split on blank lines: the owner's message
+ * can contain blank lines itself, so a blank-line split would cut one question
+ * into pieces and then fail to recognise it.
  */
 export function mergeRetryPrefix(existing: string | undefined, incoming: string): string {
   if (existing === undefined || existing === '') return incoming
-  if (existing === incoming || existing.split('\n\n').includes(incoming)) return existing
+  if (existing.includes(incoming)) return existing
   return `${existing}\n\n${incoming}`
+}
+
+/** A carried ledger question starts with this header; the boundary between entries. */
+const OPEN_QUESTION_BOUNDARY = /\n\n(?=OPEN_QUESTION chat_id=)/
+const OPEN_QUESTION_HEADER = /^OPEN_QUESTION chat_id=(\S+) message_id=(\S+)/
+
+/**
+ * Pure: keep only the carried questions that are STILL OPEN at delivery time
+ * (card 22d7f41e). Returns '' when nothing is left to deliver.
+ *
+ * A carried hit is the cure for a consumed-then-dropped message, but carried
+ * across a delay it can go stale: measured on 2026-09-24, 19 of 20 historical
+ * busy-hits were answered through the normal channel within 1-9 minutes. The
+ * drain's prompt calls its block "still unanswered" and orders an immediate
+ * reply, so delivering a stale one is a duplicate reply to the owner.
+ *
+ *   an entry that is not a ledger question -> kept as-is (nothing to check)
+ *   isAnswered === true                    -> dropped
+ *   isAnswered === null (not in ledger)    -> KEPT: a failed check must never
+ *                                             silently drop a message
+ */
+export function stillOpenHits(
+  prefix: string,
+  isAnswered: (chatId: string, messageId: string) => boolean | null,
+): string {
+  return prefix
+    .split(OPEN_QUESTION_BOUNDARY)
+    .filter((entry) => {
+      const m = OPEN_QUESTION_HEADER.exec(entry)
+      return !m || isAnswered(m[1], m[2]) !== true
+    })
+    .join('\n\n')
 }
 
 function loadRetryPrefixes(): void {
@@ -516,8 +553,39 @@ function rememberRetryPrefix(key: string, prefix: string): void {
   persistRetryPrefixes()
 }
 
+/**
+ * Pure: the retry loop's pre-check decision (card 22d7f41e).
+ *
+ *   a hit is STORED -> it is the only copy of a consumed message: re-check it
+ *                      read-only and deliver what is still open. The consuming
+ *                      pre-check is NOT re-run -- its dedup would answer SKIP.
+ *                      Nothing still open -> skip, and clear the store.
+ *   nothing stored  -> the old behaviour: re-run the pre-check (state may have
+ *                      changed), and if THAT is a hit, it becomes the stored one.
+ *
+ * `stored`: undefined = leave the store alone, null = clear it, string = store it.
+ */
+export function decideRetryPreCheck(
+  storedHit: string | undefined,
+  isAnswered: (chatId: string, messageId: string) => boolean | null,
+  runFresh: () => { skip: boolean; prefix?: string },
+): { pc: { skip: boolean; prefix?: string }; stored: string | null | undefined } {
+  if (storedHit !== undefined) {
+    const open = stillOpenHits(storedHit, isAnswered)
+    if (open === '') return { pc: { skip: true }, stored: null }
+    return { pc: { skip: false, prefix: open }, stored: open === storedHit ? undefined : open }
+  }
+  const pc = runFresh()
+  return { pc, stored: isPreCheckHit(pc) ? (pc.prefix as string) : undefined }
+}
+
 function clearRetryPrefix(key: string): void {
   if (retryPrefix.delete(key)) persistRetryPrefixes()
+}
+
+function replaceRetryPrefix(key: string, prefix: string): void {
+  retryPrefix.set(key, prefix)
+  persistRetryPrefixes()
 }
 
 /**
@@ -1582,9 +1650,18 @@ export function startScheduleRunner(): NodeJS.Timeout {
       // is already waiting for this key: re-running a CONSUMING pre-check would
       // answer SKIP from its own dedup and swallow the very message the retry
       // exists to deliver (card 22d7f41e).
-      const storedHit = retryPrefix.get(key)
-      const retryPc = storedHit !== undefined ? { skip: false, prefix: storedHit } : runPreCheck(taskDef)
-      if (storedHit === undefined && isPreCheckHit(retryPc)) rememberRetryPrefix(key, retryPc.prefix as string)
+      // A CARRIED hit is re-checked, read-only, before it is delivered: what the
+      // agent answered in the meantime drops out, and if nothing is left the
+      // retry closes through the ordinary pre-check skip below -- no turn, and
+      // no second reply to a question that already has one.
+      const decided = decideRetryPreCheck(
+        retryPrefix.get(key),
+        (chatId, messageId) => isLedgerInboundAnswered(row.agent_name, chatId, messageId),
+        () => runPreCheck(taskDef),
+      )
+      if (decided.stored === null) clearRetryPrefix(key)
+      else if (decided.stored !== undefined) replaceRetryPrefix(key, decided.stored)
+      const retryPc = decided.pc
       if (retryPc.skip) {
         deletePendingTaskRetry(row.task_name, row.agent_name)
         // Nothing to do NOW either: catching this up later would be wrong.
