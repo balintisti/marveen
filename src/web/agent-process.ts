@@ -989,7 +989,9 @@ function startRemoteAgentProcess(
   }
 
   const model = readAgentModel(name)
-  const cmd = buildRemoteLaunchCommand({ workdir, model, continue: hasPriorSession })
+  // 49d1d6b6: the remote launch carries the same git identity as the local one (jarvis found it
+  // missing). No remote agent is configured today (0 of 7 agent-config.json have remoteHost).
+  const cmd = buildRemoteLaunchCommand({ workdir, model, continue: hasPriorSession, envPrefix: gitIdentityEnv(name) })
 
   try {
     runTmux(host, ['new-session', '-d', '-s', session, cmd], { timeout: 10000 })

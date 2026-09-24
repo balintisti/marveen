@@ -59,6 +59,23 @@ describe('gitIdentityEnv', () => {
   })
 })
 
+describe('the REMOTE launch carries it too (jarvis, intersection check)', () => {
+  it('buildRemoteLaunchCommand puts the prefix after PATH and before the cd; without it, unchanged', async () => {
+    const { buildRemoteLaunchCommand } = await import('../web/ssh-tmux.js')
+    const withId = buildRemoteLaunchCommand({ workdir: '/p', model: 'm', continue: false, envPrefix: gitIdentityEnv('dexter') })
+    const at = withId.indexOf("GIT_AUTHOR_NAME='dexter'")
+    expect(at).toBeGreaterThan(withId.indexOf('export PATH='))
+    expect(at).toBeLessThan(withId.indexOf("cd '/p'"))
+    const without = buildRemoteLaunchCommand({ workdir: '/p', model: 'm', continue: false })
+    expect(without).not.toContain('GIT_AUTHOR')
+  })
+
+  it('startRemoteAgentProcess passes gitIdentityEnv(name) to it', () => {
+    const src = readFileSync(join(__dirname, '..', 'web', 'agent-process.ts'), 'utf-8')
+    expect(src).toMatch(/buildRemoteLaunchCommand\(\{[^}]*envPrefix: gitIdentityEnv\(name\)/)
+  })
+})
+
 describe('wiring: the launch command exports it before the agent starts', () => {
   it('startAgentProcess puts gitIdentityEnv(name) into the command, before the cd and the claude binary', () => {
     const src = readFileSync(join(__dirname, '..', 'web', 'agent-process.ts'), 'utf-8')
