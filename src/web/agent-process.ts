@@ -28,6 +28,7 @@ import {
   firstRunAcceptKeys,
   stuckInputSignature,
   mcpTrustAcceptKeys,
+  detectsPermissionPrompt,
   type FirstRunGateKind,
 } from '../pane-state.js'
 import { paneRemedy } from './parked-pane-remedy.js'
@@ -2898,6 +2899,38 @@ export async function dismissModelConsentDialogIfPresent(session: string, host: 
   } catch (err) {
     logger.warn({ err, session }, 'Failed to probe/answer model usage-credit consent dialog')
   }
+}
+
+/**
+ * Is a tool-PERMISSION prompt on screen, so that a bare Enter must not be sent? (card 2a8cb07f)
+ *
+ * On a permission prompt `❯ 1. Yes` is preselected: a bare Enter does not cancel, it GRANTS.
+ * dismissModelConsentDialogIfPresent guards both recovery Enters against the model-consent
+ * dialog -- the one we had already burned ourselves on (FABLEFALL1) -- and nothing guarded them
+ * against the permission prompt, although the detector for it existed and was used only to label
+ * a trace after an Escape. Measured unreachable today (the parked/paste signatures are null on the
+ * real permission fixture, and the signature gate sits above both Enters), so this is the class
+ * guard the consent fix should have been, not a response to an incident.
+ *
+ * Returns true when the Enter must be withheld. A capture that fails also withholds it: the
+ * recovery escalates next tick within its budget, which costs one tick; a wrong Enter on a
+ * permission prompt grants a tool call nobody approved.
+ */
+export function permissionPromptBlocksBareEnter(
+  session: string,
+  host: string | null = null,
+  capture: (host: string | null, args: string[]) => string = captureTmux,
+): boolean {
+  let pane: string
+  try {
+    pane = capture(host, ['capture-pane', '-t', session, '-p'])
+  } catch (err) {
+    logger.warn({ err, session }, 'Stuck input -- pane capture failed before a bare Enter; withholding it this tick')
+    return true
+  }
+  if (!detectsPermissionPrompt(pane)) return false
+  logger.warn({ session }, 'Stuck input -- a tool PERMISSION prompt is on screen; NOT sending Enter (it would grant the request)')
+  return true
 }
 
 // Walk a session out of the Claude Code FIRST-RUN dialog chain (folder-trust,

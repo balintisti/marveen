@@ -22,6 +22,7 @@ import {
   clearInputBuffer,
   dismissResumeSummaryModalIfPresent,
   dismissModelConsentDialogIfPresent,
+  permissionPromptBlocksBareEnter,
   stampFableOverageConsentSharedRoots,
   isAgentRunning,
   sendPromptToSession,
@@ -626,6 +627,8 @@ async function performStuckInputAction(
           // first (no-op when absent); an Enter on the then-idle prompt is
           // harmless.
           await dismissModelConsentDialogIfPresent(session)
+          // 2a8cb07f: the class guard -- on a PERMISSION prompt a bare Enter grants it.
+          if (permissionPromptBlocksBareEnter(session)) break
           execFileSync(tmuxBin(), ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
         }
         submitted = true
@@ -705,6 +708,8 @@ async function performStuckInputAction(
         // Enter must never reach the model consent dialog (its default SWITCHES
         // the model). No-op when the dialog is absent.
         await dismissModelConsentDialogIfPresent(session)
+        // 2a8cb07f: the class guard -- on a PERMISSION prompt a bare Enter grants it.
+        if (permissionPromptBlocksBareEnter(session)) break
         execFileSync(tmuxBin(), ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
         submitted = true
         break
