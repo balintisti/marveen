@@ -92,7 +92,20 @@ export function readActiveModelFromProjectDir(workingDir: string, sinceUnixSec?:
   return value
 }
 
-const ctxCache = new Map<string, { value: number | null; expiresAt: number }>()
+const ctxCache = new Map<string, { value: number | null; mtime: number | null; expiresAt: number }>()
+
+/**
+ * A DEAD READING (card 6f362eb3): the newest transcript was last written BEFORE the agent's current
+ * session started, so nothing in it is this session's. 5c094718 was one CAUSE of that (a symlinked
+ * working dir keyed to a directory that exists and holds yesterday's files); this is the guard for
+ * the CLASS -- any cause, including a future key change, and the ordinary one: a freshly restarted
+ * `--continue` session that has not written its first turn yet, whose file still ends in the
+ * previous session's usage. `sinceUnixSec` is the session start in epoch SECONDS, the unit
+ * readActiveModelFromProjectDir already takes; absent means "not known", and then nothing changes.
+ */
+export function predatesSession(mtimeMs: number | null, sinceUnixSec: number | undefined): boolean {
+  return sinceUnixSec !== undefined && mtimeMs !== null && mtimeMs < sinceUnixSec * 1000
+}
 
 // Current context size of the live session, in tokens. Claude Code records a
 // `usage` object on each assistant turn; the context that gets re-read every
@@ -102,12 +115,15 @@ const ctxCache = new Map<string, { value: number | null; expiresAt: number }>()
 // null when there is no transcript / no usage yet (fresh session). This is what
 // the dashboard surfaces so the operator can see a session growing heavy and
 // decide to restart it.
-export function readContextTokensFromProjectDir(workingDir: string, configDir?: string): number | null {
+export function readContextTokensFromProjectDir(workingDir: string, configDir?: string, sinceUnixSec?: number): number | null {
   const now = Date.now()
   const cacheKey = `${workingDir}:${configDir ?? ''}`
   const cached = ctxCache.get(cacheKey)
-  if (cached && cached.expiresAt > now) return cached.value
+  // The cache holds the reading AND the file's mtime; the dead-reading check runs after it, so two
+  // callers with different session starts can share one read without sharing one verdict.
+  if (cached && cached.expiresAt > now) return predatesSession(cached.mtime, sinceUnixSec) ? null : cached.value
   let value: number | null = null
+  let mtime: number | null = null
   try {
     const dir = projectsDirFor(workingDir, configDir)
     if (existsSync(dir)) {
@@ -116,6 +132,7 @@ export function readContextTokensFromProjectDir(workingDir: string, configDir?: 
         .map(f => ({ f, mtime: statSync(join(dir, f)).mtimeMs }))
         .sort((a, b) => b.mtime - a.mtime)
       if (jsonls.length > 0) {
+        mtime = jsonls[0].mtime
         const content = readFileSync(join(dir, jsonls[0].f), 'utf-8')
         const lines = content.split('\n')
         for (let i = lines.length - 1; i >= 0; i--) {
@@ -135,8 +152,8 @@ export function readContextTokensFromProjectDir(workingDir: string, configDir?: 
       }
     }
   } catch { /* fall through */ }
-  ctxCache.set(cacheKey, { value, expiresAt: now + TTL_MS })
-  return value
+  ctxCache.set(cacheKey, { value, mtime, expiresAt: now + TTL_MS })
+  return predatesSession(mtime, sinceUnixSec) ? null : value
 }
 
 /**
@@ -160,7 +177,7 @@ export function readContextTokensFromProjectDir(workingDir: string, configDir?: 
  * the newest file; this exposes it rather than recomputing the selection
  * differently, so the two always describe the SAME transcript.
  */
-export function readTranscriptMtimeFromProjectDir(workingDir: string, configDir?: string): number | null {
+export function readTranscriptMtimeFromProjectDir(workingDir: string, configDir?: string, sinceUnixSec?: number): number | null {
   try {
     const dir = projectsDirFor(workingDir, configDir)
     if (!existsSync(dir)) return null
@@ -170,6 +187,6 @@ export function readTranscriptMtimeFromProjectDir(workingDir: string, configDir?
       const m = statSync(join(dir, f)).mtimeMs
       if (newest === null || m > newest) newest = m
     }
-    return newest
+    return predatesSession(newest, sinceUnixSec) ? null : newest
   } catch { return null }
 }

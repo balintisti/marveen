@@ -902,7 +902,9 @@ export function sessionExistsOnHost(host: string | null, session: string): boole
 export function getAgentRunningSince(name: string): number | null {
   try {
     const host = readAgentRemoteHost(name)
-    const out = captureTmux(host, ['display-message', '-p', '-t', agentSessionName(name), '#{session_created}']).trim()
+    // sessionNameForAgent, not agentSessionName: the coordinator runs in `<id>-channels`, and the
+    // hand-copied name returned null for him (card 6f362eb3; the resolver exists for this, 228c9252).
+    const out = captureTmux(host, ['display-message', '-p', '-t', sessionNameForAgent(name), '#{session_created}']).trim()
     const ts = parseInt(out, 10)
     return Number.isFinite(ts) ? ts : null
   } catch {

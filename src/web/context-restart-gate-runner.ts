@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { logger } from '../logger.js'
 import { MAIN_AGENT_ID, PROJECT_ROOT } from '../config.js'
 import { listAgentNames, readAgentClaudeConfigDir } from './agent-config.js'
-import { capturePane } from './agent-process.js'
+import { capturePane, getAgentRunningSince } from './agent-process.js'
 import { sessionNameForAgent } from './session-names.js'
 import { detectPaneState } from '../pane-state.js'
 import { detectsUsageLimit } from '../pane-state.js'
@@ -397,7 +397,10 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
 
   const hardGuardPhase = getHardGuardPhase(name)
 
-  const contextTokens = readContextTokensFromProjectDir(workingDir, configDirFor(name))
+  // A transcript older than the current session is not this session's (card 6f362eb3). Refused as
+  // null, which this gate already treats as a fail-closed BLOCK -- a dead reading must not /clear a
+  // session that has not written a turn yet.
+  const contextTokens = readContextTokensFromProjectDir(workingDir, configDirFor(name), getAgentRunningSince(name) ?? undefined)
 
   const dispatchedStats = (() => {
     try { return getDispatchedPendingStats(name, nowMs, cfg.staleCutoffMs) }
