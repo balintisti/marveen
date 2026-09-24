@@ -448,6 +448,55 @@ export function ensureMemoryIndexWriteGate(name: string): boolean {
   return true
 }
 
+// THE OUTGOING-COPY GATE REACHES THE SUB-AGENTS (card 2cbe5eb3, upstream a64ded30's idea).
+// Measured 2026-09-24 on parsed JSON, every settings layer an agent session loads (user,
+// config dir, old cwd, current cwd + .local, plugins): 0 of 7 sub-agents had the gate, while
+// the same parser found email-send-gate on all 7. Only the coordinator's TRACKED
+// .claude/settings.json carried it, so every gate built on it (em dash, accents, homoglyph,
+// the foreign-letter warning) reached one agent's Telegram text and nobody else's.
+//
+// FAIL-OPEN ON A MISSING SCRIPT, like the memory gate and for the owner's sake: Telegram is
+// the owner's only supervision channel, so a missing script must not mute an agent. The gate's
+// own Telegram path is fail-open on an internal error for the same reason; a FOUND problem
+// still exits 2 and blocks. The main agent is skipped: it gets the gate from the tracked
+// project settings, and its agentSettingsPath is the user-global ~/.claude/settings.json.
+export const TELEGRAM_COPY_GATE_MATCHER =
+  'mcp__plugin_telegram_telegram__reply|mcp__plugin_telegram_telegram__edit_message'
+const _copyGateScript = join(PROJECT_ROOT, 'scripts', 'hooks', 'outgoing-copy-gate.py')
+export const COPY_GATE_HOOK_CMD = `bash -c '[ -f ${_copyGateScript} ] && exec python3 ${_copyGateScript}; exit 0'`
+
+export function ensureTelegramCopyGate(name: string): boolean {
+  if (name === MAIN_AGENT_ID) return false
+  const settingsPath = agentSettingsPath(name)
+  let settings: Record<string, unknown> = {}
+  if (existsSync(settingsPath)) {
+    const parsed = readAgentSettingsChecked(settingsPath, name, 'ensureTelegramCopyGate')
+    if (parsed === null) return false
+    settings = parsed
+  }
+  const hooks = (settings.hooks && typeof settings.hooks === 'object')
+    ? settings.hooks as Record<string, unknown>
+    : {}
+  const ptu = Array.isArray(hooks.PreToolUse) ? hooks.PreToolUse as unknown[] : []
+  const mine = (e: unknown) => JSON.stringify(e).includes('outgoing-copy-gate.py')
+  // Idempotent on SCRIPT + MATCHER + COMMAND: a moved PROJECT_ROOT or a narrower matcher left
+  // by an older writer must be rewritten, not kept (a reply-only matcher would leave edits
+  // unaudited, which is how the coordinator's own gap was found).
+  const wired = ptu.filter(mine)
+  if (wired.length === 1
+      && (wired[0] as { matcher?: unknown }).matcher === TELEGRAM_COPY_GATE_MATCHER
+      && hookCommandWired(JSON.stringify(wired), COPY_GATE_HOOK_CMD)) return false
+  if (isUnsafeHookCommand(COPY_GATE_HOOK_CMD)) return false
+  hooks.PreToolUse = [
+    ...ptu.filter((e) => !mine(e)),
+    { matcher: TELEGRAM_COPY_GATE_MATCHER, hooks: [{ type: 'command', command: COPY_GATE_HOOK_CMD, timeout: 15 }] },
+  ]
+  settings.hooks = hooks
+  mkdirSync(join(agentDir(name), '.claude'), { recursive: true })
+  atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2))
+  return true
+}
+
 export function writeAgentSettingsFromProfile(name: string, profile: ProfileTemplate): void {
   const agentRoot = agentDir(name)
   const settingsDir = join(agentRoot, '.claude')
@@ -1007,6 +1056,7 @@ export function scaffoldAgentDir(name: string) {
   ensureEgressGate(name)
   ensureGovernanceGateCommands(name)
   ensureMemoryIndexWriteGate(name)
+  ensureTelegramCopyGate(name)
 }
 
 // HTML comment markers that delimit the auto-generated fleet roster block.
