@@ -345,7 +345,12 @@ class TestCollectClaudeCacheFallback(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             latest_path = os.path.join(tmp, "usage-latest.json")
             fresh_ts = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
-            cached_windows = {"five_hour": {"used_percent": 11.0, "resets_at": 1234.0}}
+            # A FRESH cache must carry a window that has not reset yet. This fixture used
+            # resets_at=1234.0 (1970), which _mark_expired_windows (f1778340, card 1fe8e8c5)
+            # rightly flags as expired -- so the equality below failed from 2026-09-19 on, and
+            # the red sat unnoticed among the "pre-existing" failures of the shell-test runner.
+            future_reset = (datetime.now(timezone.utc) + timedelta(hours=2)).timestamp()
+            cached_windows = {"five_hour": {"used_percent": 11.0, "resets_at": future_reset}}
             self._write_latest(latest_path, "authoritative", cached_windows, fresh_ts)
 
             http_err = urllib.error.HTTPError("url", 429, "Too Many Requests", {}, None)
