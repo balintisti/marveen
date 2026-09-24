@@ -81,6 +81,12 @@ CLAUDE_WINDOW_SECONDS = {
 
 # Canonical display names used in ALERT lines, keyed by the
 # "<provider>_<window_key>" scope key used for de-dup state too.
+# Sub-window -> the window whose quota it also consumes (see compute_alerts, UNDERUSE).
+UNDERUSE_PARENT = {
+    "claude_seven_day_opus": "claude_seven_day",
+    "claude_seven_day_sonnet": "claude_seven_day",
+}
+
 ALERT_WINDOW_NAMES = {
     "claude_five_hour": "5-hour limit",
     "claude_seven_day": "weekly limit",
@@ -1000,8 +1006,35 @@ def compute_alerts(snapshot, state, now_utc=None):
     now_ts = now_utc.timestamp()
     alerts = []
 
+    # UNDERUSE ON THE BINDING CONSTRAINT (card 1fe8e8c5 / a3d743f3, 2026-09-24). A sub-window's
+    # spare quota is only spendable if its SIBLINGS have spare too: Fable/Opus usage also
+    # counts against the total weekly window. Measured on the 52 UNDERUSE lines of
+    # store/usage-collect.log: 30 (58%) said "plenty of unused quota, start a big project" about
+    # the Fable/Opus sub-window at 0-6% while the TOTAL weekly stood at 85-100%. Replayed over
+    # 5431 snapshots (2026-08-17..09-24): the underuse condition held 3780 times under the old
+    # rule, 841 under this one; 2939 sub-window cases are dropped because the total was not
+    # under-paced, and all 495 cases of the total window's OWN underuse are kept (the control).
+    # THE BINDING IS ONE-WAY, and the first version of this rule got that wrong: a sub-window
+    # is PART of the total, so the total can bind the sub-window, never the reverse (an
+    # exhausted Fable/Opus window leaves the total free for other models). So a sub-window's
+    # UNDERUSE needs its PARENT (UNDERUSE_PARENT) to be under-paced too; the total is never
+    # vetoed by its parts; a parent whose pace cannot be judged yet does not veto.
+    paces = {}
     for scope_key, window, window_len_sec in _iter_pace_windows(snapshot):
-        pace = compute_pace(window.get("used_percent"), window.get("resets_at"), window_len_sec, now_utc)
+        paces[scope_key] = (window, window_len_sec,
+                            compute_pace(window.get("used_percent"), window.get("resets_at"), window_len_sec, now_utc))
+
+    def _parent_binds(scope_key):
+        parent = UNDERUSE_PARENT.get(scope_key)
+        if parent is None or parent not in paces:
+            return False
+        parent_pace = paces[parent][2]
+        if parent_pace is None or parent_pace["pace_ratio"] is None \
+                or parent_pace["elapsed_fraction"] < CONFIG["pace_min_elapsed_fraction"]:
+            return False
+        return parent_pace["pace_ratio"] > CONFIG["pace_under_ratio"]
+
+    for scope_key, (window, window_len_sec, pace) in paces.items():
         if pace is None:
             continue
 
@@ -1045,7 +1078,7 @@ def compute_alerts(snapshot, state, now_utc=None):
 
         # --- UNDERUSE: plenty of unused quota, worth spending (weekly-class windows only) ---
         if underuse_eligible:
-            cond_under = pace_ratio <= CONFIG["pace_under_ratio"]
+            cond_under = pace_ratio <= CONFIG["pace_under_ratio"] and not _parent_binds(scope_key)
             if _should_fire(state, f"{scope_key}_under", cond_under, "throttle", now_ts,
                              refire_seconds=CONFIG["pace_under_refire_hours"] * 3600):
                 alerts.append(

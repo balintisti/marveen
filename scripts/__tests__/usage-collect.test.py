@@ -660,6 +660,52 @@ class TestComputeAlerts(unittest.TestCase):
         alerts = uc.compute_alerts(snap, {}, now_utc=self.NOW)
         self.assertEqual(alerts, [])
 
+    # --- UNDERUSE on the BINDING constraint (card 1fe8e8c5 / a3d743f3) ---------
+    # 30 of the 52 logged UNDERUSE lines were about the Fable/Opus sub-window while the
+    # TOTAL weekly was at 85-100%: "start a big project" into an exhausted week.
+
+    def _under(self, alerts, name):
+        return [a for a in alerts if "UNDERUSE" in a and name in a]
+
+    def test_sub_window_underuse_silent_when_total_is_binding(self):
+        r = self._resets_at(self.WEEK, 0.57)
+        snap = self._snapshot(claude_windows={
+            "seven_day": {"used_percent": 90, "resets_at": r},
+            "seven_day_opus": {"used_percent": 2, "resets_at": r},
+        })
+        alerts = uc.compute_alerts(snap, {}, now_utc=self.NOW)
+        self.assertEqual(self._under(alerts, "Fable weekly limit"), [], alerts)
+
+    def test_sub_window_underuse_fires_when_total_is_spare_too(self):
+        r = self._resets_at(self.WEEK, 0.57)
+        snap = self._snapshot(claude_windows={
+            "seven_day": {"used_percent": 10, "resets_at": r},
+            "seven_day_opus": {"used_percent": 2, "resets_at": r},
+        })
+        alerts = uc.compute_alerts(snap, {}, now_utc=self.NOW)
+        self.assertEqual(len(self._under(alerts, "Fable weekly limit")), 1, alerts)
+        self.assertEqual(len([a for a in alerts if "UNDERUSE: weekly limit" in a]), 1, alerts)
+
+    def test_total_underuse_is_never_vetoed_by_an_exhausted_sub_window(self):
+        # One-way binding: an exhausted Fable/Opus window leaves the total free for other
+        # models. The first version of the rule let any sibling veto, and would have
+        # silenced exactly this real signal.
+        r = self._resets_at(self.WEEK, 0.57)
+        snap = self._snapshot(claude_windows={
+            "seven_day": {"used_percent": 10, "resets_at": r},
+            "seven_day_opus": {"used_percent": 95, "resets_at": r},
+        })
+        alerts = uc.compute_alerts(snap, {}, now_utc=self.NOW)
+        self.assertEqual(len([a for a in alerts if "UNDERUSE: weekly limit" in a]), 1, alerts)
+
+    def test_a_parent_too_early_to_judge_does_not_veto(self):
+        snap = self._snapshot(claude_windows={
+            "seven_day": {"used_percent": 30, "resets_at": self._resets_at(self.WEEK, 0.05)},
+            "seven_day_opus": {"used_percent": 2, "resets_at": self._resets_at(self.WEEK, 0.57)},
+        })
+        alerts = uc.compute_alerts(snap, {}, now_utc=self.NOW)
+        self.assertEqual(len(self._under(alerts, "Fable weekly limit")), 1, alerts)
+
     def test_underuse_flows_through_codex_window_too(self):
         snap = self._snapshot(
             claude_windows={},
