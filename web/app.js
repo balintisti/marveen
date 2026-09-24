@@ -1945,6 +1945,49 @@ function getDragAfterElement(col, y) {
   return closest
 }
 
+// === Due date: the day in the SERVER's zone (cards a8dff303, ad4ee45a) ===
+// The zone is NOT written here. The server owns it (DUE_DATE_ZONE in
+// src/web/kanban-due-date.ts) and says it at /api/kanban/due-date-rules, so
+// changing it there changes both what is stored and what this field shows.
+// The old code filled the field with the UTC day and saved UTC midnight, which
+// moved a Budapest-midnight floor 22 hours earlier on every save.
+let dueDateZonePromise = null
+function dueDateZone() {
+  if (!dueDateZonePromise) {
+    dueDateZonePromise = fetch('/api/kanban/due-date-rules')
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => d.zone)
+      .catch((err) => {
+        dueDateZonePromise = null // retry on the next open instead of caching a failure
+        console.warn('due-date-rules unavailable, showing the browser-local day', err)
+        return undefined // Intl with timeZone undefined = the browser's own zone
+      })
+  }
+  return dueDateZonePromise
+}
+async function dueDayForField(seconds) {
+  // Two legacy rows still hold TEXT ('YYYY-MM-DD', written before a8dff303).
+  // `new Date(text * 1000)` is an Invalid Date and Intl.format THROWS on it,
+  // which would stop the edit modal from opening at all -- so a day string is
+  // shown as the day it is, and anything else uninterpretable as empty.
+  if (typeof seconds === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(seconds)) return seconds
+  const n = Number(seconds)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  seconds = n
+  const zone = await dueDateZone()
+  // en-CA formats as YYYY-MM-DD, which is what <input type="date"> takes.
+  return new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' })
+    .format(new Date(seconds * 1000))
+}
+
+// The save's due_date decision, kept pure so kanban-due-modal.test.ts runs it.
+// Unchanged -> nothing (the stored floor is left exactly as it is); changed ->
+// the day string for the server to interpret, or null when the field was cleared.
+function dueDatePatch(value, initial) {
+  if (value === (initial || '')) return {}
+  return { due_date: value || null }
+}
+
 // === New card modal ===
 function openNewCardModal(status) {
   document.getElementById('cardModalTitle').textContent = t('kanban.modal.title_new')
@@ -1953,6 +1996,7 @@ function openNewCardModal(status) {
   document.getElementById('cardPriority').value = 'normal'
   document.getElementById('cardProject').value = ''
   document.getElementById('cardDue').value = ''
+  document.getElementById('cardDue').dataset.initial = ''
   document.getElementById('cardEditId').value = ''
   document.getElementById('cardEditStatus').value = status || 'planned'
   populateAssigneeSelect('cardAssignee')
@@ -1984,10 +2028,13 @@ document.getElementById('saveCardBtn').addEventListener('click', async () => {
     assignee: document.getElementById('cardAssignee').value || null,
     priority: document.getElementById('cardPriority').value,
     project: document.getElementById('cardProject').value.trim() || null,
-    due_date: document.getElementById('cardDue').value
-      ? Math.floor(new Date(document.getElementById('cardDue').value).getTime() / 1000)
-      : null,
   }
+  // due_date ONLY IF THE FIELD CHANGED (card ad4ee45a). An untouched field is
+  // not re-sent, so saving a priority change can never move a floor -- whatever
+  // the zones do. A changed field goes as the day itself ('YYYY-MM-DD'); the
+  // server turns it into that day's midnight in its zone, or refuses it with 400.
+  const dueEl = document.getElementById('cardDue')
+  Object.assign(data, dueDatePatch(dueEl.value, dueEl.dataset.initial))
 
   const editId = document.getElementById('cardEditId').value
 
@@ -2364,16 +2411,16 @@ async function showCardDetail(card) {
   }
 
   // Edit button
-  document.getElementById('cardEditBtn').onclick = () => {
+  document.getElementById('cardEditBtn').onclick = async () => {
     closeModal(cardDetailOverlay)
     document.getElementById('cardModalTitle').textContent = t('kanban.modal.title_edit')
     document.getElementById('cardTitle').value = card.title
     document.getElementById('cardDesc').value = card.description || ''
     document.getElementById('cardPriority').value = card.priority
     document.getElementById('cardProject').value = card.project || ''
-    document.getElementById('cardDue').value = card.due_date
-      ? new Date(card.due_date * 1000).toISOString().split('T')[0]
-      : ''
+    const dueEl = document.getElementById('cardDue')
+    dueEl.value = await dueDayForField(card.due_date)
+    dueEl.dataset.initial = dueEl.value
     document.getElementById('cardEditId').value = card.id
     document.getElementById('cardEditStatus').value = card.status
     populateAssigneeSelect('cardAssignee', card.assignee)
