@@ -37,8 +37,10 @@
 #     ...text with `backticks`, $vars, "quotes"...
 #     EOF
 #     bash scripts/agent-msg.sh <from> <to> - < /path/to/body.txt
-#   Plain prose holding none of those characters may still go in as the 3rd
-#   argument. A body that is empty or only whitespace is REFUSED (gate below).
+#   The 3rd argument is `-` ONLY: the body arrives on STDIN or as a redirect from
+#   a file. A positional body is REFUSED (exit 4) -- the shell has already eaten
+#   part of it before this script starts -- and so is an empty or only-whitespace
+#   body (exit 1). Each gate below carries its own sentence.
 # Output: success -> "OK id=<n> queue=<depth> (~<n> perc)"; failure -> "FAIL <reason>"
 # When the recipient is not running -- or could not be asked -- the server also
 # returns a line saying so, and it is printed on stderr (card bbb8557c). The
