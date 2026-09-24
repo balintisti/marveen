@@ -676,7 +676,15 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // untouched, not just that field: a PUT that changed the priority and failed
     // on the date must not half-apply. The value a caller sees on success is the
     // stored one -- the reason this is normalised here and not in the reader.
-    if ('due_date' in data) {
+    //
+    // AN ECHO OF THE STORED VALUE IS NOT CHECKED, for the reason the unknown-key
+    // guard above gives: the intent is the distinguisher, not the key. The two
+    // inline edits send `{ ...card, assignee }`, i.e. whatever due_date is stored.
+    // Validating that would lock any card holding a legacy value out of every
+    // inline edit -- a guard that freezes the broken state instead of leaving a
+    // way out. It also leaves the two legacy text rows exactly as they are, which
+    // is what a8dff303 asked for.
+    if ('due_date' in data && !(roCard && data.due_date === (roCard as { due_date?: unknown }).due_date)) {
       const due = normalizeDueDate(data.due_date)
       if (!due.ok) { json(res, { error: due.error }, 400); return true }
       data.due_date = due.value

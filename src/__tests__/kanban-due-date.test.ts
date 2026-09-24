@@ -148,6 +148,19 @@ describe('PUT /api/kanban/<id> -- refused means the WHOLE card is untouched', ()
     expect(getKanbanCard(id)!.due_date).toBeNull()
   })
 
+  it("an ECHO of a stored legacy value passes and is left as stored (the inline edits' {...card})", async () => {
+    // Plant a legacy text value the old write path allowed, straight into the row.
+    const { getDb } = await import('../db.js')
+    getDb().prepare('UPDATE kanban_cards SET due_date = ? WHERE id = ?').run('regi-ertek', id)
+    const r = await call('PUT', `/api/kanban/${id}`, { ...getKanbanCard(id)!, assignee: 'dexter', actor: 'dashboard' })
+    expect(r.status).toBe(200)
+    const card = getKanbanCard(id)!
+    expect(card.assignee).toBe('dexter')
+    expect(card.due_date).toBe('regi-ertek' as unknown as number)
+    // and a DIFFERENT bad value on the same card is still refused
+    expect((await call('PUT', `/api/kanban/${id}`, { due_date: 'holnap' })).status).toBe(400)
+  })
+
   it('a PUT without due_date does not touch it (the modal relies on this)', async () => {
     const r = await call('PUT', `/api/kanban/${id}`, { priority: 'low' })
     expect(r.status).toBe(200)
