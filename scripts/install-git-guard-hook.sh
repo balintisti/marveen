@@ -10,6 +10,17 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# ONE SOURCE FOR ONE FILE (card 61648d4b). This installer and install-no-force-push-hook.sh
+# both write pre-push.d/10-no-force-push-protected, with different bodies: this one 23 lines
+# (main/master only), that one 66 (also the branch the main worktree sits on, derived). The
+# update path ran them in glob order, so the right one won by ALPHABET; a manual run of this
+# installer -- which docs/security-hardening.md invites -- silently wrote the 23-line body back
+# and dropped the deploy-branch protection (reproduced in a throwaway repo). When the fuller
+# installer is present, it is the only writer; this body stays for an install without it.
+if [ -f "$ROOT/scripts/install-no-force-push-hook.sh" ]; then
+  exec bash "$ROOT/scripts/install-no-force-push-hook.sh" "$@"
+fi
 # `--git-common-dir` is RELATIVE from the main checkout and ABSOLUTE from a linked
 # worktree, and git resolves the relative form against ITS OWN cwd -- so `cd` on the
 # result lands in the CALLER's cwd and dies with "cd: .git: Not a directory" from any
