@@ -453,6 +453,20 @@ fi
 #          work made the main agent permanently ineligible for a soft restart
 # A prefix would shift any `[Eredmény] ...` sent through this helper out of both
 # patterns and re-open a documented incident. Nothing parses the END.
+# LENGTH: A WARNING, NOT A GATE (card 504dc397, marveen's decision 2026-09-24).
+# jarvis measured himself: 5 of 5 consecutive messages over his own 800-character rule
+# (940/899/817/909/998), each time with the length SEEN and the message sent anyway -- a
+# shape rule with no mechanism. A refusal would be a wall on the flat population (the
+# sender-ceiling measurement above), so the tool says the number out loud instead.
+# Measured in CHARACTERS, not bytes: `wc -c` overcounts accented Hungarian text. The body
+# is measured before the footer below is appended -- the author wrote the body, not that.
+SOFT_LIMIT="${AGENT_MSG_SOFT_LIMIT:-800}"
+BODY_LEN="$(C="$C" python3 -c 'import os; print(len(os.environ["C"]))' 2>/dev/null || true)"
+if [ -z "$BODY_LEN" ]; then
+  echo "FIGYELEM: a torzs hosszat nem tudtam megmerni (python3) -- elkuldom, a korlatot ($SOFT_LIMIT) nem ellenoriztem." >&2
+elif [ "$BODY_LEN" -gt "$SOFT_LIMIT" ]; then
+  echo "FIGYELEM: a torzs $BODY_LEN karakter (a korlat $SOFT_LIMIT) -- elkuldom, de a hosszu anyag KARTYARA valo; ide egy osszefoglalo es a kartya-id." >&2
+fi
 STAMP_TIME="$(date '+%Y-%m-%d %H:%M %Z')"
 # WHOSE queue, AND WHEN -- both, because the footnote is read by the RECIPIENT
 # (card 3caaaf62). `sor: 0` at the end of a delivered message reads as "nothing
