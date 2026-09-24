@@ -588,6 +588,94 @@ def mixed_script_words(text: str):
     return out
 
 
+# --- FOREIGNLETTER924 (card c61d5270): a letter from the right script, but the wrong one --
+# The two checks above cover DECOMPOSITION (base + combining mark) and SUBSTITUTION (a
+# foreign-script letter inside a Latin word). deeper measured a third class on 2026-09-24
+# that passes both: `fordìtott` with U+00EC (i WITH GRAVE) where Hungarian has U+00ED
+# (i WITH ACUTE). The name of U+00EC starts with LATIN, so mixed_script_words cannot fire
+# on it BY CONSTRUCTION (friday, measured: specimen 0 hits, Cyrillic U+0456 control 1 hit).
+# An accent-DIRECTION slip is the likeliest shape of this class, and the word still looks
+# accented, which is why it survives.
+#
+# THE RULE: a non-ASCII LETTER (Unicode category L*) that is not one of the eighteen
+# Hungarian accented letters, plus U+FFFD (the decoder's replacement mark, a corruption
+# signal that is not a letter). It WARNS, it never blocks (marveen, 2026-09-24): c-caron,
+# s-caron, d-bar, z-caron are real letters in real names, the owner's contacts are in
+# Serbia, and a block would refuse correct text about actual customers.
+#
+# WHY LETTERS AND NOT A WHOLE-CHARACTER ALLOWLIST, measured before building:
+#   whole-character allowlist, last 30 days of owner-facing Telegram (n=857): 7.4% of
+#     messages flagged, almost all emoji (U+1F916 alone in 37) -- a warning on most
+#     briefings, which trains the reader to skip it.
+#   letters only, same population: 1.6%; inter-agent 7 days (n=1801): 0.9%. Its hits
+#     include a real slip (a Cyrillic ie inside a Hungarian word) and real names
+#     (Jalapeno with n-tilde, Markovic with c-acute, Serbian "sasije").
+# A symbol cannot be the mis-spelling of a letter, which is the same reason the class
+# never needed an entry for punctuation.
+#
+# THE HUNGARIAN QUOTES, AND WHICH HALF IS A MEASUREMENT: U+201E (opening) was MEASURED,
+# 13 of 200 inter-agent messages; U+201D (closing) was DECIDED, 0 of 200, admitted because
+# Hungarian uses the pair and allowing only the opener would alarm on every closed quote.
+# Under the letters-only rule neither is a letter, so neither can fire -- the decision is
+# kept here so that a future widening to symbols does not silently re-decide it. The inner
+# pair (U+00BB / U+00AB) was NOT decided either way.
+#
+# THE SET MAY ONLY GROW BY DECISION (deeper's asymmetry): a letter MISSING from it is a false
+# alarm, a letter ADDED to it lets a real defect through. It prints the CHARACTERS, never a
+# bare count: deeper's own first set held six uppercase letters where Hungarian has nine,
+# and only the printed characters showed five correct words among the "hits".
+#
+# TWO LIMITS, stated where the next check will be added:
+#  (1) IT IS BLIND TO SPELLING. `kezbesít` for `kézbesít` (deeper, same day: a MISSING
+#      accent, all legitimate codepoints) is green here and on every other codepoint check.
+#      Its claim is WRONG CODEPOINTS, not correct Hungarian.
+#  (2) ON THE INTER-AGENT PATH IT INHERITS THE FAIL-OPEN BRANCH: an uninterpretable body
+#      (unreadable @file, unresolved $-path, run-time substitution, non-JSON) passes with
+#      a systemMessage to the SENDER and a gate-log line, and then no check runs at all --
+#      this one included. Upstream's replay: 38 of 1157 = 3.3%. The sender is the only
+#      witness.
+HU_ACCENTED_LETTERS = frozenset("áéíóöőúüűÁÉÍÓÖŐÚÜŰ")
+CORRUPTION_MARKS = frozenset("\ufffd")
+
+
+def foreign_letter_words(text: str):
+    """[(token, char, "NAME (U+XXXX)"), ...], one entry per distinct (token, char)."""
+    import unicodedata
+    out, seen = [], set()
+    for tok in text.split():
+        for ch in tok:
+            if ord(ch) < 128 or ch in HU_ACCENTED_LETTERS:
+                continue
+            if not (unicodedata.category(ch).startswith("L") or ch in CORRUPTION_MARKS):
+                continue
+            key = (tok, ch)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((tok.strip(".,;:!?()[]{}\"'`"), ch,
+                        f"{unicodedata.name(ch, 'UNKNOWN')} (U+{ord(ch):04X})"))
+    return out
+
+
+def foreign_letter_warning(text: str):
+    """The named warning text, or None. Never a block (see above)."""
+    hits = foreign_letter_words(text)
+    if not hits:
+        return None
+    shown = "; ".join(f"{w!r} -- benne {name}" for w, _c, name in hits[:5])
+    more = f" (+{len(hits) - 5} tovabbi)" if len(hits) > 5 else ""
+    return ("outgoing-copy-gate FIGYELMEZTETES (nem tiltas): NEM MAGYAR BETU, "
+            f"{len(hits)} db: {shown}{more}. Ha nev (pl. szerb), rendben van; ha elgepeles "
+            "(pl. i-grave az i-ekezetes helyett), javitsd. A kapu helyesirast NEM ellenoriz.")
+
+
+def emit_system_messages(msgs) -> None:
+    """One hook stdout JSON for every non-blocking message of this call."""
+    msgs = [m for m in msgs if m]
+    if msgs:
+        print(json.dumps({"systemMessage": "\n".join(msgs)}))
+
+
 EM_DASH = "—"
 
 # GATEPERSIST816: owner-specific NAME rules load from an UNTRACKED local file,
@@ -1009,11 +1097,14 @@ def telegram_gate(tool_input: dict) -> None:
     # szabaly (RULES_SANCTIONED, barmelyik flag-irassal) mar nem veszteseg,
     # nincs mit jelezni, a Telegram-ag ott csendben marad. Minden mas nem-ok
     # allapot (missing/empty/invalid) figyelmeztetest kap.
-    if RULES_STATE in RULES_LOUD:
-        print(json.dumps({"systemMessage":
-            "outgoing-copy-gate: a NEV-SZABALY fajl hianyzik/ures "
-            f"({_LOCAL_RULES}) -- a nev-ellenorzes NEM fut a kimeno uzeneteken. "
-            "Potold a store/outgoing-copy-gate-rules.json-t."}))
+    # FOREIGNLETTER924: the named foreign-letter warning rides in the SAME stdout JSON --
+    # a hook prints one object, so two separate prints would be one unparseable line.
+    emit_system_messages([
+        ("outgoing-copy-gate: a NEV-SZABALY fajl hianyzik/ures "
+         f"({_LOCAL_RULES}) -- a nev-ellenorzes NEM fut a kimeno uzeneteken. "
+         "Potold a store/outgoing-copy-gate-rules.json-t.") if RULES_STATE in RULES_LOUD else None,
+        foreign_letter_warning(text),
+    ])
     sys.exit(0)
 
 
@@ -1262,6 +1353,9 @@ def inter_agent_homoglyph_gate(cmd: str) -> None:
             "Javitsd a szoveget es kuldd ujra. (Itt CSAK a homoglifa fut, ekezet- es copy-szabaly nem.)\n"
         )
         sys.exit(2)
+    # FOREIGNLETTER924: after the homoglyph BLOCK, the foreign-letter WARNING. It never
+    # blocks, and it inherits the fail-open branch above (see the limits at its definition).
+    emit_system_messages([foreign_letter_warning(text)])
     sys.exit(0)
 
 
@@ -1409,16 +1503,19 @@ def main():
         )
         sys.exit(2)
 
-    if RULES_STATE in (RULES_MISSING, RULES_EMPTY):
-        # Fail-OPEN, but never silent: the send goes out WITHOUT the name
-        # check, and the user must see that on the surface they are using --
-        # a log line nobody reads is the same as nothing (CLCOPYGATEHIANY902).
-        print(json.dumps({"systemMessage":
-            "outgoing-copy-gate: a NEV-SZABALY fajl "
-            + ("HIANYZIK" if RULES_STATE == RULES_MISSING else "URES (nincs minta)")
-            + f" ({_LOCAL_RULES}) -- ez a level a nev-ellenorzes NELKUL ment ki. "
-            "Ha kell a vedelem, hozd letre a fajlt: "
-            '{"bad_name_patterns": ["<python-regex>"], "correction": "<helyes alak>"}.'}))
+    # Fail-OPEN on a missing/empty rules file, but never silent: the send goes out WITHOUT
+    # the name check, and the user must see that on the surface they are using -- a log
+    # line nobody reads is the same as nothing (CLCOPYGATEHIANY902). FOREIGNLETTER924 adds
+    # the named foreign-letter warning to the SAME stdout JSON.
+    emit_system_messages([
+        ("outgoing-copy-gate: a NEV-SZABALY fajl "
+         + ("HIANYZIK" if RULES_STATE == RULES_MISSING else "URES (nincs minta)")
+         + f" ({_LOCAL_RULES}) -- ez a level a nev-ellenorzes NELKUL ment ki. "
+         "Ha kell a vedelem, hozd letre a fajlt: "
+         '{"bad_name_patterns": ["<python-regex>"], "correction": "<helyes alak>"}.')
+        if RULES_STATE in (RULES_MISSING, RULES_EMPTY) else None,
+        foreign_letter_warning(text),
+    ])
     sys.exit(0)
 
 
