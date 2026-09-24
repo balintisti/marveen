@@ -34,6 +34,8 @@ noted in the summary/snapshot instead of raising.
 
 import argparse
 import glob
+import re
+import sqlite3
 import hashlib
 import json
 import os
@@ -100,6 +102,10 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STORE_DIR = os.path.join(REPO_ROOT, "store")
 HISTORY_PATH = os.path.join(STORE_DIR, "usage-history.jsonl")
 LATEST_PATH = os.path.join(STORE_DIR, "usage-latest.json")
+DELIVERY_STATE_PATH = os.path.join(STORE_DIR, "usage-delivery-state.json")
+DB_PATH = os.path.join(STORE_DIR, "claudeclaw.db")
+TASKS_DIR = os.path.expanduser("~/.claude/scheduled-tasks")
+TOKEN_PATH = os.path.join(STORE_DIR, ".dashboard-token")
 STATE_PATH = os.path.join(STORE_DIR, "usage-alert-state.json")
 ENV_PATH = os.path.join(REPO_ROOT, ".env")
 
@@ -1091,12 +1097,193 @@ def compute_alerts(snapshot, state, now_utc=None):
 
 
 # --------------------------------------------------------------------------
+# Delivery to the coordinator (card 1fe8e8c5)
+# --------------------------------------------------------------------------
+# WHO GETS WHAT is marveen's decision on the card (2026-09-24 15:0x): the OVERUSE forecast and
+# the list of tasks the quota gate is holding go to the COORDINATOR as an inter-agent message;
+# the owner only hears about it when the quota actually stops (the ceiling guard's job, not this
+# file's). Until today every ALERT line went to store/usage-collect.log, which nothing reads.
+#
+# WHAT IS NOT DELIVERED, and why -- measured on the log (862 ALERT lines, 2026-09-24):
+#   NEAR-EXHAUSTION ... redundant: the quota-ceiling guard delivers the same window at 93/95%
+#   UNDERUSE .......... a spin-up signal for a different consumer (a3d743f3), not a warning
+#   OVERUSE >= 92% .... past the backstop the forecast is moot; the ceiling guard speaks there
+#
+# CADENCE, simulated on 5450 real snapshots (08-17..09-24) before it was chosen: the log's
+# 45-minute refire would have been 324 messages in 16 days (29 on the worst day). One message
+# when an episode STARTS and at most one per 12 h while it lasts gives 13 in 16 days, and every
+# one of them lands while the forecast can still change what gets scheduled.
+
+DELIVER_EPISODE_GAP_SEC = 3 * 3600      # no OVERUSE line for this long -> the next one starts a new episode
+DELIVER_REFIRE_SEC = 12 * 3600          # while an episode lasts, at most one message per this long
+HELD_MIN_HOURS = 6                      # a quota skip streak shorter than this is ordinary deferral
+
+_OVERUSE_RX = re.compile(r"^ALERT: OVERUSE: (?P<key>.+?) (?P<used>\d+)% used")
+
+
+def held_tasks(db_path=None, tasks_dir=None, now_ms=None, min_hours=HELD_MIN_HOURS):
+    """Enabled scheduled tasks the quota gate is HOLDING: the newest task_runs row is a
+    `skipped`/`quota`, and the streak of such skips (back to the last `fired`/`fired_late`)
+    is older than `min_hours`. Works from the gate's ACTUAL decisions, not a copy of its
+    thresholds. Read-only connection. Raises on an unreadable database -- the caller must
+    be able to say "not measured" rather than "nothing held".
+    """
+    db_path = db_path or DB_PATH
+    tasks_dir = tasks_dir or TASKS_DIR
+    now_ms = now_ms if now_ms is not None else time.time() * 1000
+    enabled = {}
+    for f in glob.glob(os.path.join(tasks_dir, "*", "task-config.json")):
+        try:
+            with open(f, encoding="utf-8") as fh:
+                cfg = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if cfg.get("enabled"):
+            enabled[os.path.basename(os.path.dirname(f))] = cfg.get("agent") or "?"
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        out = []
+        for name in sorted(enabled):
+            rows = con.execute(
+                "SELECT ts, status, reason FROM task_runs WHERE name = ? ORDER BY ts DESC LIMIT 2000",
+                (name,)).fetchall()
+            if not rows or not (rows[0][1] == "skipped" and rows[0][2] == "quota"):
+                continue
+            since = rows[0][0]
+            for ts, status, reason in rows:
+                if status in ("fired", "fired_late"):
+                    break
+                if status == "skipped" and reason == "quota":
+                    since = ts
+            if (now_ms - since) >= min_hours * 3600 * 1000:
+                out.append({"name": name, "agent": enabled[name], "since_ms": since})
+        return out
+    finally:
+        con.close()
+
+
+def plan_delivery(alerts, held, dstate, now_ts, held_error=None):
+    """Pure: what to tell the coordinator this tick, and the state to keep IF it is delivered.
+
+    Returns (text_or_None, new_state). The caller saves new_state only after a verified
+    delivery, so a failed send is retried next tick instead of being marked as said.
+    """
+    ceiling = CONFIG["hard_near_exhaustion"] * 100
+    over_state = dict((dstate or {}).get("over", {}))
+    held_sent = set((dstate or {}).get("held_sent", []))
+    lines = []
+    for a in alerts:
+        m = _OVERUSE_RX.match(a)
+        if not m or int(m.group("used")) >= ceiling:
+            continue
+        key = m.group("key")
+        prev = over_state.get(key, {})
+        new_episode = "last_seen" not in prev or now_ts - prev["last_seen"] >= DELIVER_EPISODE_GAP_SEC
+        due = new_episode or now_ts - prev.get("last_sent", 0) >= DELIVER_REFIRE_SEC
+        over_state[key] = {"last_seen": now_ts, "last_sent": now_ts if due else prev.get("last_sent", 0)}
+        if due:
+            lines.append(("OVERUSE forecast (new episode): " if new_episode else "OVERUSE forecast (still on): ")
+                         + a[len("ALERT: OVERUSE: "):])
+    names = {h["name"] for h in held}
+    new_names = names - held_sent
+    if new_names:
+        tz = ZoneInfo("Europe/Budapest")
+        lines.append(f"HELD by the quota gate for over {HELD_MIN_HOURS} h ({len(held)} task(s), new: "
+                     + ", ".join(sorted(new_names)) + "):")
+        for h in sorted(held, key=lambda x: x["since_ms"]):
+            since = datetime.fromtimestamp(h["since_ms"] / 1000, tz)
+            hours = (now_ts * 1000 - h["since_ms"]) / 3.6e6
+            lines.append(f"  - {h['name']} ({h['agent']}), skipped for quota since "
+                         f"{since.strftime('%m-%d %H:%M')} ({hours:.0f} h)")
+    if held_error:
+        lines.append(f"HELD TASKS NOT MEASURED this tick: {held_error}")
+    new_state = {"over": over_state,
+                 # a task that stops being held is forgotten, so holding it AGAIN is announced again
+                 "held_sent": sorted(names if held_error is None else held_sent)}
+    if not lines:
+        return None, new_state
+    return "[usage] " + "\n".join(lines), new_state
+
+
+def _main_agent_id():
+    mid = "marveen"
+    try:
+        with open(os.path.join(REPO_ROOT, ".env"), encoding="utf-8") as fh:
+            for line in fh:
+                k, _, v = line.strip().partition("=")
+                if k.strip() == "MAIN_AGENT_ID" and v.strip():
+                    mid = v.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return mid
+
+
+def deliver(text, token_path=None, url="http://localhost:3420/api/messages"):
+    """POST the message and READ BACK the answer: a 2xx with an id is a delivery, anything else
+    is not -- the `curl ... && echo sent` shape reports success on a 401 too."""
+    try:
+        with open(token_path or TOKEN_PATH, encoding="utf-8") as fh:
+            token = fh.read().strip()
+    except OSError as e:
+        return False, f"token unreadable: {e.strerror}"
+    body = json.dumps({"from": "system", "to": _main_agent_id(), "content": text}).encode()
+    req = urllib.request.Request(url, data=body, method="POST", headers={
+        "Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            payload = json.loads(resp.read().decode() or "{}")
+            if 200 <= resp.status < 300 and payload.get("id"):
+                return True, f"id={payload['id']}"
+            return False, f"HTTP {resp.status} without an id"
+    except urllib.error.HTTPError as e:
+        return False, f"HTTP {e.code}"
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return False, f"request failed: {e}"
+
+
+def _load_delivery_state():
+    try:
+        with open(DELIVERY_STATE_PATH, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def run_delivery(alerts, now_ts=None, deliver_fn=None):
+    now_ts = now_ts if now_ts is not None else time.time()
+    held_error = None
+    try:
+        held = held_tasks(now_ms=now_ts * 1000)
+    except Exception as e:  # an unreadable board is "not measured", never "nothing held"
+        held, held_error = [], str(e)[:200]
+    text, new_state = plan_delivery(alerts, held, _load_delivery_state(), now_ts, held_error)
+    if text is None:
+        tmp = DELIVERY_STATE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(new_state, fh)
+        os.replace(tmp, DELIVERY_STATE_PATH)
+        return
+    ok, detail = (deliver_fn or deliver)(text)
+    if ok:
+        tmp = DELIVERY_STATE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(new_state, fh)
+        os.replace(tmp, DELIVERY_STATE_PATH)
+        print(f"DELIVERED to the coordinator ({detail})")
+    else:
+        print(f"DELIVERY FAILED ({detail}) -- state not advanced, retried next tick")
+
+
+# --------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------
 
 def _run():
     parser = argparse.ArgumentParser(description="Subscription usage/quota monitor")
     parser.add_argument("--json", action="store_true", help="print only the snapshot JSON, no alerts/history")
+    parser.add_argument("--deliver", action="store_true",
+                        help="also send the OVERUSE forecast and the held-task list to the coordinator "
+                             "(card 1fe8e8c5). Off by default, so tests and ad-hoc runs never message anyone.")
     args = parser.parse_args()
 
     snapshot = build_snapshot()
@@ -1112,6 +1299,8 @@ def _run():
     _save_state(state)
     for line in alerts:
         print(line)
+    if args.deliver:
+        run_delivery(alerts)
 
     os.makedirs(STORE_DIR, exist_ok=True)
     with open(HISTORY_PATH, "a", encoding="utf-8") as f:
