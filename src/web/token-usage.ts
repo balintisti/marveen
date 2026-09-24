@@ -6,6 +6,8 @@ import { createInterface } from 'node:readline'
 import { getDb } from '../db.js'
 import { logger } from '../logger.js'
 import { MAIN_AGENT_ID, PROJECT_ROOT } from '../config.js'
+import { projectsDirFor } from './active-model.js'
+import { agentDir, listAllAgentNames } from './agent-config.js'
 
 const PROJECTS_DIR = join(homedir(), '.claude', 'projects')
 
@@ -22,26 +24,42 @@ interface AgentTranscriptSource {
   projectDir: string
 }
 
-function discoverAgentSources(): AgentTranscriptSource[] {
+// DISCOVERY FROM THE AGENTS, NOT FROM THE DIRECTORY NAMES (card 50eee909, mandark measured it).
+// Since 2026-09-18 agents/<name> is a SYMLINK to /Users/Shared/marveen-<name>, and Claude Code
+// keys a project by the RESOLVED cwd -- so every live transcript lands in
+// `-Users-Shared-marveen-<name>`, which the `-agents-<name>$` pattern never matches. The collector
+// kept running and wrote nothing for seven agents: 529 tracked files, zero under the new dirs, each
+// agent's last row minutes before its dir became a symlink. So the PRIMARY key is now the dir the
+// context-guard itself reads, via the same realpath encoding (projectsDirFor(agentDir(name))),
+// built from the known agents; the `-agents-<name>` form stays as a SECOND key so old transcripts
+// stay attributed. A file with no cursor is read from line 0, so the first run after this change
+// back-fills the new dirs by itself.
+export function discoverAgentSources(projectsDir: string = PROJECTS_DIR): AgentTranscriptSource[] {
   const sources: AgentTranscriptSource[] = []
-  if (!existsSync(PROJECTS_DIR)) return sources
+  if (!existsSync(projectsDir)) return sources
+  const seen = new Set<string>()
+  const add = (agent: string, projectDir: string) => {
+    if (seen.has(projectDir)) return
+    try { if (!statSync(projectDir).isDirectory()) return } catch { return }
+    seen.add(projectDir)
+    sources.push({ agent, projectDir })
+  }
+  // 1. PRIMARY: where each known agent's transcripts actually land (the context-guard's key).
+  // The ENCODED name comes from projectsDirFor (realpath + its own scheme); the root is ours.
+  const keyed = (workingDir: string) => join(projectsDir, basename(projectsDirFor(workingDir)))
+  add(MAIN_AGENT_ID, keyed(PROJECT_ROOT))
+  for (const name of listAllAgentNames()) add(name, keyed(agentDir(name)))
+  // 2. SECOND KEY: the pre-symlink `-agents-<name>` dirs (and any agent no longer listed).
   const mainDirName = encodeProjectPath(PROJECT_ROOT)
-  for (const entry of readdirSync(PROJECTS_DIR)) {
-    const full = join(PROJECTS_DIR, entry)
-    let stat
-    try { stat = statSync(full) } catch { continue }
-    if (!stat.isDirectory()) continue
-
+  for (const entry of readdirSync(projectsDir)) {
+    const full = join(projectsDir, entry)
     // sanitizeAgentName() allows [a-z0-9-], so the old /([a-z]+)$/ silently
     // skipped every agent with a digit or a hyphen in its name -- the whole
     // per-project worker fleet (davinci-ocura, vermeer-fressa, ...) never
     // appeared in the token monitor at all. Not zero usage: no rows.
     const agentMatch = entry.match(/-agents-([a-z0-9-]+)$/)
-    if (agentMatch) {
-      sources.push({ agent: agentMatch[1], projectDir: full })
-    } else if (entry === mainDirName) {
-      sources.push({ agent: MAIN_AGENT_ID, projectDir: full })
-    }
+    if (agentMatch) add(agentMatch[1], full)
+    else if (entry === mainDirName) add(MAIN_AGENT_ID, full)
   }
   return sources
 }
