@@ -812,6 +812,78 @@ def _hit_context(prose: str, pos: int, length: int) -> str:
     return f'"...{frag}..." @{pos}'
 
 
+# GATEHARMADIK924 (deeper merte 2026-09-24; a 972904fd kartya leletet koveti):
+# a HARMADIK OSZTALY, amit a felette allo kapuk EGYUTT sem fognak.
+#
+#   a szoveg ............... `forditott`, a magyar ekezetes `i` helyett
+#                            U+00EC LATIN SMALL LETTER I WITH GRAVE all
+#   kombinalo-jel kapu ..... 0  (a U+00EC ELORE OSSZETETT kodpont, nem bazis+jel)
+#   homoglifa kapu ......... 0  (latin betu az ekezetevel, nem idegen irasrendszer)
+#   ekezet-kapu ............ 0  (a romlott alak nem kulcs az ACCENTLESS szotarban)
+#
+# Mervel a futo fajlon 2026-09-24-en: mind a harom zold, a romlott szo ATMEGY.
+# Az elso kapu a ROMLAST fogja (szetesett kodpont), a masodik a KICSERELEST
+# (idegen irasrendszer), ez a harmadik a TEVESZTEST: jo irasrendszer, rossz betu.
+#
+# A SZABALY SZUK, ES EZ SZANDEKOS. Nem az, hogy "minden nem-magyar betu", hanem:
+# a betu ALAPBETUJE magyarul IS kap ekezetet, DE az ekezet, ami rajta all, nem az,
+# amit a magyar hasznal. A kulonbseg nem esztetikai, hanem meres:
+#
+#   U+00EC  i + GRAVE ....... az `i` magyarul kap ekezetet  -> TALALAT
+#   U+0161  s + CARON ....... az `s` magyarul NEM kap      -> atmegy
+#   U+0107  c + ACUTE ....... a `c` magyarul NEM kap       -> atmegy
+#   U+0111  (nincs bontasa) . nincs bazis+jel par          -> atmegy
+#
+# A masodik es harmadik fel sor NEM elmelet: a flotta szerb vevonevei pontosan
+# igy neznek ki (`Stefkovic`, `Dekic`), es egy kapu, ami ezekre tuzel, egy ido
+# utan nem olvasodik -- a hamis riasztas is hiba, csak a biztonsagos oldalon all.
+# Ugyanezert nem "minden karakter, ami nem ASCII": az a valtozat a magyar
+# nyito idezojelre is tuzel, ami nem betuttevesztes, hanem irasjel.
+#
+# A magyar ekezet PONTOSAN HAROM jelet hasznal: ACUTE, DIAERESIS, DOUBLE ACUTE.
+# Az OK-halmaz SZUKITESE hamis riasztast ad (biztonsagos), a BOVITESE viszont
+# valodi defektust enged at -- ezert csak kimondott dontessel szabad nyulni hozza.
+# A harom jel `chr()`-rel all, NEM begepelt kodpontkent: a begepelt valtozat
+# lathatatlan a forrasban (egy magaban allo kombinalo jel), es pont az a
+# szerkesztoi reteg dekodolta valodi kodponta, amirol a fleet-lap ir.
+HUNGARIAN_MARKS = {chr(0x0301), chr(0x0308), chr(0x030B)}
+ACCENTABLE_BASE = set("aeiouAEIOU")
+
+
+def foreign_diacritic_words(prose: str):
+    """Return [(char, "NAME (U+XXXX)", context, count), ...] for Latin letters whose
+    BASE letter takes a Hungarian accent but whose OWN diacritic is not one Hungarian
+    uses. Deliberately not "any non-Hungarian letter": a neighbouring language's
+    letter (caron, stroke, cedilla) passes, because its base letter has no Hungarian
+    accented form to be mistaken for."""
+    import unicodedata
+    positions = {}
+    for pos, ch in enumerate(prose):
+        if ord(ch) < 128 or ch in ACCENTED:
+            continue
+        try:
+            name = unicodedata.name(ch)
+        except ValueError:
+            continue
+        if not name.startswith("LATIN"):
+            continue
+        decomp = unicodedata.decomposition(ch)
+        if not decomp or decomp.startswith("<"):
+            continue
+        parts = decomp.split()
+        if chr(int(parts[0], 16)) not in ACCENTABLE_BASE:
+            continue
+        marks = [chr(int(p, 16)) for p in parts[1:]]
+        if not marks or all(m in HUNGARIAN_MARKS for m in marks):
+            continue
+        positions.setdefault(ch, (name, []) )[1].append(pos)
+    out = []
+    for ch, (name, pos_list) in positions.items():
+        out.append((ch, f"{name} (U+{ord(ch):04X})",
+                    _hit_context(prose, pos_list[0], 1), len(pos_list)))
+    return out
+
+
 # Technikai tokenek maszkolasa AZ EKEZET-ELLENORZES ELOTT. Merve 2026-08-13, a
 # +48-as bovites negativ kontrolljan: egy HIBATLANUL ekezetezett eles level
 # fennakadt a `video_view` esemenynevben levo "video"-n. A szobonto az aláhúzást
@@ -1070,6 +1142,24 @@ def audit(text: str):
             f"VEGYES IRASRENDSZERU SZO (homoglifa), {len(mixed)} db: {shown}{more}. "
             "Latin szoba keveredett nem-latin betu: olvasva lathatatlan, de a keresest/grepet neman eltori."
         )
+    # 5. ellenorzes (GATEHARMADIK924): helyes irasrendszer, TEVES betu. SZANDEKOSAN
+    # NEM magyar-kapuzott, ugyanabbol az ervbol, mint a homoglifa: ez KODPONT-kapu,
+    # nem nyelv-kapu, es a magyar-kapu pont azt a szoveget engedne at, amiben a
+    # romlas all (a `forditott` korul a tobbi szo hibatlanul ekezetes).
+    # A KARAKTERT nevezzuk meg, nem a darabszamot: merve 2026-09-24, az elso
+    # valtozat csak egy szamot adott, es alatta OT HELYES szo allt.
+    foreign = foreign_diacritic_words(prose)
+    if foreign:
+        shown = "; ".join(
+            f"{ch!r} {name} ({ctx}), {n} helyen" for ch, name, ctx, n in foreign[:5]
+        )
+        more = f" (+{len(foreign) - 5} tovabbi karakter)" if len(foreign) > 5 else ""
+        problems.append(
+            f"MAGYARUL NEM HASZNALT EKEZET LATIN BETUN, {len(foreign)} fele: {shown}{more}. "
+            "A betu olvasva majdnem azonos a helyessel, ezert szemre nem tunik fel. "
+            "A javitas SZO-FUGGO, ezert a kapu szandekosan NEM javasol alakot: egy rossz "
+            "javaslat egy valodi hibat javitana es egy ujat vezetne be."
+        )
     tok_pos = accent_check_tokens(prose)
     words = [w for w, _ in tok_pos]
     if is_hungarian(plain) or accentless_evidence(words):
@@ -1238,15 +1328,27 @@ def _ia_payload(cmd: str, toks):
 
 
 def inter_agent_homoglyph_gate(cmd: str) -> None:
-    """Exit 2 on a homoglyph, exit 0 otherwise (loudly when unreadable).
-    Only called for a command that is NOT an email send."""
+    """Exit 2 on a codepoint-substitution defect (homoglyph or a Latin letter
+    carrying a diacritic Hungarian does not use), exit 0 otherwise (loudly when
+    unreadable). Only called for a command that is NOT an email send.
+
+    GATEHARMADIK924: the second class is here because THIS is the arm my own
+    `forditott` specimen would have travelled through (agent-msg.sh and card
+    comments are Bash, not sends). Putting it only in audit() would leave the
+    path where the defect actually appeared unguarded.
+
+    The failure directions follow the arm's own structure: an UNREADABLE payload
+    is NEM MERT and fails open loudly, a MEASURED defect blocks. The two new
+    chars are the same class as the homoglyph -- a codepoint substitution the eye
+    reads past -- so they block the same way, not differently."""
     toks = _ia_segment(cmd)
     if toks is None:
         sys.exit(0)
     text, unreadable = _ia_payload(cmd, toks)
     if unreadable:
-        msg = ("outgoing-copy-gate (inter-agent, homoglifa): a torzs NEM vizsgalhato -- "
-               f"{unreadable}. Az uzenet ATMENT, homoglifa-ellenorzes NELKUL. "
+        msg = ("outgoing-copy-gate (inter-agent): a torzs NEM vizsgalhato -- "
+               f"{unreadable}. Az uzenet ATMENT, homoglifa-ellenorzes NELKUL, "
+               "es a latin ekezet-helyettesites sem futott le. "
                "Vizsgalhato alak: idezett heredoc (--data-binary @- <<'JSON') vagy @/abszolut/ut.json.")
         _gate_log(msg)
         print(json.dumps({"systemMessage": msg}))
@@ -1259,7 +1361,19 @@ def inter_agent_homoglyph_gate(cmd: str) -> None:
             "KIMENO-SZOVEG KAPU (inter-agent): TILTVA -- VEGYES IRASRENDSZERU SZO (homoglifa), "
             f"{len(mixed)} db: {shown}{more}.\n"
             "Egy kartya-azonositoban, agens-nevben vagy utvonalban ez neman felreiranyit. "
-            "Javitsd a szoveget es kuldd ujra. (Itt CSAK a homoglifa fut, ekezet- es copy-szabaly nem.)\n"
+            "Javitsd a szoveget es kuldd ujra. (Itt a homoglifa es a latin ekezet-helyettesites fut, "
+            "copy-szabaly nem.)\n"
+        )
+        sys.exit(2)
+    foreign = foreign_diacritic_words(text)
+    if foreign:
+        shown = "; ".join(f"{ch!r} {name} ({n} helyen)" for ch, name, _ctx, n in foreign[:5])
+        more = f" (+{len(foreign) - 5} tovabbi karakter)" if len(foreign) > 5 else ""
+        sys.stderr.write(
+            "KIMENO-SZOVEG KAPU (inter-agent): TILTVA -- MAGYARUL NEM HASZNALT EKEZET "
+            f"LATIN BETUN, {len(foreign)} fele: {shown}{more}.\n"
+            "A betu olvasva majdnem azonos a helyessel, ezert a masik fel olvasva sem tunik fel. "
+            "Javitsd a szoveget es kuldd ujra.\n"
         )
         sys.exit(2)
     sys.exit(0)
