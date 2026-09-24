@@ -26,8 +26,9 @@
  * bukik, nem csendben marad ki.
  */
 import { describe, it, expect, beforeAll } from 'vitest'
-import { readdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { discoverScriptTests } from './helpers/discover-script-tests.js'
 import { fileURLToPath } from 'node:url'
 import { execFile } from 'node:child_process'
 
@@ -38,7 +39,8 @@ const TESTS_DIR = join(REPO_ROOT, 'scripts', '__tests__')
 const PER_TEST_TIMEOUT_MS = 200_000
 const CONCURRENCY = 6
 
-const allTestFiles = readdirSync(TESTS_DIR).filter((f) => f.includes('.test.')).sort()
+// Recursive, like the python runner (card 20258ef3): a test in a subdirectory must not drop out.
+const allTestFiles = discoverScriptTests(TESTS_DIR)
 const runnable = allTestFiles.filter((f) => /\.test\.(sh|py)$/.test(f))
 const unhandled = allTestFiles.filter((f) => !/\.test\.(sh|py)$/.test(f))
 
