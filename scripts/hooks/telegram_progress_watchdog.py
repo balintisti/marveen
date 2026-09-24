@@ -185,6 +185,29 @@ def read_transcript(transcript_path):
     return text, reply_is_hung
 
 
+def err_detail(e):
+    """The Bot API's OWN reason for a failed call, not just the status line.
+
+    str() of an HTTPError is "HTTP Error 400: Bad Request" -- the JSON body's
+    `description` is dropped, and it is the only thing that separates "message to
+    delete not found" from "message can't be deleted". Card 3f638239: 16 delete
+    failures were logged that way, on placeholders 5-6 minutes old (so NOT the
+    48 h delete limit), and the cause could not be read back from the log.
+    """
+    import urllib.error
+    if isinstance(e, urllib.error.HTTPError):
+        try:
+            body = e.read().decode("utf-8", "replace")
+            try:
+                desc = json.loads(body).get("description") or body[:200]
+            except ValueError:
+                desc = body[:200] or "(empty body)"
+        except Exception:
+            desc = "(body not readable)"
+        return f"HTTP {e.code}: {desc}"
+    return str(e)
+
+
 def log(progress_dir, msg):
     # Was the only writer with a time, and it still had no DATE (card e9cc1fc2).
     # Same prefix as the other three now, so the whole file sorts and every line
@@ -204,7 +227,7 @@ def deliver(tok, chat_id, message_id, answer, progress_dir):
         try:
             api(tok, "sendMessage", {"chat_id": chat_id, "text": answer[:4000]})
         except Exception as e:
-            log(progress_dir, f"real-answer send failed (mid={message_id}): {e}")
+            log(progress_dir, f"real-answer send failed (mid={message_id}): {err_detail(e)}")
             return "send-failed"
         try:
             api(tok, "deleteMessage", {"chat_id": chat_id, "message_id": message_id})
@@ -215,21 +238,21 @@ def deliver(tok, chat_id, message_id, answer, progress_dir):
             # turns it into a permanent false "still working" marker. Edit is
             # still permitted at that age, so neutralise it instead (card
             # 074431bf).
-            log(progress_dir, f"placeholder delete failed (mid={message_id}): {e}")
+            log(progress_dir, f"placeholder delete failed (mid={message_id}): {err_detail(e)}")
             try:
                 api(tok, "editMessageText", {"chat_id": chat_id,
                                              "message_id": message_id,
                                              "text": DELIVERED_TEXT})
             except Exception as e2:
                 log(progress_dir,
-                    f"placeholder edit fallback failed (mid={message_id}): {e2}")
+                    f"placeholder edit fallback failed (mid={message_id}): {err_detail(e2)}")
         return "real-answer"
     # No recoverable answer -> generic error, keep the (edited) placeholder.
     try:
         api(tok, "editMessageText",
             {"chat_id": chat_id, "message_id": message_id, "text": ERROR_TEXT})
     except Exception as e:
-        log(progress_dir, f"error edit failed (mid={message_id}): {e}")
+        log(progress_dir, f"error edit failed (mid={message_id}): {err_detail(e)}")
     return "generic-error"
 
 

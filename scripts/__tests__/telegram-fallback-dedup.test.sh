@@ -58,7 +58,17 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
-srv = HTTPServer(("127.0.0.1", 0), H)
+# HTTPServer.server_bind() calls socket.getfqdn(host), a reverse lookup. Measured
+# 2026-09-24 in an agent session on this host: getfqdn("127.0.0.1") took 35.0 s,
+# and the harness waits 5 s for the port file -> "FATAL: stub did not start", red
+# on every run and filed among the "pre-existing" failures (card 3f638239). A
+# loopback stub needs no name: bind the TCP socket and skip the lookup.
+import socketserver
+class QuickHTTPServer(HTTPServer):
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
+srv = QuickHTTPServer(("127.0.0.1", 0), H)
 with open(sys.argv[2], "w") as f:
     f.write(str(srv.server_address[1]))
 srv.serve_forever()
