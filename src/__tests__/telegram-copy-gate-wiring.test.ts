@@ -27,13 +27,24 @@ vi.mock('../logger.js', () => ({
   logger: { warn: () => {}, info: () => {}, debug: () => {}, error: () => {} },
 }))
 
+// THE MAIN AGENT'S SETTINGS LIVE IN homedir(), NOT UNDER agentDir -- and this file once proved what
+// that costs. On 2026-09-24 a mutation run removed ensureTelegramCopyGate's MAIN_AGENT_ID guard (M4),
+// test 4 called it for the main agent, and with only agentDir mocked the write went to the REAL
+// ~/.claude/settings.json: the live coordinator ran this branch's gate from a worktree for hours.
+// So homedir() is sandboxed for the whole file, and test 0 fails loudly if the sandbox is ever lost.
+const FAKE_HOME = mkdtempSync(join(tmpdir(), 'copygate-home-'))
+vi.mock('node:os', async (orig) => {
+  const actual = await orig<typeof import('node:os')>()
+  return { ...actual, homedir: () => FAKE_HOME }
+})
+
 let agentRoot: string
 vi.mock('../web/agent-config.js', async (orig) => {
   const actual = await orig<typeof import('../web/agent-config.js')>()
   return { ...actual, agentDir: () => agentRoot }
 })
 
-const { ensureTelegramCopyGate, TELEGRAM_COPY_GATE_MATCHER } = await import('../web/agent-scaffold.js')
+const { ensureTelegramCopyGate, TELEGRAM_COPY_GATE_MATCHER, agentSettingsPath } = await import('../web/agent-scaffold.js')
 const { MAIN_AGENT_ID } = await import('../config.js')
 
 const SETTINGS = () => join(agentRoot, '.claude', 'settings.json')
@@ -48,6 +59,10 @@ beforeEach(() => {
 afterEach(() => rmSync(agentRoot, { recursive: true, force: true }))
 
 describe('the outgoing-copy gate is wired into a sub-agent settings file', () => {
+  it('0. SANDBOX: the main agent settings path resolves inside the fake home, never the real one', () => {
+    expect(agentSettingsPath(MAIN_AGENT_ID).startsWith(FAKE_HOME)).toBe(true)
+  })
+
   it('1. writes itself into an EMPTY settings file', () => {
     writeFileSync(SETTINGS(), JSON.stringify({}))
     expect(ensureTelegramCopyGate('probe')).toBe(true)
@@ -71,9 +86,12 @@ describe('the outgoing-copy gate is wired into a sub-agent settings file', () =>
   })
 
   it('4. the main agent is left alone: no write, file untouched', () => {
-    writeFileSync(SETTINGS(), JSON.stringify({ marker: 1 }))
+    // the MAIN agent's file is the home one, not agentRoot's -- watch the file it would write
+    const mainPath = agentSettingsPath(MAIN_AGENT_ID)
+    mkdirSync(join(FAKE_HOME, '.claude'), { recursive: true })
+    writeFileSync(mainPath, JSON.stringify({ marker: 1 }))
     expect(ensureTelegramCopyGate(MAIN_AGENT_ID)).toBe(false)
-    expect(read()).toEqual({ marker: 1 })
+    expect(JSON.parse(readFileSync(mainPath, 'utf-8'))).toEqual({ marker: 1 })
   })
 
   it('5. the matcher covers reply AND edit_message; an older reply-only entry is REPLACED', () => {
