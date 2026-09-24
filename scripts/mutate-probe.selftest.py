@@ -36,7 +36,10 @@ def run_case(name, src, anchor, replacement, runner_body, expect, expect_restore
              "--anchor-file", str(d / "anchor.txt"),
              "--replacement-file", str(d / "repl.txt"),
              "--cmd", f"{sys.executable} {runner} {target}",
-             "--cwd", str(d)],
+             "--cwd", str(d),
+             # 0ab8a829: kotelezo lett. Ezek az esetek a HAROM regi kontrollt merik, nem a
+             # darabszamot -- a kimondott `unknown` pontosan ezt jelenti.
+             "--expect-failed", "unknown"],
             capture_output=True, text=True)
         ok = r.returncode == expect
         restored = target.read_text() == src
@@ -113,7 +116,8 @@ def sentinel_cases() -> list[bool]:
         base = [sys.executable, str(PROBE), "--file", str(target), "--cwd", str(d)]
         probe = base + ["--anchor-file", str(d / "anchor.txt"),
                         "--replacement-file", str(d / "repl.txt"),
-                        "--cmd", f"{sys.executable} {runner} {target}"]
+                        "--cmd", f"{sys.executable} {runner} {target}",
+                        "--expect-failed", "unknown"]
 
         # POZITIV KONTROLL: a proba MEGHAL, es a fan MUTALT kod marad.
         # Ha ez az eset zoldet adna, a tobbi nem allitana semmit.

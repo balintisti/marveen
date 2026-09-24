@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""mutate-probe.py -- egy mutacios proba HAROM kontrollal, HAROM kilepesi koddal.
+"""mutate-probe.py -- egy mutacios proba HAROM kontrollal, NEGY kilepesi koddal.
 
 MIERT LETEZIK. Egy mutacios proba akkor er valamit, ha a ZOLD eredmeny EGY dolgot
 jelent. 2026-08-24-en egy nap alatt HAROM kulonbozo mechanizmus adott zoldet
@@ -15,17 +15,43 @@ A (b) negyszer fordult elo egyetlen napon, es mindannyiszor egy zold futas
 kovette, amit majdnem leletnek olvastunk. A (c) egyszer: egy kontroll 4172
 helyett 4153 tesztet futtatott, es a "zold" semmit nem allitott.
 
-Ezert a kimenet HAROM allapot, nem ketto:
+Ezert a kimenet NEGY allapot, nem ketto:
     0 = a mutacio DISZKRIMINAL  (a teszt megfogja -> a sor VEDVE van)
     1 = TULELTE                 (a teszt nem allit rola semmit -> LELET)
     2 = ERVENYTELEN PROBA       (a PROBAVAL van baj, nem a teszttel)
+    3 = DISZKRIMINAL, DE NEM UGY, AHOGY ALLITOD (pirosra ment, de nem a VART
+        szamu allitast torte el -- lasd a --expect-failed-et lent)
 
-A ketto kozotti kulonbseg a lenyeg: a 2 azt mondja, hogy MEG NEM TUDJUK.
+A kulonbseg a lenyeg: a 2 azt mondja, hogy MEG NEM TUDJUK.
+
+A VART BUKASI DARABSZAM, --expect-failed (kartya 0ab8a829, a CRM-oldali peldany
+83ffd8314 / 920883cdc javitasanak atvetele, marveen 2026-09-11-i rendelkezesevel).
+A `piros/zold` TUL KEVESET allit: 2026-09-11-en egy or harom allitasa kozul EGY
+csendben abbahagyta a merest, es a mutacio igy is pirosra ment, mert a masik ketto
+bukott. A jel az volt, hogy KETTO bukott harom helyett -- nem a szin.
+KOTELEZO, es KET ervenyes alakja van:
+    <N>        pozitiv egesz -- ennyi allitas bukasat VAROD
+    unknown    KIMONDOTT dontes: most nem allitok darabszamot (felderito proba)
+Azert kotelezo, mert opcionalis alakban harom ember hagyta ki egymastol fuggetlenul
+ugyanazon az ejszakan; es azert van `unknown`, mert egy KITALALT elvaras, ami
+veletlenul egyezik, rosszabb egy allitatlan futasnal. Egy elirt ertek ERVENYTELEN
+PROBA, nem nem-allitas -- az a fail-open irany lenne.
+A marveen-oldali kulonbseg: itt a --cmd a TELJES keszlet is lehet, amiben mar a
+mutacio elott is bukik valami. Ezert a darabszam a KULONBSEG: mutalt bukasok minusz
+az alapvonal bukasai. (Merve 2026-09-24: a teljes vitest a futo fan 12 bukassal indul.)
+Hivo 2026-09-24-en: NULLA programozott (git grep + skillek + utemezett feladatok).
 
 A NEGYEDIK KONTROLL, computress otlete (Delta-CRM, mutate-probe.py): a mutalt
 sornak FEDETTNEK kell lennie a lefedettsegi riport szerint. Egy soha le nem futo
 sor mutacioja termeszetesen tulel -- az a valasz csak azt mondja vissza, amit mar
 tudtunk. Opcionalis, mert lefedettsegi riport nem mindig van kez alatt.
+  ELAVULT RIPORT = ERVENYTELEN PROBA (0ab8a829, a CRM-oldali 2. javitas). Ha a riport
+  REGEBBI a forrasnal, a sorszamok elcsuszhattak, es a kontroll MAS sorra mondhat
+  FEDETT-et -- ez hamis zold. A friesseg nem allithato -> szinten ervenytelen.
+  ES A FORRAS mtime-JA MEGMARAD a visszaallitason at (a 3. javitas): e nelkul a
+  szerszam SAJAT irasa tenne a forrast frissebbe a riportnal, es egy fajl riport-
+  futasonkent EGYSZER lenne merheto. Merve itt is, nem levezetve: a `write_text`
+  frissiti az mtime-ot (lasd scripts/__tests__/mutate-probe.test.py).
 
 AZ OTODIK KONTROLL: A `finally` NEM ELI TUL A KILLT (merve, 2026-08-27).
 A visszaallitas eddig egyetlen `finally`-n allt. Az egy KIVETELT tul-el, egy
@@ -63,6 +89,7 @@ from pathlib import Path
 OK_DISCRIMINATES = 0
 SURVIVED = 1
 INVALID_PROBE = 2
+DISCRIMINATES_OTHERWISE = 3
 
 # Sor-eleji komment-alakok. A horgony ellenorzesehez kell: egy kommentben talalt
 # horgony nem kod, es egy ra epulo proba a sajat magyarazatat mutalna.
@@ -98,6 +125,27 @@ def summary_line(out: str) -> str | None:
     hits = [m.group(1).strip() for m in SUMMARY_RX.finditer(out)]
     hits = [h for h in hits if any(k in h for k in ("passed", "failed", "skipped", "no tests"))]
     return hits[-1] if hits else None
+
+
+def failed_count(out: str) -> int | None:
+    """A bukott ALLITASOK szama az osszegzo sorbol (`Tests  2 failed | 8 passed`).
+
+    Nincs osszegzo -> None (nem tudjuk). Van osszegzo, de nincs benne `failed` -> 0.
+    """
+    line = summary_line(out)
+    if line is None:
+        return None
+    m = re.search(r"(\d+)\s+failed", line)
+    return int(m.group(1)) if m else 0
+
+
+def parse_expect(raw: str | None) -> tuple[bool, int | None]:
+    """(ervenyes, ertek). `unknown` -> (True, None); pozitiv egesz -> (True, N)."""
+    if raw == "unknown":
+        return True, None
+    if raw is not None and re.fullmatch(r"[1-9]\d*", raw):
+        return True, int(raw)
+    return False, None
 
 
 def count_tests(cmd: str, cwd: Path) -> tuple[int | None, str]:
@@ -143,12 +191,14 @@ def sentinel_for(target: Path) -> Path:
 
 
 def sentinel_write(target: Path, original: str, anchor: str) -> Path:
-    """A mutacio ELOTT: eredeti szoveg + kontextus a cel MELLE."""
+    """A mutacio ELOTT: eredeti szoveg + kontextus + az EREDETI idobelyegek a cel MELLE."""
     s = sentinel_for(target)
+    st = target.stat()
     s.write_text(json.dumps({
         "file": str(target),
         "original": original,
         "anchor": anchor,
+        "times_ns": [st.st_atime_ns, st.st_mtime_ns],
         "pid": os.getpid(),
         "started_at": datetime.now().isoformat(timespec="seconds"),
     }, ensure_ascii=False))
@@ -169,6 +219,9 @@ def sentinel_restore(sent: Path) -> tuple[bool, str]:
         sent.unlink()
         return True, f"{target} MAR az eredeti volt -- a jelzot toroltem"
     target.write_text(original)
+    times = data.get("times_ns")
+    if isinstance(times, list) and len(times) == 2:
+        os.utime(target, ns=(int(times[0]), int(times[1])))
     sent.unlink()
     return True, f"{target} visszaallitva ({data.get('started_at', '?')} ota allt mutalva)"
 
@@ -200,6 +253,9 @@ def main() -> int:
     p.add_argument("--coverage", default=os.environ.get("MUTATE_PROBE_COV"),
                    help="json-summary riport a fedettseg-kontrollhoz (env: MUTATE_PROBE_COV)")
     p.add_argument("--cwd", default=".", help="a futtatas konyvtara")
+    p.add_argument("--expect-failed",
+                   help="KOTELEZO probanal: hany allitas bukasat varod (pozitiv egesz), "
+                        "vagy `unknown` (kimondottan nem allitasz darabszamot)")
     p.add_argument("--recover", action="store_true",
                    help="egy felbeszakadt proba visszaallitasa a jelzo-fajlbol, futtatas nelkul")
     p.add_argument("--check", action="store_true",
@@ -243,6 +299,13 @@ def main() -> int:
 
     if not a.anchor_file or not a.replacement_file:
         return fail("a --anchor-file es a --replacement-file kotelezo (kiveve `--check` / `--recover`)")
+    ok_exp, expect_failed = parse_expect(a.expect_failed)
+    if not ok_exp:
+        return fail(
+            "a --expect-failed KOTELEZO, es ervenyes alakja: pozitiv egesz, vagy pontosan `unknown`"
+            + (f" (kapott: {a.expect_failed!r})" if a.expect_failed is not None else "")
+            + ". Egy elirt ertek nem degradalodik nem-allitasra, mert az a fail-open irany."
+        )
     anchor = Path(a.anchor_file).read_text().rstrip("\n")
     replacement = Path(a.replacement_file).read_text().rstrip("\n")
     if not anchor:
@@ -267,25 +330,38 @@ def main() -> int:
 
     # --- 4. KONTROLL (opcionalis): a mutalt sor legyen FEDETT ---
     if a.coverage:
-        covered = line_is_covered(Path(a.coverage), target, lineno)
+        report = Path(a.coverage)
+        try:
+            rep_mt, src_mt = report.stat().st_mtime, target.stat().st_mtime
+        except OSError as e:
+            return fail(f"a riport vagy a forras mtime-ja nem olvashato ({e}) -- a friesseg nem allithato")
+        if rep_mt < src_mt:
+            return fail(
+                f"a lefedettsegi riport REGEBBI a forrasnal ({(src_mt - rep_mt) / 86400:.1f} nap) -- "
+                f"a sorszamok elcsuszhattak, a kontroll MAS sorra mondhat FEDETT-et. Futtass coverage-et: {report}"
+            )
+        covered = line_is_covered(report, target, lineno)
         if covered is None:
             return fail(f"a fedettseg nem allapithato meg a(z) {a.file}:{lineno} sorra")
         if not covered:
             return fail(f"a(z) {a.file}:{lineno} sor NEM FEDETT -- a tulelese semmit nem allitana")
 
     # --- alapvonal: a mutacio ELOTTI darabszam ---
-    base_n, _ = count_tests(a.cmd, cwd)
+    base_n, base_out = count_tests(a.cmd, cwd)
     if base_n is None:
         return fail("az alapvonal darabszama nem olvashato ki a futtato kimenetebol")
+    base_failed = failed_count(base_out) or 0
 
     # --- 5. KONTROLL: a jelzo a mutacio ELOTT keletkezik, es CSAK a sikeres
     #     visszaallitas utan tunik el. Ha a folyamatot megoljak, ez marad a fan.
+    st = target.stat()
     sentinel_write(target, original, anchor)
     target.write_text(original.replace(anchor, replacement, 1))
     try:
         mut_n, mut_out = count_tests(a.cmd, cwd)
     finally:
         target.write_text(original)  # a forras MINDIG visszaall
+        os.utime(target, ns=(st.st_atime_ns, st.st_mtime_ns))  # ...az EREDETI idobelyeggel
         sent.unlink(missing_ok=True)  # ...es CSAK ezutan tunik el a jelzo
 
     # --- 2. KONTROLL: az osszletszam ne csokkenjen ---
@@ -294,12 +370,22 @@ def main() -> int:
     if mut_n < base_n:
         return fail(f"az osszletszam CSOKKENT ({base_n} -> {mut_n}) -- a mutacio a BETOLTEST torte el")
 
-    summary = summary_line(mut_out) or ""
-    if "failed" in summary:
-        print(f"DISZKRIMINAL: {a.file}:{lineno} -- a teszt megfogja a mutaciot ({base_n} teszt)")
-        return OK_DISCRIMINATES
-    print(f"TULELTE: {a.file}:{lineno} -- a teszt NEM allit rola semmit ({base_n} teszt)")
-    return SURVIVED
+    mut_failed = failed_count(mut_out) or 0
+    broke = mut_failed - base_failed
+    base_note = f", az alapvonal mar {base_failed} bukassal indult" if base_failed else ""
+    if broke <= 0:
+        print(f"TULELTE: {a.file}:{lineno} -- a teszt NEM allit rola semmit ({base_n} teszt{base_note})")
+        return SURVIVED
+    if expect_failed is not None and broke != expect_failed:
+        print(f"DISZKRIMINAL, DE NEM UGY, AHOGY ALLITOD: {a.file}:{lineno} -- {broke} allitas tort el, "
+              f"{expect_failed} helyett{base_note}. Nezd meg egyenkent, melyik maradt zold: "
+              "az nem mer semmit, es a piros futas elrejti.")
+        return DISCRIMINATES_OTHERWISE
+    print(f"DISZKRIMINAL: {a.file}:{lineno} -- {broke} allitas tort el ({base_n} teszt{base_note})")
+    if expect_failed is None:
+        print("  [`unknown`: a darabszamot KIMONDOTTAN nem allitottad. Ha mar tudod, add meg, "
+              "es a futas azt is meri, MELYIK allitas hagyta abba a merest]")
+    return OK_DISCRIMINATES
 
 
 if __name__ == "__main__":
