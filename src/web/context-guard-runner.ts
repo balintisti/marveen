@@ -13,12 +13,13 @@ import {
   isSessionReadyForPrompt,
   noteSaturationBannerUntrusted,
   clearSaturationBannerOverride,
+  getAgentRunningSince,
 } from './agent-process.js'
 import { sessionNameForAgent } from './session-names.js'
 import { sendSystemDirective } from './system-directive.js'
 import { notifyChannel } from '../notify.js'
 import { detectPaneState, paneShowsContextSaturation, paneShowsContextSaturationHardError } from '../pane-state.js'
-import { readContextTokensFromProjectDir, readActiveModelFromProjectDir, readTranscriptMtimeFromProjectDir } from './active-model.js'
+import { readContextTokensFromProjectDir, readActiveModelFromProjectDir, readTranscriptMtimeFromProjectDir, predatesSession } from './active-model.js'
 import { readContextGuardConfig } from './context-guard-store.js'
 import { readAllContextGuardConfigs } from './context-guard-store.js'
 import { makeContextGuardConfigWarner } from './context-guard-config-warning.js'
@@ -266,9 +267,32 @@ export function resumePrompt(
   )
 }
 
+/** When this agent's CURRENT tmux session started (epoch seconds), or undefined when unknown.
+ *  Every transcript reading below is refused if the transcript is older than this (card 6f362eb3):
+ *  a file the current session has not written cannot describe it. Unknown -> no check, as before. */
+function sessionStartSec(name: string): number | undefined {
+  return getAgentRunningSince(name) ?? undefined
+}
+
+// Which agents the last sweep found on a dead reading -- only so the log speaks on a CHANGE. A
+// restarted session is dead until its first turn, every time; a line per sweep would bury it.
+const deadReading = new Set<string>()
+
+function noteDeadReading(name: string, since: number | undefined): void {
+  const dead = predatesSession(readTranscriptMtimeFromProjectDir(workingDirFor(name), configDirFor(name)), since)
+  if (dead === deadReading.has(name)) return
+  if (dead) {
+    deadReading.add(name)
+    logger.info({ agent: name, sessionStartSec: since }, 'context guard: newest transcript predates the session -- not measuring from it (dead reading)')
+  } else {
+    deadReading.delete(name)
+    logger.info({ agent: name }, 'context guard: transcript is live again -- measuring')
+  }
+}
+
 /** Raw observed context size (tokens) for the idle-flush tier's absolute threshold. */
-export function measureContextTokens(name: string): number | null {
-  const tokens = readContextTokensFromProjectDir(workingDirFor(name), configDirFor(name))
+export function measureContextTokens(name: string, since?: number): number | null {
+  const tokens = readContextTokensFromProjectDir(workingDirFor(name), configDirFor(name), since)
   return tokens !== null && tokens > 0 ? tokens : null
 }
 
@@ -278,16 +302,16 @@ export function measureContextTokens(name: string): number | null {
  * a clock change) is treated as "just now" rather than as a large idle time --
  * a wrong clock must not be able to trigger a flush.
  */
-export function measureIdleMs(name: string, nowMs: number): number | null {
-  const mtime = readTranscriptMtimeFromProjectDir(workingDirFor(name), configDirFor(name))
+export function measureIdleMs(name: string, nowMs: number, since?: number): number | null {
+  const mtime = readTranscriptMtimeFromProjectDir(workingDirFor(name), configDirFor(name), since)
   if (mtime === null) return null
   return Math.max(0, nowMs - mtime)
 }
 
-export function measurePct(name: string, cfgLimit: number | null): number | null {
+export function measurePct(name: string, cfgLimit: number | null, since?: number): number | null {
   const workingDir = workingDirFor(name)
   const configDir = configDirFor(name)
-  const tokens = readContextTokensFromProjectDir(workingDir, configDir)
+  const tokens = readContextTokensFromProjectDir(workingDir, configDir, since)
   if (tokens === null || tokens <= 0) return null
   let limit: number
   if (cfgLimit) {
@@ -405,6 +429,13 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
   // really is saturated") and lets all three consumers of the signal -- the net
   // below, agent-process.ts's dispatch gate and schedule-runner.ts's forceSend
   // deferral -- act on ONE verdict.
+  // One session-start read for every transcript probe below (the credibility probe and the
+  // three guard inputs), so they cannot disagree about it (card 6f362eb3). A dead reading is
+  // null: for the banner check that means the banner is NOT overruled -- only a real
+  // measurement may overrule a real banner (saturationBannerCredible).
+  const since = running && needPct ? sessionStartSec(name) : undefined
+  if (running && needPct) noteDeadReading(name, since)
+
   const paneSaturatedRaw = pane !== null ? paneShowsContextSaturation(pane) : false
   // Only a PERCENTAGE claim can be contradicted by a measurement; an
   // error-shaped banner is painted after a turn actually failed at the real
@@ -417,7 +448,7 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
   const bannerIsHardError = pane !== null && paneShowsContextSaturationHardError(pane)
   const needCredibilityProbe = paneSaturatedRaw && !bannerIsHardError
   const measuredPct = running && needPct && (cfg.enabled || needCredibilityProbe)
-    ? measurePct(name, cfg.limitTokens)
+    ? measurePct(name, cfg.limitTokens, since)
     : null
   const paneSaturatedTrusted = saturationBannerCredible(paneSaturatedRaw, bannerIsHardError, measuredPct)
   if (paneSaturatedRaw && !paneSaturatedTrusted) {
@@ -474,11 +505,11 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
     // Note the condition is cfg.idleFlushEnabled, NOT cfg.enabled: the two
     // tiers are independently switchable, so an agent running the idle tier
     // alone must still get its measurements.
-    contextTokens: running && needPct && cfg.idleFlushEnabled ? measureContextTokens(name) : null,
+    contextTokens: running && needPct && cfg.idleFlushEnabled ? measureContextTokens(name, since) : null,
     // idleMs is NOT gated on the idle-flush tier: the handoff-staleness check
     // (handoffStaleMinutes) needs the transcript mtime on every decision path
     // that can restart, and the probe is a single stat().
-    idleMs: running && needPct ? measureIdleMs(name, nowMs) : null,
+    idleMs: running && needPct ? measureIdleMs(name, nowMs, since) : null,
     // Seed-on-first-sight: an agent we have not seen this process is recorded
     // as served NOW and is never due on the same sweep. dailyHandoffDue is
     // therefore false on the first tick by construction, not by luck.
@@ -773,7 +804,7 @@ export function getContextGuardStatus(): Array<{
     return {
       agent: name,
       phase: state?.phase ?? 'idle',
-      pct: cfg.enabled && !remote ? measurePct(name, cfg.limitTokens) : null,
+      pct: cfg.enabled && !remote ? measurePct(name, cfg.limitTokens, sessionStartSec(name)) : null,
       enabled: cfg.enabled,
       saturationRestart: cfg.saturationRestart,
       ...cooldownStatusExtra(state),
