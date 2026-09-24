@@ -1405,6 +1405,25 @@ export function shSingleQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
+/** The git identity every commit made from an agent's session carries (card 49d1d6b6).
+ *
+ * WHY THE PROCESS AND NOT THE TREE: on 2026-09-24 the shared Delta-CRM `.git/config` held a
+ * leftover `jarvis@localhost` identity and 45 commits by several agents carried it. The first
+ * remedy considered was a per-worktree identity; measured: 240 linked worktrees, 30 with a name,
+ * 0 with an email, ~109 not attributable by path, and new ones created constantly. An identity
+ * exported at LAUNCH follows the agent into every tree it touches, old or new, in every repo.
+ * Git's precedence makes the environment win over any repo or worktree config (measured in a
+ * throwaway repo, both directions).
+ *
+ * The email is `<agent>@agents.local` (marveen's decision): deliberately not a real mailbox, so
+ * an agent commit is never mistaken for the owner's, on GitHub or anywhere else.
+ */
+export function gitIdentityEnv(name: string): string {
+  const email = `${name}@agents.local`
+  return `export GIT_AUTHOR_NAME=${shSingleQuote(name)} GIT_AUTHOR_EMAIL=${shSingleQuote(email)}`
+    + ` GIT_COMMITTER_NAME=${shSingleQuote(name)} GIT_COMMITTER_EMAIL=${shSingleQuote(email)} && `
+}
+
 /**
  * hu: A modell-azonosító alapján eldönti, melyik providerhez tartozik, és felépíti a shell
  * export-láncot, ami a Claude Code CLI-t az adott provider Anthropic-kompatibilis végpontjára
@@ -2511,7 +2530,7 @@ export async function startAgentProcess(name: string, opts: { fresh?: boolean } 
     // A `${byoUnsetEnv}` a SZERZO tagja (BYO/custom agensnel az orokolt OAuth-tokent le kell
     // venni, kulonben a CLI azt preferalja a sajat kulcs helyett). A bazis azota fuggvennye tette
     // ezt a sort az EPERM-fallback miatt; a tag ugyanabba a poziciba kerult vissza.
-    const buildLaunchCmd = (launchCwd: string) => `${umaskPrefix}export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin:$PATH" && ${unsetTokens} && ${autoUpdaterEnv}${byoUnsetEnv}${promptSuggestionEnv}${mcpEnv}${channelSetup}${apiKeyEnv}${claudeConfigEnv}${oauthTokenEnv}${providerEnv}cd "${launchCwd}" && ${claudeBin()} ${continueFlag}${skipFlag}--model ${shSingleQuote(model)} ${channelFlag}${worksourceFlags}`.trimEnd()
+    const buildLaunchCmd = (launchCwd: string) => `${umaskPrefix}export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin:$PATH" && ${unsetTokens} && ${autoUpdaterEnv}${byoUnsetEnv}${promptSuggestionEnv}${mcpEnv}${channelSetup}${apiKeyEnv}${claudeConfigEnv}${gitIdentityEnv(name)}${oauthTokenEnv}${providerEnv}cd "${launchCwd}" && ${claudeBin()} ${continueFlag}${skipFlag}--model ${shSingleQuote(model)} ${channelFlag}${worksourceFlags}`.trimEnd()
     // The agent's own target: for a per-user agent this is what makes the whole
     // session (and every process inside it) belong to that uid. Passing null here
     // silently started it as the router's user -- measured 2026-08-19: the start
