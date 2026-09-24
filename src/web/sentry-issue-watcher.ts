@@ -35,9 +35,14 @@ import {
   buildSentryNotice,
   buildUnreadableSentryNotice,
   NO_SENTRY_STATE,
+  decideSentryLanes,
+  buildLaneNotice,
+  laneCaveat,
   type SentryIssue,
   type SentryIssueState,
   type SentryReading,
+  type SentryLaneReading,
+  type SentryLaneMemory,
 } from '../sentry-issues.js'
 
 /**
@@ -109,13 +114,50 @@ export function saveWatermark(ms: number | undefined, path = SENTRY_WATERMARK_PA
   }
 }
 
+/**
+ * Which orgs' error lane is known closed, and when that was last said (card
+ * 6db77c30). ON DISK, unlike the issue state, because the dashboard restarts
+ * several times a day: in memory, every restart would be a fresh "LANE CLOSED"
+ * edge, and the notice meant to be rare would arrive with every deploy.
+ */
+export const SENTRY_LANE_PATH = join(PROJECT_ROOT, 'store', 'sentry-lane-state.json')
+
+/** Every failure reads as "nothing known", like the watermark: one repeat, never a crash. */
+export function loadLaneMemory(path = SENTRY_LANE_PATH): SentryLaneMemory {
+  try {
+    const raw: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return {}
+    const out: SentryLaneMemory = {}
+    for (const [org, v] of Object.entries(raw as Record<string, unknown>)) {
+      const o = v as { sinceMs?: unknown; announcedAtMs?: unknown } | null
+      if (typeof o?.sinceMs === 'number' && typeof o?.announcedAtMs === 'number') {
+        out[org] = { sinceMs: o.sinceMs, announcedAtMs: o.announcedAtMs }
+      }
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+export function saveLaneMemory(mem: SentryLaneMemory, path = SENTRY_LANE_PATH): void {
+  try {
+    writeFileSync(path, `${JSON.stringify(mem, null, 2)}\n`, 'utf8')
+  } catch (err) {
+    logger.warn(`[sentry] could not persist the error-lane state: ${String(err)}`)
+  }
+}
+
+let laneMemory: SentryLaneMemory = loadLaneMemory()
+
 // In-memory apart from the watermark above, which is loaded once at module
 // start so the FIRST tick of a new process can tell a gap arrival from backlog.
 let state: SentryIssueState = { ...NO_SENTRY_STATE, lastReadAtMs: loadWatermark() }
 
 /** Test seam: reset the module's memory between cases. */
-export function __resetSentryState(watermark?: number): void {
+export function __resetSentryState(watermark?: number, lanes: SentryLaneMemory = {}): void {
   state = watermark == null ? NO_SENTRY_STATE : { ...NO_SENTRY_STATE, lastReadAtMs: watermark }
+  laneMemory = lanes
 }
 
 function token(): Probe<string> {
@@ -207,6 +249,33 @@ export function issuesFromPayload(payload: unknown, org: string): SentryIssue[] 
 }
 
 /**
+ * One org's `error` category from `stats_v2`, hour by hour.
+ *
+ * SENTRY OMITS AN OUTCOME THAT HAD ZERO EVENTS -- measured 2026-09-24: with the
+ * lane closed, the `accepted` group was ABSENT, not a group of zeros. So a missing
+ * group is zero. A missing `groups` or `intervals` ARRAY is not: that is a shape
+ * this parser does not know, and reading it as zeros would turn "we could not
+ * read it" into `no-traffic` -- quiet, which is the defect this card is about.
+ */
+export function laneFromStatsPayload(payload: unknown, org: string): SentryLaneReading {
+  const p = payload as { groups?: unknown; intervals?: unknown } | null
+  if (!Array.isArray(p?.groups) || !Array.isArray(p?.intervals)) {
+    return { org, ok: false, reason: 'stats_v2 answered without groups/intervals arrays' }
+  }
+  const n = p.intervals.length
+  const series = (outcome: string): number[] => {
+    for (const g of p.groups as unknown[]) {
+      const gg = g as { by?: { outcome?: unknown }; series?: Record<string, unknown> } | null
+      if (gg?.by?.outcome !== outcome) continue
+      const s = gg.series?.['sum(quantity)']
+      if (Array.isArray(s)) return s.map(x => (typeof x === 'number' && Number.isFinite(x) ? x : 0))
+    }
+    return new Array(n).fill(0)
+  }
+  return { org, ok: true, accepted: series('accepted'), rateLimited: series('rate_limited') }
+}
+
+/**
  * Enqueue and READ BACK.
  *
  * A write counts as done when the row comes back, not when the call returns. An
@@ -271,7 +340,16 @@ export async function sentryTick(now = Date.now()): Promise<void> {
 
   const issues: SentryIssue[] = []
   const orgsFailed: { org: string; reason: string }[] = []
+  const lanes: SentryLaneReading[] = []
   for (const org of orgs) {
+    // ONE EXTRA CALL PER ORG. The measured ceiling was 10 per short window when
+    // INTERVAL_MS was set and 20 on 2026-09-24; a tick is now 1 + 2 x orgs = 5.
+    const sq = new URLSearchParams({
+      field: 'sum(quantity)', groupBy: 'outcome', category: 'error', statsPeriod: '24h', interval: '1h',
+    })
+    const stats = await getJson(`${API_ROOT}/organizations/${encodeURIComponent(org)}/stats_v2/?${sq}`, tok)
+    lanes.push(stats.ok ? laneFromStatsPayload(stats.value, org) : { org, ok: false, reason: stats.reason })
+
     const q = new URLSearchParams({
       query: 'is:unresolved',
       statsPeriod: STATS_PERIOD,
@@ -290,10 +368,20 @@ export async function sentryTick(now = Date.now()): Promise<void> {
   state = decision.next
   saveWatermark(state.lastReadAtMs)
 
+  const laneDecision = decideSentryLanes(lanes, laneMemory, now)
+  laneMemory = laneDecision.next
+  saveLaneMemory(laneMemory)
+  const laneNotice = buildLaneNotice(laneDecision, now)
+  if (laneNotice != null) enqueueVerified(laneNotice)
+  // EVERY issue notice carries the lane while it is closed: that is the line read
+  // when a decision is taken, and its quiet sentences are the misleading ones.
+  const caveat = laneCaveat(laneDecision)
+  const withCaveat = (n: string): string => (caveat != null ? `${n}\n\n${caveat}` : n)
+
   const unreadable = buildUnreadableSentryNotice(decision, reading, now)
-  if (unreadable != null) enqueueVerified(unreadable)
+  if (unreadable != null) enqueueVerified(withCaveat(unreadable))
   const notice = buildSentryNotice(decision)
-  if (notice != null) enqueueVerified(notice)
+  if (notice != null) enqueueVerified(withCaveat(notice))
 }
 
 export function startSentryIssueWatcher(): NodeJS.Timeout {
