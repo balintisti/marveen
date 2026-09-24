@@ -835,6 +835,25 @@ export function shSingleQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
+/** The git identity every commit made from an agent's session carries (card 49d1d6b6).
+ *
+ * WHY THE PROCESS AND NOT THE TREE: on 2026-09-24 the shared Delta-CRM `.git/config` held a
+ * leftover `jarvis@localhost` identity and 45 commits by several agents carried it. The first
+ * remedy considered was a per-worktree identity; measured: 240 linked worktrees, 30 with a name,
+ * 0 with an email, ~109 not attributable by path, and new ones created constantly. An identity
+ * exported at LAUNCH follows the agent into every tree it touches, old or new, in every repo.
+ * Git's precedence makes the environment win over any repo or worktree config (measured in a
+ * throwaway repo, both directions).
+ *
+ * The email is `<agent>@agents.local` (marveen's decision): deliberately not a real mailbox, so
+ * an agent commit is never mistaken for the owner's, on GitHub or anywhere else.
+ */
+export function gitIdentityEnv(name: string): string {
+  const email = `${name}@agents.local`
+  return `export GIT_AUTHOR_NAME=${shSingleQuote(name)} GIT_AUTHOR_EMAIL=${shSingleQuote(email)}`
+    + ` GIT_COMMITTER_NAME=${shSingleQuote(name)} GIT_COMMITTER_EMAIL=${shSingleQuote(email)} && `
+}
+
 // All tmux operations route through these two wrappers so the local-vs-remote
 // (ssh) decision and the quoting live in ONE place (ssh-tmux.ts). host=null is
 // byte-identical to the prior direct local tmux call. Remote calls get a larger
@@ -1381,7 +1400,7 @@ export async function startAgentProcess(name: string, opts: { fresh?: boolean } 
     // values like `claude-opus-4-8[1m]` (1M-context suffix) from being glob-expanded AND makes a `'`
     // in the value inert rather than a quote-break -> command injection. Same escape at the three
     // ANTHROPIC_MODEL env sites above.
-    const cmd = `export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin:$PATH" && ${unsetTokens} && ${autoUpdaterEnv}${promptSuggestionEnv}${mcpEnv}${channelSetup}${apiKeyEnv}${claudeConfigEnv}${oauthTokenEnv}${ollamaEnv}${deepseekEnv}${openrouterEnv}cd "${dir}" && ${claudeBin()} ${continueFlag}${skipFlag}--model ${shSingleQuote(model)} ${channelFlag}`.trimEnd()
+    const cmd = `export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin:$PATH" && ${unsetTokens} && ${autoUpdaterEnv}${promptSuggestionEnv}${mcpEnv}${channelSetup}${apiKeyEnv}${claudeConfigEnv}${gitIdentityEnv(name)}${oauthTokenEnv}${ollamaEnv}${deepseekEnv}${openrouterEnv}cd "${dir}" && ${claudeBin()} ${continueFlag}${skipFlag}--model ${shSingleQuote(model)} ${channelFlag}`.trimEnd()
     runTmux(null, ['new-session', '-d', '-s', session, cmd], { timeout: 10000 })
 
     logger.info({ name, session, channelDir: agentChannelDir }, 'Agent tmux session started')
