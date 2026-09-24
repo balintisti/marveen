@@ -597,7 +597,9 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
     const orCatalog = loadOpenRouterCatalog()
     json(res, {
       claude: [
-        { id: 'claude-opus-5', label: 'Opus 5 (legújabb Opus)' },
+        { id: 'claude-opus-5-5', label: 'Opus 5.5 (legújabb Opus)' },
+        { id: 'claude-opus-5-5[1m]', label: 'Opus 5.5 (1M kontextus)' },
+        { id: 'claude-opus-5', label: 'Opus 5' },
         { id: 'claude-sonnet-5', label: 'Sonnet 5' },
         { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
         { id: 'claude-fable-5', label: 'Fable 5' },

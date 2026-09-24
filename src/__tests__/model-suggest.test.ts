@@ -59,9 +59,17 @@ describe('suggestForAgent -- base (no signals)', () => {
 
   it('normalises [1m] suffix for comparison', () => {
     const text = 'IT architekt. Komplex elosztott rendszerterv, mikroszolgáltatás, stratégiai döntések.'
-    // Plain opus-5 vs the suggested opus-5[1m]: same family after normalize(),
-    // so no change is advised -- the suffix alone must not trigger churn.
-    const result = suggestForAgent('rick', 'claude-opus-5', text)
+    // The plain form of the CURRENT top tier vs the suggested [1m] form: same
+    // family after normalize(), so no change is advised -- the suffix alone must
+    // not trigger churn.
+    //
+    // DERIVED from the constant, not spelled out: this test previously hardcoded
+    // 'claude-opus-5' and so it locked the SUFFIX rule to one model generation.
+    // On the 2026-09-24 Opus 5.5 bump it failed for a reason that had nothing to
+    // do with suffix normalisation, which is the mechanism it is here to defend.
+    const plainTopTier = DISTRIBUTION_DEFAULT_AGENT_MODEL.replace(/\[1m\]$/, '')
+    expect(plainTopTier).not.toBe(DISTRIBUTION_DEFAULT_AGENT_MODEL) // the fixture must really differ
+    const result = suggestForAgent('rick', plainTopTier, text)
     expect(result.changeAdvised).toBe(false)
   })
 
@@ -215,8 +223,11 @@ describe('suggestForAgent -- reason structure (6 sections)', () => {
 // endpoint before the fix: 8 of 10 agents were suggested 4.8, 7 of them with
 // changeAdvised, 5 of those running Opus 5; after: 0 of 10).
 describe('MODELSUGGEST807 -- top tier is the shipped distribution default', () => {
-  it('the constant this suite locks to is Opus 5 (1M) today', () => {
-    expect(DISTRIBUTION_DEFAULT_AGENT_MODEL).toBe('claude-opus-5[1m]')
+  // Deliberately a LITERAL pin, not a tautology: it makes a model bump a
+  // conscious act that has to walk past this line. Bumped 2026-09-24 (Opus 5.5
+  // shipped); the previous pinned value was 'claude-opus-5[1m]'.
+  it('the constant this suite locks to is Opus 5.5 (1M) today', () => {
+    expect(DISTRIBUTION_DEFAULT_AGENT_MODEL).toBe('claude-opus-5-5[1m]')
   })
 
   it('an agent already ON the distribution default is never advised to change tier upward', () => {

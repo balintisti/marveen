@@ -28,7 +28,16 @@
 // the CLI already handles the 4.8[1m] default. The valueSet below carries BOTH
 // claude-opus-5 and claude-opus-5[1m] so an operator can still pick the
 // non-1M form.
-export const DISTRIBUTION_DEFAULT_AGENT_MODEL = 'claude-opus-5[1m]'
+// OPUS55924 (2026-09-24): bumped 5 -> 5.5 on the day Opus 5.5 shipped. This is
+// NOT cosmetic and NOT just the scaffold default: model-suggest.ts derives its
+// TOP_TIER_MODEL from this very constant, so leaving it at 5 made the dashboard
+// advise DOWNGRADING every freshly migrated agent. Measured on the live endpoint
+// with four agents already on claude-opus-5-5: 4 of 4 got suggestedModel
+// claude-opus-5[1m] with changeAdvised true -- byte-for-byte the MODELSUGGEST807
+// failure the comment in model-suggest.ts describes, reproduced by the migration
+// it was written about. Both ids verified present in the installed CLI bundle
+// (2.1.281): claude-opus-5-5 and claude-opus-5-5[1m].
+export const DISTRIBUTION_DEFAULT_AGENT_MODEL = 'claude-opus-5-5[1m]'
 
 export type SettingType = 'int' | 'string' | 'color' | 'boolean'
 
@@ -435,6 +444,8 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     secret: false,
     requiresRestart: true,
     valueSet: [
+      'claude-opus-5-5',
+      'claude-opus-5-5[1m]',
       'claude-opus-5',
       'claude-opus-5[1m]',
       'claude-sonnet-5',

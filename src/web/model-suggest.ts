@@ -33,6 +33,8 @@ const TOP_TIER_LABEL = humanModelLabel(TOP_TIER_MODEL)
 export type ModelId =
   | 'claude-haiku-4-5-20251001'
   | 'claude-sonnet-5'
+  | 'claude-opus-5-5[1m]'
+  | 'claude-opus-5-5'
   | 'claude-opus-5[1m]'
   | 'claude-opus-5'
   | 'claude-fable-5'
@@ -94,6 +96,12 @@ const HAIKU_KEYWORDS = [
 // Approximate input-token cost in USD per 1M tokens (mid-2026 pricing).
 const MODEL_COST_PER_M: Record<string, number> = {
   'claude-opus-4-8': 15,
+  // Listed BEFORE claude-opus-5 on purpose: modelCostPerM() walks this map in
+  // insertion order and takes the first startsWith() hit, and 'claude-opus-5-5'
+  // starts with 'claude-opus-5'. Today both price at 15 so the order changes
+  // nothing -- it matters the day the two tiers diverge, which is exactly when
+  // nobody would think to look here.
+  'claude-opus-5-5': 15,
   'claude-opus-5': 15,
   'claude-fable-5': 15,
   'claude-sonnet-5': 3,

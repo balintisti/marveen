@@ -14287,6 +14287,12 @@ const TU_MODEL_PRICING = {
   // model reference this table was checked against. The value follows the rest
   // of the current Opus tier (4.6/4.7/4.8 at 5 / 25); treat it as an estimate
   // until a published rate confirms it.
+  // Opus 5.5 is INFERRED the same way as Opus 5 below: no published rate yet.
+  // tuPriceForModel() sorts keys by length descending, so this row is not
+  // strictly needed today (claude-opus-5-5 already longest-prefix-matches
+  // claude-opus-5) -- it exists so the day the tiers diverge there is a row to
+  // edit instead of a silent wrong number.
+  'claude-opus-5-5':     { in: 5.0,   out: 25.0,  cw: 6.25,  cr: 0.50 },
   'claude-opus-5':       { in: 5.0,   out: 25.0,  cw: 6.25,  cr: 0.50 },
   'claude-opus-4-8':     { in: 5.0,   out: 25.0,  cw: 6.25,  cr: 0.50 },
   'claude-opus-4-7':     { in: 5.0,   out: 25.0,  cw: 6.25,  cr: 0.50 },
