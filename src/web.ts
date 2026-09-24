@@ -13,6 +13,7 @@ import { isBlockedCrossOriginWrite, originMatchesServedHost } from './web/csrf-o
 import { json } from './web/http-helpers.js'
 import { detectLanIp } from './web/network-info.js'
 import { AGENTS_BASE_DIR, listAgentNames } from './web/agent-config.js'
+import { refreshWorkerSettings } from './web/agent-worker.js'
 import { ensureAgentHooks, ensureAgentStalenessHook, ensureEgressGate, ensureGovernanceGateCommands, ensureMemoryIndexWriteGate, ensureQuarantineReader, ensureDefaultScheduledTasks, agentSettingsPath, ensureAutonomySection, ensureSkillsPathTrapSection } from './web/agent-scaffold.js'
 import { shouldRegisterHooks, pruneStaleHooksFromSettingsFile } from './web/hook-registration-guard.js'
 import { refreshMarveenBotUsername } from './web/telegram.js'
@@ -589,6 +590,12 @@ export function startWebServer(port = 3420): http.Server {
       if (egressPatched.length) logger.info({ patched: egressPatched }, 'egress-gate WebFetch hook backfilled into agent settings.json')
       if (govPatched.length) logger.info({ patched: govPatched }, 'governance gate hook commands upgraded to absolute node path in agent settings.json')
       if (memGatePatched.length) logger.info({ patched: memGatePatched }, 'MEMORY.md write-gate hook backfilled into agent settings.json')
+      // WORKERS TOO, and on the same guarded path (card ad303fae): a worker used to pick up the
+      // shared hooks only when its session was created, so a gate added here reached the agents at
+      // their next start and the workers only at their next session. Worktree-bound hooks are
+      // refused inside writeWorkerSettings, loudly.
+      const workersRefreshed = refreshWorkerSettings()
+      if (workersRefreshed.length) logger.info({ workers: workersRefreshed }, 'worker settings.json hooks refreshed at boot')
     } catch (err) {
       logger.warn({ err }, 'Agent hook backfill skipped')
     }

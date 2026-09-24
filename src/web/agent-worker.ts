@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, lstatSync, symlinkSync, realpathSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { homedir, userInfo } from 'node:os'
 import { createHash } from 'node:crypto'
 import { resolveFromPath, tryResolveFromPath } from '../platform.js'
@@ -390,6 +390,105 @@ export function mergeSharedHooks(
 }
 
 /**
+ * The absolute path in `command` that lies inside a LINKED GIT WORKTREE, or null (card ad303fae).
+ *
+ * THE MECHANISM, NOT A NAME: a linked worktree carries `.git` as a FILE (a `gitdir:` pointer),
+ * the main checkout carries it as a DIRECTORY. Walking up from each absolute path in the command
+ * to the nearest `.git` answers "is this a worktree" for any worktree, whatever it is called --
+ * a `marveen-wt-` pattern would have caught today's case and missed the next one.
+ *
+ * WHY IT EXISTS: 2026-09-24 11:38 a test run in a worktree wrote a hook pointing INTO that
+ * worktree into the real ~/.claude/settings.json (incident card 66b8e1fb); agent starts copied
+ * it into three sub-agents. A worktree is someone's unmerged work and disappears when pruned --
+ * a hook that runs from one runs unreviewed code, and after the prune (behind `[ -f ]`) nothing.
+ *
+ * NOT a rule "only the main checkout": four legitimate shared hooks run from ~/.claude/hooks/,
+ * and `$VAR` paths are resolved by the hook itself. Those have no worktree ancestor and pass.
+ */
+export function worktreeBoundHookPath(command: string): string | null {
+  for (const m of command.matchAll(/(?:^|[\s'"=;(])(\/[^\s'";)]+)/g)) {
+    let dir = m[1]
+    while (dir && dir !== '/') {
+      try {
+        if (lstatSync(join(dir, '.git')).isFile()) return m[1]
+        break  // a .git DIRECTORY: the nearest repo is a main checkout
+      } catch { /* no .git here -- keep walking up */ }
+      dir = dirname(dir)
+    }
+  }
+  return null
+}
+
+/** Drop every hook entry whose command runs from a linked worktree -- shared AND local, since the
+ *  merge preserves local entries and a bad hook that reached a worker once would otherwise stay.
+ *  Each drop is logged by path: a silently discarded gate is the failure this module guards. */
+export function dropWorktreeBoundHooks(block: HookBlock | undefined, where: string): HookBlock | undefined {
+  if (!block) return block
+  const out: HookBlock = {}
+  for (const [event, entries] of Object.entries(block)) {
+    const kept = (Array.isArray(entries) ? entries : []).filter((entry) => {
+      const cmds = ((entry as { hooks?: { command?: unknown }[] })?.hooks ?? [])
+        .map((h) => (typeof h?.command === 'string' ? h.command : ''))
+      const bad = cmds.map(worktreeBoundHookPath).find((p) => p != null)
+      if (bad) logger.warn({ where, event, path: bad }, 'worker hooks: REFUSED a hook that runs from a git worktree')
+      return !bad
+    })
+    if (kept.length) out[event] = kept
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+/**
+ * Write the worker's settings.json: channel plugins off, the shared `hooks` block merged in and
+ * filtered. Split out of ensureWorkerCwd so the dashboard can re-run it for EXISTING workers at
+ * boot (card ad303fae, marveen's decision 2026-09-24): until then a worker picked up shared hooks
+ * only when its session was created, so a legitimate new gate reached agents at their next start
+ * and workers only at their next session -- measured the same day, 16 shared hooks vs 15.
+ */
+export function writeWorkerSettings(ctx: WorkerCtx, claudeDir: string = join(homedir(), '.claude')): void {
+  const settingsPath = join(ctx.configDir, 'settings.json')
+  let current: WorkerSettings = {}
+  const sst = lstatSyncSafe(settingsPath)
+  if (sst?.isSymbolicLink()) {
+    rmSync(settingsPath, { force: true })
+  } else if (existsSync(settingsPath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(settingsPath, 'utf-8'))
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) current = parsed as WorkerSettings
+    } catch { /* rewrite */ }
+  }
+  const enabledPlugins: Record<string, boolean> = { ...(current.enabledPlugins ?? {}) }
+  for (const p of WORKER_DISABLED_PLUGINS) enabledPlugins[p] = false
+  // skipDangerousModePermissionPrompt: suppress the "Bypass Permissions mode"
+  // first-run warning so the headless worker (launched with
+  // --dangerously-skip-permissions) reaches its prompt without a blocking modal.
+  const hooks = dropWorktreeBoundHooks(mergeSharedHooks(readSharedHooks(claudeDir), current.hooks), ctx.configDir)
+  const { hooks: _dropped, ...rest } = current
+  writeFileSync(settingsPath, JSON.stringify({
+    ...rest,
+    enabledPlugins,
+    ...(hooks ? { hooks } : {}),
+    skipDangerousModePermissionPrompt: true,
+  }, null, 2) + '\n')
+}
+
+/** Re-run writeWorkerSettings for every worker whose config dir already exists. Called at
+ *  dashboard boot; a worker that was never created is left alone (ensureWorkerCwd builds it). */
+export function refreshWorkerSettings(ctxs: WorkerCtx[] = workerContexts(), claudeDir?: string): string[] {
+  const done: string[] = []
+  for (const ctx of ctxs) {
+    if (!existsSync(ctx.configDir)) continue
+    try {
+      writeWorkerSettings(ctx, claudeDir)
+      done.push(ctx.session)
+    } catch (err) {
+      logger.warn({ err, session: ctx.session }, 'worker hooks: settings refresh failed')
+    }
+  }
+  return done
+}
+
+/**
  * Build (idempotently) the worker's isolated cwd + CLAUDE_CONFIG_DIR:
  *  - empty project .mcp.json (defense in depth);
  *  - config dir symlinks every ~/.claude entry EXCEPT settings.json + CLAUDE.md
@@ -446,29 +545,7 @@ export function ensureWorkerCwd(ctx: WorkerCtx = ctxSlow): void {
   // hook config Claude Code wrote in a prior run) AND carry the shared `hooks`
   // block, which WORKER_CONFIG_SKIP would otherwise strip along with the file.
   // See readSharedHooks/mergeSharedHooks above for why the fix has to live here.
-  const settingsPath = join(ctx.configDir, 'settings.json')
-  let current: WorkerSettings = {}
-  const sst = lstatSyncSafe(settingsPath)
-  if (sst?.isSymbolicLink()) {
-    rmSync(settingsPath, { force: true })
-  } else if (existsSync(settingsPath)) {
-    try {
-      const parsed = JSON.parse(readFileSync(settingsPath, 'utf-8'))
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) current = parsed as WorkerSettings
-    } catch { /* rewrite */ }
-  }
-  const enabledPlugins: Record<string, boolean> = { ...(current.enabledPlugins ?? {}) }
-  for (const p of WORKER_DISABLED_PLUGINS) enabledPlugins[p] = false
-  // skipDangerousModePermissionPrompt: suppress the "Bypass Permissions mode"
-  // first-run warning so the headless worker (launched with
-  // --dangerously-skip-permissions) reaches its prompt without a blocking modal.
-  const hooks = mergeSharedHooks(readSharedHooks(realClaude), current.hooks)
-  writeFileSync(settingsPath, JSON.stringify({
-    ...current,
-    enabledPlugins,
-    ...(hooks ? { hooks } : {}),
-    skipDangerousModePermissionPrompt: true,
-  }, null, 2) + '\n')
+  writeWorkerSettings(ctx, realClaude)
 
   // Subscription auth: materialise the host login JSON as .credentials.json AND
   // clear the stale path-hashed Keychain entry that would shadow it (see the

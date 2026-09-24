@@ -113,12 +113,16 @@ describe('wiring (string contract)', () => {
   // and it writes to the live ~/.marveen-worker, so it cannot be called from a test.
   const SRC = readFileSync(new URL('../web/agent-worker.ts', import.meta.url), 'utf-8')
 
-  it('the settings writer consults the merge, not just the helper existing', () => {
-    expect(SRC).toMatch(/mergeSharedHooks\(readSharedHooks\(realClaude\), current\.hooks\)/)
+  // Since card ad303fae the writer is writeWorkerSettings(ctx, claudeDir), which takes an injectable
+  // ctx and IS exercised end to end in worker-hook-refresh.test.ts. These two stay as the cheap
+  // string contract; the third line is the one that ties ensureWorkerCwd to that writer.
+  it('the settings writer consults the merge (filtered), not just the helper existing', () => {
+    expect(SRC).toMatch(/dropWorktreeBoundHooks\(mergeSharedHooks\(readSharedHooks\(claudeDir\), current\.hooks\)/)
+    expect(SRC).toMatch(/writeWorkerSettings\(ctx, realClaude\)/)
   })
 
   it('the merged block is spread into the object that gets written', () => {
-    const writer = SRC.slice(SRC.indexOf('const hooks = mergeSharedHooks'))
+    const writer = SRC.slice(SRC.indexOf('const hooks = dropWorktreeBoundHooks'))
       .slice(0, 400)
     expect(writer).toMatch(/writeFileSync\(settingsPath/)
     expect(writer).toMatch(/\.\.\.\(hooks \? \{ hooks \} : \{\}\)/)
