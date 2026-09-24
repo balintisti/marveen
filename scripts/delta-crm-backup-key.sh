@@ -17,6 +17,13 @@
 # That is also the limit, stated rather than hidden: script(1) fakes a terminal,
 # so this stops an ACCIDENT, not someone set on getting the key out.
 #
+# BEFORE YOU HAND THIS KEY TO ANYONE: the unsafe step here was once proposed by
+# someone who knew the rule and had quoted it two paragraphs earlier. The pull
+# came from thinking about DELIVERY ("Isti must end up holding this") and
+# reaching for the usual channel without asking what travels on it and where it
+# stays. A chat message is its server, our log and the transcript at once. Ask
+# "what does this channel keep?" before "where does this need to arrive?".
+#
 # `verify` exists so the paper copy can be checked WITHOUT printing the key a
 # second time: a copy nobody has checked is a hope, and the day it is needed is
 # the worst day to learn one symbol was misread.
