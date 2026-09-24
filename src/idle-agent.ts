@@ -611,7 +611,21 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
       // 'waiting' because for a worker it means blocked on someone else. For the
       // blocker it is the opposite -- `waiting` is the only column that is
       // actually his, and every other status on his name is work in flight.
-      return live.filter((c) => c.status === 'waiting' && (c.assignee ?? '') === agent)
+      //
+      // AND THE COORDINATOR IS ALSO REACHED BY THE LABEL (card 515d668f, deeper measured
+      // it, jarvis specified it). A card that waits ON the coordinator is carried by
+      // somebody else -- its assignee is the BLOCKED side -- so the assignee filter alone
+      // delivered it to whoever carries it and never to whom it waits on. The label
+      // `varakozik:koordinator` existed with no consumer (0 production readers), which is
+      // this file's named shape: a producer that reaches nobody. This is the consumer:
+      // additive only, nothing leaves anyone else's list, so the coupling rule in
+      // idle-triage-coupling.test.ts (no narrowing without a consumer) is not engaged.
+      return live.filter((c) => {
+        if (c.status !== 'waiting') return false
+        if ((c.assignee ?? '') === agent) return true
+        return coordinator !== undefined && agent === coordinator
+          && labelNames(c).includes(WAITING_ON_COORDINATOR_LABEL)
+      })
     }
     case 'assigned_open_cards': {
       // 'waiting' is excluded: on this board it means blocked on someone else's
