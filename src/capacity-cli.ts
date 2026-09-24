@@ -8,17 +8,13 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { STORE_DIR, formatLocalStamp } from './config.js'
-import { sustainedSpareCapacity, paceRatio, SPARE_CAPACITY_DEFAULT, type CapacitySnapshot } from './capacity-report.js'
+import { sustainedSpareCapacity, paceRatio, SPARE_CAPACITY_DEFAULT, windowFromUsage, type CapacitySnapshot } from './capacity-report.js'
 
 function emit(o: unknown): never { process.stdout.write(JSON.stringify(o) + '\n'); process.exit(0) }
 
-function win(raw: unknown): { usedPercent: number; resetsAtMs: number } | null {
-  if (!raw || typeof raw !== 'object') return null
-  const r = raw as { used_percent?: unknown; resets_at?: unknown }
-  const u = Number(r.used_percent), t = Number(r.resets_at)
-  if (!Number.isFinite(u) || !Number.isFinite(t)) return null
-  return { usedPercent: u, resetsAtMs: t > 1e11 ? t : t * 1000 }
-}
+// The window parse lives in capacity-report.ts (windowFromUsage) so it can be tested
+// without running this CLI; see card 466b8998 there.
+const win = windowFromUsage
 
 function snapOf(row: { generated_at?: unknown; claude?: unknown }): CapacitySnapshot | null {
   const at = Date.parse(String(row.generated_at ?? ''))

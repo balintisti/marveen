@@ -131,3 +131,24 @@ export function sustainedSpareCapacity(
         : `nem mind a ${pop.days} nap volt alulhasznalat`,
   }
 }
+
+
+/**
+ * One usage window from the raw usage-latest.json shape, or null when it cannot be measured.
+ *
+ * Card 466b8998 (didi found it, mandark and didi measured it on the SHIPPED bytes): the old
+ * guard in capacity-cli.ts was `Number.isFinite(Number(x))`, and `Number(null) === 0`, which
+ * IS finite. So a `null` used_percent passed as 0 ("no consumption at all", paceRatio 0 on
+ * both windows) and a `null` resets_at passed as epoch 0 (paceRatio ~0.0003, read as
+ * UNDERUSE at 80% used). Both errors pointed the reassuring way. The guard now requires a
+ * real number, the same shape quota-gate.ts uses for the same fields (`typeof !== 'number'`).
+ * An absent field and a null field are both "not measurable", never zero.
+ */
+export function windowFromUsage(raw: unknown): { usedPercent: number; resetsAtMs: number } | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as { used_percent?: unknown; resets_at?: unknown }
+  const u = r.used_percent, t = r.resets_at
+  if (typeof u !== 'number' || !Number.isFinite(u)) return null
+  if (typeof t !== 'number' || !Number.isFinite(t)) return null
+  return { usedPercent: u, resetsAtMs: t > 1e11 ? t : t * 1000 }
+}
