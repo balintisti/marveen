@@ -840,10 +840,14 @@ def render_summary(snapshot):
     lines.append(f"Quota status -- {snapshot['generated_at_local']}")
     # WHICH COPY OF THIS SCRIPT ACTUALLY RAN, and a fingerprint of it.
     #
-    # There are two copies: scripts/usage-collect.py (the repo one) and
-    # store/usage-collect.py (a deliberate copy -- the scheduled task runs THAT
-    # one, because the upstream PR is not merged and update.sh needs a clean
-    # tree). Nothing said when they diverged, and on 2026-08-22 they had been
+    # There WERE two copies: scripts/usage-collect.py (the repo one) and
+    # store/usage-collect.py (a deliberate copy the scheduled task ran, because
+    # the upstream PR was not merged and update.sh needed a clean tree). Since
+    # 2026-09-24 the task runs THIS file (card 1fe8e8c5): the clean-tree reason
+    # died with decision 76b38e48, and the copy had fallen 5 weeks and 6 fixes
+    # behind. It is kept as store/usage-collect.py.retired-20260924 only for a
+    # rollback. The fingerprint below still earns its place: it is how that
+    # divergence was found twice. Nothing said when they diverged, and on 2026-08-22 they had been
     # five days apart: the keychain-refresh fix went into the repo copy while
     # the scheduled task kept running the August 17 one, 148 lines shorter and
     # with zero refresh logic (didi measured it).
