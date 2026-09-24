@@ -1117,6 +1117,15 @@ def compute_alerts(snapshot, state, now_utc=None):
 DELIVER_EPISODE_GAP_SEC = 3 * 3600      # no OVERUSE line for this long -> the next one starts a new episode
 DELIVER_REFIRE_SEC = 12 * 3600          # while an episode lasts, at most one message per this long
 HELD_MIN_HOURS = 6                      # a quota skip streak shorter than this is ordinary deferral
+_ONE_OFF_RX = re.compile(r"^\S+ \S+ \d+ \d+ \S+$")  # fixed day-of-month AND month: fires once a year
+
+
+def is_one_off(schedule):
+    """A cron with a FIXED day-of-month and month (`0 7 17 9 *`) fires once a year -- in practice
+    a one-off, date-bound task. For it a quota skip is not a deferral but a LOSS: there is no
+    next tick (card 9bf26d4b; measured: flotta-feloldas-09-17 was skipped on 09-17 07:00 and
+    never ran). Such a task is reported as held at once, not after HELD_MIN_HOURS."""
+    return bool(_ONE_OFF_RX.match((schedule or "").strip()))
 
 _OVERUSE_RX = re.compile(r"^ALERT: OVERUSE: (?P<key>.+?) (?P<used>\d+)% used")
 
@@ -1139,7 +1148,7 @@ def held_tasks(db_path=None, tasks_dir=None, now_ms=None, min_hours=HELD_MIN_HOU
         except (OSError, ValueError):
             continue
         if cfg.get("enabled"):
-            enabled[os.path.basename(os.path.dirname(f))] = cfg.get("agent") or "?"
+            enabled[os.path.basename(os.path.dirname(f))] = (cfg.get("agent") or "?", is_one_off(cfg.get("schedule")))
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
         out = []
@@ -1155,8 +1164,9 @@ def held_tasks(db_path=None, tasks_dir=None, now_ms=None, min_hours=HELD_MIN_HOU
                     break
                 if status == "skipped" and reason == "quota":
                     since = ts
-            if (now_ms - since) >= min_hours * 3600 * 1000:
-                out.append({"name": name, "agent": enabled[name], "since_ms": since})
+            agent, one_off = enabled[name]
+            if one_off or (now_ms - since) >= min_hours * 3600 * 1000:
+                out.append({"name": name, "agent": agent, "since_ms": since, "one_off": one_off})
         return out
     finally:
         con.close()
@@ -1194,7 +1204,9 @@ def plan_delivery(alerts, held, dstate, now_ts, held_error=None):
             since = datetime.fromtimestamp(h["since_ms"] / 1000, tz)
             hours = (now_ts * 1000 - h["since_ms"]) / 3.6e6
             lines.append(f"  - {h['name']} ({h['agent']}), skipped for quota since "
-                         f"{since.strftime('%m-%d %H:%M')} ({hours:.0f} h)")
+                         f"{since.strftime('%m-%d %H:%M')} ({hours:.0f} h)"
+                         + (" -- ONE-OFF schedule: there is no next run, this skip is a LOSS"
+                            if h.get("one_off") else ""))
     if held_error:
         lines.append(f"HELD TASKS NOT MEASURED this tick: {held_error}")
     new_state = {"over": over_state,

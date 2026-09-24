@@ -157,11 +157,11 @@ class HeldTasks(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def task(self, name, enabled=True):
+    def task(self, name, enabled=True, schedule="0 7 * * *"):
         d = os.path.join(self.tasks, name)
         os.makedirs(d)
         with open(os.path.join(d, "task-config.json"), "w") as fh:
-            json.dump({"enabled": enabled, "agent": "a1"}, fh)
+            json.dump({"enabled": enabled, "agent": "a1", "schedule": schedule}, fh)
 
     def runs(self, name, rows):
         c = sqlite3.connect(self.db)
@@ -187,6 +187,24 @@ class HeldTasks(unittest.TestCase):
         self.runs("late", [(T0 - 30 * H, "skipped", "quota"), (T0 - 3 * H, "fired_late", None),
                            (T0 - 1 * H, "skipped", "quota")])
         self.assertEqual(self.held(), ["held"])
+
+    def test_a_ONE_OFF_task_is_held_at_once_because_there_is_no_next_run(self):
+        # card 9bf26d4b: `0 7 17 9 *` fires once a year; its quota skip is a loss, not a deferral
+        self.task("feloldas-09-17", schedule="0 7 17 9 *")
+        self.runs("feloldas-09-17", [(T0 - 10 * 60, "skipped", "quota")])
+        self.task("daily", schedule="0 7 * * *")            # CONTROL: same 10-minute streak, recurring
+        self.runs("daily", [(T0 - 10 * 60, "skipped", "quota")])
+        got = uc.held_tasks(self.db, self.tasks, now_ms=T0 * 1000)
+        self.assertEqual([h["name"] for h in got], ["feloldas-09-17"])
+        self.assertTrue(got[0]["one_off"])
+        text, _ = uc.plan_delivery([], got, {}, T0)
+        self.assertIn("ONE-OFF schedule: there is no next run, this skip is a LOSS", text)
+
+    def test_one_off_shape(self):
+        for sch in ("0 7 17 9 *", "30 6 1 1 *"):
+            self.assertTrue(uc.is_one_off(sch), sch)
+        for sch in ("0 7 * * *", "*/10 * * * *", "0 7 17 * *", "0 7 * 9 *", "0 4 * * 3", ""):
+            self.assertFalse(uc.is_one_off(sch), sch)
 
     def test_an_unreadable_database_raises_instead_of_reporting_none(self):
         self.task("x")
