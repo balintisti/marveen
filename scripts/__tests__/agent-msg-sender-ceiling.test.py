@@ -181,6 +181,26 @@ class SenderCeiling(unittest.TestCase):
         # send was attempted. A refusal and a network failure are different exits.
         self.assertNotEqual(rc, 2)
 
+    def test_the_RECIPIENT_refusal_keeps_the_debt_too_and_says_when(self):
+        """Card 39c240a1 (jarvis, from didi's measurement in cc1d957f). Only the sender-side
+        closing sentence was pinned: didi mutated the recipient-side one ("kuldd el, amint a sor
+        urul" -> "kuldd el kesobb") and all 12 tests stayed green. This is its twin, in the same
+        shape -- and it also pins that the recipient branch does NOT borrow the ceiling's release
+        condition, since the two debts come due on different events (a drained queue vs a rolling
+        window)."""
+        d = self.tree([])
+        c = sqlite3.connect(os.path.join(d, "store", "claudeclaw.db"))
+        for i in range(3):
+            c.execute("insert into agent_messages (from_agent,to_agent,content,status,created_at)"
+                      " values (?,?,?,?,?)", ("didi", "marveen", "x", "pending", int(time.time())))
+        c.commit()
+        c.close()
+        rc, _, err = run(d)
+        self.assertEqual(rc, 2)
+        self.assertIn("TAROL, nem kezbesit", err)
+        self.assertIn("TARTOZAS -- kuldd el, amint a sor urul.", err)
+        self.assertNotIn("amint a PLAFON FELENGED", err)
+
     def test_the_recipient_gate_still_wins_when_both_apply(self):
         """The recipient's backlog is the stronger statement -- they have not read the last
         three. Both branches firing on one send would print two reasons for one refusal."""
