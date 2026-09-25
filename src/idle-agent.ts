@@ -572,6 +572,45 @@ export function selectWaitingOnOwner<T extends WorkCountCard>(cards: readonly T[
  *
  * `commentAuthorsByCard` maps card id -> the set of authors who have commented.
  */
+/**
+ * A CENSUS comment: board bookkeeping by jarvis, not a finding (card 57cb8d64, marveen 2026-09-25
+ * 03:05). marveen decided the COMMENT KIND decides, not the role: didi measured 22 reviewer cards
+ * where jarvis spoke last, 21 of them census, 1 a real reply (29a6b7e9) -- the one a role-based
+ * exclusion would have swallowed.
+ *
+ * A CLOSED TOKEN AT THE START OF THE FIRST LINE, not a content detector -- marveen's specification
+ * (03:12; my first cut departed from it, 03:24): an optional date prefix, then "jarvis,
+ * testing-cenzus", case-insensitive and with the comma OPTIONAL so the older "JARVIS TESTING-CENZUS
+ * (...)" form matches too. Nowhere else in the text counts.
+ * THE PREFIX may carry a TIME and a CEST/CET stamp ("2026-09-24 17:43:57 CEST -- jarvis, ..."):
+ * marveen 04:04, on the condition that real answers stay at 0. Measured 2026-09-25 on all 2308 of
+ * jarvis's comments: 316 census comments match (199 without the time prefix), 0 real answers, and
+ * 0 of the 16626 comments by others. Still NOT matched: "CIM ATIRVA (...)", "... -- CENZUS, MASODIK
+ * KERDES", "JARVIS done-cenzus" -- other genres, not the census header.
+ */
+export const CENSUS_HEADER = /^(?:\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?(?: CES?T)? +-- )?jarvis,?\s+testing-cenzus\b/i
+
+/**
+ * A census comment that carries a FINDING re-arms after all (marveen 2026-09-25 06:07, on didi's
+ * 06:05 review): the header classified the comment KIND, so a census round that noticed something
+ * on an already-reviewed card -- a stale fix, an ownerless item -- was swallowed with the rest.
+ *
+ * ONE CLOSED TOKEN, jarvis's census-own: a line that STARTS with `TALALAT:` at column 0. NOT
+ * `LELET:`, which stands in every checker's "LELET: nincs" and would read a negative answer as a
+ * finding. An INDENTED line does not count: that is a quotation, not jarvis's own finding.
+ * Case-sensitive, so a sentence in running text ("a talalat: ...") is not the token.
+ * The accented spelling `TALÁLAT:` is the SAME token, and it is accepted on purpose: jarvis wrote it
+ * accented on 18790e64, the finding that started this, and a token that silently misses its own
+ * author's spelling is the swallowed finding again. NFC first, so a decomposed Á matches too.
+ * Measured 2026-09-25 06:2x on the live board: 2 of 326 census comments carry the token (both
+ * jarvis, both after the decision, both positive); 0 carry it as a "nincs".
+ */
+export const CENSUS_FINDING_LINE = /^TAL[AÁ]LAT:/m
+
+export function isCensusComment(content: string): boolean {
+  return CENSUS_HEADER.test(content) && !CENSUS_FINDING_LINE.test(content.normalize('NFC'))
+}
+
 export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
   check: WorkCheck,
   agent: string,
@@ -601,6 +640,9 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
    *  deliver them nowhere -- the same silence this file refuses elsewhere. The
    *  narrowing switches on when the declarations exist, not before. */
   reviewers?: ReadonlySet<string>,
+  /** Same shape as lastCommentAtByCard, but built WITHOUT census comments (isCensusComment).
+   *  Absent = not measured, and then every comment counts, exactly as before. */
+  lastRealCommentAtByCard?: Map<string, Map<string, number>>,
 ): T[] {
   const live = cards.filter((c) => !c.archived_at)
   switch (check.kind) {
@@ -763,11 +805,18 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
         // AND NOT jarvis: his comments are mixed -- real independent measurement one hour,
         // census bookkeeping the next -- so role alone cannot decide it. That question is worth
         // 34 of the 44 items, i.e. most of the benefit, and it belongs to the coordinator.
+        //
+        // THE JARVIS QUESTION, DECIDED (marveen 2026-09-25, card 57cb8d64): not his role but the
+        // KIND of comment. A comment that opens with the census header does not re-arm; every
+        // other comment of his re-arms like anyone's. So an author re-arms the card only with a
+        // NON-census comment after mine -- read from lastRealCommentAtByCard when it is given.
         const spokeAfterMe: string[] = []
         for (const [author, at] of lastCommentAtByCard.get(c.id) ?? []) {
           if (author !== agent && at > mine) spokeAfterMe.push(author)
         }
-        if (spokeAfterMe.length > 0 && spokeAfterMe.every((a) => a === coordinator)) return false
+        const real = lastRealCommentAtByCard ? (lastRealCommentAtByCard.get(c.id) ?? new Map<string, number>()) : null
+        const reArming = spokeAfterMe.filter((a) => a !== coordinator && (real === null || (real.get(a) ?? -Infinity) > mine))
+        if (spokeAfterMe.length > 0 && reArming.length === 0) return false
         return true
       })
   }
