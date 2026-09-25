@@ -882,10 +882,19 @@ TAG = re.compile(r"<[^>]+>")
 # csupasz szam NEM lesz token, tehat a szamokra vonatkozo mai viselkedes nem
 # valtozik. Az `5-os` eddig is atment, de VELETLENUL -- az `os` nincs a
 # szotarban --; mostantol azert megy at, amiert a `Drive-ot`: egeszkent nezzuk.
-_HU_LETTER = "a-záéíóöőúüűA-ZÁÉÍÓÖŐÚÜŰ"
+#
+# 93CC58FC (2026-09-25): the letter class was HUNGARIAN-ONLY (`a-záéíóöőúüű...`), so a
+# foreign letter CUT a word in two and the fragment was audited as a standalone
+# Hungarian word. Measured live: "Nimčević" -> ['Nim', 'evi'], and "evi" is the
+# accent-stripped "évi" -> exit 2 on a correct Telegram report about a customer.
+# deeper: every -ević surname trips it (Nimčević, Nišević, Kovačević, Đorđević).
+# The fix is the TOKENIZER, not a surname allowlist (a name census never closes):
+# any Unicode letter is a word character, so a foreign name is ONE token and is
+# never in ACCENTLESS. `[^\W\d_]` = a letter; `[^\W_]` = a letter or a digit.
+# Script mixing is not this regex's job: mixed_script_words tokenizes with UWORD.
 HYPHEN_WORD = re.compile(
-    rf"[{_HU_LETTER}]+(?:-[{_HU_LETTER}0-9]+)*"
-    rf"|[0-9]+(?:-[{_HU_LETTER}0-9]+)+"
+    r"[^\W\d_]+(?:-[^\W_]+)*"
+    r"|[0-9]+(?:-[^\W_]+)+"
 )
 
 
