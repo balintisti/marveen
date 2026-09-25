@@ -1173,10 +1173,20 @@ export async function runMessageRouterTick(): Promise<void> {
           const mates = collectBatchMates(pending, msg, now, agentSessionCache)
           if (mates.items.length > 0) {
             const text = composeBatchInjection([{ prefix, wrapped }, ...mates.items], mates.remaining)
-            await sendPromptToSession(session, text, host, {
+            const batchResult = await sendPromptToSession(session, text, host, {
               survival: 'lost',
               survivalReason: 'the head row (shared code below) and every mate (loop below) are marked delivered right after -- the queue never re-sends a delivered message',
             })
+            // NOTHING WAS TYPED (card 2a8cb07f): a tool-permission prompt is on screen. Neither the
+            // head nor any mate may be marked delivered -- that would lose them silently. All stay
+            // pending; the mates are skipped for the rest of THIS tick only, so each does not take
+            // its own capture against the same prompt. The next tick delivers them once a human
+            // has answered the prompt.
+            if (batchResult === 'withheld-permission') {
+              for (const mate of mates.rows) batchedMsgIdsThisTick.add(mate.id)
+              logger.warn({ id: msg.id, agent: msg.to_agent, mates: mates.rows.length }, 'message-router: a permission prompt is on screen; batch left pending, not typed')
+              continue
+            }
             // The head row is marked delivered by the shared code below; the
             // mates are marked here and skipped by the loop via
             // batchedMsgIdsThisTick, exactly like the reconnect batch.
@@ -1196,10 +1206,18 @@ export async function runMessageRouterTick(): Promise<void> {
             if (mates.lastTraceCtx) traceCtxToRecord = mates.lastTraceCtx
             logger.info({ head: msg.id, to: msg.to_agent, batchSize: mates.items.length + 1, remaining: mates.remaining }, 'message-router: multi-envelope injection')
           } else {
-            await sendPromptToSession(session, prefix + wrapped, host, {
+            const sendResult = await sendPromptToSession(session, prefix + wrapped, host, {
               survival: 'lost',
               survivalReason: 'markMessageDelivered(msg.id) runs right after this block -- the queue never re-sends a delivered message',
             })
+            // NOTHING WAS TYPED: a tool-permission prompt was on screen (card 2a8cb07f). The router
+            // gates on isSessionReadyForPrompt first, so this is the race window between that check
+            // and the send -- but marking the message delivered here would LOSE it silently. It stays
+            // pending, and the next tick delivers it once the prompt has been answered by a human.
+            if (sendResult === 'withheld-permission') {
+              logger.warn({ id: msg.id, agent: msg.to_agent }, 'message-router: a permission prompt is on screen; message left pending, not typed')
+              continue
+            }
           }
         }
         if (!markMessageDelivered(msg.id)) {

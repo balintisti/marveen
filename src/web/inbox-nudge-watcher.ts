@@ -64,7 +64,7 @@ import { MAIN_AGENT_ID } from '../config.js'
 import { getPendingMessages } from '../db.js'
 import { getEffectiveSettingValue } from '../settings-store.js'
 import { MAIN_CHANNELS_SESSION } from './main-agent.js'
-import { capturePane, isSessionReadyForPrompt, sendPromptToSession, sessionExistsOnHost, clearFeedbackModalAndRecheck } from './agent-process.js'
+import { capturePane, isSessionReadyForPrompt, sendPromptToSession, sessionExistsOnHost, clearFeedbackModalAndRecheck, type SendPromptResult } from './agent-process.js'
 import { promptAlreadyQueued } from '../pane-state.js'
 import { sendAlert } from './channel-monitor.js'
 
@@ -485,7 +485,7 @@ async function tick(): Promise<void> {
 
     const prev = state
     state = recordNudge(state, now, oldest.id)
-    let result: 'sent' | 'aborted-busy' | 'skipped-locked'
+    let result: SendPromptResult
     try {
       result = await sendPromptToSession(MAIN_CHANNELS_SESSION, nudgeText(resolveLang()), null, {
         onBusyTimeout: 'abort',
@@ -502,11 +502,13 @@ async function tick(): Promise<void> {
       logger.warn({ err, pending: pending.length }, 'inbox nudge: send threw; nothing typed, state restored')
       return
     }
-    if (result === 'aborted-busy' || result === 'skipped-locked') {
+    if (result === 'aborted-busy' || result === 'skipped-locked' || result === 'withheld-permission') {
       // Nothing was typed: either the pane turned busy in the check->send gap
       // (aborted-busy), or a delivery held the per-pane lock (skipped-locked --
       // this is a deliver-mode call so it fails open rather than skipping, but
-      // handle it for completeness). Undo the debounce so the cadence retries.
+      // handle it for completeness), or a tool-permission prompt was on screen
+      // (withheld-permission, card 2a8cb07f -- a machine must not answer it). Undo the
+      // debounce so the cadence retries.
       state = prev
       logger.info({ inboxNudgeSkipped: result, pending: pending.length }, 'inbox nudge: nothing typed before send; skipped')
       return

@@ -2920,16 +2920,17 @@ export function permissionPromptBlocksBareEnter(
   session: string,
   host: string | null = null,
   capture: (host: string | null, args: string[]) => string = captureTmux,
+  who = 'Stuck input',
 ): boolean {
   let pane: string
   try {
     pane = capture(host, ['capture-pane', '-t', session, '-p'])
   } catch (err) {
-    logger.warn({ err, session }, 'Stuck input -- pane capture failed before a bare Enter; withholding it this tick')
+    logger.warn({ err, session }, `${who} -- pane capture failed before keystrokes; withholding them this tick`)
     return true
   }
   if (!detectsPermissionPrompt(pane)) return false
-  logger.warn({ session }, 'Stuck input -- a tool PERMISSION prompt is on screen; NOT sending Enter (it would grant the request)')
+  logger.warn({ session }, `${who} -- a tool PERMISSION prompt is on screen; NOT typing and NOT sending Enter (it would answer the request)`)
   return true
 }
 
@@ -3286,6 +3287,10 @@ async function discardPlaceholderBuffer(session: string, host: string | null = n
   return finalPane != null && !detectsPastePlaceholder(finalPane)
 }
 
+/** What a delivery did. 'withheld-permission' = NOTHING was typed (or a follow-up key was held
+ *  back) because a tool-permission prompt was on screen -- the caller must not treat it as sent. */
+export type SendPromptResult = 'sent' | 'aborted-busy' | 'skipped-locked' | 'withheld-permission'
+
 // Send text to a tmux session as if typed at the prompt.
 // Uses execFileSync so callers can pass raw text -- tmux send-keys -l treats
 // the argument as literal characters, bypassing shell quoting entirely.
@@ -3330,7 +3335,7 @@ export async function sendPromptToSession(
     /** Called the moment the first keystroke of THIS prompt is emitted (PROMPTCSONK923). */
     onEmitStart?: () => void
   },
-): Promise<'sent' | 'aborted-busy' | 'skipped-locked'> {
+): Promise<SendPromptResult> {
   const lockMode: SendLockMode = opts.lockMode ?? 'deliver'
   // PANEWRITERS805: the three modal dismissals are probe+act keystroke writers
   // that ran BEFORE the lane lock -- so they could press Escape/Enter into a
@@ -3426,7 +3431,20 @@ export async function sendPromptToSession(
   // is the per-session critical section. Held under a per-pane in-process mutex
   // (session-send-lock): normal delivery is fail-open (a stuck holder must not
   // silence the fleet); a `recover` caller skips instead of racing a live send.
-  const emitToPane = async (): Promise<'sent'> => {
+  const emitToPane = async (): Promise<'sent' | 'withheld-permission'> => {
+  // THE ONE PLACE EVERY MACHINE DELIVERY PASSES, SO THE PERMISSION GUARD LIVES HERE (card 2a8cb07f,
+  // didi's review 18764, marveen 02:1x). A tool-permission prompt reads as a NOT-ready pane, and
+  // that is exactly the state in which the coordinator's inbox wakeup types with waitForIdle:false
+  // -- text plus Enter into a menu where "1. Yes" is preselected. The TEXT is as dangerous as the
+  // Enter: the menu may take single keys, and the wakeup line contains both "y" and "n". So the
+  // guard sits BEFORE the first keystroke, including the stale-preamble clear below, and nothing
+  // at all is typed. Fail-closed on an unreadable pane, like the recovery Enters: a withheld send
+  // costs one tick, a machine answer grants a tool call nobody approved.
+  if (permissionPromptBlocksBareEnter(session, host, captureTmux, 'sendPromptToSession')) {
+    return 'withheld-permission'
+  }
+  // The guard above returns before this: no keystroke of THIS prompt was emitted, so the
+  // caller's delivery clock must not start.
   // PROMPTCSONK923: tell the caller the moment the first keystroke of THIS
   // prompt is about to be emitted (we hold the lane from here). The scheduler
   // judges delivery from transcript prompts recorded after this instant.
@@ -3529,6 +3547,11 @@ export async function sendPromptToSession(
       logger.warn({ session, attempt }, 'sendPromptToSession: prompt still parked after retries')
       break
     }
+    // The prompt can appear AFTER the first send (the delivered text started a turn that asks
+    // for a tool). Every follow-up below presses keys, so each one asks the guard again.
+    if (permissionPromptBlocksBareEnter(session, host, captureTmux, 'sendPromptToSession follow-up')) {
+      return 'withheld-permission'
+    }
     if (action === 'clear-and-resend') {
       // Placeholder confirmed in the pane (box non-empty, not busy), so the
       // Ctrl-C in discardPlaceholderBuffer is safe. Clear it, then replay the
@@ -3566,6 +3589,7 @@ export async function sendPromptToSession(
   }
 
   const lockResult = await withSessionSendLock(session, host, lockMode, emitToPane)
+  if (lockResult.ran && lockResult.value === 'withheld-permission') return 'withheld-permission'
   if (!lockResult.ran) {
     // recover mode + lane busy: a delivery is mid-flight into this pane. Do NOT
     // race it (we would clear or submit the wrong buffer). Skip this round and
