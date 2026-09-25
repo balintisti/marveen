@@ -152,6 +152,62 @@ _CURL_BODY_OPTS = {
 _SAFE_METHODS = {"GET", "HEAD"}
 
 
+# RESENDCFG926 (card a38fdb42, marveen 2026-09-26): a Resend CONFIG call is not
+# a mail send. Registering the delivery-events webhook (card 0f857c3d, the
+# owner's explicit order) is a POST /webhooks with {endpoint, events}: no
+# recipient, no copy. The method-only verdict above refused it fail-closed,
+# because every POST to api.resend.com counted as a send. The exemption is a
+# NARROW POSITIVE LIST on the parsed URL, everything else keeps the old path:
+#   - exactly ONE URL-like token in the whole curl (two URLs -> no exemption)
+#   - scheme https (or none), host EXACTLY api.resend.com, no userinfo, no port
+#   - no query, no fragment, no '%', no '..', no '//' in the path
+#   - path is /webhooks or /domains, optionally one id segment (and /verify
+#     for domains); case-sensitive, so /Webhooks does not qualify
+# /emails, /emails/batch, /broadcasts, /audiences and anything unparseable stay
+# on the old verdict. The sub-agent hard gate (email-send-gate.mjs) is NOT
+# changed: it already refuses every Resend curl including GET, deliberately
+# stricter (same split as RESENDGATE826). Only the main agent configures Resend.
+_URLISH = re.compile(r"^([a-z][a-z0-9+.-]*:)?//", re.I)
+_RESEND_CFG_PATH = re.compile(
+    r"^/(webhooks(/[A-Za-z0-9_-]+)?|domains(/[A-Za-z0-9_-]+(/verify)?)?)/?$"
+)
+
+
+def _curl_resend_config_only(rest):
+    from urllib.parse import urlsplit
+    url_opts = {"--url"}
+    urls = []
+    for i, t in enumerate(rest):
+        if t in url_opts:
+            continue
+        if t.startswith("--url="):
+            t = t.split("=", 1)[1]
+        # Counted: anything with a scheme or '//' prefix, and any token the
+        # Resend target pattern hits. A second such token (another URL, or the
+        # target hidden in some flag's value) voids the exemption.
+        if _URLISH.match(t) or _RESEND_TARGET.match(t) or "resend.com" in t.lower():
+            urls.append(t)
+    if len(urls) != 1:
+        return False
+    raw = urls[0]
+    if "%" in raw or "\\" in raw:
+        return False
+    if raw.lower().startswith("https://"):
+        u = urlsplit(raw)
+    elif "://" in raw or raw.startswith("//"):
+        return False  # http:// or any other scheme: not the provider's API
+    else:
+        u = urlsplit("https://" + raw)
+    if u.netloc != "api.resend.com":
+        return False
+    if u.query or u.fragment:
+        return False
+    path = u.path
+    if ".." in path or "//" in path:
+        return False
+    return bool(_RESEND_CFG_PATH.match(path))
+
+
 def _curl_resend_verdict(rest):
     """'read' | 'send' | 'unknown' -- unknown a hivo oldalon fail-closed."""
     method = None
@@ -405,7 +461,13 @@ def _head_is_send(toks, depth: int) -> bool:
     # fenn; a read-only GET/HEAD lekerdezes atmegy; a nem-donthato metodus
     # tovabbra is fail-closed.
     if _CURLISH.match(prog) and any(_RESEND_TARGET.match(t) for t in rest):
-        return _curl_resend_verdict(rest) != "read"
+        verdict = _curl_resend_verdict(rest)
+        if verdict == "send" and _curl_resend_config_only(rest):
+            # RESENDCFG926: only a DETERMINED method gets the config exemption;
+            # 'unknown' (variable method, truncated flag, -K config file that may
+            # carry its own URL) stays fail-closed exactly as before.
+            return False
+        return verdict != "read"
     return False
 
 
