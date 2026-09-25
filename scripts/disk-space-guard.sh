@@ -87,6 +87,20 @@ ALERT_STAMP="$STATE_DIR/.disk-guard-alerted"
 TG_ENV="${DISK_GUARD_TG_ENV:-$HOME/.claude/channels/telegram/.env}"
 LOG_TAG="disk-space-guard"
 
+# THE COORDINATOR FIRST, THE OWNER AS FALLBACK (card b610c593, marveen 2026-09-25 04:38): the same
+# routing as the idle guard's 45101873 -- "Isti cannot do anything with the disk at night; I can".
+# Resolved the way backup.sh does (src/env.ts: .env MAIN_AGENT_ID, default "marveen").
+MAIN_AGENT_ID="marveen"
+if [ -f "$INSTALL_DIR/.env" ]; then
+  _mid="$(grep -E '^[[:space:]]*MAIN_AGENT_ID[[:space:]]*=' "$INSTALL_DIR/.env" | tail -1 \
+    | sed -E 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//; s/^"(.*)"$/\1/; s/^'\''(.*)'\''$/\1/' || true)"
+  [ -n "${_mid:-}" ] && MAIN_AGENT_ID="$_mid"
+fi
+# Test hooks: the tmux binary (the "is the coordinator running" probe), and a SENDER executable
+# that takes the message on stdin and prints "OK id=<n>" like agent-msg.sh -- so a test exercises
+# this routing without ever writing to the live dashboard queue.
+TMUX_BIN="${DISK_GUARD_TMUX_BIN:-tmux}"
+
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [$LOG_TAG] $*" || true; }
 
 # REAL usage% of the measured volume (0-100). No override reaches this: it is the
@@ -225,6 +239,40 @@ alert_owner() {
   return 1
 }
 
+# The coordinator, through agent-msg.sh -- the one path that checks HTTP code AND id and says
+# "OK id=<n>" (fleet-page-guard.sh uses it for the same reason; a bare curl exits 0 on a 403).
+# `--force` because this is the one alert that must not be held back by the courtesy queue gate.
+# Returns non-zero -- and the owner gets it -- when the coordinator is NOT RUNNING (a letter in a
+# queue nobody reads is the idle guard's lesson, 45101873) or the send fails. Note agent-msg.sh uses
+# mktemp: on a truly full disk this path can fail, and the fallback below uses no files at all.
+alert_coordinator() {
+  local msg="$1" out rc
+  if ! "$TMUX_BIN" has-session -t "${MAIN_AGENT_ID}-channels" 2>/dev/null; then
+    log "coordinator session ${MAIN_AGENT_ID}-channels is not running -- the owner gets this alert"
+    return 1
+  fi
+  if [ -n "${DISK_GUARD_COORD_SENDER:-}" ]; then
+    out="$(printf '%s' "$msg" | "$DISK_GUARD_COORD_SENDER" 2>&1)"; rc=$?
+  elif [ "${DISK_GUARD_ALERT_DRYRUN:-}" = "1" ]; then
+    echo "ALERT_DRYRUN(coordinator): $msg"; return 0
+  else
+    # the same refusal as alert_owner: a planted percentage is not a disk
+    if [ -n "${DISK_GUARD_USAGE_OVERRIDE:-}" ] && [ "${DISK_GUARD_ALLOW_FAKE_ALERT:-}" != "1" ]; then
+      log "ALERT REFUSED (coordinator): usage is a planted value, not a real disk: $msg"; return 1
+    fi
+    out="$(printf '%s' "$msg" | bash "$INSTALL_DIR/scripts/agent-msg.sh" "$MAIN_AGENT_ID" "$MAIN_AGENT_ID" - --force 2>&1)"; rc=$?
+  fi
+  if [ "$rc" = "0" ]; then
+    case "$out" in (*"OK id="*) log "coordinator alerted ($(printf '%s' "$out" | grep -o 'OK id=[0-9]*' | head -1))"; return 0;; esac
+  fi
+  log "coordinator alert FAILED (rc=${rc}) -- the owner gets this alert"
+  return 1
+}
+
+alert_route() {
+  alert_coordinator "$1" || alert_owner "$1"
+}
+
 main() {
   local usage removed now last
   # Ensure the state dir exists UP FRONT so the cooldown stamp write below always
@@ -266,7 +314,7 @@ main() {
       # (a timer kadenciaja szerint), tehat elbukott alertenkent egy naplosor. Ez szandekos:
       # a lemez ilyenkor TELE van, es egy nem kezbesitett veszjelzes ujraprobalasa pontosan
       # az, amiert ez az or letezik. A csendes elhallgatas volt a hiba.
-      if alert_owner "🔴 Disk space critical: ${SCRATCH_DIR} (volume $(disk_mount)) is at ${usage}% after reaping ${removed} scratch item(s). Manual cleanup needed -- a full disk can wedge the channel session (deafness)."; then
+      if alert_route "🔴 Disk space critical: ${SCRATCH_DIR} (volume $(disk_mount)) is at ${usage}% after reaping ${removed} scratch item(s). Manual cleanup needed -- a full disk can wedge the channel session (deafness)."; then
         echo "$now" > "$ALERT_STAMP" 2>/dev/null || true
       else
         log "alert did NOT go out -- cooldown stamp NOT written, will retry next tick"

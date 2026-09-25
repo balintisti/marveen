@@ -259,7 +259,11 @@ printf '%s' "$OUTL" | grep -q "reaping scratch under $LSCR" && pass "l: reaps un
 # The threshold hook must not become a way to disable the guard by typo. Both bad
 # directions: a non-number must not read as 0 (reap every tick), and 900 must not
 # silently mean never. Both fall back to 90, so at 62% neither reaps.
-OUTL2="$(DISK_GUARD_SCRATCH_DIR="$LSCR" DISK_GUARD_STATE_DIR="$LSTATE" \
+# A PLANTED 50% here, not the real disk (card b610c593): this assert is about the THRESHOLD, and on
+# the real disk it only held while the host was under 90% -- it went red, on the base tree too, the
+# night the disk reached 90%, because the fallback 90 then legitimately reaps. With 50% planted,
+# "reaps" can only mean the garbage was read as 0.
+OUTL2="$(DISK_GUARD_SCRATCH_DIR="$LSCR" DISK_GUARD_STATE_DIR="$LSTATE" DISK_GUARD_USAGE_OVERRIDE=50 \
          DISK_GUARD_REAP_THRESHOLD=abc DISK_GUARD_ALERT_DRYRUN=1 bash "$GUARD" 2>&1)"
 printf '%s' "$OUTL2" | grep -q "reaping scratch" && fail "l: garbage threshold read as 0 -- would reap every tick" || pass "l: garbage threshold falls back to the default (no reap)"
 # 900 needs the usage override, and here it is the RIGHT tool: the thing under
@@ -403,6 +407,38 @@ DP_N="$(printf '%s\n' "$DP_ALL" | grep -c 'DISK_PATH=' || true)"
 [ -z "$DF_BAD" ] && pass "o: every df uses the canonical \$DISK_PATH form" || fail "o: this df is not the canonical form, so (o) cannot verify WHICH volume it measures -- write it as df -P \"\$DISK_PATH\" (a grep cannot parse shell, so one form is all it can check). If it deliberately measures something else, that is a second source of truth that can drift from DISK_PATH: $DF_BAD"
 [ "$DP_N" = "1" ] && pass "o: DISK_PATH is assigned exactly once" || fail "o: DISK_PATH assigned $DP_N times -- two assignments can drift: $DP_ALL"
 printf '%s' "$DP_ALL" | grep -q 'DISK_PATH="\$SCRATCH_DIR"' && pass "o: and it is derived from SCRATCH_DIR" || fail "o: DISK_PATH is not derived from SCRATCH_DIR: $DP_ALL"
+
+# ---------------------------------------------------------------------------
+# (r) ROUTING (card b610c593, marveen 04:38): the coordinator first, the owner only as fallback --
+# the idle guard's 45101873 rule. A stub tmux answers "is the coordinator running", a stub sender
+# records what it was given; the owner path stays in DRYRUN, so nothing here can send anything.
+# ---------------------------------------------------------------------------
+echo ""
+echo "(r) the critical alert goes to the coordinator first"
+RDIR="$TMPDIR_BASE/case-r"; mkdir -p "$RDIR/bin"
+printf '#!/bin/sh\nexit 0\n' > "$RDIR/bin/tmux-up";   chmod +x "$RDIR/bin/tmux-up"
+printf '#!/bin/sh\nexit 1\n' > "$RDIR/bin/tmux-down"; chmod +x "$RDIR/bin/tmux-down"
+printf '#!/bin/sh\ncat > "%s/sent"\necho "OK id=7"\n' "$RDIR" > "$RDIR/bin/send-ok";   chmod +x "$RDIR/bin/send-ok"
+printf '#!/bin/sh\ncat > "%s/sent"\necho "NEM KULDTEM"\nexit 2\n' "$RDIR" > "$RDIR/bin/send-fail"; chmod +x "$RDIR/bin/send-fail"
+route() { # tmux sender -> stdout
+  rm -f "$RDIR/sent"; read -r S ST <<< "$(fresh_case "r-$1-$2")"
+  DISK_GUARD_TMUX_BIN="$RDIR/bin/$1" DISK_GUARD_COORD_SENDER="$RDIR/bin/$2" run_guard 96 "$S" "$ST"
+}
+OUTR1="$(route tmux-up send-ok)"
+printf '%s' "$OUTR1" | grep -q "coordinator alerted (OK id=7)" && pass "r: coordinator running -> the coordinator gets it" || fail "r: no coordinator alert: $OUTR1"
+printf '%s' "$OUTR1" | grep -qF "ALERT_DRYRUN: " && fail "r: the owner was ALSO alerted though the coordinator got it" || pass "r: ...and the owner is NOT alerted"
+grep -q "Disk space critical" "$RDIR/sent" 2>/dev/null && pass "r: the sender received the alert text" || fail "r: the sender got nothing"
+OUTR2="$(route tmux-up send-fail)"
+printf '%s' "$OUTR2" | grep -q "coordinator alert FAILED" && printf '%s' "$OUTR2" | grep -qF "ALERT_DRYRUN: " \
+  && pass "r: a failed send -> the owner gets it (fallback)" || fail "r: no fallback after a failed send: $OUTR2"
+OUTR3="$(route tmux-down send-ok)"
+[ ! -e "$RDIR/sent" ] && pass "r: coordinator NOT running -> the sender is not even called" || fail "r: sent to a coordinator who is not running"
+printf '%s' "$OUTR3" | grep -qF "ALERT_DRYRUN: " && pass "r: coordinator not running -> the owner gets it" || fail "r: no owner alert when the coordinator is down: $OUTR3"
+# the cooldown stamp is written on the coordinator path too: a second tick stays quiet
+read -r S ST <<< "$(fresh_case r-cool)"
+DISK_GUARD_TMUX_BIN="$RDIR/bin/tmux-up" DISK_GUARD_COORD_SENDER="$RDIR/bin/send-ok" run_guard 96 "$S" "$ST" >/dev/null
+OUTR4="$(DISK_GUARD_TMUX_BIN="$RDIR/bin/tmux-up" DISK_GUARD_COORD_SENDER="$RDIR/bin/send-ok" run_guard 96 "$S" "$ST")"
+printf '%s' "$OUTR4" | grep -q "within alert cooldown" && pass "r: a coordinator alert starts the cooldown too" || fail "r: re-alerted within cooldown: $OUTR4"
 
 # ---------------------------------------------------------------------------
 echo ""
