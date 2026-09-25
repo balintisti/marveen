@@ -758,8 +758,29 @@ RULES_INVALID = "invalid"
 RULES_LOUD = (RULES_MISSING, RULES_EMPTY, RULES_INVALID)
 
 
+# A PATTERN THAT CAN MATCH ZERO CHARACTERS MATCHES EVERY MESSAGE (card 3c753513, didi 18748).
+# audit() reports any hit of BAD_NAME.search(), and "" or ".*" hits at position 0 of any text --
+# so ONE such line in the rules file would block every Telegram reply as a FOUND problem (rc 2,
+# where the fail-open for internal errors does not apply), on all eight sessions once the gate
+# is wired into the sub-agents. Not only "" and ".*": "x?", "\b" and a bare lookahead match
+# zero-width too, so the test is a zero-length match on a few probe texts, not a string compare.
+# Such a pattern is INVALID at load: the email path stays closed, the Telegram path warns.
+_ZERO_WIDTH_PROBES = ("", " ", "a", "0", "Szia Béla, itt a levél.\nÜdv")
+_INVALID_REASON = ""
+
+
+def _zero_width_index(compiled):
+    """Index of the first pattern that can match zero characters, or None."""
+    for i, rx in enumerate(compiled):
+        for probe in _ZERO_WIDTH_PROBES:
+            if any(m.end() == m.start() for m in rx.finditer(probe)):
+                return i
+    return None
+
+
 def load_bad_name():
     """Return (compiled_regex_or_None, state) -- see the RULES_* names above."""
+    global _INVALID_REASON
     try:
         with open(_LOCAL_RULES, encoding="utf-8") as fh:
             data = json.load(fh)
@@ -770,7 +791,13 @@ def load_bad_name():
             if not isinstance(pats, list) or not all(isinstance(x, str) for x in pats):
                 state = RULES_INVALID
             elif pats:
-                return (re.compile("|".join(pats)), RULES_OK)
+                # the pattern's INDEX, never its text: a name rule names a private person
+                zw = _zero_width_index([re.compile(x) for x in pats])
+                if zw is None:
+                    return (re.compile("|".join(pats)), RULES_OK)
+                _INVALID_REASON = (f"a(z) {zw + 1}. minta URES szovegre is illeszkedik "
+                                   "(pl. \"\" vagy \".*\"), ami MINDEN uzenetet elkapna")
+                state = RULES_INVALID
             elif data.get("no_name_rule") is True or data.get("name_check_disabled") is True:
                 # Returns HERE, before the logging tail, on purpose: a taken
                 # decision must not write a "the protection is gone" line into
@@ -802,7 +829,7 @@ def load_bad_name():
     # left no log line while missing did -- same event class, inconsistent
     # ledger).
     _gate_log(f"outgoing-copy-gate: NEV-SZABALY {state.upper()} ({_LOCAL_RULES}) -- "
-              "a nev-ellenorzes NEM fut.")
+              "a nev-ellenorzes NEM fut." + (f" Ok: {_INVALID_REASON}." if _INVALID_REASON else ""))
     return (None, state)
 
 
@@ -1100,9 +1127,14 @@ def telegram_gate(tool_input: dict) -> None:
     # FOREIGNLETTER924: the named foreign-letter warning rides in the SAME stdout JSON --
     # a hook prints one object, so two separate prints would be one unparseable line.
     emit_system_messages([
-        ("outgoing-copy-gate: a NEV-SZABALY fajl hianyzik/ures "
-         f"({_LOCAL_RULES}) -- a nev-ellenorzes NEM fut a kimeno uzeneteken. "
-         "Potold a store/outgoing-copy-gate-rules.json-t.") if RULES_STATE in RULES_LOUD else None,
+        (("outgoing-copy-gate: a NEV-SZABALY fajl ERVENYTELEN "
+          f"({_LOCAL_RULES}"
+          + (f"; {_INVALID_REASON}" if _INVALID_REASON else "")
+          + ") -- a nev-ellenorzes NEM fut a kimeno uzeneteken. Javitsd a fajlt.")
+         if RULES_STATE == RULES_INVALID else
+         ("outgoing-copy-gate: a NEV-SZABALY fajl hianyzik/ures "
+          f"({_LOCAL_RULES}) -- a nev-ellenorzes NEM fut a kimeno uzeneteken. "
+          "Potold a store/outgoing-copy-gate-rules.json-t.") if RULES_STATE in RULES_LOUD else None),
         foreign_letter_warning(text),
     ])
     sys.exit(0)
@@ -1486,8 +1518,10 @@ def main():
         # fail-closed until the file is repaired (negative control in tests).
         sys.stderr.write(
             "KIMENO-SZOVEG KAPU: TILTVA -- a NEV-SZABALY fajl LETEZIK, de "
-            f"ervenytelen ({_LOCAL_RULES}): nem parse-olhato JSON, rossz sema "
-            "vagy hibas regex.\n"
+            f"ervenytelen ({_LOCAL_RULES}): "
+            + (_INVALID_REASON if _INVALID_REASON else
+               "nem parse-olhato JSON, rossz sema vagy hibas regex")
+            + ".\n"
             "Javitsd a fajlt (bad_name_patterns: [regex, ...] + correction), "
             "aztan kuldd ujra.\n"
         )
