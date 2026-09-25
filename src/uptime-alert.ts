@@ -133,6 +133,26 @@ export function seriesVerdict(
  */
 export const BLIND_REANNOUNCE_MS = 3_600_000
 
+/**
+ * How long a blind spell must LAST before its first notice: the next poll has to confirm it.
+ *
+ * Card 507992c5, marveen's ruling: keep the NOT MEASURED form, but not for a one-poll blip. Measured
+ * 2026-09-25 on the live log and the live queue (36 NOT MEASURED notices, 09-22 01:19 .. 09-25 05:5x):
+ * after 35 of them the VERY NEXT poll, at most 150 s later, read the API again; one spell lasted two
+ * polls (09-22 01:19, sighted again 198 s later). The causes were all connect-level -- gcloud timing
+ * out (23) or the timeSeries fetch failing (13) -- and the in-tick retry, 1 s apart, cannot outlast
+ * them. So the delayed retry marveen asked for is the NEXT TICK, not a longer wait inside this one:
+ * holding a tick open is what card 77c305a4 had to cap.
+ *
+ * 90 s, not 120: the second poll lands ~120 s after the first, and a threshold equal to the interval
+ * would miss it on a millisecond of timer jitter and wait a THIRD poll. Anything in (0, 120 s)
+ * means "the next poll", and 90 s sits well inside it.
+ *
+ * The cost, stated: a real outage of the poller's reach is announced one poll (~2 min) later. It is
+ * still announced -- the spell's start time is kept, and the notice names it.
+ */
+export const BLIND_CONFIRM_MS = 90_000
+
 /** What the poller remembers between ticks, so an ongoing outage is announced once. */
 export interface UptimeAlertState {
   /** `checkId::checkerLocation` for every series currently announced as firing. */
@@ -177,8 +197,8 @@ export interface UptimeDecision {
   /** True when the policy's trigger threshold is met across all series. */
   policyWouldFire: boolean
   /**
-   * Whether the unreadable notice is DUE this tick -- the edge of a blind spell,
-   * or an hour of continuous blindness since the last one. The builder formats;
+   * Whether the unreadable notice is DUE this tick -- a blind spell the next poll
+   * confirmed (BLIND_CONFIRM_MS), or an hour of continuous blindness since the last one. The builder formats;
    * this decides, so the window is testable without touching I/O.
    */
   announceBlind: boolean
@@ -221,8 +241,11 @@ export function decideUptimeAlerts(
   // A spell that ENDS resets both marks, so the next blind spell announces on its
   // own edge instead of serving out a window that started an hour ago.
   const blindSinceMs = blindNow ? (prev.blindSinceMs ?? nowMs) : null
+  // The spell must have outlived one poll (BLIND_CONFIRM_MS) before anything is said about it;
+  // after that, the re-announce window below is unchanged.
   const announceBlind =
     blindNow &&
+    nowMs - (blindSinceMs ?? nowMs) >= BLIND_CONFIRM_MS &&
     (prev.blindAnnouncedAtMs == null || nowMs - prev.blindAnnouncedAtMs >= BLIND_REANNOUNCE_MS)
 
   return {
@@ -320,10 +343,14 @@ export function buildUnreadableNotice(
   if (!d.announceBlind) return null
   // On a repeat the reader must be able to tell an hour-old blind spell from a
   // fresh one -- otherwise identical hourly notices read as flapping.
+  // The FIRST notice names its confirmation too (507992c5): the reader is owed the difference between
+  // "one poll failed" -- which is no longer announced at all -- and "blind across consecutive polls".
   const ongoing =
-    d.blindSinceMs != null && nowMs - d.blindSinceMs >= BLIND_REANNOUNCE_MS
-      ? ` STILL BLIND since ${new Date(d.blindSinceMs).toISOString()} -- this is a repeat, not a new event.`
-      : ''
+    d.blindSinceMs == null
+      ? ''
+      : nowMs - d.blindSinceMs >= BLIND_REANNOUNCE_MS
+        ? ` STILL BLIND since ${new Date(d.blindSinceMs).toISOString()} -- this is a repeat, not a new event.`
+        : ` Blind since ${new Date(d.blindSinceMs).toISOString()}, confirmed by the next poll -- not a one-poll blip.`
   // CHECKED FIRST, because this is the case that was silent. An empty result has
   // no series to report as unknown, so an unknown-only check reads it as nothing
   // to say.

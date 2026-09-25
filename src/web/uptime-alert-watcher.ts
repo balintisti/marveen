@@ -335,6 +335,36 @@ export function resetPollerInFlight(): void {
 // finishes is capped by the same number.
 export const CALL_TIMEOUT_MS = 100_000
 
+/**
+ * A thrown call described WITH ITS CAUSE CHAIN (card 507992c5).
+ *
+ * undici throws a bare `TypeError: fetch failed`; the reason is one level down, in `err.cause`.
+ * The notice used to carry only the top message, so every connect failure 09-22..09-25 reached the
+ * coordinator as "threw: fetch failed", while the log right beside it said which: a
+ * `ConnectTimeoutError [UND_ERR_CONNECT_TIMEOUT]` to monitoring.googleapis.com:443 (10 s connect
+ * cap), or an `AggregateError [ETIMEDOUT]` (every address timed out). Those point at the host's
+ * network, not at the token or the API -- and the reader should not have to open the log for it.
+ * The depth is bounded and a self-referencing cause stops the walk.
+ */
+export function describeThrow(err: unknown): string {
+  const top = err instanceof Error ? err.message : String(err)
+  const links: string[] = []
+  const seen = new Set<unknown>([err])
+  let e: unknown = err instanceof Error ? err.cause : undefined
+  for (let depth = 0; e != null && !seen.has(e) && depth < 3; depth++) {
+    seen.add(e)
+    if (e instanceof Error) {
+      const code = (e as { code?: unknown }).code
+      links.push(`${e.name}${typeof code === 'string' ? ` [${code}]` : ''}${e.message ? `: ${e.message}` : ''}`)
+      e = e.cause
+    } else {
+      links.push(String(e))
+      break
+    }
+  }
+  return links.length === 0 ? top : `${top} -- caused by: ${links.join(' <- ')}`
+}
+
 export async function getJson(url: string, token: string, timeoutMs: number = CALL_TIMEOUT_MS): Promise<Probe<unknown>> {
   const where = url.split('?')[0]
   const startedAt = Date.now()
@@ -367,7 +397,7 @@ export async function getJson(url: string, token: string, timeoutMs: number = CA
     // A cap hit is named as such, so the log separates "we gave up at the cap" from any other throw.
     done(err instanceof Error && err.name === 'TimeoutError' ? 'timeout' : 'threw')
     logger.warn({ err, url: where }, 'uptime poller: API call threw')
-    const msg = redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, MAX_REASON_CHARS)
+    const msg = redactSecrets(describeThrow(err)).slice(0, MAX_REASON_CHARS)
     return { ok: false, reason: `request to ${where} threw: ${msg}`, transient: true }
   }
 }
