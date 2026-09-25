@@ -28,6 +28,7 @@ mean "let it through". The block message says how to make it inspectable.
 Contract: PreToolUse. Reads the hook payload on stdin, exit 0 = allow,
 exit 2 = block (stderr goes back to the model).
 """
+import html
 import json
 import os
 import re
@@ -72,6 +73,18 @@ import sys
 # eldobasa a heredoc-taplalt VALODI kuldot vesztette volna el (FN).
 _HEREDOC = re.compile(r"(<<-?\s*'?(\w+)'?[^\n]*)\n.*?\n\2(?=\s|$)", re.S)
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*=")
+# KWSPLIT924: shell reserved words that put the NEXT word in command position.
+# The segmenter splits on operators only, so `if true; then sendmail x; fi`
+# gave the segment [then, sendmail, x] whose "program" was `then`: the send was
+# not recognised and the copy audit was silently skipped (same for do / else /
+# elif / { / !, and the condition after if / while / until). They are stripped
+# ONLY at the head of a segment, i.e. in command position, never as separators:
+# `echo then sendmail x` stays a single echo. `in` is deliberately NOT here: the
+# words after it are data, and `for m in sendmail msmtp; do which $m; done` must
+# stay false. `for` / `case` are not here either: the word after them is a name
+# or a subject, not a command. Mirrored in email-send-gate.mjs (CMD_POSITION_KEYWORDS);
+# the shared send-invocation-cases.json binds the two.
+_CMD_POSITION_KEYWORDS = frozenset(("if", "then", "else", "elif", "do", "while", "until", "{", "!"))
 _SENDER_PROG = re.compile(r"^(sendmail|msmtp|swaks)$", re.I)
 _SENDPY = re.compile(r"^send\.py$", re.I)
 _PYTHON = re.compile(r"^python3?$", re.I)
@@ -120,6 +133,88 @@ def _code_string_sends(code: str) -> bool:
 # Token-ELEJERE horgonyzott cel-minta: egy URL-argumentum vagy csupasz
 # domain/utvonal illik ra; egy JSON-payload ('{...api.resend.com...}') nem.
 _RESEND_TARGET = re.compile(r"^(https?://)?([^/@\s]*\.)?api\.resend\.com(/|$|\s|$)", re.I)
+
+# RESENDGATE826: a resend-celu curl/wget csak akkor KULDES, ha a METODUS az.
+# A korabbi minta metodus-vak volt, es egy read-only GET /domains (nincs torzs,
+# nincs cimzett) ugyanugy fail-closed elutasitast kapott -- pont egy domain-
+# verifikacios MERES akadt el rajta. A szukites iranya szigoru: a metodust
+# FELISMERNI kell (explicit -X/--request/--method, vagy implicit POST a
+# torzs-flagekbol); ha nem allapithato meg (valtozo, config-fajl, csonka flag),
+# marad a fail-closed. Egy "nincs felismerheto torzs -> atmegy" szabaly a
+# kaput utne ki, ezert ILYEN AG NINCS.
+_CURL_BODY_OPTS = {
+    "-d", "--data", "--data-raw", "--data-binary", "--data-urlencode",
+    "--data-ascii", "-F", "--form", "--form-string", "--json",
+    "-T", "--upload-file",
+    # wget torzs-flagek
+    "--post-data", "--post-file", "--body-data", "--body-file",
+}
+_SAFE_METHODS = {"GET", "HEAD"}
+
+
+def _curl_resend_verdict(rest):
+    """'read' | 'send' | 'unknown' -- unknown a hivo oldalon fail-closed."""
+    method = None
+    has_body = False
+    get_forced = False
+    i, n = 0, len(rest)
+    while i < n:
+        t = rest[i]
+        if t in ("-X", "--request", "--method"):
+            if i + 1 >= n or not rest[i + 1].isalpha():
+                return "unknown"  # csonka vagy valtozo ($METHOD) -- nem dontheto
+            method = rest[i + 1].upper()
+            i += 2
+            continue
+        if t.startswith("--request=") or t.startswith("--method="):
+            m = t.split("=", 1)[1]
+            if not m.isalpha():
+                return "unknown"
+            method = m.upper()
+            i += 1
+            continue
+        if t in ("-G", "--get"):
+            get_forced = True
+            i += 1
+            continue
+        if t in ("-K", "--config"):
+            return "unknown"  # a config-fajl rejtett metodust/torzset hordozhat
+        if t in _CURL_BODY_OPTS or any(
+            t.startswith(o + "=") for o in _CURL_BODY_OPTS if o.startswith("--")
+        ):
+            has_body = True
+            i += 1
+            continue
+        if t.startswith("-") and not t.startswith("--") and len(t) > 1:
+            # egy-kotojeles cluster (-sS, -sX POST, -sd '{}'): a betuk kotegelve
+            letters = t[1:]
+            if "X" in letters:
+                after = letters.split("X", 1)[1]
+                if after:
+                    if not after.isalpha():
+                        return "unknown"
+                    method = after.upper()
+                else:
+                    if i + 1 >= n or not rest[i + 1].isalpha():
+                        return "unknown"
+                    method = rest[i + 1].upper()
+                    i += 1
+            elif "d" in letters or "F" in letters or "T" in letters:
+                has_body = True
+            elif "G" in letters:
+                get_forced = True
+            elif "K" in letters:
+                return "unknown"
+            i += 1
+            continue
+        i += 1
+    if method is not None and method not in _SAFE_METHODS:
+        return "send"
+    if has_body and not get_forced:
+        # implicit POST (curl -d/-F/--json/-T alapertelmezese), vagy egy
+        # gyanus "GET torzzsel" alak -- mindketto kuldeskent kezelve
+        return "send"
+    return "read"
 # A tovabbi kuldes-jellegu literalok, amikre a parse-hiba eseten (es CSAK
 # akkor) konzervativan visszaesunk -- lasd is_send_invocation vegen.
 _FALLBACK_LITERALS = re.compile(
@@ -166,7 +261,15 @@ def _segments_tokens(cmd: str):
     lex.whitespace_split = True
     segments, cur = [], []
     for tok in lex:
-        if tok in ("|", "||", "&", "&&", ";", "(", ")", ";;", "|&"):
+        # SEGSPLIT923: shlex(punctuation_chars) returns a RUN of operator
+        # characters as ONE token, so `$(date); sendmail ...` (after the
+        # subshell mask: `;date); sendmail`) yielded the token ");" -- not in
+        # the list, so it did not split, `sendmail` landed mid-segment, and the
+        # send was NOT recognised: the copy audit was silently skipped. The JS
+        # twin (email-send-gate.mjs) said true on the same input; nothing in
+        # the conformance list covered it. A token made ONLY of operator
+        # characters is always an operator sequence, so it separates.
+        if tok in ("|", "||", "&", "&&", ";", "(", ")", ";;", "|&") or (tok and set(tok) <= set("();|&")):
             if cur:
                 segments.append(cur)
             cur = []
@@ -177,9 +280,97 @@ def _segments_tokens(cmd: str):
     return segments
 
 
-def _segment_is_send(toks, depth: int) -> bool:
-    while toks and _ENV_ASSIGN.match(toks[0]):
+# SENDWRAP924: a wrapper in front of the sender -- `sudo sendmail x`,
+# `time -p sendmail x`, `env -i sendmail x`, `timeout 10 sendmail x` -- made
+# the wrapper the "program", so the send was not recognised and the copy audit
+# was silently skipped (13 measured shapes, both copies). A wrapper is stepped
+# over WITH its own flags: a flag that takes a value consumes it, so in
+# `sudo -u sendmail true` the program is `true`, not `sendmail`.
+# name -> (short flags taking a value, long flags taking a value, positional
+# arguments before the command). An UNKNOWN long flag without `=` may or may
+# not take a value, so both readings are tried and either one being a send
+# counts: an unknown flag errs toward auditing, never toward skipping.
+# `command -v/-V` looks a name up and runs nothing. `function NAME` and
+# `coproc [NAME]` put their body in command position. Mirrored in
+# email-send-gate.mjs (WRAPPERS / commandHeads); send-invocation-cases.json
+# binds the two.
+_WRAPPERS = {
+    "time": ("fo", ("format", "output"), 0),
+    "sudo": ("ughpCUrtDRT", ("user", "group", "host", "prompt", "close-from", "other-user",
+                             "role", "type", "chdir", "chroot", "command-timeout"), 0),
+    "env": ("uCS", ("unset", "chdir", "split-string"), 0),
+    "nohup": ("", (), 0),
+    "nice": ("n", ("adjustment",), 0),
+    "exec": ("a", (), 0),
+    "command": ("", (), 0),
+    "xargs": ("ILnPsdEa", ("arg-file", "delimiter", "eof", "replace", "max-lines", "max-args",
+                           "max-procs", "max-chars", "process-slot-var"), 0),
+    "timeout": ("sk", ("signal", "kill-after"), 1),
+    # setsid: for future use and symmetry. NOT measured local traffic: the hits the
+    # first count found all sat inside quoted remote (ssh) command strings or heredoc
+    # bodies, and that pattern was not quote-aware (Marveen's correction, 2026-09-24).
+    "setsid": ("", (), 0),
+}
+_HEAD_DEPTH = 8
+
+
+def _command_heads(toks, _d: int = 0):
+    """Every token list that can be the real command of this segment, after the
+    leading assignments, command-position keywords and wrappers are stepped over."""
+    while toks and (_ENV_ASSIGN.match(toks[0]) or toks[0] in _CMD_POSITION_KEYWORDS):
         toks = toks[1:]
+    if not toks:
+        return [toks]
+    w = _basename(toks[0])
+    if _d >= _HEAD_DEPTH:
+        # Still a wrapper at the depth bound: the real command is out of sight,
+        # so it counts as a send (None) -- the bound errs toward auditing, like
+        # an unknown flag does. It used to return the wrapper itself, and nine
+        # nested wrappers + sendmail was silently skipped (Samu, #1521 review).
+        return [None] if (w in _WRAPPERS or w in ("function", "coproc")) else [toks]
+    if w == "function":
+        return _command_heads(toks[2:], _d + 1)
+    if w == "coproc":
+        return _command_heads(toks[1:], _d + 1) + _command_heads(toks[2:], _d + 1)
+    spec = _WRAPPERS.get(w)
+    if spec is None:
+        return [toks]
+    short_val, long_val, positionals = spec
+    i, starts = 1, []
+    while i < len(toks):
+        t = toks[i]
+        if t == "--":
+            i += 1
+            break
+        if t.startswith("--"):
+            if "=" not in t and t[2:] in long_val:
+                i += 2
+                continue
+            if "=" not in t:
+                starts.append(i + 2)
+            i += 1
+            continue
+        if t.startswith("-") and len(t) > 1:
+            if w == "command" and ("v" in t or "V" in t):
+                return []
+            k = next((j for j, ch in enumerate(t[1:], 1) if ch in short_val), -1)
+            i += 2 if k == len(t) - 1 else 1
+            continue
+        break
+    starts.insert(0, i)
+    heads = []
+    for s in starts:
+        heads += _command_heads(toks[s + positionals:], _d + 1)
+    return heads
+
+
+def _segment_is_send(toks, depth: int) -> bool:
+    return any(_head_is_send(h, depth) for h in _command_heads(toks))
+
+
+def _head_is_send(toks, depth: int) -> bool:
+    if toks is None:  # the depth bound was hit on a wrapper: audit it
+        return True
     if not toks:
         return False
     prog = _basename(toks[0])
@@ -209,10 +400,30 @@ def _segment_is_send(toks, depth: int) -> bool:
     if any(_GRAPHMAIL.match(_basename(t)) for t in toks) and "send" in rest:
         return True
     # curl/wget: a cel-token akkor is muvelet, ha idezojelben allt -- a
-    # horgonyzott minta valasztja el a payload-belseji emlitestol
+    # horgonyzott minta valasztja el a payload-belseji emlitestol.
+    # RESENDGATE826: csak a TENYLEGES kuldes (POST/PUT/... vagy torzs) akad
+    # fenn; a read-only GET/HEAD lekerdezes atmegy; a nem-donthato metodus
+    # tovabbra is fail-closed.
     if _CURLISH.match(prog) and any(_RESEND_TARGET.match(t) for t in rest):
-        return True
+        return _curl_resend_verdict(rest) != "read"
     return False
+
+
+def wrapper_depth_hit(cmd: str) -> bool:
+    """True when some segment is still a wrapper at the depth bound, so it was
+    counted as a send without the real command being seen (HEADDEPTH924). The
+    gate uses it to say WHY it blocks: "I could not audit the letter" is the
+    wrong reason for `nohup x9 git status` (Marveen, #1522 review)."""
+    # Only when the depth bound is the WHOLE reason: if a visible segment is a
+    # send on its own (`sendmail x; sudo x9 true`), that send is the reason,
+    # and the ordinary wording must stay (Samu, #1523 review).
+    try:
+        segments = _segments_tokens(cmd)
+    except ValueError:
+        return False
+    heads = [h for toks in segments for h in _command_heads(toks)]
+    return any(h is None for h in heads) and not any(
+        h is not None and _head_is_send(h, 0) for h in heads)
 
 
 def is_send_invocation(cmd: str, _depth: int = 0) -> bool:
@@ -256,8 +467,12 @@ HU_MARKERS = [
     "hogy", "nem", "vagy", "amit", "ami", "mert", "ezt", "ez a", "van", "lesz",
     "kell", "tehat", "tehát", "koszonom", "köszönöm", "szia", "sziasztok",
     "kerlek", "kérlek", "csatolva", "udvozlettel", "üdvözlettel", "levelet",
-    "level", "kuldom", "küldöm", "jelezz", "irj", "írj", "mar", "már", "csak",
+    "kuldom", "küldöm", "jelezz", "irj", "írj", "mar", "már", "csak",
 ]
+# A puszta "level" 2026-08-26-an kikerult a markerek kozul. Magyar markerkent
+# gyenge (a gyakori alak a "levelet", az mar bent van), viszont az ANGOL "level"
+# minden elofordulasa magyar-pontot adott egy angol szovegnek, es igy indithatta
+# el az ekezet-vizsgalatot olyan uzeneten, ami nem is magyar.
 
 # Accentless spellings of frequent Hungarian words -> the correct form. Every
 # entry is a word that CANNOT be spelled without its accent, so a hit inside
@@ -373,6 +588,94 @@ def mixed_script_words(text: str):
     return out
 
 
+# --- FOREIGNLETTER924 (card c61d5270): a letter from the right script, but the wrong one --
+# The two checks above cover DECOMPOSITION (base + combining mark) and SUBSTITUTION (a
+# foreign-script letter inside a Latin word). deeper measured a third class on 2026-09-24
+# that passes both: `fordìtott` with U+00EC (i WITH GRAVE) where Hungarian has U+00ED
+# (i WITH ACUTE). The name of U+00EC starts with LATIN, so mixed_script_words cannot fire
+# on it BY CONSTRUCTION (friday, measured: specimen 0 hits, Cyrillic U+0456 control 1 hit).
+# An accent-DIRECTION slip is the likeliest shape of this class, and the word still looks
+# accented, which is why it survives.
+#
+# THE RULE: a non-ASCII LETTER (Unicode category L*) that is not one of the eighteen
+# Hungarian accented letters, plus U+FFFD (the decoder's replacement mark, a corruption
+# signal that is not a letter). It WARNS, it never blocks (marveen, 2026-09-24): c-caron,
+# s-caron, d-bar, z-caron are real letters in real names, the owner's contacts are in
+# Serbia, and a block would refuse correct text about actual customers.
+#
+# WHY LETTERS AND NOT A WHOLE-CHARACTER ALLOWLIST, measured before building:
+#   whole-character allowlist, last 30 days of owner-facing Telegram (n=857): 7.4% of
+#     messages flagged, almost all emoji (U+1F916 alone in 37) -- a warning on most
+#     briefings, which trains the reader to skip it.
+#   letters only, same population: 1.6%; inter-agent 7 days (n=1801): 0.9%. Its hits
+#     include a real slip (a Cyrillic ie inside a Hungarian word) and real names
+#     (Jalapeno with n-tilde, Markovic with c-acute, Serbian "sasije").
+# A symbol cannot be the mis-spelling of a letter, which is the same reason the class
+# never needed an entry for punctuation.
+#
+# THE HUNGARIAN QUOTES, AND WHICH HALF IS A MEASUREMENT: U+201E (opening) was MEASURED,
+# 13 of 200 inter-agent messages; U+201D (closing) was DECIDED, 0 of 200, admitted because
+# Hungarian uses the pair and allowing only the opener would alarm on every closed quote.
+# Under the letters-only rule neither is a letter, so neither can fire -- the decision is
+# kept here so that a future widening to symbols does not silently re-decide it. The inner
+# pair (U+00BB / U+00AB) was NOT decided either way.
+#
+# THE SET MAY ONLY GROW BY DECISION (deeper's asymmetry): a letter MISSING from it is a false
+# alarm, a letter ADDED to it lets a real defect through. It prints the CHARACTERS, never a
+# bare count: deeper's own first set held six uppercase letters where Hungarian has nine,
+# and only the printed characters showed five correct words among the "hits".
+#
+# TWO LIMITS, stated where the next check will be added:
+#  (1) IT IS BLIND TO SPELLING. `kezbesít` for `kézbesít` (deeper, same day: a MISSING
+#      accent, all legitimate codepoints) is green here and on every other codepoint check.
+#      Its claim is WRONG CODEPOINTS, not correct Hungarian.
+#  (2) ON THE INTER-AGENT PATH IT INHERITS THE FAIL-OPEN BRANCH: an uninterpretable body
+#      (unreadable @file, unresolved $-path, run-time substitution, non-JSON) passes with
+#      a systemMessage to the SENDER and a gate-log line, and then no check runs at all --
+#      this one included. Upstream's replay: 38 of 1157 = 3.3%. The sender is the only
+#      witness.
+HU_ACCENTED_LETTERS = frozenset("áéíóöőúüűÁÉÍÓÖŐÚÜŰ")
+CORRUPTION_MARKS = frozenset("\ufffd")
+
+
+def foreign_letter_words(text: str):
+    """[(token, char, "NAME (U+XXXX)"), ...], one entry per distinct (token, char)."""
+    import unicodedata
+    out, seen = [], set()
+    for tok in text.split():
+        for ch in tok:
+            if ord(ch) < 128 or ch in HU_ACCENTED_LETTERS:
+                continue
+            if not (unicodedata.category(ch).startswith("L") or ch in CORRUPTION_MARKS):
+                continue
+            key = (tok, ch)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((tok.strip(".,;:!?()[]{}\"'`"), ch,
+                        f"{unicodedata.name(ch, 'UNKNOWN')} (U+{ord(ch):04X})"))
+    return out
+
+
+def foreign_letter_warning(text: str):
+    """The named warning text, or None. Never a block (see above)."""
+    hits = foreign_letter_words(text)
+    if not hits:
+        return None
+    shown = "; ".join(f"{w!r} -- benne {name}" for w, _c, name in hits[:5])
+    more = f" (+{len(hits) - 5} tovabbi)" if len(hits) > 5 else ""
+    return ("outgoing-copy-gate FIGYELMEZTETES (nem tiltas): NEM MAGYAR BETU, "
+            f"{len(hits)} db: {shown}{more}. Ha nev (pl. szerb), rendben van; ha elgepeles "
+            "(pl. i-grave az i-ekezetes helyett), javitsd. A kapu helyesirast NEM ellenoriz.")
+
+
+def emit_system_messages(msgs) -> None:
+    """One hook stdout JSON for every non-blocking message of this call."""
+    msgs = [m for m in msgs if m]
+    if msgs:
+        print(json.dumps({"systemMessage": "\n".join(msgs)}))
+
+
 EM_DASH = "—"
 
 # GATEPERSIST816: owner-specific NAME rules load from an UNTRACKED local file,
@@ -389,25 +692,153 @@ _LOCAL_RULES = os.environ.get(
                  "store", "outgoing-copy-gate-rules.json"),
 )
 
+_GATE_LOG = os.path.join(os.path.dirname(_LOCAL_RULES), "outgoing-copy-gate.log")
+
+
+def _gate_log(message: str) -> None:
+    """Append one TIMESTAMPED line to the gate log.
+
+    The log used to carry bare text. Measured 2026-09-05: 8005 lines, four
+    distinct messages, and one of them recorded a FAIL-OPEN pass-through on the
+    Telegram branch -- a message that went out unaudited -- with no way to tell
+    which day it happened on, let alone which message it was. A gate log whose
+    entries cannot be placed in time cannot be used to check anything. Local
+    time with the offset, never UTC.
+    """
+    try:
+        from datetime import datetime
+        stamp = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S%z")
+        with open(_GATE_LOG, "a", encoding="utf-8") as fh:
+            fh.write(f"{stamp} {message.rstrip()}\n")
+    except OSError:
+        pass
+
+
+# CLCOPYGATEHIANY902 (owner decision, TG 14442) MERGED WITH GATEPERSIST816/3
+# (PDB install, 2026-08-19). Two independent fixes to the same question, from
+# opposite directions, so the merged policy has FIVE states:
+#
+#   "ok"         -> patterns loaded, the name check enforces as before.
+#   "sanctioned" -> the file EXISTS and explicitly says "no_name_rule": true.
+#                   Reported by the PDB install, 2026-08-19: their rules file
+#                   was lost with no backup, and the owner decided not to
+#                   reconstruct it. That is a taken decision, not a loss, and
+#                   an install that has made it should not be nagged about it
+#                   on every send. So this state is silent
+#                   EVERYWHERE: no log line, no systemMessage, no block. Note
+#                   the early return BELOW, which deliberately skips the
+#                   logging tail. An ordinary empty list WITHOUT the flag does
+#                   NOT reach this state, so a file emptied by accident can
+#                   never masquerade as the sanctioned one.
+#   "empty"      -> no patterns and no flag: the check is OFF.
+#   "missing"    -> file absent, which is EVERY fresh customer install, since
+#                   the file names a private person and is deliberately not
+#                   shipped. Both of these fail-OPEN with a LOUD, user-visible
+#                   warning on every send: the old fail-closed email path left
+#                   a paying customer unable to send mail at all (Nova,
+#                   2026-09-02).
+#   "invalid"    -> the file EXISTS but cannot be used (bad JSON, wrong schema,
+#                   uncompilable regex). Somebody TRIED to configure it and got
+#                   it wrong: the email path stays fail-CLOSED until repaired.
+#
+# WHY THE MERGE IS NOT A CHOICE BETWEEN THE TWO: without the sanctioned state,
+# a live rules file carrying the flag with an empty pattern list reads as
+# "empty", and a loud warning gets stamped on EVERY outgoing letter, customer
+# mail included. Without the missing/empty/invalid split, a fresh install with
+# no file at all cannot send mail at all. Each half is wrong exactly where the
+# other one is right, which is why both are here.
+RULES_OK = "ok"
+RULES_SANCTIONED = "sanctioned"
+RULES_EMPTY = "empty"
+RULES_MISSING = "missing"
+RULES_INVALID = "invalid"
+
+# The states where the name check does not run AND that is not a taken
+# decision: the ones that must stay loud.
+RULES_LOUD = (RULES_MISSING, RULES_EMPTY, RULES_INVALID)
+
+
+# A NAME PATTERN THAT MATCHES ORDINARY TEXT MATCHES EVERY MESSAGE (card 3c753513).
+# audit() reports any hit of BAD_NAME.search(), so one over-broad line in the rules file makes
+# every Telegram reply a FOUND problem (rc 2, where the fail-open for internal errors does not
+# apply) -- on all eight sessions once the gate is wired into the sub-agents.
+# The first version (didi 18748) rejected only ZERO-WIDTH patterns ("" / ".*" / "x?" / "\b").
+# didi then showed "." "\w" "e" "[a-z]" still block every clean reply (comment 22): that fix
+# closed an instance, not the class. The class is "matches text that names nobody", so the test
+# is exactly that (marveen 02:3x): a pattern is INVALID if it matches a NEUTRAL sentence. The
+# sentences hold no proper name on purpose -- a real rule targets a name, and a probe that
+# contained one would reject a legitimate rule. The empty string stays in for patterns that match
+# only an empty message ("^$").
+_NEUTRAL_PROBES = (
+    "Rendben, köszönöm szépen, holnap küldöm a részleteket.",
+    "Ok, thanks, I will send the details tomorrow.",
+    "12:30-kor jó lesz, a dokumentum a mappában van.",
+)
+_INVALID_REASON = ""
+
+
+def _too_broad_index(compiled):
+    """Index of the first pattern that matches a neutral sentence or only-empty text, or None."""
+    for i, rx in enumerate(compiled):
+        if rx.search("") is not None or any(rx.search(p) is not None for p in _NEUTRAL_PROBES):
+            return i
+    return None
+
 
 def load_bad_name():
+    """Return (compiled_regex_or_None, state) -- see the RULES_* names above."""
+    global _INVALID_REASON
     try:
         with open(_LOCAL_RULES, encoding="utf-8") as fh:
-            pats = json.load(fh).get("bad_name_patterns") or []
-        if pats:
-            return re.compile("|".join(pats))
-    except OSError:
-        pass
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            state = RULES_INVALID
+        else:
+            pats = data.get("bad_name_patterns") or []
+            if not isinstance(pats, list) or not all(isinstance(x, str) for x in pats):
+                state = RULES_INVALID
+            elif pats:
+                # the pattern's INDEX, never its text: a name rule names a private person
+                zw = _too_broad_index([re.compile(x) for x in pats])
+                if zw is None:
+                    return (re.compile("|".join(pats)), RULES_OK)
+                _INVALID_REASON = (f"a(z) {zw + 1}. minta egy SEMLEGES, nevet nem tartalmazo mondatra "
+                                   "is illeszkedik (pl. \".\", \"\\w\", \"e\", \"[a-z]\", \".*\"), "
+                                   "ami MINDEN uzenetet elkapna")
+                state = RULES_INVALID
+            elif data.get("no_name_rule") is True or data.get("name_check_disabled") is True:
+                # Returns HERE, before the logging tail, on purpose: a taken
+                # decision must not write a "the protection is gone" line into
+                # the ledger on every single run. An alarm that can never be
+                # answered is the one people learn to ignore -- it was drowning
+                # the real signals in the same log (571 lines here by
+                # 2026-09-04, CLCOPYGATEDONTES904).
+                # TWO spellings of the SAME decision are accepted, because two
+                # installs each documented one before the branches met:
+                #   {"no_name_rule": true, "no_name_rule_reason": "why"}
+                #     (GATEPERSIST816/3, the PDB install)
+                #   {"bad_name_patterns": [], "name_check_disabled": true,
+                #    "decided_at": "2026-09-04", "note": "why"}
+                #     (CLCOPYGATEDONTES904)
+                # Dropping either spelling would silently turn that install's
+                # recorded decision back into a loud "empty".
+                return (None, RULES_SANCTIONED)
+            else:
+                state = RULES_EMPTY
+    except FileNotFoundError:
+        state = RULES_MISSING
     except Exception:
-        pass
-    try:
-        log_path = os.path.join(os.path.dirname(_LOCAL_RULES), "outgoing-copy-gate.log")
-        with open(log_path, "a", encoding="utf-8") as fh:
-            fh.write(f"outgoing-copy-gate: NEV-SZABALY FAJL HIANYZIK/URES ({_LOCAL_RULES}) -- "
-                     "a nev-ellenorzes NEM fut; potold a store/outgoing-copy-gate-rules.json-t.\n")
-    except OSError:
-        pass
-    return None
+        # Present but unusable: unreadable (permissions), unparseable JSON,
+        # or an uncompilable pattern. All of these mean someone TRIED to
+        # configure the rule and failed -- that must stay loud AND closed.
+        state = RULES_INVALID
+    # ONE logging tail for EVERY loud state (Marveen review on #1156: the
+    # first cut logged only the exception branches, so empty/schema-invalid
+    # left no log line while missing did -- same event class, inconsistent
+    # ledger).
+    _gate_log(f"outgoing-copy-gate: NEV-SZABALY {state.upper()} ({_LOCAL_RULES}) -- "
+              "a nev-ellenorzes NEM fut." + (f" Ok: {_INVALID_REASON}." if _INVALID_REASON else ""))
+    return (None, state)
 
 
 def _name_correction() -> str:
@@ -419,7 +850,7 @@ def _name_correction() -> str:
         return ""
 
 
-BAD_NAME = load_bad_name()
+BAD_NAME, RULES_STATE = load_bad_name()
 ACCENTED = set("áéíóöőúüűÁÉÍÓÖŐÚÜŰ")
 TAG = re.compile(r"<[^>]+>")
 
@@ -480,6 +911,14 @@ def accent_check_tokens(prose: str):
     out = []
     for m in HYPHEN_WORD.finditer(prose):
         tok = m.group(0)
+        # DIGIT-HYPHEN SUFFIX (429-es, 403-as, 2026-os, 3420-as). HYPHEN_WORD only
+        # admits LETTERS around the hyphen, so a Hungarian suffix attached to a
+        # NUMBER is seen as a standalone word -- and "es" is then read as the
+        # accent-stripped "és". These are not prose words; they carry no accent.
+        # (2026-08-21: the gate blocked a correct message reading "429-es vagy
+        # 403-as". GATEKOTOJEL817 covered letter-hyphen-letter forms, not this one.)
+        if m.start() >= 2 and prose[m.start() - 1] == "-" and prose[m.start() - 2].isdigit():
+            continue
         if "-" not in tok and tok[0].isupper() and not _at_sentence_start(prose, m.start()):
             continue
         out.append((tok.lower(), m.start()))
@@ -501,23 +940,77 @@ def _hit_context(prose: str, pos: int, length: int) -> str:
 # fennakadt a `video_view` esemenynevben levo "video"-n. A szobonto az aláhúzást
 # hataroljelnek veszi, tehat minden snake_case azonosito, fajlnev, URL-slug es
 # domain beszallit egy "magyar szot", ami ott ekezet nelkul HELYES. Ugyanaz az
-# osztaly, mint a 2026-08-11-i `level` fajlnev-talalat. A javitas nem a szotarbol
+# osztaly, mint a 2026-08-11-i `level` fajlnev-talalat. Ugyanide tartozik a
+# 2026-08-25-i talalat ugyanebbol az osztalybol: a TULAJDONNEV + kotojeles toldalek
+# ("Chrome-ot", "Drive-ra") is puszta "ot"/"ra" tokenre esik szet, es az "ot" benne
+# van a szotarban (-> "ot"). Ezert a maszk a nagybetuvel kezdodo tovet is elfogadja,
+# de CSAK ha a kotojel utan legfeljebb negy kisbetu all: egy valodi magyar osszetett
+# szo masodik tagja ("Telegram-hidam") tipikusan hosszabb, tehat az tovabbra is fennakad.
+# 2026-08-26-i talalat, HARMADIK a sorozatban, de mas alosztaly: nem toldalek volt,
+# hanem egy ANGOL SZO, ami veletlenul egy ekezetes magyar szo ekezetlen alakja.
+# A "level 1" (autonomia-szint) alak a szotarban "level -> level" javaslatot valtott ki,
+# es ketszer blokkolta a reggeli uzenetet. A szotarbol NEM vettem ki a bejegyzest, mert
+# a magyar "level" tenyleg hibas alak; a maszk csak a SZAM ELOTTI angol hasznalatot vagja ki.
+# Ami igy is fennakad: az idezojelbe tett, magarol beszelo "level" szo. Arra a kod-span
+# (backtick) a kijarat, az ugyanis maszkolva van.
+# 2026-08-27, NEGYEDIK a sorozatban: a KOTOJELES KISBETUS AZONOSITO. Az utemezett
+# feladatok es skillek nevei (folyamatos-ellenorzes, mentes-lemaradas-ellenorzes,
+# kontextus-atadas-visszaallitas) ekezet nelkuli magyar szavakbol allnak, mert fajl- es
+# mappanevek. A szotar ezeket valodi talalatnak latja, pedig AZONOSITOK, nem proza --
+# a gazdanak pont igy, betuhiven kell leirni oket, kulonben nem talalja meg a gepen.
+# A maszk ezert kivagja a legalabb ket tagu, csupa kisbetus, kotojellel osszekotott
+# alakokat. Egy valodi magyar mondat nem all ilyen alakbol, es a NAGYBETUS kezdetu
+# osszetetelekre (Chrome-ot) mar van kulon, szigorubb szabaly folotte.
+# 2026-08-24-i talalat: a szambol es kotojeles magyar toldalekbol allo alak
+# ("8:09-es", "2-es", "17:06-kor") a szobontonal puszta "es"/"kor" tokenne esik
+# szet, amit a szotar hibanak lat -- pedig ott toldalek, nem szo. A javitas nem a szotarbol
 # vesz ki (az elrontana a valodi talalatokat is), hanem a technikai regiokat
-# vagja ki a vizsgalt szovegbol. A gondolatjel- es nev-ellenorzes NEM ezen fut.
-TECHNICAL = re.compile(
-    r"""https?://\S+                # URL
+# vagja ki a vizsgalt szovegbol. A gondolatjel-ellenorzes NEM ezen fut (az a nyers
+# szovegen mer), a nev-ellenorzes pedig a SAJAT, szukebb maszkjan -- lasd NAME_MASK.
+#
+# GATENEVSTRIP921 (kulso bejelentes 2026-09-21, sajat visszameres 2026-09-22):
+# KET SZABALY, AMI UGYANARRA A SZOVEGRE NEZ, NEM UGYANAZT A MASZKOT AKARJA.
+# A bejelentes az volt, hogy a nev-szabaly a NYERS szovegen fut, ezert URL-ben,
+# kod-spanban vagy utvonalban allo nevalak is megallitja a teljes uzenetet
+# (harom ilyen hamis pozitiv reprodukalva). A kezenfekvo javitas -- a nev-szabaly
+# athelyezese a strip_technical UTANRA -- viszont LYUKAT NYIT, mert az alabbi ket
+# alternativa a NEVET magat vagja ki a szovegbol a toldalekaval egyutt:
+#   "Nev-val" / "Nev-nak" / "Nev-fele"  ->  a tulajdonnev+toldalek ag eszi meg
+# Merve a sajat mintankon (kartya-komment 17237): harom prozai alakbol harom tunt
+# el a strip utan, vagyis csendben ATMENTEK volna. Ezert a nev-szabaly a kozos,
+# egyertelmuen technikai regiokat kapja meg maszknak (_TECH_COMMON), a toldalek-
+# es azonosito-agakat NEM. Ezek az agak a token- es ekezet-vizsgalatnak kellenek,
+# ahol epp az a dolguk, hogy a toldalek-toredeket ne nezzek onallo szonak.
+#
+# A KET MASZK EGY FORRASBOL EPUL, hogy ne drifteljenek szet: ha valaki uj
+# technikai regiot vesz fel, a _TECH_COMMON-ba irva MINDKET ellenorzes latja.
+_TECH_COMMON = r"""
+        https?://\S+                # URL
       | [\w.+-]+@[\w-]+\.[\w.]+     # email
       | `[^`]*`                     # kod-span
       | \b\w+(?:_\w+)+\b            # snake_case azonosito
-      | \b\w+\.[A-Za-z]{2,10}\b     # fajlnev / domain (video.mp4, marveen.io)
+      | \b\w+\.[A-Za-z]{2,10}(?:-[a-záéíóöőúüű]{1,4})?\b   # fajlnev / domain, magyar toldalekkal (video.mp4, marveen.io, Mail.app-ot)
       | \b[\w-]*/[\w/-]+            # utvonal / slug
-    """,
-    re.X,
-)
+"""
+# CSAK a token-/ekezet-vizsgalat vaghatja ki ezeket: mindharom ag kepes egy
+# tulajdonnevet a toldalekaval egyutt elnyelni, ezert a nev-szabaly nem kapja meg.
+_TECH_SUFFIXED = r"""
+        \d+(?:[.:,]\d+)*-[^\W\d_]+   # szam + magyar toldalek (8:09-es, 2-es, 17:06-kor)
+      | \b[A-ZÁÉÍÓÖŐÚÜŰ][^\W\d_]*-[a-záéíóöőúüű]{1,4}\b   # tulajdonnev + toldalek (Chrome-ot, Drive-ra)
+      | \blevel\s+\d+\b            # angol "level 1" (autonomia-szint, log-szint)
+      | \b[a-z]+(?:-[a-z]+){1,4}\b    # kotojeles kisbetus azonosito (feladat- es skill-nevek)
+"""
+TECHNICAL = re.compile(_TECH_COMMON + "|" + _TECH_SUFFIXED, re.X)
+NAME_MASK = re.compile(_TECH_COMMON, re.X)
 
 
 def strip_technical(text: str) -> str:
     return TECHNICAL.sub(" ", text)
+
+
+def strip_for_name(text: str) -> str:
+    """A nev-ellenorzes maszkja: csak az egyertelmuen technikai regiok esnek ki."""
+    return NAME_MASK.sub(" ", text)
 
 
 def is_hungarian(text: str) -> bool:
@@ -544,49 +1037,28 @@ def accentless_evidence(words):
     return {w for w in words if w in ACCENTLESS and w not in AMBIGUOUS_TRIGGER}
 
 
-def collect_bash_body(cmd: str):
-    """Return (text, unreadable_reason). text is '' when nothing was recovered."""
-    parts = []
-    for m in re.finditer(r"--(?:body|subject)[= ]+(\"([^\"]*)\"|'([^']*)'|(\S+))", cmd):
-        val = m.group(2) or m.group(3) or m.group(4) or ""
-        # A shell-expanded --body ($(cat f), `cat f`, $VAR) reaches this hook
-        # UNEXPANDED: what we would audit is the literal command text, not the
-        # letter. That is worse than useless -- it fires on words that happen to
-        # sit in the PATH while the real copy goes uninspected. Measured
-        # 2026-08-11 on a live customer letter: `--body "$(cat .../hidli_zaro_
-        # level.txt)"` blocked on "level" from the FILENAME, and the letter
-        # itself was never read. Same fail-closed rule as the `<` branch below.
-        if re.search(r"\$\(|`|\$\{?\w", val):
-            return ("\n".join(parts),
-                    "a --body shell-behelyettesitest tartalmaz, amit a hook nem old fel "
-                    f"({val[:60]}...) -- igy a parancs szoveget vizsgalnam, nem a levelet")
-        parts.append(val)
-    # heredoc payloads sit inline in the command string
-    for m in re.finditer(r"<<-?\s*'?(\w+)'?\n(.*?)\n\1", cmd, re.S):
-        parts.append(m.group(2))
-    # A single `<` only. Without the lookarounds a heredoc (`<<'EOF'`) matches
-    # here and the quoted delimiter is taken for a filename -- caught by the
-    # first live probe of this gate, which blocked with "'EOF': No such file".
-    redirect = re.search(r"(?<!<)<(?!<)\s*([^\s|;&<>]+)", cmd)
-    if redirect:
-        raw = redirect.group(1)
-        path = os.path.expandvars(os.path.expanduser(raw))
-        if "$" in path:
-            return ("\n".join(parts), f"a torzs egy fel nem oldhato utvonalrol jon ({raw})")
-        try:
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                parts.append(fh.read())
-        except OSError as exc:
-            return ("\n".join(parts), f"a torzs-fajl nem olvashato ({path}: {exc})")
-    if not parts and re.search(r"\|\s*(python3?|node|tsx)?[^|]*send", cmd):
-        return ("", "a torzs egy pipe-bol jon, a hook nem latja")
-    return ("\n".join(parts), None)
+# collect_bash_body / collect_mcp_body moved VERBATIM to email_extract.py
+# (EMAILKAPU901 PR1): the level-2 approval gate hashes the same letter this
+# gate audits, so the extraction must have exactly one implementation.
+# Byte-parity with the pre-move behavior is pinned by
+# scripts/__tests__/email-extract-parity.test.py against a golden captured
+# from the pre-move code.
+# GUARDED import: a bare ImportError would escape the __main__ net (it fires
+# during module load), exit 1, and PreToolUse treats 1 as NON-blocking -- the
+# send would run UNCHECKED. The stubs keep the email path fail-closed through
+# the existing unreadable branch, and leave the telegram path (which never
+# calls these) fail-open as designed.
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from email_extract import collect_bash_body, collect_mcp_body  # noqa: E402
+except Exception as _extract_exc:  # noqa: BLE001 -- deliberate fail-closed stub
+    _EXTRACT_ERR = repr(_extract_exc)
 
+    def collect_bash_body(cmd: str):
+        return ("", f"az email_extract modul nem toltheto be ({_EXTRACT_ERR})")
 
-def collect_mcp_body(tool_input: dict):
-    fields = ("body", "text", "html", "htmlBody", "message", "subject", "content")
-    got = [str(tool_input[f]) for f in fields if tool_input.get(f)]
-    return "\n".join(got)
+    def collect_mcp_body(tool_input: dict):
+        return ""
 
 
 # --- Telegram reply (GATETG816) ---------------------------------------------
@@ -613,19 +1085,36 @@ def telegram_gate(tool_input: dict) -> None:
         text = collect_telegram_body(tool_input)
         if not text.strip():
             sys.exit(0)  # files-only reply or empty text: nothing to audit
+        # GATECOPY827: a masolhato kodblokk CSAK markdownv2 modban lesz
+        # kodblokk. A reply tool `format` parametere alapertelmezesben "text",
+        # es plain textben a Telegram nem parsolja a harom backtickot, tehat
+        # nincs copy gomb -- a szoveg nyersen, a backslash-escape-ekkel egyutt
+        # jelenik meg. Ez 2026-08-17 ota OTSZOR ment ki igy (a memoriaban
+        # feedback_telegram_codeblock_needs_markdownv2, plusz a kotelezove tett
+        # telegram-copy-gomb skill), es egyik alkalommal sem tudashiany volt,
+        # hanem kihagyott lepes. Ezert innentol gepi kapu allitja meg, nem
+        # emlekezet. A vizsgalat a NYERS szovegen fut, mert a fence-t a
+        # MDV2_ESCAPE feloldas nem erinti.
+        raw = "\n".join(str(tool_input[f]) for f in ("text", "caption", "message")
+                        if tool_input.get(f))
+        if "```" in raw and str(tool_input.get("format", "")).lower() != "markdownv2":
+            sys.stderr.write(
+                "KIMENO-SZOVEG KAPU (Telegram): TILTVA, a kodblokk nem lenne masolhato.\n\n"
+                "  - A szoveg harom backtickes kodblokkot tartalmaz, de a hivasban\n"
+                "    format=\"" + str(tool_input.get("format") or "text") + "\". Plain textben a Telegram nem ad copy gombot,\n"
+                "    es a MarkdownV2 escape-ek (\\. \\- \\() nyersen latszanak.\n\n"
+                "Kuldd ujra ugyanezt a szoveget format=\"markdownv2\"-vel. Kodblokkon\n"
+                "belul csak a backtickot es a backslasht kell escapelni, a blokkon\n"
+                "kivuli prozat viszont teljesen (_*[]()~`>#+-=|{}.!).\n"
+            )
+            sys.exit(2)
         problems = audit(text)
     except SystemExit:
         raise
     except Exception as exc:  # noqa: BLE001 -- deliberate blanket: fail-open path
-        warn = f"outgoing-copy-gate: TELEGRAM-ag belso hiba, FAIL-OPEN atengedes: {exc!r}\n"
-        sys.stderr.write(warn)
-        try:
-            log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-                os.path.abspath(__file__)))), "store", "outgoing-copy-gate.log")
-            with open(log_path, "a", encoding="utf-8") as fh:
-                fh.write(warn)
-        except OSError:
-            pass
+        warn = f"outgoing-copy-gate: TELEGRAM-ag belso hiba, FAIL-OPEN atengedes: {exc!r}"
+        sys.stderr.write(warn + "\n")
+        _gate_log(warn)
         sys.exit(0)
     if problems:
         sys.stderr.write(
@@ -639,23 +1128,47 @@ def telegram_gate(tool_input: dict) -> None:
     # de a figyelmeztetes ODA megy, ahol a session tenyleg latja -- a hook
     # stdout systemMessage mezoje a futo sessionben jelenik meg, nem egy
     # logfajlban, amit senki nem olvas.
-    if BAD_NAME is None:
-        print(json.dumps({"systemMessage":
-            "outgoing-copy-gate: a NEV-SZABALY fajl hianyzik/ures "
-            f"({_LOCAL_RULES}) -- a nev-ellenorzes NEM fut a kimeno uzeneteken. "
-            "Potold a store/outgoing-copy-gate-rules.json-t."}))
+    # GATEPERSIST816/3 + CLCOPYGATEDONTES904: a tudatosan felfuggesztett
+    # szabaly (RULES_SANCTIONED, barmelyik flag-irassal) mar nem veszteseg,
+    # nincs mit jelezni, a Telegram-ag ott csendben marad. Minden mas nem-ok
+    # allapot (missing/empty/invalid) figyelmeztetest kap.
+    # FOREIGNLETTER924: the named foreign-letter warning rides in the SAME stdout JSON --
+    # a hook prints one object, so two separate prints would be one unparseable line.
+    emit_system_messages([
+        (("outgoing-copy-gate: a NEV-SZABALY fajl ERVENYTELEN "
+          f"({_LOCAL_RULES}"
+          + (f"; {_INVALID_REASON}" if _INVALID_REASON else "")
+          + ") -- a nev-ellenorzes NEM fut a kimeno uzeneteken. Javitsd a fajlt.")
+         if RULES_STATE == RULES_INVALID else
+         ("outgoing-copy-gate: a NEV-SZABALY fajl hianyzik/ures "
+          f"({_LOCAL_RULES}) -- a nev-ellenorzes NEM fut a kimeno uzeneteken. "
+          "Potold a store/outgoing-copy-gate-rules.json-t.") if RULES_STATE in RULES_LOUD else None),
+        foreign_letter_warning(text),
+    ])
     sys.exit(0)
 
 
 def audit(text: str):
     """Return a list of human-readable problems."""
-    plain = TAG.sub(" ", text)
+    # COPYGATEENT914 (Marveen merese, 2026-09-14, egy VALODI vevo-levelen): a
+    # tag-kiszedes onmagaban megkerulheto HTML-ENTITASSAL. A `&mdash;` (es a
+    # szamos `&#8212;` / hex `&#x2014;` alak) atment a kapun, a cimzettnel
+    # viszont gondolatjelkent renderel -- vagyis a kapu zoldet mondott arra,
+    # amit tilt. Merve mind a harom alakon.
+    # A SORREND SZANDEKOS: eloszor a tageket szedjuk ki, AZUTAN dekodolunk.
+    # Forditva egy szovegkent mutatott, escape-elt jelolo (`&lt;b&gt;`) valodi
+    # tagge dekodolodna, es a TAG.sub kitorolne a szoveg egy darabjat.
+    plain = html.unescape(TAG.sub(" ", text))
     problems = []
     if EM_DASH in plain:
         problems.append(
             f"GONDOLATJEL (em dash, U+2014) {plain.count(EM_DASH)} helyen -- allo szabaly, soha nem mehet ki."
         )
-    bad = BAD_NAME.search(plain) if BAD_NAME else None
+    # GATENEVSTRIP921: a nev-szabaly a SAJAT maszkjan fut (NAME_MASK), nem a
+    # nyers szovegen es nem a strip_technical kimeneten -- lasd a NAME_MASK
+    # feletti indoklast. Igy a kod-spanban/URL-ben allo nevalak atmegy, a
+    # toldalekos prozai alak ("Nev-val") viszont tovabbra is bukik.
+    bad = BAD_NAME.search(strip_for_name(plain)) if BAD_NAME else None
     if bad:
         problems.append(
             f"HELYTELEN NEV: {bad.group(0)!r} -- a lokal nev-szabaly (store/outgoing-copy-gate-rules.json) szerint helytelen alak; a helyes irast a szabaly-fajl correction mezoje adja." + _name_correction()
@@ -671,6 +1184,24 @@ def audit(text: str):
         problems.append(
             f"DUPLA KOTOJEL gondolatjel-potlokent {dh} helyen (' -- ') -- Szabi jelzese: "
             "ugyanugy zavaro, mint az em dash. Ird at kotojel nelkul: kettospont, zarojel, vagy uj mondat."
+        )
+    # SZOKOZOS NAGYKOTOJEL (" – ", U+2013) -- card e57af6ec, marveen, a szabaly gazdaja:
+    # Isti szabalya "Nincs gondolatjel", es a magyar gondolatjel leggyakoribb alakja epp ez; a
+    # kapu eddig ket PELDANYT sorolt (em dash, " -- "), a mechanizmust nem. A PROZAN merjuk,
+    # mint a " -- "-t. A szokoz lehet nem-toro is (U+00A0, U+202F): a gondos magyar tipografia
+    # epp azt teszi a kotojel ele, es az a rendes alak.
+    #   TILTOTT: szo utan szokoz + nagykotojel + szokoz        "rendben – kesz"
+    #            szo utan szokoz + nagykotojel + SORVEG        "rendben –\nkesz" (ugyanaz, sortoressel)
+    #   ATMEGY:  szokoz nelkul (tartomany)                     "10–20", "2026–2027"
+    #            SOR ELEJEN, akar behuzva (felsorolas/parbeszed) "\n– elso pont", "\n  – pont"
+    # A sor eleji alak dontese (a kartya kerte): 1524 kimeno uzenetben a harom szokozos alak
+    # egyike sem fordult elo (merve 2026-09-25), tehat a meres nem dont; a sor eleji "– " a
+    # magyarban felsorolas- es parbeszedjel, nem mondatkozi gondolatjel, ezert atengedjuk.
+    spaced_en = len(re.findall(r"(?<=\S)[ \u00a0\u202f]\u2013(?:[ \u00a0\u202f]|(?=\n)|$)", prose))
+    if spaced_en:
+        problems.append(
+            f"GONDOLATJEL (szokozos nagykotojel, ' \u2013 ') {spaced_en} helyen -- allo szabaly, "
+            "ugyanaz, mint az em dash. Tartomanyt (10\u201320) szokoz nelkul irj; kulonben kettospont, zarojel vagy uj mondat."
         )
     # 4. ellenorzes (GATEHOMOGLIF816): vegyes irasrendszeru szo. SZANDEKOSAN
     # NEM magyar-kapuzott (elteres Marveen specjetol, ervvel): az FP-vedelem
@@ -716,6 +1247,176 @@ def audit(text: str):
     return problems
 
 
+# Outbound-shaped operations of the multiplexed manage_email tool. Everything
+# else it does (search, read, labels, trash, getAttachment...) produces no text
+# of ours, so the gate must not touch it -- classifying those as sends is how
+# the sibling email gate once denied plain mailbox READS (MANAGEOP904).
+MANAGE_EMAIL_OUTBOUND_OPS = {"send", "reply", "replyall", "forward"}
+
+# Dedicated (non-multiplexed) outbound tools: the draft tools and the Gmail
+# connector's three separate send-shaped tools. Kept in step with the matcher
+# this hook is registered under in settings.json.
+# GMAILCONNECTOR914: the server segment is NOT always exactly "gmail" -- the
+# claude.ai connector is mcp__claude_ai_Gmail__send_message, one underscore
+# before Gmail, and `(^|__)gmail__` never matched it, so its sends fell through
+# to sys.exit(0) with no audit (measured 2026-08-30, 2026-09-08). Anything
+# ending in "gmail__<send-shaped tool>" is a send now, whatever the prefix.
+EMAIL_TOOL_RE = re.compile(
+    r"(send_email|create_draft|draft_email|update_draft"
+    r"|gmail__(reply|reply_all|send_message|forward)$)",
+    re.I,
+)
+
+
+# --- Inter-agent messages: HOMOGLYPH-ONLY (INTERAGENTHOMOGLIF923) -----------
+# `curl .../api/messages` is NOT an email send (send-invocation-cases.json pins
+# it expected:false, and that stays), so none of the copy rules below ever ran
+# on it: no accent audit, no name rule, no em dash -- correctly, because the
+# fleet's internal traffic is written WITHOUT accents and the full audit would
+# block most of it. One dimension is added here and nothing else: a MIXED-SCRIPT
+# word (homoglyph). The fleet coordinates by card ids, agent names and file
+# paths passed in messages; a Cyrillic 'a' in one of those does not look wrong,
+# it silently points at something that does not exist. Measured 2026-09-16:
+# four such characters in the lead agent's own messages, caught only by a
+# manual scan.
+#
+# FAILURE DIRECTION IS THE OPPOSITE OF THE EMAIL BRANCH (Marveen, msg 28870):
+#   - homoglyph FOUND           -> BLOCK (exit 2), naming the word and the char;
+#   - body NOT INTERPRETABLE     -> PASS, with a loud named systemMessage and a
+#     (unreadable path, $-path,     gate-log line. On this channel a false block
+#     run-time substitution,        mutes an agent (the fleet's coordination
+#     non-object JSON, unknown      backbone); the threat is our own agent
+#     shape)                        emitting a lookalike by accident, not an
+#                                   attacker, so fail-open-loud is the right side.
+# All three shapes are covered, or the concept is not closed: quoted heredoc
+# (`--data-binary @- <<'JSON'`), `@file`, and inline `-d '...'`.
+_IA_TARGET = re.compile(r"^(https?://)?[^/\s]*/api/messages/?(\?\S*)?$", re.I)
+_IA_DATA_FLAGS = ("-d", "--data", "--data-binary", "--data-raw", "--data-ascii", "--json")
+_IA_SUBST = re.compile(r"\$\(|`|\$\{?\w")
+
+
+def _ia_segment(cmd: str):
+    """Tokens of the curl segment that POSTs to /api/messages, or None."""
+    try:
+        segments = _segments_tokens(cmd)
+    except ValueError:
+        return None
+    for toks in segments:
+        while toks and _ENV_ASSIGN.match(toks[0]):
+            toks = toks[1:]
+        if toks and _CURLISH.match(_basename(toks[0])) and any(_IA_TARGET.match(t) for t in toks[1:]):
+            return toks
+    return None
+
+
+# The fleet's everyday form is `S=/abs/scratch; ... --data-binary @$S/m.json`:
+# the variable is assigned a LITERAL earlier in the SAME command string. That
+# is deterministic, so it is resolved here instead of warned about. Measured
+# 2026-09-23 over 1153 real inter-agent POSTs: without this, most of the
+# warnings were exactly this shape, and a warning that fires on half the
+# traffic is noise. Only a plain literal value counts (no quotes-with-$,
+# no substitution); anything else stays unresolved and is warned about.
+_IA_ASSIGN = re.compile(r"""(?:^|[;&|\n(]\s*|\s)(?:export\s+)?([A-Za-z_]\w*)=(?:"([^"$`]*)"|'([^']*)'|([^\s;&|$`'"()]+))""")
+
+
+def _ia_resolve_local_vars(cmd: str, ref: str) -> str:
+    local = {}
+    for m in _IA_ASSIGN.finditer(cmd):
+        local[m.group(1)] = next(g for g in m.groups()[1:] if g is not None)
+    def sub(m):
+        name = m.group(1) or m.group(2)
+        return local.get(name, m.group(0))
+    return re.sub(r"\$\{(\w+)\}|\$(\w+)", sub, ref)
+
+
+def _ia_payload(cmd: str, toks):
+    """(text, unreadable_reason) of the message body, from the three shapes."""
+    raw = None
+    for i, t in enumerate(toks):
+        val = None
+        for f in _IA_DATA_FLAGS:
+            if t == f and i + 1 < len(toks):
+                val = toks[i + 1]
+            elif t.startswith(f + "="):
+                val = t[len(f) + 1:]
+            elif f == "-d" and t.startswith("-d") and len(t) > 2 and not t.startswith("--"):
+                val = t[2:]
+            if val is not None:
+                is_raw_flag = f == "--data-raw"
+                break
+        if val is None:
+            continue
+        if val.startswith("@") and not is_raw_flag:
+            ref = val[1:]
+            if ref == "-":
+                m = re.search(r"<<-?\s*'?(\w+)'?[^\n]*\n(.*?)\n\1(?=\s|$)", cmd, re.S)
+                if not m:
+                    return None, "a torzs stdin-rol jon (@-), heredoc nelkul"
+                if not re.search(r"<<-?\s*'", cmd) and _IA_SUBST.search(m.group(2)):
+                    return None, "a heredoc NEM idezett, es shell-behelyettesitest tartalmaz"
+                raw = m.group(2)
+            else:
+                path = os.path.expandvars(os.path.expanduser(_ia_resolve_local_vars(cmd, ref)))
+                if "$" in path:
+                    return None, f"a torzs fel nem oldhato @utvonalrol jon (@{ref})"
+                try:
+                    with open(path, encoding="utf-8", errors="replace") as fh:
+                        raw = fh.read()
+                except OSError as exc:
+                    return None, f"a torzs-fajl (@{ref}) nem olvashato ({exc.strerror or exc})"
+        else:
+            if _IA_SUBST.search(val):
+                return None, "az inline torzs shell-behelyettesitest tartalmaz, futasidoben dol el"
+            raw = val
+        break
+    if raw is None:
+        # No data flag at all: a GET of the queue (the most frequent call on this
+        # path) or a bare POST. Nothing is being SENT, so nothing to scan and
+        # nothing to warn about -- a warning here would fire on every queue read.
+        return "", None
+    try:
+        obj = json.loads(raw)
+    except ValueError:
+        return None, "a torzs nem ervenyes JSON"
+    if not isinstance(obj, dict):
+        return None, "a torzs JSON, de nem objektum"
+    # EVERY string field: a lookalike in `to` misroutes as silently as one in
+    # `content` misleads.
+    strings = [str(v) for v in obj.values() if isinstance(v, str)]
+    return "\n".join(strings), None
+
+
+def inter_agent_homoglyph_gate(cmd: str) -> None:
+    """Exit 2 on a homoglyph, exit 0 otherwise (loudly when unreadable).
+    Only called for a command that is NOT an email send."""
+    toks = _ia_segment(cmd)
+    if toks is None:
+        sys.exit(0)
+    text, unreadable = _ia_payload(cmd, toks)
+    if unreadable:
+        msg = ("outgoing-copy-gate (inter-agent, homoglifa): a torzs NEM vizsgalhato -- "
+               f"{unreadable}. Az uzenet ATMENT, homoglifa-ellenorzes NELKUL. "
+               "Vizsgalhato alak: idezett heredoc (--data-binary @- <<'JSON') vagy @/abszolut/ut.json.")
+        _gate_log(msg)
+        print(json.dumps({"systemMessage": msg}))
+        sys.exit(0)
+    mixed = mixed_script_words(text)
+    if mixed:
+        shown = "; ".join(f"{w!r} -- benne {name}" for w, _c, name in mixed[:5])
+        more = f" (+{len(mixed) - 5} tovabbi)" if len(mixed) > 5 else ""
+        sys.stderr.write(
+            "KIMENO-SZOVEG KAPU (inter-agent): TILTVA -- VEGYES IRASRENDSZERU SZO (homoglifa), "
+            f"{len(mixed)} db: {shown}{more}.\n"
+            "Egy kartya-azonositoban, agens-nevben vagy utvonalban ez neman felreiranyit. "
+            "Javitsd a szoveget es kuldd ujra. (Itt CSAK a homoglifa fut, ekezet- es copy-szabaly nem.)\n"
+        )
+        sys.exit(2)
+    # FOREIGNLETTER924: after the homoglyph BLOCK, the foreign-letter WARNING. It never
+    # blocks, and it inherits the fail-open branch above (see the limits at its definition).
+    emit_system_messages([foreign_letter_warning(text)])
+    sys.exit(0)
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -724,9 +1425,40 @@ def main():
 
     tool = str(payload.get("tool_name") or "")
     tool_input = payload.get("tool_input") or {}
+    # A tool_input that is not a dict crashed every branch on its first .get(),
+    # which the Telegram arm then reported as an internal gate error and passed
+    # through fail-open. Measured 2026-09-05: the log holds exactly one such
+    # line, AttributeError("'int' object has no attribute 'get'"), and a payload
+    # with an integer tool_input reproduces it byte for byte. Name the real
+    # cause instead of the symptom, and keep each arm's designed failure
+    # direction: nothing of ours is readable, so Telegram (the owner's only
+    # supervision channel) still passes, email still blocks.
+    if not isinstance(tool_input, dict):
+        shape = type(tool_input).__name__
+        gated = (re.search(r"telegram.*__reply$", tool, re.I)
+                 or re.search(r"(^|__)manage_email$", tool, re.I)
+                 or EMAIL_TOOL_RE.search(tool)
+                 or tool == "Bash")
+        if not gated:
+            sys.exit(0)  # not a send: the net must never widen the gate
+        _gate_log(f"outgoing-copy-gate: a tool_input nem szotar, hanem {shape} "
+                  f"-- a vizsgalat nem futtathato (tool={tool!r}).")
+        if re.search(r"telegram.*__reply$", tool, re.I):
+            sys.exit(0)  # Telegram stays fail-open by design
+        sys.stderr.write(
+            "KIMENO-SZOVEG KAPU: TILTVA, a hivas tool_input mezoje nem szotar, hanem "
+            f"{shape} -- a kimeno szoveg igy nem olvashato ki, tehat nem vizsgalhato.\n"
+            "Fail-closed: egy vizsgalhatatlan kuldes pont a kaput utne ki. "
+            "Hivd ujra rendes parameterekkel.\n"
+        )
+        sys.exit(2)
 
-    if re.search(r"telegram.*__reply$", tool, re.I):
-        telegram_gate(tool_input)
+    # GATECOPY828 (#1184): the scaffold wires this hook onto reply AND
+    # edit_message (an edit can replace a working code block with a broken
+    # one). The dispatch must recognise BOTH, or the edit half of the matcher
+    # invokes a hook that exits 0 without auditing anything.
+    if re.search(r"telegram.*__(reply|edit_message)$", tool, re.I):
+        telegram_gate(tool_input)  # exits; never falls through
         # UNREACHABLE TODAY, AND THAT IS THE POINT (card 9106d8e6). Every path in
         # telegram_gate exits -- measured 2026-09-06: five exits, all hard (bare return 0,
         # sys.exit 4, raise 1), so a return would be a deliberate edit, not a slip.
@@ -749,17 +1481,48 @@ def main():
             "irt bele, a kapu innentol NEM vizsgalja a kimeno szoveget, ezert megtagadom.\n"
         )
         sys.exit(2)
-    if re.search(r"send_email", tool, re.I):
+    # COPYGATEMATCHER904: the hook is REGISTERED for manage_email, create_draft,
+    # update_draft and the Gmail connector's reply/send_message/forward tools,
+    # but this dispatch only ever recognised a tool NAME containing
+    # "send_email" -- so on an install whose email tool is the multiplexed
+    # mcp__google-workspace__manage_email, every letter fell through to
+    # sys.exit(0) and the copy audit NEVER ran on an outgoing email. Measured
+    # 2026-09-04: an em dash in a manage_email draft body passed the gate,
+    # while the same text was blocked on the Telegram path. Same class as the
+    # email-send-gate's MANAGEOP904 fix: a multiplexer cannot be classified by
+    # its name, only by the operation it was asked to perform.
+    if re.search(r"(^|__)manage_email$", tool, re.I):
+        op = str(tool_input.get("operation") or tool_input.get("action") or "").strip().lower()
+        if op not in MANAGE_EMAIL_OUTBOUND_OPS:
+            sys.exit(0)  # search/read/labels/trash...: no outgoing text of ours
+        # A bare forward carries someone else's text and an EMPTY note: there is
+        # nothing of ours to audit, and the fail-closed "unreadable" branch below
+        # would block it for no reason.
+        if op == "forward" and not str(tool_input.get("body") or "").strip():
+            sys.exit(0)
+        text, unreadable = collect_mcp_body(tool_input), None
+    elif EMAIL_TOOL_RE.search(tool):
         text, unreadable = collect_mcp_body(tool_input), None
     elif tool == "Bash":
         cmd = str(tool_input.get("command") or "")
         if not is_send_invocation(cmd):
-            sys.exit(0)
+            inter_agent_homoglyph_gate(cmd)  # exits; a no-op pass for anything else
         text, unreadable = collect_bash_body(cmd)
     else:
         sys.exit(0)
 
     if unreadable or not text.strip():
+        if tool == "Bash" and wrapper_depth_hit(cmd):
+            sys.stderr.write(
+                "KIMENO-SZOVEG KAPU: TILTVA, mert a parancs valodi fejet nem latom.\n"
+                f"Ok: a parancs a burkolo-korlatnal ({_HEAD_DEPTH} egymasba agyazott burkolo: sudo, "
+                "time, env, nohup, nice, timeout...) is meg burkolo, tehat nem tudom eldonteni, "
+                "hogy levelkuldes-e. Ez szandekosan fail-closed.\n\n"
+                f"Ha ez NEM levelkuldes: csokkentsd a burkolok szamat {_HEAD_DEPTH} vagy kevesebb ala.\n"
+                "Ha levelkuldes: tedd vizsgalhatova -- ABSZOLUT utvonalu stdin-atiranyitas "
+                "(< /teljes/ut/body.txt), vagy --body-ban atadott szoveg.\n"
+            )
+            sys.exit(2)
         reason = unreadable or "a hook nem talalt vizsgalhato szoveget a hivasban"
         sys.stderr.write(
             "KIMENO-SZOVEG KAPU: TILTVA, mert a levelet nem tudtam megvizsgalni.\n"
@@ -775,12 +1538,18 @@ def main():
     # csendben lealit nev-ellenorzes mellett kuldeni rosszabb, mint megvarni a
     # szabaly-fajl potlasat. (A telegram-ag fail-open marad systemMessage
     # figyelmeztetessel: az a felugyeleti csatorna, ott a nemulas a dragabb.)
-    if BAD_NAME is None:
+    if RULES_STATE == RULES_INVALID:
+        # The file EXISTS but cannot be used: someone configured it and got it
+        # wrong. Silent enforcement-loss here would be invisible, so this stays
+        # fail-closed until the file is repaired (negative control in tests).
         sys.stderr.write(
-            "KIMENO-SZOVEG KAPU: TILTVA -- a NEV-SZABALY fajl hianyzik/ures "
-            f"({_LOCAL_RULES}), igy a nev-ellenorzes nem tud lefutni.\n"
-            "Email fail-closed: potold a store/outgoing-copy-gate-rules.json-t "
-            "(bad_name_patterns + correction), aztan kuldd ujra.\n"
+            "KIMENO-SZOVEG KAPU: TILTVA -- a NEV-SZABALY fajl LETEZIK, de "
+            f"ervenytelen ({_LOCAL_RULES}): "
+            + (_INVALID_REASON if _INVALID_REASON else
+               "nem parse-olhato JSON, rossz sema vagy hibas regex")
+            + ".\n"
+            "Javitsd a fajlt (bad_name_patterns: [regex, ...] + correction), "
+            "aztan kuldd ujra.\n"
         )
         sys.exit(2)
 
@@ -794,8 +1563,39 @@ def main():
         )
         sys.exit(2)
 
+    # Fail-OPEN on a missing/empty rules file, but never silent: the send goes out WITHOUT
+    # the name check, and the user must see that on the surface they are using -- a log
+    # line nobody reads is the same as nothing (CLCOPYGATEHIANY902). FOREIGNLETTER924 adds
+    # the named foreign-letter warning to the SAME stdout JSON.
+    emit_system_messages([
+        ("outgoing-copy-gate: a NEV-SZABALY fajl "
+         + ("HIANYZIK" if RULES_STATE == RULES_MISSING else "URES (nincs minta)")
+         + f" ({_LOCAL_RULES}) -- ez a level a nev-ellenorzes NELKUL ment ki. "
+         "Ha kell a vedelem, hozd letre a fajlt: "
+         '{"bad_name_patterns": ["<python-regex>"], "correction": "<helyes alak>"}.')
+        if RULES_STATE in (RULES_MISSING, RULES_EMPTY) else None,
+        foreign_letter_warning(text),
+    ])
     sys.exit(0)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- deliberate blanket: fail-closed net
+        # An unhandled crash exits 1, and PreToolUse treats 1 as NON-blocking,
+        # so the send would run UNCHECKED -- the exact opposite of the email
+        # path's fail-closed contract (e.g. a non-dict tool_input used to
+        # AttributeError inside collect_mcp_body). The telegram path never
+        # reaches here: telegram_gate() catches its own errors and exits 0
+        # (fail-open by design), so this net only ever catches the email/Bash
+        # send paths, where blocking is the safe failure mode.
+        sys.stderr.write(
+            "KIMENO-SZOVEG KAPU: TILTVA, belso hiba a vizsgalat kozben "
+            f"({exc!r}).\n"
+            "Fail-closed: egy vizsgalhatatlan kuldes pont a kaput utne ki. "
+            "Tedd vizsgalhatova a hivast, aztan kuldd ujra.\n"
+        )
+        sys.exit(2)

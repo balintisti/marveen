@@ -15,10 +15,17 @@
 // string) and claims no more. Our sub-agents are not adversaries; if that
 // assumption ever changes, this gate is the wrong tool.
 //
-// Why a hook and not a permissions deny-list: permissive security profiles
-// launch Claude Code with --dangerously-skip-permissions, which BYPASSES the
-// settings.json allow/deny list. A PreToolUse hook runs regardless of
-// permission mode, so it is the only reliable mode-independent gate.
+// Why a hook and not a permissions deny-list: the hook is version- and
+// mode-independent, and it can analyze command CONTENT (the Bash send-shape
+// heuristics below), which a name/prefix deny rule cannot express.
+// CORRECTION (SKIPDENY910, measured 2026-09-10): this comment used to claim
+// that --dangerously-skip-permissions BYPASSES the settings.json deny list.
+// That is false on every CLI version we measured (2.1.63, 2.1.110, 2.1.267;
+// marker-file ground truth, deny arm vs no-deny control, -p AND interactive
+// TUI): the deny list IS enforced under the flag, and a tool-name deny is
+// enforced by removing the tool from the session entirely. The hook remains
+// the primary gate anyway -- future CLI behavior is not a contract, and the
+// deny list stays a second, independent layer, not the load-bearing one.
 //
 // This file is wired into every sub-agent's .claude/settings.json by
 // writeAgentSettingsFromProfile() (agent-scaffold.ts), guarded by
@@ -27,6 +34,7 @@
 import { readFileSync, realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { homedir } from 'node:os'
 
 // Bash command patterns that send mail. SUBGATEPOZ822 (2026-08-22): these are
 // no longer the primary trigger -- they matched CONTENT anywhere in the
@@ -86,6 +94,11 @@ const SEND_PATTERNS = [
 // would have lost a heredoc-fed real sender (FN).
 const HEREDOC_RE = /(<<-?\s*'?(\w+)'?[^\n]*)\n[\s\S]*?\n\2(?=\s|$)/g
 const ENV_ASSIGN = /^[A-Za-z_][A-Za-z_0-9]*=/
+// KWSPLIT924: shell reserved words that put the NEXT word in command position.
+// Stripped only at the head of a segment, never used as separators -- see the
+// full rationale at _CMD_POSITION_KEYWORDS in outgoing-copy-gate.py (the python
+// twin); the shared send-invocation-cases.json binds the two copies.
+const CMD_POSITION_KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '{', '!'])
 const SENDER_PROG = /^(sendmail|msmtp|swaks)$/i
 const SENDPY = /^send\.py$/i
 const PYTHON = /^python3?$/i
@@ -179,9 +192,68 @@ export function segmentsTokens(cmd) {
 
 const basename = (t) => t.split('/').pop()
 
-function segmentIsSend(toksIn, depth) {
+// SENDWRAP924: a wrapper in front of the sender is stepped over WITH its own
+// flags -- see the full rationale at _WRAPPERS in outgoing-copy-gate.py (the
+// python twin). An unknown long flag without `=` is read both ways, so it errs
+// toward auditing. send-invocation-cases.json binds the two copies.
+const WRAPPERS = new Map([
+  ['time', ['fo', ['format', 'output'], 0]],
+  ['sudo', ['ughpCUrtDRT', ['user', 'group', 'host', 'prompt', 'close-from', 'other-user',
+    'role', 'type', 'chdir', 'chroot', 'command-timeout'], 0]],
+  ['env', ['uCS', ['unset', 'chdir', 'split-string'], 0]],
+  ['nohup', ['', [], 0]],
+  ['nice', ['n', ['adjustment'], 0]],
+  ['exec', ['a', [], 0]],
+  ['command', ['', [], 0]],
+  ['xargs', ['ILnPsdEa', ['arg-file', 'delimiter', 'eof', 'replace', 'max-lines', 'max-args',
+    'max-procs', 'max-chars', 'process-slot-var'], 0]],
+  ['timeout', ['sk', ['signal', 'kill-after'], 1]],
+  ['setsid', ['', [], 0]],
+])
+const HEAD_DEPTH = 8
+
+function commandHeads(toksIn, d = 0) {
   let toks = toksIn
-  while (toks.length && ENV_ASSIGN.test(toks[0])) toks = toks.slice(1)
+  while (toks.length && (ENV_ASSIGN.test(toks[0]) || CMD_POSITION_KEYWORDS.has(toks[0]))) toks = toks.slice(1)
+  if (!toks.length) return [toks]
+  const w = basename(toks[0])
+  // Still a wrapper at the depth bound: counts as a send (null), see the python twin.
+  if (d >= HEAD_DEPTH) return (WRAPPERS.has(w) || w === 'function' || w === 'coproc') ? [null] : [toks]
+  if (w === 'function') return commandHeads(toks.slice(2), d + 1)
+  if (w === 'coproc') return [...commandHeads(toks.slice(1), d + 1), ...commandHeads(toks.slice(2), d + 1)]
+  const spec = WRAPPERS.get(w)
+  if (!spec) return [toks]
+  const [shortVal, longVal, positionals] = spec
+  let i = 1
+  const starts = []
+  while (i < toks.length) {
+    const t = toks[i]
+    if (t === '--') { i++; break }
+    if (t.startsWith('--')) {
+      if (!t.includes('=') && longVal.includes(t.slice(2))) { i += 2; continue }
+      if (!t.includes('=')) starts.push(i + 2)
+      i++
+      continue
+    }
+    if (t.startsWith('-') && t.length > 1) {
+      if (w === 'command' && (t.includes('v') || t.includes('V'))) return []
+      let k = -1
+      for (let j = 1; j < t.length; j++) if (shortVal.includes(t[j])) { k = j; break }
+      i += k === t.length - 1 ? 2 : 1
+      continue
+    }
+    break
+  }
+  starts.unshift(i)
+  return starts.flatMap((s) => commandHeads(toks.slice(s + positionals), d + 1))
+}
+
+function segmentIsSend(toksIn, depth) {
+  return commandHeads(toksIn).some((h) => headIsSend(h, depth))
+}
+
+function headIsSend(toks, depth) {
+  if (toks === null) return true // the depth bound was hit on a wrapper: audit it
   if (!toks.length) return false
   const prog = basename(toks[0])
   const rest = toks.slice(1)
@@ -207,6 +279,30 @@ function segmentIsSend(toksIn, depth) {
   return false
 }
 
+// True when some segment is still a wrapper at the depth bound (HEADDEPTH924),
+// so the deny says WHY -- see wrapper_depth_hit in outgoing-copy-gate.py.
+export function wrapperDepthHit(cmd) {
+  let segments
+  try {
+    segments = segmentsTokens(cmd)
+  } catch {
+    return false
+  }
+  // Only when the bound is the WHOLE reason: a visible send in another segment wins.
+  const heads = segments.flatMap((toks) => commandHeads(toks))
+  return heads.some((h) => h === null) && !heads.some((h) => h !== null && headIsSend(h, 0))
+}
+
+export function buildWrapperDepthMsg() {
+  return (
+    'TILTVA (governance hard-gate): a parancs valodi fejet nem latom. ' +
+    `A parancs a burkolo-korlatnal (${HEAD_DEPTH} egymasba agyazott burkolo: sudo, time, env, nohup, nice, timeout...) ` +
+    'is meg burkolo, tehat nem tudom eldonteni, hogy levelkuldes-e, es a kapu ilyenkor fail-closed. ' +
+    `Ha ez NEM levelkuldes: csokkentsd a burkolok szamat ${HEAD_DEPTH} vagy kevesebb ala. ` +
+    'Ha levelkuldes: sub-agentkent Bash-bol amugy sem kuldhetsz, a kimeno emailt a fo-agens kuldi.'
+  )
+}
+
 export function isSendInvocation(cmd, depth = 0) {
   let segments
   try {
@@ -226,13 +322,23 @@ const MANAGE_EMAIL_SEND_OPS = new Set(['send', 'reply', 'replyall', 'forward'])
 // Pure decision: does this tool call send (or attempt to send) email?
 // Returns { deny, kind? }. `kind` selects the deny wording at the hook
 // entrypoint: 'draft-required' is the manage_email case (drafting is fine,
-// only the actual send is refused), everything else is the sub-agent
-// governance block.
+// only the actual send is refused), 'send_email' is the direct MCP send tool
+// (the only path the thread-reply capability below can narrow), everything
+// else is the sub-agent governance block.
 export function gateDecision(toolName, toolInput) {
   const name = String(toolName ?? '')
   // Any MCP send_email tool, name-agnostic (gmail or a differently-named
   // server in a customer install -> the matcher + this both key on send_email).
-  if (/send_email/i.test(name)) return { deny: true }
+  if (/send_email/i.test(name)) return { deny: true, kind: 'send_email' }
+  // The claude.ai Gmail connector (mcp__claude_ai_Gmail__*) has no send_email:
+  // its sends are send_message / reply / forward. Drafts stay allowed and the
+  // reads are not sends, only the three send-shaped tools are denied
+  // (GMAILCONNECTOR914 -- before this line a sub-agent could send through the
+  // connector with no gate at all).
+  // Kind is NOT 'send_email' on purpose: the thread-reply narrowing at the
+  // entrypoint reads send_email-shaped fields (threadId/to), which a connector
+  // reply does not carry, so the connector stays fully gated for every agent.
+  if (/gmail__(reply|reply_all|send_message|forward)$/i.test(name)) return { deny: true, kind: 'connector-send' }
   // @aaronsb/google-workspace-mcp multiplexes read, draft and send behind one
   // manage_email tool, so the tool NAME cannot decide this one -- the operation
   // plus the draft flag can. This is what replaces the server's own
@@ -251,7 +357,7 @@ export function gateDecision(toolName, toolInput) {
   }
   if (name === 'Bash') {
     const cmd = String(toolInput?.command ?? '')
-    if (isSendInvocation(cmd)) return { deny: true }
+    if (isSendInvocation(cmd)) return wrapperDepthHit(cmd) ? { deny: true, kind: 'wrapper-depth' } : { deny: true }
   }
   return { deny: false }
 }
@@ -316,6 +422,143 @@ export function readBrandEnv(readFile = (p) => readFileSync(p, 'utf-8')) {
   }
 }
 
+// --- thread-scoped reply (BONIMAIL910) --------------------------------------
+// Owner decision 2026-09-10: ONE named agent may send outbound email, but ONLY
+// into an EXISTING Gmail thread and ONLY to addresses that already appear in
+// that thread's headers. The capability is granted per agent in code
+// (agent-scaffold.ts appends --allow-thread-reply to this hook's command when
+// the agent's capability list contains EMAIL_THREAD_REPLY_CAPABILITY); every
+// other agent keeps the unconditional deny above.
+//
+// Why THREAD-MEMBERSHIP and not a topic rule: the 2026-06-25 incident that
+// created this gate was a sub-agent mailing a FABRICATED address in the
+// owner's name. Membership in an existing thread is checkable in code; "is
+// this financial" is not. The narrowing closes exactly the failure shape that
+// created the rule: a new address can never be introduced.
+//
+// Every branch below fails CLOSED: missing threadId, unparseable recipient,
+// empty participant list, credential/fetch/HTTP error, timeout -> deny.
+
+// One address token. Deliberately simple: it must match what appears both in
+// the tool input and in Gmail's From/To/Cc header values.
+const ADDR_TOKEN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi
+
+// Parse one recipient entry ("addr" or "Name <addr>") to a bare lowercase
+// address. Returns '' when the entry is not a single clean address -- the
+// caller treats that as deny (an unparseable recipient must never slip past
+// the membership check).
+export function extractAddress(raw) {
+  const s = String(raw ?? '').trim()
+  const angle = s.match(/<([^<>]+)>$/)
+  const cand = (angle ? angle[1] : s).trim()
+  return /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(cand) ? cand.toLowerCase() : ''
+}
+
+// Validate the send_email tool input as a thread-reply request. Pure.
+// Returns { ok: true, threadId, recipients } or { ok: false, reason }.
+export function threadReplyRequest(toolInput) {
+  const threadId = toolInput?.threadId
+  if (typeof threadId !== 'string' || !threadId.trim()) {
+    return { ok: false, reason: 'threadId hianyzik (uj szal nyitasa tiltott)' }
+  }
+  const raw = [toolInput?.to, toolInput?.cc, toolInput?.bcc]
+    .flatMap((v) => (Array.isArray(v) ? v : v == null ? [] : [v]))
+  if (!raw.length) return { ok: false, reason: 'nincs cimzett' }
+  const recipients = []
+  for (const r of raw) {
+    const addr = extractAddress(r)
+    if (!addr) return { ok: false, reason: `ertelmezhetetlen cimzett: ${String(r)}` }
+    recipients.push(addr)
+  }
+  return { ok: true, threadId: threadId.trim(), recipients }
+}
+
+// The membership decision itself. Pure. Empty participant list denies: a
+// thread we could not read participants from authorizes nothing.
+export function threadMembershipDecision(recipients, participants) {
+  const set = new Set((participants ?? []).map((p) => String(p).toLowerCase()).filter(Boolean))
+  if (!set.size) return { allow: false, reason: 'a szal resztvevo-listaja ures (fail-closed)' }
+  for (const r of recipients) {
+    if (!set.has(r)) return { allow: false, reason: `cimzett nincs a szalban: ${r}` }
+  }
+  return { allow: true }
+}
+
+// Collect every address that appears in the thread's From/To/Cc/Reply-To
+// headers. Pure over the Gmail API thread payload (format=metadata).
+export function extractParticipants(threadData) {
+  const out = new Set()
+  for (const msg of threadData?.messages ?? []) {
+    for (const h of msg?.payload?.headers ?? []) {
+      const n = String(h?.name ?? '').toLowerCase()
+      if (n === 'from' || n === 'to' || n === 'cc' || n === 'reply-to') {
+        for (const m of String(h?.value ?? '').matchAll(ADDR_TOKEN)) out.add(m[0].toLowerCase())
+      }
+    }
+  }
+  return [...out]
+}
+
+// Fetch the thread's participant addresses with the same credentials the Gmail
+// MCP server uses (same mailbox the send would go through, so the gate and the
+// send see the same thread). Path resolution mirrors the MCP server's own:
+// GMAIL_CREDENTIALS_PATH / GMAIL_OAUTH_PATH env overrides, else ~/.gmail-mcp.
+// Throws on ANY failure; per-request timeouts keep the whole check well under
+// the hook's 10s budget (a hook timeout would be a NON-blocking error, i.e.
+// fail-open -- the script must always decide first).
+export async function fetchThreadParticipants(threadId, opts = {}) {
+  const fetchImpl = opts.fetchImpl ?? fetch
+  const readFile = opts.readFile ?? ((p) => readFileSync(p, 'utf-8'))
+  const now = opts.now ?? (() => Date.now())
+  const home = process.env.HOME || homedir()
+  const credPath = process.env.GMAIL_CREDENTIALS_PATH || join(home, '.gmail-mcp', 'credentials.json')
+  const keysPath = process.env.GMAIL_OAUTH_PATH || join(home, '.gmail-mcp', 'gcp-oauth.keys.json')
+  const creds = JSON.parse(readFile(credPath))
+  let accessToken = creds.access_token
+  const fresh = typeof creds.expiry_date === 'number' && creds.expiry_date > now() + 60_000
+  if (!fresh) {
+    const keys = JSON.parse(readFile(keysPath))
+    const k = keys.installed ?? keys.web
+    if (!k?.client_id || !k?.client_secret || !creds.refresh_token) {
+      throw new Error('gmail credentials incomplete')
+    }
+    const res = await fetchImpl(k.token_uri || 'https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: k.client_id,
+        client_secret: k.client_secret,
+        refresh_token: creds.refresh_token,
+        grant_type: 'refresh_token',
+      }).toString(),
+      signal: AbortSignal.timeout(3500),
+    })
+    if (!res.ok) throw new Error(`token refresh failed: ${res.status}`)
+    accessToken = (await res.json())?.access_token
+  }
+  if (!accessToken) throw new Error('no gmail access token')
+  const url = 'https://gmail.googleapis.com/gmail/v1/users/me/threads/'
+    + encodeURIComponent(threadId)
+    + '?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Reply-To'
+  const res = await fetchImpl(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(3500),
+  })
+  if (!res.ok) throw new Error(`thread fetch failed: ${res.status}`)
+  return extractParticipants(await res.json())
+}
+
+// Deny wording for the thread-reply case: the agent HAS a send right, the
+// specific call fell outside it. Says what the right covers and the way out.
+export function buildThreadDenyMsg(botName, detail) {
+  return (
+    'Kimeno email ezzel a jogosultsaggal CSAK meglevo szalba mehet, es csak a ' +
+    `szalban mar szereplo cimzettnek (szal-kapu). Elutasitva: ${detail}. ` +
+    `Uj cimzetthez vagy uj szalhoz kuldd a tervezett emailt ${botName}nek ` +
+    'inter-agent uzenetben jovahagyasra.'
+  )
+}
+
 function allow() { process.exit(0) }
 
 function deny(reason) {
@@ -354,7 +597,26 @@ if (isInvokedDirectly()) {
   const { deny: shouldDeny, kind } = gateDecision(payload?.tool_name, payload?.tool_input)
   if (shouldDeny) {
     const { botName, ownerName } = readBrandEnv()
-    deny(kind === 'draft-required' ? buildDraftOnlyMsg(ownerName) : buildGateMsg(botName, ownerName))
+    if (kind === 'draft-required') deny(buildDraftOnlyMsg(ownerName))
+    if (kind === 'wrapper-depth') deny(buildWrapperDepthMsg())
+    // Thread-scoped narrowing: only when the scaffold wired this agent's hook
+    // command with the flag (capability-driven, regenerated on every spawn),
+    // and only for the direct send_email tool. Bash send routes and
+    // manage_email stay fully gated even for the capable agent.
+    if (kind === 'send_email' && process.argv.includes('--allow-thread-reply')) {
+      const req = threadReplyRequest(payload?.tool_input)
+      if (!req.ok) deny(buildThreadDenyMsg(botName, req.reason))
+      let verdict
+      try {
+        const participants = await fetchThreadParticipants(req.threadId)
+        verdict = threadMembershipDecision(req.recipients, participants)
+      } catch {
+        verdict = { allow: false, reason: 'a szal resztvevoi nem olvashatok (fail-closed)' }
+      }
+      if (verdict.allow) allow()
+      deny(buildThreadDenyMsg(botName, verdict.reason))
+    }
+    deny(buildGateMsg(botName, ownerName))
   }
   allow()
 }
