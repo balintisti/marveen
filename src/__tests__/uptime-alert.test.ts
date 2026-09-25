@@ -5,6 +5,7 @@ import {
   buildUptimeNotice,
   buildUnreadableNotice,
   BLIND_REANNOUNCE_MS,
+  BLIND_CONFIRM_MS,
   NO_UPTIME_STATE,
   type UptimeSeries,
   type UptimeCondition,
@@ -135,9 +136,10 @@ describe('the notices say what a reader must not conclude', () => {
   // "CANNOT MEASURE" IS A SEPARATE MESSAGE FROM "IS DOWN", and collapsing them
   // is the exact failure mode of the backup alert that sat on 403 for months.
   it('unreadable produces its own notice, and never a clear one', () => {
-    const d = decideUptimeAlerts([series([])], COND, NO_UPTIME_STATE, NOW)
+    // the SECOND blind poll: the first says nothing on its own (507992c5)
+    const d = decideUptimeAlerts([series([])], COND, decideUptimeAlerts([series([])], COND, NO_UPTIME_STATE, NOW).next, NOW + 120_000)
     expect(buildUptimeNotice(d, 12)).toBeNull()
-    const u = buildUnreadableNotice(d, 12)!
+    const u = buildUnreadableNotice(d, 12, NOW + 120_000)!
     expect(u).toContain('CANNOT MEASURE')
     expect(u).toMatch(/NOT a clear result/)
   })
@@ -152,9 +154,10 @@ describe('the notices say what a reader must not conclude', () => {
   // The 14 tests and 7 caught mutations all missed it because every one handed
   // in at least one series. The gap was in the INPUT SPACE, not the logic.
   it('ZERO series -- the no-token path -- is LOUD, not silent', () => {
-    const d = decideUptimeAlerts([], COND, NO_UPTIME_STATE, NOW)
+    // the SECOND blind poll: the first says nothing on its own (507992c5)
+    const d = decideUptimeAlerts([], COND, decideUptimeAlerts([], COND, NO_UPTIME_STATE, NOW).next, NOW + 120_000)
     expect(d.noSeries).toBe(true)
-    const n = buildUnreadableNotice(d, 0)
+    const n = buildUnreadableNotice(d, 0, NOW + 120_000)
     expect(n).not.toBeNull()
     expect(n).toContain('NO UPTIME DATA AT ALL')
     expect(n).toMatch(/NOT a clear result/)
@@ -184,37 +187,75 @@ describe('the notices say what a reader must not conclude', () => {
 // uncovered.
 describe('a blind spell re-announces on a window, not on the level and not once ever', () => {
   const blind: UptimeSeries[] = []
+  const POLL = 120_000   // the watcher's INTERVAL_MS
+  /** A spell that began at `start` and that the next poll confirmed: the first decision that speaks. */
+  const confirmed = (all: UptimeSeries[], start = NOW) =>
+    decideUptimeAlerts(all, COND, decideUptimeAlerts(all, COND, NO_UPTIME_STATE, start).next, start + POLL)
 
   // Its own assertion, because every other test here now uses a literal hour.
   it('the window is one hour', () => {
     expect(BLIND_REANNOUNCE_MS).toBe(3_600_000)
   })
 
-  it('announces on the EDGE of a blind spell', () => {
-    const d = decideUptimeAlerts(blind, COND, NO_UPTIME_STATE, NOW)
+  // Its own assertion for the same reason (507992c5): the jitter test below uses literals.
+  it('the confirmation threshold is 90 s -- inside one poll interval, not equal to it', () => {
+    expect(BLIND_CONFIRM_MS).toBe(90_000)
+  })
+
+  // THE MEASURED CASE (507992c5): 35 of 36 NOT MEASURED notices 09-22..09-25 were followed by a
+  // poll that read the API again. Blind once, then sighted: nothing is said, on either tick.
+  it('a ONE-POLL blip says nothing: blind on one poll, sighted on the next', () => {
+    const first = decideUptimeAlerts(blind, COND, NO_UPTIME_STATE, NOW)
+    expect(first.announceBlind).toBe(false)
+    expect(buildUnreadableNotice(first, 0, NOW, 'gcloud timed out')).toBeNull()
+    const sighted = decideUptimeAlerts([series(Array(11).fill(true))], COND, first.next, NOW + POLL)
+    expect(sighted.announceBlind).toBe(false)
+    expect(sighted.next.blindSinceMs).toBeUndefined()
+  })
+
+  it('announces when the NEXT poll confirms the spell, and names its start', () => {
+    const d = confirmed(blind)
     expect(d.announceBlind).toBe(true)
-    expect(buildUnreadableNotice(d, 0, NOW)).toContain('NO UPTIME DATA AT ALL')
+    expect(d.blindSinceMs).toBe(NOW)
+    const n = buildUnreadableNotice(d, 0, NOW + POLL)!
+    expect(n).toContain('NO UPTIME DATA AT ALL')
+    expect(n).toContain(`Blind since ${new Date(NOW).toISOString()}, confirmed by the next poll`)
+    expect(n).not.toContain('STILL BLIND')
+  })
+
+  // RED if the threshold becomes the interval itself: a poll that lands a second early must not
+  // push the notice to a THIRD poll.
+  it('a poll that lands a little early still confirms (timer jitter)', () => {
+    const first = decideUptimeAlerts(blind, COND, NO_UPTIME_STATE, NOW)
+    expect(decideUptimeAlerts(blind, COND, first.next, NOW + 119_000).announceBlind).toBe(true)
+  })
+
+  // RED if the gate is dropped for a spell that has barely started (e.g. a restart's first tick
+  // right after a blind one would otherwise speak on no confirmation at all).
+  it('CONTROL for the jitter test: 60 s into a spell is not yet a confirmation', () => {
+    const first = decideUptimeAlerts(blind, COND, NO_UPTIME_STATE, NOW)
+    expect(decideUptimeAlerts(blind, COND, first.next, NOW + 60_000).announceBlind).toBe(false)
   })
 
   // RED if BLIND_REANNOUNCE_MS becomes 0.
-  it('stays SILENT on the next tick inside the window', () => {
-    const first = decideUptimeAlerts(blind, COND, NO_UPTIME_STATE, NOW)
-    const twoMinLater = decideUptimeAlerts(blind, COND, first.next, NOW + 120_000)
-    expect(twoMinLater.announceBlind).toBe(false)
-    expect(buildUnreadableNotice(twoMinLater, 0, NOW + 120_000)).toBeNull()
+  it('stays SILENT on the poll after the announcement, inside the window', () => {
+    const said = confirmed(blind)
+    const after = decideUptimeAlerts(blind, COND, said.next, NOW + 2 * POLL)
+    expect(after.announceBlind).toBe(false)
+    expect(buildUnreadableNotice(after, 0, NOW + 2 * POLL)).toBeNull()
   })
 
   // RED if BLIND_REANNOUNCE_MS becomes Infinity. This is the half that matters
   // most: "I cannot measure" has no RECOVERED event to close it, so going quiet
   // leaves the fleet believing the watcher works.
   it('RE-ANNOUNCES once the window has passed, because blindness has no recovery event', () => {
-    const first = decideUptimeAlerts(blind, COND, NO_UPTIME_STATE, NOW)
-    // LITERAL, not NOW + BLIND_REANNOUNCE_MS. Deriving the fixture from the
+    const said = confirmed(blind)
+    // LITERAL, not derived from BLIND_REANNOUNCE_MS. Deriving the fixture from the
     // constant makes it move WITH a mutation of that constant: the Infinity
     // mutation SURVIVED the first version of this test for exactly that reason
-    // (measured, 2026-09-05). The constant gets its own assertion below instead.
-    const later = NOW + 3_600_000
-    const d = decideUptimeAlerts(blind, COND, first.next, later)
+    // (measured, 2026-09-05). The constant gets its own assertion above instead.
+    const later = NOW + 120_000 + 3_600_000
+    const d = decideUptimeAlerts(blind, COND, said.next, later)
     expect(d.announceBlind).toBe(true)
     const n = buildUnreadableNotice(d, 0, later)!
     // and the repeat is LABELLED, or identical hourly notices read as flapping
@@ -223,14 +264,17 @@ describe('a blind spell re-announces on a window, not on the level and not once 
   })
 
   // The window must not survive the spell that opened it: a spell that ends and
-  // a new one that starts 10 minutes later is a NEW event, not a suppressed repeat.
-  it('resets when sight returns, so the next blind spell announces on its own edge', () => {
-    const first = decideUptimeAlerts(blind, COND, NO_UPTIME_STATE, NOW)
-    const sighted = decideUptimeAlerts([series(Array(11).fill(true))], COND, first.next, NOW + 60_000)
+  // a new one that starts 10 minutes later is a NEW event -- confirmed on its own,
+  // from its OWN start, not from the old spell's.
+  it('resets when sight returns, so the next blind spell is confirmed and announced on its own', () => {
+    const said = confirmed(blind)
+    const sighted = decideUptimeAlerts([series(Array(11).fill(true))], COND, said.next, NOW + 3 * POLL)
     expect(sighted.announceBlind).toBe(false)
     expect(sighted.blindSinceMs).toBeNull()
-    const blindAgain = decideUptimeAlerts(blind, COND, sighted.next, NOW + 600_000)
-    expect(blindAgain.announceBlind).toBe(true)
+    const again = decideUptimeAlerts(blind, COND, sighted.next, NOW + 600_000)
+    expect(again.announceBlind).toBe(false)          // a new spell's first poll: unconfirmed
+    expect(again.blindSinceMs).toBe(NOW + 600_000)   // and it did not inherit the old start
+    expect(decideUptimeAlerts(blind, COND, again.next, NOW + 600_000 + POLL).announceBlind).toBe(true)
   })
 
   // CONTROL: the window must not turn the loud path into a quiet one for a
@@ -242,11 +286,13 @@ describe('a blind spell re-announces on a window, not on the level and not once 
     expect(buildUnreadableNotice(healthy, 1, NOW)).toBeNull()
   })
 
-  // The unknown path shares the window: it is the same "cannot measure" claim.
+  // The unknown path shares the confirmation and the window: it is the same "cannot measure" claim.
   it('applies to the unknown path too, not only to zero series', () => {
     const first = decideUptimeAlerts([series([])], COND, NO_UPTIME_STATE, NOW)
-    expect(first.announceBlind).toBe(true)
-    const soon = decideUptimeAlerts([series([])], COND, first.next, NOW + 120_000)
-    expect(buildUnreadableNotice(soon, 1, NOW + 120_000)).toBeNull()
+    expect(first.announceBlind).toBe(false)
+    const said = decideUptimeAlerts([series([])], COND, first.next, NOW + POLL)
+    expect(said.announceBlind).toBe(true)
+    const soon = decideUptimeAlerts([series([])], COND, said.next, NOW + 2 * POLL)
+    expect(buildUnreadableNotice(soon, 1, NOW + 2 * POLL)).toBeNull()
   })
 })

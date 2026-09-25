@@ -34,8 +34,10 @@ import {
 const NOW = Date.parse('2026-09-06T12:00:00Z')
 const COND: UptimeCondition = { durationSeconds: 600, triggerCount: 1 }
 
-/** A dontes, amit a watcher URES tombbel allit elo -- mindket bukasi uton ez keletkezik. */
-const noSeriesDecision = () => decideUptimeAlerts([], COND, NO_UPTIME_STATE, NOW)
+/** A dontes, amit a watcher URES tombbel allit elo -- mindket bukasi uton ez keletkezik.
+ *  A MASODIK vak poll-on: az elso egymagaban nem szolal meg (507992c5, BLIND_CONFIRM_MS). */
+const noSeriesDecision = () =>
+  decideUptimeAlerts([], COND, decideUptimeAlerts([], COND, NO_UPTIME_STATE, NOW - 120_000).next, NOW)
 
 describe('a fejlec megkulonbozteti a NEM MERT-et a MERT NULLA-tol', () => {
   it('1. A LELET: elerhetetlen API -> NOT MEASURED, es NEM "zero series returned"', () => {
