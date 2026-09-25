@@ -1,4 +1,5 @@
 import { logger } from '../logger.js'
+import { createAgentMessage } from '../db.js'
 import { MAIN_AGENT_ID } from '../config.js'
 import { listAgentNames, readAgentRemoteHost } from './agent-config.js'
 import { isAgentRunning, captureParkedInputView, sendEnterToSession, capturePane } from './agent-process.js'
@@ -227,6 +228,37 @@ function bareEnterRecovery(label: string, session: string, host: string | null):
 // this flag), only the ghost-risky plain-text branch is closed. Local
 // sub-agents pass TRUE: the env-var strips their ghost at the source, so their
 // plain re-inject (an inter-agent message the TUI failed to submit) is safe.
+/**
+ * The give-up alert goes to the COORDINATOR first, the owner only as fallback (card b0181f2b,
+ * marveen 2026-09-25 05:14 -- the same rule as 45101873 and b610c593). A stuck sub-agent box is his
+ * to act on: a restart or a look at the pane. The owner hears it when the coordinator is not running
+ * (a letter would wait unread) or the letter cannot be enqueued. Exported for the routing test.
+ */
+export function alertGiveUp(
+  text: string,
+  deps: {
+    coordinatorRunning?: () => boolean
+    toCoordinator?: (text: string) => void
+    toOwner?: (text: string) => void
+  } = {},
+): 'coordinator' | 'owner' {
+  const running = deps.coordinatorRunning ?? (() => isAgentRunning(MAIN_AGENT_ID))
+  const toCoordinator = deps.toCoordinator ?? ((t: string) => { createAgentMessage('system', MAIN_AGENT_ID, t) })
+  const toOwner = deps.toOwner ?? sendAlert
+  if (running()) {
+    try {
+      toCoordinator(text)
+      return 'coordinator'
+    } catch (err) {
+      logger.warn({ err }, 'stuck-input-watcher: could not tell the coordinator -- the owner gets the give-up alert')
+    }
+  } else {
+    logger.warn('stuck-input-watcher: the coordinator is not running -- the owner gets the give-up alert')
+  }
+  toOwner(text)
+  return 'owner'
+}
+
 async function checkLocalSession(label: string, session: string, alertOnGiveUp: boolean, allowPlainReinject: boolean): Promise<void> {
   const prev = watchState.get(session) ?? NO_STATE
   const next = await recoverStuckInputForSession(session, label, prev, LOCAL_FAST_THRESHOLDS, allowPlainReinject)
@@ -252,7 +284,7 @@ async function checkLocalSession(label: string, session: string, alertOnGiveUp: 
       })) {
         alertedSpells.add(session)
         logger.warn({ label, session, paneState }, 'stuck-input-watcher: sub-agent input still parked after max recovery attempts at a non-busy pane, alerting for manual restart')
-        sendAlert(`⚠️ A(z) ${label} agens bemenete beragadt és az auto-recovery (Enter + clear/re-inject) nem szabadította ki. Valószínűleg kézi restart kell: POST /api/agents/${label}/restart vagy a dashboardon.`)
+        alertGiveUp(`⚠️ A(z) ${label} agens bemenete beragadt és az auto-recovery (Enter + clear/re-inject) nem szabadította ki. Valószínűleg kézi restart kell: POST /api/agents/${label}/restart vagy a dashboardon.`)
       } else if (paneState === 'busy' && prev.attempts < LOCAL_FAST_THRESHOLDS.maxAttempts) {
         // Once per spell, at the crossing tick: say WHY no alert went out, so
         // a real wedge investigation finds the suppression instead of a hole.
@@ -265,8 +297,9 @@ async function checkLocalSession(label: string, session: string, alertOnGiveUp: 
 export function startStuckInputWatcher(): NodeJS.Timeout {
   async function sweep() {
     // The main agent's channels session is named `<id>-channels`, not
-    // `agent-<id>`, so isAgentRunning (which checks the agent- prefix)
-    // does not apply. Check it directly; capturePane returns null when it
+    // `agent-<id>`. (isAgentRunning now resolves it through sessionNameForAgent,
+    // and alertGiveUp relies on that; this loop still checks the pane directly.)
+    // capturePane returns null when it
     // is not up, which ends any spell without acting. Main is always local,
     // so it gets the FULL escalation (Enter -> clear + re-inject of the parked
     // <channel> block) here -- previously it was bare-Enter-only and a
