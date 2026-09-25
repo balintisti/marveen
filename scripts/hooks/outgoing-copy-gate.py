@@ -173,20 +173,45 @@ _RESEND_CFG_PATH = re.compile(
 )
 
 
+_CURL_VALUE_SHORT = set("HdXoOwuAebcmFTEKrYyzCPQtx")
+_CURL_VALUE_LONG = {
+    "--header", "--data", "--data-raw", "--data-binary", "--data-urlencode",
+    "--data-ascii", "--json", "--output", "--write-out", "--request", "--method",
+    "--user", "--user-agent", "--referer", "--cookie", "--cookie-jar",
+    "--max-time", "--connect-timeout", "--retry", "--form", "--form-string",
+    "--upload-file", "--config", "--cert", "--key", "--cacert", "--proxy",
+    "--resolve", "--connect-to", "--range", "--time-cond", "--oauth2-bearer",
+}
+
+
 def _curl_resend_config_only(rest):
     from urllib.parse import urlsplit
-    url_opts = {"--url"}
+    # Every POSITIONAL argument is a URL to curl, scheme or not (didi's probe:
+    # a bare second host was not counted). So: walk the args, skip the values
+    # of the value-taking flags we know, and count everything else that is not
+    # a flag. An unknown flag's value is then counted as a URL too -- that only
+    # ever REMOVES the exemption (fail-closed), never grants it.
     urls = []
-    for i, t in enumerate(rest):
-        if t in url_opts:
-            continue
+    i, n = 0, len(rest)
+    while i < n:
+        t = rest[i]
+        if t == "--url" and i + 1 < n:
+            urls.append(rest[i + 1]); i += 2; continue
         if t.startswith("--url="):
-            t = t.split("=", 1)[1]
-        # Counted: anything with a scheme or '//' prefix, and any token the
-        # Resend target pattern hits. A second such token (another URL, or the
-        # target hidden in some flag's value) voids the exemption.
-        if _URLISH.match(t) or _RESEND_TARGET.match(t) or "resend.com" in t.lower():
-            urls.append(t)
+            urls.append(t.split("=", 1)[1]); i += 1; continue
+        if t.startswith("--"):
+            i += 2 if (t in _CURL_VALUE_LONG and i + 1 < n) else 1
+            continue
+        if t.startswith("-") and len(t) > 1:
+            letters = t[1:]
+            takes = next((k for k, ch in enumerate(letters) if ch in _CURL_VALUE_SHORT), None)
+            if takes is not None and takes == len(letters) - 1:
+                i += 2  # -H 'x', -sX POST: the value is the next token
+            else:
+                i += 1  # -s, -sS, or -XPOST with the value glued on
+            continue
+        urls.append(t)
+        i += 1
     if len(urls) != 1:
         return False
     raw = urls[0]
