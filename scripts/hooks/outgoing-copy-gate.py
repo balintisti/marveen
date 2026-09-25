@@ -758,23 +758,30 @@ RULES_INVALID = "invalid"
 RULES_LOUD = (RULES_MISSING, RULES_EMPTY, RULES_INVALID)
 
 
-# A PATTERN THAT CAN MATCH ZERO CHARACTERS MATCHES EVERY MESSAGE (card 3c753513, didi 18748).
-# audit() reports any hit of BAD_NAME.search(), and "" or ".*" hits at position 0 of any text --
-# so ONE such line in the rules file would block every Telegram reply as a FOUND problem (rc 2,
-# where the fail-open for internal errors does not apply), on all eight sessions once the gate
-# is wired into the sub-agents. Not only "" and ".*": "x?", "\b" and a bare lookahead match
-# zero-width too, so the test is a zero-length match on a few probe texts, not a string compare.
-# Such a pattern is INVALID at load: the email path stays closed, the Telegram path warns.
-_ZERO_WIDTH_PROBES = ("", " ", "a", "0", "Szia Béla, itt a levél.\nÜdv")
+# A NAME PATTERN THAT MATCHES ORDINARY TEXT MATCHES EVERY MESSAGE (card 3c753513).
+# audit() reports any hit of BAD_NAME.search(), so one over-broad line in the rules file makes
+# every Telegram reply a FOUND problem (rc 2, where the fail-open for internal errors does not
+# apply) -- on all eight sessions once the gate is wired into the sub-agents.
+# The first version (didi 18748) rejected only ZERO-WIDTH patterns ("" / ".*" / "x?" / "\b").
+# didi then showed "." "\w" "e" "[a-z]" still block every clean reply (comment 22): that fix
+# closed an instance, not the class. The class is "matches text that names nobody", so the test
+# is exactly that (marveen 02:3x): a pattern is INVALID if it matches a NEUTRAL sentence. The
+# sentences hold no proper name on purpose -- a real rule targets a name, and a probe that
+# contained one would reject a legitimate rule. The empty string stays in for patterns that match
+# only an empty message ("^$").
+_NEUTRAL_PROBES = (
+    "Rendben, köszönöm szépen, holnap küldöm a részleteket.",
+    "Ok, thanks, I will send the details tomorrow.",
+    "12:30-kor jó lesz, a dokumentum a mappában van.",
+)
 _INVALID_REASON = ""
 
 
-def _zero_width_index(compiled):
-    """Index of the first pattern that can match zero characters, or None."""
+def _too_broad_index(compiled):
+    """Index of the first pattern that matches a neutral sentence or only-empty text, or None."""
     for i, rx in enumerate(compiled):
-        for probe in _ZERO_WIDTH_PROBES:
-            if any(m.end() == m.start() for m in rx.finditer(probe)):
-                return i
+        if rx.search("") is not None or any(rx.search(p) is not None for p in _NEUTRAL_PROBES):
+            return i
     return None
 
 
@@ -792,11 +799,12 @@ def load_bad_name():
                 state = RULES_INVALID
             elif pats:
                 # the pattern's INDEX, never its text: a name rule names a private person
-                zw = _zero_width_index([re.compile(x) for x in pats])
+                zw = _too_broad_index([re.compile(x) for x in pats])
                 if zw is None:
                     return (re.compile("|".join(pats)), RULES_OK)
-                _INVALID_REASON = (f"a(z) {zw + 1}. minta URES szovegre is illeszkedik "
-                                   "(pl. \"\" vagy \".*\"), ami MINDEN uzenetet elkapna")
+                _INVALID_REASON = (f"a(z) {zw + 1}. minta egy SEMLEGES, nevet nem tartalmazo mondatra "
+                                   "is illeszkedik (pl. \".\", \"\\w\", \"e\", \"[a-z]\", \".*\"), "
+                                   "ami MINDEN uzenetet elkapna")
                 state = RULES_INVALID
             elif data.get("no_name_rule") is True or data.get("name_check_disabled") is True:
                 # Returns HERE, before the logging tail, on purpose: a taken

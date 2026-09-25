@@ -115,12 +115,17 @@ with tempfile.TemporaryDirectory() as td:
     check("telegram + missing rules: still fail-open with its own warning",
           code == 0 and "systemMessage" in out, f"exit={code}")
 
-    # --- a ZERO-WIDTH pattern is INVALID (card 3c753513, didi 18748) ------------------
+    # --- a pattern that matches ORDINARY TEXT is INVALID (card 3c753513) ---------------
+    # didi 18748 found the zero-width ones; didi comment 22 found that "." "\\w" "e" "[a-z]" -- which
+    # match real characters -- still blocked every clean reply. The rule is the CLASS: a pattern
+    # that matches a neutral, name-free sentence would catch every message.
     # "" or ".*" matches at position 0 of ANY text, so audit() used to call every message a bad
     # name: every Telegram reply blocked (rc 2) as a FOUND problem, on all sessions at once.
     # Not only those two: "x?", "\b" and a bare lookahead are zero-width as well.
     for label, pats in [('""', [""]), ('".*"', [".*"]), ('"x?"', ["x?"]),
                         ('"\\b"', [r"\b"]), ('lookahead', ["(?=a)"]),
+                        ('"."', ["."]), ('"\\w"', [r"\w"]), ('"e"', ["e"]), ('"[a-z]"', ["[a-z]"]),
+                        ('"^$" (empty-only)', ["^$"]),
                         ("a real one PLUS \".*\"", ["Titkos Nev", ".*"]),
                         # the zero-width pattern ITSELF names the person: the leak that matters
                         ("an optional name", ["(Titkos Nev)?"])]:
@@ -131,10 +136,10 @@ with tempfile.TemporaryDirectory() as td:
         check(f"zero-width {label}: a clean Telegram reply is NOT blocked (the flotta would go mute)",
               code == 0, f"exit={code}")
         check(f"zero-width {label}: ...and the Telegram warning says INVALID and why",
-              "ERVENYTELEN" in out and "URES szovegre" in out, f"out={out[:220]!r}")
+              "ERVENYTELEN" in out and "SEMLEGES" in out, f"out={out[:220]!r}")
         code, _, err = run_gate(zw, CLEAN_MAIL)
         check(f"zero-width {label}: the email stays BLOCKED, naming the empty-matching pattern",
-              code == 2 and "ervenytelen" in err and "URES szovegre" in err, f"exit={code} err={err[:200]!r}")
+              code == 2 and "ervenytelen" in err and "SEMLEGES" in err, f"exit={code} err={err[:200]!r}")
         check(f"zero-width {label}: the pattern's TEXT is not echoed (it names a private person)",
               "Titkos" not in out + err, f"leaked in {(out + err)[:200]!r}")
     # the INDEX is named, so the file can be fixed without printing it
@@ -143,7 +148,17 @@ with tempfile.TemporaryDirectory() as td:
     _, _, err = run_gate(zw, CLEAN_MAIL)
     check("zero-width: the offending pattern is named by its position (2.)", "a(z) 2. minta" in err,
           f"err={err[:200]!r}")
-    # CONTROL: a real pattern is not zero-width, still loads, still blocks, and a clean reply passes
+    # CONTROL, THE OTHER DIRECTION: realistic name rules are NOT rejected -- an over-broad test would
+    # turn a legitimate rules file into a closed email path.
+    real = os.path.join(td, "real.json")
+    with open(real, "w") as fh:
+        json.dump({"bad_name_patterns": [r"Szóta", r"Kovacs\s+Bela", r"B[eé]la\b", r"(?i:\bszotasz\b)"]}, fh)
+    # (the SCOPED flag: a global "(?i)" after the first pattern breaks the joined regex -- a separate,
+    # older limitation of the "|".join, noted on the card, not part of this check)
+    code, out, _ = run_gate(real, tg)
+    check("CONTROL: four realistic name rules load (a clean reply passes, no INVALID warning)",
+          code == 0 and "ERVENYTELEN" not in out, f"exit={code} out={out[:160]!r}")
+    # CONTROL: a real pattern still loads, still blocks, and a clean reply passes
     code, _, err = run_gate(good, bad_name_mail)
     check("CONTROL: a real pattern still blocks the bad name", code == 2 and "HELYTELEN NEV" in err,
           f"exit={code}")
