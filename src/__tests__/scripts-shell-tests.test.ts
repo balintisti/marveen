@@ -84,10 +84,19 @@ describe('scripts/__tests__ -- a shell- es python-tesztek', () => {
   // Card 74d0d0cf: three files said "NOT WIRED TO CI ... its passing is not a gate" for two weeks
   // AFTER this collector started running them. A header that says "nobody runs me" is the one that
   // licenses leaving a test red -- so a collected file may not say it.
-  const NOT_COLLECTED_CLAIM = /NOT WIRED TO CI|does not collect Python/i
+  //
+  // THE PATTERN NAMES THE CLAIM, NOT TWO SENTENCES THAT MADE IT (didi, 2026-09-25): the first form
+  // matched "NOT WIRED TO CI" and "does not collect Python", so "NOT WIRED TO vitest" alone or
+  // "not collected" passed -- the fourth header was caught only because it also carried the second
+  // phrase. English and the Hungarian spellings this codebase uses, with and without accents.
+  const NOT_COLLECTED_CLAIM = /NOT WIRED\b|not collected|does not collect|nincs bek[öo]tve|nem gy[űu]jti|senki nem futtatja/i
   it('egyetlen begyujtott fajl sem allitja magarol, hogy nem futtatja senki', () => {
-    // KONTROLL: a minta tuzel a regi fejlec szovegere
+    // KONTROLL: a minta tuzel a regi fejlec szovegere ES a valtozataira, egy Run:-sorra nem
     expect(NOT_COLLECTED_CLAIM.test('NOT WIRED TO CI: `npm test` is vitest and does not collect Python')).toBe(true)
+    for (const variant of ['NOT WIRED TO vitest', 'Not collected by npm test', 'ezt senki nem futtatja', 'nincs bekotve a CI-ba']) {
+      expect(NOT_COLLECTED_CLAIM.test(variant), variant).toBe(true)
+    }
+    expect(NOT_COLLECTED_CLAIM.test('Run: python3 scripts/__tests__/x.test.py')).toBe(false)
     const liars = runnable.filter((f) => NOT_COLLECTED_CLAIM.test(readFileSync(join(TESTS_DIR, f), 'utf8')))
     expect(liars).toEqual([])
   })

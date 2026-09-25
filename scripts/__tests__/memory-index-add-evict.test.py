@@ -23,7 +23,7 @@ it is what makes the choice deterministic here. The first-seen ranking is NOT co
 
 WIRED: `npm test` collects this file through src/__tests__/scripts-shell-tests.test.ts
 (discovery, not a list -- 34cd8ddf, 2026-09-10), so a failure here fails the suite. This header
-claimed the opposite (not collected) until 2026-09-24 (card 74d0d0cf): true when written (card 27975b85),
+said the opposite until 2026-09-24 (card 74d0d0cf): true when written (card 27975b85),
 false for two weeks after, and false in the reassuring direction.
 
 Run: python3 <thisfile>   Exit 0 = all pass.
