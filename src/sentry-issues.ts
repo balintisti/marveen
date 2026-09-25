@@ -520,14 +520,32 @@ export type SentryLaneReading =
   | { org: string; ok: true; accepted: number[]; rateLimited: number[] }
   | { org: string; ok: false; reason: string }
 
-export type SentryLaneState = 'closed' | 'open' | 'no-traffic'
+export type SentryLaneState = 'closed' | 'throttled' | 'open' | 'no-traffic'
+
+/**
+ * THE LANE STATE COMES FROM THE SHARE DROPPED, NOT FROM WHETHER ANYTHING GOT THROUGH (didi's review
+ * of this card, marveen 2026-09-25). The first version called a lane open as soon as ONE event was
+ * accepted in the deciding hour: 1 accepted beside 999 rate-limited read "open", and on an open
+ * lane the watcher said nothing about the drops -- the silence was calm again, in exactly the
+ * quota-running-out transition this card exists for.
+ *   closed ...... at least LANE_CLOSED_SHARE of the deciding hour's events were dropped
+ *   throttled ... at least LANE_THROTTLED_SHARE, but not closed: part of the errors arrive
+ *   open ........ below that
+ */
+export const LANE_CLOSED_SHARE = 0.9
+export const LANE_THROTTLED_SHARE = 0.1
+/** An OPEN lane whose 24 h window dropped at least this share still gets a caveat line. */
+export const LANE_LEAK_SHARE = 0.1
 
 export interface SentryLaneClass {
   state: SentryLaneState
-  /** rate_limited summed over the whole window -- what the notice reports as dropped. */
+  /** rate_limited summed over the whole window. */
   dropped: number
   /** accepted summed over the whole window. */
   accepted: number
+  /** The deciding hour -- the last one with any traffic -- so a notice can say what decided it. */
+  hourAccepted: number
+  hourDropped: number
 }
 
 /**
@@ -542,23 +560,30 @@ export interface SentryLaneClass {
  *     back, one edge notice per quiet hour.
  * An hour with neither accepted nor rate-limited events says nothing about the
  * lane, so it is skipped. No such hour in the whole window is `no-traffic`: the
- * lane may be open or closed, and nothing was sent to tell which.
+ * lane may be open or closed, and nothing was sent to tell which. Within the
+ * deciding hour the dropped SHARE sets the state (see LANE_CLOSED_SHARE).
  */
 export function classifyLane(accepted: number[], rateLimited: number[]): SentryLaneClass {
   const n = Math.max(accepted.length, rateLimited.length)
   const at = (a: number[], i: number) => (Number.isFinite(a[i]) ? a[i] : 0)
   let dropped = 0
   let acc = 0
-  let state: SentryLaneState = 'no-traffic'
+  let hourAccepted = 0
+  let hourDropped = 0
   for (let i = 0; i < n; i++) {
     const a = at(accepted, i)
     const r = at(rateLimited, i)
     acc += a
     dropped += r
-    if (a > 0) state = 'open'
-    else if (r > 0) state = 'closed'
+    if (a + r > 0) { hourAccepted = a; hourDropped = r }
   }
-  return { state, dropped, accepted: acc }
+  const total = hourAccepted + hourDropped
+  const share = total > 0 ? hourDropped / total : 0
+  const state: SentryLaneState = total === 0 ? 'no-traffic'
+    : share >= LANE_CLOSED_SHARE ? 'closed'
+    : share >= LANE_THROTTLED_SHARE ? 'throttled'
+    : 'open'
+  return { state, dropped, accepted: acc, hourAccepted, hourDropped }
 }
 
 /**
@@ -568,18 +593,26 @@ export function classifyLane(accepted: number[], rateLimited: number[]): SentryL
  */
 export const LANE_REANNOUNCE_MS = 24 * 3_600_000
 
-/** Per org, since when its lane is closed and when that was last said. */
-export type SentryLaneMemory = Record<string, { sinceMs: number; announcedAtMs: number }>
+/** Per org: which degraded state it is in, since when, and when that was last said. A record
+ *  without `state` predates the throttled state and was written for a CLOSED lane. */
+export type SentryLaneMemory = Record<string, { sinceMs: number; announcedAtMs: number; state?: 'closed' | 'throttled' }>
+
+type Degraded = 'closed' | 'throttled'
 
 export interface SentryLaneDecision {
-  /** Orgs whose lane is closed right now, with the window's dropped count. */
-  closed: { org: string; dropped: number }[]
+  /** Orgs whose lane is closed or throttled right now, with the window's counts. */
+  degraded: { org: string; state: Degraded; dropped: number; accepted: number }[]
+  /** OPEN lanes that still dropped a significant share over the window -- caveat only, no edge. */
+  leaky: { org: string; dropped: number; accepted: number }[]
   /** Orgs whose lane could not be read this tick -- neither closed nor open. */
   unmeasured: { org: string; reason: string }[]
-  /** Closed this tick, or closed and due for the daily repeat. */
-  announceClosed: { org: string; dropped: number; sinceMs: number; repeat: boolean }[]
-  /** Were closed, now accept errors again. */
-  reopened: { org: string; accepted: number }[]
+  /** Entered a degraded state, changed between closed and throttled, or due the daily repeat. */
+  announce: {
+    org: string; state: Degraded; dropped: number; accepted: number
+    hourAccepted: number; hourDropped: number; sinceMs: number; repeat: boolean
+  }[]
+  /** Were degraded, now open again. */
+  reopened: { org: string; accepted: number; dropped: number }[]
   next: SentryLaneMemory
 }
 
@@ -589,7 +622,7 @@ export interface SentryLaneDecision {
  * AN UNREADABLE LANE KEEPS ITS PREVIOUS STATE. A failed stats call is not a
  * reopening: dropping the org from memory would announce "reopened" on a 429 and
  * "closed" again on the next tick -- two false edges from one failed request.
- * `no-traffic` is treated the same way for a lane that was closed: nothing was
+ * `no-traffic` is treated the same way for a lane that was degraded: nothing was
  * sent, so nothing says the quota came back.
  */
 export function decideSentryLanes(
@@ -598,35 +631,42 @@ export function decideSentryLanes(
   nowMs: number,
 ): SentryLaneDecision {
   const next: SentryLaneMemory = {}
-  const closed: SentryLaneDecision['closed'] = []
+  const degraded: SentryLaneDecision['degraded'] = []
+  const leaky: SentryLaneDecision['leaky'] = []
   const unmeasured: SentryLaneDecision['unmeasured'] = []
-  const announceClosed: SentryLaneDecision['announceClosed'] = []
+  const announce: SentryLaneDecision['announce'] = []
   const reopened: SentryLaneDecision['reopened'] = []
 
   for (const lane of lanes) {
     const was = prev[lane.org]
+    const wasState: Degraded | undefined = was ? (was.state ?? 'closed') : undefined
     if (!lane.ok) {
       unmeasured.push({ org: lane.org, reason: lane.reason })
       if (was) next[lane.org] = was
       continue
     }
     const c = classifyLane(lane.accepted, lane.rateLimited)
-    if (c.state === 'closed') {
-      closed.push({ org: lane.org, dropped: c.dropped })
-      if (!was) {
-        announceClosed.push({ org: lane.org, dropped: c.dropped, sinceMs: nowMs, repeat: false })
-        next[lane.org] = { sinceMs: nowMs, announcedAtMs: nowMs }
-      } else if (nowMs - was.announcedAtMs >= LANE_REANNOUNCE_MS) {
-        announceClosed.push({ org: lane.org, dropped: c.dropped, sinceMs: was.sinceMs, repeat: true })
-        next[lane.org] = { sinceMs: was.sinceMs, announcedAtMs: nowMs }
-      } else {
-        next[lane.org] = was
+    if (c.state === 'closed' || c.state === 'throttled') {
+      degraded.push({ org: lane.org, state: c.state, dropped: c.dropped, accepted: c.accepted })
+      const say = (sinceMs: number, repeat: boolean) => {
+        announce.push({
+          org: lane.org, state: c.state as Degraded, dropped: c.dropped, accepted: c.accepted,
+          hourAccepted: c.hourAccepted, hourDropped: c.hourDropped, sinceMs, repeat,
+        })
+        next[lane.org] = { sinceMs, announcedAtMs: nowMs, state: c.state as Degraded }
       }
+      if (!was || wasState !== c.state) say(nowMs, false)          // a new state is an edge
+      else if (nowMs - was.announcedAtMs >= LANE_REANNOUNCE_MS) say(was.sinceMs, true)
+      else next[lane.org] = { ...was, state: wasState }
     } else if (c.state === 'open') {
-      if (was) reopened.push({ org: lane.org, accepted: c.accepted })
+      if (was) reopened.push({ org: lane.org, accepted: c.accepted, dropped: c.dropped })
+      const total = c.accepted + c.dropped
+      if (total > 0 && c.dropped / total >= LANE_LEAK_SHARE) {
+        leaky.push({ org: lane.org, dropped: c.dropped, accepted: c.accepted })
+      }
     } else if (was) {
-      // no-traffic on a closed lane: still closed as far as anyone can tell
-      closed.push({ org: lane.org, dropped: c.dropped })
+      // no-traffic on a degraded lane: still degraded as far as anyone can tell
+      degraded.push({ org: lane.org, state: wasState!, dropped: c.dropped, accepted: c.accepted })
       next[lane.org] = was
     }
   }
@@ -635,28 +675,39 @@ export function decideSentryLanes(
   for (const [org, mem] of Object.entries(prev)) {
     if (!lanes.some(l => l.org === org)) next[org] = mem
   }
-  return { closed, unmeasured, announceClosed, reopened, next }
+  return { degraded, leaky, unmeasured, announce, reopened, next }
 }
 
-/** The edge / daily notice for the lane itself. Null when there is nothing to say. */
+const pct = (part: number, whole: number) => (whole > 0 ? `${Math.round((100 * part) / whole)}%` : '0%')
+
+/** The edge / daily notice for the lane itself. Null when there is nothing to say.
+ *  Every number in it is MEASURED (didi): the first version said "accepted 0 in 24 h" as a fixed
+ *  phrase, which on the closing day was false -- the window still held the hours before the close. */
 export function buildLaneNotice(d: SentryLaneDecision, nowMs: number): string | null {
   const parts: string[] = []
-  for (const c of d.announceClosed) {
+  for (const c of d.announce) {
     const days = Math.floor((nowMs - c.sinceMs) / 86_400_000)
+    const word = c.state === 'closed' ? 'CLOSED' : 'THROTTLED'
     const lead = c.repeat
-      ? `[sentry] ERROR LANE STILL CLOSED for ${c.org} (known to this poller for ${days} day(s))`
-      : `[sentry] ERROR LANE CLOSED for ${c.org}`
-    parts.push(
-      `${lead}: in the last 24 h Sentry accepted 0 error events and rate-limited ${c.dropped}. ` +
-      'No NEW error issue can appear from this org while it lasts, so "nothing new" from this ' +
-      'poller does NOT mean nothing broke. The dropped events are gone; only the quota reset ' +
-      'or a lower event rate reopens the lane.',
-    )
+      ? `[sentry] ERROR LANE STILL ${word} for ${c.org} (known to this poller for ${days} day(s))`
+      : `[sentry] ERROR LANE ${word} for ${c.org}`
+    const hour = c.hourAccepted + c.hourDropped
+    const measured =
+      `in the last hour with traffic Sentry dropped ${c.hourDropped} of ${hour} error events ` +
+      `(${pct(c.hourDropped, hour)}); over the last 24 h it accepted ${c.accepted} and rate-limited ${c.dropped}.`
+    const meaning = c.state === 'closed'
+      ? ' No NEW error issue can appear from this org while it lasts, so "nothing new" from this ' +
+        'poller does NOT mean nothing broke. The dropped events are gone; only the quota reset ' +
+        'or a lower event rate reopens the lane.'
+      : ' Only part of the errors arrive: a new issue may be missing and every count is low, so ' +
+        '"nothing new" from this poller is not an all-clear either. The dropped events are gone.'
+    parts.push(`${lead}: ${measured}${meaning}`)
   }
   for (const r of d.reopened) {
     parts.push(
-      `[sentry] ERROR LANE REOPENED for ${r.org}: ${r.accepted} error event(s) accepted in the ` +
-      'last 24 h. New error issues from this org are visible again.',
+      `[sentry] ERROR LANE REOPENED for ${r.org}: in the last hour with traffic under ` +
+      `${Math.round(LANE_THROTTLED_SHARE * 100)}% was dropped; over the last 24 h ${r.accepted} error ` +
+      `event(s) accepted and ${r.dropped} rate-limited. New error issues from this org are visible again.`,
     )
   }
   return parts.length > 0 ? parts.join('\n\n') : null
@@ -671,16 +722,30 @@ export function buildLaneNotice(d: SentryLaneDecision, nowMs: number): string | 
  */
 export function laneCaveat(d: SentryLaneDecision): string | null {
   const bits: string[] = []
-  if (d.closed.length > 0) {
-    const list = d.closed.map(c => `${c.org} (${c.dropped} dropped in 24 h)`).join(', ')
+  const closed = d.degraded.filter(c => c.state === 'closed')
+  const throttled = d.degraded.filter(c => c.state === 'throttled')
+  const list = (xs: { org: string; dropped: number; accepted: number }[]) =>
+    xs.map(c => `${c.org} (${c.dropped} dropped, ${c.accepted} accepted in 24 h)`).join(', ')
+  if (closed.length > 0) {
     bits.push(
-      `ERROR LANE CLOSED for ${list}: no new error issue CAN appear from it, so a quiet ` +
+      `ERROR LANE CLOSED for ${list(closed)}: no new error issue CAN appear from it, so a quiet ` +
       'line above is not an all-clear.',
     )
   }
+  if (throttled.length > 0) {
+    bits.push(
+      `ERROR LANE THROTTLED for ${list(throttled)}: only part of the errors arrive, so a quiet ` +
+      'line above is not an all-clear.',
+    )
+  }
+  if (d.leaky.length > 0) {
+    bits.push(
+      `Error lane open now, but ${list(d.leaky)}: an issue from the dropped share may be missing.`,
+    )
+  }
   if (d.unmeasured.length > 0) {
-    const list = d.unmeasured.map(u => `${u.org}: ${u.reason}`).join('; ')
-    bits.push(`Error lane NOT MEASURED this tick (${list}), so a quiet line above is unverified.`)
+    const ul = d.unmeasured.map(u => `${u.org}: ${u.reason}`).join('; ')
+    bits.push(`Error lane NOT MEASURED this tick (${ul}), so a quiet line above is unverified.`)
   }
   return bits.length > 0 ? `[sentry] ${bits.join(' ')}` : null
 }

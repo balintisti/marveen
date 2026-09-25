@@ -63,7 +63,7 @@ describe('sentryTick carries the closed error lane to the queue', () => {
     expect(edge).toContain('rate-limited 151')
     const resumed = sent.find(s => s.includes('RESUMED'))!
     expect(resumed).toContain('NOTHING first appeared')
-    expect(resumed).toContain('ERROR LANE CLOSED for delta-crm (151 dropped in 24 h)')
+    expect(resumed).toContain('ERROR LANE CLOSED for delta-crm (151 dropped, 0 accepted in 24 h)')
     // and the memory is on disk, so a dashboard restart does not re-announce the edge
     expect(JSON.parse(readFileSync(SENTRY_LANE_PATH, 'utf8'))['delta-crm'].sinceMs).toBe(NOW)
   })

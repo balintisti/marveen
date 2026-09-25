@@ -129,9 +129,12 @@ export function loadLaneMemory(path = SENTRY_LANE_PATH): SentryLaneMemory {
     if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return {}
     const out: SentryLaneMemory = {}
     for (const [org, v] of Object.entries(raw as Record<string, unknown>)) {
-      const o = v as { sinceMs?: unknown; announcedAtMs?: unknown } | null
+      const o = v as { sinceMs?: unknown; announcedAtMs?: unknown; state?: unknown } | null
       if (typeof o?.sinceMs === 'number' && typeof o?.announcedAtMs === 'number') {
-        out[org] = { sinceMs: o.sinceMs, announcedAtMs: o.announcedAtMs }
+        // `state` came with the throttled lane (6db77c30, didi's review). Anything else -- absent,
+        // or a value this build does not know -- is left out, and the decision reads it as closed.
+        const st = o.state === 'closed' || o.state === 'throttled' ? o.state : undefined
+        out[org] = st ? { sinceMs: o.sinceMs, announcedAtMs: o.announcedAtMs, state: st } : { sinceMs: o.sinceMs, announcedAtMs: o.announcedAtMs }
       }
     }
     return out
@@ -373,7 +376,7 @@ export async function sentryTick(now = Date.now()): Promise<void> {
   saveLaneMemory(laneMemory)
   const laneNotice = buildLaneNotice(laneDecision, now)
   if (laneNotice != null) enqueueVerified(laneNotice)
-  // EVERY issue notice carries the lane while it is closed: that is the line read
+  // EVERY issue notice carries the lane while it is closed or throttled: that is the line read
   // when a decision is taken, and its quiet sentences are the misleading ones.
   const caveat = laneCaveat(laneDecision)
   const withCaveat = (n: string): string => (caveat != null ? `${n}\n\n${caveat}` : n)
