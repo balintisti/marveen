@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **270** kovetett fajl, ebbol
-**91** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **272** kovetett fajl, ebbol
+**92** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -105,6 +105,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/assert-isolated.py`
 
 - WHAT WENT WRONG, AND WHY "READ THE VARIABLE" IS NOT THE FIX. On 2026-09-11 I measured
+
+### `scripts/backup-offsite.py`
+
+- WHY NOT THE SERVICE ACCOUNT (measured 2026-09-25 07:32): a service account has a Drive storage
 
 ### `scripts/batch-candidates.py`
 
