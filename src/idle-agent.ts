@@ -579,16 +579,16 @@ export function selectWaitingOnOwner<T extends WorkCountCard>(cards: readonly T[
  * exclusion would have swallowed.
  *
  * A CLOSED TOKEN AT THE START OF THE FIRST LINE, not a content detector -- marveen's specification
- * (03:12, correcting my first cut on 03:24): an optional "YYYY-MM-DD -- " prefix (jarvis's comments
- * are not editable, and tonight's ~70 begin with the date), then "jarvis, testing-cenzus",
- * case-insensitive and with the comma OPTIONAL so the older "JARVIS TESTING-CENZUS (...)" form
- * matches too. Nowhere else in the text counts.
- * Measured 2026-09-25 on 498 census-looking comments: this matches 199, and 0 of jarvis's 2267
- * comments that are real answers. NOT matched, and put to marveen as a decision: a date+time
- * prefix ("<date> <time> CEST -- jarvis, ...", 81 comments) and other heads ("CIM ATIRVA (...)",
- * "... -- CENZUS, MASODIK KERDES", "JARVIS done-cenzus").
+ * (03:12; my first cut departed from it, 03:24): an optional date prefix, then "jarvis,
+ * testing-cenzus", case-insensitive and with the comma OPTIONAL so the older "JARVIS TESTING-CENZUS
+ * (...)" form matches too. Nowhere else in the text counts.
+ * THE PREFIX may carry a TIME and a CEST/CET stamp ("2026-09-24 17:43:57 CEST -- jarvis, ..."):
+ * marveen 04:04, on the condition that real answers stay at 0. Measured 2026-09-25 on all 2308 of
+ * jarvis's comments: 316 census comments match (199 without the time prefix), 0 real answers, and
+ * 0 of the 16626 comments by others. Still NOT matched: "CIM ATIRVA (...)", "... -- CENZUS, MASODIK
+ * KERDES", "JARVIS done-cenzus" -- other genres, not the census header.
  */
-export const CENSUS_HEADER = /^(?:\d{4}-\d{2}-\d{2} -- )?jarvis,?\s+testing-cenzus\b/i
+export const CENSUS_HEADER = /^(?:\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?(?: CES?T)? +-- )?jarvis,?\s+testing-cenzus\b/i
 
 export function isCensusComment(content: string): boolean {
   return CENSUS_HEADER.test(content)

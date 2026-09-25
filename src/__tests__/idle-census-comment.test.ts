@@ -18,8 +18,15 @@ describe('isCensusComment: a closed header token at the start, nothing else', ()
       '2026-09-25 -- JARVIS testing-cenzus 1. kor',
     ]) expect(isCensusComment(s), s).toBe(true)
   })
-  it('a date+TIME prefix is NOT matched -- a different prefix, put to marveen as a decision', () => {
-    for (const s of ['2026-09-24 17:43:57 CEST -- jarvis, TESTING-CENZUS (a65623ef)', '2026-09-24 17:43:57  -- jarvis, TESTING-CENZUS'])
+  it('a date+TIME(+CEST) prefix is census too (marveen 04:04, on 0 real answers matched)', () => {
+    for (const s of ['2026-09-24 17:43:57 CEST -- jarvis, TESTING-CENZUS (a65623ef)', '2026-09-24 17:43:57  -- jarvis, TESTING-CENZUS',
+                     '2026-09-24 17:43 CEST -- jarvis, testing-cenzus 2. kor'])
+      expect(isCensusComment(s), s).toBe(true)
+  })
+  it('...but the prefix stays CLOSED: a time with other text before the dashes is not census', () => {
+    for (const s of ['2026-09-24 17:43:57 CEST -- VALASZ didi-re: jarvis, testing-cenzus utan', '17:43:57 -- jarvis, testing-cenzus',
+                     // other WORDS between the date and the dashes: only a time and CEST/CET may stand there
+                     '2026-09-24 VALASZ didi k16827-re -- jarvis, testing-cenzus kor utan ujramertem'])
       expect(isCensusComment(s), s).toBe(false)
   })
   it('a real reply is not, even when it mentions the census', () => {
