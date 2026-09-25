@@ -275,7 +275,7 @@ class TestReadCachedClaudeAuthoritative(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             missing = os.path.join(tmp, "nope.json")
             with patch.object(uc, "LATEST_PATH", missing):
-                windows, age = uc._read_cached_claude_authoritative(90)
+                windows, age, _ = uc._read_cached_claude_authoritative(90)
         self.assertIsNone(windows)
         self.assertIsNone(age)
 
@@ -286,7 +286,7 @@ class TestReadCachedClaudeAuthoritative(unittest.TestCase):
             windows = {"five_hour": {"used_percent": 11.0, "resets_at": 123.0}}
             self._write_latest(path, "authoritative", windows, ts)
             with patch.object(uc, "LATEST_PATH", path):
-                got_windows, age = uc._read_cached_claude_authoritative(90)
+                got_windows, age, _ = uc._read_cached_claude_authoritative(90)
         self.assertEqual(got_windows, windows)
         self.assertAlmostEqual(age, 5, delta=0.5)
 
@@ -296,7 +296,7 @@ class TestReadCachedClaudeAuthoritative(unittest.TestCase):
             ts = (datetime.now(timezone.utc) - timedelta(minutes=200)).isoformat()
             self._write_latest(path, "authoritative", {"five_hour": {"used_percent": 1}}, ts)
             with patch.object(uc, "LATEST_PATH", path):
-                got_windows, age = uc._read_cached_claude_authoritative(90)
+                got_windows, age, _ = uc._read_cached_claude_authoritative(90)
         self.assertIsNone(got_windows)
         self.assertIsNone(age)
 
@@ -306,19 +306,36 @@ class TestReadCachedClaudeAuthoritative(unittest.TestCase):
             ts = datetime.now(timezone.utc).isoformat()
             self._write_latest(path, "estimate", {}, ts)
             with patch.object(uc, "LATEST_PATH", path):
-                got_windows, age = uc._read_cached_claude_authoritative(90)
+                got_windows, age, _ = uc._read_cached_claude_authoritative(90)
         self.assertIsNone(got_windows)
         self.assertIsNone(age)
 
-    def test_previously_cached_source_is_itself_reusable(self):
+    def test_cached_source_is_reusable_only_with_its_true_authoritative_time(self):
+        # card 45b71d0b: an authoritative_cached entry is reusable when it CARRIES the time of the
+        # real answer it came from, and that is inside the window ...
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "usage-latest.json")
+            now = datetime.now(timezone.utc)
+            windows = {"seven_day": {"used_percent": 58.0, "resets_at": 456.0}}
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"generated_at": now.isoformat(), "claude": {"source": "authoritative_cached", "windows": windows,
+                           "authoritative_at": (now - timedelta(minutes=30)).isoformat()}}, f)
+            with patch.object(uc, "LATEST_PATH", path):
+                got_windows, age, true_at = uc._read_cached_claude_authoritative(90)
+        self.assertEqual(got_windows, windows)
+        self.assertAlmostEqual(age, 30, delta=0.5)       # the DATA's age, not the file's 0
+        self.assertIsNotNone(true_at)
+
+    def test_cached_source_without_its_origin_is_NOT_reusable(self):
+        # ... and one that does not (a file from before the field, or a chain) has an unknown true
+        # age: it is not guessed fresh from the file's own timestamp -- that guess WAS the bug.
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "usage-latest.json")
             ts = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
-            windows = {"seven_day": {"used_percent": 58.0, "resets_at": 456.0}}
-            self._write_latest(path, "authoritative_cached", windows, ts)
+            self._write_latest(path, "authoritative_cached", {"seven_day": {"used_percent": 58.0}}, ts)
             with patch.object(uc, "LATEST_PATH", path):
-                got_windows, age = uc._read_cached_claude_authoritative(90)
-        self.assertEqual(got_windows, windows)
+                got_windows, age, _ = uc._read_cached_claude_authoritative(90)
+        self.assertIsNone(got_windows)
 
     def test_corrupt_json_returns_none(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -326,9 +343,69 @@ class TestReadCachedClaudeAuthoritative(unittest.TestCase):
             with open(path, "w") as f:
                 f.write("{not valid json")
             with patch.object(uc, "LATEST_PATH", path):
-                got_windows, age = uc._read_cached_claude_authoritative(90)
+                got_windows, age, _ = uc._read_cached_claude_authoritative(90)
         self.assertIsNone(got_windows)
         self.assertIsNone(age)
+
+
+class TestCacheDoesNotRearmItself(unittest.TestCase):
+    """card 45b71d0b (jarvis): the 90-minute cache window restarted itself because its age was the
+    FILE's generated_at, which every 10-minute run sets to now. 09-14..09-18: 720 runs as
+    authoritative_cached, 0 as estimate, so the data-source alarm never fired. Driven through the
+    real collect_claude with a 429 (transient) answer and the estimate stubbed."""
+
+    def _run(self, latest):
+        http_err = urllib.error.HTTPError("url", 429, "Too Many Requests", {}, None)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "usage-latest.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(latest, f)
+            with patch.object(uc, "LATEST_PATH", path), \
+                 patch.object(uc, "_read_claude_token", return_value=("fake-token", "test")), \
+                 patch.object(uc, "_claude_cli_version", return_value="1.2.3"), \
+                 patch("urllib.request.urlopen", side_effect=http_err), \
+                 patch.object(uc, "_collect_claude_estimate", return_value={"windows": {}}) as est:
+                return uc.collect_claude(), est
+
+    def test_the_freeze_shape_falls_to_the_estimate(self):
+        # the file was written a minute ago (as every run does) but the last REAL answer is 100 min old
+        now = datetime.now(timezone.utc)
+        future = (now + timedelta(hours=2)).timestamp()
+        result, est = self._run({"generated_at": (now - timedelta(minutes=1)).isoformat(),
+                                 "claude": {"source": "authoritative_cached",
+                                            "windows": {"five_hour": {"used_percent": 11.0, "resets_at": future}},
+                                            "authoritative_at": (now - timedelta(minutes=100)).isoformat()}})
+        est.assert_called_once()
+        self.assertEqual(result["source"], "estimate")
+
+    def test_a_cache_hit_carries_the_ORIGINAL_answer_time_forward(self):
+        # the chain link that used to reset: the next file must hold the same authoritative_at
+        now = datetime.now(timezone.utc)
+        origin = (now - timedelta(minutes=40)).isoformat()
+        future = (now + timedelta(hours=2)).timestamp()
+        result, est = self._run({"generated_at": now.isoformat(),
+                                 "claude": {"source": "authoritative_cached",
+                                            "windows": {"five_hour": {"used_percent": 11.0, "resets_at": future}},
+                                            "authoritative_at": origin}})
+        est.assert_not_called()
+        self.assertEqual(result["source"], "authoritative_cached")
+        self.assertEqual(datetime.fromisoformat(result["authoritative_at"]), datetime.fromisoformat(origin))
+        self.assertAlmostEqual(result["cache_age_minutes"], 40, delta=0.5)
+
+    def test_a_real_answer_writes_a_fresh_authoritative_at(self):
+        body = json.dumps({"five_hour": {"utilization": 11.0, "resets_at": "2099-01-01T00:00:00+00:00"}}).encode()
+        class R:
+            def __enter__(s): return s
+            def __exit__(s, *a): return False
+            def read(s): return body
+            status = 200
+        with patch.object(uc, "_read_claude_token", return_value=("fake-token", "test")), \
+             patch.object(uc, "_claude_cli_version", return_value="1.2.3"), \
+             patch("urllib.request.urlopen", return_value=R()):
+            result = uc.collect_claude()
+        self.assertEqual(result.get("source"), "authoritative", result.get("auth_error"))
+        at = datetime.fromisoformat(result["authoritative_at"])
+        self.assertLess(abs((datetime.now(timezone.utc) - at).total_seconds()), 60)
 
 
 class TestCollectClaudeCacheFallback(unittest.TestCase):

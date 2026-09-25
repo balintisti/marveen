@@ -632,40 +632,55 @@ def _collect_claude_authoritative():
 
 
 def _read_cached_claude_authoritative(max_age_minutes, now_utc=None):
-    """Return (windows_dict, age_minutes) from the last snapshot written to
-    store/usage-latest.json IF its Claude entry was authoritative (or itself
-    already authoritative_cached) and younger than max_age_minutes.
-    Returns (None, None) if there's no usable cache."""
+    """Return (windows_dict, age_minutes, authoritative_at) from the last snapshot in
+    store/usage-latest.json IF its Claude numbers came from a REAL authoritative answer no more than
+    max_age_minutes ago. Returns (None, None, None) if there's no usable cache.
+
+    THE AGE IS THE DATA'S, NOT THE FILE'S (card 45b71d0b, jarvis). This used to measure the file's
+    `generated_at` -- which EVERY run sets to now. The collector runs every 10 minutes, so a cached
+    entry was always < 90 minutes old and the cache re-armed itself forever: 09-14..09-18 ran 720
+    times as `authoritative_cached` and 0 as `estimate` while the keychain token was dead, so the
+    data-source alarm (which fires on `estimate`) never saw the freeze. Now the age is measured from
+    `authoritative_at`, which is written ONLY on a real authoritative answer and carried unchanged
+    through cache hits.
+
+    A file from before the field: if its source is plain `authoritative`, its `generated_at` IS a
+    real answer's time. If it is already `authoritative_cached`, the true age is unknown -- no cache,
+    fall to the estimate (the loud state the alarm is built for), rather than guess it fresh."""
     if not os.path.exists(LATEST_PATH):
-        return None, None
+        return None, None, None
     try:
         with open(LATEST_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception:
-        return None, None
+        return None, None, None
 
     claude = data.get("claude") or {}
     if claude.get("source") not in ("authoritative", "authoritative_cached"):
-        return None, None
+        return None, None, None
     windows = claude.get("windows")
     if not windows:
-        return None, None
+        return None, None, None
 
-    generated_at = data.get("generated_at")
-    if not generated_at:
-        return None, None
+    true_at = claude.get("authoritative_at")
+    if not true_at:
+        if claude.get("source") != "authoritative":
+            return None, None, None
+        true_at = data.get("generated_at")
+    if not true_at:
+        return None, None, None
     try:
-        gen_dt = datetime.fromisoformat(generated_at)
+        true_dt = datetime.fromisoformat(true_at)
     except (ValueError, TypeError):
-        return None, None
-    if gen_dt.tzinfo is None:
-        gen_dt = gen_dt.replace(tzinfo=timezone.utc)
+        return None, None, None
+    if true_dt.tzinfo is None:
+        true_dt = true_dt.replace(tzinfo=timezone.utc)
 
     now_utc = now_utc or datetime.now(timezone.utc)
-    age_minutes = (now_utc - gen_dt).total_seconds() / 60.0
+    age_minutes = (now_utc - true_dt).total_seconds() / 60.0
     if age_minutes < 0 or age_minutes > max_age_minutes:
-        return None, None
-    return windows, age_minutes
+        return None, None, None
+    return windows, age_minutes, true_dt.isoformat()
 
 
 def _collect_claude_estimate():
@@ -742,6 +757,8 @@ def _collect_claude_raw():
     if windows is not None:
         result["source"] = "authoritative"
         result["windows"] = windows
+        # the ONLY place this is written fresh: a real answer (card 45b71d0b)
+        result["authoritative_at"] = datetime.now(timezone.utc).isoformat()
         return result
 
     result["auth_error"] = err
@@ -751,13 +768,15 @@ def _collect_claude_raw():
     # enough. A missing token or a 403 (real scope problem) skips the cache
     # and goes straight to the estimate.
     if err_kind == "transient":
-        cached_windows, age_minutes = _read_cached_claude_authoritative(
+        cached_windows, age_minutes, true_at = _read_cached_claude_authoritative(
             CONFIG["claude_authoritative_cache_max_age_min"]
         )
         if cached_windows is not None:
             result["source"] = "authoritative_cached"
             result["windows"] = cached_windows
+            # the DATA's age since the last real answer, carried unchanged -- not reset per run
             result["cache_age_minutes"] = round(age_minutes, 1)
+            result["authoritative_at"] = true_at
             return result
 
     try:
