@@ -166,3 +166,39 @@ describe('outgoing-copy gate tokenization: a Hungarian suffix on a dotted filena
     expect(probs[0]).toContain('küldj át ot darabot')
   })
 })
+
+// 93CC58FC (2026-09-25): the same tokenization class, now on a FOREIGN LETTER. The
+// letter class was Hungarian-only, so `č`/`š`/`đ` cut a Serbian surname in two and the
+// lowercase fragment was audited as a standalone word: "Nimčević" -> "Nim" + "evi", and
+// "evi" is the accent-stripped "évi". A correct Telegram report to the owner was blocked
+// (deeper, live, 2026-09-25). Only the -ević shape trips it (fragment "evi"); -ić, -ović
+// and Cyrillic already passed, so they would be SILENT tests here and are left out.
+// Non-ASCII test letters are built from code points, the house rule for this gate.
+describe('outgoing-copy gate tokenization: a foreign letter does not split a word (93CC58FC)', () => {
+  const cp = (...codes: number[]) => String.fromCodePoint(...codes)
+  const c_caron = cp(0x10d), c_acute = cp(0x107), s_caron = cp(0x161), d_stroke = cp(0x111), D_stroke = cp(0x110)
+  const SURNAMES = [
+    `Nim${c_caron}evi${c_acute}`,
+    `Ni${s_caron}evi${c_acute}`,
+    `Kova${c_caron}evi${c_acute}`,
+    `${D_stroke}or${d_stroke}evi${c_acute}`,
+  ]
+
+  for (const name of SURNAMES) {
+    it(`mid-sentence: ${name} passes in a fully accented Hungarian sentence`, () => {
+      expect(auditAccent(`Szia, a 82324-es ügyfél, Mirko ${name}, még nem kapott levelet, kérlek nézd meg.`)).toEqual([])
+    })
+
+    it(`sentence start: ${name} passes (the capital-skip rule does not apply there)`, () => {
+      expect(auditAccent(`${name} még nem kapott levelet, kérlek nézd meg, köszönöm.`)).toEqual([])
+    })
+  }
+
+  it('control: a standalone accentless "evi" in the same sentence is still caught', () => {
+    // The carrier must be long enough for the Hungarian-language detector to engage; a
+    // too-short sentence skips the whole audit and this control would pass for nothing.
+    const probs = auditAccent(`Szia, a 82324-es ügyfél, Mirko ${SURNAMES[0]}, még nem kapott levelet, és az evi jelentése sem jött meg, kérlek nézd meg, köszönöm.`)
+    expect(probs.length).toBe(1)
+    expect(probs[0]).toContain('evi -> évi')
+  })
+})
