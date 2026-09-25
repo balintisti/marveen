@@ -176,33 +176,81 @@ LOCAL_COUNT=$(ls -1 delta-crm-*.dump 2>/dev/null | wc -l | tr -d ' ')
 # lost, stolen or dead. A failure here is logged and reported but must NOT fail
 # the run: a local backup that exists is still worth more than no backup.
 # ---------------------------------------------------------------------------
+# ENCRYPTED, card 3acc137f. The bucket holds real customer data, so what leaves
+# the machine is a gpg-encrypted copy; the LOCAL dump stays plaintext, because
+# the key lives in this machine's Keychain anyway and encrypting beside it would
+# protect nothing. FAIL-CLOSED: without a readable key NOTHING is uploaded --
+# the previous version uploaded plaintext, and a missing key must not quietly
+# bring that back. The survivable copy of the key is the paper one with Isti;
+# see scripts/lib/backup-key.sh for the two-copy rule.
 if [ -r "$R2_KEY_FILE" ]; then
-  if python3 "$R2_SCRIPT" put "$R2_BUCKET" "$OUT" "$(basename "$OUT")" >>"$LOG_FILE" 2>&1; then
-    log "R2 OK $(basename "$OUT")"
-
-    # Mirror the local retention: the local directory IS the policy, so whatever
-    # local pruning kept is what the bucket should hold.
-    #
-    # GUARD: never prune the bucket from a suspiciously thin local directory. If
-    # the disk died or the dumps were wiped, an unguarded mirror would delete the
-    # offsite copies too — turning the one surviving backup into no backup at the
-    # exact moment it is needed.
-    if [ "$LOCAL_COUNT" -ge 3 ]; then
-      python3 "$R2_SCRIPT" list "$R2_BUCKET" 2>/dev/null | awk '{print $3}' | grep '\.dump$' | while read -r REMOTE; do
-        [ -f "$BACKUP_DIR/$REMOTE" ] || {
-          python3 "$R2_SCRIPT" delete "$R2_BUCKET" "$REMOTE" >/dev/null 2>&1 && log "R2 PRUNE $REMOTE"
-        }
-      done
-    else
-      log "R2 PRUNE kihagyva: csak $LOCAL_COUNT helyi mentes van, ez tul keves ahhoz hogy tukrozzek"
-    fi
+  BK_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/backup-key.sh"
+  [ -f "$BK_LIB" ] || BK_LIB="/Users/isti/marveen/scripts/lib/backup-key.sh"
+  BK_PASS=""
+  if [ ! -f "$BK_LIB" ]; then
+    log "R2 KIHAGYVA: hianyzik a scripts/lib/backup-key.sh -- titkositatlanul NEM toltok fel"
+    notify_failure "az offsite titkosito konyvtar hianyzik, NEM ment fel semmi az R2-re"
   else
-    log "R2 HIBA: a feltoltes nem sikerult, a helyi mentes megvan"
-    # SECOND instance of the same defect, and the REGRESSION TEST is what found it:
-    # I fixed fail() first and this path still carried from="delta-crm-backup" with
-    # its response discarded. One defect, two call sites -- the test asked the file,
-    # not me, and my own grep had matched the explanatory comment instead.
-    notify_failure "az R2 feltoltes elszallt, csak a Macen van masolat"
+    # shellcheck source=/dev/null
+    . "$BK_LIB"
+    if ! backup_key_read BK_PASS; then
+      log "R2 KIHAGYVA: az offsite kulcs nem olvashato ($BACKUP_KEY_STATUS, $BACKUP_KEY_SERVICE) -- titkositatlanul NEM toltok fel"
+      notify_failure "az offsite kulcs nem olvashato ($BACKUP_KEY_STATUS), NEM ment fel semmi az R2-re"
+    else
+      REMOTE_NAME="$(basename "$OUT").gpg"
+      ENC="$BACKUP_DIR/.$REMOTE_NAME.tmp"
+      rm -f "$ENC"
+      ENC_OK=0
+      if backup_encrypt BK_PASS "$OUT" "$ENC" 2>>"$LOG_FILE"; then
+        chmod 600 "$ENC"
+        # ROUND TRIP before upload: the object we ship must decrypt, with the key
+        # the restore will use, to the very bytes we verified above. An encrypted
+        # copy nobody has decrypted is not a backup yet.
+        CHECK="$BACKUP_DIR/.$REMOTE_NAME.check"
+        rm -f "$CHECK"
+        if backup_decrypt BK_PASS "$ENC" "$CHECK" 2>>"$LOG_FILE" \
+           && [ "$(shasum -a 256 <"$CHECK" | cut -d' ' -f1)" = "$(shasum -a 256 <"$OUT" | cut -d' ' -f1)" ]; then
+          ENC_OK=1
+        else
+          log "R2 HIBA: a titkositott masolat oda-vissza ellenorzese NEM egyezett"
+        fi
+        rm -f "$CHECK"
+      else
+        log "R2 HIBA: a titkositas nem sikerult"
+      fi
+      BK_PASS=""
+
+      if [ "$ENC_OK" = "1" ] && python3 "$R2_SCRIPT" put "$R2_BUCKET" "$ENC" "$REMOTE_NAME" >>"$LOG_FILE" 2>&1; then
+        log "R2 OK $REMOTE_NAME (titkositva)"
+
+        # Mirror the local retention: the local directory IS the policy, so whatever
+        # local pruning kept is what the bucket should hold. BOTH suffixes: objects
+        # uploaded before 3acc137f are plaintext `.dump`, and they must keep
+        # rotating out exactly as before rather than sit in the bucket forever.
+        #
+        # GUARD: never prune the bucket from a suspiciously thin local directory. If
+        # the disk died or the dumps were wiped, an unguarded mirror would delete the
+        # offsite copies too -- turning the one surviving backup into no backup at the
+        # exact moment it is needed.
+        if [ "$LOCAL_COUNT" -ge 3 ]; then
+          python3 "$R2_SCRIPT" list "$R2_BUCKET" 2>/dev/null | awk '{print $3}' | grep -E '\.dump(\.gpg)?$' | while read -r REMOTE; do
+            [ -f "$BACKUP_DIR/${REMOTE%.gpg}" ] || {
+              python3 "$R2_SCRIPT" delete "$R2_BUCKET" "$REMOTE" >/dev/null 2>&1 && log "R2 PRUNE $REMOTE"
+            }
+          done
+        else
+          log "R2 PRUNE kihagyva: csak $LOCAL_COUNT helyi mentes van, ez tul keves ahhoz hogy tukrozzek"
+        fi
+      else
+        log "R2 HIBA: a feltoltes nem sikerult, a helyi mentes megvan"
+        # SECOND instance of the same defect, and the REGRESSION TEST is what found it:
+        # I fixed fail() first and this path still carried from="delta-crm-backup" with
+        # its response discarded. One defect, two call sites -- the test asked the file,
+        # not me, and my own grep had matched the explanatory comment instead.
+        notify_failure "az R2 feltoltes elszallt, csak a Macen van masolat"
+      fi
+      rm -f "$ENC"
+    fi
   fi
 else
   log "R2 kihagyva: nincs kulcs ($R2_KEY_FILE)"
