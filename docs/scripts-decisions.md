@@ -16,7 +16,7 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **270** kovetett fajl, ebbol
+Populacio: `git ls-files scripts/` = **281** kovetett fajl, ebbol
 **91** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
@@ -186,7 +186,7 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/email-send-gate.mjs`
 
 - Governance control (Szabi 2026-06-25, after the Boni incident: a sub-agent
-- Why a hook and not a permissions deny-list: permissive security profiles
+- Why a hook and not a permissions deny-list: the hook is version- and
 
 ### `scripts/ensure-managed-channels-enabled.sh`
 
