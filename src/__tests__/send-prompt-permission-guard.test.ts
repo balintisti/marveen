@@ -29,7 +29,7 @@ vi.mock('node:child_process', () => ({
   }),
 }))
 
-const { sendPromptToSession } = await import('../web/agent-process.js')
+const { sendPromptToSession, sendEnterToSession } = await import('../web/agent-process.js')
 
 const PERMISSION_PANE = [
   ' Bash command',
@@ -95,5 +95,21 @@ describe('sendPromptToSession never types into a tool-permission prompt (2a8cb07
     h.colour = () => IDLE_PANE
     expect(await send('agent-perm-5')).toBe('withheld-permission')
     expect(h.keys).toEqual([])
+  })
+})
+
+describe('sendEnterToSession, the other shared bare-Enter path, asks the same guard', () => {
+  beforeEach(() => { h.keys.length = 0 })
+
+  it('a permission prompt on screen -> false, and no Enter', () => {
+    h.raw = () => PERMISSION_PANE
+    expect(sendEnterToSession('agent-perm-6')).toBe(false)
+    expect(h.keys).toEqual([])
+  })
+
+  it('CONTROL: a pane without the prompt gets its Enter', () => {
+    h.raw = () => IDLE_PANE
+    expect(sendEnterToSession('agent-perm-7')).toBe(true)
+    expect(h.keys).toEqual([['-t', 'agent-perm-7', 'Enter']])
   })
 })
