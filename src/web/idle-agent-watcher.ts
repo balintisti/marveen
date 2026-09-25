@@ -220,7 +220,7 @@ function lastCommentAtByCard(): Map<string, Map<string, number>> {
  * lastCommentAtByCard WITHOUT census comments (card 57cb8d64), for the reviewer queue's re-arm rule.
  *
  * Cheap on purpose -- it runs every tick: a LIKE prefilter on the first 160 characters finds the few
- * hundred candidates, the exact anchored token (isCensusComment) decides in JS, and one grouped
+ * hundred candidates, the exact anchored token (isCensusComment, incl. its TALALAT: finding line) decides in JS, and one grouped
  * query rebuilds the map without those ids. NO census comment -> the raw map itself, so nothing can
  * change. A failed query -> undefined, which selectDeclaredWork reads as "not measured" and counts
  * every comment, as before: a broken lookup must not silence a queue.
@@ -228,9 +228,15 @@ function lastCommentAtByCard(): Map<string, Map<string, number>> {
 export function lastRealCommentAtByCard(raw: Map<string, Map<string, number>>): Map<string, Map<string, number>> | undefined {
   try {
     const candidates = getDb()
-      .prepare("SELECT id, substr(content, 1, 160) AS head FROM kanban_comments WHERE substr(content, 1, 160) LIKE '%testing-cenzus%'")
-      .all() as { id: number; head: string }[]
-    const census = candidates.filter((r) => isCensusComment(r.head)).map((r) => r.id)
+      .prepare(
+        // The header is in the first 160 characters; a TALALAT: finding line can be anywhere (the
+        // longest census comment measured 3029). So a candidate that contains "LAT:" at all comes back
+        // WHOLE -- a superset of both spellings, NFC or decomposed -- and the rest as its head only.
+        "SELECT id, CASE WHEN instr(content, 'LAT:') > 0 THEN content ELSE substr(content, 1, 160) END AS text " +
+        "FROM kanban_comments WHERE substr(content, 1, 160) LIKE '%testing-cenzus%'",
+      )
+      .all() as { id: number; text: string }[]
+    const census = candidates.filter((r) => isCensusComment(r.text)).map((r) => r.id)
     if (census.length === 0) return raw
     const rows = getDb()
       .prepare('SELECT card_id, author, MAX(created_at) AS at FROM kanban_comments WHERE id NOT IN (SELECT value FROM json_each(?)) GROUP BY card_id, author')

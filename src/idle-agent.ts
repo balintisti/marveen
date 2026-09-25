@@ -590,8 +590,25 @@ export function selectWaitingOnOwner<T extends WorkCountCard>(cards: readonly T[
  */
 export const CENSUS_HEADER = /^(?:\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?(?: CES?T)? +-- )?jarvis,?\s+testing-cenzus\b/i
 
+/**
+ * A census comment that carries a FINDING re-arms after all (marveen 2026-09-25 06:07, on didi's
+ * 06:05 review): the header classified the comment KIND, so a census round that noticed something
+ * on an already-reviewed card -- a stale fix, an ownerless item -- was swallowed with the rest.
+ *
+ * ONE CLOSED TOKEN, jarvis's census-own: a line that STARTS with `TALALAT:` at column 0. NOT
+ * `LELET:`, which stands in every checker's "LELET: nincs" and would read a negative answer as a
+ * finding. An INDENTED line does not count: that is a quotation, not jarvis's own finding.
+ * Case-sensitive, so a sentence in running text ("a talalat: ...") is not the token.
+ * The accented spelling `TALÁLAT:` is the SAME token, and it is accepted on purpose: jarvis wrote it
+ * accented on 18790e64, the finding that started this, and a token that silently misses its own
+ * author's spelling is the swallowed finding again. NFC first, so a decomposed Á matches too.
+ * Measured 2026-09-25 06:2x on the live board: 2 of 326 census comments carry the token (both
+ * jarvis, both after the decision, both positive); 0 carry it as a "nincs".
+ */
+export const CENSUS_FINDING_LINE = /^TAL[AÁ]LAT:/m
+
 export function isCensusComment(content: string): boolean {
-  return CENSUS_HEADER.test(content)
+  return CENSUS_HEADER.test(content) && !CENSUS_FINDING_LINE.test(content.normalize('NFC'))
 }
 
 export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(

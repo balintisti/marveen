@@ -49,6 +49,36 @@ const map = (o: Record<string, number>) => new Map([[CARD.id, new Map(Object.ent
 const queue = (raw: Record<string, number>, real?: Record<string, number>) =>
   selectDeclaredWork(check, 'didi', [CARD], map(raw), 'marveen', 1_000, REVIEWERS, real ? map(real) : undefined).map((c) => c.id)
 
+// marveen 2026-09-25 06:07, on didi's review: a census comment that carries a finding re-arms.
+describe('a census comment with a column-0 TALALAT: line is NOT census (it re-arms)', () => {
+  const HEAD = '2026-09-25 06:30:00 CEST -- jarvis, testing-cenzus (a65623ef).'
+  it('POSITIVE: census + a TALALAT: line at column 0 -> not census', () => {
+    expect(isCensusComment(`${HEAD}\nallapot: rendben\nTALALAT: ez a kartya ELAVULT FIXET hordoz`)).toBe(false)
+  })
+  it('NEGATIVE: an INDENTED TALALAT: line is a quotation -> still census', () => {
+    expect(isCensusComment(`${HEAD}\n    TALALAT: idezet egy masik kommentbol`)).toBe(true)
+  })
+  it('NEGATIVE: "LELET: nincs" is not the token -> still census', () => {
+    expect(isCensusComment(`${HEAD}\nLELET: nincs`)).toBe(true)
+  })
+  it('the token MID-LINE (18790e64 shape) does not count -- column 0 only', () => {
+    expect(isCensusComment(`${HEAD} TABLA-IGAZSAG TALALAT: ez a kartya ELAVULT`)).toBe(true)
+  })
+  it('lower case in running text is not the token', () => {
+    expect(isCensusComment(`${HEAD}\ntalalat: nincs uj`)).toBe(true)
+  })
+  it('the accented spelling is the same token, composed or decomposed', () => {
+    expect(isCensusComment(`${HEAD}\nTALÁLAT: gazdatlan tetel`)).toBe(false)
+    expect(isCensusComment(`${HEAD}\nTALA\u0301LAT: gazdatlan tetel`)).toBe(false)
+  })
+  it('CRLF line ends still find the column-0 line', () => {
+    expect(isCensusComment(`${HEAD}\r\nTALALAT: x`)).toBe(false)
+  })
+  it('CONTROL: the same census without the line is census', () => {
+    expect(isCensusComment(`${HEAD}\nallapot: rendben`)).toBe(true)
+  })
+})
+
 describe('the reviewer queue: only a NON-census comment after mine re-arms the card', () => {
   it('only a jarvis census after me -> NOT re-armed', () => {
     expect(queue({ didi: 100, jarvis: 200 }, { didi: 100 })).toEqual([])
@@ -93,6 +123,21 @@ describe('lastRealCommentAtByCard builds the census-free map on a real sqlite', 
     const real = lastRealCommentAtByCard(raw)!
     expect(real.get('c1')).toEqual(new Map([['didi', 100], ['jarvis', 200]]))
     expect(real.get('c2')).toBeUndefined()
+  })
+  // The watcher reads only the first 160 characters for the header; the finding line can be far
+  // below it (longest census measured: 3029). RED if the query goes back to the head alone.
+  it('a census whose TALALAT: line sits beyond the first 160 characters re-arms', () => {
+    const filler = 'x'.repeat(400)
+    setup([
+      ['c1', 'didi', 100, 'review'],
+      ['c1', 'jarvis', 300, `2026-09-25 -- jarvis, testing-cenzus (a65623ef)\n${filler}\nTALALAT: gazdatlan tetel`],
+      ['c2', 'didi', 100, 'review'],
+      ['c2', 'jarvis', 300, `2026-09-25 -- jarvis, testing-cenzus (a65623ef)\n${filler}\n    TALALAT: idezet`],
+    ])
+    const raw = new Map([['c1', new Map([['didi', 100], ['jarvis', 300]])], ['c2', new Map([['didi', 100], ['jarvis', 300]])]])
+    const real = lastRealCommentAtByCard(raw)!
+    expect(real.get('c1')).toEqual(new Map([['didi', 100], ['jarvis', 300]]))   // the finding counts
+    expect(real.get('c2')).toEqual(new Map([['didi', 100]]))                    // the quotation does not
   })
   it('no census comment at all -> the raw map itself (nothing can change)', () => {
     setup([['c1', 'didi', 100, 'review'], ['c1', 'jarvis', 200, 'real reply']])
