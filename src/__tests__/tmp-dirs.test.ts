@@ -2,7 +2,7 @@
 // leaked keep using it. The first half is the leak coming back as a RED test instead of as a disk
 // at 90%: empty the helper's afterAll, or stop recording the directories, and it fails.
 import { describe, it, expect } from 'vitest'
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, sep } from 'node:path'
 import { tmpDirs } from './helpers/tmp-dirs.js'
 import { stripComments } from './helpers/strip-comments.js'
@@ -17,7 +17,9 @@ describe('a scope that makes temporary directories', () => {
     const a = mkTmp('tmpdirs-probe-')
     const b = mkTmp('tmpdirs-probe-')
     writeFileSync(join(a, 'f'), 'x')           // a non-empty directory must go too
-    made = [a, b]
+    const c = mkTmp.adopt(join(a, '..', `${a.split(sep).pop()}-adopted`))   // made elsewhere, handed over
+    mkdirSync(c)
+    made = [a, b, c]
     expect(a).not.toBe(b)
     expect(a).toContain('tmpdirs-probe-')
     expect(existsSync(a) && existsSync(b)).toBe(true)
@@ -25,8 +27,8 @@ describe('a scope that makes temporary directories', () => {
 })
 
 describe('after that scope finishes', () => {
-  it('both directories are gone, contents included', () => {
-    expect(made).toHaveLength(2)
+  it('all three directories are gone, contents and the adopted one included', () => {
+    expect(made).toHaveLength(3)
     for (const d of made) expect(existsSync(d)).toBe(false)
   })
 })
