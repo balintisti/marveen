@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, existsSync, mkdtempSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, existsSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs'
+
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card b610c593 (c)): a bare mkdtempSync here leaked every run.
+const mkTmp = tmpDirs()
 
 // WHY THIS GUARD EXISTS (card 48940af0, from the 6e6e40ce measurement).
 //
@@ -28,7 +32,7 @@ const SCRIPT = join(REPO, 'scripts', 'doc-commands.py')
 
 /** Drive the REAL extractor, so these tests cannot drift from what doctor.sh runs. */
 function listFor(content: string, installDir = '/nonexistent-install'): string[] {
-  const dir = mkdtempSync(join(tmpdir(), 'doccmd-'))
+  const dir = mkTmp('doccmd-')
   const doc = join(dir, 'DOC.md')
   writeFileSync(doc, content)
   const out = execFileSync('python3', [SCRIPT, doc, installDir, '--list'], { encoding: 'utf-8' })
@@ -156,7 +160,7 @@ describe('every command named in a repo document exists', () => {
     // runs from. That is why re-rooting is correct here and wrong for the
     // ~/.claude documents, which name an absolute path instead.
     for (const doc of DOCUMENTED) {
-      const dir = mkdtempSync(join(tmpdir(), 'doccmd-repo-'))
+      const dir = mkTmp('doccmd-repo-')
       mkdirSync(join(dir, 'd'), { recursive: true })
       const copy = join(dir, 'd', 'DOC.md')
       writeFileSync(copy, readFileSync(join(REPO, doc), 'utf-8'))

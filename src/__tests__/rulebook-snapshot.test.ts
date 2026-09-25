@@ -15,15 +15,19 @@
 
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs'
+
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card b610c593 (c)): a bare mkdtempSync here leaked every run.
+const mkTmp = tmpDirs()
 
 const SCRIPT = join(__dirname, '..', '..', 'scripts', 'rulebook-snapshot.sh')
 
 /** A throwaway world: fake source roots, a fake repo, a notifier that records. */
 function world(skillCount: number) {
-  const root = mkdtempSync(join(tmpdir(), 'rulebook-'))
+  const root = mkTmp('rulebook-')
   const marveen = join(root, 'marveen')
   const skills = join(root, 'skills')
   // A FAKE MEMORY ROOT IS MANDATORY, NOT TIDINESS. The script's default is

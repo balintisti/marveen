@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, chmodSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, copyFileSync, writeFileSync, chmodSync } from 'node:fs'
+
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card b610c593 (c)): a bare mkdtempSync here leaked every run.
+const mkTmp = tmpDirs()
 
 // WHY THIS IS TESTED AND NOT JUST FIXED (card 477682a0, measured 2026-08-24).
 // The three voice wrappers picked their install root by asking "is `_vtools.py`
@@ -40,7 +44,7 @@ function run(script: string, args: string[], installDir: string): { out: string;
 
 /** An install root that looks exactly like a finished `install-voice.sh` run. */
 function fakeInstall(): string {
-  const root = mkdtempSync(join(tmpdir(), 'voice-inst-'))
+  const root = mkTmp('voice-inst-')
   mkdirSync(join(root, 'venv', 'bin'), { recursive: true })
   mkdirSync(join(root, 'voices'), { recursive: true })
   const py = join(root, 'venv', 'bin', 'python')
@@ -53,7 +57,7 @@ function fakeInstall(): string {
 
 /** A path where nothing was ever installed. */
 function emptyRoot(): string {
-  return join(mkdtempSync(join(tmpdir(), 'voice-none-')), 'never-installed')
+  return join(mkTmp('voice-none-'), 'never-installed')
 }
 
 describe('voice wrappers: which install root do they choose', () => {

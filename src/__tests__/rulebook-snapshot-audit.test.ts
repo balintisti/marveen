@@ -18,16 +18,20 @@
 // `CREATE INDEX CONCURRENTLY` false alarm on the other rulebook.
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
+
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card b610c593 (c)): a bare mkdtempSync here leaked every run.
+const mkTmp = tmpDirs()
 
 const AUDIT = join(__dirname, '..', '..', 'scripts', 'rulebook-snapshot-audit.sh')
 
 /** A hand-built snapshot repo, so both the healthy and the truncated shape are
  *  exact rather than raced into existence. */
 function repoWith(commits: Array<{ manifest: number; store: number }>) {
-  const repo = mkdtempSync(join(tmpdir(), 'rbaudit-'))
+  const repo = mkTmp('rbaudit-')
   const git = (...args: string[]) =>
     spawnSync('git', ['-C', repo, ...args], {
       encoding: 'utf8',
@@ -76,7 +80,7 @@ describe('rulebook snapshot audit', () => {
   })
 
   it('a repo with no manifest at all is skipped, not silently passed', () => {
-    const repo = mkdtempSync(join(tmpdir(), 'rbaudit-empty-'))
+    const repo = mkTmp('rbaudit-empty-')
     const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
     spawnSync('git', ['-C', repo, 'init', '-q'], { env })
     writeFileSync(join(repo, 'x.txt'), 'x\n')

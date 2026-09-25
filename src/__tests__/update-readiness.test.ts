@@ -1,9 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, copyFileSync, writeFileSync } from 'node:fs'
+
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card b610c593 (c)): a bare mkdtempSync here leaked every run.
+const mkTmp = tmpDirs()
 
 // Kartya bae4df49. A frissitesi ut hibaja definicio szerint KESON derul ki --
 // akkor, amikor mar frissiteni kellene. 2026-08-23-an megmerve: ez a telepites
@@ -17,7 +21,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 type Allapot = 'kesz' | 'ag-nincs-a-tavolin' | 'nincs-upstream' | 'elore-van' | 'levalasztott'
 
 function fixture(allapot: Allapot): string {
-  const dir = mkdtempSync(join(tmpdir(), 'updready-'))
+  const dir = mkTmp('updready-')
   const origin = join(dir, 'origin.git')
   const work = join(dir, 'work')
   const sh = (cwd: string, ...args: string[]) => {
