@@ -161,6 +161,12 @@ class FakeDrive:
         return fid
 
 
+def stamped(dirpath, hours_ago):
+    """An archive path named the way backup.sh names it, made `hours_ago` hours before now."""
+    t = time.localtime(time.time() - hours_ago * 3600)
+    return os.path.join(dirpath, time.strftime('claudeclaw-%Y%m%d-%H%M%S.tar.gz', t))
+
+
 def make_archive(path, cards=3, broken_db=False):
     with tempfile.TemporaryDirectory() as d:
         db = os.path.join(d, 'claudeclaw.db')
@@ -203,7 +209,8 @@ class Base(unittest.TestCase):
                         DRIVE_API_BASE=f'{base}/drive/v3', DRIVE_UPLOAD_BASE=f'{base}/upload/drive/v3',
                         OAUTH_TOKEN_URL=f'{base}/token', OAUTH_TOKENINFO_URL=f'{base}/tokeninfo',
                         BACKUP_OFFSITE_CLIENT_FILE=os.path.join(self.tmp, 'conf', 'client.json'), BACKUP_OFFSITE_ALERT_CMD=f'cat >> {self.alerts}')
-        self.archive = os.path.join(self.tmp, 'claudeclaw-20260925-030000.tar.gz')
+        # stamped RELATIVE to now: a fixed date here would turn stale and fail the suite in 36 h
+        self.archive = stamped(self.tmp, 5)
         make_archive(self.archive)
 
     def tearDown(self):
@@ -338,6 +345,51 @@ class TestOffsite(Base):
         r = self.run_tool('push', '--archive', self.archive)
         self.assertEqual(r.returncode, 1)
         self.assertIn('UNEXPECTED', self.alert_text())
+
+    def test_a_stale_archive_is_refused_loudly(self):
+        # didi 08:08: a stopped daily backup must not be re-uploaded "successfully" every day
+        self.init()
+        old = stamped(self.tmp, 40)
+        make_archive(old)
+        r = self.run_tool('push', '--archive', old)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('40 h old', r.stderr)
+        self.assertIn('DAILY backup has stopped', self.alert_text())
+        self.assertEqual(self.uploaded(), [])
+
+    def test_the_limit_is_36_hours(self):
+        self.init()
+        ok = stamped(self.tmp, 35)
+        make_archive(ok)
+        self.assertEqual(self.run_tool('push', '--archive', ok).returncode, 0)
+        late = stamped(self.tmp, 37)
+        make_archive(late)
+        self.assertEqual(self.run_tool('push', '--archive', late).returncode, 1)
+
+    def test_the_name_decides_not_a_fresh_mtime(self):
+        # a copied or restored archive has a fresh mtime; its name still says when it was made
+        self.init()
+        old = stamped(self.tmp, 240)
+        make_archive(old)          # mtime: now
+        self.assertEqual(self.run_tool('push', '--archive', old).returncode, 1)
+
+    def test_an_unstamped_name_falls_back_to_mtime(self):
+        self.init()
+        plain = os.path.join(self.tmp, 'claudeclaw-manual.tar.gz')
+        make_archive(plain)
+        past = time.time() - 48 * 3600
+        os.utime(plain, (past, past))
+        r = self.run_tool('push', '--archive', plain)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('from its mtime', r.stderr)
+
+    def test_restore_test_reports_the_archive_age_not_the_upload_time(self):
+        self.init()
+        self.assertEqual(self.run_tool('push', '--archive', self.archive).returncode, 0)
+        r = self.run_tool('restore-test')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('archive 5 h old', r.stdout)
+        self.assertIn('uploaded 0 h ago', r.stdout)
 
     def test_no_temp_files_are_left_behind(self):
         self.init()

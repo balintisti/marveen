@@ -43,6 +43,7 @@ Configuration (all overridable for tests):
 import argparse
 import calendar
 import glob
+import re
 import hashlib
 import json
 import os
@@ -77,6 +78,12 @@ DEFAULT_KEEP_DAYS = 14
 HTTP_TIMEOUT = 120
 MAIN_AGENT_ID = os.environ.get('MAIN_AGENT_ID', 'marveen')
 DB_IN_ARCHIVE = 'repo/store/claudeclaw.db'
+# A daily archive older than this means the DAILY BACKUP has stopped (didi 08:08, marveen 08:09).
+# Without it, a stopped local backup was re-uploaded every day "successfully" -- measured: a
+# 10-day-old archive gave push rc=0 and restore-test "0 h old", and a 10-day local gap really
+# happened (09-14 .. 09-24). 36 h = one missed day plus slack for a late run.
+MAX_ARCHIVE_AGE_H = 36
+STAMP_RE = re.compile(r'claudeclaw-(\d{8}-\d{6})\.tar\.gz$')
 
 
 class Fail(Exception):
@@ -261,6 +268,17 @@ def rfc3339_to_epoch(s):
 
 # ---------------------------------------------------------------- the commands
 
+def archive_time(path):
+    """When the archive was MADE: the stamp backup.sh puts in its name (local time).
+
+    Not the mtime -- a copy or a restore moves that, and a moved mtime made a 10-day-old
+    archive look fresh. The mtime is only the fallback for a name without a stamp, and says so."""
+    m = STAMP_RE.search(os.path.basename(path))
+    if m:
+        return time.mktime(time.strptime(m.group(1), '%Y%m%d-%H%M%S')), 'name'
+    return os.path.getmtime(path), 'mtime'
+
+
 def newest_archive():
     found = sorted(glob.glob(os.path.join(REPO_ROOT, 'backups', 'claudeclaw-*.tar.gz')), key=os.path.getmtime)
     if not found:
@@ -326,6 +344,11 @@ def cmd_consent_exchange(a):
 
 def cmd_push(a):
     archive = a.archive or newest_archive()
+    made, source = archive_time(archive)
+    age_h = (time.time() - made) / 3600
+    if age_h > MAX_ARCHIVE_AGE_H:
+        raise Fail(f'the newest local archive {os.path.basename(archive)} is {age_h:.0f} h old (from its {source}; '
+                   f'limit {MAX_ARCHIVE_AGE_H} h) -- the DAILY backup has stopped. Nothing uploaded, nothing pruned')
     work = tempfile.mkdtemp(prefix='offsite-push-')
     try:
         os.chmod(work, 0o700)
@@ -337,12 +360,14 @@ def cmd_push(a):
         token = access_token()
         parent = folder_id(token)
         fid = upload(token, parent, enc, os.path.basename(enc),
-                     {'sha256': plain_sha, 'plainSize': str(os.path.getsize(archive))})
+                     {'sha256': plain_sha, 'plainSize': str(os.path.getsize(archive)),
+                      'archiveTime': str(int(made))})
         _, meta, _ = http('GET', f'{API}/files/{fid}?fields=id,size,md5Checksum', token)
         if meta.get('md5Checksum') != sent_md5 or int(meta.get('size', -1)) != os.path.getsize(enc):
             raise Fail(f'READ-BACK MISMATCH for {fid}: Drive has md5 {meta.get("md5Checksum")} '
                        f'size {meta.get("size")}, sent md5 {sent_md5} size {os.path.getsize(enc)}')
-        print(f'push: {os.path.basename(archive)} ({cards} cards) -> {fid}, read back md5 {sent_md5}')
+        print(f'push: {os.path.basename(archive)} ({cards} cards, archive {age_h:.0f} h old) -> {fid}, '
+              f'read back md5 {sent_md5}')
         # Prune ONLY after this run's copy was read back: a failed upload must not also shrink
         # the history it would have replaced.
         prune(token, parent, a.keep_days)
@@ -390,8 +415,12 @@ def cmd_restore_test(_a):
         if not want or got != want:
             raise Fail(f'restore test: decrypted archive sha256 {got[:12]} != recorded {str(want)[:12]}')
         cards = verify_archive(plain, os.path.join(work, 'x'))
-        age_h = (time.time() - rfc3339_to_epoch(f['createdTime'])) / 3600
-        print(f'restore-test: OK {f["name"]} ({age_h:.0f} h old) byte-identical, integrity ok, {cards} cards')
+        # the ARCHIVE's age, not the upload's: a stale archive uploaded today is still stale
+        made = (f.get('appProperties') or {}).get('archiveTime')
+        age = f'archive {(time.time() - int(made)) / 3600:.0f} h old' if made else 'archive age UNKNOWN (no archiveTime)'
+        up_h = max(0.0, (time.time() - rfc3339_to_epoch(f['createdTime'])) / 3600)  # clock skew is not an age
+        print(f'restore-test: OK {f["name"]} ({age}, uploaded {up_h:.0f} h ago) byte-identical, '
+              f'integrity ok, {cards} cards')
         return 0
     finally:
         shutil.rmtree(work, ignore_errors=True)
