@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import Database from 'better-sqlite3'
-import { readFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { HEARTBEAT_URGENT_SQL, HEARTBEAT_WAITING_SQL } from '../db.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // The most prominent line of an hourly report is the one nobody reads.
 //
@@ -26,7 +29,7 @@ import { HEARTBEAT_URGENT_SQL, HEARTBEAT_WAITING_SQL } from '../db.js'
 const ROOT = join(__dirname, '..', '..')
 
 function fixtureDb() {
-  const dir = mkdtempSync(join(tmpdir(), 'hb-urgent-'))
+  const dir = mkTmp('hb-urgent-')
   const db = new Database(join(dir, 'test.db'))
   db.exec(`CREATE TABLE kanban_cards (
     id TEXT PRIMARY KEY, title TEXT, status TEXT, priority TEXT,

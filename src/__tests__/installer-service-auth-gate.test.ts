@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 // The 2026-07-30 bug: every affected install completed "successfully" while the
 // agents sat at "Not logged in" forever. Root cause, measured on a live host:
 // the installer gated its whole auth block on `claude auth status`, which
@@ -47,7 +49,7 @@ describe.each([
 ])('%s -- service-side auth gate', (_name, SRC) => {
   let dir: string
   beforeAll(() => {
-    dir = mkdtempSync(join(tmpdir(), 'svcauth-'))
+    dir = mkTmp('svcauth-')
     mkdirSync(join(dir, 'store'), { recursive: true })
   })
   afterAll(() => rmSync(dir, { recursive: true, force: true }))

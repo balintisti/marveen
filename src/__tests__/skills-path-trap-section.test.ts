@@ -4,11 +4,13 @@
 // third-party skills landed fleet-wide through it on 2026-08-22. This proves
 // the warning block actually reaches the agent file on respawn, idempotently.
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, readFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const tmpRoot = mkdtempSync(join(tmpdir(), 'marveen-skilltrap-test-'))
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
+const tmpRoot = mkTmp('marveen-skilltrap-test-')
 
 vi.mock('../config.js', () => ({
   PROJECT_ROOT: tmpRoot,

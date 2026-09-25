@@ -1,10 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, chmodSync, rmSync } from 'node:fs'
+import { mkdirSync, copyFileSync, writeFileSync, chmodSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -17,7 +20,7 @@ const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 // adja vissza. Igy a VALODI szkript-ut fut le (a sikeressegi ellenorzessel egyutt), halozat nelkul.
 
 function makeTree(opts: { withLedgerLib?: boolean } = {}): string {
-  const tree = mkdtempSync(join(tmpdir(), 'notify-ledger-'))
+  const tree = mkTmp('notify-ledger-')
   mkdirSync(join(tree, 'scripts', 'hooks'), { recursive: true })
   mkdirSync(join(tree, 'store'), { recursive: true })
   mkdirSync(join(tree, 'bin'), { recursive: true })

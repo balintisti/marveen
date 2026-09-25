@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   CredentialsPermissionError,
@@ -11,6 +10,10 @@ import {
   tarolasiHatter,
   writeSkillFiles,
 } from '../skill-cli-fs.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 /**
  * A JOGOSULTSAG NEM KOMMENT-KERDES, HANEM MERHETO: az itteni allitasok a
@@ -23,7 +26,7 @@ let tmp: string
 
 beforeEach(() => {
   elozoHome = process.env.MARVEEN_SKILL_HOME
-  tmp = mkdtempSync(join(tmpdir(), 'skill-cli-fs-'))
+  tmp = mkTmp('skill-cli-fs-')
   process.env.MARVEEN_SKILL_HOME = join(tmp, 'skill')
 })
 

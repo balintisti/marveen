@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // BC100FAIL810 (measured on ai-bootcamp-vps100, 2026-08-10): the Linux installer
 // died with "installer exited with code 1 at step ollama-whisper" on a host
@@ -75,7 +78,7 @@ function runOllamaBlock(opts: { apiUp: boolean; pullBody?: string }): { code: nu
     'echo REACHED_THE_END',
   ].join('\n')
 
-  const file = join(mkdtempSync(join(tmpdir(), 'marveen-ollama-')), 'block.sh')
+  const file = join(mkTmp('marveen-ollama-'), 'block.sh')
   writeFileSync(file, script)
   try {
     const out = execFileSync('/bin/bash', [file], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] })

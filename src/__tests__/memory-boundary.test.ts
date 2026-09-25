@@ -1,15 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { provisionMemoryBoundaryDir } from '../web/memory-boundary.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 describe('provisionMemoryBoundaryDir', () => {
   let dir: string
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'mem-boundary-'))
+    dir = mkTmp('mem-boundary-')
   })
 
   afterEach(() => {

@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, copyFileSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // WHY THIS CONTRACT IS TESTED AND NOT JUST DOCUMENTED (2026-08-22). The morning
 // briefing is an LLM procedure. On 2026-08-22 three documents told it three
@@ -39,7 +42,7 @@ function runWrapper(root: string, args: string[] = []): { stdout: string; status
 
 /** A throwaway install root holding only the wrapper -- no dist, no build. */
 function rootWithWrapperOnly(label: string): string {
-  const root = mkdtempSync(join(tmpdir(), `agenda-${label}-`))
+  const root = mkTmp(`agenda-${label}-`)
   mkdirSync(join(root, 'scripts'), { recursive: true })
   copyFileSync(WRAPPER, join(root, 'scripts', 'calendar-agenda.sh'))
   return root

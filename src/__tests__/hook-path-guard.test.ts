@@ -10,11 +10,14 @@
 //   (c) boot-time prune detects and removes a planted /tmp hook
 //   (d) fail-open wrapper: a missing hook script exits 0, not non-zero
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, readFileSync, rmSync, mkdirSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { spawnSync, execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..', '..')
@@ -84,7 +87,7 @@ describe('boot-hook-prune.py', () => {
   let tmpHome: string
 
   beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'boot-prune-test-'))
+    tmpHome = mkTmp('boot-prune-test-')
   })
 
   afterEach(() => {
@@ -181,7 +184,7 @@ describe('fail-open wrapper (UserPromptSubmit)', () => {
 
   it('propagates non-zero exit when the script exists and intentionally blocks', () => {
     // Write a tiny python script that explicitly exits 2 (simulates a policy block)
-    const tmp = mkdtempSync(join(tmpdir(), 'fail-open-test-'))
+    const tmp = mkTmp('fail-open-test-')
     try {
       const script = join(tmp, 'policy-block.py')
       writeFileSync(script, 'import sys; sys.exit(2)\n')

@@ -7,9 +7,12 @@
 // transient network error must not block an install.
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const ROOT = resolve(__dirname, '..', '..')
 const MACOS = readFileSync(join(ROOT, 'install-macos.sh'), 'utf-8')
@@ -28,7 +31,7 @@ function sliceProbeFn(src: string): string {
  * parsing, not a re-implementation of it.
  */
 function runProbe(opts: { getMe: string; webhook?: string; updatesStatus?: string; curlFails?: boolean }): string {
-  const dir = mkdtempSync(join(tmpdir(), 'tokenprobe-'))
+  const dir = mkTmp('tokenprobe-')
   try {
     const stub = join(dir, 'curl')
     writeFileSync(

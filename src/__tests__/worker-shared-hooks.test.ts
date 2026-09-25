@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, rmSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readSharedHooks, mergeSharedHooks } from '../web/agent-worker.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // WHAT THIS PINS. The worker config dir symlinks every ~/.claude entry EXCEPT
 // settings.json, so the shared `hooks` block -- where every governance gate in this
@@ -29,7 +32,7 @@ const LOCAL = { matcher: 'Bash', hooks: [{ type: 'command', command: '/abs/worke
 
 describe('readSharedHooks', () => {
   let dir: string
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'shared-hooks-')) })
+  beforeEach(() => { dir = mkTmp('shared-hooks-') })
   afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
   const write = (o: unknown) => writeFileSync(join(dir, 'settings.json'), JSON.stringify(o))

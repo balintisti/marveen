@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -10,6 +10,10 @@ import {
   pruneStaleHooksFromSettingsFile,
   KNOWN_HOOK_SCRIPTS,
 } from '../web/hook-registration-guard.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // 2026-07-11 incident: a WEB_ONLY smoke instance running from a git worktree
 // registered UserPromptSubmit/SessionStart hooks into the user-global
@@ -225,7 +229,7 @@ describe('pruneStaleHookEntries', () => {
 
 describe('pruneStaleHooksFromSettingsFile', () => {
   it('rewrites the file without stale entries and preserves the rest', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'hook-guard-test-'))
+    const dir = mkTmp('hook-guard-test-')
     try {
       // A real script file that must survive pruning.
       const liveScript = join(dir, 'staleness-guard.py')
@@ -257,7 +261,7 @@ describe('pruneStaleHooksFromSettingsFile', () => {
   })
 
   it('leaves a missing or unparseable file untouched', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'hook-guard-test-'))
+    const dir = mkTmp('hook-guard-test-')
     try {
       expect(pruneStaleHooksFromSettingsFile(join(dir, 'nope.json'))).toEqual([])
       const badPath = join(dir, 'settings.json')

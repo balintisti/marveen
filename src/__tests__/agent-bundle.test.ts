@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   stageAgentDirForExport,
@@ -17,6 +16,10 @@ import {
   type BundleManifest,
   type FleetBundleManifest,
 } from '../web/agent-bundle.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // Hermetic: every test builds its own agent source tree and install target in a
 // temp dir, so nothing touches the real AGENTS_BASE_DIR. The full round-trip
@@ -46,7 +49,7 @@ function packBundle(stageRoot: string, agentName: string, includesSecrets: boole
 describe('agent bundle export/import', () => {
   let tmp: string
 
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'agent-bundle-test-')) })
+  beforeEach(() => { tmp = mkTmp('agent-bundle-test-') })
   afterEach(() => { rmSync(tmp, { recursive: true, force: true }) })
 
   it('stages the portable subset and excludes channel secrets by default', () => {
@@ -223,7 +226,7 @@ function packFleetBundle(
 
 describe('fleet bundle export/import', () => {
   let tmp: string
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'fleet-bundle-test-')) })
+  beforeEach(() => { tmp = mkTmp('fleet-bundle-test-') })
   afterEach(() => { rmSync(tmp, { recursive: true, force: true }) })
 
   it('peekBundleKind tells a fleet bundle from a single-agent bundle', () => {

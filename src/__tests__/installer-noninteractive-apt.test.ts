@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, chmodSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, chmodSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // APTPROMPT802, measured on a live host during a real first install:
 //
@@ -68,7 +71,7 @@ function sliceShellFn(src: string, name: string): string {
  * parent's pipe). With the fix both conditions fail.
  */
 function stubDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'aptprompt-'))
+  const dir = mkTmp('aptprompt-')
   const sudo = join(dir, 'sudo')
   writeFileSync(
     sudo,

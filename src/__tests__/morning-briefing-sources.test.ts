@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // scripts/morning-briefing.sh is NOT dead code, and that is the point of this
 // file. On this macOS box nothing runs it -- there is no LaunchAgent and
@@ -97,7 +100,7 @@ describe('morning-briefing.sh -- a chat-id kapu VISELKEDESE', () => {
    * briefing OSSZEALLT-E. Halozat nincs, valodi `claude` nincs.
    */
   function run(chatId: string | null) {
-    const home = mkdtempSync(join(tmpdir(), 'briefing-'))
+    const home = mkTmp('briefing-')
     mkdirSync(join(home, 'scripts'), { recursive: true })
     mkdirSync(join(home, 'store'), { recursive: true })
     // A STUB A `$HOME/.local/bin`-BE MEGY, ES EZ NEM STILUS-KERDES.

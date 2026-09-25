@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 // A watchdog that cannot be satisfied must not run at full speed forever.
 //
 // On a host where the channel plugin CANNOT start -- AVX-less box, broken
@@ -50,7 +52,7 @@ function neverStartedBranch(): string {
 }
 
 function runScript(body: string): { out: string; code: number } {
-  const dir = mkdtempSync(join(tmpdir(), 'neverstart-'))
+  const dir = mkTmp('neverstart-')
   try {
     const p = join(dir, 'probe.sh')
     writeFileSync(p, body + '\n')
@@ -221,7 +223,7 @@ function runChain(dir: string, opts: { ageSeconds: number; pluginAlive: boolean 
 
 describe('the streak file, executed for real and read back', () => {
   it('counts up across consecutive never-started exits and clears on recovery', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'streak-'))
+    const dir = mkTmp('streak-')
     const streakFile = join(dir, 'store', '.channel-neverstart-streak')
     try {
       // 1st exit: no counter yet, budget 600, elapsed 700 -> deadline passed
@@ -259,7 +261,7 @@ describe('the streak file, executed for real and read back', () => {
   })
 
   it('an unwritable store/ does not fake success: the counter stays put and the exit still happens', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'streak-ro-'))
+    const dir = mkTmp('streak-ro-')
     try {
       const storeDir = join(dir, 'store')
       execFileSync('mkdir', ['-p', storeDir])

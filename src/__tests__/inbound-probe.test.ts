@@ -1,8 +1,11 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { mkdtempSync, writeFileSync, mkdirSync, rmdirSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, mkdirSync, rmdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { shouldTriggerDeafnessRespawn, readLastIngestionTimestamp } from '../web/inbound-probe.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // ---------------------------------------------------------------------------
 // AC coverage map (channel-watchdog-prompt.md D3 + wolf-swarm-trial.md #3)
@@ -97,18 +100,18 @@ describe('shouldTriggerDeafnessRespawn', () => {
 // readLastIngestionTimestamp
 // ---------------------------------------------------------------------------
 describe('readLastIngestionTimestamp', () => {
-  const tmpDirs: string[] = []
+  const made: string[] = []
 
   afterEach(() => {
-    for (const d of tmpDirs) {
+    for (const d of made) {
       try { rmSync(d, { recursive: true, force: true }) } catch { /* ignore */ }
     }
-    tmpDirs.length = 0
+    made.length = 0
   })
 
   function makeTmpDir(): string {
-    const d = mkdtempSync(join(tmpdir(), 'inbound-probe-test-'))
-    tmpDirs.push(d)
+    const d = mkTmp('inbound-probe-test-')
+    made.push(d)
     return d
   }
 

@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, chmodSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // The 2026-08-03 bug: `install.sh` printed "Marveen sikeresen telepitve!" and the
 // dashboard never came up. `launchctl list` showed com.marveen.dashboard with no
@@ -68,7 +71,7 @@ function stepBlock(src: string, step: string, nextStep: string): string {
  * `node` it would resolve. Returns whichever node each npm invocation saw.
  */
 function runNpmInstallStep(): { code: number; out: string; nodes: string[] } {
-  const dir = mkdtempSync(join(tmpdir(), 'marveen-nodeabi-'))
+  const dir = mkTmp('marveen-nodeabi-')
   const log = join(dir, 'resolved-node.log')
 
   // A fake `node@22` keg and a fake generic `node`, both on PATH. The generic

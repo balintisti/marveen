@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
+import { rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { MAIN_AGENT_ID } from '../config.js'
 import { checkBearerToken } from '../web/dashboard-auth.js'
 import {
@@ -21,10 +20,14 @@ import {
   DEFAULT_ABANDON_WINDOW_MINUTES,
   type FederationConfig,
 } from '../web/federation/config.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // Isolated store dir (initDatabase(':memory:') precedent: explicit override,
 // never the real checkout's store/).
-const TMP = mkdtempSync(join(tmpdir(), 'fed-config-test-'))
+const TMP = mkTmp('fed-config-test-')
 const IN_TOKEN = 'f'.repeat(64)
 const OUT_TOKEN = 'e'.repeat(64)
 

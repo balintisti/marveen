@@ -18,10 +18,13 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, copyFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, rmSync, mkdirSync, existsSync, copyFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const INSTALLER = join(REPO, 'scripts', 'install-prod-tree-guard-hook.sh')
@@ -53,7 +56,7 @@ function blocks(env: Record<string, string> = {}): boolean {
 }
 
 beforeAll(() => {
-  dir = mkdtempSync(join(tmpdir(), 'prodguard-merge-'))
+  dir = mkTmp('prodguard-merge-')
   mkdirSync(join(dir, 'src/__tests__/setup'), { recursive: true })
   mkdirSync(join(dir, 'scripts'), { recursive: true })
   mkdirSync(join(dir, 'store'), { recursive: true })

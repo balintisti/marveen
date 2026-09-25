@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { ensureSharedClaudeOnboarded } from '../web/agent-process.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // 2026-07-15 bootcamp: ~/.claude.json lost hasCompletedOnboarding, so every
 // fresh (re)spawn on the shared config root parked on the first-run
@@ -12,7 +15,7 @@ describe('ensureSharedClaudeOnboarded', () => {
   let dir: string
   let dotClaude: string
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'onboarded-'))
+    dir = mkTmp('onboarded-')
     dotClaude = join(dir, '.claude.json')
   })
   afterEach(() => rmSync(dir, { recursive: true, force: true }))

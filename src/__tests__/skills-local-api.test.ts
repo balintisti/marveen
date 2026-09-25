@@ -3,17 +3,20 @@
 // for the main agent (PROJECT_ROOT path) and for a sub-agent, not just that
 // the source text contains the right patterns.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdirSync, rmSync, writeFileSync, readFileSync, mkdtempSync, existsSync, readdirSync, statSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import type { RouteContext } from '../web/routes/types.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // ENFORCED sandbox: the earlier version wrote skills into the REAL
 // <repoRoot>/.claude/skills/ and the real agents/ tree (2026-07-27
 // test-suite-mutates-live-state incident class). PROJECT_ROOT and the whole
 // agent-dir resolution are redirected into an mkdtemp root; the handler under
 // test is imported AFTER the mocks so its module graph sees the sandbox.
-const tmpRoot = mkdtempSync(join(tmpdir(), 'skills-local-'))
+const tmpRoot = mkTmp('skills-local-')
 const AGENTS_TMP = join(tmpRoot, 'agents')
 
 vi.mock('../config.js', async (orig) => {

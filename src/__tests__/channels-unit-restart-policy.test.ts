@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, readdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 // The channel could die silently and stay dead, on Linux only.
 //
 // channels.sh has watchdog branches that exit ON PURPOSE ("plugin dead for Ns
@@ -58,7 +60,7 @@ function sliceShellFn(src: string, name: string): string {
 }
 
 function runScript(body: string, env: Record<string, string> = {}): { out: string; code: number } {
-  const dir = mkdtempSync(join(tmpdir(), 'chanrestart-'))
+  const dir = mkTmp('chanrestart-')
   try {
     const p = join(dir, 'probe.sh')
     writeFileSync(p, body + '\n')
@@ -79,7 +81,7 @@ describe('channels.sh watchdog exit status', () => {
   const tail = CHANNELS.slice(CHANNELS.indexOf('ELAPSED=$(( $(date +%s) - START_TS ))'))
 
   it('exits non-zero when a watchdog branch asked for the restart', () => {
-    const store = mkdtempSync(join(tmpdir(), 'chanstore-'))
+    const store = mkTmp('chanstore-')
     try {
       const r = runScript(
         `INSTALL_DIR="${store}"\nmkdir -p "$INSTALL_DIR/store"\nSTART_TS=$(( $(date +%s) - 600 ))\nRESTART_REQUESTED=1\n` + tail,
@@ -91,7 +93,7 @@ describe('channels.sh watchdog exit status', () => {
   })
 
   it('still exits zero on a genuinely normal end (no watchdog request)', () => {
-    const store = mkdtempSync(join(tmpdir(), 'chanstore-'))
+    const store = mkTmp('chanstore-')
     try {
       const r = runScript(
         `INSTALL_DIR="${store}"\nmkdir -p "$INSTALL_DIR/store"\nSTART_TS=$(( $(date +%s) - 600 ))\nRESTART_REQUESTED=0\n` + tail,
@@ -158,7 +160,7 @@ describe('update.sh migration for already-installed machines', () => {
   ].join('\n')
 
   it('rewrites an existing on-failure channels unit and leaves no backup file', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'units-'))
+    const dir = mkTmp('units-')
     try {
       const unit = join(dir, 'marveen-channels.service')
       writeFileSync(unit, OLD_UNIT)
@@ -177,7 +179,7 @@ describe('update.sh migration for already-installed machines', () => {
   })
 
   it('is idempotent: a second run changes nothing and reports nothing', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'units-'))
+    const dir = mkTmp('units-')
     try {
       const unit = join(dir, 'marveen-channels.service')
       writeFileSync(unit, OLD_UNIT)
@@ -193,7 +195,7 @@ describe('update.sh migration for already-installed machines', () => {
   })
 
   it('migrates a renamed install too (unit name derives from the bot name)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'units-'))
+    const dir = mkTmp('units-')
     try {
       const unit = join(dir, 'hermes-channels.service')
       writeFileSync(unit, OLD_UNIT)
@@ -205,7 +207,7 @@ describe('update.sh migration for already-installed machines', () => {
   })
 
   it('does not touch the dashboard unit in the same directory', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'units-'))
+    const dir = mkTmp('units-')
     try {
       const dash = join(dir, 'marveen-dashboard.service')
       writeFileSync(dash, OLD_UNIT.replace('channels.sh', 'start-dashboard.sh'))
@@ -217,7 +219,7 @@ describe('update.sh migration for already-installed machines', () => {
   })
 
   it('survives a directory with no units at all (fresh macOS host)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'units-'))
+    const dir = mkTmp('units-')
     try {
       expect(runMigration(dir).code).toBe(0)
       expect(runMigration(join(dir, 'does-not-exist')).code).toBe(0)

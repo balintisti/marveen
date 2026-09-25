@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { stampFableOverageConsent } from '../web/agent-process.js'
 import { detectsBlockingMenu, detectsModelConsentDialog } from '../pane-state.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const ORG = '238d7fa8-0000-4000-8000-000000000000'
 const ACCT = '4039fb28-0000-4000-8000-000000000000'
@@ -13,7 +16,7 @@ describe('stampFableOverageConsent', () => {
   let dotClaude: string
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'fable-consent-'))
+    dir = mkTmp('fable-consent-')
     dotClaude = join(dir, '.claude.json')
   })
   afterEach(() => {

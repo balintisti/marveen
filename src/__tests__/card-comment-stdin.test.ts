@@ -39,11 +39,13 @@
  */
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { writeFileSync, mkdtempSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SCRIPT = join(ROOT, 'scripts', 'card-comment.sh')
 const NEM_LETEZO_KARTYA = '00000000-teszt-nem-letezo-kartya'
@@ -82,7 +84,7 @@ describe('card-comment.sh -- a `-` (stdin) mod', () => {
   })
 
   it('4. KONTROLL: a FAJL mod valtozatlanul mukodik -- a javitas nem torte el a mukodo utat', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'card-comment-'))
+    const dir = mkTmp('card-comment-')
     const f = join(dir, 'body.txt')
     writeFileSync(f, 'valodi komment-szoveg fajlbol\n')
     const r = run(f, '')

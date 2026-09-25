@@ -26,10 +26,13 @@
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, rmSync, copyFileSync, existsSync, readFileSync } from 'node:fs'
+import { writeFileSync, chmodSync, mkdirSync, rmSync, copyFileSync, existsSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REAL_SCRIPT = join(HERE, '..', '..', 'scripts', 'quota-ceiling-guard.sh')
@@ -58,7 +61,7 @@ interface Run {
 
 /** Stage the real guard in a throwaway install with recording stubs. */
 function makeInstall(runningAgents: string[] = ['dexter'], deployed?: string[]): string {
-  const base = mkdtempSync(join(tmpdir(), 'quota-ceiling-'))
+  const base = mkTmp('quota-ceiling-')
   made.push(base)
   mkdirSync(join(base, 'scripts'))
   mkdirSync(join(base, 'store'))
@@ -324,7 +327,7 @@ describe('quota-ceiling-guard: who it guards is DERIVED, not hardcoded', () => {
     // No agents/ directories and no override. Without this line the output is
     // byte-identical to a healthy fleet under the threshold: nobody messaged,
     // nothing wrong. A guard protecting nobody must not be silent about it.
-    const base = mkdtempSync(join(tmpdir(), 'quota-ceiling-empty-'))
+    const base = mkTmp('quota-ceiling-empty-')
     made.push(base)
     mkdirSync(join(base, 'scripts'))
     mkdirSync(join(base, 'store'))

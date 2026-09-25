@@ -13,10 +13,13 @@
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, rmSync, copyFileSync } from 'node:fs'
+import { writeFileSync, chmodSync, mkdirSync, rmSync, copyFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const REAL_SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'agent-msg.sh')
@@ -28,7 +31,7 @@ afterEach(() => {
 
 /** Stage the real script in a throwaway install, with `curl` replaced. */
 function run(responseJson: string, httpCode = '200'): { stdout: string; stderr: string; code: number } {
-  const base = mkdtempSync(join(tmpdir(), 'agent-msg-'))
+  const base = mkTmp('agent-msg-')
   made.push(base)
   mkdirSync(join(base, 'scripts'))
   mkdirSync(join(base, 'store'))
@@ -84,7 +87,7 @@ function adviceOnly(stderr: string): string[] {
 /** execFileSync only hands back stderr on failure, so capture it explicitly.
  *  `withDb` creates a real (empty) queue database, so the preflight CAN measure. */
 function runCapturingStderr(responseJson: string, withDb = false): { stdout: string; stderr: string } {
-  const base = mkdtempSync(join(tmpdir(), 'agent-msg-'))
+  const base = mkTmp('agent-msg-')
   made.push(base)
   mkdirSync(join(base, 'scripts'))
   mkdirSync(join(base, 'store'))

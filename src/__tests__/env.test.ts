@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { writeFileSync, unlinkSync, mkdtempSync, rmSync } from 'node:fs'
+import { writeFileSync, unlinkSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 // ENFORCED sandbox. The previous version of this file wrote fixtures into --
 // and unlink'd -- the LIVE repo-root .env (snapshot/restore around each test),
 // which in a production checkout recreated the real secrets file with default
@@ -11,7 +13,7 @@ import { tmpdir } from 'node:os'
 // CLAUDECLAW_ENV_DIR hook read at module import; set it BEFORE the dynamic
 // import below. vitest isolates module registries per test file, so the hook
 // cannot leak into other suites.
-const SANDBOX = mkdtempSync(join(tmpdir(), 'env-test-'))
+const SANDBOX = mkTmp('env-test-')
 const testEnvPath = join(SANDBOX, '.env')
 
 beforeAll(() => {

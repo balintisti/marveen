@@ -9,9 +9,12 @@
 // hookot -- az or nem hibazik, nem figyelmeztet, csak nincs. A bizonyitek KIZAROLAG a
 // NYERS szovegben letezik, ezert kell a parse ELOTT megnezni.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const warns: Array<{ ctx: Record<string, unknown>; msg: string }> = []
 vi.mock('../logger.js', () => ({
@@ -33,7 +36,7 @@ const { ensureAgentHooks, ensureAgentStalenessHook, ensureEgressGate,
 describe('json-dup-keys BE VAN KOTVE az agent-settings olvasasaba (6872b0aa)', () => {
   beforeEach(() => {
     warns.length = 0
-    agentRoot = mkdtempSync(join(tmpdir(), 'dupwire-'))
+    agentRoot = mkTmp('dupwire-')
     mkdirSync(join(agentRoot, '.claude'), { recursive: true })
   })
   afterEach(() => rmSync(agentRoot, { recursive: true, force: true }))
@@ -73,7 +76,7 @@ describe('json-dup-keys BE VAN KOTVE az agent-settings olvasasaba (6872b0aa)', (
 describe('a dup-key or MIND AZ OT settingsPath-irot fedi (e3f8f2fd)', () => {
   beforeEach(() => {
     warns.length = 0
-    agentRoot = mkdtempSync(join(tmpdir(), 'dupwire5-'))
+    agentRoot = mkTmp('dupwire5-')
     mkdirSync(join(agentRoot, '.claude'), { recursive: true })
   })
   afterEach(() => rmSync(agentRoot, { recursive: true, force: true }))

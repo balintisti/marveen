@@ -1,9 +1,13 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
+import { mkdirSync, copyFileSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // WHY THE STAMP EXISTS (2026-08-23). The fleet rule is that every handed-over
 // measurement carries WHEN it was taken, ON WHAT STATE, and WHAT WOULD
@@ -60,7 +64,7 @@ function fakeDashboard(): Promise<{ port: number; bodies: Array<Record<string, s
 
 /** A throwaway install root: the script resolves BASE from its own location. */
 function installRoot(label: string, pending?: { to: string; count: number }): string {
-  const root = mkdtempSync(join(tmpdir(), `agentmsg-${label}-`))
+  const root = mkTmp(`agentmsg-${label}-`)
   mkdirSync(join(root, 'scripts'), { recursive: true })
   mkdirSync(join(root, 'store'), { recursive: true })
   copyFileSync(join(REPO, 'scripts', 'agent-msg.sh'), join(root, 'scripts', 'agent-msg.sh'))
@@ -248,7 +252,7 @@ describe('agent-msg.sh -- a __STAMP__ es a kuldesi belyeg EGYUTT el', () => {
     // ujraepitene azt a lyukat, amit ez bezar -- es a kuldes a visszafordithatatlan fel.
     const { port, bodies } = await fakeDashboard()
     const root = installRoot('nodate')
-    const stub = mkdtempSync(join(tmpdir(), 'nodate-bin-'))
+    const stub = mkTmp('nodate-bin-')
     writeFileSync(join(stub, 'date'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
     const r = await new Promise<{ status: number }>((resolve) => {
       const p = spawn('bash', [join(root, 'scripts', 'agent-msg.sh'), 'friday', 'marveen', 'MERVE: __STAMP__'], {

@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { scanResult } from '../skill-scan.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 /**
  * MIOCLISKILL831 -- a CLI szkennerenek PARITASA az EREDETI Python mio-scan-nel.
@@ -72,7 +75,7 @@ function mutaltKimenet(minta: RegExp, csere: string, fixtureNev: string): string
   const forras = readFileSync(FORRAS, 'utf8')
   const rontott = forras.replace(minta, csere)
   if (rontott === forras) throw new Error(`a mutacio nem talalt mintat: ${minta}`)
-  const dir = mkdtempSync(join(tmpdir(), 'skill-scan-mut-'))
+  const dir = mkTmp('skill-scan-mut-')
   try {
     writeFileSync(join(dir, 'skill-scan.ts'), rontott)
     writeFileSync(

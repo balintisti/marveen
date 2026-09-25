@@ -11,6 +11,10 @@
 //   - the coordinator's enqueue fails -> the owner gets it;
 //   - the coordinator is the one standing -> the owner gets it.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const h = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -34,6 +38,7 @@ const h = vi.hoisted(() => {
     info: vi.fn(),
   }
 })
+mkTmp.adopt(h.tmp)   // made in vi.hoisted above, where mkTmp does not exist yet
 
 vi.mock('../config.js', async (orig) => ({
   ...(await orig<typeof import('../config.js')>()),

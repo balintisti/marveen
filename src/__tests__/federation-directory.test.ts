@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { MAIN_AGENT_ID, BOT_NAME } from '../config.js'
 import {
   tryHandleFederation,
@@ -13,8 +12,12 @@ import { _setFederationStoreDirForTest, reloadFederationForTest } from '../web/f
 import { pollPeerManifests, resetFederationPollerCache } from '../web/federation/poller.js'
 import { _setCapabilityStoreDirForTest } from '../web/federation/capabilities.js'
 import type { RouteContext } from '../web/routes/types.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const TMP = mkdtempSync(join(tmpdir(), 'fed-directory-test-'))
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
+
+const TMP = mkTmp('fed-directory-test-')
 const IN_TOKEN = 'b'.repeat(64)
 const OUT_TOKEN = 'c'.repeat(64)
 const NOW = 1_750_000_000_000

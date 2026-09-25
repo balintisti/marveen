@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ScheduledTask } from '../web/scheduled-tasks-io.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // The prompt-prefix branch (schedule-runner.ts: `if (task.type === 'heartbeat')`
 // and the nested `if (boundChatId)`), pinned by BEHAVIOUR -- on the prompt the
@@ -133,7 +136,7 @@ async function deliveredPrompt(): Promise<string> {
 
 describe('prompt prefix: heartbeats stay silent, tasks get a concrete chat', () => {
   beforeEach(() => {
-    tmpRoot = mkdtempSync(join(tmpdir(), 'marveen-prefix-'))
+    tmpRoot = mkTmp('marveen-prefix-')
     vi.stubEnv('SCHEDULER_TZ', 'Europe/Budapest')
     vi.stubEnv('MARVEEN_ROOT', tmpRoot)
     vi.clearAllMocks()

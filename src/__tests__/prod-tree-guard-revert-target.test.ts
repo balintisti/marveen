@@ -14,11 +14,14 @@
 // installer and perform real checkouts -- because the bug was not in a
 // predicate but in what the tree looked like afterwards.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, copyFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, rmSync, mkdirSync, existsSync, copyFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..', '..')
@@ -30,7 +33,7 @@ const git = (...args: string[]) =>
 const head = () => git('rev-parse', '--abbrev-ref', 'HEAD')
 
 beforeEach(() => {
-  repo = mkdtempSync(join(tmpdir(), 'prod-guard-'))
+  repo = mkTmp('prod-guard-')
   git('init', '-q', '.')
   git('config', 'user.email', 't@t')
   git('config', 'user.name', 't')

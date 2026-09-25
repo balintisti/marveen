@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
+import { rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { OWNER_NAME } from '../config.js'
 import { _setFederationStoreDirForTest, reloadFederationForTest } from '../web/federation/config.js'
 import {
@@ -27,8 +26,12 @@ import {
   _setCapabilityStoreDirForTest,
   type CapabilityCache,
 } from '../web/federation/capabilities.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const TMP = mkdtempSync(join(tmpdir(), 'fed-capabilities-test-'))
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
+
+const TMP = mkTmp('fed-capabilities-test-')
 const NOW = 1_750_000_000_000
 const IN_TOKEN = 'i'.repeat(64)
 const OUT_TOKEN = 'o'.repeat(64)

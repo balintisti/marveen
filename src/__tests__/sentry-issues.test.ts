@@ -16,9 +16,12 @@ import {
   loadWatermark,
   saveWatermark,
 } from '../web/sentry-issue-watcher.js'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const NOW = 1_788_000_000_000
 
@@ -263,7 +266,6 @@ describe('payload parsing keeps ABSENT distinct from zero', () => {
     expect(orgsFromPayload(null)).toEqual([])
   })
 })
-
 
 /**
  * CARD 65a324b2 -- an issue that first appears while the poller is DOWN.
@@ -612,7 +614,7 @@ describe('an org unreadable at seeding does not replay its backlog (card f248371
 })
 
 describe('the watermark file (card 65a324b2)', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'sentry-wm-'))
+  const dir = mkTmp('sentry-wm-')
 
   it('round-trips a value', () => {
     const path = join(dir, 'ok.json')

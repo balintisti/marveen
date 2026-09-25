@@ -3,6 +3,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // VAULTUJKULCS822: the master-key path must FAIL CLOSED. The old code silently
 // generated a REPLACEMENT master key when the keychain did not answer (locked
@@ -19,6 +23,7 @@ const tmpRoot = vi.hoisted(() => {
   const { join } = require('node:path') as typeof import('node:path')
   return mkdtempSync(join(tmpdir(), 'vaultkey-test-'))
 })
+mkTmp.adopt(tmpRoot)   // made in vi.hoisted above, where mkTmp does not exist yet
 
 const keychainMock = vi.hoisted(() => ({
   available: true,

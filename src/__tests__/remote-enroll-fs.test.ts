@@ -1,19 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import {
-  mkdtempSync,
-  rmSync,
-  existsSync,
-  writeFileSync,
-  mkdirSync,
-  readFileSync,
-  statSync,
-  readdirSync,
-  chmodSync,
-} from 'node:fs'
+import { rmSync, existsSync, writeFileSync, mkdirSync, readFileSync, statSync, readdirSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { enrollAuthorizedKey } from '../remote-enroll-fs.js'
 import { buildRestrictedLine, validatePublicKeyLine } from '../remote-enroll-core.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const UUID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301'
 
@@ -38,7 +31,7 @@ describe('enrollAuthorizedKey (filesystem)', () => {
   let sshDir: string
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'remote-enroll-'))
+    root = mkTmp('remote-enroll-')
     sshDir = join(root, '.ssh')
   })
   afterEach(() => {

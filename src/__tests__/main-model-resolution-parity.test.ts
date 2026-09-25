@@ -1,12 +1,15 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, rmSync } from 'node:fs'
+import { mkdirSync, writeFileSync, copyFileSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 import { readConfiguredMainModel } from '../web/channel-monitor.js'
 import { DISTRIBUTION_DEFAULT_AGENT_MODEL } from '../config-registry.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // The main agent's model is resolved by TWO independent implementations:
 //
@@ -43,7 +46,7 @@ afterEach(() => {
 /** Build a throwaway install root. channels.sh derives INSTALL_DIR from its own
  *  path, so a copy under <root>/scripts sees <root> as the install. */
 function fixture(envBody: string | null, settingsBody: string | null): string {
-  const root = mkdtempSync(join(tmpdir(), 'mainmodel-'))
+  const root = mkTmp('mainmodel-')
   roots.push(root)
   mkdirSync(join(root, 'scripts'), { recursive: true })
   mkdirSync(join(root, '.claude'), { recursive: true })
@@ -119,7 +122,6 @@ describe('the respawn path reads .env at all (guards the 2026-08-03 defect direc
     expect(readConfiguredMainModel(root)).toBe('claude-opus-5')
   })
 })
-
 
 // RESPAWNMODEL807 structural locks: four copies of the model resolution
 // existed and three went stale. Lock every respawn path onto the ONE resolver

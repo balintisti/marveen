@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import {
-  mkdtempSync, mkdirSync, writeFileSync, rmSync, lstatSync, readlinkSync, readFileSync, existsSync,
-} from 'node:fs'
+import { mkdirSync, writeFileSync, rmSync, lstatSync, readlinkSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // Redirect homedir() (used inside ensureIsolatedChannelConfigDir to find the
 // shared ~/.claude) and agentDir() (used to find the agent cwd) at the temp
@@ -47,7 +49,7 @@ function seedSharedClaude(home: string) {
 }
 
 beforeEach(() => {
-  SANDBOX = mkdtempSync(join(tmpdir(), 'isocfg-'))
+  SANDBOX = mkTmp('isocfg-')
   seedSharedClaude(join(SANDBOX, 'home'))
   mkdirSync(join(SANDBOX, 'agents', 'testagent'), { recursive: true })
 })

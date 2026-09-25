@@ -1,10 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, statSync } from 'node:fs'
+import { writeFileSync, readFileSync, mkdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 // Create a temp dir that acts as the project root for the test.
-const tmpRoot = mkdtempSync(join(tmpdir(), 'marveen-roster-test-'))
+const tmpRoot = mkTmp('marveen-roster-test-')
 
 vi.mock('../config.js', () => ({
   PROJECT_ROOT: tmpRoot,

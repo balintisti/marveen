@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import Database from 'better-sqlite3'
-import { readFileSync, mkdtempSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { HEARTBEAT_NEW_HOT_MEMORIES_SQL } from '../db.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // HBMEMBLIND819: the heartbeat's "new hot memories (1h)" line said 0 for
 // 14/14 rounds over 24h while the real value was 2 in three of them. Second
@@ -19,7 +22,7 @@ import { HEARTBEAT_NEW_HOT_MEMORIES_SQL } from '../db.js'
 const ROOT = join(__dirname, '..', '..')
 
 function fixtureDb() {
-  const dir = mkdtempSync(join(tmpdir(), 'hb-hotmem-'))
+  const dir = mkTmp('hb-hotmem-')
   const db = new Database(join(dir, 'test.db'))
   db.exec(`CREATE TABLE memories (
     id INTEGER PRIMARY KEY, agent_id TEXT, category TEXT, content TEXT, created_at INTEGER

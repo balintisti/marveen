@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
+import { rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import {
   initDatabase,
   createAgentMessage,
@@ -18,8 +17,12 @@ import {
   getFederationConfig,
 } from '../web/federation/config.js'
 import type { RouteContext } from '../web/routes/types.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const TMP = mkdtempSync(join(tmpdir(), 'fed-lifecycle-test-'))
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
+
+const TMP = mkTmp('fed-lifecycle-test-')
 const IN_TOKEN = 'a'.repeat(64)
 const OUT_TOKEN = 'b'.repeat(64)
 

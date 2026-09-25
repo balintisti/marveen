@@ -8,12 +8,15 @@ import { describe, it, expect, vi } from 'vitest'
 import type http from 'node:http'
 import { Readable } from 'node:stream'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import type { RouteContext } from '../web/routes/types.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const tmpRoot = mkdtempSync(join(tmpdir(), 'vault-ssh-keys-import-'))
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
+
+const tmpRoot = mkTmp('vault-ssh-keys-import-')
 mkdirSync(join(tmpRoot, 'store'), { recursive: true })
 
 vi.mock('../config.js', async (orig) => {
@@ -58,7 +61,7 @@ async function importKey(privateKey: string) {
 }
 
 function freshPrivateKeyWithNewline(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'vault-ssh-keys-fixture-'))
+  const dir = mkTmp('vault-ssh-keys-fixture-')
   const keyPath = join(dir, 'k')
   execFileSync('ssh-keygen', ['-t', 'ed25519', '-f', keyPath, '-N', '', '-C', 'fixture'], { stdio: 'pipe' })
   return readFileSync(keyPath, 'utf-8')

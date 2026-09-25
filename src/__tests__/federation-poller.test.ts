@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { _setFederationStoreDirForTest, reloadFederationForTest } from '../web/federation/config.js'
 import {
   pollPeerManifests,
@@ -12,8 +11,12 @@ import {
   MANIFEST_MAX_BODY_BYTES,
   MANIFEST_MAX_AGENTS,
 } from '../web/federation/poller.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const TMP = mkdtempSync(join(tmpdir(), 'fed-poller-test-'))
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
+
+const TMP = mkTmp('fed-poller-test-')
 const OUT_TOKEN = 'a'.repeat(64)
 const IN_TOKEN = 'b'.repeat(64)
 const NOW = 1_750_000_000_000

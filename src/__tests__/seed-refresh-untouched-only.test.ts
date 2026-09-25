@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 // Refreshing a shipped file on an existing machine is a WRITE into someone
 // else's install, so the rule that makes it acceptable has to hold under test.
 //
@@ -40,7 +42,7 @@ function git(dir: string, args: string[]): void {
 
 /** A throwaway install: a git repo with a seed history, plus a ~/.claude tree. */
 function makeFixture() {
-  const base = mkdtempSync(join(tmpdir(), 'seedrefresh-'))
+  const base = mkTmp('seedrefresh-')
   const install = join(base, 'install')
   const home = join(base, 'home')
   mkdirSync(join(install, 'seed-skills', 'demo'), { recursive: true })

@@ -21,12 +21,15 @@
 // alone would otherwise re-open exactly the same gap from the other direction.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { readConfiguredMainModel, readExtraChannelPluginIds } from '../web/channel-monitor.js'
 import { DISTRIBUTION_DEFAULT_AGENT_MODEL } from '../config-registry.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -42,7 +45,7 @@ function writeSettings(obj: unknown): void {
 }
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'main-model-precedence-'))
+  root = mkTmp('main-model-precedence-')
 })
 
 afterEach(() => {
