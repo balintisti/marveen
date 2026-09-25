@@ -263,7 +263,7 @@ describe('database file permissions', () => {
   let tmpDbPath: string
 
   beforeAll(async () => {
-    const { mkdtempSync, chmodSync } = await import('node:fs')
+    const { chmodSync } = await import('node:fs')
     const { tmpdir } = await import('node:os')
     tmpDir = mkTmp('claudeclaw-perm-')
     tmpDbPath = join(tmpDir, DB_FILENAME)

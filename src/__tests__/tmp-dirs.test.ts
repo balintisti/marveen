@@ -54,14 +54,22 @@ function hoistedSpans(src: string): [number, number][] {
   }
   return spans
 }
-/** Every bare mkdtemp call that does NOT go through the helper, as "file:offset". */
+/** Comments AND string literals out: a test name or a fixture text is not a call. */
+function codeOnly(src: string): string {
+  return stripComments(src).replace(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g, "''")
+}
+/**
+ * Every mkdtemp TOKEN outside the helper, as "file:offset" -- the token, not the call shape: an
+ * aliased import (`mkdtempSync as mkdt`) or a destructured `await import('node:fs')` leaked just
+ * the same, and the first version of this scan, which looked for `mkdtempSync(`, missed one.
+ */
 function bareMkdtemps(files: string[]): string[] {
   const bad: string[] = []
   for (const f of files) {
     if (f.endsWith(`helpers${sep}tmp-dirs.ts`)) continue
-    const src = stripComments(readFileSync(f, 'utf8'))
+    const src = codeOnly(readFileSync(f, 'utf8'))
     const spans = hoistedSpans(src)
-    for (const m of src.matchAll(/\bmkdtemp(?:Sync)?\s*\(/g)) {
+    for (const m of src.matchAll(/\bmkdtemp(?:Sync)?\b/g)) {
       const at = m.index ?? 0
       const inHoisted = spans.some(([a, b]) => at >= a && at < b)
       if (inHoisted && /\.adopt\(/.test(src)) continue
@@ -92,6 +100,13 @@ describe('every test file makes its temp dirs through tmpDirs()', () => {
     writeFileSync(hoisted, `const r = vi.hoisted(() => require('node:fs').${MK}'/x'))\nmkTmp.adopt(r)\n`)
     const unadopted = join(dir, 'unadopted.test.ts')
     writeFileSync(unadopted, `const r = vi.hoisted(() => require('node:fs').${MK}'/x'))\n`)
-    expect(bareMkdtemps([bare, hoisted, unadopted]).length).toBe(2)
+    const aliased = join(dir, 'aliased.test.ts')
+    writeFileSync(aliased, `import { ${MK.slice(0, -1)} as mk } from 'node:fs'\nconst d = mk('/x')\n`)
+    const dynamic = join(dir, 'dynamic.test.ts')
+    writeFileSync(dynamic, `const { ${MK.slice(0, -1)} } = await import('node:fs')\n`)
+    const named = join(dir, 'named.test.ts')
+    writeFileSync(named, `it('no ${MK} here', () => {})\n`)   // only in a string: not a call
+    expect(bareMkdtemps([bare, hoisted, unadopted, aliased, dynamic, named]).map((x) => x.split(':')[0].split(sep).pop()))
+      .toEqual(['bare.test.ts', 'unadopted.test.ts', 'aliased.test.ts', 'dynamic.test.ts'])
   })
 })

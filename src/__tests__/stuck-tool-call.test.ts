@@ -6,6 +6,10 @@ import {
   type StuckToolCallThresholds,
 } from '../pane-state.js'
 import { shouldDeferForRecentRespawn, confirmsWedgeProfile } from '../web/stuck-tool-call-watcher.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // Thresholds matching the production defaults in stuck-tool-call-watcher.ts.
 // Repeated here so the tests pin the contract independently of the wrapper
@@ -462,9 +466,8 @@ describe('confirmsWedgeProfile (#248 CPU-profile guard)', () => {
 // wedged TUI writes nothing, so its transcript is >= freezeSeconds old by
 // construction.
 import { verdictStaleByTranscript, STALE_VERDICT_FRESH_MS } from '../web/stuck-tool-call-watcher.js'
-import { readFileSync as rfs, writeFileSync as wfs, mkdtempSync as mkdt, statSync as st } from 'node:fs'
+import { readFileSync as rfs, writeFileSync as wfs, statSync as st } from 'node:fs'
 import { join as pjoin } from 'node:path'
-import { tmpdir as ostmp } from 'node:os'
 import { spawn as pspawn } from 'node:child_process'
 
 describe('verdictStaleByTranscript (pure) -- STUCKFREEZE819', () => {
@@ -491,7 +494,7 @@ describe('verdictStaleByTranscript (pure) -- STUCKFREEZE819', () => {
 
 describe('negative control: a stopped process writes nothing, so the mtime signal cannot mask a real wedge', () => {
   it('SIGSTOP freezes the writer and its file mtime stands still', async () => {
-    const dir = mkdt(pjoin(ostmp(), 'wedge-sim-'))
+    const dir = mkTmp('wedge-sim-')
     const f = pjoin(dir, 'transcript.jsonl')
     wfs(f, '')
     // A writer that appends every 100ms -- the healthy-session analogue.

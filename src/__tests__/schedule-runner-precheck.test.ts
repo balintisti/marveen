@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { writeFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { writeFileSync, rmSync } from 'node:fs'
 import { runPreCheck } from '../web/schedule-runner.js'
 import type { ScheduledTask } from '../web/scheduled-tasks-io.js'
 import { tmpDirs } from './helpers/tmp-dirs.js'
