@@ -572,6 +572,26 @@ export function selectWaitingOnOwner<T extends WorkCountCard>(cards: readonly T[
  *
  * `commentAuthorsByCard` maps card id -> the set of authors who have commented.
  */
+/**
+ * A CENSUS comment: board bookkeeping by jarvis, not a finding (card 57cb8d64, marveen 2026-09-25
+ * 03:05). marveen decided the COMMENT KIND decides, not the role: didi measured 22 reviewer cards
+ * where jarvis spoke last, 21 of them census, 1 a real reply (29a6b7e9) -- the one a role-based
+ * exclusion would have swallowed.
+ *
+ * A CLOSED TOKEN AT THE START, not a content detector (marveen's condition, the VERDIKT lesson: a
+ * "contains" test gives false positives). The only thing allowed in front of it is the date/time
+ * stamp jarvis's comments begin with -- measured 2026-09-25 on 497 census-looking comments, the
+ * common heads are "2026-09-24 -- jarvis, testing-cenzus" and "2026-09-24 17:43:57 CEST -- jarvis,
+ * TESTING-CENZUS". Other shapes seen ("JARVIS TESTING-CENZUS (...)", "CIM ATIRVA (jarvis, ...") do
+ * NOT match on purpose: widening to them would be content-guessing; the header is jarvis's to keep.
+ */
+export const CENSUS_HEADER =
+  /^(?:\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?(?:\s+CES?T)?\s*--\s*)?jarvis,\s+testing-cenzus\b/i
+
+export function isCensusComment(content: string): boolean {
+  return CENSUS_HEADER.test(content)
+}
+
 export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
   check: WorkCheck,
   agent: string,
@@ -601,6 +621,9 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
    *  deliver them nowhere -- the same silence this file refuses elsewhere. The
    *  narrowing switches on when the declarations exist, not before. */
   reviewers?: ReadonlySet<string>,
+  /** Same shape as lastCommentAtByCard, but built WITHOUT census comments (isCensusComment).
+   *  Absent = not measured, and then every comment counts, exactly as before. */
+  lastRealCommentAtByCard?: Map<string, Map<string, number>>,
 ): T[] {
   const live = cards.filter((c) => !c.archived_at)
   switch (check.kind) {
@@ -763,11 +786,18 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
         // AND NOT jarvis: his comments are mixed -- real independent measurement one hour,
         // census bookkeeping the next -- so role alone cannot decide it. That question is worth
         // 34 of the 44 items, i.e. most of the benefit, and it belongs to the coordinator.
+        //
+        // THE JARVIS QUESTION, DECIDED (marveen 2026-09-25, card 57cb8d64): not his role but the
+        // KIND of comment. A comment that opens with the census header does not re-arm; every
+        // other comment of his re-arms like anyone's. So an author re-arms the card only with a
+        // NON-census comment after mine -- read from lastRealCommentAtByCard when it is given.
         const spokeAfterMe: string[] = []
         for (const [author, at] of lastCommentAtByCard.get(c.id) ?? []) {
           if (author !== agent && at > mine) spokeAfterMe.push(author)
         }
-        if (spokeAfterMe.length > 0 && spokeAfterMe.every((a) => a === coordinator)) return false
+        const real = lastRealCommentAtByCard ? (lastRealCommentAtByCard.get(c.id) ?? new Map<string, number>()) : null
+        const reArming = spokeAfterMe.filter((a) => a !== coordinator && (real === null || (real.get(a) ?? -Infinity) > mine))
+        if (spokeAfterMe.length > 0 && reArming.length === 0) return false
         return true
       })
   }

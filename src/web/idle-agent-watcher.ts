@@ -12,6 +12,7 @@ import {
   decideIdleAlert,
   parseWorkCheck,
   selectDeclaredWork,
+  isCensusComment,
   buildNoWorkNotice,
   orphanPullList,
   laneFilteredPullList,
@@ -215,6 +216,38 @@ function lastCommentAtByCard(): Map<string, Map<string, number>> {
   return map
 }
 
+/**
+ * lastCommentAtByCard WITHOUT census comments (card 57cb8d64), for the reviewer queue's re-arm rule.
+ *
+ * Cheap on purpose -- it runs every tick: a LIKE prefilter on the first 160 characters finds the few
+ * hundred candidates, the exact anchored token (isCensusComment) decides in JS, and one grouped
+ * query rebuilds the map without those ids. NO census comment -> the raw map itself, so nothing can
+ * change. A failed query -> undefined, which selectDeclaredWork reads as "not measured" and counts
+ * every comment, as before: a broken lookup must not silence a queue.
+ */
+export function lastRealCommentAtByCard(raw: Map<string, Map<string, number>>): Map<string, Map<string, number>> | undefined {
+  try {
+    const candidates = getDb()
+      .prepare("SELECT id, substr(content, 1, 160) AS head FROM kanban_comments WHERE substr(content, 1, 160) LIKE '%testing-cenzus%'")
+      .all() as { id: number; head: string }[]
+    const census = candidates.filter((r) => isCensusComment(r.head)).map((r) => r.id)
+    if (census.length === 0) return raw
+    const rows = getDb()
+      .prepare('SELECT card_id, author, MAX(created_at) AS at FROM kanban_comments WHERE id NOT IN (SELECT value FROM json_each(?)) GROUP BY card_id, author')
+      .all(JSON.stringify(census)) as { card_id: string; author: string; at: number }[]
+    const map = new Map<string, Map<string, number>>()
+    for (const row of rows) {
+      let inner = map.get(row.card_id)
+      if (!inner) { inner = new Map(); map.set(row.card_id, inner) }
+      inner.set(row.author, row.at)
+    }
+    return map
+  } catch (err) {
+    logger.warn({ err }, 'idle guard: census-comment lookup failed; every comment counts this tick')
+    return undefined
+  }
+}
+
 /** null = could not tell (no session, capture failed, unknown pane). NOT the same as
  *  "busy". Folding an unreadable pane into "busy" silently switches the guard off for
  *  that agent -- a failure that looks exactly like health, which is the one shape this
@@ -284,6 +317,7 @@ export function tick(): void {
     const labelsByCard = getLabelsForAllCards()
     const cards = listKanbanCards().map((c) => ({ ...c, labels: labelsByCard.get(c.id) ?? [] }))
     const comments = lastCommentAtByCard()
+    const realComments = lastRealCommentAtByCard(comments)
     const now = Date.now()
 
     // Alerts are COLLECTED here and sent once at the end of the sweep. Sending inside
@@ -323,7 +357,7 @@ export function tick(): void {
       // last wake NAMED -- a count from a different list could suppress a wake for work
       // the agent was never shown.
       const ownItems = check
-        ? selectDeclaredWork(check, agent, cards, comments, MAIN_AGENT_ID, nowSec, reviewers)
+        ? selectDeclaredWork(check, agent, cards, comments, MAIN_AGENT_ID, nowSec, reviewers, realComments)
         : null
       const ownWorkCount = ownItems ? ownItems.length : null
 
