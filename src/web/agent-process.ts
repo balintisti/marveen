@@ -3618,6 +3618,11 @@ const PANE_READY_CONFIRM_DELAY_MS = 250
 // the text, so the post-send retry budget never ran). Best-effort: a
 // tmux failure is logged and swallowed so the watcher loop keeps going.
 export function sendEnterToSession(session: string, host: string | null = null): boolean {
+  // The OTHER shared bare-Enter choke point (card 2a8cb07f): the stuck-input watcher and the
+  // schedule runner submit "parked input" through here after their own pane classification,
+  // and nothing proves that classification can never read a permission menu as parked text.
+  // One check here covers all four call sites; false means "nothing sent", which they tolerate.
+  if (permissionPromptBlocksBareEnter(session, host, captureTmux, 'sendEnterToSession')) return false
   try {
     runTmux(host, ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
     return true
