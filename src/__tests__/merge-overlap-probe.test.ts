@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
+
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card b610c593 (c)): a bare mkdtempSync here leaked every run.
+const mkTmp = tmpDirs()
 
 // WHY THIS TOOL EXISTS (2026-08-23, from Jarvis's distinction).
 //
@@ -34,7 +38,7 @@ function git(cwd: string, ...args: string[]): string {
 
 /** A repo with a base commit and two branches, each rewriting the given lines. */
 function repoWith(aLines: number[], bLines: number[], aFile = 'f.txt', bFile = 'f.txt'): string {
-  const dir = mkdtempSync(join(tmpdir(), 'mergeoverlap-'))
+  const dir = mkTmp('mergeoverlap-')
   git(dir, 'init', '-q', '-b', 'base')
   git(dir, 'config', 'user.email', 't@t.t')
   git(dir, 'config', 'user.name', 'T')
@@ -166,7 +170,7 @@ describe('merge-overlap.py -- which shared files need a behaviour measurement', 
     // A zero-length hunk is reported at the line BEFORE the insert. Treating it
     // as empty would put the riskiest edit of all -- a line added in the middle
     // of someone else's rewrite -- in the "disjoint" column.
-    const dir = mkdtempSync(join(tmpdir(), 'mergeoverlap-ins-'))
+    const dir = mkTmp('mergeoverlap-ins-')
     git(dir, 'init', '-q', '-b', 'base')
     git(dir, 'config', 'user.email', 't@t.t')
     git(dir, 'config', 'user.name', 'T')

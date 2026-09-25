@@ -1,9 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { stripComments } from './helpers/strip-comments.js'
 import { detectTransitions, readQuotaSourceState, transitionMessage, QUOTA_SNAPSHOT_MAX_AGE_MIN } from '../data-source-alarm.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card b610c593 (c)): a bare mkdtempSync here leaked every run.
+const mkTmp = tmpDirs()
 
 // Cards 0114968c + 2b1e373a. Three data sources can fail quietly, and every one
 // of them fails INTO the shape of calm: a 403 calendar renders as "no upcoming
@@ -19,7 +23,7 @@ import { detectTransitions, readQuotaSourceState, transitionMessage, QUOTA_SNAPS
 // as a rule everyone mutes.
 
 function tmpState(): string {
-  return join(mkdtempSync(join(tmpdir(), 'dsalarm-')), 'state.json')
+  return join(mkTmp('dsalarm-'), 'state.json')
 }
 
 const NOW = 1_700_000_000
@@ -113,7 +117,7 @@ describe('transitionMessage -- what the coordinator actually reads', () => {
 
 describe('readQuotaSourceState -- which meter states still carry alerting', () => {
   function withLatest(json: string): string {
-    const p = join(mkdtempSync(join(tmpdir(), 'dsq-')), 'usage-latest.json')
+    const p = join(mkTmp('dsq-'), 'usage-latest.json')
     writeFileSync(p, json)
     return p
   }
