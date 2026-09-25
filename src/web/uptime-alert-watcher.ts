@@ -324,7 +324,18 @@ export function resetPollerInFlight(): void {
 
 // Exported for the contract test: the whole point is what this function RECORDS, and that
 // cannot be asserted from the tick without also standing up gcloud.
-export async function getJson(url: string, token: string): Promise<Probe<unknown>> {
+// A POST-CONNECT CAP ON EVERY CALL (card 77c305a4). undici already caps the CONNECT phase at
+// 10 s (13 of the 22 failures in didi's 1283-call measurement sat at 10.49-10.58 s), but a call
+// whose connection stood up had NO ceiling: one took 73.8 s and a hung one would never return.
+// Measured distribution (2026-09-11..12, n=1283): p99 10.5 s, max 73.8 s, and 100 s interrupts
+// ZERO of them. It sits BELOW the 120 s tick on purpose: a hung call ends inside the tick that
+// started it, instead of racing the next tick's overdue check. 15 s was rejected: it would have
+// killed the one successful 74 s call (the alarming direction, per the card's ruling).
+// The signal covers the body read too, so a response whose headers arrive and whose body never
+// finishes is capped by the same number.
+export const CALL_TIMEOUT_MS = 100_000
+
+export async function getJson(url: string, token: string, timeoutMs: number = CALL_TIMEOUT_MS): Promise<Probe<unknown>> {
   const where = url.split('?')[0]
   const startedAt = Date.now()
   const entry: InFlightCall = { url: where, startedAt }
@@ -336,7 +347,7 @@ export async function getJson(url: string, token: string): Promise<Probe<unknown
     logger.info({ ms: Date.now() - startedAt, url: where, outcome }, 'uptime poller: API call latency')
   }
   try {
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(timeoutMs) })
     if (!res.ok) {
       done(`http-${res.status}`)
       logger.warn({ status: res.status, url: where }, 'uptime poller: API call failed')
@@ -353,7 +364,8 @@ export async function getJson(url: string, token: string): Promise<Probe<unknown
     done('ok')
     return { ok: true, value }
   } catch (err) {
-    done('threw')
+    // A cap hit is named as such, so the log separates "we gave up at the cap" from any other throw.
+    done(err instanceof Error && err.name === 'TimeoutError' ? 'timeout' : 'threw')
     logger.warn({ err, url: where }, 'uptime poller: API call threw')
     const msg = redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, MAX_REASON_CHARS)
     return { ok: false, reason: `request to ${where} threw: ${msg}`, transient: true }
@@ -430,18 +442,42 @@ function enqueueVerified(content: string): boolean {
   }
 }
 
+// ONE TICK AT A TIME (card 77c305a4, didi 03:10, marveen's decision). The per-call cap ends a
+// hung CALL inside its tick, but a tick makes two calls, each with a retry: worst case
+// 2 x (100 + 1 + 100) = 402 s, over three intervals -- and setInterval does not wait, so up to
+// four ticks could run at once against a stalled API. A tick that finds the previous one still
+// running is SKIPPED, with one log line; it does not queue.
+let tickRunning = false
+
+/** Test seam: the guard is module state. */
+export function resetUptimeTickGuard(): void {
+  tickRunning = false
+}
+
 export async function uptimeTick(now = Date.now()): Promise<void> {
   // A call still running as this tick starts cannot complete inside its own tick any more, so
   // it is the hang card 77c305a4 is about -- and it is only visible HERE, because the hung call
-  // itself never reaches its own logging. Warn, do not abort: we have no measured basis for
-  // deciding it is dead rather than slow, and killing a slow-but-working call is the alarming
-  // direction that card's ruling rules out.
+  // itself never reaches its own logging. Checked BEFORE the skip below, so a skipped tick still
+  // names what is hanging. Warn, do not abort: the per-call cap (CALL_TIMEOUT_MS) ends it.
   for (const c of overdueCalls(inFlight, now)) {
     logger.warn(
-      { url: c.url, msSoFar: now - c.startedAt, limitMs: INTERVAL_MS },
-      'uptime poller: an API call is still in flight as the next tick begins -- no timeout exists on this path (card 77c305a4)',
+      { url: c.url, msSoFar: now - c.startedAt, limitMs: INTERVAL_MS, capMs: CALL_TIMEOUT_MS },
+      'uptime poller: an API call is still in flight as the next tick begins -- the per-call cap will end it (card 77c305a4)',
     )
   }
+  if (tickRunning) {
+    logger.warn({ inFlight: inFlight.length }, 'uptime poller: the previous tick is still running -- this tick is SKIPPED, not queued (card 77c305a4)')
+    return
+  }
+  tickRunning = true
+  try {
+    await uptimeTickBody(now)
+  } finally {
+    tickRunning = false
+  }
+}
+
+async function uptimeTickBody(now: number): Promise<void> {
   const tokenProbe = await accessToken()
   const projProbe = await project()
 
