@@ -405,8 +405,16 @@ export function mergeSharedHooks(
  * NOT a rule "only the main checkout": four legitimate shared hooks run from ~/.claude/hooks/,
  * and `$VAR` paths are resolved by the hook itself. Those have no worktree ancestor and pass.
  */
-export function worktreeBoundHookPath(command: string): string | null {
-  for (const m of command.matchAll(/(?:^|[\s'"=;(])(\/[^\s'";)]+)/g)) {
+/** `~/x`, `$HOME/x` and `${HOME}/x` written out as `<home>/x`, so the path checks below see the same
+ *  file however the hook spells it (didi 02:19: the same worktree written with $HOME passed). */
+function expandHome(command: string, home: string): string {
+  return command.replace(/(^|[\s'"=;(])(?:~|\$HOME|\$\{HOME\})(?=\/)/g, (_m, pre: string) => pre + home)
+}
+
+const ABS_PATH = /(?:^|[\s'"=;(])(\/[^\s'";)]+)/g
+
+export function worktreeBoundHookPath(command: string, home: string = homedir()): string | null {
+  for (const m of expandHome(command, home).matchAll(ABS_PATH)) {
     let dir = m[1]
     while (dir && dir !== '/') {
       try {
@@ -419,19 +427,42 @@ export function worktreeBoundHookPath(command: string): string | null {
   return null
 }
 
+/**
+ * An absolute path under the home dir -- outside ~/.claude -- whose DIRECTORY no longer exists, or null
+ * (didi 02:19). The worktree walk above needs the directory to exist, so a hook pointing into a
+ * worktree that has since been REMOVED passed: it runs nothing today, and the day a worktree of the
+ * same name is created again (the `marveen-wt-<topic>` names repeat), it runs that worktree's
+ * unreviewed code. The PARENT is tested, not the file: a removed worktree takes its whole tree with
+ * it, while a legitimate hook may name a log file that simply does not exist yet.
+ */
+export function vanishedHomeHookPath(command: string, home: string = homedir()): string | null {
+  const claudeDir = join(home, '.claude') + '/'
+  for (const m of expandHome(command, home).matchAll(ABS_PATH)) {
+    const p = m[1]
+    if (!p.startsWith(home + '/') || p.startsWith(claudeDir)) continue
+    if (!existsSync(dirname(p))) return p
+  }
+  return null
+}
+
 /** Drop every hook entry whose command runs from a linked worktree -- shared AND local, since the
  *  merge preserves local entries and a bad hook that reached a worker once would otherwise stay.
  *  Each drop is logged by path: a silently discarded gate is the failure this module guards. */
-export function dropWorktreeBoundHooks(block: HookBlock | undefined, where: string): HookBlock | undefined {
+export function dropWorktreeBoundHooks(block: HookBlock | undefined, where: string, home: string = homedir()): HookBlock | undefined {
   if (!block) return block
   const out: HookBlock = {}
   for (const [event, entries] of Object.entries(block)) {
     const kept = (Array.isArray(entries) ? entries : []).filter((entry) => {
       const cmds = ((entry as { hooks?: { command?: unknown }[] })?.hooks ?? [])
         .map((h) => (typeof h?.command === 'string' ? h.command : ''))
-      const bad = cmds.map(worktreeBoundHookPath).find((p) => p != null)
-      if (bad) logger.warn({ where, event, path: bad }, 'worker hooks: REFUSED a hook that runs from a git worktree')
-      return !bad
+      const bad = cmds.map((c) => worktreeBoundHookPath(c, home)).find((p) => p != null)
+      if (bad) {
+        logger.warn({ where, event, path: bad }, 'worker hooks: REFUSED a hook that runs from a git worktree')
+        return false
+      }
+      const gone = cmds.map((c) => vanishedHomeHookPath(c, home)).find((p) => p != null)
+      if (gone) logger.warn({ where, event, path: gone }, 'worker hooks: REFUSED a hook whose directory no longer exists (a removed worktree, or a moved tree)')
+      return !gone
     })
     if (kept.length) out[event] = kept
   }

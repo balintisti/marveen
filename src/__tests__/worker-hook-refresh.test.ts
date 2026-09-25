@@ -17,7 +17,7 @@ vi.mock('../logger.js', () => ({
   logger: { warn: (...a: unknown[]) => { warns.push(a) }, info: () => {}, debug: () => {}, error: () => {} },
 }))
 
-const { worktreeBoundHookPath, dropWorktreeBoundHooks, writeWorkerSettings, refreshWorkerSettings, makeWorkerCtx } =
+const { worktreeBoundHookPath, vanishedHomeHookPath, dropWorktreeBoundHooks, writeWorkerSettings, refreshWorkerSettings, makeWorkerCtx } =
   await import('../web/agent-worker.js')
 
 let root: string
@@ -54,6 +54,42 @@ describe('worktreeBoundHookPath: the mechanism is `.git` as a FILE, not a direct
     expect(worktreeBoundHookPath(`python3 ${MAIN}/scripts/hooks/db-gate.py`)).toBeNull()
     expect(worktreeBoundHookPath(`${PLAIN}/telegram_progress.py`)).toBeNull()
     expect(worktreeBoundHookPath('python3 "$CLAUDE_PROJECT_DIR/scripts/hooks/x.py"')).toBeNull()
+  })
+})
+
+// didi 02:19: two input shapes the first version was blind to. `root` stands in for the home dir.
+describe('the same worktree however it is spelled, and a worktree that is already gone (didi 02:19)', () => {
+  it('$HOME, ${HOME} and ~ spellings of a worktree path are refused like the absolute one', () => {
+    for (const pre of ['$HOME', '${HOME}', '~']) {
+      expect(worktreeBoundHookPath(`python3 ${pre}/main-wt-x/scripts/hooks/gate.py`, root), pre)
+        .toBe(`${WT}/scripts/hooks/gate.py`)
+    }
+  })
+  it('CONTROL: the same spellings into the MAIN checkout pass', () => {
+    for (const pre of ['$HOME', '${HOME}', '~']) {
+      expect(worktreeBoundHookPath(`python3 ${pre}/main/scripts/hooks/db-gate.py`, root), pre).toBeNull()
+    }
+  })
+  it('a hook into a REMOVED worktree (its directory is gone) is named, in any spelling', () => {
+    expect(vanishedHomeHookPath(`python3 ${root}/gone-wt/scripts/hooks/gate.py`, root)).toBe(`${root}/gone-wt/scripts/hooks/gate.py`)
+    expect(vanishedHomeHookPath('python3 $HOME/gone-wt/scripts/hooks/gate.py', root)).toBe(`${root}/gone-wt/scripts/hooks/gate.py`)
+  })
+  it('...and the day a worktree of that name is created again, the worktree check catches it', () => {
+    const cmd = `python3 ${root}/gone-wt/scripts/hooks/gate.py`
+    mkdirSync(join(root, 'gone-wt', 'scripts', 'hooks'), { recursive: true })
+    writeFileSync(join(root, 'gone-wt', '.git'), `gitdir: ${MAIN}/.git/worktrees/gone\n`)
+    expect(vanishedHomeHookPath(cmd, root)).toBeNull()
+    expect(worktreeBoundHookPath(cmd, root)).toBe(`${root}/gone-wt/scripts/hooks/gate.py`)
+  })
+  it('CONTROLS: a not-yet-written LOG file in an existing dir, ~/.claude, and paths outside home all pass', () => {
+    expect(vanishedHomeHookPath(`python3 ${MAIN}/scripts/hooks/db-gate.py >> ${MAIN}/new-hook.log`, root)).toBeNull()
+    expect(vanishedHomeHookPath(`python3 ${root}/.claude/hooks/missing/x.py`, root)).toBeNull()
+    expect(vanishedHomeHookPath('python3 /nonexistent-top/x.py', root)).toBeNull()
+  })
+  it('dropWorktreeBoundHooks refuses the vanished one too, and says why', () => {
+    const block = { PreToolUse: [hook(`python3 ${root}/gone-wt/x.py`), hook(`python3 ${MAIN}/scripts/hooks/db-gate.py`)] }
+    expect(dropWorktreeBoundHooks(block, 'test', root)).toEqual({ PreToolUse: [hook(`python3 ${MAIN}/scripts/hooks/db-gate.py`)] })
+    expect(JSON.stringify(warns)).toContain('directory no longer exists')
   })
 })
 
