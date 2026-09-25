@@ -1830,6 +1830,34 @@ const NO_STUCK_INPUT: StuckInputState = {
  * @param now         Current clock (ms).
  * @param thresholds  Confirm / dedup / maxAttempts knobs.
  */
+/**
+ * THE HOLD IS BOUNDED (card b0181f2b, marveen's decision 2026-09-25 03:19). 3faaf3b6 made the
+ * common case recoverable, and three measured paths still fall back to the origin check and park
+ * the box on 'hold' forever: the injected-prompt record expired (10 min TTL), it was lost on a
+ * dashboard restart (in-memory), or a newer prompt overwrote it. marveen chose NOT to widen the
+ * registry (each widening closes ONE path, and the fourth is unseen) but to bound the hold: the
+ * SAME parked box, unchanged for this long, is announced ONCE. Any path, the unknown ones too.
+ *
+ * 20 minutes, from the recovery's own numbers: the budget is spent after ~1 min on the stuck-input
+ * watcher's thresholds (12 s confirm + 4 x 12 s, maxAttempts 5) and ~4 min on the channel monitor's
+ * (90 s + 3 x 45 s, maxAttempts 4) -- both callers run this recovery -- and the record lives 10 min.
+ * A box still parked at 20 min has outlived every automatic path. (The first version of this comment
+ * named only the ~4 min set; jarvis measured the ~1 min one.)
+ */
+export const PARKED_HOLD_ALERT_MS = 20 * 60_000
+
+/** Pure: is this spell's box overdue, and not yet announced? `alertedSig` is the box already
+ *  announced for this session -- the same box is announced once; a different box starts over. */
+export function parkedHoldOverdue(
+  state: StuckInputState,
+  now: number,
+  alertedSig: string | null | undefined,
+  holdMs: number = PARKED_HOLD_ALERT_MS,
+): boolean {
+  return state.parkedSig !== null && state.firstSeenAt !== null
+    && now - state.firstSeenAt >= holdMs && alertedSig !== state.parkedSig
+}
+
 export function decideStuckInputRecovery(
   parkedSig: string | null,
   prev: StuckInputState,

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { shouldAlertParkedGiveUp } from '../web/stuck-input-watcher.js'
+import { shouldAlertParkedGiveUp, alertGiveUp } from '../web/stuck-input-watcher.js'
 
 // RIASZTASZAJ819: three identical owner alerts in one afternoon ("a samu
 // agens bemenete beragadt ... kezi restart kell") at an agent that was
@@ -71,11 +71,12 @@ describe('wiring: the owner alert goes through the gate, recovery does not', () 
   it('checkLocalSession exists and its alert is gated by shouldAlertParkedGiveUp', () => {
     expect(start).toBeGreaterThanOrEqual(0)
     expect(fnBody).toMatch(/shouldAlertParkedGiveUp\(/)
-    // The sendAlert call must be INSIDE the gated branch: no sendAlert may
-    // appear in the body before the gate call.
+    // The alert call must be INSIDE the gated branch. Since b0181f2b it is alertGiveUp (the
+    // coordinator first, the owner as fallback) and no bare sendAlert remains in the body.
     const gateIdx = fnBody.indexOf('shouldAlertParkedGiveUp(')
-    const alertIdx = fnBody.indexOf('sendAlert(')
+    const alertIdx = fnBody.indexOf('alertGiveUp(')
     expect(alertIdx).toBeGreaterThan(gateIdx)
+    expect(fnBody).not.toMatch(/sendAlert\(/)
   })
 
   it('the pane state is read fresh at alert time (capturePane + detectPaneState)', () => {
@@ -99,5 +100,26 @@ describe('wiring: the owner alert goes through the gate, recovery does not', () 
     const gateIdx = fnBody.indexOf('shouldAlertParkedGiveUp(')
     expect(recoverIdx).toBeGreaterThanOrEqual(0)
     expect(gateIdx).toBeGreaterThan(recoverIdx)
+  })
+})
+
+describe('alertGiveUp: the coordinator first, the owner only as fallback (b0181f2b, marveen 05:14)', () => {
+  const run = (running: boolean, enqueueThrows = false) => {
+    const sent: string[] = []
+    const route = alertGiveUp('X beragadt', {
+      coordinatorRunning: () => running,
+      toCoordinator: () => { if (enqueueThrows) throw new Error('queue down'); sent.push('coordinator') },
+      toOwner: () => { sent.push('owner') },
+    })
+    return { route, sent }
+  }
+  it('coordinator running -> the coordinator gets it, the owner does not', () => {
+    expect(run(true)).toEqual({ route: 'coordinator', sent: ['coordinator'] })
+  })
+  it('coordinator not running -> the owner gets it, no letter into an unread queue', () => {
+    expect(run(false)).toEqual({ route: 'owner', sent: ['owner'] })
+  })
+  it('the letter cannot be enqueued -> the owner gets it', () => {
+    expect(run(true, true)).toEqual({ route: 'owner', sent: ['owner'] })
   })
 })

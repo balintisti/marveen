@@ -41,7 +41,7 @@ import { paneSourceSurvivesDrop, getPaneSource } from './pane-source-survival.js
 import { probeSigTransition, sigTransitionFacts } from './stuck-sig-transition-probe.js'
 import {
   detectPaneState, decidePaneErrorAlert, detectsBlockingMenu, detectsFirstRunGate, detectsModelConsentDialog, detectsPermissionPrompt, type PaneErrorAlertState, type PaneState,
-  stuckInputSignature, decideStuckInputRecovery, parkedChannelInput,
+  stuckInputSignature, decideStuckInputRecovery, parkedChannelInput, parkedHoldOverdue,
   parkedInputText, shouldClearTruncatedPreamble,
   parkedInputRowCount, submitLanded, decideStuckInputAction,
   parkedScheduledTaskInput, parkedMachineOriginInput, parkedMainInputHasRemedy,
@@ -313,6 +313,54 @@ export function applyStuckRestartBusyGuard(
 //      (e.g. an inter-agent notification) -> clear + re-inject the collapsed
 //      text. A sub-agent's input box never holds a human draft, so this is
 //      safe; the main session stays conservative (Enter / <channel>-only).
+// The box already announced per session (card b0181f2b). Module state, one map for both callers of
+// recoverStuckInputForSession (the channel monitor and the stuck-input watcher), so the same box is
+// announced once however many loops look at it; a new box -- or no box -- clears it.
+const parkedHoldAnnounced = new Map<string, string>()
+
+/** Test seam. */
+export function resetParkedHoldAnnounced(): void {
+  parkedHoldAnnounced.clear()
+}
+
+/**
+ * Announce a box that has sat parked, unchanged, past PARKED_HOLD_ALERT_MS -- ONCE per box. Nothing
+ * is cleared: it may be a human draft, and a human or the coordinator decides.
+ *
+ * WHO HEARS IT follows 45101873: the COORDINATOR, the owner only as fallback. And when the box is
+ * in the coordinator's OWN pane, straight to the owner -- that pane is the one a letter cannot
+ * reach, since the router does not type into a pane with a parked box.
+ */
+export function noteParkedHold(
+  session: string,
+  agent: string | null,
+  state: StuckInputState,
+  pane: string | null,
+  nowMs: number,
+): void {
+  if (state.parkedSig === null) { parkedHoldAnnounced.delete(session); return }
+  if (!parkedHoldOverdue(state, nowMs, parkedHoldAnnounced.get(session))) return
+  parkedHoldAnnounced.set(session, state.parkedSig)
+  const first = ((pane != null ? parkedInputText(pane) : null) ?? '').split('\n')[0].trim().slice(0, 80) || '(nem olvashato)'
+  const minutes = Math.round((nowMs - (state.firstSeenAt ?? nowMs)) / 60_000)
+  const text =
+    `[stuck-input] A(z) "${session}" beviteli dobozaban ${minutes} perce VALTOZATLANUL all egy parkolt ` +
+    `szoveg, es az automatikus helyreallitas nem vitte at. Elso sora: "${first}". Automatikus torles ` +
+    `NINCS (emberi piszkozat is lehet): nezd meg a panelt, es dontsd el, bekuldod vagy torlod.`
+  if (agent === MAIN_AGENT_ID || session === MAIN_CHANNELS_SESSION) {
+    logger.warn({ session, minutes }, 'Stuck input -- parked box held past the bound in the COORDINATOR pane: owner alerted')
+    sendAlert(text)
+    return
+  }
+  try {
+    createAgentMessage('system', MAIN_AGENT_ID, text)
+    logger.warn({ session, minutes }, 'Stuck input -- parked box held past the bound: coordinator told')
+  } catch (err) {
+    logger.warn({ err, session }, 'Stuck input -- could not tell the coordinator about a held box; owner alerted')
+    sendAlert(text)
+  }
+}
+
 export async function recoverStuckInputForSession(
   session: string,
   agent: string | null,
@@ -333,6 +381,9 @@ export async function recoverStuckInputForSession(
   probeSigTransition(session, agent, sigTransitionFacts(
     sig, prev.parkedSig, prev.firstSeenAt, prev.attempts, decision.recover, nowMs,
   ))
+  // EVERY tick, not only a recovering one: after the attempts budget the decision stops
+  // recovering, and that held spell is exactly the one the bound is for (card b0181f2b).
+  noteParkedHold(session, agent, decision.next, pane, nowMs)
   if (decision.recover && pane != null) {
     const attempt = decision.next.attempts
     const block = parkedChannelInput(pane)
