@@ -194,6 +194,14 @@ describe('outgoing-copy gate tokenization: a foreign letter does not split a wor
     })
   }
 
+  it('a digit glued to an accentless word does not hide it: "koszonom2" is still caught', () => {
+    // Pins the letter class as LETTERS ONLY in the leading run. A `\w` class (digits
+    // allowed) would make "koszonom2" one unknown token and pass it; didi's mutant.
+    const probs = auditAccent('Szia, a 82324-es ügyfél még nem kapott levelet, koszonom2 hogy szóltál, kérlek nézd meg, és jelezz.')
+    expect(probs.length).toBe(1)
+    expect(probs[0]).toContain('koszonom -> ')
+  })
+
   it('control: a standalone accentless "evi" in the same sentence is still caught', () => {
     // The carrier must be long enough for the Hungarian-language detector to engage; a
     // too-short sentence skips the whole audit and this control would pass for nothing.
