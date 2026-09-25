@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 // ensureMainAgentIsolatedConfigDir: extends the already-proven sub-agent
 // isolated-config machinery to the MAIN channels agent, now on ANY platform
 // (PLAN.md GAP 1, 2026-07-23 marveen-channels silent outage) -- the previous
@@ -16,7 +18,7 @@ import { tmpdir } from 'node:os'
 // suite uses a SINGLE fixed sandbox for the whole file (created once, mocked
 // once) and resets its mutable contents per test, rather than a fresh
 // mkdtempSync per test like the homedir()-only isolated-channel-config suite.
-const SANDBOX = mkdtempSync(join(tmpdir(), 'mainisocfg-'))
+const SANDBOX = mkTmp('mainisocfg-')
 const PROJECT = join(SANDBOX, 'project')
 const STORE = join(PROJECT, 'store')
 const HOME = join(SANDBOX, 'home')

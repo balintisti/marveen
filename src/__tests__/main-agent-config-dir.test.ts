@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, readFileSync } from 'node:fs'
+import { mkdirSync, rmSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 // MAIN_AGENT_CONFIG_DIR: an EXPLICIT CLAUDE_CONFIG_DIR for the main channels
 // agent, for the operator whose bot has its own Claude login (separate from the
 // fleet's). Distinct from MAIN_AGENT_ISOLATED_CONFIG, which authenticates from
@@ -26,7 +28,7 @@ vi.mock('../settings-store.js', async (orig) => {
 const { resolveMainAgentConfigDir } = await import('../web/agent-process.js')
 
 beforeEach(() => {
-  SANDBOX = mkdtempSync(join(tmpdir(), 'maincfg-'))
+  SANDBOX = mkTmp('maincfg-')
   mkdirSync(join(SANDBOX, 'home', '.claude-bot'), { recursive: true })
   SETTING = ''
 })

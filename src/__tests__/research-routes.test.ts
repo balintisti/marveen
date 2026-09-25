@@ -3,10 +3,13 @@
 // the path-traversal arm: encoded ../ sequences, non-.md names, and unknown
 // agents must all be rejected before any filesystem read happens.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdirSync, rmSync, writeFileSync, mkdtempSync, existsSync, readdirSync, statSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import type { RouteContext } from '../web/routes/types.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // ENFORCED sandbox: the earlier version used the REAL PROJECT_ROOT/agents
 // tree, creating <repoRoot>/research/ and agents/zz-.../ in a live checkout
@@ -14,7 +17,7 @@ import type { RouteContext } from '../web/routes/types.js'
 // the whole agent-dir resolution are redirected into an mkdtemp root; the
 // handler under test is imported AFTER the mocks so its module graph sees the
 // sandbox.
-const tmpRoot = mkdtempSync(join(tmpdir(), 'research-routes-'))
+const tmpRoot = mkTmp('research-routes-')
 const AGENTS_TMP = join(tmpRoot, 'agents')
 
 vi.mock('../config.js', async (orig) => {

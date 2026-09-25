@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { execFile } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { signAttestation } from '../skill-cli-core.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 /**
  * A LEGFONTOSABB ALLITAS EBBEN A KORBEN: egy megjelolt fajl BAJTJAI EL SEM
@@ -38,7 +41,7 @@ let tmp: string
 
 beforeEach(async () => {
   keresek = []
-  tmp = mkdtempSync(join(tmpdir(), 'skill-cli-upload-'))
+  tmp = mkTmp('skill-cli-upload-')
   szerver = createServer((req, res) => {
     let body = ''
     req.on('data', (c) => (body += c))

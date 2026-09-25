@@ -11,20 +11,34 @@
  *
  *   const mkTmp = tmpDirs()
  *   const dir = mkTmp('doccmd-')
+ *
+ * A directory that has to exist BEFORE the imports -- made inside vi.hoisted(), where mkTmp does
+ * not exist yet -- is handed over with `mkTmp.adopt(dir)` and removed the same way (card 66756e73).
  */
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll } from 'vitest'
 
-export function tmpDirs(): (prefix: string) => string {
+export interface TmpDirs {
+  (prefix: string): string
+  /** Remove `dir` with the others -- for a directory made where mkTmp was not yet available. */
+  adopt(dir: string): string
+}
+
+export function tmpDirs(): TmpDirs {
   const made: string[] = []
   afterAll(() => {
     for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true })
   })
-  return (prefix: string) => {
+  const mk = ((prefix: string) => {
     const d = mkdtempSync(join(tmpdir(), prefix))
     made.push(d)
     return d
+  }) as TmpDirs
+  mk.adopt = (dir: string) => {
+    made.push(dir)
+    return dir
   }
+  return mk
 }

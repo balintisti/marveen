@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildAgentPrompt } from '../heartbeat.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // The heartbeat used to ask its sub-agent to fetch mail itself through an MCP
 // tool. That made email the only source whose absence was invisible: calendar
@@ -88,7 +91,7 @@ describe('scripts/gmail-recent.py -- caller contract', () => {
     // stdout would turn a missing config into a thrown exception inside the
     // collector, and the collector would report "threw" instead of the real
     // reason.
-    const empty = mkdtempSync(join(tmpdir(), 'gmail-noconfig-'))
+    const empty = mkTmp('gmail-noconfig-')
     const r = runWithHome(empty)
     expect(r.status).toBe(0)
     const parsed = parseOrExplain(r)
@@ -97,7 +100,7 @@ describe('scripts/gmail-recent.py -- caller contract', () => {
   })
 
   it('names the config PATH on failure, so the operator knows what to fix', () => {
-    const empty = mkdtempSync(join(tmpdir(), 'gmail-noconfig-path-'))
+    const empty = mkTmp('gmail-noconfig-path-')
     const parsed = parseOrExplain(runWithHome(empty))
     expect(String(parsed.error)).toContain('gmail-imap.json')
   })
@@ -107,7 +110,7 @@ describe('scripts/gmail-recent.py -- caller contract', () => {
     // stringifies the arguments, a debug print left behind. Point it at a host
     // that cannot resolve so the login genuinely fails, and assert the
     // sentinel is absent from everything the caller can see.
-    const home = mkdtempSync(join(tmpdir(), 'gmail-badhost-'))
+    const home = mkTmp('gmail-badhost-')
     mkdirSync(join(home, '.config', 'marveen'), { recursive: true })
     writeFileSync(
       join(home, '.config', 'marveen', 'gmail-imap.json'),
@@ -132,7 +135,7 @@ describe('scripts/gmail-recent.py -- caller contract', () => {
     // "No mail" and "we could not look" must not be the same value. An
     // ok:true with messages:[] on a failed fetch is the exact silence this
     // script exists to remove.
-    const home = mkdtempSync(join(tmpdir(), 'gmail-distinguish-'))
+    const home = mkTmp('gmail-distinguish-')
     mkdirSync(join(home, '.config', 'marveen'), { recursive: true })
     writeFileSync(
       join(home, '.config', 'marveen', 'gmail-imap.json'),

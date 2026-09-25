@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // Van-e fek a koordinatoron -- es tuleli-e a kovetkezo indulast? (kartya caaf32a4)
 //
@@ -21,7 +24,7 @@ import { fileURLToPath } from 'node:url'
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'permission-guard-check.sh')
 
 let dir: string
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'permguard-')) })
+beforeEach(() => { dir = mkTmp('permguard-') })
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
 const write = (name: string, obj: unknown): string => {

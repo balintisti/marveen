@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync, cpSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, rmSync, cpSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { substituteTemplatePlaceholders } from '../web/agent-scaffold.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // PORTCHAIN1: WEB_PORT is user-selectable, but several places still asked a
 // fixed 3420. The worst were not the cosmetic strings:
@@ -20,7 +23,7 @@ const ROOT = join(__dirname, '..', '..')
 
 /** A throwaway install tree whose .env selects a non-default port. */
 function makeInstall(port: string): string {
-  const dir = mkdtempSync(join(tmpdir(), 'portchain-'))
+  const dir = mkTmp('portchain-')
   mkdirSync(join(dir, 'scripts'), { recursive: true })
   mkdirSync(join(dir, 'store'), { recursive: true })
   writeFileSync(join(dir, '.env'), `OWNER_NAME=Teszt\nWEB_PORT=${port}\n`)
@@ -86,7 +89,7 @@ describe('PORTCHAIN1: the port chain follows WEB_PORT on a NON-default port', ()
   })
 
   it('falls back to 3420 only when nothing selects a port', () => {
-    const bare = mkdtempSync(join(tmpdir(), 'portchain-bare-'))
+    const bare = mkTmp('portchain-bare-')
     mkdirSync(join(bare, 'scripts'), { recursive: true })
     try {
       expect(resolvedPort('scripts/doctor.sh', bare)).toBe('3420')

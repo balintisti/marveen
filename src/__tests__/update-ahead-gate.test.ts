@@ -1,10 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, copyFileSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { checkUpdatePreflight, type GitRunner } from '../update-preflight.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // Kartya bae4df49. Az ahead-kapu azt hivatott megfogni, hogy egy DIVERGALT
 // checkoutot ne probaljunk `--ff-only`-val frissiteni. A regi alak:
@@ -60,7 +63,7 @@ describe('checkUpdatePreflight -- a "nem merheto" nem nulla', () => {
  * repoban semmi elesre nem hat.
  */
 function fixture(withUpstream: boolean): string {
-  const dir = mkdtempSync(join(tmpdir(), 'updgate-'))
+  const dir = mkTmp('updgate-')
   const origin = join(dir, 'origin.git')
   const work = join(dir, 'work')
   const sh = (cwd: string, ...args: string[]) => {

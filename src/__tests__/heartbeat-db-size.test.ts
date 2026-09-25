@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync, mkdtempSync, statSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { initDatabase, getDbFileSizeMb } from '../db.js'
 import { buildHeartbeatSummaryResponse } from '../web/routes/kanban.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // HBDBMERET822: the heartbeat's "DB size" line had NO sanctioned source --
 // the scaffold template said `- DB size: <X> MB` and every session re-invented
@@ -20,7 +23,7 @@ const ROOT = join(__dirname, '..', '..')
 
 describe('getDbFileSizeMb (server-side, against the OPENED database)', () => {
   it('reports the real on-disk size of the database it opened', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'hb-dbsize-'))
+    const dir = mkTmp('hb-dbsize-')
     const dbPath = join(dir, 'test.db')
     initDatabase(dbPath)
     const reported = getDbFileSizeMb()

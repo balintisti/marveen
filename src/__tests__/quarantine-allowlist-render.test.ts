@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { renderQuarantineReader, ownerAllowedDomains, quarantineReaderDomains, isPublicFetchHost } from '../web/agent-scaffold.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // The quarantine reader may only fetch from an allowlist, and that list used to
 // exist TWICE: once in this template and once in store/egress-allowlist.json,
@@ -78,7 +81,7 @@ describe('renderQuarantineReader', () => {
 })
 
 describe('ownerAllowedDomains', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'egress-'))
+  const dir = mkTmp('egress-')
 
   it('reads the domains array', () => {
     writeFileSync(join(dir, 'egress-allowlist.json'), JSON.stringify({ domains: ['a.com', 'b.com'] }))
@@ -114,7 +117,7 @@ describe('ownerAllowedDomains', () => {
 // before a fetch was ever attempted. The render input must be the union the
 // hook enforces.
 describe('quarantineReaderDomains', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'egress-q-'))
+  const dir = mkTmp('egress-q-')
 
   it('unions domains and quarantine_domains, domains first', () => {
     writeFileSync(join(dir, 'egress-allowlist.json'),
@@ -227,7 +230,7 @@ describe('isPublicFetchHost', () => {
   })
 
   it('drops the rejected entries from ownerAllowedDomains instead of failing the read', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'egress-filter-'))
+    const dir = mkTmp('egress-filter-')
     writeFileSync(join(dir, 'egress-allowlist.json'), JSON.stringify({
       domains: ['claude.com', '127.0.0.1', 'localhost', '169.254.169.254', '192.168.1.50', '*', 'docs.anthropic.com'],
     }))

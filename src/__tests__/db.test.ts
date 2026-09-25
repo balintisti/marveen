@@ -26,6 +26,10 @@ import {
   COMPLETION_REPORT_PREFIX,
 } from '../db.js'
 import { DB_FILENAME } from '../config.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 beforeAll(() => {
   // Teszt adatbázis inicializálás -- in-memory, hogy a teszt SOHA ne irjon a
@@ -259,9 +263,9 @@ describe('database file permissions', () => {
   let tmpDbPath: string
 
   beforeAll(async () => {
-    const { mkdtempSync, chmodSync } = await import('node:fs')
+    const { chmodSync } = await import('node:fs')
     const { tmpdir } = await import('node:os')
-    tmpDir = mkdtempSync(join(tmpdir(), 'claudeclaw-perm-'))
+    tmpDir = mkTmp('claudeclaw-perm-')
     tmpDbPath = join(tmpDir, DB_FILENAME)
     // First init creates the file + sidecars (already tightened).
     initDatabase(tmpDbPath)

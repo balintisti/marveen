@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // The gate's WIRING: does the exit code still follow the verdict?
 //
@@ -30,7 +33,7 @@ const SCRIPT = join(REPO, 'scripts', 'secret-gate.ts')
 const STRIPE_FIXTURE = ['sk', 'live', '51ABCDEFGHIJKLMNOPQRSTUV'].join('_')
 
 function repoWith(files: Record<string, string>) {
-  const dir = mkdtempSync(join(tmpdir(), 'secret-gate-wiring-'))
+  const dir = mkTmp('secret-gate-wiring-')
   const git = (...a: string[]) => execFileSync('git', a, { cwd: dir, encoding: 'utf-8' })
   git('init', '-q', '-b', 'main')
   git('config', 'user.email', 't@t')

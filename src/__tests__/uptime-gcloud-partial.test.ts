@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs'
+import { writeFileSync, chmodSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { runGcloud, GCLOUD_STDIO } from '../web/uptime-alert-watcher.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // ============================================================================================
 // WHAT THESE PIN, AND WHY THEY EXIST AT ALL (card 3d038bac)
@@ -26,7 +29,7 @@ describe('runGcloud -- the real timeout path, end to end', () => {
   let prevPath: string | undefined
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'fakegcloud-'))
+    dir = mkTmp('fakegcloud-')
     prevPath = process.env.PATH
     process.env.PATH = `${dir}:${prevPath ?? ''}`
   })
@@ -91,7 +94,7 @@ describe('node itself: both sync APIs time out, and neither can be trusted for t
   let dir: string
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'nodeprobe-'))
+    dir = mkTmp('nodeprobe-')
   })
   afterEach(() => rmSync(dir, { recursive: true, force: true }))
 

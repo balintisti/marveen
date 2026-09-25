@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { EventEmitter } from 'node:events'
 import { initDatabase, createAgentMessage, getAgentMessage, getPendingMessages } from '../db.js'
 import { deliverFederatedBatch } from '../web/message-router.js'
@@ -9,6 +8,10 @@ import { tryHandleMessages } from '../web/routes/messages.js'
 import { _setFederationStoreDirForTest, reloadFederationForTest } from '../web/federation/config.js'
 import { AGENTS_BASE_DIR } from '../web/agent-config.js'
 import type { RouteContext } from '../web/routes/types.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // Fixture agent directories required by the from-auth check in /api/messages.
 // 'localboss' is the fictional test sender used throughout this suite.
@@ -20,7 +23,7 @@ import type { RouteContext } from '../web/routes/types.js'
 // cimzettet), es most is pontosan azt meri; csak a vilag lett szigorubb.
 const FIXTURE_AGENTS = ['localboss', 'localmate']
 
-const TMP = mkdtempSync(join(tmpdir(), 'fed-feedback-test-'))
+const TMP = mkTmp('fed-feedback-test-')
 const IN_TOKEN = 'b'.repeat(64)
 const OUT_TOKEN = 'c'.repeat(64)
 

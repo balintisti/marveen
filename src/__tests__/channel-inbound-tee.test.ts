@@ -1,10 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { buildTelegramMcpServerConfig } from '../web/agent-process.js'
 import { PROJECT_ROOT } from '../config.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const WRAPPER = join(PROJECT_ROOT, 'scripts', 'channel-inbound-tee.mjs')
 
@@ -30,7 +33,7 @@ function runWrapper(stateDir: string, childCode: string): Promise<{ stdout: stri
 
 describe('channel-inbound-tee', () => {
   it('passes stdout through byte-for-byte and tees split channel notifications to the inbox', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'channel-inbound-tee-'))
+    const dir = mkTmp('channel-inbound-tee-')
     try {
       const notification = JSON.stringify({
         jsonrpc: '2.0',

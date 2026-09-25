@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { rootMismatchMessage, jsonDrift, lineDrift, UNRESOLVED, RUNTIME_ASSIGNED_FIELDS } from '../seed-drift.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // A seeded scheduled task never receives a later template fix
 // (`if (existsSync(dest)) continue`), and that early exit is NOT a bug -- it
@@ -131,14 +135,13 @@ describe('condition 4: an unresolved placeholder stops the tool', () => {
 // than keeping a hand-maintained exception list, which would have needed an
 // entry for every future data dir and silently missed the one nobody added.
 import { compareTask } from '../seed-drift.js'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join as j } from 'node:path'
 
 describe('a template subdirectory is the seeder working, not drift', () => {
   let root: string, seed: string, live: string
   beforeEach(() => {
-    root = mkdtempSync(j(tmpdir(), 'drift-dir-'))
+    root = mkTmp('drift-dir-')
     seed = j(root, 'seed', 'task'); live = j(root, 'live', 'task')
     mkdirSync(seed, { recursive: true }); mkdirSync(live, { recursive: true })
     writeFileSync(j(seed, 'SKILL.md'), 'same\n'); writeFileSync(j(live, 'SKILL.md'), 'same\n')

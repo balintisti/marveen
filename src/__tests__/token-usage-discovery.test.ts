@@ -10,9 +10,12 @@
 //   - an agent whose dir is not a symlink is listed once, not twice;
 //   - CONTROL: the old suffix rule alone would miss the resolved dir (the defect, on the fixture).
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest'
-import { mkdtempSync, mkdirSync, symlinkSync, rmSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, symlinkSync, rmSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 vi.mock('../logger.js', () => ({ logger: { warn: () => {}, info: () => {}, debug: () => {}, error: () => {} } }))
 
@@ -33,7 +36,7 @@ const enc = (p: string) => realpathSync(p).replace(/[/.]/g, '-')
 let projects: string
 
 beforeAll(() => {
-  root = mkdtempSync(join(tmpdir(), 'tokdisc-'))
+  root = mkTmp('tokdisc-')
   agentsBase = join(root, 'agents')
   mkdirSync(agentsBase)
   // 'linked': agents/linked -> Shared/marveen-linked, like the live fleet since 09-18

@@ -3,11 +3,13 @@
 // agent's CLAUDE.md (not just that the source text exists somewhere in the
 // scaffold), proving the wiring reaches the agent file on every respawn.
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, statSync } from 'node:fs'
+import { writeFileSync, readFileSync, mkdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const tmpRoot = mkdtempSync(join(tmpdir(), 'marveen-autonomy-test-'))
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
+const tmpRoot = mkTmp('marveen-autonomy-test-')
 
 vi.mock('../config.js', () => ({
   PROJECT_ROOT: tmpRoot,

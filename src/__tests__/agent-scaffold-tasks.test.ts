@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // Isolated unit test for the JSON-rewrite path of
 // ensureDefaultScheduledTasks. We re-implement the core copy-with-
@@ -29,7 +32,7 @@ describe('ensureDefaultScheduledTasks JSON-rewrite (task-config.json)', () => {
   let tmp: string
 
   beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), 'scaffold-test-'))
+    tmp = mkTmp('scaffold-test-')
   })
 
   afterEach(() => {

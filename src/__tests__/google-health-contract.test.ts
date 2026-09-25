@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, copyFileSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // WHY A HEALTH CHECK FOR SOMETHING THAT WORKS (2026-08-22). The Google access
 // -- calendar, Drive, mail -- was set up on 2026-08-20 and verified once, by
@@ -38,7 +41,7 @@ function runWrapper(root: string): { stdout: string; status: number } {
 }
 
 function rootWithWrapperOnly(label: string): string {
-  const root = mkdtempSync(join(tmpdir(), `ghealth-${label}-`))
+  const root = mkTmp(`ghealth-${label}-`)
   mkdirSync(join(root, 'scripts'), { recursive: true })
   copyFileSync(WRAPPER, join(root, 'scripts', 'google-health.sh'))
   return root

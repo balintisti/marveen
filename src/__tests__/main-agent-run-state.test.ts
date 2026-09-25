@@ -1,8 +1,11 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { MAIN_AGENT_ID } from '../config.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // Card 228c9252. `agentRunState()` asked tmux for `agent-<name>` for EVERY
 // agent, and the main agent does not run under that name -- it runs in
@@ -19,7 +22,7 @@ import { MAIN_AGENT_ID } from '../config.js'
 // The tmux stub prints whatever session list the current test wrote to a file,
 // so one resolved binary serves every case (the bin resolver caches the PATH
 // lookup, not the output).
-const stubDir = mkdtempSync(join(tmpdir(), 'tmux-stub-'))
+const stubDir = mkTmp('tmux-stub-')
 const sessionsFile = join(stubDir, 'sessions.txt')
 writeFileSync(join(stubDir, 'tmux'), `#!/bin/sh\ncat ${sessionsFile}\n`, { mode: 0o755 })
 process.env.TMUX_STUB_SESSIONS = sessionsFile

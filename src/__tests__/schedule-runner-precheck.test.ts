@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { writeFileSync, mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, rmSync } from 'node:fs'
 import { runPreCheck } from '../web/schedule-runner.js'
 import type { ScheduledTask } from '../web/scheduled-tasks-io.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // Tests for the heartbeat pre-check mechanism (#234).
 //
@@ -31,7 +34,7 @@ function makeTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
 }
 
 function withScript(content: string, ext = '.sh'): { dir: string; file: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'precheck-'))
+  const dir = mkTmp('precheck-')
   const file = join(dir, `pre-check${ext}`)
   writeFileSync(file, content, { mode: 0o755 })
   return { dir, file }

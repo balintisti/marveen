@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest'
-import { existsSync, mkdirSync, readFileSync, rmSync, mkdtempSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 // ENFORCED sandbox, not an assumed one. The previous version of this file
 // imported the real settings-store (STORE_DIR = <repoRoot>/store) and relied
 // on a comment claiming the checkout lives under /tmp; run in a production
@@ -10,7 +12,7 @@ import { tmpdir } from 'node:os'
 // incident: the deletion dropped MAIN_AGENT_ISOLATED_CONFIG and 401'd the
 // main agent that evening). STORE_DIR is baked into OVERRIDES_PATH at import
 // time, so the sandbox must be mocked in before the module loads.
-const SANDBOX = mkdtempSync(join(tmpdir(), 'settings-store-'))
+const SANDBOX = mkTmp('settings-store-')
 const STORE = join(SANDBOX, 'store')
 
 vi.mock('../config.js', async (orig) => {

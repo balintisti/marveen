@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, readdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 // A repair that only runs when there is something to pull is a repair that
 // never runs on the machines that need it.
 //
@@ -41,7 +43,7 @@ function sliceShellFn(src: string, name: string): string {
 }
 
 function runScript(body: string): { out: string; code: number } {
-  const dir = mkdtempSync(join(tmpdir(), 'unitmaint-'))
+  const dir = mkTmp('unitmaint-')
   try {
     const p = join(dir, 'probe.sh')
     writeFileSync(p, body + '\n')
@@ -96,7 +98,7 @@ describe('the maintenance itself, executed for real', () => {
   }
 
   it('repairs BOTH unit kinds in one pass', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'units-'))
+    const dir = mkTmp('units-')
     try {
       writeFileSync(join(dir, 'marveen-channels.service'), OLD_CHANNELS_UNIT)
       writeFileSync(join(dir, 'marveen-morning.timer'), OLD_MORNING_TIMER)
@@ -113,7 +115,7 @@ describe('the maintenance itself, executed for real', () => {
   })
 
   it('is idempotent: the second pass changes nothing and says nothing', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'units-'))
+    const dir = mkTmp('units-')
     try {
       writeFileSync(join(dir, 'marveen-channels.service'), OLD_CHANNELS_UNIT)
       writeFileSync(join(dir, 'marveen-morning.timer'), OLD_MORNING_TIMER)
@@ -133,7 +135,7 @@ describe('the maintenance itself, executed for real', () => {
   })
 
   it('survives a machine with no unit directory at all (macOS)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'units-'))
+    const dir = mkTmp('units-')
     try {
       expect(run(join(dir, 'nope')).code).toBe(0)
       expect(run(dir).code).toBe(0)

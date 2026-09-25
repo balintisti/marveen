@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SCRIPT = join(REPO_ROOT, 'scripts', 'skill-index.sh')
@@ -29,7 +32,7 @@ describe('skill-index.sh -- no-arg mode (backward compat)', () => {
   let tmpHome: string
 
   beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'skill-index-test-'))
+    tmpHome = mkTmp('skill-index-test-')
     mkdirSync(join(tmpHome, '.claude', 'skills', 'skill-alpha'), { recursive: true })
     writeFileSync(
       join(tmpHome, '.claude', 'skills', 'skill-alpha', 'SKILL.md'),
@@ -79,7 +82,7 @@ describe('skill-index.sh -- AGENT_DIR mode (merged index)', () => {
   let agentDir: string
 
   beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'skill-index-test-'))
+    tmpHome = mkTmp('skill-index-test-')
     // Global skill
     mkdirSync(join(tmpHome, '.claude', 'skills', 'skill-global'), { recursive: true })
     writeFileSync(
@@ -194,7 +197,7 @@ describe('skill-index.sh -- graceful handling of missing global dir', () => {
   // script that is both mute and status-less would indeed be indistinguishable from one
   // that never started.
   it('prints NOTHING on the happy path, so no caller has a reason to redirect', () => {
-    const home = mkdtempSync(join(tmpdir(), 'skill-quiet-'))
+    const home = mkTmp('skill-quiet-')
     try {
       const dir = join(home, '.claude', 'skills', 'thin-one')
       mkdirSync(dir, { recursive: true })
@@ -210,7 +213,7 @@ describe('skill-index.sh -- graceful handling of missing global dir', () => {
   })
 
   it('-v restores the confirmation line for a human who wants it', () => {
-    const home = mkdtempSync(join(tmpdir(), 'skill-verbose-'))
+    const home = mkTmp('skill-verbose-')
     try {
       const dir = join(home, '.claude', 'skills', 'thin-one')
       mkdirSync(dir, { recursive: true })
@@ -223,7 +226,7 @@ describe('skill-index.sh -- graceful handling of missing global dir', () => {
   })
 
   it('EXITS NON-ZERO when a skill is over the limit, so a silenced caller still trips', () => {
-    const home = mkdtempSync(join(tmpdir(), 'skill-size-'))
+    const home = mkTmp('skill-size-')
     try {
       const dir = join(home, '.claude', 'skills', 'fat-one')
       mkdirSync(dir, { recursive: true })
@@ -238,7 +241,7 @@ describe('skill-index.sh -- graceful handling of missing global dir', () => {
   it('exits 0 when every skill is under the limit -- the guard must not cry wolf', () => {
     // The other direction, and the one that makes the test above mean something: a
     // guard wired to fail always would pass the assertion above and be useless.
-    const home = mkdtempSync(join(tmpdir(), 'skill-size-ok-'))
+    const home = mkTmp('skill-size-ok-')
     try {
       const dir = join(home, '.claude', 'skills', 'thin-one')
       mkdirSync(dir, { recursive: true })
@@ -251,7 +254,7 @@ describe('skill-index.sh -- graceful handling of missing global dir', () => {
   })
 
   it('exits cleanly when ~/.claude/skills does not exist', () => {
-    const emptyHome = mkdtempSync(join(tmpdir(), 'skill-index-test-'))
+    const emptyHome = mkTmp('skill-index-test-')
     try {
       const { exitCode } = runScript([], { HOME: emptyHome })
       expect(exitCode).toBe(0)
@@ -268,7 +271,7 @@ describe('skill-index.sh -- a MARADEK KERET, nem csak az ertek (mandark, 2026-08
   // KOVETKEZO, aki egy jogos sort beir.
 
   function baselinedHome(lines: number) {
-    const home = mkdtempSync(join(tmpdir(), 'skill-room-'))
+    const home = mkTmp('skill-room-')
     const dir = join(home, '.claude', 'skills', 'pinned')
     mkdirSync(dir, { recursive: true })
     const head = makeSkillMd('pinned', 'x')
@@ -346,7 +349,7 @@ describe('skill-index.sh -- a KEMENY ag ALSZIK a mai konstansokkal (didi, 2026-0
   // elove, hanem szolva.
 
   function homeWith(lines: number) {
-    const home = mkdtempSync(join(tmpdir(), 'skill-dormant-'))
+    const home = mkTmp('skill-dormant-')
     const dir = join(home, '.claude', 'skills', 'pinned')
     mkdirSync(dir, { recursive: true })
     const head = makeSkillMd('pinned', 'x')
@@ -425,7 +428,7 @@ describe('skill-index.sh -- a KARAKTER-KERET: sajat alapvonal (83cac1ed)', () =>
   // merodik, a kerete a sor-keret ugyanabban a suruségben (LIMIT * atlagos sorhossz).
 
   function fileWith(lines: number, chars: number) {
-    const home = mkdtempSync(join(tmpdir(), 'skill-chars-'))
+    const home = mkTmp('skill-chars-')
     const dir = join(home, '.claude', 'skills', 'pinned')
     mkdirSync(dir, { recursive: true })
     const per = Math.floor(chars / lines)
@@ -584,7 +587,7 @@ describe('skill-index.sh -- `--check <skill>` (0d0e3892)', () => {
   }
 
   beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'skill-check-'))
+    tmpHome = mkTmp('skill-check-')
     write('sajat-skill', 40)
     write('masik-skill', 40)
   })
@@ -756,7 +759,7 @@ describe('skill-index.sh -- a karakter-szam LOCALE-FUGGETLEN (38221eef)', () => 
   }
 
   it('ugyanazt a szamot adja `LC_ALL=C` es UTF-8 alatt -- ez a kartya elfogadasi probaja', () => {
-    const home = mkdtempSync(join(tmpdir(), 'skill-charcount-'))
+    const home = mkTmp('skill-charcount-')
     mkdirSync(join(home, '.claude', 'skills', 'egy-skill'), { recursive: true })
     // TENYLEG EKEZETES tartalom. Az elso valtozatom ASCII-t irt ide ("arvizturo"), es ezzel a
     // ket egyseg EGYBEESETT -- a teszt zold volt a `wc -c`-vel ES a locale-fuggo `wc -m`-mel is,
@@ -812,7 +815,7 @@ describe('skill-index.sh -- soft threshold (early warning)', () => {
   let tmpHome: string
   const ENV = { SKILL_LINE_LIMIT: '100', SKILL_SOFT_HEADROOM: '20' }
 
-  beforeEach(() => { tmpHome = mkdtempSync(join(tmpdir(), 'skill-soft-')) })
+  beforeEach(() => { tmpHome = mkTmp('skill-soft-') })
   afterEach(() => rmSync(tmpHome, { recursive: true, force: true }))
 
   it('reports a skill above the soft threshold in BROADCAST mode -- the branch that was silent', () => {

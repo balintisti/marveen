@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // The 2026-08-03 bug: the macOS installer died with
 //
@@ -73,7 +76,7 @@ function runWhisperBlock(installerRc: number, stderrMsg = ''): { code: number; o
     'echo REACHED_THE_END',
   ].join('\n')
 
-  const file = join(mkdtempSync(join(tmpdir(), 'marveen-whisper-')), 'block.sh')
+  const file = join(mkTmp('marveen-whisper-'), 'block.sh')
   writeFileSync(file, script)
 
   try {

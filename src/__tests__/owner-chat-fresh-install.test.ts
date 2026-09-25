@@ -25,10 +25,13 @@
 // paired channel, and that nothing bogus goes out when there is no pairing.
 // The earlier draft set process.env and claimed the .env case; it was not
 // measuring that, and the third test failing is what exposed it.
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const REAL = '1268077055'
 
@@ -48,7 +51,7 @@ let originalHome: string | undefined
 let originalChat: string | undefined
 
 beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), 'freshinstall-'))
+  home = mkTmp('freshinstall-')
   mkdirSync(join(home, '.claude', 'channels', 'telegram'), { recursive: true })
   // The wizard DID pair successfully: this is the file the plugin enforces.
   writeFileSync(

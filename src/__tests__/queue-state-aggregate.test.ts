@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // A KET AGGREGALT MERES (kartya 0e3959e4).
 //
@@ -43,7 +46,7 @@ function recent(to: string, windowMin: number) {
 }
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'queue-agg-'))
+  dir = mkTmp('queue-agg-')
   db = new Database(join(dir, 't.db'))
   db.exec('CREATE TABLE agent_messages (id INTEGER PRIMARY KEY, from_agent TEXT, to_agent TEXT, content TEXT, status TEXT, created_at INTEGER, delivered_at INTEGER)')
 })

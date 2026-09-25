@@ -1,8 +1,11 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import type { ScheduledTask } from '../web/scheduled-tasks-io.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // THE WIRE, NOT THE DECISION (card 0114968c, decision (B), 2026-08-23).
 //
@@ -30,7 +33,7 @@ const mockAppendTaskRun = vi.fn()
 // ROOT -- which is exactly what the first version of this test did: it dropped
 // two stray json files next to package.json and let state leak between cases.
 // One directory for the whole file, wiped between tests, is the honest shape.
-const STORE = mkdtempSync(join(tmpdir(), 'friday-quota-hook-'))
+const STORE = mkTmp('friday-quota-hook-')
 
 vi.mock('../logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },

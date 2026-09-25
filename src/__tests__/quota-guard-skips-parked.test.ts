@@ -8,11 +8,14 @@
 // fix: skip agents whose own workcheck.json says {"kind":"none"}, stay loud about
 // the skip, and keep notifying the owner (a Telegram message starts no agent turn).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, copyFileSync, chmodSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, mkdirSync, rmSync, copyFileSync, chmodSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..', '..')
@@ -46,7 +49,7 @@ function agent(name: string, workcheck: string | null) {
 }
 
 beforeEach(() => {
-  tree = mkdtempSync(join(tmpdir(), 'quota-guard-'))
+  tree = mkTmp('quota-guard-')
   mkdirSync(join(tree, 'scripts'), { recursive: true })
   mkdirSync(join(tree, 'store'), { recursive: true })
   mkdirSync(join(tree, 'bin'), { recursive: true })

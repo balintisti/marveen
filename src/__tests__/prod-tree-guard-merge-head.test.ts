@@ -27,10 +27,13 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, copyFileSync, readFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync, rmSync, existsSync, copyFileSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const INSTALLER = join(ROOT, 'scripts', 'install-prod-tree-guard-hook.sh')
@@ -56,7 +59,7 @@ const git = (...args: string[]) =>
  */
 
 beforeEach(() => {
-  repo = mkdtempSync(join(tmpdir(), 'prod-guard-merge-'))
+  repo = mkTmp('prod-guard-merge-')
   git('init', '-q', '-b', 'main', '.')
   git('config', 'user.email', 't@t')
   git('config', 'user.name', 't')
@@ -153,7 +156,7 @@ describe('prod-tree-guard: a folyamatban levo merge lezarasa atmegy', () => {
     // Ami NEM redundans, az az UZENET: nelkule minden worktree minden merge-lezarasa kiirna egy
     // "prod-tree-guard: ..." sort, ami nem rola szol. Ez az allitas azt a felet rogziti, es
     // ezzel a 3. mutacio is diszkriminal.
-    const wt = mkdtempSync(join(tmpdir(), 'prod-guard-wt-'))
+    const wt = mkTmp('prod-guard-wt-')
     try {
       execFileSync('git', ['worktree', 'add', '-q', '--detach', wt, 'main'], { cwd: repo, stdio: 'pipe' })
       // Ugyanaz a befejezetlen merge, csak a CSATOLT worktreeben (ott TOPLEVEL != PROD_ROOT).

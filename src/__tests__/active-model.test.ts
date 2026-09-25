@@ -1,8 +1,11 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { join } from 'node:path'
-import { mkdtempSync, mkdirSync, symlinkSync, rmSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, symlinkSync, rmSync, realpathSync } from 'node:fs'
 import { projectsDirFor } from '../web/active-model.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 describe('projectsDirFor', () => {
   it('uses <home>/.claude/projects when no config dir is given', () => {
@@ -38,7 +41,7 @@ describe('projectsDirFor', () => {
   // the guard at a directory that existed and held yesterday's transcripts --
   // a reading that never changed, and therefore restarted the agent forever.
   describe('symlinked working dirs', () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'projdir-')))
+    const root = realpathSync(mkTmp('projdir-'))
     const real = join(root, 'real-home')
     const link = join(root, 'link-to-home')
     mkdirSync(real)

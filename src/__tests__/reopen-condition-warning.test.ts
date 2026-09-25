@@ -16,10 +16,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import http from 'node:http'
 import { Readable } from 'node:stream'
-import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 import { initDatabase, createKanbanCard, addKanbanComment, getKanbanCard } from '../db.js'
@@ -36,7 +39,7 @@ let logFile: string
 
 beforeEach(() => {
   initDatabase(':memory:')
-  logDir = mkdtempSync(join(tmpdir(), 'reopen-warn-'))
+  logDir = mkTmp('reopen-warn-')
   logFile = join(logDir, 'warnings.jsonl')
   process.env.MARVEEN_REOPEN_WARNING_LOG = logFile
 })

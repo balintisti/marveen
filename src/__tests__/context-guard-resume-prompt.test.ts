@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 // RESPAWNZAJ822/PRODFAAG822 (2026-08-22): a context-guard-restarted session,
 // resumed via inject-resume, branch-switched and committed on the running prod
 // checkout (PR #1036 duplicate). The resume prompt is the ONLY context that
@@ -10,7 +11,7 @@ import { tmpdir } from 'node:os'
 // itself -- on EVERY variant (with handoff, without, stale, unmeasurable).
 // This test pins that invariant: a later rewording cannot silently drop it.
 
-const SANDBOX = mkdtempSync(join(tmpdir(), 'resume-prompt-test-'))
+const SANDBOX = mkTmp('resume-prompt-test-')
 
 vi.mock('../config.js', async (orig) => {
   const actual = await orig<typeof import('../config.js')>()

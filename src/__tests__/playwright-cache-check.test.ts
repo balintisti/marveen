@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // The signal for a stalled Playwright install (card d1cf8ffb).
 //
@@ -20,7 +23,7 @@ import { fileURLToPath } from 'node:url'
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'playwright-cache-check.sh')
 
 let cache: string
-beforeEach(() => { cache = mkdtempSync(join(tmpdir(), 'pwcache-')) })
+beforeEach(() => { cache = mkTmp('pwcache-') })
 afterEach(() => { rmSync(cache, { recursive: true, force: true }) })
 
 /** Always-0 exit and line output are the contract; the caller parses STATUS|text. */

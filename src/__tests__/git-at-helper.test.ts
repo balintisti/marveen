@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const HELPER = join(ROOT, 'scripts', 'git-at.sh')
@@ -26,7 +29,7 @@ const HELPER = join(ROOT, 'scripts', 'git-at.sh')
 
 /** Egy eldobhato repo, ahol a fajl LETEZIK, es egy ref, ahol nem. */
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), 'git-at-'))
+  const dir = mkTmp('git-at-')
   const git = (...a: string[]) => execFileSync('git', a, { cwd: dir, encoding: 'utf-8' })
   git('init', '-q', '-b', 'main')
   git('config', 'user.email', 't@t')
@@ -167,7 +170,7 @@ describe('git-at.sh -- melyik FAT kerdeztuk (kartya d8d5b92c)', () => {
   it('-C egy MASIK repot kerdez, idegen cwd-bol -- ez maga a mert eset', () => {
     // `here` egy MASIK repo, ami nem ismeri a `van-benne` agat -- pontosan az az
     // allapot, amibe egy agens-cwd tesz: ervenyes repo, rossz fa.
-    const here = mkdtempSync(join(tmpdir(), 'git-at-masik-'))
+    const here = mkTmp('git-at-masik-')
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: here })
     execFileSync('git', ['config', 'user.email', 't@t'], { cwd: here })
     execFileSync('git', ['config', 'user.name', 't'], { cwd: here })
@@ -198,7 +201,7 @@ describe('git-at.sh -- melyik FAT kerdeztuk (kartya d8d5b92c)', () => {
   })
 
   it('nem-git konyvtarban: exit 3, es kimondja, hogy nem merheto', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'git-at-nem-repo-'))
+    const dir = mkTmp('git-at-nem-repo-')
     try {
       const r = runHelper(dir, ['exists', 'main', 'alap.txt'])
       expect(r.status).toBe(3)

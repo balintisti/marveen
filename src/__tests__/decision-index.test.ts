@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SCRIPT = join(REPO_ROOT, 'scripts', 'decision-index.py')
@@ -32,7 +35,7 @@ describe('decision-index.py -- a --check tud PIROSAT is mondani', () => {
   let tmp: string
 
   beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), 'decidx-'))
+    tmp = mkTmp('decidx-')
     spawnSync('git', ['init', '-q'], { cwd: tmp })
     mkdirSync(join(tmp, 'scripts'), { recursive: true })
     mkdirSync(join(tmp, 'docs'), { recursive: true })
@@ -194,7 +197,7 @@ describe('decision-index.py -- a NAGYBETUS NYITANY, es ameddig NEM tagul', () =>
   let tmp: string
 
   beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), 'decidx-caps-'))
+    tmp = mkTmp('decidx-caps-')
     spawnSync('git', ['init', '-q'], { cwd: tmp })
     mkdirSync(join(tmp, 'scripts'), { recursive: true })
     mkdirSync(join(tmp, 'docs'), { recursive: true })
@@ -264,7 +267,7 @@ describe('decision-index.py -- az import nem ir fajlt', () => {
   let tmp: string
 
   beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), 'decidx-import-'))
+    tmp = mkTmp('decidx-import-')
     spawnSync('git', ['init', '-q'], { cwd: tmp })
     mkdirSync(join(tmp, 'scripts'), { recursive: true })
     mkdirSync(join(tmp, 'docs'), { recursive: true })

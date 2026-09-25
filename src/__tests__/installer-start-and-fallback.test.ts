@@ -1,14 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs'
+import { readFileSync, writeFileSync, chmodSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 /** Run a real script FILE (not `bash -c`) and return its output + exit code.
  *  The distinction matters: $LINENO inside an ERR trap numbers a file the way
  *  the installer is numbered, while `bash -c` numbers the -c string. */
 function runScriptFile(lines: string[]): { out: string; code: number } {
-  const dir = mkdtempSync(join(tmpdir(), 'errtrap-'))
+  const dir = mkTmp('errtrap-')
   try {
     const p = join(dir, 'probe.sh')
     writeFileSync(p, lines.join('\n') + '\n')
@@ -185,7 +187,7 @@ describe('install-macos.sh -- launchd units must be verified, not assumed', () =
    *                `last exit code = 78: EX_CONFIG` (program missing)
    */
   function runStart(mode: 'healthy' | 'pended' | 'crashloop'): { pid: string; calls: string[] } {
-    const dir = mkdtempSync(join(tmpdir(), 'launchd-'))
+    const dir = mkTmp('launchd-')
     try {
       const calls = join(dir, 'calls')
       const prints = join(dir, 'prints')

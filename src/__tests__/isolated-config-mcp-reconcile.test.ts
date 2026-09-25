@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync, chmodSync, statSync } from 'node:fs'
+import { mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync, chmodSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 // Same sandbox shape as isolated-channel-config.test.ts: homedir() and
 // agentDir() are redirected into a throwaway temp tree, so nothing here can
 // read or write the real ~/.claude of the machine running the suite.
@@ -35,7 +37,7 @@ function servers(): Record<string, unknown> {
 }
 
 beforeEach(() => {
-  SANDBOX = mkdtempSync(join(tmpdir(), 'mcpseed-'))
+  SANDBOX = mkTmp('mcpseed-')
   const claude = join(SANDBOX, 'home', '.claude')
   mkdirSync(claude, { recursive: true })
   writeFileSync(join(claude, 'settings.json'), JSON.stringify({ enabledPlugins: {} }))

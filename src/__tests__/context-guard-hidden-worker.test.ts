@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // 2026-08-04, P1: the hourly heartbeat went silent for two hours. The schedule
 // runner did the right thing -- it refuses to inject into a 100%-context pane
@@ -15,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 //
 // The sentinel is a VISIBILITY decision ("do not clutter the dashboard"). This
 // suite pins that it never again doubles as a LIFECYCLE decision.
-const SANDBOX = mkdtempSync(join(tmpdir(), 'guardsweep-'))
+const SANDBOX = mkTmp('guardsweep-')
 const AGENTS = join(SANDBOX, 'agents')
 
 vi.mock('../config.js', async (orig) => {

@@ -29,10 +29,13 @@
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, existsSync, readFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync, chmodSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REAL_SCRIPT = join(HERE, '..', '..', 'scripts', 'disk-space-guard.sh')
@@ -67,7 +70,7 @@ interface Run {
  * kert valaszt adja vissza.
  */
 function runGuard(curl: CurlBehaviour, usage = 96): Run {
-  const base = mkdtempSync(join(tmpdir(), 'disk-guard-alert-'))
+  const base = mkTmp('disk-guard-alert-')
   made.push(base)
   mkdirSync(join(base, 'scripts'))
   mkdirSync(join(base, 'store'))

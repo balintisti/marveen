@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { initDatabase, getDb, createDashboardUser } from '../db.js'
 import {
   createSession,
@@ -12,10 +11,14 @@ import {
   sweepExpiredSessions,
   _clearSessionCacheForTest,
 } from '../web/auth-sessions.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // Real on-disk temp DB (dbPathOverride pattern) so restart-rehydration can be
 // exercised by re-opening the same file with a fresh handle.
-const TMP = mkdtempSync(join(tmpdir(), 'auth-sessions-test-'))
+const TMP = mkTmp('auth-sessions-test-')
 const DB_PATH = join(TMP, 'test.db')
 
 const DAY = 24 * 60 * 60 * 1000

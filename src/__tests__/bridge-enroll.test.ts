@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest'
 import type http from 'node:http'
 import { Readable } from 'node:stream'
-import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { initDatabase, getDb } from '../db.js'
@@ -13,6 +12,10 @@ import { listDeviceKeys, findDeviceKeyByInstallId, _clearDeviceKeyCacheForTest }
 import { tryHandleSecurity } from '../web/routes/security.js'
 import { tryHandleAuth } from '../web/routes/auth.js'
 import type { RouteContext } from '../web/routes/types.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // AUTHPLAN1 #2 -- Bridge pairing. Contract under test:
 //   - one enroll writes the restricted authorized_keys line AND mints a
@@ -63,7 +66,7 @@ beforeAll(() => {
 })
 
 beforeEach(() => {
-  sshDir = mkdtempSync(join(tmpdir(), 'bridge-enroll-test-'))
+  sshDir = mkTmp('bridge-enroll-test-')
   _clearDeviceKeyCacheForTest()
   getDb().prepare('DELETE FROM device_keys').run()
   getDb().prepare('DELETE FROM config_change_log').run()

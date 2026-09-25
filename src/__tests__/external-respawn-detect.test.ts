@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { classifyRespawnStampAdvance } from '../channel-coordinator/liveness.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // SOAKRESPAWN819: a main-session respawn performed by anyone but the dashboard
 // (service-manager relaunch of channels.sh after a watchdog exit, the
@@ -107,7 +110,7 @@ function sliceShellFn(src: string, name: string): string {
 
 describe('channels.sh respawn_log (runnable)', () => {
   it('appends timestamped lines and trims past 1000 to the newest 500', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'respawnlog-'))
+    const dir = mkTmp('respawnlog-')
     const logPath = join(dir, 'channels-respawn.log')
     const body = [
       '#!/bin/bash',
@@ -132,7 +135,7 @@ describe('channels.sh respawn_log (runnable)', () => {
   })
 
   it('a failing log write never breaks the caller (best-effort contract)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'respawnlog-'))
+    const dir = mkTmp('respawnlog-')
     const body = [
       '#!/bin/bash',
       // Unwritable target: parent dir does not exist.

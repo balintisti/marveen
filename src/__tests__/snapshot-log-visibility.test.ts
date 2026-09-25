@@ -11,10 +11,14 @@
 // "volt, es a zar megfogta" ma megkulonboztethetetlen -- ezt a kartyat ez zarja be.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs'
-import { tmpdir, homedir } from 'node:os'
+import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SNAPSHOT = join(ROOT, 'scripts', 'rulebook-snapshot.sh')
@@ -22,7 +26,7 @@ const HOOK = join(ROOT, 'scripts', 'hooks', 'skills-snapshot-on-write.sh')
 
 let root: string
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'snaplog-'))
+  root = mkTmp('snaplog-')
   mkdirSync(join(root, 'src', 'marveen', 'agents', 'x'), { recursive: true })
   mkdirSync(join(root, 'src', 'skills', 's1'), { recursive: true })
   writeFileSync(join(root, 'src', 'marveen', 'CLAUDE.md'), 'x\n')

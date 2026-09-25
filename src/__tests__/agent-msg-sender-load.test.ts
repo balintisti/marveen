@@ -18,10 +18,13 @@
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, rmSync, copyFileSync } from 'node:fs'
+import { writeFileSync, chmodSync, mkdirSync, rmSync, copyFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const REAL_SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'agent-msg.sh')
@@ -35,7 +38,7 @@ type Row = { from: string; to: string; chars: number; agoMin: number }
 
 /** Stage the real script over a real sqlite queue seeded with `rows`. */
 function run(from: string, to: string, rows: Row[]): { stdout: string; stderr: string } {
-  const base = mkdtempSync(join(tmpdir(), 'agent-msg-load-'))
+  const base = mkTmp('agent-msg-load-')
   made.push(base)
   mkdirSync(join(base, 'scripts'))
   mkdirSync(join(base, 'store'))
@@ -145,7 +148,7 @@ describe('agent-msg.sh -- the sender sees its OWN load at the moment of sending'
   it('does not fabricate a load when the queue cannot be read at all', () => {
     // Fail-open must stay silent about MY traffic too: "I could not look" and
     // "I sent nothing" are the same two states this helper exists to separate.
-    const base = mkdtempSync(join(tmpdir(), 'agent-msg-load-'))
+    const base = mkTmp('agent-msg-load-')
     made.push(base)
     mkdirSync(join(base, 'scripts'))
     mkdirSync(join(base, 'store'))

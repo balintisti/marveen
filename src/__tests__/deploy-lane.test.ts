@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // A telepitesi sav megnevezese (kartya a1c5d6ca).
 //
@@ -97,7 +100,7 @@ describe('deploy-lane -- az allapot, egy szintetikus telepitesi fan', () => {
     lines.find((l) => l.startsWith(`${key}|`))?.slice(key.length + 1)
 
   beforeEach(() => {
-    install = mkdtempSync(join(tmpdir(), 'lane-'))
+    install = mkTmp('lane-')
     git(install, 'init', '-q', '-b', 'main')
     git(install, 'config', 'user.email', 't@t')
     git(install, 'config', 'user.name', 't')

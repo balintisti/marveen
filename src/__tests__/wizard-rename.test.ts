@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { writeFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 // WIZNAME1 (2026-07-28, bootcamp): renaming the agent in the wizard appeared
 // to do nothing on installer-started (VPS) installs. Two independent causes:
 //   1. the identity save only wrote BOT_NAME when the fleet was NOT running,
@@ -15,7 +17,7 @@ import { tmpdir } from 'node:os'
 // Sandboxed .env via the CLAUDECLAW_ENV_DIR hook (see env.test.ts): set
 // BEFORE the dynamic import so neither config.js nor env.js ever touches the
 // checkout's real .env.
-const SANDBOX = mkdtempSync(join(tmpdir(), 'wizname-test-'))
+const SANDBOX = mkTmp('wizname-test-')
 const testEnvPath = join(SANDBOX, '.env')
 
 beforeAll(() => {

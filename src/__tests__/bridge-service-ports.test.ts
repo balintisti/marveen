@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, readFileSync, writeFileSync, statSync, rmSync } from 'node:fs'
+import { readFileSync, writeFileSync, statSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import {
   validateBridgeServicePorts,
   restrictOptionsWithServices,
@@ -11,6 +10,10 @@ import {
   MAX_BRIDGE_SERVICE_PORTS,
 } from '../remote-enroll-core.js'
 import { updateEnrolledServicePorts } from '../remote-enroll-fs.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // BRIDGEPORT817. The permitopen list in authorized_keys is the REAL boundary
 // of the Bridge's service-tab feature; these tests pin the policy (validate),
@@ -129,7 +132,7 @@ describe('rewriteServicePorts (only our line, options rebuilt from scratch)', ()
 
 describe('updateEnrolledServicePorts (fs, temp dir)', () => {
   it('rewrites under lock, keeps 0600, reports before/after', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'mv-svc-ports-'))
+    const dir = mkTmp('mv-svc-ports-')
     const authPath = join(dir, 'authorized_keys')
     writeFileSync(authPath, `${FOREIGN_LINE}\n${OUR_LINE}\n`, { mode: 0o600 })
     const r = await updateEnrolledServicePorts({ sshDir: dir, installId: ID, webPort: WEB, ports: [4007, 8443] })
@@ -143,7 +146,7 @@ describe('updateEnrolledServicePorts (fs, temp dir)', () => {
   })
 
   it('missing file or missing line: found:false, nothing written', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'mv-svc-ports-'))
+    const dir = mkTmp('mv-svc-ports-')
     const none = await updateEnrolledServicePorts({ sshDir: dir, installId: ID, webPort: WEB, ports: [4007] })
     expect(none.found).toBe(false)
     writeFileSync(join(dir, 'authorized_keys'), `${FOREIGN_LINE}\n`, { mode: 0o600 })
