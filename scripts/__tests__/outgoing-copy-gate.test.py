@@ -172,6 +172,26 @@ def main():
         check("em dash still blocks (exit 2)", code, 2)
         check_true("em dash: stderr names it", "GONDOLATJEL" in err, err)
 
+        # 5a2. SPACED EN DASH (card e57af6ec): " – " is the commonest Hungarian gondolatjel.
+        # Both paths, the non-breaking-space spelling, and the line-end form block; ranges and a
+        # line-start list/dialogue dash pass (the line-start decision is on the card).
+        for label, body in (("spaced", "Rendben – holnap küldöm."),
+                            ("non-breaking space", "Rendben\u00a0– holnap küldöm."),
+                            ("at a line end", "Rendben –\nholnap küldöm.")):
+            code, out, err = run_hook(email_payload(CLEAN_HU_OK + " " + body), rules_file=active)
+            check(f"en dash {label}: email blocks (exit 2)", code, 2)
+            check_true(f"en dash {label}: stderr names it", "szokozos nagykotojel" in err, err)
+            code, out, err = run_hook(telegram_payload(CLEAN_HU_OK + " " + body), rules_file=active)
+            check(f"en dash {label}: telegram blocks (exit 2)", code, 2)
+        for label, body in (("range 10–20", "A hívás 10–20 perc."), ("years 2026–2027", "A 2026–2027-es terv kész."),
+                            ("line-start list dash", "Lista:\n– első pont\n– második pont"),
+                            ("indented list dash", "Lista:\n  – első pont")):
+            code, out, err = run_hook(email_payload(CLEAN_HU_OK + " " + body), rules_file=active)
+            check(f"en dash control, {label}: email passes (exit 0)", code, 0)
+        # the two old forms are unchanged
+        code, out, err = run_hook(email_payload(CLEAN_HU_OK + " Rendben -- holnap."), rules_file=active)
+        check('" -- " still blocks (exit 2)', code, 2)
+
         # 5b. missing accents (accent-insensitive Hungarian detector)
         code, out, err = run_hook(email_payload(CLEAN_HU), rules_file=active)
         check("missing accents still blocks (exit 2)", code, 2)

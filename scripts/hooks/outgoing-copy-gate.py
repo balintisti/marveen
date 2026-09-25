@@ -1185,6 +1185,24 @@ def audit(text: str):
             f"DUPLA KOTOJEL gondolatjel-potlokent {dh} helyen (' -- ') -- Szabi jelzese: "
             "ugyanugy zavaro, mint az em dash. Ird at kotojel nelkul: kettospont, zarojel, vagy uj mondat."
         )
+    # SZOKOZOS NAGYKOTOJEL (" – ", U+2013) -- card e57af6ec, marveen, a szabaly gazdaja:
+    # Isti szabalya "Nincs gondolatjel", es a magyar gondolatjel leggyakoribb alakja epp ez; a
+    # kapu eddig ket PELDANYT sorolt (em dash, " -- "), a mechanizmust nem. A PROZAN merjuk,
+    # mint a " -- "-t. A szokoz lehet nem-toro is (U+00A0, U+202F): a gondos magyar tipografia
+    # epp azt teszi a kotojel ele, es az a rendes alak.
+    #   TILTOTT: szo utan szokoz + nagykotojel + szokoz        "rendben – kesz"
+    #            szo utan szokoz + nagykotojel + SORVEG        "rendben –\nkesz" (ugyanaz, sortoressel)
+    #   ATMEGY:  szokoz nelkul (tartomany)                     "10–20", "2026–2027"
+    #            SOR ELEJEN, akar behuzva (felsorolas/parbeszed) "\n– elso pont", "\n  – pont"
+    # A sor eleji alak dontese (a kartya kerte): 1524 kimeno uzenetben a harom szokozos alak
+    # egyike sem fordult elo (merve 2026-09-25), tehat a meres nem dont; a sor eleji "– " a
+    # magyarban felsorolas- es parbeszedjel, nem mondatkozi gondolatjel, ezert atengedjuk.
+    spaced_en = len(re.findall(r"(?<=\S)[ \u00a0\u202f]\u2013(?:[ \u00a0\u202f]|(?=\n)|$)", prose))
+    if spaced_en:
+        problems.append(
+            f"GONDOLATJEL (szokozos nagykotojel, ' \u2013 ') {spaced_en} helyen -- allo szabaly, "
+            "ugyanaz, mint az em dash. Tartomanyt (10\u201320) szokoz nelkul irj; kulonben kettospont, zarojel vagy uj mondat."
+        )
     # 4. ellenorzes (GATEHOMOGLIF816): vegyes irasrendszeru szo. SZANDEKOSAN
     # NEM magyar-kapuzott (elteres Marveen specjetol, ervvel): az FP-vedelem
     # maga a VEGYES-szo szabaly -- egy legitim idegen idezet szavai TISZTA
