@@ -442,18 +442,42 @@ function enqueueVerified(content: string): boolean {
   }
 }
 
+// ONE TICK AT A TIME (card 77c305a4, didi 03:10, marveen's decision). The per-call cap ends a
+// hung CALL inside its tick, but a tick makes two calls, each with a retry: worst case
+// 2 x (100 + 1 + 100) = 402 s, over three intervals -- and setInterval does not wait, so up to
+// four ticks could run at once against a stalled API. A tick that finds the previous one still
+// running is SKIPPED, with one log line; it does not queue.
+let tickRunning = false
+
+/** Test seam: the guard is module state. */
+export function resetUptimeTickGuard(): void {
+  tickRunning = false
+}
+
 export async function uptimeTick(now = Date.now()): Promise<void> {
   // A call still running as this tick starts cannot complete inside its own tick any more, so
   // it is the hang card 77c305a4 is about -- and it is only visible HERE, because the hung call
-  // itself never reaches its own logging. Warn, do not abort: we have no measured basis for
-  // deciding it is dead rather than slow, and killing a slow-but-working call is the alarming
-  // direction that card's ruling rules out.
+  // itself never reaches its own logging. Checked BEFORE the skip below, so a skipped tick still
+  // names what is hanging. Warn, do not abort: the per-call cap (CALL_TIMEOUT_MS) ends it.
   for (const c of overdueCalls(inFlight, now)) {
     logger.warn(
-      { url: c.url, msSoFar: now - c.startedAt, limitMs: INTERVAL_MS },
-      'uptime poller: an API call is still in flight as the next tick begins -- no timeout exists on this path (card 77c305a4)',
+      { url: c.url, msSoFar: now - c.startedAt, limitMs: INTERVAL_MS, capMs: CALL_TIMEOUT_MS },
+      'uptime poller: an API call is still in flight as the next tick begins -- the per-call cap will end it (card 77c305a4)',
     )
   }
+  if (tickRunning) {
+    logger.warn({ inFlight: inFlight.length }, 'uptime poller: the previous tick is still running -- this tick is SKIPPED, not queued (card 77c305a4)')
+    return
+  }
+  tickRunning = true
+  try {
+    await uptimeTickBody(now)
+  } finally {
+    tickRunning = false
+  }
+}
+
+async function uptimeTickBody(now: number): Promise<void> {
   const tokenProbe = await accessToken()
   const projProbe = await project()
 
