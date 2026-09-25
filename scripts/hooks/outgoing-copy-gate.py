@@ -132,7 +132,18 @@ def _code_string_sends(code: str) -> bool:
     return bool(_CODE_EXECISH.search(code) and _CODE_SENDER_LIT.search(code))
 # Token-ELEJERE horgonyzott cel-minta: egy URL-argumentum vagy csupasz
 # domain/utvonal illik ra; egy JSON-payload ('{...api.resend.com...}') nem.
-_RESEND_TARGET = re.compile(r"^(https?://)?([^/@\s]*\.)?api\.resend\.com(/|$|\s|$)", re.I)
+# RESENDHOST926 (card 0ca64c14, didi's probe 2026-09-26): the host is matched
+# in its NORMALIZED shape -- optional `--url=` glue, optional userinfo
+# (`x@`), trailing root dots (`api.resend.com.`), an optional port (`:443`),
+# and `?`/`#` right after the host. All of these reach the same provider, and
+# the old pattern let a real mail POST through as "not a send". The userinfo
+# may not contain whitespace or `/`, so an address inside a message payload
+# ('... x@api.resend.com') still does not qualify. The twin in
+# email-send-gate.mjs is identical; send-invocation-cases.json pins both.
+_RESEND_TARGET = re.compile(
+    r"^(--url=)?(https?://)?([^/?#@\s]*@)?([^/?#@\s]*\.)?api\.resend\.com\.*(:\d*)?([/?#]|\s|$)",
+    re.I,
+)
 
 # RESENDGATE826: a resend-celu curl/wget csak akkor KULDES, ha a METODUS az.
 # A korabbi minta metodus-vak volt, es egy read-only GET /domains (nincs torzs,

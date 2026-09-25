@@ -106,7 +106,10 @@ const NODEISH = /^(node|tsx|ts-node|deno|bun|npx)$/i
 const GRAPHMAIL = /^graph-mail(\.ts|\.js)?$/i
 const WRAPPER_SHELL = /^(sh|bash|zsh|dash)$/i
 const CURLISH = /^(curl|wget|http)$/i
-const RESEND_TARGET = /^(https?:\/\/)?([^/@\s]*\.)?api\.resend\.com(\/|$)/i
+// RESENDHOST926 (card 0ca64c14): normalized host shape -- `--url=` glue, userinfo,
+// trailing root dots, port, `?`/`#` after the host. Twin of _RESEND_TARGET in
+// outgoing-copy-gate.py; send-invocation-cases.json pins both.
+const RESEND_TARGET = /^(--url=)?(https?:\/\/)?([^/?#@\s]*@)?([^/?#@\s]*\.)?api\.resend\.com\.*(:\d*)?([/?#]|\s|$)/i
 // A `-e`/`-c` KODSZTRINGEN BELUL felismert kuldes-alakok.
 // HOZZAADVA 2026-08-23 (marveen, upstream-merge): a vendor-SDK hivas (`resend.emails.send(...)`)
 // hianyzott innen, es EPP EZEN a uton ment at -- a szegmens parancsneve `node`, tehat a

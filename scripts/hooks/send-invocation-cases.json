@@ -620,6 +620,51 @@
       "name": "SENDWRAP924: reverse -- eight nested wrappers + a non-sender, inside the bound",
       "cmd": "nohup nohup nohup nohup nohup nohup nohup nohup echo sendmail",
       "expected": false
+    },
+    {
+      "name": "[0ca64c14] resend host with explicit port",
+      "cmd": "curl -X POST https://api.resend.com:443/emails -H 'Authorization: Bearer X' -d '{\"to\":\"a@b.hu\"}'",
+      "expected": true
+    },
+    {
+      "name": "[0ca64c14] resend host with userinfo",
+      "cmd": "curl -X POST https://x@api.resend.com/emails -d '{\"to\":\"a@b.hu\"}'",
+      "expected": true
+    },
+    {
+      "name": "[0ca64c14] resend host with trailing root dot",
+      "cmd": "curl -X POST https://api.resend.com./emails -d '{\"to\":\"a@b.hu\"}'",
+      "expected": true
+    },
+    {
+      "name": "[0ca64c14] resend host uppercase with port and dot",
+      "cmd": "curl -X POST HTTPS://API.RESEND.COM.:443/emails -d '{\"to\":\"a@b.hu\"}'",
+      "expected": true
+    },
+    {
+      "name": "[0ca64c14] resend URL glued to --url=",
+      "cmd": "curl -X POST --url=https://api.resend.com/emails -d '{\"to\":\"a@b.hu\"}'",
+      "expected": true
+    },
+    {
+      "name": "[0ca64c14] resend host followed by query",
+      "cmd": "curl -X POST 'https://api.resend.com?x=1' -d '{\"to\":\"a@b.hu\"}'",
+      "expected": true
+    },
+    {
+      "name": "[0ca64c14] lookalike host api.resend.com.evil.com is not the provider",
+      "cmd": "curl -X POST https://api.resend.com.evil.com/emails -d '{\"to\":\"a@b.hu\"}'",
+      "expected": false
+    },
+    {
+      "name": "[0ca64c14] lookalike host api.resend.company is not the provider",
+      "cmd": "curl -X POST https://api.resend.company/emails -d '{\"to\":\"a@b.hu\"}'",
+      "expected": false
+    },
+    {
+      "name": "[0ca64c14] address at the provider inside an inter-agent payload",
+      "cmd": "curl -s http://localhost:3420/api/messages -d 'ird meg a x@api.resend.com cimre'",
+      "expected": false
     }
   ]
 }
