@@ -1031,10 +1031,18 @@ export async function runMessageRouterTick(): Promise<void> {
         const { prefix, wrapped } = wrapAgentMessageForDelivery(category, safeFromAgent, msg.from_agent, content, msg.id, msg.origin_note)
         // Inline preamble so a fresh session (post hard-restart) doesn't miss
         // the context that explains the tag semantics.
-        await sendPromptToSession(session, prefix + wrapped, host, {
+        const sendResult = await sendPromptToSession(session, prefix + wrapped, host, {
           survival: 'lost',
           survivalReason: 'markMessageDelivered(msg.id) runs on the next line -- the queue never re-sends a delivered message',
         })
+        // NOTHING WAS TYPED: a tool-permission prompt was on screen (card 2a8cb07f). The router
+        // gates on isSessionReadyForPrompt first, so this is the race window between that check
+        // and the send -- but marking the message delivered here would LOSE it silently. It stays
+        // pending, and the next tick delivers it once the prompt has been answered by a human.
+        if (sendResult === 'withheld-permission') {
+          logger.warn({ id: msg.id, agent: msg.to_agent }, 'message-router: a permission prompt is on screen; message left pending, not typed')
+          continue
+        }
         if (!markMessageDelivered(msg.id)) {
           logger.warn({ id: msg.id }, 'markMessageDelivered affected 0 rows (deleted concurrently?)')
         }
