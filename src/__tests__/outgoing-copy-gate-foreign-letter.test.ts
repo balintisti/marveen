@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawnSync, execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 // FOREIGNLETTER924 (card c61d5270): a non-Hungarian LETTER gets a NAMED WARNING on every
 // outgoing path, and never a block. The measured specimen is `fordìtott` with U+00EC
 // (i WITH GRAVE) where Hungarian has U+00ED (i WITH ACUTE): it passes the homoglyph check
@@ -41,7 +43,7 @@ const carrier = (word: string) =>
   `Szia, a jelentést ${word} sorrendben küldöm, mert így olvashatóbb. Kérlek, nézd meg, és szólj.`
 
 let dir: string
-beforeAll(() => { dir = mkdtempSync(join(tmpdir(), 'foreignletter-')) })
+beforeAll(() => { dir = mkTmp('foreignletter-') })
 afterAll(() => { rmSync(dir, { recursive: true, force: true }) })
 
 function hook(tool_name: string, tool_input: Record<string, unknown>) {

@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawnSync, execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 // GATEBINVAK916: the copy gate never read curl's `@file` payload.
 //
 // MEASURED 2026-09-23, before this change, on BOTH the develop tree and the
@@ -32,7 +34,7 @@ const CLEAN = 'Szia, küldöm a számlát, kérlek nézd meg, köszönöm.'
 const HOMO = `Szia, küldöm a számlát, kérlek nézd meg, köszönöm, k${CYR_A}pcsolat.`
 
 let dir: string
-beforeAll(() => { dir = mkdtempSync(join(tmpdir(), 'gatebinvak-')) })
+beforeAll(() => { dir = mkTmp('gatebinvak-') })
 afterAll(() => { rmSync(dir, { recursive: true, force: true }) })
 
 function file(name: string, content: string): string {

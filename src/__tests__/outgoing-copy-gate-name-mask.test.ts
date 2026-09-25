@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 // GATENEVSTRIP921 -- two rules looking at the same text do not want the same mask.
 //
 // REPORTED (community feed, 2026-09-21): the name rule ran on the RAW text, so a
@@ -32,7 +34,7 @@ let RULES = ''
 beforeAll(() => {
   // The gate log is derived from the rules file's directory, so a temp dir also
   // keeps this test from appending to the install's real gate log.
-  const dir = mkdtempSync(join(tmpdir(), 'copy-gate-name-'))
+  const dir = mkTmp('copy-gate-name-')
   RULES = join(dir, 'outgoing-copy-gate-rules.json')
   writeFileSync(RULES, JSON.stringify({
     bad_name_patterns: ['Kovách', 'Kovach\\s+S[áa]ra'],

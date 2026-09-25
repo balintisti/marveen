@@ -18,10 +18,13 @@
  *     at the command level.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 vi.mock('../logger.js', () => ({
   logger: { warn: () => {}, info: () => {}, debug: () => {}, error: () => {} },
@@ -32,7 +35,7 @@ vi.mock('../logger.js', () => ({
 // test 4 called it for the main agent, and with only agentDir mocked the write went to the REAL
 // ~/.claude/settings.json: the live coordinator ran this branch's gate from a worktree for hours.
 // So homedir() is sandboxed for the whole file, and test 0 fails loudly if the sandbox is ever lost.
-const FAKE_HOME = mkdtempSync(join(tmpdir(), 'copygate-home-'))
+const FAKE_HOME = mkTmp('copygate-home-')
 vi.mock('node:os', async (orig) => {
   const actual = await orig<typeof import('node:os')>()
   return { ...actual, homedir: () => FAKE_HOME }
@@ -53,7 +56,7 @@ const entries = () => (read().hooks?.PreToolUse ?? []) as any[]
 const ours = () => entries().filter(e => JSON.stringify(e).includes('outgoing-copy-gate.py'))
 
 beforeEach(() => {
-  agentRoot = mkdtempSync(join(tmpdir(), 'copygate-wire-'))
+  agentRoot = mkTmp('copygate-wire-')
   mkdirSync(join(agentRoot, '.claude'), { recursive: true })
 })
 afterEach(() => rmSync(agentRoot, { recursive: true, force: true }))

@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 // INTERAGENTHOMOGLIF923 (decision: Marveen, msg 28870): inter-agent messages
 // get a HOMOGLYPH-ONLY check, and nothing else from the copy gate.
 //
@@ -30,7 +32,7 @@ const TOK = 'Authorization: Bearer $(cat ~/ClaudeClaw/store/.dashboard-token)'
 const POST = `curl -s -X POST http://localhost:3420/api/messages -H "Content-Type: application/json" -H "${TOK}"`
 
 let dir: string
-beforeAll(() => { dir = mkdtempSync(join(tmpdir(), 'iahomo-')) })
+beforeAll(() => { dir = mkTmp('iahomo-') })
 afterAll(() => { rmSync(dir, { recursive: true, force: true }) })
 
 const msg = (content: string, to = 'marveen') => JSON.stringify({ from: 'samu', to, content })

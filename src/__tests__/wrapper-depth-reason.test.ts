@@ -7,11 +7,14 @@
 // unchanged everywhere else.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 // @ts-expect-error -- plain .mjs hook script, no types
 import { gateDecision, wrapperDepthHit, buildWrapperDepthMsg } from '../../scripts/email-send-gate.mjs'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const ROOT = join(__dirname, '..', '..')
 const COPY_GATE = join(ROOT, 'scripts', 'hooks', 'outgoing-copy-gate.py')
@@ -20,7 +23,7 @@ const wrap = (n: number, cmd: string) => 'nohup '.repeat(n) + cmd
 const CYR_A = String.fromCodePoint(0x430)
 
 let dir: string
-beforeAll(() => { dir = mkdtempSync(join(tmpdir(), 'headdepth-')) })
+beforeAll(() => { dir = mkTmp('headdepth-') })
 afterAll(() => { rmSync(dir, { recursive: true, force: true }) })
 
 function copyGate(cmd: string): { code: number | null; err: string } {
