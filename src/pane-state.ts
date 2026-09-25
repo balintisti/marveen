@@ -1838,9 +1838,11 @@ const NO_STUCK_INPUT: StuckInputState = {
  * registry (each widening closes ONE path, and the fourth is unseen) but to bound the hold: the
  * SAME parked box, unchanged for this long, is announced ONCE. Any path, the unknown ones too.
  *
- * 20 minutes, from the recovery's own numbers: its budget is spent after ~4 min (confirm 90 s +
- * 3 x 45 s dedup, maxAttempts 4) and the record lives 10 min -- a box still parked at 20 min has
- * outlived every automatic path.
+ * 20 minutes, from the recovery's own numbers: the budget is spent after ~1 min on the stuck-input
+ * watcher's thresholds (12 s confirm + 4 x 12 s, maxAttempts 5) and ~4 min on the channel monitor's
+ * (90 s + 3 x 45 s, maxAttempts 4) -- both callers run this recovery -- and the record lives 10 min.
+ * A box still parked at 20 min has outlived every automatic path. (The first version of this comment
+ * named only the ~4 min set; jarvis measured the ~1 min one.)
  */
 export const PARKED_HOLD_ALERT_MS = 20 * 60_000
 
