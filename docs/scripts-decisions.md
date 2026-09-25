@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **264** kovetett fajl, ebbol
-**88** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **270** kovetett fajl, ebbol
+**91** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -170,6 +170,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - MIERT NINCS IDOBELYEG A GENERALT FAJLBAN, es ez SZANDEKOS elteres a skill-index.sh-tol:
 - MIERT NINCS A "lapon nevezik-e" OSZLOP A GENERALT FAJLBAN. A bemenete a repon KIVUL van
 
+### `scripts/delta-crm-backup-key.sh`
+
+- WHY `show` REFUSES UNLESS BOTH STDIN AND STDOUT ARE A TERMINAL: every agent's
+
 ### `scripts/deploy-lane.sh`
 
 - MIERT SZERSZAM ES NEM SZABALY. A repo dokumentacioja eddig egy SZAMOT mondott
@@ -281,6 +285,14 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - WHY SUBJECT AND NOT PATCH-ID: patch-id was measured unreliable here on 2026-08-23, and a rebase
 - WHY THE CARD-ID EXCLUSION IS NOT COSMETIC. Our card ids are 8 hex characters, so a bare
 - WHY A CARD COUNTS AS LANDED IF ANY named commit landed. Cards quote other people's commits and
+
+### `scripts/lib/backup-key.sh`
+
+- WHY gpg AND NOT OUR OWN AES-GCM (vault.ts has one): the restore that matters
+
+### `scripts/lib/backup_key_words.py`
+
+- WHY WORDS AND NOT RANDOM CHARACTERS (marveen's ruling, and the reason is the
 
 ### `scripts/lib/content-hash.sh`
 
