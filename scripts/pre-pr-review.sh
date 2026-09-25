@@ -67,7 +67,14 @@ import json, sys
 prompt = sys.stdin.read()
 print(json.dumps({'contents': [{'parts': [{'text': prompt}]}]}))
 " <<< "$PROMPT")"
-  curl -sf "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_KEY" \
+  # Model is configurable; the default must be one the key can reach TODAY
+  # (gemini-2.0-flash was retired: 404, measured 2026-09-25, card 1b0faf28).
+  # The key goes in the x-goog-api-key HEADER: this account's key format
+  # (AQ....) is refused as a ?key= query parameter (404) and accepted as a
+  # header (200) -- measured on the same model, same minute.
+  GEMINI_MODEL="${GEMINI_REVIEW_MODEL:-gemini-3.5-flash}"
+  curl -sf "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
+    -H "x-goog-api-key: $GEMINI_KEY" \
     -H "Content-Type: application/json" \
     -d "$PAYLOAD" \
   | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['candidates'][0]['content']['parts'][0]['text'])"
