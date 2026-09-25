@@ -10,13 +10,17 @@ import Database from 'better-sqlite3'
 import { isCensusComment, selectDeclaredWork } from '../idle-agent.js'
 
 describe('isCensusComment: a closed header token at the start, nothing else', () => {
-  it('the measured header shapes are census', () => {
+  it("marveen's specified shapes are census (optional date prefix, case-insensitive, optional comma)", () => {
     for (const s of [
       '2026-09-24 -- jarvis, testing-cenzus 3. kor, batch B (gap).',
-      '2026-09-24 17:43:57 CEST -- jarvis, TESTING-CENZUS (a65623ef) tabla-igazsag',
-      '2026-09-24 17:43:57  -- jarvis, TESTING-CENZUS (a65623ef)',
       'jarvis, testing-cenzus 4. kor',
+      'JARVIS TESTING-CENZUS (a65623ef, 9. kor folytatas)',
+      '2026-09-25 -- JARVIS testing-cenzus 1. kor',
     ]) expect(isCensusComment(s), s).toBe(true)
+  })
+  it('a date+TIME prefix is NOT matched -- a different prefix, put to marveen as a decision', () => {
+    for (const s of ['2026-09-24 17:43:57 CEST -- jarvis, TESTING-CENZUS (a65623ef)', '2026-09-24 17:43:57  -- jarvis, TESTING-CENZUS'])
+      expect(isCensusComment(s), s).toBe(false)
   })
   it('a real reply is not, even when it mentions the census', () => {
     for (const s of [
@@ -24,8 +28,8 @@ describe('isCensusComment: a closed header token at the start, nothing else', ()
       'LELET: a jarvis, testing-cenzus szerint a cim elavult, de a kod hibas',
     ]) expect(isCensusComment(s), s).toBe(false)
   })
-  it('other census-looking shapes are NOT matched on purpose (the header is jarvis\'s to keep)', () => {
-    for (const s of ['JARVIS TESTING-CENZUS (a65623ef, 9. kor)', 'CIM ATIRVA (jarvis, testing-cenzus 12. kor)'])
+  it('other heads are NOT matched: the token is at the start of the first line or nowhere', () => {
+    for (const s of ['CIM ATIRVA (jarvis, testing-cenzus 12. kor)', 'VALASZ didi k16827-re: fuggetlen ujrameres', 'x\njarvis, testing-cenzus on the second line'])
       expect(isCensusComment(s), s).toBe(false)
   })
 })
@@ -76,7 +80,7 @@ describe('lastRealCommentAtByCard builds the census-free map on a real sqlite', 
       // mentions the census MID-TEXT: the SQL prefilter catches it, the anchored token must let it through
       ['c1', 'jarvis', 200, 'VALASZ didi-re: a jarvis, testing-cenzus kor utan fuggetlenul ujramertem'],
       ['c1', 'jarvis', 300, '2026-09-24 -- jarvis, testing-cenzus 3. kor'],
-      ['c2', 'jarvis', 400, '2026-09-24 17:43:57 CEST -- jarvis, TESTING-CENZUS (x)'],
+      ['c2', 'jarvis', 400, 'JARVIS TESTING-CENZUS (x)'],
     ])
     const raw = new Map([['c1', new Map([['didi', 100], ['jarvis', 300]])], ['c2', new Map([['jarvis', 400]])]])
     const real = lastRealCommentAtByCard(raw)!
