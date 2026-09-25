@@ -73,6 +73,12 @@ arc="$(ls "${F}"/backups/claudeclaw-*.tar.gz | head -1)"
 [ "${rc}" = "0" ] && ok "agent-config.json alone counts for its agent" || bad "cfg rc=${rc}: $(cat "${F}/out")"
 tar -tzf "${arc}" | grep -q '^repo/agents/a1/agent-config.json$' && ok "agent-config.json is IN the archive" || bad "not archived: $(tar -tzf "${arc}")"
 
+# 6. workcheck.json too (didi, ef6a93dc): without it a restored agent is invisible to the idle guard
+F="${T}/wc"; fixture "${F}"; echo '{"kind":"assigned_open_cards"}' > "${F}/agents/a1/workcheck.json"
+rc=$(run "${F}")
+arc="$(ls "${F}"/backups/claudeclaw-*.tar.gz | head -1)"
+[ "${rc}" = "0" ] && tar -tzf "${arc}" | grep -q '^repo/agents/a1/workcheck.json$' && ok "workcheck.json is IN the archive" || bad "workcheck not archived rc=${rc}: $(tar -tzf "${arc}")"
+
 # 3b. CONTROL: no agents dir at all (a fresh machine) is not that failure
 F="${T}/fresh"; fixture "${F}"; rm -rf "${F}/agents"
 rc=$(run "${F}")

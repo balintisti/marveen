@@ -10,7 +10,7 @@
 #     .env                     (project root secrets)
 #     scheduled-tasks.json     (legacy, if present)
 #     assets/meetings/**       (meeting transcripts/memos)
-#     agents/*/CLAUDE.md, SOUL.md, .mcp.json, agent-config.json
+#     agents/*/CLAUDE.md, SOUL.md, .mcp.json, agent-config.json, workcheck.json
 #     agents/*/.claude/channels/{telegram,slack,discord}/.env, access.json
 #
 #   home/   -> extract under $HOME
@@ -94,7 +94,7 @@ if [[ -d agents ]]; then
     find -H "${a}" -maxdepth 4 -type f \
       \( -path "${a}/CLAUDE.md" -o -path "${a}/SOUL.md" -o -path "${a}/.mcp.json" \
          -o -path "${a}/.claude/channels/*/.env" -o -path "${a}/.claude/channels/*/access.json" \
-         -o -path "${a}/agent-config.json" \) \
+         -o -path "${a}/agent-config.json" -o -path "${a}/workcheck.json" \) \
       -print >> "${REPOLIST}"
   done
 fi
