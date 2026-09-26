@@ -257,7 +257,8 @@ describe('dev-gc: worktree-riport (9f499b14)', () => {
       const t = (Date.now() - 72 * 3600 * 1000) / 1000
       utimesSync(join(f.pushed, n), t, t)
     }
-    // src/deep es x.ts friss marad
+    utimesSync(f.pushed, (Date.now() - 72 * 3600 * 1000) / 1000, (Date.now() - 72 * 3600 * 1000) / 1000)
+    // a gyoker es a felso szint regi; CSAK src/deep es x.ts friss
     const out = runAll(['--skip-compile-cache', '--wt-repo', `${f.repo}:fork`])
     expect(out).toMatch(/would remove 0,/)
     expect(out).toMatch(/'young': 2/)
