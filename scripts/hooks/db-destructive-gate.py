@@ -678,6 +678,23 @@ def log(kind, detail, command=""):
         pass
 
 
+def verdict(command: str, env=None):
+    """The whole decision, without I/O: ("none" | "e2e" | "override" | "deny", hits).
+
+    It exists so the ORDER of the checks is testable. A spec that calls find_hits and
+    e2e_drop_allowed separately and combines them itself stays green when the decision
+    stops consulting the carve-out -- measured: that mutation SURVIVED the first version
+    of db-gate-e2e-drop.test.ts (card 251b5785)."""
+    hits = find_hits(command)
+    if not hits:
+        return "none", hits
+    if e2e_drop_allowed(command, env):
+        return "e2e", hits
+    if OVERRIDE.search(command):
+        return "override", hits
+    return "deny", hits
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -695,15 +712,15 @@ def main():
         if not command.strip():
             sys.exit(0)
 
-        hits = find_hits(command)
-        if not hits:
+        kind, hits = verdict(command)
+        if kind == "none":
             sys.exit(0)
 
-        if e2e_drop_allowed(command):
+        if kind == "e2e":
             log("E2E-DROP", "; ".join(hits), command)
             sys.exit(0)
 
-        if OVERRIDE.search(command):
+        if kind == "override":
             log("OVERRIDE", "; ".join(hits), command)
             sys.stderr.write(
                 "DB-KAPU: ATENGEDVE MARVEEN_DB_GATE=allow miatt.\n"

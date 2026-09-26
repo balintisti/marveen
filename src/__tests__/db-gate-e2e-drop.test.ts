@@ -30,8 +30,10 @@ const GATE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts'
 const DD = 'DROP ' + 'DATABASE'
 
 /**
- * A kapu TELJES verdiktje egy parancsra: blokkol-e (van talalat ES nem a kivetel).
- * Az `env` a psql kornyezeti valtozoit adja, ures objektum = semmi nincs beallitva.
+ * A kapu TELJES verdiktje egy parancsra (`verdict`, ugyanaz, amit a `main()` hasznal):
+ * blokkol-e. Az `env` a psql kornyezeti valtozoit adja, ures objektum = semmi nincs
+ * beallitva. NEM a find_hits es az e2e_drop_allowed kulon hivasa: ugy a `main()`
+ * sorrendje tesztelen maradt, es a "kivetel kikapcsolva" mutacio TULELT (merve).
  */
 function blocks(command: string, env: Record<string, string> = {}): boolean {
   const driver = `
@@ -39,8 +41,8 @@ import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("g", ${JSON.stringify(GATE)})
 g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
 a = json.loads(sys.stdin.read())
-hits = g.find_hits(a["c"])
-print(json.dumps(bool(hits) and not g.e2e_drop_allowed(a["c"], a["env"])))
+kind, _ = g.verdict(a["c"], a["env"])
+print(json.dumps(kind == "deny"))
 `
   const out = execFileSync('python3', ['-c', driver], {
     input: JSON.stringify({ c: command, env }),
