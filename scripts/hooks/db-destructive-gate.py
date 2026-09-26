@@ -134,6 +134,11 @@ TOOL_PATTERNS = [
     (r"\bnpm\s+run\s+(db:reset|db:seed|dev:clean|dev:setup)\b", "an npm script that resets or seeds the database"),
     (r"\byarn\s+(db:reset|db:seed|dev:clean|dev:setup)\b", "a yarn script that resets or seeds the database"),
     (r"\bmake\s+db-", "a make db-* target"),
+    # `dropdb` IS the statement, so it carries no SQL text for the SQL class to see.
+    # Until 2026-09-26 `dropdb -h localhost <any database>` passed this gate untouched
+    # (measured: find_hits -> [], card 251b5785). The one shape that stays allowed is
+    # the narrow e2e carve-out further down (`e2e_drop_allowed`).
+    (r"(?<![\w./-])dropdb(?![\w-])", "dropdb -- deletes a whole database"),
 ]
 
 SQL_PATTERNS = [
@@ -374,6 +379,46 @@ GIT_PUSH_PATTERNS = [
 # it). Each executed body line CARRIES its opener's client instead -- see
 # strip_heredoc_bodies.
 _SEG = re.compile(r"(?:\|\||&&|[;\n|&])")
+
+
+def _split_outside_quotes(command: str):
+    """Segments for the SQL class: the same separators as `_SEG`, but NOT inside a
+    quoted string.
+
+    WHY THE SQL CLASS NEEDS ITS OWN SPLIT (card 251b5785, measured 2026-09-26): the SQL
+    class needs a client AND a statement in ONE segment, and `_SEG` splits on the `;`
+    INSIDE `psql -c "select 1; <destructive statement>"`. The second statement landed in
+    a segment with no client and was never checked -- find_hits returned [] for it,
+    while the same statement alone was refused. A shell does not split inside quotes,
+    so this split follows the shell.
+
+    It can only MERGE segments that `_SEG` would have separated, never separate ones it
+    would have joined, so for a class that needs co-occurrence it can only add checks.
+    An unbalanced quote swallows the rest of the command into one segment -- same
+    direction, more checks, never fewer."""
+    out, cur, quote, i = [], [], None, 0
+    while i < len(command):
+        ch = command[i]
+        if quote:
+            cur.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+            cur.append(ch)
+        elif command.startswith("||", i) or command.startswith("&&", i):
+            out.append("".join(cur))
+            cur = []
+            i += 2
+            continue
+        elif ch in ";\n|&":
+            out.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+        i += 1
+    out.append("".join(cur))
+    return out
 _LINE_CONT = re.compile(r"\\\n")
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
@@ -475,11 +520,142 @@ def find_hits(command: str):
             for pat, why in GIT_PUSH_PATTERNS:
                 if re.search(pat, cmdpos, re.I) and why not in hits:
                     hits.append(why)
+    for segment in _split_outside_quotes(command):
         if DB_CLIENTS.search(segment):
             for pat, why in SQL_PATTERNS:
                 if re.search(pat, segment, re.I) and why not in hits:
                     hits.append(why)
     return hits
+
+
+# === THE E2E CARVE-OUT: ONE WHOLE COMMAND SHAPE, NOT A LOOSER PATTERN (card 251b5785)
+#
+# WHY IT EXISTS. Every e2e run creates a `crm_e2e_<agent>_<suffix>` database and none was
+# ever dropped, because this gate refuses DROP DATABASE: 233 of them, 5.0 GB, on
+# 2026-09-26 (didi's measurement), growing ~3-4 GiB per working day. A prohibition with
+# no exit ends with someone deleting the gate (see THE OVERRIDE above), and the override
+# token is for one-off human decisions, not for a daily job.
+#
+# WHY THIS IS NOT THE CARVE-OUT THE DOCBLOCK REJECTS. That one was "the connection LOOKS
+# like a test database", which would have to GUESS where DATABASE_URL points. This one
+# guesses nothing: the WHOLE command must be one of two fixed shapes, every token is
+# accounted for, the host is read from the command AND from the psql environment
+# variables that could redirect it, and anything unrecognised falls back to the normal
+# verdict (DENY). The allow condition is a conjunction; any doubt fails it.
+#
+#   psql [-h H] [-p N] [-U U] [-d D] [-X] [-q] [-w] -c "<drop-db> [IF EXISTS] <name>[;]"
+#   dropdb [-h H] [-p N] [-U U] [-w] [-e] [--if-exists] <name>
+#
+# THE NAME, and the two live traps didi named in her probe spec on the card:
+#   - `crm_e2e_didi` with NO suffix is an 88-row baseline another reset gate protects,
+#     and `crm_e2e_test` is the SHARED database other agents run on. Hence an EXPLICIT
+#     agent list and a REQUIRED suffix: `[a-z]+_` would admit `crm_e2e_test_x`.
+#   - lowercase and UNQUOTED only. Postgres folds unquoted names to lowercase, and a
+#     quoted upper-case name is a DIFFERENT database; neither is needed, both refused.
+# NOT ALLOWED, even on a matching name: `WITH (FORCE)` and `dropdb -f/--force` (they
+# terminate someone's live session), any other statement, a second statement, any shell
+# operator, an env-assignment prefix, a positional psql argument, a conninfo `-d`.
+# The daily reaper (scripts/dev-gc.py) builds its command and asks THIS function before
+# running it, so the job is held to the same shape as a typed command.
+E2E_AGENTS = ("dexter", "didi", "deeper", "mandark", "computress", "marveen", "friday", "jarvis")
+E2E_DB_NAME = re.compile(r"crm_e2e_(?:%s)_[a-z0-9][a-z0-9_]*" % "|".join(E2E_AGENTS))
+_E2E_DROP_SQL = re.compile(
+    r"\s*(?i:DROP)\s+(?i:DATABASE)\s+(?:(?i:IF)\s+(?i:EXISTS)\s+)?([^\s;]+)\s*;?\s*")
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_SHELL_META = re.compile(r"[\n&|<>`$\\(){}!*?\[\]#~]")
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _is_local_host(value: str) -> bool:
+    # A Unix-socket DIRECTORY is local by definition; a comma list (multi-host) is not
+    # something an e2e cleanup needs, so it is refused rather than parsed.
+    return value in _LOCAL_HOSTS or (value.startswith("/") and "," not in value)
+
+
+def _env_is_local(env) -> bool:
+    """The psql environment variables that can send a command with no -h elsewhere."""
+    host = env.get("PGHOST")
+    if host is not None and not _is_local_host(host):
+        return False
+    addr = env.get("PGHOSTADDR")
+    if addr is not None and addr not in {"127.0.0.1", "::1"}:
+        return False
+    if env.get("PGSERVICE") or env.get("PGSERVICEFILE"):
+        return False
+    db = env.get("PGDATABASE")
+    if db is not None and not _IDENT.fullmatch(db):
+        return False
+    return True
+
+
+def e2e_drop_allowed(command: str, env=None) -> bool:
+    """True only when the WHOLE command is one of the two e2e-drop shapes, aimed at this
+    machine, on a `crm_e2e_<agent>_<suffix>` database. Never raises."""
+    try:
+        import shlex
+        env = os.environ if env is None else env
+        raw = command.strip()
+        if not raw or _SHELL_META.search(raw):
+            return False
+        # A `;` may only be the statement terminator at the end of the quoted -c string.
+        if raw.count(";") > 1 or (";" in raw and not re.search(r";\s*[\"']$", raw)):
+            return False
+        toks = shlex.split(raw)
+        if not toks or toks[0] not in ("psql", "dropdb"):
+            return False
+        if not _env_is_local(env):
+            return False
+        tool, rest = toks[0], toks[1:]
+        with_val = {"-h": "host", "--host": "host", "-p": "port", "--port": "port",
+                    "-U": "user", "--username": "user"}
+        flags = {"-w", "--no-password"}
+        if tool == "psql":
+            with_val.update({"-d": "db", "--dbname": "db", "-c": "sql", "--command": "sql"})
+            flags |= {"-X", "--no-psqlrc", "-q", "--quiet"}
+        else:
+            flags |= {"-e", "--echo", "--if-exists"}
+        seen, positional, i = {}, [], 0
+        while i < len(rest):
+            t = rest[i]
+            if t.startswith("--") and "=" in t:
+                t, val = t.split("=", 1)
+                if t not in with_val:
+                    return False
+                key = with_val[t]
+                i += 1
+            elif t in with_val:
+                if i + 1 >= len(rest):
+                    return False
+                key, val = with_val[t], rest[i + 1]
+                i += 2
+            elif t in flags:
+                i += 1
+                continue
+            elif t.startswith("-"):
+                return False
+            else:
+                positional.append(t)
+                i += 1
+                continue
+            if key in seen:
+                return False
+            seen[key] = val
+        if "host" in seen and not _is_local_host(seen["host"]):
+            return False
+        if "port" in seen and not seen["port"].isdigit():
+            return False
+        if "user" in seen and not _IDENT.fullmatch(seen["user"]):
+            return False
+        if tool == "psql":
+            if positional or "sql" not in seen:
+                return False
+            if "db" in seen and not _IDENT.fullmatch(seen["db"]):
+                return False
+            m = _E2E_DROP_SQL.fullmatch(seen["sql"])
+            return bool(m) and bool(E2E_DB_NAME.fullmatch(m.group(1)))
+        return len(positional) == 1 and bool(E2E_DB_NAME.fullmatch(positional[0]))
+    except Exception:
+        return False
 
 
 OVERRIDE = re.compile(r"(^|\s)MARVEEN_DB_GATE=allow(\s|$)")
@@ -521,6 +697,10 @@ def main():
 
         hits = find_hits(command)
         if not hits:
+            sys.exit(0)
+
+        if e2e_drop_allowed(command):
+            log("E2E-DROP", "; ".join(hits), command)
             sys.exit(0)
 
         if OVERRIDE.search(command):
