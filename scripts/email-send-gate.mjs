@@ -306,6 +306,116 @@ export function buildWrapperDepthMsg() {
   )
 }
 
+// VARURL926 (card cb63ddb4): a Resend URL in a shell variable or built by a
+// command substitution (`curl -X POST $API/emails -d ...`) never matched
+// RESEND_TARGET. Narrow fail-closed on the BODY: a curl/wget whose URL (a
+// positional or --url) holds an unresolved `$`, AND whose body option values
+// carry BOTH a `to` key AND a `subject` key, is a send. Full rationale and the
+// stated limits at _var_url_send in outgoing-copy-gate.py (the python twin);
+// send-invocation-cases.json pins both.
+const VARURL_BODY_LONG = new Set(['--data', '--data-raw', '--data-binary', '--data-urlencode', '--data-ascii',
+  '--json', '--form', '--form-string', '--post-data', '--body-data'])
+const CURL_VALUE_SHORT = 'HdXoOwuAebcmFTEKrYyzCPQtx'
+const CURL_VALUE_LONG = new Set(['--header', '--data', '--data-raw', '--data-binary', '--data-urlencode',
+  '--data-ascii', '--json', '--output', '--write-out', '--request', '--method',
+  '--user', '--user-agent', '--referer', '--cookie', '--cookie-jar',
+  '--max-time', '--connect-timeout', '--retry', '--form', '--form-string',
+  '--upload-file', '--config', '--cert', '--key', '--cacert', '--proxy',
+  '--resolve', '--connect-to', '--range', '--time-cond', '--oauth2-bearer'])
+const VARURL_TO = /["']to["']\s*:|(?:^|&)to=/im
+const VARURL_SUBJECT = /["']subject["']\s*:|(?:^|&)subject=/im
+
+export function collapseSubst(cmd) {
+  let out = ''
+  let q = null
+  const n = cmd.length
+  for (let i = 0; i < n; i++) {
+    const ch = cmd[i]
+    if (q === "'") { if (ch === "'") q = null; out += ch; continue }
+    if (ch === '\\' && i + 1 < n) { out += ch + cmd[i + 1]; i++; continue }
+    if (ch === "'" && q === null) { q = "'"; out += ch; continue }
+    if (ch === '"') { q = q === '"' ? null : '"'; out += ch; continue }
+    if (ch === '$' && cmd[i + 1] === '(') {
+      let depth = 1
+      let j = i + 2
+      while (j < n && depth) { if (cmd[j] === '(') depth++; else if (cmd[j] === ')') depth--; j++ }
+      out += '$__SUBST__'
+      i = j - 1
+      continue
+    }
+    if (ch === '`') {
+      let j = cmd.indexOf('`', i + 1)
+      j = j < 0 ? n : j + 1
+      out += '$__SUBST__'
+      i = j - 1
+      continue
+    }
+    out += ch
+  }
+  return out
+}
+
+function curlUrlsAndBodies(rest) {
+  const urls = []
+  const bodies = []
+  const n = rest.length
+  let i = 0
+  while (i < n) {
+    const t = rest[i]
+    if (t === '--url' && i + 1 < n) { urls.push(rest[i + 1]); i += 2; continue }
+    if (t.startsWith('--url=')) { urls.push(t.slice(6)); i += 1; continue }
+    if (t.startsWith('--')) {
+      const eq = t.indexOf('=')
+      if (eq >= 0) {
+        if (VARURL_BODY_LONG.has(t.slice(0, eq))) bodies.push(t.slice(eq + 1))
+        i += 1
+        continue
+      }
+      if (CURL_VALUE_LONG.has(t) || VARURL_BODY_LONG.has(t)) {
+        if (VARURL_BODY_LONG.has(t) && i + 1 < n) bodies.push(rest[i + 1])
+        i += 2
+        continue
+      }
+      i += 1
+      continue
+    }
+    if (t.startsWith('-') && t.length > 1) {
+      const letters = t.slice(1)
+      let k = -1
+      for (let j = 0; j < letters.length; j++) if (CURL_VALUE_SHORT.includes(letters[j])) { k = j; break }
+      if (k < 0) { i += 1; continue }
+      const glued = letters.slice(k + 1)
+      const isBody = letters[k] === 'd' || letters[k] === 'F'
+      if (glued) { if (isBody) bodies.push(glued); i += 1; continue }
+      if (isBody && i + 1 < n) bodies.push(rest[i + 1])
+      i += 2
+      continue
+    }
+    urls.push(t)
+    i += 1
+  }
+  return { urls, bodies }
+}
+
+export function varUrlSend(cmd) {
+  let segments
+  try {
+    segments = segmentsTokens(collapseSubst(cmd))
+  } catch {
+    return false
+  }
+  for (const toks of segments) {
+    for (const h of commandHeads(toks)) {
+      if (!h || !h.length || !CURLISH.test(basename(h[0]))) continue
+      const { urls, bodies } = curlUrlsAndBodies(h.slice(1))
+      if (!urls.some((u) => u.includes('$'))) continue
+      const body = bodies.join('\n')
+      if (VARURL_TO.test(body) && VARURL_SUBJECT.test(body)) return true
+    }
+  }
+  return false
+}
+
 export function isSendInvocation(cmd, depth = 0) {
   let segments
   try {
@@ -315,7 +425,7 @@ export function isSendInvocation(cmd, depth = 0) {
     // this path the gate is exactly as strict as before -- never weaker.
     return SEND_PATTERNS.some((re) => re.test(cmd))
   }
-  return segments.some((toks) => segmentIsSend(toks, depth))
+  return segments.some((toks) => segmentIsSend(toks, depth)) || varUrlSend(cmd)
 }
 
 // Outbound-shaped operations of the multiplexed manage_email tool. Each of

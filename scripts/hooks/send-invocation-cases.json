@@ -665,6 +665,66 @@
       "name": "[0ca64c14] address at the provider inside an inter-agent payload",
       "cmd": "curl -s http://localhost:3420/api/messages -d 'ird meg a x@api.resend.com cimre'",
       "expected": false
+    },
+    {
+      "name": "[VARURL926 cb63ddb4] var URL, JSON to+subject",
+      "cmd": "API=https://api.resend.com; curl -X POST $API/emails -H \"Authorization: Bearer $K\" -d '{\"from\":\"a@x.hu\",\"to\":\"b@y.hu\",\"subject\":\"Hi\",\"html\":\"x\"}'",
+      "expected": true
+    },
+    {
+      "name": "[VARURL926 cb63ddb4] $(...) URL, --data to+subject",
+      "cmd": "curl -s -X POST \"$(cat base.txt)/emails\" -H 'Content-Type: application/json' --data '{\"to\":[\"b@y.hu\"],\"subject\":\"s\",\"text\":\"t\"}'",
+      "expected": true
+    },
+    {
+      "name": "[VARURL926 cb63ddb4] backtick URL, escaped JSON",
+      "cmd": "curl -s -X POST `cat base`/emails -d \"{\\\"to\\\":\\\"b@y.hu\\\",\\\"subject\\\":\\\"s\\\"}\" ",
+      "expected": true
+    },
+    {
+      "name": "[VARURL926 cb63ddb4] ${VAR} URL, -F to= subject=",
+      "cmd": "curl -X POST ${RESEND}/emails -F to=b@y.hu -F subject=hello",
+      "expected": true
+    },
+    {
+      "name": "[VARURL926 cb63ddb4] NEGATIVE CONTROL: inter-agent via $API, from/to/content, no subject",
+      "cmd": "curl $API/api/messages -d '{\"from\":\"a\",\"to\":\"b\",\"content\":\"...\"}'",
+      "expected": false
+    },
+    {
+      "name": "[VARURL926 cb63ddb4] literal localhost inter-agent, subject only in content prose",
+      "cmd": "curl -s -X POST http://localhost:3420/api/messages -H \"Authorization: Bearer $(cat store/.dashboard-token)\" -d '{\"from\":\"a\",\"to\":\"b\",\"content\":\"subject: x\"}'",
+      "expected": false
+    },
+    {
+      "name": "[VARURL926 cb63ddb4] var URL, Reply-To/Subject only in HEADERS",
+      "cmd": "curl -X POST $API/emails -H 'Reply-To: x' -H 'Subject: y' -d '{\"html\":\"x\"}'",
+      "expected": false
+    },
+    {
+      "name": "[VARURL926 cb63ddb4] literal non-Resend URL with to+subject",
+      "cmd": "curl -X POST https://example.com/api -d '{\"to\":\"b\",\"subject\":\"s\"}'",
+      "expected": false
+    },
+    {
+      "name": "[VARURL926 cb63ddb4] var URL, body from file (stated limit)",
+      "cmd": "curl -X POST $API/emails -d @mail.json",
+      "expected": false
+    },
+    {
+      "name": "[VARURL926 cb63ddb4] var URL inter-agent, 'subject:' and 'to=' only inside content prose",
+      "cmd": "curl $API/api/messages -d '{\"from\":\"a\",\"to\":\"b\",\"content\":\"subject: x, to=y\"}'",
+      "expected": false
+    },
+    {
+      "name": "[VARURL926 cb63ddb4] --url \"$BASE\" with --json to+subject",
+      "cmd": "curl -X POST --url \"$BASE/emails\" --json '{\"to\": \"b@y.hu\", \"subject\": \"s\"}'",
+      "expected": true
+    },
+    {
+      "name": "[VARURL926 cb63ddb4] sudo curl, glued -sd body, URL last",
+      "cmd": "sudo curl -sd '{\"to\":\"b\",\"subject\":\"s\"}' $U",
+      "expected": true
     }
   ]
 }

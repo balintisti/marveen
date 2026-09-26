@@ -307,6 +307,123 @@ def _curl_resend_verdict(rest):
         # gyanus "GET torzzsel" alak -- mindketto kuldeskent kezelve
         return "send"
     return "read"
+# VARURL926 (card cb63ddb4, didi's review of 0ca64c14): a Resend URL held in
+# a shell variable or built by a command substitution -- `API=...; curl -X
+# POST $API/emails -d ...`, `curl $(cat f)/emails ...` -- never matched
+# _RESEND_TARGET, so a real mail POST passed as "not a send" in both gates.
+# The host is unknowable before the shell runs, so the rule is a NARROW
+# fail-closed on the BODY instead: a curl/wget whose URL (a positional arg or
+# --url) contains an unresolved `$`, AND whose request body carries BOTH a
+# `to` key AND a `subject` key, is a send. Why `subject`: the provider's send
+# endpoint requires it, and our inter-agent payload (from/to/content) never
+# has it -- a rule on `to` alone would block our own messaging. Only BODY
+# option values are read, never headers, so `Reply-To:` does not count.
+# Stated limits that stay: IP + Host header, httpie, python requests, a body
+# from a file or stdin (`-d @f`), a body itself in a variable.
+# Twin: varUrlSend in email-send-gate.mjs; send-invocation-cases.json pins both.
+_VARURL_BODY_LONG = {
+    "--data", "--data-raw", "--data-binary", "--data-urlencode", "--data-ascii",
+    "--json", "--form", "--form-string", "--post-data", "--body-data",
+}
+# A KEY, not a word: a quoted JSON key (`"to":`) or a form field at the start
+# of a value or after `&` (`to=`, `a=1&subject=x`). Prose inside a message
+# ("... subject: x ...") does not count.
+_VARURL_TO = re.compile(r"[\"']to[\"']\s*:|(?:^|&)to=", re.I | re.M)
+_VARURL_SUBJECT = re.compile(r"[\"']subject[\"']\s*:|(?:^|&)subject=", re.I | re.M)
+
+
+def _collapse_subst(cmd: str) -> str:
+    """`$(...)` and backtick substitutions -> the placeholder `$__SUBST__`, so
+    the URL they build stays ONE token carrying an unresolved `$` (the segment
+    splitter would otherwise cut the curl command in two)."""
+    out = []
+    i, n = 0, len(cmd)
+    q = None
+    while i < n:
+        ch = cmd[i]
+        if q == "'":
+            if ch == "'":
+                q = None
+            out.append(ch); i += 1; continue
+        if ch == "\\" and i + 1 < n:
+            out.append(cmd[i:i + 2]); i += 2; continue
+        if ch == "'" and q is None:
+            q = "'"; out.append(ch); i += 1; continue
+        if ch == '"':
+            q = None if q == '"' else '"'
+            out.append(ch); i += 1; continue
+        if ch == "$" and i + 1 < n and cmd[i + 1] == "(":
+            depth, j = 1, i + 2
+            while j < n and depth:
+                depth += {"(": 1, ")": -1}.get(cmd[j], 0)
+                j += 1
+            out.append("$__SUBST__"); i = j; continue
+        if ch == "`":
+            j = cmd.find("`", i + 1)
+            j = n if j < 0 else j + 1
+            out.append("$__SUBST__"); i = j; continue
+        out.append(ch); i += 1
+    return "".join(out)
+
+
+def _curl_urls_and_bodies(rest):
+    """(positional/--url values, body-option values) of a curl/wget arg list."""
+    urls, bodies = [], []
+    i, n = 0, len(rest)
+    while i < n:
+        t = rest[i]
+        if t == "--url" and i + 1 < n:
+            urls.append(rest[i + 1]); i += 2; continue
+        if t.startswith("--url="):
+            urls.append(t.split("=", 1)[1]); i += 1; continue
+        if t.startswith("--"):
+            name = t.split("=", 1)[0]
+            if "=" in t:
+                if name in _VARURL_BODY_LONG:
+                    bodies.append(t.split("=", 1)[1])
+                i += 1; continue
+            if t in _CURL_VALUE_LONG or t in _VARURL_BODY_LONG:
+                if t in _VARURL_BODY_LONG and i + 1 < n:
+                    bodies.append(rest[i + 1])
+                i += 2; continue
+            i += 1; continue
+        if t.startswith("-") and len(t) > 1:
+            letters = t[1:]
+            k = next((j for j, ch in enumerate(letters) if ch in _CURL_VALUE_SHORT), None)
+            if k is None:
+                i += 1; continue
+            glued = letters[k + 1:]
+            is_body = letters[k] in "dF"
+            if glued:
+                if is_body:
+                    bodies.append(glued)
+                i += 1; continue
+            if is_body and i + 1 < n:
+                bodies.append(rest[i + 1])
+            i += 2; continue
+        urls.append(t)
+        i += 1
+    return urls, bodies
+
+
+def _var_url_send(cmd: str, depth: int) -> bool:
+    try:
+        segments = _segments_tokens(_collapse_subst(cmd))
+    except ValueError:
+        return False
+    for toks in segments:
+        for h in _command_heads(toks):
+            if not h or not _CURLISH.match(_basename(h[0])):
+                continue
+            urls, bodies = _curl_urls_and_bodies(h[1:])
+            if not any("$" in u for u in urls):
+                continue
+            body = "\n".join(bodies)
+            if _VARURL_TO.search(body) and _VARURL_SUBJECT.search(body):
+                return True
+    return False
+
+
 # A tovabbi kuldes-jellegu literalok, amikre a parse-hiba eseten (es CSAK
 # akkor) konzervativan visszaesunk -- lasd is_send_invocation vegen.
 _FALLBACK_LITERALS = re.compile(
@@ -556,7 +673,9 @@ def is_send_invocation(cmd: str, _depth: int = 0) -> bool:
         # nem ezen a fallbacken utazik. (Merve: az entrypoint-blokkban
         # is_send_invocation 1 elofordulas, a Bash agon.)
         return bool(_FALLBACK_LITERALS.search(cmd))
-    return any(_segment_is_send(toks, _depth) for toks in segments)
+    if any(_segment_is_send(toks, _depth) for toks in segments):
+        return True
+    return _var_url_send(cmd, _depth)
 
 # --- Hungarian detection (accent-insensitive markers) -----------------------
 # These fire on both the correct and the stripped spelling, so a transliterated
