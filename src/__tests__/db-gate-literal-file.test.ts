@@ -133,7 +133,10 @@ describe('db-destructive-gate: fajlbol erkezo SQL', () => {
     // didi 61 valodi parancsot jatszott vissza: a `psql -f /` egy IDEZETT kartya-cimben
     // allt, a kapu megnyitotta a `/`-t, es tiltott. A kliensnek PARANCS-POZICIOBAN kell allnia.
     expect(blocks(`bash scripts/kanban-uj.sh marveen marveen "DB-kapu: a psql -f / nem latszik"`)).toBe(false)
-    expect(blocks(`git commit -m "psql -f destructive.sql is now covered"`)).toBe(false)
+    // A `psql` SZOKOZ utan alljon az idezeten belul: egy `"psql` alakot a kliens-minta
+    // amugy sem lat, tehat az a teszt a parancs-pozicio nelkul is zold maradt (mert
+    // mutacioval, N1). Ez az alak viszont a nyers szegmensen TILTANA.
+    expect(blocks(`git commit -m "now psql -f destructive.sql is covered"`)).toBe(false)
   })
 
   // A NEGATIV ESETEK A JELENTES SULYA: egy tul-blokkolo kaput megkerulnek.
