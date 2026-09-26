@@ -326,7 +326,7 @@ main() {
       # (a timer kadenciaja szerint), tehat elbukott alertenkent egy naplosor. Ez szandekos:
       # a lemez ilyenkor TELE van, es egy nem kezbesitett veszjelzes ujraprobalasa pontosan
       # az, amiert ez az or letezik. A csendes elhallgatas volt a hiba.
-      if alert_route "🔴 Disk space critical: ${SCRATCH_DIR} (volume $(disk_mount)) is at ${usage}% after reaping ${removed} scratch item(s). Manual cleanup needed -- a full disk can wedge the channel session (deafness)."; then
+      if alert_route "🔴 Disk space critical: ${SCRATCH_DIR} (volume $(disk_mount)) is at ${usage}% ($( [ "$REAP_THRESHOLD" -ge 100 ] && echo "reap off" || echo "after reaping ${removed} scratch item(s)" )). Manual cleanup needed -- a full disk can wedge the channel session (deafness)."; then
         echo "$now" > "$ALERT_STAMP" 2>/dev/null || true
       else
         log "alert did NOT go out -- cooldown stamp NOT written, will retry next tick"

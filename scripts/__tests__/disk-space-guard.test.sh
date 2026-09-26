@@ -441,6 +441,23 @@ OUTR4="$(DISK_GUARD_TMUX_BIN="$RDIR/bin/tmux-up" DISK_GUARD_COORD_SENDER="$RDIR/
 printf '%s' "$OUTR4" | grep -q "within alert cooldown" && pass "r: a coordinator alert starts the cooldown too" || fail "r: re-alerted within cooldown: $OUTR4"
 
 # ---------------------------------------------------------------------------
+# (s) ALERTGATE926 (card 0c8ff24b): the live plist turns the reap OFF with
+# REAP_THRESHOLD=100. The old early return (usage < REAP -> return) sat before the
+# alert branch, so the reap switch silenced the 95% alert too: 98% for hours, 0-byte
+# log. didi's review: nothing pinned this -- the suite was 51/51 on the fix AND on the
+# mutant. Reap off + usage at/over the alert level must ALERT and must NOT reap.
+# ---------------------------------------------------------------------------
+echo ""
+echo "(s) Reap off does not silence the alert"
+read -r S ST <<< "$(fresh_case s-off)"
+OUTS="$(DISK_GUARD_REAP_THRESHOLD=100 run_guard 98 "$S" "$ST")"
+printf '%s' "$OUTS" | grep -q "ALERT_DRYRUN" && pass "s: reap off, 98% -> alert" || fail "s: reap off, 98% -> NO alert: $OUTS"
+printf '%s' "$OUTS" | grep -q "reaping scratch" && fail "s: reap off, but it reaped: $OUTS" || pass "s: reap off -> no reap"
+read -r S ST <<< "$(fresh_case s-ctl)"
+OUTS2="$(DISK_GUARD_REAP_THRESHOLD=100 run_guard 90 "$S" "$ST")"
+printf '%s' "$OUTS2" | grep -q "ALERT_DRYRUN" && fail "s: reap off, 90% -> alerted below 95%" || pass "s: reap off, 90% -> no alert (control)"
+
+# ---------------------------------------------------------------------------
 echo ""
 echo "======================"
 TOTAL=$((PASS + FAIL))
