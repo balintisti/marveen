@@ -99,7 +99,20 @@ fi
 # Test hooks: the tmux binary (the "is the coordinator running" probe), and a SENDER executable
 # that takes the message on stdin and prints "OK id=<n>" like agent-msg.sh -- so a test exercises
 # this routing without ever writing to the live dashboard queue.
-TMUX_BIN="${DISK_GUARD_TMUX_BIN:-tmux}"
+# LAUNCHD'S PATH IS /usr/bin:/bin:/usr/sbin:/sbin (`launchctl print`, default environment), and
+# Homebrew's tmux is not on it. The bare `tmux` exited 127 under launchd, 2>/dev/null hid it, and on
+# 2026-09-26 every one of 9 alerts logged "coordinator ... is not running" while it ran -- all 9 went
+# to the owner. So: PATH first, then the known install dirs; and an empty result is said, not guessed.
+TMUX_SEARCH="${DISK_GUARD_TMUX_SEARCH:-/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin}"
+resolve_tmux() {
+  local d
+  if [ -n "${DISK_GUARD_TMUX_BIN:-}" ]; then echo "$DISK_GUARD_TMUX_BIN"; return; fi
+  command -v tmux 2>/dev/null && return
+  local IFS=:
+  for d in $TMUX_SEARCH; do [ -x "$d/tmux" ] && { echo "$d/tmux"; return; }; done
+  return 0
+}
+TMUX_BIN="$(resolve_tmux)"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [$LOG_TAG] $*" || true; }
 
@@ -247,8 +260,17 @@ alert_owner() {
 # mktemp: on a truly full disk this path can fail, and the fallback below uses no files at all.
 alert_coordinator() {
   local msg="$1" out rc
-  if ! "$TMUX_BIN" has-session -t "${MAIN_AGENT_ID}-channels" 2>/dev/null; then
+  if [ -z "$TMUX_BIN" ]; then
+    log "cannot find tmux (PATH=$PATH; searched $TMUX_SEARCH) -- cannot tell whether the coordinator runs; the owner gets this alert"
+    return 1
+  fi
+  # rc 1 is tmux's "no such session"; anything else is a probe that did not answer.
+  "$TMUX_BIN" has-session -t "${MAIN_AGENT_ID}-channels" 2>/dev/null; rc=$?
+  if [ "$rc" = "1" ]; then
     log "coordinator session ${MAIN_AGENT_ID}-channels is not running -- the owner gets this alert"
+    return 1
+  elif [ "$rc" != "0" ]; then
+    log "tmux probe failed (rc=${rc}, $TMUX_BIN) -- cannot tell whether the coordinator runs; the owner gets this alert"
     return 1
   fi
   if [ -n "${DISK_GUARD_COORD_SENDER:-}" ]; then
@@ -341,7 +363,7 @@ main() {
 # DISK_GUARD_USAGE_OVERRIDE on purpose -- a probe that could be fed a fake number
 # would let the test suite "cover" the df line without ever running it.
 if [ "${1:-}" = "--probe" ]; then
-  echo "PROBE scratch=$SCRATCH_DIR mount=$(disk_mount) usage=$(real_disk_usage) reap_at=${REAP_THRESHOLD} alert_at=${ALERT_THRESHOLD}"
+  echo "PROBE scratch=$SCRATCH_DIR mount=$(disk_mount) usage=$(real_disk_usage) reap_at=${REAP_THRESHOLD} alert_at=${ALERT_THRESHOLD} tmux=${TMUX_BIN:-none}"
   exit 0
 fi
 

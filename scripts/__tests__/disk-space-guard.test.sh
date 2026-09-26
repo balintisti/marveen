@@ -458,6 +458,43 @@ OUTS2="$(DISK_GUARD_REAP_THRESHOLD=100 run_guard 90 "$S" "$ST")"
 printf '%s' "$OUTS2" | grep -q "ALERT_DRYRUN" && fail "s: reap off, 90% -> alerted below 95%" || pass "s: reap off, 90% -> no alert (control)"
 
 # ---------------------------------------------------------------------------
+# (t) LAUNCHD'S PATH (card b610c593, measured 2026-09-26): launchd runs the guard with
+# PATH=/usr/bin:/bin:/usr/sbin:/sbin, and Homebrew's tmux is not on it. The bare `tmux`
+# probe exited 127, the log said "coordinator session ... is not running" while it ran,
+# and all 9 alerts of that day went to the owner. (r) never saw it: every case there
+# hands the script DISK_GUARD_TMUX_BIN. These run WITHOUT it, on a PATH that has
+# everything /usr/bin and /bin have except tmux -- the launchd shape on any OS.
+# ---------------------------------------------------------------------------
+echo ""
+echo "(t) the coordinator probe finds tmux under launchd's PATH"
+TDIR="$TMPDIR_BASE/case-t"; mkdir -p "$TDIR/notmux" "$TDIR/brew"
+for f in /usr/bin/* /bin/* /usr/sbin/* /sbin/*; do
+  n="${f##*/}"; [ "$n" = "tmux" ] || [ -e "$TDIR/notmux/$n" ] || ln -s "$f" "$TDIR/notmux/$n"
+done
+cp "$RDIR/bin/tmux-up" "$TDIR/brew/tmux"
+launchd_guard() { # search-dir -> stdout
+  rm -f "$RDIR/sent"; read -r S ST <<< "$(fresh_case "t-$2")"
+  env -u DISK_GUARD_TMUX_BIN PATH="$TDIR/notmux" DISK_GUARD_TMUX_SEARCH="$1" \
+    DISK_GUARD_COORD_SENDER="$RDIR/bin/send-ok" DISK_GUARD_USAGE_OVERRIDE=96 \
+    DISK_GUARD_SCRATCH_DIR="$S" DISK_GUARD_STATE_DIR="$ST" DISK_GUARD_ALERT_DRYRUN=1 \
+    /bin/bash "$GUARD" 2>&1
+}
+PATH="$TDIR/notmux" command -v tmux >/dev/null && fail "t: fixture: tmux is still on the test PATH" || pass "t: fixture: no tmux on the test PATH (control)"
+OUTT1="$(launchd_guard "$TDIR/brew" found)"
+printf '%s' "$OUTT1" | grep -q "coordinator alerted (OK id=7)" && pass "t: tmux off PATH but in a known dir -> the coordinator gets it" || fail "t: no coordinator alert under launchd's PATH: $OUTT1"
+printf '%s' "$OUTT1" | grep -qF "ALERT_DRYRUN: " && fail "t: the owner was ALSO alerted: $OUTT1" || pass "t: ...and the owner is NOT alerted"
+OUTT2="$(launchd_guard "$TDIR/nowhere" missing)"
+printf '%s' "$OUTT2" | grep -q "cannot find tmux" && pass "t: no tmux anywhere -> the log says so" || fail "t: no tmux anywhere, but the log does not say so: $OUTT2"
+printf '%s' "$OUTT2" | grep -q "is not running" && fail "t: no tmux, yet the log claims the coordinator is not running: $OUTT2" || pass "t: ...and does not claim the coordinator is down"
+printf '%s' "$OUTT2" | grep -qF "ALERT_DRYRUN: " && [ ! -e "$RDIR/sent" ] && pass "t: no tmux -> the owner gets it, the sender is not called" || fail "t: no owner fallback without tmux: $OUTT2"
+printf '#!/bin/sh\nexit 127\n' > "$RDIR/bin/tmux-broken"; chmod +x "$RDIR/bin/tmux-broken"
+OUTT3="$(route tmux-broken send-ok)"
+printf '%s' "$OUTT3" | grep -q "tmux probe failed (rc=127," && pass "t: a probe rc other than 1 is named, not read as 'not running'" || fail "t: probe rc=127 read as something else: $OUTT3"
+printf '%s' "$OUTT3" | grep -qF "ALERT_DRYRUN: " && pass "t: ...and the owner gets it" || fail "t: no owner fallback after a failed probe: $OUTT3"
+PROBET="$(env -u DISK_GUARD_TMUX_BIN PATH="$TDIR/notmux" DISK_GUARD_TMUX_SEARCH="$TDIR/brew" /bin/bash "$GUARD" --probe 2>&1)"
+printf '%s' "$PROBET" | grep -qF "tmux=$TDIR/brew/tmux" && pass "t: --probe names the tmux it resolved" || fail "t: --probe does not name the resolved tmux: $PROBET"
+
+# ---------------------------------------------------------------------------
 echo ""
 echo "======================"
 TOTAL=$((PASS + FAIL))
