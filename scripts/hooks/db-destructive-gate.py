@@ -120,11 +120,24 @@ LOG = "/Users/isti/marveen/store/db-gate.log"
 #                     segment has to invoke a database client. `DROP TABLE` in a
 #                     heredoc written to a markdown file invokes nothing.
 #
-# The residual hole is stated rather than hidden: a destructive statement passed to
-# a client through a variable the hook cannot see (`psql -f "$f"`, or a script that
-# builds SQL at runtime) is not caught. This gate is a guard rail against a typed
-# mistake, not a sandbox -- it cannot become one, because the hook sees a command
-# string and not the process that will run.
+# FILE-DELIVERED SQL (card fc7d05f9, porting friday's 2e08a7e1 which never merged):
+# the LITERAL-PATH case is covered, the VARIABLE case is not, and the difference is
+# not effort -- it is the tool's boundary.
+#
+#   COVERED -- the file is READ and its statements are checked as if typed:
+#       psql -f x.sql | psql --file=x.sql | psql < x.sql | cat x.sql | psql
+#       psql -c '\i x.sql' (also \ir, \include, \include_relative, and inside a
+#       psql heredoc) | prisma db execute --file x.sql
+#   NOT COVERED, and it cannot be: `psql -f "$f"` (15 of the 50 file-fed commands in
+#       14 days of real fleet traffic, didi's census on fc7d05f9), and any script that
+#       builds or runs SQL itself (`bash x.sh`, `python3 x.py`, scripts/readonly-
+#       measure.sh). The hook sees a command string, not the process that will run.
+#       This gate is a guard rail against a typed mistake, not a sandbox.
+#
+# DO NOT DESCRIBE THIS AS "THE -f HOLE IS CLOSED". Our own prescribed recipe
+# (readonly-measure.sh) uses the variable form, so the one sanctioned user of file
+# delivery stays outside this check -- it does not need it (BEGIN TRANSACTION READ
+# ONLY, gate proved before AND after).
 
 TOOL_PATTERNS = [
     (r"prisma\s+migrate\s+reset", "prisma migrate reset -- drops and recreates the schema"),
@@ -490,9 +503,127 @@ def strip_heredoc_bodies(command: str) -> str:
     return "\n".join(out)
 
 
-def find_hits(command: str):
+# --- LITERAL-PATH FILE ARGUMENTS (card fc7d05f9, from friday's 2e08a7e1) --------
+# When a DB client is handed a FILE, the statements live in the file, so the command
+# text alone can never see them. The file is read and each STATEMENT (split on `;`,
+# newlines joined) is appended PREFIXED with the client -- the same trick as an
+# executed heredoc body -- so the SQL class finds client and statement in one segment.
+#
+# WHY STATEMENTS AND NOT LINES: a line-by-line prefix turns a legal two-line
+# `DELETE FROM t` / `WHERE id = 1;` into `psql DELETE FROM t`, a FALSE refusal of the
+# commonest safe shape. Joining lines first keeps the WHERE with its DELETE.
+#
+# THE WHOLE FILE IS READ. friday's version stopped at line 400 with no log, so a
+# statement on line 401 passed silently (didi measured it) -- the worst kind of gap,
+# because the gate looked like it had checked.
+#
+# WHAT COULD NOT BE CHECKED IS A REFUSAL, NOT A PASS (fail-closed), with one exception:
+#   exists but unreadable / over the size cap / relative path with no cwd -> DENY,
+#       and the reason names the way out (absolute path, or MARVEEN_DB_GATE=allow).
+#   does NOT exist -> ALLOW + log. The client itself fails on a missing file, so a
+#       refusal protects nothing and only adds friction (didi's reading, accepted).
+# The size cap is generous (16 MiB): a pg_dump restore is a legitimate big file, and a
+# `--clean` dump really does contain drops -- refusing it is this gate doing its job.
+#
+# OVER-BLOCKING is prevented structurally: expansion happens only in a segment that
+# already invokes a DB client, so `grep -f pats`, `docker compose -f x.yml`,
+# `make -f Makefile` never reach it. `\i` inside an expanded file is followed too, up
+# to _MAX_FILE_DEPTH levels.
+_FILE_ARG = re.compile(
+    r"(?:^|\s)(?:-f|--file)(?:=|\s+)(\S+)"      # psql -f x.sql / --file=x.sql
+    r"|(?<![<0-9])<(?![<(])\s*(\S+)"           # psql < x.sql  (never a heredoc)
+    r"|\\(?:include_relative|include|ir|i)\s+(\S+)"   # psql \i x.sql
+)
+# `cat x.sql | psql` -- the file sits in the segment BEFORE the pipe, so it is found
+# on the whole command, not per segment.
+_CAT_PIPE = re.compile(r"(?:^|[\s;&(])cat\s+(\S+)\s*\|\s*((?:[A-Za-z_]\w*=\S*\s+)*\S+)")
+# A path we can resolve without running anything. Anything with shell expansion in it
+# is deliberately skipped: guessing what `$f` held is how a gate starts lying.
+_LITERAL_PATH = re.compile(r"^[\w./~+-]+$")
+_MAX_FILE_BYTES = 16 * 1024 * 1024
+_MAX_FILE_DEPTH = 3
+
+
+def _read_sql_file(path, cwd):
+    """(text, None) on success, (None, "missing") if absent, (None, reason) otherwise.
+    Never raises."""
+    try:
+        if path.startswith("~"):
+            path = os.path.expanduser(path)
+        if not os.path.isabs(path):
+            if not cwd:
+                return None, "relative path and no cwd to resolve it"
+            path = os.path.join(cwd, path)
+        if not os.path.exists(path):
+            return None, "missing"
+        if os.path.getsize(path) > _MAX_FILE_BYTES:
+            return None, "larger than %d MiB" % (_MAX_FILE_BYTES // (1024 * 1024))
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return fh.read(), None
+    except Exception as exc:
+        return None, "unreadable (%s)" % type(exc).__name__
+
+
+def _file_refs(command: str):
+    """(client, raw_path) for every file handed to a DB client in `command`."""
+    refs = []
+    for segment in _split_outside_quotes(command):
+        client = DB_CLIENTS.search(segment)
+        if not client:
+            continue
+        for m in _FILE_ARG.finditer(segment):
+            refs.append((client.group(2), m.group(1) or m.group(2) or m.group(3) or ""))
+    for m in _CAT_PIPE.finditer(command):
+        client = DB_CLIENTS.search(" " + m.group(2))
+        if client:
+            refs.append((client.group(2), m.group(1)))
+    return refs
+
+
+def expand_file_args(command: str, cwd=None):
+    """(extra_lines, problems, missing). `extra_lines` are client-prefixed statements
+    from every readable literal file; `problems` are paths that exist (or cannot be
+    resolved) but could not be checked -- each becomes a refusal; `missing` are paths
+    that do not exist -- logged, not refused."""
+    extra, problems, missing, seen = [], [], [], set()
+    pending = command
+    for _ in range(_MAX_FILE_DEPTH):
+        found = []
+        for name, raw in _file_refs(pending):
+            raw = raw.strip().strip("\"'")
+            if not raw or raw == "-" or not _LITERAL_PATH.match(raw) or raw in seen:
+                continue
+            seen.add(raw)
+            text, why = _read_sql_file(raw, cwd)
+            if why == "missing":
+                missing.append(raw)
+                continue
+            if text is None:
+                problems.append("a file handed to %s could not be checked: %s -- %s. "
+                                "Use an absolute path, or MARVEEN_DB_GATE=allow if it "
+                                "is meant." % (name, raw, why))
+                continue
+            for stmt in text.replace("\r", " ").replace("\n", " ").split(";"):
+                if stmt.strip():
+                    found.append("%s %s;" % (name, stmt.strip()))
+        if not found:
+            break
+        extra.extend(found)
+        pending = "\n".join(found)
+    return extra, problems, missing
+
+
+def find_hits(command: str, cwd=None, missing=None):
+    """`missing`, if a list, collects literal files that do not exist (logged by the
+    caller, never refused). Everything else stays pure."""
     hits = []
     command = strip_heredoc_bodies(command)
+    extra, problems, absent = expand_file_args(command, cwd)
+    if missing is not None:
+        missing.extend(absent)
+    hits.extend(problems)
+    if extra:
+        command = command + "\n" + "\n".join(extra)
     # Join shell line continuations BEFORE splitting. A backslash-newline is ONE
     # command to any shell, but `_SEG` splits on `\n` -- so `prisma migrate \<nl>
     # reset` and `gcloud run services \<nl>delete x` each arrived in two segments,
@@ -678,14 +809,14 @@ def log(kind, detail, command=""):
         pass
 
 
-def verdict(command: str, env=None):
+def verdict(command: str, env=None, cwd=None, missing=None):
     """The whole decision, without I/O: ("none" | "e2e" | "override" | "deny", hits).
 
     It exists so the ORDER of the checks is testable. A spec that calls find_hits and
     e2e_drop_allowed separately and combines them itself stays green when the decision
     stops consulting the carve-out -- measured: that mutation SURVIVED the first version
     of db-gate-e2e-drop.test.ts (card 251b5785)."""
-    hits = find_hits(command)
+    hits = find_hits(command, cwd, missing)
     if not hits:
         return "none", hits
     if e2e_drop_allowed(command, env):
@@ -712,7 +843,12 @@ def main():
         if not command.strip():
             sys.exit(0)
 
-        kind, hits = verdict(command)
+        # The hook's own cwd is the session's; the payload names it explicitly.
+        cwd = str(payload.get("cwd") or "") or os.getcwd()
+        missing = []
+        kind, hits = verdict(command, cwd=cwd, missing=missing)
+        for path in missing:
+            log("UNCHECKED-FILE", "does not exist, so it was not examined: %s" % path, command)
         if kind == "none":
             sys.exit(0)
 
