@@ -1935,7 +1935,9 @@ docblockja).
 A `db-destructive-gate.py` hook a PARANCS SZÖVEGÉT nézi. Ha az SQL egy FÁJLBÓL érkezik, az utasítás
 nincs a szövegben -- tehát ugyanaz a `DROP TABLE` `-c`-vel BLOKKOLT, `-f`-fel ÁTMENT.
 
-    psql -f ./x.sql   /   psql < ./x.sql     ->  FEDVE, A BEOLVASZTÁSTÓL (literál út)
+    psql -f ./x.sql   /   psql < ./x.sql     ->  FEDVE 2026-09-26 óta (kártya fc7d05f9; a 2e08a7e1
+        ág 22 napig NEM olvadt be, és ez a sor addig egy teljesületlen feltételt hordozott)
+    cat x.sql | psql  /  \i x.sql  /  prisma db execute --file  ->  UGYANÍGY FEDVE, a teljes fájl olvasva
     psql -f "$f"      /   futásidőben épített SQL  ->  **NINCS FEDVE, és nem is lehet:**
         a hook parancs-sztringet lát, nem folyamatot. Ez az ESZKÖZ HATÁRA, nem elmulasztott javítás.
 
