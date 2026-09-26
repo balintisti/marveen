@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **287** kovetett fajl, ebbol
-**92** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **289** kovetett fajl, ebbol
+**93** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -177,6 +177,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/deploy-lane.sh`
 
 - MIERT SZERSZAM ES NEM SZABALY. A repo dokumentacioja eddig egy SZAMOT mondott
+
+### `scripts/dev-gc.py`
+
+- WHY (card 251b5785, didi's measurement 2026-09-26 04:16): the disk lost ~52 GiB in one
 
 ### `scripts/doc-commands.py`
 
