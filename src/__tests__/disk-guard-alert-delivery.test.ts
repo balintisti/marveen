@@ -98,6 +98,11 @@ function runGuard(curl: CurlBehaviour, usage = 96): Run {
     `exit ${curl.exit ?? 0}`,
   ].join('\n') + '\n')
   chmodSync(join(base, 'bin', 'curl'), 0o755)
+  // "The coordinator is not running": without it the REAL tmux answers for the REAL
+  // marveen-channels session, and the alert leaves on the coordinator path, never
+  // reaching the curl these tests measure.
+  writeFileSync(join(base, 'bin', 'tmux-down'), '#!/bin/sh\nexit 1\n')
+  chmodSync(join(base, 'bin', 'tmux-down'), 0o755)
 
   const log = execFileSync('/bin/bash', [join(base, 'scripts', 'disk-space-guard.sh')], {
     encoding: 'utf8',
@@ -111,6 +116,12 @@ function runGuard(curl: CurlBehaviour, usage = 96): Run {
       DISK_GUARD_STATE_DIR: join(base, 'store'),
       // SZANDEKOSAN NINCS DISK_GUARD_ALERT_DRYRUN: az rovidre zarna azt a fuggvenyt,
       // amit ezek a tesztek merni akarnak.
+      // The usage is planted, and since 054b56b8 (card fbbbca3c) a planted value is
+      // REFUSED unless this says it is meant. Without it all six cases below measured the
+      // refusal, not the delivery -- red on every tree from 2026-09-19, blamed on a full disk.
+      // Safe here: HOME, the token and curl are all fakes.
+      DISK_GUARD_ALLOW_FAKE_ALERT: '1',
+      DISK_GUARD_TMUX_BIN: join(base, 'bin', 'tmux-down'),
     },
   })
 
