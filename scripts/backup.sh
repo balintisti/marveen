@@ -10,7 +10,7 @@
 #     .env                     (project root secrets)
 #     scheduled-tasks.json     (legacy, if present)
 #     assets/meetings/**       (meeting transcripts/memos)
-#     agents/*/CLAUDE.md, SOUL.md, .mcp.json
+#     agents/*/CLAUDE.md, SOUL.md, .mcp.json, agent-config.json, workcheck.json
 #     agents/*/.claude/channels/{telegram,slack,discord}/.env, access.json
 #
 #   home/   -> extract under $HOME
@@ -29,6 +29,11 @@
 # Full runbook: docs/MIGRATION.md.
 
 set -euo pipefail
+
+# The archive holds tokens (dashboard bearer, bot tokens, .env). Everything this run creates --
+# the backups/ dir, the staging copies, the archive -- is owner-only from the first byte, not
+# chmod-ed afterwards (card fb315ca6: the 09-14 archive was 0644).
+umask 077
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKUP_DIR="${REPO_ROOT}/backups"
@@ -70,11 +75,28 @@ add_if "${REPOLIST}" "${REPO_ROOT}" .env
 add_if "${REPOLIST}" "${REPO_ROOT}" scheduled-tasks.json
 add_if "${REPOLIST}" "${REPO_ROOT}" assets/meetings
 # Per-agent identity + channel secrets (glob; missing dir is not an error).
+#
+# EACH agents/<n> MAY BE A SYMLINK, and since 2026-09-18 all seven are (-> /Users/Shared/...).
+# A plain `find agents` does not descend into a symlinked directory, so this block skipped deeper
+# from 09-07 and collected ZERO files once all seven were links -- and nothing said so: the archive
+# was written, "backup: wrote" was printed, and five agents' own bot tokens were in no backup
+# (card ef6a93dc, measured 2026-09-24).
+#
+# `-H` follows ONLY the start point -- the agents/<n> link itself -- and no symlink below it:
+# an agent's .claude-config/channels points at the SHARED ~/.claude/channels (already in the
+# home/ group) and its plugin caches hold unrelated .mcp.json files; `-L` would pull in both.
+# The -path list is the documented layout from the header, not a name search: an agent dir can
+# later hold a project checkout with its own .env, and a recursive name match would copy that
+# secret into the archive without anyone deciding to.
 if [[ -d agents ]]; then
-  find agents -type f \
-    \( -name 'CLAUDE.md' -o -name 'SOUL.md' -o -name '.mcp.json' \
-       -o -name 'access.json' -o -name '.env' \) \
-    -print >> "${REPOLIST}"
+  for a in agents/*; do
+    [[ -d "${a}" ]] || continue
+    find -H "${a}" -maxdepth 4 -type f \
+      \( -path "${a}/CLAUDE.md" -o -path "${a}/SOUL.md" -o -path "${a}/.mcp.json" \
+         -o -path "${a}/.claude/channels/*/.env" -o -path "${a}/.claude/channels/*/access.json" \
+         -o -path "${a}/agent-config.json" -o -path "${a}/workcheck.json" \) \
+      -print >> "${REPOLIST}"
+  done
 fi
 
 # home/ group (relative to $HOME)
@@ -106,8 +128,35 @@ if [[ -d "${HOME}/Library/LaunchAgents" ]]; then
   ( cd "${HOME}" && find Library/LaunchAgents -maxdepth 1 -name "com.${MAIN_AGENT_ID}.*.plist" -print ) >> "${HOMELIST}"
 fi
 
+# THE AGENT-FILE COUNT IS A SUCCESS CONDITION, NOT A DETAIL (card fb315ca6, marveen's ruling).
+# From 09-18 this block collected ZERO agent files and the run still printed "backup: wrote":
+# a backup that silently stops covering the agents looks exactly like one that works. If agent
+# directories exist and none of their files were collected, the archive is STILL written (the
+# database and tokens in it are worth keeping) but the run exits 3, so the scheduler's health
+# verdict turns red instead of green.
+#
+# PER AGENT, NOT IN TOTAL (didi, 2026-09-24): with two agent dirs and one of them collected, the
+# total was 1 and the run was green -- the same silent gap, one agent at a time. So every agent
+# dir must contribute at least one file, and the ones that did not are NAMED. Measured the same
+# night on the live tree: all 7 agents contribute 3-5 files and all 7 have agent-config.json.
+AGENT_DIRS=0
+AGENT_FILES=0
+EMPTY_AGENTS=""
+if [[ -d agents ]]; then
+  for a in agents/*; do
+    [[ -d "${a}" ]] || continue
+    AGENT_DIRS=$((AGENT_DIRS + 1))
+    # index()==1, not a regex: an agent name is data, and `agents/a1/` must not match `agents/a10/`
+    n=$(awk -v p="${a}/" 'index($0, p) == 1' "${REPOLIST}" | wc -l | tr -d ' ')
+    AGENT_FILES=$((AGENT_FILES + n))
+    [[ "${n}" -eq 0 ]] && EMPTY_AGENTS="${EMPTY_AGENTS} ${a#agents/}"
+  done
+fi
+
 if [[ ! -s "${REPOLIST}" && ! -s "${HOMELIST}" ]]; then
   echo "backup: nothing to archive" >&2
+  # nothing at all is a fresh machine -- unless agents exist, which is the silent failure above
+  [[ "${AGENT_DIRS}" -gt 0 ]] && exit 3
   exit 0
 fi
 
@@ -151,7 +200,7 @@ stage_group "${HOMELIST}" "${HOME}" home
 # stay clean (no leading "./").
 ( cd "${STAGE}" && tar -czf "${ARCHIVE}" MANIFEST.txt \
     $( [[ -d repo ]] && echo repo ) $( [[ -d home ]] && echo home ) )
-echo "backup: wrote ${ARCHIVE} ($(wc -c < "${ARCHIVE}" | awk '{print $1}') bytes)"
+echo "backup: wrote ${ARCHIVE} ($(wc -c < "${ARCHIVE}" | awk '{print $1}') bytes; agent dirs ${AGENT_DIRS}, agent files ${AGENT_FILES}${EMPTY_AGENTS:+; agents with NO files:${EMPTY_AGENTS}})"
 
 # The archive contains sensitive tokens (dashboard bearer, channel bot tokens,
 # project .env secrets). Do not auto-sync ${BACKUP_DIR} to iCloud, Dropbox,
@@ -165,3 +214,8 @@ ls -1t "${BACKUP_DIR}"/claudeclaw-*.tar.gz 2>/dev/null | tail -n +$((KEEP + 1)) 
   rm -f "${f}"
   echo "backup: pruned $(basename "${f}")"
 done
+
+if [[ -n "${EMPTY_AGENTS}" ]]; then
+  echo "backup: FAILED CONDITION -- no files collected for agent(s):${EMPTY_AGENTS} (${AGENT_FILES} agent files from ${AGENT_DIRS} dirs in total); the archive was written but does NOT cover them." >&2
+  exit 3
+fi

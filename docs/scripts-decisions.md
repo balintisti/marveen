@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **282** kovetett fajl, ebbol
-**91** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **287** kovetett fajl, ebbol
+**92** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -373,6 +373,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - WHY THIS EXISTS (card 27975b85). Nothing ran scripts/__tests__/*.test.py: `npm test` is
 - WHY IT WRITES A STATE FILE EVEN WHEN EVERYTHING PASSES (marveen's condition on this card).
+
+### `scripts/safety-core-drift-check.py`
+
+- MIERT NEM ELOSZTO (marveen dontese, 2026-09-24, a kartyan): friday merte, hogy a sablon a lapok
 
 ### `scripts/self-pace-gate.mjs`
 
