@@ -3,12 +3,15 @@
  * in a subdirectory silently; the python sibling already globbed recursively.
  */
 import { describe, it, expect, afterAll } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, rmSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { discoverScriptTests } from './helpers/discover-script-tests.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const root = mkdtempSync(join(tmpdir(), 'discover-tests-'))
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
+
+const root = mkTmp('discover-tests-')
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 const touch = (rel: string) => {
   const p = join(root, rel)

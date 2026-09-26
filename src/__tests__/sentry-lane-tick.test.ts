@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 // Card 6db77c30. The pure half is tested in sentry-lane.test.ts; THIS file drives the real tick
 // with fetch, the vault and the queue stubbed, so the path from the stats_v2 call to the enqueued
 // text is exercised -- a lane that is decided correctly but never fetched, or fetched and never
 // reaching the notice, would leave every pure test green.
-const ROOT = mkdtempSync(join(tmpdir(), 'sentry-lane-tick-'))
+const ROOT = mkTmp('sentry-lane-tick-')
 mkdirSync(join(ROOT, 'store'), { recursive: true })
 
 const sent: string[] = []

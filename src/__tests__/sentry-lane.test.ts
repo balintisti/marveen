@@ -8,9 +8,12 @@ import {
   type SentryLaneReading,
 } from '../sentry-issues.js'
 import { laneFromStatsPayload, loadLaneMemory } from '../web/sentry-issue-watcher.js'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // Card 6db77c30 (the B half of 32f40913). Measured 2026-09-24: delta-crm's error lane accepted 0 and
 // rate-limited ~2000/day since 09-19, and the watcher's "NOTHING first appeared" was true and
@@ -221,7 +224,7 @@ describe('the notices', () => {
 
 describe('loadLaneMemory keeps the state, and tolerates the older shape', () => {
   it('state round-trips; absent or unknown state is left out (read as closed)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'lane-mem-'))
+    const dir = mkTmp('lane-mem-')
     try {
       const p = join(dir, 'm.json')
       writeFileSync(p, JSON.stringify({
