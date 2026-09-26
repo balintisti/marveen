@@ -287,15 +287,27 @@ main() {
   # the configuration. Pinned by test (m).
   case "$usage" in (''|*[!0-9]*) log "could not read disk usage of '$DISK_PATH' (got '$usage') -- no-op"; return 0;; esac
 
-  if [ "$usage" -lt "$REAP_THRESHOLD" ]; then
+  # ALERTGATE926 (card 0c8ff24b): the ALERT must not hang off the REAP threshold.
+  # The live plist turns the reap off with DISK_GUARD_REAP_THRESHOLD=100, and the old
+  # early return (`usage < REAP -> return`) sat BEFORE the alert branch, so switching the
+  # reap off switched the 95% alert off too: 2026-09-26 the disk stood at 98% for hours
+  # with a 0-byte log. Now: nothing to do only when BOTH thresholds are unmet; the reap
+  # runs only at/above its own threshold; the alert branch below runs at/above 95%
+  # whether or not a reap happened.
+  if [ "$usage" -lt "$REAP_THRESHOLD" ] && [ "$usage" -lt "$ALERT_THRESHOLD" ]; then
     return 0   # plenty of room
   fi
 
-  log "disk ${usage}% >= ${REAP_THRESHOLD}% -- reaping scratch under $SCRATCH_DIR"
-  removed="$(reap_scratch)"
-  log "reaped $removed scratch entr$( [ "$removed" = 1 ] && echo y || echo ies )"
-  usage="$(disk_usage)"
-  log "post-reap disk ${usage}%"
+  removed=0
+  if [ "$usage" -ge "$REAP_THRESHOLD" ]; then
+    log "disk ${usage}% >= ${REAP_THRESHOLD}% -- reaping scratch under $SCRATCH_DIR"
+    removed="$(reap_scratch)"
+    log "reaped $removed scratch entr$( [ "$removed" = 1 ] && echo y || echo ies )"
+    usage="$(disk_usage)"
+    log "post-reap disk ${usage}%"
+  else
+    log "disk ${usage}% >= alert ${ALERT_THRESHOLD}% (reap off: threshold ${REAP_THRESHOLD}%)"
+  fi
 
   if [ "$usage" -ge "$ALERT_THRESHOLD" ]; then
     # Cooldown so a stuck-full disk alerts at most once/hour (best-effort stamp).
