@@ -181,7 +181,9 @@ def main():
             """--check on the fixture, so reachability is measured by the SHIPPED meter."""
             env = dict(os.environ, MARVEEN_MEMORY_DIR=mem,
                        MARVEEN_SNAPSHOT_REPO="/nonexistent-on-purpose")
-            q = subprocess.run([sys.executable, SCRIPT, "--check"], capture_output=True,
+            # --unreachable: the FULL list, so a `"NO PATH: X" not in co` below cannot pass just
+            # because X fell past the five-name cut (card 217cf56a)
+            q = subprocess.run([sys.executable, SCRIPT, "--check", "--unreachable"], capture_output=True,
                                text=True, env=env)
             return q.stdout + q.stderr
 

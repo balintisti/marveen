@@ -51,7 +51,9 @@ def check(name, cond, detail=""):
 
 def run(mem):
     env = dict(os.environ, MARVEEN_MEMORY_DIR=mem, MARVEEN_SNAPSHOT_REPO="/nonexistent-on-purpose")
-    p = subprocess.run([sys.executable, SCRIPT, "--check"], capture_output=True, text=True, env=env)
+    # --unreachable: the FULL list. Plain --check names only the first five orphans, so a
+    # `"NO PATH: X" not in out` assertion passes whenever X is simply cut off (card 217cf56a).
+    p = subprocess.run([sys.executable, SCRIPT, "--check", "--unreachable"], capture_output=True, text=True, env=env)
     return p.stdout + p.stderr
 
 
@@ -64,6 +66,12 @@ def fixture(mem):
         fh.write("wiki form: [[wiki-target]]\nmarkdown form: [label](md-target.md)\n")
     for name in ("wiki-target.md", "md-target.md", "orphan.md"):
         with open(os.path.join(mem, name), "w", encoding="utf-8") as fh:
+            fh.write("body\n")
+    # SIX true orphans that sort BEFORE every name asserted on: with the five-name cut, none of
+    # the names below would be listed at all, so the absent/present checks only mean something
+    # because run() asks for the full list (card 217cf56a). Check 3 proves it is being asked.
+    for i in range(1, 7):
+        with open(os.path.join(mem, "aa-pad-%d.md" % i), "w", encoding="utf-8") as fh:
             fh.write("body\n")
 
 
