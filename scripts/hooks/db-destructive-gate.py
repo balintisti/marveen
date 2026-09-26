@@ -133,6 +133,9 @@ LOG = "/Users/isti/marveen/store/db-gate.log"
 #       builds or runs SQL itself (`bash x.sh`, `python3 x.py`, scripts/readonly-
 #       measure.sh). The hook sees a command string, not the process that will run.
 #       This gate is a guard rail against a typed mistake, not a sandbox.
+#   NOT COVERED either, by the same boundary: a FIFO or device (allow + log -- opening
+#       one would hang or consume it), so a background writer into a FIFO read by psql
+#       passes. Same class as `$var` and scripts (didi, fc7d05f9 review).
 #
 # DO NOT DESCRIBE THIS AS "THE -f HOLE IS CLOSED". Our own prescribed recipe
 # (readonly-measure.sh) uses the variable form, so the one sanctioned user of file
