@@ -12,7 +12,7 @@
  */
 import { describe, it, expect, afterAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, existsSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, existsSync, rmSync, readdirSync, realpathSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -36,7 +36,9 @@ function jestFixture(dirName = 'jest_dx') {
 }
 
 function run(args: string[]): string {
-  return execFileSync('python3', [SCRIPT, '--skip-db', ...args], { encoding: 'utf8' })
+  return execFileSync('python3', [SCRIPT, '--skip-db', '--skip-worktrees', '--skip-compile-cache', ...args], {
+    encoding: 'utf8',
+  })
 }
 
 describe('dev-gc: jest_dx', () => {
@@ -64,7 +66,9 @@ describe('dev-gc: jest_dx', () => {
   it('1 ora alatti kuszobot megtagad (egy futo jest cache-e alatt lenne)', () => {
     let rc = 0
     try {
-      execFileSync('python3', [SCRIPT, '--skip-db', '--max-age-hours', '0.1'], { encoding: 'utf8' })
+      execFileSync('python3', [SCRIPT, '--skip-db', '--skip-worktrees', '--skip-compile-cache', '--max-age-hours', '0.1'], {
+        encoding: 'utf8',
+      })
     } catch (e: any) {
       rc = e.status
     }
@@ -125,5 +129,152 @@ describe('dev-gc: e2e DB-k kivalasztasa (plan_db)', () => {
     const r = plan([[1, 'crm_e2e_didi_x', 0]], { 1: 30 }, { PGHOST: 'db.example.com' })
     expect(r.drop).toEqual([])
     expect(r.skipped.gate).toEqual(['crm_e2e_didi_x'])
+  })
+})
+
+/**
+ * Kartya 9f499b14: compile-cache meretkorlat + worktree-riport. A worktree-fel ALAPBOL csak
+ * riportol (--apply-worktrees nelkul), es minden kizaro feltetelnek van egy fa a fixture-ben,
+ * ami PONTOSAN azon bukik el -- plusz egy, ami megy (kulonben a "0 torles" nem kulonboztetheto
+ * meg egy vak merotol).
+ */
+function runAll(args: string[]): string {
+  return execFileSync('python3', [SCRIPT, '--skip-db', '--jest-dir', '/nonexistent/jest_dx', ...args], {
+    encoding: 'utf8',
+  })
+}
+
+function sh(cmd: string[], cwd: string) {
+  return execFileSync(cmd[0], cmd.slice(1), { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+}
+
+function age(dir: string, hours: number) {
+  const t = (Date.now() - hours * 3600 * 1000) / 1000
+  for (const n of readdirSync(dir)) utimesSync(join(dir, n), t, t)
+  utimesSync(dir, t, t)
+}
+
+function wtFixture() {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'devgc-wt-')))
+  made.push(base)
+  const remote = join(base, 'remote.git')
+  const repo = join(base, 'repo')
+  sh(['git', 'init', '-q', '--bare', remote], base)
+  sh(['git', 'init', '-q', '-b', 'main', repo], base)
+  const g = (args: string[], cwd = repo) => sh(['git', '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], cwd)
+  writeFileSync(join(repo, 'a.txt'), 'a')
+  g(['add', '.'])
+  g(['commit', '-q', '-m', 'init'])
+  g(['remote', 'add', 'fork', remote])
+  g(['push', '-q', 'fork', 'main'])
+  g(['fetch', '-q', 'fork'])
+  const wt = (name: string) => {
+    const p = join(base, name)
+    g(['worktree', 'add', '-q', '--detach', p, 'main'])
+    return p
+  }
+  const pushed = wt('wt-pushed')
+  const dirty = wt('wt-dirty')
+  writeFileSync(join(dirty, 'untracked.txt'), 'x')
+  const local = wt('wt-local')
+  writeFileSync(join(local, 'b.txt'), 'b')
+  g(['add', '.'], local)
+  g(['commit', '-q', '-m', 'local only'], local)
+  const young = wt('wt-young')
+  const target = wt('wt-nm-target')
+  const user = wt('wt-nm-user')
+  symlinkSync(target, join(user, 'node_modules'))
+  // node_modules symlink is untracked -> the user tree is dirty; only the TARGET matters here
+  for (const p of [pushed, dirty, local, target, user]) age(p, 72)
+  age(young, 1)
+  return { repo, pushed, dirty, local, young, target, user }
+}
+
+describe('dev-gc: worktree-riport (9f499b14)', () => {
+  it('csak a tiszta, tavolin levo, regi fa jelolt; minden mas a SAJAT okan marad', () => {
+    const f = wtFixture()
+    const out = runAll(['--skip-compile-cache', '--wt-repo', `${f.repo}:fork`])
+    expect(out).toMatch(/REPORT-ONLY worktrees .*would remove 1,/)
+    expect(out).toContain(`would remove: ${f.pushed}`)
+    expect(out).toMatch(/'dirty': 2/) // wt-dirty + wt-nm-user (untracked symlink)
+    expect(out).toMatch(/'local-only-commits': 1/)
+    expect(out).toMatch(/'young': 1/)
+    expect(out).toMatch(/'node_modules-target': 1/)
+    // riport: SEMMI nem tunt el
+    for (const p of [f.pushed, f.dirty, f.local, f.young, f.target]) expect(existsSync(p)).toBe(true)
+  })
+
+  it('--apply-worktrees NELKUL a --dry-run nelkuli futas sem torol', () => {
+    const f = wtFixture()
+    runAll(['--skip-compile-cache', '--wt-repo', `${f.repo}:fork`])
+    expect(existsSync(f.pushed)).toBe(true)
+  })
+
+  it('--apply-worktrees csak a jeloltet veszi ki, az agat nem torli', () => {
+    const f = wtFixture()
+    const out = runAll(['--skip-compile-cache', '--apply-worktrees', '--wt-repo', `${f.repo}:fork`])
+    expect(out).toMatch(/worktrees .*removed 1,/)
+    expect(existsSync(f.pushed)).toBe(false)
+    for (const p of [f.dirty, f.local, f.young, f.target]) expect(existsSync(p)).toBe(true)
+  })
+
+  it('egy NEM konfiguralt remote (pl. a halott old-origin helyett eliras) senkit nem enged at', () => {
+    const f = wtFixture()
+    const out = runAll(['--skip-compile-cache', '--wt-repo', `${f.repo}:nincsilyen`])
+    expect(out).toMatch(/would remove 0,/)
+    expect(out).toMatch(/'remote-not-configured': 6/)
+  })
+
+  it('24 ora alatti korkuszobot es remote nelkuli repot megtagad', () => {
+    for (const extra of [['--wt-min-age-hours', '2'], ['--wt-repo', '/x']]) {
+      let rc = 0
+      try {
+        runAll(['--skip-compile-cache', ...extra])
+      } catch (e: any) {
+        rc = e.status
+      }
+      expect(rc).toBe(2)
+    }
+  })
+})
+
+describe('dev-gc: compile-cache meretkorlat (9f499b14)', () => {
+  function cacheFixture(name = 'node-compile-cache') {
+    const base = mkdtempSync(join(tmpdir(), 'devgc-cc-'))
+    made.push(base)
+    const d = join(base, name)
+    mkdirSync(d)
+    const files = [0, 1, 2].map((i) => {
+      const p = join(d, `f${i}`)
+      writeFileSync(p, Buffer.alloc(64 * 1024))
+      const t = (Date.now() - (10 - i) * 3600 * 1000) / 1000 // f0 a legregebbi
+      utimesSync(p, t, t)
+      return p
+    })
+    return { d, files }
+  }
+
+  it('a korlat folott a LEGREGEBBI megy eloszor, amig ala nem er', () => {
+    const f = cacheFixture()
+    // ~0.15 MB korlat: 3 x 64 KiB = 192 KiB -> egy fajlnak mennie kell
+    const out = runAll(['--skip-worktrees', '--compile-cache-dir', f.d, '--compile-cache-cap-mb', '0.15'])
+    expect(out).toMatch(/compile caches .*: 1 files/)
+    expect(existsSync(f.files[0])).toBe(false)
+    expect(existsSync(f.files[1])).toBe(true)
+    expect(existsSync(f.files[2])).toBe(true)
+  })
+
+  it('a korlat alatt semmi nem megy', () => {
+    const f = cacheFixture()
+    const out = runAll(['--skip-worktrees', '--compile-cache-dir', f.d])
+    expect(out).toMatch(/compile caches .*: 0 files/)
+    for (const p of f.files) expect(existsSync(p)).toBe(true)
+  })
+
+  it('idegen nevu konyvtarat megtagad', () => {
+    const f = cacheFixture('valami-mas')
+    const out = runAll(['--skip-worktrees', '--compile-cache-dir', f.d, '--compile-cache-cap-mb', '0.01'])
+    expect(out).toMatch(/REFUSED dirs/)
+    for (const p of f.files) expect(existsSync(p)).toBe(true)
   })
 })
