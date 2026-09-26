@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Daily dev garbage collection (card 251b5785): jest_dx files and crm_e2e_<agent>_<suffix>
+  databases older than 24 hours. See the docblock of scripts/dev-gc.py for why each half is safe.
+
+  Install (a separate lane from the merge -- launchd reads the INSTALLED copy):
+    cp scripts/com.marveen.dev-gc.plist.template ~/Library/LaunchAgents/com.marveen.dev-gc.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.marveen.dev-gc.plist
+
+  05:30 local: after the night's work, before the day's e2e runs start.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.marveen.dev-gc</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/isti/marveen/scripts/dev-gc.py</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>5</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/isti/marveen/store/dev-gc.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/isti/marveen/store/dev-gc.log</string>
+</dict>
+</plist>
