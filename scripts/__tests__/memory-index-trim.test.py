@@ -17,8 +17,10 @@ Both directions are pinned and they are different bugs: a reference LOST drops a
 the index; a reference GAINED is a CONSOLIDATION wearing a trim's clothes, which is a real
 operation with the opposite invariant and no tool.
 
-NOT WIRED TO CI: `npm test` is vitest and does not collect Python (card 27975b85). Run by hand;
-its passing is not a gate.
+WIRED: `npm test` collects this file through src/__tests__/scripts-shell-tests.test.ts
+(discovery, not a list -- 34cd8ddf, 2026-09-10), so a failure here fails the suite. This header
+claimed the opposite (not collected) until 2026-09-24 (card 74d0d0cf): true when written (card 27975b85),
+false for two weeks after, and false in the reassuring direction.
 
 Run: python3 <thisfile>   Exit 0 = all pass.
 """

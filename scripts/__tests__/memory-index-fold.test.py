@@ -21,8 +21,10 @@ Test 8 is the one that separates this tool from a hand-edit with extra steps: ev
 would pass on a version with no flock at all. Six agents write MEMORY.md through a shared inode
 by PREPEND, and on 2026-09-05 one agent's save LANDED DURING a trim run and the lock caught it.
 
-NOT WIRED TO vitest: `npm test` does not collect Python. Collected by
-scripts/run-python-contract-tests.py.
+WIRED: `npm test` collects this file through src/__tests__/scripts-shell-tests.test.ts
+(discovery -- 34cd8ddf, 2026-09-10), and scripts/run-python-contract-tests.py runs it too. Until
+2026-09-24 this header claimed vitest did not collect it (card 74d0d0cf); the collector's own
+guard now refuses that claim in any collected file.
 
 Run: python3 <thisfile>   Exit 0 = all pass.
 """

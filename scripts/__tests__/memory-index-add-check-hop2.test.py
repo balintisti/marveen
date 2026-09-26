@@ -28,7 +28,10 @@ LIMIT, stated: depth 3+ is NO PATH BY DESIGN and is not pinned here -- the rulin
 FORMS at hop 2, not about depth. Test 5 needs chmod to actually deny reads; if it does not (root),
 the test reports SKIP rather than passing quietly.
 
-NOT WIRED TO CI: `npm test` is vitest and does not collect Python (card 27975b85).
+WIRED: `npm test` collects this file through src/__tests__/scripts-shell-tests.test.ts
+(discovery, not a list -- 34cd8ddf, 2026-09-10), so a failure here fails the suite. This header
+claimed the opposite (not collected) until 2026-09-24 (card 74d0d0cf): true when written (card 27975b85),
+false for two weeks after, and false in the reassuring direction.
 Run: python3 <thisfile>   Exit 0 = all pass.
 """
 import os

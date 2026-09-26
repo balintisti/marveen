@@ -26,8 +26,9 @@
  * bukik, nem csendben marad ki.
  */
 import { describe, it, expect, beforeAll } from 'vitest'
-import { readdirSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { discoverScriptTests } from './helpers/discover-script-tests.js'
 import { fileURLToPath } from 'node:url'
 import { execFile } from 'node:child_process'
 
@@ -38,7 +39,8 @@ const TESTS_DIR = join(REPO_ROOT, 'scripts', '__tests__')
 const PER_TEST_TIMEOUT_MS = 200_000
 const CONCURRENCY = 6
 
-const allTestFiles = readdirSync(TESTS_DIR).filter((f) => f.includes('.test.')).sort()
+// Recursive, like the python runner (card 20258ef3): a test in a subdirectory must not drop out.
+const allTestFiles = discoverScriptTests(TESTS_DIR)
 const runnable = allTestFiles.filter((f) => /\.test\.(sh|py)$/.test(f))
 const unhandled = allTestFiles.filter((f) => !/\.test\.(sh|py)$/.test(f))
 
@@ -79,6 +81,17 @@ describe('scripts/__tests__ -- a shell- es python-tesztek', () => {
 
   it('MINDEN .test.* fajlnak van kezeloje -- egy uj kiterjesztes nem eshet ki nemán', () => {
     expect(unhandled).toEqual([])
+  })
+
+  // Card 74d0d0cf: three files said "NOT WIRED TO CI ... its passing is not a gate" for two weeks
+  // AFTER this collector started running them. A header that says "nobody runs me" is the one that
+  // licenses leaving a test red -- so a collected file may not say it.
+  const NOT_COLLECTED_CLAIM = /NOT WIRED TO CI|does not collect Python/i
+  it('egyetlen begyujtott fajl sem allitja magarol, hogy nem futtatja senki', () => {
+    // KONTROLL: a minta tuzel a regi fejlec szovegere
+    expect(NOT_COLLECTED_CLAIM.test('NOT WIRED TO CI: `npm test` is vitest and does not collect Python')).toBe(true)
+    const liars = runnable.filter((f) => NOT_COLLECTED_CLAIM.test(readFileSync(join(TESTS_DIR, f), 'utf8')))
+    expect(liars).toEqual([])
   })
 
   for (const file of runnable) {
