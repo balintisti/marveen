@@ -30,7 +30,8 @@ day (96%, 19 GB free) and the cause was WORKTREE CHURN, not a cache:
                 NAMED per repo (marveen: fork+origin; Delta-CRM: origin only -- its
                 `old-origin` is a dead repo and must not count as "backed up"; and a bare
                 `--remotes` would count the ORPHAN `dexterwt/` refs too)
-              - its newest top-level entry is older than --wt-min-age-hours (default 48);
+              - its newest entry (deep walk, node_modules/.git/dist skipped) is older than
+                --wt-min-age-hours (default 48);
                 `.git/worktrees/*/logs/HEAD` is NOT an age signal (all touched 09-25)
               - no other worktree's `node_modules` symlink resolves into it
             Removal is plain `git worktree remove` WITHOUT --force, so git itself refuses a
@@ -265,13 +266,18 @@ def git(args, cwd):
     return r.returncode, r.stdout, r.stderr
 
 
-def tmux_pane_paths():
-    """cwd of every tmux pane. None = could not ask (then NO tree is a candidate)."""
+def tmux_pane_paths(tmux=None):
+    """cwd of every tmux pane. None = could not ask (then NO tree is a candidate).
+    launchd runs this with PATH=/usr/bin:/bin:/usr/sbin:/sbin and tmux lives in
+    /opt/homebrew/bin (didi, 2026-09-26): a missing binary is therefore "could not ask",
+    never "no pane" -- the latter would be fail-OPEN exactly under the job."""
+    tmux = tmux or shutil.which("tmux", path="/opt/homebrew/bin:/usr/local/bin:" +
+                                os.environ.get("PATH", "/usr/bin:/bin"))
+    if not tmux:
+        return None
     try:
-        r = subprocess.run(["tmux", "list-panes", "-a", "-F", "#{pane_current_path}"],
+        r = subprocess.run([tmux, "list-panes", "-a", "-F", "#{pane_current_path}"],
                            capture_output=True, text=True, timeout=30)
-    except FileNotFoundError:
-        return []  # no tmux binary: no pane can sit in a tree
     except Exception:
         return None
     if r.returncode != 0:
@@ -296,18 +302,25 @@ def list_worktrees(repo):
     return wts
 
 
-def newest_top_level_mtime(path):
+AGE_WALK_SKIP = ("node_modules", ".git", "dist", "coverage", ".next", ".turbo")
+
+
+def newest_tree_mtime(path):
+    """Newest mtime of any entry in the tree, skipping regenerable/vendored directories.
+    Top-level only was WRONG (didi, 2026-09-26): 10 of 56 "48h+" trees had a deep edit
+    under 48h (top 519h vs a .tsx at 11.2h). A full walk of 210 trees took 3.7 s."""
     try:
         newest = os.lstat(path).st_mtime
-        with os.scandir(path) as it:
-            for e in it:
-                try:
-                    newest = max(newest, e.stat(follow_symlinks=False).st_mtime)
-                except OSError:
-                    continue
-        return newest
     except OSError:
         return None
+    for root, dirs, names in os.walk(path, followlinks=False):
+        dirs[:] = [d for d in dirs if d not in AGE_WALK_SKIP]
+        for n in dirs + names:
+            try:
+                newest = max(newest, os.lstat(os.path.join(root, n)).st_mtime)
+            except OSError:
+                continue
+    return newest
 
 
 def plan_worktrees(repo, remotes, now, min_age_s, panes):
@@ -370,7 +383,7 @@ def plan_worktrees(repo, remotes, now, min_age_s, panes):
         if int(cnt.strip()) > 0:
             skip("local-only-commits", p)
             continue
-        m = newest_top_level_mtime(p)
+        m = newest_tree_mtime(p)
         if m is None:
             skip("age-unknown", p)
             continue
@@ -381,10 +394,10 @@ def plan_worktrees(repo, remotes, now, min_age_s, panes):
     return candidates, skipped
 
 
-def run_worktrees(repos, now, min_age_s, apply, stamp):
+def run_worktrees(repos, now, min_age_s, apply, stamp, tmux=None):
     """Returns the number of failures (a repo that could not be listed counts)."""
     tag = "" if apply else "REPORT-ONLY "
-    panes = tmux_pane_paths()
+    panes = tmux_pane_paths(tmux)
     failures = 0
     for repo, remotes in repos:
         if not os.path.isdir(repo):
@@ -434,6 +447,7 @@ def main(argv=None):
     ap.add_argument("--wt-repo", action="append", type=parse_repo_arg,
                     help="PATH:remote1,remote2 -- override the repos (tests)")
     ap.add_argument("--wt-min-age-hours", type=float, default=48.0)
+    ap.add_argument("--tmux", help="tmux binary to ask (tests)")
     ap.add_argument("--apply-worktrees", action="store_true",
                     help="actually remove; without it the worktree half only reports")
     a = ap.parse_args(argv)
@@ -465,7 +479,7 @@ def main(argv=None):
     if not a.skip_worktrees:
         failures += run_worktrees(a.wt_repo or list(DEFAULT_WT_REPOS), now,
                                   a.wt_min_age_hours * 3600,
-                                  a.apply_worktrees and not a.dry_run, stamp)
+                                  a.apply_worktrees and not a.dry_run, stamp, a.tmux)
 
     if a.skip_db:
         return 1 if failures else 0
