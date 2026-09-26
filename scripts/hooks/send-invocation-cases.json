@@ -725,6 +725,11 @@
       "name": "[VARURL926 cb63ddb4] sudo curl, glued -sd body, URL last",
       "cmd": "sudo curl -sd '{\"to\":\"b\",\"subject\":\"s\"}' $U",
       "expected": true
+    },
+    {
+      "name": "[VARURL926 cb63ddb4] kanban comment to a $DASH URL, prose quotes 'to': and 'subject': in single quotes (didi LOW)",
+      "cmd": "curl -s -X POST $DASH/api/kanban/cb63ddb4/comments -H \"Authorization: Bearer $(cat store/.dashboard-token)\" -d \"{\\\"author\\\":\\\"didi\\\",\\\"content\\\":\\\"the gate reads 'to': and 'subject': keys\\\"}\"",
+      "expected": false
     }
   ]
 }

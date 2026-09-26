@@ -322,8 +322,8 @@ const CURL_VALUE_LONG = new Set(['--header', '--data', '--data-raw', '--data-bin
   '--max-time', '--connect-timeout', '--retry', '--form', '--form-string',
   '--upload-file', '--config', '--cert', '--key', '--cacert', '--proxy',
   '--resolve', '--connect-to', '--range', '--time-cond', '--oauth2-bearer'])
-const VARURL_TO = /["']to["']\s*:|(?:^|&)to=/im
-const VARURL_SUBJECT = /["']subject["']\s*:|(?:^|&)subject=/im
+const VARURL_TO = /"to"\s*:|(?:^|&)to=/im
+const VARURL_SUBJECT = /"subject"\s*:|(?:^|&)subject=/im
 
 export function collapseSubst(cmd) {
   let out = ''

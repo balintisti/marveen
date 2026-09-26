@@ -325,11 +325,12 @@ _VARURL_BODY_LONG = {
     "--data", "--data-raw", "--data-binary", "--data-urlencode", "--data-ascii",
     "--json", "--form", "--form-string", "--post-data", "--body-data",
 }
-# A KEY, not a word: a quoted JSON key (`"to":`) or a form field at the start
+# A KEY, not a word: a DOUBLE-quoted JSON key (`"to":`; JSON keys never take
+# single quotes, and prose quoting 'to': must not count -- didi, cb63ddb4) or a form field at the start
 # of a value or after `&` (`to=`, `a=1&subject=x`). Prose inside a message
 # ("... subject: x ...") does not count.
-_VARURL_TO = re.compile(r"[\"']to[\"']\s*:|(?:^|&)to=", re.I | re.M)
-_VARURL_SUBJECT = re.compile(r"[\"']subject[\"']\s*:|(?:^|&)subject=", re.I | re.M)
+_VARURL_TO = re.compile(r"\"to\"\s*:|(?:^|&)to=", re.I | re.M)
+_VARURL_SUBJECT = re.compile(r"\"subject\"\s*:|(?:^|&)subject=", re.I | re.M)
 
 
 def _collapse_subst(cmd: str) -> str:
