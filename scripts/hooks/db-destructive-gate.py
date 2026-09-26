@@ -532,85 +532,114 @@ def strip_heredoc_bodies(command: str) -> str:
 _FILE_ARG = re.compile(
     r"(?:^|\s)(?:-f|--file)(?:=|\s+)(\S+)"      # psql -f x.sql / --file=x.sql
     r"|(?<![<0-9])<(?![<(])\s*(\S+)"           # psql < x.sql  (never a heredoc)
-    r"|\\(?:include_relative|include|ir|i)\s+(\S+)"   # psql \i x.sql
+    r"|\\(include_relative|include|ir|i)\s+(\S+)"   # psql \i x.sql
 )
-# `cat x.sql | psql` -- the file sits in the segment BEFORE the pipe, so it is found
-# on the whole command, not per segment.
-_CAT_PIPE = re.compile(r"(?:^|[\s;&(])cat\s+(\S+)\s*\|\s*((?:[A-Za-z_]\w*=\S*\s+)*\S+)")
+# `cat a.sql b.sql | psql` -- the files sit in the segment BEFORE the pipe, so they are
+# found on the whole command, not per segment. Every non-option argument counts.
+_CAT_PIPE = re.compile(r"(?:^|[\s;&(])cat((?:\s+[^\s|;&]+)+)\s*\|\s*((?:[A-Za-z_]\w*=\S*\s+)*\S+)")
 # A path we can resolve without running anything. Anything with shell expansion in it
 # is deliberately skipped: guessing what `$f` held is how a gate starts lying.
 _LITERAL_PATH = re.compile(r"^[\w./~+-]+$")
 _MAX_FILE_BYTES = 16 * 1024 * 1024
 _MAX_FILE_DEPTH = 3
+# Streams the hook cannot read without consuming them, and which are the caller's own
+# input anyway: nothing to check, and opening them would steal or hang.
+_STREAM_PATH = re.compile(r"^/dev/(stdin|fd/\d+)$")
 
 
-def _read_sql_file(path, cwd):
-    """(text, None) on success, (None, "missing") if absent, (None, reason) otherwise.
-    Never raises."""
+def _read_sql_file(path, base):
+    """(text, resolved_path, None) on success, or (None, resolved_path, reason).
+    reason "skip:<why>" means log-and-allow; any other reason means refuse. Never
+    raises, and never blocks: only REGULAR files are opened (a FIFO hung verdict()
+    for >5 s in didi's probe, and /dev/zero reports size 0 so a size check alone
+    never trips), and the read itself is capped at MAX+1 bytes."""
     try:
         if path.startswith("~"):
             path = os.path.expanduser(path)
         if not os.path.isabs(path):
-            if not cwd:
-                return None, "relative path and no cwd to resolve it"
-            path = os.path.join(cwd, path)
+            if not base:
+                return None, path, "relative path and no cwd to resolve it"
+            path = os.path.join(base, path)
+        if _STREAM_PATH.match(path):
+            return None, path, "skip:the caller's own input stream"
         if not os.path.exists(path):
-            return None, "missing"
-        if os.path.getsize(path) > _MAX_FILE_BYTES:
-            return None, "larger than %d MiB" % (_MAX_FILE_BYTES // (1024 * 1024))
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            return fh.read(), None
+            return None, path, "skip:does not exist"
+        if not os.path.isfile(path):
+            return None, path, "skip:not a regular file (directory, FIFO or device)"
+        with open(path, "rb") as fh:
+            data = fh.read(_MAX_FILE_BYTES + 1)
+        if len(data) > _MAX_FILE_BYTES:
+            return None, path, "larger than %d MiB" % (_MAX_FILE_BYTES // (1024 * 1024))
+        return data.decode("utf-8", errors="replace"), path, None
     except Exception as exc:
-        return None, "unreadable (%s)" % type(exc).__name__
+        return None, path, "unreadable (%s)" % type(exc).__name__
 
 
-def _file_refs(command: str):
-    """(client, raw_path) for every file handed to a DB client in `command`."""
+def _file_refs(command: str, cwd, script_dir):
+    """(client, raw_path, base_dir) for every file handed to a DB client.
+
+    ONLY when the client is in COMMAND POSITION (quoted text blanked), like the TOOL,
+    CLOUD and GIT classes: a card title or commit message that merely MENTIONS
+    `psql -f /` must not make the gate open `/` (didi, fc7d05f9: the one new denial in
+    61 replayed real commands was exactly that). `\\ir` resolves against the including
+    FILE's directory, everything else against the cwd -- as psql does."""
     refs = []
     for segment in _split_outside_quotes(command):
-        client = DB_CLIENTS.search(segment)
+        client = DB_CLIENTS.search(_command_position_text(segment))
         if not client:
             continue
+        name = client.group(2)
         for m in _FILE_ARG.finditer(segment):
-            refs.append((client.group(2), m.group(1) or m.group(2) or m.group(3) or ""))
+            if m.group(4):
+                base = script_dir if m.group(3) in ("ir", "include_relative") else cwd
+                refs.append((name, m.group(4), base))
+            else:
+                refs.append((name, m.group(1) or m.group(2) or "", cwd))
     for m in _CAT_PIPE.finditer(command):
         client = DB_CLIENTS.search(" " + m.group(2))
         if client:
-            refs.append((client.group(2), m.group(1)))
+            for arg in m.group(1).split():
+                if not arg.startswith("-"):
+                    refs.append((client.group(2), arg, cwd))
     return refs
 
 
 def expand_file_args(command: str, cwd=None):
-    """(extra_lines, problems, missing). `extra_lines` are client-prefixed statements
-    from every readable literal file; `problems` are paths that exist (or cannot be
-    resolved) but could not be checked -- each becomes a refusal; `missing` are paths
-    that do not exist -- logged, not refused."""
-    extra, problems, missing, seen = [], [], [], set()
-    pending = command
+    """(extra_lines, problems, skipped). `extra_lines` are client-prefixed statements
+    from every readable literal file; `problems` are files that could not be checked
+    -- each becomes a refusal; `skipped` are paths deliberately not read (missing,
+    directory, stream) -- logged, not refused, because the client itself fails on them
+    or they are the caller's own input."""
+    extra, problems, skipped, seen = [], [], [], set()
+    pending = [(command, cwd)]
     for _ in range(_MAX_FILE_DEPTH):
         found = []
-        for name, raw in _file_refs(pending):
-            raw = raw.strip().strip("\"'")
-            if not raw or raw == "-" or not _LITERAL_PATH.match(raw) or raw in seen:
-                continue
-            seen.add(raw)
-            text, why = _read_sql_file(raw, cwd)
-            if why == "missing":
-                missing.append(raw)
-                continue
-            if text is None:
-                problems.append("a file handed to %s could not be checked: %s -- %s. "
-                                "Use an absolute path, or MARVEEN_DB_GATE=allow if it "
-                                "is meant." % (name, raw, why))
-                continue
-            for stmt in text.replace("\r", " ").replace("\n", " ").split(";"):
-                if stmt.strip():
-                    found.append("%s %s;" % (name, stmt.strip()))
+        for text_in, script_dir in pending:
+            for name, raw, base in _file_refs(text_in, cwd, script_dir):
+                raw = raw.strip().strip("\"'")
+                if not raw or raw == "-" or not _LITERAL_PATH.match(raw):
+                    continue
+                text, resolved, why = _read_sql_file(raw, base)
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                if why and why.startswith("skip:"):
+                    skipped.append("%s (%s)" % (raw, why[5:]))
+                    continue
+                if text is None:
+                    problems.append("a file handed to %s could not be checked: %s -- %s. "
+                                    "Use an absolute path, or MARVEEN_DB_GATE=allow if it "
+                                    "is meant." % (name, raw, why))
+                    continue
+                stmts = ["%s %s;" % (name, st.strip())
+                         for st in text.replace("\r", " ").replace("\n", " ").split(";")
+                         if st.strip()]
+                extra.extend(stmts)
+                found.append(("\n".join(stmts), os.path.dirname(resolved)))
         if not found:
             break
-        extra.extend(found)
-        pending = "\n".join(found)
-    return extra, problems, missing
+        pending = found
+    return extra, problems, skipped
 
 
 def find_hits(command: str, cwd=None, missing=None):
@@ -848,7 +877,7 @@ def main():
         missing = []
         kind, hits = verdict(command, cwd=cwd, missing=missing)
         for path in missing:
-            log("UNCHECKED-FILE", "does not exist, so it was not examined: %s" % path, command)
+            log("UNCHECKED-FILE", "not examined: %s" % path, command)
         if kind == "none":
             sys.exit(0)
 

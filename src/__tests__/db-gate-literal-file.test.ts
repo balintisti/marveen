@@ -16,7 +16,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, rmSync, chmodSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, rmSync, chmodSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -39,6 +39,11 @@ beforeAll(() => {
   writeFileSync(join(dir, 'notes.md'), '# Jegyzet\nA DROP TABLE veszelyes, ezert nem hasznaljuk.\n')
   writeFileSync(join(dir, 'locked.sql'), 'SELECT 1;\n')
   chmodSync(join(dir, 'locked.sql'), 0o000)
+  // \ir egy MASIK konyvtarban allo fajlbol: a psql az INCLUDOLO fajlhoz kepest old fel.
+  mkdirSync(join(dir, 'sub'))
+  writeFileSync(join(dir, 'sub', 'inner.sql'), 'DROP TABLE y;\n')
+  writeFileSync(join(dir, 'sub', 'outer.sql'), '\\ir inner.sql\n')
+  execFileSync('mkfifo', [join(dir, 'pipe.sql')])
 })
 afterAll(() => { if (dir) rmSync(dir, { recursive: true, force: true }) })
 
@@ -53,7 +58,8 @@ missing = []
 kind, hits = g.verdict(cmd, None, cwd, missing)
 print(json.dumps({"kind": kind, "hits": hits, "missing": missing}))
 `
-  const out = execFileSync('python3', ['-c', driver], { input: JSON.stringify([command, cwd]), encoding: 'utf8' })
+  // A timeout a FIFO-eset miatt: egy beakado verdict() itt DOB, nem lefagyasztja a futast.
+  const out = execFileSync('python3', ['-c', driver], { input: JSON.stringify([command, cwd]), encoding: 'utf8', timeout: 5000 })
   return JSON.parse(out.trim())
 }
 const blocks = (c: string, cwd: string | null = dir) => decide(c, cwd).kind === 'deny'
@@ -101,7 +107,33 @@ describe('db-destructive-gate: fajlbol erkezo SQL', () => {
     // A kliens maga bukik el egy hianyzo fajlon: a tiltas semmit nem vedene.
     const d = decide('psql "$URL" -f nincs-ilyen.sql')
     expect(d.kind).toBe('none')
-    expect(d.missing).toEqual(['nincs-ilyen.sql'])
+    expect(d.missing).toEqual(['nincs-ilyen.sql (does not exist)'])
+  })
+
+  it('cat TOBB fajl | psql: a masodik fajl is BLOKKOLVA', () => {
+    expect(blocks('cat safe.sql destructive.sql | psql "$URL"')).toBe(true)
+  })
+
+  it('\\ir egy masik konyvtarban allo fajlbol az INCLUDOLO fajlhoz kepest old fel -> BLOKKOLVA', () => {
+    // Kulonben a cwd-hez kepest "nem letezonek" latszik, es atmegy: megkerules.
+    expect(blocks('psql "$URL" -f sub/outer.sql')).toBe(true)
+  })
+
+  it('egy FIFO nem akasztja meg a kaput: nem nyitja meg, atengedi es naplozza', () => {
+    const d = decide('psql "$URL" -f pipe.sql')
+    expect(d.kind).toBe('none')
+    expect(d.missing.join(' ')).toMatch(/not a regular file/)
+  })
+
+  it('konyvtar -> ATMEGY + naplo, nem tiltas', () => {
+    expect(decide('psql "$URL" -f sub').kind).toBe('none')
+  })
+
+  it('IDEZETT emlites (kartya-cim, commit-uzenet) NEM nyit meg fajlt -- a valodi forgalom egyetlen uj tiltasa ez volt', () => {
+    // didi 61 valodi parancsot jatszott vissza: a `psql -f /` egy IDEZETT kartya-cimben
+    // allt, a kapu megnyitotta a `/`-t, es tiltott. A kliensnek PARANCS-POZICIOBAN kell allnia.
+    expect(blocks(`bash scripts/kanban-uj.sh marveen marveen "DB-kapu: a psql -f / nem latszik"`)).toBe(false)
+    expect(blocks(`git commit -m "psql -f destructive.sql is now covered"`)).toBe(false)
   })
 
   // A NEGATIV ESETEK A JELENTES SULYA: egy tul-blokkolo kaput megkerulnek.
