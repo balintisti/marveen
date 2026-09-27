@@ -228,3 +228,28 @@ describe('gateDecision Bash: runner walk, third pass (card a7ea5b8c)', () => {
     expect(bash(command).deny).toBe(false)
   })
 })
+
+// didi, last pass on a7ea5b8c: STACKED unknown value flags. Node runs the script in all
+// three (measured); rule A looked only one step ahead.
+describe('gateDecision Bash: stacked value flags before the script (card a7ea5b8c, last pass)', () => {
+  const bash = (command: string) => gateDecision('Bash', { command })
+
+  it.each([
+    'node --title a --disable-warning X resend-mailer.js --send',
+    'node --title a --title b --title c resend-mailer.js --send',
+    'node --disable-warning X --no-warnings resend-mailer.js --send',
+    // A boolean flag the list does not know swallows the script as its "value" --
+    // which is still a candidate, so a misjudged flag cannot open a gap.
+    'node --unknown-bool resend-mailer.js --send',
+    'npx -- resend-cli send',
+  ])('denies: %s', (command) => {
+    expect(bash(command).deny).toBe(true)
+  })
+
+  it.each([
+    'npx -- jest resend-email.service.spec.ts',
+    'node --title a --title b scripts/report.js resend-email.service.ts',
+  ])('CONTROL, passes: %s', (command) => {
+    expect(bash(command).deny).toBe(false)
+  })
+})

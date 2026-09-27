@@ -184,23 +184,24 @@ function executedNames(toks) {
   for (; hop < 4 && RUNNER.test(prog); hop++) {
     const subs = RUNNER_SUBCOMMANDS[prog.toLowerCase()]
     if (subs && subs.includes(toks[i])) i++
-    let afterUnknownLong = false
     while (i < toks.length && toks[i].startsWith('-') && toks[i] !== '-') {
-      if (RUNNER_VALUE_OPTS.has(toks[i]) && i + 1 < toks.length) {
+      const t = toks[i]
+      if (t === '--') { i++; break }
+      // A value option, or a long flag that is neither `--x=v` nor a known
+      // boolean: its NEXT token is its value (stacked flags included, didi's last
+      // pass). The value is a candidate too, so a boolean this list misjudges
+      // cannot open a gap -- the script it swallowed is still checked.
+      const unknownLong = t.startsWith('--') && !t.includes('=') && !RUNNER_BOOLEAN_LONG.test(t)
+      if ((RUNNER_VALUE_OPTS.has(t) || unknownLong) && i + 1 < toks.length && !toks[i + 1].startsWith('-')) {
         names.push(basename(toks[i + 1]))
         i += 2
-        afterUnknownLong = false
         continue
       }
-      afterUnknownLong = toks[i].startsWith('--') && !toks[i].includes('=') && !RUNNER_BOOLEAN_LONG.test(toks[i])
       i++
     }
     if (i >= toks.length) break
     prog = basename(toks[i])
     names.push(prog)
-    // The first non-option may have been that flag's VALUE: the next token is
-    // then what runs.
-    if (afterUnknownLong && i + 1 < toks.length) names.push(basename(toks[i + 1]))
     i++
   }
   if (hop === 4 && RUNNER.test(prog) && i < toks.length) names.push(RUNNER_DEPTH_HIT)
