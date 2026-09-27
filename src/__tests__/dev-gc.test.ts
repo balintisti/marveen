@@ -10,20 +10,18 @@
  * A DB-felet szerver NELKUL teszteljuk: a plan_db tiszta fuggveny, az mtime-forras
  * injektalhato. Ez a fajl egyetlen adatbazist sem dob el.
  */
-import { describe, it, expect, afterAll } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, existsSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, utimesSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'dev-gc.py')
-const made: string[] = []
-afterAll(() => made.forEach((d) => rmSync(d, { recursive: true, force: true })))
+const mkTmp = tmpDirs()
 
 function jestFixture(dirName = 'jest_dx') {
-  const base = mkdtempSync(join(tmpdir(), 'devgc-'))
-  made.push(base)
+  const base = mkTmp('devgc-')
   const d = join(base, dirName)
   mkdirSync(join(d, 'sub'), { recursive: true })
   const old = join(d, 'sub', 'old.map')

@@ -3,12 +3,14 @@
 // at 90%: empty the helper's afterAll, or stop recording the directories, and it fails.
 import { describe, it, expect } from 'vitest'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
-import { join, sep } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { tmpDirs } from './helpers/tmp-dirs.js'
 import { stripComments } from './helpers/strip-comments.js'
 
 const mkTmp = tmpDirs()
 let made: string[] = []
+// a parent outside $TMPDIR's own listing, for the `base` argument (the file-level helper removes it)
+const baseParent = mkTmp('tmpdirs-baseparent-')
 
 // Vitest runs a file's describes in order, so the second one observes the first one's afterAll.
 describe('a scope that makes temporary directories', () => {
@@ -19,7 +21,9 @@ describe('a scope that makes temporary directories', () => {
     writeFileSync(join(a, 'f'), 'x')           // a non-empty directory must go too
     const c = mkTmp.adopt(join(a, '..', `${a.split(sep).pop()}-adopted`))   // made elsewhere, handed over
     mkdirSync(c)
-    made = [a, b, c]
+    const d = mkTmp('tmpdirs-based-', baseParent)   // a caller that must live elsewhere (db-gate: HOME)
+    made = [a, b, c, d]
+    expect(dirname(d)).toBe(baseParent)
     expect(a).not.toBe(b)
     expect(a).toContain('tmpdirs-probe-')
     expect(existsSync(a) && existsSync(b)).toBe(true)
@@ -27,8 +31,8 @@ describe('a scope that makes temporary directories', () => {
 })
 
 describe('after that scope finishes', () => {
-  it('all three directories are gone, contents and the adopted one included', () => {
-    expect(made).toHaveLength(3)
+  it('all four directories are gone, contents, the adopted one and the one under a base included', () => {
+    expect(made).toHaveLength(4)
     for (const d of made) expect(existsSync(d)).toBe(false)
   })
 })

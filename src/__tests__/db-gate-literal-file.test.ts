@@ -14,19 +14,21 @@
  * NULLA SZONDAZAS: ez a fajl SZOVEGET ad a dontesi fuggvenynek es fixture-fajlokat
  * olvas. Egyetlen adatbazishoz sem nyul.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, rmSync, chmodSync, mkdirSync } from 'node:fs'
+import { writeFileSync, chmodSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
 const GATE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'hooks', 'db-destructive-gate.py')
 
+const mkTmp = tmpDirs()
 let dir = ''
 beforeAll(() => {
   // A HOME alatt, nem /tmp-ben: a /tmp gyoker mas hookok alatt hamis pirosat ad.
-  dir = mkdtempSync(join(homedir(), '.dbgate-literal-'))
+  dir = mkTmp('.dbgate-literal-', homedir())
   writeFileSync(join(dir, 'destructive.sql'), 'SELECT 1;\nDROP TABLE "FormField" CASCADE;\n')
   writeFileSync(join(dir, 'safe.sql'), 'SELECT count(*) FROM "Task";\n')
   // Ket soros, LEGALIS DELETE: soronkenti prefixszel `psql DELETE FROM "Task"` lenne
@@ -45,7 +47,6 @@ beforeAll(() => {
   writeFileSync(join(dir, 'sub', 'outer.sql'), '\\ir inner.sql\n')
   execFileSync('mkfifo', [join(dir, 'pipe.sql')])
 })
-afterAll(() => { if (dir) rmSync(dir, { recursive: true, force: true }) })
 
 /** A kapu DONTESE (verdict) egy parancs-SZOVEGRE. Nem hajt vegre semmit. */
 function decide(command: string, cwd: string | null = dir): { kind: string; hits: string[]; missing: string[] } {
