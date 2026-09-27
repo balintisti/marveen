@@ -558,7 +558,7 @@ describe('buildWakeMessage', () => {
       card('cccccccc1', 'low', 'a low one'),
       card('aaaaaaaa1', 'urgent', 'the urgent one'),
       card('bbbbbbbb1', 'normal', 'a normal one'),
-    ], WAKE_NOW)
+    ], WAKE_NOW, 'assigned_open_cards')
     const lines = msg.split('\n').filter((l) => l.startsWith('  '))
     expect(lines[0]).toContain('aaaaaaaa')
     expect(lines[0]).toContain('the urgent one')
@@ -567,7 +567,7 @@ describe('buildWakeMessage', () => {
 
   it('never dumps the whole board into a pane', () => {
     const many = Array.from({ length: 40 }, (_, i) => card(`id${i}`.padEnd(9, 'x'), 'normal', `t${i}`))
-    const lines = buildWakeMessage('didi', 13, 40, many, WAKE_NOW).split('\n').filter((l) => l.startsWith('  '))
+    const lines = buildWakeMessage('didi', 13, 40, many, WAKE_NOW, 'assigned_open_cards').split('\n').filter((l) => l.startsWith('  '))
     // All 40 are `testing`, so they land in the review section, which is capped tighter
     // than the work section: a reviewer's queue is not what the reader can act on.
     expect(lines.length).toBeLessThanOrEqual(3)
@@ -581,7 +581,7 @@ describe('buildWakeMessage', () => {
       { ...card('rev11111', 'high', 'a review waiting for an answer'), status: 'testing' },
       { ...card('rev22222', 'urgent', 'another review'), status: 'testing' },
       { ...card('work1111', 'low', 'something I can actually start'), status: 'planned' },
-    ], WAKE_NOW)
+    ], WAKE_NOW, 'assigned_open_cards')
     const lines = msg.split('\n').filter((l) => l.startsWith('  '))
     expect(lines[0]).toContain('work1111')
     expect(msg.indexOf('work1111')).toBeLessThan(msg.indexOf('rev22222'))
@@ -591,7 +591,7 @@ describe('buildWakeMessage', () => {
     const msg = buildWakeMessage('dexter', 13, 2, [
       { ...card('work1111', 'normal', 'w'), status: 'planned' },
       { ...card('rev11111', 'normal', 'r'), status: 'testing' },
-    ], WAKE_NOW)
+    ], WAKE_NOW, 'assigned_open_cards')
     expect(msg).toMatch(/FELVEHETO MUNKA \(1\)/)
     expect(msg).toMatch(/VALASZRA VARO ELLENORZES \(1\)/)
     expect(msg).toContain('planned')
@@ -599,7 +599,7 @@ describe('buildWakeMessage', () => {
   })
 
   it('says so plainly when there is nothing pickable, only reviews', () => {
-    const msg = buildWakeMessage('dexter', 13, 1, [{ ...card('rev11111', 'high', 'r'), status: 'testing' }], WAKE_NOW)
+    const msg = buildWakeMessage('dexter', 13, 1, [{ ...card('rev11111', 'high', 'r'), status: 'testing' }], WAKE_NOW, 'assigned_open_cards')
     expect(msg).toMatch(/Nincs A TE NEVEDEN felveheto munka/)
   })
 
@@ -610,14 +610,14 @@ describe('buildWakeMessage', () => {
   // pull list. This is not a wording test: the absolute form is what makes an agent STOP,
   // and nothing else in the suite would notice it coming back.
   it('never claims there is no work at all, only none under this name', () => {
-    const msg = buildWakeMessage('dexter', 13, 1, [{ ...card('rev11111', 'high', 'r'), status: 'testing' }], WAKE_NOW)
+    const msg = buildWakeMessage('dexter', 13, 1, [{ ...card('rev11111', 'high', 'r'), status: 'testing' }], WAKE_NOW, 'assigned_open_cards')
     expect(msg).toContain('A TE NEVEDEN')
     expect(msg).toContain('GAZDATLAN')
     expect(msg).not.toMatch(/Nincs felveheto munkad/)
   })
 
   it('says the count and the idle time, because the agent cannot see either', () => {
-    const msg = buildWakeMessage('didi', 13, 48, [card('aaaaaaaa1', 'high', 'x')], WAKE_NOW)
+    const msg = buildWakeMessage('didi', 13, 48, [card('aaaaaaaa1', 'high', 'x')], WAKE_NOW, 'assigned_open_cards')
     expect(msg).toContain('13')
     expect(msg).toContain('48')
   })
@@ -627,7 +627,7 @@ describe('buildWakeMessage', () => {
   // disagree. Saying so is the only honest option -- "you have 48 things" followed by
   // nothing at all is exactly the shape this fleet keeps getting burned by.
   it('when it can name nothing, it SAYS so instead of pretending', () => {
-    const msg = buildWakeMessage('didi', 13, 48, [], WAKE_NOW)
+    const msg = buildWakeMessage('didi', 13, 48, [], WAKE_NOW, 'assigned_open_cards')
     expect(msg).toMatch(/nem tudtam megnevezni/)
   })
 
@@ -665,7 +665,7 @@ describe('buildWakeMessage', () => {
   })
 
   it('tells the agent that no human was alerted, so it does not go looking', () => {
-    const msg = buildWakeMessage('didi', 13, 48, [card('aaaaaaaa1', 'high', 'x')], WAKE_NOW)
+    const msg = buildWakeMessage('didi', 13, 48, [card('aaaaaaaa1', 'high', 'x')], WAKE_NOW, 'assigned_open_cards')
     expect(msg).toContain('Isti NEM lett ertesitve')
   })
 })
@@ -1060,7 +1060,7 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
     const ID_ITEM = /^ {2}[0-9a-z]{8}\s/
     const cases: { msg: string; item: RegExp }[] = [
       { msg: buildPullNotice('jarvis', 20, ids.map(it3), NOW), item: ID_ITEM },
-      { msg: buildWakeMessage('jarvis', 20, 3, ids.map(it3), NOW), item: ID_ITEM },
+      { msg: buildWakeMessage('jarvis', 20, 3, ids.map(it3), NOW, 'assigned_open_cards'), item: ID_ITEM },
       { msg: buildNoWorkNotice('jarvis', 20, NOW), item: ID_ITEM },
       {
         msg: buildPendingStillWaitingNotice(
@@ -1133,7 +1133,7 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
   })
 
   it('a WAKE megbelyegzi az idotartamot ES kimondja, hogy a DARABSZAM pillanatfelvetel', () => {
-    const msg = buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW)
+    const msg = buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW, 'assigned_open_cards')
     expect(msg).toMatch(/MERVE \d{2}:\d{2}:\d{2}-kor/)
     expect(msg).toContain('PILLANATFELVETEL')
     expect(msg).toMatch(/nem az ora avultatja/)
@@ -1155,7 +1155,7 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
   // nelkul), igy egy fajllal arrebb ujra lehetseges volt, or nelkul.
   const GUARDED: { name: string; msg: string }[] = [
     { name: 'buildPullNotice', msg: buildPullNotice('jarvis', 20, [it3('aaaaaaaa1')], NOW) },
-    { name: 'buildWakeMessage', msg: buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW) },
+    { name: 'buildWakeMessage', msg: buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW, 'assigned_open_cards') },
     { name: 'buildNoWorkNotice', msg: buildNoWorkNotice('jarvis', 20, NOW) },
     {
       name: 'buildPendingStillWaitingNotice',
@@ -1218,7 +1218,7 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
     )
     for (const msg of [
       buildPullNotice('jarvis', 20, [it3('aaaaaaaa1')], NOW),
-      buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW),
+      buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW, 'assigned_open_cards'),
       buildNoWorkNotice('jarvis', 20, NOW),
       pending,
     ]) {
@@ -1230,7 +1230,7 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
 
     // AGENS-HATOKORU szamok: a parancs NEVEZZE MEG az agenst.
     for (const msg of [
-      buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW),
+      buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW, 'assigned_open_cards'),
       buildNoWorkNotice('jarvis', 20, NOW),
     ]) {
       expect(cmdOf(msg)).toContain("=='jarvis'")
