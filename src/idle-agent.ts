@@ -252,6 +252,26 @@ export function isDeferred(dueDate: number | null | undefined, now: number | und
   return ms(dueDate) > ms(now)
 }
 
+/** Has a `waiting` card's FLOOR run out? The date reader the waiting column never had
+ *  (card ce5c9e4b, deeper measured it 2026-09-28).
+ *
+ *  The board convention puts every waiting card's floor into `due_date`, and a floor
+ *  promises that the condition fires even when the awaited event never comes. It fired
+ *  for nothing: `assigned_open_cards` dropped the row on its STATUS before `isDeferred`
+ *  ever looked at the date. Measured 01:07 CEST: 26 waiting cards carry a date, 12 of
+ *  them already past, spread over six agents (at most four on one) -- the census that
+ *  had to come BEFORE this went live, so it would not land as one big wake-up wave.
+ *
+ *  NOT `!isDeferred`, and that is the trap worth naming: `isDeferred` answers "no" when
+ *  it cannot tell (no clock, no date), which is the safe answer for hiding a card and the
+ *  WRONG one here -- `!isDeferred` would call every undated waiting card expired, and an
+ *  absent clock would wake the whole column at once. A floor that was never set cannot
+ *  run out. */
+export function isFloorExpired(dueDate: number | null | undefined, now: number | undefined): boolean {
+  if (now === undefined || dueDate == null) return false
+  return !isDeferred(dueDate, now)
+}
+
 export function decideIdleAlert(
   input: IdleAgentInput,
   state: IdleAgentState,
@@ -702,8 +722,16 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
       // teach anyone to skim its list.
       const isMine = (c: WorkCountCard) => c.assignee === agent
       const deferred = (c: WorkCountCard) => isDeferred(c.due_date, now)
+      // EXCEPT A WAITING CARD WHOSE FLOOR HAS RUN OUT (card ce5c9e4b, marveen's decision).
+      // The date is the only promise a waiting card makes to anyone, and until this line
+      // the status threw the row away before the date was read -- the floor was decorative.
+      // What it hands the assignee is NOT the work: it is re-measuring the condition, and
+      // then either moving the card on or writing a new floor. A FUTURE date on a waiting
+      // card still means nothing here, and a planned card's future date stays NOT-BEFORE.
+      const floorRanOut = (c: WorkCountCard) => c.status === 'waiting' && isFloorExpired(c.due_date, now)
       const open = live.filter(
-        (c) => isMine(c) && c.status !== 'done' && c.status !== 'waiting' && !deferred(c),
+        (c) => isMine(c) && c.status !== 'done'
+          && (c.status !== 'waiting' ? !deferred(c) : floorRanOut(c)),
       )
       return open.filter((c) => {
         if (c.status !== 'testing') return true
@@ -1432,7 +1460,7 @@ export function buildWakeMessage(
   agent: string,
   minutes: number,
   workCount: number,
-  items: { id: string; title?: string | null; priority?: string | null; status?: string }[],
+  items: { id: string; title?: string | null; priority?: string | null; status?: string; due_date?: number | null }[],
   nowMs: number,
   kind: WorkCheckKind = 'assigned_open_cards',
 ): string {
@@ -1449,7 +1477,11 @@ export function buildWakeMessage(
     isReviewQueue ? c.status === 'testing' : c.status !== 'testing'
   const byPriority = (a: { priority?: string | null }, b: { priority?: string | null }) =>
     (rank[a.priority ?? 'normal'] ?? 2) - (rank[b.priority ?? 'normal'] ?? 2)
-  const work = [...items].filter(pickable).sort(byPriority)
+  // A `waiting` card reaches this list for ONE reason: its floor ran out (card ce5c9e4b).
+  // It is not pickable work and must not be listed as such -- the reader would start the
+  // work the card is blocked on. So it gets its own group, and the group says why it came.
+  const floor = isReviewQueue ? [] : [...items].filter((c) => c.status === 'waiting').sort(byPriority)
+  const work = [...items].filter((c) => pickable(c) && !floor.includes(c)).sort(byPriority)
   const review = [...items].filter((c) => !pickable(c)).sort(byPriority)
 
   const line = (c: { id: string; title?: string | null; priority?: string | null; status?: string }) =>
@@ -1472,6 +1504,16 @@ export function buildWakeMessage(
       ...work.slice(0, 5).map(line),
     )
   }
+  if (floor.length) {
+    const day = (t: number | null | undefined) =>
+      t == null ? '?' : new Date(t < 1e11 ? t * 1000 : t).toISOString().slice(0, 10)
+    out.push(
+      ...(work.length ? [''] : []),
+      `PADLO-LEJARAT (${floor.length}) -- waiting kartya, aminek a due_date-je ELMULT. NEM munka:`,
+      'a feladat a feltetel UJRAMERESE, utana vagy tovabbviszed, vagy UJ padlot irsz (due_date) indokkal:',
+      ...floor.slice(0, 5).map((c) => `${line(c)}  (padlo ${day(c.due_date)})`),
+    )
+  }
   if (review.length) {
     out.push(
       '',
@@ -1481,7 +1523,7 @@ export function buildWakeMessage(
       ...review.slice(0, 3).map(line),
     )
   }
-  if (!work.length && !review.length) {
+  if (!work.length && !review.length && !floor.length) {
     out.push('A szamlalod nem nulla, de tetelt nem tudtam megnevezni -- nezd meg a tablat.')
   }
   // THE STAMP ABOVE FIXES THE DURATION AND NOT THE COUNT, AND THE MESSAGE HAS TO SAY WHICH.
@@ -1505,18 +1547,23 @@ export function buildWakeMessage(
     // BAJT-AZONOS a ket kind kozott. Megmerve 2026-09-06: `assigned_open_cards` es
     // `testing_without_my_comment` mellett a parancs-sor azonos, mikozben az uzenet TOBBI resze
     // elter -- tehat a fuggveny hasznalja a kind-ot, csak epp itt nem.
-    `${ASYMMETRY_NOTE} a jovobeli \`due_date\`-et, es a \`workcheck.json\` \`kind\`-jat.`,
+    `${ASYMMETRY_NOTE} a jovobeli \`due_date\`-et, a LEJART padloju \`waiting\` kartyat (en beszamitom,`,
+    'a sor nem), es a `workcheck.json` `kind`-jat.',
     isReviewQueue
       ? 'A te deklaraciod `testing_without_my_comment`, tehat en a `testing` oszlopot szamoltam, amire'
       : 'A te deklaraciod `assigned_open_cards`, tehat ez a sor ugyanazt a halmazt kerdezi, amit szamoltam --',
     isReviewQueue
       ? 'meg nem szoltal hozza. A fenti sor a NEVEDEN allo nyitott kartyakat adja: MASIK halmaz.'
-      : 'a fenti ketto kivetelevel.',
+      : 'a fenti harom kivetelevel.',
   )
   out.push(
     '',
     work.length
       ? 'Vedd fel a legfelso FELVEHETO tetelt. Ha egyik sem a tied, ird meg egy sorban, hogy miert --'
+      // Only expired floors on the list: the fallback below would call them "valaszra varo
+      // ellenorzes", which is the wrong action for the wrong column.
+      : floor.length
+        ? 'Merd ujra a legfelso PADLO-LEJARAT kartya feltetelet. Ha egyik sem a tied, ird meg egy sorban --'
       : isReviewQueue
         ? 'Nem tudtam megnevezni felveheto ellenorzest. Ha a szamlalod megsem nulla, ird meg egy sorban --'
         : // SCOPED ON PURPOSE, and the old wording was not (card 5a499a19). `isMine` counts
