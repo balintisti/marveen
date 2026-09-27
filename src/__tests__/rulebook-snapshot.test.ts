@@ -83,6 +83,10 @@ function world(skillCount: number) {
         // here stay the numbers they were measured to be.
         RULEBOOK_SCHED_ROOT: join(root, 'no-such-scheduled-tasks'),
         RULEBOOK_NOTIFY: notify,
+        // The push-failure marker defaults to the LIVE store/: a fixture run that reaches
+        // the push branch would delete a real failure marker (hiding a real backlog) or
+        // write a fake one. No case here adds a remote today, so it is latent (card 8a49e6c2).
+        RULEBOOK_PUSH_MARK: join(root, 'rulebook-push-failed'),
         ALERT_FILE: alertFile,
         GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t',
         GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t',
