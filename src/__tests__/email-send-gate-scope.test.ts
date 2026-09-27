@@ -154,3 +154,42 @@ describe('gateDecision Bash: a Resend tool or script with its own name, RUN, den
     expect(bash(command).deny).toBe(false)
   })
 })
+
+// didi, second pass on a7ea5b8c: fifteen ordinary shapes still passed, because only
+// rest[0] was taken as the executed position. `npx -y` is what agents type by default.
+describe('gateDecision Bash: the executed position is found past runner flags and in more runners (card a7ea5b8c, pass 2)', () => {
+  const bash = (command: string) => gateDecision('Bash', { command })
+
+  it.each([
+    'npx -y resend-cli send --to a@b.c',
+    'npx --yes resend-cli send --to a@b.c',
+    'npx -p resend-cli resend-cli send',
+    'node --env-file=.env resend-mailer.js --to a@b.c',
+    'node --no-warnings resend-mailer.js --to a@b.c',
+    'tsx --tsconfig tsconfig.json resend-mailer.ts --to a@b.c',
+    'python3 -u resend_mailer.py --to a@b.c',
+    'python3 -X utf8 resend_mailer.py --to a@b.c',
+    'python3 -m resend_cli send --to a@b.c',
+    'pnpm dlx resend-cli send --to a@b.c',
+    'yarn dlx resend-cli send --to a@b.c',
+    'bunx resend-cli send --to a@b.c',
+    'uv run resend_mailer.py --to a@b.c',
+    'bash resend-mailer.sh --to a@b.c',
+    'sh ./resend-send.sh',
+    // chains and preloads
+    'npx -y tsx scripts/resend-mailer.ts --to a@b.c',
+    'node -r ./resend-mailer.js app.js',
+  ])('denies: %s', (command) => {
+    expect(bash(command).deny).toBe(true)
+  })
+
+  it.each([
+    'npx -y jest src/common/services/resend-email.service.spec.ts',
+    'bash scripts/check.sh resend-email.service.ts',
+    'python3 -m pytest tests/test_resend_mailer.py',
+    'pnpm dlx prettier --check src/common/services/resend-email.service.ts',
+    'python3 -X utf8 scripts/report.py resend-email.service.ts',
+  ])('CONTROL, passes (a resend-* name as an ARGUMENT, not what runs): %s', (command) => {
+    expect(bash(command).deny).toBe(false)
+  })
+})
