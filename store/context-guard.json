@@ -35,10 +35,11 @@
     "limitTokens": null,
     "cooldownMinutes": 15,
     "handoffTimeoutMinutes": 20,
-    "idleFlushEnabled": false,
+    "idleFlushEnabled": true,
     "idleFlushTokens": 400000,
     "idleMinutes": 20,
-    "_marveen_note": "2026-09-19 17:3x CEST -- marveen. KIKAPCSOLVA, amig a stop tart. HELYESBITVE 2026-09-20 21:5x CEST: a KET indokbol az EGYIK MA MEGDOLT. (1) ALL: az idle-flush hozama a KESOBBI fordulokban terul meg, es egy leallitott agensnek nincs kesobbi forduloja. Merve 21:5x-kor: didi utolso nyoma 09-19 17:27, computresse 09-19 17:02 -- a stop tart. (2) MEGSZUNT: a guard TEGNAPI, halott atiratot mert (agents/<nev> symlink, feloldatlan ut). Ez 2026-09-20 16:07-kor JAVITVA ES TELEPITVE -- didi tetlensege 1085 perc -> 50, computress 793k -> 107k token. Kartya 5c094718. AKI UJRAENGEDELYEZ (date_floor 2026-09-24, a heti keret resetje): a (2)-re MAR NEM kell varni, csak az (1)-re. VISSZAALLITAS: idleFlushEnabled true, vagy git checkout store/context-guard.json."
+    "_marveen_note": "2026-09-19 17:3x CEST -- marveen. KIKAPCSOLVA, amig a stop tart. HELYESBITVE 2026-09-20 21:5x CEST: a KET indokbol az EGYIK MA MEGDOLT. (1) ALL: az idle-flush hozama a KESOBBI fordulokban terul meg, es egy leallitott agensnek nincs kesobbi forduloja. Merve 21:5x-kor: didi utolso nyoma 09-19 17:27, computresse 09-19 17:02 -- a stop tart. (2) MEGSZUNT: a guard TEGNAPI, halott atiratot mert (agents/<nev> symlink, feloldatlan ut). Ez 2026-09-20 16:07-kor JAVITVA ES TELEPITVE -- didi tetlensege 1085 perc -> 50, computress 793k -> 107k token. Kartya 5c094718. AKI UJRAENGEDELYEZ (date_floor 2026-09-24, a heti keret resetje): a (2)-re MAR NEM kell varni, csak az (1)-re. VISSZAALLITAS: idleFlushEnabled true, vagy git checkout store/context-guard.json.",
+    "_marveen_note_20260927": "2026-09-27 23:4x CEST -- marveen: idleFlushEnabled VISSZA true. A false a leallitott agens koltseg-feke volt (791145ab); Isti 3924 (23:19) heti keret-reset utan mind a het agens dolgozik (friday 19597 jelezte). Backup: marveen scratchpad context-guard.json.bak-20260927-2345."
   },
   "friday": {
     "enabled": false,
@@ -72,9 +73,10 @@
     "limitTokens": null,
     "cooldownMinutes": 15,
     "handoffTimeoutMinutes": 20,
-    "idleFlushEnabled": false,
+    "idleFlushEnabled": true,
     "idleFlushTokens": 400000,
     "idleMinutes": 20,
-    "_marveen_note": "2026-09-19 17:3x CEST -- marveen. KIKAPCSOLVA, amig a stop tart. HELYESBITVE 2026-09-20 21:5x CEST: a KET indokbol az EGYIK MA MEGDOLT. (1) ALL: az idle-flush hozama a KESOBBI fordulokban terul meg, es egy leallitott agensnek nincs kesobbi forduloja. Merve 21:5x-kor: didi utolso nyoma 09-19 17:27, computresse 09-19 17:02 -- a stop tart. (2) MEGSZUNT: a guard TEGNAPI, halott atiratot mert (agents/<nev> symlink, feloldatlan ut). Ez 2026-09-20 16:07-kor JAVITVA ES TELEPITVE -- didi tetlensege 1085 perc -> 50, computress 793k -> 107k token. Kartya 5c094718. AKI UJRAENGEDELYEZ (date_floor 2026-09-24, a heti keret resetje): a (2)-re MAR NEM kell varni, csak az (1)-re. VISSZAALLITAS: idleFlushEnabled true, vagy git checkout store/context-guard.json."
+    "_marveen_note": "2026-09-19 17:3x CEST -- marveen. KIKAPCSOLVA, amig a stop tart. HELYESBITVE 2026-09-20 21:5x CEST: a KET indokbol az EGYIK MA MEGDOLT. (1) ALL: az idle-flush hozama a KESOBBI fordulokban terul meg, es egy leallitott agensnek nincs kesobbi forduloja. Merve 21:5x-kor: didi utolso nyoma 09-19 17:27, computresse 09-19 17:02 -- a stop tart. (2) MEGSZUNT: a guard TEGNAPI, halott atiratot mert (agents/<nev> symlink, feloldatlan ut). Ez 2026-09-20 16:07-kor JAVITVA ES TELEPITVE -- didi tetlensege 1085 perc -> 50, computress 793k -> 107k token. Kartya 5c094718. AKI UJRAENGEDELYEZ (date_floor 2026-09-24, a heti keret resetje): a (2)-re MAR NEM kell varni, csak az (1)-re. VISSZAALLITAS: idleFlushEnabled true, vagy git checkout store/context-guard.json.",
+    "_marveen_note_20260927": "2026-09-27 23:4x CEST -- marveen: idleFlushEnabled VISSZA true. A false a leallitott agens koltseg-feke volt (791145ab); Isti 3924 (23:19) heti keret-reset utan mind a het agens dolgozik (friday 19597 jelezte). Backup: marveen scratchpad context-guard.json.bak-20260927-2345."
   }
 }
