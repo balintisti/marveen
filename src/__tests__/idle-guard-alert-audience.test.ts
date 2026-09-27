@@ -111,3 +111,38 @@ describe('tick() uses the delivery, not a route of its own', () => {
     expect(fnBody).not.toMatch(/sendAlert\(buildFleetAlert\(/)
   })
 })
+
+// Card 3b722cb5, didi's second instance: the fix for "eight Telegram messages" (4ec15e86)
+// was a CALL-SITE move -- one delivery per sweep, after the per-agent loop. Moved back
+// into the loop, every test stayed green, because the test above only asks THAT tick()
+// uses deliverFleetAlerts, not WHERE. This asks where, from the syntax tree.
+describe('tick() delivers ONCE per sweep, outside the per-agent loop', () => {
+  it('exactly one deliverFleetAlerts call, with no loop above it inside tick()', async () => {
+    const ts = (await import('typescript')).default
+    const sf = ts.createSourceFile('w.ts', SRC, ts.ScriptTarget.Latest, true)
+    let tick: import('typescript').Node | undefined
+    ts.forEachChild(sf, function find(n) {
+      if (ts.isFunctionDeclaration(n) && n.name?.text === 'tick') tick = n
+      else ts.forEachChild(n, find)
+    })
+    expect(tick).toBeDefined()
+
+    const calls: import('typescript').CallExpression[] = []
+    ;(function visit(n: import('typescript').Node) {
+      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'deliverFleetAlerts') calls.push(n)
+      ts.forEachChild(n, visit)
+    })(tick!)
+    expect(calls).toHaveLength(1)
+
+    const loops: string[] = []
+    for (let n: import('typescript').Node | undefined = calls[0].parent; n && n !== tick; n = n.parent) {
+      if (ts.isForOfStatement(n) || ts.isForInStatement(n) || ts.isForStatement(n) || ts.isWhileStatement(n) || ts.isDoStatement(n)) {
+        loops.push(ts.SyntaxKind[n.kind])
+      }
+      if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && ['forEach', 'map'].includes(n.expression.name.text)) {
+        loops.push(n.expression.name.text)
+      }
+    }
+    expect(loops).toEqual([])
+  })
+})
