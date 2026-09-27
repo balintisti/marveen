@@ -137,6 +137,20 @@ const CODE_EXECISH = /\bsubprocess\b|os\.system|\bpopen\b|child_process|\bexec[A
 // atment, mert az `npx` utani elso argumentumot csak a SENDPY-ag nezte meg.
 // A `(?!-\w)` itt is a fajlnev-kizaras (resend-email.service.ts).
 const VENDOR_CLI = /^resend$/i
+// A RESEND TOOL OR SCRIPT WITH ITS OWN NAME -- card a7ea5b8c (didi, measured
+// 2026-08-22 and 08-27 on the real isSendInvocation). The filename exemption
+// above (`(?!-\w)`, card 92e3c22f) was right for ARGUMENTS -- `wc -l
+// resend-email.service.ts` reads a file -- but VENDOR_CLI only knew the bare
+// `resend`, so a hyphen- or underscore-named binary or helper script in COMMAND
+// position (`npx resend-cli send`, `node resend-mailer.js --send --to x`,
+// `./resend-mailer send`, `npx resend_cli send`) walked through. Decided by
+// POSITION, like everything else here: only the program itself, or the script a
+// runner executes, is looked at -- a `resend-*` token as an argument stays
+// content, so the 92e3c22f reads keep passing. And it needs a send signal: a
+// `send` / `--send` / `--to` argument, or a name that says so (`resend-send`,
+// `resend-mailer`).
+const RESEND_TOOL = /^resend[-_][\w.-]+$/i
+const RESEND_TOOL_SENDS_BY_NAME = /send|mail/i
 const CODE_SENDER_LIT = /sendmail|msmtp|swaks|send\.py/i
 const codeStringSends = (code) => CODE_SEND.test(code) || (CODE_EXECISH.test(code) && CODE_SENDER_LIT.test(code))
 
@@ -278,6 +292,16 @@ function headIsSend(toks, depth) {
       rest.some((t) => t === '--to' || t.startsWith('--to='))) return true
   if (toks.some((t) => GRAPHMAIL.test(basename(t))) && rest.includes('send')) return true
   if (toks.some((t) => VENDOR_CLI.test(basename(t))) && rest.includes('send')) return true
+  // The program, the script a runner executes, and the script behind a runner
+  // chain (`npx tsx resend-mailer.ts`): the positions where a name is RUN.
+  const executed = [prog]
+  if ((PYTHON.test(prog) || NODEISH.test(prog)) && rest.length) {
+    executed.push(basename(rest[0]))
+    if (NODEISH.test(basename(rest[0])) && rest.length > 1) executed.push(basename(rest[1]))
+  }
+  const sendArg = rest.some((t) => t === 'send' || t === '--send' || t === '--to' || t.startsWith('--to='))
+  if (executed.some((c) => RESEND_TOOL.test(c) &&
+      (sendArg || RESEND_TOOL_SENDS_BY_NAME.test(c.replace(/^resend[-_]/i, ''))))) return true
   if (CURLISH.test(prog) && rest.some((t) => RESEND_TARGET.test(t))) return true
   return false
 }

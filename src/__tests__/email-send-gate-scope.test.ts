@@ -119,3 +119,38 @@ describe('gateDecision Bash: POSITIVE CONTROLS -- real send attempts still deny 
     expect(bash(`echo 'sendmail mentioned inside a closed quote'`).deny).toBe(false)
   })
 })
+
+// Card a7ea5b8c (didi, 2026-08-22 and 08-27, measured on the real isSendInvocation):
+// the filename exemption `(?!-\w)` (card 92e3c22f) was right for ARGUMENTS, but the
+// vendor-CLI check only knew the bare `resend`, so a hyphen- or underscore-named Resend
+// binary or helper script in COMMAND position walked through. Every one of these was
+// GREEN (allowed) before the fix.
+describe('gateDecision Bash: a Resend tool or script with its own name, RUN, denies (card a7ea5b8c)', () => {
+  const bash = (command: string) => gateDecision('Bash', { command })
+
+  it.each([
+    'npx resend-cli send --to a@b.c',
+    'npx resend-api send --to a@b.c',
+    'node resend-mailer.js --send --to a@b.c',
+    'RESEND_API_KEY=x npx resend-send',
+    './resend-mailer send --to a@b.c',
+    'npx resend_cli send --to a@b.c',
+    'npx tsx scripts/resend-mailer.ts --to a@b.c',
+  ])('denies: %s', (command) => {
+    expect(bash(command).deny).toBe(true)
+  })
+
+  it.each([
+    // The 92e3c22f reads: a `resend-*` token as an ARGUMENT is content, even next to `send`.
+    'wc -l src/common/services/resend-email.service.ts',
+    'grep -n send src/common/services/resend-email.service.ts',
+    'git log --oneline -- src/common/services/resend-email.service.ts',
+    'npx jest src/common/services/resend-email.service.spec.ts',
+    'npx eslint src/common/services/resend-email.service.ts',
+    // A resend-named tool that is RUN but carries no send signal is not a send.
+    'npx resend-cli --help',
+    'node resend-domains-report.js --list',
+  ])('CONTROL, passes: %s', (command) => {
+    expect(bash(command).deny).toBe(false)
+  })
+})
