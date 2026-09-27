@@ -18,7 +18,7 @@ import { describe, it, expect, beforeAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { writeFileSync, chmodSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, dirname } from 'node:path'
+import { join, dirname, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpDirs } from './helpers/tmp-dirs.js'
 
@@ -66,6 +66,12 @@ print(json.dumps({"kind": kind, "hits": hits, "missing": missing}))
 const blocks = (c: string, cwd: string | null = dir) => decide(c, cwd).kind === 'deny'
 
 describe('db-destructive-gate: fajlbol erkezo SQL', () => {
+  // didi R3 (card 8a49e6c2): the fixture's HOME location was kept by the tmpDirs switch but
+  // pinned by nothing -- base dropped, all 64 stayed green. A /tmp root trips other hooks.
+  it('a fixture a HOME alatt all, nem /tmp-ben', () => {
+    expect(dir.startsWith(homedir() + sep)).toBe(true)
+  })
+
   it.each([
     ['psql -f', 'psql "$URL" -f destructive.sql'],
     ['psql --file=', 'psql "$URL" --file=destructive.sql'],
