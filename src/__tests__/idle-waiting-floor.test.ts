@@ -114,6 +114,16 @@ describe('the wake names a floor expiry AS a floor expiry, not as work', () => {
 
   it('the asymmetry note declares that the re-query line does not count expired floors', () => {
     const msg = buildWakeMessage(ME, 12, 1, [floorCard], nowMs)
-    expect(msg).toContain('a LEJART padloju `waiting` kartyat')
+    expect(msg).toContain('a LEJART padloju `waiting` kartyakat')
+  })
+
+  it('the floor group and its sentence belong to assigned_open_cards ONLY', () => {
+    // waiting_on_me: every item IS a waiting card, taken for a different reason -- the
+    // coordinator's decision queue must not be relabelled a floor expiry (first version did).
+    const coord = buildWakeMessage('marveen', 12, 2, [floorCard, { ...floorCard, id: 'bbbbbbbb-1', due_date: NOW + DAY }], nowMs, 'waiting_on_me')
+    expect(coord).not.toMatch(/PADLO-LEJARAT/)
+    expect(coord).not.toContain('LEJART padloju')
+    const review = buildWakeMessage('didi', 12, 1, [{ ...workCard, status: 'testing' }], nowMs, 'testing_without_my_comment')
+    expect(review).not.toContain('LEJART padloju')
   })
 })

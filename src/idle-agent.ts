@@ -1480,7 +1480,13 @@ export function buildWakeMessage(
   // A `waiting` card reaches this list for ONE reason: its floor ran out (card ce5c9e4b).
   // It is not pickable work and must not be listed as such -- the reader would start the
   // work the card is blocked on. So it gets its own group, and the group says why it came.
-  const floor = isReviewQueue ? [] : [...items].filter((c) => c.status === 'waiting').sort(byPriority)
+  // ONLY for `assigned_open_cards`: that is the one kind whose selection admits a waiting card
+  // by its floor. For `waiting_on_me` EVERY item is a waiting card, taken for a different
+  // reason, and grouping them here would call the coordinator's whole decision queue a floor
+  // expiry (didi's intersection review, 2026-09-28, named the kind boundary).
+  const floor = kind === 'assigned_open_cards'
+    ? [...items].filter((c) => c.status === 'waiting').sort(byPriority)
+    : []
   const work = [...items].filter((c) => pickable(c) && !floor.includes(c)).sort(byPriority)
   const review = [...items].filter((c) => !pickable(c)).sort(byPriority)
 
@@ -1547,14 +1553,17 @@ export function buildWakeMessage(
     // BAJT-AZONOS a ket kind kozott. Megmerve 2026-09-06: `assigned_open_cards` es
     // `testing_without_my_comment` mellett a parancs-sor azonos, mikozben az uzenet TOBBI resze
     // elter -- tehat a fuggveny hasznalja a kind-ot, csak epp itt nem.
-    `${ASYMMETRY_NOTE} a jovobeli \`due_date\`-et, a LEJART padloju \`waiting\` kartyat (en beszamitom,`,
-    'a sor nem), es a `workcheck.json` `kind`-jat.',
+    `${ASYMMETRY_NOTE} a jovobeli \`due_date\`-et, es a \`workcheck.json\` \`kind\`-jat.`,
     isReviewQueue
       ? 'A te deklaraciod `testing_without_my_comment`, tehat en a `testing` oszlopot szamoltam, amire'
       : 'A te deklaraciod `assigned_open_cards`, tehat ez a sor ugyanazt a halmazt kerdezi, amit szamoltam --',
     isReviewQueue
       ? 'meg nem szoltal hozza. A fenti sor a NEVEDEN allo nyitott kartyakat adja: MASIK halmaz.'
-      : 'a fenti harom kivetelevel.',
+      // The floor clause by KIND, not by "not the review queue": this else-branch also serves
+      // waiting_on_me today (the mislabel faa6003a fixes), and it counts no floors.
+      : kind === 'assigned_open_cards'
+        ? 'a fenti ketto kivetelevel, ES a LEJART padloju `waiting` kartyakat, amiket en beszamitok, a sor nem.'
+        : 'a fenti ketto kivetelevel.',
   )
   out.push(
     '',
