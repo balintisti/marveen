@@ -1,5 +1,6 @@
 #!/bin/bash
-# Tests for scripts/install-secret-gate-hook.sh -- card 5bcf185d.
+# Tests for scripts/install-secret-gate-hook.sh -- cards 5bcf185d and 3b4137aa
+# (the scanner had 21 tests and the HOOK's decision branches none).
 #
 # The hook used to run `npx --no-install tsx`, which in a worktree without
 # node_modules resolved tsx from the ~/.npm/_npx CACHE; with that cache empty
@@ -75,10 +76,17 @@ rm "$WT/scripts/secret-gate.ts"
 out="$(run "$WT")"
 has   "exits 0" "$out" "rc=0"
 has   "says the branch predates the gate" "$out" "NOT on this branch"
+has   "names the gate's script" "$out" "scripts/secret-gate.ts"
+has   "names the way out" "$out" "git merge origin/develop"
+has   "says the CI job still checks" "$out" "secret-gate.yml"
 
-echo "-- 5. SKIP_SECRET_GATE=1 still passes"
+echo "-- 5. SKIP_SECRET_GATE=1 passes a commit the hook would otherwise BLOCK"
+printf 'process.exit(0)\n' > "$WT/scripts/secret-gate.ts"   # script back, still no tsx
+out="$(run "$WT")"
+has   "CONTROL: without the skip this state blocks" "$out" "rc=1"
 out="$(cd "$WT" && SKIP_SECRET_GATE=1 "$GUARD" 2>&1; echo "rc=$?")"
 has   "exits 0 with the skip" "$out" "rc=0"
+has   "and says the CI job still runs" "$out" "SKIP_SECRET_GATE=1 -- the CI job still runs"
 
 echo
 echo "install-secret-gate-hook: $PASS passed, $FAIL failed"
