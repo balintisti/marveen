@@ -193,3 +193,38 @@ describe('gateDecision Bash: the executed position is found past runner flags an
     expect(bash(command).deny).toBe(false)
   })
 })
+
+// didi, third pass on a7ea5b8c: four LOW items. A and B were asked for before the merge
+// (scripts/ goes live on merge); C and D are the cheap optional pair.
+describe('gateDecision Bash: runner walk, third pass (card a7ea5b8c)', () => {
+  const bash = (command: string) => gateDecision('Bash', { command })
+
+  it.each([
+    // A: Node takes the space-separated VALUE of a flag it knows, then runs the script.
+    'node --title didi resend-mailer.js --send',
+    'node --disable-warning DEP0040 resend-mailer.js --send',
+    'node --inspect-port 9229 resend-mailer.js --send',
+    // B: the walk's bound fails CLOSED, like HEAD_DEPTH.
+    'npx -y npx -y npx -y npx -y npx -y resend-cli send',
+    // C and D.
+    'uvx resend-cli send --to a@b.c',
+    'npm run resend-send',
+    'pnpm run resend-send',
+    'yarn resend-send',
+  ])('denies: %s', (command) => {
+    expect(bash(command).deny).toBe(true)
+  })
+
+  it.each([
+    // A known boolean long flag does not make the next token a script.
+    'npx --yes jest src/common/services/resend-email.service.spec.ts',
+    'npx --yes prettier --check resend-email.service.ts',
+    'node --no-warnings scripts/report.js resend-email.service.ts',
+    'npm run test -- resend-email.service.spec.ts',
+    'npm run lint',
+    'npm install resend-cli',
+    'python3 -m pip install resend',
+  ])('CONTROL, passes: %s', (command) => {
+    expect(bash(command).deny).toBe(false)
+  })
+})

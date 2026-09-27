@@ -156,11 +156,19 @@ const RESEND_TOOL_SENDS_BY_NAME = /send|mail/i
 // it executes, and so is the value of an option that names a package, module or
 // preloaded script. Runners chain (`npx -y tsx x.ts`, `uv run python3 -m x`), so
 // the walk repeats a few hops. `-c`/`-e` code strings are handled elsewhere.
-const RUNNER = /^(node|tsx|ts-node|deno|bun|bunx|npx|pnpx|npm|pnpm|yarn|uv|python3?|sh|bash|zsh|dash)$/i
+const RUNNER = /^(node|tsx|ts-node|deno|bun|bunx|npx|pnpx|npm|pnpm|yarn|uv|uvx|python3?|sh|bash|zsh|dash)$/i
 const RUNNER_SUBCOMMANDS = {
-  npm: ['exec', 'x'], pnpm: ['dlx', 'exec'], yarn: ['dlx', 'exec'],
+  npm: ['exec', 'x', 'run', 'run-script'], pnpm: ['dlx', 'exec', 'run'], yarn: ['dlx', 'exec', 'run'],
   uv: ['run', 'tool'], deno: ['run'], bun: ['run', 'x'],
 }
+// Long flags known to take NO value. Any OTHER long flag without `=` may take
+// the next token as its value (Node does: `node --title x script.js`, measured by
+// didi), so after one of those the token following the first non-option is a
+// candidate too.
+const RUNNER_BOOLEAN_LONG = /^--(yes|no-[\w-]+|quiet|silent|verbose|inspect|inspect-brk|trace-[\w-]+|experimental-[\w-]+|enable-source-maps|watch|preserve-symlinks|frozen-lockfile|offline|ignore-scripts|if-present)$/i
+// The walk's bound FAILS CLOSED, like HEAD_DEPTH: a chain still on a runner after
+// the last hop is not known to be harmless (didi: a five-hop chain passed).
+const RUNNER_DEPTH_HIT = '\u0000runner-depth'
 // Options whose NEXT token is their value, not the script: the value is a
 // candidate when it names what runs (-p/--package, -r/--require, -m, ...), and
 // must be skipped when it does not (-X utf8, -W ignore, --env-file .env, -o opt).
@@ -172,22 +180,30 @@ function executedNames(toks) {
   const names = [basename(toks[0])]
   let prog = names[0]
   let i = 1
-  for (let hop = 0; hop < 4 && RUNNER.test(prog); hop++) {
+  let hop = 0
+  for (; hop < 4 && RUNNER.test(prog); hop++) {
     const subs = RUNNER_SUBCOMMANDS[prog.toLowerCase()]
     if (subs && subs.includes(toks[i])) i++
+    let afterUnknownLong = false
     while (i < toks.length && toks[i].startsWith('-') && toks[i] !== '-') {
       if (RUNNER_VALUE_OPTS.has(toks[i]) && i + 1 < toks.length) {
         names.push(basename(toks[i + 1]))
         i += 2
+        afterUnknownLong = false
         continue
       }
+      afterUnknownLong = toks[i].startsWith('--') && !toks[i].includes('=') && !RUNNER_BOOLEAN_LONG.test(toks[i])
       i++
     }
     if (i >= toks.length) break
     prog = basename(toks[i])
     names.push(prog)
+    // The first non-option may have been that flag's VALUE: the next token is
+    // then what runs.
+    if (afterUnknownLong && i + 1 < toks.length) names.push(basename(toks[i + 1]))
     i++
   }
+  if (hop === 4 && RUNNER.test(prog) && i < toks.length) names.push(RUNNER_DEPTH_HIT)
   return names
 }
 const CODE_SENDER_LIT = /sendmail|msmtp|swaks|send\.py/i
@@ -333,6 +349,7 @@ function headIsSend(toks, depth) {
   if (toks.some((t) => VENDOR_CLI.test(basename(t))) && rest.includes('send')) return true
   // The positions where a name is RUN: see executedNames.
   const executed = executedNames(toks)
+  if (executed.includes(RUNNER_DEPTH_HIT)) return true
   const sendArg = rest.some((t) => t === 'send' || t === '--send' || t === '--to' || t.startsWith('--to='))
   if (executed.some((c) => RESEND_TOOL.test(c) &&
       (sendArg || RESEND_TOOL_SENDS_BY_NAME.test(c.replace(/^resend[-_]/i, ''))))) return true
