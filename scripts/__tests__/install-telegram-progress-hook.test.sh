@@ -436,6 +436,46 @@ case "$OUT5" in
 esac
 
 # ---------------------------------------------------------------------------
+# (k) The repo's plist TEMPLATE is exactly what this installer writes (card
+# 4bc31b06). The template kept the pre-#1305 `~/.claude/hooks` path while the
+# installer moved to the repo copy, and the live plist -- installed before
+# #1305 and never re-installed -- matched the stale template. The drift check
+# (installed-drift-check.ts lane C) compares template to live, so it said
+# AZONOS on 2026-09-28 while launchd ran a 09-11 copy of the watchdog without
+# the round scoping, and Isti got an old report three times. Two copies of one
+# unit may not diverge: the template is the installer's output with the two
+# placeholders the drift check resolves (and the host's python3 put back).
+# ---------------------------------------------------------------------------
+echo ""
+echo "(k) The plist template is byte-for-byte what the installer writes"
+TEMPLATE="$REPO_ROOT/scripts/com.marveen.telegram-progress-watchdog.plist.template"
+CASE="$TMP/case-k"
+HOME_K="$CASE/home"
+mkdir -p "$HOME_K"
+printf 'SERVICE_ID=marveen\nCHANNEL_PROVIDER=telegram\n' > "$CASE/env"
+FAKE_UNAME=Darwin run_installer "$HOME_K" "$CASE/env" >/dev/null
+PLIST_K="$HOME_K/Library/LaunchAgents/com.marveen.telegram-progress-watchdog.plist"
+assert_exists "$PLIST_K" "installer wrote the com.marveen plist"
+PY_K="$(PATH="$SHIM_BIN:$PATH" command -v python3)"
+RENDER_K="$(python3 - "$TEMPLATE" "$REPO_ROOT" "$HOME_K" "$PY_K" <<'PY'
+import sys
+tpl, root, home, py = sys.argv[1:]
+s = open(tpl).read().replace("__MARVEEN_ROOT__", root).replace("__HOME__", home)
+print(s.replace("<string>/opt/homebrew/bin/python3</string>", f"<string>{py}</string>"), end="")
+PY
+)"
+if [ "$RENDER_K" = "$(cat "$PLIST_K" 2>/dev/null)" ]; then
+  pass "rendered template == installed plist"
+else
+  fail "the template and the installer's plist differ -- regenerate the template from the installer"
+  diff <(printf '%s' "$RENDER_K") "$PLIST_K" | head -10
+fi
+case "$RENDER_K" in
+  *"$REPO_ROOT/scripts/hooks/telegram_progress_watchdog.py"*) pass "the template runs the REPO copy" ;;
+  *) fail "the template does not run the repo copy of the watchdog" ;;
+esac
+
+# ---------------------------------------------------------------------------
 # (j) Hermeticity: the suite never reaches the host's service manager.
 # ---------------------------------------------------------------------------
 echo ""

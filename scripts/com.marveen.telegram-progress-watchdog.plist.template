@@ -7,13 +7,19 @@
     <key>ProgramArguments</key>
     <array>
         <string>/opt/homebrew/bin/python3</string>
-        <string>__HOME__/.claude/hooks/telegram_progress_watchdog.py</string>
+        <string>__MARVEEN_ROOT__/scripts/hooks/telegram_progress_watchdog.py</string>
     </array>
     <!-- launchd's default PATH is minimal; the watchdog shells out to tmux. -->
+    <!-- MARVEEN_ROOT: launchd passes no shell env to a job, so the watchdog
+         cannot see the operator's environment. It self-locates from its own
+         path when run from the repo copy (see telegram_progress_watchdog.py),
+         but this makes the install root explicit as a belt (TGWDOGVAK913). -->
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>MARVEEN_ROOT</key>
+        <string>__MARVEEN_ROOT__</string>
     </dict>
     <key>StartInterval</key>
     <integer>60</integer>
