@@ -58,7 +58,9 @@ describe('/api/models/available carries the gate', () => {
     const ids = (body.claude as Array<{ id: string }>).map((m) => m.id)
     for (const id of ['claude-fable-5-1', 'claude-opus-5-5[1m]', 'claude-opus-5', 'claude-sonnet-5']) expect(ids).toContain(id)
     // Opus 5.5: ONLY the 1M variant is offered (owner decision 2026-09-23); the plain id is gone from the API too.
-    expect(ids).not.toContain('claude-opus-5-5')
+    // P8 (merge 88c366f2): upstream dropped the plain id on ITS owner's decision; here 5 of 7 agents
+    // run on it, so it stays selectable until Isti decides.
+    expect(ids).toContain('claude-opus-5-5')
     // the picker markup offers exactly the same Claude ids the API lists
     for (const id of ids) expect(indexHtml, id).toContain(`<option value="${id}"`)
   })
@@ -120,10 +122,11 @@ describe('the writers are gated too (POST/PUT model)', () => {
 })
 
 describe('the served client', () => {
-  it('both selects offer Opus 5.5[1m] only (no plain claude-opus-5-5), and both carry a CLI hint element', () => {
+  it('both selects offer Opus 5.5[1m] AND the plain claude-opus-5-5 (P8), and both carry a CLI hint element', () => {
     expect(indexHtml.split('<option value="claude-opus-5-5[1m]"').length - 1).toBe(2)
-    // the plain claude-opus-5-5 option is NOT offered in either select (owner decision 2026-09-23)
-    expect(indexHtml.split('<option value="claude-opus-5-5"').length - 1).toBe(0)
+    // P8 (merge 88c366f2): upstream's owner removed the plain option (2026-09-23); here it is kept in
+    // both selects until Isti decides -- the fleet runs on it.
+    expect(indexHtml.split('<option value="claude-opus-5-5"').length - 1).toBe(2)
     expect(indexHtml).toContain('id="agentModelCliHint"')
     expect(indexHtml).toContain('id="editAgentModelCliHint"')
   })

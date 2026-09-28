@@ -113,6 +113,12 @@ describe('morning-briefing.sh -- a chat-id kapu VISELKEDESE', () => {
     mkdirSync(join(home, '.local', 'bin'), { recursive: true })
     copyFileSync(join(__dirname, '..', '..', 'scripts', 'morning-briefing.sh'),
                  join(home, 'scripts', 'morning-briefing.sh'))
+    // merge 88c366f2: the chat-id guard is upstream's resolve_owner_chat_id, SOURCED from
+    // scripts/lib/owner-chat.sh. Without the copy the script died at the `.` line -- the two
+    // refusal cases above then passed for the wrong reason, and this positive control caught it.
+    mkdirSync(join(home, 'scripts', 'lib'), { recursive: true })
+    copyFileSync(join(__dirname, '..', '..', 'scripts', 'lib', 'owner-chat.sh'),
+                 join(home, 'scripts', 'lib', 'owner-chat.sh'))
     writeFileSync(join(home, '.env'), chatId === null ? '' : `ALLOWED_CHAT_ID=${chatId}\n`)
     // A stub NEM hiv semmit -- csak nyomot hagy, hogy eljutottunk-e idaig.
     writeFileSync(join(home, '.local', 'bin', 'claude'), `#!/bin/bash\ntouch "${home}/store/.claude-hivva"\n`)

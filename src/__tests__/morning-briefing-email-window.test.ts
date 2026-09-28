@@ -24,9 +24,14 @@ const windowsIn = (text: string): number[] =>
   [...text.matchAll(WINDOW_RE)].map(m => Number(m[1]))
 
 describe('the morning briefing asks for a full previous working day of mail', () => {
-  it('morning-briefing.sh asks for 24 hours, not 12', () => {
-    const windows = windowsIn(read('scripts/morning-briefing.sh'))
-    expect(windows).toEqual([24])
+  // ADAPTED IN THE 88c366f2 MERGE (P12). Our runner does not use the search_emails prompt shape: it
+  // tells the agent to RUN gmail-recent.py --minutes N, so WINDOW_RE found nothing here and this case
+  // measured nothing. It now reads the window the script actually requests, and pins the merge
+  // default -- 12 hours, held until Isti decides (the window is what he reads every morning;
+  // upstream's measured argument for 24 is kept verbatim in the script next to the line).
+  it('morning-briefing.sh requests the window Isti has decided (P12: 12 h until he says otherwise)', () => {
+    const minutes = [...read('scripts/morning-briefing.sh').matchAll(/gmail-recent\.py --minutes (\d+)/g)].map(m => Number(m[1]))
+    expect(minutes.map(m => m / 60)).toEqual([12])
   })
 
   it('morning-briefing.sh marks sender and subject as third-party data, not instructions', () => {
