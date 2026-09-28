@@ -21,6 +21,11 @@ describe('usageLimitReleaseAt -- the reset the banner names', () => {
     expect(usageLimitReleaseAt(pane('Session limit reached ∙ resets at 2am'), local(28, 23))).toBe(local(29, 2, 2))
   })
 
+  it('the two twelves (didi): "12am" is midnight, "12pm" is noon', () => {
+    expect(usageLimitReleaseAt(pane('Session limit reached ∙ resets 12am'), local(28, 21))).toBe(local(29, 0, 2))
+    expect(usageLimitReleaseAt(pane('Session limit reached ∙ resets 12pm'), local(28, 9))).toBe(local(28, 12, 2))
+  })
+
   it('no clock time in the banner: the cap', () => {
     expect(usageLimitReleaseAt(pane("You've reached your weekly limit for Opus. Resets Oct 3"), local(28, 10)))
       .toBe(local(28, 10) + USAGE_LIMIT_MAX_HOLD_MS)
