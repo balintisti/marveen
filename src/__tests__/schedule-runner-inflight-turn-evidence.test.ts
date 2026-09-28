@@ -227,4 +227,29 @@ describe('post-fire watchdog: a task is declared lost only with NO evidence of a
     const finalMap = JSON.parse(String(lastRunWrites[lastRunWrites.length - 1]?.[1] ?? '{}'))
     expect(finalMap).not.toHaveProperty(TASK.name)
   })
+
+  it('the unstamp still lands when the SEND takes real time (stamp is the tick, not the submit)', async () => {
+    // In production sendPromptToSession spends seconds before it returns (the
+    // 12 s idle gate, chunked send-keys; 18 s measured on 2026-09-15, see
+    // SCHEDLOST915). The case above cannot see that: the fake clock stands
+    // still inside the send, so tick `now` and submit time coincide. Here the
+    // clock moves during the send, so a rollback keyed off the submit time
+    // matches neither stamp and the loss would stay recorded as served.
+    mockSendPrompt.mockImplementationOnce(() => {
+      vi.setSystemTime(Date.now() + 18_000)
+      return 'sent'
+    })
+    mockCapturePane.mockReturnValue(IDLE_PANE)
+    mockTranscriptMtime.mockReturnValue(null)
+    await fireThenSweep(120_000)
+
+    expect(lostRuns().length).toBeGreaterThan(0)
+    const finalWrite = (file: string) => {
+      const writes = mockAtomicWrite.mock.calls.filter((c) => String(c[0]).includes(file))
+      expect(writes.length).toBeGreaterThan(1) // the fire stamp, then the rollback
+      return JSON.parse(String(writes[writes.length - 1]?.[1] ?? '{}'))
+    }
+    expect(finalWrite('schedule-last-run.json')).not.toHaveProperty(TASK.name)
+    expect(finalWrite('schedule-last-outcome.json')[TASK.name]?.lastFiredAt).toBeUndefined()
+  })
 })

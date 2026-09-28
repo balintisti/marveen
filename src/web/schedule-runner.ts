@@ -159,6 +159,12 @@ export interface TaskInflightEntry {
   session: string
   host: string | null
   injectedAt: number
+  // The tick `now` this injection was stamped with in scheduleLastRun and
+  // scheduleLastOutcome.lastFiredAt. NOT injectedAt: that is submittedAt,
+  // taken after sendPromptToSession returned (seconds later in production),
+  // so a lost-rollback keyed off injectedAt never matched its own stamp and
+  // a lost injection stayed recorded as served (merge 88c366f2, T2).
+  firedAt: number
   // Stage 1: inter-agent notice sent to the main agent (was, until this
   // change, a direct channel alert).
   alerted: boolean
@@ -1713,6 +1719,7 @@ async function attemptFireTask(
       // each time while the round was actually running, and each false verdict
       // re-injected the whole prompt.
       injectedAt: submittedAt,
+      firedAt: now,
       alerted: false,
       ownerAlerted: false,
       sawTurn: false,
@@ -2537,14 +2544,14 @@ export function startScheduleRunner(): NodeJS.Timeout {
           try { markTaskRunCompleted(entry.runId, 'lost', now) } catch { /* non-fatal */ }
         }
         appendTaskRun(entry.taskName, entry.agentName, 'lost')
-        if (scheduleLastRun.get(entry.taskName) === entry.injectedAt) {
+        if (scheduleLastRun.get(entry.taskName) === entry.firedAt) {
           scheduleLastRun.delete(entry.taskName)
           persistScheduleLastRun()
         }
         // Same rollback on the outcome record: the prompt was typed but no turn
         // ever started, so this must not stand as the task's last real firing.
         const lostOutcome = scheduleLastOutcome.get(entry.taskName)
-        if (lostOutcome?.lastFiredAt === entry.injectedAt) {
+        if (lostOutcome?.lastFiredAt === entry.firedAt) {
           const { lastFiredAt: _dropped, ...rest } = lostOutcome
           scheduleLastOutcome.set(entry.taskName, rest)
           persistScheduleLastOutcome()
