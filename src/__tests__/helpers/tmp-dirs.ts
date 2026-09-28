@@ -12,6 +12,9 @@
  *   const mkTmp = tmpDirs()
  *   const dir = mkTmp('doccmd-')
  *
+ * A directory that must live somewhere else than $TMPDIR (a hook that refuses paths under /tmp)
+ * gives its base: `mkTmp('.dbgate-literal-', homedir())` -- made and removed the same way.
+ *
  * A directory that has to exist BEFORE the imports -- made inside vi.hoisted(), where mkTmp does
  * not exist yet -- is handed over with `mkTmp.adopt(dir)` and removed the same way (card 66756e73).
  */
@@ -21,7 +24,7 @@ import { join } from 'node:path'
 import { afterAll } from 'vitest'
 
 export interface TmpDirs {
-  (prefix: string): string
+  (prefix: string, base?: string): string
   /** Remove `dir` with the others -- for a directory made where mkTmp was not yet available. */
   adopt(dir: string): string
 }
@@ -31,8 +34,8 @@ export function tmpDirs(): TmpDirs {
   afterAll(() => {
     for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true })
   })
-  const mk = ((prefix: string) => {
-    const d = mkdtempSync(join(tmpdir(), prefix))
+  const mk = ((prefix: string, base: string = tmpdir()) => {
+    const d = mkdtempSync(join(base, prefix))
     made.push(d)
     return d
   }) as TmpDirs
