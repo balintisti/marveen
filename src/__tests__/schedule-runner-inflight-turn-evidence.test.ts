@@ -93,6 +93,9 @@ vi.mock('../web/scheduled-tasks-io.js', () => ({
 vi.mock('../web/active-model.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../web/active-model.js')>()),
   readTranscriptMtimeFromProjectDir: () => mockTranscriptMtime(),
+  // merge 88c366f2: the sweep now reads the evidence through upstream's across-config-dirs reader,
+  // which calls its module-internal sibling -- the spread original would bypass the mock above.
+  readTranscriptMtimeAcrossConfigDirs: () => mockTranscriptMtime(),
 }))
 
 const SEP = '─'.repeat(80)

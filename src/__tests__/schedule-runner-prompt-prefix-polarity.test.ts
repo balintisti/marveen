@@ -41,14 +41,18 @@ let tmpRoot: string
 // bound chat is a GUESS (first wins), and the warn is the only thing that says
 // so. Nothing pinned which way round it fires.
 const mockWarn = vi.fn()
+const mockError = vi.fn()
+const mockCreateAgentMessage = vi.fn((..._a: unknown[]) => ({ id: 1 }))
 
 vi.mock('../logger.js', () => ({
-  logger: { info: vi.fn(), warn: (...a: unknown[]) => mockWarn(...a), debug: vi.fn(), error: vi.fn() },
+  logger: { info: vi.fn(), warn: (...a: unknown[]) => mockWarn(...a), debug: vi.fn(), error: (...a: unknown[]) => mockError(...a) },
 }))
 
 vi.mock('../web/atomic-write.js', () => ({ atomicWriteFileSync: vi.fn() }))
 
 vi.mock('../db.js', () => ({
+  // The refuse-to-guess path asks the coordinator to pin the task ([FELHIVAS]).
+  createAgentMessage: (...a: unknown[]) => mockCreateAgentMessage(...a),
   // merge 88c366f2: the merged scheduler also records run completion/delivery and the owner-alert claim; neutral here.
   markTaskRunCompleted: () => true,
   setTaskRunDelivery: () => true,
@@ -199,16 +203,21 @@ describe('prompt prefix: heartbeats stay silent, tasks get a concrete chat', () 
     expect(prompt).not.toMatch(/chat_id:\s*0[,)]/)
   })
 
-  it('TWO allowlist entries make the bound chat a guess, and the runner says so', async () => {
-    // First-entry-wins is a heuristic: access.json has no owner field, so a
-    // reordering silently redirects task results to another person. The warn is
-    // the only thing that makes the guess visible.
+  it('TWO allowlist entries: the runner REFUSES to guess, and says so loudly', async () => {
+    // First-entry-wins was a heuristic: access.json has no owner field, so a reordering silently
+    // redirects task results to another person. OURS used to pick the first and warn; the merge
+    // (88c366f2) takes upstream's WRONGRECIP819, which measured the misdelivery on a live host and
+    // REFUSES to guess: no chat target in the prompt, an error line, and a [FELHIVAS] to pin it.
     writeAllowFrom(['1268077055', '999888777'])
     mockListScheduledTasks.mockReturnValue([task({ type: 'task' })])
     const prompt = await deliveredPrompt()
 
-    expect(prompt).toContain('chat_id: 1268077055')
-    expect(ambiguityWarns()).toBeGreaterThan(0)
+    expect(prompt).not.toContain('1268077055')
+    expect(prompt).not.toContain('999888777')
+    expect(mockError.mock.calls.filter((c) => String(c[1] ?? '').includes('ambiguous')).length).toBeGreaterThan(0)
+    const asks = mockCreateAgentMessage.mock.calls.filter((c) => String(c[2]).startsWith('[FELHIVAS]'))
+    expect(asks.length).toBe(1)
+    expect(String(asks[0][2])).toContain('telegramChatId')
   })
 
   it('ONE entry is not ambiguous -- no warn, or the signal becomes noise', async () => {
