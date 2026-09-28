@@ -4,17 +4,18 @@
 // yesterday's transcripts; the guard restarted didi and computress for hours on a file that never
 // changed). This is the guard for the CLASS: whatever the cause, a transcript last written before
 // the agent's current session started cannot describe that session. Real files, real mtimes.
-import { describe, it, expect, afterAll } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { describe, it, expect } from 'vitest'
+import { mkdirSync, writeFileSync, utimesSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   projectsDirFor, readContextTokensFromProjectDir, readTranscriptMtimeFromProjectDir, predatesSession,
 } from '../web/active-model.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const root = mkdtempSync(join(tmpdir(), 'dead-transcript-'))
-afterAll(() => rmSync(root, { recursive: true, force: true }))
+const mkTmp = tmpDirs()
+
+const root = mkTmp('dead-transcript-')
 
 let n = 0
 /** A fresh working dir + config dir with ONE transcript, last written at `mtimeSec`. */
