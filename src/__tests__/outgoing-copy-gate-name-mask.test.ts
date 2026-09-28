@@ -82,6 +82,24 @@ describe('outgoing-copy gate: the name rule has its own mask (GATENEVSTRIP921)',
     expect(nameProblems('mondta Kovách, hogy jon')).toHaveLength(1)
   })
 
+  // 88c366f2 merge, P7 (marveen 2026-09-28): the CLI-flag branch of the shared mask cut a name
+  // glued to "--" together with the dashes, so it never reached the rule. The flag branch now
+  // belongs to the token/dash checks only.
+  it('a name glued to "--" still blocks (P7)', () => {
+    expect(nameProblems('--Kovách jon holnap')).toHaveLength(1)
+    expect(nameProblems('a --Kovách-mod kapcsolo')).toHaveLength(1)
+  })
+
+  it('CONTROL: a real CLI flag is still technical for the dash rule (no false DUPLA KOTOJEL)', () => {
+    const out = execFileSync('python3', ['-c', `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("gate", ${JSON.stringify(GATE)})
+g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+print(json.dumps([p for p in g.audit(sys.argv[1]) if "DUPLA KOTOJEL" in p]))
+`, 'futtasd a parancsot --env-file=x kapcsoloval, es kesz'], { encoding: 'utf-8', env: { ...process.env, OUTGOING_COPY_GATE_RULES: RULES } })
+    expect(JSON.parse(out.trim())).toEqual([])
+  })
+
   // --- the reported false positives: identifiers must pass
   it('a code span passes', () => {
     expect(nameProblems('a `Kovách` a kodban')).toEqual([])

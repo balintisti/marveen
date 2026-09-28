@@ -1220,12 +1220,18 @@ def _hit_context(prose: str, pos: int, length: int) -> str:
 #
 # A KET MASZK EGY FORRASBOL EPUL, hogy ne drifteljenek szet: ha valaki uj
 # technikai regiot vesz fel, a _TECH_COMMON-ba irva MINDKET ellenorzes latja.
-_TECH_COMMON = r"""
+# A CLI-KAPCSOLO AG KULON CSOPORT (88c366f2 merge, P7; marveen 2026-09-28): a "--"-hoz
+# ragasztott nevet ("--Nev", "--Nev-mod") a kapcsolo-ag a nevvel egyutt kivagna, es a
+# nev-szabaly nem latna. A DUPLA KOTOJEL szabalynak viszont kell (card 3973a0c7), ezert csak
+# a TECHNICAL kapja meg, a NAME_MASK nem -- ugyanugy, mint a _TECH_SUFFIXED agakat.
+_TECH_FLAG = r"""
         (?<![\w-])--[A-Za-z][\w-]*(?:=\S*)?   # CLI kapcsolo (--env-file, --x=y), a KET KOTOJELLEL
                                     # EGYUTT: kulonben a kotojeles-azonosito ag a betutol vag, es
                                     # a "--" arvan marad szokozok kozott -> hamis DUPLA KOTOJEL
                                     # (card 3973a0c7). Prozai " -- " utan szokoz all, nem betu.
-      | https?://\S+                # URL
+"""
+_TECH_COMMON = r"""
+        https?://\S+                # URL
       | [\w.+-]+@[\w-]+\.[\w.]+     # email
       | `[^`]*`                     # kod-span
       | \b\w+(?:_\w+)+\b            # snake_case azonosito
@@ -1240,7 +1246,7 @@ _TECH_SUFFIXED = r"""
       | \blevel\s+\d+\b            # angol "level 1" (autonomia-szint, log-szint)
       | \b[a-z]+(?:-[a-z]+){1,4}\b    # kotojeles kisbetus azonosito (feladat- es skill-nevek)
 """
-TECHNICAL = re.compile(_TECH_COMMON + "|" + _TECH_SUFFIXED, re.X)
+TECHNICAL = re.compile(_TECH_FLAG + "|" + _TECH_COMMON + "|" + _TECH_SUFFIXED, re.X)
 NAME_MASK = re.compile(_TECH_COMMON, re.X)
 
 
