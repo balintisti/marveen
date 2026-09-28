@@ -219,9 +219,15 @@ describe('the sweep is wired to it (source-level: the sweep needs live tmux)', (
     // typedAt is re-stamped at the first emitted keystroke, not at call start
     expect(RUNNER.slice(sendIdx, sendIdx + 200)).toMatch(/onEmitStart: \(\) => \{\s*typedAt = Date\.now\(\)/)
     const AP = readFileSync(join(__dirname, '../web/agent-process.ts'), 'utf-8')
-    const emitIdx = AP.indexOf("const emitToPane = async (): Promise<'sent'> => {")
+    const emitIdx = AP.indexOf("const emitToPane = async (): Promise<'sent' | 'withheld-permission'> => {")
     expect(emitIdx).toBeGreaterThan(0)
-    expect(AP.slice(emitIdx, emitIdx + 500)).toContain('opts.onEmitStart?.()')
+    // the permission guard (2a8cb07f) returns BEFORE onEmitStart: a withheld send emitted nothing,
+    // so the caller's typedAt clock must not start
+    const guardIdx = AP.indexOf("if (permissionPromptBlocksBareEnter(session, host, captureTmux, 'sendPromptToSession')) {", emitIdx)
+    const onEmitIdx = AP.indexOf('opts.onEmitStart?.()', emitIdx)
+    expect(guardIdx).toBeGreaterThan(emitIdx)
+    expect(onEmitIdx).toBeGreaterThan(guardIdx)
+    expect(onEmitIdx - emitIdx).toBeLessThan(2500)
     expect(RUNNER).toMatch(/host == null \? \{ sentText: paneOneLine\(fullPrompt\), typedAt \} : \{\}/)
   })
 
