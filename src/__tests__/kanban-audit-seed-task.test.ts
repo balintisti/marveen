@@ -165,7 +165,11 @@ function auditSnippet(marker: string): string {
   const from = skillSrc.indexOf('\n', start) + 1
   const end = skillSrc.indexOf('\n"\n', from)
   if (end < 0) throw new Error(`a(z) ${marker} reszlet nincs lezarva`)
-  return skillSrc.slice(from, end)
+  // The snippet sits inside a bash DOUBLE-QUOTED string (`python3 -c "..."`), so it is only valid
+  // Python after bash's own unescaping: \" \\ \$ and \` lose their backslash, every other
+  // backslash (e.g. \u00c1) is kept. Run what the shell would run, not the raw text (merge 88c366f2:
+  // the merged step 3 is the first snippet with \" in it).
+  return skillSrc.slice(from, end).replace(/\\(["\\$`])/g, '$1')
 }
 
 type Card = Record<string, unknown>
@@ -233,8 +237,20 @@ describe('a szallitott osztalyozas NEM riaszt egy egeszseges tablara', () => {
 })
 
 describe('a beakadt-detektalas kihagyja az ALLANDO SOR kartyat', () => {
-  const LAST = String(NOW - 3600)
-  const futtat = (cards: Card[]): string[] => runSnippet('beakadt', cards, ["'''$LAST'''", `'''${LAST}'''`])
+  // ADAPTED IN THE 88c366f2 MERGE (T3): the stale-card logic moved INTO upstream's GET
+  // /api/kanban/stuck, and the snippet now reads that endpoint's answer and only drops the standing-
+  // queue cards. So the fixture is the endpoint's shape (every card given here IS stale), and the
+  // assertions read the CARD rows (the summary lines around them always print). Same three claims.
+  const futtat = (cards: Card[]): string[] => {
+    const answer = {
+      examined: cards.length,
+      stuck: cards.map((c) => ({ id: c.id, assignee: c.assignee, title: c.title, last_activity: c.updated_at })),
+      waiting: { examined: 0, overdue: [], without_deadline: 0 },
+    }
+    const code = auditSnippet('beakadt')
+    const out = execFileSync('python3', ['-c', code], { input: JSON.stringify(answer), encoding: 'utf-8' })
+    return out.split('\n').filter((l) => /^\s+\S+ \|/.test(l))
+  }
 
   it('egy szandekosan orokke in_progress kartya NEM beakadt', () => {
     const sorok = futtat([

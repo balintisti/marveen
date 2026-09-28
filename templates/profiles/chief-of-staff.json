@@ -13,17 +13,11 @@
       "Bash(rm -rf ${HOME}:*)",
       "Bash(rm -rf /:*)",
       "Bash(git push:*)",
-      "Write(${HOME}/Projektek/sajat-crm/**)",
       "Edit(${HOME}/Projektek/sajat-crm/**)",
-      "Write(${HOME}/marveen/src/**)",
       "Edit(${HOME}/marveen/src/**)",
-      "Write(${HOME}/marveen/scripts/**)",
       "Edit(${HOME}/marveen/scripts/**)",
-      "Write(${HOME}/marveen/agents/dexter/**)",
       "Edit(${HOME}/marveen/agents/dexter/**)",
-      "Write(${HOME}/marveen/agents/didi/**)",
       "Edit(${HOME}/marveen/agents/didi/**)",
-      "Write(${HOME}/marveen/agents/mandark/**)",
       "Edit(${HOME}/marveen/agents/mandark/**)"
     ]
   }

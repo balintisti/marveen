@@ -379,7 +379,7 @@ window._i18n.hu = {
   'agents.running_tip':            'Fut: él az ágens tmux session-je (a Claude Code folyamat fut). Forrás: tmux list-sessions.',
   'agents.stopped_tip':            'Leállva: nincs élő tmux session az ágensnek. Forrás: tmux list-sessions.',
   'agents.online_tip':             'Csatorna: van bekonfigurált csatorna-token (saját bot). Figyelem: ez nem élő kapcsolat, csak a token meglétét jelzi, és semmit nem mond arról, hogy az ügynök fut-e.',
-  'agents.offline_tip':            'Nincs csatorna bekötve (channel-less, csak inter-agent ügynök). Ez NEM azt jelenti, hogy az ügynök áll -- azt a mellette lévő Fut/Leállva jelzés mondja meg.',
+  'agents.offline_tip':            'Nincs csatorna bekötve (channel-less, csak inter-agent ügynök). Ez NEM azt jelenti, hogy az ügynök áll: azt a mellette lévő Fut/Leállva jelzés mondja meg.',
   'agents.context_tip':            'Kontextusablak kihasználtsága: {pct}%. Ugyanaz a mérés, amin a context-guard handoff/restart-döntése is alapul.',
   'agents.guard_phase_tip_handoff':    'A context-guard handoff-ot kért ettől az agenttől (a kontextus megtelt), és a HANDOFF.md megírására vár.',
   'agents.guard_phase_tip_restarting': 'A context-guard újraindította ezt az agentet, és arra vár, hogy a friss session felálljon.',
@@ -1947,7 +1947,7 @@ window._i18n.hu = {
   'auth.bridge.err.enroll813':                   'A párosítás egy biztonsági ellenőrzésen állt meg: ez a telepítés teszt-környezetnek látszik (VITEST vagy NODE_ENV=test), ezért a rendszer hozzá sem nyúlt az authorized_keys fájlhoz. Vedd ki a teszt-jelzést a szolgáltatás környezetéből, majd próbáld újra.',
 
   'auth.nokey.title':             'Nincs belépési kulcs ehhez a címhez',
-  'auth.nokey.desc':              'A szolgáltatás fut és válaszol -- csak ez a böngésző nem tud belépni: ehhez a címhez nincs eltárolva kulcs.',
+  'auth.nokey.desc':              'A szolgáltatás fut és válaszol. Csak ez a böngésző nem tud belépni, mert ehhez a címhez nincs eltárolva kulcs.',
   'auth.nokey.short':             'Nincs eltárolva belépési kulcs ehhez a címhez.',
   'auth.nokey.how':               'Egyszeri belépési link kell hozzá. A link a szolgáltatás naplójában áll:',
   'auth.nokey.hint':              'Keresd a "Dashboard access URL" sort, és nyisd meg azt a címet.',

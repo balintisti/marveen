@@ -35,6 +35,10 @@ function shellAdvice(): string[] {
     .split('\n')
     .map(l => l.match(/^\s*echo "\s*(git [^"]*?)\s*"\s*$/)?.[1])
     .filter((c): c is string => Boolean(c))
+    // ONE equivalence, nothing else (merge 88c366f2): our branch-not-on-remote guard names the
+    // remote update.sh actually pulls from, `${UPDATE_REMOTE}` -- `origin` by upstream default, so
+    // there it IS this command; on an install that updates from a fork it is the correct one.
+    .map(c => c.replace('--track ${UPDATE_REMOTE}/', '--track origin/'))
 }
 
 /** Commands update-preflight.ts puts in a user-facing message. */
