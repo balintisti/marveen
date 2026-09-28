@@ -32,12 +32,14 @@ function stageScript(chatId = '42'): { scriptCopy: string } {
   return { scriptCopy }
 }
 
-// A curl stub controlled per-case via env: CURL_STUB_EXIT + CURL_STUB_BODY.
+// A curl stub controlled per-case via env: CURL_STUB_EXIT + CURL_STUB_BODY (+ CURL_STUB_HTTP).
+// Like real curl, it prints the HTTP status line ONLY when asked with -w '...%{http_code}': ours
+// (notify.sh) asks for it and trusts only 200 + ok:true (merge 88c366f2).
 // Failure bodies quote the request URL (token included) on purpose, to prove
 // the script redacts it before echoing.
 function writeCurlStub(dir: string): void {
   const stub = join(dir, 'curl')
-  writeFileSync(stub, '#!/bin/bash\nif [ "${CURL_STUB_EXIT:-0}" -ne 0 ]; then\n  echo "curl: (6) Could not resolve host for https://api.telegram.org/bot${CURL_STUB_TOKEN}/sendMessage" >&2\n  exit "${CURL_STUB_EXIT}"\nfi\nprintf \'%s\' "${CURL_STUB_BODY}"\n')
+  writeFileSync(stub, '#!/bin/bash\nif [ "${CURL_STUB_EXIT:-0}" -ne 0 ]; then\n  echo "curl: (6) Could not resolve host for https://api.telegram.org/bot${CURL_STUB_TOKEN}/sendMessage" >&2\n  exit "${CURL_STUB_EXIT}"\nfi\nif [[ "$*" == *"%{http_code}"* ]]; then printf \'%s\\n%s\' "${CURL_STUB_BODY}" "${CURL_STUB_HTTP:-200}"; else printf \'%s\' "${CURL_STUB_BODY}"; fi\n')
   chmodSync(stub, 0o755)
 }
 

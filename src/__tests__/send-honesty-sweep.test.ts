@@ -40,7 +40,7 @@ function stageTree(scriptNames: string[]): { root: string; bin: string } {
   const bin = join(stage, 'bin')
   mkdirSync(bin, { recursive: true })
   writeFileSync(join(bin, 'curl'),
-    '#!/bin/bash\necho "$@" >> "${CURL_ARGV_LOG:-/dev/null}"\nif [ "${CURL_STUB_EXIT:-0}" -ne 0 ]; then\n  echo "curl: (6) Could not resolve host for https://api.telegram.org/bot${CURL_STUB_TOKEN:-}/sendMessage" >&2\n  exit "${CURL_STUB_EXIT}"\nfi\nprintf \'%s\' "${CURL_STUB_BODY:-{\\"ok\\":true}}"\n')
+    '#!/bin/bash\necho "$@" >> "${CURL_ARGV_LOG:-/dev/null}"\nif [ "${CURL_STUB_EXIT:-0}" -ne 0 ]; then\n  echo "curl: (6) Could not resolve host for https://api.telegram.org/bot${CURL_STUB_TOKEN:-}/sendMessage" >&2\n  exit "${CURL_STUB_EXIT}"\nfi\nB="${CURL_STUB_BODY:-{\\"ok\\":true}}"\nif [[ "$*" == *"%{http_code}"* ]]; then printf \'%s\\n%s\' "$B" "${CURL_STUB_HTTP:-200}"; else printf \'%s\' "$B"; fi\n')
   writeFileSync(join(bin, 'tmux'), '#!/bin/bash\nexit 1\n')
   // limit-monitor hashes with md5sum, which macOS lacks (md5 only); the hash
   // value is irrelevant to these tests, only the stamp lifecycle is.
@@ -206,6 +206,9 @@ describe('disk-space-guard.sh: cooldown stamp only after confirmed delivery', ()
     mkdirSync(scratch, { recursive: true })
     const env = {
       DISK_GUARD_USAGE_OVERRIDE: '96',
+      // Ours (merge 88c366f2): a PLANTED usage value refuses to alert unless this is set, so without it
+      // neither case below reaches the send path it is about (disk-guard-alert-delivery sets it too).
+      DISK_GUARD_ALLOW_FAKE_ALERT: '1',
       DISK_GUARD_SCRATCH_DIR: scratch,
       DISK_GUARD_STATE_DIR: join(stage, 'store'),
     }

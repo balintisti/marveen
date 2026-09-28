@@ -80,6 +80,10 @@ function runGuard(curl: CurlBehaviour, usage = 96): Run {
 
   writeFileSync(join(base, 'scripts', 'disk-space-guard.sh'), readFileSync(REAL_SCRIPT))
   chmodSync(join(base, 'scripts', 'disk-space-guard.sh'), 0o755)
+  // merge 88c366f2: the script now SOURCES scripts/lib/owner-chat.sh (upstream's owner-chat resolver);
+  // without the copy it dies at the `.` line and every case here fails before measuring anything.
+  mkdirSync(join(base, 'scripts', 'lib'), { recursive: true })
+  writeFileSync(join(base, 'scripts', 'lib', 'owner-chat.sh'), readFileSync(join(HERE, '..', '..', 'scripts', 'lib', 'owner-chat.sh')))
 
   // A ket hitelesito forras, amit a szkript olvas -- mindketto HAMIS ertekkel.
   writeFileSync(join(base, '.env'), 'ALLOWED_CHAT_ID=111222333\n')

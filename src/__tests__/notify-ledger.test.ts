@@ -25,6 +25,10 @@ function makeTree(opts: { withLedgerLib?: boolean } = {}): string {
   mkdirSync(join(tree, 'store'), { recursive: true })
   mkdirSync(join(tree, 'bin'), { recursive: true })
   copyFileSync(join(REPO, 'scripts', 'notify.sh'), join(tree, 'scripts', 'notify.sh'))
+  // merge 88c366f2: the script now SOURCES scripts/lib/owner-chat.sh (upstream's owner-chat resolver);
+  // without the copy it dies at the `.` line and every case here fails before measuring anything.
+  mkdirSync(join(tree, 'scripts', 'lib'), { recursive: true })
+  copyFileSync(join(REPO, 'scripts', 'lib', 'owner-chat.sh'), join(tree, 'scripts', 'lib', 'owner-chat.sh'))
   if (opts.withLedgerLib !== false) {
     copyFileSync(join(REPO, 'scripts', 'hooks', 'ledger_lib.py'), join(tree, 'scripts', 'hooks', 'ledger_lib.py'))
   }
