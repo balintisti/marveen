@@ -50,15 +50,31 @@ export function keychainRetrieve(): string | null {
   return keychainRetrieveStatus().value
 }
 
+// The value goes on STDIN of `security -i`, NEVER on argv (card 612bf2f1). As `-w <value>`
+// the master key was readable in `ps` by any local process for the duration of the call.
+// Measured 2026-09-28 on the real binary with a throwaway item: `-i` passes the inner
+// command's exit code through (a duplicate add gives 45 under both forms, an unknown command
+// 1), and a base64 value round-trips byte-identical -- so the throw callers rely on survives.
+//
+// The inner line is parsed by `security`, not a shell: a double quote, backslash or line
+// break in the value would change the command it reads. The vault's keys are base64 and can
+// hold none of these, so such a value is refused rather than escaped on a guess.
 export function keychainStore(value: string): void {
-  execFileSync(SECURITY, [
-    'add-generic-password',
-    '-U',
-    '-s', SERVICE,
-    '-a', ACCOUNT,
-    '-w', value,
-    '-A',
-  ], { stdio: ['ignore', 'ignore', 'ignore'], timeout: SECURITY_TIMEOUT_MS })
+  if (!value || /["\\\r\n]/.test(value)) {
+    throw new Error('keychainStore: refusing a value that is empty or holds a quote, backslash or line break')
+  }
+  execFileSync(SECURITY, ['-i'], {
+    input: `add-generic-password -U -s ${SERVICE} -a ${ACCOUNT} -w "${value}" -A\n`,
+    stdio: ['pipe', 'ignore', 'ignore'],
+    timeout: SECURITY_TIMEOUT_MS,
+  })
+  // A 0 exit is not proof the item holds THIS value; the read-back is. Both callers in
+  // vault.ts act on a return (rename .vault-key away, or drop the only copy of a fresh key),
+  // so a store that did not land must throw here, as the argv form did.
+  const back = keychainRetrieveStatus()
+  if (back.status !== 'ok' || back.value !== value) {
+    throw new Error(`keychainStore: stored, but the read-back does not match (${back.status})`)
+  }
 }
 
 export function keychainDelete(): boolean {
