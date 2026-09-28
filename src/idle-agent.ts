@@ -768,7 +768,13 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
         // its own.
         const markedForMe = labelNames(c).includes(WAITING_ON_ASSIGNEE_LABEL)
         if (markedForMe) return true
-        const authors = lastCommentAtByCard.get(c.id)
+        // A CENSUS COMMENT IS TRANSPARENT HERE TOO (card 4ea61e29). The reviewer branch below
+        // already reads lastRealCommentAtByCard; this one read the raw map, so jarvis's census
+        // (reviewer: true) counted as "a reviewer spoke last" and woke the assignee over a
+        // board check -- measured 2026-09-28: 7 of 55 offered items, on dexter and friday. The
+        // census neither adds a reviewer's word nor hides one: the latest NON-census comment
+        // decides. Absent map = not measured, and then every comment counts, as before.
+        const authors = (lastRealCommentAtByCard ?? lastCommentAtByCard).get(c.id)
         if (!authors || authors.size === 0) return false
         let latestAuthor: string | null = null
         let latestAt = -Infinity
