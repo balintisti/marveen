@@ -548,11 +548,20 @@ class TestResilience(Base):
         self.assertNotIn('gave up after', self.alert_text())
         self.assertEqual(self.uploaded(), [])
 
+    def test_a_flaky_line_with_progress_between_breaks_still_gets_there(self):
+        # measured 2026-09-29 00:3x: a 172 MB push broke now and then and gave up at 12 MiB,
+        # because the bound counted ALL breaks. Every other chunk breaks here -- far more breaks
+        # in total than RETRIES (3), never more than one in a row.
+        self.drive.drop_puts = {n: 'before' for n in range(2, 60, 2)}
+        r = self.run_tool('push', '--archive', self.archive)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.round_trip_ok()
+
     def test_breaks_are_bounded_and_loud(self):
         self.drive.drop_puts = {n: 'before' for n in range(1, 50)}
         r = self.run_tool('push', '--archive', self.archive)
         self.assertEqual(r.returncode, 1)
-        self.assertIn('upload gave up after', self.alert_text())
+        self.assertIn('breaks in a row', self.alert_text())
         self.assertEqual(self.uploaded(), [])
 
 

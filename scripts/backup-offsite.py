@@ -83,7 +83,7 @@ HTTP_TIMEOUT = 120
 # resumable session, a break costs one "how much do you have?" and the rest of the file, and the
 # small calls retry a TRANSIENT failure (no connection, 5xx, 429) a bounded number of times. A real
 # 4xx is never retried: it is an answer, and it stays loud.
-CHUNK = int(os.environ.get('BACKUP_OFFSITE_CHUNK', 8 * 1024 * 1024))    # Drive: a multiple of 256 KiB
+CHUNK = int(os.environ.get('BACKUP_OFFSITE_CHUNK', 2 * 1024 * 1024))    # Drive: a multiple of 256 KiB
 RETRIES = int(os.environ.get('BACKUP_OFFSITE_RETRIES', 5))
 BACKOFF_S = float(os.environ.get('BACKUP_OFFSITE_BACKOFF', 2))
 MAIN_AGENT_ID = os.environ.get('MAIN_AGENT_ID', 'marveen')
@@ -302,7 +302,7 @@ def upload(token, parent, path, name, props):
             except Transient as e:
                 breaks += 1
                 if breaks > RETRIES:
-                    raise Fail(f'{e} (upload gave up after {breaks} breaks, at byte {offset} of {size})')
+                    raise Fail(f'{e} (upload gave up after {breaks} breaks in a row, at byte {offset} of {size})')
                 _pause(breaks - 1)
                 ask = True
                 continue
@@ -315,6 +315,9 @@ def upload(token, parent, path, name, props):
             if status != 308:
                 raise Fail(f'the upload session answered HTTP {status}')
             got = _received(h)
+            if got > offset:
+                breaks = 0          # the bound is on CONSECUTIVE breaks: progress resets it (a long
+                                    # upload on a flaky line breaks now and then and still gets there)
             stalls = stalls + 1 if got <= offset else 0
             if stalls > RETRIES:
                 raise Fail(f'the upload session stopped taking bytes at {got} of {size}')
