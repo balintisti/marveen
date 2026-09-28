@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **289** kovetett fajl, ebbol
-**93** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **413** kovetett fajl, ebbol
+**123** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -29,9 +29,17 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - `scripts/expiry-inventory.json` -- "WHY A DECLARED PROBE AND NOT A DATE FIELD: a stored date drifts silently the",
 - `scripts/sql/tasks-reopen-grant.sql` -- MIERT ALL EZ ITT, ES NEM CSAK A KARTYAN: a fajlt UJRAFUTTATTAK nyitott kerdeskent,
 
+### `scripts/__tests__/channels-custom-provider.test.sh`
+
+- Why this exists: channels.sh gains customProvider support for the main agent
+
 ### `scripts/__tests__/channels-main-model.test.sh`
 
 - Why this exists (2026-07-29): the model was read ONLY from
+
+### `scripts/__tests__/channels-native-install-no-npm.test.sh`
+
+- Why this exists (2026-09-17): a host that had migrated to the native installer
 
 ### `scripts/__tests__/expiry-check.test.py`
 
@@ -53,6 +61,14 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - MIERT SCRATCH REPO ES NEM A SAJAT FANK: ez a telepito a `.git/hooks` ala ir.
 
+### `scripts/__tests__/lib/sqlite-oracle.sh`
+
+- WHY THIS EXISTS. Several suites looked into (or seeded) a database with the
+
+### `scripts/__tests__/main-inbox-observer.test.sh`
+
+- Why the observer exists:  /  the main agent's queue is the one delivery path nothing watches from outside
+
 ### `scripts/__tests__/memory-index-add-check-hop2.test.py`
 
 - WHY THAT IS THE DANGEROUS DIRECTION, and not just an inaccurate number: NO PATH is the input to
@@ -60,6 +76,14 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/__tests__/memory-index-add-unreachable-truncation.test.py`
 
 - WHY THAT IS THE DANGEROUS DIRECTION: the question people bring to this list is "did my
+
+### `scripts/__tests__/memory-index-gate-jq-fallback.test.sh`
+
+- why this suite asserts the maximum first: it is the one that fails QUIET.
+
+### `scripts/__tests__/nullaor-memgate.test.sh`
+
+- WHY THIS FILE EXISTS, STATED HONESTLY: the guard added alongside this test is
 
 ### `scripts/__tests__/outgoing-gate-entry-seam.test.py`
 
@@ -82,6 +106,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - MIERT LETEZIK. A modul sajat docstringje azt igeri: "--json prints only the snapshot
 
+### `scripts/__tests__/vault-alak-scan.test.py`
+
+- Miert alprocesszkent: amit ez az eszkoz KIIR, az maga a kockazat. Egy fuggveny-
+
 ### `scripts/agent-core-check.py`
 
 - MIERT: Isti dontese (2026-09-18) szerint minden agens a SAJAT lapjat olvassa, nem a kozoset.
@@ -89,6 +117,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/agent-cwd-detach.sh`
 
 - MIERT. A Claude Code a cwd-tol a GYOKERIG minden szinten betolti a CLAUDE.md-t, es erre NINCS
+
+### `scripts/agent-msg-get.sh`
+
+- WHY THIS EXISTS: a completion notification carries only the first part of a long `result`,
 
 ### `scripts/agent-msg.sh`
 
@@ -204,10 +236,19 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - WHY THE SUMMARY CANNOT SAY 'ALL CLEAR' WHILE ANYTHING IS UNMEASURED. A checker whose
 - WHY --quiet-unless-changed EXISTS, AND WHY THE SILENCE HAS A CEILING. Run daily,
 
+### `scripts/fetch-budget.py`
+
+- Why this exists  /  ---------------
+
 ### `scripts/fleet-page-guard.sh`
 
 - MIERT LETEZIK. 2026-09-20-an megmertem, hogy mind a het agens LE VAN VALASZTVA
 - MIERT NEM BLOKKOL, HANEM JELEZ. A drift nem a futas pillanataban keletkezik, hanem amikor
+
+### `scripts/garmin_run_gate.py`
+
+- WHY A CRASH IS NOT exit 0. The task spec asked for "already analysed OR error
+- WHY WE ROLL THE STATE BACK. running_analysis.py advances
 
 ### `scripts/git-at.sh`
 
@@ -224,15 +265,32 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - Why a script and not a prescribed command, measured three times: the
 
+### `scripts/hooks/browser-content-notice.py`
+
+- WHY THIS EXISTS  /  ---------------
+- WHY THE LABEL NEVER QUOTES THE PAYLOAD  /  --------------------------------------
+
+### `scripts/hooks/channel-process-gate.py`
+
+- Why this exists (card ccdc10ec, step 3): on 2026-09-05 and 09-06 the telegram
+
 ### `scripts/hooks/db-destructive-gate.py`
 
 - WHY THIS EXISTS, AND WHY THE PERMISSION LIST IS NOT ENOUGH (measured 2026-08-19,
 - === THE OVERRIDE, AND WHY IT IS A TOKEN AND NOT A CARVE-OUT
 
+### `scripts/hooks/memory-frontmatter-gate.py`
+
+- WHY (MEMFMGATE918, 2026-09-18): nine memory files in the fleet store had a
+
 ### `scripts/hooks/memory-index-write-gate.py`
 
 - WHY THIS EXISTS (card c837502c, didi's finding d85cfbb4 c8). The index overflow rule had
 - === WHY THE TARGET IS MATCHED BY realpath AND NOT BY NAME
+
+### `scripts/hooks/mio-orszem-precheck.sh`
+
+- Why: the hourly sentinel round re-injects its full SKILL.md (~3.5k tokens of
 
 ### `scripts/hooks/outgoing-copy-gate.py`
 
@@ -243,6 +301,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - WHY (card de00fd2b, measured 2026-08-27). rulebook-snapshot.sh already versions
 - WHY THIS MATCHES Bash AND NOT JUST Write|Edit, which is the whole point.
 - WHY IT ASKS THE FILESYSTEM AND NOT THE COMMAND TEXT. Grepping the Bash command
+
+### `scripts/hooks/slack_progress_reply_clear.py`
+
+- Why: a single long turn can pull a bigger task forward and emit several
 
 ### `scripts/hooks/telegram_fallback_send.py`
 
@@ -273,6 +335,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - WHY A SCRIPT AND NOT A VERSIONED settings.json (card de00fd2b, 2026-08-27).
 
+### `scripts/install-slack-progress-hook.sh`
+
+- Why not Slack's "typing…" indicator: the classic RTM `type: typing` frame
+
 ### `scripts/kanban-project-classify.py`
 
 - MIERT FAJLUT ES NEM CIMSZO. Egy fajlut ellenorizheto teny: vagy letezik az adott
@@ -280,6 +346,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/kanban-uj.sh`
 
 - MIERT LETEZIK. A `CLAUDE.md`-ben het curl-pelda all a kartya-nyitasra, es a valasz,
+
+### `scripts/kartya-es-ertesites.py`
+
+- MIERT: 2026-09-05-en a kanban-audit ot friss kartyat talalt megnevezett flotta-gazdaval,
 
 ### `scripts/landed-check.py`
 
@@ -308,6 +378,11 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - WHY A VARIABLE AND NOT AN ECHOED RESULT: `$(...)` strips trailing newlines, so
 - WHY NOT `printf %b "${s//%/\\x}"`, the usual one-liner: it also interprets
 
+### `scripts/lib/retire_progress_hooks.py`
+
+- Why a separate file: this used to be a here-document inside a "$( ... )" in the
+- why Linux never showed it. Python that lives in its own file cannot break the
+
 ### `scripts/limit-monitor.sh`
 
 - WHY bash and not a Claude scheduled-task: a Claude agent invocation itself
@@ -315,6 +390,14 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/main-agent-isolated-config.mjs`
 
 - Why: the main agent otherwise keeps the shared ~/.claude and authenticates
+
+### `scripts/main-inbox-observer.sh`
+
+- WHY A SEPARATE UNIT -- the two cheap in-tree candidates both failed their
+
+### `scripts/memoria_heartbeat_gate.py`
+
+- WHO MOVES THE WATERMARK, AND WHY IT IS NOT THIS SCRIPT
 
 ### `scripts/memory-index-add.py`
 
@@ -326,6 +409,16 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - why: "pretending otherwise is how a tool grows a capability nobody asked for." So the caller
 - WHY THE LOCK IS LOAD-BEARING, not ceremony: six agents write MEMORY.md through a shared inode,
 
+### `scripts/memory-index-gate.sh`
+
+- MIERT A HOSSZ, ES NEM A TARTALOM: a "tartalmaz-e mert reszletet" osztalyozast
+- MIERT 800: a forro sorok eloszlasa (n=313) p50=373, p75=530, p90=669, p95=896,
+
+### `scripts/memory-index-linkcheck.py`
+
+- WHY A SECOND NUMBER NEXT TO THE SIZE  /  The index gate measures the SIZE of the shared MEMORY.md, because above the
+- WHY A CANDIDATE, AND ONLY THEN A FINDING
+
 ### `scripts/memory-save.sh`
 
 - WHY: the pattern documented in CLAUDE.md is
@@ -333,6 +426,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/merge-overlap.py`
 
 - WHY THIS EXISTS (2026-08-23). Two branches touching the same file, with git
+
+### `scripts/mio-feed-post.py`
+
+- Miert ilyen alakban (es nem ad-hoc fetch-csel):
 
 ### `scripts/mutate-probe.py`
 
@@ -362,6 +459,14 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/readonly-measure.sh`
 
 - MIERT LETEZIK. A CLAUDE.md „Eles adatbazis MERESE" receptje JO, es harman futtattuk egy
+
+### `scripts/recipient-ledger.mjs`
+
+- Why this exists (2026-08-14): an agent wrote to support@connectors.hu, an
+
+### `scripts/retire-progress-watchdog.sh`
+
+- Why this exists: installing a second provider's progress hook does NOT
 
 ### `scripts/rulebook-snapshot-audit.sh`
 
@@ -396,13 +501,31 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - MIERT A CLI SAJAT FOLYAMATABAN SZKENNEL (spec, msg 16930/b): a hatokor
 
+### `scripts/sms/seeme-send.py`
+
+- MIERT KuLoN FAJL, ES NEM AZ `sms-send.py` BoVITESE: az `sms-send.py` az sms-gate.app
+- ATVETT ELEMEK, ES MIERT (ellenorizve a sajat testverenel, nem feltetelezve):
+- TUDATOSAN NEM ATVETT ELEMEK, ES MIERT:  /  - KLIENS-OLDALI TITKOSITAS (sms_crypto.py): az sms-gate.app tamogatja, mert egy
+
 ### `scripts/statusline-ratelimit.sh`
 
 - WHY THIS EXISTS: the owner asked to be warned when the 5-hour or the weekly
 
+### `scripts/supabase-q.sh`
+
+- WHY IT EXISTS, measured: the account-level Supabase PAT leaked into 167 places,
+
+### `scripts/support-mail/entitlement.py`
+
+- WHY THIS EXISTS: the old support-inbox check queried ONE customer DB
+
 ### `scripts/task-last-run.sh`
 
 - Miert letezik ez a szkript: a task_runs.ts oszlop MILLISZEKUNDUM epoch, a
+
+### `scripts/telegram-live-progress.py`
+
+- Why a daemon and not a hook: a hook fires at discrete points and cannot keep a
 
 ### `scripts/tenant-second-user-watch.sh`
 
@@ -436,6 +559,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/worktree-uj.sh`
 
 - MIERT LETEZIK. 2026-09-17 09:3x-kor marveen ezt irta:
+
+### `scripts/write-built-commit.cjs`
+
+- WHY THE BUILD WRITES IT. update.sh:747-751 uses dist/.built-commit as the
 
 ### `scripts/write-census.mjs`
 
