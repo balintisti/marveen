@@ -137,7 +137,10 @@ describe('schedule-runner pre-check integration (source-level)', () => {
     expect(afterCronPc.slice(
       afterCronPc.indexOf('if (cronPc.skip)'),
       afterCronPc.indexOf('if (pendingKeys.has(key))'),
-    )).toMatch(/appendTaskRun\(task\.name, agentName, 'skipped-precheck'\)/)
+    // merge 88c366f2 (T1): the reason rides in task_runs.reason, not in a per-reason status --
+    // ours, pinned by task-run-skip-reason.test.ts. The stall detector's distinction is kept:
+    // a precheck-quiet round is `skipped` + reason `precheck-cron`, never a bare `skipped`.
+    )).toMatch(/appendTaskRun\(task\.name, agentName, 'skipped', 'precheck-cron'\)/)
   })
 
   it('uses fail-open semantics (no SKIP on non-zero exit, no throw on missing file)', () => {

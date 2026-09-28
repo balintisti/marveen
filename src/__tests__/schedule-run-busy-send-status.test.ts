@@ -30,7 +30,10 @@ describe('busy-pane scheduled-task delivery is recorded distinctly', () => {
   it('sendPromptToSession offers an onBusySend callback in its opts bag', () => {
     const sigIdx = AGENT_PROCESS.indexOf('export async function sendPromptToSession(')
     expect(sigIdx).toBeGreaterThan(0)
-    expect(AGENT_PROCESS.slice(sigIdx, sigIdx + 400)).toMatch(/onBusySend\?:\s*\(\)\s*=>\s*void/)
+    // The whole opts bag, up to the return type -- not a fixed 400 chars: our required
+    // survival/survivalReason docblocks (card c4b99fa7, merge 88c366f2) sit in front of it.
+    const bag = AGENT_PROCESS.slice(sigIdx, AGENT_PROCESS.indexOf('): Promise<', sigIdx))
+    expect(bag).toMatch(/onBusySend\?:\s*\(\)\s*=>\s*void/)
   })
 
   it('the callback fires on the busy fall-through, AFTER the abort branch', () => {
@@ -75,7 +78,8 @@ describe('busy-pane scheduled-task delivery is recorded distinctly', () => {
   it('the late-catch-up status still wins over the busy status', () => {
     // A catch-up run is already an anomaly with its own status; the busy branch
     // must not shadow it.
-    const lateIdx = SCHEDULE_RUNNER.indexOf("appendTaskRun(task.name, agentName, 'fired_late')")
+    // Ours passes the catch-up REASON as a 4th argument (merge 88c366f2), hence the prefix match.
+    const lateIdx = SCHEDULE_RUNNER.indexOf("appendTaskRun(task.name, agentName, 'fired_late'")
     const busyIdx = SCHEDULE_RUNNER.indexOf("} else if (busySend) {")
     expect(lateIdx).toBeGreaterThan(0)
     expect(lateIdx).toBeLessThan(busyIdx)

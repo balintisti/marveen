@@ -52,6 +52,19 @@ vi.mock('../db.js', () => ({
   markScheduledTaskKanbanWaiting: vi.fn(),
 }))
 
+// merge 88c366f2: scheduler alerts now leave through getProvider(CHANNEL_PROVIDER).sendMessage, and
+// the token lookup falls back to the channel STATE DIR's .env (the live Telegram file on this host).
+// Both pointed at this file's own spy and envToken, so the cases keep their meaning.
+vi.mock('../channel-provider.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../channel-provider.js')>()),
+  readChannelToken: () => (envToken.includes('=') ? envToken.split('=')[1] || null : null),
+  getProvider: () => ({
+    sendMessage: async (...a: unknown[]) => {
+      await mockTelegram(...a)
+    },
+  }),
+}))
+
 vi.mock('../web/telegram.js', () => ({
   sendTelegramMessage: (...a: unknown[]) => mockTelegram(...a),
   sendTelegramPhoto: vi.fn(async () => {}),

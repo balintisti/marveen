@@ -39,7 +39,8 @@ vi.mock('../db.js', () => ({
   reconcileOpenTaskRuns: () => 0,
   getTaskRunMedianDurationMs: () => null,
   markPendingTaskRetryOwnerAlert: () => true,
-  clearPendingTaskRetryOwnerAlert: () => true,
+  // The owner alert's stamp (upstream's stage-2 claim, merge 88c366f2): the spy this file asserts on.
+  clearPendingTaskRetryOwnerAlert: (...a: unknown[]) => mockClearAlertStamp(...a),
   appendTaskRun: vi.fn(),
   listPendingTaskRetries: () => mockListPendingRetries(),
   deletePendingTaskRetry: vi.fn(),
@@ -48,8 +49,25 @@ vi.mock('../db.js', () => ({
   // The claim succeeds: this test is about the config gates AFTER the claim,
   // not about the race the claim guards.
   markPendingTaskRetryAlert: vi.fn(() => true),
-  clearPendingTaskRetryAlert: (...a: unknown[]) => mockClearAlertStamp(...a),
+  clearPendingTaskRetryAlert: vi.fn(() => true),
   markScheduledTaskKanbanWaiting: vi.fn(() => null),
+}))
+
+// merge 88c366f2: the owner alert now leaves through the MAIN agent's channel provider
+// (getProvider(CHANNEL_PROVIDER).sendMessage), not sendTelegramMessage directly. Same spy, same
+// failure injection, so the four gates below keep meaning what they meant.
+vi.mock('../channel-provider.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../channel-provider.js')>()),
+  // The token lookup now also falls back to the channel STATE DIR's .env -- on a live host that is
+  // the real Telegram channel's file, so without this the "NO token" case found a live token and
+  // the test depended on the machine it ran on. Driven by the same `envToken` as before.
+  readChannelToken: () => (envToken.includes('=') ? envToken.split('=')[1] || null : null),
+  getProvider: () => ({
+    sendMessage: async (...a: unknown[]) => {
+      await mockTelegram(...a)
+      if (sendError) throw new Error(sendError)
+    },
+  }),
 }))
 
 vi.mock('../web/telegram.js', () => ({

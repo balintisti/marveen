@@ -29,6 +29,7 @@ const mockInfo = vi.fn()
 /** What markScheduledTaskKanbanWaiting reports: a moved card id, or nothing. */
 let movedCardId: string | null = null
 
+import { OWNER_ESCALATION_EXTRA_MS } from '../pending-retries.js'
 vi.mock('../logger.js', () => ({
   logger: { info: (...a: unknown[]) => mockInfo(...a), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
 }))
@@ -52,6 +53,19 @@ vi.mock('../db.js', () => ({
   markPendingTaskRetryAlert: vi.fn(() => true),
   clearPendingTaskRetryAlert: vi.fn(),
   markScheduledTaskKanbanWaiting: () => movedCardId,
+}))
+
+// merge 88c366f2: scheduler alerts now leave through getProvider(CHANNEL_PROVIDER).sendMessage, and
+// the token lookup falls back to the channel STATE DIR's .env (the live Telegram file on this host).
+// Both pointed at this file's own spy and envToken, so the cases keep their meaning.
+vi.mock('../channel-provider.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../channel-provider.js')>()),
+  readChannelToken: () => (envToken.includes('=') ? envToken.split('=')[1] || null : null),
+  getProvider: () => ({
+    sendMessage: async (...a: unknown[]) => {
+      await mockTelegram(...a)
+    },
+  }),
 }))
 
 vi.mock('../web/telegram.js', () => ({
@@ -120,7 +134,10 @@ async function fireAndWaitPastTimeout() {
   const stop = startScheduleRunner()
   await vi.advanceTimersByTimeAsync(61_000)
   expect(mockSendPrompt).toHaveBeenCalled()
-  await vi.advanceTimersByTimeAsync(TASK_FIRE_TIMEOUT_MS + 60_000)
+  // merge 88c366f2: the OWNER alert is now stage 2. At TASK_FIRE_TIMEOUT_MS the coordinator gets an
+  // inbox notice (stage 1); the owner's channel only after a further OWNER_ESCALATION_EXTRA_MS. So
+  // the wait covers both, and every gate below is measured on the stage that reaches the owner.
+  await vi.advanceTimersByTimeAsync(TASK_FIRE_TIMEOUT_MS + OWNER_ESCALATION_EXTRA_MS + 120_000)
   clearInterval(stop)
 }
 
