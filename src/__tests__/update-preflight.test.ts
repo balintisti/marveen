@@ -53,12 +53,17 @@ describe('checkUpdatePreflight --local commits (diverged history)', () => {
     expect(checkUpdatePreflight(makeGit('main', '', 0)).ok).toBe(true)
   })
 
-  // The rule update.sh actually applies since 2026-08-30: ahead with nothing
-  // behind is an install that also develops locally, the pull is a no-op, and
-  // the update proceeds. Blocking it here locked the button on a tree that
-  // was in fact current.
-  it('passes when ahead but not behind, matching update.sh', () => {
-    expect(checkUpdatePreflight(makeGit('main', '', 53, 0)).ok).toBe(true)
+  // ADAPTED IN THE 88c366f2 MERGE (P11). Upstream's rule since 2026-08-30 lets an ahead-only tree
+  // update: the pull is a no-op. On THIS install the run would still BUILD and RESTART the local tree,
+  // which carries our own commits, so ahead-only refuses -- matching our update.sh, whose opt-in
+  // (UPDATE_AUTO_REBASE=1) the dashboard never sets. Same parity claim as upstream's case: the button
+  // says what update.sh would do.
+  it('REFUSES when ahead but not behind, matching update.sh on this install (P11)', () => {
+    const result = checkUpdatePreflight(makeGit('main', '', 53, 0))
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toBe('local-commits')
+    expect(result.message).toContain('53 commit(s) ahead and 0 behind')
   })
 
   it('dirty-tree takes precedence over divergence (stash is offered first)', () => {

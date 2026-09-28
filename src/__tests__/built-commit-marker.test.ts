@@ -75,11 +75,14 @@ describe('the build writes the marker, so it cannot be forgotten', () => {
   // and the fallback matters as much as the write: if the hash cannot be
   // produced, the marker is REMOVED, never left stale. No marker reads as
   // unknown; a stale one reads as a date.
-  it('npm run build writes the marker, and deletes it when it cannot', () => {
+  // MERGE 88c366f2: the stamp moved into upstream's scripts/write-built-commit.cjs (BUILTSTAMPKEZI920:
+  // one implementation, full-sha validation). It does NOT delete an unwritable stamp, it leaves it --
+  // and that is safe HERE because of the case above: a marker OLDER than the build it describes is
+  // judged 'contradicted', never reported as a date. The half that still has to hold on
+  // package.json: the build writes the marker, and only after a successful compile.
+  it('npm run build writes the marker, chained behind a successful tsc', () => {
     const pkg = JSON.parse(readFileSync(join(import.meta.dirname, '..', '..', 'package.json'), 'utf8'))
     const build: string = pkg.scripts.build
-    expect(build).toContain('tsc')
-    expect(build).toContain('git rev-parse HEAD > dist/.built-commit')
-    expect(build).toContain('rm -f dist/.built-commit')
+    expect(build).toMatch(/^tsc && node scripts\/write-built-commit\.cjs$/)
   })
 })
