@@ -29,22 +29,61 @@ export interface TmpDirs {
   adopt(dir: string): string
 }
 
+// A SECOND, PROCESS-LEVEL NET (card c203db6b). `vitest list` (the suite baseline, a name diff)
+// COLLECTS every file -- so module- and describe-level mkTmp() calls run -- but never runs its
+// hooks, so the afterAll below never fires: measured 2026-09-28, 76 directories left per list run.
+// Every directory is therefore also recorded in ONE per-process set, removed on the way out.
+// MEASURED, not assumed: the list worker is ended with SIGTERM, and an 'exit' handler alone never
+// ran there (probe log: handler installed, dirs made, no exit event). So SIGTERM gets a once-handler
+// that cleans and then RE-RAISES the signal, so the worker still ends by the signal exactly as
+// before. The set and the handlers live on globalThis under a registry symbol, so module isolation
+// (a fresh copy of this helper per test file) neither loses them nor stacks listeners per file.
+// afterAll stays the normal path and takes its directories out of the set.
+const PENDING = Symbol.for('marveen.tmpDirs.pending')
+function pending(): Set<string> {
+  const g = globalThis as unknown as Record<symbol, Set<string> | undefined>
+  let set = g[PENDING]
+  if (!set) {
+    const fresh = new Set<string>()
+    g[PENDING] = fresh
+    const sweep = () => {
+      for (const d of fresh) {
+        try { rmSync(d, { recursive: true, force: true }) } catch { /* exit path: best effort */ }
+      }
+      fresh.clear()
+    }
+    process.on('exit', sweep)
+    process.once('SIGTERM', () => {
+      sweep()
+      process.kill(process.pid, 'SIGTERM')
+    })
+    set = fresh
+  }
+  return set
+}
+
 export function tmpDirs(): TmpDirs {
   const made: string[] = []
+  const net = pending()
   // An explicit, generous hook timeout: a file that builds many throwaway trees removes them all
   // here, and under a loaded host (load average 37-50 measured 2026-09-28, several suites at once)
   // rulebook-snapshot.test.ts's cleanup passed vitest's 10 s default, failing a file whose 23 tests
   // were all green. A slow cleanup must never read as a failed test.
   afterAll(() => {
-    for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true })
+    for (const d of made.splice(0)) {
+      rmSync(d, { recursive: true, force: true })
+      net.delete(d)
+    }
   }, 120_000)
   const mk = ((prefix: string, base: string = tmpdir()) => {
     const d = mkdtempSync(join(base, prefix))
     made.push(d)
+    net.add(d)
     return d
   }) as TmpDirs
   mk.adopt = (dir: string) => {
     made.push(dir)
+    net.add(dir)
     return dir
   }
   return mk
