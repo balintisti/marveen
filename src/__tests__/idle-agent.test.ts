@@ -1832,3 +1832,29 @@ describe('selectDeclaredWork -- review-ag: a koordinator kommentje nem elesit uj
     expect(countDeclaredWork(CHECK, 'didi', rows, cmts, undefined)).toBe(1)
   })
 })
+
+// IDLE ONLY BECAUSE THE PLAN LIMIT IS REACHED (card d3f92923). The pane reads idle; a wake typed into
+// it cannot move it until the reset, so the guard steps aside with a NAMED reason and the idle
+// window does not accumulate meanwhile.
+describe('decideIdleAlert -- a usage-limited pane', () => {
+  it('idle with work but limit-reached: no wake, reason usage-limited, window not started', () => {
+    const { decision, next } = decideIdleAlert({ ...base, paneUsageLimited: true }, NO_IDLE_STATE, TH, at(0))
+    expect(decision).toEqual({ alert: false, reason: 'usage-limited' })
+    expect(next.idleSinceMs).toBeNull()
+  })
+
+  it('CONTROL: the same agent without the limit starts its idle window as before', () => {
+    const { decision, next } = decideIdleAlert({ ...base, paneUsageLimited: false }, NO_IDLE_STATE, TH, at(0))
+    expect(decision.reason).not.toBe('usage-limited')
+    expect(next.idleSinceMs).toBe(at(0))
+  })
+
+  it('a limit that lasts past the sustained window still never wakes', () => {
+    let state = NO_IDLE_STATE
+    for (const t of [0, 11, 40, 90]) {
+      const r = decideIdleAlert({ ...base, paneUsageLimited: true }, state, TH, at(t))
+      expect(r.decision.alert, `t=${t}`).toBe(false)
+      state = r.next
+    }
+  })
+})

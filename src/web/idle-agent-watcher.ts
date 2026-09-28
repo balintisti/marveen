@@ -6,7 +6,7 @@ import { listAgentNames, agentDir, readAgentRemoteHost, readAgentProjects } from
 import { isAgentRunning, capturePane } from './agent-process.js'
 import { resolveAgentSession } from './channel-mcp-reconnect.js'
 import { sendAlert } from './channel-monitor.js'
-import { busyEvidence, detectPaneState } from '../pane-state.js'
+import { busyEvidence, detectPaneState, detectsUsageLimitReached } from '../pane-state.js'
 import { getPendingMessages, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
 import {
   decideIdleAlert,
@@ -268,6 +268,7 @@ export function lastRealCommentAtByCard(raw: Map<string, Map<string, number>>): 
 export function readPane(agent: string): {
   idle: boolean | null
   staleCounterOnly: boolean
+  usageLimited?: boolean
   paneReason?: PaneUnreadableReason
 } {
   // WHICH branch produced `idle: null` -- three of them do, and the owner-facing
@@ -281,7 +282,12 @@ export function readPane(agent: string): {
   if (!pane) return { idle: null, staleCounterOnly: false, paneReason: 'capture-failed' }
   const state = detectPaneState(pane)
   if (state === 'unknown') return { idle: null, staleCounterOnly: false, paneReason: 'unknown-state' }
-  return { idle: state === 'idle', staleCounterOnly: busyEvidence(pane) === 'counter' }
+  return {
+    idle: state === 'idle',
+    staleCounterOnly: busyEvidence(pane) === 'counter',
+    // Same capture as the idle verdict (card d3f92923), so the two cannot disagree about the screen.
+    usageLimited: detectsUsageLimitReached(pane),
+  }
 }
 
 // EXPORTALVA A NAPLOZAS MERHETOSEGEERT (kartya 60060415). A `readPane`-nel ugyanez a
@@ -416,6 +422,7 @@ export function tick(): void {
           // settled it -- a running fleet ticks this every three minutes.
           paneIdle: running ? paneRead.idle : false,
           staleCounterOnly: running ? paneRead.staleCounterOnly : false,
+          paneUsageLimited: running ? paneRead.usageLimited === true : false,
           pendingMessages: running ? getPendingMessages(agent).length : 0,
           ownWorkCount,
           // Without this the repeat-suppression never fires -- it is skipped whenever the

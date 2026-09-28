@@ -18,7 +18,7 @@ import {
 import { sessionNameForAgent } from './session-names.js'
 import { sendSystemDirective } from './system-directive.js'
 import { notifyChannel } from '../notify.js'
-import { detectPaneState, paneShowsContextSaturation, paneShowsContextSaturationHardError } from '../pane-state.js'
+import { detectPaneState, detectsUsageLimitReached, paneShowsContextSaturation, paneShowsContextSaturationHardError } from '../pane-state.js'
 import { readContextTokensFromProjectDir, readActiveModelFromProjectDir, readTranscriptMtimeFromProjectDir, predatesSession } from './active-model.js'
 import { readContextGuardConfig } from './context-guard-store.js'
 import { readAllContextGuardConfigs } from './context-guard-store.js'
@@ -496,6 +496,8 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
     pct: cfg.enabled ? measuredPct : null,
     paneIdle: paneState === 'idle',
     paneBusy: paneState === 'busy',
+    // Same capture as paneIdle (card d3f92923); only the idle-flush tier reads it.
+    paneUsageLimited: pane !== null && detectsUsageLimitReached(pane),
     sessionReady,
     handoffMtime: needPct ? handoffMtime(name) : null,
     // Already reconciled with the measurement above, so decideGuard itself

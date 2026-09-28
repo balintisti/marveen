@@ -148,6 +148,10 @@ export interface IdleAgentInput {
    *  possibly forever, while a false IDLE costs one unnecessary notice to the
    *  coordinator. See busyEvidence() in pane-state.ts for the measurement. */
   staleCounterOnly?: boolean
+  /** The pane shows the plan usage limit REACHED (detectsUsageLimitReached; the approaching-limit
+   *  warning does not count). Such a pane reads idle, and nothing a wake says can move it until the
+   *  limit resets -- the model-fallback runner owns that state. Card d3f92923. */
+  paneUsageLimited?: boolean
   /** The KIND the agent declared. `'none'` means "this agent has no queue in this
    *  system" -- an on-call agent whose empty board is the correct state, not a leak.
    *  Absent is treated as 'not none': an agent that declared a real check and has zero
@@ -172,6 +176,8 @@ export type IdleDecision =
         // here is the point: a repeated identical list costs a turn and teaches nothing.
         | 'unchanged-since-wake'
   | 'unchanged-pull-list'
+        // Idle only because the plan limit is reached: a wake cannot help (card d3f92923).
+        | 'usage-limited'
     }
   /** Stage 1: tell the AGENT, not a human. The agent is awake, its queue is empty and
    *  the condition is about itself -- it is the only party that can both be reached and
@@ -297,6 +303,11 @@ export function decideIdleAlert(
       next: { ...state, idleSinceMs: null, lastAlertAt: now },
     }
   }
+
+  // IDLE BECAUSE THE PLAN LIMIT IS REACHED (card d3f92923): the pane reads idle, and a wake typed
+  // into it can do nothing until the limit resets. Named, not folded into 'busy': the log has to say
+  // WHY a waiting agent was left alone, and the idle window restarts once the limit lifts.
+  if (input.paneUsageLimited === true) return clear('usage-limited')
 
   // The no-work notice reads a counter-only 'busy' as idle, and NOTHING ELSE does.
   //

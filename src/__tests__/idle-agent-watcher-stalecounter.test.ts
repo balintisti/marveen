@@ -26,6 +26,7 @@ vi.mock('../web/agent-config.js', () => ({
 vi.mock('../pane-state.js', () => ({
   detectPaneState: (...a: unknown[]) => detectPaneState(...a),
   busyEvidence: (...a: unknown[]) => busyEvidence(...a),
+  detectsUsageLimitReached: () => false,
 }))
 
 const { readPane } = await import('../web/idle-agent-watcher.js')

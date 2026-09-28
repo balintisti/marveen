@@ -22,6 +22,7 @@ import {
   busyEvidence,
   mayActOnPane,
   detectsUsageLimit,
+  detectsUsageLimitReached,
   paneLooksIdle,
   paneShowsContextSaturationHardError,
   mcpTrustAcceptKeys,
@@ -2904,5 +2905,51 @@ describe('detectsFirstRunGate / mcpTrustAcceptKeys: the MCP approval dialog', ()
   it('a busy pane quoting the dialog is never the dialog', () => {
     const quoted = `New MCP server found in this project: worksource\n  1. Use this MCP server\n\n✻ Thinking… (esc to interrupt)`
     expect(detectsFirstRunGate(quoted)).toBeNull()
+  })
+})
+
+// THE HARD STOP, NOT THE WARNING (card d3f92923, 2026-09-28). The act-decisions ask "can this pane
+// take work?", and a pane only APPROACHING a weekly limit still can -- for days. The wide
+// detectsUsageLimit is right for the model downgrade and wrong for a wake or a flush.
+describe('detectsUsageLimitReached (card d3f92923)', () => {
+  const HARD = [
+    'You have reached your usage limit. Try again later.',
+    '5-hour limit reached ∙ resets 3pm',
+    'Your limit will reset at 18:00',
+    '/upgrade to increase your usage limit',
+    'You hit your session limit · resets 5:50pm',
+    "You've reached your weekly limit for Opus.",
+    'Session limit reached ∙ resets at 2am',
+  ]
+  const SOFT = ['Approaching usage limit', 'Approaching Opus weekly limit ∙ 5% left']
+
+  it('every hard wording the wide predicate knows is a hard stop here too', () => {
+    for (const w of HARD) {
+      expect(detectsUsageLimit(w), w).toBe(true)
+      expect(detectsUsageLimitReached(w), w).toBe(true)
+    }
+  })
+
+  it('THE DIFFERENCE: the approaching-limit warning is a limit to the wide one, NOT a stop here', () => {
+    for (const w of SOFT) {
+      expect(detectsUsageLimit(w), w).toBe(true)
+      expect(detectsUsageLimitReached(w), w).toBe(false)
+    }
+  })
+
+  it('a transient 429 and scrollback are not a stop either (same region rule)', () => {
+    expect(detectsUsageLimitReached('  ⎿  API Error: 429 rate_limit_error: too many requests')).toBe(false)
+    const scrollback = ['you reached your usage limit', ...Array(40).fill('normal output line')].join('\n')
+    expect(detectsUsageLimitReached(scrollback)).toBe(false)
+    expect(detectsUsageLimitReached('')).toBe(false)
+  })
+
+  it('mayActOnPane: an idle pane under the WEEKLY WARNING may still be acted on', () => {
+    const warned = IDLE_BYPASS.replace('❯ ', 'Approaching Opus weekly limit ∙ 5% left\n❯ ')
+    expect(warned).not.toBe(IDLE_BYPASS)   // the insertion happened (else this proves nothing)
+    expect(paneLooksIdle(warned)).toBe(true)
+    expect(mayActOnPane(warned)).toBe(true)
+    const stopped = IDLE_BYPASS.replace('❯ ', 'Session limit reached ∙ resets at 2am\n❯ ')
+    expect(mayActOnPane(stopped)).toBe(false)
   })
 })

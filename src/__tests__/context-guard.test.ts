@@ -905,3 +905,25 @@ describe('decideGuard with a corrected saturation input (no kill, no handoff)', 
     expect(d.reason).toBe('waiting for handoff')
   })
 })
+
+// THE IDLE-FLUSH TIER ON A LIMIT-REACHED PANE (card d3f92923). It would START a handoff sequence on a
+// pane that cannot answer the request; the await-handoff deadline then restarts the session with
+// nothing written. Stated as a difference, like the pane tests above: the limit is the only change.
+describe('decideGuard -- idle-flush defers on a usage-limited pane', () => {
+  const CFG: ContextGuardConfig = {
+    ...DEFAULT_CONTEXT_GUARD, enabled: false, idleFlushEnabled: true, idleFlushTokens: 400_000, idleMinutes: 20,
+  }
+  const armed = inputs({ contextTokens: 600_000, idleMs: 21 * 60_000, paneIdle: true })
+
+  it('heavy, quiet, idle but limit-reached: no handoff request, and the reason names the limit', () => {
+    const d = decideGuard(INITIAL_GUARD_STATE, { ...armed, paneUsageLimited: true }, CFG)
+    expect(d.action).toBe('none')
+    expect(d.nextState.phase).toBe('idle')
+    expect(d.reason).toContain('usage limit is reached')
+  })
+
+  it('CONTROL: flip only the limit and the same session is flushed', () => {
+    expect(decideGuard(INITIAL_GUARD_STATE, { ...armed, paneUsageLimited: false }, CFG).action).toBe('request-handoff')
+    expect(decideGuard(INITIAL_GUARD_STATE, armed, CFG).action).toBe('request-handoff')   // absent = as before
+  })
+})

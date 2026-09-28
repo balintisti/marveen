@@ -393,6 +393,11 @@ export interface GuardInputs {
    *  working -- deferring on `!paneIdle` would protect wedged panes from
    *  the restart that is their only way out. */
   paneBusy: boolean
+  /** The pane shows the plan usage limit REACHED (detectsUsageLimitReached). Read ONLY by the
+   *  idle-flush tier, which would otherwise START a handoff sequence on a pane that cannot answer
+   *  the request -- and its deadline then restarts the session with no handoff written (card
+   *  d3f92923). Optional: absent reads as not limited, as before. */
+  paneUsageLimited?: boolean
   /** Session is ready to receive a prompt (post-restart readiness). */
   sessionReady: boolean
   /** Current HANDOFF.md mtime (ms), or null when the file does not exist. */
@@ -850,6 +855,14 @@ function decideIdleFlush(
   if (!inputs.paneIdle) {
     return none(
       `idle-flush: heavy and quiet, but pane is not confirmed idle -- deferring`,
+      cleared,
+    )
+  }
+  // Idle because the plan limit is reached: the handoff request could not be answered, and the
+  // await-handoff deadline would restart the session with nothing written. Wait for the reset.
+  if (inputs.paneUsageLimited === true) {
+    return none(
+      `idle-flush: heavy and quiet, but the plan usage limit is reached -- a handoff request could not be answered; deferring`,
       cleared,
     )
   }

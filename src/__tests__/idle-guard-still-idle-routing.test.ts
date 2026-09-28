@@ -62,7 +62,7 @@ vi.mock('../web/agent-config.js', () => ({
   readAgentRemoteHost: () => null,
   readAgentProjects: () => null,
 }))
-vi.mock('../pane-state.js', () => ({ detectPaneState: () => 'idle', busyEvidence: () => 'none' }))
+vi.mock('../pane-state.js', () => ({ detectPaneState: () => 'idle', busyEvidence: () => 'none', detectsUsageLimitReached: () => false }))
 vi.mock('../web/channel-monitor.js', () => ({ sendAlert: (...a: unknown[]) => h.sendAlert(...a) }))
 vi.mock('../db.js', () => ({
   getPendingMessages: () => [],

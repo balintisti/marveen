@@ -45,6 +45,7 @@ vi.mock('../web/agent-config.js', () => ({
 vi.mock('../pane-state.js', () => ({
   detectPaneState: (...a: unknown[]) => paneState(...a),
   busyEvidence: () => 'none',
+  detectsUsageLimitReached: () => false,
 }))
 vi.mock('../web/channel-monitor.js', () => ({ sendAlert: () => {} }))
 vi.mock('../db.js', () => ({

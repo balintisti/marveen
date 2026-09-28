@@ -1419,6 +1419,25 @@ export function detectsUsageLimit(pane: string): boolean {
   return USAGE_LIMIT_RX.test(region)
 }
 
+// THE HARD STOP, WITHOUT THE WARNING (card d3f92923, 2026-09-28). USAGE_LIMIT_RX answers the
+// model-fallback question -- "switch to a cheaper model?" -- and there the SOFT warning
+// ("Approaching Opus weekly limit ∙ 5% left", pinned in model-fallback.test.ts) is exactly the
+// reason to switch. An ACT decision asks something else: can this pane do the work I am about to
+// hand it? A pane only APPROACHING a weekly limit still can, for hours or days, so gating a wake or
+// a flush on the wide predicate would park an agent for as long as a weekly warning is on screen.
+// Same live region, every alternative of USAGE_LIMIT_RX except the `approaching` one.
+const USAGE_LIMIT_REACHED_RX =
+  /(usage limit reached|reached your (?:usage|weekly) limit|hit (?:your|the) (?:session|usage) limit|usage limit (?:will )?reset|limit will reset at|\d+-hour limit reached|(?:weekly|session) limit reached|upgrade to increase your usage limit)/i
+
+/** True when the live pane shows that the plan limit is REACHED -- the pane cannot take work
+ *  until it resets. The approaching-limit warning does not count (see above). */
+export function detectsUsageLimitReached(pane: string): boolean {
+  if (!pane || !pane.trim()) return false
+  const lines = pane.split('\n')
+  const region = lines.slice(-USAGE_LIMIT_BANNER_REGION_LINES).join('\n')
+  return USAGE_LIMIT_REACHED_RX.test(region)
+}
+
 /**
  * MAY I ACT ON THIS PANE? -- the question five callers were asking `paneLooksIdle`
  * (card d3f92923).
@@ -1450,7 +1469,8 @@ export function detectsUsageLimit(pane: string): boolean {
  * exists to prevent.
  */
 export function mayActOnPane(pane: string): boolean {
-  return paneLooksIdle(pane) && !detectsUsageLimit(pane)
+  // The REACHED limit, not the warning (2026-09-28): "may I act" is not "should I downgrade".
+  return paneLooksIdle(pane) && !detectsUsageLimitReached(pane)
 }
 
 export function isReadyForPrompt(pane: string): boolean {
