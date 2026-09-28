@@ -74,10 +74,13 @@ describe('uptimeTick runs one tick at a time (77c305a4)', () => {
     // A failing fetch does NOT do it -- getJson catches it and the tick completes normally (the
     // first version of this test proved nothing for that reason; a mutant caught it). What escapes
     // the body is outside every try: an invalid `now` makes toISOString() throw a RangeError.
-    const bad = uptimeTick(Number.NaN)
+    // The expectation is attached IN THE SAME STATEMENT as the call (card c9add760): awaited only
+    // after the flushes, the rejection sat unhandled for a macrotask, vitest reported it, and the
+    // whole `npm test` exited 1 with every test green.
+    const bad = expect(uptimeTick(Number.NaN)).rejects.toThrow(RangeError)
     await flush()
     await releaseAll()
-    await expect(bad).rejects.toThrow(RangeError)
+    await bad
     const next = uptimeTick()
     await flush(); await flush()
     expect(calls.length).toBeGreaterThan(0)
