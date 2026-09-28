@@ -114,6 +114,56 @@ esac
 [ -r "$TOKEN_FILE" ] || { echo "FAIL: no token file at $TOKEN_FILE"; exit 1; }
 TOKEN="$(cat "$TOKEN_FILE")"
 
+# --- Homoglyph gate, BEFORE the payload is built (MSGGATE924) --------------
+# On the RAW text, not on the JSON: json.dumps escapes a Cyrillic letter into
+# \uXXXX, and a checker reading the encoded body would be looking at a string
+# where the problem is no longer visible as a letter. The gate has to see what
+# the sender typed.
+#
+# WHY IT IS HERE AND NOT IN EACH AGENT'S TOOLBOX. Measured 2026-09-24 across
+# three agents: two had built this guard for themselves, independently, because
+# both had been bitten by it; the third had no guard at all. And no CLAUDE.md
+# prescribes those private wrappers -- they all name THIS helper. The result was
+# predictable in hindsight: the agent who WROTE such a wrapper spent a whole day
+# calling this script directly, with the check run beside it in a separate
+# command instead of in front of it. One message went out contaminated while the
+# checker printed "NEM KULDOM EL" next to it. The rule that needs remembering is
+# not a rule; it has to sit in the path of the action.
+#
+# FAIL-OPEN ON A MISSING CHECKER, AND LOUDLY -- a deliberate exception to the
+# repo's usual fail-closed stance for gates (see .git/hooks/pre-commit.d). This
+# helper is the fleet's mandated message route: blocking every inter-agent
+# message on an install whose lib file is absent would be a far worse failure
+# than the one being prevented, and it would be a NEW failure, not today's. A
+# missing checker is exactly today's state, so the honest behaviour is to send
+# and say so. Contaminated text with the checker PRESENT is refused, which is
+# where the closed direction belongs.
+# Overridable so the suite can measure the missing-checker branch too.
+HG="${MARVEEN_HOMOGLYPH_BIN:-$BASE/scripts/lib/homoglyph.py}"
+if [ -r "$HG" ] && command -v python3 >/dev/null 2>&1; then
+  # THE CHECKER IS A VERDICT, NOT A FILTER: what goes out is the text the
+  # sender typed, never the checker's stdout. Measured in the 2026-09-24 review
+  # of #1541: a checker that exits 0 with EMPTY stdout made this helper send an
+  # empty message and report OK -- a broken tool silently replaced the message
+  # instead of failing. The exit code is the only thing read here.
+  printf '%s' "$C" | python3 "$HG" >/dev/null
+  HG_RC=$?
+  case "$HG_RC" in
+    0) : ;;
+    # 3 is the checker's one documented refusal code; anything else is the
+    # CHECKER failing, not the text. They must not share a message: "refused"
+    # sends the sender to rewrite a word that may be perfectly fine, while a
+    # crashed checker is an unmeasured send and the operator's problem.
+    3) echo "FAIL: homoglyph gate refused the message; nothing was sent." >&2
+       exit 3 ;;
+    *) echo "FAIL: homoglyph checker CRASHED (rc=$HG_RC) at $HG; nothing was sent." >&2
+       echo "  This is not a verdict on the text -- fix or unset MARVEEN_HOMOGLYPH_BIN." >&2
+       exit 4 ;;
+  esac
+else
+  echo "WARN: homoglyph checker not found at $HG -- sending UNCHECKED." >&2
+fi
+
 # --- __STAMP__ SUBSTITUTION (2026-08-23, card a0fbeba0) ---
 # `card-comment.sh` fills this placeholder in; this script did not, and the two
 # take the SAME text from the SAME agent. Nine messages in the last 200 went out
