@@ -84,6 +84,16 @@ function writeSnapshot(body: Record<string, unknown>): void {
 
 const NOW = Date.parse('2026-08-23T03:00:00Z')
 
+// merge 88c366f2: runCommandTask is ASYNC upstream -- it starts the command and finish() (which
+// records the run and then runs the quota hook, in one synchronous block) happens later. Each call
+// is therefore awaited until its run is recorded; without that every assertion below reads the state
+// BEFORE the hook, and consecutive calls would be skipped by the in-flight guard.
+async function run(task: ScheduledTask, now: number): Promise<void> {
+  const before = mockAppendTaskRun.mock.calls.length
+  runCommandTask(task, now)
+  await vi.waitFor(() => expect(mockAppendTaskRun.mock.calls.length).toBeGreaterThan(before), { timeout: 5000 })
+}
+
 beforeEach(() => {
   // The alarm is EDGE-driven, so a leftover state file from the previous case
   // would swallow the very transition under test.
@@ -99,10 +109,10 @@ afterAll(() => {
 })
 
 describe('runCommandTask -- the quota alarm rides the command-task tick', () => {
-  it('reports a degraded meter to the COORDINATOR, without any heartbeat round', () => {
+  it('reports a degraded meter to the COORDINATOR, without any heartbeat round', async () => {
     writeSnapshot({ generated_at: new Date(NOW).toISOString(), claude: { ok: true, source: 'estimate' } })
 
-    runCommandTask(TASK, NOW)
+    await run(TASK, NOW)
 
     expect(mockCreateAgentMessage).toHaveBeenCalledTimes(1)
     const [from, to, text] = mockCreateAgentMessage.mock.calls[0] as [string, string, string]
@@ -112,7 +122,7 @@ describe('runCommandTask -- the quota alarm rides the command-task tick', () => 
     expect(text).toContain('ELROMLOTT')
   })
 
-  it('reports a STALE snapshot too -- the failure of the tick it rides on', () => {
+  it('reports a STALE snapshot too -- the failure of the tick it rides on', async () => {
     // 40 minutes old against a 10-minute cadence: the meter is not running.
     // Without this the alarm would die together with the task that feeds it.
     writeSnapshot({
@@ -120,67 +130,67 @@ describe('runCommandTask -- the quota alarm rides the command-task tick', () => 
       claude: { ok: true, source: 'authoritative' },
     })
 
-    runCommandTask(TASK, NOW)
+    await run(TASK, NOW)
 
     expect(mockCreateAgentMessage).toHaveBeenCalledTimes(1)
     expect(String(mockCreateAgentMessage.mock.calls[0]![2])).toContain('elavult snapshot')
   })
 
-  it('says nothing when the meter is healthy, and nothing again on the next tick', () => {
+  it('says nothing when the meter is healthy, and nothing again on the next tick', async () => {
     writeSnapshot({ generated_at: new Date(NOW).toISOString(), claude: { ok: true, source: 'authoritative' } })
 
-    runCommandTask(TASK, NOW)
-    runCommandTask(TASK, NOW + 600_000)
+    await run(TASK, NOW)
+    await run(TASK, NOW + 600_000)
 
     expect(mockCreateAgentMessage).not.toHaveBeenCalled()
   })
 
-  it('is EDGE-driven: a meter that stays broken is announced once, not every 10 minutes', () => {
+  it('is EDGE-driven: a meter that stays broken is announced once, not every 10 minutes', async () => {
     writeSnapshot({ generated_at: new Date(NOW).toISOString(), claude: { ok: true, source: 'estimate' } })
 
-    runCommandTask(TASK, NOW)
+    await run(TASK, NOW)
     writeSnapshot({ generated_at: new Date(NOW + 600_000).toISOString(), claude: { ok: true, source: 'estimate' } })
-    runCommandTask(TASK, NOW + 600_000)
+    await run(TASK, NOW + 600_000)
     writeSnapshot({ generated_at: new Date(NOW + 1_200_000).toISOString(), claude: { ok: true, source: 'estimate' } })
-    runCommandTask(TASK, NOW + 1_200_000)
+    await run(TASK, NOW + 1_200_000)
 
     expect(mockCreateAgentMessage).toHaveBeenCalledTimes(1)
   })
 
-  it('fires on ANY command task, not only one named usage-snapshot', () => {
+  it('fires on ANY command task, not only one named usage-snapshot', async () => {
     // Binding the hook to the task NAME would make a rename silence it, which
     // is the same class of failure as the one being fixed.
     writeSnapshot({ generated_at: new Date(NOW).toISOString(), claude: { ok: true, source: 'estimate' } })
 
-    runCommandTask({ ...TASK, name: 'some-other-check' } as ScheduledTask, NOW)
+    await run({ ...TASK, name: 'some-other-check' } as ScheduledTask, NOW)
 
     expect(mockCreateAgentMessage).toHaveBeenCalledTimes(1)
   })
 
-  it('fires even when the task itself reports "nothing to do" -- the healthy path', () => {
+  it('fires even when the task itself reports "nothing to do" -- the healthy path', async () => {
     // `if (action === "none") return` is the branch taken on almost every tick,
     // and it is exactly the tick on which a degrading meter must still be seen.
     // The task command here exits 0, so the command-task policy yields 'none';
     // the alarm must have spoken before that return.
     writeSnapshot({ generated_at: new Date(NOW).toISOString(), claude: { ok: true, source: 'estimate' } })
 
-    runCommandTask(TASK, NOW)
+    await run(TASK, NOW)
 
     expect(mockCreateAgentMessage).toHaveBeenCalledTimes(1)
   })
 
-  it('stays silent when there is no snapshot at all, instead of inventing a failure', () => {
+  it('stays silent when there is no snapshot at all, instead of inventing a failure', async () => {
     // No file means the meter has never run here (fresh install), which is not
     // the same claim as "the meter broke".
-    runCommandTask(TASK, NOW)
+    await run(TASK, NOW)
 
     expect(mockCreateAgentMessage).not.toHaveBeenCalled()
   })
 
-  it('an alarm failure does not stop the command task itself from being recorded', () => {
+  it('an alarm failure does not stop the command task itself from being recorded', async () => {
     writeFileSync(join(STORE, 'usage-latest.json'), '{ this is not json')
 
     expect(() => runCommandTask(TASK, NOW)).not.toThrow()
-    expect(mockAppendTaskRun).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(mockAppendTaskRun).toHaveBeenCalledTimes(1), { timeout: 5000 })
   })
 })

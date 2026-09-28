@@ -59,6 +59,8 @@ vi.mock('../web/voice-directive.js', () => ({
 
 vi.mock('../web/routes/voice.js', () => ({
   transcribeVoiceFile: (...a: unknown[]) => mockTranscribe(...a),
+  // Our STT-failure path (card 477682a0) says so IN the message and names whether voice is installed.
+  isVoiceInstalled: () => true,
 }))
 
 vi.mock('../web/agent-config.js', () => ({
@@ -160,12 +162,17 @@ describe('router voice STT gate (end to end through the tick)', () => {
     })
   }
 
-  it('STT failure falls back to the raw voice block', async () => {
+  // ADAPTED IN THE 88c366f2 MERGE: on STT failure ours (card 477682a0) does NOT fall back to the raw
+  // voice block -- the agent cannot read it and would answer blindly. It delivers an explicit
+  // "no transcript" note instead (pinned by voice-unavailable-visible.test.ts). The delivery itself,
+  // which is what this end-to-end case guards, is unchanged.
+  it('STT failure still DELIVERS -- with an explicit no-transcript note, not the unreadable block', async () => {
     voiceCfg.current = { responseMode: 'voice', voiceModel: 'm' }
     mockTranscribe.mockResolvedValueOnce(null)
     const delivered = await deliverOneVoiceNote()
     expect(mockTranscribe).toHaveBeenCalledTimes(1)
-    expect(delivered).toContain('attachment_kind="voice"')
+    expect(delivered).toContain('[Hang átirat NEM ELERHETO]')
+    expect(delivered).not.toContain('attachment_kind="voice"')
   })
 })
 
