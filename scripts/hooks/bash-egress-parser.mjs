@@ -411,9 +411,19 @@ function unresolvedDest(dest, text) {
   return false
 }
 export function strictCurlReason(command, allowedHosts, vendorDomains = new Set()) {
+  return strictCurl(command, allowedHosts, vendorDomains)?.reason ?? null
+}
+// The verdict with the host that caused it, so the deny message can NAME it (didi 20013: an
+// empty "(hoszt: )" left the agent with no idea why).
+export function strictCurl(command, allowedHosts, vendorDomains = new Set()) {
   const text = String(command ?? '')
   const segments = text.split(/\|\||&&|[;|\n]/)
   let sawCurl = false
+  // Rule 2 is about where curl CONNECTS. When every destination of every curl in the command is a
+  // literal LOCAL host, a URL in the text is data posted to our own dashboard (a kanban comment or
+  // a message that quotes a link, didi 20013), not egress. Any other destination -- external, or a
+  // variable whose value only the text shows -- keeps rule 2 on.
+  let allLocal = true
   for (const seg of segments) {
     const words = shellWords(seg)
     // a subshell `(curl ...)` leaves its paren on the word; a substitution's `$(` does not reach here as a command
@@ -421,7 +431,7 @@ export function strictCurlReason(command, allowedHosts, vendorDomains = new Set(
     if (at === -1) continue
     sawCurl = true
     const args = words.slice(at + 1)
-    if (args.some((w) => CURL_CONFIG_FLAG.test(w))) return 'agent-exception-curl-config'
+    if (args.some((w) => CURL_CONFIG_FLAG.test(w))) return { reason: 'agent-exception-curl-config', hosts: [] }
     for (let k = 0; k < args.length; k++) {
       const w = args[k]
       let dest = null
@@ -440,15 +450,16 @@ export function strictCurlReason(command, allowedHosts, vendorDomains = new Set(
       } else if (!/^\d*[<>]/.test(w)) {
         dest = w
       }
-      if (dest != null && destHost(dest) === null && unresolvedDest(dest, text)) return 'agent-exception-unresolved-destination'
+      if (dest != null && destHost(dest) === null && unresolvedDest(dest, text)) return { reason: 'agent-exception-unresolved-destination', hosts: [] }
+      if (dest != null) { const h = destHost(dest); if (!h || !isLocalHost(h)) allLocal = false }
     }
   }
-  if (!sawCurl) return null
+  if (!sawCurl || allLocal) return null
   for (const m of text.matchAll(URL_RE)) {
     // URL_RE keeps a trailing `;` / `,` / `&` (`FE=https://host;`), which is shell, not host
     const h = hostOf(m[0].replace(/[;,&|]+$/, ''))
     if (!h || isLocalHost(h)) continue
-    if (!allowedHosts.has(h) && !hostInDomains(h, vendorDomains)) return 'agent-exception-unlisted-url'
+    if (!allowedHosts.has(h) && !hostInDomains(h, vendorDomains)) return { reason: 'agent-exception-unlisted-url', hosts: [h] }
   }
   return null
 }
@@ -540,8 +551,8 @@ if (isInvokedDirectly()) {
     }
     // ...and a READABLE curl must be readable in full (didi 19977): see strictCurlReason.
     if (!r.deny && agentHosts.size) {
-      const strict = strictCurlReason(command, new Set([...vendorHosts, ...agentHosts]), vendorDomains)
-      if (strict) r = { deny: true, reason: strict, hosts: [] }
+      const strict = strictCurl(command, new Set([...vendorHosts, ...agentHosts]), vendorDomains)
+      if (strict) r = { deny: true, reason: strict.reason, hosts: strict.hosts }
     }
     // Every call that passes ONLY because of this agent's entry is logged: the exception is visible.
     if (!r.deny && agentHosts.size) {
