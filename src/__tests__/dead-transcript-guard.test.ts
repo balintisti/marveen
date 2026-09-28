@@ -118,4 +118,28 @@ describe('both guards pass the session start to every transcript probe', () => {
     expect(src).toMatch(/measureContextTokens\(name, since\)/)
     expect(src).toMatch(/measureIdleMs\(name, nowMs, since\)/)
   })
+
+  // Not "a call with since EXISTS" but "NO call without it": after the 88c366f2 merge the pct probe
+  // also feeds the saturation-banner credibility check, and a dead reading there (yesterday's low
+  // pct) would overrule a real banner. Null keeps the banner trusted (saturationBannerCredible).
+  it('EVERY probe call carries the session start, and it is read before the banner credibility probe', () => {
+    const src = readFileSync(join(REPO, 'src', 'web', 'context-guard-runner.ts'), 'utf8')
+    // balanced-paren argument text, so `sessionStartSec(name)` inside a call is read whole
+    const calls = (name: string) => [...src.matchAll(new RegExp(`\\b${name}\\(`, 'g'))].map((m) => {
+      let i = (m.index ?? 0) + m[0].length
+      let depth = 1
+      const from = i
+      while (depth > 0 && i < src.length) { depth += src[i] === '(' ? 1 : src[i] === ')' ? -1 : 0; i++ }
+      return src.slice(from, i - 1)
+    }).filter((args) => !/:\s*(string|number)/.test(args))   // skip the definitions
+    const pct = calls('measurePct')
+    expect(pct.length).toBeGreaterThanOrEqual(2)
+    for (const args of pct) expect(args).toMatch(/,\s*(since|sessionStartSec\(name\))$/)
+    for (const args of calls('measureContextTokens')) expect(args).toMatch(/,\s*since$/)
+    for (const args of calls('measureIdleMs')) expect(args).toMatch(/,\s*since$/)
+    const sinceAt = src.indexOf('const since = running && needPct')
+    const probeAt = src.indexOf('const measuredPct =')
+    expect(sinceAt).toBeGreaterThan(-1)
+    expect(probeAt).toBeGreaterThan(sinceAt)
+  })
 })

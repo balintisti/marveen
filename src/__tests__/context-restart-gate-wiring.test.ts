@@ -36,6 +36,8 @@ vi.mock('../logger.js', () => ({
 vi.mock('../web/agent-process.js', () => ({
   agentSessionName: (n: string) => `agent-${n}`,
   capturePane: () => { throw new Error('no tmux in tests') },
+  // session start unknown -> the dead-transcript check does not apply (card 6f362eb3), as before it
+  getAgentRunningSince: () => null,
 }))
 vi.mock('../web/context-guard-runner.js', () => ({ getHardGuardPhase: () => null }))
 vi.mock('../web/main-transcript-root.js', () => ({
