@@ -21,6 +21,7 @@ file the tool or the library leaves behind is visible.
 import hashlib
 import http.server
 import json
+import re
 import os
 import sqlite3
 import subprocess
@@ -60,6 +61,14 @@ class FakeDrive:
         self.files = {}          # id -> dict(meta..., data=bytes)
         self.sessions = {}
         self.corrupt_next_upload = False
+        # resumable-upload realism and faults (card 0f37191a, the 2026-09-28 night of broken pipes)
+        self.session_seq = 0
+        self.partial = {}            # session id -> bytes received so far
+        self.finished = {}           # session id -> file id, for a status query after completion
+        self.data_puts = 0           # data-carrying PUTs seen
+        self.drop_puts = {}          # data PUT number -> 'before' (lost) | 'after' (stored), then the connection dies
+        self.fail_gets = 0           # the next N file-list GETs answer 503
+        self.session_error = None    # an HTTP code the upload-session POST answers with
         self.give_refresh = True
         self.granted = 'https://www.googleapis.com/auth/drive.file'
         self.n = 0
@@ -97,18 +106,55 @@ class FakeDrive:
                     fid = fake._new(meta, b'')
                     return self._json(200, {'id': fid})
                 if u.path == '/upload/drive/v3/files':
-                    sid = f's{len(fake.sessions)}'
+                    if fake.session_error:
+                        return self._json(fake.session_error, {'error': 'refused'})
+                    fake.session_seq += 1                # unique, like Drive's: a reused id would
+                    sid = f's{fake.session_seq}'         # answer a status query with an OLD file
                     fake.sessions[sid] = json.loads(body)
                     return self._json(200, {}, {'Location': f'http://127.0.0.1:{fake.port}/session/{sid}'})
                 self._json(404, {'error': 'no route'})
 
+            def _progress(self, sid):
+                n = len(fake.partial.get(sid, b''))
+                self.send_response(308)
+                if n:
+                    self.send_header('Range', f'bytes=0-{n - 1}')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+
             def do_PUT(self):
                 sid = self.path.rsplit('/', 1)[-1]
                 data = self._body()
+                rng = self.headers.get('Content-Range', '')
+                m = re.match(r'bytes (\d+)-(\d+)/(\d+)$', rng)
+                if rng.startswith('bytes */'):          # "how much do you have?"
+                    if sid in fake.finished:
+                        return self._json(200, {'id': fake.finished[sid]})
+                    return self._progress(sid)
+                if not m:                                # a whole-file PUT (no Content-Range)
+                    m = re.match(r'(\d+)', '0'), None
+                    start, total = 0, len(data)
+                else:
+                    start, total = int(m.group(1)), int(m.group(3))
+                fake.data_puts += 1
+                fault = fake.drop_puts.pop(fake.data_puts, None)
+                buf = fake.partial.setdefault(sid, b'')
+                if fault == 'before':
+                    self.close_connection = True
+                    return                               # nothing stored, no answer: a broken pipe
+                if start == len(buf):
+                    buf = fake.partial[sid] = buf + data
+                if fault == 'after':
+                    self.close_connection = True
+                    return                               # stored, but the answer never arrives
+                if len(buf) < total:
+                    return self._progress(sid)
+                data = fake.partial.pop(sid)
                 if fake.corrupt_next_upload:
                     data = data[:-1] + bytes([data[-1] ^ 1])
                     fake.corrupt_next_upload = False
                 fid = fake._new(fake.sessions.pop(sid), data)
+                fake.finished[sid] = fid
                 self._json(200, {'id': fid})
 
             def do_GET(self):
@@ -117,6 +163,9 @@ class FakeDrive:
                 if u.path == '/tokeninfo':
                     return self._json(200, {'scope': fake.granted})
                 if u.path == '/drive/v3/files':
+                    if fake.fail_gets:
+                        fake.fail_gets -= 1
+                        return self._json(503, {'error': 'backend error'})
                     parent = q['q'][0].split("'")[1]
                     items = [f for f in fake.files.values()
                              if parent in f.get('parents', []) and (f.get('appProperties') or {}).get('marveenBackup') == '1']
@@ -167,7 +216,7 @@ def stamped(dirpath, hours_ago):
     return os.path.join(dirpath, time.strftime('claudeclaw-%Y%m%d-%H%M%S.tar.gz', t))
 
 
-def make_archive(path, cards=3, broken_db=False):
+def make_archive(path, cards=3, broken_db=False, filler=0):
     with tempfile.TemporaryDirectory() as d:
         db = os.path.join(d, 'claudeclaw.db')
         c = sqlite3.connect(db)
@@ -185,6 +234,11 @@ def make_archive(path, cards=3, broken_db=False):
             with open(secret, 'w') as f:
                 f.write('SECRET_MARKER_4242=do-not-leak\n')
             t.add(secret, arcname='repo/.env')
+            if filler:                                   # incompressible bytes: several upload chunks
+                pad = os.path.join(d, 'filler.bin')
+                with open(pad, 'wb') as f:
+                    f.write(os.urandom(filler))
+                t.add(pad, arcname='repo/store/filler.bin')
 
 
 class Base(unittest.TestCase):
@@ -447,5 +501,61 @@ class TestConsent(Base):
         self.assertIn('not a desktop', r.stderr)
 
 
+class TestResilience(Base):
+    """The first real push (2026-09-28 23:3x) met a network that dropped connections: these pin
+    that a break costs a question and the rest of the file, never a silent success or a 4xx retry."""
+
+    def setUp(self):
+        super().setUp()
+        self.archive = stamped(self.tmp, 4)
+        make_archive(self.archive, filler=40_000)
+        self.env.update(BACKUP_OFFSITE_CHUNK='8192', BACKUP_OFFSITE_BACKOFF='0', BACKUP_OFFSITE_RETRIES='3')
+        self.init()
+
+    def round_trip_ok(self):
+        r = self.run_tool('restore-test')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('byte-identical', r.stdout)
+
+    def test_a_large_archive_goes_in_several_chunks_and_round_trips(self):
+        r = self.run_tool('push', '--archive', self.archive)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertGreater(self.drive.data_puts, 3, 'one PUT for 40 KB at 8 KB chunks: not chunked')
+        self.round_trip_ok()
+
+    def test_a_connection_lost_mid_upload_resumes_whether_the_chunk_landed_or_not(self):
+        for when in ('before', 'after'):
+            with self.subTest(when=when):
+                for f in self.uploaded():             # the backups only: the folder stays
+                    self.drive.files.pop(f['id'])
+                self.drive.drop_puts = {self.drive.data_puts + 2: when}
+                r = self.run_tool('push', '--archive', self.archive)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                [f] = self.uploaded()
+                self.round_trip_ok()
+                self.assertEqual(self.alert_text(), '')
+
+    def test_a_503_on_the_listing_is_retried(self):
+        self.assertEqual(self.run_tool('push', '--archive', self.archive).returncode, 0)
+        self.drive.fail_gets = 2
+        self.round_trip_ok()
+
+    def test_a_4xx_is_an_answer_not_a_blip_one_attempt_and_loud(self):
+        self.drive.session_error = 403
+        r = self.run_tool('push', '--archive', self.archive)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('HTTP 403', self.alert_text())
+        self.assertNotIn('gave up after', self.alert_text())
+        self.assertEqual(self.uploaded(), [])
+
+    def test_breaks_are_bounded_and_loud(self):
+        self.drive.drop_puts = {n: 'before' for n in range(1, 50)}
+        r = self.run_tool('push', '--archive', self.archive)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('upload gave up after', self.alert_text())
+        self.assertEqual(self.uploaded(), [])
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=1)
+

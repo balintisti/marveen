@@ -76,6 +76,16 @@ FOLDER_NAME = 'Marveen mentes'
 APP_TAG = 'marveenBackup'
 DEFAULT_KEEP_DAYS = 14
 HTTP_TIMEOUT = 120
+# RESILIENCE (measured 2026-09-28 23:3x, the first real push): the network to Google dropped
+# connections intermittently -- two 172 MB pushes died with BrokenPipe, a 1 MB probe did too, and
+# minutes later the same calls went through. One PUT of the whole archive restarts from byte 0 on
+# every break, and nothing retried at all. So: the upload goes in CHUNK pieces through the
+# resumable session, a break costs one "how much do you have?" and the rest of the file, and the
+# small calls retry a TRANSIENT failure (no connection, 5xx, 429) a bounded number of times. A real
+# 4xx is never retried: it is an answer, and it stays loud.
+CHUNK = int(os.environ.get('BACKUP_OFFSITE_CHUNK', 8 * 1024 * 1024))    # Drive: a multiple of 256 KiB
+RETRIES = int(os.environ.get('BACKUP_OFFSITE_RETRIES', 5))
+BACKOFF_S = float(os.environ.get('BACKUP_OFFSITE_BACKOFF', 2))
 MAIN_AGENT_ID = os.environ.get('MAIN_AGENT_ID', 'marveen')
 DB_IN_ARCHIVE = 'repo/store/claudeclaw.db'
 # A daily archive older than this means the DAILY BACKUP has stopped (didi 08:08, marveen 08:09).
@@ -88,6 +98,10 @@ STAMP_RE = re.compile(r'claudeclaw-(\d{8}-\d{6})\.tar\.gz$')
 
 class Fail(Exception):
     """A failure with a sentence that names its cause; main() turns it into exit 1 + an alert."""
+
+
+class Transient(Fail):
+    """Worth another try: the connection broke, or Drive answered 5xx / 429."""
 
 
 # ---------------------------------------------------------------- local checks and crypto
@@ -166,21 +180,41 @@ def decrypt(src, dst):
 
 # ---------------------------------------------------------------- Drive over plain HTTP
 
-def http(method, url, token=None, body=None, headers=None, want_json=True):
+def _once(method, url, token=None, body=None, headers=None):
+    """One request, no retry. A 308 is an answer (resumable upload: "resume incomplete")."""
     h = dict(headers or {})
     if token:
         h['Authorization'] = f'Bearer {token}'
     req = urllib.request.Request(url, data=body, method=method, headers=h)
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
-            raw = r.read()
-            return r.status, (json.loads(raw) if want_json and raw else raw), r.headers
+            return r.status, r.read(), r.headers
     except urllib.error.HTTPError as e:
-        detail = e.read()[:300].decode(errors='replace')
-        raise Fail(f'{method} {url.split("?")[0]} -> HTTP {e.code}: {detail}')
+        raw = e.read()
+        if e.code == 308:
+            return 308, raw, e.headers
+        msg = f'{method} {url.split("?")[0]} -> HTTP {e.code}: {raw[:300].decode(errors="replace")}'
+        if e.code >= 500 or e.code == 429:
+            raise Transient(msg)
+        raise Fail(msg)
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         cause = getattr(e, 'reason', e)
-        raise Fail(f'{method} {url.split("?")[0]} did not connect: {type(cause).__name__}: {cause}')
+        raise Transient(f'{method} {url.split("?")[0]} did not connect: {type(cause).__name__}: {cause}')
+
+
+def _pause(attempt):
+    time.sleep(BACKOFF_S * 2 ** attempt)
+
+
+def http(method, url, token=None, body=None, headers=None, want_json=True):
+    for attempt in range(RETRIES + 1):
+        try:
+            status, raw, hdrs = _once(method, url, token, body, headers)
+            return status, (json.loads(raw) if want_json and raw else raw), hdrs
+        except Transient as e:
+            if attempt == RETRIES:
+                raise Fail(f'{e} (gave up after {RETRIES + 1} attempts)')
+            _pause(attempt)
 
 
 def access_token():
@@ -233,8 +267,15 @@ def folder_id(token):
     return made['id']
 
 
+def _received(headers):
+    """How many bytes the session holds, from a 308's Range header ("bytes=0-N"); none = 0."""
+    m = re.match(r'bytes=0-(\d+)$', (headers.get('Range') or '').strip())
+    return int(m.group(1)) + 1 if m else 0
+
+
 def upload(token, parent, path, name, props):
-    """Resumable upload: one session POST, then the bytes in one PUT (the archive is ~90 MB)."""
+    """Resumable upload in CHUNK pieces. After a break it ASKS the session how much arrived (the
+    bytes may or may not have landed before the connection died) and continues from there."""
     meta = {'name': name, 'parents': [parent], 'mimeType': 'application/octet-stream',
             'appProperties': dict(props, **{APP_TAG: '1'})}
     size = os.path.getsize(path)
@@ -246,12 +287,38 @@ def upload(token, parent, path, name, props):
     session = hdr.get('Location')
     if not session:
         raise Fail('the upload session was not opened (no Location header)')
+    offset, breaks, stalls, ask = 0, 0, 0, False
     with open(path, 'rb') as f:
-        _, done, _ = http('PUT', session, token, body=f.read(),
-                          headers={'Content-Type': 'application/octet-stream', 'Content-Length': str(size)})
-    if not isinstance(done, dict) or 'id' not in done:
-        raise Fail('the upload finished without a file id')
-    return done['id']
+        while True:
+            try:
+                if ask or offset >= size:
+                    status, raw, h = _once('PUT', session, token, b'', {'Content-Range': f'bytes */{size}'})
+                else:
+                    f.seek(offset)
+                    chunk = f.read(CHUNK)
+                    status, raw, h = _once('PUT', session, token, chunk,
+                                           {'Content-Type': 'application/octet-stream',
+                                            'Content-Range': f'bytes {offset}-{offset + len(chunk) - 1}/{size}'})
+            except Transient as e:
+                breaks += 1
+                if breaks > RETRIES:
+                    raise Fail(f'{e} (upload gave up after {breaks} breaks, at byte {offset} of {size})')
+                _pause(breaks - 1)
+                ask = True
+                continue
+            ask = False
+            if status in (200, 201):
+                done = json.loads(raw) if raw else {}
+                if 'id' not in done:
+                    raise Fail('the upload finished without a file id')
+                return done['id']
+            if status != 308:
+                raise Fail(f'the upload session answered HTTP {status}')
+            got = _received(h)
+            stalls = stalls + 1 if got <= offset else 0
+            if stalls > RETRIES:
+                raise Fail(f'the upload session stopped taking bytes at {got} of {size}')
+            offset = got
 
 
 def list_backups(token, parent):
