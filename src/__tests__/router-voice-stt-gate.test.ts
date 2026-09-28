@@ -62,6 +62,8 @@ vi.mock('../web/routes/voice.js', () => ({
 }))
 
 vi.mock('../web/agent-config.js', () => ({
+  // merge 88c366f2: the merged code also calls these; neutral here (the file measures something else).
+  listAgentNames: () => [],
   readAgentRemoteHost: () => null,
   readAgentVoiceConfig: () => voiceCfg.current,
   readAgentWorksourceChannel: () => false,

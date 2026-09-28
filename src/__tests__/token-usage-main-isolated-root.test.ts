@@ -42,7 +42,8 @@ vi.mock('../logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
 }))
 
-vi.mock('../web/agent-config.js', () => ({ listAgentNames: () => [] }))
+// merge 88c366f2: token-usage now also walks listAllAgentNames()/agentDir() (our main-discovery path).
+vi.mock('../web/agent-config.js', () => ({ listAgentNames: () => [], listAllAgentNames: () => [], agentDir: (n: string) => `/nonexistent-agents/${n}` }))
 vi.mock('../web/claude-plans.js', () => ({ resolveAgentConfigDirForRead: () => null }))
 
 // The roots come from the one helper the scheduler probe and the channel

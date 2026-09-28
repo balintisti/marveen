@@ -38,6 +38,14 @@ vi.mock('../logger.js', () => ({
 vi.mock('../web/atomic-write.js', () => ({ atomicWriteFileSync: vi.fn() }))
 
 vi.mock('../db.js', () => ({
+  // merge 88c366f2: the merged scheduler also records run completion/delivery and the owner-alert claim; neutral here.
+  markTaskRunCompleted: () => true,
+  setTaskRunDelivery: () => true,
+  getTaskRunStatus: () => null,
+  reconcileOpenTaskRuns: () => 0,
+  getTaskRunMedianDurationMs: () => null,
+  markPendingTaskRetryOwnerAlert: () => true,
+  clearPendingTaskRetryOwnerAlert: () => true,
   appendTaskRun: (...a: unknown[]) => mockAppendTaskRun(...a),
   listPendingTaskRetries: () => mockListPendingRetries(),
   deletePendingTaskRetry: vi.fn(),
@@ -54,6 +62,10 @@ vi.mock('../web/telegram.js', () => ({
 }))
 
 vi.mock('../web/scheduled-tasks-io.js', () => ({
+  MAX_SCHEDULED_TASK_PROMPT_LEN: 50_000,
+  // merge 88c366f2: imported by the merged scheduler (upstream); real value / install default here.
+  SCHEDULED_TASK_INLINE_MAX_CHARS: 1_500,
+  SCHEDULED_TASK_BODY_WARN_CHARS: 20_000,
   listScheduledTasks: () => mockListScheduledTasks(),
   SCHEDULED_TASKS_DIR: '/tmp/marveen-mcp-precheck-no-tasks-dir',
 }))
@@ -66,6 +78,11 @@ const SEP = '─'.repeat(80)
 const HEALTHY_PANE = ['', SEP, '❯ ', SEP, '  ⏵⏵ bypass permissions on (shift+tab to cycle)'].join('\n')
 
 vi.mock('../web/agent-process.js', () => ({
+  // merge 88c366f2: imported by the merged scheduler (upstream); real value / install default here.
+  resolveAgentProvider: () => 'telegram' as const,
+  // merge 88c366f2: the merged code also calls these; neutral here (the file measures something else).
+  clearFeedbackModalAndRecheck: vi.fn(async () => false),
+  saturationRefusesDispatch: () => false,
   agentSessionName: (name: string) => `agent-${name}`,
   isAgentRunning: () => true,
   // Ready, so a non-forceSend task reaches the MCP check instead of stopping at

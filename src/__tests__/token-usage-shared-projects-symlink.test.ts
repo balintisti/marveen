@@ -32,8 +32,11 @@ vi.mock('../logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
 }))
 
+// merge 88c366f2: token-usage now also walks listAllAgentNames()/agentDir() (our main-discovery path).
 vi.mock('../web/agent-config.js', () => ({
   listAgentNames: () => ['alpha', 'beta'],
+  listAllAgentNames: () => ['alpha', 'beta'],
+  agentDir: (name: string) => join(FIXTURE, 'agents', name),
 }))
 
 vi.mock('../web/claude-plans.js', () => ({

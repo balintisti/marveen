@@ -42,6 +42,14 @@ vi.mock('../web/atomic-write.js', () => ({
 }))
 
 vi.mock('../db.js', () => ({
+  // merge 88c366f2: the merged scheduler also records run completion/delivery and the owner-alert claim; neutral here.
+  markTaskRunCompleted: () => true,
+  setTaskRunDelivery: () => true,
+  getTaskRunStatus: () => null,
+  reconcileOpenTaskRuns: () => 0,
+  getTaskRunMedianDurationMs: () => null,
+  markPendingTaskRetryOwnerAlert: () => true,
+  clearPendingTaskRetryOwnerAlert: () => true,
   appendTaskRun: (...a: unknown[]) => mockAppendTaskRun(...a),
   listPendingTaskRetries: () => mockListPendingRetries(),
   deletePendingTaskRetry: vi.fn(),
@@ -61,11 +69,22 @@ vi.mock('../web/telegram.js', () => ({
 }))
 
 vi.mock('../web/scheduled-tasks-io.js', () => ({
+  MAX_SCHEDULED_TASK_PROMPT_LEN: 50_000,
+  // merge 88c366f2: imported by the merged scheduler (upstream); real value / install default here.
+  SCHEDULED_TASK_INLINE_MAX_CHARS: 1_500,
+  SCHEDULED_TASK_BODY_WARN_CHARS: 20_000,
   listScheduledTasks: () => mockListScheduledTasks(),
   SCHEDULED_TASKS_DIR: '/tmp/marveen-force-send-saturation-no-tasks-dir',
 }))
 
-vi.mock('../web/agent-process.js', () => ({
+vi.mock('../web/agent-process.js', async () => {
+  // merge 88c366f2: the scheduler now asks upstream's saturationRefusesDispatch, not
+  // paneShowsContextSaturation directly. Mirrored here with the REAL detector (a trusted banner),
+  // so this file keeps measuring a real saturated capture rather than a stub's answer.
+  const ps = await vi.importActual<typeof import('../pane-state.js')>('../pane-state.js')
+  return {
+  saturationRefusesDispatch: (pane: string) => ps.paneShowsContextSaturation(pane),
+  clearFeedbackModalAndRecheck: vi.fn(async () => false),
   agentSessionName: (name: string) => `agent-${name}`,
   isAgentRunning: () => true,
   // Deliberately NOT ready: forceSend is supposed to bypass the ordinary busy
@@ -77,7 +96,8 @@ vi.mock('../web/agent-process.js', () => ({
   capturePane: () => mockCapturePane(),
   sendEnterToSession: vi.fn(),
   clearStaleParkedInput: vi.fn(() => false),
-}))
+  }
+})
 
 const SEP = '─'.repeat(80)
 

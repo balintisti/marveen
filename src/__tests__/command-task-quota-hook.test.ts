@@ -40,6 +40,14 @@ vi.mock('../logger.js', () => ({
 }))
 
 vi.mock('../db.js', () => ({
+  // merge 88c366f2: the merged scheduler also records run completion/delivery and the owner-alert claim; neutral here.
+  markTaskRunCompleted: () => true,
+  setTaskRunDelivery: () => true,
+  getTaskRunStatus: () => null,
+  reconcileOpenTaskRuns: () => 0,
+  getTaskRunMedianDurationMs: () => null,
+  markPendingTaskRetryOwnerAlert: () => true,
+  clearPendingTaskRetryOwnerAlert: () => true,
   appendTaskRun: (...a: unknown[]) => mockAppendTaskRun(...a),
   createAgentMessage: (...a: unknown[]) => mockCreateAgentMessage(...a),
 }))
@@ -55,6 +63,8 @@ vi.mock('../config.js', () => ({
   STORE_DIR: STORE,
   TELEGRAM_BOT_TOKEN: '',
   MAIN_AGENT_ID: 'marveen',
+  // merge 88c366f2: command-task now resolves script paths against PROJECT_ROOT (upstream).
+  PROJECT_ROOT: STORE,
 }))
 
 const { runCommandTask } = await import('../web/command-task.js')

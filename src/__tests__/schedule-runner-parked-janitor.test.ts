@@ -45,6 +45,14 @@ vi.mock('../web/atomic-write.js', () => ({
 }))
 
 vi.mock('../db.js', () => ({
+  // merge 88c366f2: the merged scheduler also records run completion/delivery and the owner-alert claim; neutral here.
+  markTaskRunCompleted: () => true,
+  setTaskRunDelivery: () => true,
+  getTaskRunStatus: () => null,
+  reconcileOpenTaskRuns: () => 0,
+  getTaskRunMedianDurationMs: () => null,
+  markPendingTaskRetryOwnerAlert: () => true,
+  clearPendingTaskRetryOwnerAlert: () => true,
   appendTaskRun: vi.fn(),
   listPendingTaskRetries: () => mockListPendingRetries(),
   deletePendingTaskRetry: (...a: unknown[]) => mockDeletePendingRetry(...a),
@@ -84,6 +92,10 @@ vi.mock('../web/scheduled-tasks-io.js', () => ({
 }))
 
 vi.mock('../web/agent-process.js', () => ({
+  // merge 88c366f2: imported by the merged scheduler (upstream); real value / install default here.
+  resolveAgentProvider: () => 'telegram' as const,
+  // merge 88c366f2: the merged code also calls these; neutral here (the file measures something else).
+  saturationRefusesDispatch: () => false,
   // The not-ready-path modal clear: false = no modal, so every caller keeps
   // its existing skip/busy behaviour and these fixtures are unaffected.
   clearFeedbackModalAndRecheck: () => false,
