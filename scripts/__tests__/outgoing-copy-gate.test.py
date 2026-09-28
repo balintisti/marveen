@@ -204,6 +204,21 @@ def main():
         check("double-hyphen still blocks (exit 2)", code, 2)
         check_true("double-hyphen: stderr names it", "DUPLA KOTOJEL" in err, err)
 
+        # 5c2. CLI flags are not a dash (card 3973a0c7, marveen measured 2026-09-27): strip_technical
+        # cut the word AFTER "--" (the hyphenated-id branch starts at the letter), left the "--"
+        # between spaces, and a command sent to the owner on Telegram was refused for 3 " -- ".
+        cmd = ("python3 scripts/ops/rotate-db-url-password.py --env-file /Users/isti/x/.env "
+               "--gcp-project delta-crm-483922 --github-repo balintisti/Delta-CRM")
+        for label, text in (("the measured command", f"{CLEAN_HU_OK} Futtasd ezt: {cmd}"),
+                            ("--flag=value", f"{CLEAN_HU_OK} Futtasd ezt: npx vitest run --reporter=json --outputFile=ki.json")):
+            code, out, err = run_hook(telegram_payload(text), rules_file=active)
+            check(f"flags, {label}: telegram passes (exit 0)", code, 0)
+            check_true(f"flags, {label}: no double-hyphen finding", "DUPLA KOTOJEL" not in err, err)
+        # ...and the rule still sees real prose next to a command: exactly the one prose dash counts
+        code, out, err = run_hook(telegram_payload(f"{CLEAN_HU_OK} Rendben -- futtasd ezt: {cmd}"), rules_file=active)
+        check("flags + one prose ' -- ': telegram blocks (exit 2)", code, 2)
+        check_true("flags + one prose ' -- ': counted once, not four times", "DUPLA KOTOJEL gondolatjel-potlokent 1 helyen" in err, err)
+
         # 5d. mixed-script (Cyrillic homoglyph 'о' U+043E inside a Latin word)
         homoglyph_word = "kоszonom"  # koszonom with a Cyrillic 'o'
         code, out, err = run_hook(

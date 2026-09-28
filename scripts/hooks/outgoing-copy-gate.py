@@ -1203,7 +1203,11 @@ def _hit_context(prose: str, pos: int, length: int) -> str:
 # A KET MASZK EGY FORRASBOL EPUL, hogy ne drifteljenek szet: ha valaki uj
 # technikai regiot vesz fel, a _TECH_COMMON-ba irva MINDKET ellenorzes latja.
 _TECH_COMMON = r"""
-        https?://\S+                # URL
+        (?<![\w-])--[A-Za-z][\w-]*(?:=\S*)?   # CLI kapcsolo (--env-file, --x=y), a KET KOTOJELLEL
+                                    # EGYUTT: kulonben a kotojeles-azonosito ag a betutol vag, es
+                                    # a "--" arvan marad szokozok kozott -> hamis DUPLA KOTOJEL
+                                    # (card 3973a0c7). Prozai " -- " utan szokoz all, nem betu.
+      | https?://\S+                # URL
       | [\w.+-]+@[\w-]+\.[\w.]+     # email
       | `[^`]*`                     # kod-span
       | \b\w+(?:_\w+)+\b            # snake_case azonosito
