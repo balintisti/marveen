@@ -24,10 +24,19 @@ function listOf(name: string): string[] {
 
 const SAFE = listOf('SAFE_INSTALLERS')
 const UNSAFE = listOf('KNOWN_UNSAFE_INSTALLERS')
-// The same selection laneD() makes.
-const PRESENT = readdirSync(join(ROOT, 'scripts')).filter((f) => /^install-.*hook.*\.sh$/.test(f)).sort()
+// The SAME selection laneD() makes -- read from the tool's source, not copied (didi, card 4a5a4aae):
+// a copy here would keep passing while the tool's own filter drifted away from it.
+const FILTER_SRC = SRC.match(/const present = readdirSync\([^\n]*\.filter\(\(f\) => (\/[^\n]+?\/)\.test\(f\)\)/)
+if (!FILTER_SRC) throw new Error('laneD installer filter not found in installed-drift-check.ts')
+const FILTER = new RegExp(FILTER_SRC[1].slice(1, -1))
+const PRESENT = readdirSync(join(ROOT, 'scripts')).filter((f) => FILTER.test(f)).sort()
 
 describe('installed-drift installer classification', () => {
+  it('the filter really is the tool\'s (a control that it was found and means what laneD means)', () => {
+    expect(FILTER.test('install-git-guard-hook.sh')).toBe(true)
+    expect(FILTER.test('install-launchd-unit.sh')).toBe(false)
+  })
+
   it('CONTROL: both lists and the directory were read (else "all classified" proves nothing)', () => {
     expect(SAFE.length).toBeGreaterThan(0)
     expect(UNSAFE.length).toBeGreaterThan(0)

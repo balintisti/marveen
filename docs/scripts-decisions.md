@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **412** kovetett fajl, ebbol
-**123** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **414** kovetett fajl, ebbol
+**124** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -338,6 +338,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/install-slack-progress-hook.sh`
 
 - Why not Slack's "typing…" indicator: the classic RTM `type: typing` frame
+
+### `scripts/installed-drift-daily.sh`
+
+- WHY: nothing ran the meter. After the upstream merge it stood at "NEM MERHETO" (an unclassified
 
 ### `scripts/kanban-project-classify.py`
 

@@ -127,3 +127,18 @@ export function throwawayLeak(normalized: string, throwawayMarker: string): stri
   const line = normalized.split('\n').find((l) => l.includes(throwawayMarker)) ?? '';
   return `a throwaway path survived normalization: ${line.trim().slice(0, 120)}`;
 }
+
+/**
+ * WHICH INSTALLER A HOOK INSTALLER HANDS OVER TO, if any (card 4a5a4aae).
+ *
+ * install-git-guard-hook.sh does `exec bash "$ROOT/scripts/install-no-force-push-hook.sh"` when
+ * that file is present (card 61648d4b: one writer per hook file). Run alone in a throwaway repo it
+ * found no target and wrote its own 23-line fallback body -- so the drift check compared a body the
+ * real install never produces, and reported the live 66-line guard as "VEGYES" drift. The hand-over
+ * is read from the installer's own text: a hand-written map would go stale the day a second one
+ * appears.
+ */
+export function delegationTarget(installerSource: string): string | null {
+  const m = /^\s*exec\s+bash\s+"\$ROOT\/scripts\/(install-[\w.-]+\.sh)"/m.exec(installerSource);
+  return m ? m[1] : null;
+}

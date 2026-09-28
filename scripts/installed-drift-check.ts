@@ -24,7 +24,7 @@ import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import {
   classifyDirection, resolveWithHistory, sameAsInstaller,
-  unresolvedPlaceholders, normalizeGenerated, throwawayLeak,
+  unresolvedPlaceholders, normalizeGenerated, throwawayLeak, delegationTarget,
   type Direction,
 } from '../src/installed-drift.js';
 
@@ -45,7 +45,10 @@ import {
  * `SOURCE_ROOT/.git/hooks` does not even exist. Both facts point the same way --
  * the hooks anchor is the git COMMON dir, never the local tree.
  */
-const SOURCE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+// INSTALLED_DRIFT_SOURCE_ROOT is a TEST SEAM (card 4a5a4aae), like LAUNCH_AGENTS_DIR below: the stop
+// reasons live in this file's control flow, and only a tree the test builds can make each one fire.
+// The tool writes nothing, so pointing it elsewhere can only change what it READS.
+const SOURCE_ROOT = process.env.INSTALLED_DRIFT_SOURCE_ROOT ?? join(dirname(fileURLToPath(import.meta.url)), '..');
 const HOME = homedir();
 
 let GIT_COMMON: string;
@@ -214,6 +217,16 @@ function laneD(): void {
     let i = 0;
     for (const inst of SAFE_INSTALLERS) {
       if (!existsSync(join(SOURCE_ROOT, 'scripts', inst))) { stopped ??= `hianyzik a nevesitett installer: ${inst}`; return; }
+      // A HAND-OVER IS THE TARGET'S RUN (card 4a5a4aae). An installer that execs another listed
+      // installer when it is present does exactly what that one does on the real install -- and run
+      // here ALONE it would find no target and generate a fallback the install never has, then
+      // report the live file as drift against it (pre-push.d/10-no-force-push-protected, measured
+      // 2026-09-28). The target is measured in its own repo below; this one is only noted.
+      const target = delegationTarget(readFileSync(join(SOURCE_ROOT, 'scripts', inst), 'utf-8'));
+      if (target && (SAFE_INSTALLERS as readonly string[]).includes(target) && existsSync(join(SOURCE_ROOT, 'scripts', target))) {
+        findings.push({ lane: 'D hook', name: inst, text: `a(z) ${target}-re delegal -- azt a sajat futasa meri, ezt nem futtatom kulon`, drift: false });
+        continue;
+      }
       // Each installer gets its OWN fresh repo: run into one repo they mask each
       // other (git-guard installs the same pre-push chain no-force-push owns).
       const repo = join(tmpRoot, `repo${++i}`);

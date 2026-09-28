@@ -11,6 +11,8 @@
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>QUOTA_CEILING_SOFT</key><string>95</string>
+    <key>QUOTA_CEILING_HARD</key><string>97</string>
   </dict>
   <key>StartInterval</key><integer>600</integer>
   <key>RunAtLoad</key><true/>
