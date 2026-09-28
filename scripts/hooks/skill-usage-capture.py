@@ -61,15 +61,27 @@ def _dashboard_token() -> str:
         return ""
 
 
-# Kept as a module-level name so callers and tests address ONE symbol; the
-# implementation is the shared resolver, not a local copy.
+# Kept as a module-level alias for the tests (they pin that this file has no
+# private copy of the resolver); the hook itself resolves from the PAYLOAD
+# (transcript-anchored, LEDGERCWD828), not from this cwd-only fallback.
 _agent_id_from_cwd = ledger_lib.agent_id_from_cwd
 
 
-# ~/.claude/skills/<name>/SKILL.md  (expand ~ for the running user)
-_SKILL_MD_RE = re.compile(
-    r"^" + re.escape(os.path.expanduser("~")) + r"/\.claude/skills/([^/]+)/SKILL\.md$"
-)
+# <barhol>/.claude/skills/<name>/SKILL.md
+#
+# 2026-09-14: a minta KORABBAN csak a futo
+# felhasznalo HOME-ja ala illeszkedett (`~/.claude/skills/...`). Emiatt a
+# PROJEKT-SZINTU skillek (pl. <install>/.claude/skills/<nev>/SKILL.md) olvasasa
+# SOHA nem keletkeztetett skill_usage sort -- a dream-engine 5. bucketje pedig
+# epp az "utolso hasznalat" alapjan javasolna avult skilleket, tehat vakon futott.
+# Merve 2026-09-14: 71 telepitett skillhez OSSZESEN 4 usage-sor tartozott, es
+# mind a negy `tool_call` volt, egyetlen `skill_read` sem.
+#
+# MEGMARADO KORLAT, szandekosan kimondva: ez a hook csak a Read TOOL-t latja.
+# Ha egy SKILL.md-t Bash-bol olvasnak (cat/sed/grep/python), az NEM keletkeztet
+# sort. A statisztika ezert MINDIG ALULMER -- a "0 hasznalat" sosem bizonyitja,
+# hogy a skill halott. Ezt a dream-engine bucket-5 ertelmezesenel figyelembe kell venni.
+_SKILL_MD_RE = re.compile(r"(?:^|/)\.claude/skills/([^/]+)/SKILL\.md$")
 
 
 def _classify(tool_name: str, tool_input: dict) -> tuple[str, str] | None:
@@ -80,7 +92,10 @@ def _classify(tool_name: str, tool_input: dict) -> tuple[str, str] | None:
             return skill, "tool_call"
     elif tool_name == "Read":
         path = (tool_input.get("file_path") or "").strip()
-        m = _SKILL_MD_RE.match(path)
+        # search(), NEM match(): a minta mostantol a path BARMELY pontjan illeszkedhet
+        # (projekt-szintu skillek utja nem a home-mal kezdodik). A match() a 0. poziciohoz
+        # kotne, es epp a projekt-szintu eseteket dobna el -- azt, amiert a mintat bovitettuk.
+        m = _SKILL_MD_RE.search(path)
         if m:
             return m.group(1), "skill_read"
     return None
@@ -102,7 +117,7 @@ def main() -> None:
         sys.exit(0)
 
     skill_name, trigger_type = result
-    agent_id = _agent_id_from_cwd(cwd)
+    agent_id = ledger_lib.agent_id_from_payload(payload)
 
     token = _dashboard_token()
     if not token:

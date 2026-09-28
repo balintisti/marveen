@@ -151,15 +151,16 @@ fi
 # Ez az assert a `skip ha assignee='testbot'` MONDATOT kereste -- megint RECEPT-SZOVEGET,
 # pontosan azt, amit a fenti komment tilt. A `213f8ad` (2026-08-23, "ship the kanban-audit
 # RULES, not the instance data") SZANDEKOSAN vette ki a nev-alapu megfogalmazast: a szabaly
-# a feladat FUTTATOJARA vonatkozik, nem egy nevre. Az assert tehat 18 NAPJA piros MINDEN
-# fan, es senki nem latta, mert ezt a fajlt semmi nem futtatja.
+# a feladat FUTTATOJARA vonatkozik, nem egy nevre. (Upstream ugyanezt talalta, 827491c.)
 #
 # ES A DISZKRIMINACIO ITT NEM TRIVIALIS: az INSTALL_DIR erteke `/opt/testbot`, tehat egy
 # csupasz `testbot` grep AKKOR IS atmenne, ha a `{{MAIN_AGENT_ID}}`-t SOHA nem helyettesitenenk
 # be -- a fenti INSTALL_DIR-assert masodpeldanya lenne. Ezert az install-utat elobb
-# kimaszkoljuk, es csak utana keressuk az agens-azonositot.
-if sed 's|/opt/testbot|<INSTALLDIR>|g' "$SCHED_TARGET/kanban-audit/SKILL.md" | grep -q 'testbot'; then
-  pass "MAIN_AGENT_ID substituted in SKILL.md (az INSTALL_DIR-tol fuggetlenul)"
+# kimaszkoljuk, es csak utana keressuk az agens-azonositot. Upstream masik fele is all:
+# nyers `{{MAIN_AGENT_ID}}` placeholder nem maradhat a fajlban.
+if sed 's|/opt/testbot|<INSTALLDIR>|g' "$SCHED_TARGET/kanban-audit/SKILL.md" | grep -q 'testbot' \
+   && ! grep -q '{{MAIN_AGENT_ID}}' "$SCHED_TARGET/kanban-audit/SKILL.md"; then
+  pass "MAIN_AGENT_ID substituted in SKILL.md (az INSTALL_DIR-tol fuggetlenul, placeholder nelkul)"
 else
   fail "MAIN_AGENT_ID NOT substituted in SKILL.md"
 fi

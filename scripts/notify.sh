@@ -12,7 +12,6 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 
 TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' "$ENV_FILE" | cut -d= -f2-)
-CHAT_ID=$(grep '^ALLOWED_CHAT_ID=' "$ENV_FILE" | cut -d= -f2-)
 MAIN_AGENT_ID=$(grep '^MAIN_AGENT_ID=' "$ENV_FILE" | head -1 | cut -d= -f2-)
 MAIN_AGENT_ID="${MAIN_AGENT_ID:-marveen}"
 
@@ -21,8 +20,20 @@ if [ -z "$TOKEN" ]; then
   exit 1
 fi
 
-if [ -z "$CHAT_ID" ]; then
-  echo "Hiba: ALLOWED_CHAT_ID nincs beallitva"
+# CHATID0: resolve_owner_chat_id, not a raw ALLOWED_CHAT_ID read -- "0" is the
+# installer placeholder, not a chat, and neither empty nor falsy. Without this
+# the FALLBACK channel fails exactly where it is needed most -- it fires when
+# the plugin is down, and on a placeholder install it would post to chat_id=0.
+# The access.json fallback still applies here: a paired channel survives even
+# while the plugin process itself is down, because it reads the same file the
+# plugin wrote, not the plugin's live state. It is the MAIN install's file
+# even when a sub-agent runs this script with its own TELEGRAM_STATE_DIR
+# (the lib ignores that variable), and only a single paired DM entry counts.
+. "$SCRIPT_DIR/lib/owner-chat.sh"
+# The resolver's reason line goes to stderr as is (not captured: any stderr
+# noise on the success path would otherwise become part of the chat id).
+if ! CHAT_ID="$(resolve_owner_chat_id "$ENV_FILE")"; then
+  echo "Hiba: ALLOWED_CHAT_ID nincs beallitva (az ok a fenti sorban)"
   exit 1
 fi
 
@@ -55,8 +66,11 @@ SENDER=""
 # A `session_activity` tehat NEM az agens munkajat meri, hanem egy tmux-belso rendezest, ami
 # akar fel napos is lehet. A prefix egy VELETLENSZERU nevet allitott, nem a legaktivabbat.
 # A javitas: csak akkor kerdezzuk a tmux-ot, ha tenylegesen egy tmux-panelbol futunk.
+# (Upstream 2adfa6cb ugyanezt javitotta, ugyanigy: no pane -> no claim about the sender.)
 SESS=""
-[ -n "${TMUX:-}" ] && SESS=$(tmux display-message -p '#S' 2>/dev/null)
+if [ -n "${TMUX:-}" ]; then
+  SESS=$(tmux display-message -p '#S' 2>/dev/null)
+fi
 case "$SESS" in
   agent-*)
     SENDER="${SESS#agent-}"
@@ -100,21 +114,32 @@ fi
 # It matters more than it looks because this script is now called from the BACKUP
 # FAILURE path -- an unbounded outbound call inside a failure handler turns one slow
 # network into a hung scheduled job. Five other scripts here already bound their curls.
-RESPONSE=$(curl -s --connect-timeout 10 --max-time 20 -w '\n%{http_code}' -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+#
+# UPSTREAM (NOTIFYVAK826 / NOTIFYVAKSWEEP826) moved the same contract into
+# scripts/lib/send-telegram.sh. It is NOT used here, on purpose (merge 88c366f2):
+# the library answers only yes/no, while this script needs the response BODY --
+# the Telegram message_id goes into the ledger below (card 44730c4c) -- and checks
+# the HTTP code as well as `ok`. What the library adds is kept inline: the curl
+# exit code is reported by number, curl's own error text reaches stderr, and the
+# bot token is redacted from anything echoed (some curl errors quote the URL).
+RESPONSE=$(curl -sS --connect-timeout 10 --max-time 20 -w '\n%{http_code}' -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
   --data-urlencode "chat_id=${CHAT_ID}" \
   --data-urlencode "text=${MESSAGE}" \
-  -d "parse_mode=HTML")
+  -d "parse_mode=HTML" 2>&1)
+CURL_EXIT=$?
+# Never let the token reach a log/journal: redact before any echo.
+RESPONSE="${RESPONSE//${TOKEN}/<token>}"
 
 HTTP_CODE=$(printf '%s' "$RESPONSE" | tail -n1)
 BODY=$(printf '%s' "$RESPONSE" | sed '$d')
 
-# `"ok":true` a torzsben ES 200-as kod -- mindketto kell.
+# `"ok":true` a torzsben ES 200-as kod ES curl exit 0 -- mindharom kell.
 case "$BODY" in
   *'"ok":true'*) OK_FIELD=1 ;;
   *) OK_FIELD=0 ;;
 esac
 
-if [ "$HTTP_CODE" = "200" ] && [ "$OK_FIELD" = "1" ]; then
+if [ "$CURL_EXIT" -eq 0 ] && [ "$HTTP_CODE" = "200" ] && [ "$OK_FIELD" = "1" ]; then
   echo "Ertesites elkuldve."
   # A LEDGERBE IS BE KELL KERULNIE (kartya 44730c4c). Ez a szkript a TARTALEK ut: akkor fut,
   # amikor az MCP `reply` tool nincs meg -- vagyis pont akkor, amikor a rendszer mar serult.
@@ -146,8 +171,13 @@ ledger_lib.log_outbound(
     int(mid) if mid and mid.isdigit() else None,
 )
 PYLEDGER
+elif [ "$CURL_EXIT" -ne 0 ]; then
+  echo "HIBA: az ertesites NEM ment el: transport failure (curl exit ${CURL_EXIT}): ${RESPONSE}" >&2
+  exit 1
 else
-  DESC=$(printf '%s' "$BODY" | sed -n 's/.*"description":"\([^"]*\)".*/\1/p')
+  # The reason is read from the WHOLE response, not just BODY: diagnostics only,
+  # the success test above stays strict.
+  DESC=$(printf '%s' "$RESPONSE" | sed -n 's/.*"description":"\([^"]*\)".*/\1/p' | head -1)
   echo "HIBA: az ertesites NEM ment el. HTTP=${HTTP_CODE} chat_id=${CHAT_ID} ok=${OK_FIELD}${DESC:+ -- $DESC}" >&2
   exit 1
 fi

@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS conversation_log (
   created_at INTEGER NOT NULL,
   attachment_kind TEXT,
   attachment_file_id TEXT,
+  reply_to_message_id TEXT,
   UNIQUE(agent_id, chat_id, direction, message_id)
 )
 """
@@ -41,6 +42,7 @@ INDEX = "CREATE INDEX IF NOT EXISTS idx_convlog_agent ON conversation_log(agent_
 _MIGRATION_COLUMNS = (
     ("attachment_kind", "TEXT"),
     ("attachment_file_id", "TEXT"),
+    ("reply_to_message_id", "TEXT"),
 )
 
 RECENT_LIMIT = 20
@@ -109,6 +111,9 @@ def owner_name():
 # THIS IS A CHAIN, NOT A REPLACEMENT: step 3 is our existing agent_id_from_cwd below, so a
 # caller that has no transcript_path and no env override behaves exactly as it does today.
 # That is why it cannot be a downgrade for the nine hooks already on the cwd resolver.
+# (Since the 88c366f2 upstream merge step 3 itself changed: a cwd OUTSIDE the install no
+# longer yields its basename but MARVEEN_AGENT_ID or the main agent -- upstream #1057, pinned
+# by scripts/__tests__/ledger-agent-id.test.py. "Exactly as today" means as of that merge.)
 #
 # MEASURED HERE BEFORE ADOPTING (2026-09-03): conversation_log holds 1125 rows and EVERY
 # one is under `marveen` -- no directory names, no foreign agent names. So this is
@@ -215,10 +220,12 @@ def _agent_id_from_project_segment(path, install):
 
 
 def agent_id_from_cwd(cwd):
-    """Which channel agent is this session? Derived from cwd so the hooks are
-    generic across all three agents and never cross-contaminate:
-      <install>/agents/<id>  -> <id>           (sub-agent: dia, erno-ba, ...)
-      <install>               -> MAIN_AGENT_ID  (the main channels agent)
+    """Which channel agent is this session? Derived from cwd. LAST-RESORT ONLY:
+    the cwd changes within a session (a `cd` into agents/<x>/ re-attributes
+    every later row), so payload-carrying hooks must call agent_id_from_payload
+    instead -- its docstring carries the measured incident (LEDGERCWD828).
+      <install>/agents/<id>[/...]  -> <id>           (a sub-agent)
+      anywhere else in the tree    -> MAIN_AGENT_ID   (the main channels agent)
     """
     cwd = (cwd or "").rstrip("/")
     install = _install_dir().rstrip("/")
@@ -234,9 +241,13 @@ def agent_id_from_cwd(cwd):
         # identities and makes the reply guard block on a question it has
         # already answered, because it finds no outbound under the real id.
         return main_agent_id()
-    # Fallback: last path component (best effort), else main.
-    base = os.path.basename(cwd)
-    return base or main_agent_id()
+    # Outside the install tree: never invent an agent id from the directory name.
+    # The launcher can name the session explicitly via MARVEEN_AGENT_ID; failing
+    # that, attribute to the main agent rather than a bogus basename.
+    env_id = os.environ.get("MARVEEN_AGENT_ID", "").strip()
+    if env_id:
+        return env_id
+    return main_agent_id()
 
 
 def connect():
@@ -252,21 +263,28 @@ def connect():
 
 
 def log_inbound(agent_id, chat_id, message_id, text, ts,
-                attachment_kind=None, attachment_file_id=None):
+                attachment_kind=None, attachment_file_id=None,
+                reply_to_message_id=None):
     """Record an inbound user message. Idempotent on (agent_id, chat_id, in, message_id).
 
     attachment_kind/file_id: set for voice / video_note messages that arrived
     WITHOUT a transcript, so a respawned session can still download and
-    transcribe the audio instead of losing the message content forever."""
+    transcribe the audio instead of losing the message content forever.
+
+    reply_to_message_id: the message_id this inbound quoted (Telegram
+    ctx.message.reply_to_message), when the sender replied to a specific
+    earlier message instead of writing standalone. Only the id is kept, not an
+    excerpt -- the quoted text is a copy of that other row's own `text` and is
+    already recoverable via a lookup on message_id (df3b48a7)."""
     con = connect()
     try:
         con.execute(
             "INSERT OR IGNORE INTO conversation_log"
             " (agent_id, chat_id, direction, message_id, text, ts, created_at,"
-            "  attachment_kind, attachment_file_id)"
-            " VALUES (?, ?, 'in', ?, ?, ?, ?, ?, ?)",
+            "  attachment_kind, attachment_file_id, reply_to_message_id)"
+            " VALUES (?, ?, 'in', ?, ?, ?, ?, ?, ?, ?)",
             (str(agent_id), str(chat_id), str(message_id), text, ts, int(time.time()),
-             attachment_kind, attachment_file_id),
+             attachment_kind, attachment_file_id, reply_to_message_id),
         )
         con.commit()
     finally:

@@ -1,7 +1,7 @@
 import type { Reporter } from 'vitest/reporters'
-import type { File, Task } from 'vitest'
+import type { TestModule } from 'vitest/node'
 import { writeFileSync } from 'node:fs'
-import { countTests } from './suite-size-guard.js'
+import { countTests, toTaskTree } from './suite-size-guard.js'
 
 /**
  * Riporter, ami a lefutott fajl- es teszt-szamot egy fajlba irja.
@@ -15,12 +15,15 @@ import { countTests } from './suite-size-guard.js'
  * az a fajta elcsuszas, ami ellen az egesz kartya szol.
  */
 export default class BaselineEmit implements Reporter {
-  onFinished(files?: File[]): void {
+  // vitest 4: onTestRunEnd, not onFinished (which is gone and would never fire) -- see
+  // suite-size-guard.ts. Same counter, same tree shape, via toTaskTree.
+  onTestRunEnd(testModules: ReadonlyArray<TestModule>): void {
     const out = process.env['SUITE_BASELINE_EMIT']
-    if (!out || !files) return
+    if (!out) return
+    const files = testModules.map(toTaskTree)
     writeFileSync(out, JSON.stringify({
       files: files.length,
-      tests: countTests(files as unknown as Task[]),
+      tests: countTests(files),
     }))
   }
 }

@@ -21,6 +21,8 @@ const mkTmp = tmpDirs()
 // cimzettel, mert a cimzettet SEMMI nem ellenorizte -- vagyis a REGI vilagot rogzitette,
 // mellekesen. A SZANDEKA valtozatlan (a kettospont-kapu ne vegye el a normal lokalis
 // cimzettet), es most is pontosan azt meri; csak a vilag lett szigorubb.
+// Upstream's reason for the same line: 'localmate' is a registered local
+// recipient (UNKNOWNTO924 rejects an unregistered one with 400).
 const FIXTURE_AGENTS = ['localboss', 'localmate']
 
 const TMP = mkTmp('fed-feedback-test-')

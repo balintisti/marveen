@@ -67,6 +67,12 @@ export function normalizeModelFallbackConfig(raw: unknown): ModelFallbackConfig 
 // Re-export deliberately NOT added: one symbol reachable from two places would
 // leave the next reader finding a pane predicate under `model-fallback`, which is
 // the exact mis-shelving the move exists to end.
+//
+// UPSTREAM WIDENED THE REGEX while it still lived here (aa06cc99, #1080): "reached
+// your weekly limit", "Approaching Opus weekly limit", "Session limit reached". That
+// widening belongs to pane-state.ts's USAGE_LIMIT_RX now (merge 88c366f2), and
+// src/__tests__/model-fallback.test.ts -- which imports the predicate from
+// ../pane-state.js -- asserts those wordings.
 
 /**
  * The next model one step down the chain from `current`, or null if already at

@@ -27,6 +27,10 @@ describe('checkUpdatePreflight -- a "nem merheto" nem nulla', () => {
     currentBranch: () => 'main',
     porcelainStatus: () => '',
     aheadCount: () => ahead,
+    // Upstream widened GitRunner (merge 88c366f2). Neutral values: nothing behind and the branch
+    // exists, so every case below still measures ONLY the ahead axis it was written for.
+    behindCount: () => 0,
+    originHasBranch: () => 'yes',
   })
 
   it('NEM MERHETO (null) -> elutasit, sajat okkal', () => {

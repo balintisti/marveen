@@ -12,9 +12,10 @@ import { sweepExpiredDeviceKeys } from './web/auth-device-keys.js'
 import { isBlockedCrossOriginWrite, originMatchesServedHost } from './web/csrf-origin.js'
 import { json } from './web/http-helpers.js'
 import { detectLanIp } from './web/network-info.js'
-import { AGENTS_BASE_DIR, listAgentNames } from './web/agent-config.js'
-import { ensureAgentHooks, ensureAgentStalenessHook, ensureEgressGate, ensureGovernanceGateCommands, ensureMemoryIndexWriteGate, ensureTelegramCopyGate, ensureQuarantineReader, ensureDefaultScheduledTasks, agentSettingsPath, ensureAutonomySection, ensureSkillsPathTrapSection } from './web/agent-scaffold.js'
+import { AGENTS_BASE_DIR, listAgentNames, listAllAgentNames } from './web/agent-config.js'
+import { ensureAgentHooks, ensureProjectRootInClaudeMd, ensureAgentStalenessHook, ensureAgentProvenanceHook, ensureEgressGate, ensureBashEgressDeny, ensureBashEgressParser, ensureGovernanceGateCommands, ensureMemoryIndexWriteGate, ensureTelegramCopyGate, ensureQuarantineReader, watchEgressAllowlistForReaderRender, ensureDefaultScheduledTasks, agentSettingsPath, ensureAutonomySection, ensureSkillsPathTrapSection, ensureSystemDirectiveAuthSection, ensureMemorySearchLabelSection, ensureFleetAuthSection, ensureEvidenceSection, ensureMcpListChannelSection, ensureMessageCloseSection } from './web/agent-scaffold.js'
 import { shouldRegisterHooks, pruneStaleHooksFromSettingsFile } from './web/hook-registration-guard.js'
+import { mainAgentConfigDirIfSeparate } from './web/agent-process.js'
 import { refreshMarveenBotUsername } from './web/telegram.js'
 import { startMessageRouter } from './web/message-router.js'
 import { startUpdateChecker } from './web/update-checker.js'
@@ -22,7 +23,9 @@ import { startScheduleRunner } from './web/schedule-runner.js'
 import { startChannelPluginMonitor } from './web/channel-monitor.js'
 import { startInboundProber } from './web/inbound-probe.js'
 import { startChannelHealthMonitor } from './web/channel-health-monitor.js'
+import { startChannelIntakeMonitor } from './web/channel-intake-monitor.js'
 import { startStuckInputWatcher } from './web/stuck-input-watcher.js'
+import { startMidTurnCommandWatcher } from './web/midturn-commands.js'
 import { startInboxNudgeWatcher } from './web/inbox-nudge-watcher.js'
 import { startIdleAgentWatcher } from './web/idle-agent-watcher.js'
 import { startUptimeAlertWatcher } from './web/uptime-alert-watcher.js'
@@ -31,8 +34,9 @@ import { startStuckToolCallWatcher } from './web/stuck-tool-call-watcher.js'
 import { startReauthHealer } from './web/reauth-healer.js'
 import { startAutoRestartRunner } from './web/auto-restart-runner.js'
 import { startModelFallbackRunner } from './web/model-fallback-runner.js'
+import { startKanbanArchiveRunner } from './web/kanban-archive-runner.js'
 import { startContextGuardRunner } from './web/context-guard-runner.js'
-import { startContextRestartGateRunner } from './web/context-restart-gate-runner.js'
+import { startContextRestartGateRunner, setMainSweepHook } from './web/context-restart-gate-runner.js'
 import { collectTokenUsage } from './web/token-usage.js'
 import { logger } from './logger.js'
 import { tryHandleAuth } from './web/routes/auth.js'
@@ -42,6 +46,12 @@ import { tryHandleProfiles } from './web/routes/profiles.js'
 import { tryHandleMessages } from './web/routes/messages.js'
 import { tryHandleFederation } from './web/routes/federation.js'
 import { startFederationPoller } from './web/federation/poller.js'
+import { registerBuiltinCommands } from './web/builtin-commands.js'
+import { tryHandleCommands } from './web/routes/commands.js'
+import { initCustomCommands } from './web/custom-commands.js'
+import { sweepModelHold, armHoldExpiryFromFile } from './web/main-model.js'
+import { runPendingWrite } from './web/pending-write.js'
+import { tryHandleCustomCommands } from './web/routes/custom-commands.js'
 import { startCapabilitySummaryRunner } from './web/federation/capability-runner.js'
 import { ensureFederationClaudeMdSection } from './web/federation/onboarding.js'
 import { tryHandleAgentTerminal } from './web/routes/agent-terminal.js'
@@ -49,9 +59,12 @@ import { tryHandleAgentConversation } from './web/routes/agent-conversation.js'
 import { tryHandleAgentTaskState } from './web/routes/agent-taskstate.js'
 import { sweepOrphanTaskStates } from './web/agent-taskstate.js'
 import { tryHandleDailyLog } from './web/routes/daily-log.js'
+import { tryHandlePrLedger } from './web/routes/pr-ledger.js'
+import { tryHandleHomoglyphs } from './web/routes/homoglyphs.js'
 import { tryHandleMemories } from './web/routes/memories.js'
 import { tryHandleMigrate } from './web/routes/migrate.js'
 import { tryHandleKanban } from './web/routes/kanban.js'
+import { tryHandleHeartbeat } from './web/routes/heartbeat.js'
 import { tryHandleSchedules } from './web/routes/schedules.js'
 import { tryHandleConnectors } from './web/routes/connectors.js'
 import { tryHandleDocs } from './web/routes/docs.js'
@@ -60,6 +73,7 @@ import { tryHandleConnectorsHu } from './web/routes/connectors-hu.js'
 import { tryHandleAgentsSkills } from './web/routes/agents-skills.js'
 import { tryHandleSkills } from './web/routes/skills.js'
 import { tryHandleAgents } from './web/routes/agents.js'
+import { tryHandleClaudePlans } from './web/routes/claude-plans.js'
 import { tryHandleMarveen } from './web/routes/marveen.js'
 import { tryHandleRecall } from './web/routes/recall.js'
 import { tryHandleBackgroundTasks, sweepOrphanedBackgroundTasks } from './web/routes/background-tasks.js'
@@ -69,6 +83,7 @@ import { tryHandleOnboarding } from './web/routes/onboarding.js'
 import { tryHandleStatus } from './web/routes/status.js'
 import { tryHandleAutonomy } from './web/routes/autonomy.js'
 import { tryHandleApprovals, startApprovalTimeoutSweeper } from './web/routes/approvals.js'
+import { tryHandleDesktopLock, sweepExpiredDesktopLock } from './web/routes/desktop-lock.js'
 import { tryHandleTokenUsage } from './web/routes/token-usage.js'
 import { tryHandleCosts, startCostsSyncTask } from './web/routes/costs.js'
 import { tryHandleIdeas } from './web/routes/ideas.js'
@@ -108,7 +123,9 @@ export function bootstrapBanner(port: number, host: string, token: string): stri
     : ''
   return `\nDashboard access URL (paste into browser, token is stored afterward):\n${lines.join('\n')}\n${note}\n`
 }
+import { tryHandleCustomProviders } from './web/routes/custom-providers.js'
 import type { RouteContext } from './web/routes/types.js'
+import { isMalformedBodyError } from './web/malformed-body.js'
 
 const WEB_DIR = join(PROJECT_ROOT, 'web')
 
@@ -208,9 +225,12 @@ export function startWebServer(port = 3420): http.Server {
       if (await tryHandleMessages(routeCtx)) return
       if (await tryHandleFederation(routeCtx)) return
       if (await tryHandleDailyLog(routeCtx)) return
+      if (await tryHandlePrLedger(routeCtx)) return
+      if (await tryHandleHomoglyphs(routeCtx)) return
       if (await tryHandleMemories(routeCtx)) return
       if (await tryHandleMigrate(routeCtx)) return
       if (await tryHandleKanban(routeCtx)) return
+      if (await tryHandleHeartbeat(routeCtx)) return
       if (await tryHandleSchedules(routeCtx)) return
       if (await tryHandleConnectorsHu(routeCtx)) return
       if (await tryHandleConnectors(routeCtx)) return
@@ -222,6 +242,7 @@ export function startWebServer(port = 3420): http.Server {
       if (await tryHandleAgentConversation(routeCtx)) return
       if (await tryHandleAgentTaskState(routeCtx)) return
       if (await tryHandleAgents(routeCtx, WEB_DIR)) return
+      if (await tryHandleClaudePlans(routeCtx)) return
       if (await tryHandleMarveen(routeCtx, WEB_DIR)) return
       if (await tryHandleBackgroundTasks(routeCtx)) return
       if (await tryHandleRecall(routeCtx)) return
@@ -229,8 +250,11 @@ export function startWebServer(port = 3420): http.Server {
       if (await tryHandleUpdates(routeCtx)) return
       if (await tryHandleOnboarding(routeCtx)) return
       if (await tryHandleStatus(routeCtx)) return
+      if (await tryHandleCommands(routeCtx)) return
+      if (await tryHandleCustomCommands(routeCtx)) return
       if (await tryHandleAutonomy(routeCtx)) return
       if (await tryHandleApprovals(routeCtx)) return
+      if (await tryHandleDesktopLock(routeCtx)) return
       if (await tryHandleTokenUsage(routeCtx)) return
       if (await tryHandleCosts(routeCtx)) return
       if (await tryHandleIdeas(routeCtx)) return
@@ -241,6 +265,7 @@ export function startWebServer(port = 3420): http.Server {
       if (await tryHandleVoice(routeCtx)) return
       if (await tryHandleVaultSshKeys(routeCtx)) return
       if (await tryHandleVaultSsh(routeCtx)) return
+      if (await tryHandleCustomProviders(routeCtx)) return
       if (await tryHandleAuditLog(routeCtx)) return
       if (await tryHandleFleetQ(routeCtx)) return
       if (await tryHandleFleet(routeCtx)) return
@@ -264,7 +289,27 @@ export function startWebServer(port = 3420): http.Server {
       res.writeHead(404)
       res.end('Not found')
     } catch (err) {
-      logger.error({ err }, 'Web szerver hiba')
+      // A malformed JSON body is the CALLER's mistake, and until 2026-09-04
+      // this handler hid both that fact and its location: it logged `err`
+      // alone (no route, no size) and answered 500, so a curl that lost a
+      // write to an unescaped newline in `content` looked like a server
+      // crash with nothing but a character offset to identify it. Two such
+      // writes are in the log from that week -- one daily-log entry and one
+      // kanban POST -- and neither caller had any way to notice. Name the
+      // route, and answer 400 so `curl -f` and every HTTP-status check see a
+      // client error instead of a server one.
+      const isBadJson = isMalformedBodyError(err)
+      if (isBadJson) {
+        logger.warn(
+          { method, path, bytes: req.headers['content-length'] ?? '?', reason: (err as Error).message },
+          'Hibas JSON torzs -- a keres NEM hajtodott vegre',
+        )
+        json(res, {
+          error: 'Hibas JSON torzs, a keres nem hajtodott vegre. Sortores es idezojel a szoveges mezokben escape-elve kell legyen.',
+        }, 400)
+        return
+      }
+      logger.error({ err, method, path }, 'Web szerver hiba')
       json(res, { error: 'Szerver hiba' }, 500)
     }
   })
@@ -333,17 +378,30 @@ export function startWebServer(port = 3420): http.Server {
     // stream is the one that gets shipped and parsed.
     //
     // BUT STDERR WAS THE WRONG ALTERNATIVE (measured 2026-08-23, card 6c8937d2).
-    // The comment here used to say stderr "shows in the interactive terminal" --
-    // and under launchd there IS no interactive terminal: StandardErrorPath
-    // sends it to store/dashboard.error.log. Measured: the access URL appeared
-    // 18 times in the ERROR log and 0 times in the normal one, while the normal
-    // log carried `http://localhost:3420` 36 times WITHOUT a token.
-    // So the easy-to-find address was the one that cannot log you in, and the
-    // working link sat in a file nobody opens while everything works.
+    // Under launchd there IS no interactive terminal: StandardErrorPath sends
+    // stderr to store/dashboard.error.log. Measured: the access URL appeared 18
+    // times in the ERROR log and 0 times in the normal one, while the normal log
+    // carried `http://localhost:3420` 36 times WITHOUT a token. So the
+    // easy-to-find address was the one that cannot log you in. Hence STDOUT.
     //
-    // Now it goes to STDOUT -- still outside the pino stream (so the original
-    // concern holds), but into store/dashboard.log, where someone actually looks.
-    process.stdout.write(bootstrapBanner(port, WEB_HOST, DASHBOARD_TOKEN))
+    // AND A REDIRECTED STREAM MUST NOT CARRY THE TOKEN AT ALL (upstream 68d3a102,
+    // measured 2026-09-01): under launchd every stream IS a file, so printing the
+    // URL only moved the credential from one capture to another -- the owner's
+    // token sat in a log AND in a gzipped archive of it, re-written on EVERY boot,
+    // and a rotated token went straight back into the same file seconds later.
+    //
+    // THE UNION (merge 88c366f2): a terminal gets the full banner (both origins,
+    // card 6c8937d2); a redirected stdout gets the discoverable line in the NORMAL
+    // log -- where someone looks -- naming the file that holds the token, never
+    // the token itself. The file is 0600 and already holds it.
+    if (process.stdout.isTTY) {
+      process.stdout.write(bootstrapBanner(port, WEB_HOST, DASHBOARD_TOKEN))
+    } else {
+      process.stdout.write(
+        `\nDashboard: http://127.0.0.1:${port}/ -- access token in store/.dashboard-token `
+        + `(not printed to a redirected stream). Login link: http://127.0.0.1:${port}/?token=<the file's content>\n\n`,
+      )
+    }
   })
 
   // Self-heal a SILENT listener failure. Under launchd, a `kickstart -k` can
@@ -435,6 +493,12 @@ export function startWebServer(port = 3420): http.Server {
   const channelHealthInterval = webOnly ? undefined : startChannelHealthMonitor()
   if (!webOnly) logger.info('Channel MCP health monitor started (60s poll, 45s offset)')
 
+  // The pane-grep above only sees a channel that SAYS it failed. This one asks
+  // Telegram whether anyone is still fetching the agent's updates, which is the
+  // only signal a silently deaf poller leaves behind.
+  const channelIntakeInterval = webOnly ? undefined : startChannelIntakeMonitor(PROJECT_ROOT)
+  if (!webOnly) logger.info('Channel intake monitor started (5min poll, 100s offset)')
+
   // CostOps: reflect the local config's fixed costs into the ledger once at boot + every
   // 10 minutes. Deliberately NOT done inside the GET /api/costs/summary handler -- a read
   // endpoint must not write (was flagged in review); this is the one place that does.
@@ -443,6 +507,9 @@ export function startWebServer(port = 3420): http.Server {
 
   const stuckInputInterval = webOnly ? undefined : startStuckInputWatcher()
   if (!webOnly) logger.info('Stuck-input watcher started (15s poll, 20s offset)')
+
+  const midTurnCommandInterval = webOnly ? undefined : startMidTurnCommandWatcher()
+  if (!webOnly) logger.info('Mid-turn command watcher started (3s poll)')
 
   const stuckToolCallInterval = webOnly ? undefined : startStuckToolCallWatcher()
   if (!webOnly) logger.info('Stuck-tool-call watcher started (30s poll, 35s offset)')
@@ -473,6 +540,15 @@ export function startWebServer(port = 3420): http.Server {
   const modelFallbackInterval = webOnly ? undefined : startModelFallbackRunner()
   if (!webOnly) logger.info('Model-fallback runner started (60s poll, 50s offset)')
 
+  // The kanban archive sweep used to ride along on every listKanbanCards() call (measured on
+  // our install), so reading the board wrote to it. It is a scheduled job now -- and it MUST
+  // be started here, or KANBAN_ARCHIVE_DONE_DAYS silently stops doing anything. Same caveat as
+  // every neighbouring runner on this line: a web-only instance never starts it, so on a
+  // web-only deployment the setting is a silent no-op too -- same failure class this comment
+  // is about, just inherited from the webOnly gate rather than reintroduced by this change.
+  const kanbanArchiveInterval = webOnly ? undefined : startKanbanArchiveRunner()
+  if (!webOnly) logger.info('Kanban archive runner started (60min poll, 70s offset)')
+
   const contextGuardInterval = webOnly ? undefined : startContextGuardRunner()
   if (!webOnly) logger.info('Context-guard runner started (5min poll, 4.5min initial delay)')
 
@@ -494,6 +570,10 @@ export function startWebServer(port = 3420): http.Server {
   // token estimates stay fresh without requiring a manual dashboard visit.
   // Sweep timed-out pending approvals every minute
   const approvalTimeoutInterval = startApprovalTimeoutSweeper()
+// Desktop-lock TTL sweeper. Independent of the schedule gate on purpose: an
+// abandoned lock must expire (and be reported) even on a day when no
+// desktop-driving round happens to be due.
+setInterval(() => { try { sweepExpiredDesktopLock() } catch { /* never kill the loop */ } }, 60_000).unref?.()
 
   // Hourly sweep of expired browser-login sessions (7d idle / 30d absolute).
   // Runs regardless of WEB_ONLY -- it is a cheap indexed delete on the shared DB
@@ -547,6 +627,25 @@ export function startWebServer(port = 3420): http.Server {
     ensureFederationClaudeMdSection()
     ensureAutonomySection(MAIN_AGENT_ID)
     ensureSkillsPathTrapSection(MAIN_AGENT_ID)
+    ensureSystemDirectiveAuthSection(MAIN_AGENT_ID)
+    ensureMemorySearchLabelSection(MAIN_AGENT_ID)
+    ensureFleetAuthSection(MAIN_AGENT_ID)
+    ensureEvidenceSection(MAIN_AGENT_ID)
+    ensureMcpListChannelSection(MAIN_AGENT_ID)
+    ensureMessageCloseSection(MAIN_AGENT_ID)
+  }
+
+  // Owner slash commands (CMD920, spec D-4): the registry the main session's
+  // UserPromptSubmit hook (scripts/hooks/marveen-commands.py) dispatches into
+  // through POST /api/commands/dispatch, answered without a main-session turn.
+  registerBuiltinCommands()
+  if (!webOnly) {
+    initCustomCommands()
+    // The /model hold revert: a one-shot timer at the exact expiry (re-armed
+    // here from a hold that survived a restart), with the gate's main sweep as
+    // the fallback for a busy session at expiry.
+    armHoldExpiryFromFile()
+    setMainSweepHook(async (nowMs) => { await sweepModelHold(nowMs); await runPendingWrite(nowMs) })
   }
 
   // Backfill the PreCompact hook into existing agents' settings.json so the
@@ -564,34 +663,75 @@ export function startWebServer(port = 3420): http.Server {
   } else {
     try {
       const patched: string[] = []
+      const rootPatched: string[] = []
       const stalePatched: string[] = []
+      const provPatched: string[] = []
       const egressPatched: string[] = []
+      const bashEgressPatched: string[] = []
+      const bashEgressUncovered: string[] = []
+      const bashParserPatched: string[] = []
       const govPatched: string[] = []
       const memGatePatched: string[] = []
       const copyGatePatched: string[] = []
       const pruned: string[] = []
       // Include the main agent (MAIN_AGENT_ID) so the voice hook is also seeded
       // into ~/.claude/settings.json alongside existing hooks (e.g. telegram_progress.py).
-      for (const agentName of [MAIN_AGENT_ID, ...listAgentNames()]) {
+      // listALLAgentNames, not listAgentNames (HBGATEWIRE826): the
+      // .hidden-from-dashboard sentinel is a UI concern, but this loop used it
+      // to skip hook-seeding too -- the heartbeat agent therefore ran with
+      // ZERO dashboard-side hooks (its kanban-write-gate and
+      // digest-provenance-gate included), and heartbeat-worker froze at the
+      // partial set from its last pre-hiding seed. Hidden technical workers
+      // need the guard hooks MORE than visible agents, not less.
+      for (const agentName of [MAIN_AGENT_ID, ...listAllAgentNames()]) {
         // Self-heal FIRST: drop entries this app previously wrote whose script
         // file no longer exists (e.g. a deleted worktree instance's paths), so
         // the re-registration below lands on a clean, unblocked settings file.
         pruned.push(...pruneStaleHooksFromSettingsFile(agentSettingsPath(agentName)))
         if (ensureAgentHooks(agentName)) patched.push(agentName)
+        // HOSTMOVE923: same guard as the hook writes -- a worktree instance must
+        // not re-anchor the live fleet's CLAUDE.md onto ITS root.
+        if (ensureProjectRootInClaudeMd(agentName)) rootPatched.push(agentName)
         if (ensureAgentStalenessHook(agentName)) stalePatched.push(agentName)
+        if (ensureAgentProvenanceHook(agentName)) provPatched.push(agentName)
         if (ensureEgressGate(agentName)) egressPatched.push(agentName)
+        // The Bash egress deny needs the main agent's OWN config dir: its
+        // nominal settings path is the shared ~/.claude, which is also the
+        // operator's own interactive shell, and the operator asked to stay out
+        // of the rule while the fleet stays in it. Null -> no separate scope
+        // exists on this install, so nothing is written and it is reported
+        // rather than decided quietly.
+        const bashDenyDir = agentName === MAIN_AGENT_ID ? mainAgentConfigDirIfSeparate() : null
+        if (agentName === MAIN_AGENT_ID && !bashDenyDir) bashEgressUncovered.push(agentName)
+        else if (ensureBashEgressDeny(agentName, bashDenyDir)) bashEgressPatched.push(agentName)
+        if (ensureBashEgressParser(agentName)) bashParserPatched.push(agentName)
         if (ensureGovernanceGateCommands(agentName)) govPatched.push(agentName)
         if (ensureMemoryIndexWriteGate(agentName)) memGatePatched.push(agentName)
         if (ensureTelegramCopyGate(agentName)) copyGatePatched.push(agentName)
         ensureQuarantineReader(agentName)
       }
+      // EGRESSRENDER824: a grant added to store/egress-allowlist.json must
+      // reach the reader PROMPT copies without waiting for the next boot --
+      // the egress-gate hook reads the JSON live, the prompt copies do not.
+      // DELIBERATELY inside the hookDecision.register branch: a worktree /
+      // sandbox instance must not start re-rendering the shared agent
+      // definitions any more than it may register hooks -- the same isolation
+      // rule that guards the settings writes above guards this watcher.
+      watchEgressAllowlistForReaderRender(listAgentNames, (agents) =>
+        logger.info({ agents }, 'quarantine-reader definitions re-rendered after egress-allowlist.json change'))
       if (pruned.length) logger.info({ pruned }, 'Stale hook entries pruned from agent settings.json')
       if (patched.length) logger.info({ patched }, 'PreCompact hook backfilled into agent settings.json')
+      if (rootPatched.length) logger.info({ patched: rootPatched }, 'CLAUDE.md install-anchored paths re-anchored on the current PROJECT_ROOT (HOSTMOVE923)')
       if (stalePatched.length) logger.info({ patched: stalePatched }, 'staleness-guard UserPromptSubmit hook backfilled into agent settings.json')
+      if (provPatched.length) logger.info({ patched: provPatched }, 'provenance-gate UserPromptSubmit hook backfilled into agent settings.json')
       if (egressPatched.length) logger.info({ patched: egressPatched }, 'egress-gate WebFetch hook backfilled into agent settings.json')
+      if (bashEgressPatched.length) logger.info({ patched: bashEgressPatched }, 'Bash egress deny rules backfilled into agent settings.json (permissions.deny)')
+      if (bashEgressUncovered.length) logger.warn({ agents: bashEgressUncovered },
+        'Bash egress deny NOT applied to the main agent: it runs on the shared user config root, which is also the operator\'s own shell. Give it a config dir of its own (MAIN_AGENT_ISOLATED_CONFIG / MAIN_AGENT_CONFIG_DIR) to cover it without covering the operator.')
+      if (bashParserPatched.length) logger.info({ patched: bashParserPatched }, 'bash-egress-parser Bash hook backfilled into agent settings.json (EGRESSPARSER923)')
       if (govPatched.length) logger.info({ patched: govPatched }, 'governance gate hook commands upgraded to absolute node path in agent settings.json')
       if (memGatePatched.length) logger.info({ patched: memGatePatched }, 'MEMORY.md write-gate hook backfilled into agent settings.json')
-      if (copyGatePatched.length) logger.info({ patched: copyGatePatched }, 'outgoing-copy gate (Telegram) hook backfilled into sub-agent settings.json')
+      if (copyGatePatched.length) logger.info({ patched: copyGatePatched }, 'outgoing-copy-gate wired onto the Telegram send tools in agent settings.json (GATECOPY828)')
     } catch (err) {
       logger.warn({ err }, 'Agent hook backfill skipped')
     }
@@ -625,8 +765,10 @@ export function startWebServer(port = 3420): http.Server {
     workerLivenessCancelled = true
     if (workerLivenessInterval) clearInterval(workerLivenessInterval)
     clearInterval(channelHealthInterval)
+    if (channelIntakeInterval) clearInterval(channelIntakeInterval)
     if (costsSyncInterval) clearInterval(costsSyncInterval)
     clearInterval(stuckInputInterval)
+    if (midTurnCommandInterval) clearInterval(midTurnCommandInterval)
     clearInterval(stuckToolCallInterval)
     if (inboxNudgeInterval) clearInterval(inboxNudgeInterval)
     if (idleAgentInterval) clearInterval(idleAgentInterval)
@@ -635,6 +777,7 @@ export function startWebServer(port = 3420): http.Server {
     if (reauthHealerInterval) clearInterval(reauthHealerInterval)
     clearInterval(autoRestartInterval)
     clearInterval(modelFallbackInterval)
+    clearInterval(kanbanArchiveInterval)
     clearInterval(contextGuardInterval)
     clearInterval(approvalTimeoutInterval)
     clearInterval(authSessionSweepInterval)

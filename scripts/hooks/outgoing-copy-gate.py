@@ -780,9 +780,27 @@ ACCENTLESS = {
 # regex latin-only, egy homoglifas szot darabokra vagna.
 UWORD = re.compile(r"[^\W\d_]+", re.UNICODE)
 
+# HOMOGLYPHMICRO924: az "irasrendszer" itt a Unicode-nev ELSO SZAVA, es ez nehany
+# jelnel nem irasrendszer, hanem a jel neve. Merve 2026-09-24: a "40 us" (MICRO
+# SIGN), a "100 m2" es "5 cm3" (SUPERSCRIPT TWO/THREE) es a "H2O" (SUBSCRIPT TWO)
+# VEGYES SZOKENT blokkolt, mert a felso/also indexes szamjegy nem \d, tehat az
+# UWORD a szoba veszi. Ezek mertekegyseg- es kepletjelolesek, egyik sem alcaz
+# latin betut (a MICRO SIGN egyetlen confusable-je a gorog mu). A lista SZANDEKOSAN
+# explicit: a "minden nem-betu semleges" szabaly tul tag volna, mert a ROMAN
+# NUMERAL ONE (U+2160) is nem-betu, es latin I-nek latszik; a KELVIN SIGN (U+212A)
+# es az ANGSTROM SIGN (U+212B) betu, es latin K/A-nak latszik -- ezek maradnak
+# fogva.
+SCRIPT_NEUTRAL = frozenset(
+    ["\u00b5", "\u00b2", "\u00b3", "\u00b9", "\u2070"]
+    + [chr(cp) for cp in range(0x2074, 0x207A)]  # felso index 4..9
+    + [chr(cp) for cp in range(0x2080, 0x208A)]  # also index 0..9
+)
+
 
 def _char_script(ch: str) -> str:
     import unicodedata
+    if ch in SCRIPT_NEUTRAL:
+        return "NEUTRAL"
     try:
         return unicodedata.name(ch).split(" ")[0]
     except ValueError:
@@ -795,9 +813,9 @@ def mixed_script_words(text: str):
     import unicodedata
     out = []
     for word in UWORD.findall(text):
-        scripts = {_char_script(ch) for ch in word}
+        scripts = {_char_script(ch) for ch in word} - {"NEUTRAL"}
         if "LATIN" in scripts and len(scripts) > 1:
-            bad = next(ch for ch in word if _char_script(ch) != "LATIN")
+            bad = next(ch for ch in word if _char_script(ch) not in ("LATIN", "NEUTRAL"))
             try:
                 bad_name = unicodedata.name(bad)
             except ValueError:
@@ -1292,19 +1310,146 @@ except Exception as _extract_exc:  # noqa: BLE001 -- deliberate fail-closed stub
 MDV2_ESCAPE = re.compile(r"\\([^\w\s])")
 
 
-def collect_telegram_body(tool_input: dict) -> str:
+# --- Human-facing HTTP channels via curl (GATEHTTP924) ------------------------
+# The Bash arm recognised exactly one kind of send: email. Every other outbound
+# path that a human reads, and that an agent can reach with a plain curl, left
+# the machine with no audit at all. Measured 2026-09-24 with a synthetic em-dash
+# payload: a comment to the community API, a post to Discord's REST API and a
+# Telegram Bot API sendMessage all passed exit 0, while the SAME text through
+# the Telegram reply tool was blocked. The gate was not failing on these paths,
+# it simply had no door there.
+#
+# Covered here, each only when the method is a SEND (POST/PUT/PATCH or an
+# implicit POST from a data flag; GET/HEAD reads pass untouched):
+#   - the community agent API (api.marveen.io): feed posts, comments, mention
+#     replies. Written from a vault-held base URL in practice ($B/feed/...), so
+#     the path shape counts even when the host is an unresolved variable;
+#   - Discord REST: .../channels/<id>/messages[/<id>];
+#   - Telegram Bot API: .../bot<token>/send*|edit*.
+# NOT covered, deliberately: /api/messages (inter-agent and federation). That
+# channel is agent-to-agent, its traffic is written without accents, and it
+# already has its own homoglyph-only gate (INTERAGENTHOMOGLIF923) above.
+#
+# Failure direction follows the email branch, not the Telegram one: a body the
+# hook cannot read BLOCKS. These are deferrable writes (a community post is
+# even queued for owner approval), and a public text that skipped the audit
+# costs more than a retry with a readable body. An INTERNAL error still passes
+# loudly, like every channel arm.
+_HTTP_CHANNEL_TARGETS = (
+    ("marveen.io", re.compile(
+        r"^((https?://)?([^/\s]*\.)?api\.marveen\.io|\$\{?\w+\}?)(/[^\s]*)?"
+        r"/(feed/posts(/[^/\s]+/comments)?|mentions/[^/\s]+/reply)/?(\?\S*)?$", re.I)),
+    ("Discord API", re.compile(
+        r"^(https?://)?([^/\s]*\.)?discord(app)?\.com/api(/v\d+)?/channels/[^/\s]+/messages(/[^/\s]+)?/?(\?\S*)?$",
+        re.I)),
+    ("Telegram API", re.compile(
+        r"^(https?://)?api\.telegram\.org/bot[^/\s]+/(send|edit)\w*/?(\?\S*)?$", re.I)),
+)
+# Only the prose a human reads. ids, chat ids, parse modes and urls stay out:
+# auditing them would block on tokens nobody reads as text.
+_HTTP_TEXT_FIELDS = ("title", "content", "text", "caption", "message")
+
+
+def _http_channel_segment(cmd: str):
+    """(label, tokens) of the first curl segment that SENDS to a covered
+    human-facing HTTP channel, or (None, None)."""
+    try:
+        segments = _segments_tokens(cmd)
+    except ValueError:
+        return None, None
+    for toks in segments:
+        while toks and _ENV_ASSIGN.match(toks[0]):
+            toks = toks[1:]
+        if not toks or not _CURLISH.match(_basename(toks[0])):
+            continue
+        rest = toks[1:]
+        for label, target in _HTTP_CHANNEL_TARGETS:
+            if any(target.match(t) for t in rest):
+                if _curl_resend_verdict(rest) == "read":
+                    return None, None  # a GET of the feed: nothing is sent
+                return label, toks
+    return None, None
+
+
+def _http_channel_text(raw: str) -> str:
+    """The human-read prose of a channel body: JSON object fields, or the same
+    fields form-encoded (Telegram accepts both). Unknown shape: the raw body."""
+    try:
+        obj = json.loads(raw)
+    except ValueError:
+        obj = None
+    if isinstance(obj, dict):
+        return "\n".join(str(obj[f]) for f in _HTTP_TEXT_FIELDS
+                         if isinstance(obj.get(f), str) and obj.get(f))
+    if obj is None:
+        from urllib.parse import parse_qs
+        form = parse_qs(raw, keep_blank_values=False)
+        got = [v for f in _HTTP_TEXT_FIELDS for v in form.get(f, [])]
+        if got:
+            return "\n".join(got)
+    return raw
+
+
+def http_channel_gate(cmd: str) -> None:
+    """Exit 2 on a copy problem or an unreadable body, exit 0 when clean.
+    RETURNS (does not exit) when the command is not a covered HTTP send, so
+    the caller's other arms still run."""
+    label, toks = _http_channel_segment(cmd)
+    if label is None:
+        return
+    try:
+        raw, unreadable = _curl_payload_raw(cmd, toks, all_flags=True)
+        if unreadable:
+            sys.stderr.write(
+                f"KIMENO-SZOVEG KAPU ({label}): TILTVA, mert a kimeno szoveget nem tudtam "
+                f"megvizsgalni.\nOk: {unreadable}.\n\n"
+                "Ez szandekosan fail-closed: egy vizsgalhatatlan kuldes pont a kaput utne ki.\n"
+                "Vizsgalhato alak: idezett heredoc (--data-binary @- <<'JSON'), "
+                "@/abszolut/ut.json, vagy inline -d '...' behelyettesites nelkul.\n")
+            sys.exit(2)
+        if raw is None:
+            sys.exit(0)  # a bare POST: nothing of ours is being sent
+        text = _http_channel_text(raw)
+        if not text.strip():
+            sys.exit(0)
+        problems = audit(text)
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- deliberate blanket: fail-open-loud
+        warn = f"outgoing-copy-gate: HTTP-csatorna-ag ({label}) belso hiba, FAIL-OPEN atengedes: {exc!r}"
+        sys.stderr.write(warn + "\n")
+        _gate_log(warn)
+        sys.exit(0)
+    if problems:
+        sys.stderr.write(
+            f"KIMENO-SZOVEG KAPU ({label}): TILTVA, az uzenet nem mehet ki igy.\n\n"
+            + "\n".join(f"  - {p}" for p in problems)
+            + "\n\nJavitsd a szoveget es kuldd ujra.\n")
+        sys.exit(2)
+    sys.exit(0)
+
+
+def collect_channel_body(tool_input: dict, unescape_mdv2: bool) -> str:
+    """Text of a channel reply. GATEDISCORD905: both the Telegram and the
+    Discord reply tool put the prose in `text` (schema-checked, not guessed);
+    `caption`/`message` stay in the list because they cost nothing and a
+    missed field here is a SILENT ZERO -- empty text exits 0, i.e. fail-open.
+    Only Telegram's MarkdownV2 escapes get undone: on Discord a backslash is
+    a literal the author wrote, not gate noise."""
     fields = ("text", "caption", "message")
     got = [str(tool_input[f]) for f in fields if tool_input.get(f)]
-    return MDV2_ESCAPE.sub(r"\1", "\n".join(got))
+    joined = "\n".join(got)
+    return MDV2_ESCAPE.sub(r"\1", joined) if unescape_mdv2 else joined
 
 
-def telegram_gate(tool_input: dict) -> None:
-    """Audit a Telegram reply. FAIL-OPEN on any internal error (exit 0 + loud
-    log): email is deferrable, but Telegram is the owner's ONLY supervision
-    channel -- a gate crash that silences it costs more than a slipped accent.
-    A FOUND problem still blocks (exit 2): that is the gate's whole point."""
+def channel_gate(tool_input: dict, label: str, unescape_mdv2: bool) -> None:
+    """Audit a channel reply (Telegram or Discord). FAIL-OPEN on any internal
+    error (exit 0 + loud log): email is deferrable, but these are the owner's
+    ONLY supervision channels -- a gate crash that silences one costs more
+    than a slipped accent. A FOUND problem still blocks (exit 2): that is the
+    gate's whole point."""
     try:
-        text = collect_telegram_body(tool_input)
+        text = collect_channel_body(tool_input, unescape_mdv2)
         if not text.strip():
             sys.exit(0)  # files-only reply or empty text: nothing to audit
         # GATECOPY827: a masolhato kodblokk CSAK markdownv2 modban lesz
@@ -1319,7 +1464,16 @@ def telegram_gate(tool_input: dict) -> None:
         # MDV2_ESCAPE feloldas nem erinti.
         raw = "\n".join(str(tool_input[f]) for f in ("text", "caption", "message")
                         if tool_input.get(f))
-        if "```" in raw and str(tool_input.get("format", "")).lower() != "markdownv2":
+        # This rule is TELEGRAM-SPECIFIC: the copy button depends on MarkdownV2
+        # parsing. Discord renders a triple-backtick block natively in a plain
+        # message and its reply tool has no markdownv2 format value at all, so on
+        # that branch the rule would block a problem that does not exist -- and,
+        # before the label existed, would have named the wrong channel while doing
+        # it. The condition therefore filters on the label explicitly, not on
+        # unescape_mdv2: those two only happen to coincide today, and the intent
+        # here is the channel.
+        if (label == "Telegram" and "```" in raw
+                and str(tool_input.get("format", "")).lower() != "markdownv2"):
             sys.stderr.write(
                 "KIMENO-SZOVEG KAPU (Telegram): TILTVA, a kodblokk nem lenne masolhato.\n\n"
                 "  - A szoveg harom backtickes kodblokkot tartalmaz, de a hivasban\n"
@@ -1334,19 +1488,19 @@ def telegram_gate(tool_input: dict) -> None:
     except SystemExit:
         raise
     except Exception as exc:  # noqa: BLE001 -- deliberate blanket: fail-open path
-        warn = f"outgoing-copy-gate: TELEGRAM-ag belso hiba, FAIL-OPEN atengedes: {exc!r}"
+        warn = f"outgoing-copy-gate: {label.upper()}-ag belso hiba, FAIL-OPEN atengedes: {exc!r}"
         sys.stderr.write(warn + "\n")
         _gate_log(warn)
         sys.exit(0)
     if problems:
         sys.stderr.write(
-            "KIMENO-SZOVEG KAPU (Telegram): TILTVA, az uzenet nem mehet ki igy.\n\n"
+            f"KIMENO-SZOVEG KAPU ({label}): TILTVA, az uzenet nem mehet ki igy.\n\n"
             + "\n".join(f"  - {p}" for p in problems)
             + "\n\nJavitsd a szoveget es kuldd ujra (a MarkdownV2 escape-eket a kapu "
               "az ellenorzes elott feloldja, azok nem szamitanak hibanak).\n"
         )
         sys.exit(2)
-    # GATEPERSIST816(2): a hianyzo nev-szabaly a telegram-agon fail-open marad,
+    # GATEPERSIST816(2): a hianyzo nev-szabaly a csatorna-agon fail-open marad,
     # de a figyelmeztetes ODA megy, ahol a session tenyleg latja -- a hook
     # stdout systemMessage mezoje a futo sessionben jelenik meg, nem egy
     # logfajlban, amit senki nem olvas.
@@ -1551,9 +1705,16 @@ def _ia_resolve_local_vars(cmd: str, ref: str) -> str:
     return re.sub(r"\$\{(\w+)\}|\$(\w+)", sub, ref)
 
 
-def _ia_payload(cmd: str, toks):
-    """(text, unreadable_reason) of the message body, from the three shapes."""
+def _curl_payload_raw(cmd: str, toks, all_flags: bool = False):
+    """(raw_body, unreadable_reason) of a curl data flag, from the three shapes
+    (inline -d, @file, quoted heredoc via @-). raw_body is None when the call
+    carries no data flag at all. Shared by the inter-agent homoglyph gate and
+    the HTTP channel gate (GATEHTTP924), so both read the SAME body the same way.
+    all_flags: curl joins repeated -d values with '&' (a form body such as
+    `-d chat_id=1 -d text=...`); the HTTP gate needs every part, or the text
+    field hides behind the first flag. The inter-agent gate keeps first-only."""
     raw = None
+    parts = []
     for i, t in enumerate(toks):
         val = None
         for f in _IA_DATA_FLAGS:
@@ -1590,7 +1751,19 @@ def _ia_payload(cmd: str, toks):
             if _IA_SUBST.search(val):
                 return None, "az inline torzs shell-behelyettesitest tartalmaz, futasidoben dol el"
             raw = val
-        break
+        if not all_flags:
+            break
+        parts.append(raw)
+    if all_flags and parts:
+        return "&".join(parts), None
+    return raw, None
+
+
+def _ia_payload(cmd: str, toks):
+    """(text, unreadable_reason) of the message body, from the three shapes."""
+    raw, unreadable = _curl_payload_raw(cmd, toks)
+    if unreadable:
+        return None, unreadable
     if raw is None:
         # No data flag at all: a GET of the queue (the most frequent call on this
         # path) or a bare POST. Nothing is being SENT, so nothing to scan and
@@ -1680,9 +1853,10 @@ def main():
     # one). The dispatch must recognise BOTH, or the edit half of the matcher
     # invokes a hook that exits 0 without auditing anything.
     if re.search(r"telegram.*__(reply|edit_message)$", tool, re.I):
-        telegram_gate(tool_input)  # exits; never falls through
+        channel_gate(tool_input, "Telegram", unescape_mdv2=True)  # exits; never falls through
         # UNREACHABLE TODAY, AND THAT IS THE POINT (card 9106d8e6). Every path in
-        # telegram_gate exits -- measured 2026-09-06: five exits, all hard (bare return 0,
+        # channel_gate (the former telegram_gate, generalised upstream by GATEDISCORD905)
+        # exits -- measured 2026-09-06 on telegram_gate: five exits, all hard (bare return 0,
         # sys.exit 4, raise 1), so a return would be a deliberate edit, not a slip.
         #
         # But if one is ever added, control falls PAST this branch: a telegram tool name
@@ -1698,8 +1872,21 @@ def main():
         # So the fail-closed form is an explicit exit 2 -- NOT merely "non-zero", which
         # would ship exactly the exit-1 behaviour this card rejects.
         sys.stderr.write(
-            "KIMENO-SZOVEG KAPU: TILTVA -- a telegram_gate visszatert.\n"
-            "Ez nem tortenhet meg: a telegram-ag minden utja kilep. Ha valaki `return`-t\n"
+            "KIMENO-SZOVEG KAPU: TILTVA -- a channel_gate visszatert (Telegram).\n"
+            "Ez nem tortenhet meg: a csatorna-ag minden utja kilep. Ha valaki `return`-t\n"
+            "irt bele, a kapu innentol NEM vizsgalja a kimeno szoveget, ezert megtagadom.\n"
+        )
+        sys.exit(2)
+    if re.search(r"discord.*__(reply|edit_message)$", tool, re.I):
+        # GATEDISCORD905: an install whose owner DM and every working thread run
+        # on Discord had no gate on that path at all -- same audit, no MarkdownV2
+        # unescaping (on Discord a backslash is a literal the author typed).
+        channel_gate(tool_input, "Discord", unescape_mdv2=False)  # exits; never falls through
+        # Same seam as the Telegram arm above (card 9106d8e6): a returning
+        # channel_gate must BLOCK with exit 2, never fall through to sys.exit(0).
+        sys.stderr.write(
+            "KIMENO-SZOVEG KAPU: TILTVA -- a channel_gate visszatert (Discord).\n"
+            "Ez nem tortenhet meg: a csatorna-ag minden utja kilep. Ha valaki `return`-t\n"
             "irt bele, a kapu innentol NEM vizsgalja a kimeno szoveget, ezert megtagadom.\n"
         )
         sys.exit(2)
@@ -1728,6 +1915,7 @@ def main():
     elif tool == "Bash":
         cmd = str(tool_input.get("command") or "")
         if not is_send_invocation(cmd):
+            http_channel_gate(cmd)  # exits if it is a human-facing HTTP send; else returns
             inter_agent_homoglyph_gate(cmd)  # exits; a no-op pass for anything else
         text, unreadable = collect_bash_body(cmd)
     else:
@@ -1810,8 +1998,8 @@ if __name__ == "__main__":
         # An unhandled crash exits 1, and PreToolUse treats 1 as NON-blocking,
         # so the send would run UNCHECKED -- the exact opposite of the email
         # path's fail-closed contract (e.g. a non-dict tool_input used to
-        # AttributeError inside collect_mcp_body). The telegram path never
-        # reaches here: telegram_gate() catches its own errors and exits 0
+        # AttributeError inside collect_mcp_body). The channel paths never
+        # reach here: channel_gate() catches its own errors and exits 0
         # (fail-open by design), so this net only ever catches the email/Bash
         # send paths, where blocking is the safe failure mode.
         sys.stderr.write(

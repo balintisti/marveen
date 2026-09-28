@@ -25,6 +25,9 @@ describe('sendPromptToSession waitForIdle gate', () => {
     // watcher (an OPTIONAL prompt aborts instead of best-effort-typing into a
     // busy pane); waitForIdle stays a default-ON member. DELIVLOCK805 added
     // lockMode (per-pane delivery mutex: deliver/recover/held).
+    // AUDITBORITEKVESZ918 added onBusySend: the caller learns that the prompt
+    // went into a BUSY pane best-effort, so a possibly-spliced delivery is not
+    // recorded as a clean run. PROMPTCSONK923 added onEmitStart alongside it.
     //
     // c4b99fa7 made the bag MULTI-LINE and added two REQUIRED members, so the
     // old single-line regex could no longer match. Pinned member-by-member
@@ -35,6 +38,8 @@ describe('sendPromptToSession waitForIdle gate', () => {
     expect(sig).toMatch(/onBusyTimeout\?:\s*'send'\s*\|\s*'abort'/)
     expect(sig).toMatch(/idleTimeoutMs\?:\s*number/)
     expect(sig).toMatch(/lockMode\?:\s*SendLockMode/)
+    expect(sig).toMatch(/onBusySend\?:\s*\(\)\s*=>\s*void/)
+    expect(sig).toMatch(/onEmitStart\?:\s*\(\)\s*=>\s*void/)
     // And the two c4b99fa7 members are REQUIRED -- no `?`. That is the whole
     // point of the design: a default is the guard that never reaches caller 15.
     expect(sig).toMatch(/\n\s*survival:\s*SourceSurvival\n/)
@@ -63,10 +68,13 @@ describe('sendPromptToSession waitForIdle gate', () => {
   it('the forceSend scheduled-task path opts out of the idle wait', () => {
     const callIdx = SCHEDULE_RUNNER.indexOf('sendPromptToSession(session, fullPrompt, host')
     expect(callIdx).toBeGreaterThan(0)
-    // Widened from 120 chars: c4b99fa7 made this call multi-line.
+    // Widened from 120 chars: c4b99fa7 made this call multi-line, and
+    // AUDITBORITEKVESZ918 / PROMPTCSONK923 put onEmitStart/onBusySend in it too.
     const call = SCHEDULE_RUNNER.slice(callIdx, callIdx + 500)
     // waitForIdle is the negation of forceSend: ON for normal tasks, OFF for
     // forceSend so a long-busy session is not blocked on the 12s gate.
+    // The opts object is multi-line, so this pins the member itself, not the
+    // whole literal.
     expect(call).toMatch(/waitForIdle:\s*!task\.forceSend/)
     // And this caller declares its source re-delivered -- a scheduled task recurs,
     // so a dropped tick costs one cycle. Pinned because the classification is the

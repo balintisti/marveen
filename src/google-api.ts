@@ -500,6 +500,24 @@ export async function fetchCalendarEvents(
 }
 
 /**
+ * Upstream's calendar read (5E0A32B0, #1159): the events, or a THROW -- never an
+ * empty list for a failure. Kept as a thin adapter over fetchCalendarEvents so
+ * there is ONE fetch implementation (ours: service-account path, per-endpoint
+ * deadline, named errors) while callers written against upstream's contract --
+ * src/web/routes/heartbeat.ts, heartbeat-calendar-route.test.ts -- keep working.
+ * (merge 88c366f2)
+ */
+export async function getCalendarEvents(
+  calendarId: string,
+  timeMin: Date,
+  timeMax: Date
+): Promise<CalendarEvent[]> {
+  const res = await fetchCalendarEvents(calendarId, timeMin, timeMax)
+  if (!res.ok) throw new Error(`Google Calendar API error: ${res.error}`)
+  return res.events
+}
+
+/**
  * Every calendar this identity can read.
  *
  * WHY this exists (2026-08-20): on the OAuth path `primary` is the owner's own
@@ -525,13 +543,18 @@ export async function listCalendars(): Promise<CalendarSummary[]> {
     })
     if (retry.status !== 200) {
       logger.error({ status: retry.status, body: retry.data }, 'Google calendarList error after refresh')
-      return []
+      // 5E0A32B0 (upstream's rule for the calendar read, applied to the list too):
+      // throw, never return []. An API failure that returns an empty list is
+      // indistinguishable from "this identity sees no calendars" -- on the
+      // service-account path that reads exactly like the unshared-calendar case
+      // this function exists to expose.
+      throw new Error(`Google calendarList error after refresh: ${retry.status}`)
     }
     return (JSON.parse(retry.data) as CalendarListEntries).items ?? []
   }
   if (status !== 200) {
     logger.error({ status, body: data }, 'Google calendarList error')
-    return []
+    throw new Error(`Google calendarList error: ${status}`)
   }
   return (JSON.parse(data) as CalendarListEntries).items ?? []
 }

@@ -28,6 +28,22 @@ const test1 = (name: string): TaskLike => ({ type: 'test', name, result: { state
 const file = (name: string, n: number): FileLike =>
   ({ name, tasks: Array.from({ length: n }, (_, i) => test1(`${name}#${i}`)) })
 
+// VITEST 4 (merge 88c366f2): the reporter hook is onTestRunEnd(testModules), and a module exposes its
+// tests through the public `children` tree with `result().state` in 'passed'/'failed'/'skipped'/
+// 'pending'. The fixtures above stay in the old shape (every assertion below reads them), and this
+// converter builds the module shape the guard now receives -- the guard's own toTaskTree turns it
+// back, so a wrong mapping in EITHER direction shows up here.
+const asModules = (files: { name: string; tasks: { type: string; result?: { state: string } }[] }[]) =>
+  files.map((f) => ({
+    relativeModuleId: f.name,
+    children: f.tasks.map((t) => ({
+      type: t.type,
+      result: () => ({
+        state: t.result?.state === 'pass' ? 'passed' : t.result?.state === 'fail' ? 'failed' : 'skipped',
+      }),
+    })),
+  }))
+
 describe('SuiteSizeGuard -- a riporter tenyleg hivja az oroket', () => {
   // A tipus szandekosan a process.exitCode SAJAT tipusa, nem egy szukitese:
   // a Node-ban `string | number | null | undefined`, es egy szukebb tipus itt
@@ -83,10 +99,10 @@ describe('SuiteSizeGuard -- a riporter tenyleg hivja az oroket', () => {
     process.env['SUITE_BASELINE_FILES'] = '2'
     process.env['SUITE_BASELINE_TESTS'] = '5'
     try {
-      new SuiteSizeGuard().onFinished([
+      new SuiteSizeGuard().onTestRunEnd(asModules([
         file('ep.test.ts', 5),
         { name: 'elszallt.test.ts', tasks: [] },
-      ] as never)
+      ]) as never)
       expect(stderr).toMatch(/VAN FAJL, AMI EGYETLEN TESZTET SEM ADOTT/)
       expect(stderr).toContain('elszallt.test.ts')
       expect(process.exitCode).toBe(1)
@@ -115,7 +131,7 @@ describe('SuiteSizeGuard -- a riporter tenyleg hivja az oroket', () => {
     process.env['SUITE_BASELINE_TESTS'] = '7'
     try {
       process.exitCode = undefined
-      new SuiteSizeGuard().onFinished([file('a.test.ts', 3), file('b.test.ts', 4)] as never)
+      new SuiteSizeGuard().onTestRunEnd(asModules([file('a.test.ts', 3), file('b.test.ts', 4)]) as never)
       expect(stderr).toBe('')
       expect(process.exitCode).toBeUndefined()
     } finally {
@@ -131,7 +147,7 @@ describe('SuiteSizeGuard -- a riporter tenyleg hivja az oroket', () => {
     process.env['SUITE_BASELINE_FILES'] = '2'
     process.env['SUITE_BASELINE_TESTS'] = '100'
     try {
-      new SuiteSizeGuard().onFinished([file('a.test.ts', 1), file('b.test.ts', 1)] as never)
+      new SuiteSizeGuard().onTestRunEnd(asModules([file('a.test.ts', 1), file('b.test.ts', 1)]) as never)
       expect(stderr).toMatch(/\S/)
       expect(process.exitCode).toBe(1)
     } finally {
@@ -150,13 +166,13 @@ describe('SuiteSizeGuard -- a riporter tenyleg hivja az oroket', () => {
     process.env['SUITE_BASELINE_TESTS'] = '100'
     try {
       process.exitCode = undefined
-      new SuiteSizeGuard().onFinished([file('a.test.ts', 1)] as never)
+      new SuiteSizeGuard().onTestRunEnd(asModules([file('a.test.ts', 1)]) as never)
       expect(stderr).toBe('')
       expect(process.exitCode).toBeUndefined()
 
       process.exitCode = undefined
       stderr = ''
-      new SuiteSizeGuard().onFinished([{ name: 'elszallt.test.ts', tasks: [] }] as never)
+      new SuiteSizeGuard().onTestRunEnd(asModules([{ name: 'elszallt.test.ts', tasks: [] }]) as never)
       expect(stderr).toMatch(/EGYETLEN TESZTET SEM ADOTT/)
       expect(process.exitCode).toBe(1)
     } finally {
@@ -172,7 +188,7 @@ describe('SuiteSizeGuard -- a riporter tenyleg hivja az oroket', () => {
     process.env['SUITE_SIZE_GUARD'] = 'off'
     try {
       process.exitCode = undefined
-      new SuiteSizeGuard().onFinished([{ name: 'elszallt.test.ts', tasks: [] }] as never)
+      new SuiteSizeGuard().onTestRunEnd(asModules([{ name: 'elszallt.test.ts', tasks: [] }]) as never)
       expect(stderr).toBe('')
       expect(process.exitCode).toBeUndefined()
     } finally {
@@ -180,9 +196,13 @@ describe('SuiteSizeGuard -- a riporter tenyleg hivja az oroket', () => {
     }
   })
 
-  it('files nelkul (a vitest ezt is atadhatja) NEM omlik ossze', () => {
+  it('URES modul-lista: NEM omlik ossze, es egy teljes futason OSSZEOMLOTT keszletkent jelez', () => {
+    // vitest 4 (merge 88c366f2): az onTestRunEnd MINDIG tombot kap, `undefined` mar nem jon -- a
+    // regi "files nelkul" eset igy nem letezik. A legkozelebbi: egy futas, ami egyetlen modult sem
+    // adott. A regi or egy URES tombre is a (B) agat futtatta (csak az `undefined`-re hallgatott),
+    // tehat a port viselkedese ugyanaz: nulla fajl egy teljes futason zsugorodas, nem csend.
     process.exitCode = undefined
-    expect(() => new SuiteSizeGuard().onFinished(undefined)).not.toThrow()
-    expect(process.exitCode).toBeUndefined()
+    expect(() => new SuiteSizeGuard().onTestRunEnd([])).not.toThrow()
+    expect(process.exitCode).toBe(1)
   })
 })

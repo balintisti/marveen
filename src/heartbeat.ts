@@ -16,7 +16,7 @@ import { getHeartbeatKanbanSummary, getActiveScheduledTaskCount, createAgentMess
 import { fetchCalendarEvents, type CalendarEvent } from './google-api.js'
 import { detectTransitions, readQuotaSourceState } from './data-source-alarm.js'
 import { runAgent } from './agent.js'
-import { notifyTelegram } from './notify.js'
+import { notifyOwner } from './notify.js'
 import { logger } from './logger.js'
 import { wrapUntrusted, UNTRUSTED_PREAMBLE } from './prompt-safety.js'
 import { getMainParkedState } from './web/agent-process.js'
@@ -76,11 +76,35 @@ interface ClaudeSettings {
 // our enabledPlugins:{} override. .DS_Store / lock files are just noise.
 const HEARTBEAT_CONFIG_SKIP = new Set(['settings.json', '.DS_Store', '.lock'])
 
+/**
+ * Mark the isolation-sandbox dir as hidden from the dashboard's agent list.
+ *
+ * MUST be callable independently of whether the heartbeat feature is enabled:
+ * agents/heartbeat-worker is a plain cwd, not an agent, but listAgentNames()
+ * cannot tell the difference without this sentinel. Before 2026-08-25 the
+ * write lived only at the END of ensureHeartbeatWorkerCwd(), which runs solely
+ * from executeHeartbeat() -- so on any install with HEARTBEAT_AGENT_ENABLED
+ * unset (the default) the sentinel was never created, the sandbox showed up as
+ * a real agent, and could be started as one. Observed in the wild.
+ */
+export function ensureHeartbeatWorkerHidden(): void {
+  try {
+    if (!existsSync(HEARTBEAT_AGENT_CWD)) return
+    const sentinelPath = join(HEARTBEAT_AGENT_CWD, '.hidden-from-dashboard')
+    if (!existsSync(sentinelPath)) writeFileSync(sentinelPath, '')
+  } catch (err) {
+    logger.warn({ err }, 'Heartbeat: failed to write the dashboard-hide sentinel')
+  }
+}
+
 function ensureHeartbeatWorkerCwd(): void {
   try {
     if (!existsSync(HEARTBEAT_AGENT_CWD)) {
       mkdirSync(HEARTBEAT_AGENT_CWD, { recursive: true })
     }
+    // Write the hide-sentinel FIRST, right after the dir exists: if any later
+    // step throws, the dir must still not masquerade as an agent.
+    ensureHeartbeatWorkerHidden()
     // Project-scope empty MCP list (defense in depth -- the load-bearing
     // gates are the enabledPlugins override + CLAUDE_CONFIG_DIR).
     const mcpPath = join(HEARTBEAT_AGENT_CWD, '.mcp.json')
@@ -210,13 +234,8 @@ function ensureHeartbeatWorkerCwd(): void {
       logger.warn({ err }, 'Heartbeat: failed to materialise .claude.json into isolated config dir (sub-agent will lack project MCPs)')
     }
 
-    // Dashboard-hide sentinel: Szabi 2026-06-02 asked that this technical
-    // worker NOT show up as a real agent on the dashboard. listAgentNames()
-    // filters out any subdir of agents/ that contains this sentinel file.
-    const sentinelPath = join(HEARTBEAT_AGENT_CWD, '.hidden-from-dashboard')
-    if (!existsSync(sentinelPath)) {
-      writeFileSync(sentinelPath, '')
-    }
+    // (The dashboard-hide sentinel is written at the top of this function --
+    // see ensureHeartbeatWorkerHidden.)
   } catch (err) {
     logger.warn({ err, cwd: HEARTBEAT_AGENT_CWD }, 'Heartbeat: failed to ensure isolated worker cwd, falling back to PROJECT_ROOT')
   }
@@ -292,6 +311,15 @@ interface SystemInfo {
   dbSizeMB: number | null
   dbWarning: boolean
 }
+
+// 5E0A32B0 #1159 (upstream): the discriminated calendar result. Kept as an
+// export for callers/tests that speak it; on this line the heartbeat carries
+// the SAME information as `calendar` + `calendarError` (card: 2026-08-22
+// calendar-error fix, guarded by heartbeat-calendar-error.test.ts), fed by
+// fetchCalendarEvents, whose CalendarFetch is exactly this union.
+export type HeartbeatCalendarResult =
+  | { ok: true; events: CalendarEvent[] }
+  | { ok: false; error: string }
 
 interface RecentEmail {
   from: string
@@ -452,6 +480,21 @@ function shouldNotify(data: HeartbeatData): boolean {
   // a felhasznalot.
   if (hour >= 22) return false
 
+  // 5E0A32B0 fail-open on the NOTIFICATION side: a failed calendar QUERY is
+  // itself notify-worthy. Before this, an expired token emptied the list,
+  // shouldNotify saw nothing calendar-shaped, and on a quiet weekday the
+  // heartbeat simply did not fire -- the failure presented as SILENCE, which
+  // is the one presentation nobody investigates. Placed after the 22:00
+  // curfew (that window stays dbWarning-only by design: a broken token can
+  // wait until morning) but before the evening/weekend urgent-only filters,
+  // so a broken calendar surfaces on the next non-curfew round.
+  //
+  // NOT TAKEN IN THE 88c366f2 MERGE (default until marveen decides P3): here a broken calendar
+  // would reach ISTI every daytime round. Our routing already makes it loud without that -- the
+  // edge-triggered source alert in executeHeartbeat runs BEFORE this gate and tells the
+  // coordinator (0114968c + 2b1e373a, Marveen's decision 2026-08-22 22:57), so the failure does
+  // not present as silence, which was upstream's whole reason for this line.
+
   if (hour >= 21) {
     return data.kanban.urgent > 0
   }
@@ -507,9 +550,14 @@ function buildAgentPrompt(data: HeartbeatData): string {
   prompt += `## Naptar (kovetkezo 2 ora)\n`
   if (data.calendarError) {
     // Say it out loud, exactly as the email branch below does. A calendar we
-    // could not read must never render as a clear day.
+    // could not read must never render as a clear day. The second line is
+    // upstream's 5E0A32B0 wording (the error text is our own message from
+    // google-api.ts, not remote content): it names the source as broken and
+    // the calendar picture as UNKNOWN.
     prompt += `NEM SIKERULT lekerdezni: ${data.calendarError}\n`
-    prompt += `Ezt JELENTSD -- ne ird azt, hogy nincs esemeny, mert nem tudjuk.\n\n`
+    prompt += `NAPTAR-LEKERDEZES HIBARA FUTOTT: ${data.calendarError}\n`
+    prompt += `Ezt JELENTSD -- ne ird azt, hogy nincs esemeny, mert nem tudjuk. ` +
+      `Ez NEM ures naptar -- a lekerdezes bukott; a naptar-forras hibas (pl. lejart token), a naptari kep emiatt ISMERETLEN.\n\n`
   } else if (data.calendar.length === 0) {
     prompt += `Nincs kozelgo esemeny.\n\n`
   } else {
@@ -689,7 +737,7 @@ async function executeHeartbeat(): Promise<void> {
       CLAUDE_CONFIG_DIR: HEARTBEAT_CONFIG_DIR,
     })
     if (text) {
-      await notifyTelegram(text)
+      await notifyOwner(text)
       logger.info('Heartbeat ertesites elkuldve')
     }
   } catch (err) {

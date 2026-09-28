@@ -84,6 +84,8 @@ describe('idea comments require the idea to exist (3f981b31)', () => {
       title: 'Real idea',
       description: null,
       category: 'other',
+      // upstream's idea_box.scope (merge 88c366f2); 'munka' is the column default.
+      scope: 'munka',
       status: 'new',
       source: 'dexter',
       kanban_id: null,

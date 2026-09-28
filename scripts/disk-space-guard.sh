@@ -84,8 +84,19 @@ ALERT_STAMP="$STATE_DIR/.disk-guard-alerted"
 # an empty file, alert_owner finds no token and returns before curl -- so the test
 # is safe even if the refusal below is broken, which is the state a test of a
 # refusal has to survive. Also lets a manual end-to-end check run against a test bot.
-TG_ENV="${DISK_GUARD_TG_ENV:-$HOME/.claude/channels/telegram/.env}"
+# #915 (upstream 2997022b): main channel state is install-scoped once migrated;
+# the legacy shared path only serves unmigrated installs. The test override above
+# still wins over both.
+TG_CHAN_DIR="${TELEGRAM_STATE_DIR:-}"
+if [ -z "$TG_CHAN_DIR" ]; then
+  TG_CHAN_DIR="$INSTALL_DIR/.claude/channels/telegram"
+  [ -f "$TG_CHAN_DIR/.env" ] || TG_CHAN_DIR="$HOME/.claude/channels/telegram"
+fi
+TG_ENV="${DISK_GUARD_TG_ENV:-$TG_CHAN_DIR/.env}"
 LOG_TAG="disk-space-guard"
+
+# CHATID0 (upstream b49d4c5d): the owner chat id comes from resolve_owner_chat_id.
+. "$(cd "$(dirname "$0")" && pwd)/lib/owner-chat.sh"
 
 # THE COORDINATOR FIRST, THE OWNER AS FALLBACK (card b610c593, marveen 2026-09-25 04:38): the same
 # routing as the idle guard's 45101873 -- "Isti cannot do anything with the disk at night; I can".
@@ -205,14 +216,18 @@ alert_owner() {
     log "ALERT REFUSED: usage is a planted value (DISK_GUARD_USAGE_OVERRIDE=${DISK_GUARD_USAGE_OVERRIDE}), not a real disk. Set DISK_GUARD_ALLOW_FAKE_ALERT=1 if you mean to test the wiring for real: $msg"
     return 1
   fi
-  # Token + owner chat id both come from config, never hardcoded: token from the
-  # channels env, chat id from .env ALLOWED_CHAT_ID (or TELEGRAM_CHAT_ID in the
-  # channels env). If either is missing, skip the alert silently.
+  # Token from the channels env, never hardcoded. Owner chat id via
+  # resolve_owner_chat_id (CHATID0): the old direct ALLOWED_CHAT_ID/
+  # TELEGRAM_CHAT_ID reads let the installer's "0" placeholder through
+  # unnoticed, and skipped the access.json fallback entirely.
   # `tr -d '\r '` strips a trailing CR (CRLF-edited .env) / stray spaces so the
-  # value doesn't corrupt the URL or the comparison.
+  # token doesn't corrupt the URL.
   token="$(grep -E '^TELEGRAM_BOT_TOKEN=' "$TG_ENV" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\r ')"
-  chat="$(grep -E '^ALLOWED_CHAT_ID=' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\r ')"
-  [ -z "$chat" ] && chat="$(grep -E '^TELEGRAM_CHAT_ID=' "$TG_ENV" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\r ')"
+  # The resolver's reason line stays on stderr (the guard's log), not
+  # /dev/null: a skipped alert must say why (no DM entry, several DM entries,
+  # no access.json). Not captured with 2>&1 -- any stderr noise on the success
+  # path would then become part of the chat id.
+  chat="$(resolve_owner_chat_id "$INSTALL_DIR/.env")" || chat=""
   if [ -z "$token" ] || [ -z "$chat" ]; then
     log "ALERT (no bot token or owner chat id configured, could not Telegram): $msg"; return 1
   fi
@@ -241,7 +256,7 @@ alert_owner() {
   # 200 ES `"ok":true` -- mindketto kell. A Telegram ad 200-at hibaval is, es ad
   # `ok:false`-t 200 alatt is; kulon-kulon egyik sem eleg.
   if [ "$rc" = "0" ] && [ "$code" = "200" ] && [ "$okf" = "1" ]; then
-    log "owner alerted via direct Bot API"
+    log "owner alerted via direct Bot API (delivery confirmed)"
     return 0
   fi
   # A `rc` valasztja szet a ket bukast, amit a regi alak egyformanak mutatott:

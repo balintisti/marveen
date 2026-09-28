@@ -10,36 +10,15 @@ marker carries a FULL DATE deliberately: dashboard.log lines are time-only,
 and hour-based filtering across days has already produced a false backlog
 reading once.
 
-NOTHING CALLS THIS FILE, AND THE PARAGRAPH ABOVE IS TRUE OF IT AND OF NOTHING
-THAT RUNS (measured 2026-09-11, card e479b940). The sentence "every replayed
-message now writes a marker" describes THIS module; the replay that actually
-happens is a heredoc embedded in watchdog.sh, and it is a DIFFERENT program:
-
-    the heredoc   session_name, agent_id, cutoff_str, data_file = sys.argv[1:5]
-    this file     session_name, agent_id, cutoff_str, data_file, log_target = sys.argv[1:6]
-    marker writes heredoc: 0   |   this file: 6
-    (no line numbers on purpose -- both files drift, the unpack line does not)
-
-So the extraction happened and the call site never moved, and a reader of the
-paragraph above concludes that replays leave a trace. They do not.
-
-    an ANCHORED search over scripts/ src/ dist/ web/ (the anchor matters:
-    an unanchored `watchdog.sh` also matches inside `channel-watchdog.sh`):
-        4 hits -- this docblock, two lines of watchdog.sh's OWN contract
-        test, and a comment in src/web/worker-liveness.ts. ZERO call sites,
-        and this file has no test of its own. (The anchored form also has to
-        survive TRUNCATION: a separate claim in the same round came out false
-        because a 32-line result went through `head -20` and the refutation
-        was on lines 27-30.)
-    CONTROL, same meter on channel-watchdog.sh -> 18 files, so it is not blind.
-    (didi added the axes a reference census cannot see, same day: no running
-     process, no launchd plist under an ANCHORED match, no settings hook in any
-     of the nine config trees, no scheduled task.)
-
-WHAT IS NOT MEASURED, and it is the half that decides the fix: whether this
-path EVER ran, and whether watchdog.sh should be wired to call this file or
-deleted with it. Wiring it is a `scripts/` change, which is live on merge, so
-that is a coordinator decision and not this docblock's to take.
+ITS CALL SITE (corrected at the 88c366f2 upstream merge). Until that merge this
+docblock said "NOTHING CALLS THIS FILE" (measured 2026-09-11, card e479b940),
+and on our tree that was true: watchdog.sh ran its own embedded heredoc, a
+different program (4 argv, 0 marker writes) from this file (5 argv, marker per
+replay). Upstream #1086 moved the call site: watchdog.sh now runs
+`python3 "$INSTALL_DIR/scripts/watchdog-replay.py" ... 2>>"$LOG"`, and that
+reached our tree with the same merge. The claim was therefore retracted rather
+than left standing -- re-measure with an ANCHORED search for
+`scripts/watchdog-replay.py` over scripts/ src/ dist/ web/ if watchdog.sh moves.
 
 argv: session_name agent_id cutoff_epoch data_file log_target
 """

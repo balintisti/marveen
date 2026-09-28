@@ -30,18 +30,28 @@
 export interface GitRunner {
   // Current branch name. "HEAD" (or empty) signals a detached checkout.
   currentBranch(): string
-  // Number of local commits ahead of the upstream tracking ref
-  // (git rev-list --count @{u}..HEAD). >0 means the local history has
-  // diverged, so `git pull --ff-only` will refuse -- the dominant silent
-  // failure. Returns 0 when there is no upstream or the probe fails (the
-  // safe default: do not block on an uncertain count).
+  // Number of local commits ahead of the ref update.sh measures and pulls
+  // (<update-remote>/<branch>; not @{u}, see UPSTREAMSRC927 and card bae4df49),
+  // or `null` when it CANNOT BE MEASURED.
   /**
-   * Helyi commitok szama az upstreamhez kepest, vagy `null`, ha NEM MERHETO
-   * (pl. az agnak nincs beallitott upstreamje). A `null` szandekos: a korabbi
-   * alak `0`-t adott vissza mereси hibara is, tehat a kapu ATENGEDETT olyankor,
-   * amikor a legkevesbe tudta, hogy szabad-e. (Kartya bae4df49.)
+   * Helyi commitok szama a frissito tavolihoz kepest, vagy `null`, ha NEM MERHETO
+   * (pl. hianyzik a tavoli ref). A `null` szandekos: a korabbi alak `0`-t adott
+   * vissza meresi hibara is, tehat a kapu ATENGEDETT olyankor, amikor a
+   * legkevesbe tudta, hogy szabad-e. (Kartya bae4df49.)
    */
   aheadCount(): number | null
+  // Number of upstream commits the local checkout is missing
+  // (git rev-list --count HEAD..<update-remote>/<branch>), same `null`
+  // convention as above. Ahead AND behind together mean the histories parted
+  // and ff-only must refuse.
+  behindCount(): number | null
+  // Does the branch exist on the update remote? update.sh exits 2 when that
+  // ref does not exist, so a local-only branch is a guaranteed-failed run.
+  // Network probe, hence three-valued: 'unknown' (offline, auth failure,
+  // timeout) must NOT block -- an uncertain probe is not evidence of a missing
+  // branch. (Upstream name kept: the update remote is `origin` upstream, and
+  // $UPDATE_REMOTE (default `fork`) on this install.)
+  originHasBranch(branch: string): 'yes' | 'no' | 'unknown'
   // Porcelain status excluding untracked files. Non-empty = dirty tree.
   // Untracked files are excluded because the repo legitimately carries
   // ad-hoc backup files (CLAUDE.md.backup-*, SOUL.md mid-edit, etc.)
@@ -55,6 +65,7 @@ export type PreflightResult =
   | { ok: false; reason: 'detached-head'; message: string }
   | { ok: false; reason: 'local-commits'; message: string; ahead: number }
   | { ok: false; reason: 'ahead-unmeasurable'; message: string }
+  | { ok: false; reason: 'branch-not-on-origin'; message: string; branch: string }
 
 // Concurrency gate: refuse a second /api/updates/apply while the first
 // update.sh is still running. An in-memory timestamp would reset on the
@@ -147,7 +158,30 @@ export function checkUpdatePreflight(git: GitRunner): PreflightResult {
       reason: 'detached-head',
       message:
         'Repository is in a detached-HEAD state. ' +
-        'Check out a release branch before updating, e.g.: git checkout main',
+        'Check out a release branch before updating, e.g.: git switch main || git switch -c main --track origin/main',
+    }
+  }
+
+  // update.sh guard 2: `git ls-remote --exit-code --heads origin <branch>`.
+  // A branch that exists only locally has no ref to fast-forward to, so the
+  // script exits 2 before doing anything. The dashboard spawns it detached
+  // with its output going to a log nobody is watching, answers {ok:true},
+  // and the UI shows "reloading in 30s" for a run that could never start --
+  // exactly the lie this module exists to prevent. Measured 2026-09-05 on
+  // this install: branch fix/email-gate-mcp-matcher, ls-remote exit 2,
+  // preflight ok, update.sh exit 2.
+  // Ordered to match update.sh: this check runs BEFORE the dirty-tree one
+  // there, so the operator sees the same first reason from either entry
+  // point instead of being sent to stash changes that would not have helped.
+  if (git.originHasBranch(branch) === 'no') {
+    return {
+      ok: false,
+      reason: 'branch-not-on-origin',
+      branch,
+      message:
+        `Branch '${branch}' does not exist on origin, so there is nothing to ` +
+        'pull. Updates can only run from a branch that origin also has, e.g.: ' +
+        'git switch main || git switch -c main --track origin/main',
     }
   }
 
@@ -172,37 +206,54 @@ export function checkUpdatePreflight(git: GitRunner): PreflightResult {
     }
   }
 
-  // Local commits ahead of upstream = a diverged history. `git pull --ff-only`
-  // refuses this, and because update.sh runs detached the abort is invisible
-  // (the update looks "started" then reloads to the same commit list). Catch it
-  // here with an actionable message instead of that silent death. A running
-  // agent committing to its own tracked CLAUDE.md/SOUL.md/task-config is the
-  // usual cause. The tree is clean (changes are committed), so the dirty-tree
-  // stash cannot help; reconciliation is a separate, explicit step.
+  // A DIVERGED history -- ahead AND behind together -- is what `git pull
+  // --ff-only` refuses, and because update.sh runs detached the abort is
+  // invisible (the update looks "started" then reloads to the same commit
+  // list). Catch it here with an actionable message instead of that silent
+  // death. A running agent committing to its own tracked CLAUDE.md/SOUL.md/
+  // task-config is the usual cause. The tree is clean (changes are
+  // committed), so the dirty-tree stash cannot help; reconciliation is a
+  // separate, explicit step.
+  // Upstream stopped blocking ahead ALONE (the operator's checkout sat 53
+  // ahead / 0 behind on 2026-08-30 and was locked out of its own updater), and
+  // keeps this copy of the rule equal to update.sh's. The principle -- the
+  // button and the script use the SAME condition -- is kept here; the condition
+  // itself is this install's (see POLICY below and in update.sh).
   const ahead = git.aheadCount()
   // A "nem merheto" SAJAT eset, nem nulla. Ugyanaz a lyuk allt az update.sh
   // 332. soraban is; egyiket javitani a masik nelkul azt tanitana, hogy a
-  // szabaly populacio-fuggo.
+  // szabaly populacio-fuggo. (Kartya bae4df49.)
   if (ahead === null) {
     return {
       ok: false,
       reason: 'ahead-unmeasurable',
       message:
-        'Cannot measure how far this checkout is ahead of its upstream (the branch ' +
-        'has no upstream configured). This is NOT the same as zero local commits: ' +
-        'a fast-forward update from here is not known to be safe. Set one with: ' +
-        'git branch --set-upstream-to=origin/<branch>',
+        'Cannot measure how far this checkout is ahead of the update remote\'s copy of ' +
+        'its branch (the remote-tracking ref is missing, or git failed). This is NOT the ' +
+        'same as zero local commits: a fast-forward update from here is not known to be ' +
+        'safe. Fetch the branch from the update remote first, or set an upstream with: ' +
+        'git branch --set-upstream-to=<update-remote>/<branch>',
     }
   }
+  // POLICY (merge 88c366f2): on this install ANY local commit refuses by default,
+  // as update.sh does -- see the POLICY block there. Upstream refuses only when
+  // ahead AND behind; update.sh accepts ahead-only (and replays a divergence)
+  // only with UPDATE_AUTO_REBASE=1, which the dashboard does not set. The behind
+  // count is measured for the message only; an unmeasurable one is not reported
+  // as zero.
+  const behind = git.behindCount()
   if (ahead > 0) {
+    const behindText = behind === null ? 'an unknown number of commits' : `${behind}`
     return {
       ok: false,
       reason: 'local-commits',
       ahead,
       message:
-        `The local checkout has ${ahead} commit(s) not on the upstream, so a ` +
-        'fast-forward update is not possible. This is usually a local edit that ' +
-        'was committed. Review with: git log @{u}..HEAD',
+        `The local checkout is ${ahead} commit(s) ahead and ${behindText} behind the ` +
+        'update remote, so this install refuses the update: an ahead-only pull is a ' +
+        'no-op, but the run would still build and restart the local tree, and a ' +
+        'diverged history cannot fast-forward at all. Review with: ' +
+        'git log <update-remote>/<branch>..HEAD',
     }
   }
 

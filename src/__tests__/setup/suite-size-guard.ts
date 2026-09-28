@@ -1,5 +1,36 @@
 import type { Reporter } from 'vitest/reporters'
-import type { File, Task } from 'vitest'
+import type { TestModule } from 'vitest/node'
+
+/**
+ * VITEST 4 NINCS `onFinished` (merge 88c366f2, vitest 2 -> 4). A regi horog egyszeruen NEM HIVODIK
+ * meg, hiba nelkul -- vagyis ez az or a frissites utan NEMAN kikapcsolt volna, pontosan az a
+ * nema-kikapcsolas, ami ellen letezik. Az uj horog `onTestRunEnd(testModules)`, es a nyilvanos API
+ * mar nem adja ki a futtato `File`/`Task` fat. Ezert ez a modul a SAJAT, strukturalis fajtajat
+ * hasznalja, es a `toTaskTree` a nyilvanos TestModule-fabol ugyanazt az alakot allitja elo, amit a
+ * szamolok eddig kaptak -- a szamolok maguk VALTOZATLANOK, a sajat egysegtesztjeikkel egyutt.
+ */
+export type Task = { type: string; name?: string; tasks?: Task[]; result?: { state?: string } }
+
+type ReportedNode = {
+  type: string
+  children?: Iterable<ReportedNode>
+  result?: () => { state: string }
+}
+
+// 'passed' / 'failed' -> a regi 'pass' / 'fail'; 'skipped' / 'pending' -> NINCS eredmeny, ahogy
+// a regi faban a skip/todo `result` nelkul maradt (a countRanTests erre epul).
+function toTask(node: ReportedNode): Task {
+  if (node.type === 'test') {
+    const st = node.result?.().state
+    return { type: 'test', result: st === 'passed' ? { state: 'pass' } : st === 'failed' ? { state: 'fail' } : undefined }
+  }
+  return { type: 'suite', tasks: [...(node.children ?? [])].map(toTask) }
+}
+
+/** Egy lefutott modul a szamolok regi alakjaban: `{ name, tasks }`. */
+export function toTaskTree(m: TestModule): { name: string; type: string; tasks: Task[] } {
+  return { name: m.relativeModuleId, type: 'suite', tasks: [...(m.children as Iterable<ReportedNode>)].map(toTask) }
+}
 
 /**
  * ALAPVONAL-OR A LEFUTOTT TESZTEK SZAMARA (kartya 30e04d76).
@@ -364,12 +395,12 @@ export function zeroTestMessage(names: readonly string[]): string {
  * INDITASI hibat ad, es a keszlet el sem indul. (Merve, 2026-08-23.)
  */
 export default class SuiteSizeGuard implements Reporter {
-  onFinished(files?: File[]): void {
-    if (!files) return
+  onTestRunEnd(testModules: ReadonlyArray<TestModule>): void {
+    const files = testModules.map(toTaskTree)
     if (process.env['SUITE_SIZE_GUARD'] === 'off') return
 
     // (A) merettol fuggetlen, reszhalmazon is fut
-    const zeros = zeroTestFiles(files as unknown as { name: string; tasks?: Task[] }[])
+    const zeros = zeroTestFiles(files)
     if (zeros.length > 0) {
       process.stderr.write(zeroTestMessage(zeros))
       process.exitCode = 1
@@ -377,11 +408,11 @@ export default class SuiteSizeGuard implements Reporter {
 
     // (B) alapvonal -- csak teljes futason ertelmes
     if (isFilteredRun(process.argv)) return
-    const collected = countTests(files as unknown as Task[])
-    const ran = countRanTests(files as unknown as Task[])
+    const collected = countTests(files)
+    const ran = countRanTests(files)
     // CIMKE, NEM KUSZOB: ha egy EGESZ fajl kihagyott, azt kimondjuk -- de nem
     // buktatjuk el tole a futast. Egy hatar kezi kivetel-listat kivanna.
-    const allSkipped = (files as unknown as { name: string; tasks?: Task[] }[])
+    const allSkipped = files
       .filter(f => countTests(f.tasks ?? []) > 0 && countRanTests(f.tasks ?? []) === 0)
       .map(f => f.name)
     if (allSkipped.length > 0) {

@@ -8,6 +8,10 @@
 
 set -u
 
+# Hermetic (#1555 review round 1): inside an agent session the inherited
+# channel state dir points at a live access.json / bot token.
+unset TELEGRAM_STATE_DIR SLACK_STATE_DIR DISCORD_STATE_DIR GOOGLECHAT_STATE_DIR TEAMS_STATE_DIR
+
 PASS=0; FAIL=0
 TMPDIR_BASE="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_BASE"' EXIT
@@ -493,6 +497,76 @@ printf '%s' "$OUTT3" | grep -q "tmux probe failed (rc=127," && pass "t: a probe 
 printf '%s' "$OUTT3" | grep -qF "ALERT_DRYRUN: " && pass "t: ...and the owner gets it" || fail "t: no owner fallback after a failed probe: $OUTT3"
 PROBET="$(env -u DISK_GUARD_TMUX_BIN PATH="$TDIR/notmux" DISK_GUARD_TMUX_SEARCH="$TDIR/brew" /bin/bash "$GUARD" --probe 2>&1)"
 printf '%s' "$PROBET" | grep -qF "tmux=$TDIR/brew/tmux" && pass "t: --probe names the tmux it resolved" || fail "t: --probe does not name the resolved tmux: $PROBET"
+
+# ---------------------------------------------------------------------------
+# (u) CHATID0 (upstream b49d4c5d; was upstream's "(k)", renamed because (k) above
+# is ours) -- the real (non-dry-run) alert path resolves the owner chat,
+# refusing the "0" placeholder and falling back to a paired access.json.
+# Needs a full copy of the guard under a throwaway INSTALL_DIR, since
+# INSTALL_DIR is derived from $0, not overridable via env.
+# Two knobs added for OUR guard (merge 88c366f2), both required to reach the
+# owner path at all: DISK_GUARD_ALLOW_FAKE_ALERT=1, because the usage here is
+# planted and (n) pins that a planted percentage is refused without consent; and
+# a tmux stub that says "no coordinator", because (r) routes the alert to the
+# coordinator first -- and on a live host the real coordinator session EXISTS.
+# Also: this file exports DISK_GUARD_ALERT_DRYRUN=1 for every case, so the real
+# send path needs it cleared here (as (n) does); and the reap is pointed at a
+# throwaway dir -- upstream's case left DISK_GUARD_SCRATCH_DIR unset, so a planted
+# 96% made the guard reap the host's REAL /tmp scratch.
+# ---------------------------------------------------------------------------
+echo ""
+echo "(u) CHATID0 owner-chat resolution"
+KBASE="$TMPDIR_BASE/k"
+mkdir -p "$KBASE/bin" "$KBASE/home" "$KBASE/scratch"
+cat > "$KBASE/bin/curl" <<'STUB'
+#!/bin/bash
+for a in "$@"; do
+  case "$a" in
+    chat_id=*) echo "SEEN_CHAT_ID:${a#chat_id=}" >> "$CURL_LOG" ;;
+  esac
+done
+printf '{"ok":true,"result":{"message_id":1}}'
+STUB
+chmod +x "$KBASE/bin/curl"
+printf '#!/bin/sh\nexit 1\n' > "$KBASE/bin/tmux-down"; chmod +x "$KBASE/bin/tmux-down"
+
+# (k1) ALLOWED_CHAT_ID=0, paired access.json -> alerts the REAL resolved id.
+K1="$KBASE/inst1"; mkdir -p "$K1/store" "$K1/.claude/channels/telegram" "$K1/scripts/lib"
+cp "$INSTALL_DIR/scripts/disk-space-guard.sh" "$K1/scripts/"
+cp "$INSTALL_DIR/scripts/lib/owner-chat.sh" "$K1/scripts/lib/"
+cp "$INSTALL_DIR/scripts/lib/send-telegram.sh" "$K1/scripts/lib/"
+printf 'ALLOWED_CHAT_ID=0\n' > "$K1/.env"
+printf 'TELEGRAM_BOT_TOKEN=faketoken\n' > "$K1/.claude/channels/telegram/.env"
+printf '{"allowFrom":["7777777"]}\n' > "$K1/.claude/channels/telegram/access.json"
+CURL_LOG="$K1/curl.log"; : > "$CURL_LOG"
+# The guard's own INSTALL_DIR is scripts/.. -- run it FROM K1 so $0's dirname resolves there.
+CURL_LOG="$CURL_LOG" DISK_GUARD_ALERT_DRYRUN= DISK_GUARD_SCRATCH_DIR="$KBASE/scratch" DISK_GUARD_USAGE_OVERRIDE=96 DISK_GUARD_ALLOW_FAKE_ALERT=1 DISK_GUARD_TMUX_BIN="$KBASE/bin/tmux-down" DISK_GUARD_STATE_DIR="$K1/store" \
+  HOME="$KBASE/home" bash -c 'cd "$1" && PATH="'"$KBASE"'/bin:$PATH" bash scripts/disk-space-guard.sh' _ "$K1" >/dev/null 2>&1
+if grep -q "SEEN_CHAT_ID:7777777" "$CURL_LOG" 2>/dev/null; then
+  pass "CHATID0: ALLOWED_CHAT_ID=0 + paired access.json -> alerts the real resolved id"
+else
+  fail "CHATID0: ALLOWED_CHAT_ID=0 + paired access.json -> expected chat_id=7777777, log: $(cat "$CURL_LOG" 2>/dev/null)"
+fi
+
+# (k2) ALLOWED_CHAT_ID=0, no access.json -> no send, and no "0" chat_id anywhere.
+K2="$KBASE/inst2"; mkdir -p "$K2/store" "$K2/scripts/lib"
+cp "$INSTALL_DIR/scripts/disk-space-guard.sh" "$K2/scripts/"
+cp "$INSTALL_DIR/scripts/lib/owner-chat.sh" "$K2/scripts/lib/"
+cp "$INSTALL_DIR/scripts/lib/send-telegram.sh" "$K2/scripts/lib/"
+printf 'ALLOWED_CHAT_ID=0\n' > "$K2/.env"
+CURL_LOG2="$K2/curl.log"; : > "$CURL_LOG2"
+CURL_LOG="$CURL_LOG2" DISK_GUARD_ALERT_DRYRUN= DISK_GUARD_SCRATCH_DIR="$KBASE/scratch" DISK_GUARD_USAGE_OVERRIDE=96 DISK_GUARD_ALLOW_FAKE_ALERT=1 DISK_GUARD_TMUX_BIN="$KBASE/bin/tmux-down" DISK_GUARD_STATE_DIR="$K2/store" \
+  HOME="$KBASE/home" bash -c 'cd "$1" && PATH="'"$KBASE"'/bin:$PATH" bash scripts/disk-space-guard.sh' _ "$K2" >/dev/null 2>&1
+if [ ! -s "$CURL_LOG2" ]; then
+  pass "CHATID0: ALLOWED_CHAT_ID=0, no access.json -> no send attempted"
+else
+  fail "CHATID0: ALLOWED_CHAT_ID=0, no access.json -> unexpected send: $(cat "$CURL_LOG2")"
+fi
+if grep -q "SEEN_CHAT_ID:0" "$CURL_LOG2" 2>/dev/null; then
+  fail "CHATID0: the '0' placeholder must never reach curl"
+else
+  pass "CHATID0: the '0' placeholder never reaches curl"
+fi
 
 # ---------------------------------------------------------------------------
 echo ""

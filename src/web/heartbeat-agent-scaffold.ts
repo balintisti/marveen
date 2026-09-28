@@ -33,7 +33,7 @@
 // CLAUDE.md (owner, main-agent name, store path, calendar account) comes
 // from config via currentHeartbeatIdentity().
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   PROJECT_ROOT,
@@ -41,16 +41,19 @@ import {
   OWNER_NAME,
   BOT_NAME,
   MAIN_AGENT_ID,
+  HEARTBEAT_AGENT_ID,
   WEB_PORT,
   HEARTBEAT_CALENDAR_ACCOUNT,
   APP_TZ,
   DASHBOARD_PUBLIC_URL,
+  AGENT_API_ORIGIN,
 } from '../config.js'
 import { resolveDashboardOrigin } from './agent-scaffold.js'
 import { logger } from '../logger.js'
 import { CHANNEL_PLUGIN_IDS } from './plugin-ids.js'
+import { HB_METRICS_BLOCK_MARKER } from './heartbeat-metrics-inject.js'
 
-const HEARTBEAT_AGENT_NAME = 'heartbeat'
+const HEARTBEAT_AGENT_NAME = HEARTBEAT_AGENT_ID
 const HEARTBEAT_AGENT_DIR = join(PROJECT_ROOT, 'agents', HEARTBEAT_AGENT_NAME)
 
 // Channel plugins MUST be explicitly disabled in the agent's
@@ -98,9 +101,15 @@ export interface HeartbeatIdentity {
   // Dashboard origin for the inter-agent message POST, e.g.
   // http://localhost:3420.
   dashboardOrigin: string
-  // Google Calendar account to summarise, or '' to let the calendar MCP
+  // Google Calendar account to summarise (display only), or '' to let the
   // server use whatever account it is authenticated as.
   calendarAccount: string
+  // Absolute path to scripts/heartbeat-metrics.sh. Since HBMETRICSWIRE910
+  // the WORKER runs it at prompt-build time (heartbeat-metrics-inject.ts);
+  // the rendered CLAUDE.md names the path only as provenance -- the round
+  // itself is forbidden to run it, so there is no command prose left to
+  // recompose.
+  metricsScript: string
 }
 
 // Build the identity from the live config. Kept separate from the pure
@@ -111,8 +120,9 @@ export function currentHeartbeatIdentity(): HeartbeatIdentity {
     botName: BOT_NAME,
     mainAgentId: MAIN_AGENT_ID,
     storeDir: STORE_DIR,
-    dashboardOrigin: resolveDashboardOrigin(DASHBOARD_PUBLIC_URL, WEB_PORT),
+    dashboardOrigin: resolveDashboardOrigin(DASHBOARD_PUBLIC_URL, WEB_PORT, AGENT_API_ORIGIN),
     calendarAccount: HEARTBEAT_CALENDAR_ACCOUNT,
+    metricsScript: join(PROJECT_ROOT, 'scripts', 'heartbeat-metrics.sh'),
   }
 }
 
@@ -138,7 +148,7 @@ export function shouldBootHeartbeatAgent(opts: { respawnEnabled: boolean; agentE
 export function renderHeartbeatClaudeMd(id: HeartbeatIdentity): string {
   const calendarTarget = id.calendarAccount
     ? `against \`${id.calendarAccount}\``
-    : 'against your primary calendar (whatever account the calendar MCP server is authenticated as)'
+    : 'against the calendar the dashboard is configured for (HEARTBEAT_CALENDAR_ID)'
   // A FAJL MONDJA MEG MAGAROL, HOGY GENERALT (kartya 7a8d972b, jarvis kerdesere).
   // Ez a harom fajl minden bootkor TELJES EGESZEBEN ujrarendelodik (ALWAYS_WRITE), es
   // a fenti komment ki is mondja, hogy szandekosan: "our boot rewrite wins".
@@ -195,180 +205,59 @@ When you receive the heartbeat prompt:
    1h") is read against it, so an hour of drift silently moves the
    window as well as the label.
 
-1. **Collect** the four data sources:
-   - **Calendar (next 2 hours)** -- use the
-     \`mcp__server-google-calendar-mcp__list-events\` tool
-     ${calendarTarget}, timeMin=now, timeMax=now+2h.
-     Call it as a TOOL, directly. Do not try to reach an MCP server
-     from Bash, python, curl or any other subprocess: MCP tools exist
-     only in your own tool list, so a subprocess will always come back
-     empty and that emptiness says nothing about the server.
+1. **Find the measured block in THIS prompt.** Every number -- calendar,
+   kanban, tasks, memory, DB size -- arrives PRE-RENDERED in the prompt
+   itself, in a block that starts with the marker line
+   \`${HB_METRICS_BLOCK_MARKER} ts=...\`. The WORKER already ran the
+   on-disk instrument (\`${id.metricsScript}\`, every number measured
+   server-side on \`${id.dashboardOrigin}\`; the calendar ${calendarTarget})
+   at prompt-build time and rendered its output into the FINAL report
+   sections.
 
-     DEFERRED LOADING (2026-08-09, HBCALMCP808): MCP tools may arrive
-     DEFERRED -- their names appear in a system-reminder listing but
-     the schema is not loaded, and a direct call fails as if the tool
-     did not exist. That failure is NOT absence. Before concluding
-     anything, run:
+   THE BLOCK RULE (HBMETRICSWIRE910, supersedes the old sentinel rule):
+   your report's body is that block's sections, copied VERBATIM. You
+   never run the instrument, and you NEVER rebuild any of its numbers
+   with your own curl / python3 / sqlite3 / du / ls / stat / calendar
+   call -- not even a correct-looking one-liner. Measured history of
+   the alternative, four failed instruction layers on the same metric:
+   HBMEMBLIND807 (self-composed SQL, false 0), HBMEMBLIND819
+   (recomposed with wrong agent_id, 14/14 rounds false 0), 2026-08-24
+   (truncated format string, false 0), and 2026-09-10/11 (du-shaped DB
+   size 488 vs the instrument's 473.6, shipped even by a fresh-context
+   round WHILE the run-it-yourself instruction stood). The worker-side
+   injection exists because instructing this step was measured not to
+   hold; re-measuring "to be sure" is the defect, not diligence.
 
-     ToolSearch with query "select:mcp__server-google-calendar-mcp__list-events"
+   A \`muszer-hiba: ...\` line inside the block IS the measured result:
+   copy it through unchanged. The instrument and the renderer are
+   fail-closed -- a value they could not measure never appears as 0,
+   so a fabricated 0 (or any number not present in the block) is
+   always a defect in YOUR round.
 
-     and then call the tool normally. Between 2026-08-08 20:00 and
-     2026-08-09 every hourly round reported "calendar tool not
-     available" while all 13 calendar tools sat in the deferred list
-     of the very same session -- the section went empty for a day
-     because this step was missing.
-
-     You may say "calendar tool not available in this session" ONLY
-     when ToolSearch itself cannot surface the tool either -- that is
-     a different fact from a failed direct call on a deferred tool,
-     and a different fact again from a failed call (token revoked /
-     401), which only the loaded tool can produce.
-     If the call fails (token revoked / 401), record the failure
-     reason rather than the events; the main agent can act on the
-     failure.
-   - **Kanban** -- ONE command, fetch AND extract together; run it EXACTLY
-     as written, do not recompose it:
-
-     \`\`\`bash
-     python3 -c "import json,urllib.request; tok=open('${id.storeDir}/.dashboard-token').read().strip(); d=json.load(urllib.request.urlopen(urllib.request.Request('${id.dashboardOrigin}/api/kanban/heartbeat-summary', headers={'Authorization':'Bearer '+tok}))); c=d['counts']; print('COUNTS urgent=%s in_progress=%s waiting=%s planned=%s new_hot_memories_1h=%s db_size_mb=%s waiting_shown=%s' % (c['urgent'],c['in_progress'],c['waiting'],c['planned'],c['new_hot_memories_1h'],c.get('db_size_mb'),d.get('waiting_shown'))); [print('URGENT',x['id'],x['title']) for x in d['urgent']]; [print('WAITING',x['id'],x['title']) for x in d['waiting']]"
-     \`\`\`
-
-     The command is ONE line on purpose: it survives copy-paste from any
-     indentation, needs no shell variable, no pipe, and no second
-     process -- the failure modes that produced HBHEREDOC819 and
-     HBKANBANDRIFT819 structurally cannot occur in it.
-
-     FORBIDDEN SHAPE (HBHEREDOC819): NEVER pipe the response into a
-     python3 HEREDOC (\`echo "$X" | python3 << 'PY' ... PY\`) -- the
-     heredoc becomes python3's stdin, the piped data is silently lost,
-     and json.load reads EOF. Measured 2026-08-19 18:00: the round
-     reported "empty response from /api/kanban/heartbeat-summary"
-     while the endpoint was serving 200 with 3173 bytes in 9ms, and
-     the SAME shell POSTed to the same origin with the same token
-     right after. The command above has no pipe and no heredoc; if it
-     fails, REPORT the failure line as-is -- do not rebuild the
-     extraction some other way, and do not hide the error.
-
-     It returns exactly what this section may report:
-     \`{"counts":{...}, "urgent":[...], "waiting":[...]}\`, where the
-     lists contain only UNFINISHED cards -- never archived, never
-     \`done\`, but \`planned\` included, because "urgent and nobody
-     has touched it" is exactly what this line is for. Report the ids
-     and titles it gives you and nothing else.
-
-     EVERY NUMBER COMES FROM \`counts.*\` AND NOWHERE ELSE
-     (HBKANBANDRIFT819): the lists are capped and their titles
-     truncated BY DESIGN (waiting shows only the few most recently
-     updated; \`counts.waiting\` is the full total), so counting the
-     array items gives a number that is WRONG on purpose. Measured
-     2026-08-19 16:42: a heartbeat counted a truncated list and
-     reported waiting: 12 against a real 280. If \`counts\` is missing
-     from the response, write "nincs adat" -- never count the lists as
-     a substitute.
-
-     Two things this replaces, both measured: the old instruction told
-     you to write the filter yourself, and on 2026-08-04 the 09:00
-     report still listed five items of which THREE were \`done\` --
-     a rule you must re-apply every hour is not a mechanism. And the
-     old call used \`sqlite3\`, which does not exist on a stock Linux
-     install (exit 127), so on those hosts this step died silently.
-
-     If a list comes back EMPTY, write that it is empty. Do not widen
-     the query, do not fall back to another status, do not fill the
-     line with closed cards so that it has content: an empty urgent
-     list is the good news, and a report nobody can trust to be empty
-     is a report nobody reads.
-   - **Scheduled tasks** -- the live registry is the dashboard API, NOT
-     the \`scheduled_tasks\` table (that table is empty on this
-     deployment, and a count taken from it reports 0 forever):
-
-     \`\`\`bash
-     curl -s -H "Authorization: Bearer $(cat ${id.storeDir}/.dashboard-token)" \\
-       ${id.dashboardOrigin}/api/schedules \\
-       | python3 -c "import json,sys; r=json.load(sys.stdin); print(sum(1 for x in r if x.get('enabled')))"
-     \`\`\`
-
-     For what actually ran, query \`task_runs\`. Its \`ts\` column is in
-     MILLISECONDS, so the one-hour cutoff is \`(unixepoch()-3600)*1000\`
-     -- with a seconds comparison every row matches and the count is
-     the whole table:
-     \`sqlite3 ${id.storeDir}/claudeclaw.db "SELECT status, COUNT(*) FROM
-     task_runs WHERE ts > (unixepoch()-3600)*1000 GROUP BY status"\`.
-   - **Memory + system** -- DB file size and new hot memories.
-     HBWARN807: there is NO warnings metric here on purpose. The old
-     bullet asked for "status='warning' entries in the memory log" -- a
-     source that DOES NOT EXIST (memories has no status column, the
-     store has no such log table), so the line could only ever say
-     'none': an unfalsifiable metric is zero evidence wearing the
-     costume of a check. If a warnings line ever returns, it must come
-     with a READY-MADE query against a REAL source, like the hot-memory
-     count below.
-     HBMEMBLIND807+819: the hot-memory count comes from the SAME
-     \`/api/kanban/heartbeat-summary\` call you already made for the
-     Kanban section: report \`counts.new_hot_memories_1h\` from that
-     response. Do NOT run any query for this number -- not even a
-     correct-looking one.
-
-     Why an endpoint number and not a query, measured twice:
-     2026-08-07 (HBMEMBLIND807) this bullet was prose, the agent
-     composed its own SQL and reported 0 while three hot memories sat
-     in the window. The fix prescribed a ready-made query with "do not
-     rewrite the query" -- and 2026-08-19 (HBMEMBLIND819) that failed
-     too: 14/14 rounds over 24h reported 0 against real values of 2,
-     because post-compact rounds reconstructed the query from memory as
-     "count MY hot memories" and substituted the wrong agent_id. A
-     prescription you must re-copy every hour is not a mechanism; a
-     number computed server-side has nothing to rewrite. The kanban
-     counts above never drifted for exactly this reason.
-
-     If the field is MISSING from the response (older dashboard build),
-     write \`new hot memories (1h): nincs adat (a summary nem adja)\` --
-     do not fall back to your own query, and never fill the line with 0.
-
-     HBDBMERET822: the DB size comes from the SAME response: report
-     \`counts.db_size_mb\`. Do NOT measure it yourself -- no \`du\`, no
-     \`ls -l\`, no \`stat\`, no python division, not even a
-     correct-looking one. This line used to be a bare placeholder with
-     no source, and each session re-invented the measurement: the
-     format drifted round to round (\`158 MB\`, then \`160M\` in du -h
-     shape) and on 2026-08-22 15:00 a round reported \`0.0 MB\`
-     against a real 159 MB, right after a restart. A growth signal
-     that reads 0.0 does not die loudly -- nobody misses a zero.
-     If the field is missing or \`None\`/null (older dashboard build,
-     or the server could not stat the file), write
-     \`DB size: nincs adat (a summary nem adja)\` -- never 0.
+   If the prompt contains NO \`${HB_METRICS_BLOCK_MARKER}\` marker at
+   all, that itself is the finding: send the report with
+   \`muszer-hiba: hianyzo metrika-blokk (worker-injektalas kimaradt)\`
+   as every section's only line. Do not fill in anything yourself.
 
 2. **Format** the result as a single inter-agent message:
 
    \`\`\`
    ## Heartbeat <the string step 0 measured> (${APP_TZ})
+   merve: <the ts= value from the block's marker line>
 
-   ### Calendar (next 2h)
-   - HH:MM -- <summary> (<attendees>)
-   - <or: "no upcoming events">
-   - <or: "calendar fetch failed: <reason>">
-
-   ### Kanban
-   - urgent: <N> (<short titles, comma-separated>)
-   - in_progress: <N>
-   - waiting: <N> (<short titles>)
-   - planned: <N>
-
-   ### Tasks
-   - enabled schedules: <N>
-   - last hour: <N fired, N skipped>
-
-   ### Memory / system
-   - DB size: <counts.db_size_mb> MB
-   - new hot memories (1h): <N>
+   <the block's sections, from "### Calendar (next 2h)" to the end,
+    VERBATIM -- no line added, dropped, reworded or renumbered>
    \`\`\`
 
-   Every line above is a MEASUREMENT of this round, never a memory of
-   an earlier one. Run the queries again and report what they return
-   now, even when you are sure nothing changed -- especially then.
-   A value carried over from an earlier round makes its line constant,
-   and a line that always says the same thing stops being read -- at
-   which point a real change looks exactly like the noise around it.
+   The \`merve:\` line is the reader's freshness check: it carries the
+   ts the WORKER stamped at prompt-build. If it differs from the step-0
+   clock by more than the current hour, the prompt sat parked before
+   you ran -- still report the block verbatim (it is the measurement
+   that was taken), the two timestamps side by side ARE the finding.
+   Never substitute a value remembered from an earlier round: a stale
+   value is indistinguishable from a fresh one once it is in the
+   message (5E0A32B0: a copy-forwarded failure line masked a day of
+   zero real calendar attempts).
 
 3. **Send** that string to the main agent via the dashboard API:
 
@@ -422,19 +311,32 @@ function renderAgentConfigJson(): string {
   return JSON.stringify(HEARTBEAT_AGENT_CONFIG, null, 2) + '\n'
 }
 
-function renderClaudeSettingsJson(): string {
-  return JSON.stringify({ enabledPlugins: CHANNEL_PLUGIN_DISABLES }, null, 2) + '\n'
+// The project-scope settings must MERGE, never overwrite (HBGATEWIRE826):
+// the hook-seeding pass (web.ts) writes gate hooks into this SAME file, and
+// this scaffold reruns at every boot after it -- the previous wholesale
+// rewrite deleted every seeded hook, which was one half of how the heartbeat
+// worker ran with ZERO dashboard-side hooks (the kanban-write-gate included)
+// while every test stayed green. Only the key this scaffold OWNS
+// (enabledPlugins) is enforced; everything else (hooks, permissions) is
+// preserved. Exported pure so the wiring test can pin the contract.
+export function mergeClaudeSettingsJson(existingRaw: string | null): string {
+  let existing: Record<string, unknown> = {}
+  if (existingRaw) {
+    try { existing = JSON.parse(existingRaw) as Record<string, unknown> } catch { existing = {} }
+  }
+  existing.enabledPlugins = CHANNEL_PLUGIN_DISABLES
+  return JSON.stringify(existing, null, 2) + '\n'
 }
 
-// Files we ALWAYS rewrite. Settings + agent-config are recreated to
-// keep them in sync with the constants in this file; if the operator
-// hand-edited the on-disk copy, our boot rewrite wins. CLAUDE.md is
-// re-rendered every boot for the same reason: the canonical source of
-// truth for the agent's instructions lives here, not on disk.
+// Files we ALWAYS rewrite wholesale. Agent-config is recreated to keep it in
+// sync with the constants in this file; if the operator hand-edited the
+// on-disk copy, our boot rewrite wins. CLAUDE.md is re-rendered every boot
+// for the same reason: the canonical source of truth for the agent's
+// instructions lives here, not on disk. settings.json is deliberately NOT
+// here -- it is merge-written (see mergeClaudeSettingsJson).
 const ALWAYS_WRITE: ReadonlyArray<readonly [string, () => string]> = [
   ['CLAUDE.md', () => renderHeartbeatClaudeMd(currentHeartbeatIdentity())],
   ['agent-config.json', renderAgentConfigJson],
-  [join('.claude', 'settings.json'), renderClaudeSettingsJson],
 ] as const
 
 // Files we write only when missing. The sentinel is a marker, not a
@@ -463,6 +365,9 @@ export function ensureHeartbeatAgent(): void {
     for (const [relPath, render] of ALWAYS_WRITE) {
       writeFileSync(join(HEARTBEAT_AGENT_DIR, relPath), render())
     }
+    const settingsPath = join(claudeDir, 'settings.json')
+    const existingRaw = existsSync(settingsPath) ? readFileSync(settingsPath, 'utf-8') : null
+    writeFileSync(settingsPath, mergeClaudeSettingsJson(existingRaw))
     for (const [relPath, body] of SENTINEL_FILES) {
       const p = join(HEARTBEAT_AGENT_DIR, relPath)
       if (!existsSync(p)) writeFileSync(p, body)
