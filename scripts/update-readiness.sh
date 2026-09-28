@@ -41,8 +41,15 @@ if [ -z "$BRANCH" ] || [ "$BRANCH" = "HEAD" ]; then
 fi
 
 # 2. Letezik-e az ag a tavolin. Ez az, ami MA megfogja ezt a telepitest.
-if ! git ls-remote --exit-code --heads "$REMOTE" "$BRANCH" >/dev/null 2>&1; then
+#    `--exit-code`: 2 = a tavoli valaszolt, es nincs ilyen ag; minden mas nem-nulla (128) = a
+#    tavoli NEM ELERHETO. A ketto kulon ok: egy halozati hiba nem "nincs ilyen ag" (didi 788c0571,
+#    2026-09-28: a GitHub 13:2x-kor egy ideig elerhetetlen volt). Mindketto not-ready marad.
+git ls-remote --exit-code --heads "$REMOTE" "$BRANCH" >/dev/null 2>&1
+LSRC=$?
+if [ "$LSRC" -eq 2 ]; then
   add "a(z) '$BRANCH' ag nem letezik a(z) '$REMOTE' tavolin"
+elif [ "$LSRC" -ne 0 ]; then
+  add "a(z) '$REMOTE' tavoli NEM ELERHETO (git ls-remote rc=$LSRC) -- nem tudni, letezik-e rajta a(z) '$BRANCH' ag"
 fi
 
 # 3. Ahead-szam, a frissito tavoli UGYANAZON agahoz merve (`$REMOTE/$BRANCH`), NEM az `@{u}`-hoz:

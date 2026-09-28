@@ -113,6 +113,16 @@ describe('update-readiness.sh -- a frissitesi ut allapota, MIELOTT kellene', () 
     expect(json.ready).toBe(false)
   })
 
+  it('a tavoli NEM ELERHETO -> NEM ready, es ezt mondja, nem azt, hogy nincs ag (didi 788c0571)', () => {
+    const work = fixture('kesz')
+    // the remote URL points nowhere: ls-remote fails with 128, not the "no such ref" 2
+    spawnSync('git', ['remote', 'set-url', 'fork', join(work, '..', 'nincs-ilyen.git')], { cwd: work })
+    const { json } = probe(work)
+    expect(json.ready).toBe(false)
+    expect(json.reasons.join(' ')).toMatch(/NEM ELERHETO/)
+    expect(json.reasons.join(' ')).not.toMatch(/nem letezik/)
+  })
+
   it('levalasztott HEAD -> NEM ready, es nem hasal el', () => {
     const { json } = probe(fixture('levalasztott'))
     expect(json.ok).toBe(true)
