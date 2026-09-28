@@ -56,13 +56,11 @@ const REGISTRATION_SURFACES = [...SEEDING_SURFACES, ...CHECKOUT_SURFACES]
 // name -> why it is allowed to be unregistered. Keep every reason concrete;
 // "misc" entries defeat the lint.
 const EXEMPT: Record<string, string> = {
-  // THREE ENTRIES FROM THE 88c366f2 MERGE -- each a measured state, not a wish:
+  // TWO ENTRIES FROM THE 88c366f2 MERGE -- each a measured state, not a wish:
   'email-approval-gate.py':
     'held back for the MAIN agent in the 88c366f2 merge (D4, pending marveen P10): with email_send at level 1 it would hard-block every main-agent send/draft; on disk, wired nowhere until decided',
   'skills-snapshot-on-write.sh':
     'ours: wired at USER level (~/.claude/settings.json on this host), which covers every agent; the repo settings do not carry it -- measured 2026-09-28',
-  'claude-usage.py':
-    'ours, and a KNOWN GAP: a UserPromptSubmit hook (zero-token /usage) that is wired NOWHERE on this host -- repo settings 0, user settings 0, measured 2026-09-28; exempt so the merge does not decide it silently, raised separately',
   'ledger_lib.py':
     'shared library imported by the ledger hooks; not itself a hook',
   'command_prompt.py':

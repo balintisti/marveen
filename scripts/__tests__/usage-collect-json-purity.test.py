@@ -9,6 +9,8 @@ A kar nem elmeleti volt. A `scripts/hooks/claude-usage.py` (Szotasztol atvett,
 nulla-tokenes /usage parancs Telegramra) pontosan ezt hivja, `json.loads()`-szal
 olvassa, es a kivetel agan a GENERIC_ERROR_REPLY-t kuldi. Vagyis a kepesseg MEGVOLT
 es SOHA nem ert volna oda -- es a hibauzenet a HOOKRA mutatott volna, nem ide.
+A 88c366f2 merge ota a /usage-et a `scripts/hooks/marveen-commands.py` adja, ugyanigy
+(`--json` + `json.loads`), tehat a szerzodes valtozatlanul el.
 
 Ez a teszt a SZERZODEST vedi, nem a konkret sort: barmely jovobeli `print()` a
 --json uton ugyanigy elbuktatja.

@@ -440,7 +440,8 @@ def _refresh_claude_macos_keychain():
         # the snapshot JSON", es ez a sor megszegte: a hivo `json.loads()`-ja azonnal
         # elhasal rajta. MERVE 2026-09-19: a `scripts/hooks/claude-usage.py` (nulla-tokenes
         # /usage parancs) emiatt MINDIG a GENERIC_ERROR_REPLY-t kuldte volna, vagyis a
-        # kepesseg megvan es nem er oda. Egy FIGYELMEZTETES amugy is a stderr-re valo:
+        # kepesseg megvan es nem er oda. Ma ugyanigy olvassa a `marveen-commands.py`
+        # (`--json` + `json.loads`), ami a 88c366f2 merge-ben atvette a /usage-et. Egy FIGYELMEZTETES amugy is a stderr-re valo:
         # ott mindket modban lathato marad, es egyik modban sem szennyezi az adatot.
         print("  (keychain refresh failed, credential untouched: %s)" % type(e).__name__,
               file=sys.stderr)
