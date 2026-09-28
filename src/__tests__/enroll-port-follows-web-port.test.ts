@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, symlinkSync } from 'node:fs'
+import { rmSync, readFileSync, existsSync, writeFileSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes, randomUUID } from 'node:crypto'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // INSTUX1 regression (Marveen msg 23503): BOTH enroll paths must follow the
 // install's real WEB_PORT into the permitopen restriction AND the connection
@@ -79,7 +82,7 @@ beforeAll(() => {
 })
 
 beforeEach(() => {
-  sshDir = mkdtempSync(join(tmpdir(), 'enroll-port-test-'))
+  sshDir = mkTmp('enroll-port-test-')
   _clearDeviceKeyCacheForTest()
   getDb().prepare('DELETE FROM device_keys').run()
   getDb().prepare('DELETE FROM config_change_log').run()
@@ -96,7 +99,7 @@ describe('INSTUX1: enroll paths follow WEB_PORT on a NON-default port', () => {
     // resolution the CLI really uses (.env -> config.WEB_PORT ->
     // defaultWebPort) with no mock in the path. The import-guard keeps main()
     // from running on import.
-    const dir = mkdtempSync(join(tmpdir(), 'enroll-cli-env-'))
+    const dir = mkTmp('enroll-cli-env-')
     try {
       writeFileSync(join(dir, '.env'), `WEB_PORT=${PORT}\n`)
       const script = join(ROOT, 'scripts', 'remote-access-enroll.ts')
@@ -148,7 +151,7 @@ describe('INSTUX1: enroll paths follow WEB_PORT on a NON-default port', () => {
     // with exit 1 -- a silent guard shows as exit 0 with neither.
     // Negative control (performed and reverted): argv[1] left un-realpathed
     // in the guard -> this test goes RED (exit 0, empty stderr).
-    const dir = mkdtempSync(join(tmpdir(), 'enroll-symlink-'))
+    const dir = mkTmp('enroll-symlink-')
     try {
       symlinkSync(ROOT, join(dir, 'repo'))
       const script = join(dir, 'repo', 'scripts', 'remote-access-enroll.ts')

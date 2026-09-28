@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
@@ -7,6 +7,9 @@ import {
   writePersonaFileIfUnchanged,
   generatedSidecarPath,
 } from '../web/persona-write-guard.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // PERSONANOCLOBBER923. Measured on a live install, 2026-09-21: an operator
 // hand-wrote an agent's CLAUDE.md and SOUL.md in the ~25 minutes between
@@ -20,7 +23,7 @@ const GENERATED = '# generalt\n\nGeneralt szemelyiseg.\n'
 const TEMPLATE = '# x\n\n> **FIGYELEM: ez egy SABLON.** A generalas nem sikerult.\n'
 
 let dir: string
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'persona-guard-')) })
+beforeEach(() => { dir = mkTmp('persona-guard-') })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
 describe('persona write guard: untouched files are written', () => {

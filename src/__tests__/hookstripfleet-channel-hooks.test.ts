@@ -1,13 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import {
-  mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, statSync,
-} from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ensureIsolatedChannelConfigDir } from '../web/agent-process.js'
 import { ensureAgentHooks } from '../web/agent-scaffold.js'
 import { PROJECT_ROOT } from '../config.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // HOOKSTRIPFLEET913: #1307's isolated-config strip removes clone hooks on every
 // respawn. Four channel hooks had NO project-scope writer (they only ever
@@ -102,7 +103,7 @@ describe('HOOKSTRIPFLEET913: the four channel hooks survive the #1307 strip', ()
 
     beforeEach(() => {
       realHome = process.env.HOME
-      fakeHome = mkdtempSync(join(tmpdir(), 'hsf913-'))
+      fakeHome = mkTmp('hsf913-')
       process.env.HOME = fakeHome
       mkdirSync(join(fakeHome, '.claude'), { recursive: true })
       // The global clone-source still carries the four (as on the live host
@@ -144,7 +145,7 @@ describe('HOOKSTRIPFLEET913: the four channel hooks survive the #1307 strip', ()
   // --- Condition 2 (effect): the registered hooks actually DO their job ----
   describe('effect: the hooks fire, not just registered', () => {
     let tmp: string
-    beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'hsf913-fx-')) })
+    beforeEach(() => { tmp = mkTmp('hsf913-fx-') })
     afterEach(() => rmSync(tmp, { recursive: true, force: true }))
 
     it('channel-image-resize.sh preserves the original and emits additionalContext for a >500KB inbox image', () => {

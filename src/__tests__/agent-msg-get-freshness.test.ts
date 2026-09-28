@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // The consumer half. Putting the freshness signal in the API response is only
 // half the fix: `scripts/agent-msg-get.sh` is the reader the
@@ -19,7 +22,7 @@ function render(response: unknown): string {
   const m = script.match(/python3 - "\$OUT" <<'PY'\n([\s\S]*?)\nPY/)
   expect(m, 'the python rendering block must still be recognizable').not.toBeNull()
 
-  const dir = mkdtempSync(join(tmpdir(), 'msgget-'))
+  const dir = mkTmp('msgget-')
   const py = join(dir, 'render.py')
   const json = join(dir, 'msg.json')
   writeFileSync(py, m![1], 'utf-8')

@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdirSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // A fleet where NO agent was migrated to its own OS user: every
 // agents/<name>/.claude-config/projects is a symlink back to the shared
@@ -10,7 +13,7 @@ import { join } from 'node:path'
 // token monitor showed three sub-agents with byte-identical totals
 // (measured on a live install 2026-09-04) while only the main agent's
 // number was real.
-const FIXTURE = mkdtempSync(join(tmpdir(), 'token-usage-symlink-'))
+const FIXTURE = mkTmp('token-usage-symlink-')
 const HOME = join(FIXTURE, 'home')
 const SHARED_PROJECTS = join(HOME, '.claude', 'projects')
 const PROJECT_ROOT = '/Users/x/marveen'

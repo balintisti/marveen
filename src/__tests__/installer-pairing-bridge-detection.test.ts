@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, mkdtempSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // Measured on a Linux/Docker install 2026-09-01: [7/7] printed
 //   "systemd --user nem elerheto (WSL / konteneren / VPS user-session nelkul)"
@@ -54,7 +57,7 @@ function bridgeProbeBlock(src: string): string {
  * `sleep` is stubbed so the 15s wait costs nothing.
  */
 function runProbe(opts: { systemdUser?: boolean; systemdSystem?: boolean; pid?: number | '' }): string {
-  const dir = mkdtempSync(join(tmpdir(), 'marveen-pairprobe-'))
+  const dir = mkTmp('marveen-pairprobe-')
   mkdirSync(join(dir, 'store'), { recursive: true })
   if (opts.pid !== undefined && opts.pid !== '') {
     writeFileSync(join(dir, 'store', 'channels.pid'), String(opts.pid))

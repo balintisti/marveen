@@ -8,11 +8,14 @@
 // and reads the file back -- so a lost write, a wrong path, or a no-op return
 // each fail here. Mock pattern mirrors autonomy-section.test.ts.
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs'
+import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const tmpRoot = mkdtempSync(join(tmpdir(), 'marveen-hostmove-write-'))
+const mkTmp = tmpDirs()
+
+const tmpRoot = mkTmp('marveen-hostmove-write-')
 const NEW_ROOT = tmpRoot
 const OLD_ROOT = '/Users/old-user/klaudia'
 

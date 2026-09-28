@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawn } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // NAPZAROFRISS918: the nap-zaro SKILL.md's step-2 Python block (heredoc `<<'PY'`)
 // now reports updated memories separately from new ones (spec 17-18. döntés). This
@@ -28,7 +31,7 @@ function extractPyBlock(): string {
 function runScript(port: number, since: number): Promise<{ status: number | null; stdout: string; stderr: string }> {
   const fixture = JSON.parse(readFileSync(FIXTURE_PATH, 'utf-8'))
   const script = extractPyBlock().split('{{MAIN_AGENT_ID}}').join(fixture.agent_id)
-  const dir = mkdtempSync(join(tmpdir(), 'nap-zaro-py-'))
+  const dir = mkTmp('nap-zaro-py-')
   const scriptPath = join(dir, 'napzaro.py')
   writeFileSync(scriptPath, script)
   return new Promise((resolve) => {

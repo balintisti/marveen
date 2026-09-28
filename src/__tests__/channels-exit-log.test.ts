@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // CHEXIT910: channels.sh has SEVEN exit-0 paths and zero exit logging --
 // channels-failures.log records only failures, so a clean self-exit left no
@@ -41,7 +44,7 @@ describe('channels.sh exit logging (CHEXIT910)', () => {
   const probeExitLine = CHANNELS.slice(0, CHANNELS.indexOf('exit "${2:-0}"')).split('\n').length
 
   it('POSITIVE CONTROL: a deliberate exit 0 writes a row with the REAL exit line -- the invisible class', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'chexit-'))
+    const dir = mkTmp('chexit-')
     try {
       const log = join(dir, 'exits.log')
       expect(runExitProbe('0', log)).toBe(0)
@@ -55,7 +58,7 @@ describe('channels.sh exit logging (CHEXIT910)', () => {
   })
 
   it('a non-zero exit is recorded with ITS code and line, and the trap does not clobber the exit status', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'chexit-'))
+    const dir = mkTmp('chexit-')
     try {
       const log = join(dir, 'exits.log')
       expect(runExitProbe('7', log)).toBe(7)
@@ -73,7 +76,7 @@ describe('channels.sh exit logging (CHEXIT910)', () => {
     const fnStart = CHANNELS.indexOf('chexit_track() {')
     const fnEnd = CHANNELS.indexOf('\n}', fnStart)
     const tracker = CHANNELS.slice(fnStart, fnEnd + 2)
-    const dir = mkdtempSync(join(tmpdir(), 'chexit-'))
+    const dir = mkTmp('chexit-')
     try {
       const probe = join(dir, 'probe.sh')
       writeFileSync(probe, [
@@ -101,7 +104,7 @@ describe('channels.sh exit logging (CHEXIT910)', () => {
   })
 
   it('seams before the trap stay store-free: a seam invocation writes NO exit row', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'chexit-'))
+    const dir = mkTmp('chexit-')
     try {
       const log = join(dir, 'exits.log')
       execFileSync('bash', [SCRIPT, '--classify-unlock-residue'], {

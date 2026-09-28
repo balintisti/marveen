@@ -11,6 +11,9 @@
  * The first test is the one that matters -- it fails on the old code.
  */
 import { describe, it, expect, vi } from 'vitest'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 vi.mock('../config.js', async () => {
   const actual = await vi.importActual<typeof import('../config.js')>('../config.js')
@@ -98,10 +101,9 @@ describe('command task execution', () => {
 
   it('the timeout kills the command, it does not keep running in the background', async () => {
     const { logger } = await import('../logger.js')
-    const { mkdtempSync, existsSync } = await import('node:fs')
+    const { existsSync } = await import('node:fs')
     const { join } = await import('node:path')
-    const { tmpdir } = await import('node:os')
-    const marker = join(mkdtempSync(join(tmpdir(), 'cmdtask-kill-')), 'still-alive')
+    const marker = join(mkTmp('cmdtask-kill-'), 'still-alive')
     mod.runCommandTask(
       { name: 'kill-probe', type: 'command', command: `sleep 0.8; touch '${marker}'`, agent: 'system', timeoutMs: 200 } as never,
       Math.floor(Date.now() / 1000),

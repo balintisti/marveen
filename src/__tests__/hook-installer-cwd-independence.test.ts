@@ -1,8 +1,11 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, cpSync, existsSync } from 'node:fs'
+import { rmSync, mkdirSync, writeFileSync, cpSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // Every git-hook installer must land its hooks in the repository it BELONGS TO,
 // whatever directory it happens to be started from.
@@ -44,7 +47,7 @@ const INSTALLERS = [
   },
 ] as const
 
-const stage = mkdtempSync(join(tmpdir(), 'hookcwd-'))
+const stage = mkTmp('hookcwd-')
 afterAll(() => rmSync(stage, { recursive: true, force: true }))
 
 let n = 0
@@ -85,7 +88,7 @@ describe.each(INSTALLERS)('$script: the install target is the repo, not the call
 
   it('started from a NON-GIT directory it still installs into its own repo', () => {
     const repo = makeRepo('nongit', script)
-    const outside = mkdtempSync(join(stage, 'plain-'))
+    const outside = mkTmp('plain-', stage)
     const r = install(repo, script, outside)
     expect(r.status).toBe(0)
     expect(existsSync(join(repo, guard))).toBe(true)

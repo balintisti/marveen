@@ -5,13 +5,16 @@
 // memoria-heartbeat turn). The tail runs on a real file, appended the way
 // Claude Code appends, so offset/partial-line/rotation bugs show up here.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, writeFileSync, appendFileSync, rmSync, utimesSync } from 'node:fs'
+import { writeFileSync, appendFileSync, rmSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
   parseQueuedChannelCommand, midTurnTick, newTailState, type MidTurnDeps, type TailState,
 } from '../web/midturn-commands.js'
 import type { DispatchResult } from '../web/routes/commands.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const OWNER = '8659214323'
 
@@ -74,7 +77,7 @@ describe('midTurnTick', () => {
   let deps: MidTurnDeps
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'midturn-'))
+    dir = mkTmp('midturn-')
     file = join(dir, 'sess-a.jsonl')
     writeFileSync(file, queuedLine(channelPrompt('/status')) + '\n') // history: must NOT be replayed
     state = newTailState()

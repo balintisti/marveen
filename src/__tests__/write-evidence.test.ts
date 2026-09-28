@@ -3,10 +3,13 @@
 // -- the owner's chat, the same message id, the same text, recent, and not
 // used before.
 import { describe, it, expect, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { checkWriteEvidence, findEvidence, readEvidenceLines, EVIDENCE_FILE, EVIDENCE_WINDOW_MS, WRITE_EVIDENCE_REPLY } from '../web/write-evidence.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const NOW = 1_780_000_000_000
 const line = (o: Record<string, unknown>) => JSON.stringify({ chat_id: '42', message_id: '901', text: '/model opus', at: NOW - 5_000, ...o })
@@ -63,7 +66,7 @@ describe('checkWriteEvidence', () => {
 
 describe('findEvidence / readEvidenceLines', () => {
   it('reads the rotated file too (a message logged just before the rotation)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'write-evidence-')); dirs.push(dir)
+    const dir = mkTmp('write-evidence-'); dirs.push(dir)
     writeFileSync(join(dir, `${EVIDENCE_FILE}.1`), line({}) + '\n')
     writeFileSync(join(dir, EVIDENCE_FILE), line({ message_id: '950' }) + '\n')
     const lines = readEvidenceLines(dir)
@@ -71,7 +74,7 @@ describe('findEvidence / readEvidenceLines', () => {
     expect(findEvidence(lines, '42', '950')).not.toBeNull()
   })
   it('no log at all (the plugin patch is missing): nothing found, so no write runs', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'write-evidence-')); dirs.push(dir)
+    const dir = mkTmp('write-evidence-'); dirs.push(dir)
     expect(readEvidenceLines(dir)).toEqual([])
   })
 })

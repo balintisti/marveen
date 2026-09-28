@@ -12,6 +12,9 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { trackedBranch, currentVersion, getUpdateStatus } from '../web/update-checker.js'
 import { PROJECT_ROOT } from '../config.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 function gitBranch(): string {
   return execFileSync('/usr/bin/git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
@@ -72,7 +75,7 @@ describe('update checker current version', () => {
 //   - the compare BASE (a base the remote does not know turns the reported
 //     backlog into a fork-distance -- measured 375 against a real 5).
 import { remoteIsOwnOrigin, parseGitHubRemote, branchOnRemote, branchExistsOnOrigin, originHasTrackingRefs, upstreamMergeBase } from '../web/update-checker.js'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 
 // A throwaway git repo with the given remotes. Everything below measures against
@@ -80,7 +83,7 @@ import { tmpdir } from 'node:os'
 // `upstream` remote, so a test that reads PROJECT_ROOT exits before it asserts
 // anything, and stays green even with the fix deleted.
 function repoWithRemotes(remotes: Record<string, string>): string {
-  const dir = mkdtempSync(join(tmpdir(), 'update-checker-'))
+  const dir = mkTmp('update-checker-')
   const git = (...args: string[]) =>
     execFileSync('/usr/bin/git', args, { cwd: dir, timeout: 5000, encoding: 'utf-8' })
   git('init', '-q', '-b', 'a-local-feature-branch')
@@ -215,7 +218,7 @@ describe('branchOnRemote does not trust a branch the remote has never seen', () 
 // `refs/remotes/origin/*` -- so the assertions measure git behaviour and stay
 // true wherever they run.
 function clonedRepoWithTrackingRefs(): { root: string; cleanup: () => void } {
-  const dir = mkdtempSync(join(tmpdir(), 'update-checker-clone-'))
+  const dir = mkTmp('update-checker-clone-')
   const origin = join(dir, 'origin.git')
   const root = join(dir, 'work')
   const git = (cwd: string, ...args: string[]) =>

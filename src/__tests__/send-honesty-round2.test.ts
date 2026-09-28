@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync, existsSync, readFileSync, cpSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, chmodSync, existsSync, readFileSync, cpSync } from 'node:fs'
 import { tmpdir, platform } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // NOTIFYVAKSWEEP826 round 2: the remaining Telegram senders move to the shared
 // contract (telegram_api_call generalizes it beyond sendMessage), their
@@ -17,7 +20,7 @@ const ROOT = join(__dirname, '..', '..')
 const FAKE_TOKEN = '1234567890:TESTTOKENTESTTOKEN'
 
 let stage: string
-beforeEach(() => { stage = mkdtempSync(join(tmpdir(), 'send-r2-')) })
+beforeEach(() => { stage = mkTmp('send-r2-') })
 afterEach(() => { rmSync(stage, { recursive: true, force: true }) })
 
 function stageTree(scriptNames: string[]): { bin: string } {

@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // Repo root = two levels up from src/__tests__/.
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -85,7 +88,7 @@ function currentBranch(cwd: string): string {
 
 describe('BRANCH_HEAL_COMMAND (the command the Updates page hands the user)', () => {
   beforeAll(() => {
-    tmp = mkdtempSync(join(tmpdir(), 'branch-heal-'))
+    tmp = mkTmp('branch-heal-')
     upstream = makeUpstream('main')
   })
   afterAll(() => rmSync(tmp, { recursive: true, force: true }))

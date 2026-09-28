@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { mkdtempSync, rmSync, existsSync, statSync, readdirSync } from 'node:fs'
+import { rmSync, existsSync, statSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // #796: a deleted DEFAULT scheduled task reappeared after an update, because
 // seeding (ensureDefaultScheduledTasks on every dashboard start, and the shell
@@ -10,7 +13,7 @@ import { join } from 'node:path'
 // read. os.homedir() reads $HOME on POSIX, so we point HOME at a temp dir
 // BEFORE importing the modules (SCHEDULED_TASKS_DIR is computed at import) and
 // exercise the real exported functions, not a re-implementation.
-const tmpHome = mkdtempSync(join(tmpdir(), 'tombstone-home-'))
+const tmpHome = mkTmp('tombstone-home-')
 const realHome = process.env.HOME
 process.env.HOME = tmpHome
 process.env.MAIN_AGENT_ID = process.env.MAIN_AGENT_ID || 'marveen'

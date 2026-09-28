@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import Database from 'better-sqlite3'
-import { mkdtempSync } from 'node:fs'
+
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
   detectHomoglyphs, formatHomoglyphWarning, triggerLikeClause, TRIGGER_CHARS,
 } from '../homoglyph.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // GATEHOMOGLIFSWEEP816. Design pinned by these tests, in order of importance:
 //  1. the gate WARNS and journals -- it never blocks and never rewrites
@@ -51,7 +54,7 @@ describe('formatHomoglyphWarning', () => {
 })
 
 function fixtureDb() {
-  const dir = mkdtempSync(join(tmpdir(), 'homoglif-'))
+  const dir = mkTmp('homoglif-')
   const db = new Database(join(dir, 'test.db'))
   db.exec(`CREATE TABLE kanban_cards (id TEXT PRIMARY KEY, title TEXT NOT NULL)`)
   db.exec(`CREATE TABLE kanban_comments (

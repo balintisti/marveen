@@ -22,9 +22,12 @@
 // holds for callers that do not exist yet.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync } from 'node:fs'
+import { rmSync, readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 let ROOT = ''
 const sent: Array<[string, string, string]> = []
@@ -56,7 +59,7 @@ function log(): string {
 }
 
 beforeEach(() => {
-  ROOT = mkdtempSync(join(tmpdir(), 'mcguard-'))
+  ROOT = mkTmp('mcguard-')
   require('node:fs').mkdirSync(join(ROOT, 'store'), { recursive: true })
   sent.length = 0
   fakeState = { isolatedConfigDir: null, fleetToken: false, isolatedDirExists: false }

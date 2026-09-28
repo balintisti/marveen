@@ -1,14 +1,17 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { writeFileSync, readFileSync, mkdtempSync, rmSync, chmodSync, statSync, existsSync } from 'node:fs'
+import { writeFileSync, readFileSync, rmSync, chmodSync, statSync, existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { syncTeamsDisplayName } from '../web/agent-process.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // ENVTMPMODE925: two .env writers that left a secrets file readable by every
 // local user for a while -- the follow-up of ENVPERM925 (#1594).
 
-const SANDBOX = mkdtempSync(join(tmpdir(), 'env-tmp-mode-'))
+const SANDBOX = mkTmp('env-tmp-mode-')
 const modeOf = (p: string) => statSync(p).mode & 0o777
 
 afterAll(() => { rmSync(SANDBOX, { recursive: true, force: true }) })
@@ -62,7 +65,7 @@ describe.each(['install-linux.sh', 'install-macos.sh'])('%s env_merge_key', (scr
   ].join('\n')], { encoding: 'utf-8' })
 
   it('the tmp holding the full .env is 0600 before the mv, and the merge is right', () => {
-    const dir = mkdtempSync(join(SANDBOX, 'inst-'))
+    const dir = mkTmp('inst-', SANDBOX)
     writeFileSync(join(dir, '.env'), 'TELEGRAM_BOT_TOKEN=123:abc\nNEW_KEY=old\n')
     chmodSync(join(dir, '.env'), 0o600)
     run(dir)
@@ -72,7 +75,7 @@ describe.each(['install-linux.sh', 'install-macos.sh'])('%s env_merge_key', (scr
   })
 
   it('a leftover tmp of the same name does not pass its 0644 on', () => {
-    const dir = mkdtempSync(join(SANDBOX, 'inst-'))
+    const dir = mkTmp('inst-', SANDBOX)
     writeFileSync(join(dir, '.env'), 'A=1\n')
     // $$ inside `bash -c` is that shell's pid, unknown here -- so pre-create the
     // leftover from inside the same shell, right before the call.

@@ -8,9 +8,12 @@
 // seam), so each case re-imports the module after pointing the seam at a
 // temporary .env.
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const saved = {
   dir: process.env.CLAUDECLAW_ENV_DIR,
@@ -19,7 +22,7 @@ const saved = {
 }
 
 async function loadWithEnvFile(content: string) {
-  const dir = mkdtempSync(join(tmpdir(), 'b1f-env-'))
+  const dir = mkTmp('b1f-env-')
   writeFileSync(join(dir, '.env'), content)
   process.env.CLAUDECLAW_ENV_DIR = dir
   vi.resetModules()
@@ -64,7 +67,7 @@ describe('ROUTER_BATCH_INJECT_* resolves from the install .env, not only from pr
   })
 
   it('the .env is read fresh on each call: editing it takes effect without a restart', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'b1f-env-'))
+    const dir = mkTmp('b1f-env-')
     writeFileSync(join(dir, '.env'), 'WEB_PORT=3420\n')
     process.env.CLAUDECLAW_ENV_DIR = dir
     vi.resetModules()

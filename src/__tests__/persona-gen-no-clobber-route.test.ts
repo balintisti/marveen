@@ -1,8 +1,11 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // PERSONANOCLOBBER923, driven through the route itself (review of #1518).
 //
@@ -125,7 +128,7 @@ const skipNotices = () => h.createAgentMessage.mock.calls.filter(
 
 const savedCliEnv = process.env[CLI_VERSION_OVERRIDE_ENV]
 beforeEach(() => {
-  h.root = mkdtempSync(join(tmpdir(), 'persona-route-'))
+  h.root = mkTmp('persona-route-')
   let markStarted!: () => void
   const started = new Promise<void>((r) => { markStarted = r })
   h.gen = { started, markStarted, claude: deferred<string>(), soul: deferred<string>() }

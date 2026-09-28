@@ -2,12 +2,15 @@
 // principal, allowlist verdict, found) and NEVER the value. Audit only: the
 // allowlist verdict does not block anything in this phase.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type http from 'node:http'
 import { Readable } from 'node:stream'
 import type { RouteContext } from '../web/routes/types.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const logSpy = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 vi.mock('../logger.js', () => ({ logger: logSpy, PRETTY_OPTIONS: {} }))
@@ -28,7 +31,7 @@ vi.mock('../web/vault.js', () => ({
 const { readVaultAcl, principalOf, evaluateVaultRead, logVaultRead, isSshPrivateKeyId } = await import('../web/vault-acl.js')
 const { tryHandleConnectors } = await import('../web/routes/connectors.js')
 
-const tmp = mkdtempSync(join(tmpdir(), 'vault-acl-test-'))
+const tmp = mkTmp('vault-acl-test-')
 function aclFile(name: string, content: string): string {
   const p = join(tmp, name)
   writeFileSync(p, content, 'utf-8')

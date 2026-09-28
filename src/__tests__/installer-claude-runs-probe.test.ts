@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, mkdtempSync, chmodSync, existsSync, readdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, chmodSync, existsSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // CLIRUNSVERZIO923. install-linux.sh and scripts/fix-avx.sh decide "the
 // installed claude actually launches" with `_claude_runs`. It used to run
@@ -37,7 +40,7 @@ type MockKind = 'healthy' | 'spin' | 'crash'
 
 /** A PATH dir holding a mock `claude` of the given class; -p records its environment. */
 function mockClaude(kind: MockKind, envLog: string): string {
-  const dir = mkdtempSync(join(tmpdir(), 'clirv-'))
+  const dir = mkTmp('clirv-')
   const body = [
     '#!/bin/bash',
     'if [ "$1" = "--version" ]; then echo "2.1.280 (Claude Code)"; exit 0; fi',
@@ -87,13 +90,13 @@ describe.skipIf(!HAVE_TIMEOUT)('_claude_runs is a real launch probe, not --versi
   for (const [label, src] of [['install-linux.sh', LINUX], ['scripts/fix-avx.sh', FIXAVX]] as const) {
     describe(label, () => {
       it('spin class (--version exits 0, -p hangs): NO -- and the old --version gate said RUNS', () => {
-        const log = join(mkdtempSync(join(tmpdir(), 'clirv-log-')), 'env')
+        const log = join(mkTmp('clirv-log-'), 'env')
         const dir = mockClaude('spin', log)
         expect(runProbe(src, dir)).toBe(3)
         expect(runOldGate(dir), 'instrument control: the old gate is fooled by this class').toBe(0)
       })
       it('healthy class (-p exits 1 fast with the Not-logged-in JSON): RUNS, auth-free, isolated config dir, cleaned up', () => {
-        const log = join(mkdtempSync(join(tmpdir(), 'clirv-log-')), 'env')
+        const log = join(mkTmp('clirv-log-'), 'env')
         const dir = mockClaude('healthy', log)
         // PROBEFLAKY924: this case must RUN, so its timeout must never be the
         // thing that decides it. The mock exits at once, but under a full-suite
@@ -111,11 +114,11 @@ describe.skipIf(!HAVE_TIMEOUT)('_claude_runs is a real launch probe, not --versi
         expect(existsSync(seen.CFG), 'the probe config dir is removed afterwards').toBe(false)
       })
       it('crash class (SIGILL on -p): NO', () => {
-        const log = join(mkdtempSync(join(tmpdir(), 'clirv-log-')), 'env')
+        const log = join(mkTmp('clirv-log-'), 'env')
         expect(runProbe(src, mockClaude('crash', log))).toBe(3)
       })
       it('no claude on PATH: NO', () => {
-        const empty = mkdtempSync(join(tmpdir(), 'clirv-empty-'))
+        const empty = mkTmp('clirv-empty-')
         expect(runProbe(src, empty, { PATH: `${empty}:/usr/bin:/bin` })).toBe(3)
       })
     })
@@ -134,7 +137,7 @@ describe.skipIf(!HAVE_TIMEOUT)('_claude_runs is a real launch probe, not --versi
 describe('_shelve_broken_claude moves a non-launching claude off PATH so the pin can win', () => {
   for (const [label, src] of [['install-linux.sh', LINUX], ['scripts/fix-avx.sh', FIXAVX]] as const) {
     it(`${label}: the binary is renamed to <path>.avx-broken and claude no longer resolves`, () => {
-      const dir = mockClaude('spin', join(mkdtempSync(join(tmpdir(), 'clirv-log-')), 'env'))
+      const dir = mockClaude('spin', join(mkTmp('clirv-log-'), 'env'))
       const script = [
         'warn() { echo "warn: $*"; }',
         sliceShellFn(src, '_shelve_broken_claude'),

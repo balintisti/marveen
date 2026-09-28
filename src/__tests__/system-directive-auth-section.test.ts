@@ -1,13 +1,16 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, readFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // GUARDHITELES903: the RECEIVER half. The scaffold rule is what turns the
 // envelope's msg_id from provenance into protection, so its presence and
 // idempotency get the same pin as the other generated sections.
 
-const tmpRoot = mkdtempSync(join(tmpdir(), 'marveen-sysdir-test-'))
+const tmpRoot = mkTmp('marveen-sysdir-test-')
 
 vi.mock('../config.js', () => ({
   // agent-scaffold imports settings-store (MCPOROKLES923), which derives a path from

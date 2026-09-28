@@ -3,7 +3,7 @@
 // and its reply comes back; anything else is `handled:false` with nothing run
 // and nothing replied, so the hook lets the prompt through to the model.
 import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { Readable } from 'node:stream'
 import { readFileSync } from 'node:fs'
@@ -13,11 +13,14 @@ import { registerCommand, clearCommandsForTest } from '../web/commands.js'
 import { dispatchForChat, tryHandleCommands, mainSessionFromBody } from '../web/routes/commands.js'
 import { requiresAuth, resolveAuth } from '../web/auth-gate.js'
 import type { RouteContext } from '../web/routes/types.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // The owner chat the route resolves, and the channel state dir the evidence
 // is read from: both pinned, so the HTTP cases below never see a live install.
 vi.mock('../owner-chat.js', async (orig) => ({ ...(await orig<typeof import('../owner-chat.js')>()), resolveOwnerChatId: () => '42' }))
-const STATE = mkdtempSync(join(tmpdir(), 'cmd-evidence-'))
+const STATE = mkTmp('cmd-evidence-')
 const prevStateDir = process.env.TELEGRAM_STATE_DIR
 beforeAll(() => { initDatabase(':memory:'); process.env.TELEGRAM_STATE_DIR = STATE })
 afterAll(() => {

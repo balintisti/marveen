@@ -12,10 +12,13 @@
 // hook that exits non-zero turns a labelling aid into a tool failure.
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, existsSync, statSync } from 'node:fs'
+import { readFileSync, existsSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..', '..')
@@ -26,7 +29,7 @@ type HookRun = { stdout: string; status: number; logPath: string }
 function runHook(payload: unknown): HookRun {
   // Every run gets its own log file: the hook appends the full payload for the
   // operator, and a shared path would let one case read another's writes.
-  const logPath = join(mkdtempSync(join(tmpdir(), 'bcn-')), 'browser-content.log')
+  const logPath = join(mkTmp('bcn-'), 'browser-content.log')
   let status = 0
   let stdout = ''
   try {

@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // MCPOROKLES923 -- owner decision (b): a NEW agent inherits MCP servers only from
 // an explicit list (AGENT_INHERITED_MCP_SERVERS), on BOTH inheritance paths:
@@ -13,7 +16,7 @@ import { tmpdir } from 'node:os'
 // does -- without (ii) a green run could just mean "we copy nothing any more".
 // And the 2026-09-05 scope-collision rule must survive the filter.
 
-const SANDBOX = mkdtempSync(join(tmpdir(), 'mcpinherit-'))
+const SANDBOX = mkTmp('mcpinherit-')
 let LIST = ''
 
 vi.mock('node:os', async (orig) => {

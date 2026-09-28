@@ -15,7 +15,7 @@
 // resolves through os.homedir() at call time, so even a broken gate can only
 // write into the sandbox, never into the operator's real home.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -26,6 +26,9 @@ import {
   agentSettingsPath,
 } from '../web/agent-scaffold.js'
 import { MAIN_AGENT_ID, PROJECT_ROOT } from '../config.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const PROBE = 'mainrefusal-probe'
 const probeDir = join(PROJECT_ROOT, 'agents', PROBE)
@@ -38,7 +41,7 @@ const MARKER = '{"hooks":{"marker":"untouched-by-1305-gate"}}'
 
 beforeEach(() => {
   realHome = process.env.HOME
-  fakeHome = mkdtempSync(join(tmpdir(), 'refuse1305-'))
+  fakeHome = mkTmp('refuse1305-')
   process.env.HOME = fakeHome
   mkdirSync(join(fakeHome, '.claude'), { recursive: true })
   mainSettings = agentSettingsPath(MAIN_AGENT_ID)

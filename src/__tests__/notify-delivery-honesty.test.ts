@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // NOTIFYVAK826: notify.sh is the fleet's FALLBACK channel -- it fires exactly
 // when the primary Telegram plugin is down. Until this fix it discarded curl's
@@ -62,7 +65,7 @@ function runNotify(env: Record<string, string>, chatId = '42'): { status: number
 }
 
 beforeAll(() => {
-  stage = mkdtempSync(join(tmpdir(), 'notify-honesty-'))
+  stage = mkTmp('notify-honesty-')
 })
 
 afterAll(() => {

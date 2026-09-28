@@ -1,16 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, openSync, writeSync, closeSync, statSync } from 'node:fs'
+import { rmSync, writeFileSync, readFileSync, existsSync, openSync, writeSync, closeSync, statSync } from 'node:fs'
 import { gunzipSync } from 'node:zlib'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { rotateLogFile, runLogRotationSweep, ROTATED_LOG_NAMES } from '../web/log-rotation.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // Copytruncate rotation (LOGROTATE910). The load-bearing property is the last
 // test: a writer holding the file open in APPEND mode keeps landing lines in
 // the truncated live file -- the exact shape mv-based rotation breaks.
 
 let dir: string
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'logrot-')) })
+beforeEach(() => { dir = mkTmp('logrot-') })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
 const fill = (path: string, bytes: number, ch = 'x') => writeFileSync(path, ch.repeat(bytes))

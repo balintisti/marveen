@@ -10,11 +10,14 @@
 // - responseMode 'text' + install default on: transcribed, unless the agent
 //   sets voice.transcribeInbound=false.
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const stateDir = mkdtempSync(join(tmpdir(), 'router-stt-gate-'))
+const mkTmp = tmpDirs()
+
+const stateDir = mkTmp('router-stt-gate-')
 writeFileSync(join(stateDir, '.env'), 'TELEGRAM_BOT_TOKEN=x\n')
 
 const cfgState = vi.hoisted(() => ({ installDefault: false }))

@@ -16,7 +16,7 @@
 // These tests pin the target path and the watcher's re-render decision.
 
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, writeFileSync, existsSync, readFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, existsSync, readFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -26,6 +26,9 @@ import {
   watchEgressAllowlistForReaderRender,
 } from '../web/agent-scaffold.js'
 import { PROJECT_ROOT, MAIN_AGENT_ID } from '../config.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const TEMPLATE = `---
 name: quarantine-reader
@@ -40,7 +43,7 @@ For any other domain, return the error shape.
 `
 
 function tmpSetup() {
-  const root = mkdtempSync(join(tmpdir(), 'qr-render-'))
+  const root = mkTmp('qr-render-')
   const tplPath = join(root, 'quarantine-reader.md')
   writeFileSync(tplPath, TEMPLATE)
   const destDir = join(root, 'dest', '.claude', 'agents')

@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // MEMFMGATE918: nine memory files in the fleet store had a frontmatter that
 // did not parse, so the harness could not read their `description` and the
@@ -16,7 +19,7 @@ import { join } from 'node:path'
 
 const ROOT = join(__dirname, '..', '..')
 const GATE = join(ROOT, 'scripts', 'hooks', 'memory-frontmatter-gate.py')
-const SCRATCH = mkdtempSync(join(tmpdir(), 'memfm-gate-'))
+const SCRATCH = mkTmp('memfm-gate-')
 const MEMDIR = join(SCRATCH, '.claude', 'projects', '-Users-x-app', 'memory')
 mkdirSync(MEMDIR, { recursive: true })
 

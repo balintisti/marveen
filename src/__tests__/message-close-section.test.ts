@@ -9,12 +9,15 @@
 // The wiring part reads the two call sites with comment lines removed, so a
 // commented-out call does not pass for a live one.
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, readFileSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const tmpRoot = mkdtempSync(join(tmpdir(), 'marveen-msgclose-test-'))
+const mkTmp = tmpDirs()
+
+const tmpRoot = mkTmp('marveen-msgclose-test-')
 
 vi.mock('../config.js', () => ({
   STORE_DIR: '/nonexistent/claudeclaw-test-store',

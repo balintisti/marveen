@@ -16,11 +16,14 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { execFile } from 'node:child_process'
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const ROOT = mkdtempSync(join(tmpdir(), 'vault-resolve-test-'))
+const mkTmp = tmpDirs()
+
+const ROOT = mkTmp('vault-resolve-test-')
 const SECRET_VALUE = 'sv-3f6f1e2b-not-a-real-secret'
 
 function run(stdin: string): Promise<{ code: number; stdout: string; stderr: string }> {

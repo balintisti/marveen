@@ -10,13 +10,16 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import { spawn } from 'node:child_process'
 import http from 'node:http'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { AddressInfo } from 'node:net'
 import { clearCommandsForTest, listCommands } from '../web/commands.js'
 import { registerBuiltinCommands } from '../web/builtin-commands.js'
 import Database from 'better-sqlite3'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const ROOT = join(__dirname, '..', '..')
 const HOOK = join(ROOT, 'scripts', 'hooks', 'marveen-commands.py')
@@ -70,21 +73,21 @@ beforeAll(async () => {
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r))
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
 
-  install = mkdtempSync(join(tmpdir(), 'mcmd-install-'))
+  install = mkTmp('mcmd-install-')
   mkdirSync(join(install, 'store'))
   mkdirSync(join(install, 'scripts'))
   writeFileSync(join(install, '.env'), 'ALLOWED_CHAT_ID=42\n')
   writeFileSync(join(install, 'store', '.dashboard-token'), 'dash-token\n')
   writeFileSync(join(install, 'scripts', 'usage-collect.py'),
     'import json\nprint(json.dumps({"claude": {"ok": True, "windows": {"five_hour": {"used_percent": 30, "resets_at": 0}}}}))\n')
-  stateDir = mkdtempSync(join(tmpdir(), 'mcmd-state-'))
+  stateDir = mkTmp('mcmd-state-')
   writeFileSync(join(stateDir, '.env'), 'TELEGRAM_BOT_TOKEN=bot-tok\n')
   // Isolates the conversation-continuity ledger from the worktree's own
   // store/claudeclaw.db -- ledger_lib.db_path() resolves from THIS repo
   // checkout's own scripts/hooks/ dir (not from MARVEEN_INSTALL_DIR), so
   // without this override every hook spawn here would write real rows into
   // the checkout's live store (gitignored, but still cross-run shared state).
-  ledgerDb = join(mkdtempSync(join(tmpdir(), 'mcmd-ledger-')), 'claudeclaw.db')
+  ledgerDb = join(mkTmp('mcmd-ledger-'), 'claudeclaw.db')
 })
 
 afterAll(() => {

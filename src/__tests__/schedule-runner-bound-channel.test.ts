@@ -8,14 +8,17 @@
 // the fix: telegram/access.json was read unconditionally, was absent, and every
 // scheduled task shipped with no delivery instruction.
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // The mock factories are hoisted but run lazily, on the dynamic import below,
 // so they can safely read this module-level state.
 const h = {
-  tmpRoot: mkdtempSync(join(tmpdir(), 'bound-channel-')),
+  tmpRoot: mkTmp('bound-channel-'),
   provider: 'telegram' as 'telegram' | 'slack' | 'discord',
 }
 

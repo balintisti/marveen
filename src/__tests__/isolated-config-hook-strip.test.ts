@@ -15,11 +15,14 @@
 //     (the inheritance block runs after the strip, so without its own
 //     'hooks' exclusion it would resurrect them every start).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ensureIsolatedChannelConfigDir } from '../web/agent-process.js'
 import { PROJECT_ROOT } from '../config.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const PROBE = 'hookstrip-probe'
 const probeDir = join(PROJECT_ROOT, 'agents', PROBE)
@@ -44,7 +47,7 @@ function readIsolated(): Record<string, unknown> {
 
 beforeEach(() => {
   realHome = process.env.HOME
-  fakeHome = mkdtempSync(join(tmpdir(), 'hookstrip-'))
+  fakeHome = mkTmp('hookstrip-')
   process.env.HOME = fakeHome
   mkdirSync(join(fakeHome, '.claude'), { recursive: true })
   writeFileSync(join(fakeHome, '.claude', 'settings.json'), JSON.stringify(SHARED))

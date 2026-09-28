@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, utimesSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, rmSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolveAgentConfigDirForRead } from '../web/claude-plans.js'
 import { resolveClaudeConfigDir } from '../web/agent-config.js'
 import { readTranscriptMtimeFromProjectDir, readTranscriptMtimeAcrossConfigDirs, projectsDirFor } from '../web/active-model.js'
 import { mainConfigRoots } from '../web/inbound-probe.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // The post-fire watchdog's sawTurn probe, and why the config dir it is handed
 // decides whether the probe can see anything at all.
@@ -37,7 +40,7 @@ describe('in-flight watchdog: config dir for the sawTurn transcript probe', () =
   let agentPath: string
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'inflight-config-dir-'))
+    root = mkTmp('inflight-config-dir-')
     agentPath = join(root, 'agents', AGENT)
     mkdirSync(agentPath, { recursive: true })
     // Config file WITHOUT claudeConfigDir -- what the fleet auth rule mandates.
@@ -108,7 +111,7 @@ describe('in-flight watchdog: the MAIN agent transcript may live under an isolat
   let workingDir: string
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'inflight-main-config-'))
+    root = mkTmp('inflight-main-config-')
     workingDir = join(root, 'marveen')
     mkdirSync(workingDir, { recursive: true })
   })

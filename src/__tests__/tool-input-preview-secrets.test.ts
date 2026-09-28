@@ -5,10 +5,13 @@
 // either of them redacts.
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { toolInputPreview } from '../web/tool-input-preview.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const PY_SCRIPT = join(__dirname, 'tool-input-preview-parity.py')
 
@@ -56,7 +59,7 @@ const KEEP: Array<[string, string]> = [
 ]
 
 function python(commands: string[]): string[] {
-  const dir = mkdtempSync(join(tmpdir(), 'preview-secrets-'))
+  const dir = mkTmp('preview-secrets-')
   try {
     const fixture = join(dir, 'cases.json')
     writeFileSync(fixture, JSON.stringify(commands.map((command) => ({ toolName: 'Bash', input: { command } }))))

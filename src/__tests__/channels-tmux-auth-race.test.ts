@@ -11,9 +11,12 @@
 // dropping the wiring (not just the helper) turns the suite red (#1534 review).
 import { describe, it, expect, afterEach } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync, chmodSync } from 'node:fs'
+import { readFileSync, rmSync, existsSync, writeFileSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const SH = readFileSync(join(__dirname, '..', '..', 'scripts', 'channels.sh'), 'utf-8')
 const HAS_TMUX = spawnSync('tmux', ['-V']).status === 0
@@ -52,14 +55,14 @@ function bash(script: string, env: Record<string, string> = {}): string {
 
 describe.skipIf(!HAS_TMUX)('channels.sh tmux auth (real tmux, isolated socket)', () => {
   it('root cause: start-server alone keeps no server, so set-environment -g is lost', () => {
-    dir = mkdtempSync(join(tmpdir(), 'tmuxrace-'))
+    dir = mkTmp('tmuxrace-')
     sock = join(dir, 's')
     const out = bash(`tmux -S ${sock} start-server; tmux -S ${sock} set-environment -g X 1 2>&1; echo rc=$?`)
     expect(out).toMatch(/no server running/)
   })
 
   it('the worker wins the race: the channels pane (launched by the real channels.sh lines) still has the token, and the server global env gets it after new-session', () => {
-    dir = mkdtempSync(join(tmpdir(), 'tmuxrace-'))
+    dir = mkTmp('tmuxrace-')
     sock = join(dir, 's')
     const out = join(dir, 'pane-env')
     // stand-in for the claude binary: report the token the pane got, then idle
@@ -85,7 +88,7 @@ describe.skipIf(!HAS_TMUX)('channels.sh tmux auth (real tmux, isolated socket)',
   })
 
   it('without the fix (no -e, no second set-environment) the same race leaves the pane without the token', () => {
-    dir = mkdtempSync(join(tmpdir(), 'tmuxrace-'))
+    dir = mkTmp('tmuxrace-')
     sock = join(dir, 's')
     const out = join(dir, 'pane-env')
     bash(`
@@ -99,7 +102,7 @@ describe.skipIf(!HAS_TMUX)('channels.sh tmux auth (real tmux, isolated socket)',
   })
 
   it('no token configured: no -e flag, nothing breaks', () => {
-    dir = mkdtempSync(join(tmpdir(), 'tmuxrace-'))
+    dir = mkTmp('tmuxrace-')
     sock = join(dir, 's')
     const n = bash(`TMUX="tmux -S ${sock}"; ${authBlock()}; echo "\${#TMUX_AUTH_ENV[@]}"`)
     expect(n.trim().split('\n').pop()).toBe('0')

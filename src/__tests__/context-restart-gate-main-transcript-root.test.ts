@@ -20,11 +20,14 @@
 // is token-usage-main-isolated-root.test.ts.
 
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, utimesSync, readFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, utimesSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const FIXTURE = mkdtempSync(join(tmpdir(), 'gate-main-root-'))
+const mkTmp = tmpDirs()
+
+const FIXTURE = mkTmp('gate-main-root-')
 const PROJECT_ROOT = '/Users/x/marveen'
 const ENCODED = '-Users-x-marveen'
 

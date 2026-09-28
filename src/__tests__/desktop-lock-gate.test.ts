@@ -14,11 +14,14 @@
 //   3. The lock expires, or one dead holder parks the fleet indefinitely.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs'
+import { rmSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 import {
@@ -40,7 +43,7 @@ function lock(over: Partial<DesktopLock> = {}): DesktopLock {
 }
 
 let dir: string
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'desktop-lock-')) })
+beforeEach(() => { dir = mkTmp('desktop-lock-') })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
 describe('decideDesktopGate', () => {

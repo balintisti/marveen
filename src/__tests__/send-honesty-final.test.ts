@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { spawnSync, execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync, existsSync, readFileSync, cpSync, realpathSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, chmodSync, existsSync, readFileSync, cpSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // NOTIFYVAKSWEEP826 closing round: the two dashboard-API senders get the
 // honest-delivery treatment (channels.sh guard POSTs, the generated prod-tree
@@ -18,7 +21,7 @@ const ROOT = join(__dirname, '..', '..')
 let stage: string
 // realpath, mert a macOS /var/folders symlink miatt a hook TOPLEVEL==PROD_ROOT
 // osszevetese kulonben hamisan elterne (a show-toplevel felold, a cd+pwd nem).
-beforeEach(() => { stage = realpathSync(mkdtempSync(join(tmpdir(), 'send-final-'))) })
+beforeEach(() => { stage = realpathSync(mkTmp('send-final-')) })
 afterEach(() => { rmSync(stage, { recursive: true, force: true }) })
 
 function stubBin(): string {

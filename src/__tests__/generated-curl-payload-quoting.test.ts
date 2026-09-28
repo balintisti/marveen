@@ -12,11 +12,14 @@
 // Both are asserted here: (1) functionally, on the file the generator writes, and
 // (2) at source level, the established idiom for the LLM-calling generator.
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, readFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const tmpRoot = mkdtempSync(join(tmpdir(), 'marveen-curlquote-test-'))
+const mkTmp = tmpDirs()
+
+const tmpRoot = mkTmp('marveen-curlquote-test-')
 
 vi.mock('../config.js', () => ({
   // agent-scaffold imports settings-store (MCPOROKLES923), which derives a path from

@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, existsSync, symlinkSync, chmodSync } from 'node:fs'
+import { readFileSync, mkdirSync, writeFileSync, existsSync, symlinkSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // Step 2 is re-run on every install attempt, so its idempotency gate decides
 // whether a broken install can ever recover. The gate used to be
@@ -94,7 +97,7 @@ describe('install-voice.sh step 2 venv gate', () => {
   })
 
   it('rebuilds a venv that exists but has no pip (the 09-21 regression)', () => {
-    const dest = mkdtempSync(join(tmpdir(), 'voice-broken-'))
+    const dest = mkTmp('voice-broken-')
     makeBrokenVenv(dest)
     expect(existsSync(join(dest, 'venv', 'bin', 'python'))).toBe(true)
     expect(existsSync(join(dest, 'venv', 'bin', 'pip'))).toBe(false)
@@ -108,7 +111,7 @@ describe('install-voice.sh step 2 venv gate', () => {
   })
 
   it('keeps the downloaded voice models when it rebuilds the venv', () => {
-    const dest = mkdtempSync(join(tmpdir(), 'voice-scope-'))
+    const dest = mkTmp('voice-scope-')
     makeBrokenVenv(dest)
     const model = makeVoices(dest)
 
@@ -124,7 +127,7 @@ describe('install-voice.sh step 2 venv gate', () => {
   })
 
   it('leaves a working venv untouched (idempotency is still the point)', () => {
-    const dest = mkdtempSync(join(tmpdir(), 'voice-ok-'))
+    const dest = mkTmp('voice-ok-')
     makeWorkingVenv(dest)
 
     const r = runStep2(dest)
@@ -136,7 +139,7 @@ describe('install-voice.sh step 2 venv gate', () => {
   })
 
   it('creates the venv when nothing is there yet', () => {
-    const dest = mkdtempSync(join(tmpdir(), 'voice-empty-'))
+    const dest = mkTmp('voice-empty-')
 
     const r = runStep2(dest)
 

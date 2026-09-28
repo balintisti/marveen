@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach, vi } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, utimesSync } from 'node:fs'
+import { readFileSync, rmSync, statSync, writeFileSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -13,13 +13,16 @@ import {
 import { logger } from '../logger.js'
 import { wrapScheduledTaskByReference } from '../prompt-safety.js'
 import { execFileSync } from 'node:child_process'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // SCHEDPROMPTREF917: fire-time snapshot for reference-based scheduled-task
 // delivery (spec 5, tests 2/4/6/9/11). See docs/scheduled-tasks.md.
 
 let dirs: string[] = []
 function tmpDir(prefix: string): string {
-  const d = mkdtempSync(join(tmpdir(), prefix))
+  const d = mkTmp(prefix)
   dirs.push(d)
   return d
 }

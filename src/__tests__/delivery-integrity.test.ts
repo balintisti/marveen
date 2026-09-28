@@ -1,10 +1,13 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { classifyDelivery, readUserPromptsSince } from '../web/delivery-integrity.js'
 import { checkTaskDeliveryIntegrity } from '../web/schedule-runner.js'
 import { projectsDirFor } from '../web/active-model.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // PROMPTCSONK923 -- a scheduled prompt's delivery is judged by what the
 // session's transcript recorded, not by the pane state at send time.
@@ -80,7 +83,7 @@ describe('classifyDelivery', () => {
 
 describe('readUserPromptsSince', () => {
   let dir: string
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'deliv-int-')) })
+  beforeEach(() => { dir = mkTmp('deliv-int-') })
   afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
   const T0 = Date.parse('2026-09-13T07:58:00.000Z')
@@ -190,7 +193,7 @@ describe('checkTaskDeliveryIntegrity (the sweep decision)', () => {
   })
 
   it('end to end on disk: the 2026-09-13 shape is recorded as head-lost', () => {
-    const root = mkdtempSync(join(tmpdir(), 'deliv-e2e-'))
+    const root = mkTmp('deliv-e2e-')
     try {
       const pdir = projectsDirFor('/Users/x/ClaudeClaw', root)
       mkdirSync(pdir, { recursive: true })

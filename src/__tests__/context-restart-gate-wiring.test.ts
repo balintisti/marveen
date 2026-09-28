@@ -10,11 +10,14 @@
 // (`gatherGateInputs` / `checkAgent`) with the production defaults, and each one
 // names the mutant it kills.
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, utimesSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const FIXTURE = mkdtempSync(join(tmpdir(), 'gate-wiring-'))
+const mkTmp = tmpDirs()
+
+const FIXTURE = mkTmp('gate-wiring-')
 const PROJECT_ROOT = join(FIXTURE, 'marveen')
 const CONFIG_DIR = join(FIXTURE, 'config')
 const MAIN = 'marveen'

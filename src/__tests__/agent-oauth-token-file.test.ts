@@ -2,7 +2,7 @@
 // Every token below is a FAKE value with the setup-token prefix; no real token is
 // read or written anywhere in this file.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, chmodSync, symlinkSync, linkSync, readFileSync } from 'node:fs'
+import { rmSync, writeFileSync, chmodSync, symlinkSync, linkSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -16,6 +16,9 @@ import {
   decideOwnOauthToken,
   SETUP_TOKEN_PREFIX,
 } from '../web/agent-oauth-token-file.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const FAKE_TOKEN = `${SETUP_TOKEN_PREFIX}01-FAKE-agent-token-for-tests-only_0123456789`
 const FAKE_FLEET = `${SETUP_TOKEN_PREFIX}01-FAKE-fleet-token-for-tests-only_9876543210`
@@ -26,7 +29,7 @@ const UID = typeof process.getuid === 'function' ? process.getuid() : -1
 let tmp: string
 let fleet: string
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), 'oauth-token-file-'))
+  tmp = mkTmp('oauth-token-file-')
   fleet = join(tmp, 'fleet.token')
   writeFileSync(fleet, FAKE_FLEET + '\n', { mode: 0o600 })
 })

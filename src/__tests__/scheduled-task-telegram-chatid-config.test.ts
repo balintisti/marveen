@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // WRONGRECIP819, config surface. The resolver side of the explicit recipient
 // pin is guarded by schedule-runner-bound-chatid.test.ts, but the line that
@@ -17,7 +20,7 @@ import { join } from 'node:path'
 // import time, so HOME is pointed at a throwaway directory BEFORE the module
 // is imported. The real exported functions are exercised, not a
 // re-implementation of the parse.
-const tmpHome = mkdtempSync(join(tmpdir(), 'task-chatid-home-'))
+const tmpHome = mkTmp('task-chatid-home-')
 const realHome = process.env.HOME
 process.env.HOME = tmpHome
 

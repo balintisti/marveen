@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getDb, initDatabase } from '../db.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
 // hoisted: the vi.mock factories below run before the module body, and the
 // static db.js import pulls config.js in at that point
@@ -17,6 +18,8 @@ const { FIXTURE, HOME, PROJECT_ROOT } = vi.hoisted(() => {
   const FIXTURE = mkdtempSync(join(tmpdir(), 'token-usage-redact-'))
   return { FIXTURE, HOME: join(FIXTURE, 'home'), PROJECT_ROOT: '/Users/x/marveen' }
 })
+const mkTmp = tmpDirs()
+mkTmp.adopt(FIXTURE)   // made in vi.hoisted above, where mkTmp does not exist yet
 const MAIN_DIR = join(HOME, '.claude', 'projects', '-Users-x-marveen')
 const SECRET = 'fakeTokenValue123456'
 

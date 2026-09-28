@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
+import { writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -33,6 +33,9 @@ import { logger } from '../logger.js'
 // Expected clock strings are built with the app's own formatter: CI runs in
 // UTC, a hard-coded "14:52" only held in Budapest time.
 import { formatDayClock } from '../web/system-status.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const BASE = 'claude-sonnet-5'
 const T0 = Date.parse('2026-09-22T08:00:00Z')
@@ -85,7 +88,7 @@ function writeChoices() {
 }
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'main-model-'))
+  dir = mkTmp('main-model-')
   _resetMainModelForTest()
 })
 afterEach(() => {
@@ -147,7 +150,7 @@ describe('/model set (CMD920 tests 5, 6)', () => {
   })
 
   it('keep replaces the existing .env line, it does not duplicate it (real updateEnvFile)', async () => {
-    const envDir = mkdtempSync(join(tmpdir(), 'env-'))
+    const envDir = mkTmp('env-')
     writeFileSync(join(envDir, '.env'), 'FOO=1\nMAIN_AGENT_MODEL=claude-sonnet-5\nBAR=2\n')
     const saved = process.env.CLAUDECLAW_ENV_DIR
     process.env.CLAUDECLAW_ENV_DIR = envDir

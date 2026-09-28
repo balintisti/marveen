@@ -15,11 +15,14 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import { execFile } from 'node:child_process'
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdirSync, copyFileSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const ROOT = mkdtempSync(join(tmpdir(), 'resolve-plan-token-env-test-'))
+const mkTmp = tmpDirs()
+
+const ROOT = mkTmp('resolve-plan-token-env-test-')
 const PLAN_TOKEN_VALUE = 'test-fixture-not-a-real-plan-token-oat01'
 const FLEET_TOKEN_VALUE = 'test-fixture-not-a-real-fleet-token-oat01'
 const FLEET_TOKEN_PATH = join(ROOT, 'store', '.claude-oauth-token')

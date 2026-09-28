@@ -4,10 +4,13 @@
 // fixtures/telegram-plugin-0.0.7/server.ts.txt) in a scratch plugins cache.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, copyFileSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, copyFileSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import ts from 'typescript'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const ROOT = join(__dirname, '..', '..')
 const SCRIPT = join(ROOT, 'scripts', 'patch-telegram-plugin.py')
@@ -17,7 +20,7 @@ let cache = ''
 let server = ''
 
 beforeEach(() => {
-  cache = mkdtempSync(join(tmpdir(), 'tg-plugin-cache-'))
+  cache = mkTmp('tg-plugin-cache-')
   const dir = join(cache, 'claude-plugins-official', 'telegram', '0.0.7')
   mkdirSync(dir, { recursive: true })
   server = join(dir, 'server.ts')
@@ -95,7 +98,7 @@ describe('patch-telegram-plugin.py', () => {
     expect(lines[i + 2]).toMatch(/method: 'notifications\/claude\/channel',$/)
     expect(syntaxErrors(text)).toEqual([])
     // Run the inserted line with the handler's own names in scope.
-    const stateDir = mkdtempSync(join(tmpdir(), 'tg-evid-'))
+    const stateDir = mkTmp('tg-evid-')
     try {
       const fs = require('node:fs')
       const fn = new Function('writeFileSync', 'statSync', 'renameSync', 'join', 'STATE_DIR', 'chat_id', 'msgId', 'text', lines[i])
@@ -128,7 +131,7 @@ describe('patch-telegram-plugin.py', () => {
   })
 
   it('writes exactly one cache: $CLAUDE_CONFIG_DIR when set, the user-level ~/.claude never on top', () => {
-    const home = mkdtempSync(join(tmpdir(), 'tg-plugin-home-'))
+    const home = mkTmp('tg-plugin-home-')
     try {
       const userDir = join(home, '.claude', 'plugins', 'cache', 'claude-plugins-official', 'telegram', '0.0.7')
       mkdirSync(userDir, { recursive: true })

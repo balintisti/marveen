@@ -3,11 +3,14 @@
 // so writes exercise the real atomic-write path without touching the repo's
 // own store/ directory.
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const tmpRoot = mkdtempSync(join(tmpdir(), 'marveen-claude-plans-write-test-'))
+const mkTmp = tmpDirs()
+
+const tmpRoot = mkTmp('marveen-claude-plans-write-test-')
 
 vi.mock('../config.js', () => ({ PROJECT_ROOT: tmpRoot, MAIN_AGENT_ID: 'agent-a', DEFAULT_AGENT_MODEL: 'claude-opus-5' }))
 

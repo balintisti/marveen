@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { encodeClaudeProjectDir } from '../claude-project-dir.js'
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { resolveTranscriptLocation } from '../web/routes/agents.js'
 import { MAIN_AGENT_ID, PROJECT_ROOT } from '../config.js'
 import { projectsDirFor } from '../web/active-model.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // GH #816: the dashboard showed the main agent's model as the DEFAULT_MODEL
 // fallback rather than the model the process was on, and the display read as a
@@ -55,7 +58,7 @@ describe('resolveTranscriptLocation: isolated config root', () => {
   // isolation decision, so these two cases are about the directory existing.
   let tmp: string
 
-  beforeAll(() => { tmp = mkdtempSync(join(tmpdir(), 'gh816-')) })
+  beforeAll(() => { tmp = mkTmp('gh816-') })
   afterAll(() => { rmSync(tmp, { recursive: true, force: true }) })
 
   it('returns a configDir only when the isolated projects dir exists', () => {

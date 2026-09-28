@@ -1,9 +1,12 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { readFileSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { PROJECT_ROOT } from '../config.js'
 import { channelStateDir, type ChannelProviderType } from '../channel-provider.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // Behavioural fixture for the ambiguous-allowlist branch (see the
 // "genuinely exercises the ambiguous branch" describe block below). Mocked
@@ -244,7 +247,7 @@ describe('resolveTaskChannelTarget (pin precedence, no filesystem needed)', () =
 // resolved provider) does not turn this guard red for the wrong reason.
 describe('resolveTaskChannelTarget genuinely exercises the ambiguous branch (not text-pinned)', () => {
   beforeEach(() => {
-    FIXTURE_DIR = mkdtempSync(join(tmpdir(), 'ambiguous-chatid-'))
+    FIXTURE_DIR = mkTmp('ambiguous-chatid-')
     mkdirSync(join(FIXTURE_DIR, '.claude', 'channels', 'telegram'), { recursive: true })
   })
   afterEach(() => {

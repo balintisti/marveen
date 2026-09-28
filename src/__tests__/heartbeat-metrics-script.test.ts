@@ -14,10 +14,13 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
 import { execFile, spawnSync } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
-import { accessSync, constants, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { accessSync, constants, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AddressInfo } from 'node:net'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const REPO_ROOT = join(__dirname, '..', '..')
 const SCRIPT = join(REPO_ROOT, 'scripts', 'heartbeat-metrics.sh')
@@ -80,7 +83,7 @@ function runScript(env: Record<string, string> = {}): Promise<{ status: number; 
 }
 
 beforeAll(async () => {
-  storeDir = mkdtempSync(join(tmpdir(), 'hb-metrics-store-'))
+  storeDir = mkTmp('hb-metrics-store-')
   writeFileSync(join(storeDir, '.dashboard-token'), TOKEN + '\n')
 
   // Fixture task_runs DB, created with the same python3 the script uses.
@@ -290,7 +293,7 @@ describe('fail-closed: a missing value is an ERROR line + non-zero exit, never a
   })
 
   it('missing token file: ERROR token, non-zero exit, no fabricated numbers', async () => {
-    const bare = mkdtempSync(join(tmpdir(), 'hb-metrics-bare-'))
+    const bare = mkTmp('hb-metrics-bare-')
     try {
       summaryBody = FULL_SUMMARY()
       schedulesBody = []

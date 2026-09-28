@@ -14,11 +14,14 @@
 // temp project root so the test never touches the install's store/.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { execFile } from 'node:child_process'
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..', '..')
@@ -32,7 +35,7 @@ const posts: Array<{ path: string; body: any }> = []
 beforeAll(async () => {
   // Hook copy under <tmp>/scripts/hooks so its own _project_root() resolves
   // to <tmp>, where we plant the dashboard token it insists on.
-  tmpRoot = mkdtempSync(join(tmpdir(), 'toollog-'))
+  tmpRoot = mkTmp('toollog-')
   const hooksDir = join(tmpRoot, 'scripts', 'hooks')
   mkdirSync(hooksDir, { recursive: true })
   mkdirSync(join(tmpRoot, 'store'), { recursive: true })

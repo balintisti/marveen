@@ -8,10 +8,13 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import { spawn } from 'node:child_process'
 import http from 'node:http'
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { AddressInfo } from 'node:net'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const HOOKS = join(__dirname, '..', '..', 'scripts', 'hooks')
 let server: http.Server
@@ -27,7 +30,7 @@ beforeAll(async () => {
   })
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r))
   port = (server.address() as AddressInfo).port
-  install = mkdtempSync(join(tmpdir(), 'drain-install-'))
+  install = mkTmp('drain-install-')
   mkdirSync(join(install, 'scripts', 'hooks'), { recursive: true })
   mkdirSync(join(install, 'store'))
   for (const f of ['inbox-drain.py', 'ledger_lib.py', 'command_prompt.py']) copyFileSync(join(HOOKS, f), join(install, 'scripts', 'hooks', f))

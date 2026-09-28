@@ -3,7 +3,7 @@
 // was simply lost). The Stop hook is the trigger; these tests cover the store
 // and the runner's four outcomes.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs'
+import { rmSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -15,13 +15,16 @@ import {
   type PendingDeps,
 } from '../web/pending-write.js'
 import { withRetry } from '../web/main-model.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const T0 = Date.parse('2026-09-22T20:00:00Z')
 let dir: string
 let file: string
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'pending-'))
+  dir = mkTmp('pending-')
   file = join(dir, 'main-command-pending.json')
 })
 afterEach(() => rmSync(dir, { recursive: true, force: true }))

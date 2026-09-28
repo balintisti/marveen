@@ -23,16 +23,19 @@
 //                   context-restart-gate-wiring.test.ts, not here.
 
 import { describe, it, expect } from 'vitest'
-import { mkdirSync, mkdtempSync, writeFileSync, utimesSync } from 'node:fs'
+import { mkdirSync, writeFileSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readLastConversationTsFromProjectDir } from '../web/active-model.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const WORKING_DIR = '/Users/x/marveen'
 const ENCODED = '-Users-x-marveen'
 
 function fixtureWith(lines: string[], mtimeEpochSec?: number): string {
-  const root = mkdtempSync(join(tmpdir(), 'gate-never-clears-'))
+  const root = mkTmp('gate-never-clears-')
   const dir = join(root, 'projects', ENCODED)
   mkdirSync(dir, { recursive: true })
   const file = join(dir, 'session.jsonl')

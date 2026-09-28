@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // Fleet policy (2026-09-08): a newly created agent comes up with the context
 // guard armed.
@@ -13,7 +16,7 @@ import { fileURLToPath } from 'node:url'
 // technical workers (context-guard-hidden-worker.test.ts pins it) and existing
 // agents whose operator never opted in. This suite pins the narrow fix:
 // creation writes an EXPLICIT row, the global default stays off.
-const SANDBOX = mkdtempSync(join(tmpdir(), 'cgseed-'))
+const SANDBOX = mkTmp('cgseed-')
 mkdirSync(join(SANDBOX, 'store'), { recursive: true })
 
 vi.mock('../config.js', async (orig) => {

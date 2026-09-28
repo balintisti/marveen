@@ -2,11 +2,14 @@
 // same fake req/res harness as claude-plans-routes.test.ts. The vault is an
 // in-memory Map and the global fetch is stubbed: no real token, no network.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs'
+import { rmSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const tmpRoot = mkdtempSync(join(tmpdir(), 'marveen-claude-plans-probe-test-'))
+const mkTmp = tmpDirs()
+
+const tmpRoot = mkTmp('marveen-claude-plans-probe-test-')
 
 vi.mock('../config.js', () => ({ PROJECT_ROOT: tmpRoot, MAIN_AGENT_ID: 'agent-a', DEFAULT_AGENT_MODEL: 'claude-opus-5' }))
 vi.mock('../settings-store.js', () => ({ getEffectiveSettingValue: () => '' }))

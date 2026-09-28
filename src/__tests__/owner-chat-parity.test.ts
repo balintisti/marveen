@@ -6,10 +6,13 @@
 // resolveOwnerChatId's first-entry heuristic (#1555 review round 1).
 import { describe, it, expect, afterEach, afterAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolveAlertOwnerChat } from '../owner-chat.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const REAL = '1268077055'
 const REPO_ROOT = join(__dirname, '..', '..')
@@ -21,13 +24,13 @@ let dirs: string[] = []
 // Hermetic child env: inside an agent session the inherited *_STATE_DIR and
 // HOME (legacy ~/.claude/channels) point at a live access.json. The spawned
 // resolvers get neither -- only a PATH (for node) and an empty HOME.
-const HOME_DIR = mkdtempSync(join(tmpdir(), 'owner-chat-parity-home-'))
+const HOME_DIR = mkTmp('owner-chat-parity-home-')
 function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   return { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: HOME_DIR, ...extra }
 }
 
 function makeInstall(envValue: string | undefined, accessBody: unknown): string {
-  const dir = mkdtempSync(join(tmpdir(), 'owner-chat-parity-'))
+  const dir = mkTmp('owner-chat-parity-')
   dirs.push(dir)
   const envLine = envValue === undefined ? '' : `ALLOWED_CHAT_ID=${envValue}\n`
   writeFileSync(join(dir, '.env'), `MAIN_AGENT_ID=marveen\n${envLine}`)
@@ -141,7 +144,7 @@ describe('owner-chat parity: shell, Python, TS agree', () => {
   // implementation rather than trivially agreeing with itself.
   it('mutant probe: a Python branch without the "0" guard fails the placeholder case', () => {
     const dir = makeInstall('0', undefined)
-    const mutantDir = mkdtempSync(join(tmpdir(), 'owner-chat-mutant-'))
+    const mutantDir = mkTmp('owner-chat-mutant-')
     dirs.push(mutantDir)
     const mutantSrc = require('node:fs').readFileSync(join(PY_LIB, 'owner_chat.py'), 'utf-8')
       .replace('if not v or v == "0":\n        return None', 'if not v:\n        return None')

@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdirSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // The MAIN agent runs with its own CLAUDE_CONFIG_DIR (<PROJECT_ROOT>/.channels-config),
 // so its transcripts are NOT under ~/.claude/projects. discoverAgentSources() used to
@@ -12,7 +15,7 @@ import { join } from 'node:path'
 // MEASURED 2026-09-15 on a live install: the newest file in the shared root was frozen
 // at 2026-09-13 07:27 (288 KB) while the live one under .channels-config was 5.0 MB and
 // minutes old; token_usage's last row carried exactly that frozen timestamp.
-const FIXTURE = mkdtempSync(join(tmpdir(), 'token-usage-main-root-'))
+const FIXTURE = mkTmp('token-usage-main-root-')
 const HOME = join(FIXTURE, 'home')
 const SHARED_PROJECTS = join(HOME, '.claude', 'projects')
 const PROJECT_ROOT = '/Users/x/marveen'

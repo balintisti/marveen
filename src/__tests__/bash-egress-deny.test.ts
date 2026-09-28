@@ -1,10 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync, writeFileSync, mkdtempSync, existsSync, rmSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { BASH_EGRESS_DENY, mergeBashEgressDeny, bashEgressDenyTargetPath, ensureBashEgressDeny } from '../web/agent-scaffold.js'
 import { MAIN_AGENT_ID } from '../config.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -199,7 +202,7 @@ describe('bashEgressDenyTargetPath', () => {
 
 describe('ensureBashEgressDeny for the main agent', () => {
   it('writes the rules into the config dir it was given', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'marveen-egress-'))
+    const dir = mkTmp('marveen-egress-')
     try {
       expect(ensureBashEgressDeny(MAIN_AGENT_ID, dir)).toBe(true)
       const written = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf-8'))
@@ -212,7 +215,7 @@ describe('ensureBashEgressDeny for the main agent', () => {
   })
 
   it('keeps the config dir\'s other keys -- the file is rebuilt on every start and only its own keys survive', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'marveen-egress-'))
+    const dir = mkTmp('marveen-egress-')
     try {
       writeFileSync(join(dir, 'settings.json'), JSON.stringify({ hooks: { PreCompact: [] }, enabledPlugins: { x: true } }))
       ensureBashEgressDeny(MAIN_AGENT_ID, dir)

@@ -4,11 +4,14 @@
 // the stamp, so every manual build left it lying -- and a hand-written stamp
 // is the one thing that can blind update.sh's "git=NEW + dist=OLD" self-heal.
 import { describe, it, expect } from 'vitest'
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, existsSync, cpSync } from 'node:fs'
+import { readFileSync, mkdirSync, writeFileSync, existsSync, cpSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..', '..')
@@ -17,7 +20,7 @@ const SCRIPT = join(ROOT, 'scripts', 'write-built-commit.cjs')
 // The script resolves the repo root from its OWN location (<root>/scripts/..),
 // so each case gets a throwaway root with the script copied under scripts/.
 function makeRoot(opts: { git: boolean; dist: boolean }): string {
-  const root = mkdtempSync(join(tmpdir(), 'built-stamp-'))
+  const root = mkTmp('built-stamp-')
   mkdirSync(join(root, 'scripts'))
   cpSync(SCRIPT, join(root, 'scripts', 'write-built-commit.cjs'))
   if (opts.dist) mkdirSync(join(root, 'dist'))

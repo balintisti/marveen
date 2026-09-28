@@ -8,12 +8,15 @@
 // Static tests lock the wiring (both settings surfaces, 3 s timeout) and the
 // fail-open shape (no network, no DB, errors exit 0 silently).
 import { describe, it, expect } from 'vitest'
-import { readFileSync, mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs'
+import { readFileSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs'
 import { spawnSync, spawn } from 'node:child_process'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const ROOT = join(__dirname, '..', '..')
 const HOOK = join(ROOT, 'scripts', 'hooks', 'memory-lookup-nudge.py')
@@ -62,7 +65,7 @@ describe('memory-lookup-nudge: speaks on a human message', () => {
     })
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
     const port = String((server.address() as AddressInfo).port)
-    const root = mkdtempSync(join(tmpdir(), 'nudge-root-'))
+    const root = mkTmp('nudge-root-')
     try {
       mkdirSync(join(root, 'scripts', 'hooks'), { recursive: true })
       mkdirSync(join(root, 'store'), { recursive: true })

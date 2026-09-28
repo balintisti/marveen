@@ -2,9 +2,12 @@ import { describe, it, expect, vi } from 'vitest'
 import { contextClear, clearVerdict, switchVerdict, humanBusy, type SessionControlDeps } from '../web/session-control.js'
 import { DEFAULT_GATE_CONFIG, type GateInputs } from '../context-restart-gate.js'
 import { readLastTurnActivityMs, projectsDirFor } from '../web/active-model.js'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const NOW = Date.parse('2026-09-22T08:00:00Z')
 
@@ -116,7 +119,7 @@ describe('/context clear (CMD920 test 10)', () => {
   })
 
   it('readLastTurnActivityMs skips the blocked-prompt bookkeeping lines (the shape measured on the test transcript)', () => {
-    const cfgDir = mkdtempSync(join(tmpdir(), 'turn-'))
+    const cfgDir = mkTmp('turn-')
     try {
       const dir = projectsDirFor('/opt/marveen', cfgDir)
       mkdirSync(dir, { recursive: true })
@@ -133,7 +136,7 @@ describe('/context clear (CMD920 test 10)', () => {
   })
 
   it('a fresh session with only bookkeeping lines reads as "never had a turn" (0); an oversized file stays unknown (null)', () => {
-    const cfgDir = mkdtempSync(join(tmpdir(), 'turn-'))
+    const cfgDir = mkTmp('turn-')
     try {
       const dir = projectsDirFor('/opt/marveen', cfgDir)
       mkdirSync(dir, { recursive: true })
@@ -151,7 +154,7 @@ describe('/context clear (CMD920 test 10)', () => {
   })
 
   it('readLastTurnActivityMs skips our own /model lines (local command, no model turn; measured 2026-09-23)', () => {
-    const cfgDir = mkdtempSync(join(tmpdir(), 'turn-'))
+    const cfgDir = mkTmp('turn-')
     try {
       const dir = projectsDirFor('/opt/marveen', cfgDir)
       mkdirSync(dir, { recursive: true })

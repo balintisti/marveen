@@ -2,9 +2,12 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { execFile, execFileSync, spawnSync } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createServer, type Server } from 'node:http'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, cpSync, realpathSync } from 'node:fs'
+import { rmSync, mkdirSync, writeFileSync, cpSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // The post-checkout guard alert must be JSON-ENCODED, never shell-interpolated.
 //
@@ -44,7 +47,7 @@ const FORGED_TO = 'other-recipient'
 // nothing -- all four cases went red, including the positive control, with
 // the script untouched. A gate that reports the bug it was pointed at while
 // measuring nothing is worse than no gate.
-const stage = realpathSync(mkdtempSync(join(tmpdir(), 'prodguard-')))
+const stage = realpathSync(mkTmp('prodguard-'))
 
 /** Raw request bodies, exactly as they left the hook. */
 let captured: string[] = []

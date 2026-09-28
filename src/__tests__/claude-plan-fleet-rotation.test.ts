@@ -3,7 +3,7 @@
 // writeFleetTokenFile runs against a throwaway temp dir. Tokens are assembled
 // at runtime (never a literal token-shaped string in the source).
 import { describe, it, expect, afterAll } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync, statSync, chmodSync, mkdirSync } from 'node:fs'
+import { rmSync, writeFileSync, readFileSync, readdirSync, statSync, chmodSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
@@ -17,11 +17,14 @@ import {
 import { pendingFleetReport } from '../claude-plan-rotate-heartbeat.js'
 import type { ClaudePlan } from '../web/claude-plans.js'
 import type { ClaudePlansState } from '../web/claude-plans-state.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const NOW = Date.UTC(2026, 8, 24, 8, 30, 15)
 const fakeToken = (tag: string) => ['fake', 'fleet', 'tok', tag].join('-')
 
-const tmpRoot = mkdtempSync(join(tmpdir(), 'marveen-fleet-rotation-test-'))
+const tmpRoot = mkTmp('marveen-fleet-rotation-test-')
 afterAll(() => rmSync(tmpRoot, { recursive: true, force: true }))
 
 function tokenPlan(over: Partial<ClaudePlan> = {}): ClaudePlan {

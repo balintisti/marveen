@@ -11,15 +11,18 @@
  * benne). A VÉGSŐ bizonyíték egy élő `ps`-mérés pozitív kontrollal, az a PR törzsében áll.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, statSync, existsSync } from 'node:fs'
+import { rmSync, readFileSync, statSync, existsSync } from 'node:fs'
 import { join, dirname, basename } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 let dir: string
 const eredetiHome = process.env.HOME
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'launch-secret-'))
+  dir = mkTmp('launch-secret-')
 })
 afterEach(() => {
   if (eredetiHome !== undefined) process.env.HOME = eredetiHome

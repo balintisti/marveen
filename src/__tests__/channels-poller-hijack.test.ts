@@ -1,9 +1,12 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
-import { readFileSync, mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs'
+import { readFileSync, writeFileSync, chmodSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // CHANSPARE925 (measured 2026-09-25): a Claude Code daemon background session,
 // started from the main agent's config dir with --channels, loaded the telegram
@@ -28,7 +31,7 @@ function ownerCheck(botPid: string | number, panePid: string | number, env: Reco
 
 // A stub ps for the unmeasurable branch: it prints `body` and exits `rc`.
 function stubPs(body: string, rc = 0): string {
-  const dir = mkdtempSync(join(tmpdir(), 'ps-stub-'))
+  const dir = mkTmp('ps-stub-')
   const f = join(dir, 'ps')
   writeFileSync(f, `#!/bin/sh\nprintf '%s' '${body}'\nexit ${rc}\n`)
   chmodSync(f, 0o755)

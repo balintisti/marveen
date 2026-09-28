@@ -1,13 +1,16 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // CGBADGE908: the /api/context-guard status carries cooldownUntilMs ONLY in
 // the cooldown phase, so the badge can show the remaining time (what the word
 // "cooldown" promises) and no consumer ever reads a stale timestamp as a live
 // timer. Both branches pinned -- a happy-path-only test would let either rot.
-const SANDBOX = mkdtempSync(join(tmpdir(), 'cgstatus-'))
+const SANDBOX = mkTmp('cgstatus-')
 
 vi.mock('../config.js', async (orig) => {
   const actual = await orig<typeof import('../config.js')>()

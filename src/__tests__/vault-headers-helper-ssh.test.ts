@@ -4,11 +4,14 @@
 // vault-resolve-loud-failures.test.ts (the script derives its root from its own path).
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { execFile } from 'node:child_process'
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const ROOT = mkdtempSync(join(tmpdir(), 'vault-headers-helper-test-'))
+const mkTmp = tmpDirs()
+
+const ROOT = mkTmp('vault-headers-helper-test-')
 const VALUE = 'hv-9a1c-not-a-real-secret'
 
 function run(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {

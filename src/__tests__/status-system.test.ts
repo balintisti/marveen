@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type http from 'node:http'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // The route tests pin the local part so they measure the ROUTE contract; the
 // pure helpers below use the real module.
@@ -273,7 +276,7 @@ describe('Telegram plugin-patch row', () => {
   }
   const writeState = (files: Array<{ version: string; status: string }>) =>
     writeFileSync(state, JSON.stringify({ at: 0, root: join(dir, 'cache'), files }))
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'plugin-patch-row-')); state = join(dir, 'state.json') })
+  beforeEach(() => { dir = mkTmp('plugin-patch-row-'); state = join(dir, 'state.json') })
   afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
   it('patched: "rendben" with the version', () => {

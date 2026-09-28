@@ -11,12 +11,15 @@
 // matcher migration that carries a widened matcher to the existing fleet.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs'
+import { rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { syncHookMatchers } from '../web/agent-scaffold.js'
 import { KNOWN_HOOK_SCRIPTS } from '../web/hook-registration-guard.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..', '..')
@@ -49,7 +52,7 @@ const OWNER_TURN = (text: string) => ({ type: 'user', message: { content: text }
 const AGENT_TURN = (text: string) => ({ type: 'assistant', message: { content: [{ type: 'text', text }] } })
 
 beforeEach(() => {
-  store = mkdtempSync(join(tmpdir(), 'clearstate-'))
+  store = mkTmp('clearstate-')
   transcript = join(store, 'session.jsonl')
   writeFileSync(transcript, jsonl([
     // Harness noise: an injected reminder is not something the owner typed.

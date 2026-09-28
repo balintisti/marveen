@@ -12,12 +12,15 @@
 // The vault entries here are REAL ciphertexts produced by vault.ts with a known
 // key, so "opens the vault" is measured by an actual decrypt, not assumed.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomBytes } from 'node:crypto'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const tmpRoot = mkdtempSync(join(tmpdir(), 'vault-export-keyres-'))
+const mkTmp = tmpDirs()
+
+const tmpRoot = mkTmp('vault-export-keyres-')
 mkdirSync(join(tmpRoot, 'store'), { recursive: true })
 
 vi.mock('../config.js', () => ({

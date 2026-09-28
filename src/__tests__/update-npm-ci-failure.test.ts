@@ -1,8 +1,11 @@
 import { describe, it, expect, afterAll } from 'vitest'
-import { readFileSync, mkdtempSync, rmSync, mkdirSync, existsSync } from 'node:fs'
+import { readFileSync, rmSync, mkdirSync, existsSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // UPDOOMNPMCI926: on a 3.8 GB swapless host the OOM killer ended `npm ci` three
 // times in 33 s (exit 137). update.sh then printed a fixed "package-lock.json is
@@ -13,7 +16,7 @@ import { tmpdir } from 'node:os'
 // block, with npm and git stubbed.
 
 const UPDATE = readFileSync(join(__dirname, '..', '..', 'update.sh'), 'utf-8')
-const SANDBOX = mkdtempSync(join(tmpdir(), 'upd-npmci-'))
+const SANDBOX = mkTmp('upd-npmci-')
 afterAll(() => { rmSync(SANDBOX, { recursive: true, force: true }) })
 
 function fn(name: string): string {
@@ -33,7 +36,7 @@ function callSite(): string {
 interface Run { code: number; out: string; status: string; msg: string; gitLog: string }
 
 function run(opts: { ciRc: number; rollbackCiRc?: number; stashed?: boolean; viaCallSite?: boolean }): Run {
-  const dir = mkdtempSync(join(SANDBOX, 'run-'))
+  const dir = mkTmp('run-', SANDBOX)
   mkdirSync(join(dir, 'dist'))
   const script = [
     'set -e',

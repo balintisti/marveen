@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // src/config.ts:331 resolves the embedding endpoint as
 //   OLLAMA_URL ?? 'http://localhost:11434'
@@ -33,7 +36,7 @@ function resolutionBlock(src: string): string {
 
 /** Resolve with a given environment and .env content. */
 function resolve(opts: { envVar?: string; dotenv?: string }): string {
-  const dir = mkdtempSync(join(tmpdir(), 'marveen-ollamaurl-'))
+  const dir = mkTmp('marveen-ollamaurl-')
   if (opts.dotenv !== undefined) writeFileSync(join(dir, '.env'), opts.dotenv)
 
   const script = [

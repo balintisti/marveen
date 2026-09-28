@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync, existsSync } from 'node:fs'
+import { rmSync, mkdirSync, writeFileSync, symlinkSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // The RUNNER's tests. `secret-gate.test.ts` covers the pure core (which shapes
 // are secrets); this file covers the half that decides WHAT the core is handed,
@@ -38,7 +41,7 @@ function git(cwd: string, args: string[]): string {
 
 /** A throwaway repository. Real git objects: the point is the object store. */
 function newRepo(): string {
-  const root = mkdtempSync(join(tmpdir(), 'secret-gate-runner-'))
+  const root = mkTmp('secret-gate-runner-')
   git(root, ['init', '-q', '-b', 'main'])
   git(root, ['config', 'user.email', 'test@example.invalid'])
   git(root, ['config', 'user.name', 'test'])

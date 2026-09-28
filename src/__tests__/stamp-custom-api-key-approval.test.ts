@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { stampCustomApiKeyApproval } from '../web/agent-process.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // Mirrors the CLI's Jne function (empirically verified from 2.1.222 binary):
 // function Jne(e) { return e.trim().slice(-20) }
@@ -17,7 +20,7 @@ describe('stampCustomApiKeyApproval', () => {
   let dotClaude: string
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'custom-api-key-stamp-'))
+    dir = mkTmp('custom-api-key-stamp-')
     dotClaude = join(dir, '.claude.json')
   })
   afterEach(() => {

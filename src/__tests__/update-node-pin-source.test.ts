@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // NODEPINMAC921 (2026-09-21, external report + own re-measure): update.sh's
 // node pin fell back to .nvmrc when the running dashboard's exe could not be
@@ -29,7 +32,7 @@ function extract(): string {
 }
 
 function runPin(opts: { detectExe: boolean }): string {
-  const base = mkdtempSync(join(tmpdir(), 'nodepin-'))
+  const base = mkTmp('nodepin-')
   const install = join(base, 'install'); mkdirSync(install)
   writeFileSync(join(install, '.nvmrc'), '22\n')
   // fake ~/.nvm with a node stub, so the .nvmrc branch has something to pin

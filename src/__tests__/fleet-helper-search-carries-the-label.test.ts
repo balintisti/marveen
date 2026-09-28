@@ -15,10 +15,13 @@
 // listener would add a failure mode that has nothing to do with either.
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SCRIPT = join(ROOT, 'seed-skills', 'fleet-helper', 'scripts', 'fleet.py')
@@ -60,7 +63,7 @@ print(json.dumps({"url": seen.get("url"), "out": out}, ensure_ascii=False))
 `
 
 function run(label: string, rows: unknown[], kwargs: Record<string, unknown>) {
-  const dir = mkdtempSync(join(tmpdir(), 'fleet-helper-test-'))
+  const dir = mkTmp('fleet-helper-test-')
   mkdirSync(join(dir, 'store'), { recursive: true })
   writeFileSync(join(dir, 'store', '.dashboard-token'), 'test-token\n', 'utf-8')
   const stdout = execFileSync(

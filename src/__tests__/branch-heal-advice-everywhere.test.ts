@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // BRANCHHEAL925, follow-up to #1566. That PR fixed the ONE command the Updates
 // page hands the user. The same advice stands in five more places -- update.sh
@@ -96,7 +99,7 @@ const currentBranch = (cwd: string) =>
 
 describe('every place that advises getting back onto main advises a command that works', () => {
   beforeAll(() => {
-    tmp = mkdtempSync(join(tmpdir(), 'heal-advice-'))
+    tmp = mkTmp('heal-advice-')
     upstream = makeUpstream('main')
   })
   afterAll(() => rmSync(tmp, { recursive: true, force: true }))

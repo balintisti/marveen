@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
+
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // Exit-code invariant for every shipped hook, by event class.
 //
@@ -24,7 +27,7 @@ import { join } from 'node:path'
 // mode fails CI instead of shipping a silent fail-open or a deaf agent.
 
 const ROOT = join(__dirname, '..', '..')
-const SCRATCH = mkdtempSync(join(tmpdir(), 'hook-exit-inv-'))
+const SCRATCH = mkTmp('hook-exit-inv-')
 
 const BAD_STDIN = 'this is not json'
 const nonDict = (tool: string) => JSON.stringify({ tool_name: tool, tool_input: ['not-a-dict'] })

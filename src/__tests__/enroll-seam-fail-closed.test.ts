@@ -27,7 +27,7 @@
 // account. The environment is put back by the file-level afterEach, not by the
 // block that changed it.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { rmSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -45,6 +45,9 @@ import {
 } from '../ssh-dir.js'
 import { isTestRun } from '../test-run-marker.js'
 import { restrictOptions, COMMENT_PREFIX } from '../remote-enroll-core.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const LINE = `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA marveen-remote:${randomUUID()}`
 
@@ -71,13 +74,13 @@ beforeEach(() => {
   savedOverride = process.env.MARVEEN_SSH_DIR
   savedVitest = process.env['VITEST']
   savedNodeEnv = process.env['NODE_ENV']
-  fakeHome = mkdtempSync(join(tmpdir(), 'enroll-seam-home-'))
+  fakeHome = mkTmp('enroll-seam-home-')
   process.env.HOME = fakeHome
   // Sanity: without this the whole file would be testing the REAL home, which
   // is the one thing it must never do.
   expect(homedir()).toBe(fakeHome)
   mkdirSync(join(fakeHome, '.ssh'), { recursive: true, mode: 0o700 })
-  scratchSshDir = mkdtempSync(join(tmpdir(), 'enroll-seam-scratch-'))
+  scratchSshDir = mkTmp('enroll-seam-scratch-')
 })
 
 afterEach(() => {

@@ -7,6 +7,9 @@ import {
   channelStateDir,
   type ChannelProviderType,
 } from '../channel-provider.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 describe('getProviderType', () => {
   it('returns telegram by default', () => {
@@ -225,12 +228,12 @@ describe('checkTelegramTokenBusy', () => {
 // `# SLACK_BOT_TOKEN=old` in marveen/.env matched first and shadowed the live
 // token in the channel .env -- exactly the fallback the alert path relies on
 // after a token rotation.
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { readChannelToken } from '../channel-provider.js'
 
 describe('readChannelToken (anchored, whole-line match)', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'read-channel-token-'))
+  const dir = mkTmp('read-channel-token-')
   const envFile = (body: string): string => {
     const p = join(dir, `${Math.random().toString(36).slice(2)}.env`)
     writeFileSync(p, body)

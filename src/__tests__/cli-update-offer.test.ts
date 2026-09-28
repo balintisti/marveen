@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { readFileSync, writeFileSync, mkdtempSync, chmodSync, existsSync, rmSync } from 'node:fs'
+import { readFileSync, writeFileSync, chmodSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -10,6 +10,9 @@ import {
 } from '../web/cli-update.js'
 import { tryHandleUpdates } from '../web/routes/updates.js'
 import type { RouteContext } from '../web/routes/types.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // CLIFRISSAJANLAS923: the update page OFFERS a Claude Code CLI update. Every
 // rule below is a measured constraint from the card, not a preference:
@@ -67,7 +70,7 @@ describe('detectInstallMethod', () => {
 })
 
 function mockClaude(kind: 'healthy' | 'spin' | 'crash', envLog: string): string {
-  const dir = mkdtempSync(join(tmpdir(), 'cliupd-'))
+  const dir = mkTmp('cliupd-')
   const body = [
     '#!/bin/bash',
     'if [ "$1" = "--version" ]; then echo "2.1.280 (Claude Code)"; exit 0; fi',
@@ -81,7 +84,7 @@ function mockClaude(kind: 'healthy' | 'spin' | 'crash', envLog: string): string 
 
 describe('probeClaudeLaunches (rule 3: a real -p, auth-free, isolated, cleaned up)', () => {
   it('healthy: exit 1 fast -> ok; auth env absent even when set outside; config dir isolated and removed', async () => {
-    const log = join(mkdtempSync(join(tmpdir(), 'cliupd-log-')), 'env')
+    const log = join(mkTmp('cliupd-log-'), 'env')
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'leak-oauth'
     process.env.ANTHROPIC_API_KEY = 'leak-key'
     try {
@@ -100,12 +103,12 @@ describe('probeClaudeLaunches (rule 3: a real -p, auth-free, isolated, cleaned u
     }
   })
   it('spin: hangs -> killed at the timeout -> not ok', async () => {
-    const r = await probeClaudeLaunches(mockClaude('spin', join(mkdtempSync(join(tmpdir(), 'cliupd-log-')), 'env')), 1500)
+    const r = await probeClaudeLaunches(mockClaude('spin', join(mkTmp('cliupd-log-'), 'env')), 1500)
     expect(r.ok).toBe(false)
     expect(r.signal).toBe('TIMEOUT')
   }, 10_000)
   it('crash: SIGILL -> not ok', async () => {
-    const r = await probeClaudeLaunches(mockClaude('crash', join(mkdtempSync(join(tmpdir(), 'cliupd-log-')), 'env')), 5000)
+    const r = await probeClaudeLaunches(mockClaude('crash', join(mkTmp('cliupd-log-'), 'env')), 5000)
     expect(r.ok).toBe(false)
     expect(r.exitCode === null || r.exitCode >= 128).toBe(true)
   })

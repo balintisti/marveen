@@ -12,11 +12,14 @@
 //   - once the block is in a file it is refreshed in place,
 //   - the block is written per-agent, not with a shared /tmp path.
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs'
+import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const tmpRoot = mkdtempSync(join(tmpdir(), 'marveen-memlabel-test-'))
+const mkTmp = tmpDirs()
+
+const tmpRoot = mkTmp('marveen-memlabel-test-')
 
 vi.mock('../config.js', () => ({
   // agent-scaffold imports settings-store (MCPOROKLES923), which derives a path from

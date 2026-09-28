@@ -17,7 +17,7 @@
 // SCRIPT BASENAME. An exact-string check would never match and the duplicate
 // would survive -- the assertion below uses the two real spellings.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -26,6 +26,9 @@ import {
   agentSettingsPath,
 } from '../web/agent-scaffold.js'
 import { PROJECT_ROOT } from '../config.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const WRAPPED = "bash -c '[ -f /abs/scripts/hooks/provenance-gate.py ] && exec python3 /abs/scripts/hooks/provenance-gate.py; exit 0'"
 const PROJECT_SPELLING = 'python3 "$CLAUDE_PROJECT_DIR/scripts/hooks/provenance-gate.py"'
@@ -41,7 +44,7 @@ function writeScope(path: string, hooks: Record<string, unknown>): void {
 
 describe('hookScriptAlreadyEffectiveInOtherScope', () => {
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'xscope-'))
+    root = mkTmp('xscope-')
     userScope = join(root, 'home', '.claude', 'settings.json')
     projectScope = join(root, 'repo', '.claude', 'settings.json')
   })
@@ -106,7 +109,7 @@ describe('ensureAgentHooks respects the cross-scope guard', () => {
     }
     rmSync(dir, { recursive: true, force: true })
     mkdirSync(join(dir, '.claude'), { recursive: true })
-    root = mkdtempSync(join(tmpdir(), 'xscope-int-'))
+    root = mkTmp('xscope-int-')
     projectScope = join(root, 'repo', '.claude', 'settings.json')
   })
   afterEach(() => {

@@ -1,8 +1,11 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, readFileSync, rmSync, statSync, writeFileSync, mkdtempSync } from 'node:fs'
+import { chmodSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // ensure-managed-channels-enabled.sh resolved `sudo` BEFORE it looked at the
 // file, so on a host where channelsEnabled was ALREADY true but the invoking
@@ -63,7 +66,7 @@ function runGate(opts: {
   mode?: number
   umask?: string
 }): { out: string; file: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'marveen-gate-'))
+  const dir = mkTmp('marveen-gate-')
   dirs.push(dir)
   const file = join(dir, 'managed-settings.json')
   if (opts.managed !== null) writeFileSync(file, opts.managed)

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { Readable } from 'node:stream'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type http from 'node:http'
@@ -44,6 +44,9 @@ import { registerBuiltinCommands, customCommandsText } from '../web/builtin-comm
 import { tryHandleCustomCommands } from '../web/routes/custom-commands.js'
 import { classifyAgentMessage } from '../web/agent-message-wrap.js'
 import { COORDINATOR_AGENT_ID } from '../channel-coordinator/ingest.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const OWNER = 4242
 const T0 = Date.parse('2026-09-22T08:00:00Z')
@@ -341,7 +344,7 @@ describe('prompt: the confirmation shows the whole text (#1530 review, point 2)'
 
 describe('commands.json import / export (CMD920 test 25)', () => {
   it('imports into an empty table; export gives the same definitions back', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cmds-'))
+    const dir = mkTmp('cmds-')
     const file = join(dir, 'commands.json')
     const defs = [
       { name: 'melymunka', description: 'Opus 4 órára', kind: 'actions', body: [{ action: 'model', value: 'opus', hold: '4h' }, { action: 'effort', value: 'high' }], enabled: true },
@@ -368,7 +371,7 @@ describe('commands.json import / export (CMD920 test 25)', () => {
   })
 
   it('a malformed commands.json throws (the caller logs it), the table stays empty', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cmds-'))
+    const dir = mkTmp('cmds-')
     const file = join(dir, 'commands.json')
     writeFileSync(file, '{"commands": 5}')
     expect(() => importIfEmpty(file)).toThrow(/commands/)

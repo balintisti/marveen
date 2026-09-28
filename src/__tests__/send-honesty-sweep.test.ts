@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync, existsSync, readFileSync, cpSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, chmodSync, existsSync, readFileSync, cpSync } from 'node:fs'
 import { tmpdir, platform } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // NOTIFYVAKSWEEP826 round 1: the sweep measured 13 Telegram/dashboard senders
 // and found only two honest ones. This round extracts the proven notify.sh
@@ -19,7 +22,7 @@ const FAKE_TOKEN = '1234567890:TESTTOKENTESTTOKEN'
 let stage: string
 
 beforeEach(() => {
-  stage = mkdtempSync(join(tmpdir(), 'send-sweep-'))
+  stage = mkTmp('send-sweep-')
 })
 afterEach(() => {
   rmSync(stage, { recursive: true, force: true })

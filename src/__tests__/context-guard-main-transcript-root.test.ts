@@ -29,11 +29,14 @@
 
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest'
 import { encodeClaudeProjectDir } from '../claude-project-dir.js'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, utimesSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const FIXTURE = mkdtempSync(join(tmpdir(), 'guard-main-root-'))
+const mkTmp = tmpDirs()
+
+const FIXTURE = mkTmp('guard-main-root-')
 const PROJECT_ROOT = '/Users/x/marveen'
 const ENCODED = '-Users-x-marveen'
 

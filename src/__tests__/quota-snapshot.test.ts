@@ -14,10 +14,13 @@
 //     22:00 rollover; scripts/lib/quota-check.py skips those for the same
 //     reason).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readQuotaSnapshot, DEFAULT_MAX_AGE_SEC, readFableSnapshot, DEFAULT_FABLE_MAX_AGE_SEC } from '../web/quota.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const NOW = 1_788_700_000
 
@@ -41,7 +44,7 @@ function healthy(overrides: Record<string, unknown> = {}): Record<string, unknow
 }
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'quota-'))
+  dir = mkTmp('quota-')
   file = join(dir, '.claude-rate-limits.json')
 })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })

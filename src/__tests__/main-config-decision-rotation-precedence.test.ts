@@ -16,9 +16,12 @@
 // This file locks the SAME precedence into resolveMainConfigDecision(), so the
 // two decision-makers (the mjs script and this module) cannot drift again.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, mkdirSync } from 'node:fs'
+import { rmSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 let ROOT = ''
 
@@ -57,7 +60,7 @@ vi.mock('../web/agent-process.js', async (orig) => ({
 const { resolveMainConfigDecision } = await import('../web/main-config-decision.js')
 
 beforeEach(() => {
-  ROOT = mkdtempSync(join(tmpdir(), 'mcguard-rotation-'))
+  ROOT = mkTmp('mcguard-rotation-')
   mkdirSync(join(ROOT, 'store'), { recursive: true })
   fakeExplicit = null
   fakeRotated = null

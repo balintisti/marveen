@@ -7,7 +7,7 @@
 // returned 0 two nights running, and nobody could tell from the logs.
 
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, mkdirSync } from 'node:fs'
+import { writeFileSync, readFileSync, rmSync, existsSync, mkdirSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -15,6 +15,9 @@ import { fileURLToPath } from 'node:url'
 import { decideEmbeddingFailureLevel, backfillNeedsWarning } from '../db.js'
 import { readJsonObjectForWrite, redactJsonParseMessage } from '../web/agent-config.js'
 import { logger } from '../logger.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..', '..')
@@ -47,7 +50,7 @@ describe('embedding backend failures are visible once per outage', () => {
 })
 
 describe('readJsonObjectForWrite never clobbers an existing config', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'json-for-write-'))
+  const dir = mkTmp('json-for-write-')
   const at = (name: string) => join(dir, name)
 
   it('a missing file is the normal first write: {}', () => {
@@ -149,7 +152,7 @@ describe('readJsonObjectForWrite never clobbers an existing config', () => {
 
 describe('hook_errlog: a swallowed hook failure leaves one line', () => {
   it('report() appends a timestamped line with hook, message and exception, and never raises', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'hook-errlog-'))
+    const dir = mkTmp('hook-errlog-')
     const logPath = join(dir, 'nested', 'hook-errors.log')
     try {
       const code = [

@@ -14,13 +14,16 @@
 // buildFleetAuthBody), so the body now describes the real auth design and keeps
 // only the two rules that are genuinely non-negotiable.
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, readFileSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const tmpRoot = mkdtempSync(join(tmpdir(), 'marveen-fleetauth-test-'))
+const tmpRoot = mkTmp('marveen-fleetauth-test-')
 
 vi.mock('../config.js', () => ({
   // agent-scaffold imports settings-store (MCPOROKLES923), which derives a path from

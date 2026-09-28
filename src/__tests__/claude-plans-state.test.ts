@@ -3,11 +3,14 @@
 // transitions, finalizing the schema per design decision #1 (2026-09-12):
 // activePlanId -> activePlanByAgent, keyed by agent id.
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const tmpRoot = mkdtempSync(join(tmpdir(), 'marveen-claude-plans-state-test-'))
+const mkTmp = tmpDirs()
+
+const tmpRoot = mkTmp('marveen-claude-plans-state-test-')
 
 vi.mock('../config.js', () => ({ PROJECT_ROOT: tmpRoot }))
 

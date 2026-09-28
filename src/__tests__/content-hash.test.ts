@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // MD5SUMHIANY826: the shared content-hash helper must never hand back an
 // empty fingerprint. The old bare `md5sum` pipeline did exactly that on
@@ -58,7 +61,7 @@ describe('dedupe_check (limit-monitor contract)', () => {
   it('known positive: a SECOND, DIFFERENT alert in the same window must get out', () => {
     // This is the exact control the card demands: the broken empty-hash
     // dedupe passed the first alert concept and swallowed every later one.
-    const dir = mkdtempSync(join(tmpdir(), 'md5fix-'))
+    const dir = mkTmp('md5fix-')
     const state = join(dir, 'state')
 
     // Alert 1: new -> exit 0, caller stamps after confirmed send.
@@ -78,7 +81,7 @@ describe('dedupe_check (limit-monitor contract)', () => {
   })
 
   it('empty state file never swallows a real signal (the original bug shape)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'md5fix-'))
+    const dir = mkTmp('md5fix-')
     const state = join(dir, 'state')
     writeFileSync(state, '') // what the broken pipeline left behind
     const r = bash(`. ${HELPER}; printf 'limit signal' | dedupe_check ${state}`)
@@ -87,7 +90,7 @@ describe('dedupe_check (limit-monitor contract)', () => {
   })
 
   it('hashing unavailable -> exit 2 so the caller can fail OPEN', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'md5fix-'))
+    const dir = mkTmp('md5fix-')
     const state = join(dir, 'state')
     const r = bash(`. ${HELPER}; printf 'x' | dedupe_check ${state}`, { CONTENT_HASH_DISABLE: NO_TOOLS })
     expect(r.code).toBe(2)

@@ -14,11 +14,14 @@
 // The ordering is tested through the pure resolver, not the filesystem-backed
 // wrapper, so no test ever creates files under the real home directory.
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolveMainChannelStateDir, channelStateDir, channelStateDirEnvVar } from '../channel-provider.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 function hasEnvIn(dirsWithEnv: Set<string>) {
   return (dir: string) => dirsWithEnv.has(dir)
@@ -81,7 +84,7 @@ describe('resolveMainChannelStateDir (#915 ordering)', () => {
 
 describe('channelStateDir wrapper', () => {
   it('honours the per-provider env override end to end', () => {
-    const tmp = mkdtempSync(join(tmpdir(), 'chanstate-'))
+    const tmp = mkTmp('chanstate-')
     try {
       const key = channelStateDirEnvVar('telegram')
       const prev = process.env[key]
@@ -122,7 +125,7 @@ describe('the migration ordering the pure resolver implies', () => {
   it('a real tmp fixture: legacy-only -> legacy; after a move -> install-scoped', () => {
     // Sanity-check the hasEnvFile shape against a real filesystem, still in
     // tmp: the same predicate channelStateDir wires in.
-    const base = mkdtempSync(join(tmpdir(), 'chanstate-fs-'))
+    const base = mkTmp('chanstate-fs-')
     try {
       const inst = join(base, 'install', '.claude', 'channels', 'telegram')
       const legacy = join(base, 'home', '.claude', 'channels', 'telegram')

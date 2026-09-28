@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, chmodSync, statSync, readdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, rmSync, chmodSync, statSync, readdirSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // SLACKMGDATOM913: the slack branch of the macOS installer wrote the system
 // org-policy file (/Library/Application Support/ClaudeCode/managed-settings.json)
@@ -57,7 +60,7 @@ describe('slack-branch managed-settings write is atomic and refuses to rebuild (
   })
 
   it('the extracted create script writes a 0644 policy even under umask 077', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'slackmgd-'))
+    const dir = mkTmp('slackmgd-')
     try {
       const target = join(dir, 'managed-settings.json')
       execFileSync('bash', ['-c', 'umask 077; exec python3 - "$0"', target], {
@@ -88,7 +91,7 @@ describe('slack-branch managed-settings write is atomic and refuses to rebuild (
     }
 
     it('merges the four entries into a live policy and KEEPS unrelated keys and the file mode', () => {
-      const dir = mkdtempSync(join(tmpdir(), 'slackmgd-'))
+      const dir = mkTmp('slackmgd-')
       try {
         const before = JSON.stringify({
           channelsEnabled: true,
@@ -110,7 +113,7 @@ describe('slack-branch managed-settings write is atomic and refuses to rebuild (
     })
 
     it('a corrupt policy file is left BYTE-IDENTICAL, exit non-zero', () => {
-      const dir = mkdtempSync(join(tmpdir(), 'slackmgd-'))
+      const dir = mkTmp('slackmgd-')
       try {
         const corrupt = '{ this is not json'
         const { status, after } = run(dir, corrupt)
@@ -122,7 +125,7 @@ describe('slack-branch managed-settings write is atomic and refuses to rebuild (
     })
 
     it('a non-object root is refused, file untouched', () => {
-      const dir = mkdtempSync(join(tmpdir(), 'slackmgd-'))
+      const dir = mkTmp('slackmgd-')
       try {
         const { status, after } = run(dir, '[1,2,3]')
         expect(status).not.toBe(0)
@@ -133,7 +136,7 @@ describe('slack-branch managed-settings write is atomic and refuses to rebuild (
     })
 
     it('is idempotent: a second run changes nothing', () => {
-      const dir = mkdtempSync(join(tmpdir(), 'slackmgd-'))
+      const dir = mkTmp('slackmgd-')
       try {
         const first = run(dir, JSON.stringify({ allowedChannelPlugins: [] }))
         expect(first.status).toBe(0)

@@ -16,13 +16,16 @@
 // A real tmux server is never touched: the fake prints or fails on demand.
 import { describe, it, expect, afterAll } from 'vitest'
 import { spawn } from 'node:child_process'
-import { mkdirSync, writeFileSync, chmodSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { reapChannelOrphans } from '../web/channel-poller-reap.js'
 import { channelStateDir } from '../channel-provider.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const tmp = mkdtempSync(join(tmpdir(), 'reap-live-pane-'))
+const mkTmp = tmpDirs()
+
+const tmp = mkTmp('reap-live-pane-')
 const agentDir = join(tmp, 'agent')
 const chanDir = channelStateDir('telegram', agentDir)
 mkdirSync(chanDir, { recursive: true })

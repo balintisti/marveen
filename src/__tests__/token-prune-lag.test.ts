@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import Database from 'better-sqlite3'
-import { mkdtempSync } from 'node:fs'
+
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
@@ -9,6 +9,9 @@ import {
   DECAY_SWEEP_INTERVAL_MS,
   classifyTokenPruneLag,
 } from '../db.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // HBDBKUSZOB823. The heartbeat carried a `dbSize > 100 MB` warning; measured
 // 2026-09-13 the DB is 481.7 MB and ~65 % of it is the token ledger, which the
@@ -29,7 +32,7 @@ const cutoff = (overshootHours: number) => NOW - RETENTION * 86400 - Math.round(
 
 describe('TOKEN_PRUNE_OLDEST_SQL (the shipped statement, on a fixture DB)', () => {
   function fixtureDb() {
-    const dir = mkdtempSync(join(tmpdir(), 'token-prune-'))
+    const dir = mkTmp('token-prune-')
     const db = new Database(join(dir, 'test.db'))
     db.exec('CREATE TABLE token_usage (id INTEGER PRIMARY KEY, timestamp INTEGER)')
     return db
