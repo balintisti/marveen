@@ -58,25 +58,24 @@ describe('unrouted methods on the single-card path answer 405, not a bare 404', 
     const { ctx, out } = fakeCtx(`/api/kanban/${CARD}`, 'PATCH', { priority: 'normal' })
     expect(await tryHandleKanban(ctx)).toBe(true)
     expect(out.status).toBe(405)
-    expect(out.headers.allow).toBe('PUT, DELETE')
+    expect(out.headers.allow).toBe('GET, PUT, DELETE')
   })
 
   it('POST answers 405 as well -- the rule is the method set, not one verb', async () => {
     const { ctx, out } = fakeCtx(`/api/kanban/${CARD}`, 'POST', { title: 'x' })
     expect(await tryHandleKanban(ctx)).toBe(true)
     expect(out.status).toBe(405)
-    expect(out.headers.allow).toBe('PUT, DELETE')
+    expect(out.headers.allow).toBe('GET, PUT, DELETE')
   })
 
-  // Measured, and it corrects a natural assumption: there is NO GET on this
-  // path. Advertising one in the Allow header would send the next caller into
-  // the same fog, one method further along.
-  it('GET answers 405 too, because no single-card read route exists', async () => {
+  // ADAPTED IN THE 88c366f2 MERGE: upstream has no single-card read route, so its version of this
+  // case measured GET -> 405. OURS serves one (cards 66454b7d / 2e493a4b), and the Allow header is
+  // derived from the routed set, so it advertises GET too. The rule this file pins -- the header
+  // names exactly the methods that are routed -- is unchanged.
+  it('GET is served on this path (ours), so it is NOT a 405', async () => {
     const { ctx, out } = fakeCtx(`/api/kanban/${CARD}`, 'GET')
     expect(await tryHandleKanban(ctx)).toBe(true)
-    expect(out.status).toBe(405)
-    expect(out.headers.allow).toBe('PUT, DELETE')
-    expect(out.headers.allow).not.toContain('GET')
+    expect(out.status).toBe(200)
   })
 
   it('the body says the METHOD is the problem, not the card id', async () => {

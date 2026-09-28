@@ -56,6 +56,9 @@ const NEM_ALLITHATO: Record<string, string> = {
   created_at: 'a letrehozas ideje; egy PUT nem valtoztathatja meg a multat',
   updated_at: 'EPP EZ A KARTYA TARGYA: a szerver allitja, es csak VALODI valtozasra',
   dispatched_at: 'sajat dedikalt fuggvenye van (db.ts, markKanbanCardDispatched), es a once-only ort az adja',
+  // merge 88c366f2 (upstream 7e9a7362): a listazasban SZAMOLT ertek (az utolso oszlopvaltas esemenyebol,
+  // enelkul created_at), nem tarolt oszlop -- egy PUT-nak nincs mit irnia.
+  last_status_at: 'szarmaztatott: a status-esemenyekbol szamolva a lekerdezesben (db.ts), nem tarolt mezo',
 }
 
 describe('KANBAN_UPDATABLE -- a lista a TIPUSBOL szarmazik, nem kezzel keszul', () => {

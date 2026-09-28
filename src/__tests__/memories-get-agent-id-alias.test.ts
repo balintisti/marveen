@@ -19,6 +19,9 @@ vi.mock('../config.js', async () => {
     MAIN_AGENT_ID: 'agent-a',
     ALLOWED_CHAT_ID: 'test-chat',
     OLLAMA_URL: '',
+    // EMBED_URL is computed from the REAL OLLAMA_URL at config load, so the spread above kept it at
+    // localhost:11434 -- the live Ollama answered this test (merge 88c366f2). Blank it too.
+    EMBED_URL: '',
   }
 })
 

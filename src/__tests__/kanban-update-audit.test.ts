@@ -24,13 +24,17 @@ beforeEach(() => {
   initDatabase(':memory:')
 })
 
+// merge 88c366f2: updateKanbanCard returns { outcome, changed } (ours), not a boolean.
+// Ours also writes a BIRTH row at creation (the one row with a NULL from_status). The cases below
+// count STATUS CHANGES, so they read the events without it; the interleave case names it explicitly.
+const statusChanges = (id: string) => getKanbanCardEvents(id).filter((e) => e.from_status !== null)
 describe('kanban update audit trail', () => {
   it('records one event with correct from/to status and actor on a status change', () => {
     createKanbanCard({ id: 'card-a', title: 'Audited card' })
 
-    expect(updateKanbanCard('card-a', { status: 'in_progress' }, 'devy')).toBe(true)
+    expect(updateKanbanCard('card-a', { status: 'in_progress' }, 'devy').outcome).toBe('updated')
 
-    const events = getKanbanCardEvents('card-a')
+    const events = statusChanges('card-a')
     expect(events).toHaveLength(1)
     expect(events[0].card_id).toBe('card-a')
     expect(events[0].from_status).toBe('planned')
@@ -42,8 +46,8 @@ describe('kanban update audit trail', () => {
   it('records no event when a non-status field changes', () => {
     createKanbanCard({ id: 'card-b', title: 'Renamed card' })
 
-    expect(updateKanbanCard('card-b', { title: 'New title', priority: 'high' }, 'devy')).toBe(true)
-    expect(getKanbanCardEvents('card-b')).toHaveLength(0)
+    expect(updateKanbanCard('card-b', { title: 'New title', priority: 'high' }, 'devy').outcome).toBe('updated')
+    expect(statusChanges('card-b')).toHaveLength(0)
     expect(getKanbanCard('card-b')?.title).toBe('New title')
   })
 
@@ -52,21 +56,21 @@ describe('kanban update audit trail', () => {
     // that as a transition would bury the real ones in noise.
     createKanbanCard({ id: 'card-c', title: 'Full-card PUT' })
 
-    expect(updateKanbanCard('card-c', { title: 'Edited', status: 'planned' }, 'devy')).toBe(true)
-    expect(getKanbanCardEvents('card-c')).toHaveLength(0)
+    expect(updateKanbanCard('card-c', { title: 'Edited', status: 'planned' }, 'devy').outcome).toBe('updated')
+    expect(statusChanges('card-c')).toHaveLength(0)
   })
 
   it('records no event when no row matches', () => {
-    expect(updateKanbanCard('nonexistent-card', { status: 'done' }, 'devy')).toBe(false)
-    expect(getKanbanCardEvents('nonexistent-card')).toHaveLength(0)
+    expect(updateKanbanCard('nonexistent-card', { status: 'done' }, 'devy').outcome).toBe('not-found')
+    expect(statusChanges('nonexistent-card')).toHaveLength(0)
   })
 
   it('leaves actor null when none is supplied (existing callers pass two args)', () => {
     createKanbanCard({ id: 'card-d', title: 'No actor' })
 
-    expect(updateKanbanCard('card-d', { status: 'waiting' })).toBe(true)
+    expect(updateKanbanCard('card-d', { status: 'waiting' }).outcome).toBe('updated')
 
-    const events = getKanbanCardEvents('card-d')
+    const events = statusChanges('card-d')
     expect(events).toHaveLength(1)
     expect(events[0].actor).toBeNull()
   })
@@ -80,10 +84,12 @@ describe('kanban update audit trail', () => {
     moveKanbanCard('card-e', 'waiting', 0, 'zsolt')
     updateKanbanCard('card-e', { status: 'done' }, 'devy')
 
+    // merge 88c366f2: ours also writes a BIRTH row at creation (from_status NULL -- the one row with
+    // a NULL from_status, see createKanbanCard), so the timeline starts one step earlier.
     const events = getKanbanCardEvents('card-e')
-    expect(events.map((e) => e.to_status)).toEqual(['in_progress', 'waiting', 'done'])
-    expect(events.map((e) => e.from_status)).toEqual(['planned', 'in_progress', 'waiting'])
-    expect(events.map((e) => e.actor)).toEqual(['devy', 'zsolt', 'devy'])
+    expect(events.map((e) => e.to_status)).toEqual(['planned', 'in_progress', 'waiting', 'done'])
+    expect(events.map((e) => e.from_status)).toEqual([null, 'planned', 'in_progress', 'waiting'])
+    expect(events.map((e) => e.actor)).toEqual([null, 'devy', 'zsolt', 'devy'])
     for (let i = 1; i < events.length; i++) {
       expect(events[i].created_at).toBeGreaterThanOrEqual(events[i - 1].created_at)
       expect(events[i].id).toBeGreaterThan(events[i - 1].id)
@@ -96,7 +102,7 @@ describe('kanban update audit trail', () => {
     createKanbanCard({ id: 'card-f', title: 'Timing card' })
     updateKanbanCard('card-f', { status: 'in_progress' }, 'devy')
 
-    const events = getKanbanCardEvents('card-f')
+    const events = statusChanges('card-f')
     const enteredCurrent = events.filter((e) => e.to_status === 'in_progress').at(-1)
     expect(enteredCurrent).toBeDefined()
     expect(getKanbanCard('card-f')?.status).toBe('in_progress')

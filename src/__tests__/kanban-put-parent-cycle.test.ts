@@ -15,6 +15,8 @@ function putCtx(id: string, payload: unknown): { ctx: RouteContext; out: { statu
     end(chunk?: string) { if (chunk) out.body = JSON.parse(chunk) },
   }
   const req: any = Readable.from([Buffer.from(JSON.stringify(payload))])
+  // Ours reads If-Match on PUT (merge 88c366f2); a fake request with no headers made it throw.
+  req.headers = {}
   const url = new URL(`http://localhost:3420/api/kanban/${encodeURIComponent(id)}`)
   return { ctx: { req, res, path: url.pathname, method: 'PUT', url } as RouteContext, out }
 }
