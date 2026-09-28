@@ -71,6 +71,7 @@ class FakeDrive:
         self.session_error = None    # an HTTP code the upload-session POST answers with
         self.max_body = None         # a data PUT with a larger body dies (the flaky-line shape)
         self.put_sizes = []          # body size of every data PUT, in order
+        self.get_sizes = []          # size of every media GET answer, in order
         self.give_refresh = True
         self.granted = 'https://www.googleapis.com/auth/drive.file'
         self.n = 0
@@ -181,10 +182,19 @@ class FakeDrive:
                 if not f:
                     return self._json(404, {'error': 'not found'})
                 if q.get('alt') == ['media']:
-                    self.send_response(200)
-                    self.send_header('Content-Length', str(len(f['data'])))
+                    data, code = f['data'], 200
+                    m = re.match(r'bytes=(\d+)-(\d+)$', self.headers.get('Range', ''))
+                    if m:                                  # Drive answers a Range with 206
+                        a, b = int(m.group(1)), int(m.group(2))
+                        data, code = data[a:b + 1], 206
+                    fake.get_sizes.append(len(data))
+                    if fake.max_body and len(data) > fake.max_body:
+                        self.close_connection = True       # the line dies under a large answer
+                        return
+                    self.send_response(code)
+                    self.send_header('Content-Length', str(len(data)))
                     self.end_headers()
-                    return self.wfile.write(f['data'])
+                    return self.wfile.write(data)
                 self._json(200, dict(fake._pub(f), trashed=False))
 
             def do_DELETE(self):
@@ -581,6 +591,16 @@ class TestResilience(Base):
         self.assertEqual(sizes[0], 8192)                # started at CHUNK
         self.assertEqual(sizes[1], 4096)                # halved by the break
         self.assertIn(8192, sizes[2:])                  # and grew back
+
+    def test_the_restore_download_goes_in_pieces_and_survives_a_line_that_kills_large_answers(self):
+        # measured 2026-09-29 01:4x: the first real restore test died six times as ONE 172 MB GET
+        self.assertEqual(self.run_tool('push', '--archive', self.archive).returncode, 0)
+        self.env.update(BACKUP_OFFSITE_MIN_CHUNK='2048')
+        self.drive.max_body = 3072
+        self.drive.get_sizes.clear()
+        self.round_trip_ok()
+        self.assertGreater(len(self.drive.get_sizes), 3, 'one GET for 40 KB: not ranged')
+        self.assertLessEqual(min(self.drive.get_sizes), 2048)
 
     def test_breaks_are_bounded_and_loud(self):
         self.drive.drop_puts = {n: 'before' for n in range(1, 50)}
