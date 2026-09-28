@@ -47,7 +47,7 @@ describe('morning-briefing.sh -- the sources it tells the agent to use', () => {
   })
 
   it('names the real mail command', () => {
-    expect(SRC).toMatch(/gmail-recent\.py --minutes 720/)
+    expect(SRC).toMatch(/gmail-recent\.py --minutes 1440/)
   })
 
   it('names the real calendar command', () => {
