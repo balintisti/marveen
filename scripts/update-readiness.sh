@@ -18,7 +18,11 @@
 # azzal, hogy a statuszt nezi.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REMOTE="${UPDATE_REMOTE:-origin}"
+# THE UPDATE REMOTE, NOT `origin` (card 788c0571). On this install `origin` is the FOREIGN
+# upstream (Szotasz/marveen); update.sh pulls from $UPDATE_REMOTE, default `fork`, and the apply
+# preflight measures the same ref. A readiness probe that measures a different remote than the
+# one the update pulls answers a different question -- and its false "ready" is the dangerous one.
+REMOTE="${UPDATE_REMOTE:-fork}"
 
 emit() { python3 -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1])))' "$1" 2>/dev/null || printf '%s\n' "$1"; exit 0; }
 jstr() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1" 2>/dev/null || printf '"%s"' "$1"; }
@@ -41,13 +45,15 @@ if ! git ls-remote --exit-code --heads "$REMOTE" "$BRANCH" >/dev/null 2>&1; then
   add "a(z) '$BRANCH' ag nem letezik a(z) '$REMOTE' tavolin"
 fi
 
-# 3. Ahead-szam. A "NEM MERHETO" SAJAT eset, nem nulla -- ez a mai lecke
-#    (update.sh:332, ahol a `|| echo 0` egy bukast megnyugtato ertekke alakitott).
-if AHEAD="$(git rev-list --count '@{u}..HEAD' 2>/dev/null)"; then
-  [ "${AHEAD:-0}" -gt 0 ] && add "a checkout $AHEAD helyi committal elore van az upstreamhez kepest -- ff-frissites nem lehetseges"
+# 3. Ahead-szam, a frissito tavoli UGYANAZON agahoz merve (`$REMOTE/$BRANCH`), NEM az `@{u}`-hoz:
+#    az ag upstreamje barmelyik tavolira mutathat (ezen a telepitesen epp az idegenre), es az
+#    `@{u}..HEAD` = 0 ott READY-t mondott egy elore levo checkoutra (card 788c0571). A "NEM
+#    MERHETO" SAJAT eset, nem nulla -- ez a regi lecke (update.sh:332, `|| echo 0`).
+if AHEAD="$(git rev-list --count "refs/remotes/$REMOTE/$BRANCH..HEAD" 2>/dev/null)"; then
+  [ "${AHEAD:-0}" -gt 0 ] && add "a checkout $AHEAD helyi committal elore van a(z) '$REMOTE/$BRANCH'-hoz kepest -- ff-frissites nem lehetseges"
 else
   AHEAD="null"
-  add "az ahead-szam NEM MERHETO (a(z) '$BRANCH' agnak nincs beallitott upstreamje) -- ez NEM ugyanaz, mint a nulla"
+  add "az ahead-szam NEM MERHETO (nincs '$REMOTE/$BRANCH' tavoli ref -- futtass egy fetch-et) -- ez NEM ugyanaz, mint a nulla"
 fi
 
 # 4. Piszkos munkafa: nem blokkolo (az update.sh stashel), de a jelentesben ott a helye.
