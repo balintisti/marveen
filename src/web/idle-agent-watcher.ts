@@ -6,7 +6,8 @@ import { listAgentNames, agentDir, readAgentRemoteHost, readAgentProjects } from
 import { isAgentRunning, capturePane } from './agent-process.js'
 import { resolveAgentSession } from './channel-mcp-reconnect.js'
 import { sendAlert } from './channel-monitor.js'
-import { busyEvidence, detectPaneState, detectsUsageLimitReached } from '../pane-state.js'
+import { busyEvidence, detectPaneState } from '../pane-state.js'
+import { usageLimitHolds } from '../usage-limit-window.js'
 import { getPendingMessages, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
 import {
   decideIdleAlert,
@@ -286,7 +287,8 @@ export function readPane(agent: string): {
     idle: state === 'idle',
     staleCounterOnly: busyEvidence(pane) === 'counter',
     // Same capture as the idle verdict (card d3f92923), so the two cannot disagree about the screen.
-    usageLimited: detectsUsageLimitReached(pane),
+    // Held only until the reset the banner names, 5 h at most: the banner outlives the limit.
+    usageLimited: usageLimitHolds(`idle:${agent}`, pane, Date.now()),
   }
 }
 

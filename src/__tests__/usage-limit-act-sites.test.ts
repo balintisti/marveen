@@ -29,10 +29,11 @@ vi.mock('../pane-state.js', () => ({
 }))
 
 const { readPane } = await import('../web/idle-agent-watcher.js')
+const { resetUsageLimitWindows } = await import('../usage-limit-window.js')
 
 describe('idle-agent-watcher readPane -> usageLimited', () => {
   beforeEach(() => {
-    capturePane.mockReset(); detectPaneState.mockReset(); reached.mockReset()
+    capturePane.mockReset(); detectPaneState.mockReset(); reached.mockReset(); resetUsageLimitWindows()
     capturePane.mockReturnValue('THE-CAPTURED-PANE')
     detectPaneState.mockReturnValue('idle')
   })
@@ -48,13 +49,15 @@ describe('idle-agent-watcher readPane -> usageLimited', () => {
   it('the decision call hands it on as paneUsageLimited (source pin, comments stripped)', () => {
     const src = stripComments(readFileSync(join(__dirname, '..', 'web', 'idle-agent-watcher.ts'), 'utf-8'))
     expect(src).toContain('paneUsageLimited: running ? paneRead.usageLimited === true : false')
+    // through the expiring window, not the bare text predicate (didi 19:22: the banner outlives the limit)
+    expect(src).toContain('usageLimited: usageLimitHolds(`idle:${agent}`, pane, Date.now())')
   })
 })
 
 describe('context-guard-runner -> paneUsageLimited', () => {
-  it('computed from the same capture as paneIdle, with the HARD predicate (source pin)', () => {
+  it('computed from the same capture as paneIdle, through the expiring window (source pin)', () => {
     const src = stripComments(readFileSync(join(__dirname, '..', 'web', 'context-guard-runner.ts'), 'utf-8'))
-    expect(src).toContain('paneUsageLimited: pane !== null && detectsUsageLimitReached(pane)')
+    expect(src).toContain('paneUsageLimited: pane !== null && usageLimitHolds(`guard:${name}`, pane, nowMs)')
     // not the wide one: the weekly WARNING must not defer a flush for days
     expect(src).not.toMatch(/paneUsageLimited:[^\n]*detectsUsageLimit\(/)
   })
