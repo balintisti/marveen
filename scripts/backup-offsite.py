@@ -335,6 +335,37 @@ def upload(token, parent, path, name, props):
             offset = got
 
 
+def download(token, fid, dest, size):
+    """Ranged, resumable download -- the upload's rules the other way round (2026-09-29 01:4x: the
+    first restore test died 6 times as one 172 MB GET, each retry from byte 0). Pieces go straight
+    to disk; a break shrinks the piece and costs only that piece; the bound is on consecutive breaks,
+    and progress resets it."""
+    got, breaks, piece, clean = 0, 0, CHUNK, 0
+    with open(dest, 'wb') as out:
+        while got < size:
+            end = min(size, got + piece) - 1
+            try:
+                status, raw, _ = _once('GET', f'{API}/files/{fid}?alt=media', token,
+                                       headers={'Range': f'bytes={got}-{end}'})
+            except Transient as e:
+                breaks += 1
+                if breaks > RETRIES:
+                    raise Fail(f'{e} (download gave up after {breaks} breaks in a row, at byte {got} of {size})')
+                _pause(breaks - 1)
+                piece, clean = max(MIN_CHUNK, piece // 2), 0
+                continue
+            if status == 200 and got == 0 and len(raw) == size:     # a server that ignores Range
+                out.write(raw)
+                return
+            if status != 206 or not raw or len(raw) > end - got + 1:
+                raise Fail(f'download: unexpected answer HTTP {status} with {len(raw)} bytes for bytes={got}-{end}')
+            out.write(raw)
+            got += len(raw)
+            breaks, clean = 0, clean + 1
+            if clean >= GROW_AFTER and piece < CHUNK:
+                piece, clean = min(CHUNK, piece * 2), 0
+
+
 def list_backups(token, parent):
     q = f"'{parent}' in parents and trashed=false and appProperties has {{ key='{APP_TAG}' and value='1' }}"
     params = urllib.parse.urlencode({'q': q, 'orderBy': 'createdTime desc', 'pageSize': '100',
@@ -484,9 +515,7 @@ def cmd_restore_test(_a):
     try:
         os.chmod(work, 0o700)
         enc = os.path.join(work, f['name'])
-        _, raw, _ = http('GET', f'{API}/files/{f["id"]}?alt=media', token, want_json=False)
-        with open(enc, 'wb') as out:
-            out.write(raw)
+        download(token, f['id'], enc, int(f.get('size') or 0))
         if md5_of(enc) != f.get('md5Checksum'):
             raise Fail(f'restore test: downloaded bytes do not match Drive md5 for {f["name"]}')
         plain = os.path.join(work, 'restored.tar.gz')
