@@ -306,6 +306,183 @@ assert_eq "the delete failure is logged WITH the API's reason" "yes" \
   "$(grep -q "placeholder delete failed (mid=4444): HTTP 400: Bad Request: message can't be deleted" "$PK/debug.log" && echo yes || echo no)"
 
 # ---------------------------------------------------------------------------
+# Card 4bc31b06: the wedged-backstop measured the time since the PROMPT, not the
+# time since the agent last did anything. deeper's batch rounds run 15-40 min
+# without a finished answer, so the backstop fired inside nearly every one of
+# them -- six times on 2026-09-28 -- and sent Isti whatever text it scraped.
+# The live transcript also showed WHICH text: Isti's messages reached the busy
+# session as `attachment/queued_command` events (not `type:user` prompts), and a
+# compaction summary IS a `type:user` string, so the round was anchored on an
+# older prompt and an older report went out. Two placeholders in one marker sent
+# that text twice.
+#
+# Builder: events as JSON on stdin, each with "ago" (seconds before now) turned
+# into a real timestamp. Optional 4th arg: a subagent file's age in seconds.
+make_ev_case() { # name marker_age_seconds n_placeholders [subagent_age]
+    local name="$1" age="$2" n="$3" sub="${4:-}"
+    local pdir="$TMP/root/agents/$name/.claude/channels/telegram/progress"
+    local sdir="$TMP/root/agents/$name/.claude/channels/telegram"
+    mkdir -p "$pdir"
+    printf 'TELEGRAM_BOT_TOKEN=TESTTOKEN\n' > "$sdir/.env"
+    local tr="$sdir/sess.jsonl"
+    python3 -c '
+import datetime, json, sys, time
+now = time.time()
+with open(sys.argv[1], "w") as f:
+    for e in json.load(sys.stdin):
+        ago = e.pop("ago", None)
+        if ago is not None:
+            e["timestamp"] = datetime.datetime.fromtimestamp(now - ago, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        f.write(json.dumps(e) + "\n")
+' "$tr"
+    if [ -n "$sub" ]; then
+        mkdir -p "$sdir/sess/subagents"
+        echo '{}' > "$sdir/sess/subagents/agent-x.jsonl"
+        python3 -c 'import os,sys,time; os.utime(sys.argv[1], (time.time()-int(sys.argv[2]),)*2)' \
+            "$sdir/sess/subagents/agent-x.jsonl" "$sub"
+    fi
+    python3 -c '
+import json, sys
+print(json.dumps([{"chat_id": sys.argv[1], "message_id": 600 + i, "transcript_path": sys.argv[2]}
+                  for i in range(int(sys.argv[3]))]))' "$CHAT" "$tr" "$n" > "$pdir/SID.json"
+    python3 -c 'import os,sys,time; os.utime(sys.argv[1], (time.time()-int(sys.argv[2]),)*2)' \
+        "$pdir/SID.json" "$age"
+    echo "$pdir"
+}
+TG_TAG='<channel source=\"plugin:telegram:telegram\" chat_id=\"10000000001\" message_id=\"947\">'
+
+echo ""
+echo "(l) 30-min round, tool calls every minute: the backstop does NOT fire"
+PL="$(make_ev_case wl 1800 1 <<'EOF'
+[{"type":"user","ago":1800,"message":{"role":"user","content":"kotegmunka indul"}},
+ {"type":"assistant","ago":1700,"message":{"role":"assistant","content":[{"type":"text","text":"KOZTES_ALLAPOT"},{"type":"tool_use","id":"b1","name":"Bash"}]}},
+ {"type":"user","ago":1650,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"b1"}]}},
+ {"type":"assistant","ago":60,"message":{"role":"assistant","content":[{"type":"tool_use","id":"b2","name":"Bash"}]}},
+ {"type":"user","ago":30,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"b2"}]}}]
+EOF
+)"
+run_wd 1 1
+assert_eq "no delivery while the agent is still working" "0" "$(count sendMessage)"
+assert_eq "no error edit while the agent is still working" "0" "$(count editMessageText)"
+assert_eq "placeholder preserved" "yes" "$(pend_exists "$PL")"
+
+echo ""
+echo "(l2) CONTROL: the same round, but the agent went quiet 1000 s ago -> fires"
+PL2="$(make_ev_case wl2 1800 1 <<'EOF'
+[{"type":"user","ago":1800,"message":{"role":"user","content":"kotegmunka indul"}},
+ {"type":"assistant","ago":1000,"message":{"role":"assistant","content":[{"type":"text","text":"MEGALLT_KOR_VALASZA"},{"type":"tool_use","id":"b1","name":"Bash"}]}},
+ {"type":"user","ago":1000,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"b1"}]}}]
+EOF
+)"
+run_wd 1 1
+assert_eq "backstop fires on a genuinely stalled round" "1" "$(count sendMessage)"
+assert_eq "delivers that round's text" "yes" "$(body_has "MEGALLT_KOR_VALASZA")"
+
+echo ""
+echo "(l3) Inbound messages queued at a stalled session are NOT agent activity"
+PL3="$(make_ev_case wl3 1800 1 <<EOF
+[{"type":"user","ago":1800,"message":{"role":"user","content":"kotegmunka indul"}},
+ {"type":"assistant","ago":1000,"message":{"role":"assistant","content":[{"type":"text","text":"MEGALLT_KOR_VALASZA"}]}},
+ {"type":"queue-operation","ago":20,"operation":"enqueue","content":"$TG_TAG kesobbi uzenet"}]
+EOF
+)"
+run_wd 1 1
+assert_eq "an enqueue does not keep a stalled round alive" "1" "$(count sendMessage)"
+
+echo ""
+echo "(r) Main transcript quiet, but a subagent wrote 30 s ago: does NOT fire"
+PR="$(make_ev_case wr 1800 1 30 <<'EOF'
+[{"type":"user","ago":1800,"message":{"role":"user","content":"kotegmunka indul"}},
+ {"type":"assistant","ago":1000,"message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Task"}]}}]
+EOF
+)"
+run_wd 1 1
+assert_eq "no delivery while a subagent works" "0" "$(count sendMessage)"
+assert_eq "placeholder preserved" "yes" "$(pend_exists "$PR")"
+
+echo ""
+echo "(n) A QUEUED prompt anchors the round: the older report is never sent"
+PN="$(make_ev_case wn 1000 1 <<EOF
+[{"type":"user","ago":7200,"message":{"role":"user","content":"regi kor"}},
+ {"type":"assistant","ago":7000,"message":{"role":"assistant","content":[{"type":"text","text":"REGI_930_JELENTES"}]}},
+ {"type":"attachment","ago":1000,"attachment":{"type":"queued_command","prompt":"$TG_TAG uj kerdes"}},
+ {"type":"assistant","ago":990,"message":{"role":"assistant","content":[{"type":"text","text":"UJ_KERDES_VALASZA"}]}}]
+EOF
+)"
+run_wd 1 1
+assert_eq "one delivery" "1" "$(count sendMessage)"
+assert_eq "the queued prompt's own answer is delivered" "yes" "$(body_has "UJ_KERDES_VALASZA")"
+assert_eq "the older report is NOT sent" "no" "$(body_has "REGI_930_JELENTES")"
+
+echo ""
+echo "(n2) Queued prompt, nothing answered after it: generic error, no old text"
+PN2="$(make_ev_case wn2 1000 1 <<EOF
+[{"type":"user","ago":7200,"message":{"role":"user","content":"regi kor"}},
+ {"type":"assistant","ago":7000,"message":{"role":"assistant","content":[{"type":"text","text":"REGI_930_JELENTES"}]}},
+ {"type":"attachment","ago":1000,"attachment":{"type":"queued_command","prompt":"$TG_TAG uj kerdes"}}]
+EOF
+)"
+run_wd 1 1
+assert_eq "no text delivery" "0" "$(count sendMessage)"
+assert_eq "the older report is NOT sent" "no" "$(body_has "REGI_930_JELENTES")"
+assert_eq "generic error instead" "1" "$(count editMessageText)"
+
+echo ""
+echo "(n4) Text written just BEFORE the queued prompt is not its answer"
+# Inside the anchor slack, so the time floor alone lets it through: only
+# reading the queued prompt as the round's opening keeps it out.
+PN4="$(make_ev_case wn4 1000 1 <<EOF
+[{"type":"user","ago":7200,"message":{"role":"user","content":"regi kor"}},
+ {"type":"assistant","ago":1050,"message":{"role":"assistant","content":[{"type":"text","text":"KOZTES_MUNKASZOVEG"}]}},
+ {"type":"attachment","ago":1000,"attachment":{"type":"queued_command","prompt":"$TG_TAG uj kerdes"}}]
+EOF
+)"
+run_wd 1 1
+assert_eq "the mid-work text is NOT sent as the answer" "no" "$(body_has "KOZTES_MUNKASZOVEG")"
+assert_eq "generic error instead" "1" "$(count editMessageText)"
+
+echo ""
+echo "(n3) No prompt near the marker at all: text older than the marker is never an answer"
+PN3="$(make_ev_case wn3 1000 1 <<'EOF'
+[{"type":"user","ago":7200,"message":{"role":"user","content":"regi kor"}},
+ {"type":"assistant","ago":7000,"message":{"role":"assistant","content":[{"type":"text","text":"REGI_930_JELENTES"}]}}]
+EOF
+)"
+run_wd 1 1
+assert_eq "the older report is NOT sent" "no" "$(body_has "REGI_930_JELENTES")"
+assert_eq "generic error instead" "1" "$(count editMessageText)"
+
+echo ""
+echo "(o) A compaction inside the round does not end it"
+# The compaction lands well past the anchor slack (500 s into the round), where the
+# old reading took its summary for the NEXT prompt and closed the window.
+PO="$(make_ev_case wo 2000 1 <<'EOF'
+[{"type":"user","ago":2000,"message":{"role":"user","content":"csatorna-kerdes"}},
+ {"type":"system","ago":1500,"subtype":"compact_boundary"},
+ {"type":"user","ago":1500,"isCompactSummary":true,"message":{"role":"user","content":"This session is being continued from a previous conversation."}},
+ {"type":"assistant","ago":1490,"message":{"role":"assistant","content":[{"type":"text","text":"TOMORITES_UTANI_VALASZ"}]}}]
+EOF
+)"
+run_wd 1 1
+assert_eq "the post-compaction answer is delivered" "yes" "$(body_has "TOMORITES_UTANI_VALASZ")"
+
+echo ""
+echo "(p) Two placeholders in one chat: the answer goes out ONCE"
+PP="$(make_ev_case wp 1000 2 <<'EOF'
+[{"type":"user","ago":1000,"message":{"role":"user","content":"csatorna-kerdes"}},
+ {"type":"assistant","ago":990,"message":{"role":"assistant","content":[{"type":"text","text":"EGYSZER_KELL"}]}}]
+EOF
+)"
+run_wd 1 1
+assert_eq "exactly one sendMessage" "1" "$(count sendMessage)"
+assert_eq "both placeholders removed" "2" "$(count deleteMessage)"
+assert_eq "no error edit" "0" "$(count editMessageText)"
+# Measurable next time (deeper: the log carried only the label, never the text):
+# the sent message's own id, the text's length and a short hash.
+assert_eq "the log names the sent message id, length and hash" "yes" \
+  "$(grep -qE "sent_mid=9001 len=12 sha=[0-9a-f]{12}" "$PP/debug.log" && echo yes || echo no)"
+
+# ---------------------------------------------------------------------------
 echo ""
 echo "=============================="
 TOTAL=$((PASS + FAIL))

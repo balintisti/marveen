@@ -28,9 +28,11 @@ Detection (per pending placeholder, keyed by its session state file):
     older than WEDGED_UP_SEC -> fire FAST. This precisely targets the dropped-
     MCP freeze and does NOT misfire on a legitimately long task (which has no
     dangling reply call), so the threshold can be far below the blunt backstop.
-  - agent UP with no hung-reply signal but the placeholder is older than
-    WEDGED_SEC -> fire (blunt backstop for genuinely stuck turns; generous so
-    long legit tasks aren't cut short).
+  - agent UP with no hung-reply signal, the placeholder older than WEDGED_SEC
+    AND the agent itself silent for WEDGED_SEC -> fire (backstop for genuinely
+    stuck turns). The silence is the transcript's own last agent event (or a
+    subagent file's write), not the time since the prompt: card 4bc31b06, a
+    working 15-40 min batch round is not a stuck one.
   - placeholder older than STALE_SEC (default 24h) -> DEAD round: deliver
     nothing, drop the marker (and the placeholder message while Telegram still
     allows deletion). TGORPHAN908: without this bound a post-outage scan walked
@@ -44,7 +46,7 @@ Standalone: scans every agent's per-agent telegram state dir. No marveen src
 dependency; only Python stdlib + the `tmux` binary. Bot API base is overridable
 via TELEGRAM_API_BASE (tests point it at a local stub).
 """
-import datetime, os, glob, json, time, subprocess, urllib.request
+import datetime, hashlib, os, glob, json, time, subprocess, urllib.request
 
 # State dirs to scan: per-agent dirs under the fleet, plus the default dir.
 #
@@ -210,7 +212,21 @@ def _ev_epoch(ev):
 
 
 def _is_user_prompt(ev):
-    """A real inbound prompt (starts a turn) -- NOT a tool_result carrier."""
+    """An inbound prompt that opens a round -- NOT a tool_result carrier.
+
+    Card 4bc31b06, measured on deeper's live transcript 2026-09-28: a message
+    that reaches a BUSY session is written as `attachment` / `queued_command`,
+    not as a `type:user` prompt, and the submit hook posts its placeholder at
+    that moment -- so it opens that placeholder's round. A compaction summary,
+    the other way round, IS a `type:user` string (`isCompactSummary`) but opens
+    nothing: the round goes on across it. Reading the two the other way anchored
+    the round on an hours-old prompt and sent Isti an older report.
+    """
+    if ev.get("type") == "attachment":
+        att = ev.get("attachment") or {}
+        return isinstance(att, dict) and att.get("type") == "queued_command"
+    if ev.get("isCompactSummary"):
+        return False
     msg = ev.get("message") or {}
     role = msg.get("role") or ev.get("role")
     if not (ev.get("type") == "user" or role == "user"):
@@ -267,8 +283,36 @@ class _Acc:
         return bool(self.reply_ids & self.results)
 
 
-def read_transcript(transcript_path, turn_start=None):
-    """Return (last_assistant_text, reply_is_hung, reply_delivered).
+# Events that say nothing about whether the AGENT is moving: an inbound message
+# is enqueued whether the session works or hangs (card 4bc31b06).
+_NOT_ACTIVITY = {"queue-operation"}
+
+
+def _subagent_activity(transcript_path):
+    """Latest write under <session>/subagents/ -- a Task subagent works in its own
+    file while the main transcript waits on the call that spawned it."""
+    newest = None
+    base = transcript_path[:-len(".jsonl")] if transcript_path.endswith(".jsonl") else None
+    if not base:
+        return None
+    for f in glob.glob(os.path.join(base, "subagents", "*.jsonl")):
+        try:
+            m = os.path.getmtime(f)
+        except OSError:
+            continue
+        newest = m if newest is None or m > newest else newest
+    return newest
+
+
+def read_transcript(transcript_path, turn_start=None, with_activity=False):
+    """Return (last_assistant_text, reply_is_hung, reply_delivered), plus the
+    epoch of the agent's last activity when `with_activity` is set.
+
+    The activity epoch is None -- the caller then falls back to the placeholder's
+    age -- when it cannot speak for the marker's round: no timestamps, no anchor,
+    or the round is already OVER. A later `type:user` prompt proves the turn
+    ended (a new one began), and a working session after that is working on
+    something else; a queued command does not prove it, since it arrives MID-turn.
 
     last_assistant_text: the agent's final user-facing answer (last non-empty
     assistant text block) -- the same source the Stop hook's fallback uses.
@@ -289,31 +333,53 @@ def read_transcript(transcript_path, turn_start=None):
     transcript with no prompt at/before the marker is unattributable -> no
     answer (generic-error path), never a foreign turn's text. Transcripts
     without timestamped prompts (older format) keep the whole-file behavior.
+
+    An answer cannot predate its question (card 4bc31b06): an event timestamped
+    before turn_start - slack never feeds the round, even when the anchor prompt
+    itself is older -- that text belonged to an earlier round.
     """
     whole = _Acc()
     scoped = _Acc()
     have_ts_prompt = False
     anchor_seen = False
     in_window = False
+    last_active = None
+    round_over = False
+    floor = turn_start - TURN_ANCHOR_SLACK_SEC if turn_start is not None else None
     for ev in _iter_events(transcript_path):
+        e = _ev_epoch(ev)
+        if e is not None and ev.get("type") not in _NOT_ACTIVITY:
+            last_active = e if last_active is None or e > last_active else last_active
         if _is_user_prompt(ev):
-            e = _ev_epoch(ev)
             if e is not None:
                 have_ts_prompt = True
                 if turn_start is not None and e <= turn_start + TURN_ANCHOR_SLACK_SEC:
                     scoped = _Acc()  # a later prompt supersedes: window restarts
                     anchor_seen = True
                     in_window = True
-                elif in_window:
+                    round_over = False
+                else:
+                    if anchor_seen and ev.get("type") != "attachment":
+                        round_over = True  # a new turn began: the marker's one ended
                     in_window = False  # the marker's round ended here
         whole.feed(ev)
-        if in_window:
+        if in_window and not (floor is not None and e is not None and e < floor):
             scoped.feed(ev)
+    if with_activity:
+        if anchor_seen and not round_over:
+            sub = _subagent_activity(transcript_path or "")
+            if sub is not None and (last_active is None or sub > last_active):
+                last_active = sub
+        else:
+            last_active = None
+        tail = (last_active,)
+    else:
+        tail = ()
     if turn_start is not None and have_ts_prompt:
         if not anchor_seen:
-            return "", False, False
-        return scoped.text, scoped.reply_hung(), scoped.reply_delivered()
-    return whole.text, whole.reply_hung(), False
+            return ("", False, False) + tail
+        return (scoped.text, scoped.reply_hung(), scoped.reply_delivered()) + tail
+    return (whole.text, whole.reply_hung(), False) + tail
 
 
 def err_detail(e):
@@ -350,16 +416,27 @@ def log(progress_dir, msg):
         pass
 
 
-def deliver(tok, chat_id, message_id, answer, progress_dir):
+def deliver(tok, chat_id, message_id, answer, progress_dir, already_sent=False):
     """Deliver the real answer if we have one (sendMessage + drop the
     placeholder), else rewrite the placeholder into a generic error. Returns a
-    short label for logging."""
-    if answer:
+    short label for logging.
+
+    already_sent: this round's answer already went to this chat from a sibling
+    placeholder in the same marker -- only the placeholder is removed. Card
+    4bc31b06: two placeholders sent the same text twice."""
+    if answer and not already_sent:
+        text = answer[:4000]
         try:
-            api(tok, "sendMessage", {"chat_id": chat_id, "text": answer[:4000]})
+            resp = api(tok, "sendMessage", {"chat_id": chat_id, "text": text})
         except Exception as e:
             log(progress_dir, f"real-answer send failed (mid={message_id}): {err_detail(e)}")
             return "send-failed"
+        # WHAT went out, measurably (card 4bc31b06: the log held only the label,
+        # so a wrong text could not be told apart from a right one afterwards).
+        sent_mid = (resp or {}).get("result", {}).get("message_id") if isinstance(resp, dict) else None
+        log(progress_dir, f"real-answer sent (mid={message_id}) sent_mid={sent_mid} "
+                          f"len={len(text)} sha={hashlib.sha256(text.encode('utf-8')).hexdigest()[:12]}")
+    if answer:
         try:
             api(tok, "deleteMessage", {"chat_id": chat_id, "message_id": message_id})
         except Exception as e:
@@ -377,7 +454,7 @@ def deliver(tok, chat_id, message_id, answer, progress_dir):
             except Exception as e2:
                 log(progress_dir,
                     f"placeholder edit fallback failed (mid={message_id}): {err_detail(e2)}")
-        return "real-answer"
+        return "dup-cleared" if already_sent else "real-answer"
     # No recoverable answer -> generic error, keep the (edited) placeholder.
     try:
         api(tok, "editMessageText",
@@ -449,8 +526,11 @@ def handle_dir(progress_dir):
             if p.get("transcript_path"):
                 transcript_path = p["transcript_path"]
                 break
-        answer, reply_hung, reply_delivered = read_transcript(
-            transcript_path, turn_start=now - age)
+        answer, reply_hung, reply_delivered, last_active = read_transcript(
+            transcript_path, turn_start=now - age, with_activity=True)
+        # Silence of the agent itself; without any timestamp or subagent file
+        # (older transcript format) the placeholder's age stands in, as before.
+        quiet = now - last_active if last_active is not None else age
 
         # Fire decision.
         if not agent_up:
@@ -459,7 +539,7 @@ def handle_dir(progress_dir):
         elif reply_hung and age > up_sec:
             fire = True
             reason = "reply-hung"
-        elif age > WEDGED_SEC:
+        elif age > WEDGED_SEC and quiet > WEDGED_SEC:
             fire = True
             reason = "wedged-backstop"
         else:
@@ -497,15 +577,19 @@ def handle_dir(progress_dir):
             continue
 
         modes = []
+        sent_to = set()
         for p in pend:
-            modes.append(deliver(tok, p.get("chat_id"), p.get("message_id"),
-                                 answer, progress_dir))
+            cid = p.get("chat_id")
+            modes.append(deliver(tok, cid, p.get("message_id"), answer, progress_dir,
+                                 already_sent=cid in sent_to))
+            if modes[-1] == "real-answer":
+                sent_to.add(cid)
         try:
             os.remove(path)
         except Exception:
             pass
         log(progress_dir, f"orphan handled ({reason}): {os.path.basename(path)} "
-                          f"agent_up={agent_up} age={int(age)}s "
+                          f"agent_up={agent_up} age={int(age)}s quiet={int(quiet)}s "
                           f"delivered={','.join(modes)}")
 
 
