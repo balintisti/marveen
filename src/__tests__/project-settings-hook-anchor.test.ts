@@ -50,7 +50,9 @@ const EXPECTED: Record<string, string[]> = {
   // (TOOLLOGVAKSIKER921): without this entry tool_call_log cannot hold a 0.
   PostToolUseFailure: ['tool-log-capture.py'],
   PreToolUse: [
-    'outgoing-copy-gate.py', 'email-approval-gate.py',
+    // merge 88c366f2: email-approval-gate.py held back for the main agent (D4, pending P10);
+    // db-destructive-gate.py is ours (also wired at user level; see hook-registration-completeness).
+    'outgoing-copy-gate.py', 'db-destructive-gate.py',
     'channel-image-resize.sh', 'egress-gate.mjs', 'memory-frontmatter-gate.py',
   ],
   Stop: ['marveen-commands.py', 'telegram-reply-guard.py', 'telegram_progress_clear.py', 'slack_progress_clear.py'],

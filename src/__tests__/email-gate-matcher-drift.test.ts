@@ -28,7 +28,11 @@ const CANONICAL = EMAIL_GATE_MATCHER.split('|')
 // telegram reply tool -- that is an allowed EXTRA surface, not email drift,
 // so the assertion is coverage (every canonical alternative present), not
 // set-equality.
-const EMAIL_HOOKS = ['outgoing-copy-gate.py', 'email-approval-gate.py']
+// email-approval-gate.py is held back for the main agent in the 88c366f2 merge (D4, marveen decides
+// P10): with email_send at level 1 it would hard-block every main-agent send/draft. Its absence is
+// pinned in its own case below, so arming it later flips ONE place, not a silent drift.
+const EMAIL_HOOKS = ['outgoing-copy-gate.py']
+const HELD_BACK_FOR_MAIN = 'email-approval-gate.py'
 
 function matcherAlternativesFor(script: string): string[] {
   const entries = SETTINGS.hooks?.PreToolUse ?? []
@@ -38,6 +42,10 @@ function matcherAlternativesFor(script: string): string[] {
 }
 
 describe('main-agent email hook matchers cover the canonical EMAIL_GATE_MATCHER', () => {
+  it(`${HELD_BACK_FOR_MAIN} is NOT wired for the main agent (merge default D4, pending P10)`, () => {
+    expect(matcherAlternativesFor(HELD_BACK_FOR_MAIN)).toEqual([])
+  })
+
   for (const script of EMAIL_HOOKS) {
     it(`${script} covers every alternative of EMAIL_GATE_MATCHER`, () => {
       const present = matcherAlternativesFor(script)
@@ -64,15 +72,17 @@ describe('main-agent email hook matchers cover the canonical EMAIL_GATE_MATCHER'
     const full = new RegExp(`^(${EMAIL_GATE_MATCHER})$`)
     const tool = 'mcp__server-gmail-autoauth-mcp__draft_email'
     expect(full.test(tool), 'matcher must fire for the tool the fleet actually has').toBe(true)
-    const verified = (a: string) => a === 'known@vlbbtab.com'
-    expect(gateDecision(tool, { to: 'invented@example.com' }, verified).deny).toBe(true)
-    expect(gateDecision(tool, { to: 'known@vlbbtab.com' }, verified).deny).toBe(false)
+    // A1 (merge 88c366f2): upstream's recipient ledger is NOT taken here, so the gate does not judge
+    // the ADDRESS -- a draft is allowed whatever it is addressed to (drafting is the permitted path for
+    // sub-agents; SENDING is what the gate blocks). With the ledger, the first line would be deny.
+    expect(gateDecision(tool, { to: 'invented@example.com' }).deny).toBe(false)
+    expect(gateDecision('mcp__server-gmail-autoauth-mcp__send_email', { to: 'invented@example.com' }).deny).toBe(true)
     // A name-keyed matcher goes blind on the next new server name, so the draft
     // surface is pinned by the OPERATION too: a server with no gmail in its name.
     expect(full.test('mcp__whatever_mail_server__draft_email')).toBe(true)
     // Read tools on the same server stay out of the deny path (the hook may
     // fire for them; the gate is what decides, and it must say no-deny).
-    expect(gateDecision('mcp__server-gmail-autoauth-mcp__read_email', {}, verified).deny).toBe(false)
+    expect(gateDecision('mcp__server-gmail-autoauth-mcp__read_email', {}).deny).toBe(false)
   })
 
   it('the canonical matcher reaches the claude.ai Gmail connector (GMAILCONNECTOR914)', () => {

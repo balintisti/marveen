@@ -92,8 +92,6 @@ vi.mock('../web/scheduled-tasks-io.js', () => ({
 }))
 
 vi.mock('../web/agent-process.js', () => ({
-  // merge 88c366f2: imported by the merged scheduler (upstream); real value / install default here.
-  resolveAgentProvider: () => 'telegram' as const,
   // merge 88c366f2: the merged code also calls these; neutral here (the file measures something else).
   saturationRefusesDispatch: () => false,
   // The not-ready-path modal clear: false = no modal, so every caller keeps

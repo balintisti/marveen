@@ -88,42 +88,19 @@ describe('evidence-rule scaffold block', () => {
     expect(evidenceBody).toContain('nem találom sehol')
   })
 
-  it('points at the mechanical half of the rule (the recipient ledger)', () => {
-    expect(evidenceBody).toContain('store/verified-recipients.json')
-    // RECOVERYPATH920: the command has to be runnable from the cwd of the agent
-    // it is written FOR. Sub-agents run in agents/<name>/, which has no
-    // scripts/ directory, so the relative `node scripts/recipient-ledger.mjs`
-    // died with "Cannot find module" in exactly the place the gate points at.
-    // Source-level like its siblings: the absolute path is built from
-    // PROJECT_ROOT, and the relative spelling must not come back.
-    expect(evidenceBody).toContain("join(PROJECT_ROOT, 'scripts', 'recipient-ledger.mjs')")
-    expect(evidenceBody).not.toContain('node scripts/recipient-ledger.mjs')
+  // ADAPTED IN THE 88c366f2 MERGE (A1): upstream's recipient ledger is NOT taken on this install
+  // (marveen a55e02ed, card 5140afc7), so the gate paragraphs say what OUR gate does. The upstream
+  // cases asserted the ledger's own sentences (the file, the add command, fail-closed recovery); the
+  // claims they protected -- no overclaiming, and no protection promised where none runs -- are
+  // asserted below against the true text instead.
+  it('promises no ledger: neither the file nor its command appears in the generated block', () => {
+    expect(evidenceBody).not.toContain('verified-recipients.json')
+    expect(evidenceBody).not.toContain('recipient-ledger.mjs')
   })
 
-  // GATESCOPE921: the block used to say the hook measures "minden címet" and
-  // lets nothing unknown through, not even a draft. Measured on a live install
-  // 2026-09-21: the hook only sees a call that CARRIES to/cc/bcc. An address
-  // assembled inside a script the agent then runs (`python3 kuldes.py`) is
-  // invisible to it -- the gate's own header says so, because static analysis
-  // of arbitrary interpreter code is undecidable. The old sentence therefore
-  // told every agent it stood under machine protection on a path where it did
-  // not, and the gap is SILENT: nothing fires, the draft is simply written.
-  // The narrowed wording must not drift back on a later edit.
-  it('does not overclaim the recipient gate -- names what it cannot see', () => {
-    expect(evidenceBody).toContain('szkriptbe zárt címet')
+  it('does not overclaim: the address is named as NOT machine-checked', () => {
     expect(evidenceBody).toContain('ne olvasd védelemnek ott, ahol nincs')
-    expect(evidenceBody).not.toContain('ismeretlen címre még piszkozatot sem enged')
-  })
-
-  // Same measurement, second consequence: while the ledger file does not exist
-  // the gate is fail-closed, so every address-carrying send is denied. That is
-  // the right direction, but an approved recurring task does not disappear --
-  // the agent looks for the path the gate cannot see. Observed once already.
-  // Naming the correct recovery (add the address WITH a source) is what keeps
-  // fail-closed from teaching the workaround.
-  it('names the recovery path so the empty ledger does not teach evasion', () => {
-    expect(evidenceBody).toContain('fail-closed')
-    expect(evidenceBody).toContain('nem a kapu megkerülése')
+    expect(evidenceBody).toContain('címzett-ledger')
   })
 
   it('keeps Hungarian accents and uses no em dash, like its sibling blocks', () => {
@@ -144,34 +121,23 @@ describe('evidence-rule scaffold block', () => {
     const main = buildEvidenceBody(true)
     const sub = buildEvidenceBody(false)
 
-    it('main agent: says the ledger is NOT its machine gate, names what gates it instead', () => {
-      expect(main).toContain('nálad NEM gépi kapu')
-      expect(main).toContain('jóváhagyás-kapu')
-      expect(main).toContain('copy-kapu')
-      // the hook FILE NAMES must stay out of the generated text: the seeding-surface
-      // scan (hook-registration-completeness.test.ts) reads agent-scaffold.ts as a
-      // corpus and would take a mention for a registration.
+    it('main agent: the address is not checked by any machine gate here, and says so', () => {
+      expect(main).toContain('a CÍMET ezen a telepítésen semmilyen gépi kapu nem ellenőrzi')
+      expect(main).toContain('ne olvasd védelemnek ott, ahol nincs')
+      // the hook FILE NAMES stay out of the generated text: the seeding-surface scan
+      // (hook-registration-completeness.test.ts) reads agent-scaffold.ts as a corpus.
       expect(main).not.toContain('email-approval-gate.py')
       expect(main).not.toContain('outgoing-copy-gate.py')
-      expect(main).toContain('címet nem mérik a ledgerhez')
-      expect(main).toContain('ne olvasd védelemnek ott, ahol nincs')
-      expect(main).not.toContain('Amit a PreToolUse hook lát')
-      expect(main).not.toContain('ismeretlen címre nem engedi át')
     })
 
-    it('main agent: wiring the ledger is named as a separate owner decision, not something to do alone', () => {
-      expect(main).toContain('gazda-döntés')
-      expect(main).toContain('magadtól ne kösd be')
+    it('sub-agent: names what the gate DOES (blocks sending) and what it does not (the address)', () => {
+      expect(sub).toContain('a KÜLDÉST tiltja')
+      expect(sub).toContain('A CÍMET nem ellenőrzi')
+      expect(sub).not.toContain('a CÍMET ezen a telepítésen semmilyen gépi kapu nem ellenőrzi')
     })
 
-    it('sub-agent: keeps the GATESCOPE921 narrowed text unchanged', () => {
-      expect(sub).toContain('szkriptbe zárt címet')
-      expect(sub).toContain('nem a kapu megkerülése')
-      expect(sub).not.toContain('nálad NEM gépi kapu')
-    })
-
-    it('both audiences keep the ledger add command', () => {
-      for (const body of [main, sub]) expect(body).toContain('recipient-ledger.mjs')
+    it('neither audience carries a ledger command', () => {
+      for (const body of [main, sub]) expect(body).not.toContain('recipient-ledger.mjs')
     })
 
     it('both outputs keep accents and use no em dash', () => {
