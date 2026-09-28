@@ -55,7 +55,7 @@ describe('permissionPromptBlocksBareEnter', () => {
 describe('wiring: both recovery Enters consult the guard first', () => {
   const src = readFileSync(join(__dirname, '..', 'web', 'channel-monitor.ts'), 'utf-8')
   const guard = 'if (permissionPromptBlocksBareEnter(session)) break'
-  const enter = "execFileSync(TMUX, ['send-keys', '-t', session, 'Enter']"
+  const enter = "execFileSync(tmuxBin(), ['send-keys', '-t', session, 'Enter']"
 
   it('the guard stands at exactly the two recovery Enter sites', () => {
     expect(src.split(guard).length - 1).toBe(2)
