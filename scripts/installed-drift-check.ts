@@ -91,6 +91,7 @@ const SAFE_INSTALLERS = [
 const KNOWN_UNSAFE_INSTALLERS = [
   'install-channel-image-hook.sh',
   'install-skills-snapshot-hook.sh',
+  'install-slack-progress-hook.sh',   // launchd plist / systemd user units, like its Telegram pair (card db782525)
   'install-telegram-image-hook.sh',
   'install-telegram-progress-hook.sh',
 ] as const;
