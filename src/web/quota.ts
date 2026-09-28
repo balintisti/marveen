@@ -156,13 +156,26 @@ export function readFableSnapshot(
   const window = windows ? readOpusWindow(windows.seven_day_opus, nowSec) : null
   if (!window) return { status: 'missing', ageSec: null, window: null }
 
-  // A missing generated_at counts as maximally old, matching how
-  // readQuotaSnapshot treats a missing written_at above.
-  let generatedAtSec = 0
-  if (typeof d.generated_at === 'string') {
-    const ms = Date.parse(d.generated_at)
-    if (!Number.isNaN(ms)) generatedAtSec = Math.floor(ms / 1000)
+  // THE AGE IS THE DATA'S, NOT THE FILE'S (merge 88c366f2, T5; our collector's
+  // rule, card 45b71d0b). usage-collect.py sets generated_at to NOW on every
+  // run, cache hits included, so on its own it reads fresh while the numbers
+  // are hours old (09-14..09-18: 720 cached runs, keychain token dead).
+  // claude.authoritative_at is written only on a real authoritative answer and
+  // carried unchanged through cache hits. Without that field: a plain
+  // 'authoritative' (or upstream-shaped) file's generated_at IS the answer's
+  // time; an 'authoritative_cached' one's true age is unknown, so it counts
+  // as maximally old -- same as a missing timestamp.
+  const answeredAt =
+    typeof claude?.authoritative_at === 'string'
+      ? claude.authoritative_at
+      : claude?.source === 'authoritative_cached'
+        ? undefined
+        : d.generated_at
+  let answeredAtSec = 0
+  if (typeof answeredAt === 'string') {
+    const ms = Date.parse(answeredAt)
+    if (!Number.isNaN(ms)) answeredAtSec = Math.floor(ms / 1000)
   }
-  const ageSec = Math.max(0, nowSec - generatedAtSec)
+  const ageSec = Math.max(0, nowSec - answeredAtSec)
   return { status: ageSec > maxAgeSec ? 'stale' : 'ok', ageSec, window }
 }

@@ -208,4 +208,41 @@ describe('readFableSnapshot', () => {
     writeFable({ claude: { windows: { seven_day_opus: { used_percent: 10, resets_at: NOW + 60 } } } })
     expect(readFableSnapshot(fableFile, NOW).status).toBe('stale')
   })
+
+  // Our collector re-stamps generated_at on every run, cache hits included; the
+  // answer's own time is claude.authoritative_at (card 45b71d0b).
+  it('ages a cached reading from authoritative_at, not from the re-stamped generated_at', () => {
+    const answered = NOW - DEFAULT_FABLE_MAX_AGE_SEC - 600
+    writeFable(healthyFable({
+      generated_at: new Date((NOW - 30) * 1000).toISOString(),
+      claude: {
+        source: 'authoritative_cached',
+        authoritative_at: new Date(answered * 1000).toISOString(),
+        windows: { seven_day_opus: { used_percent: 37, resets_at: NOW + 86400 } },
+      },
+    }))
+    const snap = readFableSnapshot(fableFile, NOW)
+    expect(snap.status).toBe('stale')
+    expect(snap.ageSec).toBe(NOW - answered)
+  })
+
+  it('CONTROL: a fresh authoritative_at under an equally fresh generated_at stays ok', () => {
+    writeFable(healthyFable({
+      claude: {
+        source: 'authoritative',
+        authoritative_at: new Date((NOW - 90) * 1000).toISOString(),
+        windows: { seven_day_opus: { used_percent: 37, resets_at: NOW + 86400 } },
+      },
+    }))
+    const snap = readFableSnapshot(fableFile, NOW)
+    expect(snap.status).toBe('ok')
+    expect(snap.ageSec).toBe(90)
+  })
+
+  it('a cached reading with no authoritative_at has an unknown age: stale, not fresh', () => {
+    writeFable(healthyFable({
+      claude: { source: 'authoritative_cached', windows: { seven_day_opus: { used_percent: 37, resets_at: NOW + 86400 } } },
+    }))
+    expect(readFableSnapshot(fableFile, NOW).status).toBe('stale')
+  })
 })
