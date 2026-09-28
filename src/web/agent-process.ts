@@ -1676,7 +1676,10 @@ export function sessionExistsOnHost(host: string | null, session: string): boole
   }
 }
 
-export function getAgentRunningSince(name: string, session: string = agentSessionName(name)): number | null {
+// The default is sessionNameForAgent, not agentSessionName: the coordinator runs in `<id>-channels`,
+// and the hand-copied name returned null for him, so every caller that did not pass the session
+// (the context guard, the restart gate) was blind for exactly him (card 6f362eb3; 228c9252).
+export function getAgentRunningSince(name: string, session: string = sessionNameForAgent(name)): number | null {
   try {
     const target = agentTmuxTarget(name)
     const host = target.host

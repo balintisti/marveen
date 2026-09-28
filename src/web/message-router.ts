@@ -15,6 +15,7 @@ import {
   stampMessageTrace,
   upsertOtelSpan,
   type AgentMessage,
+  getLastOutboundMessageAt,
 } from '../db.js'
 import { isQualifiedId } from './federation/address.js'
 import { sendFederatedMessage } from './federation/bridge.js'
@@ -100,7 +101,7 @@ export function shouldGiveUpOnInject(failCount: number, maxFailures: number): bo
  *  invalidating the paragraph above it. */
 export const ALERT_TAGS = ['[session-stuck]', '[approval-needed]', '[input-parked]'] as const
 
-export function formatStuckSessionAlert(
+function formatStuckSessionAlertCore(
   agent: string,
   mainAgentId: string,
   session: string,
@@ -246,9 +247,71 @@ export function formatStuckSessionAlert(
   return `[session-stuck] Agent '${agent}' (tmux ${session}) has been not-ready for ${min} min with ${queue}. Run the delivery-stall diagnosis: READ THE PANE FIRST. Do NOT restart unless the pane shows a genuine wedge -- saturation belongs to the context-guard, a permission prompt needs a decision rather than a keystroke, and a queued message is often about to be delivered anyway.${alsoQuiet}`
 }
 
+// TWO QUESTIONS THE ALERT USED TO ANSWER WITH ONE WORD (card 9b28c2f7, marveen's 09-12
+// split). "Is the turn PROGRESSING?" and "Is the INBOX being served?" are independent, and
+// the free evidence for both is already in agent_messages:
+//   progressing ... when the agent last SENT a message (a turn that emits messages moves)
+//   inbox ......... how long the oldest queued message has waited (the router injects only
+//                   into an idle gap, so a long turn starves its own inbox)
+// Measured on the 19 [session-stuck] alerts 2026-09-17..09-24 (all on the busy branch):
+// 15 had sent a message within 10 min of the alert, 3 had been silent 21-40 min, one sat
+// exactly at 10; the oldest queued message had waited 17-134 min in every alert that had one.
+// The 10-minute band is that measurement, not a law: the number is printed either way.
+export type StuckEvidence = { lastOutboundAgoSec: number | null; oldestPendingAgeSec: number | null }
+export const PROGRESS_BAND_SEC = 10 * 60
+
+export function formatStuckEvidence(ev: StuckEvidence | null): string {
+  if (!ev) return ''
+  const min = (s: number) => Math.round(s / 60)
+  let out = ''
+  if (ev.lastOutboundAgoSec === null) {
+    out += ' Progress check (message log): it has never sent an inter-agent message, so the log cannot show progress -- read the pane.'
+  } else if (ev.lastOutboundAgoSec <= PROGRESS_BAND_SEC) {
+    out += ` Progress check (message log): it last SENT a message ${min(ev.lastOutboundAgoSec)} min ago -- the turn is producing output.`
+  } else {
+    out += ` Progress check (message log): it has sent nothing for ${min(ev.lastOutboundAgoSec)} min -- the log shows no progress, read the pane.`
+  }
+  if (ev.oldestPendingAgeSec !== null) {
+    out += ` Inbox check: the oldest queued message has waited ${min(ev.oldestPendingAgeSec)} min. Those senders' decisions have NOT landed: the router injects only into an idle gap, so a long turn starves its own inbox. A restart does not deliver them -- telling the senders does.`
+  }
+  return out
+}
+
+/** The alert text. `evidence` defaults to null, and then the text is byte-identical to the
+ *  version before card 9b28c2f7 -- every existing caller and test keeps its contract. */
+export function formatStuckSessionAlert(
+  agent: string,
+  mainAgentId: string,
+  session: string,
+  stuckMs: number,
+  pendingCount: number,
+  paneState: PaneState | null = null,
+  pane: string | null = null,
+  evidence: StuckEvidence | null = null,
+): string | null {
+  const base = formatStuckSessionAlertCore(agent, mainAgentId, session, stuckMs, pendingCount, paneState, pane)
+  return base === null ? null : base + formatStuckEvidence(evidence)
+}
+
+function readStuckEvidence(agent: string): StuckEvidence | null {
+  // Evidence is an ADDITION: a DB hiccup here must not cost the alert itself.
+  try {
+    const nowSec = Math.floor(Date.now() / 1000)
+    const last = getLastOutboundMessageAt(agent)
+    const pending = getPendingMessages(agent)
+    return {
+      lastOutboundAgoSec: last === null ? null : Math.max(0, nowSec - last),
+      oldestPendingAgeSec: pending.length ? Math.max(0, nowSec - pending[0].created_at) : null,
+    }
+  } catch (err) {
+    logger.warn({ err, agent }, 'session-stuck evidence unreadable; alert goes out without it')
+    return null
+  }
+}
+
 function notifyOrchestratorOfStuckSession(agent: string, session: string, stuckMs: number, pendingCount: number, paneState: PaneState | null, pane: string | null): void {
   try {
-    const alert = formatStuckSessionAlert(agent, MAIN_AGENT_ID, session, stuckMs, pendingCount, paneState, pane)
+    const alert = formatStuckSessionAlert(agent, MAIN_AGENT_ID, session, stuckMs, pendingCount, paneState, pane, readStuckEvidence(agent))
     if (!alert) return
     createAgentMessage('system', MAIN_AGENT_ID, alert)
     logger.info({ agent, session, stuckMs, pendingCount, paneState }, 'session-stuck surfaced to orchestrator')
