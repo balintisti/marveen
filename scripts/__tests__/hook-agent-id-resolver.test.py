@@ -25,15 +25,23 @@ import sys
 
 HOOKS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "hooks")
 
+# merge 88c366f2: skill-usage-capture.py LEFT this list -- upstream centralised it (#1100) and the
+# private copy is gone; it records usage STATISTICS, so a worker session appearing under its directory
+# id is visible and harmless. taskstate-replay.py STAYS: the merge had silently taken upstream's swap
+# there, which overturned marveen's NO of 2026-09-06; the file was restored to ours.
 EXCEPTIONS = {
     "ledger-live-drain.py": (
         "no payload exists: it resolves from os.getcwd() because the hook is not "
         "given one. Adopting the chain here would pass an empty dict and change "
         "nothing -- it stays on the honest call."),
-    "skill-usage-capture.py": (
-        "carries its OWN private _agent_id_from_cwd copy. Upstream centralised "
-        "exactly this file after the copy drifted; the port is a judgement call, "
-        "not a one-line swap, and it is not in this commit."),
+    "clear-capture.py": (
+        "upstream #1130, adopted with the cwd call ON PURPOSE (merge 88c366f2): the cwd resolver "
+        "returns None for a session OUTSIDE the install, and these hooks are user-global -- the "
+        "shared payload chain never goes falsy, so it would write clear-state for foreign sessions. "
+        "MEASURED: switching it turned upstream's own clear-continuity.test.ts case 'writes nothing "
+        "for a session outside the install' red. Same danger as taskstate-replay below."),
+    "clear-replay.py": (
+        "same as clear-capture.py: the replay half of the pair, and the same measured case."),
     "taskstate-replay.py": (
         "NOT OUTSTANDING WORK, AND NOT AN ADOPTION -- upstream 29a1bd9 uses the shared "
         "chain and WE put the private resolver back (+22/-8), so the move would be "

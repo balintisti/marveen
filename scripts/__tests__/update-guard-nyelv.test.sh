@@ -75,9 +75,12 @@ futtat() {  # futtat <ut> <nyelv>  -> a kilepesi kod a fuggveny visszaterese, a 
 
 HU1="Allj at egy release branchre, majd indithatod ujra a frissitest"
 EN1="Switch to a release branch, then you can start the update again"
-HU2A="Csak az origin-on is meglevo (kovetett) branchrol lehet frissiteni."
+# merge 88c366f2: ours names the UPDATE remote (kartya bae4df49; default `fork`), not a hard-coded
+# origin -- the same default update.sh resolves, so the lines below are the ones it will print.
+REMOTE="${UPDATE_REMOTE:-fork}"
+HU2A="Csak a '${REMOTE}' tavolin is meglevo (kovetett) branchrol lehet frissiteni."
 HU2B="Allj at egy release branchre, pl.:"
-EN2A="You can only update from a branch that also exists on origin"
+EN2A="You can only update from a branch that also exists on '${REMOTE}'"
 EN2B="Switch to a release branch, e.g.:"
 
 # ── Guard 1: detached HEAD, NEM shallow ─────────────────────────────────────

@@ -15,6 +15,10 @@ fixture() {  # fixture <dir> -- a fresh install tree with one agent that has a p
   cp "${SRC}" "$1/scripts/backup.sh"
   echo page > "$1/agents/a1/CLAUDE.md"
   echo X=1 > "$1/.env"
+  # merge 88c366f2: backup.sh now REQUIRES three load-bearing items by name (upstream; a backup
+  # without the DB or the skills is a failed backup) -- a real install always has them.
+  mkdir -p "$1/store" "$1/home/.claude/skills" "$1/home/.claude/scheduled-tasks"
+  echo db > "$1/store/claudeclaw.db"
 }
 run() { HOME="$1/home" bash "$1/scripts/backup.sh" >"$1/out" 2>&1; echo $?; }
 mode() { python3 -c "import os,sys;print(oct(os.stat(sys.argv[1]).st_mode & 0o777))" "$1"; }

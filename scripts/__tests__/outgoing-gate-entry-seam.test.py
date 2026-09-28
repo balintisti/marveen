@@ -40,7 +40,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 GATE = os.path.join(ROOT, "scripts", "hooks", "outgoing-copy-gate.py")
 FAILS = []
 
-SIG = "def telegram_gate(tool_input: dict) -> None:"
+SIG = "def channel_gate(tool_input: dict, label: str, unescape_mdv2: bool) -> None:"
 
 
 def check(name, cond, detail=""):
@@ -53,7 +53,7 @@ def variant(tmp, name, returning):
     """A copy of the gate; if `returning`, telegram_gate returns instead of exiting."""
     src = open(GATE, encoding="utf-8").read()
     if returning:
-        assert src.count(SIG) == 1, "telegram_gate signature is not unique -- anchor is stale"
+        assert src.count(SIG) == 1, "channel_gate signature is not unique -- anchor is stale"
         src = src.replace(SIG, SIG + "\n    return None  # TEST STUB: the future regression", 1)
     path = os.path.join(tmp, name)
     open(path, "w", encoding="utf-8").write(src)
@@ -78,7 +78,7 @@ def main():
         print("1. THE PIN -- a RETURNING telegram_gate must exit 2, never 0")
         rc, out = run(stubbed, {"tool_name": TELEGRAM, "tool_input": {"text": "ez egy teljesen rendes üzenet a gazdának"}})
         check("exit code is 2 (block), not 0 (silent pass-through)", rc == 2, f"rc={rc} out={out[:200]}")
-        check("names the returning gate in stderr", "telegram_gate visszatert" in out, out[:220])
+        check("names the returning gate in stderr", "channel_gate visszatert (Telegram)" in out, out[:220])
         check("it is NOT exit 1 (that would be a hook error, and the call proceeds)", rc != 1, f"rc={rc}")
 
         print("2. CONTROL -- the same STUBBED copy still lets an unrelated tool through")
@@ -90,7 +90,7 @@ def main():
         rc, out = run(pristine, {"tool_name": TELEGRAM, "tool_input": {"text": "ez egy gondolatjel — itt"}})
         check("exit 2", rc == 2, f"rc={rc} out={out[:200]}")
         check("it is the GATE's message, not the seam's",
-              "GONDOLATJEL" in out and "telegram_gate visszatert" not in out, out[:260])
+              "GONDOLATJEL" in out and "channel_gate visszatert" not in out, out[:260])
 
         print("4. CONTROL -- the REAL gate still lets a clean telegram message through")
         rc, out = run(pristine, {"tool_name": TELEGRAM, "tool_input": {"text": "ez egy teljesen rendes üzenet a gazdának"}})
@@ -103,16 +103,16 @@ def main():
         print("6. STRUCTURAL -- telegram_gate itself still has no `return` (the latent form)")
         tree = ast.parse(open(GATE, encoding="utf-8").read())
         fn = next((n for n in ast.walk(tree)
-                   if isinstance(n, ast.FunctionDef) and n.name == "telegram_gate"), None)
-        check("telegram_gate is present", fn is not None)
+                   if isinstance(n, ast.FunctionDef) and n.name == "channel_gate"), None)
+        check("channel_gate is present", fn is not None)
         if fn is not None:
             returns = [n for n in ast.walk(fn) if isinstance(n, ast.Return)]
-            check("no `return` statement in telegram_gate", not returns,
+            check("no `return` statement in channel_gate", not returns,
                   f"{len(returns)} return(s) -- the seam is now LIVE, and test 1 is what stands between "
                   "that and a silent pass-through")
         # CONTROL: the meter can say "this one HAS a return" -- otherwise it says no to everything.
         other = next((n for n in ast.walk(tree)
-                      if isinstance(n, ast.FunctionDef) and n.name == "collect_telegram_body"), None)
+                      if isinstance(n, ast.FunctionDef) and n.name == "collect_channel_body"), None)
         check("CONTROL: the AST meter finds a `return` where one exists",
               other is not None and any(isinstance(n, ast.Return) for n in ast.walk(other)))
     finally:

@@ -17,6 +17,10 @@ trap 'rm -rf "${T}"' EXIT
 FX="${T}/install"; ELSE="${T}/elsewhere"; SHARED="${T}/shared-channels"
 mkdir -p "${FX}/scripts" "${FX}/agents/realone" "${ELSE}/linked" "${SHARED}/telegram" "${T}/home"
 cp "${SRC}" "${FX}/scripts/backup.sh"
+# merge 88c366f2: backup.sh now REQUIRES three load-bearing items by name (upstream; a backup
+# without the DB or the skills is a failed backup) -- a real install always has them.
+mkdir -p "${FX}/store" "${T}/home/.claude/skills" "${T}/home/.claude/scheduled-tasks"
+echo db > "${FX}/store/claudeclaw.db"
 
 # a real agent dir, the pre-09-18 shape
 echo real > "${FX}/agents/realone/CLAUDE.md"

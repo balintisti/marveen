@@ -61,8 +61,12 @@ run_gate() {
       MARVEEN_ALERT_CHAT_ID="111" \
       MARVEEN_CORE_AGENTS="__no_core__" \
       MARVEEN_MEM_GATE_OBSERVE=0 \
-      timeout "$secs" bash "$GATE" "$@" 2>&1)"
+      perl -e 'alarm shift; exec @ARGV' "$secs" bash "$GATE" "$@" 2>&1)"
   RC=$?
+  # macOS has no GNU `timeout` (merge 88c366f2: this ran "env: timeout: No such file" on every
+  # case). perl's alarm kills with SIGALRM, exit 142; map it to timeout's 124 so the assertions
+  # below keep their meaning: 124 = killed by the time limit.
+  [ "$RC" = "142" ] && RC=124
 }
 
 # 1. `--check` alone must terminate (the infinite loop), and fail open.
