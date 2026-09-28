@@ -69,6 +69,8 @@ class FakeDrive:
         self.drop_puts = {}          # data PUT number -> 'before' (lost) | 'after' (stored), then the connection dies
         self.fail_gets = 0           # the next N file-list GETs answer 503
         self.session_error = None    # an HTTP code the upload-session POST answers with
+        self.max_body = None         # a data PUT with a larger body dies (the flaky-line shape)
+        self.put_sizes = []          # body size of every data PUT, in order
         self.give_refresh = True
         self.granted = 'https://www.googleapis.com/auth/drive.file'
         self.n = 0
@@ -137,7 +139,10 @@ class FakeDrive:
                 else:
                     start, total = int(m.group(1)), int(m.group(3))
                 fake.data_puts += 1
+                fake.put_sizes.append(len(data))
                 fault = fake.drop_puts.pop(fake.data_puts, None)
+                if fake.max_body and len(data) > fake.max_body:
+                    fault = 'before'
                 buf = fake.partial.setdefault(sid, b'')
                 if fault == 'before':
                     self.close_connection = True
@@ -556,6 +561,26 @@ class TestResilience(Base):
         r = self.run_tool('push', '--archive', self.archive)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.round_trip_ok()
+
+    def test_a_line_that_breaks_large_bodies_still_delivers_by_shrinking_the_chunk(self):
+        # the measured shape: small bodies pass, large ones die. 8 KB chunks, a 2 KB floor, and a
+        # line that kills anything over 3 KB: only a SHRINKING chunk ever gets through.
+        self.env.update(BACKUP_OFFSITE_MIN_CHUNK='2048')
+        self.drive.max_body = 3072
+        r = self.run_tool('push', '--archive', self.archive)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.round_trip_ok()
+        self.assertLessEqual(min(self.drive.put_sizes), 2048)
+
+    def test_the_chunk_grows_back_after_a_run_of_clean_chunks(self):
+        self.env.update(BACKUP_OFFSITE_MIN_CHUNK='2048')
+        self.drive.drop_puts = {1: 'before'}          # one early break, then a clean line
+        r = self.run_tool('push', '--archive', self.archive)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sizes = self.drive.put_sizes
+        self.assertEqual(sizes[0], 8192)                # started at CHUNK
+        self.assertEqual(sizes[1], 4096)                # halved by the break
+        self.assertIn(8192, sizes[2:])                  # and grew back
 
     def test_breaks_are_bounded_and_loud(self):
         self.drive.drop_puts = {n: 'before' for n in range(1, 50)}

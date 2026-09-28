@@ -84,6 +84,12 @@ HTTP_TIMEOUT = 120
 # small calls retry a TRANSIENT failure (no connection, 5xx, 429) a bounded number of times. A real
 # 4xx is never retried: it is an answer, and it stays loud.
 CHUNK = int(os.environ.get('BACKUP_OFFSITE_CHUNK', 2 * 1024 * 1024))    # Drive: a multiple of 256 KiB
+# ADAPTIVE (measured 2026-09-29 00:5x on this line): large request bodies broke far more often than
+# small ones -- python 512 KiB 3/5, 1 MiB 2/5, 1.5 MiB 1/5; curl over IPv4 2 MiB 3/3 once and 0/3 an
+# hour later -- the line, not the client. So a break HALVES the chunk (down to Drive's 256 KiB
+# floor) and a run of clean chunks doubles it back: a good line stays fast, a bad one still arrives.
+MIN_CHUNK = int(os.environ.get('BACKUP_OFFSITE_MIN_CHUNK', 256 * 1024))
+GROW_AFTER = 4
 RETRIES = int(os.environ.get('BACKUP_OFFSITE_RETRIES', 5))
 BACKOFF_S = float(os.environ.get('BACKUP_OFFSITE_BACKOFF', 2))
 MAIN_AGENT_ID = os.environ.get('MAIN_AGENT_ID', 'marveen')
@@ -288,6 +294,7 @@ def upload(token, parent, path, name, props):
     if not session:
         raise Fail('the upload session was not opened (no Location header)')
     offset, breaks, stalls, ask = 0, 0, 0, False
+    chunk_size, clean = CHUNK, 0
     with open(path, 'rb') as f:
         while True:
             try:
@@ -295,7 +302,7 @@ def upload(token, parent, path, name, props):
                     status, raw, h = _once('PUT', session, token, b'', {'Content-Range': f'bytes */{size}'})
                 else:
                     f.seek(offset)
-                    chunk = f.read(CHUNK)
+                    chunk = f.read(chunk_size)
                     status, raw, h = _once('PUT', session, token, chunk,
                                            {'Content-Type': 'application/octet-stream',
                                             'Content-Range': f'bytes {offset}-{offset + len(chunk) - 1}/{size}'})
@@ -304,6 +311,7 @@ def upload(token, parent, path, name, props):
                 if breaks > RETRIES:
                     raise Fail(f'{e} (upload gave up after {breaks} breaks in a row, at byte {offset} of {size})')
                 _pause(breaks - 1)
+                chunk_size, clean = max(MIN_CHUNK, chunk_size // 2), 0
                 ask = True
                 continue
             ask = False
@@ -316,6 +324,9 @@ def upload(token, parent, path, name, props):
                 raise Fail(f'the upload session answered HTTP {status}')
             got = _received(h)
             if got > offset:
+                clean += 1
+                if clean >= GROW_AFTER and chunk_size < CHUNK:
+                    chunk_size, clean = min(CHUNK, chunk_size * 2), 0
                 breaks = 0          # the bound is on CONSECUTIVE breaks: progress resets it (a long
                                     # upload on a flaky line breaks now and then and still gets there)
             stalls = stalls + 1 if got <= offset else 0
