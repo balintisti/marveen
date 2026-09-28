@@ -2787,12 +2787,28 @@ async function dismissSurveyModalIfPresent(session: string, host: string | null 
 // permissions" string), so isSessionReadyForPrompt() refuses to deliver and
 // every scheduled task / inter-agent message piles up behind it. Pre-flight
 // pick option 1 (Resume from summary, recommended) and Enter to confirm.
+//
+// TWO CONDITIONS BEFORE THE '1' + Enter (card c5723b82, didi's finding in the 2a8cb07f review).
+// The title alone matched ANYWHERE on screen, so scrollback that still showed "Resume from
+// summary" read as the modal -- and if a tool-PERMISSION prompt was live at that moment, '1' +
+// Enter answered it "Yes". So: the modal's own footer must be in the live tail, and the same
+// capture must not be a permission prompt (the guard every other bare Enter already consults).
 const RESUME_SUMMARY_MODAL_RX = /Resume from summary/
+const RESUME_SUMMARY_FOOTER_RX = /Enter to confirm/
+const RESUME_SUMMARY_FOOTER_LINES = 5
+
+function resumeSummaryFooterIsLive(pane: string): boolean {
+  const lines = pane.split('\n')
+  let end = lines.length
+  while (end > 0 && lines[end - 1].trim() === '') end--
+  return RESUME_SUMMARY_FOOTER_RX.test(lines.slice(Math.max(0, end - RESUME_SUMMARY_FOOTER_LINES), end).join('\n'))
+}
 
 export async function dismissResumeSummaryModalIfPresent(session: string, host: string | null = null): Promise<void> {
   try {
     const pane = captureTmux(host, ['capture-pane', '-t', session, '-p'])
-    if (!RESUME_SUMMARY_MODAL_RX.test(pane)) return
+    if (!RESUME_SUMMARY_MODAL_RX.test(pane) || !resumeSummaryFooterIsLive(pane)) return
+    if (permissionPromptBlocksBareEnter(session, host, () => pane, 'Resume-from-summary dismiss')) return
     runTmux(host, ['send-keys', '-t', session, '1'], { timeout: 5000 })
     await delay(100)
     runTmux(host, ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
@@ -3116,6 +3132,13 @@ export async function scheduleIdentitySetup(session: string, displayName: string
               await delay(IDENTITY_LANE_RETRY_MS)
               continue
             }
+            // A permission prompt that came up during the restart would take this Enter as its
+            // "Yes" (card c5723b82): wait it out like a busy lane, never type into it.
+            if (permissionPromptBlocksBareEnter(session, host, captureTmux, 'Identity /rename')) {
+              releaseIdentityLane()
+              await delay(IDENTITY_LANE_RETRY_MS)
+              continue
+            }
             try {
               for (const cmd of identitySlashCommands(displayName)) {
                 runTmux(host, ['send-keys', '-t', session, cmd, 'Enter'], { timeout: 5000 })
@@ -3134,7 +3157,7 @@ export async function scheduleIdentitySetup(session: string, displayName: string
           // loudly because a skip nobody logs is not a skip.
           logger.warn(
             { session, displayName, max: IDENTITY_LANE_MAX_ATTEMPTS },
-            'Identity /rename abandoned -- pane send lane stayed busy; session keeps its default name',
+            'Identity /rename abandoned -- the send lane stayed busy or a permission prompt stayed up; session keeps its default name',
           )
         })()
       }, IDENTITY_SEND_DELAY_MS)
