@@ -10,8 +10,11 @@ const h = vi.hoisted(() => ({ warns: [] as unknown[][] }))
 
 vi.mock('node:child_process', async (orig) => ({
   ...(await orig<typeof import('node:child_process')>()),
-  // gcloud: a token for `auth print-access-token`, a project id for `config get-value project`
-  execFileSync: vi.fn((_bin: string, args: string[]) => (args.includes('print-access-token') ? 'tok\n' : 'proj\n')),
+  // gcloud: `config config-helper --format=json` answers token, expiry and project at once (3d038bac)
+  execFileSync: vi.fn(() => JSON.stringify({
+    credential: { access_token: 'tok', token_expiry: new Date(Date.now() + 3_600_000).toISOString() },
+    configuration: { properties: { core: { project: 'proj' } } },
+  })),
 }))
 vi.mock('../logger.js', () => ({
   logger: { warn: (...a: unknown[]) => { h.warns.push(a) }, info: () => {}, debug: () => {}, error: () => {} },

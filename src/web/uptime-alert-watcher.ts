@@ -263,20 +263,53 @@ export function runGcloud(args: string[], what: string, timeoutMs = GCLOUD_TIMEO
   }
 }
 
-function accessToken(): Promise<Probe<string>> {
-  return withRetry(() => runGcloud(['auth', 'print-access-token'], 'access token'))
+/**
+ * TOKEN AND PROJECT FROM ONE CALL, KEPT UNTIL THE TOKEN'S OWN EXPIRY (card 3d038bac).
+ *
+ * Every 2-minute tick used to run TWO synchronous gcloud processes (`auth print-access-token`,
+ * `config get-value project`): ~60 an hour for a token that lives an hour. Measured 2026-09-29
+ * 01:46 at loadavg ~15: both 0.32-0.36 s (n=10 each, rc 0) -- gcloud is not slow; the blind ticks
+ * are rare 15 s spikes, and 5 of 09-28's 7 "NOT MEASURED" notices were exactly that, on the token
+ * call (didi). Fewer calls is fewer chances to hit one.
+ *
+ * `config config-helper --format=json` returns the token, ITS EXPIRY and the project at once. The
+ * expiry is the reason to use it: gcloud may hand back a token already 50 minutes old, so a fixed
+ * cache TTL could serve an expired one. Kept until TOKEN_MARGIN_MS before that expiry; a failed
+ * refresh still uses a cached token that has not expired (a spike no longer blinds a tick);
+ * a 401/403 from the API drops the cache (see invalidateCredentials).
+ */
+export interface Credentials { token: string; project: string; expiresAt: number }
+const TOKEN_MARGIN_MS = 5 * 60_000
+let creds: Credentials | null = null
+
+export function parseConfigHelper(out: string): Probe<Credentials> {
+  let j: { credential?: { access_token?: string; token_expiry?: string }; configuration?: { properties?: { core?: { project?: string } } } }
+  try { j = JSON.parse(out) } catch { return { ok: false, reason: 'credentials: gcloud config-helper printed no JSON' } }
+  const token = j.credential?.access_token
+  const expiresAt = Date.parse(j.credential?.token_expiry ?? '')
+  const project = j.configuration?.properties?.core?.project
+  if (!token) return { ok: false, reason: 'access token: gcloud config-helper returned no access_token' }
+  if (!Number.isFinite(expiresAt)) return { ok: false, reason: 'access token: gcloud config-helper returned no usable token_expiry' }
+  // NOT transient: gcloud answered, and the answer is "there is no project".
+  if (!project || project === '(unset)') return { ok: false, reason: 'project: gcloud reports the project is (unset)' }
+  return { ok: true, value: { token, project, expiresAt } }
 }
 
-function project(): Promise<Probe<string>> {
-  return withRetry(() => {
-  const p = runGcloud(['config', 'get-value', 'project'], 'project')
-  if (!p.ok) return p
-  // '(unset)' is gcloud SUCCEEDING and telling us there is no project -- a
-  // different cause from a failed call, and it used to collapse into the same null.
-  // NOT transient: gcloud answered, and the answer is "there is no project".
-  if (p.value === '(unset)') return { ok: false, reason: 'project: gcloud reports the project is (unset)' }
-  return p
+/** A 401/403 from the API means the cached token is not accepted: the next tick fetches afresh. */
+export function invalidateCredentials(): void { creds = null }
+
+export async function credentials(now = Date.now()): Promise<Probe<Credentials>> {
+  if (creds && now < creds.expiresAt - TOKEN_MARGIN_MS) return { ok: true, value: creds }
+  const p = await withRetry(() => {
+    const r = runGcloud(['config', 'config-helper', '--format=json'], 'credentials')
+    return r.ok ? parseConfigHelper(r.value) : r
   })
+  if (p.ok) { creds = p.value; return p }
+  if (creds && now < creds.expiresAt) {
+    logger.warn({ reason: p.reason, msLeft: creds.expiresAt - now }, 'uptime poller: credential refresh failed; the cached token has not expired, using it')
+    return { ok: true, value: creds }
+  }
+  return p
 }
 
 /**
@@ -508,12 +541,11 @@ export async function uptimeTick(now = Date.now()): Promise<void> {
 }
 
 async function uptimeTickBody(now: number): Promise<void> {
-  const tokenProbe = await accessToken()
-  const projProbe = await project()
+  const credProbe = await credentials(now)
 
   // NO TOKEN IS AN ALERT, NOT A QUIET SKIP. This is the whole point of the card:
   // the failure that looked like silence looked like health for months.
-  if (!tokenProbe.ok || !projProbe.ok) {
+  if (!credProbe.ok) {
     const decision = decideUptimeAlerts([], FALLBACK_CONDITION, state, now)
     // PERSIST ON THIS PATH TOO. Without it the re-announce window never advances
     // here -- and this is the likeliest blind path of all (missing/expired token),
@@ -524,7 +556,7 @@ async function uptimeTickBody(now: number): Promise<void> {
     // rule out "not installed", "timed out" and "not authenticated" by hand.
     // Narrowed explicitly: inside this branch TS knows ONE probe failed but not
     // which, so a ternary over both does not narrow either.
-    const why = !tokenProbe.ok ? tokenProbe.reason : !projProbe.ok ? projProbe.reason : 'cause unavailable'
+    const why = credProbe.reason
     // THE CAUSE GOES IN, NOT AFTER (card f3808792). It used to be appended, which left the
     // HEADLINE saying "zero series returned" -- a claim about an answer the poller never got.
     const notice = buildUnreadableNotice(decision, 0, now, `poller could not reach gcloud -- ${why}`)
@@ -532,8 +564,7 @@ async function uptimeTickBody(now: number): Promise<void> {
     return
   }
 
-  const token = tokenProbe.value
-  const proj = projProbe.value
+  const { token, project: proj } = credProbe.value
   const base = `https://monitoring.googleapis.com/v3/projects/${encodeURIComponent(proj)}`
   const policyProbe = await withRetry(() => getJson(`${base}/alertPolicies`, token))
   const policyPayload = policyProbe.ok ? policyProbe.value : null
@@ -548,6 +579,8 @@ async function uptimeTickBody(now: number): Promise<void> {
     'interval.endTime': end,
   })
   const seriesProbe = await withRetry(() => getJson(`${base}/timeSeries?${q}`, token))
+  // a token the API will not take must not be served again from the cache for up to an hour
+  if ([policyProbe, seriesProbe].some((p) => !p.ok && /^HTTP 40[13] /.test(p.reason))) invalidateCredentials()
   const series = seriesFromPayload(seriesProbe.ok ? seriesProbe.value : null)
 
   const decision = decideUptimeAlerts(series, cond, state, now)
