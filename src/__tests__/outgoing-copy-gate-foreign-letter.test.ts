@@ -121,6 +121,28 @@ describe('email path: warning, and the letter still goes out', () => {
   })
 })
 
+// 88c366f2 merge, P6: upstream's human-facing HTTP channel path (GATEHTTP924, a curl to the
+// Telegram Bot API, Discord or the community API) is an outgoing path like the others.
+const httpTelegram = (text: string) =>
+  hook('Bash', { command: `curl -s https://api.telegram.org/botXYZ/sendMessage --data-binary @- <<'JSON'\n${JSON.stringify({ chat_id: 1, text })}\nJSON` })
+
+describe('HTTP channel path: warning, and the message still goes out (P6)', () => {
+  it('the specimen passes with the warning that names the character', () => {
+    const r = httpTelegram(carrier(SPECIMEN))
+    expect(r.code).toBe(0)
+    expect(r.msg).toContain('NEM MAGYAR BETU')
+    expect(r.msg).toContain(SPECIMEN)
+  })
+  it('the correct word is silent (negative control)', () => {
+    const r = httpTelegram(carrier(CORRECT))
+    expect(r.code).toBe(0)
+    expect(r.out).toBe('')
+  })
+  it('CONTROL: the path is really audited -- an em dash still BLOCKS', () => {
+    expect(httpTelegram(`Szia, ez egy teszt ${cp(0x2014)} gondolatjellel.`).code).toBe(2)
+  })
+})
+
 describe('the rule itself', () => {
   it('the eighteen Hungarian accented letters never fire -- a missing one is a false alarm', () => {
     expect(words(HU18.split('').join(' '))).toEqual([])

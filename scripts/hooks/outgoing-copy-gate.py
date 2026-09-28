@@ -1432,6 +1432,10 @@ def http_channel_gate(cmd: str) -> None:
             + "\n".join(f"  - {p}" for p in problems)
             + "\n\nJavitsd a szoveget es kuldd ujra.\n")
         sys.exit(2)
+    # FOREIGNLETTER924 on this path too (88c366f2 merge, P6; marveen 2026-09-28): our commit said
+    # "every outgoing path", and upstream's HTTP channel path arrived without the warning. It never
+    # blocks, exactly as on the Telegram, email and inter-agent paths.
+    emit_system_messages([foreign_letter_warning(text)])
     sys.exit(0)
 
 
