@@ -235,6 +235,7 @@ describe('the sweep is wired to it (source-level: the sweep needs live tmux)', (
   it('the verdict lives in its own column, written once; status keeps its meaning', () => {
     expect(DB).toMatch(/ALTER TABLE task_runs ADD COLUMN delivery TEXT/)
     expect(DB).toMatch(/UPDATE task_runs SET delivery = \? WHERE id = \? AND delivery IS NULL/)
-    expect(DB).toMatch(/SELECT ts, status, agent, completed_at, outcome, delivery FROM task_runs/)
+    // `(reason, )?`: ours also reads task_runs.reason in the same select (merge 88c366f2).
+    expect(DB).toMatch(/SELECT ts, status, (?:reason, )?agent, completed_at, outcome, delivery FROM task_runs/)
   })
 })

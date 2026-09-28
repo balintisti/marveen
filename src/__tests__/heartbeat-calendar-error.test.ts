@@ -140,8 +140,18 @@ describe('the lossy shape is gone, not merely unused', () => {
   const apiSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../google-api.ts'), 'utf-8')
   const hbSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../heartbeat.ts'), 'utf-8')
 
-  it('google-api no longer exports a calendar read that returns a bare array', () => {
-    expect(apiSrc).not.toMatch(/export async function getCalendarEvents/)
+  // REFINED IN THE 88c366f2 MERGE. The name came back: upstream's heartbeat route (5E0A32B0, #1159)
+  // calls getCalendarEvents with a contract of "the events, or a THROW -- never an empty list for a
+  // failure", and it is kept as a thin adapter over OUR fetchCalendarEvents. The property this case
+  // exists for -- no calendar read that turns a failure into `[]` -- is now asserted on the BODY,
+  // so a lossy reintroduction under any name still fails here.
+  it('google-api exports no calendar read that returns a bare array on failure', () => {
+    const at = apiSrc.indexOf('export async function getCalendarEvents')
+    if (at < 0) return // absent entirely: nothing can be lossy
+    const body = apiSrc.slice(at, apiSrc.indexOf('\n}\n', at) + 2)
+    expect(body).toMatch(/fetchCalendarEvents\(/)          // one fetch implementation (ours)
+    expect(body).toMatch(/if \(!res\.ok\) throw /)         // a failure THROWS
+    expect(body).not.toMatch(/return \[\]|catch/)          // and is never swallowed into []
   })
 
   it('the heartbeat imports the result-shaped fetch', () => {

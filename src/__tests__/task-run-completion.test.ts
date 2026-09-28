@@ -128,7 +128,8 @@ describe('terminal marker rows are closed at insert', () => {
   it('only a dispatch status opens a run', () => {
     expect(DB_SRC).toMatch(/OPEN_TASK_RUN_STATUSES: ReadonlySet<string> = new Set\(\['fired', 'fired_late', 'fired_busy'\]\)/)
     expect(DB_SRC).toMatch(/const completedAt = OPEN_TASK_RUN_STATUSES\.has\(status\) \? null : now/)
-    expect(DB_SRC).toMatch(/INSERT INTO task_runs \(name, agent, ts, status, completed_at\) VALUES \(\?, \?, \?, \?, \?\)/)
+    // `(reason, )?`: ours also records the skip/catch-up REASON in the same insert (merge 88c366f2).
+    expect(DB_SRC).toMatch(/INSERT INTO task_runs \(name, agent, ts, status, (?:reason, )?completed_at\) VALUES \(\?, \?, \?, \?, (?:\?, )?\?\)/)
   })
 
   it('backfills the historical marker rows with the same rule the reconcile uses', () => {

@@ -1400,8 +1400,12 @@ const USAGE_LIMIT_BANNER_REGION_LINES = 15
 // "session limit" variant observed in production (2026-08-08):
 //   "You hit your session limit · resets 5:50pm"
 // The original regex only covered "usage limit"; "session" was missing.
+// WIDENED IN THE 88c366f2 MERGE to upstream's form (a strict superset): the WEEKLY wordings
+// ("reached your weekly limit", "Approaching Opus weekly limit", "Session limit reached"), measured
+// silent before 2026-08-18. One definition, here (card d3f92923); model-fallback.test.ts pins both the
+// new wordings and the 429 negative controls.
 const USAGE_LIMIT_RX =
-  /(usage limit reached|reached your usage limit|hit (?:your|the) (?:session|usage) limit|approaching (?:your )?usage limit|usage limit (?:will )?reset|limit will reset at|\d+-hour limit reached|upgrade to increase your usage limit)/i
+  /(usage limit reached|reached your (?:usage|weekly) limit|hit (?:your|the) (?:session|usage) limit|approaching (?:your )?(?:\w+ )?(?:usage|weekly) limit|usage limit (?:will )?reset|limit will reset at|\d+-hour limit reached|(?:weekly|session) limit reached|upgrade to increase your usage limit)/i
 
 /**
  * True when the live pane shows a Claude *plan usage-limit* banner (not a

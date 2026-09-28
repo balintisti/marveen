@@ -217,7 +217,11 @@ describe('MINDEN hiba-megjelenites a fogalmazon at megy (szarmaztatott populacio
   // Ez didi erosebb kontrollja, es a helyes populacio-definicio PROBAJA: ha a
   // szam CSOKKENNE a javitastol, akkor a szures a HIBA alakjara ment, es a
   // sikeres javitas megvakitana az ort.
-  const POPULACIO_ALAPVONAL = 15
+  // 15 -> 14 IN THE 88c366f2 MERGE, measured, not assumed: the ONE missing site is the Activity page's
+  // error box (`activity.error_load`), and upstream removed the whole page -- no loadActivity in
+  // app.js, no activity element in index.html (020c9672: present; merged: 0). A deleted box, which is
+  // exactly the case the comment below allows, updated in the same commit.
+  const POPULACIO_ALAPVONAL = 14
 
   it('a populacio NEM URES -- kulonben a teszt semmit nem allit', () => {
     // Egy or, ami nulla elemet ellenoriz, pontosan ugy nez ki, mint egy or,
