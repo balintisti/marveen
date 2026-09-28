@@ -330,3 +330,47 @@ describe('agent-msg.sh -- a __STAMP__ es a kuldesi belyeg EGYUTT el', () => {
     expect(bodies[0].content).toContain('/no/such/path/anywhere')
   })
 })
+
+// AN EMPTY BODY IS NOT A MESSAGE (card ee8fdc6c). deeper, 2026-09-28 16:45: a heredoc with no body
+// went out as msg 20115 -- only the [KULDVE] footer -- and the helper answered `OK id=`. Every
+// refusal case below also asserts that NOTHING reached the dashboard: exit 1 after a POST would be
+// the same silent send, only with a different exit code.
+describe('agent-msg.sh -- an empty body is refused, nothing is sent', () => {
+  function stdinFile(text: string): string {
+    const f = join(mkTmp('agentmsg-empty-'), 'body.txt')
+    writeFileSync(f, text)
+    return f
+  }
+
+  it('an EMPTY STDIN (the bodiless heredoc) is refused, and no POST happens', async () => {
+    const { port, bodies } = await fakeDashboard()
+    const r = await sendStdin(installRoot('empty'), port, ['friday', 'marveen', '-'], stdinFile(''))
+    expect(r.status).not.toBe(0)
+    expect(r.stdout).not.toMatch(/OK id=/)
+    expect(r.stderr).toMatch(/NEM KULDTEM: a torzs URES/)
+    expect(bodies).toHaveLength(0)
+  })
+
+  it('whitespace-only STDIN is refused the same way', async () => {
+    const { port, bodies } = await fakeDashboard()
+    const r = await sendStdin(installRoot('ws'), port, ['friday', 'marveen', '-'], stdinFile('  \n\t\n\n'))
+    expect(r.status).not.toBe(0)
+    expect(bodies).toHaveLength(0)
+  })
+
+  it('a whitespace-only INLINE argument is refused too (the ${3:?} check lets it through)', async () => {
+    const { port, bodies } = await fakeDashboard()
+    const r = await send(installRoot('ws-inline'), port, ['friday', 'marveen', '   '])
+    expect(r.status).not.toBe(0)
+    expect(bodies).toHaveLength(0)
+  })
+
+  it('CONTROL: a one-word STDIN body still goes out, with its word in the content', async () => {
+    const { port, bodies } = await fakeDashboard()
+    const r = await sendStdin(installRoot('word'), port, ['friday', 'marveen', '-'], stdinFile('kesz\n'))
+    expect(r.status).toBe(0)
+    expect(r.stdout).toMatch(/OK id=4242/)
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0].content.startsWith('kesz')).toBe(true)
+  })
+})

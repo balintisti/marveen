@@ -60,6 +60,16 @@ LOG="$BASE/store/agent-msg-failures.log"
 FROM="${1:?from required}"; TO="${2:?to required}"; C="${3:?content required (or - for STDIN)}"
 [ "$C" = "-" ] && C="$(cat)"
 
+# AZ URES TORZS NEM UZENET (kartya ee8fdc6c, deeper merte 2026-09-28 16:45, msg 20115).
+# Egy torzs nelkuli heredoc (`- <<'VEGE'` + azonnal `VEGE`) ures STDIN-t ad; a helper ezt is
+# kikuldte, csak a [KULDVE] labjegyzettel, es `OK id=`-t mondott -- a kuldo azt hitte, elment
+# valami. Az inline alakot a `${3:?}` mar megfogja, de csak az URES stringet: a csupa-szokoz es
+# a STDIN-ut atment. A labjegyzet elott nezzuk, mert utana a torzs mar sosem ures.
+if [ -z "$(printf '%s' "$C" | tr -d '[:space:]')" ]; then
+  echo "NEM KULDTEM: a torzs URES (vagy csak szokoz/sortores). Ha STDIN-t adtal (-), a heredoc vagy a fajl ures volt." >&2
+  exit 1
+fi
+
 # A FAJLNEV NEM UZENET (kartya 3caaaf62 kore, merve 2026-09-03).
 #
 # Ez a helper TARTALMAT var a 3. argumentumban; a FAJL-alak a `- < "$f"`. Aki
