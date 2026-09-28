@@ -10,9 +10,35 @@ collected here:
     `crm_e2e_<agent>_<suffix>` DBs ...... 233 databases / 5.0 GB, ~20 MB left by EVERY e2e
                                           run, because the DB gate refused DROP DATABASE
 
-The others on that list (worktrees, the npm cache, transcripts) are NOT collected here:
-a worktree can hold unmerged work, and the rest are either regenerable on demand or not
-ours to delete. Those are per-owner decisions on the card.
+The npm cache and the transcripts are NOT collected here: they are either regenerable on
+demand or not ours to delete.
+
+CARD 9f499b14 (2026-09-26) adds two more halves, because the disk alert came back the same
+day (96%, 19 GB free) and the cause was WORKTREE CHURN, not a cache:
+
+  compile caches  `node-compile-cache` and `v8-compile-cache-<uid>` under $TMPDIR and
+            /private/tmp, capped by SIZE (--compile-cache-cap-mb, default 1024 per
+            directory), oldest files first. Regenerable by node on the next start.
+
+  worktrees REPORT-ONLY until an explicit decision (--apply-worktrees is NOT in the
+            launchd plist). A linked worktree is a candidate only if ALL hold:
+              - not the main checkout, exists, not locked, not prunable
+              - no tmux pane has its cwd inside it
+              - `git status --porcelain --untracked-files=all` is empty
+              - no merge/rebase/cherry-pick/revert/bisect in progress
+              - `git rev-list --count HEAD --not --remotes=<r>...` is 0, with the remotes
+                NAMED per repo (marveen: fork+origin; Delta-CRM: origin only -- its
+                `old-origin` is a dead repo and must not count as "backed up"; and a bare
+                `--remotes` would count the ORPHAN `dexterwt/` refs too)
+              - its newest entry (deep walk, node_modules/.git/dist skipped) is older than
+                --wt-min-age-hours (default 48);
+                `.git/worktrees/*/logs/HEAD` is NOT an age signal (all touched 09-25)
+              - no other worktree's `node_modules` symlink resolves into it
+            Removal is plain `git worktree remove` WITHOUT --force, so git itself refuses a
+            tree that turned dirty between the check and the removal. The branch stays.
+            Never by card status: several waiting cards live only on a local branch.
+            The same criteria removed 404 trees by hand on 2026-09-26 13:49 (19.0 -> 47.1 GB
+            free, 0 refused).
 
 WHAT MAKES EACH HALF SAFE, AND IT IS A CONJUNCTION, NOT A HEURISTIC:
 
@@ -179,15 +205,260 @@ def query_rows(psql, env):
     return data_dir, rows
 
 
+COMPILE_CACHE_NAMES = ("node-compile-cache", "v8-compile-cache-%d" % os.getuid())
+GIT_OPS_IN_PROGRESS = ("MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD",
+                       "REVERT_HEAD", "BISECT_LOG")
+DEFAULT_WT_REPOS = (("/Users/isti/marveen", ("fork", "origin")),
+                    ("/Users/isti/Projektek/sajat-crm", ("origin",)))
+
+
+def default_compile_cache_dirs():
+    roots = [os.environ.get("TMPDIR") or "", "/private/tmp"]
+    return [os.path.join(r, n) for r in roots if r for n in COMPILE_CACHE_NAMES]
+
+
+def compile_dir_is_allowed(path):
+    real = os.path.realpath(path)
+    return os.path.basename(real) in COMPILE_CACHE_NAMES and real.startswith(JEST_ROOTS_ALLOWED)
+
+
+def collect_compile_cache(dirs, cap_bytes, dry_run):
+    """Evict the oldest files until each directory is under cap. Returns (files, bytes, refused)."""
+    files = size = 0
+    refused = []
+    seen = set()
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue
+        real = os.path.realpath(d)
+        if real in seen:
+            continue
+        seen.add(real)
+        if not compile_dir_is_allowed(d):
+            refused.append(d)
+            continue
+        entries = []
+        for root, _subdirs, names in os.walk(d, followlinks=False):
+            for n in names:
+                p = os.path.join(root, n)
+                try:
+                    st = os.lstat(p)
+                except OSError:
+                    continue
+                entries.append((st.st_mtime, st.st_blocks * 512, p))
+        total = sum(e[1] for e in entries)
+        for _mtime, blocks, p in sorted(entries):
+            if total <= cap_bytes:
+                break
+            if not dry_run:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    continue
+            total -= blocks
+            files += 1
+            size += blocks
+    return files, size, refused
+
+
+def git(args, cwd):
+    r = subprocess.run(["git"] + args, cwd=cwd, capture_output=True, text=True, timeout=120)
+    return r.returncode, r.stdout, r.stderr
+
+
+def tmux_pane_paths(tmux=None):
+    """cwd of every tmux pane. None = could not ask (then NO tree is a candidate).
+    launchd runs this with PATH=/usr/bin:/bin:/usr/sbin:/sbin and tmux lives in
+    /opt/homebrew/bin (didi, 2026-09-26): a missing binary is therefore "could not ask",
+    never "no pane" -- the latter would be fail-OPEN exactly under the job."""
+    tmux = tmux or shutil.which("tmux", path="/opt/homebrew/bin:/usr/local/bin:" +
+                                os.environ.get("PATH", "/usr/bin:/bin"))
+    if not tmux:
+        return None
+    try:
+        r = subprocess.run([tmux, "list-panes", "-a", "-F", "#{pane_current_path}"],
+                           capture_output=True, text=True, timeout=30)
+    except Exception:
+        return None
+    if r.returncode != 0:
+        err = r.stderr.lower()
+        return [] if ("no server running" in err or "error connecting" in err) else None
+    return [ln for ln in r.stdout.splitlines() if ln.strip()]
+
+
+def list_worktrees(repo):
+    rc, out, err = git(["worktree", "list", "--porcelain"], repo)
+    if rc != 0:
+        raise RuntimeError(err.strip() or "git worktree list rc=%d" % rc)
+    wts, cur = [], {}
+    for line in out.splitlines() + [""]:
+        if not line:
+            if cur:
+                wts.append(cur)
+                cur = {}
+            continue
+        k, _, v = line.partition(" ")
+        cur[k] = v or True
+    return wts
+
+
+AGE_WALK_SKIP = ("node_modules", ".git", "dist", "coverage", ".next", ".turbo")
+
+
+def newest_tree_mtime(path):
+    """Newest mtime of any entry in the tree, skipping regenerable/vendored directories.
+    Top-level only was WRONG (didi, 2026-09-26): 10 of 56 "48h+" trees had a deep edit
+    under 48h (top 519h vs a .tsx at 11.2h). A full walk of 210 trees took 3.7 s."""
+    try:
+        newest = os.lstat(path).st_mtime
+    except OSError:
+        return None
+    for root, dirs, names in os.walk(path, followlinks=False):
+        dirs[:] = [d for d in dirs if d not in AGE_WALK_SKIP]
+        for n in dirs + names:
+            try:
+                newest = max(newest, os.lstat(os.path.join(root, n)).st_mtime)
+            except OSError:
+                continue
+    return newest
+
+
+def plan_worktrees(repo, remotes, now, min_age_s, panes):
+    """Returns (candidates, skipped{reason: [paths]}). Reads git, never writes."""
+    candidates, skipped = [], {}
+
+    def skip(reason, path):
+        skipped.setdefault(reason, []).append(path)
+
+    main_real = os.path.realpath(repo)
+    wts = list_worktrees(repo)
+    known = set(ln.strip() for ln in git(["remote"], repo)[1].splitlines())
+    missing_remotes = [r for r in remotes if r not in known]
+    # node_modules symlinks of EVERY tree: a target inside a candidate would break its owner
+    nm_targets = []
+    for w in wts:
+        nm = os.path.join(w["worktree"], "node_modules")
+        if os.path.islink(nm):
+            nm_targets.append(os.path.realpath(nm))
+    for w in wts:
+        p = w["worktree"]
+        real = os.path.realpath(p)
+        if real == main_real:
+            continue
+        if missing_remotes:
+            skip("remote-not-configured", p)
+            continue
+        if w.get("locked"):
+            skip("locked", p)
+            continue
+        if w.get("prunable") or not os.path.isdir(p):
+            skip("missing", p)
+            continue
+        if panes is None:
+            skip("panes-unknown", p)
+            continue
+        if any(x == real or x.startswith(real + "/") or x == p or x.startswith(p + "/") for x in panes):
+            skip("in-use", p)
+            continue
+        if any(t == real or t.startswith(real + "/") for t in nm_targets):
+            skip("node_modules-target", p)
+            continue
+        rc, st, _ = git(["status", "--porcelain", "--untracked-files=all"], p)
+        if rc != 0:
+            skip("status-error", p)
+            continue
+        if st.strip():
+            skip("dirty", p)
+            continue
+        rc, gd, _ = git(["rev-parse", "--git-dir"], p)
+        gd = gd.strip()
+        gd = gd if os.path.isabs(gd) else os.path.join(p, gd)
+        if rc != 0 or any(os.path.exists(os.path.join(gd, f)) for f in GIT_OPS_IN_PROGRESS):
+            skip("git-op", p)
+            continue
+        rc, cnt, _ = git(["rev-list", "--count", "HEAD", "--not"] + ["--remotes=" + r for r in remotes], p)
+        if rc != 0 or not cnt.strip().isdigit():
+            skip("revlist-error", p)
+            continue
+        if int(cnt.strip()) > 0:
+            skip("local-only-commits", p)
+            continue
+        m = newest_tree_mtime(p)
+        if m is None:
+            skip("age-unknown", p)
+            continue
+        if now - m < min_age_s:
+            skip("young", p)
+            continue
+        candidates.append(p)
+    return candidates, skipped
+
+
+def run_worktrees(repos, now, min_age_s, apply, stamp, tmux=None):
+    """Returns the number of failures (a repo that could not be listed counts)."""
+    tag = "" if apply else "REPORT-ONLY "
+    panes = tmux_pane_paths(tmux)
+    failures = 0
+    for repo, remotes in repos:
+        if not os.path.isdir(repo):
+            print("%s %sworktrees %s: repo missing, skipped" % (stamp, tag, repo))
+            continue
+        try:
+            cands, skipped = plan_worktrees(repo, remotes, now, min_age_s, panes)
+        except Exception as exc:
+            print("%s ERROR: worktrees %s: %s" % (stamp, repo, exc))
+            failures += 1
+            continue
+        removed, refused = 0, []
+        if apply:
+            for p in cands:
+                rc, _, err = git(["worktree", "remove", p], repo)  # NO --force: git re-checks
+                if rc == 0:
+                    removed += 1
+                else:
+                    refused.append("%s: %s" % (p, err.strip()[:120]))
+        print("%s %sworktrees %s (remotes %s): %s %d, kept %s%s" % (
+            stamp, tag, repo, "+".join(remotes),
+            "removed" if apply else "would remove", removed if apply else len(cands),
+            {k: len(v) for k, v in sorted(skipped.items())},
+            (" | REFUSED: %s" % refused) if refused else ""))
+        if not apply:
+            for p in cands:
+                print("    would remove: %s" % p)
+        failures += 1 if refused else 0
+    return failures
+
+
+def parse_repo_arg(v):
+    path, _, rems = v.partition(":")
+    return path, tuple(r for r in rems.split(",") if r)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--max-age-hours", type=float, default=24.0)
     ap.add_argument("--jest-dir", action="append", help="override the jest_dx dirs (tests)")
-    ap.add_argument("--skip-db", action="store_true", help="jest half only (tests)")
+    ap.add_argument("--skip-db", action="store_true", help="skip the e2e database half")
+    ap.add_argument("--skip-worktrees", action="store_true")
+    ap.add_argument("--skip-compile-cache", action="store_true")
+    ap.add_argument("--compile-cache-dir", action="append", help="override the dirs (tests)")
+    ap.add_argument("--compile-cache-cap-mb", type=float, default=1024.0)
+    ap.add_argument("--wt-repo", action="append", type=parse_repo_arg,
+                    help="PATH:remote1,remote2 -- override the repos (tests)")
+    ap.add_argument("--wt-min-age-hours", type=float, default=48.0)
+    ap.add_argument("--tmux", help="tmux binary to ask (tests)")
+    ap.add_argument("--apply-worktrees", action="store_true",
+                    help="actually remove; without it the worktree half only reports")
     a = ap.parse_args(argv)
     if a.max_age_hours < 1:
         print("ERROR: --max-age-hours below 1 would reach a live run; refusing")
+        return 2
+    if a.wt_min_age_hours < 24:
+        print("ERROR: --wt-min-age-hours below 24 would reach a tree in use today; refusing")
+        return 2
+    if a.wt_repo and any(not r for _, r in a.wt_repo):
+        print("ERROR: --wt-repo needs PATH:remote[,remote] -- no remote means nothing is backed up")
         return 2
     now, max_age_s = time.time(), a.max_age_hours * 3600
     tag = "DRY-RUN " if a.dry_run else ""
@@ -197,8 +468,21 @@ def main(argv=None):
     print("%s %sjest_dx: %d files, %.2f GiB%s" % (
         stamp, tag, files, size / 2**30, (" | REFUSED dirs: %s" % refused) if refused else ""))
 
+    failures = 0
+    if not a.skip_compile_cache:
+        cf, cs, cref = collect_compile_cache(a.compile_cache_dir or default_compile_cache_dirs(),
+                                             a.compile_cache_cap_mb * 2**20, a.dry_run)
+        print("%s %scompile caches (cap %.0f MB each): %d files, %.2f GiB%s" % (
+            stamp, tag, a.compile_cache_cap_mb, cf, cs / 2**30,
+            (" | REFUSED dirs: %s" % cref) if cref else ""))
+
+    if not a.skip_worktrees:
+        failures += run_worktrees(a.wt_repo or list(DEFAULT_WT_REPOS), now,
+                                  a.wt_min_age_hours * 3600,
+                                  a.apply_worktrees and not a.dry_run, stamp, a.tmux)
+
     if a.skip_db:
-        return 0
+        return 1 if failures else 0
     # The psql variables that could point the job elsewhere are dropped; the job talks
     # to localhost only, and the gate re-checks that against this same env.
     env = {k: v for k, v in os.environ.items()
@@ -230,7 +514,7 @@ def main(argv=None):
         len(to_drop) if a.dry_run else dropped,
         {k: len(v) for k, v in sorted(skipped.items())},
         (" | FAILED: %s" % failed) if failed else ""))
-    return 1 if failed else 0
+    return 1 if (failed or failures) else 0
 
 
 if __name__ == "__main__":
