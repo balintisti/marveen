@@ -2646,14 +2646,32 @@ export function getPendingMessages(toAgent?: string): AgentMessage[] {
 
 /** The rows a restart could plausibly have cost, for the agent that was restarted.
  *
- *  Deliberately returns BOTH statuses and does NOT filter by time: the window arithmetic
+ *  Deliberately returns ALL THREE statuses and does NOT filter by time: the window arithmetic
  *  lives in `buildRestartLossLine`, where it is testable on fixtures and its reasoning is
  *  visible. A `sinceSec` bound in this SQL would put the one rule that matters (card
  *  82d9b960: filter on the WINDOW, not the status) inside a string nobody tests. */
-export function getRestartLossCandidates(toAgent: string): AgentMessage[] {
+/** How far back the SQL reads `delivered` rows for the restart line -- a COARSE bound, 48x the
+ *  30-minute window (card 18c382df, jarvis's intersection check). `delivered` is effectively
+ *  permanent (0.6% ever reach `done`), so unbounded it is the agent's whole history: 8074 rows
+ *  for marveen on 2026-09-24, back to 08-17, ~185/day, of which the line uses 30 minutes. The
+ *  exact window stays in `buildRestartLossLine`, tested on fixtures; this bound is wide enough
+ *  that it can never be the rule that decides. pending/failed stay unbounded (few rows, and an
+ *  old `failed` is filtered, visibly, by the line). */
+export const RESTART_LOSS_SQL_HORIZON_S = 24 * 3600
+
+export function getRestartLossCandidates(
+  toAgent: string,
+  nowMs: number = Date.now(),
+): (Pick<AgentMessage, 'id' | 'status' | 'created_at' | 'delivered_at' | 'from_agent'> & { head: string })[] {
+  // `delivered` joined the set for card 18c382df: it is the state a restart actually takes.
+  // Narrow columns, and only the first 40 characters of the body, which carry the `[tag]` the
+  // line uses to recognise the one moot kind of row.
+  const horizon = Math.floor(nowMs / 1000) - RESTART_LOSS_SQL_HORIZON_S
   return db.prepare(
-    "SELECT * FROM agent_messages WHERE to_agent = ? AND status IN ('pending','failed') ORDER BY created_at ASC",
-  ).all(toAgent) as AgentMessage[]
+    "SELECT id, status, created_at, delivered_at, from_agent, substr(content, 1, 40) AS head FROM agent_messages"
+    + " WHERE to_agent = ? AND (status IN ('pending','failed') OR (status = 'delivered' AND delivered_at >= ?))"
+    + " ORDER BY created_at ASC",
+  ).all(toAgent, horizon) as (Pick<AgentMessage, 'id' | 'status' | 'created_at' | 'delivered_at' | 'from_agent'> & { head: string })[]
 }
 
 // Status-guarded (pending only): the federation removal path bulk-fails

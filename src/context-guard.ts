@@ -672,6 +672,37 @@ function handoffRequest(
  *  messages that were in flight AROUND it. */
 export const RESTART_LOSS_WINDOW_MS = 30 * 60_000
 
+/** One `agent_messages` row as the restart-loss line needs it. `delivered_at`, `from_agent`
+ *  and `head` (the first characters of the content) are optional so a `pending`/`failed`
+ *  fixture stays one line; a `delivered` row WITHOUT `delivered_at` is not counted, because
+ *  its injection time is unknown. */
+export type RestartLossRow = {
+  id: number
+  status: string
+  created_at: number
+  delivered_at?: number | null
+  from_agent?: string
+  head?: string
+}
+
+/** The idle guard's wake-up to the agent ITSELF (`buildWakeMessage`, src/idle-agent.ts).
+ *  The ONLY delivered row a restart provably cannot cost: it describes the OLD session's idle
+ *  prompt, and the new session is evaluated from scratch. Pinned against the real builder in
+ *  restart-loss-line.test.ts, so a reworded wake-up cannot silently start alarming. */
+const IDLE_SELF_WAKE = /^\[tetlen-or\] \d+ perce allsz /
+
+/** `system` rows are NOT a class that regenerates: approvals, sentry and uptime edges and
+ *  handoff failures are sent once. So a system row is listed like any other, with its tag. */
+function senderLabel(r: RestartLossRow): string {
+  const from = r.from_agent ?? '?'
+  const tag = from === 'system' ? /^\[([A-Za-z_-]+)\]/.exec(r.head ?? '')?.[1] : undefined
+  return tag ? `${from}[${tag}]` : from
+}
+
+/** How many sender-written `delivered` rows the line names by id; the rest become a count.
+ *  Measured 2026-09-24 over 411 restart notices: up to 24 such rows in one window. */
+export const RESTART_DELIVERED_LIST_MAX = 6
+
 /** What a restart actually cost, as a line the notice carries instead of a warning it
  *  delegates (card 82d9b960).
  *
@@ -688,7 +719,7 @@ export const RESTART_LOSS_WINDOW_MS = 30 * 60_000
  *  Pure on purpose -- the rows come from the caller, so this is testable on fixtures without
  *  a database, and the window arithmetic is visible rather than buried in SQL. */
 export function buildRestartLossLine(
-  rows: { id: number; status: string; created_at: number }[],
+  rows: RestartLossRow[],
   restartMs: number,
   windowMs: number = RESTART_LOSS_WINDOW_MS,
   stamp?: string,
@@ -711,11 +742,52 @@ export function buildRestartLossLine(
   const failedInWindow = rows.filter((r) => r.status === 'failed' && r.created_at >= sinceSec)
   const mins = Math.round(windowMs / 60_000)
 
+  // `delivered` IS THE STATE A RESTART TAKES (card 18c382df). pending survives in the table and
+  // failed is already dead; a delivered row's text was INJECTED into the pane that the restart
+  // then destroyed, and whether it was processed first is not visible from the database. Its
+  // window runs on `delivered_at`, not `created_at`: the risk starts when the text lands, and a
+  // message queued 40 minutes ago but injected 5 minutes ago is exactly in it.
+  // Measured 2026-09-24 over 411 restart notices: 178 said "NINCS mit ujrakuldeni", and 75 of
+  // those (42%) had delivered rows in the window. Three of those, 09-19, are traced on the card.
+  // ONE kind of row is excluded, and it is NOT "every system row" -- that was this fix's first
+  // shape and it was wrong: eight code paths send as `system`, and approvals, sentry/uptime
+  // edges and handoff failures are sent ONCE. Only the idle guard's wake-up to the restarted
+  // agent itself is moot (IDLE_SELF_WAKE above). `done` rows are not here either:
+  // `completed_at` is proof of processing.
+  const restartSec = restartMs / 1000
+  const deliveredInWindow = rows.filter(
+    (r) => r.status === 'delivered' && typeof r.delivered_at === 'number'
+      && r.delivered_at >= sinceSec && r.delivered_at <= restartSec,
+  )
+  const isMootWake = (r: RestartLossRow) => r.from_agent === 'system' && IDLE_SELF_WAKE.test(r.head ?? '')
+  const deliveredMoot = deliveredInWindow.filter(isMootWake)
+  const deliveredFromSenders = deliveredInWindow
+    .filter((r) => !isMootWake(r))
+    .sort((a, b) => (a.delivered_at as number) - (b.delivered_at as number))
+
   const head = stamp ? ` MERVE ${stamp}-kor:` : ' MERVE:'
-  if (pending.length === 0 && failedInWindow.length === 0) {
-    return `${head} pending 0 | failed a restart ${mins} perces ablakaban: 0 -- NINCS mit ujrakuldeni.`
+  if (pending.length === 0 && failedInWindow.length === 0 && deliveredFromSenders.length === 0) {
+    const mootNote = deliveredMoot.length > 0
+      ? ` (csak ${deliveredMoot.length} tetlen-or ebreszto a regi sessionnek, az uj sessionre targytalan)`
+      : ''
+    return `${head} pending 0 | failed a restart ${mins} perces ablakaban: 0`
+      + ` | delivered az ablakban: ${deliveredMoot.length}${mootNote} -- NINCS mit ujrakuldeni.`
   }
   const parts: string[] = []
+  if (deliveredFromSenders.length > 0) {
+    const shown = deliveredFromSenders.slice(-RESTART_DELIVERED_LIST_MAX)
+    const hidden = deliveredFromSenders.length - shown.length
+    const list = shown
+      .map((r) => `${r.id}<-${senderLabel(r)} ${Math.round((restartSec - (r.delivered_at as number)) / 60)} perce`)
+      .join(', ')
+    parts.push(
+      `delivered AZ ABLAKBAN: ${deliveredFromSenders.length} (${list}${hidden > 0 ? `, +${hidden} korabbi` : ''})`
+      + ` -- a regi sessionbe BEINJEKTALODTAK, a feldolgozasuk ebbol NEM latszik.`
+      + ` Triazs: van-e nyom a kezbesites UTAN (kimeno uzenet, kartya-komment, commit)?`
+      + ` Ha nincs, es kerdes vagy engedely volt benne, az ujrakuldes a KULDO dontese`
+      + (deliveredMoot.length > 0 ? ` (plusz ${deliveredMoot.length} targytalan tetlen-or ebreszto)` : ''),
+    )
+  }
   if (failedInWindow.length > 0) {
     parts.push(
       `failed AZ ABLAKBAN: ${failedInWindow.length} (id ${failedInWindow.map((r) => r.id).join(', ')})` +
