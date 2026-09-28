@@ -71,7 +71,16 @@ So for a sub-agent with a non-empty entry `bashEgressDenyFor()` leaves out the t
 becomes that agent's curl gate: its listed hosts pass and each such call is logged
 as `allow-agent-exception`, every other external host is denied, and an
 unparseable curl-https command is denied rather than let through (fail closed, for
-that agent only). `wget` / `nc` / `ncat` / `telnet` stay denied whole; the main
+that agent only). And a READABLE curl from that agent must be readable in full
+(didi's review, 2026-09-28): no `-K`/`--config`, every URL literal anywhere in the
+command (heredoc, here-string, substitution) on a local or listed host, and no
+destination that only a substitution or an outside variable knows.
+
+The curl NAME is matched as the shell resolves it, for every sub-agent: case-folded
+and after quote/backslash resolution (`Curl`, `\curl`, `"curl"`, `c''url`). This disk
+is case-insensitive, and Claude Code's own `Bash(...)` deny glob is case-sensitive
+(its wildcard branch compiles with the `s` flag only; read from the 2.1.283 bundle),
+so before this `Curl https://...` passed both layers. `wget` / `nc` / `ncat` / `telnet` stay denied whole; the main
 agent always keeps the full list. A new entry reaches a running agent at its next
 spawn: the startup migration only adds rules, it never removes one.
 

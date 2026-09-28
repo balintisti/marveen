@@ -12,7 +12,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 // @ts-expect-error -- plain .mjs hook script, no types
-import { classify, parseAgentHosts, agentFromArgv } from '../../scripts/hooks/bash-egress-parser.mjs'
+import { classify, parseAgentHosts, agentFromArgv, strictCurlReason } from '../../scripts/hooks/bash-egress-parser.mjs'
 import { BASH_EGRESS_DENY, agentEgressHosts, bashEgressDenyFor, bashEgressParserCommand, injectBashEgressParser } from '../web/agent-scaffold.js'
 import { MAIN_AGENT_ID } from '../config.js'
 import { tmpDirs } from './helpers/tmp-dirs.js'
@@ -115,6 +115,41 @@ describe('the hook command names the agent', () => {
   })
 })
 
+// didi's review of this exception (19977, 2026-09-28): the two removed curl-https deny rules had
+// been blocking shapes the parser cannot read, and those commands PARSE, so the fail-closed branch
+// never fired. For an agent with an entry, a curl call now has to be readable in full.
+describe('strict curl for the excepted agent (didi 19977)', () => {
+  const mine = parseAgentHosts(FILE, 'deeper')
+  const strict = (c: string) => strictCurlReason(c, mine)
+  it('a curl config is refused: -K file, -K- here-string, --config=', () => {
+    expect(strict('curl -K /tmp/cfg https://api.deltacrm.io/')).toBe('agent-exception-curl-config')
+    expect(strict('curl -K- https://api.deltacrm.io/ <<< "url = https://evil.example/"')).toBe('agent-exception-curl-config')
+    expect(strict('curl --config=/tmp/c https://api.deltacrm.io/x')).toBe('agent-exception-curl-config')
+  })
+  it('a URL the command builds or only an outside variable knows is refused', () => {
+    expect(strict('curl "$(echo https://evil.example/)"')).not.toBeNull()
+    expect(strict('curl -s "$(cat /tmp/url)"')).toBe('agent-exception-unresolved-destination')
+    expect(strict('curl -s "$U"')).toBe('agent-exception-unresolved-destination')
+    expect(strict('U=https://evil.example/x; curl -s "$U"')).toBe('agent-exception-unlisted-url')
+  })
+  it('curl is recognised case-insensitively and through quoting (Curl, \\curl, c\'\'url)', () => {
+    for (const c of ['Curl https://evil.example/', '\\curl https://evil.example/', "c''url https://evil.example/"]) {
+      expect(strict(c)).toBe('agent-exception-unlisted-url')
+    }
+  })
+  it('CONTROLS, measured shapes of deeper\'s week: listed host, token header, path variable, assigned base, loop', () => {
+    expect(strict('curl -s https://api.deltacrm.io/health')).toBeNull()
+    expect(strict('curl -s -H "Authorization: Bearer $(cat ~/.x/token)" https://api.deltacrm.io/api/v1/x')).toBeNull()
+    expect(strict('curl -s "https://api.deltacrm.io/leads/$ID"')).toBeNull()
+    expect(strict('FE=https://delta-crm-backend-755fg4x27a-ew.a.run.app; while read -r p; do curl -s -o x "$FE$p"; done < l')).toBeNull()
+    expect(strict('for h in https://api.deltacrm.io/a https://api.deltacrm.io/api/v1/health; do curl -s "$h"; done')).toBeNull()
+    expect(strict('(curl -s https://evil.example/)')).toBe('agent-exception-unlisted-url')
+    expect(strict('API=https://api.deltacrm.io/api/v1; curl -s "$API/lookup?n=$(python3 -c x)"')).toBeNull()
+    expect(strict('curl -s http://localhost:3420/api/kanban')).toBeNull()
+    expect(strict('echo https://evil.example/')).toBeNull()
+  })
+})
+
 describe('the hook process', () => {
   const setup = () => {
     const dir = mkTmp('agent-egress-')
@@ -160,6 +195,18 @@ describe('the hook process', () => {
   it('CONTROL: for an agent with no entry the unreadable case keeps today\'s fail-open (its deny list still holds)', () => {
     const { run } = setup()
     expect(run('curl -s "https://evil.example.com/x', ['--agent', 'didi']).stdout).toBe('')
+  })
+
+  it('didi 19977 at the hook: a curl config from deeper is denied and logged', () => {
+    const { run, rows } = setup()
+    expect(run('curl -K /tmp/cfg https://api.deltacrm.io/', ['--agent', 'deeper']).stdout).toContain(DENY)
+    expect(rows().at(-1)).toMatchObject({ agent: 'deeper', reason: 'agent-exception-curl-config' })
+  })
+
+  it('CONTROL: the same command from an agent WITHOUT an entry is left to its deny list (hook silent)', () => {
+    const { run } = setup()
+    expect(run('curl -K /tmp/cfg https://api.deltacrm.io/', ['--agent', 'didi']).stdout).toContain(DENY)
+    expect(run('curl -K /tmp/cfg', ['--agent', 'didi']).stdout).toBe('')
   })
 
   it('a localhost call from deeper writes nothing', () => {

@@ -381,6 +381,90 @@ export function curlDestinations(args) {
   }
   return dests.filter((h) => !isLocalHost(h))
 }
+// STRICT CURL FOR AN AGENT WITH A HOST EXCEPTION (card fa917eba; didi's review 19977, 2026-09-28).
+// Such an agent has no `curl *https://*` deny rule any more, and those rules had been blocking
+// shapes this parser cannot read: a curl config (-K / --config, from a file or a here-string), a
+// URL built by a substitution (`curl "$(echo https://x)"`), a destination only an outside variable
+// knows. For THAT agent, a curl call is allowed only when all of it is readable:
+//   1. no -K / --config at all;
+//   2. every URL literal ANYWHERE in the command text (quoted, heredoc, here-string, a substitution)
+//      has a local or listed host -- data included, deliberately: for this agent the literal is the
+//      only evidence there is;
+//   3. no destination-position value that is still a `$` / backtick expression.
+// curl is recognised by name case-insensitively and after quote removal (`Curl`, `\curl`, `c''url`):
+// the disk is case-insensitive, so /usr/bin/Curl runs curl (didi, same review).
+// Returns a deny reason, or null. Fleet-wide behaviour is untouched: this runs only for an agent
+// whose entry is non-empty (the CLI block below).
+const CURL_CONFIG_FLAG = /^(?:-K.*|--config(?:=.*)?)$/
+// A destination the command itself does not spell out: a substitution, or a variable that is NOT
+// given a value in this same command (NAME=... or `for NAME in ...`). A variable the command does
+// assign is fine here: its literal URL is in the text, and rule 2 checks every literal.
+function unresolvedDest(dest, text) {
+  const assigned = (v) => new RegExp(`(?:^|[\\s;&|(])${v}=|\\bfor\\s+${v}\\s+in\\b`).test(text)
+  // A destination that STARTS with an assigned variable takes its scheme and host from that
+  // variable's literal (checked by rule 2); whatever follows it -- a path, a query, even a
+  // substitution in the query -- cannot move the host (`"$FE$p"`, `"$API/x?n=$(...)"`).
+  const lead = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/.exec(dest)
+  if (lead && assigned(lead[1])) return false
+  if (/\$\(|`/.test(dest)) return true
+  for (const m of dest.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) if (!assigned(m[1])) return true
+  return false
+}
+export function strictCurlReason(command, allowedHosts, vendorDomains = new Set()) {
+  const text = String(command ?? '')
+  const segments = text.split(/\|\||&&|[;|\n]/)
+  let sawCurl = false
+  for (const seg of segments) {
+    const words = shellWords(seg)
+    // a subshell `(curl ...)` leaves its paren on the word; a substitution's `$(` does not reach here as a command
+    const at = words.findIndex((w) => normalizedName(w) === 'curl')
+    if (at === -1) continue
+    sawCurl = true
+    const args = words.slice(at + 1)
+    if (args.some((w) => CURL_CONFIG_FLAG.test(w))) return 'agent-exception-curl-config'
+    for (let k = 0; k < args.length; k++) {
+      const w = args[k]
+      let dest = null
+      if (w.startsWith('--')) {
+        const [name, inline] = w.slice(2).split(/=(.*)/s)
+        if (!CURL_LONG_WITH_VALUE.has(name)) continue
+        const v = inline !== undefined ? inline : args[++k]
+        if (CURL_DEST_URL.has(name)) dest = v
+      } else if (w.startsWith('-') && w.length > 1) {
+        for (let q = 1; q < w.length; q++) {
+          if (!CURL_SHORT_WITH_VALUE.has(w[q])) continue
+          const v = q + 1 < w.length ? w.slice(q + 1) : args[++k]
+          if (CURL_DEST_URL.has(w[q])) dest = v
+          break
+        }
+      } else if (!/^\d*[<>]/.test(w)) {
+        dest = w
+      }
+      if (dest != null && destHost(dest) === null && unresolvedDest(dest, text)) return 'agent-exception-unresolved-destination'
+    }
+  }
+  if (!sawCurl) return null
+  for (const m of text.matchAll(URL_RE)) {
+    // URL_RE keeps a trailing `;` / `,` / `&` (`FE=https://host;`), which is shell, not host
+    const h = hostOf(m[0].replace(/[;,&|]+$/, ''))
+    if (!h || isLocalHost(h)) continue
+    if (!allowedHosts.has(h) && !hostInDomains(h, vendorDomains)) return 'agent-exception-unlisted-url'
+  }
+  return null
+}
+// A command word as the shell resolves it. Takes a shellWords word, so quotes and backslashes are
+// already resolved (`"curl"`, `\curl`, `c''url` -> curl); strips a subshell's leading paren, takes
+// the basename, and folds case because this disk is case-insensitive (`Curl` runs curl).
+export function normalizedName(word) {
+  return String(word ?? '').replace(/^\(+/, '').split('/').pop().toLowerCase()
+}
+// The first word that is not an assignment or a prefix keyword, read from the ORIGINAL segment's
+// shell words. Falls back to the masked word if the two readings disagree on the word count.
+function commandName(swords, maskedWord) {
+  let i = 0
+  while (i < swords.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(swords[i]) || PREFIX_WORDS.has(swords[i]))) i++
+  return i < swords.length ? normalizedName(swords[i]) : normalizedName(maskedWord)
+}
 export function classify(command, depth = 0, vendorHosts = new Set(), vendorDomains = new Set()) {
   const norm = String(command ?? '').replace(/\\\r?\n/g, ' ')
   const { stripped: orig, inners } = liftSubstitutions(norm)
@@ -395,8 +479,11 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
     let i = 0
     while (i < mw.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(mw[i]) || PREFIX_WORDS.has(mw[i]))) i++
     if (i >= mw.length) continue
-    const cmd = mw[i].split('/').pop()
     const text = expand(orig.slice(a, b), env)
+    // The command NAME is read from the ORIGINAL text through shellWords, not from the masked one:
+    // masking blanks a quoted "curl", and the shell runs `Curl` (case-insensitive disk,
+    // /usr/bin/Curl exists), `\curl`, `"curl"` and `c''url` as curl (didi 19977, marveen 19980).
+    const cmd = commandName(shellWords(orig.slice(a, b)), mw[i])
     let target = null
     if (cmd === 'curl') target = 'curl'
     else if (INTERPRETER.test(cmd) && mw.slice(i + 1).some((w) => CODE_FLAG.has(w)) && NET_PRIMITIVE.test(text)) target = 'one-liner'
@@ -408,7 +495,7 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
     // one-liner has no argv to read, so its code is still scanned with URL_RE.
     let found
     const argv = target === 'curl' ? shellWords(text) : null
-    const at = argv ? argv.findIndex((w) => w.split('/').pop() === 'curl') : -1
+    const at = argv ? argv.findIndex((w) => normalizedName(w) === 'curl') : -1
     if (at !== -1) found = curlDestinations(argv.slice(at + 1))
     else found = [...text.matchAll(URL_RE)].map((m) => m[0]).filter(isExternal).map(hostOf)
     // A listed vendor host (or a host under a listed domain) passes only by itself: any other
@@ -450,6 +537,11 @@ if (isInvokedDirectly()) {
     // https URL would otherwise leave with no gate at all.
     if (!r.deny && r.reason === 'unparseable' && agentHosts.size && CURL_HTTPS.test(command)) {
       r = { deny: true, reason: 'unparseable-agent-exception', hosts: [] }
+    }
+    // ...and a READABLE curl must be readable in full (didi 19977): see strictCurlReason.
+    if (!r.deny && agentHosts.size) {
+      const strict = strictCurlReason(command, new Set([...vendorHosts, ...agentHosts]), vendorDomains)
+      if (strict) r = { deny: true, reason: strict, hosts: [] }
     }
     // Every call that passes ONLY because of this agent's entry is logged: the exception is visible.
     if (!r.deny && agentHosts.size) {

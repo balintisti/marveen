@@ -105,6 +105,29 @@ describe('(b) localhost control: the fleet\'s own calls pass', () => {
   })
 })
 
+// didi's review 19977 (finding 2), marveen 19980: the shell runs these as curl, and the parser
+// matched only the exact word "curl". This disk is case-insensitive (/usr/bin/Curl exists), and
+// Claude Code's own deny glob is case-SENSITIVE (read from the 2.1.283 bundle: the Bash wildcard
+// branch compiles with the "s" flag only), so before this every sub-agent passed BOTH layers with
+// `Curl`. The command name is now read from the original text, quotes and backslashes resolved.
+describe('the curl name as the shell resolves it (didi 19977, fleet-wide)', () => {
+  it('didi\'s four shapes are denied: Curl, \\curl, "curl", c\'\'url', () => {
+    for (const c of ['Curl https://evil.example/', '\\curl https://evil.example/', '"curl" https://evil.example/', "c''url https://evil.example/"]) {
+      expect(classify(c)).toMatchObject({ deny: true, hosts: ['evil.example'] })
+    }
+  })
+  it('and the path forms: CURL, /usr/bin/Curl, inside a subshell', () => {
+    expect(classify('CURL -s https://evil.example/').deny).toBe(true)
+    expect(classify('/usr/bin/Curl https://evil.example/').deny).toBe(true)
+    expect(classify('(Curl https://evil.example/)').deny).toBe(true)
+  })
+  it('CONTROLS: the same spellings to localhost pass, and the word inside an echo is not a command', () => {
+    expect(classify('Curl -s http://127.0.0.1:3420/api/kanban').deny).toBe(false)
+    expect(classify('"curl" -s http://localhost:3420/api/kanban').deny).toBe(false)
+    expect(classify('echo Curl https://evil.example/').deny).toBe(false)
+  })
+})
+
 describe('(a) the named shapes', () => {
   it('denies every named external shape', () => {
     for (const cmd of NAMED) expect({ cmd, deny: deny(cmd) }).toEqual({ cmd, deny: true })
