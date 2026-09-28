@@ -119,3 +119,137 @@ describe('gateDecision Bash: POSITIVE CONTROLS -- real send attempts still deny 
     expect(bash(`echo 'sendmail mentioned inside a closed quote'`).deny).toBe(false)
   })
 })
+
+// Card a7ea5b8c (didi, 2026-08-22 and 08-27, measured on the real isSendInvocation):
+// the filename exemption `(?!-\w)` (card 92e3c22f) was right for ARGUMENTS, but the
+// vendor-CLI check only knew the bare `resend`, so a hyphen- or underscore-named Resend
+// binary or helper script in COMMAND position walked through. Every one of these was
+// GREEN (allowed) before the fix.
+describe('gateDecision Bash: a Resend tool or script with its own name, RUN, denies (card a7ea5b8c)', () => {
+  const bash = (command: string) => gateDecision('Bash', { command })
+
+  it.each([
+    'npx resend-cli send --to a@b.c',
+    'npx resend-api send --to a@b.c',
+    'node resend-mailer.js --send --to a@b.c',
+    'RESEND_API_KEY=x npx resend-send',
+    './resend-mailer send --to a@b.c',
+    'npx resend_cli send --to a@b.c',
+    'npx tsx scripts/resend-mailer.ts --to a@b.c',
+  ])('denies: %s', (command) => {
+    expect(bash(command).deny).toBe(true)
+  })
+
+  it.each([
+    // The 92e3c22f reads: a `resend-*` token as an ARGUMENT is content, even next to `send`.
+    'wc -l src/common/services/resend-email.service.ts',
+    'grep -n send src/common/services/resend-email.service.ts',
+    'git log --oneline -- src/common/services/resend-email.service.ts',
+    'npx jest src/common/services/resend-email.service.spec.ts',
+    'npx eslint src/common/services/resend-email.service.ts',
+    // A resend-named tool that is RUN but carries no send signal is not a send.
+    'npx resend-cli --help',
+    'node resend-domains-report.js --list',
+  ])('CONTROL, passes: %s', (command) => {
+    expect(bash(command).deny).toBe(false)
+  })
+})
+
+// didi, second pass on a7ea5b8c: fifteen ordinary shapes still passed, because only
+// rest[0] was taken as the executed position. `npx -y` is what agents type by default.
+describe('gateDecision Bash: the executed position is found past runner flags and in more runners (card a7ea5b8c, pass 2)', () => {
+  const bash = (command: string) => gateDecision('Bash', { command })
+
+  it.each([
+    'npx -y resend-cli send --to a@b.c',
+    'npx --yes resend-cli send --to a@b.c',
+    'npx -p resend-cli resend-cli send',
+    'node --env-file=.env resend-mailer.js --to a@b.c',
+    'node --no-warnings resend-mailer.js --to a@b.c',
+    'tsx --tsconfig tsconfig.json resend-mailer.ts --to a@b.c',
+    'python3 -u resend_mailer.py --to a@b.c',
+    'python3 -X utf8 resend_mailer.py --to a@b.c',
+    'python3 -m resend_cli send --to a@b.c',
+    'pnpm dlx resend-cli send --to a@b.c',
+    'yarn dlx resend-cli send --to a@b.c',
+    'bunx resend-cli send --to a@b.c',
+    'uv run resend_mailer.py --to a@b.c',
+    'bash resend-mailer.sh --to a@b.c',
+    'sh ./resend-send.sh',
+    // chains and preloads
+    'npx -y tsx scripts/resend-mailer.ts --to a@b.c',
+    'node -r ./resend-mailer.js app.js',
+  ])('denies: %s', (command) => {
+    expect(bash(command).deny).toBe(true)
+  })
+
+  it.each([
+    'npx -y jest src/common/services/resend-email.service.spec.ts',
+    'bash scripts/check.sh resend-email.service.ts',
+    'python3 -m pytest tests/test_resend_mailer.py',
+    'pnpm dlx prettier --check src/common/services/resend-email.service.ts',
+    'python3 -X utf8 scripts/report.py resend-email.service.ts',
+  ])('CONTROL, passes (a resend-* name as an ARGUMENT, not what runs): %s', (command) => {
+    expect(bash(command).deny).toBe(false)
+  })
+})
+
+// didi, third pass on a7ea5b8c: four LOW items. A and B were asked for before the merge
+// (scripts/ goes live on merge); C and D are the cheap optional pair.
+describe('gateDecision Bash: runner walk, third pass (card a7ea5b8c)', () => {
+  const bash = (command: string) => gateDecision('Bash', { command })
+
+  it.each([
+    // A: Node takes the space-separated VALUE of a flag it knows, then runs the script.
+    'node --title didi resend-mailer.js --send',
+    'node --disable-warning DEP0040 resend-mailer.js --send',
+    'node --inspect-port 9229 resend-mailer.js --send',
+    // B: the walk's bound fails CLOSED, like HEAD_DEPTH.
+    'npx -y npx -y npx -y npx -y npx -y resend-cli send',
+    // C and D.
+    'uvx resend-cli send --to a@b.c',
+    'npm run resend-send',
+    'pnpm run resend-send',
+    'yarn resend-send',
+  ])('denies: %s', (command) => {
+    expect(bash(command).deny).toBe(true)
+  })
+
+  it.each([
+    // A known boolean long flag does not make the next token a script.
+    'npx --yes jest src/common/services/resend-email.service.spec.ts',
+    'npx --yes prettier --check resend-email.service.ts',
+    'node --no-warnings scripts/report.js resend-email.service.ts',
+    'npm run test -- resend-email.service.spec.ts',
+    'npm run lint',
+    'npm install resend-cli',
+    'python3 -m pip install resend',
+  ])('CONTROL, passes: %s', (command) => {
+    expect(bash(command).deny).toBe(false)
+  })
+})
+
+// didi, last pass on a7ea5b8c: STACKED unknown value flags. Node runs the script in all
+// three (measured); rule A looked only one step ahead.
+describe('gateDecision Bash: stacked value flags before the script (card a7ea5b8c, last pass)', () => {
+  const bash = (command: string) => gateDecision('Bash', { command })
+
+  it.each([
+    'node --title a --disable-warning X resend-mailer.js --send',
+    'node --title a --title b --title c resend-mailer.js --send',
+    'node --disable-warning X --no-warnings resend-mailer.js --send',
+    // A boolean flag the list does not know swallows the script as its "value" --
+    // which is still a candidate, so a misjudged flag cannot open a gap.
+    'node --unknown-bool resend-mailer.js --send',
+    'npx -- resend-cli send',
+  ])('denies: %s', (command) => {
+    expect(bash(command).deny).toBe(true)
+  })
+
+  it.each([
+    'npx -- jest resend-email.service.spec.ts',
+    'node --title a --title b scripts/report.js resend-email.service.ts',
+  ])('CONTROL, passes: %s', (command) => {
+    expect(bash(command).deny).toBe(false)
+  })
+})
