@@ -31,9 +31,13 @@ export interface TmpDirs {
 
 export function tmpDirs(): TmpDirs {
   const made: string[] = []
+  // An explicit, generous hook timeout: a file that builds many throwaway trees removes them all
+  // here, and under a loaded host (load average 37-50 measured 2026-09-28, several suites at once)
+  // rulebook-snapshot.test.ts's cleanup passed vitest's 10 s default, failing a file whose 23 tests
+  // were all green. A slow cleanup must never read as a failed test.
   afterAll(() => {
     for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true })
-  })
+  }, 120_000)
   const mk = ((prefix: string, base: string = tmpdir()) => {
     const d = mkdtempSync(join(base, prefix))
     made.push(d)

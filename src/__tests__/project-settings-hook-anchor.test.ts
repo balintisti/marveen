@@ -52,8 +52,11 @@ const EXPECTED: Record<string, string[]> = {
   PreToolUse: [
     // merge 88c366f2: email-approval-gate.py held back for the main agent (D4, pending P10);
     // db-destructive-gate.py is ours (also wired at user level; see hook-registration-completeness).
+    // memory-index-write-gate.py: the main agent's copy moved here from ~/.claude (P4, marveen
+    // 2026-09-28), so the scaffold no longer writes user-level settings for it (#1305).
     'outgoing-copy-gate.py', 'db-destructive-gate.py',
     'channel-image-resize.sh', 'egress-gate.mjs', 'memory-frontmatter-gate.py',
+    'memory-index-write-gate.py',
   ],
   Stop: ['marveen-commands.py', 'telegram-reply-guard.py', 'telegram_progress_clear.py', 'slack_progress_clear.py'],
   SessionStart: ['ledger-replay.py', 'taskstate-replay.py', 'clear-replay.py', 'marveen-commands.py'],
