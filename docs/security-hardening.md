@@ -61,6 +61,20 @@ The sanctioned route for external content is unchanged: the quarantine-reader
 sub-agent, through `WebFetch`, where the domain check already runs. A host being
 on the egress allowlist does not open it to the shell.
 
+### Per-agent https exception (card fa917eba)
+
+`store/egress-vendor-hosts.json` may carry `"agents": {"<name>": ["exact.host"]}`.
+Because a `deny` rule runs before any hook and always wins, a host entry read only
+by `scripts/hooks/bash-egress-parser.mjs` could never let `curl https://` through.
+So for a sub-agent with a non-empty entry `bashEgressDenyFor()` leaves out the two
+`curl *https://*` rules, and the parser (whose command carries `--agent <name>`)
+becomes that agent's curl gate: its listed hosts pass and each such call is logged
+as `allow-agent-exception`, every other external host is denied, and an
+unparseable curl-https command is denied rather than let through (fail closed, for
+that agent only). `wget` / `nc` / `ncat` / `telnet` stay denied whole; the main
+agent always keeps the full list. A new entry reaches a running agent at its next
+spawn: the startup migration only adds rules, it never removes one.
+
 ## Where the main agent's copy goes
 
 The main agent's nominal settings path is the shared user root

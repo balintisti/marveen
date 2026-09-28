@@ -839,7 +839,7 @@ export function writeAgentSettingsFromProfile(name: string, profile: ProfileTemp
   // Egress deny: applied to EVERY profile, not just the gated ones. This
   // function replaces permissions wholesale on each spawn, so without it a
   // respawn would silently drop what ensureBashEgressDeny() merged in.
-  denyList.push(...BASH_EGRESS_DENY)
+  denyList.push(...bashEgressDenyFor(name))
   // Per-agent tool-name deny (agent-config.json "toolDeny"): merged LAST and
   // on EVERY spawn, because this function replaces the deny list wholesale --
   // a name written straight into settings.json disappears at the next respawn
@@ -875,7 +875,7 @@ export function writeAgentSettingsFromProfile(name: string, profile: ProfileTemp
   }
   if (agentGetsTelegramCopyGate(name)) injectTelegramCopyGate(existing)
   injectEgressGate(existing)
-  if (agentGetsBashEgressParser(name)) injectBashEgressParser(existing)
+  if (agentGetsBashEgressParser(name)) injectBashEgressParser(existing, name)
   atomicWriteFileSync(settingsPath, JSON.stringify(existing, null, 2))
 }
 
@@ -1070,17 +1070,48 @@ export const BASH_EGRESS_DENY = [
   'Bash(*/telnet *)',
 ]
 
+// PER-AGENT HTTPS EXCEPTION (card fa917eba, marveen 18139). store/egress-vendor-hosts.json may carry
+// `"agents": {"<name>": ["exact.host", ...]}`; the Bash egress parser lets that agent -- and only
+// it -- reach those hosts, and logs every such call. A permissions.deny rule is evaluated before any
+// PreToolUse hook and always wins, so an entry alone could never let `curl https://` through
+// (bash-egress-deny.test.ts pins that). For an agent WITH a non-empty entry the two curl-https rules
+// are therefore left out, and the parser -- which reads https curl destinations too, and fails
+// closed for exactly this agent -- is its curl gate. wget/nc/ncat/telnet stay denied whole.
+// The file and the shape check are the parser's own (parseAgentHosts in bash-egress-parser.mjs);
+// a parity test keeps the two readers in step. An exception added to a RUNNING agent takes effect
+// at its next spawn: the spawn path rewrites the deny list, the startup migration only adds.
+const BASH_EGRESS_VENDOR_HOSTS_PATH = () =>
+  process.env.BASH_EGRESS_VENDOR_HOSTS || join(PROJECT_ROOT, 'store', 'egress-vendor-hosts.json')
+const EGRESS_AGENT_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/i
+const EGRESS_VENDOR_HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
+export function agentEgressHosts(name: string, raw?: unknown): string[] {
+  if (!EGRESS_AGENT_NAME.test(name)) return []
+  let data = raw
+  if (data === undefined) {
+    try { data = JSON.parse(readFileSync(BASH_EGRESS_VENDOR_HOSTS_PATH(), 'utf-8')) } catch { return [] }
+  }
+  const agents = data && typeof data === 'object' ? (data as { agents?: unknown }).agents : undefined
+  if (!agents || typeof agents !== 'object' || Array.isArray(agents)) return []
+  if (!Object.prototype.hasOwnProperty.call(agents, name)) return []
+  const list = (agents as Record<string, unknown>)[name]
+  return Array.isArray(list) ? list.filter((h): h is string => typeof h === 'string' && EGRESS_VENDOR_HOST.test(h)) : []
+}
+export function bashEgressDenyFor(name: string, raw?: unknown): string[] {
+  if (name === MAIN_AGENT_ID || agentEgressHosts(name, raw).length === 0) return [...BASH_EGRESS_DENY]
+  return BASH_EGRESS_DENY.filter((rule) => !rule.includes('curl '))
+}
+
 // Idempotently merge the egress deny rules into a settings object's
 // permissions.deny. Pure (no I/O) so both the rule set and the merge behaviour
 // are unit-testable; ensureBashEgressDeny() below is the filesystem wrapper.
 // Existing entries are preserved and their order kept: an operator's own deny
 // rule must never be dropped by a migration. Returns true if anything changed.
-export function mergeBashEgressDeny(settings: Record<string, unknown>): boolean {
+export function mergeBashEgressDeny(settings: Record<string, unknown>, rules: readonly string[] = BASH_EGRESS_DENY): boolean {
   const perms = (settings.permissions && typeof settings.permissions === 'object' && !Array.isArray(settings.permissions))
     ? settings.permissions as Record<string, unknown>
     : {}
   const deny = Array.isArray(perms.deny) ? [...(perms.deny as unknown[])] : []
-  const missing = BASH_EGRESS_DENY.filter((rule) => !deny.includes(rule))
+  const missing = rules.filter((rule) => !deny.includes(rule))
   if (missing.length === 0) return false
   perms.deny = [...deny, ...missing]
   settings.permissions = perms
@@ -1138,7 +1169,7 @@ export function ensureBashEgressDeny(name: string, mainAgentConfigDir: string | 
   if (existsSync(settingsPath)) {
     try { settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) } catch { return false }
   }
-  if (!mergeBashEgressDeny(settings)) return false
+  if (!mergeBashEgressDeny(settings, bashEgressDenyFor(name))) return false
   if (name !== MAIN_AGENT_ID) mkdirSync(join(agentDir(name), '.claude'), { recursive: true })
   atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2))
   return true
@@ -1272,11 +1303,18 @@ export function agentGetsBashEgressParser(name: string): boolean {
 // command, with localhost always allowed. See the script header for what stays
 // open. The dedupe key is the script basename, which deliberately does NOT
 // contain 'egress-gate.mjs' -- injectEgressGate's filter would drop it.
-export function injectBashEgressParser(existing: Record<string, unknown>): void {
+// The agent name is burnt into the command (`--agent <name>`): each sub-agent has its own
+// settings.json, so the hook knows whose per-agent entry applies without guessing from the cwd.
+// A name that is not a plain identifier gets no argument, i.e. no per-agent exception.
+export function bashEgressParserCommand(name?: string): string {
+  const base = hookCommand(join(PROJECT_ROOT, 'scripts', 'hooks', 'bash-egress-parser.mjs'))
+  return name && EGRESS_AGENT_NAME.test(name) ? `${base} --agent ${name}` : base
+}
+export function injectBashEgressParser(existing: Record<string, unknown>, name?: string): void {
   const hooks = (existing.hooks && typeof existing.hooks === 'object'
     ? existing.hooks
     : (existing.hooks = {})) as Record<string, unknown>
-  const command = hookCommand(join(PROJECT_ROOT, 'scripts', 'hooks', 'bash-egress-parser.mjs'))
+  const command = bashEgressParserCommand(name)
   // Registration guard: a /tmp or missing path must never enter shared settings.
   if (isUnsafeHookCommand(command)) return
   const entry = {
@@ -1397,7 +1435,7 @@ export function ensureBashEgressParser(name: string): boolean {
   if (!existsSync(settingsPath)) return false
   let settings: Record<string, unknown> = {}
   try { settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) } catch { return false }
-  const command = hookCommand(join(PROJECT_ROOT, 'scripts', 'hooks', 'bash-egress-parser.mjs'))
+  const command = bashEgressParserCommand(name)
   const hooks = (settings.hooks && typeof settings.hooks === 'object')
     ? settings.hooks as Record<string, unknown>
     : {}
@@ -1409,7 +1447,7 @@ export function ensureBashEgressParser(name: string): boolean {
     && hookCommandWired(JSON.stringify(e), command))
   if (wired) return false
   if (isUnsafeHookCommand(command)) return false
-  injectBashEgressParser(settings)
+  injectBashEgressParser(settings, name)
   atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2))
   return true
 }

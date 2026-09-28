@@ -80,6 +80,32 @@ export function parseVendorDomains(raw) {
 export function loadVendorDomains(path = VENDOR_HOSTS_PATH) {
   try { return parseVendorDomains(JSON.parse(readFileSync(path, 'utf-8'))) } catch { return new Set() }
 }
+// PER-AGENT hosts (card fa917eba, marveen 18139): `"agents": {"deeper": ["api.deltacrm.io"]}` in the
+// same file. Only the agent the scaffold burnt into this hook's command (`--agent <name>`) gets its
+// entry; every other agent sees nothing from it. Same shape check as "hosts" (exact DNS names, no
+// wildcard / IP / port / userinfo). The scaffold ALSO drops the two `curl *https://*` deny rules for
+// an agent with a non-empty entry -- a permissions.deny runs before this hook and always wins, so
+// without that the entry could never let an https call through (bash-egress-deny.test.ts pins it).
+// For such an agent this hook is therefore the ONLY curl-https gate, and it fails CLOSED where the
+// rest of the fleet fails open: see the CLI block below.
+const AGENT_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/i
+export function parseAgentHosts(raw, agent) {
+  if (!agent || !AGENT_NAME.test(agent)) return new Set()
+  const agents = raw && typeof raw === 'object' && raw.agents && typeof raw.agents === 'object' && !Array.isArray(raw.agents) ? raw.agents : {}
+  const list = Object.prototype.hasOwnProperty.call(agents, agent) && Array.isArray(agents[agent]) ? agents[agent] : []
+  return new Set(list.filter((h) => typeof h === 'string' && VENDOR_HOST.test(h)))
+}
+export function loadAgentHosts(agent, path = VENDOR_HOSTS_PATH) {
+  try { return parseAgentHosts(JSON.parse(readFileSync(path, 'utf-8')), agent) } catch { return new Set() }
+}
+/** `--agent <name>` from the hook's argv (the scaffold writes it); null when absent or malformed. */
+export function agentFromArgv(argv) {
+  const i = argv.indexOf('--agent')
+  const v = i === -1 ? undefined : argv[i + 1]
+  return typeof v === 'string' && AGENT_NAME.test(v) ? v : null
+}
+/** A command an agent with an https exception must not get through unread: curl + an https URL. */
+const CURL_HTTPS = /\bcurl\b[\s\S]*https:\/\/|https:\/\/[\s\S]*\bcurl\b/i
 export function hostInDomains(host, domains) {
   for (const d of domains) if (host === d || host.endsWith(`.${d}`)) return true
   return false
@@ -405,13 +431,37 @@ if (isInvokedDirectly()) {
   let payload
   try { payload = JSON.parse(readFileSync(0, 'utf-8')) } catch { process.exit(0) }
   if (payload?.tool_name !== 'Bash') process.exit(0)
-  let r
-  try { r = classify(payload?.tool_input?.command, 0, loadVendorHosts(), loadVendorDomains()) } catch (e) { process.stderr.write(`bash-egress-parser: internal error, allowing: ${e?.message}\n`); process.exit(0) }
-  if (r.deny) {
+  const agent = agentFromArgv(process.argv.slice(2))
+  const command = String(payload?.tool_input?.command ?? '')
+  const logRow = (row) => {
     try {
       mkdirSync(dirname(BLOCK_LOG), { recursive: true })
-      appendFileSync(BLOCK_LOG, JSON.stringify({ ts: new Date().toISOString(), cwd: process.cwd(), reason: r.reason, hosts: r.hosts }) + '\n')
-    } catch { /* the deny still stands; a log failure must not turn it into an allow */ }
+      appendFileSync(BLOCK_LOG, JSON.stringify({ ts: new Date().toISOString(), cwd: process.cwd(), ...(agent ? { agent } : {}), ...row }) + '\n')
+    } catch { /* a log failure changes no decision */ }
+  }
+  let r
+  let agentHosts = new Set()
+  try {
+    const vendorHosts = loadVendorHosts()
+    const vendorDomains = loadVendorDomains()
+    agentHosts = loadAgentHosts(agent)
+    r = classify(command, 0, new Set([...vendorHosts, ...agentHosts]), vendorDomains)
+    // FAIL CLOSED for an excepted agent: its curl-https deny rules are gone, so an unread curl to an
+    // https URL would otherwise leave with no gate at all.
+    if (!r.deny && r.reason === 'unparseable' && agentHosts.size && CURL_HTTPS.test(command)) {
+      r = { deny: true, reason: 'unparseable-agent-exception', hosts: [] }
+    }
+    // Every call that passes ONLY because of this agent's entry is logged: the exception is visible.
+    if (!r.deny && agentHosts.size) {
+      const without = classify(command, 0, vendorHosts, vendorDomains)
+      if (without.deny) logRow({ decision: 'allow-agent-exception', reason: without.reason, hosts: without.hosts })
+    }
+  } catch (e) {
+    if (agentHosts.size && CURL_HTTPS.test(command)) r = { deny: true, reason: 'internal-error-agent-exception', hosts: [] }
+    else { process.stderr.write(`bash-egress-parser: internal error, allowing: ${e?.message}\n`); process.exit(0) }
+  }
+  if (r.deny) {
+    logRow({ reason: r.reason, hosts: r.hosts })
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `${GATE_MSG} (hoszt: ${r.hosts.join(', ')})` } }))
   }
   process.exit(0)
