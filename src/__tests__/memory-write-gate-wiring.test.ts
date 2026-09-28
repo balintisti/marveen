@@ -20,7 +20,8 @@
  * blokkolna. Ezert fail-OPEN, ugyanaz az alak, mint a staleness-hooke.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpDirs } from './helpers/tmp-dirs.js'
 
@@ -36,8 +37,19 @@ vi.mock('../web/agent-config.js', async (orig) => {
   const actual = await orig<typeof import('../web/agent-config.js')>()
   return { ...actual, agentDir: () => agentRoot }
 })
+// The main agent's settings path is <home>/.claude/settings.json: a fake home, so no case (and no
+// mutant of the #1305 refusal) can ever write the operator's real user settings.
+const fakeHome = vi.hoisted(() => {
+  const { mkdtempSync } = require('node:fs') as typeof import('node:fs')
+  const { tmpdir } = require('node:os') as typeof import('node:os')
+  const { join } = require('node:path') as typeof import('node:path')
+  return mkdtempSync(join(tmpdir(), 'memgate-home-'))
+})
+vi.mock('node:os', async (orig) => ({ ...(await orig<typeof import('node:os')>()), homedir: () => fakeHome }))
 
 const { ensureMemoryIndexWriteGate } = await import('../web/agent-scaffold.js')
+const { MAIN_AGENT_ID } = await import('../config.js')
+mkTmp.adopt(fakeHome)   // made in vi.hoisted above, where mkTmp does not exist yet
 
 const SETTINGS = () => join(agentRoot, '.claude', 'settings.json')
 const read = () => JSON.parse(readFileSync(SETTINGS(), 'utf-8')) as Record<string, any>
@@ -101,6 +113,47 @@ describe('a MEMORY.md iras-kapu bekotese', () => {
     expect(src).toContain('ensureMemoryIndexWriteGate')
     // ...es nem csak importalja: a startup-hurokban hivja is.
     expect(src).toMatch(/if \(ensureMemoryIndexWriteGate\(agentName\)\)/)
+  })
+})
+
+/**
+ * A FO AGENS KAPUJA A KOVETETT PROJEKT-BEALLITASBAN (88c366f2 merge, P4; marveen 2026-09-28).
+ * Az upstream #1305: scaffold-iras nem celozhatja a ~/.claude/settings.json-t, mert az a gazda
+ * SAJAT, nem-flotta sessionjeit is kotne. A marveen-feltetel: a kapu ELOBB keruljon a kovetett
+ * fajlba, es a fo agensnel a deploy utan is tuzeljen -- ezert a 10. eset a KOVETETT fajlban allo
+ * parancsot futtatja, nem egy masolatat.
+ */
+describe('a fo agens: a kapu a kovetett .claude/settings.json-ban, nem a ~/.claude-ban (P4)', () => {
+  const ROOT = join(__dirname, '..', '..')
+  const tracked = () => {
+    const s = JSON.parse(readFileSync(join(ROOT, '.claude', 'settings.json'), 'utf-8')) as Record<string, any>
+    return ((s.hooks?.PreToolUse ?? []) as any[]).filter(e => JSON.stringify(e).includes('memory-index-write-gate.py'))
+  }
+
+  it('8b. a fo agensre NEM ir: a ~/.claude/settings.json erintetlen marad', () => {
+    expect(ensureMemoryIndexWriteGate(MAIN_AGENT_ID)).toBe(false)
+    expect(existsSync(join(fakeHome, '.claude', 'settings.json'))).toBe(false)
+  })
+
+  it('9. a kovetett fajl EGYSZER hordozza, a harom uttal es fail-open alakban', () => {
+    const e = tracked()
+    expect(e).toHaveLength(1)
+    for (const tool of ['Write', 'Edit', 'Bash']) expect(e[0].matcher).toContain(tool)
+    const cmd = e[0].hooks[0].command as string
+    expect(cmd).toContain('[ -f ')
+    expect(cmd).not.toContain('exit 2')
+  })
+
+  it('10. a kovetett parancs TENYLEG tilt egy vagas fole vivo irast; KONTROLL: egy kicsi atmegy', () => {
+    const cmd = tracked()[0].hooks[0].command as string
+    const mem = mkTmp('memgate-mem-')
+    const run = (content: string) => spawnSync('bash', ['-c', cmd], {
+      input: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: join(mem, 'MEMORY.md'), content } }),
+      encoding: 'utf-8',
+      env: { ...process.env, CLAUDE_PROJECT_DIR: ROOT, MARVEEN_MEMORY_DIR: mem },
+    })
+    expect(run('x'.repeat(30000)).status).toBe(2)
+    expect(run('- [a](a.md) -- rovid\n').status).toBe(0)
   })
 })
 

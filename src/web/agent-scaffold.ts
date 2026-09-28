@@ -680,6 +680,11 @@ const MEMORY_GATE_HOOK_CMD = `bash -c '[ -f ${_memoryGateScript} ] && exec pytho
 //
 // Returns true if the file was updated, false if already wired.
 export function ensureMemoryIndexWriteGate(name: string): boolean {
+  // #1305 (88c366f2 merge, P4; marveen 2026-09-28): the main agent's copy of this gate is
+  // repo-shipped in the tracked .claude/settings.json, like its egress gate; writing
+  // ~/.claude/settings.json would put the gate into the owner's own unrelated sessions too.
+  // The tracked entry landed in the same change, so main is never left without it.
+  if (refuseMainAgentHookWrite(name, 'ensureMemoryIndexWriteGate')) return false
   const settingsPath = agentSettingsPath(name)
   let settings: Record<string, unknown> = {}
   if (existsSync(settingsPath)) {
