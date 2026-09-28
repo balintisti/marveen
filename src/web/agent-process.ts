@@ -2807,7 +2807,14 @@ function resumeSummaryFooterIsLive(pane: string): boolean {
 export async function dismissResumeSummaryModalIfPresent(session: string, host: string | null = null): Promise<void> {
   try {
     const pane = captureTmux(host, ['capture-pane', '-t', session, '-p'])
-    if (!RESUME_SUMMARY_MODAL_RX.test(pane) || !resumeSummaryFooterIsLive(pane)) return
+    if (!RESUME_SUMMARY_MODAL_RX.test(pane)) return
+    if (!resumeSummaryFooterIsLive(pane)) {
+      // The title without the live footer: scrollback, or a modal whose footer text differs from the
+      // one this was written against (unverified on the current CLI -- didi, 2026-09-28). Say it, so
+      // a real modal that stops matching shows up as a line here instead of as a silent stall.
+      logger.warn({ session }, 'Resume-from-summary title on screen but no live "Enter to confirm" footer -- NOT dismissing')
+      return
+    }
     if (permissionPromptBlocksBareEnter(session, host, () => pane, 'Resume-from-summary dismiss')) return
     runTmux(host, ['send-keys', '-t', session, '1'], { timeout: 5000 })
     await delay(100)

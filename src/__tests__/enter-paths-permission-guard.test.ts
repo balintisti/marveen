@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-const h = vi.hoisted(() => ({ pane: '', keys: [] as string[][] }))
+const h = vi.hoisted(() => ({ pane: '', keys: [] as string[][], warns: [] as string[] }))
 
 vi.mock('node:child_process', async (orig) => ({
   ...(await orig<typeof import('node:child_process')>()),
@@ -24,7 +24,7 @@ vi.mock('node:child_process', async (orig) => ({
     return ''
   }),
 }))
-vi.mock('../logger.js', () => ({ logger: { warn: () => {}, info: () => {}, debug: () => {}, error: () => {} } }))
+vi.mock('../logger.js', () => ({ logger: { warn: (_o: unknown, m: string) => { h.warns.push(m) }, info: () => {}, debug: () => {}, error: () => {} } }))
 
 const { dismissResumeSummaryModalIfPresent } = await import('../web/agent-process.js')
 const { detectsPermissionPrompt } = await import('../pane-state.js')
@@ -91,7 +91,7 @@ const MODAL_UNDER_OLD_PERMISSION = [
   RESUME_MODAL,
 ].join('\n')
 
-beforeEach(() => { h.pane = ''; h.keys = [] })
+beforeEach(() => { h.pane = ''; h.keys = []; h.warns = [] })
 
 describe('dismissResumeSummaryModalIfPresent', () => {
   it('CONTROL: the live modal is still dismissed -- 1, then Enter', async () => {
@@ -127,6 +127,24 @@ describe('dismissResumeSummaryModalIfPresent', () => {
     h.pane = IDLE_WITH_OLD_TITLE
     await dismissResumeSummaryModalIfPresent('agent-x')
     expect(h.keys).toEqual([])
+  })
+
+  // didi, 2026-09-28: the real modal's footer text is unverified on the current CLI. If it differs,
+  // the footer check would leave a real modal up with nothing said -- so a title without a live
+  // footer is logged. Measured live the same day: the old dismiss typed '1' + Enter into an agent's
+  // pane with no modal on it (it arrived in that session as a user message "1").
+  it('title without a live footer: NO keystroke, and a warning that says so', async () => {
+    h.pane = IDLE_WITH_OLD_TITLE
+    await dismissResumeSummaryModalIfPresent('agent-x')
+    expect(h.keys).toEqual([])
+    expect(h.warns.filter((w) => /no live "Enter to confirm" footer/.test(w))).toHaveLength(1)
+  })
+
+  it('CONTROL: no title on screen at all -- nothing typed, nothing warned', async () => {
+    h.pane = ['╭────────────╮', '│ >          │', '╰────────────╯', '  ? for shortcuts'].join('\n')
+    await dismissResumeSummaryModalIfPresent('agent-x')
+    expect(h.keys).toEqual([])
+    expect(h.warns).toEqual([])
   })
 })
 
