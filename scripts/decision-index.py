@@ -41,6 +41,7 @@ Hasznalat:
   python3 scripts/decision-index.py --check    -- elavult-e a kovetett peldany (exit 3, ha igen)
   python3 scripts/decision-index.py --unnamed  -- ELO: amit egyik kozos lap sem nevez
   python3 scripts/decision-index.py --control  -- a lap-mero onellenorzese
+  Minden mas argumentum (a `--help` is): hasznalati sor, iras NELKUL (--help: exit 0, mas: exit 2).
 
 ONELLENORZES, ES MOSTANTOL NEM OPCIONALIS. A `--unnamed` a szam KIIRASA ELOTT lefuttatja a
 kontrollt, es MEGTAGADJA a valaszt, ha az elbukik. Mert eset (2026-09-03): egy WORKTREEBOL
@@ -269,8 +270,28 @@ def control():
     return ok, '\n'.join(lines)
 
 
+USAGE = '''hasznalat: python3 scripts/decision-index.py [--check | --unnamed | --control | --help]
+  (argumentum nelkul)  ujragenerálja docs/scripts-decisions.md -- EZ AZ EGY, AMI IR
+  --check              elavult-e a kovetett peldany (exit 3, ha igen)
+  --unnamed            ELO: amit egyik kozos lap sem nevez
+  --control            a lap-mero onellenorzese'''
+KNOWN_ARGS = ('--check', '--unnamed', '--control')
+
+
 def main():
-    arg = sys.argv[1] if len(sys.argv) > 1 else ''
+    # CSAK az ARGUMENTUM NELKULI hivas ir (kartya afb4a2c4, 2026-09-29). Korabban minden
+    # ismeretlen argumentum a generalo agra esett: egy diagnosztikanak szant `--help` (friday,
+    # 07:5x) a FO CHECKOUTBAN irta ujra a docs/scripts-decisions.md-t, es kezzel kellett
+    # visszaallitani. Egy elgepelt `--chek` ugyanigy irt volna, csendben.
+    args = sys.argv[1:]
+    if args in (['--help'], ['-h']):
+        print(USAGE)
+        return 0
+    if len(args) > 1 or (args and args[0] not in KNOWN_ARGS):
+        print(f'ismeretlen argumentum: {" ".join(args)} -- nem irtam semmit.', file=sys.stderr)
+        print(USAGE, file=sys.stderr)
+        return 2
+    arg = args[0] if args else ''
     root = repo_root()
     out_abs = os.path.join(root, OUT_REL)
 

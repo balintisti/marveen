@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync, utimesSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpDirs } from './helpers/tmp-dirs.js'
@@ -251,6 +251,61 @@ describe('decision-index.py -- a NAGYBETUS NYITANY, es ameddig NEM tagul', () =>
       '#!/bin/bash\n# szerzodes.sh -- a ket kimenet:\n#     {"ok":false,"error":"..."}   we could not look, and this is why\necho ok\n',
     )
     expect(generate()).not.toContain('scripts/szerzodes.sh')
+  })
+})
+
+// ============================================================================================
+// CSAK AZ ARGUMENTUM NELKULI HIVAS IR (kartya afb4a2c4, 2026-09-29). Korabban minden ismeretlen
+// argumentum a generalo agra esett: friday egy `--help`-pel a FO CHECKOUTBAN irta ujra az indexet.
+// A BIZONYITEK a fajl VALTOZATLANSAGA (tartalom ES mtime), nem a kilepesi kod.
+// ============================================================================================
+describe('decision-index.py -- ismeretlen argumentum nem ir', () => {
+  let tmp: string
+  let artifact: string
+  const SENTINEL = '# a teszt sajat, szandekosan ELAVULT tartalma\n'
+
+  beforeEach(() => {
+    tmp = mkTmp('decidx-args-')
+    spawnSync('git', ['init', '-q'], { cwd: tmp })
+    mkdirSync(join(tmp, 'scripts'), { recursive: true })
+    mkdirSync(join(tmp, 'docs'), { recursive: true })
+    writeFileSync(join(tmp, 'scripts', 'proba.sh'), '#!/bin/bash\n# MIERT LETEZIK: hogy legyen mit generalni.\necho ok\n')
+    spawnSync('git', ['add', '-A'], { cwd: tmp })
+    artifact = join(tmp, 'docs', 'scripts-decisions.md')
+    writeFileSync(artifact, SENTINEL)
+    const old = new Date('2026-01-01T00:00:00Z')
+    utimesSync(artifact, old, old)
+  })
+
+  afterEach(() => rmSync(tmp, { recursive: true, force: true }))
+
+  const untouched = () => {
+    expect(readFileSync(artifact, 'utf-8')).toBe(SENTINEL)
+    expect(statSync(artifact).mtime.toISOString()).toBe('2026-01-01T00:00:00.000Z')
+  }
+
+  it('--help: hasznalat, exit 0, iras nelkul', () => {
+    const r = run(tmp, ['--help'])
+    expect(r.code).toBe(0)
+    expect(r.out).toContain('hasznalat:')
+    untouched()
+  })
+
+  it('ismeretlen (elgepelt) argumentum: hasznalat, exit 2, iras nelkul', () => {
+    const r = run(tmp, ['--chek'])
+    expect(r.code).toBe(2)
+    expect(r.out).toContain('hasznalat:')
+    untouched()
+  })
+
+  it('egy ismert argumentum MELLETT egy extra: exit 2, iras nelkul', () => {
+    expect(run(tmp, ['--check', '--extra']).code).toBe(2)
+    untouched()
+  })
+
+  it('KONTROLL: argumentum nelkul UGYANEZ a fixture IR -- a fenti harom nem vak', () => {
+    expect(run(tmp, []).code).toBe(0)
+    expect(readFileSync(artifact, 'utf-8')).not.toBe(SENTINEL)
   })
 })
 
