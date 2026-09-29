@@ -9,60 +9,19 @@
  * reading, and the closer read the LAST verdict on the card, not each
  * checker's last one.
  *
- * THE RULE, from rulebook/kanban-verdikt-konvencio.md, not reinvented here:
- *   - a verdict is a line that STARTS with `VERDIKT:` (column 0). A quoted or
- *     indented one is somebody citing a verdict, not giving one;
- *   - the token is what stands between `VERDIKT:` and the first `|` -- never
- *     "the line contains NYITOTT", which also matches NINCS NYITOTT TETEL;
- *   - "last wins" holds WITHIN an author, never across the card: each
- *     checker speaks for their own check.
- * So a card has an open item when ANY author's last verdict is NYITOTT TETEL.
+ * THE RULE -- which line is a verdict, what its token is, whose last one
+ * counts -- is in kanban-verdict.ts, shared with the archive sweep.
  *
  * What this does NOT decide: that a card with no open verdict is done. The
  * owner may not have spoken, and scopes can leave the card's subject
  * uncovered (the convention's "union of scopes" section). The gate only
  * refuses the one state that is certainly wrong.
  */
-import type { KanbanComment } from '../db.js'
+// The reading itself is shared with the archive sweep (db.ts), so it lives
+// outside web/: see kanban-verdict.ts for the rule and the token.
+import { openVerdicts, type OpenVerdict } from '../kanban-verdict.js'
 
-export interface OpenVerdict {
-  author: string
-  /** The verdict line as written, for the refusal to quote. */
-  line: string
-  commentId: number
-}
-
-const VERDICT_PREFIX = 'VERDIKT:'
-
-/** Upper case, accents off, spaces collapsed: "NYITOTT TÉTEL" == "NYITOTT TETEL". */
-function normalizeToken(text: string): string {
-  return text
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toUpperCase()
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-/** Each author's last verdict line, if it says NYITOTT TETEL. */
-export function openVerdicts(comments: KanbanComment[]): OpenVerdict[] {
-  const ordered = [...comments].sort((a, b) => a.created_at - b.created_at || a.id - b.id)
-  const lastByAuthor = new Map<string, { line: string; commentId: number }>()
-  for (const comment of ordered) {
-    for (const line of (comment.content ?? '').split(/\r?\n/)) {
-      if (!line.startsWith(VERDICT_PREFIX)) continue
-      lastByAuthor.set(comment.author, { line: line.trimEnd(), commentId: comment.id })
-    }
-  }
-  const open: OpenVerdict[] = []
-  for (const [author, verdict] of lastByAuthor) {
-    const token = verdict.line.slice(VERDICT_PREFIX.length).split('|')[0]
-    if (normalizeToken(token) === 'NYITOTT TETEL') {
-      open.push({ author, line: verdict.line, commentId: verdict.commentId })
-    }
-  }
-  return open
-}
+export { openVerdicts, type OpenVerdict }
 
 /**
  * The override the gate accepts: a stated reason, nothing less. An empty or

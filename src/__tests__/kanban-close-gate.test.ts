@@ -14,7 +14,7 @@ import http from 'node:http'
 import { Readable } from 'node:stream'
 import {
   initDatabase, createKanbanCard, addKanbanComment, getKanbanCard, getKanbanComments,
-  getKanbanCardFieldEvents, moveKanbanCard,
+  getKanbanCardFieldEvents, moveKanbanCard, getDb, sweepArchivedKanbanCards,
 } from '../db.js'
 import { tryHandleKanban } from '../web/routes/kanban.js'
 import { openVerdicts } from '../web/kanban-verdict-gate.js'
@@ -85,6 +85,77 @@ describe('a parser: szerzonkent az utolso, 0. oszlop, token a pipe elott', () =>
     cardInTesting('p6')
     addKanbanComment('p6', 'didi', 'VERDIKT: NYITOTT TÉTEL | ekezettel')
     expect(openVerdicts(getKanbanComments('p6'))).toHaveLength(1)
+  })
+})
+
+// didi's audit (2026-09-29 19:5x, via the API): the author-last verdict of 17
+// OPEN cards in the older form -- ` -- ` instead of `|`, some with a severity
+// in parentheses. The first version of the gate matched the token exactly and
+// let all 17 through. marveen's decision: the token ends at `|` OR ` -- `.
+const LIVE_OLD_FORM = [
+  "VERDIKT: NYITOTT TETEL -- valtozatlanul TERMEK-dontes (szandekos-e a browse nelkuli read-by-id); a \"nincs a ta",
+  "VERDIKT: NYITOTT TETEL (kozepes) -- a javitas HELYES es a logikaja VEDETT, de a BEKOTESE nem.",
+  "VERDIKT: NYITOTT TETEL -- routing-dontes marveenre; a frontend fele a backend mezo szallitasara var.",
+  "VERDIKT: NYITOTT TETEL -- a meres mandarke, az engedely megvan",
+  "VERDIKT: NYITOTT TETEL -- a merge, a fenti szabaly szerint, a HELYES refrol.",
+  "VERDIKT: NYITOTT TETEL -- kizarolag a (4) beragadt eset; a (2) es (3) megoldva a main-en, commitokkal nevesitv",
+  "VERDIKT: NYITOTT TETEL (kozepes) -- a javitas HELYES, a hatoköre szuk. A testver-vegpont ugyanazt",
+  "VERDIKT: NYITOTT TETEL (alacsony) -- a javitas ALL es a legkockazatosabb resze (a cache utani",
+  "VERDIKT: NYITOTT TETEL -- a 21 piros osztalyozasa es a maradek ot FAIL->PASS visszavezetese; reszemrol a kozos",
+  "VERDIKT: NYITOTT TETEL -- valtozatlanul a `4a4f118f` szallitasa, de a cimzett ISTI (a `30869dde`",
+  "VERDIKT: NYITOTT TETEL -- a PROJECT ag gyujtese dexteré; a sema-komment UTANA az enyem (a 5. komment \"mindkett",
+  "VERDIKT: NYITOTT TETEL -- a scope (3 vagy 4 fajl + spec) es a Sprint 6 kerdese marveenre var.",
+  "VERDIKT: NYITOTT TETEL -- valtozatlanul a `f6642d34` KISZALLITASA. Az elofeltetel (a beolvasztas)",
+  "VERDIKT: NYITOTT TETEL -- a kartya ket hibamodot fog ossze, es a szetvalasztasa (VAGY a",
+  "VERDIKT: NYITOTT TETEL -- valtozatlanul a deploy utani megfigyeles, es most mar kimondva, hogy",
+  "VERDIKT: NYITOTT TETEL -- dexteré a meres (nem-webes fogyasztok) es a dontes.",
+  "VERDIKT: NYITOTT TETEL -- a ket nema ut javitasa, es elotte az orvossag alakjanak eldontese."
+]
+
+describe('a regebbi alak is nyitott (didi 23590, marveen dontese)', () => {
+  it.each(LIVE_OLD_FORM)('elo sor: %s', (line) => {
+    cardInTesting('old')
+    addKanbanComment('old', 'valaki', line)
+    expect(openVerdicts(getKanbanComments('old'))).toHaveLength(1)
+  })
+
+  it('KOTELEZO NEGATIV: a "NINCS NYITOTT TETEL -- ..." NEM nyitott', () => {
+    cardInTesting('neg')
+    addKanbanComment('neg', 'didi', 'VERDIKT: NINCS NYITOTT TETEL -- a sajat ellenorzesemre')
+    expect(openVerdicts(getKanbanComments('neg'))).toEqual([])
+  })
+
+  it('egy tokent, ami csak ugyanazzal a szoval KEZDODIK, nem olvas nyitottnak', () => {
+    cardInTesting('pre')
+    addKanbanComment('pre', 'didi', 'VERDIKT: NYITOTT TETELEK NINCSENEK -- mind lezarva')
+    expect(openVerdicts(getKanbanComments('pre'))).toEqual([])
+  })
+
+  it('a move done-ra a regi alaku nyitott verdikt folott is 409', async () => {
+    cardInTesting('mv')
+    addKanbanComment('mv', 'mandark', LIVE_OLD_FORM[0])
+    const r = await call('POST', '/api/kanban/mv/move', { status: 'done', actor: 'jarvis' })
+    expect(r.status).toBe(409)
+  })
+})
+
+describe('az oras archivalo ugyanazt a kaput kerdezi (marveen dontese)', () => {
+  function oldDone(id: string) {
+    cardInTesting(id)
+    moveKanbanCard(id, 'done', 0, 'marveen')
+    // well past KANBAN_ARCHIVE_DONE_DAYS
+    getDb().prepare('UPDATE kanban_cards SET updated_at = ? WHERE id = ?').run(1_000, id)
+  }
+
+  it('a nyitott verdiktu done kartya a TABLAN marad; a tobbit archivalja', () => {
+    oldDone('open-done')
+    addKanbanComment('open-done', 'didi', OPEN)
+    getDb().prepare('UPDATE kanban_cards SET updated_at = ? WHERE id = ?').run(1_000, 'open-done')
+    oldDone('clean-done')
+
+    expect(sweepArchivedKanbanCards()).toBe(1)
+    expect(getKanbanCard('open-done')?.archived_at ?? null).toBeNull()
+    expect(getKanbanCard('clean-done')?.archived_at).not.toBeNull()
   })
 })
 
