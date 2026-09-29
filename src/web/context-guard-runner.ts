@@ -37,6 +37,7 @@ import {
   contextLimitForModel,
   calibrateLimit,
   handoffStaleMinutes,
+  dailyHandoffStep,
   dailyHandoffDue,
   DAILY_HANDOFF_REASON_PREFIX,
   dailyServedAtMs,
@@ -696,16 +697,20 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
     // that can restart, and the probe is a single stat().
     idleMs,
     ...background,
-    // Seed-on-first-sight: an agent we have not seen this process is recorded
-    // as served NOW and is never due on the same sweep. dailyHandoffDue is
-    // therefore false on the first tick by construction, not by luck.
+    // Seed-on-first-ARMED-sight (dailyHandoffStep): an agent first seen with
+    // the tier armed is recorded as served NOW and is never due on that sweep;
+    // a disarmed tier forgets the record, so arming it later in the day does
+    // not find a stale seed from before the slot and fire at once.
     dailyHandoffDue: (() => {
       if (!running || state.phase !== 'idle') return false
-      const last = lastDailyHandoff.get(name)
-      if (last === undefined) {
-        lastDailyHandoff.set(name, nowMs)
-        return false
-      }
+      const step = dailyHandoffStep(cfg, lastDailyHandoff.get(name), localMidnightMs(nowMs), nowMs)
+      if (step.record === undefined) lastDailyHandoff.delete(name)
+      else lastDailyHandoff.set(name, step.record)
+      // step.due is judged on the guard's own record (step.record, unchanged when due); the
+      // session start below can only move the served moment later, so it can only make the
+      // slot less due, never more.
+      const last = step.record
+      if (!step.due || last === undefined) return false
       // A session that started after the record is fresh: its start serves the slot (card 987baf44).
       const servedAt = dailyServedAtMs(last, sessionStartSec(name))
       if (!dailyHandoffDue(cfg, localMidnightMs(nowMs), servedAt, nowMs)) return false
