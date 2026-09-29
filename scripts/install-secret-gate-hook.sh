@@ -29,11 +29,6 @@ set -euo pipefail
 [ "${SKIP_SECRET_GATE:-0}" = "1" ] && { echo "pre-commit: SKIP_SECRET_GATE=1 -- the CI job still runs." >&2; exit 0; }
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
-if ! command -v npx >/dev/null 2>&1; then
-  echo "pre-commit: npx not found, cannot run the secret gate -- BLOCKING (fail-closed)." >&2
-  echo "Install Node, or bypass knowingly with SKIP_SECRET_GATE=1 (the CI job will still catch it)." >&2
-  exit 1
-fi
 # THE SCRIPT'S ABSENCE IS NOT A SECRET HIT (2026-08-23, measured).
 # `.git/hooks` is SHARED across worktrees, so installing this hook reaches every
 # branch at once -- including branches older than the gate itself. Measured that
@@ -52,7 +47,30 @@ if [ ! -f scripts/secret-gate.ts ]; then
   echo "            The CI job (secret-gate.yml) still checks on the PR." >&2
   exit 0
 fi
-npx --no-install tsx scripts/secret-gate.ts --staged
+# THE GATE RUNS ON A TSX THAT LIVES IN A TREE, NOT IN A CACHE (card 5bcf185d).
+# `npx --no-install tsx` resolved tsx from ~/.npm/_npx when the worktree had no
+# node_modules (measured: 5 worktrees ran the gate that way). With that cache
+# emptied the hook exited 1 on "npx canceled due to missing packages" -- a
+# blocked commit whose message said nothing about the gate or the way out.
+# So: this worktree's own install first, then the main checkout's (worktrees
+# share its git dir, and it is the one install every worktree can reach).
+if ! command -v node >/dev/null 2>&1; then
+  echo "pre-commit: node not found, so the SECRET GATE cannot run -- BLOCKING (fail-closed)." >&2
+  echo "            Install Node, or bypass knowingly: SKIP_SECRET_GATE=1 git commit ...  (the CI job still checks)." >&2
+  exit 1
+fi
+MAIN="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)"
+TSX=""
+for cand in "$ROOT/node_modules/.bin/tsx" "$MAIN/node_modules/.bin/tsx"; do
+  if [ -x "$cand" ]; then TSX="$cand"; break; fi
+done
+if [ -z "$TSX" ]; then
+  echo "pre-commit: the SECRET GATE cannot run here -- tsx is installed neither in this worktree nor in the main checkout ($MAIN)." >&2
+  echo "            THIS IS NOT A SECRET HIT. Clone the dependencies:  cp -Rc \"$MAIN/node_modules\" \"$ROOT/\"" >&2
+  echo "            or bypass knowingly: SKIP_SECRET_GATE=1 git commit ...  (the CI job still checks)." >&2
+  exit 1
+fi
+exec "$TSX" scripts/secret-gate.ts --staged
 EOF
 chmod +x "$GUARD"
 
