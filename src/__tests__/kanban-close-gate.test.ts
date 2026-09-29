@@ -119,6 +119,18 @@ describe('a regebbi alak is nyitott (didi 23590, marveen dontese)', () => {
     expect(openVerdicts(getKanbanComments('old'))).toHaveLength(1)
   })
 
+  // didi (23641): 18 live lines carry BOTH separators ("... | ... -- ..."). The
+  // token ends at the FIRST of them; ending at the last would read the verdict
+  // out of the free text after the pipe.
+  it.each([
+    ['VERDIKT: NYITOTT TETEL | a -- b', 1],
+    ['VERDIKT: NINCS NYITOTT TETEL | a -- b', 0],
+  ])('mindket elvalaszto egy soron: %s', (line, open) => {
+    cardInTesting('both')
+    addKanbanComment('both', 'didi', line as string)
+    expect(openVerdicts(getKanbanComments('both'))).toHaveLength(open as number)
+  })
+
   it('KOTELEZO NEGATIV: a "NINCS NYITOTT TETEL -- ..." NEM nyitott', () => {
     cardInTesting('neg')
     addKanbanComment('neg', 'didi', 'VERDIKT: NINCS NYITOTT TETEL -- a sajat ellenorzesemre')
