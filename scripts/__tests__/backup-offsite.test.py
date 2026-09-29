@@ -70,6 +70,12 @@ class FakeDrive:
         self.fail_gets = 0           # the next N file-list GETs answer 503
         self.session_error = None    # an HTTP code the upload-session POST answers with
         self.max_body = None         # a data PUT with a larger body dies (the flaky-line shape)
+        self.fail_code = 503         # what the fail_gets answers are (429 is Drive's rate limit)
+        self.stall_puts = False      # data PUTs are answered 308 but nothing is stored: a stuck session
+        self.long_206 = False        # a ranged GET is answered with one byte more than asked
+        self.ignore_range_from = None  # from this media GET on (0-based), Range is ignored: 200, whole file
+        self.put_log = []            # every session PUT in order: ('query', None) | ('data', start)
+        self.overlaps = 0            # data PUTs that did not start where the session's bytes end
         self.put_sizes = []          # body size of every data PUT, in order
         self.get_sizes = []          # size of every media GET answer, in order
         self.give_refresh = True
@@ -131,6 +137,7 @@ class FakeDrive:
                 rng = self.headers.get('Content-Range', '')
                 m = re.match(r'bytes (\d+)-(\d+)/(\d+)$', rng)
                 if rng.startswith('bytes */'):          # "how much do you have?"
+                    fake.put_log.append(('query', None))
                     if sid in fake.finished:
                         return self._json(200, {'id': fake.finished[sid]})
                     return self._progress(sid)
@@ -141,10 +148,15 @@ class FakeDrive:
                     start, total = int(m.group(1)), int(m.group(3))
                 fake.data_puts += 1
                 fake.put_sizes.append(len(data))
+                fake.put_log.append(('data', start))
                 fault = fake.drop_puts.pop(fake.data_puts, None)
                 if fake.max_body and len(data) > fake.max_body:
                     fault = 'before'
                 buf = fake.partial.setdefault(sid, b'')
+                if start != len(buf):
+                    fake.overlaps += 1
+                if fake.stall_puts:
+                    return self._progress(sid)
                 if fault == 'before':
                     self.close_connection = True
                     return                               # nothing stored, no answer: a broken pipe
@@ -171,7 +183,7 @@ class FakeDrive:
                 if u.path == '/drive/v3/files':
                     if fake.fail_gets:
                         fake.fail_gets -= 1
-                        return self._json(503, {'error': 'backend error'})
+                        return self._json(fake.fail_code, {'error': 'backend error'})
                     parent = q['q'][0].split("'")[1]
                     items = [f for f in fake.files.values()
                              if parent in f.get('parents', []) and (f.get('appProperties') or {}).get('marveenBackup') == '1']
@@ -184,9 +196,10 @@ class FakeDrive:
                 if q.get('alt') == ['media']:
                     data, code = f['data'], 200
                     m = re.match(r'bytes=(\d+)-(\d+)$', self.headers.get('Range', ''))
-                    if m:                                  # Drive answers a Range with 206
+                    ignore = fake.ignore_range_from is not None and len(fake.get_sizes) >= fake.ignore_range_from
+                    if m and not ignore:                   # Drive answers a Range with 206
                         a, b = int(m.group(1)), int(m.group(2))
-                        data, code = data[a:b + 1], 206
+                        data, code = data[a:b + 1 + (1 if fake.long_206 else 0)], 206
                     fake.get_sizes.append(len(data))
                     if fake.max_body and len(data) > fake.max_body:
                         self.close_connection = True       # the line dies under a large answer
@@ -287,8 +300,8 @@ class Base(unittest.TestCase):
         self.drive.srv.server_close()
         subprocess.run(['rm', '-rf', self.tmp, self.tooltmp])
 
-    def run_tool(self, *args):
-        return subprocess.run([sys.executable, SCRIPT, *args], env=self.env, capture_output=True, text=True, timeout=120)
+    def run_tool(self, *args, timeout=120):
+        return subprocess.run([sys.executable, SCRIPT, *args], env=self.env, capture_output=True, text=True, timeout=timeout)
 
     def init(self):
         with open(self.keyfile, 'w') as f:
@@ -601,6 +614,64 @@ class TestResilience(Base):
         self.round_trip_ok()
         self.assertGreater(len(self.drive.get_sizes), 3, 'one GET for 40 KB: not ranged')
         self.assertLessEqual(min(self.drive.get_sizes), 2048)
+
+    def test_after_a_break_the_session_is_asked_before_any_byte_is_resent(self):
+        # didi's M5 (2026-09-29 01:50): without the question the fake accepted a resend from a
+        # stale offset, so nothing noticed. Pinned on the WIRE: the request after a lost chunk is
+        # "bytes */size", and no data PUT ever starts below what the session already holds.
+        for when in ('before', 'after'):
+            with self.subTest(when=when):
+                for f in self.uploaded():
+                    self.drive.files.pop(f['id'])
+                self.drive.put_log.clear()
+                self.drive.overlaps = 0
+                self.drive.drop_puts = {self.drive.data_puts + 2: when}
+                r = self.run_tool('push', '--archive', self.archive)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                log = self.drive.put_log
+                self.assertEqual(log[1][0], 'data')          # the PUT the line swallowed
+                self.assertEqual(log[2], ('query', None), log[:4])
+                self.assertEqual(self.drive.overlaps, 0)
+
+    def test_a_session_that_stops_taking_bytes_fails_with_its_own_reason_not_the_scheduler_kill(self):
+        # didi's M6: with the stall bound gone, 308-without-progress looped until the scheduler's
+        # 90-minute SIGKILL, whose alert names only a timeout. The script must stop and say why.
+        self.drive.stall_puts = True
+        r = self.run_tool('push', '--archive', self.archive, timeout=30)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('stopped taking bytes', self.alert_text())
+        self.assertLessEqual(self.drive.data_puts, 3 + 2)
+        self.assertEqual(self.uploaded(), [])
+
+    def test_a_429_is_a_blip_and_is_retried(self):
+        # didi's M7: Drive's rate limit is 429; treated as a 4xx answer it would fail the night.
+        self.assertEqual(self.run_tool('push', '--archive', self.archive).returncode, 0)
+        self.drive.fail_code, self.drive.fail_gets = 429, 2
+        self.round_trip_ok()
+        self.assertEqual(self.drive.fail_gets, 0)
+
+    def test_a_ranged_answer_longer_than_asked_is_refused_by_the_download_itself(self):
+        # didi's M9: the end-to-end md5 would catch it too -- this pins that the PIECE check names it
+        self.assertEqual(self.run_tool('push', '--archive', self.archive).returncode, 0)
+        self.drive.long_206 = True
+        r = self.run_tool('restore-test')
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('unexpected answer HTTP 206', self.alert_text())
+
+    def test_a_200_that_ignores_range_mid_download_is_refused(self):
+        # didi's M10: a whole file after the first piece would be appended to it
+        self.assertEqual(self.run_tool('push', '--archive', self.archive).returncode, 0)
+        self.drive.ignore_range_from = 1
+        r = self.run_tool('restore-test')
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('unexpected answer HTTP 200', self.alert_text())
+
+    def test_CONTROL_a_server_that_ignores_range_from_the_start_still_restores(self):
+        self.assertEqual(self.run_tool('push', '--archive', self.archive).returncode, 0)
+        self.drive.ignore_range_from = 0
+        self.drive.get_sizes.clear()
+        self.round_trip_ok()
+        self.assertEqual(len(self.drive.get_sizes), 1)
 
     def test_breaks_are_bounded_and_loud(self):
         self.drive.drop_puts = {n: 'before' for n in range(1, 50)}
