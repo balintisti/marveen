@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **416** kovetett fajl, ebbol
-**125** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **425** kovetett fajl, ebbol
+**128** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -129,6 +129,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/agent-progress.sh`
 
 - WHY: the [session-stuck] alert fires every 30 minutes for every agent that is
+
+### `scripts/alert-coordinator.sh`
+
+- WHY: agent-msg.sh refuses a message when the recipient already has >= 3 pending (its saturation
 
 ### `scripts/applies-cleanly.sh`
 
@@ -448,6 +452,11 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - MIERT SZKRIPT ES NEM PROMPT: mind a harom szekcio szamlalas, es egy LLM-fordulo
 - hogy az ellenorzes miert nem futott le. A napindito pontosan ezen bukott el
 
+### `scripts/net-probe.py`
+
+- WHY: on 2026-09-24 four pollers failed on four different hosts in one morning (googleapis oauth2,
+- why this measures HTTPS); 120 interleaved HTTPS requests: 1 failure, sentry.io. The machine is on
+
 ### `scripts/permission-guard-check.sh`
 
 - MIERT LETEZIK, KET MERT ESEMENYBOL:
@@ -494,6 +503,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/safety-core-drift-check.py`
 
 - MIERT NEM ELOSZTO (marveen dontese, 2026-09-24, a kartyan): friday merte, hogy a sablon a lapok
+
+### `scripts/schedule-artifact-watch.py`
+
+- WHY (card 5b69464f, didi 2026-09-18): sentry-or's state file did not move for 5 days 12 hours
 
 ### `scripts/self-pace-gate.mjs`
 
