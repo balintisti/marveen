@@ -12,7 +12,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, writeFileSync, utimesSync, existsSync, readdirSync, realpathSync, symlinkSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, utimesSync, existsSync, readdirSync, realpathSync, symlinkSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpDirs } from './helpers/tmp-dirs.js'
@@ -33,8 +33,18 @@ function jestFixture(dirName = 'jest_dx') {
   return { d, old, fresh }
 }
 
-function run(args: string[]): string {
-  return execFileSync('python3', [SCRIPT, '--skip-db', '--skip-worktrees', '--skip-compile-cache', ...args], {
+/** Egy hamis pgrep: `body` a shell-torzse. Alapbol "nincs talalat" (rc 1), igy a gep VALODI jest-jei
+ * nem szolnak bele a tesztbe. Az argumentumait `<dir>/args`-ba irja. */
+function fakePgrep(body = 'exit 1'): { bin: string; argsFile: string } {
+  const d = mkTmp('devgc-pgrep-')
+  const bin = join(d, 'pgrep')
+  const argsFile = join(d, 'args')
+  writeFileSync(bin, `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile}'\n${body}\n`, { mode: 0o755 })
+  return { bin, argsFile }
+}
+
+function run(args: string[], pgrep = fakePgrep().bin): string {
+  return execFileSync('python3', [SCRIPT, '--skip-db', '--skip-worktrees', '--skip-compile-cache', '--pgrep', pgrep, ...args], {
     encoding: 'utf8',
   })
 }
@@ -140,6 +150,49 @@ describe('dev-gc: jest_dx meret-plafon (4138aa04)', () => {
     const f = capFixture()
     expect(run(['--jest-dir', f.d, '--jest-cap-mb', '100'])).toMatch(/jest_dx cap .*: 0 files/)
     expect(existsSync(f.oldest)).toBe(true)
+  })
+
+  // didi, 2026-09-29 07:48: cache-TALALATNAL a jest csak OLVAS, az mtime az irast mutatja -- egy futo jest
+  // a padlonal regebbi fajlokat is olvashat (merve: 662 egy ora alatt). Ezert jest futasa alatt a plafon-
+  // lepes EGESZEBEN kimarad; a kor-lepes (24 h) marad.
+  it('futo jest mellett a plafon-lepes KIMARAD, minden fajl marad; a kor-lepes megy tovabb', () => {
+    const f = capFixture()
+    const aged = jestFixture()
+    const out = run(['--jest-dir', f.d, '--jest-dir', aged.d, '--jest-cap-mb', '0.01'], fakePgrep("echo 99999; exit 0").bin)
+    expect(out).toMatch(/jest_dx cap: SKIPPED/)
+    expect(out).toMatch(/jest_dx: 1 files/)
+    expect(existsSync(aged.old)).toBe(false)
+    for (const p of [f.oldest, f.middle, f.newer, f.fresh]) expect(existsSync(p)).toBe(true)
+  })
+
+  it('fail-closed: HIANYZO vagy HIBAZO pgrep -> a plafon-lepes kimarad', () => {
+    for (const pgrep of ['/nonexistent/pgrep', fakePgrep('exit 2').bin]) {
+      const f = capFixture()
+      expect(run(['--jest-dir', f.d, '--jest-cap-mb', '0.01'], pgrep)).toMatch(/jest_dx cap: SKIPPED/)
+      expect(existsSync(f.oldest)).toBe(true)
+    }
+  })
+
+  it('a SAJAT folyamat talalata nem jest: a plafon-lepes lefut', () => {
+    const f = capFixture()
+    // $PPID of the fake pgrep = the dev-gc python process itself
+    const out = run(['--jest-dir', f.d, '--jest-cap-mb', '0.25'], fakePgrep('echo $PPID; exit 0').bin)
+    expect(out).toMatch(/jest_dx cap .*: 2 files/)
+  })
+
+  it('a minta a jest BINARISRA illeszt, nem a szora: a dev-gc sajat --jest-* argumentumaira nem', () => {
+    const f = capFixture()
+    const pg = fakePgrep()
+    run(['--jest-dir', f.d], pg.bin)
+    const [flag, pattern] = readFileSync(pg.argsFile, 'utf8').trim().split('\n')
+    expect(flag).toBe('-f')
+    const re = new RegExp(pattern)
+    for (const live of [
+      'node /Users/x/crm/backend/api/node_modules/.bin/jest --config ./test/jest-e2e.json --runInBand',
+      'node /Users/x/crm/node_modules/jest/bin/jest.js',
+      '/usr/local/bin/node /Users/x/crm/node_modules/jest-worker/build/workers/processChild.js',
+    ]) expect(live).toMatch(re)
+    expect(`/usr/bin/python3 ${SCRIPT} --jest-cap-mb 4096 --jest-dir /private/tmp/jest_dx`).not.toMatch(re)
   })
 
   it('30 perc alatti --jest-min-age-minutes-et megtagad', () => {

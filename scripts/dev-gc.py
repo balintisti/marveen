@@ -143,9 +143,12 @@ def collect_jest(dirs, max_age_s, now, dry_run):
 
 
 def collect_jest_cap(dirs, cap_bytes, min_age_s, now, dry_run):
-    """After the age sweep: evict the OLDEST files until each jest_dx is under cap, but never a file
-    younger than min_age_s -- a running jest reads those (card 4138aa04, 2026-09-29: one night of
-    worktrees took jest_dx to 10.9 GB inside the 24 h age window and the disk to 97%).
+    """After the age sweep: evict the OLDEST files until each jest_dx is under cap, never a file
+    written in the last min_age_s (card 4138aa04, 2026-09-29: one night of worktrees took jest_dx to
+    10.9 GB inside the 24 h age window and the disk to 97%).
+    WHAT THE FLOOR DOES NOT DO (didi, 07:48): on a cache HIT jest only READS the file, so mtime shows
+    writes, not reads -- a running jest can be reading files older than the floor (measured: 662 in
+    one hour). That is why main() skips this whole pass while any jest process runs.
     Returns (files, bytes, refused)."""
     files = size = 0
     refused = []
@@ -177,6 +180,26 @@ def collect_jest_cap(dirs, cap_bytes, min_age_s, now, dry_run):
             files += 1
             size += blocks
     return files, size, refused
+
+
+JEST_PROCESS_PATTERN = r"node_modules/(\.bin/jest|jest/bin/jest|jest-cli/bin/jest|jest-worker/)"
+
+
+def jest_running(pgrep):
+    """True when a jest process exists -- or when that cannot be asked (fail-closed: the cap pass is
+    skipped rather than evict under a run it cannot see).
+    The pattern is the jest BINARY, not the word: a bare `jest` also matches this very process when
+    it runs with --jest-dir/--jest-cap-mb, and the cap would then never run (npx/npm exec both end
+    in node_modules/.bin/jest; workers run from jest-worker)."""
+    try:
+        r = subprocess.run([pgrep, "-f", JEST_PROCESS_PATTERN], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return True
+    if r.returncode == 1:
+        return False            # pgrep: no match
+    if r.returncode != 0:
+        return True             # pgrep itself failed: assume a run
+    return any(pid.strip() and int(pid) != os.getpid() for pid in r.stdout.split())
 
 
 def newest_mtime(path):
@@ -487,6 +510,7 @@ def main(argv=None):
                     help="PATH:remote1,remote2 -- override the repos (tests)")
     ap.add_argument("--wt-min-age-hours", type=float, default=48.0)
     ap.add_argument("--tmux", help="tmux binary to ask (tests)")
+    ap.add_argument("--pgrep", default="/usr/bin/pgrep", help="pgrep binary to ask whether jest runs (tests)")
     ap.add_argument("--apply-worktrees", action="store_true",
                     help="actually remove; without it the worktree half only reports")
     a = ap.parse_args(argv)
@@ -509,10 +533,14 @@ def main(argv=None):
     files, size, refused = collect_jest(a.jest_dir or default_jest_dirs(), max_age_s, now, a.dry_run)
     print("%s %sjest_dx: %d files, %.2f GiB%s" % (
         stamp, tag, files, size / 2**30, (" | REFUSED dirs: %s" % refused) if refused else ""))
-    jf, js, _jref = collect_jest_cap(a.jest_dir or default_jest_dirs(), a.jest_cap_mb * 2**20,
-                                     a.jest_min_age_minutes * 60, now, a.dry_run)
-    print("%s %sjest_dx cap (%.0f MB each, nothing under %.0f min): %d files, %.2f GiB" % (
-        stamp, tag, a.jest_cap_mb, a.jest_min_age_minutes, jf, js / 2**30))
+    if jest_running(a.pgrep):
+        print("%s %sjest_dx cap: SKIPPED -- a jest process is running (or pgrep could not be asked);"
+              " it may be reading cache files of any age" % (stamp, tag))
+    else:
+        jf, js, _jref = collect_jest_cap(a.jest_dir or default_jest_dirs(), a.jest_cap_mb * 2**20,
+                                         a.jest_min_age_minutes * 60, now, a.dry_run)
+        print("%s %sjest_dx cap (%.0f MB each, nothing under %.0f min): %d files, %.2f GiB" % (
+            stamp, tag, a.jest_cap_mb, a.jest_min_age_minutes, jf, js / 2**30))
 
     failures = 0
     if not a.skip_compile_cache:
