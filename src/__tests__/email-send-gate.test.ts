@@ -120,6 +120,22 @@ describe('gateDecision', () => {
     ).toBe(false)
   })
 
+  // Card 27977d33 (didi's mutation battery on 845e457f): three behaviours
+  // were right and held by nothing -- each mutant below left the suite green.
+  it('pins the three shapes no test held: filename in code, resend subdomain, popen', () => {
+    const bash = (command: string) => gateDecision('Bash', { command })
+    // C -- the `(?!-\w)` filename exclusion on the CODE path: a one-liner that
+    // merely names resend-email.service.ts next to an unrelated .send() is not
+    // a send. (The Bash-path twin is the test above; this is the code string.)
+    expect(bash(`node -e "console.log('resend-email.service.ts'); obj.send()"`).deny).toBe(false)
+    // CONTROL for C: the same shape WITHOUT the filename is gated.
+    expect(bash(`node -e "resend.emails.send({to: 'a@b.c'})"`).deny).toBe(true)
+    // D -- a regional Resend host is still Resend.
+    expect(bash('curl -X POST https://eu.api.resend.com/emails').deny).toBe(true)
+    // E -- os.popen is an exec path like subprocess.
+    expect(bash(`python3 -c "import os; os.popen('sendmail a@b.c')"`).deny).toBe(true)
+  })
+
   it('allows ordinary Bash that does not send mail', () => {
     const bash = (command: string) => gateDecision('Bash', { command })
     expect(bash('git status').deny).toBe(false)
