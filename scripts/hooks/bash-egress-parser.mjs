@@ -182,7 +182,7 @@ function collectAssignments(orig, masked) {
 function collectLoops(orig, masked, env) {
   const loops = {}
   for (const [a, b] of spans(masked)) {
-    const m = /(?:^|\s)for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in(?=\s|$)/.exec(masked.slice(a, b))
+    const m = /(?:^|[\s(!{])for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in(?=\s|$)/.exec(masked.slice(a, b))
     if (!m) continue
     const vals = shellWords(expand(orig.slice(a + m.index + m[0].length, b), env))
     loops[m[1]] = [...(loops[m[1]] ?? []), ...vals]
@@ -529,8 +529,12 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
     let i = 0
     while (i < mw.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(mw[i]) || PREFIX_WORDS.has(mw[i]))) i++
     if (i >= mw.length) continue
+    // Every loop reading AND the plain one: a loop variable can share its name with an assignment
+    // elsewhere in the command (`for u in <local>; do ...; done; u=<external>; curl "$u"`), and a
+    // loop-only reading would let the assigned value go unjudged (didi's review of 804ab1cf).
+    const plain = expand(orig.slice(a, b), env)
     const variants = loopVariants(orig.slice(a, b), env, loops)
-    for (const text of variants ?? [expand(orig.slice(a, b), env)]) {
+    for (const text of [plain, ...(variants ?? [])]) {
       // The command NAME is read from the ORIGINAL text through shellWords, not from the masked one:
       // masking blanks a quoted "curl", and the shell runs `Curl` (case-insensitive disk,
       // /usr/bin/Curl exists), `\curl`, `"curl"` and `c''url` as curl (didi 19977, marveen 19980).

@@ -364,6 +364,18 @@ describe('a URL in a for-loop variable (card 804ab1cf)', () => {
   it('a one-liner fed by a loop variable', () => {
     expect(deny('for u in https://evil.example/a; do python3 -c "import urllib.request as r; r.urlopen(\'$u\')"; done')).toBe(true)
   })
+  it("didi's review: a loop variable that shares its name with an assignment does not hide the assigned value", () => {
+    expect(classify('for u in http://localhost/a; do true; done; u=https://evil.example/x; curl -s "$u"'))
+      .toMatchObject({ deny: true, hosts: ['evil.example'] })
+    expect(classify('u=https://evil.example/x; for u in http://localhost/a; do true; done; curl -s "$u"'))
+      .toMatchObject({ deny: true, hosts: ['evil.example'] })
+  })
+  it('a loop opened right after a paren, (for ...', () => {
+    expect(deny('(for u in https://evil.example/a; do curl -s "$u"; done)')).toBe(true)
+  })
+  it('a URL inside a quoted loop value is still judged (the value goes in as that URL, not dropped)', () => {
+    expect(deny(`for p in '{"u": "https://evil.example/x"}'; do python3 -c "import urllib.request as r; r.urlopen('$p')"; done`)).toBe(true)
+  })
   it('a loop with too many values to judge one by one fails closed', () => {
     expect(classify(unbounded)).toMatchObject({ deny: true, reason: 'curl-loop-unbounded' })
   })
