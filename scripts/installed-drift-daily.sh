@@ -11,8 +11,10 @@
 #                                           the triage path reads the log, a daily letter would not
 #   rc=1  NEM MERHETO ..................... the COORDINATOR, loudly: the meter is blind
 #   any other rc (crash, no node/tsx) ...... the coordinator too: also blind, only less politely
-# The letter goes through agent-msg.sh, the one route that checks the HTTP code AND the id. If even
-# that fails, this script exits non-zero and says so in the log -- a failed alarm is not silent.
+# The letter goes through alert-coordinator.sh (card 906e9159): agent-msg.sh WITH --force, the one
+# route that checks the HTTP code AND the id, and notify.sh to the owner when the coordinator's queue
+# refuses it -- a plain call went silent exactly when the coordinator was overloaded. If both fail,
+# this script exits non-zero and says so in the log -- a failed alarm is not silent.
 #
 # INSTALL (a launchd unit, NOT live on merge): bash scripts/install-launchd-unit.sh com.marveen.installed-drift
 #
@@ -24,7 +26,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG="${INSTALLED_DRIFT_LOG:-$ROOT/store/installed-drift.log}"
 NODE=/opt/homebrew/opt/node@22/bin/node
 CMD="${INSTALLED_DRIFT_CMD:-$NODE $ROOT/node_modules/tsx/dist/cli.mjs $ROOT/scripts/installed-drift-check.ts}"
-MSG_CMD="${INSTALLED_DRIFT_MSG:-bash $ROOT/scripts/agent-msg.sh marveen marveen -}"
+MSG_CMD="${INSTALLED_DRIFT_MSG:-bash $ROOT/scripts/alert-coordinator.sh}"   # --force + owner fallback (card 906e9159)
 
 OUT="$($CMD 2>&1)"
 RC=$?
@@ -40,7 +42,7 @@ esac
 # The meter is blind. Name it with its own first line, and where the rest is.
 FIRST="$(printf '%s\n' "$OUT" | grep -m1 -E 'NEM MERHETO|Error|error' || printf '%s\n' "$OUT" | head -1)"
 TEXT="installed-drift napi futas: NEM MERHETO (rc=$RC). ${FIRST:-(ures kimenet)} -- teljes kimenet: $LOG. A mero ma VAK: amig ez all, egy telepitett-es-repo elteres senkinek nem jelez."
-if SENT="$(printf '%s' "$TEXT" | $MSG_CMD 2>&1)" && printf '%s' "$SENT" | grep -q '^OK id='; then
+if SENT="$(printf '%s' "$TEXT" | $MSG_CMD 2>&1)" && printf '%s' "$SENT" | grep -q '^OK'; then
   printf '[%s] jelezve: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$(printf '%s' "$SENT" | head -1)" >> "$LOG"
   exit 1
 fi

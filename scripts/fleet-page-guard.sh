@@ -50,6 +50,7 @@ MSG=$(printf '%s\n\n%s\n\n%s\n' \
 ODA NEM JUT EL. A javitas: ird be a hianyzo mondatot a nevezett lap(ok)ba, flock alatt,
 horgonyosan, es futtasd ujra ezt: python3 scripts/agent-core-check.py  (kartya b493b5a5)")
 
-printf '%s' "$MSG" | bash "$ROOT/scripts/agent-msg.sh" marveen marveen - 2>&1 \
-  | grep -E 'OK id|FAIL|NEM KULDTEM' >> "$LOG"
+# Through alert-coordinator.sh (card 906e9159): --force to the coordinator, the owner as the
+# fallback. A plain agent-msg.sh call went silent whenever the coordinator's queue was full.
+printf '%s' "$MSG" | bash "$ROOT/scripts/alert-coordinator.sh" >> "$LOG" 2>&1
 exit "$RC"
