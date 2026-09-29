@@ -30,7 +30,8 @@ ROOT = os.environ.get('SAW_ROOT', os.path.dirname(os.path.dirname(os.path.abspat
 OUTCOME = os.path.join(ROOT, 'store', 'schedule-last-outcome.json')
 STATE = os.path.join(ROOT, 'store', 'schedule-artifact-watch.state.json')
 LOG = os.path.join(ROOT, 'store', 'schedule-artifact-watch.log')
-MSG = os.environ.get('SAW_MSG', f'bash {ROOT}/scripts/agent-msg.sh marveen marveen -')
+# alert-coordinator.sh: --force past the queue gate, the owner as the fallback (card 906e9159)
+MSG = os.environ.get('SAW_MSG', f'bash {ROOT}/scripts/alert-coordinator.sh')
 
 # task -> the file its round writes when it gets to the end, and how long a round may take
 WATCH = {
@@ -46,7 +47,7 @@ def log(text, now):
 
 def send(text):
     r = subprocess.run(MSG, shell=True, input=text, capture_output=True, text=True)
-    return r.returncode == 0 and r.stdout.startswith('OK id='), (r.stdout + r.stderr).strip()[:200]
+    return r.returncode == 0 and r.stdout.startswith('OK'), (r.stdout + r.stderr).strip()[:200]
 
 
 def main():
