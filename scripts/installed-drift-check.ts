@@ -3,6 +3,7 @@
  * INSTALLED-VS-TRACKED DRIFT, lanes C and D (card 8027ebee).
  *
  *   lane C  launchd plists   scripts/com.marveen.*.plist.template -> ~/Library/LaunchAgents/
+ *           + the DEFAULT units an installer script writes (install-macos.sh, update.sh run_unit_maintenance)
  *   lane D  git hooks        scripts/install-*-hook.sh            -> .git/hooks/
  *
  * The seeded lane (~/.claude/scheduled-tasks) is NOT here: `scripts/seed-drift-check.ts`
@@ -196,6 +197,64 @@ function laneC(): void {
   }
 }
 
+// --- LANE C, second half: DEFAULT units an installer SCRIPT writes (card 6c22da86) ----------
+// The template half above reports a missing unit as "not installed, not drift", and rightly: a
+// template unit is opt-in. But some units are written by an installer script's heredoc, and the
+// installers call those by DEFAULT -- install-macos.sh on a new Mac, update.sh's
+// run_unit_maintenance on an existing one. Measured 2026-09-29: update.sh had not run on this Mac
+// since 08-16 (the running tree is updated by ff + build + kickstart), so two default units
+// (channel-keepalive-probe, main-inbox-observer) were never installed, and this meter could not
+// see it -- they have no template. The keepalive's absence cost 12 respawns and 149 stale warnings
+// in one night. A default unit with no plist IS drift.
+// The expected set is DERIVED from the two callers' text, never listed here: a hand list is the
+// shape that went stale. No installer runs and launchctl is not asked; only the plist's presence
+// is measured (its content is a heredoc, so there is nothing to render and compare).
+function defaultUnitInstallers(): Map<string, string> {
+  const scriptsDir = join(SOURCE_ROOT, 'scripts');
+  const named = new Map<string, Set<string>>();   // installer -> the callers that name it
+  const refs = (text: string) => [...text.matchAll(/scripts\/(install-[A-Za-z0-9_-]+\.sh)/g)].map((m) => m[1]);
+  const body = (text: string, fn: string) =>
+    new RegExp(`^${fn}\\(\\) \\{\\n([\\s\\S]*?)^\\}$`, 'm').exec(text)?.[1] ?? '';
+
+  const macos = join(SOURCE_ROOT, 'install-macos.sh');
+  const add = (f: string, by: string) => named.set(f, (named.get(f) ?? new Set<string>()).add(by));
+  if (existsSync(macos)) for (const f of refs(readFileSync(macos, 'utf-8'))) add(f, 'install-macos.sh');
+
+  const update = join(SOURCE_ROOT, 'update.sh');
+  if (existsSync(update)) {
+    const text = readFileSync(update, 'utf-8');
+    const steps = [...body(text, 'run_unit_maintenance').matchAll(/^\s*([A-Za-z_][A-Za-z0-9_]*)\b/gm)].map((m) => m[1]);
+    for (const step of steps) for (const f of refs(body(text, step))) add(f, `update.sh ${step}`);
+  }
+
+  const units = new Map<string, string>();   // label -> "<installer> (<callers>)"
+  for (const [f, by] of named) {
+    const path = join(scriptsDir, f);
+    if (!existsSync(path)) continue;
+    const src = readFileSync(path, 'utf-8');
+    if (!src.includes('Library/LaunchAgents')) continue;
+    const label = /^LABEL="(com\.marveen\.[^"$]+)"$/m.exec(src)?.[1];
+    if (label) units.set(label, `${f} (${[...by].join(' + ')})`);
+  }
+  return units;
+}
+
+function laneCDefaults(): void {
+  if (process.platform !== 'darwin' && !process.env.LAUNCH_AGENTS_DIR) return;
+  const targetDir = process.env.LAUNCH_AGENTS_DIR ?? join(HOME, 'Library', 'LaunchAgents');
+  const templated = new Set(readdirSync(join(SOURCE_ROOT, 'scripts'))
+    .filter((f) => f.endsWith('.plist.template')).map((f) => f.replace(/\.plist\.template$/, '')));
+  for (const [label, via] of [...defaultUnitInstallers()].sort()) {
+    if (templated.has(label)) continue;   // the template half above already measured it
+    const installer = via.split(' ')[0];
+    if (existsSync(join(targetDir, `${label}.plist`))) {
+      findings.push({ lane: 'C unit', name: label, text: 'TELEPITVE (alapertelmezett; a tartalmat a telepito heredocbol irja, nincs mit osszevetni)', drift: false, via });
+    } else {
+      findings.push({ lane: 'C unit', name: label, text: `ALAPERTELMEZETT UNIT HIANYZIK -- a telepitok alapbol rakjak, itt nincs plist. Telepites: bash scripts/${installer} --load`, drift: true, via });
+    }
+  }
+}
+
 // --- LANE D: .git/hooks -----------------------------------------------------
 // A hook is GENERATED from a heredoc and never committed, so the "did this blob
 // ever exist in history" probe says OUTSIDE for all of them and that is not a
@@ -277,7 +336,7 @@ function laneD(): void {
 function main(): number {
   const args = process.argv.slice(2);
   const both = !args.includes('--plists') && !args.includes('--hooks');
-  if (both || args.includes('--plists')) laneC();
+  if (both || args.includes('--plists')) { laneC(); if (!stopped) laneCDefaults(); }
   if (!stopped && (both || args.includes('--hooks'))) laneD();
 
   if (stopped) { console.log(`installed-drift: NEM MERHETO -- ${stopped}`); return 1; }
