@@ -142,6 +142,43 @@ def collect_jest(dirs, max_age_s, now, dry_run):
     return files, size, refused
 
 
+def collect_jest_cap(dirs, cap_bytes, min_age_s, now, dry_run):
+    """After the age sweep: evict the OLDEST files until each jest_dx is under cap, but never a file
+    younger than min_age_s -- a running jest reads those (card 4138aa04, 2026-09-29: one night of
+    worktrees took jest_dx to 10.9 GB inside the 24 h age window and the disk to 97%).
+    Returns (files, bytes, refused)."""
+    files = size = 0
+    refused = []
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue
+        if not jest_dir_is_allowed(d):
+            refused.append(d)
+            continue
+        entries = []
+        for root, _subdirs, names in os.walk(d, followlinks=False):
+            for n in names:
+                p = os.path.join(root, n)
+                try:
+                    st = os.lstat(p)
+                except OSError:
+                    continue
+                entries.append((st.st_mtime, st.st_blocks * 512, p))
+        total = sum(e[1] for e in entries)
+        for mtime, blocks, p in sorted(entries):
+            if total <= cap_bytes or now - mtime < min_age_s:
+                break  # oldest first: once one file is too young, every later one is too
+            if not dry_run:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    continue
+            total -= blocks
+            files += 1
+            size += blocks
+    return files, size, refused
+
+
 def newest_mtime(path):
     """Newest mtime of the directory and the files directly in it; None if unreadable."""
     try:
@@ -444,6 +481,8 @@ def main(argv=None):
     ap.add_argument("--skip-compile-cache", action="store_true")
     ap.add_argument("--compile-cache-dir", action="append", help="override the dirs (tests)")
     ap.add_argument("--compile-cache-cap-mb", type=float, default=1024.0)
+    ap.add_argument("--jest-cap-mb", type=float, default=4096.0)
+    ap.add_argument("--jest-min-age-minutes", type=float, default=60.0)
     ap.add_argument("--wt-repo", action="append", type=parse_repo_arg,
                     help="PATH:remote1,remote2 -- override the repos (tests)")
     ap.add_argument("--wt-min-age-hours", type=float, default=48.0)
@@ -453,6 +492,9 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.max_age_hours < 1:
         print("ERROR: --max-age-hours below 1 would reach a live run; refusing")
+        return 2
+    if a.jest_min_age_minutes < 30:
+        print("ERROR: --jest-min-age-minutes below 30 would reach a live jest run; refusing")
         return 2
     if a.wt_min_age_hours < 24:
         print("ERROR: --wt-min-age-hours below 24 would reach a tree in use today; refusing")
@@ -467,6 +509,10 @@ def main(argv=None):
     files, size, refused = collect_jest(a.jest_dir or default_jest_dirs(), max_age_s, now, a.dry_run)
     print("%s %sjest_dx: %d files, %.2f GiB%s" % (
         stamp, tag, files, size / 2**30, (" | REFUSED dirs: %s" % refused) if refused else ""))
+    jf, js, _jref = collect_jest_cap(a.jest_dir or default_jest_dirs(), a.jest_cap_mb * 2**20,
+                                     a.jest_min_age_minutes * 60, now, a.dry_run)
+    print("%s %sjest_dx cap (%.0f MB each, nothing under %.0f min): %d files, %.2f GiB" % (
+        stamp, tag, a.jest_cap_mb, a.jest_min_age_minutes, jf, js / 2**30))
 
     failures = 0
     if not a.skip_compile_cache:

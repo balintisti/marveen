@@ -99,6 +99,62 @@ print(json.dumps({"drop": [n for n, _ in drop], "skipped": skipped}))
   return JSON.parse(out.trim()) as { drop: string[]; skipped: Record<string, string[]> }
 }
 
+// Kartya 4138aa04 (2026-09-29): egyetlen munkas ejszaka a 24 oras KOR-ablakon BELUL 10,9 GB-ra
+// vitte a jest_dx-et, a lemez 97%-ra ment. A kor-takaritas ezt nem latja; a MERET-plafon igen --
+// de a legfrissebb fajlokhoz (--jest-min-age-minutes) sosem nyul, azokat egy futo jest olvassa.
+function capFixture() {
+  const base = mkTmp('devgc-cap-')
+  const d = join(base, 'jest_dx')
+  mkdirSync(join(d, 'sub'), { recursive: true })
+  const body = 'x'.repeat(100 * 1024)
+  const now = Date.now() / 1000
+  const f = (name: string, ageMin: number) => {
+    const p = join(d, 'sub', name)
+    writeFileSync(p, body)
+    utimesSync(p, now - ageMin * 60, now - ageMin * 60)
+    return p
+  }
+  // all inside the 24 h age window, so the age sweep alone removes none of them
+  return { d, oldest: f('a.map', 180), middle: f('b.map', 150), newer: f('c.map', 120), fresh: f('d.map', 5) }
+}
+
+describe('dev-gc: jest_dx meret-plafon (4138aa04)', () => {
+  it('a plafon felett a LEGREGEBBI megy eloszor, amig ala nem er -- a 24 oran BELULI is', () => {
+    const f = capFixture()
+    const out = run(['--jest-dir', f.d, '--jest-cap-mb', '0.25'])
+    expect(out).toMatch(/jest_dx cap \(0 MB each, nothing under 60 min\): 2 files/)
+    expect(existsSync(f.oldest)).toBe(false)
+    expect(existsSync(f.middle)).toBe(false)
+    expect(existsSync(f.newer)).toBe(true)
+    expect(existsSync(f.fresh)).toBe(true)
+  })
+
+  it('a --jest-min-age-minutes alatti fajl MARAD, meg ha a plafon felett is vagyunk (futo jest)', () => {
+    const f = capFixture()
+    run(['--jest-dir', f.d, '--jest-cap-mb', '0.01'])
+    expect(existsSync(f.oldest) || existsSync(f.middle) || existsSync(f.newer)).toBe(false)
+    expect(existsSync(f.fresh)).toBe(true)
+  })
+
+  it('CONTROL: a plafon alatt a plafon-lepes nem torol semmit', () => {
+    const f = capFixture()
+    expect(run(['--jest-dir', f.d, '--jest-cap-mb', '100'])).toMatch(/jest_dx cap .*: 0 files/)
+    expect(existsSync(f.oldest)).toBe(true)
+  })
+
+  it('30 perc alatti --jest-min-age-minutes-et megtagad', () => {
+    let rc = 0
+    try {
+      execFileSync('python3', [SCRIPT, '--skip-db', '--skip-worktrees', '--skip-compile-cache', '--jest-min-age-minutes', '10'], {
+        encoding: 'utf8',
+      })
+    } catch (e: any) {
+      rc = e.status
+    }
+    expect(rc).toBe(2)
+  })
+})
+
 describe('dev-gc: e2e DB-k kivalasztasa (plan_db)', () => {
   it('egy regi, tetlen crm_e2e_<agens>_<utotag> megy', () => {
     expect(plan([[1, 'crm_e2e_dexter_a1', 0]], { 1: 30 }).drop).toEqual(['crm_e2e_dexter_a1'])
