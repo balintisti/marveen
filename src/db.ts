@@ -3072,6 +3072,17 @@ export function getKanbanCardFieldEvents(cardId: string): KanbanCardFieldEvent[]
     .all(cardId) as KanbanCardFieldEvent[]
 }
 
+/**
+ * A closing that overrode an open verdict -- card 5a967042. Written to the
+ * field-event table so it shows in the card's history next to the status
+ * change it allowed: `from_value` holds what was open, `to_value` the reason.
+ */
+export function recordKanbanCloseOverride(cardId: string, openVerdicts: string, reason: string, actor: string | null): void {
+  db.prepare(
+    'INSERT INTO kanban_card_field_events (card_id, field, from_value, to_value, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(cardId, 'close_override', openVerdicts, reason, actor, Math.floor(Date.now() / 1000))
+}
+
 /** One row of the merged card history: a status transition or a field rewrite. */
 export type KanbanHistoryEntry =
   | (KanbanCardEvent & { kind: 'status' })

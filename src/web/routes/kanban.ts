@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import {
   listKanbanCards, countArchivedKanbanCards, kanbanAssigneeExists, createKanbanCard, updateKanbanCard,
@@ -23,7 +24,9 @@ import {
   getTokenPruneLag,
   getStuckKanbanCards,
   type TokenPruneLag,
+  recordKanbanCloseOverride,
 } from '../../db.js'
+import { openVerdicts, overrideReason, closeRefusal, type OpenVerdict } from '../kanban-verdict-gate.js'
 import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
 import { kanbanCreateError } from '../kanban-create-validation.js'
 import { normalizeDueDate, DUE_DATE_ZONE, DUE_DATE_ACCEPTED } from '../kanban-due-date.js'
@@ -275,6 +278,27 @@ export const KANBAN_RESERVED_SEGMENTS = ['archived', 'labels', 'assignees', 'hea
  *  all three arms, and a literal route added later is covered by one entry here --
  *  not by remembering to order the handlers correctly.
  */
+/**
+ * THE CLOSING GATE -- card 5a967042. Answers 409 and returns true when the card
+ * has an open verdict and the caller gave no reason to close it anyway. With a
+ * reason, the closing goes ahead and the reason is written to the card's history
+ * (`close_override`), next to the status change it allowed. The parser and its
+ * rules live in kanban-verdict-gate.ts.
+ */
+function closeBlocked(res: ServerResponse, cardId: string, body: unknown, actor: unknown): boolean {
+  const open: OpenVerdict[] = openVerdicts(getKanbanComments(cardId))
+  if (open.length === 0) return false
+  const reason = overrideReason(body)
+  if (!reason) {
+    json(res, closeRefusal(open), 409)
+    return true
+  }
+  const who = typeof actor === 'string' && actor.trim() !== '' ? actor.trim() : null
+  recordKanbanCloseOverride(cardId, JSON.stringify(open.map((v) => ({ author: v.author, line: v.line }))), reason, who)
+  logger.warn({ cardId, open, actor: who }, 'Kanban card closed over an open verdict, with a stated reason')
+  return false
+}
+
 /**
  * A move that changed no rows, put into words that name WHICH condition failed.
  *
@@ -888,7 +912,9 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
       // mezo-tortenet "ki" fele nemán elveszett volna. A `merge-tree` errol semmit nem
       // mondott -- a ket valtozas a fajl KET KULONBOZO regiojaban all.
       // MERVE a seam-en: a `kanban-field-history.test.ts` ket esete 400-at kapott 200 helyett.
-      const PUT_CONTROL_FIELDS = ['actor'] as const
+      // `override_reason` is a control field too: the reason a closing overrides an
+      // open verdict (card 5a967042), never stored on the card.
+      const PUT_CONTROL_FIELDS = ['actor', 'override_reason'] as const
       const sentKeys = Object.keys(data).filter(
         (k) => !(KANBAN_UPDATABLE as readonly string[]).includes(k)
              && !(PUT_CONTROL_FIELDS as readonly string[]).includes(k),
@@ -1029,6 +1055,12 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
         return true
       }
     }
+    // CARD 5a967042: a card does not close over an open verdict. Only a real
+    // transition to done is gated -- an echo of a card already done is not a
+    // closing, and blocking it would lock the card out of every inline edit.
+    if (roCard && data.status === 'done' && (roCard as { status?: string }).status !== 'done') {
+      if (closeBlocked(res, id, data, actor)) return true
+    }
     const result = updateKanbanCard(id, data, actor)
     if (result.outcome === 'not-found') { json(res, { error: 'Kártya nem található' }, 404); return true }
 
@@ -1078,7 +1110,13 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   if (kanbanMoveMatch && method === 'POST') {
     const id = decodeURIComponent(kanbanMoveMatch[1])
     const body = await readBody(req)
-    const { status, sort_order, actor } = JSON.parse(body.toString())
+    const parsedMove = JSON.parse(body.toString())
+    const { status, sort_order, actor } = parsedMove
+    // CARD 5a967042: the move to done is where a card closes; see closeBlocked.
+    if (status === 'done') {
+      const current = getKanbanCard(id)
+      if (current && current.status !== 'done' && closeBlocked(res, id, parsedMove, actor)) return true
+    }
     // A HAROM-ALLAPOTU KIMENET ES A TORZS DIAGNOSZTIKAJA EGYUTT MARAD, es a sorrend a lenyeg
     // (kartya aca11ba5 x a 09-05-i /move-naplozas). A torzs azert naplozott, mert a BOOLEAN
     // hamis erteke KET dolgot fedett -- "nincs ilyen kartya" es "nulla sor valtozott" --, es
@@ -1121,13 +1159,18 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // absent means "no actor, no reason", never an error.
     let actor = 'ismeretlen'
     let reason: unknown
+    let parsedArchive: unknown = null
     try {
       const parsed = JSON.parse((await readBody(req)).toString())
       if (parsed && typeof parsed === 'object') {
+        parsedArchive = parsed
         if (typeof parsed.actor === 'string' && parsed.actor.trim() !== '') actor = parsed.actor.trim()
         reason = parsed.reason
       }
     } catch { /* empty or non-JSON body: the documented shape */ }
+
+    // CARD 5a967042: archiving takes a card out of sight as surely as closing it.
+    if (getKanbanCard(id) && closeBlocked(res, id, parsedArchive, actor)) return true
 
     // Read the comments BEFORE archiving: the scan is about what the archive is
     // taking out of sight. Archiving does not touch comments today, but the
