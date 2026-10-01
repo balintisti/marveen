@@ -68,6 +68,11 @@ describe('POST /api/kanban -- unknown fields are warned, not rejected', () => {
     warn = vi.spyOn(logger, 'warn').mockImplementation(() => logger)
   })
   afterEach(() => { warn.mockRestore() })
+  // OURS: this install's POST also warns on an empty `project` (kanban-project-warning.ts),
+  // a different, deliberate warning. These assertions are about the UNKNOWN-KEY warning, so
+  // they count only that one.
+  const UNKNOWN_KEY_MSG = 'POST /api/kanban: ismeretlen mező(k), csendben eldobva'
+  const unknownKeyCalls = () => warn.mock.calls.filter((c: unknown[]) => c[1] === UNKNOWN_KEY_MSG)
 
   it('an unrecognised key logs a WARN naming the key, but the write still succeeds', async () => {
     const { ctx, out } = postCtx({ title: 'Typo field', descrpition: 'oops' })
@@ -83,13 +88,19 @@ describe('POST /api/kanban -- unknown fields are warned, not rejected', () => {
   it('`agent` itself is never warned as unknown -- it is a recognised, handled key', async () => {
     const { ctx } = postCtx({ title: 'Agent only', agent: 'newton' })
     expect(await tryHandleKanban(ctx)).toBe(true)
-    expect(warn).not.toHaveBeenCalled()
+    expect(unknownKeyCalls()).toHaveLength(0)
+  })
+
+  it('OURS: `actor` is a known create field (createKanbanCard writes it), never warned', async () => {
+    const { ctx } = postCtx({ title: 'With actor', assignee: 'newton', actor: 'friday' })
+    expect(await tryHandleKanban(ctx)).toBe(true)
+    expect(unknownKeyCalls()).toHaveLength(0)
   })
 
   it('a fully known body (writable fields + id) logs no warning', async () => {
     const { ctx } = postCtx({ id: 'k1', title: 'Clean card', status: 'planned', assignee: 'newton' })
     expect(await tryHandleKanban(ctx)).toBe(true)
-    expect(warn).not.toHaveBeenCalled()
+    expect(unknownKeyCalls()).toHaveLength(0)
   })
 
   // Szotasz's review on #1501, point 2: `sort_order` and `archived_at` are in
@@ -126,7 +137,7 @@ describe('POST /api/kanban -- unknown fields are warned, not rejected', () => {
   it('one warn call lists every unknown key, not one call per key', async () => {
     const { ctx } = postCtx({ title: 'Two typos', descrpition: 'oops', statuss: 'planned' })
     expect(await tryHandleKanban(ctx)).toBe(true)
-    expect(warn).toHaveBeenCalledTimes(1)
+    expect(unknownKeyCalls()).toHaveLength(1)
     expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({ keys: expect.arrayContaining(['descrpition', 'statuss']) }),
       expect.any(String),
