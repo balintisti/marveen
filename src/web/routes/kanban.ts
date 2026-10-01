@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import {
-  listKanbanCards, countArchivedKanbanCards, kanbanAssigneeExists, createKanbanCard, updateKanbanCard,
+  listKanbanCards, countArchivedKanbanCards, kanbanAssigneeExists, createKanbanCard, updateKanbanCard, KANBAN_CREATE_FIELDS,
   deleteKanbanCard, moveKanbanCard, archiveKanbanCard, unarchiveKanbanCard,
   getKanbanComments, addKanbanComment, getKanbanCardHistory, listKanbanProjects,
   getKanbanCard, getChildCards, getDb,
@@ -720,6 +720,18 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   if (path === '/api/kanban' && method === 'POST') {
     const body = await readBody(req)
     const data = JSON.parse(body.toString())
+    // `agent` -> `assignee` alias (upstream 826453d9, #1501): createKanbanCard reads named
+    // fields, so a body carrying `agent` instead of `assignee` made an OWNERLESS card with
+    // {ok:true}. Measured upstream: five such cards before anyone noticed. Only when
+    // `assignee` is absent (`=== undefined`: an explicit `assignee: null` still wins), and
+    // `agent` is removed only when the alias fired, so an ignored `agent` reaches the
+    // unknown-key warning below instead of vanishing unlogged.
+    let agentAliasApplied = false
+    if (data.assignee === undefined && typeof data.agent === 'string') {
+      data.assignee = data.agent
+      agentAliasApplied = true
+    }
+    if (agentAliasApplied) delete data.agent
     // The row cannot be created with a bad `status`/`priority` or no `title` --
     // SQLite's NOT NULL and CHECK see to that. Without this line the caller was
     // told so by an anonymous 500 while the field name went to the log, which is
@@ -754,6 +766,14 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
       }
     }
     const id = suppliedId || randomUUID().slice(0, 8)
+    // Unknown keys are WARNED, not rejected (upstream 826453d9): POST's caller population is
+    // not measured, and a 400 here would turn a silent data loss into an outage in card
+    // creation. The known set is what createKanbanCard itself writes (KANBAN_CREATE_FIELDS).
+    const knownPostFields = new Set<string>([...KANBAN_CREATE_FIELDS, 'id'])
+    const unknownKeys = Object.keys(data).filter((key) => !knownPostFields.has(key))
+    if (unknownKeys.length > 0) {
+      logger.warn({ id, keys: unknownKeys }, 'POST /api/kanban: ismeretlen mező(k), csendben eldobva')
+    }
     createKanbanCard({ ...data, id })
     // The card IS created either way -- see kanban-project-warning.ts for why
     // this is not a 400 and why the warning travels in the response body.
