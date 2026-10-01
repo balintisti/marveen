@@ -49,16 +49,24 @@ LARGE = [
     ('cf-up-1MB', ['-X', 'POST', '--data-binary', '@-', 'https://speed.cloudflare.com/__up']),
     ('cf-down-1MB', [f'https://speed.cloudflare.com/__down?bytes={LARGE_BYTES}']),
 ]
-FMT = '%{http_code} %{time_connect} %{time_appconnect} %{time_total}'
+# Tab-separated: remote_ip is EMPTY when no TCP connection was made, and an empty field must not
+# shift the others. The ip and curl's own error text say WHERE a failure happened (card 286de2bf,
+# 2026-10-01: www.googleapis.com failed 12% with TLS errors right after connect, every other host
+# ~2% -- one Google edge, or our path? Only the failing ip, kept per failure, can tell).
+FMT = '%{http_code}\t%{time_connect}\t%{time_appconnect}\t%{time_total}\t%{remote_ip}'
 
 
 def probe(args, stdin=None):
     """One request. Any failure to get an answer -- timeout, reset, DNS -- is code 000."""
     try:
-        r = subprocess.run([CURL, '-s', '-o', '/dev/null', '-m', str(CAP_S), '-w', FMT, *args],
+        r = subprocess.run([CURL, '-sS', '-o', '/dev/null', '-m', str(CAP_S), '-w', FMT, *args],
                            input=stdin, capture_output=True, timeout=CAP_S + 10)
-        code, conn, tls, total = r.stdout.decode().split()
-        return {'code': code, 'connect': float(conn), 'tls': float(tls), 'total': float(total), 'rc': r.returncode}
+        code, conn, tls, total, ip = r.stdout.decode().split('\t')
+        out = {'code': code, 'connect': float(conn), 'tls': float(tls), 'total': float(total), 'rc': r.returncode,
+               'ip': ip.strip()}
+        if r.returncode:
+            out['error'] = r.stderr.decode(errors='replace').strip()[:200]
+        return out
     except (subprocess.TimeoutExpired, ValueError, OSError) as e:
         return {'code': '000', 'connect': None, 'tls': None, 'total': None, 'rc': None, 'err': type(e).__name__}
 
@@ -101,6 +109,13 @@ def summary(hours, now):
         totals = sorted(r['total'] for r in rs if r['code'] != '000' and r['total'] is not None)
         spread = (f'median {totals[len(totals) // 2]:.2f} s, max {totals[-1]:.2f} s' if totals else 'no answer at all')
         out.append(f'  {name:12} {fails}/{len(rs)} no answer ({100 * fails / len(rs):.0f}%) | {spread}')
+        fail_ips = {}
+        for r in rs:
+            if r['code'] == '000' and 'ip' in r:     # older lines have no ip: not counted, not guessed
+                fail_ips[r['ip'] or 'no-connect'] = fail_ips.get(r['ip'] or 'no-connect', 0) + 1
+        if fail_ips:
+            out.append('               failed at: ' + ', '.join(f'{ip} x{n}' for ip, n in
+                                                         sorted(fail_ips.items(), key=lambda kv: -kv[1])))
     if runs == 0:
         out.append('  NO RUNS in the window: the probe itself did not run -- that is the finding.')
     print('\n'.join(out))

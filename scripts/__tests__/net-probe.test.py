@@ -12,10 +12,16 @@ import unittest
 SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'net-probe.py')
 
 FAKE_CURL = """#!/bin/bash
-# answers like curl -w, or not at all for a URL listed in FAKE_DEAD
+# answers like curl -w (tab-separated, remote_ip last). A URL in FAKE_DEAD fails like real
+# curl does: the -w line is STILL printed (code 000), the error goes to stderr, rc is non-zero.
+# FAKE_DEAD_IP is the address it "connected" to before failing; empty = no TCP connection.
 for a in "$@"; do url="$a"; done
-case " $FAKE_DEAD " in *" $url "*) exit 28;; esac
-printf '200 0.010 0.020 0.030'
+case " $FAKE_DEAD " in *" $url "*)
+  printf '000\\t0.050\\t0.000\\t0.120\\t%s' "$FAKE_DEAD_IP"
+  echo "curl: (35) LibreSSL SSL_connect: SSL_ERROR_SYSCALL in connection to $url" >&2
+  exit 35;;
+esac
+printf '200\\t0.010\\t0.020\\t0.030\\t192.0.2.7'
 """
 
 
@@ -35,8 +41,9 @@ class NetProbe(unittest.TestCase):
     def tearDown(self):
         subprocess.run(['rm', '-rf', self.tmp])
 
-    def run_probe(self, now, *args, dead=''):
-        env = dict(os.environ, NET_PROBE_LOG=self.log, NET_PROBE_CURL=self.curl, NET_PROBE_NOW=str(now), FAKE_DEAD=dead)
+    def run_probe(self, now, *args, dead='', dead_ip='172.217.113.4'):
+        env = dict(os.environ, NET_PROBE_LOG=self.log, NET_PROBE_CURL=self.curl, NET_PROBE_NOW=str(now), FAKE_DEAD=dead,
+                   FAKE_DEAD_IP=dead_ip)
         return subprocess.run([sys.executable, SCRIPT, *args], env=env, capture_output=True, text=True, timeout=60)
 
     def lines(self):
@@ -61,6 +68,32 @@ class NetProbe(unittest.TestCase):
         [line] = self.lines()
         self.assertEqual(line['results']['sentry']['code'], '000')
         self.assertEqual(line['results']['github']['code'], '200')
+
+    def test_a_failure_keeps_the_ip_and_curls_error_text(self):
+        # card 286de2bf: WHERE it failed is the question; a bare 000 cannot answer it
+        self.run_probe(at(4, 25), dead='https://www.googleapis.com/generate_204')
+        [line] = self.lines()
+        g = line['results']['googleapis']
+        self.assertEqual((g['code'], g['rc'], g['ip']), ('000', 35, '172.217.113.4'))
+        self.assertIn('SSL_ERROR_SYSCALL', g['error'])
+        ok = line['results']['github']
+        self.assertEqual((ok['code'], ok['ip']), ('200', '192.0.2.7'))
+        self.assertNotIn('error', ok)
+
+    def test_no_tcp_connection_is_an_empty_ip_not_a_shifted_field(self):
+        self.run_probe(at(4, 25), dead='https://www.googleapis.com/generate_204', dead_ip='')
+        g = self.lines()[0]['results']['googleapis']
+        self.assertEqual((g['code'], g['ip'], g['total']), ('000', '', 0.12))
+
+    def test_the_summary_names_the_failing_ips_and_skips_lines_without_one(self):
+        with open(self.log, 'w') as f:   # an OLD-format line (no ip): must not be counted or guessed
+            f.write(json.dumps({'ts': int(at(4, 5)), 'at': 'x', 'results': {'googleapis': {'code': '000', 'total': None}}}) + '\n')
+        self.run_probe(at(4, 15), dead='https://www.googleapis.com/generate_204')
+        self.run_probe(at(4, 25), dead='https://www.googleapis.com/generate_204')
+        self.run_probe(at(4, 35), dead='https://www.googleapis.com/generate_204', dead_ip='')
+        r = self.run_probe(at(4, 40), '--summary', '2')
+        self.assertRegex(r.stdout, r'googleapis\s+4/4 no answer')
+        self.assertIn('failed at: 172.217.113.4 x2, no-connect x1', r.stdout)
 
     def test_the_summary_counts_failures_per_target_in_the_window(self):
         self.run_probe(at(1, 25), dead='https://sentry.io/api/0/')    # outside a 2 h window at 04:30
