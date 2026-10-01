@@ -107,16 +107,23 @@ class Meter(unittest.TestCase):
         # merged, then ordinary later development touches 2 of its 10 lines
         r.branch_with('fix/fffffff6-evolved', 'f.txt', feature('F'), 'feat: F'); r.merge('fix/fffffff6-evolved')
         lines = feature('F'); lines[0] = 'F rewritten line zero'; lines[1] = 'F rewritten line one'
-        r.write('f.txt', lines); r.commit('refactor F')
+        r.write('f.txt', lines); r.commit('refactor F\n\nrevert to the plainer wording')  # 'revert' in the BODY only
+        # a real revert that touches f.txt but deletes none of F's lines: must not count against F
+        r.write('f.txt', lines + ['unrelated line added then reverted']); r.commit('feat: unrelated')
+        r.write('f.txt', lines); r.commit('Revert "feat: unrelated"')
         # merged, then a REVERT removes a fifth of it: under half, yet named a revert (didi's dilution case)
         r.git('checkout', '-q', '-b', 'fix/aaaabbb8-diluted', 'main')
         r.write('h_big.txt', feature('H', 40)); r.write('h_small.txt', feature('h', 10)); r.commit('feat: H')
         r.git('checkout', '-q', 'main'); r.merge('fix/aaaabbb8-diluted')
         os.remove(os.path.join(r.dir, 'h_small.txt')); r.commit('Revert "feat: H small part"')
+        # merged into a SHARED file, which later changes elsewhere: the delta still reverse-applies
+        r.branch_with('fix/abcabc12-shared-top', 'base.txt', feature('S', 5) + BODY, 'feat: S on top of base')
+        r.merge('fix/abcabc12-shared-top')
+        r.write('base.txt', feature('S', 5) + BODY[:-1] + ['the last shared line, rewritten']); r.commit('chore: tail')
         # project-less card with a ref, never merged
         r.branch_with('fix/99999997-projectless', 'g.txt', feature('G'), 'feat: G')
         cls.cards = [card('aaaaaaa1'), card('bbbbbbb2', priority='high'), card('ccccccc3'), card('ddddddd4'),
-                     card('eeeeeee5'), card('fffffff6'), card('99999997', project=None), card('aaaabbb8'),
+                     card('eeeeeee5'), card('fffffff6'), card('99999997', project=None), card('aaaabbb8'), card('abcabc12'),
                      card('12345678'), card('87654321', project=None), card('abcdef01', project='marveen'),
                      card('0bbbbbb2', status='planned')]
         cls.rc, cls.d, cls.proc = run(r, cls.cards)
@@ -147,6 +154,9 @@ class Meter(unittest.TestCase):
         self.assertEqual(self.v['aaaabbb8']['missing_share'], '10/50')
         self.assertEqual(len(self.v['aaaabbb8']['reverts']), 1)
 
+    def test_a_shared_file_changed_elsewhere_is_live(self):
+        self.assertNotIn('abcabc12', self.v)
+
     def test_cherry_picked_is_live(self):
         self.assertNotIn('ddddddd4', self.v)
 
@@ -170,7 +180,7 @@ class Meter(unittest.TestCase):
         self.assertEqual(self.v['12345678']['verdict'], 'NO-BRANCH')
         self.assertNotIn('abcdef01', self.v)          # other project
         self.assertNotIn('0bbbbbb2', self.v)          # not done/testing
-        self.assertEqual(self.d['summary']['done']['population'], 9)
+        self.assertEqual(self.d['summary']['done']['population'], 10)
 
     def test_ack_holds_only_while_fingerprint_matches(self):
         fp = self.v['bbbbbbb2']['fingerprint']
@@ -189,6 +199,12 @@ class Meter(unittest.TestCase):
         rc, d, _ = run(self.repo, [card('aaaaaaa1', status='planned')])
         self.assertEqual(rc, 1)
         self.assertIn('0 done/testing', d['error'])
+
+    def test_a_crash_still_writes_the_error(self):
+        # A card without an id makes the script raise; the result file must still say so.
+        rc, d, _ = run(self.repo, self.cards + [{'status': 'done', 'project': 'delta-crm'}])
+        self.assertEqual(rc, 1)
+        self.assertIn('crashed: KeyError', d['error'])
 
     def test_target_is_the_image_not_main(self):
         # live = the image built BEFORE the C revert: there C is fully live, whatever main says now.

@@ -54,7 +54,7 @@ It runs at 06:45, ahead of the 07:30 morning brief; a full run took 130-180 s on
 Exit: 0 measured (findings or not)   1 not measurable (no live SHA, git failure, no cards)
 Test seams: --live-sha, --cards-json, --no-fetch, --out, --acks, --cache.
 """
-import argparse, collections, hashlib, json, os, re, subprocess, sys, tempfile, time, urllib.request
+import argparse, collections, hashlib, json, os, re, signal, subprocess, sys, tempfile, time, urllib.request
 from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -77,6 +77,7 @@ ap.add_argument('--gcloud', default='/opt/homebrew/bin/gcloud')
 A = ap.parse_args()
 
 T0 = time.time()
+RUN_BUDGET_S = 1800   # a wedged run must say so, not hold the next 06:45 hostage in silence
 result = {'measured_at': datetime.now().astimezone().isoformat(timespec='seconds'),
           'repo': A.repo, 'error': None}
 
@@ -125,6 +126,23 @@ def live_sha():
     return tags
 
 
+def _crashed(kind, exc, tb):
+    # ANY uncaught error still writes the result file with `error` set (measured 2026-10-01: a
+    # crash left no file at all, so the brief would have shown YESTERDAY's numbers until the 26 h
+    # staleness check fired). The traceback still goes to stderr, i.e. the launchd log.
+    import traceback
+    traceback.print_exception(kind, exc, tb)
+    result['error'] = f'crashed: {kind.__name__}: {str(exc)[:200]}'
+    try:
+        write_out()
+    except Exception:
+        pass
+    os._exit(1)
+
+
+sys.excepthook = _crashed
+signal.signal(signal.SIGALRM, lambda *_: fail(f'run exceeded {RUN_BUDGET_S} s (git or gcloud wedged)'))
+signal.alarm(RUN_BUDGET_S)
 tags = live_sha()
 result['live'] = tags
 if not A.no_fetch:
@@ -211,6 +229,29 @@ fp_chain = git('rev-list', '--first-parent', LIVE, check=True).stdout.split()
 # NOT-LIVE cards had ONLY such commits). Still reported -- the content does differ -- but marked,
 # so the reader starts there.
 live_subjects = set(git('log', '--no-merges', '--format=%s', LIVE, check=True).stdout.splitlines())
+# Every commit named "revert..." in the live history, with the files it touched: ONE log call.
+# Asking per gap file walked the whole history once per file and took a run past 20 minutes
+# (measured 2026-10-01, the first live run, killed by its own alarm).
+# The SUBJECT decides: --grep matches any line of the message, and two ordinary fixes whose body
+# had a line starting "revert" were counted as reverts on the first run (610940f04, cfc0300ce).
+revert_files = collections.defaultdict(set)
+_cur = None
+for line in git('log', '--no-merges', '-i', '-E', '--grep=^revert', '--name-only', '--format=@%H %s',
+                LIVE, check=True).stdout.splitlines():
+    if line.startswith('@'):
+        h, _, subj = line[1:].partition(' ')
+        _cur = h if re.match(r'(?i)revert', subj) else None
+    elif line.strip() and _cur:
+        revert_files[line.strip()].add(_cur)
+
+
+def revert_removed(rev, path):
+    """Hashes of the lines a revert DELETED from one file."""
+    def calc():
+        d = git('show', '--format=', '-U0', '--no-renames', rev, '--', ':(top)' + path).stdout
+        return sorted({hashlib.sha1(x[1:].strip().encode()).hexdigest()[:12] for x in d.splitlines()
+                       if x.startswith('-') and not x.startswith('---') and len(x[1:].strip()) >= MIN_LINE})
+    return set(cached(f'r:{rev}:{path}', calc))
 
 
 def cached(key, fn):
@@ -283,21 +324,22 @@ def delta_gaps(base, tip):
         live = live_blobs.get(path, ZERO)
         if live == new:
             continue
-        key = f'd:{old}:{new}:{live}:{path}'
+        key = f'd2:{old}:{new}:{live}:{path}'
 
         def calc():
             p = git('diff', '--binary', '--full-index', '--no-renames', base, tip, '--', ':(top)' + path).stdout
             if not p.strip() or git('apply', '--cached', '--check', '-R', '-', inp=p, env=ENV_IDX).returncode == 0:
-                return [0, 0]
+                return [0, 0, []]
             d = git('diff', '-U0', '--no-renames', base, tip, '--', ':(top)' + path).stdout
             added = [x[1:].strip() for x in d.splitlines() if x.startswith('+') and not x.startswith('+++')]
             added = [x for x in added if len(x) >= MIN_LINE]
             have = collections.Counter(x.strip() for x in
                                        (git('cat-file', '-p', live).stdout if live != ZERO else '').splitlines())
-            return [sum(1 for x in added if have[x] == 0), len(added)]
-        miss, added = cached(key, calc)
+            gone = [x for x in added if have[x] == 0]
+            return [len(gone), len(added), sorted({hashlib.sha1(x.encode()).hexdigest()[:12] for x in gone})]
+        miss, added, gone = cached(key, calc)
         if miss:
-            gaps.append({'file': path, 'missing': miss, 'added': added})
+            gaps.append({'file': path, 'missing': miss, 'added': added, 'gone': gone})
     return gaps
 
 
@@ -339,9 +381,11 @@ for c in pop:
     missing_total = sum(g['missing'] for g in gaps)
     # A REVERT is judged by name, not by share (didi, e572a1c2): a revert riding on a big seam
     # branch is diluted below half (1c52b3e8's revert sat under 1% on 0bea63c0 and 15dd14db).
-    reverts = sorted({h for g in gaps for h in git(
-        'log', '--full-history', '-i', '-E', '--grep=^revert', '--format=%h', f"{tip_of[g['tip']]}..{LIVE}",
-        '--', ':(top)' + g['file']).stdout.split()})
+    # ...and a revert counts only if its diff DELETED one of this card's missing lines: file level
+    # alone flagged every card with any gap in a shared file a revert once touched (62 on the
+    # first run, mostly through one unrelated revert, 9bd764f1f).
+    reverts = sorted({h[:9] for g in gaps for h in revert_files.get(g['file'], ())
+                      if not is_anc(h, tip_of[g['tip']]) and revert_removed(h, g['file']) & set(g['gone'])})
     if missing_commits:
         rec['verdict'] = 'NOT-LIVE'
         subj = {k: git('log', '-1', '--format=%s', k).stdout.strip() for k in missing_commits}
@@ -359,7 +403,7 @@ for c in pop:
         # (EVOLVED), not headlined; a small lost hunk in it is caught only at batch close, by
         # close-measure with a reader -- this daily line cannot tell it from evolution.
         rec['verdict'] = 'LINES-MISSING'
-        rec['gaps'] = gaps[:20]
+        rec['gaps'] = [{k: v for k, v in g.items() if k != 'gone'} for g in gaps[:20]]
         rec['gap_count'] = len(gaps)
         rec['missing_share'] = f'{missing_total}/{added_total}'
         rec['reverts'] = reverts
