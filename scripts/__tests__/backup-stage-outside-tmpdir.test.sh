@@ -60,11 +60,17 @@ printf 'rarely read content' > "$FAKE/store/$PLANT"
 touch -a -t "$(date -v-10d +%Y%m%d%H%M 2>/dev/null || date -d '10 days ago' +%Y%m%d%H%M)" \
   "$FAKE/store/$PLANT"
 
+MARK="$TMP/.started"; touch "$MARK"; sleep 1   # -newer has 1 s resolution
 REAL_CP="$(command -v cp)"
 cat > "$SHIM/cp" <<EOF
 #!/bin/bash
 "$REAL_CP" "\$@"; rc=\$?
-find "$TMPROOT" -path "$TMP" -prune -o -type f -name "$PLANT" -atime +3 -print0 2>/dev/null | xargs -0 rm -f
+# Only directories created DURING this test can hold a stage: walking the whole temp root
+# on every cp took 132 s here with 53,869 leftover entries in it, and under the full
+# suite's load the runner's 200 s cap killed the test (rc 1, header only). A stage made
+# with mktemp -d in the temp root is a new top-level entry, so it is still swept.
+find "$TMPROOT" -mindepth 1 -maxdepth 1 -type d -newer "$MARK" ! -path "$TMP" -print0 2>/dev/null \
+  | xargs -0 -I{} find {} -type f -name "$PLANT" -atime +3 -print0 2>/dev/null | xargs -0 rm -f
 exit \$rc
 EOF
 chmod +x "$SHIM/cp"
