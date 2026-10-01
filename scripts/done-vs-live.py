@@ -146,8 +146,15 @@ signal.alarm(RUN_BUDGET_S)
 tags = live_sha()
 result['live'] = tags
 if not A.no_fetch:
-    r = git('fetch', '--quiet', '--prune', 'origin', timeout=180)
-    result['fetch'] = 'ok' if r.returncode == 0 else f'FAILED rc={r.returncode}: {r.stderr.strip()[:200]}'
+    # Two retries: this machine's outbound network flickers (card 286de2bf), and the first live
+    # run lost its fetch to one "Could not resolve host: github.com" (2026-10-01 10:44).
+    for attempt in range(3):
+        r = git('fetch', '--quiet', '--prune', 'origin', timeout=180)
+        if r.returncode == 0:
+            break
+        time.sleep(float(os.environ.get('DONE_VS_LIVE_RETRY_SLEEP', '15')))
+    result['fetch'] = ('ok' if attempt == 0 else f'ok after {attempt + 1} attempts') if r.returncode == 0 \
+        else f'FAILED rc={r.returncode} after 3 attempts: {r.stderr.strip()[:200]}'
 else:
     result['fetch'] = 'skipped'
 resolved = {}

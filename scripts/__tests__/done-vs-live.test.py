@@ -60,7 +60,7 @@ def feature(tag, n=10):
     return [f'{tag} feature line {i} with enough text' for i in range(n)]
 
 
-def run(repo, cards, live=None, acks=None):
+def run(repo, cards, live=None, acks=None, fetch=False):
     out = tempfile.mkdtemp(prefix='dvl-out-')
     cj = os.path.join(out, 'cards.json')
     with open(cj, 'w') as f:
@@ -70,8 +70,9 @@ def run(repo, cards, live=None, acks=None):
         json.dump(acks or {}, f)
     oj = os.path.join(out, 'out.json')
     r = subprocess.run([sys.executable, SCRIPT, '--repo', repo.dir, '--live-sha', live or repo.git('rev-parse', 'main'),
-                        '--cards-json', cj, '--no-fetch', '--out', oj, '--acks', aj,
-                        '--cache', os.path.join(out, 'cache.json')], capture_output=True, text=True, env=ENV)
+                        '--cards-json', cj, *([] if fetch else ['--no-fetch']), '--out', oj, '--acks', aj,
+                        '--cache', os.path.join(out, 'cache.json')], capture_output=True, text=True,
+                       env=dict(ENV, DONE_VS_LIVE_RETRY_SLEEP='0'))
     d = json.load(open(oj)) if os.path.exists(oj) else None
     shutil.rmtree(out)
     return r.returncode, d, r
@@ -205,6 +206,17 @@ class Meter(unittest.TestCase):
         rc, d, _ = run(self.repo, self.cards + [{'status': 'done', 'project': 'delta-crm'}])
         self.assertEqual(rc, 1)
         self.assertIn('crashed: KeyError', d['error'])
+
+    def test_a_failed_fetch_is_retried_then_reported_and_the_run_goes_on(self):
+        self.repo.git('remote', 'add', 'origin', '/nonexistent/delta-crm.git')
+        try:
+            rc, d, _ = run(self.repo, self.cards, fetch=True)
+        finally:
+            self.repo.git('remote', 'remove', 'origin')
+        self.assertEqual(rc, 0)
+        self.assertTrue(d['fetch'].startswith('FAILED'), d['fetch'])
+        self.assertIn('after 3 attempts', d['fetch'])
+        self.assertEqual(verdicts(d)['bbbbbbb2']['verdict'], 'NOT-LIVE')
 
     def test_target_is_the_image_not_main(self):
         # live = the image built BEFORE the C revert: there C is fully live, whatever main says now.
