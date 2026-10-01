@@ -80,6 +80,31 @@ def main():
         rc, sent, out, _ = run(d, answer(200, "failure", 201, "skipped"))
         check("older red after newer green: no alert", sent, 2)
 
+    with tempfile.TemporaryDirectory() as d:
+        # didi 21638: an answer WITHOUT a watched workflow is not a state change.
+        # Unchanged red main: full / no-Deploy / full / no-Deploy / full used to send 5 alerts.
+        full = answer(200, "failure", 201, "skipped")
+        ci_only = json.dumps(json.loads(full)[:1])
+        for g in (full, ci_only, full, ci_only, full):
+            rc, sent, out, _ = run(d, g)
+        check("missing workflow: full/partial x5 alerts exactly once", sent, 1)
+        rc, sent, out, _ = run(d, ci_only)
+        check("missing workflow: said NEM MERHETO in the log", "NEM MERHETO" in out and "Deploy to Cloud Run" in out, True)
+        state = json.load(open(os.path.join(d, "state.json")))
+        check("missing workflow: the key did not shrink", state["last_key"], "CI:failure|Deploy to Cloud Run:skipped")
+        # the way out: missing for 18 ticks in a row is said ONCE (17 more here = 18)
+        for _ in range(17):
+            rc, sent, out, _ = run(d, ci_only)
+        check("missing 18 ticks in a row: one notice", sent, 2)
+        check("the notice names the workflow", "Deploy to Cloud Run 18 egymas utani" in open(os.path.join(d, "notify-calls.txt")).read(), True)
+        rc, sent, out, _ = run(d, ci_only)
+        check("tick 19: not repeated", sent, 2)
+        # a full answer resets the streak, and a real change still alerts (the guard can say yes)
+        rc, sent, out, _ = run(d, full)
+        check("full answer clears the streak", "missing_streak" in json.load(open(os.path.join(d, "state.json"))), False)
+        rc, sent, out, _ = run(d, answer(300, "success", 301, "success"))
+        check("CONTROL: newer green after the gap is reported", sent, 3)
+
     if FAILS:
         print("\nFAILED: %d" % len(FAILS))
         sys.exit(1)

@@ -120,6 +120,34 @@ if stale:
         for wf, (got, have) in sorted(stale.items())))
     sys.exit(0)
 
+# A MISSING WORKFLOW IS NOT MEASURABLE, NOT A STATE (card fd1d30af, didi 21638). The same
+# unstable answer can also leave a watched workflow out entirely; the key then gets shorter,
+# reads as a change, and an unchanged red main sent five identical alerts in five ticks
+# (full / no-Deploy / full / no-Deploy / full). A workflow we have seen before and do not see
+# now says nothing about main: logged, state not moved.
+# The way out, so this guard is not a trap: if the same workflow stays missing for
+# MISSING_ALERT_TICKS ticks in a row (renamed, deleted, or pushed out of the --limit window),
+# that is said ONCE, and the streak restarts only after a full answer.
+MISSING_ALERT_TICKS = 18   # 18 x 600 s = 3 hours
+expected = watched or sorted(seen_ids)
+missing = sorted(wf for wf in expected if wf in seen_ids and wf not in latest)
+if missing:
+    streak = st.get("missing_streak", 0) + 1
+    st["missing_streak"] = streak
+    print(f"NEM MERHETO: {', '.join(missing)} hianyzik a valaszbol ({streak}. egymas utani tick) "
+          "-- nem ertesitek, az allapot nem lep")
+    if streak == MISSING_ALERT_TICKS:
+        msg = (f"CI-figyelo: a(z) {branch} agon {', '.join(missing)} {MISSING_ALERT_TICKS} egymas utani "
+               "lekeresben hianyzott a GitHub valaszabol, ezert az allapotat nem tudom merni. "
+               "Ha a munkafolyamatot atneveztek vagy toroltek, a CI_WATCH_WORKFLOWS-t kell igazitani.")
+        rc = subprocess.run(["bash", notify, msg]).returncode
+        if rc != 0:
+            st["missing_streak"] = streak - 1   # retry the notice on the next tick
+            print(f"AZ ERTESITES BUKOTT (notify rc={rc}) -- a kovetkezo futas ujraprobalja")
+    json.dump(st, open(state_path, "w"), indent=1)
+    sys.exit(0)
+st.pop("missing_streak", None)
+
 bad = {wf: r for wf, r in latest.items() if r["conclusion"] not in ("success", "skipped")}
 key = "|".join(f"{wf}:{r['conclusion']}" for wf, r in sorted(latest.items()))
 prev = st.get("last_key")
