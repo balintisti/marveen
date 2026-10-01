@@ -20,7 +20,8 @@ refs that name it (8 hex of the card id in the ref name, local + origin) are jud
                      resolution, or a legitimate rewrite. Only a reader can tell which, so it is
                      reported separately from (b). Without this step a reverted card reads as LIVE
                      (didi's finding on 575f38bd, comment 23869; the 1c52b3e8 revert). Flagged only
-                     when HALF or more of the delta's added lines are gone; below that it is
+                     when HALF or more of the delta's added lines are gone, or when a commit
+                     named "revert..." touched a gap file after the tip; otherwise it is
                      EVOLVED (ordinary later development), counted but not headlined.
   LIVE               neither.
   NO-BRANCH          no ref names the card: not measurable by this method, counted, not judged.
@@ -40,8 +41,11 @@ A RUN THAT DID NOT HAPPEN IS NOT A CLEAN RUN. The result file carries measured_a
 field; napindito-sections.py says "nem futott le" when the file is missing, stale or errored, so a
 dead meter and a quiet day stay distinguishable.
 
-Read-only toward everything but its own files: `git fetch` (refs only), a throwaway index file,
-and store/done-vs-live*.json. It never checks out, never writes a ref, never touches a worktree.
+What it WRITES: `git fetch --prune origin` updates the shared repo's origin/* refs and deletes the
+ones whose branch is gone (that is a write to the shared repo, said here because a fetch reads like
+a read -- didi, e572a1c2); a throwaway index file; store/done-vs-live*.json. It never checks out,
+never writes a local branch, never touches a worktree. A failed fetch does not stop the run, it is
+reported: the brief line says the refs are stale.
 
 INSTALL (a launchd unit, NOT live on merge): bash scripts/install-launchd-unit.sh com.marveen.done-vs-live
 It runs at 06:45, ahead of the 07:30 morning brief; a full run took 130-180 s on 2026-10-01
@@ -323,15 +327,21 @@ for c in pop:
                       f'{LIVE}...{crefs[ref]}').stdout.split():
             if cm not in missing_commits and not commit_in_live(cm):
                 missing_commits[cm] = ref
-    gaps, added_total = [], 0
+    gaps, added_total, tip_of = [], 0, {}
     shipped_tips = [t for t in sorted(set(crefs.values())) if is_anc(t, LIVE)]
     if not missing_commits:
         for tip in shipped_tips:
             base = landing_base(tip)
             if base and base != tip:
+                tip_of[tip[:9]] = tip
                 gaps += [dict(g, tip=tip[:9]) for g in delta_gaps(base, tip)]
                 added_total += delta_added(base, tip)
     missing_total = sum(g['missing'] for g in gaps)
+    # A REVERT is judged by name, not by share (didi, e572a1c2): a revert riding on a big seam
+    # branch is diluted below half (1c52b3e8's revert sat under 1% on 0bea63c0 and 15dd14db).
+    reverts = sorted({h for g in gaps for h in git(
+        'log', '--full-history', '-i', '-E', '--grep=^revert', '--format=%h', f"{tip_of[g['tip']]}..{LIVE}",
+        '--', ':(top)' + g['file']).stdout.split()})
     if missing_commits:
         rec['verdict'] = 'NOT-LIVE'
         subj = {k: git('log', '-1', '--format=%s', k).stdout.strip() for k in missing_commits}
@@ -342,7 +352,7 @@ for c in pop:
         rec['missing_commit_count'] = len(missing_commits)
         rec['partly_shipped'] = bool(shipped_tips)
         fp_src = sorted(missing_commits)
-    elif gaps and missing_total * 2 >= max(added_total, 1):
+    elif gaps and (missing_total * 2 >= max(added_total, 1) or reverts):
         # Half or more of the card's added lines are gone from the live tree: the shape of a revert
         # or a lost resolution. Below half it is the shape of ordinary later development: measured
         # 2026-10-01, 186 of 234 cards with any missing line were under 20%. That band is counted
@@ -352,6 +362,7 @@ for c in pop:
         rec['gaps'] = gaps[:20]
         rec['gap_count'] = len(gaps)
         rec['missing_share'] = f'{missing_total}/{added_total}'
+        rec['reverts'] = reverts
         fp_src = sorted(f"{g['tip']}:{g['file']}:{g['missing']}" for g in gaps)
     elif gaps:
         rec['verdict'] = 'EVOLVED'

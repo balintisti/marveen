@@ -73,6 +73,10 @@ def section_done_vs_live(root=DEFAULT_ROOT, now=None, max_age_h=26):
     nl_test = pick("testing", "NOT-LIVE") + pick("testing", "LINES-MISSING")
     when = datetime.fromtimestamp(measured).strftime("%H:%M")
     out = [f"{head} (merve {when}, elo kep {str(d.get('target'))[:12]}):"]
+    fetch = str(d.get("fetch") or "")
+    if fetch.startswith("FAILED"):
+        # didi, e572a1c2: a failed fetch measures yesterday's refs and looks clean. Say it.
+        out[0] = out[0][:-1] + " -- a git fetch NEM SIKERULT, a meres regi refeken ment):"
     if nl_done:
         hi = sum(1 for c in nl_done if c.get("priority") in ("urgent", "high"))
         part = sum(1 for c in nl_done if c.get("partly_shipped"))

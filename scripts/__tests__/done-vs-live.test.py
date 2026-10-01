@@ -108,10 +108,15 @@ class Meter(unittest.TestCase):
         r.branch_with('fix/fffffff6-evolved', 'f.txt', feature('F'), 'feat: F'); r.merge('fix/fffffff6-evolved')
         lines = feature('F'); lines[0] = 'F rewritten line zero'; lines[1] = 'F rewritten line one'
         r.write('f.txt', lines); r.commit('refactor F')
+        # merged, then a REVERT removes a fifth of it: under half, yet named a revert (didi's dilution case)
+        r.git('checkout', '-q', '-b', 'fix/aaaabbb8-diluted', 'main')
+        r.write('h_big.txt', feature('H', 40)); r.write('h_small.txt', feature('h', 10)); r.commit('feat: H')
+        r.git('checkout', '-q', 'main'); r.merge('fix/aaaabbb8-diluted')
+        os.remove(os.path.join(r.dir, 'h_small.txt')); r.commit('Revert "feat: H small part"')
         # project-less card with a ref, never merged
         r.branch_with('fix/99999997-projectless', 'g.txt', feature('G'), 'feat: G')
         cls.cards = [card('aaaaaaa1'), card('bbbbbbb2', priority='high'), card('ccccccc3'), card('ddddddd4'),
-                     card('eeeeeee5'), card('fffffff6'), card('99999997', project=None),
+                     card('eeeeeee5'), card('fffffff6'), card('99999997', project=None), card('aaaabbb8'),
                      card('12345678'), card('87654321', project=None), card('abcdef01', project='marveen'),
                      card('0bbbbbb2', status='planned')]
         cls.rc, cls.d, cls.proc = run(r, cls.cards)
@@ -137,6 +142,11 @@ class Meter(unittest.TestCase):
         self.assertEqual(self.v['ccccccc3']['verdict'], 'LINES-MISSING')
         self.assertEqual(self.v['ccccccc3']['missing_share'], '10/10')
 
+    def test_a_named_revert_is_flagged_even_when_diluted(self):
+        self.assertEqual(self.v['aaaabbb8']['verdict'], 'LINES-MISSING')
+        self.assertEqual(self.v['aaaabbb8']['missing_share'], '10/50')
+        self.assertEqual(len(self.v['aaaabbb8']['reverts']), 1)
+
     def test_cherry_picked_is_live(self):
         self.assertNotIn('ddddddd4', self.v)
 
@@ -160,7 +170,7 @@ class Meter(unittest.TestCase):
         self.assertEqual(self.v['12345678']['verdict'], 'NO-BRANCH')
         self.assertNotIn('abcdef01', self.v)          # other project
         self.assertNotIn('0bbbbbb2', self.v)          # not done/testing
-        self.assertEqual(self.d['summary']['done']['population'], 8)
+        self.assertEqual(self.d['summary']['done']['population'], 9)
 
     def test_ack_holds_only_while_fingerprint_matches(self):
         fp = self.v['bbbbbbb2']['fingerprint']
@@ -231,6 +241,12 @@ class Section(unittest.TestCase):
         self.assertIn('kesobb kikerult', text); self.assertIn('ccccccc3', text)
         self.assertIn('testing, nincs elesben: 1', text)
         self.assertIn('nincs aga): 1 done kartya; nyugtazva: 1', text)
+
+    def test_failed_fetch_is_said(self):
+        self.put(fetch='FAILED rc=128: could not read Username')
+        self.assertIn('fetch NEM SIKERULT', ns.section_done_vs_live(self.root)[0])
+        self.put(fetch='ok')
+        self.assertNotIn('fetch', ns.section_done_vs_live(self.root)[0])
 
     def test_zero_is_said_when_measured(self):
         self.put()
