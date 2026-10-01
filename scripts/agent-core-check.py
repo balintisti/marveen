@@ -12,7 +12,7 @@ minden agense. Ezert NEM hianynak szamit egy agens-lapon. Barmi MAS hiany az.
 import importlib.util as u, sys, os
 
 COORD_ONLY = ["melyik ágens PANELJE áll üresen"]
-AGENTS = ['dexter','didi','computress','deeper','friday','jarvis','mandark']
+AGENTS = ['dexter','didi','computress','deeper','friday','jarvis','mandark','zara']
 ROOT = '/Users/isti/marveen'
 
 sp = u.spec_from_file_location('cme', os.path.join(ROOT, 'scripts/claude-md-edit.py'))
@@ -35,6 +35,6 @@ for a in AGENTS:
 # KONTROLL: a mero tudjon NEMET is mondani
 ctl = [c for c in required if c not in "teljesen ures szoveg"]
 print(f"\n  KONTROLL (ures szoveg): {len(ctl)}/{len(required)} hianyzana -> a mero diszkriminal")
-print("\n" + ("MIND A HET LAP TELJES -- a levalasztas biztonsagos" if bad == 0
+print("\n" + (f"MIND A {len(AGENTS)} LAP TELJES -- a levalasztas biztonsagos" if bad == 0
               else f"!!! {bad} LAP HIANYOS -- NE valaszd le oket"))
 sys.exit(0 if bad == 0 else 3)
