@@ -2,8 +2,8 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { execFile, execFileSync, spawnSync } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createServer, type Server } from 'node:http'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, cpSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, mkdirSync, writeFileSync, cpSync, realpathSync } from 'node:fs'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 import { join } from 'node:path'
 // The stand-in dashboard below decides who is a known SENDER with the SERVER'S OWN
 // code, not a re-implementation: the same .env grammar (parseEnvContent, last
@@ -31,7 +31,8 @@ const SCRIPT = 'install-prod-tree-guard-hook.sh'
 
 // realpath for the same reason as the sibling file: on macOS os.tmpdir() is a
 // symlink, and the hook only fires when the physical toplevel matches.
-const stage = realpathSync(mkdtempSync(join(tmpdir(), 'prodguard-to-')))
+const mkTmp = tmpDirs()
+const stage = realpathSync(mkTmp('prodguard-to-'))
 
 let captured: string[] = []
 let rejected: string[] = []

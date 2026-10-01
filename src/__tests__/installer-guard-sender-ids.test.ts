@@ -15,12 +15,14 @@
 //  - both installers carry the same function and the same two calls.
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync, statSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, writeFileSync, statSync } from 'node:fs'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 import { join } from 'node:path'
 import { parseEnvContent } from '../env-parse.js'
 import { parseSystemSenderIds } from '../config.js'
 import { sanitizeAgentIdent } from '../prompt-safety.js'
+
+const mkTmp = tmpDirs()
 
 const ROOT = join(__dirname, '..', '..')
 const src = (f: string) => readFileSync(join(ROOT, f), 'utf-8')
@@ -34,7 +36,7 @@ const CALLS = ['env_add_list_entry SYSTEM_SENDER_IDS prod-tree-guard', 'env_add_
 describe.each(['install-linux.sh', 'install-macos.sh'])('%s: SYSTEM_SENDER_IDS', (script) => {
   const text = src(script)
   const run = (env: string | null) => {
-    const dir = mkdtempSync(join(tmpdir(), 'guard-sender-ids-'))
+    const dir = mkTmp('guard-sender-ids-')
     if (env !== null) writeFileSync(join(dir, '.env'), env, { mode: 0o600 })
     execFileSync('bash', ['-c', ['set -e', `INSTALL_DIR='${dir}'`, '(umask 077 && touch "$INSTALL_DIR/.env")',
       fn(text, 'env_merge_key'), fn(text, 'env_add_list_entry'), ...CALLS].join('\n')])

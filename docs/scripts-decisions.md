@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **429** kovetett fajl, ebbol
-**129** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **433** kovetett fajl, ebbol
+**130** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -96,6 +96,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/__tests__/telegram-reply-guard-agent-id.test.py`
 
 - Why this hook first, and alone: it is the one on the path to Isti. The upstream
+
+### `scripts/__tests__/update-npm-ci-include-dev.test.sh`
+
+- Why: the service runs under NODE_ENV=production, and a bare `npm ci` then
 
 ### `scripts/__tests__/usage-collect-expired-windows.test.py`
 
