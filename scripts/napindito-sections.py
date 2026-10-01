@@ -33,6 +33,66 @@ from datetime import datetime
 # CSAK mereshez/teszthez kell (egy worktreeben nincs `store/`), es epp ezert nem
 # env-bol: egy tevesen orokolt env-valtozo csendben MAS adatbazist olvasna.
 DEFAULT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+def section_done_vs_live(root=DEFAULT_ROOT, now=None, max_age_h=26):
+    """6. KESZ, DE NINCS ELESBEN (kartya e572a1c2, Isti 4553).
+
+    A `scripts/done-vs-live.py` naponta meri, melyik done/testing Delta-CRM kartya munkaja
+    NINCS az elo Cloud Run kepben. Ez a szekcio CSAK OLVAS: a merest a launchd egyseg vegzi
+    (`com.marveen.done-vs-live`), mert egy teljes futas percekig tart, a napindito pedig nem
+    varhat ra.
+
+    A HAROM NEM-FUTOTT ALLAPOT SAJAT SORT KAP (a fajl elso szabalya): nincs eredmeny-fajl,
+    a fajl ELAVULT, vagy a mero maga irta bele, hogy nem tudott merni (`error`). Egyik sem
+    "0 kartya". A kort a fajl SAJAT `measured_at` mezoje adja, nem az mtime (a `section_dream`
+    precedense: egy masolas az mtime-ot frissiti, a merest nem).
+
+    MINDIG SZOL, ha merni tudott, nullanal is: ez nem riasztas, hanem egy szam, aminek a
+    napi valtozasa maga a hir (a 173-as eset epp attol nott meg, hogy senki nem latta)."""
+    path = os.path.join(root, "store", "done-vs-live.json")
+    now = time.time() if now is None else now
+    head = "KESZ, DE NINCS ELESBEN"
+    if not os.path.exists(path):
+        return [f"{head}: NEM MERHETO -- nincs {path} (a done-vs-live meres meg nem futott le)."]
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+        measured = datetime.fromisoformat(d["measured_at"]).timestamp()
+    except Exception as e:
+        return [f"{head}: NEM MERHETO -- az eredmeny-fajl olvashatatlan ({type(e).__name__})."]
+    age_h = (now - measured) / 3600
+    if age_h > max_age_h:
+        return [f"{head}: NEM MERHETO -- az utolso meres {age_h:.0f} oras (a hatar {max_age_h}); "
+                "a `com.marveen.done-vs-live` egyseg nem futott le."]
+    if d.get("error"):
+        return [f"{head}: NEM MERHETO -- a mero jelentette: {str(d['error'])[:160]}"]
+    cards = d.get("cards") or []
+    open_ = [c for c in cards if not c.get("acked")]
+    def pick(status, verdict):
+        return [c for c in open_ if c.get("status") == status and c.get("verdict") == verdict]
+    nl_done, lm_done = pick("done", "NOT-LIVE"), pick("done", "LINES-MISSING")
+    nl_test = pick("testing", "NOT-LIVE") + pick("testing", "LINES-MISSING")
+    when = datetime.fromtimestamp(measured).strftime("%H:%M")
+    out = [f"{head} (merve {when}, elo kep {str(d.get('target'))[:12]}):"]
+    if nl_done:
+        hi = sum(1 for c in nl_done if c.get("priority") in ("urgent", "high"))
+        part = sum(1 for c in nl_done if c.get("partly_shipped"))
+        old = min(nl_done, key=lambda c: c.get("status_at") or now)
+        old_when = datetime.fromtimestamp(old["status_at"]).strftime("%Y-%m-%d") if old.get("status_at") else "?"
+        out.append(f"  - done, de a munkaja nincs elesben: {len(nl_done)} kartya (ebbol urgent/high {hi}, "
+                   f"reszben szallitva {part}); legregebbi: {old['id']} ({old_when}) {old.get('title', '')[:60]}")
+    else:
+        out.append("  - done, de a munkaja nincs elesben: 0 kartya")
+    if lm_done:
+        out.append(f"  - done, de a tartalma kesobb kikerult (revert vagy elveszett feloldas): {len(lm_done)} kartya: "
+                   + ", ".join(c["id"] for c in lm_done[:5]))
+    if nl_test:
+        out.append(f"  - testing, nincs elesben: {len(nl_test)} kartya")
+    nb = sum(1 for c in cards if c.get("verdict") == "NO-BRANCH" and c.get("status") == "done")
+    acked = sum(1 for c in cards if c.get("acked"))
+    out.append(f"  - nem merheto (nincs aga): {nb} done kartya; nyugtazva: {acked}")
+    return out
+
+
 STATUSES = ["planned", "in_progress", "testing", "waiting", "done"]
 # Az `assignee` NEM tisztitott mezo: merve 2026-09-10 az elo kartyakon
 # `Isti` 17, `isti` 2, ures sztring 2, NULL 5. Egy nagybetu-erzekeny
@@ -402,7 +462,7 @@ def main():
         return 1
     blocks = [section_dream(a.root), section_isti(con), section_delta(con, snap, not a.no_write),
               section_broken(con, a.since_hours, a.tasks_dir, a.root, None, not a.no_write),
-              section_quota(a.root)]
+              section_quota(a.root), section_done_vs_live(a.root)]
     print("\n\n".join("\n".join(b) for b in blocks if b))
     return 0
 
