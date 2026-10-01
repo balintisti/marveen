@@ -13,7 +13,7 @@
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { writeFileSync, chmodSync, mkdirSync, rmSync, copyFileSync } from 'node:fs'
+import { writeFileSync, chmodSync, mkdirSync, rmSync, copyFileSync, cpSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpDirs } from './helpers/tmp-dirs.js'
@@ -23,6 +23,7 @@ const mkTmp = tmpDirs()
 
 const REAL_SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'agent-msg.sh')
+const REAL_LIB = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'lib')
 
 const made: string[] = []
 afterEach(() => {
@@ -36,6 +37,9 @@ function run(responseJson: string, httpCode = '200'): { stdout: string; stderr: 
   mkdirSync(join(base, 'scripts'))
   mkdirSync(join(base, 'store'))
   copyFileSync(REAL_SCRIPT, join(base, 'scripts', 'agent-msg.sh'))
+  // The helper runs <base>/scripts/lib/homoglyph.py before every send (upstream dd312aa1); without
+  // it the sandbox prints a 'checker not found' warning, which is not the advice under test.
+  cpSync(REAL_LIB, join(base, 'scripts', 'lib'), { recursive: true })
   writeFileSync(join(base, 'store', '.dashboard-token'), 'test-token\n')
 
   const binDir = join(base, 'bin')
@@ -92,6 +96,9 @@ function runCapturingStderr(responseJson: string, withDb = false): { stdout: str
   mkdirSync(join(base, 'scripts'))
   mkdirSync(join(base, 'store'))
   copyFileSync(REAL_SCRIPT, join(base, 'scripts', 'agent-msg.sh'))
+  // The helper runs <base>/scripts/lib/homoglyph.py before every send (upstream dd312aa1); without
+  // it the sandbox prints a 'checker not found' warning, which is not the advice under test.
+  cpSync(REAL_LIB, join(base, 'scripts', 'lib'), { recursive: true })
   writeFileSync(join(base, 'store', '.dashboard-token'), 'test-token\n')
   if (withDb) {
     // A REAL sqlite file, not a stub: the preflight reads it with python3, and

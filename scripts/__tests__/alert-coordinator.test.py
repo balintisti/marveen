@@ -66,6 +66,8 @@ NOT_AN_ALARM_OR_COVERED = {
     'kartya-es-ertesites.py': 'help text only, no call',
     'kanban-project-classify.py': 'a docstring mention, no call',
     'merge-overlap.py': 'a docstring mention, no call',
+    'homoglyph.py': 'a docstring mention, no call (the checker agent-msg.sh runs; upstream dd312aa1)',
+    'mixed_script.py': 'a docstring mention, no call (the shared rule; upstream dd312aa1)',
 }
 CALL = re.compile(r'agent-msg\.sh')
 

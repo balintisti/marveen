@@ -55,7 +55,15 @@ def variant(tmp, name, returning):
     if returning:
         assert src.count(SIG) == 1, "channel_gate signature is not unique -- anchor is stale"
         src = src.replace(SIG, SIG + "\n    return None  # TEST STUB: the future regression", 1)
-    path = os.path.join(tmp, name)
+    # The gate imports its shared rule from <its dir>/../lib (mixed_script.py, upstream
+    # dd312aa1) and BLOCKS when that is missing, so a copy needs the same layout:
+    # <tmp>/hooks/<copy> next to <tmp>/lib.
+    hooks = os.path.join(tmp, "hooks")
+    os.makedirs(hooks, exist_ok=True)
+    lib = os.path.join(tmp, "lib")
+    if not os.path.isdir(lib):
+        shutil.copytree(os.path.join(ROOT, "scripts", "lib"), lib)
+    path = os.path.join(hooks, name)
     open(path, "w", encoding="utf-8").write(src)
     return path
 
