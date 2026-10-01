@@ -72,7 +72,12 @@ beforeAll(async () => {
     }
   })
   await Promise.all(workers)
-}, PER_TEST_TIMEOUT_MS + 60_000)
+  // The budget is the WHOLE queue's worst case, not one test's: every worker runs at most
+  // ceil(n / CONCURRENCY) scripts, each capped by PER_TEST_TIMEOUT_MS. It used to be one
+  // per-test cap + 60 s for the entire queue; measured 2026-10-01, the queue needed 227 s of
+  // that 260 s on a quiet run, and 4 more ported upstream script tests tipped a full-suite run
+  // over it -- the file then failed as a whole, with 150 tests skipped and no script named.
+}, Math.ceil(runnable.length / CONCURRENCY) * PER_TEST_TIMEOUT_MS + 60_000)
 
 describe('scripts/__tests__ -- a shell- es python-tesztek', () => {
   it('talalt futtathato teszt-fajlt (nema nulla ellen)', () => {
