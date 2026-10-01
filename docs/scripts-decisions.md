@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **425** kovetett fajl, ebbol
-**128** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **428** kovetett fajl, ebbol
+**129** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -226,6 +226,11 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - WHY THIS IS ITS OWN FILE. The extraction plus the path resolution is a `case`
 - WHY THE RESOLUTION RULE MATTERS MORE THAN THE PATTERN (Marveen, 2026-08-22
+
+### `scripts/done-vs-live.py`
+
+- WHY (Isti 4553, 2026-09-30). Measured that day: 173 done/testing cards whose work never reached
+- WHY NOT scripts/landed-check.py (card 7eb6a490). It asks whether the SHAs a card's TEXT names
 
 ### `scripts/email-send-gate.mjs`
 
