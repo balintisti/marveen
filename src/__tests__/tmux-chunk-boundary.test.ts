@@ -102,4 +102,27 @@ describe('computeTmuxChunk', () => {
     }
     expect(sawContent.replace(/ /g, '')).toContain('aaa')
   })
+
+  // Card 232b4b9b (didi 25158): every boundary fixture above is ';'+letter, ';x-' or a
+  // prompt-final ';'. Prose is mostly '; ' -- and a narrowed dodge survived the suite:
+  // M2 (no slide when ';' is followed by a space) and M1 (trailing space only at the very
+  // end of the prompt) both left the BORITEKVESZ927 loss in place with every test green.
+  it("'; ' at the 80-char boundary: the ';' is folded in with its space, and nothing is added", () => {
+    const text = 'a'.repeat(79) + '; next words, as in prose ' + 'b'.repeat(100)
+    const { chunk, end } = computeTmuxChunk(text, 0, 80)
+    expect(chunk).toBe('a'.repeat(79) + '; ')
+    expect(end).toBe(81)
+    expect(reassemble(text, 80)).toBe(text)
+  })
+
+  it('a run of ; longer than the slide cap mid-prompt: the chunk still never ends on ; (one space typed, no ; lost)', () => {
+    const run = TMUX_CHUNK_MAX_SLIDE + 4
+    const text = 'a'.repeat(79) + ';'.repeat(run) + 'tail'
+    const first = computeTmuxChunk(text, 0, 80)
+    expect(first.chunk.endsWith(';')).toBe(false)
+    expect(first.end).toBe(80 + TMUX_CHUNK_MAX_SLIDE)
+    const out = reassemble(text, 80)
+    expect(out.replace(/ /g, '')).toBe(text)
+    expect((out.match(/;/g) || []).length).toBe(run)
+  })
 })
