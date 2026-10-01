@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **434** kovetett fajl, ebbol
-**130** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **437** kovetett fajl, ebbol
+**132** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -392,6 +392,15 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/lib/content-hash.sh`
 
 - Why this exists: `md5sum` does not exist on macOS, and the flagship host's
+
+### `scripts/lib/homoglyph.py`
+
+- WHY THIS EXISTS. Measured 2026-09-22: one agent sent a report with three
+- WHY IT IS HERE AND NOT IN ONE AGENT'S TOOLBOX (MSGGATE924). Two agents had
+
+### `scripts/lib/mixed_script.py`
+
+- WHY IT LIVES HERE (2026-09-24 review of #1541). Two paths block on this rule:
 
 ### `scripts/lib/pg-argv-safe.sh`
 
