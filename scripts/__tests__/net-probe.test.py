@@ -18,7 +18,7 @@ FAKE_CURL = """#!/bin/bash
 for a in "$@"; do url="$a"; done
 case " $FAKE_DEAD " in *" $url "*)
   printf '000\\t0.050\\t0.000\\t0.120\\t%s' "$FAKE_DEAD_IP"
-  echo "curl: (35) LibreSSL SSL_connect: SSL_ERROR_SYSCALL in connection to $url" >&2
+  echo "curl: (35) LibreSSL SSL_connect: SSL_ERROR_SYSCALL in connection to $url$FAKE_ERR_TAIL" >&2
   exit 35;;
 esac
 printf '200\\t0.010\\t0.020\\t0.030\\t192.0.2.7'
@@ -41,9 +41,9 @@ class NetProbe(unittest.TestCase):
     def tearDown(self):
         subprocess.run(['rm', '-rf', self.tmp])
 
-    def run_probe(self, now, *args, dead='', dead_ip='172.217.113.4'):
+    def run_probe(self, now, *args, dead='', dead_ip='172.217.113.4', err_tail=''):
         env = dict(os.environ, NET_PROBE_LOG=self.log, NET_PROBE_CURL=self.curl, NET_PROBE_NOW=str(now), FAKE_DEAD=dead,
-                   FAKE_DEAD_IP=dead_ip)
+                   FAKE_DEAD_IP=dead_ip, FAKE_ERR_TAIL=err_tail)
         return subprocess.run([sys.executable, SCRIPT, *args], env=env, capture_output=True, text=True, timeout=60)
 
     def lines(self):
@@ -79,6 +79,15 @@ class NetProbe(unittest.TestCase):
         ok = line['results']['github']
         self.assertEqual((ok['code'], ok['ip']), ('200', '192.0.2.7'))
         self.assertNotIn('error', ok)
+
+    def test_the_error_text_never_keeps_a_query_or_a_credential(self):
+        # marveen 21665: net-probe.jsonl must not become a place where a token-bearing string lands
+        tail = '?access_token=ya29.SECRETVALUE&x=1 Authorization: Bearer sk-SECRET2 api_key=SECRET3'
+        self.run_probe(at(4, 25), dead='https://www.googleapis.com/generate_204', err_tail=tail)
+        raw = open(self.log).read()
+        for secret in ('SECRETVALUE', 'SECRET2', 'SECRET3', 'access_token='):
+            self.assertNotIn(secret, raw)
+        self.assertIn('SSL_ERROR_SYSCALL', self.lines()[0]['results']['googleapis']['error'])
 
     def test_no_tcp_connection_is_an_empty_ip_not_a_shifted_field(self):
         self.run_probe(at(4, 25), dead='https://www.googleapis.com/generate_204', dead_ip='')

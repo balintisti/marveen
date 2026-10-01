@@ -26,6 +26,7 @@ Wi-Fi (en1), the Ethernet port is inactive.
 Test seams: NET_PROBE_CURL (the curl binary), NET_PROBE_LOG (the log), NET_PROBE_NOW (epoch s).
 """
 import json
+import re
 import os
 import subprocess
 import sys
@@ -56,6 +57,14 @@ LARGE = [
 FMT = '%{http_code}\t%{time_connect}\t%{time_appconnect}\t%{time_total}\t%{remote_ip}'
 
 
+def scrub(text):
+    """curl's error text, safe to keep in a log: no URL query, no credential-shaped value.
+    Today's targets carry neither, but the log outlives the target list (marveen 21665)."""
+    text = re.sub(r'\?\S*', '?<query>', text)
+    text = re.sub(r'(?i)\b(authorization|bearer|token|key|secret|password)(\s*[:=]?\s*)\S+', r'\1\2<redacted>', text)
+    return text.strip()[:200]
+
+
 def probe(args, stdin=None):
     """One request. Any failure to get an answer -- timeout, reset, DNS -- is code 000."""
     try:
@@ -65,7 +74,7 @@ def probe(args, stdin=None):
         out = {'code': code, 'connect': float(conn), 'tls': float(tls), 'total': float(total), 'rc': r.returncode,
                'ip': ip.strip()}
         if r.returncode:
-            out['error'] = r.stderr.decode(errors='replace').strip()[:200]
+            out['error'] = scrub(r.stderr.decode(errors='replace'))
         return out
     except (subprocess.TimeoutExpired, ValueError, OSError) as e:
         return {'code': '000', 'connect': None, 'tls': None, 'total': None, 'rc': None, 'err': type(e).__name__}
