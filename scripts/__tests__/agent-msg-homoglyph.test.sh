@@ -215,7 +215,11 @@ for a in open('$SANDBOX/calls.txt', encoding='utf-8').read().splitlines():
         continue
     if isinstance(d, dict) and 'content' in d:
         sent = d['content']
-sys.exit(0 if sent == 'ezt a szoveget kell elkuldeni' else 1)
+# OURS: this install's helper appends a [KULDVE: ...] footer to every message by
+# design, so the typed text must come FIRST and the only addition is that footer.
+t = 'ezt a szoveget kell elkuldeni'
+ok = sent is not None and sent.startswith(t) and (sent == t or sent[len(t):].lstrip('\\n').startswith('[KULDVE:'))
+sys.exit(0 if ok else 1)
 " && echo 0 || echo 1)" "the payload was not the text that was typed"
 
 # A CRASHING checker must get its own message and its own exit code: "refused"
