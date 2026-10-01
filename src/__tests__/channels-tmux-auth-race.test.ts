@@ -11,9 +11,8 @@
 // dropping the wiring (not just the helper) turns the suite red (#1534 review).
 import { describe, it, expect, afterEach } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync, writeFileSync, chmodSync, statSync, lstatSync, symlinkSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, existsSync, writeFileSync, chmodSync, statSync, lstatSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { tmpDirs } from './helpers/tmp-dirs.js'
 
 const mkTmp = tmpDirs()
@@ -116,7 +115,7 @@ describe.skipIf(!HAS_TMUX)('channels.sh tmux auth (real tmux, isolated socket)',
   // over the name, so a pre-existing wider-mode file or a planted symlink never
   // receives the value.
   it('a pre-existing 0644 auth file: replaced by a 0600 file, never written in place', () => {
-    dir = mkdtempSync(join(tmpdir(), 'tmuxauthfile-'))
+    dir = mkTmp('tmuxauthfile-')
     mkdirSync(join(dir, 'store'))
     const f = join(dir, 'store', '.channels-pane-auth')
     writeFileSync(f, 'old\n')
@@ -129,7 +128,7 @@ describe.skipIf(!HAS_TMUX)('channels.sh tmux auth (real tmux, isolated socket)',
   })
 
   it('a symlink planted at the auth path: its target is never written, the link itself is replaced', () => {
-    dir = mkdtempSync(join(tmpdir(), 'tmuxauthfile-'))
+    dir = mkTmp('tmuxauthfile-')
     mkdirSync(join(dir, 'store'))
     const target = join(dir, 'elsewhere')
     writeFileSync(target, 'untouched\n')
@@ -164,7 +163,7 @@ describe.skipIf(!HAS_TMUX)('channels.sh tmux auth (real tmux, isolated socket)',
   }
 
   it('the token is in no process command line when the channels launch creates the tmux server', () => {
-    dir = mkdtempSync(join(tmpdir(), 'tmuxargv-'))
+    dir = mkTmp('tmuxargv-')
     mkdirSync(join(dir, 'store'))
     sock = join(dir, 's')
     const out = join(dir, 'pane-env')
@@ -186,7 +185,7 @@ describe.skipIf(!HAS_TMUX)('channels.sh tmux auth (real tmux, isolated socket)',
   })
 
   it('negative control: the old "new-session -e TOKEN=..." launch leaves the token in the server command line', () => {
-    dir = mkdtempSync(join(tmpdir(), 'tmuxargv-'))
+    dir = mkTmp('tmuxargv-')
     sock = join(dir, 's')
     bash(`tmux -S ${sock} new-session -d -s channels -e "CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN" "sleep 30"`, { CLAUDE_CODE_OAUTH_TOKEN: TOKEN })
     expect(countInPs()).toBeGreaterThan(0)
