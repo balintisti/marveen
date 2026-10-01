@@ -54,7 +54,7 @@ describe('sendPromptToSession streams through computeTmuxChunk', () => {
       'a'.repeat(79) + ';x-' +
       'b'.repeat(79) + ';' +
       'tail ' + 'd'.repeat(20) + ';'
-    expect(await sendPromptToSession('chunk-binding-test', text, null, { waitForIdle: false })).toBe('sent')
+    expect(await sendPromptToSession('chunk-binding-test', text, null, { waitForIdle: false, survival: 'redelivered', survivalReason: 'test' })).toBe('sent')
 
     const chunks = literalChunks()
     expect(chunks.length).toBe(3)
