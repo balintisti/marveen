@@ -234,13 +234,14 @@ class Section(unittest.TestCase):
             dict(id='ccccccc3', status='done', verdict='LINES-MISSING', status_at=now),
             dict(id='ddddddd4', status='testing', verdict='NOT-LIVE', status_at=now),
             dict(id='eeeeeee5', status='done', verdict='NOT-LIVE', acked={'reason': 'x'}, status_at=now - 99 * 86400),
-            dict(id='12345678', status='done', verdict='NO-BRANCH')])
+            dict(id='12345678', status='done', verdict='NO-BRANCH')], projectless_without_ref=147)
         text = '\n'.join(ns.section_done_vs_live(self.root))
         self.assertIn('nincs elesben: 2 kartya (ebbol urgent/high 1, reszben szallitva 1)', text)
         self.assertIn('legregebbi: aaaaaaa1', text)          # the acked older one is NOT the oldest
         self.assertIn('kesobb kikerult', text); self.assertIn('ccccccc3', text)
         self.assertIn('testing, nincs elesben: 1', text)
-        self.assertIn('nincs aga): 1 done kartya; nyugtazva: 1', text)
+        self.assertIn('NEM MERHETO: 1 done kartya ag nelkul, es 147 projekt nelkuli', text)
+        self.assertIn('nyugtazva: 1', text)
 
     def test_failed_fetch_is_said(self):
         self.put(fetch='FAILED rc=128: could not read Username')

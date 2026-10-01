@@ -93,7 +93,11 @@ def section_done_vs_live(root=DEFAULT_ROOT, now=None, max_age_h=26):
         out.append(f"  - testing, nincs elesben: {len(nl_test)} kartya")
     nb = sum(1 for c in cards if c.get("verdict") == "NO-BRANCH" and c.get("status") == "done")
     acked = sum(1 for c in cards if c.get("acked"))
-    out.append(f"  - nem merheto (nincs aga): {nb} done kartya; nyugtazva: {acked}")
+    # marveen 23920: what this method cannot see is said as its own number, never folded into zero.
+    pl = d.get("projectless_without_ref")
+    out.append(f"  - NEM MERHETO: {nb} done kartya ag nelkul, es "
+               + (f"{pl}" if pl is not None else "?") + " projekt nelkuli done/testing kartya ag nelkul; "
+               f"nyugtazva: {acked}")
     return out
 
 
