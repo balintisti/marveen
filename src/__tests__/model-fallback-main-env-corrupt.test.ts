@@ -11,11 +11,13 @@
  * Swapping the order makes the second case throw.
  */
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, readFileSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const ROOT = mkdtempSync(join(tmpdir(), 'mf-env-corrupt-'))
+const mkTmp = tmpDirs()
+
+const ROOT = mkTmp('mf-env-corrupt-')
 vi.mock('../config.js', async () => {
   const actual = await vi.importActual<typeof import('../config.js')>('../config.js')
   return { ...actual, PROJECT_ROOT: ROOT }

@@ -18,9 +18,11 @@
 // failure mode that has nothing to do with that.
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -53,7 +55,7 @@ sys.exit(code)
 `
 
 function run(args: string[], stdin = '') {
-  const dir = mkdtempSync(join(tmpdir(), 'fleet-kanban-test-'))
+  const dir = mkTmp('fleet-kanban-test-')
   mkdirSync(join(dir, 'store'), { recursive: true })
   writeFileSync(join(dir, 'store', '.dashboard-token'), 'test-token\n', 'utf-8')
   const r = spawnSync('python3', ['-c', HARNESS, SCRIPT, ...args], {

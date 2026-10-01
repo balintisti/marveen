@@ -4,11 +4,13 @@
  * write THERE -- and keep .env's mode, since it holds secrets.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, chmodSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, readFileSync, statSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const ROOT = mkdtempSync(join(tmpdir(), 'mf-env-'))
+const mkTmp = tmpDirs()
+
+const ROOT = mkTmp('mf-env-')
 vi.mock('../config.js', async () => {
   const actual = await vi.importActual<typeof import('../config.js')>('../config.js')
   return { ...actual, PROJECT_ROOT: ROOT }
