@@ -74,7 +74,51 @@ ap.add_argument('--out', default=os.path.join(ROOT, 'store', 'done-vs-live.json'
 ap.add_argument('--acks', default=os.path.join(ROOT, 'store', 'done-vs-live-acks.json'))
 ap.add_argument('--cache', default=os.path.join(ROOT, 'store', 'done-vs-live-cache.json'))
 ap.add_argument('--gcloud', default='/opt/homebrew/bin/gcloud')
+ap.add_argument('--import-acks', metavar='VERDICTS_JSON',
+                help='add acks for NO-BRANCH cards a person judged LIVE or NO_DEPLOY by hand, then exit')
 A = ap.parse_args()
+
+# Hand verdicts the meter cannot reach (marveen, e572a1c2 comment 24877). The fingerprint comes from
+# the meter's own last result, never recomputed here: one formula, in one place. Only LIVE and
+# NO_DEPLOY become acks -- a hand NOT_LIVE or MOBILE is a finding, and an ack would mute it.
+ACKABLE_HAND_CLASSES = ('LIVE', 'NO_DEPLOY')
+
+
+def import_acks(src):
+    hand = json.load(open(src, encoding='utf-8'))
+    res = json.load(open(A.out, encoding='utf-8'))
+    if res.get('error'):
+        sys.exit(f'NEM IMPORTALOK: the last result has an error: {res["error"]}')
+    acks = json.load(open(A.acks, encoding='utf-8')) if os.path.exists(A.acks) else {}
+    by = f"{hand.get('source', os.path.basename(src))} ({hand.get('measured', '?')})"
+    tally = collections.Counter()
+    for c in res.get('cards') or []:
+        if c.get('verdict') != 'NO-BRANCH':
+            continue
+        h = (hand.get('cards') or {}).get(c['id'])
+        if not h:
+            tally['no hand verdict'] += 1
+        elif h.get('class') not in ACKABLE_HAND_CLASSES:
+            tally[f"kept open: {h.get('class')}"] += 1
+        elif not c.get('fingerprint'):
+            tally['no fingerprint in result (old meter)'] += 1
+        elif c['id'] in acks:
+            tally['already acked'] += 1
+        else:
+            acks[c['id']] = {'fingerprint': c['fingerprint'], 'by': by,
+                             'at': datetime.now().strftime('%Y-%m-%d %H:%M'),
+                             'reason': f"hand {h['class']}: {(h.get('evidence') or '')[:240]}"}
+            tally[f"acked: {h['class']}"] += 1
+    tmp = A.acks + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(acks, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, A.acks)
+    print(dict(sorted(tally.items())))
+    sys.exit(0)
+
+
+if A.import_acks:
+    import_acks(A.import_acks)
 
 T0 = time.time()
 RUN_BUDGET_S = 1800   # a wedged run must say so, not hold the next 06:45 hostage in silence
@@ -367,6 +411,14 @@ for c in pop:
     crefs = by_hex.get(h, {})
     if not crefs:
         rec['verdict'] = 'NO-BRANCH'
+        # Not measurable here, but a person may have judged it by hand. That judgement holds only
+        # while the card stays where it was judged: a status move re-opens it.
+        rec['fingerprint'] = hashlib.sha1(f"NO-BRANCH:{rec['status']}:{rec['status_at']}".encode()).hexdigest()[:12]
+        ack = acks.get(h)
+        if ack and ack.get('fingerprint') == rec['fingerprint']:
+            rec['acked'] = {k: ack.get(k) for k in ('reason', 'by', 'at')}
+        elif ack:
+            rec['ack_lapsed'] = f"ack fingerprint {ack.get('fingerprint')} != now {rec['fingerprint']}"
         cards_out.append(rec)
         continue
     rec['refs'] = sorted(crefs)

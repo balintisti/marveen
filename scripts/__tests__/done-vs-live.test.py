@@ -191,6 +191,63 @@ class Meter(unittest.TestCase):
         self.assertNotIn('acked', verdicts(d)['bbbbbbb2'])
         self.assertIn('ack_lapsed', verdicts(d)['bbbbbbb2'])
 
+    def test_no_branch_ack_holds_until_the_card_moves(self):
+        # e572a1c2 / marveen 24877: a hand verdict on a card no ref names is an ack too, and it
+        # lapses the moment the card changes status, so a reopened card is judged again.
+        fp = self.v['12345678']['fingerprint']
+        _, d, _ = run(self.repo, self.cards, acks={'12345678': {'fingerprint': fp, 'reason': 'hand LIVE', 'by': 'j'}})
+        self.assertEqual(verdicts(d)['12345678']['acked']['reason'], 'hand LIVE')
+        moved = [dict(c, last_status_at=1790000000) if c['id'].startswith('12345678') else c for c in self.cards]
+        _, d, _ = run(self.repo, moved, acks={'12345678': {'fingerprint': fp, 'reason': 'hand LIVE', 'by': 'j'}})
+        self.assertNotIn('acked', verdicts(d)['12345678'])
+        self.assertIn('ack_lapsed', verdicts(d)['12345678'])
+
+    def test_import_acks_takes_only_live_and_no_deploy(self):
+        out = tempfile.mkdtemp(prefix='dvl-imp-')
+        try:
+            oj, aj, hj = (os.path.join(out, n) for n in ('out.json', 'acks.json', 'hand.json'))
+            json.dump({'error': None, 'cards': [
+                {'id': 'aaaa0001', 'verdict': 'NO-BRANCH', 'fingerprint': 'f1'},
+                {'id': 'aaaa0002', 'verdict': 'NO-BRANCH', 'fingerprint': 'f2'},
+                {'id': 'aaaa0003', 'verdict': 'NO-BRANCH', 'fingerprint': 'f3'},
+                {'id': 'aaaa0004', 'verdict': 'NO-BRANCH', 'fingerprint': 'f4'},
+                {'id': 'aaaa0005', 'verdict': 'NO-BRANCH', 'fingerprint': 'f5'},
+                {'id': 'aaaa0006', 'verdict': 'NOT-LIVE', 'fingerprint': 'f6'},
+                {'id': 'aaaa0007', 'verdict': 'NO-BRANCH', 'fingerprint': 'f7'}]}, open(oj, 'w'))
+            json.dump({'aaaa0007': {'fingerprint': 'old', 'reason': 'kept', 'by': 'friday'}}, open(aj, 'w'))
+            json.dump({'source': 'hand', 'measured': 'today', 'cards': {
+                'aaaa0001': {'class': 'LIVE', 'evidence': 'ancestor of the image'},
+                'aaaa0002': {'class': 'NO_DEPLOY', 'evidence': 'analysis only'},
+                'aaaa0003': {'class': 'NOT_LIVE', 'evidence': 'never merged'},
+                'aaaa0004': {'class': 'MOBILE', 'evidence': 'waits for EAS'},
+                'aaaa0006': {'class': 'LIVE', 'evidence': 'measured by the meter, not by hand'},
+                'aaaa0007': {'class': 'LIVE', 'evidence': 'x'}}}, open(hj, 'w'))
+            r = subprocess.run([sys.executable, SCRIPT, '--out', oj, '--acks', aj, '--import-acks', hj],
+                               capture_output=True, text=True, env=ENV)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            acks = json.load(open(aj))
+            self.assertEqual(sorted(acks), ['aaaa0001', 'aaaa0002', 'aaaa0007'])
+            self.assertEqual(acks['aaaa0001']['fingerprint'], 'f1')
+            self.assertTrue(acks['aaaa0002']['reason'].startswith('hand NO_DEPLOY'))
+            self.assertEqual(acks['aaaa0007']['reason'], 'kept')          # an existing ack is not overwritten
+            self.assertIn("'kept open: NOT_LIVE': 1", r.stdout)
+            self.assertIn("'no hand verdict': 1", r.stdout)
+        finally:
+            shutil.rmtree(out)
+
+    def test_import_acks_refuses_an_errored_result(self):
+        out = tempfile.mkdtemp(prefix='dvl-imp-')
+        try:
+            oj, aj, hj = (os.path.join(out, n) for n in ('out.json', 'acks.json', 'hand.json'))
+            json.dump({'error': 'gcloud failed', 'cards': []}, open(oj, 'w'))
+            json.dump({'cards': {}}, open(hj, 'w'))
+            r = subprocess.run([sys.executable, SCRIPT, '--out', oj, '--acks', aj, '--import-acks', hj],
+                               capture_output=True, text=True, env=ENV)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertFalse(os.path.exists(aj))
+        finally:
+            shutil.rmtree(out)
+
     def test_unknown_live_sha_is_not_measurable(self):
         rc, d, _ = run(self.repo, self.cards, live='0123456789012345678901234567890123456789')
         self.assertEqual(rc, 1)
@@ -269,6 +326,13 @@ class Section(unittest.TestCase):
         self.assertIn('kesobb kikerult', text); self.assertIn('ccccccc3', text)
         self.assertIn('testing, nincs elesben: 1', text)
         self.assertIn('NEM MERHETO: 1 done kartya ag nelkul, es 147 projekt nelkuli', text)
+        self.assertIn('nyugtazva: 1', text)
+
+    def test_a_hand_acked_no_branch_card_is_not_unmeasurable(self):
+        self.put(cards=[dict(id='12345678', status='done', verdict='NO-BRANCH', acked={'reason': 'hand LIVE'}),
+                        dict(id='87654321', status='done', verdict='NO-BRANCH')], projectless_without_ref=0)
+        text = '\n'.join(ns.section_done_vs_live(self.root))
+        self.assertIn('NEM MERHETO: 1 done kartya ag nelkul', text)
         self.assertIn('nyugtazva: 1', text)
 
     def test_failed_fetch_is_said(self):
