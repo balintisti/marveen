@@ -207,13 +207,15 @@ class Meter(unittest.TestCase):
         try:
             oj, aj, hj = (os.path.join(out, n) for n in ('out.json', 'acks.json', 'hand.json'))
             json.dump({'error': None, 'cards': [
-                {'id': 'aaaa0001', 'verdict': 'NO-BRANCH', 'fingerprint': 'f1'},
-                {'id': 'aaaa0002', 'verdict': 'NO-BRANCH', 'fingerprint': 'f2'},
-                {'id': 'aaaa0003', 'verdict': 'NO-BRANCH', 'fingerprint': 'f3'},
-                {'id': 'aaaa0004', 'verdict': 'NO-BRANCH', 'fingerprint': 'f4'},
-                {'id': 'aaaa0005', 'verdict': 'NO-BRANCH', 'fingerprint': 'f5'},
-                {'id': 'aaaa0006', 'verdict': 'NOT-LIVE', 'fingerprint': 'f6'},
-                {'id': 'aaaa0007', 'verdict': 'NO-BRANCH', 'fingerprint': 'f7'}]}, open(oj, 'w'))
+                {'id': 'aaaa0001', 'verdict': 'NO-BRANCH', 'fingerprint': 'f1', 'status_at': 1000},
+                {'id': 'aaaa0002', 'verdict': 'NO-BRANCH', 'fingerprint': 'f2', 'status_at': 1000},
+                {'id': 'aaaa0003', 'verdict': 'NO-BRANCH', 'fingerprint': 'f3', 'status_at': 1000},
+                {'id': 'aaaa0004', 'verdict': 'NO-BRANCH', 'fingerprint': 'f4', 'status_at': 1000},
+                {'id': 'aaaa0005', 'verdict': 'NO-BRANCH', 'fingerprint': 'f5', 'status_at': 1000},
+                {'id': 'aaaa0006', 'verdict': 'NOT-LIVE', 'fingerprint': 'f6', 'status_at': 1000},
+                {'id': 'aaaa0007', 'verdict': 'NO-BRANCH', 'fingerprint': 'f7', 'status_at': 1000},
+                {'id': 'aaaa0008', 'verdict': 'NO-BRANCH', 'fingerprint': 'f8', 'status_at': 3000},
+                {'id': 'aaaa0009', 'verdict': 'NO-BRANCH', 'fingerprint': 'f9'}]}, open(oj, 'w'))
             json.dump({'aaaa0007': {'fingerprint': 'old', 'reason': 'kept', 'by': 'friday'}}, open(aj, 'w'))
             json.dump({'source': 'hand', 'measured': 'today', 'cards': {
                 'aaaa0001': {'class': 'LIVE', 'evidence': 'ancestor of the image'},
@@ -221,9 +223,12 @@ class Meter(unittest.TestCase):
                 'aaaa0003': {'class': 'NOT_LIVE', 'evidence': 'never merged'},
                 'aaaa0004': {'class': 'MOBILE', 'evidence': 'waits for EAS'},
                 'aaaa0006': {'class': 'LIVE', 'evidence': 'measured by the meter, not by hand'},
-                'aaaa0007': {'class': 'LIVE', 'evidence': 'x'}}}, open(hj, 'w'))
-            r = subprocess.run([sys.executable, SCRIPT, '--out', oj, '--acks', aj, '--import-acks', hj],
-                               capture_output=True, text=True, env=ENV)
+                'aaaa0007': {'class': 'LIVE', 'evidence': 'x'},
+                'aaaa0008': {'class': 'LIVE', 'evidence': 'judged before it moved'},
+                'aaaa0009': {'class': 'LIVE', 'evidence': 'no status time'}}}, open(hj, 'w'))
+            at = datetime.fromtimestamp(2000).astimezone().isoformat()
+            r = subprocess.run([sys.executable, SCRIPT, '--out', oj, '--acks', aj, '--import-acks', hj,
+                                '--verdicts-at', at], capture_output=True, text=True, env=ENV)
             self.assertEqual(r.returncode, 0, r.stderr)
             acks = json.load(open(aj))
             self.assertEqual(sorted(acks), ['aaaa0001', 'aaaa0002', 'aaaa0007'])
@@ -232,6 +237,24 @@ class Meter(unittest.TestCase):
             self.assertEqual(acks['aaaa0007']['reason'], 'kept')          # an existing ack is not overwritten
             self.assertIn("'kept open: NOT_LIVE': 1", r.stdout)
             self.assertIn("'no hand verdict': 1", r.stdout)
+            # didi 25616: moved after the verdict (or no status time at all) is not acked
+            self.assertIn("'moved after the verdict': 2", r.stdout)
+        finally:
+            shutil.rmtree(out)
+
+    def test_import_acks_needs_a_zoned_verdict_time(self):
+        out = tempfile.mkdtemp(prefix='dvl-imp-')
+        try:
+            oj, aj, hj = (os.path.join(out, n) for n in ('out.json', 'acks.json', 'hand.json'))
+            json.dump({'error': None, 'cards': [
+                {'id': 'aaaa0001', 'verdict': 'NO-BRANCH', 'fingerprint': 'f1', 'status_at': 1000}]}, open(oj, 'w'))
+            json.dump({'cards': {'aaaa0001': {'class': 'LIVE', 'evidence': 'x'}}}, open(hj, 'w'))
+            base = [sys.executable, SCRIPT, '--out', oj, '--acks', aj, '--import-acks', hj]
+            for extra in ([], ['--verdicts-at', '2026-10-01 11:30'], ['--verdicts-at', 'yesterday']):
+                r = subprocess.run(base + extra, capture_output=True, text=True, env=ENV)
+                self.assertNotEqual(r.returncode, 0, extra)
+                self.assertIn('NEM IMPORTALOK', r.stderr, extra)
+                self.assertFalse(os.path.exists(aj), extra)
         finally:
             shutil.rmtree(out)
 
@@ -241,9 +264,10 @@ class Meter(unittest.TestCase):
             oj, aj, hj = (os.path.join(out, n) for n in ('out.json', 'acks.json', 'hand.json'))
             json.dump({'error': 'gcloud failed', 'cards': []}, open(oj, 'w'))
             json.dump({'cards': {}}, open(hj, 'w'))
-            r = subprocess.run([sys.executable, SCRIPT, '--out', oj, '--acks', aj, '--import-acks', hj],
-                               capture_output=True, text=True, env=ENV)
+            r = subprocess.run([sys.executable, SCRIPT, '--out', oj, '--acks', aj, '--import-acks', hj,
+                                '--verdicts-at', '2026-10-01T11:30:00+02:00'], capture_output=True, text=True, env=ENV)
             self.assertNotEqual(r.returncode, 0)
+            self.assertIn('has an error', r.stderr)
             self.assertFalse(os.path.exists(aj))
         finally:
             shutil.rmtree(out)

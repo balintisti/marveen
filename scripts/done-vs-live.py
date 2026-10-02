@@ -76,6 +76,9 @@ ap.add_argument('--cache', default=os.path.join(ROOT, 'store', 'done-vs-live-cac
 ap.add_argument('--gcloud', default='/opt/homebrew/bin/gcloud')
 ap.add_argument('--import-acks', metavar='VERDICTS_JSON',
                 help='add acks for NO-BRANCH cards a person judged LIVE or NO_DEPLOY by hand, then exit')
+ap.add_argument('--verdicts-at', metavar='ISO_TIME',
+                help='when the hand verdicts were made (required with --import-acks); a card that moved '
+                     'after it is not acked')
 A = ap.parse_args()
 
 # Hand verdicts the meter cannot reach (marveen, e572a1c2 comment 24877). The fingerprint comes from
@@ -85,6 +88,17 @@ ACKABLE_HAND_CLASSES = ('LIVE', 'NO_DEPLOY')
 
 
 def import_acks(src):
+    # didi 25616: a hand verdict judged the card as it was THEN. The fingerprint comes from the
+    # meter's latest result, so a card that moved after the verdict would be acked on its new
+    # state, which nobody judged. The verdict time is a required argument, not a habit.
+    if not A.verdicts_at:
+        sys.exit('NEM IMPORTALOK: --verdicts-at <ISO time of the hand verdicts> is required')
+    try:
+        judged_at = datetime.fromisoformat(A.verdicts_at).timestamp()
+    except ValueError:
+        sys.exit(f'NEM IMPORTALOK: --verdicts-at is not an ISO time: {A.verdicts_at}')
+    if datetime.fromisoformat(A.verdicts_at).tzinfo is None:
+        sys.exit('NEM IMPORTALOK: --verdicts-at needs a UTC offset (e.g. 2026-10-01T11:30:00+02:00)')
     hand = json.load(open(src, encoding='utf-8'))
     res = json.load(open(A.out, encoding='utf-8'))
     if res.get('error'):
@@ -102,6 +116,8 @@ def import_acks(src):
             tally[f"kept open: {h.get('class')}"] += 1
         elif not c.get('fingerprint'):
             tally['no fingerprint in result (old meter)'] += 1
+        elif not c.get('status_at') or c['status_at'] > judged_at:
+            tally['moved after the verdict'] += 1
         elif c['id'] in acks:
             tally['already acked'] += 1
         else:
