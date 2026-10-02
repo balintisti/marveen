@@ -12,7 +12,7 @@ minden agense. Ezert NEM hianynak szamit egy agens-lapon. Barmi MAS hiany az.
 import importlib.util as u, sys, os
 
 COORD_ONLY = ["melyik ágens PANELJE áll üresen"]
-AGENTS = ['dexter','didi','computress','deeper','friday','jarvis','mandark','zara']
+AGENTS = ['dexter','didi','computress','deeper','friday','jarvis','mandark','zara','sirius']
 ROOT = '/Users/isti/marveen'
 
 sp = u.spec_from_file_location('cme', os.path.join(ROOT, 'scripts/claude-md-edit.py'))
