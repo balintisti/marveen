@@ -1425,6 +1425,11 @@ DASHBOARD_PLIST="com.${SERVICE_ID}.dashboard"
 CHANNELS_PLIST="com.${SERVICE_ID}.channels"
 
 # Dashboard service
+# NODE_OPTIONS (card 4fcba090): Node's Happy Eyeballs gives each connection
+# attempt 250 ms; on a slow uplink a healthy host often needs longer, and the
+# dashboard's pollers failed with ETIMEDOUT where curl reached the same host.
+# 2500 ms per attempt. Kept identical to scripts/com.marveen.dashboard.plist.template
+# (dashboard-unit-env-parity.test.ts renders both and compares them).
 cat > "$PLIST_DIR/${DASHBOARD_PLIST}.plist" << PLISTEOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -1453,6 +1458,8 @@ cat > "$PLIST_DIR/${DASHBOARD_PLIST}.plist" << PLISTEOF
     <string>${NODE_BIN_DIR}:${HOME}/.local/bin:/opt/homebrew/bin:${HOME}/.bun/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>HOME</key>
     <string>${HOME}</string>
+    <key>NODE_OPTIONS</key>
+    <string>--network-family-autoselection-attempt-timeout=2500</string>
   </dict>
   <key>SoftResourceLimits</key>
   <dict>
