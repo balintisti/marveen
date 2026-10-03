@@ -29,6 +29,7 @@ import {
   stuckInputSignature,
   mcpTrustAcceptKeys,
   detectsPermissionPrompt,
+  liveTurnFooterVisible,
   type FirstRunGateKind,
 } from '../pane-state.js'
 import { paneRemedy } from './parked-pane-remedy.js'
@@ -3262,6 +3263,11 @@ export async function clearInputBuffer(session: string, host: string | null = nu
   for (let attempt = 1; attempt <= CLEAR_INPUT_MAX_ATTEMPTS; attempt++) {
     try {
       const pane = capturePane(session, host)
+      // Escape leads the sequence, and on a running turn Escape is an interrupt (card f5bb2626).
+      if (pane != null && liveTurnFooterVisible(pane)) {
+        logger.warn({ session, attempt }, 'Input clear refused: the footer shows a running turn (esc to interrupt)')
+        return false
+      }
       for (const key of parkedClearSequence(pane != null ? parkedInputRowCount(pane) : 0)) {
         runTmux(host, ['send-keys', '-t', session, key], { timeout: 5000 })
       }
@@ -3318,6 +3324,11 @@ async function discardPlaceholderBuffer(session: string, host: string | null = n
     // Stop pressing once the stub is gone -- a further Ctrl-C on an empty box
     // would quit the TUI.
     if (pane != null && !detectsPastePlaceholder(pane)) return true
+    // Ctrl-C on a running turn interrupts it (card f5bb2626).
+    if (pane != null && liveTurnFooterVisible(pane)) {
+      logger.warn({ session }, 'discardPlaceholderBuffer: refused, the footer shows a running turn (esc to interrupt)')
+      return false
+    }
     try {
       runTmux(host, ['send-keys', '-t', session, 'C-c'], { timeout: 5000 })
     } catch (err) {
@@ -3636,6 +3647,12 @@ export async function sendPromptToSession(
       return 'withheld-permission'
     }
     if (action === 'clear-and-resend') {
+      // A running turn means the box is queued behind it, and the discard's Ctrl-C would interrupt
+      // it; a resend after a refused discard would type the prompt twice (card f5bb2626).
+      if (pane != null && liveTurnFooterVisible(pane)) {
+        logger.warn({ session, attempt }, 'sendPromptToSession: placeholder behind a running turn; not clearing')
+        break
+      }
       // Placeholder confirmed in the pane (box non-empty, not busy), so the
       // Ctrl-C in discardPlaceholderBuffer is safe. Clear it, then replay the
       // chunk stream. The loop re-samples on the next iteration and will keep

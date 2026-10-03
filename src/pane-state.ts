@@ -75,7 +75,21 @@ export type PaneState = 'idle' | 'busy' | 'typing' | 'unknown' | 'error'
 // scrollback still will not match; it needs the shift+tab hint or a `·`
 // separated idle action, which is UI chrome that prose does not carry.
 // `← for agents` is the FleetView tail on current builds; older tails kept.
-const IDLE_FOOTER_RX = /(?:[A-Za-z][\w-]* ){1,3}on(?: \(shift\+tab to cycle\)| · [^\n]*?(?:ctrl\+t|↓ to manage|← for agents))|\? for shortcuts/
+//
+// A TAIL CUT SHORT BY THE TERMINAL WIDTH IS STILL THE FOOTER (card f5bb2626, measured 2026-10-03).
+// The footer is one line, and Claude Code truncates it with `…` when it does not fit. A long
+// background count pushes the action tail off the edge -- didi's live pane, mid-turn:
+//
+//     ⏵⏵ bypass permissions on · 72 shells, 2 monitors · esc to interrupt · ↓ to …
+//
+// None of the known tails survives that, so the regex found NO footer, detectPaneState fell
+// into the footer-less branch below, and a message queued in the box mid-turn read 'typing'.
+// The stuck-input recovery then cleared it with parkedClearSequence -- Escape first -- and
+// interrupted the live turn with its nine background verifiers (07:37 and 09:13 that day). A
+// `·`- or `(`-separated tail ending the line in `…` is the same chrome, truncated; prose does
+// not end a line in ` on · ...…`. The busy checks still run first, so a truncated footer that
+// shows `esc to interrupt` reads busy.
+const IDLE_FOOTER_RX = /(?:[A-Za-z][\w-]* ){1,3}on(?: \(shift\+tab to cycle\)| · [^\n]*?(?:ctrl\+t|↓ to manage|← for agents)|(?: · | \()[^\n]*…[ \t]*(?=\n|$))|\? for shortcuts/
 
 // Positive busy signals. ANY match anywhere in the pane means the turn
 // is mid-flight, even if the footer looks idle for a frame.
@@ -294,6 +308,31 @@ export function detectsPastePlaceholder(pane: string): boolean {
 // Input-box separator lines are made of U+2500 BOX DRAWINGS LIGHT
 // HORIZONTAL. At least 10 in a run to ignore stray `-` glyphs.
 const BOX_SEP_RX = /^─{10,}/
+
+// How many lines under the input box's bottom separator the footer can take: the mode line, and on
+// some builds a status line above it.
+const FOOTER_BELOW_BOX_LINES = 3
+
+/**
+ * Whether the footer UNDER THE LIVE INPUT BOX says a turn is running (`esc to interrupt`), found
+ * from the box -- not from the footer's wording and not from the end of the pane. Card f5bb2626.
+ *
+ * The recovery keys (Escape in parkedClearSequence, Ctrl-C in the placeholder discard) interrupt
+ * a running turn, and with it every background agent the turn is waiting on. detectPaneState is
+ * the first gate, but it needs to RECOGNISE the footer, and on 2026-10-03 a width-truncated
+ * footer was not recognised: the pane read 'typing' mid-turn and the clear interrupted it. This
+ * asks the narrower question the keys need, from the one anchor that does not depend on the
+ * footer's text: the last box separator, with the background-agent panel (drawn below the
+ * footer) never in the window. No separator -> false, the previous behaviour.
+ */
+export function liveTurnFooterVisible(pane: string): boolean {
+  const lines = pane.split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!BOX_SEP_RX.test(lines[i])) continue
+    return lines.slice(i + 1, i + 1 + FOOTER_BELOW_BOX_LINES).some(l => BUSY_ESC_TO_INTERRUPT_RX.test(l))
+  }
+  return false
+}
 
 // Prompt line inside the input box. `❯` followed by at least one
 // horizontal whitespace and then a non-whitespace character means the
@@ -1197,7 +1236,8 @@ export interface DetectPaneStateOptions {
 export function detectPermissionMode(pane: string): string | null {
   if (!pane || !pane.trim()) return null
   const m = pane.match(
-    /((?:[A-Za-z][\w-]* ){1,3})on(?: \(shift\+tab to cycle\)| · [^\n]*?(?:ctrl\+t|↓ to manage|← for agents))/,
+    // Same tails as IDLE_FOOTER_RX, the width-truncated one included (card f5bb2626).
+    /((?:[A-Za-z][\w-]* ){1,3})on(?: \(shift\+tab to cycle\)| · [^\n]*?(?:ctrl\+t|↓ to manage|← for agents)|(?: · | \()[^\n]*…[ \t]*(?=\n|$))/,
   )
   if (m) return m[1].trim()
   return /\? for shortcuts/.test(pane) ? 'default' : null

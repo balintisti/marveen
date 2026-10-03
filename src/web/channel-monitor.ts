@@ -56,7 +56,7 @@ import {
   stuckInputSignature, decideStuckInputRecovery, parkedChannelInput, parkedHoldOverdue,
   parkedInputText, shouldClearTruncatedPreamble,
   parkedInputRowCount, submitLanded, decideStuckInputAction,
-  parkedScheduledTaskInput, parkedMachineOriginInput, parkedMainInputHasRemedy,
+  parkedScheduledTaskInput, parkedMachineOriginInput, parkedMainInputHasRemedy, liveTurnFooterVisible,
   type StuckInputState, type StuckInputThresholds, type StuckInputAction,
   type StuckInputActionFacts,
 } from '../pane-state.js'
@@ -494,6 +494,14 @@ export async function recoverStuckInputForSession(
   // EVERY tick, not only a recovering one: after the attempts budget the decision stops
   // recovering, and that held spell is exactly the one the bound is for (card b0181f2b).
   noteParkedHold(session, agent, decision.next, pane, nowMs)
+  // A RUNNING TURN IS NOT A PARKED BOX (card f5bb2626). Every move below presses keys, and the
+  // clear's first key is Escape: on 2026-10-03 it interrupted didi's live turn twice, nine
+  // background verifiers with it, because a width-truncated footer let the pane read 'typing'.
+  // The text in the box is a message queued behind the turn; it waits, it is not stuck.
+  if (decision.recover && pane != null && liveTurnFooterVisible(pane)) {
+    logger.info({ session, attempt: decision.next.attempts }, 'Stuck-input recovery skipped: the footer shows a running turn (esc to interrupt)')
+    return decision.next
+  }
   if (decision.recover && pane != null) {
     const attempt = decision.next.attempts
     const block = parkedChannelInput(pane)
