@@ -25,6 +25,8 @@
     <string>/opt/homebrew/opt/node@22/bin:__HOME__/.local/bin:/opt/homebrew/bin:__HOME__/.bun/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>HOME</key>
     <string>__HOME__</string>
+    <key>NODE_OPTIONS</key>
+    <string>--network-family-autoselection-attempt-timeout=2500</string>
   </dict>
   <key>SoftResourceLimits</key>
   <dict>
