@@ -1,4 +1,21 @@
 {
+  "permissions": {
+    "deny": [
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.gnupg/**)",
+      "Read(~/.env)",
+      "Read(**/.env)",
+      "Bash(sudo:*)",
+      "Bash(*/sudo *)",
+      "Bash(rm -rf ~:*)",
+      "Bash(rm -rf /:*)",
+      "Bash(curl -X POST:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "mcp__playwright__browser_run_code_unsafe"
+    ]
+  },
   "hooks": {
     "UserPromptSubmit": [
       { "hooks": [ { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/hooks/ledger-capture.py\"", "timeout": 15 } ] },
