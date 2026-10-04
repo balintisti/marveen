@@ -44,6 +44,9 @@ const h = vi.hoisted(() => {
     // didi 27419, measured shapes: background work and NO "esc to interrupt" anywhere.
     BG_FOOTER_PARKED: ['', NAMED, '❯ Csendes heartbeat.', SEP, '  … 45 shells, 3 monitors · ↓ to manage'].join('\n'),
     BG_WAITING_PARKED: ['  ✻ Waiting for 2 background agents to finish', '', NAMED, '❯ Csendes heartbeat.', SEP, IDLE_FOOTER].join('\n'),
+    // didi 27454, the live main-agent WORKER pane, idle: a navigation hint, no shell, no monitor
+    WORKER_IDLE_PARKED: ['', NAMED, '❯ Csendes heartbeat.', SEP, '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents'].join('\n'),
+    MONITOR_HINT_PARKED: ['', NAMED, '❯ Csendes heartbeat.', SEP, '  ⏵⏵ bypass permissions on · 1 monitor · ← for agents · ↓ to manage'].join('\n'),
     // the same words QUOTED in the scrollback, far above the live box: not background work
     BG_QUOTED_IDLE: ['  ⎿  "✻ Waiting for 2 background agents to finish" (didi 27419)', '  ⎿  footer was: … 45 shells, 3 monitors · ↓ to manage',
       '', '  ⎿  ok', '', '  ⎿  ok', '', NAMED, '❯ Csendes heartbeat.', SEP, IDLE_FOOTER].join('\n'),
@@ -196,6 +199,18 @@ describe('background work beside an idle prompt (didi 27419; marveen 26943: no E
   it('CONTROL: the quoted words in the scrollback do not stop the janitor', async () => {
     h.pane = h.BG_QUOTED_IDLE
     await clearStaleParkedInput('agent-bg-quoted')
+    expect(sentKeys().length).toBeGreaterThan(0)
+  })
+
+  it('the idle worker footer "· ← for agents" is NOT background work (didi 27454); a monitor beside it is', () => {
+    expect(backgroundWorkVisible(h.WORKER_IDLE_PARKED)).toBe(false)
+    expect(interruptingKeysUnsafe(h.WORKER_IDLE_PARKED)).toBe(false)
+    expect(backgroundWorkVisible(h.MONITOR_HINT_PARKED)).toBe(true)
+  })
+
+  it('CONTROL: the janitor still clears parked text on an idle worker pane', async () => {
+    h.pane = h.WORKER_IDLE_PARKED
+    await clearStaleParkedInput('agent-worker-idle')
     expect(sentKeys().length).toBeGreaterThan(0)
   })
 })

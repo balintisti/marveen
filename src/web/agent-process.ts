@@ -3347,7 +3347,10 @@ async function discardPlaceholderBuffer(
 }
 
 /** What a delivery did. 'withheld-permission' = NOTHING was typed (or a follow-up key was held
- *  back) because a tool-permission prompt was on screen -- the caller must not treat it as sent. */
+ *  back) -- the caller must not treat it as sent. Two causes share it, because every caller already
+ *  handles it as "keep it pending": a tool-permission prompt on screen, or a stale preamble the
+ *  pre-send clear REFUSED to touch beside a running turn or background work (card f5bb2626, didi
+ *  27454) -- typing behind it would send the stale text with the prompt. */
 export type SendPromptResult = 'sent' | 'aborted-busy' | 'skipped-locked' | 'withheld-permission'
 
 // Cap on how many extra characters a single chunk boundary may absorb while
@@ -3555,7 +3558,25 @@ export async function sendPromptToSession(
   if (permissionPromptBlocksBareEnter(session, host, captureTmux, 'sendPromptToSession')) {
     return 'withheld-permission'
   }
-  // The guard above returns before this: no keystroke of THIS prompt was emitted, so the
+  // Pre-flight buffer-clear when a stale preamble is detected -- BEFORE onEmitStart, so a refused
+  // clear returns before the caller's clock starts (didi 27454). Reading
+  // the pane is best-effort: a capture failure here means we cannot
+  // prove the buffer is clean, but proceeding without the clear is no
+  // worse than the pre-fix status quo.
+  try {
+    const preCapture = captureTmux(host, ['capture-pane', '-t', session, '-p'])
+    if (shouldClearTruncatedPreamble(preCapture)) {
+      // Refused: typing behind the preamble would submit both (didi 27454). Type nothing.
+      if (!(await clearInputBuffer(session, host))) {
+        logger.warn({ session }, 'Stale preamble in the box and the clear was refused (running turn or background work): nothing typed')
+        return 'withheld-permission'
+      }
+      logger.info({ session }, 'Cleared stale preamble from input buffer before sending prompt')
+    }
+  } catch (err) {
+    logger.warn({ err, session }, 'Pre-send capture-pane failed; skipping truncated-preamble check')
+  }
+  // The guards above return before this: no keystroke of THIS prompt was emitted, so the
   // caller's delivery clock must not start.
   // PROMPTCSONK923: tell the caller the moment the first keystroke of THIS
   // prompt is about to be emitted (we hold the lane from here). The scheduler
@@ -3565,20 +3586,6 @@ export async function sendPromptToSession(
   } catch (err) {
     logger.warn({ err, session }, 'sendPromptToSession: onEmitStart callback threw; ignored (delivery continues)')
   }
-  // Pre-flight buffer-clear when a stale preamble is detected. Reading
-  // the pane is best-effort: a capture failure here means we cannot
-  // prove the buffer is clean, but proceeding without the clear is no
-  // worse than the pre-fix status quo.
-  try {
-    const preCapture = captureTmux(host, ['capture-pane', '-t', session, '-p'])
-    if (shouldClearTruncatedPreamble(preCapture)) {
-      logger.info({ session }, 'Cleared stale preamble from input buffer before sending prompt')
-      await clearInputBuffer(session, host)
-    }
-  } catch (err) {
-    logger.warn({ err, session }, 'Pre-send capture-pane failed; skipping truncated-preamble check')
-  }
-
   // The mapping lives in pane-text.ts: the provenance gate re-applies it to
   // the queue row, so the two must never drift (DIREKTIVASORTORES920).
   const oneLine = paneOneLine(text)

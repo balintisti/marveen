@@ -47,6 +47,12 @@ const PH_LIVE = ['', SEP, STUB, SEP, '  ⏵⏵ bypass permissions on · 3 shells
 const PH_IDLE = ['', SEP, STUB, SEP, '  ⏵⏵ bypass permissions on (shift+tab to cycle)'].join('\n')
 // didi 27419: background shells, no running turn -- Ctrl-C would still hit the work
 const PH_BG = ['', SEP, STUB, SEP, '  ⏵⏵ bypass permissions on · 3 shells · ↓ to manage'].join('\n')
+// didi 27454: the main-agent worker's IDLE footer -- a hint, not work; the stub must still be discarded
+const PH_WORKER = ['', SEP, STUB, SEP, '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents'].join('\n')
+// a stale, cut-off preamble left in the box, beside background work: the pre-send clear refuses
+const PREAMBLE_BOX = '❯ TEAM MEMBER NOTICE -- the next <trusted-peer source'
+const PREAMBLE_BG = ['', SEP, PREAMBLE_BOX, SEP, '  ⏵⏵ bypass permissions on · 3 shells · ↓ to manage'].join('\n')
+const PREAMBLE_IDLE = ['', SEP, PREAMBLE_BOX, SEP, '  ⏵⏵ bypass permissions on (shift+tab to cycle)'].join('\n')
 const EMPTY_IDLE = ['', SEP, '❯ ', SEP, '  ⏵⏵ bypass permissions on (shift+tab to cycle)'].join('\n')
 
 const WAKEUP = '[inbox-wakeup: pending inter-agent messages]'
@@ -91,6 +97,31 @@ describe('the paste-placeholder recovery behind a running turn (f5bb2626)', () =
     h.colour = (sentEnter) => (sentEnter ? PH_BG : EMPTY_IDLE)
     expect(await send('agent-ph-bg')).toBe('sent')
     expect(ctrlC()).toEqual([])
+    expect(typed()).toHaveLength(1)
+  })
+
+  it('the idle worker footer "· ← for agents" does not block the discard: Ctrl-C, resent once (didi 27454)', async () => {
+    h.colour = (sentEnter, n) => (sentEnter && n < 2 ? PH_WORKER : EMPTY_IDLE)
+    expect(await send('agent-ph-worker')).toBe('sent')
+    expect(ctrlC().length).toBeGreaterThan(0)
+    expect(typed()).toHaveLength(2)
+  })
+
+  it('a stale preamble beside background work: the pre-send clear refuses and NOTHING is typed (didi 27454)', async () => {
+    h.raw = () => PREAMBLE_BG
+    h.colour = () => PREAMBLE_BG
+    expect(await send('agent-ph-preamble-bg')).toBe('withheld-permission')
+    expect(typed()).toEqual([])
+    expect(h.keys).toEqual([])
+  })
+
+  it('CONTROL: the same stale preamble on an idle pane is cleared and the prompt typed', async () => {
+    // the box empties once the clear's keys have actually gone out
+    const escaped = () => h.keys.some((k) => k.includes('Escape'))
+    h.raw = () => (escaped() ? EMPTY_IDLE : PREAMBLE_IDLE)
+    h.colour = () => (escaped() ? EMPTY_IDLE : PREAMBLE_IDLE)
+    expect(await send('agent-ph-preamble-idle')).toBe('sent')
+    expect(h.keys.some((k) => k.includes('Escape'))).toBe(true)
     expect(typed()).toHaveLength(1)
   })
 

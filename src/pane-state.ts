@@ -340,9 +340,14 @@ export function liveTurnFooterVisible(pane: string): boolean {
 // Background work the interrupting keys would kill (card f5bb2626, didi 27419; marveen 26943: the
 // recovery never sends Escape "if esc to interrupt OR a running background task is visible").
 // Below the box: the footer's task tail -- `· 45 shells, 3 monitors · ↓ to manage`,
-// `· 1 monitor · ← for agents`, `/tasks to see subagents`. Above the box: the spinner line a turn
-// leaves while it waits on its background agents, `✻ Waiting for 2 background agents to finish`.
-const BG_FOOTER_RX = /(?:^|[·…])\s*\d+\s+(?:shells?|monitors?)\b|← for agents|\/tasks to see subagents/
+// `/tasks to see subagents`. Above the box: the spinner line a turn leaves while it waits on its
+// background agents, `✻ Waiting for 2 background agents to finish`.
+// NOT `← for agents` (didi 27454): it is a navigation hint, and the main agent's two workers show it
+// IDLE (`(shift+tab to cycle) · ← for agents`, no shell, no monitor) -- read as work, it refused the
+// placeholder discard there and the worker's task stayed parked. `· 1 monitor · ← for agents` is
+// still caught, by its monitor count. `/tasks to see subagents` has been seen only during a turn;
+// whether it also shows idle is NOT measured.
+const BG_FOOTER_RX = /(?:^|[·…])\s*\d+\s+(?:shells?|monitors?)\b|\/tasks to see subagents/
 const BG_WAITING_RX = /\bWaiting for \d+ background (?:agents?|tasks?)\b/
 const SPINNER_ABOVE_BOX_LINES = 3
 
