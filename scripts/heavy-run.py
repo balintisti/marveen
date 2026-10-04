@@ -20,7 +20,8 @@ backends (node dist/main) from e2e runners whose EXIT trap never ran or whose SI
    the group gets TERM, then KILL after HEAVY_RUN_GRACE seconds (default 10): a swapped Nest does not
    honour TERM (measured). A watchdog child does the same if the wrapper itself is SIGKILLed.
    Limit, stated: a descendant that calls setsid() leaves the group and is not reaped.
-The exit code is the command's (128+N if a signal ended it).
+The exit code is the command's (128+N if a signal ended it). Each run appends one JSON line to
+HEAVY_RUN_DIR/runs.jsonl: who, what, waited_s, ran_s, rc.
 """
 import fcntl
 import json
@@ -138,6 +139,7 @@ def run(label, cmd):
     me = {"agent": agent_name(), "pid": os.getpid(), "label": label or " ".join(cmd)[:120],
           "started": time.strftime("%Y-%m-%d %H:%M:%S")}
     last_note = 0.0
+    asked = time.time()
     slot = try_slot(me)
     while slot is None:
         if time.time() - last_note >= 60:
@@ -147,6 +149,7 @@ def run(label, cmd):
             last_note = time.time()
         time.sleep(POLL)
         slot = try_slot(me)
+    got = time.time()
     proc = subprocess.Popen(cmd, start_new_session=True)
     watchdog(os.getpid(), proc.pid, slot)
     rc = None
@@ -162,6 +165,10 @@ def run(label, cmd):
     finally:
         reap_group(proc.pid, GRACE)  # what the command left behind (a backend it started)
         slot.close()
+        # One line per run, so the limit can be judged by its waits (marveen 23086: watch 3 days).
+        with open(os.path.join(DIR, "runs.jsonl"), "a") as f:
+            f.write(json.dumps({**me, "waited_s": round(got - asked, 1),
+                                "ran_s": round(time.time() - got, 1), "rc": rc}) + "\n")
     return rc if rc >= 0 else 128 - rc
 
 
@@ -257,7 +264,13 @@ def self_test():
     # 5. the exit code is the command's
     results.append(("exit code passes through", spawn("rc", "bash", "-c", "exit 7").wait() == 7))
 
-    # 6. --help and a mistyped command answer in words, not with a traceback
+    # 6. every finished run leaves one line with its wait, its run time and its exit code
+    log = os.path.join(base, "runs.jsonl")
+    lines = [json.loads(x) for x in open(log)] if os.path.exists(log) else []
+    results.append(("each run is logged with waited_s / ran_s / rc",
+                    any(x["label"] == "rc" and x["rc"] == 7 and "waited_s" in x for x in lines)))
+
+    # 7. --help and a mistyped command answer in words, not with a traceback
     h = subprocess.run([sys.executable, me, "--help"], env=env, capture_output=True, text=True)
     results.append(("--help prints the usage, rc 0", h.returncode == 0 and "--status" in h.stdout))
     m = spawn("typo", "no-such-command-a2090e75")
