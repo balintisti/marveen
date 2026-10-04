@@ -79,7 +79,7 @@ mkdir -p "$TMP/scripts/lib" "$TMP/backups"
 # every file the copy sources or runs -- the word helper and its list included,
 # or the copy fails closed with `no-helper` and every case below measures that
 cp "$HERE/lib/backup-key.sh" "$HERE/lib/pg-argv-safe.sh" "$HERE/lib/backup_key_words.py" \
-   "$HERE/lib/bip39-english.txt" "$TMP/scripts/lib/"
+   "$HERE/lib/bip39-english.txt" "$HERE/lib/backup-retention.sh" "$TMP/scripts/lib/"
 cp "$HERE/delta-crm-backup-key.sh" "$HERE/delta-crm-restore-offsite.sh" "$TMP/scripts/"
 sed -i '' -e "s|^R2_SCRIPT=.*|R2_SCRIPT=\"$R2\"|" "$TMP/scripts/delta-crm-restore-offsite.sh"
 ENVF="$TMP/.env"; echo 'DATABASE_URL=postgresql://u:p@nincs-ilyen.invalid:5432/db' > "$ENVF"
@@ -356,6 +356,49 @@ printf '%s\n' "$K2" | MIN_TABLES=50 /bin/bash "$TMP/scripts/delta-crm-restore-of
 [ "$RC" -ne 0 ] && ok "rossz papir-kulcs -> bukik (rc=$RC)" || no 'ROSSZ PAPIR-KULCCSAL SIKERT ADOTT'
 grep -q 'rossz kulcs VAGY serult' "$TMP/w.err" && ok 'az uzenet megnevezi a ket lehetseges okot' || no 'a hibauzenet nem mondja meg, mi tortent'
 ls "$OUTD"/*.dump >/dev/null 2>&1 && no 'rossz kulcsnal .dump maradt a kimeneti mappaban' || ok 'rossz kulcsnal nem maradt .dump'
+
+echo "== 12. hianyzo megtartasi segedprogram -> SEMMIT nem torol, riaszt (78870ea3) =="
+# Measured 2026-10-04: a copy without lib/backup-retention.sh deleted EVERY local
+# dump, tonight's too, rc=0, no alert -- and this file went 12 red on it unnoticed,
+# because the harness above did not copy the helper. The copy's second resolution
+# is the live install, which HAS the helper, so case b points it at nothing.
+OLD="delta-crm-20200101-033000-public.dump"
+: > "$TMP/backups/$OLD"
+# 14 newer fillers, or the 14-day window keeps $OLD as a daily and the control
+# below fails for a reason that has nothing to do with the helper.
+for d in 01 02 03 04 05 06 07 08 09 10 11 12 13 14; do : > "$TMP/backups/delta-crm-202501$d-033000-public.dump"; done
+sleep 1; /bin/bash "$TMP/scripts/delta-crm-backup.sh" >/dev/null 2>&1
+[ -f "$TMP/backups/$OLD" ] && no 'KONTROLL: ep segedprogrammal sem torolte a regi mentest -- a lenti proba vak' \
+  || ok 'KONTROLL: ep segedprogrammal a regi mentes torlodik (a proba tud nemet mondani)'
+: > "$TMP/backups/$OLD"
+BEFORE=$(ls "$TMP/backups" | grep -cE '\.dump$')
+sed -e "s|/Users/isti/marveen/scripts/lib/backup-retention.sh|$TMP/nincs-ilyen-lib.sh|" \
+  "$TMP/scripts/delta-crm-backup.sh" > "$TMP/scripts/delta-crm-backup-noret.sh"
+mv "$TMP/scripts/lib/backup-retention.sh" "$TMP/retention.away"
+rm -f "$NOTIFIED"; : > "$TMP/backups/backup.log"
+sleep 1; /bin/bash "$TMP/scripts/delta-crm-backup-noret.sh" >/dev/null 2>&1
+mv "$TMP/retention.away" "$TMP/scripts/lib/backup-retention.sh"
+AFTER=$(ls "$TMP/backups" | grep -cE '\.dump$')
+[ "$AFTER" -eq $((BEFORE + 1)) ] && ok "segedprogram nelkul semmi nem torlodott ($BEFORE -> $AFTER, +1 a mai)" \
+  || no "segedprogram nelkul a helyi mentesek szama $BEFORE -> $AFTER"
+[ -f "$TMP/backups/$OLD" ] && ok 'a regi mentes megmaradt' || no 'segedprogram nelkul TOROLTE a regi mentest'
+grep -q 'PRUNE KIHAGYVA' "$TMP/backups/backup.log" && ok 'a naplo megnevezi a kihagyott torlest' || no 'a kihagyott torles nincs a naploban'
+grep -q '^.* PRUNE delta' "$TMP/backups/backup.log" && no 'segedprogram nelkul PRUNE sor van a naploban' || ok 'egyetlen PRUNE sor sincs'
+[ -f "$NOTIFIED" ] && grep -q 'torlese kimaradt' "$NOTIFIED" && ok 'riasztas ment' || no 'nem ment riasztas a kihagyott torlesrol'
+# c) the helper EXISTS but returns a broken list (here: empty, rc=0). Only the
+#    result check catches this -- the file-exists test above is satisfied.
+: > "$TMP/backups/$OLD"
+BEFORE=$(ls "$TMP/backups" | grep -cE '\.dump$')
+mv "$TMP/scripts/lib/backup-retention.sh" "$TMP/retention.away"
+printf 'backup_keep_list() { cat >/dev/null; return 0; }\nbackup_month_cutoff() { echo 202001; }\n' > "$TMP/scripts/lib/backup-retention.sh"
+rm -f "$NOTIFIED"; : > "$TMP/backups/backup.log"
+sleep 1; /bin/bash "$TMP/scripts/delta-crm-backup.sh" >/dev/null 2>&1
+mv "$TMP/retention.away" "$TMP/scripts/lib/backup-retention.sh"
+AFTER=$(ls "$TMP/backups" | grep -cE '\.dump$')
+[ "$AFTER" -eq $((BEFORE + 1)) ] && ok "ures megtartasi lista -> semmi nem torlodott ($BEFORE -> $AFTER)" \
+  || no "ures megtartasi listaval a helyi mentesek szama $BEFORE -> $AFTER"
+grep -q 'PRUNE KIHAGYVA' "$TMP/backups/backup.log" && ok 'ures listanal is a kihagyott torlest naplozza' || no 'ures listanal nincs PRUNE KIHAGYVA'
+rm -f "$TMP/backups/$OLD" "$TMP/backups"/delta-crm-202501*
 
 echo
 echo "  $PASS ok, $FAIL bukott"

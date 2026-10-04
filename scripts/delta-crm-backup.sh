@@ -159,14 +159,29 @@ log "OK $(basename "$OUT") $SIZE $TABLES tabla"
 # corruption that only gets noticed weeks later). It was "forever" until card fe4d8ccc:
 # a deleted customer's data then stayed in the archives indefinitely, against the terms'
 # deletion promise (Isti 5121: 12 months). The R2 bucket mirrors this directory below.
-# shellcheck source=/dev/null
-. "$(dirname "${BASH_SOURCE[0]}")/lib/backup-retention.sh"
+#
+# FAIL-SAFE, card 78870ea3. The first version sourced the helper from one path and
+# trusted it: measured 2026-10-04 on a copy without lib/, `backup_keep_list` was
+# "command not found", the keep list came out EMPTY, and the loop deleted every
+# dump in the directory -- tonight's too -- with rc=0 and no alert. So the helper is
+# resolved in two places like pg-argv-safe.sh above, and the RESULT is checked
+# before anything is deleted: a keep list without tonight's dump is a broken list,
+# not a policy. A missing helper costs a night of retention, never the backups.
+RET_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/backup-retention.sh"
+[ -f "$RET_LIB" ] || RET_LIB="/Users/isti/marveen/scripts/lib/backup-retention.sh"
 cd "$BACKUP_DIR" || exit 0
 KEEP_FILE=$(mktemp)
-ls -1 delta-crm-*.dump 2>/dev/null | backup_keep_list "$DAILY_KEEP" "$(backup_month_cutoff "$MONTHLY_KEEP")" >"$KEEP_FILE"
-for F in $(ls -1 delta-crm-*.dump 2>/dev/null); do
-  grep -qxF "$F" "$KEEP_FILE" || { rm -f "$F" && log "PRUNE $F"; }
-done
+# shellcheck source=/dev/null
+if [ -f "$RET_LIB" ] && . "$RET_LIB" \
+   && ls -1 delta-crm-*.dump 2>/dev/null | backup_keep_list "$DAILY_KEEP" "$(backup_month_cutoff "$MONTHLY_KEEP")" >"$KEEP_FILE" \
+   && grep -qxF "$(basename "$OUT")" "$KEEP_FILE"; then
+  for F in $(ls -1 delta-crm-*.dump 2>/dev/null); do
+    grep -qxF "$F" "$KEEP_FILE" || { rm -f "$F" && log "PRUNE $F"; }
+  done
+else
+  log "PRUNE KIHAGYVA: a megtartasi lista hibas vagy a segedprogram hianyzik ($RET_LIB) -- semmit nem torlok"
+  notify_failure "a mentes megvan, de a regi mentesek torlese kimaradt (hibas megtartasi lista)"
+fi
 rm -f "$KEEP_FILE"
 
 LOCAL_COUNT=$(ls -1 delta-crm-*.dump 2>/dev/null | wc -l | tr -d ' ')
