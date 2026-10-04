@@ -351,6 +351,18 @@ def section_broken(con, hours, tasks_dir=None, root=None, drift_state=None, writ
     return [f"MI TORT EL AZ EJJEL (utolso {hours} ora):"] + out
 
 
+def reset_when(resets_at, now):
+    """A reset moment as a reader can place it: "ma 07:59", "holnap 07:59", else "10-08 07:59".
+
+    Card 5aa4eccd: the hour alone made the WEEKLY reset (2026-10-08 07:59) read as today's on
+    10-04. The day is relative to `now`, the moment the digest is written, in local time.
+    """
+    at = datetime.fromtimestamp(resets_at)
+    days = (at.date() - datetime.fromtimestamp(now).date()).days
+    day = {0: "ma", 1: "holnap"}.get(days, at.strftime("%m-%d"))
+    return f"{day} {at.strftime('%H:%M')}"
+
+
 def section_quota(root=DEFAULT_ROOT, now=None, max_age_min=30):
     """4. KERET -- MOSTANTOL KIIRJA, ES EZ A SOR AZ INDOK, HOGY MIERT VALTOZOTT.
 
@@ -399,8 +411,7 @@ def section_quota(root=DEFAULT_ROOT, now=None, max_age_min=30):
         if pct is None:
             return f"  - {label}: NEM MERHETO (hianyzo mezo)"
         r = x.get("resets_at")
-        when = datetime.fromtimestamp(r).strftime("%H:%M") if r else "?"
-        return f"  - {label}: {pct:g}% (reset {when})"
+        return f"  - {label}: {pct:g}% (reset {reset_when(r, now) if r else '?'})"
     return ["KERET:", one("five_hour", "5 oras"), one("seven_day", "heti"),
             one("seven_day_opus", "heti opus")]
 

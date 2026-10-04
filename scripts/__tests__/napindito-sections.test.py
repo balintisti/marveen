@@ -274,6 +274,24 @@ AUTH = {"claude": {"source": "authoritative", "ok": True,
                                "seven_day": {"used_percent": 12.0, "resets_at": NOW + 86400},
                                "seven_day_opus": {"used_percent": 0, "resets_at": NOW + 86400}}}}
 
+# card 5aa4eccd: the reset says WHICH day. The measured case: on 2026-10-04 07:39 the weekly reset
+# was 2026-10-08 07:59, and the digest printed only "07:59" -- read as today's.
+from datetime import datetime as _dt
+_at = lambda *a: _dt(*a).timestamp()
+check("keret 5aa4eccd: a 4 nappal kesobbi heti reset datummal",
+      ns.reset_when(_at(2026, 10, 8, 7, 59), _at(2026, 10, 4, 7, 39)), "10-08 07:59")
+check("keret 5aa4eccd: ugyanaznap -> 'ma'", ns.reset_when(_at(2026, 10, 4, 12, 5), _at(2026, 10, 4, 7, 39)), "ma 12:05")
+check("keret 5aa4eccd: masnap -> 'holnap', ejfel utan is",
+      ns.reset_when(_at(2026, 10, 5, 0, 30), _at(2026, 10, 4, 23, 50)), "holnap 00:30")
+_wk = {"claude": {"source": "authoritative", "ok": True,
+                  "windows": {"five_hour": {"used_percent": 1.0, "resets_at": _at(2026, 10, 4, 10, 0)},
+                              "seven_day": {"used_percent": 2.0, "resets_at": _at(2026, 10, 8, 7, 59)},
+                              "seven_day_opus": {"used_percent": 0, "resets_at": _at(2026, 10, 8, 7, 59)}}}}
+_wk_root = _quota_root(_wk, mtime=_at(2026, 10, 4, 7, 35))
+_wk_out = ns.section_quota(_wk_root, now=_at(2026, 10, 4, 7, 39))
+check_true("keret 5aa4eccd: a szekcio a heti sort datummal irja", any("heti: 2% (reset 10-08 07:59)" in x for x in _wk_out))
+check_true("keret 5aa4eccd: az 5 oras sor 'ma'", any("5 oras: 1% (reset ma 10:00)" in x for x in _wk_out))
+
 out = ns.section_quota(_quota_root(AUTH))
 check_true("keret: hiteles forrasnal kiirja a szazalekot", any("13%" in x for x in out))
 check_true("keret: mind a harom ablak sort kap", len([x for x in out if "%" in x]) == 3)
