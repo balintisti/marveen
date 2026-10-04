@@ -21,6 +21,7 @@ R2_BUCKET="delta-crm-backup"
 NOTIFY_SCRIPT="/Users/isti/marveen/scripts/notify.sh"
 PGDUMP_TRIES="${PGDUMP_TRIES:-3}"
 DAILY_KEEP=14          # keep this many recent dumps regardless of age
+MONTHLY_KEEP=12        # the first dump of each month, for this many months (card fe4d8ccc)
 export PATH="$PG_BIN:$PATH"
 
 mkdir -p "$BACKUP_DIR"
@@ -153,16 +154,16 @@ TABLES=$(pg_restore --list "$OUT" 2>/dev/null | grep -c 'TABLE DATA')
 SIZE=$(du -h "$OUT" | cut -f1)
 log "OK $(basename "$OUT") $SIZE $TABLES tabla"
 
-# Retention: keep the newest $DAILY_KEEP dumps, plus the first dump of every month
-# forever (monthly archives are ~8 MB each, cheap insurance against silent corruption
-# that only gets noticed weeks later).
+# Retention: keep the newest $DAILY_KEEP dumps, plus the first dump of each month for
+# $MONTHLY_KEEP months (monthly archives are ~8 MB each, cheap insurance against silent
+# corruption that only gets noticed weeks later). It was "forever" until card fe4d8ccc:
+# a deleted customer's data then stayed in the archives indefinitely, against the terms'
+# deletion promise (Isti 5121: 12 months). The R2 bucket mirrors this directory below.
+# shellcheck source=/dev/null
+. "$(dirname "${BASH_SOURCE[0]}")/lib/backup-retention.sh"
 cd "$BACKUP_DIR" || exit 0
 KEEP_FILE=$(mktemp)
-ls -1t delta-crm-*.dump 2>/dev/null | head -n "$DAILY_KEEP" >>"$KEEP_FILE"
-for MONTH in $(ls -1 delta-crm-*.dump 2>/dev/null | sed -E 's/delta-crm-([0-9]{6})[0-9]{2}-.*/\1/' | sort -u); do
-  ls -1 delta-crm-"$MONTH"*.dump 2>/dev/null | sort | head -n 1 >>"$KEEP_FILE"
-done
-sort -u "$KEEP_FILE" -o "$KEEP_FILE"
+ls -1 delta-crm-*.dump 2>/dev/null | backup_keep_list "$DAILY_KEEP" "$(backup_month_cutoff "$MONTHLY_KEEP")" >"$KEEP_FILE"
 for F in $(ls -1 delta-crm-*.dump 2>/dev/null); do
   grep -qxF "$F" "$KEEP_FILE" || { rm -f "$F" && log "PRUNE $F"; }
 done
