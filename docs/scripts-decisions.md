@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **437** kovetett fajl, ebbol
-**132** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **443** kovetett fajl, ebbol
+**135** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -218,6 +218,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - WHY `show` REFUSES UNLESS BOTH STDIN AND STDOUT ARE A TERMINAL: every agent's
 
+### `scripts/delta-crm-tester-inactivity.py`
+
+- WHERE THE DATA COMES FROM, and why not the CRM API: the admin endpoints want a
+
 ### `scripts/deploy-lane.sh`
 
 - MIERT SZERSZAM ES NEM SZABALY. A repo dokumentacioja eddig egy SZAMOT mondott
@@ -281,6 +285,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/heartbeat-metrics.sh`
 
 - Why a script and not a prescribed command, measured three times: the
+
+### `scripts/heavy-run.py`
+
+- WHY (measured 2026-10-03 12:03, dexter 22886, marveen re-measured): 17 node tsc/jest processes at once
 
 ### `scripts/hooks/browser-content-notice.py`
 
@@ -384,6 +392,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/lib/backup-key.sh`
 
 - WHY gpg AND NOT OUR OWN AES-GCM (vault.ts has one): the restore that matters
+
+### `scripts/lib/backup-retention.sh`
+
+- WHY A LIMIT (Isti 5121, 2026-10-03 17:00, marveen 27062/27069): the monthly archive used
 
 ### `scripts/lib/backup_key_words.py`
 
