@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **443** kovetett fajl, ebbol
-**135** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **446** kovetett fajl, ebbol
+**136** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -133,6 +133,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/agent-progress.sh`
 
 - WHY: the [session-stuck] alert fires every 30 minutes for every agent that is
+
+### `scripts/agent-reports-snapshot.sh`
+
+- WHY (card b511e460, measured 2026-10-03 13:57): /Users/Shared/marveen-sirius/reports held
 
 ### `scripts/alert-coordinator.sh`
 
