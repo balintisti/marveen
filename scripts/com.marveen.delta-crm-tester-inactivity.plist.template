@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.marveen.delta-crm-tester-inactivity</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>__MARVEEN_ROOT__/scripts/delta-crm-tester-inactivity.py</string>
+    </array>
+
+    <!-- 04:15: after the 03:30 backup, whose dump it reads (card 4008ea30) -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>15</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Backups/delta-crm/tester-inactivity.launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Backups/delta-crm/tester-inactivity.launchd.err.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
