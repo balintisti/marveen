@@ -6,20 +6,20 @@
  * identity and 45 commits by several agents carried it. Measured through git itself, not by
  * reading the string back.
  */
-import { describe, it, expect, afterAll } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
 const { gitIdentityEnv } = await import('../web/agent-process.js')
 
-const repo = mkdtempSync(join(tmpdir(), 'agent-git-id-'))
+const mkTmp = tmpDirs()
+const repo = mkTmp('agent-git-id-')
 execFileSync('git', ['init', '-q', repo])
 // the incident's shape: a repo-level identity that is NOT the agent's
 execFileSync('git', ['-C', repo, 'config', 'user.name', 'jarvis (cherry-pick probe)'])
 execFileSync('git', ['-C', repo, 'config', 'user.email', 'jarvis@localhost'])
-afterAll(() => rmSync(repo, { recursive: true, force: true }))
 
 const identUnder = (prefix: string) => execFileSync('bash', ['-c',
   `${prefix}cd ${JSON.stringify(repo)} && git var GIT_AUTHOR_IDENT && git var GIT_COMMITTER_IDENT`],
@@ -42,20 +42,16 @@ describe('gitIdentityEnv', () => {
     // A weaker first form checked only that the combined output CONTAINED the literal; a mutant that
     // unquoted the author name alone passed it (the committer line still matched) and actually ran
     // the substitution. So each line is checked on its own, and the side effect is looked for.
-    const sandbox = mkdtempSync(join(tmpdir(), 'agent-git-id-cwd-'))
-    try {
-      const name = "o'brien $(touch pwned)"
-      const out = execFileSync('bash', ['-c',
-        `cd ${JSON.stringify(sandbox)} && ${gitIdentityEnv(name)}cd ${JSON.stringify(repo)} && git var GIT_AUTHOR_IDENT && git var GIT_COMMITTER_IDENT`],
-        { encoding: 'utf-8' })
-      const [author, committer] = out.trim().split('\n')
-      const want = `${name} <${name}@agents.local> `
-      expect(author.startsWith(want)).toBe(true)
-      expect(committer.startsWith(want)).toBe(true)
-      expect(existsSync(join(sandbox, 'pwned'))).toBe(false)
-    } finally {
-      rmSync(sandbox, { recursive: true, force: true })
-    }
+    const sandbox = mkTmp('agent-git-id-cwd-')
+    const name = "o'brien $(touch pwned)"
+    const out = execFileSync('bash', ['-c',
+      `cd ${JSON.stringify(sandbox)} && ${gitIdentityEnv(name)}cd ${JSON.stringify(repo)} && git var GIT_AUTHOR_IDENT && git var GIT_COMMITTER_IDENT`],
+      { encoding: 'utf-8' })
+    const [author, committer] = out.trim().split('\n')
+    const want = `${name} <${name}@agents.local> `
+    expect(author.startsWith(want)).toBe(true)
+    expect(committer.startsWith(want)).toBe(true)
+    expect(existsSync(join(sandbox, 'pwned'))).toBe(false)
   })
 })
 
