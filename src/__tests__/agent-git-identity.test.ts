@@ -21,9 +21,15 @@ execFileSync('git', ['init', '-q', repo])
 execFileSync('git', ['-C', repo, 'config', 'user.name', 'jarvis (cherry-pick probe)'])
 execFileSync('git', ['-C', repo, 'config', 'user.email', 'jarvis@localhost'])
 
+// The suite itself runs inside an agent session, and once this card is deployed that session
+// EXPORTS an identity (didi 27453): inherited, it would win over the repo config and turn the
+// control below green-for-the-wrong-reason red. Every probe starts from an env without it.
+const GIT_IDENT_VARS = ['GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL']
+const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !GIT_IDENT_VARS.includes(k)))
+
 const identUnder = (prefix: string) => execFileSync('bash', ['-c',
   `${prefix}cd ${JSON.stringify(repo)} && git var GIT_AUTHOR_IDENT && git var GIT_COMMITTER_IDENT`],
-  { encoding: 'utf-8' })
+  { encoding: 'utf-8', env: cleanEnv })
 
 describe('gitIdentityEnv', () => {
   it('the agent identity wins over a stray repo-level identity, for author AND committer', () => {
@@ -46,7 +52,7 @@ describe('gitIdentityEnv', () => {
     const name = "o'brien $(touch pwned)"
     const out = execFileSync('bash', ['-c',
       `cd ${JSON.stringify(sandbox)} && ${gitIdentityEnv(name)}cd ${JSON.stringify(repo)} && git var GIT_AUTHOR_IDENT && git var GIT_COMMITTER_IDENT`],
-      { encoding: 'utf-8' })
+      { encoding: 'utf-8', env: cleanEnv })
     const [author, committer] = out.trim().split('\n')
     const want = `${name} <${name}@agents.local> `
     expect(author.startsWith(want)).toBe(true)

@@ -1405,7 +1405,11 @@ export function shSingleQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
-/** The git identity every commit made from an agent's session carries (card 49d1d6b6).
+/** The git identity a SUB-AGENT session's commits carry (card 49d1d6b6).
+ *
+ * SCOPE, said plainly (didi 27453): the sessions startAgentProcess launches -- locally and on a
+ * remote host. NOT covered: the main agent's own (re)spawn, the worker sessions, and scheduled
+ * background tasks; those still commit under whatever the machine's git config says.
  *
  * WHY THE PROCESS AND NOT THE TREE: on 2026-09-24 the shared Delta-CRM `.git/config` held a
  * leftover `jarvis@localhost` identity and 45 commits by several agents carried it. The first
