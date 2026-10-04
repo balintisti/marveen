@@ -275,11 +275,79 @@ def derive_agent_id(cwd):
         return None
     if here == install:
         return _env_setting("MAIN_AGENT_ID", "marveen")
-    agents = os.path.join(install, "agents") + os.sep
+    agents_dir = os.path.join(install, "agents")
+    agents = agents_dir + os.sep
     if here.startswith(agents):
         name = here[len(agents):].split(os.sep, 1)[0]
         return name or None
-    return None
+    # agents/<name> MAY BE A SYMLINK, and the realpath above has already followed
+    # it. Since 2026-09-18 every sub-agent's is (agents/<name> ->
+    # /Users/Shared/marveen-<name>), so the prefix test above matched no
+    # sub-agent session at all and every real directive to one read
+    # UNVERIFIABLE (measured 2026-10-04: directive 23204 to friday, cwd
+    # /Users/Shared/marveen-friday). Match the resolved target of each entry.
+    try:
+        names = sorted(os.listdir(agents_dir))
+    except OSError:
+        return None
+    # The MOST SPECIFIC target wins (didi 27405): with a nested layout
+    # (agents/a -> /X, agents/b -> /X/b) a session in /X/b is b's, whatever the
+    # names sort to. Equal lengths fall back to the sorted name, deterministic.
+    best, best_len = None, -1
+    for name in names:
+        target = os.path.realpath(os.path.join(agents_dir, name))
+        if target in (os.sep, install) or not os.path.isdir(target):
+            continue
+        if (here == target or here.startswith(target + os.sep)) and len(target) > best_len:
+            best, best_len = name, len(target)
+    return best
+
+
+# PASTED-CONTENT WRAPPING (card 5bd533cc, 2026-10-03). The Claude Code harness
+# cuts a long prompt into blocks and wraps each in <pasted_content id="X"> ...
+# </pasted_content id="X">, at arbitrary points -- mid-header, mid-word. A REAL
+# directive (msg 22835, marveen) was then flagged forged: neither known shape of
+# its row matched a body full of tags. The wrapping is pure insertion, measured
+# on a harness-wrapped prompt (friday's own transcript, 2026-10-03):
+#     "...app\n\n<pasted_content id="3a95">\nearing..."   (was "appearing")
+#     "...fordulot\n</pasted_content id="3a95">\n\n\n<pasted_content id=...
+# so removing exactly those bytes restores the text the harness received.
+# STRICT on purpose: tags must alternate open/close with the same id on each
+# pair; anything else -> None, the prompt is used as it came, and a mismatch
+# still reads forged. A strip can only DELETE tag text, never add any, so a
+# body still has to equal the queue row to verify.
+_PASTED_TAG_RX = re.compile(
+    r'(?:\n\n|^)<pasted_content id="([^"\n]+)">\n|\n</pasted_content id="([^"\n]+)">(?:\n|$)'
+)
+
+
+def strip_pasted_content(text):
+    """The text without the harness's pasted_content wrapping, or None when there
+    is none or it is not the exact, well-paired shape."""
+    if "<pasted_content" not in (text or "") and "</pasted_content" not in (text or ""):
+        return None
+    out, pos, open_id = [], 0, None
+    for m in _PASTED_TAG_RX.finditer(text):
+        opening, closing = m.group(1), m.group(2)
+        if opening is not None:
+            if open_id is not None:
+                return None
+            open_id = opening
+        else:
+            if open_id is None or closing != open_id:
+                return None
+            open_id = None
+        out.append(text[pos:m.start()])
+        pos = m.end()
+    if open_id is not None:
+        return None
+    rest = text[pos:]
+    stripped = "".join(out) + rest
+    # A tag the pattern did not consume (other spacing, a stray fragment) means
+    # this is not the measured shape: refuse rather than half-strip.
+    if "pasted_content" in stripped:
+        return None
+    return stripped
 
 
 def verify_directive_row(msg_id, body, agent):
@@ -722,6 +790,15 @@ def main():
         # a header cannot be silenced by a marker pasted after it, and before
         # the exemptions so a rules file cannot whitelist the header itself.
         dm = DIRECTIVE_HEADER_RX.match(prompt)
+        pasted_label = []
+        unwrapped = strip_pasted_content(prompt)
+        if unwrapped is not None and DIRECTIVE_HEADER_RX.match(unwrapped):
+            # The harness's pasted_content wrapping (card 5bd533cc): verify the
+            # text it wrapped. The audit line says so, after the directive-
+            # label, so the counting recipe in audit() is unchanged.
+            prompt = unwrapped
+            dm = DIRECTIVE_HEADER_RX.match(prompt)
+            pasted_label = ["pasted-unwrapped"]
         if dm:
             msg_id, body = dm.group(1), dm.group(2)
             cwd = payload.get("cwd") or os.getcwd()
@@ -729,7 +806,7 @@ def main():
             verdict, reason, age, trailer = verify_directive_row(msg_id, body, derive_agent_id(cwd))
             # The age rides in the label column ("age=12s") so the bound can be
             # re-derived from the log later: grep 'directive-' | grep -o 'age=[0-9]*'.
-            age_label = [f"age={age}s"] if age is not None else []
+            age_label = ([f"age={age}s"] if age is not None else []) + pasted_label
             if verdict == "verified" and trailer is not None and trailer.strip():
                 # DIREKTIVAFARK920: the row verifies the directive, NOT what
                 # follows it. The remainder takes the ordinary gate on its own
