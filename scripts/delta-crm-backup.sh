@@ -213,41 +213,79 @@ if [ -r "$R2_KEY_FILE" ]; then
       log "R2 KIHAGYVA: az offsite kulcs nem olvashato ($BACKUP_KEY_STATUS, $BACKUP_KEY_SERVICE) -- titkositatlanul NEM toltok fel"
       notify_failure "az offsite kulcs nem olvashato ($BACKUP_KEY_STATUS), NEM ment fel semmi az R2-re"
     else
-      REMOTE_NAME="$(basename "$OUT").gpg"
-      ENC="$BACKUP_DIR/.$REMOTE_NAME.tmp"
-      rm -f "$ENC"
-      ENC_OK=0
-      if backup_encrypt BK_PASS "$OUT" "$ENC" 2>>"$LOG_FILE"; then
-        chmod 600 "$ENC"
-        # ROUND TRIP before upload: the object we ship must decrypt, with the key
-        # the restore will use, to the very bytes we verified above. An encrypted
-        # copy nobody has decrypted is not a backup yet.
-        CHECK="$BACKUP_DIR/.$REMOTE_NAME.check"
-        rm -f "$CHECK"
-        if backup_decrypt BK_PASS "$ENC" "$CHECK" 2>>"$LOG_FILE" \
-           && [ "$(shasum -a 256 <"$CHECK" | cut -d' ' -f1)" = "$(shasum -a 256 <"$OUT" | cut -d' ' -f1)" ]; then
-          ENC_OK=1
-        else
-          log "R2 HIBA: a titkositott masolat oda-vissza ellenorzese NEM egyezett"
-        fi
-        rm -f "$CHECK"
+      # CATCH-UP, card 78870ea3. The mirror used to run one way only: tonight's dump
+      # went up and the prune below deleted what was gone locally, but nothing ever
+      # refilled a night whose upload had failed. Measured 2026-10-04: 3 of 16 local
+      # dumps had no offsite copy (09-28 locked Keychain, 10-03 network, 08-16 older
+      # than the bucket), each to stay missing until it rotated out locally. So every
+      # run uploads EVERY local dump the bucket lacks, tonight's included. A legacy
+      # plaintext `.dump` object counts as present: re-uploading it would add a
+      # second copy, not a missing one.
+      TONIGHT="$(basename "$OUT")"
+      if REMOTE_LIST=$(python3 "$R2_SCRIPT" list "$R2_BUCKET" 2>>"$LOG_FILE"); then
+        REMOTE_NAMES=$(printf '%s\n' "$REMOTE_LIST" | awk '{print $3}' | grep -E '\.dump(\.gpg)?$')
+        PENDING=$(ls -1 delta-crm-*.dump 2>/dev/null | while read -r F; do
+          printf '%s\n' "$REMOTE_NAMES" | grep -qxF -e "$F" -e "$F.gpg" || echo "$F"
+        done)
       else
-        log "R2 HIBA: a titkositas nem sikerult"
+        # A failed listing says nothing about whether a put would work: try tonight's.
+        log "R2 HIBA: a vodor listaja nem olvashato (${REMOTE_LIST%%$'\n'*}), csak a mai mentest probalom"
+        PENDING="$TONIGHT"
       fi
+
+      TONIGHT_OK=0
+      UP_FAILED=""
+      for F in $PENDING; do
+        REMOTE_NAME="$F.gpg"
+        ENC="$BACKUP_DIR/.$REMOTE_NAME.tmp"
+        rm -f "$ENC"
+        ENC_OK=0
+        if backup_encrypt BK_PASS "$F" "$ENC" 2>>"$LOG_FILE"; then
+          chmod 600 "$ENC"
+          # ROUND TRIP before upload: the object we ship must decrypt, with the key
+          # the restore will use, to the very bytes we verified above. An encrypted
+          # copy nobody has decrypted is not a backup yet.
+          CHECK="$BACKUP_DIR/.$REMOTE_NAME.check"
+          rm -f "$CHECK"
+          if backup_decrypt BK_PASS "$ENC" "$CHECK" 2>>"$LOG_FILE" \
+             && [ "$(shasum -a 256 <"$CHECK" | cut -d' ' -f1)" = "$(shasum -a 256 <"$F" | cut -d' ' -f1)" ]; then
+            ENC_OK=1
+          else
+            log "R2 HIBA: a titkositott masolat oda-vissza ellenorzese NEM egyezett ($REMOTE_NAME)"
+          fi
+          rm -f "$CHECK"
+        else
+          log "R2 HIBA: a titkositas nem sikerult ($REMOTE_NAME)"
+        fi
+
+        if [ "$ENC_OK" = "1" ] && python3 "$R2_SCRIPT" put "$R2_BUCKET" "$ENC" "$REMOTE_NAME" >>"$LOG_FILE" 2>&1; then
+          if [ "$F" = "$TONIGHT" ]; then
+            TONIGHT_OK=1
+            log "R2 OK $REMOTE_NAME (titkositva)"
+          else
+            log "R2 POTOLVA $REMOTE_NAME (titkositva, egy korabbi elmaradt feltoltes)"
+          fi
+        else
+          UP_FAILED="$UP_FAILED $F"
+        fi
+        rm -f "$ENC"
+      done
       BK_PASS=""
 
-      if [ "$ENC_OK" = "1" ] && python3 "$R2_SCRIPT" put "$R2_BUCKET" "$ENC" "$REMOTE_NAME" >>"$LOG_FILE" 2>&1; then
-        log "R2 OK $REMOTE_NAME (titkositva)"
-
-        # Mirror the local retention: the local directory IS the policy, so whatever
-        # local pruning kept is what the bucket should hold. BOTH suffixes: objects
-        # uploaded before 3acc137f are plaintext `.dump`, and they must keep
-        # rotating out exactly as before rather than sit in the bucket forever.
-        #
-        # GUARD: never prune the bucket from a suspiciously thin local directory. If
-        # the disk died or the dumps were wiped, an unguarded mirror would delete the
-        # offsite copies too -- turning the one surviving backup into no backup at the
-        # exact moment it is needed.
+      # Mirror the local retention: the local directory IS the policy, so whatever
+      # local pruning kept is what the bucket should hold. BOTH suffixes: objects
+      # uploaded before 3acc137f are plaintext `.dump`, and they must keep
+      # rotating out exactly as before rather than sit in the bucket forever.
+      #
+      # Gated on TONIGHT's upload, as before, and NOT on the catch-ups: one old dump
+      # that keeps failing must not freeze the bucket's deletions, which carry the
+      # 12-month promise (fe4d8ccc).
+      #
+      # GUARD: never prune the bucket from a suspiciously thin local directory. If
+      # the disk died or the dumps were wiped, an unguarded mirror would delete the
+      # offsite copies too -- turning the one surviving backup into no backup at the
+      # exact moment it is needed.
+      if [ "$TONIGHT_OK" = "1" ]; then
         if [ "$LOCAL_COUNT" -ge 3 ]; then
           python3 "$R2_SCRIPT" list "$R2_BUCKET" 2>/dev/null | awk '{print $3}' | grep -E '\.dump(\.gpg)?$' | while read -r REMOTE; do
             [ -f "$BACKUP_DIR/${REMOTE%.gpg}" ] || {
@@ -257,15 +295,16 @@ if [ -r "$R2_KEY_FILE" ]; then
         else
           log "R2 PRUNE kihagyva: csak $LOCAL_COUNT helyi mentes van, ez tul keves ahhoz hogy tukrozzek"
         fi
-      else
-        log "R2 HIBA: a feltoltes nem sikerult, a helyi mentes megvan"
+      fi
+
+      if [ -n "$UP_FAILED" ]; then
+        log "R2 HIBA: a feltoltes nem sikerult:$UP_FAILED -- a helyi mentes megvan, a kovetkezo futas potolja"
         # SECOND instance of the same defect, and the REGRESSION TEST is what found it:
         # I fixed fail() first and this path still carried from="delta-crm-backup" with
         # its response discarded. One defect, two call sites -- the test asked the file,
         # not me, and my own grep had matched the explanatory comment instead.
-        notify_failure "az R2 feltoltes elszallt, csak a Macen van masolat"
+        notify_failure "az R2 feltoltes elszallt ($(printf '%s\n' $UP_FAILED | wc -l | tr -d ' ') mentes), csak a Macen van masolat; a kovetkezo futas potolja"
       fi
-      rm -f "$ENC"
     fi
   fi
 else

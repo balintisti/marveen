@@ -59,6 +59,12 @@ cat > "$R2" <<EOF
 import os, shutil, sys
 b = "$BUCKET"
 cmd = sys.argv[1]
+# failure switches for case 13: one object's put fails, or the listing fails the
+# way the real r2.py does (a HIBA line on stdout, rc 1)
+if cmd == "put" and os.environ.get("R2_FAIL_PUT") and os.environ["R2_FAIL_PUT"] in sys.argv[4]:
+    sys.exit(1)
+if cmd == "list" and os.environ.get("R2_FAIL_LIST"):
+    print("HIBA 500: stub list failure"); sys.exit(1)
 if cmd == "put":
     shutil.copyfile(sys.argv[3], os.path.join(b, sys.argv[4]))
 elif cmd == "list":
@@ -399,6 +405,58 @@ AFTER=$(ls "$TMP/backups" | grep -cE '\.dump$')
   || no "ures megtartasi listaval a helyi mentesek szama $BEFORE -> $AFTER"
 grep -q 'PRUNE KIHAGYVA' "$TMP/backups/backup.log" && ok 'ures listanal is a kihagyott torlest naplozza' || no 'ures listanal nincs PRUNE KIHAGYVA'
 rm -f "$TMP/backups/$OLD" "$TMP/backups"/delta-crm-202501*
+
+echo "== 13. potlas: minden helyi mentes, ami a bucketbol hianyzik, felmegy (78870ea3) =="
+# has_copy NAME -> the bucket holds NAME.gpg or a legacy plaintext NAME
+has_copy() { [ -f "$BUCKET/$1.gpg" ] || [ -f "$BUCKET/$1" ]; }
+locals() { ls "$TMP/backups" | grep -E '^delta-crm-.*-public\.dump$'; }
+missing() { n=0; for f in $(locals); do has_copy "$f" || n=$((n+1)); done; echo $n; }
+rm -f "$BUCKET"/* "$NOTIFIED"; : > "$TMP/backups/backup.log"
+NL=$(locals | wc -l | tr -d ' ')
+[ "$NL" -ge 3 ] && ok "ELOFELTETEL: $NL helyi mentes, ures bucket" || no "ELOFELTETEL: csak $NL helyi mentes"
+sleep 1; /bin/bash "$TMP/scripts/delta-crm-backup.sh" >/dev/null 2>&1
+[ "$(missing)" = 0 ] && ok "a) ures bucket -> mind a $((NL + 1)) helyi mentesnek van masolata" || no "a) $(missing) helyi mentes hianyzik a bucketbol"
+P=$(grep -c 'R2 POTOLVA' "$TMP/backups/backup.log")
+[ "$P" = "$NL" ] && ok "a) a naplo $P potlast nevez meg, kulon a mai R2 OK-tol" || no "a) $P POTOLVA sor, $NL vart"
+OLDEST=$(locals | head -1)
+backup_decrypt K1 "$BUCKET/$OLDEST.gpg" "$TMP/old.rt" 2>/dev/null && cmp -s "$TMP/old.rt" "$TMP/backups/$OLDEST" \
+  && ok 'a) egy potolt objektum a helyi mentesre fejtodik vissza' || no 'a) a potolt objektum nem adja vissza a helyi mentest'
+[ ! -f "$BUCKET/$OLDEST" ] && ok 'a) nyers .dump nem kerult fel' || no 'a) NYERS objektum kerult a bucketbe'
+
+# b) one old dump's put keeps failing: tonight and the rest still go up, the
+#    stray remote object is still pruned (the gate is TONIGHT, not the catch-up),
+#    the failure is named and alerted -- and the next clean run fills it.
+rm -f "$BUCKET"/* "$NOTIFIED"; : > "$TMP/backups/backup.log"
+: > "$BUCKET/delta-crm-20200103-000000-public.dump.gpg"
+STUCK=$(locals | head -1)
+sleep 1; R2_FAIL_PUT="$STUCK" /bin/bash "$TMP/scripts/delta-crm-backup.sh" >/dev/null 2>&1
+TN=$(locals | tail -1)
+has_copy "$TN" && ok 'b) a mai mentes felment' || no 'b) a mai mentes NEM ment fel'
+has_copy "$STUCK" && no 'b) a bukott feltoltes megis felment (a stub nem tuzelt)' || ok 'b) a bukott feltoltes hianyzik (a stub tuzelt)'
+[ "$(missing)" = 1 ] && ok 'b) pontosan egy hianyzik, a tobbi felment' || no "b) $(missing) hianyzik, 1 vart"
+grep -q "R2 HIBA: a feltoltes nem sikerult: $STUCK" "$TMP/backups/backup.log" && ok 'b) a naplo megnevezi a bukott mentest' || no 'b) a naplo nem nevezi meg a bukott mentest'
+[ -f "$NOTIFIED" ] && grep -q '(1 mentes)' "$NOTIFIED" && ok 'b) riasztas ment, a darabszammal' || no 'b) nincs riasztas vagy rossz a darabszam'
+[ -f "$BUCKET/delta-crm-20200103-000000-public.dump.gpg" ] && no 'b) a par nelkuli objektum maradt (a potlas bukasa blokkolta a tukrot)' \
+  || ok 'b) a par nelkuli objektum torolve, a potlas bukasa ellenere'
+rm -f "$NOTIFIED"
+sleep 1; /bin/bash "$TMP/scripts/delta-crm-backup.sh" >/dev/null 2>&1
+has_copy "$STUCK" && ok 'b) a kovetkezo tiszta futas potolta' || no 'b) a kovetkezo futas sem potolta'
+[ "$(missing)" = 0 ] && ok 'b) utana semmi nem hianyzik' || no "b) utana is $(missing) hianyzik"
+
+# c) the listing fails: tonight's dump is still tried, nothing else is guessed
+rm -f "$BUCKET"/* "$NOTIFIED"; : > "$TMP/backups/backup.log"
+sleep 1; R2_FAIL_LIST=1 /bin/bash "$TMP/scripts/delta-crm-backup.sh" >/dev/null 2>&1
+TN=$(locals | tail -1)
+[ -f "$BUCKET/$TN.gpg" ] && ok 'c) lista-hiba mellett a mai mentes felment' || no 'c) lista-hiba mellett a mai mentes sem ment fel'
+[ "$(ls "$BUCKET" | wc -l | tr -d ' ')" = 1 ] && ok 'c) csak a mai ment fel' || no "c) $(ls "$BUCKET" | wc -l | tr -d ' ') objektum ment fel"
+grep -q 'listaja nem olvashato (HIBA 500: stub list failure)' "$TMP/backups/backup.log" && ok 'c) a naplo megnevezi a lista-hibat, az okkal' || no 'c) a lista-hiba nincs a naploban'
+
+# d) a legacy plaintext object counts as present and is not uploaded again
+rm -f "$BUCKET"/*; : > "$TMP/backups/backup.log"
+LEG=$(locals | head -1); cp "$TMP/backups/$LEG" "$BUCKET/$LEG"
+sleep 1; /bin/bash "$TMP/scripts/delta-crm-backup.sh" >/dev/null 2>&1
+[ -f "$BUCKET/$LEG" ] && [ ! -f "$BUCKET/$LEG.gpg" ] && ok 'd) a regi nyers objektumot nem duplazza .gpg-vel' || no 'd) a regi nyers objektum melle .gpg is felment'
+[ "$(missing)" = 0 ] && ok 'd) a tobbi felment' || no "d) $(missing) hianyzik"
 
 echo
 echo "  $PASS ok, $FAIL bukott"
