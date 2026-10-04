@@ -201,7 +201,10 @@ const BUSY_INDICATORS: RegExp[] = [
 // in the scrollback from permanently pinning the session as busy
 // (observed incident: 81 consecutive scheduler retries on a report that
 // contained the phrase in its body).
-const BUSY_ESC_TO_INTERRUPT_RX = /\besc to interrupt\b/
+// ...and the same phrase CUT by the terminal width (card f5bb2626, didi 27204 (A)): a real
+// footer from friday's pane on 10-02 and 10-03 ended "... /tasks to see subagents · esc to inte…".
+// The truncated form is only ever tested against the footer region, like the full one.
+const BUSY_ESC_TO_INTERRUPT_RX = /\besc to interrupt\b|\besc(?: t(?:o(?: (?:i[a-z]*)?)?)?)?…/
 const LIVE_FOOTER_REGION_LINES = 5
 
 /**

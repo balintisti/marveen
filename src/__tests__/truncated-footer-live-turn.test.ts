@@ -1,6 +1,4 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import {
   detectPaneState,
   detectPermissionMode,
@@ -24,6 +22,8 @@ const SEP = '─'.repeat(80)
 const NAMED_SEP = `${'─'.repeat(71)} Didi ─`
 const TRUNCATED_BUSY_FOOTER = '  ⏵⏵ bypass permissions on · 72 shells, 2 monitors · esc to interrupt · ↓ to …'
 const TRUNCATED_IDLE_FOOTER = '  ⏵⏵ bypass permissions on · 72 shells, 2 monitors · ← for agents · ↓ to …'
+// The idle footer cut INSIDE its parenthesis: the other separator the truncated tail accepts.
+const TRUNCATED_PAREN_IDLE_FOOTER = '  ⏵⏵ bypass permissions on (shift+tab to cyc…'
 
 const panel = (n: number): string[] => [
   '',
@@ -76,6 +76,13 @@ describe('a width-truncated footer is still the footer (card f5bb2626)', () => {
     expect(detectPaneState(pane({ footer: TRUNCATED_IDLE_FOOTER, spinner: false, agents: 9 }))).toBe('idle')
   })
 
+  it('an idle footer cut inside its parenthesis is still the footer (empty box idle, text typing)', () => {
+    expect(detectPaneState(pane({ footer: TRUNCATED_PAREN_IDLE_FOOTER, spinner: false, agents: 9 }))).toBe('idle')
+    expect(detectPaneState(pane({ footer: TRUNCATED_PAREN_IDLE_FOOTER, box: QUEUED, spinner: false, agents: 9 }))).toBe('typing')
+    expect(detectPermissionMode(pane({ footer: TRUNCATED_PAREN_IDLE_FOOTER, spinner: false, agents: 3 })))
+      .toBe('bypass permissions')
+  })
+
   it('names the permission mode from a truncated footer', () => {
     expect(detectPermissionMode(pane({ footer: TRUNCATED_IDLE_FOOTER, spinner: false, agents: 3 })))
       .toBe('bypass permissions')
@@ -109,39 +116,6 @@ describe('liveTurnFooterVisible', () => {
   })
 })
 
-// The keys that interrupt a turn check for one first. Source-level, like parked-clear-sequence:
-// these paths drive tmux directly.
-describe('the interrupting keys ask first (card f5bb2626)', () => {
-  const ROOT = join(__dirname, '..', '..')
-  const AGENT_PROCESS = readFileSync(join(ROOT, 'src', 'web', 'agent-process.ts'), 'utf-8')
-  const CHANNEL_MONITOR = readFileSync(join(ROOT, 'src', 'web', 'channel-monitor.ts'), 'utf-8')
-  const body = (src: string, start: string, end: string) => {
-    const from = src.indexOf(start)
-    expect(from).toBeGreaterThanOrEqual(0)
-    return src.slice(from, src.indexOf(end, from))
-  }
-
-  it('clearInputBuffer checks before the Escape-led sequence', () => {
-    const fn = body(AGENT_PROCESS, 'export async function clearInputBuffer', '\n}\n')
-    expect(fn.indexOf('liveTurnFooterVisible(pane)')).toBeGreaterThan(0)
-    expect(fn.indexOf('liveTurnFooterVisible(pane)')).toBeLessThan(fn.indexOf('parkedClearSequence('))
-  })
-
-  it('discardPlaceholderBuffer checks before its Ctrl-C', () => {
-    const fn = body(AGENT_PROCESS, 'async function discardPlaceholderBuffer', '\n}\n')
-    expect(fn.indexOf('liveTurnFooterVisible(pane)')).toBeGreaterThan(0)
-    expect(fn.indexOf('liveTurnFooterVisible(pane)')).toBeLessThan(fn.indexOf("'C-c'"))
-  })
-
-  it('the clear-and-resend follow-up stops instead of discarding behind a running turn', () => {
-    const fn = body(AGENT_PROCESS, "if (action === 'clear-and-resend') {", 'await sendChunks()')
-    expect(fn.indexOf('liveTurnFooterVisible(pane)')).toBeGreaterThan(0)
-    expect(fn.indexOf('liveTurnFooterVisible(pane)')).toBeLessThan(fn.indexOf('discardPlaceholderBuffer('))
-  })
-
-  it('the stuck-input recovery skips its move behind a running turn', () => {
-    const fn = body(CHANNEL_MONITOR, 'export async function recoverStuckInputForSession', '\n}\n')
-    expect(fn.indexOf('liveTurnFooterVisible(pane)')).toBeGreaterThan(0)
-    expect(fn.indexOf('liveTurnFooterVisible(pane)')).toBeLessThan(fn.indexOf('performStuckInputAction('))
-  })
-})
+// The interrupting keys themselves are covered by BEHAVIOUR tests (what is actually typed into a
+// stubbed tmux): live-turn-keys-refused, live-turn-placeholder-resend, live-turn-stuck-recovery.
+// The source-order checks that stood here let 8 of 11 mutants survive (didi 27204 D).

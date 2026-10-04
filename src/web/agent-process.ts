@@ -3317,28 +3317,31 @@ const PLACEHOLDER_DISCARD_SETTLE_MS = 450
 // when a placeholder is CONFIRMED present (box non-empty, not busy) -- which
 // detectsPastePlaceholder guarantees at the call site. We re-check before each
 // press and stop the instant the placeholder is gone, so we never press Ctrl-C
-// into an already-empty box. Returns true if the placeholder was cleared.
-async function discardPlaceholderBuffer(session: string, host: string | null = null): Promise<boolean> {
+// into an already-empty box. 'refused' = a running turn appeared under the box, nothing pressed.
+async function discardPlaceholderBuffer(
+  session: string,
+  host: string | null = null,
+): Promise<'cleared' | 'refused' | 'failed'> {
   for (let i = 0; i < PLACEHOLDER_DISCARD_MAX; i++) {
     const pane = capturePane(session, host)
     // Stop pressing once the stub is gone -- a further Ctrl-C on an empty box
     // would quit the TUI.
-    if (pane != null && !detectsPastePlaceholder(pane)) return true
+    if (pane != null && !detectsPastePlaceholder(pane)) return 'cleared'
     // Ctrl-C on a running turn interrupts it (card f5bb2626).
     if (pane != null && liveTurnFooterVisible(pane)) {
       logger.warn({ session }, 'discardPlaceholderBuffer: refused, the footer shows a running turn (esc to interrupt)')
-      return false
+      return 'refused'
     }
     try {
       runTmux(host, ['send-keys', '-t', session, 'C-c'], { timeout: 5000 })
     } catch (err) {
       logger.warn({ err, session }, 'discardPlaceholderBuffer: Ctrl-C send failed')
-      return false
+      return 'failed'
     }
     await delay(PLACEHOLDER_DISCARD_SETTLE_MS)
   }
   const finalPane = capturePane(session, host)
-  return finalPane != null && !detectsPastePlaceholder(finalPane)
+  return finalPane != null && !detectsPastePlaceholder(finalPane) ? 'cleared' : 'failed'
 }
 
 /** What a delivery did. 'withheld-permission' = NOTHING was typed (or a follow-up key was held
@@ -3647,18 +3650,17 @@ export async function sendPromptToSession(
       return 'withheld-permission'
     }
     if (action === 'clear-and-resend') {
-      // A running turn means the box is queued behind it, and the discard's Ctrl-C would interrupt
-      // it; a resend after a refused discard would type the prompt twice (card f5bb2626).
-      if (pane != null && liveTurnFooterVisible(pane)) {
-        logger.warn({ session, attempt }, 'sendPromptToSession: placeholder behind a running turn; not clearing')
-        break
-      }
       // Placeholder confirmed in the pane (box non-empty, not busy), so the
       // Ctrl-C in discardPlaceholderBuffer is safe. Clear it, then replay the
       // chunk stream. The loop re-samples on the next iteration and will keep
       // recovering (or give up at the budget) if the resend itself parks.
       logger.info({ session, attempt }, 'sendPromptToSession: paste placeholder detected; clearing and re-sending')
-      if (!(await discardPlaceholderBuffer(session, host))) {
+      const discard = await discardPlaceholderBuffer(session, host)
+      // A running turn under the box (card f5bb2626): the discard re-checks on its OWN capture,
+      // right before its Ctrl-C, and refuses. The stub is still in the box, so a resend would type
+      // the prompt a second time behind it -- stop instead.
+      if (discard === 'refused') break
+      if (discard === 'failed') {
         logger.warn({ session, attempt }, 'sendPromptToSession: failed to clear paste placeholder before resend')
       }
       try {
@@ -4222,6 +4224,8 @@ export async function clearStaleParkedInput(
 ): Promise<boolean> {
   const a = capturePane(session, host)
   if (a == null || detectPaneState(a) !== 'typing') return false
+  // The clear below is Escape-first: never behind a running turn (card f5bb2626, didi 27204 (C)).
+  if (liveTurnFooterVisible(a)) return false
   // DIM-GUARD (2026-06-30, Szabi insight): extract the parked TEXT from the
   // dim-stripped (-e) view. Ghost/phantom frames -- stale captures, placeholder
   // hints, a persona fragment left by a send-keys delivery (the "Koszi a halakat."
