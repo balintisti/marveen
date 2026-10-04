@@ -244,7 +244,7 @@ def stamped(dirpath, hours_ago):
     return os.path.join(dirpath, time.strftime('claudeclaw-%Y%m%d-%H%M%S.tar.gz', t))
 
 
-def make_archive(path, cards=3, broken_db=False, filler=0):
+def make_archive(path, cards=3, broken_db=False, filler=0, reports=0, manifest_names_reports=None):
     with tempfile.TemporaryDirectory() as d:
         db = os.path.join(d, 'claudeclaw.db')
         c = sqlite3.connect(db)
@@ -262,6 +262,23 @@ def make_archive(path, cards=3, broken_db=False, filler=0):
             with open(secret, 'w') as f:
                 f.write('SECRET_MARKER_4242=do-not-leak\n')
             t.add(secret, arcname='repo/.env')
+            # card 23bd6a95: the agents' reports as backup.sh archives them (files, plus the snapshot's .git)
+            names = manifest_names_reports if manifest_names_reports is not None else bool(reports)
+            lines = ['Marveen backup test', '--- home/ ---'] + (['home/Backups/agent-reports'] if names else [])
+            man = os.path.join(d, 'MANIFEST.txt')
+            with open(man, 'w') as f:
+                f.write('\n'.join(lines) + '\n')
+            t.add(man, arcname='MANIFEST.txt')
+            if reports:
+                for i in range(reports):
+                    rp = os.path.join(d, f'r{i}.md')
+                    with open(rp, 'w') as f:
+                        f.write(f'report {i}\n')
+                    t.add(rp, arcname=f'home/Backups/agent-reports/a1/r{i}.md')
+                git_obj = os.path.join(d, 'obj')
+                with open(git_obj, 'w') as f:
+                    f.write('not a report')
+                t.add(git_obj, arcname='home/Backups/agent-reports/.git/objects/ab/cdef')
             if filler:                                   # incompressible bytes: several upload chunks
                 pad = os.path.join(d, 'filler.bin')
                 with open(pad, 'wb') as f:
@@ -679,6 +696,36 @@ class TestResilience(Base):
         self.assertEqual(r.returncode, 1)
         self.assertIn('breaks in a row', self.alert_text())
         self.assertEqual(self.uploaded(), [])
+
+
+class TestReportsInTheArchive(Base):
+    """Card 23bd6a95: the agents' reports travel in the daily archive, and the offsite log SAYS so."""
+
+    def test_push_and_restore_test_name_the_report_files(self):
+        self.init()
+        make_archive(self.archive, reports=3)
+        r = self.run_tool('push', '--archive', self.archive)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('agent-reports: 3 files', r.stdout)      # the snapshot's .git objects are not reports
+        r = self.run_tool('restore-test')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('agent-reports: 3 files', r.stdout)      # counted in the DECRYPTED archive, after the round trip
+
+    def test_an_archive_naming_reports_it_does_not_hold_is_not_shipped(self):
+        self.init()
+        make_archive(self.archive, reports=0, manifest_names_reports=True)
+        r = self.run_tool('push', '--archive', self.archive)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('holds no report file', r.stderr)
+        self.assertEqual(self.uploaded(), [], 'a copy that names a part it lacks was uploaded')
+        self.assertIn('FAILED', self.alert_text())
+
+    def test_an_archive_from_before_the_reports_is_said_to_be_so_not_counted_as_zero(self):
+        self.init()
+        r = self.run_tool('push', '--archive', self.archive)      # the Base archive: no reports, none named
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('agent-reports: not in this archive', r.stdout)
+        self.assertNotIn('agent-reports: 0 files', r.stdout)
 
 
 if __name__ == '__main__':
