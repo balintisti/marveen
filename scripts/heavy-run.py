@@ -42,6 +42,16 @@ POLL = float(os.environ.get("HEAVY_RUN_POLL") or 5)
 def agent_name():
     if os.environ.get("HEAVY_AGENT"):
         return os.environ["HEAVY_AGENT"]
+    # The session's config dir names the agent wherever it works; the cwd only does inside
+    # agents/<name>, and the heavy runs happen in worktrees outside it (measured 2026-10-04:
+    # a friday run from /Users/isti/friday-test was logged as "unknown-<pid>", one agent per run).
+    conf = (os.environ.get("CLAUDE_CONFIG_DIR") or "").rstrip(os.sep).split(os.sep)
+    if "agents" in conf and conf.index("agents") + 1 < len(conf):
+        return conf[conf.index("agents") + 1]
+    if conf[-1:] == [".channels-config"]:
+        return "marveen"
+    if len(conf) >= 2 and conf[-1] == ".claude-config" and conf[-2].startswith("."):
+        return conf[-2][1:]  # ~/.marveen-worker/.claude-config -> marveen-worker
     parts = (os.environ.get("PWD") or os.getcwd()).split(os.sep)
     if "agents" in parts and parts.index("agents") + 1 < len(parts):
         return parts[parts.index("agents") + 1]
@@ -270,7 +280,21 @@ def self_test():
     results.append(("each run is logged with waited_s / ran_s / rc",
                     any(x["label"] == "rc" and x["rc"] == 7 and "waited_s" in x for x in lines)))
 
-    # 7. --help and a mistyped command answer in words, not with a traceback
+    # 7. the agent is read from the session's config dir, not only from the cwd
+    def named(conf):
+        e = {k: v for k, v in env.items() if k != "HEAVY_AGENT"}
+        e.update(CLAUDE_CONFIG_DIR=conf, PWD=base)
+        subprocess.run([sys.executable, me, "--label", "who:" + conf, "--", "true"], env=e, cwd=base)
+        rows = [json.loads(x) for x in open(log)]
+        return [x["agent"] for x in rows if x["label"] == "who:" + conf][-1]
+    results.append(("config dir agents/dexter -> dexter, from any cwd",
+                    named("/Users/isti/marveen/agents/dexter/.claude-config") == "dexter"))
+    results.append(("coordinator's .channels-config -> marveen",
+                    named("/Users/isti/marveen/.channels-config") == "marveen"))
+    results.append(("CONTROL: no config dir, cwd outside agents/ -> unknown",
+                    named("").startswith("unknown-")))
+
+    # 8. --help and a mistyped command answer in words, not with a traceback
     h = subprocess.run([sys.executable, me, "--help"], env=env, capture_output=True, text=True)
     results.append(("--help prints the usage, rc 0", h.returncode == 0 and "--status" in h.stdout))
     m = spawn("typo", "no-such-command-a2090e75")
