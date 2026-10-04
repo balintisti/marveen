@@ -37,6 +37,7 @@ the Docker volumes (3) are **separate** and must be moved on their own.
 - `~/.claude/channels/*/.env` — MAIN orchestrator channel token
 - `~/.claude/channels/*/access.json`, `invites.json`, `approved/**` — pairing allowlist + approvals
 - `~/Library/LaunchAgents/com.<MAIN_AGENT_ID>.*.plist` -- launchd jobs (the prefix is your `MAIN_AGENT_ID`, `marveen` by default)
+- `~/Backups/agent-reports/**` -- the agents' `reports/` trees as a local-only git repo (`scripts/agent-reports-snapshot.sh`), with its history. The run exits 7 (archive still written) when report files exist and this snapshot is missing, empty or stale (card 23bd6a95).
 
 **(3) Docker volumes — NOT in the tarball, migrate separately**
 - `stack_influxdb-data`, `stack_influxdb-config` — InfluxDB 2.7 time-series (Loxone history)
