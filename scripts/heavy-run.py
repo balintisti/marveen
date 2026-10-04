@@ -25,6 +25,7 @@ The exit code is the command's (128+N if a signal ended it).
 import fcntl
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -129,6 +130,10 @@ def watchdog(runner, pgid, slot):
 
 
 def run(label, cmd):
+    # A mistyped command fails before it queues for a slot, the way a shell says it, not as a traceback.
+    if shutil.which(cmd[0]) is None:
+        print(f"heavy-run: {cmd[0]}: command not found", file=sys.stderr)
+        return 127
     os.makedirs(DIR, exist_ok=True)
     me = {"agent": agent_name(), "pid": os.getpid(), "label": label or " ".join(cmd)[:120],
           "started": time.strftime("%Y-%m-%d %H:%M:%S")}
@@ -162,7 +167,6 @@ def run(label, cmd):
 
 def self_test():
     """Each case with the control that proves the check can fail."""
-    import shutil
     base = tempfile.mkdtemp(prefix="heavy-run-test-")
     env = {**os.environ, "HEAVY_RUN_DIR": base, "HEAVY_RUN_MAX": "2", "HEAVY_RUN_POLL": "0.2",
            "HEAVY_RUN_GRACE": "1"}
@@ -253,6 +257,13 @@ def self_test():
     # 5. the exit code is the command's
     results.append(("exit code passes through", spawn("rc", "bash", "-c", "exit 7").wait() == 7))
 
+    # 6. --help and a mistyped command answer in words, not with a traceback
+    h = subprocess.run([sys.executable, me, "--help"], env=env, capture_output=True, text=True)
+    results.append(("--help prints the usage, rc 0", h.returncode == 0 and "--status" in h.stdout))
+    m = spawn("typo", "no-such-command-a2090e75")
+    err = m.communicate()[1]
+    results.append(("a missing command: rc 127, no traceback", m.returncode == 127 and "Traceback" not in err))
+
     shutil.rmtree(base, ignore_errors=True)
     for name, ok in results:
         print(("PASS " if ok else "FAIL ") + name)
@@ -262,6 +273,9 @@ def self_test():
 
 
 def main(argv):
+    if argv[:1] in (["-h"], ["--help"]):
+        print(__doc__)
+        return 0
     if argv[:1] == ["--self-test"]:
         return self_test()
     if argv[:1] == ["--status"]:
