@@ -24,7 +24,9 @@ const h = vi.hoisted(() => {
   // window and the pane reads 'typing' mid-turn -- the same misreading as 10-03, by another road.
   // On such a pane the liveTurnFooterVisible guards are the ONLY thing between the keys and the turn.
   const NOMODE_LIVE = '  3 shells, 2 monitors · esc to interrupt · ↓ to manage'
-  const NOMODE_IDLE = '  3 shells, 2 monitors · ↓ to manage'
+  // No background work in it: since didi 27419 a shells/monitors tail refuses the keys on its own
+  // (see 'background work beside an idle prompt'), so it can no longer be the idle control.
+  const NOMODE_IDLE = '  ? for shortcuts'
   const longPanel = ['', '  ⏺ main', ...[0, 1, 2, 3, 4, 5].map(i => `  ◯ general-purpose  Checking row ${i}…  3h 53m`)]
   const divergent = (footer: string) =>
     ['  ⎿  $ git fetch -q origin', '', NAMED, '❯ Csendes heartbeat.', SEP, footer, ...longPanel].join('\n')
@@ -39,6 +41,12 @@ const h = vi.hoisted(() => {
     LIVE_PARKED: pane(LIVE_FOOTER, 'Csendes heartbeat.', true),
     LIVE_EMPTY: pane(LIVE_FOOTER, '', true),
     IDLE_PARKED: pane(IDLE_FOOTER, 'Csendes heartbeat.', false),
+    // didi 27419, measured shapes: background work and NO "esc to interrupt" anywhere.
+    BG_FOOTER_PARKED: ['', NAMED, '❯ Csendes heartbeat.', SEP, '  … 45 shells, 3 monitors · ↓ to manage'].join('\n'),
+    BG_WAITING_PARKED: ['  ✻ Waiting for 2 background agents to finish', '', NAMED, '❯ Csendes heartbeat.', SEP, IDLE_FOOTER].join('\n'),
+    // the same words QUOTED in the scrollback, far above the live box: not background work
+    BG_QUOTED_IDLE: ['  ⎿  "✻ Waiting for 2 background agents to finish" (didi 27419)', '  ⎿  footer was: … 45 shells, 3 monitors · ↓ to manage',
+      '', '  ⎿  ok', '', '  ⎿  ok', '', NAMED, '❯ Csendes heartbeat.', SEP, IDLE_FOOTER].join('\n'),
     pane: '',
     calls: [] as string[][],
   }
@@ -57,7 +65,7 @@ vi.mock('node:child_process', async (orig) => ({
 vi.mock('../notify.js', () => ({ alertIsRedirected: () => false, notifyChannel: vi.fn(async () => {}), notifyTelegram: vi.fn(async () => {}) }))
 
 import { clearInputBuffer, clearStaleParkedInput } from '../web/agent-process.js'
-import { detectPaneState, liveTurnFooterVisible } from '../pane-state.js'
+import { detectPaneState, liveTurnFooterVisible, backgroundWorkVisible, interruptingKeysUnsafe } from '../pane-state.js'
 import { __resetSessionSendLocks } from '../web/session-send-lock.js'
 
 const sentKeys = () => h.calls.filter(a => a.includes('send-keys'))
@@ -147,5 +155,47 @@ describe('when the pane classifier misreads a running turn as typing, the keys s
     h.pane = h.DIVERGENT_LIVE
     expect(await clearInputBuffer('agent-x')).toBe(false)
     expect(sentKeys()).toEqual([])
+  })
+})
+
+describe('background work beside an idle prompt (didi 27419; marveen 26943: no Escape if a running background task is visible)', () => {
+  it('is seen from the footer tail and from the "Waiting for N background agents" line, not from quoted text', () => {
+    expect(backgroundWorkVisible(h.BG_FOOTER_PARKED)).toBe(true)
+    expect(backgroundWorkVisible(h.BG_WAITING_PARKED)).toBe(true)
+    expect(backgroundWorkVisible(h.BG_QUOTED_IDLE)).toBe(false)
+    expect(backgroundWorkVisible(h.IDLE_PARKED)).toBe(false)
+    // none of them shows a running turn: only the background-work half can refuse them
+    for (const p of [h.BG_FOOTER_PARKED, h.BG_WAITING_PARKED]) {
+      expect(liveTurnFooterVisible(p)).toBe(false)
+      expect(interruptingKeysUnsafe(p)).toBe(true)
+    }
+    expect(interruptingKeysUnsafe(h.DIVERGENT_LIVE)).toBe(true)
+  })
+
+  it('the old divergent footer "3 shells, 2 monitors · ↓ to manage" is background work too', () => {
+    const old = h.DIVERGENT_IDLE.replace('  ? for shortcuts', '  3 shells, 2 monitors · ↓ to manage')
+    expect(old).not.toBe(h.DIVERGENT_IDLE)
+    expect(backgroundWorkVisible(old)).toBe(true)
+  })
+
+  for (const [name, shape] of [['footer tail', 'BG_FOOTER_PARKED'], ['waiting line', 'BG_WAITING_PARKED']] as const) {
+    it(`clearInputBuffer sends nothing and reports failure (${name})`, async () => {
+      h.pane = h[shape]
+      expect(await clearInputBuffer('agent-bg')).toBe(false)
+      expect(sentKeys()).toEqual([])
+    })
+
+    it(`the janitor sends nothing (${name})`, async () => {
+      h.pane = h[shape]
+      expect(detectPaneState(h[shape])).toBe('typing')
+      expect(await clearStaleParkedInput(`agent-bg-${name}`)).toBe(false)
+      expect(sentKeys()).toEqual([])
+    })
+  }
+
+  it('CONTROL: the quoted words in the scrollback do not stop the janitor', async () => {
+    h.pane = h.BG_QUOTED_IDLE
+    await clearStaleParkedInput('agent-bg-quoted')
+    expect(sentKeys().length).toBeGreaterThan(0)
   })
 })

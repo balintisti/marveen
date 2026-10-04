@@ -574,6 +574,27 @@ export async function clearParkedInputUnderLane(
   return cleared ? 'cleared' : 'left-fragment'
 }
 
+// The clear + re-inject of the three reinject moves, as ONE recover-mode critical section
+// (DELIVLOCK805): it MUTATES the input box, so it must not race a live delivery into this pane.
+// A REFUSED clear leaves the parked text in the box, and a re-inject behind it would submit both
+// (didi 27419) -- since card f5bb2626 the clear refuses beside a running turn or background work,
+// so this is an ordinary outcome, not a corner: hold, and let the parked-hold bound raise it.
+// HOST-KEY CAVEAT (PANEWRITERS805): the lane key is host-scoped (`local::sess` here vs
+// `vps1::sess` for a remote delivery). This recovery only ever targets LOCAL sessions today, so
+// null is correct; if it is ever extended to remote agents, the real host MUST be threaded here or
+// the fail-closed guarantee silently evaporates (two different keys never contend).
+export type ClearReinjectResult = 'skipped-locked' | 'clear-refused' | 'reinjected'
+
+async function clearThenReinject(session: string, text: string, survivalReason: string): Promise<ClearReinjectResult> {
+  let refused = false
+  const res = await withSessionSendLock(session, null, 'recover', async () => {
+    if (!(await clearInputBuffer(session))) { refused = true; return }
+    await sendPromptToSession(session, text, null, { lockMode: 'held', survival: 'lost', survivalReason })
+  })
+  if (!res.ran) return 'skipped-locked'
+  return refused ? 'clear-refused' : 'reinjected'
+}
+
 async function performStuckInputAction(
   session: string,
   action: StuckInputAction,
@@ -588,27 +609,13 @@ async function performStuckInputAction(
     switch (action) {
       case 'reinject-block': {
         logger.warn({ session, chatId: block?.chatId, attempt }, 'Stuck channel input -- clear + verbatim re-inject')
-        // DELIVLOCK805: clear+re-inject MUTATES the input box, so it must not
-        // race a live delivery into this pane (it could clear a partial send or
-        // submit the wrong buffer). Run the clear+re-inject as ONE recover-mode
-        // critical section; if a delivery holds the lane, skip and log -- a
-        // stuck box recovers on the next tick once the delivery finishes.
-        // HOST-KEY CAVEAT (PANEWRITERS805): the lane key is host-scoped
-        // (`local::sess` here vs `vps1::sess` for a remote delivery). This
-        // recovery only ever targets LOCAL sessions today, so null is correct;
-        // if stuck-input recovery is ever extended to remote agents, the real
-        // host MUST be threaded here or the fail-closed guarantee silently
-        // evaporates (two different keys never contend).
-        const res = await withSessionSendLock(session, null, 'recover', async () => {
-          await clearInputBuffer(session)
-          await sendPromptToSession(session, block!.block!, null, {
-            lockMode: 'held',
-            survival: 'lost',
-            survivalReason: 'clears the box before re-injecting, so it destroys its own source; it survives only via the injected-prompt registry, which is the mechanism that READS this declaration -- so the honest unconditional value is lost',
-          })
-        })
-        if (!res.ran) {
+        const result = await clearThenReinject(session, block!.block!, 'clears the box before re-injecting, so it destroys its own source; it survives only via the injected-prompt registry, which is the mechanism that READS this declaration -- so the honest unconditional value is lost')
+        if (result === 'skipped-locked') {
           logger.info({ session, attempt }, 'Stuck-input recovery (reinject-block) skipped: a delivery is in flight into this pane (fail-closed)')
+          break
+        }
+        if (result === 'clear-refused') {
+          logger.warn({ session, attempt }, 'Stuck-input recovery (reinject-block) held: the clear was refused (a running turn or background work is visible), nothing re-injected')
           break
         }
         submitted = true
@@ -618,16 +625,13 @@ async function performStuckInputAction(
         const text = parkedInputText(paneBefore)
         if (text != null) {
           logger.warn({ session, attempt }, 'Stuck input (non-channel) -- clear + re-inject parked text')
-          const res = await withSessionSendLock(session, null, 'recover', async () => {
-            await clearInputBuffer(session)
-            await sendPromptToSession(session, text, null, {
-              lockMode: 'held',
-              survival: 'lost',
-              survivalReason: 'clears the box before re-injecting; survives only via the registry that reads this declaration, and not at all when that registry is empty',
-            })
-          })
-          if (!res.ran) {
+          const result = await clearThenReinject(session, text, 'clears the box before re-injecting; survives only via the registry that reads this declaration, and not at all when that registry is empty')
+          if (result === 'skipped-locked') {
             logger.info({ session, attempt }, 'Stuck-input recovery (reinject-plain) skipped: a delivery is in flight into this pane (fail-closed)')
+            break
+          }
+          if (result === 'clear-refused') {
+            logger.warn({ session, attempt }, 'Stuck-input recovery (reinject-plain) held: the clear was refused (a running turn or background work is visible), nothing re-injected')
             break
           }
         } else {
@@ -653,16 +657,13 @@ async function performStuckInputAction(
           break
         }
         logger.warn({ session, attempt }, 'Stuck input -- clear + re-inject the recorded prompt (registry-proven)')
-        const res = await withSessionSendLock(session, null, 'recover', async () => {
-          await clearInputBuffer(session)
-          await sendPromptToSession(session, recordedText, null, {
-            lockMode: 'held',
-            survival: 'lost',
-            survivalReason: 'replays the registry record, then clears; if this send is dropped with the registry empty nothing brings it back',
-          })
-        })
-        if (!res.ran) {
+        const result = await clearThenReinject(session, recordedText, 'replays the registry record, then clears; if this send is dropped with the registry empty nothing brings it back')
+        if (result === 'skipped-locked') {
           logger.info({ session, attempt }, 'Stuck-input recovery (reinject-recorded) skipped: a delivery is in flight into this pane (fail-closed)')
+          break
+        }
+        if (result === 'clear-refused') {
+          logger.warn({ session, attempt }, 'Stuck-input recovery (reinject-recorded) held: the clear was refused (a running turn or background work is visible), nothing re-injected')
           break
         }
         submitted = true

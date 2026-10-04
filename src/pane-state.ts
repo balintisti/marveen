@@ -337,6 +337,46 @@ export function liveTurnFooterVisible(pane: string): boolean {
   return false
 }
 
+// Background work the interrupting keys would kill (card f5bb2626, didi 27419; marveen 26943: the
+// recovery never sends Escape "if esc to interrupt OR a running background task is visible").
+// Below the box: the footer's task tail -- `· 45 shells, 3 monitors · ↓ to manage`,
+// `· 1 monitor · ← for agents`, `/tasks to see subagents`. Above the box: the spinner line a turn
+// leaves while it waits on its background agents, `✻ Waiting for 2 background agents to finish`.
+const BG_FOOTER_RX = /(?:^|[·…])\s*\d+\s+(?:shells?|monitors?)\b|← for agents|\/tasks to see subagents/
+const BG_WAITING_RX = /\bWaiting for \d+ background (?:agents?|tasks?)\b/
+const SPINNER_ABOVE_BOX_LINES = 3
+
+/**
+ * Whether background work is visible around the LIVE input box: a task tail in the footer under
+ * it, or the "Waiting for N background agents" line above it. Same anchor as liveTurnFooterVisible
+ * (the last box separator), for the same reason: the agent list drawn below the footer and any
+ * quoted text in the scrollback stay out of the window. No box -> false.
+ */
+export function backgroundWorkVisible(pane: string): boolean {
+  const lines = pane.split('\n')
+  let bottom = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (BOX_SEP_RX.test(lines[i])) { bottom = i; break }
+  }
+  if (bottom < 0) return false
+  if (lines.slice(bottom + 1, bottom + 1 + FOOTER_BELOW_BOX_LINES).some(l => BG_FOOTER_RX.test(l))) return true
+  let top = -1
+  for (let i = bottom - 1; i >= 0; i--) {
+    if (BOX_SEP_RX.test(lines[i])) { top = i; break }
+  }
+  if (top < 0) return false
+  return lines.slice(Math.max(0, top - SPINNER_ABOVE_BOX_LINES), top).some(l => BG_WAITING_RX.test(l))
+}
+
+/**
+ * The one question every interrupting key (Escape-first clear, Ctrl-C discard) must ask first:
+ * would it hit a running turn or the background work it waits on? Enter is not covered -- it
+ * interrupts nothing, and marveen 26943 keeps it as the first move.
+ */
+export function interruptingKeysUnsafe(pane: string): boolean {
+  return liveTurnFooterVisible(pane) || backgroundWorkVisible(pane)
+}
+
 // Prompt line inside the input box. `❯` followed by at least one
 // horizontal whitespace and then a non-whitespace character means the
 // user (or a send-keys that didn't submit) parked text there.

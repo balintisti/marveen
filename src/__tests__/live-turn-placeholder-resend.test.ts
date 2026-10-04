@@ -45,6 +45,8 @@ const PANEL = ['', '  ⏺ main', ...[0, 1, 2, 3, 4, 5].map((i) => `  ◯ general
 const STUB = '❯ [Pasted text #1 +2 lines]'
 const PH_LIVE = ['', SEP, STUB, SEP, '  ⏵⏵ bypass permissions on · 3 shells · esc to interrupt · ↓ to manage', ...PANEL].join('\n')
 const PH_IDLE = ['', SEP, STUB, SEP, '  ⏵⏵ bypass permissions on (shift+tab to cycle)'].join('\n')
+// didi 27419: background shells, no running turn -- Ctrl-C would still hit the work
+const PH_BG = ['', SEP, STUB, SEP, '  ⏵⏵ bypass permissions on · 3 shells · ↓ to manage'].join('\n')
 const EMPTY_IDLE = ['', SEP, '❯ ', SEP, '  ⏵⏵ bypass permissions on (shift+tab to cycle)'].join('\n')
 
 const WAKEUP = '[inbox-wakeup: pending inter-agent messages]'
@@ -80,6 +82,14 @@ describe('the paste-placeholder recovery behind a running turn (f5bb2626)', () =
     // 2nd = the discard's own re-check (the turn is now running)
     h.colour = (sentEnter, n) => (!sentEnter ? EMPTY_IDLE : n === 0 ? PH_IDLE : PH_LIVE)
     expect(await send('agent-ph-2')).toBe('sent')
+    expect(ctrlC()).toEqual([])
+    expect(typed()).toHaveLength(1)
+  })
+
+  it('background work beside the stub (no running turn): no Ctrl-C, and NOT typed a second time', async () => {
+    expect(liveTurnFooterVisible(PH_BG)).toBe(false)
+    h.colour = (sentEnter) => (sentEnter ? PH_BG : EMPTY_IDLE)
+    expect(await send('agent-ph-bg')).toBe('sent')
     expect(ctrlC()).toEqual([])
     expect(typed()).toHaveLength(1)
   })

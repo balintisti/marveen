@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   clears: [] as string[],
   sends: [] as string[],
   tmux: [] as string[][],
+  clearResult: true,
 }))
 
 vi.mock('node:child_process', async (orig) => ({
@@ -40,7 +41,7 @@ vi.mock('../web/agent-process.js', async (orig) => ({
   ...(await orig<typeof import('../web/agent-process.js')>()),
   captureParkedInputView: () => h.pane,
   capturePane: () => h.pane,
-  clearInputBuffer: async (s: string) => { h.clears.push(s); return true },
+  clearInputBuffer: async (s: string) => { h.clears.push(s); return h.clearResult },
   sendPromptToSession: async (s: string) => { h.sends.push(s); return 'sent' },
   dismissModelConsentDialogIfPresent: async () => false,
 }))
@@ -71,7 +72,7 @@ const keysSent = () => h.tmux.filter((a) => a.includes('send-keys'))
 describe('the stuck-input recovery behind a running turn (f5bb2626)', () => {
   beforeEach(() => {
     vi.useFakeTimers()
-    h.clears = []; h.sends = []; h.tmux = []
+    h.clears = []; h.sends = []; h.tmux = []; h.clearResult = true
   })
   afterEach(() => vi.useRealTimers())
 
@@ -94,5 +95,21 @@ describe('the stuck-input recovery behind a running turn (f5bb2626)', () => {
     h.pane = IDLE
     await twoTicks('didi-idle')
     expect(h.clears.length + h.sends.length + keysSent().length).toBeGreaterThan(0)
+  })
+
+  it('a REFUSED clear re-injects nothing: the parked text would be submitted with the copy (didi 27419)', async () => {
+    // The first move is a bare Enter (marveen 26943: Enter first); the clear + re-inject comes on a
+    // later attempt, so tick past the dedup window until the clear has been asked for.
+    h.pane = IDLE
+    h.clearResult = false
+    let s = { parkedSig: null, firstSeenAt: null, lastRecoverAt: null, attempts: 0 } as Parameters<typeof recoverStuckInputForSession>[2]
+    let t = T0
+    for (let i = 0; i < THRESH.maxAttempts + 2 && h.clears.length === 0; i++) {
+      vi.setSystemTime(t)
+      s = await recoverStuckInputForSession('didi-refused', 'didi', s, THRESH, true)
+      t += THRESH.confirmMs + THRESH.dedupMs + 1_000
+    }
+    expect(h.clears.length).toBeGreaterThan(0)
+    expect(h.sends).toEqual([])
   })
 })

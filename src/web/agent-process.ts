@@ -30,6 +30,7 @@ import {
   mcpTrustAcceptKeys,
   detectsPermissionPrompt,
   liveTurnFooterVisible,
+  interruptingKeysUnsafe,
   type FirstRunGateKind,
 } from '../pane-state.js'
 import { paneRemedy } from './parked-pane-remedy.js'
@@ -3263,9 +3264,10 @@ export async function clearInputBuffer(session: string, host: string | null = nu
   for (let attempt = 1; attempt <= CLEAR_INPUT_MAX_ATTEMPTS; attempt++) {
     try {
       const pane = capturePane(session, host)
-      // Escape leads the sequence, and on a running turn Escape is an interrupt (card f5bb2626).
-      if (pane != null && liveTurnFooterVisible(pane)) {
-        logger.warn({ session, attempt }, 'Input clear refused: the footer shows a running turn (esc to interrupt)')
+      // Escape leads the sequence, and on a running turn -- or beside the background work a turn
+      // waits on -- Escape is an interrupt (card f5bb2626, didi 27419).
+      if (pane != null && interruptingKeysUnsafe(pane)) {
+        logger.warn({ session, attempt }, 'Input clear refused: a running turn or background work is visible (Escape would interrupt it)')
         return false
       }
       for (const key of parkedClearSequence(pane != null ? parkedInputRowCount(pane) : 0)) {
@@ -3327,9 +3329,9 @@ async function discardPlaceholderBuffer(
     // Stop pressing once the stub is gone -- a further Ctrl-C on an empty box
     // would quit the TUI.
     if (pane != null && !detectsPastePlaceholder(pane)) return 'cleared'
-    // Ctrl-C on a running turn interrupts it (card f5bb2626).
-    if (pane != null && liveTurnFooterVisible(pane)) {
-      logger.warn({ session }, 'discardPlaceholderBuffer: refused, the footer shows a running turn (esc to interrupt)')
+    // Ctrl-C on a running turn, or beside its background work, interrupts it (card f5bb2626).
+    if (pane != null && interruptingKeysUnsafe(pane)) {
+      logger.warn({ session }, 'discardPlaceholderBuffer: refused, a running turn or background work is visible')
       return 'refused'
     }
     try {
@@ -4224,8 +4226,9 @@ export async function clearStaleParkedInput(
 ): Promise<boolean> {
   const a = capturePane(session, host)
   if (a == null || detectPaneState(a) !== 'typing') return false
-  // The clear below is Escape-first: never behind a running turn (card f5bb2626, didi 27204 (C)).
-  if (liveTurnFooterVisible(a)) return false
+  // The clear below is Escape-first: never behind a running turn or its background work
+  // (card f5bb2626, didi 27204 (C) and 27419).
+  if (interruptingKeysUnsafe(a)) return false
   // DIM-GUARD (2026-06-30, Szabi insight): extract the parked TEXT from the
   // dim-stripped (-e) view. Ghost/phantom frames -- stale captures, placeholder
   // hints, a persona fragment left by a send-keys delivery (the "Koszi a halakat."
