@@ -30,6 +30,12 @@
 #   3. pg_restore --list backup.dump        (must list the tables)
 #   4. pg_restore --no-owner --no-privileges --dbname <target url> backup.dump
 #
+#   USE pg_restore 18, the version that wrote the dumps (archive format 1.16).
+#   Measured 2026-10-04 on this machine: 18.4 (/opt/homebrew/opt/libpq/bin) reads
+#   them; the bare `pg_restore` on PATH is 15.19 (/opt/homebrew/bin) and refuses
+#   with "unsupported version (1.16) in file header". 16 and 17 not measured.
+#   Check `pg_restore --version` first.
+#
 #   On a FRESH target two errors are expected and harmless, and pg_restore
 #   carries on past both (it ends "errors ignored on restore: N"):
 #     schema "public" already exists     -- the dump creates it, the target has one
