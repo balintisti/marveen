@@ -290,13 +290,17 @@ def derive_agent_id(cwd):
         names = sorted(os.listdir(agents_dir))
     except OSError:
         return None
+    # The MOST SPECIFIC target wins (didi 27405): with a nested layout
+    # (agents/a -> /X, agents/b -> /X/b) a session in /X/b is b's, whatever the
+    # names sort to. Equal lengths fall back to the sorted name, deterministic.
+    best, best_len = None, -1
     for name in names:
         target = os.path.realpath(os.path.join(agents_dir, name))
         if target in (os.sep, install) or not os.path.isdir(target):
             continue
-        if here == target or here.startswith(target + os.sep):
-            return name
-    return None
+        if (here == target or here.startswith(target + os.sep)) and len(target) > best_len:
+            best, best_len = name, len(target)
+    return best
 
 
 # PASTED-CONTENT WRAPPING (card 5bd533cc, 2026-10-03). The Claude Code harness
