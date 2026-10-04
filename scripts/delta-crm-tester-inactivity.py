@@ -20,6 +20,12 @@ THE POPULATION: every company not marked E2E/SEED/DEMO (Organization.provenance,
 set by an admin, never inferred -- card fedd2d7f). An UNCLASSIFIED one is in,
 and the alert says so: a mislabel must not hide a real tester.
 
+EXCLUDED COMPANIES: an id listed in EXCLUDE_FILE (store/, JSON: {"<org id>": {"name": ...,
+"why": ...}}) is never announced -- Isti's word, not a guess (2026-10-04, Telegram 5224 via
+marveen 23333: no alert for "Claude Teszt Kft."). By ID, because a name can change. Not silent:
+every run logs each exclusion, and an id no longer in the dump is logged as stale. A file that
+cannot be read as that shape is the UNKNOWN case below -- a broken list could hide anybody.
+
 NO SILENT ALL-CLEAR: if the newest dump is older than MAX_DUMP_AGE_H, or cannot
 be read, the run alerts that the signal is UNKNOWN instead of reporting that
 everybody is active.
@@ -49,6 +55,7 @@ KANBAN_URL = os.environ.get("TI_KANBAN_URL", "http://localhost:3420/api/kanban")
 TOKEN_FILE = os.environ.get("TI_TOKEN_FILE", "/Users/isti/marveen/store/.dashboard-token")
 THRESHOLD_DAYS = int(os.environ.get("TI_THRESHOLD_DAYS", "7"))
 MAX_DUMP_AGE_H = int(os.environ.get("TI_MAX_DUMP_AGE_H", "26"))
+EXCLUDE_FILE = os.environ.get("TI_EXCLUDE_FILE", "/Users/isti/marveen/store/tester-inactivity-exclude.json")
 NOT_REAL = ("E2E", "SEED", "DEMO")
 NULL = "\\N"
 
@@ -114,6 +121,34 @@ def last_seen(tables):
         result[o["id"]] = (o.get("name", "?"), provenance,
                            seen[o["id"]] if active else parse_ts(o.get("createdAt")), active)
     return result
+
+
+def load_exclusions(path=None):
+    """{org id: why} from EXCLUDE_FILE; {} when the file does not exist. Any other shape raises."""
+    path = path or EXCLUDE_FILE
+    try:
+        raw = json.load(open(path, encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except ValueError as exc:
+        raise ValueError(f"a kizaro lista ({os.path.basename(path)}) nem olvashato JSON: {exc}") from exc
+    if not isinstance(raw, dict) or not all(
+            isinstance(k, str) and k and isinstance(v, dict) and str(v.get("why", "")).strip()
+            for k, v in raw.items()):
+        raise ValueError(f"a kizaro lista ({os.path.basename(path)}) nem {{id: {{name, why}}}} alaku")
+    return {k: v for k, v in raw.items()}
+
+
+def apply_exclusions(companies, excluded):
+    """(kept companies, [(id, name, why) excluded], [stale ids not in the dump])."""
+    kept, dropped = {}, []
+    for cid, row in companies.items():
+        if cid in excluded:
+            dropped.append((cid, row[0], excluded[cid].get("why", "")))
+        else:
+            kept[cid] = row
+    stale = sorted(set(excluded) - set(companies))
+    return kept, dropped, stale
 
 
 def decide(companies, state, now, threshold_days=THRESHOLD_DAYS):
@@ -186,6 +221,7 @@ def main(argv):
         if age_h > MAX_DUMP_AGE_H:
             raise RuntimeError(f"a legfrissebb dump {age_h:.0f} oras ({os.path.basename(dump)})")
         companies = last_seen(read_tables(dump, ["Organization", "User", "Session"]))
+        companies, dropped, stale = apply_exclusions(companies, load_exclusions())
     except Exception as exc:  # the signal is unknown -- say so, never "all active"
         text = f"Tesztelő-aktivitás jel ISMERETLEN: {exc}"
         log(f"UNKNOWN {exc}")
@@ -199,6 +235,10 @@ def main(argv):
         state = json.load(open(STATE_FILE, encoding="utf-8"))
     except FileNotFoundError:
         state = {}
+    for cid, name, why in dropped:
+        log(f"EXCLUDED {cid} {name} -- {why}")
+    for cid in stale:
+        log(f"EXCLUDE-STALE {cid} is listed but not in the dump")
     alerts, new_state = decide(companies, state, now)
     log(f"RUN {os.path.basename(dump)} companies={len(companies)} inactive={len(new_state)} new_alerts={len(alerts)}")
     for cid, name, provenance, seen, active, days in alerts:

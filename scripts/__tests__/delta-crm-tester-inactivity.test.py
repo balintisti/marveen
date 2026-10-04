@@ -87,6 +87,27 @@ check("unclassified stays unclassified (None), classified keeps its label",
 check("the never-active message says so, not 'last activity'",
       "senki nem lépett be" in ti.message("Soha Kft.", None, ls["o3"][2], False, 33))
 
+print("== the exclusion list (Isti 5224 via marveen 23333) ==")
+X = tempfile.mkdtemp(prefix="ti-excl-")
+xf = os.path.join(X, "exclude.json")
+check("no file: nothing excluded", ti.load_exclusions(xf) == {})
+open(xf, "w").write(json.dumps({"o2": {"name": "Claude Teszt Kft.", "why": "Isti 5224"}}))
+ex = ti.load_exclusions(xf)
+comp = {"o1": ("A", None, D(2026, 9, 1), True), "o2": ("Claude Teszt Kft.", None, D(2026, 7, 27), False)}
+kept, dropped, stale = ti.apply_exclusions(comp, ex)
+check("the listed id is dropped, the other kept", sorted(kept) == ["o1"] and [d[0] for d in dropped] == ["o2"])
+check("the reason travels with it, for the log", dropped[0][2] == "Isti 5224")
+_, _, stale = ti.apply_exclusions({"o1": comp["o1"]}, ex)
+check("a listed id missing from the dump is reported stale", stale == ["o2"])
+for bad in ("[1]", '{"o2": "no reason"}', '{"o2": {"name": "x"}}', '{"o2": {"why": "  "}}', "not json"):
+    open(xf, "w").write(bad)
+    try:
+        ti.load_exclusions(xf)
+        ok = False
+    except Exception:
+        ok = True
+    check(f"a malformed list raises, never 'nothing excluded': {bad!r}", ok)
+
 print("== end to end, through the real script (LANG unset, like launchd) ==")
 T = tempfile.mkdtemp(prefix="ti-test-")
 dumps = os.path.join(T, "dumps")
@@ -138,7 +159,7 @@ env = {"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", "/tmp"),
        "TI_DUMP_DIR": dumps, "TI_PG_RESTORE": fake_pg, "TI_STATE_FILE": state,
        "TI_LOG_FILE": os.path.join(T, "ti.log"), "TI_NOTIFY_SCRIPT": fake_notify,
        "TI_KANBAN_URL": f"http://127.0.0.1:{srv.server_port}/api/kanban", "TI_TOKEN_FILE": token,
-       "TI_NOW": "2026-10-04 04:15:00"}
+       "TI_NOW": "2026-10-04 04:15:00", "TI_EXCLUDE_FILE": os.path.join(T, "exclude.json")}
 
 
 def run():
@@ -169,6 +190,20 @@ check("...and leaves no state, so the next run tries again", not os.path.exists(
 os.remove(os.path.join(T, "notify-fail"))
 rc, out = run()
 check("the next run delivers it", rc == 0 and len(sent()) == 2)
+
+print("== the exclusion, through the real script ==")
+os.remove(state)
+open(notified, "w").close()
+cards.clear()
+open(os.path.join(T, "exclude.json"), "w").write(json.dumps({"o1": {"name": "Árvíztűrő Kft.", "why": "Isti 5224"}}))
+rc, out = run()
+log_text = open(os.path.join(T, "ti.log"), encoding="utf-8").read()
+check(f"the excluded 32-day company: no alert, no card (rc={rc})", rc == 0 and sent() == [] and cards == [])
+check("...and the run says so in its log, with the reason", "EXCLUDED o1 Árvíztűrő Kft. -- Isti 5224" in log_text)
+open(os.path.join(T, "exclude.json"), "w").write("[")
+rc, out = run()
+check(f"a broken list: rc={rc}, UNKNOWN, not a silent pass", rc != 0 and any("ISMERETLEN" in m and "kizaro" in m for m in sent()))
+os.remove(os.path.join(T, "exclude.json"))
 
 print("== no silent all-clear ==")
 open(notified, "w").close()
