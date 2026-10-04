@@ -10,7 +10,7 @@
 // prune list), because a gate that silently stops being registered is worse
 // than no gate at all.
 import { describe, it, expect } from 'vitest'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, copyFileSync, symlinkSync, realpathSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -341,12 +341,12 @@ describe('provenance-gate: system directive row verification (CTXBORITEK919)', (
   const AGENT_CWD = join(ROOT, 'agents', 'testagent')
   const OTHER_CWD = join(ROOT, 'agents', 'someoneelse')
 
-  function runDirective(prompt: string, cwd: string, db: string, rulesDir?: string): { out: string; log: string } {
+  function runDirective(prompt: string, cwd: string, db: string, rulesDir?: string, hook = HOOK): { out: string; log: string } {
     const dir = rulesDir ?? mkTmp('prov-dir-')
     const rules = join(dir, 'no-such-rules.json')
     let out = ''
     try {
-      out = execFileSync('python3', [HOOK], {
+      out = execFileSync('python3', [hook], {
         input: JSON.stringify({ prompt, cwd }),
         encoding: 'utf-8',
         env: { ...process.env, PROVENANCE_GATE_RULES: rules, PROVENANCE_GATE_DB: db },
@@ -414,6 +414,34 @@ describe('provenance-gate: system directive row verification (CTXBORITEK919)', (
     const { out } = runDirective(`${HEADER(48)}\n${BODY}`, '/test', db)
     expect(out).toContain('NEM ELLENORIZHETO RENDSZER-DIREKTIVA')
     expect(out).toContain('cwd')
+  })
+
+  it('a SYMLINKED agent dir resolves from its target (agents/<name> -> elsewhere)', () => {
+    // Since 2026-09-18 every sub-agent's agents/<name> is a symlink to /Users/Shared/marveen-<name>,
+    // and the session cwd is the RESOLVED target -- the prefix test matched none of them, so every
+    // real directive to a sub-agent read UNVERIFIABLE. A throwaway install keeps the repo's
+    // agents/ untouched; the hook finds its install from its own path.
+    const inst = mkTmp('prov-inst-')
+    mkdirSync(join(inst, 'scripts', 'hooks'), { recursive: true })
+    const hook = join(inst, 'scripts', 'hooks', 'provenance-gate.py')
+    copyFileSync(HOOK, hook)
+    mkdirSync(join(inst, 'agents'))
+    const real = realpathSync(mkTmp('prov-real-'))
+    symlinkSync(real, join(inst, 'agents', 'testagent'))
+    const db = makeDb([[50, 'system', 'testagent', BODY, 'delivered']])
+    const { out, log } = runDirective(`${HEADER(50)}\n${BODY}`, real, db, undefined, hook)
+    expect(out.trim()).toBe('')
+    expect(log).toContain('directive-verified')
+    // a subdirectory of the target is the same agent
+    mkdirSync(join(real, 'sub'))
+    expect(runDirective(`${HEADER(50)}\n${BODY}`, join(real, 'sub'), db, undefined, hook).out.trim()).toBe('')
+    // CONTROL: a directory no agents/ entry points at stays unverifiable
+    const stray = realpathSync(mkTmp('prov-stray-'))
+    expect(runDirective(`${HEADER(50)}\n${BODY}`, stray, db, undefined, hook).out).toContain('NEM ELLENORIZHETO RENDSZER-DIREKTIVA')
+    // an entry pointing at the install root itself does not claim every directory of the install
+    symlinkSync(realpathSync(inst), join(inst, 'agents', 'aaa-install'))
+    const db2 = makeDb([[51, 'system', 'aaa-install', BODY, 'delivered']])
+    expect(runDirective(`${HEADER(51)}\n${BODY}`, realpathSync(join(inst, 'scripts')), db2, undefined, hook).out).toContain('NEM ELLENORIZHETO RENDSZER-DIREKTIVA')
   })
 
   it('the install root itself resolves to the main agent id', () => {

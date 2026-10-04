@@ -275,10 +275,27 @@ def derive_agent_id(cwd):
         return None
     if here == install:
         return _env_setting("MAIN_AGENT_ID", "marveen")
-    agents = os.path.join(install, "agents") + os.sep
+    agents_dir = os.path.join(install, "agents")
+    agents = agents_dir + os.sep
     if here.startswith(agents):
         name = here[len(agents):].split(os.sep, 1)[0]
         return name or None
+    # agents/<name> MAY BE A SYMLINK, and the realpath above has already followed
+    # it. Since 2026-09-18 every sub-agent's is (agents/<name> ->
+    # /Users/Shared/marveen-<name>), so the prefix test above matched no
+    # sub-agent session at all and every real directive to one read
+    # UNVERIFIABLE (measured 2026-10-04: directive 23204 to friday, cwd
+    # /Users/Shared/marveen-friday). Match the resolved target of each entry.
+    try:
+        names = sorted(os.listdir(agents_dir))
+    except OSError:
+        return None
+    for name in names:
+        target = os.path.realpath(os.path.join(agents_dir, name))
+        if target in (os.sep, install) or not os.path.isdir(target):
+            continue
+        if here == target or here.startswith(target + os.sep):
+            return name
     return None
 
 
