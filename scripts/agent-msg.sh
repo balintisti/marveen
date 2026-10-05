@@ -76,16 +76,16 @@ fi
 # torzskent, a STDIN-t el sem olvassa, es `OK id=`-t mond -- a valodi szoveg
 # elveszett, a kuldo azt hiszi, elment. A teljes tortenetben (23762 uzenet) 3
 # ilyen torzs volt, mind `--force`, mind hiba (3485, 23754, 23761), es egy
-# szandekos sem: egy egyetlen, `--`-sal kezdodo szo sosem uzenet.
-# Ha megis ezt a szot kell elkuldeni: STDIN-en (`- <<'VEGE'`), az atmegy.
+# szandekos sem; `--`-sal kezdodo tobbszavas torzs sem volt soha (0 a 23767-bol).
+# Ezert marveen dontese (msg 23764): MINDEN `--`-sal kezdodo 3. argumentum FAIL.
+# Ha megis igy kezdodo szoveget kell elkuldeni: STDIN-en (`- <<'VEGE'`), az atmegy.
 case "$3" in
   --*)
-    if [ "$(printf '%s' "$3" | wc -w | tr -d ' ')" = "1" ]; then
-      echo "NEM KULDTEM. A harmadik argumentum (a TARTALOM helye) egy kapcsolo: $3" >&2
-      echo "A --force a NEGYEDIK argumentum, a tartalom utan:" >&2
-      echo "  bash scripts/agent-msg.sh $FROM $TO - --force <<'VEGE'" >&2
-      exit 3
-    fi
+    echo "NEM KULDTEM. A harmadik argumentum (a TARTALOM helye) kapcsolokent kezdodik: $3" >&2
+    echo "A --force a NEGYEDIK argumentum, a tartalom utan:" >&2
+    echo "  bash scripts/agent-msg.sh $FROM $TO - --force <<'VEGE'" >&2
+    echo "(Ha a szoveg tenyleg -- jellel kezdodik: STDIN-en kuldd, az atmegy.)" >&2
+    exit 3
     ;;
 esac
 

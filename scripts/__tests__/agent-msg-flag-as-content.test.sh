@@ -69,9 +69,14 @@ ok "any single --flag in the content slot is refused" "$([ "$RC" = 3 ] && [ "$CA
 send "the real text" - --force
 ok "'- --force' sends the STDIN text" "$([ "$RC" = 0 ] && [ "$CALLED" = yes ] && sent_body_has "the real text" && echo 0 || echo 1)" "rc=$RC called=$CALLED"
 
-# Text that merely STARTS with -- is a message, not a flag.
+# Any content argument starting with -- is refused (marveen 23764): in the
+# whole history no message ever started with --, so there is nothing to lose.
 send "" "--force was the wrong slot, resend please"
-ok "multi-word text starting with -- is sent" "$([ "$RC" = 0 ] && [ "$CALLED" = yes ] && echo 0 || echo 1)" "rc=$RC"
+ok "a content argument merely starting with -- is refused too" "$([ "$RC" = 3 ] && [ "$CALLED" = no ] && echo 0 || echo 1)" "rc=$RC"
+
+# Text with -- inside (not at the start) is a message.
+send "" "the a -- b form is fine"
+ok "text with -- inside is sent" "$([ "$RC" = 0 ] && [ "$CALLED" = yes ] && echo 0 || echo 1)" "rc=$RC"
 
 # The way out: the bare word itself, on STDIN.
 send "--force" -
