@@ -339,3 +339,84 @@ describe('quota-ceiling-guard: who it guards is DERIVED, not hardcoded', () => {
     expect(r.agent).toBe('')
   })
 })
+
+// Card 9d4f3ac7 (measured 2026-10-06): usage-latest.json is the HOST account (plan
+// "elso", 95%), while the fleet ran on "masodik" (0-8%). In plan mode the guard reads
+// that plan's probe from claude-plans-state.json and guards only that plan's agents.
+describe('quota-ceiling-guard: PLAN MODE reads the plan the agents actually run on', () => {
+  function planInstall(): string {
+    const base = makeInstall(['dexter', 'sirius'], ['dexter', 'sirius'])
+    writeFileSync(join(base, 'agents', 'dexter', 'agent-config.json'),
+      JSON.stringify({ model: 'claude-opus-5-5', oauthTokenFile: 'store/.claude-oauth-token-masodik' }))
+    writeFileSync(join(base, 'agents', 'sirius', 'agent-config.json'), JSON.stringify({ model: 'claude-opus-5-5' }))
+    return base
+  }
+  function plansState(base: string, plans: Record<string, { pct: number; probeAt?: number; ageMin?: number }>): string {
+    const out: Record<string, unknown> = {}
+    for (const [id, o] of Object.entries(plans)) {
+      const observedAt = Date.now() - (o.ageMin ?? 1) * 60_000
+      out[id] = {
+        observedAt,
+        source: 'probe',
+        windows: { seven_day: { usedPercent: o.pct, resetsAt: 1787810400 } },
+        lastProbe: { at: o.probeAt ?? observedAt, ok: true },
+      }
+    }
+    const p = join(base, 'store', 'plans-state.json')
+    writeFileSync(p, JSON.stringify({ activePlanByAgent: {}, plans: out }))
+    return p
+  }
+  function runPlan(base: string, plan: string, statePath: string): Run {
+    const prev = { ...process.env }
+    process.env.QUOTA_CEILING_PLAN = plan
+    process.env.QUOTA_CEILING_PLANS_STATE = statePath
+    try {
+      // The snapshot argument is ignored in plan mode only when unset -- pass the plan file path.
+      const r = runGuard(base, join(base, 'store', `plan-snap-${plan}.json`))
+      return r
+    } finally {
+      for (const k of ['QUOTA_CEILING_PLAN', 'QUOTA_CEILING_PLANS_STATE']) {
+        if (prev[k] === undefined) delete process.env[k]
+        else process.env[k] = prev[k]
+      }
+    }
+  }
+
+  it('the 10-06 case: elso at 95% does NOT stop the agent on masodik at 8%', () => {
+    const base = planInstall()
+    const r = runPlan(base, 'masodik', plansState(base, { elso: { pct: 95 }, masodik: { pct: 8 } }))
+    expect(r.agent).toBe('')
+    expect(r.owner).toBe('')
+  })
+
+  it('masodik at its ceiling stops ONLY the masodik agent', () => {
+    const base = planInstall()
+    const r = runPlan(base, 'masodik', plansState(base, { elso: { pct: 10 }, masodik: { pct: 95 } }))
+    expect(r.agent).toContain('TO=dexter')
+    expect(r.agent).not.toContain('TO=sirius')
+  })
+
+  it('an agent without oauthTokenFile belongs to the fleet plan (elso)', () => {
+    const base = planInstall()
+    const r = runPlan(base, 'elso', plansState(base, { elso: { pct: 95 }, masodik: { pct: 8 } }))
+    expect(r.agent).toContain('TO=sirius')
+    expect(r.agent).not.toContain('TO=dexter')
+  })
+
+  it('a probe that returned no usage is BLIND, not green', () => {
+    const base = planInstall()
+    // lastProbe newer than observedAt = the latest probe produced no windows.
+    const r = runPlan(base, 'masodik', plansState(base, { masodik: { pct: 8, probeAt: Date.now() } , elso: { pct: 1 } }))
+    const log = readFileSync(join(base, 'store', 'quota-ceiling-guard.log'), 'utf8')
+    expect(log).toContain('BLIND')
+    expect(log).toContain('[plan=masodik]')
+    expect(r.agent).toBe('')
+  })
+
+  it('a missing plan is BLIND, not green', () => {
+    const base = planInstall()
+    runPlan(base, 'masodik', plansState(base, { elso: { pct: 1 } }))
+    const log = readFileSync(join(base, 'store', 'quota-ceiling-guard.log'), 'utf8')
+    expect(log).toContain('BLIND')
+  })
+})

@@ -45,6 +45,25 @@ SNAPSHOT="${QUOTA_CEILING_SNAPSHOT:-$STORE/usage-latest.json}"
 STATE="${QUOTA_CEILING_STATE:-$STORE/quota-ceiling-guard-state.json}"
 LOG="$STORE/quota-ceiling-guard.log"
 
+# PLAN MODE (card 9d4f3ac7, measured 2026-10-06). usage-latest.json is read from the HOST
+# keychain account -- the first plan ("elso"). After the fleet moved to the second plan the
+# guard went on comparing the FIRST plan's 95% and would have stopped everyone at 09:28 while
+# the plan they actually ran on stood at 0-8%. With QUOTA_CEILING_PLAN=<id> this guard reads
+# THAT plan's live probe from claude-plans-state.json, guards only the agents whose token is
+# that plan's, and keeps its own once-per-window state. Unset = the old single-account mode.
+PLAN="${QUOTA_CEILING_PLAN:-}"
+PLANS_STATE="${QUOTA_CEILING_PLANS_STATE:-$STORE/claude-plans-state.json}"
+# The plan an agent WITHOUT an oauthTokenFile runs on: the shared fleet token
+# (store/.claude-oauth-token). Verified 2026-10-06 against the vault: that token is "elso".
+FLEET_PLAN="${QUOTA_CEILING_FLEET_PLAN:-elso}"
+# A probe older than this is refreshed before reading (one minimal API call on that plan).
+PROBE_AFTER_MIN="${QUOTA_CEILING_PROBE_AFTER_MIN:-25}"
+if [ -n "$PLAN" ]; then
+  case "$PLAN" in *[!a-z0-9_-]*) echo "bad QUOTA_CEILING_PLAN: $PLAN" >&2; exit 2 ;; esac
+  [ -n "${QUOTA_CEILING_STATE:-}" ] || STATE="$STORE/quota-ceiling-guard-state-$PLAN.json"
+  [ -n "${QUOTA_CEILING_SNAPSHOT:-}" ] || SNAPSHOT="$STORE/quota-ceiling-snapshot-$PLAN.json"
+fi
+
 # Thresholds. Overridable from the environment so a changed owner instruction does not
 # need a code edit -- but the defaults ARE the instruction as given on 2026-08-26.
 SOFT_PCT="${QUOTA_CEILING_SOFT:-93}"
@@ -101,6 +120,21 @@ HARD_PCT="${QUOTA_CEILING_HARD:-95}"
 #   uj   -> [computress dexter didi friday jarvis mandark]     a kulonbseg PONTOSAN {deeper}
 # ES egy szintetikus fan, a negativ kontrollokra: hibas JSON -> BENNE, ures model -> BENNE,
 #   `deepseek-flash` -> KIMARAD.
+# Which plan an agent runs on: `oauthTokenFile` ending in `.claude-oauth-token-<plan>` -> <plan>;
+# no such field -> the fleet token's plan. An unreadable config counts as the fleet plan.
+_agent_plan() {
+  python3 - "$1" "$FLEET_PLAN" <<'AGENTPLAN' 2>/dev/null || echo "$FLEET_PLAN"
+import json, os, sys
+try:
+    f = json.load(open(sys.argv[1])).get('oauthTokenFile') or ''
+except Exception:
+    f = ''
+b = os.path.basename(str(f))
+pre = '.claude-oauth-token-'
+print(b[len(pre):] if b.startswith(pre) and len(b) > len(pre) else sys.argv[2])
+AGENTPLAN
+}
+
 _derive_guarded_agents() {
   local d name model out=""
   for d in "$INSTALL_DIR"/agents/*/; do
@@ -112,9 +146,11 @@ try: print(json.load(open(sys.argv[1])).get('model',''))
 except Exception: print('')
 " "$d/agent-config.json" 2>/dev/null)"
     case "$model" in
-      claude*|'') out="$out $name" ;;
-      *) : ;;
+      claude*|'') : ;;
+      *) continue ;;
     esac
+    if [ -n "$PLAN" ] && [ "$(_agent_plan "$d/agent-config.json")" != "$PLAN" ]; then continue; fi
+    out="$out $name"
   done
   printf '%s' "${out# }"
 }
@@ -146,7 +182,7 @@ num_int() {
   python3 -c "import sys;print(int(round(float(sys.argv[1]))))" "$1" 2>/dev/null
 }
 
-log(){ echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
+log(){ echo "$(date '+%Y-%m-%d %H:%M:%S')${PLAN:+ [plan=$PLAN]} $*" >> "$LOG"; }
 say(){ [ "$DRY_RUN" = 1 ] && echo "$*"; }
 
 # --- refresh the snapshot if it is stale -------------------------------------------
@@ -165,8 +201,56 @@ except Exception:
 PY
 }
 
+# PLAN MODE: refresh the plan's probe if old, then translate its observation into the
+# snapshot shape the rest of this file reads. A failed probe becomes source=probe-failed,
+# which the BLIND branch below reports -- never a silent green.
+plan_probe_age_min() {
+  python3 - "$PLANS_STATE" "$PLAN" <<'PROBEAGE' 2>/dev/null || echo 99999
+import json, sys, time
+try:
+    p = json.load(open(sys.argv[1]))['plans'][sys.argv[2]]
+    print(int((time.time() * 1000 - float(p['observedAt'])) / 60000))
+except Exception:
+    print(99999)
+PROBEAGE
+}
+if [ -n "$PLAN" ]; then
+  if [ "$(plan_probe_age_min)" -gt "$PROBE_AFTER_MIN" ] && [ -z "${QUOTA_CEILING_PLANS_STATE:-}" ]; then
+    log "plan probe older than ${PROBE_AFTER_MIN}min -- probing"
+    node "$INSTALL_DIR/scripts/claude-plan-probe.mjs" "$PLAN" >>"$LOG" 2>&1 || log "plan probe FAILED"
+  fi
+  python3 - "$PLANS_STATE" "$PLAN" "$SNAPSHOT" <<'PLANSNAP' 2>>"$LOG" || log "plan snapshot could not be written"
+import datetime, json, sys
+src, plan, out = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    p = json.load(open(src))['plans'][plan]
+except Exception:
+    p = None
+snap = {'generated_at': '1970-01-01T00:00:00Z', 'claude': {'source': 'none', 'windows': {}}}
+if p:
+    obs = datetime.datetime.fromtimestamp(float(p.get('observedAt') or 0) / 1000, datetime.timezone.utc)
+    w = (p.get('windows') or {}).get('seven_day') or {}
+    # Fresh usage = the LATEST probe produced these windows (its `at` equals observedAt). A 429
+    # on an exhausted plan still carries usage headers and counts; a probe that returned no
+    # usage leaves observedAt behind, and that is blindness, not a reading.
+    lp = p.get('lastProbe') or {}
+    ok = p.get('source') == 'probe' and lp.get('at') is not None and lp.get('at') == p.get('observedAt')
+    snap = {
+        'generated_at': obs.isoformat().replace('+00:00', 'Z'),
+        'plan': plan,
+        'claude': {
+            'source': 'authoritative' if ok else 'probe-failed',
+            'windows': {'seven_day': {'used_percent': w.get('usedPercent'), 'resets_at': w.get('resetsAt')}},
+        },
+    }
+json.dump(snap, open(out, 'w'))
+PLANSNAP
+fi
+
 AGE="$(snapshot_age_min)"
-if [ "$AGE" -gt "$MAX_AGE_MIN" ]; then
+if [ -n "$PLAN" ]; then
+  : # usage-collect.py reads the HOST account, i.e. another plan -- never refresh from it here
+elif [ "$AGE" -gt "$MAX_AGE_MIN" ]; then
   log "snapshot ${AGE}min old (max ${MAX_AGE_MIN}), collecting fresh"
   say "snapshot stale (${AGE}min) -> running usage-collect.py"
   if [ -z "${QUOTA_CEILING_SNAPSHOT:-}" ]; then
