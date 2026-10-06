@@ -6,6 +6,7 @@ import { getEffectiveSettingValue } from './settings-store.js'
 import { logger } from './logger.js'
 import { TOOL_TIMEOUTS } from './tool-timeouts.js'
 import { triggerLikeClause } from './homoglyph.js'
+import { openVerdicts } from './kanban-verdict.js'
 
 let db: Database.Database
 // The path the CURRENT handle was opened on (null for ':memory:'). Kept so
@@ -2463,10 +2464,36 @@ export interface KanbanComment {
 export function sweepArchivedKanbanCards(): number {
   const archiveDays = Number(getEffectiveSettingValue('KANBAN_ARCHIVE_DONE_DAYS'))
   const archiveCutoff = Math.floor(Date.now() / 1000) - archiveDays * 86400
-  const res = db.prepare(
-    "UPDATE kanban_cards SET archived_at = ? WHERE status = 'done' AND archived_at IS NULL AND updated_at < ?"
-  ).run(Math.floor(Date.now() / 1000), archiveCutoff)
-  return res.changes
+  const candidates = db.prepare(
+    "SELECT id FROM kanban_cards WHERE status = 'done' AND archived_at IS NULL AND updated_at < ?"
+  ).all(archiveCutoff) as Array<{ id: string }>
+
+  // CARD 5a967042: the sweep closes a card out of sight as surely as the archive
+  // route does, so it asks the same question (kanban-verdict.ts). A done card
+  // whose checker still has an open verdict STAYS on the board -- where the open
+  // item can be seen and answered -- instead of being archived with it. Measured
+  // 2026-09-29 (didi): 51 such done cards; without this the hourly sweep would
+  // have archived all of them, and the gate would have protected only the hand.
+  const kept: Array<{ id: string; authors: string[] }> = []
+  const archive: string[] = []
+  for (const { id } of candidates) {
+    const open = openVerdicts(getKanbanComments(id))
+    if (open.length > 0) kept.push({ id, authors: open.map((v) => v.author) })
+    else archive.push(id)
+  }
+  if (kept.length > 0) {
+    logger.warn(
+      { kept },
+      `Archive sweep kept ${kept.length} done card(s) on the board: an open VERDIKT (card 5a967042)`,
+    )
+  }
+  const now = Math.floor(Date.now() / 1000)
+  const stamp = db.prepare('UPDATE kanban_cards SET archived_at = ? WHERE id = ? AND archived_at IS NULL')
+  let changes = 0
+  db.transaction(() => {
+    for (const id of archive) changes += stamp.run(now, id).changes
+  })()
+  return changes
 }
 
 // last_status_at: when the card LAST CHANGED COLUMN, not when its row was
@@ -3097,6 +3124,17 @@ export interface KanbanCardFieldEvent {
 export function getKanbanCardFieldEvents(cardId: string): KanbanCardFieldEvent[] {
   return db.prepare('SELECT * FROM kanban_card_field_events WHERE card_id = ? ORDER BY created_at ASC, id ASC')
     .all(cardId) as KanbanCardFieldEvent[]
+}
+
+/**
+ * A closing that overrode an open verdict -- card 5a967042. Written to the
+ * field-event table so it shows in the card's history next to the status
+ * change it allowed: `from_value` holds what was open, `to_value` the reason.
+ */
+export function recordKanbanCloseOverride(cardId: string, openVerdicts: string, reason: string, actor: string | null): void {
+  db.prepare(
+    'INSERT INTO kanban_card_field_events (card_id, field, from_value, to_value, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(cardId, 'close_override', openVerdicts, reason, actor, Math.floor(Date.now() / 1000))
 }
 
 /** One row of the merged card history: a status transition or a field rewrite. */
