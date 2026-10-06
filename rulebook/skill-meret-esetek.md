@@ -137,3 +137,74 @@ elég; jarvis esetében pontosan egy volt (489 -> 490).
 
 *(Ez ugyanaz az alak, mint mindenhol máshol ezen a lapon, csak a MÉRŐN belül: a szám javult, a
 védett dolog romlott, és a mérő szerkezetileg nem tudott róla.)*
+
+---
+*(kikoltoztetve 2026-10-06, marveen)*
+
+**DE A 500 NEM MINDEN SKILLRE AZ ÉRVÉNYES KAPU.** A `scripts/skill-index.sh` **két rezsimet**
+használ, és a saját összegző sora ki is mondja:
+
+| skill | mi kapuzza |
+|---|---|
+| **alapvonal nélküli** (a legtöbb) | `SKILL_LINE_LIMIT` = **500** |
+| **alapvonalas** | a NÖVEKEDÉS: alapvonal + `SKILL_GROWTH_LIMIT`, plusz a kemény `SKILL_HARD_LIMIT` = 600 |
+
+Mérve, nem kódból levezetve: `SKILL_LINE_LIMIT=400` mellett három skill tüzelt (450, 498, 499 sor),
+az alapvonalas 499 soros fájl **nem**. Ugyanaz a szám, ellentétes verdikt. **Miért helyes:** egy
+fájlra, ami MÁR a limit fölött van, a „legyél 500 alatt" nem lezárható jelzés, tehát minden körben
+újra tüzel és zajjá válik. A növekedés-kapu lezárható: „ne legyen rosszabb".
+
+**ÉS A `references/` SZÁNDÉKOSAN NINCS KAPUZVA -- MÉRT INDOKKAL, MERT KÜLÖNBEN VALAKI „RENDBE TESZI".**
+A populáció 11 fájl / 8498 sor, a legnagyobb egymaga 5582. A kézenfekvő reflex kapuzni. **Ne.** A
+kérdés az volt, BETÖLTŐDIK-E a maggal együtt; megmérve, nem levezetve (egy 347 soros referenciával
+rendelkező skill meghívva):
+
+    megerkezett .... a MAG, 483 sor
+    megerkezett .... NULLA referencia-sor, csak MUTATOK (`-> references/alakok.md`)
+
+**A Level 2 tényleg halaszt**, tehát a 8498 sor súlyozatlan és NEM betöltött. A kérés ezért
+LÁTHATÓSÁG volt, nem határ. *(A mérés ára maga a bizonyíték: 483 sor.)*
+**AMI MÉRETLEN:** hogy egy `references/` fájlt ELOLVAS-e valaha bárki. A mérés a BETÖLTÉSRŐL szól,
+nem a HASZNÁLATRÓL.
+
+**ÉS EGY BONTÁS UTÁN A ZÖLD ŐR KÉT DOLGOT JELENTHET, AMIK BÁJT-AZONOSAK:** hogy a skill kisebb lett,
+vagy hogy sorok ÁTKERÜLTEK a súlyozatlan populációba (mag 503 -> 436, references 0 -> 108, `rc=3` ->
+`rc=0`). Ezért kell a mérleg-sor: enélkül a „minden skill a határa alatt" mondat a MAGOKRÓL szól, és
+aki idézi, többet állít.
+
+**BONTÁS UTÁN AZ ALAPVONALAT ÚJRA KELL ÁLLÍTANI, ÉS A SZABÁLY `MINIMUM`.** Mért defektus: 549 -> 491
+vágás mellett az alapvonal 513 maradt, tehát a bontás 58 soros nyeresége **növekedési kerette** vált
+-- a fájl 528-ig nőhetett hang nélkül, és öt órán belül 510-en állt. **Egy alapvonal RACSNI: csak
+szorulhat.** `alapvonal := min(bontás utáni mért méret, RÉGI alapvonal)`.
+*(A `MINIMUM` szó maga is javítás: a korábbi alak -- „az alapvonal a bontás utáni mért méret" -- egy
+495-ös bontásnál 491-es alapvonal mellett TÁGÍTOTT volna. A régi mondat a MECHANIZMUST írta le a
+SZÁNDÉK helyett, és pontosan abban az esetben volt helyes, amiben megfogalmazták.)*
+
+**ÉS A MÁSIK FELE, KÜLÖNBEN A RACSNI TILALOMMÁ VÁLIK.** A `MINIMUM` azt zárja ki, hogy a kapu
+MELLÉKHATÁSKÉNT táguljon -- nem azt, hogy tudatosan tágítsuk:
+- **Bontás mellékhatásaként soha.** Egy kiköltöztetés nyereség, nem keret.
+- **Kimondott döntéssel igen**, ha a fájl VALÓDI új tartalommal nőtt (új mért alak, nem
+  átfogalmazás). Az alapvonal az új mért méret lesz, és a kártyán ott az indok.
+
+Enélkül az őr minden körben tüzelne egy jogos növekedésre, és zajjá válna -- **egy tartósan tüzelő
+őr és egy kikapcsolt őr között nincs gyakorlati különbség; az elsőhöz csak hozzászoknak.**
+
+**ÉS A BONTÁS SORRENDJE: ÁLLÍTS, AZTÁN TÖRÖLJ.** Minden átmozgatott sorra ÁLLÍTSD az archívumbeli
+meglétet, MIELŐTT törlöd a magból -- amelyik megbukik az asserten, azt nem törlöd.
+
+    ELOTTE allitva ... „ott van-e mar?" -> egy NEM megallitja a torlest
+    UTANA allitva .... „megmaradt-e?"   -> MASIK kerdes, es mindig IGENT ad
+
+**Az utólagos ellenőrzés arról szól, ami TÚLÉLT, nem arról, ami ELVESZHETETT** -- ezért néz ki
+mindig jónak.
+
+**ÉS A MÉRET-KAPU SZERKEZETILEG NEM LÁTJA, MELYIK MONDATOT DOBTA EL A BONTÁS.** Mért eset: egy
+bontás után a lelet mechanizmusa és a két száma megmaradt a magban, de az az EGY mondat, amelyik a
+leletet egy MÁSIK lap törvényéhez köti, CSAK a references-be került -- vagyis épp az, amitől az
+olvasó FELISMERI, hogy ismerős alakról van szó. **A szabály: minden bontás után olvasd el a MAGOT
+ÖNMAGÁBAN, és kérdezd meg, hogy a lelet így is FELISMERHETŐ-e.** A teherhordó mondat maradjon a
+magban, akkor is, ha a részletek kiköltöznek; általában egy sor elég (489 -> 490).
+
+*(A mért esetek: `rulebook/skill-meret-esetek.md`.)*
+
+

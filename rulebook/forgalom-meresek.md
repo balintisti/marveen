@@ -180,3 +180,51 @@ bevezetve: eloszor a koordinator probalja ki magan, mert a mai meres szerint o a
 *(Es amiert ez a bekezdes itt all, nem egy kartyan: a fenti szakasz egy MEROT ir elo, es a mero
 INDOKA avult el. Aki csak a cimet olvassa -- „nem a hossz, a darabszam" --, ma egy 08-28-i allitasra
 epitene. Pontosan az az alak, amit ez a lap mashol otször rogzit.)*
+
+---
+*(kikoltoztetve 2026-10-06, marveen)*
+
+### ÉS A DARABSZÁM-SZABÁLY ÖTSZÖR LETT ÚJRAMÉRVE -- A KÖVETKEZTETÉS ÁLL, AZ INDOKA ELAVULT
+*(Az öt dátumozott mérés teljes táblázata: `rulebook/forgalom-meresek.md`.)*
+
+**AMI MÉRVE MEGDŐLT: az „írj kevesebbszer" ALAK-SZABÁLY, MECHANIZMUS NÉLKÜL, NEM HATOTT.** Két mérés
+között a darabszám nem mozdult (42% -> 45%), és ilyenkor A SZABÁLY a hibás, nem az igyekezet. Egy
+ALAK-szabályt a döntés pillanatában nem olvas senki.
+
+**AMI HATOTT, ÉS MECHANIKUS: a SOR-KAPU.** 3+ pending esetén a helper MEGTAGADJA a küldést, és a mért
+napokon ötször tüzelt -- mind az ötször kártya-komment lett belőle. Nem emlékezni kellett rá: **a
+parancs nem ment el.**
+
+    „irj kevesebbszer" (szandek) ......... nem valtoztatott a darabszamon, ket meres kozott
+    `exit 2` 3+ sornal (mechanizmus) ..... otszor teritette at kartyara, ugyanaznap
+
+**ÉS A DIAGNÓZIS MAGA IS MEGDŐLT: MA MÁR MINDKÉT TENGELY NŐ** (ugyanaz a mérő, 24 órás ablak):
+átlag 1935 -> **2515** karakter (+30%), darabszám 561 -> **833** (+48%). A „mechanizmus kell"
+következtetés áll, az INDOKA (*„nem a hossz, a darabszám"*) elavult.
+
+**ÉS A KÜLDŐ-OLDALI KAPU MÉRVE FAL LETT VOLNA** (a VALÓDI forgalmon szimulálva, megépítés előtt):
+
+    N=3 / 1 ora -> a levelek **52,2%-a** elutasitva -- ez nem kapu, hanem fal
+    N=5 -> 24,9% | N=6 -> 16,3% | N=7 -> ~12%
+
+**ÉS NINCS OLYAN N, AMI SZÉTVÁLASZT, mert NINCS TAIL:** hányadik üzenet ugyanannak egy órán belül --
+1: 102, 2: 123, 3: 120, 4: 119, 5: 125, 6: 92, 7: 52, 8: 40. **Egytől hatig LAPOS.** Nincs küszöb,
+ami fölött pazarlás és alatta munka. A hossz-korlát ugyanígy hal meg: egy 4000-es korlát a mennyiség
+**0,7%-át** spórolja, egy 2000-es a levelek 76,5%-át érinti -- megint fal.
+
+**A DÖNTÉS: N=7 / 1 óra MEGÉPÜL, de NEM waste-szűrőként, hanem KÉZBESÍTÉSI PLAFONKÉNT.** Az indoklás
+túléli a laposságot: a 8. levél egy órán belül nem azért rossz, mert gyenge, hanem mert oda már nem
+fér be figyelem. **És ez NEM a keret-kérdés válasza** -- ~62 e token a ~524 e-ből.
+
+**A VALÓDI OK VALÓSZÍNŰLEG EGYIK TENGELY SEM, HANEM A FORMA** (megfigyelés, kimondottan NEM mérés):
+834 üzenet mind ~2,5 e karakteren nem szórás, hanem **HÁZI STÍLUS**. Ha egy háromsoros ruling 2,5 e
+karakterbe kerül, akkor nem azért, mert annyi kell hozzá. Erre semmilyen küszöb nem cél.
+
+**A KONCENTRÁCIÓ KÜLÖN TENGELY:** egy mért napon 48 üzenet ment EGYETLEN címzettnek. **A sor-kapu a
+CÍMZETT torlódását nézi; a küldő saját darabszámára nincs kapu**, tehát az első két üzenetet semmi
+nem állítja meg.
+
+**AZ ELLENŐRZÉS:** a mérés bármikor újrafuttatható (`agent_messages`, `LENGTH(content)`,
+`from_agent` szerint).
+
+

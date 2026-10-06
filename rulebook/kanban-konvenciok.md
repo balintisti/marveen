@@ -621,3 +621,63 @@ hanem KONVENCIÓ.
 A régi mondat a MAGA pillanatában igaz volt, mert adaton állt. **Egy arány-alapú állítás
 hónapokkal később megfordulhat anélkül, hogy bárki hazudott volna** -- ezért nem törlés jár neki,
 hanem dátum és a megdöntő mérés mellé tétele.
+
+---
+*(kikoltoztetve 2026-10-06, marveen)*
+
+**EGY AZONOSÍTÓ A FAJTÁJA NÉLKÜL KÉTÉRTELMŰ -- A KÁRTYA-ID ÉS A RÖVID SHA UGYANÚGY NÉZ KI**
+(marveen mérte magán 2026-09-17, HÁROM alakban egy estén; didi nevezte meg a közös okot).
+
+A kártya-azonosítónk 8 hex, a git rövid SHA 7-9 hex, és **mindkettőt backtickben írjuk.** Egy csupasz
+`3c6c5626` tehát nem mondja meg, a TÁBLÁN vagy a REPÓBAN kell keresni -- és aki rossz helyen keresi,
+NEM HIBÁT kap, hanem ÜRESET, amit halott hivatkozásnak olvas.
+
+    (1) a kartya-ID mint AG-ELOTAG ..... harom tavoli ag viselte a `fix/129ed25f-*` elotagot, es
+                                        csak EGY volt a keresett -> elotag szerint valogatva
+                                        rosszat vagy mindharmat viszed be
+    (2) a SHA mint LISTA-ELEM .......... egy befagyasztott SHA nem tudja eszrevenni a sajat hianyat;
+                                        harom ag feje mozdult el alattam egy oran belul
+    (3) a COMMIT KARTYA-SZOKINCSBEN .... `secret-gate.py:201`: „`3c6c5626` is `done` but is not an
+                                        ancestor of origin/main". A `done` KARTYA-szo; a tablan
+                                        NULLA ilyen kartya (kontroll: `7a4cdded` -> 1). Az allitas
+                                        IGAZ egy COMMITRA, es halottnak olvasodik.
+
+**A KONVENCIÓ, ÉS EGY SZÓBA KERÜL:**
+
+    kartya  ->  `kartya 3c6c5626`  /  `#3c6c5626`
+    commit  ->  `commit 3c6c5626`  /  a TELJES ag-nev, ha van
+    es egy LISTA, amibol valogatunk: SOHA ne azonositoval, hanem TELJES AG-NEVVEL, a fejet
+    a hasznalat pillanataban feloldva
+
+**AZ ALAK, AMI MINDHARMAT MAGYARAZZA:** az azonosító elárulja, MELYIK objektum, de nem azt, hogy
+MELYIK NÉVTÉRBEN. Ahol két névtér ugyanolyan alakú kulcsot használ, ott a KULCS ÖNMAGÁBAN nem
+hivatkozás -- és a rossz névtérben kapott üres válasz megkülönböztethetetlen a valódi hiánytól.
+*(Ez ugyanaz a törvény, mint a 404 két jelentése ezen a lapon: „nincs ilyen ÚT" kontra „nincs ilyen
+REKORD" -- ott is egy MÁSODIK mérés választja szét, itt egy SZÓ előzi meg.)*
+
+**ÉS A NEGYEDIK PÁR ROSSZABB MIND A HÁROMNÁL, MERT NEM ÜRESET AD, HANEM EGY ÉRVÉNYES MÁSIK
+REKORDOT: `agent_messages.id` KONTRA `kanban_comments.id`** (marveen mérte 2026-09-20, miután deeper
+`your 17530`-at írt egy olyan üzenetben, ahol minden más szám üzenet-azonosító volt).
+
+    a ket tabla KULON sorozatot vezet UGYANABBAN a szamtartomanyban
+    `select count(*) from agent_messages m join kanban_comments k on k.id = m.id`
+      -> **17 523 olyan szam, ami MINDKET nevterben LETEZO rekord (99,9%)**
+    a mai 17500-17545 savban: 27 ilyen
+    KONTROLL, hogy a mero tud kulonbseget is mondani: 17543 -> komment IGEN, uzenet NEM
+
+A fenti három pár (kártya-ID kontra rövid SHA) hibája ÜRESSÉG, amit halott hivatkozásnak olvasol.
+**Itt a rossz névtér egy létező, hihető, teljesen más objektumot ad vissza** -- és semmi nem jelzi,
+hogy nem azt olvasod, amire a szerző gondolt. A `17530` üzenetként nem létezik; kommentként az én
+parancsom volt (`OROVEC CSABA MEHET. Ird be.`). Aki üzenetként keresi, „kitalált hivatkozást" lát.
+
+**A KONVENCIÓ, ÉS EGY SZÓBA KERÜL:** `msg 17514` / `komment 17530`. A csupasz szám itt nem
+rövidítés, hanem kétértelműség 99,9%-os valószínűséggel.
+
+**ÉS EGY MÁSODIK SZABÁLY UGYANEBBŐL A NAPBÓL, A KOMMENT TARTALMÁRA: ha egy kártya-komment
+CSELEKVÉST ír elő, kapjon LEJÁRATOT vagy mérhető feltételt.** A `17530` felszólító módban állt és
+nem viselt lejáratot; negyven perccel később a munka már el volt végezve, a komment viszont
+változatlanul utasított, és a címzett a SAJÁT, frissebb mérése helyett azt írta át. Ugyanaz az alak,
+mint az elavult `hot` emlék, csak a táblán: **egy komment nem avul el magától, de utasításként
+olvasódik, amíg ott áll.** Elég lett volna egy tagmondat: *„ha a 28083 már létezik, ez tárgytalan"*.
+
+
