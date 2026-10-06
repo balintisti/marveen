@@ -34,6 +34,7 @@ import {
   handoffStaleMinutes,
   dailyHandoffDue,
   DAILY_HANDOFF_REASON_PREFIX,
+  dailyServedAtMs,
   IDLE_FLUSH_REASON_PREFIX,
   INITIAL_GUARD_STATE,
   STALE_REFRESH_REASON_PREFIX,
@@ -524,7 +525,8 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
         lastDailyHandoff.set(name, nowMs)
         return false
       }
-      return dailyHandoffDue(cfg, localMidnightMs(nowMs), last, nowMs)
+      // A session that started after the record is fresh: its start serves the slot (card 987baf44).
+      return dailyHandoffDue(cfg, localMidnightMs(nowMs), dailyServedAtMs(last, sessionStartSec(name)), nowMs)
     })(),
   }
 

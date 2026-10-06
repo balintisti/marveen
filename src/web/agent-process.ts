@@ -2656,13 +2656,18 @@ export async function startAgentProcess(name: string, opts: { fresh?: boolean } 
     // scheduled once, at the door, instead of at each caller (card 3a64403b).
     if (shouldBriefAfterStart(opts, { ok: true })) {
       scheduleRecoveryBrief(name, session, (target, text) =>
-        sendPromptToSession(target, text, null, {
-          lockMode: 'deliver',
-          // card c4b99fa7: the brief is sent ONCE from a timer; nothing re-issues it and
-          // nothing escalates if it never lands.
-          survival: 'lost',
-          survivalReason: 'scheduleRecoveryBrief fires once per fresh start; no re-delivery path',
-        }),
+        sendRecoveryBriefWhenIdle(target, text, (t, body) =>
+          sendPromptToSession(t, body, null, {
+            lockMode: 'deliver',
+            // Card e9f66084: a best-effort send into a non-idle pane pasted this brief onto a
+            // PARKED /rename line and submitted both as one command. The brief is optional;
+            // a spliced brief is worse than a late one, so a busy pane aborts and we retry.
+            onBusyTimeout: 'abort',
+            // card c4b99fa7: nothing outside this retry loop re-issues the brief.
+            survival: 'lost',
+            survivalReason: 'scheduleRecoveryBrief fires once per fresh start; bounded retry in sendRecoveryBriefWhenIdle, then given up',
+          }),
+        ),
       )
     }
 
@@ -3079,6 +3084,63 @@ export function identitySlashCommands(displayName: string): string[] {
   return [`/rename ${displayName}`]
 }
 
+// Card e9f66084 (measured 2026-10-06, computress 09:44 and dexter 10:15): the
+// `/rename <name>` + Enter sent in ONE send-keys call left the command PARKED in
+// the input box -- the Enter did not submit it. Ninety seconds later the
+// recovery brief was pasted onto that parked line and submitted with it, so the
+// brief became the session TITLE (`Computress[recovery-brief] ...`), never a
+// prompt, and the agent sat idle 20+ minutes. So the command text and the Enter
+// go separately, and after the Enter we READ the input box: while our own
+// command is still parked there we press Enter again. Our own text, typed by us
+// inside the lane we hold, is the only thing these extra Enters can submit.
+export const IDENTITY_SUBMIT_MAX_EXTRA_ENTERS = 3
+
+// Card e9f66084: the recovery brief retries on a busy pane instead of being pasted
+// into it. Bounded: after the last abort the brief is given up, loudly.
+export const RECOVERY_BRIEF_BUSY_RETRIES = 5
+export const RECOVERY_BRIEF_BUSY_RETRY_MS = 60_000
+
+export async function sendRecoveryBriefWhenIdle<R>(
+  session: string,
+  text: string,
+  send: (session: string, text: string) => Promise<R>,
+  wait: (ms: number) => Promise<unknown> = delay,
+): Promise<R | 'gave-up-busy'> {
+  for (let attempt = 1; attempt <= RECOVERY_BRIEF_BUSY_RETRIES; attempt++) {
+    const res = await send(session, text)
+    if (res !== 'aborted-busy') return res
+    logger.info({ session, attempt, max: RECOVERY_BRIEF_BUSY_RETRIES }, 'recovery-brief: pane not idle, not pasting into it; retrying later')
+    if (attempt < RECOVERY_BRIEF_BUSY_RETRIES) await wait(RECOVERY_BRIEF_BUSY_RETRY_MS)
+  }
+  logger.warn({ session }, 'recovery-brief: GIVEN UP -- the pane never went idle; the brief was not sent (better than spliced)')
+  return 'gave-up-busy'
+}
+
+export interface OwnSlashSubmitDeps {
+  typeLiteral: (text: string) => void
+  pressEnter: () => void
+  /** The parked input text (parkedInputText of a ghost-stripped capture), or null. */
+  readParked: () => string | null
+  delay: (ms: number) => Promise<unknown>
+}
+
+export async function submitOwnSlashCommand(
+  cmd: string,
+  deps: OwnSlashSubmitDeps,
+): Promise<'submitted' | 'still-parked'> {
+  deps.typeLiteral(cmd)
+  await deps.delay(300)
+  deps.pressEnter()
+  for (let extra = 0; extra <= IDENTITY_SUBMIT_MAX_EXTRA_ENTERS; extra++) {
+    await deps.delay(800)
+    const parked = deps.readParked()
+    if (parked == null || !parked.includes(cmd)) return 'submitted'
+    if (extra === IDENTITY_SUBMIT_MAX_EXTRA_ENTERS) break
+    deps.pressEnter()
+  }
+  return 'still-parked'
+}
+
 // Delays mirror the observed Claude Code first-render timing: the first-run /
 // resume modals appear within ~4-6s, so dismiss at 8s; the prompt input is
 // reliably ready ~5s after that.
@@ -3158,8 +3220,19 @@ export async function scheduleIdentitySetup(session: string, displayName: string
             }
             try {
               for (const cmd of identitySlashCommands(displayName)) {
-                runTmux(host, ['send-keys', '-t', session, cmd, 'Enter'], { timeout: 5000 })
-                await delay(1000)
+                const outcome = await submitOwnSlashCommand(cmd, {
+                  typeLiteral: (text) => runTmux(host, ['send-keys', '-t', session, '-l', text], { timeout: 5000 }),
+                  pressEnter: () => runTmux(host, ['send-keys', '-t', session, 'Enter'], { timeout: 5000 }),
+                  readParked: () => {
+                    const view = captureParkedInputView(session, host)
+                    return view == null ? null : parkedInputText(view)
+                  },
+                  delay,
+                })
+                if (outcome === 'still-parked') {
+                  // Loud: the next writer would paste onto this line (card e9f66084).
+                  logger.warn({ session, displayName, cmd }, 'Identity /rename still PARKED in the input box after the extra Enters')
+                }
               }
               logger.info({ session, displayName, attempt }, 'Set session /rename')
             } catch (err) {

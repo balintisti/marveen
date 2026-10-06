@@ -151,7 +151,7 @@ describe('dismissResumeSummaryModalIfPresent', () => {
 describe('identity /rename consults the guard before its Enter', () => {
   const src = readFileSync(join(__dirname, '..', 'web', 'agent-process.ts'), 'utf-8')
   const guard = "if (permissionPromptBlocksBareEnter(session, host, captureTmux, 'Identity /rename')) {"
-  const send = "runTmux(host, ['send-keys', '-t', session, cmd, 'Enter']"
+  const send = "await submitOwnSlashCommand(cmd, {"
 
   it('the guard stands once, after the lane is taken and before the /rename send', () => {
     expect(src.split(guard).length - 1).toBe(1)
