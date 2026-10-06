@@ -453,3 +453,78 @@ válasz** -- és a megnyugtató irányba tévedt volna. Ezért áll a `cd "$(git
 a recept első soraként. A `store/` gitignore-ban van, de egy `git add -f` vagy egy másik útvonal
 ezt megkerülheti, és **egy nyilvános forkból nem lehet visszavenni semmit.**
 
+
+---
+*(kikoltoztetve 2026-10-06, marveen)*
+
+### ÉS EGY SZINTTEL ARRÉBB: A `develop` NEM AZ IGAZSÁG FORRÁSA EBBEN A REPÓBAN -- A FUTÓ FA AZ
+(didi mérte 2026-09-02 23:48, marveen egy hamis leletén, amit ugyanaz a nap termelt.)
+
+A fenti szakasz arról szól, hogy a `develop` szó három SHA-n áll. **Ez eggyel arrébb van: nem a
+három `develop` közül kell választani, hanem a `develop` és A FUTÓ FA között -- és a kettő elvált.**
+
+    HEAD (a futó fa) = a fő checkout ága, ma `feat/google-service-account` @ 72b5654
+    HEAD ^fork/develop .... 526        fork/develop ^HEAD .... 0
+    HEAD ^fork/main ....... 549        fork/main    ^HEAD .... 0
+    fork/develop utolsó commitja: 2026-08-16
+    KONTROLL: HEAD ^HEAD = 0, tehát a mérő tud nullát mondani
+
+**A futó rendszer 526 committal áll az előtt az ág előtt, amit bárki törzsnek nevezne, és
+semmi nem folyik visszafelé.**
+
+**A GYAKORLATI KÖVETKEZMÉNY, ÉS EZ FOGOTT MEG ENGEM:** aki azt kérdezi, hogy „ki van-e szállítva"
+vagy „él-e ez a hiba", és a `develop`-hoz méri, **egy tizenhét napos fához méri.** A mérés tiszta
+lehet, a kontroll tüzelhet, és a válasz mégis hamis. Ma este pontosan ez történt: tartalommal
+mértem (helyesen, ancestry helyett), kontrollal, és azt írtam, hogy egy javítás nincs kiszállítva
+és a hiba ÉL a futó dashboardban. A javítás a `dist/`-ben volt, futott, és a `develop` volt, ami
+nem tudott róla.
+
+**ÉS NEM IS ÉRVÉNYES ALAPVONAL TARTALMI ELLENŐRZÉSHEZ** (didi mérte 2026-09-19): egy szemantikai
+ellenőrzés a `develop`-on 0-t és 0-t adott, DE A KONTROLL IS 0-t -- a fájl ott egy olyan időből
+való, amikor a keresett szimbólumok még nem léteztek. **Egy nulla onnan nem cáfolat, hanem
+CSEND**, és a kettőt csak a kontroll választja szét.
+
+**A HELYES HORGONY: amiből az fut, ami fut.**
+
+```bash
+curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" \
+  http://localhost:3420/api/overview | python3 -c "import json,sys; b=json.load(sys.stdin)['build']; print(b['status'], b.get('builtCommit'))"
+git rev-parse --abbrev-ref HEAD        # és a fő checkout ága, mert a build ABBÓL készül
+```
+
+**ÉS EGY MÁSODIK CSAPDA UGYANEBBEN A MÉRÉSBEN** (didi fogta meg magán, mielőtt lelet lett volna):
+az `origin/develop`-hoz mérve 85 commit hiányzik a futó fából. **Ez nem szállítási rés: az `origin`
+itt az IDEGEN upstream (`Szotasz/marveen`), a miénk a `fork`.** A 85 az ő munkájuk. A lap ezt
+kimondja; a `develop` szót könnyebb elolvasni, mint a remote-ot.
+
+**ÉS EZ SZÁNDÉKOS, NEM SODRÓDÁS -- MÉRVE, HÁROM RÉTEGBEN** (didi, 2026-09-02 23:52; a válasz
+NÉGY NAPJA le volt írva, és egyikünk sem olvasta el):
+
+    a BUILD nem ismer ágat ..... `package.json`: `tsc && git rev-parse HEAD > .built-commit`
+                                 a MUNKAFÁT fordítja; nem is tudna ágat választani
+    az ŐR VÉDI .................. a `post-checkout` a tiszta fát ARRA az ágra állítja vissza,
+                                 amiről jött, és a `develop`-ra visszaállítás SZÁNDÉKOSAN KI LETT
+                                 VÉVE, mint káros
+    és TELEPÍTVE van ............ `.git/hooks/pre-commit.d/05-prod-tree-guard` + `post-checkout`,
+                                 a `10-secret-gate` mellett mint kontroll
+
+Az `install-prod-tree-guard-hook.sh` fejléce szó szerint kimondja, 2026-08-29-ről: *„a `develop`
+510 committal a telepített fa mögött volt és nem tartalmazta sem a `secret-gate.ts`-t, sem a
+`card-comment.sh`-t, tehát a »visszaállítás« MAGA VOLT a csonkítás."*
+
+**TEHÁT A RENDSZER 08-29 ÓTA A CHECKOUT ÁGÁT TEKINTI A TELEPÍTÉS FORRÁSÁNAK, és a `develop`-ra
+visszaállítást KÁRNAK minősíti.** A rés nem állandó, hanem NŐ: 510 az őr fejlécében, ma 526.
+
+**AMI A `develop`-BÓL MEGMARADT, KÉT FUNKCIÓ, EGYIK SEM SZÁLLÍTÁS:** egy CI-trigger, ami soha nem
+tüzel (`test.yml` / `secret-gate.yml` a `[develop, main]` pusholásra, és a `fork/develop` utolsó
+commitja 08-16); és **öt ág, ami magát hozzá méri -- ráadásul nem a MIÉNKHEZ: mind az öt upstreamje
+az `origin/develop`, vagyis a Szotasz/marveen.** Azok az ágak egy MÁSIK PROJEKT ágához hasonlítják
+magukat, és a „rajta van-e a törzsön" kérdésre nálunk semmit nem válaszolnak.
+
+**AMI TOVÁBBRA IS ISTI DÖNTÉSE:** hogy ez így MARADJON-e. Az őr szerzője a saját hatókörében
+döntött; hogy ez KIMONDOTT politika-e, nincs mérve.
+
+*(A szám határa kimondva: az 526 COMMIT, nem MUNKA -- merge-commitok benne, a tartalom olvasatlan.
+Az IRÁNY az állítás, nem a mennyiség.)*
+
+

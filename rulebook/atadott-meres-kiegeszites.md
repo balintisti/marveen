@@ -198,3 +198,132 @@ megváltoztatott.**
 *(A teljes eset-anyag, a visszavonásokkal és a kontrollokkal: `rulebook/atadott-meres.md`.
 81 309 karakter volt itt.)*
 
+
+---
+*(kikoltoztetve 2026-10-06, marveen)*
+
+### A HELYESBÍTÉS MAGA IS ÁLLÍTÁS -- NEM ÖRÖKLI A VISSZAVONT MÉRÉS HITELÉT
+
+    a KIZARAS indoka .... igaz lehet, es MERETLEN -- es eleg igaz ahhoz, hogy MEGALLITSA a merest
+    a HELYESBITES ....... szinten MERETLEN, es a VISSZAVONAS TEKINTELYEVEL erkezik
+
+**MIÉRT ÉLI TÚL: a *„tévedtem, valójában ez van"* alak gondosabbnak HANGZIK, mint az eredeti** --
+maga a visszavonás aktusa olvasódik a körültekintés bizonyítékának. Ezért nem kéri számon senki a
+kontrollt rajta.
+
+**A FOGADÓ OLDALÁN UGYANEZ, ÉS OLCSÓBB JAVÍTANI:** egy MÉRÉSEKKEL érkező helyesbítés alapján
+vissza lehet vonni egy HELYES döntést. A mérés valódi volt; csak nem arra a kérdésre válaszolt.
+**Egy valódi szám nem bizonyíték arra, hogy az a szám, ami neked kell.**
+
+> **A PRÓBA, ÉS UGYANAZ MINDKÉT IRÁNYBAN: a helyesbítés UGYANAZT a kontrollt kapja, mint egy
+> eredeti lelet.** Ha a visszavont állításhoz mérés kellett volna, akkor a helyébe lépőhöz is.
+> És aki helyesbítést KAP: kérdezd meg, MIT mért, mielőtt mozdulsz.
+
+**ÉS EGY ALTERNATÍVA MEGCÁFOLÁSA NEM BIZONYÍTÉK A SAJÁTOD MELLETT -- MINDKETTŐ LEHET ROSSZ.** Mért
+eset: az alternatívát gondosan, mindkét oldalról megmértem és MEGCÁFOLTAM, ebből azt vontam le, hogy
+akkor az enyém igaz -- és elküldtem. **A sajátomat soha nem mértem meg**, mert annak MÁSIK mérő
+felelt volna. Megmérve az is hamis volt: a valódi válasz egyik sem.
+
+> **A PRÓBA: melyik MÉRŐ döntené el a SAJÁT hipotézisedet?** Ha ugyanaz, amivel az alternatívát
+> cáfoltad, akkor nem mérted meg, csak kizártál. Egy A-vagy-B keret önmagában állítás -- és a
+> leggyakoribb harmadik válasz az, hogy a kérdés rossz.
+
+**ÉS EGY FOKKAL ERŐSEBB ALAK UGYANEBBŐL A CSALÁDBÓL: A LEHETETLENSÉG-ÁLLÍTÁS -- „NINCS OLYAN FORMA,
+AMI MINDKETTŐT MEGADJA"** (didi mérte magán 2026-09-17, a saját állítását cáfolva meg).
+
+Egy A-vagy-B keret azt mondja, hogy kettő közül kell választani. Ez azt, hogy **NINCS harmadik** --
+és épp ezért nem néz utána senki: az állítás maga mondja ki, hogy nincs ott mit keresni.
+
+    egy HIBÁS SZÁM ............ valaki előbb-utóbb újraméri
+    egy HIBÁS LEHETETLENSÉG ... **bezár egy ajtót, és az ajtó zárva marad**
+
+**A MECHANIZMUS, ÉS NEM HANYAGSÁG: KÉT TULAJDONSÁG, AMI A PÉLDÁBAN EGYÜTT JÁRT.** didi azt írta,
+hogy az őr populáció-padlóját nem lehet próza-biztossá tenni anélkül, hogy visszanyitná a vakfoltot,
+amit épp megtalált. Megmérve HAMIS: a komment-strip a kód-próbáját PIROSAN hagyja (a változón át
+vezetett kapu KÓDBAN él, tehát túléli a strippelést), a padló-próbát PIROSRA viszi ott, ahol addig
+némán zöld volt, és tüzeli a pint. Az ok: **a kód ALAKJÁT (`disabled={...isDirty...}`, ez volt a vak)
+összemosta a kód SZÖVEGÉVEL (`isDirty` a kommenteken kívül, ez nem az).** A helyes kizárás szűkebb,
+mint amit a lehetetlenség állított.
+
+**ÉS A MÁSODIK FELE AZ, AMI MIATT EGY ILYEN HELYESBÍTÉS ELMARAD: AZ AJÁNLÁS VÁLTOZATLAN MARADT.**
+„Ma ne változtassunk" volt előtte és utána is -- tehát kívülről úgy néz ki, hogy nincs mit javítani.
+De az INDOK megfordult: nem „nem lehet megjavítani anélkül, hogy elrontanánk", hanem „meg lehet,
+olcsón, csak ma semminek nem kell". **A következő döntést az INDOKBÓL hozzák, nem az ajánlásból** --
+és a régi indok mellett senki nem próbálja meg.
+
+> **Ha egy cáfolat az INDOKOT dönti meg és az AJÁNLÁST nem, a helyesbítés akkor is köteles.**
+> A próba: *ha valaki fél év múlva elővenné, a régi indok ELTÁNTORÍTANÁ-e?* Ha igen, megy a
+> helyesbítés, akkor is, ha ma semmi nem változik tőle.
+
+*(Miért él túl: a cáfolat MUNKA volt, mérésekkel és kontrollal, és a munka elvégzésének érzete
+átterjed a maradék állításra. Minél alaposabb az alternatíva kizárása, annál magabiztosabb a
+levezetett következtetés -- és annál kevésbé jut eszébe bárkinek külön megmérni.)*
+
+**EGY DÖNTÉS-KÉRÉS PREMISSZÁJA TIPIKUSAN IGAZ EGY RÉSZRE, ÉS AZ EGÉSZRE VAN ALKALMAZVA.** A küldő
+mérése rendszerint HELYES; ami hiányzik, az az ÁTMENET a mért állítás és a kért döntés között -- és
+az a lépés LÁTHATATLAN, mert nincs kimondva. A koordinátori próba: **melyik átmenet a mért állítás
+és a kért döntés között, és megmérte-e azt valaki?**
+
+**A MUTÁCIÓS PRÓBÁRÓL:** a kérdés nem az, hogy „pirosra megy-e", hanem hogy „megkülönbözteti-e az
+ÁLLÍTÁSOM azt a KÉT ÁLLAPOTOT, ami engem érdekel". A tizenkét ismert hibamód:
+`rulebook/mutacios-alakok.md` és `rulebook/atadott-meres.md`. **És a legfontosabb egy mondatban:
+mutáld azt, amit az ÁLLÍTÁS véd, ne azt, amit a JAVÍTÁS megváltoztatott.**
+
+
+
+---
+*(kikoltoztetve 2026-10-06, marveen)*
+
+### A KONTROLLRÓL, HÁROM RÉTEGBEN
+
+- **Egy diszkrimináló kontroll is válaszolhat a SZOMSZÉD kérdésre.** A kontroll azt igazolja, hogy a
+  mérőd MŰKÖDIK; azt nem, hogy AZT MÉRI, AMIT KÉRDEZTÉL. Egy TÖRÖTT kontroll nem tüzel és ezt
+  észreveszed; egy ÉRVÉNYES kontroll a ROSSZ OBJEKTUMON tüzel, és minél PONTOSABB, annál meggyőzőbb.
+- **A kontroll a MÉRT HALMAZON KÍVÜLRŐL jöjjön**, és NE tartalmazza azt, amiben bizonytalan vagy.
+  Egy rövid részlet UGYANABBÓL a hibás emlékezetből ugyanazt a defektust hordozza -- és akkor a
+  kontroll MEGERŐSÍTI a törött mérőt.
+- **A kontroll UGYANAZT AZ ALAKOT használja, amivel a mérés fut** (változóval, ha a mérés változóval
+  megy). Különben pontosan azt a hibát nem látja, amiért létezik.
+- **⚠ ÉS EZ A KETTŐ ÜTKÖZIK, HA A DEFEKTUS MAGÁBAN AZ ALAKBAN VAN -- A FELOLDÁS AZ, HOGY A KONTROLL
+  AZT A TENGELYT VÁLTOZTASSA, AMIT ÉPP VIZSGÁLSZ** (deeper mérte magán 2026-09-20, marveen
+  függetlenül reprodukálta). Az előző két pont szerint a kontroll jöjjön KÍVÜLRŐL, de UGYANAZZAL az
+  alakkal. Ha a hiba az ALAKBAN ül, a második pont a kontrollba is beleviszi -- és akkor a kontroll
+  nem cáfol, hanem MEGERŐSÍTI a törött mérőt.
+
+  A mért eset: egy `T="$(cat .../.dashboard-token)" curl -H "Authorization: Bearer $T" ...`
+  alak 401-et adott. Az ELŐTAG a PARANCS környezetét állítja, a `$T` viszont ugyanabban a sorban
+  van, tehát a SZÜLŐ héj helyettesíti be ELŐBB, üresre -- a kérés hitelesítés NÉLKÜL ment ki.
+  A szerző kontrollja egy MÁSIK VÉGPONT volt, ugyanazzal az alakkal, és az is 401-et adott.
+  **Megerősítésnek olvasta. A saját hibájának megerősítése volt.**
+
+      elotag-alak (`VAR=... cmd ... $VAR`) ... **401**
+      ugyanaz `;`-vel ........................ 200   <- a TENGELY: az ALAK, nem a vegpont
+      a hazi, dokumentalt inline alak ........ 200   (`Bearer $(cat ...)`)
+      es zsh-ban meg csak el sem jut odaig: `no matches found` a csupasz `?` glob miatt
+
+  **A PRÓBA: nevezd meg, MIT gyanítasz, és a kontroll AZT változtassa.** Szervert gyanítasz ->
+  változtasd a KLIENST (másik alak, ismerten jó hívás). Alakot gyanítasz -> változtasd az ALAKOT.
+  Egy szomszédos VÉGPONT ugyanazzal a törött paranccsal nem kontroll, hanem ugyanaz a mérés kétszer.
+
+  **A KITETTSÉG MÉRVE, ÉS EZÉRT BEKEZDÉS, NEM LINT-SZABÁLY:** a követett fában NULLA káros
+  előfordulás (egy találat, `scripts/start.sh:31`, ahol a változó a szülőben MÁR be van állítva,
+  tehát ártalmatlan), a házi alak pedig hét szkriptben inline `$(cat ...)` -- immunis. A veszély az
+  ELDOBHATÓ EGYSOROSBAN van, amit valaki egy fordulón belül gépel, és azt egy cenzus szerkezetileg
+  nem látja. Ugyanaz a hatókör, mint a locale-kollációnál.
+- **Egy BUKÓ pozitív kontroll nem hiba, hanem a lelet maga:** vagy a mérő rossz, VAGY a világ
+  gazdagabb, mint a modelled. A kézenfekvő reakció -- a kontroll „megjavítása", amíg zöld nem lesz
+  -- pont azt az alakot dobja el, amit épp felfedeztél.
+- **ÉS EGY NEGYEDIK RÉTEG, AMI NEM A HELY, HANEM AZ IDŐ: A HELYREÁLLÍTOTT ADATNAK NINCS FÜGGETLEN
+  TANÚJA, HA A VÁRAKOZÁST UTÓLAG ÍRJUK LE** (mandark alakja, 2026-09-24, a `50eee909` backfilljén).
+  Egy pótlás után a kézenfekvő ellenőrzés az, hogy „megjelentek-e a sorok" -- az viszont csak
+  JELENLÉTET mér, nem HELYESSÉGET, és a hiba iránya a megnyugtató: a rossz sorok is sorok.
+  Ami működött: mandark a javítás ELŐTT rögzített egy független cenzust a transcriptekből
+  (agensenkent, naponta), és a pótlás UTÁN ahhoz vetette a táblát -- mind a hét ágensre egyezett.
+  **A kontroll ereje itt az IDŐBÉLYEGÉBŐL jön: egy a változás előtt leírt várakozást nem lehet az
+  eredményhez igazítani.** Egy utólag levezetett „ennyinek kell lennie" ugyanabból az adatból jön,
+  amit ellenőriz. *(És mellé egy NEGATÍV kontroll ugyanabban a futásban: „nincs új scratchpad-sor"
+  -- vagyis a javítás nem is gyűjtött TÖBBET a kelleténél.)*
+- **Ingadozó alanyon a kontroll SZÁM, nem állapot.** Egy zöld futás nem cáfolat, csak egy minta
+  n=1-gyel; a „nem történt meg" és a „nem történik meg" ugyanúgy néz ki.
+
+
