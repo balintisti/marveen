@@ -16,6 +16,7 @@ import {
   normalizeContextGuardConfig,
   dailyHandoffArmed,
   dailyHandoffDue,
+  dailyServedAtMs,
   DAILY_HANDOFF_REASON_PREFIX,
   IDLE_FLUSH_REASON_PREFIX,
   DEFAULT_CONTEXT_GUARD,
@@ -284,5 +285,31 @@ describe('runner wiring', () => {
     expect(code).toContain(
       'if (!cfg.enabled && !cfg.saturationRestart && !cfg.idleFlushEnabled && !cfg.dailyHandoffEnabled) {',
     )
+  })
+})
+
+// Card 987baf44 (measured 2026-10-06): a session started after the slot must not
+// be asked for that slot's handoff.
+describe('dailyServedAtMs -- a fresh session serves the slot it started after', () => {
+  const slot = Date.UTC(2026, 9, 6, 1, 12) // 03:12 local-ish; only ordering matters
+  const yesterday = slot - 20 * 3600_000
+  const startedAfter = (slot + 6 * 3600_000) / 1000
+
+  it('a session started AFTER the record moves served-at to its start', () => {
+    expect(dailyServedAtMs(yesterday, startedAfter)).toBe(startedAfter * 1000)
+  })
+
+  it('an older session keeps the guard record', () => {
+    const startedBefore = (yesterday - 3600_000) / 1000
+    expect(dailyServedAtMs(yesterday, startedBefore)).toBe(yesterday)
+  })
+
+  it('unknown session start keeps the guard record (no guessing)', () => {
+    expect(dailyServedAtMs(yesterday, undefined)).toBe(yesterday)
+  })
+
+  it('the runner feeds the session start into the due check', () => {
+    const code = src('src/web/context-guard-runner.ts')
+    expect(code).toContain('dailyHandoffDue(cfg, localMidnightMs(nowMs), dailyServedAtMs(last, sessionStartSec(name)), nowMs)')
   })
 })

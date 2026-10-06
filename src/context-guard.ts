@@ -471,6 +471,19 @@ export function dailyHandoffArmed(cfg: ContextGuardConfig): boolean {
  * already means elsewhere in the fleet: past the slot, and not already served
  * for that slot.
  */
+/**
+ * When the daily slot counts as last served for a RUNNING session: the later of
+ * the guard's own record and the session's start. A session that started after
+ * the record already has a fresh context, so a slot that passed before it does
+ * not need a handoff. Measured 2026-10-06: the fleet was stopped over the 03:xx
+ * slots, the record was the day before's, and the first idle sweep after the
+ * 09:13 restarts asked brand-new sessions (17%, 23% full) for a daily handoff,
+ * each costing a restart. Card 987baf44.
+ */
+export function dailyServedAtMs(lastMs: number, sessionStartSec: number | undefined): number {
+  return sessionStartSec !== undefined ? Math.max(lastMs, sessionStartSec * 1000) : lastMs
+}
+
 export function dailyHandoffDue(
   cfg: ContextGuardConfig,
   localMidnightMs: number,
