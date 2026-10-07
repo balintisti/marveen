@@ -3466,17 +3466,19 @@ export function computeTmuxChunk(
 //
 // EVERY NEWLINE IN `text` BECOMES A SPACE. The recipient reads ONE LINE
 // (card 981be530, didi measured the reach, 2026-09-11). The flattening is the
-// `replace` below -- unconditional, at this function's top level, and the only
-// newline replacement in its 207 lines -- and it is NOT optional: in this pane
+// `paneOneLine(text)` call below (src/web/pane-text.ts, the one mapping a
+// prompt undergoes on the way to the pane) -- unconditional, at this
+// function's top level -- and it is NOT optional: in this pane
 // a newline IS a submit, so a laid-out message would send itself halfway
 // through. The note further down about a multi-row buffer that a plain Enter
 // cannot submit is the same hazard seen from the other end.
 //
 // WHAT THIS COSTS THE CALLER, and it is why this paragraph exists rather than
-// only the line below: 14 call sites in 8 modules hand whole message bodies to
-// this function -- inter-agent messages (message-router), scheduled-task
-// prompts (schedule-runner), the context-guard continuation prompt, the worker
-// prompt, and the channel-monitor injections. All of them arrive as one line.
+// only the call below: 14 call sites in 8 modules (counted 2026-09-11) hand
+// whole message bodies to this function -- inter-agent messages
+// (message-router), scheduled-task prompts (schedule-runner), the
+// context-guard continuation prompt, the worker prompt, and the
+// channel-monitor injections. All of them arrive as one line.
 //
 //     SURVIVES ...... an anchor at the START of a sentence, capitals, the
 //                     decision first, a `[prefix]` the reader can scan for
@@ -3492,7 +3494,7 @@ export function computeTmuxChunk(
 // has observed the rendered result on a live pane. Two routes were tried and
 // both are structurally unable -- the TUI redraws, so the scrollback does not
 // retain an injected prompt, and the injected-prompt registry is in-memory.
-// The claim rests on the unconditional replace on the single delivery path.
+// The claim rests on the unconditional paneOneLine() on the single delivery path.
 //
 // Pre-flight: if the live input box already shows a stale preamble from
 // a previous wrapped message that never fully landed (shouldClearTrun-
