@@ -153,6 +153,21 @@ if [ "$GATE_HITS" -eq 2 ]; then
 fi
 
 if [ "$GATE_HITS" -eq 0 ]; then
+  # KET KULONBOZO OK, EGY KILEPESI KOD. A nyito kapu hianya ketfele lehet: (a) NEM VOLT kapcsolat
+  # (DNS-hiba, `Connection refused`, idotullepes, hitelesites) -- ekkor a kapu mar csak azert sem
+  # tuzelhetett, mert a tranzakcio el sem indult --, vagy (b) volt kapcsolat, es a kapu NEM tuzelt:
+  # az a csak-olvaso vedelem hianya. Kartya 15d61c9d: (a)-ra is a (b) szoveg ment ki, es egy DNS-hiba
+  # utan egy nem letezo „nem csak-olvaso" hibat kezdtek keresni. A kilepesi kod marad 3 (fail-closed,
+  # a hivok csak a nem-nullat nezik); a KULONBSEG a szovegben van.
+  # A felismeres: a psql CSATLAKOZASI hibaja `psql: error: ...` (regebbi psql-nel `psql: could not
+  # ...`) sorkent jelenik meg, a szkript-hibak viszont `psql:<fajl>:<sor>: ERROR:` alakuak (nincs
+  # szokoz a ket kettospont kozott), tehat a ketto nem keveredik.
+  CONN_ERR="$(grep -m1 -E '^psql: ' "$OUT" || true)"
+  if [ -n "$CONN_ERR" ]; then
+    echo "NEM MERTEM: nincs kapcsolat (atmeneti lehet, probald ujra; ha marad: URL / hitelesites). Semmit nem fogadok el belole." >&2
+    echo "  $CONN_ERR" >&2
+    exit 3
+  fi
   echo "NEM MERTEM: a NYITO kapu sem tuzelt -- a kapcsolat NEM csak-olvaso. Semmit nem fogadok el belole." >&2
   exit 3
 fi
