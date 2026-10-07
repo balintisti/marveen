@@ -23,6 +23,7 @@ import {
   reconcileOpenTaskRuns,
   getTaskRunMedianDurationMs,
   listPendingTaskRetries,
+  getPendingTaskRetry,
   deletePendingTaskRetry,
   updatePendingTaskRetry,
   insertPendingTaskRetryIfNew,
@@ -2859,6 +2860,17 @@ export function startScheduleRunner(): NodeJS.Timeout {
       if (decided.stored === null) clearRetryPrefix(key)
       else if (decided.stored !== undefined) replaceRetryPrefix(key, decided.stored)
       const retryPc = decided.pc
+      // TESTFOLLOWUP1007G: a pre-check runs off the event loop for up to its
+      // time limit, and the operator may disable or delete the task, or cancel
+      // this retry, meanwhile. The checks above saw the state from before the
+      // await, so read both again before acting on the answer. Nothing fires
+      // here; a disabled or deleted task's row is dropped by the checks above
+      // on the next tick, as for any other retry.
+      if (taskDef.preCheck) {
+        const current = listScheduledTasks().find(t => t.name === row.task_name)
+        if (!current || !current.enabled) continue
+        if (!getPendingTaskRetry(row.task_name, row.agent_name)) continue
+      }
       if (retryPc.skip) {
         deletePendingTaskRetry(row.task_name, row.agent_name)
         // Nothing to do NOW either: catching this up later would be wrong.
