@@ -104,21 +104,28 @@ def try_slot(me):
     return None
 
 
+# EPERM counts as "nothing of ours left to reap" (dexter 24845, 2026-10-07): on macOS killpg on a
+# group whose members are all zombies or have left it answers PermissionError, not ProcessLookupError.
+# Uncaught, it was raised inside main()'s `finally`, so the wrapper exited 1 with a traceback, the
+# runs.jsonl line was never written, and the COMMAND's rc was lost -- every run read as failed.
+_GONE = (ProcessLookupError, PermissionError)
+
+
 def reap_group(pgid, grace):
     try:
         os.killpg(pgid, signal.SIGTERM)
-    except ProcessLookupError:
+    except _GONE:
         return
     deadline = time.time() + grace
     while time.time() < deadline:
         try:
             os.killpg(pgid, 0)
-        except ProcessLookupError:
+        except _GONE:
             return
         time.sleep(0.2)
     try:
         os.killpg(pgid, signal.SIGKILL)
-    except ProcessLookupError:
+    except _GONE:
         pass
 
 
