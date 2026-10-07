@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **436** kovetett fajl, ebbol
-**129** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **439** kovetett fajl, ebbol
+**131** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -105,6 +105,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - MIERT LETEZIK. 2026-09-19-en kiderult, hogy a kulcstarto-hitelesites 129 oraja lejart,
 - MIERT MESTERSEGES BEMENET, KIMONDVA: az elo lekerdezes MA egyaltalan nem ad `windows`-t
+
+### `scripts/__tests__/usage-collect-fleet-plan.test.py`
+
+- WHY THIS EXISTS. scripts/usage-collect.py reads the usage through the HOST keychain token, i.e. the
 
 ### `scripts/__tests__/usage-collect-json-purity.test.py`
 
@@ -516,6 +520,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - Governance control (2026-06-26, after the autonom-kor incident: a sub-agent
 - Why a hook and not only a permissions deny-list: permissive profiles launch
+
+### `scripts/sentry-or-precheck.sh`
+
+- WHY: the `sentry-or` heartbeat wakes the model every 3 hours (8 turns a day) to find out, nearly
 
 ### `scripts/skill-index.sh`
 
