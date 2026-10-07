@@ -78,6 +78,15 @@ main() {
     return 1
   fi
   echo "LETREJOTT: $ut  ag=$ag  alap=$sha  (upstream NINCS beallitva -- SHA-rol jott)"
+  # 4. AZ L2-LINKEK (kartya fbee04e0): a futo fa a marveen-l2 fajljait symlinkkel tartja a regi
+  # utjukon; egy friss fabol hianyoznak, es az oket futtato tesztek ott buknak, elesben nem.
+  local l2
+  l2="$(dirname "$(cd "$(git rev-parse --git-common-dir)" && pwd)")"; l2="$(dirname "$l2")/marveen-l2"
+  if [ -x "$l2/scripts/link-into.sh" ]; then
+    bash "$l2/scripts/link-into.sh" "$ut" || echo "FIGYELEM: az L2-linkeles nem teljes (lasd fent)" >&2
+  else
+    echo "FIGYELEM: $l2 nincs meg -- a mentes- es kvota-szkriptek tesztjei ebben a faban buknak" >&2
+  fi
   echo "TIPP: ha node_modules kell, KLONOZD, ne symlinkeld:  cp -Rc node_modules \"$ut/\""
   return 0
 }
