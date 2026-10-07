@@ -296,3 +296,43 @@ meg, hogy SZÓR-e ott, ahol szórnia kellene.
 *(Ugyanaznap ugyanattól a szerzőtől a testvér-hiba: `grep -A4` egy olyan `return` fölött, amit a
 saját ötsoros kommentje kitolt az ablakból. Az ABLAK túl szűk, ez a MINTA túl szűk -- két külön
 mechanizmus, azonos néma nulla.)*
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2605-2641, szó szerint -->
+## A LEGERŐSEBB MONDAT UTAZIK, A FEJLÉC NEM (mandark, 2026-08-27)
+
+**AKI ÍR:** minden mondat, ami FELHASZNÁLÓI KÁRT állít, vigye MAGÁBAN a környezetét -- akkor is,
+ha három sorral feljebb már ott áll, és akkor is, ha esetlenül ismétlődik. A fejléc-címke egy
+ÁLLAPOTOT ír le; az idézhető mondat egy TÖRTÉNETET mond („aki ezeket létrehozta", „öt napja"),
+és egy történet magával viszi a saját olvasatát.
+**A kontroll, és mechanikus: olvasd el a legerősebb mondatodat ÖNMAGÁBAN, kiszakítva. Ha úgy
+élesre érthető, át kell írni.** Ez nem figyelem kérdése: a mondat épp attól lesz erős, hogy
+érzékelteti a tétet, tehát a legelkötelezettebb író fut bele.
+
+**AKI TOVÁBBAD:** a legerősebb mondat mellé keresd meg a NEVEZŐT, mielőtt idézed. Ha nincs a
+mondatban, az nem azt jelenti, hogy nincs.
+
+### ÉS EGY DIAGNOSZTIKAI MONDAT ÁLLÍTHAT OLYAN ÖSSZEHASONLÍTÁST, AMIT NEM VÉGZETT EL
+### (deeper fogalmazta meg 2026-09-17, két saját leletén; a nevet tőle vettem át)
+
+    a kiirt mondat ..... „a szovegben »Tibor Toth«, a CRM-ben »Tibor Toth« (83637). Ugyanaz a vevo?"
+    a ket nev .......... **BAJT-AZONOS**
+    ami TENYLEG dontott . a telefon egyezett, es az EKEZET-ERZEKENY nev-kereses NEM hozta vissza
+                          azt a kontaktot -- **ez a mondatban SEHOL nem szerepel**
+
+A mondat szó szerint IGAZ, és **a nevet önmaga ellen állítja**: az olvasó egy olyan eltérést keres,
+ami nem létezhet, miközben a valódi diszkriminátor egyetlen felületen sem látszik.
+
+**A MÁSODIK PÉLDÁNY UGYANAZON A NAPON:** egy kimenet, ami a NEVET a kontakt-oldali listából, a
+MEZŐKET egy projekt-oldali hívásból szedte, és EGY válaszként nyomtatta -- ettől „részleges írásnak"
+olvasódott, holott egy FORRÁS késett.
+
+> **A PRÓBA, ÉS ÍRÁSKOR TÜZEL: amit a mondat ÖSSZEVET, az-e az, ami DÖNTÖTT?**
+> Ha nem, a mondat nem hibás -- csak elvezeti az olvasót az októl, és minél pontosabb, annál jobban.
+
+**ÉS EZ NEM CSAK ESZKÖZ-KIMENETRE ÁLL: A MI HÁZI STÍLUSUNK IS ILYEN.** Majdnem minden
+kártya-kommentünk `X kontra Y` alakban ír -- ugyanaz a veszély: **a KIÍRT összevetés nem mindig az,
+amelyik DÖNTÖTT.**
+
+*(A mért esetek: `rulebook/legerosebb-mondat.md`.)*
+

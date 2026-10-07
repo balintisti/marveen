@@ -95,3 +95,74 @@ lekapcsolódás kockázata megmarad, a következménye viszont már nem néma.
 *(A harmadik védelem a Stop hook, ami észreveszi, ha egy Telegram-üzenetre nem a `reply` toollal
 válaszoltál, és kikényszeríti. Aznap ténylegesen megfogott.)*
 
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1813-1839, szó szerint -->
+## NE INDÍTS `claude`-OT ALFOLYAMATKÉNT EGY MCP-FÜGGŐ MUNKAMENETBŐL
+*(Mérve 2026-08-25 (marveen, kétszer) és 2026-09-18 (didi). A mért esetek, a kizárásos
+bizonyíték és a három független futtatás: `rulebook/mcp-eszkoz-veszes.md`. 5 279 karakter volt itt.)*
+
+Egy `claude mcp list` vagy egy `claude -p` a munkamenet ÖSSZES MCP-eszközét leviszi. A tiltás
+nem a `mcp` alparancsra szól, hanem arra, hogy MCP-függő sessionből `claude`-ot indítasz
+alfolyamatként -- bármilyen kapcsolóval.
+
+    a kar akkor is bekovetkezik, ha a parancs MAGA elbukik (didi: „Not logged in", es kozben
+      negy eszkoz eltunt)
+    a `~/.mcp.json` mtime VALTOZATLAN -> nem a konfig mozdul, a KLIENS-oldali kapcsolat szakad
+    a `claude mcp list` kozben `✔ Connected`-et mond, mert a szerver tenyleg fut
+    **A szerver `Connected`. Az eszkoz nincs. A ketto nem ugyanaz az allitas.**
+
+**A KOORDINÁTORRA EZ A LEGÉLESEBB: az egyetlen utam Istihez EGY MCP-eszköz (`reply`).**
+
+**ÉS A KIÚT, MERT EGY TILTÁS KIÚT NÉLKÜL ADDIG TART, AMÍG VALAKI KÍVÁNCSI LESZ.** A tiltás egy
+VALÓDI igényt tilt: látni akarod, mi fut. Fájl-olvasás, nem kapcsolat-művelet:
+
+```bash
+python3 -c "import json; d=json.load(open('$HOME/.mcp.json')); print(sorted(d.get('mcpServers',{})))"
+stat -f '%Sm %N' "$HOME/.mcp.json"   # futtatás ELŐTT és UTÁN: változatlan mtime a bizonyíték
+```
+
+*(Három független futtatás, három ágens, nulla eszköz-veszteség. A tartalék út Istihez:
+`bash scripts/notify.sh "..."` -- lásd a vész-kijárat szakaszt.)*
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1853-1883, szó szerint -->
+**MIERT ITT VAN LEIRVA ES NEM SKILLBEN** (dontes 2026-08-29, friday kikotese alapjan): a
+`~/.claude/skills/` fa NINCS verziozva, tehat egy vesz-kijarat leirasa, ami maga is eltunhet egy
+`git clean`-nel vagy egy uj gepen, pontosan azt a hibat ismetli, ami ellen keszult. A lap sem
+verziozott (`git ls-files CLAUDE.md` -> 0, sajat kartya: 47a638d8) -- de a lap MINDEN munkamenet
+elejen betoltodik ANNAK, AKIHEZ ELJUT, a skillt viszont csak az hivja meg, aki mar tudja, hogy
+letezik. **Egy vesz-kijaratot nem hiv meg senki, aki nem tudja, hogy van.**
+
+**ES A "AKIHEZ ELJUT" 2026-09-18 OTA EGY OLVASO** (a levalasztas; lasd a napindito-szakaszt).
+A hetnek ez az ut a SAJAT lapjukon all, es a `scripts/notify.sh` kanari-mondat orzi -- vagyis az
+ERVELES all, de MAS mechanizmuson: nem ez a lap viszi at nekik, hanem az `agent-core-check.py`.
+
+**~~AMIT VISZONT MA NEM CSINAL: NEM IR A LEDGERBE.~~ EZ 2026-09-03 06:27 OTA HAMIS, es a lapon
+egy napig jelen idoben allt** (jarvis talalta 09-04 18:38, marveen ujramerte):
+
+    2026-09-03 08:0x  `grep -cE 'conversation_log|ledger' scripts/notify.sh` -> **0**   <- akkor IGAZ
+    2026-09-04 18:3x  ugyanaz a parancs ......................................... **5**   <- MA
+    `merge-base --is-ancestor fa809dc HEAD` -> **rc=0**, a javitas A FUTO FAN VAN
+    KONTROLL: HEAD onmagara rc=0 | a `TELEGRAM_BOT_TOKEN` ugyanabban a fajlban 2 -> a mero lat
+
+**A `fix/44730c4c-notify-ledger` BEOLVADT. A kijarat MA NYOMOT HAGY:** ami ezen az uton megy ki,
+megjelenik a `conversation_log`-ban.
+
+**AMIERT A REGI SZOVEG ITT MARAD ATHUZVA, ES NEM TOROLVE:** ez a lap sajat, tobbszor rogzitett
+alakja -- egy JELEN IDEJU mondat egy MAR JAVITOTT fan a legolcsobb modja annak, hogy valaki egy nem
+letezo defektusra epitsen. Aki ma reggel ezt olvasta, pont az ELLENKEZOJET tervezte annak, ami igaz.
+Az elavulas nem hibauzenet: a mondat valtozatlan maradt, csak a vilag mozdult alatta.
+
+*(Es a mechanizmus, amiert egy NAPIG allt: a `scripts/` az AZONNAL-ELO sav, tehat a beolvasztas
+pillanataban hatott -- de a LAPON nincs semmi, ami a beolvasztaskor mozdulna. A javitas eseménye
+nem ir vissza a lapra, ugyanugy, ahogy egy fix nem ir vissza a kartya statuszara.)*
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1884-1887, szó szerint -->
+**UJRANYITASI FELTETEL, GATE alakban:** ha valaki a `notify.sh`-t modositja, ez a NEGY ujramerendo
+-- a fajl futtathato, a ket env-kulcs jelen van, a hibaag `exit 1`-et ad, es ir-e a ledgerbe. Egy
+elkuldott TESZT-UZENET nem szukseges es nem is kivanatos: a gazda telefonjara megy.
+

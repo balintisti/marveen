@@ -102,3 +102,88 @@ pontosan az volt a veszélyes.
 az NEM, hogy a SZÖVEGÜK tényleg hordozza-e a döntést. Ha egy kártya csak HIVATKOZIK rá, akkor a
 helyreállítási út **LÁTSZÓLAGOS, NEM VALÓDI** -- és az a rosszabb eset, mert egy látszólagos út
 mindenkit visszatart attól, hogy valódit építsen.
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 361-422, szó szerint -->
+### AZ ÖTÖDIK ÁLLAPOT: ÉL ÉS FUT, DE NINCS VERZIÓZVA
+*(A mért esetek: `rulebook/otodik-allapot-esetek.md`.)*
+
+A fenti táblázat SÁVOKAT sorol: hol tart egy változás a telepítés felé. Ez nem sáv, hanem ÁLLAPOT:
+nem „még nem ért oda", hanem **már ott van, csak nem lehet visszahozni**. A fájl HAT, és egy
+`git clean -fd` vagy egy új gép nyomtalanul elviszi -- miközben a kártya késznek mutatja a munkát.
+
+**A KÉRDÉS, AMI EZT MEGFOGJA:** nem az, hogy „beolvadt-e", hanem hogy `git ls-files <fájl>` ad-e sort.
+
+**ÉS A KÉRDÉS KÉT LÉPCSŐS, MERT NEM MINDEN FÁRA ÉRVÉNYES:** követi-e a repó, ÉS ha nem, fedi-e egy
+PILLANATFELVÉTEL. A `~/.claude/skills/` fa követetlen, és MÉGIS van diffje és története
+(`/Users/isti/Backups/rulebooks`, **1018 commit**; a `skills-snapshot-on-write.sh` PostToolUse hook
+menti minden Bash-hívás után):
+
+```bash
+git -C /Users/isti/Backups/rulebooks show <commit>:store/skills/<skill>/<fajl>   # visszaallitas = MASOLAS
+```
+
+**A SZABÁLY EHHEZ A FÁJLHOZ (`CLAUDE.md`): olvasás-módosítás-írás CSAK `fcntl.flock` alatt, és a
+csere legyen HORGONYOS asserttel** (a horgony PONTOSAN egyszer illeszkedjen), ne sorszám vagy teljes
+újraírás. Egy `git ls-files` itt 0-t ad, tehát a szokásos háló nincs alattad. *(Mért eset: két ágens
+percen belül írta.)*
+
+**ÉS EGY HARMADIK PÉLDÁNY MÁS OKBÓL LÁTHATATLAN: A CÍMKE AZT MONDTA, NE NÉZD MEG.** Egy `scratch`
+nevű ág és egy `planned`-ként archivált kártya ugyanígy: **a jelölés maga tereli el a figyelmet.**
+Ugyanaz a mechanizmus, ami az elavult „ÁLLJ MEG" emléket életben tartja. **Adatvesztés-kérdésnél a
+NÉV ne legyen szűrő** -- mérj mindenre, és a besorolást a TARTALOM adja.
+
+**ÉS UGYANEZ A BIZONYÍTÉKON, NEM A KÓDON -- EZ A DRÁGÁBB:**
+
+    a KOD elvesztese:        egy funkcio eltunik -- elobb-utobb valakinek feltunik
+    a BIZONYITEK elvesztese: a kartya TOVABBRA IS azt allitja, hogy megvolt
+
+**A szabály:** amikor egy kártyára azt írod, hogy a bizonyíték futtatható, előbb `git ls-files` a
+fájlra. Egy commit-hash a kártyán ezt magától megoldja. **Prózára ugyanez:** egy döntés, ami KÁRTYÁT
+nevez, helyreállítható; ami csak DÁTUMOT, az az EGYETLEN PÉLDÁNY. És **olvasni kell, nem grepelni**:
+egy kulcsszó-cenzus azt bizonyítja, hogy a SZAVAK ott vannak, nem azt, hogy a DÖNTÉS ki van mondva.
+
+**ÉS A HARMADIK ALAK A TÜKÖRKÉPE, ÉS NEM VESZTESÉG, HANEM HAMIS TÖBBLET: A VAKON ZÖLD TESZT**
+(didi mérte 2026-09-17, marveen gyengébb alakját javítva).
+
+    a KOD elvesztese ......... eltunik, es feltunik
+    a BIZONYITEK elvesztese .. a kartya azt allitja, hogy MEGVOLT
+    **a VAKON ZOLD teszt** ... a kartya azt allitja, hogy MEGVIZSGALTUK -- es sosem vizsgaltuk
+
+A mért eset: egy assert egy `if (save.disabled) { ... }` őrön BELÜL állt. A javítás után a gomb
+ENGEDÉLYEZETT lett, tehát az őr hamis, a törzs SOHA nem fut le, és a fájl `3 passed | 0 failed`-et
+ad. Nem törött, nem skipelt, nem néma: **zöld, és semmit nem állít.** *(A bizonyíték didi
+szentinelje az `if`-en belül: pirosra megy, tehát a törzs tényleg halott.)*
+
+> **Egy NÉMA teszt KIHAGY lefedettséget. Egy VAKON ZÖLD ÁLLÍTJA -- és az állítás TÚLÉLI azt az
+> ágat, amin mérték.** (didi mondata.)
+
+**ÉS A KÉZENFEKVŐ TRIÁZS-KÉRDÉS ITT HAMIS NEGATÍVOT AD, EZÉRT ÉL TÚL:** „merge-úton van-e?" Mérve:
+az a spec KIZÁRÓLAG egy scratch-ágon él, `integration/batch/release` ref **0** (KONTROLL: ugyanaz
+a mérő **28** ilyen refet lát), a fájl az `origin/main`-en nincs. Tehát a kód felől ÁRTALMATLAN --
+**a kár a TÁBLÁN van:** a `3 passed` ott áll egy kártya kommentjében annak bizonyítékaként, hogy a
+javítás teljes volt, és a komment append-only.
+
+**A PRÓBA, ÉS EGY SOR: tedd a szentinelt az ŐRÖN BELÜLRE, ne az assert mellé.** Ha a szentinel is
+zöld marad, a törzs nem fut le. Egy `expect` a fájlban nem bizonyítja, hogy VÉGRE IS HAJTOTTÁK.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 423-439, szó szerint -->
+### A HOOK-BEKÖTÉS ÉS A COMMIT-EREDET: `~/.claude/skills/hook-savok-es-commit-eredet/`
+
+Két teherhordó mondat marad itt, a többi a skillben (a négy settings-hely mérése, a kézbesítési
+idők, a `.git/hooks` worktree-megosztása és a `git show` csapdájának teljes esete):
+
+- **MINDEN ÁGENS SAJÁT `CLAUDE_CONFIG_DIR`-REL FUT** (`agents/<név>/.claude-config`), tehát egy
+  KIZÁRÓLAG a `~/.claude/settings.json`-be írt hook nem „a következő indulástól" hat, hanem
+  **SEHOGY**. Új fleet-hookot ne settings-fájlba írj, hanem `ensure*` függvénybe.
+- **Egy `git show <sha>:<út>` SIKERE NEM ÁLLÍTÁS ARRÓL, HOGY A COMMIT A TE FÁDON VAN** -- a `git
+  show` egy IDEGEN upstreamről fetchelt objektumot is olvas. A mérő:
+
+```bash
+git merge-base --is-ancestor <sha> HEAD; echo $?   # 0 = a te fadon van, 1 = NINCS
+# ha NEM: kerdezd meg a TARTALMAT, mielott leletet irsz (cherry-pick/rebase/squash UJ SHA-t ad):
+git log --all --oneline --grep=<kartya-azonosito>
+```
+

@@ -226,3 +226,46 @@ kollacio-sorrendje eltér, plusz egy kontroll-paron, ahol egyezik.)*
 
 *(NEM MERVE: a collation-tabla bejegyzese; mas locale-ok a hu_HU es a C mellett; a gawk viselkedese
 -- nincs telepitve.)*
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 592-631, szó szerint -->
+## A LOCALE-KOLLÁCIÓ: A PIPA ÉS A KERESZT EGYENLŐNEK SZÁMÍT (didi, dexter, marveen -- 2026-09-05)
+
+Ezen a gépen (`LANG=hu_HU.UTF-8`) a sztring-EGYENLŐSÉG locale szerint rendez, és a jest/vitest
+két állapot-glifája EGYENLŐNEK jön ki. Nem glifa-probléma: a KÖRÜLÖTTE álló szöveget is túléli,
+tehát egy ÁTMENT és egy ELBUKOTT teszt sora megkülönböztethetetlen ezeknek az eszközöknek.
+
+    TÖRÖTT ...... `awk ==` | `sort -u` | `uniq` | `uniq -c` | `uniq -d` | `comm -12`
+                  `join` | **`comm -3`** (a legcsendesebb: azt mondja, NINCS eltérő sor)
+    BIZTONSÁGOS   `grep`/`grep -E` | `sed` | awk REGEX-illesztés | `[ = ]`
+                  bash/zsh `[[ == ]]` és `[[ < ]]` | `python3` | `diff` | `cmp` | `grep -Fxf`
+
+**A HIBA IRÁNYA MINDKÉT ESZKÖZBEN A MEGNYUGTATÓ:** a ternary a BUKOTT tesztet átmentként
+olvassa, a `sort -u` pedig ugyanannak a tesztnek a két állapot-sorát vonja össze -- és a `✓` sor
+az, ami TÚLÉL. Semmi nem néz ki rosszul.
+
+**A JAVÍTÁS: `LC_ALL=C` A CSŐVEZETÉK EGÉSZE ELÉ, NEM EGY PARANCS ELÉ.** A `VAR=érték parancs`
+előtag EGY parancsra hat; a cső többi tagja az örökölt locale-ban marad, és épp az `uniq` az,
+amelyik INFORMÁCIÓT SEMMISÍT MEG. Mérve: `LC_ALL=C sort f | uniq` -> **1 sor** (a bukó sor MÉG
+MINDIG elvész); `LC_ALL=C bash -c "sort f | uniq"` -> 2, helyes.
+**És a fél-javítás ROSSZABB, mint a javítatlan:** `sort f | LC_ALL=C uniq` -> **3**, mert a
+kollácó nem csak az összehasonlítást rontja el, hanem a `sort` CSOPORTOSÍTÁSÁT is -- a kereszt
+BEÉKELŐDIK a két pipa közé, és egy lentebbi C-locale `uniq` ezt már nem tudja helyrehozni.
+
+**A HELYES ALAK VÉGÜL NEM EZ: `jest --json`, és a parser ÁLLÍTSA, hogy a VÁRT SZÁMÚ eredményt
+megtalálta** -- enélkül egy törött olvasó SEMMIT ad vissza, és a semmi „nincs bukás"-nak
+olvasódik.
+
+**ÉS A TENGELY, AMI KÉZENFEKVŐ ÉS HAMIS:** nem az, hogy „regex jó, egyenlőség rossz". Három
+tengely-jelölt, három cáfolat, és EGYIK SEM JÓSOL -- ugyanaz az EGY binárs `awk` a `==`-on
+KOLLÁCIÓT, a `/regex/`-en BÁJTOT használ. **A viselkedés (ESZKÖZ, MŰVELET) PÁRONKÉNT ismerendő;
+egy új pár MÉRENDŐ, nem KÖVETKEZTETENDŐ.**
+
+**A KITETTSÉG MÉRVE: a KÖVETETT fában NULLA** (88 fájl, 4 valódi találat, mind numerikus kulcson
+vagy csak-ASCII bemeneten). A veszély az ELDOBHATÓ EGYSOROSBAN van, amit bárki begépel egy
+fordulón belül -- azt egy cenzus szerkezetileg nem látja. Ezért ez egy bekezdés, nem lint-szabály.
+
+*(A mérések, a három megdöntött tengely és a homoglif-cenzus tanulsága -- köztük hogy egy
+„rossz karakter egy szó belsejében" detektor nem tudja megkülönböztetni a DEFEKTUST attól, hogy
+a defektust DOKUMENTÁLJÁK -- `rulebook/glifa-kollacio.md`.)*
+

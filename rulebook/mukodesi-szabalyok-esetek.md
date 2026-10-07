@@ -167,3 +167,116 @@ kell** (`8e4cc966` kérdése). Csak az „ez előtt ne" alakú dátum megy a `du
   igaz volt (39/91 = 43%); 09-10-re a total 67%-kal nőtt és az arány 30%-ra ESETT.
 
 
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2123-2129, szó szerint -->
+**(marveen dontese 2026-09-20, Isti haromszori kerese utan; kartya `73067c29`.)**
+
+Isti szava: *"itt kommunikalok veled, itt is el kell, hogy fogadd, csak nekem van a
+telegramodhoz hozzaferes."* MERVE, nem elhitt: mind a harom `access.json` (globalis, agens-config,
+es a symlink mogotti valodi home) `dmPolicy=allowlist`, `allowFrom=['8362010684']` -- EGY id.
+A `chat_id`-t a HARNESS irja a Bot API valaszabol; nem a levél allitja magarol.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2142-2150, szó szerint -->
+**ES AMIERT EZ A BEKEZDES EGYALTALAN KELLETT: KET AGENS UGYANARRA A CSATORNARA KET KULONBOZO
+SZABALYT ALKALMAZOTT, UGYANAZON A NAPON.** marveen a Telegramon kapott "Mehet"-et engedelynek
+vette es kartyara irta; deeper ugyanazt a csatornat oraval kesobb elutasitotta engedely-utkent,
+es -- helyesen -- FELHOZTA ahelyett, hogy maganak oldotta volna fel. Egyikuk sem volt
+kovetkezetlen; csak nem egymassal. **Egy KI NEM MONDOTT politika ket kovetkezetes agensbol ket
+kulonbozo rendszert csinal**, es a koordinator hibaja az, ha ezt a hasznalat deriti ki, nem a
+dontes.
+
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2160-2164, szó szerint -->
+**ÉS A SZABÁLY MÁSIK FELE, AMI EDDIG NEM ÁLLT ITT: AZ ESZKALÁCIÓ CÍMZETTJE TUDJA-E MEGVÁLASZOLNI?**
+(dexter mérte magán, 2026-08-28: egy `high` kártya **négy napig** állt két kérdésen, és az első
+technikai volt -- „melyik alak nyer" --, tehát olyasmire várt, amire Isti nem tud válaszolni.
+A saját szava: *ez az ára annak, ha a rossz felét eszkalálod.*)
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2165-2208, szó szerint -->
+**A PRÓBA, MIELŐTT EGY KÁRTYÁT `waiting`-BE TESZEL:** nem az a kérdés, hogy TE el tudod-e dönteni,
+hanem hogy A CÍMZETT el tudja-e. Ha a válasz nem, akkor a kártya nem vár, hanem **áll** -- és a
+különbség hetekben mérhető.
+
+    technikai / megvalósítási  ->  a szerzőé vagy a koordinátoré, AZONNAL
+    termék / üzleti / pénz     ->  Istié
+    politika (ki mit tehet)    ->  a koordinátoré
+    egy kártyán MINDKETTŐ      ->  bontsd ketté, a technikai fele MEGY
+
+**A ROUTING-KÖVETKEZTETÉS NEM KÉZBESÍTÉS.** Ha egy kommentben leírod, hogy „ez X döntése",
+ugyanabban a mozdulatban NEVEZD MEG, KI VISZI EL HOZZÁ -- vagy vidd el te. *(Mért eset: egy `urgent`
+kártyán három ellenőrző helyesen írta, hogy „ez Istié", és öt napig senki nem vitte el.)*
+
+**A BONTÁS MÁSODIK KRITÉRIUMA AZ IDŐZÍTÉS:** ha egy kártya KÉT ügyet hordoz eltérő határidővel, az
+olcsóbbik örökli a lassabbik dátumát. Parkoláskor kérdezd meg: minden tétel UGYANARRA vár-e? Ha a
+címben vagy az indoklásban két esemény szerepel, bonts.
+
+**TÖBB CÍMZETTNEK ADOTT SZÁMNÁL VAGY LELETNÉL NEVEZD MEG, KI MÉRI, és a kártya-azonosítót** (vagy
+mondd ki, hogy még nincs kártya) -- különben ketten mérik, és két kártya születik 39 másodpercen belül.
+
+**A `waiting` OSZLOP:**
+- A `waiting>48h` az ÉRINTETLENT méri, nem a blokkoltat (egy komment is mozdítja az `updated_at`-et).
+- Isti kártyái külön kategória, nem flotta-backlog.
+- **„Ez előtt ne" dátum a `due_date` MEZŐBE megy** (a felajánló a mezőt olvassa, prózát nem). **HATÁRIDŐ
+  („meddig") PRÓZÁBA**: a mező NOT-BEFORE, határidőként a gazda addig MEG SEM KAPJA a kártyát. A
+  `waiting` sornál a mezőt ma senki nem olvassa (`ce5c9e4b`), ott a padlót ember méri újra.
+  Tömeges kitöltés prózából TILOS: kártyánkénti olvasás vagy semmi.
+- Egy teljes oszlop átolvasása SAJÁT KÁRTYÁT kap, gazdával.
+
+*(Mért esetek, számok, a megdőlt alakok: `rulebook/mukodesi-szabalyok-esetek.md`.)*
+
+**Minőség hosszú távra.** Isti NEM a legegyszerűbb megoldást kéri, hanem amelyik hosszú
+távon a legjobb. Ha egy feladat emiatt tovább tart, az rendben van, csak szólj.
+
+**Teszt = az egyetlen védvonal.** Nincs monitoring és nincs riasztás. Ha elrontasz valamit
+és nem veszed észre, és nincs rá teszt, Isti CSAK AKKOR szerez róla tudomást, amikor már
+nem működik. Ezért a teszt nem szorgalmi feladat.
+
+**Részletesség.** Rövidebben, mint egy hosszú jelentés, de Isti tudni akarja mi történik.
+Ne csak "kész" legyen, de ne is minden lépés.
+
+**Időzítés.** Nincs tiltott napszak, bármikor írhatsz. Ha nem alkalmas, egyszerűen nem
+nézi meg.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2209-2216, szó szerint -->
+**Éjszakai munka: NEM kell rá engedélyt kérni (Isti, 2026-08-18).** Szó szerint: „az éjjeli
+munkára ne kelljen engedélyt adnom. Nyugodtan dolgozzatok mindig éjjel is. Főleg Dexter és
+Didi, nekik nagyon sok feladatuk van és éjjel dolgozhatnak nyugodtan, nem zavarom őket."
+Ez ÁLLANDÓ felhatalmazás, nem egyszeri. Amit viszont **nem** old fel: a felügyelet nélküli
+rendszerműveletek szabályait (`felugyelet-nelkuli-rendszermuvelet` skill), és azt a
+mérlegelést, hogy egy több napos munkát félbehagyva rosszabb-e, mint el sem kezdve. Az
+éjszakai engedély a MUNKÁRA szól, nem a kockázatvállalásra.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2217-2238, szó szerint -->
+**A keret kihasználása kötelezettség, nem lehetőség (Isti, 2026-08-20 reggel).** Szó szerint:
+„ha van limit, főleg ennyi, akkor ilyen nem fordulhat elő. Dolgozni kell, főleg ilyen kapacitás
+mellett." Az eset, amiből jött: az 5 órás keret 22%-on állt, mert az egyik ágens **három órája
+tétlen volt** — a session futott, a sora üres volt, és nem vettem észre, mert egész éjjel a
+másik ágenssel dolgoztam.
+
+Ez nem jószándék-kérdés, mert egyszer már felírtam és mégis megismétlődött. Ezért mérés:
+**minden heartbeat-körben ellenőrizni kell, melyik ágens PANELJE áll üresen.**
+Aki üres prompton áll (nincs futó jelző, nincs várakozó üzenet a sorában), az tétlen — annak
+azonnal munkát kell adni, nem a következő körben. A parancsok a `claude-limit-monitoring`
+skillben állnak.
+
+*(Javítva 2026-08-22, Isti engedélyével, két mért eset után. Eredetileg az „utolsó megszólalás
+60 percnél régebben" volt a feltétel. Az a JELENTÉST méri, nem a MUNKÁT: egy ágens, aki
+végigcsinál egy 22 perces fordulót kártya-kommentekkel és commitokkal, de nem küld inter-agent
+üzenetet, órákig „némának" látszik. Mérve 08-22-én kétszer — 06:02-kor és 08:38-kor is dolgozó
+ágenst mutatott tétlennek, és a hiba iránya állandó. Az ára nem nulla: egy ébresztő egy dolgozó
+ágensnek megszakítja azt a fordulót, amiért felébresztettük volna. A panel-alapú mérés viszont
+már megvolt — a tétlen-őr ezt használja (`paneIsIdle()` + 12 perces küszöb), és aznap reggel
+hatszor ébresztett, mindegyik valódi tétlenség. A szabály nem rossz volt, hanem KORÁBBI: akkor
+született, amikor még nem volt panel-alapú őrünk. Kártya: 5c40b225.)*
+

@@ -327,3 +327,138 @@ mutáld azt, amit az ÁLLÍTÁS véd, ne azt, amit a JAVÍTÁS megváltoztatott.
   n=1-gyel; a „nem történt meg" és a „nem történik meg" ugyanúgy néz ki.
 
 
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2417-2421, szó szerint -->
+*(A mért esetek TELJES szövege -- a nyolc eltérés-ok példái, a másodperc-pontosság cenzusa, a
+helyesbítés-eset két lépcsője és az A-vagy-B keret cáfolata -- `rulebook/atadott-meres-kiegeszites.md`.
+12 956 karakter volt itt. A `rulebook/atadott-meres.md` és a `rulebook/mutacios-alakok.md`
+továbbra is érvényes.)*
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2434-2443, szó szerint -->
+**ÉS EGY HALMAZ A SZŰRŐJE NÉLKÜL NEM REKONSTRUÁLHATÓ.** Egy szám újramérhető; egy „melyeket hagytam
+ki" halmaz nem: egy újralevezetett szűrő MÁSIK halmazt hagy ki, és a különbség láthatatlan. **A
+szűrőt FUTÁS KÖZBEN írd le** -- utólag csak azt tudod rekonstruálni, amit megtaláltál. És a
+legrosszabb fajta szűrő az, ami KORRELÁL azzal, amit mérsz: az nem zajt ad, hanem szisztematikus,
+egyirányú torzítást, hihető szám mellett. **A próba:** *az a tulajdonság, ami alapján kizárok,
+összefügg azzal, amit MÉROK?*
+
+**EGY ÖSSZEHASONLÍTÓ ÁLLÍTÁS AZ ALAPVONALA NÉLKÜL NEM ÁLLÍTÁS, HANEM KÉTÉRTELMŰ** -- az olvasó a
+sajátját teszi alá, és ugyanaz a mondat igaz az egyik alapvonalhoz és hamis a másikhoz.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2444-2468, szó szerint -->
+### MIÉRT TÉR EL KÉT SZÁM -- ÉS CSAK AZ ELSŐ KETTŐT SZOKTUK KERESNI
+*(A fejléc szándékosan nem mond számot: a lista nőtt már egyszer. Számold meg a sorokat.)*
+
+1. **MÁS A NEVEZŐ** (más populáció).
+2. **MÁS A MÉRŐ** (más definíció).
+3. **MÁS A FA** -- azonos definíció, azonos egység, MÁSIK COMMIT. A legkönnyebben átsikló változó:
+   mindkét szám helyes a saját fáján, és semmi nem hívja fel rá a figyelmet.
+4. **VÉLETLENÜL EGYEZNEK** -- rosszabb, mert nem szül vitát. Két szám ugyanazzal az értékkel, MÁS
+   EGYSÉGBEN (fájl kontra hívási hely), megerősítésnek látszik. **A próba: ha valaki más ugyanezt a
+   számot kapja, abból következik-e, hogy ugyanazt MÉRTE?**
+5. **TÖLCSÉR-ÁLLOMÁST OLVASUNK VÉGEREDMÉNYNEK** (`191 jelölt -> 47 gyanús -> 0 élő`): egy ÁLLOMÁS
+   soha nem adódik hozzá semmihez, benne van az előtte állóban.
+6. **KÉT KÜLÖNBÖZŐ ELŐÁLLÍTÓ: GÉP ÉS EMBER** -- összevonva a GÉPET méred, miközben az EMBERRŐL
+   állítasz, és a hiba iránya a MEGNYUGTATÓ (100%-ot jelent). **A detektálása egy oszlop, nem ítélet:
+   AZ ÉRTÉK PONTOSSÁGA megmondja, ki állította elő.** Másodperc-pontos fejléc = GÉPI bélyeg;
+   PERC-pontos = ott a szerző VÁLASZTOTT, és csak ez hordoz jelet. Összevonva ~100% jön ki
+   mindenkire; szétválasztva a valódi, EMBERI szám **94%**.
+7. **A JAVÍTÁS MEGNÖVELI A NEVEZŐT, ÉS EMIATT A HIBASZÁM IS NŐ.** Egy teszt-suite, ami BE SEM
+   TÖLTŐDIK, **NULLA tesztet ad a nevezőhöz**: bukó SUITE 11 -> 3 (félreérthetetlen javítás), bukó
+   TESZT 16 -> **20** (ugyanaz a javítás REGRESSZIÓNAK látszik). **Aki bukó TESZT-számra kapuz, egy
+   MŰKÖDŐ javítást olvas regressziónak.** Ha a defektus maga csökkenti a populációt, arra kapuzz,
+   ami a defektustól FÜGGETLENÜL számolható.
+8. **EGY CSONKOLT NÉZETET OLVASUNK POPULÁCIÓNAK** -- `head -5`, `--limit 100`. **A PRÓBA INGYEN VAN:
+   ha a visszakapott darabszám PONTOSAN EGYENLŐ a limittel, csonkolt.**
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2469-2501, szó szerint -->
+**HA KÉT MÉRÉS ELTÉR, A NÉZETELTÉRÉS MARADJON NYITVA**, amíg valaki meg nem méri, MELYIK POPULÁCIÓ.
+Egy magyarázat, ami mindkét számot igazzá teszi, nem feloldás -- a GYÁRTOTT EGYETÉRTÉS eltünteti a
+jelet, ami épp a hibát fogta volna meg. **A nézeteltérés mérőeszköz.**
+
+**ÉS A PRÓBA, AMI EZT MECHANIKUSSÁ TESZI: EGY FELAJÁNLOTT MAGYARÁZAT TAGSÁGÁT SZÁMOLD MEG, MIELŐTT
+KIMONDOD.** Mért eset: két cenzus 469 kontra 467, és a felajánlott magyarázat („a tesztem
+whitespace-t vág") MINDKÉT számot igazzá tette volna. Lefuttatva: a mechanizmus tagsága **0**.
+A valódi ok a mérő volt -- a két futás között leírtak két leírást.
+
+> **Egy magyarázat, aminek nincs megszámolt tagsága, nem magyarázat, hanem javaslat.** A kérdés nem
+> az, hogy HIHETŐ-e, hanem hogy **HÁNY ESETET FED -- és ha nullát, akkor semmit nem magyaráz.**
+
+**ÉS A GYÁRTOTT EGYETÉRTÉS IKRE, AMIT SENKI NEM GYÁRT: KÉT FÜGGETLEN MÉRŐ, EGY KÖZÖS MŰSZER.** Mért
+eset: két ágens egymástól függetlenül `tsc` -> **21 hiba**, bájtra ugyanaz, egész nap alapvonalként
+idézve. A 21 nem a FA tulajdonsága volt, hanem egy HAT NAPOS, MEGOSZTOTT Prisma-kliensé -- ugyanabban
+a fában `prisma generate` után **0 hiba**.
+
+> **A megerősítés FÜGGETLEN MŰSZERT kíván, nem független megfigyelőt.** A kérdés nem az, hogy
+> „ketten mérték-e", hanem hogy **UGYANAZT a szerszámot, fát, klienst vagy cache-t használták-e.**
+> Amikor egy számot MÁSODSZOR mérsz, a kérdés nem „ugyanazt kapom-e", hanem „MÁS ÚTON kapom-e".
+
+**A KATEGÓRIA NEVE A MECHANIZMUST NEVEZZE MEG, NE EGY PÉLDÁNYÁT.** Egy gyűjtő-kategória mindent
+felszív és semmit nem mond; egy PÉLDÁNY-név betű szerint kihagy érvényes eseteket. Minden kategória
+mellé egy mondat: MITŐL VÉD ez az alak.
+
+**EGY SZABÁLY, AMI ÍRÁSKOR TÜZEL, CSAK A HANYAGON SEGÍT. AMI OLVASÁSKOR, AZ A GONDOSAT IS
+MEGFOGJA.** Mért eset: három ágens futott ugyanabba a csapdába egy éjszakán, és a szabály MÁR LE
+VOLT ÍRVA, névvel. Mindhárman figyeltek; írás közben egyikük sem hibázott. Ezért: amikor egy
+leletből szabályt írsz, kérdezd meg, MIKOR tüzel -- és keress hozzá egy olcsó, olvasáskori próbát.
+
+*(A mért esetek: `rulebook/atadott-meres-kiegeszites.md`.)*
+
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2502-2528, szó szerint -->
+### A KONTROLLRÓL
+
+- **Egy diszkrimináló kontroll is válaszolhat a SZOMSZÉD kérdésre:** azt igazolja, hogy a mérő
+  működik, nem azt, hogy AZT méri, amit kérdeztél.
+- **A kontroll a mért halmazon KÍVÜLRŐL jöjjön, de UGYANAZZAL az alakkal** fusson, amivel a mérés.
+- **Ha a defektus MAGÁBAN AZ ALAKBAN van, a kontroll AZT a tengelyt változtassa, amit gyanítasz.**
+  Mért eset: `T="$(cat tok)" curl -H "Bearer $T"` -> 401 (a `$T`-t a SZÜLŐ héj helyettesíti be,
+  üresre), és a „kontroll" egy másik végpont volt UGYANAZZAL a törött alakkal -- megerősítette a hibát.
+- **Egy BUKÓ pozitív kontroll nem hiba, hanem a lelet maga:** ne „javítsd" zöldre.
+- **Helyreállított adatnál a várakozást a VÁLTOZÁS ELŐTT írd le** (független cenzus), különben
+  ugyanabból az adatból jön, amit ellenőriz.
+- **Ingadozó alanyon a kontroll SZÁM, nem állapot** (n=1 zöld nem cáfolat).
+
+**AMIKOR A MÉRŐ HIBÁJA UGYANOLYAN ALAKÚ, MINT A KERESETT DEFEKTUS**, a találat SOHA nem különbözteti
+meg a kettőt. A kérdés a mérő megírásakor: *ha az eszközöm elromlik, az úgy fog kinézni, mint egy
+TALÁLAT, vagy mint egy HIBA?* Ha találatnak, a kontroll nem szorgalmi feladat, hanem a mérés fele.
+
+**A SZÓRÁS, NEM AZ ÉRTÉK.** Egy valódi mérés SZÓR; egy elhasalt mérő tökéletesen egyenletes. És a
+tükörképe rosszabb: egy IMPLAUZIBILISAN KONZISZTENS találat ugyanúgy műszerhiba, csak a
+reprodukálhatóság normálisan NÖVELI a bizalmat.
+
+**A MÉRÉS ÉS A MAGYARÁZAT NE ÁLLJON UGYANABBAN A BEKEZDÉSBEN JELÖLETLENÜL.** A szám mellé a PARANCS
+jár; az ok mellé az, hogy MI IGAZOLJA -- és ha semmi, akkor a szó, hogy *feltételezés*. **És a
+fogadó oldalán: mielőtt egy kapott érvre CÍMET, STÁTUSZT vagy FOKOZATOT írsz át, válaszd szét,
+melyik mondat a mérés és melyik a következtetés.** Ha az üzenetben nincsenek szétválasztva, a
+szétválasztás a tiéd.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2529-2545, szó szerint -->
+### A HELYESBÍTÉS MAGA IS ÁLLÍTÁS -- NEM ÖRÖKLI A VISSZAVONT MÉRÉS HITELÉT
+
+- **A helyesbítés UGYANAZT a kontrollt kapja, mint egy eredeti lelet** -- a „tévedtem, valójában"
+  alak gondosabbnak hangzik, ezért senki nem kéri rajta számon. Aki helyesbítést KAP: kérdezd meg,
+  MIT mért, mielőtt mozdulsz.
+- **Egy alternatíva megcáfolása nem bizonyíték a sajátod mellett.** Melyik MÉRŐ döntené el a saját
+  hipotézisedet? Ha nem mérted, csak kizártál.
+- **A lehetetlenség-állítás („nincs olyan forma, ami mindkettőt megadja") bezár egy ajtót**, és az
+  ajtó zárva marad. Ha egy cáfolat az INDOKOT dönti meg és az AJÁNLÁST nem, a helyesbítés akkor is
+  köteles: a következő döntést az indokból hozzák.
+- **Egy döntés-kérés premisszája tipikusan egy RÉSZRE igaz, és az egészre van alkalmazva.** Melyik
+  átmenet a mért állítás és a kért döntés között, és megmérte-e valaki?
+- **Mutációs próba:** mutáld azt, amit az ÁLLÍTÁS véd, ne azt, amit a JAVÍTÁS megváltoztatott
+  (`rulebook/mutacios-alakok.md`).
+
+*(A mért esetek: `rulebook/atadott-meres-kiegeszites.md`.)*
+

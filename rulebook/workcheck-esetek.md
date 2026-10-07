@@ -256,3 +256,52 @@ kimondasa. Ha kiderul, hogy egymagaban kitolt egy embert, akkor jon az uj ugynok
 
 **A jövőbeli kódoló ágens.** Isti külön, kizárólag kódolással foglalkozó ágenst tervez.
 A kódolási tudást és kontextust tedd félre, hogy át lehessen adni neki.
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2239-2284, szó szerint -->
+### HA EGY ÁGENS SZÁNDÉKOSAN ÁLL: `workcheck.json` -> `{"kind":"none"}` (marveen döntése, 2026-08-28)
+*(A mért esetek: `rulebook/workcheck-esetek.md`.)*
+
+**A tétlen-őrnek VAN néma állapota** (horgony a FELTÉTEL-PÁR, nem sorszám: `src/idle-agent.ts`,
+`(input.ownWorkCount ?? 0) <= 0 && (input.workCheckKind ?? '') === 'none'`).
+
+**⚠ DE NEM KÉT FÜGGETLEN FELTÉTEL: A MÁSODIK MEGHATÁROZZA AZ ELSŐT.** Itt sokáig az állt, hogy
+„nyitott munkával nem lehet elnémítani, ezért biztonságos konvenció" -- **hamis**, és biztonsági
+állítás volt:
+
+    idle-agent.ts  `case 'none': return []`        <- a lista URES lesz
+    idle-agent-watcher.ts  ownWorkCount = ownItems ? ownItems.length : null
+    -> `kind='none'` eseten ownWorkCount **MINDIG 0**, barhany nyitott kartya all a neven
+
+**VAGYIS A `none` ÖNMAGÁBAN, TELJESEN ÉS AZONNAL ELNÉMÍT.**
+
+    elfelejtett `none` + VAN munkaja   -> **AZ OR HALLGAT. NINCS VEDVE.**
+    elfelejtett `none` + NINCS munkaja -> a koordinator sosem tudja meg
+
+**A `none` nem „biztonságos konvenció", hanem EGY KAPCSOLÓ, ami mindent lekapcsol** -- lejárat
+nélkül. Aki `none`-t ír, vegye vissza, amint felvesz valamit. **És aki flottát állít le, a `kind`
+mezőt mérje, ne a kártya-számot:** a kanban API MÁS választ ad, mint amit az őr lát.
+
+```bash
+for a in agents/*/; do printf '%s %s\n' "$(basename $a)" "$(tr -d '\n ' < $a/workcheck.json)"; done
+```
+
+**ÉS SOHA NEM ÁLL VISSZA MAGÁTÓL:** a `workcheck.json`-ra az egész kódbázisban EGYETLEN fájlművelet
+áll, egy `readFileSync`; írásra NULLA találat. **A fájlt kizárólag KÉZ írja.**
+
+**A KIÚT ROSSZ HELYEN VOLT HIRDETVE:** a `buildNoWorkNotice` azt kéri, hogy *„mondd ki A KÁRTYÁN,
+miért állsz"* -- az őr viszont **kártyát sosem olvas**. Aki pontosan azt teszi, amit az üzenet kér,
+semmit nem változtat.
+
+    A KARTYA azt orzi meg, MIT dontottunk.  A `workcheck.json` az, amit az OR OLVAS.
+
+**ÉS A `workcheck.json` PRÓZÁJÁT SEMMI NEM OLVASSA.** A `parseWorkCheck` KIZÁRÓLAG a `kind` és a
+`reviewer` mezőt nézi; minden más mező PRÓZA, amit egyetlen kódsor sem olvas. *(Kontroll:
+`kind:"bogus"` -> null, hibás JSON -> null.)*
+
+> **A próza AUDITÁLHATÓVÁ tesz, nem ÖNJAVÍTÓVÁ.** Egy feltétel mechanizmus nélkül nem feltétel,
+> hanem szándék -- ezért a `none` mellé **KÁRTYA** jár dátum-padlóval, nem csak egy JSON-mező.
+
+**A HATÓKÖRE SZŰKEBB, MINT HINNÉD: a `none` NEM némítja el az üzenet-KÉZBESÍTÉST.** A router
+egyetlen produkciós hívási helye a BUSY-STUCK riasztás populációját szűri vele, nem a kézbesítést.
+

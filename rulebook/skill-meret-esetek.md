@@ -208,3 +208,80 @@ magban, akkor is, ha a részletek kiköltöznek; általában egy sor elég (489 
 *(A mért esetek: `rulebook/skill-meret-esetek.md`.)*
 
 
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1739-1812, szó szerint -->
+## Öntanulás és Skill rendszer
+
+Te egy önfejlesztő ágens vagy. A munkád során tanulsz, és újrafelhasználható skill-eket hozol létre.
+
+### Skill-ek helye
+- Globális: `~/.claude/skills/` (minden ágens számára elérhető)
+- Egyéni: a te munkakönyvtárad `.claude/skills/` mappája
+
+### Automatikus skill generálás
+Komplex feladatok után (5+ tool hívás, hiba utáni recovery, user korrekció, többlépéses workflow) automatikusan hozz létre SKILL.md fájlt:
+
+```bash
+mkdir -p ~/.claude/skills/SKILL-NEV
+cat > ~/.claude/skills/SKILL-NEV/SKILL.md << 'EOF'
+---
+name: skill-nev
+description: Mikor használd, mit csinál. Legyél konkrét a triggerelésben.
+---
+# Skill neve
+
+## Mikor használd
+[Konkrét triggerek és kontextusok]
+
+## Eljárás
+1. [Első lépés]
+2. [Második lépés]
+...
+
+## Buktatók
+- [Ismert probléma és megoldása]
+
+## Ellenőrzés
+- [Hogyan validáld az eredményt]
+EOF
+```
+
+### Skill patch (runtime javítás)
+Ha egy meglévő skill használata közben jobb megoldást találsz:
+1. Ne írd újra az egész skill-t, csak a megváltozott részt javítsd
+2. Használj célzott cserét (régi szöveg -> új szöveg)
+3. Jegyezd fel a változtatás okát a skill "Buktatók" szekciójába
+
+### Progressive disclosure (token-hatékony betöltés)
+A skill-ek 3 szinten töltődnek:
+- **Level 0**: Csak név + leírás (~100 szó) -- mindig elérhető
+- **Level 1**: Teljes SKILL.md tartalom -- csak ha releváns
+- **Level 2**: Segédfájlok (scripts/, references/) -- csak ha specifikusan kell
+
+Tartsd a SKILL.md-t 500 sor alatt. Nagyobb anyagot tegyél `references/` almappába.
+
+**A MÉRET-ŐR (`scripts/skill-index.sh -v`) KÉT REZSIMŰ:** alapvonal nélküli skillnél 500 sor a
+kapu, alapvonalasnál a NÖVEKEDÉS (plusz kemény 600). A `references/` szándékosan nincs kapuzva
+(Level 2, nem töltődik be a maggal).
+- **Bontás után az alapvonal RACSNI:** `min(bontás utáni méret, régi alapvonal)`; tágítani csak
+  kimondott döntéssel, valódi új tartalomra.
+- **Állíts, aztán törölj:** minden átmozgatott sor archívumbeli meglétét a törlés ELŐTT ellenőrizd.
+- **Bontás után olvasd el a MAGOT önmagában:** a teherhordó mondat maradjon benne.
+
+*(A mért esetek: `rulebook/skill-meret-esetek.md`.)*
+
+### Mikor generálj skill-t?
+| Helyzet | Tegyél |
+|---------|--------|
+| 5+ tool hívás, sikeres befejezés | Generálj skill-t |
+| Hiba -> recovery -> siker | Generálj skill-t (buktató szekcióval) |
+| User korrekció | Patch-eld a meglévő skill-t |
+| Nem triviális workflow | Generálj skill-t |
+| Egyszerű, egylépéses feladat | Ne generálj semmit |
+
+### Skill reflexió
+Minden kontextus-tömörítés előtt (PreCompact hook) automatikusan vizsgáld meg:
+- Van-e a session-ben újrafelhasználható minta?
+- Van-e meglévő skill amit javítani kellene?
+

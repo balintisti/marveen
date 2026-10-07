@@ -256,3 +256,44 @@ Ez a lap egy SZABÁLYKÖNYV, tehát ez a lépés itt állandóan meg fog törté
 *(A három teljes esete -- a 25,2%-os szóhossz-eloszlás, mandark 512 specje, a `populacion` kontra
 `A MEGNEVEZETT` kontroll-lecke -- `rulebook/meresi-vakfoltok.md`. 15 638 karakter volt itt.)*
 
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1940-1956, szó szerint -->
+## Időkezelés
+
+MINDIG a megfelelő lokális időt használd. A futó folyamat `Europe/Belgrade`-en áll (a `TZ` nincs
+beállítva); Isti Magyarkanizsán él, Szerbiában. **MA EZ NULLA KÜLÖNBSÉG a `Budapest`-hez képest,
+MÉRVE** (hét próbapont, mindkét DST-átmenettel) -- **amit NEM szabad belőle olvasni: hogy a
+rendszer ezt az azonosítót HASZNÁLJA.**
+
+**GATE:** ha valaki a `SCHEDULER_TZ`-t BEÁLLÍTJA, az értéke EGYEZZEN a teszt-pinnel. Ma egyik sincs
+beállítva, tehát nincs mit összevetni -- és épp ezért nem tüzel semmi.
+
+**A ZÓNA, A NAPTÁRI NAP ÉS A CI-IDŐBÉLYEG EGY SKILLBEN ÉL:**
+`~/.claude/skills/ido-es-ci-datum/SKILL.md` -- a hét próbapont a kontrolljával, a `SCHEDULER_TZ`
+kapu parancsai, a helyi/CI dátum-szétválás 22:00 és éjfél között, a Tokió-cáfolat (a fali órának
+is egyeznie kell) és az UTC-`Z` szabály. Ide NEM másoljuk vissza: ez akkor kell, amikor
+DÁTUM-VETETT tesztet vagy CI-időbélyeget mérsz, nem minden fordulóban.
+*(A mért esetek: `rulebook/idokezeles-esetek.md`.)*
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1957-1968, szó szerint -->
+## A HELYI `.env` NEM A FUTÓ SZOLGÁLTATÁS KONFIGJA (didi, kártya `2138aceb`)
+
+A `.env` arra a kérdésre, hogy MI VAN KIMONDVA NÁLUNK, igazat mond. A csapda a VISELKEDÉS- és
+JOGOSULTSÁG-kérdés: ott a helyi fájl HIBA NÉLKÜL ad egy hihető számot -- egy MÁSIK példányról
+(mérve: ugyanaz a változó 1 kontra 2 tétel, helyi kontra futó Cloud Run).
+
+    „mi az adatbazis / az URL?" .......... a helyi `.env` JO
+    „ki a super admin / mit enged?" ...... a FUTO peldanyt kerdezd, kulonben mas gep valaszol
+
+**KIMONDOTT HATÁR (didi):** ez nem állítja, hogy bármelyik érték rossz; és **ha egy változó
+titok-hivatkozásként van bekötve, az értéke ezen az úton NEM LÁTSZIK -- amit tilos nullának olvasni.**
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1969-1971, szó szerint -->
+- **Jelenlegi idő**: `date` Bash első lépés időponti feladatoknál (heartbeat, naptár-művelet,
+  scheduled-task analízis)
+

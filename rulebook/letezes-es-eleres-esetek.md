@@ -295,3 +295,40 @@ konkrét hook bármelyik ágenshez eljut, MA NEM ÁLL -- mert nincs benne a konf
 context-guard telítettségre indít. Ennek a sávnak a kézbesítési ideje tehát NEM TERVEZHETŐ.
 Aki hook-alapú mechanizmust épít, ne feltételezze, hogy a bekötés napján bárkinél hat;
 és ha a mechanizmus fontos, legyen mellette egy munkamenettől független út (itt: a poll).
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 233-253, szó szerint -->
+### A LÉTEZÉS ÉS AZ ELÉRÉS KÉT KÜLÖN ÁLLÍTÁS -- ÉS MI AZ ELSŐT SZOKTUK MÉRNI
+
+    skills-snapshot hook ....... BEKOTVE, es egyetlen agens konfigjaba sem jutott el
+    quota-ceiling-guard ........ FUT, tiz percenkent, es nem volt verziozva
+    dexter guard-fajlja ........ MEGIRVA, teszttel, es egy be nem olvasztott agon allt
+    `timeout-minutes: 25` ...... COMMITOLVA negy napja, es a torzson ma is 15 all
+
+Négy mechanizmus, egy hiba: **megmértük, hogy MEGVAN, és nem mértük meg, hogy ODAÉR.** Mind a négy
+úgy néz ki kívülről, mint a kész munka -- a kártya „kész"-t mutat, mert a munka tényleg kész.
+
+**A KÉRDÉS, AMI MEGFOGJA:** nem az, hogy megírtuk-e, hanem hogy **KI OLVASSA, ÉS MIKOR.** Ha a válasz
+„a következő telepítéskor", akkor ma nem hat; ha „senki", akkor sosem.
+
+**ÉS KÉT TOVÁBBI ALAK, MERT NEM MINDEGYIK HIÁNY:** (1) **egy jóváhagyás is DÖNTÉS**, és egy döntés,
+ami sosem ért el egy dologhoz, megkülönböztethetetlen attól, amit meg sem hoztak -- a jóváhagyó
+KÉSZNEK könyveli, a végrehajtó egy hiányzó előfeltételbe fut, és **egyik oldalon sem keletkezik
+nyitott tétel**. (2) **Néha semmi nem hiányzik: a rossz ellenőrzés egyszerűen KÖZELEBB volt a
+kézhez.** *„`marker == HEAD` egy sor bash; a `build.status` egy curl és egy token. Az olcsóbb
+ellenőrzés nyert -- és rossz kérdésre válaszolt."* Ha egy helyes, elérhető képességet nem használnak,
+a hiba a HELYÉN van, nem a tudásban.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 440-449, szó szerint -->
+### A REPO-BELI KERESÉS VAK A LAUNCHD-FOGYASZTÓRA
+
+    grep -rl '<szkript>' dist/ src/ scripts/ web/   ->   csak onmaga es a sajat tesztje
+    launchctl list | grep <unit>                    ->   BETOLTVE, tiz percenkent fut
+
+A grep IGAZAT mond arról, amit megnézett: a repóról. A `~/Library/LaunchAgents/` nem a repó része,
+tehát egy repo-hatókörű keresés SZERKEZETILEG nem láthatja -- és a hiánya **bájt-azonos** egy valódi
+„semmi nem hívja" válasszal. **Aki azt kérdezi, hogy „hívja-e valami", három helyen nézzen:** a repó,
+a `~/Library/LaunchAgents/` (+ `launchctl list`), és a `~/.claude/scheduled-tasks/`.
+

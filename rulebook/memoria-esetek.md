@@ -81,3 +81,30 @@ dátumot vagy egy mérhető feltételt, ami után érvénytelen. A `hot` réteg 
 az van benne, ami MOST történik; ami dátumhoz kötött és a dátum elmúlt, az nem hot, hanem hamis.
 
 
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 147-152, szó szerint -->
+**AZ ELAVULT „ÁLLJ MEG" EMLÉK NEM DERÜL KI MAGÁTÓL** (dexter, 2026-08-28): egy elavult „dolgozz"
+emlék elakad és kiderül; egy elavult „állj meg" CSENDBEN leállít, és fegyelemnek látszik -- épp az
+a mondat tartja életben, ami miatt senki nem kérdőjelezi meg. **Ha egy `hot` emlék LEÁLLÁST vagy
+TILTÁST állít, kapjon LEJÁRATOT** (dátum vagy mérhető feltétel). És egy cenzus, ami egy javítás
+UTÁN fut, nem látja, amit javított: a „gyakori-e" kérdésnél az időzítés a nevező része.
+*(A flotta-mérés és a helyesbítése: `rulebook/memoria-esetek.md`.)*
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 197-211, szó szerint -->
+**A `limit` alapértelmezése 50, a maximuma 200 -- és eddig egyik sem állt itt**
+(jarvis mérte 2026-08-22). Egy felidézés, ami 50 sornál elvágódik, nem mondja meg, hogy elvágódott:
+a válasz teljesnek látszik. Ha egy kérdésre „nincs erről emlékem" a válasz, az a `limit` miatt is
+lehet -- ezért van a példában kiírva.
+
+**Amit a `q` NÉLKÜLI felidézés ad, az a sajátod ÉS a `shared` réteg, felváltva.** Ez szándékos: a
+`shared` pont azért van, hogy más ágens tudása elérjen hozzád. 2026-08-22-ig viszont a kettő egy
+közös `accessed_at` sorrendben versenyzett, és egy kis készletű ágenst kiszorított a saját
+felidézéséből: jarvis 13 saját emlékéből 9 fért be az 50-es ablakba, a többi 41 sor másé volt.
+Javítva (commit d30248b): a két forrás külön rangsorolódik és felváltva kerül be, tehát **a sajátod
+soha nem szorul ki**. Ha kevesebb saját emléked van, mint az ablak fele, mind bekerül.
+
+**A `q` VISZONT SZŰR** (jarvis kontrollja: értelmetlen kulcsszó -> 0 sor). Vagyis egy `q`-s keresés
+nulla találata valódi nemleges válasz -- egy `q` nélküli listázás hiánya nem az.
+

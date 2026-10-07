@@ -528,3 +528,261 @@ döntött; hogy ez KIMONDOTT politika-e, nincs mérve.
 Az IRÁNY az állítás, nem a mennyiség.)*
 
 
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 527-571, szó szerint -->
+## A SZÓ `develop` HÁROM KÜLÖNBÖZŐ SHA-N ÁLL EBBEN A REPÓBAN -- ÉS MINDHÁROM ÉRTELMES VÁLASZT AD
+## (friday mérte 2026-08-28, marveen rossz refet adott neki egy másik repóból)
+
+    develop (helyi) f82a98b -> 275 commit | fork/develop 6b59dc4 -> 270
+    origin/develop  29a1bd9 -> 222        | origin/main   1f13ff1 -> 222
+
+Ugyanaz a kérdés (`git rev-list --count <ref>..<tip>`), négy ref, három különböző szám. **Egyik sem
+hibás; egyik sem mondja meg magától, melyikre gondoltál.** És a marveenben rosszabb, mint máshol: a
+`fork` Istié, az `origin` IDEGEN upstream -- a rossz választás nem csak rossz számot ad, hanem **rossz
+repóról szól**.
+
+**ÉS EGY MÁSIK REPÓ REFJE ÜRES VÁLASZT AD, NEM HIBÁT.** Egy `integration/2026-08-27-batch` ref egy
+Delta-CRM ágnév; a marveenben nem létezik. Vakon lemérve **az üres eredmény nullának olvasódik** --
+vagyis „nincs különbség a köteghez képest", ami épp az ellenkezője az igazságnak.
+
+```bash
+git ls-remote <remote> 'refs/heads/<minta>'   # LETEZIK-E a ref, MIELOTT mernel vele
+git rev-list --count <TELJES ref>..<tip>      # es ird ki MINDKET oldalt a szammal egyutt
+```
+
+**ÉS AZ `ls-remote` ÁTMENETI ÜRESET AD EZEN A GÉPEN, A RIASZTÓ IRÁNYBA TÉVEDVE.** Az üres válasz és
+a valódi „nincs ilyen ref" BÁJT-AZONOS, és az üresből az következik, hogy a munka EGY LEMEZEN áll --
+vagyis **egy átmeneti hálózati hiba pontosan azt a vészjelzést hamisítja, amit a legkomolyabban
+veszünk.** Mérve két ágensnél egy éjszaka; egy hét ágas ellenőrzésben egyszer elsült.
+
+    egy PUSH hangosan bukik ......... `fatal:`, exit != 0, azonnal latod
+    egy `ls-remote` NEMAN bukik ..... ures kimenet, exit 0, es ugy nez ki, mint egy valasz
+
+**A SZABÁLY: egy `ls-remote` ÜRES válaszára SOHA ne építs állítást első futásra.** Futtasd újra
+(3-4x), és csak akkor mondd ki, hogy a ref nem létezik, ha MINDEN próba üres. Egy NEM-üres válasz
+egyszer is elég a létezéshez -- az aszimmetria a mi javunkra dolgozik.
+
+**A KONTROLL, ami ingyen van:** ugyanabban a futásban kérdezz le egy BIZTOSAN létező refet is.
+
+```bash
+git ls-remote <remote> 'refs/heads/main' 'refs/heads/<a keresett>'   # a main a KONTROLL
+```
+
+**ÉS A KONTROLL AZ ELSŐ HASZNÁLATÁN TÜZELT, PERCEKKEL A MEGÍRÁSA UTÁN:** egy ellenőrzés ÜRESET adott
+MINDKÉT refre, a kontrollra is. Kontroll nélkül az a sor azt mondta volna, hogy az aznapi munkát
+vivő ág nincs a távolin. A verdikt helyesen ÚJRAPRÓBÁLÁS lett, nem lelet -- egy újrapróba egyezett.
+
+*(A mért esetek -- a három `develop`, a négy remote, a két éjszakai üres `ls-remote` és a
+költség-aszimmetria -- `rulebook/push-cel-esetek.md`.)*
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 572-591, szó szerint -->
+### ÉS EGY SZINTTEL ARRÉBB: A `develop` NEM AZ IGAZSÁG FORRÁSA EBBEN A REPÓBAN -- A FUTÓ FA AZ
+(didi mérte 2026-09-02, marveen egy hamis leletén.)
+
+**A futó rendszer a fő checkout ÁGÁBÓL épül, és több száz committal a `fork/develop` előtt áll;
+semmi nem folyik visszafelé.** Aki a `develop`-hoz méri, hogy „ki van-e szállítva" vagy „él-e a
+hiba", egy hetekkel régebbi fához mér: a mérés lehet tiszta és kontrollos, a válasz mégis hamis.
+Tartalmi ellenőrzéshez sem alapvonal: egy nulla onnan CSEND, nem cáfolat. Ez SZÁNDÉKOS (a
+`prod-tree-guard` a `develop`-ra visszaállítást kárnak minősíti, 08-29 óta); hogy így maradjon-e,
+Isti döntése. Az `origin/develop` ráadásul az IDEGEN upstream (Szotasz), nem a miénk.
+
+**A HELYES HORGONY: amiből az fut, ami fut.**
+
+```bash
+curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" \
+  http://localhost:3420/api/overview | python3 -c "import json,sys; b=json.load(sys.stdin)['build']; print(b['status'], b.get('builtCommit'))"
+git rev-parse --abbrev-ref HEAD        # és a fő checkout ága, mert a build ABBÓL készül
+```
+
+*(A mért számok, a három réteg bizonyítéka és az őr-fejléc idézete: `rulebook/push-cel-esetek.md`.)*
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 739-762, szó szerint -->
+### A `git remote -v` ÖNMAGÁBAN VAK
+
+Nem az `origin` dönti el, hova megy a push, hanem az **ág SAJÁT upstreamje**. A `remote -v`
+azt sorolja fel, MILYEN távoliak vannak, és HELYESEN mutatja őket, miközben az ág máshova megy.
+Mérve: a Delta-CRM `develop`-ján az upstream az `old-origin` (a halott repó), a `remote -v`
+kimenete tökéletesen rendben. **A védelem lefut, zöldet mond, és nem véd.**
+
+```bash
+git rev-parse --abbrev-ref '@{push}'                        # ide menne EZ az ág
+git config --get branch.$(git branch --show-current).remote  # ugyanez, nyersen
+git push fork <ág>      # marveen: MINDIG explicit `fork`, sosem csupasz `git push`
+git push origin <ág>    # Delta-CRM: origin -- de NEM a marveenben
+```
+
+**Az upstreamet KÉT mező adja, egyik sem önmagában:** `branch.<ág>.merge` csak a ref NEVE,
+`branch.<ág>.remote` a távoli. Egy `.merge`-re szűrt grep tehát HAMIS képet ad; a `@{push}` a
+kettőt EGYÜTT oldja fel.
+
+**`remote.pushDefault=fork` be van állítva** (marveen, 2026-08-27 11:28), tehát a csupasz
+`git push` egy rosszul beállított ágon HANGOSAN elhasal
+(`cannot resolve 'simple' push to a single destination`) ahelyett, hogy csendben egy idegen
+nyilvános projektbe menne. **Ha ezt a hibát kapod: nem elromlott semmi. Az ág upstreamje nem a
+`fork`.** A válasz mindig `git push fork <ág>`.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 763-818, szó szerint -->
+### ÉS A CSAPDÁT A SAJÁT AJÁNLOTT RECEPTÜNK TERMELTE
+
+A prod-tree-guard hibaüzenete évekig ezt ajánlotta:
+
+    git worktree add ../marveen-wt-<topic> -b <branch> origin/develop
+
+Ez EGYÜTT beállítja az `origin` upstreamet -- és itt az `origin` a `Szotasz/marveen`. **A
+dokumentált biztonságos szokás hozta létre a hibás konfigurációt**, nem hanyagság: pontosan attól,
+hogy valaki KÖVETTE a lapot. És ami megvédett, nem a figyelem volt: a `push.default=simple`
+azért tagadta meg, mert az ág NEVE nem egyezett az upstream ág nevével. **Ha az ágat
+`develop`-nak hívták volna, átment volna.** A védelem egy névegyezésen múlt.
+
+```bash
+git worktree add ../marveen-wt-<topic> -b <branch> "$(git rev-parse HEAD)"   # SHA: nem allit upstreamet
+git branch --unset-upstream <branch>    # ha mar letrejott rosszul
+
+# ES UGYANEZ EGY MASIK PARANCSBOL, MASIK REPOBAN (dexter merte 2026-09-11, Delta-CRM):
+git checkout -b <uj> origin/main        # <- EZ IS UPSTREAMET ALLIT, es a VEDETT main-re
+# -> egy csupasz `git push` a PROTECTED main-re menne, ami ott ELO DEPLOY. Ugyanaz az alak, mint a
+#    worktree-recept fent: nem hanyagsag, hanem hogy a KEZENFEKVO parancs allitja be a rosszat.
+git checkout -b <uj> "$(git rev-parse origin/main)"   # SHA-val: nem allit upstreamet
+cp -Rc node_modules ../marveen-wt-<topic>/     # NE SYMLINKELD -- lasd alább
+# ES A FORRAS NEM A main: a Delta-CRM fo checkout 10-05-en 09-17-i agon allt (tiptap 3.22.3 vs
+#   origin/main lock 3.31.3, kartya 5d9347ea). FUGGOSEGET ERINTO valtozasnal: `npm ci` a sajat faban.
+# ES A CEL LETEZESET ELOBB KERDEZD MEG: ha `<wt>/node_modules` MAR VAN, a `cp -Rc` NEM bukik,
+# hanem BELE masol -> `node_modules/node_modules`. Egy MAS AGENS fajaba igy irtam bele ma
+# (2026-09-24), es a `git status --porcelain` 0-t adott ra, mert a node_modules gitignore-olt:
+# a szennyezes a szokasos halon SZERKEZETILEG nem latszik. A `git worktree add` elotte
+# HANGOSAN bukott (`fatal: ... already exists`) -- a masolas volt a nema fele, es a lanc
+# tovabbment rajta. Az alak: `[ -e "$WT/node_modules" ] && echo 'MAR VAN -- NE MASOLJ' || cp -Rc ...`
+```
+
+**A `node_modules`-t NE SYMLINKELD, KLONOZD -- es ez a sor azert all ITT, a parancs MELLETT, mert
+maskepp nem er el senkihez** (mandark merte 2026-09-11; a szabaly EDDIG IS le volt irva, es epp ez
+a lelet).
+
+    a szabaly leirva: `koteg-celallapot-merese/SKILL.md:31`, szo szerint, mert szammal
+    `cp -Rc` a skill-faban .......... **1** fajl   |   worktree-t emlito skill: **18**
+    es az az egy skill a KOTEG-CELALLAPOT MERESEROL szol
+
+**Vagyis aki FEJLESZTESI worktree-t hoz letre, meg akkor sem talalna meg, ha atnezne a skilleket:
+nem abban a skillben van, amit ehhez hivna.** A szabaly helyes, mert van, megnevezi a mechanizmust
+-- es egy olyan ajto mogott ul, amit senki nem nyit ki a megfelelo pillanatban.
+
+**A KAR, AMIT A SYMLINK OKOZ, MERVE:** 108 worktree-bol **70 symlinkeli** a `node_modules`-t, es 66
+ut UGYANARRA a generalt Prisma-kliensre mutat. **Egy `prisma generate` barmelyikben a TOBBI 65
+klienset is atirja** -- masok futo munkaja kozben. Es a hiba iranya a megnyugtato: a kliens
+SZELESEBB lehet a fanal, tehat a `tsc` ZOLDEN atenged olyan mezot, ami az adott ag semajaban nincs.
+
+**A KLON ARA GYAKORLATILAG NULLA, harom fuggetlen meressel:** 1,0 GB latszolagos meret,
+`cp -Rc` **7,3 / 7,6 / 7,8 masodperc** (mandark, dexter, computress), es a VALODI lemez-delta
+**0,02 GB** -- az APFS blokkokat oszt. Mind a 70 fa izolalasa igy ~8,5 perc es ~1,4 GB, nem 70 GB.
+
+*(Mérve: a Delta-CRM 82 ágából 30-nak MÁS NEVŰ ágra mutat az upstreamje. Ott minden
+„ahead/behind" szám a `main`-hez mér, nem a saját távoli ághoz, és ez sehol nem látszik.)*
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 829-926, szó szerint -->
+### PUSH ELŐTT: CI-PERC ÉS TITOK -- KÉT KÜLÖN TENGELY
+
+**A CI-t nem az ág NEVE indítja, és KÉT út van -- az üres `gh pr list` SZÜKSÉGES, DE NEM ELÉGSÉGES:**
+
+    `pull_request:` .... kell hozza NYITOTT PR (a default `[opened, synchronize, reopened]`, es a
+                         `synchronize` MINDEN pusholasra tuzel egy ilyen agra)
+    **`push:`** ........ NEM kell hozza PR, csak hogy az AGNEV illeszkedjen a listajara
+
+```bash
+gh pr list --state open --head <ág>                             # Delta-CRM
+gh pr list --state open --repo balintisti/marveen --head <ág>   # marveen FORK -- ide pusholunk
+# a `--head` SZURJON, NE a `--limit` (51 nyitott PR volt; egy `--limit 20` HAMIS nemlegest adott)
+gh api "repos/<owner>/<repo>/contents/.github/workflows?ref=main" --jq '.[].name'   # a masodik ut
+gh run list --repo <owner>/<repo> --branch <ág> --limit 5       # push UTAN: a JOSLAT nem meres
+```
+
+**A KÉT MÉRÉS NEM EGYENRANGÚ: a push ELŐTTI egy JÓSLAT, a push UTÁNI egy MEGFIGYELÉS** -- az utóbbi
+az erősebb, és az dönti el, tényleg ingyenes volt-e. Kontroll, hogy a lekérdezés tud NEM-nullát
+mondani: ugyanez `main`-re.
+
+**⚠ ÉS A `gh pr list` NÉMÁN ÜRESET AD HÁLÓZATI HIBÁRA** (a hiba a stderr-en, a stdout üres, és az
+üres „nincs nyitott PR"-nak olvasódik, azaz a MEGNYUGTATÓ irányba). Ezért `2>&1`, és nézd meg a
+kimenetet. **A `gh api` NEM ilyen: az HANGOSAN bukik** (rc=1, hibatörzs a stdouton) -- a rituálét
+NE terjeszd rá.
+
+**A WORKFLOW `on:` BLOKKJÁT OLVASD EL, NE REGEXELD.** Mért eset: egy regexes kinyerő ÜRES
+branch-listát adott két push-triggeres fájlra, és **egy üres branch-lista úgy olvasódik, hogy
+„nincs korlátozás, tehát MINDEN ágon tüzel"** -- hamis ~70 perces riasztás egy privát repón.
+*Egy ÜRES kinyert érték, aminek van HIHETŐ JELENTÉSE, veszélyesebb annál, amelyik törtnek látszik.*
+
+**⚠ ÉS A ~70 PERC NEM EGY PUSH ÁRA -- EGY FEATURE-ÁGRA VALÓ PUSH NYITOTT PR NÉLKÜL NULLA**
+(dexter mérte 2026-09-19, marveen függetlenül újramérte, 17 valódi ág feltöltésével):
+
+    ci.yml ................ push: [main, develop]  +  pull_request: [main, develop]
+    deploy.yml ............ workflow_run a CI-ra, branches: [main]
+    pr-check.yml .......... CSAK pull_request
+    ci-timing-probe.yml ... VAN push-triggere, de EGYETLEN meresi agra szukitve (a sajat
+                            docblockja mondja ki, hogy szandekosan)
+    a tobbi ot ............ workflow_dispatch, azaz kezi
+
+**ÉS A MEGFIGYELÉS, NEM A JÓSLAT:** dexter 17 ágat tolt fel, és a repó legutolsó workflow-futása
+azóta is az ELŐZŐ NAPI. Semmi nem indult el. *(A jóslat a konfig olvasása; a megfigyelés az,
+hogy `gh run list` nem mozdult.)*
+
+> **Hónapokig egy lemezen tartottuk a munkát egy költség miatt, ami erre a műveletre SOHA nem
+> állt fenn.** A szabály nem volt hamis, a HATÓKÖRE hiányzott -- és épp ez a bekezdés mondja ki
+> két sorral lejjebb, hogy egy szabály indoka ugyanúgy hatókörös, mint egy szám.
+
+**AMI VALÓDI KIKÖTÉS MARAD:** ha az ágnak van NYITOTT PR-je, a `synchronize` MINDEN odatolásra
+tüzel. Tehát a próba nem az, hogy „ág-e", hanem hogy **van-e rajta nyitott PR** -- és arra a
+`gh pr list --head <ág>` a mérő, nem a `--limit`.
+
+**A KÖLTSÉG CSAK AZ EGYIK REPÓBAN VAN:** `balintisti/Delta-CRM` **PRIVÁT** (~70 számlázott perc
+futásonként, ÉS CSAK A FENTI UTAKON), a két marveen repó **PUBLIKUS**, ott ingyenes. A mechanizmus közös, a SZÁMLA nem --
+a „ne pusholj" szabály a Delta-CRM-re szól. **Egy szabály indoka ugyanúgy hatókörös, mint egy szám,
+és ugyanúgy hamissá válik, ha a hatókör lemarad róla.** *(Mért eset: marveen pontosan így
+terjesztette ki a tiltást MINDKÉT repóra „ugyanaz a mechanizmus" alapon, és tévedett.)*
+
+**A TITOK-ELLENŐRZÉS KÉT TENGELY, ÉS EGYIK SEM VÁLTJA KI A MÁSIKAT.** A kapuk repónként MÁSOK:
+
+```bash
+# marveen -- TS. A neveket a DIFFBOL, a TARTALMAT a MUNKAFABOL veszi:
+#   egy ki nem csekkolt agra `NOT SCANNED, therefore NOT CLEARED` (fail-closed).
+npx tsx scripts/secret-gate.ts --range origin/main..<ág>
+# Delta-CRM -- PYTHON, 2026-09-11 ota (`aa1643e6f`). BLOBOT olvas (`git show {rev}:{path}`),
+#   tehat BARMELY refet szkennel, kicsekkolva vagy sem -- a marveen korlatja ide NEM ervenyes.
+git cat-file -e origin/main:scripts/secret-gate.py; echo $?   # 0 = van kapu (a TORZSET kerdezd,
+                                                              # ne a munkafa indexet)
+python3 scripts/secret-gate.py --range <base>..<head>
+python3 scripts/secret-gate.py --self-test        # 72 ellenorzes, PASS = a kapu maga mukodik
+```
+
+**ÉS A HOOK MÁS MENNYISÉGET OLD FEL, MINT AMIT PUSHOLSZ:** a `pre-push.d/50-secret-gate`
+`ROOT="$(git rev-parse --show-toplevel)"` alakban dolgozik -- AHONNAN ÁLLSZ, nem AMIT KÜLDESZ.
+A fő checkoutból pusholva átmegy akkor is, ha az ÁGON nincs ott a kapu-fájl; az ág saját
+worktree-jéből `NOT SCANNED`. **Aki a fő checkoutból dolgozik, sosem találkozik vele.**
+
+A második tengely a FÁJLNÉV, és a kapu egyik detektora sem fájlnév-alapú a titkokra:
+
+```bash
+# A `cd` GYENGE ELOFELTETEL: a git minden pathspec-es parancsa a CWD-hez old fel, es ha semmire
+# nem illeszkedik, URES kimenetet ad rc=0-val -- a CSEND olvasodik valasznak (ket agensnel, ket
+# parancson, egy napon, MINDKETTO fail-open). A MECHANIKUS alak HANGOS:
+git ls-files --error-unmatch <pathspec> >/dev/null || { echo "ROSSZ UT -- ALLJ"; exit 1; }
+git ls-tree -r --name-only <ág> | grep -iE \
+  '(^|/)\.env($|\.)|service-account\.json|tokens\.json|\.pem$|id_rsa|(^|/)\.(bash|zsh|psql)_history$|docker/config\.json|(^|/)\.netrc$|(^|/)\.npmrc$' \
+  | grep -vE '\.env\.(example|sample|template)$'
+```
+
+**A FELTÉTEL NEM AZ ÜRES KIMENET, HANEM A NULLA KÜLÖNBSÉG AZ `origin/main`-HEZ KÉPEST.** A repó
+három dotfile-t KÖVET az Initial commit óta, tehát a minta MINDIG ad találatot -- egy őr, ami
+minden alkalommal riaszt, pár kör után zaj. Fájlonként vesd össze a blob-hasht az `origin/main`-ével;
+`AZONOS` = nulla kitettség. **Pozitív kontroll nélkül ez sem ér semmit:** egy fájl, amit TÉNYLEG
+átírtál, adjon `BLOKKOLO`-t.
+
+*(A `.env` horgony `($|\.)`-re bővült: a szűkebb `\.env$` hét env-fájlból ötöt nem látott. A
+bővítés és a `.example` kivétel EGY CSOMAG -- csak az egyiket bevezetni rosszabb, mint egyiket sem.)*
+

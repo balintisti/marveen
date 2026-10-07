@@ -77,3 +77,36 @@ tényét hozza át a „szintén" szón; a második -- „az érték nem típus"
 esetre, ami nem az. A második a veszélyesebb: abból az következne, hogy a spec-ekben a
 TÍPUS-eltérés itt biztonságos, és nem az.)*
 
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 997-1026, szó szerint -->
+## EGY ZÖLD `tsc` EGYIK REPÓBAN SEM ÁLLÍTÁS AZ ÁLLÍTÁSOKRÓL -- DE MÁS OKBÓL
+*(friday mérte 2026-09-05, marveen két hibás magyarázatát javítva. A két megdőlt alak
+története és a mérési narratíva: `rulebook/spec-tipusellenorzes.md`. 4 121 karakter volt itt.)*
+
+    marveen ....... a specek BENNE VANNAK a tipus-grafban (636 sajat fajl, ebbol 422 teszt;
+                    kontroll: 214 nem-teszt). Egy tipushiba a spec NEM-ALLITAS reszeben KIDERUL.
+    Delta-CRM ..... a specek KIVUL vannak. Ott mar a fajl sem latszik.
+
+**DE AZ ÁLLÍTÁS-HATÁRON MINDKETTŐ MEGÁLL, ÉS ITT MÁS AZ OK:** a `toBe` nem korlátozza az
+argumentumát. Mérve, ugyanabban a fájlban, a gráf-tagságot kontrollal igazolva:
+
+    expect(f()).toBe(true)        `'not-found'|'unchanged'|'moved'`-on  -> tsc **rc=0**
+    expect(f()).toBe('unchanged') rossz ERTEK                           -> tsc **rc=0**
+
+    node_modules/@vitest/expect/dist/index.d.ts:165   toBe: <E>(expected: E) => void;
+    KONTROLL ugyanaz a horgony masik matcheren:  :149  toEqual: <E>(expected: E) => void;
+
+Az `E` KIZÁRÓLAG az argumentumból következtetődik; semmi nem köti az állítás ALANYÁHOZ.
+
+**ÉS A SZÓ `any` ROSSZ, ROSSZ IRÁNYBA:** egy SZABAD TÍPUS-PARAMÉTER nincs kikapcsolva, csak nem
+állít semmit -- tehát **nincs az a `strict` beállítás, ami ebből hibát csinálna.** Az `any` azt
+sugallná, hogy egy szigorúbb config megjavítja.
+
+**A HORGONY SZÁMÍT, MERT A NAIV ÚJRAMÉRÉS NÉMA NULLÁT AD:**
+
+    NAIV:   grep 'toBe' <fajl>            -> 43 talalat, a deklaracio elvesz a JSDoc-peldakban
+    MUKODO: grep -nE '^\s+toBe\s*[<(:]'   -> 1 talalat (sor-eleji horgony zarja ki a ` * expect(...)`-et)
+
+> Ha ide idézet kerül egy függőségből, jöjjön vele az ÚT, a SOR és egy horgony, ami tényleg megtalálja.
+

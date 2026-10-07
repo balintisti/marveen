@@ -309,3 +309,61 @@ megkülönböztethetetlen az el nem kezdettől, és a becslés vezérli a sorren
 
 *(A mért esetek: `rulebook/kanban-konvenciok.md`. 34 000 karakter volt itt.)*
 
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1274-1278, szó szerint -->
+
+**ÉS AZ `actor` MA TÚLÉLI A LÉTREHOZÁST** (a `d624222e` merge óta, 2026-09-12 07:48). A korábbi
+`planned`-then-move kerülőút az attribúcióhoz MÁR NEM KELL -- küldd az `actor`-t, mert most már hat.
+*(Mérve: 38 valódi create-esemény, ebből 37 aktorral. A merge ELŐTTI sorok száma: 0.)*
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1297-1309, szó szerint -->
+### A VISSZAOLVASÁS ROSSZ VÉGPONTRÓL MAGABIZTOS NULLÁT AD
+
+**A `GET /api/kanban/<id>` NEM tartalmazza a kommenteket.** Két ágens futott ebbe egy órán belül,
+egymástól függetlenül: a parserük a `comments` kulcsot kereste, `undefined`-et kapott, és **0-t
+olvasott ki belőle** -- dexter így „0 kommentet" mért MIND A 26 kártyán.
+
+    a rossz kerdes:  `d.get('comments')`      -> undefined -> 0, csendben
+    a jo kerdes:     `d['comment_count']`, es ha kell a tartalom, a `/comments` vegpont
+    az INGYENES kontroll: ha a `comment_count` > 0 es a te szamod 0, a MEROD rossz
+
+**A LEGÉLESEBB RÉSZ: A VÁLASZ MEGNEVEZI A SAJÁT HIÁNYÁT** -- ott a `comments_omitted: true` ÉS a
+`comment_count`. Nem hiányzó információ volt, hanem OLVASATLAN információ a saját eszköz-kimenetben.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1310-1316, szó szerint -->
+### „MÉG SENKI NEM MOZGATTA" -- A KORSZAK-FÜGGETLEN ALAKOT HASZNÁLD, A CSUPASZT SOHA
+
+2026-09-12 07:48 óta MINDEN új kártya EGY eseménnyel SZÜLETIK. Ezért a csupasz „nincs eseménye"
+proxy **NULLÁT** ad a soha-nem-mozgatott kártyákra, **és a nulla úgy olvasódik, hogy „minden
+mozdult" -- a KÉNYELMES irányba.** (Mérve a szétválás napján: csupasz 514 kontra korszak-független
+517.)
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1322-1342, szó szerint -->
+
+**ÉS A DIAGNOSZTIKA CSAK AZ SQL ÚTON HELYES -- AZ API-N UGYANEZ A FELTÉTEL MEZŐ-ESEMÉNYT IS FOG.**
+A két út MÁS populációt lát, és egyik sem hibás:
+
+    SQL:  `kanban_card_events` -- NINCS `kind` oszlopa, a mezo-esemenyek KULON tablaban allnak
+          (`kanban_card_field_events`). Egy `and kind='status'` zaradek HIBARA FUTNA.
+    API:  a `GET /api/kanban/<id>/events` OSSZEFESULI a kettot es szintetizal egy `kind` mezot.
+          Egy mezo-esemeny ott `from_status=None` ES `to_status=None`.
+
+**A DISZKRIMINÁTOR, AMI MINDKÉT ÚTON MŰKÖDIK, és ezért ezt használd:**
+
+    from_status IS NULL  **AND to_status IS NOT NULL**
+
+SQL-en ártalmatlan (ott amúgy is mindig igaz), az API-n pontosan a mező-eseményeket zárja ki -- és
+nem függ egy oszloptól, ami csak az egyik úton létezik. *(Mért csapda: egy 08-22-i kártya az API-n
+1 ilyen sort ad, és az egy 09-13-i `description`-szerkesztés, nem létrehozás.)*
+
+**A MEZŐ-VÁLTOZÁSOK IS BEKERÜLNEK AZ ESEMÉNY-NAPLÓBA** (2026-09-05 óta, `kind` mezővel). Eddig egy
+átnevezés, egy fokozat-emelés vagy egy gazdaváltás nyomtalan volt; mostantól a `kind` szétválasztja
+őket, és egy státusz-söprés meg tudja különböztetni a valódi mozgást a mező-szerkesztéstől.
+

@@ -228,3 +228,22 @@ nem állítja meg.
 `from_agent` szerint).
 
 
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 33-38, szó szerint -->
+**AZ INTER-AGENT ÜZENETEK NYELVE ANGOL, ÉS EZ MÉRT DÖNTÉS, NEM STÍLUS.** A magyar ~25-33%-kal
+több tokent használ ugyanarra a tartalomra, és az ágens-forgalom napi nagyságrendje ~959 e token
+(1664 üzenet / 3,4 M karakter, 24 órás mérés) plusz ~911 e a kártya-kommenteké. Ez napi
+negyed-egyharmad millió token, **minőség-veszteség nélkül** -- a mérés, a kontroll és a határok
+kimondása ugyanúgy elfér angolul.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 43-49, szó szerint -->
+**ÉS A NAGYOBBIK TARTALÉK NEM A NYELV, HANEM A HOSSZ.** A kártya-komment átlaga ~800 token, és
+van egy szorzó: amit egyszer leírunk, azt az olvasó MINDEN további fordulójában újra beolvassa,
+amíg újra nem indul. **Egy hosszú komment nem egyszer kerül pénzbe, hanem húszszor.**
+Amit össze lehet nyomni veszteség nélkül: a NYUGTÁZÁS (elismerés, megerősítés, „jól csináltad, és
+íme miért"). Amihez NEM nyúlunk: a mérés, a lelet, és annak kimondása, mit NEM mértünk meg -- ez
+utóbbi 2026-08-27 éjjel legalább hatszor fogott meg egy hamis állítást.
+

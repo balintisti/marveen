@@ -342,3 +342,299 @@ hogy hiba történt.**
 *(Hogy a skillben szereplő `0` PONTOSAN melyik olvasóból jött, az MÉRETLEN -- a skillben nyomtatott
 alak épp a hangosan bukó. didi ezt kimondta a kártyán ahelyett, hogy visszafelé levezetett volna
 egy illeszkedő történetet.)*
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1450-1455, szó szerint -->
+*(A mért esetek TELJES szövege -- a héj-esetek, a sor-mérések, a 872/876-os wc-eltérés, a
+`failed`-újraküldés hat esete és a saját forgalom-mérésem -- `rulebook/inter-agent-esetek.md`.
+14 683 karakter volt itt. A `rulebook/uzenetkuldes-esetek.md` továbbra is érvényes.)*
+
+Az ágensek közvetlenül tudnak egymásnak üzenni egy közös SQLite üzenetsoron keresztül.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1473-1504, szó szerint -->
+### A HÉJ NEM ELHARAPJA A SZÖVEGET, HANEM LEFUTTATJA
+*(A teljes eljárás, a mért esetek és az auditálás: a `hej-elharapja-a-szoveget` SKILL, ami magától
+felbukkan, amikor szabad szöveget adsz át héj-argumentumként. 2 693 karakter volt itt.)*
+
+Idézőjeles argumentumban a visszaperjel és a `$` **parancshelyettesítés**, és a két kimenet nem
+fokozat, hanem kategóriakülönbség:
+
+    a hej ELHARAPJA  -> egy szo kiesik, az `OK id=` megjon, a kuldes SIKERESNEK latszik
+    a hej VEGREHAJTJA -> egy PARANCS fut le, ott, ahol allsz (masvalaki fajan)
+
+**A SZABÁLY NEM A HOSSZRA VONATKOZIK, HANEM A TARTALOMRA.** Ha van benne visszaperjel, `$`,
+idézőjel, vagy bármi, amit nem te írtál szó szerint: APOSZTRÓFOS heredoc vagy FÁJL -- és a
+munkafájl a session-scratchpadbe menjen, ne a `/tmp`-be (közös névtér).
+
+**ÉS A TERMINÁTOR LEGYEN EGYEDI, HA A TARTALOM MAGA IS HEREDOCOT EMLÍT.** Mérve magamon
+2026-09-19, épp ennek a bekezdésnek az írásakor: a tartalomban álló `EOF` sor LEZÁRTA a külső
+heredocot, és a parancs `unmatched` hibával elhasalt. Itt hangos volt; egy `cat`-nél néma
+csonkolás lett volna.
+
+**ÉS A „STDIN" ÖNMAGÁBAN NEM VÉDELEM** (didi mérte magán, ugyanaznap): egy `printf`-ből csövezett
+STDIN ugyanúgy veszít, ha a `printf` argumentumai dupla idézőjelesek -- a héj már behelyettesített,
+mielőtt bármi a csőig ért. **Bármely dupla idézőjeles argumentum BÁRHOL a csővezetékben újranyitja.**
+
+**ÉS EGY ELNYELT MUTÁCIÓ ROSSZABB EGY ELNYELT ÜZENETNÉL** (dexter, ugyanaznap): egy üzenet szavakat
+veszít, amit VISSZA lehet olvasni; egy mutáció, ami nem alkalmazódott, **bizonyítékot gyárt a
+megnyugtató irányba** -- a készlet zöld marad, és feljegyzel egy túlélő mutációt, ami meg sem
+történt. A precedens a repóban: `mechanism-proof.mjs` a horgony-találatokat SZÁMOLJA, és
+`hits !== 1` esetén `exit 2`.
+
+> **Minden mutáció ÁLLÍTSA, hogy ALKALMAZÓDOTT, mielőtt az eredményt elolvasod** -- és az ÁLLÍTÁS
+> se menjen át dupla idézőjelen, különben az őr és az őrzött együtt hal meg.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1505-1584, szó szerint -->
+### AZ "ELKÜLDVE" NEM "MEGÉRKEZETT" -- A SOR ÁLLAPOTA
+
+A router csak a címzett paneljének IDLE réseibe tud injektálni. **Egy hosszú forduló alatt nulla
+kézbesítés lehetséges, és ez nem hiba.**
+
+    0-2 queue ... mehet
+    3+ queue .... a helper FIGYELMEZTET. NE kuldj ujabbat -- ird a kartyara.
+                  A `pending` azt jelenti, hogy az elozot EL SEM OLVASTA.
+
+**Az üzenet TOL, a kártya HÚZAT. De a kártya csak azt húzatja, aki MÁR ODANÉZ.**
+
+**A SZABÁLY RÉSE: a „3+ vár -> írd a kártyára" HELYES egy INFORMÁCIÓRA, és ELÉGTELEN egy
+IDŐKRITIKUS ENGEDÉLYRE** (mért eset: 36 perc késés élő adatvesztés-csapda mellett). Ilyenkor
+**ellenőrizd vissza**: pár perc múlva nézd meg, ürült-e a sor, és küldd el EGY SOROSAN is. A kártya
+a nyom, az üzenet a kézbesítés; időkritikusnál mindkettő kell.
+
+**RESTART UTÁN A HÁROM ÁLLAPOT ELLENTÉTES TEENDŐT KÍVÁN:**
+
+    `pending`   -> a SORBAN van (adatbazisban), TULELI a restartot   -> NE kuldd ujra
+    `delivered` -> a panelbe MAR beinjektalodott                      -> EZT viheti el a restart
+    `failed`    -> a munkamenet HIANYZOTT a teljes ujraproba-ablakban -> ELVESZETT, kuldd ujra
+
+**DE A `failed` -> ÚJRAKÜLDÉS NEM MECHANIKUS:** a `failed` a KÉZBESÍTÉSRŐL szól, nem arról, hogy a
+TARTALOM ma is érvényes. Mielőtt újraküldesz, nézd meg, MIKOR keletkezett és MIRŐL szól.
+
+**ÉS A FOGADÓ OLDALÁN: EGY SORBAN ÁLLÓ ÜZENET FÉNYKÉP, NEM KÉRDÉS.** Ha úgy érkezik, hogy te már
+megválaszoltad, NEM a küldő vár, hanem a LEVÉL. Olvasáskor ingyen eldönthető: minden üzenet viseli
+a `[KULDVE: <ido>]` sort.
+
+**ÉS A KÜLDŐ OLDALÁN UGYANEZ, ÉS EZ EDDIG NEM ÁLLT ITT: AZ ÜZENET A MEGÍRÁSAKOR FÉNYKÉP, A
+KÉZBESÍTÉS VISZONT KÉSŐBB TÖRTÉNIK -- TEHÁT EGY SÜRGŐS KIOSZTÁS LANDOLHAT AZUTÁN, HOGY A MUNKA
+ELKÉSZÜLT** (deeper fogalmazta meg 2026-09-24, marveen üzenetén mérve).
+
+    10:39:05  marveen megirja: „40fc8201 mostantol a tied es SURGOS"
+    10:39:27  deeper felveszi a KARTYAROL -- **22 masodperccel kesobb**
+    10:51:12  deeper lezarja, harom elo valasszal
+    10:58:05  marveen elfogadja az eredmenyt
+    **12:14:47  a 10:39-es uzenet MEGERKEZIK** -- egy ora harmincot perccel a lezaras utan
+
+**A MUNKA VÉGIG JÓL MENT, ÉS NEM A LEVÉL VITTE: a KÁRTYA húzatta.** Ez a `TOL kontra HÚZAT`
+szabály élesben, a javunkra. Amit viszont a levél állít -- „ez MOST a tiéd, és MOST sürgős" --,
+az a kézbesítéskor már hamis volt.
+
+    a FOGADO kerdese ..... „megvalaszoltam-e mar ezt?"        -> a `[KULDVE:]` sor eldonti
+    a KULDO kerdese ...... **„igaz lesz-e ez meg, amikor megerkezik?"**
+
+**A GYAKORLATI ALAK: egy üzenet ne ÁLLAPOTOT állítson, ha a kártya úgyis hordozza.** „Ez a tiéd és
+sürgős" a KÁRTYA dolga (gazda + fokozat), mert azt a címzett a felvételkor olvassa. Az üzenetbe az
+való, ami a kézbesítés pillanatában is igaz marad: egy INDOK, egy HATÁR, egy MÉRÉS. **Egy
+állapot-állítás egy órás késésen át ugyanolyan némán avul el, mint egy `hot` emlék.**
+
+*(És a második fele, amit deeper külön kimondott: ez nem hiba a sorban. A kézbesítés a címzett
+IDLE réseire vár, tehát a késés a rendszer működése, nem a meghibásodása -- a hiba az, ha
+ROMLANDÓ tartalmat bízunk rá.)*
+
+**A SOR MÉLYSÉGÉT NE AZ API-BÓL MÉRD: 50 SOROS ABLAKA VAN, ÉS HAMIS NULLÁT AD.**
+
+```bash
+python3 -c "
+import sqlite3
+c=sqlite3.connect('file:/Users/isti/marveen/store/claudeclaw.db?mode=ro',uri=True)
+print(list(c.execute(\"select id from agent_messages where to_agent=? and status='pending'\", ('<agens>',))))"
+```
+
+**A `status in ('pending','failed')` ALAK HIBÁS: HALOTT ÜZENETEKET SZÁMOL** (mért eset: 12-ből 0
+`pending`), tehát ÖRÖKRE tiltana egy ágenst, miközben senki nem vár. **A `pending` KORA is mérendő,
+nem csak a mélysége** -- egy helyesbítés értékét a késés nem gyengíti, hanem MEGFORDÍTJA.
+
+**A MEZŐNEVEK `from_agent` / `to_agent`, ÉS A VÉGPONT FAIL-CLOSED:** egy kitalált paraméter
+**HTTP 400**, a törzs megnevezi a támogatottakat (`agent`, `status`, `limit`, `before`).
+KONTROLL ingyen: kérdezz le egy TÁMOGATOTT paramétert is ugyanabban a futásban -- ha az 200-at ad
+és a tiéd 400-at, a paraméter-NÉV a hibás, nem a hozzáférés.
+
+> **NÉZD MEG A STÁTUSZT, mert a TÖRZS ÉRTELMEZÉSÉNEK kimenete nem jelzi megbízhatóan, hogy hiba
+> történt.** Ugyanaz a 400-as válasz négy olvasónak HÁROM különböző kimenetet ad, és csak EGY
+> hangos -- előre nem tudod, melyiket kapod. A `curl` `0`-val tér vissza egy 400-ra is.
+
+*(A mért esetek -- a 36 perc, a hat `failed`, a 98 perces `pending`, a fail-closed mérés és a
+négy-olvasós bontás -- `rulebook/inter-agent-esetek.md`.)*
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1585-1616, szó szerint -->
+### EGY BURKOLÓ VISSZACSINÁLHATJA A HELPER EGYETLEN ÉRTELMÉT -- MINDKÉT IRÁNYBAN
+
+A helper az `OK id=`-t a **stdout**-ra, az indoklást és a figyelmeztetést a **stderr**-re írja.
+
+    a stderr ELDOBVA .......... egy `exit 2` megtagadas NEMA lesz -> „elkuldottkent" jelented
+    a jel KISZORITVA (`tail`) . a figyelmeztetes kitolja az `OK id=` sort -> UJRAKULDESZ, es a
+                                cimzett soraba KET azonos uzenet kerul
+
+```bash
+bash scripts/agent-msg.sh ... 2>&1 | grep -E 'OK id|FAIL|NEM KULDTEM'
+```
+
+Ez általánosabb az üzenetküldésnél: **valahányszor egy őrzött parancsot burkolsz, a burkoló
+eldobhatja azt a csatornát, amin az őr beszél.** És az aszimmetria: egy elnyelt HIBA néma
+veszteséget ad, egy elnyelt SIKER duplikátumot -- és a KÜLDŐ nem tudja visszavonni.
+
+**ÉS EZ PONTOSÍTÁS, MERT ITT EDDIG „üzenet-törlő végpont nincs" ÁLLT, ÉS AZ TÚL ERŐS** (mérve
+2026-09-20 a FORRÁSBÓL, nem egy 404-ből). `DELETE /api/messages/<id>` tényleg nincs, se
+`DELETE FROM agent_messages` sehol. De **`PUT /api/messages/<id>` VAN** (`{status:'done'|'failed'}`),
+a `markMessageDone` `status='done'`-ra ír, és a router `WHERE status='pending'`-et szed, tehát a
+sorból KIESIK -- a `src/db.ts:2878` kommentje ki is mondja ezt az esetet. KONTROLL, hogy a mérő tud
+DELETE-et találni: négy másik DELETE út ugyanabban a fában, köztük a `schedules.ts:292` pending-
+visszavonása.
+
+> **Nem az hiányzik, hogy egy sorban álló üzenetet ki lehessen venni. Az MEGVAN. Az hiányzik,
+> hogy a KÜLDŐ vehesse ki** -- pedig egyedül ő tudja, hogy a tartalma elavult.
+
+Az a végpont a VÉGREHAJTÓ jelentési útja (`done` + `result`, és visszafelé egy completion reportot
+is gyárt). Küldőként átmenni rajta annyi, mint egy jelentést hamisítani a címzett nevében: a rés a
+MÉRT MENNYISÉG (`status`) és a VÉDETT SZÁNDÉK (a végrehajtó jelent) között van, tehát **LELET, nem
+kijárat.** Kártya: `4f2b2d8e`.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1617-1678, szó szerint -->
+### A ZSH NEM TÖRDEL SZÓRA -- ÉS A HIÁNYZÓ ITERÁCIÓ ÜRES KIMENETET AD
+
+`for x in $LISTA` a zsh-ban **EGYSZER** fut le, az egész listával egy argumentumként; bash-ban
+N-szer. A kár iránya: a hiányzó iterációk kimenete ÜRES, és az üres kimenet „nincs találat"-nak
+olvasódik.
+
+| alak | zsh szóköz | bash szóköz | zsh sortörés | bash sortörés |
+|---|---|---|---|---|
+| `for x in $VAR` | **1** | 3 | **1** | 3 |
+| `while IFS= read -r x ... <<< "$VAR"` | **1** | **1** | 3 | 3 |
+| `for x in $(echo "$VAR")` | 3 | 3 | 3 | 3 |
+
+**Mindhárom alak MÁS dologtól függ** (szeparátor, héj, tartalom), tehát nincs biztonságos forma.
+**Ezért a szabály nem az ALAKRA szól:**
+
+> **Írasd ki a ciklussal, HÁNY elemet fog bejárni -- ÉS AZ ELSŐ ELEMET.** `db=1 elso=[a b c]`
+
+Az első elem azért kell, mert egy mérésben tipikusan NEM tudod az elvárt N-et; ha az egész lista
+egy elemként érkezik, az első elem MAGA A LISTA, láthatóan.
+
+**ÉS A `2>/dev/null` EGY HANGOS BUKÁST NÉMA NULLÁVÁ ALAKÍT.** Egy mérőben a stderr elnyelése nem
+zajszűrés, hanem a jelzés eldobása -- a zajszűrés a KIMENET szűrése (`| grep`).
+
+**ÉS A MEGKÜLÖNBÖZTETŐ NEM A ZSH, HANEM HOGY VÁLTOZÓN ÁT MEGY-E.** A zsh a
+PARANCS-BEHELYETTESÍTÉST (`$(...)`) szóra tördeli, a PARAMÉTER-BEHELYETTESÍTÉST (`$VAR`) nem --
+mérve ugyanabban a héjban: közvetlen `$(...)` -> 680, változóba emelve -> `fatal: failed to stat`.
+**Ezért egy közvetlen `$(...)` alakot NE „javíts ki" változóra.**
+
+```bash
+git rev-list --count HEAD --not --remotes=fork --remotes=origin    # valtozo-mentes: mindket bajt megszunteti
+# KONTROLL: ugyanez egy MÁR PUSHOLT csúcson -> 0, és csak az egyik remote ellen -> nem-nulla
+```
+
+**ÉS AZ ELNYELT `rc` EGY `&&` LÁNCBAN NEM ROSSZ SZÁMOT AD, HANEM ÁTÍRJA, MIRŐL SZÓL A MÉRÉS:**
+egy elhasalt `worktree add` után a lánc TOVÁBBMEGY (az `rc` a `tail`-é), és a mérés egy MÁR LÉTEZŐ
+fában fut le. **Ez nem fokozat, hanem osztály:** egy elnyelt `rc` a szám helyén hibás számot ad,
+amit meg lehet kérdőjelezni; egy `&&` láncban egy **tökéletesen hihető mérést** ad egy MÁSIK
+alanyról.
+
+```bash
+git worktree add "$WT" --detach "$SHA" || { echo "A WORKTREE NEM JOTT LETRE -- ALLJ"; exit 1; }
+# es a meres UTAN: a fa allapota alljon vissza oda, ahol talaltad
+```
+
+> **Környezetet ÉPÍTŐ parancs SOHA ne álljon cső mögött egy `&&` láncban.**
+
+**ÉS A CSAPDA AKKOR IS ELSÜL, HA A LÁNC MÁSODIK TAGJA MAGA EGY VÉDELEM -- ILYENKOR A BIZONYÍTÉK A
+HIÁNYA, NEM EGY HIBAÜZENET** (computress mérte magán 2026-09-18):
+
+    git fetch -q origin main && python3 scripts/secret-gate.py --range origin/main..HEAD
+
+A `fetch` `Could not resolve host`-tal elhasalt, tehát **a titok-kapu SOHA nem futott le** -- és a
+bukás jele egy HIÁNYZÓ SOR volt (`SECRET GATE: PASS` egyszerűen nincs ott). A push utána SIKERÜLT,
+mert a `pre-push` hook függetlenül lefuttatta ugyanazt a kaput.
+
+    ha NINCS második őr .... a kimaradó ellenőrzés előbb-utóbb hibát termel  -> KIDERÜL
+    ha VAN második őr ...... minden ZÖLD marad, és a saját lépésed CSENDBEN kiesik a szokásból
+
+**A redundancia nem megvédett, hanem ELREJTETTE, hogy kimaradt egy lépés.** A tartalom végig fedve
+volt -- épp ezért nem tűnt fel. *(Ugyanaz az alak, mint a „vakon zöld" teszt: nem hiány marad utána,
+hanem egy ÁLLÍTÁS arról, hogy megvizsgáltuk.)*
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1679-1694, szó szerint -->
+### `echo "$S" | wc -l` NEM SORSZÁMLÁLÓ -- A ZSH BEÉPÍTETT `echo`-JA KIBONTJA A `\n`-t
+
+Mért eset, ugyanazon a fán: csövön `872`, változón át `876`; a mért fájlban 4 `\n` literál. **És a
+torzítás FÁJL-FÜGGŐ:** a SZOMSZÉD fájlon ugyanaz a parancs HELYES számot adott.
+
+    egy mero, ami MINDENHOL teved ...... a kontroll megfogja
+    egy mero, ami az EGYIK alanyon pontos es a MASIKON felfuj, mikozben epp a KETTO KULONBSEGE
+    a lelet ............................ **rosszabb, mint a mindenhol teves**
+
+```bash
+git show <ref>:<út> | wc -l          # közvetlenül, csövön
+printf '%s\n' "$S" | wc -l          # ha MÉGIS változóban van: a printf NEM értelmez
+# KONTROLL, ingyen: ha a fájl tartalmazhat `\n` literált, mérd MINDKÉT alakkal; az eltérés MAGA
+# a literálok száma, és a `wc -l` nyer
+```
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1695-1714, szó szerint -->
+### Sub-ágens ismeretlen-sender ping kezelése (auto-approval, default-deny)
+
+Amikor egy sub-ágens ilyen üzenetet küld: `Ismeretlen sender [ID] jelezett első üzenettel: '...'.
+Ki ez, mit válaszoljak?` -- NE kérdezd reflexből Isti-t. Helyette:
+
+1. **Allowlist-összevetés** a saját csatornád `allowFrom`-jában:
+
+```bash
+   python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print('IGEN' if sys.argv[2] in d.get('allowFrom',[]) else 'NEM')" "$HOME/.claude/channels/telegram/access.json" "[ID]"
+   ```
+
+2. **Ha az `[ID]` BENNE van** -> AUTO-ENGEDÉLYEZD (NE kérdezd Isti-t): válaszolj a sub-ágensnek,
+   hogy a sender jóváhagyott párosított kontakt, és add át, amit tudsz róla. **Auditáld:** jegyezd
+   fel, MELYIK allowlist-match alapján engedélyezted.
+3. **Ha NINCS benne** -> **DEFAULT-DENY**: NE találj ki identitást, NE engedélyezd magadtól.
+   Eszkaláld Istihez Telegramon; a sub-ágens addig a generikus „egy pillanat, ellenőrzöm" választ adja.
+
+**KIZÁRÓLAG az `allowFrom`-on szereplő sendert engedélyezd auto; minden más Isti-döntés. A senderId
+a végső azonosító, NEM a self-claimed név.**
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1715-1738, szó szerint -->
+### A saját üzeneteid is telítenek
+
+Mért eset: amikor egy ágens panelja telítődött, **28 hosszú üzenetem** állt sorban hozzá két óra
+alatt. Amit „részletes visszajelzésnek" hittem, része volt annak, amiért újra kellett indulnia.
+
+**A döntés legyen rövid és kártyán; a hosszú indoklás a kártya kommentjébe való; az üzenet mutasson
+rá, ne ismételje meg.** Ez a második ok, amiért a döntés kártyára való: az első az, hogy egy üzenet
+elveszik -- a második, hogy egy üzenet TELÍT.
+
+**ÉS A SZÁM MELLÉ A NEVEZŐ IS JÁR: két kérdés van, egy szám nem elég** -- *telítem-e ŐKET?* ->
+címzettenként; *telítem-e MAGAMAT?* -> az összeg. **És van egy harmadik tengely: a KONCENTRÁCIÓ.**
+**ÉS 2026-09-24-RE A SZÁM ÓRÁS FELBONTÁSBAN IS MEGVAN, ÉS ROSSZABB: 26 ÜZENET EGY ÓRA ALATT,
+ÖT CÍMZETTNEK -- ebből KETTŐ a 7-es plafonon** (dexter 7, jarvis 7, mandark 6, friday 4,
+deeper 2). A per-címzett kapu aznap HÁROMSZOR tüzelt: kétszer NYUGTÁZÁSRA (helyesen, az a
+levél el sem megy), egyszer egy ENGEDÉLYRE, ami valakit BLOKKOLT -- az a kártyára került.
+**A szám nem a plafont cáfolja, hanem a küldőt méri.** Három megtagadás egy napon ugyanattól
+a küldőtől azt jelenti, hogy túl sokat ír, nem azt, hogy a kapu szoros. És a koordinátoron
+ez a legélesebb: aznap ő írta a lapra a rövidség-szabályokat, miközben ezt termelte.
+*(A mérő újrafuttatható: `from_agent='marveen'`, `created_at >= now-3600`, `to_agent` szerint.)*
+
+Mért eset: 48 üzenet EGYETLEN címzettnek egy nap alatt; és egy 2,4 órás ablakban 3 pending, mind
+egy küldőtől, a legrégebbi 32 perces. **Nem a total a baj, hanem hogy gyorsabban termelsz, mint
+ahogy EGY címzett fogyaszt.**
+
