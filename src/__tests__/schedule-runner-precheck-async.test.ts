@@ -230,7 +230,7 @@ describe('wiring (source-level)', () => {
     // The fork's decideRetryPreCheck wrapper (22d7f41e) carries the fresh run: the awaited throttled form is its runFresh.
     expect(retryLoop).toMatch(/await decideRetryPreCheck\([\s\S]*?\(\) => retryPreCheck\(taskDef, now\),/)
     expect(retryLoop).not.toMatch(/runPreCheck\(taskDef\)/)
-    expect(retryLoop.indexOf('retryPreCheck(taskDef')).toBeLessThan(retryLoop.indexOf('attemptFireTask(taskDef,'))
+    expect(retryLoop.indexOf('retryPreCheck(taskDef')).toBeLessThan(retryLoop.indexOf('attemptFireTask(current,'))
   })
 
   it('the cron loop records its fresh answer right after running it', () => {

@@ -290,11 +290,11 @@ describe('schedule-runner wiring (order inside each loop)', () => {
   it('cron: the hit is remembered BEFORE the pending-key shortcut and before firing', () => {
     const remember = at(cron, 'if (preCheckHit) rememberRetryPrefix(key, cronPc.prefix as string)')
     expect(remember).toBeLessThan(at(cron, 'if (pendingKeys.has(key))'))
-    expect(remember).toBeLessThan(at(cron, 'attemptFireTask(task,'))
+    expect(remember).toBeLessThan(at(cron, 'attemptFireTask(current,'))
   })
 
   it('cron: the busy drop goes through shouldDropBusyTick with the hit', () => {
-    expect(cron).toContain('if (shouldDropBusyTick(task, now, preCheckHit))')
+    expect(cron).toContain('if (shouldDropBusyTick(current, now, preCheckHit))')
     expect(cron).not.toContain('if (task.skipIfBusy && !task.forceSend && skipIfBusyIsSafe(task.schedule, now))')
   })
 
@@ -312,13 +312,13 @@ describe('schedule-runner wiring (order inside each loop)', () => {
     expect(block).toContain('() => retryPreCheck(taskDef, now),')
     expect(block).toContain('if (decided.stored === null) clearRetryPrefix(key)')
     expect(block).toContain('else if (decided.stored !== undefined) replaceRetryPrefix(key, decided.stored)')
-    expect(call).toBeLessThan(at(retry, 'attemptFireTask(taskDef,'))
+    expect(call).toBeLessThan(at(retry, 'attemptFireTask(current,'))
   })
 
   it('retry: the decided prefix actually reaches the injection', () => {
     // Computing the right prefix and then firing without it would pass every
     // check above. The cron loop has this pin already; the retry loop had none.
-    expect(retry).toContain('attemptFireTask(taskDef, row.agent_name, now, retryPc.prefix, heldMs, heldReason)')
+    expect(retry).toContain('attemptFireTask(current, row.agent_name, now, retryPc.prefix, heldMs, heldReason)')
   })
 
   it('both loops clear the stored hit when it is delivered', () => {
