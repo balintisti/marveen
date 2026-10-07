@@ -243,7 +243,9 @@ describe('POST /api/agents: untouched files still get written (the guard is not 
     expect(read('CLAUDE.md')).toBe(GEN_CLAUDE)
     expect(read('SOUL.md')).toBe(GEN_SOUL)
     expect(existsSync(join(dir(), 'CLAUDE.generated.md'))).toBe(false)
-    expect(r.body).toEqual({ ok: true, name: NAME })
+    // The sandbox has no gate scripts, so the route also reports missingGates (card
+    // 9419cf92); this test is about the persona fields, so that one is left out.
+    expect({ ...r.body, missingGates: undefined }).toEqual({ ok: true, name: NAME })
     expect(skipNotices()).toHaveLength(0)
   })
 
