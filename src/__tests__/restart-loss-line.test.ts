@@ -86,7 +86,7 @@ describe('a restart-ertesites hordozza a sajat mereset', () => {
     const dRow = (id: number, from: string, deliveredMs: number, createdMs = deliveredMs, head = 'kerdes') =>
       ({ id, status: 'delivered', created_at: sec(createdMs), delivered_at: sec(deliveredMs), from_agent: from, head })
     // the REAL wake-up text, not a copy: a reworded builder must fail here, not start alarming
-    const wakeHead = buildWakeMessage('friday', 12, 3, [], RESTART).slice(0, 40)
+    const wakeHead = buildWakeMessage('friday', 12, 3, [], RESTART, 'assigned_open_cards').slice(0, 40)
 
     it('egy ablakon beluli, KULDO altal irt delivered sor MEGAKADALYOZZA a "NINCS mit ujrakuldeni"-t', () => {
       const line = buildRestartLossLine([dRow(716972, 'didi', RESTART - 10 * 60_000)], RESTART)
