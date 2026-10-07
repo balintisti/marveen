@@ -95,7 +95,7 @@ describe('the wake names a floor expiry AS a floor expiry, not as work', () => {
   const workCard = { id: 'aaaaaaaa-1', status: 'planned', priority: 'normal', title: 'real work' }
 
   it('its own labelled group, with the floor date, and NOT under FELVEHETO MUNKA', () => {
-    const msg = buildWakeMessage(ME, 12, 2, [workCard, floorCard], nowMs)
+    const msg = buildWakeMessage(ME, 12, 2, [workCard, floorCard], nowMs, 'assigned_open_cards')
     expect(msg).toMatch(/FELVEHETO MUNKA \(1\)/)
     expect(msg).toMatch(/PADLO-LEJARAT \(1\)/)
     expect(msg).toContain(`padlo ${new Date((NOW - DAY) * 1000).toISOString().slice(0, 10)}`)
@@ -104,7 +104,7 @@ describe('the wake names a floor expiry AS a floor expiry, not as work', () => {
   })
 
   it('a floor-only wake asks for a RE-MEASURE, not a review answer', () => {
-    const msg = buildWakeMessage(ME, 12, 1, [floorCard], nowMs)
+    const msg = buildWakeMessage(ME, 12, 1, [floorCard], nowMs, 'assigned_open_cards')
     expect(msg).not.toMatch(/FELVEHETO MUNKA/)
     expect(msg).toMatch(/PADLO-LEJARAT \(1\)/)
     expect(msg).toContain('Merd ujra a legfelso PADLO-LEJARAT')
@@ -113,7 +113,7 @@ describe('the wake names a floor expiry AS a floor expiry, not as work', () => {
   })
 
   it('the asymmetry note declares that the re-query line does not count expired floors', () => {
-    const msg = buildWakeMessage(ME, 12, 1, [floorCard], nowMs)
+    const msg = buildWakeMessage(ME, 12, 1, [floorCard], nowMs, 'assigned_open_cards')
     expect(msg).toContain('a LEJART padloju `waiting` kartyakat')
   })
 

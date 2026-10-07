@@ -99,3 +99,43 @@ describe('a megtagadas-keszlet visszaallitasa be van kotve', () => {
     expect(seed).toBeLessThan(select)       // -1 < N osszehasonlitas trivialisan atmenne
   })
 })
+
+// Card 3b722cb5, didi's W2: making buildWakeMessage's `kind` required closed "forgot the
+// argument" (TS2554), but not "passed the WRONG one". Hard-coding the old value,
+// `'assigned_open_cards'`, at the call site compiled and stayed 347/347 green -- and a
+// review agent got the old, self-contradicting wake again. The property that matters is
+// CORRESPONDENCE: the wake is worded for the same work check the work was SELECTED with.
+// A source assertion, with the same limit as the rest of this file: it proves the values
+// are connected, not that the running process behaves.
+describe('the wake is worded for the same work check the work was selected with (3b722cb5)', () => {
+  it('buildWakeMessage gets <the selection check>.kind, not a literal or another value', async () => {
+    const ts = (await import('typescript')).default
+    const sf = ts.createSourceFile('w.ts', SRC, ts.ScriptTarget.Latest, true)
+    const calls = (name: string) => {
+      const out: import('typescript').CallExpression[] = []
+      ;(function visit(n: import('typescript').Node) {
+        if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === name) out.push(n)
+        ts.forEachChild(n, visit)
+      })(sf)
+      return out
+    }
+    const unwrap = (e: import('typescript').Expression): import('typescript').Expression =>
+      ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isNonNullExpression(e) ? unwrap(e.expression) : e
+
+    const [selection] = calls('selectDeclaredWork')
+    expect(selection).toBeDefined()
+    const selectedWith = unwrap(selection.arguments[0])
+    expect(ts.isIdentifier(selectedWith)).toBe(true)
+
+    const wakes = calls('buildWakeMessage')
+    expect(wakes.length).toBeGreaterThan(0)
+    for (const wake of wakes) {
+      const kindArg = unwrap(wake.arguments[5])
+      expect(ts.isPropertyAccessExpression(kindArg) && kindArg.name.text === 'kind').toBe(true)
+      const owner = unwrap((kindArg as import('typescript').PropertyAccessExpression).expression)
+      expect([ts.isIdentifier(owner) ? owner.text : owner.getText(sf)]).toEqual([
+        (selectedWith as import('typescript').Identifier).text,
+      ])
+    }
+  })
+})

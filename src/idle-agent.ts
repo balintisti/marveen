@@ -469,7 +469,7 @@ export function decideIdleAlert(
   }
 }
 
-const VALID_KINDS: readonly WorkCheckKind[] = ['assigned_open_cards', 'testing_without_my_comment', 'waiting_on_me', 'none']
+export const VALID_KINDS: readonly WorkCheckKind[] = ['assigned_open_cards', 'testing_without_my_comment', 'waiting_on_me', 'none']
 
 /**
  * Parse a declared work check. Returns null for "not declared" -- which is NOT the
@@ -1382,7 +1382,7 @@ export function buildPullNotice(
   ].join('\n')
 }
 
-export function buildNoWorkNotice(agent: string, minutes: number, nowMs: number): string {
+export function buildNoWorkNotice(agent: string, minutes: number, nowMs: number, kind?: WorkCheckKind | null): string {
   // THIS NOTICE RIDES THE COORDINATOR'S QUEUE, AND THAT IS WHY IT IS STAMPED (card 7edc5839).
   //
   // Card 1d800670 stamped the sibling notice because it rides the queue it reports. The
@@ -1447,9 +1447,21 @@ export function buildNoWorkNotice(agent: string, minutes: number, nowMs: number)
     // egeszen mas halmazt szamolt (a `testing` oszlop, amire O nem szolt hozza), egy `none`
     // agensnel pedig NULLAT, barmennyi kartya all a neven. Enelkul a sor a szomszed kerdesre
     // valaszol -- az or tekintelyevel a hata mogott.
-    '`workcheck.json` `kind`-jat: ez a sor az `assigned_open_cards` alakot kerdezi, es',
-    'egy `testing_without_my_comment` vagy `none` deklaracio mellett MAS halmazt ad, mint amit',
-    'en szamoltam.',
+    // ITT KORABBAN KEZZEL FEL VOLT SOROLVA A TOBBI KIND, ES AZ ELAVULT (kartya faa6003a).
+    // A felsorolas 2026-09-06-an (5f36f85c) TELJES volt -- harom kind letezett. 2026-09-11-en a
+    // `waiting_on_me` negyedikkent beolvadt (b2516432), es ez a mondat nem kovette: ot napon at
+    // egy `waiting_on_me` agensrol szolo ertesites ugy olvasodott, mintha a kind-ja a felsorolt
+    // harom egyike lenne. **EZERT NINCS TOBBE FELSOROLAS: "MINDEN MAS" nem tud elavulni**, es ha
+    // a kind ISMERT, a mondat MEGNEVEZI -- akkor nem kell altalanositani.
+    ...(kind && kind !== 'assigned_open_cards'
+      ? [
+          `\`workcheck.json\` \`kind\`-jat: a(z) "${agent}" deklaracioja \`${kind}\`, tehat ez a sor`,
+          'MAS halmazt ad, mint amit en szamoltam.',
+        ]
+      : [
+          '`workcheck.json` `kind`-jat: ez a sor az `assigned_open_cards` alakot kerdezi, es',
+          'MINDEN MAS deklaracio mellett MAS halmazt ad, mint amit en szamoltam.',
+        ]),
     // ES A `testing` AL-SZURO, ami eddig SEHOL nem volt kimondva -- marveen ezt az egy sort
     // nevezte meg (k30). A fenti sor a `testing` kartyakat MIND beszamitja; a szamlalo csak
     // azokat, ahol a labda meg az ellenorzonel van. Tehat egy NEM-URES valasz onmagaban meg
@@ -1479,7 +1491,11 @@ export function buildWakeMessage(
   workCount: number,
   items: { id: string; title?: string | null; priority?: string | null; status?: string; due_date?: number | null }[],
   nowMs: number,
-  kind: WorkCheckKind = 'assigned_open_cards',
+  // REQUIRED, not defaulted (card 3b722cb5, didi): with a default, dropping the
+  // argument at the watcher's call site compiled and silently gave a review
+  // agent the old, self-contradicting wake -- 3688/3688 tests green. Now the
+  // omission is a compile error (tsc --noEmit, and the build).
+  kind: WorkCheckKind,
 ): string {
   const rank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 }
   // Pickable first, then priority within each group. WHICH cards are pickable depends on
@@ -1571,16 +1587,43 @@ export function buildWakeMessage(
     // `testing_without_my_comment` mellett a parancs-sor azonos, mikozben az uzenet TOBBI resze
     // elter -- tehat a fuggveny hasznalja a kind-ot, csak epp itt nem.
     `${ASYMMETRY_NOTE} a jovobeli \`due_date\`-et, es a \`workcheck.json\` \`kind\`-jat.`,
-    isReviewQueue
-      ? 'A te deklaraciod `testing_without_my_comment`, tehat en a `testing` oszlopot szamoltam, amire'
-      : 'A te deklaraciod `assigned_open_cards`, tehat ez a sor ugyanazt a halmazt kerdezi, amit szamoltam --',
-    isReviewQueue
-      ? 'meg nem szoltal hozza. A fenti sor a NEVEDEN allo nyitott kartyakat adja: MASIK halmaz.'
-      // The floor clause by KIND, not by "not the review queue": this else-branch also serves
-      // waiting_on_me today (the mislabel faa6003a fixes), and it counts no floors.
+    // A CIMKE KIND-ENKENT IRODOTT, ES A KOVETKEZO KIND SAJAT AG NELKUL ERKEZETT (kartya faa6003a).
+    // 2026-09-06-an (5f36f85c) ez TELJES volt: harom kind letezett, es a fenti komment is "a HAROM
+    // kozul csak az EGYIKET"-et mond. 2026-09-11-en a `waiting_on_me` bekerult (b2516432, "a
+    // koordinator belep a populacioba"), es a cimke nem kovette. Ot napig minden `waiting_on_me`
+    // agens KET hamis allitast olvasott magarol: hogy a deklaracioja `assigned_open_cards`, es hogy
+    // a fenti sor "ugyanazt a halmazt kerdezi" -- mikozben a ketto DISZJUNKT (merve 2026-09-17: a
+    // felajanlott top5-bol 0 szerepelt a re-query 305-os listajaban).
+    // EZERT NEM TERNARY TOBBE: az ALAPERTELMEZES a szukszavu, IGAZ alak, es CSAK az
+    // `assigned_open_cards` allit kozel-azonossagot. Egy otodik kind igy NEMA tud maradni, de
+    // HAMISAT nem tud allitani -- ez a kulonbseg a hianyzo es a megteveszto valasz kozott.
+    ...(isReviewQueue
+      ? [
+          'A te deklaraciod `testing_without_my_comment`, tehat en a `testing` oszlopot szamoltam, amire',
+          'meg nem szoltal hozza. A fenti sor a NEVEDEN allo nyitott kartyakat adja: MASIK halmaz.',
+        ]
       : kind === 'assigned_open_cards'
-        ? 'a fenti ketto kivetelevel, ES a LEJART padloju `waiting` kartyakat, amiket en beszamitok, a sor nem.'
-        : 'a fenti ketto kivetelevel.',
+        ? [
+            'A te deklaraciod `assigned_open_cards`, tehat ez a sor ugyanazt a halmazt kerdezi, amit szamoltam --',
+            // The floor clause from HEAD (fb4e6622): only this kind counts expired-floor waiting cards.
+            'a fenti ketto kivetelevel, ES a LEJART padloju `waiting` kartyakat, amiket en beszamitok, a sor nem.',
+          ]
+        : kind === 'waiting_on_me'
+          ? [
+              'A te deklaraciod `waiting_on_me`, es a fenti sor NEM ezt reprodukalja: kihagyja a',
+              '`waiting` oszlopot, tehat a fent felajanlott tetelek NEM lesznek benne. MASIK halmaz.',
+            ]
+          : [
+              // EZ AZ AG SZANDEKOSAN SZUKSZAVU (didi merte 2026-09-17, faa6003a k6). Az elozo
+              // alakja a `waiting` oszlopot nevezte meg INDOKKENT -- ami a `waiting_on_me`-re igaz,
+              // egy JOVOBELI otodik kindre viszont nem: egy `planned` tetelt a re-query
+              // (`status not in ('done','waiting')`) BELEVENNE, tehat a mondat masodik fele
+              // hamis lenne, a megnyugtato iranyba. A fenti komment ("hamisat nem tud allitani")
+              // a CIMKERE igaz volt, erre a MONDATRA nem -- ugyanaz az alak, egy reteggel lejjebb.
+              // Ezert itt csak az all, ami MINDEN kindre igaz: a sor nem ezt a deklaraciot
+              // reprodukalja. Hogy MIT hagy ki, azt a kind sajat aga mondja meg, ha van.
+              `A te deklaraciod \`${kind}\`, es a fenti sor NEM ezt reprodukalja. MASIK halmaz.`,
+            ]),
   )
   out.push(
     '',
