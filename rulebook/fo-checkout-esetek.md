@@ -515,3 +515,78 @@ Nem „beolvadt", hanem:
 Három szó, és utána a kártya önmagában eldönthető. Enélkül a „beolvadt" mindhárom esetben igaznak
 látszik, és csak az elsőben jelenti azt, hogy a felhasználó számára megtörtént.
 
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 213-217, szó szerint -->
+*(A mért esetek TELJES szövege -- a hook-kézbesítés három állítása, a `web/` jelölő-mérés, a launchd
+TEMP-foglalás, az őr-halmaz öt szivárgása, a gate-szkriptek átvételi csapdája, a `--show-toplevel`
+visszavonás és a decision-index esete -- `rulebook/fo-checkout-esetek.md`. 31 298 karakter volt itt.
+A korábbi `rulebook/telepitesi-savok-esetek.md` és `rulebook/letezes-es-eleres-esetek.md` továbbra is
+érvényes, azokat ez nem váltja ki.)*
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 254-298, szó szerint -->
+### A HÁROM RÉTEG, AMIT A „KÉSZ" ÖSSZEMOS
+
+    MERGED ..... a tartalom a torzson van
+    BUILT ...... a tartalom a `dist/`-ben van    <- EZT meri a `.built-commit`, es igazat mond
+    RUNNING .... a tartalom abban a FOLYAMATBAN van, amit a felhasznalo hasznal
+
+**A marker NEM HAZUDIK: MÁS kérdésre válaszol.** Mért eset: nyolc `marker == HEAD` ellenőrzés, mind
+igaz, miközben a futó folyamat **41 perccel** a saját buildje mögött állt. **A `build.status` mező
+sem mérő:** EGY mezőben KÉT független feltételt hordoz, és a `stale-source` ág ELŐBB tér vissza --
+ha mindkettő áll, ELHALLGATJA a RUNNING-rést.
+
+**A HÁROM KÉRDÉS, ÉS MINDHÁRMAT KÜLÖN KELL FELTENNI:**
+
+    lemaradt-e a FOLYAMAT a sajat buildjetol? .... `startedAt < builtAt`
+    lemaradt-e a BUILD a torzstol? ............... `git rev-list --count <builtCommit>..HEAD -- src/`
+    ott van-e a KONKRET valtozas a dist-ben? ..... `ls dist/<ut>` -- parancs nelkul is olvashato
+
+```bash
+curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" http://localhost:3420/api/overview \
+  | python3 -c "import json,sys; b=json.load(sys.stdin)['build']; \
+      print('RUNNING elavult?', b['startedAt'] < b['builtAt'], '| status:', b['status'])"
+# KONTROLL mindket iranyba: HEAD..HEAD -> 0, es ugyanez a mero a teljes tortenetre -> nem-nulla
+```
+
+**A DELTA-CRM-BEN A RUNNING RÉTEG MÉRŐJE MÁS, A RÉS HORDOZÓJA PEDIG NÉMA.** A `deploy.yml` a
+`github.sha`-val címkézi a képet, tehát **a kép-címke MAGA a commit SHA**:
+
+```bash
+gcloud run services describe delta-crm-backend --region europe-west1 --project delta-crm-483922 \
+  --format='value(spec.template.spec.containers[0].image)'        # a cimke = a FUTO commit
+gh api repos/balintisti/Delta-CRM/compare/<az a sha>...main --jq '.ahead_by'   # 0 = KI VAN SZALLITVA
+# KONTROLL: compare(<sha>, UGYANAZ) -> "identical", kulonben a mero nem tud nullat mondani
+```
+
+**A HORDOZÓ: a `Deploy to Cloud Run` `workflow_run`-ra fut, tehát egy PIROS CI mellett `skipped`.**
+Nem bukik, nem riaszt, nem hagy nyomot -- a merge megtörtént, a telepítés SOHA nem indult el.
+**ÉS NE ÍRJ RÁ DETEKTORT: az a GYAKORI eset** (100 futáson 45 skipped / 50 success), és a kihagyás
+ÖNMAGÁT GYÓGYÍTJA, mert a telepítés KUMULATÍV.
+
+> **Egy `main`-re való merge után a kérdés nem az, hogy ZÖLD-E A CI, hanem hogy MOZDULT-E A
+> KÉP-CÍMKE.** A rés, ami számít, kizárólag a CSÚCSON van: a main feje kontra az ÉLES kép-címke.
+
+*(A mért esetek -- a 41 perces rés, a 14:37-es tenant-javítás, ami 16:0x-kor még nem volt élesben,
+és a `skipped`-populáció mérése -- `rulebook/fo-checkout-esetek.md`.)*
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 358-360, szó szerint -->
+*(A mért esetek -- a `web/` jelölő-mérés, a launchd TEMP-foglalás, a `--show-toplevel` visszavonás --
+`rulebook/fo-checkout-esetek.md` és `rulebook/telepitesi-savok-esetek.md`.)*
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 504-513, szó szerint -->
+### EGY `scripts/` MERGE UTÁN FUSSON LE A DECISION-INDEX ŐRE
+
+```bash
+python3 scripts/decision-index.py --check    # 0 = friss, 3 = ELAVULT (javitas: ugyanez --check nelkul)
+```
+
+Bármely merge, ami `scripts/` alatt ÚJ fájlt ad vagy átnevez, elavít egy GENERÁLT indexet máshol a
+fában -- és a heurisztika meg a bukás TERVEZÉSBŐL diszjunkt, tehát a saját tesztjei nem fogják meg.
+*(A mért eset: `~/.claude/skills/hook-savok-es-commit-eredet/`.)*
+

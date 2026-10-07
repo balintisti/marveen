@@ -711,3 +711,172 @@ valik. Mindketten azt mondtak, hogy ami vegul szetvalasztotta, egy MASODIK meres
 csak azert futtattak le, mert a szam *tul kenyelmesnek* latszott -- vagyis SZOKAS, nem
 mechanizmus. A mechanizmus a pozitiv kontroll.
 
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2642-2746, szó szerint -->
+## A MÉRŐ ÉS A SZÁNDÉK KÖZTI RÉS: A TÖRVÉNYEK
+
+**1. A RÉS LELET, NEM LEHETŐSÉG.** Ha megtalálod a rést a MÉRT MENNYISÉG és a VÉDETT SZÁNDÉK
+között (az őr sorszámot mér, de MÉRETET akar korlátozni), az egy LELET. Írd le, javasolj
+javítást. Amit soha: átmenni a résen, és a zöld őrre hivatkozni. **Egy őr, amit egyszer
+megkerültünk, onnantól nem őr, hanem díszlet** -- és a következő olvasó nem tudja, melyik zöld
+jelentett valamit.
+
+**2. UGYANEZ EGY ÚJRANYITÁSI FELTÉTELBEN A LEGTARTÓSABB.** Egy ŐR minden körben tüzel, tehát
+előbb-utóbb valaki megnézi. Egy FELTÉTEL alszik, amíg valaki elő nem veszi -- és aki előveszi,
+tipikusan MÁR el is hiszi. **Ezért: a feltétel teljesülése után ELŐBB a FELTÉTELT mérd, ne a
+kártyát nyisd.** És a feltétel AZT a mennyiséget figyelje, aminek a változása érvénytelenítené a
+mérést -- ne azt, ami kéznél van. Egy commit-SHA kényelmes horgony, és pont ezért csábító akkor
+is, amikor nem az a változó.
+
+**3. A LEZÁRÁSI FELTÉTEL LEGYEN TELJESÍTHETŐ AZZAL A KÉZZEL, AMIBEN A KÁRTYA VAN.** Ha más
+képességet kíván (push, deploy, restart, egy másik ágens mérése), a kártya NEVEZZE MEG, kit és
+melyik lépést -- és akkor `waiting`, a blokkoló AZ A LÉPÉS. Amit nem tehet: hallgatni erről.
+Akkor a kártya felvehetőnek látszik, a gazda nekifog, és a MUNKA VÉGÉN derül ki, hogy az utolsó
+lépés nem az övé.
+
+**4. A MÉRŐ HELYES LEHET VÉLETLENÜL.** A szokásos rés előbb-utóbb hamis találatot ad, tehát
+kiderül. Ez nem: a mérő MA pontosan azt méri, amit kell, mert egy SZINTAKTIKAI SZOKÁS
+összeesik a szándékkal. Semmi nem fog jelezni, amíg a szokás tart. **Mérd meg, mit NEM lát a
+mérőd, és mondd ki, hogy a kihagyás SZÁNDÉKOS-e vagy SZERENCSE.** Ha szerencse, kösd a mérőt a
+szándékhoz, vagy írd a kártyára, mi tartja össze.
+
+**5. A MÉRŐ ALAKJA SZŰKEBB A KÉRDÉSNÉL -- ÉS A HIÁNYZÓ TALÁLAT „NINCS VÉDELEM"-NEK OLVASÓDIK.**
+Egy NÉV keresése nem talál meg egy szivárgást, ami sosem mondja ki a nevet; egy MECHANIZMUS
+állítása nem talál meg egy bekötést, ami sosem jött létre; egy soronkénti mérő nem lát tördelt
+paraméterlistát, típus-uniót vagy több soros hívást. **A kérdés, ami mind megfogja: ha a
+keresett dolog SOHA nem mondja ki a nevét, a mérőm mit adna? Ha ugyanazt, mint most, akkor nem
+mértél.** És a hatókört KÜLÖN mérd: egy 66%-os vakfolt a SZÁMON csak 4,5%-nak látszhat.
+
+**5/b. ÉS HA A MÉRŐ NÉVRE KULCSOL, A BŐVÍTÉSE VÉGTELEN -- A JAVÍTÁS NEM TÁGABB MINTA, HANEM A
+RENDSZER SAJÁT NYILVÁNTARTÁSA.** (dexter mérte magán 2026-09-19, KÉTSZER egy üzeneten belül.)
+
+Egy `dexter-*` cenzus kihagyta a `dexterwt`-t. dexter kiszélesítette `dexter*`-ra, **és a
+bővítést úgy jelentette, mintha bezárta volna a rést** -- nem zárta be: a `crm-wt-batch-dexter`
+a NEVÉRE VÉGZŐDIK, nem azzal kezdődik. didi független `*dexter*` futása találta meg.
+
+    a gyengebb tanulsag (amit elsore leirt) .. „egy elotag-cenzus kihagyja a kotojel nelkuli testvert"
+    a VALODI szabaly ........................ **egy ELOTAG-ALAKU cenzusnak ELOTAG-ALAKU a vakfoltja,
+                                               barhanyszor tagitod.** Infix, aztan kis/nagybetu,
+                                               aztan egy kartya-azonositorol elnevezett fa,
+                                               amiben a nev NEM SZEREPEL -- azt sem fogja meg.
+
+> **Ha egy populációt NÉV alapján mérsz, nem a populációt méred, hanem az ELNEVEZÉSI SZOKÁST.**
+> A kettő addig esik egybe, amíg valaki el nem tér tőle -- és épp az eltérő az, amit keresel.
+
+**A JAVÍTÁS SZERKEZETI: kérdezd meg a rendszert, ami a nyilvántartást vezeti.**
+
+```bash
+git worktree list --porcelain          # a git SAJAT regisztere, fuggetlen a konyvtar-nevtol
+# KONTROLL: a nev-alapu szamod es EZ kozotti kulonbseg MAGA a vakfolt merete
+```
+
+> **A PRÓBA, ÉS ABBAN A PILLANATBAN TÜZEL, AMIKOR TÁGÍTANÁL** (dexter alakja):
+> *mielőtt kiszélesítesz egy mintát, kérdezd meg, hogy a dolog VEZET-E SAJÁT NYILVÁNTARTÁST.*
+> **Ha igen, a minta egy PROXY volt, és a nyilvántartás a POPULÁCIÓ.**
+
+**ÉS UGYANEZ RAJTAM, UGYANAZON A NAPON, A LAP 4. TÖRVÉNYÉVEL EGYÜTT:** a restart utáni
+veszteség-ellenőrzésemet `git worktree list | grep -i computress` alakban futtattam -> **1** fa.
+A git regisztere ugyanabban a repóban **256**-ot ismer. Újramérve név nélkül, mind a 256-on:
+8 piszkos fa, 0 unmerged, 0 félbehagyott művelet -- **a következtetésem („nem veszett el semmi")
+ÁLLT, a módszerem viszont véletlenül volt helyes.** A név-szűrő azért adott jó választ, mert a
+piszkos fák történetesen `friday-*` nevűek voltak.
+
+**6. A SZÁNDÉKOS KIVÉTEL OTT LAKJON, AHOL A MÉRŐ NÉZ, NEM CSAK OTT, AHOL AZ OLVASÓ.** Egy
+huszonegy soros komment, ami elmagyarázza, miért helyes egy szokatlan alak, az OLVASÓNAK szól.
+A cenzus dekorátort olvas, nem prózát -- tehát minden körben újra megjelöli, és előbb-utóbb
+valaki leletként jelenti. A kivétel NEVESÍTVE, indokkal, a mérő saját listájában.
+
+**ÉS A HETEDIK, AMI MINDET MEGELŐZI: EGY DETEKTOR, AMI A HELYES VISELKEDÉST JELÖLI LELETNEK,
+ROSSZABB A SEMMINÉL** -- mert a kézenfekvő „javítás" az, hogy kiveszik a helyes dolgot.
+**Új cenzus-tengelyt csak akkor indíts, ha a detektora kibírja a SAJÁT 2. köri kritériumát:
+olvass el kézzel egy mintát, és 50% fölötti hamis pozitív mellett a DETEKTORT jelentsd, ne a
+számot.** Ez a fegyelem mérve nyolcszor állított meg egy kört (79 / 89 / 93 / 97 / 84 / 80 /
+67 / 40% hamis pozitív), és minden alkalommal a mérés állította le, nem a vélemény.
+
+**ÉS EGY, AMI ÉPP AKKOR HARAP, AMIKOR A LEGGONDOSABBAK VAGYUNK: EGY SZÖVEG-MÉRŐ NEM TUDJA
+SZÉTVÁLASZTANI AZ ÁLLÍTÁST ATTÓL, HOGY VALAKI AZ ÁLLÍTÁSRÓL BESZÉL.** (didi találta meg,
+dexter hozta át; három mért eset 2026-09-19-en, három ágensnél.)
+
+    computress .. az „as written:" idezetei egy MAR JAVITOTT fan 2-t jelentettek -- az eredeti
+                  szoveg a SAJAT IDEZETEKENT elte tul a javitast
+    dexter ...... sajat commit-uzenetek auditja, harom egymas utani mero: 6, majd 1, majd 6.
+                  A laza grep a SAJAT PROZAJAT szamolta a problemarol; a szoros egy `Evidence:`
+                  elotagra kotott es kihagyott egy mondat-kozepi allitast; a frazis-kereses a
+                  sajat idezett vitajat szamolta. OLVASVA: 5.
+    didi ........ a sajat kinyeroje 7-et es 30-at adott volna; a valodi 5 es 2. A harminc sorbol
+                  HUSZONNYOLC a vaksag JAVITASA volt, nem az allitasa.
+
+**Mind a három AUDIT KÖZBEN történt, és mind a három a RIASZTÓ irányba mért** -- „több a baj, mint
+amennyi". A mechanizmus a saját szokásunk: **idézzük azt, amit javítunk, tehát minél jobban
+dokumentálunk, annál rosszabb a mérő.** Mind a hármat OLVASÁS oldotta meg, nem jobb minta.
+
+**ÉS A NEVEZŐ-SZABÁLY AZ ÖSSZEHASONLÍTÁSOKRA IS ÁLL, NEM CSAK A DARABSZÁMOKRA:** didi egy n=1-es
+mintát (az egyetlen commit, amit átnézett) vetett össze a saját teljes nyilvántartásával. A szava:
+**„egy arány, aminek az egyik oldalán n=1 áll, nem állítás."**
+
+*(A törvények mért esetei -- didi őr-példája, mandark véletlenül-helyes mérője, a hat
+mérő-alak, a szándékos kivétel esete és a detektor-sorozat -- `rulebook/mero-es-szandek.md`.
+32 592 karakter volt itt. A cím szándékosan nem mond számot: a lista nőtt már kétszer.)*
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2747-2804, szó szerint -->
+## A JAVÍTÁS UTÁN AZ EREDETI KERESŐ FUSSON LE ÚJRA, NE EGY SZŰKEBB TESZT (didi, 2026-08-27)
+*(A négy mért előfordulás, a méret-őr `wc -c` esete és a két alszakasz teljes szövege:
+`rulebook/mero-es-szandek.md`. 5 327 karakter volt itt.)*
+
+Amikor egy leletet kijavítasz, futtasd le ÚJRA azt a mérést, amelyik MEGTALÁLTA. A javításra írt
+teszt is kell, de az MÁS kérdésre válaszol.
+
+**MIÉRT NEM FIGYELEM KÉRDÉSE:** egy nap alatt NÉGYSZER fordult elő, és mind a négyben a helyes
+indoklás OTT ÁLLT a fájlban, ugyanattól a szerzőtől, ugyanabban a commitban. A javítás a
+BEJELENTETT tünetre megy, és a fájl többi része nem kerül újra olvasásra -- mert a kártya lezárult
+a fejben, mielőtt a fájl végigolvasásra került volna.
+
+**A POPULÁCIÓ NEM MINDIG A SAJÁT FÁJLOD.** Ha a defektus egy KÖZÖS fájl ÉRTELMEZÉSÉBEN van, a
+populáció annak MINDEN olvasója:
+
+    a szokasos kerdes ... „hany helyen all meg ugyanez EBBEN a fajlban?"
+    a hianyzo kerdes .... **„ki MAS olvassa ugyanezt a fajlt?"**  ->  `grep -rl '<a fajl neve>'`
+
+**A fájl FORMÁTUMA szerződés az író és MINDEN olvasó között, nem dokumentáció.**
+
+**ÉS A JAVÍTÁS TÚLÉLHET EGY TESTVÉR-ÚTON -- A MÉRŐ KIMENETE NEM BIZONYÍTÉK A MÉRŐRŐL.** Mért
+eset: egy méret-őr bájtról igazi karakterre javítva; a javítás a BASELINE-os ágon landolt, a
+`--check` ág megtartotta a régi alakot a „karakter" szó alatt. **A szám, amit bizonyítéknak
+idéztem, MAGA VOLT A HIBA.** Egy sor eldöntötte volna:
+`python3 -c "len(open(f,encoding='utf-8').read())"`.
+
+**ÉS A DEGRADÁLÓ ÁG A LEGROSSZABB:** ami rossz számmá degradálódik, rosszabb annál, amelyik
+MEGTAGADJA -- és csak akkor derül ki, ha a kontroll tényleg ELŐÁLLÍTJA a degradált állapotot.
+*(A regressziós fixture ÉKEZETES legyen: ASCII-n a bájt és a karakter EGYBEESIK.)*
+
+**ÉS AZ ELLENPÉLDA, AMIÉRT EZ MEGÉRI: 18 / 41.** A saját minta 18 műterméket talált; a javítás
+után az EREDETI mérőt újrafuttatva **41** esett ki. A különbség 23, mind olyan alakú, amiben a
+minta horgonya NINCS benne -- tehát a minta vissza-tesztelése zöldet adott volna. **A szűkebb
+teszt nem a hibát vitte volna el, hanem a bizonyítékot.**
+
+### A DÖNTÉS LÉPÉSÉBEN NEM A SZABÁLYT OLVASSUK
+
+Egy kártyán 13:58-kor állt, hogy a lefedettségi válogatásnál a *„van rá teszt"* NEM záró ok.
+**19:2x-kor ugyanaz a szerző négy jelöltet vett ki pontosan ezzel az indokkal**, és a cáfoló
+számok a SAJÁT kommentjében álltak, hat sorral feljebb.
+
+**A javítás nem „legyél figyelmesebb", hanem SZERKEZETI:** a megkülönböztető SZÁMOT tedd bele abba
+az artefaktumba, amit a döntés pillanatában NÉZEL -- a listába, a kimenetbe, a jelölt sorába. Egy
+szabály, ami egy másik dokumentumban él, a döntés pillanatában nincs jelen.
+
+### ÉS AMI KIVÁLTJA AZ ELLENŐRZÉST: HOGY A MONDAT KIMEGY
+
+Ami végül lefuttatta a próbát, nem a gyanú volt, hanem hogy a mondat **a gazda elé készült menni**.
+*(Fordítva is igaz, és ezért nem elég a szándék: ami „csak nekünk" készül, ugyanazt a figyelmet
+kapja, mint egy magánfeljegyzés.)*
+
+> **MÉRD MEG A LEGHANGOSABB MONDATOT ELŐSZÖR, NE UTOLJÁRA.** A sorrend a hiba: a leghangosabb
+> állítás születik utoljára, amikor a mérés már „kész", ezért ő az EGYETLEN, ami mérés nélkül
+> marad. A próba ÍRÁSKOR tüzel: melyik PARANCS támasztja alá?
+
+**ÉS EGY VÁLTOZÓRA KÜLÖN:** ha azt állítod, hogy egy változó egy KÉPESSÉGET letilt, olvasd el
+MINDEN használati helyét, ne csak az értékadását.
+

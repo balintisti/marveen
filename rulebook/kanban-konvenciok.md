@@ -681,3 +681,83 @@ mint az elavult `hot` emlék, csak a táblán: **egy komment nem avul el magát�
 olvasódik, amíg ott áll.** Elég lett volna egy tagmondat: *„ha a 28083 már létezik, ez tárgytalan"*.
 
 
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1362-1367, szó szerint -->
+**A MÉRT OK, AMIÉRT EZ A SZABÁLY LÉTEZIK** (marveen, 2026-09-30, kártya `64aad5a5`): a Delta-CRM-ben
+**173** `done`/`testing` kártya munkája SOHA nem ért az `origin/main`-re, köztük az ÁSZF és az
+adatvédelmi oldal, és egy javítás, amibe Isti KÉTSZER futott bele (`53e39738`). A régi konvenció
+szerint mind „kész” volt, és SEMMI nem mérte a szállítást. Isti szava: *„Ez a lehető legrosszabb,
+elmegy rá az idő, a token, stb és soha nem kerül ki.”*
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1368-1379, szó szerint -->
+A lezárás egyetlen akadálya továbbra is egy NYITOTT LELET is (azt előbb javítani kell, vagy saját
+kártyát kap, különben a lezárással archiválódik).
+
+**DE A `done` NEM JELENTI, HOGY RÁ LEHET ÉPÍTENI.** Ha egy kártya egy másik EREDMÉNYÉT
+HASZNÁLJA (hívja, importálja, kiterjeszti), akkor neki a KISZÁLLÍTOTT munka kell, és a kettő
+között a táblán NINCS MEZŐ. Ilyenkor mondd ki a függőség leírásakor, hogy a KÉSZ munka kell-e
+vagy a SZÁLLÍTÁS -- ha az utóbbi, a kártya `waiting`, és a blokkoló a MERGE, nem a másik kártya.
+És a „javítva" mondja meg, MELYIK ÁGON: a kártya-állapot IDŐPONTOT ad, a repó-állapot HELYET.
+
+**A CÍMBEN NINCS RELATÍV DÁTUM.** „MA MEGMÉRVE" éjfélkor NÉMÁN elromlik; `mérve 09-02,
+origin/main 8562eebc` ugyanannyiba kerül leírni és soha nem avul.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1380-1385, szó szerint -->
+**EGY AZONOSÍTÓ A FAJTÁJA NÉLKÜL KÉTÉRTELMŰ.** A kártya-ID (8 hex) és a rövid SHA ugyanúgy néz ki;
+rossz névtérben ÜRES választ kapsz, amit halott hivatkozásnak olvasol. Az `agent_messages.id` és a
+`kanban_comments.id` pedig UGYANABBAN a számtartományban él (99,9% átfedés), ott a rossz névtér egy
+LÉTEZŐ, más rekordot ad. **Konvenció:** `kártya 3c6c5626` / `commit 3c6c5626` / `msg 17514` /
+`komment 17530`; listából válogatni TELJES ágnévvel, nem azonosítóval.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1386-1397, szó szerint -->
+**CSELEKVÉST ELŐÍRÓ KOMMENT KAPJON LEJÁRATOT** vagy mérhető feltételt („ha X már létezik, ez
+tárgytalan"): egy komment nem avul el magától, de utasításként olvasódik, amíg ott áll.
+
+*(A mért esetek: `rulebook/kanban-konvenciok.md`.)*
+
+**A FOKOZAT A KÓDOT MÉRI, A SÜRGŐSSÉGHEZ A HASZNÁLAT IS KELL.** Ha egy kártya éles használata
+MÉRVE nulla, a mért tény a CÍM ELEJÉRE kerül (`MÉRVE MM-DD: <szám és nevező> -- <cím>`), mert a
+sorrend-döntés pillanatában a lista CSAK a címet mutatja, és mindkét csonkoló a VÉGÉT viszi el.
+A nulla NEM automatikus leminősítés: pillanatfelvétel, és a döntés BEMENETE. **Kivétel, ha a
+szám a címben az ELLENKEZŐ irányba mutat, mint a mérésben** -- akkor az érv megy a címbe, a szám
+a kommentbe.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1398-1402, szó szerint -->
+**A CÍM-JELÖLŐNEK KÉT FOGYASZTÓJA VAN, KÜLÖNBÖZŐ SZÉLESSÉGGEL** (mérve): a tétlen-őr 60
+karakternél vág, a dashboard nem csonkol. Ezért az ÁLLAPOT-jelölő (`PARKOLVA`) elöl, a 60-on
+belül; a MÉRT-TÉNY utótag a végén marad. **De a cím-előtag NEM KAPUZ: a felvehető-predikátum a
+STÁTUSZT nézi, a címet sosem.** Parkoláshoz `waiting` + `PICKABLE WHEN` + dátum-padló kell.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1403-1414, szó szerint -->
+**AZ ÁGENS MAGÁTÓL VESZ FEL MUNKÁT -- ez az ALAPÉRTELMEZÉS.** Van felvehető kártyád és nincs
+ellentétes utasítás? VEDD FEL. Utasítás hiánya NEM megállítás; csak a koordinátor KIMONDOTT,
+okot és időtartamot NEVEZŐ megállítása az. A sorrend:
+1. **ELŐBB FOGLALD LE** (`assignee` + `in_progress`), mert két ágens ugyanazt veszi fel.
+2. **AZTÁN OLVASD EL VÉGIG** -- a leírást ÉS a kommenteket. A foglalás ÜTKÖZÉST előz meg, nem
+   KONTEXTUST szállít; enélkül újra levezeted a leletet, ami már a kártyán áll.
+3. **AZTÁN FUTTASD LE A KÁRTYA SAJÁT KONTROLLJÁT**, mielőtt bármi mást mérnél. Ami rothad, az
+   nem a lelet és nem a javítás, hanem a kártya kimondott KONTROLLJA -- a leírása úgy érződik,
+   mintha a megtétele lenne. (Mérve: három kártyán egy estén, és a harmadikon a kontroll
+   ELBUKOTT, egy kipányvázatlan biztonsági tulajdonságon, 47/47 zöld mellett.)
+4. Ha nem a te területed: NE csináld rosszul, SOROLD ÁT egy soros indoklással.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1415-1420, szó szerint -->
+**EGY BECSLÉS LEFELÉ SOSEM ÍRÓDIK ÚJRA.** Ha felvételkor kiderül, hogy a kártya KISEBB (a
+döntés, amit kérne, már meg van hozva), mondd ki -- a táblán egy zsugorodó kártya
+megkülönböztethetetlen az el nem kezdettől, és a becslés vezérli a sorrendet.
+
+*(A mért esetek: `rulebook/kanban-konvenciok.md`. 34 000 karakter volt itt.)*
+

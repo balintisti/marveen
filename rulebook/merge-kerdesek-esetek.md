@@ -508,3 +508,225 @@ enélkül néma maradt volna: a 09-17-i bontás 242 966 -> 206 545-re vitte a la
 245 325-ön áll. A bontás teljes nyeresége visszanőtt egy éjszaka alatt, és semmi nem szólt --
 ugyanaz az alak, mint az alapvonal-racsni a skilleknél. Kártya kell rá, nem egy újabb bekezdés.)*
 
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 927-996, szó szerint -->
+### AZ ÚJRANYITÁSI FELTÉTEL KÉT FAJTA, ÉS CSAK AZ EGYIK TUD NÉMÁN HAZUDNI
+
+    GATE   a meres ujrafuttatasa a DONTESI PONTON. Nem allit semmit ket felhasznalas kozott,
+           tehat nem tud neman elavulni. SOHA nem riaszt -- ez az ara, es ez az ALAPERTELMEZES.
+    WATCH  egy figyelt mennyiseg, ami majd SZOL. Aktiv igeret: „tamaszkodj ra, amig nem tuzelek."
+           Ez az egyetlen fajta, ami CSENDBEN valhat hamissa.
+
+**A PRÓBA, ÉS CSAK A WATCH-RA ÉRTELMES:** nevezz meg egy változást, ami ÉRVÉNYTELENÍTENÉ a mérést,
+ÉS a feltételt NÉMÁN hagyná. Ha tudsz ilyet mondani, a feltétel rossz. *(Mért bukás: egy feltétel
+KÉT mennyiséget nevezett meg és végig néma maradt, mert az ISMERT TAGOKAT figyelte -- ami változott,
+az a TAGSÁG volt. Egy felsorolás nem tudja figyelni azt, ami még nincs benne.)*
+
+**ÉS EGY HARMADIK FAJTA, AMI ROSSZABB AZ ELAVULTNÁL: A SZÜLETÉSÉTŐL DEKORATÍV FELTÉTEL.** Mért
+eset: a feltétel 17:55-kor íródott („amikor a deploy megtörténik"), a deploy **12:59-kor** már
+megtörtént. Egy ELAVULT feltétel legalább IGAZ volt egyszer; ez soha nem tudott hamissá válni,
+**mert soha nem is várt arra, hogy igazzá váljon** -- és kívülről fegyelmezetten parkolt kártyának
+látszott. **A PRÓBA: mérd meg, hogy a feltétel MOST teljesül-e. Ha igen, nem feltétel, hanem
+díszlet** -- és a kártya `planned`, nem `waiting`.
+
+> **A feltételem egy ESEMÉNYT nevezett meg, ahol egy DÖNTÉS áll.**
+> Az esemény megtörténhet nélkülünk; a döntés soha.
+
+**A DÁTUM ÖNMAGÁBAN NEM ZÁRJA BE** -- egy dátum ANNOTÁCIÓ, nem feltétel: soha nem tüzel, az
+ÉLETKORT teszi láthatóvá, nem a számot igazzá. **DE EGY FELTÉTEL MELLÉ PADLÓKÉNT MŰKÖDIK:**
+
+    PICKABLE WHEN:  a kovetkezo termeszetes valtozas azon a fajlon amugy is esedekesse valik
+    HA SEMMI <datum>-IG:  megcsinalom onalloan
+
+**A kettő EGYÜTT az, ami működik:** a FELTÉTEL engedi, hogy korán tüzeljen; a DÁTUM garantálja, hogy
+egyáltalán tüzel. Külön-külön mindkettő elbukik -- a csupasz dátum sosem tüzel magától, a csupasz
+feltétel pedig **soha nem válik hamissá**, ha az az esemény nem következik be.
+
+**ÉS EGY VAGYLAGOS KAPU NYITOTTNAK LÁTSZIK, MIKÖZBEN AZ EGYETLEN ÖNMŰKÖDŐ ÁGA BE VAN ZÁRVA.**
+(didi mérte és fogalmazta meg 2026-09-19, marveen saját, gyengébb önkritikáját javítva.)
+
+Egy `BÁRMELYIK: (1)... (2)... (3)...` alakú feltétel a szó erejével EGYENRANGÚNAK mutatja az ágait.
+Nem azok. **Osztályozd őket: melyik TÜZEL MAGÁTÓL, és melyikhez kell, hogy valaki DÖNTSÖN?**
+
+    ONMUKODO ag ......... egy mennyiseg valtozik, es a feltetel teljesul. EZ tud NEMAN bezarulni.
+    DONTES-FUGGO ag ..... „X ujrainditja" / „en kiosztok valamit" -- ezek nem felteteelek, hanem
+                          egy DONTES HIANYA. Nem tuzelnek; valakinek meg kell hoznia oket.
+
+**A megnyugtató rész maga a csapda:** a döntés-függő ágak azt sugallják, hogy *„bármikor fel lehet
+oldani"*, és épp ezért nem nézi meg senki, hogy az az EGY ág, amelyik MAGÁTÓL tüzelne, még tud-e.
+
+**A MÉRT ESET:** három ágens `release_condition`-je három ágat kínált; a (2) a keret-mérés élő
+forrásra térését kívánta. A hitelesítés lejárt, a lekérdező `ok: true`-t adott gyorsítótárból, és
+az önműködő ág öt napon át nem tudott tüzelni. A (1) és a (3) végig járható volt -- és pontosan
+ezért nem tűnt fel senkinek, hogy a (2) halott. *(Feloldva 2026-09-19: a `/login` után a forrás
+`authoritative`, a heti keret 81%, mind a három ablak a jövőben.)*
+
+> **A próba, és íráskor tüzel: egy `BÁRMELYIK` mellé írd oda ÁGANKÉNT, hogy ÖNMŰKÖDŐ-e.**
+> Ha egyetlen önműködő ága sincs, az nem feltétel, hanem egy elhalasztott döntés.
+
+**ÉS A KÜSZÖB A ROSSZ KÖRNYEZET EGYSÉGEIBEN NEM KÜSZÖB.** Mért eset: egy falszifikátor „~0,2-2 s
+kontra ~138 s" sávokat mondott, a SAJÁT GÉPEN mérve; a CI-n a válasz 6,6 s lett, ami egyik sávba sem
+esik. **A kár nem a rossz válasz, hanem hogy AZ ADOTT VÁLASZRA NINCS SZABÁLYOD.** A helyes alak
+RELATÍV, a futáson belül: 138,6 s a következő leglassabb 28,3-hoz képest = 4,9x, KILÓGÓ; 6,6 s a
+leglassabb 33,6-hoz képest = 0,2x, meg a top háromban sincs.
+
+**ÉS MELYIK SZÁMLÁRA MEGY A CÍMZETT MUNKÁJA?** Egy KÖLTSÉG-alapú parkolás csak akkor áll, ha a gazda
+tényleg AZT az erőforrást költi. *(Mért eset: egy kártyát a CLAUDE heti keret resetjére parkoltam egy
+ágensnél, aki `deepseek-flash`-en fut -- 0,02% a flotta forgalmából. A feltétel nem csak
+megfigyelhetetlen volt, hanem TÁRGYTALAN.)* A hatókör-változat: `agents/<nev>/agent-config.json` -> `model`.
+
+**AMIT A GATE SEM FED:** a gate EGY utat véd -- azt, ahol a döntést újra meghozzák. Ha valaki a
+SZÁMOT idézi máshol (másik kártyán, üzenetben, Istinek), a gate nem tüzel, és egy elavult nulla utazik.
+
+*(A mért esetek: `rulebook/merge-kerdesek-esetek.md`.)*
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2285-2307, szó szerint -->
+## EGY MERGE-JAVASLAT TÖBB KÉRDÉST KÍVÁN, MINT EGYET -- ÉS A LISTA NŐTT
+*(A mért esetek TELJES szövege -- dexter #154-es kötege, a három seam-bukás, a `.env` öt
+visszavont alakja, az irány-tanulságok és a `dc6da9f0` határesete -- `rulebook/merge-kerdesek-esetek.md`.
+16 244 karakter volt itt.)*
+
+*A cím szándékosan nem mond számot. Négy kérdéssel indult; ma öt áll itt. Számold meg a sorokat.*
+
+| # | a kérdés | mivel |
+|---|---|---|
+| 1 | **ÁLL-E** az állapot? | eldobható worktree, `--detach` a SHA-ra, friss DB, jobonkénti kapuk |
+| 2 | **HELYES-E** az érvelés? | nem-szerzőként, MÁS granularitással, mint amivel mérték |
+| 3 | **ELÉRHETŐ-E** az állapot ONNAN, ahonnan a merge történik? | `git ls-remote origin` |
+| 4 | **MŰKÖDIK-E, AMIVEL MÉREK?** | a saját ellenőrződ is adhat hamis negatívot MINDEN ágra |
+| 5 | **LEFUT-E A KÉSZLET A MERGE-ELT FÁN?** | nem a külön-külön zöld ágakon: a SEAM-en |
+
+**A 3. KÉRDÉS PARANCSA, mert a kártyán álló figyelmeztetés nem véd ott, ahonnan a merge készül:**
+
+```bash
+git ls-remote origin | grep -c <TELJES sha>     # 0 = csak helyben létezik
+# a `git branch -a` NEM elég: a helyi `remotes/origin/...` ref elavulhat
+```
+A merge-javaslatban a SHA mellé egy szó: `helyi` / `origin` / `mindkettő`.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2308-2338, szó szerint -->
+### A 4. KÉRDÉS HÁROM ALAKJA
+
+**(A) EGY MAGYARÁZAT, AMI EGY ISMERT BUKÁST FED, ELNYELI AZ ISMERETLENEKET.** Egy PR-törzs
+tetején álló *„a törzs amúgy is 10/2 egy elavult Prisma-kliens miatt"* helyes és hasznos -- és egy
+VALÓDI `openapi.json is STALE` bukás pontosan ugyanúgy néz ki alóla.
+
+    a magyarazott alapvonal ... 10 buko suite / 2 buko teszt / 10797 atment
+    egy IZOLALT fan, `prisma generate` utan ... **1 / 0 / 10893**
+    a NEVEZO 10815 -> 10896, mert egy suite, ami BE SEM TOLTODIK, nullat ad a nevezohoz
+
+> **Ne magyarázd -- szüntesd meg.** Egy előre megmagyarázott piros az a hely, ahová a valódi jel
+> elbújik. Ha egy pirosat minden körben meg kell magyarázni, a magyarázat nem a megoldás, hanem a
+> költség. *(A kikötés: egy `prisma generate` SYMLINKELT `node_modules`-ban 65 másik worktree
+> kliensét írja át. `islink` mérendő ELŐTTE, és csendes ponton.)*
+
+**(B) EGY HELYI KAPU, AMI KIHAGY, NEM EGY HELYI KAPU, AMI ÁTENGED.**
+
+    `check-generated.sh` KIIRJA: „mobile dependencies are not installed; skipped"  es VISSZAAD: **rc=0**
+
+A szkript a KIMENETÉBEN őszinte és az EXIT KÓDJÁBAN hamis, és az automatizálás az exit kódot
+olvassa. **Ha egy kapu `rc=0`-t ad, keresd meg a SKIPPED sorokat, mielőtt zöldnek veszed.**
+
+**(C) A PARANCS, AMIT EZ A SZAKASZ MAGA ÍR ELŐ, KÉT VILÁGOT FED EGY EXIT KÓDDAL:**
+
+```bash
+git cat-file -e <sha>^{commit} || { echo "NINCS ilyen commit EBBEN a repoban"; exit 1; }
+git merge-tree --write-tree HEAD <sha> >/dev/null 2>&1; echo "rc=$?"
+# a `merge-tree HEAD HEAD -> 0` kontroll a SZOMSZED kerdesre valaszol: azt bizonyitja, hogy a
+# mero tud TISZTAT mondani, NEM azt, hogy a bemenet LETEZIK. Egy nem letezo commit is rc=1.
+```
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2339-2380, szó szerint -->
+### AZ 5. KÉRDÉS: A SEAM AZ ELSŐ FA, AHOL MINDKÉT VÁLTOZÁS LÉTEZIK
+
+**A `merge-tree` TISZTASÁGA SEMMIT NEM ÁLLÍT A KÉSZLETRŐL.** Három mért fajta, és a lista nem
+zárható le előre -- ezért kell a seam-próba, nem egy ellenőrző-lista:
+
+    TARTALMI .... a konfliktus a fajl MASIK regiojaban -> a git nem jelez
+    SZEMANTIKAI . egyik ag atnevez egy mezot, a masik spec-je a regi alakot mockolja
+    IDOZITESI ... egy per-teszt idokorlat a TELJESITMENY-valtozast PASS/FAIL-le alakitja,
+                  es a kimenet attol fugg, mi FUT MEG mellette (5,01 s egy 5,00-s kerettel)
+
+**AZ ELŐFELTÉTELEK, ÉS MINDEGYIK ELBUKÁSA TÖMEGES `FAIL`-KÉNT NYOMTATÓDIK** -- vagyis pontosan
+úgy néz ki, mint egy piros seam:
+
+    worktree a HOME alatt (a fo checkout ELES TELEPITES, nem futtatokornyezet)
+    a `.nvmrc` szerinti Node:  export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
+    Delta-CRM: DUMMY `.env` (`~/dummy-env-template.txt`), SOHA az eleset
+      **ES A SABLON KIZAROLAG A GITIGNORE-OLT `.env`-RE VALO** (dexter merte magan 2026-09-19):
+      a `.env.test` KOVETETT, SZALLITOTT fajl, es a kezenfekvo kiterjesztes FELULIRJA. Egyetlen
+      spec fogta meg 565-bol (`e2e-start-recipe.spec.ts`, ami azt allitja, hogy a `.env.test`
+      NEM allit `CORS_ORIGINS`-t) -- se tsc, se lint, se a tobbi suite
+ -- az ELES `.env`
+      MAGA GYARTJA a ket piros `.integration` suite-ot (eles: 2 buko / 20 teszt; dummy: **0**)
+    `cp -Rc node_modules <wt>/`  KLONOZD, ne symlinkeld (~8 mp, valodi lemez-delta 0,02 GB)
+
+**A `cp -Rc` EGY mozdulattal ket dolgot zar be:** a `prisma generate` kliens-felulirasat (70 fabol
+66 ugyanarra a generalt kliensre mutat) ES a `.env`-szivargast -- a Node FELOLDJA a symlinket,
+tehat egy symlinkelt `node_modules` a FO CHECKOUT `.env`-jet olvassa (61/61 kitett; klonozva 0/33).
+
+**A KÉT INGYENES DISZKRIMINÁTOR, amit a szám MELLÉ kell tenni:**
+
+    a FAJLSZAM egyezik-e egy FUGGETLEN meressel? (474 kontra 462 azonnal arulkodott: az
+      `agents/` GITIGNORE-OLT, tehat csak a fo checkoutban letezik)
+    **`0 teszt` melletti `FAIL` SOHA nem teszt-bukas** -- gyujtes-ideju vagy megtagadasi hiba
+
+> Egy eldobható worktree-ben mért piros esetén a törzset hibáztatni CSAK azután szabad, hogy
+> ELOLVASTAD a hibaüzenetet. A szabály a bukás FAJTÁJÁT mondja meg, nem azt, hogy KIÉ.
+
+*(A `scripts/__tests__/*.sh` készletek BENNE VANNAK a seamben (2026-09-10, `34cd8dd`), és a
+futtató FELDERÍT, nem felsorol. NÉGYEN jutottunk függetlenül arra, hogy „semmi nem futtatja" --
+mind a négyen olyan helyen kerestük, ahol egy VITEST teszt nem lehet. Ha megint felmerül, ez a
+bekezdés a válasz, nem egy ötödik mérés.)*
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2381-2395, szó szerint -->
+### A MÉRŐ HIBÁJÁNAK IRÁNYA SZÁMÍT, NEM CSAK AZ, HOGY HIBÁS
+
+    a TETLENSEG fele tevedo hiba .... rejtve marad, mert kenyelmes elhinni
+    a RIASZTO fele tevedo ........... MUNKAT gyart, es a kovetkezo kor bizalmat viszi el
+    a TORLES fele tevedo ............ **a legdragabb**: elo, bekotott, tesztelt modult nevez
+                                      halott kodnak. „a hamis valtozat KONNYEBB VOLT ELHINNI,
+                                      mint megmerni"
+
+> Ha egy állítás TÖRLÉS felé mutat -- „halott kód", „nincs fogyasztója" --, azt akkor is mérd meg,
+> ha te magad írtad korábban.
+
+**ÉS EGY NEGYEDIK TENGELY, AMI NEM AZ IRÁNY, HANEM A KÖZÖNSÉG:** ugyanaz a veszteség lehet HANGOS
+futásidőben és NÉMA a review-ban (egy őr alapvonala `422 -> 415` futásidőben minden úton `rc=3`,
+a diffben SZORÍTÁSNAK látszik). Amikor egy változás irányáról állítasz, mondd meg, KINEK néma.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2396-2403, szó szerint -->
+### AZ ELLENŐRZŐ ÉRTÉKE NEM AZ ÚJRAMÉRÉS, HANEM A MÁSIK KÉRDÉS
+
+Öt kártyából négynél nem új mérésből jött az érték -- a szerző mérése mindenhol jó volt. Onnan
+jött, hogy **másik kérdést tett fel**: áll-e az ÁLLAPOT · helyes-e az ÉRVELÉS · ELÉRHETŐ-e onnan,
+ahonnan használják · mit ENGEDNE ÁT az őr · melyik fájl az ÉLŐ.
+
+> **a MÉRŐ hatóköre szűkebb volt a KÉRDÉSNÉL, és a hiánya nem hibának látszott.**
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2404-2415, szó szerint -->
+### ÉS A HATÁRESET: EGY KIVÉTEL, AMI IGAZ, ÉPP EZÉRT ÉLI TÚL A TÁMADÁST
+
+    egy kivetel, ami HAMIS ..... egy tamadas MEGTALALJA
+    egy kivetel, ami IGAZ ...... egy tamadas MEGEROSITI -- es a MELLETTE allo res tulel
+
+Mért eset: egy `search` végpont kivétel-szövege a `phone`, `notes` és `customFields` szándékos
+hiányával érvelt. Igaz volt. Az `email`-ről egy szót sem mondott, a kivétel ÁLLTA a támadást, és a
+rés négy útból kettőn ott maradt.
+
+> **Egy megerősített kivétel bizonyíték a SAJÁT SZÖVEGÉRŐL, soha nem a populációról.**
+> A próba, és olvasáskor tüzel: *mit NEM NEVEZ MEG ez a kivétel?*
+

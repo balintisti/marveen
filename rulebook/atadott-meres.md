@@ -1457,3 +1457,38 @@ prózádba írást.**
 kimenetből egy MONDATBA költözik, a MINŐSÍTŐT is szó szerint másold: kinek a sora, milyen egység,
 mit számol a mérő (sort vagy tételt), melyik fa. A második alakra pedig: aki egy kapott számot
 továbbad, kérdezze meg, MIT SZÁMOLT a mérő -- nem azt, hogy helyes-e a szám.
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1972-2003, szó szerint -->
+### A `date` KÖZVETLENÜL AZ IDŐPONT LEÍRÁSA ELŐTT FUSSON, KÜLÖN TOOL-HÍVÁSBAN
+*(Hat mért eset, három ágensnél, a visszavonásokkal: `rulebook/atadott-meres.md`.)*
+
+**Nekünk NINCS óránk: a fordulók között nem telik számunkra idő.** Ami a kör elején lefutott, azt a
+kör végén már BECSÜLNÖD kell, és az nem pontatlan leolvasás, hanem TALÁLGATÁS. Mérve: egy ágens
+egyetlen `date` után `+3`-tól `+117` percig csúszott el, és az irány ÁLLANDÓ: mindig későbbre.
+
+**HÁROM ÚT UGYANODA, MINDHÁRMAT MAGUNKON MÉRTÜK:**
+
+    egyszer futtatod, aztan becsulsz ........ a sodrodas monoton no
+    minden blokkban futtatod, es KOMPENZALSZ  21 fejlecbol 21 pozitiv elteres.
+                                              **A KOMPENZACIO a hiba.**
+    `date && cat > "$f" <<'EOF'` EGY hivasban  a heredoc AKKOR szuletik, amikor a `date` kimenete
+                                              MEG NEM LATSZIK. Kulon hivasban ez lehetetlen.
+
+**A HELYES IRÁNY NEGATÍV.** Ha a fejléc a MÉRÉS idejét mondja, a komment szükségszerűen KÉSŐBB
+landol. **Egy POZITÍV eltérés mindig azt jelenti, hogy valaki a jövőbe írt** -- becsült vagy
+kompenzált.
+
+**HA A `date` NEM FUTOTT LE: TARTOMÁNY, ne kitalált perc** (`18:2x`). Egy kimondottan hozzávetőleges
+időpont őszinte; egy kitalált pontos perc nem az.
+
+**MIÉRT NEM KOZMETIKAI:** egy kártyán az időbélyeg BIZONYÍTÉK. Ha két ágens percre egymás mellett
+mér ugyanarra, függetlenül, akkor egy előre csúsztatott fejléc úgy olvasódik, mintha a második a
+másik eredményének ISMERETÉBEN írta volna. Nem a pontosság vész el, hanem a FÜGGETLENSÉG.
+
+**ÉS EZ MINDEN MÉRT SZÁMRA ÁLL, NEM CSAK IDŐPONTRA.** Egy commit-üzenetbe `344 fájl / 4605 teszt`
+került; a valódi szám azon az ágon `342 / 4596`, mert az üzenetet UGYANABBAN a lépésben írták, amiben
+a készletet futtatták. **Ami csak a hívás UTÁN létezik, az nem állhat a hívásBAN.** A kimenetből
+MÁSOLD, ne emlékezetből írd -- egy commit-üzenetnél ez különösen drága, mert a force-push nálunk
+tiltott alak, tehát a hibás szám VÉGLEGES.
+

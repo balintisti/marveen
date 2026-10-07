@@ -266,3 +266,109 @@ megtalálása** — és egy tetszetős magyarázat leállítja a keresést.
 - **Cron expressions** (scheduled-tasks task-config.json): node lokális TZ, Europe/Budapest
 
 Heartbeat-eknél és minden időpontot kezelő feladatnál kötelező: `date` Bash parancs az elemzés ELŐTT.
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 450-503, szó szerint -->
+### ÉS A `grep` A MI HÉJAINKBAN NEM A `grep`: EGY `ugrep` BURKOLÓ `-I`-VEL, TEHÁT MINDEN
+### NUL-BÁJTOS FÁJL NÉMÁN KIMARAD (deeper találta 2026-09-17, marveen izolálta az okot)
+
+A `grep` egy SHELL-FÜGGVÉNY, ami `ARGV0=ugrep ... --ignore-files --hidden -I` alakban fut.
+Az `ugrep -I` = *„ignore binary files"*, és egy FÁJL BINÁRIS, HA EGYETLEN NUL-BÁJT VAN BENNE.
+
+    mero                        NUL NELKUL          NUL-LAL
+    `grep -c <minta> <fajl>`    rc=0  out='2'       **rc=1  out=''**   <- se hiba, se nulla
+    `grep -rl <minta> .`        a fajlnev           **URES LISTA**     <- EZT hasznaljak a cenzusok
+    `command grep -c ...`       rc=0  out='2'       rc=0  out='2'      <- a VALODI grep LATJA
+
+**A `command grep` a megoldás, nem a fájl megjavítása.** *(Az ok IZOLÁLVA, nem levezetve: ugyanaz
+a burkoló-hívás `-I` NÉLKÜL -> 2. És a `subprocess.run(['grep',...])` megkerüli a függvényt, tehát
+Pythonból MÁS választ kapsz, mint a héjból -- ezen majdnem megcáfoltam egy IGAZ leletet.)*
+
+**A KITETTSÉG MÉRVE:** a marveen követett fája 1208 fájl, 24 tartalmaz NUL-t; 23 png, és **EGY
+ÉLŐ TypeScript forrás: `src/web/federation/capabilities.ts`** (5 NUL, egy `.update` elválasztó).
+Az a fájl MINDEN eddigi `grep -rl` cenzusunkból kimaradt, csendben.
+
+> **Ha egy `grep -c` NEM ÍR KI SZÁMOT, az nem nulla találat, hanem KIHAGYOTT FÁJL.**
+> Egy szám, ami semmit nem ír ki, nem szám. *(deeper mondata; egy fájlnyi eltérés fogta meg.)*
+
+**ÉS A `git grep -E` NEM ISMERI A `\s`-T -- LITERÁLIS `s`-KÉNT OLVASSA, ÉS A MI `grep`-ÜNK IGEN**
+(didi mérte 2026-09-19, marveen újramérte). Vagyis egy mintát a héjban kipróbálsz, működik,
+átviszed `git grep`-be, és **NÉMÁN NULLÁT ad** -- a megnyugtató irányba.
+
+    a hejunk    `grep -E 'export\s+const'` .......... mukodik
+    `git grep -E 'export\s+const'` ................... **0**   <- HAMIS NULLA
+    `git grep -E 'export[[:space:]]+const'` .......... 100
+    `git grep -P 'export\s+const'` ................... 100
+    KONTROLL: csupasz `git grep 'export const'` ...... 100
+
+A `\s*` alak a legrosszabb: **nulla darab `s`-t is elfogad**, tehát ott illeszkedik, ahol NINCS
+szóköz, és pont ott bukik, ahol van -- ezért nem tűnik fel. **A javítás `[[:space:]]` vagy `-P`.**
+
+**A MECHANIZMUS, dexter közvetlen bizonyítékával** (három egysoros fájl, git 2.51.2): az `A  "x"`
+(szóköz) és az `Asss"x"` (betű) fájlokon a `git grep -E 'A\s+"'` a **BETŰS** fájlt találja meg, a
+`grep -E` ugyanazzal a mintával a SZÓKÖZÖSET. Vagyis nem "nem ismeri" -- **a `\s`-t `s` betűként
+olvassa.** Ezért láthatatlan a `\s*`: dexter első reprodukciója `\s*`-gal mind a négy eszközön
+`5 = 5 = 5`-öt adott, és majdnem abból írta le, hogy nincs is hiba. **`\s+` kell hozzá, vagy egy
+forrás, amiben tényleg van a whitespace.**
+
+**AZ INGYENES KONTROLL, ÉS TÍZ MÁSODPERC (didi alakja, 2026-09-17):** futtasd ugyanazt a mintát egy
+szóra, ami BIZTOSAN illeszkedik, UGYANAZON a fájlon. Ha az is üres, **az ESZKÖZ romlott el, nem a
+minta.** Ez azért a helyes alak, mert akkor is működik, amikor NEM gyanakszol NUL-bájtra -- vagyis
+a gyakori esetben. *(Mérve: `capabilities.ts`-en `grep -c export` -> ÜRES, rc=1; ugyanott
+`command grep`, `git grep` és python egyaránt **26**.)*
+
+**ÉS A `git ls-files | grep '\.plist$'` ÜRESET AD, PEDIG MIND A NYOLC KÖVETVE VAN:** a követett
+nevek `scripts/com.marveen.<unit>.plist.template` alakúak, tehát a `$` horgony SZERKEZETILEG kizárja
+őket. **A megnyugtató és a riasztó irány itt EGYBEESETT** -- a hamis eredmény SÚLYOSABB leletet
+állított, tehát a „ne dőlj be a kényelmes válasznak" reflex nem fogta meg. Ami megfogta: ugyanaz a
+kérdés, MÁSIK mérővel (`grep -i plist` -> 8 sor).
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 632-652, szó szerint -->
+**ÉS UGYANEBBŐL A CSALÁDBÓL, MERT UGYANITT LAKIK: A `gcloud logging read` IDŐHATÁR NÉLKÜL EGY
+NÉMA ~24 ÓRÁS ABLAKOT TESZ RÁ** (didi mérte 2026-09-10). Ugyanaz a szerkezet, mint fent: a
+kitettség a KÖVETETT fában nulla (`grep -rl 'gcloud logging' scripts/ src/` -> **0** mindkét
+repóban, tehát nincs docblock, amibe tenni lehetne), és a veszély abban az egysorosban él, amit
+valaki egy fordulón belül begépel.
+
+    időhatár NÉLKÜL .......  317 sor, a legkorábbi esemény 09-09T13:30
+    explicit `timestamp>=`   **1598** sor, a legkorábbi 09-06T11:30
+    KONTROLL, csak a korai ablakra:  1281 -> az adat VÉGIG ott volt
+
+**A hiba iránya a megnyugtató:** 317 sor 98 órára osztva 3,2/óra, amiből „a köteg ötödére vágta"
+lett volna. A valódi szám 16,3/óra, vagyis a jelenség VÁLTOZATLAN.
+
+**AZ INGYENES KONTROLL: vesd össze a LEGKORÁBBI eseményt az alany INDULÁSI IDEJÉVEL** (revízió,
+telepítés, ág). Ha a legkorábbi esemény jóval későbbi, az ABLAK vágott, nem az adat hiányzik.
+
+*(És egy második, ugyanabból a mérésből: a ráta NEM egyenletes. Két több órás NULLA ablak egy
+napon, TELJES forgalom mellett (2654 és ~4800 naplósor, 0 hiba), és az egyik a nap legforgalmasabb
+órája volt. **Egy 2-3 órás nulla NEM bizonyíték arra, hogy a jelenség megszűnt** -- rövid és hosszú
+ablak ezen a tengelyen nem összehasonlítható.)*
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 2004-2025, szó szerint -->
+## HÁROM MÉRÉSI VAKFOLT, AMI MAGYAR SZÖVEGEN NÉMA NULLÁT AD
+*(A teljes esetek -- a 25,2%-os szóhossz-eloszlás, mandark 512 specje, a kontroll-lecke --
+`rulebook/meresi-vakfoltok.md`.)*
+
+**1. AZ ÉKEZET ÉS A KIS/NAGYBETŰ MINDKÉT IRÁNYBAN VAK, ÉS EGYIK SEM AD HIBÁT.** Mind NULLÁT ad, nem
+hibát. **Az irányuk viszont különböző költségű:** az ékezet-alapú alulmérés a KÉNYELMES irányba
+téved, az ASCII-grep hamis nullája a RIASZTÓ irányba. **A próba: futtasd le az ELLENKEZŐ alakkal is,
+és nézd meg, a két szám együtt értelmes-e.** Mérve: egy ékezet-alapú mérő minden NEGYEDIK egyszavas
+címkét elveszít (25,2%) -- épp a CÍMKÉKEN a leggyengébb.
+**ÉS A KONTROLL AZ, AMIT SENKI NEM VIZSGÁL:** ugyanaz a szó három méréssel 18 / 24 / 15 -- a `-c`
+SORT számol, nem találatot, és a kis/nagybetű-érzékenység külön tengely. **A kontroll címkéje mondja
+meg, MIT számol, és hogy `-i`-vel fut-e.**
+
+**2. NEM MINDEN KORLÁTOT KIMONDANI KELL -- EGY RÉSZÜKET BE KELL ZÁRNI.** A korlát a MEGNEVEZETT
+POPULÁCIÓN KÍVÜL van, vagy BELÜL? KÍVÜL -> valódi hatókör-állítás, MONDD KI. BELÜL -> nem caveat,
+hanem meg nem vizsgált részhalmaz, **ZÁRD BE**. „0 duplikátum 512 specben, kivéve amit nem néztem
+meg" NEM szűkebb állítás: ugyanaz, lyukkal.
+
+**3. A HOMÁLYOS SZÓ NEM A MÉRÉSBEN JELENIK MEG, HANEM AMIKOR A MÉRÉSBŐL SZABÁLYT ÍRSZ MÁSNAK.**
+A próba a szabály MEGÍRÁSAKOR: *kell-e majd az ALKALMAZÓNAK olyan ítéletet hoznia, amit én nem tudok
+helyette meghozni?* És ha igen: **ő ÉPP A HIBA BELSEJÉBEN lesz, amikor meghozza.**
+

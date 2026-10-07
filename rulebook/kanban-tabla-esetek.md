@@ -285,3 +285,207 @@ másik fél nem tud -- 16:34:46-kor vettem át a kártyát, miközben didi level
 ágensek közti kézbesítési késés, és arra semmilyen kártya-konvenció nem hat.
 
 
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1028-1032, szó szerint -->
+*(A mért esetek TELJES szövege -- a három szerep mérései, a verdikt-jelölő négy megbukott változata,
+a 0/27-es uptake, a szétvágás időrendje, a 7,5 órás állás és a visszavont versenyhelyzet --
+`rulebook/kanban-tabla-esetek.md`. 17 156 karakter volt itt. A `rulebook/kartya-kontra-uzenet-esetek.md`
+és a `rulebook/kanban-verdikt-konvencio.md` továbbra is érvényes, azokat ez nem váltja ki.)*
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1033-1073, szó szerint -->
+### Ami egy hét múlva is számít, az kártyára megy (Isti kérdésére, 2026-08-18)
+
+Az inter-agent üzenet NEM nyilvántartás. **Egy üzenet elveszik. Egy kártya marad.**
+
+- **Feladat** -> kártya.
+- **Döntés**, ami a feladatot érinti -> a kártyára is, kommentként, az indoklással együtt.
+  Akkor is, ha üzenetben már elmondtad. Az üzenet a beszélgetés, a komment a nyom.
+- **Lelet** -> kártya, a bizonyítékkal (fájl:sor, forgatókönyv), nem csak a beszélgetésben.
+- **Koordináció** (sorrend, „most ezt csináld", biztatás) -> marad üzenet. Ha ez is kártya
+  lenne, a tábla egy hét alatt olvashatatlan zaj lenne.
+
+Az önellenőrző kérdés: *ha holnap elveszne a beszélgetés, ez a tudás megmaradna?*
+
+**HÁROM HELY, ÉS EGYIK SEM PÓTOLJA A MÁSIKAT:**
+
+    a KOMMENT ..... azt orzi meg, MIT dontottunk
+    a STATUSZ ..... azt mondja meg, VAN-E MEG ITT MUNKA -- es a dispatcher meg a tetlen-or EZT olvassa
+    a SZABALYKONYV  azt mondja meg, MIT CSINALJUNK LEGKOZELEBB
+
+**Ha egy döntés megváltoztatja, hogy egy kártyát fel kell-e venni, a STÁTUSZ is mozdul.** A komment
+nem pótolja: amit senki nem olvas el a felvétel előtt, annyit ér, mint egy nem létező. És ha a
+döntés a LAPRA kerül, a kártyára is oda kell kerülnie -- **a lap nem értesít senkit**, azt a
+következő munkamenet olvassa, a kártyát az, aki most vár rá.
+
+**ÉS A KÉZBESÍTÉS NEM AZ EGYETLEN KÉRDÉS: EGY RENDELKEZÉS A KORMÁNYZÓ KÁRTYÁN NEM ÉR EL AHHOZ, AKI
+A GAZDÁLT KÁRTYÁT OLVASSA.** Mért eset: egy merge-előfeltétel a KÖTEG-kártyán állt, helyesen és
+elérhetően, és a felvételi sorrend szerint mind a három gazdált kártyát végigolvasó ágens EGYIKEN
+SEM találta meg.
+
+    KEZBESITES ... „megkapta valaki?"                    -> merheto, es ott IGEN volt
+    OLVASASI UT .. „megtalalja, aki a sorrendet koveti?"  -> ott NEM
+
+**A konvenció:** ha egy köteg- vagy epic-kártyára olyan rendelkezés kerül, ami megváltoztatja, hogy
+MÁS kártyákat fel lehet-e venni, akkor a gazdált kártyák is kapnak egy sort -- elég egy mutató
+(`előfeltétel: lásd <köteg-id>`). Valaminek ott kell ülnie azon a lapon, amit az olvasó a SAJÁT
+eljárása szerint kinyit.
+
+**A VÉGREHAJTHATÓ ALAK:** *a kártya-mozgatás a COMMIT lépéséhez tartozik, nem a jelentéshez.* A
+jelentés a kör végén van, amikor a munka a fejedben már lezárult -- ott a legkönnyebb kihagyni egy
+lépést. A commit mechanikus pont, amit úgysem hagysz ki.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1074-1115, szó szerint -->
+### AZ ELLENŐRZŐNEK NINCS COMMIT-HORGONYA -- EZ A SZABÁLY VAK FOLTJA, NEM A MEGSZEGÉSE
+
+A commit-horgony a SZERZŐRE működik. Egy ELLENŐRZŐ viszont nem commitol: a köre azzal ér véget, hogy
+elolvasta a kártyát és **nem talált nyitott tételt**. Abban a pillanatban semmi mechanikus nem
+kényszeríti ki a státusz-mozgatást -- a helyes eredmény épp az, hogy nincs mit tenni.
+
+**ÉS A HIÁNYZÓ „MIÉRT": A LÁTHATÓSÁG ASZIMMETRIKUS, EZÉRT AZ ELLENŐRZŐ SOHA NEM TANULJA MEG.**
+Ugyanaz az ember, ugyanaz a szabály, két szerep, és csak az egyikből látszik:
+
+    GAZDAKENT ..... a rothadas LATHATO -- a kartya AZ O oszlopaban ul, es minden nap ranez
+    ELLENORZOKENT . a kore OSZINTEN veget er azzal, hogy nem talalt semmit -- es a KOLTSEG
+                    VALAKI MAS oszlopaban landol, ahova TOBBE SOHA nem nez vissza
+
+> **Ezért kell a horgonynak a MOZDULAT lenni, nem az ÉSZREVÉTEL.**
+
+**Ez nem figyelem-kérdés:** aki egy este MÁSOKNAK írta le ezt a szabályt, ugyanaznap ellenőrzőként
+hagyta ott a mezőt egy idegen kártyán -- és az ELLENKEZŐ irányban, gazdaként, helyesen járt el.
+**A szerep dönti el, nem az ember.**
+
+**ÉS A SZABÁLY MÁSIK FELE UGYANILYEN FONTOS: HA VAN NYITOTT TÉTEL, HAGYD OTT.** Egy lezárás ott egy
+IGAZOLATLAN állítást archiválna. A szabály nem „zárd le", hanem **„a mező kövesse a verdiktet --
+mindkét irányban"**.
+
+### ÉS A HARMADIK SZEREP: A KOORDINÁTORÉ -- A GAZDA-MEZŐ IS VERDIKTET KÖVET, CSAK NEM SAJÁTOT
+
+Mért eset: rendelkeztem, hogy egy kártya maradjon `in_progress` és maradjon X-é, mert X fele MÉG
+NYITVA ÁLLT. **Akkor igaz volt.** Amikor X lezárta a saját felét, a rendelkezésem attól a perctől
+HAMIS lett, és SEMMI nem szólt -- a tétlen-őr pedig felajánlotta neki a kártyát.
+
+**A gazda-mező tehát ugyanúgy egy verdiktet követ, mint a státusz -- csak a verdikt MÁSÉ, és épp
+ezért nem áll mellette senki, aki mozdítsa.** Az ellenőrző lezárja a felét és továbbmegy; a
+koordinátor, aki a mezőt beállította, már nem nézi.
+
+**A HORDOZHATÓ ALAK: ha egy kártyát azzal hagysz valakinél, hogy „a maradék az enyém", az egy
+LEJÁRATOS RENDELKEZÉS, és a lejárata az a pillanat, amikor Ő VÉGEZ.** Vagy a mezőt mozdítod akkor,
+vagy eleve nem az ő nevén hagyod.
+
+**ÉS AMI NEM A VÁLASZ, PEDIG KÉZENFEKVŐ: a `waiting`.** A `waiting` a BLOKKOLT kártyáé -- ami olyanra
+vár, ami nem a csapat kezében van. Egy „marveen: a mag javítása" nevű blokkoló nem blokkoló, hanem
+KIOSZTÁS, és a `waiting` oszlop pontosan attól veszti el a jelentését. A helyes mozdulat a
+GAZDA-mező, nem a státusz.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1116-1151, szó szerint -->
+### A VERDIKT-JELÖLŐ: EGY ELLENŐRZŐ KÖRE A STÁTUSSZAL ÉR VÉGET, NEM A KOMMENTTEL
+
+Egy KIMONDOTT KORLÁT („az én zöldem nem fedi le a te mutációidat") és egy NYITOTT TÉTEL teljes
+mondatban különbözik, SKIM-mélységben nem -- és a státusz-söprés skim-mélységben fut. Ezért az
+ellenőrző köre EGY FIX SORRAL zárul, a komment VÉGÉN, a 0. oszlopban:
+
+    VERDIKT: NINCS NYITOTT TETEL | <HATOKOR: mit fedett az ellenorzesem>
+    VERDIKT: NYITOTT TETEL | <mi az, egy sorban>
+
+**A PIPE UTÁNI RÉSZ A KONVENCIÓ RÉSZE, NEM DÍSZ.** Csupasz tokent kérve az uptake **0/27** volt: egy
+ellenőrző csak a SAJÁT ellenőrzéséről tud beszélni, tehát a csupasz alak többet állítana, mint amit
+mért. A pipe helyet ad az igaznak: balra ZÁRT token (ezt olvassa a gép), jobbra szabad szöveg.
+
+**A TOKEN PONTOS ÉS ÉRINTETLEN, A MINŐSÍTŐ A PIPE UTÁN ÁLL -- SOHA A FRÁZISON BELÜL.**
+
+    JO:    VERDIKT: NINCS NYITOTT TETEL | a frontend felen
+    ROSSZ: VERDIKT: NINCS NYITOTT TETEL A FRONTEND FELEN | ...    <- a token mar nem token
+
+**EGY VERDIKT A SZERZŐJE ELLENŐRZÉSÉRŐL BESZÉL, SOHA NEM A KÁRTYÁRÓL.** A parser SZERZŐ SZERINT
+csoportosít, és szerzőnként az UTOLSÓ verdiktet veszi. Bármelyik NYITOTT -> van nyitott tétel.
+MIND NINCS -> egyetlen ELLENŐRZŐNEK sincs nyitott tétele, ami NEM azonos azzal, hogy a kártya kész.
+**Ha minden `NINCS` visel hatókört és EGYIK sem nevezi meg a kártya TÁRGYÁT, a helyes kimenet
+NEM MÉRHETŐ.** Ha a saját verdikted a kártya egy RÉSZÉRE áll, írd ki külön sorban, hogy a TÁRGY
+nyitott -- a saját nevedben, nem harmadik tokenként.
+
+**A `VERDIKT:` KIZÁRÓLAG ELLENŐRZÉSI verdiktre való.** Kapu-eredményhez, cenzus-lelethez más horgony
+(`KAPU:`, `PROBA:`, `ERTEKELES:`). Egy IDÉZETT verdikt-sor legyen BEHÚZVA: a 0. oszlop a valódié.
+
+**ÉS AMI EBBŐL A MUNKÁRA KÖVETKEZIK:** ha a vizsgálat nem talált nyitott tételt, a `testing` ->
+`done` mozgatás UGYANANNAK a mozdulatnak a része, nem külön lépés.
+
+**PARSERT ÍRSZ RÁ? NE A SAJÁT FEJEDBŐL.** A naiv `'NYITOTT' in sor` a „NINCS NYITOTT TETEL"-t is
+NYITOTT-nak olvassa, és mérve 14/14-et adott 8/6 helyett. A kötelező alak és a mért csapdák:
+`rulebook/kanban-verdikt-konvencio.md`. **Olvasáskori próba, egy sor: ha a verdikt-bontásod egyik
+rekesze PONTOSAN nulla, a parser a gyanúsított, nem a tábla.**
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1152-1187, szó szerint -->
+### A KÁRTYA MOZDULÁSA NEM AZ, HOGY A LELET NYITOTT-E
+
+    `updated_at` ................. „mozdult-e a kartya"  -- egy KOMMENT is mozditja
+    `GET /api/kanban/<id>/events`  „mikor LEPETT BE az oszlopba", `actor`-ral es `kind`-dal egyutt
+
+Egy nem mozduló kártya lehet ELAKADT és lehet KÉSZ, és az `updated_at` a kettőt BÁJT-AZONOSAN
+mutatja. Aki időhatárra válogat vele, TÚL-válogat egy lefedett kártyára és KIHAGY olyat, ami tényleg
+később érkezett -- és ha közben ő maga kommentelt, **a mérő a saját tevékenységét méri.**
+*(A szerzője a SAJÁT, már szabállyá vált mérését vonta vissza három órán belül. A tanulság nem a
+szám: egy PROXY-metrika (mozdult-e) észrevétlenül átveszi a VALÓDI kérdés (nyitott-e) helyét.)*
+
+**ÉS UGYANEZ A TULAJDONSÁG A LEVER, HA TE VAGY AZ, AKI VÁLTOZTAT: EGY SZÉTVÁGÁS ELSŐ KOMMENTJE A
+FORRÁS-KÁRTYÁRA MEGY.** Mért eset: a szétvágás után a forrás-kártya KÉT tengelyen volt néma -- nem
+mondta el, hogy szétvágás történt, ÉS NEM IS MOZDULT. A flotta minden figyelője az egyiket olvassa,
+tehát egyik sem tudott szólni, és valaki egy órával később újra levezette ugyanazt a döntést.
+
+**A KÖZELI ELKERÜLÉS, AMI ROSSZABB A MEGTÖRTÉNTNÉL:** ha a forrás-kártyán lett volna egy friss
+komment, a kártya FRISSNEK látszik, és a frissesség-szűrő FEL SEM AJÁNLJA -- miközben egy
+rögzítetlen szétvágást hordoz.
+
+**A KONVENCIÓ: minden TARTÓS ÁLLAPOT-VÁLTOZÁS (szétvágás, átsorolás, gazdaváltás) első nyoma a
+FORRÁS-kártyára kerül**, és nem csak az újra vagy üzenetbe. Egy komment ott mindkét tengelyt kezeli:
+tartalmat ad ÉS mozdítja az `updated_at`-et.
+
+**ÉS A TÜKÖRKÉPE, AMI A KOORDINÁTOR HIBÁJA: EGY MUNKA-UTASÍTÁS EGY `testing` KÁRTYA KOMMENTJÉBEN
+SEMMILYEN MECHANIZMUSNAK NEM LÁTSZIK.**
+
+    a tetlen-or a `planned` + `in_progress` kartyakat szamolja A NEVEDRE
+    a kartya `testing` volt, es MASVALAKI munkajarol szolt
+    -> az utasitas LETEZETT, es NULLA mechanizmus latta
+
+**A JAVÍTÁS: ha egy komment MUNKÁT OSZT KI, akkor vagy a STÁTUSZ mozdul ugyanabban a mozdulatban,
+vagy az utasítás SAJÁT KÁRTYÁT kap.** Egy `testing` kártya kommentje a NYOM helye, nem a KIOSZTÁSÉ.
+**És detektort NE írj rá:** egy „tartalmaz-e ez a komment utasítást" illesztő pontosan abba a
+hamis-pozitív családba esik, amit ez a flotta már ötször mért. A mechanizmus a kártya-létrehozás.
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 1188-1213, szó szerint -->
+### A BIZONYÍTÉK-MUTATÓ NEM UTAZIK A DUPLIKÁTUMRA -- ÉS EZ MEGMONDJA, HOL KERESS
+
+    a fejlec nem utazik a MONDATTAL
+    a cafolat nem utazik a KOMMENTTEL
+    a helyesbites nem utazik a MAR ELKULDOTT UZENETTEL
+    **a MUTATO nem utazik a MASODIK KARTYARA**
+    **es a KIKOTES nem utazik a FEJLECCEL** -- ugyanez visszafele
+
+**A bizonyíték-mutató azon a kártyán él, ahol a bizonyíték KELETKEZETT. Amikor egy defektust újra
+felfedeznek és MÁSODIK kártyát kap, a mutató nem követi -- és a munka a MÁSODIKON folyik.** Mért
+eset: az első kártya végig hordozott egy futtatható bukó tesztet; a második, ahol hárman ténylegesen
+dolgoztak, **nulla említést tartalmazott róla** (kontroll: egy szomszéd szimbólum ugyanott 12).
+
+**ÉS EZ NEM A NÉV-ELUTASÍTÁS ALAKJA** -- oda soroltam be, és mandark megmérte, hogy tévedtem. Ugyanaz
+az ág, MÁSIK commit, MÁSIK mechanizmus: az egyik esetben a NEVE alapján utasították el (név-szűrő),
+a másikban senki nem utasított el semmit, a mutató SOHA NEM KERÜLT ELŐ (olvasatlan kártya). **Egy
+rossz besorolás itt bizonyítékot halmoz egy mechanizmusra, ami nem működött, és elrejti azt,
+amelyik igen.**
+
+**AMIÉRT EZ TÖBB A TÖBBINÉL: MEGMONDJA, HOL NÉZZ.** A név-minta nem. Ez igen: **ahol egy defektusnak
+KÉT kártyája van.** Ott a mutató szinte biztosan az elsőn maradt, a munka meg a másodikon folyik.
+
+**A HATÁRA, KIMONDVA:** ez a TARTÓS állapot-változásokra áll, ahol van mit leírni. Azt NEM zárja be,
+hogy egy MOST hozott döntésről a másik fél nem tud -- az ágensek közti kézbesítési késés, és arra
+semmilyen kártya-konvenció nem hat.
+

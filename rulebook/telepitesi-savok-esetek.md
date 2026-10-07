@@ -343,3 +343,80 @@ zöld, a commit létrejön -- a piros törzs pedig addig áll, amíg valaki más
 
 **Nem kérünk visszamenőleges javítást** a tizenegy kártyán: a nagy részük a build után úgyis
 lezárul. A konvenció a KÖVETKEZŐ kötegnél számít.
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 299-310, szó szerint -->
+### TÖBB TELEPÍTÉSI SÁV VAN, MINT AHÁNYRA SZÁMÍTASZ -- ÉS A „KÉSZ" MINDEGYIKBEN MÁST JELENT
+(kártya `576a4b21`.) *A cím szándékosan nem mond számot: számold meg a sorokat.*
+
+| sáv | mikor hat | mérve |
+|---|---|---|
+| `scripts/` | a beolvasztással **AZONNAL** | **18** `dist/` modul futásidőben a munkafát hívja |
+| `web/` | a beolvasztással **AZONNAL** | `src/web.ts:111`: `WEB_DIR = join(PROJECT_ROOT, 'web')` |
+| `src/` | csak `npm run build` + újraindítás után | a szolgáltatás a `dist/`-ből megy |
+| `*.plist` / launchd | csak KÜLÖN telepítéssel (`launchctl`) | a repó `scripts/*.plist.template`-et követ (8 db), a TELEPÍTETT példány a `~/Library/LaunchAgents/` alatt él |
+| `.claude/settings.json` hookjai | **ÁGENSENKÉNTI MÁSOLÁSSAL, a következő provisioningkor** | minden ágens SAJÁT `CLAUDE_CONFIG_DIR`-rel fut; a `provisionIsolatedConfigDir` a MEGOSZTOTT settingset olvassa BE ALAPNAK. **MÉG NEM MÉRT: lefut-e MINDEN ágens-indulásnál** |
+| `.git/hooks/` | csak `bash scripts/sync-hooks.sh` után | a telepítő MÁSOLJA, tehát DRIFTELHET |
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 311-353, szó szerint -->
+**A „TELEPÍTVE VAN-E" KÉRDÉS CSAK AZ EGYIK HOOK-SÁVRA ÉRTELMES:**
+
+    git-hook (`.git/hooks/`) ....... a telepito MASOLJA -> **DRIFT**: egy regi, telepitett hook
+                                     ugyanolyan nema, mint egy hianyzo, csak megtevesztobb
+    Claude Code hook (`scripts/hooks/`) . a settings UTVONALLAL hivatkozik a munkafa fajljara
+                                     -> nem tud driftelni, DE minden szerkesztes AZONNAL eles
+
+**ÉS A `.git/hooks` MEGOSZTOTT A LINKELT WORKTREE-KKEL** (mérve valódi pusholással): egy
+worktree-ből indított push a FŐ CHECKOUT hookját futtatja, a WORKTREE cwd-jével. Egy telepítés
+MINDEN ágens worktree-jére hat -- de a robbanási sugár is a TELJES flotta. **Ebből sorrend-szabály:
+hook-telepítés SOHA ne álljon közvetlenül az elé az esemény elé, amit védeni hivatott.** A köteg megy
+fel ELŐSZÖR, utána a telepítés.
+
+Ami a hook MEGÍRÁSÁRA következik: **ami a worktree cwd-jéből olvas, az az ÁGENS ágát látja**, nem a
+telepítési ágat -- a fő checkoutban tesztelve viszont helyesnek látszik. **A helyes alak HORGONY
+NÉLKÜLI** (a `--show-toplevel`-horgonyos alak MÉRVE ROSSZ: alkönyvtárból nem létező utat ad):
+
+```bash
+COMMON="$(cd "$(git rev-parse --git-common-dir)" && pwd)"    # nem kell horgony
+cat "$COMMON/HEAD"                                            # a FO worktree aga, barhonnan
+```
+
+**A 18-AS SZÁM PARANCSA** (ha ide szám kerül, jöjjön vele a parancs; a `__tests__` KIMARAD):
+
+```bash
+grep -rlE "scripts/[a-z0-9_-]+\.(sh|py|ts|mjs)" dist/ | grep -v '__tests__' | wc -l   # 18 (KONKRET hivas)
+grep -rl  "scripts/" dist/ | grep -v '__tests__' | wc -l                              # 23 (barmilyen emlites)
+```
+
+A két szám KÉT KÉRDÉSRE válaszol; a különbség nem hiba, hanem a populáció.
+
+**ÉS A `launchctl list | grep -c` HAMIS ZÖLDET AD EGY ELFOGLALT LABELRE** -- a `grep -c` a label
+JELENLÉTÉT számolja, és a label ott van akkor is, ha egy TÖRÖLT temp-könyvtárból származó plist
+foglalja el. Csak a harmadik mérő diszkriminál:
+
+```bash
+for L in $(launchctl list | awk '/com\.(marveen|testbot)/{print $3}'); do
+  P=$(launchctl print "gui/$(id -u)/$L" 2>/dev/null | grep -m1 'path =' | sed 's/.*path = //')
+  case "$P" in /Users/*/Library/LaunchAgents/*) echo "OK   $L";; *) echo "TEMP $L -- $P";; esac
+done
+# MÉRVE 2026-09-05: 8 betöltött unitból 6 OK, 2 TEMP -- tehát a mérő tud egészségeset mondani
+```
+
+
+
+<!-- Áthelyezve a koordinátor CLAUDE.md-jéből 2026-10-07 (kártya 25392e91), eredeti sor 514-526, szó szerint -->
+### HA EGY KÁRTYA COMMITOT TERMEL, A LEZÁRÁSI FELTÉTELE NEVEZZE MEG A SÁVOT
+
+A mai köteg 14 érintett kártyájából HÁRMON állt kimondott lezárási feltétel. A többi tizenegyen a
+„teljesült-e" kérdés a KÁRTYÁRÓL nem dönthető el, csak a repóból -- vagyis a kártya nem tudja
+megmondani a saját állapotát. Nem „beolvadt", hanem:
+
+- „beolvadt a törzs-ágba (`scripts/` vagy `web/`) -- **AZONNAL HAT**",
+- „beolvadt, **BUILDRE VÁR**",
+- „beolvadt, **TELEPÍTÉSRE VÁR** (`launchctl`)".
+
+Három szó, és utána a kártya önmagában eldönthető. Enélkül a „beolvadt" mindhárom esetben igaznak
+látszik, és csak az elsőben jelenti azt, hogy a felhasználó számára megtörtént.
+
