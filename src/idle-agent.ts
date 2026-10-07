@@ -1479,7 +1479,11 @@ export function buildWakeMessage(
   workCount: number,
   items: { id: string; title?: string | null; priority?: string | null; status?: string; due_date?: number | null }[],
   nowMs: number,
-  kind: WorkCheckKind = 'assigned_open_cards',
+  // REQUIRED, not defaulted (card 3b722cb5, didi): with a default, dropping the
+  // argument at the watcher's call site compiled and silently gave a review
+  // agent the old, self-contradicting wake -- 3688/3688 tests green. Now the
+  // omission is a compile error (tsc --noEmit, and the build).
+  kind: WorkCheckKind,
 ): string {
   const rank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 }
   // Pickable first, then priority within each group. WHICH cards are pickable depends on
