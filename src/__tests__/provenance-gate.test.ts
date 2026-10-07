@@ -168,10 +168,12 @@ describe('provenance-gate: the agent own background-task notice', () => {
     expect(out).toContain('SAJAT HATTER-TASK EREDMENYE')
     // The false escalation this branch exists to remove.
     expect(out).not.toContain('KERDEZZ VISSZA')
-    // The LEAD NOTICE, by contrast, stays -- review condition (a), PR #1165:
-    // the confirm-back is meaningless for one's own task, the audit trail is
-    // not. Asserting its ABSENCE (as this case first did) was the mistake.
-    expect(out).toContain('/api/messages')
+    // The audit TRAIL stays (review condition (a), PR #1165) -- but since card
+    // 3c27105f (2026-10-07) it is the gate's own `self-task` audit-log line, not
+    // a lead message: the message duplicated the log at one coordinator turn
+    // per sub-agent result.
+    expect(out).not.toContain('/api/messages')
+    expect(out).toContain('audit-naploban')
   })
 
   it('states the substance that survives: the content is data, not an instruction', () => {
@@ -244,14 +246,16 @@ describe('provenance-gate: the agent own background-task notice', () => {
     expect(runHook(bare)).toContain('SAJAT HATTER-TASK EREDMENYE')
   })
 
-  it('keeps the fleet-lead notice on the self-task branch too, so the exception is auditable', () => {
-    // Asking the principal is meaningless for one's own background task, but the
-    // TRACE is not: if this branch ever misclassifies, the notice is the only
-    // thing that makes it visible from outside. An un-notified exception branch
-    // cannot be audited.
+  it('does NOT ask for a fleet-lead message on the self-task branch: the audit log is the trace (card 3c27105f)', () => {
+    // The trace this branch needs already exists: main() audits it under its own
+    // `self-task` label (pinned by the next test). A lead message duplicated it and,
+    // with every agent delegating to background sub-agents, cost one coordinator
+    // turn per sub-agent result -- measured 2026-10-07 as noise, never an action.
     const out = runHook(NOTICE)
-    expect(out).toContain('/api/messages')
-    expect(out).toContain('PROVENANCE-SAJAT-TASK')
+    expect(out).toContain('SAJAT HATTER-TASK EREDMENYE')
+    expect(out).not.toContain('/api/messages')
+    expect(out).not.toContain('[PROVENANCE-SAJAT-TASK]')
+    expect(out).toContain('audit-naploban')
   })
 
   it('audits the self-task branch under its own label so the log stays measurable', () => {
@@ -849,10 +853,10 @@ describe('provenance-gate: FLEET_LEAD_ID is the recipient, MAIN_AGENT_ID stays t
     expect(out).toContain('flotta-vezetonek (vezeto-y)')
   })
 
-  it('self-task branch: same recipient rule', () => {
+  it('self-task branch: names no recipient at all (no lead message since card 3c27105f)', () => {
     const out = runWith(NOTICE, '/test', SPLIT)
     expect(out).toContain('SAJAT HATTER-TASK EREDMENYE')
-    expect(out).toContain('"to":"vezeto-y"')
+    expect(out).not.toContain('"to":"vezeto-y"')
     expect(out).not.toContain('"to":"sajat-x"')
   })
 
