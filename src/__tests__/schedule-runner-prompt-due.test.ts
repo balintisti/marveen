@@ -21,6 +21,26 @@ let tasks: ScheduledTask[] = []
 let seededOutcomeFile: string | null = null
 const mockDueCheck = vi.fn()
 
+// CRONPRECHECKSYNC1007: the cron loop AWAITS its pre-check child. This file drives the tick on fake
+// timers, and a real child needs real I/O that fake time does not wait for: advancing the clock
+// through the pre-check's own 10 s limit made it time out, so the LLM "ran anyway" and the quota
+// gate recorded 'quota' instead of the 'precheck-cron' the test is about. The pre-check script that
+// answers SKIP is therefore a stand-in child that closes at once; the real child process, the
+// timeout and the process group are covered by schedule-runner-cron-precheck-async.test.ts.
+vi.mock('node:child_process', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:child_process')>()
+  const { EventEmitter } = await import('node:events')
+  const spawn = ((cmd: string, args?: readonly string[], opts?: unknown) => {
+    if (cmd === 'bash' && String(args?.[0]).endsWith('pre-check-skip.sh')) {
+      const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), pid: undefined })
+      queueMicrotask(() => { child.stdout.emit('data', Buffer.from('SKIP\n')); child.emit('close', 0) })
+      return child
+    }
+    return (real.spawn as (...a: unknown[]) => unknown)(cmd, args, opts)
+  }) as unknown as typeof real.spawn
+  return { ...real, spawn, default: { ...real, spawn } }
+})
+
 vi.mock('node:fs', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs')>()
   const readFileSync = ((p: unknown, ...rest: unknown[]) =>
@@ -183,7 +203,7 @@ describe('prompt-task missed-run alert, through the real tick (card 997515c0)', 
 
   it('NEGATIVE CONTROL: a task whose pre-check says SKIP (precheck-cron) builds no streak and is never alerted', async () => {
     const dir = mkTmp('prompt-due-')
-    const script = join(dir, 'pre-check.sh')
+    const script = join(dir, 'pre-check-skip.sh')
     writeFileSync(script, '#!/usr/bin/env bash\necho SKIP\n', { mode: 0o755 })
     tasks = [hourly({ name: 'due-fixture-precheck', preCheck: script })]
     await start()

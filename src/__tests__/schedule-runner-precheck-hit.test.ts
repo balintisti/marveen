@@ -283,7 +283,7 @@ describe('schedule-runner wiring (order inside each loop)', () => {
   })
 
   it('cron: the pre-check runs BEFORE the quota gate, and the hit reaches the gate', () => {
-    expect(at(cron, 'const cronPc = runPreCheck(task)')).toBeLessThan(at(cron, "if (quota.action === 'defer')"))
+    expect(at(cron, 'const cronPc = await runPreCheckAsync(task)')).toBeLessThan(at(cron, "if (quota.action === 'defer')"))
     expect(at(cron, 'const preCheckHit = isPreCheckHit(cronPc)')).toBeLessThan(at(cron, 'workClass: quotaWorkClass(task, preCheckHit)'))
   })
 
