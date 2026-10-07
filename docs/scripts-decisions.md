@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **449** kovetett fajl, ebbol
-**136** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **436** kovetett fajl, ebbol
+**129** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -150,10 +150,6 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - WHAT WENT WRONG, AND WHY "READ THE VARIABLE" IS NOT THE FIX. On 2026-09-11 I measured
 
-### `scripts/backup-offsite.py`
-
-- WHY NOT THE SERVICE ACCOUNT (measured 2026-09-25 07:32): a service account has a Drive storage
-
 ### `scripts/batch-candidates.py`
 
 - WHY THIS EXISTS. The batch rule lived only in prose and was re-derived by hand every
@@ -217,10 +213,6 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - MIERT GENERALT ES NEM KEZI LISTA: egy kezi lista ugyanugy elavul, mint minden mas szam
 - MIERT NINCS IDOBELYEG A GENERALT FAJLBAN, es ez SZANDEKOS elteres a skill-index.sh-tol:
 - MIERT NINCS A "lapon nevezik-e" OSZLOP A GENERALT FAJLBAN. A bemenete a repon KIVUL van
-
-### `scripts/delta-crm-backup-key.sh`
-
-- WHY `show` REFUSES UNLESS BOTH STDIN AND STDOUT ARE A TERMINAL: every agent's
 
 ### `scripts/delta-crm-tester-inactivity.py`
 
@@ -393,18 +385,6 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - WHY THE CARD-ID EXCLUSION IS NOT COSMETIC. Our card ids are 8 hex characters, so a bare
 - WHY A CARD COUNTS AS LANDED IF ANY named commit landed. Cards quote other people's commits and
 
-### `scripts/lib/backup-key.sh`
-
-- WHY gpg AND NOT OUR OWN AES-GCM (vault.ts has one): the restore that matters
-
-### `scripts/lib/backup-retention.sh`
-
-- WHY A LIMIT (Isti 5121, 2026-10-03 17:00, marveen 27062/27069): the monthly archive used
-
-### `scripts/lib/backup_key_words.py`
-
-- WHY WORDS AND NOT RANDOM CHARACTERS (marveen's ruling, and the reason is the
-
 ### `scripts/lib/content-hash.sh`
 
 - Why this exists: `md5sum` does not exist on macOS, and the flagship host's
@@ -417,12 +397,6 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/lib/mixed_script.py`
 
 - WHY IT LIVES HERE (2026-09-24 review of #1541). Two paths block on this rule:
-
-### `scripts/lib/pg-argv-safe.sh`
-
-- WHY THE SCRIPTS WERE NOT CARELESS. `delta-crm-backup.sh`'s own header says
-- WHY A VARIABLE AND NOT AN ECHOED RESULT: `$(...)` strips trailing newlines, so
-- WHY NOT `printf %b "${s//%/\\x}"`, the usual one-liner: it also interprets
 
 ### `scripts/lib/retire_progress_hooks.py`
 
@@ -502,10 +476,6 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/pre-push-secret-check.sh`
 
 - MIERT LETEZIK (kartya dd5e07b4, mert eset 2026-08-28). A lapon egy KEZI recept allt:
-
-### `scripts/quota-ceiling-guard.sh`
-
-- WHY THIS EXISTS  /  Isti lifted the fleet standstill for ONE agent (dexter) on 2026-08-26 with a hard
 
 ### `scripts/readonly-measure.sh`
 
