@@ -45,12 +45,57 @@ SENTRY-OR (csak-olvaso). Cel: UJ eles hiba eszrevetele, nem a meglevok ismetlese
    **ES A SZAM, AMIT NE ADJ TOVABB CSUPASZON: AZ ISSUE-SZAM NEM PROBLEMA-SZAM.** Ugyanaz a
    `prisma-cache-invalidation` hiba HET kulon issue-csoportban all (93+49+18+16+13+9+8 = 206
    esemeny / 7 nap). Aki a legnagyobb csoportot idezi, a valodi terheles 45%-at mondja.
+3b. **A SAVOT NE VEZESD LE A KVOTA-STATISZTIKABOL: A PAYLOAD KIMONDJA** (didi merte 2026-09-12,
+   kartya `b3ea27c4`/k35; marveen ujramerte es SZUKITETTE). Az issue-k hordoznak `issueCategory` /
+   `issueType` mezot, es az eddigi eljaras egyiket sem olvasta -- a k33-ban a savot a
+   kvota-statisztikabol SZAMOLTAM ki, mikozben a mezo ALLITJA. Merve 59/59 issue-n, ket szervezeten.
+
+   **A HATOKOR ELOSZOR, MERT AZ ALABBI CSAK AZ EGYIK FOGYASZTORA ALL** (didi helyesbitette
+   14:29-kor, es a helyesbites SZUKIT, nem tagit). A `sentry-issue-watcher.ts` GUARD **NEM hasznal
+   MCP-t**: REST-et hiv (`API_ROOT = 'https://sentry.io/api/0'`, `/organizations/<org>/issues/`), es
+   a docblockja ki is mondja, miert -- az MCP-eszkozok KIZAROLAG egy agens-fordulon belul leteznek,
+   tehat az az ut kielegitene, hogy „az olvasas mukodik", es ellentmondana annak, hogy „nem fugghet
+   egy fordulotol". **A NYERS REST-payloadban NINCS aszimmetria:** az `issueCategory` az error-savu
+   issue-kon IS ott all az ERTEKEVEL (delta-crm 31/32, agrotech-cv 27/27, hianyzo kulcs: NULLA).
+   A guardnak tehat nincs mi ellen vedekeznie: olvassa a mezot, es kesz.
+
+   **AZ ALABBI AZ MCP-UTRA ALL -- vagyis ERRE A SKILLRE, amit egy agens kezzel kovet**
+   (marveen merte, kontrollal):
+
+       search_issues LISTA ....... a `Category:` sor CSAK a nem-error kategorianal jelenik meg
+                                   (BACKEND-11 -> `Category: db_query`; a negy error-issue-n SEMMI).
+                                   Vagyis a HIANY jelenti az errort.
+       get_sentry_resource ....... KIMONDJA: `Issue Type: error` ES `Issue Category: error`
+                                   (KONTROLL: BACKEND-G, ugyanaz a perc, ugyanaz az issue)
+
+   **A hasznalhato alak ASZIMMETRIKUS:** ha a listaban VAN `Category:` sor, az biztos allitas, hogy
+   NEM error-savu. Ha NINCS, az a renderelo viselkedesebol levezetett kovetkeztetes, nem kiolvasott
+   mezo -- es egy elhagyott mezo pontosan igy nez ki. Ha a jelentesbe az kerul, hogy egy issue
+   error-savu, azt EGY `get_sentry_resource` hivas mondja ki, ne a csend.
+
+   **ES A HARMADIK REKESZ IDE IS KELL** (didi kikotese): ha a Sentry valaha ELHAGYJA a mezot a
+   JSON-bol, a lapitas `null`-t lat -- es akkor a verdikt legyen NEM MERHETO, ne „error". Ugyanaz a
+   harmadik rekesz, amit a kvota-labra mar kikotottunk: a hianyzo adat nem a megnyugtato ertek.
+
+   **AMIT EZ NEM VALASZOL MEG, es didi ki is mondta:** azt, hogy az ERKEZETT issue error-e. Azt NEM,
+   hogy az error-csatorna ZARVA van-e vagy csak csendes -- nulla error-issue a ket vilagban
+   BAJT-AZONOSAN nez ki. A k32 dontes tehat all, es a kvota-lab tovabbra is kell.
+
+   **ES A `level` MEZORE NE EPITS**, barmennyire jol szetvalaszt (59/59): az FELHASZNALO-ALLITOTT
+   sulyossag, nem sav, es didi info-mintaja EGYETLEN issue.
+
 4. Vesd ossze az allapotfajlban tarolt, mar jelentett issue-azonositokkal. CSAK az ujakat vedd.
 5. Ird vissza az allapotot (jelentett id-k + a futas ideje).
 6. JELENTES: csak akkor irj Istinek, ha van UJ, es akkor is roviden -- mi tort el, hany
    felhasznalot erint, es hogy ez uj-e vagy visszatero. Ha nincs uj: NE irj. Ez heartbeat.
 
 KIKOTESEK:
+- **HA AZ MCP CSAK `authenticate`-ET KINAL (merve 2026-09-25 18:24, marveen): NEM kell megallni,
+  a REST UT UGYANAZT MERI** -- ugyanaz a vault-token, amivel a kvota-lab megy. Mukodo alak (node,
+  a `getSecret('sentry_olvaso_token')` a `dist/web/vault.js`-bol):
+      GET /api/0/organizations/<org>/issues/?query=is:unresolved%20firstSeen:-4h&statsPeriod=24h&limit=50
+  A nyers payload `issueCategory` mezoje KIMONDJA a savot (error / db_query), nincs MCP-aszimmetria.
+  A HTTP statuszt itt is ELOBB nezd; != 200 -> NEM MERT, nem nulla.
 - Ha a Sentry MCP eszkoz nem erheto el, NE tippelj es NE jelents "nincs hiba"-t. Ird a
   naploba, hogy a MERO nem volt elerheto -- az ures es a nem-mert nem ugyanaz.
 
@@ -132,6 +177,10 @@ KIKOTESEK:
       09-07  accepted  775 | rate_limited  929   <- az atmenet napja
       09-08  accepted    0 | rate_limited 1468
   A legfrissebb issue `lastSeen`-je 2026-09-07 06:11:01Z -- ket fuggetlen mero, ugyanaz a nap.
+
+   **A 09-07 EGY PELDA, NEM A MAI ZARAS KEZDETE** (marveen, 2026-09-28: Istinek „09-07 ota zarva”-t irtam,
+   hamisan). A savos 09-16/17-en UJRA NYILT (accepted 2374 / 2737), 09-18 ota zarva ujra. Ha a jelentesbe
+   „mióta” kerul, kerdezd le `statsPeriod=21d&interval=1d`-vel, es az UTOLSO accepted>0 nap utani nap a kezdet.
 
   **ES AMIT A KVOTA-LAB SEM MOND MEG:** hogy MIKOR all helyre. A `subscription` es a `quotas`
   vegpont a mi olvaso tokenunkkel **404** (merve), tehat a szamlazasi idoszak fordulasa innen nem
