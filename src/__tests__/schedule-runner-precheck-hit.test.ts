@@ -179,39 +179,39 @@ describe('decideRetryPreCheck -- the retry carries the hit, and never re-runs a 
     return { run: () => { calls++; return result }, calls: () => calls }
   }
 
-  it('a stored, still-open hit is delivered WITHOUT re-running the pre-check', () => {
+  it('a stored, still-open hit is delivered WITHOUT re-running the pre-check', async () => {
     // The whole card in one assertion: re-running would hit the drain's dedup and SKIP.
     const fresh = counted({ skip: true })
-    const d = decideRetryPreCheck(q(1), () => false, fresh.run)
+    const d = await decideRetryPreCheck(q(1), () => false, fresh.run)
     expect(fresh.calls()).toBe(0)
     expect(d.pc).toEqual({ skip: false, prefix: q(1) })
     expect(d.stored).toBeUndefined()
   })
 
-  it('a stored hit that was answered meanwhile is NOT delivered, and the store is cleared', () => {
+  it('a stored hit that was answered meanwhile is NOT delivered, and the store is cleared', async () => {
     const fresh = counted({ skip: true })
-    const d = decideRetryPreCheck(q(1), () => true, fresh.run)
+    const d = await decideRetryPreCheck(q(1), () => true, fresh.run)
     expect(fresh.calls()).toBe(0)
     expect(d.pc.skip).toBe(true)
     expect(d.stored).toBeNull()
   })
 
-  it('of two stored, only the still-open one goes out, and the store shrinks to it', () => {
-    const d = decideRetryPreCheck(`${q(1)}\n\n${q(2)}`, (_c, m) => m === '1', counted({ skip: true }).run)
+  it('of two stored, only the still-open one goes out, and the store shrinks to it', async () => {
+    const d = await decideRetryPreCheck(`${q(1)}\n\n${q(2)}`, (_c, m) => m === '1', counted({ skip: true }).run)
     expect(d.pc).toEqual({ skip: false, prefix: q(2) })
     expect(d.stored).toBe(q(2))
   })
 
-  it('CONTROL: nothing stored -> the old behaviour, the pre-check IS re-run', () => {
+  it('CONTROL: nothing stored -> the old behaviour, the pre-check IS re-run', async () => {
     const fresh = counted({ skip: true })
-    const d = decideRetryPreCheck(undefined, () => false, fresh.run)
+    const d = await decideRetryPreCheck(undefined, () => false, fresh.run)
     expect(fresh.calls()).toBe(1)
     expect(d.pc.skip).toBe(true)
     expect(d.stored).toBeUndefined()
   })
 
-  it('nothing stored, and the fresh run is a hit -> it becomes the stored one', () => {
-    const d = decideRetryPreCheck(undefined, () => false, counted({ skip: false, prefix: q(9) }).run)
+  it('nothing stored, and the fresh run is a hit -> it becomes the stored one', async () => {
+    const d = await decideRetryPreCheck(undefined, () => false, counted({ skip: false, prefix: q(9) }).run)
     expect(d.pc).toEqual({ skip: false, prefix: q(9) })
     expect(d.stored).toBe(q(9))
   })
@@ -305,11 +305,11 @@ describe('schedule-runner wiring (order inside each loop)', () => {
   it('retry: the loop decides through decideRetryPreCheck, fed the STORED hit, before firing', () => {
     // The decision itself is covered behaviourally above; this pins that the loop
     // actually hands it the stored hit and the ledger check, and obeys it.
-    const call = at(retry, 'const decided = decideRetryPreCheck(')
+    const call = at(retry, 'const decided = await decideRetryPreCheck(')
     const block = retry.slice(call, at(retry, 'const retryPc = decided.pc'))
     expect(block).toContain('retryPrefix.get(key),')
     expect(block).toContain('isLedgerInboundAnswered(row.agent_name, chatId, messageId)')
-    expect(block).toContain('() => runPreCheck(taskDef),')
+    expect(block).toContain('() => retryPreCheck(taskDef, now),')
     expect(block).toContain('if (decided.stored === null) clearRetryPrefix(key)')
     expect(block).toContain('else if (decided.stored !== undefined) replaceRetryPrefix(key, decided.stored)')
     expect(call).toBeLessThan(at(retry, 'attemptFireTask(taskDef,'))
