@@ -368,6 +368,23 @@ export function resetPollerInFlight(): void {
 // finishes is capped by the same number.
 export const CALL_TIMEOUT_MS = 100_000
 
+// THE SIGNAL ALONE DID NOT END A HUNG CALL (card ad8143b3). In production one timeSeries call stayed
+// in flight from 2026-10-03 07:11 to the 10-06 11:32 restart (max msSoFar 274267787 ms, 2268 overdue
+// warnings, 10-04 and 10-05 without a single measurement), with the 100 s signal on it. The tests
+// above it passed because their fake fetch HONOURS the signal; the real one, that time, did not.
+// So the cap is now also a wall-clock race the fetch cannot ignore: a timer held by THIS function
+// (not only by the signal) aborts the controller at the cap, and HARD_CAP_GRACE_MS later the call
+// is given up regardless of what fetch does, so the tick ends and the in-flight registry is freed.
+export const HARD_CAP_GRACE_MS = 5_000
+
+/** The wall-clock guard fired: the fetch did not settle even after its signal was aborted. */
+export class HardCapError extends Error {
+  constructor(ms: number) {
+    super(`no answer ${ms} ms after the call started, and the aborted signal did not end it (wall-clock guard, card ad8143b3)`)
+    this.name = 'HardCapError'
+  }
+}
+
 /**
  * A thrown call described WITH ITS CAUSE CHAIN (card 507992c5).
  *
@@ -398,7 +415,12 @@ export function describeThrow(err: unknown): string {
   return links.length === 0 ? top : `${top} -- caused by: ${links.join(' <- ')}`
 }
 
-export async function getJson(url: string, token: string, timeoutMs: number = CALL_TIMEOUT_MS): Promise<Probe<unknown>> {
+export async function getJson(
+  url: string,
+  token: string,
+  timeoutMs: number = CALL_TIMEOUT_MS,
+  graceMs: number = HARD_CAP_GRACE_MS,
+): Promise<Probe<unknown>> {
   const where = url.split('?')[0]
   const startedAt = Date.now()
   const entry: InFlightCall = { url: where, startedAt }
@@ -409,8 +431,15 @@ export async function getJson(url: string, token: string, timeoutMs: number = CA
     // would leave NOTHING retained -- and a retained distribution is the entire deliverable.
     logger.info({ ms: Date.now() - startedAt, url: where, outcome }, 'uptime poller: API call latency')
   }
+  const controller = new AbortController()
+  let softTimer: ReturnType<typeof setTimeout> | undefined
+  let hardTimer: ReturnType<typeof setTimeout> | undefined
+  const hard = new Promise<never>((_, reject) => {
+    softTimer = setTimeout(() => controller.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError')), timeoutMs)
+    hardTimer = setTimeout(() => reject(new HardCapError(timeoutMs + graceMs)), timeoutMs + graceMs)
+  })
   try {
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(timeoutMs) })
+    const res = await Promise.race([fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal }), hard])
     if (!res.ok) {
       done(`http-${res.status}`)
       logger.warn({ status: res.status, url: where }, 'uptime poller: API call failed')
@@ -423,15 +452,18 @@ export async function getJson(url: string, token: string, timeoutMs: number = CA
     // The body is read INSIDE the measurement: a response whose headers arrive fast and whose
     // body never finishes is the same hang, one layer down, and stopping the clock at the
     // header would hide exactly that case.
-    const value = await res.json()
+    const value = await Promise.race([res.json(), hard])
     done('ok')
     return { ok: true, value }
   } catch (err) {
     // A cap hit is named as such, so the log separates "we gave up at the cap" from any other throw.
-    done(err instanceof Error && err.name === 'TimeoutError' ? 'timeout' : 'threw')
+    done(err instanceof HardCapError ? 'hard-timeout' : err instanceof Error && err.name === 'TimeoutError' ? 'timeout' : 'threw')
     logger.warn({ err, url: where }, 'uptime poller: API call threw')
     const msg = redactSecrets(describeThrow(err)).slice(0, MAX_REASON_CHARS)
     return { ok: false, reason: `request to ${where} threw: ${msg}`, transient: true }
+  } finally {
+    clearTimeout(softTimer)
+    clearTimeout(hardTimer)
   }
 }
 
@@ -521,7 +553,8 @@ export async function uptimeTick(now = Date.now()): Promise<void> {
   // A call still running as this tick starts cannot complete inside its own tick any more, so
   // it is the hang card 77c305a4 is about -- and it is only visible HERE, because the hung call
   // itself never reaches its own logging. Checked BEFORE the skip below, so a skipped tick still
-  // names what is hanging. Warn, do not abort: the per-call cap (CALL_TIMEOUT_MS) ends it.
+  // names what is hanging. Warn, do not abort: the per-call cap (CALL_TIMEOUT_MS, and the
+  // wall-clock guard HARD_CAP_GRACE_MS after it, card ad8143b3) ends it.
   for (const c of overdueCalls(inFlight, now)) {
     logger.warn(
       { url: c.url, msSoFar: now - c.startedAt, limitMs: INTERVAL_MS, capMs: CALL_TIMEOUT_MS },

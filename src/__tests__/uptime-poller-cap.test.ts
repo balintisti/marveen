@@ -11,7 +11,7 @@
 //   - the signal reaches fetch at all (a cap defined but not passed is the inert version);
 //   - a body that never finishes is capped by the same signal.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { getJson, pollerInFlight, resetPollerInFlight, CALL_TIMEOUT_MS } from '../web/uptime-alert-watcher.js'
+import { getJson, pollerInFlight, resetPollerInFlight, CALL_TIMEOUT_MS, HARD_CAP_GRACE_MS } from '../web/uptime-alert-watcher.js'
 
 const SLOWEST_MEASURED_OK_MS = 73_800
 const TICK_MS = 120_000
@@ -33,6 +33,11 @@ describe('the cap number is the measured band', () => {
   it('above the slowest measured successful call, below the poll tick', () => {
     expect(CALL_TIMEOUT_MS).toBeGreaterThan(SLOWEST_MEASURED_OK_MS)
     expect(CALL_TIMEOUT_MS).toBeLessThan(TICK_MS)
+  })
+
+  it('the wall-clock guard also ends inside the tick (card ad8143b3)', () => {
+    expect(HARD_CAP_GRACE_MS).toBeGreaterThan(0)
+    expect(CALL_TIMEOUT_MS + HARD_CAP_GRACE_MS).toBeLessThan(TICK_MS)
   })
 })
 
@@ -68,5 +73,61 @@ describe('getJson under the cap', () => {
     vi.stubGlobal('fetch', async () => ({ ok: true, status: 200, json: async () => ({ a: 1 }) }) as unknown as Response)
     const r = await getJson('https://example.invalid/v3/alertPolicies', 'tok', 1_000)
     expect(r).toEqual({ ok: true, value: { a: 1 } })
+  })
+})
+
+// Card ad8143b3: in production one call stayed in flight for 76.2 h with the 100 s signal on it.
+// The fakes above honour the signal, so they could not see that. These do not.
+function deafFetch(headersThenHang = false) {
+  return (_url: string, _init?: RequestInit) => {
+    const never = new Promise<never>(() => {})
+    if (!headersThenHang) return never
+    return Promise.resolve({ ok: true, status: 200, json: () => never } as unknown as Response)
+  }
+}
+
+describe('getJson when fetch ignores its signal (card ad8143b3)', () => {
+  beforeEach(() => resetPollerInFlight())
+  afterEach(() => { vi.unstubAllGlobals(); resetPollerInFlight() })
+
+  it('a call that never settles ENDS at cap + grace, transient, named as the guard, registry freed', async () => {
+    vi.stubGlobal('fetch', deafFetch())
+    const t0 = Date.now()
+    const r = await getJson('https://example.invalid/v3/timeSeries?x=1', 'tok', 20, 30)
+    expect(Date.now() - t0).toBeLessThan(2_000)
+    expect(r.ok).toBe(false)
+    expect((r as { transient?: boolean }).transient).toBe(true)
+    expect((r as { reason: string }).reason).toContain('wall-clock guard')
+    expect(pollerInFlight()).toHaveLength(0)
+  })
+
+  it('a body that never finishes and ignores the signal ends the same way', async () => {
+    vi.stubGlobal('fetch', deafFetch(true))
+    const r = await getJson('https://example.invalid/v3/alertPolicies', 'tok', 20, 30)
+    expect(r.ok).toBe(false)
+    expect((r as { reason: string }).reason).toContain('wall-clock guard')
+    expect(pollerInFlight()).toHaveLength(0)
+  })
+
+  it('the signal is still aborted at the cap, before the guard', async () => {
+    let seen: AbortSignal | undefined
+    vi.stubGlobal('fetch', (_u: string, init?: RequestInit) => { seen = init?.signal as AbortSignal; return new Promise<never>(() => {}) })
+    await getJson('https://example.invalid/v3/timeSeries', 'tok', 20, 30)
+    expect(seen?.aborted).toBe(true)
+    expect((seen?.reason as Error).name).toBe('TimeoutError')
+  })
+
+  // Without this, dropping the clearTimeout calls passed all of the above: every answered call
+  // would leave two cap-long timers behind (one per call, every tick).
+  it('an answered call leaves no timer behind', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.stubGlobal('fetch', async () => ({ ok: true, status: 200, json: async () => ({ a: 1 }) }) as unknown as Response)
+      const r = await getJson('https://example.invalid/v3/alertPolicies', 'tok')
+      expect(r.ok).toBe(true)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
