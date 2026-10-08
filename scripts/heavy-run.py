@@ -20,6 +20,15 @@ backends (node dist/main) from e2e runners whose EXIT trap never ran or whose SI
    the group gets TERM, then KILL after HEAVY_RUN_GRACE seconds (default 10): a swapped Nest does not
    honour TERM (measured). A watchdog child does the same if the wrapper itself is SIGKILLed.
    Limit, stated: a descendant that calls setsid() leaves the group and is not reaped.
+3. FIRST COME, FIRST SERVED (card 391d725b; measured 2026-10-08 18:45: didi waited 60+ min while dexter's
+   later runs, three waiters polling every 5 s, kept winning the first poll after a release). Every
+   waiter takes a TICKET: a monotonic number in HEAVY_RUN_DIR/ticket-seq and a file tickets/<number>
+   that it holds an fcntl lock on for as long as it lives -- so a SIGKILLed waiter's ticket is dead the
+   moment the kernel drops the lock, and the next scan removes it (same property as the slots). Only
+   the lowest ticket among waiters whose agent holds no slot may take a free slot ("whose agent holds
+   no slot": a waiter that the one-per-agent rule keeps out must not block everybody behind it).
+   Deciding and taking happen under one lock (queue.lock), so two waiters cannot both think it is theirs.
+   HEAVY_RUN_FIFO=0 switches the ticket order off (the old first-poll-wins behaviour).
 The exit code is the command's (128+N if a signal ended it). Each run appends one JSON line to
 HEAVY_RUN_DIR/runs.jsonl: who, what, waited_s, ran_s, rc.
 """
@@ -37,6 +46,8 @@ DIR = os.environ.get("HEAVY_RUN_DIR") or os.path.expanduser("~/.heavy-run")
 MAX = int(os.environ.get("HEAVY_RUN_MAX") or 2)
 GRACE = float(os.environ.get("HEAVY_RUN_GRACE") or 10)
 POLL = float(os.environ.get("HEAVY_RUN_POLL") or 5)
+FIFO = (os.environ.get("HEAVY_RUN_FIFO") or "1") != "0"
+QDIR = os.path.join(DIR, "tickets")
 
 
 def agent_name():
@@ -104,6 +115,110 @@ def try_slot(me):
     return None
 
 
+class QueueLock:
+    """Exclusive flock on DIR/queue.lock: ticket handout, queue scans and slot taking never interleave."""
+
+    def __enter__(self):
+        os.makedirs(QDIR, exist_ok=True)
+        self.f = open(os.path.join(DIR, "queue.lock"), "a+")
+        fcntl.flock(self.f, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *_exc):
+        self.f.close()
+
+
+def take_ticket(me):
+    """The next monotonic number, and an open, LOCKED ticket file carrying who waits. Keep it open."""
+    with QueueLock():
+        seq_path = os.path.join(DIR, "ticket-seq")
+        try:
+            with open(seq_path) as f:
+                last = int(f.read().strip() or 0)
+        except (FileNotFoundError, ValueError):
+            last = 0  # missing or torn counter: the files below still hold the order
+        for name in os.listdir(QDIR):
+            if name.isdigit():
+                last = max(last, int(name))
+        n = last + 1
+        with open(seq_path, "w") as f:
+            f.write(str(n))
+        path = os.path.join(QDIR, f"{n:012d}")
+        f = open(path, "w")
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)  # nobody else can know this name yet
+        f.write(json.dumps({**me, "seq": n}))
+        f.flush()
+        return f, path, n
+
+
+def live_tickets():
+    """Live waiters, oldest first. Caller holds the queue lock. A ticket whose lock can be taken has no
+    owner any more (killed, crashed): it is removed here, so a dead waiter never blocks the queue."""
+    out = []
+    for name in sorted(os.listdir(QDIR)):
+        path = os.path.join(QDIR, name)
+        try:
+            f = open(path)
+        except FileNotFoundError:
+            continue
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            t = read_holder(path)  # locked: its owner lives (this includes our own ticket)
+            if t:
+                out.append(t)
+        else:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+        finally:
+            f.close()
+    return out
+
+
+def try_slot_in_order(me, ticket):
+    """try_slot, but only if ours is among the oldest tickets that can use the free slots.
+
+    A waiter is a CANDIDATE when its agent holds no slot and no older ticket of the same agent is
+    queued (one run per agent). With k free slots the k oldest candidates may go: two arrivals at an
+    idle machine both start, a third waits for the first release."""
+    tf, tpath, seq = ticket
+    with QueueLock():
+        held = holders()
+        busy = {h.get("agent") for h in held}
+        free = MAX - len(held)
+        oldest = {}
+        for t in live_tickets():
+            if t.get("agent") not in busy:
+                oldest.setdefault(t.get("agent"), t)
+        ranked = [t.get("seq") for t in oldest.values()]  # insertion order = ticket order
+        if seq not in ranked or ranked.index(seq) >= free:
+            return None
+        slot = try_slot(me)
+        if slot is not None:
+            drop_ticket(ticket)  # inside the lock: no scan ever sees us both queued and running
+        return slot
+
+
+def drop_ticket(ticket):
+    tf, tpath, _seq = ticket
+    try:
+        os.unlink(tpath)
+    except FileNotFoundError:
+        pass
+    tf.close()
+
+
+def queue_position(seq):
+    with QueueLock():
+        tickets = live_tickets()
+    for i, t in enumerate(tickets):
+        if t.get("seq") == seq:
+            return i + 1, len(tickets)
+    return 0, len(tickets)
+
+
 # EPERM counts as "nothing of ours left to reap" (dexter 24845, 2026-10-07): on macOS killpg on a
 # group whose members are all zombies or have left it answers PermissionError, not ProcessLookupError.
 # Uncaught, it was raised inside main()'s `finally`, so the wrapper exited 1 with a traceback, the
@@ -157,15 +272,24 @@ def run(label, cmd):
           "started": time.strftime("%Y-%m-%d %H:%M:%S")}
     last_note = 0.0
     asked = time.time()
-    slot = try_slot(me)
-    while slot is None:
-        if time.time() - last_note >= 60:
-            busy = "; ".join(f"{h['agent']} ({h['label'][:50]}, since {h['started'][11:]})" for h in holders())
-            print(f"heavy-run: waiting for a slot ({MAX} max, one per agent) -- busy: {busy or 'nobody?'}",
-                  file=sys.stderr, flush=True)
-            last_note = time.time()
-        time.sleep(POLL)
-        slot = try_slot(me)
+    ticket = take_ticket(me) if FIFO else None
+    try:
+        slot = try_slot_in_order(me, ticket) if ticket else try_slot(me)
+        while slot is None:
+            if time.time() - last_note >= 60:
+                busy = "; ".join(f"{h['agent']} ({h['label'][:50]}, since {h['started'][11:]})" for h in holders())
+                where = ""
+                if ticket:
+                    pos, total = queue_position(ticket[2])
+                    where = f", queue position {pos}/{total}"
+                print(f"heavy-run: waiting for a slot ({MAX} max, one per agent{where}) -- busy: {busy or 'nobody?'}",
+                      file=sys.stderr, flush=True)
+                last_note = time.time()
+            time.sleep(POLL)
+            slot = try_slot_in_order(me, ticket) if ticket else try_slot(me)
+    finally:
+        if ticket:
+            drop_ticket(ticket)  # a no-op after a successful take; the cleanup for an interrupted wait
     got = time.time()
     proc = subprocess.Popen(cmd, start_new_session=True)
     watchdog(os.getpid(), proc.pid, slot)
@@ -197,9 +321,10 @@ def self_test():
     me = os.path.abspath(__file__)
     results = []
 
-    def spawn(agent, *cmd):
+    def spawn(agent, *cmd, extra=None):
         return subprocess.Popen([sys.executable, me, "--label", agent, "--", *cmd],
-                                env={**env, "HEAVY_AGENT": agent}, stderr=subprocess.PIPE, text=True)
+                                env={**env, "HEAVY_AGENT": agent, **(extra or {})},
+                                stderr=subprocess.PIPE, text=True)
 
     def alive(pid):
         try:
@@ -213,8 +338,22 @@ def self_test():
     # timing threshold cannot tell "waited" from "started slowly" (the first version's control failed
     # on exactly that).
     def waited(p):
-        _, err = p.communicate()
+        try:
+            _, err = p.communicate(timeout=40)
+        except subprocess.TimeoutExpired:  # a queue that never lets it in is the loudest kind of waiting
+            p.kill()
+            _, err = p.communicate()
+            return True
         return "waiting for a slot" in (err or "")
+
+    def finish(p, timeout=40):
+        """wait() that cannot hang the self-test: a run the queue never admits counts as failed (None)."""
+        try:
+            return p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+            return None
 
     # 1. two agents run at once; a third waits until one finishes (fleet limit 2)
     a = spawn("a", "sleep", "2")
@@ -301,6 +440,77 @@ def self_test():
     results.append(("CONTROL: no config dir, cwd outside agents/ -> unknown",
                     named("").startswith("unknown-")))
 
+    # 9. FIRST COME, FIRST SERVED (card 391d725b). Both slots held; "old" queues first (a slow poll, 1 s),
+    # then three waiters of ONE other agent (fast poll, 0.2 s) that would win every race for the slot.
+    # Each command appends its agent when it STARTS, so the first line says who got in first.
+    def order_case(fifo):
+        orderfile = os.path.join(base, f"order-{fifo}")
+        e = {**env, "HEAVY_RUN_FIFO": fifo, "HEAVY_RUN_MAX": "1"}  # one slot: only the oldest may take it
+
+        def sp(agent, poll, *cmd):
+            return subprocess.Popen([sys.executable, me, "--label", agent, "--", *cmd],
+                                    env={**e, "HEAVY_AGENT": agent, "HEAVY_RUN_POLL": poll},
+                                    stderr=subprocess.DEVNULL)
+
+        h1 = sp("h1", "0.2", "sleep", "3")
+        time.sleep(1.0)
+        note = f"echo $0 >> {orderfile}; sleep 1.2"
+        procs = [sp("old", "1.0", "bash", "-c", note, "old")]
+        time.sleep(0.6)
+        procs += [sp("many", "0.2", "bash", "-c", note, "many") for _ in range(3)]
+        for p in [h1, *procs]:
+            finish(p)
+        return [x.strip() for x in open(orderfile)] if os.path.exists(orderfile) else []
+
+    first = order_case("1")
+    results.append(("FIFO: the older waiter of one agent beats three later waiters of another",
+                    first[:1] == ["old"]))
+    # Without tickets the winner is whoever polls first after the release: a race. The control only has
+    # to show that the setup CAN lose, so it gets three tries.
+    ctrl = []
+    for _ in range(3):
+        ctrl = order_case("0")
+        if ctrl[:1] == ["many"]:
+            break
+    results.append(("CONTROL: with HEAVY_RUN_FIFO=0 the three fast pollers get in first (race, 3 tries)",
+                    ctrl[:1] == ["many"]))
+
+    # 10. a SIGKILLed waiter at the head of the queue does not block it (its ticket dies with its lock)
+    # ONE slot, so the dead head would be the only one allowed to take it if its ticket still counted.
+    one = {"HEAVY_RUN_MAX": "1"}
+    h1 = spawn("h1", "sleep", "3", extra=one)
+    time.sleep(1.0)
+    head = spawn("head", "true", extra=one)
+    time.sleep(0.6)
+    nxt = spawn("next", "true", extra=one)
+    time.sleep(0.6)
+    tdir = os.path.join(base, "tickets")
+    queued = len(os.listdir(tdir))
+    head.kill()
+    head.wait()
+    t0 = time.time()
+    try:
+        nxt_rc = nxt.wait(timeout=20)  # a dead ticket that still counted would hold it here for ever
+    except subprocess.TimeoutExpired:
+        nxt.kill()
+        nxt_rc = None
+    finish(h1)
+    results.append(("CONTROL: both waiters held a ticket before the kill", queued == 2))
+    results.append(("a SIGKILLed head-of-queue waiter does not block the next one",
+                    nxt_rc == 0 and time.time() - t0 < 10))
+    results.append(("every ticket is gone once the queue is empty", os.listdir(tdir) == []))
+
+    # 11. a waiter that the one-per-agent rule keeps out does not block the ones behind it
+    d = spawn("d", "sleep", "4")
+    time.sleep(1.0)
+    d2 = spawn("d", "true")   # older ticket than e's, but its agent already holds a slot
+    time.sleep(0.6)
+    e2 = spawn("e", "true")
+    results.append(("an agent-blocked older waiter does not hold up another agent (free slot used at once)",
+                    not waited(e2) and e2.returncode == 0))
+    results.append(("CONTROL: that agent's own second run does wait", waited(d2)))
+    finish(d)
+
     # 8. --help and a mistyped command answer in words, not with a traceback
     h = subprocess.run([sys.executable, me, "--help"], env=env, capture_output=True, text=True)
     results.append(("--help prints the usage, rc 0", h.returncode == 0 and "--status" in h.stdout))
@@ -328,6 +538,10 @@ def main(argv):
         print(f"heavy runs: {len(hs)}/{MAX}")
         for h in hs:
             print(f"  slot {h.get('slot')}: {h['agent']} pid {h['pid']} since {h['started']} -- {h['label']}")
+        with QueueLock():
+            waiting = live_tickets()
+        for i, t in enumerate(waiting):
+            print(f"  waiting #{i + 1}: {t['agent']} pid {t['pid']} since {t['started']} -- {t['label']}")
         return 0
     label = None
     if argv[:1] == ["--label"]:
