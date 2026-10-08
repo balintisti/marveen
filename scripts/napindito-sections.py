@@ -101,6 +101,58 @@ def section_done_vs_live(root=DEFAULT_ROOT, now=None, max_age_h=26):
     return out
 
 
+def section_idle_digest(root=DEFAULT_ROOT, now=None, hours=24):
+    """7. TETLEN, NINCS KIOSZTVA (kartya 3c27105f).
+
+    A tetlen-or ezt az esetet ("ures prompton all, es nincs ra kiosztva semmi") elobb uzenetkent
+    kuldte a koordinatornak: 69 a 245 gepi jelzesbol 7 nap alatt, mindegyik egy teljes fordulo.
+    Mostantol egy sor a `store/idle-digest.jsonl`-ben (`idleDigestLine`, src/idle-agent.ts), es
+    ez a szekcio olvassa. Az `ts` EZREDMASODPERC (a watcher Date.now()-ja), a `now` itt masodperc.
+
+    A NEM-FUTOTT ALLAPOT SAJAT SORT KAP (a fajl elso szabalya): nincs fajl, olvashatatlan fajl,
+    vagy serult sorok. A hianyzo fajl ket dolgot jelenthet (nem volt ilyen eset, vagy az uj build
+    meg nem fut), es a ketto kivulrol azonos -- ezert a sor ezt KIMONDJA, nem nullat ir."""
+    path = os.path.join(root, "store", "idle-digest.jsonl")
+    now = time.time() if now is None else now
+    head = "TETLEN, NINCS KIOSZTVA"
+    if not os.path.exists(path):
+        return [f"{head}: NINCS NAPLO ({path}) -- vagy nem volt ilyen eset, vagy a tetlen-or uj builde meg "
+                "nem fut; a ketto innen nem kulonboztetheto meg."]
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = f.read().splitlines()
+    except Exception as e:
+        return [f"{head}: NEM MERHETO -- a naplo olvashatatlan ({type(e).__name__})."]
+    entries, bad = [], 0
+    for line in raw:
+        if not line.strip():
+            continue
+        try:
+            d = json.loads(line)
+            ts = float(d["ts"])
+            # Masodperc-alaku ts (1e11 alatt: 1973 ezredmasodpercben) serult sor, NEM "regi": egy
+            # egysegtevesztes ugyanis nulla jelzest mutatna, ami bajt-azonos a nyugodt nappal.
+            if ts < 1e11:
+                raise ValueError("ts nem ezredmasodperc")
+            entries.append((ts / 1000.0, str(d["agent"]), int(d["minutes"])))
+        except Exception:
+            bad += 1
+    recent = [e for e in entries if now - e[0] <= hours * 3600]
+    tail = f"; {bad} serult sor kihagyva" if bad else ""
+    if not recent:
+        return [f"{head}: 0 jelzes az elmult {hours} oraban ({len(entries)} sor a naploban osszesen){tail}."]
+    per = collections.defaultdict(list)
+    for ts, agent, minutes in recent:
+        per[agent].append((ts, minutes))
+    out = [f"{head} (elmult {hours} ora, {len(recent)} jelzes, {len(per)} ugynok; a tetlen-or ezeket mar nem "
+           f"kuldi uzenetkent){tail}:"]
+    for agent, xs in sorted(per.items(), key=lambda kv: -len(kv[1])):
+        last = max(xs)
+        when = datetime.fromtimestamp(last[0]).strftime("%H:%M")
+        out.append(f"  - {agent}: {len(xs)}x, legutobb {when} ({last[1]} perce tetlen, nincs kartyaja)")
+    return out
+
+
 STATUSES = ["planned", "in_progress", "testing", "waiting", "done"]
 # Az `assignee` NEM tisztitott mezo: merve 2026-09-10 az elo kartyakon
 # `Isti` 17, `isti` 2, ures sztring 2, NULL 5. Egy nagybetu-erzekeny
@@ -481,7 +533,7 @@ def main():
         return 1
     blocks = [section_dream(a.root), section_isti(con), section_delta(con, snap, not a.no_write),
               section_broken(con, a.since_hours, a.tasks_dir, a.root, None, not a.no_write),
-              section_quota(a.root), section_done_vs_live(a.root)]
+              section_quota(a.root), section_done_vs_live(a.root), section_idle_digest(a.root)]
     print("\n\n".join("\n".join(b) for b in blocks if b))
     return 0
 

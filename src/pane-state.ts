@@ -1381,6 +1381,49 @@ export function paneLooksIdle(capture: string): boolean {
   return detectPaneState(capture) === 'idle'
 }
 
+// RUNNING BACKGROUND SUB-AGENTS (card 3c27105f). An agent whose own prompt is free while
+// sub-agents work is not standing idle: the idle guard reported didi twice on 2026-10-07
+// (11:55, 12:25) with 3-5 sub-agents running, and replayed over the week 90 of 245 guard
+// messages came from an agent that had one. detectPaneState rightly says 'idle' for that
+// pane (the prompt IS free), so this is a SECOND question about the same capture and it
+// changes no existing verdict.
+//
+// Two signals, both read off live panes (2026-10-09):
+//   - the panel BELOW the footer: `⏺ main`, then one `◯ <name> <task> <duration> · ↓ <n> tokens`
+//     row per RUNNING agent. A row ending in `idle` is a finished teammate waiting for a
+//     message, not work, and does not match.
+//   - `✻ Waiting for N background agents to finish`, just above the input box. It stays when
+//     the panel is hidden or longer than the capture, so the count is the larger of the two.
+// Footer-anchored like the busy windows (the panel grows with the agent count, so counting
+// back from the end of the pane slides off it). Without a footer the rows only count under a
+// `⏺ main` header in the last lines: a pane that quotes a row in scrollback is not a panel.
+const SUBAGENT_ROW_RX = /^\s*◯\s+\S.*\s\d+[hms](?: \d+[hms])*\s+·\s+↓\s+[\d.]+[kKmM]?\s+tokens\s*$/
+const SUBAGENT_WAITING_RX = /Waiting for (\d+) background agents? to finish/
+const SUBAGENT_PANEL_HEADER_RX = /^\s*⏺\s+main\s*$/
+const SUBAGENT_FOOTERLESS_TAIL_LINES = 20
+
+export function runningSubagentCount(pane: string): number {
+  if (!pane) return 0
+  const lines = pane.split('\n')
+  let footer = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (IDLE_FOOTER_RX.test(lines[i])) { footer = i; break }
+  }
+  let rows = 0
+  let waiting = 0
+  if (footer >= 0) {
+    for (let i = footer + 1; i < lines.length; i++) if (SUBAGENT_ROW_RX.test(lines[i])) rows++
+    const above = lines.slice(Math.max(0, footer - 12), footer).join('\n')
+    const m = SUBAGENT_WAITING_RX.exec(above)
+    if (m) waiting = Number(m[1])
+  } else {
+    const tail = lines.slice(-SUBAGENT_FOOTERLESS_TAIL_LINES)
+    const header = tail.findIndex(l => SUBAGENT_PANEL_HEADER_RX.test(l))
+    if (header >= 0) for (let i = header + 1; i < tail.length; i++) if (SUBAGENT_ROW_RX.test(tail[i])) rows++
+  }
+  return Math.max(rows, waiting)
+}
+
 /**
  * True when the pane is in the specific "accepting a new prompt" state.
  * 'typing' counts as not-ready because the user has unsubmitted text

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { appendFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { logger } from '../logger.js'
 import { MAIN_AGENT_ID, PROJECT_ROOT } from '../config.js'
@@ -6,7 +6,7 @@ import { listAgentNames, agentDir, readAgentRemoteHost, readAgentProjects } from
 import { isAgentRunning, capturePane } from './agent-process.js'
 import { resolveAgentSession } from './channel-mcp-reconnect.js'
 import { sendAlert } from './channel-monitor.js'
-import { busyEvidence, detectPaneState } from '../pane-state.js'
+import { busyEvidence, detectPaneState, runningSubagentCount } from '../pane-state.js'
 import { usageLimitHolds } from '../usage-limit-window.js'
 import { getPendingMessages, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
 import {
@@ -15,6 +15,7 @@ import {
   selectDeclaredWork,
   isCensusComment,
   buildNoWorkNotice,
+  idleDigestLine,
   orphanPullList,
   laneFilteredPullList,
   topOfPullList,
@@ -67,7 +68,21 @@ const THRESHOLDS: IdleAgentThresholds = {
   // A repeated identical list is not news -- but after four hours, "nobody has touched
   // this" is. Without this the suppression is permanent on a stable queue.
   wakeStaleRearmMs: 4 * 60 * 60_000,
+  // "The guard is blind to this agent" is one fact per spell, not one per half hour (card
+  // 3c27105f). Replayed over 7 days: 79 lines, 14 of them repeats inside six hours for an agent
+  // already reported, none followed by anything the repeat caused; a blind spell that outlasts
+  // the window is still reported again, four times a day at most.
+  paneUnreadableRealertMs: 6 * 60 * 60_000,
+  // Sub-agents keep an agent out of the guard for two hours at most. The longest legitimate
+  // spell measured was 74 minutes (didi's three reviewers, 2026-10-07); computress's polling
+  // sub-agents (52-82 minutes, nothing posted) are the case the bound exists for.
+  subagentHoldMs: 2 * 60 * 60_000,
 }
+
+// WHERE "IDLE, NOTHING ASSIGNED" GOES NOW (card 3c27105f): a line in this file, which the morning
+// briefing reads (scripts/napindito-sections.py, section_idle_digest), not a message to the
+// coordinator. 69 of the 245 guard messages in the 7 days before were this class.
+const IDLE_DIGEST_PATH = join(PROJECT_ROOT, 'store', 'idle-digest.jsonl')
 
 const INITIAL_DELAY_MS = 90_000
 const INTERVAL_MS = 3 * 60_000
@@ -271,6 +286,7 @@ export function readPane(agent: string): {
   staleCounterOnly: boolean
   usageLimited?: boolean
   paneReason?: PaneUnreadableReason
+  runningSubagents?: number
 } {
   // WHICH branch produced `idle: null` -- three of them do, and the owner-facing
   // message named only two. Measured 2026-09-19: 33 'pane unreadable' alerts, 16 of
@@ -282,9 +298,13 @@ export function readPane(agent: string): {
   const pane = capturePane(session, readAgentRemoteHost(agent))
   if (!pane) return { idle: null, staleCounterOnly: false, paneReason: 'capture-failed' }
   const state = detectPaneState(pane)
-  if (state === 'unknown') return { idle: null, staleCounterOnly: false, paneReason: 'unknown-state' }
+  // Counted from the same capture, and BEFORE the unknown verdict: a panel read off the screen
+  // is evidence the pane is not a mystery, whatever else the classifier made of it.
+  const runningSubagents = runningSubagentCount(pane)
+  if (state === 'unknown') return { idle: null, staleCounterOnly: false, paneReason: 'unknown-state', runningSubagents }
   return {
     idle: state === 'idle',
+    runningSubagents,
     staleCounterOnly: busyEvidence(pane) === 'counter',
     // Same capture as the idle verdict (card d3f92923), so the two cannot disagree about the screen.
     // Held only until the reset the banner names, 5 h at most: the banner outlives the limit.
@@ -425,6 +445,7 @@ export function tick(): void {
           paneIdle: running ? paneRead.idle : false,
           staleCounterOnly: running ? paneRead.staleCounterOnly : false,
           paneUsageLimited: running ? paneRead.usageLimited === true : false,
+          runningSubagents: running ? paneRead.runningSubagents ?? 0 : 0,
           pendingMessages: running ? getPendingMessages(agent).length : 0,
           ownWorkCount,
           // Without this the repeat-suppression never fires -- it is skipped whenever the
@@ -590,14 +611,23 @@ export function tick(): void {
           }
           continue
         }
+        // NOT A MESSAGE (card 3c27105f): the coordinator's turn costs a whole session re-read, and
+        // this class was 69 of 245 guard messages in 7 days. It goes into the daily digest. If the
+        // digest cannot be written the old message is the way out -- a dropped notice is the shape
+        // this guard exists to remove.
         try {
-          createAgentMessage('system', MAIN_AGENT_ID, buildNoWorkNotice(agent, minutes, Date.now(), (check as WorkCheck | null)?.kind ?? null))
+          appendFileSync(IDLE_DIGEST_PATH, idleDigestLine(agent, minutes, Date.now(), (check as WorkCheck | null)?.kind ?? null))
           logger.info(
             { idleGuard: true, agent, idleForMs: decision.idleForMs },
-            'idle guard: agent idle with nothing assigned -- told the coordinator',
+            'idle guard: agent idle with nothing assigned -- appended to the daily digest',
           )
-        } catch (err) {
-          logger.warn({ err, agent }, 'idle guard: could not tell the coordinator about an unassigned idle agent')
+        } catch (digestErr) {
+          logger.warn({ err: digestErr, agent }, 'idle guard: could not write the daily digest -- telling the coordinator instead')
+          try {
+            createAgentMessage('system', MAIN_AGENT_ID, buildNoWorkNotice(agent, minutes, Date.now(), (check as WorkCheck | null)?.kind ?? null))
+          } catch (err) {
+            logger.warn({ err, agent }, 'idle guard: could not tell the coordinator about an unassigned idle agent')
+          }
         }
         continue
       }
