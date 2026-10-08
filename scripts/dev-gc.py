@@ -48,6 +48,22 @@ WHAT MAKES EACH HALF SAFE, AND IT IS A CONJUNCTION, NOT A HEURISTIC:
             floor cannot pull a file out from under a live run. Empty directories are
             removed with rmdir, which refuses a non-empty one by itself.
 
+  jest_dx   CARD 7ea96ce9 (2026-10-08, marveen: two disk alerts at 95%, jest_dx 18.2 GB
+  busy cap  in 1623 jest-transform-cache-<hash> dirs, ~8 GB/hour): with five agents a jest
+            process is practically ALWAYS running, so the file-level cap below never ran,
+            and the age sweep reported only what it REMOVED (0.26 GiB), never the size.
+            While a jest runs, the cap now works on WHOLE top-level entries
+            (jest-transform-cache-*, haste-map-*, perf-cache-*): oldest first, and only an
+            entry NOTHING inside of which was written for --jest-busy-floor-minutes
+            (default 120, below 60 refused). The marker is the rootDir/config hash in the
+            name: a run of another tree never writes there. What it does NOT cover: a run
+            whose every transform is a cache HIT only reads, so an entry it reads can look
+            idle. Jest 29.7 (@jest/transform readCacheFile) returns null and re-transforms
+            when the cache file is gone at existsSync; only a deletion in the instant
+            between existsSync and readFileSync throws. A 120-minute-idle entry being read
+            in that instant is the accepted residue; a 95% disk stops every run.
+            Every run now prints the size LEFT in each jest_dx, not only what went.
+
   e2e DBs   the name must pass the SAME `E2E_DB_NAME` the DB gate uses (explicit agent
             list, suffix required -- so the `crm_e2e_didi` baseline and the SHARED
             `crm_e2e_test` are structurally out of reach); no connection in
@@ -72,6 +88,7 @@ import argparse
 import importlib.util
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -180,6 +197,70 @@ def collect_jest_cap(dirs, cap_bytes, min_age_s, now, dry_run):
             files += 1
             size += blocks
     return files, size, refused
+
+
+def entry_stats(path):
+    """(newest mtime, bytes) of a top-level jest_dx entry: the entry itself and, for a directory,
+    every file and directory under it (no symlink is followed)."""
+    st = os.lstat(path)
+    newest, size = st.st_mtime, st.st_blocks * 512
+    if stat.S_ISDIR(st.st_mode):
+        for root, subdirs, names in os.walk(path, followlinks=False):
+            for n in subdirs + names:
+                try:
+                    s2 = os.lstat(os.path.join(root, n))
+                except OSError:
+                    continue
+                newest = max(newest, s2.st_mtime)
+                size += s2.st_blocks * 512
+    return newest, size
+
+
+def collect_jest_busy_cap(dirs, cap_bytes, floor_s, now, dry_run):
+    """The cap while a jest runs (card 7ea96ce9): evict WHOLE top-level entries, oldest first, until
+    each jest_dx is under cap, never an entry with anything written in the last floor_s.
+    Returns (entries, bytes, refused)."""
+    count = size = 0
+    refused = []
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue
+        if not jest_dir_is_allowed(d):
+            refused.append(d)
+            continue
+        entries = []
+        for n in os.listdir(d):
+            p = os.path.join(d, n)
+            try:
+                newest, nbytes = entry_stats(p)
+            except OSError:
+                continue
+            entries.append((newest, nbytes, p))
+        total = sum(e[1] for e in entries)
+        for newest, nbytes, p in sorted(entries):
+            if total <= cap_bytes or now - newest < floor_s:
+                break  # oldest first: once one entry is too young, every later one is too
+            if not dry_run:
+                try:
+                    if os.path.isdir(p) and not os.path.islink(p):
+                        shutil.rmtree(p)
+                    else:
+                        os.unlink(p)
+                except OSError:
+                    continue
+            total -= nbytes
+            count += 1
+            size += nbytes
+    return count, size, refused
+
+
+def jest_dir_sizes(dirs):
+    """[(dir, bytes)] of every existing, allowed jest_dx: what is LEFT, for the log."""
+    out = []
+    for d in dirs:
+        if os.path.isdir(d) and jest_dir_is_allowed(d):
+            out.append((d, sum(entry_stats(os.path.join(d, n))[1] for n in os.listdir(d))))
+    return out
 
 
 JEST_PROCESS_PATTERN = r"node_modules/(\.bin/jest|jest/bin/jest|jest-cli/bin/jest|jest-worker/)"
@@ -506,6 +587,8 @@ def main(argv=None):
     ap.add_argument("--compile-cache-cap-mb", type=float, default=1024.0)
     ap.add_argument("--jest-cap-mb", type=float, default=4096.0)
     ap.add_argument("--jest-min-age-minutes", type=float, default=60.0)
+    ap.add_argument("--jest-busy-floor-minutes", type=float, default=120.0,
+                    help="while a jest runs: only whole entries idle this long are evicted")
     ap.add_argument("--wt-repo", action="append", type=parse_repo_arg,
                     help="PATH:remote1,remote2 -- override the repos (tests)")
     ap.add_argument("--wt-min-age-hours", type=float, default=48.0)
@@ -520,6 +603,9 @@ def main(argv=None):
     if a.jest_min_age_minutes < 30:
         print("ERROR: --jest-min-age-minutes below 30 would reach a live jest run; refusing")
         return 2
+    if a.jest_busy_floor_minutes < 60:
+        print("ERROR: --jest-busy-floor-minutes below 60 would reach a tree a jest is writing; refusing")
+        return 2
     if a.wt_min_age_hours < 24:
         print("ERROR: --wt-min-age-hours below 24 would reach a tree in use today; refusing")
         return 2
@@ -533,14 +619,21 @@ def main(argv=None):
     files, size, refused = collect_jest(a.jest_dir or default_jest_dirs(), max_age_s, now, a.dry_run)
     print("%s %sjest_dx: %d files, %.2f GiB%s" % (
         stamp, tag, files, size / 2**30, (" | REFUSED dirs: %s" % refused) if refused else ""))
+    jest_dirs = a.jest_dir or default_jest_dirs()
     if jest_running(a.pgrep):
         print("%s %sjest_dx cap: SKIPPED -- a jest process is running (or pgrep could not be asked);"
               " it may be reading cache files of any age" % (stamp, tag))
+        bn, bs, _bref = collect_jest_busy_cap(jest_dirs, a.jest_cap_mb * 2**20,
+                                              a.jest_busy_floor_minutes * 60, now, a.dry_run)
+        print("%s %sjest_dx busy cap (%.0f MB each, whole entries idle %.0f min): %d entries, %.2f GiB" % (
+            stamp, tag, a.jest_cap_mb, a.jest_busy_floor_minutes, bn, bs / 2**30))
     else:
         jf, js, _jref = collect_jest_cap(a.jest_dir or default_jest_dirs(), a.jest_cap_mb * 2**20,
                                          a.jest_min_age_minutes * 60, now, a.dry_run)
         print("%s %sjest_dx cap (%.0f MB each, nothing under %.0f min): %d files, %.2f GiB" % (
             stamp, tag, a.jest_cap_mb, a.jest_min_age_minutes, jf, js / 2**30))
+    for d, left in jest_dir_sizes(jest_dirs):
+        print("%s %sjest_dx left: %.0f MB in %s" % (stamp, tag, left / 2**20, d))
 
     failures = 0
     if not a.skip_compile_cache:

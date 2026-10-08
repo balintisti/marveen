@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Half-hourly jest_dx pass of dev-gc (card 7ea96ce9). jest_dx grows ~8 GB/h on a busy day, so
+  the daily 05:30 run (com.marveen.dev-gc) alone lets it reach the disk alert before it fires.
+  This job runs only the jest_dx half: age sweep, size cap and the busy cap while jest runs.
+  The database, worktree and compile-cache halves stay on the daily job.
+
+  Install (a separate lane from the merge -- launchd reads the INSTALLED copy):
+    cp scripts/com.marveen.dev-gc-jest.plist.template ~/Library/LaunchAgents/com.marveen.dev-gc-jest.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.marveen.dev-gc-jest.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.marveen.dev-gc-jest</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/isti/marveen/scripts/dev-gc.py</string>
+    <string>--skip-db</string>
+    <string>--skip-worktrees</string>
+    <string>--skip-compile-cache</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>1800</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/isti/marveen/store/dev-gc.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/isti/marveen/store/dev-gc.log</string>
+</dict>
+</plist>
