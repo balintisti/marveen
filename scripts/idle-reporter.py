@@ -96,12 +96,30 @@ def roster(fleet_root=None):
     agents_dir = os.path.join(root, "agents")
     try:
         for n in os.listdir(agents_dir):
-            if os.path.isdir(os.path.join(agents_dir, n)) and not n.startswith("."):
+            d = os.path.join(agents_dir, n)
+            if os.path.isdir(d) and not n.startswith(".") and not is_parked(d):
                 names.add(n)
     except OSError:
         pass
     names.add(env_value("MAIN_AGENT_ID", env_path=os.path.join(root, ".env")) or "marveen")
     return sorted(names)
+
+
+def is_parked(agent_dir):
+    """Igaz, ha az agens workcheck.json-ja `{"kind": "none"}` -- a gazda dontese szerint parkol.
+
+    MIERT (2026-10-08, Isti 6001): a parkolt agens (jarvis, sirius, zara, deeper) a
+    kuszob felett "nema" volt, es a jelentes Istinek LEALLASKENT olvasodott -- holott
+    a parkolas az O dontese volt. A tetlen-or es a quota-ceiling-guard a `kind=none`-t
+    mar kihagyja; ez a jelento eddig nem.
+    FAIL-OPEN: hianyzo vagy olvashatatlan fajl -> NEM parkol, tehat merjuk. Egy
+    tores itt csak zajt adhat, vaksagot nem.
+    """
+    try:
+        with open(os.path.join(agent_dir, "workcheck.json"), encoding="utf-8") as fh:
+            return json.load(fh).get("kind") == "none"
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 def env_value(key, env_path=None):
