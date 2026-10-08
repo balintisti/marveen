@@ -28,6 +28,10 @@ backends (node dist/main) from e2e runners whose EXIT trap never ran or whose SI
    the lowest ticket among waiters whose agent holds no slot may take a free slot ("whose agent holds
    no slot": a waiter that the one-per-agent rule keeps out must not block everybody behind it).
    Deciding and taking happen under one lock (queue.lock), so two waiters cannot both think it is theirs.
+   A ticket is only as good as its owner's polling: SIGSTOP keeps the lock alive, and a stopped (or
+   wedged) head waiter would hold a free slot empty for everyone behind it (marveen, review of 391d725b).
+   So each waiter touches its ticket on every poll, and a ticket not touched for max(3 x its poll, 3 s)
+   is SKIPPED -- not deleted: it rejoins its place the moment its owner polls again.
    HEAVY_RUN_FIFO=0 switches the ticket order off (the old first-poll-wins behaviour).
 The exit code is the command's (128+N if a signal ended it). Each run appends one JSON line to
 HEAVY_RUN_DIR/runs.jsonl: who, what, waited_s, ran_s, rc.
@@ -47,6 +51,7 @@ MAX = int(os.environ.get("HEAVY_RUN_MAX") or 2)
 GRACE = float(os.environ.get("HEAVY_RUN_GRACE") or 10)
 POLL = float(os.environ.get("HEAVY_RUN_POLL") or 5)
 FIFO = (os.environ.get("HEAVY_RUN_FIFO") or "1") != "0"
+STALE_FLOOR = 3.0  # a ticket untouched for less than this is never called stalled, whatever the poll
 QDIR = os.path.join(DIR, "tickets")
 
 
@@ -146,7 +151,7 @@ def take_ticket(me):
         path = os.path.join(QDIR, f"{n:012d}")
         f = open(path, "w")
         fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)  # nobody else can know this name yet
-        f.write(json.dumps({**me, "seq": n}))
+        f.write(json.dumps({**me, "seq": n, "stale_s": max(3 * POLL, STALE_FLOOR)}))
         f.flush()
         return f, path, n
 
@@ -166,6 +171,10 @@ def live_tickets():
         except BlockingIOError:
             t = read_holder(path)  # locked: its owner lives (this includes our own ticket)
             if t:
+                try:
+                    t["_age"] = time.time() - os.stat(path).st_mtime
+                except FileNotFoundError:
+                    continue
                 out.append(t)
         else:
             try:
@@ -177,6 +186,10 @@ def live_tickets():
     return out
 
 
+def is_stalled(t):
+    return t.get("_age", 0) > t.get("stale_s", 15)
+
+
 def try_slot_in_order(me, ticket):
     """try_slot, but only if ours is among the oldest tickets that can use the free slots.
 
@@ -184,12 +197,15 @@ def try_slot_in_order(me, ticket):
     queued (one run per agent). With k free slots the k oldest candidates may go: two arrivals at an
     idle machine both start, a third waits for the first release."""
     tf, tpath, seq = ticket
+    os.utime(tpath)  # "I am polling": the stamp that tells a stopped or wedged owner from a waiting one
     with QueueLock():
         held = holders()
         busy = {h.get("agent") for h in held}
         free = MAX - len(held)
         oldest = {}
         for t in live_tickets():
+            if is_stalled(t):
+                continue  # alive but not polling: it must not hold a free slot empty
             if t.get("agent") not in busy:
                 oldest.setdefault(t.get("agent"), t)
         ranked = [t.get("seq") for t in oldest.values()]  # insertion order = ticket order
@@ -511,6 +527,25 @@ def self_test():
     results.append(("CONTROL: that agent's own second run does wait", waited(d2)))
     finish(d)
 
+    # 12. a STOPPED head waiter (SIGSTOP keeps its ticket lock alive) must not keep a free slot empty
+    # (marveen's review of 391d725b). One slot, held for 7 s; the head is stopped at 1.5 s, so by the time
+    # the slot frees its ticket has gone untouched for longer than max(3 x poll, 3 s).
+    fast = {"HEAVY_RUN_MAX": "1", "HEAVY_RUN_POLL": "0.5"}
+    h1 = spawn("h1", "sleep", "7", extra=fast)
+    time.sleep(1.0)
+    head = spawn("shead", "true", extra=fast)
+    time.sleep(0.6)
+    nxt = spawn("snext", "true", extra=fast)
+    time.sleep(0.2)
+    head.send_signal(signal.SIGSTOP)
+    nxt_rc = finish(nxt, 40)
+    still_stopped = head.poll() is None
+    results.append(("a SIGSTOPped head waiter does not keep the free slot empty for the next one",
+                    nxt_rc == 0 and still_stopped))
+    head.send_signal(signal.SIGCONT)
+    results.append(("CONTROL: after SIGCONT the stopped waiter rejoins and gets its turn", finish(head, 40) == 0))
+    finish(h1)
+
     # 8. --help and a mistyped command answer in words, not with a traceback
     h = subprocess.run([sys.executable, me, "--help"], env=env, capture_output=True, text=True)
     results.append(("--help prints the usage, rc 0", h.returncode == 0 and "--status" in h.stdout))
@@ -541,7 +576,8 @@ def main(argv):
         with QueueLock():
             waiting = live_tickets()
         for i, t in enumerate(waiting):
-            print(f"  waiting #{i + 1}: {t['agent']} pid {t['pid']} since {t['started']} -- {t['label']}")
+            note = " [stalled: not polling]" if is_stalled(t) else ""
+            print(f"  waiting #{i + 1}: {t['agent']} pid {t['pid']} since {t['started']} -- {t['label']}{note}")
         return 0
     label = None
     if argv[:1] == ["--label"]:
