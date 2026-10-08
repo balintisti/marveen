@@ -459,7 +459,7 @@ def self_test():
     # 9. FIRST COME, FIRST SERVED (card 391d725b). Both slots held; "old" queues first (a slow poll, 1 s),
     # then three waiters of ONE other agent (fast poll, 0.2 s) that would win every race for the slot.
     # Each command appends its agent when it STARTS, so the first line says who got in first.
-    def order_case(fifo):
+    def order_case(fifo, old_poll="1.0"):
         orderfile = os.path.join(base, f"order-{fifo}")
         e = {**env, "HEAVY_RUN_FIFO": fifo, "HEAVY_RUN_MAX": "1"}  # one slot: only the oldest may take it
 
@@ -471,7 +471,7 @@ def self_test():
         h1 = sp("h1", "0.2", "sleep", "3")
         time.sleep(1.0)
         note = f"echo $0 >> {orderfile}; sleep 1.2"
-        procs = [sp("old", "1.0", "bash", "-c", note, "old")]
+        procs = [sp("old", old_poll, "bash", "-c", note, "old")]
         time.sleep(0.6)
         procs += [sp("many", "0.2", "bash", "-c", note, "many") for _ in range(3)]
         for p in [h1, *procs]:
@@ -482,13 +482,14 @@ def self_test():
     results.append(("FIFO: the older waiter of one agent beats three later waiters of another",
                     first[:1] == ["old"]))
     # Without tickets the winner is whoever polls first after the release: a race. The control only has
-    # to show that the setup CAN lose, so it gets three tries.
+    # to show that the setup CAN lose, so the old waiter polls slower still and it gets five tries
+    # (measured: with a 1 s poll it won 1 run in 6 by luck of timing).
     ctrl = []
-    for _ in range(3):
-        ctrl = order_case("0")
+    for _ in range(5):
+        ctrl = order_case("0", old_poll="3.0")
         if ctrl[:1] == ["many"]:
             break
-    results.append(("CONTROL: with HEAVY_RUN_FIFO=0 the three fast pollers get in first (race, 3 tries)",
+    results.append(("CONTROL: with HEAVY_RUN_FIFO=0 the three fast pollers get in first (race, up to 5 tries)",
                     ctrl[:1] == ["many"]))
 
     # 10. a SIGKILLed waiter at the head of the queue does not block it (its ticket dies with its lock)
