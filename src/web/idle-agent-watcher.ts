@@ -73,15 +73,21 @@ const THRESHOLDS: IdleAgentThresholds = {
   // already reported, none followed by anything the repeat caused; a blind spell that outlasts
   // the window is still reported again, four times a day at most.
   paneUnreadableRealertMs: 6 * 60 * 60_000,
-  // NO BOUND on recognised background work (card 53bcfe74: waiting on background work is
-  // working, not idle). Sub-agent rows, the `Waiting for N background agents` line, footer shells
-  // and monitors keep an agent out of the guard for as long as they are on screen: no wake, no
-  // repeat, no coordinator notice. The 2 h hold, the one-notice-per-2 h window and the silent-trace
-  // ghost check this branch added (subagentHoldMs, subagentNoticeWindowMs, subagentSilentMs) are
-  // deliberately NOT set: measured 2026-10-09 07:21-09:55, nine false alerts in 2.5 hours came from
-  // agents legitimately waiting (mandark x4, friday x2, computress x3, didi x2), and a notice that
-  // can only say "your sub-agent is still running" costs a paid turn each time. The decision keeps
-  // the optional fields, so a bound is a config line away if a stuck-forever case turns up.
+  // Recognised background work (sub-agent rows, the `Waiting for N background agents` line, footer
+  // shells and monitors) keeps an agent out of the guard WITHOUT any notice (card 53bcfe74): no
+  // wake, no repeat, no coordinator message. There is no hold bound and no notice window
+  // (subagentHoldMs, subagentNoticeWindowMs are deliberately not set): measured 2026-10-09
+  // 07:21-09:55, nine false alerts in 2.5 hours came from agents legitimately waiting, and a notice
+  // that can only say "your sub-agent is still running" costs a paid turn each time.
+  //
+  // THE WAY OUT is the ghost-row guard: background work on screen for the whole of this window and
+  // the agent sent no message and wrote no card comment since it appeared -> judged as if it had
+  // none (the normal path: one wake, then the usual escalation). A row that never goes away (a dead
+  // sub-agent, a leftover shell) must not hide a stuck agent forever. marveen 26460 overruled
+  // friday's 30 minutes: legitimate silent spells reached 85 minutes in one night (mandark 85,
+  // dexter 80, friday), so anything under 2 h false-escalates working agents. Any message or card
+  // comment after the work appeared puts the hold back.
+  subagentSilentMs: 2 * 60 * 60_000,
 }
 
 // WHERE THE REPEATS OF "IDLE, NOTHING ASSIGNED" GO (card 3c27105f): a line in this file, which the

@@ -447,16 +447,27 @@ describe('tick() -- a bekotes', () => {
     expect(reasonOf('x')).toBe('subagents-running')
   })
 
-  // Card 53bcfe74: the watcher sets NO bound (THRESHOLDS has no subagentHoldMs / subagentNoticeWindowMs /
-  // subagentSilentMs). The pure-decision tests above keep passing their own thresholds; this one pins the
-  // wiring: rows on screen with ZERO trace stay a hold at 85 min, 121 min (the old bound), 5 h and 24 h.
-  it('53bcfe74: a watcher NEM szab hatart a felismert hatter-munkara: nulla nyommal is tartas 24 oraig, nincs ertesites', () => {
+  // Card 53bcfe74: the watcher sets NO hold bound and NO notice window; the ghost-row guard
+  // (subagentSilentMs, 2 h) is the way out. The pure-decision tests above pass their own thresholds;
+  // this one pins the wiring: rows on screen while the agent keeps writing stay a hold at 85 min,
+  // 121 min (the old bound), 5 h and 24 h; the same rows with ZERO trace stop holding at the 2 h mark.
+  it('53bcfe74: a watcher nem szab tartas-hatart, de a szellem-sor 2 oranal elenged (nyom nelkul)', () => {
     workcheck('x', 'assigned_open_cards'); openCards(); panes.set('agent-x', rowsPane())
-    outboundSec = null
+    outboundSec = () => nowSec()                            // az agens vegig ir valamit
     const at = (min: number) => { vi.setSystemTime(NOW + min * 60_000); tick(); return reasonOf('x') }
     for (const min of [0, 85, 121, 134, 5 * 60, 24 * 60]) expect(at(min)).toBe('subagents-running')
     expect(toCoordinator()).toHaveLength(0)
     expect(existsSync(digestPath())).toBe(false)
+  })
+
+  it('53bcfe74: ugyanaz nulla nyommal: 85 perc meg tartas, 121 perc utan szellem-sor (szokasos menet, nem ertesites-ablak)', () => {
+    workcheck('x', 'assigned_open_cards'); openCards(); panes.set('agent-x', rowsPane())
+    outboundSec = null
+    const at = (min: number) => { vi.setSystemTime(NOW + min * 60_000); tick(); return reasonOf('x') }
+    expect(at(0)).toBe('subagents-running')
+    expect(at(85)).toBe('subagents-running')
+    expect(at(121)).not.toBe('subagents-running')
+    expect(at(152)).not.toBe('subagents-notice-window')
   })
 
   // didi 31755 (3): a nyom-keresés HIBÁJA = "nem merve" (undefined, az ido szerinti tartas marad), NEM
