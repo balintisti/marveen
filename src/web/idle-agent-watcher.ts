@@ -8,7 +8,7 @@ import { resolveAgentSession } from './channel-mcp-reconnect.js'
 import { sendAlert } from './channel-monitor.js'
 import { busyEvidence, detectPaneState, runningSubagentCount } from '../pane-state.js'
 import { usageLimitHolds } from '../usage-limit-window.js'
-import { getPendingMessages, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
+import { getPendingMessages, getLastOutboundMessageAt, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
 import {
   decideIdleAlert,
   parseWorkCheck,
@@ -77,6 +77,15 @@ const THRESHOLDS: IdleAgentThresholds = {
   // spell measured was 74 minutes (didi's three reviewers, 2026-10-07); computress's polling
   // sub-agents (52-82 minutes, nothing posted) are the case the bound exists for.
   subagentHoldMs: 2 * 60 * 60_000,
+  // Past the hold, while the rows are still on screen: ONE notice per two hours, not one per 30
+  // minutes (marveen 26435: ~10 false idle-guard alerts in one night, nearly all agents working
+  // through sub-agents).
+  subagentNoticeWindowMs: 2 * 60 * 60_000,
+  // The ghost-row guard: rows on screen for 30 minutes and the agent sent no message and wrote no card
+  // comment since they appeared -> the hold is dropped and the agent is judged as if it had none.
+  // Chosen by friday (marveen asked for "the hold window"; checking only at the hold's end would be
+  // no check at all); marveen may veto the 30 minutes.
+  subagentSilentMs: 30 * 60_000,
 }
 
 // WHERE THE REPEATS OF "IDLE, NOTHING ASSIGNED" GO (card 3c27105f): a line in this file, which the
@@ -271,6 +280,29 @@ export function lastRealCommentAtByCard(raw: Map<string, Map<string, number>>): 
   }
 }
 
+/** The agent's latest ACTION TRACE, epoch ms: the newer of its last outgoing inter-agent message
+ *  (db.getLastOutboundMessageAt, the helper the session-stuck alert already uses) and its last card
+ *  comment (the per-tick comment map, census comments excluded). null = none on record; undefined = the
+ *  lookup failed, which the decision reads as "not measured" and keeps the time-only hold. */
+export function lastActionAtMs(
+  agent: string,
+  comments: Map<string, Map<string, number>>,
+): number | null | undefined {
+  try {
+    const me = agent.trim().toLowerCase()
+    let latestSec: number | null = getLastOutboundMessageAt(agent)
+    for (const authors of comments.values()) {
+      for (const [author, at] of authors) {
+        if (author.trim().toLowerCase() === me && (latestSec === null || at > latestSec)) latestSec = at
+      }
+    }
+    return latestSec === null ? null : latestSec * 1000
+  } catch (err) {
+    logger.warn({ err, agent }, 'idle guard: action-trace lookup failed; the sub-agent hold is judged by time only')
+    return undefined
+  }
+}
+
 /** null = could not tell (no session, capture failed, unknown pane). NOT the same as
  *  "busy". Folding an unreadable pane into "busy" silently switches the guard off for
  *  that agent -- a failure that looks exactly like health, which is the one shape this
@@ -447,6 +479,8 @@ export function tick(): void {
           staleCounterOnly: running ? paneRead.staleCounterOnly : false,
           paneUsageLimited: running ? paneRead.usageLimited === true : false,
           runningSubagents: running ? paneRead.runningSubagents ?? 0 : 0,
+          // Read only when sub-agent rows are on screen: it is the one case that consumes it.
+          lastActionAtMs: running && (paneRead.runningSubagents ?? 0) > 0 ? lastActionAtMs(agent, realComments ?? comments) : undefined,
           pendingMessages: running ? getPendingMessages(agent).length : 0,
           ownWorkCount,
           // Without this the repeat-suppression never fires -- it is skipped whenever the

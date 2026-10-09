@@ -30,6 +30,11 @@ const paneStates = new Map<string, string>()
 const messages: Array<{ from: string; to: string; content: string }> = []
 let storedState: Record<string, unknown> | null = null
 let failNextMessage = false
+// A cselekves-nyom forrasai (a watcher ezeket olvassa): az utolso kimeno uzenet ideje (mp, null = nincs),
+// a kartya-kommentek (kartya, szerzo, ido mp) es a tabla kartyai.
+let outboundSec: number | null | (() => number | null) = null
+let commentRows: Array<{ card_id: string; author: string; at: number }> = []
+let cardRows: Array<Record<string, unknown>> = []
 
 vi.mock('../logger.js', () => ({
   logger: { debug: (...a: unknown[]) => debug(...a), info: (...a: unknown[]) => info(...a), warn: () => {}, error: () => {} },
@@ -62,9 +67,16 @@ vi.mock('../pane-state.js', async (importOriginal) => {
 vi.mock('../web/channel-monitor.js', () => ({ sendAlert: () => {} }))
 vi.mock('../db.js', () => ({
   getPendingMessages: () => [],
-  listKanbanCards: () => [],
+  listKanbanCards: () => cardRows,
   getLabelsForAllCards: () => new Map(),
-  getDb: () => ({ prepare: () => ({ all: () => [], get: () => undefined, run: () => ({ changes: 0 }) }) }),
+  getLastOutboundMessageAt: () => (typeof outboundSec === 'function' ? outboundSec() : outboundSec),
+  getDb: () => ({
+    prepare: (sql: string) => ({
+      all: () => (sql.includes('GROUP BY card_id, author') && !sql.includes('NOT IN') ? commentRows : []),
+      get: () => undefined,
+      run: () => ({ changes: 0 }),
+    }),
+  }),
   createAgentMessage: (from: string, to: string, content: string) => {
     if (failNextMessage) { failNextMessage = false; throw new Error('enqueue failed') }
     messages.push({ from, to, content }); return { id: messages.length }
@@ -74,6 +86,7 @@ vi.mock('../db.js', () => ({
 }))
 
 const { decideIdleAlert, NO_IDLE_STATE, idleDigestLine } = await import('../idle-agent.js')
+import type { IdleAgentThresholds } from '../idle-agent.js'
 const { runningSubagentCount } = await import('../pane-state.js')
 let { tick } = await import('../web/idle-agent-watcher.js')
 const { MAIN_AGENT_ID } = await import('../config.js')
@@ -130,6 +143,7 @@ describe('(a) decideIdleAlert -- futo al-agens mellett nincs ebresztes, nincs es
   const T = {
     sustainedMs: 12 * 60_000, realertMs: 30 * 60_000, wakeGraceMs: 15 * 60_000, wakeCooldownMs: 30 * 60_000,
     paneUnreadableRealertMs: 6 * 3_600_000, subagentHoldMs: 2 * 3_600_000,
+    subagentNoticeWindowMs: 2 * 3_600_000, subagentSilentMs: 30 * 60_000,
   }
   const base = { agent: 'x', running: true, paneIdle: true as boolean | null, pendingMessages: 0, ownWorkCount: 3, workCheckKind: 'assigned_open_cards' }
   const now = 1_800_000_000_000
@@ -177,31 +191,80 @@ describe('(a) decideIdleAlert -- futo al-agens mellett nincs ebresztes, nincs es
 
   // didi 31695 szimulacioja: 10 ora, percenkenti tick, tetlen agens 2 nyitott kartyaval, a watcher
   // valodi kuszobeivel; a futo al-agens-sor az egesz idon at latszik. A kontroll al-agens nelkul fut.
-  const simulate = (subagents: number) => {
+  // `trace`: a cselekves-nyom az adott percben (az utolso kimeno uzenet / kartya-komment ideje, ms),
+  // undefined = nincs merve, null = nincs nyom.
+  const simulate = (subagents: number, trace?: (min: number) => number | null | undefined, thr: IdleAgentThresholds = T) => {
     let st = { ...NO_IDLE_STATE } as typeof NO_IDLE_STATE
     const log: Array<{ min: number; reason: string }> = []
     for (let min = 0; min <= 600; min++) {
       const r = decideIdleAlert(
-        { ...base, ownWorkCount: 2, ownWorkIds: ['a', 'b'], runningSubagents: subagents },
-        st, T, now + min * 60_000,
+        { ...base, ownWorkCount: 2, ownWorkIds: ['a', 'b'], runningSubagents: subagents, lastActionAtMs: trace?.(min) },
+        st, thr, now + min * 60_000,
       )
       st = r.next
       if (r.decision.alert) log.push({ min, reason: r.decision.reason })
     }
     return log
   }
+  // Az agens minden percben ir valamit (a nyom mindig friss): a sor mellett DOLGOZIK.
+  const alwaysTraced = (min: number) => now + min * 60_000
+  const escalations = (l: Array<{ reason: string }>) => l.filter((e) => e.reason === 'idle-with-work').length
 
-  it('10 ora tartosan latszo al-agens-sor mellett: az elso 2 ora nema, utana a szokasos ebresztes ES eszkalacio fut (didi 31695)', () => {
+  it('sub-agent sor + nyom -> 1 ertesites / 2 h (marveen 26435 (1))', () => {
     const control = simulate(0)
-    const held = simulate(1)
-    const escalations = (l: typeof held) => l.filter((e) => e.reason === 'idle-with-work').length
-    expect(escalations(control)).toBeGreaterThan(10)       // pozitiv kontroll: a szimulacio MER eszkalaciot (didi: 20)
+    const held = simulate(1, alwaysTraced)
+    expect(escalations(control)).toBe(20)                  // pozitiv kontroll: a szimulacio MER eszkalaciot
     expect(held.filter((e) => e.min < 120)).toEqual([])    // az elso 2 ora csendes
     expect(held[0]).toMatchObject({ reason: 'wake-agent' })
-    expect(escalations(held)).toBeGreaterThan(0)
-    // A tartas lejarta utan a menet az al-agens nelkulivel egyezik: ugyanazok a riasztasok, 120 perccel eltolva.
-    const shifted = control.filter((e) => e.min <= 480).map((e) => ({ ...e, min: e.min + 120 }))
-    expect(held).toEqual(shifted)
+    // A tartas utan 2 oras ablakonkent EGY ertesites (132 ebresztes, majd 252, 372, 492 eszkalacio), nem 30 percenkent.
+    expect(held.map((e) => e.min)).toEqual([132, 252, 372, 492])
+    expect(held.slice(1).every((e) => e.reason === 'idle-with-work')).toBe(true)
+    // Egyetlen 2 oras ablakban sincs ket ertesites.
+    for (let a = 120; a + 120 <= 600; a += 1) expect(held.filter((e) => e.min >= a && e.min < a + 120).length).toBeLessThanOrEqual(1)
+  })
+
+  it('sub-agent sor + nulla nyom 2 h-ig -> eszkalacio (marveen 26435 (2))', () => {
+    const control = simulate(0)
+    const ghost = simulate(1, () => null)                  // sor latszik, az agens SEMMIT nem kuldott/irt
+    expect(ghost.length).toBeGreaterThan(0)
+    expect(ghost[0].min).toBeLessThan(120)                 // nem var a 2 oras tartasra
+    expect(ghost[0]).toMatchObject({ reason: 'wake-agent' })
+    expect(ghost.some((e) => e.reason === 'idle-with-work' && e.min < 120)).toBe(true)   // a koordinator tud rola a tartas ELOTT
+    // Szellem-sor: a menet a nyom-ablak (30 perc) utan az al-agens nelkulivel egyezik.
+    expect(ghost).toEqual(control.filter((e) => e.min <= 570).map((e) => ({ ...e, min: e.min + 30 })))
+  })
+
+  it('a nyom a sor MEGJELENESE UTANI: egy regi nyom nem szamit (a szellem-sor mellett is eszkalal)', () => {
+    const stale = simulate(1, () => now - 5 * 3_600_000)   // az utolso uzenet 5 oraval a sor elott
+    expect(stale[0].min).toBeLessThan(120)
+  })
+
+  it('a nyom CSAK kartya-komment is lehet (nem csak uzenet): a sor mellett a tartas marad', () => {
+    // A hivo a ket forras maximumat adja at; itt a komment a friss, az uzenet regi -- a dontes csak a maximumot latja.
+    const held = simulate(1, (min) => now + min * 60_000 - 1000)
+    expect(held.filter((e) => e.min < 120)).toEqual([])
+  })
+
+  it('MEGFELELTETES: nyom-ellenorzes nelkuli kuszob (subagentSilentMs hianyzik) -> a szellem-sor 2 oraig nema', () => {
+    const { subagentSilentMs: _drop, ...noSilent } = T
+    const ghost = simulate(1, () => null, noSilent)
+    expect(ghost.filter((e) => e.min < 120)).toEqual([])
+  })
+
+  it('MEGFELELTETES: ablak-kuszob nelkul a tartas utan a szokasos 30 perces menet fut', () => {
+    const { subagentNoticeWindowMs: _drop, ...noWindow } = T
+    const held = simulate(1, alwaysTraced, noWindow)
+    expect(escalations(held)).toBeGreaterThan(10)
+  })
+
+  it('az elnyomott ertesites megtartja a tetlen-szakaszt es nem viszi el az ertesites konyvelet', () => {
+    const t0 = now + 130 * 60_000
+    const st = { ...NO_IDLE_STATE, idleSinceMs: t0 - 20 * 60_000, lastWakeAt: t0 - 18 * 60_000, subagentsSinceMs: now, lastSubagentNoticeAt: t0 - 18 * 60_000 }
+    const r = decideIdleAlert({ ...base, ownWorkCount: 2, runningSubagents: 1, lastActionAtMs: t0 - 1000 }, st, T, t0)
+    expect(r.decision).toEqual({ alert: false, reason: 'subagents-notice-window' })
+    expect(r.next.idleSinceMs).toBe(st.idleSinceMs)
+    expect(r.next.lastAlertAt).toBeNull()
+    expect(r.next.lastSubagentNoticeAt).toBe(st.lastSubagentNoticeAt)
   })
 
   it('az ora NULLAZODIK, ha egy tick nem lat al-agenst', () => {
@@ -279,6 +342,7 @@ describe('tick() -- a bekotes', () => {
     vi.useFakeTimers(); vi.setSystemTime(NOW)
     debug.mockReset(); info.mockReset(); panes.clear(); paneStates.clear(); messages.length = 0
     storedState = null; failNextMessage = false
+    outboundSec = null; commentRows = []; cardRows = []
     workcheck(MAIN_AGENT_ID, 'none')
     panes.set(`agent-${MAIN_AGENT_ID}`, 'COORDINATOR-PANE')
   })
@@ -303,12 +367,70 @@ describe('tick() -- a bekotes', () => {
   it('(a) a watcher 2 oras tartasa: 90 perc mulva meg al-agenses, 121 perc mulva mar nem (a THRESHOLDS bekotese)', () => {
     workcheck('x', 'assigned_open_cards')
     panes.set('agent-x', pane({ rows: [runningRow('b19-pw', 18)] }))
+    outboundSec = () => Math.floor(Date.now() / 1000)       // az agens vegig ir valamit: a nyom nem engedi el a tartast
     tick()
     expect(reasonOf('x')).toBe('subagents-running')
     vi.setSystemTime(NOW + 90 * 60_000); tick()
     expect(reasonOf('x')).toBe('subagents-running')
     vi.setSystemTime(NOW + 121 * 60_000); tick()
     expect(reasonOf('x')).not.toBe('subagents-running')
+  })
+
+  // --- a cselekves-nyom es az ertesites-ablak bekotese (marveen 26435) ---------------------------
+  const nowSec = () => Math.floor(Date.now() / 1000)
+  const openCards = () => {
+    cardRows = ['a', 'b'].map((n) => ({
+      id: `card-${n}`, title: `t-${n}`, status: 'in_progress', assignee: 'x', priority: 'normal',
+      archived_at: null, updated_at: nowSec(), due_date: null,
+    }))
+  }
+  const rowsPane = () => pane({ rows: [runningRow('b19-pw', 18)] })
+
+  it('(a/nyom) sor + friss kimeno uzenet: 45 perc mulva is tartas (a nyom jelen van)', () => {
+    workcheck('x', 'assigned_open_cards'); panes.set('agent-x', rowsPane())
+    outboundSec = () => nowSec()
+    tick()
+    vi.setSystemTime(NOW + 45 * 60_000); tick()
+    expect(reasonOf('x')).toBe('subagents-running')
+  })
+
+  it('(a/nyom) sor + NULLA nyom: 31 perc utan a tartas elengedi, az agens ugy ertekelodik, mintha nem lenne al-agense', () => {
+    workcheck('x', 'assigned_open_cards'); panes.set('agent-x', rowsPane())
+    outboundSec = null
+    tick()
+    vi.setSystemTime(NOW + 25 * 60_000); tick()
+    expect(reasonOf('x')).toBe('subagents-running')         // a nyom-ablakon belul meg tartas
+    vi.setSystemTime(NOW + 31 * 60_000); tick()
+    expect(reasonOf('x')).not.toBe('subagents-running')
+  })
+
+  it('(a/nyom) a nyom lehet CSAK kartya-komment is (az agens sajat komentje), uzenet nelkul', () => {
+    workcheck('x', 'assigned_open_cards'); panes.set('agent-x', rowsPane())
+    outboundSec = null
+    commentRows = [{ card_id: 'card-a', author: 'X', at: Math.floor((NOW + 20 * 60_000) / 1000) }]   // nagybetu: a szerzo-egyezes kis/nagybetu-fuggetlen
+    tick()
+    vi.setSystemTime(NOW + 31 * 60_000); tick()
+    expect(reasonOf('x')).toBe('subagents-running')
+  })
+
+  it('(a/nyom) MEGFELELTETES: egy MAS szerzo kommentje nem nyom', () => {
+    workcheck('x', 'assigned_open_cards'); panes.set('agent-x', rowsPane())
+    commentRows = [{ card_id: 'card-a', author: 'marveen', at: Math.floor((NOW + 20 * 60_000) / 1000) }]
+    tick()
+    vi.setSystemTime(NOW + 31 * 60_000); tick()
+    expect(reasonOf('x')).not.toBe('subagents-running')
+  })
+
+  it('(a/ablak) a tartas utan, amig a sor latszik, 2 oras ablakonkent EGY ertesites (a THRESHOLDS bekotese)', () => {
+    workcheck('x', 'assigned_open_cards'); openCards(); panes.set('agent-x', rowsPane())
+    outboundSec = () => nowSec()                            // az agens vegig ir valamit: nincs szellem-gyanu
+    const at = (min: number) => { vi.setSystemTime(NOW + min * 60_000); tick(); return reasonOf('x') }
+    expect(at(0)).toBe('subagents-running')
+    expect(at(121)).toBe('not-sustained')                   // a tartas lejart, a szakasz indul
+    expect(at(134)).toBe('wake-agent')                      // az ablak EGYETLEN ertesitese
+    expect(at(152)).toBe('subagents-notice-window')         // az eszkalacio mar az ablakba esik: elnyomva
+    expect(at(165)).toBe('subagents-notice-window')         // 31 perc: a 30 perces ablak itt mar kiengedne
+    expect(at(255)).toBe('idle-with-work')                  // az uj ablak ertesitese, a szakasz megmaradt
   })
 
   it('(a) MEGFELELTETES: ugyanaz az allapot al-agens NELKUL a "nincs kiosztva" agra fut', () => {
