@@ -32,7 +32,10 @@ backends (node dist/main) from e2e runners whose EXIT trap never ran or whose SI
    wedged) head waiter would hold a free slot empty for everyone behind it (marveen, review of 391d725b).
    So each waiter touches its ticket on every poll, and a ticket not touched for max(3 x its poll, 3 s)
    is SKIPPED -- not deleted: it rejoins its place the moment its owner polls again.
-   HEAVY_RUN_FIFO=0 switches the ticket order off (the old first-poll-wins behaviour).
+   HEAVY_RUN_FIFO=0 switches the ticket order off (the old first-poll-wins behaviour). The light pool
+   (item 4) has the SAME queue, but its OWN: tickets-light/, queue-light.lock, ticket-seq-light. A light
+   waiter never takes a heavy ticket and vice versa, so an older heavy waiter cannot hold up a free
+   light slot, and a light run cannot jump a heavy queue.
 4. SIZE CLASSES (marveen 31661, from trillian's measurement of runs.jsonl: 252 wait-hours against 105
    run-hours, 41% of the runs were under 10 s and queued behind 25-minute e2e runs). --light is for ONE
    test file, ONE mutant, tsc on ONE project. It has its OWN pool (HEAVY_RUN_LIGHT_MAX, default 2; ONE
@@ -59,13 +62,20 @@ GRACE = float(os.environ.get("HEAVY_RUN_GRACE") or 10)
 POLL = float(os.environ.get("HEAVY_RUN_POLL") or 5)
 FIFO = (os.environ.get("HEAVY_RUN_FIFO") or "1") != "0"
 STALE_FLOOR = 3.0  # a ticket untouched for less than this is never called stalled, whatever the poll
-QDIR = os.path.join(DIR, "tickets")
 LIGHT_MAX = int(os.environ.get("HEAVY_RUN_LIGHT_MAX") or 2)
 LIGHT_CAP = float(os.environ.get("HEAVY_RUN_LIGHT_CAP") or 120)
 CAP_RC = 124  # the exit code timeout(1) uses
 # class -> (slot file prefix, pool size). The heavy files keep their old name, so a run started before
 # this change and one started after it still see each other.
 POOLS = {"heavy": ("slot", MAX), "light": ("light", LIGHT_MAX)}
+# class -> (ticket dir, queue lock, ticket counter): one queue per pool, nothing shared between them.
+# The heavy names are the ones from before the light pool existed.
+QUEUES = {"heavy": ("tickets", "queue.lock", "ticket-seq"),
+          "light": ("tickets-light", "queue-light.lock", "ticket-seq-light")}
+
+
+def qdir(cls):
+    return os.path.join(DIR, QUEUES[cls][0])
 
 
 def agent_name():
@@ -136,11 +146,15 @@ def try_slot(me):
 
 
 class QueueLock:
-    """Exclusive flock on DIR/queue.lock: ticket handout, queue scans and slot taking never interleave."""
+    """Exclusive flock on the pool's queue lock: ticket handout, queue scans and slot taking never
+    interleave within one pool (the two pools are independent, so they do not share a lock)."""
+
+    def __init__(self, cls="heavy"):
+        self.cls = cls
 
     def __enter__(self):
-        os.makedirs(QDIR, exist_ok=True)
-        self.f = open(os.path.join(DIR, "queue.lock"), "a+")
+        os.makedirs(qdir(self.cls), exist_ok=True)
+        self.f = open(os.path.join(DIR, QUEUES[self.cls][1]), "a+")
         fcntl.flock(self.f, fcntl.LOCK_EX)
         return self
 
@@ -150,20 +164,21 @@ class QueueLock:
 
 def take_ticket(me):
     """The next monotonic number, and an open, LOCKED ticket file carrying who waits. Keep it open."""
-    with QueueLock():
-        seq_path = os.path.join(DIR, "ticket-seq")
+    cls = me["class"]
+    with QueueLock(cls):
+        seq_path = os.path.join(DIR, QUEUES[cls][2])
         try:
             with open(seq_path) as f:
                 last = int(f.read().strip() or 0)
         except (FileNotFoundError, ValueError):
             last = 0  # missing or torn counter: the files below still hold the order
-        for name in os.listdir(QDIR):
+        for name in os.listdir(qdir(cls)):
             if name.isdigit():
                 last = max(last, int(name))
         n = last + 1
         with open(seq_path, "w") as f:
             f.write(str(n))
-        path = os.path.join(QDIR, f"{n:012d}")
+        path = os.path.join(qdir(cls), f"{n:012d}")
         f = open(path, "w")
         fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)  # nobody else can know this name yet
         f.write(json.dumps({**me, "seq": n, "stale_s": max(3 * POLL, STALE_FLOOR)}))
@@ -171,12 +186,12 @@ def take_ticket(me):
         return f, path, n
 
 
-def live_tickets():
-    """Live waiters, oldest first. Caller holds the queue lock. A ticket whose lock can be taken has no
+def live_tickets(cls="heavy"):
+    """Live waiters of one pool, oldest first. Caller holds that pool's queue lock. A ticket whose lock can be taken has no
     owner any more (killed, crashed): it is removed here, so a dead waiter never blocks the queue."""
     out = []
-    for name in sorted(os.listdir(QDIR)):
-        path = os.path.join(QDIR, name)
+    for name in sorted(os.listdir(qdir(cls))):
+        path = os.path.join(qdir(cls), name)
         try:
             f = open(path)
         except FileNotFoundError:
@@ -212,13 +227,14 @@ def try_slot_in_order(me, ticket):
     queued (one run per agent). With k free slots the k oldest candidates may go: two arrivals at an
     idle machine both start, a third waits for the first release."""
     tf, tpath, seq = ticket
+    cls = me["class"]
     os.utime(tpath)  # "I am polling": the stamp that tells a stopped or wedged owner from a waiting one
-    with QueueLock():
-        held = holders()
+    with QueueLock(cls):
+        held = holders(cls)
         busy = {h.get("agent") for h in held}
-        free = MAX - len(held)
+        free = POOLS[cls][1] - len(held)
         oldest = {}
-        for t in live_tickets():
+        for t in live_tickets(cls):
             if is_stalled(t):
                 continue  # alive but not polling: it must not hold a free slot empty
             if t.get("agent") not in busy:
@@ -241,9 +257,9 @@ def drop_ticket(ticket):
     tf.close()
 
 
-def queue_position(seq):
-    with QueueLock():
-        tickets = live_tickets()
+def queue_position(seq, cls="heavy"):
+    with QueueLock(cls):
+        tickets = live_tickets(cls)
     for i, t in enumerate(tickets):
         if t.get("seq") == seq:
             return i + 1, len(tickets)
@@ -303,7 +319,7 @@ def run(label, cmd, cls="heavy"):
           "class": cls, "started": time.strftime("%Y-%m-%d %H:%M:%S")}
     last_note = 0.0
     asked = time.time()
-    ticket = take_ticket(me) if FIFO and cls == "heavy" else None
+    ticket = take_ticket(me) if FIFO else None
     try:
         slot = try_slot_in_order(me, ticket) if ticket else try_slot(me)
         while slot is None:
@@ -312,7 +328,7 @@ def run(label, cmd, cls="heavy"):
                                  for h in holders(cls))
                 where = ""
                 if ticket:
-                    pos, total = queue_position(ticket[2])
+                    pos, total = queue_position(ticket[2], cls)
                     where = f", queue position {pos}/{total}"
                 print(f"heavy-run: waiting for a {cls} slot ({POOLS[cls][1]} max, one per agent{where}) -- "
                       f"busy: {busy or 'nobody?'}",
@@ -486,12 +502,14 @@ def self_test():
     # 9. FIRST COME, FIRST SERVED (card 391d725b). Both slots held; "old" queues first (a slow poll, 1 s),
     # then three waiters of ONE other agent (fast poll, 0.2 s) that would win every race for the slot.
     # Each command appends its agent when it STARTS, so the first line says who got in first.
-    def order_case(fifo, old_poll="1.0"):
-        orderfile = os.path.join(base, f"order-{fifo}")
-        e = {**env, "HEAVY_RUN_FIFO": fifo, "HEAVY_RUN_MAX": "1"}  # one slot: only the oldest may take it
+    def order_case(fifo, old_poll="1.0", light=False):
+        orderfile = os.path.join(base, f"order-{'light' if light else 'heavy'}-{fifo}")
+        # one slot in the pool under test: only the oldest may take it
+        e = {**env, "HEAVY_RUN_FIFO": fifo, "HEAVY_RUN_MAX": "1", "HEAVY_RUN_LIGHT_MAX": "1"}
 
         def sp(agent, poll, *cmd):
-            return subprocess.Popen([sys.executable, me, "--label", agent, "--", *cmd],
+            return subprocess.Popen([sys.executable, me, "--label", agent, *(["--light"] if light else []),
+                                     "--", *cmd],
                                     env={**e, "HEAVY_AGENT": agent, "HEAVY_RUN_POLL": poll},
                                     stderr=subprocess.DEVNULL)
 
@@ -643,6 +661,67 @@ def self_test():
                     by.get("capped", {}).get("class") == "light" and by["capped"].get("rc") == 124
                     and by.get("under", {}).get("class") == "light" and by.get("hv", {}).get("class") == "heavy"))
 
+    # 14. FIRST COME, FIRST SERVED IN THE LIGHT POOL (a2090e75): the same ticket queue, its own state.
+    # the old light waiter polls slowly (3 s): without tickets the fast pollers win the race nearly every time
+    first = order_case("1", old_poll="3.0", light=True)
+    results.append(("light FIFO: the older light waiter of one agent beats three later light waiters of another",
+                    first[:1] == ["old"]))
+    ctrl = []
+    for _ in range(5):
+        ctrl = order_case("0", old_poll="3.0", light=True)
+        if ctrl[:1] == ["many"]:
+            break
+    results.append(("CONTROL: with HEAVY_RUN_FIFO=0 the three fast light pollers get in first (race, up to 5 tries)",
+                    ctrl[:1] == ["many"]))
+
+    def tickets_in(name):
+        d = os.path.join(base, name)
+        return len(os.listdir(d)) if os.path.isdir(d) else 0
+
+    # (b) separation, heavy waiter -> light: the heavy pool (1 slot) is held, an OLDER heavy waiter queues;
+    # the light pool is free, so another agent's light run starts at once. With one shared queue that
+    # older heavy ticket would rank first and the light run would be kept out.
+    one = {"HEAVY_RUN_MAX": "1", "HEAVY_RUN_LIGHT_MAX": "1"}
+    hold = spawn("hold", "sleep", "4", extra=one)
+    time.sleep(1.0)
+    hw = spawn("hw", "true", extra=one)
+    time.sleep(1.0)
+    seen = (tickets_in("tickets"), tickets_in("tickets-light"))
+    lr = spawn("lr", "true", extra=one, light=True)
+    lr_waited = waited(lr)
+    results.append(("a heavy waiter holds a HEAVY ticket only (heavy 1, light 0)", seen == (1, 0)))
+    results.append(("an older heavy waiter does not hold up a free light slot", not lr_waited and lr.returncode == 0))
+    finish(hold), finish(hw)
+
+    # (c) separation, light waiter -> heavy: the light pool (1 slot) is held, an older light waiter queues,
+    # the heavy pool is free: another agent's heavy run starts at once.
+    hold = spawn("hold", "sleep", "4", extra=one, light=True)
+    time.sleep(1.0)
+    lw = spawn("lw", "true", extra=one, light=True)
+    time.sleep(1.0)
+    seen = (tickets_in("tickets"), tickets_in("tickets-light"))
+    hr = spawn("hr", "true", extra=one)
+    hr_waited = waited(hr)
+    results.append(("a light waiter holds a LIGHT ticket only (heavy 0, light 1)", seen == (0, 1)))
+    results.append(("an older light waiter does not hold up a free heavy slot", not hr_waited and hr.returncode == 0))
+    finish(hold), finish(lw)
+
+    # (d) a SIGKILLed light head waiter does not block the next light waiter; the light queue empties
+    hold = spawn("hold", "sleep", "3", extra=one, light=True)
+    time.sleep(1.0)
+    head = spawn("lhead", "true", extra=one, light=True)
+    time.sleep(0.6)
+    nxt = spawn("lnext", "true", extra=one, light=True)
+    time.sleep(0.6)
+    queued = tickets_in("tickets-light")
+    head.kill()
+    head.wait()
+    nxt_rc = finish(nxt, 20)
+    finish(hold)
+    results.append(("CONTROL: both light waiters held a light ticket before the kill", queued == 2))
+    results.append(("a SIGKILLed head-of-queue light waiter does not block the next one", nxt_rc == 0))
+    results.append(("every light ticket is gone once the light queue is empty", tickets_in("tickets-light") == 0))
+
     shutil.rmtree(base, ignore_errors=True)
     for name, ok in results:
         print(("PASS " if ok else "FAIL ") + name)
@@ -665,11 +744,11 @@ def main(argv):
             print(f"{cls} runs: {len(hs)}/{size}{extra}")
             for h in hs:
                 print(f"  slot {h.get('slot')}: {h['agent']} pid {h['pid']} since {h['started']} -- {h['label']}")
-        with QueueLock():
-            waiting = live_tickets()
-        for i, t in enumerate(waiting):
-            note = " [stalled: not polling]" if is_stalled(t) else ""
-            print(f"  waiting #{i + 1}: {t['agent']} pid {t['pid']} since {t['started']} -- {t['label']}{note}")
+            with QueueLock(cls):
+                waiting = live_tickets(cls)
+            for i, t in enumerate(waiting):
+                note = " [stalled: not polling]" if is_stalled(t) else ""
+                print(f"  waiting #{i + 1}: {t['agent']} pid {t['pid']} since {t['started']} -- {t['label']}{note}")
         return 0
     label, cls = None, "heavy"
     while argv[:1] in (["--label"], ["--light"]):
