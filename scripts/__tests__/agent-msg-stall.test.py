@@ -162,6 +162,17 @@ class StallGate(unittest.TestCase):
         self.assertIn("OK id=4242", out)
         self.assertIn("utolso kezbesites neki: soha", err)
 
+    def test_another_recipients_fresh_delivery_does_not_hide_the_stall(self):
+        """The last-delivery probe is PER RECIPIENT. In the live fleet somebody always got a
+        letter within the hour; if the to_agent filter fell out, the fleet-wide last delivery
+        would be fresh and the stall would never fire (trillian, card 4f2b2d8e comment 31671)."""
+        rows = pending3(200, 150) + [("marveen", "dexter", "delivered", 2, 1)]
+        rc, out, err = self.run_gate(rows)
+        self.assertEqual(rc, 0)
+        self.assertIn("OK id=4242", out)
+        self.assertIn("KEZBESITESI ALLASBAN", err)
+        self.assertIn("ennyi perce: 150", err)
+
     def test_stall_does_not_bypass_the_sender_ceiling(self):
         """The sender-side ceiling (7 per hour to one recipient) is a separate statement and
         must still bind during a stall -- otherwise a stall would be an open door."""
