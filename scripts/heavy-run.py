@@ -8,7 +8,7 @@ habit; a habit is a hope. This makes it a gate. And the second, larger cost the 
 backends (node dist/main) from e2e runners whose EXIT trap never ran or whose SIGTERM was ignored,
 ~9 GB of swap (marveen 14:0x). So the wrapper also owns the command's whole process tree.
 
-  python3 scripts/heavy-run.py [--label TEXT] -- <command> [args...]
+  python3 scripts/heavy-run.py [--label TEXT] [--light] -- <command> [args...]
   python3 scripts/heavy-run.py --status
   python3 scripts/heavy-run.py --self-test
 
@@ -33,8 +33,15 @@ backends (node dist/main) from e2e runners whose EXIT trap never ran or whose SI
    So each waiter touches its ticket on every poll, and a ticket not touched for max(3 x its poll, 3 s)
    is SKIPPED -- not deleted: it rejoins its place the moment its owner polls again.
    HEAVY_RUN_FIFO=0 switches the ticket order off (the old first-poll-wins behaviour).
+4. SIZE CLASSES (marveen 31661, from trillian's measurement of runs.jsonl: 252 wait-hours against 105
+   run-hours, 41% of the runs were under 10 s and queued behind 25-minute e2e runs). --light is for ONE
+   test file, ONE mutant, tsc on ONE project. It has its OWN pool (HEAVY_RUN_LIGHT_MAX, default 2; ONE
+   per agent), so a long run no longer blocks it, and the heavy pool stays HEAVY_RUN_MAX. The price is a
+   HARD CAP: a light run over HEAVY_RUN_LIGHT_CAP seconds (default 120) is killed, the wrapper says so
+   on stderr ("light run exceeded 120s, rerun without --light") and exits 124, so a mislabelled heavy
+   run cannot smuggle a third heavy run past the heavy pool.
 The exit code is the command's (128+N if a signal ended it). Each run appends one JSON line to
-HEAVY_RUN_DIR/runs.jsonl: who, what, waited_s, ran_s, rc.
+HEAVY_RUN_DIR/runs.jsonl: who, what, class (heavy|light), waited_s, ran_s, rc.
 """
 import fcntl
 import json
@@ -53,6 +60,12 @@ POLL = float(os.environ.get("HEAVY_RUN_POLL") or 5)
 FIFO = (os.environ.get("HEAVY_RUN_FIFO") or "1") != "0"
 STALE_FLOOR = 3.0  # a ticket untouched for less than this is never called stalled, whatever the poll
 QDIR = os.path.join(DIR, "tickets")
+LIGHT_MAX = int(os.environ.get("HEAVY_RUN_LIGHT_MAX") or 2)
+LIGHT_CAP = float(os.environ.get("HEAVY_RUN_LIGHT_CAP") or 120)
+CAP_RC = 124  # the exit code timeout(1) uses
+# class -> (slot file prefix, pool size). The heavy files keep their old name, so a run started before
+# this change and one started after it still see each other.
+POOLS = {"heavy": ("slot", MAX), "light": ("light", LIGHT_MAX)}
 
 
 def agent_name():
@@ -82,10 +95,11 @@ def read_holder(path):
         return None
 
 
-def holders():
+def holders(cls="heavy"):
+    prefix, size = POOLS[cls]
     out = []
-    for i in range(MAX):
-        path = os.path.join(DIR, f"slot-{i}")
+    for i in range(size):
+        path = os.path.join(DIR, f"{prefix}-{i}")
         if not os.path.exists(path):
             continue
         with open(path, "a+") as f:
@@ -100,12 +114,13 @@ def holders():
 
 
 def try_slot(me):
-    """An open, locked slot file, or None. Refuses a second slot for the same agent."""
-    for h in holders():
+    """An open, locked slot file, or None. Refuses a second slot of the same class for the same agent."""
+    prefix, size = POOLS[me["class"]]
+    for h in holders(me["class"]):
         if h.get("agent") == me["agent"]:
             return None
-    for i in range(MAX):
-        path = os.path.join(DIR, f"slot-{i}")
+    for i in range(size):
+        path = os.path.join(DIR, f"{prefix}-{i}")
         f = open(path, "a+")
         try:
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -278,27 +293,29 @@ def watchdog(runner, pgid, slot):
     os._exit(0)
 
 
-def run(label, cmd):
+def run(label, cmd, cls="heavy"):
     # A mistyped command fails before it queues for a slot, the way a shell says it, not as a traceback.
     if shutil.which(cmd[0]) is None:
         print(f"heavy-run: {cmd[0]}: command not found", file=sys.stderr)
         return 127
     os.makedirs(DIR, exist_ok=True)
     me = {"agent": agent_name(), "pid": os.getpid(), "label": label or " ".join(cmd)[:120],
-          "started": time.strftime("%Y-%m-%d %H:%M:%S")}
+          "class": cls, "started": time.strftime("%Y-%m-%d %H:%M:%S")}
     last_note = 0.0
     asked = time.time()
-    ticket = take_ticket(me) if FIFO else None
+    ticket = take_ticket(me) if FIFO and cls == "heavy" else None
     try:
         slot = try_slot_in_order(me, ticket) if ticket else try_slot(me)
         while slot is None:
             if time.time() - last_note >= 60:
-                busy = "; ".join(f"{h['agent']} ({h['label'][:50]}, since {h['started'][11:]})" for h in holders())
+                busy = "; ".join(f"{h['agent']} ({h['label'][:50]}, since {h['started'][11:]})"
+                                 for h in holders(cls))
                 where = ""
                 if ticket:
                     pos, total = queue_position(ticket[2])
                     where = f", queue position {pos}/{total}"
-                print(f"heavy-run: waiting for a slot ({MAX} max, one per agent{where}) -- busy: {busy or 'nobody?'}",
+                print(f"heavy-run: waiting for a {cls} slot ({POOLS[cls][1]} max, one per agent{where}) -- "
+                      f"busy: {busy or 'nobody?'}",
                       file=sys.stderr, flush=True)
                 last_note = time.time()
             time.sleep(POLL)
@@ -317,15 +334,24 @@ def run(label, cmd):
 
     for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(s, on_signal)
+    capped = False
     try:
-        rc = proc.wait()
+        try:
+            rc = proc.wait(timeout=LIGHT_CAP if cls == "light" else None)
+        except subprocess.TimeoutExpired:
+            capped = True
+            print(f"heavy-run: light run exceeded {LIGHT_CAP:g}s, rerun without --light "
+                  f"(killed: {me['label'][:80]})", file=sys.stderr, flush=True)
+            reap_group(proc.pid, GRACE)
+            rc = CAP_RC
     finally:
         reap_group(proc.pid, GRACE)  # what the command left behind (a backend it started)
         slot.close()
         # One line per run, so the limit can be judged by its waits (marveen 23086: watch 3 days).
         with open(os.path.join(DIR, "runs.jsonl"), "a") as f:
             f.write(json.dumps({**me, "waited_s": round(got - asked, 1),
-                                "ran_s": round(time.time() - got, 1), "rc": rc}) + "\n")
+                                "ran_s": round(time.time() - got, 1), "rc": rc,
+                                **({"capped": True} if capped else {})}) + "\n")
     return rc if rc >= 0 else 128 - rc
 
 
@@ -337,8 +363,9 @@ def self_test():
     me = os.path.abspath(__file__)
     results = []
 
-    def spawn(agent, *cmd, extra=None):
-        return subprocess.Popen([sys.executable, me, "--label", agent, "--", *cmd],
+    def spawn(agent, *cmd, extra=None, light=False):
+        return subprocess.Popen([sys.executable, me, "--label", agent, *(["--light"] if light else []),
+                                 "--", *cmd],
                                 env={**env, "HEAVY_AGENT": agent, **(extra or {})},
                                 stderr=subprocess.PIPE, text=True)
 
@@ -360,7 +387,7 @@ def self_test():
             p.kill()
             _, err = p.communicate()
             return True
-        return "waiting for a slot" in (err or "")
+        return "heavy-run: waiting for a" in (err or "")
 
     def finish(p, timeout=40):
         """wait() that cannot hang the self-test: a run the queue never admits counts as failed (None)."""
@@ -554,6 +581,68 @@ def self_test():
     err = m.communicate()[1]
     results.append(("a missing command: rc 127, no traceback", m.returncode == 127 and "Traceback" not in err))
 
+    # 13. SIZE CLASSES (a2090e75, marveen 31661). The light pool is separate from the heavy one, ONE per
+    # agent, with a hard cap that kills the run and names the overrun; the class lands in runs.jsonl.
+    # (a) a full heavy pool does not block a light run, and a full light pool does not block a heavy one
+    a = spawn("a", "sleep", "2")
+    b = spawn("b", "sleep", "2")
+    time.sleep(1.0)
+    c = spawn("c", "true", light=True)
+    results.append(("light run does not wait behind a full heavy pool", not waited(c)))
+    c = spawn("c", "true")
+    results.append(("CONTROL: a heavy run does wait behind the full heavy pool", waited(c)))
+    a.wait(), b.wait()
+    a = spawn("a", "sleep", "2", light=True)
+    b = spawn("b", "sleep", "2", light=True)
+    time.sleep(1.0)
+    c = spawn("c", "true")
+    results.append(("heavy run does not wait behind a full light pool", not waited(c)))
+    # (b) the light pool has its own size: the third light run waits, with a larger pool it does not
+    c = spawn("c", "true", light=True)
+    results.append(("third light run waits (light pool 2)", waited(c)))
+    a.wait(), b.wait()
+    a = spawn("a", "sleep", "2", light=True)
+    b = spawn("b", "sleep", "2", light=True)
+    time.sleep(1.0)
+    c = spawn("c", "true", light=True, extra={"HEAVY_RUN_LIGHT_MAX": "3"})
+    results.append(("CONTROL: with light pool 3 the third light run does not wait", not waited(c)))
+    a.wait(), b.wait()
+    # (c) ONE light run per agent, even with a free light slot
+    a = spawn("same", "sleep", "2", light=True)
+    time.sleep(1.0)
+    a2 = spawn("same", "true", light=True)
+    results.append(("same agent's second light run waits though a light slot is free", waited(a2)))
+    a3 = spawn("other", "true", light=True)
+    results.append(("CONTROL: another agent's light run takes the free light slot", not waited(a3)))
+    a.wait()
+    # (d) the hard cap kills the run (also a TERM-ignoring grandchild), names the overrun, exits non-zero
+    pidfile = os.path.join(base, "light.pid")
+    capped = spawn("capped", "bash", "-c", f"trap '' TERM; sleep 30 & echo $! > {pidfile}; wait",
+                   light=True, extra={"HEAVY_RUN_LIGHT_CAP": "1.5"})
+    t0 = time.time()
+    err = capped.communicate()[1]
+    took = time.time() - t0
+    results.append(("light run over the cap is killed: rc 124, message names the overrun",
+                    capped.returncode == 124 and "light run exceeded 1.5s, rerun without --light" in err
+                    and took < 15))
+    time.sleep(0.5)
+    results.append(("the cap reaps the TERM-ignoring grandchild too", not alive(int(open(pidfile).read()))))
+    ok_run = spawn("under", "sleep", "1", light=True, extra={"HEAVY_RUN_LIGHT_CAP": "30"})
+    ok_run.communicate()
+    results.append(("CONTROL: a light run under the cap finishes with its own rc 0", ok_run.returncode == 0))
+    heavy_long = spawn("hv", "sleep", "3", extra={"HEAVY_RUN_LIGHT_CAP": "1.5"})
+    heavy_long.communicate()
+    results.append(("CONTROL: the cap does not touch a heavy run", heavy_long.returncode == 0))
+    st = subprocess.run([sys.executable, me, "--status"], env={k: v for k, v in env.items()
+                        if k != "HEAVY_RUN_LIGHT_CAP"}, capture_output=True, text=True).stdout
+    results.append(("the default hard cap is 120s", "light runs: 0/2 (hard cap 120s)" in st))
+    # (e) runs.jsonl carries the class
+    rows = [json.loads(x) for x in open(log)]
+    by = {x["label"]: x for x in rows if x["label"] in ("capped", "under", "hv")}
+    results.append(("runs.jsonl records class light / heavy, and the capped run's rc 124",
+                    by.get("capped", {}).get("class") == "light" and by["capped"].get("rc") == 124
+                    and by.get("under", {}).get("class") == "light" and by.get("hv", {}).get("class") == "heavy"))
+
     shutil.rmtree(base, ignore_errors=True)
     for name, ok in results:
         print(("PASS " if ok else "FAIL ") + name)
@@ -570,25 +659,30 @@ def main(argv):
         return self_test()
     if argv[:1] == ["--status"]:
         os.makedirs(DIR, exist_ok=True)
-        hs = holders()
-        print(f"heavy runs: {len(hs)}/{MAX}")
-        for h in hs:
-            print(f"  slot {h.get('slot')}: {h['agent']} pid {h['pid']} since {h['started']} -- {h['label']}")
+        for cls, (_, size) in POOLS.items():
+            hs = holders(cls)
+            extra = f" (hard cap {LIGHT_CAP:g}s)" if cls == "light" else ""
+            print(f"{cls} runs: {len(hs)}/{size}{extra}")
+            for h in hs:
+                print(f"  slot {h.get('slot')}: {h['agent']} pid {h['pid']} since {h['started']} -- {h['label']}")
         with QueueLock():
             waiting = live_tickets()
         for i, t in enumerate(waiting):
             note = " [stalled: not polling]" if is_stalled(t) else ""
             print(f"  waiting #{i + 1}: {t['agent']} pid {t['pid']} since {t['started']} -- {t['label']}{note}")
         return 0
-    label = None
-    if argv[:1] == ["--label"]:
-        label, argv = argv[1], argv[2:]
+    label, cls = None, "heavy"
+    while argv[:1] in (["--label"], ["--light"]):
+        if argv[0] == "--light":
+            cls, argv = "light", argv[1:]
+        else:
+            label, argv = argv[1], argv[2:]
     if argv[:1] == ["--"]:
         argv = argv[1:]
     if not argv:
         print(__doc__, file=sys.stderr)
         return 2
-    return run(label, argv)
+    return run(label, argv, cls)
 
 
 if __name__ == "__main__":
