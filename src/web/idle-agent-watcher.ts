@@ -81,11 +81,12 @@ const THRESHOLDS: IdleAgentThresholds = {
   // minutes (marveen 26435: ~10 false idle-guard alerts in one night, nearly all agents working
   // through sub-agents).
   subagentNoticeWindowMs: 2 * 60 * 60_000,
-  // The ghost-row guard: rows on screen for 30 minutes and the agent sent no message and wrote no card
-  // comment since they appeared -> the hold is dropped and the agent is judged as if it had none.
-  // Chosen by friday (marveen asked for "the hold window"; checking only at the hold's end would be
-  // no check at all); marveen may veto the 30 minutes.
-  subagentSilentMs: 30 * 60_000,
+  // The ghost-row guard: rows on screen for the whole hold window and the agent sent no message and
+  // wrote no card comment since they appeared -> the hold is dropped and the agent is judged as if it
+  // had none (and, being a ghost, without the notice window). marveen 26460 overruled friday's 30
+  // minutes: legitimate silent spells reached 85 minutes in one night (mandark 85, dexter 80, friday),
+  // so anything under the 2 h hold false-escalates working agents.
+  subagentSilentMs: 2 * 60 * 60_000,
 }
 
 // WHERE THE REPEATS OF "IDLE, NOTHING ASSIGNED" GO (card 3c27105f): a line in this file, which the
