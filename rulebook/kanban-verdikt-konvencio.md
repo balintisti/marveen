@@ -689,3 +689,6 @@ kartyan proza „MARADEK-JELZES" komment allt, a lezaras atment, a maradek az ar
   komment-id-t, a szerzot, a sort, a kiutat; kiut meg az `override_reason` is (a `close_override` esemenybe kerul).
 - Az orai archivalo is latja: nyitott MARADEK-es done kartya a tablan marad.
 - NEM proza-detektor: „MARADEK-JELZES", sor kozepi „maradek:", behuzott, idezett vagy kisbetus sor nem token.
+- A horgony szigoru 0. oszlop, mint a kapu `openVerdicts`-e (`startsWith`): a markdown-bold `**MARADEK:**` NEM token
+  (a `**` mar a 0. oszlopban all), ezert a szerzo ne kiemelje. A magyar helyesirasu NAGYBETUS `MARADÉK:` (es a
+  `MARADÉK: NINCS | <hova>` is) ugyanaz a token; a kisbetus vagy vegyes `Maradék:` proza (didi 31731).

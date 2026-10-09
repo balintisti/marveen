@@ -116,6 +116,46 @@ describe('a parser: MARADEK sor, 0. oszlop, szerzonkent', () => {
     expect(openLeftovers(getKanbanComments('n1'))).toEqual([])
   })
 
+  it('a magyar helyesirasu NAGYBETUS "MARADÉK:" ugyanaz a token (didi 31731): nyit, es a hely a sorban marad ahogy irtak', () => {
+    cardInTesting('a1')
+    addKanbanComment('a1', 'friday', 'MARADÉK: e2e | dexter')
+    expect(openLeftovers(getKanbanComments('a1'))).toEqual([
+      expect.objectContaining({ author: 'friday', line: 'MARADÉK: e2e | dexter' }),
+    ])
+  })
+
+  it('a "MARADÉK: NINCS | x" zarja a korabbi "MARADEK:" sort, es forditva is', () => {
+    cardInTesting('a2')
+    addKanbanComment('a2', 'friday', LEFTOVER)
+    addKanbanComment('a2', 'friday', 'MARADÉK: NINCS | a 3527b675-re kerult')
+    expect(openLeftovers(getKanbanComments('a2'))).toEqual([])
+
+    cardInTesting('a3')
+    addKanbanComment('a3', 'friday', 'MARADÉK: e2e | dexter')
+    addKanbanComment('a3', 'friday', NONE)
+    expect(openLeftovers(getKanbanComments('a3'))).toEqual([])
+  })
+
+  it('a "MARADÉK: NINCS" hely nelkul itt sem zar, es a bontott (E + kombinalo ekezet) alak is token', () => {
+    cardInTesting('a4')
+    addKanbanComment('a4', 'friday', 'MARADÉK: e2e | dexter')
+    addKanbanComment('a4', 'friday', 'MARADÉK: NINCS')
+    addKanbanComment('a4', 'friday', 'MARADE\u0301K: bontott | x')
+    expect(openLeftovers(getKanbanComments('a4'))).toHaveLength(3)
+  })
+
+  it('a kisbetus/vegyes "Maradék: x | y" es a bold "**MARADEK:**" tovabbra sem token', () => {
+    cardInTesting('a5')
+    addKanbanComment('a5', 'friday', [
+      'Maradék: x | y',
+      'maradék: x | y',
+      'MARADéK: x | y',
+      '**MARADEK:** x | y',
+      '**MARADÉK:** x | y',
+    ].join('\n'))
+    expect(openLeftovers(getKanbanComments('a5'))).toEqual([])
+  })
+
   it('a ket token fuggetlen: a VERDIKT nem lat MARADEK-ot, a MARADEK nem lat VERDIKT-et', () => {
     cardInTesting('n2')
     addKanbanComment('n2', 'didi', 'VERDIKT: NYITOTT TETEL | valami')
@@ -142,6 +182,16 @@ describe('a lezaro utak', () => {
     expect(r.payload.error).toContain('MARADEK: NINCS | <hova kerult>')
     expect(r.payload.error).toContain('override_reason')
     expect(getKanbanCard('m1')?.status).toBe('testing')
+  })
+
+  it('POST /move done: a "MARADÉK:" sor is 409, a hiba a sort ahogy irtak idezi; a "MARADÉK: NINCS | x" utan megy', async () => {
+    cardInTesting('m0')
+    addKanbanComment('m0', 'friday', 'MARADÉK: e2e | dexter')
+    const r = await move('m0')
+    expect(r.status).toBe(409)
+    expect(r.payload.error).toContain('MARADÉK: e2e | dexter')
+    addKanbanComment('m0', 'friday', 'MARADÉK: NINCS | a 3527b675 kartyara kerult')
+    expect((await move('m0')).status).toBe(200)
   })
 
   it('a szerzo sajat NINCS-e utan a lezaras megy', async () => {

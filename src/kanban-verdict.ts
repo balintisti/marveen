@@ -29,7 +29,8 @@
  *     SAME author opened before it (the destination after the `|` is required: a
  *     bare NINCS is a leftover vanishing without a trace, exactly the failure);
  *   - another author's NINCS closes nothing; a later MARADEK line re-opens;
- *   - the same ` -- ` / `|` separators and the same normalisation as VERDIKT.
+ *   - the same ` -- ` / `|` separators and the same normalisation as VERDIKT;
+ *     the prefix also takes the accented upper-case spelling `MARADÉK:`.
  * Prose ("MARADEK-JELZES: ...", "maradek: ..." mid-line, indented, quoted) is
  * somebody talking about a leftover, not declaring one, and is never read.
  */
@@ -96,11 +97,27 @@ export function openVerdicts(comments: VerdictComment[]): OpenVerdict[] {
 const LEFTOVER_PREFIX = 'MARADEK:'
 
 /**
+ * The text after a column-0 `MARADEK:` prefix, or null when the line does not
+ * start with one. The prefix is compared accent-insensitively (accents off, case
+ * kept; card 0a787690, didi 31731): the Hungarian spelling "MARADÉK:" is the same
+ * token (otherwise it would silently open nothing), while "Maradék:" / "maradek:"
+ * stay prose because the case is never folded. Only the prefix is normalised; the
+ * rest of the line is returned as written.
+ */
+function leftoverRest(raw: string): string | null {
+  const colon = raw.indexOf(':')
+  // "MARADEK:" is 8 chars precomposed, up to 10 with a decomposed accent.
+  if (colon < 0 || colon > 10) return null
+  const prefix = raw.slice(0, colon + 1)
+  const bare = prefix.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  return bare === LEFTOVER_PREFIX ? raw.slice(colon + 1) : null
+}
+
+/**
  * The text before the first `|` or ` -- ` (the token) and what follows it (the
  * destination, empty when there is no separator).
  */
-function splitLeftover(line: string): { token: string; where: string } {
-  const rest = line.slice(LEFTOVER_PREFIX.length)
+function splitLeftover(rest: string): { token: string; where: string } {
   const cut = [rest.indexOf('|'), rest.indexOf(' -- ')].filter((i) => i >= 0)
   if (cut.length === 0) return { token: normalize(rest), where: '' }
   const at = Math.min(...cut)
@@ -118,9 +135,10 @@ export function openLeftovers(comments: VerdictComment[]): OpenLeftover[] {
   const byAuthor = new Map<string, OpenLeftover[]>()
   for (const comment of ordered) {
     for (const raw of (comment.content ?? '').split(/\r?\n/)) {
-      if (!raw.startsWith(LEFTOVER_PREFIX)) continue
+      const rest = leftoverRest(raw)
+      if (rest === null) continue
       const line = raw.trimEnd()
-      const { token, where } = splitLeftover(line)
+      const { token, where } = splitLeftover(rest)
       if (token === 'NINCS' && where !== '') {
         byAuthor.delete(comment.author)
         continue
