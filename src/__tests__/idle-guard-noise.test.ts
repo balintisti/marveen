@@ -255,7 +255,7 @@ describe('(a) decideIdleAlert -- futo al-agens mellett nincs ebresztes, nincs es
     expect(stale.filter((e) => e.min < 120)).toEqual([])
   })
 
-  // didi 31755 (1): a szellem-sor agon a `lastActionAtMs < since` feltetel a TELJES teher. Elo agensnek
+  // didi 31755 (1): a szellem-sor agon a `lastActionAtMs < now - subagentSilentMs` feltetel a TELJES teher (marveen 26816 ota). Elo agensnek
   // majdnem mindig van regebbi kimeno uzenete / komentje (a watcher a LEGUTOLSOT adja), tehat a `null`
   // eset keves; a valodi eset egy a sor megjelenese ELOTTI nyom. Mutans `=== null`: 365/365 tulelte.
   it('didi 31755 (1): a tartas kezdete ELOTTI nyom szellem-sor -- a szokasos 30 perces menet fut, nem az ablak', () => {
@@ -263,8 +263,12 @@ describe('(a) decideIdleAlert -- futo al-agens mellett nincs ebresztes, nincs es
     const before = simulate(1, () => now - 1000)           // 1 mp-cel a sor megjelenese elott
     expect(before).toEqual(ghost)
     expect(before.map((e) => e.min)).not.toEqual([132, 252, 372, 492])   // pozitiv kontroll: az ablakos menet mas
-    // Hatar: a pontosan a megjelenes pillanatara eso nyom MEGSZAMIT (`<`, nem `<=`): ablakos menet.
-    expect(simulate(1, () => now).map((e) => e.min)).toEqual([132, 252, 372, 492])
+    // marveen 26816: a csend az UTOLSO nyomtol szamit, nem a sor megjelenesetol -- a megjelenes
+    // pillanataban irt nyom sem tart tovabb 2 oranal.
+    expect(simulate(1, () => now)).toEqual(ghost)
+    // Hatar: a pontosan 2 oras nyom MEG nyom (`<`, nem `<=`): ablakos menet; 1 ms-mal regebbi mar szellem.
+    expect(simulate(1, (min) => now + (min - 120) * 60_000).map((e) => e.min)).toEqual([132, 252, 372, 492])
+    expect(simulate(1, (min) => now + (min - 120) * 60_000 - 1)).toEqual(ghost)
   })
 
   it('didi 31755 (1): ugyanaz az allapot, csak a nyom ideje kulonbozik -- a sor elotti nyom ebreszt, a sor utani az ablakba esik', () => {

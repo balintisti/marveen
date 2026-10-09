@@ -390,7 +390,7 @@ describe('tick() -- background work is working: no wake, no repeat, no coordinat
     expect(messages.some(m => m.to === 'x')).toBe(true)
   })
 
-  describe('the ghost-row guard is the way out (marveen 26460: 2 h, and no message or card comment since the work appeared)', () => {
+  describe('the ghost-row guard is the way out (marveen 26460 + 26816: rows 2 h+, and the last message or card comment 2 h+ old)', () => {
     const at = (min: number) => {
       vi.setSystemTime(NOW + min * 60_000); panes.set('agent-x', FRIDAY_0825); tick()
       const calls = debug.mock.calls.filter(c => (c[0] as { agent?: string })?.agent === 'x')
@@ -411,31 +411,61 @@ describe('tick() -- background work is working: no wake, no repeat, no coordinat
       expect(first).toBeLessThanOrEqual(120 + 21)
     })
 
-    it('(2) LEGITIMATE LONG SPELL: rows for 5 h, the agent commented on a card at 90 minutes -> never a wake, never a notice', () => {
+    // Silence counts from the LAST message or card comment (marveen 26816, didi 32302): under the
+    // first wording one post in minute 5 held a stuck agent for 8 h with no wake.
+    const firstWake = (reasons: string[]) => reasons.indexOf('wake-agent') * 3
+
+    it('(2) a card comment at 90 minutes holds the spell for 2 h FROM THE COMMENT, then ONE wake', () => {
       workcheck('x', 'assigned_open_cards'); assignedCards()
       commentRows = [{ card_id: 'card-a', author: 'x', at: Math.floor((NOW + 90 * 60_000) / 1000) }]
       const reasons: string[] = []
       for (let m = 0; m <= 5 * 60; m += 3) reasons.push(at(m))
-      expect(new Set(reasons)).toEqual(new Set(['subagents-running']))
-      expect(noise()).toBe(0)
+      expect(reasons.slice(0, 210 / 3)).toEqual(Array(210 / 3).fill('subagents-running'))   // 0..207 min: under 2 h since the comment
+      expect(firstWake(reasons)).toBeGreaterThanOrEqual(210 + 12)
+      expect(firstWake(reasons)).toBeLessThanOrEqual(210 + 21)
+      expect(wakes()).toHaveLength(1)
+      expect(reasons).not.toContain('subagents-notice-window')
     })
 
-    it('(2b) a sent message is a trace too (no card comment needed)', () => {
+    it('(2b) a sent message is a trace too: the 2 h run from the message', () => {
       workcheck('x', 'assigned_open_cards'); assignedCards()
       outboundSec = Math.floor((NOW + 100 * 60_000) / 1000)
+      const reasons: string[] = []
+      for (let m = 0; m <= 5 * 60; m += 3) reasons.push(at(m))
+      expect(reasons.slice(0, 219 / 3)).toEqual(Array(219 / 3).fill('subagents-running'))
+      expect(firstWake(reasons)).toBeGreaterThanOrEqual(220 + 12)
+      expect(firstWake(reasons)).toBeLessThanOrEqual(220 + 21)
+      expect(wakes()).toHaveLength(1)
+    })
+
+    it('(2c) didi P1: one comment in minute 5, then 8 h of silence with a shell and a monitor -> it IS woken', () => {
+      workcheck('x', 'assigned_open_cards'); assignedCards()
+      commentRows = [{ card_id: 'card-a', author: 'x', at: Math.floor((NOW + 5 * 60_000) / 1000) }]
+      const reasons: string[] = []
+      for (let m = 0; m <= 8 * 60; m += 3) reasons.push(at(m))
+      expect(firstWake(reasons)).toBeGreaterThanOrEqual(125 + 12)
+      expect(firstWake(reasons)).toBeLessThanOrEqual(125 + 21)
+      expect(wakes().length).toBeGreaterThanOrEqual(1)
+    })
+
+    it('(2d) a comment every 100 minutes keeps a long spell held for 5 h: no wake, no notice', () => {
+      workcheck('x', 'assigned_open_cards'); assignedCards()
+      commentRows = [100, 200].map(min => ({ card_id: 'card-a', author: 'x', at: Math.floor((NOW + min * 60_000) / 1000) }))
       const reasons: string[] = []
       for (let m = 0; m <= 5 * 60; m += 3) reasons.push(at(m))
       expect(new Set(reasons)).toEqual(new Set(['subagents-running']))
       expect(noise()).toBe(0)
     })
 
-    it('(3) the way back: a ghost that posts after its wake is held again, with no further notice', () => {
+    it('(3) the way back: a ghost that posts after its wake is held again for 2 h from that post', () => {
       workcheck('x', 'assigned_open_cards'); assignedCards()
       for (let m = 0; m <= 150; m += 3) at(m)
       expect(wakes()).toHaveLength(1)
       commentRows = [{ card_id: 'card-a', author: 'x', at: Math.floor((NOW + 151 * 60_000) / 1000) }]
-      expect(at(153)).toBe('subagents-running')
-      expect(at(5 * 60)).toBe('subagents-running')
+      const after: string[] = []
+      for (let m = 153; m <= 5 * 60; m += 3) after.push(at(m))
+      expect(after.slice(0, (270 - 153) / 3 + 1)).toEqual(Array((270 - 153) / 3 + 1).fill('subagents-running'))   // 153..270: under 2 h since the post
+      expect(after.at(-1)).not.toBe('subagents-running')                                                           // 300: silent 2 h+ again
     })
   })
 })

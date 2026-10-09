@@ -329,8 +329,10 @@ export function isFloorExpired(dueDate: number | null | undefined, now: number |
 type SubagentVerdict = 'none' | 'hold' | 'ghost' | 'past'
 
 /** What the visible sub-agent rows mean this tick. 'hold': working, stay out of the way. 'ghost':
- *  rows for at least subagentSilentMs and the agent has produced no message and no card comment
- *  since they appeared, so judge it as if it had none. 'past': the hold ran out. */
+ *  rows for at least subagentSilentMs and the agent's LAST message or card comment is older than
+ *  subagentSilentMs too (marveen 26816: silence counts from the last action, not from when the
+ *  rows appeared, so one post early in a stuck spell cannot hold it forever; didi 32302), so judge
+ *  it as if it had none. 'past': the hold ran out. */
 function subagentVerdict(input: IdleAgentInput, sinceMs: number | null | undefined, thresholds: IdleAgentThresholds, now: number): SubagentVerdict {
   if ((input.runningSubagents ?? 0) <= 0) return 'none'
   const since = sinceMs ?? now
@@ -339,7 +341,7 @@ function subagentVerdict(input: IdleAgentInput, sinceMs: number | null | undefin
     thresholds.subagentSilentMs !== undefined &&
     input.lastActionAtMs !== undefined &&
     held >= thresholds.subagentSilentMs &&
-    (input.lastActionAtMs === null || input.lastActionAtMs < since)
+    (input.lastActionAtMs === null || input.lastActionAtMs < now - thresholds.subagentSilentMs)
   ) return 'ghost'
   if (thresholds.subagentHoldMs === undefined || held < thresholds.subagentHoldMs) return 'hold'
   return 'past'
