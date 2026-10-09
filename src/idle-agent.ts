@@ -187,8 +187,10 @@ export interface IdleAgentInput {
    *  warning does not count). Such a pane reads idle, and nothing a wake says can move it until the
    *  limit resets -- the model-fallback runner owns that state. Card d3f92923. */
   paneUsageLimited?: boolean
-  /** Background sub-agents the pane shows RUNNING (runningSubagentCount). An agent with a free
-   *  prompt and sub-agents at work is not standing idle: no wake, no escalation (card 3c27105f).
+  /** Background work the pane shows RUNNING (runningBackgroundWork): sub-agent rows, the
+   *  `Waiting for N background agents` line, and the shells and monitors the footer counts. An
+   *  agent with a free prompt and background work at hand is not standing idle: no wake, no
+   *  escalation (cards 3c27105f, 53bcfe74). The name is the first, narrower use of the field.
    *  Absent = not measured = 0. */
   runningSubagents?: number
   /** The latest OUTGOING message or card comment this agent produced, epoch ms; null = none on record.

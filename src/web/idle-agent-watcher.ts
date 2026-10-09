@@ -6,7 +6,7 @@ import { listAgentNames, agentDir, readAgentRemoteHost, readAgentProjects } from
 import { isAgentRunning, capturePane } from './agent-process.js'
 import { resolveAgentSession } from './channel-mcp-reconnect.js'
 import { sendAlert } from './channel-monitor.js'
-import { busyEvidence, detectPaneState, runningSubagentCount } from '../pane-state.js'
+import { busyEvidence, detectPaneState, runningBackgroundWork } from '../pane-state.js'
 import { usageLimitHolds } from '../usage-limit-window.js'
 import { getPendingMessages, getLastOutboundMessageAt, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
 import {
@@ -73,20 +73,15 @@ const THRESHOLDS: IdleAgentThresholds = {
   // already reported, none followed by anything the repeat caused; a blind spell that outlasts
   // the window is still reported again, four times a day at most.
   paneUnreadableRealertMs: 6 * 60 * 60_000,
-  // Sub-agents keep an agent out of the guard for two hours at most. The longest legitimate
-  // spell measured was 74 minutes (didi's three reviewers, 2026-10-07); computress's polling
-  // sub-agents (52-82 minutes, nothing posted) are the case the bound exists for.
-  subagentHoldMs: 2 * 60 * 60_000,
-  // Past the hold, while the rows are still on screen: ONE notice per two hours, not one per 30
-  // minutes (marveen 26435: ~10 false idle-guard alerts in one night, nearly all agents working
-  // through sub-agents).
-  subagentNoticeWindowMs: 2 * 60 * 60_000,
-  // The ghost-row guard: rows on screen for the whole hold window and the agent sent no message and
-  // wrote no card comment since they appeared -> the hold is dropped and the agent is judged as if it
-  // had none (and, being a ghost, without the notice window). marveen 26460 overruled friday's 30
-  // minutes: legitimate silent spells reached 85 minutes in one night (mandark 85, dexter 80, friday),
-  // so anything under the 2 h hold false-escalates working agents.
-  subagentSilentMs: 2 * 60 * 60_000,
+  // NO BOUND on recognised background work (card 53bcfe74: waiting on background work is
+  // working, not idle). Sub-agent rows, the `Waiting for N background agents` line, footer shells
+  // and monitors keep an agent out of the guard for as long as they are on screen: no wake, no
+  // repeat, no coordinator notice. The 2 h hold, the one-notice-per-2 h window and the silent-trace
+  // ghost check this branch added (subagentHoldMs, subagentNoticeWindowMs, subagentSilentMs) are
+  // deliberately NOT set: measured 2026-10-09 07:21-09:55, nine false alerts in 2.5 hours came from
+  // agents legitimately waiting (mandark x4, friday x2, computress x3, didi x2), and a notice that
+  // can only say "your sub-agent is still running" costs a paid turn each time. The decision keeps
+  // the optional fields, so a bound is a config line away if a stuck-forever case turns up.
 }
 
 // WHERE THE REPEATS OF "IDLE, NOTHING ASSIGNED" GO (card 3c27105f): a line in this file, which the
@@ -334,7 +329,7 @@ export function readPane(agent: string): {
   const state = detectPaneState(pane)
   // Counted from the same capture, and BEFORE the unknown verdict: a panel read off the screen
   // is evidence the pane is not a mystery, whatever else the classifier made of it.
-  const runningSubagents = runningSubagentCount(pane)
+  const runningSubagents = runningBackgroundWork(pane)
   if (state === 'unknown') return { idle: null, staleCounterOnly: false, paneReason: 'unknown-state', runningSubagents }
   return {
     idle: state === 'idle',

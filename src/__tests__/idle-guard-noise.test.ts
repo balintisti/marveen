@@ -93,7 +93,7 @@ const { MAIN_AGENT_ID } = await import('../config.js')
 
 // --- a panelek: a 2026-10-09-i ELO panelekrol, a tartalom nelkul ------------------------
 const SEP = '─'.repeat(80)
-const FOOTER = '  ⏵⏵ bypass permissions on · 7 shells, 1 monitor · ↓ to manage'
+const FOOTER = '  ⏵⏵ bypass permissions on · ↓ to manage'
 const runningRow = (name: string, mins: number) =>
   `  ◯ ${name.padEnd(16)} Valami feladat leirasa…  ${mins}m 12s · ↓ 125.7k tokens`
 const idleRow = (name: string) => `  ◯ ${name.padEnd(16)} Batch 19 B-layer resume                 idle`
@@ -429,18 +429,6 @@ describe('tick() -- a bekotes', () => {
     expect(existsSync(digestPath())).toBe(false)
   })
 
-  it('(a) a watcher 2 oras tartasa: 90 perc mulva meg al-agenses, 121 perc mulva mar nem (a THRESHOLDS bekotese)', () => {
-    workcheck('x', 'assigned_open_cards')
-    panes.set('agent-x', pane({ rows: [runningRow('b19-pw', 18)] }))
-    outboundSec = () => Math.floor(Date.now() / 1000)       // az agens vegig ir valamit: a nyom nem engedi el a tartast
-    tick()
-    expect(reasonOf('x')).toBe('subagents-running')
-    vi.setSystemTime(NOW + 90 * 60_000); tick()
-    expect(reasonOf('x')).toBe('subagents-running')
-    vi.setSystemTime(NOW + 121 * 60_000); tick()
-    expect(reasonOf('x')).not.toBe('subagents-running')
-  })
-
   // --- a cselekves-nyom es az ertesites-ablak bekotese (marveen 26435) ---------------------------
   const nowSec = () => Math.floor(Date.now() / 1000)
   const openCards = () => {
@@ -459,35 +447,16 @@ describe('tick() -- a bekotes', () => {
     expect(reasonOf('x')).toBe('subagents-running')
   })
 
-  it('(a/nyom) sor + NULLA nyom: 85 perc meg tartas (marveen 26460), 121 perc utan elengedi, az agens ugy ertekelodik, mintha nem lenne al-agense', () => {
-    workcheck('x', 'assigned_open_cards'); panes.set('agent-x', rowsPane())
-    outboundSec = null
-    tick()
-    vi.setSystemTime(NOW + 85 * 60_000); tick()
-    expect(reasonOf('x')).toBe('subagents-running')         // a legitim 85 perces csend NEM eszkalal
-    vi.setSystemTime(NOW + 121 * 60_000); tick()
-    expect(reasonOf('x')).not.toBe('subagents-running')
-  })
-
-  it('(a/nyom) a nyom lehet CSAK kartya-komment is (az agens sajat komentje), uzenet nelkul', () => {
+  // Card 53bcfe74: the watcher sets NO bound (THRESHOLDS has no subagentHoldMs / subagentNoticeWindowMs /
+  // subagentSilentMs). The pure-decision tests above keep passing their own thresholds; this one pins the
+  // wiring: rows on screen with ZERO trace stay a hold at 85 min, 121 min (the old bound), 5 h and 24 h.
+  it('53bcfe74: a watcher NEM szab hatart a felismert hatter-munkara: nulla nyommal is tartas 24 oraig, nincs ertesites', () => {
     workcheck('x', 'assigned_open_cards'); openCards(); panes.set('agent-x', rowsPane())
     outboundSec = null
-    commentRows = [{ card_id: 'card-a', author: 'X', at: Math.floor((NOW + 20 * 60_000) / 1000) }]   // nagybetu: a szerzo-egyezes kis/nagybetu-fuggetlen
     const at = (min: number) => { vi.setSystemTime(NOW + min * 60_000); tick(); return reasonOf('x') }
-    expect(at(0)).toBe('subagents-running')
-    expect(at(121)).toBe('not-sustained')
-    expect(at(134)).toBe('wake-agent')
-    expect(at(152)).toBe('subagents-notice-window')        // nyom van: a tartas utan az ablak szerint, nem szellem-sorkent
-  })
-
-  it('(a/nyom) MEGFELELTETES: egy MAS szerzo kommentje nem nyom', () => {
-    workcheck('x', 'assigned_open_cards'); openCards(); panes.set('agent-x', rowsPane())
-    commentRows = [{ card_id: 'card-a', author: 'marveen', at: Math.floor((NOW + 20 * 60_000) / 1000) }]
-    const at = (min: number) => { vi.setSystemTime(NOW + min * 60_000); tick(); return reasonOf('x') }
-    expect(at(0)).toBe('subagents-running')
-    expect(at(121)).toBe('not-sustained')
-    expect(at(134)).toBe('wake-agent')
-    expect(at(152)).not.toBe('subagents-notice-window')    // nyom nincs: szellem-sor, a szokasos menet fut, nem az ablak
+    for (const min of [0, 85, 121, 134, 5 * 60, 24 * 60]) expect(at(min)).toBe('subagents-running')
+    expect(toCoordinator()).toHaveLength(0)
+    expect(existsSync(digestPath())).toBe(false)
   })
 
   // didi 31755 (3): a nyom-keresés HIBÁJA = "nem merve" (undefined, az ido szerinti tartas marad), NEM
@@ -501,29 +470,6 @@ describe('tick() -- a bekotes', () => {
     outboundSec = 1000
     expect(lastActionAtMs('x', new Map())).toBe(1_000_000)
     expect(lastActionAtMs('x', new Map([['c', new Map([['X', 2000]])]]))).toBe(2_000_000)
-  })
-
-  it('didi 31755 (3): ha a nyom-keresés elhasal, az agens NEM szellem-sor: a tartas utan az ablak szerint, nem a szokasos menet szerint', () => {
-    workcheck('x', 'assigned_open_cards'); openCards(); panes.set('agent-x', rowsPane())
-    outboundSec = () => { throw new Error('db down') }
-    const at = (min: number) => { vi.setSystemTime(NOW + min * 60_000); tick(); return reasonOf('x') }
-    expect(at(0)).toBe('subagents-running')
-    expect(at(85)).toBe('subagents-running')                 // nem merve: az ido szerinti tartas
-    expect(at(121)).toBe('not-sustained')
-    expect(at(134)).toBe('wake-agent')
-    expect(at(152)).toBe('subagents-notice-window')          // szellem-sorkent (null) itt a szokasos menet futna
-  })
-
-  it('(a/ablak) a tartas utan, amig a sor latszik, 2 oras ablakonkent EGY ertesites (a THRESHOLDS bekotese)', () => {
-    workcheck('x', 'assigned_open_cards'); openCards(); panes.set('agent-x', rowsPane())
-    outboundSec = () => nowSec()                            // az agens vegig ir valamit: nincs szellem-gyanu
-    const at = (min: number) => { vi.setSystemTime(NOW + min * 60_000); tick(); return reasonOf('x') }
-    expect(at(0)).toBe('subagents-running')
-    expect(at(121)).toBe('not-sustained')                   // a tartas lejart, a szakasz indul
-    expect(at(134)).toBe('wake-agent')                      // az ablak EGYETLEN ertesitese
-    expect(at(152)).toBe('subagents-notice-window')         // az eszkalacio mar az ablakba esik: elnyomva
-    expect(at(165)).toBe('subagents-notice-window')         // 31 perc: a 30 perces ablak itt mar kiengedne
-    expect(at(255)).toBe('idle-with-work')                  // az uj ablak ertesitese, a szakasz megmaradt
   })
 
   it('(a) MEGFELELTETES: ugyanaz az allapot al-agens NELKUL a "nincs kiosztva" agra fut', () => {

@@ -47,7 +47,7 @@ vi.mock('../pane-state.js', () => ({
   busyEvidence: () => 'none',
   detectsUsageLimitReached: () => false,
   // card 3c27105f: readPane counts running sub-agents from the same capture.
-  runningSubagentCount: () => 0,
+  runningBackgroundWork: () => 0,
 }))
 vi.mock('../web/channel-monitor.js', () => ({ sendAlert: () => {} }))
 vi.mock('../db.js', () => ({
