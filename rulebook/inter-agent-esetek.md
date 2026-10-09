@@ -13,9 +13,19 @@ Az ágensek közvetlenül tudnak egymásnak üzenni egy közös SQLite üzenetso
 *(A mért esetek -- ki, mikor, milyen szöveggel, mi lett belőle: `rulebook/uzenetkuldes-esetek.md`.)*
 
 ```bash
-bash scripts/agent-msg.sh marveen TARGET_AGENT "Feladat leírása."
+bash scripts/agent-msg.sh marveen TARGET_AGENT - <<'VEGE'
+Feladat leírása. Ide jöhet `backtick`, $valtozo és "idezojel" is.
+VEGE
 # -> OK id=<n> queue=<hányan várnak> (~<perc> késés)   vagy   FAIL
+# A 3. argumentum CSAK `-` lehet (2026-09-22); fájlból:  ... TARGET_AGENT - < "$f"
 ```
+
+**A 3. ARGUMENTUM CSAK `-` LEHET (2026-09-22, kártya `16d66942` 1. tétel).** A pozíciós alakot a
+szkript **megtagadja** (exit 4). Nem szigorítás: a pozíciós szöveg egy héj-idézőjelen megy át,
+MIELŐTT a szkript látná, tehát a visszaperjel, a `$` és a backtick ott már eldőlt -- részben
+eltűnik, részben LEFUT --, a küldés pedig `OK id=`-vel tér vissza. A szkript a megcsonkult
+szöveget kapná, és nem tud ellene tenni semmit; ezért az egyetlen helyes válasz a megtagadás.
+A `<<'VEGE'` **aposztrófos** alakja kötelező: aposztróf nélkül a heredoc IS behelyettesít.
 
 **EGY ÜZENET CSAK AKKOR SZÁMÍT ELKÜLDÖTTNEK, HA VISSZAJÖTT EGY `id`.** A gyakori
 `curl -s ... >/dev/null && echo sent` minta NÉMA küldés-hibát ad: a curl `0`-val tér vissza egy
