@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { appendFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { logger } from '../logger.js'
 import { MAIN_AGENT_ID, PROJECT_ROOT } from '../config.js'
@@ -6,15 +6,16 @@ import { listAgentNames, agentDir, readAgentRemoteHost, readAgentProjects } from
 import { isAgentRunning, capturePane } from './agent-process.js'
 import { resolveAgentSession } from './channel-mcp-reconnect.js'
 import { sendAlert } from './channel-monitor.js'
-import { busyEvidence, detectPaneState } from '../pane-state.js'
+import { busyEvidence, detectPaneState, runningBackgroundWork } from '../pane-state.js'
 import { usageLimitHolds } from '../usage-limit-window.js'
-import { getPendingMessages, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
+import { getPendingMessages, getLastOutboundMessageAt, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
 import {
   decideIdleAlert,
   parseWorkCheck,
   selectDeclaredWork,
   isCensusComment,
   buildNoWorkNotice,
+  idleDigestLine,
   orphanPullList,
   laneFilteredPullList,
   topOfPullList,
@@ -67,7 +68,33 @@ const THRESHOLDS: IdleAgentThresholds = {
   // A repeated identical list is not news -- but after four hours, "nobody has touched
   // this" is. Without this the suppression is permanent on a stable queue.
   wakeStaleRearmMs: 4 * 60 * 60_000,
+  // "The guard is blind to this agent" is one fact per spell, not one per half hour (card
+  // 3c27105f). Replayed over 7 days: 79 lines, 14 of them repeats inside six hours for an agent
+  // already reported, none followed by anything the repeat caused; a blind spell that outlasts
+  // the window is still reported again, four times a day at most.
+  paneUnreadableRealertMs: 6 * 60 * 60_000,
+  // Recognised background work (sub-agent rows, the `Waiting for N background agents` line, footer
+  // shells and monitors) keeps an agent out of the guard WITHOUT any notice (card 53bcfe74): no
+  // wake, no repeat, no coordinator message. There is no hold bound and no notice window
+  // (subagentHoldMs, subagentNoticeWindowMs are deliberately not set): measured 2026-10-09
+  // 07:21-09:55, nine false alerts in 2.5 hours came from agents legitimately waiting, and a notice
+  // that can only say "your sub-agent is still running" costs a paid turn each time.
+  //
+  // THE WAY OUT is the ghost-row guard: background work on screen for the whole of this window and
+  // the agent sent no message and wrote no card comment since it appeared -> judged as if it had
+  // none (the normal path: one wake, then the usual escalation). A row that never goes away (a dead
+  // sub-agent, a leftover shell) must not hide a stuck agent forever. marveen 26460 overruled
+  // friday's 30 minutes: legitimate silent spells reached 85 minutes in one night (mandark 85,
+  // dexter 80, friday), so anything under 2 h false-escalates working agents. Any message or card
+  // comment after the work appeared puts the hold back.
+  subagentSilentMs: 2 * 60 * 60_000,
 }
+
+// WHERE THE REPEATS OF "IDLE, NOTHING ASSIGNED" GO (card 3c27105f): a line in this file, which the
+// morning briefing reads (scripts/napindito-sections.py, section_idle_digest), not a message to the
+// coordinator. 69 of the 245 guard messages in the 7 days before were this class; the FIRST notice
+// of each idle spell still goes out live (see the idle-no-work branch in tick()).
+const IDLE_DIGEST_PATH = join(PROJECT_ROOT, 'store', 'idle-digest.jsonl')
 
 const INITIAL_DELAY_MS = 90_000
 const INTERVAL_MS = 3 * 60_000
@@ -255,6 +282,29 @@ export function lastRealCommentAtByCard(raw: Map<string, Map<string, number>>): 
   }
 }
 
+/** The agent's latest ACTION TRACE, epoch ms: the newer of its last outgoing inter-agent message
+ *  (db.getLastOutboundMessageAt, the helper the session-stuck alert already uses) and its last card
+ *  comment (the per-tick comment map, census comments excluded). null = none on record; undefined = the
+ *  lookup failed, which the decision reads as "not measured" and keeps the time-only hold. */
+export function lastActionAtMs(
+  agent: string,
+  comments: Map<string, Map<string, number>>,
+): number | null | undefined {
+  try {
+    const me = agent.trim().toLowerCase()
+    let latestSec: number | null = getLastOutboundMessageAt(agent)
+    for (const authors of comments.values()) {
+      for (const [author, at] of authors) {
+        if (author.trim().toLowerCase() === me && (latestSec === null || at > latestSec)) latestSec = at
+      }
+    }
+    return latestSec === null ? null : latestSec * 1000
+  } catch (err) {
+    logger.warn({ err, agent }, 'idle guard: action-trace lookup failed; the sub-agent hold is judged by time only')
+    return undefined
+  }
+}
+
 /** null = could not tell (no session, capture failed, unknown pane). NOT the same as
  *  "busy". Folding an unreadable pane into "busy" silently switches the guard off for
  *  that agent -- a failure that looks exactly like health, which is the one shape this
@@ -271,6 +321,7 @@ export function readPane(agent: string): {
   staleCounterOnly: boolean
   usageLimited?: boolean
   paneReason?: PaneUnreadableReason
+  runningSubagents?: number
 } {
   // WHICH branch produced `idle: null` -- three of them do, and the owner-facing
   // message named only two. Measured 2026-09-19: 33 'pane unreadable' alerts, 16 of
@@ -282,9 +333,13 @@ export function readPane(agent: string): {
   const pane = capturePane(session, readAgentRemoteHost(agent))
   if (!pane) return { idle: null, staleCounterOnly: false, paneReason: 'capture-failed' }
   const state = detectPaneState(pane)
-  if (state === 'unknown') return { idle: null, staleCounterOnly: false, paneReason: 'unknown-state' }
+  // Counted from the same capture, and BEFORE the unknown verdict: a panel read off the screen
+  // is evidence the pane is not a mystery, whatever else the classifier made of it.
+  const runningSubagents = runningBackgroundWork(pane)
+  if (state === 'unknown') return { idle: null, staleCounterOnly: false, paneReason: 'unknown-state', runningSubagents }
   return {
     idle: state === 'idle',
+    runningSubagents,
     staleCounterOnly: busyEvidence(pane) === 'counter',
     // Same capture as the idle verdict (card d3f92923), so the two cannot disagree about the screen.
     // Held only until the reset the banner names, 5 h at most: the banner outlives the limit.
@@ -425,6 +480,9 @@ export function tick(): void {
           paneIdle: running ? paneRead.idle : false,
           staleCounterOnly: running ? paneRead.staleCounterOnly : false,
           paneUsageLimited: running ? paneRead.usageLimited === true : false,
+          runningSubagents: running ? paneRead.runningSubagents ?? 0 : 0,
+          // Read only when sub-agent rows are on screen: it is the one case that consumes it.
+          lastActionAtMs: running && (paneRead.runningSubagents ?? 0) > 0 ? lastActionAtMs(agent, realComments ?? comments) : undefined,
           pendingMessages: running ? getPendingMessages(agent).length : 0,
           ownWorkCount,
           // Without this the repeat-suppression never fires -- it is skipped whenever the
@@ -590,14 +648,44 @@ export function tick(): void {
           }
           continue
         }
+        // THE FIRST NOTICE OF AN IDLE SPELL STAYS A LIVE MESSAGE; ONLY REPEATS GO TO THE DIGEST
+        // (card 3c27105f, marveen's decision R3). Replayed over 7 days: 53 of 71 such notices were
+        // followed by the coordinator handing the agent work within 30 minutes (a random 30-minute
+        // window: 22%), so this is the one guard message that makes work happen. The repeats are the
+        // noise: the coordinator already knows. A spell is identified by its idleSinceMs; the stamp
+        // is written only when the message was really enqueued, so a failed enqueue is not "used up".
+        const noticeKind = (check as WorkCheck | null)?.kind ?? null
+        const isFirstOfSpell = next.idleSinceMs !== null && next.noWorkLiveSpellSince !== next.idleSinceMs
+        if (isFirstOfSpell) {
+          try {
+            createAgentMessage('system', MAIN_AGENT_ID, buildNoWorkNotice(agent, minutes, Date.now(), noticeKind))
+            watchState.set(agent, { ...next, noWorkLiveSpellSince: next.idleSinceMs })
+            logger.info(
+              { idleGuard: true, agent, idleForMs: decision.idleForMs },
+              'idle guard: agent idle with nothing assigned -- told the coordinator (first notice of this idle spell)',
+            )
+            continue
+          } catch (err) {
+            logger.warn({ err, agent }, 'idle guard: could not tell the coordinator about an unassigned idle agent -- trying the digest')
+          }
+        }
+        // A REPEAT (or a first notice that could not be enqueued) is not a message: the coordinator's
+        // turn costs a whole session re-read. It goes into the daily digest. If the digest cannot be
+        // written the old message is the way out -- a dropped notice is the shape this guard exists
+        // to remove.
         try {
-          createAgentMessage('system', MAIN_AGENT_ID, buildNoWorkNotice(agent, minutes, Date.now(), (check as WorkCheck | null)?.kind ?? null))
+          appendFileSync(IDLE_DIGEST_PATH, idleDigestLine(agent, minutes, Date.now(), noticeKind))
           logger.info(
             { idleGuard: true, agent, idleForMs: decision.idleForMs },
-            'idle guard: agent idle with nothing assigned -- told the coordinator',
+            'idle guard: agent idle with nothing assigned -- repeat in the same idle spell, appended to the daily digest',
           )
-        } catch (err) {
-          logger.warn({ err, agent }, 'idle guard: could not tell the coordinator about an unassigned idle agent')
+        } catch (digestErr) {
+          logger.warn({ err: digestErr, agent }, 'idle guard: could not write the daily digest -- telling the coordinator instead')
+          try {
+            createAgentMessage('system', MAIN_AGENT_ID, buildNoWorkNotice(agent, minutes, Date.now(), noticeKind))
+          } catch (err) {
+            logger.warn({ err, agent }, 'idle guard: could not tell the coordinator about an unassigned idle agent')
+          }
         }
         continue
       }

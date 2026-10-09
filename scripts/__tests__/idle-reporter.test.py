@@ -316,6 +316,22 @@ class Szivveres(unittest.TestCase):
             fh.write("MAIN_AGENT_ID=\n")
         self.assertEqual(ir.roster(ures), ["marveen"])
 
+    def test_a_PARKOLT_agens_kimarad_a_rosterbol(self):
+        """Isti 6001: a workcheck `kind=none` agens nem tetlen, hanem parkol.
+        Kontroll ugyanabban a fleetben: a nem parkolt, a workcheck NELKULI es a
+        TOROTT workcheck-u agens benne marad (fail-open)."""
+        import json as _j
+        f = os.path.join(self.dir, "park-fleet")
+        for n, wc in (("parkol", {"kind": "none"}), ("dolgozik", {"kind": "assigned_open_cards"}),
+                      ("nincs-wc", None), ("torott", "{nem json")):
+            os.makedirs(os.path.join(f, "agents", n))
+            if wc is not None:
+                with open(os.path.join(f, "agents", n, "workcheck.json"), "w", encoding="utf-8") as fh:
+                    fh.write(wc if isinstance(wc, str) else _j.dumps(wc))
+        with open(os.path.join(f, ".env"), "w", encoding="utf-8") as fh:
+            fh.write("MAIN_AGENT_ID=marveen\n")
+        self.assertEqual(ir.roster(f), ["dolgozik", "marveen", "nincs-wc", "torott"])
+
     def test_a_VAK_kor_is_szivverest_ad(self):
         self.db = os.path.join(self.dir, "nincs.db")
         self._run(NOW)

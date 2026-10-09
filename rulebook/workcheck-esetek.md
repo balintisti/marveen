@@ -305,3 +305,34 @@ semmit nem változtat.
 **A HATÓKÖRE SZŰKEBB, MINT HINNÉD: a `none` NEM némítja el az üzenet-KÉZBESÍTÉST.** A router
 egyetlen produkciós hívási helye a BUSY-STUCK riasztás populációját szűri vele, nem a kézbesítést.
 
+
+---
+
+## A tetlen-or ZAJA -- 7 napos visszajatszas (kartya `3c27105f`, mert 2026-10-09 01:28)
+
+Populacio: a `[tetlen-or]` uzenetek system -> marveen, 2026-10-02 01:09 .. 10-09 01:09: **238 uzenet, 245 tetel**
+(7 csoportos uzenet). Ujramerheto: `agent_messages` (created_at MASODPERC), `from_agent='system' AND
+to_agent='marveen' AND content LIKE '[tetlen-or]%'`; a tetel az agens-nev a szovegben.
+
+| osztaly | tetel | futo al-agens mellett | marveen-uzenet az agensnek 30 percen belul |
+|---|---|---|---|
+| ebresztes utan is all | 97 | 22 | 41 (kontroll, +-24h eltolas: atlag 27) |
+| panel nem olvashato | 79 | 47 | 27 (kontroll atlag 20) |
+| ures prompton, nincs kiosztva | 69 | 21 | 48 (kontroll atlag 15,5) |
+
+Az al-agens-oszlop NEM a panelbol jon (a panel-torteneti adat nincs meg), hanem az agensek session-naploibol
+(Agent-hivas inditasa -> lezaro ertesites); pozitiv kontroll: didi 10-07 11:55 es 12:25 harom futo al-ageense.
+Az `idle` sor a panelen NEM futo al-agens. Az `unknown-state` volt MIND a 76 egyedi "nem olvashato" ok.
+
+**A "nincs kiosztva" osztaly az, amire marveen TENYLEG reagalt:** al-agens nelkuli 48 tetelbol 36-nal ment tole uzenet az
+agensnek 30 percen belul (kontroll atlag 8,5), ebbol 26/31 az ELSO ertesitesnel (12-29 perc tetlen). Egy masodik, pontosabb
+visszajatszas (253 tetel, marveen 2026-10-09): a "nincs kiosztva" ertesiteseket 53/71 esetben (75%) koveti marveen-lepes, a
+veletlen 30 perces ablak alaparanya 22%. EZERT (marveen dontese R3): az idle-szakasz ELSO "nincs kiosztva" ertesitese ELO
+uzenet marad; csak az ISMETLESEK ugyanabban a szakaszban mennek a `store/idle-digest.jsonl`-be (napindito:
+`section_idle_digest`). A szakaszt az `idleSinceMs` azonositja; a jelolo (`noWorkLiveSpellSince`) csak a SIKERESEN sorba
+tett uzenet utan kerul fel, memoriaban el (ujraindulas: legfeljebb egy extra elo ertesites).
+Dontes (a): futo al-agenses pane-re legfeljebb egy ertesites 2 oranként (`subagentHoldMs`; egy atengedett riasztas
+ujrafegyverzi). Dontes (b): a "panel nem olvashato" agensenkent 6 oranként egyszer (`paneUnreadableRealertMs`).
+
+Az eldobott tetelek kozott (al-agens vagy 6 oras ablak miatt, 104 db) EGY alert-vezerelt valodi teendo volt: computress 10-07
+17:17, harom polling al-agens 52-82 perce, marveen kezzel leallitotta. A 2 oras `subagentHoldMs` ezt NEM fogja (82 < 120 perc).

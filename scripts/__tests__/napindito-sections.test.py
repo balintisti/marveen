@@ -313,6 +313,48 @@ check_true("keret: a sor kimondja a kort is", "perces" in first(out_old))
 out_none = ns.section_quota(tempfile.mkdtemp())
 check_true("keret: hianyzo pillanatfelvetel sajat sort kap", "NEM MERHETO" in first(out_none))
 
+# =============================================================================
+# 7. TETLEN, NINCS KIOSZTVA (kartya 3c27105f): a tetlen-or sorai a `store/idle-digest.jsonl`-ben
+# =============================================================================
+def _digest_root(lines):
+    d = tempfile.mkdtemp()
+    os.makedirs(os.path.join(d, "store"))
+    with open(os.path.join(d, "store", "idle-digest.jsonl"), "w", encoding="utf-8") as f:
+        f.write("".join(l + "\n" for l in lines))
+    return d
+
+_ms = lambda sec_ago: int((NOW - sec_ago) * 1000)
+_row = lambda sec_ago, agent, minutes: json.dumps({"ts": _ms(sec_ago), "agent": agent, "minutes": minutes, "kind": "assigned_open_cards"})
+
+out_nofile = ns.section_idle_digest(tempfile.mkdtemp(), now=NOW)
+check_true("digest: hianyzo fajl sajat sort kap, es kimondja a ketertelmuseget",
+           "NINCS NAPLO" in first(out_nofile) and "nem kulonboztetheto" in first(out_nofile))
+
+out_empty = ns.section_idle_digest(_digest_root([]), now=NOW)
+check_true("digest: ures naplo = 0 jelzes, NEM hallgatas", "0 jelzes" in first(out_empty))
+
+out_old = ns.section_idle_digest(_digest_root([_row(30 * 3600, "didi", 40)]), now=NOW)
+check_true("digest: a 24 oranal regebbi sor kimarad, de a naplo mereteit kiirja",
+           "0 jelzes" in first(out_old) and "1 sor" in first(out_old))
+
+out_two = ns.section_idle_digest(
+    _digest_root([_row(3600, "didi", 40), _row(1800, "mandark", 30), _row(600, "mandark", 70)]), now=NOW)
+check_true("digest: a fejlec megszamolja a jelzest es az ugynokot", "3 jelzes, 2 ugynok" in first(out_two))
+# A gyakoribb ELOL, es a betusorrend ELLENE szol (didi < mandark): a rendezes-hiba igy latszik.
+check_true("digest: ugynokonkent sor, a gyakoribb elol",
+           out_two[1].lstrip().startswith("- mandark: 2x") and out_two[2].lstrip().startswith("- didi: 1x"))
+check_true("digest: a legutobbi jelzes percszamat irja", "70 perce" in out_two[1])
+
+out_bad = ns.section_idle_digest(_digest_root([_row(600, "didi", 15), "ez nem json", '{"ts": 1}']), now=NOW)
+check_true("digest: a serult sor SZAMLALVA van, nem nyelve el", "2 serult sor" in first(out_bad))
+check_true("digest: a serult sor mellett az ep sor is megvan", "didi: 1x" in "\n".join(out_bad))
+
+# Egysegtevesztes: egy MASODPERCES ts (1.79e9) ezredmasodpercnek olvasva 1970 januar, es "regi"
+# sorkent csendben kiesne -> nulla jelzes. Ezert serult sor, es latszik.
+out_sec = ns.section_idle_digest(
+    _digest_root([json.dumps({"ts": NOW - 600, "agent": "didi", "minutes": 15, "kind": None})]), now=NOW)
+check_true("digest: masodperces ts SERULT sor, nem csendes nulla", "1 serult sor" in first(out_sec))
+
 # AZ OSSZEGZO A FAJL VEGEN ALL, es ez nem stilus: 2026-09-10-ig a 200. soron
 # allt, tehat minden UTANA irt eset ugy bukhatott volna, hogy a futas exit 0-t ad.
 if failed:

@@ -94,6 +94,25 @@ export interface IdleAgentThresholds {
    *  that keeps finishing short turns would be woken every few minutes: each spell
    *  looks new, because going busy is exactly what ends the previous one. */
   wakeCooldownMs: number
+  /** Floor between two 'pane unreadable' alerts about the SAME agent (card 3c27105f). The alert
+   *  says the guard is blind, and a blind spell lasts as long as it lasts: measured 2026-10-09
+   *  over 7 days, 79 such lines to the coordinator, every one closed with no result. Absent
+   *  falls back to realertMs, i.e. the old behaviour. Never shortens realertMs. */
+  paneUnreadableRealertMs?: number
+  /** How long running sub-agents may keep an agent out of the guard's sight (card 3c27105f).
+   *  Without a bound the suppression is permanent: a sub-agent that only polls can run for
+   *  hours (computress, 2026-10-07: three of them 52-82 minutes with nothing posted, which the
+   *  coordinator caught by hand). Past the bound the agent is judged as if it had none, but notices
+   *  are limited to one per subagentNoticeWindowMs. Absent means no bound. */
+  subagentHoldMs?: number
+  /** ACTION TRACE (card 3c27105f, marveen 26435): how long visible sub-agent rows may go with ZERO
+   *  outgoing messages and ZERO card comments from the agent before the hold is dropped early. It
+   *  answers the ghost-row risk (a row on screen, nothing actually working) by what the agent DID, not
+   *  by how often it is nagged. Needs input.lastActionAtMs; absent = no trace check. */
+  subagentSilentMs?: number
+  /** Past the hold, with sub-agent rows still visible, at most ONE notice per this window. Absent =
+   *  no limit (the notices follow the normal cadence). */
+  subagentNoticeWindowMs?: number
 }
 
 export interface IdleAgentState {
@@ -118,6 +137,22 @@ export interface IdleAgentState {
    * lastWakeWorkIds, for the branch that returns before the wake path is reachable.
    */
   lastNoWorkNoticeIds?: readonly string[] | null
+  /** When sub-agents were first seen running in the current stretch; null = none seen on the
+   *  last tick. Feeds thresholds.subagentHoldMs. In memory only, like lastNoWorkNoticeAt: a
+   *  restart merely restarts the hold. */
+  subagentsSinceMs?: number | null
+  /** When the last notice went out while sub-agent rows were still visible past the hold. Feeds
+   *  thresholds.subagentNoticeWindowMs; reset when a tick sees no sub-agents. In memory only. */
+  lastSubagentNoticeAt?: number | null
+  /** When the coordinator was last told this agent's pane is unreadable. Survives everything
+   *  but a restart, for the same reason as above: the worst a restart costs is one repeat. */
+  lastPaneUnreadableAt?: number | null
+  /** The idle spell (its idleSinceMs) for which the coordinator was last sent a LIVE 'idle, nothing
+   *  assigned' message (card 3c27105f). The first notice of a spell stays live, because 53 of 71
+   *  such notices were followed by the coordinator handing out work; repeats in the same spell go to
+   *  the digest. Stamped by the watcher only after the message was really enqueued. In memory only:
+   *  a restart costs at most one extra live notice. */
+  noWorkLiveSpellSince?: number | null
 }
 
 export interface IdleAgentInput {
@@ -152,6 +187,15 @@ export interface IdleAgentInput {
    *  warning does not count). Such a pane reads idle, and nothing a wake says can move it until the
    *  limit resets -- the model-fallback runner owns that state. Card d3f92923. */
   paneUsageLimited?: boolean
+  /** Background work the pane shows RUNNING (runningBackgroundWork): sub-agent rows, the
+   *  `Waiting for N background agents` line, and the shells and monitors the footer counts. An
+   *  agent with a free prompt and background work at hand is not standing idle: no wake, no
+   *  escalation (cards 3c27105f, 53bcfe74). The name is the first, narrower use of the field.
+   *  Absent = not measured = 0. */
+  runningSubagents?: number
+  /** The latest OUTGOING message or card comment this agent produced, epoch ms; null = none on record.
+   *  Absent = not measured, and then the sub-agent hold is judged by time alone (card 3c27105f). */
+  lastActionAtMs?: number | null
   /** The KIND the agent declared. `'none'` means "this agent has no queue in this
    *  system" -- an on-call agent whose empty board is the correct state, not a leak.
    *  Absent is treated as 'not none': an agent that declared a real check and has zero
@@ -178,6 +222,10 @@ export type IdleDecision =
   | 'unchanged-pull-list'
         // Idle only because the plan limit is reached: a wake cannot help (card d3f92923).
         | 'usage-limited'
+        // The pane shows running background sub-agents: the agent is working (card 3c27105f).
+        | 'subagents-running'
+        // Past the hold with sub-agent rows still visible: this window's one notice already went out.
+        | 'subagents-notice-window'
     }
   /** Stage 1: tell the AGENT, not a human. The agent is awake, its queue is empty and
    *  the condition is about itself -- it is the only party that can both be reached and
@@ -278,18 +326,84 @@ export function isFloorExpired(dueDate: number | null | undefined, now: number |
   return !isDeferred(dueDate, now)
 }
 
+type SubagentVerdict = 'none' | 'hold' | 'ghost' | 'past'
+
+/** What the visible sub-agent rows mean this tick. 'hold': working, stay out of the way. 'ghost':
+ *  rows for at least subagentSilentMs and the agent's LAST message or card comment is older than
+ *  subagentSilentMs too (marveen 26816: silence counts from the last action, not from when the
+ *  rows appeared, so one post early in a stuck spell cannot hold it forever; didi 32302), so judge
+ *  it as if it had none. 'past': the hold ran out. */
+function subagentVerdict(input: IdleAgentInput, sinceMs: number | null | undefined, thresholds: IdleAgentThresholds, now: number): SubagentVerdict {
+  if ((input.runningSubagents ?? 0) <= 0) return 'none'
+  const since = sinceMs ?? now
+  const held = now - since
+  if (
+    thresholds.subagentSilentMs !== undefined &&
+    input.lastActionAtMs !== undefined &&
+    held >= thresholds.subagentSilentMs &&
+    (input.lastActionAtMs === null || input.lastActionAtMs < now - thresholds.subagentSilentMs)
+  ) return 'ghost'
+  if (thresholds.subagentHoldMs === undefined || held < thresholds.subagentHoldMs) return 'hold'
+  return 'past'
+}
+
+/**
+ * Pure decision plus ONE rule on top: past the hold, while sub-agent rows are still visible, at most
+ * one notice per subagentNoticeWindowMs (card 3c27105f, marveen 26435: past the 2 h hold the normal
+ * 30 minute cadence would bring the noise back). A suppressed notice keeps the idle spell and takes
+ * none of the notice's bookkeeping, so the next window's notice is still the right stage (didi 31695:
+ * zeroing the spell made the escalation unreachable).
+ */
 export function decideIdleAlert(
   input: IdleAgentInput,
-  state: IdleAgentState,
+  stateIn: IdleAgentState,
   thresholds: IdleAgentThresholds,
   now: number,
 ): { decision: IdleDecision; next: IdleAgentState } {
+  const r = decideIdleAlertCore(input, stateIn, thresholds, now)
+  const windowMs = thresholds.subagentNoticeWindowMs
+  if (windowMs === undefined || subagentVerdict(input, r.next.subagentsSinceMs, thresholds, now) !== 'past') return r
+  if (!r.decision.alert) return r
+  const last = stateIn.lastSubagentNoticeAt ?? null
+  if (last !== null && now - last < windowMs) {
+    return {
+      decision: { alert: false, reason: 'subagents-notice-window' },
+      next: { ...stateIn, subagentsSinceMs: r.next.subagentsSinceMs, idleSinceMs: r.next.idleSinceMs },
+    }
+  }
+  return { decision: r.decision, next: { ...r.next, lastSubagentNoticeAt: now } }
+}
+
+function decideIdleAlertCore(
+  input: IdleAgentInput,
+  stateIn: IdleAgentState,
+  thresholds: IdleAgentThresholds,
+  now: number,
+): { decision: IdleDecision; next: IdleAgentState } {
+  // The hold clock runs on every tick that shows sub-agents and resets on the first that shows
+  // none, so it is stamped here once and every return below carries it (they all spread state).
+  // An alert does NOT touch it (didi 31695, card 3c27105f): re-arming the hold on an alert also
+  // cleared the idle spell (the hold branch below), so past the bound only the first wake ever
+  // fired and the escalation never did. Past the bound the agent is judged as if it had no
+  // sub-agents, wakes and escalations both.
+  const subagents = input.runningSubagents ?? 0
+  const subagentsSince = subagents > 0 ? (stateIn.subagentsSinceMs ?? now) : null
+  let state: IdleAgentState = (stateIn.subagentsSinceMs ?? null) === subagentsSince ? stateIn : { ...stateIn, subagentsSinceMs: subagentsSince }
+  // A tick with no sub-agents ends the stretch, and the stretch's notice window with it.
+  if (subagentsSince === null && state.lastSubagentNoticeAt != null) state = { ...state, lastSubagentNoticeAt: null }
   const clear = (reason: Extract<IdleDecision, { alert: false }>['reason']) => ({
     decision: { alert: false, reason } as IdleDecision,
     next: { ...state, idleSinceMs: null },
   })
 
   if (!input.running) return clear('not-running')
+
+  // RUNNING SUB-AGENTS COME BEFORE EVERYTHING ELSE, the unreadable pane included: rows that were
+  // read off the screen mean the guard is not blind, and the agent is working. The bound keeps
+  // this from becoming permanent -- see subagentHoldMs.
+  if (subagentVerdict(input, state.subagentsSinceMs, thresholds, now) === 'hold') {
+    return clear('subagents-running')
+  }
 
   // An unreadable pane is NOT "busy". Reported on its own rail, rate-limited like the
   // undeclared case: a pane we cannot read means the guard is blind for that agent, and
@@ -298,9 +412,17 @@ export function decideIdleAlert(
     if (state.lastAlertAt !== null && now - state.lastAlertAt < thresholds.realertMs) {
       return clear('recently-alerted')
     }
+    // PER AGENT, ONCE PER WINDOW (card 3c27105f). The check above shares lastAlertAt with the other
+    // alert kinds and its window is 30 minutes; this one is the alert's own clock and its window is
+    // longer. The reason is not repeated as news: the agent is still blind, and the coordinator
+    // already knows.
+    const blindWindow = thresholds.paneUnreadableRealertMs ?? thresholds.realertMs
+    if (state.lastPaneUnreadableAt != null && now - state.lastPaneUnreadableAt < blindWindow) {
+      return clear('recently-alerted')
+    }
     return {
       decision: { alert: true, reason: 'pane-unreadable' },
-      next: { ...state, idleSinceMs: null, lastAlertAt: now },
+      next: { ...state, idleSinceMs: null, lastAlertAt: now, lastPaneUnreadableAt: now },
     }
   }
 
@@ -1380,6 +1502,13 @@ export function buildPullNotice(
     `${ASYMMETRY_NOTE} a jovobeli \`due_date\`-et (az orphanPullList szuri), es a`,
     'munka-szamlalo `testing` al-szurojet, ami a felajanlas ELOFELTETELE volt.',
   ].join('\n')
+}
+
+/** One line of the daily digest for 'idle, nothing assigned' (card 3c27105f): JSON, newline
+ *  terminated, appended to store/idle-digest.jsonl and read by section_idle_digest in
+ *  scripts/napindito-sections.py. `ts` is epoch MILLISECONDS here -- the reader divides. */
+export function idleDigestLine(agent: string, minutes: number, nowMs: number, kind?: WorkCheckKind | null): string {
+  return JSON.stringify({ ts: nowMs, agent, minutes, kind: kind ?? null }) + '\n'
 }
 
 export function buildNoWorkNotice(agent: string, minutes: number, nowMs: number, kind?: WorkCheckKind | null): string {

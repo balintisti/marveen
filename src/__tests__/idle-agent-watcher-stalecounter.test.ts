@@ -27,6 +27,8 @@ vi.mock('../pane-state.js', () => ({
   detectPaneState: (...a: unknown[]) => detectPaneState(...a),
   busyEvidence: (...a: unknown[]) => busyEvidence(...a),
   detectsUsageLimitReached: () => false,
+  // card 3c27105f: readPane counts running sub-agents from the same capture.
+  runningBackgroundWork: () => 0,
 }))
 
 const { readPane } = await import('../web/idle-agent-watcher.js')
@@ -78,6 +80,7 @@ describe('readPane -- a staleCounterOnly BEKOTESE (b5bff340)', () => {
       idle: null,
       staleCounterOnly: false,
       paneReason: 'unknown-state',
+      runningSubagents: 0,
     })
 
     capturePane.mockReturnValue(null)
