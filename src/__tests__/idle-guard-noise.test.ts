@@ -255,6 +255,27 @@ describe('(a) decideIdleAlert -- futo al-agens mellett nincs ebresztes, nincs es
     expect(stale.filter((e) => e.min < 120)).toEqual([])
   })
 
+  // didi 31755 (1): a szellem-sor agon a `lastActionAtMs < since` feltetel a TELJES teher. Elo agensnek
+  // majdnem mindig van regebbi kimeno uzenete / komentje (a watcher a LEGUTOLSOT adja), tehat a `null`
+  // eset keves; a valodi eset egy a sor megjelenese ELOTTI nyom. Mutans `=== null`: 365/365 tulelte.
+  it('didi 31755 (1): a tartas kezdete ELOTTI nyom szellem-sor -- a szokasos 30 perces menet fut, nem az ablak', () => {
+    const ghost = simulate(1, () => null)
+    const before = simulate(1, () => now - 1000)           // 1 mp-cel a sor megjelenese elott
+    expect(before).toEqual(ghost)
+    expect(before.map((e) => e.min)).not.toEqual([132, 252, 372, 492])   // pozitiv kontroll: az ablakos menet mas
+    // Hatar: a pontosan a megjelenes pillanatara eso nyom MEGSZAMIT (`<`, nem `<=`): ablakos menet.
+    expect(simulate(1, () => now).map((e) => e.min)).toEqual([132, 252, 372, 492])
+  })
+
+  it('didi 31755 (1): ugyanaz az allapot, csak a nyom ideje kulonbozik -- a sor elotti nyom ebreszt, a sor utani az ablakba esik', () => {
+    const st = { ...longIdle, subagentsSinceMs: now - 3 * 3_600_000, lastSubagentNoticeAt: now - 10 * 60_000 }
+    const input = { ...base, runningSubagents: 1 }
+    const old = decideIdleAlert({ ...input, lastActionAtMs: now - 5 * 3_600_000 }, st, T, now)
+    expect(old.decision).toMatchObject({ alert: true, reason: 'wake-agent' })     // szellem-sor: az ablak nem fogja vissza
+    const fresh = decideIdleAlert({ ...input, lastActionAtMs: now - 3_600_000 }, st, T, now)
+    expect(fresh.decision).toEqual({ alert: false, reason: 'subagents-notice-window' })
+  })
+
   it('a nyom CSAK kartya-komment is lehet (nem csak uzenet): a sor mellett a tartas marad', () => {
     // A hivo a ket forras maximumat adja at; itt a komment a friss, az uzenet regi -- a dontes csak a maximumot latja.
     const held = simulate(1, (min) => now + min * 60_000 - 1000)
@@ -291,6 +312,33 @@ describe('(a) decideIdleAlert -- futo al-agens mellett nincs ebresztes, nincs es
     const again = decideIdleAlert({ ...base, runningSubagents: 1 }, gone.next, T, now + 3 * 3_600_000)
     expect(again.next.subagentsSinceMs).toBe(now + 3 * 3_600_000)
     expect(again.decision.reason).toBe('subagents-running')
+  })
+
+  // didi 31755 (2): a sorok eltunesekor az ablak is veget er. Mutans `if false`: tulelte. A gyakorlati
+  // kovetkezmeny a watcher kuszobeivel (tartas = ablak = 2 ora) nem latszik -- az uj szakasz elso ertesitese
+  // legkorabban a tartas utan jon, az pedig mindig messzebb van az elozo ertesitestol, mint az ablak --,
+  // ezert a tesztek az allapotot es egy rovidebb tartast rogzitenek, nem a gyari kuszobot.
+  it('didi 31755 (2): a sorok eltunesekor az ertesites-ablak is nullazodik (allapot)', () => {
+    const st = { ...longIdle, subagentsSinceMs: now - 3 * 3_600_000, lastSubagentNoticeAt: now - 10 * 60_000 }
+    const gone = decideIdleAlert(base, st, T, now)
+    expect(gone.next.subagentsSinceMs).toBeNull()
+    expect(gone.next.lastSubagentNoticeAt).toBeNull()
+    // Kontroll: amig a sor latszik, az ablak megmarad.
+    expect(decideIdleAlert({ ...base, runningSubagents: 1, lastActionAtMs: now - 1000 }, st, T, now).next.lastSubagentNoticeAt).toBe(st.lastSubagentNoticeAt)
+  })
+
+  it('didi 31755 (2): rovid tartassal (30 perc < ablak) az uj szakasz elso ertesitese NEM nyelodik el az elozo szakasz ablaka miatt', () => {
+    const T2 = { ...T, subagentHoldMs: 30 * 60_000, subagentSilentMs: 30 * 60_000 }
+    const st = { ...longIdle, subagentsSinceMs: now - 3 * 3_600_000, lastSubagentNoticeAt: now - 10 * 60_000 }
+    const gone = decideIdleAlert(base, st, T2, now)
+    // Uj szakasz: a sor 5 perc mulva ujra latszik, 31 perccel kesobb a tartas lejart; az elozo ertesites 46 perccel korabbi.
+    const tNew = now + 36 * 60_000
+    const fresh = { ...gone.next, idleSinceMs: tNew - 60 * 60_000, lastAlertAt: null, lastWakeAt: null, subagentsSinceMs: tNew - 31 * 60_000 }
+    const r = decideIdleAlert({ ...base, runningSubagents: 1, lastActionAtMs: tNew - 60_000 }, fresh, T2, tNew)
+    expect(r.decision).toMatchObject({ alert: true, reason: 'wake-agent' })
+    // Kontroll: ugyanez az elozo ablakkal egyutt (nem nullazott allapot) elnyelodne.
+    const kept = decideIdleAlert({ ...base, runningSubagents: 1, lastActionAtMs: tNew - 60_000 }, { ...fresh, lastSubagentNoticeAt: now - 10 * 60_000 }, T2, tNew)
+    expect(kept.decision).toEqual({ alert: false, reason: 'subagents-notice-window' })
   })
 
   it('al-agens nelkuli allapotnal a next-be NEM kerul uj kulcs (a regi hivok toEqual-ja ep marad)', () => {
@@ -440,6 +488,30 @@ describe('tick() -- a bekotes', () => {
     expect(at(121)).toBe('not-sustained')
     expect(at(134)).toBe('wake-agent')
     expect(at(152)).not.toBe('subagents-notice-window')    // nyom nincs: szellem-sor, a szokasos menet fut, nem az ablak
+  })
+
+  // didi 31755 (3): a nyom-keresés HIBÁJA = "nem merve" (undefined, az ido szerinti tartas marad), NEM
+  // "nincs nyom" (null, szellem-sor). Mutans `return null`: tulelte -- egy adatbazis-hiba csendben eszkalacio lett volna.
+  it('didi 31755 (3): lastActionAtMs -- a kimeno-uzenet keresese elhasal -> undefined (nem merve), nincs -> null, van -> ms', async () => {
+    const { lastActionAtMs } = await import('../web/idle-agent-watcher.js')
+    outboundSec = () => { throw new Error('db down') }
+    expect(lastActionAtMs('x', new Map())).toBeUndefined()
+    outboundSec = null
+    expect(lastActionAtMs('x', new Map())).toBeNull()                      // pozitiv kontroll: a nincs-nyom ag mas, mint a hiba
+    outboundSec = 1000
+    expect(lastActionAtMs('x', new Map())).toBe(1_000_000)
+    expect(lastActionAtMs('x', new Map([['c', new Map([['X', 2000]])]]))).toBe(2_000_000)
+  })
+
+  it('didi 31755 (3): ha a nyom-keresés elhasal, az agens NEM szellem-sor: a tartas utan az ablak szerint, nem a szokasos menet szerint', () => {
+    workcheck('x', 'assigned_open_cards'); openCards(); panes.set('agent-x', rowsPane())
+    outboundSec = () => { throw new Error('db down') }
+    const at = (min: number) => { vi.setSystemTime(NOW + min * 60_000); tick(); return reasonOf('x') }
+    expect(at(0)).toBe('subagents-running')
+    expect(at(85)).toBe('subagents-running')                 // nem merve: az ido szerinti tartas
+    expect(at(121)).toBe('not-sustained')
+    expect(at(134)).toBe('wake-agent')
+    expect(at(152)).toBe('subagents-notice-window')          // szellem-sorkent (null) itt a szokasos menet futna
   })
 
   it('(a/ablak) a tartas utan, amig a sor latszik, 2 oras ablakonkent EGY ertesites (a THRESHOLDS bekotese)', () => {
