@@ -43,6 +43,10 @@ backends (node dist/main) from e2e runners whose EXIT trap never ran or whose SI
    HARD CAP: a light run over HEAVY_RUN_LIGHT_CAP seconds (default 120) is killed, the wrapper says so
    on stderr ("light run exceeded 120s, rerun without --light") and exits 124, so a mislabelled heavy
    run cannot smuggle a third heavy run past the heavy pool.
+5. A NESTED CALL DOES NOT WAIT FOR ITS OWN PARENT. The run exports HEAVY_RUN_HELD=<agent>:<pid> to the
+   command. A heavy-run inside it, by the same agent, whose holder still holds a slot, runs the command
+   without taking a second slot and without a ticket, in either pool (logged nested=true). Without this the one-per-agent rule made the inner
+   call wait forever for the slot its own parent held (card 378576bc).
 The exit code is the command's (128+N if a signal ended it). Each run appends one JSON line to
 HEAVY_RUN_DIR/runs.jsonl: who, what, class (heavy|light), waited_s, ran_s, rc.
 """
@@ -273,6 +277,18 @@ def queue_position(seq, cls="heavy"):
 _GONE = (ProcessLookupError, PermissionError)
 
 
+def held_by_me(held, agent):
+    """True if HEAVY_RUN_HELD names this agent AND that pid holds a slot right now.
+
+    The variable alone is not trusted: a descendant that outlives its run (a daemon it started) still
+    carries it, and a pass-through on a stale value would let the agent run unlimited.
+    """
+    who, _, pid = held.rpartition(":")
+    if who != agent or not pid.isdigit():
+        return False
+    return any(h.get("agent") == agent and h.get("pid") == int(pid) for cls in POOLS for h in holders(cls))
+
+
 def reap_group(pgid, grace):
     try:
         os.killpg(pgid, signal.SIGTERM)
@@ -301,7 +317,8 @@ def watchdog(runner, pgid, slot):
     """
     if os.fork() != 0:
         return
-    slot.close()
+    if slot:
+        slot.close()
     os.setsid()  # out of the run's group, so reaping the group does not take the watchdog first
     while os.getppid() == runner:
         time.sleep(0.5)
@@ -319,28 +336,37 @@ def run(label, cmd, cls="heavy"):
           "class": cls, "started": time.strftime("%Y-%m-%d %H:%M:%S")}
     last_note = 0.0
     asked = time.time()
-    ticket = take_ticket(me) if FIFO else None
-    try:
-        slot = try_slot_in_order(me, ticket) if ticket else try_slot(me)
-        while slot is None:
-            if time.time() - last_note >= 60:
-                busy = "; ".join(f"{h['agent']} ({h['label'][:50]}, since {h['started'][11:]})"
-                                 for h in holders(cls))
-                where = ""
-                if ticket:
-                    pos, total = queue_position(ticket[2], cls)
-                    where = f", queue position {pos}/{total}"
-                print(f"heavy-run: waiting for a {cls} slot ({POOLS[cls][1]} max, one per agent{where}) -- "
-                      f"busy: {busy or 'nobody?'}",
-                      file=sys.stderr, flush=True)
-                last_note = time.time()
-            time.sleep(POLL)
+    held = os.environ.get("HEAVY_RUN_HELD", "")
+    nested = held_by_me(held, me["agent"])
+    env = None
+    if nested:
+        print(f"heavy-run: nested in this agent's own run (pid {held.rpartition(':')[2]}), "
+              "running without a second slot", file=sys.stderr, flush=True)
+        slot = None
+    else:
+        env = {**os.environ, "HEAVY_RUN_HELD": f"{me['agent']}:{me['pid']}"}
+        ticket = take_ticket(me) if FIFO else None
+        try:
             slot = try_slot_in_order(me, ticket) if ticket else try_slot(me)
-    finally:
-        if ticket:
-            drop_ticket(ticket)  # a no-op after a successful take; the cleanup for an interrupted wait
+            while slot is None:
+                if time.time() - last_note >= 60:
+                    busy = "; ".join(f"{h['agent']} ({h['label'][:50]}, since {h['started'][11:]})"
+                                     for h in holders(cls))
+                    where = ""
+                    if ticket:
+                        pos, total = queue_position(ticket[2], cls)
+                        where = f", queue position {pos}/{total}"
+                    print(f"heavy-run: waiting for a {cls} slot ({POOLS[cls][1]} max, one per agent{where}) -- "
+                          f"busy: {busy or 'nobody?'}",
+                          file=sys.stderr, flush=True)
+                    last_note = time.time()
+                time.sleep(POLL)
+                slot = try_slot_in_order(me, ticket) if ticket else try_slot(me)
+        finally:
+            if ticket:
+                drop_ticket(ticket)  # a no-op after a successful take; the cleanup for an interrupted wait
     got = time.time()
-    proc = subprocess.Popen(cmd, start_new_session=True)
+    proc = subprocess.Popen(cmd, start_new_session=True, env=env)
     watchdog(os.getpid(), proc.pid, slot)
     rc = None
 
@@ -362,12 +388,14 @@ def run(label, cmd, cls="heavy"):
             rc = CAP_RC
     finally:
         reap_group(proc.pid, GRACE)  # what the command left behind (a backend it started)
-        slot.close()
+        if slot:
+            slot.close()
         # One line per run, so the limit can be judged by its waits (marveen 23086: watch 3 days).
         with open(os.path.join(DIR, "runs.jsonl"), "a") as f:
             f.write(json.dumps({**me, "waited_s": round(got - asked, 1),
                                 "ran_s": round(time.time() - got, 1), "rc": rc,
-                                **({"capped": True} if capped else {})}) + "\n")
+                                **({"capped": True} if capped else {}),
+                                **({"nested": True} if nested else {})}) + "\n")
     return rc if rc >= 0 else 128 - rc
 
 
@@ -601,9 +629,11 @@ def self_test():
 
     # 13. SIZE CLASSES (a2090e75, marveen 31661). The light pool is separate from the heavy one, ONE per
     # agent, with a hard cap that kills the run and names the overrun; the class lands in runs.jsonl.
-    # (a) a full heavy pool does not block a light run, and a full light pool does not block a heavy one
-    a = spawn("a", "sleep", "2")
-    b = spawn("b", "sleep", "2")
+    # (a) a full heavy pool does not block a light run, and a full light pool does not block a heavy one.
+    # The heavy holders sleep 4 s: the CONTROL below asks only after the light run, and with 2 s holders a
+    # loaded machine let them finish first, so the control read "did not wait" (1 of 13 runs, 2026-10-24).
+    a = spawn("a", "sleep", "4")
+    b = spawn("b", "sleep", "4")
     time.sleep(1.0)
     c = spawn("c", "true", light=True)
     results.append(("light run does not wait behind a full heavy pool", not waited(c)))
@@ -721,6 +751,42 @@ def self_test():
     results.append(("CONTROL: both light waiters held a light ticket before the kill", queued == 2))
     results.append(("a SIGKILLed head-of-queue light waiter does not block the next one", nxt_rc == 0))
     results.append(("every light ticket is gone once the light queue is empty", tickets_in("tickets-light") == 0))
+
+    # 14. a nested call by the same agent runs inside its parent's slot, even with max 1 (card 378576bc)
+    one = {**env, "HEAVY_RUN_MAX": "1"}
+
+    def nest(outer, inner_env, timeout, light=False):
+        """outer agent holds the only slot; inside it a second heavy-run runs `true`. rc, or None if stuck."""
+        cls = ["--light"] if light else []
+        inner = " ".join([sys.executable, me, "--label", "inner-" + outer, *cls, "--", "true"])
+        p = subprocess.Popen([sys.executable, me, "--label", "outer-" + outer, *cls, "--", "bash", "-c",
+                              f"{inner_env} {inner}"], env={**one, "HEAVY_AGENT": outer},
+                             stderr=subprocess.PIPE, text=True)
+        try:
+            p.communicate(timeout=timeout)
+            return p.returncode
+        except subprocess.TimeoutExpired:
+            p.terminate()  # the wrapper reaps its group, the stuck inner call with it
+            p.communicate()
+            return None
+    results.append(("nested call of the same agent completes with max 1", nest("n", "", 10) == 0))
+    rows = [json.loads(x) for x in open(log)]
+    results.append(("the nested run is logged nested=true, the outer one is not",
+                    [x.get("nested") for x in rows if x["label"] in ("outer-n", "inner-n")] == [True, None]))
+    # CONTROL: a DIFFERENT agent's call inside that run still waits for the slot
+    results.append(("CONTROL: another agent's nested call still waits",
+                    nest("o", "HEAVY_AGENT=other", 3) is None))
+    # the light pool is one per agent too, so a light run nested in the same agent's light run deadlocked
+    # the same way; the holder check has to look at both pools
+    results.append(("nested light call of the same agent completes inside its light parent",
+                    nest("l", "", 10, light=True) == 0))
+    # a stale HEAVY_RUN_HELD (its pid holds no slot) does not bypass the limit
+    a = spawn("a", "sleep", "2")
+    time.sleep(1.0)
+    s = subprocess.Popen([sys.executable, me, "--", "true"], stderr=subprocess.PIPE, text=True,
+                         env={**one, "HEAVY_AGENT": "s", "HEAVY_RUN_HELD": "s:1"})
+    results.append(("a stale HEAVY_RUN_HELD still waits for a slot", waited(s)))
+    a.wait()
 
     shutil.rmtree(base, ignore_errors=True)
     for name, ok in results:
