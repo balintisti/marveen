@@ -77,6 +77,26 @@ export type PaneState = 'idle' | 'busy' | 'typing' | 'unknown' | 'error'
 // `← for agents` is the FleetView tail on current builds; older tails kept.
 const IDLE_FOOTER_RX = /(?:[A-Za-z][\w-]* ){1,3}on(?: \(shift\+tab to cycle\)| · [^\n]*?(?:ctrl\+t|↓ to manage|← for agents))|\? for shortcuts/
 
+// A WIDTH-TRUNCATED FOOTER (card 53521828, 2026-10-09). With `3 shells, 2 monitors · esc to interrupt`
+// in front of the hint, an 80-column footer is cut at `↓ to m…`: none of the IDLE_FOOTER_RX tails
+// survives, and that is RIGHT for the idle verdict (a partly rendered footer is not a ready pane --
+// pane-state.test.ts pins it). But every busy window is anchored on the footer line, so with no
+// anchor they slid to the end of the pane, and the three sub-agent rows under the footer pushed
+// `esc to interrupt` out of the 5-line window: a working pane read `unknown` (didi 04:48 and dexter
+// 05:54, a spinner and `esc to interrupt` on screen). liveFooterIndex gives the BUSY windows and the
+// background-work count an anchor; the idle gate still uses IDLE_FOOTER_RX alone. The `⏵⏵` mode
+// glyph is footer chrome that prose does not carry.
+const TRUNCATED_FOOTER_RX = /⏵⏵ (?:[A-Za-z][\w-]* ){1,3}on\b/
+function liveFooterIndex(lines: string[], fromEnd = false): number {
+  const find = (rx: RegExp): number => {
+    if (!fromEnd) return lines.findIndex(l => rx.test(l))
+    for (let i = lines.length - 1; i >= 0; i--) if (rx.test(lines[i])) return i
+    return -1
+  }
+  const strict = find(IDLE_FOOTER_RX)
+  return strict >= 0 ? strict : find(TRUNCATED_FOOTER_RX)
+}
+
 // Positive busy signals. ANY match anywhere in the pane means the turn
 // is mid-flight, even if the footer looks idle for a frame.
 //
@@ -1241,7 +1261,7 @@ export function detectPaneState(
   // work, interrupting the turn we woke it for. Widening the constants only
   // moves the threshold to a larger fleet of subagents; anchoring removes the
   // dependency.
-  const footerAnchor = paneLines.findIndex(l => IDLE_FOOTER_RX.test(l))
+  const footerAnchor = liveFooterIndex(paneLines)
   const liveEnd = footerAnchor >= 0 ? footerAnchor + 1 : paneLines.length
   const liveRegion = (lineCount: number): string =>
     paneLines.slice(Math.max(0, liveEnd - lineCount), liveEnd).join('\n')
@@ -1365,7 +1385,7 @@ export function busyEvidence(capture: string): BusyEvidence {
   if (!capture || !capture.trim()) return null
   if (detectPaneState(capture) !== 'busy') return null
   const paneLines = capture.split('\n')
-  const footerAnchor = paneLines.findIndex(l => IDLE_FOOTER_RX.test(l))
+  const footerAnchor = liveFooterIndex(paneLines)
   const liveEnd = footerAnchor >= 0 ? footerAnchor + 1 : paneLines.length
   const region = (n: number): string =>
     paneLines.slice(Math.max(0, liveEnd - n), liveEnd).join('\n')
@@ -1398,30 +1418,69 @@ export function paneLooksIdle(capture: string): boolean {
 // back from the end of the pane slides off it). Without a footer the rows only count under a
 // `⏺ main` header in the last lines: a pane that quotes a row in scrollback is not a panel.
 const SUBAGENT_ROW_RX = /^\s*◯\s+\S.*\s\d+[hms](?: \d+[hms])*\s+·\s+↓\s+[\d.]+[kKmM]?\s+tokens\s*$/
-const SUBAGENT_WAITING_RX = /Waiting for (\d+) background agents? to finish/
+// The waiting line is the spinner glyph at column 0 and nothing else on the line. Assistant text
+// starts with `⏺ ` and a quote is indented, so prose that repeats the phrase ("I am Waiting for 2
+// background agents to finish") has neither the glyph nor the position (card 53bcfe74).
+const SUBAGENT_WAITING_RX = /^[✻✶✳✢✽✺✹·*]\s+Waiting for (\d+) background agents? to finish\s*$/
 const SUBAGENT_PANEL_HEADER_RX = /^\s*⏺\s+main\s*$/
 const SUBAGENT_FOOTERLESS_TAIL_LINES = 20
+const SUBAGENT_WAITING_LINES_ABOVE_BOX = 3
+const SUBAGENT_WAITING_FALLBACK_LINES_ABOVE_FOOTER = 12
+// Background work the FOOTER itself counts: `1 shell`, `3 shells, 2 monitors` (card 53bcfe74).
+// Read off the footer line only, never the scrollback.
+const FOOTER_SHELLS_RX = /\b(\d+) shells?\b/
+const FOOTER_MONITORS_RX = /\b(\d+) monitors?\b/
 
-export function runningSubagentCount(pane: string): number {
-  if (!pane) return 0
+interface PaneBackground { rows: number; waiting: number; shells: number; monitors: number }
+
+function paneBackground(pane: string): PaneBackground {
+  const none: PaneBackground = { rows: 0, waiting: 0, shells: 0, monitors: 0 }
+  if (!pane) return none
   const lines = pane.split('\n')
-  let footer = -1
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (IDLE_FOOTER_RX.test(lines[i])) { footer = i; break }
-  }
-  let rows = 0
-  let waiting = 0
-  if (footer >= 0) {
-    for (let i = footer + 1; i < lines.length; i++) if (SUBAGENT_ROW_RX.test(lines[i])) rows++
-    const above = lines.slice(Math.max(0, footer - 12), footer).join('\n')
-    const m = SUBAGENT_WAITING_RX.exec(above)
-    if (m) waiting = Number(m[1])
-  } else {
+  const footer = liveFooterIndex(lines, true)
+  if (footer < 0) {
     const tail = lines.slice(-SUBAGENT_FOOTERLESS_TAIL_LINES)
     const header = tail.findIndex(l => SUBAGENT_PANEL_HEADER_RX.test(l))
+    let rows = 0
     if (header >= 0) for (let i = header + 1; i < tail.length; i++) if (SUBAGENT_ROW_RX.test(tail[i])) rows++
+    return { ...none, rows }
   }
-  return Math.max(rows, waiting)
+  let rows = 0
+  for (let i = footer + 1; i < lines.length; i++) if (SUBAGENT_ROW_RX.test(lines[i])) rows++
+  // The waiting line sits just above the input box (waiting, blank, box top). Without a readable
+  // box the window is the dozen lines above the footer.
+  let bottomSep = -1
+  for (let i = footer - 1; i >= 0; i--) if (BOX_SEP_RX.test(lines[i])) { bottomSep = i; break }
+  let topSep = -1
+  if (bottomSep > 0) for (let i = bottomSep - 1; i >= 0; i--) if (BOX_SEP_RX.test(lines[i])) { topSep = i; break }
+  const to = topSep >= 0 ? topSep : footer
+  const from = Math.max(0, to - (topSep >= 0 ? SUBAGENT_WAITING_LINES_ABOVE_BOX : SUBAGENT_WAITING_FALLBACK_LINES_ABOVE_FOOTER))
+  let waiting = 0
+  for (let i = from; i < to; i++) {
+    const m = SUBAGENT_WAITING_RX.exec(lines[i])
+    if (m) waiting = Math.max(waiting, Number(m[1]))
+  }
+  return {
+    rows,
+    waiting,
+    shells: Number(FOOTER_SHELLS_RX.exec(lines[footer])?.[1] ?? 0),
+    monitors: Number(FOOTER_MONITORS_RX.exec(lines[footer])?.[1] ?? 0),
+  }
+}
+
+export function runningSubagentCount(pane: string): number {
+  const b = paneBackground(pane)
+  return Math.max(b.rows, b.waiting)
+}
+
+/** Everything the pane shows as BACKGROUND WORK while the main prompt is free (card 53bcfe74): the
+ *  sub-agents (runningSubagentCount) plus the shells and monitors the footer counts. An agent with
+ *  any of it is waiting on work it started, not standing idle: a wake costs a paid turn and cannot
+ *  move it. didi's work arrives as review messages, so she has no assigned cards while a
+ *  sequencer shell and two reviewers run (26649). 0 = nothing recognised. */
+export function runningBackgroundWork(pane: string): number {
+  const b = paneBackground(pane)
+  return Math.max(b.rows, b.waiting) + b.shells + b.monitors
 }
 
 /**
