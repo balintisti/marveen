@@ -6,7 +6,7 @@
 //   - 79 "a panel nem olvashato" sor, ugyanarrol az agensrol ujra meg ujra;
 //   - 69 "ures prompton all, nincs kiosztva" -- uzenet, ami egy teljes fordulo a cimzettnek.
 // Harom javitas, harom resz ebben a fajlban: (a) al-agens, (b) a vak panel ritkabban,
-// (c) a "nincs kiosztva" a napi osszesitobe megy. Mindegyiknek van egy MEGFELELTETES-tesztje:
+// (c) a "nincs kiosztva" ISMETLESE a napi osszesitobe megy (az idle-szakasz ELSO ertesitese elo marad, R3). Mindegyiknek van egy MEGFELELTETES-tesztje:
 // a bemenet valtozasa mozditja a kimenetet (nem csak a jo dolog van ott).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
@@ -29,6 +29,7 @@ const panes = new Map<string, string | null>()
 const paneStates = new Map<string, string>()
 const messages: Array<{ from: string; to: string; content: string }> = []
 let storedState: Record<string, unknown> | null = null
+let failNextMessage = false
 
 vi.mock('../logger.js', () => ({
   logger: { debug: (...a: unknown[]) => debug(...a), info: (...a: unknown[]) => info(...a), warn: () => {}, error: () => {} },
@@ -64,7 +65,10 @@ vi.mock('../db.js', () => ({
   listKanbanCards: () => [],
   getLabelsForAllCards: () => new Map(),
   getDb: () => ({ prepare: () => ({ all: () => [], get: () => undefined, run: () => ({ changes: 0 }) }) }),
-  createAgentMessage: (from: string, to: string, content: string) => { messages.push({ from, to, content }); return { id: messages.length } },
+  createAgentMessage: (from: string, to: string, content: string) => {
+    if (failNextMessage) { failNextMessage = false; throw new Error('enqueue failed') }
+    messages.push({ from, to, content }); return { id: messages.length }
+  },
   saveIdleGuardState: () => {},
   loadIdleGuardState: () => storedState,
 }))
@@ -162,6 +166,20 @@ describe('(a) decideIdleAlert -- futo al-agens mellett nincs ebresztes, nincs es
     expect(decideIdleAlert({ ...base, runningSubagents: 1 }, first.next, noHold, now + 10 * 3_600_000).decision.reason).toBe('subagents-running')
   })
 
+  it('(a) LEGFELJEBB EGY ertesites 2 oranként: a tartas utan atengedett riasztas ujrafegyverzi a tartast', () => {
+    const first = decideIdleAlert({ ...base, runningSubagents: 1 }, NO_IDLE_STATE, T, now)
+    const t1 = now + 121 * 60_000
+    const past = decideIdleAlert({ ...base, runningSubagents: 1 }, { ...first.next, idleSinceMs: now - 60 * 60_000 }, T, t1)
+    expect(past.decision).toMatchObject({ alert: true, reason: 'wake-agent' })
+    expect(past.next.subagentsSinceMs).toBe(t1)           // az ora ujraindult az atengedett riasztassal
+    // A kovetkezo 2 oraban (30 perces realert ablak ellenere) nem jon masik...
+    const quiet = decideIdleAlert({ ...base, runningSubagents: 1 }, { ...past.next, idleSinceMs: now - 60 * 60_000 }, T, t1 + 119 * 60_000)
+    expect(quiet.decision).toEqual({ alert: false, reason: 'subagents-running' })
+    // ...utana megint egy.
+    const again = decideIdleAlert({ ...base, runningSubagents: 1 }, { ...past.next, idleSinceMs: now - 60 * 60_000 }, T, t1 + 121 * 60_000)
+    expect(again.decision.alert).toBe(true)
+  })
+
   it('az ora NULLAZODIK, ha egy tick nem lat al-agenst', () => {
     const first = decideIdleAlert({ ...base, runningSubagents: 1 }, NO_IDLE_STATE, T, now)
     const gone = decideIdleAlert(base, first.next, T, now + 60_000)
@@ -236,7 +254,7 @@ describe('tick() -- a bekotes', () => {
     rmSync(join(hoisted.root, 'store'), { recursive: true, force: true })
     vi.useFakeTimers(); vi.setSystemTime(NOW)
     debug.mockReset(); info.mockReset(); panes.clear(); paneStates.clear(); messages.length = 0
-    storedState = null
+    storedState = null; failNextMessage = false
     workcheck(MAIN_AGENT_ID, 'none')
     panes.set(`agent-${MAIN_AGENT_ID}`, 'COORDINATOR-PANE')
   })
@@ -258,6 +276,17 @@ describe('tick() -- a bekotes', () => {
     expect(existsSync(digestPath())).toBe(false)
   })
 
+  it('(a) a watcher 2 oras tartasa: 90 perc mulva meg al-agenses, 121 perc mulva mar nem (a THRESHOLDS bekotese)', () => {
+    workcheck('x', 'assigned_open_cards')
+    panes.set('agent-x', pane({ rows: [runningRow('b19-pw', 18)] }))
+    tick()
+    expect(reasonOf('x')).toBe('subagents-running')
+    vi.setSystemTime(NOW + 90 * 60_000); tick()
+    expect(reasonOf('x')).toBe('subagents-running')
+    vi.setSystemTime(NOW + 121 * 60_000); tick()
+    expect(reasonOf('x')).not.toBe('subagents-running')
+  })
+
   it('(a) MEGFELELTETES: ugyanaz az allapot al-agens NELKUL a "nincs kiosztva" agra fut', () => {
     workcheck('x', 'assigned_open_cards')
     mkdirSync(join(hoisted.root, 'store'), { recursive: true })
@@ -276,26 +305,68 @@ describe('tick() -- a bekotes', () => {
     expect(toCoordinator().filter(m => m.content.includes('NEM OLVASHATO'))).toHaveLength(0)
   })
 
-  it('(c) a "nincs kiosztva" a napi osszesitobe kerul, a koordinatornak NEM megy uzenet', () => {
+  // R3 (marveen's decision): az idle-szakasz ELSO "nincs kiosztva" ertesitese ELO uzenet marad (a
+  // visszajatszas: 53/71 utan a koordinator munkat osztott), csak az ISMETLESEK mennek a napi osszesitobe.
+  // A 4 ora + 1 perc azert kell: az azonos (ures) huzo-lista ismetleset a 88998fea 4 oraig elnyomja.
+  const SPELL_REPEAT_MS = 4 * 3_600_000 + 60_000
+  const noWorkMessages = () => toCoordinator().filter(m => m.content.includes('NINCS RA KIOSZTVA'))
+  const digestLines = () => (existsSync(digestPath()) ? readFileSync(digestPath(), 'utf8').trim().split('\n').map(l => JSON.parse(l)) : [])
+  const idleX = () => {
     workcheck('x', 'assigned_open_cards')
     mkdirSync(join(hoisted.root, 'store'), { recursive: true })
     storedState = { idleSinceMs: NOW - 20 * 60_000, lastAlertAt: null, lastWakeAt: null, updatedAt: NOW, staleIdleDropped: false }
     panes.set('agent-x', pane())
+  }
+
+  it('(c/R3) az idle-szakasz ELSO "nincs kiosztva" ertesitese ELO uzenet a koordinatornak, nem a napi osszesitobe', () => {
+    idleX()
     tick()
-    const lines = readFileSync(digestPath(), 'utf8').trim().split('\n').map(l => JSON.parse(l))
-    expect(lines).toHaveLength(1)
-    expect(lines[0]).toMatchObject({ ts: NOW, agent: 'x', minutes: 20, kind: 'assigned_open_cards' })
-    expect(toCoordinator().filter(m => m.content.includes('NINCS RA KIOSZTVA'))).toHaveLength(0)
+    expect(noWorkMessages()).toHaveLength(1)
+    expect(digestLines()).toHaveLength(0)
   })
 
-  it('(c) AZ UT KIFELE: ha a napi osszesito nem irhato, a regi uzenet megy (nem nyelodik el)', () => {
+  it('(c/R3) az ISMETLES ugyanabban az idle-szakaszban a napi osszesitobe megy, uzenet nem', () => {
+    idleX()
+    tick()
+    vi.setSystemTime(NOW + SPELL_REPEAT_MS); tick()
+    expect(noWorkMessages()).toHaveLength(1)
+    const lines = digestLines()
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatchObject({ ts: NOW + SPELL_REPEAT_MS, agent: 'x', kind: 'assigned_open_cards' })
+  })
+
+  it('(c/R3) UJ idle-szakasz (kozben dolgozott) ujra ELO uzenetet kap', () => {
+    idleX()
+    tick()
+    paneStates.set(panes.get('agent-x') as string, 'busy')
+    vi.setSystemTime(NOW + 10 * 60_000); tick()           // dolgozik: a szakasz veget er
+    paneStates.delete(panes.get('agent-x') as string)
+    vi.setSystemTime(NOW + 20 * 60_000); tick()           // ujra tetlen: uj szakasz kezdodik
+    vi.setSystemTime(NOW + 40 * 60_000 + SPELL_REPEAT_MS); tick()
+    expect(noWorkMessages()).toHaveLength(2)
+    expect(digestLines()).toHaveLength(0)
+  })
+
+  it('(c/R3) az elso ertesites, amit nem lehetett sorba tenni, NEM "elhasznalt": a kovetkezo elo megy', () => {
+    idleX()
+    failNextMessage = true
+    tick()
+    expect(noWorkMessages()).toHaveLength(0)
+    expect(digestLines()).toHaveLength(1)                 // nem nyelodott el: a napi osszesitoben van
+    vi.setSystemTime(NOW + SPELL_REPEAT_MS); tick()
+    expect(noWorkMessages()).toHaveLength(1)
+    expect(digestLines()).toHaveLength(1)
+  })
+
+  it('(c) AZ UT KIFELE: ha a napi osszesito nem irhato, az ismetles a regi uzenetkent megy (nem nyelodik el)', () => {
     workcheck('x', 'assigned_open_cards')
     // store/ nincs -> appendFileSync ENOENT
     storedState = { idleSinceMs: NOW - 20 * 60_000, lastAlertAt: null, lastWakeAt: null, updatedAt: NOW, staleIdleDropped: false }
     panes.set('agent-x', pane())
-    tick()
+    tick()                                                // elso: elo uzenet
+    vi.setSystemTime(NOW + SPELL_REPEAT_MS); tick()       // ismetles: a digest nem irhato -> uzenet
     expect(existsSync(digestPath())).toBe(false)
-    expect(toCoordinator().filter(m => m.content.includes('NINCS RA KIOSZTVA'))).toHaveLength(1)
+    expect(noWorkMessages()).toHaveLength(2)
   })
 
   it('(b) a vak panel 30 perc mulva MAR nem, 6 ora mulva ujra megy (a THRESHOLDS bekotese)', () => {

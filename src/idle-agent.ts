@@ -136,6 +136,12 @@ export interface IdleAgentState {
   /** When the coordinator was last told this agent's pane is unreadable. Survives everything
    *  but a restart, for the same reason as above: the worst a restart costs is one repeat. */
   lastPaneUnreadableAt?: number | null
+  /** The idle spell (its idleSinceMs) for which the coordinator was last sent a LIVE 'idle, nothing
+   *  assigned' message (card 3c27105f). The first notice of a spell stays live, because 53 of 71
+   *  such notices were followed by the coordinator handing out work; repeats in the same spell go to
+   *  the digest. Stamped by the watcher only after the message was really enqueued. In memory only:
+   *  a restart costs at most one extra live notice. */
+  noWorkLiveSpellSince?: number | null
 }
 
 export interface IdleAgentInput {
@@ -303,6 +309,23 @@ export function isFloorExpired(dueDate: number | null | undefined, now: number |
 }
 
 export function decideIdleAlert(
+  input: IdleAgentInput,
+  stateIn: IdleAgentState,
+  thresholds: IdleAgentThresholds,
+  now: number,
+): { decision: IdleDecision; next: IdleAgentState } {
+  const result = decideIdleAlertCore(input, stateIn, thresholds, now)
+  // AT MOST ONE NOTICE PER HOLD WINDOW while sub-agents run (card 3c27105f, marveen's decision (a)).
+  // Once the hold has expired the normal rules apply, and their own windows are 30 minutes; so an
+  // alert that gets through here re-arms the hold, and the next one waits another subagentHoldMs.
+  // Without this the cap would be "silent for 2 h, then every 30 minutes".
+  if (result.decision.alert && (input.runningSubagents ?? 0) > 0) {
+    return { decision: result.decision, next: { ...result.next, subagentsSinceMs: now } }
+  }
+  return result
+}
+
+function decideIdleAlertCore(
   input: IdleAgentInput,
   stateIn: IdleAgentState,
   thresholds: IdleAgentThresholds,

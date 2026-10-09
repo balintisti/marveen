@@ -325,9 +325,14 @@ Az al-agens-oszlop NEM a panelbol jon (a panel-torteneti adat nincs meg), hanem 
 Az `idle` sor a panelen NEM futo al-agens. Az `unknown-state` volt MIND a 76 egyedi "nem olvashato" ok.
 
 **A "nincs kiosztva" osztaly az, amire marveen TENYLEG reagalt:** al-agens nelkuli 48 tetelbol 36-nal ment tole uzenet az
-agensnek 30 percen belul (kontroll atlag 8,5), ebbol 26/31 az ELSO ertesitesnel (12-29 perc tetlen). A tetlen-or ezt mostantol a
-`store/idle-digest.jsonl`-be irja (napindito: `section_idle_digest`), nem uzenetkent (a kartya (A) pontja).
-Ha a kesleltetes dragabb, mint a fordulo: az ELSO ertesites visszakapcsolasa a watcher kis modositasa.
+agensnek 30 percen belul (kontroll atlag 8,5), ebbol 26/31 az ELSO ertesitesnel (12-29 perc tetlen). Egy masodik, pontosabb
+visszajatszas (253 tetel, marveen 2026-10-09): a "nincs kiosztva" ertesiteseket 53/71 esetben (75%) koveti marveen-lepes, a
+veletlen 30 perces ablak alaparanya 22%. EZERT (marveen dontese R3): az idle-szakasz ELSO "nincs kiosztva" ertesitese ELO
+uzenet marad; csak az ISMETLESEK ugyanabban a szakaszban mennek a `store/idle-digest.jsonl`-be (napindito:
+`section_idle_digest`). A szakaszt az `idleSinceMs` azonositja; a jelolo (`noWorkLiveSpellSince`) csak a SIKERESEN sorba
+tett uzenet utan kerul fel, memoriaban el (ujraindulas: legfeljebb egy extra elo ertesites).
+Dontes (a): futo al-agenses pane-re legfeljebb egy ertesites 2 oranként (`subagentHoldMs`; egy atengedett riasztas
+ujrafegyverzi). Dontes (b): a "panel nem olvashato" agensenkent 6 oranként egyszer (`paneUnreadableRealertMs`).
 
 Az eldobott tetelek kozott (al-agens vagy 6 oras ablak miatt, 104 db) EGY alert-vezerelt valodi teendo volt: computress 10-07
 17:17, harom polling al-agens 52-82 perce, marveen kezzel leallitotta. A 2 oras `subagentHoldMs` ezt NEM fogja (82 < 120 perc).

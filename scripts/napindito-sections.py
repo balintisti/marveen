@@ -106,8 +106,8 @@ def section_idle_digest(root=DEFAULT_ROOT, now=None, hours=24):
 
     A tetlen-or ezt az esetet ("ures prompton all, es nincs ra kiosztva semmi") elobb uzenetkent
     kuldte a koordinatornak: 69 a 245 gepi jelzesbol 7 nap alatt, mindegyik egy teljes fordulo.
-    Mostantol egy sor a `store/idle-digest.jsonl`-ben (`idleDigestLine`, src/idle-agent.ts), es
-    ez a szekcio olvassa. Az `ts` EZREDMASODPERC (a watcher Date.now()-ja), a `now` itt masodperc.
+    Mostantol az ISMETLESEK (az idle-szakasz ELSO ertesitese elo uzenet marad, R3) egy sor a
+    `store/idle-digest.jsonl`-ben (`idleDigestLine`, src/idle-agent.ts), es ez a szekcio olvassa. Az `ts` EZREDMASODPERC (a watcher Date.now()-ja), a `now` itt masodperc.
 
     A NEM-FUTOTT ALLAPOT SAJAT SORT KAP (a fajl elso szabalya): nincs fajl, olvashatatlan fajl,
     vagy serult sorok. A hianyzo fajl ket dolgot jelenthet (nem volt ilyen eset, vagy az uj build
