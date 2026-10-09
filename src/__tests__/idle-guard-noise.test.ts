@@ -166,18 +166,42 @@ describe('(a) decideIdleAlert -- futo al-agens mellett nincs ebresztes, nincs es
     expect(decideIdleAlert({ ...base, runningSubagents: 1 }, first.next, noHold, now + 10 * 3_600_000).decision.reason).toBe('subagents-running')
   })
 
-  it('(a) LEGFELJEBB EGY ertesites 2 oranként: a tartas utan atengedett riasztas ujrafegyverzi a tartast', () => {
+  it('a tartas lejarta UTAN a riasztas NEM inditja ujra a tartast es nem nullazza a tetlen-szakaszt (didi 31695)', () => {
     const first = decideIdleAlert({ ...base, runningSubagents: 1 }, NO_IDLE_STATE, T, now)
     const t1 = now + 121 * 60_000
     const past = decideIdleAlert({ ...base, runningSubagents: 1 }, { ...first.next, idleSinceMs: now - 60 * 60_000 }, T, t1)
     expect(past.decision).toMatchObject({ alert: true, reason: 'wake-agent' })
-    expect(past.next.subagentsSinceMs).toBe(t1)           // az ora ujraindult az atengedett riasztassal
-    // A kovetkezo 2 oraban (30 perces realert ablak ellenere) nem jon masik...
-    const quiet = decideIdleAlert({ ...base, runningSubagents: 1 }, { ...past.next, idleSinceMs: now - 60 * 60_000 }, T, t1 + 119 * 60_000)
-    expect(quiet.decision).toEqual({ alert: false, reason: 'subagents-running' })
-    // ...utana megint egy.
-    const again = decideIdleAlert({ ...base, runningSubagents: 1 }, { ...past.next, idleSinceMs: now - 60 * 60_000 }, T, t1 + 121 * 60_000)
-    expect(again.decision.alert).toBe(true)
+    expect(past.next.subagentsSinceMs).toBe(now)          // az ora a folyamatos jelenletet meri, nem a riasztast
+    expect(past.next.idleSinceMs).not.toBeNull()          // a szakasz tovabb er, igy a 2. fokozat elerheto
+  })
+
+  // didi 31695 szimulacioja: 10 ora, percenkenti tick, tetlen agens 2 nyitott kartyaval, a watcher
+  // valodi kuszobeivel; a futo al-agens-sor az egesz idon at latszik. A kontroll al-agens nelkul fut.
+  const simulate = (subagents: number) => {
+    let st = { ...NO_IDLE_STATE } as typeof NO_IDLE_STATE
+    const log: Array<{ min: number; reason: string }> = []
+    for (let min = 0; min <= 600; min++) {
+      const r = decideIdleAlert(
+        { ...base, ownWorkCount: 2, ownWorkIds: ['a', 'b'], runningSubagents: subagents },
+        st, T, now + min * 60_000,
+      )
+      st = r.next
+      if (r.decision.alert) log.push({ min, reason: r.decision.reason })
+    }
+    return log
+  }
+
+  it('10 ora tartosan latszo al-agens-sor mellett: az elso 2 ora nema, utana a szokasos ebresztes ES eszkalacio fut (didi 31695)', () => {
+    const control = simulate(0)
+    const held = simulate(1)
+    const escalations = (l: typeof held) => l.filter((e) => e.reason === 'idle-with-work').length
+    expect(escalations(control)).toBeGreaterThan(10)       // pozitiv kontroll: a szimulacio MER eszkalaciot (didi: 20)
+    expect(held.filter((e) => e.min < 120)).toEqual([])    // az elso 2 ora csendes
+    expect(held[0]).toMatchObject({ reason: 'wake-agent' })
+    expect(escalations(held)).toBeGreaterThan(0)
+    // A tartas lejarta utan a menet az al-agens nelkulivel egyezik: ugyanazok a riasztasok, 120 perccel eltolva.
+    const shifted = control.filter((e) => e.min <= 480).map((e) => ({ ...e, min: e.min + 120 }))
+    expect(held).toEqual(shifted)
   })
 
   it('az ora NULLAZODIK, ha egy tick nem lat al-agenst', () => {

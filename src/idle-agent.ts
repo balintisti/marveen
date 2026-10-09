@@ -314,25 +314,12 @@ export function decideIdleAlert(
   thresholds: IdleAgentThresholds,
   now: number,
 ): { decision: IdleDecision; next: IdleAgentState } {
-  const result = decideIdleAlertCore(input, stateIn, thresholds, now)
-  // AT MOST ONE NOTICE PER HOLD WINDOW while sub-agents run (card 3c27105f, marveen's decision (a)).
-  // Once the hold has expired the normal rules apply, and their own windows are 30 minutes; so an
-  // alert that gets through here re-arms the hold, and the next one waits another subagentHoldMs.
-  // Without this the cap would be "silent for 2 h, then every 30 minutes".
-  if (result.decision.alert && (input.runningSubagents ?? 0) > 0) {
-    return { decision: result.decision, next: { ...result.next, subagentsSinceMs: now } }
-  }
-  return result
-}
-
-function decideIdleAlertCore(
-  input: IdleAgentInput,
-  stateIn: IdleAgentState,
-  thresholds: IdleAgentThresholds,
-  now: number,
-): { decision: IdleDecision; next: IdleAgentState } {
   // The hold clock runs on every tick that shows sub-agents and resets on the first that shows
   // none, so it is stamped here once and every return below carries it (they all spread state).
+  // An alert does NOT touch it (didi 31695, card 3c27105f): re-arming the hold on an alert also
+  // cleared the idle spell (the hold branch below), so past the bound only the first wake ever
+  // fired and the escalation never did. Past the bound the agent is judged as if it had no
+  // sub-agents, wakes and escalations both.
   const subagents = input.runningSubagents ?? 0
   const subagentsSince = subagents > 0 ? (stateIn.subagentsSinceMs ?? now) : null
   const state: IdleAgentState = (stateIn.subagentsSinceMs ?? null) === subagentsSince ? stateIn : { ...stateIn, subagentsSinceMs: subagentsSince }
