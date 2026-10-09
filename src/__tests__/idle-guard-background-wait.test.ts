@@ -29,6 +29,9 @@ const panes = new Map<string, string | null>()
 const messages: Array<{ from: string; to: string; content: string }> = []
 const ownerAlerts: string[] = []
 let cardRows: Array<Record<string, unknown>> = []
+// The action trace the ghost-row guard reads: the last outgoing message (epoch s, null = none) and the card comments.
+let outboundSec: number | null = null
+let commentRows: Array<{ card_id: string; author: string; at: number }> = []
 
 vi.mock('../logger.js', () => ({
   logger: { debug: (...a: unknown[]) => debug(...a), info: () => {}, warn: () => {}, error: () => {} },
@@ -53,8 +56,14 @@ vi.mock('../db.js', () => ({
   getPendingMessages: () => [],
   listKanbanCards: () => cardRows,
   getLabelsForAllCards: () => new Map(),
-  getLastOutboundMessageAt: () => null,
-  getDb: () => ({ prepare: () => ({ all: () => [], get: () => undefined, run: () => ({ changes: 0 }) }) }),
+  getLastOutboundMessageAt: () => outboundSec,
+  getDb: () => ({
+    prepare: (sql: string) => ({
+      all: () => (sql.includes('GROUP BY card_id, author') && !sql.includes('NOT IN') ? commentRows : []),
+      get: () => undefined,
+      run: () => ({ changes: 0 }),
+    }),
+  }),
   createAgentMessage: (from: string, to: string, content: string) => { messages.push({ from, to, content }); return { id: messages.length } },
   saveIdleGuardState: () => {},
   loadIdleGuardState: () => null,
@@ -284,7 +293,7 @@ describe('the pane reads as background work', () => {
 // --- the decision view: the watcher's tick() ---------------------------------------------------
 describe('tick() -- background work is working: no wake, no repeat, no coordinator notice', () => {
   const NOW = new Date('2026-10-09T10:00:00Z').getTime()
-  const SPELL_MIN = 180
+  const SPELL_MIN = 110                      // under the 2 h ghost-row bound: these agents have posted nothing, and it is not yet time
   const workcheck = (agent: string, kind: string) => {
     const dir = agent === MAIN_AGENT_ID ? hoisted.root : join(hoisted.root, 'agents', agent)
     mkdirSync(dir, { recursive: true })
@@ -303,7 +312,7 @@ describe('tick() -- background work is working: no wake, no repeat, no coordinat
     rmSync(join(hoisted.root, 'store'), { recursive: true, force: true })
     mkdirSync(join(hoisted.root, 'store'), { recursive: true })
     vi.useFakeTimers(); vi.setSystemTime(NOW)
-    debug.mockReset(); panes.clear(); messages.length = 0; ownerAlerts.length = 0; cardRows = []
+    debug.mockReset(); panes.clear(); messages.length = 0; ownerAlerts.length = 0; cardRows = []; outboundSec = null; commentRows = []
     workcheck(MAIN_AGENT_ID, 'none')
     // The watcher visits the coordinator too; a busy pane keeps its own verdict out of the counts.
     panes.set(`agent-${MAIN_AGENT_ID}`, COORDINATOR_BUSY)
@@ -328,7 +337,7 @@ describe('tick() -- background work is working: no wake, no repeat, no coordinat
     ['2 assigned cards', true],
     ['NOTHING assigned (didi: her work arrives as review messages)', false],
   ])('agent with %s', (_label, withCards) => {
-    it.each(POSITIVES)('%s: three hours, zero wakes, zero repeats, zero notices', (_n, p) => {
+    it.each(POSITIVES)('%s: a 110 minute spell, zero wakes, zero repeats, zero notices', (_n, p) => {
       workcheck('x', 'assigned_open_cards'); if (withCards) assignedCards()
       const reasons = runSpell(() => p)
       expect(new Set(reasons)).toEqual(new Set(['subagents-running']))
@@ -381,10 +390,52 @@ describe('tick() -- background work is working: no wake, no repeat, no coordinat
     expect(messages.some(m => m.to === 'x')).toBe(true)
   })
 
-  it('the 2 h hold is gone from the watcher: five hours of rows with no outgoing trace still hold', () => {
-    workcheck('x', 'assigned_open_cards'); assignedCards()
-    const reasons = runSpell(() => FRIDAY_0825, 5 * 60)
-    expect(new Set(reasons)).toEqual(new Set(['subagents-running']))
-    expect(noise()).toBe(0)
+  describe('the ghost-row guard is the way out (marveen 26460: 2 h, and no message or card comment since the work appeared)', () => {
+    const at = (min: number) => {
+      vi.setSystemTime(NOW + min * 60_000); panes.set('agent-x', FRIDAY_0825); tick()
+      const calls = debug.mock.calls.filter(c => (c[0] as { agent?: string })?.agent === 'x')
+      return String((calls.at(-1)?.[0] as { reason?: string } | undefined)?.reason)
+    }
+    const wakes = () => messages.filter(m => m.to === 'x')
+
+    it('(1) GHOST: rows on screen 2 h+ and nothing posted since -> judged as if none: ONE wake, no notice window', () => {
+      workcheck('x', 'assigned_open_cards'); assignedCards()
+      const reasons: string[] = []
+      for (let m = 0; m <= 6 * 60; m += 3) reasons.push(at(m))
+      expect(reasons.slice(0, 120 / 3)).toEqual(Array(120 / 3).fill('subagents-running'))   // 0..117 min: still working
+      expect(reasons).toContain('wake-agent')
+      expect(reasons).not.toContain('subagents-notice-window')
+      expect(wakes()).toHaveLength(1)                                                       // one wake, the unchanged list is not re-sent
+      const first = reasons.indexOf('wake-agent') * 3
+      expect(first).toBeGreaterThanOrEqual(120 + 12)                                        // the 2 h bound plus the usual 12 minute sustain
+      expect(first).toBeLessThanOrEqual(120 + 21)
+    })
+
+    it('(2) LEGITIMATE LONG SPELL: rows for 5 h, the agent commented on a card at 90 minutes -> never a wake, never a notice', () => {
+      workcheck('x', 'assigned_open_cards'); assignedCards()
+      commentRows = [{ card_id: 'card-a', author: 'x', at: Math.floor((NOW + 90 * 60_000) / 1000) }]
+      const reasons: string[] = []
+      for (let m = 0; m <= 5 * 60; m += 3) reasons.push(at(m))
+      expect(new Set(reasons)).toEqual(new Set(['subagents-running']))
+      expect(noise()).toBe(0)
+    })
+
+    it('(2b) a sent message is a trace too (no card comment needed)', () => {
+      workcheck('x', 'assigned_open_cards'); assignedCards()
+      outboundSec = Math.floor((NOW + 100 * 60_000) / 1000)
+      const reasons: string[] = []
+      for (let m = 0; m <= 5 * 60; m += 3) reasons.push(at(m))
+      expect(new Set(reasons)).toEqual(new Set(['subagents-running']))
+      expect(noise()).toBe(0)
+    })
+
+    it('(3) the way back: a ghost that posts after its wake is held again, with no further notice', () => {
+      workcheck('x', 'assigned_open_cards'); assignedCards()
+      for (let m = 0; m <= 150; m += 3) at(m)
+      expect(wakes()).toHaveLength(1)
+      commentRows = [{ card_id: 'card-a', author: 'x', at: Math.floor((NOW + 151 * 60_000) / 1000) }]
+      expect(at(153)).toBe('subagents-running')
+      expect(at(5 * 60)).toBe('subagents-running')
+    })
   })
 })
