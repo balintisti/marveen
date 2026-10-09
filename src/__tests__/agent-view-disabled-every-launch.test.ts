@@ -39,7 +39,8 @@ describe('every fleet launch path disables the Agent view', () => {
   })
 
   it('watchdog.sh sub-agent relaunch', () => {
-    expect(read('scripts/watchdog.sh')).toMatch(/CMD="\$\{ISO_ENV\}[^\n]*export CLAUDE_CODE_DISABLE_AGENT_VIEW=1 && [^\n]*--dangerously-skip-permissions/)
+    // The launch string is built in build_agent_launch_cmd (card dcdcab66 moved it out of the loop).
+    expect(read('scripts/watchdog.sh')).toMatch(/printf '%s' "\$\{iso_env\}[^\n]*export CLAUDE_CODE_DISABLE_AGENT_VIEW=1 && [^\n]*--dangerously-skip-permissions/)
   })
 
   it('morning-briefing.sh (print mode, same flag set)', () => {
