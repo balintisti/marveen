@@ -21,7 +21,7 @@ VEGE
 ```
 
 **A 3. ARGUMENTUM CSAK `-` LEHET (2026-09-22, kártya `16d66942` 1. tétel).** A pozíciós alakot a
-szkript **megtagadja** (exit 4). Nem szigorítás: a pozíciós szöveg egy héj-idézőjelen megy át,
+szkript **megtagadja** (exit 5). Nem szigorítás: a pozíciós szöveg egy héj-idézőjelen megy át,
 MIELŐTT a szkript látná, tehát a visszaperjel, a `$` és a backtick ott már eldőlt -- részben
 eltűnik, részben LEFUT --, a küldés pedig `OK id=`-vel tér vissza. A szkript a megcsonkult
 szöveget kapná, és nem tud ellene tenni semmit; ezért az egyetlen helyes válasz a megtagadás.

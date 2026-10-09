@@ -635,7 +635,7 @@ def komment_mod(a):
         sys.exit('MEGTAGADVA: --msg-file, de NINCS kit ertesiteni ezen a kartyan: a felelos vagy te magad\n'
                  'vagy ("' + str(a.author) + '"), vagy nem flotta-agens. Nem talalunk ki cimzettet.\n'
                  'Ha egy KONKRET agensnek akarsz irni, az a kulon ut:\n'
-                 '  bash scripts/agent-msg.sh <felado> <cimzett> "<szoveg>"')
+                 "  bash scripts/agent-msg.sh <felado> <cimzett> - <<'VEGE'  (a szoveg a heredocban)")
     if _ertesitendo and not msg.strip() and not a.nincs_ertesites_szandekos:
         _kik = ', '.join(_ertesitendo)
         sys.exit('MEGTAGADVA: a kartya felelose "' + _kik + '" (flotta-agens), te pedig "'
@@ -645,7 +645,7 @@ def komment_mod(a):
                  '  EZ A LEGEGYSZERUBB UT: add hozza a --msg-file <fajl> kapcsolot, es UGYANEZ a futas\n'
                  '    elkuldi az ertesitest ide: ' + _kik + '\n'
                  '  Ha kulon lepesben szolnal: bash scripts/agent-msg.sh '
-                 + (a.from_agent or a.author).strip().lower() + ' ' + _ertesitendo[0] + ' "<szoveg>"\n'
+                 + (a.from_agent or a.author).strip().lower() + ' ' + _ertesitendo[0] + " - <<'VEGE'  (a szoveg a heredocban)\n"
                  '  Ha csak NYOMOT hagysz a jovonek, es a felelosnek nem kell tudnia rola:\n'
                  '    mondd ki a --nincs-ertesites-szandekos kapcsoloval.')
     # C) A FELADO ERVENYESSEGE ES A TOKEN AZ IRAS ELOTT (Samu lelete, 28122). A letrehozo agon a

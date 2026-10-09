@@ -96,7 +96,7 @@ c.commit()
  *
  * THE BODY GOES IN ON STDIN, ALWAYS (card 16d66942, item 1, landed 2026-09-22).
  * The third argument is a literal `-` and the text rides the pipe. This is not a
- * style the harness happens to use: the positional form is REFUSED with exit 4,
+ * style the harness happens to use: the positional form is REFUSED with exit 5,
  * because in that form the text passes through a shell quoting layer BEFORE the
  * script sees it, and a backslash, `$` or backtick is already gone or already
  * executed by then. A test still passing the body as argv[3] would be asserting
@@ -112,7 +112,7 @@ function send(root: string, port: number, args: string[], body = ''): Promise<{ 
     let stderr = ''
     p.stdout.on('data', (c) => (stdout += c))
     p.stderr.on('data', (c) => (stderr += c))
-    // A child that refuses (exit 4, 3, 1) can close the pipe before we finish
+    // A child that refuses (exit 5, 3, 1) can close the pipe before we finish
     // writing; without this the EPIPE arrives as an unhandled 'error' event and
     // takes the whole suite down with a stack trace instead of a failed assert.
     p.stdin.on('error', () => { /* EPIPE on a child that refused early */ })
@@ -310,7 +310,7 @@ describe('agent-msg.sh -- a __STAMP__ es a kuldesi belyeg EGYUTT el', () => {
   // could not have been sent with `- < "$f"` and must pass.
   //
   // AND AFTER 2026-09-22 THE ORDER OF THE TWO GATES IS PINNED BY THESE TESTS
-  // (card 16d66942, item 1). Argument 3 is `-` or nothing (exit 4), but that gate
+  // (card 16d66942, item 1). Argument 3 is `-` or nothing (exit 5), but that gate
   // sits AFTER this one, so the existing-path case still exits 3 with the
   // filename message. Reversing them would leave both exit codes green while
   // emptying the filename refusal of its text -- which is why the two tests below
@@ -359,7 +359,7 @@ describe('agent-msg.sh -- a __STAMP__ es a kuldesi belyeg EGYUTT el', () => {
     // each refusal, so a reordering that kept both codes intact could not pass.
     const { port, bodies } = await fakeDashboard()
     const r = await send(installRoot('mention', { to: 'marveen', count: 0 }), port, ['friday', 'marveen', '/no/such/path/anywhere'])
-    expect(r.status).toBe(4)
+    expect(r.status).toBe(5)
     expect(bodies).toHaveLength(0)
     expect(r.stderr).toContain('HEJ-IDEOZOJELEN')
     expect(r.stderr).not.toContain('LETEZO fajl utvonala')

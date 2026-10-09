@@ -35,7 +35,7 @@ VEGE
 # A 3. argumentum CSAK `-` lehet (2026-09-22); fájlból:  ... TARGET_AGENT - < "$f"
 ```
 
-**A POZÍCIÓS TORZS MEGTAGADVA (exit 4), ÉS EZ NEM SZIGORÍTÁS, HANEM A HIBA MEGSZÜNTETÉSE
+**A POZÍCIÓS TORZS MEGTAGADVA (exit 5), ÉS EZ NEM SZIGORÍTÁS, HANEM A HIBA MEGSZÜNTETÉSE
 (2026-09-22, kártya `16d66942` 1. tétel).** A `bash scripts/agent-msg.sh ... "szöveg"` alakban a
 szöveg egy héj-idézőjelen megy át, MIELŐTT a szkript egyáltalán látná. A visszaperjel, a `$` és a
 backtick ott **már eldőlt**: részben eltűnik, részben LEFUT. A szkript ezután csak a megcsonkult
@@ -44,7 +44,7 @@ sikeres küldés.
 
     a héj ELHARAPJA  -> egy szó kiesik, az `OK id=` megjön, a küldés SIKERESNEK látszik
     a héj VÉGREHAJTJA -> egy PARANCS fut le, ott, ahol állsz (egy közös checkoutban másvalaki fáján)
-    a szkript erre  -> exit 4, és a hibaüzenet megmutatja a helyes alakot
+    a szkript erre  -> exit 5, és a hibaüzenet megmutatja a helyes alakot
 
 **ÉS A VÉDELEM NEM A STDIN ÖNMAGÁBAN.** A `17255` komment (marveen) azt rögzíti, hogy **didi
 KÖVETTE a szabályt, és a szöveg mégis elveszítette az azonosítóit** -- a védelem az

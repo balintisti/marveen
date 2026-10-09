@@ -11,7 +11,7 @@
 # Usage:  bash scripts/agent-msg.sh <from> <to> -        (body on STDIN)
 #           ... <to> - <<'VEGE'   /   echo "..." | ... -   /   ... - < "$f"
 #         The third argument is `-`-ONLY since 2026-09-22 (card 16d66942, item 1):
-#         a positional body is REFUSED with exit 4 -- see the gate below, and why
+#         a positional body is REFUSED with exit 5 -- see the gate below, and why
 #         the refusal is the only honest answer rather than a wording preference.
 #
 # CONTENT, AND WHICH LAYER PROTECTS IT (card 16d66942). This line used to read
@@ -38,7 +38,7 @@
 #     EOF
 #     bash scripts/agent-msg.sh <from> <to> - < /path/to/body.txt
 #   The 3rd argument is `-` ONLY: the body arrives on STDIN or as a redirect from
-#   a file. A positional body is REFUSED (exit 4) -- the shell has already eaten
+#   a file. A positional body is REFUSED (exit 5) -- the shell has already eaten
 #   part of it before this script starts -- and so is an empty or only-whitespace
 #   body (exit 1). Each gate below carries its own sentence.
 # Output: success -> "OK id=<n> queue=<depth> (~<n> perc)"; failure -> "FAIL <reason>"
@@ -111,6 +111,10 @@ else
 fi
 
 # --- A TORZS NEM LEHET URES (kartya 16d66942, 2. tetel; merve 2026-09-19) ---
+# EGY KAPU, NEM KETTO: a kartya ee8fdc6c (deeper merte 2026-09-28 16:45, msg 20115) kulon,
+# a lenti kapuk elott allo `tr -d`-es kaput tett ide ugyanerre az esetre; a 16d66942 ag
+# beolvasztasakor az ELSO mar mindent elkapott, amit a masodik elkapott volna (halott kod),
+# ezert a masodikat toroltuk, es a kimondott hibauzenete ide koltozott (a teszt azt rogziti).
 #
 # MIERT: a level TARTALMA a torzs. Egy ures torzsre ez a helper eddig `OK id=<n>`-t
 # adott, es a levelbe KIZAROLAG a lenti `[KULDVE: ...]` labjegyzet kerult -- a cimzett
@@ -138,23 +142,13 @@ fi
 case "$C" in
   *[![:space:]]*) ;;
   *)
-    echo "NEM KULDTEM: az uzenet-torzs URES vagy csak szokoz." >&2
+    echo "NEM KULDTEM: a torzs URES (vagy csak szokoz/sortores). Ha STDIN-t adtal (-), a heredoc vagy a fajl ures volt." >&2
     echo "  A torzs a TARTALOM. Ures torzsbol egy kizarolag-labjegyzet level lesz," >&2
     echo "  amit a cimzett tartalomkent olvas -- a kuldo pedig OK-t lat." >&2
     echo "  A --force ezt NEM nyitja ki: az a sor- es plafon-kapukat oldja." >&2
     exit 1
     ;;
 esac
-
-# AZ URES TORZS NEM UZENET (kartya ee8fdc6c, deeper merte 2026-09-28 16:45, msg 20115).
-# Egy torzs nelkuli heredoc (`- <<'VEGE'` + azonnal `VEGE`) ures STDIN-t ad; a helper ezt is
-# kikuldte, csak a [KULDVE] labjegyzettel, es `OK id=`-t mondott -- a kuldo azt hitte, elment
-# valami. Az inline alakot a `${3:?}` mar megfogja, de csak az URES stringet: a csupa-szokoz es
-# a STDIN-ut atment. A labjegyzet elott nezzuk, mert utana a torzs mar sosem ures.
-if [ -z "$(printf '%s' "$C" | tr -d '[:space:]')" ]; then
-  echo "NEM KULDTEM: a torzs URES (vagy csak szokoz/sortores). Ha STDIN-t adtal (-), a heredoc vagy a fajl ures volt." >&2
-  exit 1
-fi
 
 # A KAPCSOLO NEM UZENET (friday merte 2026-10-05, msg 23761/23763).
 # A `--force` a NEGYEDIK argumentum. Aki a harmadik helyre teszi
@@ -228,8 +222,10 @@ esac
 # kapu az OSSZES TOBBI pozicios argumentumot fogja meg, tehat a ketto NEM fedi egymast,
 # es a sorrend forditva elvenne az or szoveget.
 #
-# A KOD 4: az 1 (ures torzs), a 2 (cimzett-sor) es a 3 (fajlnev-or) mar foglalt, es a
-# hivo a kodbol donti el, MIT tegyen -- itt a hivast kell atirni, nem varni.
+# A KOD 5, NEM 4: az 1 (ures torzs), a 2 (sor/plafon), a 3 (fajlnev-or, kapcsolo, homoglif)
+# ES A 4 (a homoglif-ellenorzo OSSZEOMLOTT) mar foglalt, es a hivo a kodbol donti el,
+# MIT tegyen -- itt a hivast kell atirni, nem varni. (A 16d66942 ag eredetileg 4-et
+# hasznalt, mert az agon meg nem volt homoglif-kapu; a beolvasztas utan ez utkozott volna.)
 if [ "$MOD" != "stdin" ]; then
   echo "NEM KULDTEM: a 3. argumentum csak \`-\` lehet; a torzs STDIN-en vagy fajlbol jon." >&2
   echo "  A pozicios alakban a szoveg egy HEJ-IDEOZOJELEN megy at, es a visszaperjel," >&2
@@ -240,7 +236,7 @@ if [ "$MOD" != "stdin" ]; then
   echo "    VEGE" >&2
   echo "  vagy fajlbol:  bash scripts/agent-msg.sh $FROM $TO - < \"\$f\"" >&2
   echo "  (A --force ezt NEM nyitja ki: az a sor- es plafon-kapukat oldja.)" >&2
-  exit 4
+  exit 5
 fi
 [ -r "$TOKEN_FILE" ] || { echo "FAIL: no token file at $TOKEN_FILE"; exit 1; }
 TOKEN="$(cat "$TOKEN_FILE")"
@@ -608,7 +604,7 @@ except Exception:
     echo "  Ird a kartyara kommentkent. Az uzenet tol, a kartya huzat." >&2
     echo "  DE a kartya csak azt huzatja, aki MAR ODANEZ: a komment TAROL, nem kezbesit." >&2
     echo "  A komment a NYOM; a level tovabbra is TARTOZAS -- kuldd el, amint a sor urul." >&2
-    echo "  Ha tenyleg most kell mennie:  bash scripts/agent-msg.sh $FROM $TO \"...\" --force" >&2
+    echo "  Ha tenyleg most kell mennie:  bash scripts/agent-msg.sh $FROM $TO - --force <<'VEGE'  (a szoveg a heredocban)" >&2
     exit 2
   elif [ -n "$HOUR_N" ] && [ "$HOUR_N" -ge "$SENDER_HOUR_CEILING" ] 2>/dev/null; then
     echo "NEM KULDTEM. Egy oran belul mar $HOUR_N uzenetet kuldtem $TO-nak (plafon: $SENDER_HOUR_CEILING)." >&2
@@ -626,7 +622,7 @@ except Exception:
     echo "  tartozas, akkor a megtakaritas egy resze kesobb visszajon. A kapu HALASZT, nem DOB EL." >&2
     echo "  Aki ugy olvassa, hogy 'a keret rendben van'," >&2
     echo "  pontosan azt a hibat koveti el, amit ez a flotta egesz ejjel mert." >&2
-    echo "  Ha tenyleg most kell mennie:  bash scripts/agent-msg.sh $FROM $TO \"...\" --force" >&2
+    echo "  Ha tenyleg most kell mennie:  bash scripts/agent-msg.sh $FROM $TO - --force <<'VEGE'  (a szoveg a heredocban)" >&2
     exit 2
   fi
 fi

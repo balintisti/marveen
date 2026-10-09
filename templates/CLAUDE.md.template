@@ -245,7 +245,7 @@ VEGE
 szöveg egy HÉJ-IDÉZŐJELEN megy át, MIELŐTT a szkript egyáltalán látná: a visszaperjel, a `$` és a
 backtick ott már eldőlt, részben eltűnik, részben LEFUT. A szkript ezután csak a megcsonkult
 szöveget látja, és a küldés `OK id=`-vel tér vissza. Ezért a pozíciós alakot a szkript **megtagadja**
-(exit 4), és a fenti heredoc vagy egy fájl (`... TARGET_AGENT - < "$f"`) a helyes út. A `<<'VEGE'`
+(exit 5), és a fenti heredoc vagy egy fájl (`... TARGET_AGENT - < "$f"`) a helyes út. A `<<'VEGE'`
 **aposztrófos** alakja kötelező: aposztróf nélkül a heredoc IS behelyettesít.
 
 A rendszer automatikusan:
