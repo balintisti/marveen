@@ -59,6 +59,14 @@ import { signalCardBoundaryAtMove } from '../context-guard-runner.js'
 // db.ts's KANBAN_SERVER_FIELDS ('last_status_at') and KANBAN_ELSEWHERE_FIELDS
 // ('blockers') so the dashboard's whole-card echo keeps working.
 
+// Every key POST /api/kanban/:id/move accepts; anything else is a 400, same
+// rule as the PUT above. `override_reason` is the fork's close-gate field
+// (closeBlocked reads it from the move body): upstream's list lacks it, and
+// without it every override close would be refused.
+// expected_status: the batch's compare-and-set guard (card baabe0ba); the board UI sends it on
+// every move, so leaving it out of this list would refuse every drag with a 400.
+const KANBAN_MOVE_FIELDS = ['status', 'sort_order', 'actor', 'override_reason', 'expected_status'] as const
+
 // A headless agent cannot "drag" a card to done, so the dispatch hands it the
 // exact curl commands to (1) post a short, human-readable result summary as a
 // comment -- so the finished task's result lands on its OWN card, visible in the
@@ -1399,8 +1407,24 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   if (kanbanMoveMatch && method === 'POST') {
     const id = decodeURIComponent(kanbanMoveMatch[1])
     const body = await readBody(req)
-    const parsedMove = JSON.parse(body.toString())
-    const { status, sort_order, actor, expected_status } = parsedMove
+    const parsedMove = JSON.parse(body.toString()) as unknown
+    // An unknown key used to be dropped while the move still answered ok,
+    // so a misspelt field (`sortOrder`, `state`) looked applied. Refuse the
+    // whole move and name the accepted fields, as the PUT does (upstream #1798).
+    if (parsedMove === null || typeof parsedMove !== 'object' || Array.isArray(parsedMove)) {
+      json(res, { error: `Body must be a JSON object. Accepted fields: ${KANBAN_MOVE_FIELDS.join(', ')}` }, 400)
+      return true
+    }
+    const unknownMoveKeys = Object.keys(parsedMove).filter((k) => !(KANBAN_MOVE_FIELDS as readonly string[]).includes(k))
+    if (unknownMoveKeys.length > 0) {
+      json(res, { error: `Unknown field(s): ${unknownMoveKeys.join(', ')}. Accepted: ${KANBAN_MOVE_FIELDS.join(', ')}` }, 400)
+      return true
+    }
+    const { status, sort_order, actor, expected_status } = parsedMove as {
+      status: Parameters<typeof moveKanbanCard>[1]; sort_order?: number; actor?: string
+      // Checked against KANBAN_STATUSES below: the type names what the check lets through.
+      expected_status?: Parameters<typeof moveKanbanCard>[1] | null
+    }
     let proseWarning: string | null = null
     // Optional compare-and-set guard (upstream a33b81af5, card baabe0ba). Absent (undefined/null)
     // keeps the unconditional move exactly as it was. Present, it must name a real status: an
@@ -1776,7 +1800,10 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
           id,
           title: st.title,
           description: st.description,
-          assignee: st.assignee ?? undefined,
+          // The breakdown prompt allows a null assignee, and an ownerless child
+          // is easy to lose on the board; the parent's owner is almost always
+          // right for a piece of the same work, and is one click to change.
+          assignee: st.assignee ?? parent.assignee ?? undefined,
           priority: (st.priority as any) ?? 'normal',
           project: parent.project ?? undefined,
           parent_id: parentId,
