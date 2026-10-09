@@ -103,7 +103,11 @@ describe('main agent: start and every respawn', () => {
 
 describe('sub-agent relaunch, workers, scheduled and background tasks', () => {
   it('watchdog.sh sub-agent relaunch keeps the agent identity', () => {
-    expect(read('scripts/watchdog.sh')).toMatch(/CMD="\$\{ISO_ENV\}[^\n]*\$\(git_identity_env "\$AGENT_ID"\)[^\n]*--dangerously-skip-permissions/)
+    // The launch string is built in build_agent_launch_cmd (card dcdcab66 moved it out of the
+    // loop); the loop must hand it the agent id, or the export prints nothing.
+    const src = read('scripts/watchdog.sh')
+    expect(src).toMatch(/printf '%s' "\$\{iso_env\}[^\n]*\$\(git_identity_env "\$agent_id"\)[^\n]*--dangerously-skip-permissions/)
+    expect(src).toMatch(/^\s*CMD="\$\(build_agent_launch_cmd "\$AGENT_DIR" "\$MODEL" "\$CLAUDE_BIN" "\$AGENT_ID"\)"$/m)
   })
 
   it('agent-worker.ts: the worker launch carries its session name', () => {
