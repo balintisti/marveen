@@ -19,9 +19,9 @@
  */
 // The reading itself is shared with the archive sweep (db.ts), so it lives
 // outside web/: see kanban-verdict.ts for the rule and the token.
-import { openVerdicts, type OpenVerdict } from '../kanban-verdict.js'
+import { openVerdicts, openLeftovers, type OpenVerdict, type OpenLeftover } from '../kanban-verdict.js'
 
-export { openVerdicts, type OpenVerdict }
+export { openVerdicts, openLeftovers, type OpenVerdict, type OpenLeftover }
 
 /**
  * The override the gate accepts: a stated reason, nothing less. An empty or
@@ -33,14 +33,36 @@ export function overrideReason(body: unknown): string | null {
   return typeof reason === 'string' && reason.trim() !== '' ? reason.trim() : null
 }
 
-/** The 409 body: who still has an open item, in their own words, and the way out. */
-export function closeRefusal(open: OpenVerdict[]): { error: string; open_verdicts: OpenVerdict[] } {
-  const who = open.map((v) => `${v.author}: "${v.line}"`).join('; ')
+/**
+ * The 409 body: who still has an open item, in their own words, and the way out.
+ * `leftovers` (card 0a787690) are the open `MARADEK:` lines; the verdicts part of
+ * the body is unchanged when there are none.
+ */
+export function closeRefusal(
+  open: OpenVerdict[],
+  leftovers: OpenLeftover[] = [],
+): { error: string; open_verdicts: OpenVerdict[]; open_leftovers: OpenLeftover[] } {
+  const parts: string[] = []
+  if (open.length > 0) {
+    const who = open.map((v) => `${v.author}: "${v.line}"`).join('; ')
+    parts.push(
+      `${open.length} ellenorzo utolso verdiktje NYITOTT TETEL (${who}). `
+      + 'Zard le a tetelt (az ellenorzo uj VERDIKT-sora)',
+    )
+  }
+  if (leftovers.length > 0) {
+    const what = leftovers.map((l) => `komment ${l.commentId}, ${l.author}: "${l.line}"`).join('; ')
+    parts.push(
+      `${leftovers.length} nyitott MARADEK-sor (${what}). `
+      + 'Ugyanaz a szerzo zarja a sajatjat egy ujabb `MARADEK: NINCS | <hova kerult>` sorral '
+      + '(0. oszlopban, a `|` utan a hely kotelezo)',
+    )
+  }
   return {
     error:
-      `A kartya nem zarhato le: ${open.length} ellenorzo utolso verdiktje NYITOTT TETEL (${who}). `
-      + 'Zard le a tetelt (az ellenorzo uj VERDIKT-sora), vagy kuldd a lezarast `override_reason` '
-      + 'mezovel, kimondott indokkal -- az indok a kartya esemenynaplojaba kerul.',
+      `A kartya nem zarhato le: ${parts.join(' -- ')}; vagy kuldd a lezarast `
+      + '`override_reason` mezovel, kimondott indokkal -- az indok a kartya esemenynaplojaba kerul.',
     open_verdicts: open,
+    open_leftovers: leftovers,
   }
 }

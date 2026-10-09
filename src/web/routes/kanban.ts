@@ -26,7 +26,7 @@ import {
   type TokenPruneLag,
   recordKanbanCloseOverride,
 } from '../../db.js'
-import { openVerdicts, overrideReason, closeRefusal, type OpenVerdict } from '../kanban-verdict-gate.js'
+import { openVerdicts, openLeftovers, overrideReason, closeRefusal, type OpenVerdict } from '../kanban-verdict-gate.js'
 import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
 import { kanbanCreateError } from '../kanban-create-validation.js'
 import { normalizeDueDate, DUE_DATE_ZONE, DUE_DATE_ACCEPTED } from '../kanban-due-date.js'
@@ -280,22 +280,26 @@ export const KANBAN_RESERVED_SEGMENTS = ['archived', 'labels', 'assignees', 'hea
  */
 /**
  * THE CLOSING GATE -- card 5a967042. Answers 409 and returns true when the card
- * has an open verdict and the caller gave no reason to close it anyway. With a
+ * has an open verdict or an open MARADEK leftover and the caller gave no reason to close it anyway. With a
  * reason, the closing goes ahead and the reason is written to the card's history
  * (`close_override`), next to the status change it allowed. The parser and its
  * rules live in kanban-verdict-gate.ts.
  */
 function closeBlocked(res: ServerResponse, cardId: string, body: unknown, actor: unknown): boolean {
-  const open: OpenVerdict[] = openVerdicts(getKanbanComments(cardId))
-  if (open.length === 0) return false
+  const comments = getKanbanComments(cardId)
+  const verdicts: OpenVerdict[] = openVerdicts(comments)
+  // Card 0a787690: the second closed token (`MARADEK:`) goes through the SAME door.
+  const leftovers = openLeftovers(comments)
+  if (verdicts.length === 0 && leftovers.length === 0) return false
   const reason = overrideReason(body)
   if (!reason) {
-    json(res, closeRefusal(open), 409)
+    json(res, closeRefusal(verdicts, leftovers), 409)
     return true
   }
   const who = typeof actor === 'string' && actor.trim() !== '' ? actor.trim() : null
+  const open = [...verdicts, ...leftovers]
   recordKanbanCloseOverride(cardId, JSON.stringify(open.map((v) => ({ author: v.author, line: v.line }))), reason, who)
-  logger.warn({ cardId, open, actor: who }, 'Kanban card closed over an open verdict, with a stated reason')
+  logger.warn({ cardId, open, actor: who }, 'Kanban card closed over an open verdict or leftover, with a stated reason')
   return false
 }
 

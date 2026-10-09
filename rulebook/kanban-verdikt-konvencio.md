@@ -675,3 +675,17 @@ továbbra is üzenet.
 **A STÁTUSZ-MOZGATÁS SOHA NEM SÖPÖRHETŐ.** Egy kártya-id egy commit-üzenetben NEM azt jelenti,
 hogy a commit elvégezte a kártyát -- ugyanaz a NÉV-EGYEZÉS kontra HASZNÁLAT-EGYEZÉS hiba, mint
 mindenhol máshol. Kártyánként el kell olvasni, mi történt.
+
+## A MASODIK ZART TOKEN: `MARADEK:` (kartya 0a787690, Isti 5654)
+
+Isti: „Nem mehet kesz statuszba olyan kartya amin meg van nyitott teendo." Merve 2026-10-07 08:56: harom done
+kartyan proza „MARADEK-JELZES" komment allt, a lezaras atment, a maradek az archivumba kerult. A kapu
+(`src/kanban-verdict.ts`, `openLeftovers`) ugyanabban a parserben, ugyanazokkal a szabalyokkal olvassa:
+
+- `MARADEK: <mi> | <hol>` a 0. oszlopban NYITOTT maradekot nyit a szerzonek. Minden ilyen sor kulon tetel.
+- `MARADEK: NINCS | <hova kerult>` (0. oszlop) zarja a SAJAT szerzo MINDEN korabbi maradekat. A `|` (vagy ` -- `) utani hely
+  KOTELEZO: hely nelkuli NINCS nem zar. MASIK szerzo NINCS-e nem zar; egy kesobbi MARADEK-sor ujranyit.
+- A lezaras (move done, PUT status, archive) ilyenkor 409, a torzs `open_leftovers` mezoje es a hibauzenet nevezi a
+  komment-id-t, a szerzot, a sort, a kiutat; kiut meg az `override_reason` is (a `close_override` esemenybe kerul).
+- Az orai archivalo is latja: nyitott MARADEK-es done kartya a tablan marad.
+- NEM proza-detektor: „MARADEK-JELZES", sor kozepi „maradek:", behuzott, idezett vagy kisbetus sor nem token.

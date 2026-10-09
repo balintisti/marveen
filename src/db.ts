@@ -6,7 +6,7 @@ import { getEffectiveSettingValue } from './settings-store.js'
 import { logger } from './logger.js'
 import { TOOL_TIMEOUTS } from './tool-timeouts.js'
 import { triggerLikeClause } from './homoglyph.js'
-import { openVerdicts } from './kanban-verdict.js'
+import { openVerdicts, openLeftovers } from './kanban-verdict.js'
 
 let db: Database.Database
 // The path the CURRENT handle was opened on (null for ':memory:'). Kept so
@@ -2477,7 +2477,9 @@ export function sweepArchivedKanbanCards(): number {
   const kept: Array<{ id: string; authors: string[] }> = []
   const archive: string[] = []
   for (const { id } of candidates) {
-    const open = openVerdicts(getKanbanComments(id))
+    const comments = getKanbanComments(id)
+    // Card 0a787690: an open `MARADEK:` leftover keeps the card on the board too.
+    const open = [...openVerdicts(comments), ...openLeftovers(comments)]
     if (open.length > 0) kept.push({ id, authors: open.map((v) => v.author) })
     else archive.push(id)
   }
