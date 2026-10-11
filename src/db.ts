@@ -2455,7 +2455,8 @@ export interface KanbanComment {
 // a missing row, which is the failure mode that hides longest. Default stays false so
 // the board keeps its current behaviour; only a caller that asks gets the wider set.
 /**
- * Archive `done` cards older than KANBAN_ARCHIVE_DONE_DAYS. Returns how many it archived.
+ * Archive `done` cards older than KANBAN_ARCHIVE_DONE_DAYS that carry the KANBAN_ARCHIVE_REQUIRE_LABEL
+ * label (default IGAZOLT). Returns how many it archived.
  *
  * This used to run inside listKanbanCards(), which made READING the board WRITE to it: an
  * audit changed the set it was about to report. It is now a scheduled job
@@ -2464,9 +2465,20 @@ export interface KanbanComment {
 export function sweepArchivedKanbanCards(): number {
   const archiveDays = Number(getEffectiveSettingValue('KANBAN_ARCHIVE_DONE_DAYS'))
   const archiveCutoff = Math.floor(Date.now() / 1000) - archiveDays * 86400
+  // CARD 8b982892 (Isti, TG 6309): what is not finished must not be archived. `done` alone
+  // does not prove that -- measured 2026-10-11, the sweep archived 77 done cards in 26 hours,
+  // none of them carrying the IGAZOLT label or a KESZ-IGAZOLAS comment (they predate the
+  // verified-done rule). So the sweep only takes cards that carry the verification label;
+  // an unverified done card stays on the board, where someone can still verify or reopen it.
+  // An empty setting restores the old, label-blind behaviour.
+  const requiredLabel = String(getEffectiveSettingValue('KANBAN_ARCHIVE_REQUIRE_LABEL')).trim()
+  const labelClause = requiredLabel
+    ? ` AND EXISTS (SELECT 1 FROM kanban_card_labels cl JOIN labels l ON l.id = cl.label_id
+                    WHERE cl.card_id = kanban_cards.id AND l.name = ? COLLATE NOCASE)`
+    : ''
   const candidates = db.prepare(
-    "SELECT id FROM kanban_cards WHERE status = 'done' AND archived_at IS NULL AND updated_at < ?"
-  ).all(archiveCutoff) as Array<{ id: string }>
+    "SELECT id FROM kanban_cards WHERE status = 'done' AND archived_at IS NULL AND updated_at < ?" + labelClause
+  ).all(...(requiredLabel ? [archiveCutoff, requiredLabel] : [archiveCutoff])) as Array<{ id: string }>
 
   // CARD 5a967042: the sweep closes a card out of sight as surely as the archive
   // route does, so it asks the same question (kanban-verdict.ts). A done card

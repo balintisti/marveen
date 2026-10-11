@@ -19,7 +19,20 @@
 // feature off).
 
 import { describe, it, expect, beforeEach } from 'vitest'
-import { initDatabase, getDb, sweepArchivedKanbanCards, getKanbanCard, createKanbanCard } from '../db.js'
+import {
+  initDatabase, getDb, sweepArchivedKanbanCards, getKanbanCard, createKanbanCard,
+  createLabel, addLabelToCard,
+} from '../db.js'
+
+// Card 8b982892: the sweep only archives done cards carrying the IGAZOLT label
+// (KANBAN_ARCHIVE_REQUIRE_LABEL). Every card these tests expect the sweep to judge
+// gets it, so the cases below keep testing what they were written for -- not the label.
+function verify(id: string): void {
+  if (!getDb().prepare("SELECT 1 FROM labels WHERE id = 'igazolt'").get()) {
+    createLabel({ id: 'igazolt', name: 'IGAZOLT', color: '#16a34a' })
+  }
+  addLabelToCard(id, 'igazolt')
+}
 
 beforeEach(() => {
   initDatabase(':memory:')
@@ -83,6 +96,7 @@ describe('archive sweep vs. raw SQL status writes', () => {
 
     // The exact shape of the bug: status-only raw SQL write, no updated_at.
     db.prepare("UPDATE kanban_cards SET status = 'done' WHERE id = ?").run('freshly-done')
+    verify('freshly-done')
 
     sweepArchivedKanbanCards()
 
@@ -98,6 +112,7 @@ describe('archive sweep vs. raw SQL status writes', () => {
       `INSERT INTO kanban_cards (id, title, status, priority, created_at, updated_at)
        VALUES ('genuinely-old', 'old and done', 'done', 'normal', ?, ?)`
     ).run(OLD, OLD)
+    verify('genuinely-old')
 
     sweepArchivedKanbanCards()
 
@@ -106,6 +121,7 @@ describe('archive sweep vs. raw SQL status writes', () => {
 
   it('does not archive a done card moved via the production entry point (createKanbanCard + status: done)', () => {
     createKanbanCard({ id: 'prod-done', title: 'created done today', status: 'done' })
+    verify('prod-done')
 
     sweepArchivedKanbanCards()
 

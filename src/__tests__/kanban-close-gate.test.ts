@@ -15,6 +15,7 @@ import { Readable } from 'node:stream'
 import {
   initDatabase, createKanbanCard, addKanbanComment, getKanbanCard, getKanbanComments,
   getKanbanCardFieldEvents, moveKanbanCard, getDb, sweepArchivedKanbanCards,
+  createLabel, addLabelToCard,
 } from '../db.js'
 import { tryHandleKanban } from '../web/routes/kanban.js'
 import { openVerdicts } from '../web/kanban-verdict-gate.js'
@@ -155,6 +156,12 @@ describe('az oras archivalo ugyanazt a kaput kerdezi (marveen dontese)', () => {
   function oldDone(id: string) {
     cardInTesting(id)
     moveKanbanCard(id, 'done', 0, 'marveen')
+    // card 8b982892: the sweep only takes IGAZOLT-labelled cards; both get it, so this
+    // case keeps testing the verdict gate and not the label
+    if (!getDb().prepare("SELECT 1 FROM labels WHERE id = 'igazolt'").get()) {
+      createLabel({ id: 'igazolt', name: 'IGAZOLT', color: '#16a34a' })
+    }
+    addLabelToCard(id, 'igazolt')
     // well past KANBAN_ARCHIVE_DONE_DAYS
     getDb().prepare('UPDATE kanban_cards SET updated_at = ? WHERE id = ?').run(1_000, id)
   }
