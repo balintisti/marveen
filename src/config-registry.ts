@@ -174,6 +174,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     requiresRestart: false,
   },
   {
+    key: 'KANBAN_ARCHIVE_REQUIRE_LABEL',
+    type: 'string',
+    default: 'IGAZOLT',
+    description: 'Az automatikus archiválás csak az ilyen nevű címkét viselő "done" kártyát viszi el (kis/nagybetű nem számít). Üresen: minden régi "done" kártya archiválódik, mint korábban.',
+    module: 'kanban',
+    secret: false,
+    requiresRestart: false,
+  },
+  {
     key: 'KANBAN_ARCHIVED_MAX_ROWS',
     type: 'int',
     default: 500,

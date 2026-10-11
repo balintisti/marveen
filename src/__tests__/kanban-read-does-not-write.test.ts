@@ -16,8 +16,18 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   initDatabase, getDb, listKanbanCards, sweepArchivedKanbanCards,
-  getKanbanCard, createKanbanCard,
+  getKanbanCard, createKanbanCard, createLabel, addLabelToCard,
 } from '../db.js'
+
+// Card 8b982892: the sweep only archives done cards carrying the IGAZOLT label
+// (KANBAN_ARCHIVE_REQUIRE_LABEL). Every card these tests expect the sweep to judge
+// gets it, so the cases below keep testing what they were written for -- not the label.
+function verify(id: string): void {
+  if (!getDb().prepare("SELECT 1 FROM labels WHERE id = 'igazolt'").get()) {
+    createLabel({ id: 'igazolt', name: 'IGAZOLT', color: '#16a34a' })
+  }
+  addLabelToCard(id, 'igazolt')
+}
 
 beforeEach(() => {
   initDatabase(':memory:')
@@ -31,6 +41,7 @@ function seedOldDoneCard(id = 'old-done'): void {
     `INSERT INTO kanban_cards (id, title, status, priority, created_at, updated_at)
      VALUES (?, 'old and done', 'done', 'normal', ?, ?)`
   ).run(id, OLD, OLD)
+  verify(id)
 }
 
 describe('a LEKERDEZES NEM IR -- ez a kartya lenyege', () => {
@@ -67,6 +78,7 @@ describe('a SOPRES viszont TOVABBRA IS mukodik -- kulonben ez a javitas kikapcso
 
   it('KONTROLL: friss done kartyat NEM archival (nem egyszeruen mindent lesopor)', () => {
     createKanbanCard({ id: 'fresh-done', title: 'Ma zarult', status: 'done' })
+    verify('fresh-done')
     expect(sweepArchivedKanbanCards()).toBe(0)
     expect(getKanbanCard('fresh-done')!.archived_at).toBeNull()
   })
@@ -76,6 +88,7 @@ describe('a SOPRES viszont TOVABBRA IS mukodik -- kulonben ez a javitas kikapcso
       `INSERT INTO kanban_cards (id, title, status, priority, created_at, updated_at)
        VALUES ('old-open', 'regi, de nyitott', 'planned', 'normal', ?, ?)`
     ).run(OLD, OLD)
+    verify('old-open')
     expect(sweepArchivedKanbanCards()).toBe(0)
     expect(getKanbanCard('old-open')!.archived_at).toBeNull()
   })
