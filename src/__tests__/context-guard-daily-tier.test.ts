@@ -17,6 +17,8 @@ import {
   dailyHandoffArmed,
   dailyHandoffDue,
   dailyServedAtMs,
+  dailyHandoffUnused,
+  DAILY_UNUSED_GRACE_MS,
   DAILY_HANDOFF_REASON_PREFIX,
   IDLE_FLUSH_REASON_PREFIX,
   DEFAULT_CONTEXT_GUARD,
@@ -310,6 +312,40 @@ describe('dailyServedAtMs -- a fresh session serves the slot it started after', 
 
   it('the runner feeds the session start into the due check', () => {
     const code = src('src/web/context-guard-runner.ts')
-    expect(code).toContain('dailyHandoffDue(cfg, localMidnightMs(nowMs), dailyServedAtMs(last, sessionStartSec(name)), nowMs)')
+    // Shape changed 2026-10-12 (the served moment is now shared with dailyHandoffUnused); the
+    // guarantee did not: the session start still feeds the due check.
+    expect(code).toContain('const servedAt = dailyServedAtMs(last, sessionStartSec(name))')
+    expect(code).toContain('dailyHandoffDue(cfg, localMidnightMs(nowMs), servedAt, nowMs)')
+  })
+})
+
+describe('dailyHandoffUnused -- a session that did nothing is not handed off (Isti TG 6390)', () => {
+  const served = Date.parse('2026-10-11T03:30:00Z')
+  const now = Date.parse('2026-10-12T03:30:00Z')
+
+  it('skips when the transcript was last written before the served moment', () => {
+    const lastWrite = served - 60_000
+    expect(dailyHandoffUnused(served, now - lastWrite, now)).toBe(true)
+  })
+
+  it('skips start-up writes inside the grace window', () => {
+    const lastWrite = served + DAILY_UNUSED_GRACE_MS - 1000
+    expect(dailyHandoffUnused(served, now - lastWrite, now)).toBe(true)
+  })
+
+  it('POSITIVE CONTROL: work after the grace window keeps the daily handoff', () => {
+    const lastWrite = served + DAILY_UNUSED_GRACE_MS + 60_000
+    expect(dailyHandoffUnused(served, now - lastWrite, now)).toBe(false)
+  })
+
+  it('an unmeasurable transcript (null) keeps the old behaviour', () => {
+    expect(dailyHandoffUnused(served, null, now)).toBe(false)
+  })
+
+  it('the runner asks it before arming the tier', () => {
+    const runner = readFileSync(fileURLToPath(new URL('../web/context-guard-runner.ts', import.meta.url)), 'utf8')
+    const at = runner.indexOf('dailyHandoffUnused(servedAt, idleMs, nowMs)')
+    expect(at).toBeGreaterThan(-1)
+    expect(runner.slice(at, at + 400)).toContain('lastDailyHandoff.set(name, nowMs)')
   })
 })

@@ -35,6 +35,7 @@ import {
   dailyHandoffDue,
   DAILY_HANDOFF_REASON_PREFIX,
   dailyServedAtMs,
+  dailyHandoffUnused,
   IDLE_FLUSH_REASON_PREFIX,
   INITIAL_GUARD_STATE,
   STALE_REFRESH_REASON_PREFIX,
@@ -487,6 +488,10 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
     }
   }
 
+  // ONE transcript probe per sweep: the idle-flush/staleness inputs and the daily-tier
+  // unused check read the same value (pinned by context-guard-saturation-mismatch).
+  const idleMs = running && needPct ? measureIdleMs(name, nowMs, since) : null
+
   const inputs: GuardInputs = {
     nowMs,
     running,
@@ -514,7 +519,7 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
     // idleMs is NOT gated on the idle-flush tier: the handoff-staleness check
     // (handoffStaleMinutes) needs the transcript mtime on every decision path
     // that can restart, and the probe is a single stat().
-    idleMs: running && needPct ? measureIdleMs(name, nowMs, since) : null,
+    idleMs,
     // Seed-on-first-sight: an agent we have not seen this process is recorded
     // as served NOW and is never due on the same sweep. dailyHandoffDue is
     // therefore false on the first tick by construction, not by luck.
@@ -526,7 +531,16 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
         return false
       }
       // A session that started after the record is fresh: its start serves the slot (card 987baf44).
-      return dailyHandoffDue(cfg, localMidnightMs(nowMs), dailyServedAtMs(last, sessionStartSec(name)), nowMs)
+      const servedAt = dailyServedAtMs(last, sessionStartSec(name))
+      if (!dailyHandoffDue(cfg, localMidnightMs(nowMs), servedAt, nowMs)) return false
+      // No work since the slot was served: a handoff would cost a full-context turn to say
+      // nothing. Serve the slot without one (Isti TG 6390).
+      if (dailyHandoffUnused(servedAt, idleMs, nowMs)) {
+        lastDailyHandoff.set(name, nowMs)
+        logger.info({ name }, 'context-guard: daily handoff skipped -- no transcript activity since the slot was last served')
+        return false
+      }
+      return true
     })(),
   }
 

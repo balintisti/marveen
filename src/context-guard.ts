@@ -484,6 +484,27 @@ export function dailyServedAtMs(lastMs: number, sessionStartSec: number | undefi
   return sessionStartSec !== undefined ? Math.max(lastMs, sessionStartSec * 1000) : lastMs
 }
 
+/** Slack after the served moment before transcript activity counts as WORK.
+ *  A restarted session writes a little on its own (start-up hooks), and the
+ *  handoff-writing turn itself lands just before the restart; neither is work. */
+export const DAILY_UNUSED_GRACE_MS = 15 * 60_000
+
+/**
+ * Whether a due daily handoff would hand off NOTHING: the transcript has not
+ * been written since the slot was last served, so the session holds no work
+ * done since its last fresh start. Isti (TG 6390, 2026-10-12) asked why parked
+ * agents still read their whole context every night: measured that morning,
+ * the 03:xx tier restarted seven agents, most of them parked since days, each
+ * paying one full-context turn to write a handoff about no new work.
+ *
+ * `idleMs` null (unmeasurable) is NOT unused: the old behaviour stays, so an
+ * agent we cannot measure is never silently denied its daily fresh start.
+ */
+export function dailyHandoffUnused(servedAtMs: number, idleMs: number | null, nowMs: number): boolean {
+  if (idleMs === null) return false
+  return nowMs - idleMs <= servedAtMs + DAILY_UNUSED_GRACE_MS
+}
+
 export function dailyHandoffDue(
   cfg: ContextGuardConfig,
   localMidnightMs: number,
