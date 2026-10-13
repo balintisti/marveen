@@ -107,6 +107,14 @@ describe('self-pace-gate gateDecision', () => {
     }
   })
 
+  it('egress-allowlist (FORK port of 618b57ca): mixed reason, the hint names both the data way out and the real write', () => {
+    // Bash names the file (may be documentation) and a file tool writes it (structural):
+    // one reason code for both, as upstream asserts, so the hint has to say both.
+    expect(REASON_HINT['egress-allowlist']).toMatch(/HA DOKUMENTALSZ/)
+    expect(REASON_HINT['egress-allowlist']).toMatch(/Write eszkozzel/)
+    expect(REASON_HINT['egress-allowlist']).toMatch(/Fajl-eszkoznel ilyen eset nincs/)
+  })
+
   it('BLOCKS EXACTLY WHAT IT BLOCKED BEFORE -- only the message grew', () => {
     // The hint must not become a narrowing by accident.
     expect(selfPaceDecision('Bash', { command: `${PANE_WRITE} -t p 'go' Enter` }).deny).toBe(true)

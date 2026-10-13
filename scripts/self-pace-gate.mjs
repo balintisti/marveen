@@ -764,15 +764,21 @@ export const REASON_HINT = {
     ' HA DOKUMENTALSZ (a szoveg ADAT, nem hivas): NE fogalmazd at a szoveget, hanem valassz' +
     ' MASIK UTAT -- a Write eszkozzel fajlba, vagy `-d`/`--data` payloadkent (azt a kapu' +
     ' blankolja). Igy a parancssorban csak egy utvonal all, es a dokumentum pontos marad.',
+  'egress-allowlist':
+    ' KIVALTO OK: egy fajl-eszkoz a store/egress-allowlist.json-ra irna (nev vagy valodi utvonal' +
+    ' szerint), vagy a Bash-parancs megnevezi a fajlt, es nem sima olvasas.' +
+    ' Ha egy domain kell, kerd a fo agenst (inter-agent uzenet: domain + miert); o a gazda' +
+    ' jovahagyasaval veszi fel. Olvasni szabad: cat / grep / jq a fajlra (ertelmezo -- python,' +
+    ' node -- nem).' +
+    ' HA DOKUMENTALSZ (jegyzet, heredoc a fajlrol): a jegyzetet a Write eszkozzel ird -- a kapu' +
+    ' a heredoc-torzset is parancsszovegnek nezi. Fajl-eszkoznel ilyen eset nincs: az iras valodi.',
 }
 
+// Its own header instead of GATE_MSG (this is not self-pace); the hint is REASON_HINT's, so
+// the every-reason-has-a-hint guard covers it like the others.
 const ALLOWLIST_GATE_MSG =
   'Egress-engedelylista TILTOTT (governance hard-gate). Sub-agentkent NEM irhatod a ' +
-  'store/egress-allowlist.json-t: ez a kapu RAD vonatkozik. Ha egy domain kell, kerd a fo ' +
-  'agenst (inter-agent uzenet: domain + miert); o a gazda jovahagyasaval veszi fel. ' +
-  'Olvasni szabad: cat / grep / jq a fajlra (ertelmezo -- python, node -- nem). ' +
-  'Ha csak IRSZ a fajlrol (jegyzet, heredoc), a jegyzetet a Write eszkozzel ird: ' +
-  'a kapu a heredoc-torzset is parancsszovegnek nezi.'
+  'store/egress-allowlist.json-t: ez a kapu RAD vonatkozik.' + REASON_HINT['egress-allowlist']
 
 function allow() { process.exit(0) }
 
