@@ -429,14 +429,12 @@ describe('heredoc-fed interpreters', () => {
     `python3 - <<'PY'\nimport json,urllib.request\ntok=open('store/.dashboard-token').read().strip()\nr=urllib.request.Request('http://127.0.0.1:3420/api/kanban',headers={'Authorization':'Bearer '+tok})\nprint(json.loads(urllib.request.urlopen(r).read()))\nPY`,
     `python3 - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://192.168.1.5:8096/')\nPY`,
     `node <<EOF\nfetch('http://nas.local:5000/').then(r => r.text())\nEOF`,
-    `bash <<EOF\ncurl -s http://localhost:3420/api/health\nEOF`,
     `python3 <<< "import urllib.request; urllib.request.urlopen('http://localhost:3420/x')"`,
     // a URL carried as data with no network primitive: passes, as in a one-liner
     `python3 - <<'PY'\nprint('https://example.org/')\nPY`,
     // a quoted tag does not expand $U, so the assigned external URL never reaches the body
     `U=https://example.org/; python3 - <<'PY'\nimport urllib.request; urllib.request.urlopen('http://localhost:3420/$U')\nPY`,
     // a heredoc to a NON-interpreter is inert text, URL and curl word included
-    `cat <<EOF\ncurl https://example.org/\nEOF`,
     `cat > /tmp/notes.md <<'EOF'\nimport urllib.request; urllib.request.urlopen('https://example.org/')\nEOF`,
   ]
   it('POSITIVE CONTROL: the same body as a -c one-liner was already denied', () => {
@@ -447,6 +445,16 @@ describe('heredoc-fed interpreters', () => {
   })
   it('lets localhost, private-network, data-only and non-interpreter heredocs through', () => {
     for (const cmd of ALLOW) expect({ cmd, deny: deny(cmd) }).toEqual({ cmd, deny: false })
+  })
+  // FORK, KNOWN FALSE DENY kept on purpose (card 6525aba3, option (a), marveen 27632): a bash heredoc whose
+  // body starts with a LOCAL curl is denied, because the command name is read from the original text and
+  // the body's terminator reads as curl's destination (host "eof"). The running gate (89f8a6f9b) does the
+  // same. Upstream's test expects a pass; the fix that blanks bodies (0ed6702ab) loosened the gate (didi
+  // 33332), so this branch ships without it and pins today's behaviour. The follow-up fix flips this back.
+  it('KNOWN: a curl line in a bash or cat heredoc body is still denied here, as on the running gate', () => {
+    expect(classify(`bash <<EOF\ncurl -s http://localhost:3420/api/health\nEOF`)).toMatchObject({ deny: true, hosts: ['eof'] })
+    // and a body line starting with curl under a plain `cat` is read as that curl
+    expect(classify(`cat <<EOF\ncurl https://example.org/\nEOF`)).toMatchObject({ deny: true })
   })
   it('a listed vendor host passes in a heredoc body too, and does not launder another host', () => {
     const V = parseVendorHosts({ hosts: ['api.elevenlabs.io'] })
@@ -694,9 +702,17 @@ describe('every PREFIX_WORDS entry in front of a heredoc-fed interpreter', () =>
     }
   })
   it('CONTROL: the localhost twin behind every prefix form passes', () => {
-    for (const p of forms()) for (const body of [PY, SH]) {
-      const cmd = `${p} ${body('http://localhost:3420/api/health')}`
+    for (const p of forms()) {
+      const cmd = `${p} ${PY('http://localhost:3420/api/health')}`
       expect({ cmd, deny: deny(cmd) }).toEqual({ cmd, deny: false })
+    }
+  })
+  // FORK, KNOWN FALSE DENY (see 'KNOWN: a curl line in a bash or cat heredoc'): the bash twin reads the
+  // terminator as the destination on this branch, behind every prefix form as without one.
+  it('KNOWN: the localhost bash twin behind every prefix form is still denied here (host "eof")', () => {
+    for (const p of forms()) {
+      const cmd = `${p} ${SH('http://localhost:3420/api/health')}`
+      expect({ cmd, r: classify(cmd) }).toMatchObject({ cmd, r: { deny: true, hosts: ['sh'] } })
     }
   })
   it('a prefix with options no longer hides curl or a one-liner on the plain path either', () => {
