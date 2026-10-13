@@ -299,6 +299,36 @@ describe('self-pace-gate stripProseArguments (scoped to gh/git/glab)', () => {
     const cut = "cut -b '1-3 at now'"
     expect(stripProseArguments(cut)).toBe(cut)
   })
+
+  // FORK (didi's C6 review, card 6525aba3): the guard used to be "gh/git/glab
+  // ANYWHERE in the command", on the whole command, so the word git in one
+  // segment blanked an argument another segment's command executes.
+  it('leaves a prose flag alone when gh/git/glab is only elsewhere in the text', () => {
+    const watch = "watch -t 'claude -p /loop'"
+    expect(stripProseArguments(watch)).toBe(watch)
+    const path = "cat ~/git/x -t 'at now'"
+    expect(stripProseArguments(path)).toBe(path)
+  })
+
+  it.each([
+    ['watch -t after cd into a git dir', "cd ~/git && watch -t 'tmux send-keys -t didi hi Enter'"],
+    ['watch -t after a git command', "git status; watch -t 'curl -s -X POST http://localhost:3420/api/schedules'"],
+    ['xargs -t after git', "git log -1; echo x | xargs -t 'tmux send-keys -t didi hi Enter'"],
+    ['setsid -b after git', "git status && setsid -b 'claude -p /loop'"],
+    ['env -m after git', "git -C . status; env -m 'tmux send-keys -t didi x Enter'"],
+    ['watch -t on the next line after git', "git status\nwatch -t 'tmux send-keys -t didi hi Enter'"],
+  ])('a quoted command another tool executes stays DENIED: %s', (_name, command) => {
+    expect(selfPaceDecision('Bash', { command }).deny).toBe(true)
+  })
+
+  it('still blanks prose on the scheduler fallback path (unresolvable quoting)', () => {
+    // "$(date)" makes maskInertLiterals give up, so the anchored scheduler check
+    // runs on naive segments: the gh body must not read as the at scheduler
+    // (the `(` is a SCHED_BOUNDARY). A `;` inside the body would still split the
+    // naive segment and stay denied: fail-closed, accepted.
+    const command = `gh pr create --title "$(date +%F)" --body 'ships Friday (at noon) for review'`
+    expect(selfPaceDecision('Bash', { command }).deny).toBe(false)
+  })
 })
 
 // --- stripDataPayloads: a curl -d/--data body is DATA sent over the wire, never

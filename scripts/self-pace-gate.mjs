@@ -455,14 +455,21 @@ export function maskInertLiterals(command, { heredocOnly = false } = {}) {
 // value with $( or ` may substitute, so it is left alone.
 const PROSE_FLAGS = String.raw`--body|--message|--notes|--title|--subject|-b|-m|-t`
 
+// FORK (card 6525aba3, didi's C6 review): ONE segment in, and only when gh, git
+// or glab IS that segment's command word. Upstream ran this on the whole command
+// with "gh/git/glab anywhere" as the guard, so `cd ~/git && watch -t '<pane
+// write>'` blanked the argument `watch` executes. And it feeds ONLY the anchored
+// scheduler check's naive fallback (gateDecision): the self-inject, store, API
+// and allowlist checks keep seeing prose, as they did before this port.
+const PROSE_TOOL_RX = /^(?:\S*\/)?(?:gh|git|glab)(?:\s|$)/i
+
 export function stripProseArguments(seg) {
   const s = String(seg ?? '')
   // Scoped to the tools these prose flags were written for: gh, git, glab (a PR
   // body, a PR comment, a release note). A short flag means different things to
   // different binaries (`tar -t`, `cut -b`, `sort -t`), so blanking it on an
   // unrelated tool would hide real data from the gate (PR #770 review, Szotasz).
-  // Same coarse command-word guard as stripGitCommitMessages just below.
-  if (!/\b(?:gh|git|glab)\b/i.test(s)) return s
+  if (!PROSE_TOOL_RX.test(s.trimStart())) return s
   return s.replace(
     new RegExp(String.raw`((?:^|\s)(?:${PROSE_FLAGS})(?:\s+|=))('[^']*'|\$'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")`, 'gi'),
     (full, flag, arg) => {
@@ -546,7 +553,7 @@ export function gateDecision(toolName, toolInput) {
     // it), so the URL/method args still match but the body text never does. A
     // separator OUTSIDE the payload still splits, so `curl -d '' x ; crontab -r`
     // is still caught.
-    const safeCommand = stripProseArguments(stripDataPayloads(stripGitCommitMessages(String(toolInput?.command ?? ''))))
+    const safeCommand = stripDataPayloads(stripGitCommitMessages(String(toolInput?.command ?? '')))
     // Per-segment so an unrelated token elsewhere in a compound command cannot
     // turn a legit read (store inspection, schedule-API GET) into a false deny.
     const naiveSegs = splitSegments(safeCommand)
@@ -576,9 +583,11 @@ export function gateDecision(toolName, toolInput) {
     // The scheduler check is the ANCHORED one -- it fires on what sits at a
     // segment START -- so it is the one a fake segment boundary can mislead, and
     // the only one that gets quote-aware segments. Null (unresolvable quoting)
-    // falls back to the naive split, i.e. to scanning strictly more.
+    // falls back to the naive split, i.e. to scanning strictly more. The masked
+    // path already blanks every quoted argument; on the fallback a gh/git/glab
+    // segment's prose flags are blanked per segment (stripProseArguments).
     const masked = maskInertLiterals(safeCommand)
-    for (const seg of (masked == null ? naiveSegs : splitSegments(masked))) {
+    for (const seg of (masked == null ? naiveSegs.map(stripProseArguments) : splitSegments(masked))) {
       // scheduler binaries: deny the exec/submit forms, allow pure read-listing
       if (SCHEDULER_RX.test(seg) && !SCHEDULER_READ_RX.test(seg)) return { deny: true, reason: 'os-scheduler' }
     }
