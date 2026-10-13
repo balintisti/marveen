@@ -15,7 +15,7 @@
 // (isInvokedDirectly), so importing it here runs no side effects.
 import { describe, it, expect, afterAll } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, statSync } from 'node:fs'
+import { readFileSync, existsSync, rmSync, writeFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -45,7 +45,7 @@ const HOOK = join(ROOT, 'scripts', 'hooks', 'bash-egress-parser.mjs')
 const REPO_BLOCK_LOG = join(ROOT, 'store', 'bash-egress-blocks.jsonl')
 const stamp = (p: string) => (existsSync(p) ? `${statSync(p).size}:${statSync(p).mtimeMs}` : 'absent')
 const REPO_BLOCK_LOG_BEFORE = stamp(REPO_BLOCK_LOG)
-const TEST_LOG_DIR = mkdtempSync(join(tmpdir(), 'bash-egress-default-log-'))
+const TEST_LOG_DIR = mkTmp('bash-egress-default-log-')
 process.env.BASH_EGRESS_BLOCK_LOG = join(TEST_LOG_DIR, 'blocks.jsonl')
 afterAll(() => {
   rmSync(TEST_LOG_DIR, { recursive: true, force: true })
@@ -481,7 +481,7 @@ describe('heredoc-fed interpreters', () => {
     expect(classify(loopOf([...local(63), 'https://example.org/x']))).toEqual({ deny: true, reason: 'heredoc-external', hosts: ['example.org'] })
   })
   it('the hook process denies the heredoc shape and stays silent on its localhost twin', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'bash-egress-heredoc-'))
+    const dir = mkTmp('bash-egress-heredoc-')
     try {
       const run = (command: string) => spawnSync(process.execPath, [HOOK], {
         input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }),
@@ -560,7 +560,7 @@ describe('a Python heredoc that only MENTIONS a primitive and a URL', () => {
     expect(classify(py(`open('n.md','w').write("ｅｘｅｃ and ｕｒｌｏｐｅｎ('https://example.org/') are only words here")`)).deny).toBe(false)
   })
   it('the hook process stays silent on a file-writing heredoc', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'bash-egress-filewrite-'))
+    const dir = mkTmp('bash-egress-filewrite-')
     try {
       const r = spawnSync(process.execPath, [HOOK], {
         input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: py(WRITES[0]) } }),
