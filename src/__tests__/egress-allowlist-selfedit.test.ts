@@ -131,6 +131,10 @@ describe('gate: the hook end to end, and who it applies to', () => {
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain('fo agenst')
     // FORK: the way out for a sub-agent that only writes ABOUT the file (heredoc denied)
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain('Write eszkozzel')
+    // its own header: an allowlist denial must not read as a self-pace one (the hint alone
+    // carries the other words, so only the header tells the two apart)
+    expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/^Egress-engedelylista TILTOTT/)
+    expect(out.hookSpecificOutput.permissionDecisionReason).not.toContain('Self-pace')
   })
   it('the self-pace denial keeps its own message', () => {
     const r = run({ tool_name: 'ScheduleWakeup', tool_input: {} })
