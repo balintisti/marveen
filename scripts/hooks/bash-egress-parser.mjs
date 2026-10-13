@@ -735,6 +735,86 @@ function stdinFeeds(orig, masked, herestrings, env) {
   }
   return feeds
 }
+// Commands that only print or write the text they are given: a heredoc body fed to one of them is data.
+// printf is not here: `printf -v VAR` writes a variable, and the -v can hide behind quotes (didi 27673).
+const TEXT_ONLY = new Set(['cat', 'tee', 'echo', 'true', ':'])
+// Is the `<<` at offset `at` inside a comment (an unquoted `#` starting a word earlier on its line)?
+// Then it opens no heredoc, and the lines after it run as commands.
+function inComment(masked, at) {
+  const ls = masked.lastIndexOf('\n', at - 1) + 1
+  return /(?:^|[\s;&|()])#/.test(masked.slice(ls, at))
+}
+// May the heredoc bodies of this command line be read as text? Only where every sub-command either
+// just prints / writes text, or is a shell / interpreter reading its OWN heredoc (stdinFeeds judges
+// that body as a program). A body that reaches a program any other way stays in the command line:
+// piped into a shell (`cat <<EOF | bash`), sourced (`. /dev/stdin <<EOF`), sent to a remote shell
+// (`ssh host <<EOF`), or written and run in the same line (`cat > a.sh <<EOF ... EOF; bash a.sh`).
+// A command not named here reads as "maybe runs it", so a new form is judged, not waved through
+// (didi 33332 on 0ed6702ab). A substitution's output is itself a command line (`eval "$(cat <<EOF)"`).
+// The NAME alone is not enough (didi 27663): output written into a process substitution
+// (`tee >(bash)`, `cat > >(sh -s)`) reaches a shell, and `./cat` or `PATH=. cat` is not the cat the
+// set means. So a text-only word counts only as the bare first word of its command, and a line with
+// any `>(` / `<(` outside quotes keeps its bodies.
+function bodiesAreText(orig, masked, depth, substituted) {
+  if (substituted || depth >= 4) return false
+  if (/[<>]\(/.test(masked)) return false
+  // Read outside the bodies but inside quotes (a double-quoted `${X:=v}` still runs): an expansion
+  // that assigns (`: ${PATH:=.}`, `$((...))`) changes what a later name means, and a /dev/tcp or
+  // /dev/udp redirect sends the body over the network.
+  const outer = blankHeredocBodies(orig, masked)
+  if (/\$\{[^}]*=|\$\(\(|\$\[|\/dev\/(?:tcp|udp)\//.test(outer)) return false
+  // A terminator line (`EOF`) is the end of a body, not a command.
+  let lines = masked
+  for (const h of heredocBodies(orig, masked)) {
+    if (h.end >= orig.length) continue
+    const eol = orig.indexOf('\n', h.end)
+    const e = eol === -1 ? orig.length : eol
+    lines = lines.slice(0, h.end) + ' '.repeat(e - h.end) + lines.slice(e)
+  }
+  for (const [a, b] of spans(lines)) {
+    const mw = words(lines.slice(a, b))
+    if (mw.length === 0) continue
+    // An assignment-only command (`PATH=.:$PATH; cat`) changes what a later name means: not text.
+    const i = commandIndex(mw)
+    if (i >= mw.length) return false
+    // The name is read from the masked text, where `"./"cat` reads as cat: the RAW first word must
+    // be the bare name too.
+    if (i === 0 && TEXT_ONLY.has(mw[0]) && outer.slice(a, b).trim().split(/\s+/)[0] === mw[0]) continue
+    const cmd = mw[i].split('/').pop()
+    const ownHeredoc = /<<-?\s*(?:'|"|[A-Za-z_])/.test(lines.slice(a, b))
+    if (ownHeredoc && (SHELL.test(cmd) || INTERPRETER.test(cmd.toLowerCase()))) continue
+    return false
+  }
+  return true
+}
+// The original text with every heredoc BODY blanked (length-preserving), for reading command NAMES.
+// maskInertLiterals blanks a body together with its newlines, so a body and its terminator line fall
+// into ONE span; read through shellWords on the original, that span started with the body's first
+// word, and `cat <<EOF` / `bash <<EOF` over a `curl ...` line read as a curl whose destination was
+// the terminator (`EOF` -> host "eof"). Called only where bodiesAreText says the bodies are text.
+// Quoted strings stay: the shell runs `"curl"` as curl.
+function blankHeredocBodies(orig, masked) {
+  let out = orig
+  for (const { start, end } of heredocBodies(orig, masked)) {
+    out = out.slice(0, start) + out.slice(start, end).replace(/[^\n]/g, ' ') + out.slice(end)
+  }
+  return out
+}
+// Every heredoc body as { start, end }: from the line after the `<<TAG` operator to the start of its
+// terminator line (or the end of the text). A `<<` inside a comment opens nothing.
+function heredocBodies(orig, masked) {
+  const out = []
+  for (const m of masked.matchAll(/<<-?\s*(?:'([^']*)'|"([^"]*)"|([A-Za-z_]\w*))/g)) {
+    if (inComment(masked, m.index)) continue
+    const tag = m[1] ?? m[2] ?? m[3]
+    const nl = orig.indexOf('\n', m.index + m[0].length)
+    if (nl === -1) continue
+    const endRx = new RegExp(`^[ \\t]*${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[ \\t]*$`, 'm')
+    const rel = endRx.exec(orig.slice(nl + 1))
+    out.push({ start: nl + 1, end: rel ? nl + 1 + rel.index : orig.length })
+  }
+  return out
+}
 // The command word of the sub-command that contains offset `at` (basename, prefixes skipped).
 function commandWordAt(masked, at) {
   for (const [a, b] of spans(masked)) {
@@ -784,11 +864,12 @@ function readValues(text, { names, array }) {
   }
   return out
 }
-export function classify(command, depth = 0, vendorHosts = new Set(), vendorDomains = new Set()) {
+// `substituted`: this text is the inside of a $(...) / `...`, whose output the outer line uses.
+export function classify(command, depth = 0, vendorHosts = new Set(), vendorDomains = new Set(), substituted = false) {
   const norm = String(command ?? '').replace(/\\\r?\n/g, ' ')
   const { stripped: orig, inners, herestrings } = liftSubstitutions(norm)
   if (depth < 4) {
-    for (const inner of inners) { const r = classify(inner, depth + 1, vendorHosts, vendorDomains); if (r.deny) return r }
+    for (const inner of inners) { const r = classify(inner, depth + 1, vendorHosts, vendorDomains, true); if (r.deny) return r }
   }
   const masked = maskInertLiterals(orig)
   if (masked === null || masked.length !== orig.length) return { deny: false, reason: 'unparseable', hosts: [] }
@@ -816,7 +897,7 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
     for (const text of [plain, ...(variants ?? [])]) {
       if (shell) {
         if (depth >= 4) break
-        const r = classify(text, depth + 1, vendorHosts, vendorDomains)
+        const r = classify(text, depth + 1, vendorHosts, vendorDomains, substituted)
         if (r.deny) return { ...r, reason: `heredoc-${r.reason}` }
         continue
       }
@@ -827,6 +908,7 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
     }
     if (variants === null) return { deny: true, reason: 'heredoc-loop-unbounded', hosts: [] }
   }
+  const named = bodiesAreText(orig, masked, depth, substituted) ? blankHeredocBodies(orig, masked) : orig
   for (const [a, b] of spans(masked)) {
     const mw = words(masked.slice(a, b))
     const i = commandIndex(mw)
@@ -840,7 +922,7 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
       // The command NAME is read from the ORIGINAL text through shellWords, not from the masked one:
       // masking blanks a quoted "curl", and the shell runs `Curl` (case-insensitive disk,
       // /usr/bin/Curl exists), `\curl`, `"curl"` and `c''url` as curl (didi 19977, marveen 19980).
-      const cmd = commandName(shellWords(orig.slice(a, b)), mw[i])
+      const cmd = commandName(shellWords(named.slice(a, b)), mw[i])
       let target = null
       if (cmd === 'curl') target = 'curl'
       else if (INTERPRETER.test(cmd.toLowerCase()) && hasCodeFlag(cmd, mw.slice(i + 1)) && usesNetwork(cmd, text)) target = 'one-liner'
