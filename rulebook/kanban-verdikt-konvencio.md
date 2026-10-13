@@ -327,6 +327,13 @@ barki megir.
     3. EKEZET-NORMALIZALAS (NFD + a `Mn` kategoria eldobasa) -- lasd lentebb
     4. **PONTOS EGYENLOSEG** a ket tokenre. NEM `in`, NEM `startswith`.
     5. barmi mas = **NEM MERHETO**, ami NEM verdikt es NEM "nincs nyitott tetel": kezzel olvasd el
+    6. **AZ OSSZEGZES ELOTT DONTSD EL, MIT JELENT A NULLA VERDIKT** (didi merte 2026-09-18,
+       kartya `f0568e48`). Pythonban `all([])` == True, tehat az `all(v == 'NINCS NYITOTT TETEL'
+       for v in verdicts)` alak egy olyan kartyat is MIND NINCS-nek olvas, amire SENKI nem nezett ra.
+       Ha ez nem a szandekod, orizd: `if not verdicts: ...` (kulon bucket). Merve a teljes testing
+       oszlopon (56 kartya): orzott alak 7, orizetlen 9, a kulonbseg a 2 nulla-verdiktes kartya.
+       Az 1-5. lepes a KINYERESROL szol, ez az OSSZEGZESROL: a ket ismert parser (dextere, dide)
+       orzott, de a leirasbol egy harmadik implementacio nem kapna figyelmeztetest.
 
 **ES A 4. LEPES ELVAGTA AZOKAT, AKIK A SZABALYT BETARTOTTAK -- EZ A NAP LEGSULYOSABB HIBAJA, ES AZ
 ENYEM** (jarvis merte 13:09-kor, MIELOTT atallt volna ra):

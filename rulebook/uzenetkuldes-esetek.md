@@ -785,3 +785,25 @@ python3 -c "print(len(open(f).read().splitlines()))"
 eltérést ahelyett, hogy kibékítette volna. A TIPPELT oka -- ág kontra szállított fa -- HAMIS volt,
 mindkét mérés az `origin/main`-en futott. **A tipp nem számított; az számított, hogy nem simította
 el.** Ez a lap „gyártott egyetértés" bejegyzésének a pozitív oldala: a nézeteltérés mérőeszköz.)*
+
+## KI VISZI ISTI ELÉ? A DÖNTÉS-KÉRÉS A KOORDINÁTORÉ, AZ ELFOGADOTT MUNKA EREDMÉNYE AZ ÁGENS SAJÁT SZÁLÁÉ
+## (marveen, 2026-09-15; kártya `f39a936e`)
+
+    DÖNTÉS-KÉRÉS (politika, hatókör, pénz, "csináljuk-e?") ...... a KOORDINÁTOR csatornája
+    EGY MÁR JÓVÁHAGYOTT MUNKA EREDMÉNYE abban a szálban,
+    amit Isti KÖZVETLENÜL az ágenssel folytat ................... az ÁGENS saját csatornája
+    a kettő SOHA nem megy ki kétszer
+
+**A PRÓBA, AMI ELDÖNTI:** melyik csatornán tette fel Isti a kérdést, amire ez a válasz? Oda megy. Ha
+nem ő kérdezte, hanem mi visszük elé, az döntés-kérés, és a koordinátoré.
+
+A mért eset: deeper a névjavítás három számát a SAJÁT Telegram-szálán küldte Istinek (2026-09-15
+13:50), abban a beszélgetésben, ahol a köteg-számozás futott. A koordinátor az eszkalációs szabályból
+("Isti elé a koordinátor viszi") azt rendelte, hogy ő viszi; az a szabály a DÖNTÉS-KÉRÉSRE áll, nem
+egy jóváhagyott munka eredményére. Ha ő viszi, a CRM-beszélgetés két chatre szakad, és Isti a
+válaszát a másikba írja.
+
+**És egy második hiba ugyanabból az esetből:** a koordinátor ismételt utasítása elejtette az eredeti
+kikötését, és a címzett joggal a későbbi, teljesebbnek látszó alakot követte. Egy utasítás
+ismétlésekor a kikötés vagy újra elhangzik, vagy kimondottan visszavonódik. A kár nulla volt, mert
+deeper JELEZTE az eltérést: a jelzés védett, nem a szabály.

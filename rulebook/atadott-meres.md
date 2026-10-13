@@ -1287,6 +1287,33 @@ végez műveletet; egy cron-söprésnek értelmetlen. Nem minden tömeges írás
 *(Ez a lap túlnyomórészt hibákból épül, és attól könnyen úgy olvasódik, mintha a kódbázis rossz
 lenne. Nem az: ugyanabban a fában, ugyanazon a napon, ez is benne van.)*
 
+### EGY RELAYELT SZÁM NE LEGYEN IGE, ÉS EGY RELAYELT MECHANIZMUS MONDJA KI, HOGY MEGÁLLAPÍTOTTÁK-E
+### (marveen négy esete 2026-08-28; friday kiegészítése 2026-09-04; kártya `a30c4828`)
+
+A koordinátor átjátszó pont: a relay elkerülhetetlen, és nem az a hiba. A hiba ott keletkezik, ahol
+egy MÁSOK által mért szám mérési lépés nélkül UTASÍTÁSSÁ válik:
+
+    "didi mérte, +2317 -- nézd meg"     ->  a címzett MÉRI, és megfogja
+    "a keret elfogyott, bontsd szét"    ->  a címzett VÉGREHAJTJA
+
+Ugyanaz a szám, ugyanaz a forrás, ugyanaz a küldő. **A MÓDJA dönt.** Két szabály:
+
+    RELAYELT SZÁM ......... a mondat KIMONDVA kérjen MÉRÉSI LÉPÉST vagy VÉGREHAJTÁST. Egy szám
+                            ige nélkül végrehajtásnak olvasódik.
+    RELAYELT MECHANIZMUS .. mondja ki, MEGÁLLAPÍTOTTÁK-E, hogy erre az esetre áll: "ilyen ALAKÚ
+                            csapda létezik; NEM állapítottam meg, hogy a tied az." A "forrás: X"
+                            címke és a "hipotézis" szó önmagában kevés: friday kiírta, és a
+                            magyarázat majdnem így is landolt, mert HIHETŐ ÉS HÍZELGŐ volt. Egy
+                            hihető ok leállítja a keresést, akkor is, ha általában igaz.
+
+Kívülről ellenőrizhető, nem a figyelmen áll: bármely kiadott utasításra megkérdezhető, hogy mérési
+lépést kér-e vagy végrehajtást, és a válasz a mondat alakjából látszik, nem a szándékból. Saját
+kézből mért számnál a felszólító mód helyes; a kikötés CSAK a relayelt számra áll.
+
+A négy mért esetet (`b484cab5`, `60060415`, `8cbb7ce6`, `38221eef`) mind a CÍMZETT fogta meg, egyiket
+sem a relayelő: a mechanizmus ezért működik akkor is, ha a relayelő nem veszi észre. A négy alsó
+korlát: a végrehajtott és fel nem tűnt eset definíció szerint nincs a listán.
+
 ---
 
 # A `date` ÉS A MÉRT SZÁM LEÍRÁSA -- a teljes mért történet
