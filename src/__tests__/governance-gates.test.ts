@@ -1,9 +1,9 @@
-import { describe, it, expect, afterAll } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 // @ts-expect-error -- plain .mjs hook script, no types
-import { gateDecision as selfPaceDecision, stripDataPayloads, stripGitCommitMessages, stripHeredocBodies, stripProseArguments, REASON_HINT } from '../../scripts/self-pace-gate.mjs'
+import { gateDecision as selfPaceDecision, stripDataPayloads, stripGitCommitMessages, stripProseArguments, REASON_HINT } from '../../scripts/self-pace-gate.mjs'
 // @ts-expect-error -- plain .mjs hook script, no types
 import { bashViolation, isExactInstall } from '../../scripts/readonly-repo-gate.mjs'
 import {
@@ -14,10 +14,13 @@ import {
   TELEGRAM_COPY_GATE_MATCHER,
 } from '../web/agent-scaffold.js'
 import { MAIN_AGENT_ID } from '../config.js'
-import { homedir, tmpdir } from 'node:os'
-import { mkdtempSync, mkdirSync, symlinkSync, rmSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { mkdirSync, symlinkSync, rmSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 const PANE_WRITE = 't' + 'mux send-' + 'keys'
@@ -276,84 +279,10 @@ describe('self-pace-gate gateDecision', () => {
   })
 })
 
-// --- stripDataPayloads: a curl -d/--data body is DATA sent over the wire, never
-// a shell invocation, so a trigger token INSIDE the payload must not false-deny a
-// legit dispatch. Only provably-literal payloads are blanked; a payload that can
-// command-substitute ($(...)/backtick) is kept so a real substitution still trips. ---
-describe('self-pace-gate stripHeredocBodies (quoted vs unquoted marker)', () => {
-  // A heredoc body is data -- unless the shell will expand it. A quoted marker
-  // is literal, an unquoted one is not, and blanking an unquoted body would
-  // hide a live command substitution from the scheduler patterns. Reported on
-  // PR #770; the gate-level assertion for the same hole lives above.
-  const PROSE = 'at the same time we fixed the parser'
-
-  it('blanks a QUOTED heredoc body (the false positive this strip exists for)', () => {
-    const cmd = `git commit -F - <<'EOF'\n${PROSE}\nEOF`
-    expect(stripHeredocBodies(cmd)).not.toContain(PROSE)
-  })
-
-  it('blanks a double-quoted marker too', () => {
-    const cmd = `git commit -F - <<"EOF"\n${PROSE}\nEOF`
-    expect(stripHeredocBodies(cmd)).not.toContain(PROSE)
-  })
-
-  it('blanks an UNQUOTED body that has nothing to expand', () => {
-    const cmd = `git commit -F - <<EOF\n${PROSE}\nEOF`
-    expect(stripHeredocBodies(cmd)).not.toContain(PROSE)
-  })
-
-  it('KEEPS an unquoted body containing $( ) -- the shell would run it', () => {
-    const cmd = 'git commit -m "$(cat <<EOF\nfix\n$(at now)\nEOF\n)"'
-    expect(stripHeredocBodies(cmd)).toContain('$(at now)')
-  })
-
-  it('KEEPS an unquoted body containing a backtick', () => {
-    const cmd = 'git commit -F - <<EOF\nfix `at now`\nEOF'
-    expect(stripHeredocBodies(cmd)).toContain('`at now`')
-  })
-
-  it('still blanks a QUOTED body that merely mentions $( ) as text', () => {
-    // Quoted marker: the shell does not expand, so the text is data even when
-    // it looks like a substitution.
-    const cmd = "git commit -F - <<'EOF'\nwe replaced $(at now) with cron\nEOF"
-    expect(stripHeredocBodies(cmd)).not.toContain('$(at now)')
-  })
-
-  it('the <<- variant follows the same rule', () => {
-    expect(stripHeredocBodies(`git commit -F - <<-'EOF'\n\t${PROSE}\n\tEOF`)).not.toContain(PROSE)
-    expect(stripHeredocBodies('git commit -F - <<-EOF\n\t$(at now)\n\tEOF')).toContain('$(at now)')
-  })
-
-  // PR #770 review (Szotasz): a QUOTED body is literal to the SHELL, but an
-  // interpreter/remote-executor that OWNS the redirect runs it -- blanking would
-  // hide a live scheduler command. Keep the body visible for those owners.
-  const RUNS = 'crontab -r; at now'
-
-  it('KEEPS a quoted heredoc body owned by bash (it executes the body)', () => {
-    expect(stripHeredocBodies(`bash <<'EOF'\n${RUNS}\nEOF`)).toContain(RUNS)
-  })
-
-  it('KEEPS a quoted heredoc body owned by sh / bash -s', () => {
-    expect(stripHeredocBodies(`sh <<"EOF"\n${RUNS}\nEOF`)).toContain(RUNS)
-    expect(stripHeredocBodies(`bash -s <<'EOF'\n${RUNS}\nEOF`)).toContain(RUNS)
-  })
-
-  it('KEEPS a quoted heredoc body owned by ssh / python / docker exec', () => {
-    expect(stripHeredocBodies(`ssh box <<'EOF'\n${RUNS}\nEOF`)).toContain(RUNS)
-    expect(stripHeredocBodies(`python3 - <<'EOF'\n${RUNS}\nEOF`)).toContain(RUNS)
-    expect(stripHeredocBodies(`docker exec c bash <<'EOF'\n${RUNS}\nEOF`)).toContain(RUNS)
-  })
-
-  it('sees through a sudo/env prefix to the interpreter owner', () => {
-    expect(stripHeredocBodies(`sudo bash <<'EOF'\n${RUNS}\nEOF`)).toContain(RUNS)
-  })
-
-  it('still blanks when a non-interpreter (git/tee) owns the redirect', () => {
-    expect(stripHeredocBodies(`git commit -F - <<'EOF'\n${RUNS}\nEOF`)).not.toContain(RUNS)
-    expect(stripHeredocBodies(`tee f <<'EOF'\n${RUNS}\nEOF`)).not.toContain(RUNS)
-  })
-})
-
+// FORK (card 6525aba3): upstream #770 also blanks heredoc bodies here
+// (stripHeredocBodies). Not taken, the fork's decision stands: a
+// `cat > x.sh <<'EOF'` body carrying a pane write must stay visible to the
+// self-pace patterns (pinned in egress-allowlist-selfedit.test.ts).
 describe('self-pace-gate stripProseArguments (scoped to gh/git/glab)', () => {
   // PR #770 review (Szotasz): the prose-flag blanking is for a PR/issue body or
   // release note, so it must be scoped to gh/git/glab. A short flag means
@@ -372,6 +301,10 @@ describe('self-pace-gate stripProseArguments (scoped to gh/git/glab)', () => {
   })
 })
 
+// --- stripDataPayloads: a curl -d/--data body is DATA sent over the wire, never
+// a shell invocation, so a trigger token INSIDE the payload must not false-deny a
+// legit dispatch. Only provably-literal payloads are blanked; a payload that can
+// command-substitute ($(...)/backtick) is kept so a real substitution still trips. ---
 describe('self-pace-gate stripDataPayloads (data-payload false-positive guard)', () => {
   it('blanks a single-quoted -d payload but keeps the flag', () => {
     expect(stripDataPayloads(`curl -d '{"x":"/api/schedules"}' u`)).toBe(`curl -d '' u`)
@@ -1248,13 +1181,12 @@ describe('readonly-repo-gate: artifact exemption per target', () => {
 // `node_modules/@ws/core` pointing back at `packages/core` is SOURCE.
 describe('readonly-repo-gate: the hook end to end', () => {
   const script = join(__dirname, '..', '..', 'scripts', 'readonly-repo-gate.mjs')
-  const root = mkdtempSync(join(tmpdir(), 'rorg-'))
+  const root = mkTmp('rorg-')
   const repo = join(root, 'app')
   mkdirSync(join(repo, 'packages', 'core', 'src'), { recursive: true })
   mkdirSync(join(repo, 'node_modules', '@ws'), { recursive: true })
   mkdirSync(join(repo, 'node_modules', '.cache'), { recursive: true })
   symlinkSync(join(repo, 'packages', 'core'), join(repo, 'node_modules', '@ws', 'core'))
-  afterAll(() => rmSync(root, { recursive: true, force: true }))
 
   const run = (payload: Record<string, unknown>) => {
     const r = spawnSync(process.execPath, [script], {
