@@ -329,6 +329,13 @@ describe('self-pace-gate stripProseArguments (scoped to gh/git/glab)', () => {
     const command = `gh pr create --title "$(date +%F)" --body 'ships Friday (at noon) for review'`
     expect(selfPaceDecision('Bash', { command }).deny).toBe(false)
   })
+
+  it('on the fallback path, git LATER in the segment does not blank another tool\'s argument', () => {
+    // didi's M4: without the ^ anchor in PROSE_TOOL_RX the `~/git` below made
+    // the watch argument prose, and the at-scheduler under it went through.
+    const command = `watch -t '(at now)' ~/git "$(date +%F)"`
+    expect(selfPaceDecision('Bash', { command }).deny).toBe(true)
+  })
 })
 
 // --- stripDataPayloads: a curl -d/--data body is DATA sent over the wire, never
