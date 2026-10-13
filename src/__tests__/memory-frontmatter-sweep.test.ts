@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, symlinkSync, chmodSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, mkdirSync, readFileSync, existsSync, symlinkSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // KAPUEGYUT918 PR2: the at-rest sweep reads every fleet memory file with the
 // shared parser and REPORTS (never repairs). What these tests pin: a symlinked
@@ -27,7 +29,7 @@ function notifier(ok: boolean) {
 }
 
 beforeEach(() => {
-  S = mkdtempSync(join(tmpdir(), 'memfm-sweep-'))
+  S = mkTmp('memfm-sweep-')
   HOME = join(S, 'home')
   MEM = join(HOME, '.claude', 'projects', '-Users-x-ClaudeClaw', 'memory')
   mkdirSync(MEM, { recursive: true })

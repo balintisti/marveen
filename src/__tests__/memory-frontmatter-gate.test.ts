@@ -58,6 +58,13 @@ describe('memory-frontmatter-gate: the measured failure shapes are blocked (exit
     expect(r.code).toBe(2)
     expect(r.stderr).toMatch(/description/)
   })
+  it('an empty or whitespace-only description (present, but recall has nothing to read)', () => {
+    for (const desc of ['""', '"   "']) {
+      const r = run(write(memPath, `---\nname: reference_x\ndescription: ${desc}\nmetadata:\n  type: reference\n---\n\nbody\n`))
+      expect(r.code, desc).toBe(2)
+      expect(r.stderr, desc).toMatch(/nem-ures `description`/)
+    }
+  })
   it('no frontmatter at all', () => {
     expect(run(write(memPath, '# just a body\n')).code).toBe(2)
   })

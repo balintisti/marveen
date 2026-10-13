@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, symlinkSync, rmSync, readdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, mkdirSync, readFileSync, existsSync, symlinkSync, rmSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // KAPUEGYUT918: the Write/Edit gate (memory-frontmatter-gate.py) never sees a
 // memory file written from Bash, and measured 2026-09-29 all 8 recall-blind
@@ -26,7 +28,7 @@ const BROKEN = '---\nname: reference_x\ndescription: Ket route-meresi csapda: a 
 let S: string, CONFIG: string, REPO: string, CWD: string, MEM: string, STATE: string, ERRLOG: string, TRANSCRIPT: string
 
 beforeEach(() => {
-  S = mkdtempSync(join(tmpdir(), 'memfm-bash-'))
+  S = mkTmp('memfm-bash-')
   CONFIG = join(S, 'cfg')
   REPO = join(S, 'repo')
   mkdirSync(join(REPO, '.git'), { recursive: true })
