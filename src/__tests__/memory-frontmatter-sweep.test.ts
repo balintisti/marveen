@@ -23,8 +23,8 @@ let S: string, HOME: string, REPO: string, MEM: string, STATE: string, SENT: str
 function notifier(ok: boolean) {
   MSG = join(S, ok ? 'msg-ok.sh' : 'msg-fail.sh')
   writeFileSync(MSG, ok
-    ? `#!/bin/bash\necho "$1 -> $2" >> "${SENT}"\ncat >> "${SENT}"\necho "---" >> "${SENT}"\necho "OK id=1"\n`
-    : '#!/bin/bash\necho "FAIL http=500"\nexit 1\n')
+    ? `#!/bin/bash\necho "from $1" >> "${SENT}"\ncat >> "${SENT}"\necho "---" >> "${SENT}"\necho "OK id=1"\n`
+    : '#!/bin/bash\necho "NOWHERE: coordinator refused, owner unreachable"\nexit 1\n')
   chmodSync(MSG, 0o755)
 }
 
@@ -45,7 +45,7 @@ beforeEach(() => {
 })
 
 function sweep() {
-  const r = spawnSync('python3', [SWEEP, '--home', HOME, '--repo', REPO, '--state', STATE, '--notify', '--agent-msg', MSG], { encoding: 'utf8', timeout: 15_000 })
+  const r = spawnSync('python3', [SWEEP, '--home', HOME, '--repo', REPO, '--state', STATE, '--notify', '--alert', MSG], { encoding: 'utf8', timeout: 15_000 })
   return { code: r.status, out: r.stdout }
 }
 const sent = () => (existsSync(SENT) ? readFileSync(SENT, 'utf8') : '')
@@ -62,7 +62,7 @@ describe('memory-frontmatter-sweep', () => {
     writeFileSync(join(MEM, 'feedback_b.md'), BROKEN)
     const r = sweep()
     expect(r.code).toBe(1)
-    expect(sent()).toContain('heartbeat -> marveen')
+    expect(sent()).toContain('from heartbeat')
     expect(sent()).toContain('UJ: ')
     expect(sent()).toContain('feedback_b.md')
   })

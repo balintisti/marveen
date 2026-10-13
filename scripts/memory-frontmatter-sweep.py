@@ -72,7 +72,9 @@ def main():
     ap.add_argument('--repo', default=REPO)
     ap.add_argument('--state', default=os.path.join(REPO, 'store', 'memory-frontmatter-sweep.json'))
     ap.add_argument('--notify', action='store_true', help='message Marveen when the broken set changes')
-    ap.add_argument('--agent-msg', default=os.path.join(REPO, 'scripts', 'agent-msg.sh'))
+    # Fork: an alarm goes through alert-coordinator.sh (card 906e9159): the coordinator with --force,
+    # the owner as the fallback, so a saturated queue cannot mute it (alert-coordinator.test.py guard).
+    ap.add_argument('--alert', default=os.path.join(REPO, 'scripts', 'alert-coordinator.sh'))
     a = ap.parse_args()
 
     try:
@@ -106,7 +108,7 @@ def main():
             sorok.append(f'marad: {p}')
         for p in javult:
             sorok.append(f'javult: {p}')
-        r = subprocess.run(['bash', a.agent_msg, 'heartbeat', 'marveen', '-'], input='\n'.join(sorok), text=True, capture_output=True)
+        r = subprocess.run(['bash', a.alert, 'heartbeat'], input='\n'.join(sorok), text=True, capture_output=True)
         if r.returncode != 0 or not r.stdout.startswith('OK'):
             print(f'ERTESITES SIKERTELEN: {r.stdout.strip()[:200]} {r.stderr.strip()[:200]}')
             return 3  # the state is NOT advanced: the next run tries again
