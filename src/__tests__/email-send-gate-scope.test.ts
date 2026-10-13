@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import { execFileSync } from 'node:child_process'
+import { join } from 'node:path'
 // @ts-expect-error -- plain .mjs hook script, no types
 import { gateDecision } from '../../scripts/email-send-gate.mjs'
 
@@ -251,5 +253,38 @@ describe('gateDecision Bash: stacked value flags before the script (card a7ea5b8
     'node --title a --title b scripts/report.js resend-email.service.ts',
   ])('CONTROL, passes: %s', (command) => {
     expect(bash(command).deny).toBe(false)
+  })
+})
+
+// marveen 27615 (card 6525aba3), upstream 63a392c8 NOT taken: upstream made this
+// sub-agent gate pass a read-only Resend query (GET/HEAD, no body), like the main-agent
+// copy gate. The fork keeps the stricter rule on purpose: a sub-agent is denied EVERY
+// Resend curl, reads included. The shared send-invocation-cases.json cannot carry two
+// verdicts, so the ruling is pinned here, ON THE DIVERGENCE: the same inputs must
+// deny here AND pass the sibling. A change aligning EITHER gate to the other goes
+// red here -- that is a decision for the coordinator, not a cleanup.
+describe('gateDecision Bash: a read-only Resend query still denies HERE (marveen 27615, 63a392c8 not taken)', () => {
+  const bash = (command: string) => gateDecision('Bash', { command })
+  const READS = [
+    "curl https://api.resend.com/domains -H 'Authorization: Bearer X'",
+    'curl -X GET https://api.resend.com/emails/abc',
+    'curl -I https://api.resend.com/domains',
+  ]
+  const siblingVerdicts = (cmds: string[]): boolean[] => {
+    const gate = join(__dirname, '..', '..', 'scripts', 'hooks', 'outgoing-copy-gate.py')
+    const out = execFileSync('python3', ['-c', `
+import importlib.util, json, sys
+s = importlib.util.spec_from_file_location('g', sys.argv[1]); g = importlib.util.module_from_spec(s); s.loader.exec_module(g)
+print(json.dumps([g.is_send_invocation(c) for c in json.load(sys.stdin)]))
+`, gate], { encoding: 'utf-8', input: JSON.stringify(cmds) })
+    return JSON.parse(out.trim())
+  }
+  it('denies every read form here, while the main-agent copy gate passes the same commands', () => {
+    for (const c of READS) expect(bash(c).deny, c).toBe(true)
+    expect(siblingVerdicts(READS)).toEqual([false, false, false])
+  })
+  it('CONTROL: the same read shape to a non-Resend host passes here', () => {
+    expect(bash('curl https://api.example.com/domains').deny).toBe(false)
+    expect(bash('curl -I https://example.com/').deny).toBe(false)
   })
 })
