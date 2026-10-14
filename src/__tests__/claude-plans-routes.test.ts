@@ -502,4 +502,22 @@ describe('POST /api/claude-plans/rotate (PR2c)', () => {
     await tryHandleClaudePlans(ctx)
     expect(out.status).toBe(200)
   })
+
+  it('sub-agent path: a token-mode target is 409, nothing written, nothing restarted', async () => {
+    // A sub-agent launch takes a plan only as a configDir; a token-mode plan has
+    // none, so this used to answer ok:true and restart the agent on the same
+    // login, while the field and the state named the new plan.
+    await seedTwoPlans()
+    await tryHandleClaudePlans(fakeCtx('POST', '/api/claude-plans', {
+      id: 'tok', label: 'Token plan', token: 'test-fixture-not-a-real-token-tok', planType: 'personal', channelsAllowed: true,
+    }).ctx)
+    mkdirSync(join(agentsDir, 'devy'), { recursive: true })
+    const { ctx, out } = fakeCtx('POST', '/api/claude-plans/rotate', { agentId: 'devy', targetPlanId: 'tok' })
+    await tryHandleClaudePlans(ctx)
+    expect(out.status).toBe(409)
+    expect(out.body.error).toMatch(/token-mode/)
+    expect(restartAgentProcess).not.toHaveBeenCalled()
+    expect(existsSync(join(agentsDir, 'devy', 'agent-config.json'))).toBe(false)
+    expect(existsSync(CLAUDE_PLANS_STATE_PATH)).toBe(false)
+  })
 })

@@ -2222,9 +2222,16 @@ export async function startAgentProcess(name: string, opts: { fresh?: boolean } 
       // entry removed/renamed). Do NOT silently boot on the host login --
       // surface it. The channelsAllowed enforcement guardrail is a separate
       // gated follow-up; this is just the visibility floor.
+      // A token-mode plan also reads as unresolved here, though it IS in the
+      // registry (assigned before the assign paths refused it): name that case
+      // as what it is, so the fix looked for is clearing the field, not
+      // restoring a registry entry.
+      const planId = readAgentClaudePlan(name)
       logger.warn(
-        { name, plan: readAgentClaudePlan(name) },
-        'claude-plan: configured plan id does not resolve in store/claude-plans.json; falling back to raw config-dir / default login',
+        { name, plan: planId },
+        getClaudePlan(planId)
+          ? 'claude-plan: configured plan is token-mode, which applies to the main agent only; falling back to raw config-dir / default login (clear the agent\'s claudePlan field)'
+          : 'claude-plan: configured plan id does not resolve in store/claude-plans.json; falling back to raw config-dir / default login',
       )
     }
     let claudeConfigDir = planResolution.configDir
