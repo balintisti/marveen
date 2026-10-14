@@ -35,6 +35,7 @@ import {
   FLEET_OAUTH_TOKEN_PATH,
   answerFirstRunGates,
   shSingleQuote,
+  gitIdentityExport,
 } from './agent-process.js'
 import { isRestartInFlight, markRestartStarted, clearRestart } from './restart-inflight.js'
 import { sendSystemDirective } from './system-directive.js'
@@ -979,6 +980,8 @@ export function buildMainSessionRespawnCmd(opts: {
     // CHANSPARE925: no Agent view -- parity with channels.sh (Left backgrounds the
     // session into the daemon, whose --channels copy takes the bot poller).
     '&& export CLAUDE_CODE_DISABLE_AGENT_VIEW=1',
+    // db775775: the main agent's commits carry its own name, parity with channels.sh.
+    `&& ${gitIdentityExport(MAIN_AGENT_ID)}`,
     // macOS main-agent config isolation -- parity with channels.sh CFG_ENV. The
     // token is read at launch via $(cat) so the secret never lands in argv/`ps`.
     // An own-credential dir (explicit or a rotated claude-plans entry) gets NO

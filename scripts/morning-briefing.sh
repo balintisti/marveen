@@ -101,6 +101,11 @@ SENTINEL="MORNING_SENT_OK_$(date +%s)_$$"
 RUN_OUT="$(mktemp)"
 trap 'rm -f "$RUN_OUT"' EXIT
 
+# db775775: anything this run commits carries the main agent's name, not the machine's.
+. "$INSTALL_DIR/scripts/lib/git-identity.sh" 2>/dev/null || git_identity_env() { :; }
+_MAIN_ID="$(grep -E '^MAIN_AGENT_ID=' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2-)"
+eval "$(git_identity_env "${_MAIN_ID:-marveen}") :"
+
 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 $CLAUDE --dangerously-skip-permissions \
   --channels plugin:telegram@claude-plugins-official \
   -p "Reggeli napindító - készítsd el és küld el Telegramra (chat_id: $CHAT_ID).

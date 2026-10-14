@@ -54,6 +54,8 @@ TG_ENV="$TG_CHAN_DIR/.env"
 LOG_TAG="stuck-modal-guard"
 
 . "$(cd "$(dirname "$0")" && pwd)/lib/owner-chat.sh"
+# db775775: the respawned main session commits under its own name, parity with channels.sh.
+. "$(cd "$(dirname "$0")" && pwd)/lib/git-identity.sh" 2>/dev/null || git_identity_env() { :; }
 
 STUCK_SECONDS="${STUCK_MODAL_SECONDS:-120}"   # must stay stuck this long before acting
 # Validate: a non-integer override would make the `-ge` comparison error and
@@ -331,7 +333,7 @@ run_guard() {
     fi
   fi
 
-  local RESPAWN_CMD="export PATH=\"/opt/homebrew/bin:\$HOME/.bun/bin:/home/linuxbrew/.linuxbrew/bin:\$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin\" && export CLAUDE_CODE_DISABLE_AGENT_VIEW=1 && ${CFG_ENV}$CLAUDE_Q --dangerously-skip-permissions ${MODEL_FLAG}--channels $PLUGIN_Q"
+  local RESPAWN_CMD="export PATH=\"/opt/homebrew/bin:\$HOME/.bun/bin:/home/linuxbrew/.linuxbrew/bin:\$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin\" && export CLAUDE_CODE_DISABLE_AGENT_VIEW=1 && ${CFG_ENV}$(git_identity_env "${SESSION%-channels}")$CLAUDE_Q --dangerously-skip-permissions ${MODEL_FLAG}--channels $PLUGIN_Q"
 
   log "stuck modal not cleared by Escape -- respawn-pane $SESSION (respawn #$((count+1)))"
   # G: alert ONLY after the respawn-pane actually succeeds, so a failed respawn

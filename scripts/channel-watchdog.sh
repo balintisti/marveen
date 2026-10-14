@@ -65,6 +65,8 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [$LOG_TAG] $*"; }
 MAIN_AGENT_ID="$(grep -E '^MAIN_AGENT_ID=' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2-)"
 MAIN_AGENT_ID="${MAIN_AGENT_ID:-marveen}"
 MAIN_AGENT_ID="${MAIN_AGENT_ID//[^a-zA-Z0-9_-]/}"
+# db775775: the respawned main session commits under its own name, parity with channels.sh.
+. "$INSTALL_DIR/scripts/lib/git-identity.sh" 2>/dev/null || git_identity_env() { :; }
 SESSION="${MAIN_AGENT_ID}-channels"
 # Same helper channels.sh already uses to provision the main-agent isolated
 # config dir (PLAN.md GAP 1) -- needed below to give a watchdog-triggered
@@ -239,7 +241,7 @@ esac
 MAIN_CHAN_DIR="$INSTALL_DIR/.claude/channels/$CHANNEL_PROVIDER"
 STATE_DIR_ENV=""
 [ -f "$MAIN_CHAN_DIR/.env" ] && STATE_DIR_ENV="export ${STATE_ENV_VAR}='${MAIN_CHAN_DIR}' && "
-RESPAWN_CMD="export PATH=\"/opt/homebrew/bin:\$HOME/.bun/bin:/home/linuxbrew/.linuxbrew/bin:\$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin\" && export CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 && ${STATE_DIR_ENV}${CFG_ENV}$CLAUDE --dangerously-skip-permissions ${MODEL_FLAG}--channels plugin:${CHANNEL_PROVIDER}@claude-plugins-official${EXTRA_CHANNELS}"
+RESPAWN_CMD="export PATH=\"/opt/homebrew/bin:\$HOME/.bun/bin:/home/linuxbrew/.linuxbrew/bin:\$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin\" && export CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 && ${STATE_DIR_ENV}${CFG_ENV}$(git_identity_env "$MAIN_AGENT_ID")$CLAUDE --dangerously-skip-permissions ${MODEL_FLAG}--channels plugin:${CHANNEL_PROVIDER}@claude-plugins-official${EXTRA_CHANNELS}"
 
 reason="keepalive stale ${age}s"
 [ "$STALE" != true ] && reason=""

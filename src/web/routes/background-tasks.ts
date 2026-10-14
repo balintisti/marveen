@@ -10,6 +10,7 @@ import { APP_TZ } from '../../config.js'
 import { logger } from '../../logger.js'
 import { readBody, json } from '../http-helpers.js'
 import type { RouteContext } from './types.js'
+import { gitIdentityExport } from '../git-identity.js'
 
 const TMUX = resolveFromPath('tmux')
 const CLAUDE = resolveFromPath('claude')
@@ -56,6 +57,9 @@ export function spawnBackgroundTask(agentId: string, prompt: string): Background
 
   const shellCmd = [
     `export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin:$PATH"`,
+    // db775775: in the pane command, not execFileSync's env -- a tmux session takes the
+    // server's environment, not the client's.
+    gitIdentityExport(agentId),
     `${CLAUDE} -p "$BG_PROMPT" --output-format text 2>&1`,
   ].join(' && ')
 

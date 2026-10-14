@@ -97,6 +97,7 @@ export function delay(ms: number): Promise<void> {
 }
 
 import { CHANNEL_PLUGIN_IDS } from './plugin-ids.js'
+import { gitIdentityEnv } from './git-identity.js'
 export { CHANNEL_PLUGIN_IDS }
 
 // Pure: compute the enabledPlugins map for a sub-agent so that exactly its own
@@ -1405,28 +1406,9 @@ export function shSingleQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
-/** The git identity a SUB-AGENT session's commits carry (card 49d1d6b6).
- *
- * SCOPE, said plainly (didi 27453): the sessions startAgentProcess launches -- locally and on a
- * remote host. NOT covered: the main agent's own (re)spawn, the worker sessions, and scheduled
- * background tasks; those still commit under whatever the machine's git config says.
- *
- * WHY THE PROCESS AND NOT THE TREE: on 2026-09-24 the shared Delta-CRM `.git/config` held a
- * leftover `jarvis@localhost` identity and 45 commits by several agents carried it. The first
- * remedy considered was a per-worktree identity; measured: 240 linked worktrees, 30 with a name,
- * 0 with an email, ~109 not attributable by path, and new ones created constantly. An identity
- * exported at LAUNCH follows the agent into every tree it touches, old or new, in every repo.
- * Git's precedence makes the environment win over any repo or worktree config (measured in a
- * throwaway repo, both directions).
- *
- * The email is `<agent>@agents.local` (marveen's decision): deliberately not a real mailbox, so
- * an agent commit is never mistaken for the owner's, on GitHub or anywhere else.
- */
-export function gitIdentityEnv(name: string): string {
-  const email = `${name}@agents.local`
-  return `export GIT_AUTHOR_NAME=${shSingleQuote(name)} GIT_AUTHOR_EMAIL=${shSingleQuote(email)}`
-    + ` GIT_COMMITTER_NAME=${shSingleQuote(name)} GIT_COMMITTER_EMAIL=${shSingleQuote(email)} && `
-}
+// Moved to git-identity.ts (a light module, so the worker, task and route launchers can use it
+// without importing this one); re-exported here for the existing callers.
+export { gitIdentityVars, gitIdentityExport, gitIdentityEnv } from './git-identity.js'
 
 /**
  * hu: A modell-azonosító alapján eldönti, melyik providerhez tartozik, és felépíti a shell

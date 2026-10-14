@@ -21,6 +21,7 @@ import { withSessionSendLock } from './session-send-lock.js'
 import { readClaudeCodeOauthJson } from './claude-credentials.js'
 import { detectPaneState } from '../pane-state.js'
 import { notifyChannel } from '../notify.js'
+import { gitIdentityEnv } from './git-identity.js'
 
 // =============================================================================
 // Interactive-tmux agent worker (jun.15 subscription migration).
@@ -619,6 +620,8 @@ function startWorkerSessionFor(ctx: WorkerCtx): void {
     // CHANSPARE925: no Agent view (Left would background the worker into the daemon).
     `export CLAUDE_CODE_DISABLE_AGENT_VIEW=1; ` +
     customEnvPrefix +
+    // db775775: a worker's commits carry its session name (<main>-worker[-fast]), not the machine's.
+    gitIdentityEnv(ctx.session) +
     `cd ${shArg(ctx.home)} && ` +
     `${shArg(claudeLaunchBin)} --dangerously-skip-permissions --model ${shArg(workerModel)}`
   execFileSync(TMUX, ['new-session', '-d', '-s', ctx.session, '-c', ctx.home, 'bash', '-lc', launch], { timeout: 8000 })
