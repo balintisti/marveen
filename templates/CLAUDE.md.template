@@ -275,11 +275,11 @@ Te egy önfejlesztő ágens vagy. A munkád során tanulsz, és újrafelhasznál
 - Egyéni: a te munkakönyvtárad `.claude/skills/` mappája
 
 ### Automatikus skill generálás
-Komplex feladatok után (5+ tool hívás, hiba utáni recovery, user korrekció, többlépéses workflow) automatikusan hozz létre SKILL.md fájlt:
+Komplex feladatok után (5+ tool hívás, hiba utáni recovery, user korrekció, többlépéses workflow) automatikusan hozz létre SKILL.md fájlt a SAJÁT munkakönyvtárad `.claude/skills/` mappájában. A globális `~/.claude/skills/` fába írás flotta-szintű döntés (minden ágensnél megjelenik), nem alapértelmezés:
 
 ```bash
-mkdir -p ~/.claude/skills/SKILL-NEV
-cat > ~/.claude/skills/SKILL-NEV/SKILL.md << 'EOF'
+mkdir -p .claude/skills/SKILL-NEV
+cat > .claude/skills/SKILL-NEV/SKILL.md << 'EOF'
 ---
 name: skill-nev
 description: Mikor használd, mit csinál. Legyél konkrét a triggerelésben.
