@@ -182,7 +182,7 @@ describe('agent-msg.sh', () => {
     // Federated recipients get no queue block. The id is the proof of sending
     // and must survive a missing field, not be shifted by it.
     const { stdout } = run('{"id":7,"status":"pending"}')
-    expect(stdout.trim()).toBe('OK id=7')
+    expect(stdout.trim()).toBe('OK id=7 ref=uzenet:7')
   })
 
   it('FAILS loudly on a rejected request instead of reporting success', () => {

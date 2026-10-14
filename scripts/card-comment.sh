@@ -29,7 +29,8 @@
 # Eredetije: agents/mandark/bin/card-comment.sh (mandark irta, o ajanlotta fel kozosbe).
 set -euo pipefail
 AGENT="${1:?agens nev kell}"; CARD="${2:?kartya id kell}"; SRC="${3:?fajl vagy - kell}"
-TOKEN_FILE=/Users/isti/marveen/store/.dashboard-token
+TOKEN_FILE="${MARVEEN_TOKEN_FILE:-/Users/isti/marveen/store/.dashboard-token}"
+API_BASE="${MARVEEN_API_BASE:-http://localhost:3420}"; API_BASE="${API_BASE%/}"
 [ -r "$TOKEN_FILE" ] || { echo "NEM KULDTEM: nincs token ($TOKEN_FILE)" >&2; exit 1; }
 # A DOKUMENTALT `-` (STDIN) MOD 2026-09-04-IG SZERKEZETILEG LEHETETLEN VOLT, es NEMAN.
 # A python PROGRAM MAGA megy a stdin-en (`python3 - ... <<'PY'`), tehat mire a `sys.stdin.read()`
@@ -53,9 +54,9 @@ if [ "$SRC" = "-" ]; then
 fi
 [ -s "$SRC" ] || { echo "NEM KULDTEM: a komment-torzs URES ($SRC)" >&2; exit 1; }
 STAMP="$(date '+%Y-%m-%d %H:%M:%S %Z')"
-python3 - "$AGENT" "$CARD" "$SRC" "$STAMP" "$TOKEN_FILE" <<'PY'
+python3 - "$AGENT" "$CARD" "$SRC" "$STAMP" "$TOKEN_FILE" "$API_BASE" <<'PY'
 import sys, json, re, urllib.request, urllib.error
-agent, card, src, stamp, tokfile = sys.argv[1:6]
+agent, card, src, stamp, tokfile, api = sys.argv[1:7]
 body = open(src, encoding='utf-8').read()
 # MASODIK, FUGGETLEN KAPU: a hej `-s`-e egy csupa-szokoz fajlra is igazat ad, es egy
 # whitespace-komment ugyanolyan hasznalhatatlan artefaktum egy append-only vegponton.
@@ -63,7 +64,7 @@ if not body.strip():
     print('NEM KULDTEM: a komment-torzs URES vagy csak szokoz'); sys.exit(1)
 body = body.replace('__STAMP__', stamp)
 tok = open(tokfile).read().strip()
-base = 'http://localhost:3420/api/kanban/%s/comments' % card
+base = '%s/api/kanban/%s/comments' % (api, card)
 req = urllib.request.Request(
     base, data=json.dumps({'author': agent, 'content': body}).encode(),
     headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok})
@@ -73,6 +74,10 @@ except urllib.error.HTTPError as e:
     print('NEM KULDTEM: HTTP %d %r' % (e.code, e.read()[:200])); sys.exit(1)
 if r.status != 200:
     print('NEM KULDTEM: HTTP %d' % r.status); sys.exit(1)
+try:
+    posted_id = json.load(r).get('id')
+except Exception:
+    posted_id = None
 # VISSZAOLVASAS. A 200 nem bizonyitek: a komment-vegpont visszhangozza a beküldött
 # card_id-t, tehat a valasz azt adja vissza, amit te kuldtel. A bizonyitek egy MASIK hivas.
 chk = urllib.request.Request(base, headers={'Authorization': 'Bearer ' + tok})
@@ -88,7 +93,16 @@ last = cs[-1]['content'] if cs else ''
 def _canon(t):
     return re.sub(r'#(?:[0-9a-f]{8}|[0-9]+)\b', '#REF', t)
 ok = _canon(last) == _canon(body)
-print('%s kartya=%s komment=%d stamp=%s' % ('OK' if ok else 'GYANUS', card, len(cs), stamp))
+# A KOMMENT-ID ES AZ UZENET-ID UGYANABBAN A SZAMTERBEN EL (kartya ab8b23d0, didi merte 2026-09-19:
+# mindketto AUTOINCREMENT 1-tol, 17 155 utkozo szam). Egy csupasz "17156" a kommentre ES egy
+# masik agens uzenetere is feloldhato, es mindket feloldas HIHETO valaszt ad. Ezert a sor egy
+# MASOLHATO, a teret is hordozo hivatkozast ad: ref=komment:<id>@<kartya>. A `komment=` mezo
+# a kartya kommentjeinek SZAMA (nem id), es valtozatlan marad, mert hivok olvashatjak.
+# Visszaeses a lista utolso elemere CSAK ha a tartalom egyezett: kozben mas is kommentelhetett,
+# es egy hihetonek latszo, de idegen id rosszabb, mint a hianyzo.
+cid = posted_id if posted_id is not None else (cs[-1].get('id') if cs and ok else None)
+ref = ' id=%s ref=komment:%s@%s' % (cid, cid, card) if cid is not None else ''
+print('%s kartya=%s komment=%d%s stamp=%s' % ('OK' if ok else 'GYANUS', card, len(cs), ref, stamp))
 if not ok:
     print('  a visszaolvasott utolso komment NEM egyezik a kuldottel -- nezd meg kezzel')
     print('  (a `#<kartya>` -> `#<sorszam>` csere VARHATO, azt nem jelzi; barmi mas elteres valodi)')
