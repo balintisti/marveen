@@ -95,6 +95,33 @@ describe('secret-gate --outgoing: the text that leaves the machine (1b0faf28)', 
     expect(existsSync(out)).toBe(false)
   })
 
+  it('a line-anchored pattern still fires: the +/-/space prefix is cut before the scan', () => {
+    // didi 2026-10-14 (M3): with the prefix kept, `+[Uzenet ...` never matches the `^\s*\[` anchor.
+    const { root, base } = repoWith({})
+    writeFileSync(join(root, 'notes.md'), `${'['}Uzenet @x-tol] quoted\n`); commitAll(root)
+    const out = join(mkTmp('outgoing-out-'), 'outgoing-anchor.diff')
+    const r = gate(root, ['--outgoing', `${base}...HEAD`, out])
+    expect(r.status).toBe(1)
+    expect(r.out).toMatch(/notes\.md:\d+\s+\[transcript\]/)
+    expect(existsSync(out)).toBe(false)
+  })
+
+  it('a line it does not recognise is scanned whole: a secret-shaped binary file NAME is RED', () => {
+    // didi 2026-10-14 (M2): a binary file has no +++/--- lines, its name rides out only on the
+    // `diff --git` and `Binary files ... differ` lines, which carry no diff prefix.
+    const name = `${'AKIA'}${'ABCDEFGHIJKLMNOP'}.bin`
+    const { root, base } = repoWith({})
+    writeFileSync(join(root, name), Buffer.from([0, 1, 2, 0])); commitAll(root)
+    // CONTROL: the name is only on lines without a +/-/space/@@ prefix.
+    const diff = git(root, ['diff', `${base}...HEAD`]).split('\n')
+    expect(diff.filter((l) => l.includes('AKIA')).every((l) => !/^([-+ ]|@@)/.test(l))).toBe(true)
+    expect(diff.filter((l) => l.includes('AKIA')).length).toBeGreaterThan(0)
+    const out = join(mkTmp('outgoing-out-'), 'outgoing-binname.diff')
+    const r = gate(root, ['--outgoing', `${base}...HEAD`, out])
+    expect(r.status).toBe(1)
+    expect(existsSync(out)).toBe(false)
+  })
+
   it('a path with a space is parsed, not sent unscanned', () => {
     const { root, base } = repoWith({})
     writeFileSync(join(root, 'my file.ts'), `${SECRET_LINE}\n`); commitAll(root)
