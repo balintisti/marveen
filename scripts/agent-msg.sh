@@ -246,8 +246,15 @@ fi
 # lapunk mashol mar rogzit. Ezert CSAK azt nezzuk, amit a szoveg maga KARTYANAK
 # nevez (`card <id>` / `kartya <id>` / `kártya <id>`, backtickkel vagy anelkul).
 #
-# NEM BLOKKOL, FIGYELMEZTET: egy archivalt kartyara valo jogos hivatkozas is
-# feloldhatatlan, es egy fontos uzenetet nem allitunk meg egy labjegyzet miatt.
+# NEM BLOKKOL, FIGYELMEZTET: egy fontos uzenetet nem allitunk meg egy labjegyzet miatt.
+#
+# AZ ARCHIVALT KARTYA NEM HIANYZO KARTYA (kartya 9ec6b45a, dexter + marveen merte 2026-09-19:
+# az elo lista 1050 kartya, az archivalt 1347 -- a vak halmaz NAGYOBB volt a lathatonal).
+# A regi szoveg azt mondta, "ha archivalt kartya, hagyd figyelmen kivul": a TOBBSEGI esetre
+# mentesitett, tehat a figyelmeztetes atsiklasra szoktatott (mandark 2026-09-24-en egy IGAZ,
+# forraskodbol masolt hivatkozasra kapta meg). Ezert amit az elo lista nem ismer, azt egyenkent
+# a `GET /api/kanban/<id>` dontse el: 200 = letezik (archivalt), 404 = tenyleg nincs, minden mas
+# = NEM ELLENORIZTE. Ez a hivas CSAK a ritka agon fut, csak a hianyzo id-kre.
 #
 # ES HA NEM TUD MERNI, AZT KIMONDJA. Egy ellenorzes, ami elerhetetlen API mellett
 # CSENDBEN atenged, megkulonboztethetetlen attol, hogy nincs is -- ez a lap
@@ -337,8 +344,24 @@ print(" ".join(t for t in os.environ["CARDS"].split() if t not in ids))' 2>/dev/
         ;;
     esac
     if [ -n "$_BAD" ]; then
-      _m="NEM FELOLDHATO KARTYA-ID: $_BAD -- a szoveg kartyanak nevezi, de a tablan nincs ilyen. Ha commit-hash, fogalmazd at; ha archivalt kartya, hagyd figyelmen kivul."
-      echo "$_m"; echo "$_m" >&2
+      _MISSING=""; _UNVERIFIED=""
+      for _id in $_BAD; do
+        _code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+                   -H "Authorization: Bearer $(cat "$TOKEN_FILE")" "${API_BASE}/api/kanban/${_id}")"
+        case "$_code" in
+          200) ;;
+          404) _MISSING="${_MISSING:+$_MISSING }$_id" ;;
+          *)   _UNVERIFIED="${_UNVERIFIED:+$_UNVERIFIED }$_id (HTTP ${_code:-000})" ;;
+        esac
+      done
+      if [ -n "$_MISSING" ]; then
+        _m="NEM FELOLDHATO KARTYA-ID: $_MISSING -- a szoveg kartyanak nevezi, de ilyen kartya nincs, archivalt sem (GET /api/kanban/<id> -> 404). Ha commit-hash, fogalmazd at."
+        echo "$_m"; echo "$_m" >&2
+      fi
+      if [ -n "$_UNVERIFIED" ]; then
+        _m="NEM FELOLDHATO KARTYA-ID: az ellenorzes NEM FUTOTT LE ezekre: $_UNVERIFIED -- az elo listan nincsenek, es a kozvetlen lekerdezes sem 200-at, sem 404-et nem adott. Nincsenek igazolva."
+        echo "$_m"; echo "$_m" >&2
+      fi
     fi
   fi
   rm -f "$_KBF" "$_KBE"
