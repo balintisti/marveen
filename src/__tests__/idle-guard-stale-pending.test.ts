@@ -6,6 +6,7 @@
 // pendingStaleMs is stuck, not on its way, for the coordinator only (marveen's scope).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { decideIdleAlert, type IdleAgentInput, type IdleAgentState, type IdleAgentThresholds } from '../idle-agent.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
 const MIN = 60_000
 const T: IdleAgentThresholds = {
@@ -88,6 +89,7 @@ const h = vi.hoisted(() => {
     debug: vi.fn(),
   }
 })
+tmpDirs().adopt(h.tmp)
 
 vi.mock('../config.js', async (orig) => ({
   ...(await orig<typeof import('../config.js')>()),
@@ -104,7 +106,14 @@ vi.mock('../web/agent-config.js', () => ({
   readAgentRemoteHost: () => null,
   readAgentProjects: () => null,
 }))
-vi.mock('../pane-state.js', () => ({ detectPaneState: () => 'idle', busyEvidence: () => 'none' }))
+vi.mock('../pane-state.js', () => ({
+  detectPaneState: () => 'idle',
+  busyEvidence: () => 'none',
+  // The tick path reads these since the rebase onto 67fe1b7fb; without them tick() throws and
+  // the log stays empty, which looks exactly like the finding this spec hunts.
+  detectsUsageLimitReached: () => false,
+  runningBackgroundWork: () => 0,
+}))
 vi.mock('../web/channel-monitor.js', () => ({ sendAlert: (...a: unknown[]) => h.sendAlert(...a) }))
 vi.mock('../db.js', () => ({
   // created_at in epoch SECONDS, like the real table -- a unit slip here is one of the mutants.
