@@ -438,6 +438,8 @@ window._i18n.hu = {
   'agents.settings.plan_unresolved_desc': "⚠️ A(z) '{id}' nincs a registryben (store/claude-plans.json). Launchkor a raw config-dir / host login dönt.",
   'agents.settings.plan_not_found_suffix': ' (nincs a registryben)',
   'agents.settings.plan_no_channels':     ' ⚠️ Channels tiltva ezen a planen',
+  'agents.settings.plan_main_only_suffix': ' (csak fő agens)',
+  'agents.settings.plan_main_only_desc': '⚠️ Token-módú plan: csak a fő agensre hat. Az al-agens a jelenlegi bejelentkezésével indulna; válassz másik plant vagy az alapértelmezettet.',
   'agents.settings.memory_isolation_label':  'Memória-izoláció',
   'agents.settings.memory_isolation_toggle': 'Saját, izolált fájl-memória ennek az ágensnek',
   'agents.settings.memory_isolation_desc':   'Bekapcsolva az ágens a saját, kezdetben üres fájl-memóriájával indul, és nem látja a közös MEMORY.md-t. A megosztott SQLite-emlékek és a CLAUDE.md továbbra is elérnek hozzá. Több-felhasználós telepítésen ajánlott; egy-felhasználós telepítésen hagyd kikapcsolva. A következő újraindításkor lép életbe.',
