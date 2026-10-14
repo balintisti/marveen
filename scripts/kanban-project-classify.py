@@ -44,7 +44,7 @@ nem irt), 2026-08-23:
     in_progress    2 cimkezett:   2 egyezik | 0 ELTER | 0 ketes |  0 azonosito nelkul
 HAROM TEVEDES 125 FUGGETLEN CIMKEN -- es mind a harom UGYANAZ AZ ALAK:
     10eacec6  CRM-mentes offsite masolata   -> bizonyitek: scripts/delta-crm-backup.sh, scripts/r2.py
-    22511ff4  CRM-темaju kartya             -> bizonyitek: scripts/card-comment.sh
+    22511ff4  CRM-temaju kartya             -> bizonyitek: scripts/card-comment.sh
     0b32c5da  CRM-temaju kartya             -> bizonyitek: claude/settings.json
 CRM-TEMAJU KARTYA, AMI MARVEEN-ESZKOZ UTVONALAT IDEZ. Az eszkoz a marveen repoban
 lakik, a TARGYA viszont a CRM. Ez ugyanaz a mondat, mint az 1. kizarasnal, csak
@@ -97,7 +97,7 @@ class Osztalyozo:
         koveetett = {k: _koveetett(v) for k, v in repok.items()}
         kozos_ut = set.intersection(*koveetett.values())
         egyedi = {k: v - kozos_ut for k, v in koveetett.items()}
-        # A dontо kizaras: ha a FAJLNEV mindket munkafaban letezik, nem
+        # A donto kizaras: ha a FAJLNEV mindket munkafaban letezik, nem
         # megkulonbozteto -- fuggetlenul attol, hogy melyik repo koveti.
         lemez = {k: _lemez_fajlnevek(v) for k, v in repok.items()}
         self.mindkettoben = set.intersection(*lemez.values())

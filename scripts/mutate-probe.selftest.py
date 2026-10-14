@@ -71,7 +71,7 @@ RUNNER_SHRINK = (
 RUNNER_NONUMBER = "print('nincs itt semmilyen szam')\n"
 # A VALODI vitest alak: az osszegzo a STDOUT-ra megy, a bukas-banner a STDERR-re,
 # es a banner IS tartalmazza a "Tests" szot. Osszefuzve tehat az UTOLSO "Tests"
-# elofordulas a BANNERBEN van. 2026-08-27-ig a probа ebbol olvasta ki a verdiktet,
+# elofordulas a BANNERBEN van. 2026-08-27-ig a proba ebbol olvasta ki a verdiktet,
 # es HAROM valodi leletet jelentett TULELTNEK -- a megnyugtato irany.
 RUNNER_VITEST_SHAPE = (
     "import sys\n"

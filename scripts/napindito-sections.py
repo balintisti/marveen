@@ -189,7 +189,7 @@ def section_isti(con):
 
     A PREDIKATUM, ES MIERT EZ: sem a statusz, sem a gazda-mezo nem eleg
     onmagaban. A `waiting` BLOKKOLTAT jelent (ma 164 kartya), a gazda-mezo pedig
-    a VEGREHAJTOT nevezi meg -- de a kettо EGYUTT szetvalik, es merve is: 19 elo
+    a VEGREHAJTOT nevezi meg -- de a ketto EGYUTT szetvalik, es merve is: 19 elo
     kartya all Istin, ebbol 14 `waiting`. A maradek ot `done` vagy `planned`,
     tehat nem var valaszra. Ezert `waiting` ES gazda=Isti."""
     rows = con.execute(
@@ -342,7 +342,7 @@ def _seed_drift(root, state_path, write):
 def section_broken(con, hours, tasks_dir=None, root=None, drift_state=None, write_drift=True):
     """3. MI TORT EL AZ EJJEL.
 
-    HAROM FORRAS, es a masodik-harmadik nelkul az elso megtevesztо.
+    HAROM FORRAS, es a masodik-harmadik nelkul az elso megteveszto.
 
     ES A LETILTAS KET POPULACIO, MERVE 2026-09-10: tizennyolc utemezett feladatbol
     KILENC volt letiltva -- de OT 09-06 22:51:40-41-kor (egy flotta-atvitel, es
