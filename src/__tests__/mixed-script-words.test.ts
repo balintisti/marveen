@@ -5,6 +5,8 @@
 // comes back). A word like that cannot be found by grep: whoever searches the source for a
 // message they just read gets ZERO hits and reads it as "the code does not produce this".
 // 2026-10-14 the same scan found 15 such words in 12 files; this test keeps it at zero.
+// The scope is EVERY tracked file except vendor/ (third-party code): a directory list
+// left two of them out (docs/, seed-scheduled-tasks/, trillian's census, comment 34281).
 //
 // Deliberate specimens (homoglyph fixtures, a page quoting the defect) are listed below,
 // keyed by file AND word, and written with \u escapes so this file does not trip itself.
@@ -35,12 +37,14 @@ describe('mixed-script words (card 0d5217f4)', () => {
     expect(mixedScriptWords('hiheto hihet\u043e \u03bb tau \u043a\u0438\u0440\u0438\u043b\u043b')).toEqual(['hihet\u043e'])
   })
 
-  it('no tracked source, script or rulebook file carries one outside the specimen list', () => {
-    const files = execFileSync('git', ['ls-files', '-z', '--', 'src', 'scripts', 'web', 'rulebook', 'update.sh'], {
+  it('no tracked file outside vendor/ carries one outside the specimen list', () => {
+    const files = execFileSync('git', ['ls-files', '-z', '--', '.', ':(exclude)vendor'], {
       cwd: repoRoot,
       encoding: 'utf8',
     }).split('\0').filter(Boolean)
-    expect(files.length).toBeGreaterThan(100) // positive control: the scan saw the tree
+    expect(files.length).toBeGreaterThan(1000) // positive control: the scan saw the whole tree
+    expect(files.some((f) => f.startsWith('docs/'))).toBe(true)
+    expect(files.some((f) => f.startsWith('vendor/'))).toBe(false)
     const found: string[] = []
     const seenSpecimens = new Set<string>()
     for (const f of files) {

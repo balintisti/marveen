@@ -209,7 +209,7 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 ### `scripts/dashboard-user-add.sh`
 
-- MIERT LETEZIK: az `/api/*` MINDEN hivasa hitelesitest kiван (nincs loopback-mentesseg,
+- MIERT LETEZIK: az `/api/*` MINDEN hivasa hitelesitest kivan (nincs loopback-mentesseg,
 
 ### `scripts/decision-index.py`
 
