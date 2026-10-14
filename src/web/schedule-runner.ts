@@ -103,6 +103,7 @@ import { detectsFirstRunGate, detectPaneState, overfullParkedInputTail, type Pan
 import { getInjectedPrompt, matchesInjectedPrompt, type InjectedPromptRecord } from './injected-prompt-registry.js'
 import { withSessionSendLock } from './session-send-lock.js'
 import { startSleepWakeDetector, systemSleptBetween } from './sleep-wake-detector.js'
+import { gitIdentityVars } from './git-identity.js'
 
 // How many bare-Enter attempts the post-send resubmit tries before escalating
 // to a clear + re-inject, and the hard cap after which it gives up.
@@ -1289,7 +1290,8 @@ export function runPreCheck(task: ScheduledTask): { skip: boolean; prefix?: stri
     return { skip: false }
   }
   try {
-    const r = spawnSync('bash', [scriptPath], { timeout: 10_000, encoding: 'utf-8' })
+    // db775775: under the task's agent identity, like the command tasks.
+    const r = spawnSync('bash', [scriptPath], { timeout: 10_000, encoding: 'utf-8', env: { ...process.env, ...gitIdentityVars(task.agent || MAIN_AGENT_ID) } })
     if (r.error) {
       logger.warn({ task: task.name, error: r.error.message }, 'pre-check script spawn error, running LLM anyway')
       return { skip: false }

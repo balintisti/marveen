@@ -157,11 +157,15 @@ export function buildRemoteLaunchCommand(opts: {
   workdir: string
   model: string
   continue: boolean
+  /** Extra `export ... && ` prefix the caller composes -- today the agent's git identity
+   *  (gitIdentityEnv, card 49d1d6b6). Passed in, not rebuilt here, so the local and the remote
+   *  launch share ONE definition of it; jarvis found the remote path missing it. */
+  envPrefix?: string
 }): string {
   const path = 'export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"'
   const cont = opts.continue ? '--continue ' : ''
   // CHANSPARE925: no Agent view on remote agents either (parity with every local launch).
-  return `${path} && export CLAUDE_CODE_DISABLE_AGENT_VIEW=1 && cd ${shQuote(opts.workdir)} && claude ${cont}--dangerously-skip-permissions --model ${shQuote(opts.model)}`
+  return `${path} && export CLAUDE_CODE_DISABLE_AGENT_VIEW=1 && ${opts.envPrefix ?? ''}cd ${shQuote(opts.workdir)} && claude ${cont}--dangerously-skip-permissions --model ${shQuote(opts.model)}`
 }
 
 /**

@@ -3,6 +3,7 @@ import { join } from "node:path"
 import { readFileSync } from "node:fs"
 import { PROJECT_ROOT, STORE_DIR, TELEGRAM_BOT_TOKEN, MAIN_AGENT_ID } from "../config.js"
 import { shQuote } from "./ssh-tmux.js"
+import { gitIdentityVars } from "./git-identity.js"
 import { resolveOwnerChatId } from "../owner-chat.js"
 import { atomicWriteFileSync } from "./atomic-write.js"
 import { logger } from "../logger.js"
@@ -96,11 +97,13 @@ export function evaluateCommandResult(
 //
 // Each direction looked correct in isolation: a scheduler may wait for its
 // task, and a task may talk to the API. The defect only exists in the pair.
-function runCommand(cmd: string, timeoutMs: number): Promise<{ ok: boolean; detail: string }> {
+// db775775: the command runs under its task's agent identity, so a commit it makes is not the
+// machine's (task.agent defaults to the main agent).
+function runCommand(cmd: string, timeoutMs: number, agent: string): Promise<{ ok: boolean; detail: string }> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>
     try {
-      child = spawn("bash", ["-lc", cmd])
+      child = spawn("bash", ["-lc", cmd], { env: { ...process.env, ...gitIdentityVars(agent) } })
     } catch (err) {
       resolve({ ok: false, detail: (err as Error).message })
       return
@@ -166,7 +169,7 @@ export function runCommandTask(task: ScheduledTask, now: number): void {
   }
   const map = load()
   inFlight.add(task.name)
-  void runCommand(resolveCommandPlaceholders(task.command), timeoutMs)
+  void runCommand(resolveCommandPlaceholders(task.command), timeoutMs, task.agent || MAIN_AGENT_ID)
     .then(({ ok, detail }) => finish(task, now, failThreshold, map, ok, detail))
     .catch((err) => finish(task, now, failThreshold, map, false, (err as Error).message))
     .finally(() => inFlight.delete(task.name))

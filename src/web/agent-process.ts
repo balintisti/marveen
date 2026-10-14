@@ -97,6 +97,7 @@ export function delay(ms: number): Promise<void> {
 }
 
 import { CHANNEL_PLUGIN_IDS } from './plugin-ids.js'
+import { gitIdentityEnv } from './git-identity.js'
 export { CHANNEL_PLUGIN_IDS }
 
 // Pure: compute the enabledPlugins map for a sub-agent so that exactly its own
@@ -1405,6 +1406,10 @@ export function shSingleQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
+// Moved to git-identity.ts (a light module, so the worker, task and route launchers can use it
+// without importing this one); re-exported here for the existing callers.
+export { gitIdentityVars, gitIdentityExport, gitIdentityEnv } from './git-identity.js'
+
 /**
  * hu: A modell-azonosító alapján eldönti, melyik providerhez tartozik, és felépíti a shell
  * export-láncot, ami a Claude Code CLI-t az adott provider Anthropic-kompatibilis végpontjára
@@ -1751,7 +1756,9 @@ function startRemoteAgentProcess(
   }
 
   const model = readAgentModel(name)
-  const cmd = buildRemoteLaunchCommand({ workdir, model, continue: hasPriorSession })
+  // 49d1d6b6: the remote launch carries the same git identity as the local one (jarvis found it
+  // missing). No remote agent is configured today (0 of 7 agent-config.json have remoteHost).
+  const cmd = buildRemoteLaunchCommand({ workdir, model, continue: hasPriorSession, envPrefix: gitIdentityEnv(name) })
 
   try {
     runTmux(host, ['new-session', '-d', '-s', session, cmd], { timeout: 10000 })
@@ -2511,7 +2518,7 @@ export async function startAgentProcess(name: string, opts: { fresh?: boolean } 
     // A `${byoUnsetEnv}` a SZERZO tagja (BYO/custom agensnel az orokolt OAuth-tokent le kell
     // venni, kulonben a CLI azt preferalja a sajat kulcs helyett). A bazis azota fuggvennye tette
     // ezt a sort az EPERM-fallback miatt; a tag ugyanabba a poziciba kerult vissza.
-    const buildLaunchCmd = (launchCwd: string) => `${umaskPrefix}export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin:$PATH" && ${unsetTokens} && ${autoUpdaterEnv}${byoUnsetEnv}${promptSuggestionEnv}${mcpEnv}${channelSetup}${apiKeyEnv}${claudeConfigEnv}${oauthTokenEnv}${providerEnv}cd "${launchCwd}" && ${claudeBin()} ${continueFlag}${skipFlag}--model ${shSingleQuote(model)} ${channelFlag}${worksourceFlags}`.trimEnd()
+    const buildLaunchCmd = (launchCwd: string) => `${umaskPrefix}export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin:$PATH" && ${unsetTokens} && ${autoUpdaterEnv}${byoUnsetEnv}${promptSuggestionEnv}${mcpEnv}${channelSetup}${apiKeyEnv}${claudeConfigEnv}${gitIdentityEnv(name)}${oauthTokenEnv}${providerEnv}cd "${launchCwd}" && ${claudeBin()} ${continueFlag}${skipFlag}--model ${shSingleQuote(model)} ${channelFlag}${worksourceFlags}`.trimEnd()
     // The agent's own target: for a per-user agent this is what makes the whole
     // session (and every process inside it) belong to that uid. Passing null here
     // silently started it as the router's user -- measured 2026-08-19: the start
