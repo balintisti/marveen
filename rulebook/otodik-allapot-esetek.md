@@ -116,8 +116,8 @@ nem „még nem ért oda", hanem **már ott van, csak nem lehet visszahozni**. A
 
 **ÉS A KÉRDÉS KÉT LÉPCSŐS, MERT NEM MINDEN FÁRA ÉRVÉNYES:** követi-e a repó, ÉS ha nem, fedi-e egy
 PILLANATFELVÉTEL. A `~/.claude/skills/` fa követetlen, és MÉGIS van diffje és története
-(`/Users/isti/Backups/rulebooks`, **1018 commit**; a `skills-snapshot-on-write.sh` PostToolUse hook
-menti minden Bash-hívás után):
+(`/Users/isti/Backups/rulebooks`, **1018 commit**; a `com.marveen.rulebook-snapshot` launchd-egység
+menti 30 percenként; a `skills-snapshot-on-write.sh` hook 2026-10-14 óta nincs bekötve, e2fb3460):
 
 ```bash
 git -C /Users/isti/Backups/rulebooks show <commit>:store/skills/<skill>/<fajl>   # visszaallitas = MASOLAS

@@ -273,8 +273,8 @@ sort.
 története és bájtra pontos visszaállítása:
 
     /Users/isti/Backups/rulebooks   **1018 commit**, 84 kovetett skill-fajl
-    a `rulebook-snapshot.sh` verziozza oda, es a `skills-snapshot-on-write.sh` PostToolUse hook
-    futtatja MINDEN Bash-hivas utan
+    a `rulebook-snapshot.sh` verziozza oda, a `com.marveen.rulebook-snapshot` launchd 30 percenkent
+    futtatja (a `skills-snapshot-on-write.sh` hook 2026-10-14 ota nincs bekotve, e2fb3460)
     egy mert szerkesztes: `1 file changed, 9 insertions(+)`
     KONTROLL, hogy a differ nem vak: ugyanaz a ket commit a TELJES fan -> 61 fajl / 3715 / 1037
 

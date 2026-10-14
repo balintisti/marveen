@@ -2,6 +2,10 @@
 # install-skills-snapshot-hook.sh -- wire skills-snapshot-on-write.sh into the
 # USER-level Claude Code settings, idempotently.
 #
+# DO NOT RUN THIS TO "FIX DRIFT" (2026-10-14, card e2fb3460): the hook was
+# unwired by decision, see the NOT WIRED note in skills-snapshot-on-write.sh.
+# Running this re-wires a hook that cannot finish inside its own timeout.
+#
 # WHY A SCRIPT AND NOT A VERSIONED settings.json (card de00fd2b, 2026-08-27).
 # ~/.claude/settings.json is in no repository and in no snapshot -- the fourth
 # unversioned-and-live case measured today. The obvious fix, versioning it, was
