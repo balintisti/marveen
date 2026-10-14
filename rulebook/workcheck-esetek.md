@@ -10,6 +10,37 @@ ELOTT futott le.
 
 ---
 
+## HA IDEIGLENESEN ÁLLSZ: `standstill`, LEJÁRATTAL (kártya `00f7455b`, 2026-10-14)
+
+A `{"kind":"none"}` lejárat nélkül némít, és semmi nem állítja vissza (lent: „SOHA NEM ÁLL VISSZA
+MAGÁTÓL"). Aki **van munkája, de most nem nyúlhat hozzá**, az a `kind` MELLÉ ír egy lejáró
+`standstill` mezőt, és a `kind` marad, ami volt:
+
+```json
+{"kind": "assigned_open_cards",
+ "standstill": {"reason": "budget", "until": "2026-10-20T09:00:00+02:00", "card": "<opcionális>"}}
+```
+
+    reason ......... forbidden (tiltás: flotta-leállás, telepítési zár) | budget (keret, ismert újulás)
+                     | waiting (kész, másra vár, ismert időpontig) | background_job (saját futás)
+    until .......... ISO-8601, KÖTELEZŐ időzónával (`+02:00` vagy `Z`); legfeljebb 7 nappal előre
+    pid ............ csak background_job-hoz, opcionális: a tartás a folyamat kilépésekor véget ér
+    card ........... opcionális, a döntés helye
+
+- **Amíg tart:** a tétlen-őr nem ébreszt és nem küld „nincs munkája" jelzést (a döntési napló oka:
+  `standstill`), és az `idle-reporter.py` sem viszi Isti elé leállásként.
+- **Lejárt, vagy a pid-es folyamat véget ért:** rendes ébresztés, és az üzenet MEGNEVEZI a lejárt
+  bejegyzést. Töröld vagy írd át; a régi bejegyzés nem némít, csak minden üzenet alján ott áll.
+- **Hibás** (ismeretlen ok, időzóna nélküli vagy 7 napnál távolabbi `until`, rossz pid): NEM némít,
+  a `kind` érvényes marad, és az üzenet kimondja, mi a hiba. A 7 nap a heti keret-újulás: egy
+  elfelejtett bejegyzés így legfeljebb egy hétig hallgattat, a `none` örökre.
+- **Amit NEM fed:** egy be NEM jelentett, leválasztott háttérfolyamat (pl. `nohup`) felismerését. Ami
+  a pane láblécében látszik (shell, monitor, sub-agent), azt az őr magától is munkának veszi.
+
+A `kind:"none"` marad annak, akinek TÉNYLEG nincs sora ebben a rendszerben (AgroTech-eset).
+
+---
+
 
 ## HA EGY ÁGENS SZÁNDÉKOSAN ÁLL: `workcheck.json` -> `{"kind":"none"}` (marveen döntése, 2026-08-28)
 
@@ -298,6 +329,8 @@ semmit nem változtat.
 **ÉS A `workcheck.json` PRÓZÁJÁT SEMMI NEM OLVASSA.** A `parseWorkCheck` KIZÁRÓLAG a `kind` és a
 `reviewer` mezőt nézi; minden más mező PRÓZA, amit egyetlen kódsor sem olvas. *(Kontroll:
 `kind:"bogus"` -> null, hibás JSON -> null.)*
+*(2026-10-14, kártya `00f7455b`: a parser azóta a `standstill` mezőt is olvassa, lásd a lap elején.
+A többi mező továbbra is próza.)*
 
 > **A próza AUDITÁLHATÓVÁ tesz, nem ÖNJAVÍTÓVÁ.** Egy feltétel mechanizmus nélkül nem feltétel,
 > hanem szándék -- ezért a `none` mellé **KÁRTYA** jár dátum-padlóval, nem csak egy JSON-mező.

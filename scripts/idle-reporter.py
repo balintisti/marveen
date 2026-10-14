@@ -39,8 +39,10 @@ T = 40 perc. Jarvis merte az egesz ejszakai forgalmon: ket ablak lepte at
 nulla riasztast adott volna. Ez a szam egy EJSZAKA forgalmara all; nappal,
 kevesebb agenssel a normal resek hosszabbak lehetnek, ezert env-bol allithato.
 """
+import datetime
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -105,8 +107,49 @@ def roster(fleet_root=None):
     return sorted(names)
 
 
-def is_parked(agent_dir):
-    """Igaz, ha az agens workcheck.json-ja `{"kind": "none"}` -- a gazda dontese szerint parkol.
+# A tetlen-or standstill-szabalyai (src/idle-agent.ts parseStandstill / standstillVerdict,
+# kartya 00f7455b), itt ujra: ez a jelento szandekosan nem fugg a node folyamattol.
+STANDSTILL_REASONS = ("forbidden", "budget", "waiting", "background_job")
+STANDSTILL_MAX_AHEAD_S = 7 * 24 * 3600
+_UNTIL_WITH_OFFSET = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$")
+
+
+def standstill_holds(wc, now):
+    """Igaz, ha a workcheck `standstill` bejegyzese MOST tart (kartya 00f7455b).
+
+    Ugyanaz a harom feltetel, mint a tetlen-ornel: ervenyes ok, idozonas `until` legfeljebb
+    7 napra elore, es ha van `pid`, a folyamat el. Ha az or hallgat egy kimondott, lejaro
+    leallas miatt, ez a jelento se vigye Isti ele LEALLASKENT. Barmi hiba -> False (merjuk).
+    """
+    s = wc.get("standstill") if isinstance(wc, dict) else None
+    if not isinstance(s, dict) or s.get("reason") not in STANDSTILL_REASONS:
+        return False
+    until = s.get("until")
+    if not isinstance(until, str) or not _UNTIL_WITH_OFFSET.match(until):
+        return False
+    try:
+        until_s = datetime.datetime.fromisoformat(until.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return False
+    if not (now < until_s <= now + STANDSTILL_MAX_AHEAD_S):
+        return False
+    pid = s.get("pid")
+    if pid is None:
+        return True
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def is_parked(agent_dir, now=None):
+    """Igaz, ha az agens workcheck.json-ja `{"kind": "none"}` -- a gazda dontese szerint parkol --,
+    vagy egy MOST tarto standstill-t deklaral (kartya 00f7455b, lasd standstill_holds).
 
     MIERT (2026-10-08, Isti 6001): a parkolt agens (jarvis, sirius, zara, deeper) a
     kuszob felett "nema" volt, es a jelentes Istinek LEALLASKENT olvasodott -- holott
@@ -117,7 +160,8 @@ def is_parked(agent_dir):
     """
     try:
         with open(os.path.join(agent_dir, "workcheck.json"), encoding="utf-8") as fh:
-            return json.load(fh).get("kind") == "none"
+            wc = json.load(fh)
+        return wc.get("kind") == "none" or standstill_holds(wc, time.time() if now is None else now)
     except (OSError, ValueError, AttributeError):
         return False
 
