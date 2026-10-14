@@ -526,6 +526,28 @@ describe('countDeclaredWork', () => {
       .toEqual(['g'])
   })
 
+  // trillian's review (34335): the own half must get the SAME reviewers and real-comment map as the
+  // direct call -- dropping either in the recursive call left every test green. Both fixtures are
+  // didi's own testing card that the testing half excludes (she spoke at 100, no change since).
+  it('b8674845: the own half reads reviewers and the real-comment map, exactly like assigned_open_cards', () => {
+    const own = [card('r', 'testing', 'didi', { updatedAt: 100 })]
+    const reviewers = new Set(['mandark'])
+    const ids = (kind: 'testing_without_my_comment' | 'assigned_open_cards', cm: Map<string, Map<string, number>>,
+      rv?: Set<string>, real?: Map<string, Map<string, number>>) =>
+      selectDeclaredWork({ kind }, 'didi', own, cm, 'marveen', undefined, rv, real).map((c) => c.id)
+    // (1) a NON-reviewer spoke last: no unanswered finding while the reviewer set is known
+    const jarvisLast = commentsAt([['r', 'didi', 100], ['r', 'jarvis', 150]])
+    expect(ids('testing_without_my_comment', jarvisLast, reviewers)).toEqual([])
+    // CONTROL: the fixture discriminates -- without the reviewer set the same card counts
+    expect(ids('assigned_open_cards', jarvisLast)).toEqual(['r'])
+    // (2) a reviewer's CENSUS comment is last; the real-comment map has only didi's own word
+    const censusLast = commentsAt([['r', 'didi', 100], ['r', 'mandark', 150]])
+    const realOnly = commentsAt([['r', 'didi', 100]])
+    expect(ids('testing_without_my_comment', censusLast, reviewers, realOnly)).toEqual([])
+    // CONTROL: without the real-comment map the census comment reads as a finding
+    expect(ids('assigned_open_cards', censusLast, reviewers)).toEqual(['r'])
+  })
+
   // The defect Didi measured: asking "did I ever comment" retires a card permanently,
   // so the guard falls silent exactly when the reviewer has caught up. On the live board
   // that was 28 cards with activity after her comment.
