@@ -168,7 +168,20 @@ if [ "$GATE_HITS" -eq 0 ]; then
     echo "  $CONN_ERR" >&2
     exit 3
   fi
-  echo "NEM MERTEM: a NYITO kapu sem tuzelt -- a kapcsolat NEM csak-olvaso. Semmit nem fogadok el belole." >&2
+  # VOLT kapcsolat, a kapu megsem tuzelt: ez is ketfele (kartya 06d512fc, didi 2026-09-11 eles CRM-en).
+  # Ha a kapu-UPDATE LEFUTOTT (`UPDATE 0`), a kapcsolat valoban nem csak-olvaso. Ha viszont HIBARA
+  # futott (nem letezo --gate-table/--gate-column, jogosultsag), akkor a csak-olvasosagrol a kimenet
+  # semmit nem mond, es a regi mondat az env fele kuldte az olvasot a kapu-cel javitasa helyett.
+  # Ha egyik jel sincs, azt mondjuk ki, hogy nem tudjuk. A kilepesi kod mindharom esetben 3.
+  if grep -q -E '^UPDATE [0-9]+$' "$OUT"; then
+    echo "NEM MERTEM: a NYITO kapu sem tuzelt -- a kapcsolat NEM csak-olvaso. Semmit nem fogadok el belole." >&2
+  elif GATE_ERR="$(grep -m1 'ERROR:' "$OUT")"; then
+    echo "NEM MERTEM: a NYITO kapu HIBARA futott, nem a csak-olvaso tiltasra -- a kapcsolat csak-olvasosaga ebbol NEM derul ki. Semmit nem fogadok el belole." >&2
+    echo "  $GATE_ERR" >&2
+    echo "  Gyakori ok: nem letezo kapu-tabla/-oszlop (--gate-table / --gate-column) vagy jogosultsag." >&2
+  else
+    echo "NEM MERTEM: a NYITO kapu nem tuzelt, es a kimenetben se kapcsolat-hiba, se UPDATE, se ERROR nincs -- az ok nem allapithato meg (a nyers kimenet fentebb). Semmit nem fogadok el belole." >&2
+  fi
   exit 3
 fi
 
