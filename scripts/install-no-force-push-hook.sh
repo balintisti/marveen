@@ -58,7 +58,11 @@ if [ -f "$DISPATCH" ] && ! grep -qF "$DISPATCH_MARK" "$DISPATCH" 2>/dev/null; th
   echo "  (preserved a pre-existing pre-push hook as pre-push.d/00-preexisting-local)"
 fi
 
-if [ ! -f "$DISPATCH" ]; then
+# REWRITTEN ON EVERY RUN (card 0ad477ef): the dispatcher used to be written only
+# when absent, so a body fix never reached an existing install. Here $DISPATCH is
+# either absent or carries OUR marker -- a foreign file was moved into the chain
+# above -- so overwriting it cannot destroy anything that is not ours.
+{
   cat > "$DISPATCH" <<'EOF'
 #!/usr/bin/env bash
 # marveen-pre-push-dispatcher : run every executable in pre-push.d/, passing the ref list to each.
@@ -67,14 +71,23 @@ HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 payload="$(cat)"
 status=0
 for h in "$HOOK_DIR"/pre-push.d/*; do
-  [ -x "$h" ] || continue
+  # Empty dir: the glob stays literal, nothing to run. Subdirectories are
+  # skipped on purpose. A non-executable entry FAILS the hook instead of being
+  # skipped silently (card 0ad477ef); the other entries still run and report.
+  [ -e "$h" ] || [ -L "$h" ] || continue
+  [ -d "$h" ] && continue
+  if [ ! -x "$h" ]; then
+    echo "pre-push: $h is not executable, so it would have been skipped silently -- refusing. Fix: chmod +x '$h', or move it out of pre-push.d/." >&2
+    status=1
+    continue
+  fi
   printf '%s\n' "$payload" | "$h" "$@" || status=1
 done
 exit $status
 EOF
   chmod +x "$DISPATCH"
   echo "  (installed pre-push dispatcher)"
-fi
+}
 
 cat > "$GUARD" <<'EOF'
 #!/usr/bin/env bash
