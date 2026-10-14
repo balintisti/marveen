@@ -588,6 +588,12 @@ export function initDatabase(dbPathOverride?: string): void {
       updated_at INTEGER NOT NULL
     )
   `)
+  // card e6045a1b: the guard's other suppressors (dedup sets, time gates) as one JSON object, so a
+  // new suppressor field needs no new column. Nullable: a row written before this column reads as
+  // "nothing stored", which is the old behaviour.
+  if (!(db.prepare('PRAGMA table_info(idle_guard_state)').all() as { name: string }[]).some((c) => c.name === 'suppressors_json')) {
+    db.exec('ALTER TABLE idle_guard_state ADD COLUMN suppressors_json TEXT')
+  }
 
   // listKanbanCards()'s auto-archive sweep (below) treats a card's updated_at
   // as "when did this card last change", and archives a done card once that
@@ -6060,7 +6066,43 @@ export function listOtelTraces(limit = 50): OtelTraceSummary[] {
 
 // === The idle guard's per-agent state (card 60060415) ===============================
 
-export interface IdleGuardStateRow {
+/** The suppressors that survive a restart beside the first three columns (card e6045a1b). Every
+ *  one of them can only DELAY or DEDUPE a notice, never cause one, so they are restored whatever
+ *  the row's age -- the same rule as lastAlertAt/lastWakeAt. A restored dedup set expires on its
+ *  own: the decision re-arms it from lastWakeAt / lastNoWorkNoticeAt (`wakeStaleRearmMs`), which
+ *  are restored with it. NOT here, deliberately: subagentsSinceMs, which can only ACCELERATE an
+ *  alert (it starts the sub-agent hold), so a restart restarting the hold is the safe side. */
+export interface IdleGuardSuppressors {
+  lastNoWorkNoticeAt?: number | null
+  lastWakeWorkIds?: readonly string[] | null
+  lastNoWorkNoticeIds?: readonly string[] | null
+  lastSubagentNoticeAt?: number | null
+  lastPaneUnreadableAt?: number | null
+  noWorkLiveSpellSince?: number | null
+}
+const SUPPRESSOR_TIMES = ['lastNoWorkNoticeAt', 'lastSubagentNoticeAt', 'lastPaneUnreadableAt', 'noWorkLiveSpellSince'] as const
+const SUPPRESSOR_SETS = ['lastWakeWorkIds', 'lastNoWorkNoticeIds'] as const
+
+/** Only well-typed fields come back: a malformed value is dropped, never passed on, because a
+ *  suppressor read wrong would silence a notice nobody asked to silence. */
+function parseSuppressors(raw: string | null): IdleGuardSuppressors {
+  if (!raw) return {}
+  let obj: unknown
+  try { obj = JSON.parse(raw) } catch { return {} }
+  if (!obj || typeof obj !== 'object') return {}
+  const o = obj as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const k of SUPPRESSOR_TIMES) {
+    if (o[k] === null || (typeof o[k] === 'number' && Number.isFinite(o[k]))) out[k] = o[k]
+  }
+  for (const k of SUPPRESSOR_SETS) {
+    const v = o[k]
+    if (v === null || (Array.isArray(v) && v.every((x) => typeof x === 'string'))) out[k] = v
+  }
+  return out as IdleGuardSuppressors
+}
+
+export interface IdleGuardStateRow extends IdleGuardSuppressors {
   idleSinceMs: number | null
   lastAlertAt: number | null
   lastWakeAt: number | null
@@ -6081,18 +6123,23 @@ export interface IdleGuardStateRow {
 
 export function saveIdleGuardState(
   agent: string,
-  state: { idleSinceMs: number | null; lastAlertAt: number | null; lastWakeAt: number | null },
+  state: { idleSinceMs: number | null; lastAlertAt: number | null; lastWakeAt: number | null } & IdleGuardSuppressors,
   now: number = Date.now(),
 ): void {
+  const suppressors: Record<string, unknown> = {}
+  for (const k of [...SUPPRESSOR_TIMES, ...SUPPRESSOR_SETS]) {
+    if (state[k] !== undefined) suppressors[k] = state[k]
+  }
   getDb().prepare(
-    `INSERT INTO idle_guard_state (agent, idle_since_ms, last_alert_at, last_wake_at, updated_at)
-     VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO idle_guard_state (agent, idle_since_ms, last_alert_at, last_wake_at, updated_at, suppressors_json)
+     VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(agent) DO UPDATE SET
        idle_since_ms = excluded.idle_since_ms,
        last_alert_at = excluded.last_alert_at,
        last_wake_at  = excluded.last_wake_at,
-       updated_at    = excluded.updated_at`,
-  ).run(agent, state.idleSinceMs, state.lastAlertAt, state.lastWakeAt, now)
+       updated_at    = excluded.updated_at,
+       suppressors_json = excluded.suppressors_json`,
+  ).run(agent, state.idleSinceMs, state.lastAlertAt, state.lastWakeAt, now, JSON.stringify(suppressors))
 }
 
 /**
@@ -6115,12 +6162,14 @@ export function loadIdleGuardState(
   now: number = Date.now(),
 ): IdleGuardStateRow | null {
   const row = getDb().prepare(
-    'SELECT idle_since_ms as idleSinceMs, last_alert_at as lastAlertAt, last_wake_at as lastWakeAt, updated_at as updatedAt FROM idle_guard_state WHERE agent = ?',
-  ).get(agent) as IdleGuardStateRow | undefined
+    'SELECT idle_since_ms as idleSinceMs, last_alert_at as lastAlertAt, last_wake_at as lastWakeAt, updated_at as updatedAt, suppressors_json as suppressorsJson FROM idle_guard_state WHERE agent = ?',
+  ).get(agent) as (Omit<IdleGuardStateRow, 'staleIdleDropped'> & { suppressorsJson: string | null }) | undefined
   if (!row) return null
+  const { suppressorsJson, ...columns } = row
   const stale = now - row.updatedAt > maxIdleAgeMs
   return {
-    ...row,
+    ...parseSuppressors(suppressorsJson),
+    ...columns,
     idleSinceMs: stale ? null : row.idleSinceMs,
     // Only true when something was actually thrown away: a stale row that held
     // no idle span has nothing to report.

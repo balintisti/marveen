@@ -9,7 +9,10 @@
 // watcher folyamatrol. Hogy egy agens mennyi ideje tetlen, az nem szunik meg attol, hogy
 // MI telepitunk." A memoriaban tarolas nem terv volt, hanem a megvalositas mellekhatasa.
 import { describe, it, expect, beforeEach } from 'vitest'
-import { initDatabase, saveIdleGuardState, loadIdleGuardState } from '../db.js'
+import { join } from 'node:path'
+import Database from 'better-sqlite3'
+import { initDatabase, saveIdleGuardState, loadIdleGuardState, getDb } from '../db.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
 const MAX_AGE = 6 * 60_000   // ket tick, ahogy a watcher hasznalja
 
@@ -122,5 +125,73 @@ describe('a watcher tenyleg hasznalja -- bekotes, nem csak a fuggveny letezese',
     expect(loop).toMatch(/discarded as stale/)
     // NEGATIV KONTROLL: a kor-hatart NEM a hivo talalja ki menet kozben.
     expect(loop).not.toMatch(/loadIdleGuardState\(agent, 0/)
+  })
+})
+
+// --- card e6045a1b: the suppressors beyond the first three columns survive a restart ---------
+describe('az elnyomo mezok is tulelik a restartot (e6045a1b)', () => {
+  const now = 1_000_000_000
+  const ALL = {
+    lastNoWorkNoticeAt: now - 5 * 60_000,
+    lastWakeWorkIds: ['aaaaaaaa', 'bbbbbbbb'],
+    lastNoWorkNoticeIds: ['cccccccc'],
+    lastSubagentNoticeAt: now - 7 * 60_000,
+    lastPaneUnreadableAt: now - 9 * 60_000,
+    noWorkLiveSpellSince: now - 60 * 60_000,
+  }
+  const base = { idleSinceMs: now - 60_000, lastAlertAt: null, lastWakeAt: now - 20 * 60_000 }
+
+  it('mind a hat visszajon', () => {
+    saveIdleGuardState('x', { ...base, ...ALL }, now)
+    expect(loadIdleGuardState('x', MAX_AGE, now)).toMatchObject(ALL)
+  })
+
+  it('ELAVULT sorbol is visszajonnek: csak kesleltetnek, mint a lastAlertAt', () => {
+    const stale = now - 60 * 60_000
+    saveIdleGuardState('x', { ...base, ...ALL }, stale)
+    const r = loadIdleGuardState('x', MAX_AGE, now)
+    expect(r?.idleSinceMs).toBeNull()
+    expect(r).toMatchObject(ALL)
+  })
+
+  it('a subagentsSinceMs NEM perzisztal: gyorsitana, nem kesleltetne', () => {
+    saveIdleGuardState('x', { ...base, subagentsSinceMs: now - 3 * 3600_000 } as never, now)
+    expect(loadIdleGuardState('x', MAX_AGE, now)).not.toHaveProperty('subagentsSinceMs')
+  })
+
+  it('az oszlop elotti (NULL) sor a regi viselkedest adja, nem talalgat', () => {
+    saveIdleGuardState('x', base, now)
+    getDb().prepare('UPDATE idle_guard_state SET suppressors_json = NULL').run()
+    const r = loadIdleGuardState('x', MAX_AGE, now)
+    expect(r).not.toHaveProperty('lastWakeWorkIds')
+    expect(r?.lastWakeAt).toBe(base.lastWakeAt)
+  })
+
+  it('hibas JSON es rossz tipusu mezo ELDOBVA, a jok megmaradnak', () => {
+    saveIdleGuardState('x', base, now)
+    getDb().prepare('UPDATE idle_guard_state SET suppressors_json = ?').run('{nem json')
+    expect(loadIdleGuardState('x', MAX_AGE, now)?.lastWakeAt).toBe(base.lastWakeAt)
+    getDb().prepare('UPDATE idle_guard_state SET suppressors_json = ?')
+      .run(JSON.stringify({ lastWakeWorkIds: [1, 2], lastNoWorkNoticeAt: 'tegnap', lastNoWorkNoticeIds: ['ok'] }))
+    const r = loadIdleGuardState('x', MAX_AGE, now)
+    expect(r).not.toHaveProperty('lastWakeWorkIds')
+    expect(r).not.toHaveProperty('lastNoWorkNoticeAt')
+    expect(r?.lastNoWorkNoticeIds).toEqual(['ok'])
+  })
+})
+
+describe('egy REGI tabla (oszlop nelkul) az indulaskor megkapja az oszlopot (e6045a1b)', () => {
+  const mk = tmpDirs()
+  it('a meglevo sor megmarad, es az uj mezok irhatok', () => {
+    const file = join(mk('idle-guard-schema-'), 'old.db')
+    const old = new Database(file)
+    old.exec('CREATE TABLE idle_guard_state (agent TEXT PRIMARY KEY, idle_since_ms INTEGER, last_alert_at INTEGER, last_wake_at INTEGER, updated_at INTEGER NOT NULL)')
+    old.prepare('INSERT INTO idle_guard_state VALUES (?, ?, ?, ?, ?)').run('x', null, 111, 222, 1000)
+    old.close()
+    initDatabase(file)
+    expect(loadIdleGuardState('x', MAX_AGE, 1000)).toMatchObject({ lastAlertAt: 111, lastWakeAt: 222 })
+    saveIdleGuardState('x', { idleSinceMs: null, lastAlertAt: 111, lastWakeAt: 222, lastWakeWorkIds: ['z'] }, 2000)
+    expect(loadIdleGuardState('x', MAX_AGE, 2000)?.lastWakeWorkIds).toEqual(['z'])
+    initDatabase(':memory:')
   })
 })

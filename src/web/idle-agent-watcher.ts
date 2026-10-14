@@ -493,8 +493,9 @@ export function tick(): void {
             `idle guard: ${agent} -> stored idle span discarded as stale, window restarts`,
           )
         }
+        // The suppressors come back too (card e6045a1b); staleIdleDropped and updatedAt are not state.
         state = stored
-          ? { idleSinceMs: stored.idleSinceMs, lastAlertAt: stored.lastAlertAt, lastWakeAt: stored.lastWakeAt }
+          ? (({ staleIdleDropped: _dropped, updatedAt: _written, ...rest }) => rest)(stored)
           : NO_IDLE_STATE
       }
       // One read of this agent's queue per tick, used by the decision AND the log line below.
@@ -703,6 +704,13 @@ export function tick(): void {
           try {
             createAgentMessage('system', MAIN_AGENT_ID, withStandstillNote(buildNoWorkNotice(agent, minutes, Date.now(), noticeKind), stillNote))
             watchState.set(agent, { ...next, noWorkLiveSpellSince: next.idleSinceMs })
+            // Saved again here, not left to the next tick (card e6045a1b): the row above was written
+            // before this stamp existed, so a restart inside the next three minutes would re-send it.
+            try {
+              saveIdleGuardState(agent, { ...next, noWorkLiveSpellSince: next.idleSinceMs }, now)
+            } catch (err) {
+              logger.warn({ err, agent }, 'idle guard: could not persist the live-notice stamp')
+            }
             logger.info(
               { idleGuard: true, agent, idleForMs: decision.idleForMs },
               'idle guard: agent idle with nothing assigned -- told the coordinator (first notice of this idle spell)',
