@@ -408,10 +408,10 @@ export interface GuardInputs {
    *  idle-flush tier thresholds on this rather than on `pct`, so its trigger
    *  does not move when the window denominator is recalibrated. */
   contextTokens: number | null
-  /** How long the session's transcript has been untouched (ms), or null when
-   *  unmeasurable. NOT proof the agent is finished -- a single long tool call
-   *  writes nothing while it runs -- so it is only ever read together with
-   *  paneIdle. See readTranscriptMtimeFromProjectDir. */
+  /** How long the session has run no turn (ms), or null when unmeasurable.
+   *  NOT proof the agent is finished -- a single long tool call writes nothing
+   *  while it runs -- so it is only ever read together with paneIdle. See
+   *  measureIdleMs (context-guard-runner) and readLastTurnActivityMs. */
   idleMs: number | null
   /** The configured daily slot has come round and has not been served yet.
    *  Computed by the runner with dailyHandoffDue(), which needs a local
@@ -561,7 +561,7 @@ export type HandoffStaleness = number | 'unknown' | null
  * How many minutes of work HANDOFF.md fails to cover; null when it is fresh
  * enough or there is no artifact to judge. "Existence is not freshness": the
  * guard's handoff precondition must compare the artifact against the agent's
- * LAST MEANINGFUL OUTPUT (transcript mtime = nowMs - idleMs), not merely
+ * LAST MEANINGFUL OUTPUT (the last turn = nowMs - idleMs), not merely
  * observe that the file appeared after the request -- an agent that writes
  * the handoff and then keeps working (messages keep arriving while the guard
  * waits for an idle pane) satisfies the mtime-advanced check with an
@@ -857,7 +857,7 @@ function decideWedgeTiers(
  *
  * The quiet test is deliberately TWO signals, not one:
  *
- *   idleMs    -- how long the transcript has been untouched. Survives a
+ *   idleMs    -- how long the session has run no turn. Survives a
  *                dashboard restart because the clock lives in the filesystem,
  *                written by the session itself.
  *   paneIdle  -- whether the pane is idle RIGHT NOW. Needed because a single
@@ -865,7 +865,7 @@ function decideWedgeTiers(
  *                runs, so idleMs alone reads a working agent as quiet.
  *
  * paneIdle, not !paneBusy: a pane parked behind an error banner is neither,
- * and flushing one on the strength of a stale mtime would throw away whatever
+ * and flushing one on the strength of a stale transcript would throw away whatever
  * state a human might still recover from it. The saturation net is the
  * mechanism for wedged panes; this tier stays out of that business.
  */

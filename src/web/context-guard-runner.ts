@@ -20,7 +20,7 @@ import { sendSystemDirective } from './system-directive.js'
 import { notifyChannel } from '../notify.js'
 import { detectPaneState, paneShowsContextSaturation, paneShowsContextSaturationHardError } from '../pane-state.js'
 import { usageLimitHolds } from '../usage-limit-window.js'
-import { readContextTokensFromProjectDir, readActiveModelFromProjectDir, readTranscriptMtimeFromProjectDir, predatesSession } from './active-model.js'
+import { readContextTokensFromProjectDir, readActiveModelFromProjectDir, readTranscriptMtimeFromProjectDir, readLastTurnActivityMs, predatesSession } from './active-model.js'
 import { readContextGuardConfig } from './context-guard-store.js'
 import { readAllContextGuardConfigs } from './context-guard-store.js'
 import { makeContextGuardConfigWarner } from './context-guard-config-warning.js'
@@ -300,15 +300,23 @@ export function measureContextTokens(name: string, since?: number): number | nul
 }
 
 /**
- * How long the session's transcript has been untouched (ms), or null when
- * unmeasurable. A negative reading (transcript mtime in the future, e.g. after
- * a clock change) is treated as "just now" rather than as a large idle time --
- * a wrong clock must not be able to trigger a flush.
+ * How long the session has run no turn (ms), or null when unmeasurable.
+ *
+ * Measured from the last TURN line (readLastTurnActivityMs), not the file mtime (card 12aece6a):
+ * a session rename, a local slash command or a bookkeeping record touches the file without a
+ * model call, and measured 2026-09-20 a /name sweep rewrote four agents' ~21 hours of idleness to
+ * 1 minute. The mtime probe stays as the dead-transcript gate (6f362eb3): a file last written
+ * before this session started yields null. The session start is also the floor: a session that
+ * started after its last turn has been idle only since it started. A negative reading (a clock
+ * change) is "just now" -- a wrong clock must not be able to trigger a flush.
  */
 export function measureIdleMs(name: string, nowMs: number, since?: number): number | null {
-  const mtime = readTranscriptMtimeFromProjectDir(workingDirFor(name), configDirFor(name), since)
-  if (mtime === null) return null
-  return Math.max(0, nowMs - mtime)
+  const workingDir = workingDirFor(name)
+  const configDir = configDirFor(name)
+  if (readTranscriptMtimeFromProjectDir(workingDir, configDir, since) === null) return null
+  const turnAt = readLastTurnActivityMs(workingDir, configDir)
+  if (turnAt === null) return null
+  return Math.max(0, nowMs - Math.max(turnAt, since !== undefined ? since * 1000 : 0))
 }
 
 export function measurePct(name: string, cfgLimit: number | null, since?: number): number | null {

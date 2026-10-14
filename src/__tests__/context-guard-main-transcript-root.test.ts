@@ -80,8 +80,8 @@ vi.mock('../web/claude-plans.js', () => ({
 function writeTranscript(dir: string, name: string, tokens: number, ageSeconds: number): void {
   mkdirSync(dir, { recursive: true })
   const file = join(dir, name)
-  writeFileSync(file, JSON.stringify({ message: { usage: { input_tokens: tokens } } }) + '\n')
   const when = new Date(Date.now() - ageSeconds * 1000)
+  writeFileSync(file, JSON.stringify({ type: 'assistant', timestamp: when.toISOString(), message: { usage: { input_tokens: tokens } } }) + '\n')
   utimesSync(file, when, when)
 }
 
