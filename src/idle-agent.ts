@@ -1557,16 +1557,37 @@ export function buildPendingStillWaitingNotice(
 // Generic over the caller's card type: the filter only needs these fields, and
 // forcing WorkCountCard here would strip the id/title/priority the message has
 // to print -- the guard would know WHICH cards and be unable to name them.
-export function orphanPullList<T extends {
+type OwnerlessCandidate = {
   status: string; assignee: string | null
   archived_at?: number | null; due_date?: number | null
-}>(cards: T[], now?: number): T[] {
-  return cards.filter((c) =>
-    !c.archived_at &&
-    (c.assignee ?? '').trim() === '' &&
-    c.status === 'planned' &&
-    !isDeferred(c.due_date, now),
-  )
+}
+
+function isOwnerlessPlanned(c: OwnerlessCandidate): boolean {
+  return !c.archived_at && (c.assignee ?? '').trim() === '' && c.status === 'planned'
+}
+
+export function orphanPullList<T extends OwnerlessCandidate>(cards: T[], now?: number): T[] {
+  return cards.filter((c) => isOwnerlessPlanned(c) && !isDeferred(c.due_date, now))
+}
+
+/** The ownerless cards held back ONLY by a future `due_date` (card a7ded8fb). The pull notice
+ *  prints this count beside its own, because the re-query it hands over does not filter on
+ *  `due_date`: measured 2026-09-20, the notice said 10 and the re-query 13, all three extra cards
+ *  deliberately deferred. One predicate with `orphanPullList`, so the two numbers always split
+ *  the same population. */
+export function deferredOrphanList<T extends OwnerlessCandidate>(cards: T[], now?: number): T[] {
+  return cards.filter((c) => isOwnerlessPlanned(c) && isDeferred(c.due_date, now))
+}
+
+/** Is this pull-list worth WAKING an agent for? (card da11b4a4, decision (d)) A wake costs the
+ *  agent a whole turn, and a `low` card is by definition not worth one: measured 2026-09-05, all
+ *  13 ownerless cards that woke agents were `low`, and computress alone was woken 26 times that
+ *  day for them. The floor gates the WAKE only; once a wake is due, the list it names still
+ *  carries the `low` cards. Accepted cost (computress, comment 12231): a `low` card in an idle
+ *  agent's own lane no longer wakes it. A missing priority counts as `normal`, as in
+ *  `topOfPullList`. */
+export function pullListWakes(cards: readonly { priority?: string | null }[]): boolean {
+  return cards.some((c) => (c.priority ?? 'normal') !== 'low')
 }
 
 /** Highest-priority first, so the message can name ONE card and be right. */
@@ -1681,6 +1702,11 @@ export function buildPullNotice(
    *  An empty list means NO filtering, matching `laneFilteredPullList` exactly: an agent that
    *  declares no lane is filtered by nothing, and that default is deliberate. */
   lanes?: readonly string[] | null,
+  /** How many ownerless cards in the same lanes are held back by a future `due_date`
+   *  (`deferredOrphanList`, card a7ded8fb). With it the notice states both numbers and the
+   *  re-query reproduces their sum; without it the notice cannot say how far the re-query may
+   *  legitimately exceed its count, and says so. */
+  parked?: number,
 ): string {
   const line = (c: { id: string; title?: string | null; priority?: string | null }) =>
     `  ${c.id.slice(0, 8)}  ${(c.priority ?? 'normal').padEnd(6)}  ${(c.title ?? '').slice(0, 60)}`
@@ -1692,14 +1718,22 @@ export function buildPullNotice(
     : ` and (c.get('project') or '') in ('', ${declared.map((l) => `'${l}'`).join(', ')})`
   return [
     `[tetlen-or] A(z) "${agent}" ${minutes} perce ures prompton all, es a NEVEN nincs semmi --`,
-    `de a tablan ${items.length} GAZDATLAN kartya var, amit barki felvehet`,
+    ...(parked === undefined
+      ? [`de a tablan ${items.length} GAZDATLAN kartya var, amit barki felvehet`]
+      : [
+          `de a tablan ${items.length + parked} GAZDATLAN \`planned\` kartya all, ebbol ${parked} jovobeli \`due_date\`-tel`,
+          `padlozva, tehat ${items.length} felveheto most`,
+        ]),
     `(MERVE ${stampOf(nowMs)}-kor):`,
     '',
     ...items.slice(0, 5).map(line),
     '',
     'FOGLALD LE ELOSZOR, aztan merj: `assignee` + `in_progress`. Ket agens 19 masodperc',
     'kulonbseggel vette fel ugyanazt a kartyat azon a napon, amikor ez a szabaly szuletett.',
-    'Ha egyik sem a te savod, sorold at egy soros indoklassal -- az is elvegzett munka.',
+    // NOT "re-route it" (card da11b4a4, computress 12440): the decision was that these cards are
+    // NOT routed, because on another agent's long list they never surface again.
+    'Ha egyik sem a te savod, NE sorold at senkire: egy masik agens hosszu listajan elsullyedne.',
+    'Egy soros komment a kartyan, hogy miert nem a tied, eleg.',
     '',
     // A COUNT DOES NOT DECAY FROM THE CLOCK -- IT DECAYS BECAUSE SOMEONE ELSE ACTED, which is
     // why the stamp above is necessary but NOT sufficient for this line (mandark, marveen, 7edc5839).
@@ -1721,10 +1755,18 @@ export function buildPullNotice(
     // ASYMMETRIC, AND THE SIBLING NOTICE SAYS THE SAME OF ITSELF. The lane filter is in, because
     // it is the term that produced the 24-against-1 gap. The guard's remaining filters are NOT
     // (a future `due_date`, and the `testing` exclusion), so:
-    'Ha ez NAGYOBBAT ad, mint a fenti szam, a lista ELAVULT -- nezd meg ujra.',
+    // The future `due_date` is not in the command either. With `parked` the notice states the
+    // re-query's own population, so "larger = stale" compares like with like (card a7ded8fb:
+    // before, a correct count was routinely called stale). Without it, the rule must not claim
+    // what it cannot know.
+    ...(parked === undefined
+      ? [
+          'Ha ez NAGYOBBAT ad, mint a fenti szam, a kulonbseg jovobeli `due_date`-tel padlozott kartya',
+          'is lehet, amit az or szandekosan nem ajanl fel: ELAVULTNAK csak a padlo nelkuli tobbletet mondd.',
+        ]
+      : [`Ha ez NAGYOBBAT ad, mint a fenti ${items.length + parked}, a lista ELAVULT -- nezd meg ujra.`]),
     'Ha UGYANANNYIT vagy kevesebbet, az meg NEM az en dontesem megismetlese.',
-    `${ASYMMETRY_NOTE} a jovobeli \`due_date\`-et (az orphanPullList szuri), es a`,
-    'munka-szamlalo `testing` al-szurojet, ami a felajanlas ELOFELTETELE volt.',
+    `${ASYMMETRY_NOTE} a munka-szamlalo \`testing\` al-szurojet, ami a felajanlas ELOFELTETELE volt.`,
   ].join('\n')
 }
 

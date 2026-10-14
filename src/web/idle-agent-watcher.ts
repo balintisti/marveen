@@ -18,6 +18,8 @@ import {
   buildNoWorkNotice,
   idleDigestLine,
   orphanPullList,
+  deferredOrphanList,
+  pullListWakes,
   laneFilteredPullList,
   topOfPullList,
   buildPullNotice,
@@ -738,13 +740,18 @@ export function tick(): void {
         // directions -- a timestamp pattern that matched nothing put every line on one side
         // (mine: all "after", a confident 100) or the other (didi's: all "before", a confident
         // 0, agreeing with what we expected, which is the more dangerous half).
+        // THE PRIORITY FLOOR GATES THE WAKE ONLY (card da11b4a4): an all-`low` list falls through
+        // to the 'nothing assigned' path below, exactly as an empty list does.
+        const pullWakes = pullListWakes(pull)
         logger.info(
-          { idleGuard: true, agent, orphanCount: pull.length },
+          { idleGuard: true, agent, orphanCount: pull.length, pullWakes },
           'idle guard: evaluated the ownerless pull-list',
         )
-        if (pull.length > 0) {
+        if (pull.length > 0 && pullWakes) {
           try {
-            createAgentMessage('system', agent, withStandstillNote(buildPullNotice(agent, minutes, pull, Date.now(), readAgentProjects(agent)), stillNote))
+            const lanes = readAgentProjects(agent)
+            const parked = laneFilteredPullList(deferredOrphanList(cards, now), lanes).length
+            createAgentMessage('system', agent, withStandstillNote(buildPullNotice(agent, minutes, pull, Date.now(), lanes, parked), stillNote))
             logger.info(
               { idleGuard: true, agent, orphanCount: pull.length, top: pull[0]?.id },
               'idle guard: agent idle with nothing assigned -- named the ownerless pull-list',
