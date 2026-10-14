@@ -49,7 +49,7 @@ describe('secret-gate --outgoing: the text that leaves the machine (1b0faf28)', 
     const out = join(mkTmp('outgoing-out-'), 'outgoing-red.diff')
     const r = gate(root, ['--outgoing', `${base}...HEAD`, out])
     expect(r.status).toBe(1)
-    expect(r.out).toMatch(/BLOCKED \(1\):\n\s+old\.ts:1\s+\[content\]/)
+    expect(r.out).toMatch(/BLOCKED \(1\):\n\s+old\.ts:7\s+\[content\]/)
     expect(existsSync(out)).toBe(false)
     expect(r.out).not.toContain('ABCDEFGHIJKLMNOP')
   })
@@ -78,12 +78,29 @@ describe('secret-gate --outgoing: the text that leaves the machine (1b0faf28)', 
     expect(sent).toContain('+export const b = 3')
   })
 
+  it('a secret that rides out on a HUNK HEADER is RED, and nothing is written', () => {
+    // didi 2026-10-14: git puts the nearest unindented source line before the hunk into the
+    // `@@ ... @@ <context>` header, from outside the context lines. Key on line 1, edit at line 25.
+    const body = Array.from({ length: 29 }, (_, i) => `  line${i + 2}`)
+    const { root, base } = repoWith({ 'deploy.ts': [SECRET_LINE, ...body, ''].join('\n') })
+    body[23] = '  line25 changed'
+    writeFileSync(join(root, 'deploy.ts'), [SECRET_LINE, ...body, ''].join('\n')); commitAll(root)
+    // CONTROL: the key really is in the sent text, and only on the header, not in a +/-/space line.
+    const diff = git(root, ['diff', `${base}...HEAD`]).split('\n')
+    expect(diff.filter((l) => l.includes('AKIA')).map((l) => l.slice(0, 2))).toEqual(['@@'])
+    const out = join(mkTmp('outgoing-out-'), 'outgoing-header.diff')
+    const r = gate(root, ['--outgoing', `${base}...HEAD`, out])
+    expect(r.status).toBe(1)
+    expect(r.out).toMatch(/BLOCKED \(1\):\n\s+deploy\.ts:\d+\s+\[content\]/)
+    expect(existsSync(out)).toBe(false)
+  })
+
   it('a path with a space is parsed, not sent unscanned', () => {
     const { root, base } = repoWith({})
     writeFileSync(join(root, 'my file.ts'), `${SECRET_LINE}\n`); commitAll(root)
     const r = gate(root, ['--outgoing', `${base}...HEAD`, join(mkTmp('outgoing-out-'), 'sp.diff')])
     expect(r.status).toBe(1)
-    expect(r.out).toContain('my file.ts:1')
+    expect(r.out).toContain('my file.ts:7')
   })
 
   it('without an outfile it refuses (exit 2)', () => {

@@ -284,7 +284,7 @@ function report(result: GateResult, mode: string, entries: Entry[]): void {
  * no blob there. Its content lives only in the diff's `-` lines.
  *
  * So this mode scans what is actually sent: every file in the diff, any status,
- * both sides of every hunk. Files that never belong in an outgoing review
+ * every line of it that is written, hunk headers included. Files that never belong in an outgoing review
  * (dotfiles, history, key material) are dropped from the text by NAME, deletions
  * included, and the names are reported. The filtered diff is written to
  * <outfile> ONLY when the scan passes; on any finding nothing is written.
@@ -315,12 +315,23 @@ function splitDiff(diff: string): OutgoingFile[] {
   });
 }
 
-/** Both sides of every hunk, without the +/-/space prefix, so anchored shapes match. */
-function hunkContent(text: string): string {
-  const lines = text.split('\n');
-  const at = lines.findIndex((l) => l.startsWith('@@'));
-  if (at < 0) return '';
-  return lines.slice(at).filter((l) => /^[-+ ]/.test(l)).map((l) => l.slice(1)).join('\n');
+/**
+ * EVERY line of the chunk that is written, so the scanned text and the sent text
+ * are the same text. Only the diff markup is cut, so anchored shapes match: the
+ * +/-/space prefix, and the `@@ -a,b +c,d @@` ranges of a hunk header.
+ *
+ * didi measured 2026-10-14 (card 1b0faf28): scanning only the +/-/space lines
+ * missed the hunk header, and git puts the nearest function-like source line
+ * before the hunk there -- from OUTSIDE the context lines. A key on line 1 rode
+ * out on the header of an edit at line 25, and the gate said PASS. A line this
+ * function does not recognise is scanned whole, never skipped.
+ */
+function outgoingView(text: string): string {
+  return text.split('\n').map((l) => {
+    const header = /^@@+ [^@]*@@+ ?(.*)$/.exec(l);
+    if (header) return header[1];
+    return /^[-+ ]/.test(l) ? l.slice(1) : l;
+  }).join('\n');
 }
 
 function outgoing(range: string | undefined, outfile: string | undefined): never {
@@ -352,8 +363,8 @@ function outgoing(range: string | undefined, outfile: string | undefined): never
     process.stdout.write(`\nsecret-gate --outgoing: ${files.length} file(s) in the diff, none left to send.\n`);
     process.exit(0);
   }
-  const result = runGate(kept.map((f) => ({ path: f.path, content: hunkContent(f.text) })));
-  report(result, '--outgoing (both sides of the diff)', []);
+  const result = runGate(kept.map((f) => ({ path: f.path, content: outgoingView(f.text) })));
+  report(result, "--outgoing (every line sent; :N counts in that file's diff text, not in the file)", []);
   if (!result.ok) process.exit(1);
   writeFileSync(outfile, kept.map((f) => f.text).join(''));
   process.exit(0);
