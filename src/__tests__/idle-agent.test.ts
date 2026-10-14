@@ -503,7 +503,27 @@ describe('countDeclaredWork', () => {
 
   it('testing_without_my_comment is the reviewer queue, not the testing column', () => {
     // 'f' has no comment at all; 'g' has one from dexter, which is not didi's review.
-    expect(countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', cards, comments)).toBe(2)
+    // Plus 'e', her own planned card: the union with her own queue (card b8674845).
+    expect(countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', cards, comments)).toBe(3)
+  })
+
+  it('b8674845: the review queue is the UNION of the testing queue and the own queue, each card once', () => {
+    const ids = (kind: 'testing_without_my_comment' | 'assigned_open_cards') =>
+      selectDeclaredWork({ kind }, 'didi', cards, comments).map((c) => c.id).sort()
+    expect(ids('testing_without_my_comment')).toEqual(['e', 'f', 'g'])
+    // the own half is exactly assigned_open_cards' answer: 'e' ('f' is her testing card with no reviewer word)
+    expect(ids('assigned_open_cards')).toEqual(['e'])
+    // each card once, even when both halves name it: a reviewer's word on her own testing card
+    const both = commentsAt([['c', 'didi', 150], ['g', 'dexter', 150], ['f', 'mandark', 150]])
+    const ids2 = selectDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', cards, both, undefined, undefined, new Set(['mandark']))
+      .map((c) => c.id)
+    expect(ids2.filter((id) => id === 'f')).toHaveLength(1)
+    expect(selectDeclaredWork({ kind: 'assigned_open_cards' }, 'didi', cards, both, undefined, undefined, new Set(['mandark']))
+      .map((c) => c.id)).toContain('f')
+    // CONTROL: a reviewer with nothing on her name gets the testing queue alone, as before
+    const noOwn = cards.filter((c) => c.assignee !== 'didi')
+    expect(selectDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', noOwn, comments).map((c) => c.id).sort())
+      .toEqual(['g'])
   })
 
   // The defect Didi measured: asking "did I ever comment" retires a card permanently,
