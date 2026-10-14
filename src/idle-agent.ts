@@ -1776,7 +1776,13 @@ export function buildWakeMessage(
           'Nincs A TE NEVEDEN felveheto munka, csak valaszra varo ellenorzes. A GAZDATLAN `planned` kartyak\n' +
             'NEM szerepelnek ebben a szamban -- ha egyik ellenorzes sem a tied, azok a pull-listad. Ha meg azok\n' +
             'sem, ird meg egy sorban --',
-    'akkor a workcheck.json-od hazudik, es azt kell javitani, nem teged ebreszteni.',
+    // The old close said the workcheck.json "lies" and must be fixed (dexter, 2026-09-14,
+    // card 0e36eab0 comment 15838). The only quiet value an agent can write there is
+    // `none`, and `none` silences this guard -- the one thing that gives a parked agent a
+    // new turn. So the old line steered a busy agent towards muting its own wake-up.
+    // The declaration is usually RIGHT when this fires; the answer belongs on the card.
+    'a kartyara vagy marveennek. A workcheck.json-t ezert NE allitsd `none`-ra: az elnemitja ezt az ort,\n' +
+      'es vele az egyetlen ebresztesedet. Szandekos leallast a koordinator allit be, nem a tetlen-or uzenete.',
   )
   return out.join('\n')
 }
