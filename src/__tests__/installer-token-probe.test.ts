@@ -39,7 +39,9 @@ function runProbe(opts: { getMe: string; webhook?: string; updatesStatus?: strin
       [
         '#!/bin/bash',
         opts.curlFails ? 'exit 7' : '',
+        // The token-bearing URL arrives in a -K config (card 9ac56d05), not as the last argument.
         'url="${@: -1}"',
+        'args=("$@"); for i in "${!args[@]}"; do [ "${args[$i]}" = -K ] && url="$(sed -n \'s/^url = "\\(.*\\)"$/\\1/p\' "${args[$((i+1))]}")"; done',
         'case "$url" in',
         `  *getMe*) printf '%s' '${opts.getMe}' ;;`,
         `  *getWebhookInfo*) printf '%s' '${opts.webhook ?? '{"ok":true,"result":{"url":""}}'}' ;;`,

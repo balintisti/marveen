@@ -102,7 +102,10 @@ describe('set-bot-menu.sh: honest outcome', () => {
     writeFileSync(join(stage, 'store', '.dashboard-token'), 'dash-tok\n')
     // Own curl stub: the shared one's `${CURL_STUB_BODY:-{...}}` default
     // appends a stray `}` to any body that is set, which JSON cannot survive.
-    writeFileSync(join(bin, 'curl'), '#!/bin/bash\necho "$@" >> "$CURL_ARGV_LOG"\nprintf %s "$MENU_BODY"\n')
+    writeFileSync(join(bin, 'curl'), '#!/bin/bash\n' +
+      // The URL / auth header now arrive in a -K config (card 9ac56d05): log it on the argv's line.
+      'cfg=""; args=("$@"); for i in "${!args[@]}"; do [ "${args[$i]}" = -K ] && cfg="$cfg $(tr \'\\n\' \' \' < "${args[$((i+1))]}")"; done\n' +
+      'echo "$@$cfg" >> "$CURL_ARGV_LOG"\nprintf %s "$MENU_BODY"\n')
     const r = run('set-bot-menu.sh', {
       MENU_BODY: '{"ok":true,"commands":[{"command":"status","description":"Rendszer-állapot"},{"command":"queue","description":"Sor"}]}',
     }, bin)
