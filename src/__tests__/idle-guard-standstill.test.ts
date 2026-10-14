@@ -125,6 +125,16 @@ describe('the way out: what does NOT silence', () => {
     expect(standstillVerdict(edge, NOW, null).state).toBe('active')
   })
 
+  it('the ceiling is SEVEN days, pinned as a literal (didi 2026-10-14: a test computed from the constant moves with it)', () => {
+    expect(standstillVerdict(check({ reason: 'budget', until: '2026-09-03T12:47:00+02:00' }), NOW, null).state).toBe('invalid')
+    expect(standstillVerdict(check({ reason: 'budget', until: '2026-09-02T12:47:00+02:00' }), NOW, null).state).toBe('active')
+  })
+
+  it('an until equal to now has expired: the stop does not cover its own last minute', () => {
+    const v = standstillVerdict(check({ reason: 'budget', until: '2026-08-26T12:47:00+02:00' }), NOW, null)
+    expect(v).toMatchObject({ state: 'expired', why: 'time' })
+  })
+
   it.each([
     ['unknown reason', { reason: 'vacation', until: '2026-08-26T18:00:00+02:00' }, /ismeretlen reason/],
     ['until without an offset', { reason: 'budget', until: '2026-08-26T18:00:00' }, /idozonas ISO-8601/],
