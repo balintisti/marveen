@@ -2023,7 +2023,43 @@ def main():
     sys.exit(0)
 
 
-if __name__ == "__main__":
+class _StderrTail:
+    """Pass stderr through untouched, and keep a copy for the denial log line."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.parts = []
+
+    def write(self, text):
+        self.parts.append(text)
+        return self.inner.write(text)
+
+    def flush(self):
+        return self.inner.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
+def _log_denial(stop: SystemExit, said: str) -> None:
+    """One gate-log line per DENIAL (card acba3c6f).
+
+    The exit-2 branches told the agent why and logged nothing, so how often the
+    gate blocks, and which rule blocks, could not be measured. Logged HERE, once,
+    rather than at each branch: there are over a dozen exit-2 sites, and a new
+    one would have to remember. The site is the function and line that called
+    sys.exit(2); the reason is the first line the gate wrote, which is its own
+    header ("KIMENO-SZOVEG KAPU (...): TILTVA ..."), not the outgoing text.
+    """
+    tb = stop.__traceback__
+    while tb is not None and tb.tb_next is not None:
+        tb = tb.tb_next
+    site = f"{tb.tb_frame.f_code.co_name}:{tb.tb_lineno}" if tb is not None else "?"
+    first = next((ln.strip() for ln in said.splitlines() if ln.strip()), "(no reason written)")
+    _gate_log(f"outgoing-copy-gate: DENY (exit 2) at {site} -- {first[:160]}")
+
+
+def _run() -> None:
     try:
         main()
     except SystemExit:
@@ -2043,3 +2079,13 @@ if __name__ == "__main__":
             "Tedd vizsgalhatova a hivast, aztan kuldd ujra.\n"
         )
         sys.exit(2)
+
+
+if __name__ == "__main__":
+    sys.stderr = _tail = _StderrTail(sys.stderr)
+    try:
+        _run()
+    except SystemExit as stop:
+        if stop.code == 2:
+            _log_denial(stop, "".join(_tail.parts))
+        raise
