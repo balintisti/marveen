@@ -138,20 +138,20 @@ export interface IdleAgentState {
    */
   lastNoWorkNoticeIds?: readonly string[] | null
   /** When sub-agents were first seen running in the current stretch; null = none seen on the
-   *  last tick. Feeds thresholds.subagentHoldMs. In memory only, like lastNoWorkNoticeAt: a
-   *  restart merely restarts the hold. */
+   *  last tick. Feeds thresholds.subagentHoldMs. In memory only: it can only accelerate an alert,
+   *  so a restart restarting the hold is the safe side (card e6045a1b). */
   subagentsSinceMs?: number | null
   /** When the last notice went out while sub-agent rows were still visible past the hold. Feeds
-   *  thresholds.subagentNoticeWindowMs; reset when a tick sees no sub-agents. In memory only. */
+   *  thresholds.subagentNoticeWindowMs; reset when a tick sees no sub-agents. Persisted (e6045a1b). */
   lastSubagentNoticeAt?: number | null
-  /** When the coordinator was last told this agent's pane is unreadable. Survives everything
-   *  but a restart, for the same reason as above: the worst a restart costs is one repeat. */
+  /** When the coordinator was last told this agent's pane is unreadable. Persisted, so it
+   *  survives a restart too (card e6045a1b). */
   lastPaneUnreadableAt?: number | null
   /** The idle spell (its idleSinceMs) for which the coordinator was last sent a LIVE 'idle, nothing
    *  assigned' message (card 3c27105f). The first notice of a spell stays live, because 53 of 71
    *  such notices were followed by the coordinator handing out work; repeats in the same spell go to
-   *  the digest. Stamped by the watcher only after the message was really enqueued. In memory only:
-   *  a restart costs at most one extra live notice. */
+   *  the digest. Stamped by the watcher only after the message was really enqueued. Persisted
+   *  (card e6045a1b); it only matches while the restored idleSinceMs is the same spell. */
   noWorkLiveSpellSince?: number | null
 }
 
