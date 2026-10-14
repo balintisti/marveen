@@ -8,15 +8,20 @@
 // real installers runs.
 import { describe, it, expect } from 'vitest'
 import { spawnSync, execFileSync } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpDirs } from './helpers/tmp-dirs.js'
 import { delegationTarget } from '../installed-drift.js'
 
 const mkTmp = tmpDirs()
 const REPO = join(__dirname, '..', '..')
-const SAFE = ['install-git-guard-hook.sh', 'install-prod-tree-guard-hook.sh', 'install-secret-gate-hook.sh',
-  'install-no-force-push-hook.sh', 'install-backup-gate-hook.sh']
+// Read from the tool's own SAFE_INSTALLERS, not copied: the tool stops on a listed installer that is
+// missing from the tree, so a copy here went red the day the list grew (install-seed-refresh-hook.sh,
+// card 03126955) -- the same reason installed-drift-classification.test.ts reads it.
+const SAFE_SRC = readFileSync(join(REPO, 'scripts', 'installed-drift-check.ts'), 'utf-8')
+  .match(/const SAFE_INSTALLERS = \[([\s\S]*?)\] as const/)
+if (!SAFE_SRC) throw new Error('SAFE_INSTALLERS not found in installed-drift-check.ts')
+const SAFE = [...SAFE_SRC[1].matchAll(/'([^']+\.sh)'/g)].map((x) => x[1])
 
 function run(sourceRoot: string, args: string[]): { status: number | null; out: string } {
   const r = spawnSync(process.execPath, [join(REPO, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
@@ -27,7 +32,7 @@ function run(sourceRoot: string, args: string[]): { status: number | null; out: 
   return { status: r.status, out: (r.stdout ?? '') + (r.stderr ?? '') }
 }
 
-/** A git repo whose scripts/ holds the five SAFE installers; `bodies` overrides some of them. */
+/** A git repo whose scripts/ holds every SAFE installer; `bodies` overrides some of them. */
 function installTree(bodies: Record<string, string>, installedHooks: Record<string, string> = {}): string {
   const root = mkTmp('drift-src-')
   execFileSync('git', ['init', '-q', root])
