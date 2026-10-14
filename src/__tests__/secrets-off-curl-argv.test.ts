@@ -71,11 +71,29 @@ function headerWords(line: string): string[] {
   return words
 }
 
+const SECRET_HEADER = /(authorization|api-key|token)[^:"']*:/i
+
+/**
+ * Variables a file assigns a secret header to (`AUTH="Authorization: Bearer $(cat f)"`).
+ * `curl -H "$AUTH"` puts that value on the argv just like the literal form, but the
+ * -H word itself shows only `$AUTH` (didi, 9ac56d05 verdict: this mutant stayed green).
+ */
+function secretHeaderVars(lines: string[]): Set<string> {
+  const vars = new Set<string>()
+  for (const line of lines) {
+    const m = /^\s*(?:local\s+|export\s+|readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line)
+    if (m && SECRET_HEADER.test(m[2]) && m[2].includes('$')) vars.add(m[1])
+  }
+  return vars
+}
+
 /** Findings for one logical line: the reason, or null when the line is clean. */
-function leak(line: string): string | null {
+function leak(line: string, secretVars: Set<string> = new Set()): string | null {
   if (line.trim().startsWith('#')) return null
   for (const w of headerWords(line)) {
     if (/(authorization|api-key|token)/i.test(w) && w.includes('$')) return `secret header on argv: ${w}`
+    const v = /^"?\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"?$/.exec(w)
+    if (v && secretVars.has(v[1])) return `secret header on argv via $${v[1]}: ${w}`
   }
   if (/api\.telegram\.org\/bot\$/.test(line) && !line.includes('printf')) return 'bot token in a URL on argv'
   return null
@@ -90,6 +108,7 @@ describe('shell scripts keep secrets off the curl argv', () => {
       `curl -s -H 'Authorization: Bearer '"$T" http://x`,
       'curl -s "https://api.telegram.org/bot${TOKEN}/getMe"',
       'curl -s https://api.telegram.org/bot$TOKEN/getMe',
+      'curl -s -H "X-Auth: $TOKEN" http://x',
     ]
     const good = [
       `curl -s -K <(printf 'header = "Authorization: Bearer %s"\\n' "$T") http://x`,
@@ -101,14 +120,29 @@ describe('shell scripts keep secrets off the curl argv', () => {
     for (const l of good) expect(leak(l), l).toBeNull()
   })
 
+  it('the detector follows a secret header through a variable, and only a secret one', () => {
+    const vars = secretHeaderVars([
+      'AUTH_HDR="Authorization: Bearer $(cat "$F")"',
+      '  local KEY_HDR="x-goog-api-key: ${K}"',
+      'CT="Content-Type: application/json"',
+      'TOKEN_FILE="$HOME/.token"',
+    ])
+    expect([...vars].sort()).toEqual(['AUTH_HDR', 'KEY_HDR'])
+    expect(leak('curl -s -H "$AUTH_HDR" http://x', vars)).not.toBeNull()
+    expect(leak('curl -s --header "${KEY_HDR}" http://x', vars)).not.toBeNull()
+    expect(leak('curl -s -H "$CT" http://x', vars)).toBeNull()
+  })
+
   it('no tracked script puts a secret on a curl command line', () => {
     const files = shellFiles()
     expect(files.length).toBeGreaterThan(80) // population guard: the walk really found the scripts
     const hits: string[] = []
     for (const f of files) {
       if (ALLOWED[f]) continue
-      for (const { n, text } of logicalLines(readFileSync(join(ROOT, f), 'utf-8'))) {
-        const why = leak(text)
+      const lines = logicalLines(readFileSync(join(ROOT, f), 'utf-8'))
+      const vars = secretHeaderVars(lines.map((l) => l.text))
+      for (const { n, text } of lines) {
+        const why = leak(text, vars)
         if (why) hits.push(`${f}:${n}  ${why}`)
       }
     }
