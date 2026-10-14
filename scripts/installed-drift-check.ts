@@ -86,6 +86,7 @@ const SAFE_INSTALLERS = [
   'install-secret-gate-hook.sh',
   'install-no-force-push-hook.sh',
   'install-backup-gate-hook.sh',
+  'install-seed-refresh-hook.sh',   // writes only .git/hooks/post-merge; the HOOK later writes ~/.claude seeds, the installer does not (card 03126955)
 ] as const;
 
 /** Known to write outside the repo. Listed rather than merely omitted so that a

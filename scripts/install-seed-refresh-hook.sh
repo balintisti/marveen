@@ -12,7 +12,10 @@
 # A post-merge hook that is not ours is left alone, and this says so (exit 1).
 set -u
 
-HOOK_DIR="$(cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd)/hooks"
+# The repo is the one this script lives in, not the caller's cwd: installed-drift-check.ts runs SAFE
+# installers from cwd=/ inside a throwaway repo, and sync-hooks.sh does not pin a cwd either.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HOOK_DIR="$(cd "$REPO" && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd)/hooks"
 [ -d "$HOOK_DIR" ] || { echo "  ⚠ install-seed-refresh-hook.sh: no git hooks dir here, nothing installed" >&2; exit 1; }
 HOOK="$HOOK_DIR/post-merge"
 MARK="marveen-seed-refresh"

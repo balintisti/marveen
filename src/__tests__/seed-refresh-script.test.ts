@@ -31,6 +31,7 @@ function makeFixture(env = 'MAIN_AGENT_ID=marveen\nBOT_NAME=Marveen\nOWNER_NAME=
   mkdirSync(join(install, 'store'), { recursive: true })
   copyFileSync(join(ROOT, 'update.sh'), join(install, 'update.sh'))
   copyFileSync(SCRIPT, join(install, 'scripts', 'seed-refresh.sh'))
+  copyFileSync(INSTALLER, join(install, 'scripts', 'install-seed-refresh-hook.sh'))
   writeFileSync(join(install, '.env'), env)
   writeFileSync(join(install, '.gitignore'), 'store/\n.env\n')
   git(install, ['init', '-q', '-b', 'main'])
@@ -104,8 +105,11 @@ describe('seed-refresh.sh', () => {
 })
 
 describe('install-seed-refresh-hook.sh', () => {
+  // ALWAYS the fixture's copy: the installer targets the repo it LIVES in, so running the real one
+  // would write into this checkout's shared .git/hooks -- on the reference host, the live install's.
+  // cwd=/ is how installed-drift-check.ts runs it.
   function installHook(dir: string) {
-    return spawnSync('bash', [INSTALLER], { cwd: dir, encoding: 'utf-8' })
+    return spawnSync('bash', [join(dir, 'scripts', 'install-seed-refresh-hook.sh')], { cwd: '/', encoding: 'utf-8' })
   }
 
   it('a merge in the MAIN checkout refreshes the untouched copy; a merge in a worktree does not', () => {
