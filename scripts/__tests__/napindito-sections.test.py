@@ -119,6 +119,19 @@ try:
     ns._assert_units(con_for(db)); print("ok   4 KONTROLL: a HELYES egyseget atengedi")
 except RuntimeError as e:
     failed.append("4 kontroll"); print(f"FAIL 4 KONTROLL: a helyes egyseget is elutasitja: {e}")
+# 4b. JOVOBELI ERTEK (kartya d4ebeaf8): a futas kozben irt sor par ms-mal a now UTAN lehet
+# (10-03 07:04: "-0 napos -- gyanus", mind a harom szekcio kimaradt). 1 mp jovo: atmegy.
+try:
+    ns._assert_units(con_for(make_db(runs=[("napindito", "friday", (NOW + 1) * 1000, "ok")])))
+    print("ok   4b: az 1 mp-cel jovobeli task_runs.ts-t atengedi")
+except RuntimeError as e:
+    failed.append("4b"); print(f"FAIL 4b: az 1 mp-cel jovobeli erteket is elutasitja: {e}")
+# KONTROLL: 1 ora jovo ora-csuszas vagy egysegtevedes, az tovabbra is megall, es NEVEZI a jovot
+try:
+    ns._assert_units(con_for(make_db(runs=[("napindito", "friday", (NOW + 3600) * 1000, "ok")])))
+    check("4b KONTROLL: az 1 oras jovo megallitja", "nem allt meg", "megall")
+except RuntimeError as e:
+    check_true("4b KONTROLL: az 1 oras jovo megall, es a JOVOT nevezi", "JOVOBEN" in str(e))
 
 
 # --- 5. SABLON-ELCSUSZAS: HIR KONTRA ALLANDO (kartya a22c9fe8) --------------
