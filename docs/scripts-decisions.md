@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **436** kovetett fajl, ebbol
-**129** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **441** kovetett fajl, ebbol
+**131** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -252,6 +252,11 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - WHY A FAILED PROBE IS NOT 'NO EXPIRY'. A command that errors, returns non-JSON, or
 - WHY THE SUMMARY CANNOT SAY 'ALL CLEAR' WHILE ANYTHING IS UNMEASURED. A checker whose
 - WHY --quiet-unless-changed EXISTS, AND WHY THE SILENCE HAS A CEILING. Run daily,
+
+### `scripts/fd-table-guard.py`
+
+- WHY. 2026-10-14 18:26 CEST: kern.num_files 184105 of kern.maxfiles 184320 (99.88%). Every new
+- WHY IT NEVER KILLS. The holder is often a live service (ollama serves the memory embeddings), and
 
 ### `scripts/fetch-budget.py`
 
@@ -516,6 +521,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - Governance control (2026-06-26, after the autonom-kor incident: a sub-agent
 - Why a hook and not only a permissions deny-list: permissive profiles launch
+
+### `scripts/sentry-or-precheck.sh`
+
+- WHY: the `sentry-or` heartbeat wakes the model every 3 hours (8 turns a day) to find out, nearly
 
 ### `scripts/skill-index.sh`
 
