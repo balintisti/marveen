@@ -33,6 +33,8 @@ import {
   type IdleAgentThresholds,
   type WorkCheck,
   type PaneUnreadableReason,
+  standstillVerdict,
+  standstillNote,
 } from '../idle-agent.js'
 
 // The guard for the agent that HAS work and is not doing it.
@@ -205,6 +207,24 @@ function sweepStalePending(): void {
       logger.warn({ err, sender }, 'message queue: could not tell the sender about a stale pending message')
     }
   }
+}
+
+/** Does the process a `background_job` standstill names still exist? Signal 0 delivers
+ *  nothing; it only asks. EPERM means it exists under another user, which still holds.
+ *  null = no pid named. */
+function pidAlive(pid: number | undefined): boolean | null {
+  if (pid === undefined) return null
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/** The guard's message with the stale or broken standstill named under it (card 00f7455b). */
+function withStandstillNote(text: string, note: string | null): string {
+  return note ? `${text}\n\n${note}` : text
 }
 
 function readWorkCheckRaw(agent: string): string | null {
@@ -429,6 +449,8 @@ export function tick(): void {
         ? selectDeclaredWork(check, agent, cards, comments, MAIN_AGENT_ID, nowSec, reviewers, realComments)
         : null
       const ownWorkCount = ownItems ? ownItems.length : null
+      const standstill = standstillVerdict(check, now, pidAlive(check?.standstill?.pid))
+      const stillNote = standstillNote(agent, standstill)
 
 
       // One capture per agent per tick: the evidence strength comes from the same read
@@ -494,6 +516,7 @@ export function tick(): void {
           // Same contract as ownWorkIds: absent means not measured, and the suppression
           // is skipped rather than guessed.
           workCheckKind: (check as WorkCheck | null)?.kind ?? null,
+          standstillActive: standstill.state === 'active',
         },
         state,
         THRESHOLDS,
@@ -533,6 +556,11 @@ export function tick(): void {
           sinceLastAlertMs: state.lastAlertAt !== null ? now - state.lastAlertAt : null,
           pendingMessages: running ? getPendingMessages(agent).length : 0,
           ownWorkCount,
+          // Which standstill held, or why one did not: without it a 'standstill' line cannot
+          // be checked against the entry, and an expired one is invisible (card 00f7455b).
+          standstill: standstill.state === 'none' ? undefined
+            : standstill.state === 'invalid' ? { state: 'invalid', error: standstill.error }
+            : { state: standstill.state, reason: standstill.standstill.reason, untilMs: standstill.standstill.untilMs },
         },
         `idle guard: ${agent} -> ${decision.reason}`,
       )
@@ -638,7 +666,7 @@ export function tick(): void {
         )
         if (pull.length > 0) {
           try {
-            createAgentMessage('system', agent, buildPullNotice(agent, minutes, pull, Date.now(), readAgentProjects(agent)))
+            createAgentMessage('system', agent, withStandstillNote(buildPullNotice(agent, minutes, pull, Date.now(), readAgentProjects(agent)), stillNote))
             logger.info(
               { idleGuard: true, agent, orphanCount: pull.length, top: pull[0]?.id },
               'idle guard: agent idle with nothing assigned -- named the ownerless pull-list',
@@ -658,7 +686,7 @@ export function tick(): void {
         const isFirstOfSpell = next.idleSinceMs !== null && next.noWorkLiveSpellSince !== next.idleSinceMs
         if (isFirstOfSpell) {
           try {
-            createAgentMessage('system', MAIN_AGENT_ID, buildNoWorkNotice(agent, minutes, Date.now(), noticeKind))
+            createAgentMessage('system', MAIN_AGENT_ID, withStandstillNote(buildNoWorkNotice(agent, minutes, Date.now(), noticeKind), stillNote))
             watchState.set(agent, { ...next, noWorkLiveSpellSince: next.idleSinceMs })
             logger.info(
               { idleGuard: true, agent, idleForMs: decision.idleForMs },
@@ -682,7 +710,7 @@ export function tick(): void {
         } catch (digestErr) {
           logger.warn({ err: digestErr, agent }, 'idle guard: could not write the daily digest -- telling the coordinator instead')
           try {
-            createAgentMessage('system', MAIN_AGENT_ID, buildNoWorkNotice(agent, minutes, Date.now(), noticeKind))
+            createAgentMessage('system', MAIN_AGENT_ID, withStandstillNote(buildNoWorkNotice(agent, minutes, Date.now(), noticeKind), stillNote))
           } catch (err) {
             logger.warn({ err, agent }, 'idle guard: could not tell the coordinator about an unassigned idle agent')
           }
@@ -694,7 +722,7 @@ export function tick(): void {
         const items = ownItems ?? []
         const minutes = Math.round(decision.idleForMs / 60_000)
         try {
-          createAgentMessage('system', agent, buildWakeMessage(agent, minutes, decision.workCount, items, Date.now(), (check as WorkCheck).kind))
+          createAgentMessage('system', agent, withStandstillNote(buildWakeMessage(agent, minutes, decision.workCount, items, Date.now(), (check as WorkCheck).kind), stillNote))
           logger.info(
             { idleGuard: true, agent, workCount: decision.workCount, idleForMs: decision.idleForMs },
             'idle guard: woke the agent (stage 1) -- no human told yet',

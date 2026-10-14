@@ -332,6 +332,32 @@ class Szivveres(unittest.TestCase):
             fh.write("MAIN_AGENT_ID=marveen\n")
         self.assertEqual(ir.roster(f), ["dolgozik", "marveen", "nincs-wc", "torott"])
 
+    def test_a_TARTO_STANDSTILL_parkol_a_lejart_es_a_hibas_nem(self):
+        """Kartya 00f7455b: amit a tetlen-or a standstill miatt hallgat el, azt ez a jelento se
+        vigye Isti ele leallaskent. A lejart, a hibas, a 7 napon tuli es a halott pid-es
+        bejegyzes NEM parkol (fail-open, merjuk)."""
+        import json as _j
+        import subprocess as _sp
+        now = 1_791_972_000  # 2026-10-14 ~12:00 CEST
+        iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+        dead = _sp.Popen(["true"])
+        dead.wait()
+        cases = {
+            "tart": ({"reason": "budget", "until": iso(now + 3600)}, True),
+            "tart-elo-pid": ({"reason": "background_job", "until": iso(now + 3600), "pid": os.getpid()}, True),
+            "lejart": ({"reason": "budget", "until": iso(now - 60)}, False),
+            "halott-pid": ({"reason": "background_job", "until": iso(now + 3600), "pid": dead.pid}, False),
+            "7-napon-tul": ({"reason": "budget", "until": iso(now + 8 * 86400)}, False),
+            "idozona-nelkul": ({"reason": "budget", "until": "2026-10-14T18:00:00"}, False),
+            "ismeretlen-ok": ({"reason": "szabadsag", "until": iso(now + 3600)}, False),
+        }
+        for name, (standstill, parked) in cases.items():
+            d = os.path.join(self.dir, "ss-" + name)
+            os.makedirs(d)
+            with open(os.path.join(d, "workcheck.json"), "w", encoding="utf-8") as fh:
+                fh.write(_j.dumps({"kind": "assigned_open_cards", "standstill": standstill}))
+            self.assertEqual(ir.is_parked(d, now=now), parked, name)
+
     def test_a_VAK_kor_is_szivverest_ad(self):
         self.db = os.path.join(self.dir, "nincs.db")
         self._run(NOW)

@@ -15,6 +15,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { spawnSync } from 'node:child_process'
 import { tmpDirs } from './helpers/tmp-dirs.js'
 
 const hoisted = await vi.hoisted(async () => {
@@ -467,5 +468,78 @@ describe('tick() -- background work is working: no wake, no repeat, no coordinat
       expect(after.slice(0, (270 - 153) / 3 + 1)).toEqual(Array((270 - 153) / 3 + 1).fill('subagents-running'))   // 153..270: under 2 h since the post
       expect(after.at(-1)).not.toBe('subagents-running')                                                           // 300: silent 2 h+ again
     })
+  })
+})
+
+// --- a DECLARED standstill, through the same tick() (card 00f7455b) --------------------------------
+// The pure decision is pinned in idle-guard-standstill.test.ts; this proves the watcher reads the
+// entry, measures the pid and passes the verdict on, and that its messages carry the note.
+describe('tick() -- a declared standstill in workcheck.json', () => {
+  const NOW = new Date('2026-10-14T10:00:00Z').getTime()
+  const declare = (standstill: unknown) => {
+    const dir = join(hoisted.root, 'agents', 'x')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'workcheck.json'), JSON.stringify({ kind: 'assigned_open_cards', standstill }))
+  }
+  const iso = (ms: number) => new Date(ms).toISOString()
+
+  beforeEach(async () => {
+    vi.resetModules()
+    ;({ tick } = await import('../web/idle-agent-watcher.js'))
+    rmSync(join(hoisted.root, 'store'), { recursive: true, force: true })
+    mkdirSync(join(hoisted.root, 'store'), { recursive: true })
+    vi.useFakeTimers(); vi.setSystemTime(NOW)
+    debug.mockReset(); panes.clear(); messages.length = 0; ownerAlerts.length = 0; outboundSec = null; commentRows = []
+    mkdirSync(hoisted.root, { recursive: true })
+    writeFileSync(join(hoisted.root, 'workcheck.json'), JSON.stringify({ kind: 'none' }))
+    panes.set(`agent-${MAIN_AGENT_ID}`, COORDINATOR_BUSY)
+    cardRows = ['a', 'b'].map((n) => ({
+      id: `card-${n}`, title: `t-${n}`, status: 'in_progress', assignee: 'x', priority: 'normal',
+      archived_at: null, updated_at: Math.floor(NOW / 1000), due_date: null,
+    }))
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  const spell = (minutes = 60): string[] => {
+    const reasons: string[] = []
+    for (let m = 0; m <= minutes; m += 3) {
+      panes.set('agent-x', EMPTY)
+      vi.setSystemTime(NOW + m * 60_000)
+      tick()
+      const calls = debug.mock.calls.filter(c => (c[0] as { agent?: string })?.agent === 'x')
+      reasons.push(String((calls.at(-1)?.[0] as { reason?: string } | undefined)?.reason))
+    }
+    return reasons
+  }
+  const toX = () => messages.filter(m => m.to === 'x')
+
+  it('holds: an empty pane with 2 cards for an hour, zero wakes, zero notices, every tick says standstill', () => {
+    declare({ reason: 'forbidden', until: iso(NOW + 3 * 3600_000), card: '11ef4c0a' })
+    expect(new Set(spell())).toEqual(new Set(['standstill']))
+    expect(messages.filter(m => m.to === MAIN_AGENT_ID || m.to === 'x').length + ownerAlerts.length).toBe(0)
+    const logged = debug.mock.calls.map(c => c[0] as { agent?: string; standstill?: { reason?: string } }).find(c => c.agent === 'x')
+    expect(logged?.standstill?.reason).toBe('forbidden')
+  })
+
+  it('expired: the wake goes out and names the stale entry', () => {
+    declare({ reason: 'budget', until: iso(NOW - 3600_000) })
+    expect(spell()).toContain('wake-agent')
+    expect(toX().some(m => m.content.includes('[tetlen-or]') && m.content.includes('LEJART'))).toBe(true)
+  })
+
+  it('background_job: holds while its pid lives, wakes once the process is gone', () => {
+    declare({ reason: 'background_job', until: iso(NOW + 3 * 3600_000), pid: process.pid })
+    expect(new Set(spell())).toEqual(new Set(['standstill']))
+    messages.length = 0
+    const gone = spawnSync('true').pid
+    declare({ reason: 'background_job', until: iso(NOW + 3 * 3600_000), pid: gone })
+    expect(spell()).toContain('wake-agent')
+    expect(toX().some(m => m.content.includes(`pid ${gone}) mar nem fut`))).toBe(true)
+  })
+
+  it('broken: does not silence, and the wake says what is wrong', () => {
+    declare({ reason: 'budget', until: '2026-10-14T18:00:00' })
+    expect(spell()).toContain('wake-agent')
+    expect(toX().some(m => m.content.includes('HIBAS, ezert NEM nemit'))).toBe(true)
   })
 })

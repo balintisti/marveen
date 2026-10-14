@@ -69,6 +69,110 @@ export interface WorkCheck {
    *  (live browser measurement) whose own queue is `assigned_open_cards`, exactly
    *  like a worker's. No existing signal carries the role. */
   reviewer?: boolean
+  /** A DECLARED, EXPIRING STANDSTILL (card 00f7455b): "I have work, and I am not to
+   *  touch it until X". The fourth state next to busy, idle-with-work and no-queue.
+   *  dexter met it three times on 2026-08-26 (a fleet stop, a budget stop of his own,
+   *  a budget stop agreed with the coordinator), and each time the only way to quiet
+   *  the guard was `kind: none`, which has no expiry and nothing that restores it. */
+  standstill?: Standstill
+  /** The `standstill` entry was present and could not be honoured. It does NOT
+   *  silence anything; the messages this guard sends name it, so the entry gets fixed
+   *  rather than sitting there believed to work. */
+  standstillError?: string
+}
+
+/** WHY an agent stands still. The kind of stop, not an instance of it:
+ *  forbidden ...... there is work, a decision forbids touching it (fleet stop, deploy freeze)
+ *  budget ......... the plan budget is spent until a known reset
+ *  waiting ........ the work is done and waits on somebody else, by a known time
+ *  background_job . a run started by the agent is still going; with `pid` the hold ends
+ *                   when the process does, so a finished result wakes the agent */
+export type StandstillReason = 'forbidden' | 'budget' | 'waiting' | 'background_job'
+export const STANDSTILL_REASONS: readonly StandstillReason[] = ['forbidden', 'budget', 'waiting', 'background_job']
+
+/** The furthest an `until` may lie ahead. A weekly plan reset is the longest stop the
+ *  fleet has measured; a forgotten entry therefore stops silencing within a week at most,
+ *  which is the expiry `kind: none` never had. Further out is rejected, not clamped:
+ *  a clamp would silence for a week on a typo in the year. */
+export const STANDSTILL_MAX_AHEAD_MS = 7 * 24 * 60 * 60 * 1000
+
+export interface Standstill {
+  reason: StandstillReason
+  /** epoch ms, parsed from an ISO-8601 `until` that names its offset */
+  untilMs: number
+  card?: string
+  pid?: number
+}
+
+/** An `until` must say which clock it is on. A bare "2026-10-14T18:00" is local time to
+ *  `Date.parse` and UTC to most readers: the two-hour gap is a silence nobody asked for. */
+const UNTIL_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/
+
+function parseStandstill(raw: unknown): { ok: Standstill } | { error: string } {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { error: 'a standstill nem objektum' }
+  const r = raw as { reason?: unknown; until?: unknown; card?: unknown; pid?: unknown }
+  if (typeof r.reason !== 'string' || !STANDSTILL_REASONS.includes(r.reason as StandstillReason)) {
+    return { error: `ismeretlen reason: ${JSON.stringify(r.reason ?? null)} (ervenyes: ${STANDSTILL_REASONS.join(', ')})` }
+  }
+  if (typeof r.until !== 'string' || !UNTIL_WITH_OFFSET.test(r.until)) {
+    return { error: `az until nem idozonas ISO-8601 (pl. 2026-10-14T18:00:00+02:00): ${JSON.stringify(r.until ?? null)}` }
+  }
+  const untilMs = Date.parse(r.until)
+  if (!Number.isFinite(untilMs)) return { error: `az until nem ervenyes datum: ${JSON.stringify(r.until)}` }
+  if (r.card !== undefined && typeof r.card !== 'string') return { error: 'a card nem szoveg' }
+  if (r.pid !== undefined && !(Number.isInteger(r.pid) && (r.pid as number) > 1)) return { error: `a pid nem ervenyes folyamat-azonosito: ${JSON.stringify(r.pid)}` }
+  const s: Standstill = { reason: r.reason as StandstillReason, untilMs }
+  if (r.card !== undefined) s.card = r.card as string
+  if (r.pid !== undefined) s.pid = r.pid as number
+  return { ok: s }
+}
+
+/** What a declared standstill means THIS tick. Pure: the caller measures whether the pid
+ *  is alive (null = no pid named, or not measured).
+ *  active ... silence: the guard leaves the agent alone and logs why
+ *  expired .. no silence, and every message the guard sends names the stale entry
+ *  invalid .. no silence, and the messages name what is wrong with it */
+export type StandstillVerdict =
+  | { state: 'none' }
+  | { state: 'active'; standstill: Standstill }
+  | { state: 'expired'; standstill: Standstill; why: 'time' | 'pid-exited' }
+  | { state: 'invalid'; error: string }
+
+export function standstillVerdict(check: WorkCheck | null, now: number, pidAlive: boolean | null): StandstillVerdict {
+  if (!check) return { state: 'none' }
+  if (check.standstillError !== undefined) return { state: 'invalid', error: check.standstillError }
+  const s = check.standstill
+  if (!s) return { state: 'none' }
+  if (s.untilMs - now > STANDSTILL_MAX_AHEAD_MS) {
+    return { state: 'invalid', error: `az until ${Math.ceil((s.untilMs - now) / 86_400_000)} napra van, a felso hatar 7 nap` }
+  }
+  if (now >= s.untilMs) return { state: 'expired', standstill: s, why: 'time' }
+  if (s.pid !== undefined && pidAlive === false) return { state: 'expired', standstill: s, why: 'pid-exited' }
+  return { state: 'active', standstill: s }
+}
+
+/** The line every guard message carries while a standstill entry is stale or broken.
+ *  Third person on purpose: the same line goes to the agent and to the coordinator. */
+export function standstillNote(agent: string, v: StandstillVerdict): string | null {
+  const fix = 'Ha ujra all, irja at az until-t; ha nem, torolje a standstill mezot.'
+  if (v.state === 'expired') {
+    const s = v.standstill
+    const why = v.why === 'pid-exited'
+      ? `a megnevezett folyamat (pid ${s.pid}) mar nem fut`
+      : `az until (${untilStampOf(s.untilMs)}) elmult`
+    return `MEGJEGYZES: a(z) "${agent}" workcheck.json standstill bejegyzese (reason: ${s.reason}${s.card ? `, card: ${s.card}` : ''}) LEJART: ${why}, ezert mar nem nemit. ${fix}`
+  }
+  if (v.state === 'invalid') {
+    return `MEGJEGYZES: a(z) "${agent}" workcheck.json standstill bejegyzese HIBAS, ezert NEM nemit: ${v.error}. ` +
+      'Helyes alak: {"standstill":{"reason":"forbidden|budget|waiting|background_job","until":"2026-10-14T18:00:00+02:00","card":"<opcionalis>","pid":<opcionalis>}}'
+  }
+  return null
+}
+
+function untilStampOf(ms: number): string {
+  return new Date(ms).toLocaleString('hu-HU', {
+    hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  })
 }
 
 export interface IdleAgentThresholds {
@@ -201,6 +305,9 @@ export interface IdleAgentInput {
    *  Absent is treated as 'not none': an agent that declared a real check and has zero
    *  cards is the case worth telling the coordinator about. */
   workCheckKind?: string | null
+  /** A declared standstill holds this tick (standstillVerdict === 'active', card 00f7455b).
+   *  Absent = no standstill. */
+  standstillActive?: boolean
   /** Whether the agent process is running at all. A stopped agent is a different
    *  failure with its own watchers; this guard stays out of it. */
   running: boolean
@@ -226,6 +333,8 @@ export type IdleDecision =
         | 'subagents-running'
         // Past the hold with sub-agent rows still visible: this window's one notice already went out.
         | 'subagents-notice-window'
+        // The agent declared an expiring standstill and it still holds (card 00f7455b).
+        | 'standstill'
     }
   /** Stage 1: tell the AGENT, not a human. The agent is awake, its queue is empty and
    *  the condition is about itself -- it is the only party that can both be reached and
@@ -468,6 +577,11 @@ function decideIdleAlertCore(
   // gets muted -- after which it protects nothing. The distinction is what the agent
   // DECLARED, not how many cards it happens to have: `none` means on-call, any other
   // kind means "I am supposed to have work, and I have none".
+  //
+  // A DECLARED STANDSTILL silences both the wake and the no-work notice, and only while it
+  // holds (card 00f7455b). It clears the spell like usage-limited does, so the agent gets a
+  // full sustained window after the stop ends, not a wake at the first tick.
+  if (input.standstillActive === true) return clear('standstill')
   if ((input.ownWorkCount ?? 0) <= 0 && (input.workCheckKind ?? '') === 'none') {
     return clear('no-work')
   }
@@ -618,7 +732,16 @@ export function parseWorkCheck(raw: string | null | undefined): WorkCheck | null
   // and coercing it would grant the role by accident -- in the direction that
   // INVENTS work for someone else, which is the expensive one here.
   const reviewer = (parsed as { reviewer?: unknown }).reviewer === true
-  return reviewer ? { kind: kind as WorkCheckKind, reviewer: true } : { kind: kind as WorkCheckKind }
+  const check: WorkCheck = reviewer ? { kind: kind as WorkCheckKind, reviewer: true } : { kind: kind as WorkCheckKind }
+  // A broken standstill keeps the declaration valid: the KIND still says what the queue is,
+  // and losing it would turn a typo in one field into "undeclared" for the whole agent.
+  const rawStandstill = (parsed as { standstill?: unknown }).standstill
+  if (rawStandstill !== undefined) {
+    const s = parseStandstill(rawStandstill)
+    if ('ok' in s) check.standstill = s.ok
+    else check.standstillError = s.error
+  }
+  return check
 }
 
 export interface WorkCountCard {
