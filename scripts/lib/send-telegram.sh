@@ -41,7 +41,8 @@ telegram_api_call() {
   fi
 
   local response curl_exit
-  response=$(curl -sS -m 15 "https://api.telegram.org/bot${token}/${method}" "$@" 2>&1)
+  # The secret goes in a -K config from a process substitution, not argv (ps-visible); card 9ac56d05.
+  response=$(curl -sS -m 15 -K <(printf 'url = "%s"\n' "https://api.telegram.org/bot${token}/${method}") "$@" 2>&1)
   curl_exit=$?
   # Never let the token reach a log/journal: redact before any echo.
   response="${response//${token}/<token>}"

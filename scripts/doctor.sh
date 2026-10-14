@@ -259,7 +259,8 @@ fi
 # --- Dashboard API ---
 echo -e "\n${BOLD}Dashboard${RESET}"
 if [ -f "store/.dashboard-token" ]; then
-  HTTP=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $(cat store/.dashboard-token)" "http://localhost:${WEB_PORT}/api/agents" 2>/dev/null)
+  # The secret goes in a -K config from a process substitution, not argv (ps-visible); card 9ac56d05.
+  HTTP=$(curl -s -o /dev/null -w "%{http_code}" -K <(printf 'header = "Authorization: Bearer %s"\n' "$(cat store/.dashboard-token)") "http://localhost:${WEB_PORT}/api/agents" 2>/dev/null)
   if [ "$HTTP" = "200" ]; then
     ok "Dashboard API: responding (HTTP 200)"
   else

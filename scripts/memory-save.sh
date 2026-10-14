@@ -85,7 +85,8 @@ attempt=0; max=3; CODE=""; ID=""
 while [ "$attempt" -lt "$max" ]; do
   attempt=$((attempt+1))
   BODY="$(AGENT="$AGENT" CAT="$CAT" KW="$KW" C="$C" python3 -c 'import json,os; print(json.dumps({"agent_id":os.environ["AGENT"],"category":os.environ["CAT"],"keywords":os.environ["KW"],"content":os.environ["C"]}))')"
-  RESP="$(curl -s -X POST "$URL" -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" -d "$BODY" -w $'\n%{http_code}' 2>/dev/null || true)"
+  # The secret goes in a -K config from a process substitution, not argv (ps-visible); card 9ac56d05.
+  RESP="$(curl -s -X POST "$URL" -H "Content-Type: application/json" -K <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN") -d "$BODY" -w $'\n%{http_code}' 2>/dev/null || true)"
   CODE="$(printf '%s' "$RESP" | tail -n1)"
   JSON="$(printf '%s' "$RESP" | sed '$d')"
   ID="$(printf '%s' "$JSON" | python3 -c 'import sys,json

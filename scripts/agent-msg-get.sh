@@ -20,8 +20,9 @@ TOKEN_FILE="${ROOT}/store/.dashboard-token"
 
 # The HTTP status is checked, not assumed: a 404 body would otherwise print as an empty message.
 OUT="$(mktemp)"; trap 'rm -f "$OUT"' EXIT
+# The secret goes in a -K config from a process substitution, not argv (ps-visible); card 9ac56d05.
 CODE="$(curl -s -o "$OUT" -w '%{http_code}' \
-  -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
+  -K <(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$TOKEN_FILE")") \
   "http://localhost:3420/api/messages/${ID}")"
 if [[ "$CODE" != "200" ]]; then
   echo "FAIL: GET /api/messages/${ID} -> HTTP ${CODE}" >&2

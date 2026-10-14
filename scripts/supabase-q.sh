@@ -46,7 +46,10 @@ TOKEN_FILE="$ROOT/store/.dashboard-token"
 [ -r "$TOKEN_FILE" ] || { echo "supabase-q: FAIL-CLOSED, a dashboard-token nem olvashato: $TOKEN_FILE" >&2; exit 3; }
 
 # The vault call is localhost-only; the fetched value never reaches stdout.
-PAT="$(curl -s -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
+# The secret goes in a -K config on stdin, not argv (ps-visible); card 9ac56d05.
+# (This file is /bin/sh: no process substitution in POSIX mode, so a pipe, not <(...).)
+PAT="$(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$TOKEN_FILE")" \
+       | curl -s -K - \
         "$DASH/api/vault/$VAULT_KEY" \
        | python3 -c 'import sys,json
 try:

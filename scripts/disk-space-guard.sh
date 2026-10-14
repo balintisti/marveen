@@ -246,7 +246,8 @@ alert_owner() {
   # ENOSPC alatt egy elbukott iras nem akaszthatja meg az ort -- egy tmp-fajl epp azt
   # szegné meg, amiert ez a szkript letezik.
   local resp code body okf rc desc
-  resp="$(curl -s -m 10 -w '\n%{http_code}' "https://api.telegram.org/bot${token}/sendMessage" \
+  # The secret goes in a -K config from a process substitution, not argv (ps-visible); card 9ac56d05.
+  resp="$(curl -s -m 10 -w '\n%{http_code}' -K <(printf 'url = "%s"\n' "https://api.telegram.org/bot${token}/sendMessage") \
     --data-urlencode "chat_id=${chat}" --data-urlencode "text=${msg}")"
   rc=$?
   code="$(printf '%s' "$resp" | tail -n1)"

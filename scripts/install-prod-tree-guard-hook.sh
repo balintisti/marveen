@@ -615,9 +615,10 @@ if [ -z "$GUARD_BODY" ]; then
   echo "[prod-tree-guard] FIGYELEM: a branch-valtas riasztas NEM ert celba (a JSON payload nem allt elo -- python3 hianyzik?) -- a koordinator nem tud a valtasrol" >&2
   exit 0
 fi
+# The secret goes in a -K config from a process substitution, not argv (ps-visible); card 9ac56d05.
 GUARD_HTTP="$(printf '%s' "$GUARD_BODY" | curl -s -m 5 -X POST "$ORIGIN/api/messages" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
+  -K <(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$TOKEN_FILE")") \
   -o /dev/null -w '%{http_code}' \
   --data-binary @- 2>/dev/null)" || GUARD_HTTP="000"
 case "$GUARD_HTTP" in

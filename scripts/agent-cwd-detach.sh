@@ -64,7 +64,8 @@ say "cel-hierarchia tiszta (/Users/Shared, /Users, /)"
 [ "$DRY" = "--dry-run" ] && { say "(dry-run: itt allnek meg)"; exit 0; }
 
 # 3. LEALLITAS
-curl -s -X POST -H "Authorization: Bearer $T" "http://localhost:3420/api/agents/$A/stop" >/dev/null
+# The secret goes in a -K config from a process substitution, not argv (ps-visible); card 9ac56d05.
+curl -s -X POST -K <(printf 'header = "Authorization: Bearer %s"\n' "$T") "http://localhost:3420/api/agents/$A/stop" >/dev/null
 sleep 4
 tmux has-session -t "agent-$A" 2>/dev/null && { say "A SESSION MEG EL -- ALLJ, nem mozgatok"; exit 5; }
 say "leallitva"
@@ -95,7 +96,7 @@ print(f"  trust-belyeg: {dst} -> True")
 PY
 
 # 6. INDITAS (fresh: `--continue` egy channel-agensnel SUKET sessiont ad)
-curl -s -X POST -H "Authorization: Bearer $T" -H "Content-Type: application/json" \
+curl -s -X POST -K <(printf 'header = "Authorization: Bearer %s"\n' "$T") -H "Content-Type: application/json" \
   -d '{"fresh":true}' "http://localhost:3420/api/agents/$A/start" >/dev/null
 sleep 12
 tmux has-session -t "agent-$A" 2>/dev/null || { say "NEM INDULT EL -- NEZD MEG AZONNAL"; exit 9; }

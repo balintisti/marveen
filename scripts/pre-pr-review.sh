@@ -26,7 +26,8 @@ API="http://localhost:${WEB_PORT}/api/vault"
 get_secret() {
   local id="$1"
   local val
-  val="$(curl -sf -H "Authorization: Bearer $DASHBOARD_TOKEN" "$API/$id" 2>/dev/null)" || true
+  # The secret goes in a -K config from a process substitution, not argv (ps-visible); card 9ac56d05.
+  val="$(curl -sf -K <(printf 'header = "Authorization: Bearer %s"\n' "$DASHBOARD_TOKEN") "$API/$id" 2>/dev/null)" || true
   echo "$val" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('value',''))" 2>/dev/null || true
 }
 
@@ -59,7 +60,7 @@ prompt = sys.stdin.read()
 print(json.dumps({'model': 'gpt-4o', 'messages': [{'role': 'user', 'content': prompt}], 'max_tokens': 1000}))
 " <<< "$PROMPT")"
   curl -sf https://api.openai.com/v1/chat/completions \
-    -H "Authorization: Bearer $OPENAI_KEY" \
+    -K <(printf 'header = "Authorization: Bearer %s"\n' "$OPENAI_KEY") \
     -H "Content-Type: application/json" \
     -d "$PAYLOAD" \
   | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['choices'][0]['message']['content'])"
@@ -84,7 +85,7 @@ print(json.dumps({'contents': [{'parts': [{'text': prompt}]}]}))
   # header (200) -- measured on the same model, same minute.
   GEMINI_MODEL="${GEMINI_REVIEW_MODEL:-gemini-3.5-flash}"
   curl -sf "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
-    -H "x-goog-api-key: $GEMINI_KEY" \
+    -K <(printf 'header = "x-goog-api-key: %s"\n' "$GEMINI_KEY") \
     -H "Content-Type: application/json" \
     -d "$PAYLOAD" \
   | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['candidates'][0]['content']['parts'][0]['text'])"
