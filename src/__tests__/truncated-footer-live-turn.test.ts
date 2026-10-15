@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   detectPaneState,
   detectPermissionMode,
+  detectsPermissionDialog,
   liveTurnFooterVisible,
   stuckInputSignature,
 } from '../pane-state.js'
@@ -92,6 +93,61 @@ describe('a width-truncated footer is still the footer (card f5bb2626)', () => {
   it('does not take prose ending in an ellipsis for the footer', () => {
     const prose = ['The report is on the way…', '', NAMED_SEP, '❯ ', SEP].join('\n')
     expect(detectPaneState(prose)).toBe('unknown')
+  })
+})
+
+// didi, card f0ca2dc1, 2026-10-15: the first version matched the truncated tail anywhere in the
+// pane. A clipped footer left in the scrollback, or prose ending in `on · ...…`, then hid an open
+// permission dialog (permDialog false, state idle), and a delivery could type into `❯ 1. Yes`.
+// The dialog lines are the live capture's (pane-permission-prompt.test.ts, agent-dexter 09-03).
+const DIALOG = [
+  ' │ grep on \'src/forms/submission.service.ts\' after a cd would search a',
+  ' │ directory that cannot be determined here; only you can approve running it anyway.',
+  '',
+  ' Do you want to proceed?',
+  ' ❯ 1. Yes',
+  '   2. No',
+  '',
+  ' Esc to cancel · Tab to amend',
+]
+const CLIPPED_IN_SCROLLBACK = '  ⏵⏵ bypass permissions on · 3 shells, 2 monitors · ↓ to m…'
+const PROSE_ENDING_LIKE_A_TAIL = 'the guard stays on · see the report on the card…'
+
+describe('a truncated footer counts only under the live box (didi, f0ca2dc1)', () => {
+  it.each([
+    ['a clipped footer in the scrollback', ['  ⎿  done', CLIPPED_IN_SCROLLBACK, '', ...DIALOG]],
+    ['prose ending like a truncated tail', [PROSE_ENDING_LIKE_A_TAIL, '', ...DIALOG]],
+    // A whole old box with its clipped footer above a dialog drawn without a separator.
+    ['an old box with its clipped footer', [NAMED_SEP, '❯ ', SEP, CLIPPED_IN_SCROLLBACK, '', ...DIALOG]],
+    // A dialog that opens with a separator line, the tail-like line right under it.
+    ['a tail-like line under a dialog border', [NAMED_SEP, '❯ ', SEP, '', SEP, PROSE_ENDING_LIKE_A_TAIL, ...DIALOG]],
+  ])('%s does not hide an open permission dialog', (_name, lines) => {
+    const p = (lines as string[]).join('\n')
+    expect(detectsPermissionDialog(p)).toBe(true)
+    expect(detectPaneState(p)).not.toBe('idle')
+    expect(detectPermissionMode(p)).toBeNull()
+  })
+
+  // Two separator lines with no prompt between them are not an input box (a Markdown-style rule
+  // pair in the output), so a tail-like line under them is not a footer.
+  it('a separator pair without a prompt line is not the input box', () => {
+    const p = [SEP, ' Summary', SEP, PROSE_ENDING_LIKE_A_TAIL].join('\n')
+    expect(detectPaneState(p)).toBe('unknown')
+    expect(detectPermissionMode(p)).toBeNull()
+  })
+
+  // Control: the same dialog with no tail-like line anywhere.
+  it('the bare dialog is a dialog', () => {
+    expect(detectsPermissionDialog(DIALOG.join('\n'))).toBe(true)
+  })
+
+  // The live position still counts with a panel under it (the f5bb2626 case), and a line that
+  // is not directly under the box does not. The paren-cut footer, because TRUNCATED_IDLE_FOOTER
+  // still carries `← for agents` and so matches the full form wherever it stands.
+  it('counts only within the footer lines under the last box separator', () => {
+    expect(detectPaneState(pane({ footer: TRUNCATED_PAREN_IDLE_FOOTER, spinner: false, agents: 25 }))).toBe('idle')
+    const lowered = [NAMED_SEP, '❯ ', SEP, '', '', '', TRUNCATED_PAREN_IDLE_FOOTER].join('\n')
+    expect(detectPaneState(lowered)).not.toBe('idle')
   })
 })
 
