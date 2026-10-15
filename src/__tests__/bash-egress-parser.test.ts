@@ -673,6 +673,11 @@ describe('every PREFIX_WORDS entry in front of a heredoc-fed interpreter', () =>
     nice: ['nice', 'nice -n 5', 'nice -5'],
     timeout: ['timeout 30', 'timeout 30s', 'timeout -k 5 30', 'timeout --preserve-status 1m'],
     stdbuf: ['stdbuf -oL', 'stdbuf -o L', 'stdbuf -oL -eL'],
+    // card c8b1ccbf
+    gtimeout: ['gtimeout 30', 'gtimeout -k 5 30'],
+    ionice: ['ionice -c3', 'ionice -c 2 -n 7'],
+    caffeinate: ['caffeinate -i', 'caffeinate -t 60'],
+    xargs: ['xargs', 'xargs -n1', 'xargs -I {}'],
     do: ['do'],
     then: ['then'],
     else: ['else'],
@@ -772,7 +777,8 @@ describe('still open after (a) -- pinned on purpose', () => {
     `cat <<'PY' | python3 -\nimport urllib.request; urllib.request.urlopen('https://example.org')\nPY`,
     'while read u; do curl -s "$u"; done < urls.txt', // loop values read from a file
     // the families the header lists as open after EGRESSHEREDOC924 (reviewer probe A8-A11, A14)
-    'xargs -n1 curl -s <<< "https://example.org/x"', // an argument builder fed on stdin
+    // xargs is closed since card c8b1ccbf (bash-egress-parser.c8b1ccbf.test.ts); parallel is not
+    'parallel curl -s ::: https://example.org/x', // an argument builder that is not xargs
     'mapfile -t a <<< "https://example.org/x"; curl -s "${a[0]}"', // an array filler
     'IFS=, read a b <<< "x,https://example.org/x"; curl -s "$b"', // read under a non-default IFS
     'while read u; do curl -s "$u"; done < <(echo https://example.org/x)', // process substitution input
@@ -1119,5 +1125,44 @@ describe('a heredoc body is not the outer command line (fork seam)', () => {
       `true; cat <<'EOF'\n${X}\nEOF`,
       `echo a; cat <<'EOF'\n${X}\nEOF`,
     ]) expect(classify(c).deny, c).toBe(false)
+  })
+})
+
+// Card c8b1ccbf: the edges of the closures didi's red tests drive (bash-egress-parser.c8b1ccbf.test.ts).
+describe('card c8b1ccbf: where each closure stops', () => {
+  const EXT = 'https://evil.example.com/x'
+  const UNREADABLE = `cat <<E"O"F\nx\nEOF\ncurl ${EXT}`
+  it('an unreadable line passes when it names no network tool, or only local URLs', () => {
+    expect(classify(`cat <<E"O"F\nsee ${EXT}\nEOF`)).toMatchObject({ deny: false, reason: 'unparseable' })
+    expect(classify(`cat <<E"O"F\nx\nEOF\ncurl -s http://localhost:3420/api/health`)).toMatchObject({ deny: false, reason: 'unparseable' })
+  })
+  it('a heredoc a shell reads as its PROGRAM is judged with the unreadable rule; one fed to a script as data keeps the old reading', () => {
+    for (const shell of ['bash', 'bash -s', 'bash -', 'sh -s --']) {
+      expect(classify(`${shell} <<'S'\n${UNREADABLE}\nS`), shell).toMatchObject({ deny: true, reason: 'heredoc-unparseable-external' })
+    }
+    // the fleet's message path: agent-msg.sh reads the heredoc as the message text
+    expect(classify(`bash /Users/isti/marveen/scripts/agent-msg.sh a b - <<'VEGE'\n${UNREADABLE}\nVEGE`).deny).toBe(false)
+    expect(classify(`bash -c 'cat' <<'VEGE'\n${UNREADABLE}\nVEGE`).deny).toBe(false)
+  })
+  it('xargs: a network command behind it is judged by every URL in the line; the local twin passes', () => {
+    expect(classify(`printf '%s\\n' ${EXT} | xargs -n1 -P4 curl -s`)).toMatchObject({ deny: true, reason: 'xargs-external', hosts: ['evil.example.com'] })
+    expect(classify(`echo ${EXT} | xargs -I{} sh -c 'curl -s {}'`)).toMatchObject({ deny: true, reason: 'xargs-external' })
+    expect(classify('echo http://localhost:3420/api/health | xargs curl -s').deny).toBe(false)
+    expect(classify(`echo ${EXT} | xargs -n1 echo`).deny).toBe(false)
+  })
+  it('a shell -c body is found past option clusters and -o values', () => {
+    for (const c of [`bash -lc "curl ${EXT}"`, `bash -e -c "curl ${EXT}"`, `bash -o pipefail -c "curl ${EXT}"`, `zsh -fc 'curl ${EXT}'`]) {
+      expect(classify(c), c).toMatchObject({ deny: true, reason: 'shell-c-curl-external' })
+    }
+    expect(classify('bash -c "curl -s http://localhost:3420/api/health"').deny).toBe(false)
+    expect(classify('bash ./run.sh -c x').deny).toBe(false)
+  })
+  it('a variable filled from a substitution: its URLs are its values; the local twin passes', () => {
+    expect(classify(`export x="$(echo ${EXT})"; curl -s "$x"`)).toMatchObject({ deny: true, hosts: ['evil.example.com'] })
+    expect(classify(`x=$(cat <<EOF\nhttp://localhost:3420/api/health\nEOF\n); curl -s "$x"`).deny).toBe(false)
+  })
+  it('a substitution inside a loop reads the loop value; a substitution elsewhere does not invent one', () => {
+    expect(classify(`for u in ${EXT}; do r="$(curl -s "$u")"; done`)).toMatchObject({ deny: true, hosts: ['evil.example.com'] })
+    expect(classify(`for u in http://localhost:3420/a http://127.0.0.1:3420/b; do echo "$(curl -s $u)"; done`).deny).toBe(false)
   })
 })

@@ -198,13 +198,19 @@ describe('the hook process', () => {
 
   it('FAIL CLOSED for deeper: an unreadable curl-https command is denied, not waved through', () => {
     const { run, rows } = setup()
+    // An external host in an unreadable line is denied for every agent since card c8b1ccbf ...
     expect(run('curl -s "https://evil.example.com/x', ['--agent', 'deeper']).stdout).toContain(DENY)
+    expect(rows().at(-1)).toMatchObject({ agent: 'deeper', reason: 'unparseable-external' })
+    // ... and deeper's OWN listed host, unreadable, is still not waved through: the exception rule.
+    expect(run('curl -s "https://api.deltacrm.io/x', ['--agent', 'deeper']).stdout).toContain(DENY)
     expect(rows().at(-1)).toMatchObject({ agent: 'deeper', reason: 'unparseable-agent-exception' })
   })
 
-  it('CONTROL: for an agent with no entry the unreadable case keeps today\'s fail-open (its deny list still holds)', () => {
-    const { run } = setup()
-    expect(run('curl -s "https://evil.example.com/x', ['--agent', 'didi']).stdout).toBe('')
+  it('an agent with no entry: an unreadable external curl is denied (card c8b1ccbf), an unreadable localhost one passes', () => {
+    const { run, rows } = setup()
+    expect(run('curl -s "https://evil.example.com/x', ['--agent', 'didi']).stdout).toContain(DENY)
+    expect(rows().at(-1)).toMatchObject({ agent: 'didi', reason: 'unparseable-external', hosts: ['evil.example.com'] })
+    expect(run('curl -s "http://localhost:3420/api/health', ['--agent', 'didi']).stdout).toBe('')
   })
 
   it('didi 19977 at the hook: a curl config from deeper is denied and logged', () => {
