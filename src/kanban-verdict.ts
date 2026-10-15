@@ -18,6 +18,21 @@
  * board. A severity in parentheses right after it -- "NYITOTT TETEL (kozepes)
  * -- ..." -- is part of the same verdict. "NINCS NYITOTT TETEL -- ..." stays
  * closed: the token is compared whole, never searched for "NYITOTT".
+ *
+ * THE SECOND TOKEN, `MARADEK:` -- card 0a787690, Isti 5654 ("Nem mehet kesz
+ * statuszba olyan kartya amin meg van nyitott teendo"). Measured 2026-10-07
+ * 08:56: three done cards carried a prose "MARADEK-JELZES" comment and closed
+ * clean, so the leftover went to the archive. Same parser style, a CLOSED token,
+ * NOT a prose detector (the fleet measured five false-positive families of those):
+ *   - `MARADEK: <what> | <where>` at column 0 opens a leftover for its author;
+ *   - `MARADEK: NINCS | <where it went>` at column 0 closes EVERY leftover the
+ *     SAME author opened before it (the destination after the `|` is required: a
+ *     bare NINCS is a leftover vanishing without a trace, exactly the failure);
+ *   - another author's NINCS closes nothing; a later MARADEK line re-opens;
+ *   - the same ` -- ` / `|` separators and the same normalisation as VERDIKT;
+ *     the prefix also takes the accented upper-case spelling `MARADÉK:`.
+ * Prose ("MARADEK-JELZES: ...", "maradek: ..." mid-line, indented, quoted) is
+ * somebody talking about a leftover, not declaring one, and is never read.
  */
 
 /** The fields of a comment the reading needs; db.ts's KanbanComment has them. */
@@ -34,6 +49,9 @@ export interface OpenVerdict {
   line: string
   commentId: number
 }
+
+/** An open `MARADEK:` line; same shape as a verdict so a refusal quotes both alike. */
+export type OpenLeftover = OpenVerdict
 
 const VERDICT_PREFIX = 'VERDIKT:'
 
@@ -74,4 +92,61 @@ export function openVerdicts(comments: VerdictComment[]): OpenVerdict[] {
     }
   }
   return open
+}
+
+const LEFTOVER_PREFIX = 'MARADEK:'
+
+/**
+ * The text after a column-0 `MARADEK:` prefix, or null when the line does not
+ * start with one. The prefix is compared accent-insensitively (accents off, case
+ * kept; card 0a787690, didi 31731): the Hungarian spelling "MARADÉK:" is the same
+ * token (otherwise it would silently open nothing), while "Maradék:" / "maradek:"
+ * stay prose because the case is never folded. Only the prefix is normalised; the
+ * rest of the line is returned as written.
+ */
+function leftoverRest(raw: string): string | null {
+  const colon = raw.indexOf(':')
+  // "MARADEK:" is 8 chars precomposed, up to 10 with a decomposed accent.
+  if (colon < 0 || colon > 10) return null
+  const prefix = raw.slice(0, colon + 1)
+  const bare = prefix.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  return bare === LEFTOVER_PREFIX ? raw.slice(colon + 1) : null
+}
+
+/**
+ * The text before the first `|` or ` -- ` (the token) and what follows it (the
+ * destination, empty when there is no separator).
+ */
+function splitLeftover(rest: string): { token: string; where: string } {
+  const cut = [rest.indexOf('|'), rest.indexOf(' -- ')].filter((i) => i >= 0)
+  if (cut.length === 0) return { token: normalize(rest), where: '' }
+  const at = Math.min(...cut)
+  const sepLen = rest.startsWith('|', at) ? 1 : 4
+  return { token: normalize(rest.slice(0, at)), where: rest.slice(at + sepLen).trim() }
+}
+
+/**
+ * Every leftover an author opened and has not closed with their own later
+ * `MARADEK: NINCS | <where>`. Listed one by one (an author with two leftovers
+ * gets both named), closed all at once by one NINCS of theirs.
+ */
+export function openLeftovers(comments: VerdictComment[]): OpenLeftover[] {
+  const ordered = [...comments].sort((a, b) => a.created_at - b.created_at || a.id - b.id)
+  const byAuthor = new Map<string, OpenLeftover[]>()
+  for (const comment of ordered) {
+    for (const raw of (comment.content ?? '').split(/\r?\n/)) {
+      const rest = leftoverRest(raw)
+      if (rest === null) continue
+      const line = raw.trimEnd()
+      const { token, where } = splitLeftover(rest)
+      if (token === 'NINCS' && where !== '') {
+        byAuthor.delete(comment.author)
+        continue
+      }
+      const list = byAuthor.get(comment.author) ?? []
+      list.push({ author: comment.author, line, commentId: comment.id })
+      byAuthor.set(comment.author, list)
+    }
+  }
+  return [...byAuthor.values()].flat()
 }
