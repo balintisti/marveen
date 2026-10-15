@@ -306,6 +306,9 @@ export function commandIndex(mw) {
       const a = mw[i]
       if (a === '--') { i++; break }
       if (a.startsWith('-') && a.length > 1) { i += withValue.has(a) ? 2 : 1; continue }
+      // env takes ANY word holding `=` as an assignment, not only a NAME=: `env 'BASH_FUNC_echo%%=...'
+      // curl ...` ran curl, and the word read as the command hid it (dexter, c8b1ccbf round 7)
+      if (p === 'env' && /^[^=]+=/.test(a)) { i++; continue }
       if (positional > 0 && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(a)) { positional--; i++; continue }
       break
     }
@@ -648,25 +651,31 @@ function substHostCandidates(inner) {
   return out
 }
 // A line that can give a command name a new meaning: a function definition (`NAME()`, `function NAME`,
-// zsh's `a b () {...}`), an alias, or eval / source / `.` / enable, which can do either. On such a line
-// `echo`, `printf` and `cat` are no proof of printing (`echo(){ base64 -d <<< X; }; curl "$(echo
-// localhost)"` ran the function in bash and zsh, didi round 5 item 1), and neither are the text-only
-// words a shell's -c body is judged by (`export -f` carries a function into `bash -c`).
+// zsh's `a b () {...}`), an alias, eval / source / `.` / enable, a zsh name table (`functions[echo]=`),
+// a lookup change (`PATH=`, `hash`, `autoload`, `disable`, BASH_ENV), or an exported bash function
+// (`BASH_FUNC_echo%%=`). On such a line a text-only word (`cat`, `echo`) is no proof that a body fed to
+// it stays text (`cat(){ python3 -; }; export -f cat; bash -c 'cat' <<S` ran the body, didi round 7
+// item 3), so every body fed on the line is read for a network word and an external host as well.
+// The list is a trigger for that extra reading, not the guard itself: a redefinition it does not name
+// leaves the line exactly as strict as before. A curl destination does not depend on it at all (a
+// substitution in the host part is never trusted, see curlDestinations).
+// PATH is NOT a trigger. Measured on 21 086 fleet commands (2026-10-16): `export PATH=.../node@22/bin`
+// opens many of them, and as a trigger it denied 10 that write test files about this guard. A PATH
+// change only matters with an executable planted on disk beforehand, which is the cross-command limit
+// a per-command parser has anyway (a function written into ~/.zshenv by an earlier command).
 // A quote or backslash before the name counts as a word start: past classify's depth bound a nested
 // `bash -c` body is read as raw text, where the definition sits behind `'"'"'` (dexter, 2026-10-16).
-const DEFINES_COMMANDS = /(?:^|[\s;&|({!'"\\])(?:function\s+[^\s;&|<>]+|[^\s(){};&|<>=$"'`]+\s*\(\s*\)|(?:alias|eval|source|enable|\.)(?:\s|$))/
+// `.` counts only as a command word: `find .`, `git add .` and `ls .` source nothing (didi round 7 item 5).
+const DEFINES_COMMANDS = new RegExp([
+  String.raw`(?:^|[\s;&|({!'"\\])(?:function\s+[^\s;&|<>]+|[^\s(){};&|<>=$"'` + '`' + String.raw`]+\s*\(\s*\)|(?:alias|eval|source|enable|disable|hash|autoload)(?:\s|$))`,
+  String.raw`(?:^|[;&|({!'"\\\n])[ \t]*\.(?:\s|$)`,
+  String.raw`(?:^|[\s;&|({!'"\\])(?:functions|aliases|builtins|commands)\[`,
+  String.raw`(?:^|[\s;&|({!'"\\])(?:fpath|FPATH|BASH_ENV|ENV|ZDOTDIR)\+?=`,
+].join('|'))
+// Read on the ORIGINAL text: an `env 'BASH_FUNC_echo%%=() {...}'` or `env 'PATH=...'` word is quoted,
+// and the masked text the readable path checks has it blanked.
+const DEFINES_IN_QUOTES = /BASH_FUNC_|['"](?:fpath|FPATH|BASH_ENV|ENV|ZDOTDIR)\+?=/
 function definesCommands(text) { return DEFINES_COMMANDS.test(String(text)) }
-// A substitution body that only prints literal text: each `;`/newline command is an echo or printf
-// (no `printf -v`), and nothing in it expands, redirects, pipes or runs a subshell.
-function isLiteralPrint(inner) {
-  const text = String(inner)
-  // `cat <<TAG ... TAG` prints its body: literal when the tag is quoted or nothing in it expands
-  const doc = /^\s*cat\s+<<-?\s*(['"]?)([A-Za-z_]\w*)\1[ \t]*\n([\s\S]*?)\n[ \t]*\2\s*$/.exec(text)
-  if (doc) return doc[1] !== '' || !/[$`\\]/.test(doc[3])
-  if (/[$`<>|&()\\]/.test(text)) return false
-  const cmds = text.split(/[;\n]/).map((c) => c.trim()).filter(Boolean)
-  return cmds.length > 0 && cmds.every((c) => /^(?:echo|printf)(?:\s|$)/.test(c) && !/^printf\s+(?:\S+\s+)*-v\b/.test(c))
-}
 // Output-file flags: their value is a path curl writes, never a host (an unreadable line's word
 // reading took `-o out.dir/file.json` for the host out.dir, didi's review 3).
 const CURL_FILE_SHORT = new Set(['o', 'D', 'c'])
@@ -676,24 +685,30 @@ const CURL_FILE_LONG = new Set(['output', 'output-dir', 'dump-header', 'cookie-j
 // was built by that substitution: the hosts its command text names are destinations, and when it names
 // none the destination is unknowable and is returned as `$(<command>)`, a host no list holds (didi F3:
 // `curl -s "$(echo evil.example.com/x)"` passed live). `fileValues`: collects output-file flag values.
-// `trustPrint` false: the line redefines commands, so no substitution counts as a literal print.
-export function curlDestinations(args, inners = null, fileValues = null, trustPrint = true) {
+// A substitution in the host part is ALWAYS unknowable, even `$(echo localhost)`: what echo, printf or
+// cat print depends on what the names mean, and four review rounds found a new way to change that
+// each time (a function, `functions[echo]=`, BASH_FUNC_ in the env, PATH / hash before the external
+// cat, autoload; didi rounds 5-7). Only a host written out in the text counts as local. Likewise a
+// `${...}` that is not a plain `${NAME}` (`${!r}`, `${h/a/b}`, `${h:9}`, `${a[0]}`) after expand():
+// its value is computed, not read (didi round 6 item 4).
+const COMPUTED_PARAM = /\$\{(?![A-Za-z_][A-Za-z0-9_]*\})/
+export function curlDestinations(args, inners = null, fileValues = null) {
   const dests = []
   const fromMarks = (part) => {
     if (!inners || !MARKS.test(part)) return false
     for (const k of new Set([...part].filter((c) => MARKS.test(c)).map((c) => c.charCodeAt(0) - MARK_BASE))) {
       if (inners[k] == null) continue
-      const found = substHostCandidates(inners[k])
-      // The words a substitution names are the destination only when the substitution PRINTS them:
-      // every command an echo/printf of literal text. Otherwise a named host is a decoy
-      // (`$(echo localhost >/dev/null; echo <base64> | base64 -d)`, `$(: 127.0.0.1; echo x)`, didi
-      // round 4 item 1) and the real destination is unknowable, so it is added as well.
-      if (found.length && trustPrint && isLiteralPrint(inners[k])) dests.push(...found)
-      else dests.push(...found, `$(${inners[k].trim()})`)
+      dests.push(...substHostCandidates(inners[k]), `$(${inners[k].trim()})`)
     }
     return true
   }
-  const addUrl = (v) => { const h = destHost(v); if (h) dests.push(h); else if (v != null) fromMarks(hostPortion(v)) }
+  const addUrl = (v) => {
+    const h = destHost(v)
+    if (h) { dests.push(h); return }
+    if (v == null) return
+    const part = hostPortion(v)
+    if (!fromMarks(part) && COMPUTED_PARAM.test(part)) dests.push(part)
+  }
   const addParts = (v) => { for (const p of String(v).split(':')) if (HOSTNAME.test(p)) dests.push(p.toLowerCase()); else fromMarks(p) }
   for (let k = 0; k < args.length; k++) {
     const w = args[k]
@@ -1024,9 +1039,8 @@ const IPV4_SHAPE = /^\d{1,3}(?:\.\d{1,3}){3}$/
 // every NAME=value in the line is a value $NAME can take (didi's review 3: `h=evil; curl $h` passed).
 // `fileValues` collects the output-file values, which the word reading then skips.
 const UNREAD_ASSIGN = /(?:^|[\s;&|(])(?:export\s+|local\s+|readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)=("([^"]*)"|'([^']*)'|([^\s;&|)]*))/g
-function unreadableCurlHosts(text, fileValues, untrusted = false) {
+function unreadableCurlHosts(text, fileValues) {
   const { marked, inners } = markAllSubstitutions(text)
-  const trustPrint = !untrusted && !definesCommands(text)
   const values = {}
   for (const m of marked.matchAll(UNREAD_ASSIGN)) (values[m[1]] ??= []).push(m[3] ?? m[4] ?? m[5] ?? '')
   // The other ways a line gives a name a value (didi round 4 item 3): a `for NAME in` list, a `read`
@@ -1047,7 +1061,7 @@ function unreadableCurlHosts(text, fileValues, untrusted = false) {
     // past MAX_LOOP_VARIANTS combinations, each variable's last value is read (the line still denies
     // on any literal host it holds)
     for (const t of [seg, ...(loopVariants(seg, {}, values) ?? [expand(seg, last)])]) {
-      out.push(...curlDestinations(shellWords(t), inners, fileValues, trustPrint))
+      out.push(...curlDestinations(shellWords(t), inners, fileValues))
     }
   }
   return out
@@ -1073,10 +1087,10 @@ function unreadableWordHosts(text, skip = new Set()) {
   }
   return out
 }
-function unreadableVerdict(text, vendorHosts, vendorDomains, untrusted = false) {
+function unreadableVerdict(text, vendorHosts, vendorDomains) {
   if (namesNetwork(text)) {
     const files = new Set()
-    const curlHosts = unreadableCurlHosts(text, files, untrusted)
+    const curlHosts = unreadableCurlHosts(text, files)
     const found = [...externalHosts(text, vendorHosts, vendorDomains), ...curlHosts, ...unreadableWordHosts(text, files)]
     const hosts = [...new Set(found)].filter((h) => !isLocalHost(h) && !vendorHosts.has(h) && !hostInDomains(h, vendorDomains))
     if (hosts.length) return { deny: true, reason: 'unparseable-external', hosts }
@@ -1138,35 +1152,21 @@ function shellCBodyIsData(body, trustPrint = true) {
   const w = cmds[0]; const i = commandIndex(w)
   return i < w.length && SHELL.test(normalizedName(w[i])) && shellStdinIsData(w.slice(i + 1), trustPrint)
 }
-// Does an interpreter read its stdin as its PROGRAM? Yes, unless one of ITS OWN code flags is given an
-// operand (`python3 -c CODE`, `node -e CODE`). A word after an option is no proof of a script operand:
-// `python3 -W ignore -`, `python3 -X utf8 -` and `node -r ./x.js` all ran the stdin (didi round 5
-// item 2), so options are not modelled; a script operand is judged as a program too, exactly as the
-// direct `python3 x.py <<S` form always was. Through xargs the stdin becomes the arguments, so a code
-// flag's operand can be the stdin itself (`xargs -0 -I{} python3 -c {}` ran it, item 3).
-// The flags are per interpreter: the shared CODE_FLAG made node's `-r` (preload a module) a code flag.
-const STDIN_CODE_FLAGS = {
-  python: new Set(['-c']), node: new Set(['-e', '--eval', '-p', '--print']), perl: new Set(['-e', '-E']),
-  ruby: new Set(['-e']), php: new Set(['-r']), deno: new Set(['eval']), bun: new Set(['-e', '--eval', '-p', '--print']),
-}
-function readsStdinProgram(w, i) {
-  const name = normalizedName(w[i]).toLowerCase()
-  const family = name.replace(/(?:\d+(?:\.\d+)?|js|\.exe)$/, '')
-  const isCode = (x) => (POWERSHELL.test(name) ? PS_CODE_FLAG.test(x) : (STDIN_CODE_FLAGS[family]?.has(x) ?? CODE_FLAG.has(x)))
-  if (w.slice(0, i).some((x) => normalizedName(x) === 'xargs')) return true
-  const rest = w.slice(i + 1)
-  const at = rest.findIndex(isCode)
-  return at === -1 || at === rest.length - 1
-}
-// The interpreter a shell's -c body hands its stdin to as a program (`bash -c 'python3 -'`,
-// `sh -c 'exec node'`), or null: such a body is judged by the interpreter rule, not as a command line.
+// A body that reaches an interpreter's stdin is judged as that interpreter's PROGRAM, whatever its
+// options say. No option is proof that the stdin stays data: `python3 -W ignore -` and `node -r ./x.js`
+// ran it (didi round 5 item 2), and so does a code flag's own operand when the code reads the stdin
+// (`python3 -c 'exec(sys.stdin.read())'`, `node -e 'eval(readFileSync(0))'`, didi round 7 item 2). The
+// interpreter rule only denies a body that uses the network AND names an external host, so data fed
+// to a parser (`| python3 -c 'json.load(sys.stdin)'`) stays allowed.
+// The interpreter a shell's -c body hands its stdin to (`bash -c 'python3 -'`, `sh -c 'exec node'`),
+// or null: such a body is judged by the interpreter rule, not as a command line.
 function stdinInterpreter(args) {
   const body = shellCBody(args)
   if (body === null) return null
   for (const w of bodyCommands(body)) {
     const i = commandIndex(w)
     const name = i < w.length ? normalizedName(w[i]) : ''
-    if (INTERPRETER.test(name) && readsStdinProgram(w, i)) return name
+    if (INTERPRETER.test(name)) return name
   }
   return null
 }
@@ -1222,8 +1222,8 @@ function feedRunsAsProgram(orig, masked, at, trustPrint = true) {
   }
   return false
 }
-// The interpreter a heredoc's line pipes its output into as a PROGRAM (`cat <<S | python3 -`), or null
-// (didi round 4 item 2), by readsStdinProgram.
+// The interpreter a heredoc's line pipes its output into (`cat <<S | python3 -`), or null (didi round 4
+// item 2); its stdin is its program, see stdinInterpreter.
 function pipedInterpreter(orig, masked, at) {
   const ls = orig.lastIndexOf('\n', at - 1) + 1
   const nl = orig.indexOf('\n', at)
@@ -1236,7 +1236,7 @@ function pipedInterpreter(orig, masked, at) {
     const w = withoutRedirects(shellWords(orig.slice(Math.max(line[j + 1][0], ls), Math.min(line[j + 1][1], le))))
     const i = commandIndex(w)
     const name = i < w.length ? normalizedName(w[i]) : ''
-    if (INTERPRETER.test(name.toLowerCase()) && readsStdinProgram(w, i)) return name
+    if (INTERPRETER.test(name.toLowerCase())) return name
   }
   return null
 }
@@ -1253,13 +1253,13 @@ function argsBefore(orig, masked, at) {
 // The curl destinations a substitution builds on a readable line (didi F3, card c8b1ccbf): the
 // sub-command read from the MARKED text, every loop reading too, so a host part holding a marker names
 // the substitution that built it (curlDestinations reads that substitution's command for hosts).
-function substitutedCurlHosts(seg, env, loops, inners, trustPrint = true) {
+function substitutedCurlHosts(seg, env, loops, inners) {
   const out = []
   for (const t of [expand(seg, env), ...(loopVariants(seg, env, loops) ?? [])]) {
     if (!MARKS.test(t)) continue
     const argv = shellWords(t)
     const at = argv.findIndex((w) => normalizedName(w) === 'curl')
-    if (at !== -1) out.push(...curlDestinations(argv.slice(at + 1), inners, null, trustPrint))
+    if (at !== -1) out.push(...curlDestinations(argv.slice(at + 1), inners))
   }
   return out
 }
@@ -1274,14 +1274,14 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
   const { stripped: orig, marked, inners, innerAt, herestrings } = liftSubstitutions(norm)
   const masked = maskInertLiterals(orig)
   if (masked === null || masked.length !== orig.length) {
-    const untrusted = Boolean(inherited?.untrusted) || definesCommands(norm)
+    const untrusted = Boolean(inherited?.untrusted) || definesCommands(norm) || DEFINES_IN_QUOTES.test(norm)
     if (depth < 4) {
       for (const inner of inners) { const r = classify(inner, depth + 1, vendorHosts, vendorDomains, true, { ...inherited, untrusted }); if (r.deny) return r }
     }
-    return unreadableVerdict(norm, vendorHosts, vendorDomains, untrusted)
+    return unreadableVerdict(norm, vendorHosts, vendorDomains)
   }
   // A line that redefines commands: no echo / printf / cat proves a literal print, here or in what it runs.
-  const untrusted = Boolean(inherited?.untrusted) || definesCommands(masked)
+  const untrusted = Boolean(inherited?.untrusted) || definesCommands(masked) || DEFINES_IN_QUOTES.test(orig)
   const trustPrint = !untrusted
   const env = { ...(inherited?.env ?? {}), ...collectAssignments(orig, masked) }
   const loops = { ...(inherited?.loops ?? {}), ...collectLoops(orig, masked, env) }
@@ -1319,16 +1319,24 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
     const shellArgs = shell ? argsBefore(orig, masked, f.at) : []
     // `bash -c 'python3 -'`: the body is the interpreter's program, judged by the interpreter rule
     const handedTo = shell ? stdinInterpreter(shellArgs) : null
-    if (handedTo) { cmd = handedTo; shell = false }
     const plain = f.expands ? expand(f.text, env) : f.text
     const variants = f.expands ? loopVariants(f.text, env, loops) : []
+    if (handedTo) {
+      // What the interpreter leaves of the stdin, the rest of the body reads (`bash -c 'python3 -c
+      // X; bash'`): the body stays a command line as well.
+      for (const text of depth < 4 ? [plain, ...(variants ?? [])] : []) {
+        const r = classify(text, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted })
+        if (r.deny) return { ...r, reason: `heredoc-${r.reason}` }
+      }
+      cmd = handedTo; shell = false
+    }
     const interpreter = !shell && cmd !== null && INTERPRETER.test(cmd.toLowerCase())
     const piped = !shell && !interpreter ? pipedInterpreter(orig, masked, f.at) : null
     // A here-string a substitution builds: what it prints is unknown, so when it reaches a program its
     // command text is judged as an unreadable line is (a network word and an external host deny).
     if (f.inners?.length && (handedTo || interpreter || piped || (shell ? !shellStdinIsData(shellArgs, trustPrint) : feedRunsAsProgram(orig, masked, f.at, trustPrint)))) {
       for (const inner of f.inners) {
-        const r = unreadableVerdict(inner, vendorHosts, vendorDomains, untrusted)
+        const r = unreadableVerdict(inner, vendorHosts, vendorDomains)
         if (r.deny) return { ...r, reason: `herestring-${r.reason}` }
       }
     }
@@ -1362,6 +1370,15 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
     }
     if (variants === null) return { deny: true, reason: 'heredoc-loop-unbounded', hosts: [] }
   }
+  // On a line that redefines a name, a text-only receiver can be a program in disguise
+  // (`cat(){ python3 -; }; export -f cat; bash -c 'cat' <<S`, didi round 7 item 3), and which
+  // interpreter it runs is unknown: every fed body is also read as an unreadable line is.
+  for (const f of untrusted ? feeds : []) {
+    for (const text of f.expands ? [expand(f.text, env), ...(loopVariants(f.text, env, loops) ?? [])] : [f.text]) {
+      const r = unreadableVerdict(text, vendorHosts, vendorDomains)
+      if (r.deny) return { ...r, reason: `redefined-feed-${r.reason}` }
+    }
+  }
   const named = bodiesAreText(orig, masked, depth, substituted) ? blankHeredocBodies(orig, masked) : orig
   for (const [a, b] of spans(masked)) {
     const mw = words(masked.slice(a, b))
@@ -1390,7 +1407,7 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
         if (body === null) continue
         const r = depth < 4
           ? classify(body, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted })
-          : unreadableVerdict(body, vendorHosts, vendorDomains, untrusted)
+          : unreadableVerdict(body, vendorHosts, vendorDomains)
         if (r.deny) return { ...r, reason: `shell-c-${r.reason}` }
         if (viaXargs && namesNetwork(body)) {
           const hosts = externalHosts(norm, vendorHosts, vendorDomains)
@@ -1415,7 +1432,7 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
       const argv = target === 'curl' ? shellWords(text) : null
       const at = argv ? argv.findIndex((w) => normalizedName(w) === 'curl') : -1
       if (at !== -1) {
-        substHosts ??= substitutedCurlHosts(marked.slice(a, b), markedEnv, loops, innerTexts, trustPrint)
+        substHosts ??= substitutedCurlHosts(marked.slice(a, b), markedEnv, loops, innerTexts)
         found = [...curlDestinations(argv.slice(at + 1)), ...substHosts]
       } else found = [...text.matchAll(URL_RE)].map((m) => m[0]).filter(isExternal).map(hostOf)
       // A listed vendor host (or a host under a listed domain) passes only by itself: any other

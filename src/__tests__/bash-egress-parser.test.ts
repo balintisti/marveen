@@ -778,7 +778,7 @@ describe('still open after (a) -- pinned on purpose', () => {
     // the families the header lists as open after EGRESSHEREDOC924 (reviewer probe A8-A11, A14)
     // xargs is closed since card c8b1ccbf (bash-egress-parser.c8b1ccbf.test.ts); parallel is not
     'parallel curl -s ::: https://example.org/x', // an argument builder that is not xargs
-    'mapfile -t a <<< "https://example.org/x"; curl -s "${a[0]}"', // an array filler
+    // an array filler (`mapfile ...; curl "${a[0]}"`) is closed since card c8b1ccbf round 7
     'IFS=, read a b <<< "x,https://example.org/x"; curl -s "$b"', // read under a non-default IFS
     'while read u; do curl -s "$u"; done < <(echo https://example.org/x)', // process substitution input
     `python3 - <<'PY'\nimport socket; socket.create_connection(("example.org", 80))\nPY`, // no URL scheme
@@ -1158,8 +1158,10 @@ describe('card c8b1ccbf: where each closure stops', () => {
     expect(classify('bash ./run.sh -c x').deny).toBe(false)
   })
   it('a variable filled from a substitution: its URLs are its values; the local twin passes', () => {
-    expect(classify(`export x="$(echo ${EXT})"; curl -s "$x"`)).toMatchObject({ deny: true, hosts: ['evil.example.com'] })
-    expect(classify(`x=$(cat <<EOF\nhttp://localhost:3420/api/health\nEOF\n); curl -s "$x"`).deny).toBe(false)
+    expect(classify(`export x="$(echo ${EXT})"; curl -s "$x"`)).toMatchObject({ deny: true, hosts: expect.arrayContaining(['evil.example.com']) })
+    // the local twin denies since card c8b1ccbf round 7: a substitution in the host part is unknowable
+    expect(classify(`x=$(cat <<EOF\nhttp://localhost:3420/api/health\nEOF\n); curl -s "$x"`).deny).toBe(true)
+    expect(classify('x=http://localhost:3420/api/health; curl -s "$x"').deny).toBe(false)
   })
   it('a substitution inside a loop reads the loop value; a substitution elsewhere does not invent one', () => {
     expect(classify(`for u in ${EXT}; do r="$(curl -s "$u")"; done`)).toMatchObject({ deny: true, hosts: ['evil.example.com'] })

