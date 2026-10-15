@@ -783,9 +783,10 @@ describe('still open after (a) -- pinned on purpose', () => {
     'IFS=, read a b <<< "x,https://example.org/x"; curl -s "$b"', // read under a non-default IFS
     'while read u; do curl -s "$u"; done < <(echo https://example.org/x)', // process substitution input
     `python3 - <<'PY'\nimport socket; socket.create_connection(("example.org", 80))\nPY`, // no URL scheme
-    'H=$(cat host.txt); curl -s "http://$H/x"', // host not literally in the command
+    // a host built by a substitution (`H=$(cat host.txt)`, `curl $(echo URL)`) is closed since card
+    // c8b1ccbf (didi's review 3): the substitution's text is read for hosts, and one that names none
+    // denies as an unknowable destination (bash-egress-parser.c8b1ccbf.test.ts)
     'curl -s "$URL"', // URL from the environment
-    'curl $(echo https://example.org)', // URL computed at runtime by a substitution (#1514 review B)
     'curl -K curl.cfg', // URL read from a curl config file
     'git clone https://example.org/r.git', // other network-capable binaries
     'pip install https://example.org/p.tar.gz',

