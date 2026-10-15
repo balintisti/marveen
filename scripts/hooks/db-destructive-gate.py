@@ -720,7 +720,7 @@ def find_hits(command: str, cwd=None, missing=None):
 # operator, an env-assignment prefix, a positional psql argument, a conninfo `-d`.
 # The daily reaper (scripts/dev-gc.py) builds its command and asks THIS function before
 # running it, so the job is held to the same shape as a typed command.
-E2E_AGENTS = ("dexter", "didi", "deeper", "mandark", "computress", "marveen", "friday", "jarvis")
+E2E_AGENTS = ("dexter", "didi", "deeper", "mandark", "computress", "marveen", "friday", "jarvis", "trillian")
 E2E_DB_NAME = re.compile(r"crm_e2e_(?:%s)_[a-z0-9][a-z0-9_]*" % "|".join(E2E_AGENTS))
 _E2E_DROP_SQL = re.compile(
     r"\s*(?i:DROP)\s+(?i:DATABASE)\s+(?:(?i:IF)\s+(?i:EXISTS)\s+)?([^\s;]+)\s*;?\s*")

@@ -61,6 +61,7 @@ describe('db-gate e2e-kivetel: A) amit ENGEDNI kell', () => {
     [`dropdb -h localhost crm_e2e_dexter_x`],
     [`dropdb -h localhost --if-exists crm_e2e_mandark_1a2b`],
     [`dropdb crm_e2e_friday_x`],
+    [`dropdb -h localhost crm_e2e_trillian_x`],
   ])('%s', (cmd) => {
     expect(blocks(cmd)).toBe(false)
   })
@@ -74,6 +75,7 @@ describe('db-gate e2e-kivetel: A) amit ENGEDNI kell', () => {
 describe('db-gate e2e-kivetel: B) a NEV -- a ket elo csapda es a tobbi', () => {
   it.each([
     ['crm_e2e_didi', 'a baseline, utotag NELKUL'],
+    ['crm_e2e_trillian', 'trillian, utotag NELKUL'],
     ['crm_e2e_test', 'a KOZOS DB'],
     ['crm_e2e_test_x', 'a laza [a-z]+_ minta ezt engedne'],
     ['crm_e2e_frontend_x', 'nem agens-nev'],
