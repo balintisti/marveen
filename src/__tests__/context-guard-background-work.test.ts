@@ -10,7 +10,10 @@ import { fileURLToPath } from 'node:url'
 import { tmpDirs } from './helpers/tmp-dirs.js'
 import {
   BACKGROUND_DEFER_MAX_MS,
+  DAILY_HANDOFF_REASON_PREFIX,
   DEFAULT_CONTEXT_GUARD,
+  IDLE_FLUSH_REASON_PREFIX,
+  STALE_REFRESH_REASON_PREFIX,
   INITIAL_GUARD_STATE,
   SATURATION_CONFIRM_SWEEPS,
   decideGuard,
@@ -134,10 +137,116 @@ describe('a ROUTINE restart waits for background work', () => {
     expect(bound.reason).toMatch(/^handoff timeout -- force restart -- held 45m .*KILLS running background work/)
   })
 
+  it('a stale-handoff refresh inside the hold keeps the hold\'s start, so the bound stays one (didi 35937 M2)', () => {
+    const since = NOW - 20 * MIN
+    // idleMs 0: the agent was active just now, long after the handoff (mtime 200) -- stale.
+    const d = decideGuard({ ...awaiting, backgroundDeferSinceMs: since }, inputs({ handoffMtime: 200, idleMs: 0, ...BG }), CFG)
+    expect(d.action).toBe('request-handoff')
+    expect(d.reason.startsWith(STALE_REFRESH_REASON_PREFIX)).toBe(true)
+    expect(d.nextState.backgroundDeferSinceMs).toBe(since)
+  })
+
   it('with nothing running the restart is exactly what it was', () => {
     expect(decideGuard(awaiting, inputs({ handoffMtime: 200 }), CFG).reason).toBe('handoff written')
     expect(decideGuard(awaiting, inputs({ handoffMtime: 200, backgroundWork: 0 }), CFG).action).toBe('restart')
     expect(decideGuard({ ...awaiting, deadlineMs: NOW - 1 }, inputs(), CFG).reason).toBe('handoff timeout -- force restart')
+  })
+})
+
+describe('the tiers with no context pressure do not START while background work runs (didi 35937)', () => {
+  // An agent waiting for its own gate is quiet BECAUSE it waits: without this rule the idle flush
+  // asked for a handoff, held 45m and killed the gate (didi's probe: restart at m=47).
+  const IDLE_CFG: ContextGuardConfig = { ...CFG, idleFlushEnabled: true, idleFlushTokens: 150_000, idleMinutes: 60 }
+  const quietHeavy = { pct: 0.3, contextTokens: 160_000, idleMs: 70 * MIN }
+
+  it('idle-flush: no handoff request while the gate runs, for as long as it runs', () => {
+    let state: GuardState = INITIAL_GUARD_STATE
+    for (let m = 0; m <= 180; m += 1) {
+      const d = decideGuard(state, inputs({ ...quietHeavy, nowMs: NOW + m * MIN, idleMs: (70 + m) * MIN, ...BG }), IDLE_CFG)
+      expect(d.action, `minute ${m}: ${d.reason}`).toBe('none')
+      state = d.nextState
+    }
+    expect(state.phase).toBe('idle')
+    const d = decideGuard(INITIAL_GUARD_STATE, inputs({ ...quietHeavy, ...BG }), IDLE_CFG)
+    expect(d.reason).toBe('idle-flush: heavy and quiet, but background work is running: 2 (2 in the pane (shells / monitors / sub-agents)) -- not starting a handoff')
+  })
+
+  it('CONTROL: the same quiet, heavy session with nothing running gets its idle flush', () => {
+    const d = decideGuard(INITIAL_GUARD_STATE, inputs({ ...quietHeavy }), IDLE_CFG)
+    expect(d.action).toBe('request-handoff')
+    expect(d.reason.startsWith(IDLE_FLUSH_REASON_PREFIX)).toBe(true)
+  })
+
+  it('daily: not requested while work runs, and the slot is not marked served (the reason lacks its prefix)', () => {
+    const cfg = { ...CFG, dailyHandoffEnabled: true }
+    const d = decideGuard(INITIAL_GUARD_STATE, inputs({ pct: 0.3, dailyHandoffDue: true, ...BG }), cfg)
+    expect(d.action).toBe('none')
+    expect(d.reason).toContain('daily handoff due, but background work is running')
+    expect(d.reason.startsWith(DAILY_HANDOFF_REASON_PREFIX)).toBe(false)
+    // CONTROL: once the work is done, the still-due slot is served.
+    const after = decideGuard(INITIAL_GUARD_STATE, inputs({ pct: 0.3, dailyHandoffDue: true }), cfg)
+    expect(after.action).toBe('request-handoff')
+    expect(after.reason.startsWith(DAILY_HANDOFF_REASON_PREFIX)).toBe(true)
+  })
+
+  it('the act tier still starts a sequence (its growth is real), and that one is bounded', () => {
+    const d = decideGuard(INITIAL_GUARD_STATE, inputs({ pct: 0.92, ...BG }), CFG)
+    expect(d.action).toBe('request-handoff')
+  })
+
+  // A sequence such a tier started while nothing ran, with work starting during the wait (marveen
+  // on didi 35937: no 45m bound for them). The bound returns once the context reaches actPct.
+  const NP_CFG: ContextGuardConfig = { ...CFG, idleFlushEnabled: true, idleFlushTokens: 150_000, idleMinutes: 60, actPct: 0.75, hardPct: 0.95 }
+
+  it('the sequence remembers which kind of tier started it', () => {
+    const flush = decideGuard(INITIAL_GUARD_STATE, inputs({ ...quietHeavy }), NP_CFG)
+    expect(flush.nextState.noPressure).toBe(true)
+    const daily = decideGuard(INITIAL_GUARD_STATE, inputs({ pct: 0.3, dailyHandoffDue: true }), { ...CFG, dailyHandoffEnabled: true })
+    expect(daily.nextState.noPressure).toBe(true)
+    const act = decideGuard(INITIAL_GUARD_STATE, inputs({ pct: 0.8 }), NP_CFG)
+    expect(act.action).toBe('request-handoff')
+    expect(act.nextState.noPressure ?? false).toBe(false)
+  })
+
+  it('below actPct its hold has no bound: written handoff and timeout both hold for 3 hours, then restart when the work ends', () => {
+    const start = decideGuard(INITIAL_GUARD_STATE, inputs({ ...quietHeavy }), NP_CFG).nextState
+    let state: GuardState = start
+    for (let m = 1; m <= 180; m += 1) {
+      // handoff written at once; the deadline passes at handoffTimeoutMinutes -- neither may kill the work
+      const d = decideGuard(state, inputs({ pct: 0.3, nowMs: NOW + m * MIN, handoffMtime: 200, ...BG }), NP_CFG)
+      expect(d.action, `minute ${m}: ${d.reason}`).toBe('none')
+      state = d.nextState
+    }
+    const held = decideGuard(state, inputs({ pct: 0.3, nowMs: NOW + 181 * MIN, handoffMtime: 200, ...BG }), NP_CFG)
+    expect(held.reason).toContain('(180m, no bound below 75%: no context pressure behind this handoff)')
+    const timedOut = decideGuard({ ...start, backgroundDeferSinceMs: NOW }, inputs({ pct: 0.3, nowMs: NOW + 180 * MIN, ...BG }), NP_CFG)
+    expect(timedOut.action).toBe('none')
+    expect(timedOut.reason).toContain('handoff timeout, but background work is running')
+    const done = decideGuard(state, inputs({ pct: 0.3, nowMs: NOW + 181 * MIN, handoffMtime: 200 }), NP_CFG)
+    expect(done.action).toBe('restart')
+    expect(done.reason).toBe('handoff written -- held 180m until the background work finished')
+  })
+
+  it('once the context reaches actPct the 45m bound applies, counted from then, not from the hold start', () => {
+    const start = decideGuard(INITIAL_GUARD_STATE, inputs({ ...quietHeavy }), NP_CFG).nextState
+    const longHold = { ...start, backgroundDeferSinceMs: NOW - 120 * MIN }
+    const first = decideGuard(longHold, inputs({ pct: 0.8, handoffMtime: 200, ...BG }), NP_CFG)
+    expect(first.action).toBe('none')
+    expect(first.nextState.backgroundPressureSinceMs).toBe(NOW)
+    expect(first.reason).toContain('(120m, at 75% for 0m of 45m)')
+    const inside = decideGuard(first.nextState, inputs({ pct: 0.8, nowMs: NOW + 44 * MIN, handoffMtime: 200, ...BG }), NP_CFG)
+    expect(inside.action).toBe('none')
+    expect(inside.nextState.backgroundPressureSinceMs).toBe(NOW)
+    const bound = decideGuard(inside.nextState, inputs({ pct: 0.8, nowMs: NOW + 45 * MIN, handoffMtime: 200, ...BG }), NP_CFG)
+    expect(bound.action).toBe('restart')
+    expect(bound.reason).toContain('held 165m for background work, the 45m bound is reached -- KILLS running background work')
+  })
+
+  it('the hard threshold still does not wait for it', () => {
+    const start = decideGuard(INITIAL_GUARD_STATE, inputs({ ...quietHeavy }), NP_CFG).nextState
+    const d = decideGuard({ ...start, backgroundDeferSinceMs: NOW - 10 * MIN }, inputs({ pct: 0.96, handoffMtime: 200, ...BG }), NP_CFG)
+    expect(d.action).toBe('restart')
+    expect(d.reason).toContain('KILLS running background work')
   })
 })
 
@@ -207,6 +316,17 @@ describe('the inputs come from the live pane and from heavy-run', () => {
       backgroundWork: 2,
       backgroundWorkDetail: 'heavy-run: dexter-gate, dexter-e2e (queued)',
     })
+  })
+
+  it('the light pool counts too: a light-<i> holder and a tickets-light waiter (didi 35937 M6)', () => {
+    const dir = mkTmp('heavy-light-')
+    mkdirSync(join(dir, 'tickets-light'), { recursive: true })
+    writeFileSync(join(dir, 'light-1'), JSON.stringify({ agent: 'dexter', pid: process.pid, label: 'dexter-lint' }))
+    writeFileSync(join(dir, 'tickets-light', '0000000007'), JSON.stringify({ agent: 'dexter', pid: process.pid, label: 'dexter-tsc' }))
+    expect(liveHeavyRunJobs('dexter', dir)).toEqual([
+      { label: 'dexter-lint', waiting: false },
+      { label: 'dexter-tsc', waiting: true },
+    ])
   })
 
   it('a missing heavy-run directory is no work, not an error', () => {

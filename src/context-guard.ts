@@ -297,6 +297,13 @@ export interface GuardState {
   /** When this await-handoff sequence started holding its restart for running background work
    *  (BACKGROUND_DEFER_MAX_MS bounds the hold); null/absent = not holding. Card c8852bba. */
   backgroundDeferSinceMs?: number | null
+  /** This sequence was started by a tier with no context pressure behind it (idle-flush, daily):
+   *  its background hold has no bound until the context reaches actPct (marveen, didi 35937).
+   *  Absent = an act-tier sequence (or state persisted before this field): bounded, as before. */
+  noPressure?: boolean
+  /** When a noPressure sequence's hold first saw the context at actPct: its bound counts from
+   *  here, not from the hold's start, so the growth gets the same 45m an act sequence gets. */
+  backgroundPressureSinceMs?: number | null
 }
 
 export const INITIAL_GUARD_STATE: GuardState = {
@@ -619,29 +626,59 @@ function killedNote(inputs: GuardInputs): string {
  * The routine-restart hold: `none` while background work runs and the hold is under its bound,
  * null when the restart may go ahead. `restartReason` is completed with how long it waited, or
  * with the bound and the work it now kills.
+ *
+ * The bound applies where the growth is real: an act-tier sequence from the hold's start; a
+ * noPressure sequence (idle-flush, daily) only once its context reaches actPct, counted from
+ * then. Below actPct its hold is unbounded: hardPct stays the backstop (marveen, didi 35937).
  */
 function holdForBackground(
   state: GuardState,
   inputs: GuardInputs,
+  cfg: ContextGuardConfig,
   what: string,
 ): { hold: GuardDecision | null; suffix: string } {
   const since = state.backgroundDeferSinceMs ?? null
   const running = (inputs.backgroundWork ?? 0) > 0
   const waitedMin = since !== null ? Math.round((inputs.nowMs - since) / 60_000) : 0
-  if (running && (since === null || inputs.nowMs - since < BACKGROUND_DEFER_MAX_MS)) {
+  const pressured = inputs.pct !== null && inputs.pct >= cfg.actPct
+  const boundSince = !state.noPressure
+    ? since ?? inputs.nowMs
+    : pressured ? state.backgroundPressureSinceMs ?? inputs.nowMs : null
+  const maxMin = Math.round(BACKGROUND_DEFER_MAX_MS / 60_000)
+  if (running && (boundSince === null || inputs.nowMs - boundSince < BACKGROUND_DEFER_MAX_MS)) {
+    const progress = !state.noPressure
+      ? `${waitedMin}m of ${maxMin}m`
+      : boundSince === null
+        ? `${waitedMin}m, no bound below ${Math.round(cfg.actPct * 100)}%: no context pressure behind this handoff`
+        : `${waitedMin}m, at ${Math.round(cfg.actPct * 100)}% for ${Math.round((inputs.nowMs - boundSince) / 60_000)}m of ${maxMin}m`
     return {
       hold: {
         action: 'none',
-        reason: `${what}, but background work is running: ${backgroundWorkText(inputs)} -- holding the restart (${waitedMin}m of ${Math.round(BACKGROUND_DEFER_MAX_MS / 60_000)}m)`,
-        nextState: { ...state, backgroundDeferSinceMs: since ?? inputs.nowMs },
+        reason: `${what}, but background work is running: ${backgroundWorkText(inputs)} -- holding the restart (${progress})`,
+        nextState: {
+          ...state,
+          backgroundDeferSinceMs: since ?? inputs.nowMs,
+          ...(state.noPressure && boundSince !== null ? { backgroundPressureSinceMs: boundSince } : {}),
+        },
       },
       suffix: '',
     }
   }
   if (running) {
-    return { hold: null, suffix: ` -- held ${waitedMin}m for background work, the ${Math.round(BACKGROUND_DEFER_MAX_MS / 60_000)}m bound is reached${killedNote(inputs)}` }
+    return { hold: null, suffix: ` -- held ${waitedMin}m for background work, the ${maxMin}m bound is reached${killedNote(inputs)}` }
   }
   return { hold: null, suffix: since !== null ? ` -- held ${waitedMin}m until the background work finished` : '' }
+}
+
+/**
+ * The tiers with no context pressure behind them (idle-flush, daily) do not START a sequence while
+ * background work runs: the work would be killed at BACKGROUND_DEFER_MAX_MS, and waiting costs
+ * nothing (the waiting agent does not grow). Only the act tier, whose growth is real, starts one
+ * and is bounded. Card c8852bba, didi 35937.
+ */
+function notWhileBackground(inputs: GuardInputs, what: string, cleared: GuardState, none: NoneFn): GuardDecision | null {
+  if ((inputs.backgroundWork ?? 0) === 0) return null
+  return none(`${what}, but background work is running: ${backgroundWorkText(inputs)} -- not starting a handoff`, cleared)
 }
 
 export type GuardActionType = 'none' | 'request-handoff' | 'restart' | 'inject-resume'
@@ -756,9 +793,14 @@ export function decideGuard(
       // gets the request and answers it after its turn, and await-handoff
       // already refuses to cut a live turn.
       if (cfg.dailyHandoffEnabled && inputs.dailyHandoffDue) {
+        // Not while background work runs: nothing presses (didi 35937), and the sequence would
+        // kill the work at the hold's bound. The slot stays due and is served once it ends.
+        const busy = notWhileBackground(inputs, 'daily handoff due', cleared, none)
+        if (busy) return busy
         return handoffRequest(
           nowMs, inputs, cfg,
           `${DAILY_HANDOFF_REASON_PREFIX} (scheduled ${cfg.dailyHandoffTime})`,
+          true,
         )
       }
       if (!cfg.enabled) return none('proactive guard disabled (saturation net armed)', cleared)
@@ -820,7 +862,7 @@ export function decideGuard(
         // A routine restart waits for the agent's background work (card c8852bba), unless the
         // context already reached the hard threshold.
         const atHard = inputs.pct !== null && inputs.pct >= cfg.hardPct
-        const held = atHard ? { hold: null, suffix: killedNote(inputs) } : holdForBackground(state, inputs, 'handoff written')
+        const held = atHard ? { hold: null, suffix: killedNote(inputs) } : holdForBackground(state, inputs, cfg, 'handoff written')
         if (held.hold) return held.hold
         // Refresh budget spent (or never applicable): ship what we have. Saying
         // the budget is spent out loud matters -- the previous behaviour looked
@@ -846,7 +888,7 @@ export function decideGuard(
       }
       if (nowMs >= state.deadlineMs) {
         if (inputs.paneBusy) return none('handoff timeout but agent mid-turn -- deferring restart')
-        const held = holdForBackground(state, inputs, 'handoff timeout')
+        const held = holdForBackground(state, inputs, cfg, 'handoff timeout')
         if (held.hold) return held.hold
         // No handoff in time (agent wedged or ignored the prompt). Restart
         // anyway: taskstate + kanban + hot memories are the fallback context.
@@ -961,6 +1003,10 @@ function decideIdleFlush(
       cleared,
     )
   }
+  // Quiet because it waits for its own gate: an idle flush has no context pressure behind it, so
+  // it does not start a sequence that would kill the gate at the hold's bound (didi 35937).
+  const busy = notWhileBackground(inputs, 'idle-flush: heavy and quiet', cleared, none)
+  if (busy) return busy
   // Idle because the plan limit is reached: the handoff request could not be answered, and the
   // await-handoff deadline would restart the session with nothing written. Wait for the reset.
   if (inputs.paneUsageLimited === true) {
@@ -973,6 +1019,7 @@ function decideIdleFlush(
     nowMs, inputs, cfg,
     `${IDLE_FLUSH_REASON_PREFIX} (${Math.round(inputs.contextTokens / 1000)}k tokens, quiet for ` +
     `${Math.round(inputs.idleMs / 60_000)}m >= ${cfg.idleMinutes}m)`,
+    true,
   )
 }
 
@@ -991,6 +1038,8 @@ function handoffRequest(
   inputs: GuardInputs,
   cfg: ContextGuardConfig,
   reason: string,
+  /** idle-flush / daily: no context pressure behind this sequence (see GuardState.noPressure). */
+  noPressure = false,
 ): GuardDecision {
   return {
     action: 'request-handoff',
@@ -1004,6 +1053,7 @@ function handoffRequest(
       // A NEW sequence starts with a fresh refresh budget.
       staleRefreshCount: 0,
       handoffStaleMinutes: null,
+      ...(noPressure ? { noPressure: true } : {}),
     },
   }
 }
