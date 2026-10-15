@@ -3,6 +3,7 @@ import {
   detectPaneState,
   detectPermissionMode,
   detectsPermissionDialog,
+  detectsThinkingBlockError,
   liveTurnFooterVisible,
   stuckInputSignature,
 } from '../pane-state.js'
@@ -148,6 +149,45 @@ describe('a truncated footer counts only under the live box (didi, f0ca2dc1)', (
     expect(detectPaneState(pane({ footer: TRUNCATED_PAREN_IDLE_FOOTER, spinner: false, agents: 25 }))).toBe('idle')
     const lowered = [NAMED_SEP, '❯ ', SEP, '', '', '', TRUNCATED_PAREN_IDLE_FOOTER].join('\n')
     expect(detectPaneState(lowered)).not.toBe('idle')
+  })
+})
+
+// didi 35742 (LOW, @8b8865245): three readings the cases above did not pin.
+describe('the truncated footer in the other readers (didi 35742)', () => {
+  // M6: detectsThinkingBlockError finds its footer through lastIdleFooterIndex, so the wedged
+  // error must still be seen when the live footer is the truncated one.
+  it('a thinking-block error above a truncated footer is still the error', () => {
+    const p = [
+      '  ⎿  API Error: 400 messages.55.content.19: `thinking` or `redacted_thinking` blocks in the latest assistant message',
+      '      cannot be modified. These blocks must remain as they were in the original response.',
+      '',
+      '✻ Sauteed for 1s',
+      '',
+      NAMED_SEP,
+      '❯ ',
+      SEP,
+      TRUNCATED_PAREN_IDLE_FOOTER,
+      ...panel(9),
+    ].join('\n')
+    expect(detectsThinkingBlockError(p)).toBe(true)
+  })
+
+  // M8: the ellipsis ends the truncated footer. A line under the box where text goes on after
+  // it is something else, and the pane is not idle because of it.
+  it('a line whose text goes on after the ellipsis is not a footer', () => {
+    const p = [NAMED_SEP, '❯ ', SEP, '  ⏵⏵ bypass permissions on · 3 shells… and the build went on'].join('\n')
+    expect(detectPaneState(p)).not.toBe('idle')
+  })
+
+  // Item 3: a dialog drawn under the old footer, without the `❯` cursor the check knew. Each
+  // case carries only ONE of the two dialog signs, so each sign is pinned on its own.
+  it.each([
+    ['a `>` cursor, no question', [' Allow this edit', ' > 1. Yes', '   2. No', ' Esc to cancel · Tab to amend']],
+    ['a question, no cursor', [' Do you want to proceed?', '  1. Yes', '  2. No']],
+  ])('%s under the truncated footer is still a dialog', (_name, dialog) => {
+    const p = [NAMED_SEP, '❯ hi', SEP, TRUNCATED_PAREN_IDLE_FOOTER, ...(dialog as string[])].join('\n')
+    expect(detectsPermissionDialog(p)).toBe(true)
+    expect(detectPaneState(p)).not.toBe('idle')
   })
 })
 

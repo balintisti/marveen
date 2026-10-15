@@ -330,8 +330,9 @@ const FOOTER_BELOW_BOX_LINES = 3
  * Index of a width-truncated footer (TRUNCATED_FOOTER_RX) that sits where the live footer is
  * drawn, or -1. All three must hold: it is within FOOTER_BELOW_BOX_LINES under the LAST box
  * separator; that separator closes a real input box (a `❯` line between it and the separator
- * above); and no `❯` follows it. The last one is what keeps an open dialog out: a dialog
- * replaces the box, and its selected option is a `❯ 1. Yes` line under any older footer.
+ * above); and no dialog line follows it (a `❯` or `>` cursor, or a permission question). The
+ * last one is what keeps an open dialog out: a dialog replaces the box, and its selected option
+ * is a `❯ 1. Yes` (on some builds `> 1. Yes`) line under any older footer.
  * Stricter is the safe side: a footer this misses falls back to the footer-less reading, which
  * is what every pane got before card f5bb2626.
  */
@@ -349,7 +350,7 @@ function liveTruncatedFooterIndex(lines: string[]): number {
   const end = Math.min(lines.length, bottom + 1 + FOOTER_BELOW_BOX_LINES)
   for (let i = bottom + 1; i < end; i++) {
     if (!TRUNCATED_FOOTER_RX.test(lines[i])) continue
-    return lines.slice(i + 1).some(l => l.includes('❯')) ? -1 : i
+    return lines.slice(i + 1).some(l => l.includes('❯') || /^\s*>/.test(l) || PERMISSION_QUESTION_RX.test(l)) ? -1 : i
   }
   return -1
 }
