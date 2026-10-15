@@ -131,7 +131,16 @@ PROBE_MAX_AGE_MIN_DEFAULT = 12.0
 # below its own cadence. With the refresh at the 12-min limit a reading would sit between 12 and 20
 # min old for ~8 of every 20 minutes, and every --json reader would get probe-failed meanwhile.
 PROBE_REFRESH_MIN_DEFAULT = 8.0
-PROBE_TIMEOUT_SEC = 60
+PROBE_TIMEOUT_SEC = 30
+# THE RUN HAS A BUDGET, THE PROBE GETS WHAT IS LEFT OF IT. The scheduler kills the command at the
+# task's timeoutMs (usage-snapshot: 60 s), and a killed run writes no snapshot and records no probe
+# failure. The host reading before the probe can take tens of seconds on its own (token refresh,
+# the live usage endpoint), so a fixed probe limit cannot be kept under the task limit: _run() sets
+# a deadline, the probe timeout is capped by the time left, and under PROBE_MIN_SEC it does not
+# start (the reading it would have replaced still decides). Keep the budget below the task's limit.
+RUN_BUDGET_SEC_DEFAULT = 45.0
+PROBE_MIN_SEC = 5.0
+_run_deadline = None  # time.monotonic() value set by _run(); None (library use) = no run budget
 PLAN_ID_RX = re.compile(r"^[a-z0-9_-]+$")
 
 # Display timezone for reset stamps. Defaults to the project's Europe/Budapest;
@@ -881,10 +890,16 @@ def _run_probe(plan):
     else:
         argv = [shutil.which("node") or "/opt/homebrew/bin/node", PROBE_SCRIPT]
     argv.append(plan)
+    limit = PROBE_TIMEOUT_SEC
+    if _run_deadline is not None:
+        left = _run_deadline - time.monotonic()
+        if left < PROBE_MIN_SEC:
+            return f"probe not started, {max(left, 0):.0f}s left of the run budget"
+        limit = min(limit, left)
     try:
-        r = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, timeout=PROBE_TIMEOUT_SEC)
+        r = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, timeout=limit)
     except subprocess.TimeoutExpired:
-        return f"probe command timed out after {PROBE_TIMEOUT_SEC}s"
+        return f"probe command timed out after {limit:.0f}s"
     except (OSError, ValueError) as e:
         return f"probe command could not start ({type(e).__name__})"
     return None if r.returncode == 0 else f"probe command exited {r.returncode}"
@@ -1576,6 +1591,13 @@ def _run():
                         help="also send the OVERUSE forecast and the held-task list to the coordinator "
                              "(card 1fe8e8c5). Off by default, so tests and ad-hoc runs never message anyone.")
     args = parser.parse_args()
+
+    global _run_deadline
+    try:
+        budget = float(os.environ.get("USAGE_COLLECT_RUN_BUDGET_SEC") or RUN_BUDGET_SEC_DEFAULT)
+    except ValueError:
+        budget = RUN_BUDGET_SEC_DEFAULT
+    _run_deadline = time.monotonic() + budget
 
     host_out = {}
     snapshot = build_snapshot(host_out, allow_probe=not args.json)

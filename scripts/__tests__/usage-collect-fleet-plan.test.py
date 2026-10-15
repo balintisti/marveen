@@ -130,7 +130,8 @@ class Env(unittest.TestCase):
             "MAIN_AGENT_ID": "marveen",
             "USAGE_COLLECT_HOST_PLAN": "elso",
         }
-        for k, v in self.paths.items():
+        # _run() sets the run deadline module-wide; restore it so one test's budget never reaches the next
+        for k, v in {**self.paths, "_run_deadline": None}.items():
             p = mock.patch.object(uc, k, v)
             p.start()
             self.addCleanup(p.stop)
@@ -293,6 +294,51 @@ class FleetPlanFromProbe(Env):
         self.assertLess(time.time() - t0, 4, "the timeout must cut the 5 s sleep short")
         self.assertEqual((c["source"], c["ok"]), ("probe-failed", False))
         self.assertIn("timed out", c["error"])
+
+    def test_d_probe_timeout_is_capped_by_the_run_budget(self):
+        # PROBE_TIMEOUT_SEC stays 30: only the time left of the run can cut the 5 s sleep short
+        self.write_state(_state(_plan_entry(_now_ms() - 30 * 60_000)))
+        self.env_patch("STUB_MODE", "sleep")
+        with mock.patch.object(uc, "PROBE_MIN_SEC", 0.1), \
+                mock.patch.object(uc, "_run_deadline", time.monotonic() + 0.8):
+            t0 = time.time()
+            c = uc.collect_claude()
+        self.assertLess(time.time() - t0, 4, "the run budget must cut the probe short")
+        self.assertEqual((c["source"], c["ok"]), ("probe-failed", False))
+        self.assertIn("timed out after 1s", c["error"])
+
+    def test_d_probe_not_started_when_the_run_budget_is_spent(self):
+        self.write_state(_state(_plan_entry(_now_ms() - 30 * 60_000)))
+        with mock.patch.object(uc, "_run_deadline", time.monotonic() + 2):
+            c = uc.collect_claude()
+        self.assertEqual(self.probe_calls(), [])
+        self.assertEqual((c["source"], c["ok"]), ("probe-failed", False))
+        self.assertIn("probe not started", c["error"])
+
+    def test_d_spent_budget_keeps_a_still_valid_reading(self):
+        # 10 min old: due for the refresh (8), still valid (12) -> the skipped probe changes nothing
+        self.write_state(_state(_plan_entry(_now_ms() - 10 * 60_000)))
+        with mock.patch.object(uc, "_run_deadline", time.monotonic() + 2):
+            c = uc.collect_claude()
+        self.assertEqual(self.probe_calls(), [])
+        self.assertEqual((c["source"], c["ok"]), ("authoritative", True))
+
+    def test_d_scheduled_run_sets_the_budget_and_still_writes_the_snapshot(self):
+        # control for the wiring: the same run with the default budget probes (stub writes a reading)
+        self.write_state(_state(_plan_entry(_now_ms() - 30 * 60_000)))
+        self.env_patch("USAGE_COLLECT_RUN_BUDGET_SEC", "3")
+        self.run_main()
+        self.assertEqual(self.probe_calls(), [], "a 3 s budget leaves no 5 s for the probe")
+        latest = self.read_json("usage-latest.json")
+        self.assertEqual(latest["claude"]["source"], "probe-failed")
+        self.assertIn("run budget", latest["claude"]["error"])
+
+    def test_d_scheduled_run_with_the_default_budget_probes(self):
+        self.write_state(_state(_plan_entry(_now_ms() - 30 * 60_000)))
+        self.set_payload(_state(_plan_entry(_now_ms())))
+        self.run_main()
+        self.assertEqual(self.probe_calls(), ["masodik"])
+        self.assertEqual(self.read_json("usage-latest.json")["claude"]["source"], "authoritative")
 
     def test_d_probe_command_missing_is_probe_failed(self):
         self.write_state(_state(_plan_entry(_now_ms() - 30 * 60_000)))
