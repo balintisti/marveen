@@ -151,6 +151,11 @@ class Env(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
+    def env_patch(self, key, value):
+        p = mock.patch.dict(os.environ, {key: value})
+        p.start()
+        self.addCleanup(p.stop)
+
     def write_state(self, state):
         with open(self.paths["PLANS_STATE_PATH"], "w") as f:
             json.dump(state, f)
@@ -312,11 +317,6 @@ class FleetPlanFromProbe(Env):
         self.assertEqual((c["source"], c["plan"]), ("authoritative", "masodik"))
         self.assertEqual(host_out, {})
 
-    def env_patch(self, key, value):
-        p = mock.patch.dict(os.environ, {key: value})
-        p.start()
-        self.addCleanup(p.stop)
-
 
 class ProbeValidity(Env):
     """(e) what counts as a reading."""
@@ -380,6 +380,8 @@ class ProbeValidity(Env):
         self.assertEqual(list(c["windows"]), ["seven_day"])
 
     def test_e_the_age_limit_is_configurable_and_the_boundary_is_12_minutes(self):
+        # validity only: the refresh-ahead limit is lifted to the validity limit here
+        self.env_patch("USAGE_COLLECT_PROBE_REFRESH_MIN", "1000")
         self.write_state(_state(_plan_entry(_now_ms() - 11 * 60_000)))
         self.assertEqual(uc.collect_claude()["source"], "authoritative")
         self.assertEqual(self.probe_calls(), [])
@@ -391,6 +393,87 @@ class ProbeValidity(Env):
             self.write_state(_state(_plan_entry(_now_ms() - 20 * 60_000)))
             uc.collect_claude()
         self.assertEqual(self.probe_calls(), ["masodik"], "30 min limit: a 20-min-old probe is fresh")
+
+
+    def test_e_a_future_dated_probe_is_not_a_reading(self):
+        # a clock-skewed observation 5 min in the future must not count as fresh (60 s tolerance)
+        self.write_state(_state(_plan_entry(_now_ms() + 5 * 60_000)))
+        self.env_patch("STUB_MODE", "fail")
+        c = uc.collect_claude()
+        self.assertEqual(self.probe_calls(), ["masodik"])
+        self.assertEqual((c["source"], c["ok"]), ("probe-failed", False))
+        self.assertNotIn("windows", c)
+
+    def test_e_control_a_probe_30_s_in_the_future_is_within_the_tolerance(self):
+        self.write_state(_state(_plan_entry(_now_ms() + 30_000)))
+        self.assertEqual(uc.collect_claude()["source"], "authoritative")
+        self.assertEqual(self.probe_calls(), [])
+
+
+class RefreshAheadAndReadOnly(Env):
+    """The scheduled run refreshes past 8 min; --json never runs the probe (didi 34818)."""
+
+    def test_i_a_9_min_reading_is_refreshed_ahead_and_the_new_one_used(self):
+        self.write_state(_state(_plan_entry(_now_ms() - 9 * 60_000)))
+        self.set_payload(_state(_plan_entry(_now_ms(), windows={
+            "five_hour": {"usedPercent": 5.0, "resetsAt": int(time.time()) + 3600},
+            "seven_day": {"usedPercent": 6.0, "resetsAt": int(time.time()) + 86400},
+        })))
+        c = uc.collect_claude()
+        self.assertEqual(self.probe_calls(), ["masodik"])
+        self.assertEqual(c["windows"]["seven_day"]["used_percent"], 6.0)
+
+    def test_i_a_refresh_command_that_records_nothing_leaves_the_valid_reading(self):
+        self.write_state(_state(_plan_entry(_now_ms() - 9 * 60_000)))
+        self.env_patch("STUB_MODE", "fail")
+        c = uc.collect_claude()
+        self.assertEqual(self.probe_calls(), ["masodik"])
+        self.assertEqual((c["source"], c["ok"]), ("authoritative", True))
+
+    def test_i_a_refresh_that_records_a_failure_is_probe_failed(self):
+        # the probe stamps a newer, failed lastProbe over the 9-min numbers: no longer a reading
+        old = _now_ms() - 9 * 60_000
+        self.write_state(_state(_plan_entry(old)))
+        self.set_payload(_state(_plan_entry(old, at=_now_ms(), ok=False, error="401")))
+        c = uc.collect_claude()
+        self.assertEqual(self.probe_calls(), ["masodik"])
+        self.assertEqual((c["source"], c["ok"]), ("probe-failed", False))
+        self.assertNotIn("windows", c)
+
+    def test_i_a_7_min_reading_is_not_refreshed(self):
+        self.write_state(_state(_plan_entry(_now_ms() - 7 * 60_000)))
+        self.assertEqual(uc.collect_claude()["source"], "authoritative")
+        self.assertEqual(self.probe_calls(), [])
+
+    def test_i_json_never_runs_the_probe_and_reports_the_stale_reading_as_failed(self):
+        self.write_state(_state(_plan_entry(_now_ms() - 30 * 60_000)))
+        self.set_payload(_state(_plan_entry(_now_ms())))
+        d = json.loads(self.run_main("--json"))
+        self.assertEqual(self.probe_calls(), [], "--json is read-only: no live probe")
+        self.assertEqual((d["claude"]["source"], d["claude"]["ok"]), ("probe-failed", False))
+        self.assertIn("read-only", d["claude"]["error"])
+        self.assertNotIn("windows", d["claude"])
+
+    def test_i_json_serves_a_valid_reading_without_a_refresh(self):
+        self.write_state(_state(_plan_entry(_now_ms() - 10 * 60_000)))
+        d = json.loads(self.run_main("--json"))
+        self.assertEqual(self.probe_calls(), [])
+        self.assertEqual(d["claude"]["source"], "authoritative")
+
+    def test_i_control_the_default_run_does_run_the_probe_on_the_same_state(self):
+        self.write_state(_state(_plan_entry(_now_ms() - 30 * 60_000)))
+        self.set_payload(_state(_plan_entry(_now_ms())))
+        self.run_main()
+        self.assertEqual(self.probe_calls(), ["masodik"])
+
+    def test_i_an_exception_in_the_fleet_reading_is_probe_failed_not_host(self):
+        self.write_state(_state(_plan_entry(_now_ms() - 60_000)))
+        with mock.patch.object(uc, "_collect_claude_fleet", side_effect=RuntimeError("boom")):
+            c = uc.collect_claude()
+        self.assertEqual((c["source"], c["ok"], c["plan"]), ("probe-failed", False, "masodik"))
+        self.assertNotIn("windows", c)
+        self.assertIn("RuntimeError", c["error"])
+        self.assertEqual(c["error"], c["auth_error"])
 
 
 class OpusIsNeverCopied(Env):
@@ -409,7 +492,9 @@ class OpusIsNeverCopied(Env):
         text = "\n".join(ns.section_quota(root=self._root()))
         self.assertIn("heti: 77.25%", text)   # the fleet numbers are shown
         self.assertIn("heti opus: NEM MERHETO", text)
-        self.assertNotIn("44", text)
+        # the host's opus value nowhere as a percentage (a bare "44" would also match a reset at :44)
+        self.assertNotIn(f"{HOST_OPUS:g}%", text)
+        self.assertNotIn(f"{HOST_OPUS}%", text)
 
     def _root(self):
         root = os.path.join(self.tmp, "root")
@@ -625,7 +710,7 @@ class JsonModeStaysPure(unittest.TestCase):
             os.chmod(p, os.stat(p).st_mode | stat.S_IEXEC)
         state_path = os.path.join(tmp, "plans.json")
         with open(state_path, "w") as f:
-            json.dump(_state(_plan_entry(_now_ms() - 30 * 60_000)), f)    # stale -> probe runs
+            json.dump(_state(_plan_entry(_now_ms() - 30 * 60_000)), f)    # stale; --json must not run the probe
         noisy = os.path.join(tmp, "noisy.py")
         with open(noisy, "w") as f:
             f.write("import sys\nprint('PROBE STDOUT NOISE')\nprint('probe stderr noise', file=sys.stderr)\nsys.exit(1)\n")
@@ -643,6 +728,7 @@ class JsonModeStaysPure(unittest.TestCase):
         self.assertNotIn("NOISE", r.stdout)
         self.assertEqual(d["claude"]["source"], "probe-failed")
         self.assertNotIn("NOISE", d["claude"]["error"])
+        self.assertIn("read-only", d["claude"]["error"])
 
 
 if __name__ == "__main__":

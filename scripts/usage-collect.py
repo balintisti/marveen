@@ -31,7 +31,9 @@ Default run prints a human-readable summary, prints any
 appends one JSON snapshot line to store/usage-history.jsonl, and
 overwrites store/usage-latest.json with the latest snapshot.
 
---json prints only the snapshot JSON (no alerts, no side effects) --
+--json prints only the snapshot JSON (no alerts, no history, and no probe run: a stale fleet probe
+is reported as "probe-failed" instead of refreshed, because the probe is a live API call that
+outlasts its callers' time limits -- the scheduled default run is the one that refreshes it) --
 for programmatic consumption (e.g. a future dashboard widget).
 
 Stdlib only, no pip installs. Never prints token/secret values.
@@ -124,6 +126,11 @@ PLANS_STATE_PATH = os.environ.get("USAGE_COLLECT_PLANS_STATE") or os.path.join(S
 PROBE_SCRIPT = os.path.join(REPO_ROOT, "scripts", "claude-plan-probe.mjs")
 HOST_PLAN_DEFAULT = "elso"
 PROBE_MAX_AGE_MIN_DEFAULT = 12.0
+# REFRESH AHEAD of the validity limit: the scheduled default run (usage-snapshot, every 10 min) is
+# the only one that runs the probe (--json is read-only), so it refreshes a reading older than this,
+# below its own cadence. With the refresh at the 12-min limit a reading would sit between 12 and 20
+# min old for ~8 of every 20 minutes, and every --json reader would get probe-failed meanwhile.
+PROBE_REFRESH_MIN_DEFAULT = 8.0
 PROBE_TIMEOUT_SEC = 60
 PLAN_ID_RX = re.compile(r"^[a-z0-9_-]+$")
 
@@ -883,20 +890,26 @@ def _run_probe(plan):
     return None if r.returncode == 0 else f"probe command exited {r.returncode}"
 
 
-def _collect_claude_fleet(plan):
+def _collect_claude_fleet(plan, allow_probe=True):
     """The `claude` section for a fleet plan that is NOT the host plan, from its probe.
 
-    Fresh valid probe -> source "authoritative". Otherwise one probe command run, then a re-read.
+    Fresh valid probe -> source "authoritative". A reading older than the refresh limit (8 min) or
+    no valid reading -> one probe command run, then a re-read, which decides. allow_probe=False (--json): no run, and a reading past
+    the validity limit is reported as probe-failed.
     Still not a fresh valid reading -> source "probe-failed", ok false, NO windows: the quota gate,
     the heartbeat and the ceiling guard fail open on an untrusted source and the data-source alarm
     fires (src/quota-gate.ts trustedSources, src/data-source-alarm.ts). The host plan's numbers
     are never a fallback -- they describe a different account.
     seven_day_opus is absent on purpose: a probe carries no Fable window, and the host's value
     belongs to another plan."""
-    try:
-        max_age_min = float(os.environ.get("USAGE_COLLECT_PROBE_MAX_AGE_MIN") or PROBE_MAX_AGE_MIN_DEFAULT)
-    except ValueError:
-        max_age_min = PROBE_MAX_AGE_MIN_DEFAULT
+    def _minutes(var, default):
+        try:
+            return float(os.environ.get(var) or default)
+        except ValueError:
+            return default
+
+    max_age_min = _minutes("USAGE_COLLECT_PROBE_MAX_AGE_MIN", PROBE_MAX_AGE_MIN_DEFAULT)
+    refresh_min = min(_minutes("USAGE_COLLECT_PROBE_REFRESH_MIN", PROBE_REFRESH_MIN_DEFAULT), max_age_min)
 
     def _fresh(state):
         windows, obs, why = _probe_reading(state, plan)
@@ -908,8 +921,14 @@ def _collect_claude_fleet(plan):
         return windows, obs, None
 
     windows, obs, why = _fresh(_read_plans_state())
-    if windows is None:
+    if windows is None and not allow_probe:
+        reason = f"{why or 'no reading'}; not refreshed (--json is read-only, the scheduled run refreshes it)"
+        return {"provider": "claude", "source": "probe-failed", "ok": False, "plan": plan,
+                "error": reason, "auth_error": reason}
+    if allow_probe and (windows is None or time.time() * 1000 - obs > refresh_min * 60_000):
         probe_err = _run_probe(plan)
+        # the re-read decides, as for any reader: a probe that RECORDED a failure (newer lastProbe)
+        # leaves no reading, the same answer --json gives on that state a second later
         windows, obs, why2 = _fresh(_read_plans_state())
         if windows is None:
             reason = why2 or why or "no reading"
@@ -932,7 +951,7 @@ def _host_latest_path(host_plan):
     return os.path.join(STORE_DIR, f"usage-latest-{host_plan}.json")
 
 
-def collect_claude(host_out=None):
+def collect_claude(host_out=None, allow_probe=True):
     """Burkolo: MINDEN visszateresi utat bejelol a lejart ablakokkal (a `_collect_claude_raw` hivasa
     MINDIG `_mark_expired_windows`-on megy at; usage-collect-expired-windows.test.py ezt rogziti).
 
@@ -962,7 +981,7 @@ def collect_claude(host_out=None):
     if host is not None and host_out is not None:
         host_out["claude"] = host
     try:
-        fleet = _collect_claude_fleet(fleet_plan)
+        fleet = _collect_claude_fleet(fleet_plan, allow_probe=allow_probe)
     except Exception as e:
         msg = f"fleet probe reading failed ({type(e).__name__})"
         fleet = {"provider": "claude", "source": "probe-failed", "ok": False, "plan": fleet_plan,
@@ -1060,9 +1079,9 @@ def _mark_expired_windows(result, now=None):
 # Snapshot
 # --------------------------------------------------------------------------
 
-def build_snapshot(host_out=None):
+def build_snapshot(host_out=None, allow_probe=True):
     now = datetime.now(timezone.utc)
-    claude = collect_claude(host_out)
+    claude = collect_claude(host_out, allow_probe=allow_probe)
     return {
         "generated_at": now.isoformat(),
         "generated_at_local": now.astimezone(LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S %Z"),
@@ -1559,7 +1578,7 @@ def _run():
     args = parser.parse_args()
 
     host_out = {}
-    snapshot = build_snapshot(host_out)
+    snapshot = build_snapshot(host_out, allow_probe=not args.json)
 
     if args.json:
         print(json.dumps(snapshot, ensure_ascii=False, indent=2))
