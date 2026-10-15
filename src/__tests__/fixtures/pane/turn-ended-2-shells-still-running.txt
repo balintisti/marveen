@@ -1,0 +1,8 @@
+  The checks are still running, and I'll be notified when they finish.
+
+✻ Crunched for 38s · done 22:51 · 2 shells still running
+
+─────────────────────────────────────────────────────────────────── Computress ─
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 2 shells · ↓ to manage

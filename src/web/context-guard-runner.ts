@@ -18,7 +18,8 @@ import {
 import { sessionNameForAgent } from './session-names.js'
 import { sendSystemDirective } from './system-directive.js'
 import { notifyChannel } from '../notify.js'
-import { detectPaneState, paneShowsContextSaturation, paneShowsContextSaturationHardError } from '../pane-state.js'
+import { detectPaneState, paneShowsContextSaturation, paneShowsContextSaturationHardError, runningBackgroundWork } from '../pane-state.js'
+import { liveHeavyRunJobs } from '../heavy-run-jobs.js'
 import { usageLimitHolds } from '../usage-limit-window.js'
 import { readContextTokensFromProjectDir, readActiveModelFromProjectDir, readTranscriptMtimeFromProjectDir, predatesSession } from './active-model.js'
 import { readContextGuardConfig } from './context-guard-store.js'
@@ -369,6 +370,25 @@ async function performRestart(name: string): Promise<void> {
   }
 }
 
+/**
+ * The work an agent left running when its turn ended (card c8852bba): what its pane counts (shells,
+ * monitors, sub-agents: runningBackgroundWork) and its live heavy-run jobs -- a gate started
+ * detached is invisible to the pane. A routine restart waits for it; a hard one names it as killed.
+ */
+export function measureBackgroundWork(
+  name: string,
+  pane: string | null,
+  heavyRunDir?: string,
+): { backgroundWork: number; backgroundWorkDetail: string } {
+  const inPane = pane !== null ? runningBackgroundWork(pane) : 0
+  const jobs = liveHeavyRunJobs(name, heavyRunDir)
+  const backgroundWorkDetail = [
+    inPane > 0 ? `${inPane} in the pane (shells / monitors / sub-agents)` : '',
+    jobs.length > 0 ? `heavy-run: ${jobs.map((j) => (j.waiting ? `${j.label} (queued)` : j.label)).join(', ')}` : '',
+  ].filter(Boolean).join('; ')
+  return { backgroundWork: inPane + jobs.length, backgroundWorkDetail }
+}
+
 async function checkAgent(name: string, nowMs: number): Promise<void> {
   const cfg = readContextGuardConfig(name)
   const state = guardStates.get(name) ?? INITIAL_GUARD_STATE
@@ -491,6 +511,7 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
   // ONE transcript probe per sweep: the idle-flush/staleness inputs and the daily-tier
   // unused check read the same value (pinned by context-guard-saturation-mismatch).
   const idleMs = running && needPct ? measureIdleMs(name, nowMs, since) : null
+  const background = running && needPct ? measureBackgroundWork(name, pane) : { backgroundWork: 0, backgroundWorkDetail: '' }
 
   const inputs: GuardInputs = {
     nowMs,
@@ -520,6 +541,7 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
     // (handoffStaleMinutes) needs the transcript mtime on every decision path
     // that can restart, and the probe is a single stat().
     idleMs,
+    ...background,
     // Seed-on-first-sight: an agent we have not seen this process is recorded
     // as served NOW and is never due on the same sweep. dailyHandoffDue is
     // therefore false on the first tick by construction, not by luck.

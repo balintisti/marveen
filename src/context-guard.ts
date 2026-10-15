@@ -294,6 +294,9 @@ export interface GuardState {
    *  questions (2026-08-17: a merge-gate verdict on a payment PR was missing
    *  from a 20-minute-old handoff presented as current). */
   handoffStaleMinutes: HandoffStaleness
+  /** When this await-handoff sequence started holding its restart for running background work
+   *  (BACKGROUND_DEFER_MAX_MS bounds the hold); null/absent = not holding. Card c8852bba. */
+  backgroundDeferSinceMs?: number | null
 }
 
 export const INITIAL_GUARD_STATE: GuardState = {
@@ -413,6 +416,13 @@ export interface GuardInputs {
    *  writes nothing while it runs -- so it is only ever read together with
    *  paneIdle. See readTranscriptMtimeFromProjectDir. */
   idleMs: number | null
+  /** Work this agent STARTED that is still running after its turn ended: the shells, monitors and
+   *  sub-agents its pane counts (runningBackgroundWork) plus its live heavy-run jobs. A restart
+   *  kills what the session owns, and the agent then runs it again (card c8852bba, Isti TG 6875:
+   *  "ha van futó folyamat, akkor ne legyen újraindítás, mert akkor dupla munka van"). Absent = 0. */
+  backgroundWork?: number
+  /** What that work is, in a few words, for the reason line and the restart notice. */
+  backgroundWorkDetail?: string
   /** The configured daily slot has come round and has not been served yet.
    *  Computed by the runner with dailyHandoffDue(), which needs a local
    *  midnight and the last-served stamp -- neither of which belongs in this
@@ -582,6 +592,58 @@ export function handoffStaleMinutes(inputs: GuardInputs): HandoffStaleness {
   return gapMs > STALE_HANDOFF_SLACK_MS ? Math.round(gapMs / 60_000) : null
 }
 
+/**
+ * How long one await-handoff sequence may hold its restart for running background work.
+ *
+ * Only the ROUTINE restarts wait (act / idle-flush / daily, after the handoff or at its timeout):
+ * nothing in them is urgent, and a restart in the middle of a test gate costs the whole gate again
+ * (measured 2026-10-07 and 10-08 on this card: 4/4, then 6 restarts in ~70 minutes, each killing a
+ * gate, a sequencer shell or sub-agents). The bound exists because a shell can run for hours (a
+ * watcher loop, a stuck job), and a session that never restarts grows into the hard threshold,
+ * where nothing waits. After it the restart happens as before, and says what it killed.
+ */
+export const BACKGROUND_DEFER_MAX_MS = 45 * 60_000
+
+function backgroundWorkText(inputs: GuardInputs): string {
+  const n = inputs.backgroundWork ?? 0
+  return inputs.backgroundWorkDetail ? `${n} (${inputs.backgroundWorkDetail})` : String(n)
+}
+
+/** A restart that does NOT wait for background work names what it kills, in its reason (which
+ *  the restart notice quotes). Empty when nothing runs. */
+function killedNote(inputs: GuardInputs): string {
+  return (inputs.backgroundWork ?? 0) > 0 ? ` -- KILLS running background work: ${backgroundWorkText(inputs)}` : ''
+}
+
+/**
+ * The routine-restart hold: `none` while background work runs and the hold is under its bound,
+ * null when the restart may go ahead. `restartReason` is completed with how long it waited, or
+ * with the bound and the work it now kills.
+ */
+function holdForBackground(
+  state: GuardState,
+  inputs: GuardInputs,
+  what: string,
+): { hold: GuardDecision | null; suffix: string } {
+  const since = state.backgroundDeferSinceMs ?? null
+  const running = (inputs.backgroundWork ?? 0) > 0
+  const waitedMin = since !== null ? Math.round((inputs.nowMs - since) / 60_000) : 0
+  if (running && (since === null || inputs.nowMs - since < BACKGROUND_DEFER_MAX_MS)) {
+    return {
+      hold: {
+        action: 'none',
+        reason: `${what}, but background work is running: ${backgroundWorkText(inputs)} -- holding the restart (${waitedMin}m of ${Math.round(BACKGROUND_DEFER_MAX_MS / 60_000)}m)`,
+        nextState: { ...state, backgroundDeferSinceMs: since ?? inputs.nowMs },
+      },
+      suffix: '',
+    }
+  }
+  if (running) {
+    return { hold: null, suffix: ` -- held ${waitedMin}m for background work, the ${Math.round(BACKGROUND_DEFER_MAX_MS / 60_000)}m bound is reached${killedNote(inputs)}` }
+  }
+  return { hold: null, suffix: since !== null ? ` -- held ${waitedMin}m until the background work finished` : '' }
+}
+
 export type GuardActionType = 'none' | 'request-handoff' | 'restart' | 'inject-resume'
 
 export interface GuardDecision {
@@ -662,7 +724,7 @@ export function decideGuard(
         if (streak >= SATURATION_CONFIRM_SWEEPS) {
           return restartDecision(
             nowMs,
-            `pane saturated (100% context) for ${streak} sweeps -- unrecoverable without restart`,
+            `pane saturated (100% context) for ${streak} sweeps -- unrecoverable without restart${killedNote(inputs)}`,
             handoffStaleMinutes(inputs),
           )
         }
@@ -721,7 +783,7 @@ export function decideGuard(
         // The pane tipped over while we waited for the handoff: the agent can
         // no longer act on the request, so restart now (no debounce -- the
         // act-threshold pct already corroborates a near-full context).
-        return restartDecision(nowMs, 'pane saturated during await-handoff', handoffStaleMinutes(inputs))
+        return restartDecision(nowMs, `pane saturated during await-handoff${killedNote(inputs)}`, handoffStaleMinutes(inputs))
       }
       const handoffWritten =
         inputs.handoffMtime !== null &&
@@ -755,16 +817,21 @@ export function decideGuard(
             },
           }
         }
+        // A routine restart waits for the agent's background work (card c8852bba), unless the
+        // context already reached the hard threshold.
+        const atHard = inputs.pct !== null && inputs.pct >= cfg.hardPct
+        const held = atHard ? { hold: null, suffix: killedNote(inputs) } : holdForBackground(state, inputs, 'handoff written')
+        if (held.hold) return held.hold
         // Refresh budget spent (or never applicable): ship what we have. Saying
         // the budget is spent out loud matters -- the previous behaviour looked
         // identical in the log to "the agent never answered", which is the
         // opposite diagnosis.
         return restartDecision(
           nowMs,
-          typeof staleMin === 'number'
+          (typeof staleMin === 'number'
             ? `handoff written but STALE (~${staleMin}m of work after it)` +
               (refreshBudgetLeft ? '' : ` -- ${state.staleRefreshCount} refresh(es) already requested, accepting as-is`)
-            : 'handoff written',
+            : 'handoff written') + held.suffix,
           staleMin,
         )
       }
@@ -775,15 +842,17 @@ export function decideGuard(
       // mid-flight is caught by the paneSaturated branch above.
       if (inputs.pct !== null && inputs.pct >= cfg.hardPct) {
         if (inputs.paneBusy) return none('hard threshold during await-handoff but agent mid-turn -- deferring restart')
-        return restartDecision(nowMs, 'hard threshold during await-handoff', handoffStaleMinutes(inputs))
+        return restartDecision(nowMs, `hard threshold during await-handoff${killedNote(inputs)}`, handoffStaleMinutes(inputs))
       }
       if (nowMs >= state.deadlineMs) {
         if (inputs.paneBusy) return none('handoff timeout but agent mid-turn -- deferring restart')
+        const held = holdForBackground(state, inputs, 'handoff timeout')
+        if (held.hold) return held.hold
         // No handoff in time (agent wedged or ignored the prompt). Restart
         // anyway: taskstate + kanban + hot memories are the fallback context.
         // An OLD HANDOFF.md may still exist; measure how far behind it is so
         // the resume prompt does not present it as current.
-        return restartDecision(nowMs, 'handoff timeout -- force restart', handoffStaleMinutes(inputs))
+        return restartDecision(nowMs, `handoff timeout -- force restart${held.suffix}`, handoffStaleMinutes(inputs))
       }
       return none(handoffWritten ? 'handoff written, waiting for idle pane' : 'waiting for handoff')
     }
@@ -837,7 +906,7 @@ function decideWedgeTiers(
     }
     return restartDecision(
       nowMs,
-      `hard threshold (${Math.round(pct * 100)}% >= ${Math.round(cfg.hardPct * 100)}%)`,
+      `hard threshold (${Math.round(pct * 100)}% >= ${Math.round(cfg.hardPct * 100)}%)${killedNote(inputs)}`,
       handoffStaleMinutes(inputs),
     )
   }
