@@ -176,6 +176,31 @@ describe('PUT /api/kanban/:id -- unknown fields are rejected, no-ops do not refr
     expect(getKanbanCard('c4')!.assignee).toBe('zara')
   })
 
+  it('accepts the whole card exactly as GET /api/kanban lists it (card 5c6e9968)', async () => {
+    // Fork port (card 5c6e9968, upstream faf6eda9): the list embeds a computed
+    // active_seconds. Echo the REAL GET shape rather than a hand-built one, so the next
+    // derived field the list grows fails here instead of 400-ing every board edit.
+    createKanbanCard({ id: 'c7', title: 'Card seven', status: 'in_progress', assignee: 'samu' })
+    const out = { status: 200, body: null as any }
+    const res: any = {
+      writeHead(status: number) { out.status = status; return res },
+      setHeader() { return res },
+      end(chunk?: string) { if (chunk) out.body = JSON.parse(chunk) },
+    }
+    const req: any = Readable.from([])
+    req.headers = {}
+    const url = new URL('http://localhost:3420/api/kanban')
+    expect(await tryHandleKanban({ req, res, path: url.pathname, method: 'GET', url } as RouteContext)).toBe(true)
+    const list = (Array.isArray(out.body) ? out.body : out.body.cards) as any[]
+    const listed = list.find((c) => c.id === 'c7')
+    // Control: the echo really carries the derived field, or this test proves nothing.
+    expect(listed).toHaveProperty('active_seconds')
+    const put = putCtx('c7', { ...listed, assignee: 'zara' })
+    expect(await tryHandleKanban(put.ctx)).toBe(true)
+    expect(put.out.status, JSON.stringify(put.out.body)).toBe(200)
+    expect(getKanbanCard('c7')!.assignee).toBe('zara')
+  })
+
   it('a CHANGED blockers value is refused and names the blockers endpoint (merge 88c366f2)', async () => {
     createKanbanCard({ id: 'c5', title: 'Card five', status: 'planned' })
     createKanbanCard({ id: 'c6', title: 'Blocker', status: 'planned' })

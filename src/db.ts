@@ -2967,6 +2967,10 @@ export const KANBAN_SERVER_FIELDS = [
   // Upstream's list embeds a computed `last_status_at` (7e9a7362), so the dashboard's
   // whole-card echo carries it back; it is derived, never written. merge 88c366f2.
   'last_status_at',
+  // Fork port (card 5c6e9968, upstream faf6eda9 #1863): listKanbanCards embeds a computed
+  // `active_seconds` (summed from kanban_card_events), so the whole-card echo carries it back
+  // too; derived, never stored. Without this every assignee/parent edit from the board 400s.
+  'active_seconds',
 ] as const
 // `blockers` (upstream 7e9a7362): embedded in the list, writable through
 // /api/kanban/<id>/blockers. The PUT route compares it by blocker-id set.

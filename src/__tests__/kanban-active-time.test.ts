@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
 import {
   initDatabase, createKanbanCard, moveKanbanCard, listKanbanCards,
-  sumInProgressSeconds, getKanbanCardEvents,
+  sumInProgressSeconds, getKanbanCardEvents, getDb,
 } from '../db.js'
 
 const T0 = Date.UTC(2026, 0, 5, 9, 0, 0)
@@ -37,6 +37,9 @@ describe('sumInProgressSeconds / listKanbanCards active_seconds', () => {
 
   it('leaves active_seconds absent for a card with no event rows (unknown, not zero)', () => {
     createKanbanCard({ id: 'never-moved', title: 'Never moved' })
+    // Fork port (card 5c6e9968): the fork writes a birth row for EVERY new card, so a card
+    // without event rows only exists from before that era. Remove the birth row to model it.
+    getDb().prepare('DELETE FROM kanban_card_events WHERE card_id=?').run('never-moved')
     const card = listKanbanCards().find((c) => c.id === 'never-moved')!
     expect('active_seconds' in card).toBe(false)
     expect(sumInProgressSeconds(['never-moved']).has('never-moved')).toBe(false)
@@ -84,19 +87,28 @@ describe('sumInProgressSeconds / listKanbanCards active_seconds', () => {
 
   it('gives a card born in in_progress an opening event, so its time is measured', () => {
     at(50)
-    createKanbanCard({ id: 'born', title: 'Created in progress', status: 'in_progress', assignee: 'tester' })
+    createKanbanCard({ id: 'born', title: 'Created in progress', status: 'in_progress', assignee: 'tester', actor: 'creator' })
     const ev = getKanbanCardEvents('born')
     expect(ev).toHaveLength(1)
     expect(ev[0].from_status).toBeNull()
     expect(ev[0].to_status).toBe('in_progress')
-    expect(ev[0].actor).toBe('tester')
+    // Fork port (card 5c6e9968): the fork's birth row records who CREATED the card
+    // (card.actor), not the assignee as upstream does.
+    expect(ev[0].actor).toBe('creator')
     at(50 + 1200)
     expect(activeOf('born')).toBe(1200)
   })
 
-  it('writes no opening event for a card born in planned (the default)', () => {
+  it('a card born in planned gets a planned birth row and a measured zero', () => {
+    // Fork port (card 5c6e9968): upstream writes no row here; the fork writes the birth
+    // row for every card, so the time is a measured 0, not unknown.
     createKanbanCard({ id: 'p', title: 'Planned' })
-    expect(getKanbanCardEvents('p')).toHaveLength(0)
+    const ev = getKanbanCardEvents('p')
+    expect(ev).toHaveLength(1)
+    expect(ev[0].from_status).toBeNull()
+    expect(ev[0].to_status).toBe('planned')
+    at(600)
+    expect(activeOf('p')).toBe(0)
   })
 })
 

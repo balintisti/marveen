@@ -62,6 +62,8 @@ const NEM_ALLITHATO: Record<string, string> = {
   // `expected_version`, a route kiveszi a torzsbol), sosem oszlop-ertekkent.
   version: 'a sor verzioja: trigger mozgatja; a PUT-nak csak a feltetele (409 elavult peldanyra), nem irhato mezo',
   last_status_at: 'szarmaztatott: a status-esemenyekbol szamolva a lekerdezesben (db.ts), nem tarolt mezo',
+  // Fork port (card 5c6e9968, upstream faf6eda9): a listazasban SZAMOLT ertek (sumInProgressSeconds).
+  active_seconds: 'szarmaztatott: a kanban_card_events in_progress szakaszaibol osszegezve a listazasban, nem tarolt mezo',
 }
 
 describe('KANBAN_UPDATABLE -- a lista a TIPUSBOL szarmazik, nem kezzel keszul', () => {
