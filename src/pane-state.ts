@@ -75,18 +75,43 @@ export type PaneState = 'idle' | 'busy' | 'typing' | 'unknown' | 'error'
 // scrollback still will not match; it needs the shift+tab hint or a `·`
 // separated idle action, which is UI chrome that prose does not carry.
 // `← for agents` is the FleetView tail on current builds; older tails kept.
+//
+// A TAIL CUT SHORT BY THE TERMINAL WIDTH IS STILL THE FOOTER (card f5bb2626, measured 2026-10-03).
+// The footer is one line, and Claude Code truncates it with `…` when it does not fit. A long
+// background count pushes the action tail off the edge -- didi's live pane, mid-turn:
+//
+//     ⏵⏵ bypass permissions on · 72 shells, 2 monitors · esc to interrupt · ↓ to …
+//
+// None of the known tails survives that, so the regex found NO footer, detectPaneState fell
+// into the footer-less branch below, and a message queued in the box mid-turn read 'typing'.
+// The stuck-input recovery then cleared it with parkedClearSequence -- Escape first -- and
+// interrupted the live turn with its nine background verifiers (07:37 and 09:13 that day). A
+// `·`- or `(`-separated tail ending the line in `…` is the same chrome, truncated. The busy
+// checks still run first, so a truncated footer that shows `esc to interrupt` reads busy.
+//
+// BUT ONLY WHERE THE LIVE FOOTER IS DRAWN (didi, f0ca2dc1, 2026-10-15). The first version put the
+// truncated tail into this regex, and every caller runs it over the WHOLE pane. A clipped footer
+// left in the scrollback, or a prose line ending in `on · ...…`, then hid an open permission
+// dialog: detectsPermissionDialog said false, detectPaneState said idle, and a delivery could
+// type into a `❯ 1. Yes` dialog. So the truncated form is TRUNCATED_FOOTER_RX below, and it
+// counts only through liveTruncatedFooterIndex: directly under the live input box. The full
+// forms keep their pane-wide behaviour unchanged. Upstream #1743 fixed the same hole the same
+// way (last non-empty line); that anchor does not fit here, because the background-agent panel
+// is drawn BELOW the footer.
 const IDLE_FOOTER_RX = /(?:[A-Za-z][\w-]* ){1,3}on(?: \(shift\+tab to cycle\)| · [^\n]*?(?:ctrl\+t|↓ to manage|← for agents))|\? for shortcuts/
+const TRUNCATED_FOOTER_RX = /(?:[A-Za-z][\w-]* ){1,3}on(?: · | \()[^\n]*…[ \t]*$/
 
-// A WIDTH-TRUNCATED FOOTER (card 53521828, 2026-10-09). With `3 shells, 2 monitors · esc to interrupt`
+// THE BUSY-WINDOW ANCHOR (card 53521828, 2026-10-09). With `3 shells, 2 monitors · esc to interrupt`
 // in front of the hint, an 80-column footer is cut at `↓ to m…`: none of the IDLE_FOOTER_RX tails
-// survives, and that is RIGHT for the idle verdict (a partly rendered footer is not a ready pane --
-// pane-state.test.ts pins it). But every busy window is anchored on the footer line, so with no
+// survives. For the idle verdict that cut footer counts only through liveTruncatedFooterIndex
+// above (card f5bb2626); a footer cut anywhere else, or one with no `…`, is still not a ready
+// pane (pane-state.test.ts pins it). But every busy window is anchored on the footer line, so with no
 // anchor they slid to the end of the pane, and the three sub-agent rows under the footer pushed
 // `esc to interrupt` out of the 5-line window: a working pane read `unknown` (didi 04:48 and dexter
 // 05:54, a spinner and `esc to interrupt` on screen). liveFooterIndex gives the BUSY windows and the
-// background-work count an anchor; the idle gate still uses IDLE_FOOTER_RX alone. The `⏵⏵` mode
+// background-work count an anchor; it is broader than the idle form on purpose. The `⏵⏵` mode
 // glyph is footer chrome that prose does not carry.
-const TRUNCATED_FOOTER_RX = /⏵⏵ (?:[A-Za-z][\w-]* ){1,3}on\b/
+const MODE_GLYPH_FOOTER_RX = /⏵⏵ (?:[A-Za-z][\w-]* ){1,3}on\b/
 function liveFooterIndex(lines: string[], fromEnd = false): number {
   const find = (rx: RegExp): number => {
     if (!fromEnd) return lines.findIndex(l => rx.test(l))
@@ -94,7 +119,7 @@ function liveFooterIndex(lines: string[], fromEnd = false): number {
     return -1
   }
   const strict = find(IDLE_FOOTER_RX)
-  return strict >= 0 ? strict : find(TRUNCATED_FOOTER_RX)
+  return strict >= 0 ? strict : find(MODE_GLYPH_FOOTER_RX)
 }
 
 // Positive busy signals. ANY match anywhere in the pane means the turn
@@ -207,7 +232,10 @@ const BUSY_INDICATORS: RegExp[] = [
 // in the scrollback from permanently pinning the session as busy
 // (observed incident: 81 consecutive scheduler retries on a report that
 // contained the phrase in its body).
-const BUSY_ESC_TO_INTERRUPT_RX = /\besc to interrupt\b/
+// ...and the same phrase CUT by the terminal width (card f5bb2626, didi 27204 (A)): a real
+// footer from friday's pane on 10-02 and 10-03 ended "... /tasks to see subagents · esc to inte…".
+// The truncated form is only ever tested against the footer region, like the full one.
+const BUSY_ESC_TO_INTERRUPT_RX = /\besc to interrupt\b|\besc(?: t(?:o(?: (?:i[a-z]*)?)?)?)?…/
 const LIVE_FOOTER_REGION_LINES = 5
 
 /**
@@ -314,6 +342,126 @@ export function detectsPastePlaceholder(pane: string): boolean {
 // Input-box separator lines are made of U+2500 BOX DRAWINGS LIGHT
 // HORIZONTAL. At least 10 in a run to ignore stray `-` glyphs.
 const BOX_SEP_RX = /^─{10,}/
+
+// How many lines under the input box's bottom separator the footer can take: the mode line, and on
+// some builds a status line above it.
+const FOOTER_BELOW_BOX_LINES = 3
+
+/**
+ * Index of a width-truncated footer (TRUNCATED_FOOTER_RX) that sits where the live footer is
+ * drawn, or -1. All three must hold: it is within FOOTER_BELOW_BOX_LINES under the LAST box
+ * separator; that separator closes a real input box (a `❯` line between it and the separator
+ * above); and no dialog line follows it (a `❯` or `>` cursor, or a permission question). The
+ * last one is what keeps an open dialog out: a dialog replaces the box, and its selected option
+ * is a `❯ 1. Yes` (on some builds `> 1. Yes`) line under any older footer.
+ * Stricter is the safe side: a footer this misses falls back to the footer-less reading, which
+ * is what every pane got before card f5bb2626.
+ */
+function liveTruncatedFooterIndex(lines: string[]): number {
+  let bottom = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (BOX_SEP_RX.test(lines[i])) { bottom = i; break }
+  }
+  if (bottom < 0) return -1
+  let top = -1
+  for (let i = bottom - 1; i >= 0; i--) {
+    if (BOX_SEP_RX.test(lines[i])) { top = i; break }
+  }
+  if (top < 0 || !lines.slice(top + 1, bottom).some(l => l.includes('❯'))) return -1
+  const end = Math.min(lines.length, bottom + 1 + FOOTER_BELOW_BOX_LINES)
+  for (let i = bottom + 1; i < end; i++) {
+    if (!TRUNCATED_FOOTER_RX.test(lines[i])) continue
+    return lines.slice(i + 1).some(l => l.includes('❯') || /^\s*>/.test(l) || PERMISSION_QUESTION_RX.test(l)) ? -1 : i
+  }
+  return -1
+}
+
+/** The first idle footer from the top: a full one anywhere, or the live truncated one. */
+function idleFooterIndex(lines: string[]): number {
+  const full = lines.findIndex(l => IDLE_FOOTER_RX.test(l))
+  const truncated = liveTruncatedFooterIndex(lines)
+  if (full < 0) return truncated
+  return truncated < 0 ? full : Math.min(full, truncated)
+}
+
+/** The last idle footer from the bottom, same two forms. */
+function lastIdleFooterIndex(lines: string[]): number {
+  let full = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (IDLE_FOOTER_RX.test(lines[i])) { full = i; break }
+  }
+  return Math.max(full, liveTruncatedFooterIndex(lines))
+}
+
+function hasIdleFooter(pane: string): boolean {
+  return idleFooterIndex(pane.split('\n')) >= 0
+}
+
+/**
+ * Whether the footer UNDER THE LIVE INPUT BOX says a turn is running (`esc to interrupt`), found
+ * from the box -- not from the footer's wording and not from the end of the pane. Card f5bb2626.
+ *
+ * The recovery keys (Escape in parkedClearSequence, Ctrl-C in the placeholder discard) interrupt
+ * a running turn, and with it every background agent the turn is waiting on. detectPaneState is
+ * the first gate, but it needs to RECOGNISE the footer, and on 2026-10-03 a width-truncated
+ * footer was not recognised: the pane read 'typing' mid-turn and the clear interrupted it. This
+ * asks the narrower question the keys need, from the one anchor that does not depend on the
+ * footer's text: the last box separator, with the background-agent panel (drawn below the
+ * footer) never in the window. No separator -> false, the previous behaviour.
+ */
+export function liveTurnFooterVisible(pane: string): boolean {
+  const lines = pane.split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!BOX_SEP_RX.test(lines[i])) continue
+    return lines.slice(i + 1, i + 1 + FOOTER_BELOW_BOX_LINES).some(l => BUSY_ESC_TO_INTERRUPT_RX.test(l))
+  }
+  return false
+}
+
+// Background work the interrupting keys would kill (card f5bb2626, didi 27419; marveen 26943: the
+// recovery never sends Escape "if esc to interrupt OR a running background task is visible").
+// Below the box: the footer's task tail -- `· 45 shells, 3 monitors · ↓ to manage`,
+// `/tasks to see subagents`. Above the box: the spinner line a turn leaves while it waits on its
+// background agents, `✻ Waiting for 2 background agents to finish`.
+// NOT `← for agents` (didi 27454): it is a navigation hint, and the main agent's two workers show it
+// IDLE (`(shift+tab to cycle) · ← for agents`, no shell, no monitor) -- read as work, it refused the
+// placeholder discard there and the worker's task stayed parked. `· 1 monitor · ← for agents` is
+// still caught, by its monitor count. `/tasks to see subagents` has been seen only during a turn;
+// whether it also shows idle is NOT measured.
+const BG_FOOTER_RX = /(?:^|[·…])\s*\d+\s+(?:shells?|monitors?)\b|\/tasks to see subagents/
+const BG_WAITING_RX = /\bWaiting for \d+ background (?:agents?|tasks?)\b/
+const SPINNER_ABOVE_BOX_LINES = 3
+
+/**
+ * Whether background work is visible around the LIVE input box: a task tail in the footer under
+ * it, or the "Waiting for N background agents" line above it. Same anchor as liveTurnFooterVisible
+ * (the last box separator), for the same reason: the agent list drawn below the footer and any
+ * quoted text in the scrollback stay out of the window. No box -> false.
+ */
+export function backgroundWorkVisible(pane: string): boolean {
+  const lines = pane.split('\n')
+  let bottom = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (BOX_SEP_RX.test(lines[i])) { bottom = i; break }
+  }
+  if (bottom < 0) return false
+  if (lines.slice(bottom + 1, bottom + 1 + FOOTER_BELOW_BOX_LINES).some(l => BG_FOOTER_RX.test(l))) return true
+  let top = -1
+  for (let i = bottom - 1; i >= 0; i--) {
+    if (BOX_SEP_RX.test(lines[i])) { top = i; break }
+  }
+  if (top < 0) return false
+  return lines.slice(Math.max(0, top - SPINNER_ABOVE_BOX_LINES), top).some(l => BG_WAITING_RX.test(l))
+}
+
+/**
+ * The one question every interrupting key (Escape-first clear, Ctrl-C discard) must ask first:
+ * would it hit a running turn or the background work it waits on? Enter is not covered -- it
+ * interrupts nothing, and marveen 26943 keeps it as the first move.
+ */
+export function interruptingKeysUnsafe(pane: string): boolean {
+  return liveTurnFooterVisible(pane) || backgroundWorkVisible(pane)
+}
 
 // Prompt line inside the input box. `❯` followed by at least one
 // horizontal whitespace and then a non-whitespace character means the
@@ -537,10 +685,7 @@ export function detectsThinkingBlockError(pane: string): boolean {
   const lines = pane.split('\n')
   // Find the footer from the bottom: the live footer is the last line of
   // the pane, so a footer-looking line quoted in scrollback must not win.
-  let footerIdx = -1
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (IDLE_FOOTER_RX.test(lines[i])) { footerIdx = i; break }
-  }
+  const footerIdx = lastIdleFooterIndex(lines)
   if (footerIdx < 0) return false
   const start = Math.max(0, footerIdx - ERROR_LIVE_TAIL_LINES)
   const tail = lines.slice(start, footerIdx)
@@ -600,7 +745,7 @@ export function detectsBlockingMenu(pane: string): boolean {
   const lines = pane.split('\n')
   const footerRegion = liveTailRegion(lines, MENU_FOOTER_REGION_LINES)
   if (BUSY_ESC_TO_INTERRUPT_RX.test(footerRegion)) return false
-  if (IDLE_FOOTER_RX.test(pane)) return false
+  if (hasIdleFooter(pane)) return false
   return MENU_NAV_RX.test(footerRegion) || MENU_ESC_RX.test(footerRegion)
 }
 
@@ -872,7 +1017,7 @@ export function detectsFirstRunGate(pane: string): FirstRunGateKind | null {
   }
   const footerRegion = liveTailRegion(lines, LIVE_FOOTER_REGION_LINES)
   if (BUSY_ESC_TO_INTERRUPT_RX.test(footerRegion)) return null
-  if (IDLE_FOOTER_RX.test(pane)) return null
+  if (hasIdleFooter(pane)) return null
   for (const g of FIRST_RUN_GATES) {
     if (!g.rx.test(pane)) continue
     // The welcome banner also heads the NORMAL fresh-session layout (logo +
@@ -947,7 +1092,7 @@ export function detectsPermissionDialog(pane: string): boolean {
   }
   const footerRegion = liveTailRegion(lines, LIVE_FOOTER_REGION_LINES)
   if (BUSY_ESC_TO_INTERRUPT_RX.test(footerRegion)) return false
-  if (IDLE_FOOTER_RX.test(pane)) return false
+  if (hasIdleFooter(pane)) return false
   return PERMISSION_AMEND_RX.test(footerRegion)
     || (PERMISSION_QUESTION_RX.test(pane) && PERMISSION_YES_RX.test(pane))
 }
@@ -961,7 +1106,7 @@ export function detectsModelConsentDialog(pane: string): boolean {
   }
   const footerRegion = liveTailRegion(lines, LIVE_FOOTER_REGION_LINES)
   if (BUSY_ESC_TO_INTERRUPT_RX.test(footerRegion)) return false
-  if (IDLE_FOOTER_RX.test(pane)) return false
+  if (hasIdleFooter(pane)) return false
   return MODEL_CONSENT_TITLE_RX.test(pane)
     && MODEL_CONSENT_CONTINUE_RX.test(pane)
     && MODEL_CONSENT_CONFIRM_RX.test(footerRegion)
@@ -1026,7 +1171,7 @@ export function detectsPermissionPrompt(pane: string): boolean {
   }
   const footerRegion = liveTailRegion(lines, LIVE_FOOTER_REGION_LINES)
   if (BUSY_ESC_TO_INTERRUPT_RX.test(footerRegion)) return false
-  if (IDLE_FOOTER_RX.test(pane)) return false
+  if (hasIdleFooter(pane)) return false
   // Sibling dialogs that share the shape but have their own handling.
   if (detectsFirstRunGate(pane) != null) return false
   if (detectsModelConsentDialog(pane)) return false
@@ -1216,9 +1361,12 @@ export interface DetectPaneStateOptions {
 // Code renders when no mode is switched on -- i.e. it asks about everything.
 export function detectPermissionMode(pane: string): string | null {
   if (!pane || !pane.trim()) return null
+  // Same tails as IDLE_FOOTER_RX; the width-truncated one only at the live footer (card f5bb2626).
+  const lines = pane.split('\n')
+  const truncated = liveTruncatedFooterIndex(lines)
   const m = pane.match(
     /((?:[A-Za-z][\w-]* ){1,3})on(?: \(shift\+tab to cycle\)| · [^\n]*?(?:ctrl\+t|↓ to manage|← for agents))/,
-  )
+  ) ?? (truncated >= 0 ? lines[truncated].match(/((?:[A-Za-z][\w-]* ){1,3})on(?: · | \()/) : null)
   if (m) return m[1].trim()
   return /\? for shortcuts/.test(pane) ? 'default' : null
 }
@@ -1292,7 +1440,7 @@ export function detectPaneState(
   // defer rather than pile a second prompt on.
   if (detectsPastePlaceholder(pane)) return 'busy'
 
-  if (!IDLE_FOOTER_RX.test(pane)) {
+  if (!hasIdleFooter(pane)) {
     // Footer-less fresh-session / welcome-screen: a PARKED \u276F input box still
     // means the agent has a delivered message waiting to submit. Classify it
     // 'typing' (not 'unknown') so the stuck-input recovery stack can see and
@@ -1311,7 +1459,7 @@ export function detectPaneState(
   // Scan UPWARDS from the footer so we stay inside the live box and
   // don't pick up historical ❯ lines from scrollback.
   const lines = pane.split('\n')
-  const footerIdx = lines.findIndex(l => IDLE_FOOTER_RX.test(l))
+  const footerIdx = idleFooterIndex(lines)
   if (footerIdx >= 0) {
     let bottomSep = -1
     for (let i = footerIdx - 1; i >= 0; i--) {
@@ -1683,7 +1831,7 @@ function liveInputBoxFooterless(lines: string[]): string | null {
 
 function liveInputBox(pane: string): string | null {
   const lines = pane.split('\n')
-  const footerIdx = lines.findIndex(l => IDLE_FOOTER_RX.test(l))
+  const footerIdx = idleFooterIndex(lines)
   if (footerIdx < 0) return liveInputBoxFooterless(lines)
   let bottomSep = -1
   for (let i = footerIdx - 1; i >= 0; i--) {
@@ -1797,7 +1945,7 @@ export function shouldRetrySubmit(
 
   // Without an idle footer the pane is either not Claude Code or in an
   // unknown render state. Be conservative and skip.
-  if (!IDLE_FOOTER_RX.test(pane)) return false
+  if (!hasIdleFooter(pane)) return false
 
   const inputBox = liveInputBox(pane)
   if (inputBox == null) return false
@@ -2300,7 +2448,7 @@ export function overfullParkedInputTail(pane: string): string | null {
     if (rx.test(busyRegion)) return null
   }
   if (BUSY_ESC_TO_INTERRUPT_RX.test(liveTailRegion(lines, LIVE_FOOTER_REGION_LINES))) return null
-  const footerIdx = lines.findIndex(l => IDLE_FOOTER_RX.test(l))
+  const footerIdx = idleFooterIndex(lines)
   if (footerIdx < 0) return null
   let bottomSep = -1
   for (let i = footerIdx - 1; i >= 0; i--) {
@@ -3026,10 +3174,7 @@ function ctxSatFooterRegion(capture: string): string | null {
   //
   // Free today, which is a side effect and not the reason: all seven saved captures carry exactly
   // ONE footer match (line 23 of 25), so top and bottom agree on every real capture we hold.
-  let footerIdx = -1
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (IDLE_FOOTER_RX.test(lines[i])) { footerIdx = i; break }
-  }
+  const footerIdx = lastIdleFooterIndex(lines)
   const region = footerIdx < 0
     ? lines.slice(-CTX_SAT_FOOTER_REGION_LINES)
     : lines.slice(Math.max(0, footerIdx - CTX_SAT_LINES_ABOVE_FOOTER), footerIdx + 1)

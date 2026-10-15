@@ -29,6 +29,8 @@ import {
   stuckInputSignature,
   mcpTrustAcceptKeys,
   detectsPermissionPrompt,
+  liveTurnFooterVisible,
+  interruptingKeysUnsafe,
   type FirstRunGateKind,
 } from '../pane-state.js'
 import { paneRemedy } from './parked-pane-remedy.js'
@@ -3342,6 +3344,12 @@ export async function clearInputBuffer(session: string, host: string | null = nu
   for (let attempt = 1; attempt <= CLEAR_INPUT_MAX_ATTEMPTS; attempt++) {
     try {
       const pane = capturePane(session, host)
+      // Escape leads the sequence, and on a running turn -- or beside the background work a turn
+      // waits on -- Escape is an interrupt (card f5bb2626, didi 27419).
+      if (pane != null && interruptingKeysUnsafe(pane)) {
+        logger.warn({ session, attempt }, 'Input clear refused: a running turn or background work is visible (Escape would interrupt it)')
+        return false
+      }
       for (const key of parkedClearSequence(pane != null ? parkedInputRowCount(pane) : 0)) {
         runTmux(host, ['send-keys', '-t', session, key], { timeout: 5000 })
       }
@@ -3391,27 +3399,38 @@ const PLACEHOLDER_DISCARD_SETTLE_MS = 450
 // when a placeholder is CONFIRMED present (box non-empty, not busy) -- which
 // detectsPastePlaceholder guarantees at the call site. We re-check before each
 // press and stop the instant the placeholder is gone, so we never press Ctrl-C
-// into an already-empty box. Returns true if the placeholder was cleared.
-async function discardPlaceholderBuffer(session: string, host: string | null = null): Promise<boolean> {
+// into an already-empty box. 'refused' = a running turn appeared under the box, nothing pressed.
+async function discardPlaceholderBuffer(
+  session: string,
+  host: string | null = null,
+): Promise<'cleared' | 'refused' | 'failed'> {
   for (let i = 0; i < PLACEHOLDER_DISCARD_MAX; i++) {
     const pane = capturePane(session, host)
     // Stop pressing once the stub is gone -- a further Ctrl-C on an empty box
     // would quit the TUI.
-    if (pane != null && !detectsPastePlaceholder(pane)) return true
+    if (pane != null && !detectsPastePlaceholder(pane)) return 'cleared'
+    // Ctrl-C on a running turn, or beside its background work, interrupts it (card f5bb2626).
+    if (pane != null && interruptingKeysUnsafe(pane)) {
+      logger.warn({ session }, 'discardPlaceholderBuffer: refused, a running turn or background work is visible')
+      return 'refused'
+    }
     try {
       runTmux(host, ['send-keys', '-t', session, 'C-c'], { timeout: 5000 })
     } catch (err) {
       logger.warn({ err, session }, 'discardPlaceholderBuffer: Ctrl-C send failed')
-      return false
+      return 'failed'
     }
     await delay(PLACEHOLDER_DISCARD_SETTLE_MS)
   }
   const finalPane = capturePane(session, host)
-  return finalPane != null && !detectsPastePlaceholder(finalPane)
+  return finalPane != null && !detectsPastePlaceholder(finalPane) ? 'cleared' : 'failed'
 }
 
 /** What a delivery did. 'withheld-permission' = NOTHING was typed (or a follow-up key was held
- *  back) because a tool-permission prompt was on screen -- the caller must not treat it as sent. */
+ *  back) -- the caller must not treat it as sent. Two causes share it, because every caller already
+ *  handles it as "keep it pending": a tool-permission prompt on screen, or a stale preamble the
+ *  pre-send clear REFUSED to touch beside a running turn or background work (card f5bb2626, didi
+ *  27454) -- typing behind it would send the stale text with the prompt. */
 export type SendPromptResult = 'sent' | 'aborted-busy' | 'skipped-locked' | 'withheld-permission'
 
 // Cap on how many extra characters a single chunk boundary may absorb while
@@ -3619,7 +3638,25 @@ export async function sendPromptToSession(
   if (permissionPromptBlocksBareEnter(session, host, captureTmux, 'sendPromptToSession')) {
     return 'withheld-permission'
   }
-  // The guard above returns before this: no keystroke of THIS prompt was emitted, so the
+  // Pre-flight buffer-clear when a stale preamble is detected -- BEFORE onEmitStart, so a refused
+  // clear returns before the caller's clock starts (didi 27454). Reading
+  // the pane is best-effort: a capture failure here means we cannot
+  // prove the buffer is clean, but proceeding without the clear is no
+  // worse than the pre-fix status quo.
+  try {
+    const preCapture = captureTmux(host, ['capture-pane', '-t', session, '-p'])
+    if (shouldClearTruncatedPreamble(preCapture)) {
+      // Refused: typing behind the preamble would submit both (didi 27454). Type nothing.
+      if (!(await clearInputBuffer(session, host))) {
+        logger.warn({ session }, 'Stale preamble in the box and the clear was refused (running turn or background work): nothing typed')
+        return 'withheld-permission'
+      }
+      logger.info({ session }, 'Cleared stale preamble from input buffer before sending prompt')
+    }
+  } catch (err) {
+    logger.warn({ err, session }, 'Pre-send capture-pane failed; skipping truncated-preamble check')
+  }
+  // The guards above return before this: no keystroke of THIS prompt was emitted, so the
   // caller's delivery clock must not start.
   // PROMPTCSONK923: tell the caller the moment the first keystroke of THIS
   // prompt is about to be emitted (we hold the lane from here). The scheduler
@@ -3629,20 +3666,6 @@ export async function sendPromptToSession(
   } catch (err) {
     logger.warn({ err, session }, 'sendPromptToSession: onEmitStart callback threw; ignored (delivery continues)')
   }
-  // Pre-flight buffer-clear when a stale preamble is detected. Reading
-  // the pane is best-effort: a capture failure here means we cannot
-  // prove the buffer is clean, but proceeding without the clear is no
-  // worse than the pre-fix status quo.
-  try {
-    const preCapture = captureTmux(host, ['capture-pane', '-t', session, '-p'])
-    if (shouldClearTruncatedPreamble(preCapture)) {
-      logger.info({ session }, 'Cleared stale preamble from input buffer before sending prompt')
-      await clearInputBuffer(session, host)
-    }
-  } catch (err) {
-    logger.warn({ err, session }, 'Pre-send capture-pane failed; skipping truncated-preamble check')
-  }
-
   // The mapping lives in pane-text.ts: the provenance gate re-applies it to
   // the queue row, so the two must never drift (DIREKTIVASORTORES920).
   const oneLine = paneOneLine(text)
@@ -3721,7 +3744,12 @@ export async function sendPromptToSession(
       // chunk stream. The loop re-samples on the next iteration and will keep
       // recovering (or give up at the budget) if the resend itself parks.
       logger.info({ session, attempt }, 'sendPromptToSession: paste placeholder detected; clearing and re-sending')
-      if (!(await discardPlaceholderBuffer(session, host))) {
+      const discard = await discardPlaceholderBuffer(session, host)
+      // A running turn under the box (card f5bb2626): the discard re-checks on its OWN capture,
+      // right before its Ctrl-C, and refuses. The stub is still in the box, so a resend would type
+      // the prompt a second time behind it -- stop instead.
+      if (discard === 'refused') break
+      if (discard === 'failed') {
         logger.warn({ session, attempt }, 'sendPromptToSession: failed to clear paste placeholder before resend')
       }
       try {
@@ -4285,6 +4313,9 @@ export async function clearStaleParkedInput(
 ): Promise<boolean> {
   const a = capturePane(session, host)
   if (a == null || detectPaneState(a) !== 'typing') return false
+  // The clear below is Escape-first: never behind a running turn or its background work
+  // (card f5bb2626, didi 27204 (C) and 27419).
+  if (interruptingKeysUnsafe(a)) return false
   // DIM-GUARD (2026-06-30, Szabi insight): extract the parked TEXT from the
   // dim-stripped (-e) view. Ghost/phantom frames -- stale captures, placeholder
   // hints, a persona fragment left by a send-keys delivery (the "Koszi a halakat."

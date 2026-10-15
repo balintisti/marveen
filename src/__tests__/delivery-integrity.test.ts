@@ -227,6 +227,10 @@ describe('the sweep is wired to it (source-level: the sweep needs live tmux)', (
     const onEmitIdx = AP.indexOf('opts.onEmitStart?.()', emitIdx)
     expect(guardIdx).toBeGreaterThan(emitIdx)
     expect(onEmitIdx).toBeGreaterThan(guardIdx)
+    // ...and so does the refused stale-preamble clear (card f5bb2626, didi 27454): it typed nothing
+    const refusedIdx = AP.indexOf("'Stale preamble in the box and the clear was refused", emitIdx)
+    expect(refusedIdx).toBeGreaterThan(emitIdx)
+    expect(onEmitIdx).toBeGreaterThan(refusedIdx)
     expect(onEmitIdx - emitIdx).toBeLessThan(2500)
     expect(RUNNER).toMatch(/host == null \? \{ sentText: paneOneLine\(fullPrompt\), typedAt \} : \{\}/)
   })

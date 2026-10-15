@@ -1247,7 +1247,7 @@ export async function runMessageRouterTick(): Promise<void> {
             // has answered the prompt.
             if (batchResult === 'withheld-permission') {
               for (const mate of mates.rows) batchedMsgIdsThisTick.add(mate.id)
-              logger.warn({ id: msg.id, agent: msg.to_agent, mates: mates.rows.length }, 'message-router: a permission prompt is on screen; batch left pending, not typed')
+              logger.warn({ id: msg.id, agent: msg.to_agent, mates: mates.rows.length }, 'message-router: nothing typed (a permission prompt, or a refused pre-send clear); batch left pending')
               continue
             }
             // The head row is marked delivered by the shared code below; the
@@ -1278,7 +1278,7 @@ export async function runMessageRouterTick(): Promise<void> {
             // and the send -- but marking the message delivered here would LOSE it silently. It stays
             // pending, and the next tick delivers it once the prompt has been answered by a human.
             if (sendResult === 'withheld-permission') {
-              logger.warn({ id: msg.id, agent: msg.to_agent }, 'message-router: a permission prompt is on screen; message left pending, not typed')
+              logger.warn({ id: msg.id, agent: msg.to_agent }, 'message-router: nothing typed (a permission prompt, or a refused pre-send clear); message left pending')
               continue
             }
           }
