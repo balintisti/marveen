@@ -77,7 +77,10 @@ def strip_comment_lines(text: str) -> str:
     return "\n".join(out)
 
 
-# Az OSSZEGZO sor, SOR ELEJERE horgonyozva: `Tests  9 passed | 1 failed (10)`.
+# Az OSSZEGZO sor, SOR ELEJERE horgonyozva: vitest `Tests  9 passed | 1 failed (10)`,
+# jest `Tests:       3 failed, 167 passed, 170 total` (KETTOSPONTTAL; 2026-10-07,
+# kartya 6dde3a90: a kettospont nelkuli minta minden jest-probat ERVENYTELENNEK
+# mondott, mert az alapvonal darabszama sosem volt kiolvashato).
 #
 # MIERT NEM ELEG a `.split("Tests")[-1]` (merve 2026-08-27, ez a szerszam adott
 # rossz verdiktet tole): a vitest a bukas-reszletezot a STDERR-re irja, az
@@ -86,7 +89,9 @@ def strip_comment_lines(text: str) -> str:
 # ` 1 ---` sztringben kereste a "failed" szot, nem talalta, es HAROM valodi
 # leletet jelentett TULELTNEK. Az iranya a rosszabbik: egy mukodo teszt-keszletrol
 # allitotta, hogy nem allit semmit.
-SUMMARY_RX = re.compile(r"^[^\S\n]*Tests[^\S\n]+(.*)$", re.M)
+SUMMARY_RX = re.compile(r"^[^\S\n]*Tests:?[^\S\n]+(.*)$", re.M)
+# A gyujtott osszlet: vitest `(10)`, jest `171 total`. Mas alak -> None (fail-closed).
+TOTAL_RX = re.compile(r"\((\d+)\)|(\d+)[^\S\n]+total\b")
 
 
 def summary_line(out: str) -> str | None:
@@ -96,22 +101,23 @@ def summary_line(out: str) -> str | None:
     kulcsszo -- mindket szures kell, mert a banner behuzasa valtozhat.
     """
     hits = [m.group(1).strip() for m in SUMMARY_RX.finditer(out)]
-    hits = [h for h in hits if any(k in h for k in ("passed", "failed", "skipped", "no tests"))]
+    hits = [h for h in hits if any(k in h for k in ("passed", "failed", "skipped", "todo", "total", "no tests"))]
     return hits[-1] if hits else None
 
 
 def count_tests(cmd: str, cwd: Path) -> tuple[int | None, str]:
     """A futtato kimenetebol kiolvassa az OSSZLETSZAMOT.
 
-    A `Tests  N passed (M)` alak M-je a GYUJTOTT szam -- ez az, aminek nem szabad
-    csokkennie. Ha nem talalunk ilyet, `None`-t adunk vissza: a hianyzo szam NEM
+    A vitest `Tests  N passed (M)` alak M-je, illetve a jest `Tests: N passed, M total`
+    alak M-je a GYUJTOTT szam -- ez az, aminek nem szabad csokkennie. Ha nem
+    talalunk ilyet, `None`-t adunk vissza: a hianyzo szam NEM
     nulla, es nem is 'rendben'.
     """
     r = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True)
     out = r.stdout + r.stderr
     line = summary_line(out)
-    m = re.search(r"\((\d+)\)", line) if line else None
-    return (int(m.group(1)) if m else None), out
+    m = TOTAL_RX.search(line) if line else None
+    return (int(m.group(1) or m.group(2)) if m else None), out
 
 
 def line_is_covered(report: Path, target: Path, lineno: int) -> bool | None:

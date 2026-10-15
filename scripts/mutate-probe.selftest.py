@@ -82,6 +82,29 @@ RUNNER_VITEST_SHAPE = (
     "    sys.stderr.write('\\u23af\\u23af\\u23af Failed Tests 1 \\u23af\\u23af\\u23af\\n')\n"
 )
 
+# A VALODI jest alak (2026-10-07, kartya 6dde3a90): `Tests:` KETTOSPONTTAL, az osszlet
+# `N total` (nincs zarojel). A "Test Suites:" sor is ott van -- az nem osszegzo.
+RUNNER_JEST_SHAPE = (
+    "import sys\n"
+    "src=open(sys.argv[1]).read()\n"
+    "bad = 'MUTALT' in src\n"
+    "print('Test Suites: 1 %s, 1 total' % ('failed' if bad else 'passed'))\n"
+    "print('Tests:       %s' % ('1 failed, 9 passed, 10 total' if bad else '10 passed, 10 total'))\n"
+)
+RUNNER_JEST_BLIND = (
+    "import sys\n"
+    "open(sys.argv[1]).read()\n"
+    "print('Tests:       10 passed, 10 total')\n"
+)
+RUNNER_JEST_SHRINK = (
+    "import sys\n"
+    "src=open(sys.argv[1]).read()\n"
+    "print('Tests:       %s' % ('7 passed, 7 total' if 'MUTALT' in src else '10 passed, 10 total'))\n"
+)
+# Szandekosan ROSSZ alakok: kulcsszo van, de gyujtott osszlet nincs -> nem olvashato ki.
+RUNNER_JEST_NOTOTAL = "print('Tests:       3 failed, 7 passed')\n"
+RUNNER_JEST_GARBAGE = "print('Tests: valami teljesen mas')\n"
+
 SRC = "const a = 1\nif (x > 0) {\n  hasznos()\n}\n"
 
 # A futtato, ami MEGOLI a probat menet kozben -- a jelzo `pid` mezojebol.
@@ -158,6 +181,33 @@ def sentinel_cases() -> list[bool]:
     return results
 
 
+def parse_cases() -> list[bool]:
+    """A jest/vitest osszegzo-sorok KIOLVASASA kozvetlenul (darabszam), futtato-fajl nelkul."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("mutate_probe", PROBE)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    results = []
+    cases = [
+        ("Tests:       171 passed, 171 total", 171),
+        ("Tests:       3 failed, 1 skipped, 167 passed, 171 total", 171),
+        ("Tests:       2 todo, 10 passed, 12 total", 12),
+        ("Tests:       2 todo, 2 total", 2),
+        ("Tests  9 passed | 1 failed (10)", 10),
+        ("Tests:       3 failed, 7 passed", None),   # nincs gyujtott osszlet
+        ("Tests: valami teljesen mas", None),        # szemet
+        ("Test Suites: 1 passed, 1 total", None),    # nem a `Tests` sor
+    ]
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        for i, (line, want) in enumerate(cases):
+            runner = d / f"r{i}.py"
+            runner.write_text(f"print({line!r})\n")
+            got, _ = mod.count_tests(f"{sys.executable} {runner}", d)
+            results.append(report(f"darabszam: {line!r} -> {want}", got == want, f"(kapott: {got})"))
+    return results
+
+
 def report(name: str, ok: bool, detail: str = "") -> bool:
     print(f"  {'OK  ' if ok else 'BUKIK'}  {name}{'' if ok else ' ' + detail}")
     return ok
@@ -181,6 +231,19 @@ def main() -> int:
         run_case("a bukas-BANNER a stderr-en NEM nyomja el az osszegzot -> 0",
                  SRC, "if (x > 0)", "if (MUTALT)", RUNNER_VITEST_SHAPE, OK),
     ]
+    results += [
+        run_case("jest-alak: DISZKRIMINAL -> 0",
+                 SRC, "if (x > 0)", "if (MUTALT)", RUNNER_JEST_SHAPE, OK),
+        run_case("jest-alak: TULELTE -> 1",
+                 SRC, "if (x > 0)", "if (MUTALT)", RUNNER_JEST_BLIND, SURVIVED),
+        run_case("jest-alak: az OSSZLETSZAM CSOKKEN -> 2",
+                 SRC, "if (x > 0)", "if (MUTALT)", RUNNER_JEST_SHRINK, INVALID),
+        run_case("jest-alak: nincs `total` -> 2 (fail-closed)",
+                 SRC, "if (x > 0)", "if (MUTALT)", RUNNER_JEST_NOTOTAL, INVALID),
+        run_case("jest-alak: szemet-sor -> 2 (fail-closed)",
+                 SRC, "if (x > 0)", "if (MUTALT)", RUNNER_JEST_GARBAGE, INVALID),
+    ]
+    results += parse_cases()
     results += sentinel_cases()
     bad = results.count(False)
     print(f"\n  {len(results)-bad}/{len(results)} eset rendben")
