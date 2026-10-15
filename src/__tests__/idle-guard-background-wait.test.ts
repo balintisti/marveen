@@ -228,12 +228,23 @@ describe('the pane reads as background work', () => {
     }
   })
 
-  it('CONTROL: the truncated footer is NOT an idle verdict (pane-state.test.ts rule): without a busy signal it stays `unknown`, and the rows still count', () => {
+  // Card f5bb2626 changed the idle half of this control: a footer cut at `…` DIRECTLY under the
+  // live box is the idle footer (liveTruncatedFooterIndex), so without a busy signal the pane is
+  // `idle`, as any free prompt with background work is. The same footer anywhere else is not.
+  it('CONTROL: without a busy signal the live truncated footer is idle (f5bb2626), and the rows still count', () => {
     const notBusy = DEXTER_31745
       .replace('✶ Fluttering… (41s · ↓ 2.1k tokens · thought for 1s)', '')
       .replace(' · esc to interrupt', '')
-    expect(detectPaneState(notBusy)).toBe('unknown')
+    expect(detectPaneState(notBusy)).toBe('idle')
     expect(runningBackgroundWork(notBusy)).toBe(2 + 3 + 2)
+  })
+
+  it('CONTROL: the same truncated footer away from the live box is still NOT an idle verdict', () => {
+    const lowered = DEXTER_31745
+      .replace('✶ Fluttering… (41s · ↓ 2.1k tokens · thought for 1s)', '')
+      .replace(' · esc to interrupt', '')
+      .replace('\n  ⏵⏵ bypass', '\n\n\n\n  ⏵⏵ bypass')
+    expect(detectPaneState(lowered)).toBe('unknown')
   })
 
   it('a free prompt with background work stays `idle` for the classifier (the prompt IS free); only the guard reads it as work', () => {
