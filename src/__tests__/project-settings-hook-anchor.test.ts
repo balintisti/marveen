@@ -65,6 +65,11 @@ const EXPECTED: Record<string, string[]> = {
     // card 468cf59a: refuses `git clean` / `git reset --hard` aimed at the MAIN checkout.
     // Registered behind an `[ -f ... ]` existence check, so an install without the script is a no-op.
     'main-checkout-git-guard.py',
+    // CHILDCLAUDEPOLLER1010, extended to the main agent (marveen decision 57748 on card
+    // 8b7db8f8): the main session owns the coordinator bot, so a child claude from its Bash
+    // would SIGTERM that poller just the same. The scaffold never writes the main agent's
+    // settings (agentGetsChildClaudeGuard), so this file is the only place it is wired.
+    'child-claude-channel-guard.mjs',
   ],
   Stop: ['marveen-commands.py', 'telegram-reply-guard.py', 'telegram_progress_clear.py', 'slack_progress_clear.py'],
   StopFailure: ['ledger-turn-failure.py'],

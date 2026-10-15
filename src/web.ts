@@ -15,7 +15,7 @@ import { json } from './web/http-helpers.js'
 import { detectLanIp } from './web/network-info.js'
 import { AGENTS_BASE_DIR, listAgentNames, listAllAgentNames } from './web/agent-config.js'
 import { forEachAgentIsolated } from './web/agent-seed-loop.js'
-import { ensureAgentHooks, ensureProjectRootInClaudeMd, ensureAgentStalenessHook, ensureAgentProvenanceHook, ensureEgressGate, ensureBashEgressDeny, ensureBashEgressParser, ensureGovernanceGateCommands, ensureMemoryIndexWriteGate, ensureTelegramCopyGate, ensureQuarantineReader, ensureLeanWorker, watchEgressAllowlistForReaderRender, ensureDefaultScheduledTasks, agentSettingsPath, ensureAutonomySection, ensureSkillsPathTrapSection, ensureSystemDirectiveAuthSection, ensureMemorySearchLabelSection, ensureFleetAuthSection, ensureEvidenceSection, ensureMcpListChannelSection, ensureMessageCloseSection, ensureReportRoutingSection } from './web/agent-scaffold.js'
+import { ensureAgentHooks, ensureProjectRootInClaudeMd, ensureAgentStalenessHook, ensureAgentProvenanceHook, ensureEgressGate, ensureBashEgressDeny, ensureBashEgressParser, ensureGovernanceGateCommands, ensureMemoryIndexWriteGate, ensureTelegramCopyGate, ensureQuarantineReader, ensureLeanWorker, watchEgressAllowlistForReaderRender, ensureDefaultScheduledTasks, agentSettingsPath, ensureAutonomySection, ensureSkillsPathTrapSection, ensureSystemDirectiveAuthSection, ensureMemorySearchLabelSection, ensureFleetAuthSection, ensureEvidenceSection, ensureMcpListChannelSection, ensureMessageCloseSection, ensureReportRoutingSection , ensureChildClaudeGuard } from './web/agent-scaffold.js'
 import { ensureSheetSectionAtStart } from './web/sheet-lock.js'
 import { configuredFrontDesk } from './web/front-desk-setting.js'
 import { shouldRegisterHooks, pruneStaleHooksFromSettingsFile } from './web/hook-registration-guard.js'
@@ -674,6 +674,7 @@ setInterval(() => { try { sweepExpiredDesktopLock() } catch { /* never kill the 
       const govPatched: string[] = []
       const memGatePatched: string[] = []
       const copyGatePatched: string[] = []
+      const childGuardPatched: string[] = []
       const pruned: string[] = []
       // Include the main agent (MAIN_AGENT_ID) so the voice hook is also seeded
       // into ~/.claude/settings.json alongside existing hooks (e.g. telegram_progress.py).
@@ -709,6 +710,7 @@ setInterval(() => { try { sweepExpiredDesktopLock() } catch { /* never kill the 
         if (ensureGovernanceGateCommands(agentName)) govPatched.push(agentName)
         if (ensureMemoryIndexWriteGate(agentName)) memGatePatched.push(agentName)
         if (ensureTelegramCopyGate(agentName)) copyGatePatched.push(agentName)
+        if (ensureChildClaudeGuard(agentName)) childGuardPatched.push(agentName)
         ensureQuarantineReader(agentName)
         ensureLeanWorker(agentName)
       }, (agentName, err) => logger.warn({ err, agent: agentName }, 'Agent hook backfill failed for one agent; the others continue (ROSTERALIAS1026)'))
@@ -739,6 +741,7 @@ setInterval(() => { try { sweepExpiredDesktopLock() } catch { /* never kill the 
       if (govPatched.length) logger.info({ patched: govPatched }, 'governance gate hook commands upgraded to absolute node path in agent settings.json')
       if (memGatePatched.length) logger.info({ patched: memGatePatched }, 'MEMORY.md write-gate hook backfilled into agent settings.json')
       if (copyGatePatched.length) logger.info({ patched: copyGatePatched }, 'outgoing-copy-gate wired onto the Telegram send tools in agent settings.json (GATECOPY828)')
+      if (childGuardPatched.length) logger.info({ patched: childGuardPatched }, 'child-claude channel guard wired onto Bash in agent settings.json (CHILDCLAUDEPOLLER1010)')
     } catch (err) {
       logger.warn({ err }, 'Agent hook backfill skipped')
     }

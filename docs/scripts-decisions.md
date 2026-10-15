@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **515** kovetett fajl, ebbol
-**157** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **516** kovetett fajl, ebbol
+**158** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (4)
 
@@ -335,6 +335,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/hooks/channel-process-gate.py`
 
 - Why this exists (card ccdc10ec, step 3): on 2026-09-05 and 09-06 the telegram
+
+### `scripts/hooks/child-claude-channel-guard.mjs`
+
+- WHY. On start the Telegram plugin's server.ts reads $TELEGRAM_STATE_DIR/bot.pid
 
 ### `scripts/hooks/db-destructive-gate.py`
 
