@@ -13,6 +13,7 @@ import { Readable } from 'node:stream'
 import {
   initDatabase, createKanbanCard, addKanbanComment, getKanbanCard, getKanbanComments,
   getKanbanCardFieldEvents, moveKanbanCard, getDb, sweepArchivedKanbanCards,
+  createLabel, addLabelToCard,
 } from '../db.js'
 import { tryHandleKanban } from '../web/routes/kanban.js'
 import { openLeftovers, openVerdicts, closeRefusal } from '../web/kanban-verdict-gate.js'
@@ -282,9 +283,13 @@ describe('a lezaro utak', () => {
 
 describe('az oras archivalo is latja', () => {
   it('a nyitott MARADEK-es done kartya a TABLAN marad, a lezart archivalodik', () => {
+    // Both carry IGAZOLT: the sweep archives only verified cards (kanban-archive-requires-igazolt),
+    // so the label is what isolates the leftover as the one reason k-open stays.
+    createLabel({ id: 'ig', name: 'IGAZOLT', color: '#16a34a' })
     for (const id of ['k-open', 'k-clean']) {
       cardInTesting(id)
       moveKanbanCard(id, 'done', 0, 'marveen')
+      addLabelToCard(id, 'ig')
     }
     addKanbanComment('k-open', 'friday', LEFTOVER)
     getDb().prepare('UPDATE kanban_cards SET updated_at = 1000').run()
