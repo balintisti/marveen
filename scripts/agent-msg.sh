@@ -394,6 +394,41 @@ fi
 # KERET-KERDES VALASZA. ~62 e token a napi ~524 e-bol.
 SENDER_HOUR_CEILING="${SENDER_HOUR_CEILING:-7}"
 
+# --- ALLAS, NEM TORLODAS (kartya 4f2b2d8e, 2026-10-08) ---
+#
+# A `pending >= 3` kapu azt feltetelezi, hogy a cimzett sora TORLODIK: az elozot el sem olvasta. De
+# a pending a ROUTERROL beszel, nem a cimzettrol, es ket kulonbozo dolgot tud jelenteni:
+#   torlodas ... a cimzett dolgozik, a router csak IDLE panelbe injektal, a level egy ido utan megjon
+#   allas ...... a router MAR HOSSZAN nem tud kezbesiteni (lefagyott pane, hianyzo session)
+# Torlodasnal a negyedik level tenyleg csak ront; allasnal a kapu azt tiltja le, ami az egyetlen
+# modja, hogy a level a sorban legyen, amikor az allas megszunik.
+#
+# A KUSZOB MERESBOL JON (2026-10-08, a valodi agent_messages, 26144 sor; marveen kihagyva, mert ot a
+# router nem injektalja, hanem o olvassa ki a sorat): 489 olyan pillanat volt, amikor egy elkuldott
+# level letrehozasakor a cimzettnek >= 3 pending levele allt (a megtagadott kuldes nem hagy sort, ez
+# tehat alsobecsles). Nem-marveen cimzettre a kezbesitesi keses median
+# 0,1 perc, p90 21,6, p99 151,6, max 1104 perc; a 108 perc (deeper legnagyobb ismert busy-kesese) FOLOTT
+# 230 levelet (1,67%) kezbesitettek, a 120 perc folott 201-et. Tehat nincs olyan kuszob, ami a
+# hosszu busy-kesest az allastol KULON valasztana az uzenet-tablabol, ezert a kapu ket DOLGOT kot ossze:
+#   a legregebbi pending STALL_AGE_MIN percnel (120) regebbi, ES
+#   a cimzettnek STALL_QUIET_MIN perce (60) NEM kezbesitettek semmit.
+# A valodi tortenelmen ez 32 pillanatban tuzel (a 489-bol, 9 epizod: dexter 09-27/28/29 es 10-01,
+# computress 10-02/03, friday 10-03/06, dexter 10-07), es a 32-bol EGYNEL SEM kezbesult a legregebbi
+# level 156 percnel hamarabb (median 584) -- vagyis egy sem volt rovid busy-keses. A 120/60 alatti
+# kuszobok busy-cimzettekre is tuzelnenek (X=45 perc, Y=0: 253 pillanat).
+#
+# AMIT EZ NEM OLD MEG, es ki kell mondani: deeper 2026-09-20-i esete (az a kartya) EZT A KAPUT NEM
+# ERINTI. 11:41-kor a legregebbi pending 43 perces, 13:25-kor 36 perccel korabban kezbesitettek neki,
+# 22:08-kor 85 perces volt: egyik sem allas, mindharom a router mukodese (minden level pontosan
+# egyszer kezbesult, 81-134 perc keses). Az a baj a PREMISSZA, nem a kuszob: deeper a sorat
+# a DB-bol is olvassa, tehat nala a pending nem "nem olvasta el". Azt ez a kapu nem tudja eldonteni.
+#
+# ALLASBAN a kapu NEM tagad meg, hanem kuld ES hangosan figyelmeztet. A KULDOI PLAFON (lent)
+# tovabbra is hat: allasban sem megy egy oran belul 7-nel tobb ugyanannak a cimzettnek.
+# Meresi hiba (nincs delivered_at, nem olvashato adatbazis) = NEM allas: a regi tagadas marad.
+STALL_AGE_MIN="${STALL_AGE_MIN:-120}"
+STALL_QUIET_MIN="${STALL_QUIET_MIN:-60}"
+
 FORCE="${4:-}"
 DEPTH_PRE=""
 if [ "$FORCE" != "--force" ]; then
@@ -460,6 +495,22 @@ try:
     hn, = c.execute(
         "select count(*) from agent_messages"
         " where from_agent=? and to_agent=? and created_at>=?", (me, to, hour_ago)).fetchone()
+    # ALLAS-JEL (kartya 4f2b2d8e): a legregebbi pending kora es az utolso kezbesites ideje.
+    # SAJAT try: egy olvashatatlan delivered_at oszlop nem veheti el a sor-melyseget.
+    # Ures mezo = nem merheto = nem allas (a regi tagadas marad).
+    om = sm = ld_txt = ""
+    try:
+        now_t = int(time.time())
+        oldest, = c.execute("select min(created_at) from agent_messages"
+                            " where to_agent=? and status=?", (to, "pending")).fetchone()
+        last, = c.execute("select max(delivered_at) from agent_messages"
+                          " where to_agent=? and delivered_at is not null", (to,)).fetchone()
+        if oldest is not None:
+            om = str(max(0, (now_t - oldest) // 60))
+            sm = "never" if last is None else str(max(0, (now_t - last) // 60))
+            ld_txt = "soha" if last is None else time.strftime("%m-%d %H:%M", time.localtime(last))
+    except Exception:
+        om = sm = ld_txt = ""
     line = ""
     if mc > 0:
         rate = mc / 3.0
@@ -469,15 +520,26 @@ try:
             share = " | ebbol %s-nek %d kar (%d%%)" % (to, mh, round(100.0 * mh / rc))
         line = ("  [en] %s: 3 oraban %d kar %d db %d cimzettnek = %d kar/ora, "
                 "a telito rata %.1fx-e%s" % (me, mc, mn, mt, round(rate), rate / SATURATING_RATE, share))
-    print("\t".join(str(x) for x in (n, chars, rc, rs, mc, mn, mt, mh, line, hn)))
+    print("\t".join(str(x) for x in (n, chars, rc, rs, mc, mn, mt, mh, line, hn, om, sm, ld_txt)))
 except Exception:
-    print("\t" * 9)' 2>/dev/null)"
+    print("\t" * 12)' 2>/dev/null)"
   DEPTH_PRE="$(printf '%s' "$PRE" | cut -f1)"
   CHARS_PRE="$(printf '%s' "$PRE" | cut -f2)"
   RECENT_CHARS="$(printf '%s' "$PRE" | cut -f3)"
   RECENT_SENDERS="$(printf '%s' "$PRE" | cut -f4)"
   MINE_LINE="$(printf '%s' "$PRE" | cut -f9)"
   HOUR_N="$(printf '%s' "$PRE" | cut -f10)"
+  OLDEST_MIN="$(printf '%s' "$PRE" | cut -f11)"
+  QUIET_MIN="$(printf '%s' "$PRE" | cut -f12)"
+  LAST_DELIV="$(printf '%s' "$PRE" | cut -f13)"
+  # Allas: sor-gyanu (>= 3), a legregebbi regen var, ES hosszan nem kezbesult semmi. Mindket
+  # szam szamkent ellenorizve; barmelyik hianya = nem allas.
+  STALL=0
+  if [ "${DEPTH_PRE:-0}" -ge 3 ] 2>/dev/null && [ "${OLDEST_MIN:-x}" -ge "$STALL_AGE_MIN" ] 2>/dev/null; then
+    if [ "$QUIET_MIN" = "never" ] || { [ "${QUIET_MIN:-x}" -ge "$STALL_QUIET_MIN" ] 2>/dev/null; }; then
+      STALL=1
+    fi
+  fi
   if [ -n "$RECENT_CHARS" ] && [ "$RECENT_CHARS" -gt 0 ] 2>/dev/null; then
     echo "  [sor] $TO: $DEPTH_PRE var (${CHARS_PRE} kar) | 3 oraban ${RECENT_CHARS} kar ${RECENT_SENDERS} feladotol" >&2
   fi
@@ -488,9 +550,15 @@ except Exception:
   if [ -n "$MINE_LINE" ]; then
     printf '%s\n' "$MINE_LINE" >&2
   fi
+  if [ "$STALL" = "1" ]; then
+    echo "FIGYELEM: $TO KEZBESITESI ALLASBAN VAN, nem torlodasban. Kuldom, de NEM biztos, hogy odaer." >&2
+    echo "  $TO soraban $DEPTH_PRE uzenet var, a legregebbi $OLDEST_MIN perce; utolso kezbesites neki: $LAST_DELIV (ennyi perce: $QUIET_MIN)." >&2
+    echo "  A level a sor VEGERE kerul. Ird a TARTALMAT a kartyara IS, es jelezd marveennek:" >&2
+    echo "  printf '%s' \"...\" | bash scripts/alert-coordinator.sh $FROM" >&2
+  fi
   if [ -z "$DEPTH_PRE" ]; then
     echo "FIGYELEM: a sor melyseget NEM tudtam megmerni (adatbazis nem olvashato). Kuldok, de vakon." >&2
-  elif [ "$DEPTH_PRE" -ge 3 ] 2>/dev/null; then
+  elif [ "$DEPTH_PRE" -ge 3 ] 2>/dev/null && [ "$STALL" != "1" ]; then
     echo "NEM KULDTEM. $TO soraban mar $DEPTH_PRE uzenet var, es a pending azt jelenti, hogy az" >&2
     echo "  elozot EL SEM OLVASTA -- egy ujabb level nem gyorsitja, csak a telitest hozza kozelebb." >&2
     echo "  Ird a kartyara kommentkent. Az uzenet tol, a kartya huzat." >&2
