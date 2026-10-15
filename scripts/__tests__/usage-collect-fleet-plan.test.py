@@ -340,6 +340,20 @@ class FleetPlanFromProbe(Env):
         self.assertEqual(self.probe_calls(), ["masodik"])
         self.assertEqual(self.read_json("usage-latest.json")["claude"]["source"], "authoritative")
 
+    def test_d_default_run_budget_stays_under_the_task_timeout(self):
+        # The scheduler kills the run at the usage-snapshot task's timeoutMs; the budget must end
+        # before it with room for the snapshot write. Read the live config when it exists, else the
+        # 60 s it carried when the budget was set (2026-10-15).
+        path = os.path.expanduser("~/.claude/scheduled-tasks/usage-snapshot/task-config.json")
+        timeout_sec = 60.0
+        if os.path.exists(path):
+            with open(path) as f:
+                timeout_sec = json.load(f)["timeoutMs"] / 1000.0
+        margin_sec = 10.0
+        self.assertLessEqual(uc.RUN_BUDGET_SEC_DEFAULT + margin_sec, timeout_sec)
+        self.assertLess(uc.PROBE_MIN_SEC, uc.PROBE_TIMEOUT_SEC)
+        self.assertLessEqual(uc.PROBE_TIMEOUT_SEC, uc.RUN_BUDGET_SEC_DEFAULT)
+
     def test_d_probe_command_missing_is_probe_failed(self):
         self.write_state(_state(_plan_entry(_now_ms() - 30 * 60_000)))
         self.env_patch("USAGE_COLLECT_PROBE_CMD", os.path.join(self.tmp, "nope-does-not-exist"))
