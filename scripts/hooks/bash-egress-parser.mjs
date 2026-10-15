@@ -652,7 +652,9 @@ function substHostCandidates(inner) {
 // `echo`, `printf` and `cat` are no proof of printing (`echo(){ base64 -d <<< X; }; curl "$(echo
 // localhost)"` ran the function in bash and zsh, didi round 5 item 1), and neither are the text-only
 // words a shell's -c body is judged by (`export -f` carries a function into `bash -c`).
-const DEFINES_COMMANDS = /(?:^|[\s;&|({!])(?:function\s+[^\s;&|<>]+|[^\s(){};&|<>=$"'`]+\s*\(\s*\)|(?:alias|eval|source|enable|\.)(?:\s|$))/
+// A quote or backslash before the name counts as a word start: past classify's depth bound a nested
+// `bash -c` body is read as raw text, where the definition sits behind `'"'"'` (dexter, 2026-10-16).
+const DEFINES_COMMANDS = /(?:^|[\s;&|({!'"\\])(?:function\s+[^\s;&|<>]+|[^\s(){};&|<>=$"'`]+\s*\(\s*\)|(?:alias|eval|source|enable|\.)(?:\s|$))/
 function definesCommands(text) { return DEFINES_COMMANDS.test(String(text)) }
 // A substitution body that only prints literal text: each `;`/newline command is an echo or printf
 // (no `printf -v`), and nothing in it expands, redirects, pipes or runs a subshell.

