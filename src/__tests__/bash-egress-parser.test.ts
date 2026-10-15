@@ -772,9 +772,8 @@ describe('still open after (a) -- pinned on purpose', () => {
     // Closing it means reading files at hook time, which is left to a follow-up (see the PR comment).
     `cat > /tmp/s.py <<'PY'\nimport urllib.request\nurllib.request.urlopen('https://example.org/x')\nPY\npython3 /tmp/s.py`,
     `python3 - <<'PY'\nopen('/tmp/s.py','w').write("import urllib.request\\nurllib.request.urlopen('https://example.org/x')\\n")\nPY`,
-    // a program PIPED into an interpreter (the heredoc is on cat, not on python3); the heredoc on the
-    // interpreter itself is closed since EGRESSHEREDOC924, see 'heredoc-fed interpreters' below
-    `cat <<'PY' | python3 -\nimport urllib.request; urllib.request.urlopen('https://example.org')\nPY`,
+    // a program PIPED into an interpreter (`cat <<PY | python3 -`) is closed since card c8b1ccbf round 4
+    // (bash-egress-parser.c8b1ccbf.test.ts)
     'while read u; do curl -s "$u"; done < urls.txt', // loop values read from a file
     // the families the header lists as open after EGRESSHEREDOC924 (reviewer probe A8-A11, A14)
     // xargs is closed since card c8b1ccbf (bash-egress-parser.c8b1ccbf.test.ts); parallel is not

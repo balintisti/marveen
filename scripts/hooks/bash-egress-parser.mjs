@@ -347,7 +347,7 @@ export function isExternal(url) {
 }
 function spans(masked) {
   const out = []; let start = 0
-  const re = /&&|\|\||;|\||\n/g; let m
+  const re = /&&|\|\||\|&|;|\||\n/g; let m // `|&` pipes stderr too (didi round 4 item 2)
   while ((m = re.exec(masked))) { out.push([start, m.index]); start = m.index + m[0].length }
   out.push([start, masked.length])
   return out
@@ -360,8 +360,21 @@ function collectAssignments(orig, masked) {
     for (const m of seg.matchAll(/(?:^|\s)(?:export\s+|local\s+|readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)=("([^"]*)"|'([^']*)'|([^\s]*))/g)) {
       env[m[1]] = m[3] ?? m[4] ?? m[5] ?? ''
     }
+    for (const [name, value] of printfAssignments(seg)) env[name] = value
   }
   return env
+}
+// `printf -v NAME FORMAT ARGS...` assigns too (didi round 4 item 3: `printf -v h %s evil.example.com;
+// curl $h` passed). The value is the format with its conversions filled from the arguments in order.
+function printfAssignments(text) {
+  const out = []
+  for (const m of String(text).matchAll(/(?:^|[\s;&|(])printf\s+-v\s*([A-Za-z_][A-Za-z0-9_]*)\s+([^\n;&|)]*)/g)) {
+    const [fmt = '', ...args] = shellWords(m[2])
+    let k = 0
+    const filled = fmt.replace(/%[-+ #0]*\d*(?:\.\d+)?[sbdiqxX]/g, () => args[k++] ?? '')
+    out.push([m[1], [filled, ...args.slice(k)].join(' ')])
+  }
+  return out
 }
 // `for NAME in w1 w2 ...`: the loop variable takes EACH value in turn (card 804ab1cf, didi 04:0x).
 // NAME=value alone never saw it, so `for u in https://x ...; do curl "$u"; done` reached curl with an
@@ -401,7 +414,15 @@ function loopVariants(text, env, loops) {
   }
   return out.map((t) => expand(t, env))
 }
+// `${NAME:-word}` and its kin (- = :- := + :+ ? :?) expand to `word` whenever NAME is unknown here,
+// and the `+` forms to `word` exactly when it is set: `curl ${h:-evil.example.com}` reached curl with
+// the default unread (didi round 4 item 3). A NAME this command sets keeps its value for - and =.
 function expand(text, env) {
+  text = text.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-=+?])([^}]*)\}/g, (all, name, op, word) => {
+    if (op.endsWith('+')) return word
+    if (op.endsWith('?')) return env[name] ?? all
+    return env[name] ? env[name] : word
+  })
   return text.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (all, a, b) => (env[a ?? b] ?? all))
 }
 // $( ... ) and backtick substitutions are commands of their own: lift them out (length-preserving,
@@ -626,6 +647,17 @@ function substHostCandidates(inner) {
   }
   return out
 }
+// A substitution body that only prints literal text: each `;`/newline command is an echo or printf
+// (no `printf -v`), and nothing in it expands, redirects, pipes or runs a subshell.
+function isLiteralPrint(inner) {
+  const text = String(inner)
+  // `cat <<TAG ... TAG` prints its body: literal when the tag is quoted or nothing in it expands
+  const doc = /^\s*cat\s+<<-?\s*(['"]?)([A-Za-z_]\w*)\1[ \t]*\n([\s\S]*?)\n[ \t]*\2\s*$/.exec(text)
+  if (doc) return doc[1] !== '' || !/[$`\\]/.test(doc[3])
+  if (/[$`<>|&()\\]/.test(text)) return false
+  const cmds = text.split(/[;\n]/).map((c) => c.trim()).filter(Boolean)
+  return cmds.length > 0 && cmds.every((c) => /^(?:echo|printf)(?:\s|$)/.test(c) && !/^printf\s+(?:\S+\s+)*-v\b/.test(c))
+}
 // Output-file flags: their value is a path curl writes, never a host (an unreadable line's word
 // reading took `-o out.dir/file.json` for the host out.dir, didi's review 3).
 const CURL_FILE_SHORT = new Set(['o', 'D', 'c'])
@@ -642,7 +674,12 @@ export function curlDestinations(args, inners = null, fileValues = null) {
     for (const k of new Set([...part].filter((c) => MARKS.test(c)).map((c) => c.charCodeAt(0) - MARK_BASE))) {
       if (inners[k] == null) continue
       const found = substHostCandidates(inners[k])
-      dests.push(...(found.length ? found : [`$(${inners[k].trim()})`]))
+      // The words a substitution names are the destination only when the substitution PRINTS them:
+      // every command an echo/printf of literal text. Otherwise a named host is a decoy
+      // (`$(echo localhost >/dev/null; echo <base64> | base64 -d)`, `$(: 127.0.0.1; echo x)`, didi
+      // round 4 item 1) and the real destination is unknowable, so it is added as well.
+      if (found.length && isLiteralPrint(inners[k])) dests.push(...found)
+      else dests.push(...found, `$(${inners[k].trim()})`)
     }
     return true
   }
@@ -798,7 +835,10 @@ function hereStringWord(text, i) {
 // Every feed: { at, text, expands }. `at` is the operator offset (it decides which sub-command the
 // feed belongs to); `expands` is whether the shell expands $VARS in it (unquoted heredoc tag, a
 // here-string word that is not single-quoted).
-function stdinFeeds(orig, masked, herestrings, env) {
+// A here-string word built by a substitution (`bash <<< "$(cat <<S ... S)"`) is empty in `orig`: its
+// substitutions' command texts ride along as `inners`, so the caller can judge what they print when
+// the receiver runs its stdin as a program (didi round 4 item 2).
+function stdinFeeds(orig, masked, herestrings, env, marked = orig, inners = []) {
   const feeds = []
   // Heredoc operators are found in the MASKED text, so one inside quotes or another body is not one.
   for (const m of masked.matchAll(/<<-?\s*(?:'([^']*)'|"([^"]*)"|([A-Za-z_]\w*))/g)) {
@@ -811,9 +851,11 @@ function stdinFeeds(orig, masked, herestrings, env) {
   }
   for (const at of herestrings) {
     const raw = hereStringWord(orig, at + 3)
-    if (!raw) continue
+    if (!raw.trim()) continue
     const expands = !raw.startsWith("'")
-    feeds.push({ at, text: shellWords(expands ? expand(raw, env) : raw).join(' '), expands: false })
+    const built = [...new Set([...hereStringWord(marked, at + 3)].filter((c) => MARKS.test(c)))]
+      .map((c) => inners[c.charCodeAt(0) - MARK_BASE]).filter((x) => x != null)
+    feeds.push({ at, text: shellWords(expands ? expand(raw, env) : raw).join(' '), expands: false, inners: built })
   }
   return feeds
 }
@@ -976,6 +1018,17 @@ function unreadableCurlHosts(text, fileValues) {
   const { marked, inners } = markAllSubstitutions(text)
   const values = {}
   for (const m of marked.matchAll(UNREAD_ASSIGN)) (values[m[1]] ??= []).push(m[3] ?? m[4] ?? m[5] ?? '')
+  // The other ways a line gives a name a value (didi round 4 item 3): a `for NAME in` list, a `read`
+  // fed by a here-string (each of its words to each read name), `printf -v`.
+  for (const m of marked.matchAll(/(?:^|[\s;&|(!{])for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([^;\n]*)/g)) {
+    (values[m[1]] ??= []).push(...shellWords(m[2]))
+  }
+  for (const m of marked.matchAll(/(?:^|[\s;&|(])read((?:\s+[^\s<;&|]+)*)\s*<<<\s*("[^"]*"|'[^']*'|[^\s;&|)]*)/g)) {
+    const names = m[1].trim().split(/\s+/).filter((w) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(w))
+    const said = shellWords(m[2])
+    for (const v of names.length ? names : ['REPLY']) (values[v] ??= []).push(...said, said.join(' '))
+  }
+  for (const [name, value] of printfAssignments(marked)) (values[name] ??= []).push(value)
   const last = Object.fromEntries(Object.entries(values).map(([v, xs]) => [v, xs[xs.length - 1]]))
   const out = []
   for (const m of marked.matchAll(/(?:^|[^A-Za-z0-9_-])curl(?![A-Za-z0-9_-])/gi)) {
@@ -1050,7 +1103,8 @@ function shellStdinIsData(args) {
     if (a === '-' || STDIN_PATH.test(a)) return false
     if (a === '--') continue
     if (/^[-+][oO]$/.test(a)) { k++; continue }
-    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(a)) return shellCBodyIsData(args[k + 1] ?? '')
+    // `-c` with no body here gets it from elsewhere (`| xargs -0 bash -c`: the stdin IS the body)
+    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(a)) return args[k + 1] !== undefined && shellCBodyIsData(args[k + 1])
     if (/^-[A-Za-z]*s[A-Za-z]*$/.test(a)) return false
     if (/^[-+]/.test(a)) continue
     return true
@@ -1097,7 +1151,10 @@ function runsStdin(sw) {
   if (i >= w.length) return false
   const c = normalizedName(w[i])
   if (c === 'eval') return true
-  if (c === 'source' || w[i] === '.') return w[i + 1] === undefined || STDIN_PATH.test(w[i + 1])
+  if (c === 'source' || w[i] === '.') {
+    const operand = w[i + 1] === '--' ? w[i + 2] : w[i + 1] // `source -- /dev/stdin` (didi round 4)
+    return operand === undefined || STDIN_PATH.test(operand)
+  }
   return SHELL.test(c) && !shellStdinIsData(w.slice(i + 1))
 }
 // Redirection words (`<<S`, `>out`, `2>&1`, or an operator alone with its target after it) dropped.
@@ -1138,11 +1195,35 @@ function feedRunsAsProgram(orig, masked, at) {
   }
   return false
 }
+// The interpreter a heredoc's line pipes its output into as a PROGRAM (`cat <<S | python3 -`), or null
+// (didi round 4 item 2). It runs its stdin when it has no code flag and only `-` / stdin paths /
+// options as arguments, or when a code flag has no operand (`| xargs python3 -c`: the stdin is it).
+function pipedInterpreter(orig, masked, at) {
+  const ls = orig.lastIndexOf('\n', at - 1) + 1
+  const nl = orig.indexOf('\n', at)
+  const le = nl === -1 ? orig.length : nl
+  const line = spans(masked).filter(([a, b]) => b > ls && a < le)
+  const k = line.findIndex(([a, b]) => at >= a && at < b)
+  for (let j = Math.max(k, 0); k !== -1 && j + 1 < line.length; j++) {
+    const b = line[j][1]
+    if (masked[b] !== '|' || masked[b + 1] === '|') break
+    const w = withoutRedirects(shellWords(orig.slice(Math.max(line[j + 1][0], ls), Math.min(line[j + 1][1], le))))
+    const i = commandIndex(w)
+    const name = i < w.length ? normalizedName(w[i]) : ''
+    if (!INTERPRETER.test(name.toLowerCase())) continue
+    const rest = w.slice(i + 1)
+    const isCode = (x) => CODE_FLAG.has(x) || PS_CODE_FLAG.test(x)
+    if (rest.length && isCode(rest[rest.length - 1])) return name
+    if (!rest.some(isCode) && rest.every((x) => x === '-' || STDIN_PATH.test(x) || x.startsWith('-'))) return name
+  }
+  return null
+}
 // The words of the sub-command holding offset `at`, from its start up to `at`, past its command word.
 function argsBefore(orig, masked, at) {
   for (const [a, b] of spans(masked)) {
     if (at < a || at > b) continue
-    const sw = shellWords(orig.slice(a, at))
+    // group words are no operands: `( bash ) <<S` read `)` as a script name, so the body as data
+    const sw = shellWords(orig.slice(a, at)).filter((x) => !/^[(){}!]+$/.test(x))
     return sw.slice(commandIndex(sw) + 1)
   }
   return []
@@ -1190,7 +1271,7 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
     const urls = m ? (inners[k].match(URL_RE) ?? []) : []
     if (urls.length) loops[m[1]] = [...(loops[m[1]] ?? []), ...urls]
   })
-  const feeds = stdinFeeds(orig, masked, herestrings, env)
+  const feeds = stdinFeeds(orig, masked, herestrings, env, marked, inners)
   // A `while read u; do ...; done <<< "URL"` (or `<<EOF` body, or `read u <<< "URL"`) binds u to
   // the fed lines in the same command, exactly like `for u in URL`: the values join the loop values.
   const reads = collectReads(orig, masked)
@@ -1215,7 +1296,18 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
     if (handedTo) { cmd = handedTo; shell = false }
     const plain = f.expands ? expand(f.text, env) : f.text
     const variants = f.expands ? loopVariants(f.text, env, loops) : []
-    if (!shell && !(cmd !== null && INTERPRETER.test(cmd.toLowerCase()))) {
+    const interpreter = !shell && cmd !== null && INTERPRETER.test(cmd.toLowerCase())
+    const piped = !shell && !interpreter ? pipedInterpreter(orig, masked, f.at) : null
+    // A here-string a substitution builds: what it prints is unknown, so when it reaches a program its
+    // command text is judged as an unreadable line is (a network word and an external host deny).
+    if (f.inners?.length && (handedTo || interpreter || piped || (shell ? !shellStdinIsData(shellArgs) : feedRunsAsProgram(orig, masked, f.at)))) {
+      for (const inner of f.inners) {
+        const r = unreadableVerdict(inner, vendorHosts, vendorDomains)
+        if (r.deny) return { ...r, reason: `herestring-${r.reason}` }
+      }
+    }
+    if (piped) cmd = piped
+    else if (!shell && !interpreter) {
       // Not a shell's own heredoc, but the body can still reach one (`source /dev/stdin`, `{ bash; }`,
       // `cat <<S | bash`): then it is a program and gets the whole analysis.
       if (depth >= 4 || !feedRunsAsProgram(orig, masked, f.at)) continue
