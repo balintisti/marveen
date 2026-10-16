@@ -549,30 +549,42 @@ export function quietAgentsToCheck(
 // more than BATCH_THRESHOLD messages and the oldest is > BATCH_AGE_MS old.
 const RECONNECT_BATCH_THRESHOLD = 5
 const RECONNECT_BATCH_AGE_MS = 30 * 60 * 1000    // oldest > 30 min
-// Agents that were absent on the previous tick. When they reappear, check for
-// old backlog and batch it on the first delivery attempt.
-const agentWasAbsent = new Set<string>()
+// Agents that were absent on the previous tick, with the time (ms) the router
+// FIRST saw them absent in the current unbroken absence. When they reappear,
+// check for old backlog and batch it on the first delivery attempt; the same
+// start time is how long the absence has lasted, which is what abandon needs.
+// Reset (entry deleted) the moment a tick sees the session present. In-memory:
+// a router restart starts the clock over, which can only delay an abandon.
+const agentAbsentSince = new Map<string, number>()
 // Agents we already batched this reconnect (one-shot per reconnect cycle).
 const agentBatchedThisReconnect = new Set<string>()
 
 /**
  * Pure decision: should a pending inter-agent message be abandoned?
  *
- * Abandon ONLY when the target session has been ABSENT for the full retry
- * window. A session that EXISTS (even if busy or mid-turn) is never hard-
- * abandoned -- it keeps retrying until an idle gap delivers the message.
+ * Abandon ONLY when the target session has been CONTINUOUSLY ABSENT for the
+ * full retry window. A session that EXISTS (even if busy or mid-turn) is never
+ * hard-abandoned -- it keeps retrying until an idle gap delivers the message.
  *
  * The previous inline code checked `ageMs > window` BEFORE the session-
  * existence check, which abandoned messages to an alive-but-busy main
  * session at the 1h mark even though the session was continuously running
  * (incident: two reports lost while the session was busy).
  *
+ * The session-existence check alone is an INSTANTANEOUS reading: a context-
+ * guard restart tears the session down and rebuilds it within seconds, and a
+ * tick landing in that gap killed every message older than the window -- the
+ * very ones the saturation had held back (card dd5a3f76: abandon 14:35:57, new
+ * session 14:35:58). So the absence itself must also have lasted the window.
+ *
  * @param sessionExists Whether the target tmux session is currently alive.
  * @param ageMs         How long the message has been pending (ms).
  * @param windowMs      The abandon window threshold (ms).
+ * @param absentForMs   How long the session has been continuously absent (ms);
+ *                      0 when it was not absent on an earlier tick.
  */
-export function shouldAbandon(sessionExists: boolean, ageMs: number, windowMs: number): boolean {
-  return !sessionExists && ageMs > windowMs
+export function shouldAbandon(sessionExists: boolean, ageMs: number, windowMs: number, absentForMs: number): boolean {
+  return !sessionExists && ageMs > windowMs && absentForMs >= windowMs
 }
 
 // ---- Distributed trace context (card def5a189) ------------------------------
@@ -907,7 +919,7 @@ export async function runMessageRouterTick(): Promise<void> {
       // in pending/ and get handed over one at a time, acknowledged one at a
       // time. Summarising them away would DISCARD work that was never lost.
       if (agentSessionCache.get(agent)?.worksource) continue
-      if (agentWasAbsent.has(agent) && !agentBatchedThisReconnect.has(agent)) {
+      if (agentAbsentSince.has(agent) && !agentBatchedThisReconnect.has(agent)) {
         // Check if this agent qualifies for backlog batching.
         // No wake filter here, on purpose (card a85a9acd): `presentNow` is built from the
         // deliverable rows of this tick, so an agent that reaches this loop already has a
@@ -926,14 +938,14 @@ export async function runMessageRouterTick(): Promise<void> {
     }
     // Maintain absent-set: agents absent now will be checked next tick for reconnect.
     for (const agent of absentNow) {
-      agentWasAbsent.add(agent)
+      if (!agentAbsentSince.has(agent)) agentAbsentSince.set(agent, now)
       agentBatchedThisReconnect.delete(agent) // reset batched flag on new absence
       agentStuckSince.delete(agent)           // absent = not stuck, just gone
       agentTokenSample.delete(agent)          // es a haladas-jel is: uj session, uj szamlalo
       agentTokenReadFailed.delete(agent)      // uj session: a token-olvasas jelzese is nullazodik
     }
     for (const agent of presentNow) {
-      agentWasAbsent.delete(agent)
+      agentAbsentSince.delete(agent)
     }
 
     // Federated (slash-qualified) recipients delivered over the HTTPS bridge,
@@ -1018,12 +1030,14 @@ export async function runMessageRouterTick(): Promise<void> {
           'worksource agent is not serving its queue (session absent or parked on a startup dialog) -- keeping the tmux stall gates armed')
       }
 
-      if (!worksourceServing && shouldAbandon(sessionExists, ageMs, MESSAGE_ABANDON_WINDOW_MS)) {
-        logger.warn({ id: msg.id, from: msg.from_agent, to: msg.to_agent, ageMs }, 'Agent message abandoned: target session absent for full retry window')
-        if (!markMessageFailed(msg.id, 'Abandoned: target session absent for full retry window')) {
+      const absentForMs = now - (agentAbsentSince.get(msg.to_agent) ?? now)
+      if (!worksourceServing && shouldAbandon(sessionExists, ageMs, MESSAGE_ABANDON_WINDOW_MS, absentForMs)) {
+        const absentMin = Math.round(absentForMs / 60000)
+        logger.warn({ id: msg.id, from: msg.from_agent, to: msg.to_agent, ageMs, absentForMs }, 'Agent message abandoned: target session continuously absent for the retry window')
+        if (!markMessageFailed(msg.id, `Abandoned: target session continuously absent for ${absentMin} min (retry window ${Math.round(MESSAGE_ABANDON_WINDOW_MS / 60000)} min)`)) {
           logger.warn({ id: msg.id }, 'markMessageFailed affected 0 rows (deleted concurrently?)')
         }
-        notifyOrchestratorOfFailedHandoff(msg, 'target session was absent for the entire retry window')
+        notifyOrchestratorOfFailedHandoff(msg, `target session was continuously absent for ${absentMin} min (retry window ${Math.round(MESSAGE_ABANDON_WINDOW_MS / 60000)} min)`)
         routerInjectFailures.delete(msg.id)
         routerLoggedMisses.delete(msg.id)
         continue
