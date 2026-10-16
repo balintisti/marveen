@@ -247,6 +247,22 @@ describe('main-checkout git guard: any spelling of the tree root is the whole tr
       expect(r.stderr).toContain('resolves to the repo root')
     })
 
+  // didi 36865: git reads a pathspec as a glob and `*` crosses `/`, so a glob in the
+  // FIRST segment reaches every top-level entry, like '*'.
+  it.each([["'?*'"], ["'[a-z]*'"], ["'sc*' '[a-z]*'"], ["':(top)?*'"], ["':(glob)?*'"], ["'*.md'"]])(
+    'a glob in the first segment (%s) is the whole tree', (s) => {
+      expect(run(`git checkout -- ${s}`, main).code).toBe(2)
+      expect(run(`git restore ${s}`, main).code).toBe(2)
+      expect(run(`git checkout -- ${s}`, wt).code).toBe(0)
+    })
+
+  it('a glob below a named directory, or a literal pathspec, is not the whole tree', () => {
+    expect(run("git checkout -- 'scripts/*.py'", main).code).toBe(0)
+    expect(run("git restore 'scripts/?oo.py'", main).code).toBe(0)
+    expect(run("git checkout -- ':(literal)?x'", main).code).toBe(0)
+    expect(run("git checkout -- '?*'", mainSub).code).toBe(0)
+  })
+
   it('a pathspec in a variable: resolved when the assignment is literal, refused when not', () => {
     expect(run('P=.; git checkout -- $P', main).code).toBe(2)
     expect(run('P=.; git checkout -- "$P"', main).code).toBe(2)

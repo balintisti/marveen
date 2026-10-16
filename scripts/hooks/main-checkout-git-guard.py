@@ -281,6 +281,17 @@ def _covers(path, root):
     return path == root or root.startswith(path.rstrip(os.sep) + os.sep)
 
 
+def _glob_first(path, root):
+    """True when the first segment of `path` below `root` is a glob (`*`, `?`, `[`). git
+    matches a pathspec as a glob by default and `*` crosses `/`, so `'?*'` or `'[a-z]*'`
+    reaches every top-level entry: the whole tree, like `'*'` (didi, card 468cf59a
+    comment 36865). A literal top-level name with such a character refuses loudly."""
+    if not path.startswith(root + os.sep):
+        return False
+    first = os.path.relpath(path, root).split(os.sep)[0]
+    return any(ch in first for ch in "*?[")
+
+
 def _spec_state(spec, lenient, base, root, env):
     """"whole" when this pathspec discards the whole tree rooted at `root` (or cannot be
     shown not to), "unresolvable" when it holds a variable/substitution that only the
@@ -291,6 +302,7 @@ def _spec_state(spec, lenient, base, root, env):
         return None if lenient else "unresolvable"
     if spec in _WHOLE_TREE:
         return "whole"
+    literal = spec.startswith(":(") and ")" in spec and "literal" in spec[2:spec.index(")")].split(",")
     top, exclude, rest = _strip_magic(spec)
     if exclude:
         return "whole"  # an exclude-only pathspec is "everything except ..."
@@ -304,6 +316,8 @@ def _spec_state(spec, lenient, base, root, env):
         n = os.path.normpath(rest) if rest else "."
         if os.path.basename(n) in ("*", "**"):
             n = os.path.dirname(n) or "."
+        if not literal and any(ch in n.split(os.sep)[0] for ch in "*?["):
+            return "whole"
         return "whole" if n == "." or n == ".." or n.startswith("../") else None
     else:
         cands = [os.path.normpath(os.path.join(os.path.realpath(base), rest))]
@@ -311,7 +325,7 @@ def _spec_state(spec, lenient, base, root, env):
         for cand in (c, os.path.realpath(c)):
             if os.path.basename(cand) in ("*", "**"):  # a glob over the directory itself
                 cand = os.path.dirname(cand)
-            if _covers(cand, root):
+            if _covers(cand, root) or (not literal and _glob_first(cand, root)):
                 return "whole"
     return None
 
