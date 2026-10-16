@@ -1,6 +1,7 @@
 // Card a85a9acd (a): measureRestartLoss feeds the restart notice both its loss line and the
 // wake decision, from ONE read of the rows.
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeAll } from 'vitest'
+import { initDatabase, createAgentMessage, markMessageDelivered, getDb } from '../db.js'
 import { measureRestartLoss } from '../web/context-guard-runner.js'
 import { restartNoticeWakes } from '../context-guard.js'
 
@@ -39,5 +40,32 @@ describe('measureRestartLoss', () => {
     measureRestartLoss('x', read, T)
     expect(read).toHaveBeenCalledTimes(1)
     expect(read).toHaveBeenCalledWith('x')
+  })
+})
+
+describe('measureRestartLoss over the real queue: quiet rows (card a85a9acd)', () => {
+  beforeAll(() => { initDatabase(':memory:') })
+
+  it('a delivered and a failed QUIET row neither need action nor wake the notice', () => {
+    const t = 'quiet-restart-' + Date.now()
+    const failed = createAgentMessage('system', t, 'csendes elbukott', null, null, { wake: false })
+    getDb().prepare("UPDATE agent_messages SET status = 'failed' WHERE id = ?").run(failed.id)
+    const delivered = createAgentMessage('system', t, 'csendes beinjektalva', null, null, { wake: false })
+    expect(markMessageDelivered(delivered.id)).toBe(true)
+    const r = measureRestartLoss(t)
+    expect(r.lossNeedsAction).toBe(false)
+    expect(restartNoticeWakes(r.lossNeedsAction, null)).toBe(false)
+    expect(r.lossLine).toContain('NINCS mit ujrakuldeni')
+  })
+
+  it('POSITIVE CONTROL: the same two rows, waking, DO need action and wake the notice', () => {
+    const t = 'waking-restart-' + Date.now()
+    const failed = createAgentMessage('didi', t, 'elbukott')
+    getDb().prepare("UPDATE agent_messages SET status = 'failed' WHERE id = ?").run(failed.id)
+    const delivered = createAgentMessage('didi', t, 'beinjektalva')
+    expect(markMessageDelivered(delivered.id)).toBe(true)
+    const r = measureRestartLoss(t)
+    expect(r.lossNeedsAction).toBe(true)
+    expect(restartNoticeWakes(r.lossNeedsAction, null)).toBe(true)
   })
 })

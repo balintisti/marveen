@@ -3790,7 +3790,8 @@ export function getRestartLossCandidates(
   const horizon = Math.floor(nowMs / 1000) - RESTART_LOSS_SQL_HORIZON_S
   return db.prepare(
     "SELECT id, status, created_at, delivered_at, from_agent, substr(content, 1, 40) AS head FROM agent_messages"
-    + " WHERE to_agent = ? AND (status IN ('pending','failed') OR (status = 'delivered' AND delivered_at >= ?))"
+    // Card a85a9acd: a quiet (wake=0) row has nothing to resend or act on, by definition.
+    + " WHERE to_agent = ? AND wake = 1 AND (status IN ('pending','failed') OR (status = 'delivered' AND delivered_at >= ?))"
     + " ORDER BY created_at ASC",
   ).all(toAgent, horizon) as (Pick<AgentMessage, 'id' | 'status' | 'created_at' | 'delivered_at' | 'from_agent'> & { head: string })[]
 }
