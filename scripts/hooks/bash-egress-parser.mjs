@@ -69,6 +69,9 @@
 //   - a destination that a DIFFERENT command reads from stdin and turns into arguments, other than
 //     xargs (parallel, a while-read over a pipe), or that xargs reads from a file (-a, a pipe from cat);
 //   - a command line held in a variable the command never assigns (`eval "$X"`, `bash -c "$X"`, `$X URL`);
+//     a command WORD the line cannot read (`X=$(...); $X URL`, `set -- ...; $1 URL`, `"${a[@]}"`) denies
+//     only when the text that could set it names a network tool literally AND an external host, so a
+//     tool name that is itself computed (`X=$(echo Y3VybA== | base64 -d)`) passes;
 //   - values bound by builtins other than `for` and a plain `read`: array fillers (mapfile /
 //     readarray), `read -a` elements beyond the first, and `read` under a non-default IFS (only
 //     whitespace splitting is modelled);
@@ -845,7 +848,62 @@ const PROXY_REMOVED = /(?:^|[\s;&|(])(?:unset(?:[ \t]+-[fv])?(?:[ \t]+[A-Za-z0-9
 // (`export http_{proxy,x}=`) expands to several names, `--` ends the options, `eval` builds the
 // assignment at run time (didi 36059). The `=` may come from the expansion itself: `export $(echo
 // ${v}proxy=P)`, `env $(cat f) curl`, `export $v` (didi 36152).
-const COMPUTED_ENV_NAME = /(?:^|[\s;&|(])(?:(?:export|declare|typeset|readonly|local|env|eval)(?:\s+-[\w-]*)*(?:\s+[^\s=;&|]+=\S*)*\s+[^\s=;&|]*[$`{]|printf\s+-v\s*[^\s;&|]*[$`])/
+// Read per sub-command, from its words: only a declarer in COMMAND position counts. A regex over the
+// quote-stripped line read "env $HOME" inside a -d payload, "use env $X" in a commit message and
+// `eval "$(ssh-agent -s)"` as computed names (didi 36220 item 3).
+const PRINTF_V_COMPUTED = /(?:^|[\s;&|(])printf\s+-v\s*[^\s;&|]*[$`]/
+const DECLARERS = new Set(['export', 'declare', 'typeset', 'readonly', 'local'])
+const COMPUTED_ASSIGN_NAME = /^(?=.*[$`])(?:[A-Za-z0-9_]|\$[A-Za-z_][A-Za-z0-9_]*|\$\{[^}]*\}|\$\([^)]*\)|`[^`]*`)+\+?$/
+// The sub-commands of a line, split at unquoted ; & | newline and parentheses (quotes kept).
+function subCommandTexts(text) {
+  const out = []; let cur = ''; let q = null
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (q === "'") { cur += c; if (c === "'") q = null; continue }
+    if (c === '\\') { cur += c + (text[i + 1] ?? ''); i++; continue }
+    if (q === '"') { cur += c; if (c === '"') q = null; continue }
+    if (c === "'" || c === '"') { q = c; cur += c; continue }
+    if (/[;&|\n()]/.test(c)) { out.push(cur); cur = ''; continue }
+    cur += c
+  }
+  out.push(cur)
+  return out
+}
+function computedNameInWords(w) {
+  let j = 0
+  while (j < w.length) {
+    while (j < w.length && /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/.test(w[j])) j++
+    if (j >= w.length) return false
+    // a computed name in assignment position (`eval "${v}proxy=P"`: eval makes it an assignment)
+    // The name is name characters and expansions only: a `{"a":"b=c"}` heredoc or payload line is no
+    // assignment (it read three fleet commands as computed names).
+    if (w[j].includes('=') && COMPUTED_ASSIGN_NAME.test(w[j].slice(0, w[j].indexOf('=')))) return true
+    const c = normalizedName(w[j]); j++
+    // `eval "export ${v}proxy=P"`: eval's words are a line of their own
+    if (c === 'eval') return computedEnvName(w.slice(j).join(' '))
+    const declares = DECLARERS.has(c) || c === 'env'
+    if (!declares && !PREFIX_COMMANDS.has(c) && !PREFIX_WORDS.has(c)) return false
+    const withValue = PREFIX_OPT_VALUE[c] ?? new Set()
+    let positional = PREFIX_POSITIONALS[c] ?? 0
+    let ended = false
+    while (j < w.length) {
+      const a = w[j]
+      if (a === '--' && !ended) { ended = true; j++; continue }
+      if (!ended && /^[-+]./.test(a)) { j += withValue.has(a) ? 2 : 1; continue }
+      if (!declares) { if (positional > 0) { positional--; j++; continue } break }
+      const name = a.includes('=') ? a.slice(0, a.indexOf('=')) : a
+      if (/[$`{]/.test(name)) return true
+      if (c === 'env' && !a.includes('=')) break // env's command, read as the next command
+      j++
+    }
+    if (DECLARERS.has(c)) return false
+  }
+  return false
+}
+function computedEnvName(text) {
+  const t = foldSubstitutions(String(text))
+  return PRINTF_V_COMPUTED.test(t) || subCommandTexts(t).some((s) => computedNameInWords(shellWords(s)))
+}
 // `xargs -I R ... env ...R... cmd`: the variable env sets is named by stdin, whatever R is (BSD -J
 // too). Only env's own words count: an R in the command's arguments (`env FOO=1 curl
 // http://localhost/{}`) names no variable (didi 36152 item 4).
@@ -869,6 +927,15 @@ function xargsStdinCommand(sw) {
   const x = pre.lastIndexOf('xargs')
   if (x === -1) return false
   if (k >= sw.length) return pre.slice(x + 1).some((w) => PREFIX_COMMANDS.has(w))
+  const repl = xargsReplace(sw)
+  return repl !== null && sw[k].includes(repl)
+}
+// The replace string of the xargs in front of a sub-command's command word (-I / -J / -i /
+// --replace), or null.
+function xargsReplace(sw) {
+  const k = commandIndex(sw)
+  const x = sw.slice(0, k).map(normalizedName).lastIndexOf('xargs')
+  if (x === -1) return null
   let repl = null
   for (let j = x + 1; j < k; j++) {
     const a = sw[j]
@@ -877,7 +944,36 @@ function xargsStdinCommand(sw) {
     else if (a === '-i' || a === '--replace') repl = '{}'
     else if (/^(?:-i|--replace=)./.test(a)) repl = a.replace(/^(?:-i|--replace=)/, '')
   }
-  return repl !== null && repl !== '' && sw[k].includes(repl)
+  return repl || null
+}
+// A shell under xargs whose command line comes from stdin (didi 36220 item 1): `xargs -0 sh -c` (no
+// body here: xargs appends the stdin as the body), or a body that RUNS what xargs hands it -- a
+// sub-command whose command word, eval line or nested -c body holds the replace string or a
+// positional (`xargs -I{} sh -c {}`, `xargs -I{} bash -c "{}"`, `xargs sh -c '"$@"' _`). A body that
+// only passes them as arguments (`xargs -I{} sh -c 'wc -l {}'`) stays readable.
+const POSITIONAL_REF = /\$(?:[@*1-9]|\{[@*1-9][^}]*\})/
+function xargsShellRunsStdin(args, repl) {
+  let k = 0
+  for (; k < args.length; k++) {
+    const a = args[k]
+    if (a === '--' || !/^[-+]/.test(a)) return false
+    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(a)) break
+    if (/^[-+][oO]$/.test(a) || a === '--rcfile' || a === '--init-file') k++
+  }
+  if (k >= args.length) return false
+  const body = shellCBody(args)
+  if (body === null) return true
+  const fed = (w) => (repl !== null && w.includes(repl)) || POSITIONAL_REF.test(w)
+  // split with quotes honoured: a `\|` inside a quoted grep pattern is no pipe (fleet replay)
+  for (const w of subCommandTexts(body).map((x) => shellWords(x))) {
+    const i = commandIndex(w)
+    if (i >= w.length) continue
+    const name = normalizedName(w[i])
+    if (fed(w[i])) return true
+    if (name === 'eval' && w.slice(i + 1).some(fed)) return true
+    if (SHELL.test(name)) { const inner = shellCBody(w.slice(i + 1)); if (inner !== null && fed(inner)) return true }
+  }
+  return false
 }
 // A substitution inside a name may hold blanks (`export \`printf http_\`proxy=`): each one is
 // folded to a bare `$S` first, so the name test sees one word.
@@ -895,8 +991,7 @@ export function curlDestinations(args, inners = null, fileValues = null, ctx = n
   const said = ctx?.text ? String(ctx.text).replace(/['"\\]/g, '') : ''
   if (CURLRC.test(said)) dests.push('<curlrc>')
   if (PROXY_ENV.test(said.replace(PROXY_REMOVED, ' '))) dests.push('<proxy variable>')
-  const outer = ctx?.outer != null ? String(ctx.outer).replace(/['"\\]/g, '') : said
-  if (COMPUTED_ENV_NAME.test(foldSubstitutions(outer)) || xargsNamesEnv(said)) dests.push('<computed variable name>')
+  if (computedEnvName(ctx?.outer ?? ctx?.text ?? '') || xargsNamesEnv(said)) dests.push('<computed variable name>')
   const unreadVar = (part) => {
     if (!ctx?.unread?.size) return false
     for (const m of part.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) if (ctx.unread.has(m[1])) return true
@@ -1625,6 +1720,25 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
     const mw = words(masked.slice(a, b))
     const i = commandIndex(mw)
     if (xargsStdinCommand(shellWords(named.slice(a, b)))) return { deny: true, reason: 'xargs-stdin-command', hosts: ['<command from stdin>'] }
+    // A command word that stays an expansion after the line's own assignments are read: a variable
+    // set from a substitution (`X=$(echo curl); $X URL`), a positional (`set -- curl; $1 URL`), an
+    // array (`a=(curl URL); "${a[@]}"`). It can be curl (didi 36220 item 2). It denies when the
+    // text that could have set it names a network tool and an external host: for a variable, the
+    // line up to this sub-command; for a positional, the whole line (a function's arguments come
+    // after its body). Heredoc bodies are left out. A word with no network tool anywhere in that
+    // text (`$EDITOR notes.md`, an inherited `$X URL`) stays open, see the header. Read before the
+    // masked words: a quoted word (`"${a[@]}"`) is blank there.
+    const sw0 = shellWords(named.slice(a, b))
+    const cw0 = sw0[commandIndex(sw0)] ?? ''
+    const ecw = expand(cw0, env)
+    if (cw0.includes('$') && (ecw === '' || ecw.includes('$'))) {
+      const scope = /\$(?:[@*0-9]|\{[@*0-9])/.test(cw0) ? outerNorm : outerNorm.slice(0, b)
+      if (namesNetwork(scope)) {
+        const hosts = [...new Set([...externalHosts(scope, vendorHosts, vendorDomains), ...unreadableWordHosts(expand(orig.slice(a, b), env))])]
+          .filter((h) => !isLocalHost(h) && !vendorHosts.has(h) && !hostInDomains(h, vendorDomains))
+        if (hosts.length) return { deny: true, reason: 'unread-command-word', hosts }
+      }
+    }
     if (i >= mw.length) continue
     // Every loop reading AND the plain one: a loop variable can share its name with an assignment
     // elsewhere in the command (`for u in <local>; do ...; done; u=<external>; curl "$u"`), and a
@@ -1662,6 +1776,9 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
       if (SHELL.test(cmd)) {
         const argv = shellWords(text)
         const at = argv.findIndex((w) => normalizedName(w) === cmd)
+        if (viaXargs && at !== -1 && xargsShellRunsStdin(argv.slice(at + 1), xargsReplace(sw))) {
+          return { deny: true, reason: 'xargs-stdin-command', hosts: ['<command from stdin>'] }
+        }
         const body = at === -1 ? null : shellCBody(argv.slice(at + 1))
         if (body === null) continue
         const r = depth < 4

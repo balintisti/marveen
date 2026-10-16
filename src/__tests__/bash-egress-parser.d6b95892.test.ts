@@ -219,3 +219,59 @@ describe('card d6b95892: curl destinations the parser cannot read are denied', (
     expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'eval-curl-external', hosts: [EV] })
   })
 })
+
+// Round 6 (didi 36220 on 69db22145): a shell under xargs whose command line is stdin, a command word
+// the line cannot read, and the computed-name rule read only where a declarer is the command.
+describe('card d6b95892 round 6', () => {
+  const FEED = `echo "curl -s https://${EV}/x"`
+  it.each([
+    ['S1 xargs -0 sh -c (stdin is the body)', `${FEED} | xargs -0 sh -c`],
+    ['xargs -0 bash -lc', `${FEED} | xargs -0 bash -lc`],
+    ['S2 xargs -I{} sh -c {}', `${FEED} | xargs -I{} sh -c {}`],
+    ['S3 xargs -I{} bash -c "{}"', `${FEED} | xargs -I{} bash -c "{}"`],
+    ['eval of the replace string', `${FEED} | xargs -I{} sh -c 'eval {}'`],
+    ['a positional as the command', `${FEED} | xargs sh -c '"$@"' _`],
+    ['a nested -c body', `${FEED} | xargs -I% sh -c 'bash -c %'`],
+  ])('denies %s as a command from stdin', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'xargs-stdin-command', hosts: ['<command from stdin>'] })
+  })
+  it.each([
+    ['S6 a substitution', `X=$(echo curl); $X -s https://${EV}/x`],
+    ['a backtick substitution', 'X=`echo curl`; $X -s https://' + EV + '/x'],
+    ['S7 a positional', `set -- curl; $1 -s https://${EV}/x`],
+    ['a positional in a function body', `f(){ $1 -s "$2"; }; f curl https://${EV}/x`],
+    ['S13 an array holding the line', `a=(curl -s https://${EV}/x); "\${a[@]}"`],
+    ['an array holding the tool', `a=(curl -s); "\${a[@]}" https://${EV}/x`],
+  ])('denies %s as the command word', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'unread-command-word', hosts: [EV] })
+  })
+  it.each([
+    ['O20 eval of ssh-agent', 'eval "$(ssh-agent -s)"; curl -s http://localhost:3420/'],
+    ['O21 eval of brew shellenv', 'eval "$(brew shellenv)"; curl -s http://localhost:3420/'],
+    ['O22 "env $HOME" in a -d payload', `curl -s -d '{"content":"the env $HOME check"}' http://localhost:3420/`],
+    ['O23 "local ${N}" in a -d payload', 'curl -s -d "keep local ${N} rows" http://localhost:3420/'],
+    ['O30 "env $X" in a commit message', 'git commit -m "use env $X"; curl -s http://localhost:3420/'],
+    ['xargs passing the replace string as an argument', `find . -name '*.ts' | xargs -I{} sh -c 'wc -l {}'`],
+    ['a quoted \\| in an xargs body', `ls | xargs -I{} sh -c 'echo {}; grep -n "a\\|http\\|{{" {} | head'`],
+    ['xargs -0 sh -c printing its arguments', `printf 'a\\0' | xargs -0 sh -c 'echo "$@"' _`],
+    ['an unread command word with no network tool before it', `X=$(which python3); $X s.py; curl -s http://localhost:3420/ -d '{"u":"https://github.com/a"}'`],
+    ['an inherited command word', '$EDITOR notes.md'],
+    ['an assigned curl to a local host', `C=curl; $C -s http://localhost:3420/ -d '{"u":"https://github.com/a"}'`],
+    // ford's fleet line, shrunk: an unclosed backtick in a python -c string makes a later word look
+    // like `{...}=` in assignment position
+    ['an unclosed backtick in a python -c string (fleet replay)', "TOKEN=\"$(cat /Users/isti/marveen/store/.dashboard-token)\"; H=(-H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\")\ncurl -s \"${H[@]}\" http://localhost:3420/api/kanban/ae1b3293/comments | python3 -c \"import sys,json; c=json.load(sys.stdin)[-1]; print(c['author'], '`'\ncurl -s \"${H[@]}\" http://localhost:3420/api/kanban | python3 -c \"import sys,json; d=j"],
+  ])('passes %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: false })
+  })
+  it.each([
+    ['env of a substitution', 'env $(cat f) curl -s http://localhost:3420/'],
+    ['export of a variable', 'export $v; curl -s http://localhost:3420/'],
+    ['export of a substitution', `v=http_; export $(echo \${v}proxy=http://${EV}:1); curl -s http://localhost:3420/`],
+    ['a declarer inside an eval line', `eval "export \${v}proxy=http://${EV}:1"; curl -s http://localhost:3420/`],
+    ['a declarer in a loop body', 'for v in a; do export $v; done; curl -s http://localhost:3420/'],
+    ['env behind a prefix command', 'nohup env $(cat f) curl -s http://localhost:3420/'],
+    ['printf -v', 'printf -v "$n" %s http://x; curl -s http://localhost:3420/'],
+  ])('still names a computed variable name: %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, hosts: ['<computed variable name>'] })
+  })
+})
