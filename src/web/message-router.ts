@@ -559,6 +559,13 @@ const agentAbsentSince = new Map<string, number>()
 // Agents we already batched this reconnect (one-shot per reconnect cycle).
 const agentBatchedThisReconnect = new Set<string>()
 
+/** Test-only: forget every absence clock and reconnect flag, so one test's absent tick does not
+ *  start (or continue) the next test's absence (card dd5a3f76). */
+export function _resetAgentAbsenceForTest(): void {
+  agentAbsentSince.clear()
+  agentBatchedThisReconnect.clear()
+}
+
 /**
  * Pure decision: should a pending inter-agent message be abandoned?
  *
