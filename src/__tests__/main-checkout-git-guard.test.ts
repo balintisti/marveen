@@ -154,6 +154,9 @@ describe('main-checkout git guard: the target behind nesting, variables and abbr
     expect(runHome('cd $HOME/main && git clean -fd', other)).toBe(2)
     expect(runHome('cd "${HOME}/main" && git reset --hard', other)).toBe(2)
     expect(runHome('cd $HOME/wt && git reset --hard', other)).toBe(0)
+    expect(runHome('cd "$HOME"/main && git clean -fd', other)).toBe(2)
+    expect(runHome('bash -c "cd \\"$HOME/main\\" && git clean -fd"', other)).toBe(2)
+    expect(runHome('cd "$HOME"/wt && git clean -fd', other)).toBe(0)
   })
 
   it('git accepts a unique prefix of --hard', () => {

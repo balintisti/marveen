@@ -158,8 +158,9 @@ def _literal(path, base, env=None):
     """`path` resolved against `base`, or _UNRESOLVABLE when the shell would have to
     expand something first (a variable, a substitution) or `base` is unresolvable."""
     path = _expand(path, env or {})
-    if len(path) >= 2 and path[0] == path[-1] and path[0] in "\"'":
-        path = path[1:-1]
+    # quote removal over the whole word, as the shell does it: "$HOME"/x and, inside a
+    # double-quoted bash -c body, \"$HOME/x\" are both the word $HOME/x (didi N10, N12)
+    path = re.sub(r"\\?[\"']", "", path)
     if "$" in path or "`" in path:
         return _UNRESOLVABLE
     path = os.path.expanduser(path)
