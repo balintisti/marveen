@@ -228,6 +228,18 @@ class StallGate(unittest.TestCase):
         self.assertNotIn("ALLASBAN", err)
         self.assertIn("deeper: 2 var", err.replace("[sor] ", ""))
 
+    def test_a_quiet_row_cannot_turn_congestion_into_a_stall(self):
+        """Three young WAKING rows are congestion (refused). A day-old QUIET row beside them must
+        not become 'the oldest pending' and flip the refusal into a stall send."""
+        rows = [("marveen", "deeper", "pending", 5, None, 1),
+                ("marveen", "deeper", "pending", 4, None, 1),
+                ("marveen", "deeper", "pending", 3, None, 1),
+                ("system", "deeper", "pending", 1400, None, 0)]
+        rc, out, err = self.run_gate(rows, with_wake=True)
+        self.assertEqual(rc, 2)
+        self.assertIn("NEM KULDTEM. deeper soraban mar 3", err)
+        self.assertNotIn("ALLASBAN", err)
+
     # --- failing closed on a measurement problem ----------------------------
 
     def test_unreadable_delivered_at_keeps_the_old_refusal(self):
