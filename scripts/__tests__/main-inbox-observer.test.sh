@@ -177,6 +177,40 @@ fi
 echo ""
 
 # ---------------------------------------------------------------------------
+# (d2) Quiet notices (card a85a9acd): a pending row with wake=0 is quiet by design and
+#      must never age into the owner's stall alert. The fixtures above have NO wake
+#      column (a database from before the column), and they already pass unfiltered.
+# ---------------------------------------------------------------------------
+echo "(d2) Quiet (wake=0) rows do not stall the queue"
+make_wake_db() {
+  local db="$TMP/$1.db"
+  rm -f "$db"
+  oracle_exec "$db" "${SCHEMA%);}, wake INTEGER NOT NULL DEFAULT 1);"
+  echo "$db"
+}
+# $1 = db, $2 = wake (0|1), $3 = age in seconds
+add_wake_msg() {
+  oracle_exec "$1" "INSERT INTO agent_messages (from_agent,to_agent,content,status,created_at,wake)
+                VALUES ('system','marveen','proba','pending', CAST(strftime('%s','now') AS INTEGER) - $3, $2);"
+}
+DB_Q="$(make_wake_db quiet)"
+add_wake_msg "$DB_Q" 0 7200
+expect_verdict "an aged QUIET row to MAIN is ok" "$DB_Q" ok 0
+DB_W="$(make_wake_db waking)"
+add_wake_msg "$DB_W" 1 7200
+expect_verdict "POSITIVE CONTROL: the same aged row with wake=1 is stalled" "$DB_W" stalled 1
+DB_M="$(make_wake_db mixed)"
+add_wake_msg "$DB_M" 0 7200
+add_wake_msg "$DB_M" 1 60
+out=$(MAIN_AGENT_ID=marveen bash "$OBSERVER" --check "$DB_M" 2>&1); rc=$?
+if printf '%s' "$out" | grep -q 'verdict=ok' && printf '%s' "$out" | grep -q 'pending=1 ' && [ "$rc" = 0 ]; then
+  pass "an old quiet row beside a fresh waking one: only the waking row is counted and aged"
+else
+  fail "an old quiet row beside a fresh waking one" "rc=$rc out: $out"
+fi
+echo ""
+
+# ---------------------------------------------------------------------------
 # (e) An unreadable queue must NEVER read as "nothing pending". That silent
 #     zero is the failure this whole card is about, one layer down.
 # ---------------------------------------------------------------------------

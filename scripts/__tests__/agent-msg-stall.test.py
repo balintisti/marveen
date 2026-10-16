@@ -42,8 +42,9 @@ class Stub(http.server.BaseHTTPRequestHandler):
         pass
 
 
-def make_tree(rows, with_delivered_at=True):
-    """A throwaway BASE. `rows`: (from, to, status, created_age_min, delivered_age_min|None)."""
+def make_tree(rows, with_delivered_at=True, with_wake=False):
+    """A throwaway BASE. `rows`: (from, to, status, created_age_min, delivered_age_min|None[, wake]).
+    `with_wake` adds the wake column (card a85a9acd); a row without a 6th field wakes (1)."""
     d = tempfile.mkdtemp()
     os.makedirs(os.path.join(d, "scripts"))
     os.makedirs(os.path.join(d, "store"))
@@ -54,10 +55,18 @@ def make_tree(rows, with_delivered_at=True):
     cols = "id integer primary key, from_agent text, to_agent text, content text, status text, created_at integer"
     if with_delivered_at:
         cols += ", delivered_at integer"
+    if with_wake:
+        cols += ", wake integer not null default 1"
     c.execute("create table agent_messages (%s)" % cols)
     now = int(time.time())
-    for f, t, st, age, dage in rows:
-        if with_delivered_at:
+    for row in rows:
+        f, t, st, age, dage = row[:5]
+        wake = row[5] if len(row) > 5 else 1
+        if with_wake:
+            c.execute("insert into agent_messages (from_agent,to_agent,content,status,created_at,delivered_at,wake)"
+                      " values (?,?,?,?,?,?,?)",
+                      (f, t, "x" * 50, st, now - age * MIN, None if dage is None else now - dage * MIN, wake))
+        elif with_delivered_at:
             c.execute("insert into agent_messages (from_agent,to_agent,content,status,created_at,delivered_at)"
                       " values (?,?,?,?,?,?)",
                       (f, t, "x" * 50, st, now - age * MIN, None if dage is None else now - dage * MIN))
@@ -96,8 +105,8 @@ class StallGate(unittest.TestCase):
         for d in getattr(self, "_trees", []):
             shutil.rmtree(d, ignore_errors=True)
 
-    def run_gate(self, rows, to="deeper", env=None, extra=None, with_delivered_at=True):
-        d = make_tree(rows, with_delivered_at)
+    def run_gate(self, rows, to="deeper", env=None, extra=None, with_delivered_at=True, with_wake=False):
+        d = make_tree(rows, with_delivered_at, with_wake)
         self._trees = getattr(self, "_trees", []) + [d]
         e = dict(os.environ, MARVEEN_WEB_PORT=self.port)
         e.update(env or {})
@@ -188,6 +197,36 @@ class StallGate(unittest.TestCase):
         rc, out, _ = self.run_gate(pending3(43, 2533), env={"STALL_AGE_MIN": "30"})
         self.assertEqual(rc, 0)
         self.assertIn("OK id=4242", out)
+
+    # --- quiet (wake=0) notices do not close the gate (card a85a9acd) --------
+
+    def test_quiet_rows_do_not_count_toward_the_depth_gate(self):
+        """Three QUIET notices pending are not a backlog: nothing waits to be delivered on
+        their account, so the send goes through."""
+        quiet3 = [("system", "deeper", "pending", 30 + i, None, 0) for i in range(3)]
+        rc, out, err = self.run_gate(quiet3, with_wake=True)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("OK id=4242", out)
+        self.assertNotIn("NEM KULDTEM", err)
+
+    def test_positive_control_the_same_rows_waking_are_refused(self):
+        """Same three rows with wake=1: the gate must still refuse, or the test above proves
+        nothing about the filter."""
+        waking3 = [("system", "deeper", "pending", 30 + i, None, 1) for i in range(3)]
+        rc, out, err = self.run_gate(waking3, with_wake=True)
+        self.assertEqual(rc, 2)
+        self.assertIn("NEM KULDTEM. deeper soraban mar 3", err)
+
+    def test_a_quiet_row_does_not_age_into_a_stall_warning(self):
+        """Two waking rows (young) plus one day-old QUIET row: the oldest pending that the
+        stall sign reads is the waking one, so no stall warning and the depth is 2."""
+        rows = [("marveen", "deeper", "pending", 5, None, 1),
+                ("marveen", "deeper", "pending", 4, None, 1),
+                ("system", "deeper", "pending", 1400, None, 0)]
+        rc, out, err = self.run_gate(rows, with_wake=True)
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn("ALLASBAN", err)
+        self.assertIn("deeper: 2 var", err.replace("[sor] ", ""))
 
     # --- failing closed on a measurement problem ----------------------------
 

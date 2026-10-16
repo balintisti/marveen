@@ -474,9 +474,14 @@ try:
     c = sqlite3.connect("file:" + os.environ["BASE"] + "/store/claudeclaw.db?mode=ro", uri=True)
     to = os.environ["TO"]
     me = os.environ["FROM"]
+    # WAKING rows only (card a85a9acd): the depth gate below refuses a send at >= 3 pending, and
+    # the stall sign reads the oldest pending. A quiet (wake=0) notice is pending by design, so
+    # counting it would let notices close the gate on real mail. A database from before the
+    # column has none, and every row there wakes: no filter.
+    wk = " and wake=1" if any(r[1] == "wake" for r in c.execute("pragma table_info(agent_messages)")) else ""
     n, chars = c.execute(
         "select count(*), coalesce(sum(length(content)),0) from agent_messages"
-        " where to_agent=? and status=?", (to, "pending")).fetchone()
+        " where to_agent=? and status=?" + wk, (to, "pending")).fetchone()
     since = int(time.time()) - 180 * 60
     rc, rs = c.execute(
         "select coalesce(sum(length(content)),0), count(distinct from_agent)"
@@ -502,7 +507,7 @@ try:
     try:
         now_t = int(time.time())
         oldest, = c.execute("select min(created_at) from agent_messages"
-                            " where to_agent=? and status=?", (to, "pending")).fetchone()
+                            " where to_agent=? and status=?" + wk, (to, "pending")).fetchone()
         last, = c.execute("select max(delivered_at) from agent_messages"
                           " where to_agent=? and delivered_at is not null", (to,)).fetchone()
         if oldest is not None:
