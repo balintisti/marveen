@@ -774,19 +774,18 @@ describe('still open after (a) -- pinned on purpose', () => {
     `python3 - <<'PY'\nopen('/tmp/s.py','w').write("import urllib.request\\nurllib.request.urlopen('https://example.org/x')\\n")\nPY`,
     // a program PIPED into an interpreter (`cat <<PY | python3 -`) is closed since card c8b1ccbf round 4
     // (bash-egress-parser.c8b1ccbf.test.ts)
-    'while read u; do curl -s "$u"; done < urls.txt', // loop values read from a file
+    // a loop reading a file (`done < urls.txt`, `done < <(...)`) and `curl -K` are closed since card
+    // d6b95892 (bash-egress-parser.d6b95892.test.ts): a name written by such a read is unread
     // the families the header lists as open after EGRESSHEREDOC924 (reviewer probe A8-A11, A14)
     // xargs is closed since card c8b1ccbf (bash-egress-parser.c8b1ccbf.test.ts); parallel is not
     'parallel curl -s ::: https://example.org/x', // an argument builder that is not xargs
     // an array filler (`mapfile ...; curl "${a[0]}"`) is closed since card c8b1ccbf round 7
     'IFS=, read a b <<< "x,https://example.org/x"; curl -s "$b"', // read under a non-default IFS
-    'while read u; do curl -s "$u"; done < <(echo https://example.org/x)', // process substitution input
     `python3 - <<'PY'\nimport socket; socket.create_connection(("example.org", 80))\nPY`, // no URL scheme
     // a host built by a substitution (`H=$(cat host.txt)`, `curl $(echo URL)`) is closed since card
     // c8b1ccbf (didi's review 3): the substitution's text is read for hosts, and one that names none
     // denies as an unknowable destination (bash-egress-parser.c8b1ccbf.test.ts)
     'curl -s "$URL"', // URL from the environment
-    'curl -K curl.cfg', // URL read from a curl config file
     'git clone https://example.org/r.git', // other network-capable binaries
     'pip install https://example.org/p.tar.gz',
     'ssh user@example.org true',
@@ -1146,7 +1145,9 @@ describe('card c8b1ccbf: where each closure stops', () => {
   })
   it('xargs: a network command behind it is judged by every URL in the line; the local twin passes', () => {
     expect(classify(`printf '%s\\n' ${EXT} | xargs -n1 -P4 curl -s`)).toMatchObject({ deny: true, reason: 'xargs-external', hosts: ['evil.example.com'] })
-    expect(classify(`echo ${EXT} | xargs -I{} sh -c 'curl -s {}'`)).toMatchObject({ deny: true, reason: 'xargs-external' })
+    // since card d6b95892 the `{}` placeholder in the body's curl URL is itself an unreadable host (a curl
+    // glob), so the sh -c reading denies it first
+    expect(classify(`echo ${EXT} | xargs -I{} sh -c 'curl -s {}'`)).toMatchObject({ deny: true, reason: 'shell-c-curl-external' })
     expect(classify('echo http://localhost:3420/api/health | xargs curl -s').deny).toBe(false)
     expect(classify(`echo ${EXT} | xargs -n1 echo`).deny).toBe(false)
   })
