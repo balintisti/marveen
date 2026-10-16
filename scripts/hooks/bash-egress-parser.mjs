@@ -658,6 +658,9 @@ function ansiC(body) {
     })
   return out
 }
+// Every `$'...'` of a text replaced by its value. Over-reads a `$'` inside other quotes, which only
+// makes a line read MORE names, never fewer.
+const decodeAnsiCQuotes = (text) => text.replace(/\$'((?:[^'\\]|\\[\s\S])*)'/g, (_m, body) => ansiC(body))
 // Split a shell text into words, honouring quotes and backslashes (substitutions are already lifted).
 export function shellWords(text) {
   const out = []; let cur = null; let i = 0
@@ -951,7 +954,8 @@ function xargsReplace(sw) {
 // sub-command whose command word, eval line or nested -c body holds the replace string or a
 // positional (`xargs -I{} sh -c {}`, `xargs -I{} bash -c "{}"`, `xargs sh -c '"$@"' _`). A body that
 // only passes them as arguments (`xargs -I{} sh -c 'wc -l {}'`) stays readable.
-const POSITIONAL_REF = /\$(?:[@*1-9]|\{[@*1-9][^}]*\})/
+// `$0` too: `xargs sh -c '$0 "$@"'` runs the first stdin word (didi 36252 T4).
+const POSITIONAL_REF = /\$(?:[@*0-9]|\{[@*0-9][^}]*\})/
 function xargsShellRunsStdin(args, repl) {
   let k = 0
   for (; k < args.length; k++) {
@@ -988,7 +992,9 @@ export function curlDestinations(args, inners = null, fileValues = null, ctx = n
     const name = m && (m[1] ?? m[2])
     return name && arrays[name] ? arrays[name] : [w]
   })
-  const said = ctx?.text ? String(ctx.text).replace(/['"\\]/g, '') : ''
+  // `$'...'` decoded BEFORE the quotes go: `export http$'\x5f'proxy=P` sets http_proxy, and with the
+  // quotes dropped first it read `http$\x5fproxy` (didi 36252, a regression of round 6).
+  const said = ctx?.text ? decodeAnsiCQuotes(String(ctx.text)).replace(/['"\\]/g, '') : ''
   if (CURLRC.test(said)) dests.push('<curlrc>')
   if (PROXY_ENV.test(said.replace(PROXY_REMOVED, ' '))) dests.push('<proxy variable>')
   if (computedEnvName(ctx?.outer ?? ctx?.text ?? '') || xargsNamesEnv(said)) dests.push('<computed variable name>')
@@ -1731,7 +1737,12 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
     const sw0 = shellWords(named.slice(a, b))
     const cw0 = sw0[commandIndex(sw0)] ?? ''
     const ecw = expand(cw0, env)
-    if (cw0.includes('$') && (ecw === '' || ecw.includes('$'))) {
+    // A substitution AS the command word (`$(echo curl) URL`, `` `echo curl` URL ``) is lifted, so it
+    // is blank in `named` and the next word reads as the command: read it from `outerNorm`, where
+    // it is kept (didi 36252 T17, T18).
+    const ow = shellWords(outerNorm.slice(a, b))
+    const substCommand = /^(?:\$\(|`)/.test(ow[commandIndex(ow)] ?? '')
+    if (substCommand || (cw0.includes('$') && (ecw === '' || ecw.includes('$')))) {
       const scope = /\$(?:[@*0-9]|\{[@*0-9])/.test(cw0) ? outerNorm : outerNorm.slice(0, b)
       if (namesNetwork(scope)) {
         const hosts = [...new Set([...externalHosts(scope, vendorHosts, vendorDomains), ...unreadableWordHosts(expand(orig.slice(a, b), env))])]
@@ -1785,6 +1796,17 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
           ? classify(body, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays })
           : unreadableVerdict(body, vendorHosts, vendorDomains)
         if (r.deny) return { ...r, reason: `shell-c-${r.reason}` }
+        // The same body with its substitutions kept: lifted, `sh -c "$(echo curl) URL"` reads as
+        // `sh -c " URL"` and its command word is gone (didi 36252 T21).
+        if (depth < 4) {
+          const kw = shellWords(outerNorm.slice(a, b))
+          const kat = kw.findIndex((w) => normalizedName(w) === cmd)
+          const kept = kat === -1 ? null : shellCBody(kw.slice(kat + 1))
+          if (kept !== null && kept !== body && /\$\(|`/.test(kept)) {
+            const rk = classify(kept, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays })
+            if (rk.deny) return { ...rk, reason: `shell-c-${rk.reason}` }
+          }
+        }
         if (viaXargs && namesNetwork(body)) {
           const hosts = externalHosts(norm, vendorHosts, vendorDomains)
           if (hosts.length) return { deny: true, reason: 'xargs-external', hosts }

