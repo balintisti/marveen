@@ -18,12 +18,22 @@ Reads current usage/quota status for two providers:
     cache: missing/expired token, a 403 (real scope problem), or a
     stale/absent cache.
 
+WHICH PLAN THE CLAUDE NUMBERS BELONG TO (card 9d4f3ac7). The keychain token above is the HOST
+login's plan (USAGE_COLLECT_HOST_PLAN, default "elso"), but the fleet may run on another plan:
+store/claude-plans-state.json `activePlanByAgent[MAIN_AGENT_ID]` names it. When the two differ,
+the `claude` section is built from the FLEET plan's live probe (`plans.<id>` in that file, written
+by scripts/claude-plan-probe.mjs; refreshed here when older than 12 minutes), tagged `plan`, and
+the host reading is kept apart in store/usage-latest-<hostplan>.json. A fleet plan whose probe
+cannot be read becomes source "probe-failed" / ok false -- NEVER the host plan's numbers.
+
 Default run prints a human-readable summary, prints any
 "ALERT: ..." lines (de-duplicated via store/usage-alert-state.json),
 appends one JSON snapshot line to store/usage-history.jsonl, and
 overwrites store/usage-latest.json with the latest snapshot.
 
---json prints only the snapshot JSON (no alerts, no side effects) --
+--json prints only the snapshot JSON (no alerts, no history, and no probe run: a stale fleet probe
+is reported as "probe-failed" instead of refreshed, because the probe is a live API call that
+outlasts its callers' time limits -- the scheduled default run is the one that refreshes it) --
 for programmatic consumption (e.g. a future dashboard widget).
 
 Stdlib only, no pip installs. Never prints token/secret values.
@@ -35,6 +45,8 @@ noted in the summary/snapshot instead of raising.
 import argparse
 import glob
 import re
+import shlex
+import shutil
 import sqlite3
 import hashlib
 import json
@@ -108,6 +120,28 @@ TASKS_DIR = os.path.expanduser("~/.claude/scheduled-tasks")
 TOKEN_PATH = os.path.join(STORE_DIR, ".dashboard-token")
 STATE_PATH = os.path.join(STORE_DIR, "usage-alert-state.json")
 ENV_PATH = os.path.join(REPO_ROOT, ".env")
+# The rotation side-car that names the fleet's plan and holds the per-plan probes (card 9d4f3ac7).
+# The env override exists so a subprocess test can point the script at a temp copy.
+PLANS_STATE_PATH = os.environ.get("USAGE_COLLECT_PLANS_STATE") or os.path.join(STORE_DIR, "claude-plans-state.json")
+PROBE_SCRIPT = os.path.join(REPO_ROOT, "scripts", "claude-plan-probe.mjs")
+HOST_PLAN_DEFAULT = "elso"
+PROBE_MAX_AGE_MIN_DEFAULT = 12.0
+# REFRESH AHEAD of the validity limit: the scheduled default run (usage-snapshot, every 10 min) is
+# the only one that runs the probe (--json is read-only), so it refreshes a reading older than this,
+# below its own cadence. With the refresh at the 12-min limit a reading would sit between 12 and 20
+# min old for ~8 of every 20 minutes, and every --json reader would get probe-failed meanwhile.
+PROBE_REFRESH_MIN_DEFAULT = 8.0
+PROBE_TIMEOUT_SEC = 30
+# THE RUN HAS A BUDGET, THE PROBE GETS WHAT IS LEFT OF IT. The scheduler kills the command at the
+# task's timeoutMs (usage-snapshot: 60 s), and a killed run writes no snapshot and records no probe
+# failure. The host reading before the probe can take tens of seconds on its own (token refresh,
+# the live usage endpoint), so a fixed probe limit cannot be kept under the task limit: _run() sets
+# a deadline, the probe timeout is capped by the time left, and under PROBE_MIN_SEC it does not
+# start (the reading it would have replaced still decides). Keep the budget below the task's limit.
+RUN_BUDGET_SEC_DEFAULT = 45.0
+PROBE_MIN_SEC = 5.0
+_run_deadline = None  # time.monotonic() value set by _run(); None (library use) = no run budget
+PLAN_ID_RX = re.compile(r"^[a-z0-9_-]+$")
 
 # Display timezone for reset stamps. Defaults to the project's Europe/Budapest;
 # override with MARVEEN_TZ for an install whose owner lives elsewhere.
@@ -665,7 +699,7 @@ def _collect_claude_authoritative():
     return windows, None, None
 
 
-def _read_cached_claude_authoritative(max_age_minutes, now_utc=None):
+def _read_cached_claude_authoritative(max_age_minutes, now_utc=None, path=None, plan=None):
     """Return (windows_dict, age_minutes, authoritative_at) from the last snapshot in
     store/usage-latest.json IF its Claude numbers came from a REAL authoritative answer no more than
     max_age_minutes ago. Returns (None, None, None) if there's no usable cache.
@@ -680,17 +714,24 @@ def _read_cached_claude_authoritative(max_age_minutes, now_utc=None):
 
     A file from before the field: if its source is plain `authoritative`, its `generated_at` IS a
     real answer's time. If it is already `authoritative_cached`, the true age is unknown -- no cache,
-    fall to the estimate (the loud state the alarm is built for), rather than guess it fresh."""
-    if not os.path.exists(LATEST_PATH):
+    fall to the estimate (the loud state the alarm is built for), rather than guess it fresh.
+
+    PLAN-AWARE (card 9d4f3ac7): with `plan` given, a snapshot of a DIFFERENT plan is never reused
+    (a file without a `plan` field predates the field and is the host plan's). `path` defaults to
+    LATEST_PATH; the host reading of a fleet-on-another-plan install lives in its own file."""
+    path = path or LATEST_PATH
+    if not os.path.exists(path):
         return None, None, None
     try:
-        with open(LATEST_PATH, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception:
         return None, None, None
 
     claude = data.get("claude") or {}
     if claude.get("source") not in ("authoritative", "authoritative_cached"):
+        return None, None, None
+    if plan is not None and (claude.get("plan") or _host_plan()) != plan:
         return None, None, None
     windows = claude.get("windows")
     if not windows:
@@ -774,18 +815,196 @@ def _collect_claude_estimate():
     }
 
 
-def collect_claude():
-    """Burkolo: MINDEN visszateresi utat bejelol a lejart ablakokkal.
+def _host_plan():
+    """The plan the host login (keychain token) belongs to."""
+    v = (os.environ.get("USAGE_COLLECT_HOST_PLAN") or "").strip()
+    return v if PLAN_ID_RX.match(v) else HOST_PLAN_DEFAULT
+
+
+def _read_plans_state():
+    try:
+        with open(PLANS_STATE_PATH, "r", encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return d if isinstance(d, dict) else None
+
+
+def _fleet_plan(state=None):
+    """The plan the main agent (hence the fleet) runs on, or None when the state does not say."""
+    state = _read_plans_state() if state is None else state
+    active = (state or {}).get("activePlanByAgent")
+    if not isinstance(active, dict):
+        return None
+    agent = (os.environ.get("MAIN_AGENT_ID") or "").strip() or _main_agent_id()
+    plan = active.get(agent)
+    return plan if isinstance(plan, str) and PLAN_ID_RX.match(plan) else None
+
+
+def _is_num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and v not in (float("inf"), float("-inf"))
+
+
+def _probe_reading(state, plan):
+    """Return (windows, observed_at_ms, None) when `plans.<plan>` holds a VALID probe reading, else
+    (None, None, why).
+
+    VALID = the rule quota-ceiling-guard.sh uses (it is the same file, read by both): the
+    observation came from a probe AND the latest probe is the one that produced it
+    (`lastProbe.at == observedAt`). A probe that returned no usage leaves `observedAt` behind with
+    the PREVIOUS numbers -- that is blindness, not a reading. `lastProbe.ok` must also hold, with one
+    exception: `rate_limited` (HTTP 429) still carries the usage headers, and an exhausted plan at
+    100% is exactly the reading that must not turn into "unknown". The rotation heartbeat also
+    writes an observation for the active plan (source != probe, no lastProbe): not a probe, so
+    not valid here."""
+    p = ((state or {}).get("plans") or {}).get(plan)
+    if not isinstance(p, dict):
+        return None, None, f"no probe recorded for plan {plan}"
+    if p.get("source") != "probe":
+        return None, None, f"plan {plan}: the latest observation is not a probe (source={p.get('source')})"
+    obs = p.get("observedAt")
+    if not _is_num(obs) or obs <= 0:
+        return None, None, f"plan {plan}: probe has no observedAt"
+    lp = p.get("lastProbe") if isinstance(p.get("lastProbe"), dict) else {}
+    if lp.get("at") != obs:
+        return None, None, f"plan {plan}: the latest probe produced no usage (error={lp.get('error')})"
+    if lp.get("ok") is not True and lp.get("error") != "rate_limited":
+        return None, None, f"plan {plan}: the latest probe failed (error={lp.get('error')})"
+    windows = {}
+    pw = p.get("windows") if isinstance(p.get("windows"), dict) else {}
+    for key in ("five_hour", "seven_day"):
+        w = pw.get(key)
+        if isinstance(w, dict) and _is_num(w.get("usedPercent")) and _is_num(w.get("resetsAt")):
+            # same shape the keychain path writes: used_percent 0..100, resets_at epoch SECONDS
+            windows[key] = {"used_percent": w["usedPercent"], "resets_at": w["resetsAt"]}
+    if not windows:
+        return None, None, f"plan {plan}: probe carries no usable window"
+    return windows, obs, None
+
+
+def _run_probe(plan):
+    """Run the probe command once. Returns None on exit 0, else a short reason (never its output)."""
+    custom = os.environ.get("USAGE_COLLECT_PROBE_CMD")
+    if custom:
+        argv = shlex.split(custom)
+    else:
+        argv = [shutil.which("node") or "/opt/homebrew/bin/node", PROBE_SCRIPT]
+    argv.append(plan)
+    limit = PROBE_TIMEOUT_SEC
+    if _run_deadline is not None:
+        left = _run_deadline - time.monotonic()
+        if left < PROBE_MIN_SEC:
+            return f"probe not started, {max(left, 0):.0f}s left of the run budget"
+        limit = min(limit, left)
+    try:
+        r = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, timeout=limit)
+    except subprocess.TimeoutExpired:
+        return f"probe command timed out after {limit:.0f}s"
+    except (OSError, ValueError) as e:
+        return f"probe command could not start ({type(e).__name__})"
+    return None if r.returncode == 0 else f"probe command exited {r.returncode}"
+
+
+def _collect_claude_fleet(plan, allow_probe=True):
+    """The `claude` section for a fleet plan that is NOT the host plan, from its probe.
+
+    Fresh valid probe -> source "authoritative". A reading older than the refresh limit (8 min) or
+    no valid reading -> one probe command run, then a re-read, which decides. allow_probe=False (--json): no run, and a reading past
+    the validity limit is reported as probe-failed.
+    Still not a fresh valid reading -> source "probe-failed", ok false, NO windows: the quota gate,
+    the heartbeat and the ceiling guard fail open on an untrusted source and the data-source alarm
+    fires (src/quota-gate.ts trustedSources, src/data-source-alarm.ts). The host plan's numbers
+    are never a fallback -- they describe a different account.
+    seven_day_opus is absent on purpose: a probe carries no Fable window, and the host's value
+    belongs to another plan."""
+    def _minutes(var, default):
+        try:
+            return float(os.environ.get(var) or default)
+        except ValueError:
+            return default
+
+    max_age_min = _minutes("USAGE_COLLECT_PROBE_MAX_AGE_MIN", PROBE_MAX_AGE_MIN_DEFAULT)
+    refresh_min = min(_minutes("USAGE_COLLECT_PROBE_REFRESH_MIN", PROBE_REFRESH_MIN_DEFAULT), max_age_min)
+
+    def _fresh(state):
+        windows, obs, why = _probe_reading(state, plan)
+        if windows is None:
+            return None, None, why
+        age_ms = time.time() * 1000 - obs
+        if age_ms < -60_000 or age_ms > max_age_min * 60_000:
+            return None, None, f"plan {plan}: probe is {age_ms / 60000:.0f} min old (limit {max_age_min:g})"
+        return windows, obs, None
+
+    windows, obs, why = _fresh(_read_plans_state())
+    if windows is None and not allow_probe:
+        reason = f"{why or 'no reading'}; not refreshed (--json is read-only, the scheduled run refreshes it)"
+        return {"provider": "claude", "source": "probe-failed", "ok": False, "plan": plan,
+                "error": reason, "auth_error": reason}
+    if allow_probe and (windows is None or time.time() * 1000 - obs > refresh_min * 60_000):
+        probe_err = _run_probe(plan)
+        # the re-read decides, as for any reader: a probe that RECORDED a failure (newer lastProbe)
+        # leaves no reading, the same answer --json gives on that state a second later
+        windows, obs, why2 = _fresh(_read_plans_state())
+        if windows is None:
+            reason = why2 or why or "no reading"
+            if probe_err:
+                reason += f"; {probe_err}"
+            return {"provider": "claude", "source": "probe-failed", "ok": False, "plan": plan,
+                    "error": reason, "auth_error": reason}
+    return {
+        "provider": "claude",
+        "source": "authoritative",
+        "ok": True,
+        "plan": plan,
+        "windows": windows,
+        "authoritative_at": datetime.fromtimestamp(obs / 1000.0, timezone.utc).isoformat(),
+        "seven_day_opus_unavailable": "probe carries no Fable window",
+    }
+
+
+def _host_latest_path(host_plan):
+    return os.path.join(STORE_DIR, f"usage-latest-{host_plan}.json")
+
+
+def collect_claude(host_out=None, allow_probe=True):
+    """Burkolo: MINDEN visszateresi utat bejelol a lejart ablakokkal (a `_collect_claude_raw` hivasa
+    MINDIG `_mark_expired_windows`-on megy at; usage-collect-expired-windows.test.py ezt rogziti).
 
     SZANDEKOSAN BURKOLO, NEM HAROM HIVAS. A belso fuggvenynek ma harom `return`-je van
     (hiteles / gyorsitotarazott / becsult), es az elso valtozatomat CSAK a gyorsitotarazott
     agba kotottem be. A proba azonnal megfogta: a kovetkezo futas az `estimate` agon ment,
     es mind a negy uj mezo `None` lett. Egy negyedik `return` ugyanigy esne ki -- nemán.
-    """
-    return _mark_expired_windows(_collect_claude_raw())
+
+    WHICH PLAN (card 9d4f3ac7). No plans state, or the fleet is on the host plan: the keychain
+    reading, as before, plus `plan`. Fleet on another plan: that plan's probe
+    (_collect_claude_fleet); the host keychain reading is still taken and handed back through
+    `host_out["claude"]` for store/usage-latest-<host>.json, and a host failure never touches the
+    fleet section."""
+    host_plan = _host_plan()
+    fleet_plan = _fleet_plan()
+    same = fleet_plan is None or fleet_plan == host_plan
+    try:
+        host = _mark_expired_windows(_collect_claude_raw(
+            cache_path=None if same else _host_latest_path(host_plan), plan=host_plan))
+        host["plan"] = host_plan
+    except Exception:
+        if same:
+            raise
+        host = None
+    if same:
+        return host
+    if host is not None and host_out is not None:
+        host_out["claude"] = host
+    try:
+        fleet = _collect_claude_fleet(fleet_plan, allow_probe=allow_probe)
+    except Exception as e:
+        msg = f"fleet probe reading failed ({type(e).__name__})"
+        fleet = {"provider": "claude", "source": "probe-failed", "ok": False, "plan": fleet_plan,
+                 "error": msg, "auth_error": msg}
+    return _mark_expired_windows(fleet)
 
 
-def _collect_claude_raw():
+def _collect_claude_raw(cache_path=None, plan=None):
     result = {"provider": "claude", "source": "estimate", "ok": True}
     windows, err, err_kind = _collect_claude_authoritative()
     if windows is not None:
@@ -803,7 +1022,7 @@ def _collect_claude_raw():
     # and goes straight to the estimate.
     if err_kind == "transient":
         cached_windows, age_minutes, true_at = _read_cached_claude_authoritative(
-            CONFIG["claude_authoritative_cache_max_age_min"]
+            CONFIG["claude_authoritative_cache_max_age_min"], path=cache_path, plan=plan
         )
         if cached_windows is not None:
             result["source"] = "authoritative_cached"
@@ -875,13 +1094,16 @@ def _mark_expired_windows(result, now=None):
 # Snapshot
 # --------------------------------------------------------------------------
 
-def build_snapshot():
+def build_snapshot(host_out=None, allow_probe=True):
     now = datetime.now(timezone.utc)
+    claude = collect_claude(host_out, allow_probe=allow_probe)
     return {
         "generated_at": now.isoformat(),
         "generated_at_local": now.astimezone(LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S %Z"),
+        # top level too, so a history line can be filtered by plan without opening `claude`
+        "plan": claude.get("plan"),
         "codex": collect_codex(),
-        "claude": collect_claude(),
+        "claude": claude,
     }
 
 
@@ -974,7 +1196,8 @@ def render_summary(snapshot):
 
     lines.append("")
     claude = snapshot["claude"]
-    lines.append(f"Claude (source: {claude.get('source')}):")
+    plan_note = f", plan: {claude['plan']}" if claude.get("plan") else ""
+    lines.append(f"Claude (source: {claude.get('source')}{plan_note}):")
     if not claude.get("ok"):
         lines.append(f"  error: {claude.get('error')}")
     elif claude.get("source") in ("authoritative", "authoritative_cached"):
@@ -1369,7 +1592,15 @@ def _run():
                              "(card 1fe8e8c5). Off by default, so tests and ad-hoc runs never message anyone.")
     args = parser.parse_args()
 
-    snapshot = build_snapshot()
+    global _run_deadline
+    try:
+        budget = float(os.environ.get("USAGE_COLLECT_RUN_BUDGET_SEC") or RUN_BUDGET_SEC_DEFAULT)
+    except ValueError:
+        budget = RUN_BUDGET_SEC_DEFAULT
+    _run_deadline = time.monotonic() + budget
+
+    host_out = {}
+    snapshot = build_snapshot(host_out, allow_probe=not args.json)
 
     if args.json:
         print(json.dumps(snapshot, ensure_ascii=False, indent=2))
@@ -1378,6 +1609,15 @@ def _run():
     print(render_summary(snapshot))
 
     state = _load_state()
+    # PACE ALERT STATE IS PER PLAN (card 9d4f3ac7): the dedup flags describe ONE series of windows.
+    # When the plan behind the snapshot changes, the other plan's "active" flags would suppress or
+    # fire alerts against the wrong numbers -- start clean. A state without `_plan` predates the
+    # field and belongs to the host plan.
+    plan = snapshot.get("plan")
+    if plan and state.get("_plan", _host_plan()) != plan:
+        state = {}
+    if plan:
+        state["_plan"] = plan
     alerts = compute_alerts(snapshot, state)
     _save_state(state)
     for line in alerts:
@@ -1392,6 +1632,22 @@ def _run():
     with open(tmp_latest, "w", encoding="utf-8") as f:
         json.dump(snapshot, f, ensure_ascii=False, indent=2)
     os.replace(tmp_latest, LATEST_PATH)
+
+    # The host login's own reading, kept apart so its numbers stay available (card 9d4f3ac7).
+    host_claude = host_out.get("claude")
+    if host_claude:
+        host_snap = {
+            "generated_at": snapshot["generated_at"],
+            "generated_at_local": snapshot["generated_at_local"],
+            "plan": host_claude.get("plan"),
+            "codex": snapshot["codex"],
+            "claude": host_claude,
+        }
+        host_path = _host_latest_path(host_claude["plan"])
+        tmp_host = host_path + ".tmp"
+        with open(tmp_host, "w", encoding="utf-8") as f:
+            json.dump(host_snap, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_host, host_path)
 
 
 def main():

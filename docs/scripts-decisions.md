@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **445** kovetett fajl, ebbol
-**132** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **447** kovetett fajl, ebbol
+**133** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -105,6 +105,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - MIERT LETEZIK. 2026-09-19-en kiderult, hogy a kulcstarto-hitelesites 129 oraja lejart,
 - MIERT MESTERSEGES BEMENET, KIMONDVA: az elo lekerdezes MA egyaltalan nem ad `windows`-t
+
+### `scripts/__tests__/usage-collect-fleet-plan.test.py`
+
+- WHY THIS EXISTS. scripts/usage-collect.py reads the usage through the HOST keychain token, i.e. the
 
 ### `scripts/__tests__/usage-collect-json-purity.test.py`
 
