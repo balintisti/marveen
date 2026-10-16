@@ -675,9 +675,15 @@ export function shellWords(text) {
       cur += ansiC(text.slice(i + 2, Math.min(j, text.length))); i = j + 1; continue
     }
     if (c === "'") { const e = text.indexOf("'", i + 1); const end = e === -1 ? text.length : e; cur += text.slice(i + 1, end); i = end + 1; continue }
+    // Inside "...", a backslash escapes only $ ` " \ and a newline; before any other character it
+    // stays: `sh -c "export http$'\x5f'proxy=P; curl ..."` hands sh the `\x5f`, and sh sets
+    // http_proxy (read as `x5f` it was no proxy name; didi 36603 item 4).
     if (c === '"') {
       let j = i + 1
-      while (j < text.length && text[j] !== '"') { if (text[j] === '\\' && j + 1 < text.length) { cur += text[j + 1]; j += 2; continue } cur += text[j]; j++ }
+      while (j < text.length && text[j] !== '"') {
+        if (text[j] === '\\' && j + 1 < text.length) { cur += /[$`"\\\n]/.test(text[j + 1]) ? text[j + 1] : text.slice(j, j + 2); j += 2; continue }
+        cur += text[j]; j++
+      }
       i = j + 1; continue
     }
     if (c === '\\' && i + 1 < text.length) { cur += text[i + 1]; i += 2; continue }
@@ -965,9 +971,21 @@ function xargsShellRunsStdin(args, repl) {
     if (/^[-+][oO]$/.test(a) || a === '--rcfile' || a === '--init-file') k++
   }
   if (k >= args.length) return false
-  const body = shellCBody(args)
-  if (body === null) return true
-  const fed = (w) => (repl !== null && w.includes(repl)) || POSITIONAL_REF.test(w)
+  const raw = shellCBody(args)
+  if (raw === null) return true
+  const direct = (w) => (repl !== null && w.includes(repl)) || POSITIONAL_REF.test(w)
+  // What xargs hands the body also runs through a substitution (`$(echo $0) URL`) or a variable the
+  // body sets from it (`x=$0; $x URL`, `c=$1; eval "$c URL"`) (didi 36603 item 2): a substitution
+  // that reads it is folded to a bare `$0`, the others to `$S`, and every name assigned from a fed
+  // value is fed too.
+  let body = raw
+  for (let prev = null; prev !== body;) { prev = body; body = body.replace(/`[^`]*`|\$\([^()]*\)/g, (m) => (direct(m) ? '$0' : '$S')) }
+  const tainted = new Set()
+  const fed = (w) => direct(w) || [...tainted].some((n) => new RegExp(`\\$\\{?${n}(?![A-Za-z0-9_])`).test(w))
+  for (let size = -1; size !== tainted.size;) {
+    size = tainted.size
+    for (const m of body.matchAll(/(?:^|[\s;&|(){}])([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|\S*)/g)) if (fed(m[2])) tainted.add(m[1])
+  }
   // split with quotes honoured: a `\|` inside a quoted grep pattern is no pipe (fleet replay)
   for (const w of subCommandTexts(body).map((x) => shellWords(x))) {
     const i = commandIndex(w)
@@ -994,7 +1012,11 @@ export function curlDestinations(args, inners = null, fileValues = null, ctx = n
   })
   // `$'...'` decoded BEFORE the quotes go: `export http$'\x5f'proxy=P` sets http_proxy, and with the
   // quotes dropped first it read `http$\x5fproxy` (didi 36252, a regression of round 6).
-  const said = ctx?.text ? decodeAnsiCQuotes(String(ctx.text)).replace(/['"\\]/g, '') : ''
+  // Read once more after quote removal: `eval 'export http$'"'"'\x5f'"'"'proxy=P'` hands eval the
+  // ANSI-C word that the quotes split in the raw text (didi 36603, F06).
+  const said = ctx?.text
+    ? [String(ctx.text), shellWords(String(ctx.text)).join(' ')].map(decodeAnsiCQuotes).join('\n').replace(/['"\\]/g, '')
+    : ''
   if (CURLRC.test(said)) dests.push('<curlrc>')
   if (PROXY_ENV.test(said.replace(PROXY_REMOVED, ' '))) dests.push('<proxy variable>')
   if (computedEnvName(ctx?.outer ?? ctx?.text ?? '') || xargsNamesEnv(said)) dests.push('<computed variable name>')
@@ -1423,7 +1445,9 @@ function unreadableVerdict(text, vendorHosts, vendorDomains, arrays = null) {
 }
 // The command string of `bash -c BODY` (any flag cluster holding `c`: -c, -lc, -ec), read from the
 // shell's own argv: the first operand after the options. null when the shell runs a file or stdin.
-function shellCBody(args) {
+function shellCBody(args) { return shellCSplit(args)?.body ?? null }
+// The -c body and the words after it, which the body reads as $0, $1, ...
+function shellCSplit(args) {
   let k = 0
   for (; k < args.length; k++) {
     const a = args[k]
@@ -1435,9 +1459,23 @@ function shellCBody(args) {
     const a = args[k]
     if (/^[-+][oO]$/.test(a)) { k++; continue }
     if (a === '--' || /^[-+][A-Za-z]/.test(a)) continue
-    return a
+    return { body: a, rest: args.slice(k + 1) }
   }
   return null
+}
+// A -c body with its positionals bound to the words after it (`sh -c "$(echo curl) \$1" _ URL` runs
+// `curl URL`; didi 36603 item 3), or null when it reads none. A positional with no word stays as it
+// is, so its reading does not change; "$@" / "$*" become the words themselves.
+function bindPositionals(body, rest) {
+  if (!rest.length || !POSITIONAL_REF.test(body)) return null
+  const all = rest.slice(1).map(asWord).join(' ')
+  return body
+    .replace(/"\$(?:[@*]|\{[@*]\})"/g, all)
+    .replace(/\$\{([0-9@*])[^}]*\}|\$([0-9@*])/g, (m, x, y) => {
+      const p = x ?? y
+      if (p === '@' || p === '*') return all
+      return rest[Number(p)] == null ? m : asWord(rest[Number(p)])
+    })
 }
 // Is a shell's STDIN only DATA to it? The answer needs POSITIVE evidence (didi's review 3: listing the
 // shapes that read stdin as a program -- `bash`, `-s`, `-`, `/dev/stdin`, a -c body running `bash` --
@@ -1772,15 +1810,22 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
       // `eval WORDS`: the words, joined, are a command line run here (`eval curl -s https://evil/x`
       // passed the live gate: the command word read was eval; dexter, d6b95892 round 4).
       if (cmd === 'eval') {
-        const argv = shellWords(text)
-        const at = argv.findIndex((w) => normalizedName(w) === 'eval')
         // `eval -- WORDS`: the `--` ends eval's options and is no part of the line (didi 36152)
-        const body = argv.slice(at + 1 + (argv[at + 1] === '--' ? 1 : 0)).join(' ')
-        if (!body.trim()) continue
-        const r = depth < 4
-          ? classify(body, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays })
-          : unreadableVerdict(body, vendorHosts, vendorDomains)
-        if (r.deny) return { ...r, reason: `eval-${r.reason}` }
+        const evalLine = (argv) => {
+          const at = argv.findIndex((w) => normalizedName(w) === 'eval')
+          return at === -1 ? '' : argv.slice(at + 1 + (argv[at + 1] === '--' ? 1 : 0)).join(' ')
+        }
+        const body = evalLine(shellWords(text))
+        // The same line with its substitutions kept: lifted, `eval "$(echo curl) URL"` read as
+        // `eval " URL"` and its command word was gone (didi 36603 item 1).
+        const kept = depth < 4 ? evalLine(shellWords(outerNorm.slice(a, b))) : ''
+        for (const t of kept !== body && /\$\(|`/.test(kept) ? [body, kept] : [body]) {
+          if (!t.trim()) continue
+          const r = depth < 4
+            ? classify(t, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays })
+            : unreadableVerdict(t, vendorHosts, vendorDomains)
+          if (r.deny) return { ...r, reason: `eval-${r.reason}` }
+        }
         continue
       }
       // `bash -c BODY`: the body is a command line, judged in full (card c8b1ccbf, shape 2).
@@ -1790,20 +1835,24 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
         if (viaXargs && at !== -1 && xargsShellRunsStdin(argv.slice(at + 1), xargsReplace(sw))) {
           return { deny: true, reason: 'xargs-stdin-command', hosts: ['<command from stdin>'] }
         }
-        const body = at === -1 ? null : shellCBody(argv.slice(at + 1))
-        if (body === null) continue
+        const split = at === -1 ? null : shellCSplit(argv.slice(at + 1))
+        if (split === null) continue
+        const body = split.body
         const r = depth < 4
           ? classify(body, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays })
           : unreadableVerdict(body, vendorHosts, vendorDomains)
         if (r.deny) return { ...r, reason: `shell-c-${r.reason}` }
-        // The same body with its substitutions kept: lifted, `sh -c "$(echo curl) URL"` reads as
-        // `sh -c " URL"` and its command word is gone (didi 36252 T21).
         if (depth < 4) {
+          // The same body with its substitutions kept: lifted, `sh -c "$(echo curl) URL"` reads as
+          // `sh -c " URL"` and its command word is gone (didi 36252 T21). Each body is read once
+          // more with its positionals bound to the words after it (didi 36603 item 3).
           const kw = shellWords(outerNorm.slice(a, b))
           const kat = kw.findIndex((w) => normalizedName(w) === cmd)
-          const kept = kat === -1 ? null : shellCBody(kw.slice(kat + 1))
-          if (kept !== null && kept !== body && /\$\(|`/.test(kept)) {
-            const rk = classify(kept, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays })
+          const ks = kat === -1 ? null : shellCSplit(kw.slice(kat + 1))
+          const kept = ks !== null && ks.body !== body && /\$\(|`/.test(ks.body) ? ks : null
+          const readings = [bindPositionals(body, split.rest), kept?.body, kept && bindPositionals(kept.body, kept.rest)]
+          for (const t of new Set(readings.filter((x) => x != null && x !== body))) {
+            const rk = classify(t, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays })
             if (rk.deny) return { ...rk, reason: `shell-c-${rk.reason}` }
           }
         }

