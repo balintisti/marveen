@@ -6120,8 +6120,12 @@ export interface IdleGuardSuppressors {
   lastSubagentNoticeAt?: number | null
   lastPaneUnreadableAt?: number | null
   noWorkLiveSpellSince?: number | null
+  /** When the last 'your turn died on an API error, continue' message was ENQUEUED (card 843a9ab6).
+   *  It only suppresses (a second error within the repeat window escalates instead of pumping), so
+   *  it is restored whatever the row's age. */
+  lastApiErrorResumeAt?: number | null
 }
-const SUPPRESSOR_TIMES = ['lastNoWorkNoticeAt', 'lastSubagentNoticeAt', 'lastPaneUnreadableAt', 'noWorkLiveSpellSince'] as const
+const SUPPRESSOR_TIMES = ['lastNoWorkNoticeAt', 'lastSubagentNoticeAt', 'lastPaneUnreadableAt', 'noWorkLiveSpellSince', 'lastApiErrorResumeAt'] as const
 const SUPPRESSOR_SETS = ['lastWakeWorkIds', 'lastNoWorkNoticeIds'] as const
 
 /** Only well-typed fields come back: a malformed value is dropped, never passed on, because a

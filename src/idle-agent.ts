@@ -260,6 +260,19 @@ export interface IdleAgentState {
    *  the digest. Stamped by the watcher only after the message was really enqueued. Persisted
    *  (card e6045a1b); it only matches while the restored idleSinceMs is the same spell. */
   noWorkLiveSpellSince?: number | null
+  /** When the last 'your turn died on an API error, continue' message was ENQUEUED (card 843a9ab6).
+   *  Stamped by the WATCHER, only after the enqueue succeeded: a failed enqueue must not look like a
+   *  resume that happened. Persisted (db.ts SUPPRESSOR_TIMES), so a restart cannot re-arm the repeat
+   *  window. */
+  lastApiErrorResumeAt?: number | null
+  /** When the pane was first seen ending in the mid-turn API error in the CURRENT streak; null = not
+   *  in one. In memory only: a restart restarting the two-tick confirmation is the safe side. */
+  apiErrorSinceMs?: number | null
+  /** Consecutive ticks that saw the error (streak length). In memory only. */
+  apiErrorTicks?: number
+  /** The streak (its apiErrorSinceMs) that was already answered, by the resume the watcher stamped or
+   *  by the repeat alert. One answer per streak: no resume pumping. Reset when the streak ends. */
+  apiErrorHandledSince?: number | null
 }
 
 export interface IdleAgentInput {
@@ -299,6 +312,9 @@ export interface IdleAgentInput {
    *  warning does not count). Such a pane reads idle, and nothing a wake says can move it until the
    *  limit resets -- the model-fallback runner owns that state. Card d3f92923. */
   paneUsageLimited?: boolean
+  /** The pane's LAST content block above the input box is an API error that cut a turn off
+   *  (detectsMidTurnApiError, card 843a9ab6). Absent = not measured = false. */
+  paneApiError?: boolean
   /** Background work the pane shows RUNNING (runningBackgroundWork): sub-agent rows, the
    *  `Waiting for N background agents` line, and the shells and monitors the footer counts. An
    *  agent with a free prompt and background work at hand is not standing idle: no wake, no
@@ -343,7 +359,18 @@ export type IdleDecision =
         | 'subagents-notice-window'
         // The agent declared an expiring standstill and it still holds (card 00f7455b).
         | 'standstill'
+        // The pane ends in a mid-turn API error; waiting for the second tick that confirms it
+        // (card 843a9ab6).
+        | 'api-error-confirming'
     }
+  /** The turn died on an API error and the agent stands at an empty prompt: ONE targeted message,
+   *  not the generic wake (card 843a9ab6). `errorSinceMs` is when the error was first seen. The
+   *  caller stamps lastApiErrorResumeAt / apiErrorHandledSince only after the enqueue succeeded; a
+   *  failed enqueue leaves the decision to be taken again next tick. */
+  | { alert: true; reason: 'resume-api-error'; errorSinceMs: number }
+  /** The same agent hit the error again inside API_ERROR_REPEAT_MS of the last resume: the resume did
+   *  not hold, so the coordinator is told and nothing more is pumped into the agent. */
+  | { alert: true; reason: 'api-error-repeat'; minutesSinceResume: number }
   /** Stage 1: tell the AGENT, not a human. The agent is awake, its queue is empty and
    *  the condition is about itself -- it is the only party that can both be reached and
    *  act. A human woken at 22:49 can do nothing here that the agent cannot do faster. */
@@ -491,6 +518,12 @@ export function decideIdleAlert(
   return { decision: r.decision, next: { ...r.next, lastSubagentNoticeAt: now } }
 }
 
+/** A second API error this soon after a resume means the resume did not hold (card 843a9ab6). */
+export const API_ERROR_REPEAT_MS = 10 * 60_000
+/** Consecutive ticks that must see the error before the agent is written to: at the 3-minute tick
+ *  that is 3-6 minutes, long enough for a turn that is merely between two retries. */
+export const API_ERROR_CONFIRM_TICKS = 2
+
 function decideIdleAlertCore(
   input: IdleAgentInput,
   stateIn: IdleAgentState,
@@ -508,6 +541,16 @@ function decideIdleAlertCore(
   let state: IdleAgentState = (stateIn.subagentsSinceMs ?? null) === subagentsSince ? stateIn : { ...stateIn, subagentsSinceMs: subagentsSince }
   // A tick with no sub-agents ends the stretch, and the stretch's notice window with it.
   if (subagentsSince === null && state.lastSubagentNoticeAt != null) state = { ...state, lastSubagentNoticeAt: null }
+  // The mid-turn API error streak (card 843a9ab6). Seen = a running agent whose pane is idle, ends in
+  // the error, shows NO background work (the hold owns that case; the streak does not run while it
+  // lasts), is not usage-limited, has no waking letter on its way and no declared standstill. Any
+  // tick that is not "seen" ends the streak, so two ticks must be CONSECUTIVE.
+  const apiErrorSeen =
+    input.running && input.paneApiError === true && input.paneIdle === true && subagents <= 0 &&
+    input.paneUsageLimited !== true && input.pendingMessages === 0 && input.standstillActive !== true
+  if (!apiErrorSeen && (state.apiErrorSinceMs != null || (state.apiErrorTicks ?? 0) > 0 || state.apiErrorHandledSince != null)) {
+    state = { ...state, apiErrorSinceMs: null, apiErrorTicks: 0, apiErrorHandledSince: null }
+  }
   const clear = (reason: Extract<IdleDecision, { alert: false }>['reason']) => ({
     decision: { alert: false, reason } as IdleDecision,
     next: { ...state, idleSinceMs: null },
@@ -547,6 +590,33 @@ function decideIdleAlertCore(
   // into it can do nothing until the limit resets. Named, not folded into 'busy': the log has to say
   // WHY a waiting agent was left alone, and the idle window restarts once the limit lifts.
   if (input.paneUsageLimited === true) return clear('usage-limited')
+
+  // A TURN THAT DIED ON AN API ERROR (card 843a9ab6, marveen's design 2026-10-16). Before the
+  // sustained window and before the zero-card branch: measured the same day, the generic wake came
+  // after 12-15+ minutes, never at all with 0 own cards, and did not move the agent; a targeted
+  // "continue" does. Two consecutive ticks confirm it; the answer is ONE message per streak.
+  if (apiErrorSeen && state.apiErrorHandledSince !== (state.apiErrorSinceMs ?? now)) {
+    const sinceMs = state.apiErrorSinceMs ?? now
+    const ticks = (state.apiErrorTicks ?? 0) + 1
+    const keepSpell = state.idleSinceMs ?? now
+    if (ticks < API_ERROR_CONFIRM_TICKS) {
+      return {
+        decision: { alert: false, reason: 'api-error-confirming' },
+        next: { ...state, idleSinceMs: keepSpell, apiErrorSinceMs: sinceMs, apiErrorTicks: ticks },
+      }
+    }
+    const lastResume = state.lastApiErrorResumeAt ?? null
+    if (lastResume !== null && now - lastResume < API_ERROR_REPEAT_MS) {
+      return {
+        decision: { alert: true, reason: 'api-error-repeat', minutesSinceResume: Math.round((now - lastResume) / 60_000) },
+        next: { ...state, idleSinceMs: keepSpell, apiErrorSinceMs: sinceMs, apiErrorTicks: ticks, apiErrorHandledSince: sinceMs },
+      }
+    }
+    return {
+      decision: { alert: true, reason: 'resume-api-error', errorSinceMs: sinceMs },
+      next: { ...state, idleSinceMs: keepSpell, apiErrorSinceMs: sinceMs, apiErrorTicks: ticks },
+    }
+  }
 
   // The no-work notice reads a counter-only 'busy' as idle, and NOTHING ELSE does.
   //
@@ -1943,8 +2013,17 @@ export function buildWakeMessage(
  *  and four hypotheses eliminated at tmux before anyone looked at the classifier. */
 export type PaneUnreadableReason = 'no-session' | 'capture-failed' | 'unknown-state'
 
+/** The targeted message for a turn that died on an API error (card 843a9ab6, wording fixed by
+ *  marveen's design). HH:MM is Europe/Budapest, whatever zone the process runs in. */
+export function buildApiErrorResumeMessage(errorSinceMs: number): string {
+  const hhmm = new Intl.DateTimeFormat('hu-HU', {
+    timeZone: 'Europe/Budapest', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(new Date(errorSinceMs))
+  return `a turnod API-hibával megszakadt ${hhmm}-kor, folytasd onnan, ahol tartottál`
+}
+
 export interface FleetAlert {
-  kind: 'still-idle' | 'pane-unreadable' | 'no-work-check' | 'wake-enqueue-failed'
+  kind: 'still-idle' | 'pane-unreadable' | 'no-work-check' | 'wake-enqueue-failed' | 'api-error-repeat'
   agent: string
   minutes?: number
   workCount?: number
@@ -1994,8 +2073,13 @@ export function buildFleetAlert(alerts: FleetAlert[]): string {
   const enqueueFailed = (a: FleetAlert) =>
     `A(z) "${a.agent}" ${a.minutes} perce tetlen, ${a.workCount} tetellel, es az EBRESZTO UZENETET ` +
     `SEM SIKERULT betenni a soraba. Ez nem tetlenseg-kerdes tobbe, hanem az uzenetsore. Nezd meg kezzel.`
+  const apiErrorRepeat = (a: FleetAlert) =>
+    `A(z) "${a.agent}" turnja MASODSZOR szakadt meg API-hibaval ${a.minutes} perccel az elozo ` +
+    `folytatas utan. Tovabbi folytatast nem kuldok neki: a hiba nem a turnon mulik. Nezd meg a panelt ` +
+    `(halozat, API-allapot, telitett kontextus), es dontsd el, kell-e ujrainditas.`
 
   const single: Record<FleetAlert['kind'], (a: FleetAlert) => string> = {
+    'api-error-repeat': apiErrorRepeat,
     'still-idle': stillIdle,
     'pane-unreadable': paneUnreadable,
     'no-work-check': noWorkCheck,
@@ -2015,6 +2099,11 @@ export function buildFleetAlert(alerts: FleetAlert[]): string {
       kind: 'wake-enqueue-failed',
       header: 'AZ EBRESZTOT BE SEM LEHETETT TENNI A SORBA (ez mar az uzenetsor baja):',
       line: (a) => `  ${a.agent} -- ${a.minutes} perce, ${a.workCount} tetellel`,
+    },
+    {
+      kind: 'api-error-repeat',
+      header: 'API-HIBA MASODSZOR, A FOLYTATAS NEM HOZOTT TARTOS EREDMENYT (nezd meg a panelt):',
+      line: (a) => `  ${a.agent} -- ${a.minutes} perccel az elozo folytatas utan`,
     },
     {
       kind: 'pane-unreadable',

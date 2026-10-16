@@ -6,7 +6,7 @@ import { listAgentNames, agentDir, readAgentRemoteHost, readAgentProjects } from
 import { isAgentRunning, capturePane } from './agent-process.js'
 import { resolveAgentSession } from './channel-mcp-reconnect.js'
 import { sendAlert } from './channel-monitor.js'
-import { busyEvidence, detectPaneState, runningBackgroundWork } from '../pane-state.js'
+import { busyEvidence, detectPaneState, detectsMidTurnApiError, runningBackgroundWork } from '../pane-state.js'
 import { usageLimitHolds } from '../usage-limit-window.js'
 import { wakeRows } from '../message-wake.js'
 import { getPendingMessages, getLastOutboundMessageAt, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
@@ -37,6 +37,7 @@ import {
   type PaneUnreadableReason,
   standstillVerdict,
   standstillNote,
+  buildApiErrorResumeMessage,
 } from '../idle-agent.js'
 
 // The guard for the agent that HAS work and is not doing it.
@@ -363,6 +364,8 @@ export function readPane(agent: string): {
   idle: boolean | null
   staleCounterOnly: boolean
   usageLimited?: boolean
+  /** The pane ends in a mid-turn API error (detectsMidTurnApiError, card 843a9ab6). */
+  apiError?: boolean
   paneReason?: PaneUnreadableReason
   runningSubagents?: number
 } {
@@ -387,6 +390,7 @@ export function readPane(agent: string): {
     // Same capture as the idle verdict (card d3f92923), so the two cannot disagree about the screen.
     // Held only until the reset the banner names, 5 h at most: the banner outlives the limit.
     usageLimited: usageLimitHolds(`idle:${agent}`, pane, Date.now()),
+    apiError: detectsMidTurnApiError(pane),
   }
 }
 
@@ -539,6 +543,7 @@ export function tick(): void {
           paneIdle: running ? paneRead.idle : false,
           staleCounterOnly: running ? paneRead.staleCounterOnly : false,
           paneUsageLimited: running ? paneRead.usageLimited === true : false,
+          paneApiError: running ? paneRead.apiError === true : false,
           runningSubagents: running ? paneRead.runningSubagents ?? 0 : 0,
           // Read only when sub-agent rows are on screen: it is the one case that consumes it.
           lastActionAtMs: running && (paneRead.runningSubagents ?? 0) > 0 ? lastActionAtMs(agent, realComments ?? comments) : undefined,
@@ -605,6 +610,40 @@ export function tick(): void {
       )
 
       if (!decision.alert) continue
+
+      if (decision.reason === 'resume-api-error') {
+        // ONE targeted message, and the clock is stamped only AFTER the enqueue succeeded (card
+        // 843a9ab6): a failed enqueue must not look like a resume that happened, or the repeat window
+        // would escalate an agent that was never written to. Without a stamp the next tick takes the
+        // same decision again.
+        try {
+          createAgentMessage('system', agent, buildApiErrorResumeMessage(decision.errorSinceMs))
+        } catch (err) {
+          logger.warn({ err, agent }, 'idle guard: could not enqueue the API-error resume message')
+          continue
+        }
+        const stamped = { ...next, lastApiErrorResumeAt: now, apiErrorHandledSince: next.apiErrorSinceMs ?? decision.errorSinceMs }
+        watchState.set(agent, stamped)
+        try {
+          saveIdleGuardState(agent, stamped, now)
+        } catch (err) {
+          logger.warn({ err, agent }, 'idle guard: could not persist the API-error resume stamp')
+        }
+        logger.info(
+          { idleGuard: true, agent, errorSinceMs: decision.errorSinceMs },
+          'idle guard: turn died on an API error -- sent the targeted resume message',
+        )
+        continue
+      }
+
+      if (decision.reason === 'api-error-repeat') {
+        alerts.push({ kind: 'api-error-repeat', agent, minutes: decision.minutesSinceResume })
+        logger.warn(
+          { idleGuard: true, agent, minutesSinceResume: decision.minutesSinceResume },
+          'idle guard: API error again shortly after a resume -- coordinator told, no further resume',
+        )
+        continue
+      }
 
       if (decision.reason === 'pane-unreadable') {
         alerts.push({ kind: 'pane-unreadable', agent, paneReason: paneRead.paneReason })
