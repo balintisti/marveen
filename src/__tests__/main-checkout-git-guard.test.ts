@@ -224,3 +224,84 @@ print(g.main_checkout())
     expect(got).toBe(realpathSync(dirname(common)))
   })
 })
+
+// didi 2026-10-16 (card 468cf59a comment 36845): the fixed spellings of the tree root
+// were an enumeration; these all discard the whole tree and passed. The guard now
+// NORMALISES the pathspec against the directory git runs in.
+describe('main-checkout git guard: any spelling of the tree root is the whole tree', () => {
+  let mainSub: string
+  let wtSub: string
+  beforeAll(() => {
+    mainSub = join(main, 'scripts')
+    wtSub = join(wt, 'scripts')
+    mkdirSync(mainSub, { recursive: true })
+    mkdirSync(wtSub, { recursive: true })
+  })
+
+  const SPELLINGS = ['./.', ':(top)', ':/:', ':(top).', 'scripts/..', './scripts/..', 'scripts/../.', ':(top)scripts/..', 'scripts/../*', ':!scripts/x.py']
+
+  it.each(SPELLINGS.flatMap((s) => [[`git checkout -- '${s}'`], [`git restore '${s}'`]]))(
+    '%s from the main checkout -> exit 2', (command) => {
+      const r = run(command, main)
+      expect(r.code).toBe(2)
+      expect(r.stderr).toContain('resolves to the repo root')
+    })
+
+  it('a pathspec in a variable: resolved when the assignment is literal, refused when not', () => {
+    expect(run('P=.; git checkout -- $P', main).code).toBe(2)
+    expect(run('P=.; git checkout -- "$P"', main).code).toBe(2)
+    expect(run('P=./.; git restore $P', main).code).toBe(2)
+    expect(run('P=scripts/foo.py; git checkout -- $P', main).code).toBe(0)
+    // not resolvable statically -> fail closed on the main checkout, with the real reason
+    const r = run('git checkout -- $(git rev-parse --show-toplevel)', main)
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('variable or substitution')
+    expect(run('git checkout -- "$SOMEWHERE"', main).code).toBe(2)
+    expect(run('git restore "$SOMEWHERE"', main).code).toBe(2)
+    expect(run('git checkout -- `pwd`', main).code).toBe(2)
+    expect(run('git restore --pathspec-from-file=list.txt', main).code).toBe(2)
+  })
+
+  it('from a subdirectory, .. and the absolute root reach the root', () => {
+    expect(run('git checkout -- ..', mainSub).code).toBe(2)
+    expect(run('git restore ../.', mainSub).code).toBe(2)
+    expect(run("git checkout -- ':(top)'", mainSub).code).toBe(2)
+    expect(run('git checkout -- :/', mainSub).code).toBe(2)
+    expect(run(`git restore ${main}`, mainSub).code).toBe(2)
+    expect(run('git checkout -- ../scripts/..', mainSub).code).toBe(2)
+    expect(run('git checkout -- ../scripts/foo.py', mainSub).code).toBe(0)
+  })
+
+  it('the same spellings are routine in a non-main worktree', () => {
+    for (const s of ['./.', ':(top)', ':/:', 'scripts/..', '.']) {
+      expect(run(`git checkout -- '${s}'`, wt).code).toBe(0)
+      expect(run(`git restore '${s}'`, wt).code).toBe(0)
+    }
+    expect(run('git checkout -- ..', wtSub).code).toBe(0)
+    expect(run('git checkout -- "$P"', wt).code).toBe(0)
+    expect(run(`git -C ${wt} checkout -- ./.`, main).code).toBe(0)
+    expect(run(`git -C ${wt} restore ':(top)'`, main).code).toBe(0)
+  })
+
+  it.each([
+    ['git checkout -- package.json'],
+    ['git checkout -- scripts/foo.py'],
+    ['git checkout -- scripts/../package.json'],
+    ['git checkout -- ./scripts/foo.py'],
+    ["git checkout -- ':(top)scripts/foo.py'"],
+    ['git checkout -- :/scripts/foo.py'],
+    ['git restore scripts/foo.py'],
+    ['git restore scripts/../package.json'],
+    ['git restore -s HEAD~1 package.json'],
+    ['git restore -s $REV package.json'],
+    ['git checkout develop'],
+    ['git checkout $BRANCH'],
+    ['git checkout -b feature/x'],
+    ['git restore --staged ./.'],
+    ["git restore -S ':(top)'"],
+    ['git status'],
+    ['git diff -- .'],
+  ])('%s from the main checkout -> exit 0', (command) => {
+    expect(run(command, main).code).toBe(0)
+  })
+})
