@@ -42,6 +42,13 @@ import time
 # the healthy majority, which is the shape this repo has stopped eight times.
 
 
+def exact_target(name):
+    # TMUXEXACT (card 394e0971): a bare -t NAME falls back to a PREFIX match when no
+    # session has that exact name, so agent-foo would reach agent-foo2's pane. "=NAME:"
+    # matches only the session called NAME.
+    return name if name.startswith("=") else f"={name}:"
+
+
 def main():
     session_name, agent_id, cutoff_str, data_file, log_target = sys.argv[1:6]
     cutoff = int(cutoff_str)
@@ -90,9 +97,9 @@ def main():
         chunk_size = 990
         for i in range(0, len(full_msg), chunk_size):
             chunk = full_msg[i:i + chunk_size]
-            subprocess.run(['tmux', 'send-keys', '-t', session_name, '-l', chunk],
+            subprocess.run(['tmux', 'send-keys', '-t', exact_target(session_name), '-l', chunk],
                            timeout=5, capture_output=True)
-        subprocess.run(['tmux', 'send-keys', '-t', session_name, 'Enter'],
+        subprocess.run(['tmux', 'send-keys', '-t', exact_target(session_name), 'Enter'],
                        timeout=5, capture_output=True)
         mark(m.get('id'), 'replayed-after-restart')
         time.sleep(2)

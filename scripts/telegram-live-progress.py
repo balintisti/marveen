@@ -191,13 +191,20 @@ def api(tok, method, payload):
 
 def session_alive(agent):
     try:
-        return subprocess.run(["tmux", "has-session", "-t", tmux_session(agent)],
+        return subprocess.run(["tmux", "has-session", "-t", exact_target(tmux_session(agent))],
                               capture_output=True, timeout=5).returncode == 0
     except Exception as exc:
         # SILENTOLLAMA926: a missing tmux binary made every session look dead
         # with no line anywhere; name it (the log() sink is the script's own).
         log(f"tmux has-session failed for {agent}: {type(exc).__name__}: {exc}")
         return False
+
+
+def exact_target(name):
+    # TMUXEXACT (card 394e0971): a bare -t NAME falls back to a PREFIX match when no
+    # session has that exact name, so agent-foo would reach agent-foo2's pane. "=NAME:"
+    # matches only the session called NAME.
+    return name if name.startswith("=") else f"={name}:"
 
 
 def tmux_session(agent):
@@ -253,7 +260,7 @@ def status_line(agent):
     session = tmux_session(agent)
     try:
         out = subprocess.run(
-            ["tmux", "capture-pane", "-p", "-t", session],
+            ["tmux", "capture-pane", "-p", "-t", exact_target(session)],
             capture_output=True, text=True, timeout=5).stdout
     except Exception as exc:
         log(f"tmux capture-pane failed for {session}: {type(exc).__name__}: {exc}")
