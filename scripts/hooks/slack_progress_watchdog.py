@@ -237,12 +237,19 @@ def agent_name_from(progress_dir):
     return None
 
 
+def exact_target(name):
+    # TMUXEXACT (card 394e0971): a bare -t NAME falls back to a PREFIX match when no
+    # session has that exact name, so agent-foo would reach agent-foo2's pane. "=NAME:"
+    # matches only the session called NAME.
+    return name if name.startswith("=") else f"={name}:"
+
+
 def tmux_session_alive(session):
     forced = os.environ.get("SLACK_WATCHDOG_FORCE_AGENT_UP")
     if forced in ("0", "1"):
         return forced == "1"
     try:
-        return subprocess.run(["tmux", "has-session", "-t", session],
+        return subprocess.run(["tmux", "has-session", "-t", exact_target(session)],
                               capture_output=True, timeout=5).returncode == 0
     except Exception:
         return True  # if tmux probe fails, assume alive (don't false-alarm)
