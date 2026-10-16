@@ -48,7 +48,17 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 OVERRIDE = re.compile(r"(^|[\s;&|(`])MARVEEN_GIT_GUARD=allow(\s|$)")
 _GIT = re.compile(r"(?<![\w.-])git(?=\s)")  # `/opt/homebrew/bin/git` counts, `.git` does not
-_CD = re.compile(r"(?:^|[;&|\n(`]|\$\()\s*(?:cd|pushd)\s+((?:\"[^\"]*\"|'[^']*'|[^\s;&|)`])+)")
+# A cd counts after a separator, a quote or brace that opens a nested command line
+# (`bash -c 'cd X && ...'`, `{ cd X; ...; }`), and after a shell keyword (`if cd X;
+# then ...`) -- didi measured all of these passing on 2026-10-16.
+_CD = re.compile(
+    r"(?:^|[;&|\n(`'\"{!]|\$\(|(?<![\w-])(?:if|then|else|elif|do|time)(?=\s))"
+    r"\s*(?:cd|pushd)\s+((?:\"[^\"]*\"|'[^']*'|[^\s;&|)`])+)")
+# NAME=value written literally in the same command (`R=/x; git -C $R clean`), and the
+# git environment variables that move the target (`GIT_DIR=... git clean`).
+_ASSIGN = re.compile(
+    r"(?:^|[\s;&|(`'\"{])(?:export\s+)?([A-Za-z_]\w*)=(\"[^\"$`]*\"|'[^']*'|[^\s;&|()`'\"$]*)(?=[\s;&|)'\"]|$)")
+_VAR = re.compile(r"\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)")
 _STOP = set(";&|\n`)")
 _UNRESOLVABLE = object()
 
@@ -114,9 +124,42 @@ def _tokens(text, start):
     return toks
 
 
-def _literal(path, base):
+def _assignments(command, end):
+    """Literal NAME=value assignments before `end`, the last one winning, over HOME."""
+    env = {"HOME": os.path.expanduser("~")}
+    for a in _ASSIGN.finditer(command, 0, end):
+        val = a.group(2)
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]
+        env[a.group(1)] = val
+    return env
+
+
+def _expand(path, env):
+    """$NAME / ${NAME} from `env`; anything left for the shell keeps its `$`."""
+    return _VAR.sub(lambda v: env.get(v.group(1) or v.group(2), v.group(0)), path)
+
+
+def _closed_before(command, start, end):
+    """True when a `(` group open at `start` closes before `end`: a cd in `(cd X)`
+    or `$(cd X)` does not move the shell that runs the later git."""
+    depth = 0
+    for ch in command[start:end]:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth < 0:
+                return True
+    return False
+
+
+def _literal(path, base, env=None):
     """`path` resolved against `base`, or _UNRESOLVABLE when the shell would have to
     expand something first (a variable, a substitution) or `base` is unresolvable."""
+    path = _expand(path, env or {})
+    if len(path) >= 2 and path[0] == path[-1] and path[0] in "\"'":
+        path = path[1:-1]
     if "$" in path or "`" in path:
         return _UNRESOLVABLE
     path = os.path.expanduser(path)
@@ -152,7 +195,7 @@ def destructive(toks):
         if any(a in ("-n", "--dry-run") or (re.fullmatch(r"-[A-Za-z]+", a) and "n" in a) for a in rest):
             return None
         return ("git clean", dirs, work_tree, git_dir)
-    if verb == "reset" and "--hard" in rest:
+    if verb == "reset" and any(a in ("--ha", "--har", "--hard") for a in rest):  # git takes a unique prefix
         return ("git reset --hard", dirs, work_tree, git_dir)
     return None
 
@@ -180,19 +223,22 @@ def find_hits(command, cwd, main):
             continue
         verb, dirs, work_tree, git_dir = found
         base = cwd or os.getcwd()
-        cds = [c for c in _CD.finditer(command, 0, m.start())]
+        env = _assignments(command, m.start())
+        work_tree = work_tree if work_tree is not None else env.get("GIT_WORK_TREE")
+        git_dir = git_dir if git_dir is not None else env.get("GIT_DIR")
+        cds = [c for c in _CD.finditer(command, 0, m.start()) if not _closed_before(command, c.end(), m.start())]
         if cds:
-            arg = cds[-1].group(1)
-            if len(arg) >= 2 and arg[0] == arg[-1] and arg[0] in "\"'":
-                arg = arg[1:-1]
-            base = _literal(arg, base)
+            base = _literal(cds[-1].group(1), base, env)
+            # a cd that fails leaves the shell where it was: say so, do not guess "other"
+            if base is not _UNRESOLVABLE and not os.path.isdir(base):
+                base = _UNRESOLVABLE
         for d in dirs:
-            base = _literal(d, base)
+            base = _literal(d, base, env)
         if work_tree is not None:
-            wt = _literal(work_tree, base)
+            wt = _literal(work_tree, base, env)
             target = wt if wt is _UNRESOLVABLE else ("main" if _inside(wt, main) else "other")
         elif git_dir is not None:
-            gd = _literal(git_dir, base)
+            gd = _literal(git_dir, base, env)
             target = gd if gd is _UNRESOLVABLE else (
                 "main" if os.path.realpath(gd) == os.path.join(main, ".git") else "other")
         elif base is _UNRESOLVABLE:
@@ -240,7 +286,7 @@ def main():
         "A fo checkout MAGA a futo rendszer: a scripts/ es a web/ innen fut, es ami itt\n"
         "untracked vagy stage-elt, arrol gyakran NINCS masik peldany (2026-09-19: 10 fajl\n"
         "tunt el, 1 vegleg).\n\n"
-        "HA A PARANCS SZOVEGBEN VAN (echo, commit-uzenet, heredoc): a kapu az idezojelen\n"
+        "HA A PARANCS SZOVEGBEN VAN (echo, commit-uzenet, heredoc, grep-minta): a kapu az idezojelen\n"
         "BELUL is illeszt, mert a 09-19-es parancs is ott futott le (visszaperjel egy dupla\n"
         "idezojeles echo-ban). Ird a szoveget aposztrofos heredoc-kal fajlba, vagy\n"
         "fogalmazd at.\n"

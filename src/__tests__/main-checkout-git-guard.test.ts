@@ -6,12 +6,14 @@
  * EZ A FAJL SEMMIT NEM TOROL. A kapu egy eldobhato repora (MARVEEN_GIT_GUARD_MAIN) dont,
  * a parancs csak SZOVEG a hook-payloadban, soha nem fut le.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll } from 'vitest'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 import { spawnSync, execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, realpathSync } from 'node:fs'
+import { mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+
+const mkTmp = tmpDirs()
 
 const GATE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'hooks', 'main-checkout-git-guard.py')
 
@@ -31,7 +33,7 @@ function run(command: string, cwd: string, extra: Record<string, unknown> = {}) 
 }
 
 beforeAll(() => {
-  root = realpathSync(mkdtempSync(join(tmpdir(), 'git-guard-')))
+  root = realpathSync(mkTmp('git-guard-'))
   main = join(root, 'main')
   wt = join(root, 'wt')
   other = join(root, 'other')
@@ -42,10 +44,6 @@ beforeAll(() => {
   git('init', '-q')
   git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init')
   git('worktree', 'add', '-q', '--detach', wt)
-})
-
-afterAll(() => {
-  rmSync(root, { recursive: true, force: true })
 })
 
 describe('main-checkout git guard: refuses on the main checkout', () => {
@@ -125,6 +123,56 @@ describe('main-checkout git guard: lets the routine through', () => {
     })
     expect(r.status).toBe(0)
     expect(readFileSync(join(main, 'store', 'main-checkout-git-guard.log'), 'utf8')).toMatch(/\tFAIL-OPEN\tunparseable/)
+  })
+})
+
+// didi 2026-10-16 (card comment 36728): 47 shapes fed to the live hook, 13 false
+// passes. Each one below passed before the fix.
+describe('main-checkout git guard: the target behind nesting, variables and abbreviations', () => {
+  const runHome = (command: string, cwd: string) => spawnSync('python3', [GATE], {
+    input: JSON.stringify({ tool_name: 'Bash', tool_input: { command }, cwd }),
+    encoding: 'utf8',
+    env: { ...process.env, MARVEEN_GIT_GUARD_MAIN: main, HOME: root },
+  }).status
+
+  it.each([
+    [() => `bash -c 'cd ${main} && git clean -fd'`],
+    [() => `sh -c "cd ${main}; git reset --hard HEAD"`],
+    [() => `eval "cd ${main} && git clean -fd"`],
+    [() => `{ cd ${main}; git clean -fd; }`],
+    [() => `if cd ${main}; then git clean -fd; fi`],
+    [() => `R=${main}; git -C $R clean -fd`],
+    [() => `R="${main}"; git -C "$R" reset --hard`],
+    [() => `GIT_DIR=${main}/.git GIT_WORK_TREE=${main} git clean -fd`],
+    [() => `GIT_WORK_TREE=${main} git clean -fd`],
+  ])('a cd or target the shell resolves -> exit 2 (%#)', (cmd) => {
+    expect(run(cmd(), other).code).toBe(2)
+  })
+
+  it('resolves $HOME and ${HOME}', () => {
+    expect(runHome('cd $HOME/main && git clean -fd', other)).toBe(2)
+    expect(runHome('cd "${HOME}/main" && git reset --hard', other)).toBe(2)
+    expect(runHome('cd $HOME/wt && git reset --hard', other)).toBe(0)
+  })
+
+  it('git accepts a unique prefix of --hard', () => {
+    expect(run('git reset --har HEAD', main).code).toBe(2)
+    expect(run('git reset --ha HEAD', main).code).toBe(2)
+    expect(run('git reset --soft HEAD~1', main).code).toBe(0)
+  })
+
+  it('a cd in a closed subshell, or one that fails, leaves the shell in the main checkout', () => {
+    expect(run(`(cd ${wt}) && git clean -fd`, main).code).toBe(2)
+    expect(run(`cd ${root}/does-not-exist; git reset --hard`, main).code).toBe(2)
+    // ...and from elsewhere the same failed cd is no reason to refuse
+    expect(run(`cd ${root}/does-not-exist; git reset --hard`, other).code).toBe(0)
+  })
+
+  it('still lets worktree routine through in every nested form', () => {
+    expect(run(`bash -c 'cd ${wt} && git clean -fd'`, other).code).toBe(0)
+    expect(run(`R=${wt}; git -C $R clean -fd`, other).code).toBe(0)
+    expect(run(`(cd ${main} && git status) && cd ${wt} && git clean -fd`, other).code).toBe(0)
+    expect(run(`cd ${wt} && git reset --hard`, main).code).toBe(0)
   })
 })
 
