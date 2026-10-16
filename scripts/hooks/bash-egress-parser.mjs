@@ -69,6 +69,7 @@
 //   - a destination that a DIFFERENT command reads from stdin and turns into arguments, other than
 //     xargs (parallel, a while-read over a pipe), or that xargs reads from a file (-a, a pipe from cat);
 //   - a command line held in a variable the command never assigns (`eval "$X"`, `bash -c "$X"`, `$X URL`);
+//   - a command word glued from a substitution and literal text (`eval "$(echo cu)rl URL"`, `$(echo cu)rl URL`);
 //     a command WORD the line cannot read (`X=$(...); $X URL`, `set -- ...; $1 URL`, `"${a[@]}"`) denies
 //     only when the text that could set it names a network tool literally AND an external host, so a
 //     tool name that is itself computed (`X=$(echo Y3VybA== | base64 -d)`) passes;
@@ -982,9 +983,14 @@ function xargsShellRunsStdin(args, repl) {
   for (let prev = null; prev !== body;) { prev = body; body = body.replace(/`[^`]*`|\$\([^()]*\)/g, (m) => (direct(m) ? '$0' : '$S')) }
   const tainted = new Set()
   const fed = (w) => direct(w) || [...tainted].some((n) => new RegExp(`\\$\\{?${n}(?![A-Za-z0-9_])`).test(w))
+  // A builtin that binds names from its words binds them from a fed value too (`read x <<< "$0"`,
+  // `printf -v x %s "$0"`, `for t in $0`; didi 36796): every name-like word of it is fed then.
+  const BINDS = new Set(['read', 'printf', 'for', 'select', 'mapfile', 'readarray', 'declare', 'typeset', 'local', 'export', 'let'])
+  const binders = subCommandTexts(body).map((x) => shellWords(x)).filter((w) => BINDS.has(normalizedName(w[commandIndex(w)] ?? w[0] ?? '')) || BINDS.has(w[0]))
   for (let size = -1; size !== tainted.size;) {
     size = tainted.size
     for (const m of body.matchAll(/(?:^|[\s;&|(){}])([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|\S*)/g)) if (fed(m[2])) tainted.add(m[1])
+    for (const w of binders) if (w.some(fed)) for (const n of w) if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(n) && !BINDS.has(n)) tainted.add(n)
   }
   // split with quotes honoured: a `\|` inside a quoted grep pattern is no pipe (fleet replay)
   for (const w of subCommandTexts(body).map((x) => shellWords(x))) {
@@ -1628,7 +1634,8 @@ function substitutedCurlHosts(seg, env, loops, inners, ctx) {
 // A variable assigned from a substitution (`x=$(...)`, `export x="$(...)"`): the text before the `$(`.
 const ASSIGNED_FROM_SUBST = /(?:^|[\s;&|(])(?:export\s+|local\s+|readonly\s+|declare\s+(?:-\w+\s+)?)?([A-Za-z_][A-Za-z0-9_]*)="?$/
 // `substituted`: this text is the inside of a $(...) / `...`, whose output the outer line uses.
-// `inherited`: the assignments and loop values of the line this text is part of ({ env, loops, untrusted, unread, arrays }).
+// `inherited`: the assignments and loop values of the line this text is part of ({ env, loops, untrusted, unread, arrays }),
+// and for an eval / sh -c body the text of that line before it (`scope`), where its command word may be set.
 // A substitution runs in the loop it sits in, so `for u in URL; do echo "$(curl $u)"; done` reads
 // the inner curl with u bound (card c8b1ccbf, shape 6: live on 2026-10-15, four requests went out).
 // A function body glued to its head (`f()(curl ...)`, `function f()(curl`, `f ()(g()(curl`): a space
@@ -1760,6 +1767,7 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
   for (const { start, end } of heredocBodies(orig, masked)) {
     outerNorm = outerNorm.slice(0, start) + outerNorm.slice(start, end).replace(/[^\n]/g, ' ') + outerNorm.slice(end)
   }
+  const bodyScope = (b) => (inherited?.scope ? `${inherited.scope}\n${outerNorm.slice(0, b)}` : outerNorm.slice(0, b))
   for (const [a, b] of spans(masked)) {
     const mw = words(masked.slice(a, b))
     const i = commandIndex(mw)
@@ -1781,7 +1789,10 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
     const ow = shellWords(outerNorm.slice(a, b))
     const substCommand = /^(?:\$\(|`)/.test(ow[commandIndex(ow)] ?? '')
     if (substCommand || (cw0.includes('$') && (ecw === '' || ecw.includes('$')))) {
-      const scope = /\$(?:[@*0-9]|\{[@*0-9])/.test(cw0) ? outerNorm : outerNorm.slice(0, b)
+      const own = /\$(?:[@*0-9]|\{[@*0-9])/.test(cw0) ? outerNorm : outerNorm.slice(0, b)
+      // An eval / sh -c body is read on its own, but the line that runs it may set its command word
+      // (`x=$(echo curl); eval "$x URL"`, didi 36796): that line is part of the scope.
+      const scope = inherited?.scope ? `${inherited.scope}\n${own}` : own
       if (namesNetwork(scope)) {
         const hosts = [...new Set([...externalHosts(scope, vendorHosts, vendorDomains), ...unreadableWordHosts(expand(orig.slice(a, b), env))])]
           .filter((h) => !isLocalHost(h) && !vendorHosts.has(h) && !hostInDomains(h, vendorDomains))
@@ -1817,12 +1828,13 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
         }
         const body = evalLine(shellWords(text))
         // The same line with its substitutions kept: lifted, `eval "$(echo curl) URL"` read as
-        // `eval " URL"` and its command word was gone (didi 36603 item 1).
+        // `eval " URL"` and its command word was gone (didi 36603 item 1). Lifting also blanks an
+        // escaped \$ inside "...", so any difference counts, not only a substitution (didi 36796).
         const kept = depth < 4 ? evalLine(shellWords(outerNorm.slice(a, b))) : ''
-        for (const t of kept !== body && /\$\(|`/.test(kept) ? [body, kept] : [body]) {
+        for (const t of kept !== body ? [body, kept] : [body]) {
           if (!t.trim()) continue
           const r = depth < 4
-            ? classify(t, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays })
+            ? classify(t, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays, scope: bodyScope(b) })
             : unreadableVerdict(t, vendorHosts, vendorDomains)
           if (r.deny) return { ...r, reason: `eval-${r.reason}` }
         }
@@ -1832,27 +1844,42 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
       if (SHELL.test(cmd)) {
         const argv = shellWords(text)
         const at = argv.findIndex((w) => normalizedName(w) === cmd)
-        if (viaXargs && at !== -1 && xargsShellRunsStdin(argv.slice(at + 1), xargsReplace(sw))) {
+        // The kept text too: lifting blanks an escaped \$ inside "...", and `xargs sh -c "\$0 URL"`
+        // read as `  0 URL` (didi 36796).
+        const kargv = shellWords(outerNorm.slice(a, b))
+        const kat0 = kargv.findIndex((w) => normalizedName(w) === cmd)
+        if (viaXargs && ((at !== -1 && xargsShellRunsStdin(argv.slice(at + 1), xargsReplace(sw))) ||
+          (kat0 !== -1 && xargsShellRunsStdin(kargv.slice(kat0 + 1), xargsReplace(sw))))) {
           return { deny: true, reason: 'xargs-stdin-command', hosts: ['<command from stdin>'] }
         }
         const split = at === -1 ? null : shellCSplit(argv.slice(at + 1))
         if (split === null) continue
         const body = split.body
+        // The body with its positionals bound is read first: `sh -c '$1 URL' _ curl` IS a curl to
+        // URL, and read unbound it only counts as an unread command word because its scope names
+        // curl. Both readings deny; this order keeps the reason that says what runs.
+        const bound = depth < 4 ? bindPositionals(body, split.rest) : body
+        if (bound !== body) {
+          const rb = classify(bound, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays, scope: bodyScope(b) })
+          if (rb.deny) return { ...rb, reason: `shell-c-${rb.reason}` }
+        }
         const r = depth < 4
-          ? classify(body, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays })
+          ? classify(body, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays, scope: bodyScope(b) })
           : unreadableVerdict(body, vendorHosts, vendorDomains)
         if (r.deny) return { ...r, reason: `shell-c-${r.reason}` }
         if (depth < 4) {
           // The same body with its substitutions kept: lifted, `sh -c "$(echo curl) URL"` reads as
-          // `sh -c " URL"` and its command word is gone (didi 36252 T21). Each body is read once
-          // more with its positionals bound to the words after it (didi 36603 item 3).
+          // `sh -c " URL"` and its command word is gone (didi 36252 T21). Lifting blanks an escaped
+          // \$ inside "..." too: `sh -c "\$1 URL" _ curl` read as `  1 URL` (didi 36796), so any
+          // difference counts. The kept body is read once more with its positionals bound to the words
+          // after it (didi 36603 item 3).
           const kw = shellWords(outerNorm.slice(a, b))
           const kat = kw.findIndex((w) => normalizedName(w) === cmd)
           const ks = kat === -1 ? null : shellCSplit(kw.slice(kat + 1))
-          const kept = ks !== null && ks.body !== body && /\$\(|`/.test(ks.body) ? ks : null
-          const readings = [bindPositionals(body, split.rest), kept?.body, kept && bindPositionals(kept.body, kept.rest)]
-          for (const t of new Set(readings.filter((x) => x != null && x !== body))) {
-            const rk = classify(t, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays })
+          const kept = ks !== null && ks.body !== body ? ks : null
+          const readings = [kept?.body, kept && bindPositionals(kept.body, kept.rest)]
+          for (const t of new Set(readings.filter((x) => x != null && x !== body && x !== bound))) {
+            const rk = classify(t, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays, scope: bodyScope(b) })
             if (rk.deny) return { ...rk, reason: `shell-c-${rk.reason}` }
           }
         }
