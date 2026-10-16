@@ -49,9 +49,11 @@ done
 CY="$(python3 -c 'print(chr(0x43E))')"   # CYRILLIC SMALL LETTER O
 send() {  # send <content-or-dash> [extra env assignments via ENVX]
   : > "$SANDBOX/calls.txt"
-  OUT="$(env PATH="$BIN:$PATH" CURL_CALLS="$SANDBOX/calls.txt" \
+  # The body goes on STDIN: since card 16d66942 argument 3 is `-` only (a positional
+  # body is refused with exit 5, which would make every case below fail for the wrong reason).
+  OUT="$(printf '%s' "$1" | env PATH="$BIN:$PATH" CURL_CALLS="$SANDBOX/calls.txt" \
              MARVEEN_TOKEN_FILE="$SANDBOX/token" ${ENVX:-} \
-             /bin/bash "$HELPER" igor hex "$1" 2>"$SANDBOX/err.txt")"
+             /bin/bash "$HELPER" igor hex - 2>"$SANDBOX/err.txt")"
   RC=$?
   ERR="$(cat "$SANDBOX/err.txt")"
   CALLED="$([ -s "$SANDBOX/calls.txt" ] && echo yes || echo no)"

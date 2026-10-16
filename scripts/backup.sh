@@ -374,8 +374,11 @@ if [[ "${missing}" -gt 0 ]]; then
     # BACKUPALERT925: the recipient used to be a literal agent name from the
     # author's machine, so on any other fleet the alert went nowhere and the
     # swallowed error hid that too. Address this install's main agent.
-    bash "${REPO_ROOT}/scripts/agent-msg.sh" "${MAIN_AGENT_ID}" "${MAIN_AGENT_ID}" \
-      "[MENTES] A napi mentes ellenorzese ELBUKOTT ${STAMP}-kor: ${missing} tetel hianyzik az archivumbol (reszletek: logs/backup.log). Az archivum NEM tekintheto jo masolatnak." \
+    # The body goes on STDIN (`-`): agent-msg.sh refuses a positional body since
+    # card 16d66942 (exit 5), and this call's stderr is swallowed -- without the
+    # `-` form the failure alert would be silently dropped, the very failure it reports.
+    printf '%s\n' "[MENTES] A napi mentes ellenorzese ELBUKOTT ${STAMP}-kor: ${missing} tetel hianyzik az archivumbol (reszletek: logs/backup.log). Az archivum NEM tekintheto jo masolatnak." \
+      | bash "${REPO_ROOT}/scripts/agent-msg.sh" "${MAIN_AGENT_ID}" "${MAIN_AGENT_ID}" - \
       >/dev/null 2>&1 || echo "backup: WARN could not queue the failure alert for ${MAIN_AGENT_ID}" >&2
   fi
   exit 6

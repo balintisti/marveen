@@ -8,10 +8,39 @@
 # the HTTP status AND the returned message id, and RETRIES on failure. A message counts as sent only
 # when an id came back.
 #
-# Usage:  bash scripts/agent-msg.sh <from> <to> "<content>"
-#   content: plain text (quotes / newlines OK) -- the body is built with json.dumps (no quoting pitfalls).
-#   large / multi-line content may come from STDIN when the 3rd arg is "-":
-#     echo "<long text>" | bash scripts/agent-msg.sh <from> <to> -
+# Usage:  bash scripts/agent-msg.sh <from> <to> -        (body on STDIN)
+#           ... <to> - <<'VEGE'   /   echo "..." | ... -   /   ... - < "$f"
+#         The third argument is `-`-ONLY since 2026-09-22 (card 16d66942, item 1):
+#         a positional body is REFUSED with exit 5 -- see the gate below, and why
+#         the refusal is the only honest answer rather than a wording preference.
+#
+# CONTENT, AND WHICH LAYER PROTECTS IT (card 16d66942). This line used to read
+# "content: plain text (quotes / newlines OK) -- the body is built with json.dumps
+# (no quoting pitfalls)". TRUE OF THE BODY, FALSE OF THE SHELL -- and a reassurance
+# read from the wrong layer is worse than no warning at all.
+#
+#   json.dumps ... protects the BODY. A quote or a newline in the text cannot break
+#                  the JSON payload this script builds.
+#   the SHELL .... has ALREADY expanded your argument before this script starts. A
+#                  backtick, a `$` or a quote inside a double-quoted argument is
+#                  eaten by the shell -- or RUN as a command substitution -- before
+#                  anything reaches this script. The send still answers "OK id=",
+#                  so the loss is silent and the recipient cannot detect it either.
+#                  Measured four times in one night (2026-09-19): three lost
+#                  identifiers, one a 120-second hang waiting on stdin.
+#
+#   THE SAFE SHAPE: the content must NEVER pass through double quotes anywhere in
+#   the pipeline. A QUOTED HEREDOC or a FILE guarantees that. A `-` plus a PIPE does
+#   not -- if the pipe is assembled from double-quoted arguments, the expansion has
+#   already happened upstream, and the loss looks exactly like a clean send:
+#     bash scripts/agent-msg.sh <from> <to> - <<'EOF'
+#     ...text with `backticks`, $vars, "quotes"...
+#     EOF
+#     bash scripts/agent-msg.sh <from> <to> - < /path/to/body.txt
+#   The 3rd argument is `-` ONLY: the body arrives on STDIN or as a redirect from
+#   a file. A positional body is REFUSED (exit 5) -- the shell has already eaten
+#   part of it before this script starts -- and so is an empty or only-whitespace
+#   body (exit 1). Each gate below carries its own sentence.
 # Output: success -> "OK id=<n> queue=<depth> (~<n> perc)"; failure -> "FAIL <reason>"
 # When the recipient is not running -- or could not be asked -- the server also
 # returns a line saying so, and it is printed on stderr (card bbb8557c). The
@@ -58,17 +87,68 @@ URL="${API_BASE}/api/messages"
 LOG="$BASE/store/agent-msg-failures.log"
 
 FROM="${1:?from required}"; TO="${2:?to required}"; C="${3:?content required (or - for STDIN)}"
-[ "$C" = "-" ] && C="$(cat)"
 
-# AZ URES TORZS NEM UZENET (kartya ee8fdc6c, deeper merte 2026-09-28 16:45, msg 20115).
-# Egy torzs nelkuli heredoc (`- <<'VEGE'` + azonnal `VEGE`) ures STDIN-t ad; a helper ezt is
-# kikuldte, csak a [KULDVE] labjegyzettel, es `OK id=`-t mondott -- a kuldo azt hitte, elment
-# valami. Az inline alakot a `${3:?}` mar megfogja, de csak az URES stringet: a csupa-szokoz es
-# a STDIN-ut atment. A labjegyzet elott nezzuk, mert utana a torzs mar sosem ures.
-if [ -z "$(printf '%s' "$C" | tr -d '[:space:]')" ]; then
-  echo "NEM KULDTEM: a torzs URES (vagy csak szokoz/sortores). Ha STDIN-t adtal (-), a heredoc vagy a fajl ures volt." >&2
-  exit 1
+# A 3. ARGUMENTUM ALAKJA: `-` VAGY SEMMI MAS (kartya 16d66942, 1. tetel; marveen 17647).
+#
+# MIERT: a pozicios alakban a szoveg EGY HEJ-IDEOZOJELEN megy at, MIELOTT ez a szkript
+# egyaltalan latna. A visszaperjel, a `$` es a backtick ott mar eldolt: resze eltunik,
+# resze LEFUT. A szkript ezutan csak a mar megcsonkult szoveget latja, tehat nem tud
+# ellene tenni semmit -- es a kuldes `OK id=`-vel ter vissza, mint egy sikeres kuldes.
+#
+# MERVE (2026-09-19): az aznapi 258 inter-agent uzenetbol 111 hordozott backticket vagy
+# `$`-t. ES A VEDELEM NEM A STDIN ONMAGABAN: a `17255` komment (marveen) azt rogziti,
+# hogy didi KOVETTE a szabalyt, es a szoveg megis elveszitette az azonositoit -- a
+# vedelem az idezojel nelkuli heredoc vagy a fajl. A `17273` (didi) ugyanezt a masik
+# iranybol mondja ki: a szabaly a CSATORNAROL szol, nem a tartalomrol.
+#
+# EZERT A MODOT ITT ROGZITJUK, A `-` CSERE ELOTT: a lenti `C="$(cat)"` utan a `-` mar
+# nem latszik, tehat a kesobbi kapu a vegso `$C`-bol nem tudna megkulonboztetni a
+# ket alakot. A kapu maga LENT all, a fajlnev-or UTAN -- lasd ott, hogy miert.
+if [ "$C" = "-" ]; then
+  MOD="stdin"; C="$(cat)"
+else
+  MOD="positional"
 fi
+
+# --- A TORZS NEM LEHET URES (kartya 16d66942, 2. tetel; merve 2026-09-19) ---
+# EGY KAPU, NEM KETTO: a kartya ee8fdc6c (deeper merte 2026-09-28 16:45, msg 20115) kulon,
+# a lenti kapuk elott allo `tr -d`-es kaput tett ide ugyanerre az esetre; a 16d66942 ag
+# beolvasztasakor az ELSO mar mindent elkapott, amit a masodik elkapott volna (halott kod),
+# ezert a masodikat toroltuk, es a kimondott hibauzenete ide koltozott (a teszt azt rogziti).
+#
+# MIERT: a level TARTALMA a torzs. Egy ures torzsre ez a helper eddig `OK id=<n>`-t
+# adott, es a levelbe KIZAROLAG a lenti `[KULDVE: ...]` labjegyzet kerult -- a cimzett
+# egy idobelyeget kapott tartalom helyett, a kuldo pedig sikeresnek olvasta. Ez a fajl
+# sajat visszatero alakja: egy hangos siker, ami megkulonboztethetetlen attol, hogy
+# ertelmes tartalom ment el.
+#
+# MIERT NEM ELEG A `-n "$C"`: egy csupa-szokoz torzs atmegy rajta, es ugyanugy
+# hasznalhatatlan. A `card-comment.sh` ugyanezert tesz MASODIK kaput a whitespace-re;
+# ott azert kell ketto, mert az elso a FAJL meretet nezi (`-s`), a masodik a TARTALMAT.
+# Itt a torzs mar a hejban all, tehat EGY kapu mind a kettot fedi.
+#
+# A HELY SZANDEKOS: a fenti STDIN-beolvasas UTAN, mert a `-` modban a torzs csak ott all
+# elo; es a lenti FAJLNEV-OR ELOTT, mert a ketto nem fedi egymast (az egy EGY SZAVAS
+# bemenetre tuzel, ez a SEMMILYENRE).
+#
+# AMIT EZ A KAPU FED, ES AMIT NEM: a SZOSZERINT ures pozicios argumentumot MAR a
+# feljebbi `:?` kapu elkapja (`content required`), tehat ez a kapu a CSAK-SZOKOZ /
+# csak-TAB / csak-ujsor torzset es a `-` mod URES stdin-jet fogja meg. Egyik kapu sem
+# tud a masik helyett elsulni, es egyik sem allit semmit a torzs TARTALMAROL.
+# Viselkedes-proba (2026-09-21, dummy vegpont ellen, valodi uzenet nelkul): 5 negativ
+# eset exit 1 + a dummyhoz NULLA POST; 4 pozitiv eset exit 0 + PONTOSAN 1 POST; a
+# fajlnev-or kontrollja valtozatlanul exit 3. Merve `bash` 3.2.57-en, ami a gepen a
+# `bash` -- ures / szokoz / TAB / ujSor mind ide esik, a ` x ` es a TAB-koruli szo nem.
+case "$C" in
+  *[![:space:]]*) ;;
+  *)
+    echo "NEM KULDTEM: a torzs URES (vagy csak szokoz/sortores). Ha STDIN-t adtal (-), a heredoc vagy a fajl ures volt." >&2
+    echo "  A torzs a TARTALOM. Ures torzsbol egy kizarolag-labjegyzet level lesz," >&2
+    echo "  amit a cimzett tartalomkent olvas -- a kuldo pedig OK-t lat." >&2
+    echo "  A --force ezt NEM nyitja ki: az a sor- es plafon-kapukat oldja." >&2
+    exit 1
+    ;;
+esac
 
 # A KAPCSOLO NEM UZENET (friday merte 2026-10-05, msg 23761/23763).
 # A `--force` a NEGYEDIK argumentum. Aki a harmadik helyre teszi
@@ -130,6 +210,34 @@ case "$C" in
     fi
     ;;
 esac
+
+# --- CSAK `-`: A POZICIOS TORZS MEGTAGADVA (kartya 16d66942, 1. tetel) ---
+#
+# A `-` modban a szoveg idezojel nelkuli heredocbol vagy fajlbol jon, tehat a hej nem
+# ertekeli ki. A pozicios alak ezt nem tudja: ott a hivas PILLANATABAN eldolt, mi veszik
+# el, es a szkript ehhez nem tud hozzanyulni. Ezert itt nem lehet javitani, csak megtagadni.
+#
+# A HELY SZANDEKOS: a FAJLNEV-OR UTAN. Az or ugyanarra a pozicios argumentumra a sajat,
+# pontos uzenetet adja (`- < `), es az a 11/9740 eset valtozatlanul exit 3 marad. Ez a
+# kapu az OSSZES TOBBI pozicios argumentumot fogja meg, tehat a ketto NEM fedi egymast,
+# es a sorrend forditva elvenne az or szoveget.
+#
+# A KOD 5, NEM 4: az 1 (ures torzs), a 2 (sor/plafon), a 3 (fajlnev-or, kapcsolo, homoglif)
+# ES A 4 (a homoglif-ellenorzo OSSZEOMLOTT) mar foglalt, es a hivo a kodbol donti el,
+# MIT tegyen -- itt a hivast kell atirni, nem varni. (A 16d66942 ag eredetileg 4-et
+# hasznalt, mert az agon meg nem volt homoglif-kapu; a beolvasztas utan ez utkozott volna.)
+if [ "$MOD" != "stdin" ]; then
+  echo "NEM KULDTEM: a 3. argumentum csak \`-\` lehet; a torzs STDIN-en vagy fajlbol jon." >&2
+  echo "  A pozicios alakban a szoveg egy HEJ-IDEOZOJELEN megy at, es a visszaperjel," >&2
+  echo "  a \$ es a backtick meg ELOTTE eltunik vagy LEFUT. A szkript ezt nem tudja megerni." >&2
+  echo "  Helyette (a szoveg igy egyetlen hej-ertekelesen sem megy at):" >&2
+  echo "    bash scripts/agent-msg.sh $FROM $TO - <<'VEGE'" >&2
+  echo "    a szoveg, benne \$valtozo es \`backtick\` is nyugodtan" >&2
+  echo "    VEGE" >&2
+  echo "  vagy fajlbol:  bash scripts/agent-msg.sh $FROM $TO - < \"\$f\"" >&2
+  echo "  (A --force ezt NEM nyitja ki: az a sor- es plafon-kapukat oldja.)" >&2
+  exit 5
+fi
 [ -r "$TOKEN_FILE" ] || { echo "FAIL: no token file at $TOKEN_FILE"; exit 1; }
 TOKEN="$(cat "$TOKEN_FILE")"
 
@@ -569,7 +677,7 @@ except Exception:
     echo "  Ird a kartyara kommentkent. Az uzenet tol, a kartya huzat." >&2
     echo "  DE a kartya csak azt huzatja, aki MAR ODANEZ: a komment TAROL, nem kezbesit." >&2
     echo "  A komment a NYOM; a level tovabbra is TARTOZAS -- kuldd el, amint a sor urul." >&2
-    echo "  Ha tenyleg most kell mennie:  bash scripts/agent-msg.sh $FROM $TO \"...\" --force" >&2
+    echo "  Ha tenyleg most kell mennie:  bash scripts/agent-msg.sh $FROM $TO - --force <<'VEGE'  (a szoveg a heredocban)" >&2
     exit 2
   elif [ -n "$HOUR_N" ] && [ "$HOUR_N" -ge "$SENDER_HOUR_CEILING" ] 2>/dev/null; then
     echo "NEM KULDTEM. Egy oran belul mar $HOUR_N uzenetet kuldtem $TO-nak (plafon: $SENDER_HOUR_CEILING)." >&2
@@ -587,7 +695,7 @@ except Exception:
     echo "  tartozas, akkor a megtakaritas egy resze kesobb visszajon. A kapu HALASZT, nem DOB EL." >&2
     echo "  Aki ugy olvassa, hogy 'a keret rendben van'," >&2
     echo "  pontosan azt a hibat koveti el, amit ez a flotta egesz ejjel mert." >&2
-    echo "  Ha tenyleg most kell mennie:  bash scripts/agent-msg.sh $FROM $TO \"...\" --force" >&2
+    echo "  Ha tenyleg most kell mennie:  bash scripts/agent-msg.sh $FROM $TO - --force <<'VEGE'  (a szoveg a heredocban)" >&2
     exit 2
   fi
 fi

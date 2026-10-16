@@ -59,10 +59,17 @@ def make_tree(pairs):
 
 
 def run(tree, frm="friday", to="marveen", extra=None, env=None):
+    # THE BODY GOES IN ON STDIN (card 16d66942, item 1, landed 2026-09-22). argv[3]
+    # is `-`-only now: in the positional form the text passes through a shell
+    # quoting layer BEFORE the script sees it, so a backslash, `$` or backtick is
+    # already consumed or executed by the time it could be checked. A test still
+    # passing the body as argv[3] would assert the REFUSAL while reading like it
+    # asserts the feature -- see the two directions in agent-msg-send-stamp.
     e = dict(os.environ, MARVEEN_WEB_PORT=DEAD_PORT)
     e.update(env or {})
     p = subprocess.run(["bash", os.path.join(tree, "scripts", "agent-msg.sh"),
-                        frm, to, "proba-uzenet"] + (extra or []),
+                        frm, to, "-"] + (extra or []),
+                       input="proba-uzenet",
                        capture_output=True, text=True, timeout=60, env=e)
     return p.returncode, p.stdout, p.stderr
 

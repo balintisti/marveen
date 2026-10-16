@@ -49,7 +49,7 @@ send() {  # send <stdin-text> <args after from/to...>
 sent_body_has() { grep -qF -- "$1" "$SANDBOX/calls.txt"; }
 
 # POSITIVE CONTROL: plain text still goes out, and the stub records it.
-send "" "a plain report"
+send "a plain report" -
 ok "control: plain text is sent" "$([ "$RC" = 0 ] && [ "$CALLED" = yes ] && sent_body_has "a plain report" && echo 0 || echo 1)" "rc=$RC called=$CALLED"
 ok "control: the body check can say no" "$(sent_body_has "text that was never sent" && echo 1 || echo 0)"
 
@@ -75,8 +75,13 @@ send "" "--force was the wrong slot, resend please"
 ok "a content argument merely starting with -- is refused too" "$([ "$RC" = 3 ] && [ "$CALLED" = no ] && echo 0 || echo 1)" "rc=$RC"
 
 # Text with -- inside (not at the start) is a message.
-send "" "the a -- b form is fine"
+send "the a -- b form is fine" -
 ok "text with -- inside is sent" "$([ "$RC" = 0 ] && [ "$CALLED" = yes ] && echo 0 || echo 1)" "rc=$RC"
+
+# Since card 16d66942 a positional body is refused outright (exit 5, not 3: 3 is the
+# flag/filename/homoglyph family, 4 the crashed checker) and nothing is sent.
+send "" "the a -- b form is fine"
+ok "the same text POSITIONALLY is refused with exit 5, nothing sent" "$([ "$RC" = 5 ] && [ "$CALLED" = no ] && echo 0 || echo 1)" "rc=$RC called=$CALLED"
 
 # The way out: the bare word itself, on STDIN.
 send "--force" -
