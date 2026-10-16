@@ -71,6 +71,16 @@ echo changed > "${F}/agents/a1/reports/one.md"          # mtime now
 rc=$(run "${F}")
 [ "${rc}" = "0" ] && ok "a fresh change is not held against the snapshot (grace)" || bad "fresh rc=${rc}: $(cat "${F}/out")"
 tar -xzOf "$(archive "${F}")" MANIFEST.txt | grep -q '1 compared byte for byte' && ok "... and the manifest shows only the old file was compared" || bad "compared count"
+# 4c. the grace BOUNDARY, both sides (trillian 31619): "old" and "now" above are both far from 35 minutes,
+#     so a grace of 0, 2000 or 36000 passed them all. 20 minutes is inside the grace, 50 is past it.
+F="${T}/inside"; fixture "${F}"; snapshot "${F}"
+echo changed > "${F}/agents/a1/reports/one.md"; touch -t "$(date -v-20M +%Y%m%d%H%M)" "${F}/agents/a1/reports/one.md"
+rc=$(run "${F}")
+[ "${rc}" = "0" ] && ok "a change 20 min old is still inside the grace -> exit 0" || bad "inside rc=${rc}: $(cat "${F}/out")"
+F="${T}/outside"; fixture "${F}"; snapshot "${F}"
+echo changed > "${F}/agents/a1/reports/one.md"; touch -t "$(date -v-50M +%Y%m%d%H%M)" "${F}/agents/a1/reports/one.md"
+rc=$(run "${F}")
+[ "${rc}" = "7" ] && grep -q 'a1/one.md' "${F}/out" && ok "a change 50 min old is past the grace -> exit 7, named" || bad "outside rc=${rc}: $(cat "${F}/out")"
 
 # 5. a NEW old report the snapshot never mirrored
 F="${T}/newfile"; fixture "${F}"; snapshot "${F}"
@@ -89,6 +99,15 @@ obj="$(find "${F}/home/Backups/agent-reports/.git/objects" -type f -path '*/??/*
 rm -f "${obj}"
 rc=$(run "${F}")
 [ "${rc}" = "7" ] && grep -q 'connectivity check, twice' "${F}/out" && ok "a history that does not connect -> exit 7 (checked on the COPY, copied twice)" || bad "torn rc=${rc}: $(cat "${F}/out")"
+# 7b. the copy torn ONCE (the snapshot job committed mid-copy), whole on the second copy -> exit 0, and the
+#     repo is in the archive. A git shim fails the FIRST fsck only; everything else goes to the real git.
+F="${T}/torn-once"; fixture "${F}"; snapshot "${F}"; mkdir -p "${F}/bin"
+printf '#!/bin/bash\nif [ "$1" = "-C" ] && [ "$3" = "fsck" ] && [ ! -e "%s/fsck-failed" ]; then : > "%s/fsck-failed"; exit 1; fi\nexec "%s" "$@"\n' \
+  "${F}" "${F}" "$(command -v git)" > "${F}/bin/git"; chmod +x "${F}/bin/git"
+rc=$(PATH="${F}/bin:${PATH}" run "${F}")
+[ -e "${F}/fsck-failed" ] && ok "the first connectivity check really failed (shim fired)" || bad "the shim never saw an fsck"
+[ "${rc}" = "0" ] && ! grep -q 'connectivity check' "${F}/out" && ok "a copy torn once and whole the second time -> exit 0, no alert" || bad "torn-once rc=${rc}: $(cat "${F}/out")"
+tar -tzf "$(archive "${F}")" | grep -qxF 'home/Backups/agent-reports/.git/HEAD' && ok "... and the second copy is the one in the archive" || bad "torn-once: no .git in the archive"
 
 # 8. exit 3 (an agent with no files) and exit 7 together: the lower, older code stays, BOTH are said
 F="${T}/both"; fixture "${F}"; rm "${F}/agents/a1/CLAUDE.md"
