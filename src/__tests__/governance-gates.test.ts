@@ -656,11 +656,38 @@ describe('self-pace-gate: indirect scheduler forms', () => {
     denyIndirect(`echo "at 10:30 we merged"`)
     expect(REASON_HINT['os-scheduler-indirect']).toMatch(/heredoc/)
   })
-  it('heredoc bodies stay inert (the documented route for text), the quoted-tag form', () => {
+  it('heredoc bodies stay inert while the consumer takes TEXT (the documented route), the quoted-tag form', () => {
     allow(heredoc(`print("launchctl kickstart at 10:30; crontab -r")`))
     allow(`cat <<${Q}VEGE${Q}\nsh -c ${Q}at now + 1 minute${Q}\nVEGE`)
+    // a quoted heredoc to the inter-agent sender / a file / tee: the body is a message or a file
+    allow(`bash /Users/isti/marveen/scripts/agent-msg.sh friday marveen - <<${Q}VEGE${Q}\nwe must not use crontab x or launchctl load y; at now + 1 minute\nVEGE`)
+    allow(`cat > notes.md <<${Q}EOF${Q}\ncrontab x\nEOF`)
+    allow(`cat <<${Q}EOF${Q} | tee out.txt\ncrontab x\nEOF`)
+    allow(`bash script.sh <<${Q}EOF${Q}\ncrontab x\nEOF`)       // bash runs a FILE; the body is its stdin data
+    allow(`bash -c ${Q}echo hi${Q} <<${Q}EOF${Q}\ncrontab x\nEOF`)  // -c STRING is the program
     // ...but a scheduler on the heredoc's command line is not hidden by it.
     denyIndirect(`bash -c ${Q}at now${Q} <<${Q}X${Q}\nbody\nX`)
+  })
+  it('a heredoc that feeds a SHELL is a command line: its body is scanned (review finding 1)', () => {
+    const d = (command: string) =>
+      expect(selfPaceDecision('Bash', { command }), command).toEqual({ deny: true, reason: expect.stringMatching(/^os-scheduler/) })
+    d(`bash <<${Q}EOF${Q}\nlaunchctl load x\nEOF`)
+    d(`sh <<EOF\nat now + 1 minute\nEOF`)
+    d(`bash -s <<${Q}EOF${Q}\ncrontab -\nEOF`)
+    d(`cat <<${Q}EOF${Q} | sh\ncrontab x\nEOF`)
+    d(`zsh -x <<${Q}EOF${Q}\ncrontab x\nEOF`)
+    d(`sudo bash -s -- arg <<${Q}EOF${Q}\ncrontab x\nEOF`)
+    d(`cat <<${Q}EOF${Q} | tr a b | bash\ncrontab x\nEOF`)
+    d(`/bin/bash <<-${Q}EOF${Q}\n\tcrontab x\n\tEOF`)
+    d(`bash -e <<${Q}EOF${Q}\necho hi\nnice -n 5 crontab x\nEOF`)   // finding 2 inside finding 1
+    d(`dash <<${Q}EOF${Q}\nbash -c ${Q}at now + 1 minute${Q}\nEOF`)
+    // CONTROLS: a shell heredoc that schedules nothing, and read-only listings, pass.
+    allow(`bash <<${Q}EOF${Q}\necho hello\nEOF`)
+    allow(`bash <<${Q}EOF${Q}\nlaunchctl list\ncrontab -l\nEOF`)
+  })
+  it('the way out the denial names stays true: a quoted heredoc to a non-shell consumer', () => {
+    expect(REASON_HINT['os-scheduler-indirect']).toMatch(/NEM-shell/)
+    expect(selfPaceDecision('Bash', { command: `bash agent-msg.sh a b - <<${Q}VEGE${Q}\ncrontab x\nVEGE` }).deny).toBe(false)
   })
   it('an unresolvable heredoc (unquoted tag that substitutes) fails CLOSED for the indirect scan too', () => {
     denyIndirect(`bash -c ${Q}at now${Q} <<PY\n$(date)\nPY`)

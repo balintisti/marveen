@@ -166,8 +166,9 @@ const SCHEDULER_READ_RX = new RegExp(String.raw`(^|${SCHED_BOUNDARY}\s*)${SCHED_
 // at/batch need a TIMESPEC, a flag or `<` (never a bare end), and every one of
 // them excludes `name-x`, `name=` and `name |`. The read exemptions are
 // per MATCH here (not per segment), so `crontab -l; crontab -` is still denied.
-// heredoc bodies are blanked by the caller: they are the documented way to pass
-// text through (see REASON_HINT), and the direct check never saw them either.
+// heredoc bodies are blanked by the caller when the heredoc feeds TEXT (agent-msg.sh,
+// cat > file): the documented way to pass text through (see REASON_HINT). A body that
+// feeds a SHELL (`bash <<EOF`, `cat <<EOF | sh`) is a command line and stays scanned.
 const INDIRECT_BOUNDARY = '(?:^|[;&|(`\'"!{\\n]\\s*)'
 const INDIRECT_WRAPPER = String.raw`(?:\bxargs\b[^;&|\n]*?\s|\s-(?:exec|execdir|ok|okdir)\s+|\b(?:eval|nohup)\s+)`
 const INDIRECT_ARG = String.raw`\s+(?=[^\s|;&)'"])`
@@ -224,6 +225,43 @@ export function splitSegments(command) {
     .split(/&&|\|\||[;&|]|\r?\n/)
     // trim so a leading-separator segment (" at now") anchors at ^ correctly
     .map((s) => s.trim())
+}
+
+// Does this simple command (one segment) hand its STDIN to a shell as a script?
+// `bash`, `sh -s`, `zsh -x`, `sudo dash`: yes. `bash script.sh` (the script is a
+// FILE: `bash agent-msg.sh friday marveen - <<'VEGE'`), `bash -c '...'` (the
+// string is the program): no. Wrappers and their options are skipped with the
+// same SCHED_PREFIX the scheduler check uses.
+const SHELL_STDIN_RX = new RegExp(String.raw`^${SCHED_PREFIX}(?:bash|sh|zsh|dash|ksh|fish)\b(?![-.\w/])([\s\S]*)$`, 'i')
+export function segmentReadsShellStdin(segment) {
+  const m = SHELL_STDIN_RX.exec(String(segment ?? '').trim())
+  if (!m) return false
+  const toks = m[1].split(/\s+/).filter(Boolean)
+  let sawS = false
+  for (let k = 0; k < toks.length; k++) {
+    const t = toks[k]
+    if (/^\d*[<>]|^&>/.test(t)) continue // redirection, not an argument
+    if (t === '-') return true // explicit "read the script from stdin"
+    if (t === '--') continue
+    if (/^[-+]/.test(t)) {
+      if (/^-[A-Za-z]*c[A-Za-z]*$/.test(t)) return false // -c STRING is the program
+      if (/^-[A-Za-z]*s[A-Za-z]*$/.test(t)) sawS = true // -s: read commands from stdin
+      if (/^[-+][oO]$/.test(t)) k++ // -o / +o / -O take an option name
+      continue
+    }
+    return sawS // first positional = a script FILE; stdin is only read with -s
+  }
+  return true // no script file, no -c: a shell with nothing else to read reads stdin
+}
+
+// Is the heredoc whose command line is `before<<TAG after` consumed by a shell?
+// Either directly (`bash <<EOF`, `bash -s <<EOF`) or through a pipe later on the
+// same line (`cat <<EOF | sh`). Over-approximates on purpose (scan more).
+function heredocFeedsShell(before, after) {
+  const split = (t) => t.split(/&&|\|\||[;&|(`]/)
+  const own = split(before).pop() ?? ''
+  if (segmentReadsShellStdin(own)) return true
+  return split(after).slice(1).some(segmentReadsShellStdin)
 }
 
 // Split like splitSegments, but ONLY on separators the shell would actually
@@ -295,11 +333,16 @@ export function maskInertLiterals(command, { heredocOnly = false } = {}) {
     if (here) {
       const tag = here[1] ?? here[2] ?? here[3]
       const quotedTag = here[1] != null || here[2] != null
+      // the command line of this heredoc: text before `<<` (already masked) and the
+      // rest of the line after the tag (raw)
+      const lineStart = cur.lastIndexOf('\n') + 1
+      const before = cur.slice(lineStart)
       cur += here[0]
       i += here[0].length
       // the body starts after the rest of THIS line
       const nl = src.indexOf('\n', i)
       if (nl === -1) return null // heredoc announced but no body -> cannot resolve
+      const after = src.slice(i, nl)
       cur += src.slice(i, nl + 1)
       i = nl + 1
       // find the terminator line (leading tabs allowed for <<-)
@@ -308,7 +351,11 @@ export function maskInertLiterals(command, { heredocOnly = false } = {}) {
       if (!rel) return null // unterminated heredoc
       const body = src.slice(i, i + rel.index)
       if (!quotedTag && /\$\(|`/.test(body)) return null // unquoted tag expands the body
-      cur += blank(body) + rel[0]
+      // A heredoc is inert only while its consumer treats the body as TEXT. When the
+      // consumer is a shell (`bash <<EOF`, `bash -s <<EOF`, `cat <<EOF | sh`) the
+      // body IS the command line: keep it readable for the scheduler checks.
+      const feedsShell = heredocFeedsShell(before, after)
+      cur += (feedsShell ? body : blank(body)) + rel[0]
       i += rel.index + rel[0].length
       continue
     }
@@ -529,7 +576,7 @@ export const REASON_HINT = {
     ' xargs/-exec/eval/nohup utan, `bash -c \'...\'`, `git -c alias.x=\'!...\'`. Ha az idezett szoveget a shell' +
     ' vegrehajtja, ez onutemezes, ezert itt a SZOVEG-egyezes is megtagad (egy `echo "at 10:30 ..."` is).' +
     ' A tiszta listazas (crontab -l, launchctl list, atq) atmegy.' +
-    ' HA DOKUMENTALSZ (a szoveg ADAT, nem hivas): NE fogalmazd at a szoveget -- egy pontos leiras atirasa azert, hogy egy szuron atcsusszon, a DOKUMENTUMOT rontja el. Valassz MASIK UTAT: idezett hej-heredoc (<<\'VEGE\', a torzset a kapu nem nezi), a fajlt a Write eszkozzel ird, vagy add `-d`/`--data` payloadkent -- azt a kapu blankolja.',
+    ' HA DOKUMENTALSZ (a szoveg ADAT, nem hivas): NE fogalmazd at a szoveget -- egy pontos leiras atirasa azert, hogy egy szuron atcsusszon, a DOKUMENTUMOT rontja el. Valassz MASIK UTAT: idezett hej-heredoc NEM-shell fogyasztonak (<<\'VEGE\' az agent-msg.sh-nak vagy `cat > fajl`-nak: a torzset a kapu nem nezi; `bash`/`sh`/`zsh`/`dash` fogyasztonal a torzs PARANCS, azt is nezi), a fajlt a Write eszkozzel ird, vagy add `-d`/`--data` payloadkent -- azt a kapu blankolja.',
   // The only reason without a hint until now (card 97470e22, four measured
   // occurrences: a deny-list rationale, an installation-lane finding, and twice
   // a card comment). Every other reason tells the reader what DOES pass; this
