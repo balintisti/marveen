@@ -685,6 +685,8 @@ describe('every PREFIX_WORDS entry in front of a heredoc-fed interpreter', () =>
     '{': ['{'],
     '(': ['('],
     '!': ['!'],
+    // card d6b95892
+    builtin: ['builtin'],
   }
   const PY = (u: string) => `python3 - <<'PY'\nimport urllib.request\nurllib.request.urlopen('${u}')\nPY`
   const SH = (u: string) => `bash <<'SH'\ncurl -s ${u}\nSH`

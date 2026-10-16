@@ -68,6 +68,7 @@
 //     here-string attached to the interpreter itself;
 //   - a destination that a DIFFERENT command reads from stdin and turns into arguments, other than
 //     xargs (parallel, a while-read over a pipe), or that xargs reads from a file (-a, a pipe from cat);
+//   - a command line held in a variable the command never assigns (`eval "$X"`, `bash -c "$X"`, `$X URL`);
 //   - values bound by builtins other than `for` and a plain `read`: array fillers (mapfile /
 //     readarray), `read -a` elements beyond the first, and `read` under a non-default IFS (only
 //     whitespace splitting is modelled);
@@ -263,7 +264,7 @@ function pythonUsesNetwork(text) {
 // because `for p in a b; do curl ...` splits at `;` into a span that starts with `do`, and without
 // them a curl inside a loop or an if/then body was never looked at.
 export const PREFIX_WORDS = new Set(['env', 'sudo', 'command', 'exec', 'time', 'nohup', 'nice',
-  'timeout', 'stdbuf', 'gtimeout', 'ionice', 'caffeinate', 'xargs', 'do', 'then', 'else', 'elif', '{', '(', '!'])
+  'timeout', 'stdbuf', 'gtimeout', 'ionice', 'caffeinate', 'xargs', 'builtin', 'do', 'then', 'else', 'elif', '{', '(', '!'])
 // A prefix COMMAND (not a keyword) may carry its own options before the real command word:
 // `timeout -k 5 30 cmd`, `stdbuf -oL cmd`, `nice -n 5 cmd`, `env -u X A=1 cmd`, `sudo -u u cmd`.
 // Every word starting with `-` is skipped; the options listed here also consume the next word.
@@ -282,7 +283,8 @@ const PREFIX_OPT_VALUE = {
   caffeinate: new Set(['-t', '-w']),
   // xargs runs its first operand as the command (card c8b1ccbf); what it reads from stdin becomes
   // that command's arguments, which the curl rule below cannot see -- see viaXargs in classify.
-  xargs: new Set(['-I', '-L', '-n', '-P', '-s', '-d', '-E', '-a', '--arg-file', '--delimiter',
+  // -J / -R / -S are macOS (BSD) xargs: -J is its replace string (didi 36152)
+  xargs: new Set(['-I', '-J', '-R', '-S', '-L', '-n', '-P', '-s', '-d', '-E', '-a', '--arg-file', '--delimiter',
     '--max-args', '--max-procs', '--max-chars', '--max-lines', '--eof', '--process-slot-var']),
 }
 // gtimeout is GNU timeout under Homebrew's name; ionice and caffeinate run their operand as a
@@ -314,16 +316,19 @@ export function commandIndex(mw) {
     if (!PREFIX_COMMANDS.has(p)) continue
     const withValue = PREFIX_OPT_VALUE[p] ?? new Set()
     let positional = PREFIX_POSITIONALS[p] ?? 0
+    let optsEnded = false
     while (i < mw.length) {
       const a = mw[i]
-      if (a === '--') { i++; break }
-      if (p === 'xargs') {
-        if (a === '-I') repl = mw[i + 1] ?? null
-        else if (/^-I./.test(a)) repl = a.slice(2)
+      // env still takes assignments after `--` (`xargs -I{} env -- {} curl`: the {} is an assignment
+      // stdin fills, not the command; didi 36152); every other prefix's `--` ends its own part
+      if (a === '--' && !optsEnded) { i++; optsEnded = true; if (p === 'env') continue; break }
+      if (p === 'xargs' && !optsEnded) {
+        if (a === '-I' || a === '-J') repl = mw[i + 1] ?? null
+        else if (/^-[IJ]./.test(a)) repl = a.slice(2)
         else if (a === '-i' || a === '--replace') repl = '{}'
         else if (/^(?:-i|--replace=)./.test(a)) repl = a.replace(/^(?:-i|--replace=)/, '')
       }
-      if (a.startsWith('-') && a.length > 1) { i += withValue.has(a) ? 2 : 1; continue }
+      if (!optsEnded && a.startsWith('-') && a.length > 1) { i += withValue.has(a) ? 2 : 1; continue }
       if (p === 'env' && repl && a.includes(repl)) { i++; continue }
       // env takes ANY word holding `=` as an assignment, not only a NAME=: `env 'BASH_FUNC_echo%%=...'
       // curl ...` ran curl, and the word read as the command hid it (dexter, c8b1ccbf round 7)
@@ -634,6 +639,22 @@ const CURL_DEST_URL = new Set(['url', 'proxy', 'preproxy', 'socks4', 'socks4a', 
 const CURL_DEST_PARTS = new Set(['connect-to', 'resolve']) // host:port:host:port / host:port:addr
 const HOSTNAME = /^(?:localhost|\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-f:.]+\]|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,})$/i
 
+// The value of an ANSI-C quoted word's body (`$'...'` without the quotes). `eval $'curl ...'` and a
+// `$'curl'` command word ran curl while the word read was `$curl` (didi 36152, dexter). A `\n` in an
+// eval's line is a command separator there, and is read as one.
+const ANSI_C = { a: 7, b: 8, e: 27, E: 27, f: 12, n: 10, r: 13, t: 9, v: 11, '\\': 92, "'": 39, '"': 34, '?': 63 }
+function ansiC(body) {
+  const out = body.replace(/\\(?:([0-7]{1,3})|x([0-9a-fA-F]{1,2})|u([0-9a-fA-F]{1,4})|U([0-9a-fA-F]{1,8})|c(.)|(.))/gs,
+    (m, o, x, u, U, c, e) => {
+      if (o || x || u || U) {
+        const n = parseInt(o ?? x ?? u ?? U, o ? 8 : 16)
+        return String.fromCodePoint(Math.min(n, 0x10ffff))
+      }
+      if (c !== undefined) return String.fromCharCode(c.charCodeAt(0) & 31)
+      return e in ANSI_C ? String.fromCharCode(ANSI_C[e]) : m
+    })
+  return out
+}
 // Split a shell text into words, honouring quotes and backslashes (substitutions are already lifted).
 export function shellWords(text) {
   const out = []; let cur = null; let i = 0
@@ -642,6 +663,11 @@ export function shellWords(text) {
     const c = text[i]
     if (/\s/.test(c)) { push(); i++; continue }
     cur ??= ''
+    if (c === '$' && text[i + 1] === "'") {
+      let j = i + 2
+      while (j < text.length && text[j] !== "'") j += text[j] === '\\' ? 2 : 1
+      cur += ansiC(text.slice(i + 2, Math.min(j, text.length))); i = j + 1; continue
+    }
     if (c === "'") { const e = text.indexOf("'", i + 1); const end = e === -1 ? text.length : e; cur += text.slice(i + 1, end); i = end + 1; continue }
     if (c === '"') {
       let j = i + 1
@@ -817,20 +843,47 @@ const PROXY_REMOVED = /(?:^|[\s;&|(])(?:unset(?:[ \t]+-[fv])?(?:[ \t]+[A-Za-z0-9
 // `printf -v "$n" ...`): which variable it sets is not read, and a proxy one points curl elsewhere
 // (didi 36034, measured live). On a curl line it is an unknown destination. A brace in the name
 // (`export http_{proxy,x}=`) expands to several names, `--` ends the options, `eval` builds the
-// assignment at run time (didi 36059).
-const COMPUTED_ENV_NAME = /(?:^|[\s;&|(])(?:(?:export|declare|typeset|readonly|local|env|eval)(?:\s+-[\w-]*)*(?:\s+[^\s=;&|]+=\S*)*\s+[^\s=;&|]*[$`{][^\s=;&|]*=|printf\s+-v\s*[^\s;&|]*[$`])/
-// `xargs -I R ... env ...R...`: the variable env sets is named by stdin, whatever R is.
-const XARGS_ENV_NAME = /\bxargs\b[^;&|\n]*?(?:-I\s*(\S+)|-i(\S*)|--replace(?:=(\S+))?)[^;&|\n]*?\benv\b([^;&|\n]*)/
+// assignment at run time (didi 36059). The `=` may come from the expansion itself: `export $(echo
+// ${v}proxy=P)`, `env $(cat f) curl`, `export $v` (didi 36152).
+const COMPUTED_ENV_NAME = /(?:^|[\s;&|(])(?:(?:export|declare|typeset|readonly|local|env|eval)(?:\s+-[\w-]*)*(?:\s+[^\s=;&|]+=\S*)*\s+[^\s=;&|]*[$`{]|printf\s+-v\s*[^\s;&|]*[$`])/
+// `xargs -I R ... env ...R... cmd`: the variable env sets is named by stdin, whatever R is (BSD -J
+// too). Only env's own words count: an R in the command's arguments (`env FOO=1 curl
+// http://localhost/{}`) names no variable (didi 36152 item 4).
+const XARGS_ENV_NAME = /\bxargs\b[^;&|\n]*?(?:-[IJ]\s*(\S+)|-i(\S*)|--replace(?:=(\S+))?)[^;&|\n]*?\benv\b([^;&|\n]*)/
 function xargsNamesEnv(text) {
   const m = XARGS_ENV_NAME.exec(text)
   if (!m) return false
   const r = m[1] ?? (m[2] || m[3] || '{}')
-  return m[4].split(/\s+/).some((w) => w.includes(r))
+  for (const w of m[4].split(/\s+/).filter(Boolean)) {
+    if (w.includes(r)) return true
+    if (!w.startsWith('-') && !w.includes('=')) return false
+  }
+  return false
+}
+// xargs whose command word comes from stdin: a prefix command after xargs with nothing after it
+// (`echo "curl URL" | xargs env`, `... | xargs nohup`), or a command word holding the replace string
+// (`xargs -I{} {} URL`). What runs is not in the text (didi 36152 item 2).
+function xargsStdinCommand(sw) {
+  const k = commandIndex(sw)
+  const pre = sw.slice(0, k).map(normalizedName)
+  const x = pre.lastIndexOf('xargs')
+  if (x === -1) return false
+  if (k >= sw.length) return pre.slice(x + 1).some((w) => PREFIX_COMMANDS.has(w))
+  let repl = null
+  for (let j = x + 1; j < k; j++) {
+    const a = sw[j]
+    if (a === '-I' || a === '-J') repl = sw[j + 1] ?? null
+    else if (/^-[IJ]./.test(a)) repl = a.slice(2)
+    else if (a === '-i' || a === '--replace') repl = '{}'
+    else if (/^(?:-i|--replace=)./.test(a)) repl = a.replace(/^(?:-i|--replace=)/, '')
+  }
+  return repl !== null && repl !== '' && sw[k].includes(repl)
 }
 // A substitution inside a name may hold blanks (`export \`printf http_\`proxy=`): each one is
 // folded to a bare `$S` first, so the name test sees one word.
 const foldSubstitutions = (text) => text.replace(/`[^`]*`/g, '$S').replace(/\$\([^()]*\)/g, '$S')
-// `ctx`: { unread: names written unread (unreadNames), text: the whole command, arrays: collectArrays }.
+// `ctx`: { unread: names written unread (unreadNames), text: the whole command, outer: the same
+// without heredoc bodies, arrays: collectArrays }.
 export function curlDestinations(args, inners = null, fileValues = null, ctx = null) {
   const dests = []
   const arrays = ctx?.arrays ?? {}
@@ -842,7 +895,8 @@ export function curlDestinations(args, inners = null, fileValues = null, ctx = n
   const said = ctx?.text ? String(ctx.text).replace(/['"\\]/g, '') : ''
   if (CURLRC.test(said)) dests.push('<curlrc>')
   if (PROXY_ENV.test(said.replace(PROXY_REMOVED, ' '))) dests.push('<proxy variable>')
-  if (COMPUTED_ENV_NAME.test(foldSubstitutions(said)) || xargsNamesEnv(said)) dests.push('<computed variable name>')
+  const outer = ctx?.outer != null ? String(ctx.outer).replace(/['"\\]/g, '') : said
+  if (COMPUTED_ENV_NAME.test(foldSubstitutions(outer)) || xargsNamesEnv(said)) dests.push('<computed variable name>')
   const unreadVar = (part) => {
     if (!ctx?.unread?.size) return false
     for (const m of part.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) if (ctx.unread.has(m[1])) return true
@@ -1560,9 +1614,17 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
     }
   }
   const named = bodiesAreText(orig, masked, depth, substituted) ? blankHeredocBodies(orig, masked) : orig
+  // The line without its heredoc bodies, substitutions kept (`orig` is length-preserving): a body is
+  // stdin, not this shell's words, and one that is a program is judged as its own feed. An `eval
+  // "$(...)"` quoted in a message heredoc is no computed name (fleet replay, d6b95892 round 5).
+  let outerNorm = norm
+  for (const { start, end } of heredocBodies(orig, masked)) {
+    outerNorm = outerNorm.slice(0, start) + outerNorm.slice(start, end).replace(/[^\n]/g, ' ') + outerNorm.slice(end)
+  }
   for (const [a, b] of spans(masked)) {
     const mw = words(masked.slice(a, b))
     const i = commandIndex(mw)
+    if (xargsStdinCommand(shellWords(named.slice(a, b)))) return { deny: true, reason: 'xargs-stdin-command', hosts: ['<command from stdin>'] }
     if (i >= mw.length) continue
     // Every loop reading AND the plain one: a loop variable can share its name with an assignment
     // elsewhere in the command (`for u in <local>; do ...; done; u=<external>; curl "$u"`), and a
@@ -1575,7 +1637,10 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
       // masking blanks a quoted "curl", and the shell runs `Curl` (case-insensitive disk,
       // /usr/bin/Curl exists), `\curl`, `"curl"` and `c''url` as curl (didi 19977, marveen 19980).
       const sw = shellWords(named.slice(a, b))
-      const cmd = commandName(sw, mw[i])
+      // A command word that is a variable this command assigned (`X=curl; $X URL`) is read from the
+      // expanded text (dexter, d6b95892 round 5); one never assigned here stays unread.
+      const cw = sw[commandIndex(sw)] ?? ''
+      const cmd = cw.includes('$') ? commandName(shellWords(text), mw[i]) : commandName(sw, mw[i])
       // xargs before the command: its arguments come from stdin, which the argv reading below never
       // sees (`echo URL | xargs curl`, `xargs curl <<< URL`; card c8b1ccbf, shape 3).
       const viaXargs = sw.slice(0, commandIndex(sw)).some((w) => normalizedName(w) === 'xargs')
@@ -1584,7 +1649,8 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
       if (cmd === 'eval') {
         const argv = shellWords(text)
         const at = argv.findIndex((w) => normalizedName(w) === 'eval')
-        const body = argv.slice(at + 1).join(' ')
+        // `eval -- WORDS`: the `--` ends eval's options and is no part of the line (didi 36152)
+        const body = argv.slice(at + 1 + (argv[at + 1] === '--' ? 1 : 0)).join(' ')
         if (!body.trim()) continue
         const r = depth < 4
           ? classify(body, depth + 1, vendorHosts, vendorDomains, substituted, { env, loops, untrusted, unread, arrays })
@@ -1625,7 +1691,7 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
       const argv = target === 'curl' ? shellWords(text) : null
       const at = argv ? argv.findIndex((w) => normalizedName(w) === 'curl') : -1
       if (at !== -1) {
-        const ctx = { unread, text: norm, arrays }
+        const ctx = { unread, text: norm, outer: outerNorm, arrays }
         substHosts ??= substitutedCurlHosts(marked.slice(a, b), markedEnv, loops, innerTexts, ctx)
         found = [...curlDestinations(argv.slice(at + 1), null, null, ctx), ...substHosts]
       } else found = [...text.matchAll(URL_RE)].map((m) => m[0]).filter(isExternal).map(hostOf)

