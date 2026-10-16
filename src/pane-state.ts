@@ -719,11 +719,12 @@ export function detectsThinkingBlockError(pane: string): boolean {
 // So is the TURN SUMMARY `✻ Worked for 4m 36s · done 22:42` that Claude Code prints when the dead
 // turn ends: measured 2026-10-16 22:4x on ford's live pane, the error, a blank line, that summary,
 // the box -- and without skipping it the walk stopped on the ✻ line and the guard never fired
-// (computress 22:27 the same way). The verb varies (Worked, Cogitated, Crunched, ...); the shape is
-// one word, "for", a duration, and an optional "· done HH:MM". Anything else on a ✻ line still ends
-// the walk.
+// (computress 22:27 the same way). The verb varies (Worked, Cogitated, Crunched, and accented:
+// Sautéed); the shape is one capitalised word, "for", a duration, then any number of "· ..." segments
+// ("· done 22:33 · 3 shells still running" on zara's live pane, 2026-10-16). Anything else on a ✻
+// line still ends the walk.
 const MID_TURN_ERROR_START_RX = /^\s*[⏺⎿]\s*API Error:/
-const TURN_SUMMARY_RX = /^\s*✻\s+[A-Z][a-z]+ for (?=\d)(?:\d+h\s*)?(?:\d+m\s*)?(?:\d+s)?(?:\s*·\s*done \d{1,2}:\d{2})?\s*$/
+const TURN_SUMMARY_RX = /^\s*✻\s+\p{Lu}\p{Ll}+ for (?=\d)(?:\d+h\s*)?(?:\d+m\s*)?(?:\d+s)?\s*(?:·[^·]*)*$/u
 const MID_TURN_GLYPH_LINE_RX = /^\s*[⏺⎿●✻✢✽❯]/
 const MID_TURN_ERROR_BLOCK_LINES = 6
 

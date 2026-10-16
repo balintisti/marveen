@@ -77,6 +77,10 @@ describe('detectsMidTurnApiError -- positives', () => {
     for (const line of ['✻ Cogitated for 12s · done 22:43', '✻ Crunched for 5m 7s · done 22:32', '✻ Worked for 1h 2m 3s', '✻ Brewed for 45s'])
       expect(detectsMidTurnApiError(WITH_TURN_SUMMARY.replace('✻ Worked for 4m 36s · done 22:42', line))).toBe(true)
   })
+  it('an accented verb and trailing segments after done (zara, live, 2026-10-16)', () => {
+    for (const line of ['✻ Sautéed for 1h 9m 35s · done 22:33 · 3 shells still running', '✻ Sautéed for 12s', '✻ Worked for 3s · 1 shell still running'])
+      expect(detectsMidTurnApiError(WITH_TURN_SUMMARY.replace('✻ Worked for 4m 36s · done 22:42', line))).toBe(true)
+  })
   it('the ⎿ result-glyph variant', () => {
     expect(detectsMidTurnApiError(RESULT_GLYPH)).toBe(true)
   })
@@ -115,7 +119,7 @@ describe('detectsMidTurnApiError -- negatives', () => {
     expect(detectsMidTurnApiError(later)).toBe(false)
   })
   it('a ✻ line that is not a turn summary still ends the walk', () => {
-    for (const line of ['✻ Worked for the customer', '✻ Thinking…', '✻ Worked for 4m 36s and then more text'])
+    for (const line of ['✻ Worked for the customer', '✻ Thinking…', '✻ Worked for 4m 36s and then more text', '✻ sautéed for 12s', '✻ Worked for 12s done 22:33'])
       expect(detectsMidTurnApiError(WITH_TURN_SUMMARY.replace('✻ Worked for 4m 36s · done 22:42', line))).toBe(false)
   })
   it('a normal idle pane does not match', () => {
