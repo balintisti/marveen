@@ -3,6 +3,7 @@
 // 1. curl's own URL globbing ({a,b}, [n-m]) in the host part: the host is a set, not read.
 // 2. -K / --config: url / proxy lines the argv never shows.
 // 3. shell expansion the assignment reading does not take ($1, $@, arrays, +=, read, set -A, ...).
+// Round 2 (didi 36014): slashes after the scheme, a glued f()( body, a proxy variable.
 // Found on the way (dexter): a function body (`f(){ curl ...; }; f`) and a subshell's closing `)`
 // glued to the URL (`(curl -s http://evil.example.com)`) both passed the running gate.
 // Every PASS row is a fleet shape the fix must keep green (measured on 21 086 fleet commands).
@@ -67,6 +68,16 @@ const mustDeny: Array<[string, string]> = [
   ['subshell, scheme URL', `(curl -s http://${EV})`],
   ['subshell, bare host', `(curl -s ${EV})`],
   ['subshell among others', `x=1; (curl -s -o /dev/null http://${EV}); echo`],
+  // round 2 (didi 36014)
+  ['three slashes after the scheme', `curl -s http:///${EV}/x`],
+  ['one slash after the scheme', `curl -s "https:/${EV}/x"`],
+  ['four slashes after the scheme', `curl -s http:////${EV}/x`],
+  ['f()( ... ) glued', `f()(curl -s https://${EV}/x); f`],
+  ['f()( ... ) glued, no space after ;', `f()(curl -s https://${EV}/x);f`],
+  ['http_proxy prefix', `http_proxy=http://${EV}:8080 curl -s http://localhost:3420/`],
+  ['export HTTPS_PROXY', `export HTTPS_PROXY=http://${EV}:8080; curl -s https://localhost:3420/`],
+  ['env ALL_PROXY', `env ALL_PROXY=socks5://${EV} curl -s http://localhost:3420/`],
+  ['a quoted proxy name', `export "https_pro"xy=http://${EV}; curl -s https://localhost:3420/`],
   // the array a lifted rest inherits is read in full, an external word in it still denies
   ['an array URL after an unclosed backtick', `U=(https://${EV}/x); python3 -c "print('\`')"\ncurl -s "\${U[@]}"`],
   ['an array written in the lifted rest too', `H=(-H a); python3 -c "print('\`')"\nH+=(https://${EV}/x); curl "\${H[@]}" http://localhost:3420/`],
@@ -90,6 +101,8 @@ const mustPass: Array<[string, string]> = [
   // corpus: mandark's health checks in a subshell
   ['subshell, local health checks', '(curl -s -o /dev/null -w "%{http_code} " localhost:4230/api/v1/health; curl -s -o /dev/null -w "%{http_code}\\n" localhost:5230)'],
   ['subshell, quoted local URL', '(curl -s "http://localhost:3420/api")'],
+  ['a file URL', 'curl -s file:///tmp/x.json'],
+  ['no_proxy only narrows', 'NO_PROXY=localhost curl -s http://localhost:3420/api'],
   // fleet replay (ford): an unclosed backtick lifts the rest of the line; the array written before it holds
   ['the header array before an unclosed backtick', 'H=(-H "A: b"); curl -s "${H[@]}" http://localhost:3420/x | python3 -c "print(\'`\' in \'x\')"\ncurl -s "${H[@]}" http://localhost:3420/y'],
 ]
@@ -109,6 +122,7 @@ describe('card d6b95892: curl destinations the parser cannot read are denied', (
     ['a name written unread', `h+=${EV}; curl -s "https://$h/x"`, '$h'],
     ['an unknown array', 'curl -s "${Z[@]}" http://localhost:3420/', '<unreadable host: ${Z[@]}>'],
     ['a curlrc', `printf 'url = "https://${EV}/x"\\n' > ~/.curlrc; curl -s http://localhost:3420/`, '<curlrc>'],
+    ['a proxy variable', `http_proxy=http://${EV}:8080 curl -s http://localhost:3420/`, '<proxy variable>'],
   ])('names %s', (_name, cmd, host) => {
     expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'curl-external', hosts: [host] })
   })
@@ -116,6 +130,8 @@ describe('card d6b95892: curl destinations the parser cannot read are denied', (
     ['an array read in full', `U=(https://${EV}/x); curl -s "\${U[@]}"`],
     ['a function body', `f(){ curl -s https://${EV}/x; }; f`],
     ['a subshell', `(curl -s http://${EV})`],
+    ['three slashes', `curl -s http:///${EV}/x`],
+    ['a glued function body', `f()(curl -s https://${EV}/x); f`],
     ['a fed read', `while read u; do curl -s "$u"; done <<< "https://${EV}/"`],
   ])('reads the host of %s', (_name, cmd) => {
     expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'curl-external', hosts: [EV] })

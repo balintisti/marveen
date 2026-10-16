@@ -646,8 +646,13 @@ export function shellWords(text) {
 // the host: `curl "https://raw.githubusercontent.com/o/r/$p"` in a loop is still a known destination
 // (an earlier `value.includes('$')` check let exactly that through). The scheme may be a variable
 // too (`$PROTO://host`), so everything up to `://` is dropped.
+// Any number of slashes after the scheme's colon: curl reads `http:///evil.example.com/x` (and `http:/`,
+// `http:////`) as that host (didi 36014, measured on loopback).
+const SCHEME_PREFIX = /^[^/?#\s]*:\/+/
 function hostPortion(value) {
-  const noScheme = String(value).replace(/^[^/?#\s]*:\/\//, '')
+  // file: names no network host (curl refuses any but localhost there): `file:///tmp/x` is a path
+  if (/^file:/i.test(String(value))) return ''
+  const noScheme = String(value).replace(SCHEME_PREFIX, '')
   const m = /^(?:[^@/?#]*@)?(\[[^\]]*\]|[^/:?#]*)/.exec(noScheme)
   return m ? m[1].toLowerCase() : ''
 }
@@ -725,7 +730,7 @@ const COMPUTED_PARAM = /\$\{(?![A-Za-z_][A-Za-z0-9_]*\})/
 // move the host and stays readable.
 function unreadableHostHead(value) {
   const s = String(value)
-  const scheme = /^[^/?#\s]*:\/\//.exec(s)?.[0] ?? ''
+  const scheme = SCHEME_PREFIX.exec(s)?.[0] ?? ''
   const head = scheme + s.slice(scheme.length).split(/[/?#]/)[0]
   const rest = head.replace(/(^|@|\/\/)\[[0-9a-f:.]+\](?=:|$)/i, '$1')
   return /[{}[\]()\\]/.test(rest) || /\$(?![A-Za-z_{])/.test(rest)
@@ -787,6 +792,10 @@ function fedReads(orig, masked, herestrings = []) {
 // that names that file writes or points at a config the argv reading never sees (quotes and
 // backslashes dropped first: `.curl''rc` is the same file).
 const CURLRC = /curlrc|CURL_HOME|XDG_CONFIG_HOME/
+// A proxy variable (`http_proxy=`, `export HTTPS_PROXY=`, `env ALL_PROXY=`): curl connects to it for
+// every URL, a localhost one too (didi 36014). Named on the line, it is a destination the argv never
+// shows. `no_proxy` only narrows where a proxy is used.
+const PROXY_ENV = /(?:^|[^A-Za-z0-9_])(?!no_proxy)[A-Za-z0-9]*_proxy(?![A-Za-z0-9_])/i
 // `ctx`: { unread: names written unread (unreadNames), text: the whole command, arrays: collectArrays }.
 export function curlDestinations(args, inners = null, fileValues = null, ctx = null) {
   const dests = []
@@ -796,7 +805,9 @@ export function curlDestinations(args, inners = null, fileValues = null, ctx = n
     const name = m && (m[1] ?? m[2])
     return name && arrays[name] ? arrays[name] : [w]
   })
-  if (ctx?.text && CURLRC.test(String(ctx.text).replace(/['"\\]/g, ''))) dests.push('<curlrc>')
+  const said = ctx?.text ? String(ctx.text).replace(/['"\\]/g, '') : ''
+  if (CURLRC.test(said)) dests.push('<curlrc>')
+  if (PROXY_ENV.test(said)) dests.push('<proxy variable>')
   const unreadVar = (part) => {
     if (!ctx?.unread?.size) return false
     for (const m of part.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) if (ctx.unread.has(m[1])) return true
@@ -939,8 +950,10 @@ export function strictCurl(command, allowedHosts, vendorDomains = new Set()) {
 // A command word as the shell resolves it. Takes a shellWords word, so quotes and backslashes are
 // already resolved (`"curl"`, `\curl`, `c''url` -> curl); strips a subshell's leading paren, takes
 // the basename, and folds case because this disk is case-insensitive (`Curl` runs curl).
+// A function head glued to its subshell body is one word: `f()(curl URL); f` ran a curl the gate read
+// as the command `f()(curl` (didi 36014).
 export function normalizedName(word) {
-  return String(word ?? '').replace(/^\(+/, '').split('/').pop().toLowerCase()
+  return String(word ?? '').replace(/^[^\s=()]*\(\)(?=\()/, '').replace(/^\(+/, '').split('/').pop().toLowerCase()
 }
 // The command word read from the ORIGINAL segment's shell words, found the way commandIndex finds it
 // in the masked ones: past assignments, prefix keywords AND a prefix command's own options and
