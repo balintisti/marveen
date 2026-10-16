@@ -909,9 +909,10 @@ export async function runMessageRouterTick(): Promise<void> {
       if (agentSessionCache.get(agent)?.worksource) continue
       if (agentWasAbsent.has(agent) && !agentBatchedThisReconnect.has(agent)) {
         // Check if this agent qualifies for backlog batching.
-        // Only an agent with a WAKING row waiting has anything deliverable to summarise; the
-        // quiet rows ride in the same summary then (card a85a9acd).
-        const agentPending = deliverableRows(getPendingMessages(agent))
+        // No wake filter here, on purpose (card a85a9acd): `presentNow` is built from the
+        // deliverable rows of this tick, so an agent that reaches this loop already has a
+        // waking row pending, and its quiet rows ride in the same summary.
+        const agentPending = getPendingMessages(agent)
         if (agentPending.length > RECONNECT_BATCH_THRESHOLD) {
           const oldestAge = now - agentPending[0].created_at * 1000
           if (oldestAge > RECONNECT_BATCH_AGE_MS) {

@@ -127,8 +127,10 @@ describe('router tick: quiet rows (card a85a9acd)', () => {
     expect(deliveredIds().sort()).toEqual([1, 2])
   })
 
-  it('a quiet-only recipient costs no window slot: 25 quiet rows do not starve eve', async () => {
-    load([...Array.from({ length: 30 }, (_, i) => row(i + 1, 'dex', 0)), row(31, 'eve', 1)])
+  it('quiet-only recipients cost no window slot: 30 of them, older, do not starve eve', async () => {
+    // one quiet row each for 30 different recipients, all older than eve's waking row; without the
+    // pre-window filter they would take all 25 slots and eve's message would wait a tick
+    load([...Array.from({ length: 30 }, (_, i) => row(i + 1, `q${i}`, 0, 300)), row(31, 'eve', 1, 60)])
     await runMessageRouterTick()
     expect(deliveredIds()).toEqual([31])
   })
