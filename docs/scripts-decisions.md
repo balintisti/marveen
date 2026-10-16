@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **448** kovetett fajl, ebbol
-**133** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **450** kovetett fajl, ebbol
+**135** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -366,6 +366,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - WHY THIS FILE EXISTS AT ALL (card f2b369ff, measured 2026-09-10 19:5x).
 - WHY THE HOOK AND NOT THE DENY-LIST (the card's own point 3, now measured).
 
+### `scripts/install-seed-refresh-hook.sh`
+
+- WHY: on a host updated by merges into the running tree, update.sh never runs, so neither does its
+
 ### `scripts/install-skills-snapshot-hook.sh`
 
 - WHY A SCRIPT AND NOT A VERSIONED settings.json (card de00fd2b, 2026-08-27).
@@ -525,6 +529,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/schedule-artifact-watch.py`
 
 - WHY (card 5b69464f, didi 2026-09-18): sentry-or's state file did not move for 5 days 12 hours
+
+### `scripts/seed-refresh.sh`
+
+- WHY: update.sh's run_seed_refresh is the only thing that refreshes them, and on a host that is
 
 ### `scripts/self-pace-gate.mjs`
 

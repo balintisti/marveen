@@ -111,7 +111,7 @@ class StallGate(unittest.TestCase):
         e = dict(os.environ, MARVEEN_WEB_PORT=self.port)
         e.update(env or {})
         p = subprocess.run(["bash", os.path.join(d, "scripts", "agent-msg.sh"), "friday", to,
-                            "proba-uzenet"] + (extra or []),
+                            "-"] + (extra or []), input="proba-uzenet",
                            capture_output=True, text=True, timeout=60, env=e)
         return p.returncode, p.stdout, p.stderr
 
