@@ -69,6 +69,7 @@ NOT_AN_ALARM_OR_COVERED = {
     'merge-overlap.py': 'a docstring mention, no call',
     'homoglyph.py': 'a docstring mention, no call (the checker agent-msg.sh runs; upstream dd312aa1)',
     'mixed_script.py': 'a docstring mention, no call (the shared rule; upstream dd312aa1)',
+    'self-pace-gate.mjs': 'a refusal hint names the sender as a text consumer of a heredoc, no call (card 3f18a5a6)',
 }
 CALL = re.compile(r'agent-msg\.sh')
 
