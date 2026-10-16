@@ -145,6 +145,7 @@ describe('main-checkout git guard: the target behind nesting, variables and abbr
     [() => `R="${main}"; git -C "$R" reset --hard`],
     [() => `GIT_DIR=${main}/.git GIT_WORK_TREE=${main} git clean -fd`],
     [() => `GIT_WORK_TREE=${main} git clean -fd`],
+    [() => `GIT_DIR=${main}/.git git reset --hard`],
   ])('a cd or target the shell resolves -> exit 2 (%#)', (cmd) => {
     expect(run(cmd(), other).code).toBe(2)
   })
