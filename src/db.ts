@@ -7,6 +7,7 @@ import { logger } from './logger.js'
 import { TOOL_TIMEOUTS } from './tool-timeouts.js'
 import { triggerLikeClause } from './homoglyph.js'
 import { openVerdicts, openLeftovers } from './kanban-verdict.js'
+import { UNWOKEN_EXPIRY_S, UNWOKEN_EXPIRED_RESULT } from './message-wake.js'
 
 let db: Database.Database
 // The path the CURRENT handle was opened on (null for ':memory:'). Kept so
@@ -886,6 +887,11 @@ export function initDatabase(dbPathOverride?: string): void {
   try { db.exec('ALTER TABLE agent_messages ADD COLUMN trace_id TEXT') } catch { /* exists */ }
   try { db.exec('ALTER TABLE agent_messages ADD COLUMN span_id TEXT') } catch { /* exists */ }
   try { db.exec('ALTER TABLE agent_messages ADD COLUMN parent_span_id TEXT') } catch { /* exists */ }
+  // Card a85a9acd: the wake class. 1 = the recipient has a decision or an action to take, so
+  // the message may wake its pane (the default, and what every row written before this column
+  // is); 0 = a quiet notice that rides along with the next delivery made for another reason.
+  // The SENDER sets it (createAgentMessage); no reader infers it from the text.
+  try { db.exec('ALTER TABLE agent_messages ADD COLUMN wake INTEGER NOT NULL DEFAULT 1') } catch { /* exists */ }
 
   // INVARIANT: a row that says 'delivered' must carry a delivered_at.
   //
@@ -3695,6 +3701,9 @@ export interface AgentMessage {
   trace_id: string | null
   span_id: string | null
   parent_span_id: string | null
+  // Card a85a9acd: 1 = may wake the recipient's pane, 0 = quiet (see src/message-wake.ts).
+  // Optional on the type so a row built by hand (fixtures, federation) reads as waking.
+  wake?: number
 }
 
 export function createAgentMessage(
@@ -3703,11 +3712,16 @@ export function createAgentMessage(
   content: string,
   originNote?: string | null,
   traceCtx?: { trace_id: string; span_id: string; parent_span_id: string | null } | null,
+  // Card a85a9acd: `wake: false` marks a notice the recipient has no decision or action for.
+  // It stays pending until a delivery made for another reason carries it (or it expires,
+  // expireUnwokenMessages). Omitted = waking, so no existing caller changes behaviour.
+  opts?: { wake?: boolean },
 ): AgentMessage {
   const now = Math.floor(Date.now() / 1000)
+  const wake = opts?.wake === false ? 0 : 1
   const info = db.prepare(
-    'INSERT INTO agent_messages (from_agent, to_agent, content, status, created_at, origin_note, trace_id, span_id, parent_span_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(from, to, content, 'pending', now, originNote ?? null, traceCtx?.trace_id ?? null, traceCtx?.span_id ?? null, traceCtx?.parent_span_id ?? null)
+    'INSERT INTO agent_messages (from_agent, to_agent, content, status, created_at, origin_note, trace_id, span_id, parent_span_id, wake) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(from, to, content, 'pending', now, originNote ?? null, traceCtx?.trace_id ?? null, traceCtx?.span_id ?? null, traceCtx?.parent_span_id ?? null, wake)
   return {
     id: Number(info.lastInsertRowid),
     from_agent: from, to_agent: to, content, status: 'pending',
@@ -3716,6 +3730,7 @@ export function createAgentMessage(
     trace_id: traceCtx?.trace_id ?? null,
     span_id: traceCtx?.span_id ?? null,
     parent_span_id: traceCtx?.parent_span_id ?? null,
+    wake,
   }
 }
 
@@ -3775,7 +3790,8 @@ export function getRestartLossCandidates(
   const horizon = Math.floor(nowMs / 1000) - RESTART_LOSS_SQL_HORIZON_S
   return db.prepare(
     "SELECT id, status, created_at, delivered_at, from_agent, substr(content, 1, 40) AS head FROM agent_messages"
-    + " WHERE to_agent = ? AND (status IN ('pending','failed') OR (status = 'delivered' AND delivered_at >= ?))"
+    // Card a85a9acd: a quiet (wake=0) row has nothing to resend or act on, by definition.
+    + " WHERE to_agent = ? AND wake = 1 AND (status IN ('pending','failed') OR (status = 'delivered' AND delivered_at >= ?))"
     + " ORDER BY created_at ASC",
   ).all(toAgent, horizon) as (Pick<AgentMessage, 'id' | 'status' | 'created_at' | 'delivered_at' | 'from_agent'> & { head: string })[]
 }
@@ -3870,6 +3886,8 @@ export function countNewerMessagesForRows(
 // loss. Age matters more than count: three messages from a minute ago is a busy
 // agent working normally, one message from two hours ago is an agent that is
 // never going to pick it up.
+// Card a85a9acd: a quiet (wake=0) row is not a backlog -- nothing is waiting to be delivered to
+// the agent on its account -- so it is not counted here, nor in getRecipientQueueState below.
 export type AgentBacklog = { agent: string; pending: number; oldestAgeSeconds: number }
 
 export function getPendingBacklogByAgent(agent?: string): AgentBacklog[] {
@@ -3879,7 +3897,7 @@ export function getPendingBacklogByAgent(agent?: string): AgentBacklog[] {
   const rows = db.prepare(
     `SELECT to_agent AS agent, COUNT(*) AS pending, MIN(created_at) AS oldest
        FROM agent_messages
-      WHERE status = 'pending'${agent ? ' AND to_agent = ?' : ''}
+      WHERE status = 'pending' AND wake = 1${agent ? ' AND to_agent = ?' : ''}
       GROUP BY to_agent`,
   ).all(...(agent ? [agent] : [])) as { agent: string; pending: number; oldest: number }[]
   return rows
@@ -3971,7 +3989,7 @@ export function getRecipientQueueState(toAgent: string): RecipientQueueState {
   const pending = db.prepare(
     `SELECT COUNT(*) AS n, MIN(created_at) AS oldest
        FROM agent_messages
-      WHERE status = 'pending' AND to_agent = ?`,
+      WHERE status = 'pending' AND wake = 1 AND to_agent = ?`,
   ).get(toAgent) as { n: number; oldest: number | null }
 
   // Median, not mean: one message that sat overnight because the agent was
@@ -4001,7 +4019,7 @@ export function getRecipientQueueState(toAgent: string): RecipientQueueState {
   const chars = db.prepare(
     `SELECT COALESCE(SUM(LENGTH(content)), 0) AS chars
        FROM agent_messages
-      WHERE status = 'pending' AND to_agent = ?`,
+      WHERE status = 'pending' AND wake = 1 AND to_agent = ?`,
   ).get(toAgent) as { chars: number }
 
   const since = now - QUEUE_RECENT_WINDOW_MIN * 60
@@ -4082,7 +4100,9 @@ export function failPendingFederatedMessages(peerId: string | undefined, reason:
 }
 
 // Atomically CLAIM (pending -> delivered) the oldest `limit` pending messages
-// for an agent, returning the claimed rows. A SINGLE `UPDATE ... WHERE
+// for an agent, returning the claimed rows. Waking rows are picked first (card
+// a85a9acd): otherwise a backlog of older quiet (wake=0) rows fills the cap and
+// the waking row waits extra turns, while the inbox nudge keeps counting it. A SINGLE `UPDATE ... WHERE
 // status='pending' RETURNING` (NOT a SELECT-then-UPDATE) so two concurrent
 // drains can never double-claim the same message (-> no ghost double-delivery).
 // Backs the main-agent inbox PULL model: the main agent drains its own inbox at
@@ -4095,14 +4115,33 @@ export function claimPendingForAgent(toAgent: string, limit: number): AgentMessa
        WHERE id IN (
          SELECT id FROM agent_messages
          WHERE to_agent = ? AND status = 'pending'
-         ORDER BY created_at ASC, id ASC
+         ORDER BY wake DESC, created_at ASC, id ASC
          LIMIT ?
        )
-     RETURNING id, from_agent, to_agent, content, status, result, created_at, delivered_at, completed_at`,
+     RETURNING id, from_agent, to_agent, content, status, result, created_at, delivered_at, completed_at, wake`,
   ).all(now, toAgent, limit) as AgentMessage[]
   // RETURNING row order is unspecified; restore FIFO (created_at, then id as the
   // tiebreaker for same-second inserts) for delivery.
   return rows.sort((a, b) => (a.created_at - b.created_at) || (a.id - b.id))
+}
+
+/** Close the quiet (wake=0) rows that have sat pending for UNWOKEN_EXPIRY_S (card a85a9acd).
+ *
+ *  A recipient that rarely gets a waking message would otherwise collect quiet notices for ever,
+ *  and every reader that counts pending rows would count them. They close as `done` with the
+ *  result `unwoken-expired`: not `failed` (nothing went wrong, so no handoff-failure noise) and
+ *  not `delivered` (nothing was delivered). `delivered_at` stays NULL on purpose: the
+ *  delivered_at trigger only fires for status 'delivered', and a timestamp here would read as a
+ *  24-hour delivery latency in getRecipientQueueState's median.
+ *
+ *  Waking rows are never touched, whatever their age. Status-guarded and one statement, like the
+ *  claim: a row claimed by a drain in the same instant is not closed over the claim. */
+export function expireUnwokenMessages(nowMs: number = Date.now()): number {
+  const nowSec = Math.floor(nowMs / 1000)
+  return db.prepare(
+    `UPDATE agent_messages SET status = 'done', result = ?, completed_at = ?
+       WHERE status = 'pending' AND wake = 0 AND created_at <= ?`,
+  ).run(UNWOKEN_EXPIRED_RESULT, nowSec, nowSec - UNWOKEN_EXPIRY_S).changes
 }
 
 export function markMessageDone(id: number, result?: string): boolean {

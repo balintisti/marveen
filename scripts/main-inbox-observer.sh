@@ -161,9 +161,18 @@ evaluate_queue() {
   QUERY_PENDING=0; QUERY_OLDEST_AGE=0; QUERY_VERDICT=unknown
   [ -n "$agent" ] || { log "MAIN_AGENT_ID is not a usable agent id -- refusing to query"; return 2; }
   [ -f "$db" ] || return 2
+  # WAKING rows only (card a85a9acd): a quiet notice (wake=0) is pending by design and expires
+  # on its own after 24 h, so it must never age into the owner's Telegram stall alert. A
+  # database from before the wake column (the dashboard not yet restarted on the new build, a
+  # fixture) has no such column: the first read then fails and the second runs unfiltered,
+  # which is the old behaviour and right for a database where every row wakes.
   row="$(read_queue_row "$db" \
     "SELECT COUNT(*), COALESCE(MIN(created_at),0) FROM agent_messages
-      WHERE status='pending' AND to_agent='$agent';")" || return 2
+      WHERE status='pending' AND wake=1 AND to_agent='$agent';")" \
+    || row="$(read_queue_row "$db" \
+    "SELECT COUNT(*), COALESCE(MIN(created_at),0) FROM agent_messages
+      WHERE status='pending' AND to_agent='$agent';")" \
+    || return 2
   case "$row" in
     ''|*[!0-9\|]*) return 2 ;;
   esac

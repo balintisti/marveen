@@ -46,6 +46,8 @@ import {
   type HandoffStaleness,
   type GuardInputs,
   buildRestartLossLine,
+  restartLossNeedsAction,
+  restartNoticeWakes,
 } from '../context-guard.js'
 
 // Fleet context guard (kanban #81): acts BEFORE a session drowns in its own
@@ -333,6 +335,39 @@ export function measurePct(name: string, cfgLimit: number | null, since?: number
     limit = calibrateLimit(observedHighwater(name, model, tokens), contextLimitForModel(model))
   }
   return tokens / limit
+}
+
+/** The restart notice's loss line AND whether anything in it needs the coordinator (card a85a9acd).
+ *  One measurement feeds both, so the line and the decision to wake on it cannot be read from
+ *  different rows. `lossNeedsAction` is null when the window could not be measured: the notice
+ *  then WAKES (restartNoticeWakes), because a guard that cannot tell must not go quiet.
+ *  The rows come from `readRows` so the failure path is testable without a database. */
+export function measureRestartLoss(
+  name: string,
+  readRows: (agent: string) => ReturnType<typeof getRestartLossCandidates> = getRestartLossCandidates,
+  restartMs: number = Date.now(),
+): { lossLine: string; lossNeedsAction: boolean | null } {
+  try {
+    const lossRows = readRows(name)
+    return {
+      lossLine: buildRestartLossLine(
+        lossRows,
+        restartMs,
+        undefined,
+        new Date(restartMs).toLocaleTimeString('hu-HU', {
+          hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
+        }),
+      ),
+      lossNeedsAction: restartLossNeedsAction(lossRows, restartMs),
+    }
+  } catch (err) {
+    logger.warn({ err, name }, 'context-guard: could not measure the restart loss window')
+    return {
+      lossLine: ' A VESZTESEGET NEM TUDTAM MEGMERNI (a lekerdezes hibazott)'
+        + ' -- ellenorizd kezzel a `pending`/`failed` sorokat erre az agensre.',
+      lossNeedsAction: null,
+    }
+  }
 }
 
 async function performRestart(name: string): Promise<void> {
@@ -750,22 +785,7 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
         // AND A FAILURE TO MEASURE MUST NOT READ AS ZERO. If the query throws, the notice says
         // it could not measure and falls back to asking -- the old behaviour. A guard that
         // degrades into a confident "nothing was lost" is worse than one that admits it is blind.
-        let lossLine: string
-        try {
-          const restartMs = Date.now()
-          lossLine = buildRestartLossLine(
-            getRestartLossCandidates(name),
-            restartMs,
-            undefined,
-            new Date(restartMs).toLocaleTimeString('hu-HU', {
-              hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
-            }),
-          )
-        } catch (err) {
-          logger.warn({ err, name }, 'context-guard: could not measure the restart loss window')
-          lossLine = ' A VESZTESEGET NEM TUDTAM MEGMERNI (a lekerdezes hibazott)'
-            + ' -- ellenorizd kezzel a `pending`/`failed` sorokat erre az agensre.'
-        }
+        const { lossLine, lossNeedsAction } = measureRestartLoss(name)
         try {
           createAgentMessage(
             name,
@@ -788,6 +808,8 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
                 : '') +
             (snapshotPath ? ` Pane-snapshot a restart elotti allapotrol: ${snapshotPath}` : ''),
             'context-guard restart notice',
+            undefined,
+            { wake: restartNoticeWakes(lossNeedsAction, decision.nextState.handoffStaleMinutes) },
           )
         } catch (err) {
           logger.warn({ err, name }, 'context-guard: restart notice message failed')

@@ -1100,6 +1100,72 @@ function senderLabel(r: RestartLossRow): string {
  *  Measured 2026-09-24 over 411 restart notices: up to 24 such rows in one window. */
 export const RESTART_DELIVERED_LIST_MAX = 6
 
+/** The rows a restart notice reports on, sorted into the classes the line and the wake rule
+ *  both read. ONE place, so the line and the decision to wake on it cannot disagree about
+ *  what counts as at risk (card a85a9acd). Pure. */
+function classifyRestartLoss(rows: RestartLossRow[], restartMs: number, windowMs: number) {
+  const sinceSec = (restartMs - windowMs) / 1000
+  const pending = rows.filter((r) => r.status === 'pending')
+  // `created_at` is epoch SECONDS in this table; the restart instant is millis. Mixing the
+  // two silently classifies EVERY historical row as in-window, which is the failure this
+  // whole card is about -- so the conversion happens once, here, next to its reason.
+  const failedInWindow = rows.filter((r) => r.status === 'failed' && r.created_at >= sinceSec)
+
+  // `delivered` IS THE STATE A RESTART TAKES (card 18c382df). pending survives in the table and
+  // failed is already dead; a delivered row's text was INJECTED into the pane that the restart
+  // then destroyed, and whether it was processed first is not visible from the database. Its
+  // window runs on `delivered_at`, not `created_at`: the risk starts when the text lands, and a
+  // message queued 40 minutes ago but injected 5 minutes ago is exactly in it.
+  // Measured 2026-09-24 over 411 restart notices: 178 said "NINCS mit ujrakuldeni", and 75 of
+  // those (42%) had delivered rows in the window. Three of those, 09-19, are traced on the card.
+  // ONE kind of row is excluded, and it is NOT "every system row" -- that was this fix's first
+  // shape and it was wrong: eight code paths send as `system`, and approvals, sentry/uptime
+  // edges and handoff failures are sent ONCE. Only the idle guard's wake-up to the restarted
+  // agent itself is moot (IDLE_SELF_WAKE above). `done` rows are not here either:
+  // `completed_at` is proof of processing.
+  const restartSec = restartMs / 1000
+  const deliveredInWindow = rows.filter(
+    (r) => r.status === 'delivered' && typeof r.delivered_at === 'number'
+      && r.delivered_at >= sinceSec && r.delivered_at <= restartSec,
+  )
+  const isMootWake = (r: RestartLossRow) => r.from_agent === 'system' && IDLE_SELF_WAKE.test(r.head ?? '')
+  const deliveredMoot = deliveredInWindow.filter(isMootWake)
+  const deliveredFromSenders = deliveredInWindow
+    .filter((r) => !isMootWake(r))
+    .sort((a, b) => (a.delivered_at as number) - (b.delivered_at as number))
+
+  return { sinceSec, restartSec, pending, failedInWindow, deliveredMoot, deliveredFromSenders }
+}
+
+/** Does the restart notice to the coordinator have anything to ACT on? (card a85a9acd)
+ *
+ *  False only when there is nothing to resend: no `failed` row in the window and no sender-written
+ *  `delivered` row injected into the pane the restart destroyed. `pending` rows survived the
+ *  restart (the line itself says "NE kuldd ujra"), and the idle guard's own wake-up to the
+ *  restarted agent is moot by construction, so neither needs the coordinator. Anything at risk
+ *  returns true. Same classification as buildRestartLossLine, by construction. */
+export function restartLossNeedsAction(
+  rows: RestartLossRow[],
+  restartMs: number,
+  windowMs: number = RESTART_LOSS_WINDOW_MS,
+): boolean {
+  const c = classifyRestartLoss(rows, restartMs, windowMs)
+  return c.failedInWindow.length > 0 || c.deliveredFromSenders.length > 0
+}
+
+/** Does the whole "Ujrainditottam" notice wake the coordinator? Quiet only when the loss window
+ *  was MEASURED and holds nothing to resend, and the notice carries no handoff-staleness warning
+ *  (a stale or unmeasurable HANDOFF.md is a manual state-handoff decision for its reader). A
+ *  measurement that failed (`lossNeedsAction` null) wakes: a guard that cannot tell must not go
+ *  quiet. */
+export function restartNoticeWakes(
+  lossNeedsAction: boolean | null,
+  handoffStaleMinutes: HandoffStaleness | undefined,
+): boolean {
+  if (lossNeedsAction !== false) return true
+  return typeof handoffStaleMinutes === 'number' || handoffStaleMinutes === 'unknown'
+}
+
 /** What a restart actually cost, as a line the notice carries instead of a warning it
  *  delegates (card 82d9b960).
  *
@@ -1131,36 +1197,8 @@ export function buildRestartLossLine(
   // stays failed, and `pending` decays toward zero while its advice ("do not resend") stays
   // true. So this is a CONSISTENCY change and not a correctness fix -- said plainly, because
   // the commit would otherwise claim to close a hole that was never open.
-  const sinceSec = (restartMs - windowMs) / 1000
-  const pending = rows.filter((r) => r.status === 'pending')
-  // `created_at` is epoch SECONDS in this table; the restart instant is millis. Mixing the
-  // two silently classifies EVERY historical row as in-window, which is the failure this
-  // whole card is about -- so the conversion happens once, here, next to its reason.
-  const failedInWindow = rows.filter((r) => r.status === 'failed' && r.created_at >= sinceSec)
   const mins = Math.round(windowMs / 60_000)
-
-  // `delivered` IS THE STATE A RESTART TAKES (card 18c382df). pending survives in the table and
-  // failed is already dead; a delivered row's text was INJECTED into the pane that the restart
-  // then destroyed, and whether it was processed first is not visible from the database. Its
-  // window runs on `delivered_at`, not `created_at`: the risk starts when the text lands, and a
-  // message queued 40 minutes ago but injected 5 minutes ago is exactly in it.
-  // Measured 2026-09-24 over 411 restart notices: 178 said "NINCS mit ujrakuldeni", and 75 of
-  // those (42%) had delivered rows in the window. Three of those, 09-19, are traced on the card.
-  // ONE kind of row is excluded, and it is NOT "every system row" -- that was this fix's first
-  // shape and it was wrong: eight code paths send as `system`, and approvals, sentry/uptime
-  // edges and handoff failures are sent ONCE. Only the idle guard's wake-up to the restarted
-  // agent itself is moot (IDLE_SELF_WAKE above). `done` rows are not here either:
-  // `completed_at` is proof of processing.
-  const restartSec = restartMs / 1000
-  const deliveredInWindow = rows.filter(
-    (r) => r.status === 'delivered' && typeof r.delivered_at === 'number'
-      && r.delivered_at >= sinceSec && r.delivered_at <= restartSec,
-  )
-  const isMootWake = (r: RestartLossRow) => r.from_agent === 'system' && IDLE_SELF_WAKE.test(r.head ?? '')
-  const deliveredMoot = deliveredInWindow.filter(isMootWake)
-  const deliveredFromSenders = deliveredInWindow
-    .filter((r) => !isMootWake(r))
-    .sort((a, b) => (a.delivered_at as number) - (b.delivered_at as number))
+  const { restartSec, pending, failedInWindow, deliveredMoot, deliveredFromSenders } = classifyRestartLoss(rows, restartMs, windowMs)
 
   const head = stamp ? ` MERVE ${stamp}-kor:` : ' MERVE:'
   if (pending.length === 0 && failedInWindow.length === 0 && deliveredFromSenders.length === 0) {

@@ -298,7 +298,8 @@ export function collectQueue(now = Date.now()): QueueBlock[] {
     })),
     collectBlock('INBOX (fő ágens)', () => {
       const r = getDb().prepare(
-        `SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM agent_messages WHERE to_agent = ? AND status = 'pending'`,
+        // Card a85a9acd: a quiet (wake=0) row is not "unprocessed" -- it waits for company, up to 24h.
+        `SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM agent_messages WHERE to_agent = ? AND status = 'pending' AND wake = 1`,
       ).get(MAIN_AGENT_ID) as { n: number; oldest: number | null }
       return r.n > 0 ? [`${r.n} feldolgozatlan üzenet, legrégebbi ${formatDayClock(msOf(r.oldest ?? 0))}`] : []
     }),

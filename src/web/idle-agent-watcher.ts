@@ -8,6 +8,7 @@ import { resolveAgentSession } from './channel-mcp-reconnect.js'
 import { sendAlert } from './channel-monitor.js'
 import { busyEvidence, detectPaneState, runningBackgroundWork } from '../pane-state.js'
 import { usageLimitHolds } from '../usage-limit-window.js'
+import { wakeRows } from '../message-wake.js'
 import { getPendingMessages, getLastOutboundMessageAt, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
 import {
   decideIdleAlert,
@@ -21,6 +22,7 @@ import {
   topOfPullList,
   buildPullNotice,
   stalePendingBySender,
+  messageGuardNoticeWakes,
   buildPendingStillWaitingNotice,
   type RecipientPaneState,
   type PendingRow,
@@ -151,11 +153,8 @@ function seedPendingNoticed(live: Set<number>): void {
   if (pendingNoticedSeeded) return
   pendingNoticedSeeded = true
   try {
-    const rows = getDb()
-      .prepare("SELECT content FROM agent_messages WHERE from_agent = 'system' AND content LIKE '%covered-ids:%'")
-      .all() as { content: string }[]
     let restored = 0
-    for (const id of coveredIdsStillPending(rows.map((r) => r.content), live)) {
+    for (const id of readCoveredIdsOnRecord(live)) {
       if (!pendingNoticed.has(id)) { pendingNoticed.add(id); restored++ }
     }
     if (restored) logger.info({ idleGuard: true, restored }, 'message queue: suppression set restored from the notices on record')
@@ -166,11 +165,23 @@ function seedPendingNoticed(live: Set<number>): void {
   }
 }
 
+/** The ids, among `live`, that an earlier message-guard notice on record already covered.
+ *  Throws on a database error; the callers decide which way to fail. */
+function readCoveredIdsOnRecord(live: Set<number>): Set<number> {
+  const rows = getDb()
+    .prepare("SELECT content FROM agent_messages WHERE from_agent = 'system' AND content LIKE '%covered-ids:%'")
+    .all() as { content: string }[]
+  return coveredIdsStillPending(rows.map((r) => r.content), live)
+}
+
 /** The sender-side queue sweep. Separated so the tick stays readable and this can
  *  be exercised on its own. */
 function sweepStalePending(): void {
   const rows = getDb()
-    .prepare("SELECT id, from_agent, to_agent, created_at FROM agent_messages WHERE status = 'pending'")
+    // wake = 1 (card a85a9acd): the SENDER of a quiet notice is not told it is "still pending" --
+    // it was never going to be delivered on its own, and the notice would be a loud report about
+    // a quiet row.
+    .prepare("SELECT id, from_agent, to_agent, created_at FROM agent_messages WHERE status = 'pending' AND wake = 1")
     .all() as PendingRow[]
   // Forget ids that are no longer pending, so the set cannot grow without bound
   // and a message that queues again later is reported again.
@@ -204,7 +215,15 @@ function sweepStalePending(): void {
       paneStates.set(m.to_agent, st)
     }
     try {
-      createAgentMessage('system', sender, buildPendingStillWaitingNotice(sender, msgs, now, paneStates))
+      // The FIRST notice about a message wakes its sender; one that only repeats what an
+      // earlier notice on record covered does not (card a85a9acd). An unreadable record reads as
+      // "nothing covered", i.e. wakes: the noisy side is the safe one.
+      let priorCovered = new Set<number>()
+      try { priorCovered = readCoveredIdsOnRecord(live) } catch (err) {
+        logger.warn({ err, sender }, 'message queue: could not read the earlier notices -- this one will wake its sender')
+      }
+      // One line up to the builder on purpose: idle-agent.test.ts pins "addressed to the SENDER" by reading this source.
+      createAgentMessage('system', sender, buildPendingStillWaitingNotice(sender, msgs, now, paneStates), undefined, undefined, { wake: messageGuardNoticeWakes(msgs, priorCovered) })
       for (const m of msgs) pendingNoticed.add(m.id)
       logger.info({ idleGuard: true, sender, count: msgs.length }, 'message queue: told the SENDER their message is still pending')
     } catch (err) {
@@ -499,7 +518,11 @@ export function tick(): void {
           : NO_IDLE_STATE
       }
       // One read of this agent's queue per tick, used by the decision AND the log line below.
-      const pending = running ? getPendingMessages(agent) : []
+      // WAKING rows only (card a85a9acd): this count decides 'waiting-on-router' (a letter is on
+      // its way, so the agent is not judged idle). A quiet notice is not on its way -- the router
+      // delivers it only with a waking row -- so it must neither excuse an idle agent nor, by
+      // ageing, count as a stuck queue.
+      const pending = running ? wakeRows(getPendingMessages(agent)) : []
       // THE AGE IS SUPPLIED FOR THE COORDINATOR ONLY (card 9cc3410a). For the others a letter
       // pending over 15 minutes is ordinary -- they are in long turns (measured the same day:
       // deeper 11, dexter 14, computress 6 such letters in 24 h) -- and marveen scoped the card
@@ -783,7 +806,9 @@ export function tick(): void {
     // The log line follows DELIVERY, not the rule: 'human alerted' is written only when the owner
     // was actually sent the row, so counting it measures the owner's phone.
     const delivered = deliverFleetAlerts(alerts, MAIN_AGENT_ID, coordinatorRunning === true, {
-      toCoordinator: (text) => createAgentMessage('system', MAIN_AGENT_ID, text),
+      // wake: the guard's report on its OWN blindness (pane-unreadable only) is quiet; see
+      // fleetAlertWakes. Everything else in a sweep stays waking.
+      toCoordinator: (text, wake) => createAgentMessage('system', MAIN_AGENT_ID, text, undefined, undefined, { wake }),
       toOwner: (text) => sendAlert(text),
       onCoordinatorFailed: (err) =>
         logger.warn({ err }, 'idle guard: could not tell the coordinator -- falling back to the owner'),

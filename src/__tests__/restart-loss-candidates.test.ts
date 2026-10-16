@@ -73,3 +73,22 @@ describe('getRestartLossCandidates hands the restart line what a restart takes',
     expect(line).not.toContain('NINCS mit ujrakuldeni')
   })
 })
+
+// Card a85a9acd: a quiet (wake=0) row has nothing to resend or act on, so it is not a restart loss.
+describe('getRestartLossCandidates leaves quiet rows out (card a85a9acd)', () => {
+  it('pending, failed and delivered quiet rows are not candidates; the waking ones are', () => {
+    const t = 'rlc-quiet-' + Date.now()
+    const set = getDb().prepare('UPDATE agent_messages SET status = ? WHERE id = ?')
+    const wakingPending = createAgentMessage('didi', t, 'ebreszt')
+    const quietPending = createAgentMessage('system', t, 'csendes', null, null, { wake: false })
+    const quietFailed = createAgentMessage('system', t, 'csendes elbukott', null, null, { wake: false })
+    set.run('failed', quietFailed.id)
+    const quietDelivered = createAgentMessage('system', t, 'csendes beinjektalva', null, null, { wake: false })
+    expect(markMessageDelivered(quietDelivered.id)).toBe(true)
+    const ids = new Set(getRestartLossCandidates(t).map((r) => r.id))
+    expect(ids.has(wakingPending.id)).toBe(true)
+    expect(ids.has(quietPending.id)).toBe(false)
+    expect(ids.has(quietFailed.id)).toBe(false)
+    expect(ids.has(quietDelivered.id)).toBe(false)
+  })
+})
