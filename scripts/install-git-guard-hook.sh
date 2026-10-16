@@ -75,7 +75,16 @@ HOOK_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
 payload="\$(cat)"
 status=0
 for h in "\$HOOK_DIR"/pre-push.d/*; do
-  [ -x "\$h" ] || continue
+  # Empty dir: the glob stays literal, nothing to run. Subdirectories are
+  # skipped on purpose. A non-executable entry FAILS the hook instead of being
+  # skipped silently (card 0ad477ef); the other entries still run and report.
+  [ -e "\$h" ] || [ -L "\$h" ] || continue
+  [ -d "\$h" ] && continue
+  if [ ! -x "\$h" ]; then
+    echo "pre-push: \$h is not executable, so it would have been skipped silently -- refusing. Fix: chmod +x '\$h', or move it out of pre-push.d/." >&2
+    status=1
+    continue
+  fi
   printf '%s\n' "\$payload" | "\$h" "\$@" || status=1
 done
 exit \$status

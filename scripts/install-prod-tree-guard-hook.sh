@@ -281,7 +281,11 @@ if [ -f "$PREPARE_DISPATCH" ] && ! grep -q "$PREPARE_MARK" "$PREPARE_DISPATCH" 2
   chmod +x "$HOOK_DIR/prepare-commit-msg.d/00-existing-prepare-commit-msg"
   echo "  (preserved an existing prepare-commit-msg as a chain entry)"
 fi
-if [ ! -f "$PREPARE_DISPATCH" ] || ! grep -q "$PREPARE_MARK" "$PREPARE_DISPATCH" 2>/dev/null; then
+# REWRITTEN ON EVERY RUN (card 0ad477ef): it used to be written only when absent
+# or foreign, so a body fix never reached an install that already had ours. A
+# foreign file was moved into the chain just above, so what is here is absent
+# or ours.
+{
   cat > "$PREPARE_DISPATCH" <<'EOF'
 #!/usr/bin/env bash
 # marveen-prepare-commit-msg-dispatcher : run every executable in prepare-commit-msg.d/.
@@ -289,13 +293,22 @@ set -uo pipefail
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 status=0
 for h in "$HOOK_DIR"/prepare-commit-msg.d/*; do
-  [ -x "$h" ] || continue
+  # Empty dir: the glob stays literal, nothing to run. Subdirectories are
+  # skipped on purpose. A non-executable entry FAILS the hook instead of being
+  # skipped silently (card 0ad477ef); the other entries still run and report.
+  [ -e "$h" ] || [ -L "$h" ] || continue
+  [ -d "$h" ] && continue
+  if [ ! -x "$h" ]; then
+    echo "prepare-commit-msg: $h is not executable, so it would have been skipped silently -- refusing. Fix: chmod +x '$h', or move it out of prepare-commit-msg.d/." >&2
+    status=1
+    continue
+  fi
   "$h" "$@" || status=1
 done
 exit $status
 EOF
   chmod +x "$PREPARE_DISPATCH"
-fi
+}
 
 # 2. Dispatcher: byte-for-byte the same contract as install-secret-gate-hook.sh
 #    (same marker), so whichever installer runs first creates it and the other
@@ -312,7 +325,16 @@ set -euo pipefail
 HOOK_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
 status=0
 for h in "\$HOOK_DIR"/pre-commit.d/*; do
-  [ -x "\$h" ] || continue
+  # Empty dir: the glob stays literal, nothing to run. Subdirectories are
+  # skipped on purpose. A non-executable entry FAILS the hook instead of being
+  # skipped silently (card 0ad477ef); the other entries still run and report.
+  [ -e "\$h" ] || [ -L "\$h" ] || continue
+  [ -d "\$h" ] && continue
+  if [ ! -x "\$h" ]; then
+    echo "pre-commit: \$h is not executable, so it would have been skipped silently -- refusing. Fix: chmod +x '\$h', or move it out of pre-commit.d/." >&2
+    status=1
+    continue
+  fi
   "\$h" "\$@" || status=1
 done
 exit \$status
@@ -351,7 +373,16 @@ export MARVEEN_MERGE_COMMIT=1
 HOOK_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
 status=0
 for h in "\$HOOK_DIR"/pre-commit.d/*; do
-  [ -x "\$h" ] || continue
+  # Empty dir: the glob stays literal, nothing to run. Subdirectories are
+  # skipped on purpose. A non-executable entry FAILS the hook instead of being
+  # skipped silently (card 0ad477ef); the other entries still run and report.
+  [ -e "\$h" ] || [ -L "\$h" ] || continue
+  [ -d "\$h" ] && continue
+  if [ ! -x "\$h" ]; then
+    echo "pre-merge-commit: \$h is not executable, so it would have been skipped silently -- refusing. Fix: chmod +x '\$h', or move it out of pre-commit.d/." >&2
+    status=1
+    continue
+  fi
   "\$h" "\$@" || status=1
 done
 exit \$status
