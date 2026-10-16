@@ -605,6 +605,7 @@ describe('self-pace-gate: indirect scheduler forms', () => {
     denyIndirect(`zsh -c 'echo job | batch'`)
     denyIndirect(`bash -c 'systemd-run --user sleep 5'`)
     denyIndirect(`bash -c "at -f job.sh now"`)
+    denyIndirect(`sh -c 'launchctl -h'`)   // flag form, no subcommand word
   })
   it('denies a scheduler as an xargs / find -exec / nohup argument', () => {
     denyIndirect('xargs launchctl load')
@@ -660,6 +661,9 @@ describe('self-pace-gate: indirect scheduler forms', () => {
     allow(`cat <<${Q}VEGE${Q}\nsh -c ${Q}at now + 1 minute${Q}\nVEGE`)
     // ...but a scheduler on the heredoc's command line is not hidden by it.
     denyIndirect(`bash -c ${Q}at now${Q} <<${Q}X${Q}\nbody\nX`)
+  })
+  it('an unresolvable heredoc (unquoted tag that substitutes) fails CLOSED for the indirect scan too', () => {
+    denyIndirect(`bash -c ${Q}at now${Q} <<PY\n$(date)\nPY`)
   })
   it('curl -d payloads stay blanked (a peer message may NAME these commands)', () => {
     allow(`curl -s -X POST http://localhost:3420/api/messages -d ${Q}{"content":"sh -c \\"at now + 1 minute\\" and xargs launchctl load"}${Q}`)
