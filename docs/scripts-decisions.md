@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **444** kovetett fajl, ebbol
-**131** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **445** kovetett fajl, ebbol
+**132** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -304,6 +304,11 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - WHY THIS EXISTS, AND WHY THE PERMISSION LIST IS NOT ENOUGH (measured 2026-08-19,
 - === THE OVERRIDE, AND WHY IT IS A TOKEN AND NOT A CARVE-OUT
+
+### `scripts/hooks/main-checkout-git-guard.py`
+
+- WHY (measured 2026-09-19 ~06:45 CEST): two backticked command names inside a
+- WHY A HOOK AND NOT A DENY RULE (marveen 2026-10-16 10:12): in a worktree these two
 
 ### `scripts/hooks/memory-frontmatter-gate.py`
 
