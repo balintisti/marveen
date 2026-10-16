@@ -42,6 +42,10 @@ describe('deliverableRows: a quiet row rides only with a waking row for the SAME
 })
 
 describe('isUnwokenExpired: the 24 h boundary', () => {
+  it('the horizon is 24 hours and the result string is the one readers can grep for', () => {
+    expect(UNWOKEN_EXPIRY_S).toBe(24 * 60 * 60)
+    expect(UNWOKEN_EXPIRED_RESULT).toBe('unwoken-expired')
+  })
   const now = 2_000_000_000
   it('23h59 is not expired, 24h is, 24h01 is', () => {
     expect(isUnwokenExpired({ wake: 0, created_at: now - (UNWOKEN_EXPIRY_S - 60) }, now)).toBe(false)

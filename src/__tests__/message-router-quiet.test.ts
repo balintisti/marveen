@@ -133,6 +133,17 @@ describe('router tick: quiet rows (card a85a9acd)', () => {
     expect(deliveredIds()).toEqual([31])
   })
 
+  it('the window can cut a recipient\'s waking row off: its quiet row then waits, it is not sent alone', async () => {
+    // eve: quiet row oldest, waking row newest. 30 other recipients sit between them, so the
+    // 25-slot window takes eve's OLDEST row (the quiet one) and not her waking one.
+    const others = Array.from({ length: 30 }, (_, i) => row(i + 10, `r${i}`, 1, 500))
+    load([row(1, 'eve', 0, 600), ...others, row(2, 'eve', 1, 100)])
+    await runMessageRouterTick()
+    expect(deliveredIds()).not.toContain(1)
+    expect(sessions()).not.toContain('agent-eve')
+    expect(deliveredIds()).toHaveLength(24)
+  })
+
   it('an absent recipient with only quiet rows is not failed and raises no handoff-failure', async () => {
     sessionUp = false
     // older than any abandon window
