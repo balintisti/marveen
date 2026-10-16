@@ -72,7 +72,31 @@ const SELF_PACE_BASH_PATTERNS = [
 // `PATH=/bin crontab -` are all caught. Trailing \b(?!-) so it never fires on
 // "netstat" / "crontab-helper.sh"; (?!\s*=) so a bare NAME=value assignment
 // (`at=$(...)`) is not mistaken for the `at` binary.
-const SCHED_PREFIX = String.raw`(?:(?:[A-Za-z_]\w*=\S*|sudo|env|command|exec|nice|builtin|time)\s+)*(?:\S*/)?`
+//
+// WRAPPERS WITH OPTIONS (card 3f18a5a6, didi finding 2): a wrapper that takes
+// options hid the command that follows it -- `timeout 5 crontab x`, `nice -n 5
+// launchctl load x`, `caffeinate -i crontab -`, `env -i crontab x` all passed,
+// because the prefix knew the wrapper WORD but not its flags and flag arguments,
+// so the real command was no longer at the command position. The decision of
+// 10:12 is "a scheduler call is refused anywhere in the command", so each
+// wrapper now also swallows its options. WRAPPER_OPTS is deliberately generous:
+// a flag, optionally followed by one non-flag word (its argument). Regex
+// backtracking gives the word back when it is really the command, so
+// `nice -n 5 crontab` and `sudo -E crontab` both resolve. `timeout` additionally
+// requires its positional DURATION; `command` takes only -p (`command -v crontab`
+// is a lookup, never an exec, and must stay allowed). Shell reserved words that
+// introduce a command (`then`, `do`, `else`, ...) are prefixes too.
+const WRAPPER_OPTS = String.raw`(?:\s+--?[A-Za-z0-9][^\s]*(?:\s+[^\s-]\S*)?)*`
+const WRAPPER_PATH = String.raw`(?:\S*/)?`
+const SCHED_WRAPPER = '(?:' + [
+  String.raw`[A-Za-z_]\w*=\S*`,
+  String.raw`(?:then|do|else|elif|if|while|until|!|\{)`,
+  String.raw`${WRAPPER_PATH}timeout${WRAPPER_OPTS}\s+\d\S*`,
+  String.raw`${WRAPPER_PATH}command(?:\s+-p)*`,
+  String.raw`${WRAPPER_PATH}(?:script|ssh)${WRAPPER_OPTS}\s+\S+`,
+  String.raw`${WRAPPER_PATH}(?:sudo|doas|env|exec|nice|ionice|caffeinate|stdbuf|time|setsid|nohup|watch|parallel|arch|builtin)${WRAPPER_OPTS}`,
+].join('|') + ')'
+const SCHED_PREFIX = String.raw`(?:${SCHED_WRAPPER}\s+)*(?:\S*/)?`
 // The command-boundary anchor includes `(` so a $(...) command substitution
 // (`X=$(crontab -)`) is caught, AND a backtick so a legacy `...` substitution
 // (`X=`crontab -r``) is caught too -- both run the enclosed command in a shell
@@ -92,7 +116,8 @@ const SCHED_BOUNDARY = '[;&|(`]'
 // a flag, an input redirect, or an at(1) TIMESPEC (which at(1) requires anyway,
 // so a real submit can never omit it). crontab/launchctl/systemd-run keep the
 // plain match: they are not English words, so prose cannot collide with them.
-const AT_INVOCATION = String.raw`(?=\s*$|\s+-|\s*<|\s+(?:now|noon|midnight|teatime|today|tomorrow|next\b|\+\s*\d|\d{1,2}:\d{2}|\d{3,4}\b|\d{1,2}\s*(?:am|pm)\b|\d{1,2}[./]\d{1,2}|(?:mon|tue|wed|thu|fri|sat|sun)|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)))`
+const AT_TIMESPEC = String.raw`now|noon|midnight|teatime|today|tomorrow|next\b|\+\s*\d|\d{1,2}:\d{2}|\d{3,4}\b|\d{1,2}\s*(?:am|pm)\b|\d{1,2}[./]\d{1,2}|(?:mon|tue|wed|thu|fri|sat|sun)|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)`
+const AT_INVOCATION = String.raw`(?=\s*$|\s+-|\s*<|\s+(?:${AT_TIMESPEC}))`
 // `launchctl` needed the SAME narrowing, for a different reason than at/batch, and
 // the comment above ("not English words, so prose cannot collide") was measured
 // wrong on 2026-07-26 (found by Hacker). It is not an English word -- but the
@@ -118,6 +143,55 @@ const SCHEDULER_RX = new RegExp(
 // ...but allow a pure READ-listing of one's own schedule (parity with the store /
 // schedule-API read exemptions): crontab -l, launchctl list/print, atq.
 const SCHEDULER_READ_RX = new RegExp(String.raw`(^|${SCHED_BOUNDARY}\s*)${SCHED_PREFIX}(crontab\s+-l\b|launchctl\s+(?:list|print|dumpstate|blame|examine)\b|atq\b)`, 'i')
+
+// INDIRECT forms (card 3f18a5a6). SCHEDULER_RX looks at the masked command, where
+// every quoted region is blanked, and only at a segment START -- so a scheduler
+// that is an ARGUMENT of something else passed, and each of these ran it:
+//   echo x | xargs -t 'at now + 1 minute' git "$(date)"
+//   git -c alias.z='!echo hi | at now' z
+//   bash -c 'at now + 1 minute'   sh -c "crontab -"   eval "launchctl load x"
+//   xargs launchctl load          find . -exec at now \;
+// Policy (coordinator): a false negative is an unverified scheduled run, a false
+// positive is one denial with a message that says what to do -- so the scheduler
+// command is matched as a command token in any COMMAND POSITION, including the
+// start of a quoted string and the argument slot of xargs / -exec / eval / nohup.
+// Command position (not "the word anywhere") is what keeps prose out: "deployed
+// at 12:30" has a word before `at`, `echo hi | at now` has a separator. A quote
+// counts as a boundary because inside `bash -c '...'` the quote IS the start of
+// the command line; opening and closing quotes cannot be told apart by a regex,
+// which is the accepted false-positive cost (`echo "at 10:30 we merged"`).
+// The shapes are STRICTER than the direct ones, because here a bare keyword is
+// much more likely to be prose: crontab/systemd-run need an argument that is not
+// `-l`, launchctl needs a subcommand word that is not a read (list/print/...),
+// at/batch need a TIMESPEC, a flag or `<` (never a bare end), and every one of
+// them excludes `name-x`, `name=` and `name |`. The read exemptions are
+// per MATCH here (not per segment), so `crontab -l; crontab -` is still denied.
+// heredoc bodies are blanked by the caller when the heredoc feeds TEXT (agent-msg.sh,
+// cat > file): the documented way to pass text through (see REASON_HINT). A body that
+// feeds a SHELL (`bash <<EOF`, `cat <<EOF | sh`) is a command line and stays scanned.
+const INDIRECT_BOUNDARY = '(?:^|[;&|(`\'"!{\\n]\\s*)'
+const INDIRECT_WRAPPER = String.raw`(?:\bxargs\b[^;&|\n]*?\s|\s-(?:exec|execdir|ok|okdir)\s+|\b(?:eval|nohup)\s+)`
+const INDIRECT_ARG = String.raw`\s+(?=[^\s|;&)'"])`
+// A bare `batch` (reads the job from stdin: `bash -c 'echo job | batch'`) is the one
+// shape without a TIMESPEC. A QUOTE may not precede it -- `grep "batch" src` is a
+// common search -- so this branch has its own boundary (separator or wrapper only).
+// Known gap, accepted: `sh -c 'batch'` as the entire quoted string.
+const INDIRECT_BARE_BATCH = String.raw`(?:^|[;&|(\`]\s*|${INDIRECT_WRAPPER})${SCHED_PREFIX}batch\b(?!-)(?!\s*=)(?=\s*(?:['")]|[;&|]|$))`
+// A wrapper (xargs / -exec / eval / nohup) makes the next word a COMMAND by
+// construction, so a bare `crontab` there (`xargs -n1 crontab`: reads each job
+// file from stdin) is a real invocation, unlike a bare word in prose. xargs gets
+// its OPTIONS parsed (not skipped lazily): `xargs grep crontab` is a search.
+const INDIRECT_STRICT_WRAPPER = String.raw`(?:\bxargs${WRAPPER_OPTS}\s+|\s-(?:exec|execdir|ok|okdir)\s+|\b(?:eval|nohup)\s+)`
+const INDIRECT_BARE_CRONTAB = String.raw`${INDIRECT_STRICT_WRAPPER}${SCHED_PREFIX}(?:crontab|systemd-run)\b(?!-)(?!\s*=)(?=\s*(?:[;&|)]|$))`
+const INDIRECT_SCHEDULER_RX = new RegExp(
+  INDIRECT_BARE_BATCH + '|' + INDIRECT_BARE_CRONTAB + '|' +
+  String.raw`(?:${INDIRECT_BOUNDARY}|${INDIRECT_WRAPPER})${SCHED_PREFIX}(?:` +
+    String.raw`(?:crontab|systemd-run)\b(?!-)(?!\s*=)${INDIRECT_ARG}(?!-l\b)` +
+    String.raw`|launchctl\b(?!-)(?!\s*=)\s+(?!(?:list|print|dumpstate|blame|examine)\b)(?:-|[a-z][a-z-]*(?:[\s'")]|$))` +
+    String.raw`|(?:batch|at)\b(?!-)(?!\s*=)(?=\s+-|\s*<|\s+(?:${AT_TIMESPEC}))` +
+  String.raw`)`,
+  'i',
+)
 
 // The Claude self-schedule store. Blocked for WRITE on any route (a Bash write,
 // or the native Write/Edit/NotebookEdit tool); a read/grep is legit diagnostics.
@@ -151,6 +225,43 @@ export function splitSegments(command) {
     .split(/&&|\|\||[;&|]|\r?\n/)
     // trim so a leading-separator segment (" at now") anchors at ^ correctly
     .map((s) => s.trim())
+}
+
+// Does this simple command (one segment) hand its STDIN to a shell as a script?
+// `bash`, `sh -s`, `zsh -x`, `sudo dash`: yes. `bash script.sh` (the script is a
+// FILE: `bash agent-msg.sh friday marveen - <<'VEGE'`), `bash -c '...'` (the
+// string is the program): no. Wrappers and their options are skipped with the
+// same SCHED_PREFIX the scheduler check uses.
+const SHELL_STDIN_RX = new RegExp(String.raw`^${SCHED_PREFIX}(?:bash|sh|zsh|dash|ksh|fish)\b(?![-.\w/])([\s\S]*)$`, 'i')
+export function segmentReadsShellStdin(segment) {
+  const m = SHELL_STDIN_RX.exec(String(segment ?? '').trim())
+  if (!m) return false
+  const toks = m[1].split(/\s+/).filter(Boolean)
+  let sawS = false
+  for (let k = 0; k < toks.length; k++) {
+    const t = toks[k]
+    if (/^\d*[<>]|^&>/.test(t)) continue // redirection, not an argument
+    if (t === '-') return true // explicit "read the script from stdin"
+    if (t === '--') continue
+    if (/^[-+]/.test(t)) {
+      if (/^-[A-Za-z]*c[A-Za-z]*$/.test(t)) return false // -c STRING is the program
+      if (/^-[A-Za-z]*s[A-Za-z]*$/.test(t)) sawS = true // -s: read commands from stdin
+      if (/^[-+][oO]$/.test(t)) k++ // -o / +o / -O take an option name
+      continue
+    }
+    return sawS // first positional = a script FILE; stdin is only read with -s
+  }
+  return true // no script file, no -c: a shell with nothing else to read reads stdin
+}
+
+// Is the heredoc whose command line is `before<<TAG after` consumed by a shell?
+// Either directly (`bash <<EOF`, `bash -s <<EOF`) or through a pipe later on the
+// same line (`cat <<EOF | sh`). Over-approximates on purpose (scan more).
+function heredocFeedsShell(before, after) {
+  const split = (t) => t.split(/&&|\|\||[;&|(`]/)
+  const own = split(before).pop() ?? ''
+  if (segmentReadsShellStdin(own)) return true
+  return split(after).slice(1).some(segmentReadsShellStdin)
 }
 
 // Split like splitSegments, but ONLY on separators the shell would actually
@@ -202,7 +313,7 @@ export function splitSegments(command) {
 // happened to reject the following bar. So the primitive is not "split more
 // carefully", it is "the inert text must not be there": mask it out, then let
 // the existing splitter and regexes run unchanged on what remains.
-export function maskInertLiterals(command) {
+export function maskInertLiterals(command, { heredocOnly = false } = {}) {
   const src = String(command ?? '').replace(/\\\r?\n/g, ' ')
   let cur = ''
   let i = 0
@@ -222,11 +333,16 @@ export function maskInertLiterals(command) {
     if (here) {
       const tag = here[1] ?? here[2] ?? here[3]
       const quotedTag = here[1] != null || here[2] != null
+      // the command line of this heredoc: text before `<<` (already masked) and the
+      // rest of the line after the tag (raw)
+      const lineStart = cur.lastIndexOf('\n') + 1
+      const before = cur.slice(lineStart)
       cur += here[0]
       i += here[0].length
       // the body starts after the rest of THIS line
       const nl = src.indexOf('\n', i)
       if (nl === -1) return null // heredoc announced but no body -> cannot resolve
+      const after = src.slice(i, nl)
       cur += src.slice(i, nl + 1)
       i = nl + 1
       // find the terminator line (leading tabs allowed for <<-)
@@ -235,10 +351,18 @@ export function maskInertLiterals(command) {
       if (!rel) return null // unterminated heredoc
       const body = src.slice(i, i + rel.index)
       if (!quotedTag && /\$\(|`/.test(body)) return null // unquoted tag expands the body
-      cur += blank(body) + rel[0]
+      // A heredoc is inert only while its consumer treats the body as TEXT. When the
+      // consumer is a shell (`bash <<EOF`, `bash -s <<EOF`, `cat <<EOF | sh`) the
+      // body IS the command line: keep it readable for the scheduler checks.
+      const feedsShell = heredocFeedsShell(before, after)
+      cur += (feedsShell ? body : blank(body)) + rel[0]
       i += rel.index + rel[0].length
       continue
     }
+
+    // heredocOnly: leave quoted strings readable (the indirect scheduler check
+    // needs to see inside `bash -c '...'`); only heredoc bodies are blanked.
+    if (heredocOnly) { cur += c; i++; continue }
 
     if (c === "'") { // literal until the next ' -- a backslash is NOT special here
       const end = src.indexOf("'", i + 1)
@@ -392,6 +516,12 @@ export function gateDecision(toolName, toolInput) {
       // scheduler binaries: deny the exec/submit forms, allow pure read-listing
       if (SCHEDULER_RX.test(seg) && !SCHEDULER_READ_RX.test(seg)) return { deny: true, reason: 'os-scheduler' }
     }
+    // Indirect forms: the scheduler as an argument (xargs / -exec / eval) or inside
+    // a quoted command string (bash -c, git -c alias.x='!...'). Reads the text with
+    // quotes intact, heredoc bodies blanked; null (unresolvable heredoc) -> scan all.
+    if (INDIRECT_SCHEDULER_RX.test(maskInertLiterals(safeCommand, { heredocOnly: true }) ?? safeCommand)) {
+      return { deny: true, reason: 'os-scheduler-indirect' }
+    }
   }
   return { deny: false }
 }
@@ -440,6 +570,13 @@ export const REASON_HINT = {
     ' KIVALTO OK: operacios rendszer szintu utemezo indito/beküldo alakja.' +
     ' A tiszta listazas (crontab -l, launchctl list, atq) atmegy.' +
     ' HA DOKUMENTALSZ (a szoveg ADAT, nem hivas): NE fogalmazd at a szoveget -- egy pontos leiras atirasa azert, hogy egy szuron atcsusszon, a DOKUMENTUMOT rontja el. Valassz MASIK UTAT: a fajlt a Write eszkozzel ird (ne hej-heredoccal), vagy add `-d`/`--data` payloadkent -- azt a kapu blankolja.',
+  'os-scheduler-indirect':
+    ' KIVALTO OK: egy utemezo parancs (at/batch + idopont, crontab, launchctl load/bootstrap/..., systemd-run)' +
+    ' NEM a parancs elejen all, hanem argumentumkent vagy idezett parancs-szovegben:' +
+    ' xargs/-exec/eval/nohup utan, `bash -c \'...\'`, `git -c alias.x=\'!...\'`. Ha az idezett szoveget a shell' +
+    ' vegrehajtja, ez onutemezes, ezert itt a SZOVEG-egyezes is megtagad (egy `echo "at 10:30 ..."` is).' +
+    ' A tiszta listazas (crontab -l, launchctl list, atq) atmegy.' +
+    ' HA DOKUMENTALSZ (a szoveg ADAT, nem hivas): NE fogalmazd at a szoveget -- egy pontos leiras atirasa azert, hogy egy szuron atcsusszon, a DOKUMENTUMOT rontja el. Valassz MASIK UTAT: idezett hej-heredoc NEM-shell fogyasztonak (<<\'VEGE\' az agent-msg.sh-nak vagy `cat > fajl`-nak: a torzset a kapu nem nezi; `bash`/`sh`/`zsh`/`dash` fogyasztonal a torzs PARANCS, azt is nezi), a fajlt a Write eszkozzel ird, vagy add `-d`/`--data` payloadkent -- azt a kapu blankolja.',
   // The only reason without a hint until now (card 97470e22, four measured
   // occurrences: a deny-list rationale, an installation-lane finding, and twice
   // a card comment). Every other reason tells the reader what DOES pass; this

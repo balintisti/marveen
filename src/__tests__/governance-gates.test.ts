@@ -67,7 +67,7 @@ describe('self-pace-gate gateDecision', () => {
     // A ket csalad kulonbozo valaszt erdemel, es ez a kulonbseg maga az allitas:
     //   SZOVEG-ILLESZTO ag  -> lehet, hogy csak DOKUMENTALTAL: nevezze meg a MASIK UTAT
     //   STRUKTURALIS ag     -> a hivas TENYLEG megtortent: mondja ki, hogy itt nincs ilyen eset
-    const TEXT_MATCH = ['store-write-bash', 'schedule-api-write', 'os-scheduler', 'bash-self-inject']
+    const TEXT_MATCH = ['store-write-bash', 'schedule-api-write', 'os-scheduler', 'os-scheduler-indirect', 'bash-self-inject']
     const STRUCTURAL = ['self-pace-tool', 'store-write']
 
     for (const r of [...TEXT_MATCH, ...STRUCTURAL]) {
@@ -573,6 +573,188 @@ describe('self-pace-gate: quoted prose cannot fake a command position', () => {
   it('fails CLOSED on an UNQUOTED heredoc tag whose body substitutes', () => {
     // <<PY (no quotes) expands the body, so its contents are not inert.
     expect(selfPaceDecision('Bash', { command: 'cat <<PY\n$(crontab -r)\nPY' }).deny).toBe(true)
+  })
+})
+
+// --- indirect scheduler forms (card 3f18a5a6) ---
+//
+// SCHEDULER_RX only looks at a segment START of the quote-masked command, so a
+// scheduler that is an ARGUMENT of something else passed. Reproduced on the live
+// gate: `xargs -t 'at now + 1 minute' ...` and `git -c alias.z='!echo hi | at now' z`
+// both returned deny:false. Policy (coordinator): deny the indirect form too; a
+// false positive costs one understandable denial, a false negative an unverified
+// scheduled run.
+describe('self-pace-gate: indirect scheduler forms', () => {
+  const denyIndirect = (command: string) =>
+    expect(selfPaceDecision('Bash', { command }), command).toEqual({ deny: true, reason: expect.stringMatching(/^os-scheduler/) })
+  const allow = (command: string) =>
+    expect(selfPaceDecision('Bash', { command }).deny, command).toBe(false)
+
+  it('POSITIVE CONTROL: the direct forms are denied (the gate is live)', () => {
+    expect(selfPaceDecision('Bash', { command: 'echo hi | at now + 1 minute' })).toEqual({ deny: true, reason: 'os-scheduler' })
+    expect(selfPaceDecision('Bash', { command: 'launchctl load x' })).toEqual({ deny: true, reason: 'os-scheduler' })
+  })
+  it('denies the two measured indirect reproductions', () => {
+    expect(selfPaceDecision('Bash', { command: `echo x | xargs -t 'at now + 1 minute' git "$(date)"` }).reason).toBe('os-scheduler-indirect')
+    expect(selfPaceDecision('Bash', { command: `git -c alias.z='!echo hi | at now' z` }).reason).toBe('os-scheduler-indirect')
+  })
+  it('denies a scheduler inside a bash -c / sh -c / eval string', () => {
+    denyIndirect(`bash -c 'at now + 1 minute'`)
+    denyIndirect(`sh -c "crontab -"`)
+    denyIndirect(`eval "launchctl load x"`)
+    denyIndirect(`zsh -c 'echo job | batch'`)
+    denyIndirect(`bash -c 'systemd-run --user sleep 5'`)
+    denyIndirect(`bash -c "at -f job.sh now"`)
+    denyIndirect(`sh -c 'launchctl -h'`)   // flag form, no subcommand word
+  })
+  it('denies a scheduler as an xargs / find -exec / nohup argument', () => {
+    denyIndirect('xargs launchctl load')
+    denyIndirect('ls *.plist | xargs -n1 launchctl bootstrap gui/501')
+    denyIndirect('find . -exec at now \;')
+    denyIndirect('find . -execdir crontab {} \;')
+    denyIndirect('nohup crontab cronfile')
+    denyIndirect('eval crontab -r')
+  })
+  it('denies a wrapped scheduler (sudo / env / absolute path) inside a string', () => {
+    denyIndirect(`sh -c 'sudo crontab -r'`)
+    denyIndirect(`bash -c "/usr/bin/at now + 1 minute"`)
+  })
+  it('denies a multi-line quoted string whose later line is the scheduler', () => {
+    denyIndirect(`bash -c 'echo a\nat now + 1 minute'`)
+  })
+  it('read-only listings pass indirectly too (per MATCH, so a write beside one still denies)', () => {
+    allow(`bash -c 'crontab -l'`)
+    allow(`sh -c "launchctl list | grep claude"`)
+    allow('xargs launchctl print')
+    allow(`bash -c 'atq'`)
+    denyIndirect(`bash -c 'crontab -l; crontab -'`)
+  })
+  it('does not fire on a keyword that is not in command position or lacks the invocation shape', () => {
+    allow(`echo "deployed at 12:30"`)               // a word before `at`: prose
+    allow(`echo "look at this"`)
+    allow(`echo "at least 80% of entries"`)          // `at` at string start, no TIMESPEC
+    allow(`echo "batch size is 50"`)
+    allow(`echo 'foo | crontab | bar'`)              // bare keyword between bars
+    allow(`echo "launchctl com.jarvis.channels PID 555"`) // job label, not a subcommand
+    allow(`echo "crontab-helper.sh is fine"`)
+    allow(`bash -c 'at=1; echo $at'`)
+    allow(`bash -c "echo crontab"`)
+    allow('grep -rn "batch" src')                    // a quoted bare `batch` is a search, not the binary
+    allow(`grep -rn ${Q}batch${Q} src`)
+  })
+  it('POSITIVE CONTROL MEASURED: "look at this" in a commit message is ALLOWED, in both shapes', () => {
+    // Measured 2026-10-16 on this change. The -m literal is blanked before any scheduler check, and
+    // even un-blanked (substituting form) `at this` has no TIMESPEC and a word before it.
+    allow(`git commit -m "look at this"`)
+    allow(`git commit -m "$(echo look at this)"`)
+    // ...while a real scheduler hidden in a substituting message is still caught.
+    denyIndirect(`git commit -m "$(echo x | at now)"`)
+  })
+  it('KNOWN, ACCEPTED false positive: a quoted string that STARTS with at + TIMESPEC is denied', () => {
+    // opening and closing quotes are indistinguishable to a regex; the coordinator's asymmetry
+    // (false negative = unverified scheduled run) decides this. The message names the way out.
+    denyIndirect(`echo "at 10:30 we merged"`)
+    expect(REASON_HINT['os-scheduler-indirect']).toMatch(/heredoc/)
+  })
+  it('heredoc bodies stay inert while the consumer takes TEXT (the documented route), the quoted-tag form', () => {
+    allow(heredoc(`print("launchctl kickstart at 10:30; crontab -r")`))
+    allow(`cat <<${Q}VEGE${Q}\nsh -c ${Q}at now + 1 minute${Q}\nVEGE`)
+    // a quoted heredoc to the inter-agent sender / a file / tee: the body is a message or a file
+    allow(`bash /Users/isti/marveen/scripts/agent-msg.sh friday marveen - <<${Q}VEGE${Q}\nwe must not use crontab x or launchctl load y; at now + 1 minute\nVEGE`)
+    allow(`cat > notes.md <<${Q}EOF${Q}\ncrontab x\nEOF`)
+    allow(`cat <<${Q}EOF${Q} | tee out.txt\ncrontab x\nEOF`)
+    allow(`bash script.sh <<${Q}EOF${Q}\ncrontab x\nEOF`)       // bash runs a FILE; the body is its stdin data
+    allow(`bash -c ${Q}echo hi${Q} <<${Q}EOF${Q}\ncrontab x\nEOF`)  // -c STRING is the program
+    // ...but a scheduler on the heredoc's command line is not hidden by it.
+    denyIndirect(`bash -c ${Q}at now${Q} <<${Q}X${Q}\nbody\nX`)
+  })
+  it('a heredoc that feeds a SHELL is a command line: its body is scanned (review finding 1)', () => {
+    const d = (command: string) =>
+      expect(selfPaceDecision('Bash', { command }), command).toEqual({ deny: true, reason: expect.stringMatching(/^os-scheduler/) })
+    d(`bash <<${Q}EOF${Q}\nlaunchctl load x\nEOF`)
+    d(`sh <<EOF\nat now + 1 minute\nEOF`)
+    d(`bash -s <<${Q}EOF${Q}\ncrontab -\nEOF`)
+    d(`cat <<${Q}EOF${Q} | sh\ncrontab x\nEOF`)
+    d(`zsh -x <<${Q}EOF${Q}\ncrontab x\nEOF`)
+    d(`sudo bash -s -- arg <<${Q}EOF${Q}\ncrontab x\nEOF`)
+    d(`cat <<${Q}EOF${Q} | tr a b | bash\ncrontab x\nEOF`)
+    d(`/bin/bash <<-${Q}EOF${Q}\n\tcrontab x\n\tEOF`)
+    d(`bash -e <<${Q}EOF${Q}\necho hi\nnice -n 5 crontab x\nEOF`)   // finding 2 inside finding 1
+    d(`dash <<${Q}EOF${Q}\nbash -c ${Q}at now + 1 minute${Q}\nEOF`)
+    // CONTROLS: a shell heredoc that schedules nothing, and read-only listings, pass.
+    allow(`bash <<${Q}EOF${Q}\necho hello\nEOF`)
+    allow(`bash <<${Q}EOF${Q}\nlaunchctl list\ncrontab -l\nEOF`)
+  })
+  it('the way out the denial names stays true: a quoted heredoc to a non-shell consumer', () => {
+    expect(REASON_HINT['os-scheduler-indirect']).toMatch(/NEM-shell/)
+    expect(selfPaceDecision('Bash', { command: `bash agent-msg.sh a b - <<${Q}VEGE${Q}\ncrontab x\nVEGE` }).deny).toBe(false)
+  })
+  it('an unresolvable heredoc (unquoted tag that substitutes) fails CLOSED for the indirect scan too', () => {
+    denyIndirect(`bash -c ${Q}at now${Q} <<PY\n$(date)\nPY`)
+  })
+  it('curl -d payloads stay blanked (a peer message may NAME these commands)', () => {
+    allow(`curl -s -X POST http://localhost:3420/api/messages -d ${Q}{"content":"sh -c \\"at now + 1 minute\\" and xargs launchctl load"}${Q}`)
+  })
+})
+
+// Card 3f18a5a6, review finding 2: a wrapper that takes OPTIONS hid the command after it.
+describe('self-pace-gate: option-taking wrappers do not hide the scheduler', () => {
+  const deny = (command: string) =>
+    expect(selfPaceDecision('Bash', { command }), command).toEqual({ deny: true, reason: expect.stringMatching(/^os-scheduler/) })
+  const allow = (command: string) =>
+    expect(selfPaceDecision('Bash', { command }).deny, command).toBe(false)
+
+  it('timeout DURATION (and its own options) before the scheduler', () => {
+    deny('timeout 5 crontab x')
+    deny('timeout 5 at now + 1 minute')
+    deny('timeout -k 5 10 crontab x')
+    deny('timeout --signal=KILL 5 launchctl load x')
+  })
+  it('nice / ionice / caffeinate / stdbuf / time / setsid with flags and flag arguments', () => {
+    deny('nice -n 5 launchctl load x')
+    deny('nice -5 crontab x')
+    deny('ionice -c 2 -n 4 crontab x')
+    deny('caffeinate -i crontab -')
+    deny('caffeinate -i -t 60 at now + 1 minute')
+    deny('stdbuf -o0 crontab x')
+    deny('time -p crontab x')
+    deny('setsid -f crontab x')
+  })
+  it('env with -i / -u NAME / VAR=val, sudo with -u USER, a wrapper chain, absolute paths', () => {
+    deny('env -i crontab x')
+    deny('env -u FOO FOO=1 crontab x')
+    deny('sudo -u root crontab x')
+    deny('nice -n 5 timeout 5 env -i crontab x')
+    deny('/usr/bin/env -i /usr/bin/crontab x')
+    deny('echo hi | timeout 5 at now')
+    deny('nohup crontab x')
+    deny('exec crontab x')
+  })
+  it('script / ssh / watch / parallel and shell reserved words are command prefixes too', () => {
+    deny('script -q /dev/null crontab -e')
+    deny('ssh host at now + 1 minute')
+    deny('watch crontab x')
+    deny('parallel at now ::: x')
+    deny('if true; then crontab -; fi')
+  })
+  it('a bare crontab as an xargs / -exec argument, with xargs options parsed', () => {
+    deny('xargs -n1 crontab')
+    deny('find . -exec crontab \\;')
+  })
+  it('CONTROLS: the same wrappers around ordinary or read-only commands pass', () => {
+    allow('timeout 5 git status')
+    allow('env FOO=1 npm test')
+    allow('nice -n 5 npm run build')
+    allow('caffeinate -i npm test')
+    allow('nice -n 5 crontab -l')
+    allow('timeout 5 crontab -l')
+    allow('timeout 5 launchctl list')
+    allow('launchctl list')
+    allow('env -i launchctl print gui/501')
+    allow('command -v crontab')          // a lookup, not an exec
+    allow('xargs grep crontab')          // a search, not an invocation
+    allow('ssh host crontab -l')
+    allow('env | grep crontab')
   })
 })
 
