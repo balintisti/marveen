@@ -53,7 +53,11 @@
 //     merged submit still just fires the drain hook (benign).
 //
 // The predicate is getPendingMessages(MAIN_AGENT_ID) -- to_agent = MAIN
-// exactly. Queued OUTBOUND federated rows (to_agent 'peer/agent', pending up
+// exactly -- narrowed to the WAKING rows (wakeRows, card a85a9acd): a quiet
+// notice (wake=0) is still pending and the drain still claims it, but it never
+// starts a nudge, and it never feeds the age, the stale spell, the alert or the
+// hourly budget below -- otherwise a quiet notice would become a loud one by
+// ageing. When only quiet rows are pending the watcher sees an EMPTY inbox. Queued OUTBOUND federated rows (to_agent 'peer/agent', pending up
 // to the abandon window while a peer is down) never match, so a down peer
 // cannot nudge the main agent about mail it cannot act on.
 //
@@ -62,6 +66,7 @@
 import { logger } from '../logger.js'
 import { MAIN_AGENT_ID } from '../config.js'
 import { getPendingMessages } from '../db.js'
+import { wakeRows } from '../message-wake.js'
 import { getEffectiveSettingValue } from '../settings-store.js'
 import { MAIN_CHANNELS_SESSION } from './main-agent.js'
 import { capturePane, isSessionReadyForPrompt, sendPromptToSession, sessionExistsOnHost, clearFeedbackModalAndRecheck, type SendPromptResult } from './agent-process.js'
@@ -412,7 +417,9 @@ async function tick(): Promise<void> {
   // and take the dashboard down.
   try {
     const now = Date.now()
-    const pending = getPendingMessages(MAIN_AGENT_ID)
+    // WAKING rows only: see the header. `pending` feeds the oldest id, the age, the stale
+    // spell and every log count below, so filtering once here covers all of them.
+    const pending = wakeRows(getPendingMessages(MAIN_AGENT_ID))
     const oldest = pending[0]
     const pre = decideNudgePreflight(
       { now, oldestId: oldest ? oldest.id : null, oldestAgeMs: oldest ? now - oldest.created_at * 1000 : 0 },
@@ -521,6 +528,10 @@ async function tick(): Promise<void> {
     logger.warn({ err }, 'inbox nudge: tick error')
   }
 }
+
+/** Test seam: one watcher tick, so the wake filter is exercised where it is applied (the pure
+ *  decisions never see a quiet row, which is the point of the filter). */
+export const _tickForTest = tick
 
 export function startInboxNudgeWatcher(): NodeJS.Timeout {
   setTimeout(() => { void tick() }, INBOX_NUDGE_INITIAL_DELAY_MS).unref()
