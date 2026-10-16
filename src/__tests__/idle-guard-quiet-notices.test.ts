@@ -4,6 +4,10 @@
 // Pure rules first, then the real tick() against a real in-memory database, because the sender
 // flag is only worth something if it reaches the row.
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 const h = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -20,6 +24,8 @@ const h = vi.hoisted(() => {
   fs.mkdirSync(path.join(tmp, 'root', 'store'))
   return { tmp, readable: { value: false }, debug: [] as Array<{ obj: Record<string, unknown>; msg: string }> }
 })
+
+mkTmp.adopt(h.tmp)   // made in vi.hoisted above, where mkTmp does not exist yet
 
 vi.mock('../config.js', async (orig) => ({
   ...(await orig<typeof import('../config.js')>()),
