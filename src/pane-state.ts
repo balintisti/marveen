@@ -701,6 +701,50 @@ export function detectsThinkingBlockError(pane: string): boolean {
   return false
 }
 
+// A TURN THAT DIED ON AN API ERROR AND LEFT THE AGENT AT AN EMPTY PROMPT (card 843a9ab6).
+//
+// Measured 2026-10-16: nine times in one day across six agents the pane's last block was
+//   `⏺ API Error: Connection lost mid-response. The response above may be incomplete.`
+// -- the ⏺ glyph and NO numeric code, so ERROR_CHROME_RX (`⎿ API Error: <digits>`, the
+// thinking-block class above) never matches it. The pane classifies as plain 'idle', and nothing a
+// generic wake says moves the agent; a targeted "continue" does. This is a separate, narrower
+// question than detectsThinkingBlockError, with its own predicate, and NO new PaneState value:
+// the existing 'error' state is consumed by the context-restart gate and the channel monitor.
+//
+// ONLY WHEN THE ERROR IS THE LAST CONTENT BLOCK above the live input box. An error echo that later
+// output has scrolled past (the agent was resumed, took more turns) must not match, or a healthy
+// agent would be told its turn was cut off. The status line `✻ Waiting for N background agents`
+// sits between the error and the box in a real capture (MANDARK_0855) and is chrome, not content:
+// it is skipped, and the caller decides separately what a visible background wait means.
+const MID_TURN_ERROR_START_RX = /^\s*[⏺⎿]\s*API Error:/
+const MID_TURN_GLYPH_LINE_RX = /^\s*[⏺⎿●✻✢✽❯]/
+const MID_TURN_ERROR_BLOCK_LINES = 6
+
+export function detectsMidTurnApiError(pane: string): boolean {
+  if (!pane) return false
+  const lines = pane.split('\n')
+  let bottom = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (BOX_SEP_RX.test(lines[i])) { bottom = i; break }
+  }
+  if (bottom < 0) return false
+  let top = -1
+  for (let i = bottom - 1; i >= 0; i--) {
+    if (BOX_SEP_RX.test(lines[i])) { top = i; break }
+  }
+  if (top < 0) return false
+  // Walk up from the box over blank lines and the background-wait status line.
+  let end = top - 1
+  while (end >= 0 && (lines[end].trim() === '' || BG_WAITING_RX.test(lines[end]))) end--
+  if (end < 0) return false
+  // The last block: continuation lines (wrapped error text, no leading glyph), then the error line.
+  for (let i = end; i >= 0 && i > end - MID_TURN_ERROR_BLOCK_LINES; i--) {
+    if (MID_TURN_ERROR_START_RX.test(lines[i])) return true
+    if (lines[i].trim() === '' || MID_TURN_GLYPH_LINE_RX.test(lines[i])) return false
+  }
+  return false
+}
+
 // Claude Code modal/overlay surfaces -- the /mcp server manager, the model/
 // config/theme pickers, and permission dialogs -- replace the input box with a
 // navigable list whose footer reads e.g.
