@@ -61,6 +61,32 @@ describe('main-checkout git guard: refuses on the main checkout', () => {
     expect(run(command, main).code).toBe(2)
   })
 
+  it.each([
+    ['git checkout -- .'],
+    ['git checkout .'],
+    ['git checkout HEAD -- .'],
+    ['git checkout -- :/'],
+    ['git restore .'],
+    ['git restore -s HEAD -W .'],
+    ['git restore --staged --worktree .'],
+    ['git restore -SW .'],
+  ])('whole-tree discard %s from the main checkout -> exit 2 (marveen 30585)', (command) => {
+    expect(run(command, main).code).toBe(2)
+  })
+
+  it('a whole-tree discard reaches the main checkout through -C and cd too', () => {
+    expect(run(`git -C ${main} checkout -- .`, other).code).toBe(2)
+    expect(run(`cd ${main} && git restore .`, other).code).toBe(2)
+  })
+
+  it('passes a named file, a branch switch, and an index-only restore on the main checkout', () => {
+    expect(run('git checkout -- src/x.ts', main).code).toBe(0)
+    expect(run('git checkout develop', main).code).toBe(0)
+    expect(run('git restore --staged .', main).code).toBe(0)
+    expect(run('git restore -S .', main).code).toBe(0)
+    expect(run('git restore -qS .', main).code).toBe(0)
+  })
+
   it('reaches the main checkout from elsewhere through -C, cd, and --work-tree', () => {
     expect(run(`git -C ${main} clean -fd`, other).code).toBe(2)
     expect(run(`git -C "${main}" reset --hard`, other).code).toBe(2)
@@ -89,6 +115,9 @@ describe('main-checkout git guard: lets the routine through', () => {
     ['git reset --hard', 'wt'],
     ['git clean -fd', 'wt'],
     ['git clean -fd', 'other'],
+    // marveen 30585: the whole-tree discard stays routine inside a worktree
+    ['git checkout -- .', 'wt'],
+    ['git restore .', 'wt'],
     ['git status', 'main'],
     ['git reset --soft HEAD~1', 'main'],
     ['git reset HEAD -- file', 'main'],

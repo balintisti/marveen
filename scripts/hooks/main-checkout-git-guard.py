@@ -170,7 +170,7 @@ def _literal(path, base, env=None):
 
 
 def destructive(toks):
-    """(verb, -C dirs, work_tree, git_dir) or None if not clean / reset --hard."""
+    """(verb, -C dirs, work_tree, git_dir) or None if not clean / reset --hard / a whole-tree checkout or restore."""
     dirs, work_tree, git_dir, i = [], None, None, 0
     while i < len(toks):
         t = toks[i]
@@ -198,7 +198,22 @@ def destructive(toks):
         return ("git clean", dirs, work_tree, git_dir)
     if verb == "reset" and any(a in ("--ha", "--har", "--hard") for a in rest):  # git takes a unique prefix
         return ("git reset --hard", dirs, work_tree, git_dir)
+    # Discarding the WHOLE tree's changes (marveen 2026-10-16 13:09, msg 30585): on 09-19
+    # 44 modified files would have gone this way. One named file is a deliberate act and
+    # passes; `restore --staged` alone touches only the index and passes.
+    if verb in ("checkout", "restore"):
+        if verb == "restore" and _flag(rest, "S", "--staged") and not _flag(rest, "W", "--worktree"):
+            return None
+        if any(a in _WHOLE_TREE for a in rest):  # a tree-ish before `--` is never one of these
+            return ("git %s ." % verb, dirs, work_tree, git_dir)
     return None
+
+
+_WHOLE_TREE = {".", "./", "*", "./*", ":", ":/", ":/*", ":/."}
+
+
+def _flag(args, short, long_):
+    return any(a == long_ or (re.fullmatch(r"-[A-Za-z]+", a) and short in a) for a in args)
 
 
 def toplevel(path):
@@ -281,7 +296,8 @@ def main():
         log("FAIL-OPEN", "internal error: %s" % exc)
         sys.exit(0)
     sys.stderr.write(
-        "GIT-OR: TILTVA -- `git clean` / `git reset --hard` a FO CHECKOUTON (kartya 468cf59a).\n\n"
+        "GIT-OR: TILTVA -- `git clean` / `git reset --hard` / `git checkout -- .` / `git restore .`\n"
+        "a FO CHECKOUTON (kartya 468cf59a).\n\n"
         + "\n".join("  - %s" % h for h in hits)
         + "\n\n"
         "A fo checkout MAGA a futo rendszer: a scripts/ es a web/ innen fut, es ami itt\n"
