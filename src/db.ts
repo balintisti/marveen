@@ -4100,7 +4100,9 @@ export function failPendingFederatedMessages(peerId: string | undefined, reason:
 }
 
 // Atomically CLAIM (pending -> delivered) the oldest `limit` pending messages
-// for an agent, returning the claimed rows. A SINGLE `UPDATE ... WHERE
+// for an agent, returning the claimed rows. Waking rows are picked first (card
+// a85a9acd): otherwise a backlog of older quiet (wake=0) rows fills the cap and
+// the waking row waits extra turns, while the inbox nudge keeps counting it. A SINGLE `UPDATE ... WHERE
 // status='pending' RETURNING` (NOT a SELECT-then-UPDATE) so two concurrent
 // drains can never double-claim the same message (-> no ghost double-delivery).
 // Backs the main-agent inbox PULL model: the main agent drains its own inbox at
@@ -4113,7 +4115,7 @@ export function claimPendingForAgent(toAgent: string, limit: number): AgentMessa
        WHERE id IN (
          SELECT id FROM agent_messages
          WHERE to_agent = ? AND status = 'pending'
-         ORDER BY created_at ASC, id ASC
+         ORDER BY wake DESC, created_at ASC, id ASC
          LIMIT ?
        )
      RETURNING id, from_agent, to_agent, content, status, result, created_at, delivered_at, completed_at, wake`,

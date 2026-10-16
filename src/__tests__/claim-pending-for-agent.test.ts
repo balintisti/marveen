@@ -30,6 +30,24 @@ describe('claimPendingForAgent', () => {
     expect(claimPendingForAgent(to, 10)).toEqual([])
   })
 
+  // didi's a85a9acd finding: 12 older quiet rows + 1 waking row, cap 10 -> the
+  // waking row was left for the 2nd drain. It must come in the FIRST one.
+  it('claims a waking row ahead of a backlog of older quiet rows', () => {
+    const to = 'claimtest-wake-' + Date.now() + '-' + Math.floor(performance.now())
+    for (let i = 0; i < 12; i++) createAgentMessage('ctx-guard', to, 'quiet-' + i, null, null, { wake: false })
+    createAgentMessage('subA', to, 'waking')
+
+    const batch1 = claimPendingForAgent(to, 10)
+    expect(batch1).toHaveLength(10)
+    expect(batch1.map(m => m.content)).toContain('waking')
+    // the 9 quiet rows that ride along are still the OLDEST quiet ones
+    expect(batch1.filter(m => m.content !== 'waking').map(m => m.content))
+      .toEqual(Array.from({ length: 9 }, (_, i) => 'quiet-' + i))
+
+    const batch2 = claimPendingForAgent(to, 10)
+    expect(batch2.map(m => m.content)).toEqual(['quiet-9', 'quiet-10', 'quiet-11'])
+  })
+
   it('returns [] for an agent with no pending messages', () => {
     expect(claimPendingForAgent('claimtest-empty-' + Date.now(), 10)).toEqual([])
   })
