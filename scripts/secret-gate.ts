@@ -5,6 +5,7 @@
  *   scripts/secret-gate.ts --staged            (pre-commit hook: what is about to be committed)
  *   scripts/secret-gate.ts --range <base>..<head>   (CI: what the PR adds)
  *   scripts/secret-gate.ts --all               (audit: every tracked file)
+ *   scripts/secret-gate.ts --outgoing <range> <outfile>  (text sent OFF the machine, see below)
  *
  * The hook is the fast lane and can be skipped with `git commit --no-verify`.
  * The CI run is the actual gate. That is stated here and in the PR template so
@@ -41,6 +42,7 @@
  * there is nothing to follow at all.
  */
 import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import { runGate, type ScanInput, type GateResult } from '../src/security/secret-gate.js';
 
 /** Beyond this the file is not scanned -- and therefore not cleared. */
@@ -266,14 +268,111 @@ function report(result: GateResult, mode: string, entries: Entry[]): void {
   line('If a hit is an intentional fixture, add the PATH to ALLOWLISTED_PATHS in');
   line('src/security/secret-gate.ts. Do NOT loosen the pattern: a pattern exception');
   line('opens the same hole in every file in the repository.');
-  if (entries.length !== result.scannedCount) {
+  if (entries.length && entries.length !== result.scannedCount) {
     line();
     line(`NOTE: ${entries.length} file(s) were listed but ${result.scannedCount} reached the scanner.`);
   }
 }
 
+/**
+ * ── --outgoing: THE TEXT THAT LEAVES THE MACHINE, NOT THE TREE IT CAME FROM ──
+ *
+ * pre-pr-review.sh sends `git diff <range>` to an external model. didi measured
+ * 2026-09-25 (card 1b0faf28) on a private repo's PR diff: a deleted
+ * `.bash_history` (531 lines) went out verbatim, and `--range` on the same range
+ * said PASS -- it scans the blobs at the HEAD of the range, and a DELETED file has
+ * no blob there. Its content lives only in the diff's `-` lines.
+ *
+ * So this mode scans what is actually sent: every file in the diff, any status,
+ * every line of it that is written, hunk headers included. Files that never belong in an outgoing review
+ * (dotfiles, history, key material) are dropped from the text by NAME, deletions
+ * included, and the names are reported. The filtered diff is written to
+ * <outfile> ONLY when the scan passes; on any finding nothing is written.
+ */
+const OUTGOING_EXCLUDED: { pattern: RegExp; reason: string }[] = [
+  { pattern: /(^|\/)\.[^/]+$/, reason: 'dotfile (.env*, shell/psql history, rc and credential files)' },
+  { pattern: /history$/i, reason: 'history file' },
+  { pattern: /\.(pem|key|p12|pfx|jks|keystore)$/i, reason: 'key material file' },
+  { pattern: /(^|\/)id_(rsa|dsa|ecdsa|ed25519)[^/]*$/, reason: 'ssh key file' },
+  { pattern: /(^|\/)(credentials|service-account|client_secret)[^/]*\.json$/i, reason: 'credential json' },
+];
+
+interface OutgoingFile { path: string; text: string }
+
+/** Splits a `--no-renames` diff into per-file chunks. A header it cannot read
+ *  throws: an unparsed chunk would be sent without being scanned. */
+function splitDiff(diff: string): OutgoingFile[] {
+  const chunks = diff.split(/^(?=diff --git )/m).filter((c) => c.startsWith('diff --git '));
+  return chunks.map((text) => {
+    const head = text.slice('diff --git '.length, text.indexOf('\n'));
+    // Without renames both sides name the same path: "a/<p> b/<p>", length 2*|p|+5.
+    const n = (head.length - 5) / 2;
+    const path = head.slice(2, 2 + n);
+    if (!Number.isInteger(n) || head !== `a/${path} b/${path}`) {
+      throw new Error(`cannot read the diff header: ${JSON.stringify(head.slice(0, 120))}`);
+    }
+    return { path, text };
+  });
+}
+
+/**
+ * EVERY line of the chunk that is written, so the scanned text and the sent text
+ * are the same text. Only the diff markup is cut, so anchored shapes match: the
+ * +/-/space prefix, and the `@@ -a,b +c,d @@` ranges of a hunk header.
+ *
+ * didi measured 2026-10-14 (card 1b0faf28): scanning only the +/-/space lines
+ * missed the hunk header, and git puts the nearest function-like source line
+ * before the hunk there -- from OUTSIDE the context lines. A key on line 1 rode
+ * out on the header of an edit at line 25, and the gate said PASS. A line this
+ * function does not recognise is scanned whole, never skipped.
+ */
+function outgoingView(text: string): string {
+  return text.split('\n').map((l) => {
+    const header = /^@@+ [^@]*@@+ ?(.*)$/.exec(l);
+    if (header) return header[1];
+    return /^[-+ ]/.test(l) ? l.slice(1) : l;
+  }).join('\n');
+}
+
+function outgoing(range: string | undefined, outfile: string | undefined): never {
+  if (!range || !outfile) {
+    process.stdout.write('\nsecret-gate: --outgoing needs <range> <outfile>; nothing written.\n');
+    process.exit(2);
+  }
+  let files: OutgoingFile[];
+  try {
+    files = splitDiff(git(['-c', 'core.quotePath=false', 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', range]));
+  } catch (e) {
+    process.stdout.write(`\nsecret-gate: FAILED to read the outgoing diff: ${(e as Error).message}\n`);
+    process.stdout.write('Fail-closed: nothing written, so nothing can be sent.\n');
+    process.exit(2);
+  }
+  const kept: OutgoingFile[] = [];
+  const dropped: { path: string; reason: string }[] = [];
+  for (const f of files) {
+    const hit = OUTGOING_EXCLUDED.find((x) => x.pattern.test(f.path));
+    if (hit) dropped.push({ path: f.path, reason: hit.reason });
+    else kept.push(f);
+  }
+  if (dropped.length) {
+    process.stdout.write(`\nDropped from the outgoing text by name (${dropped.length}), deletions included:\n`);
+    for (const d of dropped) process.stdout.write(`  - ${d.path}  <- ${d.reason}\n`);
+  }
+  if (kept.length === 0) {
+    writeFileSync(outfile, '');
+    process.stdout.write(`\nsecret-gate --outgoing: ${files.length} file(s) in the diff, none left to send.\n`);
+    process.exit(0);
+  }
+  const result = runGate(kept.map((f) => ({ path: f.path, content: outgoingView(f.text) })));
+  report(result, "--outgoing (every line sent; :N counts in that file's diff text, not in the file)", []);
+  if (!result.ok) process.exit(1);
+  writeFileSync(outfile, kept.map((f) => f.text).join(''));
+  process.exit(0);
+}
+
 function main(): void {
-  const [, , mode = '--staged', range] = process.argv;
+  const [, , mode = '--staged', range, outfile] = process.argv;
+  if (mode === '--outgoing') outgoing(range, outfile);
   let entries: Entry[];
   try {
     entries = entriesFor(mode, range);

@@ -30,7 +30,17 @@ get_secret() {
   echo "$val" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('value',''))" 2>/dev/null || true
 }
 
-DIFF="$(git diff "$BASE"...HEAD)"
+# The diff leaves the machine, so it goes through the secret gate's --outgoing mode
+# first: both sides of every hunk are scanned (a DELETED file's content lives only in
+# the '-' lines), dotfiles/history/key files are dropped by name, and the filtered
+# text is written ONLY when the scan passes (card 1b0faf28, didi 2026-09-25).
+DIFF_FILE="$(mktemp)"
+trap 'rm -f "$DIFF_FILE"' EXIT
+if ! "$INSTALL_DIR/node_modules/.bin/tsx" "$INSTALL_DIR/scripts/secret-gate.ts" --outgoing "$BASE...HEAD" "$DIFF_FILE" >&2; then
+  echo "[pre-pr-review] REFUSED: the outgoing diff did not pass the secret gate (see above). Nothing was sent." >&2
+  exit 3
+fi
+DIFF="$(cat "$DIFF_FILE")"
 if [ -z "$DIFF" ]; then
   echo "[pre-pr-review] No diff found against $BASE, nothing to review."
   exit 0
