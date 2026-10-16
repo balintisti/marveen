@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   initDatabase,
   getDb,
+  createAgentMessage,
   createApproval,
   getApproval,
   resolveApproval,
@@ -300,6 +301,23 @@ describe('/queue blocks (CMD920 test 16)', () => {
     const text = formatBlocks(blocks)
     expect(text).toMatch(/JÓVÁHAGYÁS\neeeeeeee · email · Várakozó levél/)
     expect(text).toMatch(/ÚJRAPRÓBÁLÁS\nnincs/)
+  })
+})
+
+// Card a85a9acd: the owner-facing "unprocessed" count must not include quiet (wake=0) notices.
+describe('/queue: INBOX counts waking rows only (card a85a9acd)', () => {
+  const inbox = () => collectQueue().find(b => b.title === 'INBOX (fő ágens)')!.lines
+
+  it('a quiet row alone is not an unprocessed message', () => {
+    createAgentMessage('system', MAIN_AGENT_ID, 'csendes ertesites', null, null, { wake: false })
+    expect(inbox()).toEqual([])
+  })
+
+  it('POSITIVE CONTROL: a waking row is counted, and the quiet one beside it is not', () => {
+    createAgentMessage('system', MAIN_AGENT_ID, 'csendes ertesites', null, null, { wake: false })
+    createAgentMessage('didi', MAIN_AGENT_ID, 'dontes kell')
+    expect(inbox()).toHaveLength(1)
+    expect(inbox()[0]).toMatch(/^1 feldolgozatlan üzenet/)
   })
 })
 
