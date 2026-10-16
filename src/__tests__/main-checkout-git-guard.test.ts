@@ -118,8 +118,13 @@ describe('main-checkout git guard: lets the routine through', () => {
 
   it('fails open on a non-Bash tool and on an unparseable payload', () => {
     expect(run('git clean -fd', main, { tool_name: 'Read' }).code).toBe(0)
-    const r = spawnSync('python3', [GATE], { input: 'not json', encoding: 'utf8' })
+    // the env override is what keeps this log line out of the LIVE store: measured
+    // 2026-10-16, without it 13 FAIL-OPEN lines from test runs landed there
+    const r = spawnSync('python3', [GATE], {
+      input: 'not json', encoding: 'utf8', env: { ...process.env, MARVEEN_GIT_GUARD_MAIN: main },
+    })
     expect(r.status).toBe(0)
+    expect(readFileSync(join(main, 'store', 'main-checkout-git-guard.log'), 'utf8')).toMatch(/\tFAIL-OPEN\tunparseable/)
   })
 })
 
