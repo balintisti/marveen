@@ -34,6 +34,22 @@ ${FOOT}
   ⏺ main
   ◯ general-purpose  Checking trial daysLeft calcul… 25m 53s · ↓ 202.2k tokens`
 
+// Verbatim from ford's live pane, 2026-10-16 22:4x (card 843a9ab6, round 2): the guard did not fire
+// on this. The turn summary line sits between the error and the box.
+const WITH_TURN_SUMMARY = `
+⏺ Migrations are already current on my disposable database, so I can run the
+  calendar-sync e2e now.
+
+  Searched for 1 pattern, ran 15 shell commands
+
+⏺ API Error: Connection lost mid-response. The response above may be
+  incomplete.
+
+✻ Worked for 4m 36s · done 22:42
+
+${BOX('Ford')}
+  ⏵⏵ bypass permissions on (shift+tab to cycle)`
+
 const RESULT_GLYPH = `
 ⏺ Bash(npm test)
   ⎿  API Error: Connection lost mid-response.
@@ -53,6 +69,13 @@ describe('detectsMidTurnApiError -- positives', () => {
   })
   it('with the background-wait status line between the error and the box', () => {
     expect(detectsMidTurnApiError(WITH_WAITING_LINE)).toBe(true)
+  })
+  it('with the turn summary line between the error and the box (ford, live)', () => {
+    expect(detectsMidTurnApiError(WITH_TURN_SUMMARY)).toBe(true)
+  })
+  it('the turn summary in its other measured spellings', () => {
+    for (const line of ['✻ Cogitated for 12s · done 22:43', '✻ Crunched for 5m 7s · done 22:32', '✻ Worked for 1h 2m 3s', '✻ Brewed for 45s'])
+      expect(detectsMidTurnApiError(WITH_TURN_SUMMARY.replace('✻ Worked for 4m 36s · done 22:42', line))).toBe(true)
   })
   it('the ⎿ result-glyph variant', () => {
     expect(detectsMidTurnApiError(RESULT_GLYPH)).toBe(true)
@@ -83,6 +106,18 @@ describe('detectsMidTurnApiError -- negatives', () => {
     const later = REAL.replace(`\n${BOX('Friday')}`, `\n⏺ Bash(ls)\n  ⎿  a.txt\n\n${BOX('Friday')}`)
     expect(detectsMidTurnApiError(later)).toBe(false)
   })
+  it('a normal reply followed by the turn summary does not match', () => {
+    const idle = `\n⏺ Kész, minden zöld.\n\n✻ Worked for 2m 1s · done 22:50\n\n${BOX('Friday')}\n${FOOT}`
+    expect(detectsMidTurnApiError(idle)).toBe(false)
+  })
+  it('an old error, a later reply, then the turn summary does not match', () => {
+    const later = WITH_TURN_SUMMARY.replace('\n✻ Worked', '\n⏺ Folytatom: 12 passed.\n\n✻ Worked')
+    expect(detectsMidTurnApiError(later)).toBe(false)
+  })
+  it('a ✻ line that is not a turn summary still ends the walk', () => {
+    for (const line of ['✻ Worked for the customer', '✻ Thinking…', '✻ Worked for 4m 36s and then more text'])
+      expect(detectsMidTurnApiError(WITH_TURN_SUMMARY.replace('✻ Worked for 4m 36s · done 22:42', line))).toBe(false)
+  })
   it('a normal idle pane does not match', () => {
     const idle = `\n⏺ Kész, minden zöld.\n\n${BOX('Friday')}\n${FOOT}`
     expect(detectsMidTurnApiError(idle)).toBe(false)
@@ -112,6 +147,7 @@ ${FOOT}`
   it('the mid-turn pane is still plain idle for detectPaneState: no new state value', () => {
     expect(detectPaneState(REAL)).toBe('idle')
     expect(detectPaneState(WITH_WAITING_LINE)).toBe('idle')
+    expect(detectPaneState(WITH_TURN_SUMMARY)).toBe('idle')
   })
   it('the code-less ⏺ error is NOT a thinking-block error', () => {
     expect(detectsThinkingBlockError(REAL)).toBe(false)

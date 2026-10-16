@@ -716,7 +716,14 @@ export function detectsThinkingBlockError(pane: string): boolean {
 // agent would be told its turn was cut off. The status line `✻ Waiting for N background agents`
 // sits between the error and the box in a real capture (MANDARK_0855) and is chrome, not content:
 // it is skipped, and the caller decides separately what a visible background wait means.
+// So is the TURN SUMMARY `✻ Worked for 4m 36s · done 22:42` that Claude Code prints when the dead
+// turn ends: measured 2026-10-16 22:4x on ford's live pane, the error, a blank line, that summary,
+// the box -- and without skipping it the walk stopped on the ✻ line and the guard never fired
+// (computress 22:27 the same way). The verb varies (Worked, Cogitated, Crunched, ...); the shape is
+// one word, "for", a duration, and an optional "· done HH:MM". Anything else on a ✻ line still ends
+// the walk.
 const MID_TURN_ERROR_START_RX = /^\s*[⏺⎿]\s*API Error:/
+const TURN_SUMMARY_RX = /^\s*✻\s+[A-Z][a-z]+ for (?=\d)(?:\d+h\s*)?(?:\d+m\s*)?(?:\d+s)?(?:\s*·\s*done \d{1,2}:\d{2})?\s*$/
 const MID_TURN_GLYPH_LINE_RX = /^\s*[⏺⎿●✻✢✽❯]/
 const MID_TURN_ERROR_BLOCK_LINES = 6
 
@@ -733,9 +740,9 @@ export function detectsMidTurnApiError(pane: string): boolean {
     if (BOX_SEP_RX.test(lines[i])) { top = i; break }
   }
   if (top < 0) return false
-  // Walk up from the box over blank lines and the background-wait status line.
+  // Walk up from the box over blank lines, the background-wait status line and the turn summary.
   let end = top - 1
-  while (end >= 0 && (lines[end].trim() === '' || BG_WAITING_RX.test(lines[end]))) end--
+  while (end >= 0 && (lines[end].trim() === '' || BG_WAITING_RX.test(lines[end]) || TURN_SUMMARY_RX.test(lines[end]))) end--
   if (end < 0) return false
   // The last block: continuation lines (wrapped error text, no leading glyph), then the error line.
   for (let i = end; i >= 0 && i > end - MID_TURN_ERROR_BLOCK_LINES; i--) {
