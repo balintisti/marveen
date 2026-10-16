@@ -45,13 +45,14 @@ function runTicks(
   t0: number,
   state: IdleAgentState = NO_IDLE_STATE,
   stampResumes = true,
+  th: IdleAgentThresholds = TH,
 ): { reasons: string[]; state: IdleAgentState; decisions: ReturnType<typeof decideIdleAlert>['decision'][] } {
   const reasons: string[] = []
   const decisions: ReturnType<typeof decideIdleAlert>['decision'][] = []
   let s = state
   seq.forEach((over, i) => {
     const now = t0 + i * TICK
-    const r = decideIdleAlert({ ...base, ...over }, s, TH, now)
+    const r = decideIdleAlert({ ...base, ...over }, s, th, now)
     s = r.next
     if (r.decision.alert && r.decision.reason === 'resume-api-error' && stampResumes) {
       s = { ...s, lastApiErrorResumeAt: now, apiErrorHandledSince: s.apiErrorSinceMs }
@@ -125,6 +126,15 @@ describe('decideIdleAlert -- resume-api-error', () => {
     const { reasons } = runTicks(Array(30).fill({ runningSubagents: 1 }), T0)
     expect(reasons).not.toContain('resume-api-error')
     expect(reasons).not.toContain('api-error-confirming')
+  })
+
+  it('background-wait indicator PAST the hold / as a ghost row (the old hold no longer protects): still NO resume', () => {
+    const th: IdleAgentThresholds = { ...TH, subagentHoldMs: 30 * MIN, subagentSilentMs: 20 * MIN }
+    const { reasons } = runTicks(Array(60).fill({ runningSubagents: 1, lastActionAtMs: null }), T0, NO_IDLE_STATE, true, th)
+    expect(reasons).not.toContain('resume-api-error')
+    expect(reasons).not.toContain('api-error-confirming')
+    expect(reasons.slice(0, 5)).toEqual(Array(5).fill('subagents-running'))          // POSITIVE CONTROL: the hold phase happened
+    expect(reasons.slice(-5).every((r) => r !== 'subagents-running')).toBe(true)       // ... and the hold really ended
   })
 
   it('TRANSITION: indicator gone, error still on the pane -> confirmation starts from that moment, then resume', () => {
