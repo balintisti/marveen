@@ -235,3 +235,27 @@ describe('the other pending readers inside the router (card a85a9acd)', () => {
     expect(mockSendPrompt).not.toHaveBeenCalled()
   })
 })
+
+describe('batch tail counts only waking rows as waiting (card a85a9acd)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks(); liveStatus.clear(); sessionUp = true; _resetUnwokenExpiryForTest()
+    mockMarkDelivered.mockReturnValue(true)
+    process.env.ROUTER_BATCH_INJECT_AGENTS = 'eve'
+    process.env.ROUTER_BATCH_INJECT_MAX = '2'
+  })
+  afterEach(() => { delete process.env.ROUTER_BATCH_INJECT_MAX; process.env.ROUTER_BATCH_INJECT_AGENTS = 'nobody-opted-in' })
+  const sentText = () => String(mockSendPrompt.mock.calls[0][1])
+
+  it('POSITIVE CONTROL: a third WAKING row beyond the batch cap is counted as waiting', async () => {
+    load([row(1, 'eve', 1), row(2, 'eve', 1), row(3, 'eve', 1)])
+    await runMessageRouterTick()
+    expect(sentText()).toContain('1 tovabbi VAR a sorban')
+  })
+
+  it('a third QUIET row beyond the batch cap is NOT counted as waiting', async () => {
+    load([row(1, 'eve', 1), row(2, 'eve', 1), row(3, 'eve', 0)])
+    await runMessageRouterTick()
+    expect(sentText()).toContain('tobb nem var ebben a sorban')
+    expect(sentText()).not.toContain('tovabbi VAR')
+  })
+})

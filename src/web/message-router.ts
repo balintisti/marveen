@@ -1427,7 +1427,8 @@ function collectBatchMates(
   // that is not in this injection. The head and the mates are still 'pending'
   // in the DB here (they are marked delivered only after the send succeeds).
   const inBatch = new Set<number>([head.id, ...rows.map((r) => r.id)])
-  const remaining = getPendingMessages(head.to_agent).filter((r) => !inBatch.has(r.id)).length
+  // Card a85a9acd: only WAKING rows are "waiting"; a quiet one rides along with the next delivery.
+  const remaining = wakeRows(getPendingMessages(head.to_agent)).filter((r) => !inBatch.has(r.id)).length
   return { items, rows, remaining, lastTraceCtx }
 }
 
