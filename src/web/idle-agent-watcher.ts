@@ -222,10 +222,8 @@ function sweepStalePending(): void {
       try { priorCovered = readCoveredIdsOnRecord(live) } catch (err) {
         logger.warn({ err, sender }, 'message queue: could not read the earlier notices -- this one will wake its sender')
       }
-      createAgentMessage(
-        'system', sender, buildPendingStillWaitingNotice(sender, msgs, now, paneStates),
-        undefined, undefined, { wake: messageGuardNoticeWakes(msgs, priorCovered) },
-      )
+      // One line up to the builder on purpose: idle-agent.test.ts pins "addressed to the SENDER" by reading this source.
+      createAgentMessage('system', sender, buildPendingStillWaitingNotice(sender, msgs, now, paneStates), undefined, undefined, { wake: messageGuardNoticeWakes(msgs, priorCovered) })
       for (const m of msgs) pendingNoticed.add(m.id)
       logger.info({ idleGuard: true, sender, count: msgs.length }, 'message queue: told the SENDER their message is still pending')
     } catch (err) {
