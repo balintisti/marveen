@@ -27,6 +27,8 @@ vi.mock('../pane-state.js', () => ({
   busyEvidence: () => 'none',
   detectsUsageLimitReached: (...a: unknown[]) => reached(...a),
   runningBackgroundWork: () => 0,
+  // card 843a9ab6: readPane reads the mid-turn API error from the same capture.
+  detectsMidTurnApiError: () => false,
 }))
 
 const { readPane } = await import('../web/idle-agent-watcher.js')

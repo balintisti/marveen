@@ -23,6 +23,7 @@ import {
   buildPendingStillWaitingNotice,
   type RecipientPaneState,
   PENDING_NOTICE_AFTER_MS,
+  buildApiErrorResumeMessage,
 } from '../idle-agent.js'
 import { buildRestartLossLine } from '../context-guard.js'
 
@@ -1165,6 +1166,9 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
       ),
     },
     { name: 'buildFleetAlert', msg: buildFleetAlert([{ kind: 'still-idle', agent: 'didi', minutes: 20, workCount: 3 }]) },
+    // card 843a9ab6: the targeted resume message, and the repeat alert's single-agent template.
+    { name: 'buildApiErrorResumeMessage', msg: buildApiErrorResumeMessage(NOW) },
+    { name: 'buildFleetAlert', msg: buildFleetAlert([{ kind: 'api-error-repeat', agent: 'didi', minutes: 4 }]) },
     { name: 'buildRestartLossLine', msg: buildRestartLossLine([{ id: 918001, status: 'failed', created_at: Math.floor(NOW / 1000) - 60 }], NOW, undefined, '04:41:59') },
   ]
 

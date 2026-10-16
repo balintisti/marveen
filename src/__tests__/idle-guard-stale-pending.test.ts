@@ -113,6 +113,8 @@ vi.mock('../pane-state.js', () => ({
   // the log stays empty, which looks exactly like the finding this spec hunts.
   detectsUsageLimitReached: () => false,
   runningBackgroundWork: () => 0,
+  // card 843a9ab6: readPane reads the mid-turn API error from the same capture.
+  detectsMidTurnApiError: () => false,
 }))
 vi.mock('../web/channel-monitor.js', () => ({ sendAlert: (...a: unknown[]) => h.sendAlert(...a) }))
 vi.mock('../db.js', () => ({

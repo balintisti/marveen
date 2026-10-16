@@ -47,6 +47,7 @@ vi.mock('../web/agent-config.js', () => ({
 vi.mock('../pane-state.js', () => ({
   detectPaneState: () => 'idle', busyEvidence: () => 'none',
   detectsUsageLimitReached: () => false, runningBackgroundWork: () => 0,
+  detectsMidTurnApiError: () => false, // card 843a9ab6
 }))
 vi.mock('../web/channel-monitor.js', () => ({ sendAlert: () => {} }))
 vi.mock('../db.js', () => ({
