@@ -9,7 +9,9 @@
 # 2. Positive control: the scanner flags a planted bare call.
 # 3. End to end with a REAL tmux, isolated by TMUX_TMPDIR (TMUX unset, socket path
 #    checked before anything is touched; kill-server is never called): with only
-#    agent-foo2 running, the progress watchdogs report agent-foo as NOT alive.
+#    agent-foo2 running, the progress watchdogs and telegram-live-progress report
+#    agent-foo as NOT alive, and watchdog-replay types nothing into agent-foo2
+#    (control: once agent-foo runs, the replay reaches it).
 # Run: bash scripts/__tests__/tmux-exact-targets-python.test.sh
 
 set -u
@@ -95,6 +97,36 @@ print(m.tmux_session_alive("agent-foo"), m.tmux_session_alive("agent-foo2"))' "$
         [ "$R" = "False True" ] && pass "$hook: agent-foo absent while agent-foo2 runs (prefix not taken)" \
           || fail "$hook: expected 'False True', got '$R'"
       done
+      # telegram-live-progress.py keeps its own copy of exact_target (didi 37129, M3).
+      R="$(env -u TMUX MAIN_AGENT_ID=no-such-main TMUX_TMPDIR="$TMP" python3 -c 'import importlib.util,sys
+spec = importlib.util.spec_from_file_location("lp", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print(m.session_alive("foo"), m.session_alive("foo2"))' "$REPO/scripts/telegram-live-progress.py" 2>&1)"
+      [ "$R" = "False True" ] && pass "telegram-live-progress: agent-foo absent while agent-foo2 runs (prefix not taken)" \
+        || fail "telegram-live-progress: expected 'False True', got '$R'"
+      # watchdog-replay.py types into the pane: the card's own failure (didi 37129, M4).
+      # Run its main() for real, sleeps stubbed. Round 1: only agent-foo2 runs, so the
+      # text must go nowhere. Round 2 (positive control, so round 1 cannot pass because
+      # sending is broken): agent-foo runs too and must receive it.
+      MARK="TMUXEXACT-REPLAY-$$"
+      printf '[{"id":1,"to_agent":"foo","status":"delivered","completed_at":null,"created_at":1,"content":"%s"}]' "$MARK" > "$TMP/replay.json"
+      replay() {
+        env -u TMUX TMUX_TMPDIR="$TMP" python3 -c 'import importlib.util,sys,time
+time.sleep = lambda s: None
+spec = importlib.util.spec_from_file_location("wr", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+sys.argv = ["watchdog-replay.py"] + sys.argv[2:]; m.main()' "$REPO/scripts/watchdog-replay.py" agent-foo foo 0 "$TMP/replay.json" "$TMP/replay.log" >/dev/null 2>&1
+      }
+      pane() { env -u TMUX TMUX_TMPDIR="$TMP" tmux capture-pane -p -t "=$1:" 2>/dev/null | grep -c "$MARK"; }
+      replay; sleep 1
+      [ "$(pane agent-foo2)" = "0" ] && pass "watchdog-replay: nothing typed into agent-foo2 when only agent-foo2 runs" \
+        || fail "watchdog-replay: the replay for agent-foo landed in agent-foo2's pane (prefix taken)"
+      env -u TMUX TMUX_TMPDIR="$TMP" tmux new-session -d -s agent-foo 'sleep 300'
+      STARTED="$STARTED agent-foo"
+      replay; sleep 1
+      if [ "$(pane agent-foo)" != "0" ] && [ "$(pane agent-foo2)" = "0" ]; then
+        pass "watchdog-replay control: with agent-foo running the text reaches agent-foo, not agent-foo2"
+      else
+        fail "watchdog-replay control: agent-foo got $(pane agent-foo), agent-foo2 got $(pane agent-foo2) (want >0 and 0)"
+      fi
       ;;
     *) fail "isolated tmux socket not under $TMP (got '$SOCK'); nothing probed" ;;
   esac
