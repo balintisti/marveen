@@ -1345,6 +1345,20 @@ export function coveredIdsStillPending(noticeTexts: string[], live: ReadonlySet<
   return out
 }
 
+/** Does a message-guard notice wake its recipient? (card a85a9acd)
+ *
+ *  The FIRST notice about a message tells its sender something they can act on (wait, or move
+ *  the content to a card). A notice that only repeats what an EARLIER notice on record already
+ *  covered carries nothing new, so it rides along with the sender's next delivery instead of
+ *  waking them. `priorCovered` is the set of ids earlier notices recorded (readCoveredIdsOnRecord);
+ *  a notice that covers even ONE id not in it is news and wakes. An empty `rows` or an empty
+ *  `priorCovered` (nothing readable) wakes: a reader that cannot tell must fail toward the noisy
+ *  side, as the seed above does. */
+export function messageGuardNoticeWakes(rows: readonly { id: number }[], priorCovered: ReadonlySet<number>): boolean {
+  if (rows.length === 0) return true
+  return rows.some((r) => !priorCovered.has(r.id))
+}
+
 /** Whether this text is the message guard's own notice: the tag opens LINE ZERO.
  *
  *  Line zero, not "contains": a card title is rendered on an indented line inside another
@@ -2023,6 +2037,18 @@ export function buildFleetAlert(alerts: FleetAlert[]): string {
   return out.join('\n')
 }
 
+/** Does a coordinator-bound sweep message wake the coordinator? (card a85a9acd)
+ *
+ *  Only when it is NOTHING BUT the guard's report on its own blindness ('pane-unreadable': "I
+ *  cannot read this pane"). That report has no decision in it for the coordinator; it is
+ *  diagnostics about the guard. Any other kind in the same message (an agent still idle after a
+ *  wake, a missing workcheck, a wake that could not be enqueued) is something to act on, and a
+ *  mixed message wakes. No alerts at all wakes too: the default is the loud side. */
+export function fleetAlertWakes(alerts: readonly FleetAlert[]): boolean {
+  if (alerts.length === 0) return true
+  return alerts.some((a) => a.kind !== 'pane-unreadable')
+}
+
 /** WHO GETS A SWEEP'S ALERTS (card 1b997345, marveen's decision 2026-09-24).
  *
  *  'still-idle' used to go to the owner's Telegram: 45 messages on 2026-09-24 between 09:09 and
@@ -2061,7 +2087,7 @@ export function deliverFleetAlerts(
   coordinator: string,
   coordinatorRunning: boolean,
   io: {
-    toCoordinator: (text: string) => void
+    toCoordinator: (text: string, wake: boolean) => void
     toOwner: (text: string) => void
     onCoordinatorFailed?: (err: unknown) => void
   },
@@ -2071,7 +2097,7 @@ export function deliverFleetAlerts(
   let toCoordinator = route.coordinator
   if (toCoordinator.length > 0) {
     try {
-      io.toCoordinator(buildFleetAlert(toCoordinator))
+      io.toCoordinator(buildFleetAlert(toCoordinator), fleetAlertWakes(toCoordinator))
     } catch (err) {
       io.onCoordinatorFailed?.(err)
       owner.push(...toCoordinator)

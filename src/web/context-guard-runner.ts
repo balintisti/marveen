@@ -46,6 +46,8 @@ import {
   type HandoffStaleness,
   type GuardInputs,
   buildRestartLossLine,
+  restartLossNeedsAction,
+  restartNoticeWakes,
 } from '../context-guard.js'
 
 // Fleet context guard (kanban #81): acts BEFORE a session drowns in its own
@@ -751,16 +753,21 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
         // it could not measure and falls back to asking -- the old behaviour. A guard that
         // degrades into a confident "nothing was lost" is worse than one that admits it is blind.
         let lossLine: string
+        // null = not measured. The notice WAKES the coordinator unless the window was measured
+        // and holds nothing to resend (card a85a9acd; restartNoticeWakes).
+        let lossNeedsAction: boolean | null = null
         try {
           const restartMs = Date.now()
+          const lossRows = getRestartLossCandidates(name)
           lossLine = buildRestartLossLine(
-            getRestartLossCandidates(name),
+            lossRows,
             restartMs,
             undefined,
             new Date(restartMs).toLocaleTimeString('hu-HU', {
               hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
             }),
           )
+          lossNeedsAction = restartLossNeedsAction(lossRows, restartMs)
         } catch (err) {
           logger.warn({ err, name }, 'context-guard: could not measure the restart loss window')
           lossLine = ' A VESZTESEGET NEM TUDTAM MEGMERNI (a lekerdezes hibazott)'
@@ -788,6 +795,8 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
                 : '') +
             (snapshotPath ? ` Pane-snapshot a restart elotti allapotrol: ${snapshotPath}` : ''),
             'context-guard restart notice',
+            undefined,
+            { wake: restartNoticeWakes(lossNeedsAction, decision.nextState.handoffStaleMinutes) },
           )
         } catch (err) {
           logger.warn({ err, name }, 'context-guard: restart notice message failed')
