@@ -92,7 +92,8 @@ const SCHED_BOUNDARY = '[;&|(`]'
 // a flag, an input redirect, or an at(1) TIMESPEC (which at(1) requires anyway,
 // so a real submit can never omit it). crontab/launchctl/systemd-run keep the
 // plain match: they are not English words, so prose cannot collide with them.
-const AT_INVOCATION = String.raw`(?=\s*$|\s+-|\s*<|\s+(?:now|noon|midnight|teatime|today|tomorrow|next\b|\+\s*\d|\d{1,2}:\d{2}|\d{3,4}\b|\d{1,2}\s*(?:am|pm)\b|\d{1,2}[./]\d{1,2}|(?:mon|tue|wed|thu|fri|sat|sun)|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)))`
+const AT_TIMESPEC = String.raw`now|noon|midnight|teatime|today|tomorrow|next\b|\+\s*\d|\d{1,2}:\d{2}|\d{3,4}\b|\d{1,2}\s*(?:am|pm)\b|\d{1,2}[./]\d{1,2}|(?:mon|tue|wed|thu|fri|sat|sun)|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)`
+const AT_INVOCATION = String.raw`(?=\s*$|\s+-|\s*<|\s+(?:${AT_TIMESPEC}))`
 // `launchctl` needed the SAME narrowing, for a different reason than at/batch, and
 // the comment above ("not English words, so prose cannot collide") was measured
 // wrong on 2026-07-26 (found by Hacker). It is not an English word -- but the
@@ -118,6 +119,48 @@ const SCHEDULER_RX = new RegExp(
 // ...but allow a pure READ-listing of one's own schedule (parity with the store /
 // schedule-API read exemptions): crontab -l, launchctl list/print, atq.
 const SCHEDULER_READ_RX = new RegExp(String.raw`(^|${SCHED_BOUNDARY}\s*)${SCHED_PREFIX}(crontab\s+-l\b|launchctl\s+(?:list|print|dumpstate|blame|examine)\b|atq\b)`, 'i')
+
+// INDIRECT forms (card 3f18a5a6). SCHEDULER_RX looks at the masked command, where
+// every quoted region is blanked, and only at a segment START -- so a scheduler
+// that is an ARGUMENT of something else passed, and each of these ran it:
+//   echo x | xargs -t 'at now + 1 minute' git "$(date)"
+//   git -c alias.z='!echo hi | at now' z
+//   bash -c 'at now + 1 minute'   sh -c "crontab -"   eval "launchctl load x"
+//   xargs launchctl load          find . -exec at now \;
+// Policy (coordinator): a false negative is an unverified scheduled run, a false
+// positive is one denial with a message that says what to do -- so the scheduler
+// command is matched as a command token in any COMMAND POSITION, including the
+// start of a quoted string and the argument slot of xargs / -exec / eval / nohup.
+// Command position (not "the word anywhere") is what keeps prose out: "deployed
+// at 12:30" has a word before `at`, `echo hi | at now` has a separator. A quote
+// counts as a boundary because inside `bash -c '...'` the quote IS the start of
+// the command line; opening and closing quotes cannot be told apart by a regex,
+// which is the accepted false-positive cost (`echo "at 10:30 we merged"`).
+// The shapes are STRICTER than the direct ones, because here a bare keyword is
+// much more likely to be prose: crontab/systemd-run need an argument that is not
+// `-l`, launchctl needs a subcommand word that is not a read (list/print/...),
+// at/batch need a TIMESPEC, a flag or `<` (never a bare end), and every one of
+// them excludes `name-x`, `name=` and `name |`. The read exemptions are
+// per MATCH here (not per segment), so `crontab -l; crontab -` is still denied.
+// heredoc bodies are blanked by the caller: they are the documented way to pass
+// text through (see REASON_HINT), and the direct check never saw them either.
+const INDIRECT_BOUNDARY = '(?:^|[;&|(`\'"!{\\n]\\s*)'
+const INDIRECT_WRAPPER = String.raw`(?:\bxargs\b[^;&|\n]*?\s|\s-(?:exec|execdir|ok|okdir)\s+|\b(?:eval|nohup)\s+)`
+const INDIRECT_ARG = String.raw`\s+(?=[^\s|;&)'"])`
+// A bare `batch` (reads the job from stdin: `bash -c 'echo job | batch'`) is the one
+// shape without a TIMESPEC. A QUOTE may not precede it -- `grep "batch" src` is a
+// common search -- so this branch has its own boundary (separator or wrapper only).
+// Known gap, accepted: `sh -c 'batch'` as the entire quoted string.
+const INDIRECT_BARE_BATCH = String.raw`(?:^|[;&|(\`]\s*|${INDIRECT_WRAPPER})${SCHED_PREFIX}batch\b(?!-)(?!\s*=)(?=\s*(?:['")]|[;&|]|$))`
+const INDIRECT_SCHEDULER_RX = new RegExp(
+  INDIRECT_BARE_BATCH + '|' +
+  String.raw`(?:${INDIRECT_BOUNDARY}|${INDIRECT_WRAPPER})${SCHED_PREFIX}(?:` +
+    String.raw`(?:crontab|systemd-run)\b(?!-)(?!\s*=)${INDIRECT_ARG}(?!-l\b)` +
+    String.raw`|launchctl\b(?!-)(?!\s*=)\s+(?!(?:list|print|dumpstate|blame|examine)\b)(?:-|[a-z][a-z-]*(?:[\s'")]|$))` +
+    String.raw`|(?:batch|at)\b(?!-)(?!\s*=)(?=\s+-|\s*<|\s+(?:${AT_TIMESPEC}))` +
+  String.raw`)`,
+  'i',
+)
 
 // The Claude self-schedule store. Blocked for WRITE on any route (a Bash write,
 // or the native Write/Edit/NotebookEdit tool); a read/grep is legit diagnostics.
@@ -202,7 +245,7 @@ export function splitSegments(command) {
 // happened to reject the following bar. So the primitive is not "split more
 // carefully", it is "the inert text must not be there": mask it out, then let
 // the existing splitter and regexes run unchanged on what remains.
-export function maskInertLiterals(command) {
+export function maskInertLiterals(command, { heredocOnly = false } = {}) {
   const src = String(command ?? '').replace(/\\\r?\n/g, ' ')
   let cur = ''
   let i = 0
@@ -239,6 +282,10 @@ export function maskInertLiterals(command) {
       i += rel.index + rel[0].length
       continue
     }
+
+    // heredocOnly: leave quoted strings readable (the indirect scheduler check
+    // needs to see inside `bash -c '...'`); only heredoc bodies are blanked.
+    if (heredocOnly) { cur += c; i++; continue }
 
     if (c === "'") { // literal until the next ' -- a backslash is NOT special here
       const end = src.indexOf("'", i + 1)
@@ -392,6 +439,12 @@ export function gateDecision(toolName, toolInput) {
       // scheduler binaries: deny the exec/submit forms, allow pure read-listing
       if (SCHEDULER_RX.test(seg) && !SCHEDULER_READ_RX.test(seg)) return { deny: true, reason: 'os-scheduler' }
     }
+    // Indirect forms: the scheduler as an argument (xargs / -exec / eval) or inside
+    // a quoted command string (bash -c, git -c alias.x='!...'). Reads the text with
+    // quotes intact, heredoc bodies blanked; null (unresolvable heredoc) -> scan all.
+    if (INDIRECT_SCHEDULER_RX.test(maskInertLiterals(safeCommand, { heredocOnly: true }) ?? safeCommand)) {
+      return { deny: true, reason: 'os-scheduler-indirect' }
+    }
   }
   return { deny: false }
 }
@@ -440,6 +493,13 @@ export const REASON_HINT = {
     ' KIVALTO OK: operacios rendszer szintu utemezo indito/beküldo alakja.' +
     ' A tiszta listazas (crontab -l, launchctl list, atq) atmegy.' +
     ' HA DOKUMENTALSZ (a szoveg ADAT, nem hivas): NE fogalmazd at a szoveget -- egy pontos leiras atirasa azert, hogy egy szuron atcsusszon, a DOKUMENTUMOT rontja el. Valassz MASIK UTAT: a fajlt a Write eszkozzel ird (ne hej-heredoccal), vagy add `-d`/`--data` payloadkent -- azt a kapu blankolja.',
+  'os-scheduler-indirect':
+    ' KIVALTO OK: egy utemezo parancs (at/batch + idopont, crontab, launchctl load/bootstrap/..., systemd-run)' +
+    ' NEM a parancs elejen all, hanem argumentumkent vagy idezett parancs-szovegben:' +
+    ' xargs/-exec/eval/nohup utan, `bash -c \'...\'`, `git -c alias.x=\'!...\'`. Ha az idezett szoveget a shell' +
+    ' vegrehajtja, ez onutemezes, ezert itt a SZOVEG-egyezes is megtagad (egy `echo "at 10:30 ..."` is).' +
+    ' A tiszta listazas (crontab -l, launchctl list, atq) atmegy.' +
+    ' HA DOKUMENTALSZ (a szoveg ADAT, nem hivas): NE fogalmazd at a szoveget -- egy pontos leiras atirasa azert, hogy egy szuron atcsusszon, a DOKUMENTUMOT rontja el. Valassz MASIK UTAT: idezett hej-heredoc (<<\'VEGE\', a torzset a kapu nem nezi), a fajlt a Write eszkozzel ird, vagy add `-d`/`--data` payloadkent -- azt a kapu blankolja.',
   // The only reason without a hint until now (card 97470e22, four measured
   // occurrences: a deny-list rationale, an installation-lane finding, and twice
   // a card comment). Every other reason tells the reader what DOES pass; this
