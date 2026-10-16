@@ -16,7 +16,9 @@ import {
   upsertOtelSpan,
   type AgentMessage,
   getLastOutboundMessageAt,
+  expireUnwokenMessages,
 } from '../db.js'
+import { wakeRows, deliverableRows, isWakeRow } from '../message-wake.js'
 import { isQualifiedId } from './federation/address.js'
 import { sendFederatedMessage } from './federation/bridge.js'
 import { getFederationConfig, abandonWindowMsForPeer } from './federation/config.js'
@@ -293,12 +295,14 @@ export function formatStuckSessionAlert(
   return base === null ? null : base + formatStuckEvidence(evidence)
 }
 
-function readStuckEvidence(agent: string): StuckEvidence | null {
+export function readStuckEvidence(agent: string): StuckEvidence | null {
   // Evidence is an ADDITION: a DB hiccup here must not cost the alert itself.
   try {
     const nowSec = Math.floor(Date.now() / 1000)
     const last = getLastOutboundMessageAt(agent)
-    const pending = getPendingMessages(agent)
+    // Waking rows only (card a85a9acd): a quiet notice is not mail the stuck session is failing
+    // to read, and a day-old one would make the evidence say "oldest pending: 24h".
+    const pending = wakeRows(getPendingMessages(agent))
     return {
       lastOutboundAgoSec: last === null ? null : Math.max(0, nowSec - last),
       oldestPendingAgeSec: pending.length ? Math.max(0, nowSec - pending[0].created_at) : null,
@@ -325,6 +329,9 @@ function notifyOrchestratorOfFailedHandoff(msg: AgentMessage, reason: string): v
     // A failed message to the main agent can't happen (pull model), but guard
     // anyway so we never loop a notification back onto itself.
     if (msg.to_agent === MAIN_AGENT_ID) return
+    // A quiet notice (wake=0) that fails to deliver stays quiet: the failure notice would be a
+    // waking message about something its own recipient had no action for (card a85a9acd).
+    if (!isWakeRow(msg)) return
     const preview = (msg.content ?? '').slice(0, 220)
     createAgentMessage(
       'system',
@@ -493,6 +500,28 @@ export function isDeliberatelyParked(agent: string): boolean {
 // the guard's cost proportional to the question it answers.
 const QUIET_SWEEP_INTERVAL_MS = 60 * 1000
 let lastQuietSweepMs = 0
+// Cadence of the quiet-notice expiry sweep (card a85a9acd). Same reasoning as above: the expiry
+// horizon is 24 h, so once a minute loses nothing and keeps the 5 s tick free of a write query.
+let lastUnwokenExpiryMs = 0
+
+/** Close quiet (wake=0) rows pending past UNWOKEN_EXPIRY_S, at most once a minute. Fenced: a
+ *  failed sweep must never cost a delivery tick. Covers MAIN and every sub-agent in one UPDATE,
+ *  and never touches a waking row (expireUnwokenMessages). Returns the number closed. */
+export function sweepUnwokenExpiry(nowMs: number): number {
+  if (!quietSweepDue(nowMs, lastUnwokenExpiryMs)) return 0
+  lastUnwokenExpiryMs = nowMs
+  try {
+    const n = expireUnwokenMessages(nowMs)
+    if (n > 0) logger.info({ expired: n }, 'message-router: closed quiet notices pending past the expiry horizon')
+    return n
+  } catch (err) {
+    logger.warn({ err }, 'message-router: quiet-notice expiry sweep failed')
+    return 0
+  }
+}
+
+/** Test seam: forget the sweep cadence. */
+export function _resetUnwokenExpiryForTest(): void { lastUnwokenExpiryMs = 0 }
 
 /** Should the quiet-agent sweep run on this tick? Pure, so the cadence is testable. */
 export function quietSweepDue(nowMs: number, lastSweepMs: number, intervalMs: number = QUIET_SWEEP_INTERVAL_MS): boolean {
@@ -747,6 +776,7 @@ function batchDeliverBacklog(agent: string, agentPending: AgentMessage[], now: n
 export async function runMessageRouterTick(): Promise<void> {
     // Reset per-tick batched-message tracker.
     batchedMsgIdsThisTick = new Set()
+    sweepUnwokenExpiry(Date.now())
     // Cap work per tick: process at most MAX_MESSAGES_PER_TICK messages, the
     // rest roll to the next 5s tick. Bounds a single tick's wall-time so a
     // backlog (e.g. after a delivery stall) can never make one tick run long
@@ -764,7 +794,15 @@ export async function runMessageRouterTick(): Promise<void> {
     const localPending: AgentMessage[] = []
     const federatedPending: AgentMessage[] = []
     for (const m of allPending) (isQualifiedId(m.to_agent) ? federatedPending : localPending).push(m)
-    const pending = selectTickWindow(localPending, MAX_MESSAGES_PER_TICK, MAIN_AGENT_ID)
+    // QUIET NOTICES (card a85a9acd): a wake=0 row is injected only in the company of a waking
+    // row for the same recipient; a recipient with nothing but quiet rows gets nothing, and so
+    // is also not a "receiver in this tick" for the stuck/absent bookkeeping below. Applied
+    // BEFORE the window, so quiet rows of such a recipient do not spend its slots, and AGAIN
+    // after it, because the window can cut a recipient's waking row off while its quiet one
+    // (older, so kept) stays. Federated rows are outbound and never quiet.
+    const pending = deliverableRows(
+      selectTickWindow(deliverableRows(localPending), MAX_MESSAGES_PER_TICK, MAIN_AGENT_ID),
+    )
     const now = Date.now()
     // ---- update absent/present tracking for all receivers in this tick ----
     // Rebuild the stuck-detector's view of which agents are absent RIGHT NOW.
@@ -871,7 +909,9 @@ export async function runMessageRouterTick(): Promise<void> {
       if (agentSessionCache.get(agent)?.worksource) continue
       if (agentWasAbsent.has(agent) && !agentBatchedThisReconnect.has(agent)) {
         // Check if this agent qualifies for backlog batching.
-        const agentPending = getPendingMessages(agent)
+        // Only an agent with a WAKING row waiting has anything deliverable to summarise; the
+        // quiet rows ride in the same summary then (card a85a9acd).
+        const agentPending = deliverableRows(getPendingMessages(agent))
         if (agentPending.length > RECONNECT_BATCH_THRESHOLD) {
           const oldestAge = now - agentPending[0].created_at * 1000
           if (oldestAge > RECONNECT_BATCH_AGE_MS) {
