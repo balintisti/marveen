@@ -670,6 +670,67 @@ describe('self-pace-gate: indirect scheduler forms', () => {
   })
 })
 
+// Card 3f18a5a6, review finding 2: a wrapper that takes OPTIONS hid the command after it.
+describe('self-pace-gate: option-taking wrappers do not hide the scheduler', () => {
+  const deny = (command: string) =>
+    expect(selfPaceDecision('Bash', { command }), command).toEqual({ deny: true, reason: expect.stringMatching(/^os-scheduler/) })
+  const allow = (command: string) =>
+    expect(selfPaceDecision('Bash', { command }).deny, command).toBe(false)
+
+  it('timeout DURATION (and its own options) before the scheduler', () => {
+    deny('timeout 5 crontab x')
+    deny('timeout 5 at now + 1 minute')
+    deny('timeout -k 5 10 crontab x')
+    deny('timeout --signal=KILL 5 launchctl load x')
+  })
+  it('nice / ionice / caffeinate / stdbuf / time / setsid with flags and flag arguments', () => {
+    deny('nice -n 5 launchctl load x')
+    deny('nice -5 crontab x')
+    deny('ionice -c 2 -n 4 crontab x')
+    deny('caffeinate -i crontab -')
+    deny('caffeinate -i -t 60 at now + 1 minute')
+    deny('stdbuf -o0 crontab x')
+    deny('time -p crontab x')
+    deny('setsid -f crontab x')
+  })
+  it('env with -i / -u NAME / VAR=val, sudo with -u USER, a wrapper chain, absolute paths', () => {
+    deny('env -i crontab x')
+    deny('env -u FOO FOO=1 crontab x')
+    deny('sudo -u root crontab x')
+    deny('nice -n 5 timeout 5 env -i crontab x')
+    deny('/usr/bin/env -i /usr/bin/crontab x')
+    deny('echo hi | timeout 5 at now')
+    deny('nohup crontab x')
+    deny('exec crontab x')
+  })
+  it('script / ssh / watch / parallel and shell reserved words are command prefixes too', () => {
+    deny('script -q /dev/null crontab -e')
+    deny('ssh host at now + 1 minute')
+    deny('watch crontab x')
+    deny('parallel at now ::: x')
+    deny('if true; then crontab -; fi')
+  })
+  it('a bare crontab as an xargs / -exec argument, with xargs options parsed', () => {
+    deny('xargs -n1 crontab')
+    deny('find . -exec crontab \\;')
+  })
+  it('CONTROLS: the same wrappers around ordinary or read-only commands pass', () => {
+    allow('timeout 5 git status')
+    allow('env FOO=1 npm test')
+    allow('nice -n 5 npm run build')
+    allow('caffeinate -i npm test')
+    allow('nice -n 5 crontab -l')
+    allow('timeout 5 crontab -l')
+    allow('timeout 5 launchctl list')
+    allow('launchctl list')
+    allow('env -i launchctl print gui/501')
+    allow('command -v crontab')          // a lookup, not an exec
+    allow('xargs grep crontab')          // a search, not an invocation
+    allow('ssh host crontab -l')
+    allow('env | grep crontab')
+  })
+})
+
 // --- telegram copy gate: the outgoing-copy-gate must actually be WIRED ---
 //
 // GATECOPY828. The check itself lived in outgoing-copy-gate.py since 2026-08-27

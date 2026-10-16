@@ -72,7 +72,31 @@ const SELF_PACE_BASH_PATTERNS = [
 // `PATH=/bin crontab -` are all caught. Trailing \b(?!-) so it never fires on
 // "netstat" / "crontab-helper.sh"; (?!\s*=) so a bare NAME=value assignment
 // (`at=$(...)`) is not mistaken for the `at` binary.
-const SCHED_PREFIX = String.raw`(?:(?:[A-Za-z_]\w*=\S*|sudo|env|command|exec|nice|builtin|time)\s+)*(?:\S*/)?`
+//
+// WRAPPERS WITH OPTIONS (card 3f18a5a6, didi finding 2): a wrapper that takes
+// options hid the command that follows it -- `timeout 5 crontab x`, `nice -n 5
+// launchctl load x`, `caffeinate -i crontab -`, `env -i crontab x` all passed,
+// because the prefix knew the wrapper WORD but not its flags and flag arguments,
+// so the real command was no longer at the command position. The decision of
+// 10:12 is "a scheduler call is refused anywhere in the command", so each
+// wrapper now also swallows its options. WRAPPER_OPTS is deliberately generous:
+// a flag, optionally followed by one non-flag word (its argument). Regex
+// backtracking gives the word back when it is really the command, so
+// `nice -n 5 crontab` and `sudo -E crontab` both resolve. `timeout` additionally
+// requires its positional DURATION; `command` takes only -p (`command -v crontab`
+// is a lookup, never an exec, and must stay allowed). Shell reserved words that
+// introduce a command (`then`, `do`, `else`, ...) are prefixes too.
+const WRAPPER_OPTS = String.raw`(?:\s+--?[A-Za-z0-9][^\s]*(?:\s+[^\s-]\S*)?)*`
+const WRAPPER_PATH = String.raw`(?:\S*/)?`
+const SCHED_WRAPPER = '(?:' + [
+  String.raw`[A-Za-z_]\w*=\S*`,
+  String.raw`(?:then|do|else|elif|if|while|until|!|\{)`,
+  String.raw`${WRAPPER_PATH}timeout${WRAPPER_OPTS}\s+\d\S*`,
+  String.raw`${WRAPPER_PATH}command(?:\s+-p)*`,
+  String.raw`${WRAPPER_PATH}(?:script|ssh)${WRAPPER_OPTS}\s+\S+`,
+  String.raw`${WRAPPER_PATH}(?:sudo|doas|env|exec|nice|ionice|caffeinate|stdbuf|time|setsid|nohup|watch|parallel|arch|builtin)${WRAPPER_OPTS}`,
+].join('|') + ')'
+const SCHED_PREFIX = String.raw`(?:${SCHED_WRAPPER}\s+)*(?:\S*/)?`
 // The command-boundary anchor includes `(` so a $(...) command substitution
 // (`X=$(crontab -)`) is caught, AND a backtick so a legacy `...` substitution
 // (`X=`crontab -r``) is caught too -- both run the enclosed command in a shell
@@ -152,8 +176,14 @@ const INDIRECT_ARG = String.raw`\s+(?=[^\s|;&)'"])`
 // common search -- so this branch has its own boundary (separator or wrapper only).
 // Known gap, accepted: `sh -c 'batch'` as the entire quoted string.
 const INDIRECT_BARE_BATCH = String.raw`(?:^|[;&|(\`]\s*|${INDIRECT_WRAPPER})${SCHED_PREFIX}batch\b(?!-)(?!\s*=)(?=\s*(?:['")]|[;&|]|$))`
+// A wrapper (xargs / -exec / eval / nohup) makes the next word a COMMAND by
+// construction, so a bare `crontab` there (`xargs -n1 crontab`: reads each job
+// file from stdin) is a real invocation, unlike a bare word in prose. xargs gets
+// its OPTIONS parsed (not skipped lazily): `xargs grep crontab` is a search.
+const INDIRECT_STRICT_WRAPPER = String.raw`(?:\bxargs${WRAPPER_OPTS}\s+|\s-(?:exec|execdir|ok|okdir)\s+|\b(?:eval|nohup)\s+)`
+const INDIRECT_BARE_CRONTAB = String.raw`${INDIRECT_STRICT_WRAPPER}${SCHED_PREFIX}(?:crontab|systemd-run)\b(?!-)(?!\s*=)(?=\s*(?:[;&|)]|$))`
 const INDIRECT_SCHEDULER_RX = new RegExp(
-  INDIRECT_BARE_BATCH + '|' +
+  INDIRECT_BARE_BATCH + '|' + INDIRECT_BARE_CRONTAB + '|' +
   String.raw`(?:${INDIRECT_BOUNDARY}|${INDIRECT_WRAPPER})${SCHED_PREFIX}(?:` +
     String.raw`(?:crontab|systemd-run)\b(?!-)(?!\s*=)${INDIRECT_ARG}(?!-l\b)` +
     String.raw`|launchctl\b(?!-)(?!\s*=)\s+(?!(?:list|print|dumpstate|blame|examine)\b)(?:-|[a-z][a-z-]*(?:[\s'")]|$))` +
