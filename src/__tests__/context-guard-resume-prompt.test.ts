@@ -87,6 +87,11 @@ describe('resumePrompt carries the restart-window re-read on every variant', () 
       // item needs no work -- this is what makes the v1 measurable at all.
       expect(p).toContain('nyugtát a feladónak')
       expect(p).toContain('akkor is, ha nincs belőle teendő')
+      // af9a6838: an ack to "system" is a 400 (not an agent); the prompt must
+      // route those rows to the result field of a silent close instead.
+      expect(p).toContain('a "system" feladó nem ágens')
+      expect(p).toContain('PUT /api/messages/<id>')
+      expect(p).toContain('"notify":false')
     })
   }
 })
