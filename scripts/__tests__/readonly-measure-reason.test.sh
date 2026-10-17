@@ -34,6 +34,7 @@ case "${STUB_MODE:-}" in
   scripterr)  echo BEGIN; echo SAVEPOINT; echo 'UPDATE 0'; echo ROLLBACK; echo 'psql:/x/m.sql:1: ERROR:  operator does not exist: uuid = integer'; exit 0 ;;
   one)      echo "$STUB_GATE" >&2; echo 'psql:/x/m.sql:1: ERROR:  syntax error'; echo ROLLBACK ;;
   two)      echo "$STUB_GATE" >&2; echo "$STUB_GATE" >&2; echo ROLLBACK ;;
+  wrap)     while [ $# -gt 0 ]; do [ "$1" = -f ] && cat "$2"; shift; done; echo "$STUB_GATE" >&2; echo "$STUB_GATE" >&2 ;;
 esac
 STUB
 chmod +x "$T/bin/psql"
@@ -72,6 +73,36 @@ rc="$(run two "$T/bin" STUB_MODE=two STUB_GATE="$GATE_LINE")"
 check "two gate hits: exit 0 (positive control)" "$rc" "0"
 rc="$(run one "$T/bin" STUB_MODE=one STUB_GATE="$GATE_LINE")"
 check "one gate hit: exit 4, unchanged" "$rc" "4"
+
+# A hivo SQL-je nem lephet ki a burokbol -- kartya f978316e. Az elutasitas psql ELOTT tortenik,
+# ezert a stub ki sem fut (fires=0); mert eles helyi Postgresen 2026-10-18: a REGI vazzal egy
+# `COMMIT; INSERT` a hivo fajljaban VALOBAN irt (1 sor), es csak utana jelzett 1/2-t.
+rsql() { # $1 nev  $2 SQL-tartalom -> exit kod
+  printf '%b' "$2" > "$T/$1.sql"
+  env PATH="$T/bin:$PATH" STUB_MODE=two STUB_GATE="$GATE_LINE" bash "$SCRIPT" --sql "$T/$1.sql" \
+    --url "postgresql://u@db.invalid-host.test:5432/d" --gate-table User --gate-column id > "$T/$1.out" 2>&1
+  echo $?
+}
+for c in "commit|SELECT 1;\nCOMMIT;\nINSERT INTO t VALUES (1);\n" "end|SELECT 1; END;\n" \
+         "rollback|SELECT 1;\nrollback;\n" "begin|BEGIN; SELECT 1;\n" "release|RELEASE SAVEPOINT p1;\n" \
+         "settxn|SET TRANSACTION READ WRITE;\n" "connect|SELECT 1;\n\\\\c postgres\n" "shell|\\\\! date\n"; do
+  n="txn-${c%%|*}"; rc="$(rsql "$n" "${c#*|}")"
+  check "$n: refused before psql, exit 64" "$rc" "64"
+  check "$n: names the escape" "$(has "$n" 'kilepne a csak-olvaso burokbol')" "1"
+  check "$n: psql never ran" "$(has "$n" 'kapu-tuzelesek')" "0"
+done
+# Ami NEM kilepes, atmegy (a szuro nem vak a masik iranyban sem): ROLLBACK TO, literal, komment, \set.
+for c in "rbto|SAVEPOINT p1;\nSELECT 1;\nROLLBACK TO SAVEPOINT p1;\n" "literal|SELECT 'commit; end;' AS x;\n" \
+         "comment|-- COMMIT here is a comment\nSELECT 1; /* END; */\n" "set|\\\\set ON_ERROR_ROLLBACK on\nSELECT 1;\n"; do
+  n="ok-${c%%|*}"; rc="$(rsql "$n" "${c#*|}")"
+  check "$n: allowed, exit 0" "$rc" "0"
+done
+# A burok ON_ERROR_ROLLBACK-kal futtatja a hivo fajljat, es a BEGIN UTAN, a `\i` ELOTT allitja.
+env PATH="$T/bin:$PATH" STUB_MODE=wrap STUB_GATE="$GATE_LINE" bash "$SCRIPT" --sql "$T/m.sql" \
+  --url "postgresql://u@db.invalid-host.test:5432/d" --gate-table User --gate-column id > "$T/wrap.out" 2>&1
+check "wrap: ON_ERROR_ROLLBACK on is set" "$(has wrap '^\\set ON_ERROR_ROLLBACK on$')" "1"
+check "wrap: set after BEGIN, before the caller file" \
+  "$(awk '/^BEGIN TRANSACTION READ ONLY;$/{b=NR} /^\\set ON_ERROR_ROLLBACK on$/{e=NR} /^\\i /{i=NR} END{print (b<e && e<i)?"yes":"no"}' "$T/wrap.out")" "yes"
 
 # Valodi psql, ha van: lezart port (Connection refused) es .invalid hoszt (DNS). Offline, nincs szerver.
 if command -v psql >/dev/null 2>&1; then
