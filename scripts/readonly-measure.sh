@@ -65,22 +65,74 @@ done
 # a burkot, es ami utana jon, AUTOCOMMITBAN fut, csak-olvaso vedelem nelkul -- a zaro kapu ekkor
 # elmarad (1 tuzeles, exit 4), de az iras MAR MEGTORTENT. Ugyanigy egy `\c` mas kapcsolatra valt,
 # a `\!` hejat futtat. Ezert ezeket FUTAS ELOTT elutasitjuk, nem utolag merjuk.
-# A HATAR, kimondva: kommenteket es '...' literalokat kihagyva az UTASITAS ELEJET nezi. Nem latja
-# a dinamikus SQL-t (EXECUTE egy DO-blokkban) es egy CALL-olt eljaras sajat COMMIT-jat; ezek
-# ellen a READ ONLY tranzakcio maga ved (egy olvaso tranzakcioban az eljaras sem ir).
+#
+# EGY MENETBEN LEXEL, BALROL JOBBRA, mert a psql is igy olvas. Az elozo, regex-sorozatos szuro
+# egymas utan vette ki a kommenteket es a literalokat, es egy aposztrof egy `--` kommentben, egy
+# "it's" azonositoban vagy egy E'\'' literalban elnyelte a kovetkezo COMMIT-ot: didi helyi
+# Postgresen mind a harommal irt egy sort (38602). A `$$...$$` torzset sem ismerte, ezert a DO
+# blokk END-jet kilepesnek vette. A psql `:valtozo` behelyettesitese SQL-t csempeszhet a szuro
+# moge (`\set q COMMIT` + `:q;`), a meta-parancs argumentumaban a backtick hejat futtat, a `\\`
+# utan uj meta-parancs jon: ezeket is elutasitjuk. Lezaratlan literal/komment: elutasitas (a
+# psql a burok sorait nyelne bele).
+# A PGOPTIONS='-c default_transaction_read_only=on' NEM pot: a Supabase pooler ezt az egy GUC-ot
+# elnyeli (rulebook/delta-crm.md, "KET ALAK, AMI VEDELEMNEK LATSZIK").
+# A HATAR, kimondva: standard_conforming_strings=on-t feltetelez (a PG alapertelmezese). Nem latja
+# a dinamikus SQL-t (EXECUTE egy DO-blokkban) es egy CALL-olt eljaras sajat COMMIT-jat; ezek ellen
+# a READ ONLY tranzakcio maga ved (tranzakcio-blokkon belul a DO/CALL nem zarhat tranzakciot, es
+# egy olvaso tranzakcioban nem is ir).
 TXN_HIT="$(python3 - "$SQL_FILE" <<'PYX'
 import re,sys
 src=open(sys.argv[1],encoding='utf-8',errors='replace').read()
-src=re.sub(r'/\*.*?\*/',' ',src,flags=re.S)
-src=re.sub(r"'(?:[^']|'')*'","''",src)
-src=re.sub(r'--[^\n]*','',src)
-hits=[]
-for ln,line in enumerate(src.splitlines(),1):
-    m=re.match(r'\s*\\(c|connect|!|i|ir|include|include_relative|o|out|g|gexec)(?=\s|$)',line)
-    if m: hits.append('%d: \\%s'%(ln,m.group(1)))
+Q,DQ,BT=chr(39),chr(34),chr(96)
+ID=re.compile(r'[A-Za-z0-9_$\x80-\U0010ffff]')
+DOLLAR=re.compile(r'\$(?:[A-Za-z_\x80-\U0010ffff][A-Za-z0-9_\x80-\U0010ffff]*)?\$')
+META_OK=re.compile(r'(?:echo|qecho|warn|pset|set|unset|x|a|t|T|f|H|C|timing|conninfo|encoding|l\+?|z|d[A-Za-z]*[+S]*|s[fv]\+?)$')
+hits=[]; code=[]; i=0; n=len(src)
+def ln(p): return src.count('\n',0,p)+1
+def quoted(i,q,esc):
+    j=i+1
+    while j<n:
+        if esc and src[j]=='\\': j+=2; continue
+        if src[j]==q:
+            if j+1<n and src[j+1]==q: j+=2; continue
+            return j+1
+        j+=1
+    return -1
+while i<n:
+    ch=src[i]; nx=src[i+1] if i+1<n else ''
+    if ch=='-' and nx=='-':
+        j=src.find('\n',i); i=n if j<0 else j; continue
+    if ch=='/' and nx=='*':
+        d=1; j=i+2
+        while j<n and d:
+            if src.startswith('/*',j): d+=1; j+=2
+            elif src.startswith('*/',j): d-=1; j+=2
+            else: j+=1
+        if d: hits.append('%d: lezaratlan /* komment'%ln(i)); break
+        code.append(' '); i=j; continue
+    if ch in (Q,DQ):
+        esc=ch==Q and i>0 and src[i-1] in 'eE' and not (i>1 and ID.match(src[i-2]))
+        j=quoted(i,ch,esc)
+        if j<0: hits.append('%d: lezaratlan %s'%(ln(i),ch)); break
+        code.append(ch*2); i=j; continue
+    if ch=='$' and not (i>0 and ID.match(src[i-1])):
+        m=DOLLAR.match(src,i)
+        if m:
+            j=src.find(m.group(0),m.end())
+            if j<0: hits.append('%d: lezaratlan %s'%(ln(i),m.group(0))); break
+            code.append(Q+Q); i=j+len(m.group(0)); continue
+    if ch=='\\':
+        m=re.match(r'[A-Za-z]+[+S]*|[^\sA-Za-z]?',src[i+1:])
+        name=m.group(0); j=src.find('\n',i); j=n if j<0 else j
+        args=src[i+1+len(name):j]
+        if not META_OK.match(name): hits.append('%d: \\%s'%(ln(i),name))
+        elif BT in args or chr(92) in args: hits.append('%d: \\%s argumentumaban backtick vagy backslash'%(ln(i),name))
+        code.append(';'); i=j; continue
+    if ch==':' and nx!=':' and not (i>0 and src[i-1]==':') and re.match('[A-Za-z_'+Q+DQ+']',nx):
+        hits.append('%d: :%s (psql-valtozo)'%(ln(i),re.match(r'[^\s;]*',src[i+1:]).group(0)[:20])); i+=1; continue
+    code.append(ch); i+=1
 TXN=re.compile(r'(?is)^\s*(commit|end|abort|begin|start\s+transaction|rollback(?!\s+(?:work\s+|transaction\s+)?to\b)|set\s+(?:session\s+characteristics|transaction)|prepare\s+transaction)\b')
-body=re.sub(r'(?m)^\s*\\[^\n]*$','',src)
-for st in body.split(';'):
+for st in ''.join(code).split(';'):
     m=TXN.match(st)
     if m: hits.append(re.sub(r'\s+',' ',m.group(1)).upper())
 print('; '.join(hits))
@@ -88,7 +140,8 @@ PYX
 )"
 if [ -n "$TXN_HIT" ]; then
   echo "NEM MERTEM: a meres SQL-je kilepne a csak-olvaso burokbol: $TXN_HIT" >&2
-  echo "  A tranzakciot a burok nyitja es zarja; a fajlban ne legyen COMMIT/END/ROLLBACK/BEGIN, se \\c, \\!, \\i." >&2
+  echo "  A tranzakciot a burok nyitja es zarja; a fajlban ne legyen COMMIT/END/ROLLBACK/BEGIN, se \\c, \\!, \\i, se :valtozo." >&2
+  echo "  Engedett meta-parancsok: \\echo \\qecho \\warn \\pset \\set \\unset \\x \\a \\t \\timing \\d* \\l \\z \\sf \\sv (backtick nelkul)." >&2
   echo "  Egy spekulativ blokk hibaja ellen NEM kell sajat SAVEPOINT: a burok ON_ERROR_ROLLBACK-kal fut." >&2
   exit 64
 fi
