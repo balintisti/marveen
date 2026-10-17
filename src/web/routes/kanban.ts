@@ -793,6 +793,21 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
         return true
       }
     }
+    // The parent must exist (card dd7f1165). `parent_id` REFERENCES kanban_cards(id),
+    // but `PRAGMA foreign_keys` is set nowhere, so SQLite stored any string and the
+    // child hung under a parent no screen shows -- while PUT, below, already refused
+    // the same value. A brand-new card has no children, so the only loop it can
+    // close is onto itself, through a supplied id.
+    if (typeof data.parent_id === 'string' && data.parent_id) {
+      if (suppliedId && data.parent_id === suppliedId) {
+        json(res, { error: 'Egy kártya nem lehet a saját szülője. A kartya NEM jott letre.' }, 400)
+        return true
+      }
+      if (!getKanbanCard(data.parent_id)) {
+        json(res, { error: `A szülő kártya nem található: ${data.parent_id}. A kartya NEM jott letre.` }, 400)
+        return true
+      }
+    }
     const id = suppliedId || randomUUID().slice(0, 8)
     // Unknown keys are WARNED, not rejected (upstream 826453d9): POST's caller population is
     // not measured, and a 400 here would turn a silent data loss into an outage in card

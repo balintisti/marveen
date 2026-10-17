@@ -19,9 +19,9 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import http from 'node:http'
 import { Readable } from 'node:stream'
-import { initDatabase } from '../db.js'
+import { initDatabase, listKanbanCards, getKanbanCard } from '../db.js'
 import { tryHandleKanban } from '../web/routes/kanban.js'
-import { kanbanCreateError, KANBAN_STATUSES, KANBAN_PRIORITIES } from '../web/kanban-create-validation.js'
+import { kanbanCreateError, KANBAN_STATUSES, KANBAN_PRIORITIES, KANBAN_TEXT_FIELDS } from '../web/kanban-create-validation.js'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const DB_SRC = readFileSync(join(ROOT, 'src', 'db.ts'), 'utf-8')
@@ -74,23 +74,23 @@ describe('kanbanCreateError -- the field, and what it accepts', () => {
   })
 })
 
-describe('the ROUTE returns it -- a 400 that reaches the caller', () => {
-  async function post(body: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
-    const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(body))]), {
-      method: 'POST', headers: {},
-    }) as unknown as http.IncomingMessage
-    let chunk = ''
-    let status = 200
-    const res = {
-      writeHead(c: number) { status = c; return res }, setHeader() { return res },
-      end(d?: string) { if (d) chunk = d },
-    } as unknown as http.ServerResponse
-    await tryHandleKanban({
-      req, res, path: '/api/kanban', method: 'POST', url: new URL('http://x/api/kanban'),
-    } as never)
-    return { status, body: JSON.parse(chunk) }
-  }
+async function post(body: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+  const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(body))]), {
+    method: 'POST', headers: {},
+  }) as unknown as http.IncomingMessage
+  let chunk = ''
+  let status = 200
+  const res = {
+    writeHead(c: number) { status = c; return res }, setHeader() { return res },
+    end(d?: string) { if (d) chunk = d },
+  } as unknown as http.ServerResponse
+  await tryHandleKanban({
+    req, res, path: '/api/kanban', method: 'POST', url: new URL('http://x/api/kanban'),
+  } as never)
+  return { status, body: JSON.parse(chunk) }
+}
 
+describe('the ROUTE returns it -- a 400 that reaches the caller', () => {
   it('the three measured probes now get 400 and a named field', async () => {
     initDatabase(':memory:')
     const bad = await post({ title: 'probe', priority: 'medium' })
@@ -210,5 +210,60 @@ describe('DRIFT GUARD: the validator and the schema CHECK agree', () => {
     for (const list of checkLists('priority')) {
       expect(list).toEqual([...KANBAN_PRIORITIES].sort())
     }
+  })
+})
+
+/** Card dd7f1165 (sirius 2026-10-14): the TEXT columns and `parent_id` were taken
+ *  unchecked. A non-string threw in the better-sqlite3 bind (anonymous 500) or was
+ *  stored as text; a `parent_id` naming no card was stored, foreign_keys being off. */
+describe('the TEXT fields and the parent are checked too (card dd7f1165)', () => {
+  it('names each TEXT field when it is not a string', () => {
+    for (const field of KANBAN_TEXT_FIELDS) {
+      for (const bad of [5, true, { a: 1 }, ['x']]) {
+        expect(kanbanCreateError({ title: 'x', [field]: bad }), `${field}=${JSON.stringify(bad)}`)
+          .toMatch(new RegExp('`' + field + '`'))
+      }
+    }
+  })
+
+  it('a string, an empty string and null are still accepted (control)', () => {
+    for (const field of KANBAN_TEXT_FIELDS) {
+      for (const ok of ['szoveg', '', null, undefined]) {
+        expect(kanbanCreateError({ title: 'x', [field]: ok }), `${field}=${JSON.stringify(ok)}`).toBeUndefined()
+      }
+    }
+  })
+
+  it('the route answers 400 naming the field, and creates nothing', async () => {
+    initDatabase(':memory:')
+    const r = await post({ title: 'tipus', assignee: { name: 'friday' }, project: 'marveen' })
+    expect(r.status).toBe(400)
+    expect(String(r.body.error)).toMatch(/`assignee`/)
+    expect(listKanbanCards().length).toBe(0)
+  })
+
+  it('a parent that does not exist is refused, and no card is created', async () => {
+    initDatabase(':memory:')
+    const r = await post({ title: 'arva', parent_id: 'nincsilyen', project: 'marveen' })
+    expect(r.status).toBe(400)
+    expect(String(r.body.error)).toMatch(/nincsilyen/)
+    expect(listKanbanCards().length).toBe(0)
+  })
+
+  it('a supplied id cannot be its own parent', async () => {
+    initDatabase(':memory:')
+    const r = await post({ id: 'onmaga', title: 'kor', parent_id: 'onmaga', project: 'marveen' })
+    expect(r.status).toBe(400)
+    expect(String(r.body.error)).toMatch(/saját szülője/)
+    expect(getKanbanCard('onmaga')).toBeFalsy()
+  })
+
+  it('an existing parent is accepted and stored (control)', async () => {
+    initDatabase(':memory:')
+    const parent = await post({ title: 'szulo', project: 'marveen' })
+    expect(parent.status).toBe(200)
+    const child = await post({ title: 'gyerek', parent_id: parent.body.id, project: 'marveen' })
+    expect(child.status).toBe(200)
+    expect(getKanbanCard(String(child.body.id))?.parent_id).toBe(parent.body.id)
   })
 })
