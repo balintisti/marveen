@@ -91,6 +91,21 @@ for c in "commit|SELECT 1;\nCOMMIT;\nINSERT INTO t VALUES (1);\n" "end|SELECT 1;
   check "$n: names the escape" "$(has "$n" 'kilepne a csak-olvaso burokbol')" "1"
   check "$n: psql never ran" "$(has "$n" 'kapu-tuzelesek')" "0"
 done
+# didi 38602: a regi, regex-sorozatos szuro alatt mindharom IRT egy sort helyi Postgresen (rc=4).
+# Es ami ugyanabbol az osztalybol jon: meta-parancs sor kozepen, `\\` lancolas, backtick, :valtozo, lezaratlan literal.
+for c in "dash-apos|-- don't\nCOMMIT;\nINSERT INTO t VALUES (1);\nSELECT 'x';\n" "qident|SELECT 1 AS \"it's\";\nCOMMIT;\nSELECT 'x';\n" \
+         "estr|SELECT E'\\\\'';\nCOMMIT;\nSELECT 'x';\n" "midline-shell|SELECT 1; \\\\! date\n" "chain|\\\\echo hi \\\\\\\\ \\\\! date\n" \
+         "backtick|\\\\echo \`date\`\n" "psqlvar|\\\\set q COMMIT\n:q;\n" "unterminated|SELECT 'abc;\n" \
+         "nested|/* a /* b */ c */ COMMIT;\n"; do
+  n="txn-${c%%|*}"; rc="$(rsql "$n" "${c#*|}")"
+  check "$n: refused before psql, exit 64" "$rc" "64"
+  check "$n: psql never ran" "$(has "$n" 'kapu-tuzelesek')" "0"
+done
+for c in "do-block|DO \$\$ BEGIN PERFORM 1; END \$\$;\n" "dollar-tag|SELECT \$q\$it's; COMMIT;\$q\$ AS x;\n" \
+         "estr-ok|SELECT E'a\\\\'; commit' AS x;\n" "qident-ok|SELECT 1 AS \"it's\";\n" "cast|SELECT '1'::int;\n" "describe|\\\\x\n\\\\pset format aligned\nSELECT 1;\n"; do
+  n="ok-${c%%|*}"; rc="$(rsql "$n" "${c#*|}")"
+  check "$n: allowed, exit 0" "$rc" "0"
+done
 # Ami NEM kilepes, atmegy (a szuro nem vak a masik iranyban sem): ROLLBACK TO, literal, komment, \set.
 for c in "rbto|SAVEPOINT p1;\nSELECT 1;\nROLLBACK TO SAVEPOINT p1;\n" "release|SAVEPOINT p1;\nSELECT 1;\nRELEASE SAVEPOINT p1;\n" "literal|SELECT 'commit; end;' AS x;\n" \
          "comment|-- COMMIT here is a comment\nSELECT 1; /* END; */\n" "set|\\\\set ON_ERROR_ROLLBACK on\nSELECT 1;\n"; do
