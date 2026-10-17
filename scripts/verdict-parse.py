@@ -60,6 +60,16 @@ DB = os.environ.get('MARVEEN_DB', '/Users/isti/marveen/store/claudeclaw.db')
 # this byte-match the documented form, so the next reader does not re-derive the question.
 ANCHOR = re.compile(r'^\**VERDIKT:', re.M)
 NINCS, NYITOTT, UNMEASURABLE = 'NINCS NYITOTT TETEL', 'NYITOTT TETEL', 'NEM MERHETO'
+# The author's OWN measured-time stamp in front of the line (card 08832e26, the same rule as
+# src/kanban-verdict.ts OWN_STAMP): "[didi, 2026-10-14 23:13 CEST, date] VERDIKT: ..." is a
+# verdict given. Taken off only in this exact shape and only when it names the comment's author;
+# another author's stamp stays a citation. Without it this reader and the close gate disagree.
+OWN_STAMP = re.compile(r'^\[([^\],]+), \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})? [A-Z]{3,5}, date\] ')
+
+
+def without_own_stamp(line, author):
+    m = OWN_STAMP.match(line)
+    return line[m.end():] if m and author is not None and m.group(1) == author else line
 
 
 def _strip_accents(s):
@@ -67,8 +77,9 @@ def _strip_accents(s):
                    if unicodedata.category(c) != 'Mn')
 
 
-def classify(line):
+def classify(line, author=None):
     """One line -> (token, scope). `token` is NINCS / NYITOTT / NEM MERHETO."""
+    line = without_own_stamp(line, author)
     if not ANCHOR.match(line):          # step 0: column 0, `**` included; indented = quotation
         return None
     body = line.split('VERDIKT:', 1)[1]  # step 0/b: the prefix must go
@@ -87,7 +98,7 @@ def parse_verdicts(comments):
     last = {}
     for author, ts, content in comments:
         for line in content.split('\n'):
-            got = classify(line)
+            got = classify(line, author)
             if got:
                 last[author] = (got[0], got[1], ts)
     return last
