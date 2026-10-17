@@ -880,10 +880,12 @@ describe('skill-index.sh -- soft threshold (early warning)', () => {
     makeSkillOfLines(tmpHome, 'nearly-full', 90)
     for (const hr of ['0', '100', '150']) {
       const r = runWithStderr([], { HOME: tmpHome, SKILL_LINE_LIMIT: '100', SKILL_SOFT_HEADROOM: hr })
-      expect(r.stderr, `headroom=${hr} must be rejected`).toContain('pozitiv kontroll ELBUKOTT')
+      expect(r.stderr, `headroom=${hr} must be rejected`).toContain('MERET-OR: a pozitiv kontroll ELBUKOTT')
     }
     const ok = runWithStderr([], { HOME: tmpHome, ...ENV })
-    expect(ok.stderr).not.toContain('pozitiv kontroll ELBUKOTT')
+    // The size guard's OWN control line: the hardening guard (aaef2106) has a control with
+    // the same wording, and in this tmp HOME it rightly fires (no shared skill tree here).
+    expect(ok.stderr).not.toContain('MERET-OR: a pozitiv kontroll ELBUKOTT')
   })
 
   // --- the two regimes (didi, 2026-09-11) ---------------------------------------
