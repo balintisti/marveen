@@ -223,7 +223,9 @@ export function shouldDeferForRecentRespawn(
   return lastRespawnMs > 0 && nowMs - lastRespawnMs < graceMs
 }
 
-async function checkSession(label: string, session: string): Promise<void> {
+// Exported for the behavioural poll-step test (card 0fc42aaa, didi 31905); the
+// only production caller is the sweep below.
+export async function checkSession(label: string, session: string): Promise<void> {
   const pane = capturePane(session)
   const sig = pane == null ? null : stuckToolCallSignature(pane)
 
