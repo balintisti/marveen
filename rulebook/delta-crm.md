@@ -2033,6 +2033,8 @@ voltak, a `RELEASE`-ek ott voltak, és a záró kapu mégsem futott le.)*
 SELECT count(*) FROM "<amiben nem vagy biztos>";
 ```
 
+*(2026-10-18, kártya f978316e: a `scripts/readonly-measure.sh` burka ezt MAGA állítja be a te fájlod előtt, tehát a sor a fájlodban ártalmatlan, de már nem szükséges. A burok FUTÁS ELŐTT elutasítja a fájlt, ha benne `COMMIT`/`END`/`ROLLBACK`/`BEGIN`/`RELEASE`/`SET TRANSACTION` vagy `\c`, `\!`, `\i` áll: mérve helyi Postgresen, a régi burok mellett egy `COMMIT; INSERT` a mérő fájlban VALÓBAN írt, és csak utána jelzett 1/2-t.)*
+
 **Mérve, ugyanaz a mérés, ugyanaz az elgépelés:** kézi savepointokkal `kapu-tüzelések: 1/2` és a
 `readonly-measure.sh` MEGTAGADTA az eredményt; `ON_ERROR_ROLLBACK on`-nal `2/2`, és a mérés
 lefutott. **A megtagadás mentette meg** -- a szám (0 naptár-kapcsolat) mindkét futásban ugyanaz
