@@ -63,7 +63,7 @@ vi.mock('../web/agent-message-wrap.js', async (importOriginal) => {
 })
 vi.mock('../web/telegram-inbox-wake.js', () => ({ maybeWakeSubAgentsForTelegram: vi.fn() }))
 
-import { runMessageRouterTick, sweepUnwokenExpiry, _resetUnwokenExpiryForTest, readStuckEvidence } from '../web/message-router.js'
+import { runMessageRouterTick, sweepUnwokenExpiry, _resetUnwokenExpiryForTest, readStuckEvidence, _resetAgentAbsenceForTest, MESSAGE_ABANDON_WINDOW_MS } from '../web/message-router.js'
 import type { AgentMessage } from '../db.js'
 
 const NOW_SEC = Math.floor(Date.now() / 1000)
@@ -79,6 +79,15 @@ function load(rows: AgentMessage[]) {
 }
 const deliveredIds = () => mockMarkDelivered.mock.calls.map((c) => c[0])
 const sessions = () => mockSendPrompt.mock.calls.map((c) => c[0])
+// An abandon needs the session CONTINUOUSLY absent for the window (card dd5a3f76): the first absent
+// tick only starts the clock and abandons nothing; a second tick one window later does.
+async function tickAbsentForWindow() {
+  const t0 = Date.now()
+  await runMessageRouterTick()
+  expect(mockMarkFailed).not.toHaveBeenCalled()
+  const spy = vi.spyOn(Date, 'now').mockReturnValue(t0 + MESSAGE_ABANDON_WINDOW_MS + 1000)
+  try { await runMessageRouterTick() } finally { spy.mockRestore() }
+}
 
 describe('router tick: quiet rows (card a85a9acd)', () => {
   const env = { ...process.env }
@@ -88,6 +97,7 @@ describe('router tick: quiet rows (card a85a9acd)', () => {
     mockSendPrompt.mockImplementation(async () => 'sent' as const)
     process.env.ROUTER_BATCH_INJECT_AGENTS = 'nobody-opted-in'
     _resetUnwokenExpiryForTest()
+    _resetAgentAbsenceForTest()
   })
   afterEach(() => { process.env = { ...env } })
 
@@ -150,7 +160,7 @@ describe('router tick: quiet rows (card a85a9acd)', () => {
     sessionUp = false
     // older than any abandon window
     load([row(1, 'eve', 0, 30 * 24 * 3600)])
-    await runMessageRouterTick()
+    await tickAbsentForWindow()
     expect(mockMarkFailed).not.toHaveBeenCalled()
     expect(mockCreateMessage).not.toHaveBeenCalled()
   })
@@ -158,7 +168,7 @@ describe('router tick: quiet rows (card a85a9acd)', () => {
   it('POSITIVE CONTROL: the same ancient row, waking, IS abandoned and reported', async () => {
     sessionUp = false
     load([row(1, 'eve', 1, 30 * 24 * 3600)])
-    await runMessageRouterTick()
+    await tickAbsentForWindow()
     expect(mockMarkFailed).toHaveBeenCalled()
     expect(mockCreateMessage.mock.calls.some((c) => String(c[2]).startsWith('[handoff-failure]'))).toBe(true)
   })
@@ -166,7 +176,7 @@ describe('router tick: quiet rows (card a85a9acd)', () => {
   it('a quiet row that rides with an abandoned waking row fails WITHOUT a notice of its own', async () => {
     sessionUp = false
     load([row(1, 'eve', 1, 30 * 24 * 3600), row(2, 'eve', 0, 30 * 24 * 3600)])
-    await runMessageRouterTick()
+    await tickAbsentForWindow()
     expect(mockMarkFailed.mock.calls.map((c) => c[0]).sort()).toEqual([1, 2])
     const notices = mockCreateMessage.mock.calls.filter((c) => String(c[2]).startsWith('[handoff-failure]'))
     expect(notices).toHaveLength(1)

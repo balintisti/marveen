@@ -8,9 +8,11 @@
 // even though the session never actually went away. Two completion reports
 // were silently discarded in the incident that exposed this.
 //
-// Fix: abandon ONLY when the session is ABSENT for the full window.
-// shouldAbandon(sessionExists, ageMs, windowMs) is the pure decision
-// function extracted from the loop body; the contract tests pin it.
+// Fix: abandon ONLY when the session is ABSENT for the full window, and (card
+// dd5a3f76) CONTINUOUSLY so: a context-guard restart is a seconds-long gap that
+// must not count as an absent window.
+// shouldAbandon(sessionExists, ageMs, windowMs, absentForMs) is the pure
+// decision function extracted from the loop body; the contract tests pin it.
 
 import { describe, it, expect } from 'vitest'
 import { shouldAbandon } from '../web/message-router.js'
@@ -22,26 +24,39 @@ describe('shouldAbandon: abandon only when session is absent past the window', (
     // The core invariant: a session that is alive (even if busy for days)
     // must NEVER be abandoned. This was the bug -- the old code abandoned
     // at 1h without checking existence first.
-    expect(shouldAbandon(true, WINDOW_MS + 1, WINDOW_MS)).toBe(false)
-    expect(shouldAbandon(true, WINDOW_MS * 10, WINDOW_MS)).toBe(false)
-    expect(shouldAbandon(true, 0, WINDOW_MS)).toBe(false)
+    expect(shouldAbandon(true, WINDOW_MS + 1, WINDOW_MS, WINDOW_MS + 1)).toBe(false)
+    expect(shouldAbandon(true, WINDOW_MS * 10, WINDOW_MS, WINDOW_MS * 10)).toBe(false)
+    expect(shouldAbandon(true, 0, WINDOW_MS, 0)).toBe(false)
   })
 
   it('returns false when session is absent but within the window', () => {
     // Session is gone but not yet past the retry window -- keep retrying.
-    expect(shouldAbandon(false, WINDOW_MS - 1, WINDOW_MS)).toBe(false)
-    expect(shouldAbandon(false, 0, WINDOW_MS)).toBe(false)
+    expect(shouldAbandon(false, WINDOW_MS - 1, WINDOW_MS, WINDOW_MS)).toBe(false)
+    expect(shouldAbandon(false, 0, WINDOW_MS, WINDOW_MS)).toBe(false)
   })
 
   it('returns true when session is absent AND past the window', () => {
     // Only case where abandon is justified: session is truly gone AND the
     // full retry window has elapsed with no delivery.
-    expect(shouldAbandon(false, WINDOW_MS + 1, WINDOW_MS)).toBe(true)
-    expect(shouldAbandon(false, WINDOW_MS * 2, WINDOW_MS)).toBe(true)
+    expect(shouldAbandon(false, WINDOW_MS + 1, WINDOW_MS, WINDOW_MS)).toBe(true)
+    expect(shouldAbandon(false, WINDOW_MS * 2, WINDOW_MS, WINDOW_MS * 2)).toBe(true)
   })
 
   it('returns false at the exact window boundary (strict greater-than)', () => {
     // Boundary: ageMs === windowMs is NOT yet abandoned (strict >).
-    expect(shouldAbandon(false, WINDOW_MS, WINDOW_MS)).toBe(false)
+    expect(shouldAbandon(false, WINDOW_MS, WINDOW_MS, WINDOW_MS)).toBe(false)
+  })
+
+  it('returns false when the session is absent and the message is old but the absence is short (restart gap)', () => {
+    // Card dd5a3f76: the message waited for hours because the pane was
+    // saturated; the restart that cures it shows up as a few seconds of absence.
+    expect(shouldAbandon(false, WINDOW_MS * 5, WINDOW_MS, 0)).toBe(false)
+    expect(shouldAbandon(false, WINDOW_MS * 5, WINDOW_MS, 5_000)).toBe(false)
+    expect(shouldAbandon(false, WINDOW_MS * 5, WINDOW_MS, WINDOW_MS - 1)).toBe(false)
+  })
+
+  it('returns true once the absence itself has lasted the window', () => {
+    expect(shouldAbandon(false, WINDOW_MS * 5, WINDOW_MS, WINDOW_MS)).toBe(true)
+    expect(shouldAbandon(false, WINDOW_MS + 1, WINDOW_MS, WINDOW_MS * 3)).toBe(true)
   })
 })
