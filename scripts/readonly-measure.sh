@@ -60,6 +60,39 @@ done
 [ -n "$SQL_FILE" ] || { echo "NEM MERTEM: --sql kotelezo (a meres SQL-fajlja)" >&2; exit 64; }
 [ -f "$SQL_FILE" ] || { echo "NEM MERTEM: nincs ilyen fajl: $SQL_FILE" >&2; exit 64; }
 
+# --- A HIVO SQL-JE NEM LEPHET KI A BUROKBOL -- kartya f978316e. A burok (lent) egy READ ONLY
+# tranzakcio; a hivo fajlja `\i`-vel KOZEPEN fut. Egy COMMIT/END/ROLLBACK a hivo fajljaban LEZARJA
+# a burkot, es ami utana jon, AUTOCOMMITBAN fut, csak-olvaso vedelem nelkul -- a zaro kapu ekkor
+# elmarad (1 tuzeles, exit 4), de az iras MAR MEGTORTENT. Ugyanigy egy `\c` mas kapcsolatra valt,
+# a `\!` hejat futtat. Ezert ezeket FUTAS ELOTT elutasitjuk, nem utolag merjuk.
+# A HATAR, kimondva: kommenteket es '...' literalokat kihagyva az UTASITAS ELEJET nezi. Nem latja
+# a dinamikus SQL-t (EXECUTE egy DO-blokkban) es egy CALL-olt eljaras sajat COMMIT-jat; ezek
+# ellen a READ ONLY tranzakcio maga ved (egy olvaso tranzakcioban az eljaras sem ir).
+TXN_HIT="$(python3 - "$SQL_FILE" <<'PYX'
+import re,sys
+src=open(sys.argv[1],encoding='utf-8',errors='replace').read()
+src=re.sub(r'/\*.*?\*/',' ',src,flags=re.S)
+src=re.sub(r"'(?:[^']|'')*'","''",src)
+src=re.sub(r'--[^\n]*','',src)
+hits=[]
+for ln,line in enumerate(src.splitlines(),1):
+    m=re.match(r'\s*\\(c|connect|!|i|ir|include|include_relative|o|out|g|gexec)(?=\s|$)',line)
+    if m: hits.append('%d: \\%s'%(ln,m.group(1)))
+TXN=re.compile(r'(?is)^\s*(commit|end|abort|begin|start\s+transaction|rollback(?!\s+(?:work\s+|transaction\s+)?to\b)|set\s+(?:session\s+characteristics|transaction)|prepare\s+transaction)\b')
+body=re.sub(r'(?m)^\s*\\[^\n]*$','',src)
+for st in body.split(';'):
+    m=TXN.match(st)
+    if m: hits.append(re.sub(r'\s+',' ',m.group(1)).upper())
+print('; '.join(hits))
+PYX
+)"
+if [ -n "$TXN_HIT" ]; then
+  echo "NEM MERTEM: a meres SQL-je kilepne a csak-olvaso burokbol: $TXN_HIT" >&2
+  echo "  A tranzakciot a burok nyitja es zarja; a fajlban ne legyen COMMIT/END/ROLLBACK/BEGIN, se \\c, \\!, \\i." >&2
+  echo "  Egy spekulativ blokk hibaja ellen NEM kell sajat SAVEPOINT: a burok ON_ERROR_ROLLBACK-kal fut." >&2
+  exit 64
+fi
+
 # --- URL feloldas. A `.env` Prisma-URL-jet a libpq VISSZAUTASITJA valtoztatas nelkul
 # (`invalid URI query parameter: "connection_limit"`), es a hibauzenet az URL-rol szol, tehat
 # elsore hitelesitesi hibanak latszik. A query-reszt levagjuk, `sslmode=require`-t teszunk oda.
@@ -129,6 +162,10 @@ trap 'rm -f "$WRAPPED" "$OUT"' EXIT
 {
   echo "\\set ON_ERROR_STOP off"
   echo "$BEGIN_STMT"
+  # Minden utasitas sajat implicit savepointban: egy elgepelt oszlopnev a HIVO fajljaban csak
+  # a sajat utasitasat dobja el, a tranzakciot nem abortalja, tehat a zaro kapu le tud futni
+  # (enelkul 1/2 tuzeles es exit 4, a mar kiirt eredmeny elveszett). kartya f978316e.
+  echo "\\set ON_ERROR_ROLLBACK on"
   echo "SAVEPOINT gate_before;"
   echo "$GATE_SQL"
   echo "ROLLBACK TO SAVEPOINT gate_before;"
