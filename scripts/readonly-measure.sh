@@ -76,7 +76,8 @@ done
 # psql a burok sorait nyelne bele).
 # A PGOPTIONS='-c default_transaction_read_only=on' NEM pot: a Supabase pooler ezt az egy GUC-ot
 # elnyeli (rulebook/delta-crm.md, "KET ALAK, AMI VEDELEMNEK LATSZIK").
-# A HATAR, kimondva: standard_conforming_strings=on-t feltetelez (a PG alapertelmezese). Nem latja
+# A HATAR, kimondva: standard_conforming_strings=on-t feltetelez (a PG alapertelmezese), ezert a
+# SET/RESET standard_conforming_strings es a set_config() is elutasitas. Nem latja
 # a dinamikus SQL-t (EXECUTE egy DO-blokkban) es egy CALL-olt eljaras sajat COMMIT-jat; ezek ellen
 # a READ ONLY tranzakcio maga ved (tranzakcio-blokkon belul a DO/CALL nem zarhat tranzakciot, es
 # egy olvaso tranzakcioban nem is ir).
@@ -131,8 +132,11 @@ while i<n:
     if ch==':' and nx!=':' and not (i>0 and src[i-1]==':') and re.match('[A-Za-z_'+Q+DQ+']',nx):
         hits.append('%d: :%s (psql-valtozo)'%(ln(i),re.match(r'[^\s;]*',src[i+1:]).group(0)[:20])); i+=1; continue
     code.append(ch); i+=1
-TXN=re.compile(r'(?is)^\s*(commit|end|abort|begin|start\s+transaction|rollback(?!\s+(?:work\s+|transaction\s+)?to\b)|set\s+(?:session\s+characteristics|transaction)|prepare\s+transaction)\b')
-for st in ''.join(code).split(';'):
+TXN=re.compile(r'(?is)^\s*(commit|end|abort|begin|start\s+transaction|rollback(?!\s+(?:work\s+|transaction\s+)?to\b)|set\s+(?:session\s+characteristics|transaction)|prepare\s+transaction|(?:set|reset)\s+(?:session\s+|local\s+)?standard_conforming_strings)\b')
+body=''.join(code)
+# a lexer feltetele maga: standard_conforming_strings=off mellett a '...' backslash-t is escape-nek ven (didi 38609)
+if re.search(r'(?i)\bset_config\b',body): hits.append('set_config()')
+for st in body.split(';'):
     m=TXN.match(st)
     if m: hits.append(re.sub(r'\s+',' ',m.group(1)).upper())
 print('; '.join(hits))
