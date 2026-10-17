@@ -430,6 +430,13 @@ export interface GuardInputs {
   backgroundWork?: number
   /** What that work is, in a few words, for the reason line and the restart notice. */
   backgroundWorkDetail?: string
+  /** The part of backgroundWork launched detached from the pane (a heavy-run job outside the pane's
+   *  process tree): a restart does not kill it, so the notice must not tell the fresh session to
+   *  redo it (card 3c3d8e43). Counted in backgroundWork too: the holds wait for it. Absent = 0. */
+  detachedWork?: number
+  detachedWorkDetail?: string
+  /** What is left of backgroundWork once the detached part is taken out: what the restart kills. */
+  killedWorkDetail?: string
   /** The configured daily slot has come round and has not been served yet.
    *  Computed by the runner with dailyHandoffDue(), which needs a local
    *  midnight and the last-served stamp -- neither of which belongs in this
@@ -617,9 +624,17 @@ function backgroundWorkText(inputs: GuardInputs): string {
 }
 
 /** A restart that does NOT wait for background work names what it kills, in its reason (which
- *  the restart notice quotes). Empty when nothing runs. */
+ *  the restart notice quotes), and, apart from it, the detached work it predicts will run on, with
+ *  how to check (card 3c3d8e43: the guard named surviving gates as killed, and the fresh session
+ *  was told to run them again). Empty when nothing runs. */
 function killedNote(inputs: GuardInputs): string {
-  return (inputs.backgroundWork ?? 0) > 0 ? ` -- KILLS running background work: ${backgroundWorkText(inputs)}` : ''
+  const total = inputs.backgroundWork ?? 0
+  const detached = Math.min(inputs.detachedWork ?? 0, total)
+  if (detached === 0) return total > 0 ? ` -- KILLS running background work: ${backgroundWorkText(inputs)}` : ''
+  const killed = total - detached
+  const text = (n: number, detail: string | undefined) => (detail ? `${n} (${detail})` : String(n))
+  return (killed > 0 ? ` -- KILLS running background work: ${text(killed, inputs.killedWorkDetail)}` : '') +
+    ` -- detached from the pane, expected to SURVIVE the restart (check with ps before re-running): ${text(detached, inputs.detachedWorkDetail)}`
 }
 
 /**

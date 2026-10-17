@@ -5,6 +5,7 @@
 // the work (bounded by BACKGROUND_DEFER_MAX_MS); a HARD one still fires and names what it kills.
 import { describe, it, expect, vi } from 'vitest'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { spawn, execFileSync } from 'node:child_process'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpDirs } from './helpers/tmp-dirs.js'
@@ -22,7 +23,7 @@ import {
   type GuardState,
 } from '../context-guard.js'
 import { detectPaneState } from '../pane-state.js'
-import { liveHeavyRunJobs } from '../heavy-run-jobs.js'
+import { descendsFrom, liveHeavyRunJobs } from '../heavy-run-jobs.js'
 
 const mkTmp = tmpDirs()
 const SANDBOX = mkTmp('guardbg-')
@@ -52,7 +53,7 @@ vi.mock('../web/agent-process.js', () => ({
 }))
 vi.mock('../web/main-agent.js', () => ({ MAIN_CHANNELS_SESSION: 'marveen-channels' }))
 
-const { measureBackgroundWork } = await import('../web/context-guard-runner.js')
+const { measureBackgroundWork, readParentTable } = await import('../web/context-guard-runner.js')
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 // A live pane, 80 columns, captured 2026-10-15 22:51 (computress; the first line's card id replaced):
@@ -288,14 +289,22 @@ describe('the inputs come from the live pane and from heavy-run', () => {
     expect(detectPaneState(TURN_ENDED_2_SHELLS)).toBe('idle')
     const empty = mkTmp('heavy-empty-')
     const bg = measureBackgroundWork('computress', TURN_ENDED_2_SHELLS, empty)
-    expect(bg).toEqual({ backgroundWork: 2, backgroundWorkDetail: '2 in the pane (shells / monitors / sub-agents)' })
+    expect(bg).toEqual({
+      backgroundWork: 2,
+      backgroundWorkDetail: '2 in the pane (shells / monitors / sub-agents)',
+      detachedWork: 0,
+      detachedWorkDetail: '',
+      killedWorkDetail: '2 in the pane (shells / monitors / sub-agents)',
+    })
     const d = decideGuard(awaiting, inputs({ handoffMtime: 200, paneIdle: true, ...bg }), CFG)
     expect(d.action).toBe('none')
   })
 
   it('the same pane with the shells line and footer count gone reads as nothing running', () => {
     const quiet = TURN_ENDED_2_SHELLS.replace(' · 2 shells still running', '').replace('on · 2 shells · ↓ to manage', 'on (shift+tab to cycle)')
-    expect(measureBackgroundWork('computress', quiet, mkTmp('heavy-empty2-'))).toEqual({ backgroundWork: 0, backgroundWorkDetail: '' })
+    expect(measureBackgroundWork('computress', quiet, mkTmp('heavy-empty2-'))).toEqual({
+      backgroundWork: 0, backgroundWorkDetail: '', detachedWork: 0, detachedWorkDetail: '', killedWorkDetail: '',
+    })
   })
 
   it('live heavy-run jobs of THIS agent count, held and queued; dead ones and other agents do not', () => {
@@ -309,12 +318,16 @@ describe('the inputs come from the live pane and from heavy-run', () => {
     writeFileSync(join(dir, 'tickets', '0000000042'), JSON.stringify({ agent: 'dexter', pid: live, label: 'dexter-e2e', seq: 42 }))
     writeFileSync(join(dir, 'slot-2'), 'not json')
     expect(liveHeavyRunJobs('dexter', dir)).toEqual([
-      { label: 'dexter-gate', waiting: false },
-      { label: 'dexter-e2e', waiting: true },
+      { label: 'dexter-gate', waiting: false, pid: live },
+      { label: 'dexter-e2e', waiting: true, pid: live },
     ])
-    expect(measureBackgroundWork('dexter', null, dir)).toEqual({
+    // The pane tree not measurable: every job stays with the killed, marked (the old wording).
+    expect(measureBackgroundWork('dexter', null, dir, () => null)).toEqual({
       backgroundWork: 2,
       backgroundWorkDetail: 'heavy-run: dexter-gate, dexter-e2e (queued)',
+      detachedWork: 0,
+      detachedWorkDetail: '',
+      killedWorkDetail: 'heavy-run: dexter-gate (pane link not measured), dexter-e2e (queued) (pane link not measured)',
     })
   })
 
@@ -324,8 +337,8 @@ describe('the inputs come from the live pane and from heavy-run', () => {
     writeFileSync(join(dir, 'light-1'), JSON.stringify({ agent: 'dexter', pid: process.pid, label: 'dexter-lint' }))
     writeFileSync(join(dir, 'tickets-light', '0000000007'), JSON.stringify({ agent: 'dexter', pid: process.pid, label: 'dexter-tsc' }))
     expect(liveHeavyRunJobs('dexter', dir)).toEqual([
-      { label: 'dexter-lint', waiting: false },
-      { label: 'dexter-tsc', waiting: true },
+      { label: 'dexter-lint', waiting: false, pid: process.pid },
+      { label: 'dexter-tsc', waiting: true, pid: process.pid },
     ])
   })
 
@@ -349,5 +362,99 @@ describe('the inputs come from the live pane and from heavy-run', () => {
     expect(body).toMatch(/const background = running && needPct \? measureBackgroundWork\(name, pane\)/)
     const inputsObj = body.slice(body.indexOf('const inputs: GuardInputs = {'), body.indexOf('const decision = decideGuard('))
     expect(inputsObj).toContain('...background,')
+  })
+})
+
+// Card 3c3d8e43: "KILLS" named every heavy-run job, and the detached ones survive `tmux kill-session`
+// (didi 10-16 08:43: three queued gates ran on; friday 09:13: shard 7/8 ran on). The fresh session
+// was told to redo running work. A job is now placed by the pane's process tree.
+describe('a heavy-run job is placed by the pane process tree: killed or detached (card 3c3d8e43)', () => {
+  const PANE = 500
+  // 500 = pane (claude); 510 its Bash shell; 520 heavy-run under it. 900 a detached launcher's
+  // heavy-run: its launcher exited, so the parent is 1.
+  const TABLE = new Map([[500, 400], [400, 1], [510, 500], [520, 510], [900, 1], [950, 900]])
+
+  it('descendsFrom: in the tree, outside it, and not measurable', () => {
+    expect(descendsFrom(520, PANE, TABLE)).toBe(true)
+    expect(descendsFrom(950, PANE, TABLE)).toBe(false)
+    expect(descendsFrom(900, PANE, TABLE)).toBe(false)
+    expect(descendsFrom(777, PANE, TABLE)).toBeNull() // gone from the snapshot
+    expect(descendsFrom(1, PANE, new Map([[2, 3], [3, 2]]))).toBeNull()
+    expect(descendsFrom(2, PANE, new Map([[2, 3], [3, 2]]))).toBeNull() // a loop does not end
+  })
+
+  function jobsDir(): string {
+    const dir = mkTmp('heavy-tree-')
+    mkdirSync(join(dir, 'tickets'), { recursive: true })
+    writeFileSync(join(dir, 'slot-0'), JSON.stringify({ agent: 'dexter', pid: process.pid, label: 'dexter-inpane' }))
+    writeFileSync(join(dir, 'tickets', '0000000001'), JSON.stringify({ agent: 'dexter', pid: process.pid, label: 'dexter-detached' }))
+    return dir
+  }
+  const probe = (parentOf: Map<number, number>) => () => ({ rootPid: PANE, parentOf })
+
+  it('measureBackgroundWork: an in-pane gate is killed, a detached one is not; both still hold', () => {
+    const dir = jobsDir()
+    const inPane = new Map([[process.pid, 510], [510, PANE]])
+    const detached = new Map([[process.pid, 1]])
+    // Both job files name this live process; the table places it in the pane's tree or outside.
+    const bgIn = measureBackgroundWork('dexter', null, dir, probe(inPane))
+    expect(bgIn).toMatchObject({ backgroundWork: 2, detachedWork: 0 })
+    expect(bgIn.killedWorkDetail).toBe('heavy-run: dexter-inpane, dexter-detached (queued)')
+    const bgOut = measureBackgroundWork('dexter', TURN_ENDED_2_SHELLS, dir, probe(detached))
+    expect(bgOut).toEqual({
+      backgroundWork: 4,
+      backgroundWorkDetail: '2 in the pane (shells / monitors / sub-agents); heavy-run: dexter-inpane, dexter-detached (queued)',
+      detachedWork: 2,
+      detachedWorkDetail: 'heavy-run: dexter-inpane, dexter-detached (queued)',
+      killedWorkDetail: '2 in the pane (shells / monitors / sub-agents)',
+    })
+  })
+
+  it('a HARD restart: KILLS names only the attached work, the detached part is a separate, checkable prediction', () => {
+    const mixed = {
+      backgroundWork: 3,
+      backgroundWorkDetail: '2 in the pane (shells / monitors / sub-agents); heavy-run: friday-b24gate',
+      detachedWork: 1,
+      detachedWorkDetail: 'heavy-run: friday-b24gate',
+      killedWorkDetail: '2 in the pane (shells / monitors / sub-agents)',
+    }
+    const d = decideGuard(INITIAL_GUARD_STATE, inputs({ pct: 0.99, ...mixed }), CFG)
+    expect(d.action).toBe('restart')
+    expect(d.reason).toBe(
+      'hard threshold (99% >= 97%) -- KILLS running background work: 2 (2 in the pane (shells / monitors / sub-agents))' +
+        ' -- detached from the pane, expected to SURVIVE the restart (check with ps before re-running): 1 (heavy-run: friday-b24gate)',
+    )
+  })
+
+  it('only detached work: no KILLS at all, the prediction alone', () => {
+    const only = { backgroundWork: 1, backgroundWorkDetail: 'heavy-run: didi-dd90 (queued)', detachedWork: 1, detachedWorkDetail: 'heavy-run: didi-dd90 (queued)', killedWorkDetail: '' }
+    const d = decideGuard(INITIAL_GUARD_STATE, inputs({ pct: 0.99, ...only }), CFG)
+    expect(d.action).toBe('restart')
+    expect(d.reason).not.toContain('KILLS')
+    expect(d.reason).toContain('expected to SURVIVE the restart (check with ps before re-running): 1 (heavy-run: didi-dd90 (queued))')
+  })
+
+  it('CONTROL: a routine restart still HOLDS for detached work (the hold protects the gate, only the wording changed)', () => {
+    const only = { backgroundWork: 1, backgroundWorkDetail: 'heavy-run: didi-dd90 (queued)', detachedWork: 1, detachedWorkDetail: 'heavy-run: didi-dd90 (queued)', killedWorkDetail: '' }
+    const d = decideGuard(awaiting, inputs({ handoffMtime: 200, paneIdle: true, ...only }), CFG)
+    expect(d.action).toBe('none')
+    expect(d.reason).toContain('background work is running: 1 (heavy-run: didi-dd90 (queued)) -- holding the restart')
+  })
+
+  it('REAL processes: a child of this process is in its tree, a double-forked one (parent gone, reparented) is not', async () => {
+    const child = spawn('/bin/sleep', ['30'], { stdio: 'ignore' })
+    // sh starts sleep in the background and exits at once: the orphan is reparented (to launchd/init
+    // or a subreaper), like a gate whose launcher finished.
+    const orphan = parseInt(execFileSync('/bin/sh', ['-c', '/bin/sleep 30 >/dev/null 2>&1 & echo $!'], { encoding: 'utf8' }).trim(), 10)
+    try {
+      const table = readParentTable()
+      expect(table, 'ps snapshot').not.toBeNull()
+      expect(table!.get(child.pid!)).toBe(process.pid) // positive control: the snapshot sees the link
+      expect(descendsFrom(child.pid!, process.pid, table!)).toBe(true)
+      expect(descendsFrom(orphan, process.pid, table!)).toBe(false)
+    } finally {
+      child.kill('SIGKILL')
+      try { process.kill(orphan, 'SIGKILL') } catch { /* already gone */ }
+    }
   })
 })

@@ -18,6 +18,7 @@ import { join } from 'node:path'
 export interface HeavyRunJob {
   label: string
   waiting: boolean
+  pid: number
 }
 
 const HELD = /^(?:slot|light)-\d+$/
@@ -60,10 +61,33 @@ export function liveHeavyRunJobs(agent: string, dir: string = heavyRunDir()): He
   const take = (path: string, waiting: boolean) => {
     const j = readJob(path)
     if (j && j.agent === agent && pidAlive(j.pid)) {
-      out.push({ label: typeof j.label === 'string' ? j.label : '?', waiting })
+      out.push({ label: typeof j.label === 'string' ? j.label : '?', waiting, pid: j.pid as number })
     }
   }
   for (const f of list(dir)) if (HELD.test(f)) take(join(dir, f), false)
   for (const q of QUEUES) for (const f of list(join(dir, q))) take(join(dir, q, f), true)
   return out
+}
+
+/**
+ * Whether `pid` runs inside the process tree rooted at `rootPid` (the agent's tmux pane), walking
+ * the parent links of one process-table snapshot (card 3c3d8e43). A restart is `tmux kill-session`:
+ * what descends from the pane dies with it, and a gate launched detached (its launcher exited, so
+ * the chain ends at pid 1) runs on. Measured 2026-10-16: computress-6079-gate, started from the
+ * pane, died (rc null); the detached gates the guard also listed as killed finished minutes later.
+ *
+ * true = in the pane's tree (a descendant that left its session could still survive: reported as
+ * killed, the safe direction); false = the chain ends at pid 1 or 0 outside it; null = not
+ * measured (pid gone from the snapshot, or a chain that does not end).
+ */
+export function descendsFrom(pid: number, rootPid: number, parentOf: ReadonlyMap<number, number>): boolean | null {
+  let cur = pid
+  for (let hops = 0; hops < 256; hops++) {
+    if (cur === rootPid) return true
+    const parent = parentOf.get(cur)
+    if (parent === undefined) return null
+    if (parent <= 1) return false
+    cur = parent
+  }
+  return null
 }
