@@ -136,13 +136,21 @@ export function classifyRunState(
  * perfectly REACHABLE laptop that simply has no tmux server/session yet -- that
  * is 'stopped' (and must be startable), NOT 'unreachable'. Only a real ssh
  * transport failure (exit 255) or a killed/timed-out connection (no numeric
- * status) is 'unreachable'. Local failures are always 'stopped' (no tmux server).
+ * status) is 'unreachable'.
+ *
+ * Local: a numeric exit status means tmux ANSWERED ("no server running" exits
+ * 1), so the agent is 'stopped'. No numeric status means the probe itself never
+ * finished -- ETIMEDOUT (the 3 s budget ran out under load), ENOENT, EAGAIN, a
+ * signal -- and we do not know: 'unreachable', never 'stopped'. Measured on
+ * node 22 (card 0bce45f9): no-server -> status 1; ENOENT and ETIMEDOUT -> status
+ * null. A false 'stopped' tells a sender in writing that the message will not
+ * be delivered and lets a start path treat a live agent as startable.
  */
 export function classifyRunStateFromExit(
   exitStatus: number | null | undefined,
   isRemote: boolean,
 ): AgentRunState {
-  if (!isRemote) return 'stopped'
+  if (!isRemote) return typeof exitStatus === 'number' ? 'stopped' : 'unreachable'
   if (typeof exitStatus === 'number' && exitStatus !== 255) return 'stopped'
   return 'unreachable'
 }

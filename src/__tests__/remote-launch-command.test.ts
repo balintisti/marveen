@@ -16,10 +16,14 @@ describe('classifyRunStateFromExit (failed list-sessions probe)', () => {
     expect(classifyRunStateFromExit(undefined, true)).toBe('unreachable')
   })
 
-  it('local failures are always stopped (no tmux server)', () => {
+  it('local: tmux answered with an exit code (no server) is stopped', () => {
     expect(classifyRunStateFromExit(1, false)).toBe('stopped')
     expect(classifyRunStateFromExit(255, false)).toBe('stopped')
-    expect(classifyRunStateFromExit(null, false)).toBe('stopped')
+  })
+
+  it('local: probe never finished (timeout/ENOENT/signal, no numeric status) is unreachable, NOT stopped (card 0bce45f9)', () => {
+    expect(classifyRunStateFromExit(null, false)).toBe('unreachable')
+    expect(classifyRunStateFromExit(undefined, false)).toBe('unreachable')
   })
 })
 
