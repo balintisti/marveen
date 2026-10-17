@@ -66,7 +66,8 @@ export const QUOTA_GATE = {
   /** "About to reset": waiting this long is cheaper than spending the tail. */
   nearResetMs: 30 * 60_000,
   /** Sources whose numbers are real. Anything else is a guess -- fail open. */
-  trustedSources: ['authoritative', 'authoritative_cached'],
+  /** `statusline`: the token-free reading, used only when it provably is this account's (36b91017). */
+  trustedSources: ['authoritative', 'authoritative_cached', 'statusline'],
 } as const
 
 /** Highest utilization across all windows, or null when none reports one. */

@@ -429,6 +429,97 @@ class TestCacheDoesNotRearmItself(unittest.TestCase):
         self.assertLess(abs((datetime.now(timezone.utc) - at).total_seconds()), 60)
 
 
+class TestStatuslineFallback(unittest.TestCase):
+    """card 36b91017: an expired refresh token froze the meter 5 days (09-13). The token-free
+    statusline file fills 5h/weekly ONLY if fresh and provably the same account (weekly reset ==
+    the last real answer's + k weeks). Driven through the real collect_claude with a 401."""
+
+    def _run(self, latest, statusline, code=401):
+        now = datetime.now(timezone.utc).timestamp()
+        http_err = urllib.error.HTTPError("url", code, "x", {}, None)
+        with tempfile.TemporaryDirectory() as tmp:
+            lp, sp = os.path.join(tmp, "usage-latest.json"), os.path.join(tmp, ".claude-rate-limits.json")
+            if latest is not None:
+                with open(lp, "w", encoding="utf-8") as f: json.dump(latest, f)
+            if statusline is not None:
+                with open(sp, "w", encoding="utf-8") as f: json.dump(statusline, f)
+            with patch.object(uc, "LATEST_PATH", lp), patch.object(uc, "STATUSLINE_PATH", sp), \
+                 patch.object(uc, "_read_claude_token", return_value=("fake-token", "test")), \
+                 patch.object(uc, "_claude_cli_version", return_value="1.2.3"), \
+                 patch("urllib.request.urlopen", side_effect=http_err), \
+                 patch.object(uc, "_collect_claude_estimate", return_value={"windows": {}}) as est:
+                return uc.collect_claude(), est
+
+    def _fixtures(self, sl_age_min=2, shift=0):
+        now = datetime.now(timezone.utc).timestamp()
+        week_reset = now + 3 * 86400
+        latest = {"generated_at": datetime.now(timezone.utc).isoformat(),
+                  "claude": {"source": "authoritative",
+                             "windows": {"seven_day": {"used_percent": 40.0, "resets_at": week_reset - uc.WEEK_SEC}}}}
+        sl = {"written_at": int(now - sl_age_min * 60),
+              "rate_limits": {"five_hour": {"used_percentage": 16, "resets_at": now + 3600},
+                              "seven_day": {"used_percentage": 45, "resets_at": week_reset + shift}}}
+        return latest, sl, week_reset - uc.WEEK_SEC
+
+    def test_expired_token_uses_the_matching_fresh_statusline(self):
+        latest, sl, anchor = self._fixtures()
+        result, est = self._run(latest, sl)
+        est.assert_not_called()
+        self.assertEqual(result["source"], "statusline")
+        self.assertEqual(result["windows"]["seven_day"]["used_percent"], 45)
+        self.assertEqual(result["windows"]["five_hour"]["used_percent"], 16)
+        self.assertIn("401", result["auth_error"])  # the token alarm keeps its input
+        self.assertEqual(result["week_anchor"], anchor)
+
+    def test_another_accounts_statusline_is_not_used(self):
+        latest, sl, _ = self._fixtures(shift=3 * 3600)
+        result, est = self._run(latest, sl)
+        est.assert_called_once()
+        self.assertEqual(result["source"], "estimate")
+        self.assertIn("does not match", result["statusline_skipped"])
+
+    def test_a_stale_statusline_is_not_used(self):
+        latest, sl, _ = self._fixtures(sl_age_min=30)
+        result, est = self._run(latest, sl)
+        self.assertEqual(result["source"], "estimate")
+
+    def test_no_real_answer_ever_means_no_fallback(self):
+        _, sl, _ = self._fixtures()
+        result, est = self._run({"claude": {"source": "estimate"}}, sl)
+        self.assertEqual(result["source"], "estimate")
+        self.assertIn("no week anchor", result["statusline_skipped"])
+
+    def test_the_anchor_survives_a_fallback_run_and_an_estimate_run(self):
+        latest, sl, anchor = self._fixtures()
+        r1, _ = self._run(latest, sl)
+        r2, _ = self._run({"claude": r1}, None)            # statusline gone: estimate, anchor kept
+        self.assertEqual((r2["source"], r2["week_anchor"]), ("estimate", anchor))
+        r3, _ = self._run({"claude": r2}, sl)               # back: statusline again
+        self.assertEqual(r3["source"], "statusline")
+
+    def test_a_statusline_snapshot_is_never_reused_as_the_authoritative_cache(self):
+        latest, sl, _ = self._fixtures()
+        r1, _ = self._run(latest, sl)
+        with tempfile.TemporaryDirectory() as tmp:
+            lp = os.path.join(tmp, "l.json")
+            with open(lp, "w", encoding="utf-8") as f:
+                json.dump({"generated_at": datetime.now(timezone.utc).isoformat(), "claude": r1}, f)
+            self.assertEqual(uc._read_cached_claude_authoritative(90, path=lp), (None, None, None))
+
+    def test_a_real_answer_writes_the_week_anchor(self):
+        body = json.dumps({"seven_day": {"utilization": 40.0, "resets_at": "2099-01-01T00:00:00+00:00"}}).encode()
+        class R:
+            def __enter__(s): return s
+            def __exit__(s, *a): return False
+            def read(s): return body
+            status = 200
+        with patch.object(uc, "_read_claude_token", return_value=("fake-token", "test")), \
+             patch.object(uc, "_claude_cli_version", return_value="1.2.3"), \
+             patch("urllib.request.urlopen", return_value=R()):
+            result = uc.collect_claude()
+        self.assertEqual(result["week_anchor"], uc._parse_iso_to_epoch("2099-01-01T00:00:00+00:00"))
+
+
 class TestCollectClaudeCacheFallback(unittest.TestCase):
     """collect_claude() end-to-end: a transient failure (429) must reuse a
     fresh cached authoritative snapshot instead of dropping to the token

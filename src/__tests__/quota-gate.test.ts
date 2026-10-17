@@ -75,6 +75,11 @@ describe('decideQuotaAction -- fail open', () => {
     expect(d.action).toBe('defer')
   })
 
+  it('accepts the token-free statusline reading as evidence (card 36b91017)', () => {
+    const d = background(snap({ five_hour: { used: 95 } }, { source: 'statusline' }))
+    expect(d.action).toBe('defer')
+  })
+
   it('runs when the snapshot is too old to describe now', () => {
     const d = background(
       snap({ five_hour: { used: 99 } }, { ageMs: QUOTA_GATE.staleAfterMs + 60_000 }),
