@@ -113,6 +113,7 @@ vi.mock('../web/agent-config.js', () => ({
 vi.mock('../pane-state.js', () => ({
   detectPaneState: () => 'idle', busyEvidence: () => 'none',
   detectsUsageLimitReached: () => false, runningBackgroundWork: () => 0,
+  detectsMidTurnApiError: () => false,
 }))
 vi.mock('../web/channel-monitor.js', () => ({ sendAlert: () => {} }))
 vi.mock('../db.js', () => ({
@@ -162,5 +163,26 @@ describe('tick(): the priority floor gates the pull wake (da11b4a4)', () => {
     expect(msg).toContain('low00001')
     expect(msg).toContain('ebbol 1 jovobeli')
     expect(msg).toContain('tehat 2 felveheto most')
+  })
+
+  /** The seam with 00f7455b (didi 34708): both edits rewrote this one call. Keeping only the
+   *  two numbers dropped the stale-standstill note from the pull notice, silently. */
+  it('a stale standstill is still named under the pull notice (seam with 00f7455b)', async () => {
+    const { writeFileSync } = await import('node:fs')
+    const wc = `${h.tmp}/x/workcheck.json`
+    writeFileSync(wc, JSON.stringify({
+      kind: 'assigned_open_cards',
+      standstill: { reason: 'waiting', until: new Date(Date.now() - 3_600_000).toISOString() },
+    }))
+    try {
+      h.orphans = [{ id: 'nrm00001', priority: 'normal' }]
+      await sweep()
+      const sent = pullNoticesToX()
+      expect(sent).toHaveLength(1)
+      expect(String(sent[0][2])).toMatch(/standstill bejegyzese .*LEJART/)
+      expect(String(sent[0][2])).toContain('tehat 1 felveheto most')
+    } finally {
+      writeFileSync(wc, '{"kind":"assigned_open_cards"}')
+    }
   })
 })
