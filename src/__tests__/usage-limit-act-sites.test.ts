@@ -16,7 +16,7 @@ const reached = vi.fn()
 
 vi.mock('../web/agent-process.js', () => ({
   capturePane: (...a: unknown[]) => capturePane(...a),
-  isAgentRunning: () => true,
+  isAgentRunning: () => true, saturationRefusesDispatch: () => false,
 }))
 vi.mock('../web/channel-mcp-reconnect.js', () => ({ resolveAgentSession: () => 'agent-x' }))
 vi.mock('../web/agent-config.js', () => ({

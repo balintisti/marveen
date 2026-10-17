@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { logger } from '../logger.js'
 import { MAIN_AGENT_ID, PROJECT_ROOT } from '../config.js'
 import { listAgentNames, agentDir, readAgentRemoteHost, readAgentProjects } from './agent-config.js'
-import { isAgentRunning, capturePane } from './agent-process.js'
+import { isAgentRunning, capturePane, saturationRefusesDispatch } from './agent-process.js'
 import { resolveAgentSession } from './channel-mcp-reconnect.js'
 import { sendAlert } from './channel-monitor.js'
 import { busyEvidence, detectPaneState, detectsMidTurnApiError, runningBackgroundWork } from '../pane-state.js'
@@ -206,10 +206,15 @@ function sweepStalePending(): void {
       let st: RecipientPaneState = 'unknown'
       try {
         if (isAgentRunning(m.to_agent)) {
-          const pane = capturePane(resolveAgentSession(m.to_agent))
+          const session = resolveAgentSession(m.to_agent)
+          const pane = capturePane(session)
           if (pane !== null) {
+            // Asked BEFORE detectPaneState, which reads a saturated pane as idle (card a466a216).
+            // The dispatch gate's own question, so "saturated" here means "the router will not
+            // inject", including its override of a percentage banner the measurement contradicts.
             const detected = detectPaneState(pane)
-            st = detected === 'busy' ? 'busy' : detected === 'idle' ? 'idle' : 'unknown'
+            st = saturationRefusesDispatch(pane, session) ? 'saturated'
+              : detected === 'busy' ? 'busy' : detected === 'idle' ? 'idle' : 'unknown'
           }
         }
       } catch { st = 'unknown' }
