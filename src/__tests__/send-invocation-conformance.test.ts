@@ -27,6 +27,9 @@ import { isSendInvocation } from '../../scripts/email-send-gate.mjs'
 // undefended -- measured, a mutation aligning EITHER gate to the other kept
 // the full suite green. So if a census flags the difference: do not unify it.
 // Read the ruling first -- the difference IS the decision.
+//
+// The divergence itself (not only each side of it) is pinned by the block at
+// the bottom of this file -- card 84c7fe5f.
 
 const ROOT = join(__dirname, '..', '..')
 const GATE_PY = join(ROOT, 'scripts', 'hooks', 'outgoing-copy-gate.py')
@@ -47,6 +50,71 @@ print(json.dumps([g.is_send_invocation(c) for c in cmds]))
   return JSON.parse(out.trim())
 }
 
+/**
+ * Whether the copy-gate can TOKENIZE a command -- i.e. whether it routes to the
+ * fallback at all. This is the authoritative meter for "unparseable": it is the
+ * very call whose ValueError sends `is_send_invocation` down the fallback
+ * branch.
+ *
+ * A hand-written quote counter is only an APPROXIMATION of it. Measured on ~2180
+ * real Bash commands: a naive counter differs from this on 72 rows, raw
+ * `shlex.split` on 10 (jarvis, card 980ebc8c c21/c23). The pin's fixtures happen
+ * to agree on all of them today, which is a property of those fixtures and not
+ * of the counter -- so the control below asks the gate rather than approximating
+ * it.
+ *
+ * THE TWO APPROXIMATIONS FAIL DIFFERENTLY, and only one of them fails safely:
+ *
+ *   ON THIS CORPUS gate-failures are a subset of shlex-failures. Measured in
+ *   BOTH directions over ~2187 rows: commands the gate cannot tokenize but
+ *   shlex can -> 0; the reverse -> 10. So on this traffic raw shlex
+ *   OVER-estimates the fallback population, which makes it a usable upper
+ *   bound but a wrong count. A naive counter is not bounded in either
+ *   direction.
+ *
+ *   THAT IS AN OBSERVATION, NOT A GUARANTEE, and the difference matters if
+ *   anyone leans on it. A gate-stricter shape EXISTS (jarvis, 980ebc8c c24):
+ *
+ *     echo "a <<EOF        shlex PARSES, the gate FAILS
+ *     b"
+ *     EOF
+ *
+ *   Mechanism, read off the code rather than inferred: `_mask_subshell_markers`
+ *   tracks quote state character by character, while `_HEREDOC` is a bare
+ *   regex and does not. It deletes a region that happens to carry the CLOSING
+ *   quote, leaving `echo "a <<EOF` -- unbalanced. Controls: an ordinary heredoc
+ *   and a plain balanced command parse on both sides.
+ *
+ *   The honest limit is jarvis's own: he could not produce it from a REALISTIC
+ *   shape. A heredoc writing notes ABOUT heredocs -- something this fleet does
+ *   constantly -- does NOT reproduce it, because the outer heredoc swallows the
+ *   body first (measured: shlex fails, the gate does not). The counterexample
+ *   is constructed. So the bound holds in practice and is not a theorem, and
+ *   nothing here should be quoted as one.
+ *
+ *   The mechanism behind those 10 is `#`: all ten contain one, and the gate
+ *   correctly treats what follows as a comment a shell would never run. Not
+ *   every `#` does this -- 177 of the rows contain one -- so the rule is
+ *   narrower than the character: a `#` that actually OPENS a comment. Verified
+ *   on the gate: `echo a#b` and `curl 'http://x/y#frag'` both parse (mid-word
+ *   and quoted `#` are not comment starts), `echo hi # <sender>` is NOT a send,
+ *   and the control `echo hi ; <sender>` still is.
+ */
+function pythonUnparseable(cmds: string[]): boolean[] {
+  const out = execFileSync('python3', ['-c', `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("gate", ${JSON.stringify(GATE_PY)})
+g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+def unparseable(c):
+    try:
+        g._segments_tokens(c); return False
+    except ValueError:
+        return True
+print(json.dumps([unparseable(c) for c in json.load(sys.stdin)]))
+`], { encoding: 'utf-8', input: JSON.stringify(cmds) })
+  return JSON.parse(out.trim())
+}
+
 describe('send-invocation conformance: both gates agree with the shared contract on every case', () => {
   const py = pythonVerdicts(CASES.cases.map((c) => c.cmd))
 
@@ -62,5 +130,192 @@ describe('send-invocation conformance: both gates agree with the shared contract
     expect(CASES.cases.some((c) => c.expected)).toBe(true)
     expect(CASES.cases.some((c) => !c.expected)).toBe(true)
     expect(CASES.cases.length).toBeGreaterThanOrEqual(20)
+  })
+})
+
+// ===========================================================================
+// THE DIVERGENCE ITSELF, PINNED -- card 84c7fe5f, ruling 9ebde77b (fe418df).
+//
+// WHY A TEST AND NOT ONLY THAT COMMENT: a comment does not fail a suite. The
+// ruling says these two gates SHOULD differ on unparseable input, each
+// correctly for its own population -- and a later census that measures the
+// difference, finds no statement beside it, and "aligns them away" is exactly
+// the outcome the ruling exists to prevent. Aligning either direction should
+// be loud.
+//
+// WHY IT NAMES A DIRECTION AND NOT JUST INEQUALITY: inequality alone survives
+// aligning them THE WRONG WAY ROUND. The hard-gate must be the WIDER one on
+// this path (a sub-agent deny that must never weaken); the copy-gate the
+// narrower (its false positives land on ordinary internal commands).
+//
+// THE PRICE OF EACH SIDE IS VISIBLE IN THE TWO CASES BELOW, and they carry
+// OPPOSITE expected verdicts on purpose:
+//
+//   the outbound case  `expected: true`  -- the copy-gate lets a REAL send
+//                                           through here. That is its price.
+//   the payload case   `expected: false` -- the hard-gate blocks an ORDINARY
+//                                           command here. That is its price.
+//
+// Both are the designed trade, not defects, and neither is inheritable by the
+// other gate.
+//
+// HOW THE FALLBACK IS REACHED: appending an unbalanced quote. That is OUR
+// method for routing control to the fallback, not an observed production
+// shape -- stated because the numbers below are only as general as that.
+//
+// AND THE METHOD ONLY WORKS ON A BALANCED COMMAND (jarvis measured it, dexter
+// reproduced: card 84c7fe5f / 980ebc8c c18). Append a quote to a command that
+// is ALREADY unbalanced and you BALANCE it -- so it takes the PARSED path,
+// which is the opposite of what the forcing intends. Measured directly, not
+// inferred from a verdict:
+//
+//   `echo 'smtplib`     unbalanced BEFORE: true   AFTER appending: FALSE
+//   control, balanced   unbalanced BEFORE: false  AFTER appending: true
+//
+// In production the fallback runs exactly when a command does NOT tokenize --
+// precisely where this forcing flips to the parsed path. So the method cannot
+// sample the fallback's natural traffic, and the four cases below are valid
+// ONLY because each is balanced to begin with. That is not a fact to trust: it
+// is asserted, below, so swapping in an already-unbalanced case fails loudly
+// instead of quietly measuring the other path.
+// ===========================================================================
+describe('the two gates diverge on unparseable input BY DESIGN, in a named direction', () => {
+  // Taken from the shared list BY NAME rather than written out here, so the pin
+  // moves with the corpus instead of drifting from it.
+  const byName = (name: string) => {
+    const found = CASES.cases.find((c) => c.name === name)
+    // NOT FOUND IS NOT CLEARED: if the case is renamed or removed, this fails
+    // rather than silently pinning nothing.
+    expect(found, `case not found in the shared list: ${name}`).toBeDefined()
+    return found!
+  }
+
+  const OUTBOUND = byName('M365 CLI outbound subcommand')
+  const PAYLOAD = byName(
+    "[marveen:fp-runner-path-in-message-content] runner-ut es 'send' alparancs egy inter-agent uzenet TARTALMABAN",
+  )
+  const AGREED_BLOCK = byName('wrapper shell -c with a real send (round 2)')
+  const AGREED_PASS = byName('wrapper shell -c that only talks about sending')
+
+  /** The same command with an unbalanced quote: neither gate can tokenize it. */
+  const unparseable = (cmd: string) => `${cmd} '`
+
+  // A NATURALLY unbalanced command -- no forcing at all. jarvis's point, and
+  // the better fixture: in production the fallback runs on commands that are
+  // ALREADY unbalanced, so the fixture should BE one rather than be made one.
+  //
+  // This shape is not invented either: it is what TRUNCATION produces from a
+  // real sending command. Measured on two independent logs -- db-gate.log cuts
+  // at 400 and tool_call_log at 200 -- cutting a balanced command at an
+  // arbitrary point yields an unbalanced prefix at 27% and 26% of cut
+  // positions respectively. A censor or a log reader meets this shape without
+  // anyone constructing it.
+  //
+  // NOT in the shared list on purpose: the conformance block above runs every
+  // shared case through BOTH gates and asserts both equal `expected`. A case
+  // the two gates answer DIFFERENTLY would make that block red by construction.
+  // Divergence fixtures belong here, locally.
+  const NATURAL_UNBALANCED =
+    "npx tsx scripts/graph-mail.ts send --to a@b.hu --subject 'X"
+
+  const inputs = [OUTBOUND, PAYLOAD, AGREED_BLOCK, AGREED_PASS].map((c) =>
+    unparseable(c.cmd),
+  )
+  const py = pythonVerdicts(inputs)
+  const js = inputs.map((cmd) => isSendInvocation(cmd) as boolean)
+  const [OUT, PAY, BLK, PSS] = [0, 1, 2, 3]
+
+  it('the HARD-GATE is the wider one: it blocks a real send the copy-gate lets through', () => {
+    // Direction, not inequality. Aligning the copy-gate WIDER, or the
+    // hard-gate NARROWER, both turn this red.
+    expect(js[OUT], `hard-gate on: ${inputs[OUT]}`).toBe(true)
+    expect(py[OUT], `copy-gate on: ${inputs[OUT]}`).toBe(false)
+  })
+
+  it('and it pays for that width: it blocks an ordinary command the copy-gate allows', () => {
+    // The other half of the same trade. Without this the pin would read as
+    // "the hard-gate is simply better", which is not the ruling.
+    expect(js[PAY], `hard-gate on: ${inputs[PAY]}`).toBe(true)
+    expect(py[PAY], `copy-gate on: ${inputs[PAY]}`).toBe(false)
+  })
+
+  it('the same divergence holds on a NATURALLY unbalanced command, unforced', () => {
+    // The forcing above can only reach the fallback from a BALANCED command.
+    // This case needs no forcing at all, so it exercises the path in the shape
+    // production actually produces. If the two ever agree here, the divergence
+    // was an artifact of how we reached the fallback rather than a property of
+    // the fallback.
+    expect(isSendInvocation(NATURAL_UNBALANCED) as boolean).toBe(true)
+    expect(pythonVerdicts([NATURAL_UNBALANCED])[0]).toBe(false)
+  })
+
+  it('CONTROL: a naturally unbalanced HARMLESS command still passes both', () => {
+    // Without it, the assertion above could equally mean "everything
+    // unbalanced blocks in the hard-gate", which would be a different finding.
+    const harmless = "echo 'hello vilag"
+    expect(isSendInvocation(harmless) as boolean).toBe(false)
+    expect(pythonVerdicts([harmless])[0]).toBe(false)
+  })
+
+  it('CONTROL: where they agree to BLOCK, both still block', () => {
+    // Without this the pin degenerates into "these two functions differ
+    // somewhere", which any refactor satisfies by accident.
+    expect(js[BLK]).toBe(true)
+    expect(py[BLK]).toBe(true)
+  })
+
+  it('CONTROL: where they agree to PASS, both still pass', () => {
+    // The other direction of the same control: it also proves the fallback is
+    // reached at all rather than everything blocking on a parse error.
+    expect(js[PSS]).toBe(false)
+    expect(py[PSS]).toBe(false)
+  })
+
+  it('CONTROL ON THE METHOD: every case here is balanced, so the forcing actually forces', () => {
+    // The pin's own meter, checked rather than trusted. Appending a quote only
+    // reaches the fallback if the command was balanced first; on an already
+    // unbalanced one it BALANCES it and silently measures the parsed path.
+    // Without this, a future case swap would degrade the four assertions above
+    // into parsed-path assertions with nothing saying so.
+    // The AUTHORITATIVE meter, not a hand-written quote counter: this is the
+    // call whose failure routes to the fallback. See pythonUnparseable above
+    // for why the difference is not academic (72 rows in 2180).
+    const forced = [OUTBOUND, PAYLOAD, AGREED_BLOCK, AGREED_PASS]
+    const verdicts = pythonUnparseable([
+      ...forced.map((c) => c.cmd),
+      ...forced.map((c) => unparseable(c.cmd)),
+      NATURAL_UNBALANCED,
+      unparseable(NATURAL_UNBALANCED),
+    ])
+
+    forced.forEach((c, i) => {
+      expect(verdicts[i], `case is ALREADY unparseable, forcing would balance it: ${c.name}`).toBe(false)
+      expect(verdicts[forced.length + i], `forcing did not make it unparseable: ${c.name}`).toBe(true)
+    })
+
+    // And the opposite requirement for the unforced fixture: it must arrive
+    // unparseable ON ITS OWN. Appending to it would BALANCE it and quietly move
+    // the assertion to the parsed path -- the exact failure this control exists
+    // for, in the other direction.
+    expect(verdicts[2 * forced.length], 'the unforced fixture is not unparseable').toBe(true)
+    expect(verdicts[2 * forced.length + 1], 'appending would balance it -- do not force this one').toBe(false)
+
+    // The case that proves this control is worth its cost:
+    // `grep -c 'x' file.txt # don't` is called unparseable by BOTH
+    // approximations (naive true, shlex true) and parses fine for the gate.
+    // It is not an illustration of the gap -- it IS the gap, the `#` case
+    // above. Swapping it in for the unforced fixture reddens this control,
+    // and would have passed under either approximation.
+  })
+
+  it('CONTROL: on the PARSED path the two gates agree on these very cases', () => {
+    // The divergence must be a property of the FALLBACK, not of the cases. If
+    // these disagreed already when parseable, the four assertions above would
+    // be pinning something else entirely.
+    const parsed = [OUTBOUND, PAYLOAD, AGREED_BLOCK, AGREED_PASS].map((c) => c.cmd)
+    const pyParsed = pythonVerdicts(parsed)
+    parsed.forEach((cmd, i) => {
+      expect(isSendInvocation(cmd), `parsed path disagrees on: ${cmd}`).toBe(pyParsed[i])
+    })
   })
 })
