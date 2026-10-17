@@ -96,13 +96,13 @@ done
 for c in "dash-apos|-- don't\nCOMMIT;\nINSERT INTO t VALUES (1);\nSELECT 'x';\n" "qident|SELECT 1 AS \"it's\";\nCOMMIT;\nSELECT 'x';\n" \
          "estr|SELECT E'\\\\'';\nCOMMIT;\nSELECT 'x';\n" "midline-shell|SELECT 1; \\\\! date\n" "chain|\\\\echo hi \\\\\\\\ \\\\! date\n" \
          "backtick|\\\\echo \`date\`\n" "psqlvar|\\\\set q COMMIT\n:q;\n" "unterminated|SELECT 'abc;\n" \
-         "nested|/* a /* b */ c */ COMMIT;\n"; do
+         "nested|/* a /* b */ c */ COMMIT;\n" "scs|SET standard_conforming_strings = off;\nSELECT 1;\n" "setconfig|SELECT set_config('standard_conforming_strings','off',false);\n"; do
   n="txn-${c%%|*}"; rc="$(rsql "$n" "${c#*|}")"
   check "$n: refused before psql, exit 64" "$rc" "64"
   check "$n: psql never ran" "$(has "$n" 'kapu-tuzelesek')" "0"
 done
 for c in "do-block|DO \$\$ BEGIN PERFORM 1; END \$\$;\n" "dollar-tag|SELECT \$q\$it's; COMMIT;\$q\$ AS x;\n" \
-         "estr-ok|SELECT E'a\\\\'; commit' AS x;\n" "qident-ok|SELECT 1 AS \"it's\";\n" "cast|SELECT '1'::int;\n" "describe|\\\\x\n\\\\pset format aligned\nSELECT 1;\n"; do
+         "estr-ok|SELECT E'a\\\\'; commit' AS x;\n" "qident-ok|SELECT 1 AS \"it's\";\n" "cast|SELECT '1'::int;\n" "dash-apos-ok|-- don't worry\nSELECT 1;\n" "describe|\\\\x\n\\\\pset format aligned\nSELECT 1;\n"; do
   n="ok-${c%%|*}"; rc="$(rsql "$n" "${c#*|}")"
   check "$n: allowed, exit 0" "$rc" "0"
 done
