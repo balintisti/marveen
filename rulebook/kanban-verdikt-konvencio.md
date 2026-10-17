@@ -423,6 +423,12 @@ csak azert nem harap, mert MINDENKI behuzza az idezeteket -- **egy szokas, amit 
 
     a 0. OSZLOP a VALODI verdikte. Egy IDEZETT `VERDIKT:` sor BEHUZVA all.
 
+**A SZERZO SAJAT IDOBELYEGE NEM BEHUZAS** (kartya 08832e26, merve 2026-10-17 15:58, 2028 elo
+kartya: 5 ilyen sor). A `[didi, 2026-10-14 23:13 CEST, date] VERDIKT: ...` alak (a kcomment-
+szkriptek merte fejlece) a parser szerint 0. oszlopos verdikt, de CSAK ha a bélyegben a KOMMENT
+SZERZOJE all: masik szerzo bélyege idezet marad. Elotte a 970be4b3 didi lezart verdiktjen nem
+zarhatott, a7ded8fb es da11b4a4 pedig didi NYITOTT tetele folott zarhatott volna.
+
 **(B) A HATAROLO A DOMINANS SZOKAST FORMALIZALJA -- ES EPP EZERT A MEGFOGALMAZAS A KAR**
 (mandark, 13:00, a 134 NINCS soron):
 

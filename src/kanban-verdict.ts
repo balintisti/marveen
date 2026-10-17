@@ -9,7 +9,9 @@
  * THE RULE, from rulebook/kanban-verdikt-konvencio.md:
  *   - a verdict is a line that STARTS with `VERDIKT:` (column 0); a quoted or
  *     indented one is somebody citing a verdict, not giving one;
- *   - "last wins" holds WITHIN an author, never across the card.
+ *   - "last wins" holds WITHIN an author, never across the card;
+ *   - the author's OWN measured-time stamp in front of it is not an indent
+ *     (card 08832e26, OWN_STAMP below).
  *
  * THE TOKEN, widened after didi's audit (2026-09-29, 17 live lines) and
  * marveen's decision: it is what stands before the first `|` OR the first
@@ -55,6 +57,27 @@ export type OpenLeftover = OpenVerdict
 
 const VERDICT_PREFIX = 'VERDIKT:'
 
+/**
+ * A measured-time stamp the writer's OWN script puts in front of the line --
+ * card 08832e26. `[didi, 2026-10-14 23:13 CEST, date] VERDIKT: NINCS NYITOTT TETEL`
+ * (970be4b3, comment 34722) is a verdict given, not cited, but it does not start
+ * at column 0, so the reading skipped it and didi's OLDER open line (26541) stayed
+ * her last: the card could not close over a verdict she had already closed.
+ * Measured 2026-10-17 15:58 on 2028 live cards: 5 stamped lines, all of this one
+ * shape, all naming their own comment's author.
+ *
+ * Only that exact shape is taken off, and only when the name in it is the
+ * comment's author: a line someone pastes from ANOTHER author's comment still
+ * reads as a citation, which is what the column-0 rule is for.
+ */
+const OWN_STAMP = /^\[([^\],]+), \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})? [A-Z]{3,5}, date\] /
+
+/** The line without its author's own stamp, or the line as written. */
+function withoutOwnStamp(line: string, author: string): string {
+  const m = OWN_STAMP.exec(line)
+  return m && m[1] === author ? line.slice(m[0].length) : line
+}
+
 /** Upper case, accents off, spaces collapsed: "NYITOTT TÉTEL" == "NYITOTT TETEL". */
 function normalize(text: string): string {
   return text
@@ -80,7 +103,8 @@ export function openVerdicts(comments: VerdictComment[]): OpenVerdict[] {
   const ordered = [...comments].sort((a, b) => a.created_at - b.created_at || a.id - b.id)
   const lastByAuthor = new Map<string, { line: string; commentId: number }>()
   for (const comment of ordered) {
-    for (const line of (comment.content ?? '').split(/\r?\n/)) {
+    for (const raw of (comment.content ?? '').split(/\r?\n/)) {
+      const line = withoutOwnStamp(raw, comment.author)
       if (!line.startsWith(VERDICT_PREFIX)) continue
       lastByAuthor.set(comment.author, { line: line.trimEnd(), commentId: comment.id })
     }
@@ -134,7 +158,8 @@ export function openLeftovers(comments: VerdictComment[]): OpenLeftover[] {
   const ordered = [...comments].sort((a, b) => a.created_at - b.created_at || a.id - b.id)
   const byAuthor = new Map<string, OpenLeftover[]>()
   for (const comment of ordered) {
-    for (const raw of (comment.content ?? '').split(/\r?\n/)) {
+    for (const written of (comment.content ?? '').split(/\r?\n/)) {
+      const raw = withoutOwnStamp(written, comment.author)
       const rest = leftoverRest(raw)
       if (rest === null) continue
       const line = raw.trimEnd()
