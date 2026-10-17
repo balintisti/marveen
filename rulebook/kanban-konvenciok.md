@@ -540,6 +540,37 @@ koordinátor kapacitása felszabadul arra, amit tényleg csak ő tud: döntés, 
 *(Mérve ugyanakkor, hogy ne elvi legyen: dexter 205 felvehető kártya, computress 18, didi 2,
 friday 1, mandark 0, jarvis 0, plusz 37 gazdátlan `planned`. Aki állt, nem munka híján állt.)*
 
+### A HIBA-KÁRTYA GAZDÁJA: VAN-E MÉG BENNE QA-MUNKA? (mandark vetette fel, marveen döntése 2026-09-04, kártya `164df5ae`)
+
+**A MÉRT PROBLÉMA:** minden QA-ban talált hiba a BEJELENTŐ nevén született, és ott parkolt, amíg a
+koordinátor át nem irányította. 2026-09-04 éjjel a tétlen-őr öt kártyát ajánlott fel mandarknak,
+ebből NÉGY nem az övé volt (`32162911`, `3bc3237d`: a javítás dexter sávja; `a99f1746`, `ab5fb335`:
+egy `in_progress` kártya blokkolta). Mind `planned` az ő nevén, tehát a gépi olvasóknak örökre
+felvehetőnek látszott. A gyorsabb routing nem választható: a koordinátor nevén akkor 28 `waiting`
+kártya állt, 12 két napnál régebben (mérve 2026-09-04 02:25). Egy szabály, ami azon áll, hogy EGY
+ember gyors lesz, nem szabály.
+
+**A SZABÁLY (a kapcsoló egy mechanikus esemény, nem a koordinátor figyelme):**
+
+    van benne még QA-munka (mérés, lelet, bukó spec)?
+      IGEN -> marad a BEJELENTŐN, `waiting` + a blokkoló neve
+      NEM  -> `assignee` ÜRES, `planned`, a javítás sávja a CÍMBEN ("[javítás: backend+frontend]")
+    a "tud-e most dolgozni rajta" NEM szempont: az időzítés, nem állapot
+
+- **A bejelentő mozgatja**, amint a QA-fele kész (a spec pusholva); nem várja meg az átirányítást.
+- **A gazdátlanság a JAVÍTÁSRA vonatkozik, nem az egész kártyára:** a kártya kimondja, hogy az
+  újratesztelés a bejelentőé marad.
+- **Ez nem kiosztás:** a gazdátlan `planned` a tábla pull-listája (fent, 3. pont); aki felveszi,
+  ráírja magát és `in_progress`-be teszi, mielőtt mér. A sáv a CÍMBE megy, nem az `assignee`-be:
+  a cím irányít, a gazdátlanság felvehetővé tesz.
+- **A blokkolt QA-munkát NE tedd gazdátlanná:** másik ágensnek ajánlaná fel azt, amit ő sem tud
+  elkezdeni, és levenné a bejelentő saját, elvégzendő munkáját a nevéről.
+
+*(Az első alak a „tud-e most cselekedni a gazda" kapcsolót írta; mandark az első használatnál a
+blokkolt párnál találta meg a rést, és a javított alak az övé: egy szabály, amit a HASZNÁLÓJA élesít,
+többet ér, mint amit a szerzője. Újramérve 2026-10-17 22:40: a koordinátor nevén 4 `waiting` kártya
+áll, 0 két napnál régebben `updated_at` szerint, tehát a 28-as sor külön kártyája tárgytalan.)*
+
 ### EGY BECSLÉS LEFELÉ SOSEM ÍRÓDIK ÚJRA -- ÉS A ZSUGORODÓ KÁRTYA UGYANÚGY NÉZ KI, MINT AZ EL NEM
 ### KEZDETT (computress mérte magán, 2026-09-03)
 
