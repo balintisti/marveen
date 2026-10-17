@@ -85,6 +85,25 @@ describe('submitOwnSlashCommand', () => {
     expect(res).toBe('submitted')
     expect(events).toEqual(['type', 'enter'])
   })
+  // Card 9c182807 (trillian 2026-10-14 18:11:50): `tmux send-keys Enter` threw (SIGABRT), and the
+  // throw skipped the re-read, so the command stayed parked. A throwing Enter is a missed Enter.
+  it('an Enter that THROWS is retried through the same re-read, not abandoned', async () => {
+    const p = fakePane(2)
+    let first = true
+    const pressEnter = p.deps.pressEnter
+    p.deps.pressEnter = () => {
+      if (first) { first = false; p.events.push('enter-threw'); throw new Error('Command failed: tmux send-keys -t agent-trillian Enter (signal SIGABRT)') }
+      pressEnter()
+    }
+    expect(await submitOwnSlashCommand('/rename Trillian', p.deps)).toBe('submitted')
+    expect(p.events).toEqual(['type:/rename Trillian', 'enter-threw', 'enter', 'enter'])
+  })
+
+  it('an Enter that always throws ends as still-parked (the caller logs it), not as a throw', async () => {
+    const p = fakePane(1)
+    p.deps.pressEnter = () => { throw new Error('tmux gone') }
+    expect(await submitOwnSlashCommand('/rename Trillian', p.deps)).toBe('still-parked')
+  })
 })
 
 describe('sendRecoveryBriefWhenIdle', () => {
