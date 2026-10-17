@@ -201,8 +201,10 @@ def _kanban(where, params=()):
 
 
 def kanban_due_today():
+    # A planned card's due_date is a floor ("not before", card 8e4cc966), not a
+    # deadline: a past floor means the card can be picked up, not that it is due.
     return _kanban(
-        "due_date IS NOT NULL AND status != 'done' "
+        "due_date IS NOT NULL AND status NOT IN ('done', 'planned') "
         "AND date(due_date,'unixepoch','localtime') <= date('now','localtime') "
         "ORDER BY due_date")
 
