@@ -78,7 +78,7 @@ hits=[]
 for ln,line in enumerate(src.splitlines(),1):
     m=re.match(r'\s*\\(c|connect|!|i|ir|include|include_relative|o|out|g|gexec)(?=\s|$)',line)
     if m: hits.append('%d: \\%s'%(ln,m.group(1)))
-TXN=re.compile(r'(?is)^\s*(commit|end|abort|begin|start\s+transaction|rollback(?!\s+(?:work\s+|transaction\s+)?to\b)|release|set\s+(?:session\s+characteristics|transaction)|prepare\s+transaction)\b')
+TXN=re.compile(r'(?is)^\s*(commit|end|abort|begin|start\s+transaction|rollback(?!\s+(?:work\s+|transaction\s+)?to\b)|set\s+(?:session\s+characteristics|transaction)|prepare\s+transaction)\b')
 body=re.sub(r'(?m)^\s*\\[^\n]*$','',src)
 for st in body.split(';'):
     m=TXN.match(st)
@@ -88,7 +88,7 @@ PYX
 )"
 if [ -n "$TXN_HIT" ]; then
   echo "NEM MERTEM: a meres SQL-je kilepne a csak-olvaso burokbol: $TXN_HIT" >&2
-  echo "  A tranzakciot a burok nyitja es zarja; a fajlban ne legyen COMMIT/END/ROLLBACK/BEGIN/RELEASE, se \\c, \\!, \\i." >&2
+  echo "  A tranzakciot a burok nyitja es zarja; a fajlban ne legyen COMMIT/END/ROLLBACK/BEGIN, se \\c, \\!, \\i." >&2
   echo "  Egy spekulativ blokk hibaja ellen NEM kell sajat SAVEPOINT: a burok ON_ERROR_ROLLBACK-kal fut." >&2
   exit 64
 fi

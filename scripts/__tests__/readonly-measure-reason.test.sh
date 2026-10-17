@@ -84,7 +84,7 @@ rsql() { # $1 nev  $2 SQL-tartalom -> exit kod
   echo $?
 }
 for c in "commit|SELECT 1;\nCOMMIT;\nINSERT INTO t VALUES (1);\n" "end|SELECT 1; END;\n" \
-         "rollback|SELECT 1;\nrollback;\n" "begin|BEGIN; SELECT 1;\n" "release|RELEASE SAVEPOINT p1;\n" \
+         "rollback|SELECT 1;\nrollback;\n" "begin|BEGIN; SELECT 1;\n" \
          "settxn|SET TRANSACTION READ WRITE;\n" "connect|SELECT 1;\n\\\\c postgres\n" "shell|\\\\! date\n"; do
   n="txn-${c%%|*}"; rc="$(rsql "$n" "${c#*|}")"
   check "$n: refused before psql, exit 64" "$rc" "64"
@@ -92,7 +92,7 @@ for c in "commit|SELECT 1;\nCOMMIT;\nINSERT INTO t VALUES (1);\n" "end|SELECT 1;
   check "$n: psql never ran" "$(has "$n" 'kapu-tuzelesek')" "0"
 done
 # Ami NEM kilepes, atmegy (a szuro nem vak a masik iranyban sem): ROLLBACK TO, literal, komment, \set.
-for c in "rbto|SAVEPOINT p1;\nSELECT 1;\nROLLBACK TO SAVEPOINT p1;\n" "literal|SELECT 'commit; end;' AS x;\n" \
+for c in "rbto|SAVEPOINT p1;\nSELECT 1;\nROLLBACK TO SAVEPOINT p1;\n" "release|SAVEPOINT p1;\nSELECT 1;\nRELEASE SAVEPOINT p1;\n" "literal|SELECT 'commit; end;' AS x;\n" \
          "comment|-- COMMIT here is a comment\nSELECT 1; /* END; */\n" "set|\\\\set ON_ERROR_ROLLBACK on\nSELECT 1;\n"; do
   n="ok-${c%%|*}"; rc="$(rsql "$n" "${c#*|}")"
   check "$n: allowed, exit 0" "$rc" "0"
