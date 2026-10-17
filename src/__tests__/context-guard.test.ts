@@ -8,7 +8,9 @@ import {
   DEFAULT_CONTEXT_GUARD,
   handoffStaleMinutes,
   INITIAL_GUARD_STATE,
+  READY_POLL_MS,
   READY_TIMEOUT_MS,
+  READY_TIMEOUT_REASON,
   SATURATION_CONFIRM_SWEEPS,
   SATURATION_CREDIBLE_MIN_PCT,
   saturationBannerCredible,
@@ -594,6 +596,20 @@ describe('decideGuard: await-ready', () => {
     const d = decideGuard(awaitingReady, inputs({ nowMs: NOW + 61_000 }), CFG)
     expect(d.action).toBe('none')
     expect(d.nextState.phase).toBe('cooldown')
+    expect(d.reason).toBe(READY_TIMEOUT_REASON)
+  })
+
+  // Card 9c182807: the window equalled the 5-min sweep, so the first sweep after
+  // the restart was also the last check. A session still booting then is waited for.
+  it('still waits at the first sweep after the restart', () => {
+    const justRestarted: GuardState = { ...awaitingReady, deadlineMs: NOW + READY_TIMEOUT_MS }
+    const d = decideGuard(justRestarted, inputs({ nowMs: NOW + 5 * 60_000 + 10_000 }), CFG)
+    expect(d.action).toBe('none')
+    expect(d.nextState.phase).toBe('await-ready')
+  })
+
+  it('the ready poll fits many checks into the window', () => {
+    expect(READY_POLL_MS * 10).toBeLessThanOrEqual(READY_TIMEOUT_MS)
   })
 })
 

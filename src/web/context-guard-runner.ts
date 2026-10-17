@@ -39,6 +39,9 @@ import {
   dailyHandoffUnused,
   IDLE_FLUSH_REASON_PREFIX,
   INITIAL_GUARD_STATE,
+  READY_POLL_MS,
+  READY_TIMEOUT_MS,
+  READY_TIMEOUT_REASON,
   STALE_REFRESH_REASON_PREFIX,
   SATURATION_CREDIBLE_MIN_PCT,
   saturationBannerCredible,
@@ -660,6 +663,14 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
         'context-guard: idle-flush not acting',
       )
     }
+    // The one give-up of the restart path: the agent runs, but without the
+    // "continue from your handoff" prompt. Silent until card 9c182807.
+    if (decision.reason === READY_TIMEOUT_REASON) {
+      logger.warn(
+        { name, readyTimeoutMs: READY_TIMEOUT_MS },
+        'context-guard: restarted session never read as ready -- resume prompt NOT injected',
+      )
+    }
     return
   }
 
@@ -926,6 +937,11 @@ export function getHardGuardPhase(name: string): string {
   return guardStates.get(name)?.phase ?? 'idle'
 }
 
+/** Agents the ready poll re-checks between sweeps: those waiting for a restarted session. */
+export function awaitReadyAgents(states: ReadonlyMap<string, GuardState>): string[] {
+  return [...states].filter(([, s]) => s.phase === 'await-ready').map(([name]) => name)
+}
+
 export function startContextGuardRunner(): NodeJS.Timeout {
   let tickRunning = false
   const warnMissingConfig = makeContextGuardConfigWarner((msg) => logger.warn(msg))
@@ -957,6 +973,24 @@ export function startContextGuardRunner(): NodeJS.Timeout {
       tickRunning = false
     }
   }
+  // Between sweeps, re-check only the agents in await-ready, so the resume
+  // prompt lands within READY_POLL_MS of the session reading ready instead of
+  // depending on what the pane shows at the next 5-minute sweep (card 9c182807).
+  // Shares tickRunning: a poll never overlaps a sweep or a restart in flight.
+  async function readyPoll() {
+    if (tickRunning) return
+    const names = awaitReadyAgents(guardStates)
+    if (names.length === 0) return
+    tickRunning = true
+    try {
+      for (const name of names) {
+        try { await checkAgent(name, Date.now()) } catch (err) { logger.debug({ err, agent: name }, 'context-guard: ready poll error') }
+      }
+    } finally {
+      tickRunning = false
+    }
+  }
   setTimeout(sweep, INITIAL_DELAY_MS)
+  setInterval(readyPoll, READY_POLL_MS)
   return setInterval(sweep, INTERVAL_MS)
 }
