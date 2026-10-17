@@ -219,6 +219,15 @@ const HTTP_WRITE_RX = /(-X\s*(POST|PUT|PATCH|DELETE)|--request\s+(POST|PUT|PATCH
 //   - A $(...) or backtick substitution that assigns a scheduler result
 //     (`X=$(crontab -)`, `X=`crontab -``) is caught by SCHEDULER_RX's boundary
 //     anchor, which now includes both `(` and the backtick.
+//   - The store-write check reads write intent from SHELL SYNTAX (WRITE_INTENT_RX:
+//     redirect, tee, sed -i, dd, cp, mv). A write through an interpreter carries
+//     none of those tokens -- `python3 -c "open('<store>','w').write(x)"`, `node -e`,
+//     `perl -e`, a script fed from a heredoc -- and passes (measured 2026-08-24 and
+//     2026-09-03, card 2215a949). Accepted for the reason above: catching it would
+//     mean flagging every interpreter call that NAMES the store, reads included, and
+//     a gate that cries wolf is worse than none. The file is written by the same
+//     user the agents run as, so there is no filesystem-level lock to fall back on;
+//     do not read this gate as "the store is write-protected".
 export function splitSegments(command) {
   return String(command ?? '')
     .replace(/\\\r?\n/g, ' ')
