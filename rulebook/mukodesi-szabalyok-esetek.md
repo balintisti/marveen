@@ -123,11 +123,15 @@ saját kártyája tilt. (Mindkettőn beállítva a mező, visszaolvasva.)
 > **Egy prózai dátum-padló LÁTHATATLAN egy mező-szűrőnek.** A próza az INDOKLÁS helye, a mező a
 > MECHANIZMUSÉ -- és amelyiket a gép olvassa, az a padló.
 
-**⚠ DE A `waiting` OSZLOPON A MEZŐT SEM OLVASSA SENKI -- MA** (deeper mérte 2026-09-28 00:4x, kártya `ce5c9e4b`):
-a tétlen-őr a `waiting` sort a STÁTUSZ-szűrővel dobja ki (`src/idle-agent.ts:704-706`), MIELŐTT az `isDeferred` elérné,
-a `orphanPullList` pedig csak `planned`-et néz. Vagyis egy `waiting` kártya `due_date`-je ma SEMMIT nem tüzel
-(26 ilyen kártya, 7 ágens). A mező ettől még helyes, de amíg a `ce5c9e4b` nem él, a `waiting` padlót
-EMBER méri újra -- ne hidd, hogy magától szól.
+**⚠ A `waiting` OSZLOPON A MEZŐ NEM KAPU, HANEM ÉBRESZTŐ -- ÉS CSAK LEJÁRATKOR SZÓL** (2026-09-28 óta,
+kártya `ce5c9e4b`, commit `fd71e175d`; `src/idle-agent.ts` `isFloorExpired` + `floorRanOut`): a tétlen-őr a
+LEJÁRT padlójú `waiting` kártyát a gazdája nyitott munkájaként számolja, és felébreszti. Nem a munkára, hanem a
+feltétel ÚJRAMÉRÉSÉRE: utána a kártyát vagy továbbviszed, vagy új padlót írsz. JÖVŐBELI padló egy `waiting`
+kártyán semmit nem kapuz (`waiting` kártyát a felajánló amúgy sem ad), padló NÉLKÜLI `waiting` kártya pedig soha
+nem jár le. Röviden: `planned` -> a padló NOT-BEFORE kapu; `waiting` -> a padló a visszatérés IDŐPONTJA, és a
+prózában írt padlót itt sem olvassa semmi. *(09-28-ig a `waiting` sor `due_date`-jét SEMMI nem olvasta: deeper
+mérése, 26 kártya, 7 ágens; a szabály ott a `planned` oszlopon mért indokot írta ki minden `waiting` kártyára,
+kártya `4bda5cb9`.)*
 
 **ÉS AMIT NEM SZABAD BELŐLE CSINÁLNI: a maradék 32-t NEM töltjük ki tömegesen.** Egy prózából
 dátumot parszoló söprés pontosan azt a hibát termelné, ami ellen a mező van: egy félreolvasott
@@ -225,7 +229,7 @@ mondd ki, hogy még nincs kártya) -- különben ketten mérik, és két kártya
 - Isti kártyái külön kategória, nem flotta-backlog.
 - **„Ez előtt ne" dátum a `due_date` MEZŐBE megy** (a felajánló a mezőt olvassa, prózát nem). **HATÁRIDŐ
   („meddig") PRÓZÁBA**: a mező NOT-BEFORE, határidőként a gazda addig MEG SEM KAPJA a kártyát. A
-  `waiting` sornál a mezőt ma senki nem olvassa (`ce5c9e4b`), ott a padlót ember méri újra.
+  `waiting` sornál a mező NEM kapu, hanem lejáratkor ÉBRESZTI a gazdát az újramérésre (`ce5c9e4b`, 09-28 óta).
   Tömeges kitöltés prózából TILOS: kártyánkénti olvasás vagy semmi.
 - Egy teljes oszlop átolvasása SAJÁT KÁRTYÁT kap, gazdával.
 
