@@ -29,9 +29,17 @@
 #
 # A FAIL-CLOSED SZERZODES, ES EZ A SCRIPT LENYEGE:
 #
-#   exit 0  =  MERTEM, ES NULLA.        (a kapu ketszer tuzelt, a nevezo nem-nulla, a szamlalo 0)
-#   exit 2  =  MERTEM, ES NEM NULLA.    -> a nevezo megdolt, a leletek sulyat ujra kell nezni
-#   exit 3+ =  NEM MERTEM.              -> es ez SOHA nem olvasodhat "tisztanak"
+#   exit 0  =  MERTEM.                  a VERDIKT a stdout utolso soraban es az allapot-fajlban all:
+#                                         "VERDIKT: clear" (nulla) vagy "VERDIKT: breached" (a nevezo
+#                                         megdolt, a riasztas igazoltan kiment, `OK id=`)
+#   exit 3+ =  NEM MERTEM, VAGY A RIASZTAS NEM MENT KI. -> es ez SOHA nem olvasodhat "tisztanak"
+#
+#   A megdolt verdikt korabban exit 2 volt (kartya 8b1323ab). Az utemezo (src/web/command-task.ts)
+#   minden nem-nulla kodot `fail`-nek olvas, igy egy RIASZTOTT, valtozatlan allapot minden futason
+#   `fail`-t irt: merve 2026-10-16, 157 egymas utani `fail` -- es egy telitett halal-jelzo nem jelzi
+#   a valodi halalt. A lelet utja az uzenet (marveen), a kilepesi kod azt mondja meg, MUKODIK-E az or.
+#   Utemezett futasnal a VERDIKT-sort SENKI nem olvassa (command-task.ts olvasatlanul uriti a
+#   stdout-ot): a megdoles tartos nyoma az ALLAPOT-FAJL, a hangos ut az atmenetkori uzenet.
 #
 # A `NEM MERTEM` es a `NULLA` megkulonboztetese nem stilus: e nelkul egy elszakadt adatbazis-
 # kapcsolat ugyanugy nez ki, mint egy egeszseges berlo-hatar. A meres az eles adatbazisrol
@@ -145,6 +153,7 @@ fi
 
 if [ "$VERDICT" = "clear" ]; then
   echo "OK: a nevezo all -- egyetlen berlon belul sincs masodik fel."
+  echo "VERDIKT: clear"
   exit 0
 fi
 
@@ -174,7 +183,8 @@ if [ "$PREV" = "breached" ]; then
   # amiert letezik: a huszadik utan senki nem olvassa el -- ezt a sajat kommentje mondja ki
   # ket sorral feljebb.
   printf '%s\n' "breached" > "$STATE_FILE"
-  exit 2
+  echo "VERDIKT: breached"
+  exit 0
 fi
 
 # AZ ATMENET az esemeny, nem az allapot: kulonben minden futas ujrakuldene ugyanazt, es a
@@ -237,4 +247,5 @@ fi
 # ES CSAK ITT: a kuldes IGAZOLTAN megtortent (`OK id=`). Ez az egyetlen hely, ahol az allapot
 # 'ertesitve'-re valthat.
 printf '%s\n' "breached" > "$STATE_FILE"
-exit 2
+echo "VERDIKT: breached"
+exit 0
