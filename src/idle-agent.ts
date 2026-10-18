@@ -23,8 +23,11 @@
 export type WorkCheckKind =
   // Cards assigned to this agent that are not finished. The default for a worker.
   | 'assigned_open_cards'
-  // Cards sitting in testing that this agent has not commented on yet. The reviewer's
-  // real queue -- "in testing" alone is not it, because a card stays there after review.
+  // Cards sitting in testing that this agent has not commented on yet, OR that moved
+  // after its last comment (a coordinator comment or a jarvis census comment does not
+  // re-arm; card c187aa57).
+  // The reviewer's real queue -- "in testing" alone is not it, because a card stays there
+  // after review.
   | 'testing_without_my_comment'
   // Cards in `waiting` whose named blocker is this agent -- the DECISION QUEUE.
   // The coordinator's check (card 6c1439ac, marveen's own choice). His open-card
@@ -1971,7 +1974,8 @@ export function buildWakeMessage(
     ...(isReviewQueue
       ? [
           'A te deklaraciod `testing_without_my_comment`, tehat en a `testing` oszlopot szamoltam, amire',
-          'meg nem szoltal hozza. A fenti sor a NEVEDEN allo nyitott kartyakat adja: MASIK halmaz.',
+          'meg nem szoltal hozza, VAGY ami a legutobbi kommented OTA mozdult (koordinator-komment es jarvis-cenzus nem szamit).',
+          'A fenti sor a NEVEDEN allo nyitott kartyakat adja: MASIK halmaz.',
         ]
       : kind === 'assigned_open_cards'
         ? [
