@@ -26,7 +26,7 @@
  * bukik, nem csendben marad ki.
  */
 import { describe, it, expect, beforeAll } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { discoverScriptTests } from './helpers/discover-script-tests.js'
 import { fileURLToPath } from 'node:url'
@@ -44,8 +44,32 @@ const allTestFiles = discoverScriptTests(TESTS_DIR)
 const runnable = allTestFiles.filter((f) => /\.test\.(sh|py)$/.test(f))
 const unhandled = allTestFiles.filter((f) => !/\.test\.(sh|py)$/.test(f))
 
-type Result = { rc: number | null; out: string }
+// Card 33ff4ab1: upstream's script-tests-runner.test.ts already runs every TOP-LEVEL suite (flat
+// readdirSync), so this file ran all 149 of them a second time in every full suite. Measured
+// 2026-10-18: under that doubled load the offsite-encryption test (78 s alone) went past the cap
+// here in 2 of 4 full runs, read as "rc=1" with a cut-off tail. This collector now runs only what
+// the upstream one cannot see (a subdirectory); the guards below still read the whole set. If the
+// upstream runner is gone, nothing is skipped; if its discovery changed, the guard test fails.
+const UPSTREAM_RUNNER = join(HERE, 'script-tests-runner.test.ts')
+const UPSTREAM_DISCOVERY = ['readdirSync(DIR)', '/\\.test\\.(sh|py)$/.test(f) || /-test\\.py$/.test(f)']
+const upstreamSrc = existsSync(UPSTREAM_RUNNER) ? readFileSync(UPSTREAM_RUNNER, 'utf8') : null
+
+function coveredUpstream(file: string): boolean {
+  return !file.includes('/') && (/\.test\.(sh|py)$/.test(file) || /-test\.py$/.test(file))
+}
+function selectHere(files: string[], upstreamPresent: boolean): string[] {
+  return upstreamPresent ? files.filter((f) => !coveredUpstream(f)) : files
+}
+const runHere = selectHere(runnable, upstreamSrc !== null)
+
+type Result = { rc: number | null; out: string; killed: boolean; signal: string | null }
 const results = new Map<string, Result>()
+
+// A timeout kill must say so: it used to read as "rc=1" with the tail cut off mid-run.
+function failureHead(file: string, r: Result): string {
+  if (r.killed) return `${file} TIMEOUT: ${PER_TEST_TIMEOUT_MS / 1000} s utan megolve (${r.signal ?? 'jel nelkul'})`
+  return `${file} rc=${r.rc}`
+}
 
 function runOne(file: string): Promise<Result> {
   const cmd = file.endsWith('.sh') ? 'bash' : 'python3'
@@ -56,14 +80,15 @@ function runOne(file: string): Promise<Result> {
       { cwd: REPO_ROOT, timeout: PER_TEST_TIMEOUT_MS, maxBuffer: 20 * 1024 * 1024 },
       (err, stdout, stderr) => {
         const out = `${stdout}${stderr}`
-        resolve({ rc: err ? ((err as NodeJS.ErrnoException & { code?: number }).code ?? 1) : 0, out })
+        const e = err as (NodeJS.ErrnoException & { code?: number; killed?: boolean; signal?: string }) | null
+        resolve({ rc: e ? (e.code ?? 1) : 0, out, killed: !!e?.killed, signal: e?.signal ?? null })
       },
     )
   })
 }
 
 beforeAll(async () => {
-  const queue = [...runnable]
+  const queue = [...runHere]
   const workers = Array.from({ length: Math.min(CONCURRENCY, queue.length) }, async () => {
     for (;;) {
       const file = queue.shift()
@@ -77,7 +102,7 @@ beforeAll(async () => {
   // per-test cap + 60 s for the entire queue; measured 2026-10-01, the queue needed 227 s of
   // that 260 s on a quiet run, and 4 more ported upstream script tests tipped a full-suite run
   // over it -- the file then failed as a whole, with 150 tests skipped and no script named.
-}, Math.ceil(runnable.length / CONCURRENCY) * PER_TEST_TIMEOUT_MS + 60_000)
+}, Math.ceil(runHere.length / CONCURRENCY) * PER_TEST_TIMEOUT_MS + 60_000)
 
 describe('scripts/__tests__ -- a shell- es python-tesztek', () => {
   it('talalt futtathato teszt-fajlt (nema nulla ellen)', () => {
@@ -99,13 +124,29 @@ describe('scripts/__tests__ -- a shell- es python-tesztek', () => {
     expect(liars).toEqual([])
   })
 
-  for (const file of runnable) {
+  it('csak azt futtatja, amit az upstream gyujto nem: felso szint ott, alkonyvtar itt (33ff4ab1)', () => {
+    expect(selectHere(['a.test.sh', 'b.test.py', 'c-test.py', 'd/e.test.sh'], true)).toEqual(['d/e.test.sh'])
+    // a way out: without the upstream runner nothing is skipped
+    expect(selectHere(['a.test.sh', 'd/e.test.sh'], false)).toEqual(['a.test.sh', 'd/e.test.sh'])
+  })
+
+  it('az upstream gyujto felderitese az, amire a szures epit (ha valtozott, igazitsd a coveredUpstream-et)', () => {
+    if (upstreamSrc === null) return
+    for (const snippet of UPSTREAM_DISCOVERY) expect(upstreamSrc, snippet).toContain(snippet)
+  })
+
+  it('az idotullepes TIMEOUT-kent jelenik meg, nem rc=1-kent', () => {
+    expect(failureHead('x.test.sh', { rc: null, out: '', killed: true, signal: 'SIGTERM' })).toMatch(/TIMEOUT: \d+ s utan megolve \(SIGTERM\)/)
+    expect(failureHead('x.test.sh', { rc: 1, out: '', killed: false, signal: null })).toBe('x.test.sh rc=1')
+  })
+
+  for (const file of runHere) {
     it(`${file} atmegy`, () => {
       const r = results.get(file)
       expect(r, `${file}: nem futott le`).toBeDefined()
       if (r!.rc !== 0) {
         const tail = r!.out.trim().split('\n').slice(-25).join('\n')
-        throw new Error(`${file} rc=${r!.rc}\n--- utolso 25 sor ---\n${tail}`)
+        throw new Error(`${failureHead(file, r!)}\n--- utolso 25 sor ---\n${tail}`)
       }
       expect(r!.rc).toBe(0)
     })
