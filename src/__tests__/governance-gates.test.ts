@@ -67,8 +67,8 @@ describe('self-pace-gate gateDecision', () => {
     // A ket csalad kulonbozo valaszt erdemel, es ez a kulonbseg maga az allitas:
     //   SZOVEG-ILLESZTO ag  -> lehet, hogy csak DOKUMENTALTAL: nevezze meg a MASIK UTAT
     //   STRUKTURALIS ag     -> a hivas TENYLEG megtortent: mondja ki, hogy itt nincs ilyen eset
-    const TEXT_MATCH = ['store-write-bash', 'schedule-api-write', 'os-scheduler', 'os-scheduler-indirect', 'bash-self-inject']
-    const STRUCTURAL = ['self-pace-tool', 'store-write']
+    const TEXT_MATCH = ['store-write-bash', 'schedule-api-write', 'os-scheduler', 'os-scheduler-indirect', 'bash-self-inject', 'launchd-dir-write-bash']
+    const STRUCTURAL = ['self-pace-tool', 'store-write', 'launchd-dir-write']
 
     for (const r of [...TEXT_MATCH, ...STRUCTURAL]) {
       expect(REASON_HINT[r], `${r}: nincs hint`).toBeTruthy()
@@ -755,6 +755,91 @@ describe('self-pace-gate: option-taking wrappers do not hide the scheduler', () 
     allow('xargs grep crontab')          // a search, not an invocation
     allow('ssh host crontab -l')
     allow('env | grep crontab')
+  })
+})
+
+// --- residual ACCIDENTAL shapes (card d86c38b8, didi 36930 after 3f18a5a6) ---
+//
+// The gate is a self-discipline aid against an agent scheduling itself by accident,
+// not a boundary against an adversary. These four shapes can happen without trying
+// to evade anything, so they are closed. Deliberately left open (accepted, an
+// evasion has to be constructed on purpose): quoting or substitution inside the
+// command NAME (`\at`, `a""t`, `$(echo at)`, `X=at; $X`), a command line that is
+// GENERATED as text and then sourced (`. <(echo ...)`, `echo ... | sh`), and a
+// python/node subprocess argument list.
+describe('self-pace-gate: residual accidental shapes (card d86c38b8)', () => {
+  const reasonOf = (command: string) => selfPaceDecision('Bash', { command }).reason
+  const allow = (command: string) =>
+    expect(selfPaceDecision('Bash', { command }).deny, command).toBe(false)
+
+  it('POSITIVE CONTROL: the already-closed neighbours still deny', () => {
+    expect(reasonOf(`zsh -c 'echo job | batch'`)).toBe('os-scheduler-indirect')
+    expect(reasonOf('nice -n 5 crontab cronfile')).toBe('os-scheduler')
+    expect(reasonOf("bash <<'EOF'\ncrontab cronfile\nEOF")).toBe('os-scheduler')
+  })
+
+  it('a bare batch / crontab as the WHOLE -c string of a shell is denied', () => {
+    expect(reasonOf(`sh -c 'batch'`)).toBe('os-scheduler-indirect')
+    expect(reasonOf(`bash -c "crontab"`)).toBe('os-scheduler-indirect')
+    expect(reasonOf(`zsh -lc ' batch '`)).toBe('os-scheduler-indirect')
+    expect(reasonOf(`bash -c 'systemd-run'`)).toBe('os-scheduler-indirect')
+  })
+  it('...but a counting grep or an echoed word is not a shell -c string', () => {
+    allow(`grep -c 'batch' src/x.ts`)
+    allow(`grep -c "crontab" notes.md`)
+    allow(`echo 'batch'`)
+    allow(`bash -c 'batch-report.sh'`)
+  })
+
+  it('taskpolicy is a wrapper: the scheduler after it is denied, a normal command is not', () => {
+    expect(reasonOf('taskpolicy -b crontab cronfile')).toBe('os-scheduler')
+    expect(reasonOf('taskpolicy -c utility launchctl load x.plist')).toBe('os-scheduler')
+    allow('taskpolicy -b npm test')
+  })
+
+  it('an fd-numbered heredoc into a shell is a command line: its body is scanned', () => {
+    expect(reasonOf("bash 0<<'EOF'\ncrontab cronfile\nEOF")).toBe('os-scheduler')
+    expect(reasonOf("sh 0<<EOF\nat now + 1 minute\nEOF")).toBe('os-scheduler')
+  })
+  it('...while the same body fed to a non-shell, or to a shell running a FILE, stays text', () => {
+    allow("cat 0<<'EOF'\ncrontab cronfile\nEOF")
+    allow("bash 0 <<'EOF'\ncrontab cronfile\nEOF")   // the space: `0` is a script file
+  })
+
+  it('a write INTO a launchd directory is denied (it loads at the next login/boot)', () => {
+    for (const command of [
+      'cp com.x.plist ~/Library/LaunchAgents/',
+      'ln -s /Users/isti/x/com.x.plist ~/Library/LaunchAgents/com.x.plist',
+      "cat > ~/Library/LaunchAgents/com.x.plist <<'EOF'\n<plist/>\nEOF",
+      'echo x | tee ~/Library/LaunchAgents/a.plist',
+      'cp -t ~/Library/LaunchAgents a.plist',
+      'mv a.plist /Library/LaunchDaemons/',
+      'plutil -replace Disabled -bool false ~/Library/LaunchAgents/a.plist',
+      "sed -i '' 's/a/b/' ~/Library/LaunchAgents/a.plist",
+      `bash -c 'cp a.plist ~/Library/LaunchAgents/'`,
+      `/usr/libexec/PlistBuddy -c 'Set :Disabled false' ~/Library/LaunchAgents/a.plist`,
+      'plutil -convert binary1 ~/Library/LaunchAgents/a.plist',
+      // measured on the fleet's own calls: written with no launchctl, the old gate let it through
+      "sed 's#__ROOT__#/Users/isti/marveen#g' x.plist.template > ~/Library/LaunchAgents/com.x.plist",
+    ]) expect(reasonOf(command), command).toBe('launchd-dir-write-bash')
+    for (const tool of ['Write', 'Edit']) {
+      expect(selfPaceDecision(tool, { file_path: '/Users/isti/Library/LaunchAgents/com.x.plist' }))
+        .toEqual({ deny: true, reason: 'launchd-dir-write' })
+    }
+  })
+  it('...while reading, listing and copying OUT of it, or describing it in a message, pass', () => {
+    allow('ls ~/Library/LaunchAgents')
+    allow('ls ~/Library/LaunchAgents 2>/dev/null')
+    allow('cat ~/Library/LaunchAgents/com.x.plist')
+    allow('cp ~/Library/LaunchAgents/com.x.plist ./backup/')
+    allow('grep -l marveen ~/Library/LaunchAgents/*.plist > list.txt')
+    allow('plutil -lint ~/Library/LaunchAgents/a.plist')
+    // the two read forms the first draft denied, found by replaying the fleet's calls
+    allow(`/usr/libexec/PlistBuddy -c "Print :EnvironmentVariables" ~/Library/LaunchAgents/a.plist`)
+    allow('plutil -convert json -o i.json ~/Library/LaunchAgents/a.plist')
+    allow("bash scripts/agent-msg.sh friday marveen - <<'VEGE'\ninstall: cp x.plist ~/Library/LaunchAgents/\nVEGE")
+    expect(selfPaceDecision('Read', { file_path: '/Users/isti/Library/LaunchAgents/com.x.plist' }).deny).toBe(false)
+    expect(selfPaceDecision('Write', { file_path: '/Users/isti/x/launchd/com.x.plist' }).deny).toBe(false)
   })
 })
 
