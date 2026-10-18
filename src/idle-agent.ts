@@ -25,7 +25,7 @@ export type WorkCheckKind =
   | 'assigned_open_cards'
   // Cards sitting in testing that this agent has not commented on yet, OR that moved
   // after its last comment (a coordinator comment or a jarvis census comment does not
-  // re-arm; card c187aa57).
+  // re-arm; card c187aa57), plus the reviewer's own open cards (card b8674845).
   // The reviewer's real queue -- "in testing" alone is not it, because a card stays there
   // after review.
   | 'testing_without_my_comment'
@@ -1134,8 +1134,10 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
         // card, which this function is not told. Tried the broad fix -- count it as mine
         // whenever I am the only commenter -- and the existing tests caught it: it would
         // also claim cards that are genuinely waiting for someone else's first look.
-        // Left as a known gap on card 52d94a9e; four cards today, all with the same
-        // board-level anomaly behind them (a reviewer assigned cards she must review).
+        // A known gap, tracked on card 75fef3bc (52d94a9e, where it started, is closed). The "four
+        // cards" once measured here are gone: on 2026-10-14 87 testing cards had a reviewer as
+        // assignee, on 46 that assignee spoke last, and all 46 were friday's own work waiting for
+        // a separate reviewer -- the case this rule excludes correctly. No instance of the hole.
         //
         // A REVIEWER had the last word -> an unanswered finding is waiting on me.
         // "Someone else" was too wide: it swept in the coordinator, whose comment is
@@ -1146,7 +1148,6 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
         return latestAuthor !== coordinator
       })
     }
-    case 'testing_without_my_comment':
       // The reviewer's real queue -- and the question is whether the review covers the
       // card's CURRENT state, not whether one was ever done.
       //
@@ -1157,7 +1158,15 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
       // her nine, the count would hit zero and the guard would fall silent forever,
       // with 28 cards waiting for a second look. It would switch off exactly when the
       // reviewer had caught up, which is precisely when it is needed.
-      return live.filter((c) => {
+      //
+      // AND THE REVIEWER'S OWN CARDS COME WITH IT: UNION, NOT REPLACEMENT (card b8674845,
+      // marveen's decision 12274). This branch used to return the testing queue ALONE, so a
+      // reviewer's own open cards were in no list at all: didi's 152 guard messages carried ZERO
+      // second sections (control: dexter 122/124). The own half is exactly what
+      // `assigned_open_cards` selects, so it is that branch's answer, not a copy of its rules;
+      // buildWakeMessage already splits the two by status.
+    case 'testing_without_my_comment': {
+      const queue = live.filter((c) => {
         if (c.status !== 'testing') return false
         const mine = lastCommentAtByCard.get(c.id)?.get(agent)
         if (mine === undefined) return true
@@ -1199,6 +1208,13 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
         if (spokeAfterMe.length > 0 && reArming.length === 0) return false
         return true
       })
+      const own = selectDeclaredWork(
+        { ...check, kind: 'assigned_open_cards' }, agent, cards, lastCommentAtByCard, coordinator, now, reviewers,
+        lastRealCommentAtByCard,
+      )
+      const inQueue = new Set(queue.map((c) => c.id))
+      return [...queue, ...own.filter((c) => !inQueue.has(c.id))]
+    }
   }
 }
 
@@ -1860,7 +1876,8 @@ export function buildNoWorkNotice(agent: string, minutes: number, nowMs: number,
     // A KIND-FUGGES, AMI EDDIG KIMONDATLAN VOLT (kartya ef696f05). A `selectDeclaredWork` a
     // `workcheck.json` `kind`-jara KAPCSOL, es a fenti egysoros a HAROM kozul csak az EGYIKET
     // reprodukalja (`assigned_open_cards`). Egy `testing_without_my_comment` agensnel az or
-    // egeszen mas halmazt szamolt (a `testing` oszlop, amire O nem szolt hozza), egy `none`
+    // egeszen mas halmazt szamolt (a `testing` oszlop, amire O nem szolt hozza, b8674845 ota a sajat
+    // nyitott kartyaival egyutt), egy `none`
     // agensnel pedig NULLAT, barmennyi kartya all a neven. Enelkul a sor a szomszed kerdesre
     // valaszol -- az or tekintelyevel a hata mogott.
     // ITT KORABBAN KEZZEL FEL VOLT SOROLVA A TOBBI KIND, ES AZ ELAVULT (kartya faa6003a).
@@ -1933,11 +1950,13 @@ export function buildWakeMessage(
   // by its floor. For `waiting_on_me` EVERY item is a waiting card, taken for a different
   // reason, and grouping them here would call the coordinator's whole decision queue a floor
   // expiry (didi's intersection review, 2026-09-28, named the kind boundary).
-  const floor = kind === 'assigned_open_cards'
+  // The review queue carries the assigned_open_cards selection too (card b8674845), floor included.
+  const floor = kind === 'assigned_open_cards' || isReviewQueue
     ? [...items].filter((c) => c.status === 'waiting').sort(byPriority)
     : []
   const work = [...items].filter((c) => pickable(c) && !floor.includes(c)).sort(byPriority)
-  const review = [...items].filter((c) => !pickable(c)).sort(byPriority)
+  // !floor too: in the review queue a waiting card is not pickable either, and must not be listed twice.
+  const review = [...items].filter((c) => !pickable(c) && !floor.includes(c)).sort(byPriority)
 
   const line = (c: { id: string; title?: string | null; priority?: string | null; status?: string }) =>
     `  ${c.id.slice(0, 8)}  ${(c.status ?? '?').padEnd(11)} ${(c.priority ?? 'normal').padEnd(6)}  ${(c.title ?? '').slice(0, 60)}`
@@ -1973,7 +1992,7 @@ export function buildWakeMessage(
     out.push(
       '',
       isReviewQueue
-        ? `EGYEB TETEL (${review.length}) -- nem a testing oszlopbol, nezd meg mit kerol:`
+        ? `SAJAT KARTYAID (${review.length}) -- a NEVEDEN allo nyitott munka, nem a testing oszlopbol:`
         : `VALASZRA VARO ELLENORZES (${review.length}) -- ezeken egy ellenorzo szolt utoljara, nem munka:`,
       ...review.slice(0, 3).map(line),
     )
@@ -2016,8 +2035,8 @@ export function buildWakeMessage(
     ...(isReviewQueue
       ? [
           'A te deklaraciod `testing_without_my_comment`, tehat en a `testing` oszlopot szamoltam, amire',
-          'meg nem szoltal hozza, VAGY ami a legutobbi kommented OTA mozdult (koordinator-komment es jarvis-cenzus nem szamit).',
-          'A fenti sor a NEVEDEN allo nyitott kartyakat adja: MASIK halmaz.',
+          'meg nem szoltal hozza, VAGY ami a legutobbi kommented OTA mozdult (koordinator-komment es jarvis-cenzus nem szamit),',
+          'ES a NEVEDEN allo nyitott kartyaidat. A fenti sor csak az utobbit adja: MASIK halmaz.',
         ]
       : kind === 'assigned_open_cards'
         ? [

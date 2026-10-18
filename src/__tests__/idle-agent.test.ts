@@ -504,7 +504,49 @@ describe('countDeclaredWork', () => {
 
   it('testing_without_my_comment is the reviewer queue, not the testing column', () => {
     // 'f' has no comment at all; 'g' has one from dexter, which is not didi's review.
-    expect(countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', cards, comments)).toBe(2)
+    // Plus 'e', her own planned card: the union with her own queue (card b8674845).
+    expect(countDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', cards, comments)).toBe(3)
+  })
+
+  it('b8674845: the review queue is the UNION of the testing queue and the own queue, each card once', () => {
+    const ids = (kind: 'testing_without_my_comment' | 'assigned_open_cards') =>
+      selectDeclaredWork({ kind }, 'didi', cards, comments).map((c) => c.id).sort()
+    expect(ids('testing_without_my_comment')).toEqual(['e', 'f', 'g'])
+    // the own half is exactly assigned_open_cards' answer: 'e' ('f' is her testing card with no reviewer word)
+    expect(ids('assigned_open_cards')).toEqual(['e'])
+    // each card once, even when both halves name it: a reviewer's word on her own testing card
+    const both = commentsAt([['c', 'didi', 150], ['g', 'dexter', 150], ['f', 'mandark', 150]])
+    const ids2 = selectDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', cards, both, undefined, undefined, new Set(['mandark']))
+      .map((c) => c.id)
+    expect(ids2.filter((id) => id === 'f')).toHaveLength(1)
+    expect(selectDeclaredWork({ kind: 'assigned_open_cards' }, 'didi', cards, both, undefined, undefined, new Set(['mandark']))
+      .map((c) => c.id)).toContain('f')
+    // CONTROL: a reviewer with nothing on her name gets the testing queue alone, as before
+    const noOwn = cards.filter((c) => c.assignee !== 'didi')
+    expect(selectDeclaredWork({ kind: 'testing_without_my_comment' }, 'didi', noOwn, comments).map((c) => c.id).sort())
+      .toEqual(['g'])
+  })
+
+  // trillian's review (34335): the own half must get the SAME reviewers and real-comment map as the
+  // direct call -- dropping either in the recursive call left every test green. Both fixtures are
+  // didi's own testing card that the testing half excludes (she spoke at 100, no change since).
+  it('b8674845: the own half reads reviewers and the real-comment map, exactly like assigned_open_cards', () => {
+    const own = [card('r', 'testing', 'didi', { updatedAt: 100 })]
+    const reviewers = new Set(['mandark'])
+    const ids = (kind: 'testing_without_my_comment' | 'assigned_open_cards', cm: Map<string, Map<string, number>>,
+      rv?: Set<string>, real?: Map<string, Map<string, number>>) =>
+      selectDeclaredWork({ kind }, 'didi', own, cm, 'marveen', undefined, rv, real).map((c) => c.id)
+    // (1) a NON-reviewer spoke last: no unanswered finding while the reviewer set is known
+    const jarvisLast = commentsAt([['r', 'didi', 100], ['r', 'jarvis', 150]])
+    expect(ids('testing_without_my_comment', jarvisLast, reviewers)).toEqual([])
+    // CONTROL: the fixture discriminates -- without the reviewer set the same card counts
+    expect(ids('assigned_open_cards', jarvisLast)).toEqual(['r'])
+    // (2) a reviewer's CENSUS comment is last; the real-comment map has only didi's own word
+    const censusLast = commentsAt([['r', 'didi', 100], ['r', 'mandark', 150]])
+    const realOnly = commentsAt([['r', 'didi', 100]])
+    expect(ids('testing_without_my_comment', censusLast, reviewers, realOnly)).toEqual([])
+    // CONTROL: without the real-comment map the census comment reads as a finding
+    expect(ids('assigned_open_cards', censusLast, reviewers)).toEqual(['r'])
   })
 
   // The defect Didi measured: asking "did I ever comment" retires a card permanently,

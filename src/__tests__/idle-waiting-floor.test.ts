@@ -62,8 +62,11 @@ describe('assigned_open_cards reads the floor of a waiting card (ce5c9e4b)', () 
     expect(pick([{ id: 'w', status: 'waiting', assignee: ME, due_date: NOW + DAY }], NOW * 1000)).toEqual([])
   })
 
-  it('the other kinds are untouched: the review queue never takes a waiting card', () => {
-    expect(pick([{ id: 'w', status: 'waiting', assignee: ME, due_date: NOW - DAY }], NOW, 'testing_without_my_comment')).toEqual([])
+  it('the review queue carries the own queue (b8674845), so an EXPIRED floor on its own name comes with it', () => {
+    expect(pick([{ id: 'w', status: 'waiting', assignee: ME, due_date: NOW - DAY }], NOW, 'testing_without_my_comment')).toEqual(['w'])
+    // CONTROL: a floor still in the future, and a waiting card on someone else's name, stay out
+    expect(pick([{ id: 'w', status: 'waiting', assignee: ME, due_date: NOW + DAY }], NOW, 'testing_without_my_comment')).toEqual([])
+    expect(pick([{ id: 'w', status: 'waiting', assignee: 'other', due_date: NOW - DAY }], NOW, 'testing_without_my_comment')).toEqual([])
   })
 
   it('waiting_on_me still takes EVERY waiting card on the name, dated or not', () => {
@@ -117,7 +120,7 @@ describe('the wake names a floor expiry AS a floor expiry, not as work', () => {
     expect(msg).toContain('a LEJART padloju `waiting` kartyakat')
   })
 
-  it('the floor group and its sentence belong to assigned_open_cards ONLY', () => {
+  it('the floor group belongs to the kinds that select by the floor; its sentence to assigned_open_cards ONLY', () => {
     // waiting_on_me: every item IS a waiting card, taken for a different reason -- the
     // coordinator's decision queue must not be relabelled a floor expiry (first version did).
     const coord = buildWakeMessage('marveen', 12, 2, [floorCard, { ...floorCard, id: 'bbbbbbbb-1', due_date: NOW + DAY }], nowMs, 'waiting_on_me')
@@ -125,5 +128,9 @@ describe('the wake names a floor expiry AS a floor expiry, not as work', () => {
     expect(coord).not.toContain('LEJART padloju')
     const review = buildWakeMessage('didi', 12, 1, [{ ...workCard, status: 'testing' }], nowMs, 'testing_without_my_comment')
     expect(review).not.toContain('LEJART padloju')
+    // the review queue admits a waiting card only by its floor (via the own half, b8674845), so it is grouped as one
+    const reviewFloor = buildWakeMessage('didi', 12, 2, [{ ...workCard, status: 'testing' }, floorCard], nowMs, 'testing_without_my_comment')
+    expect(reviewFloor).toMatch(/PADLO-LEJARAT \(1\)/)
+    expect(reviewFloor).not.toMatch(/SAJAT KARTYAID/)
   })
 })
