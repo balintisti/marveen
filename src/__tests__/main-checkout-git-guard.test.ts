@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { tmpDirs } from './helpers/tmp-dirs.js'
 import { spawnSync, execFileSync } from 'node:child_process'
-import { mkdirSync, readFileSync, realpathSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -319,5 +319,187 @@ describe('main-checkout git guard: any spelling of the tree root is the whole tr
     ['git diff -- .'],
   ])('%s from the main checkout -> exit 0', (command) => {
     expect(run(command, main).code).toBe(0)
+  })
+})
+
+// DISCARD BACKUP (card 90a4c57e): a worktree discard stays allowed, and what it throws away
+// is saved first. Driven end to end on a throwaway repo: the hook saves, the discard REALLY
+// runs, and `git apply` of the saved patch brings the lost work back.
+describe('main-checkout git guard: a discard is saved before it runs', () => {
+  let bmain: string
+  let bwt: string
+  const g = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, stdio: 'pipe' }).toString()
+  const hook = (command: string, cwd: string) => {
+    const r = spawnSync('python3', [GATE], {
+      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command }, cwd }),
+      encoding: 'utf8',
+      env: { ...process.env, MARVEEN_GIT_GUARD_MAIN: bmain },
+    })
+    return { code: r.status, stdout: r.stdout }
+  }
+  const backups = () => {
+    try { return readdirSync(join(bmain, '.git', 'discard-backups')).filter((n) => n.endsWith('.patch')) } catch { return [] }
+  }
+
+  beforeAll(() => {
+    const broot = realpathSync(mkTmp('git-guard-backup-'))
+    bmain = join(broot, 'main')
+    bwt = join(broot, 'wt')
+    mkdirSync(bmain)
+    mkdirSync(join(bmain, 'store'))
+    g(bmain, 'init', '-q')
+    writeFileSync(join(bmain, 'f.txt'), 'one\n')
+    writeFileSync(join(bmain, 'g.txt'), 'two\n')
+    g(bmain, 'add', 'f.txt', 'g.txt')
+    g(bmain, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'init')
+    g(bmain, 'worktree', 'add', '-q', '--detach', bwt)
+  })
+
+  it('saves the uncommitted change of the named file, says where, and the patch restores it', () => {
+    writeFileSync(join(bwt, 'f.txt'), 'one\nREAL WORK\n')
+    const before = backups().length
+    const r = hook('git checkout -- f.txt', bwt)
+    expect(r.code).toBe(0)
+    const names = backups()
+    expect(names.length).toBe(before + 1)
+    const patch = join(bmain, '.git', 'discard-backups', names.sort().at(-1)!)
+    expect(readFileSync(patch, 'utf8')).toContain('+REAL WORK')
+    expect(readFileSync(patch, 'utf8')).toContain(`# restore: git -C ${bwt} apply ${patch}`)
+    const ctx = JSON.parse(r.stdout).hookSpecificOutput
+    expect(ctx.hookEventName).toBe('PreToolUse')
+    expect(ctx.permissionDecision).toBeUndefined()   // never overrides the normal permission flow
+    expect(ctx.additionalContext).toContain(patch)
+    g(bwt, 'checkout', '--', 'f.txt')                 // the discard really happens
+    expect(readFileSync(join(bwt, 'f.txt'), 'utf8')).toBe('one\n')
+    g(bwt, 'apply', patch)                            // and the work comes back
+    expect(readFileSync(join(bwt, 'f.txt'), 'utf8')).toBe('one\nREAL WORK\n')
+    g(bwt, 'checkout', '--', 'f.txt')
+  })
+
+  it('reset --hard in a worktree saves the whole tree diff', () => {
+    writeFileSync(join(bwt, 'f.txt'), 'one\nA\n')
+    writeFileSync(join(bwt, 'g.txt'), 'two\nB\n')
+    const before = backups().length
+    expect(hook('git reset --hard', bwt).code).toBe(0)
+    const names = backups().sort()
+    expect(names.length).toBe(before + 1)
+    const body = readFileSync(join(bmain, '.git', 'discard-backups', names.at(-1)!), 'utf8')
+    expect(body).toContain('+A')
+    expect(body).toContain('+B')
+    g(bwt, 'checkout', '--', '.')
+  })
+
+  it('nothing to lose -> no file and no output; a refused discard saves nothing either', () => {
+    const before = backups().length
+    const clean = hook('git checkout -- f.txt', bwt)
+    expect(clean.code).toBe(0)
+    expect(clean.stdout).toBe('')
+    writeFileSync(join(bmain, 'f.txt'), 'one\nMAIN WORK\n')
+    expect(hook('git checkout -- .', bmain).code).toBe(2)   // refused: nothing is discarded
+    expect(hook('git clean -fd', bwt).code).toBe(0)        // untracked only: no diff to save
+    expect(hook('git checkout -- "$F"', bwt).code).toBe(0)  // a variable pathspec: not resolved
+    expect(backups().length).toBe(before)
+    g(bmain, 'checkout', '--', 'f.txt')
+  })
+
+  it('a path discard saves ONLY its paths: another dirty file stays out, so the restore line applies', () => {
+    writeFileSync(join(bwt, 'f.txt'), 'one\nMINE\n')
+    writeFileSync(join(bwt, 'g.txt'), 'two\nKEPT\n')
+    const before = backups().length
+    expect(hook('git checkout -- f.txt', bwt).code).toBe(0)
+    const names = backups().sort()
+    expect(names.length).toBe(before + 1)
+    const patch = join(bmain, '.git', 'discard-backups', names.at(-1)!)
+    const body = readFileSync(patch, 'utf8')
+    expect(body).toContain('+MINE')
+    expect(body).not.toContain('+KEPT')
+    g(bwt, 'checkout', '--', 'f.txt')
+    g(bwt, 'apply', patch)                            // g.txt still dirty: a whole-tree patch would fail here
+    expect(readFileSync(join(bwt, 'f.txt'), 'utf8')).toBe('one\nMINE\n')
+    g(bwt, 'checkout', '--', '.')
+  })
+
+  it('git clean with a dirty tracked file saves nothing: clean never touches tracked changes', () => {
+    writeFileSync(join(bwt, 'g.txt'), 'two\nTRACKED\n')
+    const before = backups().length
+    const r = hook('git clean -fd', bwt)
+    expect(r.code).toBe(0)
+    expect(r.stdout).toBe('')
+    expect(backups().length).toBe(before)
+    g(bwt, 'checkout', '--', 'g.txt')
+  })
+
+  it('a staged change: checkout -- restores from the INDEX, so only the unstaged part is saved and applies', () => {
+    writeFileSync(join(bwt, 'f.txt'), 'one\nSTAGED\n')
+    g(bwt, 'add', 'f.txt')
+    writeFileSync(join(bwt, 'f.txt'), 'one\nSTAGED\nWORK\n')
+    const before = backups().length
+    expect(hook('git checkout -- f.txt', bwt).code).toBe(0)
+    const names = backups().sort()
+    expect(names.length).toBe(before + 1)
+    const patch = join(bmain, '.git', 'discard-backups', names.at(-1)!)
+    const body = readFileSync(patch, 'utf8')
+    expect(body).toContain('+WORK')
+    expect(body).not.toContain('+STAGED')
+    g(bwt, 'checkout', '--', 'f.txt')
+    expect(readFileSync(join(bwt, 'f.txt'), 'utf8')).toBe('one\nSTAGED\n')
+    g(bwt, 'apply', patch)                            // didi 38667: a HEAD-based patch fails here
+    expect(readFileSync(join(bwt, 'f.txt'), 'utf8')).toBe('one\nSTAGED\nWORK\n')
+    g(bwt, 'reset', '-q', '--hard')
+  })
+
+  it('checkout HEAD -- and checkout HEAD <path> restore from the TREE: staged and unstaged are both saved', () => {
+    for (const command of ['git checkout HEAD -- f.txt', 'git checkout HEAD f.txt']) {
+      writeFileSync(join(bwt, 'f.txt'), 'one\nSTAGED\n')
+      g(bwt, 'add', 'f.txt')
+      writeFileSync(join(bwt, 'f.txt'), 'one\nSTAGED\nWORK\n')
+      const before = backups().length
+      expect(hook(command, bwt).code).toBe(0)
+      const names = backups().sort()
+      expect(names.length).toBe(before + 1)
+      const patch = join(bmain, '.git', 'discard-backups', names.at(-1)!)
+      g(bwt, 'checkout', 'HEAD', '--', 'f.txt')
+      expect(readFileSync(join(bwt, 'f.txt'), 'utf8')).toBe('one\n')
+      g(bwt, 'apply', patch)
+      expect(readFileSync(join(bwt, 'f.txt'), 'utf8')).toBe('one\nSTAGED\nWORK\n')
+      g(bwt, 'reset', '-q', '--hard')
+    }
+  })
+
+  it('checkout of two paths without a tree saves both from the index', () => {
+    writeFileSync(join(bwt, 'f.txt'), 'one\nF\n')
+    writeFileSync(join(bwt, 'g.txt'), 'two\nG\n')
+    const before = backups().length
+    expect(hook('git checkout f.txt g.txt', bwt).code).toBe(0)
+    const names = backups().sort()
+    expect(names.length).toBe(before + 1)
+    const body = readFileSync(join(bmain, '.git', 'discard-backups', names.at(-1)!), 'utf8')
+    expect(body).toContain('+F')
+    expect(body).toContain('+G')
+    g(bwt, 'checkout', '--', '.')
+  })
+
+  it('git restore follows its own source: index by default, the tree with --source or --staged --worktree', () => {
+    const cases: [string, string[], string][] = [
+      ['git restore f.txt', ['restore', 'f.txt'], 'one\nSTAGED\n'],
+      ['git restore --source=HEAD f.txt', ['restore', '--source=HEAD', 'f.txt'], 'one\n'],
+      ['git restore -s HEAD f.txt', ['restore', '-s', 'HEAD', 'f.txt'], 'one\n'],
+      ['git restore --staged --worktree f.txt', ['restore', '--staged', '--worktree', 'f.txt'], 'one\n'],
+    ]
+    for (const [command, real, after] of cases) {
+      writeFileSync(join(bwt, 'f.txt'), 'one\nSTAGED\n')
+      g(bwt, 'add', 'f.txt')
+      writeFileSync(join(bwt, 'f.txt'), 'one\nSTAGED\nWORK\n')
+      const before = backups().length
+      expect(hook(command, bwt).code).toBe(0)
+      const names = backups().sort()
+      expect(names.length).toBe(before + 1)
+      const patch = join(bmain, '.git', 'discard-backups', names.at(-1)!)
+      g(bwt, ...real)
+      expect(readFileSync(join(bwt, 'f.txt'), 'utf8')).toBe(after)
+      g(bwt, 'apply', patch)
+      expect(readFileSync(join(bwt, 'f.txt'), 'utf8')).toBe('one\nSTAGED\nWORK\n')
+      g(bwt, 'reset', '-q', '--hard')
+    }
   })
 })
