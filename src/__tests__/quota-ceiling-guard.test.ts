@@ -234,6 +234,11 @@ describe('quota-ceiling-guard: what it does when it cannot see', () => {
     expect(r.owner).toContain('estimate')
   })
 
+  it('reads the token-free statusline source as a real reading, not blindness (card 36b91017)', () => {
+    expect(go({ percent: 87.0, source: 'statusline' }).owner).toBe('')
+    expect(go({ percent: 93.0, source: 'statusline' }).owner).toContain('kozeledunk a plafonhoz')
+  })
+
   it('reports blindness when the percentage is missing', () => {
     const r = go({ percent: null })
     expect(r.owner).toContain('NEM LATOK')

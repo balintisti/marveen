@@ -78,6 +78,7 @@ CONFIG = {
                                              # quota is actually lost at reset (weekly-class, >=24h).
                                              # Short windows (e.g. Claude 5h) reset constantly --
                                              # under-pace there is normal, not a signal.
+    "claude_statusline_max_age_min": 20,  # token-free fallback: the statusline file, if this fresh (card 36b91017)
     "claude_authoritative_cache_max_age_min": 90,  # reuse last authoritative Claude snapshot
                                                     # on a transient failure (429/5xx/timeout)
                                                     # if it's younger than this
@@ -114,6 +115,10 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STORE_DIR = os.path.join(REPO_ROOT, "store")
 HISTORY_PATH = os.path.join(STORE_DIR, "usage-history.jsonl")
 LATEST_PATH = os.path.join(STORE_DIR, "usage-latest.json")
+# written by scripts/statusline-ratelimit.sh from the statusline payload, no token involved
+STATUSLINE_PATH = os.path.join(STORE_DIR, ".claude-rate-limits.json")
+# Claude sources whose numbers are real readings (the token-count estimate is not one of them)
+CLAUDE_REAL_SOURCES = ("authoritative", "authoritative_cached", "statusline")
 DELIVERY_STATE_PATH = os.path.join(STORE_DIR, "usage-delivery-state.json")
 DB_PATH = os.path.join(STORE_DIR, "claudeclaw.db")
 TASKS_DIR = os.path.expanduser("~/.claude/scheduled-tasks")
@@ -287,7 +292,7 @@ def _iter_pace_windows(snapshot):
     alerting on (authoritative / authoritative_cached for Claude,
     authoritative for Codex). Never yields from the token-count estimate."""
     claude = snapshot.get("claude") or {}
-    if claude.get("ok") and claude.get("source") in ("authoritative", "authoritative_cached"):
+    if claude.get("ok") and claude.get("source") in CLAUDE_REAL_SOURCES:
         for key, w in (claude.get("windows") or {}).items():
             scope_key = f"claude_{key}"
             length = _window_length_seconds(scope_key, w)
@@ -758,6 +763,69 @@ def _read_cached_claude_authoritative(max_age_minutes, now_utc=None, path=None, 
     return windows, age_minutes, true_dt.isoformat()
 
 
+WEEK_SEC = 7 * 24 * 3600
+
+
+def _read_week_anchor(path=None, plan=None):
+    """The weekly window's resets_at from the last REAL answer (epoch), or None.
+
+    It is the account's fingerprint for the statusline fallback: a weekly window resets at a fixed
+    weekly time per account, so a reading of the SAME account has resets_at == anchor + k weeks.
+    Carried forward in every Claude section as `week_anchor` (an authoritative answer refreshes it),
+    so a run on the fallback or on the estimate does not lose it. Plan-aware like the cache."""
+    path = path or LATEST_PATH
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            claude = (json.load(f) or {}).get("claude") or {}
+    except Exception:
+        return None
+    if plan is not None and (claude.get("plan") or _host_plan()) != plan:
+        return None
+    anchor = claude.get("week_anchor")
+    if anchor is None and claude.get("source") in ("authoritative", "authoritative_cached"):
+        anchor = ((claude.get("windows") or {}).get("seven_day") or {}).get("resets_at")
+    return anchor if isinstance(anchor, (int, float)) else None
+
+
+def _read_statusline_windows(anchor, max_age_minutes, now=None, path=None):
+    """Return (windows, written_at_epoch) from the token-free statusline file, or (None, reason).
+
+    Card 36b91017: the API reading stands on the keychain OAuth token, and on 2026-09-13 its REFRESH
+    token expired -- the meter froze for 5 days. The statusline payload carries the same 5h/weekly
+    numbers without any token. Used ONLY when its weekly reset matches `anchor` (same account: the
+    statusline is rendered by whichever session runs in this tree, which may be another login), and
+    only if fresh. No anchor (never had a real answer) -> not used: an unproven account is a guess."""
+    path = path or STATUSLINE_PATH
+    now = now if now is not None else datetime.now(timezone.utc).timestamp()
+    if anchor is None:
+        return None, "no week anchor from a real answer"
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            rec = json.load(f)
+        written = float(rec.get("written_at"))
+        rl = rec.get("rate_limits") or {}
+    except Exception as e:
+        return None, f"statusline file unreadable ({type(e).__name__})"
+    age_min = (now - written) / 60.0
+    if age_min < -5 or age_min > max_age_minutes:
+        return None, f"statusline file {age_min:.0f} min old"
+    windows = {}
+    for key in ("five_hour", "seven_day"):
+        w = rl.get(key) or {}
+        used = w.get("used_percentage", w.get("utilization"))
+        resets = w.get("resets_at")
+        resets = resets if isinstance(resets, (int, float)) else _parse_iso_to_epoch(resets)
+        if isinstance(used, (int, float)) and isinstance(resets, (int, float)):
+            windows[key] = {"used_percent": used, "resets_at": resets}
+    week = windows.get("seven_day")
+    if not week:
+        return None, "statusline file has no weekly window"
+    off = (week["resets_at"] - anchor) % WEEK_SEC
+    if min(off, WEEK_SEC - off) > 300:
+        return None, "statusline weekly reset does not match this account's"
+    return windows, written
+
+
 def _collect_claude_estimate():
     now = datetime.now(timezone.utc)
     five_h_cutoff = now - timedelta(hours=5)
@@ -1012,9 +1080,17 @@ def _collect_claude_raw(cache_path=None, plan=None):
         result["windows"] = windows
         # the ONLY place this is written fresh: a real answer (card 45b71d0b)
         result["authoritative_at"] = datetime.now(timezone.utc).isoformat()
+        anchor = (windows.get("seven_day") or {}).get("resets_at")
+        if anchor is None:
+            anchor = _read_week_anchor(path=cache_path, plan=plan)
+        if anchor is not None:
+            result["week_anchor"] = anchor
         return result
 
     result["auth_error"] = err
+    anchor = _read_week_anchor(path=cache_path, plan=plan)
+    if anchor is not None:
+        result["week_anchor"] = anchor
 
     # A transient failure (429/5xx/timeout/unparseable) must not throw away
     # real numbers -- reuse the last authoritative snapshot if it's fresh
@@ -1031,6 +1107,16 @@ def _collect_claude_raw(cache_path=None, plan=None):
             result["cache_age_minutes"] = round(age_minutes, 1)
             result["authoritative_at"] = true_at
             return result
+
+    # ANY failure kind, the expired token included: the token-free statusline reading, if it is
+    # provably this account's and fresh. auth_error stays set, so the token alarm still fires.
+    sl_windows, sl_at = _read_statusline_windows(anchor, CONFIG["claude_statusline_max_age_min"])
+    if sl_windows is not None:
+        result["source"] = "statusline"
+        result["windows"] = sl_windows
+        result["statusline_at"] = datetime.fromtimestamp(sl_at, timezone.utc).isoformat()
+        return result
+    result["statusline_skipped"] = sl_at
 
     try:
         result.update(_collect_claude_estimate())
@@ -1200,7 +1286,9 @@ def render_summary(snapshot):
     lines.append(f"Claude (source: {claude.get('source')}{plan_note}):")
     if not claude.get("ok"):
         lines.append(f"  error: {claude.get('error')}")
-    elif claude.get("source") in ("authoritative", "authoritative_cached"):
+    elif claude.get("source") in CLAUDE_REAL_SOURCES:
+        if claude.get("source") == "statusline":
+            lines.append(f"  (token-free statusline reading at {claude.get('statusline_at')} -- live endpoint error: {claude.get('auth_error')})")
         if claude.get("source") == "authoritative_cached":
             age = claude.get("cache_age_minutes")
             age_str = f"{age:.0f}" if isinstance(age, (int, float)) else "?"
