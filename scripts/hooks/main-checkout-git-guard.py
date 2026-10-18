@@ -414,8 +414,8 @@ def find_hits(command, cwd, main):
 # mutant. Three agents lost work this way (friday 08-22, dexter 08-28, computress 09-19;
 # the third knew the rule). Refusing is not possible -- the dangerous and the harmless
 # discard are the same command -- so the discard stays allowed and becomes RECOVERABLE:
-# before it runs, the change it throws away (`git diff HEAD` over the same pathspecs, or
-# the whole tree for reset --hard) is written to <git-common-dir>/discard-backups/.
+# before it runs, the change it throws away (`git diff` against the source the command
+# restores from: the index, or a tree; the whole tree for reset --hard) is written to <git-common-dir>/discard-backups/.
 # Not covered: `git clean` (untracked files have no diff), a target behind -C/cd that
 # holds a variable, --work-tree / --git-dir.
 BACKUP_DIR_NAME = "discard-backups"
@@ -429,11 +429,41 @@ def _git_out(base, *args, timeout=4):
     return out.stdout if out.returncode == 0 else None
 
 
+def _discard_source(toks):
+    """The revision a discard restores FROM, as `git diff` arguments ([] = the index), and the
+    word that named it. `git checkout -- f` and `git restore f` take the file from the INDEX,
+    so what they throw away is `git diff`, not `git diff HEAD`: with a staged change in the
+    file a HEAD-based patch no longer applies afterwards (didi, card 90a4c57e comment 38667).
+    `checkout <tree> -- f`, `restore --source=<tree>`, `restore --staged --worktree` and
+    `reset --hard` take it from a tree."""
+    i = 0
+    while i < len(toks) and toks[i].startswith("-"):
+        i += 2 if toks[i] in ("-C", "-c", "--git-dir", "--work-tree", "--namespace") else 1
+    verb, rest = (toks[i], toks[i + 1:]) if i < len(toks) else ("", [])
+    if verb == "reset":
+        return ["HEAD"], None
+    if verb == "restore":
+        for j, a in enumerate(rest):
+            if a.startswith("--source="):
+                return [a.split("=", 1)[1]], None
+            if (a in _VALUE_FLAGS or re.fullmatch(r"-[A-Za-z]*s", a)) and j + 1 < len(rest):
+                return [rest[j + 1]], None
+        return (["HEAD"] if _flag(rest, "S", "--staged") else []), None
+    if verb == "checkout":
+        words = [a for a in (rest[:rest.index("--")] if "--" in rest else rest) if not a.startswith("-")]
+        if "--" in rest:
+            return words[:1], None
+        if len(words) > 1:   # `git checkout <tree> <path>...`: the first word is the tree
+            return words[:1], words[0]
+    return [], None
+
+
 def backup_discards(command, cwd):
     """[(path, lines, files, top)] for each discard in `command` that has something to lose."""
     saved = []
     for m in _GIT.finditer(command):
-        found = destructive(_tokens(command, m.end()))
+        toks = _tokens(command, m.end())
+        found = destructive(toks)
         if not found:
             continue
         verb, dirs, work_tree, git_dir, specs = found
@@ -445,9 +475,14 @@ def backup_discards(command, cwd):
         base = _base(command, m.start(), cwd, dirs, env)
         if base is _UNRESOLVABLE or not os.path.isdir(base):
             continue
-        args = ["diff", "HEAD", "--binary"]
+        source, tree_word = _discard_source(toks)
+        if tree_word is not None and _git_out(base, "rev-parse", "--verify", "-q", tree_word + "^{tree}") is None:
+            source, tree_word = [], None   # `git checkout f g`: two paths, no tree
+        args = ["diff", "--binary"] + source
         if specs is not None:
             words = [w for w, _lenient in specs]
+            if tree_word is not None and words and words[0] == tree_word:
+                words = words[1:]
             if any(_VAR.search(w) or "`" in w or "$(" in w for w in words):
                 continue
             args += ["--"] + words
