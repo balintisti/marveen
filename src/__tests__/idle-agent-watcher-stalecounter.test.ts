@@ -120,7 +120,8 @@ describe('the ownerless pull-list is logged on EVALUATION, not only on firing (4
   it('logs orphanCount before it branches on it', () => {
     const evalAt = branch.indexOf('orphanCount: pull.length')
     expect(evalAt, 'the evaluation must record the count it evaluated').toBeGreaterThan(-1)
-    const branchAt = branch.indexOf('if (pull.length > 0)')
+    // da11b4a4 added the priority floor to the branch condition; the order is what is pinned.
+    const branchAt = branch.indexOf('if (pull.length > 0 && pullWakes)')
     expect(branchAt, 'the pull-list branch not found').toBeGreaterThan(-1)
     // NEGATIVE CONTROL for the whole assertion: the count has to be computed first, or the
     // order below is trivially satisfiable by a line that reads nothing.
