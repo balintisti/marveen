@@ -1493,12 +1493,12 @@ function createCardEl(card, embeddedChildren = []) {
       : ''
 
   let dueHtml = ''
-  if (card.due_date) {
-    const d = new Date(card.due_date * 1000)
-    const now = new Date()
-    const overdue = d < now && card.status !== 'done'
-    const label = d.toLocaleDateString('hu-HU', { month: 'short', day: 'numeric' })
-    dueHtml = `<span class="kanban-card-due ${overdue ? 'overdue' : ''}">${label}</span>`
+  const due = dueMeaning(card, Date.now())
+  if (due) {
+    const label = new Date(card.due_date * 1000).toLocaleDateString('hu-HU', { month: 'short', day: 'numeric' })
+    dueHtml = due.kind === 'floor'
+      ? `<span class="kanban-card-due floor" title="${escapeHtml(t('kanban.due.floor_tooltip'))}">${escapeHtml(t('kanban.due.floor', { date: label }))}</span>`
+      : `<span class="kanban-card-due ${due.overdue ? 'overdue' : ''}">${label}</span>`
   }
 
   const projectHtml = card.project
@@ -1958,6 +1958,18 @@ async function dueDayForField(seconds) {
     .format(new Date(seconds * 1000))
 }
 
+// Card 8e4cc966: one due_date field, and the STATUS decides what it means
+// (fleet policy 4bda5cb9). On a planned card it is a FLOOR -- "not before":
+// the idle guard does not offer the card until then (src/idle-agent.ts
+// isDeferred), so a past floor means "can be picked up", not "late", and is
+// never red. On waiting ("if no answer by X"), in_progress and testing it is a
+// deadline, red once past. Kept pure so kanban-due-meaning.test.ts runs it.
+function dueMeaning(card, nowMs) {
+  if (!card || !card.due_date) return null
+  if (card.status === 'planned') return { kind: 'floor', overdue: false }
+  return { kind: 'deadline', overdue: card.status !== 'done' && card.due_date * 1000 < nowMs }
+}
+
 // The save's due_date decision, kept pure so kanban-due-modal.test.ts runs it.
 // Unchanged -> nothing (the stored floor is left exactly as it is); changed ->
 // the day string for the server to interpret, or null when the field was cleared.
@@ -2297,7 +2309,7 @@ async function showCardDetail(card) {
       <span class="meta-value">${card.project ? escapeHtml(card.project) : t('kanban.meta.none')}</span>
     </div>
     <div class="meta-item">
-      <span class="meta-label">${t('kanban.meta.deadline')}</span>
+      <span class="meta-label">${t(card.status === 'planned' ? 'kanban.meta.floor' : 'kanban.meta.deadline')}</span>
       <span class="meta-value">${card.due_date ? new Date(card.due_date * 1000).toLocaleDateString(_lang === 'en' ? 'en-US' : 'hu-HU') : t('kanban.meta.none')}</span>
     </div>
   `
@@ -18507,8 +18519,9 @@ async function openResearchDoc(agent, name) {
     const nowMs = Date.now()
     const todayPct = Math.max(0, Math.min(100, (nowMs - rangeStart) / totalMs * 100))
 
-    // Filter: cards that have a due_date
-    let cards = (Array.isArray(kanbanCards) ? kanbanCards : []).filter(c => c.due_date)
+    // Filter: cards whose due_date is a deadline. A planned card's date is a
+    // floor ("not before", card 8e4cc966): it has no bar to end, and it is never overdue.
+    let cards = (Array.isArray(kanbanCards) ? kanbanCards : []).filter(c => dueMeaning(c, nowMs)?.kind === 'deadline')
 
     if (ganttOverdueOnly) {
       // Keep cards that are overdue OR due within 7 days
@@ -18583,7 +18596,7 @@ async function openResearchDoc(agent, name) {
       for (const card of projCards) {
         const barStartMs = card.created_at ? card.created_at * 1000 : rangeStart.getTime()
         const barEndMs   = card.due_date * 1000
-        const isOverdue  = card.status !== 'done' && barEndMs < nowMs
+        const isOverdue  = dueMeaning(card, nowMs).overdue
 
         // Clamp to window
         const clampedStart = Math.max(barStartMs, rangeStart.getTime())

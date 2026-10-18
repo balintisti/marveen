@@ -1052,6 +1052,8 @@ main {
   margin-left: auto;
 }
 .kanban-card-due.overdue { color: var(--danger); font-weight: 600; }
+/* A planned card's date is a floor ("not before", card 8e4cc966): neutral, never red. */
+.kanban-card-due.floor { color: var(--text-muted); font-style: italic; }
 
 .kanban-card-labels {
   display: flex;
