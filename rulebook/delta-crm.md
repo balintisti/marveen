@@ -170,8 +170,8 @@ LÉTEZIK** -- és épp azon a fájlon, amit ez a szakasz a saját bizonyítékak
 `sajat-crm` nevű -- aki abszolút utat ír, annak kell. Csak a TENGELY hiányzott.
 
 *(A git-oldali alak NEM ágfüggő: mandark mérte, 537/537 origin ref hordoz gyökér-`sajat-crm/`-t.
-A lenti „DE EZ ÁGFÜGGŐ" megjegyzés a FÁJLRENDSZER/worktree tengelyre vonatkozhat -- azt egyikünk sem
-mérte, ezért nem nyúltunk hozzá.)*
+A lenti „CHECKOUT-FÜGGŐ" megjegyzés (régen „DE EZ ÁGFÜGGŐ") a FÁJLRENDSZER tengelyre vonatkozik:
+friday mérte 2026-10-17-én, lásd ott.)*
 
 **A HATÁRA, KIMONDVA: ez FÁJL-szintű, és a szimbólum-szintre NEM terjed ki.** A fenti háromból
 egyet fog meg (`useOrgPhoneRegion.ts`); a másik kettő meglévő fájlba tett új export, azt ez a
@@ -381,8 +381,12 @@ lefedettségi specben kapuzatlannak látszik**. Vagyis a szerzők nem csak a hel
 hanem arra is, hogy a védelem LÁTHATÓ legyen a mérőeszközöknek.
 Listing from the wrong level makes the mobile package invisible.
 
-**DE EZ ÁGFÜGGŐ, ÉS A LAP EDDIG TÉNYKÉNT MONDTA** (didi mérte magán 2026-08-29 05:0x). Van ág,
-ahol a csomagok EGY SZINTTEL FELJEBB ülnek. Aki ezt a sort fejből követi, ÜRES választ kap --
+**DE EZ CHECKOUT-FÜGGŐ, ÉS A LAP EDDIG TENGELY NÉLKÜL, ÁGFÜGGŐNEK MONDTA** (didi mérte magán
+2026-08-29 05:0x; a tengelyt friday mérte 2026-10-17). A GIT-tengelyen NEM ágfüggő: 675/675 origin
+ref gyökér-`sajat-crm/`-t hordoz, és egyiken sincs gyökér-`mobile/` (8 ágon nincs mobil csomag
+egyáltalán). A szint a CHECKOUT KÖNYVTÁR nevétől függ: a fő checkout `/Users/isti/Projektek/sajat-crm`,
+ott a mobil `.../sajat-crm/sajat-crm/mobile/`; egy worktree alatt (pl. `/Users/isti/friday-crm/b27`)
+`.../b27/sajat-crm/mobile/`, EGY szinttel feljebb. Aki ezt a sort fejből követi, ÜRES választ kap --
 és az üres válasz pontosan úgy néz ki, mint a „nincs mobil kliens": az az EGY hamis állítás,
 amiről ez a szakasz szól. didi ebbe futott bele, épp e sor alapján.
 
