@@ -605,7 +605,7 @@ window._i18n.hu = {
   'tasks.cadence.weekly':        'Hetente',
   'tasks.cadence.monthly':       'Havonta vagy ritkábban',
   'tasks.cadence.other':         'Egyéb / egyedi',
-  'kanban.owner_filter':         'Csak a rám (a board felelőse) váró kártyák',
+  'kanban.owner_filter':         'Csak a rám váró kártyák (varakozik:<felelős> címke)',
   'settings.module.ideabox':     'Ötletláda',
   'overview.stat.sub.memories':  'bejegyzés',
   'recall.sort.tooltip.desc':    'Csökkenő sorrend (legújabb elöl)',

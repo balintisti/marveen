@@ -880,6 +880,10 @@ let kanbanProjectFilter = ''
 // Matched case-insensitively against card.assignee so a casing mismatch
 // (e.g. card "gorcsevivan" vs list "GorcsevIvan") still filters correctly.
 let kanbanAssigneeFilter = ''
+// The "Rám vár" toggle: cards WAITING on the owner, marked by the `varakozik:<owner>` label
+// (card 17eedaee, marveen 74b3ff53). Not an assignee value: the owner's own assigned cards
+// stay reachable from the assignee dropdown, and the two filters combine.
+let kanbanWaitingOnOwner = false
 // Swimlane grouping: 'none' (flat board, default) | 'assignee' | 'priority'.
 // The initial value is pulled from window._marveen.kanbanSwimlanes.defaultGroup
 // the first time loadKanban() runs (see kanbanGroupByInitialized below), then
@@ -1038,6 +1042,12 @@ function ownerAssigneeName() {
   return owner ? owner.name : null
 }
 
+// The label that marks a card as waiting on the owner: `varakozik:isti` for owner "Isti".
+function ownerWaitLabelName() {
+  const owner = ownerAssigneeName()
+  return owner ? `varakozik:${owner.toLowerCase()}` : null
+}
+
 // Reflect the active state of the owner quick-toggle button (hidden when there
 // is no owner-type assignee).
 function syncOwnerFilterBtn() {
@@ -1046,7 +1056,7 @@ function syncOwnerFilterBtn() {
   const owner = ownerAssigneeName()
   if (!owner) { btn.style.display = 'none'; return }
   btn.style.display = ''
-  const on = !!kanbanAssigneeFilter && kanbanAssigneeFilter.toLowerCase() === owner.toLowerCase()
+  const on = kanbanWaitingOnOwner
   btn.style.background = on ? 'var(--accent)' : 'var(--bg)'
   btn.style.color = on ? '#081a2d' : 'var(--fg)'
   btn.setAttribute('aria-pressed', on ? 'true' : 'false')
@@ -1083,12 +1093,8 @@ function setupAssigneeFilter() {
     ownerBtn.title = t('kanban.owner_filter')
     ownerBtn.style.cssText = 'font-size:13px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--fg);cursor:pointer;'
     ownerBtn.addEventListener('click', () => {
-      const owner = ownerAssigneeName()
-      if (!owner) return
-      const on = kanbanAssigneeFilter.toLowerCase() === owner.toLowerCase()
-      kanbanAssigneeFilter = on ? '' : owner
-      // Keep the dropdown in sync (only selectable if the owner is a known assignee).
-      sel.value = kanbanAssignees.some((a) => a.name === kanbanAssigneeFilter) ? kanbanAssigneeFilter : ''
+      if (!ownerAssigneeName()) return
+      kanbanWaitingOnOwner = !kanbanWaitingOnOwner
       syncOwnerFilterBtn()
       renderKanban()
     })
@@ -1124,6 +1130,10 @@ function kanbanCardMatchesBaseFilters(card) {
   if (kanbanProjectFilter && (card.project || '') !== kanbanProjectFilter) return false
   const assigneeFilter = kanbanAssigneeFilter.toLowerCase()
   if (assigneeFilter && String(card.assignee || '').trim().toLowerCase() !== assigneeFilter) return false
+  if (kanbanWaitingOnOwner) {
+    const waitLabel = ownerWaitLabelName()
+    if (!waitLabel || !(card.labels || []).some((l) => String(l.name || '').toLowerCase() === waitLabel)) return false
+  }
   return true
 }
 
