@@ -94,7 +94,7 @@ const SCHED_WRAPPER = '(?:' + [
   String.raw`${WRAPPER_PATH}timeout${WRAPPER_OPTS}\s+\d\S*`,
   String.raw`${WRAPPER_PATH}command(?:\s+-p)*`,
   String.raw`${WRAPPER_PATH}(?:script|ssh)${WRAPPER_OPTS}\s+\S+`,
-  String.raw`${WRAPPER_PATH}(?:sudo|doas|env|exec|nice|ionice|caffeinate|stdbuf|time|setsid|nohup|watch|parallel|arch|builtin)${WRAPPER_OPTS}`,
+  String.raw`${WRAPPER_PATH}(?:sudo|doas|env|exec|nice|ionice|caffeinate|stdbuf|time|setsid|nohup|watch|parallel|arch|builtin|taskpolicy)${WRAPPER_OPTS}`,
 ].join('|') + ')'
 const SCHED_PREFIX = String.raw`(?:${SCHED_WRAPPER}\s+)*(?:\S*/)?`
 // The command-boundary anchor includes `(` so a $(...) command substitution
@@ -175,8 +175,11 @@ const INDIRECT_ARG = String.raw`\s+(?=[^\s|;&)'"])`
 // A bare `batch` (reads the job from stdin: `bash -c 'echo job | batch'`) is the one
 // shape without a TIMESPEC. A QUOTE may not precede it -- `grep "batch" src` is a
 // common search -- so this branch has its own boundary (separator or wrapper only).
-// Known gap, accepted: `sh -c 'batch'` as the entire quoted string.
 const INDIRECT_BARE_BATCH = String.raw`(?:^|[;&|(\`]\s*|${INDIRECT_WRAPPER})${SCHED_PREFIX}batch\b(?!-)(?!\s*=)(?=\s*(?:['")]|[;&|]|$))`
+// Card d86c38b8 (was the accepted gap above): the whole `-c` string of a SHELL is a
+// command line, so a bare `batch` / `crontab` / `systemd-run` there (`sh -c 'batch'`)
+// is an invocation. The shell name is required, so `grep -c 'batch' f` stays a search.
+const INDIRECT_SHELL_C_BARE = String.raw`\b(?:bash|sh|zsh|dash|ksh)\b(?:\s+-[A-Za-z]+)*?\s+-[A-Za-z]*c[A-Za-z]*\s+['"]\s*${SCHED_PREFIX}(?:batch|crontab|systemd-run)\b(?!-)(?!\s*=)(?=\s*['"])`
 // A wrapper (xargs / -exec / eval / nohup) makes the next word a COMMAND by
 // construction, so a bare `crontab` there (`xargs -n1 crontab`: reads each job
 // file from stdin) is a real invocation, unlike a bare word in prose. xargs gets
@@ -184,7 +187,7 @@ const INDIRECT_BARE_BATCH = String.raw`(?:^|[;&|(\`]\s*|${INDIRECT_WRAPPER})${SC
 const INDIRECT_STRICT_WRAPPER = String.raw`(?:\bxargs${WRAPPER_OPTS}\s+|\s-(?:exec|execdir|ok|okdir)\s+|\b(?:eval|nohup)\s+)`
 const INDIRECT_BARE_CRONTAB = String.raw`${INDIRECT_STRICT_WRAPPER}${SCHED_PREFIX}(?:crontab|systemd-run)\b(?!-)(?!\s*=)(?=\s*(?:[;&|)]|$))`
 const INDIRECT_SCHEDULER_RX = new RegExp(
-  INDIRECT_BARE_BATCH + '|' + INDIRECT_BARE_CRONTAB + '|' +
+  INDIRECT_BARE_BATCH + '|' + INDIRECT_SHELL_C_BARE + '|' + INDIRECT_BARE_CRONTAB + '|' +
   String.raw`(?:${INDIRECT_BOUNDARY}|${INDIRECT_WRAPPER})${SCHED_PREFIX}(?:` +
     String.raw`(?:crontab|systemd-run)\b(?!-)(?!\s*=)${INDIRECT_ARG}(?!-l\b)` +
     String.raw`|launchctl\b(?!-)(?!\s*=)\s+(?!(?:list|print|dumpstate|blame|examine)\b)(?:-|[a-z][a-z-]*(?:[\s'")]|$))` +
@@ -202,6 +205,23 @@ const WRITE_INTENT_RX = /(>>?|\btee\b|\bsed\b[\s\S]*\s-i|\bdd\b|\bcp\b|\bmv\b)/i
 // self-paced cron; a GET (list / pending / agents) is legit diagnostics -> allowed.
 const SCHEDULE_API_RX = /\/api\/schedules\b/i
 const HTTP_WRITE_RX = /(-X\s*(POST|PUT|PATCH|DELETE)|--request\s+(POST|PUT|PATCH|DELETE)|(^|\s)(--data\b|--data-\w+\b|-d\b))/i
+// Card d86c38b8: a plist written into a launchd directory is loaded by launchd at the
+// next login or boot -- a scheduled run with no launchctl call at all. Blocked for a
+// WRITE whose TARGET is that directory (redirect / tee target, the destination of a
+// copy-family command, an in-place plist editor), on any route; listing, reading and
+// copying a plist OUT of it stay allowed.
+const LAUNCHD_DIR = String.raw`Library/Launch(?:Agents|Daemons)\b`
+const LAUNCHD_DIR_RX = new RegExp(LAUNCHD_DIR, 'i')
+const LAUNCHD_DIR_WRITE_RX = new RegExp(
+  String.raw`(?:>>?|\btee\b(?:\s+-\S+)*)\s*\S*${LAUNCHD_DIR}` +
+  String.raw`|\b(?:cp|mv|ln|ditto|install|rsync)\b(?:[^;&|\n]*\s-t\s*\S*${LAUNCHD_DIR}|[^;&|\n]*\s\S*${LAUNCHD_DIR}\S*\s*$)` +
+  // in-place editors; their READ forms (`plutil -lint`/`-p`, `-convert ... -o elsewhere`,
+  // `PlistBuddy -c Print`) are not writes and stay allowed (replayed on the fleet's calls)
+  String.raw`|\bsed\b[^;&|\n]*\s-i|\bplutil\b[^;&|\n]*\s-(?:insert|replace|remove|create)\b` +
+  String.raw`|\bplutil\b(?![^;&|\n]*\s-o\s)[^;&|\n]*\s-convert\b(?![^;&|\n]*\s-o\s)` +
+  String.raw`|\bPlistBuddy\b[^;&|\n]*\s-c\s*['"]?\s*(?:Set|Add|Delete|Merge|Import|Clear|Save)\b|\bdefaults\s+write\b`,
+  'i',
+)
 
 // Split a compound command into individual simple commands, so a token in one
 // segment cannot trip a check anchored in another (e.g. `cat store && cp a b`).
@@ -268,7 +288,9 @@ export function segmentReadsShellStdin(segment) {
 // same line (`cat <<EOF | sh`). Over-approximates on purpose (scan more).
 function heredocFeedsShell(before, after) {
   const split = (t) => t.split(/&&|\|\||[;&|(`]/)
-  const own = split(before).pop() ?? ''
+  // Digits glued to `<<` are its file descriptor, not an argument (card d86c38b8):
+  // `bash 0<<EOF` is `bash <<EOF`, while `bash 0 <<EOF` keeps its space and stays a file.
+  const own = (split(before).pop() ?? '').replace(/\d+$/, '')
   if (segmentReadsShellStdin(own)) return true
   return split(after).slice(1).some(segmentReadsShellStdin)
 }
@@ -487,6 +509,7 @@ export function gateDecision(toolName, toolInput) {
   if (name === 'Write' || name === 'Edit' || name === 'NotebookEdit') {
     const fp = String(toolInput?.file_path ?? toolInput?.notebook_path ?? '')
     if (SCHEDULE_STORE_RX.test(fp)) return { deny: true, reason: 'store-write' }
+    if (LAUNCHD_DIR_RX.test(fp)) return { deny: true, reason: 'launchd-dir-write' }
   }
   if (name === 'Bash') {
     // Strip -d/--data payloads on the WHOLE command BEFORE splitting. A payload is
@@ -516,6 +539,13 @@ export function gateDecision(toolName, toolInput) {
       // dashboard schedule API: block WRITE methods only (GET list/pending is legit)
       if (SCHEDULE_API_RX.test(seg) && HTTP_WRITE_RX.test(seg)) return { deny: true, reason: 'schedule-api-write' }
     }
+    // launchd directory: block a write INTO it (a read or a copy out of it is legit).
+    // Heredoc bodies that feed TEXT are blanked, so a message DESCRIBING an install
+    // passes; a body that feeds a shell, and every quoted string, stays scanned.
+    const heredocMasked = maskInertLiterals(safeCommand, { heredocOnly: true }) ?? safeCommand
+    for (const seg of splitSegments(heredocMasked)) {
+      if (LAUNCHD_DIR_RX.test(seg) && LAUNCHD_DIR_WRITE_RX.test(seg)) return { deny: true, reason: 'launchd-dir-write-bash' }
+    }
     // The scheduler check is the ANCHORED one -- it fires on what sits at a
     // segment START -- so it is the one a fake segment boundary can mislead, and
     // the only one that gets quote-aware segments. Null (unresolvable quoting)
@@ -528,7 +558,7 @@ export function gateDecision(toolName, toolInput) {
     // Indirect forms: the scheduler as an argument (xargs / -exec / eval) or inside
     // a quoted command string (bash -c, git -c alias.x='!...'). Reads the text with
     // quotes intact, heredoc bodies blanked; null (unresolvable heredoc) -> scan all.
-    if (INDIRECT_SCHEDULER_RX.test(maskInertLiterals(safeCommand, { heredocOnly: true }) ?? safeCommand)) {
+    if (INDIRECT_SCHEDULER_RX.test(heredocMasked)) {
       return { deny: true, reason: 'os-scheduler-indirect' }
     }
   }
@@ -586,6 +616,19 @@ export const REASON_HINT = {
     ' vegrehajtja, ez onutemezes, ezert itt a SZOVEG-egyezes is megtagad (egy `echo "at 10:30 ..."` is).' +
     ' A tiszta listazas (crontab -l, launchctl list, atq) atmegy.' +
     ' HA DOKUMENTALSZ (a szoveg ADAT, nem hivas): NE fogalmazd at a szoveget -- egy pontos leiras atirasa azert, hogy egy szuron atcsusszon, a DOKUMENTUMOT rontja el. Valassz MASIK UTAT: idezett hej-heredoc NEM-shell fogyasztonak (<<\'VEGE\' az agent-msg.sh-nak vagy `cat > fajl`-nak: a torzset a kapu nem nezi; `bash`/`sh`/`zsh`/`dash` fogyasztonal a torzs PARANCS, azt is nezi), a fajlt a Write eszkozzel ird, vagy add `-d`/`--data` payloadkent -- azt a kapu blankolja.',
+  'launchd-dir-write':
+    ' KIVALTO OK: a ~/Library/LaunchAgents (vagy LaunchDaemons) mappaba iranyulo Write/Edit/NotebookEdit hivas:' +
+    ' egy oda irt plist-et a launchd a kovetkezo bejelentkezeskor vagy ujrainditaskor BETOLTI, launchctl nelkul is.' +
+    ' Ez STRUKTURALIS megtagadas -- a hivas TENYLEG erre a mappara iranyult --, tehat itt nincs' +
+    ' "csak dokumentaltam" eset. OLVASNI SZABAD (Read, `ls`, `cat`). A plist-et a sajat worktree-dben' +
+    ' keszitsd el; a telepitest (a mappaba masolas + betoltes) a koordinator vagy a gazda vegzi.',
+  'launchd-dir-write-bash':
+    ' KIVALTO OK: iras a ~/Library/LaunchAgents (vagy LaunchDaemons) mappaba (atiranyitas vagy tee celja,' +
+    ' cp/mv/ln/ditto/install/rsync celja, sed -i, plutil, PlistBuddy, defaults write): egy oda irt plist-et' +
+    ' a launchd a kovetkezo bejelentkezeskor vagy ujrainditaskor BETOLTI, launchctl nelkul is.' +
+    ' OLVASNI SZABAD: az `ls`, a `cat` es a mappabol KIFELE masolas atmegy. A plist-et a sajat worktree-dben' +
+    ' keszitsd el; a telepitest a koordinator vagy a gazda vegzi.' +
+    ' HA DOKUMENTALSZ (a szoveg ADAT, nem hivas): NE fogalmazd at a szoveget. Valassz MASIK UTAT: idezett hej-heredoc NEM-shell fogyasztonak (<<\'VEGE\' az agent-msg.sh-nak vagy `cat > fajl`-nak: a torzset ez az ellenorzes nem nezi), a fajlt a Write eszkozzel ird, vagy add `-d`/`--data` payloadkent -- azt a kapu blankolja.',
   // The only reason without a hint until now (card 97470e22, four measured
   // occurrences: a deny-list rationale, an installation-lane finding, and twice
   // a card comment). Every other reason tells the reader what DOES pass; this
