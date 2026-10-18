@@ -93,4 +93,16 @@ describe('the wizard wires the field from the response to the banner', () => {
       expect(src).toMatch(/'agents\.wizard\.gates_body':\s*'[^']*\{gates\}/)
     }
   })
+
+  // didi 39053: a restart re-adds a gate only when settings.json parses and the template exists
+  // (agent-scaffold.ts ensure* return false otherwise), so the text must not promise more.
+  it('the body names the two cases a restart does not repair, in both languages', () => {
+    const want = { hu: ['olvashatatlan settings.json', 'hiányzó sablont'], en: ['unreadable settings.json', 'missing template'] }
+    for (const [lang, phrases] of Object.entries(want)) {
+      const src = readFileSync(join(ROOT, 'web', 'lang', `${lang}.js`), 'utf-8')
+      const body = src.match(/'agents\.wizard\.gates_body':\s*'((?:[^'\\]|\\.)*)'/)?.[1] ?? ''
+      for (const p of phrases) expect(body).toContain(p)
+      expect(body).not.toMatch(/re-runs the gate backfill;|újra lefuttatja a kapuk pótlását;/)
+    }
+  })
 })
