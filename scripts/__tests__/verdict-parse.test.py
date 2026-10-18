@@ -17,7 +17,11 @@ SPEC.loader.exec_module(vp)
 FAILED = []
 
 
+RAN = []
+
+
 def check(name, got, want):
+    RAN.append(name)
     if got != want:
         FAILED.append('%s: got %r, want %r' % (name, got, want))
 
@@ -64,6 +68,19 @@ check('no verdict at all', vp.card_state({})[0], 'NINCS VERDIKT')
 check('scope kept', vp.classify('VERDIKT: NINCS NYITOTT TETEL | csak a frontend felen')[1],
       'csak a frontend felen')
 
+# --- card 08832e26: the author's OWN time stamp in front is not an indent --------------
+# The gate (src/kanban-verdict.ts) reads it; without this the census disagreed on 5 live cards.
+STAMPED_NINCS = '[didi, 2026-10-14 23:13 CEST, date] VERDIKT: NINCS NYITOTT TETEL | 970be4b3'
+stamped = vp.parse_verdicts([
+    ('didi', 1, 'VERDIKT: NYITOTT TETEL | 26541'),
+    ('didi', 2, STAMPED_NINCS),
+])
+check('own stamp: the later stamped NINCS wins', stamped['didi'][0], vp.NINCS)
+check('own stamp, seconds + CET', vp.classify('[didi, 2026-12-01 09:05:07 CET, date] VERDIKT: NYITOTT TETEL | x', 'didi')[0], vp.NYITOTT)
+check('ANOTHER author\'s stamp is a citation', vp.classify(STAMPED_NINCS, 'marveen'), None)
+check('no author given: stamp not taken off', vp.classify(STAMPED_NINCS), None)
+check('estimated time is not the stamp', vp.classify('[didi, 2026-10-14 23:1x CEST, date] VERDIKT: NYITOTT TETEL | x', 'didi'), None)
+
 # --- CONTROL, both directions: the classifier can say each of the three ---------------
 kinds = {tok('VERDIKT: NINCS NYITOTT TETEL | x'),
          tok('VERDIKT: NYITOTT TETEL | x'),
@@ -73,4 +90,4 @@ check('the meter can say all three', kinds, {vp.NINCS, vp.NYITOTT, vp.UNMEASURAB
 if FAILED:
     print('\n'.join('FAIL ' + f for f in FAILED))
     sys.exit(1)
-print('All verdict-parse contract tests passed (%d).' % 17)
+print('All verdict-parse contract tests passed (%d).' % len(RAN))
