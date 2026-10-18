@@ -8,7 +8,8 @@
 # plus the one the old code got wrong: no key -> NOTHING uploaded, never plaintext.
 #
 # Nothing here touches production, the real Keychain or the real bucket:
-# `security` and `r2.py` are stubs, the database is a temp cluster on a socket.
+# `security`, `r2.py` and `backup-offsite.py` are stubs, the database is a temp
+# cluster on a socket.
 # The scripts under test run under /bin/bash (3.2), because that is what launchd
 # runs them with; a pass under Homebrew's bash 5 would prove nothing about 03:30.
 #
@@ -76,6 +77,25 @@ elif cmd == "delete":
     os.remove(os.path.join(b, sys.argv[3]))
 EOF
 
+# Drive stand-in for backup-offsite.py. The copy below always points at it, so no case can
+# reach the real Drive; the leg itself only runs where a case sets fake credential paths (15).
+DRIVEDIR="$TMP/drive"; mkdir -p "$DRIVEDIR"
+DRIVESTUB="$TMP/drive.py"
+cat > "$DRIVESTUB" <<EOF
+import os, shutil, sys
+d = "$DRIVEDIR"
+cmd, rest = sys.argv[1], sys.argv[4:]   # <cmd> --folder F [args]
+if cmd == "list-files":
+    for n in sorted(os.listdir(d)):
+        print(n)
+elif cmd == "push-file":
+    shutil.copyfile(rest[0], os.path.join(d, rest[1]))
+elif cmd == "delete-file":
+    os.remove(os.path.join(d, rest[0]))
+else:
+    sys.exit(2)
+EOF
+
 NOTIFIED="$TMP/notified.txt"
 STUBN="$TMP/notify.sh"
 printf '#!/bin/bash\necho "$*" >> "%s"\nexit 0\n' "$NOTIFIED" > "$STUBN"; chmod +x "$STUBN"
@@ -97,6 +117,7 @@ sed -e "s|^ENV_FILE=.*|ENV_FILE=\"$ENVF\"|" \
     -e "s|^DASHBOARD_TOKEN_FILE=.*|DASHBOARD_TOKEN_FILE=\"$TMP/nincs-token\"|" \
     -e "s|^R2_KEY_FILE=.*|R2_KEY_FILE=\"$TMP/r2-key\"|" \
     -e "s|^R2_SCRIPT=.*|R2_SCRIPT=\"$R2\"|" \
+    -e "s|^DRIVE_SCRIPT=.*|DRIVE_SCRIPT=\"$DRIVESTUB\"|" \
     -e "s|^PG_BIN=.*|PG_BIN=\"$FAKEBIN\"|" \
     "$HERE/delta-crm-backup.sh" > "$TMP/scripts/delta-crm-backup.sh"
 
@@ -482,6 +503,36 @@ sleep 1; /bin/bash "$TMP/scripts/delta-crm-backup.sh" >/dev/null 2>&1
 [ -f "$TMP/backups/$K12" ] && no "a 12 honapja ($M12) havi mentes MEGMARADT (12 honapnal tovabb tartja)" || ok "a 12 honapja ($M12) havi mentes torolve"
 grep -q "PRUNE $K12" "$TMP/backups/backup.log" && ok 'a naplo megnevezi a torolt havi mentest' || no 'a torolt havi mentes nincs a naploban'
 rm -f "$TMP/backups/$K11" "$TMP/backups"/delta-crm-${CUR}0[1-9]-000000-public.dump "$TMP/backups"/delta-crm-${CUR}1[0-4]-000000-public.dump
+
+echo "== 15. Drive-ag: potlas, a .gpg-nev a hiany-szuroben, tukor-torles (3b62a58e) =="
+# Every run above skips the Drive leg (temp BACKUP_DIR + the default, real credential paths =
+# the guard). Here the credential paths are fakes, so the leg runs against the stub.
+# trillian 38902: dropping `.gpg` from the Drive missing-filter survived 99/0.
+: > "$TMP/drive-oauth.json"; : > "$TMP/drive-state.json"
+run_drive() {
+  BACKUP_OFFSITE_OAUTH_FILE="$TMP/drive-oauth.json" BACKUP_OFFSITE_STATE_FILE="$TMP/drive-state.json" \
+    /bin/bash "$TMP/scripts/delta-crm-backup.sh" >/dev/null 2>&1
+}
+drive_missing() { n=0; for f in $(locals); do [ -f "$DRIVEDIR/$f.gpg" ] || n=$((n+1)); done; echo $n; }
+STRAY="delta-crm-20200101-000000-public.dump.gpg"
+: > "${DRIVEDIR:?}/$STRAY"; : > "$DRIVEDIR/mas-fajl.txt"
+NL=$(locals | wc -l | tr -d ' ')
+: > "$TMP/backups/backup.log"
+sleep 1; run_drive
+grep -q 'DRIVE KIHAGYVA' "$TMP/backups/backup.log" && no 'ELOFELTETEL: a Drive-ag most is kihagyva' || ok 'ELOFELTETEL: a Drive-ag fut'
+[ "$(drive_missing)" = 0 ] && ok "a) ures Drive -> mind a $((NL + 1)) helyi mentesnek van masolata" || no "a) $(drive_missing) helyi mentes hianyzik a Drive-rol"
+P=$(grep -c 'DRIVE POTOLVA' "$TMP/backups/backup.log")
+[ "$P" = "$NL" ] && ok "a) a naplo $P Drive-potlast nevez meg" || no "a) $P DRIVE POTOLVA sor, $NL vart"
+OLDEST=$(locals | head -1)
+backup_decrypt K1 "$DRIVEDIR/$OLDEST.gpg" "$TMP/old.rt" 2>/dev/null && cmp -s "$TMP/old.rt" "$TMP/backups/$OLDEST" \
+  && ok 'a) egy potolt Drive-objektum a helyi mentesre fejtodik vissza' || no 'a) a potolt Drive-objektum nem adja vissza a helyi mentest'
+[ ! -f "$DRIVEDIR/$STRAY" ] && grep -q "DRIVE PRUNE $STRAY" "$TMP/backups/backup.log" \
+  && ok 'a) a helyben mar nem letezo mentest a Drive-rol torli es naplozza' || no 'a) a regi mentes a Drive-on MARADT (vagy nincs a naploban)'
+[ -f "$DRIVEDIR/mas-fajl.txt" ] && ok 'a) nem mentes-nevu fajlhoz nem nyul' || no 'a) egy nem mentes-nevu fajlt TOROLT a Drive-rol'
+: > "$TMP/backups/backup.log"
+sleep 1; run_drive
+P=$(grep -c 'DRIVE POTOLVA' "$TMP/backups/backup.log")
+[ "$P" = 0 ] && ok 'b) teli Drive -> masodik futas 0 potlast tolt fel' || no "b) teli Drive-nal is $P DRIVE POTOLVA sor (minden mentes ujra felmegy)"
 
 echo
 echo "  $PASS ok, $FAIL bukott"
