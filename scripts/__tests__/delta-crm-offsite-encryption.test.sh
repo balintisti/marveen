@@ -85,8 +85,14 @@ cat > "$DRIVESTUB" <<EOF
 import os, shutil, sys
 d = "$DRIVEDIR"
 cmd, rest = sys.argv[1], sys.argv[4:]   # <cmd> --folder F [args]
+# failure switches for case 15: the listing fails, or hides every name after DRIVE_HIDE_AFTER
+# (a readable list that does not show tonight's object)
+if cmd == "list-files" and os.environ.get("DRIVE_FAIL_LIST"):
+    sys.stderr.write("stub drive list failure\n"); sys.exit(1)
 if cmd == "list-files":
     for n in sorted(os.listdir(d)):
+        if n > os.environ.get("DRIVE_HIDE_AFTER", "~"):
+            continue
         print(n)
 elif cmd == "push-file":
     shutil.copyfile(rest[0], os.path.join(d, rest[1]))
@@ -504,7 +510,7 @@ sleep 1; /bin/bash "$TMP/scripts/delta-crm-backup.sh" >/dev/null 2>&1
 grep -q "PRUNE $K12" "$TMP/backups/backup.log" && ok 'a naplo megnevezi a torolt havi mentest' || no 'a torolt havi mentes nincs a naploban'
 rm -f "$TMP/backups/$K11" "$TMP/backups"/delta-crm-${CUR}0[1-9]-000000-public.dump "$TMP/backups"/delta-crm-${CUR}1[0-4]-000000-public.dump
 
-echo "== 15. Drive-ag: potlas, a .gpg-nev a hiany-szuroben, tukor-torles (3b62a58e) =="
+echo "== 15. Drive-ag: potlas, a .gpg-nev a hiany-szuroben, tukor-torles es kapui (3b62a58e) =="
 # Every run above skips the Drive leg (temp BACKUP_DIR + the default, real credential paths =
 # the guard). Here the credential paths are fakes, so the leg runs against the stub.
 # trillian 38902: dropping `.gpg` from the Drive missing-filter survived 99/0.
@@ -533,6 +539,24 @@ backup_decrypt K1 "$DRIVEDIR/$OLDEST.gpg" "$TMP/old.rt" 2>/dev/null && cmp -s "$
 sleep 1; run_drive
 P=$(grep -c 'DRIVE POTOLVA' "$TMP/backups/backup.log")
 [ "$P" = 0 ] && ok 'b) teli Drive -> masodik futas 0 potlast tolt fel' || no "b) teli Drive-nal is $P DRIVE POTOLVA sor (minden mentes ujra felmegy)"
+# c) the list is readable but does not show tonight's object: the mirror would run against the
+#    wrong list, so nothing is pruned (trillian 39035: dropping that gate survived 106/0)
+: > "$DRIVEDIR/$STRAY"; : > "$TMP/backups/backup.log"
+sleep 1; DRIVE_HIDE_AFTER="$(locals | tail -1).gpg" run_drive
+TN=$(locals | tail -1)
+[ -f "$DRIVEDIR/$TN.gpg" ] && ok 'c) a mai mentes a Drive-ra felment' || no 'c) a mai mentes nem ment fel a Drive-ra'
+[ -f "$DRIVEDIR/$STRAY" ] && ok 'c) a listabol hianyzo mai mentes mellett a regi Drive-mentest NEM torli' || no 'c) a regi Drive-mentest TOROLTE egy listabol, amiben a mai nincs benne'
+grep -q 'DRIVE PRUNE kihagyva: a lista nem olvashato vagy a mai mentes nem szerepel benne' "$TMP/backups/backup.log" \
+  && ok 'c) a naplo megnevezi, miert maradt el a torles' || no 'c) a kihagyott torles nincs a naploban'
+# d) the listing fails: tonight's dump is still pushed, nothing else is guessed or pruned
+rm -f "$DRIVEDIR"/*.gpg; : > "$DRIVEDIR/$STRAY"; : > "$TMP/backups/backup.log"
+sleep 1; DRIVE_FAIL_LIST=1 run_drive
+TN=$(locals | tail -1)
+[ -f "$DRIVEDIR/$TN.gpg" ] && ok 'd) Drive lista-hiba mellett a mai mentes felment' || no 'd) Drive lista-hiba mellett a mai mentes sem ment fel'
+[ "$(ls "$DRIVEDIR" | grep -c '\.dump\.gpg$')" = 2 ] && [ -f "$DRIVEDIR/$STRAY" ] \
+  && ok 'd) csak a mai ment fel, a regi megmaradt' || no "d) $(ls "$DRIVEDIR" | grep -c '\.dump\.gpg$') .gpg a Drive-on (2 vart: a mai + a regi)"
+grep -q 'DRIVE HIBA: a mappa listaja nem olvashato (stub drive list failure)' "$TMP/backups/backup.log" \
+  && ok 'd) a naplo megnevezi a Drive lista-hibat, az okkal' || no 'd) a Drive lista-hiba nincs a naploban'
 
 echo
 echo "  $PASS ok, $FAIL bukott"
