@@ -3120,6 +3120,15 @@ export function deleteKanbanCard(id: string): boolean {
   })(id) as boolean
 }
 
+/** An agent's own card comments since `sinceSec`: the NEWEST `limit` of them, returned oldest first,
+ *  first `headChars` characters only (card 2140095d: the restart tail lists what the agent reported
+ *  after its HANDOFF was written; the ones closest to the restart are the ones it must not drop). */
+export function getAgentCommentsSince(author: string, sinceSec: number, limit: number, headChars: number): { card_id: string; created_at: number; head: string }[] {
+  return (db.prepare(
+    'SELECT card_id, created_at, substr(content, 1, ?) AS head FROM kanban_comments WHERE author = ? AND created_at >= ? ORDER BY created_at DESC, id DESC LIMIT ?',
+  ).all(headChars, author, Math.floor(sinceSec), limit) as { card_id: string; created_at: number; head: string }[]).reverse()
+}
+
 export function getKanbanComments(cardId: string): KanbanComment[] {
   return db.prepare('SELECT * FROM kanban_comments WHERE card_id = ? ORDER BY created_at ASC').all(cardId) as KanbanComment[]
 }
