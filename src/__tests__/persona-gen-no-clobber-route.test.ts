@@ -76,6 +76,7 @@ vi.mock('../db.js', async (importOriginal) => {
 })
 
 const { tryHandleAgents, PERSONALITY_PENDING_SENTINEL } = await import('../web/routes/agents.js')
+const { missingScaffoldGates } = await import('../web/agent-scaffold.js')
 const { CLI_VERSION_OVERRIDE_ENV, resetClaudeCliVersionCache } = await import('../web/claude-cli-version.js')
 const { MAIN_AGENT_ID, PROJECT_ROOT } = await import('../config.js')
 type RouteContext = import('../web/routes/types.js').RouteContext
@@ -125,6 +126,13 @@ const read = (file: string) => readFileSync(join(dir(), file), 'utf8')
 const skipNotices = () => h.createAgentMessage.mock.calls.filter(
   (c) => typeof c[2] === 'string' && c[2].includes('NEM írta felül'),
 )
+
+/** Card 9419cf92 (trillian 31632): every response branch carries the missing gates. The
+ *  sandbox has no gate scripts, so the list is never empty here (the first expect says so). */
+const expectGatesReported = (body: Record<string, any>) => {
+  expect(missingScaffoldGates(NAME).length).toBeGreaterThan(0)
+  expect(body.missingGates).toEqual(missingScaffoldGates(NAME))
+}
 
 const savedCliEnv = process.env[CLI_VERSION_OVERRIDE_ENV]
 beforeEach(() => {
@@ -204,6 +212,7 @@ describe('POST /api/agents: files hand-written DURING generation survive (pre-ge
       { file: 'CLAUDE.md', generatedPath: null },
       { file: 'SOUL.md', generatedPath: null },
     ])
+    expectGatesReported(r.body)
 
     const notices = skipNotices()
     expect(notices).toHaveLength(1)
@@ -226,6 +235,7 @@ describe('POST /api/agents: files hand-written DURING generation survive (pre-ge
     expect(existsSync(join(dir(), PERSONALITY_PENDING_SENTINEL))).toBe(true)
     expect(r.body.personalityPending).toBe(true)
     expect(r.body.personalitySkipped).toEqual([{ file: 'CLAUDE.md', generatedPath: null }])
+    expectGatesReported(r.body)
     expect(skipNotices()).toHaveLength(1)
     expect(skipNotices()[0][2]).toContain('CLAUDE.md')
     expect(skipNotices()[0][2]).not.toContain('SOUL.md')
@@ -246,6 +256,7 @@ describe('POST /api/agents: untouched files still get written (the guard is not 
     // The sandbox has no gate scripts, so the route also reports missingGates (card
     // 9419cf92); this test is about the persona fields, so that one is left out.
     expect({ ...r.body, missingGates: undefined }).toEqual({ ok: true, name: NAME })
+    expectGatesReported(r.body)
     expect(skipNotices()).toHaveLength(0)
   })
 
@@ -260,6 +271,7 @@ describe('POST /api/agents: untouched files still get written (the guard is not 
     expect(existsSync(join(dir(), PERSONALITY_PENDING_SENTINEL))).toBe(true)
     expect(r.body.personalityPending).toBe(true)
     expect(r.body.personalitySkipped).toBeUndefined()
+    expectGatesReported(r.body)
     expect(skipNotices()).toHaveLength(0)
   })
 })

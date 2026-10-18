@@ -1064,6 +1064,8 @@ window._i18n.en = {
   'agents.wizard.pending_title': 'Your agent is ready, but its personality came from a template',
   'agents.wizard.pending_body':  'The agent was created and works, nothing was lost. Its personality could not be generated, so what you see below is a template. You can rewrite it here now, or later in the agent\'s settings.',
   'agents.wizard.pending_detail': 'What failed: {detail}',
+  'agents.wizard.gates_title': 'Your agent is ready, but without some safety gates',
+  'agents.wizard.gates_body': 'Missing: {gates}. A dashboard restart re-runs the gate backfill; until then the agent runs without them.',
   'agents.model.inherit':        'Inherited (default)',
   'agents.model.fable51':       'Fable 5.1 (newest Fable)',
   'agents.model.fable5':         'Fable 5',

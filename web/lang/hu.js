@@ -415,6 +415,8 @@ window._i18n.hu = {
   'agents.wizard.pending_title': 'Az ügynök elkészült, a személyisége viszont sablonból jött',
   'agents.wizard.pending_body':  'Az ügynök létrejött és működik, nem veszett el semmi. A személyiségét nem sikerült legenerálni, ezért amit alább látsz, az egy sablon. Átírhatod most itt, vagy később bármikor az ügynök beállításainál.',
   'agents.wizard.pending_detail': 'Ami nem sikerült: {detail}',
+  'agents.wizard.gates_title': 'Az ügynök elkészült, de biztonsági kapuk nélkül',
+  'agents.wizard.gates_body': 'Hiányzik: {gates}. A dashboard újraindítása újra lefuttatja a kapuk pótlását; amíg ez nem történt meg, az ügynök ezek nélkül fut.',
   'agents.model.inherit':        'Öröklött (alapértelmezett)',
   'agents.model.fable51':       'Fable 5.1 (legújabb Fable)',
   'agents.model.fable5':         'Fable 5',
