@@ -78,10 +78,10 @@ done
 # elnyeli (rulebook/delta-crm.md, "KET ALAK, AMI VEDELEMNEK LATSZIK").
 # A HATAR, kimondva: standard_conforming_strings=on-t feltetelez (a PG alapertelmezese), ezert a
 # SET/RESET standard_conforming_strings es a set_config() is elutasitas; SET/RESET csak egy
-# engedett listara (statement_timeout, search_path, time zone, ...), U& azonosito sehol. Nem latja
-# a dinamikus SQL-t (EXECUTE egy DO-blokkban) es egy CALL-olt eljaras sajat COMMIT-jat; ezek ellen
-# a READ ONLY tranzakcio maga ved (tranzakcio-blokkon belul a DO/CALL nem zarhat tranzakciot, es
-# egy olvaso tranzakcioban nem is ir).
+# engedett listara (statement_timeout, search_path, time zone, ...), U& azonosito sehol, DO-blokk
+# sehol (a torzsebol EXECUTE-tal set_config is futhat, didi 38968). Nem latja egy CALL-olt eljaras
+# sajat COMMIT-jat vagy egy meglevo fuggveny belsejet; ezek ellen a READ ONLY tranzakcio ved
+# (tranzakcio-blokkon belul a CALL nem zarhat tranzakciot, es egy olvaso tranzakcioban nem is ir).
 TXN_HIT="$(python3 - "$SQL_FILE" <<'PYX'
 import re,sys
 src=open(sys.argv[1],encoding='utf-8',errors='replace').read()
@@ -146,10 +146,14 @@ body=''.join(code)
 if re.search(r'(?i)\bset_config\b',body): hits.append('set_config()')
 # SET/RESET csak a felsorolt, a burkot nem erinto beallitasokra: a nev-tiltas nem zarhato (didi 38649).
 SETSTMT=re.compile(r'(?is)^\s*(?:set|reset)\b')
+# DO: a torzs a szurok szamara ures literal, es EXECUTE-ban osszefuzott SQL-t futtat (set_config,
+# SET standard_conforming_strings): torzs-szkenneles ezt nem zarja, a DO maga az elutasitas.
+DOSTMT=re.compile(r'(?is)^\s*do\b')
 SET_OK=re.compile(r'(?is)^\s*(?:set|reset)\s+(?:(?:session|local)\s+)?(?:statement_timeout|lock_timeout|idle_in_transaction_session_timeout|search_path|time\s+zone|timezone|datestyle|intervalstyle|application_name|work_mem|client_min_messages|extra_float_digits|jit|enable_[a-z_]+)\b')
 for st in body.split(';'):
     m=TXN.match(st)
     if m: hits.append(re.sub(r'\s+',' ',m.group(1)).upper())
+    elif DOSTMT.match(st): hits.append('DO-blokk (a torzse dinamikus SQL-t futtathat, didi 38968)')
     elif SETSTMT.match(st) and not SET_OK.match(st): hits.append('SET/RESET nem engedett beallitasra: '+re.sub(r'\s+',' ',st.strip())[:40])
 print('; '.join(hits))
 PYX
