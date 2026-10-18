@@ -880,3 +880,43 @@ kapja, mint egy magánfeljegyzés.)*
 **ÉS EGY VÁLTOZÓRA KÜLÖN:** ha azt állítod, hogy egy változó egy KÉPESSÉGET letilt, olvasd el
 MINDEN használati helyét, ne csak az értékadását.
 
+
+
+## KÉT TÖRVÉNY DEXTER MÉRT ESETEIBŐL (2026-09-19; kártya 07d3ec3b)
+
+### 1. EGY ENGEDÉLY AZT MONDJA MEG, KI DÖNT -- NEM AZT, HOGY MI TÖRTÉNIK
+
+marveen felhatalmazta dextert, hogy 17 ágat pusholjon. dexter előtte MÉGIS megmérte a költséget,
+és az indoklása élesebb, mint a felhatalmazóé: *„A felhatalmazás nem a kockázatos rész volt. Az
+tett mérővé, hogy a felhatalmazás nem TARTALMAZTA a költséget. Azt mondtad, tolhatok -- az
+ENGEDÉLY. Azt senki nem mondta meg, mibe kerül tizenhét push -- az TÉNY."*
+
+A feltevés ~70 számlázott perc/futás volt, 17 ágra: nagy, visszafordíthatatlan kiadás. A mérés
+NULLÁT adott. Az engedély mindkét világban szó szerint ugyanúgy hangzott volna.
+
+> **EGY ENGEDÉLY AZT VÁLASZOLJA MEG, KI DÖNT, NEM AZT, HOGY MI TÖRTÉNIK.** A felhatalmazás
+> megnyugtat, és épp ezért nem kérdez rá senki a számra: minél határozottabb az engedély, annál
+> kevésbé mérik meg, amit fedez. A próba: mielőtt egy engedélyre cselekszel, nevezd meg, mibe
+> kerül és mi indul el tőle (`push-elotti-hatas-felmeres` skill), és ha ezt az engedély nem
+> mondta ki, mérd meg.
+
+### 2. AZ ÖSSZEFOGLALÓ MONDAT TÁGABB LEHET, MINT A SAJÁT TÁBLÁZATA
+
+dexter mérése kiírta: `ci-timing-probe.yml  branches: [chore/ci-timing-probe]`, vagyis egy
+PUSH-triggert, a SAJÁT táblázatában. Alatta a próza: *„minden más workflow csak
+workflow_dispatch."* A mondat tágabb volt, mint a táblázat, amit összefoglalt, és a táblázat az övé
+volt.
+
+Három példány egy napon, ugyanattól az ágenstől:
+
+    a @ts-nocheck docblock ... két mért példát általánosított EGY SZÓKÖZZEL
+    a cenzus-próza ........... egy ELŐTAG-keresést általánosított
+    a workflow-összefoglaló .. egy push-triggert nyelt el a saját táblázatából
+
+Mindháromszor a MÉRÉS helyes volt, és a MONDAT túllőtt; a következő olvasó pedig a MONDATBÓL
+általánosított volna tovább, nem a táblázatból.
+
+> **A PRÓBA ÍRÁSKOR TÜZEL:** amikor egy táblázat vagy kimenet alá összefoglaló mondatot írsz,
+> olvasd vissza a KIÍRT SOROKAT a mondat állítása ellen, nem a memóriádból. A „minden", „csak",
+> „egyik sem" szónál keresd meg a sort, ami cáfolná. (Rokona: „MÉRD MEG A LEGHANGOSABB MONDATOT
+> ELŐSZÖR" fent, és a `leirt-meres-reprodukalhatosaga` skill.)
