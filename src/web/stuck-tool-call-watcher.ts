@@ -132,6 +132,40 @@ function sampleMainClaudeCpuPercent(session: string): number | null {
   }
 }
 
+// Live-turn progress guard (card 0fc42aaa). The signature above matches the
+// FIRST "<verb> for Ns" on screen, and on this Claude Code that line is the
+// summary a COMPLETED turn leaves behind ("✻ Baked for 33s"). Measured
+// 2026-10-17 on the three respawns since 10-13 (10-14 18:17, 10-14 21:38,
+// 10-16 00:28): each footer value equals the previous turn's turn_duration
+// (35/49/33 s), a NEW turn was running a foreground Bash (43-87 s into its
+// timeout), and the respawn killed it (Exit code 137). The idle-prompt veto had
+// held while the pane was idle; it let go the moment the new turn started, and
+// the stale residual walked through every later gate. A running turn draws its
+// own counter in the spinner line ("✻ Imagining… (16s · ↓ 733 tokens)"); a TUI
+// that is really frozen cannot advance it. So a live spinner counter that moved
+// since the previous poll is progress, and the spell is cleared. No spinner
+// visible (the 2026-06-02 wedge shape, or a truncated pane) -> no veto, the
+// previous behaviour.
+const LIVE_SPINNER_COUNTER_RX = /…\s*\(((?:\d+h\s*)?(?:\d+m\s*)?\d+s)\b/
+
+// Pure: the elapsed counter of the live turn's spinner line, or null when no
+// running-turn spinner is on screen. The last match wins (the spinner sits just
+// above the input box; older text is scrollback).
+export function liveSpinnerCounter(pane: string | null): string | null {
+  if (pane == null) return null
+  let found: string | null = null
+  for (const line of pane.split('\n')) {
+    const m = line.match(LIVE_SPINNER_COUNTER_RX)
+    if (m) found = m[1]!
+  }
+  return found
+}
+
+// Pure: did the live turn visibly progress between two polls?
+export function liveTurnProgressed(prev: string | null, cur: string | null): boolean {
+  return prev != null && cur != null && prev !== cur
+}
+
 // Defaults chosen against the 2026-06-02 incident profile.
 //   - freezeSeconds = 180: long enough that a real slow Anthropic call
 //     (multi-thousand-token thinking + tool result) doesn't trip it. The
@@ -174,6 +208,8 @@ const NO_STATE: StuckToolCallState = {
 // Session-keyed state map. Only the main session ever has an entry today,
 // but the map shape leaves room for sub-agents without an API change.
 const watchState = new Map<string, StuckToolCallState>()
+// Last live-spinner counter seen per session (live-turn progress guard).
+const spinnerState = new Map<string, string | null>()
 
 // Pure: should a hard-restart be deferred because a respawn (any source --
 // this watcher, channel-monitor's cascade, channel-watchdog.sh, or the #264
@@ -187,7 +223,9 @@ export function shouldDeferForRecentRespawn(
   return lastRespawnMs > 0 && nowMs - lastRespawnMs < graceMs
 }
 
-async function checkSession(label: string, session: string): Promise<void> {
+// Exported for the behavioural poll-step test (card 0fc42aaa, didi 31905); the
+// only production caller is the sweep below.
+export async function checkSession(label: string, session: string): Promise<void> {
   const pane = capturePane(session)
   const sig = pane == null ? null : stuckToolCallSignature(pane)
 
@@ -200,7 +238,22 @@ async function checkSession(label: string, session: string): Promise<void> {
     watchState.set(session, next)
   }
 
+  const spinner = liveSpinnerCounter(pane)
+  const prevSpinner = spinnerState.get(session) ?? null
+  spinnerState.set(session, spinner)
+
   if (recover) {
+    // Live-turn progress guard (card 0fc42aaa): see liveSpinnerCounter. First,
+    // because every later gate was built for a frozen counter, and this one
+    // proves the counter on screen is not the one that is moving.
+    if (liveTurnProgressed(prevSpinner, spinner)) {
+      logger.info(
+        { label, session, tag: next.tag, seconds: next.lastSeconds, spinner, prevSpinner },
+        'stuck-tool-call-watcher: counter stagnant but the live turn spinner advanced (residual footer of the previous turn, not a wedge) -- skipping recovery',
+      )
+      watchState.delete(session)
+      return
+    }
     // Idle-prompt guard (2026-06-22 false-positive loop): the signature only
     // sees a frozen "<verb> for Ns" footer -- it cannot tell an ACTIVELY-wedged
     // tool-call (the 2026-06-02 incident) from the RESIDUAL footer a COMPLETED
