@@ -53,7 +53,7 @@ vi.mock('../logger.js', () => ({
 }))
 vi.mock('../web/agent-process.js', () => ({
   capturePane: () => 'pane',
-  isAgentRunning: (a: string) => h.running.get(a) ?? true,
+  isAgentRunning: (a: string) => h.running.get(a) ?? true, saturationRefusesDispatch: () => false,
 }))
 vi.mock('../web/channel-mcp-reconnect.js', () => ({ resolveAgentSession: (a: string) => `agent-${a}` }))
 vi.mock('../web/agent-config.js', () => ({

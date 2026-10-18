@@ -1638,6 +1638,47 @@ describe('the notice itself must not send anyone back to the queue', () => {
   })
 })
 
+// A SATURATED RECIPIENT IS NOT AN EMPTY ONE (card a466a216, measured 2026-09-20 on deeper's pane:
+// detectPaneState 'idle', paneShowsContextSaturation true). Labelled idle, the notice said "NOT held
+// up by work" and lifted the resend ban, while the router's own text for the same pane said
+// "Do NOT restart it from here".
+describe('a saturated recipient keeps the resend ban and hands over to the context-guard', () => {
+  const NOW = 600_000_000
+  const at = (min: number) => Math.floor((NOW - min * 60_000) / 1000)
+  const one = [{ id: 7, to_agent: 'deeper', created_at: at(70) }]
+  const two = [{ id: 7, to_agent: 'deeper', created_at: at(70) }, { id: 8, to_agent: 'dexter', created_at: at(65) }]
+  const map = (e: [string, RecipientPaneState][]) => new Map<string, RecipientPaneState>(e)
+
+  it('labels the pane saturated, forbids resend AND restart, and does not say "empty"', () => {
+    const msg = buildPendingStillWaitingNotice('friday', one, NOW, map([['deeper', 'saturated']]))
+    expect(msg).toMatch(/#7 deeper: .*TELITETT KONTEXTUST/)
+    expect(msg).toMatch(/ne kuldd ujra/i)
+    expect(msg).toMatch(/NE inditsd ujra innen/)
+    expect(msg).toMatch(/context-guard/)
+    expect(msg).not.toMatch(/URES/)
+    expect(msg).not.toMatch(/ujrakuldest NEM tiltom/)
+  })
+
+  it('saturated + busy: still the saturated advice, not the empty-pane warning', () => {
+    const msg = buildPendingStillWaitingNotice('friday', two, NOW, map([['deeper', 'saturated'], ['dexter', 'busy']]))
+    expect(msg).toMatch(/NE inditsd ujra innen/)
+    expect(msg).not.toMatch(/ujrakuldest NEM tiltom/)
+  })
+
+  it('saturated + idle: the empty-pane warning stays, and names the saturated exception', () => {
+    const msg = buildPendingStillWaitingNotice('friday', two, NOW, map([['deeper', 'saturated'], ['dexter', 'idle']]))
+    expect(msg).toMatch(/ujrakuldest NEM tiltom/)
+    expect(msg).toMatch(/A TELITETT cimzetteknek viszont NE kuldd ujra/)
+  })
+
+  it('CONTROL: an idle-only notice is unchanged -- no saturated line', () => {
+    const msg = buildPendingStillWaitingNotice('friday', one, NOW, map([['deeper', 'idle']]))
+    expect(msg).toMatch(/URES/)
+    expect(msg).toMatch(/ujrakuldest NEM tiltom/)
+    expect(msg).not.toMatch(/TELITETT/)
+  })
+})
+
 // THE NOTICE MUST REPORT WHAT IT MEASURED, NOT WHAT IT ASSUMES (card 1d800670).
 //
 // The old text said "a cimzett dolgozik" for every firing. friday's case had all

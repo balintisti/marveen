@@ -1445,7 +1445,11 @@ export function isMessageGuardNotice(text: string): boolean {
  *  a card. That asymmetry is the whole lesson of the day this card was rescoped
  *  -- a commit is visible to the recipient immediately, a message is not.
  */
-export type RecipientPaneState = 'busy' | 'idle' | 'unknown'
+// 'saturated' (card a466a216): the pane shows a context-saturation banner the dispatch gate
+// believes (saturationRefusesDispatch). detectPaneState reads such a pane as IDLE -- no
+// spinner -- because it CANNOT work, not because it is free; labelled idle, the notice lifted
+// the resend ban on the one pane the router refuses to inject into.
+export type RecipientPaneState = 'busy' | 'idle' | 'saturated' | 'unknown'
 
 export function buildPendingStillWaitingNotice(
   sender: string,
@@ -1459,6 +1463,7 @@ export function buildPendingStillWaitingNotice(
   const label: Record<RecipientPaneState, string> = {
     busy: 'a panelje BUSY (merve)',
     idle: 'a panelje URES (merve) -- NEM a munka tartja fel',
+    saturated: 'a panelje TELITETT KONTEXTUST mutat (merve) -- a context-guard teruletere tartozik',
     unknown: 'a panel-allapota NEM MEGALLAPITHATO (nincs munkamenet, vagy a capture bukott)',
   }
   const stateOf = (name: string): RecipientPaneState => paneStates.get(name) ?? 'unknown'
@@ -1478,19 +1483,32 @@ export function buildPendingStillWaitingNotice(
   // "do not resend" is an argument rather than an assumption: an idle pane means
   // the router should already have injected, and an unknown one is exactly the
   // case where the session may be gone and the message about to fail.
+  // A saturated pane is NOT "the router should already have injected": the router refuses it by
+  // design and the context-guard restarts it. Same words as the router's own session-stuck text
+  // (message-router.ts, "Do NOT restart it from here").
   const allBusy = rows.every((r) => stateOf(r.to_agent) === 'busy')
+  const anySaturated = rows.some((r) => stateOf(r.to_agent) === 'saturated')
+  const allBusyOrSaturated = rows.every((r) => stateOf(r.to_agent) === 'busy' || stateOf(r.to_agent) === 'saturated')
+  const saturatedAdvice = [
+    'Egy TELITETT panel a context-guard terulete: o maga inditja ujra a cimzettet (ket sweep utan),',
+    'es a `pending` sor a restartot is TULELI. Amit NE tegyel: ne kuldd ujra (duplikatum lenne), es',
+    'NE inditsd ujra innen -- egy masodik restart a sweep kozepen elveszti a guard folytatas-promptjat.',
+  ]
   const advice = allBusy
     ? [
         'Mind a cimzett panelje BUSY -- a router csak IDLE panelbe tud injektalni, tehat ez nem',
         'hiba. Amit NE tegyel: ne kuldd ujra. A `pending` sor az adatbazisban all es TULEL egy',
         'restartot is, tehat a masodik level duplikatum lenne.',
       ]
+    : allBusyOrSaturated
+    ? saturatedAdvice
     : [
         'FIGYELEM: NEM minden cimzett panelje BUSY (lasd a soronkenti merest). Ez NEM a szokasos',
         '"dolgozik, varj" eset: egy URES panel azt jelenti, hogy a routernek mar be kellett volna',
         'injektalnia, egy NEM MEGALLAPITHATO allapot pedig eppen az, amiben a munkamenet hianyozhat',
         'es az uzenet `failed`-be fordulhat. Itt az ujrakuldest NEM tiltom -- eloszb nezd meg,',
         'el-e a cimzett munkamenete.',
+        ...(anySaturated ? ['A TELITETT cimzetteknek viszont NE kuldd ujra, es NE inditsd ujra oket innen: azt a context-guard teszi.'] : []),
       ]
 
   // EVERY LINE ABOVE IS TRUE AT `nowMs` AND ONLY THEN -- card 1d800670, didi 2026-09-02.

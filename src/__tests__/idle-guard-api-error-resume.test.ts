@@ -210,7 +210,7 @@ vi.mock('../config.js', async (importOriginal) => {
 })
 vi.mock('../web/agent-process.js', () => ({
   capturePane: (session: string) => (panes.has(session) ? panes.get(session) : null),
-  isAgentRunning: () => true,
+  isAgentRunning: () => true, saturationRefusesDispatch: () => false,
 }))
 vi.mock('../web/channel-mcp-reconnect.js', () => ({ resolveAgentSession: (a: string) => `agent-${a}` }))
 vi.mock('../web/agent-config.js', () => ({

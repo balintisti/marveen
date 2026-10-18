@@ -98,7 +98,7 @@ vi.mock('../config.js', async (orig) => ({
 vi.mock('../logger.js', () => ({
   logger: { debug: (...a: unknown[]) => h.debug(...a), info: () => {}, warn: () => {}, error: () => {} },
 }))
-vi.mock('../web/agent-process.js', () => ({ capturePane: () => 'pane', isAgentRunning: () => true }))
+vi.mock('../web/agent-process.js', () => ({ capturePane: () => 'pane', isAgentRunning: () => true, saturationRefusesDispatch: () => false }))
 vi.mock('../web/channel-mcp-reconnect.js', () => ({ resolveAgentSession: (a: string) => `agent-${a}` }))
 vi.mock('../web/agent-config.js', () => ({
   listAgentNames: () => ['x'],
