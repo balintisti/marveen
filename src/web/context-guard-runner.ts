@@ -1,6 +1,9 @@
 import { statSync, readFileSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { logger } from '../logger.js'
+import { makeLazyBinResolver } from '../platform.js'
+import { tmuxStderr } from './tmux-stderr.js'
 import { MAIN_AGENT_ID, PROJECT_ROOT } from '../config.js'
 import { hardRestartMarveenChannels, lastMainRespawnAt, MARVEEN_POST_RESPAWN_GRACE_MS, markAgentRestartPending } from './channel-monitor.js'
 import { shouldDeferForRecentRespawn } from './stuck-tool-call-watcher.js'
@@ -19,7 +22,7 @@ import { sessionNameForAgent } from './session-names.js'
 import { sendSystemDirective } from './system-directive.js'
 import { notifyChannel } from '../notify.js'
 import { detectPaneState, paneShowsContextSaturation, paneShowsContextSaturationHardError, runningBackgroundWork } from '../pane-state.js'
-import { liveHeavyRunJobs } from '../heavy-run-jobs.js'
+import { descendsFrom, liveHeavyRunJobs } from '../heavy-run-jobs.js'
 import { usageLimitHolds } from '../usage-limit-window.js'
 import { readContextTokensFromProjectDir, readActiveModelFromProjectDir, readTranscriptMtimeFromProjectDir, predatesSession } from './active-model.js'
 import { readContextGuardConfig } from './context-guard-store.js'
@@ -62,6 +65,7 @@ import {
 // Remote-host agents are skipped: their transcripts live on the remote machine,
 // so the context size cannot be measured here (v1 limitation, logged once).
 
+const tmuxBin = makeLazyBinResolver('tmux')
 const INITIAL_DELAY_MS = 270_000
 const INTERVAL_MS = 300_000
 
@@ -405,23 +409,82 @@ async function performRestart(name: string): Promise<void> {
   }
 }
 
+/** One process-table snapshot and the agent's pane pid: what tells a heavy-run job that dies with
+ *  the restart from one launched detached (card 3c3d8e43). null = not measurable. */
+export type PaneTreeProbe = () => { rootPid: number; parentOf: Map<number, number> } | null
+
+/** pid -> parent pid for every process, from one `ps` snapshot; null when ps fails. `-A -o pid=,ppid=`:
+ *  BSD and procps both take it (context-restart-gate-runner getChildPids). */
+export function readParentTable(): Map<number, number> | null {
+  try {
+    const table = execFileSync('/bin/ps', ['-A', '-o', 'pid=,ppid='], { timeout: 5000, encoding: 'utf-8' })
+    const parentOf = new Map<number, number>()
+    for (const line of table.split('\n')) {
+      const m = /^\s*(\d+)\s+(\d+)\s*$/.exec(line)
+      if (m) parentOf.set(parseInt(m[1], 10), parseInt(m[2], 10))
+    }
+    return parentOf.size > 0 ? parentOf : null
+  } catch {
+    return null
+  }
+}
+
+function localPaneTree(session: string): ReturnType<PaneTreeProbe> {
+  let rootPid: number
+  try {
+    const raw = execFileSync(tmuxBin(), ['list-panes', '-t', session, '-F', '#{pane_pid}'],
+      { timeout: 3000, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] })
+    rootPid = parseInt(raw.split('\n')[0]?.trim() ?? '', 10)
+  } catch (err) {
+    logger.warn({ site: 'context-guard-runner.localPaneTree', session, tmux: tmuxStderr(err) }, 'tmux list-panes failed: pane tree not measured')
+    return null
+  }
+  if (!Number.isInteger(rootPid) || rootPid <= 1) return null
+  const parentOf = readParentTable()
+  return parentOf ? { rootPid, parentOf } : null
+}
+
+function jobText(jobs: { label: string; waiting: boolean; note?: string }[]): string {
+  return jobs.length > 0
+    ? `heavy-run: ${jobs.map((j) => j.label + (j.waiting ? ' (queued)' : '') + (j.note ?? '')).join(', ')}`
+    : ''
+}
+
 /**
  * The work an agent left running when its turn ended (card c8852bba): what its pane counts (shells,
  * monitors, sub-agents: runningBackgroundWork) and its live heavy-run jobs -- a gate started
- * detached is invisible to the pane. A routine restart waits for it; a hard one names it as killed.
+ * detached is invisible to the pane. A routine restart waits for all of it; a hard one names what
+ * it kills.
+ *
+ * "Kills" is a prediction, and until card 3c3d8e43 it named every heavy-run job: the detached ones
+ * survive `tmux kill-session`, and the fresh session was told to redo work that was still running
+ * (didi 10-16 08:43, friday 09:13). Each job is now placed by the pane's process tree: detachedWork
+ * counts the ones outside it, killedWorkDetail names the rest. A job whose place is not measurable
+ * stays with the killed (the old wording, never a false all-clear). backgroundWork is unchanged:
+ * the holds keep waiting for detached gates too.
  */
 export function measureBackgroundWork(
   name: string,
   pane: string | null,
   heavyRunDir?: string,
-): { backgroundWork: number; backgroundWorkDetail: string } {
+  probe: PaneTreeProbe = () => localPaneTree(sessionFor(name)),
+): { backgroundWork: number; backgroundWorkDetail: string; detachedWork: number; detachedWorkDetail: string; killedWorkDetail: string } {
   const inPane = pane !== null ? runningBackgroundWork(pane) : 0
   const jobs = liveHeavyRunJobs(name, heavyRunDir)
-  const backgroundWorkDetail = [
-    inPane > 0 ? `${inPane} in the pane (shells / monitors / sub-agents)` : '',
-    jobs.length > 0 ? `heavy-run: ${jobs.map((j) => (j.waiting ? `${j.label} (queued)` : j.label)).join(', ')}` : '',
-  ].filter(Boolean).join('; ')
-  return { backgroundWork: inPane + jobs.length, backgroundWorkDetail }
+  const tree = jobs.length > 0 ? probe() : null
+  const placed = jobs.map((j) => ({ ...j, attached: tree ? descendsFrom(j.pid, tree.rootPid, tree.parentOf) : null }))
+  const detached = placed.filter((j) => j.attached === false)
+  const killed = placed
+    .filter((j) => j.attached !== false)
+    .map((j) => ({ ...j, note: j.attached === null ? ' (pane link not measured)' : '' }))
+  const paneText = inPane > 0 ? `${inPane} in the pane (shells / monitors / sub-agents)` : ''
+  return {
+    backgroundWork: inPane + jobs.length,
+    backgroundWorkDetail: [paneText, jobText(jobs)].filter(Boolean).join('; '),
+    detachedWork: detached.length,
+    detachedWorkDetail: jobText(detached),
+    killedWorkDetail: [paneText, jobText(killed)].filter(Boolean).join('; '),
+  }
 }
 
 async function checkAgent(name: string, nowMs: number): Promise<void> {
@@ -546,7 +609,7 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
   // ONE transcript probe per sweep: the idle-flush/staleness inputs and the daily-tier
   // unused check read the same value (pinned by context-guard-saturation-mismatch).
   const idleMs = running && needPct ? measureIdleMs(name, nowMs, since) : null
-  const background = running && needPct ? measureBackgroundWork(name, pane) : { backgroundWork: 0, backgroundWorkDetail: '' }
+  const background = running && needPct ? measureBackgroundWork(name, pane) : { backgroundWork: 0, backgroundWorkDetail: '', detachedWork: 0, detachedWorkDetail: '', killedWorkDetail: '' }
 
   const inputs: GuardInputs = {
     nowMs,
