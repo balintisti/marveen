@@ -348,6 +348,20 @@ def _inside(path, root):
     return path == root or path.startswith(root + os.sep)
 
 
+def _base(command, start, cwd, dirs, env):
+    """The directory the git word at `start` runs in: cwd, then the last literal cd, then -C."""
+    base = cwd or os.getcwd()
+    cds = [c for c in _CD.finditer(command, 0, start) if not _closed_before(command, c.end(), start)]
+    if cds:
+        base = _literal(cds[-1].group(1), base, env)
+        # a cd that fails leaves the shell where it was: say so, do not guess "other"
+        if base is not _UNRESOLVABLE and not os.path.isdir(base):
+            base = _UNRESOLVABLE
+    for d in dirs:
+        base = _literal(d, base, env)
+    return base
+
+
 def find_hits(command, cwd, main):
     """Every clean / reset --hard whose target is the main checkout, as text lines."""
     hits = []
@@ -357,18 +371,10 @@ def find_hits(command, cwd, main):
         if not found:
             continue
         verb, dirs, work_tree, git_dir, specs = found
-        base = cwd or os.getcwd()
         env = _assignments(command, m.start())
         work_tree = work_tree if work_tree is not None else env.get("GIT_WORK_TREE")
         git_dir = git_dir if git_dir is not None else env.get("GIT_DIR")
-        cds = [c for c in _CD.finditer(command, 0, m.start()) if not _closed_before(command, c.end(), m.start())]
-        if cds:
-            base = _literal(cds[-1].group(1), base, env)
-            # a cd that fails leaves the shell where it was: say so, do not guess "other"
-            if base is not _UNRESOLVABLE and not os.path.isdir(base):
-                base = _UNRESOLVABLE
-        for d in dirs:
-            base = _literal(d, base, env)
+        base = _base(command, m.start(), cwd, dirs, env)
         root = main
         if work_tree is not None:
             wt = _literal(work_tree, base, env)
@@ -402,6 +408,84 @@ def find_hits(command, cwd, main):
     return hits
 
 
+# DISCARD BACKUP (card 90a4c57e). The trap the refusal above does not cover, because it is
+# routine in a worktree: a hand-run mutation round restores the file with
+# `git checkout -- <file>`, and every UNCOMMITTED change in that file goes with the
+# mutant. Three agents lost work this way (friday 08-22, dexter 08-28, computress 09-19;
+# the third knew the rule). Refusing is not possible -- the dangerous and the harmless
+# discard are the same command -- so the discard stays allowed and becomes RECOVERABLE:
+# before it runs, the change it throws away (`git diff HEAD` over the same pathspecs, or
+# the whole tree for reset --hard) is written to <git-common-dir>/discard-backups/.
+# Not covered: `git clean` (untracked files have no diff), a target behind -C/cd that
+# holds a variable, --work-tree / --git-dir.
+BACKUP_DIR_NAME = "discard-backups"
+BACKUP_KEEP_DAYS = 14
+BACKUP_MAX_BYTES = 20 * 1024 * 1024
+
+
+# 4 s per call: the hook as a whole has 10 s in settings.json, and two git calls must fit
+def _git_out(base, *args, timeout=4):
+    out = subprocess.run(["git", "-C", base] + list(args), capture_output=True, timeout=timeout)
+    return out.stdout if out.returncode == 0 else None
+
+
+def backup_discards(command, cwd):
+    """[(path, lines, files, top)] for each discard in `command` that has something to lose."""
+    saved = []
+    for m in _GIT.finditer(command):
+        found = destructive(_tokens(command, m.end()))
+        if not found:
+            continue
+        verb, dirs, work_tree, git_dir, specs = found
+        if verb == "git clean" or work_tree is not None or git_dir is not None:
+            continue
+        env = _assignments(command, m.start())
+        if env.get("GIT_WORK_TREE") or env.get("GIT_DIR"):
+            continue
+        base = _base(command, m.start(), cwd, dirs, env)
+        if base is _UNRESOLVABLE or not os.path.isdir(base):
+            continue
+        args = ["diff", "HEAD", "--binary"]
+        if specs is not None:
+            words = [w for w, _lenient in specs]
+            if any(_VAR.search(w) or "`" in w or "$(" in w for w in words):
+                continue
+            args += ["--"] + words
+        patch = _git_out(base, *args)
+        top = toplevel(base)
+        if not patch or not top or len(patch) > BACKUP_MAX_BYTES:
+            continue
+        common = (_git_out(base, "rev-parse", "--path-format=absolute", "--git-common-dir") or b"").decode().strip()
+        if not common:
+            continue
+        bdir = os.path.join(common, BACKUP_DIR_NAME)
+        os.makedirs(bdir, exist_ok=True)
+        cutoff = time.time() - BACKUP_KEEP_DAYS * 86400
+        for name in os.listdir(bdir):
+            p = os.path.join(bdir, name)
+            if name.endswith(".patch") and os.path.getmtime(p) < cutoff:
+                os.remove(p)
+        name = "%s-%s-%d-%d.patch" % (time.strftime("%Y%m%d-%H%M%S"), os.path.basename(top), os.getpid(), len(saved))
+        path = os.path.join(bdir, name)
+        header = ("# discarded by: %s\n# tree: %s\n# restore: git -C %s apply %s\n"
+                  % (command[:300].replace("\n", " "), top, top, path)).encode()
+        with open(path, "wb") as fh:
+            fh.write(header + patch)
+        files = patch.count(b"\ndiff --git ") + (1 if patch.startswith(b"diff --git ") else 0)
+        lines = sum(1 for ln in patch.split(b"\n") if ln[:1] in (b"+", b"-") and ln[:3] not in (b"+++", b"---"))
+        saved.append((path, lines, files, top))
+        log("BACKUP", "%s (%d lines, %d files)" % (path, lines, files), command)
+    return saved
+
+
+def say_saved(saved):
+    """Tell the agent where the discarded change went. Best effort: the BACKUP is the protection;
+    this line only shortens the way back. No permissionDecision -- the normal flow decides."""
+    text = "GIT-OR: a parancs nem commitolt valtozast dob el; ELOTTE elmentettem (kartya 90a4c57e):\n" + "\n".join(
+        "  %s (%d sor, %d fajl)  visszaallitas: git -C %s apply %s" % (p, n, f, top, p) for p, n, f, top in saved)
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": text}}))
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -415,12 +499,19 @@ def main():
         if not any(destructive(_tokens(command, m.end())) for m in _GIT.finditer(command)):
             sys.exit(0)
         main_root = main_checkout()
-        hits = find_hits(command, str(payload.get("cwd") or "") or os.getcwd(), main_root)
-        if not hits:
-            sys.exit(0)
-        if OVERRIDE.search(command):
-            log("OVERRIDE", "; ".join(hits), command)
-            sys.stderr.write("GIT-OR: ATENGEDVE MARVEEN_GIT_GUARD=allow miatt (naplozva).\n")
+        cwd = str(payload.get("cwd") or "") or os.getcwd()
+        hits = find_hits(command, cwd, main_root)
+        if not hits or OVERRIDE.search(command):
+            if hits:
+                log("OVERRIDE", "; ".join(hits), command)
+                sys.stderr.write("GIT-OR: ATENGEDVE MARVEEN_GIT_GUARD=allow miatt (naplozva).\n")
+            # the command will run: save what it throws away. Its own failure never blocks.
+            try:
+                saved = backup_discards(command, cwd)
+                if saved:
+                    say_saved(saved)
+            except Exception as exc:
+                log("BACKUP-FAIL", "internal error: %s" % exc, command)
             sys.exit(0)
         log("DENY", "; ".join(hits), command)
     except SystemExit:
