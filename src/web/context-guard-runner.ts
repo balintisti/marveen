@@ -307,6 +307,12 @@ export function resumePrompt(
     `és minden ott talált, még el nem intézett kérést kezelj újként. KÖTELEZŐ MEGFIGYELHETŐ NYOM: minden ` +
     `visszaolvasott tételről küldj rövid nyugtát a feladónak ("[RESTART-ABLAK] <id> felvéve a friss sessionben"), ` +
     `akkor is, ha nincs belőle teendő -- e nélkül a visszaolvasás a sorból láthatatlan. ` +
+    // af9a6838: "system" is not a registered agent, so an ack POSTed to it is
+    // refused (400 unknown recipient) -- and the guard's own notice is in
+    // almost every window (deeper retried 3x, msg 28923). The trace for those
+    // rows is the row itself, closed with a result and no receipt.
+    `KIVÉTEL: a "system" feladó nem ágens, neki küldött nyugta 400-at kap -- az ilyen tételt ` +
+    `PUT /api/messages/<id> {"status":"done","result":"[RESTART-ABLAK] felvéve a friss sessionben","notify":false} zárja, ez a nyoma. ` +
     // RESPAWNZAJ822/PRODFAAG822: a fresh session acting on a resume goal is
     // exactly the actor that branch-switched and committed on the live prod
     // tree (2026-08-22 10:10, PR #1036 duplicate). The constraint must ride in
