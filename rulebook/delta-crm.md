@@ -2437,15 +2437,16 @@ When writing database migrations:
   point is therefore the MERGE, not the commit -- which is where the review has to happen.
   `npx prisma generate` is safe to run locally and does not touch any database.
   **DE EZ EGY TENGELYRE IGAZ, ÉS TENGELY NÉLKÜL OLVASÓDIK** (dexter mérte 2026-08-28): az
-  ADATBÁZIS-tengelyen teljes, a FÁJLRENDSZER-tengelyen nem. Mérve: **41 worktree, 29 symlinkelt
-  `node_modules`, ebből 28 UGYANARRA a célra** -- tehát a generált kliens KÖZÖS. Egy `generate`
-  egy be nem olvasztott ágon MINDENKI kliensét átírja, és a kár néma: a `tsc` átengedi azt a
-  mezőt, amit a kliens ismer és a te sémád nem.
-  A megosztás SZÁNDÉKOS (28 azonos symlink nem véletlen), és nem javasoljuk a megszüntetését --
-  a hiány az volt, hogy a kockázata sehol nem állt leírva. Aki séma-függő állítást tesz, előbb
-  nézze meg, MELYIK fából generálódott a kliens (`node_modules/.prisma/client/schema.prisma`
-  mtime + normalizált összevetés a saját sémájával -- NYERS HASH-t ne használjon, az a
-  formázáson is eltér). Kártya: `51856a6a`.
+  ADATBÁZIS-tengelyen teljes, a FÁJLRENDSZER-tengelyen nem. 2026-08-28-án dexter **41 worktree-ből 29 symlinkelt `node_modules`-t** mért (28 ugyanarra a célra),
+  vagyis AKKOR a generált kliens KÖZÖS volt. **MA NEM AZ** (mérve 2026-10-18 03:00 CEST, `git worktree list`
+  a sajat-crm repón: 134 worktree, 0 symlinkelt `node_modules`, 36-nak saját, klónozott
+  `sajat-crm/backend/api/node_modules/.prisma/client`-je; jarvis 10-16: ezek 11 különböző tartalmat
+  ismernek, ebből 2 egyezik a main-nel). A kliens worktree-nkénti: egy `generate` csak AZT a fát írja.
+  A kockázat nem szűnt meg, csak más alakú: a klónozott kliens a KLÓN pillanatának sémáját ismeri, és
+  a `tsc` ugyanúgy átengedi azt a mezőt, amit a kliens ismer és a te sémád nem. Aki séma-függő
+  állítást tesz, AZON a worktree-n vesse össze a `node_modules/.prisma/client/schema.prisma`-t a saját
+  `prisma/schema.prisma`-jával (normalizált összevetés -- NYERS HASH-t ne, az a formázáson is eltér).
+  Kártyák: `51856a6a`, `081f6910`.
 
   **ÉS A KIÚT, AMI EDDIG NEM ÁLLT ITT: A LAP A VESZÉLYT ÍRTA LE, A MEGKERÜLÉSÉT NEM** -- egy
   tiltás kiút nélkül addig tart, amíg valakinek tényleg generálnia kell. dexter csinálta meg
