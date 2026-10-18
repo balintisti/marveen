@@ -43,6 +43,10 @@ export const KANBAN_STATUSES = ['planned', 'in_progress', 'testing', 'waiting', 
 /** The values `kanban_cards.priority` accepts. Same contract as above. */
 export const KANBAN_PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const
 
+/** The nullable TEXT columns `createKanbanCard` writes from the body. `due_date`
+ *  is not here: kanban-due-date.ts owns it. */
+export const KANBAN_TEXT_FIELDS = ['description', 'assignee', 'project', 'parent_id'] as const
+
 function listFor(allowed: readonly string[]): string {
   return allowed.join(', ')
 }
@@ -55,6 +59,14 @@ function listFor(allowed: readonly string[]): string {
  * about is not rejected here: inventing a rule the schema does not enforce would
  * turn a working call into a 400, which is the more expensive direction for a
  * fleet whose agents all write to this endpoint.
+ *
+ * The TEXT columns are the one widening (card dd7f1165, sirius 2026-10-14): a
+ * boolean, object or array there is refused by the DRIVER, not the schema --
+ * better-sqlite3 throws on the bind, and the caller got the same anonymous 500
+ * this file exists to remove. A number is bound and silently stored as text,
+ * which for `assignee`/`parent_id` is an owner or a parent nobody has: an
+ * `{ok:true}` card no dispatcher routes. Both are refused by name. Whether a
+ * `parent_id` POINTS at a card needs the database, so the route asks that.
  */
 export function kanbanCreateError(data: unknown): string | undefined {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
@@ -77,6 +89,12 @@ export function kanbanCreateError(data: unknown): string | undefined {
   if ('priority' in d && d.priority !== undefined && d.priority !== null) {
     if (typeof d.priority !== 'string' || !(KANBAN_PRIORITIES as readonly string[]).includes(d.priority)) {
       return `Ervenytelen \`priority\`: ${JSON.stringify(d.priority)}. Engedett ertekek: ${listFor(KANBAN_PRIORITIES)}.`
+    }
+  }
+
+  for (const field of KANBAN_TEXT_FIELDS) {
+    if (field in d && d[field] !== undefined && d[field] !== null && typeof d[field] !== 'string') {
+      return `Ervenytelen \`${field}\`: ${JSON.stringify(d[field])}. Szoveg (string) vagy null lehet.`
     }
   }
 
