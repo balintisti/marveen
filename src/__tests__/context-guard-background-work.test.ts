@@ -426,6 +426,15 @@ describe('a heavy-run job is placed by the pane process tree: killed or detached
     )
   })
 
+  it('pane tree NOT measured: KILLS carries the unmeasured mark, not the plain list (didi 38866)', () => {
+    const unmeasured = {
+      backgroundWork: 1, backgroundWorkDetail: 'heavy-run: dexter-gate', detachedWork: 0, detachedWorkDetail: '',
+      killedWorkDetail: 'heavy-run: dexter-gate (pane link not measured)',
+    }
+    const d = decideGuard(INITIAL_GUARD_STATE, inputs({ pct: 0.99, ...unmeasured }), CFG)
+    expect(d.reason).toBe('hard threshold (99% >= 97%) -- KILLS running background work: 1 (heavy-run: dexter-gate (pane link not measured))')
+  })
+
   it('only detached work: no KILLS at all, the prediction alone', () => {
     const only = { backgroundWork: 1, backgroundWorkDetail: 'heavy-run: didi-dd90 (queued)', detachedWork: 1, detachedWorkDetail: 'heavy-run: didi-dd90 (queued)', killedWorkDetail: '' }
     const d = decideGuard(INITIAL_GUARD_STATE, inputs({ pct: 0.99, ...only }), CFG)

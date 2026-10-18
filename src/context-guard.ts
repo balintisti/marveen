@@ -630,7 +630,13 @@ function backgroundWorkText(inputs: GuardInputs): string {
 function killedNote(inputs: GuardInputs): string {
   const total = inputs.backgroundWork ?? 0
   const detached = Math.min(inputs.detachedWork ?? 0, total)
-  if (detached === 0) return total > 0 ? ` -- KILLS running background work: ${backgroundWorkText(inputs)}` : ''
+  // killedWorkDetail, not backgroundWorkDetail, even with nothing detached: a job whose place the
+  // probe could not measure carries its '(pane link not measured)' mark only there (didi 38866).
+  if (detached === 0) {
+    if (total === 0) return ''
+    const detail = inputs.killedWorkDetail || inputs.backgroundWorkDetail
+    return ` -- KILLS running background work: ${detail ? `${total} (${detail})` : String(total)}`
+  }
   const killed = total - detached
   const text = (n: number, detail: string | undefined) => (detail ? `${n} (${detail})` : String(n))
   return (killed > 0 ? ` -- KILLS running background work: ${text(killed, inputs.killedWorkDetail)}` : '') +
