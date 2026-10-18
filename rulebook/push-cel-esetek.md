@@ -675,7 +675,9 @@ nem abban a skillben van, amit ehhez hivna.** A szabaly helyes, mert van, megnev
 
 **A KAR, AMIT A SYMLINK OKOZ, MERVE:** 108 worktree-bol **70 symlinkeli** a `node_modules`-t, es 66
 ut UGYANARRA a generalt Prisma-kliensre mutat. **Egy `prisma generate` barmelyikben a TOBBI 65
-klienset is atirja** -- masok futo munkaja kozben. Es a hiba iranya a megnyugtato: a kliens
+klienset is atirja** -- masok futo munkaja kozben. *(Ez a SYMLINKELT allapotra all. 2026-10-18-an
+134 worktree-bol 0 symlinkeli a `node_modules`-t, 36-nak sajat klonozott kliense van: a klon-szabaly
+hatott, a kozos kliens kara megszunt; a maradek kockazat az elavult klon, kartya `081f6910`.)* Es a hiba iranya a megnyugtato: a kliens
 SZELESEBB lehet a fanal, tehat a `tsc` ZOLDEN atenged olyan mezot, ami az adott ag semajaban nincs.
 
 **A KLON ARA GYAKORLATILAG NULLA, harom fuggetlen meressel:** 1,0 GB latszolagos meret,
