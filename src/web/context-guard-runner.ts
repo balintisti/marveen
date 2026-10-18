@@ -43,6 +43,9 @@ import {
   dailyHandoffUnused,
   IDLE_FLUSH_REASON_PREFIX,
   INITIAL_GUARD_STATE,
+  READY_POLL_MS,
+  READY_TIMEOUT_MS,
+  READY_TIMEOUT_REASON,
   STALE_REFRESH_REASON_PREFIX,
   SATURATION_CREDIBLE_MIN_PCT,
   saturationBannerCredible,
@@ -776,6 +779,14 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
         'context-guard: idle-flush not acting',
       )
     }
+    // The one give-up of the restart path: the agent runs, but without the
+    // "continue from your handoff" prompt. Silent until card 9c182807.
+    if (decision.reason === READY_TIMEOUT_REASON) {
+      logger.warn(
+        { name, readyTimeoutMs: READY_TIMEOUT_MS },
+        'context-guard: restarted session never read as ready -- resume prompt NOT injected',
+      )
+    }
     return
   }
 
@@ -1046,22 +1057,88 @@ export function getHardGuardPhase(name: string): string {
   return guardStates.get(name)?.phase ?? 'idle'
 }
 
-export function startContextGuardRunner(): NodeJS.Timeout {
-  let tickRunning = false
-  const warnMissingConfig = makeContextGuardConfigWarner((msg) => logger.warn(msg))
+/** Agents the ready poll re-checks between sweeps: those waiting for a restarted session. */
+export function awaitReadyAgents(states: ReadonlyMap<string, GuardState>): string[] {
+  return [...states].filter(([, s]) => s.phase === 'await-ready').map(([name]) => name)
+}
+
+/** Test seam: put one agent into a guard phase without driving the whole restart path. */
+export function _setGuardStateForTest(name: string, state: GuardState | null): void {
+  if (state === null) guardStates.delete(name)
+  else guardStates.set(name, state)
+}
+
+export interface GuardTickDeps {
+  /** Every agent the 5-minute sweep checks (computed once per sweep). */
+  sweepNames: () => string[]
+  /** The subset the ready poll re-checks between sweeps. */
+  awaitReadyNames: () => string[]
+  check: (name: string, nowMs: number) => Promise<void>
+}
+
+/**
+ * The two ticks of the runner, and how they exclude each other (card 9c182807).
+ *
+ * The sweep skips only an overlapping SWEEP (a restart in flight can outlive
+ * the interval; the next sweep re-evaluates everyone). A ready poll in flight
+ * does not make it skip -- it waits for the poll, which only checks
+ * await-ready agents and finishes in seconds. Sharing one flag here made a
+ * sweep that collided with a poll skip EVERY agent for five minutes (didi
+ * 38459). The poll in turn never starts while a sweep (or another poll) runs,
+ * so two checks of one agent never interleave.
+ */
+export function makeGuardTicks(deps: GuardTickDeps): { sweep: () => Promise<void>; readyPoll: () => Promise<void> } {
+  let sweepRunning = false
+  let pollInFlight: Promise<void> | null = null
+
   async function sweep() {
     // Re-entrancy guard: checkAgent's 'restart' action now awaits a real
     // restartAgentProcess (no longer a blocking execSync('sleep N')), so a
     // sweep with a restart in flight can still be running when the next
     // interval fires. Skip an overlapping tick; the next tick re-evaluates
     // every agent, so nothing is missed.
-    if (tickRunning) {
+    if (sweepRunning) {
       logger.debug('context-guard: previous sweep still running, skipping this tick')
       return
     }
-    tickRunning = true
+    sweepRunning = true
     try {
+      if (pollInFlight) await pollInFlight
       const now = Date.now()
+      for (const name of deps.sweepNames()) {
+        try { await deps.check(name, now) } catch (err) { logger.debug({ err, agent: name }, 'context-guard: agent check error') }
+      }
+    } finally {
+      sweepRunning = false
+    }
+  }
+
+  // Between sweeps, re-check only the agents in await-ready, so the resume
+  // prompt lands within READY_POLL_MS of the session reading ready instead of
+  // depending on what the pane shows at the next 5-minute sweep (card 9c182807).
+  async function readyPoll() {
+    if (sweepRunning || pollInFlight) return
+    const names = deps.awaitReadyNames()
+    if (names.length === 0) return
+    pollInFlight = (async () => {
+      for (const name of names) {
+        try { await deps.check(name, Date.now()) } catch (err) { logger.debug({ err, agent: name }, 'context-guard: ready poll error') }
+      }
+    })()
+    try {
+      await pollInFlight
+    } finally {
+      pollInFlight = null
+    }
+  }
+
+  return { sweep, readyPoll }
+}
+
+export function startContextGuardRunner(): NodeJS.Timeout {
+  const warnMissingConfig = makeContextGuardConfigWarner((msg) => logger.warn(msg))
+  const { sweep, readyPoll } = makeGuardTicks({
+    sweepNames: () => {
       const names = guardSweepAgentNames()
       // An agent with no entry in store/context-guard.json falls back to the opt-in
       // default, which means idleFlushEnabled=false while its peers run with it true --
@@ -1070,13 +1147,12 @@ export function startContextGuardRunner(): NodeJS.Timeout {
       // only, never contents; see context-guard-config-warning.ts for why the default is
       // NOT being flipped instead (it is upstream code stating a deliberate choice).
       warnMissingConfig(names, Object.keys(readAllContextGuardConfigs()))
-      for (const name of names) {
-        try { await checkAgent(name, now) } catch (err) { logger.debug({ err, agent: name }, 'context-guard: agent check error') }
-      }
-    } finally {
-      tickRunning = false
-    }
-  }
+      return names
+    },
+    awaitReadyNames: () => awaitReadyAgents(guardStates),
+    check: checkAgent,
+  })
   setTimeout(sweep, INITIAL_DELAY_MS)
+  setInterval(readyPoll, READY_POLL_MS)
   return setInterval(sweep, INTERVAL_MS)
 }

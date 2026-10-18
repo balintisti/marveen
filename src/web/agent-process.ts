@@ -3137,15 +3137,25 @@ export async function submitOwnSlashCommand(
   cmd: string,
   deps: OwnSlashSubmitDeps,
 ): Promise<'submitted' | 'still-parked'> {
+  // A keystroke that THROWS is an Enter that did not land, not a reason to skip the check below.
+  // Measured 2026-10-14 18:11:50 (trillian, card 9c182807): `tmux send-keys Enter` died on SIGABRT,
+  // the throw jumped past this loop, and `/rename Trillian` stayed parked until a manual restart.
+  const enter = () => {
+    try {
+      deps.pressEnter()
+    } catch (err) {
+      logger.warn({ err, cmd }, 'Own slash command: the Enter keystroke failed; re-reading the input box')
+    }
+  }
   deps.typeLiteral(cmd)
   await deps.delay(300)
-  deps.pressEnter()
+  enter()
   for (let extra = 0; extra <= IDENTITY_SUBMIT_MAX_EXTRA_ENTERS; extra++) {
     await deps.delay(800)
     const parked = deps.readParked()
     if (parked == null || !parked.includes(cmd)) return 'submitted'
     if (extra === IDENTITY_SUBMIT_MAX_EXTRA_ENTERS) break
-    deps.pressEnter()
+    enter()
   }
   return 'still-parked'
 }

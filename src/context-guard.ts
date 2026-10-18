@@ -713,7 +713,16 @@ export interface GuardDecision {
 // How long await-ready waits for the restarted session to accept the resume
 // prompt before giving up (the agent still comes up fine -- it just starts
 // without the injected pointer; kanban/memory hooks remain).
-export const READY_TIMEOUT_MS = 5 * 60_000
+//
+// It was 5 min, the same as the runner's sweep interval, so the window held ONE
+// readiness check: a session still booting at that single sweep was given up,
+// without a log line (card 9c182807; dashboard.log 10-14..10-17: 127 of 446
+// guard restarts never got an inject-resume). The runner now re-checks
+// await-ready agents every READY_POLL_MS, and the window spans three sweeps.
+export const READY_TIMEOUT_MS = 15 * 60_000
+/** Re-check period for agents in await-ready (context-guard-runner), far below READY_TIMEOUT_MS. */
+export const READY_POLL_MS = 20_000
+export const READY_TIMEOUT_REASON = 'ready timeout -- giving up on resume injection'
 
 function cooldown(nowMs: number, cfg: ContextGuardConfig, reason: string): GuardDecision {
   return {
@@ -937,7 +946,7 @@ export function decideGuard(
         }
       }
       if (nowMs >= state.deadlineMs) {
-        return cooldown(nowMs, cfg, 'ready timeout -- giving up on resume injection')
+        return cooldown(nowMs, cfg, READY_TIMEOUT_REASON)
       }
       return none('waiting for restarted session')
     }
