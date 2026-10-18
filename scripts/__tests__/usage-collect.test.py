@@ -497,6 +497,23 @@ class TestStatuslineFallback(unittest.TestCase):
         r3, _ = self._run({"claude": r2}, sl)               # back: statusline again
         self.assertEqual(r3["source"], "statusline")
 
+    def test_the_anchor_is_plan_aware(self):
+        # didi P5 survivor: another plan's last answer is another account -- its anchor must not
+        # prove this one's statusline. A section without a plan counts as the host plan.
+        latest, _, anchor = self._fixtures()
+        with tempfile.TemporaryDirectory() as tmp:
+            lp = os.path.join(tmp, "usage-latest.json")
+            latest["claude"]["plan"] = "max20"
+            with open(lp, "w", encoding="utf-8") as f: json.dump(latest, f)
+            self.assertEqual(uc._read_week_anchor(path=lp, plan="max20"), anchor)
+            self.assertIsNone(uc._read_week_anchor(path=lp, plan="max5"))
+            self.assertEqual(uc._read_week_anchor(path=lp), anchor)  # no plan asked: no filter
+            del latest["claude"]["plan"]
+            with open(lp, "w", encoding="utf-8") as f: json.dump(latest, f)
+            with patch.object(uc, "_host_plan", return_value="max5"):
+                self.assertIsNone(uc._read_week_anchor(path=lp, plan="max20"))
+                self.assertEqual(uc._read_week_anchor(path=lp, plan="max5"), anchor)
+
     def test_a_statusline_snapshot_is_never_reused_as_the_authoritative_cache(self):
         latest, sl, _ = self._fixtures()
         r1, _ = self._run(latest, sl)
