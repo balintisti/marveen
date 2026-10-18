@@ -38,6 +38,8 @@
 #   minden nem-nulla kodot `fail`-nek olvas, igy egy RIASZTOTT, valtozatlan allapot minden futason
 #   `fail`-t irt: merve 2026-10-16, 157 egymas utani `fail` -- es egy telitett halal-jelzo nem jelzi
 #   a valodi halalt. A lelet utja az uzenet (marveen), a kilepesi kod azt mondja meg, MUKODIK-E az or.
+#   Utemezett futasnal a VERDIKT-sort SENKI nem olvassa (command-task.ts olvasatlanul uriti a
+#   stdout-ot): a megdoles tartos nyoma az ALLAPOT-FAJL, a hangos ut az atmenetkori uzenet.
 #
 # A `NEM MERTEM` es a `NULLA` megkulonboztetese nem stilus: e nelkul egy elszakadt adatbazis-
 # kapcsolat ugyanugy nez ki, mint egy egeszseges berlo-hatar. A meres az eles adatbazisrol

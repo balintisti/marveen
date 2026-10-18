@@ -58,6 +58,19 @@ run 1 1 12 30 0
   && pass "unchanged breach: no resend, exit 0 (was exit 2 = a scheduler fail every run)" \
   || fail "unchanged breach: rc=$RC sends=$(sends) last='$(echo "$OUT" | tail -1)'"
 
+# didi 37133: with the exit code at 0 for a breach, the state file is the guard's ONLY loud path,
+# so both of its transitions are pinned here, not just the first alert.
+run 1 1 12 30 0
+[ "$(sends)" = 1 ] && [ "$(cat "$TMP/state")" = breached ] \
+  && pass "third breach in a row: still 1 alert (the unchanged branch restores 'breached')" \
+  || fail "third breach: sends=$(sends) state=$(cat "$TMP/state")"
+
+run 0 0 12 30 0
+run 1 1 12 30 0
+[ "$(sends)" = 2 ] && [ "$(cat "$TMP/state")" = breached ] \
+  && pass "breached -> clear -> breached: the second breach alerts again (2 alerts)" \
+  || fail "re-breach after clear: sends=$(sends) state=$(cat "$TMP/state")"
+
 rm -f "$TMP/state"; touch "$TMP/send.fail"
 run 1 1 12 30 0
 [ "$RC" = 6 ] && pass "breach, alert NOT delivered: exit 6 (stays a failure)" || fail "undelivered: rc=$RC"
