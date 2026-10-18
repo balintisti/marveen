@@ -422,6 +422,13 @@ OLDEST=$(locals | head -1)
 backup_decrypt K1 "$BUCKET/$OLDEST.gpg" "$TMP/old.rt" 2>/dev/null && cmp -s "$TMP/old.rt" "$TMP/backups/$OLDEST" \
   && ok 'a) egy potolt objektum a helyi mentesre fejtodik vissza' || no 'a) a potolt objektum nem adja vissza a helyi mentest'
 [ ! -f "$BUCKET/$OLDEST" ] && ok 'a) nyers .dump nem kerult fel' || no 'a) NYERS objektum kerult a bucketbe'
+# a2) a FULL bucket: a second run uploads nothing old again. Without the `.gpg` name in the
+#     missing-filter every encrypted copy reads as absent and every dump re-uploads each night
+#     (trillian 31600: that mutant survived every case above).
+: > "$TMP/backups/backup.log"
+sleep 1; /bin/bash "$TMP/scripts/delta-crm-backup.sh" >/dev/null 2>&1
+P=$(grep -c 'R2 POTOLVA' "$TMP/backups/backup.log")
+[ "$P" = 0 ] && ok 'a2) teli bucket -> masodik futas 0 potlast tolt fel' || no "a2) teli bucketnel is $P POTOLVA sor (minden mentes ujra felmegy)"
 
 # b) one old dump's put keeps failing: tonight and the rest still go up, the
 #    stray remote object is still pruned (the gate is TONIGHT, not the catch-up),
@@ -457,6 +464,24 @@ LEG=$(locals | head -1); cp "$TMP/backups/$LEG" "$BUCKET/$LEG"
 sleep 1; /bin/bash "$TMP/scripts/delta-crm-backup.sh" >/dev/null 2>&1
 [ -f "$BUCKET/$LEG" ] && [ ! -f "$BUCKET/$LEG.gpg" ] && ok 'd) a regi nyers objektumot nem duplazza .gpg-vel' || no 'd) a regi nyers objektum melle .gpg is felment'
 [ "$(missing)" = 0 ] && ok 'd) a tobbi felment' || no "d) $(missing) hianyzik"
+
+echo "== 14. a havi archivum 12 HONAPIG el, a 13. mar torlodik (fe4d8ccc, ASZF-igeret) =="
+# The terms promise the backups lose deleted data after 12 months at the latest (Isti 5121).
+# backup-retention.sh --self-test pins the helper; this pins the SCRIPT's own MONTHLY_KEEP
+# wiring end to end (trillian 31599: changing 12 broke no test). The month 11 back is the
+# oldest kept (the current month counts as one), the month 12 back is the first pruned.
+M11=$(date -v-11m +%Y%m); M12=$(date -v-12m +%Y%m)
+K11="delta-crm-${M11}01-000000-public.dump"; K12="delta-crm-${M12}01-000000-public.dump"
+: > "$TMP/backups/$K11"; : > "$TMP/backups/$K12"
+# 14 newer fillers, so the daily window cannot be what keeps either of them.
+CUR=$(date +%Y%m)
+for d in 01 02 03 04 05 06 07 08 09 10 11 12 13 14; do : > "$TMP/backups/delta-crm-${CUR}${d}-000000-public.dump"; done
+: > "$TMP/backups/backup.log"
+sleep 1; /bin/bash "$TMP/scripts/delta-crm-backup.sh" >/dev/null 2>&1
+[ -f "$TMP/backups/$K11" ] && ok "a 11 honapja ($M11) havi mentes megmaradt" || no "a 11 honapja ($M11) havi mentes TOROLVE (12 honap alatt)"
+[ -f "$TMP/backups/$K12" ] && no "a 12 honapja ($M12) havi mentes MEGMARADT (12 honapnal tovabb tartja)" || ok "a 12 honapja ($M12) havi mentes torolve"
+grep -q "PRUNE $K12" "$TMP/backups/backup.log" && ok 'a naplo megnevezi a torolt havi mentest' || no 'a torolt havi mentes nincs a naploban'
+rm -f "$TMP/backups/$K11" "$TMP/backups"/delta-crm-${CUR}0[1-9]-000000-public.dump "$TMP/backups"/delta-crm-${CUR}1[0-4]-000000-public.dump
 
 echo
 echo "  $PASS ok, $FAIL bukott"
