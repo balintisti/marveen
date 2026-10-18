@@ -129,7 +129,7 @@ describe('writeRestartTail writes, replaces and removes the tail file', () => {
   // MAIN_AGENT_ID is mocked to marveen, whose working dir is PROJECT_ROOT = SANDBOX.
   const HANDOFF = join(SANDBOX, 'HANDOFF.md')
   const TAIL = join(SANDBOX, 'HANDOFF-RESTART-TAIL.md')
-  const inputs = { backgroundWork: 1, backgroundWorkDetail: 'heavy-run: gate-x' } as never
+  const inputs = { backgroundWork: 1, backgroundWorkDetail: 'heavy-run: gate-x', detachedWork: 0, detachedWorkDetail: '', killedWorkDetail: 'heavy-run: gate-x' } as never
   const NOW = Date.UTC(2026, 9, 18, 3, 57)
   const reset = () => { for (const f of [HANDOFF, TAIL]) if (existsSync(f)) unlinkSync(f); getAgentCommentsSince.mockReset() }
 
@@ -144,6 +144,17 @@ describe('writeRestartTail writes, replaces and removes the tail file', () => {
     expect(t).toContain('- 2140095d')
     expect(getAgentCommentsSince.mock.calls[0][0]).toBe('marveen')
     expect(getAgentCommentsSince.mock.calls[0][1]).toBe(statSync(HANDOFF).mtimeMs / 1000)
+  })
+  it('pane tree not measured: the killed line keeps the unmeasured mark (didi 38866)', () => {
+    reset()
+    writeFileSync(HANDOFF, '# old')
+    getAgentCommentsSince.mockReturnValue([])
+    const unmeasured = {
+      backgroundWork: 1, backgroundWorkDetail: 'heavy-run: gate-x', detachedWork: 0, detachedWorkDetail: '',
+      killedWorkDetail: 'heavy-run: gate-x (pane link not measured)',
+    } as never
+    writeRestartTail('marveen', unmeasured, 42, '⏺ x', NOW)
+    expect(readFileSync(TAIL, 'utf8')).toContain('1 futott, es a restart MEGOLTE: heavy-run: gate-x (pane link not measured).')
   })
   it('a detached gate is written as surviving, the pane work as killed (didi 38853, card 3c3d8e43)', () => {
     reset()

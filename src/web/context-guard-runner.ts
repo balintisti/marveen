@@ -172,11 +172,12 @@ export function writeRestartTail(name: string, inputs: GuardInputs, staleMinutes
     }
     // Same split as the restart reason (killedNote, card 3c3d8e43): a detached gate survives the
     // kill, and calling it killed would have the fresh session start a second one beside it.
+    // killedWorkDetail even with nothing detached: only it carries '(pane link not measured)' (didi 38866).
     const total = inputs.backgroundWork ?? 0
     const detached = Math.min(inputs.detachedWork ?? 0, total)
     writeFileSync(path, buildRestartTail({
       name, nowMs, handoffMtimeMs: mtime, staleMinutes,
-      killedCount: total - detached, killedDetail: (detached > 0 ? inputs.killedWorkDetail : inputs.backgroundWorkDetail) ?? '',
+      killedCount: total - detached, killedDetail: inputs.killedWorkDetail || inputs.backgroundWorkDetail || '',
       detachedCount: detached, detachedDetail: inputs.detachedWorkDetail ?? '',
       pane, comments,
     }))
