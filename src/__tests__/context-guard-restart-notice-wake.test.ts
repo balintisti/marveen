@@ -3,7 +3,7 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest'
 import { initDatabase, createAgentMessage, markMessageDelivered, getDb } from '../db.js'
 import { measureRestartLoss } from '../web/context-guard-runner.js'
-import { restartNoticeWakes } from '../context-guard.js'
+import { restartNoticeWakes, restartNoticeIsLogOnly } from '../context-guard.js'
 
 const T = 1_800_000_000_000
 const sec = T / 1000
@@ -67,5 +67,37 @@ describe('measureRestartLoss over the real queue: quiet rows (card a85a9acd)', (
     const r = measureRestartLoss(t)
     expect(r.lossNeedsAction).toBe(true)
     expect(restartNoticeWakes(r.lossNeedsAction, null)).toBe(true)
+  })
+})
+
+describe('restartNoticeIsLogOnly (card eca5e042)', () => {
+  const idle = 'saturated pane, unrecoverable without restart'
+  const killed = 'hard threshold (99% >= 97%) -- KILLS running background work: 2 (2 in the pane)'
+
+  it('empty measured window, fresh handoff, nothing killed: log-only', () => {
+    expect(restartNoticeIsLogOnly(false, null, idle)).toBe(true)
+    expect(restartNoticeIsLogOnly(false, undefined, idle)).toBe(true)
+  })
+
+  it('killed background work keeps the message, even with an empty window', () => {
+    expect(restartNoticeIsLogOnly(false, null, killed)).toBe(false)
+  })
+
+  it('a stale or unmeasurable handoff keeps the message', () => {
+    expect(restartNoticeIsLogOnly(false, 25, idle)).toBe(false)
+    expect(restartNoticeIsLogOnly(false, 'unknown', idle)).toBe(false)
+  })
+
+  it('something to resend keeps the message', () => {
+    expect(restartNoticeIsLogOnly(true, null, idle)).toBe(false)
+  })
+
+  it('an unmeasurable window is NOT log-only: a guard that cannot tell must not go quiet', () => {
+    expect(restartNoticeIsLogOnly(null, null, idle)).toBe(false)
+  })
+
+  it('work that survives the restart is not "killed": log-only', () => {
+    const survives = 'saturated -- detached from the pane, expected to SURVIVE the restart (check with ps before re-running): 1'
+    expect(restartNoticeIsLogOnly(false, null, survives)).toBe(true)
   })
 })
