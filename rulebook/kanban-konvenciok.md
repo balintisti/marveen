@@ -792,3 +792,8 @@ megkülönböztethetetlen az el nem kezdettől, és a becslés vezérli a sorren
 
 *(A mért esetek: `rulebook/kanban-konvenciok.md`. 34 000 karakter volt itt.)*
 
+
+
+
+<!-- Kártya deca79c3, marveen döntése 2026-10-19 (msg 33825) -->
+**NYITOTT LELETET `done` KÁRTYÁRA NEM PARKOLUNK: A LELET ÖRÖKLI A KÁRTYA LEJÁRATÁT.** A `done` kártya magától archiválódik (a küszöb az `updated_at`, amit egy komment is frissít), és vele a rajta álló nyitott tétel is; a nyitott lelet ezért SAJÁT kártyát kap (vagy egy nyitott kártyára kerül), a `done` kártyán legfeljebb a mutató marad.
