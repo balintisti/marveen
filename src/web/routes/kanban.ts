@@ -120,11 +120,14 @@ export function kanbanMoveInstructions(id: string, target: string): string {
     '',
     'A kártyát in_progress-re húzták. Amikor VÉGEZTÉL, két lépés (mindkettő a kártyára kerül, a web UI-ban látszik):',
     '',
-    '1) Írj egy rövid eredmény-összefoglalót kommentként (1-2 mondat: mi lett a vége):',
+    // The done gate (card 3c7be3c4) answers 409 to a done move without a
+    // KESZ-IGAZOLAS line, so the result comment carries it: a template that
+    // tells every dispatched agent to move to done must also tell it how.
+    '1) Írj egy rövid eredmény-összefoglalót kommentként. Az ELSŐ sora a kész-igazolás, `KESZ-IGAZOLAS: <ELES|ATADVA|DONTES|DOKUMENTUM|TARGYTALAN>` és utána a bizonyíték (ELES: a mérés, hogy élesben fut; ATADVA: az üzenet azonosítója; DONTES: hol rögzítették és ki; DOKUMENTUM: útvonal + commit; TARGYTALAN: miért, és mi nyitná újra); a második sora 1-2 mondat arról, mi lett a vége. E sor nélkül a done-mozgatás 409-et kap:',
     `  curl -s -X POST ${commentUrl} \\`,
     `    ${auth} \\`,
     `    -H 'Content-Type: application/json' \\`,
-    `    -d '{"author":"${target}","content":"AZ EREDMENY ROVIDEN"}'`,
+    `    -d '{"author":"${target}","content":"KESZ-IGAZOLAS: FAJTA A BIZONYITEK\\nAZ EREDMENY ROVIDEN"}'`,
     '',
     '2) Állítsd a kártyát done-ra:',
     `  curl -s -X POST ${moveUrl} \\`,

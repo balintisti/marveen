@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { kanbanMoveInstructions } from '../web/routes/kanban.js'
+import { hasDoneProof, DONE_PROOF_KINDS } from '../kanban-verdict.js'
 
 // The one line of the dispatch that is a COMMAND rather than prose.
 const probeLine = (out: string): string | undefined =>
@@ -23,6 +24,22 @@ describe('kanbanMoveInstructions', () => {
     expect(out).toContain('"status":"done"')
     // It must NOT rely on the agent "dragging" the card (a headless agent can't).
     expect(out).not.toContain('húzd "done"-ra')
+  })
+
+  // Card 3c7be3c4: the done gate answers 409 to a done move without a
+  // KESZ-IGAZOLAS line. The template tells every dispatched agent to move to
+  // done, so the comment it hands over must be one the gate accepts once the
+  // agent fills in the kind -- measured with the gate's own reader.
+  it('the result comment it hands over passes the done gate once the kind is filled in', () => {
+    const out = kanbanMoveInstructions('abc123', 'cody')
+    const line = out.split('\n').find((l) => l.includes('"content":"KESZ-IGAZOLAS'))
+    expect(line).toBeDefined()
+    const payload = JSON.parse(/-d '(.*)'/.exec(line!)![1]) as { author: string; content: string }
+    const comment = (content: string) => ({ id: 1, author: payload.author, content, created_at: 0 })
+    expect(hasDoneProof([comment(payload.content.replace('FAJTA', 'ATADVA'))])).toBe(true)
+    // CONTROL: copied verbatim, the placeholder is not a kind and the gate refuses it.
+    expect(hasDoneProof([comment(payload.content)])).toBe(false)
+    for (const kind of DONE_PROOF_KINDS) expect(out).toContain(kind)
   })
 
   // Without an actor the board cannot tell a self-pickup from an assignment, so
