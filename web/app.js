@@ -1664,6 +1664,16 @@ function toastWithWarning(body, fallbackMsg) {
   else showToast(fallbackMsg)
 }
 
+// Egy elutasitott mozgatas vagy letrehozas (409: hianyzo KESZ-IGAZOLAS sor,
+// nyitott verdikt, maradek) az OKAT a valasz `error` mezojeben adja. A toast
+// ezt mondja ki, ne egy altalanos hibat: kulonben a kartya szo nelkul
+// visszaugrik, es a felhasznalo nem tudja, mi hianyzik. Kartya 3c7be3c4.
+async function refusalToast(r, fallbackMsg) {
+  const body = await r.json().catch(() => null)
+  if (body && typeof body.error === 'string' && body.error) showToast(body.error, 12000)
+  else showToast(fallbackMsg)
+}
+
 // === Drag & Drop ===
 // Wires the drag/drop handlers for one column-body element. Used for the
 // 4 static flat-board columns at load time, and again for every swimlane
@@ -1702,11 +1712,12 @@ function wireKanbanColumnDnD(col) {
     let sortOrder = idx
 
     try {
-      await fetch(`/api/kanban/${encodeURIComponent(cardId)}/move`, {
+      const r = await fetch(`/api/kanban/${encodeURIComponent(cardId)}/move`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus, sort_order: sortOrder, actor: kanbanMoveActor() }),
       })
+      if (!r.ok) await refusalToast(r, t('kanban.toast.move_error'))
       loadKanban()
     } catch {
       showToast(t('kanban.toast.move_error'))
@@ -1873,7 +1884,7 @@ async function kanbanTouchEnd(e) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: newStatus, sort_order: sortOrder, actor: kanbanMoveActor() }),
     })
-    if (!r.ok) throw new Error('move failed')
+    if (!r.ok) { await refusalToast(r, t('kanban.toast.move_error')); return }
     loadKanban()
   } catch {
     showToast(t('kanban.toast.move_error'))
@@ -2347,7 +2358,7 @@ async function showCardDetail(card) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ status: newVal, sort_order: 0, actor: kanbanMoveActor() }),
         })
-        if (!r.ok) throw new Error('move failed')
+        if (!r.ok) { restore(current); await refusalToast(r, t('kanban.toast.move_error')); return }
         card.status = newVal
         restore(newVal)
         showToast(t('kanban.toast.status_updated'))
@@ -2595,7 +2606,7 @@ async function showCardDetail(card) {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title, parent_id: card.id, status: card.status, priority: card.priority, project: card.project || null, assignee: null }),
           })
-          if (!r.ok) { showToast(t('kanban.toast.subtask_error')); return }
+          if (!r.ok) { await refusalToast(r, t('kanban.toast.subtask_error')); return }
           toastWithWarning(await r.json().catch(() => ({})), t('kanban.toast.subtask_created'))
           loadKanban()
           showCardDetail(card)
