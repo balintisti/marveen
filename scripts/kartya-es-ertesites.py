@@ -64,7 +64,7 @@ kartyat mozgatnak, elotte-pillanatkeppel es FUGGETLEN visszaolvasassal:
 
   A MOZGATHATO MEZOK TELJES LISTAJA (ez az egyetlen hely, ahol fel van sorolva):
     --title      a kartya cime      (300 karakteres kapu + ID-horgony kapu)
-    --status     planned | in_progress | testing | waiting | done
+    --status     planned | in_progress | testing | waiting   (done: MEGTAGADVA, csak API, d2d72d9a)
     --priority   low | normal | high | urgent
     --assignee   a felelos          (KARTYAKULDO906 4. tetel, 2026-09-06)
 
@@ -279,6 +279,26 @@ def _horgony_kapu(card_id, cim):
 # uzenetet adjon, ne nyers sqlite3 IntegrityError-t.
 STATUSZOK = ('planned','in_progress','testing','waiting','done')
 PRIORITASOK = ('low','normal','high','urgent')
+
+
+def _done_kapu(status, card_id, letrehozo):
+    """DONEKAPU-SZKRIPT (kartya d2d72d9a, marveen dontese 2026-10-20): a done-kapu (3c7be3c4,
+    KESZ-IGAZOLAS sor nelkul 409) az API-ban el. Ez a szkript kozvetlenul az SQLite-ba ir, tehat
+    egy itt atengedett done a kaput NEMAN megkerulne -- egy kapu, aminek van megkerulo utja, nem
+    kapu. A logikat nem masoljuk ide (ket peldany szetcsuszna): a done EGYETLEN utja az API."""
+    if status != 'done':
+        return
+    honnan = ('Kartyat done-ban LETREHOZNI nem lehet: hozd letre mas statusszal (pl. --status testing),\n'
+              '  aztan a lenti ut.\n' if letrehozo else '')
+    sys.exit(f'MEGTAGADVA: status=done ezen a szkripten at NEM irhato ({card_id}). A done-kapu\n'
+             f'  (KESZ-IGAZOLAS sor nelkul 409) csak az API-n fut; ez a szkript a DB-be ir, megkerulne.\n'
+             f'{honnan}'
+             f'A HELYES UT, ket lepes:\n'
+             f'  1. KESZ-IGAZOLAS komment a kartyara, az ELSO sora:\n'
+             f'       KESZ-IGAZOLAS: <ELES|ATADVA|DONTES|DOKUMENTUM|TARGYTALAN> | <bizonyitek>\n'
+             f'     (ez a szkript is megirhatja: --comment-file, --status NELKUL)\n'
+             f'  2. POST /api/kanban/{card_id}/move {{"status":"done","actor":"<neved>"}}\n'
+             f'     (Bearer token: /Users/isti/marveen/store/.dashboard-token)')
 # Ervenyes FELADO-nevek. Elgepelt nev csendben rossz attribuciot irna a sorba, ezert kapu.
 KULDOK = FLEET | {COORDINATOR}
 API = os.environ.get('KARTYA_API', 'http://localhost:3420/api/messages')
@@ -558,6 +578,7 @@ def komment_mod(a):
         _ekezet_kapu(uj_leiras, a.ekezet_nelkul_szandekos, 'leiras')
     if a.status is not None and a.status not in STATUSZOK:
         sys.exit(f'MEGTAGADVA: ervenytelen statusz ("{a.status}"). Ervenyes: {", ".join(STATUSZOK)}.')
+    _done_kapu(a.status, a.id, letrehozo=False)
     if a.priority is not None and a.priority not in PRIORITASOK:
         sys.exit(f'MEGTAGADVA: ervenytelen prioritas ("{a.priority}"). Ervenyes: {", ".join(PRIORITASOK)}.')
 
@@ -958,6 +979,7 @@ def main():
     a.priority = a.priority or 'normal'
     if a.status not in STATUSZOK:
         sys.exit(f'MEGTAGADVA: ervenytelen statusz ("{a.status}"). Ervenyes: {", ".join(STATUSZOK)}.')
+    _done_kapu(a.status, a.id, letrehozo=True)
     if a.priority not in PRIORITASOK:
         sys.exit(f'MEGTAGADVA: ervenytelen prioritas ("{a.priority}"). Ervenyes: {", ".join(PRIORITASOK)}.')
 

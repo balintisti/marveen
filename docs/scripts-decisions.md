@@ -393,6 +393,11 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/kartya-es-ertesites.py`
 
 - MIERT: 2026-09-05-en a kanban-audit ot friss kartyat talalt megnevezett flotta-gazdaval,
+- MIERT NEM IR done-t (kartya d2d72d9a, marveen dontese 2026-10-20): a done-kapu (3c7be3c4,
+  KESZ-IGAZOLAS sor nelkul 409) az API-ban el, ez a szkript pedig kozvetlenul az SQLite-ba ir --
+  egy itt atengedett done a kaput nemán megkerulne. A kapu logikajat NEM masoljuk Pythonba (ket
+  peldany szetcsuszik): mindket ag (letrehozo INSERT, mozgato UPDATE) megtagadja a done-t, es a
+  hibauzenet megnevezi a kiutat (KESZ-IGAZOLAS komment + `POST /api/kanban/<id>/move`).
 
 ### `scripts/landed-check.py`
 
