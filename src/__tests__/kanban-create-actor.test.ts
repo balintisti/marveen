@@ -17,7 +17,7 @@
 import { describe, it, expect } from 'vitest'
 import http from 'node:http'
 import { Readable } from 'node:stream'
-import { initDatabase, getKanbanCardEvents, getKanbanCardHistory } from '../db.js'
+import { initDatabase, createKanbanCard, getKanbanCardEvents, getKanbanCardHistory, listKanbanCards } from '../db.js'
 import { tryHandleKanban } from '../web/routes/kanban.js'
 
 async function post(body: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
@@ -83,15 +83,25 @@ describe('a created card carries its author -- through the real route', () => {
 
   /** THE MEASURED CONSUMER EFFECT, pinned rather than left to be discovered:
    *  `dailyCardFlow` counts a closure per event with toStatus === 'done', so a card
-   *  created DIRECTLY as done now emits one. That is a correction -- such a card is
+   *  created DIRECTLY as done emits one. That is a correction -- such a card is
    *  invisible to that metric today unless archived -- and the historical population
-   *  is 7 cards. Nothing is backfilled. */
-  it('a card created straight into done emits a done event (known flow-metric effect)', async () => {
+   *  is 7 cards. Nothing is backfilled. Since card 3c7be3c4 the API no longer creates
+   *  a card straight into done (it cannot carry its KESZ-IGAZOLAS yet), so the effect
+   *  is pinned where it still lives: the db layer. */
+  it('a card created straight into done emits a done event (known flow-metric effect)', () => {
     initDatabase(':memory:')
-    const r = await post({ title: 'egybol done', status: 'done', actor: 'friday' })
-    const [e] = getKanbanCardEvents(String(r.body.id))
+    createKanbanCard({ id: 'egybol', title: 'egybol done', status: 'done' })
+    const [e] = getKanbanCardEvents('egybol')
     expect(e.to_status).toBe('done')
     expect(e.from_status).toBeNull()
+  })
+
+  it('the API refuses a card created straight into done, and writes nothing (card 3c7be3c4)', async () => {
+    initDatabase(':memory:')
+    const r = await post({ title: 'egybol done', status: 'done', actor: 'friday' })
+    expect(r.status).toBe(409)
+    expect(r.body.missing_proof).toBe(true)
+    expect(listKanbanCards({ includeArchived: true }).filter((c) => c.title === 'egybol done')).toHaveLength(0)
   })
 
   /** CONTROL: creation is ONE event, so a later move adds a second rather than
