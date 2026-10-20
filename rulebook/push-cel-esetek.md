@@ -311,6 +311,24 @@ npx tsx scripts/secret-gate.ts --range origin/main..<ág>
 vagy -- rosszabb -- valaki „nincs kapu"-ként olvassa. Ugyanaz a repók közti átvitel, amit ez a lap
 már négyszer rögzít (ágnév, workflow-fájl, batch-döntés, most egy szkript-név).
 
+**AZ ÖTÖDIK ALAK, ÉS A LEGROSSZABB: EGY PR-SZÁM** (friday mérte 2026-09-03, újramérve 2026-10-14
+10:46-kor, `gh api repos/<repó>/pulls/138`; kártya 21e179b3). Egy marveen-kártyákról szóló üzenetben
+ez állt: *„PR 138 is MERGED (a62ba2c1)"*. A három repóban:
+
+    balintisti/Delta-CRM  #138 ... MERGED, merge-commit a62ba2c190: "fix(cache): a Redis failure
+                                   must not read as lock contention" -- EZ volt a szándék
+    balintisti/marveen    #138 ... 404, nem létezik
+    Szotasz/marveen       #138 ... LÉTEZIK, és teljesen más: "fix(connectors-hu): extend PATH for
+                                   launchd-spawned dashboard"
+    `git cat-file -e a62ba2c1` a marveen repóban -> nincs ilyen objektum
+
+Az ágnév üres eredményt ad (gyanús), a szkript-név `command not found`-ot (hangos). A PR-szám
+FELOLDÓDIK: az idegen upstreamben egy valódi, rokon témájú másik PR-re mutat, tehát nem hibázik,
+hanem VÁLASZOL, és olvasással nem fogható meg. A szabály: **repó-minősítve írjuk, `Delta-CRM PR
+#138`, nem `PR 138`** (ugyanaz, mint a refeknél az `origin/main` a `main` helyett). Az ugyanebből a
+mérésből származó `--is-ancestor` 128-as esete (hiányzó objektum = NEM VÁLASZOLHATÓ, nem „nem
+tartalmazza") a `rulebook/legerosebb-mondat.md` 130. sorától áll.
+
 Mérve, két alakban: létező ágra `exit 1`-et ad és kimondja, hogy **„NOT SCANNED, therefore NOT
 CLEARED"**; NEM létező ágra `exit 2`-t, a git hibájával, és a saját indoklásával:
 *„an undeterminable set is a failure, not a pass."* Vagyis pontosan az a megkülönböztetés, ami a
