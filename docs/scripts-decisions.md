@@ -322,7 +322,7 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/hooks/browser-content-notice.py`
 
 - WHY THIS EXISTS  /  ---------------
-- WHY THE LABEL NEVER QUOTES THE PAYLOAD  /  --------------------------------------
+- WHY THE LABEL NEVER QUOTES THE PAYLOAD
 
 ### `scripts/hooks/card-boundary-signal.py`
 

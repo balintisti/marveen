@@ -46,6 +46,9 @@ const EXPECTED: Record<string, string[]> = {
     'telegram_progress_reply_clear.py', 'slack_progress_reply_clear.py',
     'skill-usage-capture.py', 'memory-frontmatter-bash-gate.py',
     'card-boundary-signal.py', // card 00262e3f: the stop signal at a card boundary, shown on the move's own call
+    // MARVEENGAPS1020 (c): WebSearch results reach the main agent framed as
+    // untrusted content.
+    'browser-content-notice.py',
   ],
   // A failed tool call fires PostToolUseFailure, never PostToolUse
   // (TOOLLOGVAKSIKER921): without this entry tool_call_log cannot hold a 0.
