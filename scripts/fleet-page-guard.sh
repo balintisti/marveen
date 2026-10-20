@@ -43,8 +43,12 @@ printf '%s  HIANYOS rc=%s\n%s\n' "$TS" "$RC" "$OUT" >> "$LOG"
 
 # A jelzes a koordinatorhoz megy. Az `agent-msg.sh` az EGYETLEN ut: a nyers curl 0-val ter
 # vissza egy 401/400-ra is, es egy nema kuldes-hiba itt pont a vedelmet tunteti el.
+# rc=4: a MERO nem futott (hianyzo/ures/hibas forras-lista, kartya 83c47d59). Az a cim, hogy
+# "a lap hianyos", ilyenkor a nem letezo bajt nevezne meg, a meglevot (a vak orat) elhallgatna.
+HEAD="[fleet-page-guard] EGY VAGY TOBB AGENS-LAP NEM HORDOZZA A TEHERHORDO MONDATOKAT."
+[ "$RC" -eq 4 ] && HEAD="[fleet-page-guard] AZ AGENS-LAP OR NEM TUDOTT MERNI (rc=4): a lapokrol MOST semmit nem tudunk."
 MSG=$(printf '%s\n\n%s\n\n%s\n' \
-  "[fleet-page-guard] EGY VAGY TOBB AGENS-LAP NEM HORDOZZA A TEHERHORDO MONDATOKAT." \
+  "$HEAD" \
   "$OUT" \
   "A kozos CLAUDE.md EGY olvasot er el (mind a het agens levalasztva), tehat ami ott all, az
 ODA NEM JUT EL. A javitas: ird be a hianyzo mondatot a nevezett lap(ok)ba, flock alatt,
