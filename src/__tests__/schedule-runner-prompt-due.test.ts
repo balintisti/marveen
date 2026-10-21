@@ -17,6 +17,28 @@ const mockSend = vi.fn(async () => {})
 const mockWrites: Array<{ path: string; body: string }> = []
 let quotaAction: 'defer' | 'run' = 'defer'
 let tasks: ScheduledTask[] = []
+// The outcome file the runner reads at start (restart scenarios); null = the real read.
+let seededOutcomeFile: string | null = null
+const mockDueCheck = vi.fn()
+
+vi.mock('node:fs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs')>()
+  const readFileSync = ((p: unknown, ...rest: unknown[]) =>
+    seededOutcomeFile !== null && String(p).endsWith('schedule-last-outcome.json')
+      ? seededOutcomeFile
+      : (real.readFileSync as (...a: unknown[]) => unknown)(p, ...rest)) as typeof real.readFileSync
+  return { ...real, readFileSync, default: { ...real, readFileSync } }
+})
+vi.mock('../web/prompt-task-due.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../web/prompt-task-due.js')>()
+  return {
+    ...real,
+    runPromptTaskDueCheck: (...a: Parameters<typeof real.runPromptTaskDueCheck>) => {
+      mockDueCheck()
+      return real.runPromptTaskDueCheck(...a)
+    },
+  }
+})
 
 vi.mock('../logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
@@ -101,26 +123,35 @@ function lastOutcome(name: string): Record<string, unknown> | undefined {
 const alertTexts = () => mockSend.mock.calls.map(c => String((c as unknown[])[2]))
 
 describe('prompt-task missed-run alert, through the real tick (card 997515c0)', () => {
-  let stop: ReturnType<typeof setInterval>
-  beforeEach(async () => {
+  let stop: ReturnType<typeof setInterval> | undefined
+  const START = new Date('2026-10-20T10:30:00.000Z').getTime()
+  // The runner is started by each test, AFTER it has seeded the outcome file.
+  async function start() {
+    vi.resetModules()
+    const mod = await import('../web/schedule-runner.js')
+    stop = mod.startScheduleRunner()
+    return mod
+  }
+  beforeEach(() => {
     vi.stubEnv('SCHEDULER_TZ', 'Europe/Budapest')
     vi.clearAllMocks()
     mockWrites.length = 0
     quotaAction = 'defer'
+    seededOutcomeFile = null
+    stop = undefined
     vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-10-20T10:30:00.000Z'))
-    vi.resetModules()
-    const { startScheduleRunner } = await import('../web/schedule-runner.js')
-    stop = startScheduleRunner()
+    vi.setSystemTime(START)
   })
   afterEach(() => {
-    clearInterval(stop)
+    if (stop) clearInterval(stop)
+    seededOutcomeFile = null
     vi.useRealTimers()
     vi.unstubAllEnvs()
   })
 
   it('quota skips build a streak; the owner is alerted ONCE with task, count and reason; a real run resets and recovers', async () => {
     tasks = [hourly()]
+    await start()
     // 5 minutes of quota pressure: streak is stored, but the 15-minute tolerance has not passed -> no alert yet.
     await vi.advanceTimersByTimeAsync(5 * 60_000)
     const early = lastOutcome('due-fixture-stepper')
@@ -153,10 +184,68 @@ describe('prompt-task missed-run alert, through the real tick (card 997515c0)', 
     const script = join(dir, 'pre-check.sh')
     writeFileSync(script, '#!/usr/bin/env bash\necho SKIP\n', { mode: 0o755 })
     tasks = [hourly({ name: 'due-fixture-precheck', preCheck: script })]
+    await start()
     // Quota stays 'defer': if the pre-check did not win first, a streak would build.
     await vi.advanceTimersByTimeAsync(35 * 60_000)
     expect(lastOutcome('due-fixture-precheck')?.lastSkipReason).toBe('precheck-cron')
     expect(lastOutcome('due-fixture-precheck')?.skipStreak).toBeUndefined()
     expect(alertTexts().filter(t => t.includes('Kimaradt futás'))).toHaveLength(0)
+  })
+
+  // dueAlertedAt must survive a restart, because that is what keeps it one alert per episode.
+  it('RESTART: dueAlertedAt is loaded from the outcome file -- a still-not-firing alerted task gets no recovery and no second alert', async () => {
+    const alertedAt = START - 24 * 3_600_000
+    seededOutcomeFile = JSON.stringify({
+      'due-fixture-stepper': {
+        lastFiredAt: START - 3 * 24 * 3_600_000, lastSkippedAt: START - 3_600_000,
+        lastSkipReason: 'quota', skipStreak: 5, dueAlertedAt: alertedAt,
+      },
+    })
+    tasks = [hourly()]
+    await start()
+    await vi.advanceTimersByTimeAsync(30 * 60_000) // floor = start: first 17 min count 0 slots, then 2+
+    expect(alertTexts().filter(t => t.includes('Helyreállt'))).toHaveLength(0)
+    expect(alertTexts().filter(t => t.includes('Kimaradt futás'))).toHaveLength(0)
+    expect(lastOutcome('due-fixture-stepper')?.dueAlertedAt).toBe(alertedAt)
+  })
+
+  it('an OLD outcome entry without dueAlertedAt still parses, and the task is alerted normally', async () => {
+    seededOutcomeFile = JSON.stringify({
+      'due-fixture-stepper': { lastFiredAt: START - 3 * 3_600_000, lastSkippedAt: START - 60_000, lastSkipReason: 'quota' },
+    })
+    tasks = [hourly()]
+    const mod = await start()
+    expect(mod.readScheduleLastOutcome('due-fixture-stepper')).toEqual({
+      lastFiredAt: START - 3 * 3_600_000, lastSkippedAt: START - 60_000, lastSkipReason: 'quota',
+    })
+    await vi.advanceTimersByTimeAsync(30 * 60_000)
+    expect(alertTexts().filter(t => t.includes('Kimaradt futás'))).toHaveLength(1)
+  })
+
+  it('the public reader returns dueAlertedAt when the file has it', async () => {
+    seededOutcomeFile = JSON.stringify({ x: { lastFiredAt: 5, dueAlertedAt: 9 } })
+    tasks = []
+    const mod = await start()
+    expect(mod.readScheduleLastOutcome('x')).toEqual({ lastFiredAt: 5, dueAlertedAt: 9 })
+  })
+
+  it('TICK GAP (sleep): slots inside the gap are left to catch-up -- no alert for them; detection resumes after', async () => {
+    tasks = [hourly()]
+    await start()
+    await vi.advanceTimersByTimeAsync(90_000)
+    vi.setSystemTime(Date.now() + 60 * 60_000) // the machine slept: no tick ran for an hour
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(alertTexts().filter(t => t.includes('Kimaradt futás'))).toHaveLength(0)
+    // Positive control: the floor moved to the gap's end, it did not disable detection.
+    await vi.advanceTimersByTimeAsync(25 * 60_000)
+    expect(alertTexts().filter(t => t.includes('Kimaradt futás'))).toHaveLength(1)
+  })
+
+  it('THROTTLE: the due-check is evaluated about once a minute, not on every 15 s tick', async () => {
+    tasks = [hourly()]
+    await start()
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    expect(mockDueCheck.mock.calls.length).toBeGreaterThanOrEqual(4)
+    expect(mockDueCheck.mock.calls.length).toBeLessThanOrEqual(6) // unthrottled it would be ~20
   })
 })

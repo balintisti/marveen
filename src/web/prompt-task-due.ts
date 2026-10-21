@@ -171,17 +171,27 @@ export function runPromptTaskDueCheck(d: DueCheckDeps): DueAction[] {
     if (task.type === 'command' || !task.enabled) continue
     if (d.hasPendingRetry(task.name)) continue
     const outcome = d.readOutcome(task.name)
+    const alertedAt = outcome?.dueAlertedAt
+    if (alertedAt !== undefined) {
+      // RECOVERY IS EVIDENCE, NOT ABSENCE. A drop of the missed-slot count to 0
+      // is also what a restart (the floor moves to "now") or a gap in the ticks
+      // produces while the task is STILL not firing -- reading that as recovery
+      // sent a false "Helyreallt" and then re-alerted two slots later. Only a real
+      // firing after the alert ends the episode; until then the stored mark keeps
+      // the one-alert-per-episode promise across restarts.
+      const firedAt = outcome?.lastFiredAt
+      if (firedAt !== undefined && firedAt > alertedAt) {
+        d.setAlerted(task.name, null)
+        d.send(formatDueRecovery(task))
+        actions.push({ task: task.name, action: 'recover', count: 0 })
+      }
+      continue
+    }
     const a = assessPromptTaskDue(task, outcome, d.now, d.floorMs, d.tz)
-    if (a.verdict === 'unknown') continue
-    const alerted = outcome?.dueAlertedAt !== undefined
-    if (a.verdict === 'overdue' && !alerted) {
+    if (a.verdict === 'overdue') {
       d.setAlerted(task.name, d.now)
       d.send(formatDueAlert(task, a, outcome?.lastFiredAt, d.fmt))
       actions.push({ task: task.name, action: 'alert', count: a.count })
-    } else if (a.verdict === 'ok' && alerted) {
-      d.setAlerted(task.name, null)
-      d.send(formatDueRecovery(task))
-      actions.push({ task: task.name, action: 'recover', count: a.count })
     }
   }
   return actions

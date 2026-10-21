@@ -137,8 +137,8 @@ describe('runPromptTaskDueCheck', () => {
     const store = new Map<string, DueOutcome>()
     if (outcome) store.set(t.name, { ...outcome })
     const send = vi.fn()
-    const deps = (now: number) => ({
-      tasks: [t], now, floorMs: FLOOR, tz: TZ,
+    const deps = (now: number, floorMs: number) => ({
+      tasks: [t], now, floorMs, tz: TZ,
       hasPendingRetry: () => pending,
       readOutcome: (n: string) => store.get(n),
       setAlerted: (n: string, at: number | null) => {
@@ -150,7 +150,7 @@ describe('runPromptTaskDueCheck', () => {
       send,
       fmt: (ms: number) => new Date(ms).toISOString(),
     })
-    return { store, send, run: (now: number) => runPromptTaskDueCheck(deps(now)) }
+    return { store, send, run: (now: number, floorMs: number = FLOOR) => runPromptTaskDueCheck(deps(now, floorMs)) }
   }
   const stale: DueOutcome = {
     lastFiredAt: T('2026-10-20T09:00:05+02:00'), lastSkippedAt: T('2026-10-20T12:00:05+02:00'),
@@ -166,14 +166,41 @@ describe('runPromptTaskDueCheck', () => {
     expect(h.send).toHaveBeenCalledTimes(1)
   })
 
-  it('sends a recovery once the task fires again, and only then', () => {
+  it('sends exactly one recovery once a real firing follows the alert, and clears the mark', () => {
     const h = harness(task(), stale)
     h.run(NOW)
-    h.store.set('bug-hunt-stepper', { ...h.store.get('bug-hunt-stepper')!, lastFiredAt: NOW, skipStreak: undefined })
+    const alertedAt = h.store.get('bug-hunt-stepper')!.dueAlertedAt!
+    h.store.set('bug-hunt-stepper', { ...h.store.get('bug-hunt-stepper')!, lastFiredAt: alertedAt + 1000, skipStreak: undefined })
     expect(h.run(NOW + 60_000)).toEqual([{ task: 'bug-hunt-stepper', action: 'recover', count: 0 }])
     expect(h.send).toHaveBeenCalledTimes(2)
     expect(h.send.mock.calls[1][0]).toContain('Helyreállt')
+    expect(h.store.get('bug-hunt-stepper')!.dueAlertedAt).toBeUndefined()
     expect(h.run(NOW + 120_000)).toEqual([])
+    expect(h.send).toHaveBeenCalledTimes(2)
+  })
+
+  // The measured bug (trillian probe on 684865c5e): after a restart the floor is
+  // "now", the missed-slot count drops to 0, and the old code read that as recovery.
+  it('RESTART REGRESSION: alerted, still not firing, floor reset -> no recovery, no second alert, mark kept', () => {
+    const h = harness(task(), stale)
+    h.run(NOW) // the one alert
+    const mark = h.store.get('bug-hunt-stepper')!.dueAlertedAt
+    expect(mark).toBe(NOW)
+    const restartFloor = NOW + 60_000
+    // Right after the restart: 0 slots counted (verdict would be ok).
+    expect(assessPromptTaskDue(task(), h.store.get('bug-hunt-stepper'), NOW + 120_000, restartFloor, TZ).verdict).toBe('ok')
+    expect(h.run(NOW + 120_000, restartFloor)).toEqual([])
+    // Hours later the slots count again (verdict overdue) -- still no second alert.
+    expect(assessPromptTaskDue(task(), h.store.get('bug-hunt-stepper'), NOW + 4 * 3_600_000, restartFloor, TZ).verdict).toBe('overdue')
+    expect(h.run(NOW + 4 * 3_600_000, restartFloor)).toEqual([])
+    expect(h.send).toHaveBeenCalledTimes(1)
+    expect(h.store.get('bug-hunt-stepper')!.dueAlertedAt).toBe(mark)
+  })
+
+  it('a firing that predates the alert is not recovery evidence', () => {
+    const h = harness(task(), { ...stale, dueAlertedAt: NOW })
+    expect(h.run(NOW + 60_000)).toEqual([])
+    expect(h.send).not.toHaveBeenCalled()
   })
 
   it('a task with a queued retry is left to the retry path', () => {
