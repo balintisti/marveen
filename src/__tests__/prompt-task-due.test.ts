@@ -174,6 +174,8 @@ describe('runPromptTaskDueCheck', () => {
     expect(h.run(NOW + 60_000)).toEqual([{ task: 'bug-hunt-stepper', action: 'recover', count: 0 }])
     expect(h.send).toHaveBeenCalledTimes(2)
     expect(h.send.mock.calls[1][0]).toContain('Helyreállt')
+    expect(h.send.mock.calls[1][0]).toContain('újra fut')
+    expect(h.send.mock.calls[1][0]).not.toContain('visszatartott')
     expect(h.store.get('bug-hunt-stepper')!.dueAlertedAt).toBeUndefined()
     expect(h.run(NOW + 120_000)).toEqual([])
     expect(h.send).toHaveBeenCalledTimes(2)
@@ -218,6 +220,7 @@ describe('runPromptTaskDueCheck', () => {
       expect(h.run(NOW + 60_000)).toEqual([{ task: 'bug-hunt-stepper', action: 'recover', count: 0 }])
       expect(h.send.mock.calls[1][0]).toContain('Helyreállt')
       expect(h.send.mock.calls[1][0]).toContain('nincs több visszatartott futás')
+      expect(h.send.mock.calls[1][0]).not.toContain('újra fut')
       expect(h.store.get(pc.name)!.dueAlertedAt).toBeUndefined()
       // A new quota episode, no firing in between: alerted again.
       h.store.set(pc.name, { ...h.store.get(pc.name)!, lastSkippedAt: NOW + 3_600_000, lastSkipReason: 'quota', skipStreak: 2 })
