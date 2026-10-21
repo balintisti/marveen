@@ -177,6 +177,8 @@ Az eredmeny CSAK a kibovitett prompt szovege legyen, semmi mas. Ne hasznalj code
             last_skipped_at: new Date(skippedAt).toISOString(),
             last_skipped_at_local: formatLocalStamp(skippedAt),
             ...(outcome?.lastSkipReason ? { last_skip_reason: outcome.lastSkipReason } : {}),
+            // Card 997515c0: consecutive held-back ticks since the last real firing.
+            ...(outcome?.skipStreak ? { skip_streak: outcome.skipStreak } : {}),
           }
     })
     json(res, tasks)

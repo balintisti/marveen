@@ -12,6 +12,7 @@ import {
   BOT_NAME,
   APP_TZ_INVALID,
   CHANNEL_PROVIDER,
+  formatLocalStamp,
 } from '../config.js'
 import { resolveOwnerChatId, configuredOwnerChatFor } from '../owner-chat.js'
 import {
@@ -97,6 +98,7 @@ import {
 import { sessionNameForAgent } from './session-names.js'
 import { isRestartInFlight } from './restart-lock.js'
 import { runCommandTask } from './command-task.js'
+import { DUE_CHECK_INTERVAL_MS, nextSkipStreak, runPromptTaskDueCheck } from './prompt-task-due.js'
 import { decideQuotaAction, type QuotaWorkClass } from '../quota-gate.js'
 import { readQuotaSnapshot } from '../quota-snapshot.js'
 import { detectsFirstRunGate, detectPaneState, overfullParkedInputTail, type PaneState } from '../pane-state.js'
@@ -559,7 +561,18 @@ const scheduleLastRun: Map<string, number> = new Map()
  * first tick of their kind -- absent, not zero, because telling those apart is the
  * whole point.
  */
-type ScheduleOutcome = { lastFiredAt?: number; lastSkippedAt?: number; lastSkipReason?: string }
+type ScheduleOutcome = {
+  lastFiredAt?: number
+  lastSkippedAt?: number
+  lastSkipReason?: string
+  // Card 997515c0: consecutive HELD-BACK ticks (quota gate) since the last real
+  // firing. `lastSkippedAt` keeps only the latest skip, so a task deferred for a
+  // week was indistinguishable from one deferred once. Reset by a firing; a
+  // precheck-cron skip never counts (nothing was held back, see recordScheduleOutcome).
+  skipStreak?: number
+  // When the missed-run alert (prompt-task-due.ts) for the current episode was sent.
+  dueAlertedAt?: number
+}
 const SCHEDULE_LAST_OUTCOME_PATH = join(PROJECT_ROOT, 'store', 'schedule-last-outcome.json')
 const scheduleLastOutcome: Map<string, ScheduleOutcome> = new Map()
 
@@ -616,18 +629,27 @@ function persistScheduleLastRun(): void {
   }
 }
 
+function parseScheduleOutcome(v: unknown): ScheduleOutcome | undefined {
+  if (!v || typeof v !== 'object') return undefined
+  const o = v as Record<string, unknown>
+  const entry: ScheduleOutcome = {}
+  if (typeof o.lastFiredAt === 'number' && Number.isFinite(o.lastFiredAt)) entry.lastFiredAt = o.lastFiredAt
+  if (typeof o.lastSkippedAt === 'number' && Number.isFinite(o.lastSkippedAt)) entry.lastSkippedAt = o.lastSkippedAt
+  if (typeof o.lastSkipReason === 'string') entry.lastSkipReason = o.lastSkipReason
+  if (typeof o.skipStreak === 'number' && Number.isFinite(o.skipStreak) && o.skipStreak > 0) entry.skipStreak = o.skipStreak
+  if (typeof o.dueAlertedAt === 'number' && Number.isFinite(o.dueAlertedAt)) entry.dueAlertedAt = o.dueAlertedAt
+  // An alert mark alone is a record too: a task that never fired and never
+  // skipped is exactly the one the missed-run alert must not repeat every minute.
+  return entry.lastFiredAt != null || entry.lastSkippedAt != null || entry.dueAlertedAt != null ? entry : undefined
+}
+
 function loadScheduleLastOutcome(): void {
   try {
     const raw = JSON.parse(readFileSync(SCHEDULE_LAST_OUTCOME_PATH, 'utf-8'))
     if (raw && typeof raw === 'object') {
       for (const [name, v] of Object.entries(raw as Record<string, unknown>)) {
-        if (!v || typeof v !== 'object') continue
-        const o = v as Record<string, unknown>
-        const entry: ScheduleOutcome = {}
-        if (typeof o.lastFiredAt === 'number' && Number.isFinite(o.lastFiredAt)) entry.lastFiredAt = o.lastFiredAt
-        if (typeof o.lastSkippedAt === 'number' && Number.isFinite(o.lastSkippedAt)) entry.lastSkippedAt = o.lastSkippedAt
-        if (typeof o.lastSkipReason === 'string') entry.lastSkipReason = o.lastSkipReason
-        if (entry.lastFiredAt != null || entry.lastSkippedAt != null) scheduleLastOutcome.set(name, entry)
+        const entry = parseScheduleOutcome(v)
+        if (entry) scheduleLastOutcome.set(name, entry)
       }
     }
   } catch { /* no file yet / unreadable -- start empty */ }
@@ -807,6 +829,19 @@ function recordScheduleOutcome(name: string, tsMs: number, kind: 'fired' | 'skip
     next.lastSkippedAt = tsMs
     if (reason) next.lastSkipReason = reason
   }
+  // Card 997515c0: see nextSkipStreak for what ends and what extends a streak.
+  const streak = nextSkipStreak(prev.skipStreak, kind, reason)
+  if (streak === undefined) delete next.skipStreak
+  else next.skipStreak = streak
+  scheduleLastOutcome.set(name, next)
+  persistScheduleLastOutcome()
+}
+
+/** Stamp (or clear, with null) the missed-run alert mark of a task's outcome record. */
+function markDueAlerted(name: string, at: number | null): void {
+  const next: ScheduleOutcome = { ...(scheduleLastOutcome.get(name) ?? {}) }
+  if (at === null) delete next.dueAlertedAt
+  else next.dueAlertedAt = at
   scheduleLastOutcome.set(name, next)
   persistScheduleLastOutcome()
 }
@@ -822,14 +857,9 @@ function recordScheduleOutcome(name: string, tsMs: number, kind: 'fired' | 'skip
 export function readScheduleLastOutcome(name: string): ScheduleOutcome | undefined {
   try {
     const raw = JSON.parse(readFileSync(SCHEDULE_LAST_OUTCOME_PATH, 'utf-8')) as Record<string, unknown>
-    const v = raw[name]
-    if (!v || typeof v !== 'object') return undefined
-    const o = v as Record<string, unknown>
-    const entry: ScheduleOutcome = {}
-    if (typeof o.lastFiredAt === 'number' && Number.isFinite(o.lastFiredAt)) entry.lastFiredAt = o.lastFiredAt
-    if (typeof o.lastSkippedAt === 'number' && Number.isFinite(o.lastSkippedAt)) entry.lastSkippedAt = o.lastSkippedAt
-    if (typeof o.lastSkipReason === 'string') entry.lastSkipReason = o.lastSkipReason
-    return entry.lastFiredAt != null || entry.lastSkippedAt != null ? entry : undefined
+    const entry = parseScheduleOutcome(raw[name])
+    // Public contract unchanged: undefined = no tick recorded yet (see above).
+    return entry && (entry.lastFiredAt != null || entry.lastSkippedAt != null) ? entry : undefined
   } catch {
     return undefined
   }
@@ -2436,6 +2466,14 @@ export function startScheduleRunner(): NodeJS.Timeout {
   let pendingStartupGapMs = persistedTickMs != null ? startupGapMs : 0
   let lastPersistedTickMs = 0
 
+  // Missed-run alert for prompt tasks (card 997515c0, prompt-task-due.ts). Slots
+  // before `dueFloorMs` belong to the catch-up path (restart, sleep, dropped
+  // ticks), which already reports them; the due-check only counts what a RUNNING
+  // scheduler failed to do. Raised again whenever the ticks themselves had a gap.
+  let dueFloorMs = Date.now()
+  let lastDueCheckMs = 0
+  const DUE_TICK_GAP_MS = SCHEDULE_TICK_MS * 10
+
   let tickRunning = false
   async function runCheck() {
     // Re-entrancy guard: runCheck is now async (it awaits the tmux-driving
@@ -3002,6 +3040,39 @@ export function startScheduleRunner(): NodeJS.Timeout {
         // prune would drop it for want of a row. No-op when a branch above
         // already inserted one.
         if (preCheckHit && result !== 'fired') insertPendingTaskRetryIfNew(task.name, agentName, now, result)
+      }
+    }
+
+    // Missed-run alert for prompt tasks (card 997515c0): did a scheduled run fail
+    // to happen, and if it was held back, how many times in a row and why. Edge
+    // triggered and throttled; a failure here must never stall the tick.
+    if (now - fromMs > DUE_TICK_GAP_MS) dueFloorMs = now
+    if (now - lastDueCheckMs >= DUE_CHECK_INTERVAL_MS) {
+      lastDueCheckMs = now
+      try {
+        runPromptTaskDueCheck({
+          tasks,
+          now,
+          floorMs: dueFloorMs,
+          tz: cronTz,
+          hasPendingRetry: (name) => [...pendingKeys].some(k => k.startsWith(`${name}@`)),
+          readOutcome: (name) => scheduleLastOutcome.get(name),
+          setAlerted: markDueAlerted,
+          fmt: (ms) => formatLocalStamp(ms),
+          send: (text) => {
+            const token = resolveSchedulerAlertToken()
+            const ownerChat = resolveSchedulerOwnerChat()
+            if (!token || !ownerChat) {
+              logger.warn({ provider: CHANNEL_PROVIDER }, 'missed-run alert suppressed: no channel bot token or no owner chat')
+              return
+            }
+            sendSchedulerAlertMessage(token, ownerChat, `[${BOT_NAME} scheduler] ${text}`)
+              .then(() => logger.info({ provider: CHANNEL_PROVIDER }, 'missed-run alert sent'))
+              .catch((err) => logger.warn({ err }, 'missed-run alert delivery failed'))
+          },
+        })
+      } catch (err) {
+        logger.warn({ err }, 'schedule-runner: missed-run due-check failed')
       }
     }
 
