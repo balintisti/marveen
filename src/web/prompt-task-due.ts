@@ -145,7 +145,10 @@ export function formatDueAlert(
     + `Ok: ${a.reason}. Utolsó tényleges futás: ${last}.`
 }
 
-export function formatDueRecovery(task: ScheduledTask): string {
+export function formatDueRecovery(task: ScheduledTask, via: 'fired' | 'precheck' = 'fired'): string {
+  if (via === 'precheck') {
+    return `\u{1F7E2} Helyreállt: ${task.name}: nincs több visszatartott futás (az előzetes ellenőrzés lefutott, nem talált teendőt).`
+  }
   return `\u{1F7E2} Helyreállt: ${task.name} újra fut.`
 }
 
@@ -179,10 +182,24 @@ export function runPromptTaskDueCheck(d: DueCheckDeps): DueAction[] {
       // sent a false "Helyreallt" and then re-alerted two slots later. Only a real
       // firing after the alert ends the episode; until then the stored mark keeps
       // the one-alert-per-episode promise across restarts.
+      //
+      // A pre-check task has a second kind of evidence: its count is the STORED
+      // streak, not the floor-relative slot count, so a restart cannot zero it.
+      // A skip after the alert that left no streak is a precheck-cron skip: the
+      // pre-check looked and found nothing to do, so nothing is held back any
+      // more. Without this the mark stayed until a real firing, and a second
+      // quota episode after a quiet spell was never alerted (trillian probe on
+      // be871c84e).
       const firedAt = outcome?.lastFiredAt
+      const skippedAt = outcome?.lastSkippedAt
       if (firedAt !== undefined && firedAt > alertedAt) {
         d.setAlerted(task.name, null)
         d.send(formatDueRecovery(task))
+        actions.push({ task: task.name, action: 'recover', count: 0 })
+      } else if (task.preCheck && !(outcome?.skipStreak && outcome.skipStreak > 0)
+        && skippedAt !== undefined && skippedAt > alertedAt) {
+        d.setAlerted(task.name, null)
+        d.send(formatDueRecovery(task, 'precheck'))
         actions.push({ task: task.name, action: 'recover', count: 0 })
       }
       continue

@@ -203,6 +203,51 @@ describe('runPromptTaskDueCheck', () => {
     expect(h.send).not.toHaveBeenCalled()
   })
 
+  // trillian probe on be871c84e: for a pre-check task only a real firing cleared
+  // the mark, so a second quota episode after a quiet spell was never alerted.
+  describe('pre-check task: a precheck-cron skip after the alert ends the episode', () => {
+    const pcStale: DueOutcome = { ...stale, skipStreak: 4 }
+    const quiet = (o: DueOutcome, at: number): DueOutcome =>
+      ({ ...o, lastSkippedAt: at, lastSkipReason: 'precheck-cron', skipStreak: undefined })
+
+    it('recovers on the quiet skip, then alerts the SECOND quota episode', () => {
+      const pc = task({ preCheck: 'check.sh' })
+      const h = harness(pc, pcStale)
+      expect(h.run(NOW)).toEqual([{ task: 'bug-hunt-stepper', action: 'alert', count: 4 }])
+      h.store.set(pc.name, quiet(h.store.get(pc.name)!, NOW + 30_000))
+      expect(h.run(NOW + 60_000)).toEqual([{ task: 'bug-hunt-stepper', action: 'recover', count: 0 }])
+      expect(h.send.mock.calls[1][0]).toContain('Helyreállt')
+      expect(h.send.mock.calls[1][0]).toContain('nincs több visszatartott futás')
+      expect(h.store.get(pc.name)!.dueAlertedAt).toBeUndefined()
+      // A new quota episode, no firing in between: alerted again.
+      h.store.set(pc.name, { ...h.store.get(pc.name)!, lastSkippedAt: NOW + 3_600_000, lastSkipReason: 'quota', skipStreak: 2 })
+      expect(h.run(NOW + 3_600_000 + 60_000)).toEqual([{ task: 'bug-hunt-stepper', action: 'alert', count: 2 }])
+      expect(h.send).toHaveBeenCalledTimes(3)
+    })
+
+    it('a streak still running is no evidence: mark kept, nothing sent', () => {
+      const pc = task({ preCheck: 'check.sh' })
+      const h = harness(pc, { ...pcStale, dueAlertedAt: NOW, lastSkippedAt: NOW + 30_000, skipStreak: 5 })
+      expect(h.run(NOW + 60_000)).toEqual([])
+      expect(h.send).not.toHaveBeenCalled()
+      expect(h.store.get(pc.name)!.dueAlertedAt).toBe(NOW)
+    })
+
+    it('a quiet skip that predates the alert is no evidence', () => {
+      const pc = task({ preCheck: 'check.sh' })
+      const h = harness(pc, { ...quiet(pcStale, NOW - 60_000), dueAlertedAt: NOW })
+      expect(h.run(NOW + 60_000)).toEqual([])
+      expect(h.send).not.toHaveBeenCalled()
+    })
+
+    it('a plain task is not cleared by a skip without a streak (its count is floor-relative)', () => {
+      const h = harness(task(), { ...quiet(stale, NOW + 30_000), dueAlertedAt: NOW })
+      expect(h.run(NOW + 60_000)).toEqual([])
+      expect(h.send).not.toHaveBeenCalled()
+      expect(h.store.get('bug-hunt-stepper')!.dueAlertedAt).toBe(NOW)
+    })
+  })
+
   it('a task with a queued retry is left to the retry path', () => {
     const h = harness(task(), stale, true)
     expect(h.run(NOW)).toEqual([])
