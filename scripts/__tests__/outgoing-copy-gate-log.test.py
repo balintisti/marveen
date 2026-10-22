@@ -93,6 +93,30 @@ with tempfile.TemporaryDirectory() as tmp:
                       "tool_input": {"text": "Masd:\n```\nls\n```", "format": "text"}}, rules)
     check("plain textes kodblokk tovabbra is blokkol", rc == 2, f"exit={rc}")
 
+with tempfile.TemporaryDirectory() as tmp:
+    rules = os.path.join(tmp, "rules.json")
+    with open(rules, "w", encoding="utf-8") as fh:
+        json.dump({"bad_name_patterns": ["Kovacs Jozsef"], "correction": "Kovács József"}, fh)
+
+    # (6) a DENIAL leaves one log line, so its frequency can be measured (card acba3c6f)
+    deny_lines = lambda ls: [l for l in ls if "DENY (exit 2)" in l]
+    rc, _, lines = run({"tool_name": TELEGRAM, "tool_input": {"text": "Rendben van."}}, rules)
+    check("atengedett kuldes: nincs DENY sor", rc == 0 and not deny_lines(lines), f"exit={rc} {lines}")
+    rc, err, lines = run({"tool_name": TELEGRAM,
+                          "tool_input": {"text": "Titkos-tartalom-xyz — gondolatjel."}}, rules)
+    d = deny_lines(lines)
+    check("tiltas: pontosan egy DENY sor", rc == 2 and len(d) == 1, f"exit={rc} {d}")
+    check("a DENY sor idobelyeges", bool(d) and all(STAMP.match(l) for l in d), str(d))
+    check("a DENY sor a hivas helyet nevezi meg (fuggveny:sor)",
+          bool(d) and re.search(r" at [A-Za-z_]+:\d+ -- ", d[0]) is not None, str(d))
+    check("a DENY sor a kapu fejlecet idezi", bool(d) and "TILTVA" in d[0], str(d))
+    check("a DENY sor NEM tartalmazza a kimeno szoveget",
+          bool(d) and "Titkos-tartalom-xyz" not in d[0], str(d))
+    check("a hivo valtozatlanul megkapja az okot", "TILTVA" in err, err[:200])
+    rc, _, lines = run({"tool_name": "mcp__google-workspace__manage_email", "tool_input": 7}, rules)
+    check("email-ag tiltasa is naplozodik (masik exit-2 hely)",
+          rc == 2 and len(deny_lines(lines)) == 2, f"exit={rc} {deny_lines(lines)}")
+
 print()
 if failed:
     print(f"{len(failed)} FAILED: {failed}", file=sys.stderr)
