@@ -19,6 +19,12 @@
 // held. A STOP-like message therefore waits for the restart, bounded by the
 // fail-open end below.
 //
+// THE MAIN AGENT. The router never pushes to it (pull model); its mail is claimed by
+// POST /api/agents/<main>/drain-inbox, which asks the same hold and claims nothing
+// while it is on (routes/agents.ts). The inbox nudge that makes it drain is NOT gated:
+// a nudge typed into a pane about to be replaced costs one idle turn and claims
+// nothing. Same for the opt-in sub-agent Telegram wake nudge (follow-up upstream).
+//
 // FAIL-OPEN. A probe that throws answers "not held", and the guard's own probe
 // ends every hold at the phase's current deadline plus one sweep -- never at a
 // time computed from `now` -- so a guard that stops sweeping cannot keep an
