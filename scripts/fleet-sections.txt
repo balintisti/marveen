@@ -1,0 +1,41 @@
+# FLOTTA-SZAKASZOK, amiknek MINDEN AGENS-LAPON allniuk kell (kartya 83c47d59).
+# Olvassa: scripts/agent-core-check.py (orankent: fleet-page-guard.sh). A FO lap NEM olvassa:
+# annak a kanarija a claude-md-canary.txt, es a fo lapon ezek kozul 11 szandekosan nincs.
+#
+# MIERT LETEZIK: marveen (A) dontese, 2026-10-20 (kartya 83c47d59, komment 40483): a lapok
+# szandekos forkok, a kozos resz a rulebookban/skillben el, es egy KAPU jelzi, ha egy kozos
+# szakasz hianyzik egy laprol. A 2026-10-20-i cenzus (reports/83c47d59-census.md, friday)
+# szerint a kezzel masolt szakaszok kozul a BIZTONSAGI blokkon kivul SEMMIT nem orzott semmi:
+# a harom legujabb flotta-szabaly (TOKEN BUDGET, TOKEN RULES 2, WAITING COSTS) csak a lapokon
+# el, mashol egy peldanyban sem.
+#
+# ALAK:  kulcs | horgony || masik horgony
+#   A szakasz MEGVAN, ha a horgonyok BARMELYIKE szo szerint ott all. Tobb horgony azert kell,
+#   mert ugyanaz a szabaly lapcsaladonkent mas szoveggel el (a cenzus 3. pontja). A horgony
+#   a TORZSBOL jon, nem a cimbol: a cimek atneveztek, kis-nagybetut es ekezetet vesztettek.
+#   EKEZET-CSAPDA: szo szerinti illesztes, a lap ekezetes alakja kell.
+#
+# ISMERT HIANY:  !known <agens>: kulcs, kulcs
+#   Ami a bevezeteskor mar hianyzott. Nem csendes kivetel: minden futas kiirja, es ha a lap
+#   kozben megkapta a szakaszt, a sor ELAVULT-kent jelenik meg, hogy torolheto legyen.
+#   UJ hianyt ide irni annyi, mint a kaput kikapcsolni: elotte marveen dont.
+
+atadott-meres    | MI TENNÉ ÉRVÉNYTELENNÉ
+turns-end        | A message with no tool call ends your turn
+tacit            | tacit-assistant wiki context
+# EGY NEV a flottaban: Europe/Belgrade (marveen 34521, 2026-10-20; a fo lap szabalya is ez).
+# Ugyanaz az eltolas, mint Budapeste, de ket nev ket szabalynak olvasodott. A 6 dev lap es
+# mandark 2026-10-20-an atallt; a regi `Europe/Budapest` alak ezert MAR NEM horgony.
+idokezeles       | Europe/Belgrade
+memoria-rendszer | NINCS MENTAL NOTE
+mcp-deferred     | ToolSearch
+sender           | senderId
+done-eles        | addig nincs kész amíg csak a javítás van megcsinálva
+token-budget     | RISK-TIERED VERIFICATION
+token-rules-2    | FINISHED WORK GOES ON THE CARD ONLY
+waiting-costs    | WAITING COSTS TOKENS
+
+# --- ISMERT HIANY a bevezeteskor (2026-10-20, friday cenzusa) ---
+# deeper: marad kivetelkent (marveen 34521: mas modell es mas szerep). mandark mcp-deferred
+# hianyat 2026-10-20-an potoltuk a lapjan, ezert nincs itt.
+!known deeper: atadott-meres, turns-end, tacit, mcp-deferred, sender
