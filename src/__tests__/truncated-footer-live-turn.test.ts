@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  busyEvidence,
   detectPaneState,
   detectPermissionMode,
   detectsPermissionDialog,
@@ -209,6 +210,56 @@ describe('liveTurnFooterVisible', () => {
 
   it('is false when no input box is on screen', () => {
     expect(liveTurnFooterVisible('esc to interrupt')).toBe(false)
+  })
+})
+
+// didi, card 361d6b39 (LOW, against 659ac2b0f4): five mutants of the footer anchor survived the
+// first f5bb2626 pins. Each case below is red under exactly the mutant named, proven in a scratch
+// worktree, so a later "simplification" of these lines cannot pass unnoticed.
+describe('the dialog cursor and the busy anchor (didi, 361d6b39)', () => {
+  // M12: liveTruncatedFooterIndex stops on a `❯` line below the footer. The two older pins carry
+  // only a `>` cursor or only a question; this dialog has neither, only the `❯ 1. Yes` selection,
+  // so the `❯` branch is the sole thing that keeps the clipped footer from reading as the live one.
+  it('a dialog with only a `❯` cursor under a truncated footer is still a dialog, not idle', () => {
+    const p = [
+      NAMED_SEP, '❯ hi', SEP, TRUNCATED_PAREN_IDLE_FOOTER,
+      ' Allow this edit', ' ❯ 1. Yes', '   2. No', ' Esc to cancel · Tab to amend',
+    ].join('\n')
+    expect(detectsPermissionDialog(p)).toBe(true)
+    expect(detectPaneState(p)).not.toBe('idle')
+    expect(detectPermissionMode(p)).toBeNull()
+  })
+
+  // S1: detectPaneState anchors its busy windows with liveFooterIndex (the broad finder), not
+  // idleFooterIndex. A `⏵⏵ <mode> on` footer with no `…` and no idle tail is not an idle footer,
+  // but it is the anchor: without it the windows slide to the end of the pane, nine panel rows
+  // push `esc to interrupt` out of the window, and a running turn reads `unknown`.
+  it.each([2, 9])('a running turn whose footer is uncut chrome with no idle tail reads busy (%i agents)', (n) => {
+    const p = pane({ footer: '  ⏵⏵ bypass permissions on · 72 shells, 2 monitors · esc to interrupt', agents: n })
+    expect(detectPaneState(p)).toBe('busy')
+    expect(busyEvidence(p)).toBe('footer')
+  })
+
+  // S2: busyEvidence has its own anchor. The footer carries no `esc to interrupt` here, so the
+  // only busy sign is the spinner directly above the box: 'counter' when the window is anchored
+  // on the footer, but with the window at the end of the pane the nine panel rows hide the
+  // spinner and the evidence falls through to 'footer'.
+  it('busyEvidence anchors on the same footer: a spinner above the box is counter evidence', () => {
+    const p = pane({ footer: '  ⏵⏵ bypass permissions on · 72 shells, 2 monitors', agents: 9 })
+    expect(detectPaneState(p)).toBe('busy')
+    expect(busyEvidence(p)).toBe('counter')
+  })
+
+  // S3: the fallback of the broad finder is the mode GLYPH, not the truncated-tail regex. Prose
+  // that ends like a truncated tail has no glyph, so it must not become the anchor: if it did, the
+  // busy window would end at that line and the live spinner below it would never be seen.
+  it.each([
+    ['prose above a box', ['the guard stays on · see the report on the card…', '', '✽ Gitifying… (1m 32s · ↓ 5.4k tokens)', '', NAMED_SEP, '❯ ', SEP]],
+    ['prose above a long output', ['the guard stays on · see the report on the card…', ...Array.from({ length: 14 }, (_, i) => `  line ${i}`), '✽ Gitifying… (1m 32s · ↓ 5.4k tokens)']],
+  ])('%s that ends like a truncated tail is not the busy anchor', (_name, lines) => {
+    const p = (lines as string[]).join('\n')
+    expect(detectPaneState(p)).toBe('busy')
+    expect(busyEvidence(p)).toBe('counter')
   })
 })
 
