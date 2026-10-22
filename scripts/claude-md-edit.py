@@ -31,7 +31,8 @@ Hasznalat:
 """
 import argparse, fcntl, os, subprocess, sys, time
 
-PAGE = os.environ.get("CLAUDE_MD_PATH", "/Users/isti/marveen/CLAUDE.md")
+DEFAULT_PAGE = "/Users/isti/marveen/CLAUDE.md"
+PAGE = os.environ.get("CLAUDE_MD_PATH", DEFAULT_PAGE)
 BASE = os.environ.get("CLAUDE_MD_BASELINE", "/Users/isti/marveen/scripts/claude-md-baseline.txt")
 # A LOG-ot is env-bol lehet feluldefinialni. didi merte 2026-09-18 (kartya 144cb784):
 # a `PAGE`/`BASE`/`CANARY` mind feluldefinialhato volt, a `LOG` NEM -- tehat a proba-futasok
@@ -207,6 +208,13 @@ def check_generated_markers(path=None):
     return nevek, bajok
 
 
+def foreign_page_on_default_baseline():
+    """Igaz, ha a lap nem az alapertelmezett, de az alapvonal-fajl igen (nincs CLAUDE_MD_BASELINE)."""
+    if "CLAUDE_MD_BASELINE" in os.environ:
+        return False
+    return os.path.realpath(PAGE) != os.path.realpath(DEFAULT_PAGE)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true")
@@ -241,6 +249,18 @@ def main():
             print("  Egy indok, amit a kovetkezo olvaso nem tud ertelmezni, nem indok.", file=sys.stderr)
             sys.exit(5)
         a.grow = indok
+
+    # A LAP HIVAS-SZINTU, AZ ALAPVONAL GLOBALIS (deeper merte 2026-09-20, kartya 144cb784):
+    # egy masik lapra iranyitott hivas (`CLAUDE_MD_PATH`) a SAJAT meretet hasonlitotta a
+    # KOORDINATOR lapjanak alapvonalahoz, es a racsni (`min(cur, base)`, illetve a csokkenes
+    # utani szorulas) azt az alapvonalat irta at -- egy 145 ezres lap egy 188 ezres lap
+    # plafonjat vitte le, es utana a koordinator minden irasa megtagadva lett volna.
+    # Ezert: idegen lap CSAK sajat alapvonal-fajllal fut, a hibauzenet megmondja, hogyan.
+    if foreign_page_on_default_baseline():
+        print(f"NEM IRTAM: a lap ({PAGE}) nem az alapertelmezett, de az alapvonal igen ({BASE}).", file=sys.stderr)
+        print("  A racsni ennek a lapnak a meretere szoritana a KOZOS lap plafonjat.", file=sys.stderr)
+        print("  Add meg a lap SAJAT alapvonal-fajljat: CLAUDE_MD_BASELINE=<ut> (probahoz CLAUDE_MD_LOG-ot is).", file=sys.stderr)
+        return 64
 
     cur = size(PAGE); base = read_baseline()
 
