@@ -67,9 +67,11 @@ function installRoot(): string {
 // Async on purpose: spawnSync would block the in-process fake dashboard.
 function send(port: number, text: string): Promise<{ status: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const p = spawn('bash', [join(installRoot(), 'scripts', 'agent-msg.sh'), 'friday', 'marveen', text], {
+    const p = spawn('bash', [join(installRoot(), 'scripts', 'agent-msg.sh'), 'friday', 'marveen', '-'], {
       env: { ...process.env, MARVEEN_WEB_PORT: String(port) },
     })
+    // The live script takes the body on STDIN only (`-`); a positional body is refused with exit 5.
+    p.stdin.end(text)
     let stdout = ''
     let stderr = ''
     p.stdout.on('data', (c) => (stdout += c))
