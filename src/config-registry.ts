@@ -490,7 +490,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     default: 90,
     min: 7,
     max: 3650,
-    description: 'A token-használati napló (token_usage tábla) megőrzési ideje napokban. A napi sweep ennél régebbi sorokat törli, így a tábla nem nő korlátlanul. A modell-javaslat csak az utolsó 30 napot nézi, így a 90 nap minden fogyasztónak bőven elég.',
+    description: 'A token-használati napló (token_usage tábla) megőrzési ideje napokban. A napi sweep ennél régebbi sorokat törli, így a tábla nem nő korlátlanul. A modell-javaslat csak az utolsó 30 napot nézi, de a token-használati riportok és a havi költség-főkönyv tetszőleges időszakot lekérdezhetnek: a megőrzésnél régebbi időszakra ezek üres vagy hiányos adatot adnak, tehát egy rövidebb érték az ő visszatekintésüket is rövidíti.',
     module: 'system',
     secret: false,
     requiresRestart: false,
