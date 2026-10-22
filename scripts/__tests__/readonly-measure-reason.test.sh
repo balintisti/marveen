@@ -32,6 +32,8 @@ case "${STUB_MODE:-}" in
   old)      echo 'psql: could not connect to server: No route to host' >&2; exit 2 ;;
   noreadonly) echo BEGIN; echo SAVEPOINT; echo 'UPDATE 0'; echo ROLLBACK; echo SAVEPOINT; echo 'UPDATE 0'; echo ROLLBACK; echo ROLLBACK ;;
   scripterr)  echo BEGIN; echo SAVEPOINT; echo 'UPDATE 0'; echo ROLLBACK; echo 'psql:/x/m.sql:1: ERROR:  operator does not exist: uuid = integer'; exit 0 ;;
+  gaterel)  echo BEGIN; echo SAVEPOINT; echo 'psql:/x/wrapped.sql:4: ERROR:  relation "ProjectStatus" does not exist' >&2; echo ROLLBACK; echo SAVEPOINT; echo 'psql:/x/wrapped.sql:8: ERROR:  relation "ProjectStatus" does not exist' >&2; echo ROLLBACK; echo ROLLBACK ;;
+  unknown)  echo BEGIN; echo ROLLBACK ;;
   one)      echo "$STUB_GATE" >&2; echo 'psql:/x/m.sql:1: ERROR:  syntax error'; echo ROLLBACK ;;
   two)      echo "$STUB_GATE" >&2; echo "$STUB_GATE" >&2; echo ROLLBACK ;;
   wrap)     while [ $# -gt 0 ]; do [ "$1" = -f ] && cat "$2"; shift; done; echo "$STUB_GATE" >&2; echo "$STUB_GATE" >&2 ;;
@@ -67,6 +69,21 @@ rc="$(run scripterr "$T/bin" STUB_MODE=scripterr STUB_GATE="$GATE_LINE")"
 check "script error, gate silent: exit 3" "$rc" "3"
 check "script error is NOT mistaken for a connection failure" "$(has scripterr 'nincs kapcsolat')" "0"
 check "script error keeps the read-only text" "$(has scripterr 'NEM csak-olvaso')" "1"
+
+# Kartya 06d512fc: a kapu HIBARA futott (nem letezo kapu-tabla), UPDATE nem volt -- a
+# csak-olvasosagrol a kimenet semmit nem mond, a szoveg az elso hibat nevezi meg.
+rc="$(run gaterel "$T/bin" STUB_MODE=gaterel STUB_GATE="$GATE_LINE")"
+check "gate errored: exit 3" "$rc" "3"
+check "gate errored: names it as a gate error" "$(has gaterel 'a NYITO kapu HIBARA futott')" "1"
+check "gate errored: carries the first ERROR line" "$(grep -c '^  psql:/x/wrapped.sql:4: ERROR:  relation "ProjectStatus" does not exist' "$T/gaterel.out" || true)" "1"
+check "gate errored: does NOT claim the connection is not read-only" "$(has gaterel 'a kapcsolat NEM csak-olvaso')" "0"
+check "gate errored: NOT called a connection failure" "$(has gaterel 'nincs kapcsolat')" "0"
+
+# Se kapcsolat-hiba, se UPDATE, se ERROR: kimondja, hogy az ok nem allapithato meg.
+rc="$(run unknown "$T/bin" STUB_MODE=unknown STUB_GATE="$GATE_LINE")"
+check "no sign at all: exit 3" "$rc" "3"
+check "no sign at all: says the cause cannot be told" "$(has unknown 'az ok nem allapithato meg')" "1"
+check "no sign at all: does NOT claim the connection is not read-only" "$(has unknown 'a kapcsolat NEM csak-olvaso')" "0"
 
 # A tobbi ag valtozatlan: 2 kapu = siker (pozitiv kontroll), 1 kapu = a zaro kapu hianya (exit 4).
 rc="$(run two "$T/bin" STUB_MODE=two STUB_GATE="$GATE_LINE")"
