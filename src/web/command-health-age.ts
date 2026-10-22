@@ -47,7 +47,7 @@ export interface HealthAssessment {
  * feladat `stale` lenne a sajat tuzelesi masodpercében, majd megint `ok` --
  * egy jelzes, ami percenkent villog, egy heten belul zaj.
  */
-const TURES_MS = 15 * 60 * 1000
+export const TURES_MS = 15 * 60 * 1000
 
 export function assessCommandHealth(
   health: CommandHealth | undefined,
