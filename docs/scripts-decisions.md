@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **451** kovetett fajl, ebbol
-**135** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **454** kovetett fajl, ebbol
+**136** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -270,6 +270,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - MIERT LETEZIK. 2026-09-20-an megmertem, hogy mind a het agens LE VAN VALASZTVA
 - MIERT NEM BLOKKOL, HANEM JELEZ. A drift nem a futas pillanataban keletkezik, hanem amikor
+
+### `scripts/fleet-sections.txt`
+
+- MIERT LETEZIK: marveen (A) dontese, 2026-10-20 (kartya 83c47d59, komment 40483): a lapok
 
 ### `scripts/garmin_run_gate.py`
 
