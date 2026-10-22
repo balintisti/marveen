@@ -165,12 +165,20 @@ def _connect(db):
     return sqlite3.connect(f"file:{db}?mode=ro", uri=True)
 
 
+FUTURE_TOLERANCE_S = 300
+
+
 def _assert_units(con):
     """A ket egyseg futasidejuu ellenorzese.
 
     NEM stiluskerdes: ha egy jovobeli migracio atallitja valamelyik oszlopot,
     a szekciok NEM hibaznak -- csak ertelmetlen szamot irnak ki, es az
-    ertelmetlen szam is szam. Inkabb alljon meg."""
+    ertelmetlen szam is szam. Inkabb alljon meg.
+
+    A JOVOBELI ERTEK TURESE (kartya d4ebeaf8): a futas KOZBEN irt sor (a napindito sajat task_runs
+    sora) nehany ms-mal a `now` UTAN lehet. 2026-10-03 07:04-kor egy ilyen "-0 napos -- gyanus"
+    megallast adott, es mind a harom szekcio kimaradt. Ora-csuszas vagy egysegtevesztes ennel
+    nagysagrendekkel tobb, ezert a hatar FUTURE_TOLERANCE_S, nem nulla."""
     now = time.time()
     for tbl, col, unit in (("kanban_cards", "updated_at", "s"), ("task_runs", "ts", "ms")):
         mx = con.execute(f"select max({col}) from {tbl}").fetchone()[0]
@@ -180,7 +188,9 @@ def _assert_units(con):
         if seen != unit:
             raise RuntimeError(f"{tbl}.{col} egysege {seen}, a szkript {unit}-et var")
         age = now - (mx / 1000 if seen == "ms" else mx)
-        if age < 0 or age > 30 * 86400:
+        if age < -FUTURE_TOLERANCE_S:
+            raise RuntimeError(f"{tbl}.{col} legfrissebb erteke {-age:.0f} mp-cel a JOVOBEN van -- gyanus")
+        if age > 30 * 86400:
             raise RuntimeError(f"{tbl}.{col} legfrissebb erteke {age/86400:.0f} napos -- gyanus")
 
 
