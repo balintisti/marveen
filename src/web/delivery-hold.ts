@@ -21,9 +21,10 @@
 //
 // THE MAIN AGENT. The router never pushes to it (pull model); its mail is claimed by
 // POST /api/agents/<main>/drain-inbox, which asks the same hold and claims nothing
-// while it is on (routes/agents.ts). The inbox nudge that makes it drain is NOT gated:
-// a nudge typed into a pane about to be replaced costs one idle turn and claims
-// nothing. Same for the opt-in sub-agent Telegram wake nudge (follow-up upstream).
+// while it is on (routes/agents.ts), and the inbox nudge watcher (inbox-nudge-watcher.ts)
+// sends no nudge and no busy wakeup while it is on: an empty drain would count as a
+// stale nudge and, after three, fire a false alert. Not gated: the opt-in sub-agent
+// Telegram wake nudge (follow-up, as upstream).
 //
 // FAIL-OPEN. A probe that throws answers "not held", and the guard's own probe
 // ends every hold at the phase's current deadline plus one sweep -- never at a

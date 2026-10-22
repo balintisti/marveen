@@ -66,6 +66,7 @@
 import { logger } from '../logger.js'
 import { MAIN_AGENT_ID } from '../config.js'
 import { getPendingMessages } from '../db.js'
+import { deliveryHoldFor } from './delivery-hold.js'
 import { wakeRows } from '../message-wake.js'
 import { getEffectiveSettingValue } from '../settings-store.js'
 import { MAIN_CHANNELS_SESSION } from './main-agent.js'
@@ -417,6 +418,12 @@ async function tick(): Promise<void> {
   // and take the dashboard down.
   try {
     const now = Date.now()
+    // The context-guard is restarting the main agent (delivery-hold.ts): its drain-inbox
+    // claims nothing meanwhile, so a nudge now would only be an empty drain that this
+    // watcher counts as a stale nudge -- three of them (~15 min) fire a false "drain
+    // hook broken" alert and pause the idle branch. No nudge, no busy wakeup, no state
+    // change: the first tick after the hold starts from the state it had before it.
+    if (deliveryHoldFor(MAIN_AGENT_ID, now)) return
     // WAKING rows only: see the header. `pending` feeds the oldest id, the age, the stale
     // spell and every log count below, so filtering once here covers all of them.
     const pending = wakeRows(getPendingMessages(MAIN_AGENT_ID))
