@@ -7,16 +7,30 @@
 # Nulla felhasznalonal az `/api/auth/status` `login_available:false, setup_required:true`-t ad,
 # es a feluleten minden csempe uresen marad. Nem hiba: nincs kinek belepnie.
 #
-# A jelszot `read -s`-sel keri be, tehat NEM kerul se a parancssorba, se a hej-tortenetbe,
-# es a POST-ot python kuldi, tehat a jelszo hej-behelyettesitesen sem megy at.
+# MIERT A GEPEN FUTO CLI-T HIVJA, ES NEM A HTTP-T (kartya 1befbdb3, upstream #2163, DEVKEYMINT1022):
+# amint van dashboard-login, a `POST /api/auth/users` a gazda SESSIONJET kerik, a kozos
+# tokent 403-mal utasitja el (a token nem kulonbozteti meg a gazdat attol, aki ugyanazt
+# birtokolja). Ez a szkript eddig a tokennel hivta, tehat csak az ELSO felhasznalonal mukodott
+# volna. A gepen fut (nincs HTTP, nincs token): `scripts/dashboard-user.ts add`, ugyanaz a
+# jelszo-szabaly, ugyanaz a hash, ugyanaz az adatbazis, amit a futo dashboard olvas.
+#
+# A jelszot a CLI kerit be (ketszer, nem latszik, tty-rol), tehat NEM kerul se a parancssorba,
+# se a hej-tortenetbe. Jelszo parancssorban SOHA: automatizalashoz a CLI `--password-stdin`
+# kapcsoloja van (a jelszo csovon megy, nem argv-n).
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TOKEN_FILE="$DIR/store/.dashboard-token"
-PORT="$(grep -E '^WEB_PORT=' "$DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
-PORT="${PORT:-3420}"
 
-[ -f "$TOKEN_FILE" ] || { echo "HIBA: nincs dashboard-token: $TOKEN_FILE" >&2; exit 1; }
+# node@22 elol: a better-sqlite3 arra van forditva (a Homebrew alap node mas ABI-t ad), es
+# a futo szolgaltatas is azzal megy (com.marveen.dashboard).
+NODE_BIN=""
+for cand in /opt/homebrew/opt/node@22/bin /usr/local/opt/node@22/bin; do
+  [ -x "$cand/node" ] && { NODE_BIN="$cand"; break; }
+done
+[ -n "$NODE_BIN" ] && export PATH="$NODE_BIN:$PATH"
+
+TSX="$DIR/node_modules/.bin/tsx"
+[ -x "$TSX" ] || { echo "HIBA: nincs tsx: $TSX (npm install?)" >&2; exit 1; }
 
 USERNAME="${1:-}"
 if [ -z "$USERNAME" ]; then
@@ -24,38 +38,10 @@ if [ -z "$USERNAME" ]; then
   read -r USERNAME
 fi
 
-printf 'Jelszo (legalabb 10 karakter): '
-read -rs PASSWORD; echo
-printf 'Jelszo megegyszer: '
-read -rs PASSWORD2; echo
-
-if [ "$PASSWORD" != "$PASSWORD2" ]; then
-  echo "HIBA: a ket jelszo nem egyezik. Semmi nem tortent." >&2
+if [ ! -t 0 ]; then
+  echo "HIBA: a jelszot a CLI tty-n kerik be. Terminal nelkul: printf '%s' \"\$JELSZO\" | npm run dashboard-user -- add $USERNAME --password-stdin" >&2
   exit 1
 fi
 
-export MV_USER="$USERNAME" MV_PASS="$PASSWORD" MV_TOKEN="$(cat "$TOKEN_FILE")" MV_PORT="$PORT"
-unset PASSWORD PASSWORD2
-
-python3 - <<'PY'
-import json, os, urllib.request, urllib.error, sys
-body = json.dumps({"username": os.environ["MV_USER"], "password": os.environ["MV_PASS"]}).encode()
-req = urllib.request.Request(
-    f"http://127.0.0.1:{os.environ['MV_PORT']}/api/auth/users",
-    data=body,
-    headers={"Content-Type": "application/json",
-             "Authorization": "Bearer " + os.environ["MV_TOKEN"]},
-)
-try:
-    r = urllib.request.urlopen(req)
-    d = json.loads(r.read())
-    print(f"OK: a(z) '{d['user']['username']}' felhasznalo letrejott (id={d['user']['id']}).")
-    print("Mostantol be tudsz lepni a dashboardra bongeszobol.")
-except urllib.error.HTTPError as e:
-    try:
-        msg = json.loads(e.read()).get("error", "(nincs indoklas)")
-    except Exception:
-        msg = "(a valasz nem JSON)"
-    print(f"NEM JOTT LETRE. HTTP {e.code}: {msg}", file=sys.stderr)
-    sys.exit(1)
-PY
+cd "$DIR"
+exec "$TSX" scripts/dashboard-user.ts add "$USERNAME"

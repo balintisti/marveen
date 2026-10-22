@@ -16,7 +16,7 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **461** kovetett fajl, ebbol
+Populacio: `git ls-files scripts/` = **462** kovetett fajl, ebbol
 **138** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
@@ -210,6 +210,7 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/dashboard-user-add.sh`
 
 - MIERT LETEZIK: az `/api/*` MINDEN hivasa hitelesitest kivan (nincs loopback-mentesseg,
+- MIERT A GEPEN FUTO CLI-T HIVJA, ES NEM A HTTP-T (kartya 1befbdb3, upstream #2163, DEVKEYMINT1022):
 
 ### `scripts/decision-index.py`
 
