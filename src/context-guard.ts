@@ -1196,6 +1196,21 @@ export function restartNoticeWakes(
   return typeof handoffStaleMinutes === 'number' || handoffStaleMinutes === 'unknown'
 }
 
+/** Is the "Ujrainditottam" notice LOG-ONLY: no message row to the coordinator at all (card eca5e042)?
+ *  Even a quiet (wake: false) row stays pending and rides on the coordinator's next delivery, so a
+ *  restart with nothing to triage still costs reading tokens. True only when the notice would not
+ *  wake (restartNoticeWakes false: loss window measured and empty, handoff fresh) AND the restart
+ *  killed no running background work. Killed work keeps the message: the coordinator decides whether
+ *  to re-run it. Measured 2026-10-19 over 7 days: 45 of 683 notices were this case. */
+export function restartNoticeIsLogOnly(
+  lossNeedsAction: boolean | null,
+  handoffStaleMinutes: HandoffStaleness | undefined,
+  decisionReason: string,
+): boolean {
+  if (restartNoticeWakes(lossNeedsAction, handoffStaleMinutes)) return false
+  return !decisionReason.includes('KILLS running background work')
+}
+
 /** What a restart actually cost, as a line the notice carries instead of a warning it
  *  delegates (card 82d9b960).
  *

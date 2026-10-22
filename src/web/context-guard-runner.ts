@@ -55,6 +55,7 @@ import {
   buildRestartLossLine,
   restartLossNeedsAction,
   restartNoticeWakes,
+  restartNoticeIsLogOnly,
 } from '../context-guard.js'
 
 // Fleet context guard (kanban #81): acts BEFORE a session drowns in its own
@@ -917,6 +918,15 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
         // it could not measure and falls back to asking -- the old behaviour. A guard that
         // degrades into a confident "nothing was lost" is worse than one that admits it is blind.
         const { lossLine, lossNeedsAction } = measureRestartLoss(name)
+        // Nothing to triage and nothing killed: the notice goes to the log, not to the coordinator's
+        // queue (card eca5e042). The restart itself is still recorded here.
+        if (restartNoticeIsLogOnly(lossNeedsAction, decision.nextState.handoffStaleMinutes, decision.reason)) {
+          logger.info(
+            { name, reason: decision.reason, pct: pctRound, snapshotPath },
+            'context-guard: restart notice log-only (nothing to resend, handoff fresh, no work killed)',
+          )
+          break
+        }
         try {
           createAgentMessage(
             name,
