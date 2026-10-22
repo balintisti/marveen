@@ -2829,6 +2829,8 @@ let wizardCreatedName = ''
 // EXISTS and works), so `res.ok` alone cannot tell the operator anything -- without
 // reading this field the wizard would look exactly like a full success.
 let wizardPersonalityPending = null
+// Card 9419cf92: the gates the backend reports the new agent was created without.
+let wizardMissingGates = null
 
 // === Modal helpers ===
 function openModal(overlay) {
@@ -3032,6 +3034,19 @@ function renderWizardPendingBanner() {
   banner.hidden = false
 }
 
+// Paints (or clears) the step-3 missing-gates notice; cleared from resetWizard() too.
+function renderWizardGatesBanner() {
+  const banner = document.getElementById('wizardGatesBanner')
+  if (!banner) return
+  if (!wizardMissingGates) {
+    banner.hidden = true
+    return
+  }
+  document.getElementById('wizardGatesTitle').textContent = t('agents.wizard.gates_title')
+  document.getElementById('wizardGatesBody').textContent = t('agents.wizard.gates_body', { gates: wizardMissingGates.join(', ') })
+  banner.hidden = false
+}
+
 function resetWizard() {
   wizardStep = 1
   agentName.value = ''
@@ -3048,6 +3063,8 @@ function resetWizard() {
   wizardCreatedName = ''
   wizardPersonalityPending = null
   renderWizardPendingBanner()
+  wizardMissingGates = null
+  renderWizardGatesBanner()
   document.getElementById('wizardClaudeMd').value = ''
   document.getElementById('wizardSoulMd').value = ''
   populateProfileSelect(
@@ -3114,6 +3131,9 @@ document.getElementById('wizardNextBtn').addEventListener('click', async () => {
     wizardPersonalityPending = result.personalityPending
       ? { detail: result.detail || '', warning: result.warning || '' }
       : null
+    wizardMissingGates = Array.isArray(result.missingGates) && result.missingGates.length > 0
+      ? result.missingGates
+      : null
     statusEl.textContent = t('agents.soul_md_generating')
 
     // Fetch full agent details to get generated content
@@ -3149,6 +3169,7 @@ document.getElementById('wizardNextBtn').addEventListener('click', async () => {
       document.getElementById('wizardClaudeMd').value = generatedClaudeMd
       document.getElementById('wizardSoulMd').value = generatedSoulMd
       renderWizardPendingBanner()
+      renderWizardGatesBanner()
       updateWizardUI()
     }, 600)
   } catch (err) {

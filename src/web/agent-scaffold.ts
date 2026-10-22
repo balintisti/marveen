@@ -1982,6 +1982,47 @@ export function scaffoldAgentDir(name: string) {
   ensureTelegramCopyGate(name)
 }
 
+// THE GATES CHECKED ON THE RESULT, NOT ON THE ensure* RETURNS (card 9419cf92).
+//
+// Every ensure* above returns false BOTH for "already wired" and for "could not
+// install" (settings.json absent or unparseable, the gate script missing, the
+// template missing), and every one of those paths is silent. scaffoldAgentDir
+// discarded the returns, so a skipped gate looked exactly like an installed one.
+// Reading the returns would not fix that, since false means both things. So the
+// caller asks the FILE instead, after the LAST writer: which gate scripts does the
+// agent's settings.json actually reference?
+//
+// Presence by script name only. The ensure* functions own the exact command and
+// matcher (and a dashboard restart re-runs them); this answers the question the
+// creator cannot see: is the gate there at all.
+const SCAFFOLD_GATES: ReadonlyArray<{ gate: string; event: 'PreToolUse' | 'UserPromptSubmit'; script: string }> = [
+  { gate: 'staleness-guard', event: 'UserPromptSubmit', script: 'staleness-guard.py' },
+  { gate: 'egress-gate', event: 'PreToolUse', script: 'egress-gate.mjs' },
+  { gate: 'memory-index-write-gate', event: 'PreToolUse', script: 'memory-index-write-gate.py' },
+  { gate: 'outgoing-copy-gate', event: 'PreToolUse', script: 'outgoing-copy-gate.py' },
+  { gate: 'email-send-gate', event: 'PreToolUse', script: 'email-send-gate.mjs' },
+  { gate: 'self-pace-gate', event: 'PreToolUse', script: 'self-pace-gate.mjs' },
+]
+
+// Names of the gates a SUB-AGENT is missing; [] when all are in place. The main
+// agent is out of scope: its gates are repo-shipped in the tracked project
+// settings (#1305), which the ensure* family deliberately does not write.
+export function missingScaffoldGates(name: string): string[] {
+  if (name === MAIN_AGENT_ID) return []
+  const missing: string[] = []
+  if (!existsSync(join(quarantineReaderDestDir(name), 'quarantine-reader.md'))) missing.push('quarantine-reader')
+  const settings = readAgentSettingsChecked(agentSettingsPath(name), name, 'missingScaffoldGates')
+  if (settings === null) return [...missing, 'settings.json (absent or unparseable)']
+  const hooks = (settings.hooks && typeof settings.hooks === 'object')
+    ? settings.hooks as Record<string, unknown>
+    : {}
+  for (const g of SCAFFOLD_GATES) {
+    const entries = Array.isArray(hooks[g.event]) ? hooks[g.event] : []
+    if (!JSON.stringify(entries).includes(g.script)) missing.push(g.gate)
+  }
+  return missing
+}
+
 // HTML comment markers that delimit the auto-generated fleet roster block.
 // Using HTML comments means they are invisible to the LLM when the CLAUDE.md
 // is read as plain text, but are stable enough for regex replacement.

@@ -100,6 +100,7 @@ import {
 import {
   writeAgentSettingsFromProfile,
   scaffoldAgentDir,
+  missingScaffoldGates,
   generateClaudeMd,
   generateSoulMd,
 } from '../agent-scaffold.js'
@@ -1069,6 +1070,13 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
     writeAgentModel(name, model)
     writeAgentSecurityProfile(name, profileId)
     writeAgentSettingsFromProfile(name, loadProfileTemplate(profileId))
+    // Card 9419cf92: every ensure* skip is silent, so measure the final
+    // settings.json (after the profile writer, the last one) and say what is missing.
+    const missingGates = missingScaffoldGates(name)
+    if (missingGates.length > 0) {
+      logger.warn({ name, missingGates }, 'Agent created WITHOUT these gates; a dashboard restart re-runs the ensure* backfill')
+    }
+    const gatesField = missingGates.length > 0 ? { missingGates } : {}
     // A new agent comes up with the context guard ARMED (fleet policy, 2026-09-08).
     // Written as an explicit store row rather than by moving
     // DEFAULT_CONTEXT_GUARD: the default is also what hidden technical workers
@@ -1216,12 +1224,17 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
       // What DOES exist is PUT /api/agents/:name with claudeMd/soulMd, so that is
       // what the message points at. The sentinel stays as a marker for whenever a
       // regeneration path gets built; it just must not be described as one today.
-      json(res, { ok: true, name, personalityPending: true, warning: 'Agent created with a template personality because generation failed. Edit CLAUDE.md and SOUL.md to replace it.', detail: personalityPendingDetail, ...skippedField }, 200)
+      json(res, { ok: true, name, personalityPending: true, warning: 'Agent created with a template personality because generation failed. Edit CLAUDE.md and SOUL.md to replace it.', detail: personalityPendingDetail, ...skippedField, ...gatesField }, 200)
       return true
     }
 
     if (personaSkipped.length > 0) {
-      json(res, { ok: true, name, ...skippedField })
+      json(res, { ok: true, name, ...skippedField, ...gatesField })
+      return true
+    }
+
+    if (missingGates.length > 0) {
+      json(res, { ok: true, name, missingGates })
       return true
     }
 
