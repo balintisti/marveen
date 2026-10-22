@@ -19,6 +19,8 @@
 #     .claude/channels/*/.env      (MAIN orchestrator channel token)
 #     .claude/channels/*/access.json, invites.json, approved/**  (pairing state)
 #     Library/LaunchAgents/com.<MAIN_AGENT_ID>.*.plist (launchd jobs)
+#     Backups/agent-reports        (the agents' reports/ snapshot repo with its git history,
+#                                   scripts/agent-reports-snapshot.sh; card 23bd6a95)
 #
 # Output: backups/claudeclaw-YYYYmmdd-HHMMSS.tar.gz
 # Retention: keeps the most recent 14 archives, prunes the rest.
@@ -190,6 +192,70 @@ if [[ -d "${HOME}/Library/LaunchAgents" ]]; then
   ( cd "${HOME}" && find Library/LaunchAgents -maxdepth 1 -name "com.${MAIN_AGENT_ID}.*.plist" -print ) >> "${HOMELIST}"
 fi
 
+# THE AGENTS' REPORTS (card 23bd6a95, Isti 2026-10-04: no GitHub copy, the offsite one instead).
+# agents/<n>/reports/ sits in no git repository; scripts/agent-reports-snapshot.sh mirrors every
+# such tree into ~/Backups/agent-reports (a LOCAL-ONLY git repo, every 30 minutes). Until now that
+# copy lived on this disk only. It joins the archive, and the archive is what the offsite job
+# encrypts, uploads and restore-tests, so the reports leave the machine encrypted like everything
+# else here and no new destination or credential exists.
+#
+# FAIL-CLOSED, and judged on the RESULT, not on the job having run:
+#   - there are report files and no snapshot repo (or one with nothing tracked): the archive says
+#     nothing about them, which looks exactly like a good backup -- a failed condition (exit 7);
+#   - a source file older than the snapshot interval differs from its snapshot copy, or is not in
+#     it: the snapshot job has stopped, and the "copy" is stale -- a failed condition;
+#   - the staged copy's git history does not pass a connectivity check (the snapshot may be
+#     committing while it is copied): copied again once, then a failed condition;
+#   (a snapshot directory that did not make it into the archive is exit 6, through the manifest check)
+# A file younger than REPORTS_GRACE_MIN is not compared: the snapshot job may simply not have
+# reached it yet, and failing on that would teach everyone to ignore the alert.
+# The archive is ALWAYS written (the database and tokens in it are worth keeping), like exit 3.
+REPORTS_REL="Backups/agent-reports"
+REPORTS_SNAP="${HOME}/${REPORTS_REL}"
+REPORTS_GRACE_MIN=35
+REPORTS_FAIL=""
+REPORTS_SRC_N=0
+REPORTS_CHECKED=0
+REPORTS_SNAP_HEAD=""
+
+# reports_sources [find args] -> "<agent>/<path under reports/>" per file; the same glob and
+# `find -L` as the snapshot script, so both name the same population.
+reports_sources() {
+  local d a
+  for d in agents/*/reports; do
+    [[ -d "${d}" ]] || continue
+    a="$(basename "$(dirname "${d}")")"
+    ( cd "${d}" && find -L . -type f ! -name '.DS_Store' "$@" | sed "s|^\./|${a}/|" )
+  done
+}
+
+REPORTS_SRC_N="$(reports_sources | grep -c . || true)"
+[[ -d "${REPORTS_SNAP}" ]] && echo "${REPORTS_REL}" >> "${HOMELIST}"
+if [[ "${REPORTS_SRC_N}" -gt 0 ]]; then
+  if ! command -v git >/dev/null 2>&1; then
+    REPORTS_FAIL="${REPORTS_FAIL} git is not installed, the reports snapshot cannot be checked;"
+  elif [[ ! -d "${REPORTS_SNAP}/.git" ]]; then
+    REPORTS_FAIL="${REPORTS_FAIL} ${REPORTS_SRC_N} report files exist but there is no snapshot repo at ${REPORTS_SNAP};"
+  elif [[ "$(git -C "${REPORTS_SNAP}" ls-files | grep -c . || true)" -eq 0 ]]; then
+    REPORTS_FAIL="${REPORTS_FAIL} ${REPORTS_SRC_N} report files exist but the snapshot repo tracks none;"
+  else
+    REPORTS_SNAP_HEAD="$(git -C "${REPORTS_SNAP}" rev-parse --short HEAD 2>/dev/null || echo '?')"
+    REPORTS_STALE=0
+    REPORTS_STALE_NAMES=""
+    while IFS= read -r _rel; do
+      [[ -z "${_rel}" ]] && continue
+      REPORTS_CHECKED=$((REPORTS_CHECKED + 1))
+      if ! cmp -s "agents/${_rel%%/*}/reports/${_rel#*/}" "${REPORTS_SNAP}/${_rel}" 2>/dev/null; then
+        REPORTS_STALE=$((REPORTS_STALE + 1))
+        [[ "${REPORTS_STALE}" -le 3 ]] && REPORTS_STALE_NAMES="${REPORTS_STALE_NAMES} ${_rel}"
+      fi
+    done < <(reports_sources -mmin "+${REPORTS_GRACE_MIN}")
+    if [[ "${REPORTS_STALE}" -gt 0 ]]; then
+      REPORTS_FAIL="${REPORTS_FAIL} ${REPORTS_STALE} of ${REPORTS_CHECKED} report files older than ${REPORTS_GRACE_MIN} min differ from the snapshot or are missing from it (the snapshot job has stopped?):${REPORTS_STALE_NAMES};"
+    fi
+  fi
+fi
+
 # THE AGENT-FILE COUNT IS A SUCCESS CONDITION, NOT A DETAIL (card fb315ca6, marveen's ruling).
 # From 09-18 this block collected ZERO agent files and the run still printed "backup: wrote":
 # a backup that silently stops covering the agents looks exactly like one that works. If agent
@@ -257,6 +323,8 @@ fi
     echo "repo/local-commits.bundle   (git bundle: local branches absent from origin)"
   fi
   echo "--- home/ ---"; sed 's,^,home/,' "${HOMELIST}" 2>/dev/null || true
+  echo "--- reports ---"
+  echo "agent reports: ${REPORTS_SRC_N} source files, ${REPORTS_CHECKED} compared byte for byte, snapshot HEAD ${REPORTS_SNAP_HEAD:-none}"
 } > "${MANIFEST}"
 
 # --- Assemble the archive via a staging dir, then one plain tar. -----------
@@ -293,6 +361,19 @@ stage_group() {  # stage_group <listfile> <base> <group>
 
 stage_group "${REPOLIST}" "${REPO_ROOT}" repo
 stage_group "${HOMELIST}" "${HOME}" home
+
+# The snapshot job may be committing while its repository is copied. A copy whose history does not
+# connect is worse than no copy (it looks like a backup), so it is checked and, once, copied again.
+if [[ -d "${STAGE}/home/${REPORTS_REL}/.git" ]]; then
+  if ! git -C "${STAGE}/home/${REPORTS_REL}" fsck --connectivity-only --no-dangling >/dev/null 2>&1; then
+    rm -rf "${STAGE}/home/${REPORTS_REL}"
+    mkdir -p "${STAGE}/home/$(dirname "${REPORTS_REL}")"
+    cp -pR "${REPORTS_SNAP}" "${STAGE}/home/$(dirname "${REPORTS_REL}")/" 2>/dev/null || true
+    if ! git -C "${STAGE}/home/${REPORTS_REL}" fsck --connectivity-only --no-dangling >/dev/null 2>&1; then
+      REPORTS_FAIL="${REPORTS_FAIL} the copied history of ${REPORTS_SNAP} does not pass a git connectivity check, twice;"
+    fi
+  fi
+fi
 
 if [[ -n "${BUNDLE}" ]]; then
   mkdir -p "${STAGE}/repo"
@@ -398,7 +479,19 @@ ls -1t "${BACKUP_DIR}"/claudeclaw-*.tar.gz 2>/dev/null | tail -n +$((KEEP + 1)) 
   echo "backup: pruned $(basename "${f}")"
 done
 
+FINAL_RC=0
 if [[ -n "${EMPTY_AGENTS}" ]]; then
   echo "backup: FAILED CONDITION -- no files collected for agent(s):${EMPTY_AGENTS} (${AGENT_FILES} agent files from ${AGENT_DIRS} dirs in total); the archive was written but does NOT cover them." >&2
-  exit 3
+  FINAL_RC=3
 fi
+if [[ -n "${REPORTS_FAIL}" ]]; then
+  echo "backup: FAILED CONDITION -- the agents' reports are not covered:${REPORTS_FAIL} the archive was written but its reports part is NOT a good copy." >&2
+  # Same reason as the verification alert above: a loud line in a log nobody opens is no alert.
+  if [[ -x "${REPO_ROOT}/scripts/agent-msg.sh" ]]; then
+    bash "${REPO_ROOT}/scripts/agent-msg.sh" "${MAIN_AGENT_ID}" "${MAIN_AGENT_ID}" \
+      "[MENTES] A napi mentes riport-resze NEM teljes ${STAMP}-kor:${REPORTS_FAIL} Az archivum megvan, de az agents/*/reports masolata nem megbizhato." \
+      >/dev/null 2>&1 || echo "backup: WARN could not queue the reports alert for ${MAIN_AGENT_ID}" >&2
+  fi
+  [[ "${FINAL_RC}" -eq 0 ]] && FINAL_RC=7
+fi
+exit "${FINAL_RC}"
