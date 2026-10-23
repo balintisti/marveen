@@ -39,3 +39,6 @@ waiting-costs    | WAITING COSTS TOKENS
 # deeper: marad kivetelkent (marveen 34521: mas modell es mas szerep). mandark mcp-deferred
 # hianyat 2026-10-20-an potoltuk a lapjan, ezert nincs itt.
 !known deeper: atadott-meres, turns-end, tacit, mcp-deferred, sender
+# A worktree-nyitas a segedre mutasson (kartya 5d2b94a9, marveen 44912): a nyers `git worktree add` csovon at
+# elnyelte a bukas rc-jet, es origin/develop-rol az idegen upstreamet allitotta be.
+worktree-uj      | scripts/worktree-uj.sh
