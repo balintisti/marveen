@@ -70,5 +70,28 @@ class CanaryAlreadyMissing(unittest.TestCase):
         self.assertIn("kanari: megvan mind", p.stdout)
 
 
+    def rulebook(self, text):
+        rb = Path(self.d, "rulebook"); rb.mkdir(exist_ok=True)
+        Path(rb, "szabalyok.md").write_text(text, encoding="utf-8")
+
+    def test_rulebookba_koltozott_nem_figyelmeztet_es_megnevezi_a_helyet(self):
+        """marveen 37993: a 10-07-i vagas SZANDEKOS volt; a koltozott mondat ne nyaggasson orokke."""
+        self.rulebook("bevezeto\nKANARI-B itt el most\n")
+        p = self.edit("HORGONY", "HORGONY uj sor")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("rulebook/szabalyok.md", p.stdout)
+        self.assertNotIn("MAR HIANYZIK", p.stderr)
+        self.assertNotIn("CANARY ALREADY MISSING", self.log.read_text(encoding="utf-8"))
+        c = self.check()
+        self.assertEqual(c.returncode, 0, c.stdout + c.stderr)
+        self.assertIn("1 a rulebookban", c.stdout)
+
+    def test_kontroll_rulebook_mellett_is_megtagadja_a_sajat_vesztet(self):
+        """a rulebook csak a MAR koltozottet menti fel: egy lapon allo mondat elvitele tovabbra is rc 69"""
+        self.rulebook("KANARI-A es KANARI-B is itt all\n")
+        p = self.edit("KANARI-A itt all\n", "")
+        self.assertEqual(p.returncode, 69, p.stdout + p.stderr)
+        self.assertEqual(self.page.read_text(encoding="utf-8"), PAGE0)
+
 if __name__ == "__main__":
     unittest.main()

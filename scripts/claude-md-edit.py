@@ -29,7 +29,7 @@ Hasznalat:
   claude-md-edit.py --anchor-file A --replace-file B --grow "miert no"
   claude-md-edit.py --set-baseline --reason "bontas utan"
 """
-import argparse, fcntl, os, subprocess, sys, time
+import argparse, fcntl, glob, os, subprocess, sys, time
 
 DEFAULT_PAGE = "/Users/isti/marveen/CLAUDE.md"
 PAGE = os.environ.get("CLAUDE_MD_PATH", DEFAULT_PAGE)
@@ -103,6 +103,29 @@ def canary_lines():
 def check_canary(text):
     """A HIANYZO teherhordo mondatok listaja. Ures lista = minden megvan."""
     return [c for c in canary_lines() if c not in text]
+
+def moved_to_rulebook(lines):
+    """{mondat: [rulebook-fajl, ...]} azokra, amik a lap melletti rulebook/*.md-ben allnak.
+
+    A 2026-10-07-i vagas SZANDEKOSAN vitt 6 kanari-mondatot a rulebookba (marveen 37993): azok
+    nem vesztek el, csak MASHOL elnek. Ha ezt a jelentes nem tudja, minden iras orokke
+    figyelmeztet, es egy orokke szolo figyelmeztetes mellett a VALODI veszteseg nem hallatszik.
+    A rulebook a LAP konyvtarahoz kepest van, nem beegetve: egy proba-lap a sajat rulebookjat latja.
+    """
+    rb = os.path.join(os.path.dirname(os.path.abspath(PAGE)), "rulebook")
+    texts = {}
+    for f in sorted(glob.glob(os.path.join(rb, "*.md"))):
+        try:
+            with open(f, encoding="utf-8") as fh:
+                texts[os.path.relpath(f, os.path.dirname(rb))] = fh.read()
+        except OSError:
+            pass
+    out = {}
+    for c in lines:
+        hits = [n for n, t in texts.items() if c in t]
+        if hits:
+            out[c] = hits
+    return out
 
 def log(msg):
     try:
@@ -279,7 +302,12 @@ def main():
             hiany = check_canary(open(PAGE, encoding="utf-8").read())
         except CanaryUnavailable as e:
             print(f"KANARI: {e}", file=sys.stderr); return 70
-        print(f"kanari: {'megvan mind' if not hiany else f'HIANYZIK {len(hiany)}'}")
+        moved = moved_to_rulebook(hiany)
+        for m, fs in moved.items():
+            print(f"  kanari a rulebookban: {m} ({', '.join(fs)})")
+        hiany = [m for m in hiany if m not in moved]
+        print(f"kanari: {'megvan mind' if not hiany else f'HIANYZIK {len(hiany)}'}"
+              + (f" ({len(moved)} a rulebookban)" if moved else ""))
         for m in hiany:
             print(f"  KANARI-HIANY: {m}", file=sys.stderr)
         nevek, bajok = check_generated_markers()
@@ -365,13 +393,19 @@ def main():
             print("  SZANDEKOSAN valtozik, eloszor a kanari-listat javitsd, aztan a lapot.", file=sys.stderr)
             log(f"CANARY REFUSED: {missing}")
             return 69
-        if already:
-            print(f"FIGYELEM: a laprol MAR HIANYZIK {len(already)} teherhordo mondat (nem ez az iras vitte el):",
-                  file=sys.stderr)
-            for m in already:
+        moved = moved_to_rulebook(already)
+        lost = [c for c in already if c not in moved]
+        if moved:
+            files = sorted({f for fs in moved.values() for f in fs})
+            print(f"kanari: {len(moved)} mondat a rulebookban el ({', '.join(files)}), nem a lapon.")
+        if lost:
+            print(f"FIGYELEM: a laprol MAR HIANYZIK {len(lost)} teherhordo mondat, es a rulebookban sincs"
+                  " (nem ez az iras vitte el):", file=sys.stderr)
+            for m in lost:
                 print(f"    - {m}", file=sys.stderr)
-            print("  Vagy vissza a lapra, vagy (dontes) ki a `scripts/claude-md-canary.txt`-bol.", file=sys.stderr)
-            log(f"CANARY ALREADY MISSING (not blocking): {already}")
+            print("  Vagy vissza a lapra / a rulebookba, vagy (dontes) ki a `scripts/claude-md-canary.txt`-bol.",
+                  file=sys.stderr)
+            log(f"CANARY ALREADY MISSING (not blocking): {lost}")
         os.lseek(fd, 0, 0); os.ftruncate(fd, 0)
         os.write(fd, new_s.encode("utf-8"))
         print(f"OK: {len(s):,} -> {new_n:,} karakter ({new_n - len(s):+,})")
