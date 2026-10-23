@@ -12,7 +12,7 @@
  * A MECHANIZMUS ket, kulon-kulon HELYES resz talalkozasa:
  *   - `strip_heredoc_bodies` SZANDEKOSAN megtartja a body-t, ha az opener vegrehajtja
  *     (`psql <<'SQL'`), hogy ellenorizheto legyen;
- *   - a szegmentalas `\n`-en is vag, a SQL-osztaly viszont KET dolgot kiван UGYANABBAN a
+ *   - a szegmentalas `\n`-en is vag, a SQL-osztaly viszont KET dolgot kivan UGYANABBAN a
  *     szegmensben (klienst ES utasitast).
  * Egyutt: a body SOHA nem kerulhet egy szegmensbe a psql-lel, ami vegrehajtja.
  *

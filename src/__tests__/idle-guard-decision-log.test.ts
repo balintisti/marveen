@@ -97,7 +97,7 @@ describe('a tetlen-or MINDEN dontest naplozza (60060415)', () => {
     )
     expect(call?.[0]).toMatchObject({ idleGuard: true, agent: 'x' })
     // Az uzenet is nevezze meg az agenst es a dontest -- egy `{}`-be rejtett reason
-    // nem kereshetо a naplobol.
+    // nem keresheto a naplobol.
     expect(String(call?.[1])).toMatch(/x -> busy/)
   })
 

@@ -75,7 +75,7 @@ describe('GET /api/kanban -- a nema elnyeles megszunt', () => {
     })
   })
 
-  it('a kitalalt szo is 400 -- nem csak a "hihetо" nevek', async () => {
+  it('a kitalalt szo is 400 -- nem csak a "hiheto" nevek', async () => {
     const { status, payload } = await get('/api/kanban?hopponellenorizd=1')
     expect(status).toBe(400)
     expect(payload.error).toContain('hopponellenorizd')

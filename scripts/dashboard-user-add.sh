@@ -1,7 +1,7 @@
 #!/bin/bash
 # Marveen -- dashboard felhasznalo letrehozasa (bongeszos belepeshez).
 #
-# MIERT LETEZIK: az `/api/*` MINDEN hivasa hitelesitest kiван (nincs loopback-mentesseg,
+# MIERT LETEZIK: az `/api/*` MINDEN hivasa hitelesitest kivan (nincs loopback-mentesseg,
 # `src/web/auth-gate.ts` requiresAuth). Aki bongeszobol nyitja meg a dashboardot -- pl.
 # telefonrol, tailneten at --, annak SESSION kell, ahhoz pedig felhasznalo.
 # Nulla felhasznalonal az `/api/auth/status` `login_available:false, setup_required:true`-t ad,

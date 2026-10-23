@@ -234,7 +234,7 @@ es akkor a „nem vak" allitas maga bizonyitatlan.
 **A KET SZABALY, ES MINDKETTO EGY SZO:**
 
     1. a kontroll cimkeje mondja meg, MIT szamol: SORT vagy TALALATOT (`grep -c` SORT)
-    2. es hogy kis/nagybetu- es ekezet-ERZEKENY-e -- a `-i` legyen KIIRVA, ne felteteлezve
+    2. es hogy kis/nagybetu- es ekezet-ERZEKENY-e -- a `-i` legyen KIIRVA, ne feltetelezve
 
 *(Es a mai eset konkluzioja NEM mozdult egyik meronel sem: a LELET a nullak voltak (`tartozas`,
 `TAROL`, `amint a sor urul`), es azok MINDHAROM meroval, mindket esetben 0-t adnak. A cimke volt

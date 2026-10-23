@@ -13,7 +13,7 @@ import { tryHandleMessages } from '../web/routes/messages.js'
 // (friday->didi, marveen->dexter, marveen->dexter).
 //
 // A POZITIV KONTROLL, ami eldontotte: `?to=marveen` es `?to=NINCS_ILYEN_AGENS`
-// BETU SZERINT AZONOS id-listat adott. Enelkul ket egyformán hihetо magyarazat
+// BETU SZERINT AZONOS id-listat adott. Enelkul ket egyformán hiheto magyarazat
 // allt volna szemben (mas ablak kontra nem-szuro parameter).
 
 beforeEach(() => { initDatabase(':memory:') })

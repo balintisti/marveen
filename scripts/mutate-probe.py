@@ -85,7 +85,7 @@ def strip_comment_lines(text: str) -> str:
 # MIERT NEM ELEG a `.split("Tests")[-1]` (merve 2026-08-27, ez a szerszam adott
 # rossz verdiktet tole): a vitest a bukas-reszletezot a STDERR-re irja, az
 # osszegzot a STDOUT-ra, es a ketto osszefuzese utan az UTOLSO "Tests" elofordulas
-# a `--- Failed Tests 1 ---` BANNERBEN van, nem az osszegzoben. A probа igy a
+# a `--- Failed Tests 1 ---` BANNERBEN van, nem az osszegzoben. A proba igy a
 # ` 1 ---` sztringben kereste a "failed" szot, nem talalta, es HAROM valodi
 # leletet jelentett TULELTNEK. Az iranya a rosszabbik: egy mukodo teszt-keszletrol
 # allitotta, hogy nem allit semmit.

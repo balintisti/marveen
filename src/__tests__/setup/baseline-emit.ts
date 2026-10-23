@@ -8,7 +8,7 @@ import { countTests, toTaskTree } from './suite-size-guard.js'
  *
  * Csak az alapvonal-frissito (`npm run test:baseline`) hasznalja, es CSAK akkor
  * kapcsol be, ha a `SUITE_BASELINE_EMIT` env meg van adva -- egy normal futason
- * nincs jelen, tehat nem tud melleкhatast okozni.
+ * nincs jelen, tehat nem tud mellekhatast okozni.
  *
  * A SZAMOLAS UGYANAZ A `countTests`, amit az or hasznal. Ha ket kulon szamolo
  * lenne, az alapvonal es az ellenorzes csendben elteronek indulhatna -- es epp

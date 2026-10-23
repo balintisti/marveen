@@ -55,7 +55,7 @@ db = make_db(cards=[
 con = con_for(db)
 out = ns.section_isti(con)
 check("1: a szam a waiting ES Isti metszete (kisbetus gazdaval egyutt)", out[0].split()[3], "2")
-check_true("1: a legregebbi kora a 10 napos kartyaе", "10 napja" in out[0])
+check_true("1: a legregebbi kora a 10 napos kartyae", "10 napja" in out[0])
 check_true("1: a MAS gazdaju 99 napos kartya NEM szamit bele", "99" not in " ".join(out))
 check_true("1: az ARCHIVALT sem", "ARCHIVALT" not in " ".join(out))
 # KONTROLL: a mero tud nullat is mondani, es akkor MAS mondatot ir
@@ -178,7 +178,7 @@ def _fake_root(payload):
     root = tempfile.mkdtemp()
     os.makedirs(os.path.join(root, "scripts"))
     p = os.path.join(root, "scripts", "seed-drift-check.ts")
-    open(p, "w").write("x")            # a letezese a feltetel; a futtatast stubolјuk
+    open(p, "w").write("x")            # a letezese a feltetel; a futtatast stuboljuk
     return root, p
 
 _real_run = ns.subprocess.run
