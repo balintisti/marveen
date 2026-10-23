@@ -966,14 +966,24 @@ def self_test():
     row, _ = detached("wake-short", "0.1", {"HEAVY_RUN_WAKE_MIN_S": "30"})
     results.append(("CONTROL: detached but under the threshold sends nothing",
                     len(stub_calls()) == 1 and row.get("wake") == "short"))
+    # the threshold counts the WAIT too (trillian 37834: a mutant measuring the run alone stayed green):
+    # the same agent holds the only slot it may have, so this detached run queues ~2.5 s, then runs 0.1 s
+    hold = subprocess.Popen([sys.executable, me, "--label", "wake-hold", "--", "sleep", "2.5"],
+                            env={**wenv, "HEAVY_AGENT": "wk"}, stderr=subprocess.PIPE, text=True)
+    time.sleep(0.8)
+    row, _ = detached("wake-queued", "0.1", {"HEAVY_RUN_WAKE_MIN_S": "1.5"})
+    hold.communicate(timeout=30)
+    results.append(("waited 2.5 s + ran 0.1 s against a 1.5 s threshold: the wait counts, the message goes",
+                    row.get("waited_s", 0) > 1.5 and row.get("ran_s", 9) < 1.5 and row.get("wake") == "sent"
+                    and len(stub_calls()) == 2))
     p = subprocess.Popen([sys.executable, me, "--label", "wake-attached", "--", "sleep", "1.5"],
                          env={**wenv, "HEAVY_AGENT": "wk"}, stderr=subprocess.PIPE, text=True)
     p.communicate(timeout=30)
     results.append(("CONTROL: a run whose parent is alive (run_in_background) sends nothing",
-                    len(stub_calls()) == 1 and run_row("wake-attached").get("wake") == "not-detached"))
+                    len(stub_calls()) == 2 and run_row("wake-attached").get("wake") == "not-detached"))
     row, _ = detached("gate 1234abcd", "1.5", {"STUB_RC": "2"})
     results.append(("refused (rc 2): no retry, the result goes to the label's card as a comment",
-                    len(stub_calls()) == 2 and row.get("wake") == "card" and len(posted) == 1 and
+                    len(stub_calls()) == 3 and row.get("wake") == "card" and len(posted) == 1 and
                     posted[0][0] == "/api/kanban/1234abcd/comments" and posted[0][1] == "Bearer t0ken" and
                     posted[0][2]["author"] == "wk" and "label=gate 1234abcd rc=0" in posted[0][2]["content"]))
     row, _ = detached("no card here", "1.5", {"STUB_RC": "2"})
@@ -999,7 +1009,7 @@ def self_test():
             else:
                 os.environ[k] = v
     results.append(("the same run id wakes once (second call: dup)", (first, second) == ("sent", "dup")))
-    results.append(("an unknown agent is not messaged", unknown == "unknown-agent" and len(stub_calls()) == 4))
+    results.append(("an unknown agent is not messaged", unknown == "unknown-agent" and len(stub_calls()) == 5))
     srv.shutdown()
 
     shutil.rmtree(base, ignore_errors=True)
