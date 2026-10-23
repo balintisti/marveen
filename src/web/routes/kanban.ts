@@ -426,6 +426,21 @@ export function parseIncludeArchived(raw: string | null): boolean | null {
   return null
 }
 
+/**
+ * Card 85f9f3ef: the prose-leftover hint for a card that is closing. A WARNING,
+ * never a refusal: any failure here is logged and ignored, so a closing is never
+ * held up by an advisory line. Both closing doors (POST /move, PUT status done) use it.
+ */
+function proseWarningFor(id: string): string | null {
+  try {
+    const hints = proseLeftoverHints(getKanbanComments(id), id, (c) => !!getKanbanCard(c))
+    return hints.length > 0 ? proseLeftoverWarning(hints) : null
+  } catch (err) {
+    logger.warn({ err, id }, 'Kanban close: prose leftover hint failed (ignored)')
+    return null
+  }
+}
+
 export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   const { req, res, path, method, url } = ctx
 
@@ -1101,6 +1116,9 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     if (roCard && data.status === 'done' && (roCard as { status?: string }).status !== 'done') {
       if (closeBlocked(res, id, data, actor)) return true
     }
+    // Card 85f9f3ef: the same advisory line as POST /move, because this door closes too.
+    const closingProseWarning = roCard && data.status === 'done' && (roCard as { status?: string }).status !== 'done'
+      ? proseWarningFor(id) : null
     const result = updateKanbanCard(id, data, actor)
     if (result.outcome === 'not-found') { json(res, { error: 'Kártya nem található' }, 404); return true }
 
@@ -1131,10 +1149,16 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
           + 'kinek a munkajat cserelted le -- a visszaolvasas ezt NEM mutatja meg, mert a '
           + 'sajat szovegedet adja vissza.',
         ...(archiveWarning ? { archived: true, archivedWarning: archiveWarning } : {}),
+        ...(closingProseWarning ? { proseWarning: closingProseWarning } : {}),
       })
       return true
     }
-    json(res, { ok: true, changed: true, ...(archiveWarning ? { archived: true, warning: archiveWarning } : {}) })
+    json(res, {
+      ok: true,
+      changed: true,
+      ...(archiveWarning ? { archived: true, warning: archiveWarning } : {}),
+      ...(closingProseWarning ? { proseWarning: closingProseWarning } : {}),
+    })
     return true
   }
 
@@ -1159,14 +1183,7 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
       if (current && current.status !== 'done' && closeBlocked(res, id, parsedMove, actor)) return true
       // Card 85f9f3ef: a prose leftover is a WARNING in the response, never a refusal; a failure here
       // must not hold up a closing.
-      if (current && current.status !== 'done') {
-        try {
-          const hints = proseLeftoverHints(getKanbanComments(id), id, (c) => !!getKanbanCard(c))
-          if (hints.length > 0) proseWarning = proseLeftoverWarning(hints)
-        } catch (err) {
-          logger.warn({ err, id }, 'Kanban move: prose leftover hint failed (ignored)')
-        }
-      }
+      if (current && current.status !== 'done') proseWarning = proseWarningFor(id)
     }
     // A HAROM-ALLAPOTU KIMENET ES A TORZS DIAGNOSZTIKAJA EGYUTT MARAD, es a sorrend a lenyeg
     // (kartya aca11ba5 x a 09-05-i /move-naplozas). A torzs azert naplozott, mert a BOOLEAN
@@ -1198,7 +1215,7 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // Wake the assigned agent once when the card enters in_progress -- unless
     // that agent is the one who moved it (self-pickup needs no wake-up).
     if (status === 'in_progress') fireKanbanDispatch(id, actor)
-    json(res, { ok: true, changed: true, ...(proseWarning ? { warning: proseWarning } : {}) })
+    json(res, { ok: true, changed: true, ...(proseWarning ? { proseWarning } : {}) })
     return true
   }
 
