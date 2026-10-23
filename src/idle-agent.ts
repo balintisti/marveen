@@ -2103,12 +2103,13 @@ export function buildWakeMessage(
 export type PaneUnreadableReason = 'no-session' | 'capture-failed' | 'unknown-state'
 
 /** The targeted message for a turn that died on an API error (card 843a9ab6, wording fixed by
- *  marveen's design). HH:MM is Europe/Budapest, whatever zone the process runs in. */
+ *  marveen's design). HH:MM is Europe/Budapest, whatever zone the process runs in. The tail
+ *  (short turns, findings on the card) is card 57fd94f1, marveen 34422. */
 export function buildApiErrorResumeMessage(errorSinceMs: number): string {
   const hhmm = new Intl.DateTimeFormat('hu-HU', {
     timeZone: 'Europe/Budapest', hour: '2-digit', minute: '2-digit', hour12: false,
   }).format(new Date(errorSinceMs))
-  return `a turnod API-hibával megszakadt ${hhmm}-kor, folytasd onnan, ahol tartottál`
+  return `a turnod API-hibával megszakadt ${hhmm}-kor, folytasd onnan, ahol tartottál, rövid fordulókban dolgozz, a leleteket a kártyára írd`
 }
 
 export interface FleetAlert {
