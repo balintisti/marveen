@@ -32,8 +32,7 @@ function inputs(overrides: Partial<GuardInputs> = {}): GuardInputs {
     dailyHandoffDue: false,
     contextTokens: null,
     idleMs: null,
-    usageLimited: false,
-    pendingResumeExpiresAtMs: null,
+    paneUsageLimited: false,
     ...overrides,
   }
 }
