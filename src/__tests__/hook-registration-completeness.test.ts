@@ -60,7 +60,7 @@ const EXEMPT: Record<string, string> = {
   'email-approval-gate.py':
     'held back for the MAIN agent in the 88c366f2 merge (D4, pending marveen P10): with email_send at level 1 it would hard-block every main-agent send/draft; on disk, wired nowhere until decided',
   'skills-snapshot-on-write.sh':
-    'ours: wired at USER level (~/.claude/settings.json on this host), which covers every agent; the repo settings do not carry it -- measured 2026-09-28',
+    'ours: UNWIRED by decision 2026-10-14 (card e2fb3460, marveen msg 28446): could not finish inside its timeout and reached no agent; kept on disk for the reopen gate, launchd versions the skills tree every 1800 s',
   'ledger_lib.py':
     'shared library imported by the ledger hooks; not itself a hook',
   'command_prompt.py':

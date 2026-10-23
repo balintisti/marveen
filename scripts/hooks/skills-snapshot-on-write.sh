@@ -2,6 +2,16 @@
 # skills-snapshot-on-write.sh -- PostToolUse hook: snapshot ~/.claude/skills the
 # moment anything under it changes, instead of waiting up to 30 minutes.
 #
+# NOT WIRED (2026-10-14, card e2fb3460, marveen msg 28446). Removed from the
+# ~/.claude/settings.json PostToolUse array. Measured: it could not finish (the
+# snapshot took 43.36 s on 1682 files against TIMEOUT_S=20 and a 30 s hook
+# timeout), and since 2026-09-30 it reached no agent (no agent config and no
+# project settings.json carries it). The skills tree is versioned by the
+# com.marveen.rulebook-snapshot launchd unit, every 1800 s. Kept on disk for the
+# REOPEN GATE: if a skill edit is ever lost inside one 30-minute window, trigger
+# the launchd unit from here (launchctl kickstart); do not run the snapshot
+# synchronously.
+#
 # WHY (card de00fd2b, measured 2026-08-27). rulebook-snapshot.sh already versions
 # the skills tree, but on a 1800 s timer. Two edits inside one interval collapse
 # into one commit and the FIRST one is gone. Measured on a throwaway tree with the

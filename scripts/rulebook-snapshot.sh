@@ -85,6 +85,8 @@ MANIFEST_NAME="MANIFEST.tsv"
 # each PAIRED with an intact commit in the same minute. `SKILLS_SNAPSHOT_RUNNING`
 # does not cover this: it is checked in the HOOK only, and stops the hook
 # re-entering itself, not two independent callers colliding.
+# Since 2026-10-14 the hook is unwired (card e2fb3460), so launchd is the only
+# scheduled caller. The lock stays: a manual run is still a second caller.
 #
 # The lock lives OUTSIDE the repository on purpose: anything inside it would be
 # swept up by `git add -A` and committed.
@@ -345,9 +347,10 @@ fi
 # the PRIVATE github.com/balintisti/marveen-rulebooks. Private is not decoration:
 # the snapshot carries personal data (chat_id, home town, e-mail addresses).
 #
-# WHY THIS IS BEST-EFFORT AND MUST NOT FAIL THE SCRIPT. The PostToolUse hook runs
-# this, and its own docblock explains that a non-zero exit makes every subsequent
-# Bash call in the fleet pay for it. A network blip must not do that. The LOCAL
+# WHY THIS IS BEST-EFFORT AND MUST NOT FAIL THE SCRIPT. The PostToolUse hook ran
+# this until 2026-10-14 (unwired, card e2fb3460), where a non-zero exit made every
+# subsequent Bash call pay for it; launchd still records it as the unit's last
+# exit status. A network blip must not do that. The LOCAL
 # commit is the primary artefact and it has already happened above.
 #
 # AND THIS IS WHY A LOG LINE IS NOT THE SIGNAL. A failed push that only writes to
