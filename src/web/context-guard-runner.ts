@@ -30,7 +30,7 @@ import { readAllContextGuardConfigs } from './context-guard-store.js'
 import { makeContextGuardConfigWarner } from './context-guard-config-warning.js'
 import { localMidnightMs } from '../auto-restart.js'
 import { recordRescueFailure, clearRescueFailures } from './rescue-failure-tracker.js'
-import { createAgentMessage, getRestartLossCandidates, getAgentCommentsSince } from '../db.js'
+import { createAgentMessage, getRestartLossCandidates, getAgentCommentsSince, markMessageDone } from '../db.js'
 import { RESTART_TAIL_FILE, COMMENTS_MAX, COMMENT_HEAD_CHARS, NO_HANDOFF_LOOKBACK_MS, buildRestartTail, needsRestartTail } from './restart-tail.js'
 import {
   decideGuard,
@@ -56,6 +56,8 @@ import {
   restartLossNeedsAction,
   restartNoticeWakes,
   restartNoticeIsLogOnly,
+  restartNoticeClosesItself,
+  RESTART_NOTICE_AUTOCLOSED,
 } from '../context-guard.js'
 
 // Fleet context guard (kanban #81): acts BEFORE a session drowns in its own
@@ -936,7 +938,7 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
           break
         }
         try {
-          createAgentMessage(
+          const notice = createAgentMessage(
             name,
             MAIN_AGENT_ID,
             `[CONTEXT-GUARD] Ujrainditottam a(z) "${name}" agentet -- ok: ${decision.reason}` +
@@ -960,6 +962,10 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
             undefined,
             { wake: restartNoticeWakes(lossNeedsAction, decision.nextState.handoffStaleMinutes) },
           )
+          // Card 782d9c7f: triage empty -> the row is born closed (no delivery, no [Eredmeny] receipt:
+          // markMessageDone notifies nobody), kept for the audit trail. Synchronous right after the
+          // insert, so no router tick can see it pending.
+          if (restartNoticeClosesItself(lossNeedsAction)) markMessageDone(notice.id, RESTART_NOTICE_AUTOCLOSED)
         } catch (err) {
           logger.warn({ err, name }, 'context-guard: restart notice message failed')
         }
