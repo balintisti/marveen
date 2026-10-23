@@ -1153,12 +1153,9 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
       })
       return true
     }
-    json(res, {
-      ok: true,
-      changed: true,
-      ...(archiveWarning ? { archived: true, warning: archiveWarning } : {}),
-      ...(closingProseWarning ? { proseWarning: closingProseWarning } : {}),
-    })
+    // No prose warning here: a status change to done always lands in the `overwritten` branch above
+    // (the previous status is never empty), so this branch cannot be a closing.
+    json(res, { ok: true, changed: true, ...(archiveWarning ? { archived: true, warning: archiveWarning } : {}) })
     return true
   }
 
