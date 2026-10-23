@@ -39,7 +39,7 @@ import { detectPaneState, detectsFirstRunGate, detectsPermissionPrompt, describe
 import { paneRemedy } from './parked-pane-remedy.js'
 import { parsePaneTokens, nextTokenSample, type TokenSample } from '../session-progress.js'
 import { setLastInboundModality } from './voice-modality.js'
-import { classifyAgentMessage, wrapAgentMessageForDelivery } from './agent-message-wrap.js'
+import { classifyAgentMessage, isChannelInboundSender, wrapAgentMessageForDelivery } from './agent-message-wrap.js'
 import { composeBatchInjection, batchInjectCapFor } from './batch-inject.js'
 import { maybeWakeSubAgentsForTelegram } from './telegram-inbox-wake.js'
 import { selectTickWindow } from './message-router-window.js'
@@ -341,6 +341,43 @@ function notifyOrchestratorOfFailedHandoff(msg: AgentMessage, reason: string): v
     logger.info({ id: msg.id, from: msg.from_agent, to: msg.to_agent, reason }, 'handoff-failure surfaced to orchestrator')
   } catch (err) {
     logger.warn({ err, id: msg.id }, 'Failed to enqueue handoff-failure notification')
+  }
+}
+
+/**
+ * Card cd404a64 (upstream 71263d15 A): may the SENDER of a failed message get a notice?
+ *
+ * The sender got an id back when it posted, so on its side the send looks done; until now only
+ * the main agent heard about the failure. The exceptions keep the notice from looping or
+ * doubling: 'system' rows get no receipt (a failed notice cannot beget another), the main agent
+ * already gets the orchestrator notice, a channel-inbound sender is a person on a channel rather
+ * than an agent inbox, and a federated sender is notifyDelegationFailed's job.
+ */
+export function shouldNotifySenderOfFailure(fromAgent: string, mainAgentId: string): boolean {
+  if (!fromAgent || fromAgent === 'system' || fromAgent === mainAgentId) return false
+  if (isQualifiedId(fromAgent) || fromAgent.includes('/')) return false
+  return !isChannelInboundSender(fromAgent)
+}
+
+/** The sender's notice. The preview says how much it cut, so nobody answers half a message. */
+export function formatSenderFailureNotice(msg: AgentMessage, reason: string): string {
+  const content = msg.content ?? ''
+  const preview = content.length > 220 ? `${content.slice(0, 220)} [... +${content.length - 220} karakter]` : content
+  return `[handoff-failure] A(z) ${msg.to_agent} címre küldött üzeneted (#${msg.id}) NEM kézbesült: ${reason}. ` +
+    `A visszakapott id a befogadást igazolta, nem a kézbesítést; ha még számít, küldd újra. Tartalom eleje: ${preview}`
+}
+
+// Called only for the row THIS call closed (markMessageFailed returned true): a row closed
+// concurrently was not failed by us and must not be reported as failed. A quiet row (wake=0)
+// stays quiet, like its orchestrator notice (card a85a9acd).
+function notifySenderOfFailedHandoff(msg: AgentMessage, reason: string): void {
+  try {
+    if (!shouldNotifySenderOfFailure(msg.from_agent, MAIN_AGENT_ID)) return
+    if (!isWakeRow(msg)) return
+    createAgentMessage('system', msg.from_agent, formatSenderFailureNotice(msg, reason))
+    logger.info({ id: msg.id, from: msg.from_agent, to: msg.to_agent, reason }, 'handoff-failure surfaced to sender')
+  } catch (err) {
+    logger.warn({ err, id: msg.id }, 'Failed to enqueue handoff-failure notification to sender')
   }
 }
 // Bounce a terminal federated-delivery failure back to the SENDER's inbox as
@@ -1041,10 +1078,12 @@ export async function runMessageRouterTick(): Promise<void> {
       if (!worksourceServing && shouldAbandon(sessionExists, ageMs, MESSAGE_ABANDON_WINDOW_MS, absentForMs)) {
         const absentMin = Math.round(absentForMs / 60000)
         logger.warn({ id: msg.id, from: msg.from_agent, to: msg.to_agent, ageMs, absentForMs }, 'Agent message abandoned: target session continuously absent for the retry window')
-        if (!markMessageFailed(msg.id, `Abandoned: target session continuously absent for ${absentMin} min (retry window ${Math.round(MESSAGE_ABANDON_WINDOW_MS / 60000)} min)`)) {
+        const closed = markMessageFailed(msg.id, `Abandoned: target session continuously absent for ${absentMin} min (retry window ${Math.round(MESSAGE_ABANDON_WINDOW_MS / 60000)} min)`)
+        if (!closed) {
           logger.warn({ id: msg.id }, 'markMessageFailed affected 0 rows (deleted concurrently?)')
         }
         notifyOrchestratorOfFailedHandoff(msg, `target session was continuously absent for ${absentMin} min (retry window ${Math.round(MESSAGE_ABANDON_WINDOW_MS / 60000)} min)`)
+        if (closed) notifySenderOfFailedHandoff(msg, `a címzett munkamenete ${absentMin} percig megszakítás nélkül hiányzott (türelmi ablak: ${Math.round(MESSAGE_ABANDON_WINDOW_MS / 60000)} perc)`)
         routerInjectFailures.delete(msg.id)
         routerLoggedMisses.delete(msg.id)
         continue
@@ -1368,18 +1407,23 @@ export async function runMessageRouterTick(): Promise<void> {
           continue
         }
         logger.error({ err, id: msg.id, failCount }, 'Failed to inject agent message after retries, giving up')
-        if (!markMessageFailed(msg.id, `Failed to inject into tmux session after ${failCount} attempts`)) {
+        const closed = markMessageFailed(msg.id, `Failed to inject into tmux session after ${failCount} attempts`)
+        if (!closed) {
           logger.warn({ id: msg.id }, 'markMessageFailed affected 0 rows (deleted concurrently?)')
         }
         notifyOrchestratorOfFailedHandoff(msg, `tmux inject failed ${failCount}x`)
+        if (closed) notifySenderOfFailedHandoff(msg, `a címzett paneljébe írás ${failCount}-szer elbukott`)
         routerInjectFailures.delete(msg.id)
         routerLoggedMisses.delete(msg.id)
       }
       } catch (err) {
         logger.warn({ err, id: msg.id, to: msg.to_agent }, 'Agent message processing threw; marking failed so the queue cannot wedge')
-        if (!markMessageFailed(msg.id, `Delivery error: ${String(err).slice(0, 200)}`)) {
+        const closed = markMessageFailed(msg.id, `Delivery error: ${String(err).slice(0, 200)}`)
+        if (!closed) {
           logger.warn({ id: msg.id }, 'markMessageFailed affected 0 rows (deleted concurrently?)')
         }
+        // Card cd404a64: this branch failed the row without telling the sender.
+        if (closed) notifySenderOfFailedHandoff(msg, 'kézbesítési hiba a routerben')
         routerLoggedMisses.delete(msg.id)
       }
     }
