@@ -755,10 +755,15 @@ def self_test():
     # 14. a nested call by the same agent runs inside its parent's slot, even with max 1 (card 378576bc)
     one = {**env, "HEAVY_RUN_MAX": "1"}
 
-    def nest(outer, inner_env, timeout, light=False):
-        """outer agent holds the only slot; inside it a second heavy-run runs `true`. rc, or None if stuck."""
+    def nest(outer, inner_env, timeout, light=False, depth=1):
+        """outer agent holds the only slot; inside it `depth` heavy-runs, one in the other, run `true`.
+        rc, or None if stuck."""
         cls = ["--light"] if light else []
-        inner = " ".join([sys.executable, me, "--label", "inner-" + outer, *cls, "--", "true"])
+        inner = ["true"]
+        for lvl in range(depth, 0, -1):
+            inner = [sys.executable, me, "--label", ("inner-" if lvl == 1 else f"inner{lvl}-") + outer, *cls,
+                     "--", *inner]
+        inner = " ".join(inner)
         p = subprocess.Popen([sys.executable, me, "--label", "outer-" + outer, *cls, "--", "bash", "-c",
                               f"{inner_env} {inner}"], env={**one, "HEAVY_AGENT": outer},
                              stderr=subprocess.PIPE, text=True)
@@ -787,6 +792,17 @@ def self_test():
                          env={**one, "HEAVY_AGENT": "s", "HEAVY_RUN_HELD": "s:1"})
     results.append(("a stale HEAVY_RUN_HELD still waits for a slot", waited(s)))
     a.wait()
+    # the same, while that agent DOES hold a slot: HEAVY_RUN_HELD has to name the holding pid, not just
+    # the agent, or a daemon left over from one run would ride on any other run of the same agent (didi L1)
+    h = spawn("h", "sleep", "2", extra={"HEAVY_RUN_MAX": "1"})
+    time.sleep(1.0)
+    s = subprocess.Popen([sys.executable, me, "--", "true"], stderr=subprocess.PIPE, text=True,
+                         env={**one, "HEAVY_AGENT": "h", "HEAVY_RUN_HELD": "h:1"})
+    results.append(("a HEAVY_RUN_HELD naming a non-holding pid waits, though its agent holds a slot", waited(s)))
+    h.wait()
+    # two levels deep: the nested call must pass on its PARENT's HEAVY_RUN_HELD, not its own pid, which
+    # holds no slot; otherwise the second level waits for the slot its grandparent holds (didi L2)
+    results.append(("a two-level nested call of the same agent completes with max 1", nest("d", "", 15, depth=2) == 0))
 
     shutil.rmtree(base, ignore_errors=True)
     for name, ok in results:
