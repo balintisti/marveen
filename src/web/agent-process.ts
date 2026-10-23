@@ -36,6 +36,7 @@ import {
 import { paneRemedy } from './parked-pane-remedy.js'
 import { scheduleRecoveryBrief } from './restart-recovery-brief.js'
 import { beginRestart, endRestart } from './restart-lock.js'
+import { cancelRestartWake, scheduleRestartWake, type RestartWakeRequest } from './restart-wake.js'
 import { agentDir, listAgentNames, readAgentModel, resolveAgentModelDetailed, readAgentClaudeConfigDir, readAgentClaudePlan, readAgentChannelProvider, readAgentAuthMode, readAgentDisplayName, readAgentRemoteConfig, readAgentRemoteHost, readAgentRunAsUser, readAgentMemoryIsolation, readAgentWorksourceChannel, readAgentCustomProvider, readFileOr, readJsonObjectForWrite } from './agent-config.js'
 import { loadCustomProvider, type CustomProviderDef } from './custom-providers.js'
 import { decideOwnOauthToken, ownOauthTokenExport, ownOauthLaunchVerdict } from './agent-oauth-token-file.js'
@@ -2730,7 +2731,10 @@ export function getAgentProcessInfo(name: string): { running: boolean; session?:
   }
 }
 
-export async function restartAgentProcess(name: string, opts: { fresh?: boolean } = {}): Promise<{ ok: boolean; pid?: number; error?: string }> {
+export async function restartAgentProcess(
+  name: string,
+  opts: { fresh?: boolean; wake?: RestartWakeRequest } = {},
+): Promise<{ ok: boolean; pid?: number; error?: string }> {
   // The stop below opens a window in which this agent is DESIRED and NOT RUNNING, which
   // is exactly what the channel-monitor reconciler exists to fix -- and it fixes it with
   // an options-less start, dropping the `fresh` this caller asked for. Card f65bc6ef:
@@ -2755,6 +2759,10 @@ export async function restartAgentProcess(name: string, opts: { fresh?: boolean 
   }
   markRestartStarted(name)
   try {
+    // RESTARTWAKE927: a fresh restart brings its own directive (the context
+    // guard's resume prompt); a wake still owed by an earlier --continue
+    // restart must not land in that session as a second instruction.
+    if (opts.fresh) cancelRestartWake(name)
     if (isAgentRunning(name)) {
       const stopResult = await stopAgentProcess(name)
       if (!stopResult.ok) return { ok: false, error: stopResult.error || 'Failed to stop running agent before restart' }
@@ -2774,6 +2782,9 @@ export async function restartAgentProcess(name: string, opts: { fresh?: boolean 
           'Restart lost the start race -- another supervisor started this agent inside the stop window',
         )
       }
+      // RESTARTWAKE927: only a caller that asked for it, only a --continue
+      // restart, only one that really started this session (see restart-wake.ts).
+      if (started.ok && !opts.fresh && opts.wake) scheduleRestartWake(name, agentSessionName(name), opts.wake.reason)
       return started
     })
   } finally {
