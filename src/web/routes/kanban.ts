@@ -27,6 +27,7 @@ import {
   recordKanbanCloseOverride,
 } from '../../db.js'
 import { openVerdicts, openLeftovers, overrideReason, closeRefusal, type OpenVerdict } from '../kanban-verdict-gate.js'
+import { proseLeftoverHints, proseLeftoverWarning } from '../../kanban-verdict.js'
 import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
 import { kanbanCreateError } from '../kanban-create-validation.js'
 import { normalizeDueDate, DUE_DATE_ZONE, DUE_DATE_ACCEPTED } from '../kanban-due-date.js'
@@ -1151,10 +1152,21 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     const body = await readBody(req)
     const parsedMove = JSON.parse(body.toString())
     const { status, sort_order, actor } = parsedMove
+    let proseWarning: string | null = null
     // CARD 5a967042: the move to done is where a card closes; see closeBlocked.
     if (status === 'done') {
       const current = getKanbanCard(id)
       if (current && current.status !== 'done' && closeBlocked(res, id, parsedMove, actor)) return true
+      // Card 85f9f3ef: a prose leftover is a WARNING in the response, never a refusal; a failure here
+      // must not hold up a closing.
+      if (current && current.status !== 'done') {
+        try {
+          const hints = proseLeftoverHints(getKanbanComments(id), id, (c) => !!getKanbanCard(c))
+          if (hints.length > 0) proseWarning = proseLeftoverWarning(hints)
+        } catch (err) {
+          logger.warn({ err, id }, 'Kanban move: prose leftover hint failed (ignored)')
+        }
+      }
     }
     // A HAROM-ALLAPOTU KIMENET ES A TORZS DIAGNOSZTIKAJA EGYUTT MARAD, es a sorrend a lenyeg
     // (kartya aca11ba5 x a 09-05-i /move-naplozas). A torzs azert naplozott, mert a BOOLEAN
@@ -1186,7 +1198,7 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // Wake the assigned agent once when the card enters in_progress -- unless
     // that agent is the one who moved it (self-pickup needs no wake-up).
     if (status === 'in_progress') fireKanbanDispatch(id, actor)
-    json(res, { ok: true, changed: true })
+    json(res, { ok: true, changed: true, ...(proseWarning ? { warning: proseWarning } : {}) })
     return true
   }
 

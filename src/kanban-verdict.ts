@@ -175,3 +175,64 @@ export function openLeftovers(comments: VerdictComment[]): OpenLeftover[] {
   }
   return [...byAuthor.values()].flat()
 }
+
+/**
+ * PROSE LEFTOVER HINT -- card 85f9f3ef (jarvis 37484). A WARNING, never a refusal.
+ *
+ * The closed tokens above are deliberately not prose detectors. Measured
+ * 2026-10-23 on 3790 done cards: a WIDE prose detector ("maradek", "marad",
+ * "nyitva marad", "nem javitva" anywhere in a line) flags 19% of the done cards of
+ * the last 7 days (199 of 1036), mostly "a maradek 24 hivasi hely", "TIER: LOW
+ * marad", "nincs nyitott MARADEK": useless even as a warning. A NARROW one (the
+ * line STARTS with the phrase, no card id on the board named in the comment)
+ * flags 3% (35 of 1036), about 60% of a 20-line sample a real open item; the rest
+ * is a tester saying "Nem javitottam semmit, nem az en szerepem". That is too weak
+ * to refuse a closing over and good enough to put a line in front of the closer.
+ */
+const PROSE_OPEN =
+  /^[\s\-*>#=\d.)(]*(NYITVA MARAD|MARAD NYITVA|NEM JAVITVA|NEM JAVITOTTAM|NEM JAVITOM|NYITOTT MARADT|NYITOTT MARAD)\b/
+/** A line that says the opposite or counts nothing open. */
+const PROSE_NEGATED = /\bNINCS\b|\b0 NYITOTT\b|\bNEM MARADT\b|\bNEM MARAD\b|\bNEM NYITVA\b/
+const CARD_ID_SHAPE = /(?<![0-9a-zA-Z])[0-9a-f]{8}(?![0-9a-zA-Z])/g
+
+export type ProseLeftoverHint = OpenVerdict
+
+/**
+ * The lines (at most `limit`) that say an item stays open in prose and whose
+ * comment names no existing card that could carry it.
+ *
+ * `cardExists` decides whether an 8-hex token in the comment is a real card
+ * (a commit hash has the same shape and must not count as a carrier); the
+ * card being closed does not carry its own leftover.
+ */
+export function proseLeftoverHints(
+  comments: VerdictComment[],
+  ownCardId: string,
+  cardExists: (id: string) => boolean,
+  limit = 3,
+): ProseLeftoverHint[] {
+  const hints: ProseLeftoverHint[] = []
+  const ordered = [...comments].sort((a, b) => a.created_at - b.created_at || a.id - b.id)
+  for (const comment of ordered) {
+    const text = comment.content ?? ''
+    if (comment.author === 'system' || text === '') continue
+    const carried = (text.match(CARD_ID_SHAPE) ?? []).some((id) => id !== ownCardId.slice(0, 8) && cardExists(id))
+    if (carried) continue
+    for (const written of text.split(/\r?\n/)) {
+      const line = normalize(withoutOwnStamp(written, comment.author))
+      if (line.startsWith('VERDIKT') || line.startsWith('KESZ-IGAZOLAS') || line.startsWith('MARADEK:')) continue
+      if (!PROSE_OPEN.test(line) || PROSE_NEGATED.test(line)) continue
+      hints.push({ author: comment.author, line: written.trim().slice(0, 200), commentId: comment.id })
+      break
+    }
+    if (hints.length >= limit) break
+  }
+  return hints
+}
+
+/** The sentence the move response carries; the closing itself is not held up. */
+export function proseLeftoverWarning(hints: ProseLeftoverHint[]): string {
+  const what = hints.map((h) => `komment ${h.commentId}, ${h.author}: "${h.line}"`).join('; ')
+  return `FIGYELEM: a kartya lezarult, de ${hints.length} komment prozaban nyitva marado tetelt jelez es nem nevez meg kartyat, ami viszi (${what}). `
+    + 'Ha ez valodi marad: `MARADEK: <mi> | <hova>` sor (0. oszlop) vagy uj hordozo-kartya; ha nem, figyelmen kivul hagyhato.'
+}
