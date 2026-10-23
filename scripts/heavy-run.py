@@ -12,6 +12,9 @@ backends (node dist/main) from e2e runners whose EXIT trap never ran or whose SI
   python3 scripts/heavy-run.py --status
   python3 scripts/heavy-run.py --self-test
 
+Start a long run with the Bash tool's run_in_background, not detached with nohup and &: the harness
+notifies you when a background task ends, and knows nothing about a detached one (item 6 is the net).
+
 1. FLEET LIMIT. At most HEAVY_RUN_MAX (default 2) heavy runs on the machine at once; ONE per agent.
    A slot is an fcntl lock on a file under HEAVY_RUN_DIR (default ~/.heavy-run). The kernel drops the
    lock when the holder dies -- SIGKILL included -- so a killed run can never strand a slot. A waiting
@@ -47,8 +50,22 @@ backends (node dist/main) from e2e runners whose EXIT trap never ran or whose SI
    command. A heavy-run inside it, by the same agent, whose holder still holds a slot, runs the command
    without taking a second slot and without a ticket, in either pool (logged nested=true). Without this the one-per-agent rule made the inner
    call wait forever for the slot its own parent held (card 378576bc).
+6. A DETACHED RUN WAKES ITS AGENT (card 6790bcdb, marveen 37807). Measured 2026-10-22/23: ford launched
+   `nohup python3 heavy-run.py ... &` in a plain Bash call twice; the harness never knew about that
+   process, so its end could not wake him, and the idle guard was the only net, 27-57 min late. So when
+   the run ends DETACHED (parent pid 1: the shell that started it is gone) and took more than
+   HEAVY_RUN_WAKE_MIN_S seconds (default 300, waiting included), the wrapper sends EXACTLY ONE message
+   to the agent that started it, through scripts/agent-msg.sh: run id, label, exit code, duration, log
+   path, nothing else. Once per run id (a marker file under HEAVY_RUN_DIR/wake). A run started with
+   run_in_background is NOT detached (the harness's shell is its parent) and sends nothing: the harness
+   already notifies it, and that is the launch to use. When the send is refused (the queue gate, exit 2)
+   or fails, the result goes to the card named in the label (the first 8-hex token) as a comment, never
+   a retry; no card in the label -> only stderr and the runs.jsonl line. An unknown agent gets nothing.
+   Limit, stated: this wakes the agent's MAIN pane; a sub-agent that waits on a detached run is woken by
+   its main session, not by this.
 The exit code is the command's (128+N if a signal ended it). Each run appends one JSON line to
-HEAVY_RUN_DIR/runs.jsonl: who, what, class (heavy|light), waited_s, ran_s, rc.
+HEAVY_RUN_DIR/runs.jsonl: who, what, class (heavy|light), waited_s, ran_s, rc, and wake (what item 6
+did: sent / card / no-card / failed / not-detached / short / unknown-agent / dup).
 """
 import fcntl
 import json
@@ -69,6 +86,10 @@ STALE_FLOOR = 3.0  # a ticket untouched for less than this is never called stall
 LIGHT_MAX = int(os.environ.get("HEAVY_RUN_LIGHT_MAX") or 2)
 LIGHT_CAP = float(os.environ.get("HEAVY_RUN_LIGHT_CAP") or 120)
 CAP_RC = 124  # the exit code timeout(1) uses
+WAKE_MIN_S = float(os.environ.get("HEAVY_RUN_WAKE_MIN_S") or 300)
+# The sender is agent-msg.sh next to this file; overridable so the self-test can stand a stub in.
+WAKE_SEND = os.environ.get("HEAVY_RUN_WAKE_SEND") or os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                                  "agent-msg.sh")
 # class -> (slot file prefix, pool size). The heavy files keep their old name, so a run started before
 # this change and one started after it still see each other.
 POOLS = {"heavy": ("slot", MAX), "light": ("light", LIGHT_MAX)}
@@ -326,6 +347,72 @@ def watchdog(runner, pgid, slot):
     os._exit(0)
 
 
+def output_path():
+    """Where this wrapper's stdout (else stderr) goes: the log the agent will read. macOS F_GETPATH."""
+    for fd in (1, 2):
+        try:
+            path = fcntl.fcntl(fd, getattr(fcntl, "F_GETPATH"), b"\0" * 1024).split(b"\0", 1)[0].decode()
+        except (OSError, AttributeError, ValueError):
+            continue
+        if path and not path.startswith("/dev/"):
+            return path
+    return "unknown"
+
+
+def card_comment(card, author, text):
+    """POST a comment on a kanban card; True only on HTTP 2xx (the fallback when the message is refused)."""
+    import urllib.request
+    base = (os.environ.get("MARVEEN_API_BASE")
+            or f"http://localhost:{os.environ.get('MARVEEN_WEB_PORT') or 3420}").rstrip("/")
+    token_file = os.environ.get("MARVEEN_TOKEN_FILE") or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "store", ".dashboard-token")
+    try:
+        with open(token_file) as f:
+            token = f.read().strip()
+        req = urllib.request.Request(f"{base}/api/kanban/{card}/comments", method="POST",
+                                     data=json.dumps({"author": author, "content": text}).encode(),
+                                     headers={"Authorization": f"Bearer {token}",
+                                              "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return 200 <= r.status < 300
+    except Exception:
+        return False
+
+
+def wake(me, rc, elapsed, detached):
+    """Item 5: one message to the starting agent when a detached run ends. Returns the outcome word."""
+    if not detached:
+        return "not-detached"
+    if elapsed <= WAKE_MIN_S:
+        return "short"
+    agent = me["agent"]
+    if agent.startswith("unknown-"):
+        return "unknown-agent"
+    run_id = f"{agent}-{me['pid']}-{me['started'].replace(' ', 'T')}"
+    marker_dir = os.path.join(DIR, "wake")
+    os.makedirs(marker_dir, exist_ok=True)
+    try:
+        os.close(os.open(os.path.join(marker_dir, run_id), os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+    except FileExistsError:
+        return "dup"
+    text = (f"[heavy-run] detached run finished: run={run_id} label={me['label']} rc={rc} "
+            f"duration={round(elapsed)}s log={output_path()}")
+    try:
+        sent = subprocess.run(["bash", WAKE_SEND, agent, agent, "-"], input=text, text=True,
+                              capture_output=True, timeout=120).returncode
+    except (OSError, subprocess.TimeoutExpired):
+        sent = None
+    if sent == 0:
+        return "sent"
+    print(f"heavy-run: the wake message to {agent} was not sent (agent-msg.sh rc={sent}); not retrying",
+          file=sys.stderr, flush=True)
+    import re
+    card = re.search(r"\b[0-9a-f]{8}\b", me["label"])
+    if not card:
+        return "no-card"
+    return "card" if card_comment(card.group(0), agent, text) else "failed"
+
+
 def run(label, cmd, cls="heavy"):
     # A mistyped command fails before it queues for a slot, the way a shell says it, not as a traceback.
     if shutil.which(cmd[0]) is None:
@@ -390,10 +477,16 @@ def run(label, cmd, cls="heavy"):
         reap_group(proc.pid, GRACE)  # what the command left behind (a backend it started)
         if slot:
             slot.close()
+        ended = time.time()
+        # Read once, here: the parent is 1 when the shell that started the run is gone.
+        try:
+            woke = wake(me, rc, ended - asked, os.getppid() == 1)
+        except Exception as e:  # the wake is a courtesy; it must never cost the run its rc or its log line
+            woke = f"error: {type(e).__name__}"
         # One line per run, so the limit can be judged by its waits (marveen 23086: watch 3 days).
         with open(os.path.join(DIR, "runs.jsonl"), "a") as f:
             f.write(json.dumps({**me, "waited_s": round(got - asked, 1),
-                                "ran_s": round(time.time() - got, 1), "rc": rc,
+                                "ran_s": round(ended - got, 1), "rc": rc, "wake": woke,
                                 **({"capped": True} if capped else {}),
                                 **({"nested": True} if nested else {})}) + "\n")
     return rc if rc >= 0 else 128 - rc
@@ -752,7 +845,7 @@ def self_test():
     results.append(("a SIGKILLed head-of-queue light waiter does not block the next one", nxt_rc == 0))
     results.append(("every light ticket is gone once the light queue is empty", tickets_in("tickets-light") == 0))
 
-    # 14. a nested call by the same agent runs inside its parent's slot, even with max 1 (card 378576bc)
+    # 15. a nested call by the same agent runs inside its parent's slot, even with max 1 (card 378576bc)
     one = {**env, "HEAVY_RUN_MAX": "1"}
 
     def nest(outer, inner_env, timeout, light=False, depth=1):
@@ -803,6 +896,111 @@ def self_test():
     # two levels deep: the nested call must pass on its PARENT's HEAVY_RUN_HELD, not its own pid, which
     # holds no slot; otherwise the second level waits for the slot its grandparent holds (didi L2)
     results.append(("a two-level nested call of the same agent completes with max 1", nest("d", "", 15, depth=2) == 0))
+
+    # 16. item 6, the wake. A stub stands in for agent-msg.sh (records its args + stdin, exits STUB_RC) and
+    # a local HTTP server for the card API. "Detached" is made the real way: sh starts the run with & and
+    # exits, so the run's parent becomes 1 -- the same shape as `nohup ... &` in a Bash call.
+    import http.server
+    import threading
+    calls = os.path.join(base, "wake-calls")
+    stub = os.path.join(base, "stub-send.sh")
+    with open(stub, "w") as f:
+        f.write('printf "%s %s|" "$1" "$2" >> "$STUB_LOG"; cat >> "$STUB_LOG"; echo >> "$STUB_LOG"; '
+                'exit "${STUB_RC:-0}"\n')
+    posted = []
+
+    class Cards(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            posted.append((self.path, self.headers.get("Authorization"), json.loads(body)))
+            self.send_response(201)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), Cards)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    with open(os.path.join(base, "token"), "w") as f:
+        f.write("t0ken\n")
+    wenv = {**env, "HEAVY_RUN_WAKE_SEND": stub, "STUB_LOG": calls, "HEAVY_RUN_WAKE_MIN_S": "1",
+            "MARVEEN_API_BASE": f"http://127.0.0.1:{srv.server_port}",
+            "MARVEEN_TOKEN_FILE": os.path.join(base, "token")}
+
+    def stub_calls():
+        try:
+            with open(calls) as f:
+                return [x for x in f.read().split("\n") if x]
+        except FileNotFoundError:
+            return []
+
+    def run_row(label, timeout=30):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                with open(log) as f:
+                    rows = [json.loads(x) for x in f if x.strip()]
+            except FileNotFoundError:
+                rows = []
+            hit = [x for x in rows if x["label"] == label]
+            if hit:
+                return hit[-1]
+            time.sleep(0.2)
+        return {}
+
+    def detached(label, secs, extra=None):
+        out = os.path.join(base, label.replace(" ", "_") + ".out")
+        subprocess.run(["sh", "-c", f'"$PY" "$ME" --label "$LBL" -- sleep {secs} > "$OUT" 2>&1 &'],
+                       env={**wenv, "HEAVY_AGENT": "wk", "PY": sys.executable, "ME": me, "LBL": label,
+                            "OUT": out, **(extra or {})})
+        return run_row(label), out
+
+    row, out = detached("wake-a", "1.5")
+    got = stub_calls()
+    text = got[0].split("|", 1)[1] if got else ""
+    results.append(("detached + over the threshold: EXACTLY one message, to the starting agent",
+                    len(got) == 1 and got[0].startswith("wk wk|") and row.get("wake") == "sent"))
+    results.append(("the message carries run id, label, rc, duration, log path",
+                    all(k in text for k in ("run=wk-", " label=wake-a ", " rc=0 ", " duration=")) and
+                    text.endswith("log=" + os.path.realpath(out))))
+    row, _ = detached("wake-short", "0.1", {"HEAVY_RUN_WAKE_MIN_S": "30"})
+    results.append(("CONTROL: detached but under the threshold sends nothing",
+                    len(stub_calls()) == 1 and row.get("wake") == "short"))
+    p = subprocess.Popen([sys.executable, me, "--label", "wake-attached", "--", "sleep", "1.5"],
+                         env={**wenv, "HEAVY_AGENT": "wk"}, stderr=subprocess.PIPE, text=True)
+    p.communicate(timeout=30)
+    results.append(("CONTROL: a run whose parent is alive (run_in_background) sends nothing",
+                    len(stub_calls()) == 1 and run_row("wake-attached").get("wake") == "not-detached"))
+    row, _ = detached("gate 1234abcd", "1.5", {"STUB_RC": "2"})
+    results.append(("refused (rc 2): no retry, the result goes to the label's card as a comment",
+                    len(stub_calls()) == 2 and row.get("wake") == "card" and len(posted) == 1 and
+                    posted[0][0] == "/api/kanban/1234abcd/comments" and posted[0][1] == "Bearer t0ken" and
+                    posted[0][2]["author"] == "wk" and "label=gate 1234abcd rc=0" in posted[0][2]["content"]))
+    row, _ = detached("no card here", "1.5", {"STUB_RC": "2"})
+    results.append(("refused, no card in the label: nothing posted, wake=no-card",
+                    len(posted) == 1 and row.get("wake") == "no-card"))
+    # once per run id, and never for an unknown agent -- in-process, with this module's globals pointed
+    # at the test directory and the stub
+    g = globals()
+    saved = {k: g[k] for k in ("DIR", "WAKE_SEND", "WAKE_MIN_S")}
+    saved_env = {k: os.environ.get(k) for k in ("STUB_LOG", "STUB_RC")}
+    g.update(DIR=base, WAKE_SEND=stub, WAKE_MIN_S=1.0)
+    os.environ["STUB_LOG"] = calls
+    os.environ.pop("STUB_RC", None)
+    try:
+        one = {"agent": "wk", "pid": 4242, "label": "dup", "started": "2026-10-23 20:00:00"}
+        first, second = wake(one, 0, 5, True), wake(one, 0, 5, True)
+        unknown = wake({**one, "agent": "unknown-77", "pid": 4343}, 0, 5, True)
+    finally:
+        g.update(saved)
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    results.append(("the same run id wakes once (second call: dup)", (first, second) == ("sent", "dup")))
+    results.append(("an unknown agent is not messaged", unknown == "unknown-agent" and len(stub_calls()) == 4))
+    srv.shutdown()
 
     shutil.rmtree(base, ignore_errors=True)
     for name, ok in results:
