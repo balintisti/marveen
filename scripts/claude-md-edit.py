@@ -273,6 +273,15 @@ def main():
         print("OK, a plafon alatt." if d <= 0 else f"A LAP {d:,} KARAKTERREL A PLAFON FOLOTT.")
         drift = baseline_uncommitted()
         print(f"alapvonal commitolva: {'NEM -- ' + drift if drift else 'igen'}")
+        # A `--check` a kanarit is nezze: 2026-10-24-en "OK, a plafon alatt"-ot mondott egy lapra,
+        # amirol 6 kanari-mondat hianyzott, es amit a szerszam ezert egyaltalan nem engedett irni.
+        try:
+            hiany = check_canary(open(PAGE, encoding="utf-8").read())
+        except CanaryUnavailable as e:
+            print(f"KANARI: {e}", file=sys.stderr); return 70
+        print(f"kanari: {'megvan mind' if not hiany else f'HIANYZIK {len(hiany)}'}")
+        for m in hiany:
+            print(f"  KANARI-HIANY: {m}", file=sys.stderr)
         nevek, bajok = check_generated_markers()
         print(f"generalt blokk: {len(nevek)} ({', '.join(nevek) if nevek else 'nincs'})")
         if bajok:
@@ -281,6 +290,8 @@ def main():
             print("  Egy arva jelolo a KOVETKEZO ujrainditaskor UJRA HOZZAFUZI a blokkot,", file=sys.stderr)
             print("  a racsni megkerulesevel. Javitsd, mielott a lapot tovabb szerkeszted.", file=sys.stderr)
             return 4
+        if hiany:
+            return 6
         return 0 if d <= 0 else 3
 
     if a.set_baseline:
@@ -333,8 +344,16 @@ def main():
             return 2
         # KANARI: a teherhordo mondatok NE tunhessenek el egy vagassal. 2026-09-18-an egy
         # blokk kivitele elvitte Isti viselkedesi szabalyait, es csak veletlenul vettem eszre.
+        #
+        # CSAK AZT TAGADJA MEG, AMIT EZ AZ IRAS VISZ EL (friday, 2026-10-24, kartya 5d2b94a9). Elso
+        # alakjaban az iras UTANI lapot nezte: egy mondat, ami MAR hianyzott, minden kesobbi irast
+        # megtagadtatott, es a hibauzenet az aktualis valtozast nevezte meg tettesnek. MERVE: a
+        # 2026-10-07-i vagas (store/CLAUDE.md.bak-cut-1007) a szerszamon kivul 6 kanari-mondatot
+        # a rulebookba vitt, a lista maradt, es attol fogva a lap MINDEN irasa rc=69 lett. Egy or,
+        # ami a hibas allapotot befagyasztja, csapda: a mar hianyzot NEVEZI MEG, de nem blokkol.
         try:
-            missing = check_canary(new_s)
+            already = check_canary(s)
+            missing = [c for c in check_canary(new_s) if c not in already]
         except CanaryUnavailable as e:
             print(f"NEM IRTAM: {e}", file=sys.stderr)
             return 70
@@ -346,6 +365,13 @@ def main():
             print("  SZANDEKOSAN valtozik, eloszor a kanari-listat javitsd, aztan a lapot.", file=sys.stderr)
             log(f"CANARY REFUSED: {missing}")
             return 69
+        if already:
+            print(f"FIGYELEM: a laprol MAR HIANYZIK {len(already)} teherhordo mondat (nem ez az iras vitte el):",
+                  file=sys.stderr)
+            for m in already:
+                print(f"    - {m}", file=sys.stderr)
+            print("  Vagy vissza a lapra, vagy (dontes) ki a `scripts/claude-md-canary.txt`-bol.", file=sys.stderr)
+            log(f"CANARY ALREADY MISSING (not blocking): {already}")
         os.lseek(fd, 0, 0); os.ftruncate(fd, 0)
         os.write(fd, new_s.encode("utf-8"))
         print(f"OK: {len(s):,} -> {new_n:,} karakter ({new_n - len(s):+,})")
