@@ -21,16 +21,23 @@ function lift(name: string): string {
 }
 
 const make = new Function(
-  'agents',
-  `${lift('formatContextTokens')}\n${lift('contextBadgeLabel')}\n${lift('contextTokensFor')}\nreturn { formatContextTokens, contextBadgeLabel, contextTokensFor }`,
+  'agents', 'window', 'contextGuardPct', 't', 'escapeHtml',
+  `${lift('formatContextTokens')}\n${lift('mainAgentId')}\n${lift('contextBadgeLabel')}\n${lift('contextTokensFor')}\n${lift('contextPctBadgeHtml')}\nreturn { formatContextTokens, contextBadgeLabel, contextTokensFor, contextPctBadgeHtml }`,
 )
 
 describe('context badge shows absolute tokens over 100%', () => {
-  const h = make([
-    { name: 'mandark', contextTokens: 258000 },
-    { name: 'zero', contextTokens: 0 },
-    { name: 'main-agent', autoRestartId: 'marveen', contextTokens: 120000 },
-  ])
+  // Real shapes: GET /api/agents has NO main agent (11 entries measured); the
+  // main agent's contextTokens lives in /api/marveen (window._marveen).
+  const h = make(
+    [
+      { name: 'mandark', contextTokens: 258000 },
+      { name: 'zero', contextTokens: 0 },
+    ],
+    { _marveen: { agentId: 'marveen', contextTokens: 120000 } },
+    { mandark: 1.29, marveen: 1.1, zero: 0.5 },
+    (_key: string, p: { pct: number }) => `tip ${p.pct}%`,
+    (x: string) => x,
+  )
   it('over 100% the label carries the token count', () => {
     expect(h.contextBadgeLabel(1.29, 258000)).toBe('129% · ≈258k token')
   })
@@ -41,10 +48,17 @@ describe('context badge shows absolute tokens over 100%', () => {
   it('over 100% without a token count stays a bare percent (no invented number)', () => {
     expect(h.contextBadgeLabel(1.29, null)).toBe('129%')
   })
-  it('looks the tokens up by name or by autoRestartId; zero or unknown is null', () => {
+  it('looks the tokens up in the agents list, and for the main agent in window._marveen; zero or unknown is null', () => {
     expect(h.contextTokensFor('mandark')).toBe(258000)
     expect(h.contextTokensFor('marveen')).toBe(120000)
     expect(h.contextTokensFor('zero')).toBeNull()
     expect(h.contextTokensFor('nobody')).toBeNull()
+  })
+
+  it('the badge wiring: a sub-agent and the main agent over 100% show tokens, under 100% the bare percent', () => {
+    expect(h.contextPctBadgeHtml('mandark')).toContain('>129% · ≈258k token</span>')
+    expect(h.contextPctBadgeHtml('mandark')).toContain('title="tip 129% (≈258k token)"')
+    expect(h.contextPctBadgeHtml('marveen')).toContain('>110% · ≈120k token</span>')
+    expect(h.contextPctBadgeHtml('zero')).toContain('>50%</span>')
   })
 })

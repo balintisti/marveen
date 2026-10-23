@@ -3317,7 +3317,10 @@ function contextPctBadgeHtml(agentName) {
 
 // Absolute context tokens of one agent from the agents list (null when unknown).
 function contextTokensFor(agentName) {
-  const a = Array.isArray(agents) ? agents.find(x => x && (x.name === agentName || x.autoRestartId === agentName)) : null
+  // The main agent is NOT in the agents list (GET /api/agents); its contextTokens
+  // rides on /api/marveen (window._marveen).
+  const a = (Array.isArray(agents) ? agents.find(x => x && (x.name === agentName || x.autoRestartId === agentName)) : null)
+    || (agentName === mainAgentId() ? window._marveen : null)
   return a && typeof a.contextTokens === 'number' && a.contextTokens > 0 ? a.contextTokens : null
 }
 
