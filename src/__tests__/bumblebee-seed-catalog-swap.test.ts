@@ -29,6 +29,8 @@ function runRefresh(upstream: string) {
   const bin = join(root, 'bin'), catalog = join(root, 'catalog'), fixture = join(root, 'upstream')
   mkdirSync(bin), mkdirSync(catalog), mkdirSync(fixture)
   writeFileSync(join(catalog, 'old.json'), '{"schema_version":"0.1.0","entries":[]}')
+  // only in the OLD set: a whole swap drops it, a file-by-file copy over the old dir keeps it (trillian 3d05b3b9)
+  writeFileSync(join(catalog, 'stale.json'), '{"schema_version":"0.1.0","entries":[]}')
   writeFileSync(join(fixture, 'old.json'), `{"schema_version":"${upstream}","entries":[]}`)
   writeFileSync(join(fixture, 'new.json'), `{"schema_version":"${upstream}","entries":[]}`)
   writeFileSync(join(bin, 'git'),
@@ -41,21 +43,23 @@ function runRefresh(upstream: string) {
     encoding: 'utf-8',
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, BB_CATALOG: catalog, BB_BIN: join(bin, 'bumblebee') },
   })
-  const schemas = readdirSync(catalog).filter(f => f.endsWith('.json'))
-    .map(f => JSON.parse(readFileSync(join(catalog, f), 'utf-8')).schema_version as string)
-  return { out: r.stdout + r.stderr, schemas, marker: existsSync(join(catalog, '.last-refresh-check')) }
+  const files = readdirSync(catalog).filter(f => f.endsWith('.json')).sort()
+  const schemas = files.map(f => JSON.parse(readFileSync(join(catalog, f), 'utf-8')).schema_version as string)
+  return { out: r.stdout + r.stderr, files, schemas, marker: existsSync(join(catalog, '.last-refresh-check')) }
 }
 
 describe('seed bumblebee refresh: the binary decides, the set swaps whole (card 3d05b3b9)', () => {
   it('an upstream set the binary cannot read leaves the old catalogs untouched and no marker', () => {
     const r = runRefresh('0.2.0')
-    expect(r.schemas).toEqual(['0.1.0'])
+    expect(r.files).toEqual(['old.json', 'stale.json'])
+    expect(r.schemas).toEqual(['0.1.0', '0.1.0'])
     expect(r.marker).toBe(false)
     expect(r.out).toContain('REFRESH SKIPPED')
   })
   it('CONTROL: a readable upstream set is swapped in whole and stamps the marker', () => {
     const r = runRefresh('0.1.1')
-    expect(r.schemas.sort()).toEqual(['0.1.1', '0.1.1'])
+    expect(r.files).toEqual(['new.json', 'old.json'])
+    expect(r.schemas).toEqual(['0.1.1', '0.1.1'])
     expect(r.marker).toBe(true)
     expect(r.out).toContain('catalogs swapped in')
   })
