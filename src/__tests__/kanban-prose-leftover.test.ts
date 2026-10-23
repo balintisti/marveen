@@ -31,7 +31,8 @@ describe('proseLeftoverHints', () => {
   })
 
   it('the card being closed does not carry its own leftover', () => {
-    expect(hints(c('ford', 'Nyitva marad az abcdef01 kártyán.'))).toHaveLength(1)
+    // even when the id resolves to a real card (it is the card being closed)
+    expect(proseLeftoverHints([c('ford', 'Nyitva marad az abcdef01 kártyán.')], 'abcdef01', () => true)).toHaveLength(1)
   })
 
   it('does not flag the measured false-positive families', () => {
@@ -42,6 +43,9 @@ describe('proseLeftoverHints', () => {
     expect(hints(c('didi', 'Nincs nyitva marad tétel.'))).toHaveLength(0)
     expect(hints(c('ford', 'MARADEK: valami | f2a1b3c4'))).toHaveLength(0)
     expect(hints(c('ford', 'a hiba mar nem marad nyitva'))).toHaveLength(0)
+    // the phrase leads the line but the same line says nothing is open
+    expect(hints(c('ford', 'Nyitva marad: nincs ilyen tétel'))).toHaveLength(0)
+    expect(hints(c('ford', 'Nem javítva: 0 nyitott maradt'))).toHaveLength(0)
   })
 
   it('ignores system comments and empty ones', () => {

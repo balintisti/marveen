@@ -220,7 +220,6 @@ export function proseLeftoverHints(
     if (carried) continue
     for (const written of text.split(/\r?\n/)) {
       const line = normalize(withoutOwnStamp(written, comment.author))
-      if (line.startsWith('VERDIKT') || line.startsWith('KESZ-IGAZOLAS') || line.startsWith('MARADEK:')) continue
       if (!PROSE_OPEN.test(line) || PROSE_NEGATED.test(line)) continue
       hints.push({ author: comment.author, line: written.trim().slice(0, 200), commentId: comment.id })
       break
