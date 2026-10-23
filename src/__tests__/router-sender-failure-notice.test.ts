@@ -216,4 +216,12 @@ describe('cd404a64: the router tells the sender when it closes a row as failed',
     expect(toSender).toHaveLength(1)
     expect(toSender[0].text).toContain('kézbesítési hiba a routerben')
   })
+
+  it('the fault-isolation branch: a row another writer closed first (markMessageFailed false) earns no sender notice', async () => {
+    classifyThrows = true
+    mockMarkFailed.mockReturnValue(false)
+    await tickAt(0, true)
+    expect(mockMarkFailed).toHaveBeenCalledTimes(1)
+    expect(notices().map((x) => x.to)).not.toContain('geri')
+  })
 })
