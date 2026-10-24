@@ -19,7 +19,7 @@ import { readBody, json } from '../http-helpers.js'
 import { logger } from '../../logger.js'
 import { MAIN_AGENT_ID } from '../../config.js'
 import { getEffectiveSettingValue } from '../../settings-store.js'
-import { readClaudePlans, writeClaudePlans, validatePlan, PLAN_ID_ALLOWED, tokenSecretIdFor } from '../claude-plans.js'
+import { readClaudePlans, writeClaudePlans, validatePlan, PLAN_ID_ALLOWED, tokenSecretIdFor, planAppliesToSubAgent } from '../claude-plans.js'
 import { setSecret, deleteSecret, getSecret } from '../vault.js'
 import { readClaudePlansState, writeClaudePlansState, applyRotation, recordPlanObservation } from '../claude-plans-state.js'
 import { probePlanUsage, observationFromProbe, usageFromProbe } from '../../claude-plan-usage-probe.js'
@@ -267,6 +267,12 @@ export async function tryHandleClaudePlans(ctx: RouteContext): Promise<boolean> 
     // no separate sub-agent rotation mechanism to keep in sync.
     if (!existsSync(agentDir(agentId))) {
       json(res, { error: `Agent not found: ${agentId}` }, 404)
+      return true
+    }
+    if (!planAppliesToSubAgent(target)) {
+      json(res, {
+        error: `Plan ${targetPlanId} is token-mode: token-mode plans apply to the main agent only, ${agentId} would keep launching on its current login`,
+      }, 409)
       return true
     }
     // Agent config first: if it refuses (corrupt file, JSONCLOBBER926) the

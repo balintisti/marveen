@@ -59,7 +59,7 @@ import {
   type AuthMode,
   readJsonObjectForWrite,
 } from '../agent-config.js'
-import { readClaudePlans, resolveAgentConfigDir } from '../claude-plans.js'
+import { readClaudePlans, resolveAgentConfigDir, planAppliesToSubAgent } from '../claude-plans.js'
 import {
   readAgentTeam,
   writeAgentTeam,
@@ -2519,8 +2519,15 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
         return true
       }
       const planId = data.claudePlan.trim()
-      if (planId && !readClaudePlans().some(p => p.id === planId)) {
+      const plan = planId ? readClaudePlans().find(p => p.id === planId) : undefined
+      if (planId && !plan) {
         json(res, { error: `Ismeretlen Claude plan id: ${planId}` }, 400)
+        return true
+      }
+      // Same drift, other cause: a token-mode plan has no configDir, so the
+      // launch would keep the current login while the field names the plan.
+      if (plan && !planAppliesToSubAgent(plan)) {
+        json(res, { error: `A(z) ${planId} token-módú Claude plan, csak a fő agensre hat: ${name} a jelenlegi bejelentkezésével indulna tovább` }, 400)
         return true
       }
       writeAgentClaudePlan(name, planId)

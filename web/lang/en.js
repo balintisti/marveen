@@ -1089,6 +1089,8 @@ window._i18n.en = {
   'agents.settings.plan_unresolved_desc': "⚠️ '{id}' is not in the registry (store/claude-plans.json). Launch uses the raw config-dir / host login.",
   'agents.settings.plan_not_found_suffix': ' (not in registry)',
   'agents.settings.plan_no_channels':     ' ⚠️ Channels disabled on this plan',
+  'agents.settings.plan_main_only_suffix': ' (main agent only)',
+  'agents.settings.plan_main_only_desc': '⚠️ Token-mode plan: it only applies to the main agent. A sub-agent keeps its current login; choose another plan or the default.',
   'agents.settings.memory_isolation_label':  'Memory isolation',
   'agents.settings.memory_isolation_toggle': 'Give this agent its own isolated file memory',
   'agents.settings.memory_isolation_desc':   'When enabled, the agent starts with its own, initially empty file memory and no longer sees the shared MEMORY.md. Shared SQLite memories and CLAUDE.md still reach it. Recommended on multi-user installs; leave it off on single-operator installs. Takes effect on the next restart.',

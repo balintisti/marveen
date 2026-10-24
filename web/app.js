@@ -2968,25 +2968,35 @@ function populateProfileSelect(selectEl, descEl, selected) {
 // agent keeps its raw config-dir / host default. The description line shows the
 // plan type + config dir and flags a Channels-forbidden plan so the operator
 // sees the guardrail context before saving.
+function planSelectOptions(plans, selected) {
+  const known = plans.some(p => p.id === selected)
+  const opts = [`<option value="">${escapeHtml(t('agents.settings.plan_default'))}</option>`]
+  for (const p of plans) {
+    // A token-mode plan (no configDir) only reaches the main agent; the server
+    // refuses it for a sub-agent (card 4fdc6e63). Shown disabled so the reason
+    // is visible, but an already-assigned one stays selected so it can be cleared.
+    const mainOnly = !p.configDir
+    const disabled = mainOnly && p.id !== selected ? ' disabled' : ''
+    const suffix = mainOnly ? t('agents.settings.plan_main_only_suffix') : ''
+    opts.push(`<option value="${escapeHtml(p.id)}"${disabled}>${escapeHtml(p.label)}${escapeHtml(suffix)}</option>`)
+  }
+  // Preserve an already-assigned plan id that is NOT in the loaded registry
+  // (registry edited/renamed, OR /api/claude-plans transiently failed and
+  // returned []). Without this the dropdown would resolve to '' and a save
+  // would silently wipe the real assignment.
+  if (selected && !known) {
+    opts.push(`<option value="${escapeHtml(selected)}">${escapeHtml(selected)}${escapeHtml(t('agents.settings.plan_not_found_suffix'))}</option>`)
+  }
+  return opts
+}
+
 function populatePlanSelect(selectEl, descEl, selected) {
   if (!selectEl) return
   fetch('/api/claude-plans')
     .then(res => (res.ok ? res.json() : []))
     .catch(() => [])
     .then((plans) => {
-      const known = plans.some(p => p.id === selected)
-      const opts = [`<option value="">${escapeHtml(t('agents.settings.plan_default'))}</option>`]
-      for (const p of plans) {
-        opts.push(`<option value="${escapeHtml(p.id)}">${escapeHtml(p.label)}</option>`)
-      }
-      // Preserve an already-assigned plan id that is NOT in the loaded registry
-      // (registry edited/renamed, OR /api/claude-plans transiently failed and
-      // returned []). Without this the dropdown would resolve to '' and a save
-      // would silently wipe the real assignment.
-      if (selected && !known) {
-        opts.push(`<option value="${escapeHtml(selected)}">${escapeHtml(selected)}${escapeHtml(t('agents.settings.plan_not_found_suffix'))}</option>`)
-      }
-      selectEl.innerHTML = opts.join('')
+      selectEl.innerHTML = planSelectOptions(plans, selected).join('')
       selectEl.value = selected || ''
       const updateDesc = () => {
         if (!descEl) return
@@ -2998,6 +3008,10 @@ function populatePlanSelect(selectEl, descEl, selected) {
         const p = plans.find(x => x.id === val)
         if (!p) {
           descEl.textContent = t('agents.settings.plan_unresolved_desc', { id: val })
+          return
+        }
+        if (!p.configDir) {
+          descEl.textContent = t('agents.settings.plan_main_only_desc')
           return
         }
         const warn = p.channelsAllowed ? '' : t('agents.settings.plan_no_channels')
@@ -5379,12 +5393,19 @@ document.getElementById('savePlanBtn').addEventListener('click', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ claudePlan }),
     })
-    if (!res.ok) throw new Error()
+    if (!res.ok) { showToast(await planSaveErrorText(res)); return }
     currentAgent.claudePlan = claudePlan || null
     showToast(t('agents.toast.plan_saved'))
     loadAgents()
   } catch { showToast(t('agents.toast.plan_error')) }
 })
+
+// The server says WHY it refused a plan (e.g. a token-mode plan on a sub-agent);
+// the toast carries that reason instead of a bare "failed".
+async function planSaveErrorText(res) {
+  const body = await res.json().catch(() => ({}))
+  return body && body.error ? `${t('agents.toast.plan_error')}: ${body.error}` : t('agents.toast.plan_error')
+}
 
 // === Auth Mode ===
 function selectAuthModeCard(mode) {

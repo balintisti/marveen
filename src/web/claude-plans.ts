@@ -224,6 +224,16 @@ export function getClaudePlan(id: string | null | undefined): ClaudePlan | null 
   return readClaudePlans().find(p => p.id === id) ?? null
 }
 
+// Whether assigning this plan to a regular (non-main) agent changes its launch.
+// A sub-agent launch takes a plan only as a configDir (resolveAgentConfigDir
+// below); a token-mode plan has none, so the claudePlan field would change while
+// the agent keeps launching on its current login. Every path that assigns a plan
+// to a sub-agent refuses such a plan instead of reporting a switch that did not
+// happen.
+export function planAppliesToSubAgent(plan: ClaudePlan): boolean {
+  return !!plan.configDir
+}
+
 // The one place that decides an agent's effective CLAUDE_CONFIG_DIR. Named plan
 // wins over the raw claudeConfigDir; neither set => null (Claude Code default).
 // EVERY read path (launch env, activeModel/contextTokens transcript lookup,
