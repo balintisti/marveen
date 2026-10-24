@@ -380,7 +380,7 @@ def card_comment(card, author, text):
 
 
 def wake(me, rc, elapsed, detached):
-    """Item 5: one message to the starting agent when a detached run ends. Returns the outcome word."""
+    """Item 6: one message to the starting agent when a detached run ends. Returns the outcome word."""
     if not detached:
         return "not-detached"
     if elapsed <= WAKE_MIN_S:
@@ -1010,6 +1010,16 @@ def self_test():
                 os.environ[k] = v
     results.append(("the same run id wakes once (second call: dup)", (first, second) == ("sent", "dup")))
     results.append(("an unknown agent is not messaged", unknown == "unknown-agent" and len(stub_calls()) == 5))
+    # a wake that RAISES must not cost the run its rc or its log line (trillian 38417: removing the try/except
+    # around wake() in run() stayed green). HEAVY_RUN_DIR/wake made a plain file, so makedirs raises.
+    os.rename(os.path.join(base, "wake"), os.path.join(base, "wake.d"))
+    open(os.path.join(base, "wake"), "w").close()
+    out = os.path.join(base, "wake-raises.out")
+    subprocess.run(["sh", "-c", '"$PY" "$ME" --label wake-raises -- sh -c "sleep 1.5; exit 3" > "$OUT" 2>&1 &'],
+                   env={**wenv, "HEAVY_AGENT": "wk", "PY": sys.executable, "ME": me, "OUT": out})
+    row = run_row("wake-raises", timeout=15)
+    results.append(("a wake that raises: the run still logs its own rc and the error",
+                    row.get("rc") == 3 and str(row.get("wake", "")).startswith("error: ")))
     srv.shutdown()
 
     shutil.rmtree(base, ignore_errors=True)
