@@ -456,7 +456,8 @@ print(" ".join(t for t in os.environ["CARDS"].split() if t not in ids))' 2>/dev/
       _MISSING=""; _UNVERIFIED=""
       for _id in $_BAD; do
         _code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
-                   -H "Authorization: Bearer $(cat "$TOKEN_FILE")" "${API_BASE}/api/kanban/${_id}")"
+                   -K <(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$TOKEN_FILE")") \
+                   "${API_BASE}/api/kanban/${_id}")"
         case "$_code" in
           200) ;;
           404) _MISSING="${_MISSING:+$_MISSING }$_id" ;;

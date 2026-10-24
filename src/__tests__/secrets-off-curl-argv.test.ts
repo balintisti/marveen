@@ -46,10 +46,14 @@ function logicalLines(text: string): Array<{ n: number; text: string }> {
   return res
 }
 
-/** The shell word that follows each `-H` / `--header` (quotes respected, so `"a b"` is one word). */
+/**
+ * The shell word that follows each `-H` / `--header` (quotes respected, so `"a b"` is one word).
+ * Also the attached `-H"..."` form, and `-H` opening an array assignment (`H=(-H "...")`, `a+=(-H ...)`),
+ * which reach the argv the same way (didi, 9ac56d05 re-verdict 10-24).
+ */
 function headerWords(line: string): string[] {
   const words: string[] = []
-  const re = /(?:^|\s)(?:-H|--header)(?:\s+|=)/g
+  const re = /(?:^|[\s(])(?:-H|--header)(?:\s+|=|(?=["'$]))/g
   let m: RegExpExecArray | null
   while ((m = re.exec(line))) {
     let i = m.index + m[0].length
@@ -109,11 +113,17 @@ describe('shell scripts keep secrets off the curl argv', () => {
       'curl -s "https://api.telegram.org/bot${TOKEN}/getMe"',
       'curl -s https://api.telegram.org/bot$TOKEN/getMe',
       'curl -s -H "X-Auth: $TOKEN" http://x',
+      'curl -s -H"Authorization: Bearer $T" http://x',
+      `curl -s -H'Authorization: Bearer '"$T" http://x`,
+      'HDRS=(-H "Authorization: Bearer $T")',
+      'args+=(-H "Authorization: Bearer $(cat "$F")")',
     ]
     const good = [
       `curl -s -K <(printf 'header = "Authorization: Bearer %s"\\n' "$T") http://x`,
       `curl -s -K <(printf 'url = "%s"\\n' "https://api.telegram.org/bot\${TOKEN}/getMe")`,
       'curl -s -H "Content-Type: application/json" http://x',
+      'curl -s -H"Content-Type: application/json" http://x',
+      'HDRS=(-H "Content-Type: application/json")',
       '# curl -H "Authorization: Bearer $T" (comment)',
     ]
     for (const l of bad) expect(leak(l), l).not.toBeNull()
@@ -129,6 +139,7 @@ describe('shell scripts keep secrets off the curl argv', () => {
     ])
     expect([...vars].sort()).toEqual(['AUTH_HDR', 'KEY_HDR'])
     expect(leak('curl -s -H "$AUTH_HDR" http://x', vars)).not.toBeNull()
+    expect(leak('curl -s -H"$AUTH_HDR" http://x', vars)).not.toBeNull()
     expect(leak('curl -s --header "${KEY_HDR}" http://x', vars)).not.toBeNull()
     expect(leak('curl -s -H "$CT" http://x', vars)).toBeNull()
   })
