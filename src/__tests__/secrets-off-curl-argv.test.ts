@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join, dirname, relative } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 // Card 9ac56d05 (security). A secret in a curl argv (`-H "Authorization: Bearer $X"`,
@@ -17,18 +18,19 @@ const ALLOWED: Record<string, string> = {
   'scripts/fix-agent-auth-headers.sh': 'rewrites documentation examples',
 }
 
+/**
+ * The TRACKED shell scripts. Not a directory walk: in the live tree and in a test worktree, scripts/
+ * also holds L2 files (symlinks into the separate marveen-l2 repo, or copies of them, listed in
+ * .git/info/exclude), so a walk made this test's verdict depend on which tree it ran in.
+ */
 function shellFiles(): string[] {
-  const out: string[] = ['install-macos.sh', 'install-linux.sh']
-  const walk = (dir: string): void => {
-    for (const name of readdirSync(dir)) {
-      if (name === '__tests__' || name === 'fixtures' || name === 'node_modules') continue
-      const p = join(dir, name)
-      if (statSync(p).isDirectory()) walk(p)
-      else if (name.endsWith('.sh')) out.push(relative(ROOT, p))
-    }
-  }
-  walk(join(ROOT, 'scripts'))
-  return out
+  const tracked = execFileSync('git', ['ls-files', '-z', '--', 'scripts', 'install-macos.sh', 'install-linux.sh'], {
+    cwd: ROOT,
+    encoding: 'utf-8',
+  })
+  return tracked
+    .split('\0')
+    .filter((f) => f.endsWith('.sh') && !/(^|\/)(__tests__|fixtures|node_modules)\//.test(f))
 }
 
 /** Backslash-continued lines joined; each logical line keeps the number of its first physical line. */
