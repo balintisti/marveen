@@ -126,8 +126,9 @@ replay_unfinished_messages() {
   # ⛔ A kommentek SZANDEKOSAN a parancs ELOTT allnak: egy `\`-folytatasorok koze tett komment
   # elnyeli a sor hatralevo reszet (merve: az URL is a kommentbe kerult, a `bash -n` megis zold
   # maradt -- a szintaxis-ellenorzes a JELENTEST nem meri).
+  # The secret goes in a -K config from a process substitution, not argv (ps-visible); card 9ac56d05.
   RESPONSE=$(curl -s -m 5 \
-    -H "Authorization: Bearer $TOKEN" \
+    -K <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN") \
     -w '\n%{http_code}' \
     "http://localhost:${WEB_PORT}/api/messages?agent=${AGENT_ID}&limit=200" 2>/dev/null) || return
   HTTP_CODE=$(printf '%s' "$RESPONSE" | tail -n1)

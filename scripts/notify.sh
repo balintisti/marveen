@@ -122,7 +122,8 @@ fi
 # the HTTP code as well as `ok`. What the library adds is kept inline: the curl
 # exit code is reported by number, curl's own error text reaches stderr, and the
 # bot token is redacted from anything echoed (some curl errors quote the URL).
-RESPONSE=$(curl -sS --connect-timeout 10 --max-time 20 -w '\n%{http_code}' -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+# The secret goes in a -K config from a process substitution, not argv (ps-visible); card 9ac56d05.
+RESPONSE=$(curl -sS --connect-timeout 10 --max-time 20 -w '\n%{http_code}' -X POST -K <(printf 'url = "%s"\n' "https://api.telegram.org/bot${TOKEN}/sendMessage") \
   --data-urlencode "chat_id=${CHAT_ID}" \
   --data-urlencode "text=${MESSAGE}" \
   -d "parse_mode=HTML" 2>&1)

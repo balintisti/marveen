@@ -403,7 +403,8 @@ if [ -n "$_CARD_IDS" ]; then
   # allitja meg a szkriptet -- az rc a kovetkezo sorban olvashato.
   _KBF="$(mktemp -t agentmsg-kb)"
   _KBE="$(mktemp -t agentmsg-kberr)"
-  curl -s --max-time 10 -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
+  # The secret goes in a -K config from a process substitution, not argv (ps-visible); card 9ac56d05.
+  curl -s --max-time 10 -K <(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$TOKEN_FILE")") \
        "${API_BASE}/api/kanban?fields=summary" -o "$_KBF" 2>"$_KBE"
   _KBRC=$?
   # A FELTETEL HAROM OKOT FED, A REGI UZENET EGYET NEVEZETT MEG (dexter merte 2026-09-19).
@@ -455,7 +456,8 @@ print(" ".join(t for t in os.environ["CARDS"].split() if t not in ids))' 2>/dev/
       _MISSING=""; _UNVERIFIED=""
       for _id in $_BAD; do
         _code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
-                   -H "Authorization: Bearer $(cat "$TOKEN_FILE")" "${API_BASE}/api/kanban/${_id}")"
+                   -K <(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$TOKEN_FILE")") \
+                   "${API_BASE}/api/kanban/${_id}")"
         case "$_code" in
           200) ;;
           404) _MISSING="${_MISSING:+$_MISSING }$_id" ;;
@@ -796,7 +798,7 @@ BODY="$(FROM="$FROM" TO="$TO" C="$C" python3 -c 'import json,os; print(json.dump
 attempt=0; max=3; CODE=""; ID=""
 while [ "$attempt" -lt "$max" ]; do
   attempt=$((attempt+1))
-  RESP="$(curl -s -X POST "$URL" -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" -d "$BODY" -w $'\n%{http_code}' 2>/dev/null || true)"
+  RESP="$(curl -s -X POST "$URL" -H "Content-Type: application/json" -K <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN") -d "$BODY" -w $'\n%{http_code}' 2>/dev/null || true)"
   CODE="$(printf '%s' "$RESP" | tail -n1)"
   JSON="$(printf '%s' "$RESP" | sed '$d')"
   # Values out of one parse: the id (proof it was accepted), the recipient's

@@ -179,8 +179,9 @@ PY
 )" || { echo "FAIL: a kerés torzsét nem sikerult osszeallitani"; return 1; }
 
   local resp code out
+  # The secret goes in a -K config from a process substitution, not argv (ps-visible); card 9ac56d05.
   resp="$(curl -s -X POST "$ROOT/api/kanban" -H 'Content-Type: application/json' \
-          -H "Authorization: Bearer $token" -d "$body" -w $'\n%{http_code}' 2>/dev/null)"
+          -K <(printf 'header = "Authorization: Bearer %s"\n' "$token") -d "$body" -w $'\n%{http_code}' 2>/dev/null)"
   code="$(printf '%s' "$resp" | tail -n1)"
   out="$(printf '%s' "$resp" | sed '$d')"
   # A curl 0-val ter vissza 400-ra es 500-ra is; a kod ES az id kell, kulon-kulon egyik sem eleg.
@@ -194,7 +195,7 @@ PY
 
   # VISSZAOLVASAS -- a 200 nem bizonyitek, a visszaolvasas az.
   local card
-  card="$(curl -s -H "Authorization: Bearer $token" "$ROOT/api/kanban/$id" 2>/dev/null)"
+  card="$(curl -s -K <(printf 'header = "Authorization: Bearer %s"\n' "$token") "$ROOT/api/kanban/$id" 2>/dev/null)"
   local created
   created="$(printf '%s' "$card" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("created_at",""))' 2>/dev/null)"
   if [ -z "$created" ]; then

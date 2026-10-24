@@ -26,7 +26,8 @@ BASE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOKEN_FILE="$BASE/store/.dashboard-token"
 [ -r "$TOKEN_FILE" ] || { echo "NEM ELLENORIZTEM: nincs token ($TOKEN_FILE)"; exit 2; }
 
-curl -s -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
+# The secret goes in a -K config from a process substitution, not argv (ps-visible); card 9ac56d05.
+curl -s -K <(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$TOKEN_FILE")") \
   "http://localhost:${PORT}/api/agents" | python3 -c '
 import json, re, sys
 

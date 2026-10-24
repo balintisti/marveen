@@ -48,7 +48,8 @@ log() { echo "[fleet-safe-start] $*"; }
 TOKEN="$(cat "$TOKEN_FILE")"
 
 # Fetch agents (name + running) from the dashboard.
-agents_json="$(curl -s --max-time 10 -H "Authorization: Bearer $TOKEN" "$DASH/api/agents" 2>/dev/null)"
+# The secret goes in a -K config from a process substitution, not argv (ps-visible); card 9ac56d05.
+agents_json="$(curl -s --max-time 10 -K <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN") "$DASH/api/agents" 2>/dev/null)"
 [[ -z "$agents_json" ]] && { log "could not reach $DASH/api/agents"; exit 1; }
 
 # Emit "name running" lines. running is true/false.
@@ -91,7 +92,7 @@ start_one() {
   fi
   local body='{}'; (( FRESH )) && body='{"fresh":true}'
   local ok
-  ok="$(curl -s --max-time 30 -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  ok="$(curl -s --max-time 30 -X POST -K <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN") -H "Content-Type: application/json" \
         -d "$body" "$DASH/api/agents/$name/start" 2>/dev/null)"
   if printf '%s' "$ok" | grep -q '"ok":true'; then
     log "started: $name"; return 0

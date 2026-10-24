@@ -901,7 +901,8 @@ ok "Csatorna: $CHANNEL_PROVIDER"
 probe_telegram_token() {
   _ptt_t="$1"
   [ -n "$_ptt_t" ] || return 0
-  _ptt_me="$(curl -s --max-time 8 "https://api.telegram.org/bot${_ptt_t}/getMe" 2>/dev/null)" || return 0
+  # The secret goes in a -K config from a process substitution, not argv (ps-visible); card 9ac56d05.
+  _ptt_me="$(curl -s --max-time 8 -K <(printf 'url = "%s"\n' "https://api.telegram.org/bot${_ptt_t}/getMe") 2>/dev/null)" || return 0
   case "$_ptt_me" in
     *'"ok":true'*) : ;;
     *'"ok":false'*)
@@ -910,7 +911,7 @@ probe_telegram_token() {
       return 0 ;;
     *) return 0 ;;
   esac
-  _ptt_wh="$(curl -s --max-time 8 "https://api.telegram.org/bot${_ptt_t}/getWebhookInfo" 2>/dev/null)" || return 0
+  _ptt_wh="$(curl -s --max-time 8 -K <(printf 'url = "%s"\n' "https://api.telegram.org/bot${_ptt_t}/getWebhookInfo") 2>/dev/null)" || return 0
   case "$_ptt_wh" in
     *'"url":"http'*)
       warn "A bot token ervenyes, de a bot WEBHOOKRA van kotve -- a Marveen poller igy nem tud ra csatlakozni."
@@ -918,7 +919,7 @@ probe_telegram_token() {
       echo -e "    ${DIM}vagy keszits uj botot a @BotFather-nel, es futtasd ujra a telepitot azzal.${NC}"
       return 0 ;;
   esac
-  _ptt_up="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "https://api.telegram.org/bot${_ptt_t}/getUpdates?timeout=0&limit=1" 2>/dev/null)" || return 0
+  _ptt_up="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -K <(printf 'url = "%s"\n' "https://api.telegram.org/bot${_ptt_t}/getUpdates?timeout=0&limit=1") 2>/dev/null)" || return 0
   if [ "$_ptt_up" = "409" ]; then
     warn "A bot token ervenyes, de egy MASIK futo rendszer mar hasznalja (Telegram 409 Conflict)."
     echo -e "    ${DIM}Egy tokent egyszerre csak egy telepites hasznalhat. Teendo: allitsd le a korabbi telepitest,${NC}"

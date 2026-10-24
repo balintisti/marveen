@@ -51,7 +51,8 @@ REGISTRY_JSON=""
 DASH_TOKEN_FILE="$INSTALL_DIR/store/.dashboard-token"
 if [ -s "$DASH_TOKEN_FILE" ]; then
   for _try in 1 2 3 4 5 6; do
-    REGISTRY_JSON="$(curl -sS -m 10 -H "Authorization: Bearer $(cat "$DASH_TOKEN_FILE")" "http://127.0.0.1:${WEB_PORT}/api/commands/menu" 2>/dev/null)"
+    # The secret goes in a -K config from a process substitution, not argv (ps-visible); card 9ac56d05.
+    REGISTRY_JSON="$(curl -sS -m 10 -K <(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$DASH_TOKEN_FILE")") "http://127.0.0.1:${WEB_PORT}/api/commands/menu" 2>/dev/null)"
     case "$REGISTRY_JSON" in *'"commands"'*) break ;; esac
     REGISTRY_JSON=""
     sleep 10
