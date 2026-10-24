@@ -152,7 +152,9 @@ def main():
     check('5 a komment sem irodott be', comments('MOZGE906') == [], f'kapott: {comments("MOZGE906")}')
 
     # 6. Nem letezo kartya: a mezomozgatas nem hozhat letre semmit.
-    p = comment('NINCSILYEN906', 'Kartya NINCSILYEN906: nincs ilyen.', ('--status', 'done'))
+    # (waiting, nem done: a done-t 2026-10-20 ota a done-kapu MAR ELOBB megtagadja, d2d72d9a --
+    #  done-dal ez az eset a ROSSZ kapun lenne zold, a nem-letezes kapuja sosem futna.)
+    p = comment('NINCSILYEN906', 'Kartya NINCSILYEN906: nincs ilyen.', ('--status', 'waiting'))
     check('6 megtagadva nem letezo kartyara', p.returncode != 0)
     check('6 nem hozott letre kartyat', card('NINCSILYEN906') is None)
 
