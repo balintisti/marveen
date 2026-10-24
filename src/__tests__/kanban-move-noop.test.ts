@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import http from 'node:http'
 import { Readable } from 'node:stream'
-import { initDatabase, createKanbanCard, getKanbanCard, getKanbanCardEvents } from '../db.js'
+import { initDatabase, createKanbanCard, getKanbanCard, getKanbanCardEvents, addKanbanComment } from '../db.js'
 import { tryHandleKanban } from '../web/routes/kanban.js'
 
 // Kartya aca11ba5. A `/move` `{"ok":true}`-t adott egy kartyara, ami MAR abban az allapotban
@@ -55,6 +55,8 @@ describe('POST /kanban/<id>/move -- a valasz megmondja, tortent-e valami', () =>
 
   it('NO-OP (mar abban az allapotban) -> changed:false, es NINCS uj esemeny', async () => {
     createKanbanCard({ id: 'c2', title: 'x' })
+    // done needs a KESZ-IGAZOLAS line (card 3c7be3c4); without it the first move is refused too.
+    addKanbanComment('c2', 'marveen', 'KESZ-IGAZOLAS: TARGYTALAN | teszt-kartya')
     await move('c2', { status: 'done', actor: 'friday' })
     const again = await move('c2', { status: 'done', actor: 'friday' })
     expect(again.status).toBe(200)

@@ -19,9 +19,11 @@
  */
 // The reading itself is shared with the archive sweep (db.ts), so it lives
 // outside web/: see kanban-verdict.ts for the rule and the token.
-import { openVerdicts, openLeftovers, type OpenVerdict, type OpenLeftover } from '../kanban-verdict.js'
+import {
+  openVerdicts, openLeftovers, hasDoneProof, DONE_PROOF_KINDS, type OpenVerdict, type OpenLeftover,
+} from '../kanban-verdict.js'
 
-export { openVerdicts, openLeftovers, type OpenVerdict, type OpenLeftover }
+export { openVerdicts, openLeftovers, hasDoneProof, DONE_PROOF_KINDS, type OpenVerdict, type OpenLeftover }
 
 /**
  * The override the gate accepts: a stated reason, nothing less. An empty or
@@ -64,5 +66,39 @@ export function closeRefusal(
       + '`override_reason` mezovel, kimondott indokkal -- az indok a kartya esemenynaplojaba kerul.',
     open_verdicts: open,
     open_leftovers: leftovers,
+  }
+}
+
+/** How to write the proof line, named the same way in every refusal that asks for it. */
+const PROOF_HOW =
+  'egy komment, aminek egy sora (0. oszlopban) igy kezdodik: '
+  + `"KESZ-IGAZOLAS: <${DONE_PROOF_KINDS.join('|')}>", utana a merese vagy a helye`
+
+/**
+ * The 409 body when a card would go to done without its proof -- card 3c7be3c4.
+ * It names what is missing and the five kinds. `override_reason` does not stand
+ * in for the proof: the way out is the comment itself, which is always possible
+ * (TARGYTALAN covers a card whose subject went away). Open verdicts or leftovers,
+ * if any, are named in the same body so the closer learns everything in one call.
+ */
+export function proofRefusal(
+  open: OpenVerdict[],
+  leftovers: OpenLeftover[] = [],
+): { error: string; missing_proof: true; proof_kinds: readonly string[]; open_verdicts: OpenVerdict[]; open_leftovers: OpenLeftover[] } {
+  let error =
+    `A kartya nem mehet done-ba: nincs rajta KESZ-IGAZOLAS sor. Elobb ${PROOF_HOW}; `
+    + 'aztan ismeteld a lezarast. Az `override_reason` ezt nem helyettesiti.'
+  if (open.length > 0 || leftovers.length > 0) error += ` Emellett: ${closeRefusal(open, leftovers).error}`
+  return { error, missing_proof: true, proof_kinds: DONE_PROOF_KINDS, open_verdicts: open, open_leftovers: leftovers }
+}
+
+/** The 409 body for a card created straight into done: it cannot carry a proof yet. */
+export function createDoneRefusal(): { error: string; missing_proof: true; proof_kinds: readonly string[] } {
+  return {
+    error:
+      'Kartya nem hozhato letre done statusszal: igazolas meg nem lehet rajta. Hozd letre mas statusszal, '
+      + `ird meg a bizonyitekot (${PROOF_HOW}), aztan mozgasd done-ba.`,
+    missing_proof: true,
+    proof_kinds: DONE_PROOF_KINDS,
   }
 }

@@ -175,3 +175,32 @@ export function openLeftovers(comments: VerdictComment[]): OpenLeftover[] {
   }
   return [...byAuthor.values()].flat()
 }
+
+/**
+ * A CARD GOES TO DONE ONLY WITH ITS PROOF -- card 3c7be3c4.
+ *
+ * Isti (Telegram 5697, 2026-10-07; definition on card 08eed527): done needs a
+ * comment line `KESZ-IGAZOLAS: <ELES|ATADVA|DONTES|DOKUMENTUM|TARGYTALAN>`
+ * followed by its measured evidence. The rule lived in the closer's reading:
+ * 29f0cd5c went to done on 2026-10-17 with move 200 and no such line, because
+ * the closing script went on after the comment post had been refused.
+ *
+ * Read like `MARADEK:`: a line that STARTS with the prefix (column 0, after the
+ * author's own stamp), accents off (the "KÉSZ-IGAZOLÁS: TÁRGYTALAN" spelling
+ * is on the board once), case kept. Measured 2026-10-20 11:10 on the 1082 done
+ * cards: 1116 lines of the exact shape, 1 accented, 0 stamped. The kind must be
+ * one of the five; what follows it is the evidence and is not judged here.
+ */
+export const DONE_PROOF_KINDS = ['ELES', 'ATADVA', 'DONTES', 'DOKUMENTUM', 'TARGYTALAN'] as const
+
+const DONE_PROOF = new RegExp(`^KESZ-IGAZOLAS:\\s*(?:${DONE_PROOF_KINDS.join('|')})(?![A-Z0-9])`)
+
+/** Whether any comment carries a done-proof line. */
+export function hasDoneProof(comments: VerdictComment[]): boolean {
+  return comments.some((comment) =>
+    (comment.content ?? '').split(/\r?\n/).some((written) => {
+      const raw = withoutOwnStamp(written, comment.author)
+      return DONE_PROOF.test(raw.normalize('NFD').replace(/[̀-ͯ]/g, ''))
+    }),
+  )
+}

@@ -26,7 +26,10 @@ import {
   type TokenPruneLag,
   recordKanbanCloseOverride,
 } from '../../db.js'
-import { openVerdicts, openLeftovers, overrideReason, closeRefusal, type OpenVerdict } from '../kanban-verdict-gate.js'
+import {
+  openVerdicts, openLeftovers, overrideReason, closeRefusal, hasDoneProof, proofRefusal, createDoneRefusal,
+  type OpenVerdict,
+} from '../kanban-verdict-gate.js'
 import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
 import { kanbanCreateError } from '../kanban-create-validation.js'
 import { normalizeDueDate, DUE_DATE_ZONE, DUE_DATE_ACCEPTED } from '../kanban-due-date.js'
@@ -117,11 +120,14 @@ export function kanbanMoveInstructions(id: string, target: string): string {
     '',
     'A kártyát in_progress-re húzták. Amikor VÉGEZTÉL, két lépés (mindkettő a kártyára kerül, a web UI-ban látszik):',
     '',
-    '1) Írj egy rövid eredmény-összefoglalót kommentként (1-2 mondat: mi lett a vége):',
+    // The done gate (card 3c7be3c4) answers 409 to a done move without a
+    // KESZ-IGAZOLAS line, so the result comment carries it: a template that
+    // tells every dispatched agent to move to done must also tell it how.
+    '1) Írj egy rövid eredmény-összefoglalót kommentként. Az ELSŐ sora a kész-igazolás, `KESZ-IGAZOLAS: <ELES|ATADVA|DONTES|DOKUMENTUM|TARGYTALAN>` és utána a bizonyíték (ELES: a mérés, hogy élesben fut; ATADVA: az üzenet azonosítója; DONTES: hol rögzítették és ki; DOKUMENTUM: útvonal + commit; TARGYTALAN: miért, és mi nyitná újra); a második sora 1-2 mondat arról, mi lett a vége. E sor nélkül a done-mozgatás 409-et kap:',
     `  curl -s -X POST ${commentUrl} \\`,
     `    ${auth} \\`,
     `    -H 'Content-Type: application/json' \\`,
-    `    -d '{"author":"${target}","content":"AZ EREDMENY ROVIDEN"}'`,
+    `    -d '{"author":"${target}","content":"KESZ-IGAZOLAS: FAJTA A BIZONYITEK\\nAZ EREDMENY ROVIDEN"}'`,
     '',
     '2) Állítsd a kártyát done-ra:',
     `  curl -s -X POST ${moveUrl} \\`,
@@ -284,12 +290,22 @@ export const KANBAN_RESERVED_SEGMENTS = ['archived', 'labels', 'assignees', 'hea
  * reason, the closing goes ahead and the reason is written to the card's history
  * (`close_override`), next to the status change it allowed. The parser and its
  * rules live in kanban-verdict-gate.ts.
+ *
+ * Card 3c7be3c4: a move to DONE also needs the card's `KESZ-IGAZOLAS:` line, and no
+ * override reason stands in for it. Archiving does not ask for it: an archived card
+ * is not claimed done, and the archive sweep already takes only IGAZOLT-labelled ones.
  */
-function closeBlocked(res: ServerResponse, cardId: string, body: unknown, actor: unknown): boolean {
+function closeBlocked(
+  res: ServerResponse, cardId: string, body: unknown, actor: unknown, closing: 'done' | 'archive',
+): boolean {
   const comments = getKanbanComments(cardId)
   const verdicts: OpenVerdict[] = openVerdicts(comments)
   // Card 0a787690: the second closed token (`MARADEK:`) goes through the SAME door.
   const leftovers = openLeftovers(comments)
+  if (closing === 'done' && !hasDoneProof(comments)) {
+    json(res, proofRefusal(verdicts, leftovers), 409)
+    return true
+  }
   if (verdicts.length === 0 && leftovers.length === 0) return false
   const reason = overrideReason(body)
   if (!reason) {
@@ -766,6 +782,8 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // indistinguishable from the server crashing. See kanban-create-validation.ts.
     const invalid = kanbanCreateError(data)
     if (invalid) { json(res, { error: invalid }, 400); return true }
+    // Card 3c7be3c4: a card born done would skip the done-proof gate on the move.
+    if (data.status === 'done') { json(res, createDoneRefusal(), 409); return true }
     // due_date is normalised or refused BEFORE the row exists: a garbage value
     // used to create the card anyway (mandark's probe 2cecb0ac). See kanban-due-date.ts.
     if ('due_date' in data) {
@@ -1098,7 +1116,7 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // transition to done is gated -- an echo of a card already done is not a
     // closing, and blocking it would lock the card out of every inline edit.
     if (roCard && data.status === 'done' && (roCard as { status?: string }).status !== 'done') {
-      if (closeBlocked(res, id, data, actor)) return true
+      if (closeBlocked(res, id, data, actor, 'done')) return true
     }
     const result = updateKanbanCard(id, data, actor)
     if (result.outcome === 'not-found') { json(res, { error: 'Kártya nem található' }, 404); return true }
@@ -1154,7 +1172,7 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // CARD 5a967042: the move to done is where a card closes; see closeBlocked.
     if (status === 'done') {
       const current = getKanbanCard(id)
-      if (current && current.status !== 'done' && closeBlocked(res, id, parsedMove, actor)) return true
+      if (current && current.status !== 'done' && closeBlocked(res, id, parsedMove, actor, 'done')) return true
     }
     // A HAROM-ALLAPOTU KIMENET ES A TORZS DIAGNOSZTIKAJA EGYUTT MARAD, es a sorrend a lenyeg
     // (kartya aca11ba5 x a 09-05-i /move-naplozas). A torzs azert naplozott, mert a BOOLEAN
@@ -1209,7 +1227,7 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     } catch { /* empty or non-JSON body: the documented shape */ }
 
     // CARD 5a967042: archiving takes a card out of sight as surely as closing it.
-    if (getKanbanCard(id) && closeBlocked(res, id, parsedArchive, actor)) return true
+    if (getKanbanCard(id) && closeBlocked(res, id, parsedArchive, actor, 'archive')) return true
 
     // Read the comments BEFORE archiving: the scan is about what the archive is
     // taking out of sight. Archiving does not touch comments today, but the

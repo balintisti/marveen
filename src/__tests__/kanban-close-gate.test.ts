@@ -41,9 +41,13 @@ async function call(method: 'POST' | 'PUT', path: string, body?: unknown) {
   return { status, payload: chunk ? JSON.parse(chunk) : null }
 }
 
+// Card 3c7be3c4: done also needs a KESZ-IGAZOLAS line. Every card here carries one,
+// so these cases keep measuring the verdict/leftover gate alone; the proof gate has
+// its own file (kanban-done-proof-gate.test.ts).
 function cardInTesting(id: string) {
   createKanbanCard({ id, title: 'Kartya', status: 'planned' })
   moveKanbanCard(id, 'testing', 0, 'dexter')
+  addKanbanComment(id, 'marveen', 'KESZ-IGAZOLAS: TARGYTALAN | teszt-kartya')
 }
 
 const OPEN = 'VERDIKT: NYITOTT TETEL | a mobil ag meg nincs lefedve'
