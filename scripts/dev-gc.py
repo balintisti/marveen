@@ -259,7 +259,13 @@ def jest_dir_sizes(dirs):
     out = []
     for d in dirs:
         if os.path.isdir(d) and jest_dir_is_allowed(d):
-            out.append((d, sum(entry_stats(os.path.join(d, n))[1] for n in os.listdir(d))))
+            total = 0
+            for n in os.listdir(d):
+                try:
+                    total += entry_stats(os.path.join(d, n))[1]
+                except OSError:
+                    continue  # a running jest removed it between listdir and lstat
+            out.append((d, total))
     return out
 
 

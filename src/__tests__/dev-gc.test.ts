@@ -128,9 +128,9 @@ function capFixture() {
   return { d, oldest: f('a.map', 180), middle: f('b.map', 150), newer: f('c.map', 120), fresh: f('d.map', 5) }
 }
 
-function busyFixture() {
+function busyFixture(dirName = 'jest_dx') {
   const base = mkTmp('devgc-busy-')
-  const d = join(base, 'jest_dx')
+  const d = join(base, dirName)
   const now = Date.now() / 1000
   const body = 'x'.repeat(300 * 1024)
   const age = (p: string, min: number) => utimesSync(p, now - min * 60, now - min * 60)
@@ -266,6 +266,39 @@ describe('dev-gc: jest_dx meret-plafon (4138aa04)', () => {
     expect(m).not.toBeNull()
     expect(Number(m![1])).toBeGreaterThanOrEqual(1)
     expect(realpathSync(m![2].trim())).toBe(realpathSync(f.d))
+  })
+
+  // didi, 2026-10-24 (38455): M4 (torles --dry-run alatt) es M3 (az allowlist-ellenorzes nelkul) eloben maradt
+  it('futo jest mellett a --dry-run megszamolja a bejegyzeseket, de semmit nem torol', () => {
+    const f = busyFixture()
+    const out = run(['--dry-run', '--jest-dir', f.d, '--jest-cap-mb', '0.01'], fakePgrep('echo 99999; exit 0').bin)
+    expect(out).toMatch(/DRY-RUN jest_dx busy cap .*: 3 entries/)
+    for (const p of [f.oldDir, f.midDir, f.oldFile, f.recentDir, f.mixedDir]) expect(existsSync(p)).toBe(true)
+  })
+
+  it('futo jest mellett egy NEM jest_dx nevu konyvtarbol a busy cap semmit nem torol', () => {
+    const f = busyFixture('jest_dy')
+    const out = run(['--jest-dir', f.d, '--jest-cap-mb', '0.01'], fakePgrep('echo 99999; exit 0').bin)
+    expect(out).toMatch(/REFUSED dirs/)
+    expect(out).toMatch(/jest_dx busy cap .*: 0 entries/)
+    for (const p of [f.oldDir, f.midDir, f.oldFile]) expect(existsSync(p)).toBe(true)
+  })
+
+  it('a maradek-meres tuli, ha egy bejegyzes listdir es lstat kozott eltunik (futo jest torolte)', () => {
+    const f = busyFixture()
+    const probe = [
+      'import importlib.util, sys',
+      'spec = importlib.util.spec_from_file_location("devgc", sys.argv[1])',
+      'm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)',
+      'real = m.entry_stats',
+      'def flaky(p):',
+      '    if p.endswith("bbb-222"): raise FileNotFoundError(p)',
+      '    return real(p)',
+      'm.entry_stats = flaky',
+      'print(m.jest_dir_sizes([sys.argv[2]])[0][1])',
+    ].join('\n')
+    const left = Number(execFileSync('python3', ['-c', probe, SCRIPT, f.d], { encoding: 'utf8' }).trim())
+    expect(left).toBeGreaterThanOrEqual(4 * 300 * 1024) // a 4 megmaradt bejegyzes, a hianyzo nelkul
   })
 
   it('60 perc alatti --jest-busy-floor-minutes-et megtagad', () => {
