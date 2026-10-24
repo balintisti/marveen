@@ -1754,6 +1754,12 @@ window._i18n.hu = {
   'kanban.filter.group_none':    'Nincs',
   'kanban.filter.group_assignee':'Felelős szerint',
   'kanban.filter.group_priority':'Prioritás szerint',
+  'kanban.owner_strip.title':       'Rád vár',
+  'kanban.owner_strip.show':        'mutasd',
+  'kanban.owner_strip.hide':        'elrejt',
+  'kanban.owner_strip.tier_urgent':  'Sürgős',
+  'kanban.owner_strip.tier_later':   'Amint van rá időm',
+  'kanban.owner_strip.tier_parked':  'Ráér',
 
   // --- Kanban Gantt/idővonal nézet ---
   'kanban.view.board':              'Tábla',

@@ -68,7 +68,7 @@ export function isFederationWireEndpoint(path: string, method: string): boolean 
 export function requiresAuth(path: string, method: string): boolean {
   if (path === '/api/auth/status' && method === 'GET') return false
   if (path === '/api/auth/login' && method === 'POST') return false
-  if (method === 'GET' && (path === '/api/marveen/avatar' || /^\/api\/agents\/[^/]+\/avatar$/.test(path))) return false
+  if (method === 'GET' && (path === '/api/marveen/avatar' || path === '/api/marveen/owner-avatar' || /^\/api\/agents\/[^/]+\/avatar$/.test(path))) return false
   if (path === '/.well-known/fleetq' && method === 'GET') return true
   return path.startsWith('/api/')
 }

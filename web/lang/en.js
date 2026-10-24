@@ -1750,6 +1750,12 @@ window._i18n.en = {
   'kanban.filter.group_none':    'None',
   'kanban.filter.group_assignee':'By assignee',
   'kanban.filter.group_priority':'By priority',
+  'kanban.owner_strip.title':       'Waiting on you',
+  'kanban.owner_strip.show':        'show',
+  'kanban.owner_strip.hide':        'hide',
+  'kanban.owner_strip.tier_urgent':  'Urgent',
+  'kanban.owner_strip.tier_later':   'When I have time',
+  'kanban.owner_strip.tier_parked':  'Can wait',
 
   // --- Kanban Gantt/timeline view ---
   'kanban.view.board':              'Board',
