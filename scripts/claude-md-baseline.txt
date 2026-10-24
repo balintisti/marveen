@@ -1,5 +1,5 @@
 # A kozos CLAUDE.md meret-alapvonala KARAKTERBEN (kartya 30169f86).
 # RACSNI: alapvonal := min(mert, regi). Novelni csak kimondott indokkal szabad.
-# elozo: 174851  uj: 173094  indok: racsni: csokkenes utan automatikusan szorul
-# 2026-10-06 11:50:38 CEST
-173094
+# elozo: 173094  uj: 42630  indok: racsni: csokkenes utan automatikusan szorul
+# 2026-10-24 03:37:29 CEST
+42630
