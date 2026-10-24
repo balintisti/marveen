@@ -1010,6 +1010,21 @@ function decideWedgeTiers(
  * state a human might still recover from it. The saturation net is the
  * mechanism for wedged panes; this tier stays out of that business.
  */
+/** The wall-clock START of the quiet spell, with date and UTC offset (card c1e00b12).
+ *
+ *  The reason used to say only the ROUNDED 'quiet for 20m', so the start had to be derived back
+ *  from the log line's time -- and the log lines carry a local time with no date. That derivation
+ *  produced three wrong conclusions on 2026-08-29 (card 1b571955, comment 8), one of them a
+ *  local time read as UTC. Hence the date AND the offset, not a bare clock time. */
+export function quietSinceStamp(nowMs: number, idleMs: number): string {
+  const d = new Date(nowMs - idleMs)
+  const pad = (n: number) => String(Math.abs(n)).padStart(2, '0')
+  const off = -d.getTimezoneOffset()
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ` +
+    `${off < 0 ? '-' : '+'}${pad(Math.trunc(off / 60))}:${pad(off % 60)}`
+}
+
 function decideIdleFlush(
   nowMs: number,
   inputs: GuardInputs,
@@ -1020,16 +1035,17 @@ function decideIdleFlush(
   if (inputs.contextTokens === null) return none('idle-flush: context size unmeasurable', cleared)
   if (inputs.contextTokens < cfg.idleFlushTokens) return null
   if (inputs.idleMs === null) return none('idle-flush: transcript idle time unmeasurable', cleared)
+  const since = `quiet since ${quietSinceStamp(nowMs, inputs.idleMs)}`
   if (inputs.idleMs < cfg.idleMinutes * 60_000) {
     return none(
       `idle-flush: heavy (${Math.round(inputs.contextTokens / 1000)}k) but quiet for only ` +
-      `${Math.round(inputs.idleMs / 60_000)}m of ${cfg.idleMinutes}m`,
+      `${Math.round(inputs.idleMs / 60_000)}m of ${cfg.idleMinutes}m, ${since}`,
       cleared,
     )
   }
   if (!inputs.paneIdle) {
     return none(
-      `idle-flush: heavy and quiet, but pane is not confirmed idle -- deferring`,
+      `idle-flush: heavy and quiet (${since}), but pane is not confirmed idle -- deferring`,
       cleared,
     )
   }
@@ -1041,14 +1057,14 @@ function decideIdleFlush(
   // await-handoff deadline would restart the session with nothing written. Wait for the reset.
   if (inputs.paneUsageLimited === true) {
     return none(
-      `idle-flush: heavy and quiet, but the plan usage limit is reached -- a handoff request could not be answered; deferring`,
+      `idle-flush: heavy and quiet (${since}), but the plan usage limit is reached -- a handoff request could not be answered; deferring`,
       cleared,
     )
   }
   return handoffRequest(
     nowMs, inputs, cfg,
     `${IDLE_FLUSH_REASON_PREFIX} (${Math.round(inputs.contextTokens / 1000)}k tokens, quiet for ` +
-    `${Math.round(inputs.idleMs / 60_000)}m >= ${cfg.idleMinutes}m)`,
+    `${Math.round(inputs.idleMs / 60_000)}m >= ${cfg.idleMinutes}m, ${since})`,
     true,
   )
 }
