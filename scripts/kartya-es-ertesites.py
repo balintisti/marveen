@@ -6,6 +6,12 @@ amirol soha nem ment uzenet -- negy kozuluk ugyanabban a delelottben az enyem vo
 lelete: "a kartya-felvetel es az ertesites ket kulon lepes; ha ez ismetlodik, erdemesebb
 osszekotni, mint emlekezni ra."
 
+MIERT NEM IR done-t (kartya d2d72d9a, marveen dontese 2026-10-20): a done-kapu (3c7be3c4,
+  KESZ-IGAZOLAS sor nelkul 409) az API-ban el, ez a szkript pedig kozvetlenul az SQLite-ba ir --
+  egy itt atengedett done a kaput nemán megkerulne. A kapu logikajat NEM masoljuk Pythonba (ket
+  peldany szetcsuszik): mindket ag (letrehozo INSERT, mozgato UPDATE) megtagadja a done-t, es a
+  hibauzenet megnevezi a kiutat (KESZ-IGAZOLAS komment + `POST /api/kanban/<id>/move`).
+
 Amit garantal:
   - megnevezett flotta-gazdas kartya NEM jon letre ertesites nelkul (a szkript megtagadja);
   - mindket iras VISSZA VAN OLVASVA (a kartya SELECT-tel, az uzenet a visszakapott id-vel);
