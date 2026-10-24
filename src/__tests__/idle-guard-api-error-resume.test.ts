@@ -171,11 +171,11 @@ describe('decideIdleAlert -- resume-api-error', () => {
 describe('the message and the alert text', () => {
   it('names the error time in Europe/Budapest (CEST in October: UTC+2)', () => {
     expect(buildApiErrorResumeMessage(Date.UTC(2026, 9, 16, 10, 5, 0)))
-      .toBe('a turnod API-hibával megszakadt 12:05-kor, folytasd onnan, ahol tartottál')
+      .toBe('a turnod API-hibával megszakadt 12:05-kor, folytasd onnan, ahol tartottál, rövid fordulókban dolgozz, a leleteket a kártyára írd')
   })
   it('winter time is UTC+1', () => {
     expect(buildApiErrorResumeMessage(Date.UTC(2026, 11, 16, 10, 5, 0)))
-      .toBe('a turnod API-hibával megszakadt 11:05-kor, folytasd onnan, ahol tartottál')
+      .toBe('a turnod API-hibával megszakadt 11:05-kor, folytasd onnan, ahol tartottál, rövid fordulókban dolgozz, a leleteket a kártyára írd')
   })
   it('the repeat alert names the agent and the minutes, alone and grouped', () => {
     const one = buildFleetAlert([{ kind: 'api-error-repeat', agent: 'didi', minutes: 6 }])
@@ -285,7 +285,7 @@ describe('tick() -- the API-error resume, end to end', () => {
     at(3, ERR_PANE)
     expect(toX()).toHaveLength(1)
     expect(toX()[0].from).toBe('system')
-    expect(toX()[0].content).toBe('a turnod API-hibával megszakadt 12:00-kor, folytasd onnan, ahol tartottál')
+    expect(toX()[0].content).toBe('a turnod API-hibával megszakadt 12:00-kor, folytasd onnan, ahol tartottál, rövid fordulókban dolgozz, a leleteket a kártyára írd')
     for (let m = 6; m <= 60; m += 3) at(m, ERR_PANE)
     expect(toX().filter((x) => x.content.startsWith('a turnod'))).toHaveLength(1)   // one answer per streak
   })
