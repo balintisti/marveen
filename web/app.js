@@ -16091,6 +16091,15 @@ function openAddProviderModal(container, editProvider = null) {
   })
 }
 
+// t() answers a missing key with the key itself, which is truthy, so a plain
+// `t(...) || def.description` never fell back and the row showed the raw
+// settings.desc.<KEY> (#2228). Compare with the key instead.
+function settingDescription(def) {
+  const key = 'settings.desc.' + def.key
+  const text = t(key)
+  return text === key ? (def.description || '') : text
+}
+
 function buildSettingRow(def) {
   const row = document.createElement('div')
   row.className = 'settings-row'
@@ -16111,7 +16120,7 @@ function buildSettingRow(def) {
 
   const desc = document.createElement('div')
   desc.className = 'settings-row-desc'
-  desc.textContent = t('settings.desc.' + def.key) || def.description
+  desc.textContent = settingDescription(def)
   info.appendChild(desc)
 
   const meta = document.createElement('div')
