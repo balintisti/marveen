@@ -82,28 +82,36 @@ Never put the synthetic file into the real catalog dir.
 
 6. **Telegram ONLY if finding > 0**: send alert with finding details (ecosystem, package, version, which threat catalog matched). If 0 findings AND the positive control passed: stay silent (heartbeat style, transcript line only). A zero without the control is UNVERIFIED and must be reported as such, not as clean.
 
-7. **Monthly threat-intel refresh** (once per ~30 days). Key the 30-day rule on
-a refresh-check marker, NOT on the catalog files' mtime: catalog file mtime
-never changes while upstream is unchanged, so an mtime rule re-clones on every
-weekly run once the files age past 30 days (measured 2026-09-07: 35-day-old
-files, upstream byte-identical -- the clone was pure waste). Compare content,
-copy only on change, and stamp the marker either way:
+7. **Monthly threat-intel refresh** (once per ~30 days, keyed on a marker, not on file mtime: the files never change while upstream is unchanged, so an mtime rule re-clones every run). The BINARY decides what it can read, not a version string written here: the new set is test-loaded into a temp dir and swapped in WHOLE only if the binary accepts it. Never copy file by file: the binary refuses a directory that mixes schema versions (2026-09-28 a blind cp left 0.2.0 catalogs for a 0.1.0 binary and the scan died rc=2; card 3d05b3b9).
 ```bash
+BB_BIN="${BB_BIN:-$HOME/.local/bin/bumblebee}"
 MARKER="$BB_CATALOG/.last-refresh-check"
 if [ -z "$(find "$MARKER" -mtime -30 2>/dev/null)" ]; then
-  cd /tmp && rm -rf bb-ti-update
-  git clone -q --depth 1 https://github.com/perplexityai/bumblebee.git bb-ti-update 2>/dev/null
-  if [ -d bb-ti-update/threat_intel ]; then
+  T=$(mktemp -d)
+  if git clone -q --depth 1 https://github.com/perplexityai/bumblebee.git "$T/src" 2>/dev/null \
+     && ls "$T"/src/threat_intel/*.json >/dev/null 2>&1; then
     LOCAL_SUM=$(cat "$BB_CATALOG"/*.json 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
-    UPSTREAM_SUM=$(cat bb-ti-update/threat_intel/*.json | shasum -a 256 | cut -d' ' -f1)
-    if [ "$LOCAL_SUM" != "$UPSTREAM_SUM" ]; then
-      cp bb-ti-update/threat_intel/*.json "$BB_CATALOG/"
+    UPSTREAM_SUM=$(cat "$T"/src/threat_intel/*.json | shasum -a 256 | cut -d' ' -f1)
+    if [ "$LOCAL_SUM" = "$UPSTREAM_SUM" ]; then
+      echo "REFRESH: upstream catalogs unchanged"; touch "$MARKER"
+    else
+      NEW="$BB_CATALOG.new"; rm -rf "$NEW"; mkdir -p "$NEW" "$T/empty-root"
+      cp "$T"/src/threat_intel/*.json "$NEW/"
+      if "$BB_BIN" scan --root "$T/empty-root" --exposure-catalog "$NEW" >/dev/null 2>"$T/check.err"; then
+        rm -rf "$BB_CATALOG.prev"; mv "$BB_CATALOG" "$BB_CATALOG.prev" && mv "$NEW" "$BB_CATALOG" && rm -rf "$BB_CATALOG.prev"
+        touch "$MARKER"; echo "REFRESH: $(ls "$BB_CATALOG"/*.json | wc -l | tr -d ' ') catalogs swapped in"
+      else
+        rm -rf "$NEW"
+        echo "REFRESH SKIPPED, old catalogs kept: the binary cannot read upstream's set -- $(grep -m1 -o 'unsupported.*' "$T/check.err" | cut -c1-160). Rebuild the binary (card 3d05b3b9). No marker: retried next run."
+      fi
     fi
+  else
+    echo "REFRESH FAILED (clone or no threat_intel/), old catalogs kept; retried next run"
   fi
-  rm -rf bb-ti-update
-  touch "$MARKER"
+  rm -rf "$T"
 fi
 ```
+A "REFRESH SKIPPED" line means the scanner is running on catalogs older than upstream: report it with the scan result, it is a coverage gap, not noise.
 
 ## Pitfalls
 - Findings ONLY appear with `--exposure-catalog` flag (otherwise always 0). The catalogs live in `~/.claude/tools/bumblebee-threat-intel/`.
