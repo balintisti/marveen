@@ -64,6 +64,7 @@ NOT_AN_ALARM_OR_COVERED = {
     'tenant-second-user-watch.sh': 'scheduler command task, failThreshold 2, exits 6 on a send failure',
     'quota-ceiling-guard.sh': 'messages OTHER agents, not the coordinator; its own owner fallback is notify.sh',
     'deploy-lag-watch.py': 'messages friday, not the coordinator; a send without "OK id=" exits 3 and keeps its dedupe state, so the next 10-minute run sends again (marveen-l2)',
+    'heavy-run.py': 'the wake message goes to the agent that started the run, not the coordinator; once per run id, a failed send is printed to stderr and the run keeps its rc (card 6790bcdb)',
     'kartya-es-ertesites.py': 'help text only, no call',
     'kanban-project-classify.py': 'a docstring mention, no call',
     'merge-overlap.py': 'a docstring mention, no call',
