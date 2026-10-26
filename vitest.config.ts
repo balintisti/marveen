@@ -78,5 +78,8 @@ export default defineConfig({
     // run`-t irnak, nem az npm scriptet: egy wrapper pont a valodi uton nem
     // futna. Reszhalmaz-futasnal hallgat, lasd `isFilteredRun`.
     reporters: ['default', './src/__tests__/setup/suite-size-guard.ts'],
+    // Kartya ad18de7b: kiirja, ha a keszlet egy a fo worktree MOGOTT allo fan futott
+    // (a regebbi fan nem letezo tesztek nem futnak, megsem bukik semmi). Jelzes, nem kapu.
+    globalSetup: ['./src/__tests__/setup/worktree-lag-notice.ts'],
   },
 })
