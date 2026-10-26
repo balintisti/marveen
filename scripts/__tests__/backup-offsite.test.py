@@ -269,6 +269,12 @@ def make_archive(path, cards=3, broken_db=False, filler=0, reports=0, manifest_n
             with open(man, 'w') as f:
                 f.write('\n'.join(lines) + '\n')
             t.add(man, arcname='MANIFEST.txt')
+            if names:                                    # tar of a real directory carries its directory entries:
+                for sub in ('', 'a1/'):                  # they are not report files (trillian fbee04e0, isfile at :192)
+                    di = tarfile.TarInfo(f'home/Backups/agent-reports/{sub}'.rstrip('/'))
+                    di.type = tarfile.DIRTYPE
+                    di.mode = 0o755
+                    t.addfile(di)
             if reports:
                 for i in range(reports):
                     rp = os.path.join(d, f'r{i}.md')
