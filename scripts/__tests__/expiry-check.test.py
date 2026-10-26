@@ -583,13 +583,40 @@ class ExpiryCheck(unittest.TestCase):
                            extra=["--quiet-unless-changed", sp])
         self.assertEqual(rc6, 0, "inside the ceiling it may stay silent")
         self.assertIn("ELNEMITVA", out6)
-        # re-seed the old timestamp, since the run above refreshed it
-        with open(sp, "w", encoding="utf-8") as fh:
-            json.dump({"checked_at": "2026-09-01T00:00:00+00:00", "states": {"old": "DUE"}}, fh)
+        # No re-seeding: the silent run above must not have moved the ceiling's start.
         rc8, out8, _ = run([self.DUE_ITEM()], as_json=False, now="2026-09-09T00:00:00Z",
                            extra=["--quiet-unless-changed", sp])
         self.assertEqual(rc8, 3, "past the ceiling the report is forced")
-        self.assertIn("napos", out8)
+        self.assertIn("a korabbi jelentes 8 napos", out8)
+
+    def test_daily_silent_runs_do_not_postpone_the_ceiling(self):
+        """Card 01987be3: every run rewrote the timestamp the ceiling was measured from, so a
+        daily schedule was always 0-1 days old and stayed silent forever (DUE since 10-15,
+        nothing reported). Run every day: day 7 must report, and then the silence restarts."""
+        sp = self._state_path()
+        verdicts = []
+        for day in range(1, 11):
+            rc, out, _ = run([self.DUE_ITEM()], as_json=False, now=f"2026-09-{day:02d}T06:00:00Z",
+                             extra=["--quiet-unless-changed", sp])
+            verdicts.append((day, rc))
+        self.assertEqual(verdicts, [(1, 3), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0),
+                                    (8, 3), (9, 0), (10, 0)])
+
+    def test_a_snapshot_without_reported_at_counts_from_checked_at(self):
+        """The live state file predates reported_at. It must not buy a fresh 7 days of silence:
+        its checked_at is the oldest instant known, and the ceiling counts from it."""
+        sp = self._state_path()
+        os.makedirs(os.path.dirname(sp), exist_ok=True)
+        with open(sp, "w", encoding="utf-8") as fh:
+            json.dump({"checked_at": "2026-09-01T00:00:00+00:00", "states": {"old": "DUE"}}, fh)
+        rc, out, _ = run([self.DUE_ITEM()], as_json=False, now="2026-09-03T00:00:00Z",
+                         extra=["--quiet-unless-changed", sp])
+        self.assertEqual(rc, 0)
+        with open(sp, encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["reported_at"], "2026-09-01T00:00:00+00:00")
+        rc8, out8, _ = run([self.DUE_ITEM()], as_json=False, now="2026-09-08T00:00:00Z",
+                           extra=["--quiet-unless-changed", sp])
+        self.assertEqual(rc8, 3, "7 days after the legacy checked_at the report is forced")
 
     def test_corrupt_or_unreadable_state_reports(self):
         for content in ("{not json", '{"states": "not a dict"}', '{"states": {"old": "DUE"}}'):

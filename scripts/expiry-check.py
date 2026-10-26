@@ -414,19 +414,37 @@ def _suppression(args, rows, now):
     # and without this the daily run would report it once and then fall silent about it.
     for d in getattr(args, "_sweep_ids", []) or []:
         current[f"sweep:{d}"] = UNLISTED
-    snapshot = {"checked_at": now.isoformat(), "states": current}
 
-    previous, prev_when, reason = None, None, ""
+    # THE CEILING COUNTS FROM THE LAST REPORT, NOT THE LAST RUN (card 01987be3). Every run
+    # rewrites checked_at, so measured against it a daily run was always 0-1 days old and
+    # the ceiling never fired: a DUE item stayed silent from 10-15 on. reported_at moves only
+    # when a run reports. A snapshot written before this field existed has no reported_at;
+    # its checked_at is the best lower bound there is, and the ceiling counts from that.
+    previous, reported, reason = None, None, ""
     try:
         with open(path, encoding="utf-8") as fh:
             old = json.load(fh)
         previous = old.get("states")
-        prev_when = _parse_iso(old.get("checked_at"))
+        reported = _parse_iso(old.get("reported_at") or old.get("checked_at"))
     except OSError:
         reason = "nincs korabbi allapot"
     except ValueError:
         reason = "a korabbi allapot olvashatatlan"
 
+    if not isinstance(previous, dict):
+        suppress, why = False, reason or "nincs korabbi allapot"
+    elif reported is None:
+        suppress, why = False, "a korabbi idobelyeg ertelmezhetetlen"
+    elif (now - reported).days >= args.max_silence_days:
+        suppress, why = False, f"a korabbi jelentes {(now - reported).days} napos"
+    elif previous != current:
+        suppress, why = False, "valtozott az allapot"
+    else:
+        suppress, why = True, f"valtozatlan a(z) {reported.isoformat(timespec='seconds')} ota"
+
+    snapshot = {"checked_at": now.isoformat(),
+                "reported_at": (reported if suppress else now).isoformat(),
+                "states": current}
     try:
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         with open(path, "w", encoding="utf-8") as fh:
@@ -434,17 +452,7 @@ def _suppression(args, rows, now):
     except OSError as e:
         # Cannot remember -> must not stay silent, or the next run forgets too.
         return False, f"az allapot nem mentheto ({type(e).__name__})"
-
-    if not isinstance(previous, dict):
-        return False, reason or "nincs korabbi allapot"
-    if prev_when is None:
-        return False, "a korabbi idobelyeg ertelmezhetetlen"
-    age_days = (now - prev_when).days
-    if age_days >= args.max_silence_days:
-        return False, f"a korabbi jelentes {age_days} napos"
-    if previous != current:
-        return False, "valtozott az allapot"
-    return True, f"valtozatlan a(z) {prev_when.isoformat(timespec='seconds')} ota"
+    return suppress, why
 
 
 def sweep_declared_locations(inv):
