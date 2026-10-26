@@ -128,6 +128,35 @@ function capFixture() {
   return { d, oldest: f('a.map', 180), middle: f('b.map', 150), newer: f('c.map', 120), fresh: f('d.map', 5) }
 }
 
+function busyFixture(dirName = 'jest_dx') {
+  const base = mkTmp('devgc-busy-')
+  const d = join(base, dirName)
+  const now = Date.now() / 1000
+  const body = 'x'.repeat(300 * 1024)
+  const age = (p: string, min: number) => utimesSync(p, now - min * 60, now - min * 60)
+  const entryDir = (name: string, files: Array<[string, number]>, dirAgeMin: number) => {
+    const p = join(d, name)
+    mkdirSync(join(p, 'ab'), { recursive: true })
+    for (const [fname, min] of files) {
+      writeFileSync(join(p, 'ab', fname), body)
+      age(join(p, 'ab', fname), min)
+    }
+    age(join(p, 'ab'), dirAgeMin)
+    age(p, dirAgeMin)
+    return p
+  }
+  mkdirSync(d, { recursive: true })
+  const oldDir = entryDir('jest-transform-cache-aaa-111', [['a.js', 300]], 300)
+  const midDir = entryDir('jest-transform-cache-bbb-222', [['b.js', 200]], 200)
+  const recentDir = entryDir('jest-transform-cache-ccc-333', [['c.js', 30]], 30)
+  // the directory LOOKS old, but a run wrote a file into it 10 minutes ago
+  const mixedDir = entryDir('jest-transform-cache-ddd-444', [['old.js', 400], ['fresh.js', 10]], 400)
+  const oldFile = join(d, 'haste-map-eee-555')
+  writeFileSync(oldFile, body)
+  age(oldFile, 250)
+  return { d, oldDir, midDir, recentDir, mixedDir, oldFile }
+}
+
 describe('dev-gc: jest_dx meret-plafon (4138aa04)', () => {
   it('a plafon felett a LEGREGEBBI megy eloszor, amig ala nem er -- a 24 oran BELULI is', () => {
     const f = capFixture()
@@ -193,6 +222,93 @@ describe('dev-gc: jest_dx meret-plafon (4138aa04)', () => {
       '/usr/local/bin/node /Users/x/crm/node_modules/jest-worker/build/workers/processChild.js',
     ]) expect(live).toMatch(re)
     expect(`/usr/bin/python3 ${SCRIPT} --jest-cap-mb 4096 --jest-dir /private/tmp/jest_dx`).not.toMatch(re)
+  })
+
+  // Kartya 7ea96ce9 (2026-10-08): 5 agens mellett jest SZINTE MINDIG fut, igy a fenti plafon sosem futott,
+  // a jest_dx 18,2 GB-ra nott. Jest futasa alatt EGESZ bejegyzesek mennek, a legregebbi eloszor, es csak
+  // olyan, amiben SEMMI nem irodott --jest-busy-floor-minutes ota.
+  it('futo jest mellett az EGESZ, regota nem irt bejegyzes megy; ami a padlon belul irodott, marad', () => {
+    const f = busyFixture()
+    const out = run(['--jest-dir', f.d, '--jest-cap-mb', '0.01'], fakePgrep('echo 99999; exit 0').bin)
+    expect(out).toMatch(/jest_dx busy cap \(0 MB each, whole entries idle 120 min\): 3 entries/)
+    expect(existsSync(f.oldDir)).toBe(false)
+    expect(existsSync(f.midDir)).toBe(false)
+    expect(existsSync(f.oldFile)).toBe(false)
+    expect(existsSync(f.recentDir)).toBe(true)
+    expect(existsSync(f.mixedDir)).toBe(true)
+  })
+
+  it('egy regi konyvtar, amiben EGY friss fajl van, egeszeben marad (a legfrissebb irast nezi, nem a konyvtar mtime-jat)', () => {
+    const f = busyFixture()
+    run(['--jest-dir', f.d, '--jest-cap-mb', '0.01'], fakePgrep('echo 99999; exit 0').bin)
+    expect(existsSync(join(f.mixedDir, 'ab', 'old.js'))).toBe(true)
+    expect(existsSync(join(f.mixedDir, 'ab', 'fresh.js'))).toBe(true)
+  })
+
+  it('CONTROL: futo jest mellett, a plafon alatt semmi nem megy', () => {
+    const f = busyFixture()
+    const out = run(['--jest-dir', f.d, '--jest-cap-mb', '100'], fakePgrep('echo 99999; exit 0').bin)
+    expect(out).toMatch(/jest_dx busy cap .*: 0 entries/)
+    expect(existsSync(f.oldDir)).toBe(true)
+  })
+
+  it('jest NELKUL a busy cap nem fut (a fajl-szintu plafon dolgozik)', () => {
+    const f = busyFixture()
+    const out = run(['--jest-dir', f.d, '--jest-cap-mb', '100'])
+    expect(out).not.toMatch(/busy cap/)
+    expect(out).toMatch(/jest_dx cap \(/)
+  })
+
+  it('a riport a MARADEK meretet is kiirja, nem csak a torolt mennyiseget', () => {
+    const f = busyFixture()
+    const out = run(['--jest-dir', f.d, '--jest-cap-mb', '100'], fakePgrep('echo 99999; exit 0').bin)
+    const m = out.match(/jest_dx left: (\d+) MB in (.*)/)
+    expect(m).not.toBeNull()
+    expect(Number(m![1])).toBeGreaterThanOrEqual(1)
+    expect(realpathSync(m![2].trim())).toBe(realpathSync(f.d))
+  })
+
+  // didi, 2026-10-24 (38455): M4 (torles --dry-run alatt) es M3 (az allowlist-ellenorzes nelkul) eloben maradt
+  it('futo jest mellett a --dry-run megszamolja a bejegyzeseket, de semmit nem torol', () => {
+    const f = busyFixture()
+    const out = run(['--dry-run', '--jest-dir', f.d, '--jest-cap-mb', '0.01'], fakePgrep('echo 99999; exit 0').bin)
+    expect(out).toMatch(/DRY-RUN jest_dx busy cap .*: 3 entries/)
+    for (const p of [f.oldDir, f.midDir, f.oldFile, f.recentDir, f.mixedDir]) expect(existsSync(p)).toBe(true)
+  })
+
+  it('futo jest mellett egy NEM jest_dx nevu konyvtarbol a busy cap semmit nem torol', () => {
+    const f = busyFixture('jest_dy')
+    const out = run(['--jest-dir', f.d, '--jest-cap-mb', '0.01'], fakePgrep('echo 99999; exit 0').bin)
+    expect(out).toMatch(/REFUSED dirs/)
+    expect(out).toMatch(/jest_dx busy cap .*: 0 entries/)
+    for (const p of [f.oldDir, f.midDir, f.oldFile]) expect(existsSync(p)).toBe(true)
+  })
+
+  it('a maradek-meres tuli, ha egy bejegyzes listdir es lstat kozott eltunik (futo jest torolte)', () => {
+    const f = busyFixture()
+    const probe = [
+      'import importlib.util, sys',
+      'spec = importlib.util.spec_from_file_location("devgc", sys.argv[1])',
+      'm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)',
+      'real = m.entry_stats',
+      'def flaky(p):',
+      '    if p.endswith("bbb-222"): raise FileNotFoundError(p)',
+      '    return real(p)',
+      'm.entry_stats = flaky',
+      'print(m.jest_dir_sizes([sys.argv[2]])[0][1])',
+    ].join('\n')
+    const left = Number(execFileSync('python3', ['-c', probe, SCRIPT, f.d], { encoding: 'utf8' }).trim())
+    expect(left).toBeGreaterThanOrEqual(4 * 300 * 1024) // a 4 megmaradt bejegyzes, a hianyzo nelkul
+  })
+
+  it('60 perc alatti --jest-busy-floor-minutes-et megtagad', () => {
+    let rc = 0
+    try {
+      run(['--jest-busy-floor-minutes', '59'])
+    } catch (e) {
+      rc = (e as { status: number }).status
+    }
+    expect(rc).toBe(2)
   })
 
   it('30 perc alatti --jest-min-age-minutes-et megtagad', () => {
