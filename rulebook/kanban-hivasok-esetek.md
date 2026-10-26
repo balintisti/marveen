@@ -367,3 +367,56 @@ nem függ egy oszloptól, ami csak az egyik úton létezik. *(Mért csapda: egy 
 átnevezés, egy fokozat-emelés vagy egy gazdaváltás nyomtalan volt; mostantól a `kind` szétválasztja
 őket, és egy státusz-söprés meg tudja különböztetni a valódi mozgást a mező-szerkesztéstől.
 
+
+
+## Hívás-példák
+*(Szó szerint áthelyezve marveen CLAUDE.md-jéből, pillanatfelvétel 2026-10-26, sha256 8ac727c71ed62e14; hot 2526.)*
+
+```bash
+# listazas -- ALAPBOL A SOVANY NEZETET HASZNALD
+curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" \
+  'http://localhost:3420/api/kanban?fields=summary'
+# UGYANAZ a kartya-halmaz, csak `description` es `labels` nelkul. Merve 2026-09-19, elesben:
+#   csupasz ............ 532 148 token
+#   ?fields=summary .... 114 927 token   <- ugyanaz az 1038 kartya
+# A `description` a valasz 76%-a, es egy TABLA-ATTEKINTESHEZ nem kell. Ha egy KONKRET kartya
+# leirasa kell, azt a `GET /api/kanban/<id>` adja. A dashboard UI a teljeset kapja tovabbra is.
+
+# KOMMENTEK: `?limit=N`, es a valasz MEGNEVEZI, mit hagyott ki. HASZNALD FELVETELKOR.
+curl -s ... 'http://localhost:3420/api/kanban/KARTYA_ID/comments?limit=20'
+# -> {"comments":[...],"total":247,"returned":20,"omitted":227,"from":"end","order":"asc"}
+# Limit NELKUL a valasz BAJTRA a regi csupasz tomb: a csonkolas nem lehet veletlen.
+# `from=start` az ELSO N (a kartya eredete), `from=end` (alap) az UTOLSO.
+# MERVE 09-19: 900 elo kartya ~4,76 M token kommentet tart, es FERDEN -- a median kartya
+# ~2,3 e token, de `a65623ef` egymaga ~210 e, ami EGY teljes kontextusablak. Ott -97%,
+# a tiz legdragabbon -83%. Ha az `omitted` nem nulla es a dontesed a KORAI kommenteken
+# all, kerj tobbet: az `omitted` azert van ott, hogy TUDD, ne felteteelezd.
+
+# uj kartya -- A HELPERREL: a nyers curl valasza `{ok,id}`, tehat nem mondja meg, MIT tarolt,
+# es a cimben egy backtick a hejban PARANCSOT futtat. A helper VISSZAOLVAS.
+bash scripts/kanban-uj.sh marveen marveen "CÍM" --assignee marveen --priority normal
+# -> OK id=<id> created_at=<epoch> (<ido>) + a visszaolvasott mezok | hiba: FAIL, exit 1
+# hosszu leiras: `--desc -` STDIN-rol | szandekosan nincs projekt: a projekt helyen `-`
+
+# TORLES: LETEZIK es VEGLEGES (merve 09-19: 200 {"ok":true}, utana 404). Teszt-mutermekre EZ a
+# helyes; VALODI kartyara ARCHIVALAS, mert az visszavonhato.
+curl -s -X DELETE -H "Authorization: Bearer $(cat store/.dashboard-token)" \
+  http://localhost:3420/api/kanban/KARTYA_ID
+
+# mozgatas
+curl -s -X POST http://localhost:3420/api/kanban/KARTYA_ID/move -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(cat store/.dashboard-token)" -d '{"status":"in_progress","actor":"marveen"}'
+
+# MEZO-VALTOZTATAS (cim, fokozat, gazda) -- ES IGEN, IDE IS KELL AZ `actor`
+curl -s -X PUT http://localhost:3420/api/kanban/KARTYA_ID -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(cat store/.dashboard-token)" \
+  -d '{"assignee":"dexter","actor":"marveen"}'   # <- ASSIGNEE, mert EZ a 91%-ban nevtelen mezo
+
+# ES A `description` IS IRHATO EZZEL, ES NAPLOZODIK. Egy ELO, VALTOZO artefaktum a LEIRASBA
+# megy, nem kommentbe -- a leiras szerkesztheto, a komment nem.
+curl -s -X PUT http://localhost:3420/api/kanban/KARTYA_ID -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(cat store/.dashboard-token)" \
+  -d '{"description":"A TELJES uj leiras -- FELULIR, nem hozzafuz","actor":"marveen"}'
+# A PUT FELULIR: a valasz `overwritten` mezoje megmondja, KINEK a szoveget cserelted le -- OLVASD EL.
+# A visszaolvasas a SAJAT szovegedet adja vissza, tehat a 200 itt sem bizonyitek; a HOSSZ az.
+```
