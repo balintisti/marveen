@@ -157,6 +157,32 @@ else
   unset _p _missing CLAUDE_ARGV
 fi
 
+# (e) No stray provider token on the shared fallback (card dcdcab66). A channel plugin
+# started with no <PROVIDER>_STATE_DIR falls back to ~/.claude/channels/<provider>, and
+# every agent on the host shares that directory. A .env there for a provider the MAIN
+# session does not run is a token any stray plugin would pick up and open a second
+# connection with (measured 2026-10-06: Slack Socket Mode, 9 of 32 DMs lost). Detection
+# only: the per-agent fence (buildChannelStateFence, watchdog.sh) is the prevention.
+# The main session's own provider (CHANNEL_PROVIDER, default telegram) and the extras in
+# CHANNEL_PLUGINS_EXTRA are skipped: on an unmigrated install (#915) their token
+# legitimately lives on that path. Only the PATH is printed, never the file content.
+# The provider list must equal the keys of CHANNEL_PLUGIN_IDS (src/web/plugin-ids.ts);
+# scripts/__tests__/verify-channels-fallback.test.sh pins that.
+MAIN_PROVIDER="$(grep -E '^CHANNEL_PROVIDER=' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')"
+MAIN_PROVIDER="${MAIN_PROVIDER:-telegram}"
+_stray=""
+for _prov in telegram slack discord googlechat teams; do
+  [ "$_prov" = "$MAIN_PROVIDER" ] && continue
+  case "$CHANNEL_PLUGINS_EXTRA" in *"$_prov"*) continue ;; esac
+  [ -f "$HOME/.claude/channels/$_prov/.env" ] && _stray="$_stray $HOME/.claude/channels/$_prov/.env"
+done
+if [ -z "$_stray" ]; then
+  note "(e) OK: no stray provider token on the shared ~/.claude/channels fallback"
+else
+  note "(e) FAIL: shared-fallback token a stray plugin would load:$_stray"; fail=1
+fi
+unset _prov _stray
+
 if [ "$fail" -eq 0 ]; then
   echo "verify-channels-health: HEALTHY"
 else
