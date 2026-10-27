@@ -79,6 +79,18 @@ import time
 
 DIR = os.environ.get("HEAVY_RUN_DIR") or os.path.expanduser("~/.heavy-run")
 MAX = int(os.environ.get("HEAVY_RUN_MAX") or 2)
+# Runtime override of the HEAVY pool size, read on EVERY scan (not only at start): a file
+# "<DIR>/max-heavy" holding one integer 1..6. Lets the coordinator widen or narrow the fleet limit
+# without restarting anyone (Isti TG 8205, 2026-10-27: 3 slots overnight). The env var still wins,
+# so the self-test stays deterministic. Caveat: a waiter started BEFORE this code keeps its own size.
+def pool_size(cls):
+    if cls != "heavy" or os.environ.get("HEAVY_RUN_MAX"):
+        return POOLS[cls][1]
+    try:
+        n = int(open(os.path.join(DIR, "max-heavy")).read().strip())
+        return n if 1 <= n <= 6 else POOLS[cls][1]
+    except (OSError, ValueError):
+        return POOLS[cls][1]
 GRACE = float(os.environ.get("HEAVY_RUN_GRACE") or 10)
 POLL = float(os.environ.get("HEAVY_RUN_POLL") or 5)
 FIFO = (os.environ.get("HEAVY_RUN_FIFO") or "1") != "0"
@@ -133,7 +145,8 @@ def read_holder(path):
 def holders(cls="heavy"):
     prefix, size = POOLS[cls]
     out = []
-    for i in range(size):
+    # scan past the configured size: a narrowed max-heavy must still SEE a run in a higher slot
+    for i in range(max(size, 6) if cls == "heavy" else size):
         path = os.path.join(DIR, f"{prefix}-{i}")
         if not os.path.exists(path):
             continue
@@ -150,7 +163,7 @@ def holders(cls="heavy"):
 
 def try_slot(me):
     """An open, locked slot file, or None. Refuses a second slot of the same class for the same agent."""
-    prefix, size = POOLS[me["class"]]
+    prefix, size = POOLS[me["class"]][0], pool_size(me["class"])
     for h in holders(me["class"]):
         if h.get("agent") == me["agent"]:
             return None
@@ -257,7 +270,7 @@ def try_slot_in_order(me, ticket):
     with QueueLock(cls):
         held = holders(cls)
         busy = {h.get("agent") for h in held}
-        free = POOLS[cls][1] - len(held)
+        free = pool_size(cls) - len(held)
         oldest = {}
         for t in live_tickets(cls):
             if is_stalled(t):
@@ -443,7 +456,7 @@ def run(label, cmd, cls="heavy"):
                     if ticket:
                         pos, total = queue_position(ticket[2], cls)
                         where = f", queue position {pos}/{total}"
-                    print(f"heavy-run: waiting for a {cls} slot ({POOLS[cls][1]} max, one per agent{where}) -- "
+                    print(f"heavy-run: waiting for a {cls} slot ({pool_size(cls)} max, one per agent{where}) -- "
                           f"busy: {busy or 'nobody?'}",
                           file=sys.stderr, flush=True)
                     last_note = time.time()
@@ -1041,7 +1054,7 @@ def main(argv):
         for cls, (_, size) in POOLS.items():
             hs = holders(cls)
             extra = f" (hard cap {LIGHT_CAP:g}s)" if cls == "light" else ""
-            print(f"{cls} runs: {len(hs)}/{size}{extra}")
+            print(f"{cls} runs: {len(hs)}/{pool_size(cls)}{extra}")
             for h in hs:
                 print(f"  slot {h.get('slot')}: {h['agent']} pid {h['pid']} since {h['started']} -- {h['label']}")
             with QueueLock(cls):
