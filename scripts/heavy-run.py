@@ -43,9 +43,13 @@ notifies you when a background task ends, and knows nothing about a detached one
    run-hours, 41% of the runs were under 10 s and queued behind 25-minute e2e runs). --light is for ONE
    test file, ONE mutant, tsc on ONE project. It has its OWN pool (HEAVY_RUN_LIGHT_MAX, default 2; ONE
    per agent), so a long run no longer blocks it, and the heavy pool stays HEAVY_RUN_MAX. The price is a
-   HARD CAP: a light run over HEAVY_RUN_LIGHT_CAP seconds (default 120) is killed, the wrapper says so
-   on stderr ("light run exceeded 120s, rerun without --light") and exits 124, so a mislabelled heavy
+   HARD CAP: a light run over HEAVY_RUN_LIGHT_CAP seconds (default 600) is killed, the wrapper says so
+   on stderr ("light run exceeded 600s, rerun without --light") and exits 124, so a mislabelled heavy
    run cannot smuggle a third heavy run past the heavy pool.
+   The default was 120 s until 2026-10-28 (card de42b971): with 1.5-4 h batch gates holding the heavy
+   slots, a 4-minute mutant waited 2.5 h (computress f93a: ran 238 s, waited 8834 s), and the fleet's
+   planned->in_progress fell from 70-92/day (10-20..10-25) to 9/day. A run up to 10 minutes now has a
+   lane that a gate cannot block. Load at the change: 22 on 12 cores, heavy pool 3 (max-heavy).
 5. A NESTED CALL DOES NOT WAIT FOR ITS OWN PARENT. The run exports HEAVY_RUN_HELD=<agent>:<pid> to the
    command. A heavy-run inside it, by the same agent, whose holder still holds a slot, runs the command
    without taking a second slot and without a ticket, in either pool (logged nested=true). Without this the one-per-agent rule made the inner
@@ -96,7 +100,7 @@ POLL = float(os.environ.get("HEAVY_RUN_POLL") or 5)
 FIFO = (os.environ.get("HEAVY_RUN_FIFO") or "1") != "0"
 STALE_FLOOR = 3.0  # a ticket untouched for less than this is never called stalled, whatever the poll
 LIGHT_MAX = int(os.environ.get("HEAVY_RUN_LIGHT_MAX") or 2)
-LIGHT_CAP = float(os.environ.get("HEAVY_RUN_LIGHT_CAP") or 120)
+LIGHT_CAP = float(os.environ.get("HEAVY_RUN_LIGHT_CAP") or 600)
 CAP_RC = 124  # the exit code timeout(1) uses
 WAKE_MIN_S = float(os.environ.get("HEAVY_RUN_WAKE_MIN_S") or 300)
 # The sender is agent-msg.sh next to this file; overridable so the self-test can stand a stub in.
@@ -789,7 +793,7 @@ def self_test():
     results.append(("CONTROL: the cap does not touch a heavy run", heavy_long.returncode == 0))
     st = subprocess.run([sys.executable, me, "--status"], env={k: v for k, v in env.items()
                         if k != "HEAVY_RUN_LIGHT_CAP"}, capture_output=True, text=True).stdout
-    results.append(("the default hard cap is 120s", "light runs: 0/2 (hard cap 120s)" in st))
+    results.append(("the default hard cap is 600s", "light runs: 0/2 (hard cap 600s)" in st))
     # (e) runs.jsonl carries the class
     rows = [json.loads(x) for x in open(log)]
     by = {x["label"]: x for x in rows if x["label"] in ("capped", "under", "hv")}
