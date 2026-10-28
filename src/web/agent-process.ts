@@ -4186,6 +4186,20 @@ export const MAIN_PARKED_OWNER_AFTER = 12
 // so the operator has had a full stage with the manual fix in hand before the
 // box is rescued and cleared for them. GH #890.
 export const MAIN_PARKED_RESCUE_AFTER = 24
+// When the clear after a rescue fails, the same text is still in the box, so
+// every later round reached 'rescue-and-clear' again: a new rescue file, a new
+// "cleared" message and a new Escape + clear burst every 30 s (measured
+// 2026-10-28 08:39-08:48: 17 identical rescues and 17 owner messages, card
+// 1c7bd03d). Per episode the text is now rescued ONCE, and the clear is retried
+// at most MAIN_PARKED_CLEAR_MAX_TRIES times, MAIN_PARKED_CLEAR_RETRY_EVERY rounds
+// (~5 min) apart. Past that the box stays untouched and heartbeat-visible.
+export const MAIN_PARKED_CLEAR_MAX_TRIES = 3
+export const MAIN_PARKED_CLEAR_RETRY_EVERY = 10
+// An episode ends when the router has not seen the text for this long. Nothing
+// resets the record when the box empties (that exit returns before any
+// bookkeeping), so without a gap the SAME scheduled prompt parked again the
+// next day would inherit a spent clearTries and never be rescued again.
+export const MAIN_PARKED_EPISODE_GAP_MS = 10 * 60_000
 
 // Where a rescued parked line is written before the box is cleared.
 export const PARKED_RESCUE_DIR = join(STORE_DIR, 'parked-input')
@@ -4312,6 +4326,15 @@ export function decideMainParkedEscalation(
   return 'none'
 }
 
+// Pure decision, exported for tests: past the rescue threshold, is a clear
+// attempt due this round? clearTries counts the attempts already made on THIS
+// text; the first is due at MAIN_PARKED_RESCUE_AFTER, each retry
+// MAIN_PARKED_CLEAR_RETRY_EVERY rounds later, and none after the cap.
+export function mainParkedClearDue(fails: number, clearTries: number): boolean {
+  if (clearTries >= MAIN_PARKED_CLEAR_MAX_TRIES) return false
+  return fails >= MAIN_PARKED_RESCUE_AFTER + clearTries * MAIN_PARKED_CLEAR_RETRY_EVERY
+}
+
 // MAINBOXPARK816 stage-1 surface: the heartbeat round (same process) reads this
 // and puts the fact into its prompt -- deliberately NOT the inter-agent queue,
 // because a message queued to the main agent would strand behind the very
@@ -4333,7 +4356,17 @@ export function getMainParkedState(nowMs: number = Date.now()):
 // Per-session record of the last un-wedge attempt: when, on what text, how many
 // consecutive attempts failed to empty the box, and whether we already notified
 // the operator for this exact stuck text (one-shot; resets when sig/clears).
-const unwedgeAttempts = new Map<string, { last: number; sig: string; fails: number; escalated: boolean }>()
+// Main box only: where this text was rescued, and how many clears were tried on
+// it, so a failed clear is not followed by a new rescue every round.
+type UnwedgeRecord = {
+  last: number
+  sig: string
+  fails: number
+  escalated: boolean
+  rescuedPath?: string
+  clearTries?: number
+}
+const unwedgeAttempts = new Map<string, UnwedgeRecord>()
 
 // Un-wedge a session whose input box holds STALE parked text: a non-submitted
 // line (e.g. a weak local model that typed its heartbeat reply into the box
@@ -4411,7 +4444,7 @@ async function clearStaleParkedInputInLane(
   parked: string,
   key: string,
   nowMs: number,
-  prev: { last: number; sig: string; fails: number; escalated: boolean } | undefined,
+  prev: UnwedgeRecord | undefined,
 ): Promise<boolean> {
   await delay(PARKED_STABLE_CONFIRM_MS)
   const b = capturePane(session, host)
@@ -4438,9 +4471,13 @@ async function clearStaleParkedInputInLane(
   //     notifyChannel direct to the owner (pure HTTP, does not touch the box)
   //     with the CONCRETE manual fix -- a message actionable in seconds, not
   //     "something is wrong".
+  // Set only when the main box is about to be cleared after a verified rescue;
+  // the outcome message is sent after the clear is VERIFIED, not before it.
+  let mainRescue: { path: string; clearTries: number; fails: number; escalated: boolean } | null = null
   if (session === MAIN_CHANNELS_SESSION) {
-    const fails = (prev && prev.sig === parked ? prev.fails : 0) + 1
-    let escalated = !!(prev && prev.sig === parked && prev.escalated)
+    const same = !!(prev && prev.sig === parked && nowMs - prev.last < MAIN_PARKED_EPISODE_GAP_MS)
+    const fails = (same ? prev!.fails : 0) + 1
+    let escalated = same && prev!.escalated
     const stage = decideMainParkedEscalation(fails, escalated)
     if (stage === 'owner') {
       const preview = parked.slice(0, 80).replace(/[<>&]/g, ' ')
@@ -4464,7 +4501,17 @@ async function clearStaleParkedInputInLane(
     // clear ONLY if that save read back intact. If the save fails we keep the
     // old behaviour exactly -- untouched box, escalation record, no keystroke.
     if (stage === 'rescue-and-clear') {
-      const rescuedPath = rescueParkedInput(session, parked, nowMs)
+      const clearTries = same ? prev!.clearTries ?? 0 : 0
+      const keptPath = same ? prev!.rescuedPath : undefined
+      if (!mainParkedClearDue(fails, clearTries)) {
+        // A clear on this text already failed: no new rescue, no new message,
+        // no keystroke until the next retry is due (or ever, past the cap).
+        unwedgeAttempts.set(key, { last: nowMs, sig: parked, fails, escalated, rescuedPath: keptPath, clearTries })
+        return false
+      }
+      // One rescue per episode: the copy from the first attempt is verified and
+      // still describes the box, because the text is the same (sig).
+      const rescuedPath = keptPath ?? rescueParkedInput(session, parked, nowMs)
       if (rescuedPath == null) {
         logger.warn(
           { session, parked: parked.slice(0, 60), fails },
@@ -4473,13 +4520,9 @@ async function clearStaleParkedInputInLane(
         unwedgeAttempts.set(key, { last: nowMs, sig: parked, fails, escalated })
         return false
       }
-      notifyChannel(
-        `🧹 A fo agens (${session}) input-mezojeben ~${Math.round((fails * UNWEDGE_COOLDOWN_MS) / 60000)} perce allt egy parkolt sor, ` +
-        `es emiatt minden utemezett feladat varakozott. A sort KIMENTETTUK es a mezot kitisztitottuk, ` +
-        `hogy a csatorna ujra dolgozzon. A szoveg itt van: ${rescuedPath}`,
-      ).catch(() => { /* notify is best-effort */ })
+      mainRescue = { path: rescuedPath, clearTries: clearTries + 1, fails, escalated }
       logger.warn(
-        { session, parked: parked.slice(0, 60), fails, rescuedPath },
+        { session, parked: parked.slice(0, 60), fails, rescuedPath, clearTry: clearTries + 1 },
         'message-router: main-agent parked input rescued to disk, clearing the box',
       )
       // Fall through to the shared clear sequence below.
@@ -4511,6 +4554,26 @@ async function clearStaleParkedInputInLane(
   // the cooldown guard above backs us off instead of hammering every tick.
   const final = capturePane(session, host)
   const stillStuck = final != null && detectPaneState(final) === 'typing' && parkedInputText(final) === parked
+  if (stillStuck && mainRescue) {
+    const { fails, escalated } = mainRescue
+    unwedgeAttempts.set(key, { last: nowMs, sig: parked, fails, escalated, rescuedPath: mainRescue.path, clearTries: mainRescue.clearTries })
+    // ONE message per episode, after the first failed clear: the copy is safe,
+    // the channel still stands, and here is the manual fix. Later retries are silent.
+    if (mainRescue.clearTries === 1) {
+      notifyChannel(
+        `🚨 A fo agens (${session}) input-mezojeben ~${Math.round((fails * UNWEDGE_COOLDOWN_MS) / 60000)} perce all egy parkolt sor. ` +
+        `A sort KIMENTETTUK (${mainRescue.path}), de a mezo torlese NEM sikerult, a csatorna tovabbra is all. ` +
+        `KEZI FELOLDAS: tmux attach -t ${session}, majd Ctrl-C es utana Ctrl-U, vegul kilepes: Ctrl-B d. ` +
+        `Automatikusan meg legfeljebb ${MAIN_PARKED_CLEAR_MAX_TRIES - 1}x probalom, ` +
+        `~${Math.round((MAIN_PARKED_CLEAR_RETRY_EVERY * UNWEDGE_COOLDOWN_MS) / 60000)} percenkent, errol tobb uzenet nem jon.`,
+      ).catch(() => { /* notify is best-effort */ })
+    }
+    logger.warn(
+      { session, parked: parked.slice(0, 60), fails, clearTries: mainRescue.clearTries },
+      'message-router: main-agent parked input rescued but the clear failed, backing off',
+    )
+    return false
+  }
   if (stillStuck) {
     const fails = (prev && prev.sig === parked ? prev.fails : 0) + 1
     let escalated = !!(prev && prev.sig === parked && prev.escalated)
@@ -4533,6 +4596,12 @@ async function clearStaleParkedInputInLane(
     return false
   }
   unwedgeAttempts.set(key, { last: nowMs, sig: parked, fails: 0, escalated: false })
+  if (mainRescue) {
+    notifyChannel(
+      `🧹 A fo agens (${session}) input-mezojeben allt egy parkolt sor, es emiatt minden utemezett feladat varakozott. ` +
+      `A sort KIMENTETTUK es a mezot kitisztitottuk, a csatorna ujra dolgozik. A szoveg itt van: ${mainRescue.path}`,
+    ).catch(() => { /* notify is best-effort */ })
+  }
   logger.warn({ session, parked: parked.slice(0, 60) }, 'message-router: cleared stale parked input (channel un-wedge)')
   return true
 }
