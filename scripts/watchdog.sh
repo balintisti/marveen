@@ -77,6 +77,61 @@ if [ "${1:-}" = "--launch-env" ]; then
   exit 0
 fi
 
+# Per-agent channel state fence (SLACKDMVESZT1006), the bash twin of
+# buildChannelStateFence (src/web/channel-state-fence.ts). The launch strips every
+# <PROVIDER>_STATE_DIR and re-exports only the agent's own. A channel plugin the
+# session loads for any OTHER reason then starts with no state dir and falls back to
+# the shared ~/.claude/channels/<provider>, where the MAIN agent's token lives
+# (measured 2026-10-06: two sub-agents opened extra Slack Socket Mode connections on
+# the owner's app, 9 of 32 DMs lost). The fence points every provider the agent does
+# NOT use at the agent's OWN per-provider dir, so a stray plugin finds no token.
+# CHANNEL_PROVIDERS must stay equal to the keys of CHANNEL_PLUGIN_IDS in
+# src/web/plugin-ids.ts: scripts/__tests__/watchdog-fence.test.sh enforces it.
+CHANNEL_PROVIDERS="telegram slack discord googlechat teams"
+
+channel_state_env_var() {
+  printf '%s_STATE_DIR' "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
+}
+
+# Space-separated <PROVIDER>_STATE_DIR names of every provider, for the launch `unset`.
+channel_state_unset_list() {
+  local p out=""
+  for p in $CHANNEL_PROVIDERS; do out="$out $(channel_state_env_var "$p")"; done
+  printf '%s' "${out# }"
+}
+
+# Shell exports (each ending in ' && ') for every provider except $2.
+channel_state_fence() {
+  local agent_dir="${1%/}" own="$2" p
+  for p in $CHANNEL_PROVIDERS; do
+    [ "$p" = "$own" ] && continue
+    printf 'export %s="%s/.claude/channels/%s" && ' "$(channel_state_env_var "$p")" "$agent_dir" "$p"
+  done
+}
+
+# The tmux launch command for one sub-agent. Needs resolve_agent_provider to have run
+# (AGENT_PROVIDER / STATE_ENV_VAR). Order matters: unset, then the fence for the other
+# providers, then the agent's own real export. $4 is the agent id: git_identity_env makes
+# the respawned agent commit under its own name (card db775775), as the loop did before.
+build_agent_launch_cmd() {
+  local agent_dir="$1" model="$2" claude_bin="$3" agent_id="$4"
+  local chan_dir="$agent_dir/.claude/channels/$AGENT_PROVIDER"
+  local iso_env
+  iso_env="$(agent_launch_env "$agent_dir")"
+  printf '%s' "${iso_env}export PATH=\"/opt/homebrew/bin:\$HOME/.bun/bin:/home/linuxbrew/.linuxbrew/bin:\$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:\$PATH\" && unset TELEGRAM_BOT_TOKEN SLACK_BOT_TOKEN SLACK_APP_TOKEN DISCORD_BOT_TOKEN $(channel_state_unset_list) && $(channel_state_fence "$agent_dir" "$AGENT_PROVIDER")export CLAUDE_CODE_DISABLE_AGENT_VIEW=1 && $(git_identity_env "$agent_id")export ${STATE_ENV_VAR}=\"$chan_dir\" && cd \"$agent_dir\" && ${claude_bin} --dangerously-skip-permissions --model '$model' --channels plugin:${AGENT_PROVIDER}@claude-plugins-official"
+}
+
+# Self-test hook, mirroring --launch-env: print the launch command for one agent dir
+# and exit, so the fence contract is testable from fixtures
+# (scripts/__tests__/watchdog-fence.test.sh).
+if [ "${1:-}" = "--print-launch-cmd" ]; then
+  [ -n "${2:-}" ] || { echo "usage: watchdog.sh --print-launch-cmd <agent-dir>" >&2; exit 2; }
+  resolve_agent_provider "$2"
+  build_agent_launch_cmd "$2" "test-model" "claude" "$(basename "${2%/}")"
+  echo
+  exit 0
+fi
+
 # An agent is READY to be started only once both personality files exist. The
 # dashboard wizard creates the directory first and generates CLAUDE.md /
 # SOUL.md afterwards through an LLM call that can take minutes
@@ -234,9 +289,7 @@ for AGENT_DIR in "$INSTALL_DIR/agents"/*/; do
     continue
   fi
 
-  ISO_ENV="$(agent_launch_env "$AGENT_DIR")"
-
-  CMD="${ISO_ENV}export PATH=\"/opt/homebrew/bin:\$HOME/.bun/bin:/home/linuxbrew/.linuxbrew/bin:\$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:\$PATH\" && unset TELEGRAM_BOT_TOKEN SLACK_BOT_TOKEN SLACK_APP_TOKEN DISCORD_BOT_TOKEN && export CLAUDE_CODE_DISABLE_AGENT_VIEW=1 && $(git_identity_env "$AGENT_ID")export ${STATE_ENV_VAR}=\"$CHAN_DIR\" && cd \"$AGENT_DIR\" && ${CLAUDE_BIN} --dangerously-skip-permissions --model '$MODEL' --channels plugin:${AGENT_PROVIDER}@claude-plugins-official"
+  CMD="$(build_agent_launch_cmd "$AGENT_DIR" "$MODEL" "$CLAUDE_BIN" "$AGENT_ID")"
 
   tmux new-session -d -s "$SESSION_NAME" "$CMD" 2>/dev/null
   sleep 2

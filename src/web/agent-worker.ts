@@ -22,6 +22,7 @@ import { readClaudeCodeOauthJson } from './claude-credentials.js'
 import { detectPaneState } from '../pane-state.js'
 import { notifyChannel } from '../notify.js'
 import { gitIdentityEnv } from './git-identity.js'
+import { CHANNEL_PLUGIN_IDS } from './plugin-ids.js'
 
 // =============================================================================
 // Interactive-tmux agent worker (jun.15 subscription migration).
@@ -65,8 +66,10 @@ export function workerModelSource(env: NodeJS.ProcessEnv = process.env): string 
 const WORKER_BOOT_TIMEOUT_MS = 90_000
 // Poll cadence while waiting for the <reqid>.done sentinel.
 const CAPTURE_POLL_MS = 1_500
-// Channel plugins to force-disable in the worker's isolated settings.json.
-const WORKER_DISABLED_PLUGINS = ['telegram', 'slack-channel']
+// Channel plugins to force-disable in the worker's isolated settings.json. enabledPlugins is keyed
+// by the FULL plugin id (<name>@<marketplace>): the short names this list used to carry
+// ('telegram', 'slack-channel') matched nothing, so the entry disabled no plugin (card dcdcab66).
+const WORKER_DISABLED_PLUGINS: readonly string[] = Object.values(CHANNEL_PLUGIN_IDS)
 // ~/.claude entries NOT symlinked into the isolated config dir:
 //  - settings.json: we own it (enabledPlugins:{} override).
 //  - CLAUDE.md: skipped so global user memory never tints one-shot gens (refinement #1).
