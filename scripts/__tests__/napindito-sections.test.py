@@ -368,6 +368,34 @@ out_sec = ns.section_idle_digest(
     _digest_root([json.dumps({"ts": NOW - 600, "agent": "didi", "minutes": 15, "kind": None})]), now=NOW)
 check_true("digest: masodperces ts SERULT sor, nem csendes nulla", "1 serult sor" in first(out_sec))
 
+# --- FEJLEC-NAP (kartya 4c43d099): a hetnapot a szkript adja, nem a fej ----------------------------
+import datetime as _dt
+def _ts(y, mo, d, h=7, mi=0, tz="Europe/Belgrade"):
+    from zoneinfo import ZoneInfo
+    return int(_dt.datetime(y, mo, d, h, mi, tzinfo=ZoneInfo(tz)).timestamp())
+# Az ket MERT hibas fejlec (09-15 "hetfo" ment ki kedden, 09-20 "szombat" ment ki vasarnap) es egy kontroll.
+check_true("fejlec-nap: 2026-09-15 kedd", "2026-09-15 kedd" in ns.section_today(_ts(2026, 9, 15))[0])
+check_true("fejlec-nap: 2026-09-20 vasarnap", "2026-09-20 vasárnap" in ns.section_today(_ts(2026, 9, 20))[0])
+check_true("fejlec-nap: 2026-10-29 csutortok", "2026-10-29 csütörtök" in ns.section_today(_ts(2026, 10, 29))[0])
+# Ejfel utan, az oraallitas napjan: UTC szerint meg szombat (10-24 22:30Z), Belgrad szerint mar vasarnap.
+check_true("fejlec-nap: Belgrad szerint szamol, nem UTC szerint",
+           "2026-10-25 vasárnap, 00:30" in ns.section_today(_ts(2026, 10, 24, 22, 30, "UTC"))[0])
+check_true("fejlec-nap: a het mind a 7 napja kulonbozo szo",
+           {w for i in range(7) for w in ns.HETNAPOK if f" {w}," in ns.section_today(_ts(2026, 10, 26) + i * 86400)[0]}
+           == set(ns.HETNAPOK))
+# A bekotes: a main() kimenetenek VEGEN ott van, es a nap egy FUGGETLEN orakulummal (date) egyezik.
+_root = tempfile.mkdtemp(); os.makedirs(os.path.join(_root, "store"))
+_db = make_db(); os.replace(_db, os.path.join(_root, "store", "claudeclaw.db"))
+_r = ns.subprocess.run([sys.executable, os.path.join(HERE, "..", "napindito-sections.py"), "--root", _root, "--no-write"],
+                       capture_output=True, text=True, timeout=120, env={**os.environ, "TZ": "Europe/Belgrade"})
+_oracle = ns.subprocess.run(["date", "+%Y-%m-%d"], capture_output=True, text=True,
+                            env={**os.environ, "TZ": "Europe/Belgrade"}).stdout.strip()
+_weekday = ns.HETNAPOK[_dt.datetime.strptime(_oracle, "%Y-%m-%d").weekday()]
+_last = (_r.stdout.strip().splitlines() or [""])[-1]
+check("fejlec-nap: a main() exit 0", _r.returncode, 0)
+check_true("fejlec-nap: a main() kimenetenek UTOLSO sora a fejlec-nap, a mai datummal es hetnappal",
+           _last.startswith("FEJLEC-NAP") and f"{_oracle} {_weekday}" in _last)
+
 # AZ OSSZEGZO A FAJL VEGEN ALL, es ez nem stilus: 2026-09-10-ig a 200. soron
 # allt, tehat minden UTANA irt eset ugy bukhatott volna, hogy a futas exit 0-t ad.
 if failed:
