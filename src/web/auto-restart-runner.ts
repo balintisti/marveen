@@ -17,6 +17,7 @@ import { createAgentMessage, hasOpenInboundQuestion } from '../db.js'
 import { readContextGuardConfig } from './context-guard-store.js'
 import { getHardGuardPhase } from './context-guard-runner.js'
 import { dailyHandoffArmed } from '../context-guard.js'
+import { whileNotFrozen } from './fleet-freeze.js'
 
 // Drives per-agent scheduled restarts (see src/auto-restart.ts for the why and
 // the pure due-logic). Mirrors the other watcher loops: a 60s sweep, started
@@ -301,6 +302,6 @@ export function startAutoRestartRunner(): NodeJS.Timeout {
       tickRunning = false
     }
   }
-  setTimeout(sweep, INITIAL_DELAY_MS)
-  return setInterval(sweep, INTERVAL_MS)
+  setTimeout(whileNotFrozen('auto-restart', sweep), INITIAL_DELAY_MS)
+  return setInterval(whileNotFrozen('auto-restart', sweep), INTERVAL_MS)
 }

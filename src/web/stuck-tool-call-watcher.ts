@@ -56,6 +56,7 @@ import {
   type StuckToolCallState,
   type StuckToolCallThresholds,
 } from '../pane-state.js'
+import { whileNotFrozen } from './fleet-freeze.js'
 
 const TMUX = resolveFromPath('tmux')
 
@@ -431,6 +432,6 @@ export function startStuckToolCallWatcher(): NodeJS.Timeout {
       logger.debug({ err }, 'stuck-tool-call-watcher: main session check error')
     }
   }
-  setTimeout(() => { void sweep() }, INITIAL_DELAY_MS)
-  return setInterval(() => { void sweep() }, INTERVAL_MS)
+  setTimeout(whileNotFrozen('stuck-tool-call', () => { void sweep() }), INITIAL_DELAY_MS)
+  return setInterval(whileNotFrozen('stuck-tool-call', () => { void sweep() }), INTERVAL_MS)
 }

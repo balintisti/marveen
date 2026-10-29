@@ -81,6 +81,7 @@ import {
 import { getClaudePidForSession, hasChannelPluginAlive, probeChannelPluginLiveness, classifyRespawnStampAdvance } from '../channel-coordinator/liveness.js'
 import { getDesiredAgents } from './agent-desired-state.js'
 import { startSleepWakeDetector, systemSleptBetween } from './sleep-wake-detector.js'
+import { whileNotFrozen } from './fleet-freeze.js'
 
 // Lazily resolved (see makeLazyBinResolver): a module-level `resolveFromPath`
 // const throws at IMPORT time, so any environment where the binary is not
@@ -2831,8 +2832,10 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
       checkRunning = false
     }
   }
-  setTimeout(() => { void check() }, 30000)
-  return setInterval(() => { void check() }, 60000)
+  setTimeout(whileNotFrozen('channel-monitor', () => { void check() }), 30000)
+  // KILLSWITCH1022: this tick also revives desired-but-missing agents
+  // (reconcileDesiredAgents), which a stopped fleet must not do.
+  return setInterval(whileNotFrozen('channel-monitor', () => { void check() }), 60000)
 }
 
 // Start desired-but-missing agents one at a time (~15s apart). The stagger is

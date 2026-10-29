@@ -239,6 +239,28 @@ describe('marveen-commands.py', () => {
     expect(s[0].text).not.toContain('bot-tok')
   })
 
+  // KILLSWITCH1022: /stop and /resume are registry builtins and in BUILTIN_NAMES, so
+  // the hook claims them even when the dashboard is down (error reply, turn blocked)
+  // instead of handing them to the model as ordinary text.
+  it.each(['/stop furcsa levelek', '/resume'])('%s with the dashboard unreachable: claimed by the hook (error reply, blocked), not passed to the model', async (cmd) => {
+    const r = await runHook(channel(cmd), 'http://127.0.0.1:1')
+    expect(r.code).toBe(2)
+    expect(sends()[0].text).toMatch(new RegExp(`^Nem futott: \\${cmd.split(' ')[0]}, mert a dashboard nem érhető el`))
+  })
+
+  it('/stop <reason> from the owner chat: first call deferWrites, re-sent once after the hook exits (the write path the freeze takes)', async () => {
+    dispatchReply = (body) => body.deferWrites
+      ? { status: 200, body: { handled: true, outcome: 'deferred', replies: [] } }
+      : { status: 200, body: { handled: true, outcome: 'ran', replies: ['fagyasztva'] } }
+    const r = await runHook(channel('/stop furcsa levelek'))
+    expect(r.code).toBe(2)
+    const deadline = Date.now() + 5000
+    while (sends().length === 0 && Date.now() < deadline) await new Promise(res => setTimeout(res, 50))
+    expect(sends()).toEqual([{ chat_id: '42', text: 'fagyasztva' }])
+    const d = dispatches()
+    expect(d.map(x => [x.body.text, x.body.deferWrites])).toEqual([['/stop furcsa levelek', true], ['/stop furcsa levelek', false]])
+  })
+
   it('dashboard answers 500 + builtin command: error reply names the HTTP status, blocked', async () => {
     dispatchReply = () => ({ status: 500, body: { error: 'boom' } })
     const r = await runHook(channel('/queue'))

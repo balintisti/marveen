@@ -15,6 +15,7 @@ import {
   type StuckInputState,
   type StuckInputThresholds,
 } from '../pane-state.js'
+import { whileNotFrozen } from './fleet-freeze.js'
 
 // RIASZTASZAJ819: the owner alert for a parked-past-max-attempts sub-agent
 // fired three times in one afternoon at an agent that was WORKING the whole
@@ -346,6 +347,6 @@ export function startStuckInputWatcher(): NodeJS.Timeout {
     }
   }
 
-  setTimeout(() => { void sweep() }, INITIAL_DELAY_MS)
-  return setInterval(() => { void sweep() }, INTERVAL_MS)
+  setTimeout(whileNotFrozen('stuck-input', () => { void sweep() }), INITIAL_DELAY_MS)
+  return setInterval(whileNotFrozen('stuck-input', () => { void sweep() }), INTERVAL_MS)
 }

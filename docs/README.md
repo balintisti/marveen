@@ -26,5 +26,6 @@ Minden lap két szemszögből mutatja be a funkciót:
 | [Dream-engine](dream-engine.md) | Éjszakai tudás-konszolidáció + reggeli prioritás-javaslatok |
 | [Proaktív hírszerző (intel registry)](intel-registry.md) | Óránkénti gyűjtő + napi brief közös SQLite tény-registry-vel, dedup + tény-életciklus |
 | [Háttér-feladatok](background-tasks.md) | Leválasztott, hosszú feladatok futtatása + értesítés |
+| [Piros gomb: a flotta fagyasztása](fleet-freeze.md) | Egy mozdulattal leállítható flotta: eszközhívás-tiltás, álló háttér-ciklusok, feloldás csak a gazdának |
 
 *A dokumentáció él; javításokat/bővítéseket szívesen fogadunk.*

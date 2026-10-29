@@ -59,6 +59,7 @@ import {
   restartNoticeWakes,
   restartNoticeIsLogOnly,
 } from '../context-guard.js'
+import { whileNotFrozen } from './fleet-freeze.js'
 
 // Fleet context guard (kanban #81): acts BEFORE a session drowns in its own
 // context. Sweep every agent (main included) every five minutes; at actPct ask the
@@ -1184,7 +1185,10 @@ export function startContextGuardRunner(): NodeJS.Timeout {
     awaitReadyNames: () => awaitReadyAgents(guardStates),
     check: checkAgent,
   })
-  setTimeout(sweep, INITIAL_DELAY_MS)
-  setInterval(readyPoll, READY_POLL_MS)
-  return setInterval(sweep, INTERVAL_MS)
+  setTimeout(whileNotFrozen('context-guard', sweep), INITIAL_DELAY_MS)
+  // KILLSWITCH1022: readyPoll re-checks agents in await-ready, and that check
+  // types the resume prompt into the session -- an action on an agent, so it
+  // pauses with the sweep (upstream has no ready poll; this one is ours).
+  setInterval(whileNotFrozen('context-guard-ready-poll', readyPoll), READY_POLL_MS)
+  return setInterval(whileNotFrozen('context-guard', sweep), INTERVAL_MS)
 }

@@ -54,6 +54,7 @@ const EXPECTED: Record<string, string[]> = {
     // db-destructive-gate.py is ours (also wired at user level; see hook-registration-completeness).
     // memory-index-write-gate.py: the main agent's copy moved here from ~/.claude (P4, marveen
     // 2026-09-28), so the scaffold no longer writes user-level settings for it (#1305).
+    'fleet-freeze-gate.sh', // KILLSWITCH1022: every tool call denied while the fleet is frozen
     'outgoing-copy-gate.py', 'db-destructive-gate.py',
     'channel-image-resize.sh', 'egress-gate.mjs', 'memory-frontmatter-gate.py',
     'memory-index-write-gate.py',

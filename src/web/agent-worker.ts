@@ -414,6 +414,27 @@ export function mergeSharedHooks(
   return Object.keys(out).length ? out : undefined
 }
 
+/** The fleet-freeze PreToolUse gate in the worker's own settings (KILLSWITCH1022). */
+export const WORKER_FREEZE_GATE_CMD = `bash "${join(PROJECT_ROOT, 'scripts', 'hooks', 'fleet-freeze-gate.sh')}"`
+
+/**
+ * KILLSWITCH1022: the worker runs tools too (--dangerously-skip-permissions),
+ * and its cwd is outside the project, so the project .claude/settings.json never
+ * reaches it. The fleet-freeze gate goes into its OWN settings, first in
+ * PreToolUse: every other entry (and every other hook event) is kept, including
+ * the shared hooks merged in by mergeSharedHooks, and the gate entry is replaced,
+ * never duplicated.
+ */
+export function withFleetFreezeGate(settings: WorkerSettings): WorkerSettings {
+  const hooks = (settings.hooks && typeof settings.hooks === 'object' && !Array.isArray(settings.hooks) ? settings.hooks : {}) as Record<string, unknown>
+  const pre = (Array.isArray(hooks.PreToolUse) ? hooks.PreToolUse : []) as unknown[]
+  const preToolUse = [
+    { matcher: '*', hooks: [{ type: 'command', command: WORKER_FREEZE_GATE_CMD, timeout: 5 }] },
+    ...pre.filter((e) => !JSON.stringify(e).includes('fleet-freeze-gate.sh')),
+  ]
+  return { ...settings, hooks: { ...hooks, PreToolUse: preToolUse } }
+}
+
 /**
  * Build (idempotently) the worker's isolated cwd + CLAUDE_CONFIG_DIR:
  *  - empty project .mcp.json (defense in depth);
@@ -488,12 +509,12 @@ export function ensureWorkerCwd(ctx: WorkerCtx = ctxSlow): void {
   // first-run warning so the headless worker (launched with
   // --dangerously-skip-permissions) reaches its prompt without a blocking modal.
   const hooks = mergeSharedHooks(readSharedHooks(realClaude), current.hooks)
-  writeFileSync(settingsPath, JSON.stringify({
+  writeFileSync(settingsPath, JSON.stringify(withFleetFreezeGate({
     ...current,
     enabledPlugins,
     ...(hooks ? { hooks } : {}),
     skipDangerousModePermissionPrompt: true,
-  }, null, 2) + '\n')
+  }), null, 2) + '\n')
 
   // Subscription auth: materialise the host login JSON as .credentials.json AND
   // clear the stale path-hashed Keychain entry that would shadow it (see the

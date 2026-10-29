@@ -43,6 +43,7 @@ import { classifyAgentMessage, wrapAgentMessageForDelivery } from './agent-messa
 import { composeBatchInjection, batchInjectCapFor } from './batch-inject.js'
 import { maybeWakeSubAgentsForTelegram } from './telegram-inbox-wake.js'
 import { selectTickWindow } from './message-router-window.js'
+import { whileNotFrozen } from './fleet-freeze.js'
 
 // A message that cannot be delivered within this window (target session never
 // exists / stays busy) is marked failed so it stops clogging the pending
@@ -710,7 +711,8 @@ export async function deliverFederatedBatch(federated: AgentMessage[], now: numb
 }
 
 export function startMessageRouter(): NodeJS.Timeout {
-  return setInterval(async () => {
+  // KILLSWITCH1022: a frozen fleet gets nothing delivered; the rows wait.
+  return setInterval(whileNotFrozen('message-router', async () => {
     // Re-entrancy guard: STT can hold a tick for up to 65s; skip new ticks
     // while the previous one is still in flight to prevent double-delivery.
     if (_tickRunning) return
@@ -720,7 +722,7 @@ export function startMessageRouter(): NodeJS.Timeout {
     } finally {
       _tickRunning = false
     }
-  }, 5000)
+  }), 5000)
 }
 
 // Per-receiver batched-message-id set for the CURRENT tick. Built by the

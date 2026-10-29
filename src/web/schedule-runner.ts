@@ -106,6 +106,7 @@ import { getInjectedPrompt, matchesInjectedPrompt, type InjectedPromptRecord } f
 import { withSessionSendLock } from './session-send-lock.js'
 import { startSleepWakeDetector, systemSleptBetween } from './sleep-wake-detector.js'
 import { gitIdentityVars } from './git-identity.js'
+import { whileNotFrozen } from './fleet-freeze.js'
 
 // How many bare-Enter attempts the post-send resubmit tries before escalating
 // to a clear + re-inject, and the hard cap after which it gives up.
@@ -3122,6 +3123,6 @@ export function startScheduleRunner(): NodeJS.Timeout {
   }
 
   // Run immediately on start (catches missed tasks)
-  setTimeout(() => { void runCheck() }, 5000)
-  return setInterval(() => { void runCheck() }, SCHEDULE_TICK_MS)
+  setTimeout(whileNotFrozen('schedule-runner', () => { void runCheck() }), 5000)
+  return setInterval(whileNotFrozen('schedule-runner', () => { void runCheck() }), SCHEDULE_TICK_MS)
 }
