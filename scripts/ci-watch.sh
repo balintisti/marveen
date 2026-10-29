@@ -41,15 +41,45 @@ command -v gh >/dev/null 2>&1 || { log "HIBA: nincs gh a PATH-on"; exit 1; }
 # HAROM PROBA, mert egy atmeneti halozati pillanat NEM allapot. Merve 2026-08-25:
 # az elso eles futasom `i/o timeout`-ot kapott az api.github.com fele, ket masodperccel
 # kesobb ugyanaz a hivas hibatlanul ment. Egy ilyen villanas nem ebreszthet ejjel.
+#
+# MUNKAFOLYAMATONKENT KERDEZUNK, NEM EGY KOZOS ABLAKBOL SZURUNK (kartya 5d7497a0). Merve
+# 2026-10-26: a kozos `--limit 20` ablakot 19 "Dependabot Updates" + 1 telepites toltotte ki,
+# a CI kiszorult, es 18 tick utan hamis "hianyzik" riasztas ment Istinek, mikozben a main CI
+# zold volt. Egy nem figyelt munkafolyamat igy nem tolhatja ki a figyeltet. Az `ALL` mod
+# marad a kozos ablaknal: ott nincs kit kiszoritani.
 GH_RC=1; RAW=""
-for _try in 1 2 3; do
-  RAW="$(cd "$REPO_DIR" && gh run list --repo "$REPO_SLUG" --branch "$BRANCH" --limit 20 \
-          --json conclusion,status,displayTitle,createdAt,url,workflowName,databaseId 2>&1)"
-  GH_RC=$?
-  [ $GH_RC -eq 0 ] && [ -n "$RAW" ] && [ "${RAW:0:1}" = "[" ] && break
-  log "proba $_try sikertelen (rc=$GH_RC), ujraprobalom"
-  sleep 5
-done
+gh_list() {  # $1: workflow name, or empty for the shared window. Prints the JSON array.
+  local wf_args=() out rc=1 _try
+  [ -n "$1" ] && wf_args=(--workflow "$1")
+  for _try in 1 2 3; do
+    # ${arr[@]+...}: bash 3.2 (the launchd /bin/bash) treats an empty array as unset under -u
+    out="$(cd "$REPO_DIR" && gh run list --repo "$REPO_SLUG" --branch "$BRANCH" \
+            ${wf_args[@]+"${wf_args[@]}"} --limit 20 \
+            --json conclusion,status,displayTitle,createdAt,url,workflowName,databaseId 2>&1)"
+    rc=$?
+    if [ $rc -eq 0 ] && [ -n "$out" ] && [ "${out:0:1}" = "[" ]; then printf '%s' "$out"; return 0; fi
+    log "proba $_try sikertelen (rc=$rc${1:+, $1}), ujraprobalom" >&2
+    sleep 5
+  done
+  printf '%s' "$out"
+  [ $rc -eq 0 ] && rc=1   # rc 0 with a non-JSON answer is still not a measurement
+  return $rc
+}
+if [ -z "$WATCH_WORKFLOWS" ]; then
+  RAW="$(gh_list "")"; GH_RC=$?
+else
+  RAW="[]"; GH_RC=0
+  IFS=',' read -ra _wfs <<< "$WATCH_WORKFLOWS"
+  for _wf in "${_wfs[@]}"; do
+    _wf="$(printf '%s' "$_wf" | sed 's/^ *//; s/ *$//')"
+    [ -n "$_wf" ] || continue
+    _part="$(gh_list "$_wf")"; GH_RC=$?
+    # one unmeasurable workflow makes the whole answer unmeasurable, never a partial "green"
+    if [ $GH_RC -ne 0 ]; then RAW="$_wf: $_part"; break; fi
+    RAW="$(python3 -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1]) + json.loads(sys.argv[2])))' "$RAW" "$_part")" \
+      || { GH_RC=1; RAW="$_wf: a valasz nem JSON"; break; }
+  done
+fi
 
 if [ $GH_RC -ne 0 ] || [ -z "$RAW" ] || [ "${RAW:0:1}" != "[" ]; then
   # A MERES BUKOTT. Ez NEM zold. Ertesitunk rola, de csak ha valtozott.
