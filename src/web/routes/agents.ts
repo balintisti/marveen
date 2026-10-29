@@ -157,6 +157,7 @@ import {
   bundleFilename,
   fleetBundleFilename,
 } from '../agent-bundle.js'
+import { mayIssueCredentials, OWNER_SESSION_REQUIRED } from './auth.js'
 import type { RouteContext } from './types.js'
 import { suggestForAgent, type AgentSignals } from '../model-suggest.js'
 import {
@@ -1913,6 +1914,13 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
   // POST /api/agents/:name/channels/:provider/invites (legacy: /telegram/invites)
   const inviteCreateMatch = matchChannelRoute(path, '/invites')
   if (inviteCreateMatch && method === 'POST') {
+    // DEVKEYFOLLOW1022 (card 1befbdb3, not in upstream #2175): an invite token lets
+    // an unknown sender pair itself into the agent's allowlist, so creating one is
+    // credential issuance: the owner's session once a dashboard login exists.
+    if (!mayIssueCredentials(ctx.auth, req)) {
+      json(res, OWNER_SESSION_REQUIRED, 403)
+      return true
+    }
     const [name, provider] = inviteCreateMatch
     if (name !== MAIN_AGENT_ID && !existsSync(agentDir(name))) {
       json(res, { error: 'Agent not found' }, 404)
