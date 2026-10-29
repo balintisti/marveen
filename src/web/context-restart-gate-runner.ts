@@ -642,6 +642,12 @@ async function deliverPendingWake(name: string, session: string, nowMs: number):
     return
   }
 
+  // KILLSWITCH1022: this runs ~25 s after the /clear (performSoftClear sleeps
+  // first), so a freeze pulled in that gap must stop the nudge as well. The debt
+  // stays in the state file: after the lift the next sweep sends it, or drops it
+  // as stale.
+  if (frozenSkip('context-restart-gate-wake')) return
+
   try {
     // GUARDHITELES903: anchored in agent_messages so the fresh session can
     // authenticate the "continue from the restored blocks" instruction. Same

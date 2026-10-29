@@ -106,7 +106,7 @@ import { getInjectedPrompt, matchesInjectedPrompt, type InjectedPromptRecord } f
 import { withSessionSendLock } from './session-send-lock.js'
 import { startSleepWakeDetector, systemSleptBetween } from './sleep-wake-detector.js'
 import { gitIdentityVars } from './git-identity.js'
-import { whileNotFrozen } from './fleet-freeze.js'
+import { frozenSkip, whileNotFrozen } from './fleet-freeze.js'
 
 // How many bare-Enter attempts the post-send resubmit tries before escalating
 // to a clear + re-inject, and the hard cap after which it gives up.
@@ -1816,6 +1816,14 @@ async function attemptFireTask(
       ? `[Heartbeat: ${task.name}]`
       : `[Utemezett feladat: ${task.name}]`
     const resubmit = async (attempt: number, laneBusySkips = 0): Promise<void> => {
+      // KILLSWITCH1022: this chain is a detached timer armed before any freeze, and
+      // it presses Enter / re-types into the pane. Stop here; the parked prompt is
+      // compensated like a giveup (a pending retry re-fires the task after the lift).
+      if (frozenSkip('schedule-resubmit')) {
+        insertPendingTaskRetryIfNew(task.name, agentName, now, 'frozen')
+        endDelivery()
+        return
+      }
       try {
         // TASKTAIL805: the whole probe+act step is one recover-mode critical
         // section on the pane's send lane. The resubmit timer escapes the

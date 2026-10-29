@@ -31,6 +31,7 @@ import { atomicWriteFileSync } from './atomic-write.js'
 import { readActiveModelFromProjectDir } from './active-model.js'
 import { configDirFor } from './main-transcript-root.js'
 import { readConfiguredMainModel } from './channel-monitor.js'
+import { frozenSkip } from './fleet-freeze.js'
 import { gatherGateInputs, sendSlashCommand, mainSessionName } from './context-restart-gate-runner.js'
 import { capturePane } from './agent-process.js'
 import { switchVerdict, humanBusy, SWITCH_TURN_QUIET_MS, type QuietVerdict } from './session-control.js'
@@ -343,6 +344,9 @@ export function scheduleHoldExpiry(untilMs: number | null, nowMs = Date.now()): 
   const delay = Math.max(0, untilMs - nowMs) + 1000
   expiryTimer = setTimeout(() => {
     expiryTimer = null
+    // KILLSWITCH1022: the timer was armed before a freeze; the revert types a
+    // /model command, so it must not run now. The hold stays; the sweep after the lift reverts it.
+    if (frozenSkip('main-model-expiry')) return
     sweepModelHold(Date.now()).catch(err => logger.warn({ err }, 'main-model: expiry sweep failed'))
   }, delay)
   expiryTimer.unref?.()
@@ -446,6 +450,8 @@ export function onMainTurnEnded(nowMs: number, holdFile: string = MODEL_HOLD_FIL
   if (readPendingWrite()) {
     logger.info({ inMs: SWITCH_TURN_QUIET_MS + 1000 }, 'main-model: turn ended, pending write armed')
     setTimeout(() => {
+      // KILLSWITCH1022: armed before a freeze; the queued command stays in its file.
+      if (frozenSkip('main-model-pending-write')) return
       runPendingWrite(Date.now()).catch(err => logger.warn({ err }, 'main-model: pending write failed'))
     }, SWITCH_TURN_QUIET_MS + 1000).unref?.()
     armed = true
