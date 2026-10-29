@@ -329,6 +329,8 @@ describe('kbd: inline answer buttons (c67f5f34)', () => {
     const ch = (code: number) => String.fromCharCode(code)
     const bad = ['/model opus', ' /x', '\t/x', ch(0x200b) + '/x', ch(0xfeff) + '/x', ch(0x1c) + '/x', '(/x', 'a\nb', 'a' + ch(0) + 'b', 'a' + ch(0x85) + 'b',
       'a' + ch(0x200b) + 'b', 'a' + ch(0x202e) + 'b', 'a' + ch(0x2066) + 'b', 'a' + ch(0xad) + 'b', 'a' + String.fromCodePoint(0xe0041) + 'b',
+      // variation selectors supplement: a hidden byte channel (Mn, not Cf), refused at both ends of the range; U+FE0F is NOT in it
+      'a' + String.fromCodePoint(0xe0100) + 'b', 'a' + String.fromCodePoint(0xe01ef) + 'b',
       'yes abcde', 'No abcde', '  y abcde  ']
     for (const label of bad) {
       const res = await h.call({ chat_id: '42', text: 'Kérdés', buttons: ['Rendben', label] })
@@ -336,11 +338,11 @@ describe('kbd: inline answer buttons (c67f5f34)', () => {
       expect(res.content[0].text, JSON.stringify(label)).toMatch(/^reply failed: buttons: /)
     }
     expect(h.sent).toHaveLength(0)
-    for (const label of ['A/B', '1/2', 'Igen / nem', 'yes', 'no abc']) {
+    for (const label of ['A/B', '1/2', 'Igen / nem', 'yes', 'no abc', '\u2764\uFE0F']) {
       const res = await h.call({ chat_id: '42', text: 'Kérdés', buttons: [label] })
       expect(res.isError, JSON.stringify(label)).toBeUndefined()
     }
-    expect(h.sent).toHaveLength(5)
+    expect(h.sent).toHaveLength(6)
   })
 
   it('buttons go to a private chat of a paired user only; a group (or an unknown chat) gets a tool error, an empty list is still fine', async () => {
@@ -731,7 +733,15 @@ describe('kbd: the callback branch and the delivery of a tap (c67f5f34, card 267
     expectToastOnly(h, await h.press({ data: 'kbd:0', markup: [[{ text: 'A\u200bB', callback_data: 'kbd:0' }]] }), DEAD, 'zero-width character')
     expectToastOnly(h, await h.press({ data: 'kbd:0', markup: [[{ text: 'A\u202eB', callback_data: 'kbd:0' }]] }), DEAD, 'bidi override')
     expectToastOnly(h, await h.press({ data: 'kbd:0', markup: [[{ text: 'A\u{E0041}B', callback_data: 'kbd:0' }]] }), DEAD, 'tag character')
+    expectToastOnly(h, await h.press({ data: 'kbd:0', markup: [[{ text: 'A\u{E0100}B', callback_data: 'kbd:0' }]] }), DEAD, 'variation selector supplement (start of range)')
+    expectToastOnly(h, await h.press({ data: 'kbd:0', markup: [[{ text: 'A\u{E01EF}B', callback_data: 'kbd:0' }]] }), DEAD, 'variation selector supplement (end of range)')
     expect(h.set.size).toBe(0)
+  })
+
+  it('B1 positive control: an ordinary emoji label (U+2764 U+FE0F) still passes the label rule on the tap', async () => {
+    const h = callbackHarness(patched)
+    const r = await h.press({ data: 'kbd:0', markup: [[{ text: '\u2764\uFE0F', callback_data: 'kbd:0' }]] })
+    expect(r.answers).toEqual([{ text: '✓ \u2764\uFE0F' }])
   })
 
   it('AC-C9: the label comes from the button of the keyboard, never from the data; it is handed to handleInbound as (ctx, label, undefined) after the other buttons are taken off', async () => {
