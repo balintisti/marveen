@@ -131,9 +131,9 @@ KBD_CHECK = ("reply chat check", re.compile(r"^( *)assertAllowedChat\(chat_id\)\
     _kbd_lines([
         r"const kbdButtons = args.buttons == null ? undefined : Array.isArray(args.buttons) && args.buttons.length <= 12 "
         r"&& args.buttons.every(b => typeof b === 'string' && b.trim() !== '' && b.length <= 64 "
-        r"&& !/^[^\p{L}\p{N}]*\//u.test(b) && !/[\u0000-\u001f\u007f-\u009f]/.test(b) && !PERMISSION_REPLY_RE.test(b)) "
+        r"&& !/^[^\p{L}\p{N}]*\//u.test(b) && !/[\p{Cc}\p{Cf}]/u.test(b) && !PERMISSION_REPLY_RE.test(b)) "
         r"? (args.buttons as string[]) : (() => { throw new Error('buttons: a list of at most 12 non-empty labels, "
-        r"each at most 64 characters, not starting with a slash, without control characters, not a permission reply') })()",
+        r"each at most 64 characters, not starting with a slash, without control or invisible format characters, not a permission reply') })()",
         r"if (kbdButtons?.length && !loadAccess().allowFrom.includes(chat_id)) "
         r"throw new Error('buttons: only in a private chat with a paired user')",
     ]))
@@ -160,7 +160,7 @@ KBD_CALLBACK = ("callback perm regex", re.compile(
         "? kbdRows?.flat().find(b => 'callback_data' in b && b.callback_data === data) : undefined",
         "  if (!kbdButton) { await kbdToast(data === 'kbd:-' ? 'Erre már válaszoltál.' "
         ": 'Ez a gomb már nem él, írd be a választ.'); return }",
-        "  if (/^[^\\p{L}\\p{N}]*\\//u.test(kbdButton.text) || /[\\u0000-\\u001f\\u007f-\\u009f]/.test(kbdButton.text) "
+        "  if (/^[^\\p{L}\\p{N}]*\\//u.test(kbdButton.text) || /[\\p{Cc}\\p{Cf}]/u.test(kbdButton.text) "
         "|| PERMISSION_REPLY_RE.test(kbdButton.text)) { await kbdToast('Ez a gomb már nem él, írd be a választ.'); return }",
         "  const kbdKey = kbdMsg.chat.id + ':' + kbdMsg.message_id",
         "  if (marveenKbdAnswered.has(kbdKey)) { await kbdToast('Erre már válaszoltál.'); return }",

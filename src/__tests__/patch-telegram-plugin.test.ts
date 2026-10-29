@@ -323,11 +323,12 @@ describe('kbd: inline answer buttons (c67f5f34)', () => {
     expect(ok.isError).toBeUndefined()
   })
 
-  it('a label that could pass for a command, a control character or a permission reply is refused before sending; A/B and 1/2 are fine', async () => {
+  it('a label that could pass for a command, a control or invisible format character or a permission reply is refused before sending; A/B and 1/2 are fine', async () => {
     run()
     const h = replyHandler(readFileSync(server, 'utf-8'))
     const ch = (code: number) => String.fromCharCode(code)
     const bad = ['/model opus', ' /x', '\t/x', ch(0x200b) + '/x', ch(0xfeff) + '/x', ch(0x1c) + '/x', '(/x', 'a\nb', 'a' + ch(0) + 'b', 'a' + ch(0x85) + 'b',
+      'a' + ch(0x200b) + 'b', 'a' + ch(0x202e) + 'b', 'a' + ch(0x2066) + 'b', 'a' + ch(0xad) + 'b', 'a' + String.fromCodePoint(0xe0041) + 'b',
       'yes abcde', 'No abcde', '  y abcde  ']
     for (const label of bad) {
       const res = await h.call({ chat_id: '42', text: 'Kérdés', buttons: ['Rendben', label] })
@@ -721,12 +722,15 @@ describe('kbd: the callback branch and the delivery of a tap (c67f5f34, card 267
     expectToastOnly(h, await h.press({ data: 'kbd:5', markup: [[{ text: 'Csak ez', callback_data: 'kbd:7' }]] }), DEAD, 'another index only')
   })
 
-  it('B1: the label rule runs again on the label a tap brings back (slash, permission reply, control character): toast only, nothing delivered', async () => {
+  it('B1: the label rule runs again on the label a tap brings back (slash, permission reply, control or invisible format character): toast only, nothing delivered', async () => {
     const h = callbackHarness(patched)
     expectToastOnly(h, await h.press({ data: 'kbd:0', markup: [[{ text: '/context clear', callback_data: 'kbd:0' }]] }), DEAD, 'slash label')
     expectToastOnly(h, await h.press({ data: 'kbd:0', markup: [[{ text: ' » /model opus', callback_data: 'kbd:0' }]] }), DEAD, 'slash after punctuation')
     expectToastOnly(h, await h.press({ data: 'kbd:0', markup: [[{ text: 'yes abcde', callback_data: 'kbd:0' }]] }), DEAD, 'permission reply')
     expectToastOnly(h, await h.press({ data: 'kbd:0', markup: [[{ text: 'A\u0007B', callback_data: 'kbd:0' }]] }), DEAD, 'control character')
+    expectToastOnly(h, await h.press({ data: 'kbd:0', markup: [[{ text: 'A\u200bB', callback_data: 'kbd:0' }]] }), DEAD, 'zero-width character')
+    expectToastOnly(h, await h.press({ data: 'kbd:0', markup: [[{ text: 'A\u202eB', callback_data: 'kbd:0' }]] }), DEAD, 'bidi override')
+    expectToastOnly(h, await h.press({ data: 'kbd:0', markup: [[{ text: 'A\u{E0041}B', callback_data: 'kbd:0' }]] }), DEAD, 'tag character')
     expect(h.set.size).toBe(0)
   })
 
