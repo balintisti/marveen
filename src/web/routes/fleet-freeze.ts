@@ -161,7 +161,15 @@ export async function tryHandleFleetFreeze(ctx: RouteContext): Promise<boolean> 
       json(res, OWNER_SESSION_REQUIRED, 403)
       return true
     }
-    const prev = clearFleetFreeze()
+    let prev: FleetFreezeState | null
+    try {
+      prev = clearFleetFreeze()
+    } catch (err) {
+      // The file is still there, so the fleet is still frozen: say so, restart nothing.
+      logger.error({ err }, 'fleet unfreeze: the freeze file could not be removed')
+      json(res, { error: err instanceof Error ? err.message : 'could not remove the fleet freeze file', frozen: true }, 500)
+      return true
+    }
     if (!prev) {
       json(res, { ok: true, frozen: false, restarted: [] })
       return true

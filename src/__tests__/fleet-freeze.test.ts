@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
 import type http from 'node:http'
 import { Readable } from 'node:stream'
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
@@ -136,6 +136,25 @@ describe('lifting it: the owner only (mayLiftFleetFreeze)', () => {
     const owner = getDb().prepare("SELECT id FROM dashboard_users WHERE username = 'owner'").get() as { id: number }
     const cookieValue = createSession({ userId: owner.id, username: 'owner' })
     expect((await unfreeze(TOKEN, { cookie: `${SESSION_COOKIE_NAME}=${cookieValue}` })).status).toBe(200)
+    expect(isFleetFrozen()).toBe(false)
+  })
+
+  it('a freeze file that cannot be removed (EACCES) is NOT reported lifted: 500 names the file, still frozen, nothing restarted', async () => {
+    running.add('samu')
+    await freeze(TOKEN, { reason: 'x', mode: 'stop' })
+    startSpy.mockClear()
+    const dir = join(ROOT, 'store')
+    chmodSync(dir, 0o555) // unlink needs write access on the folder
+    try {
+      const r = await unfreeze(SESSION)
+      expect(r.status).toBe(500)
+      expect(r.json.frozen).toBe(true)
+      expect(r.json.error).toContain(FLEET_FREEZE_PATH)
+      expect(isFleetFrozen()).toBe(true)
+      expect(startSpy).not.toHaveBeenCalled()
+    } finally { chmodSync(dir, 0o755) }
+    // The way out is still there once the file can be removed.
+    expect((await unfreeze(SESSION)).status).toBe(200)
     expect(isFleetFrozen()).toBe(false)
   })
 

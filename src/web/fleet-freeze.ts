@@ -66,10 +66,21 @@ export function writeFleetFreeze(state: FleetFreezeState): void {
   atomicWriteFileSync(FLEET_FREEZE_PATH, JSON.stringify(state, null, 2))
 }
 
-/** Removes the file; returns the state it held (null if it was not frozen). */
+/**
+ * Removes the file; returns the state it held (null if it was not frozen).
+ * Throws when the file is STILL there afterwards (EACCES/EPERM on the file or
+ * its folder): the freeze is then unchanged and the caller must not report it
+ * lifted. A file that is already gone is not an error.
+ */
 export function clearFleetFreeze(): FleetFreezeState | null {
   const prev = readFleetFreeze()
-  try { unlinkSync(FLEET_FREEZE_PATH) } catch { /* already gone */ }
+  try {
+    unlinkSync(FLEET_FREEZE_PATH)
+  } catch (err) {
+    if (existsSync(FLEET_FREEZE_PATH)) {
+      throw new Error(`could not remove ${FLEET_FREEZE_PATH}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
   return prev
 }
 
