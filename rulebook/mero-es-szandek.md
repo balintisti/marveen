@@ -892,7 +892,14 @@ tett mérővé, hogy a felhatalmazás nem TARTALMAZTA a költséget. Azt mondtad
 ENGEDÉLY. Azt senki nem mondta meg, mibe kerül tizenhét push -- az TÉNY."*
 
 A feltevés ~70 számlázott perc/futás volt, 17 ágra: nagy, visszafordíthatatlan kiadás. A mérés
-NULLÁT adott. Az engedély mindkét világban szó szerint ugyanúgy hangzott volna.
+2026-09-19-én NULLÁT adott. Az engedély mindkét világban szó szerint ugyanúgy hangzott volna.
+
+**A KIKÖTÉS, AMI A NULLÁHOZ TARTOZIK:** dexter ugyanaznap újramérte a valódi korlátot: 14 nyitott
+PR volt a repón (kontroll: a lekérdezés ad sorokat), és a saját 17 ágából 0-nak volt nyitott PR-je.
+A nulla tehát NEM az ág tulajdonsága, hanem a MAI PR-állapoté: ha bármelyik ágra PR nyílik, minden
+további odatolás számlázott futást indít, anélkül, hogy az ágon bármi változna. A próba nem az,
+hogy „ág-e", hanem hogy VAN-E RAJTA NYITOTT PR, és ezt a push PILLANATÁBAN kell megnézni, nem a
+2026-09-19-i mérésből.
 
 > **EGY ENGEDÉLY AZT VÁLASZOLJA MEG, KI DÖNT, NEM AZT, HOGY MI TÖRTÉNIK.** A felhatalmazás
 > megnyugtat, és épp ezért nem kérdez rá senki a számra: minél határozottabb az engedély, annál
