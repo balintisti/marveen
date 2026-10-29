@@ -92,6 +92,8 @@ const h = vi.hoisted(() => {
     detached: new Map<string, unknown[]>(),
     probeCalls: 0,
     footerWork: 0,
+    // when set: background work has been seen since then (the ghost guard's clock)
+    subagentsSinceAgoMs: null as number | null,
     createAgentMessage: vi.fn(),
   }
 })
@@ -140,7 +142,10 @@ vi.mock('../db.js', () => ({
   // idle for an hour with an own card, so a wake is due on this tick
   loadIdleGuardState: () => {
     const now = Date.now()
-    return { idleSinceMs: now - 60 * 60_000, lastAlertAt: null, lastWakeAt: null, updatedAt: now }
+    return {
+      idleSinceMs: now - 60 * 60_000, lastAlertAt: null, lastWakeAt: null, updatedAt: now,
+      ...(h.subagentsSinceAgoMs === null ? {} : { subagentsSinceMs: now - h.subagentsSinceAgoMs }),
+    }
   },
 }))
 
@@ -153,7 +158,10 @@ const wakesToX = () => h.createAgentMessage.mock.calls.filter((c) => c[1] === 'x
 const GROUP = { pgid: 50339, pcpu: 204.5, root: { pid: 50341, ppid: 1, pgid: 50339, pcpu: 0, etime: '21:11:33', command: 'bash wjob4.sh' }, members: [] }
 
 describe('tick(): detached work holds the wake (ad730515)', () => {
-  beforeEach(() => { h.detached = new Map(); h.probeCalls = 0; h.footerWork = 0; h.createAgentMessage.mockReset() })
+  beforeEach(() => {
+    h.detached = new Map(); h.probeCalls = 0; h.footerWork = 0; h.subagentsSinceAgoMs = null
+    h.createAgentMessage.mockReset()
+  })
 
   it('an idle agent with a busy detached job on its path is not woken', async () => {
     h.detached = new Map([['x', [GROUP]]])
@@ -172,5 +180,17 @@ describe('tick(): detached work holds the wake (ad730515)', () => {
     await sweep()
     expect(h.probeCalls).toBe(0)
     expect(wakesToX()).toHaveLength(0)
+  })
+
+  // The way out (trillian 48798): a detached job goes through the SAME ghost guard as a footer
+  // row, so a runaway process cannot hide a stuck agent for longer than a silent sub-agent row
+  // can. Without lastActionAtMs on detached work the ghost branch never fires and the hold is
+  // forever.
+  it('a detached hold that has been silent for 3 h is released by the ghost guard: he is woken', async () => {
+    h.detached = new Map([['x', [GROUP]]])
+    h.subagentsSinceAgoMs = 3 * 60 * 60_000
+    await sweep()
+    expect(h.probeCalls).toBe(1)
+    expect(wakesToX()).toHaveLength(1)
   })
 })
