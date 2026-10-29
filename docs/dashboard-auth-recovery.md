@@ -72,8 +72,10 @@ eszközkulcsot, nem párosít Bridge-et, és nem vesz fel vagy töröl felhaszn�
 ezekhez a gazda sessionje kell. Ugyanez áll a föderációs társ felvételére, a
 teljes föderációs konfig írására (`PUT /api/federation/peers`), a társ
 szerkesztésére (`PATCH`), a föderáció bekapcsolására, a társ bejövő tokenjének
-cseréjére és felfedésére, az ügynök-meghívó létrehozására
-(`POST /api/agents/:name/channels/:provider/invites`) és a felhasználónevek
+cseréjére és felfedésére, az ügynök-meghívó létrehozására és listázására
+(`POST` és `GET /api/agents/:name/channels/:provider/invites`), a függő
+párosítási kódok listájára és jóváhagyására
+(`GET .../pending`, `POST .../approve`) és a felhasználónevek
 listájára (`GET /api/auth/users`): mind `owner_session_required` 403. Elfelejtett jelszónál
 a helyreállítás útja a fenti CLI: `npm run dashboard-user -- reset-password <felhasználó>`.
 

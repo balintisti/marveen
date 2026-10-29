@@ -1812,6 +1812,13 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
   // GET /api/agents/:name/channels/:provider/pending (legacy: /telegram/pending)
   const pendingMatch = matchChannelRoute(path, '/pending')
   if (pendingMatch && method === 'GET') {
+    // DEVKEYFOLLOW1022 (card 1befbdb3, not in upstream #2175): the pending list carries the live pairing codes, and a code is all that
+    // approve needs to put a sender on the allowlist, so reading it is credential
+    // exposure: the owner's session once a dashboard login exists.
+    if (!mayIssueCredentials(ctx.auth, req)) {
+      json(res, OWNER_SESSION_REQUIRED, 403)
+      return true
+    }
     const [name, provider] = pendingMatch
     if (name !== MAIN_AGENT_ID && !existsSync(agentDir(name))) {
       json(res, { error: 'Agent not found' }, 404)
@@ -1839,6 +1846,13 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
   // POST /api/agents/:name/channels/:provider/approve (legacy: /telegram/approve)
   const approveMatch = matchChannelRoute(path, '/approve')
   if (approveMatch && method === 'POST') {
+    // DEVKEYFOLLOW1022 (card 1befbdb3, not in upstream #2175): approving a pairing code writes the sender into the agent's allowlist
+    // (access.json allowFrom), so it is credential issuance: the owner's session
+    // once a dashboard login exists.
+    if (!mayIssueCredentials(ctx.auth, req)) {
+      json(res, OWNER_SESSION_REQUIRED, 403)
+      return true
+    }
     const [name, provider] = approveMatch
     if (name !== MAIN_AGENT_ID && !existsSync(agentDir(name))) {
       json(res, { error: 'Agent not found' }, 404)
@@ -1953,6 +1967,12 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
 
   // GET /api/agents/:name/channels/:provider/invites (legacy: /telegram/invites)
   if (inviteCreateMatch && method === 'GET') {
+    // DEVKEYFOLLOW1022 (card 1befbdb3, not in upstream #2175): the list returns the live invite tokens and their Telegram deep links,
+    // which would sidestep the POST gate above: same owner-session rule.
+    if (!mayIssueCredentials(ctx.auth, req)) {
+      json(res, OWNER_SESSION_REQUIRED, 403)
+      return true
+    }
     const [name, provider] = inviteCreateMatch
     if (name !== MAIN_AGENT_ID && !existsSync(agentDir(name))) {
       json(res, { error: 'Agent not found' }, 404)
