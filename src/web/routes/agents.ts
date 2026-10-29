@@ -2070,6 +2070,15 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
 
   const chReqApproveMatch = path.match(/^\/api\/agents\/([^/]+)\/channel-requests\/(\d+)\/approve$/)
   if (chReqApproveMatch && method === 'POST') {
+    // DEVKEYFOLLOW1022 (card 1befbdb3, not in upstream #2175): approving a channel
+    // request writes the channel (and its allowed user) into access.json, i.e. it
+    // grants access: the owner's session once a dashboard login exists. The list
+    // above carries channel and user ids only, no credential, so it stays open, and
+    // so does /deny (it grants nothing).
+    if (!mayIssueCredentials(ctx.auth, req)) {
+      json(res, OWNER_SESSION_REQUIRED, 403)
+      return true
+    }
     const name = decodeURIComponent(chReqApproveMatch[1])
     const reqId = Number(chReqApproveMatch[2])
     if (name !== MAIN_AGENT_ID && !existsSync(agentDir(name))) { json(res, { error: 'Agent not found' }, 404); return true }

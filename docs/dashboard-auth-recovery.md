@@ -75,7 +75,8 @@ szerkesztésére (`PATCH`), a föderáció bekapcsolására, a társ bejövő to
 cseréjére és felfedésére, az ügynök-meghívó létrehozására és listázására
 (`POST` és `GET /api/agents/:name/channels/:provider/invites`), a függő
 párosítási kódok listájára és jóváhagyására
-(`GET .../pending`, `POST .../approve`) és a felhasználónevek
+(`GET .../pending`, `POST .../approve`), a Slack csatorna-kérés jóváhagyására
+(`POST /api/agents/:name/channel-requests/:id/approve`) és a felhasználónevek
 listájára (`GET /api/auth/users`): mind `owner_session_required` 403. Elfelejtett jelszónál
 a helyreállítás útja a fenti CLI: `npm run dashboard-user -- reset-password <felhasználó>`.
 
