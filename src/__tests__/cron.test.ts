@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { cronMatchesNow, cronDueBetween, computeNextRun, resolveCronTz } from '../web/cron.js'
+import { cronMatchesNow, cronDueBetween, computeNextRun, resolveCronTz, cronOccurrenceToFire } from '../web/cron.js'
 import { cronGapMs } from '../web/cron.js'
 import { skipIfBusyIsSafe, SKIP_IF_BUSY_MAX_GAP_MS } from '../web/schedule-runner.js'
 import { readFileSync } from 'node:fs'
@@ -293,5 +293,79 @@ describe('the cadence guard is wired into the drop decision, not just defined', 
     // for the guard there too, instead of leaving half the behaviour fixed.
     const hits = SRC.split('\n').filter((l) => l.includes('task.skipIfBusy') && l.includes('forceSend'))
     expect(hits.length).toBe(1)
+  })
+})
+
+// Card 093d6568. The clock change repeats (autumn) or skips (spring) 02:00-03:00 local, and
+// cron-parser answers prev() and next() differently there (measured with 5.5.0 in Europe/Belgrade):
+//   autumn 2026-10-25: a daily "7 2 * * *" has 00:07Z (02:07 CEST) AND 01:07Z (02:07 CET) -> it ran
+//     twice (dream-engine, same body hash);
+//   spring 2027-03-28: next() finds 01:07Z (03:07 CEST), prev() answers with the day before -> it
+//     would not run that day at all.
+// The simulation drives the same function the runner calls, with the runner's own bookkeeping
+// (lastRun = tick time after a fire), one tick a minute.
+describe('daily and hourly crons across a clock change (Europe/Belgrade)', () => {
+  const BG = 'Europe/Belgrade'
+  const TICK = 60_000
+  const fires = (cron: string, fromIso: string, toIso: string, lastRunIso = '2026-01-01T00:00:00Z') => {
+    let lastRun = ms(lastRunIso)
+    const out: string[] = []
+    for (let t = ms(fromIso); t < ms(toIso); t += TICK) {
+      const occ = cronOccurrenceToFire(cron, t, t + TICK, lastRun, BG)
+      if (occ != null) {
+        out.push(new Date(occ).toISOString())
+        lastRun = t + TICK
+      }
+    }
+    return out
+  }
+
+  it('autumn: a daily 02:07 runs ONCE, at the first 02:07', () => {
+    expect(fires('7 2 * * *', '2026-10-24T23:30:00Z', '2026-10-25T04:00:00Z')).toEqual(['2026-10-25T00:07:00.000Z'])
+  })
+
+  it('autumn: the first 02:07 missed (down) -> the second one runs as the catch-up, once', () => {
+    expect(fires('7 2 * * *', '2026-10-25T00:30:00Z', '2026-10-25T04:00:00Z', '2026-10-24T00:07:05Z')).toEqual([
+      '2026-10-25T01:07:00.000Z',
+    ])
+  })
+
+  it('autumn: a restart between the two 02:07s does not run it again (lastRun survives)', () => {
+    // The task ran 00:07:06Z; the process restarts and re-scans from 00:55Z.
+    expect(fires('7 2 * * *', '2026-10-25T00:55:00Z', '2026-10-25T03:00:00Z', '2026-10-25T00:07:06Z')).toEqual([])
+  })
+
+  it('CONTROL: an hourly "0 * * * *" runs in the repeated hour too (00:00Z, 01:00Z, 02:00Z)', () => {
+    expect(fires('0 * * * *', '2026-10-24T23:30:00Z', '2026-10-25T02:30:00Z')).toEqual([
+      '2026-10-25T00:00:00.000Z',
+      '2026-10-25T01:00:00.000Z',
+      '2026-10-25T02:00:00.000Z',
+    ])
+  })
+
+  it('CONTROL: a quarter-hourly "*/15 * * * *" loses nothing in the repeated hour', () => {
+    expect(fires('*/15 * * * *', '2026-10-25T00:10:00Z', '2026-10-25T02:10:00Z').length).toBe(8)
+  })
+
+  it('CONTROL: an ordinary day still runs the daily task once', () => {
+    expect(fires('7 2 * * *', '2026-10-26T00:00:00Z', '2026-10-26T04:00:00Z')).toEqual(['2026-10-26T01:07:00.000Z'])
+  })
+
+  it('spring: a daily 02:07 runs ONCE on the day the hour does not exist (at 03:07 CEST)', () => {
+    expect(fires('7 2 * * *', '2027-03-27T23:30:00Z', '2027-03-28T04:00:00Z')).toEqual(['2027-03-28T01:07:00.000Z'])
+  })
+
+  it('spring: the day after runs at the normal 02:07 CEST', () => {
+    expect(fires('7 2 * * *', '2027-03-28T23:30:00Z', '2027-03-29T04:00:00Z', '2027-03-28T01:07:05Z')).toEqual([
+      '2027-03-29T00:07:00.000Z',
+    ])
+  })
+})
+
+describe('the runner asks the clock-change-aware question (card 093d6568)', () => {
+  it('the due check goes through cronOccurrenceToFire, not through a bare prev-occurrence scan', () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'web', 'schedule-runner.ts'), 'utf8')
+    expect(src).toContain('cronOccurrenceToFire(task.schedule, fromMs, now,')
+    expect(src).not.toContain('cronPrevOccurrence(task.schedule')
   })
 })
