@@ -102,7 +102,9 @@ vi.mock('../config.js', async (orig) => ({
   PROJECT_ROOT: `${h.tmp}/root`,
 }))
 vi.mock('../logger.js', () => ({ logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } }))
-vi.mock('../web/agent-process.js', () => ({ capturePane: () => 'pane', isAgentRunning: () => true }))
+vi.mock('../web/agent-process.js', () => ({
+  capturePane: () => 'pane', isAgentRunning: () => true, saturationRefusesDispatch: () => false,
+}))
 vi.mock('../web/channel-mcp-reconnect.js', () => ({ resolveAgentSession: (a: string) => `agent-${a}` }))
 vi.mock('../web/agent-config.js', () => ({
   listAgentNames: () => ['x'],
@@ -112,7 +114,8 @@ vi.mock('../web/agent-config.js', () => ({
 }))
 vi.mock('../pane-state.js', () => ({
   detectPaneState: () => 'idle', busyEvidence: () => 'none',
-  detectsUsageLimitReached: () => false, runningBackgroundWork: () => h.footerWork,
+  detectsUsageLimitReached: () => false, detectsMidTurnApiError: () => false,
+  runningBackgroundWork: () => h.footerWork,
 }))
 vi.mock('../web/detached-work.js', async (orig) => ({
   ...(await orig<typeof import('../web/detached-work.js')>()),
