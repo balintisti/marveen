@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **459** kovetett fajl, ebbol
-**136** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **461** kovetett fajl, ebbol
+**138** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -266,6 +266,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - Why this exists  /  ---------------
 
+### `scripts/fg-exec.py`
+
+- WHY (measured 2026-10-28 19:17-19:24, marveen, mem 2773): the fleet's tmux server is CPU-throttled by
+
 ### `scripts/fleet-page-guard.sh`
 
 - MIERT LETEZIK. 2026-09-20-an megmertem, hogy mind a het agens LE VAN VALASZTVA
@@ -294,6 +298,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/heartbeat-metrics.sh`
 
 - Why a script and not a prescribed command, measured three times: the
+
+### `scripts/heavy-run-jest-cap.cjs`
+
+- WHY (measured 2026-10-29 08:20, marveen): jest 29 has no env var for maxWorkers; without --maxWorkers
 
 ### `scripts/heavy-run.py`
 
