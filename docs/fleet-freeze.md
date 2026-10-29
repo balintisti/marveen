@@ -9,7 +9,7 @@ Egy mozdulattal megállítja az egész flottát, ha valami elszabadult. Ilyen le
 
 **Ki nyomhatja meg:** bárki, akinek dashboard-hozzáférése van, egy ügynök is (önfék). Egy tévedésből megnyomott fék a gazdának egy percébe kerül.
 
-**Ki oldhatja fel:** csak a gazda, a dashboard-jelszóval bejelentkezve (böngészőben, a Bridge-ben is; egy eszközkulcs, például a Bridge párosító kulcsa, nem elég). A szabály a `mayLiftFleetFreeze` (routes/fleet-freeze.ts). FIGYELEM, ebben a telepítésben az upstream #2163 (felhasználó-létrehozás és eszközkulcs-kiadás csak a gazda munkamenetével) nincs átvéve, tehát a token még létrehozhat egy dashboard-felhasználót és azzal bejelentkezhet: a feloldás védelme annyit ér, amennyit ez az út. A közös tokennel nem lehet feloldani, így egy eltévedt vagy rávett ügynök nem oldhatja fel magát. Egyetlen kivétel van: amíg nincs dashboard-felhasználó (első telepítés), a token az egyetlen gazda-hitelesítés.
+**Ki oldhatja fel:** csak a gazda, a dashboard-jelszóval bejelentkezve (böngészőben, a Bridge-ben is; egy eszközkulcs, például a Bridge párosító kulcsa, nem elég). A szabály a `mayIssueCredentials` (routes/auth.ts, upstream #2163; ugyanez védi a felhasználó-létrehozást és az eszközkulcs-kiadást, így a token nem tud magának bejelentkezést csinálni). A közös tokennel nem lehet feloldani, így egy eltévedt vagy rávett ügynök nem oldhatja fel magát. Egyetlen kivétel van: amíg nincs dashboard-felhasználó (első telepítés), a token az egyetlen gazda-hitelesítés.
 
 ## Hol
 

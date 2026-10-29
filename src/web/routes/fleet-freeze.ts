@@ -7,8 +7,7 @@
 // Switching ON is open to every dashboard credential, an agent's token included:
 // an agent that sees something going wrong may pull the brake itself, and a
 // brake pulled by mistake costs a minute of the owner's time. Lifting it is the
-// owner's: mayLiftFleetFreeze below (upstream uses mayIssueCredentials, #2163,
-// which this tree does not have), so an agent that went astray, or text that
+// owner's: mayIssueCredentials (routes/auth.ts, #2163), so an agent that went astray, or text that
 // talked one into it, cannot unfreeze itself with the shared token. Before the
 // first dashboard login exists the token is the only owner credential there is,
 // and that predicate lets it through; the CLI-free way out is still deleting
@@ -24,10 +23,7 @@ import {
   type FleetFreezeMode, type FleetFreezeState,
 } from '../fleet-freeze.js'
 import { json, readBody } from '../http-helpers.js'
-import type http from 'node:http'
-import { countDashboardUsers } from '../../db.js'
-import { parseCookies, SESSION_COOKIE_NAME } from '../auth-gate.js'
-import { resolveSession } from '../auth-sessions.js'
+import { mayIssueCredentials } from './auth.js'
 import type { RouteContext } from './types.js'
 
 const BODY_MAX_BYTES = 4 * 1024
@@ -43,29 +39,11 @@ function actorOf(auth: RouteContext['auth']): string {
   return 'token'
 }
 
+// Not the shared one in auth.ts: its text points at `npm run dashboard-user`, and the
+// break-glass for the freeze is the file.
 export const OWNER_SESSION_REQUIRED = {
   error: 'This needs the dashboard login (an owner session). The access token can do it only before the first login exists; on the machine itself, delete store/fleet-freeze.json as the break-glass.',
   code: 'owner_session_required',
-}
-
-/**
- * Who may LIFT the freeze: the owner's dashboard session; the bearer token only
- * before the first login exists (then it is the one credential there is), or when
- * the same request also carries a live session cookie (a logged-in browser sends
- * both). A device key and a federation peer never lift it.
- *
- * PORT NOTE (card 1befbdb3): upstream reuses mayIssueCredentials (routes/auth.ts,
- * #2163 / DEVKEYMINT1022), which this tree does not have. This is the same
- * predicate, local to this route, with the same inputs (countDashboardUsers incl.
- * disabled, the session cookie). The credential-issuing routes themselves are NOT
- * guarded by #2163 here, see the card for what that leaves open.
- */
-export function mayLiftFleetFreeze(auth: RouteContext['auth'], req?: http.IncomingMessage): boolean {
-  if (auth?.kind === 'session') return true
-  if (auth?.kind !== 'token') return false
-  if (countDashboardUsers(true) === 0) return true
-  const cookie = req ? parseCookies(req.headers.cookie)[SESSION_COOKIE_NAME] : undefined
-  return !!cookie && resolveSession(cookie) !== null
 }
 
 /**
@@ -157,7 +135,7 @@ export async function tryHandleFleetFreeze(ctx: RouteContext): Promise<boolean> 
   }
 
   if (path === '/api/fleet/unfreeze' && method === 'POST') {
-    if (!mayLiftFleetFreeze(auth, req)) {
+    if (!mayIssueCredentials(auth, req)) {
       json(res, OWNER_SESSION_REQUIRED, 403)
       return true
     }

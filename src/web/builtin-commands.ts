@@ -826,7 +826,7 @@ export function registerBuiltinCommands(): void {
   // (freeze: tool calls denied, loops paused, sessions kept); it is a write, so the
   // owner-chat and inbound-evidence gates of dispatchForChat apply. Lifting it is
   // NOT a command: this path runs on the shared token, and the unfreeze takes the
-  // owner's login (POST /api/fleet/unfreeze, mayLiftFleetFreeze). /resume says so.
+  // owner's login (POST /api/fleet/unfreeze, mayIssueCredentials). /resume says so.
   registerCommand({
     name: 'stop', kind: 'write', usage: '/stop <indok>', description: 'piros gomb: a flotta fagyasztása (feloldás a dashboardon, bejelentkezve)',
     run: async (ctx, args) => {

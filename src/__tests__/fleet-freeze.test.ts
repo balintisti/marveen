@@ -1,6 +1,6 @@
 // KILLSWITCH1022: the fleet freeze ("piros gomb"). Switching it on is open to any
 // dashboard credential (an agent may pull the brake); lifting it takes the owner,
-// through mayLiftFleetFreeze (a local copy of upstream's mayIssueCredentials, #2163, which is not in this tree).
+// through mayIssueCredentials (routes/auth.ts, #2163).
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
 import type http from 'node:http'
 import { Readable } from 'node:stream'
@@ -98,7 +98,7 @@ describe('switching it on', () => {
   })
 })
 
-describe('lifting it: the owner only (mayLiftFleetFreeze)', () => {
+describe('lifting it: the owner only (mayIssueCredentials)', () => {
   it('once a login exists the token is refused, and the fleet stays frozen', async () => {
     expect((await addOwner()).status).toBe(201)
     await freeze(TOKEN)
