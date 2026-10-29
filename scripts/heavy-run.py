@@ -75,6 +75,13 @@ notifies you when a background task ends, and knows nothing about a detached one
    a retry; no card in the label -> only stderr and the runs.jsonl line. An unknown agent gets nothing.
    Limit, stated: this wakes the agent's MAIN pane; a sub-agent that waits on a detached run is woken by
    its main session, not by this.
+7. TEST-RUNNER WORKER CAP (card e96722e2; measured 2026-10-29 08:20: jest 29 has no env var for its worker
+   count and starts cores-1 = 11 workers, two heavy unit runs ~22 on 12 cores). The run's environment
+   gets VITEST_MAX_WORKERS (unless already set) and NODE_OPTIONS --require heavy-run-jest-cap.cjs, which
+   adds --maxWorkers in jest's own entry process, whatever shape started it (npx, npm test, bash -c).
+   Both are HEAVY_RUN_MAX_WORKERS (default 4; 0 = off). A command's own --maxWorkers, --runInBand or
+   --watch wins. Limit, stated: a script that REPLACES NODE_OPTIONS drops the jest cap (the Delta-CRM
+   frontend "test" script does, for vitest, which the env var still caps).
 The exit code is the command's (128+N if a signal ended it). Each run appends one JSON line to
 HEAVY_RUN_DIR/runs.jsonl: who, what, class (heavy|light|short), waited_s, ran_s, rc, and wake (what item 6
 did: sent / card / no-card / failed / not-detached / short / unknown-agent / dup).
@@ -442,6 +449,25 @@ def wake(me, rc, elapsed, detached):
     return "card" if card_comment(card.group(0), agent, text) else "failed"
 
 
+JEST_CAP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "heavy-run-jest-cap.cjs")
+
+
+def cap_workers(env):
+    """Test-runner worker cap for the run's tree (card e96722e2). Vitest reads VITEST_MAX_WORKERS; jest has
+    no env var, so heavy-run-jest-cap.cjs goes into NODE_OPTIONS and adds --maxWorkers in jest's entry
+    process. An explicit VITEST_MAX_WORKERS or a --maxWorkers on the command still wins.
+    HEAVY_RUN_MAX_WORKERS=0 switches both off."""
+    n = env.get("HEAVY_RUN_MAX_WORKERS") or "4"
+    if not n.isdigit() or int(n) == 0:
+        return env
+    env = {**env, "HEAVY_RUN_MAX_WORKERS": n}
+    env.setdefault("VITEST_MAX_WORKERS", n)
+    opts = env.get("NODE_OPTIONS", "")
+    if os.path.exists(JEST_CAP) and not any(c.isspace() for c in JEST_CAP) and JEST_CAP not in opts:
+        env["NODE_OPTIONS"] = f"{opts} --require {JEST_CAP}".strip()
+    return env
+
+
 def run(label, cmd, cls="heavy"):
     # A mistyped command fails before it queues for a slot, the way a shell says it, not as a traceback.
     if shutil.which(cmd[0]) is None:
@@ -460,7 +486,7 @@ def run(label, cmd, cls="heavy"):
               "running without a second slot", file=sys.stderr, flush=True)
         slot = None
     else:
-        env = {**os.environ, "HEAVY_RUN_HELD": f"{me['agent']}:{me['pid']}"}
+        env = cap_workers({**os.environ, "HEAVY_RUN_HELD": f"{me['agent']}:{me['pid']}"})
         ticket = take_ticket(me) if FIFO else None
         try:
             slot = try_slot_in_order(me, ticket) if ticket else try_slot(me)
@@ -1100,6 +1126,45 @@ def self_test():
     results.append(("a wake that raises: the run still logs its own rc and the error",
                     row.get("rc") == 3 and str(row.get("wake", "")).startswith("error: ")))
     srv.shutdown()
+
+    # 7. worker cap (card e96722e2): a fake jest entry that prints the argv jest would parse, and the env
+    fake = os.path.join(base, "nm", "node_modules")
+    os.makedirs(os.path.join(fake, "jest", "bin"))
+    os.makedirs(os.path.join(fake, ".bin"))
+    printer = "console.log(JSON.stringify({a: process.argv.slice(2), v: process.env.VITEST_MAX_WORKERS || ''}))\n"
+    entry = os.path.join(fake, "jest", "bin", "jest.js")
+    open(entry, "w").write("#!/usr/bin/env node\n" + printer)
+    os.chmod(entry, 0o755)
+    os.symlink("../jest/bin/jest.js", os.path.join(fake, ".bin", "jest"))
+    other = os.path.join(base, "nm", "other.js")
+    open(other, "w").write(printer)
+    node = shutil.which("node")
+
+    def seen(*cmd, extra=None):
+        r = subprocess.run([sys.executable, me, "--label", "cap", "--", *cmd], capture_output=True, text=True,
+                           timeout=60, env={**env, "HEAVY_AGENT": "cap", **(extra or {})})
+        try:
+            return json.loads(r.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            return {"a": None, "v": None, "err": r.stderr[-300:]}
+
+    if node:
+        plain = seen(node, entry, "src/x.spec.ts")
+        results.append(("jest entry gets --maxWorkers=4 and VITEST_MAX_WORKERS=4",
+                        plain["a"] == ["--maxWorkers=4", "src/x.spec.ts"] and plain["v"] == "4"))
+        results.append(("CONTROL: HEAVY_RUN_MAX_WORKERS=0 adds nothing",
+                        seen(node, entry, "src/x.spec.ts", extra={"HEAVY_RUN_MAX_WORKERS": "0"})["a"] == ["src/x.spec.ts"]))
+        results.append(("jest through the .bin symlink, under sh -c, is capped too",
+                        seen("sh", "-c", f'"{fake}/.bin/jest" a.spec.ts')["a"] == ["--maxWorkers=4", "a.spec.ts"]))
+        results.append(("--runInBand / --maxWorkers=2 / -w 3 on the command win",
+                        [seen(node, entry, *x)["a"] for x in (["--runInBand"], ["--maxWorkers=2"], ["-w", "3"])]
+                        == [["--runInBand"], ["--maxWorkers=2"], ["-w", "3"]]))
+        results.append(("a node script that is not jest is untouched",
+                        seen(node, other, "x")["a"] == ["x"]))
+        results.append(("an explicit VITEST_MAX_WORKERS is kept",
+                        seen(node, other, extra={"VITEST_MAX_WORKERS": "2"})["v"] == "2"))
+    else:
+        results.append(("worker cap: node not on PATH -- SKIPPED, not passed", False))
 
     shutil.rmtree(base, ignore_errors=True)
     for name, ok in results:
