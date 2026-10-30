@@ -8,6 +8,7 @@ import { resolveAgentSession } from './channel-mcp-reconnect.js'
 import { sendAlert } from './channel-monitor.js'
 import { busyEvidence, detectPaneState, detectsMidTurnApiError, runningBackgroundWork } from '../pane-state.js'
 import { usageLimitHolds } from '../usage-limit-window.js'
+import { endsOnClosingVerdict, openLeftovers, openVerdicts, type VerdictComment } from '../kanban-verdict.js'
 import { wakeRows } from '../message-wake.js'
 import { probeDetachedWork, readPaneCwds, type DetachedGroup } from './detached-work.js'
 import { getPendingMessages, getLastOutboundMessageAt, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
@@ -20,6 +21,7 @@ import {
   idleDigestLine,
   orphanPullList,
   deferredOrphanList,
+  notYetDeclinedBy,
   pullListWakes,
   laneFilteredPullList,
   topOfPullList,
@@ -334,6 +336,55 @@ export function lastRealCommentAtByCard(raw: Map<string, Map<string, number>>): 
   }
 }
 
+/**
+ * card id -> author, for every live testing card whose latest NON-census comment ends on a closing
+ * verdict (endsOnClosingVerdict, card 860db8cd). selectDeclaredWork reads it so a reviewer's
+ * "NINCS NYITOTT TETEL" does not count as a finding the assignee owes an answer to.
+ *
+ * The three newest comments per card come back, and the first one that is not a census comment
+ * (isCensusComment, the same exact token lastRealCommentAtByCard uses) decides. A card whose three
+ * newest are all census is left out, so it counts as before. A failed query -> undefined, which
+ * selectDeclaredWork reads as "not measured": a broken lookup must not silence a queue.
+ *
+ * The latest word is ONE reviewer's. didi's review (2026-10-30): code review says NYITOTT, the
+ * browser check then says NINCS NYITOTT, and the code finding is still open -- the closing gate
+ * reads verdicts per author and refuses, while the guard went silent. So a card is only left out
+ * when it has no open verdict and no open leftover at all, the same reading as db.ts's sweep.
+ * Only the cards that end on a closing verdict load their verdict comments (measured 2026-10-30:
+ * 450 testing cards, 1609 comments carrying a VERDIKT/MARADEK line, 3.0 MB).
+ */
+export function closingVerdictByCard(): Map<string, string> | undefined {
+  try {
+    const rows = getDb()
+      .prepare(
+        'SELECT card_id, author, content FROM (' +
+        'SELECT k.card_id, k.author, k.content, ROW_NUMBER() OVER (PARTITION BY k.card_id ORDER BY k.created_at DESC, k.id DESC) AS rn ' +
+        "FROM kanban_comments k JOIN kanban_cards c ON c.id = k.card_id WHERE c.status = 'testing' AND c.archived_at IS NULL" +
+        ') WHERE rn <= 3 ORDER BY card_id, rn',
+      )
+      .all() as { card_id: string; author: string; content: string | null }[]
+    // A superset of the lines openVerdicts/openLeftovers read (LIKE ignores ASCII case; `%` takes
+    // the accented MARADÉK), so the filter can only add comments, never drop a verdict.
+    const verdictComments = getDb().prepare(
+      'SELECT id, author, content, created_at FROM kanban_comments WHERE card_id = ? ' +
+      "AND (content LIKE '%VERDIKT:%' OR content LIKE '%MARAD%K:%')",
+    )
+    const decided = new Set<string>()
+    const map = new Map<string, string>()
+    for (const row of rows) {
+      if (decided.has(row.card_id) || isCensusComment(row.content ?? '')) continue
+      decided.add(row.card_id)
+      if (!endsOnClosingVerdict(row)) continue
+      const all = verdictComments.all(row.card_id) as VerdictComment[]
+      if (openVerdicts(all).length === 0 && openLeftovers(all).length === 0) map.set(row.card_id, row.author)
+    }
+    return map
+  } catch (err) {
+    logger.warn({ err }, 'idle guard: closing-verdict lookup failed; every reviewer word counts this tick')
+    return undefined
+  }
+}
+
 /** The agent's latest ACTION TRACE, epoch ms: the newer of its last outgoing inter-agent message
  *  (db.getLastOutboundMessageAt, the helper the session-stuck alert already uses) and its last card
  *  comment (the per-tick comment map, census comments excluded). null = none on record; undefined = the
@@ -442,6 +493,7 @@ export function tick(): void {
     const cards = listKanbanCards().map((c) => ({ ...c, labels: labelsByCard.get(c.id) ?? [] }))
     const comments = lastCommentAtByCard()
     const realComments = lastRealCommentAtByCard(comments)
+    const closingVerdicts = closingVerdictByCard()
     const now = Date.now()
 
     // Alerts are COLLECTED here and sent once at the end of the sweep. Sending inside
@@ -499,7 +551,7 @@ export function tick(): void {
       // last wake NAMED -- a count from a different list could suppress a wake for work
       // the agent was never shown.
       const ownItems = check
-        ? selectDeclaredWork(check, agent, cards, comments, MAIN_AGENT_ID, nowSec, reviewers, realComments)
+        ? selectDeclaredWork(check, agent, cards, comments, MAIN_AGENT_ID, nowSec, reviewers, realComments, closingVerdicts)
         : null
       const ownWorkCount = ownItems ? ownItems.length : null
       const standstill = standstillVerdict(check, now, pidAlive(check?.standstill?.pid))
@@ -538,9 +590,13 @@ export function tick(): void {
       // this is deliberately NOT computed for every agent. It is still WIDER than the
       // branch -- sustained-ness and the pending queue are decided later -- and that is
       // the honest description: a cheap over-approximation, not an exact match.
-      const pullPreview = running && paneRead.idle && ownWorkCount !== null && ownWorkCount <= 0
-        ? topOfPullList(laneFilteredPullList(orphanPullList(cards, now), readAgentProjects(agent)))
+      // Cards this agent already commented on are its "not my lane" answer (card 860db8cd): they
+      // leave the offer, and their count goes to the notice so its re-query still adds up.
+      const lanePool = running && paneRead.idle && ownWorkCount !== null && ownWorkCount <= 0
+        ? laneFilteredPullList(orphanPullList(cards, now), readAgentProjects(agent))
         : null
+      const pullPreview = lanePool ? topOfPullList(notYetDeclinedBy(lanePool, agent, comments)) : null
+      const declinedCount = lanePool && pullPreview ? lanePool.length - pullPreview.length : 0
 
       // Memory first, then the database: after a restart the Map is empty and the
       // row carries what this agent was doing before we deployed.
@@ -789,7 +845,7 @@ export function tick(): void {
           try {
             const lanes = readAgentProjects(agent)
             const parked = laneFilteredPullList(deferredOrphanList(cards, now), lanes).length
-            createAgentMessage('system', agent, withStandstillNote(buildPullNotice(agent, minutes, pull, Date.now(), lanes, parked), stillNote))
+            createAgentMessage('system', agent, withStandstillNote(buildPullNotice(agent, minutes, pull, Date.now(), lanes, parked, declinedCount), stillNote))
             logger.info(
               { idleGuard: true, agent, orphanCount: pull.length, top: pull[0]?.id },
               'idle guard: agent idle with nothing assigned -- named the ownerless pull-list',

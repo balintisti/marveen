@@ -1009,6 +1009,10 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
   /** Same shape as lastCommentAtByCard, but built WITHOUT census comments (isCensusComment).
    *  Absent = not measured, and then every comment counts, exactly as before. */
   lastRealCommentAtByCard?: Map<string, Map<string, number>>,
+  /** card id -> author of its latest non-census comment, ONLY where that comment ends on a
+   *  closing verdict (kanban-verdict.ts endsOnClosingVerdict; card 860db8cd). Absent = not
+   *  measured, and then a reviewer's last word counts as before. */
+  closingVerdictBy?: ReadonlyMap<string, string>,
 ): T[] {
   const live = cards.filter((c) => !c.archived_at)
   switch (check.kind) {
@@ -1143,6 +1147,12 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
         // "Someone else" was too wide: it swept in the coordinator, whose comment is
         // the opposite signal -- it usually means the card is settled, not open.
         if (latestAuthor === null || latestAuthor === agent) return false
+        // A REVIEWER WHO CLOSED is not waiting on the assignee (card 860db8cd). "NINCS NYITOTT
+        // TETEL" hands the card to whoever closes or ships it; the assignee has nothing to answer.
+        // Measured 2026-10-30: 102 of ford's ~111 woken items were exactly this, and the guard
+        // woke an empty ford twice in one night over them. The author must match: a closing
+        // verdict that is not the latest reviewer word decides nothing here.
+        if (closingVerdictBy?.get(c.id) === latestAuthor) return false
         // Role, not name -- but only once anybody has declared one. See `reviewers`.
         if (reviewers && reviewers.size > 0) return reviewers.has(latestAuthor)
         return latestAuthor !== coordinator
@@ -1210,7 +1220,7 @@ export function selectDeclaredWork<T extends WorkCountCard & { id: string }>(
       })
       const own = selectDeclaredWork(
         { ...check, kind: 'assigned_open_cards' }, agent, cards, lastCommentAtByCard, coordinator, now, reviewers,
-        lastRealCommentAtByCard,
+        lastRealCommentAtByCard, closingVerdictBy,
       )
       const inQueue = new Set(queue.map((c) => c.id))
       return [...queue, ...own.filter((c) => !inQueue.has(c.id))]
@@ -1616,6 +1626,23 @@ export function deferredOrphanList<T extends OwnerlessCandidate>(cards: T[], now
   return cards.filter((c) => isOwnerlessPlanned(c) && isDeferred(c.due_date, now))
 }
 
+/** The ownerless cards this agent has NOT commented on yet (card 860db8cd).
+ *
+ *  The pull notice tells the agent: if a card is not your lane, a one-line comment on it is
+ *  enough. Nothing read that comment, so the same card came back every round: zara declined
+ *  53521828 three times (48501, 48645, 48954), and measured 2026-10-30 05:40 jarvis, mandark and
+ *  zara had each already commented on ALL FOUR cards the guard was offering them. This is the
+ *  consumer: a comment by the agent on a card that is STILL ownerless means it looked and did not
+ *  take it. The exit stays open: the coordinator can still assign the card, and an assigned card
+ *  reaches the agent through its own queue, not this list. */
+export function notYetDeclinedBy<T extends { id: string }>(
+  cards: T[],
+  agent: string,
+  lastCommentAtByCard: Map<string, Map<string, number>>,
+): T[] {
+  return cards.filter((c) => !lastCommentAtByCard.get(c.id)?.has(agent))
+}
+
 /** Is this pull-list worth WAKING an agent for? (card da11b4a4, decision (d)) A wake costs the
  *  agent a whole turn, and a `low` card is by definition not worth one: measured 2026-09-05, all
  *  13 ownerless cards that woke agents were `low`, and computress alone was woken 26 times that
@@ -1744,6 +1771,10 @@ export function buildPullNotice(
    *  re-query reproduces their sum; without it the notice cannot say how far the re-query may
    *  legitimately exceed its count, and says so. */
   parked?: number,
+  /** How many ownerless cards in the same lanes this agent has already commented on and is
+   *  therefore NOT offered (`notYetDeclinedBy`, card 860db8cd). The re-query cannot see comments,
+   *  so they belong in the number it is compared against. */
+  declined = 0,
 ): string {
   const line = (c: { id: string; title?: string | null; priority?: string | null }) =>
     `  ${c.id.slice(0, 8)}  ${(c.priority ?? 'normal').padEnd(6)}  ${(c.title ?? '').slice(0, 60)}`
@@ -1761,6 +1792,9 @@ export function buildPullNotice(
           `de a tablan ${items.length + parked} GAZDATLAN \`planned\` kartya all, ebbol ${parked} jovobeli \`due_date\`-tel`,
           `padlozva, tehat ${items.length} felveheto most`,
         ]),
+    ...(declined > 0
+      ? [`(+ ${declined} gazdatlan kartya, amire mar kommentaltal: azokat nem ajanlom ujra)`]
+      : []),
     `(MERVE ${stampOf(nowMs)}-kor):`,
     '',
     ...items.slice(0, 5).map(line),
@@ -1801,7 +1835,7 @@ export function buildPullNotice(
           'Ha ez NAGYOBBAT ad, mint a fenti szam, a kulonbseg jovobeli `due_date`-tel padlozott kartya',
           'is lehet, amit az or szandekosan nem ajanl fel: ELAVULTNAK csak a padlo nelkuli tobbletet mondd.',
         ]
-      : [`Ha ez NAGYOBBAT ad, mint a fenti ${items.length + parked}, a lista ELAVULT -- nezd meg ujra.`]),
+      : [`Ha ez NAGYOBBAT ad, mint a fenti ${items.length + parked + declined}, a lista ELAVULT -- nezd meg ujra.`]),
     'Ha UGYANANNYIT vagy kevesebbet, az meg NEM az en dontesem megismetlese.',
     `${ASYMMETRY_NOTE} a munka-szamlalo \`testing\` al-szurojet, ami a felajanlas ELOFELTETELE volt.`,
   ].join('\n')
