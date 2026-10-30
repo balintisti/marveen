@@ -66,7 +66,7 @@ describe('a7ded8fb: the pull notice and its re-query count the same population',
   it('da11b4a4: does not tell the agent to re-route a card that is not in its lane', () => {
     const msg = buildPullNotice('friday', 12, pull, NOW, lanes, parked)
     expect(msg).not.toMatch(/sorold at egy soros indoklassal/)
-    expect(msg).toContain('NE sorold at senkire')
+    expect(msg).toContain('az atsorolas NEM a gyakorlat')
   })
 })
 

@@ -1802,11 +1802,11 @@ export function buildPullNotice(
     '',
     ...items.slice(0, 5).map(line),
     '',
-    'FOGLALD LE ELOSZOR, aztan merj: `assignee` + `in_progress`. Ket agens 19 masodperc',
+    'A foglalas (`assignee` + `in_progress`) a meres ELOTT jar: ket agens 19 masodperc',
     'kulonbseggel vette fel ugyanazt a kartyat azon a napon, amikor ez a szabaly szuletett.',
     // NOT "re-route it" (card da11b4a4, computress 12440): the decision was that these cards are
     // NOT routed, because on another agent's long list they never surface again.
-    'Ha egyik sem a te savod, NE sorold at senkire: egy masik agens hosszu listajan elsullyedne.',
+    'Ha egyik sem a te savod, az atsorolas NEM a gyakorlat: egy masik agens hosszu listajan elsullyedne.',
     'Egy soros komment a kartyan, hogy miert nem a tied, eleg.',
     '',
     // A COUNT DOES NOT DECAY FROM THE CLOCK -- IT DECAYS BECAUSE SOMEONE ELSE ACTED, which is
@@ -1818,7 +1818,7 @@ export function buildPullNotice(
     // one, because the stamp suggests the number is looked after. Stamping it and stopping would
     // make this class look repaired while leaving it exactly as wrong.
     `A fenti ${items.length} PILLANATFELVETEL, nem elo szam -- es nem az ora avultatja el, hanem`,
-    'egy MASIK AGENS, aki felvesz egyet. Ezert FOGLALJ ELOSZOR: ha a kartya mar nem gazdatlan, ez',
+    'egy MASIK AGENS, aki felvesz egyet. Ezert szamit a foglalas: ha a kartya mar nem gazdatlan, ez',
     'a lista tevedett, nem te. Ujrakerdezni (gazdatlan `planned` darabszam MOST):',
     `curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" http://localhost:3420/api/kanban \\`,
     `| python3 -c "import json,sys;print(sum(1 for c in json.load(sys.stdin)`
@@ -1836,9 +1836,9 @@ export function buildPullNotice(
     ...(parked === undefined
       ? [
           'Ha ez NAGYOBBAT ad, mint a fenti szam, a kulonbseg jovobeli `due_date`-tel padlozott kartya',
-          'is lehet, amit az or szandekosan nem ajanl fel: ELAVULTNAK csak a padlo nelkuli tobbletet mondd.',
+          'is lehet, amit az or szandekosan nem ajanl fel: ELAVULT csak a padlo nelkuli tobblet.',
         ]
-      : [`Ha ez NAGYOBBAT ad, mint a fenti ${items.length + parked + declined}, a lista ELAVULT -- nezd meg ujra.`]),
+      : [`Ha ez NAGYOBBAT ad, mint a fenti ${items.length + parked + declined}, a lista ELAVULT.`]),
     'Ha UGYANANNYIT vagy kevesebbet, az meg NEM az en dontesem megismetlese.',
     `${ASYMMETRY_NOTE} a munka-szamlalo \`testing\` al-szurojet, ami a felajanlas ELOFELTETELE volt.`,
   ].join('\n')
@@ -2023,12 +2023,19 @@ export function buildWakeMessage(
     'EZ NEM SZEMREHANYAS, ES NEM A TE HIBAD. Egy agens nem tud maganak uj fordulot inditani:',
     'a szandek a fordulo belsejeben el, es a fordulo vegen meghal vele. Az egyetlen dolog, ami',
     'uj fordulot indit, egy beerkezo uzenet -- ezert kapod ezt. Isti NEM lett ertesitve.',
+    // FACTS, NOT ORDERS (card c2246921, marveen 40484 decision A). This row arrives from `system`,
+    // which is not a known agent, so the router wraps it as <untrusted> and a fresh session is
+    // RIGHT to refuse an instruction inside it (jarvis 2026-09-28: the wake did not move him).
+    // A fact it can re-measure on the board still moves it (friday 41330). So the text states what
+    // is true and whose rule applies; the agent's own standing rule does the asking.
+    'Ez az uzenet TENYEKET allit (szamok, kartya-id-k), utasitast nem hordoz: mindet a tablarol',
+    'vissza tudod merni. Hogy mit kezdesz veluk, azt a SAJAT allando szabalyaid dontik el.',
     '',
   ]
   if (bounced.length) {
     out.push(
       `VISSZADOBOTT JAVITAS (${bounced.length}) -- a NEVEDEN allo kartya, amin egy ellenorzo NYITOTT TETEL verdiktet hagyott.`,
-      'ELOBB ezeket javitsd ki, MIELOTT uj kartyat veszel fel (Isti szabalya):',
+      'Isti szabalya (TG 8509): a visszadobott javitas MEGELOZI az uj kartya felvetelet.',
       ...bounced.slice(0, 5).map(line),
       ...(work.length || floor.length ? [''] : []),
     )
@@ -2061,7 +2068,7 @@ export function buildWakeMessage(
     )
   }
   if (!bounced.length && !work.length && !review.length && !floor.length) {
-    out.push('A szamlalod nem nulla, de tetelt nem tudtam megnevezni -- nezd meg a tablat.')
+    out.push('A szamlalod nem nulla, de tetelt nem tudtam megnevezni -- a tabla a forras.')
   }
   // THE STAMP ABOVE FIXES THE DURATION AND NOT THE COUNT, AND THE MESSAGE HAS TO SAY WHICH.
   // A duration decays from the CLOCK, so a stamp repairs it completely -- the reader subtracts.
@@ -2074,7 +2081,7 @@ export function buildWakeMessage(
     '',
     `A ${workCount} es a fenti lista PILLANATFELVETEL. Az ora-resze fent megbelyegezve; a SZAMOT`,
     'viszont nem az ora avultatja, hanem egy masik szereplo -- egy statuszvaltas vagy egy foglalas.',
-    'Ezert FOGLALJ ELOSZOR (`assignee` + `in_progress`), es csak azutan merj. Ujrakerdezni:',
+    'Ezert a meres a foglalas (`assignee` + `in_progress`) UTAN megbizhato, elotte nem. A tabla ujrakerdezese:',
     `curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" http://localhost:3420/api/kanban \\`,
     `| python3 -c "import json,sys;print([(c['id'][:8],c['status']) for c in json.load(sys.stdin)`
       + ` if c.get('assignee')=='${agent}' and c.get('status') not in ('done','waiting') and not c.get('archived_at')])"`,
@@ -2127,13 +2134,13 @@ export function buildWakeMessage(
   out.push(
     '',
     work.length
-      ? 'Vedd fel a legfelso FELVEHETO tetelt. Ha egyik sem a tied, ird meg egy sorban, hogy miert --'
+      ? 'A legfelso FELVEHETO tetel a lista elso sora. Ha egyik sem a tied, egy soros indoklas a helye --'
       // Only expired floors on the list: the fallback below would call them "valaszra varo
       // ellenorzes", which is the wrong action for the wrong column.
       : floor.length
-        ? 'Merd ujra a legfelso PADLO-LEJARAT kartya feltetelet. Ha egyik sem a tied, ird meg egy sorban --'
+        ? 'A legfelso PADLO-LEJARAT kartya feltetele ujramerendo. Ha egyik sem a tied, egy soros indoklas a helye --'
       : isReviewQueue
-        ? 'Nem tudtam megnevezni felveheto ellenorzest. Ha a szamlalod megsem nulla, ird meg egy sorban --'
+        ? 'Nem tudtam megnevezni felveheto ellenorzest. Ha a szamlalod megsem nulla, egy soros indoklas a helye --'
         : // SCOPED ON PURPOSE, and the old wording was not (card 5a499a19). `isMine` counts
           // only cards with this agent's name on them, so "nincs felveheto munkad" was a
           // statement about the ASSIGNED column read as a statement about the board.
@@ -2145,13 +2152,13 @@ export function buildWakeMessage(
           // must not say "no work" when it means "none assigned to you".
           'Nincs A TE NEVEDEN felveheto munka, csak valaszra varo ellenorzes. A GAZDATLAN `planned` kartyak\n' +
             'NEM szerepelnek ebben a szamban -- ha egyik ellenorzes sem a tied, azok a pull-listad. Ha meg azok\n' +
-            'sem, ird meg egy sorban --',
+            'sem, egy soros indoklas a helye --',
     // The old close said the workcheck.json "lies" and must be fixed (dexter, 2026-09-14,
     // card 0e36eab0 comment 15838). The only quiet value an agent can write there is
     // `none`, and `none` silences this guard -- the one thing that gives a parked agent a
     // new turn. So the old line steered a busy agent towards muting its own wake-up.
     // The declaration is usually RIGHT when this fires; the answer belongs on the card.
-    'a kartyara vagy marveennek. A workcheck.json-t ezert NE allitsd `none`-ra: az elnemitja ezt az ort,\n' +
+    'a kartya vagy marveen. A workcheck.json `none` erteke elnemitja ezt az ort,\n' +
       // The third state (card 6ecd85e5): the declaration is right AND the agent stands on purpose,
       // under the coordinator's standing instruction. Named, so it is not read as one of the two above.
       // Two lines, not three: the closing-line test reads the last three, which must keep the `none` warning.
