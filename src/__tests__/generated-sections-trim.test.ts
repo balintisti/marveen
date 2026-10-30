@@ -152,7 +152,7 @@ describe('evidence-rule, fleet-auth, message-close, mcp-list-channel: operative 
     const b = blocks['evidence-rule']
     for (const s of ['**Tény.**', '**Tipp.**', '**Nem tudom.**', 'fontosabb a gyorsaságnál',
       'Nem találsz ki magyarázatot', 'lejárt vagy leállt, amíg meg nem nézted', 'emlékezetből', 'RÁÉPÜL',
-      'a gazda ideje utoljára', 'mi épült rá', 'From fejléce', '`support@`, `info@`, `hello@` szokásból',
+      'a gazda ideje utoljára', 'ha van rá mód, nézd meg', 'Mindig előbb', 'mi épült rá', 'From fejléce', '`support@`, `info@`, `hello@` szokásból',
       '"ezt nem találom sehol"', 'a KÜLDÉST tiltja', 'A CÍMET nem ellenőrzi', 'ne olvasd védelemnek ott, ahol nincs']) {
       expect(b, s).toContain(s)
     }
