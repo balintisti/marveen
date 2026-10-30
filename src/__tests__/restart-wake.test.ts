@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url'
 vi.mock('../logger.js', () => ({ logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() } }))
 const sendSystemDirective = vi.fn(async (..._a: unknown[]): Promise<'sent'> => 'sent')
 vi.mock('../web/system-directive.js', () => ({ sendSystemDirective: (...a: unknown[]) => sendSystemDirective(...a) }))
+let fleetFrozen = false
+vi.mock('../web/fleet-freeze.js', () => ({ frozenSkip: (_label: string) => fleetFrozen }))
 
 import {
   RESTART_WAKE_DELAY_MS,
@@ -102,6 +104,32 @@ describe('scheduleRestartWake: one wake, after the boot grace, as the last resta
     await flush()
     expect(busy).toHaveBeenCalledTimes(1)
     expect(hasPendingRestartWake('devy')).toBe(false)
+  })
+
+  it('a frozen fleet gets no wake: the timer fires, sends nothing, and the wake is not retried after the unfreeze', async () => {
+    fleetFrozen = true
+    try {
+      scheduleRestartWake('devy', 'agent-devy', 'api-restart', { send })
+      vi.advanceTimersByTime(RESTART_WAKE_DELAY_MS)
+      await flush()
+      expect(send).not.toHaveBeenCalled()
+      expect(hasPendingRestartWake('devy')).toBe(false)
+      fleetFrozen = false
+      vi.advanceTimersByTime(RESTART_WAKE_DELAY_MS * 4)
+      await flush()
+      expect(send).not.toHaveBeenCalled()
+    } finally {
+      fleetFrozen = false
+    }
+  })
+
+  it('a freeze lifted before the timer fires changes nothing: the wake is sent once', async () => {
+    fleetFrozen = true
+    scheduleRestartWake('devy', 'agent-devy', 'api-restart', { send })
+    fleetFrozen = false
+    vi.advanceTimersByTime(RESTART_WAKE_DELAY_MS)
+    await flush()
+    expect(send).toHaveBeenCalledTimes(1)
   })
 
   it('a failing delivery is logged and does not escape as an unhandled rejection', async () => {

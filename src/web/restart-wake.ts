@@ -23,6 +23,7 @@
 // switch is there for an external script that restarts an agent and then types
 // its own instruction, so it does not get a second one ~25 s later.
 import { logger } from '../logger.js'
+import { frozenSkip } from './fleet-freeze.js'
 
 /** Grace for the restarted session's boot + SessionStart hooks, as the restart gate's WAKE_DELAY_MS. */
 export const RESTART_WAKE_DELAY_MS = 25_000
@@ -96,6 +97,13 @@ export function scheduleRestartWake(
   if (previous) clearTimeout(previous)
   const timer = setTimeout(() => {
     pending.delete(agent)
+    // The red button (KILLSWITCH1022) stops every background action on an agent: a wake owed
+    // before the freeze, or by a restart during it, must not type into a frozen pane. The wake is
+    // owed once per restart, so it is dropped here like any other non-sent outcome.
+    if (frozenSkip('restart-wake')) {
+      logger.info({ agent, reason }, 'restart-wake: not delivered (fleet frozen)')
+      return
+    }
     const send = deps.send ?? sendAsDirective
     send(agent, session, restartWakePrompt(reason)).then(
       (outcome) => {
