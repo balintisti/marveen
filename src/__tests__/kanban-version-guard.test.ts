@@ -250,6 +250,29 @@ describe('PUT /api/kanban/:id with the version it read', () => {
     expect(getKanbanCard('r1')).toMatchObject({ description: 'written by another process', assignee: null })
   })
 
+  // Route level (card 03d531bf, baabe0ba F5, didi): the route's own pre-check passes (the card is
+  // at version 0 when read), then another writer lands before the UPDATE, so updateKanbanCard
+  // answers 'stale'. The route must turn that into the same 409 as the pre-check -- without the
+  // mapping the race answers 200 ok, the edit form closes and the typed text is lost.
+  it('route: a write landing after the route pre-check answers 409 stale_version, not 200', async () => {
+    createKanbanCard({ id: 'r4', title: 'Card' })
+    raceOnNextClockRead('r4')
+    const r = await put('r4', { assignee: 'dex', expected_version: 0, actor: 'orin' })
+    vi.restoreAllMocks()
+    expect(r.status).toBe(409)
+    expect(r.body).toMatchObject({ conflict: 'stale_version', current_version: 1 })
+    expect(typeof r.body.error).toBe('string')
+    // nothing of ours was written; the other writer's change stands
+    expect(getKanbanCard('r4')).toMatchObject({ description: 'written by another process', assignee: null })
+  })
+
+  it('route control: the same request with no race is a 200 and moves the version once', async () => {
+    createKanbanCard({ id: 'r5', title: 'Card' })
+    const r = await put('r5', { assignee: 'dex', expected_version: 0, actor: 'orin' })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ ok: true, changed: true, version: 1 })
+  })
+
   it('race, without a version: still the unconditional write it always was', () => {
     createKanbanCard({ id: 'r2', title: 'Card' })
     raceOnNextClockRead('r2')
@@ -268,6 +291,35 @@ describe('PUT /api/kanban/:id with the version it read', () => {
   it('updateKanbanCard reports not-found for a missing card, with or without a version', () => {
     expect(updateKanbanCard('nope', { title: 'x' }).outcome).toBe('not-found')
     expect(updateKanbanCard('nope', { title: 'x' }, undefined, 0).outcome).toBe('not-found')
+  })
+})
+
+// mandark A (card 03d531bf, baabe0ba F5): a status move inside an open card modal changes a
+// versioned column. If /move does not hand the new version back, the modal's next whole-card PUT
+// carries the OLD one and is refused as stale against the user's own move.
+describe('POST /move answers the version the move produced', () => {
+  it('a real move returns the new version, and a PUT carrying it is accepted', async () => {
+    createKanbanCard({ id: 'm1', title: 'Card' })
+    const m = await move('m1', 'in_progress')
+    expect(m.status).toBe(200)
+    expect(m.body.version).toBe(1)
+    expect(m.body.version).toBe(getKanbanCard('m1')?.version)
+    expect((await put('m1', { assignee: 'dex', expected_version: m.body.version })).status).toBe(200)
+  })
+
+  it('control: the version from BEFORE the move is refused (the false 409 the client used to hit)', async () => {
+    createKanbanCard({ id: 'm2', title: 'Card' })
+    await move('m2', 'in_progress')
+    const r = await put('m2', { assignee: 'dex', expected_version: 0 })
+    expect(r.status).toBe(409)
+    expect(r.body.current_version).toBe(1)
+  })
+
+  it('a no-op move returns the current version too', async () => {
+    createKanbanCard({ id: 'm3', title: 'Card' })
+    await move('m3', 'waiting')
+    const again = await move('m3', 'waiting')
+    expect(again.body).toMatchObject({ ok: true, changed: false, version: 1 })
   })
 })
 

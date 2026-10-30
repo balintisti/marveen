@@ -47,7 +47,7 @@ describe('POST /api/kanban/<id>/move with expected_status', () => {
     createKanbanCard({ id: 'c-a', title: 'Matching', assignee: 'dex' })
     const r = await move('c-a', { status: 'in_progress', expected_status: 'planned', actor: 'dex' })
     expect(r.status).toBe(200)
-    expect(r.payload).toEqual({ ok: true, changed: true })
+    expect(r.payload).toEqual({ ok: true, changed: true, version: 1 })
     expect(getKanbanCard('c-a')?.status).toBe('in_progress')
     const events = getKanbanCardEvents('c-a').filter((e) => e.from_status !== null)
     expect(events).toHaveLength(1)
@@ -94,7 +94,7 @@ describe('POST /api/kanban/<id>/move with expected_status', () => {
     closeCard('c-c')
     const r = await move('c-c', { status: 'in_progress', sort_order: 0, actor: 'orin' })
     expect(r.status).toBe(200)
-    expect(r.payload).toEqual({ ok: true, changed: true })
+    expect(r.payload).toEqual({ ok: true, changed: true, version: 2 })
     expect(getKanbanCard('c-c')?.status).toBe('in_progress')
     // null counts as absent too
     const r2 = await move('c-c', { status: 'waiting', expected_status: null, actor: 'orin' })

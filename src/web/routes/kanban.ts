@@ -1289,12 +1289,21 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // lezarta oket) -- a valasz nem adott semmit, amin ez latszott volna.
     // A no-op itt sem ir semmit, tehat az `updated_at` sem emelkedik: egy kartya nem latszhat
     // frissen attol, hogy valaki ujrakuldte a mar fennallo allapotat.
-    if (outcome === 'unchanged') { json(res, { ok: true, changed: false, ...archivedNote(getKanbanCard(id)) }); return true }
+    // BOTH answers carry the card's `version` as it stands AFTER the move, read back from the row
+    // (card 03d531bf, baabe0ba F5): a move changes `status` / `sort_order`, which are versioned
+    // columns, and a client that stays on the card (the detail modal's status select) must send the
+    // new version with its next whole-card PUT, or its own move makes that PUT a false 409.
+    if (outcome === 'unchanged') {
+      const card = getKanbanCard(id)
+      json(res, { ok: true, changed: false, version: card?.version, ...archivedNote(card) })
+      return true
+    }
 
     // Wake the assigned agent once when the card enters in_progress -- unless
     // that agent is the one who moved it (self-pickup needs no wake-up).
     if (status === 'in_progress') fireKanbanDispatch(id, actor)
-    json(res, { ok: true, changed: true, ...archivedNote(getKanbanCard(id)) })
+    const moved = getKanbanCard(id)
+    json(res, { ok: true, changed: true, version: moved?.version, ...archivedNote(moved) })
     return true
   }
 
