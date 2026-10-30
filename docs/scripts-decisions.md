@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **462** kovetett fajl, ebbol
-**138** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **463** kovetett fajl, ebbol
+**139** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -353,6 +353,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/hooks/slack_progress_reply_clear.py`
 
 - Why: a single long turn can pull a bigger task forward and emit several
+
+### `scripts/hooks/subagent-context-gate.py`
+
+- WHY (card 66d4698a, Isti TG 8534, 2026-10-30; measurement sirius dbcbb210): of 290 sub-agent runs
 
 ### `scripts/hooks/telegram_fallback_send.py`
 
