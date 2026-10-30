@@ -3129,6 +3129,26 @@ export function getAgentCommentsSince(author: string, sinceSec: number, limit: n
   ).all(headChars, author, Math.floor(sinceSec), limit) as { card_id: string; created_at: number; head: string }[]).reverse()
 }
 
+/** Messages delivered TO an agent since `sinceSec` (card 6494ca96): the restart tail lists what arrived
+ *  after the HANDOFF was written -- a question or a review request the HANDOFF cannot know about.
+ *  Measured 2026-10-30 08:13: the coordinator rebuilt this by hand for didi (dexter's three review
+ *  requests). Left out: `pending` (the fresh session receives it anyway; listing it too would hand the
+ *  same request over twice), the `system` sender (idle-guard nudges and turn-error notes: measured
+ *  2026-10-30, 4 of friday's 10 messages in the 05:34-08:52 window, they would push agent requests out
+ *  of the cap) and `[CONTEXT-GUARD]` notices (they ARE a restart, ours or another agent's).
+  *  The NEWEST `limit`, returned oldest first, without the message text (the tail is read unframed). */
+// "Since" means received since: a row created before the cutoff but delivered after it (it waited
+// in the queue while the HANDOFF was written) is exactly what the fresh session has not seen.
+export function getAgentMessagesSince(agent: string, sinceSec: number, limit: number): { id: number; from_agent: string; created_at: number; status: string }[] {
+  const since = Math.floor(sinceSec)
+  return (db.prepare(
+    'SELECT id, from_agent, created_at, status FROM agent_messages ' +
+    "WHERE to_agent = ? AND (created_at >= ? OR delivered_at >= ?) AND status != 'pending' AND from_agent != 'system' " +
+    "AND content NOT LIKE '[CONTEXT-GUARD]%' " +
+    'ORDER BY created_at DESC, id DESC LIMIT ?',
+  ).all(agent, since, since, limit) as { id: number; from_agent: string; created_at: number; status: string }[]).reverse()
+}
+
 export function getKanbanComments(cardId: string): KanbanComment[] {
   return db.prepare('SELECT * FROM kanban_comments WHERE card_id = ? ORDER BY created_at ASC').all(cardId) as KanbanComment[]
 }

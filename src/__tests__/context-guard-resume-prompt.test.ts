@@ -22,7 +22,8 @@ vi.mock('../logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
 }))
 const getAgentCommentsSince = vi.fn()
-vi.mock('../db.js', () => ({ createAgentMessage: vi.fn(), getAgentCommentsSince }))
+const getAgentMessagesSince = vi.fn()
+vi.mock('../db.js', () => ({ createAgentMessage: vi.fn(), getAgentCommentsSince, getAgentMessagesSince }))
 vi.mock('../web/channel-monitor.js', () => ({
   hardRestartMarveenChannels: vi.fn(() => ({ ok: true })),
   lastMainRespawnAt: () => null,
@@ -136,7 +137,12 @@ describe('writeRestartTail writes, replaces and removes the tail file', () => {
   const TAIL = join(SANDBOX, 'HANDOFF-RESTART-TAIL.md')
   const inputs = { backgroundWork: 1, backgroundWorkDetail: 'heavy-run: gate-x', detachedWork: 0, detachedWorkDetail: '', killedWorkDetail: 'heavy-run: gate-x' } as never
   const NOW = Date.UTC(2026, 9, 18, 3, 57)
-  const reset = () => { for (const f of [HANDOFF, TAIL]) if (existsSync(f)) unlinkSync(f); getAgentCommentsSince.mockReset() }
+  const reset = () => {
+    for (const f of [HANDOFF, TAIL]) if (existsSync(f)) unlinkSync(f)
+    getAgentCommentsSince.mockReset()
+    getAgentMessagesSince.mockReset()
+    getAgentMessagesSince.mockReturnValue([])
+  }
 
   it('stale handoff: tail written with the pane step, killed work and comments since the handoff mtime', () => {
     reset()
@@ -181,6 +187,35 @@ describe('writeRestartTail writes, replaces and removes the tail file', () => {
     writeRestartTail('marveen', inputs, null, '⏺ x', NOW)
     expect(existsSync(TAIL)).toBe(false)
     expect(getAgentCommentsSince).not.toHaveBeenCalled()
+  })
+  // Card 6494ca96: a fresh handoff cannot know what arrived after it was written.
+  it('fresh handoff but messages since it: the tail is written and lists them', () => {
+    reset()
+    writeFileSync(HANDOFF, '# fresh')
+    getAgentCommentsSince.mockReturnValue([])
+    getAgentMessagesSince.mockReturnValue([{ id: 10003707, from_agent: 'dexter', created_at: Math.floor(NOW / 1000) - 120, status: 'delivered' }])
+    writeRestartTail('marveen', inputs, null, '⏺ x', NOW)
+    const t = readFileSync(TAIL, 'utf8')
+    expect(t).toContain('- 10003707 ')
+    expect(t).toMatch(/^- 10003707 \d\d:\d\d dexter \[delivered\]$/m)
+    expect(getAgentMessagesSince.mock.calls[0][0]).toBe('marveen')
+    expect(getAgentMessagesSince.mock.calls[0][1]).toBe(statSync(HANDOFF).mtimeMs / 1000)
+  })
+  it('fresh handoff and a failed message query: the old rule holds, an older tail is removed', () => {
+    reset()
+    writeFileSync(HANDOFF, '# fresh')
+    writeFileSync(TAIL, 'from an earlier restart')
+    getAgentMessagesSince.mockImplementation(() => { throw new Error('db gone') })
+    expect(() => writeRestartTail('marveen', inputs, null, '⏺ x', NOW)).not.toThrow()
+    expect(existsSync(TAIL)).toBe(false)
+  })
+  it('stale handoff and a failed message query: the tail says so instead of "none"', () => {
+    reset()
+    writeFileSync(HANDOFF, '# old')
+    getAgentCommentsSince.mockReturnValue([])
+    getAgentMessagesSince.mockImplementation(() => { throw new Error('db gone') })
+    writeRestartTail('marveen', inputs, 42, '⏺ x', NOW)
+    expect(readFileSync(TAIL, 'utf8')).toContain('Az uzeneteket NEM SIKERULT lekerdezni.')
   })
   it('no handoff: comments from the 6 h lookback; a failed query is named, and nothing throws', () => {
     reset()

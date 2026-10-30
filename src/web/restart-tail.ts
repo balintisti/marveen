@@ -17,6 +17,7 @@ export const RESTART_TAIL_FILE = 'HANDOFF-RESTART-TAIL.md'
 export const STEPS_MAX_CHARS = 1500
 export const COMMENT_HEAD_CHARS = 120
 export const COMMENTS_MAX = 30
+export const MESSAGES_MAX = 10
 /** Without a handoff there is no mtime to count from: look back this far for card comments. */
 export const NO_HANDOFF_LOOKBACK_MS = 6 * 3600_000
 
@@ -53,6 +54,9 @@ export function lastAssistantSteps(pane: string, maxChars: number = STEPS_MAX_CH
 }
 
 export interface TailComment { card_id: string; created_at: number; head: string }
+// No message text: the tail is read unframed, and a message body is not the agent's own writing
+// (didi 6494ca96, 13:35). The framed excerpt is on the SessionStart status page (card 3af2d815).
+export interface TailMessage { id: number; from_agent: string; created_at: number; status: string }
 
 export interface RestartTailInput {
   name: string
@@ -70,6 +74,8 @@ export interface RestartTailInput {
   pane: string | null
   /** null = the comment query failed (said out loud, never shown as "none"). */
   comments: TailComment[] | null
+  /** Messages received since the handoff (card 6494ca96); null = the query failed. */
+  messages: TailMessage[] | null
 }
 
 const day = (ms: number): string => new Date(ms).toLocaleDateString('sv-SE', { timeZone: 'Europe/Budapest' })
@@ -113,6 +119,15 @@ export function buildRestartTail(t: RestartTailInput): string {
   else {
     for (const c of t.comments) out.push(`- ${c.card_id.slice(0, 8)} ${hhmm(c.created_at * 1000)} ${c.head.replace(/\s+/g, ' ').trim()}`)
     if (t.comments.length >= COMMENTS_MAX) out.push(`(az utolso ${COMMENTS_MAX}; korabbi is lehet)`)
+  }
+  out.push('')
+  out.push(`## 4. A neked kezbesitett uzenetek ${hhmm(since)} ota` + (t.handoffMtimeMs === null ? ' (nincs HANDOFF: az utolso 6 ora)' : ' (a HANDOFF irasa ota)'))
+  if (t.messages === null) out.push('Az uzeneteket NEM SIKERULT lekerdezni.')
+  else if (t.messages.length === 0) out.push('Nincs ilyen uzenet.')
+  else {
+    out.push('(delivered = kezbesitve, meg nincs lezarva; done = lezarva; szoveg itt NINCS: keretezett kivonat a status-page-en, a teljes szoveg: GET /api/messages/<id>)')
+    for (const m of t.messages) out.push(`- ${m.id} ${hhmm(m.created_at * 1000)} ${m.from_agent} [${m.status}]`)
+    if (t.messages.length >= MESSAGES_MAX) out.push(`(az utolso ${MESSAGES_MAX}; korabbi is lehet)`)
   }
   out.push('')
   return out.join('\n')
