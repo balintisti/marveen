@@ -74,16 +74,67 @@ describe('submitOwnSlashCommand', () => {
     expect(p.events.filter((e) => e === 'enter')).toHaveLength(1 + IDENTITY_SUBMIT_MAX_EXTRA_ENTERS)
   })
 
-  it('never presses an extra Enter on FOREIGN parked text', async () => {
+  it('never presses an extra Enter on FOREIGN parked text that shows up after its own Enter', async () => {
     const events: string[] = []
+    let reads = 0
     const res = await submitOwnSlashCommand('/rename Dexter', {
       typeLiteral: () => events.push('type'),
       pressEnter: () => events.push('enter'),
-      readParked: () => 'someone else typed this',
+      readParked: () => (reads++ === 0 ? null : 'someone else typed this'),
       delay: async () => undefined,
     })
     expect(res).toBe('submitted')
     expect(events).toEqual(['type', 'enter'])
+  })
+
+  // Card c91a1989 (store/dashboard.log 2026-10-26): computress's directive 10001251 sat parked
+  // from 07:44:12; the /rename typed onto it at 07:44:24 and one Enter submitted both.
+  it('types NOTHING onto a box that already holds parked text', async () => {
+    const events: string[] = []
+    let cleared = 0
+    const res = await submitOwnSlashCommand('/rename Computress', {
+      typeLiteral: () => events.push('type'),
+      pressEnter: () => events.push('enter'),
+      readParked: () => '[SYSTEM-DIREKTIVA msg_id:10001251 -- vegrehajtas elott hitelesitsd',
+      delay: async () => undefined,
+      clearOwnLine: async () => { cleared++; return true },
+    })
+    expect(res).toBe('foreign-parked')
+    expect(events).toEqual([])
+    expect(cleared).toBe(0)
+  })
+
+  it('clears its OWN line when it would not submit, so no later writer pastes onto it', async () => {
+    const p = fakePane(Number.POSITIVE_INFINITY)
+    let cleared = 0
+    const res = await submitOwnSlashCommand('/rename Dexter', {
+      ...p.deps,
+      clearOwnLine: async () => { cleared++; p.events.push('clear'); return true },
+    })
+    expect(res).toBe('cleared-own')
+    expect(cleared).toBe(1)
+    expect(p.events.at(-1)).toBe('clear')
+    expect(p.events.filter((e) => e === 'enter')).toHaveLength(1 + IDENTITY_SUBMIT_MAX_EXTRA_ENTERS)
+  })
+
+  it('a refused or unverified clear stays still-parked (the caller logs it)', async () => {
+    const p = fakePane(Number.POSITIVE_INFINITY)
+    const res = await submitOwnSlashCommand('/rename Dexter', { ...p.deps, clearOwnLine: async () => false })
+    expect(res).toBe('still-parked')
+  })
+
+  it('never clears a line where foreign text joined its own command', async () => {
+    let cleared = 0
+    let reads = 0
+    const res = await submitOwnSlashCommand('/rename Dexter', {
+      typeLiteral: () => undefined,
+      pressEnter: () => undefined,
+      readParked: () => (reads++ === 0 ? null : '/rename Dexter[Uzenet @marveen-tol]: half a message'),
+      delay: async () => undefined,
+      clearOwnLine: async () => { cleared++; return true },
+    })
+    expect(res).toBe('still-parked')
+    expect(cleared).toBe(0)
   })
   // Card 9c182807 (trillian 2026-10-14 18:11:50): `tmux send-keys Enter` threw (SIGABRT), and the
   // throw skipped the re-read, so the command stayed parked. A throwing Enter is a missed Enter.

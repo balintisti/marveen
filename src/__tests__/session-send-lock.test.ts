@@ -170,4 +170,23 @@ describe('sendPromptToSession delivery-lock wiring', () => {
     expect(body).toMatch(/Identity \/rename deferred/)
     expect(body).toMatch(/Identity \/rename abandoned/)
   })
+
+  // Card c91a1989: a parked box (foreign text, or our own line cleared) is a retry, not a success,
+  // and the retry waits OUTSIDE the lane -- the lane is released in `finally` before the wait.
+  it('a parked box defers the identity /rename and releases the lane before waiting', () => {
+    const fn = AGENT_PROCESS.slice(AGENT_PROCESS.indexOf('export async function scheduleIdentitySetup'))
+    const body = fn.slice(0, fn.indexOf('\n}\n') + 3)
+    expect(body).toContain('clearOwnLine: () => clearInputBuffer(session, host)')
+    const foreign = body.indexOf("if (outcome === 'foreign-parked') {")
+    const own = body.indexOf("} else if (outcome === 'cleared-own') {")
+    expect(foreign).toBeGreaterThan(-1)
+    expect(body.slice(foreign, own)).toContain('retryParked = true')
+    expect(body.slice(own, body.indexOf("} else if (outcome === 'still-parked') {"))).toContain('retryParked = true')
+    const release = body.indexOf('releaseIdentityLane()', own)
+    const ret = body.indexOf('if (!retryParked) return', own)
+    const wait = body.indexOf('await delay(IDENTITY_PARKED_RETRY_MS)', own)
+    expect(release).toBeGreaterThan(own)
+    expect(ret).toBeGreaterThan(release)
+    expect(wait).toBeGreaterThan(ret)
+  })
 })
