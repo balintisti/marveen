@@ -11,6 +11,7 @@ import { tmpDirs } from './helpers/tmp-dirs.js'
 import {
   BACKGROUND_DEFER_MAX_MS,
   DEFAULT_CONTEXT_GUARD,
+  STALE_REFRESH_REASON_PREFIX,
   INITIAL_GUARD_STATE,
   REAL_WINDOW_HOLD_CEILING,
   decideGuard,
@@ -117,6 +118,23 @@ describe('the hard tier holds for background work while the real window has room
     expect(near.action).toBe('restart')
     expect(near.reason).toBe('handoff written -- KILLS running background work: 2 (2 in the pane (shells / monitors / sub-agents))')
   })
+
+  it('a held handoff written before more work gets the act tier\'s refresh request, not a stale ship (didi 49405 L2)', () => {
+    const asked = decideGuard(INITIAL_GUARD_STATE, inputs({ ...ROOM, ...BG }), CFG).nextState
+    const d = decideGuard(asked, inputs({ ...ROOM, ...BG, handoffMtime: NOW + MIN, idleMs: 0, nowMs: NOW + 7 * MIN }), CFG)
+    expect(d.action).toBe('request-handoff')
+    expect(d.reason).toBe(`${STALE_REFRESH_REASON_PREFIX}: handoff written but ~6m of work happened after it -- requesting refresh`)
+  })
+
+  it('only work in the pane holds it: detached work survives the restart (didi 49405 P1)', () => {
+    const allDetached = { ...BG, detachedWork: 2, detachedWorkDetail: '2 heavy-run' }
+    const d = decideGuard(INITIAL_GUARD_STATE, inputs({ ...ROOM, ...allDetached }), CFG)
+    expect(d.action).toBe('restart')
+    expect(d.reason).toContain('expected to SURVIVE the restart')
+    expect(d.reason).not.toContain('KILLS')
+    const oneInPane = decideGuard(INITIAL_GUARD_STATE, inputs({ ...ROOM, ...BG, detachedWork: 1 }), CFG)
+    expect(oneInPane.action).toBe('request-handoff')
+  })
 })
 
 describe('(3) negative controls: everywhere else the hard tier is unchanged', () => {
@@ -168,10 +186,22 @@ describe('the runner re-reads the cap pct against the model window, from the sam
     expect(realWindowPctOf('trillian', 0.98, 200_000)).toBeCloseTo(0.98, 5)
   })
 
+  it('the mapping: capped at or above hardPct re-read, below it and uncapped the measured pct (didi 49405 L1)', async () => {
+    const { hardTierRealWindowPct } = await import('../web/context-guard-runner.js')
+    const toReal = (p: number, l: number) => (p * l) / 1_000_000
+    const capped = { limitTokens: 200_000, hardPct: 0.97 }
+    const uncapped = { limitTokens: null, hardPct: 0.97 }
+    expect(hardTierRealWindowPct(0.96, capped, toReal)).toBeCloseTo(0.96, 5)
+    expect(hardTierRealWindowPct(0.97, capped, toReal)).toBeCloseTo(0.194, 5)
+    expect(hardTierRealWindowPct(0.98, capped, toReal)).toBeCloseTo(0.196, 5)
+    expect(hardTierRealWindowPct(0.98, uncapped, toReal)).toBeCloseTo(0.98, 5)
+    expect(hardTierRealWindowPct(null, capped, toReal)).toBeNull()
+  })
+
   it('checkAgent feeds it to the decision without a second transcript read', () => {
     const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'web', 'context-guard-runner.ts'), 'utf8')
     const body = src.slice(src.indexOf('async function checkAgent('), src.indexOf('export function getContextGuardStatus('))
-    expect(body).toMatch(/\? realWindowPctOf\(name, measuredPct, cfg\.limitTokens\)/)
+    expect(body).toMatch(/= hardTierRealWindowPct\(measuredPct, cfg, \(p, l\) => realWindowPctOf\(name, p, l\)\)/)
     expect(body).toMatch(/realWindowPct: cfg\.enabled \? realWindowPct : null,/)
     expect(body.match(/measurePct\(/g) ?? []).toHaveLength(1)
   })

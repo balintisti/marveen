@@ -650,7 +650,8 @@ export function handoffStaleMinutes(inputs: GuardInputs): HandoffStaleness {
  * (measured 2026-10-07 and 10-08 on this card: 4/4, then 6 restarts in ~70 minutes, each killing a
  * gate, a sequencer shell or sub-agents). The bound exists because a shell can run for hours (a
  * watcher loop, a stuck job), and a session that never restarts grows into the hard threshold,
- * where nothing waits. After it the restart happens as before, and says what it killed.
+ * where only in-pane work with room in the real window waits (REAL_WINDOW_HOLD_CEILING), under this
+ * same bound. After it the restart happens as before, and says what it killed.
  */
 export const BACKGROUND_DEFER_MAX_MS = 45 * 60_000
 
@@ -661,11 +662,15 @@ export const BACKGROUND_DEFER_MAX_MS = 45 * 60_000
  * is below this fraction of the REAL window, the hard tier takes the act tier's path instead (handoff
  * request, then the BACKGROUND_DEFER_MAX_MS hold). At or above it, or with no real-window reading
  * (a 200k-window model, `limitTokens` null), the hard tier restarts as before.
+ * Only work IN THE PANE holds it: detached work survives the restart (card 3c3d8e43), so holding the
+ * hard tier for it would only delay a restart that kills nothing (didi 49405 P1). The act tier still
+ * waits for detached work too; that is its own, older decision.
  */
 export const REAL_WINDOW_HOLD_CEILING = 0.5
 
 function hardTierHoldsForBackground(inputs: GuardInputs): boolean {
-  return (inputs.backgroundWork ?? 0) > 0 &&
+  const total = inputs.backgroundWork ?? 0
+  return total - Math.min(inputs.detachedWork ?? 0, total) > 0 &&
     typeof inputs.realWindowPct === 'number' && inputs.realWindowPct < REAL_WINDOW_HOLD_CEILING
 }
 
@@ -701,7 +706,8 @@ function killedNote(inputs: GuardInputs): string {
  *
  * The bound applies where the growth is real: an act-tier sequence from the hold's start; a
  * noPressure sequence (idle-flush, daily) only once its context reaches actPct, counted from
- * then. Below actPct its hold is unbounded: hardPct stays the backstop (marveen, didi 35937).
+ * then. Below actPct its hold is unbounded: hardPct stays the backstop (marveen, didi 35937),
+ * except where the hard tier itself holds (hardTierHoldsForBackground), and then under this bound.
  */
 function holdForBackground(
   state: GuardState,
@@ -922,7 +928,7 @@ export function decideGuard(
           typeof staleMin === 'number' &&
           refreshBudgetLeft &&
           nowMs < state.deadlineMs &&
-          !(inputs.pct !== null && inputs.pct >= cfg.hardPct)
+          !(inputs.pct !== null && inputs.pct >= cfg.hardPct && !hardTierHoldsForBackground(inputs))
         ) {
           // There is still budget before the deadline and the context is not
           // yet at the hard threshold: ask for a refresh instead of shipping

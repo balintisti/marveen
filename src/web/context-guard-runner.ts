@@ -415,6 +415,20 @@ export function realWindowPctOf(name: string, capPct: number, cfgLimit: number):
   return tokens / modelWindowTokens(name, tokens)
 }
 
+/** The decision's realWindowPct from the one measured reading (card b6225f23). With a limitTokens
+ *  cost cap, at or above hardPct, the cap pct is re-read against the model's window (`toReal`);
+ *  without a cap the measured pct already IS the real window's, and below hardPct nothing reads it.
+ *  Exported pure so the mapping is pinned by behaviour, not by its source text (didi 49405 L1). */
+export function hardTierRealWindowPct(
+  measuredPct: number | null,
+  cfg: { limitTokens: number | null; hardPct: number },
+  toReal: (capPct: number, cfgLimit: number) => number,
+): number | null {
+  return measuredPct !== null && cfg.limitTokens && measuredPct >= cfg.hardPct
+    ? toReal(measuredPct, cfg.limitTokens)
+    : measuredPct
+}
+
 /** The restart notice's loss line AND whether anything in it needs the coordinator (card a85a9acd).
  *  One measurement feeds both, so the line and the decision to wake on it cannot be read from
  *  different rows. `lossNeedsAction` is null when the window could not be measured: the notice
@@ -648,9 +662,7 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
   // The hard tier holds for background work while the REAL window has room (card b6225f23): with a
   // limitTokens cost cap, pct is measured against the cap, so re-read the same reading against the
   // model's window. Only at the hard threshold; without a cap pct already is that.
-  const realWindowPct = measuredPct !== null && cfg.limitTokens && measuredPct >= cfg.hardPct
-    ? realWindowPctOf(name, measuredPct, cfg.limitTokens)
-    : measuredPct
+  const realWindowPct = hardTierRealWindowPct(measuredPct, cfg, (p, l) => realWindowPctOf(name, p, l))
   const paneSaturatedTrusted = saturationBannerCredible(paneSaturatedRaw, bannerIsHardError, measuredPct)
   if (paneSaturatedRaw && !paneSaturatedTrusted) {
     noteSaturationBannerUntrusted(session, nowMs + SATURATION_OVERRIDE_TTL_MS)
