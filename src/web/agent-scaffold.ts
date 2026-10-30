@@ -2913,9 +2913,9 @@ Te egy önfejlesztő ágens vagy. A munkád során tanulsz, és újrafelhasznál
 - CSAPDA: a .claude-config/skills NEM a tiéd -- az a globális mappa symlinken át; saját skill a .claude/skills alá menjen
 
 ### Automatikus skill generálás
-Komplex feladatok után (5+ tool hívás, hiba utáni recovery, user korrekció, többlépéses workflow) automatikusan hozz létre SKILL.md fájlt:
+Komplex feladatok után (5+ tool hívás, hiba utáni recovery, user korrekció, többlépéses workflow) automatikusan hozz létre SKILL.md fájlt a SAJÁT munkakönyvtárad .claude/skills/ mappájában. A globális ~/.claude/skills/ fába írás flotta-szintű döntés (minden ágensnél megjelenik), nem alapértelmezés:
 
-mkdir -p ~/.claude/skills/SKILL-NEV
+mkdir -p .claude/skills/SKILL-NEV
 A SKILL.md tartalmazzon YAML frontmatter-t (name, description), majd szekciókat: Mikor használd, Eljárás, Buktatók, Ellenőrzés.
 
 ### Skill patch (runtime javítás)

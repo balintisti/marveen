@@ -27,4 +27,17 @@ describe('skill-generation examples write into the agent\'s own skills dir', () 
       expect(text).not.toMatch(GLOBAL_WRITE)
     })
   }
+
+  // generateClaudeMd (agent-scaffold.ts) is the OTHER seeding surface: POST /api/agents
+  // (routes/agents.ts) has the model write a new agent's CLAUDE.md from this prompt, and the
+  // prompt carried the global example after the templates were fixed (measured 2026-10-29).
+  it('generateClaudeMd prompt: the example creates the skill under ./.claude/skills, not the global tree', () => {
+    const src = readFileSync(join(ROOT, 'src', 'web', 'agent-scaffold.ts'), 'utf-8')
+    const start = src.indexOf('export async function generateClaudeMd')
+    expect(start).toBeGreaterThan(-1)
+    const end = src.indexOf('\nexport ', start + 1)
+    const body = src.slice(start, end === -1 ? undefined : end)
+    expect(body).toMatch(OWN_WRITE)
+    expect(body).not.toMatch(GLOBAL_WRITE)
+  })
 })
