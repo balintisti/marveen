@@ -6,7 +6,7 @@ import { getEffectiveSettingValue } from './settings-store.js'
 import { logger } from './logger.js'
 import { TOOL_TIMEOUTS } from './tool-timeouts.js'
 import { triggerLikeClause } from './homoglyph.js'
-import { openVerdicts, openLeftovers } from './kanban-verdict.js'
+import { openVerdicts, openLeftovers, hasDoneProof } from './kanban-verdict.js'
 import { UNWOKEN_EXPIRY_S, UNWOKEN_EXPIRED_RESULT } from './message-wake.js'
 
 let db: Database.Database
@@ -2941,61 +2941,67 @@ export function updateKanbanCard(
   // Bound twice as two anonymous parameters: a numbered `?N` would alias the N-th parameter of the
   // whole statement, not this clause.
   const guard = expectedVersion ?? null
-  const changed = db.prepare(
-    `UPDATE kanban_cards SET title=?, description=?, status=?, assignee=?, priority=?, project=?, parent_id=?, due_date=?, sort_order=?, updated_at=?, archived_at=?
-     WHERE id=? AND (? IS NULL OR version=?)`
-  ).run(f.title, f.description, f.status, f.assignee, f.priority, f.project, f.parent_id, f.due_date, f.sort_order, f.updated_at, f.archived_at, id, guard, guard).changes > 0
-  if (!changed) {
-    // Gone, or (only with a version) moved on between the read above and this write.
-    const current = getKanbanCard(id)
-    return current
-      ? { outcome: 'stale', overwritten: [], current_version: current.version }
-      : { outcome: 'not-found', overwritten: [] }
-  }
-
-  // THE HISTORY IS WRITTEN FROM `valtozott`, NOT FROM `overwritten` -- card 4e27d5ad.
-  // They answer different questions and the difference is a whole class of edits:
-  // `overwritten` deliberately SKIPS a field whose previous value was empty
-  // (documented above -- it cannot tell an intentional clearing from a field
-  // nobody had filled). For a WARNING that is right; for a HISTORY it would drop
-  // exactly the events worth keeping, e.g. an unowned card being claimed
-  // (assignee null -> "friday"). Measured on the live board 2026-09-05: 23 of the
-  // 1785 cards sit at assignee NULL right now, so this is the common case, not
-  // the corner.
-  if (changed) {
-    // Upstream (kanban-parent-activity): any real change to a subcard is activity
-    // on its thread, so the ancestor chain is stamped too.
-    touchAncestorChain(f.parent_id, now, id)
-    // Re-parenting is activity on BOTH threads: the old one lost a card, the new one gained it.
-    // Stamping only the new parent would leave the old one looking frozen -- the very bug this
-    // function is fixing, just rarer and therefore harder to notice.
-    if (card.parent_id && card.parent_id !== f.parent_id) touchAncestorChain(card.parent_id, now, id)
-
-    for (const key of valtozott) {
-      const prev = card[key] as string | number | null | undefined
-      const next = fields[key as keyof typeof fields] as string | number | null | undefined
-      if (key === 'status') {
-        // Status goes into the EXISTING table, in the shape moveKanbanCard already
-        // writes -- because a status change through PUT is the same event, and the
-        // /events endpoint claims to cover it. Measured 2026-09-05 before this fix:
-        // 7 live cards whose last recorded event disagrees with their current
-        // status (4 of them testing -> done), i.e. the endpoint under-reports its
-        // OWN subject. Control: 1263 cards where the two agree, so the measure can
-        // say "match".
-        db.prepare(
-          'INSERT INTO kanban_card_events (card_id, from_status, to_status, actor, created_at) VALUES (?, ?, ?, ?, ?)'
-        ).run(id, (prev ?? null) as string | null, String(next), actor ?? null, now)
-        continue
-      }
-      // `sort_order` is column position, not content: the board writes it on every
-      // drag, and a history of it answers no question anyone asks. Excluded on
-      // purpose, and named here so the omission is a decision rather than a gap.
-      if (key === 'sort_order') continue
-      db.prepare(
-        'INSERT INTO kanban_card_field_events (card_id, field, from_value, to_value, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-      ).run(id, key, prev === null || prev === undefined ? null : String(prev), next === null || next === undefined ? null : String(next), actor ?? null, now)
+  // One transaction (card c6c8f00e): the row, its history and the verified label land together.
+  const failed = db.transaction((): KanbanUpdateResult | null => {
+    const changed = db.prepare(
+      `UPDATE kanban_cards SET title=?, description=?, status=?, assignee=?, priority=?, project=?, parent_id=?, due_date=?, sort_order=?, updated_at=?, archived_at=?
+       WHERE id=? AND (? IS NULL OR version=?)`
+    ).run(f.title, f.description, f.status, f.assignee, f.priority, f.project, f.parent_id, f.due_date, f.sort_order, f.updated_at, f.archived_at, id, guard, guard).changes > 0
+    if (!changed) {
+      // Gone, or (only with a version) moved on between the read above and this write.
+      const current = getKanbanCard(id)
+      return current
+        ? { outcome: 'stale', overwritten: [], current_version: current.version }
+        : { outcome: 'not-found', overwritten: [] }
     }
-  }
+
+    // THE HISTORY IS WRITTEN FROM `valtozott`, NOT FROM `overwritten` -- card 4e27d5ad.
+    // They answer different questions and the difference is a whole class of edits:
+    // `overwritten` deliberately SKIPS a field whose previous value was empty
+    // (documented above -- it cannot tell an intentional clearing from a field
+    // nobody had filled). For a WARNING that is right; for a HISTORY it would drop
+    // exactly the events worth keeping, e.g. an unowned card being claimed
+    // (assignee null -> "friday"). Measured on the live board 2026-09-05: 23 of the
+    // 1785 cards sit at assignee NULL right now, so this is the common case, not
+    // the corner.
+    if (changed) {
+      // Upstream (kanban-parent-activity): any real change to a subcard is activity
+      // on its thread, so the ancestor chain is stamped too.
+      touchAncestorChain(f.parent_id, now, id)
+      // Re-parenting is activity on BOTH threads: the old one lost a card, the new one gained it.
+      // Stamping only the new parent would leave the old one looking frozen -- the very bug this
+      // function is fixing, just rarer and therefore harder to notice.
+      if (card.parent_id && card.parent_id !== f.parent_id) touchAncestorChain(card.parent_id, now, id)
+
+      for (const key of valtozott) {
+        const prev = card[key] as string | number | null | undefined
+        const next = fields[key as keyof typeof fields] as string | number | null | undefined
+        if (key === 'status') {
+          // Status goes into the EXISTING table, in the shape moveKanbanCard already
+          // writes -- because a status change through PUT is the same event, and the
+          // /events endpoint claims to cover it. Measured 2026-09-05 before this fix:
+          // 7 live cards whose last recorded event disagrees with their current
+          // status (4 of them testing -> done), i.e. the endpoint under-reports its
+          // OWN subject. Control: 1263 cards where the two agree, so the measure can
+          // say "match".
+          db.prepare(
+            'INSERT INTO kanban_card_events (card_id, from_status, to_status, actor, created_at) VALUES (?, ?, ?, ?, ?)'
+          ).run(id, (prev ?? null) as string | null, String(next), actor ?? null, now)
+          syncVerifiedLabel(id, prev as string | null | undefined, String(next))
+          continue
+        }
+        // `sort_order` is column position, not content: the board writes it on every
+        // drag, and a history of it answers no question anyone asks. Excluded on
+        // purpose, and named here so the omission is a decision rather than a gap.
+        if (key === 'sort_order') continue
+        db.prepare(
+          'INSERT INTO kanban_card_field_events (card_id, field, from_value, to_value, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+        ).run(id, key, prev === null || prev === undefined ? null : String(prev), next === null || next === undefined ? null : String(next), actor ?? null, now)
+      }
+    }
+    return null
+  })()
+  if (failed) return failed
 
   // Read back, not card.version + 1: the trigger may move it more than once in one write (the title
   // gate's own UPDATE re-fires it), and the caller chains its next write on the value actually stored.
@@ -3079,20 +3085,61 @@ export function moveKanbanCard(
   const setClause = status === 'in_progress'
     ? 'SET status=?, sort_order=?, updated_at=?'
     : 'SET status=?, sort_order=?, updated_at=?, dispatched_at=NULL'
-  const written = expected === undefined
-    ? db.prepare(`UPDATE kanban_cards ${setClause} WHERE id=?`).run(status, sortOrder, now, id)
-    : db.prepare(`UPDATE kanban_cards ${setClause} WHERE id=? AND status=?`).run(status, sortOrder, now, id, expected)
-  if (written.changes === 0) return expected === undefined ? 'not-found' : 'status-conflict'
-  // parent_id comes along in the same read: the ancestor chain has to be stamped too, and this
-  // path (drag / status change) is the most common subcard event there is -- an subcard moved to
-  // done (upstream, kanban-parent-activity).
-  touchAncestorChain(row.parent_id, now, id)
-  if (row.status !== status) {
+  // One transaction (card c6c8f00e): the status, its event and the verified label land together.
+  return db.transaction((): KanbanMoveOutcome => {
+    const written = expected === undefined
+      ? db.prepare(`UPDATE kanban_cards ${setClause} WHERE id=?`).run(status, sortOrder, now, id)
+      : db.prepare(`UPDATE kanban_cards ${setClause} WHERE id=? AND status=?`).run(status, sortOrder, now, id, expected)
+    if (written.changes === 0) return expected === undefined ? 'not-found' : 'status-conflict'
+    // parent_id comes along in the same read: the ancestor chain has to be stamped too, and this
+    // path (drag / status change) is the most common subcard event there is -- an subcard moved to
+    // done (upstream, kanban-parent-activity).
+    touchAncestorChain(row.parent_id, now, id)
+    if (row.status !== status) {
+      db.prepare(
+        'INSERT INTO kanban_card_events (card_id, from_status, to_status, actor, created_at) VALUES (?, ?, ?, ?, ?)'
+      ).run(id, row.status, status, actor ?? null, now)
+      syncVerifiedLabel(id, row.status, status)
+    }
+    return 'moved'
+  })()
+}
+
+/** THE VERIFIED LABEL FOLLOWS THE DONE PROOF -- card c6c8f00e (Isti, TG 8635).
+ *
+ *  The done gate demands the `KESZ-IGAZOLAS:` comment, but the IGAZOLT label that the archive
+ *  sweep keys on was a separate, manual step, and it was skipped: marveen's census 2026-10-30
+ *  found 44 done cards without the label since 10-07, 34 of them carrying the proof comment.
+ *  So the label is written here, with the status change, by every path that changes status
+ *  (moveKanbanCard, updateKanbanCard): a card entering done WITH a proof gets it, a card
+ *  leaving done loses it, because its proof was about a state it is no longer in.
+ *
+ *  The proof is read again here rather than trusted from the route: a status write that
+ *  bypassed the gate must not come out looking verified. The label is the one the sweep
+ *  reads (KANBAN_ARCHIVE_REQUIRE_LABEL, matched by name like the sweep); an empty setting
+ *  means the install opted out of label-gated archiving, and there is nothing to write. A
+ *  missing label is logged, not created: which labels exist is the board owner's choice.
+ */
+function syncVerifiedLabel(cardId: string, from: string | null | undefined, to: string): void {
+  if ((from === 'done') === (to === 'done')) return
+  const name = String(getEffectiveSettingValue('KANBAN_ARCHIVE_REQUIRE_LABEL')).trim()
+  if (!name) return
+  if (to !== 'done') {
     db.prepare(
-      'INSERT INTO kanban_card_events (card_id, from_status, to_status, actor, created_at) VALUES (?, ?, ?, ?, ?)'
-    ).run(id, row.status, status, actor ?? null, now)
+      `DELETE FROM kanban_card_labels WHERE card_id = ?
+         AND label_id IN (SELECT id FROM labels WHERE name = ? COLLATE NOCASE)`
+    ).run(cardId, name)
+    return
   }
-  return 'moved'
+  if (!hasDoneProof(getKanbanComments(cardId))) return
+  const label = db.prepare(
+    'SELECT id FROM labels WHERE name = ? COLLATE NOCASE ORDER BY created_at, id LIMIT 1'
+  ).get(name) as { id: string } | undefined
+  if (!label) {
+    logger.warn({ cardId, label: name }, 'Kanban done with proof, but the verified label does not exist; not labelled')
+    return
+  }
+  addLabelToCard(cardId, label.id)
 }
 
 // Stamp the once-only kanban -> agent dispatch guard. Returns false if the
