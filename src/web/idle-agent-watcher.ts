@@ -9,6 +9,7 @@ import { sendAlert } from './channel-monitor.js'
 import { busyEvidence, detectPaneState, detectsMidTurnApiError, runningBackgroundWork } from '../pane-state.js'
 import { usageLimitHolds } from '../usage-limit-window.js'
 import { wakeRows } from '../message-wake.js'
+import { probeDetachedWork, readPaneCwds, type DetachedGroup } from './detached-work.js'
 import { getPendingMessages, getLastOutboundMessageAt, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
 import {
   decideIdleAlert,
@@ -465,6 +466,24 @@ export function tick(): void {
     // did not, and the delivery then treats him as not running: the owner is the loud side.
     let coordinatorRunning: boolean | null = null
 
+    // Detached background work (card ad730515): probed at most once per tick, and only when some
+    // agent is idle with nothing on its footer -- the one case that consumes it.
+    let detached: Map<string, DetachedGroup[]> | null = null
+    const detachedFor = (who: string): DetachedGroup[] => {
+      if (!detached) {
+        const cwds = readPaneCwds()
+        const paneCwdByAgent = new Map<string, string>()
+        for (const a of agents) {
+          if (readAgentRemoteHost(a)) continue
+          const session = resolveAgentSession(a)
+          const path = session ? cwds.get(session) : undefined
+          if (path) paneCwdByAgent.set(a, path)
+        }
+        detached = probeDetachedWork(paneCwdByAgent)
+      }
+      return detached.get(who) ?? []
+    }
+
     for (const agent of agents) {
       const running = isAgentRunning(agent)
       if (agent === MAIN_AGENT_ID) coordinatorRunning = running
@@ -492,6 +511,20 @@ export function tick(): void {
       const paneRead = running
         ? readPane(agent)
         : { idle: false as boolean | null, staleCounterOnly: false }
+      const detachedGroups = running && paneRead.idle === true && (paneRead.runningSubagents ?? 0) === 0
+        ? detachedFor(agent)
+        : []
+      if (detachedGroups.length > 0) {
+        logger.info(
+          {
+            idleGuard: true, agent,
+            groups: detachedGroups.map((g) => ({ pgid: g.pgid, pcpu: g.pcpu, etime: g.root.etime, command: g.root.command.slice(0, 120) })),
+          },
+          'idle guard: detached background work counts as running work',
+        )
+      }
+      // The footer's count plus the detached groups: both go through the same hold and ghost guard.
+      const backgroundWork = running ? (paneRead.runningSubagents ?? 0) + detachedGroups.length : 0
 
       // ONE computation of the ownerless pull-list, used by BOTH the repeat-suppression
       // and the message that names it (card 88998fea). Two calls would be two chances to
@@ -551,9 +584,9 @@ export function tick(): void {
           staleCounterOnly: running ? paneRead.staleCounterOnly : false,
           paneUsageLimited: running ? paneRead.usageLimited === true : false,
           paneApiError: running ? paneRead.apiError === true : false,
-          runningSubagents: running ? paneRead.runningSubagents ?? 0 : 0,
-          // Read only when sub-agent rows are on screen: it is the one case that consumes it.
-          lastActionAtMs: running && (paneRead.runningSubagents ?? 0) > 0 ? lastActionAtMs(agent, realComments ?? comments) : undefined,
+          runningSubagents: backgroundWork,
+          // Read only when background work is seen: it is the one case that consumes it.
+          lastActionAtMs: backgroundWork > 0 ? lastActionAtMs(agent, realComments ?? comments) : undefined,
           pendingMessages: pending.length,
           oldestPendingAgeMs,
           ownWorkCount,
