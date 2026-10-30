@@ -96,4 +96,18 @@ describe('the wake names a bounced fix before any new card (1affb872)', () => {
     const msg = buildWakeMessage('dexter', 13, 2, items, NOW, 'assigned_open_cards', bouncedCardIds('dexter', items))
     expect(listed(msg)[0]).toBe('bnc11111')
   })
+  // didi 49379 I7: a bounced-only list named its items, yet the fallback line would also claim none.
+  it('bounced items only: they are named, and the "could not name an item" line is absent', () => {
+    const only = [card('bnc11111', 'testing'), card('bnc22222', 'in_progress')]
+    const msg = buildWakeMessage('dexter', 13, 2, only, NOW, 'assigned_open_cards', new Set(['bnc11111', 'bnc22222']))
+    expect(listed(msg)).toEqual(['bnc11111', 'bnc22222'])
+    expect(msg).not.toContain('tetelt nem tudtam megnevezni')
+  })
+  // didi 49379 I8: the bounced block is capped like the other blocks, the header keeps the full count.
+  it('six bounced cards: the header says 6, five are listed', () => {
+    const six = ['bnc11111', 'bnc22222', 'bnc33333', 'bnc44444', 'bnc55555', 'bnc66666'].map((id) => card(id, 'testing'))
+    const msg = buildWakeMessage('dexter', 13, 6, six, NOW, 'assigned_open_cards', new Set(six.map((c) => c.id)))
+    expect(msg).toContain('VISSZADOBOTT JAVITAS (6)')
+    expect(listed(msg)).toHaveLength(5)
+  })
 })
