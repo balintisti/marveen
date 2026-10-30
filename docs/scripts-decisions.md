@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **466** kovetett fajl, ebbol
-**141** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **469** kovetett fajl, ebbol
+**142** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -218,6 +218,12 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - MIERT GENERALT ES NEM KEZI LISTA: egy kezi lista ugyanugy elavul, mint minden mas szam
 - MIERT NINCS IDOBELYEG A GENERALT FAJLBAN, es ez SZANDEKOS elteres a skill-index.sh-tol:
 - MIERT NINCS A "lapon nevezik-e" OSZLOP A GENERALT FAJLBAN. A bemenete a repon KIVUL van
+
+### `scripts/delta-crm-feedback-poll.py`
+
+- WHY A PULL AND NOT A PUSH: the CRM runs on Cloud Run and cannot reach the localhost dashboard.
+- WHY A LAUNCHD JOB AND NOT AN AGENT TURN: a turn every 10 minutes spends tokens on a GET.
+- WHY THE CURSOR IS PER ITEM, NOT A GLOBAL WATERMARK: the endpoint returns rows with createdAt > since,
 
 ### `scripts/delta-crm-tester-inactivity.py`
 
