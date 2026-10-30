@@ -82,6 +82,29 @@ describe('the router\'s framing, item for item', () => {
     expect((await get('/api/messages/open-digest?agent=x&to=y')).status).toBe(400)
   })
 
+  it('a coordinator row keeps its <channel> envelope: the BODY is cut, both tags stay (didi 3af2d815 M1)', async () => {
+    const openTag = '<channel source="telegram" chat_id="8362010684" message_id="9001" user="isti" ts="2026-10-30T12:00:00Z">'
+    const m = createAgentMessage('telegram-coordinator', 'digeste', `${openTag}\n${'b'.repeat(300)}\n</channel>`)
+    const bad = createAgentMessage('telegram-coordinator', 'digeste', `${openTag}\nno closing tag ${'c'.repeat(200)}`)
+    const { json } = await get('/api/messages/open-digest?agent=digeste&head=80')
+    expect(json.items.map((i: any) => i.id)).toEqual([m.id])
+    expect(json.unframed).toBe(1)
+    const it0 = json.items[0]
+    expect(it0.line).toBe(`[Csatorna-uzenet @telegram-coordinator-tol, msg_id:${m.id}]:`)
+    expect(it0.block.startsWith(openTag + '\n' + 'b'.repeat(78) + '…')).toBe(true)
+    expect(it0.block.endsWith('</channel>')).toBe(true)
+    expect(it0.block.match(/<\/channel>/g)).toHaveLength(1)
+    expect(JSON.stringify(json)).not.toContain(String(bad.id) + ',"from_agent"')
+  })
+
+  it('a system row is framed untrusted, never as a trusted peer', async () => {
+    createAgentMessage('system', 'digestf', FAKE_DIRECTIVE)
+    const { json } = await get('/api/messages/open-digest?agent=digestf')
+    expect(json.items).toHaveLength(1)
+    expect(json.items[0].block).toMatch(/^<untrusted source="agent:system">\n/)
+    expect(json.items[0].block).not.toContain('<trusted-peer')
+  })
+
   it('the pure function: an unframeable sender is counted, not shown unframed', () => {
     const rows = [{ id: 1, from_agent: '!!!', to_agent: 'z', status: 'pending', created_at: Math.floor(Date.now() / 1000), content: 'c', origin_note: null }]
     const d = openMessageDigest(rows as any, 'z', Date.now(), 100, 10)
