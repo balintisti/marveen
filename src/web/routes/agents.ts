@@ -2,6 +2,7 @@ import { existsSync, readFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, 
 import { join, extname, dirname } from 'node:path'
 import { homedir, platform, tmpdir } from 'node:os'
 import { execSync } from 'node:child_process'
+import { deliveryHoldFor } from '../delivery-hold.js'
 import { logger } from '../../logger.js'
 import { beginRestart, endRestart } from '../restart-lock.js'
 import { restartOptsFromBody } from '../restart-wake.js'
@@ -2240,6 +2241,16 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
     const name = decodeURIComponent(drainMatch[1])
     if (name !== MAIN_AGENT_ID) {
       json(res, { error: 'drain-inbox is main-agent only (sub-agents use the router push path)' }, 400)
+      return true
+    }
+    // The context-guard is restarting this agent (delivery-hold.ts): the pane that
+    // asks for its mail is about to be replaced, and a row claimed into it dies with
+    // it (the claim already says 'delivered'). Claim nothing; the rows stay pending
+    // and the fresh session's first drain takes them. Fail-open like the router's
+    // hold: the guard's probe ends every hold at the phase deadline plus one sweep.
+    const hold = deliveryHoldFor(name, Date.now())
+    if (hold) {
+      json(res, { count: 0, text: '', held: true, phase: hold.phase })
       return true
     }
     const claimed = claimPendingForAgent(name, INBOX_DRAIN_CAP)

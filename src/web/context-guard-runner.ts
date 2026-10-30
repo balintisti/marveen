@@ -26,6 +26,7 @@ import { descendsFrom, liveHeavyRunJobs } from '../heavy-run-jobs.js'
 import { usageLimitHolds } from '../usage-limit-window.js'
 import { readContextTokensFromProjectDir, readActiveModelFromProjectDir, readTranscriptMtimeFromProjectDir, readLastTurnActivityMs, predatesSession } from './active-model.js'
 import { readContextGuardConfig } from './context-guard-store.js'
+import { setDeliveryHoldProbe, type DeliveryHold } from './delivery-hold.js'
 import { readAllContextGuardConfigs } from './context-guard-store.js'
 import { makeContextGuardConfigWarner } from './context-guard-config-warning.js'
 import { localMidnightMs } from '../auto-restart.js'
@@ -92,6 +93,16 @@ const SATURATION_OVERRIDE_TTL_MS = 3 * INTERVAL_MS
 // agent at 'idle', which is safe -- the worst case is a repeated handoff
 // request, and cooldown prevents restart loops within a run.
 const guardStates = new Map<string, GuardState>()
+
+// agent name -> when its resume prompt started being typed (ms). The sweep's
+// inject-resume has already moved the state to cooldown when it sends, so the
+// phase does not cover this stretch, and a message pasted now would land in front
+// of the resume. Cleared when the send returns (finally). The delivery hold on it
+// is bounded by RESUME_SEND_HOLD_MAX_MS, so a send that never returns cannot keep
+// the inbox shut. (Upstream bounds it by the persisted resume obligation; this
+// fork keeps no such record, so the bound runs from the start of the send.)
+const resumeSending = new Map<string, number>()
+const RESUME_SEND_HOLD_MAX_MS = INTERVAL_MS
 
 // agent name -> when the daily-handoff tier last fired (ms). Seeded on first
 // sight WITHOUT firing, so a slot that already passed before the dashboard
@@ -1024,6 +1035,8 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
         // measuring now would be meaningless (the old session is gone).
         // GUARDHITELES903: anchored like the handoff request -- the resume
         // prompt steers a fresh session's entire first turn.
+        resumeSending.set(name, Date.now())
+        try {
         await sendSystemDirective(
           name,
           session,
@@ -1037,6 +1050,9 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
             survivalReason: 'phase -> cooldown unconditionally on the decision; nothing re-issues the resume prompt',
           },
         )
+        } finally {
+          resumeSending.delete(name)
+        }
         break
       }
     }
@@ -1206,7 +1222,45 @@ export function makeGuardTicks(deps: GuardTickDeps): { sweep: () => Promise<void
   return { sweep, readyPoll }
 }
 
+// The hold end already reported as lapsed, per agent: one warn per hold, not one
+// per router tick. One entry per agent, so it cannot grow with time.
+const lapsedHoldLogged = new Map<string, number>()
+
+function lapsed(name: string, phase: string, untilMs: number, nowMs: number): null {
+  if (lapsedHoldLogged.get(name) !== untilMs) {
+    lapsedHoldLogged.set(name, untilMs)
+    logger.warn({ name, phase, overdueMs: nowMs - untilMs }, 'context-guard: delivery hold lapsed past the phase deadline -- delivering to this agent again (fail-open)')
+  }
+  return null
+}
+
+/**
+ * The message router's delivery hold for this agent (delivery-hold.ts): from the
+ * handoff request until the fresh session has its resume prompt.
+ *
+ * - A resume prompt being typed right now holds, whatever the phase (see
+ *   resumeSending), for at most RESUME_SEND_HOLD_MAX_MS from the start of the send.
+ * - await-handoff and await-ready hold until the phase deadline plus one sweep.
+ *   The end is fixed by the deadline, never by `now`: a phase can outlast its
+ *   deadline (a deferral keeps await-handoff past it), and a hold renewed from
+ *   `now` on every look would last exactly as long as that does. Past it the hold
+ *   lapses, with one warn, and the agent's rows flow again (fail-open).
+ */
+export function contextGuardDeliveryHold(name: string, nowMs: number): DeliveryHold | null {
+  const sendingSince = resumeSending.get(name)
+  if (sendingSince !== undefined) {
+    const untilMs = sendingSince + RESUME_SEND_HOLD_MAX_MS
+    return nowMs < untilMs ? { phase: 'resume-sending', untilMs } : lapsed(name, 'resume-sending', untilMs, nowMs)
+  }
+  const st = guardStates.get(name)
+  if (!st || (st.phase !== 'await-handoff' && st.phase !== 'await-ready')) return null
+  const untilMs = st.deadlineMs + INTERVAL_MS
+  return nowMs < untilMs ? { phase: st.phase, untilMs } : lapsed(name, st.phase, untilMs, nowMs)
+}
+
 export function startContextGuardRunner(): NodeJS.Timeout {
+  // Before anything can put an agent into a restart sequence.
+  setDeliveryHoldProbe(contextGuardDeliveryHold)
   const warnMissingConfig = makeContextGuardConfigWarner((msg) => logger.warn(msg))
   const { sweep, readyPoll } = makeGuardTicks({
     sweepNames: () => {
