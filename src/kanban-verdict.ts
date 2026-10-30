@@ -118,6 +118,29 @@ export function openVerdicts(comments: VerdictComment[]): OpenVerdict[] {
   return open
 }
 
+/** The token a reviewer closes with. Compared whole, like OPEN_TOKEN. */
+const CLOSED_TOKEN = 'NINCS NYITOTT TETEL'
+
+/**
+ * Does this ONE comment end on a closing verdict -- is its last column-0 `VERDIKT:` line
+ * `NINCS NYITOTT TETEL`? (card 860db8cd)
+ *
+ * The idle guard's question, not the close gate's: when a reviewer's comment is the last
+ * word on a testing card, does the assignee owe it an answer? A closing verdict says no --
+ * the card now waits on whoever closes or ships it. Measured 2026-10-30 05:30: ford had 146
+ * testing cards, the guard woke him over ~111 of them, and on 102 the reviewer's last comment
+ * said NINCS NYITOTT. Same column-0 and own-stamp rules as openVerdicts; a comment with no
+ * verdict line, or whose last one is anything else (NYITOTT, RESZLEGES), is not closing.
+ */
+export function endsOnClosingVerdict(comment: Pick<VerdictComment, 'author' | 'content'>): boolean {
+  let last: string | null = null
+  for (const raw of (comment.content ?? '').split(/\r?\n/)) {
+    const line = withoutOwnStamp(raw, comment.author)
+    if (line.startsWith(VERDICT_PREFIX)) last = line
+  }
+  return last !== null && verdictToken(last) === CLOSED_TOKEN
+}
+
 const LEFTOVER_PREFIX = 'MARADEK:'
 
 /**
