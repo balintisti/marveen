@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { decide, diagnose, renderBlock, replaceBlock, refusalLines } from '../../scripts/update-suite-baseline.mjs'
+import { decide, diagnose, renderBlock, replaceBlock, refusalLines, zoneStamp } from '../../scripts/update-suite-baseline.mjs'
 
 // AZ ALAPVONAL-FRISSITO TESZTJEI (kartya c0f10926).
 //
@@ -302,3 +302,21 @@ describe('a kaptura tulcsordulasa NEM gyujtesi hiba (2026-08-29, merve a torzson
   })
 })
 
+describe('zoneStamp -- a blokk idobelyegenek zonaneve a pillanathoz illik (kartya 9c4f0e1e)', () => {
+  it('teli pillanat: CET, a fali ora UTC+1', () => {
+    const s = zoneStamp(new Date('2026-10-30T16:05:00Z'))
+    expect(s.endsWith(' CET')).toBe(true)
+    expect(s).toContain('17:05')
+  })
+
+  it('nyari pillanat: CEST, a fali ora UTC+2', () => {
+    const s = zoneStamp(new Date('2026-07-30T16:05:00Z'))
+    expect(s.endsWith(' CEST')).toBe(true)
+    expect(s).toContain('18:05')
+  })
+
+  it('az oszi atallitas ket oldala: 00:59:59Z meg CEST, 01:00:00Z mar CET', () => {
+    expect(zoneStamp(new Date('2026-10-25T00:59:59Z')).endsWith(' CEST')).toBe(true)
+    expect(zoneStamp(new Date('2026-10-25T01:00:00Z')).endsWith(' CET')).toBe(true)
+  })
+})
