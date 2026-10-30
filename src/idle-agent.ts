@@ -154,6 +154,9 @@ export function standstillVerdict(check: WorkCheck | null, now: number, pidAlive
   return { state: 'active', standstill: s }
 }
 
+/** The standstill shape the guard's messages hand over (card 6ecd85e5); `<...>` is the one blank. */
+export const STANDSTILL_EXAMPLE = '`{"standstill":{"reason":"forbidden","until":"<ISO-8601 idozonaval>"}}`'
+
 /** The line every guard message carries while a standstill entry is stale or broken.
  *  Third person on purpose: the same line goes to the agent and to the coordinator. */
 export function standstillNote(agent: string, v: StandstillVerdict): string | null {
@@ -1889,9 +1892,15 @@ export function buildNoWorkNotice(agent: string, minutes: number, nowMs: number,
     // szokas, csak epp nem az a csatorna, amit ez az or nez: a dontese a `workcheck.json`-on
     // all. Egy uzenet, ami olyan valaszt ker, amit a kero fel sem tud olvasni, minden korben
     // ujra elmegy -- es par kor utan a cimzett atlepi.
-    'Amit tolem var: adj neki kartyat, vagy ha tenyleg nincs neki valo, allitsd a',
-    'workcheck.json-jat `{"kind":"none"}`-ra -- EZT olvasom, a kartyat nem. Kulonben a',
-    'kovetkezo korben ugyanezt fogom kuldeni.',
+    // AZ IDEIGLENES ALLAS NEM `none` (kartya 6ecd85e5, dexter merese: 159 felveheto tetel, a
+    // deklaracio `assigned_open_cards` es IGAZ, csak a koordinator idoablak-korlatja alatt allt).
+    // A `none` lejarat nelkul nemit, es a nagy kartyak a sajat nyilvantartasbol is kiesnenek; a
+    // lejaro `standstill` (kartya 00f7455b) pontosan erre az esetre van, es magatol megszunik.
+    'Amit tolem var: adj neki kartyat. Ha IDEIGLENESEN kell allnia (allo utasitas, idoablak), a',
+    'workcheck.json-jaba a meglevo kind MELLE egy LEJARO bejegyzest (max 7 nap):',
+    `${STANDSTILL_EXAMPLE} -- az until utan magatol megszunik.`,
+    '`{"kind":"none"}` CSAK tartosan sor nelkuli, ugyeletes agensnek: az LEJARAT NELKUL nemit.',
+    'EZT a fajlt olvasom, a kartyat nem. Kulonben a kovetkezo korben ugyanezt fogom kuldeni.',
     '',
     'MIELOTT BARMELYIKET TESZED, MERD UJRA -- egy sor, es a MAI allapotot adja:',
     `curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" http://localhost:3420/api/kanban \\`,
@@ -2143,7 +2152,11 @@ export function buildWakeMessage(
     // new turn. So the old line steered a busy agent towards muting its own wake-up.
     // The declaration is usually RIGHT when this fires; the answer belongs on the card.
     'a kartyara vagy marveennek. A workcheck.json-t ezert NE allitsd `none`-ra: az elnemitja ezt az ort,\n' +
-      'es vele az egyetlen ebresztesedet. Szandekos leallast a koordinator allit be, nem a tetlen-or uzenete.',
+      // The third state (card 6ecd85e5): the declaration is right AND the agent stands on purpose,
+      // under the coordinator's standing instruction. Named, so it is not read as one of the two above.
+      // Two lines, not three: the closing-line test reads the last three, which must keep the `none` warning.
+      'es vele az egyetlen ebresztesedet. Ha ALLO UTASITAS alatt vagy (a koordinator idoablak-korlatja), az a\n' +
+      `HARMADIK eset: a szandekos leallast a koordinator allitja be, lejaro bejegyzessel, ${STANDSTILL_EXAMPLE}.`,
   )
   return out.join('\n')
 }

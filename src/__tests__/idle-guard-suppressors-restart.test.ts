@@ -83,7 +83,9 @@ const digestLines = () => existsSync(digestPath())
   ? readFileSync(digestPath(), 'utf8').trim().split('\n').filter((l) => JSON.parse(l).agent === 'x')
   : []
 const liveNoticesToCoordinator = () =>
-  h.createAgentMessage.mock.calls.filter((c) => c[1] === MAIN_AGENT_ID && String(c[2]).includes('x'))
+  // The agent's quoted name, not the bare letter: any coordinator text with an "x" in it matched before
+  // (card 6ecd85e5's "max 7 nap" did).
+  h.createAgentMessage.mock.calls.filter((c) => c[1] === MAIN_AGENT_ID && String(c[2]).includes('"x"'))
 
 describe('e6045a1b: the first tick after a restart honours the stored suppressors', () => {
   beforeEach(() => {
