@@ -89,6 +89,12 @@ const dashboardOrigin = resolveDashboardOrigin(DASHBOARD_PUBLIC_URL, WEB_PORT, A
 // 200; this had been silently killing sub-agent memory saves and searches.
 const tokenPath = join(PROJECT_ROOT, 'store', '.dashboard-token')
 
+// Card 06874086: the generated sections are re-read on every turn of every agent, so they
+// carry the operative rule and its commands only. The measured incidents and the reasoning
+// that used to sit inline live in this repo file, verbatim, and each shortened section
+// points to it in one line. Absolute for the same reason as tokenPath.
+const generatedRationalePath = join(PROJECT_ROOT, 'rulebook', 'generalt-szakaszok-indoklas.md')
+
 // Hook commands run under `/bin/sh -c` with a NON-interactive PATH. On nvm
 // installs a bare `node` is not on that PATH, so the hook exits 127 -- which
 // Claude Code treats as a NON-blocking error and lets the tool call through:
@@ -2088,11 +2094,10 @@ function buildMcpListChannelBody(): string {
   return [
     '## `claude mcp list` egy csatornát birtokló ügynökben',
     '',
-    'Ha ez az ügynök csatornát birtokol, a saját sessionjében NE futtasd a `claude mcp list`-et:',
-    'mérve 2026-09-21-én, leállítja a csatorna-plugint (reply, react, edit_message elérhetetlen), közben',
-    '`Connected`-et ír és 0-val tér vissza, tehát a hibát semmi nem jelzi. A session',
-    'újraindítása visszahozza. Máshol hasznos diagnosztika. A BEJÖVŐ üzenetek sorsát nem mértük; részletek:',
-    '`docs/mcp-list-channel-plugin.md`.',
+    'Ha ez az ügynök csatornát birtokol, a saját sessionjében NE futtasd a `claude mcp list`-et: leállítja a',
+    'csatorna-plugint (reply, react, edit_message eltűnik), közben `Connected`-et ír és 0-val tér vissza',
+    '(mérve 2026-09-21). A session újraindítása visszahozza. Máshol hasznos diagnosztika.',
+    'A BEJÖVŐ üzenetek sorsát nem mértük: `docs/mcp-list-channel-plugin.md`.',
   ].join('\n')
 }
 
@@ -2179,42 +2184,26 @@ function buildAutonomyBody(name: string): string {
     GENERATED_INSERT_WARNING,
     '## Autonómia és jóváhagyás',
     '',
-    'Az autonóm műveletek fokozatait a store/autonomy-config.json szabályozza (level: 1=csak jelez, 2=javasol+jóváhagyás, 3=autonóm+jelent). Mielőtt önállóan cselekszel, nézd meg az adott kategória szintjét.',
+    'A kategória szintje (level) a store/autonomy-config.json-ban: önálló cselekvés előtt nézd meg.',
     '',
-    '**Level 1 (csak jelez)**: küldj inter-agent értesítést a főágensnek, de NE végezd el a műveletet. Ezután ÁLLJ MEG.',
+    '**Level 1 (csak jelez)**: értesítsd a főágenst, a műveletet NE végezd el, és ÁLLJ MEG.',
     '```bash',
-    `curl -s -X POST ${dashboardOrigin}/api/messages \\`,
-    '  -H "Content-Type: application/json" \\',
-    `  -H "Authorization: Bearer $(cat ${tokenPath})" \\`,
-    `  --data-binary @- <<'JSON'`,
+    `curl -s -X POST ${dashboardOrigin}/api/messages -H "Content-Type: application/json" \\`,
+    `  -H "Authorization: Bearer $(cat ${tokenPath})" --data-binary @- <<'JSON'`,
     `{"from":"${name}","to":"${MAIN_AGENT_ID}","content":"[FELHÍVÁS] CATEGORY_KEY: MIT akartam elvégezni, de level 1 miatt csak jelzek."}`,
     'JSON',
     '```',
-    'FIGYELEM, a `-d "{...}"` DUPLA idézőjeles alak TILOS **MINDEN API-payloadnál** -- inter-agent',
-    'üzenet, memória-mentés és -PATCH, napi napló, eset-jegyzet, kanban egyaránt: a shell a backtickot',
-    'és a `$(...)`-t végrehajtja a payloadon belül, a szöveg helyére a parancs KIMENETE kerül, és a',
-    'küldés HTTP 200-at ad -- semmi nem jelzi. Idézett heredoc (fent) vagy `--data-binary @fájl`.',
-    'A header `$(cat ...)`-ja szándékosan interpolál, az maradhat.',
-    'A védelem az IDÉZETT határoló, nem maga a heredoc: a `<<JSON` alak ugyanúgy behelyettesít,',
-    "mint a dupla idézőjel, csak a `<<'JSON'` nem. És mivel az idézettben semmit nem lehet",
-    'behelyettesíteni, ha a payloadba EGY változó is kell, ne a shell állítsa össze: `python3` +',
-    '`json.dumps` (vagy `jq`) írja fájlba, és `curl --data-binary @fájl` küldje.',
-    'Nem az üzenet-típus számít, hanem hogy a szöveg BACKTICKET vagy `$(...)`-t tartalmaz-e: egy',
-    '`python3 -c "..."` dupla idézőjeles parancsban a backtickkel körbevett mezőnevek parancsként futnak le',
-    '("command not found"), és némán kiesnek a mentett szövegből, miközben a mentés HTTP 200-at ad.',
-    'Ezért csak az ÍRÁS UTÁNI VISSZAOLVASÁS fogja meg.',
-    '',
-    '**Level 2 (jóváhagyás szükséges)**: kérj jóváhagyást az API-n MIELŐTT cselekszel.',
-    '',
-    'Jóváhagyás kérése (POST):',
+    '**Level 2 (jóváhagyás szükséges)**: MIELŐTT cselekszel, POST, majd a kapott id-vel GET 60 mp-enként:',
     `curl -s -X POST ${dashboardOrigin}/api/approvals -H "Content-Type: application/json" -H "Authorization: Bearer $(cat ${tokenPath})" -d '{"agent_id":"${name}","category":"CATEGORY_KEY","action_description":"Mit tervezel elvégezni és miért","timeout_seconds":3600}'`,
-    'A válaszban kapott id-vel kérdezheted le a döntést.',
-    '',
-    'Döntés lekérdezése (GET, 60 mp-enként ismételve):',
     `curl -s -H "Authorization: Bearer $(cat ${tokenPath})" "${dashboardOrigin}/api/approvals/<id>"`,
-    'status=approved -> végezd el a műveletet. status=rejected vagy status=timeout -> ne csináld, naplózd az okot.',
+    'status=approved -> végezd el. status=rejected vagy status=timeout -> ne csináld, naplózd az okot.',
     '',
-    '**Level 3 (autonóm)**: elvégzed a műveletet, majd utána jelented a főágensnek.',
+    '**Level 3 (autonóm)**: elvégzed, majd utána jelented a főágensnek.',
+    '',
+    'PAYLOAD, minden API-hívásnál: a `-d "{...}"` dupla idézőjeles alak TILOS (a backtick és a `$(...)` lefut,',
+    "a küldés mégis 200; ugyanígy `python3 -c \"...\"`). IDÉZETT határoló (`<<'JSON'`; a `<<JSON` is behelyettesít)",
+    'vagy `--data-binary @fájl`; változóhoz `python3` + `json.dumps` (vagy `jq`) írja fájlba. A header `$(cat ...)`-ja',
+    `maradhat. Csak az írás utáni VISSZAOLVASÁS fogja meg. Indoklás: \`${generatedRationalePath}\`.`,
   ].join('\n')
 }
 
@@ -2255,34 +2244,26 @@ export function buildEvidenceBody(isMainAgent = false): string {
   // check that does not run is the exact failure this whole section is written against.
   const gateParagraphs: string[] = isMainAgent
     ? [
-        'Kimenő levélnél a CÍMET ezen a telepítésen semmilyen gépi kapu nem ellenőrzi (címzett-ledger nincs): ez szabály, nem gép, ne olvasd védelemnek ott, ahol nincs.',
+        'Kimenő levélnél a CÍMET ezen a telepítésen semmilyen gépi kapu nem ellenőrzi (címzett-ledger nincs): ne olvasd védelemnek ott, ahol nincs.',
       ]
     : [
-        'Kimenő levélnél a gépi kapu a KÜLDÉST tiltja (csak piszkozat, a levél a fő ügynökön át megy). A CÍMET nem ellenőrzi, címzett-ledger nincs: ez szabály, nem gép, ne olvasd védelemnek ott, ahol nincs.',
+        'Kimenő levélnél a gépi kapu a KÜLDÉST tiltja (csak piszkozat, a fő ügynökön át). A CÍMET nem ellenőrzi (címzett-ledger nincs): ne olvasd védelemnek ott, ahol nincs.',
       ]
   return [
     '## Tények és találgatás',
     '',
-    'Ez a legfontosabb szabályod, fontosabb a gyorsaságnál. Minden állításodról derüljön ki, melyik:',
-    '1. **Tény.** Ellenőrizted; fél mondatban mondd meg, honnan tudod.',
-    '2. **Tipp.** Jelöld annak, ugyanabban a mondatban.',
-    '3. **Nem tudom.** Teljes értékű válasz; ha van rá mód, nézd meg.',
-    '',
-    '- Nem találsz ki magyarázatot egy hibára, amit nem néztél meg.',
-    '- Nem mondod, hogy valami lehetetlen, nem elérhető, lejárt vagy leállt, amíg meg nem nézted.',
-    '- Dátumot, időtartamot vagy számot nem becsülsz emlékezetből.',
-    '- Ha terv, levél vagy külső kérés RÁÉPÜL egy állításra, előtte ellenőrizd.',
-    '',
-    'Előbb a saját forrásainkban ellenőrizz (fájl, config, API, git), a gazda ideje utoljára. Ha',
-    'tévedtél: javítsd röviden, és mondd meg, mi épült rá közben.',
+    'Ez a legfontosabb szabályod, fontosabb a gyorsaságnál. Minden állításod: **Tény.** (ellenőrizted;',
+    'mondd meg, honnan), **Tipp.** (ugyanabban a mondatban jelölve) vagy **Nem tudom.** (teljes értékű válasz;',
+    'ha van rá mód, nézd meg). Nem találsz ki magyarázatot egy hibára, amit nem néztél meg; nem mondod, hogy',
+    'valami lehetetlen, nem elérhető, lejárt vagy leállt, amíg meg nem nézted; dátumot, időtartamot, számot nem',
+    'becsülsz emlékezetből. Ha terv, levél vagy külső kérés RÁÉPÜL egy állításra, előtte ellenőrizz. Mindig előbb',
+    'a saját forrásainkban (fájl, config, API, git), a gazda ideje utoljára. Ha tévedtél: javítsd, és mondd meg, mi épült rá.',
     '',
     '### A konkrétum mindig forrásból jön',
     '',
-    'Email cím, telefonszám, URL, ügyszám, azonosító, számlaszám, verzió, ár: vagy megvan a forrása,',
-    'vagy nincs meg az adat. Email cím: a tőlük kapott levél From fejléce vagy az élő oldaluk, SOHA nem a',
-    '`support@`, `info@`, `hello@` szokásból, és nem névből összerakva. Ha nincs forrás, a válasz:',
-    '"ezt nem találom sehol".',
-    '',
+    'Email cím, telefonszám, URL, ügyszám, azonosító, számlaszám, verzió, ár: forrásból, vagy a válasz:',
+    '"ezt nem találom sehol". Email cím: a levelük From fejléce vagy az élő oldaluk, SOHA nem a',
+    '`support@`, `info@`, `hello@` szokásból vagy névből összerakva.',
     ...gateParagraphs,
   ].join('\n')
 }
@@ -2372,14 +2353,13 @@ export function buildMessageCloseBody(): string {
   return [
     '## Üzenet lezárása: bejövő riportnál `notify:false`',
     '',
-    'A `PUT /api/messages/<id>` lezárás alapból `[Eredmény]` nyugtát küld a feladónak.',
-    '- DELEGÁLT FELADAT (a feladó az eredményre vár): zárd a szokásos módon, a `result` mezőben az eredménnyel.',
-    '- BEJÖVŐ RIPORT vagy ÉRTESÍTÉS: zárd `"notify":false`-szal, mert ott a nyugta csak a feladó sorát növeli.',
+    'A `PUT /api/messages/<id>` alapból `[Eredmény]` nyugtát küld a feladónak.',
+    'DELEGÁLT FELADAT: a szokásos módon, `result` mezővel. BEJÖVŐ RIPORT vagy ÉRTESÍTÉS: `"notify":false`-szal',
+    '(ott a nyugta csak a feladó sorát növeli). A `notify` JSON boolean: a `"false"` string 400-at kap, és nem zár le.',
     '```bash',
     `curl -s -X PUT ${dashboardOrigin}/api/messages/<id> -H "Content-Type: application/json" \\`,
     `  -H "Authorization: Bearer $(cat ${tokenPath})" --data-binary '{"status":"done","notify":false}'`,
     '```',
-    'A `notify` csak JSON boolean lehet: a `"false"` string 400-at kap, és a lezárás sem történik meg.',
   ].join('\n')
 }
 
@@ -2525,37 +2505,15 @@ function buildSkillsPathTrapBody(): string {
     GENERATED_INSERT_WARNING,
     '## Skill-útvonal csapda (KÖTELEZŐ elolvasni skill-írás előtt)',
     '',
-    'A `.claude-config/skills` NEM a saját mappád: symlink a globális',
-    '`~/.claude/skills`-re, tehát ami oda kerül, az a TELJES flottánál megjelenik',
-    '-- akkor is, ha a skill-futtatás base directory-ja ezt az utat mutatja.',
-    'A saját, csak neked szóló vagy kipróbálatlan külső skill a munkakönyvtárad',
-    '`.claude/skills/` mappájába megy. A globálisba írás tudatos, flotta-szintű',
-    'döntés legyen, ne alapértelmezés.',
-      '',
-      'AZ ÚT A TE MUNKAKÖNYVTÁRADHOZ KÉPEST RELATÍV. A repó gyökeréből nézve nem',
-      'létezik -- és az NEM azt jelenti, hogy ez a figyelmeztetés elavult. Mérve',
-      '2026-09-04: KILENC ilyen symlink van, és a gyökérből egy sem látszik. Aki',
-      'onnan ellenőrzi, egy IGAZ mondatot javít hamisra -- ez egyszer már megtörtént,',
-      'és a javítás konkrét volt és hiányos.',
-      '',
-      'ÉS A KILENCEDIKET A NEVE REJTETTE EL: A KOORDINÁTORÉ `.channels-config/skills`.',
-      'Ez a bekezdés 2026-08-25 óta NYOLCAT mondott, és a hiányzó a `marveen/`',
-      '`.channels-config/skills` volt -- ugyanaz a symlink ugyanarra a globális fára,',
-      'MÁS KÖNYVTÁRNÉVEN. 2026-09-04-én pontosan azon sétált be marveen: a szabályt',
-      'ISMERTE, csak a szabály a `.claude-config` NEVET nevezte meg, és az övé nem az.',
-      '',
-      'EZÉRT NE A NEVET KERESD, HANEM KÉRDEZD MEG, HOVA MUTAT. Egy sor, és bárhol áll',
-      'a válasz, ahol épp vagy:',
-      '',
-      '```bash',
-      'python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" <a skills út>',
-      '# ha /Users/<te>/.claude/skills jön vissza, az a FLOTTA fája, nem a tiéd',
-      '```',
-      '',
-      'A teljes mai populáció: hat `agents/<ágens>/.claude-config/skills`, két',
-      'worker-home `.claude-config/skills`, és a koordinátor `.channels-config/skills`-e.',
-      'A szám ELAVUL, az ellenőrzés nem -- ha listát olvasol a parancs helyett, a',
-      'következő új konfig-fa megint hiányozni fog belőle.',
+    'A `.claude-config/skills` (koordinátornál `.channels-config/skills`) NEM a saját mappád: symlink a',
+    '`~/.claude/skills`-re, ami oda kerül, az EGÉSZ flottánál megjelenik. Saját skill: a munkakönyvtárad',
+    '`.claude/skills/`-e. Ne a NEVÉT nézd, kérdezd meg, HOVA MUTAT (az út a MUNKAKÖNYVTÁRADHOZ KÉPEST RELATÍV,',
+    'a repó gyökeréből nem látszik):',
+    '```bash',
+    'python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" <a skills út>',
+    '# ha /Users/<te>/.claude/skills jön vissza, az a FLOTTA fája, nem a tiéd',
+    '```',
+    `Mért esetek: \`${generatedRationalePath}\`.`,
   ].join('\n')
 }
 
@@ -2765,15 +2723,12 @@ export function buildFleetAuthBody(): string {
   return [
     '## Flotta-szintű AUTH-szabály (MEGSZEGHETETLEN)',
     '',
-    'A sub-agentek a `CLAUDE_CODE_OAUTH_TOKEN` úton hitelesítenek (`store/.claude-oauth-token`), saját',
-    '`CLAUDE_CONFIG_DIR`-rel. A fő channels-agent szándékosan eltérhet (`MAIN_AGENT_ISOLATED_CONFIG`,',
-    '`MAIN_AGENT_CONFIG_DIR`). A per-agent `claudeConfigDir` támogatott mező: döntés, nem tilalom.',
-    '',
-    '1. "Not logged in" esetén a javítás a TOKEN-FORRÁS, nem egy kézzel elhelyezett vagy symlinkelt',
-    '   `.credentials.json`: a lejárt fájl az érvényes env-tokennel szemben is nyer, és minden',
-    '   alkalommal ez hozta vissza a 401-kaszkádot.',
+    'Sub-agent: `CLAUDE_CODE_OAUTH_TOKEN` (`store/.claude-oauth-token`) és saját `CLAUDE_CONFIG_DIR`; a fő agent',
+    'eltérhet (`MAIN_AGENT_ISOLATED_CONFIG`, `MAIN_AGENT_CONFIG_DIR`); a per-agent `claudeConfigDir` támogatott.',
+    '1. "Not logged in": a javítás a TOKEN-FORRÁS, nem kézzel elhelyezett vagy symlinkelt `.credentials.json`',
+    '   (a lejárt fájl az érvényes env-tokennel szemben is nyer: 401-kaszkád).',
     '2. SOHA ne másold át másik agent tokenjét vagy credentialjét: új agent saját tokent és saját',
-    '   külső-szolgáltatás setupot kap. A másolás auditálhatatlan, és más adatához is hozzáférést ad.',
+    '   külső-szolgáltatás setupot kap.',
   ].join('\n')
 }
 

@@ -75,7 +75,9 @@ describe('ensureSkillsPathTrapSection', () => {
     // olvaso elavultnak hiszi a blokkot es "kijavitja" -- ez 2026-08-25-en megtortent
     // (kartya 12dffabf), es a javitas konkret es hianyos lett (nyolcbol ket ut).
     expect(out).toContain('MUNKAKÖNYVTÁRADHOZ KÉPEST RELATÍV')
-    expect(out).toContain('KILENC ilyen symlink')
+    // A KILENC symlinkes meres (2026-09-04) es a hianyos javitas tortenete a 06874086 kartya ota
+    // a rulebook-fajlban all szo szerint; a lapon egy mutato visz oda.
+    expect(out).toContain('rulebook/generalt-szakaszok-indoklas.md')
   })
 
   // A NEV SZERINTI FELSOROLAS EGYET KIHAGYOTT, ES EPP A KOORDINATORET (kartya 18ee950f).
@@ -95,7 +97,8 @@ describe('ensureSkillsPathTrapSection', () => {
     expect(out).toContain('os.path.realpath')
     // A DISZKRIMINATOR: a blokk mondja ki, hogy a NEV volt a csapda -- nelkule az
     // olvaso ugyanugy nev szerint fog keresni, csak eggyel hosszabb listaval.
-    expect(out).toContain('A NEVE REJTETTE EL')
+    // (06874086: a "A NEVE REJTETTE EL" tortenet a rulebookba koltozott; a szabaly itt marad.)
+    expect(out).toContain('Ne a NEVÉT nézd, kérdezd meg, HOVA MUTAT')
   })
 
   it('is idempotent: a second call changes nothing', () => {
