@@ -1124,7 +1124,7 @@ export function respawnMainSessionFresh(): void {
   // identity nor a guaranteed-loaded channel plugin. Both follow-ups mirror the
   // resume path; skipping them is how a restarted session comes back nameless
   // or with the plugin stuck in `◯ disabled`.
-  void scheduleIdentitySetup(MAIN_CHANNELS_SESSION, BOT_NAME)
+  scheduleMainIdentity()
   schedulePluginUnlockAfterRespawn(MAIN_CHANNELS_SESSION, provider.type)
 }
 
@@ -1214,7 +1214,7 @@ export async function resumeMarveenSession(): Promise<boolean> {
     // start). /remote-control was dropped (the operator no longer uses it).
     // scheduleIdentitySetup only SCHEDULES delayed timers and returns immediately;
     // fire-and-forget (void) is correct here -- there is nothing to await.
-    void scheduleIdentitySetup(MAIN_CHANNELS_SESSION, BOT_NAME)
+    scheduleMainIdentity()
     // channels.sh runs an /mcp+Up+Enter+Enter unlock probe after launching
     // the main session to revive a Failed/disabled channel plugin (#231/#232),
     // but THIS code path skips channels.sh entirely - tmux respawn-pane is
@@ -1443,7 +1443,7 @@ function respawnMarveenSessionFresh(): boolean {
     logger.warn({ provider: provider.type }, 'Hard restart: marveen session respawned fresh (no --continue)')
     // Re-establish /rename on the fresh process (see note in resumeMarveenSession).
     // scheduleIdentitySetup only schedules delayed timers -> fire-and-forget.
-    void scheduleIdentitySetup(MAIN_CHANNELS_SESSION, BOT_NAME)
+    scheduleMainIdentity()
     // Same channels.sh-bypass concern as in resumeMarveenSession: this respawn
     // path does NOT invoke channels.sh, so the post-init plugin unlock probe
     // (#231/#232) never runs. Wire it in-process so the keep-alive-watchdog
@@ -1567,6 +1567,43 @@ function mainPaneClaudePid(): number | null {
     logger.warn({ site: 'channel-monitor.mainPaneClaudePid', session: MAIN_CHANNELS_SESSION, tmux: tmuxStderr(err) }, 'tmux list-panes failed')
     return null
   }
+}
+
+// Card c91a1989 (marveen 10004488): channels.sh no longer types /rename -- from its own process it
+// bypassed this process's send lane and split a guard directive (2026-10-26 05:19). So the
+// dashboard names the main session after ANY restart it can see, not only its own respawns: a
+// launchd reload, a manual kickstart, KeepAlive after a crash, a respawn-pane all give the pane a
+// new pid. The first reading after the dashboard starts is a baseline, not a restart. A respawn
+// path here that already scheduled the identity within MAIN_IDENTITY_DEDUPE_MS is not doubled.
+export const MAIN_IDENTITY_DEDUPE_MS = 120_000
+let mainIdentityPid: number | null | undefined
+let mainIdentityScheduledAtMs = 0
+
+export function decideMainIdentity(
+  prevPid: number | null | undefined,
+  pid: number | null,
+  lastScheduledMs: number,
+  nowMs: number,
+): { schedule: boolean; nextPid: number | null | undefined } {
+  if (pid == null) return { schedule: false, nextPid: prevPid }
+  if (prevPid === undefined || pid === prevPid) return { schedule: false, nextPid: pid }
+  return { schedule: nowMs - lastScheduledMs >= MAIN_IDENTITY_DEDUPE_MS, nextPid: pid }
+}
+
+function scheduleMainIdentity(): void {
+  mainIdentityScheduledAtMs = Date.now()
+  // scheduleIdentitySetup only schedules delayed timers -> fire-and-forget.
+  void scheduleIdentitySetup(MAIN_CHANNELS_SESSION, BOT_NAME)
+}
+
+function checkMainIdentityAfterRestart(nowMs: number = Date.now()): void {
+  const pid = mainChannelsSessionExists() ? mainPaneClaudePid() : null
+  const d = decideMainIdentity(mainIdentityPid, pid, mainIdentityScheduledAtMs, nowMs)
+  if (d.schedule) {
+    logger.info({ session: MAIN_CHANNELS_SESSION, pidBefore: mainIdentityPid, pidAfter: pid }, 'Main session pane has a new pid (restarted) and no recent /rename was scheduled: scheduling it')
+    scheduleMainIdentity()
+  }
+  mainIdentityPid = d.nextPid
 }
 
 export function hardRestartMarveenChannels(): { ok: boolean; error?: string } {
@@ -2508,6 +2545,8 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
     // escalate to clear+re-inject only after MAIN_STUCK_ENTER_ATTEMPTS, and
     // only when the captured block looks COMPLETE -- a truncated capture stays
     // on Enter rather than risk a partial re-inject to the wrong chat_id.
+    // Card c91a1989: name the main session after any restart (channels.sh no longer does).
+    try { checkMainIdentityAfterRestart() } catch (err) { logger.warn({ err }, 'main identity check failed') }
     mainStuckInput = await recoverStuckInputForSession(MAIN_CHANNELS_SESSION, MAIN_AGENT_ID, mainStuckInput, MAIN_STUCK_THRESHOLDS, false)
     // Reliable backstop: if the soft recovery is exhausted and the input is
     // STILL parked, the TUI is hard-wedged -- escalate to a respawn-pane (the
