@@ -177,11 +177,11 @@ describe('sendPromptToSession delivery-lock wiring', () => {
     const fn = AGENT_PROCESS.slice(AGENT_PROCESS.indexOf('export async function scheduleIdentitySetup'))
     const body = fn.slice(0, fn.indexOf('\n}\n') + 3)
     expect(body).toContain('clearOwnLine: () => clearInputBuffer(session, host)')
-    const foreign = body.indexOf("if (outcome === 'foreign-parked') {")
-    const own = body.indexOf("} else if (outcome === 'cleared-own') {")
-    expect(foreign).toBeGreaterThan(-1)
-    expect(body.slice(foreign, own)).toContain('retryParked = true')
-    expect(body.slice(own, body.indexOf("} else if (outcome === 'still-parked') {"))).toContain('retryParked = true')
+    // Which outcomes retry is identityAttemptResult's (agent-identity-setup.test.ts); here: every
+    // outcome reaches it, and its verdict is what the loop acts on.
+    expect(body).toContain('outcomes.push(outcome)')
+    const own = body.indexOf('retryParked = result.retry')
+    expect(own).toBeGreaterThan(body.indexOf('const result = identityAttemptResult(outcomes)'))
     const release = body.indexOf('releaseIdentityLane()', own)
     const ret = body.indexOf('if (!retryParked) return', own)
     const wait = body.indexOf('await delay(IDENTITY_PARKED_RETRY_MS)', own)
