@@ -844,6 +844,9 @@ except Exception:
     [ -n "$DEPTH" ] && LINE="$LINE queue=$DEPTH"
     [ -n "$MINS" ] && LINE="$LINE (~${MINS} perc)"
     [ -n "$WARN" ] && LINE="$LINE (warning)"
+    # A masolhato hivatkozas a teret is hordozza (kartya ab8b23d0): az uzenet- es a komment-id
+    # ugyanabban a szamterben el, egy csupasz szam mindkettore feloldhato.
+    LINE="$LINE ref=uzenet:$ID"
     echo "$LINE"
     if [ -n "$WARN" ]; then
       echo "OK id=$ID  WARNING: $WARN" >&2
