@@ -82,11 +82,25 @@ notifies you when a background task ends, and knows nothing about a detached one
    Both are HEAVY_RUN_MAX_WORKERS (default 4; 0 = off). A command's own --maxWorkers, --runInBand or
    --watch wins. Limit, stated: a script that REPLACES NODE_OPTIONS drops the jest cap (the Delta-CRM
    frontend "test" script does, for vitest, which the env var still caps).
+8. THE SAME COMMAND IS NOT QUEUED TWICE (card b1181630). Measured 2026-10-29 06:49: dexter's session ran
+   the same gate script twice, 12 s apart, and both queued "c2dbg1 tsc" (runs.jsonl 06:49:00, 06:49:12);
+   a fresh session after a context-guard restart cannot see that its predecessor's run still waits.
+   A run whose agent, class, label, argv and cwd (realpath) equal a LIVE waiter's or slot holder's is
+   refused before it takes a ticket: rc 75, and stderr names the pid and the start time of the one to
+   wait for. Checked under the queue lock, so two identical arrivals cannot both pass. Another worktree
+   (cwd) is another run: computress' three queued "tsc-b" of 10-29 01:2x were three worktrees, not a
+   duplicate. The label is in the key because the environment is not: e2e shards that differ only in
+   an env var (TEST_DATABASE_URL=... heavy-run.py, 26 such lines in the fleet's notes) carry their own
+   labels, and must not be refused as one run.
+   HEAVY_RUN_ALLOW_DUP=1 queues it anyway. Limit, stated: a waiter or holder started before this code
+   carries no key and matches nothing; HEAVY_RUN_FIFO=0 and nested runs skip the check.
 The exit code is the command's (128+N if a signal ended it). Each run appends one JSON line to
 HEAVY_RUN_DIR/runs.jsonl: who, what, class (heavy|light|short), waited_s, ran_s, rc, and wake (what item 6
-did: sent / card / no-card / failed / not-detached / short / unknown-agent / dup).
+did: sent / card / no-card / failed / not-detached / short / unknown-agent / dup). A run refused by item 8
+writes one line too, with "refused": "dup" and the pid it deferred to.
 """
 import fcntl
+import hashlib
 import json
 import os
 import shutil
@@ -120,6 +134,7 @@ SHORT_MAX = int(os.environ.get("HEAVY_RUN_SHORT_MAX") or 1)
 SHORT_CAP = float(os.environ.get("HEAVY_RUN_SHORT_CAP") or 900)
 CAPS = {"light": LIGHT_CAP, "short": SHORT_CAP}  # class -> hard cap in seconds; heavy has none
 CAP_RC = 124  # the exit code timeout(1) uses
+DUP_RC = 75  # EX_TEMPFAIL: the same command is already queued or running (item 8)
 WAKE_MIN_S = float(os.environ.get("HEAVY_RUN_WAKE_MIN_S") or 300)
 # The sender is agent-msg.sh next to this file; overridable so the self-test can stand a stub in.
 WAKE_SEND = os.environ.get("HEAVY_RUN_WAKE_SEND") or os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -223,10 +238,29 @@ class QueueLock:
         self.f.close()
 
 
+def cmd_key(label, cmd, cwd):
+    """Item 8: what makes two runs the same run (agent and class are compared beside it)."""
+    return hashlib.sha1(json.dumps([label, os.path.realpath(cwd), list(cmd)]).encode()).hexdigest()[:16]
+
+
+def same_run(me, cls):
+    """A live slot holder or waiter of this pool with this agent and command key, or None.
+    Caller holds the pool's queue lock."""
+    for other in holders(cls) + live_tickets(cls):
+        if other.get("agent") == me["agent"] and other.get("cmd_key") == me["cmd_key"]:
+            return other
+    return None
+
+
 def take_ticket(me):
-    """The next monotonic number, and an open, LOCKED ticket file carrying who waits. Keep it open."""
+    """The next monotonic number, and an open, LOCKED ticket file carrying who waits. Keep it open.
+    Returns ("dup", <the live run>) instead when item 8 refuses the run."""
     cls = me["class"]
     with QueueLock(cls):
+        if me.get("cmd_key") and os.environ.get("HEAVY_RUN_ALLOW_DUP") != "1":
+            other = same_run(me, cls)
+            if other:
+                return "dup", other
         seq_path = os.path.join(DIR, QUEUES[cls][2])
         try:
             with open(seq_path) as f:
@@ -475,7 +509,7 @@ def run(label, cmd, cls="heavy"):
         return 127
     os.makedirs(DIR, exist_ok=True)
     me = {"agent": agent_name(), "pid": os.getpid(), "label": label or " ".join(cmd)[:120],
-          "class": cls, "started": time.strftime("%Y-%m-%d %H:%M:%S")}
+          "class": cls, "started": time.strftime("%Y-%m-%d %H:%M:%S"), "cmd_key": cmd_key(label, cmd, os.getcwd())}
     last_note = 0.0
     asked = time.time()
     held = os.environ.get("HEAVY_RUN_HELD", "")
@@ -488,6 +522,16 @@ def run(label, cmd, cls="heavy"):
     else:
         env = cap_workers({**os.environ, "HEAVY_RUN_HELD": f"{me['agent']}:{me['pid']}"})
         ticket = take_ticket(me) if FIFO else None
+        if ticket and ticket[0] == "dup":
+            other = ticket[1]
+            state = f"running in {cls} slot {other.get('slot')}" if "slot" in other else f"queued for a {cls} slot"
+            print(f"heavy-run: refused, the same command (same label, argv and cwd) of {me['agent']} is already {state}: "
+                  f"pid {other.get('pid')}, since {other.get('started')}. Wait for "
+                  "that one's result; if it is stale, kill that pid first. HEAVY_RUN_ALLOW_DUP=1 queues this anyway.",
+                  file=sys.stderr, flush=True)
+            with open(os.path.join(DIR, "runs.jsonl"), "a") as f:
+                f.write(json.dumps({**me, "rc": DUP_RC, "refused": "dup", "dup_of": other.get("pid")}) + "\n")
+            return DUP_RC
         try:
             slot = try_slot_in_order(me, ticket) if ticket else try_slot(me)
             while slot is None:
@@ -561,12 +605,12 @@ def self_test():
     me = os.path.abspath(__file__)
     results = []
 
-    def spawn(agent, *cmd, extra=None, light=False, short=False):
+    def spawn(agent, *cmd, extra=None, light=False, short=False, cwd=None, label=None):
         flag = ["--light"] if light else ["--short"] if short else []
-        return subprocess.Popen([sys.executable, me, "--label", agent, *flag,
+        return subprocess.Popen([sys.executable, me, "--label", label or agent, *flag,
                                  "--", *cmd],
                                 env={**env, "HEAVY_AGENT": agent, **(extra or {})},
-                                stderr=subprocess.PIPE, text=True)
+                                stderr=subprocess.PIPE, text=True, cwd=cwd)
 
     def alive(pid):
         try:
@@ -619,6 +663,38 @@ def self_test():
     a2 = spawn("same", "true")
     results.append(("same agent's second run waits though a slot is free", waited(a2)))
     a.wait()
+
+    # 2b. item 8 (card b1181630): the same agent's same command in the same cwd is refused, whether the
+    # first one holds a slot or waits; another cwd, another agent, or HEAVY_RUN_ALLOW_DUP=1 is not.
+    def refused(p):
+        try:
+            _, err = p.communicate(timeout=40)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.communicate()
+            return False
+        return p.returncode == DUP_RC and "heavy-run: refused, the same command" in (err or "")
+
+    other_cwd = tempfile.mkdtemp(prefix="heavy-run-cwd-", dir=base)
+    d1 = spawn("dup", "sleep", "3")
+    time.sleep(1.0)
+    d2 = spawn("dup", "sleep", "3")
+    results.append(("item 8: the same command while the first one RUNS is refused, rc 75", refused(d2)))
+    d3 = spawn("dup", "sleep", "0.5", cwd=other_cwd)  # queued behind d1 (one per agent)
+    time.sleep(1.0)
+    d4 = spawn("dup", "sleep", "0.5", cwd=other_cwd)
+    results.append(("item 8: the same command while the first one WAITS is refused", refused(d4)))
+    d5 = spawn("dup", "sleep", "0.5")  # same argv as d3, another cwd: a different run, it waits
+    d6 = spawn("dup2", "sleep", "3")   # same argv and cwd as d1, another agent: a different run
+    d7 = spawn("dup", "sleep", "3", extra={"HEAVY_RUN_ALLOW_DUP": "1"})
+    d8 = spawn("dup", "sleep", "3", label="dup shard 2")  # same agent, argv, cwd; its own label
+    results.append(("CONTROL item 8: another cwd, agent or label, or ALLOW_DUP=1, is not refused",
+                    not refused(d5) and not refused(d6) and not refused(d7) and not refused(d8)))
+    for p in (d1, d3):
+        finish(p)
+    lines = [json.loads(l) for l in open(os.path.join(base, "runs.jsonl"))]
+    results.append(("item 8: a refused run leaves a runs.jsonl line naming the pid it deferred to",
+                    any(l.get("refused") == "dup" and l.get("dup_of") == d1.pid for l in lines)))
 
     # 3. a SIGKILLed holder frees its slot (kernel drops the lock)
     k = spawn("killed", "sleep", "30")
