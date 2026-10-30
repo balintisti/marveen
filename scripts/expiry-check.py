@@ -418,14 +418,21 @@ def _suppression(args, rows, now):
     # THE CEILING COUNTS FROM THE LAST REPORT, NOT THE LAST RUN (card 01987be3). Every run
     # rewrites checked_at, so measured against it a daily run was always 0-1 days old and
     # the ceiling never fired: a DUE item stayed silent from 10-15 on. reported_at moves only
-    # when a run reports. A snapshot written before this field existed has no reported_at;
-    # its checked_at is the best lower bound there is, and the ceiling counts from that.
+    # when a run reports.
+    # A SNAPSHOT WITHOUT reported_at REPORTS (card 37955653). The first cut counted from its
+    # checked_at as "the best lower bound" -- but checked_at is the LAST RUN, the newest
+    # instant the file knows, so it bounds the silence from the wrong side. Measured live: the
+    # 10-26 run (old code) wrote checked_at, the first new-code run copied it into reported_at,
+    # and a DUE item last reported 10-15 had its ceiling postponed to 11-03. When the last
+    # report is unknown, the run reports, like every other uncertainty here.
     previous, reported, reason = None, None, ""
+    has_reported_at = False
     try:
         with open(path, encoding="utf-8") as fh:
             old = json.load(fh)
         previous = old.get("states")
-        reported = _parse_iso(old.get("reported_at") or old.get("checked_at"))
+        has_reported_at = "reported_at" in old
+        reported = _parse_iso(old.get("reported_at"))
     except OSError:
         reason = "nincs korabbi allapot"
     except ValueError:
@@ -433,6 +440,8 @@ def _suppression(args, rows, now):
 
     if not isinstance(previous, dict):
         suppress, why = False, reason or "nincs korabbi allapot"
+    elif not has_reported_at:
+        suppress, why = False, "a korabbi allapotban nincs reported_at: az utolso jelentes ideje ismeretlen"
     elif reported is None:
         suppress, why = False, "a korabbi idobelyeg ertelmezhetetlen"
     elif (now - reported).days >= args.max_silence_days:
