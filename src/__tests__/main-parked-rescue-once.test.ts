@@ -14,7 +14,15 @@ const h = vi.hoisted(() => {
   const FOOTER = '  ⏵⏵ bypass permissions on (shift+tab to cycle)'
   const PARKED = ['', SEP, '❯ Igen, írd meg Baloghnak a választ', SEP, FOOTER].join('\n')
   const EMPTY = ['', SEP, '❯ ', SEP, FOOTER].join('\n')
-  return { PARKED, EMPTY, calls: [] as string[][], clearWorks: false, cleared: false }
+  const REMAINDER = ['', SEP, '❯ Baloghnak', SEP, FOOTER].join('\n')
+  // A placeholder hint: plain text in the plain capture, DIM (SGR-2) in the -e
+  // view, which captureParkedInputView strips to an empty box.
+  const GHOST = ['', SEP, '❯ Koszi a halakat.', SEP, FOOTER].join('\n')
+  const GHOST_DIM = ['', SEP, '❯ \x1b[2mKoszi a halakat.\x1b[22m', SEP, FOOTER].join('\n')
+  // after: what a capture shows once the clear keys went in ('empty', a
+  // 'remainder' of a multi-line box, 'ghost' = only the dim placeholder, or
+  // 'fail' = tmux capture error). ghost: the box shows only the placeholder now.
+  return { PARKED, EMPTY, REMAINDER, GHOST, GHOST_DIM, calls: [] as string[][], clearWorks: false, cleared: false, ghost: false, after: 'empty' as 'empty' | 'remainder' | 'ghost' | 'fail' }
 })
 
 vi.mock('node:child_process', async (orig) => ({
@@ -23,7 +31,14 @@ vi.mock('node:child_process', async (orig) => ({
     if (Array.isArray(args)) {
       h.calls.push(args)
       if (args.includes('send-keys') && h.clearWorks && (args.includes('C-u') || args.includes('C-k'))) h.cleared = true
-      if (args.includes('capture-pane')) return h.cleared ? h.EMPTY : h.PARKED
+      if (args.includes('capture-pane')) {
+        const ghost = () => (args.includes('-e') ? h.GHOST_DIM : h.GHOST)
+        if (h.ghost) return ghost()
+        if (!h.cleared) return h.PARKED
+        if (h.after === 'ghost') return ghost()
+        if (h.after === 'fail') throw new Error('tmux: capture failed')
+        return h.after === 'remainder' ? h.REMAINDER : h.EMPTY
+      }
     }
     return ''
   }),
@@ -73,6 +88,8 @@ beforeEach(() => {
   h.calls.length = 0
   h.clearWorks = false
   h.cleared = false
+  h.ghost = false
+  h.after = 'empty'
   vi.mocked(notifyChannel).mockClear()
   before = new Set(rescueFiles())
   clock += MAIN_PARKED_EPISODE_GAP_MS + COOLDOWN // a new episode for the same text
@@ -133,5 +150,72 @@ describe('main box: a clear that works', () => {
     const ok = messages().filter(m => m.includes('kitisztitottuk'))
     expect(ok).toHaveLength(1)
     expect(messages().some(m => m.includes('NEM sikerult'))).toBe(false)
+  }, 60_000)
+})
+
+describe('main box: success only when a capture SHOWS it empty (didi 10002220)', () => {
+  it('a clear that leaves a remainder is the failure arm, not "kitisztitottuk"', async () => {
+    h.clearWorks = true
+    h.after = 'remainder'
+    let cleared = true
+    for (let i = 1; i <= MAIN_PARKED_RESCUE_AFTER; i++) cleared = await round()
+    expect(cleared).toBe(false)
+    expect(messages().some(m => m.includes('kitisztitottuk'))).toBe(false)
+    expect(messages().filter(m => m.includes('NEM sikerult'))).toHaveLength(1)
+  }, 60_000)
+
+  it('a failed final capture is the failure arm, not "kitisztitottuk"', async () => {
+    h.clearWorks = true
+    h.after = 'fail'
+    let cleared = true
+    for (let i = 1; i <= MAIN_PARKED_RESCUE_AFTER; i++) cleared = await round()
+    expect(cleared).toBe(false)
+    expect(messages().some(m => m.includes('kitisztitottuk'))).toBe(false)
+    expect(messages().filter(m => m.includes('NEM sikerult'))).toHaveLength(1)
+  }, 60_000)
+
+  it('a dim placeholder left in the plain capture still counts as cleared (the -e view decides)', async () => {
+    // didi 47068 L1: the plain capture shows the placeholder as text; reading
+    // only that would send a false "NEM sikerult" after a clear that worked.
+    h.clearWorks = true
+    h.after = 'ghost'
+    let cleared = false
+    for (let i = 1; i <= MAIN_PARKED_RESCUE_AFTER; i++) cleared = await round()
+    expect(cleared).toBe(true)
+    expect(messages().filter(m => m.includes('kitisztitottuk'))).toHaveLength(1)
+    expect(messages().some(m => m.includes('NEM sikerult'))).toBe(false)
+  }, 60_000)
+})
+
+describe('main box: a manual clear ends the episode (didi 10002220, open question 2)', () => {
+  it('the same text parking again soon after an empty box is seen gets a fresh clear and message', async () => {
+    // Spend the episode: every clear try fails, the cap is reached.
+    const spent = MAIN_PARKED_RESCUE_AFTER + MAIN_PARKED_CLEAR_MAX_TRIES * MAIN_PARKED_CLEAR_RETRY_EVERY
+    for (let i = 1; i <= spent; i++) await round()
+    expect(messages().filter(m => m.includes('NEM sikerult'))).toHaveLength(1)
+    // The owner clears the box by hand; one router round sees it empty.
+    h.cleared = true
+    await round()
+    // Within the episode gap the same scheduled line parks again.
+    h.cleared = false
+    const start = h.calls.length
+    for (let i = 1; i <= MAIN_PARKED_RESCUE_AFTER; i++) await round()
+    expect(hasClearKeys(h.calls.slice(start))).toBe(true)
+    expect(messages().filter(m => m.includes('NEM sikerult'))).toHaveLength(2)
+  }, 60_000)
+
+  it('a box showing only the dim placeholder (typing, no real text) also ends the episode', async () => {
+    // didi 47068 L2: the plain capture reads 'typing', so the idle reset does not
+    // fire; the no-parked-text branch must end the episode on its own.
+    const spent = MAIN_PARKED_RESCUE_AFTER + MAIN_PARKED_CLEAR_MAX_TRIES * MAIN_PARKED_CLEAR_RETRY_EVERY
+    for (let i = 1; i <= spent; i++) await round()
+    expect(messages().filter(m => m.includes('NEM sikerult'))).toHaveLength(1)
+    h.ghost = true
+    await round()
+    h.ghost = false
+    const start = h.calls.length
+    for (let i = 1; i <= MAIN_PARKED_RESCUE_AFTER; i++) await round()
+    expect(hasClearKeys(h.calls.slice(start))).toBe(true)
+    expect(messages().filter(m => m.includes('NEM sikerult'))).toHaveLength(2)
   }, 60_000)
 })

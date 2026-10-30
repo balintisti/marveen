@@ -4418,6 +4418,13 @@ export async function clearStaleParkedInput(
   opts: { lockMode?: 'acquire' | 'held' } = {},
 ): Promise<boolean> {
   const a = capturePane(session, host)
+  const key = (host ?? 'local') + ':' + session
+  // An empty main box SEEN ends the episode (card 1c7bd03d, didi 10002220): after a
+  // manual clear the same scheduled text can park again within the episode gap, and
+  // it must not inherit a spent clearTries and an already-sent owner alert -- that
+  // would leave the box stuck with no clear and no message. Only a capture that
+  // shows the box empty counts; a failed capture (null) keeps the record.
+  if (a != null && session === MAIN_CHANNELS_SESSION && detectPaneState(a) === 'idle') unwedgeAttempts.delete(key)
   if (a == null || detectPaneState(a) !== 'typing') return false
   // The clear below is Escape-first: never behind a running turn or its background work
   // (card f5bb2626, didi 27204 (C) and 27419).
@@ -4431,14 +4438,16 @@ export async function clearStaleParkedInput(
   // survives the strip. Falls back to the plain capture only if the -e capture
   // fails (rare), preserving prior behaviour in that edge case.
   const parked = parkedInputText(captureParkedInputView(session, host) ?? a)
-  if (!parked) return false
+  if (!parked) {
+    if (session === MAIN_CHANNELS_SESSION) unwedgeAttempts.delete(key)
+    return false
+  }
 
   // Cooldown guard FIRST, before any blocking sleep: if the same parked text was
   // attempted within the cooldown window, bail in microseconds. This is what
   // keeps a stubborn box from starving the event loop on every router tick --
   // the root cause of the dashboard crash-loop (constant ~2s blocking sleeps ->
   // HTTP 000 -> watchdog restart -> re-wedge on the same persisted input).
-  const key = (host ?? 'local') + ':' + session
   const nowMs = Date.now()
   const prev = unwedgeAttempts.get(key)
   if (prev && prev.sig === parked && nowMs - prev.last < UNWEDGE_COOLDOWN_MS) return false
@@ -4578,7 +4587,12 @@ async function clearStaleParkedInputInLane(
   // the cooldown guard above backs us off instead of hammering every tick.
   const final = capturePane(session, host)
   const stillStuck = final != null && detectPaneState(final) === 'typing' && parkedInputText(final) === parked
-  if (stillStuck && mainRescue) {
+  // The main box counts as cleared only when a capture SHOWS it empty (didi
+  // 10002220): a failed final capture, or a clear that left any text (the same
+  // line or a remainder of a multi-line box) is not "kitisztitottuk", it is the
+  // failure arm.
+  const mainCleared = final != null && !parkedInputText(captureParkedInputView(session, host) ?? final)
+  if (mainRescue && !mainCleared) {
     const { fails, escalated } = mainRescue
     unwedgeAttempts.set(key, { last: nowMs, sig: parked, fails, escalated, rescuedPath: mainRescue.path, clearTries: mainRescue.clearTries })
     // ONE message per episode, after the first failed clear: the copy is safe,
