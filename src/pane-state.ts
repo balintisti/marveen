@@ -100,6 +100,18 @@ export type PaneState = 'idle' | 'busy' | 'typing' | 'unknown' | 'error'
 // is drawn BELOW the footer.
 const IDLE_FOOTER_RX = /(?:[A-Za-z][\w-]* ){1,3}on(?: \(shift\+tab to cycle\)| · [^\n]*?(?:ctrl\+t|↓ to manage|← for agents))|\? for shortcuts/
 const TRUNCATED_FOOTER_RX = /(?:[A-Za-z][\w-]* ){1,3}on(?: · | \()[^\n]*…[ \t]*$/
+// A FOOTER THAT ENDS IN ITS BACKGROUND COUNT (upstream 004c994d7 VAGTECHIDLE1009, f64f3e1f8
+// COMMATAIL1022, d1c03996d MONITORTAIL1025; ported for card 53521828, 2026-10-30). While a
+// background shell or monitor runs, the footer can end in the count with none of the
+// IDLE_FOOTER_RX tails: `⏵⏵ bypass permissions on · 1 shell`. Measured here before the port: a
+// 4-hour tmux sample (13 sessions x 720 rounds, 05:31-09:31) read 238 of the main agent's idle
+// frames 'unknown', every one this shape. Upstream counts it only on the last non-empty line; here
+// it counts where the truncated form does, through liveTruncatedFooterIndex under the live box
+// (the background-agent panel is drawn below the footer, see above).
+const FOOTER_COUNT = String.raw`\d+ (?:shells?|monitors?)`
+const FOOTER_SHELL_TAIL_RX = new RegExp(
+  String.raw`^\s*[\u23F5\u23F8]{1,2} (?:[A-Za-z][\w-]* ){1,3}on(?: \(shift\+tab to cycle\))? · ${FOOTER_COUNT}(?:(?: ·|,) ${FOOTER_COUNT})*\s*$`,
+)
 
 // THE BUSY-WINDOW ANCHOR (card 53521828, 2026-10-09). With `3 shells, 2 monitors · esc to interrupt`
 // in front of the hint, an 80-column footer is cut at `↓ to m…`: none of the IDLE_FOOTER_RX tails
@@ -348,10 +360,12 @@ const BOX_SEP_RX = /^─{10,}/
 const FOOTER_BELOW_BOX_LINES = 3
 
 /**
- * Index of a width-truncated footer (TRUNCATED_FOOTER_RX) that sits where the live footer is
+ * Index of a width-truncated footer (TRUNCATED_FOOTER_RX) or one that ends in its background
+ * count (FOOTER_SHELL_TAIL_RX) that sits where the live footer is
  * drawn, or -1. All three must hold: it is within FOOTER_BELOW_BOX_LINES under the LAST box
  * separator; that separator closes a real input box (a `❯` line between it and the separator
- * above); and no dialog line follows it (a `❯` or `>` cursor, or a permission question). The
+ * above); and no dialog line follows it (a `❯` or `>` cursor, or a permission question), nor a
+ * running turn's `esc to interrupt` (upstream 004c994d7 pins a spinner under the footer as busy). The
  * last one is what keeps an open dialog out: a dialog replaces the box, and its selected option
  * is a `❯ 1. Yes` (on some builds `> 1. Yes`) line under any older footer.
  * Stricter is the safe side: a footer this misses falls back to the footer-less reading, which
@@ -370,8 +384,8 @@ function liveTruncatedFooterIndex(lines: string[]): number {
   if (top < 0 || !lines.slice(top + 1, bottom).some(l => l.includes('❯'))) return -1
   const end = Math.min(lines.length, bottom + 1 + FOOTER_BELOW_BOX_LINES)
   for (let i = bottom + 1; i < end; i++) {
-    if (!TRUNCATED_FOOTER_RX.test(lines[i])) continue
-    return lines.slice(i + 1).some(l => l.includes('❯') || /^\s*>/.test(l) || PERMISSION_QUESTION_RX.test(l)) ? -1 : i
+    if (!TRUNCATED_FOOTER_RX.test(lines[i]) && !FOOTER_SHELL_TAIL_RX.test(lines[i])) continue
+    return lines.slice(i + 1).some(l => l.includes('❯') || /^\s*>/.test(l) || PERMISSION_QUESTION_RX.test(l) || l.includes('esc to interrupt')) ? -1 : i
   }
   return -1
 }
