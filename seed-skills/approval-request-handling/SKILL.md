@@ -29,11 +29,16 @@ Emberi nyelven, hogy egy pillantásból eldönthesse. Legyen benne: melyik ágen
 ```
 <agent> jóváhagyást kér: <action>
 Kategória: <category>
-Válasz: IGEN <id>  vagy  NEM <id>
+Jóváhagyás: a dashboardon (Jóváhagyások), bejelentkezve.  Elutasítás: NEM <id>
 (Lejár: <timeout_at helyi időben>, utána automatikusan elévül.)
 ```
 
 Az `id` rövid előtagja is elég a válaszhoz, ha egyértelmű -- de a PATCH-hez a TELJES id kell.
+
+**JÓVÁHAGYNI CSAK A TULAJDONOS TUD, a dashboardon, bejelentkezve** (kártya 664a0f5d, upstream 89cc2f33d).
+A `PATCH status=approved` a közös tokennel `403 owner_session_required`-et ad: a tokent minden ágens
+ismeri, így egy Telegramon kapott "IGEN" alapján tokennel lezárt jóváhagyás bármely ágens kezében
+önjóváhagyás volna. Elutasítani (`rejected`) és lejáratni (`timeout`) a token is tud.
 
 ### 2. Várd meg a választ, és ellenőrizd a küldőt
 - A válasz a tulajdonos senderId-jétől jött? Ha nem: **ne zárd le**, és ne is áruld el
@@ -46,9 +51,9 @@ Az `id` rövid előtagja is elég a válaszhoz, ha egyértelmű -- de a PATCH-he
 curl -s -X PATCH "http://localhost:3420/api/approvals/<id>" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $(cat <install>/store/.dashboard-token)" \
-  -d '{"status":"approved","resolved_by":"telegram_text","telegram_message_id":<int|null>}'
+  -d '{"status":"rejected","resolved_by":"telegram_text","telegram_message_id":<int|null>}'
 ```
-- `status`: `approved` | `rejected` | `timeout` -- más érték 400.
+- `status`: `rejected` | `timeout` a tokennel; `approved` tokennel 403 (`owner_session_required`), azt a tulajdonos a dashboardon adja. Más érték 400.
 - `resolved_by`: **kötelező, nem lehet üres string** (400). Írj bele beszédes forrást
   (pl. `telegram_text`), mert ez kerül az audit logba.
 - `telegram_message_id`: szám vagy elhagyható. Nem szám -> `null` lesz.
@@ -58,6 +63,8 @@ Egy rövid visszaigazolás. Ha nem szólsz, nem tudja, hogy a döntése célba �
 
 ## Buktatók
 
+- **Telegram "IGEN" NEM zár jóváhagyást.** Ha a tulajdonos Telegramon igent ír, ne PATCH-elj
+  (403 lenne): küldd el neki, hogy a dashboardon, bejelentkezve hagyja jóvá. A 403 nem hiba, hanem az őr.
 - **409 = már eldöntötték, NEM hiba.** Ha a dashboardon (vagy máshol) már lezárták,
   a PATCH `409`-et ad: `Already resolved as <status>`. Ne próbáld felülírni, és ne
   jelentsd hibaként -- mondd meg a tulajdonosnak, hogy a kérés már el volt döntve,

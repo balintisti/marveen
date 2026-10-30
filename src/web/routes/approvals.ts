@@ -11,7 +11,20 @@ import { logger } from '../../logger.js'
 import { readBody, json } from '../http-helpers.js'
 import { resolveOwnerChatId } from '../../owner-chat.js'
 import { sendTelegramMessage } from '../telegram.js'
+import { mayIssueCredentials, OWNER_SESSION_REQUIRED } from './auth.js'
 import type { RouteContext } from './types.js'
+
+// Card 664a0f5d (upstream 89cc2f33d): APPROVING is the owner's decision, so PATCH status=approved
+// takes an owner credential. Before, a caller with the shared token (every agent holds it) could
+// approve any request, its own included under another resolved_by. Who counts as the owner is the
+// predicate that guards issuing credentials (mayIssueCredentials): the owner's dashboard session,
+// also when the browser sends the stored token alongside it; the bare token only before the first
+// dashboard login exists. Rejecting and timing out stay open to the token.
+const OWNER_ONLY = {
+  ...OWNER_SESSION_REQUIRED,
+  error: 'Approving needs the dashboard login (an owner session); the shared dashboard token can file, reject or time out a request, not approve one. ' +
+    'The token alone approves only before the first login exists.',
+}
 
 const AUTONOMY_CONFIG_PATH = join(PROJECT_ROOT, 'store', 'autonomy-config.json')
 
@@ -261,6 +274,14 @@ export async function tryHandleApprovals(ctx: RouteContext): Promise<boolean> {
     }
     const msgId = typeof telegram_message_id === 'number' ? telegram_message_id : null
 
+    // Approving takes the owner (see OWNER_ONLY); rejecting or timing out does not, since an
+    // agent that cancels a request gains nothing by it.
+    if (status === 'approved' && !mayIssueCredentials(ctx.auth, req)) {
+      logger.warn({ id: idMatch[1], resolved_by, auth: ctx.auth?.kind }, 'approval approve refused: no owner session')
+      json(res, OWNER_ONLY, 403)
+      return true
+    }
+
     // Self-approval guard: the requesting agent cannot approve its own request.
     // This is a best-effort check on the self-declared resolved_by value (all fleet
     // agents share the same bearer token, so server-side identity is not enforceable).
@@ -285,7 +306,9 @@ export async function tryHandleApprovals(ctx: RouteContext): Promise<boolean> {
     }
 
     const approval = getApproval(idMatch[1])
-    logger.info({ id: idMatch[1], status, resolved_by }, 'Approval resolved')
+    // auth: which credential closed it (token or session), so the log can tell an owner's
+    // dashboard click from a token caller; resolved_by is self-declared and cannot.
+    logger.info({ id: idMatch[1], status, resolved_by, auth: ctx.auth?.kind }, 'Approval resolved')
     json(res, approval)
     return true
   }
