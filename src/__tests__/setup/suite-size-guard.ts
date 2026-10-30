@@ -190,9 +190,9 @@ export function toTaskTree(m: TestModule): { name: string; type: string; tasks: 
 // es a plafon bevezetesevel csendben elavult volna -- epp azok hazudtak volna
 // elsonek, amik a hatart orzik. Ha a szam es a mondat egy generalt blokkban all,
 // nem tudnak szetcsuszni.
-/** Merve 2026. 10. 30. 16:47:57 CEST -- `npx vitest list --json` -> 914 fajl / 12250 teszt. */
-export const SUITE_BASELINE_FILES = 914
-export const SUITE_BASELINE_TESTS = 12250
+/** Merve 2026. 10. 30. 17:28:11 CEST -- `npx vitest list --json` -> 927 fajl / 12364 teszt. */
+export const SUITE_BASELINE_FILES = 927
+export const SUITE_BASELINE_TESTS = 12364
 // === SUITE-BASELINE:END ===
 
 /**

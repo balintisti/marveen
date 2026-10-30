@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **464** kovetett fajl, ebbol
-**140** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **466** kovetett fajl, ebbol
+**141** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -321,6 +321,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - WHY THIS EXISTS, AND WHY THE PERMISSION LIST IS NOT ENOUGH (measured 2026-08-19,
 - === THE OVERRIDE, AND WHY IT IS A TOKEN AND NOT A CARVE-OUT
+
+### `scripts/hooks/ledger-turn-failure.py`
+
+- Why: the ledger records that a message ARRIVED (ledger-capture.py) and that a reply
 
 ### `scripts/hooks/main-checkout-git-guard.py`
 
