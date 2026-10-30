@@ -60,7 +60,7 @@ const EXPECTED: Record<string, string[]> = {
     'memory-index-write-gate.py',
   ],
   Stop: ['marveen-commands.py', 'telegram-reply-guard.py', 'telegram_progress_clear.py', 'slack_progress_clear.py'],
-  SessionStart: ['ledger-replay.py', 'taskstate-replay.py', 'clear-replay.py', 'marveen-commands.py'],
+  SessionStart: ['ledger-replay.py', 'taskstate-replay.py', 'clear-replay.py', 'marveen-commands.py', 'session-status-page.py'],
   SessionEnd: ['clear-capture.py'],
 }
 

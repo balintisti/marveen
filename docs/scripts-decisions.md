@@ -344,6 +344,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - Why this exists (Szabi, 2026-08-10 12:57): a licence-delivery email went out to a
 
+### `scripts/hooks/session-status-page.py`
+
+- WHY (card 3af2d815, Isti TG 8534, 2026-10-30; measurement sirius dbcbb210 / 49372): after a restart
+
 ### `scripts/hooks/skills-snapshot-on-write.sh`
 
 - WHY (card de00fd2b, measured 2026-08-27). rulebook-snapshot.sh already versions

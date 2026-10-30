@@ -22,7 +22,7 @@ import { MAIN_AGENT_ID, OWNER_NAME, SYSTEM_SENDER_IDS, parseSystemSenderIds } fr
 import { readBody, json, jsonMaybeGzip } from '../http-helpers.js'
 import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
 import { stampHeartbeatHeader } from '../heartbeat-header-stamp.js'
-import { buildFreshnessInfo, type MessageFreshness } from '../agent-message-wrap.js'
+import { buildFreshnessInfo, classifyAgentMessage, wrapAgentMessageForDelivery, type MessageFreshness } from '../agent-message-wrap.js'
 import { parseQualifiedId, formatQualifiedId, isQualifiedId } from '../federation/address.js'
 import { getFederationConfig } from '../federation/config.js'
 import type { RouteContext } from './types.js'
@@ -30,6 +30,49 @@ import { unknownQueryParams, unknownQueryParamError } from '../query-params.js'
 
 /** Query parameters `GET /api/messages` accepts. */
 const MESSAGES_PARAMS: readonly string[] = ['agent', 'status', 'limit', 'before']
+const OPEN_DIGEST_PARAMS: readonly string[] = ['agent', 'head', 'max']
+const OPEN_DIGEST_WINDOW_S = 24 * 3600
+// A coordinator row: exactly one <channel ...> opening tag at the start, the closing tag at the end.
+const CHANNEL_ENVELOPE_RX = /^\s*(<channel\b[^>]*>)([\s\S]*)(<\/channel>)\s*$/
+
+/**
+ * The agent's not-yet-closed messages (pending / delivered, last 24 h, newest first), each as a
+ * short excerpt in the ROUTER's own framing (card 3af2d815, marveen 10004030: one defence, one
+ * shape). `line` is the router's sender line without the long preamble, `block` the router's
+ * wrapper around the first `head` characters (a coordinator row: its own <channel> envelope around
+ * the first `head` characters of the BODY). For the SessionStart status page, which must not
+ * build a wrapper of its own. Read-only: it claims nothing and changes no status.
+ */
+export function openMessageDigest(rows: AgentMessage[], agent: string, nowMs: number, head: number, max: number) {
+  const open = rows
+    .filter((m) => m.to_agent === agent && (m.status === 'pending' || m.status === 'delivered') &&
+      m.created_at * 1000 >= nowMs - OPEN_DIGEST_WINDOW_S * 1000)
+    .sort((a, b) => b.id - a.id)
+  const fresh = countNewerMessagesForRows(open)
+  const items: { id: number; from_agent: string; status: string; created_at: number; line: string; block: string }[] = []
+  let unframed = 0
+  const clip = (t: string) => t.length > head ? t.slice(0, head - 1).trimEnd() + '…' : t
+  for (const m of open.slice(0, max)) {
+    const cls = classifyAgentMessage(m.from_agent, m.to_agent)
+    if (!cls) { unframed++; continue }
+    if (cls.category === 'channel-inbound') {
+      // The content IS the <channel ...>body</channel> envelope: cutting the content would cut the
+      // envelope (didi 3af2d815 M1: the cut fell inside the opening tag, and the rest of the page
+      // read as the owner's channel block). Cut the BODY and keep both tags; no envelope, no item.
+      const env = CHANNEL_ENVELOPE_RX.exec(m.content)
+      if (!env) { unframed++; continue }
+      items.push({ id: m.id, from_agent: m.from_agent, status: m.status, created_at: m.created_at,
+        line: `[Csatorna-uzenet @${cls.safeFrom}-tol, msg_id:${m.id}]:`,
+        block: wrapAgentMessageForDelivery(cls.category, cls.safeFrom, m.from_agent, env[1] + clip(env[2]) + env[3]).wrapped })
+      continue
+    }
+    const { prefix, wrapped } = wrapAgentMessageForDelivery(cls.category, cls.safeFrom, m.from_agent, clip(m.content), m.id,
+      m.origin_note, { ageMs: nowMs - m.created_at * 1000, newerFromSameSender: fresh.get(m.id) ?? 0 })
+    items.push({ id: m.id, from_agent: m.from_agent, status: m.status, created_at: m.created_at,
+      line: prefix.slice(prefix.lastIndexOf('\n') + 1).trimEnd(), block: wrapped })
+  }
+  return { total: open.length, unframed, items }
+}
 
 // Should closing a message produce a reverse "[Eredmény]" notification to its sender?
 //
@@ -439,6 +482,17 @@ export async function tryHandleMessages(ctx: RouteContext): Promise<boolean> {
     }
     const agent = url.searchParams.get('agent') ?? url.searchParams.get('assignee') ?? undefined
     json(res, getPendingBacklogByAgent(agent))
+    return true
+  }
+
+  if (path === '/api/messages/open-digest' && method === 'GET') {
+    const unknown = unknownQueryParams(url, OPEN_DIGEST_PARAMS)
+    if (unknown.length) { json(res, unknownQueryParamError(unknown, OPEN_DIGEST_PARAMS, 'agent=<nev>&head=<kar>&max=<db>'), 400); return true }
+    const agent = sanitizeAgentIdent(url.searchParams.get('agent') || '')
+    if (!agent) { json(res, { error: 'agent is required' }, 400); return true }
+    const head = Math.min(Math.max(parseInt(url.searchParams.get('head') || '100', 10) || 100, 20), 400)
+    const max = Math.min(Math.max(parseInt(url.searchParams.get('max') || '10', 10) || 10, 1), 30)
+    json(res, openMessageDigest(getAgentConversation(agent, 200), agent, Date.now(), head, max))
     return true
   }
 
