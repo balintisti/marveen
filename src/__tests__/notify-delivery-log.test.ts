@@ -7,14 +7,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // them, so their sources could not be measured afterwards. The line must carry
 // neither the chat id nor the text.
 const { cfg, mockSend, split } = vi.hoisted(() => ({
-  cfg: { chatId: '111', alertChatId: '' },
+  cfg: { chatId: '111', alertChatId: '', token: 'bot-token' },
   mockSend: vi.fn(async (_token: string, _chat: string, _text: string, _mode?: string) => {}),
   split: { fn: (t: string) => [t] as string[] },
 }))
 
 vi.mock('../config.js', () => ({
   CHANNEL_PROVIDER: 'telegram',
-  CHANNEL_TOKEN: 'bot-token',
+  get CHANNEL_TOKEN() { return cfg.token },
   get CHANNEL_CHAT_ID() { return cfg.chatId },
   get ALLOWED_CHAT_ID() { return cfg.chatId },
   get ALERT_CHAT_ID() { return cfg.alertChatId },
@@ -56,6 +56,7 @@ beforeEach(() => {
   mockWarn.mockClear()
   cfg.chatId = '111'
   cfg.alertChatId = ''
+  cfg.token = 'bot-token'
   split.fn = (t: string) => [t]
 })
 
@@ -123,6 +124,19 @@ describe('alert delivery line (card 68cb6715)', () => {
       fields: { agent: 'agent-x', kind: 'permission-prompt', recipient: 'owner', outcome: 'skipped', chunks: 0, failedChunks: 0 },
     }])
     expect(warnMessages().some((m) => m.startsWith('Channel ertesites kihagyva'))).toBe(true)
+  })
+
+  // The alert-chat leg does not pass notifyOwner's token check, so sendToChat's
+  // own token guard is reachable only here.
+  it('a redirected alert with no bot token logs outcome skipped and sends nothing', async () => {
+    cfg.alertChatId = '222'
+    cfg.token = ''
+    await notifyChannel('x', { agent: 'agent-x', kind: 'permission-prompt' })
+    expect(mockSend).not.toHaveBeenCalled()
+    expect(deliveryLines()).toEqual([{
+      level: 'info',
+      fields: { agent: 'agent-x', kind: 'permission-prompt', recipient: 'alert-chat', outcome: 'skipped', chunks: 0, failedChunks: 0 },
+    }])
   })
 
   it('a caller without meta still gets the line, with agent and case null', async () => {

@@ -184,6 +184,12 @@ describe('the main-agent message', () => {
 
 describe('wiring in channel-monitor.ts', () => {
   const src = readFileSync(join(__dirname, '..', 'web', 'channel-monitor.ts'), 'utf-8')
+  // Card baabe0ba: the monitor's sendAlert is the funnel every owner alert of
+  // the menu pass goes through; if it drops the meta, the delivery line loses
+  // the agent and the case. A source pin (the module is too heavy to import).
+  it('sendAlert passes the alert meta on to notifyChannel', () => {
+    expect(src).toMatch(/export function sendAlert\(text: string, meta\?: AlertMeta\): void \{\n  notifyChannel\(text, meta\)/)
+  })
   it('the menu thresholds the timeline uses are the production ones', () => {
     expect(src).toMatch(/const MENU_RECOVER_CONFIRM_MS = 45_000\n/)
     expect(src).toMatch(/const MENU_RECOVER_DEDUP_MS = 5 \* 60 \* 1000\n/)

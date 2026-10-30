@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { permissionPromptSummary } from '../pane-state.js'
+import { permissionPromptSummary, isPermissionFileCardTitle } from '../pane-state.js'
 import { formatStuckSessionAlert } from '../web/message-router.js'
 import { formatPermissionPromptMainAlert } from '../web/permission-prompt-escalation.js'
 import { permissionPromptAsk, formatPermissionPromptAlert } from '../web/permission-prompt-alert.js'
@@ -102,5 +102,56 @@ describe('negative control: a card WITHOUT a reason block never puts the command
       expect(text.length).toBeGreaterThan(0)
     }
     expect(outgoing(pane, false)[0]).toContain('TOOL-PERMISSION PROMPT')
+  })
+})
+
+// Card baabe0ba (F7): the file-card branch of the summary quotes the path and
+// nothing else, only when the header says "<Verb> file", only from the card
+// itself, and only when the path sits directly under the header.
+describe('file card: the summary quotes the path, from the card, directly under the header', () => {
+  const RULE = '─'.repeat(60)
+  const card = (opts: { before?: string; gap?: string } = {}) => [
+    ...(opts.before ? [opts.before, ''] : []),
+    RULE,
+    ' Edit file · from the general-purpose agent',
+    ...(opts.gap ? [opts.gap] : []),
+    '   │ ../.claude/scheduled-tasks/x/SKILL.md',
+    '   │ + a quoted diff line, file content that is never sent',
+    ' Do you want to make this edit to SKILL.md?',
+    ' ❯ 1. Yes',
+    '   3. No',
+    '',
+    ' Esc to cancel · Tab to amend',
+  ].join('\n')
+
+  it('positive control: the path is the reason, the quoted diff below it is not', () => {
+    expect(permissionPromptSummary(card())).toEqual({
+      title: 'Edit file · from the general-purpose agent',
+      reason: '../.claude/scheduled-tasks/x/SKILL.md',
+    })
+  })
+  it('a box drawn in the transcript ABOVE the card rule is not read as the card', () => {
+    const s = permissionPromptSummary(card({ before: ' │ TRANSCRIPT-BOX-LINE' }))
+    expect(s?.reason).toBe('../.claude/scheduled-tasks/x/SKILL.md')
+    expect(JSON.stringify(s)).not.toContain('TRANSCRIPT-BOX-LINE')
+  })
+  it('a line between the header and the first quoted block means it is not the path: no summary', () => {
+    expect(permissionPromptSummary(card({ gap: '   an unquoted line, a command description' }))).toBeNull()
+  })
+})
+
+describe('isPermissionFileCardTitle', () => {
+  it.each([
+    ['Edit file', true],
+    ['Create file', true],
+    ['Edit file · from the general-purpose agent', true],
+    ['Bash command', false],
+    ['Bash command · from the general-purpose agent', false],
+    ['Bash', false],
+    ['Read', false],
+    ['edit file', false],
+    [null, false],
+  ])('%s -> %s', (title, want) => {
+    expect(isPermissionFileCardTitle(title as string | null)).toBe(want)
   })
 })
