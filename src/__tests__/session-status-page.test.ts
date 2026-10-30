@@ -227,10 +227,13 @@ describe('never in the way of a session start', () => {
   })
 })
 
-describe('wiring: every agent session gets it from the settings template', () => {
-  it('the template runs it at SessionStart, matcher startup', () => {
-    const tpl = JSON.parse(readFileSync(join(REPO, 'templates', 'settings.json.template'), 'utf8').replaceAll('{{PROJECT_ROOT}}', '/x'))
-    const entry = (tpl.hooks.SessionStart as Array<{ matcher: string; hooks: Array<{ command: string }> }>)
+describe('wiring: every agent session gets it at SessionStart, matcher startup', () => {
+  // Sub-agents get it from the template (ensureAgentHooks merges it into each
+  // agents/<n>/.claude/settings.json at boot); the main agent's hooks are the
+  // tracked project settings, which the scaffold never writes (#1305).
+  it.each(['templates/settings.json.template', '.claude/settings.json'])('%s', (file) => {
+    const cfg = JSON.parse(readFileSync(join(REPO, file), 'utf8').replaceAll('{{PROJECT_ROOT}}', '/x'))
+    const entry = (cfg.hooks.SessionStart as Array<{ matcher: string; hooks: Array<{ command: string }> }>)
       .find((e) => e.hooks.some((h) => h.command.includes('/scripts/hooks/session-status-page.py')))
     expect(entry?.matcher).toBe('startup')
   })
