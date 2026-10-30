@@ -27,6 +27,7 @@ ellenorzes: lasd `_assert_units`.
 """
 import argparse, collections, json, os, re, sqlite3, subprocess, sys, time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # A gyoker a SZKRIPT helyebol jon, nem a munkakonyvtarbol: elesben a `scripts/`
 # sav a fo checkoutbol fut, es ott a `store/` mellette van. A `--root` felulirasa
@@ -524,6 +525,27 @@ def section_dream(root=DEFAULT_ROOT, today=None):
             f"(A `dream-engine` utemezett feladat allapotat nezd meg: 09-06 ota `enabled:false` volt.)"]
 
 
+HETNAPOK = ("hétfő", "kedd", "szerda", "csütörtök", "péntek", "szombat", "vasárnap")
+TZ = ZoneInfo("Europe/Belgrade")
+
+
+def section_today(now=None):
+    """FEJLEC-NAP -- a napindito fejlecenek napja SZKRIPTBOL, nem fejbol (kartya 4c43d099).
+
+    2026-09-13, 09-15 es 09-20: a fejlecbe kezzel irt hetnap hibas volt (szombat a vasarnap
+    helyett, hetfo a kedd helyett, es a 09-20-i `date` formatuma nem is adott napnevet). A
+    SKILL azota azt kerte, hogy a `date` kimenetebol masolj; ez egy szabaly, amit figyelemmel
+    be lehet tartani, tehat remeny. Itt a szerszamban van: a sor MINDIG kijon, es a napot a
+    datetime adja, locale nelkul (a gep locale-ja nem kotelezo), Europe/Belgrade szerint:
+    ejfel korul a UTC mas napot mondana.
+
+    A VEGEN ALL, nem az elejen: a SKILL szerint a `DREAM:` sor a kimenet ELSO blokkja, ha
+    a DREAM.md nem mai, es ezt a szerzodest nem mozditjuk el."""
+    d = datetime.fromtimestamp(now, TZ) if now is not None else datetime.now(TZ)
+    return [f"FEJLEC-NAP (szkript, nem fejbol): {d.strftime('%Y-%m-%d')} {HETNAPOK[d.weekday()]}, "
+            f"{d.strftime('%H:%M')} {d.tzname()} -- a napindito fejlecebe ezt a napot ird."]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--since-hours", type=int, default=24)
@@ -543,7 +565,8 @@ def main():
         return 1
     blocks = [section_dream(a.root), section_isti(con), section_delta(con, snap, not a.no_write),
               section_broken(con, a.since_hours, a.tasks_dir, a.root, None, not a.no_write),
-              section_quota(a.root), section_done_vs_live(a.root), section_idle_digest(a.root)]
+              section_quota(a.root), section_done_vs_live(a.root), section_idle_digest(a.root),
+              section_today()]
     print("\n\n".join("\n".join(b) for b in blocks if b))
     return 0
 
