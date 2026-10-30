@@ -8,16 +8,14 @@ import { permissionPromptAsk, formatPermissionPromptAlert } from '../web/permiss
 
 // Card baabe0ba (F7), upstream ec2934146 (ESZKALTOKEN1019). Upstream's
 // permissionPromptSummary() feeds three outgoing messages there; in OUR tree
-// the urgent-held notice does not exist and the router's stuck-session alert
-// quotes the pane through its own describePermissionPrompt (message-router.ts,
-// coordination core). The texts F7 owns are the main-agent message and the
-// owner alert; those two are checked on every shape. The stuck-session alert is
-// checked on the shapes where it holds (the positive control, and cards that
-// keep a description line); on a card with neither a reason block nor a
-// description line, describePermissionPrompt quotes the command box BY DESIGN
-// (pane-state.ts, pinned by pane-permission-prompt.test.ts) and a token in the
-// command reaches that inter-agent message. Measured with this very file on
-// 2026-10-30; reported on the card, NOT changed here (router policy is Marveen's).
+// the urgent-held notice does not exist, and the third text is the router's
+// stuck-session alert. That alert used to quote the pane through its own
+// describePermissionPrompt, which on a card with neither a reason block nor a
+// description line quoted the command box BY DESIGN, so a token in the command
+// reached an inter-agent message (measured with this file, 2026-10-30).
+// Coordinator decision (card fa6535bb): the router alert carries the same
+// summary as the other two (permissionPromptAsk), and all three texts are
+// checked on EVERY shape below.
 // On a Bash card WITHOUT a reason block, the last quoted block
 // before the question is the command echo, and it used to come back as the
 // "reason" -- so the command line, a token in argv included, went into
@@ -43,10 +41,10 @@ const reasonNested = (pane: string) => pane.replace(/\n │ /g, '\n   │ ')
 const commandAtCardIndent = (pane: string) => noReason(pane).replace(/\n {3}│ /g, '\n │ ')
 
 // Every outgoing text a permission card is quoted into, for one pane.
-function outgoing(pane: string, withRouter = true): string[] {
+function outgoing(pane: string): string[] {
   const ask = permissionPromptAsk(pane)
   return [
-    ...(withRouter ? [formatStuckSessionAlert('worker', 'marveen', 'agent-worker', 11 * 60 * 1000, 1, 'unknown', pane) ?? ''] : []),
+    formatStuckSessionAlert('worker', 'marveen', 'agent-worker', 11 * 60 * 1000, 1, 'unknown', pane) ?? '',
     formatPermissionPromptMainAlert('worker', 'agent-worker', ask, 15 * 60 * 1000),
     formatPermissionPromptAlert('worker', 'agent-worker', ask, 15 * 60 * 1000, 15 * 60 * 1000),
   ]
@@ -90,18 +88,17 @@ describe('negative control: a card WITHOUT a reason block never puts the command
     ['unseen shape: reason nested as deep as the command', reasonNested(CD)],
     ['unseen shape: command echo at the card indent, followed by its description', commandAtCardIndent(CD)],
   ]
-  it.each(cases)('%s', (n, pane) => {
+  it.each(cases)('%s', (_n, pane) => {
     expect(permissionPromptSummary(pane)).toBeNull()
-    // the router's own quoting is held to this only where it holds (see the header)
-    const routerHolds = !n.includes('no description line')
-    for (const text of outgoing(pane, routerHolds)) {
+    for (const text of outgoing(pane)) {
       expect(text).not.toContain(TOKEN)
       expect(text).not.toContain('x-api-key')
       expect(text).not.toContain('example-wt')
       // the message itself still goes out: the prompt is reported, only unquoted
       expect(text.length).toBeGreaterThan(0)
     }
-    expect(outgoing(pane, false)[0]).toContain('TOOL-PERMISSION PROMPT')
+    expect(outgoing(pane)[0]).toContain('TOOL-PERMISSION prompt')
+    expect(outgoing(pane)[1]).toContain('TOOL-PERMISSION PROMPT')
   })
 })
 

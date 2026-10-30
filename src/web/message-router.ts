@@ -35,7 +35,8 @@ import {
   capturePane,
   clearFeedbackModalAndRecheck,
 } from './agent-process.js'
-import { detectPaneState, detectsFirstRunGate, detectsPermissionPrompt, describePermissionPrompt, paneShowsContextSaturation, busyEvidence, type PaneState } from '../pane-state.js'
+import { detectPaneState, detectsFirstRunGate, detectsPermissionPrompt, paneShowsContextSaturation, busyEvidence, type PaneState } from '../pane-state.js'
+import { permissionPromptAsk } from './permission-prompt-alert.js'
 import { paneRemedy } from './parked-pane-remedy.js'
 import { parsePaneTokens, nextTokenSample, type TokenSample } from '../session-progress.js'
 import { setLastInboundModality } from './voice-modality.js'
@@ -210,7 +211,14 @@ function formatStuckSessionAlertCore(
     return `[session-stuck] Agent '${agent}' (tmux ${session}) has been not-ready for ${min} min with ${queue}, but the pane shows it is WORKING (${remedy.why}). Do NOT restart and do NOT type into it -- an intervention lands inside a live turn. Check again if it is still here in another window.${alsoQuiet}`
   }
   if (remedy.remedy === 'answer-it' && pane) {
-    const asked = describePermissionPrompt(pane)
+    // THE SAME SUMMARY AS THE OTHER PERMISSION ALERTS (card fa6535bb, baabe0ba F7;
+    // coordinator decision: no command text in the stuck-session alert). The
+    // card header plus the reason Claude gives, or on a file card its path, or
+    // the header alone; never the command box. This line used to quote the box
+    // above the question, and on a Bash card without a reason block that box IS
+    // the command, so a token in its argv went into agent_messages (measured: 2
+    // of the 6 negative-control shapes in permission-summary-never-command.test.ts).
+    const asked = permissionPromptAsk(pane)
     const what = asked ? ` It is asking: "${asked}".` : ''
     return `[approval-needed] Agent '${agent}' (tmux ${session}) has been waiting for a DECISION for ${min} min with ${queue}.${what} This is NOT a stall and NOT a wedge: the pane is parked on a TOOL-PERMISSION prompt. Do NOT restart -- that spends the entire context for one keystroke, and the question comes straight back. The answer IS the decision, so it belongs to a person, not to a watchdog.${alsoQuiet}`
   }

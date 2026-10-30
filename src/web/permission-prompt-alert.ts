@@ -151,7 +151,11 @@ function readPermissionCard(pane: string): PermissionCard | null {
 }
 
 function capAsk(text: string): string {
-  const flat = text.replace(/\s+/g, ' ').trim()
+  // Control characters go first (an ESC or a BEL survives a plain \s collapse):
+  // pane content is not ours, and this string is pasted into a message. The
+  // stuck-session alert's old quoting did the same (card fa6535bb).
+  // eslint-disable-next-line no-control-regex
+  const flat = text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim()
   return flat.length > PERMISSION_ASK_MAX ? flat.slice(0, PERMISSION_ASK_MAX - 1).trimEnd() + '…' : flat
 }
 

@@ -142,13 +142,17 @@ describe('formatStuckSessionAlert: the not-ready branch names what it saw', () =
     }
   })
 
-  it('NAMES what is being asked, so the reader does not have to open the pane', () => {
-    // Half the decision is the tag; the other half is that the alert quotes the
-    // question and the block above it, which is what identifies the command.
+  it('quotes nothing from a pane that shows no card header (the command box is never quoted)', () => {
+    // Half the decision is the tag; the other half used to be that the alert
+    // quoted the block above the question. On a Bash card without a reason that
+    // block is the command, so since card fa6535bb (baabe0ba F7) the alert
+    // carries only the card summary (permissionPromptAsk), pinned on real cards
+    // in pane-permission-prompt.test.ts and permission-summary-never-command.
+    // This pane has no header, so there is nothing safe to quote.
     const alert = formatStuckSessionAlert('dexter', MAIN, 'agent-dexter', 12 * MIN, 1, null, PERMISSION_PANE)!
-    expect(alert).toContain('Do you want to proceed?')
-    expect(alert).toContain('deny rule is configured')
-    expect(alert).toContain('It is asking:')
+    expect(alert.startsWith('[approval-needed]')).toBe(true)
+    expect(alert).not.toContain('It is asking:')
+    expect(alert).not.toContain('deny rule is configured')
   })
 
   it('context saturation is named as the context-guard territory, not the reader s', () => {

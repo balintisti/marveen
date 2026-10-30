@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import {
   detectsPermissionPrompt, detectsBlockingMenu, detectPaneState,
-  detectsModelConsentDialog, detectsFirstRunGate, describePermissionPrompt,
+  detectsModelConsentDialog, detectsFirstRunGate,
 } from '../pane-state.js'
+import { formatStuckSessionAlert } from '../web/message-router.js'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 // Card b5a9f60a / 296277e8.
 // Every pane below except the two clearly-marked CONSTRUCTED ones is a VERBATIM
@@ -220,87 +223,104 @@ describe('detectsPermissionPrompt', () => {
 // Card b5a9f60a, marveen's (B) decision 2026-09-03 14:46: the alert must NAME
 // what is being asked. Reclassifying without quoting still makes the reader
 // open the pane, which is the cost the reclassification exists to remove.
-describe('describePermissionPrompt', () => {
-  it('quotes the explanation block AND the question from the live capture', () => {
-    const quoted = describePermissionPrompt(PERMISSION_PROMPT_PANE)!
-    expect(quoted).toContain('Do you want to proceed?')
-    // The block above the question is what names the command and the reason.
+//
+// CHANGED BY card fa6535bb (baabe0ba F7), coordinator decision: no command text
+// in the stuck-session alert. This block used to pin describePermissionPrompt,
+// which quoted the block above the question -- on a Bash card without a reason
+// block that is the command box, and a token in argv went into agent_messages.
+// The alert now carries the SAME summary as the other permission alerts
+// (permissionPromptAsk: card header + the reason Claude gives, a path on a file
+// card, the header alone otherwise). The pins below hold the alert to that.
+describe('the stuck-session alert names what is asked, and never quotes the command box', () => {
+  const alertFor = (pane: string | null) =>
+    formatStuckSessionAlert('dexter', 'marveen', 'agent-dexter', 12 * 60 * 1000, 1, null, pane)!
+  const asking = (alert: string) => /It is asking: "([^"]*)"/.exec(alert)?.[1] ?? null
+  const GREP_CARD = readFileSync(join(__dirname, 'fixtures/pane/permission-prompt-bash-grep.txt'), 'utf8')
+
+  it('quotes the card header and the reason from the live capture, not the command', () => {
+    const alert = alertFor(GREP_CARD)
+    expect(alert.startsWith('[approval-needed]')).toBe(true)
+    const quoted = asking(alert)!
+    expect(quoted).toContain('Bash command')
     expect(quoted).toContain('deny rule is configured')
-    expect(quoted).toContain('submission.service.ts')
+    // the command box of the same card, line by line: none of it is in the alert
+    expect(alert).not.toContain('OPERATOR')
+    expect(alert).not.toContain('firstSymbol')
+    expect(alert).not.toContain('Locate the functions')
+  })
+
+  it('on the headless live capture (command box + reason, no card header) nothing of the box is quoted', () => {
+    // The capture the old pin was written on. It has no header to name the tool,
+    // so there is nothing safe to quote: the alert still says what KIND of thing
+    // waits (a tool-permission prompt) and carries no excerpt.
+    const alert = alertFor(PERMISSION_PROMPT_PANE)
+    expect(alert.startsWith('[approval-needed]')).toBe(true)
+    expect(alert).toContain('TOOL-PERMISSION prompt')
+    expect(asking(alert)).toBeNull()
+    for (const fragment of ['tsc -b', 'escapeHtml', 'textBody', 'submission.service', 'open(p,']) {
+      expect(alert).not.toContain(fragment)
+    }
+    // CONTROL: the fragments really are in the pane, so the absence is the code's doing
+    for (const fragment of ['tsc -b', 'escapeHtml', 'textBody', 'submission.service', 'open(p,']) {
+      expect(PERMISSION_PROMPT_PANE).toContain(fragment)
+    }
   })
 
   it('returns ONE line, so it cannot imitate the framing of the message carrying it', () => {
-    // Pane content is not ours. An excerpt that kept its control characters
-    // could forge a header inside the inter-agent message that carries it.
-    //
-    // THE FIXTURE CARRIES THE CONTROL CHARACTERS ON PURPOSE, and that is a
-    // correction: the first version of this test asserted on the clean live
-    // capture, and the mutation that REMOVED the sanitiser stayed green -- the
-    // fixture could not express the state the assertion was about. A pane with
-    // a CR and a tab in the quoted block can.
-    const dirty = PERMISSION_PROMPT_PANE.replace(
-      'a Read() deny rule is',
-      'a Read()\u000d\u0009deny\u0009rule  is',
-    )
-    const quoted = describePermissionPrompt(dirty)!
-    expect(quoted).not.toContain('\n')
-    expect(quoted).not.toMatch(/[\u0000-\u001f]/)
-    // Collapsed, not merely stripped: the words survive with single spaces.
-    expect(quoted).toContain('Read() deny rule is configured')
-    // CONTROL: the same assertions on the clean capture, so a function that
-    // returned an empty string would not pass this test.
-    const clean = describePermissionPrompt(PERMISSION_PROMPT_PANE)!
-    expect(clean).toContain('deny rule is configured')
+    // Pane content is not ours. A reason that kept its control characters could
+    // forge a header inside the inter-agent message that carries it. The fixture
+    // carries them on purpose (an assertion on the clean capture cannot tell a
+    // sanitiser from none): a CR, a tab, an ESC and a BEL inside the reason.
+    const dirty = GREP_CARD.replace('a Read()\n │ deny rule', 'a Read()\u000d\u0009\u001b[2J\u0007\n │ deny rule')
+    expect(dirty).not.toBe(GREP_CARD)
+    const alert = alertFor(dirty)
+    const quoted = asking(alert)!
+    expect(quoted).toContain('deny rule is configured')
+    expect(quoted).not.toMatch(/[\u0000-\u001f\u007f]/)
+    expect(alert).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f]/)
+    // CONTROL: the clean capture quotes the same words
+    expect(asking(alertFor(GREP_CARD))).toContain('deny rule is configured')
   })
 
-  it('caps the excerpt, however long the pane line is', () => {
-    const long = PERMISSION_PROMPT_PANE.replace(
-      ' │ grep on ',
-      ` │ ${'x'.repeat(900)} grep on `,
-    )
-    const quoted = describePermissionPrompt(long)!
-    expect(quoted.length).toBeLessThanOrEqual(220)
-    expect(quoted.endsWith('...')).toBe(true)
-    // CONTROL: the uncapped one is genuinely shorter, so the cap is not simply
-    // truncating every input to the same string.
-    expect(describePermissionPrompt(PERMISSION_PROMPT_PANE)!.length).toBeLessThan(220)
+  it('caps the excerpt, however long the reason is', () => {
+    const long = GREP_CARD.replace('deny rule is configured', `deny rule is configured ${'x'.repeat(900)}`)
+    const quoted = asking(alertFor(long))!
+    expect(quoted.length).toBeLessThanOrEqual(260)
+    expect(quoted.endsWith('…')).toBe(true)
+    // CONTROL: the uncapped one is genuinely shorter
+    expect(asking(alertFor(GREP_CARD))!.length).toBeLessThan(260)
   })
 
-  it('still answers when the prompt renders no explanation block', () => {
-    // Not every prompt has one; the question alone is a valid answer, and the
-    // walk must not require a box to return something.
+  it('still alerts when the prompt renders no explanation block: no excerpt, the verdict stands', () => {
     const bare = [
-      ' Do you want to make this edit to config.ts?',
+      ' Do you want to proceed?',
       ' ❯ 1. Yes',
       '   2. No',
       '',
       ' Esc to cancel · Tab to amend',
     ].join('\n')
-    expect(describePermissionPrompt(bare)).toBe('Do you want to make this edit to config.ts?')
+    const alert = alertFor(bare)
+    expect(alert.startsWith('[approval-needed]')).toBe(true)
+    expect(asking(alert)).toBeNull()
   })
 
   it('says nothing about panes that are not a permission prompt', () => {
     // The negative half: without this, a function that always returned the same
-    // sentence would pass every test above.
-    //
-    // THE QUOTING PANE IS THE ONE THAT MATTERS, and it was added after a
-    // mutation SURVIVED: dropping the detectsPermissionPrompt() guard left all
-    // of the panes below returning null anyway, because none of them contains
-    // the question at all -- so they proved nothing about the guard. An agent
-    // that merely PASTES the dialog into its scrollback does contain it, and
-    // without the guard that pane would be described as a live prompt.
+    // sentence would pass every test above. The QUOTING pane is the one that
+    // matters (an agent that merely PASTES the dialog into its scrollback
+    // contains the question and the options, and must not be described as a
+    // live prompt).
     const quotingIdlePane = [
       'Do you want to proceed?',
-      ' \u276f 1. Yes',
+      ' ❯ 1. Yes',
       '   2. No',
-      ' Esc to cancel \u00b7 Tab to amend',
+      ' Esc to cancel · Tab to amend',
       IDLE_PANE,
     ].join('\n')
-    expect(describePermissionPrompt(quotingIdlePane)).toBeNull()
-    expect(describePermissionPrompt(IDLE_PANE)).toBeNull()
-    expect(describePermissionPrompt(BUSY_PANE)).toBeNull()
-    expect(describePermissionPrompt(CONSENT_DIALOG_PANE)).toBeNull()
-    expect(describePermissionPrompt(TRUST_GATE_PANE)).toBeNull()
-    expect(describePermissionPrompt('')).toBeNull()
+    for (const pane of [quotingIdlePane, IDLE_PANE, BUSY_PANE, CONSENT_DIALOG_PANE, TRUST_GATE_PANE, '']) {
+      const alert = alertFor(pane)
+      expect(alert.startsWith('[approval-needed]')).toBe(false)
+      expect(asking(alert)).toBeNull()
+    }
   })
 })
