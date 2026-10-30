@@ -1963,6 +1963,12 @@ export function buildWakeMessage(
   // agent the old, self-contradicting wake -- 3688/3688 tests green. Now the
   // omission is a compile error (tsc --noEmit, and the build).
   kind: WorkCheckKind,
+  /** The ids, among `items`, of the agent's OWN cards that carry an OPEN reviewer verdict -- a fix
+   *  the reviewer bounced back (card 1affb872, Isti TG 8509: "mindig logikusabb lenne eloszor a
+   *  tesztelesen visszadobott javitasokat kijavitani utana uj kartyat felvenni"). They head the
+   *  message in their own section, whatever the priority of the other cards. UNDEFINED = not
+   *  measured (the lookup failed, or the caller predates it): the old grouping, unchanged. */
+  bouncedIds?: ReadonlySet<string>,
 ): string {
   const rank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 }
   // Pickable first, then priority within each group. WHICH cards are pickable depends on
@@ -1985,12 +1991,18 @@ export function buildWakeMessage(
   // reason, and grouping them here would call the coordinator's whole decision queue a floor
   // expiry (didi's intersection review, 2026-09-28, named the kind boundary).
   // The review queue carries the assigned_open_cards selection too (card b8674845), floor included.
+  // A BOUNCED FIX IS TAKEN OUT OF EVERY OTHER GROUP AND LISTED FIRST (card 1affb872). In the
+  // assignee's queue a `testing` card landed in the "not work" review group below the pickable
+  // planned cards, so an urgent planned card was named before a fix the reviewer had already sent
+  // back -- and the group's own label said it was not work. An open verdict makes it work.
+  const bounced = bouncedIds ? [...items].filter((c) => bouncedIds.has(c.id)).sort(byPriority) : []
+  const rest = bounced.length ? items.filter((c) => !bounced.includes(c)) : items
   const floor = kind === 'assigned_open_cards' || isReviewQueue
-    ? [...items].filter((c) => c.status === 'waiting').sort(byPriority)
+    ? [...rest].filter((c) => c.status === 'waiting').sort(byPriority)
     : []
-  const work = [...items].filter((c) => pickable(c) && !floor.includes(c)).sort(byPriority)
+  const work = [...rest].filter((c) => pickable(c) && !floor.includes(c)).sort(byPriority)
   // !floor too: in the review queue a waiting card is not pickable either, and must not be listed twice.
-  const review = [...items].filter((c) => !pickable(c) && !floor.includes(c)).sort(byPriority)
+  const review = [...rest].filter((c) => !pickable(c) && !floor.includes(c)).sort(byPriority)
 
   const line = (c: { id: string; title?: string | null; priority?: string | null; status?: string }) =>
     `  ${c.id.slice(0, 8)}  ${(c.status ?? '?').padEnd(11)} ${(c.priority ?? 'normal').padEnd(6)}  ${(c.title ?? '').slice(0, 60)}`
@@ -2004,6 +2016,14 @@ export function buildWakeMessage(
     'uj fordulot indit, egy beerkezo uzenet -- ezert kapod ezt. Isti NEM lett ertesitve.',
     '',
   ]
+  if (bounced.length) {
+    out.push(
+      `VISSZADOBOTT JAVITAS (${bounced.length}) -- a NEVEDEN allo kartya, amin egy ellenorzo NYITOTT TETEL verdiktet hagyott.`,
+      'ELOBB ezeket javitsd ki, MIELOTT uj kartyat veszel fel (Isti szabalya):',
+      ...bounced.slice(0, 5).map(line),
+      ...(work.length || floor.length ? [''] : []),
+    )
+  }
   if (work.length) {
     out.push(
       isReviewQueue
@@ -2031,7 +2051,7 @@ export function buildWakeMessage(
       ...review.slice(0, 3).map(line),
     )
   }
-  if (!work.length && !review.length && !floor.length) {
+  if (!bounced.length && !work.length && !review.length && !floor.length) {
     out.push('A szamlalod nem nulla, de tetelt nem tudtam megnevezni -- nezd meg a tablat.')
   }
   // THE STAMP ABOVE FIXES THE DURATION AND NOT THE COUNT, AND THE MESSAGE HAS TO SAY WHICH.

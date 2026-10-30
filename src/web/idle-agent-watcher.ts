@@ -384,6 +384,50 @@ export function closingVerdictByCard(): Map<string, string> | undefined {
   }
 }
 
+/**
+ * Which of the items the guard is about to name are BOUNCED FIXES: the agent's OWN cards, in
+ * `testing` or `in_progress`, on which a reviewer left an OPEN verdict (kanban-verdict.ts
+ * openVerdicts, the same reading the closing gate uses; never a substring search -- "NINCS NYITOTT
+ * TETEL" contains NYITOTT). Card 1affb872, Isti TG 8509: a returned fix comes before a new card.
+ *
+ * Read at WAKE time and only for the items being named, so the comment bodies of the whole board
+ * are not loaded every tick. A card where only the agent wrote NYITOTT is not bounced (see below).
+ * A failed lookup -> undefined, which
+ * buildWakeMessage reads as "not measured": the old grouping, never a silenced queue.
+ *
+ * ANSWERED IS NOT BOUNCED: the open verdict has to be NEWER than the agent's last comment on the
+ * card. Once the agent has handed the fix back, the open verdict stays open until the reviewer
+ * looks again -- and without this the guard would put an already-fixed card at the head of every
+ * wake, telling the agent to fix it a second time instead of taking the next card.
+ */
+export function bouncedCardIds(
+  agent: string,
+  items: readonly { id: string; status?: string; assignee?: string | null }[],
+): Set<string> | undefined {
+  try {
+    const db = getDb()
+    const stmt = db.prepare(
+      'SELECT id, author, content, created_at FROM kanban_comments WHERE card_id = ? AND content LIKE ?',
+    )
+    const lastOwn = db.prepare('SELECT MAX(created_at) AS at FROM kanban_comments WHERE card_id = ? AND author = ?')
+    const ids = new Set<string>()
+    for (const c of items) {
+      if (c.assignee !== agent || (c.status !== 'testing' && c.status !== 'in_progress')) continue
+      const all = stmt.all(c.id, '%VERDIKT:%') as VerdictComment[]
+      const ownAt = (lastOwn.get(c.id, agent) as { at: number | null } | undefined)?.at ?? null
+      const at = new Map(all.map((r) => [r.id, r.created_at]))
+      // The agent's own verdict line needs no separate exclusion: it is never newer than the
+      // agent's own last comment, so the "answered" rule already drops it.
+      const bounced = openVerdicts(all).some((v) => ownAt === null || (at.get(v.commentId) ?? 0) > ownAt)
+      if (bounced) ids.add(c.id)
+    }
+    return ids
+  } catch (err) {
+    logger.warn({ err }, 'idle guard: bounced-fix lookup failed; the wake keeps its old grouping this tick')
+    return undefined
+  }
+}
+
 /** The agent's latest ACTION TRACE, epoch ms: the newer of its last outgoing inter-agent message
  *  (db.getLastOutboundMessageAt, the helper the session-stuck alert already uses) and its last card
  *  comment (the per-tick comment map, census comments excluded). null = none on record; undefined = the
@@ -875,7 +919,7 @@ export function tick(): void {
         const items = ownItems ?? []
         const minutes = Math.round(decision.idleForMs / 60_000)
         try {
-          createAgentMessage('system', agent, withStandstillNote(buildWakeMessage(agent, minutes, decision.workCount, items, Date.now(), (check as WorkCheck).kind), stillNote))
+          createAgentMessage('system', agent, withStandstillNote(buildWakeMessage(agent, minutes, decision.workCount, items, Date.now(), (check as WorkCheck).kind, bouncedCardIds(agent, items)), stillNote))
           logger.info(
             { idleGuard: true, agent, workCount: decision.workCount, idleForMs: decision.idleForMs },
             'idle guard: woke the agent (stage 1) -- no human told yet',
