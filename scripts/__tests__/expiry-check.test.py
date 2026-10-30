@@ -633,8 +633,37 @@ class ExpiryCheck(unittest.TestCase):
         self.assertEqual(rc, 3)
         self.assertIn("ertelmezhetetlen", out)
 
+    def _seed(self, reported_at):
+        sp = self._state_path()
+        os.makedirs(os.path.dirname(sp), exist_ok=True)
+        with open(sp, "w", encoding="utf-8") as fh:
+            json.dump({"checked_at": "2026-09-02T23:00:00+00:00", "reported_at": reported_at,
+                       "states": {"old": "DUE"}}, fh)
+        return sp
+
+    def test_an_empty_or_null_reported_at_reports_not_falls_back_to_checked_at(self):
+        """trillian 49737: a fallback to checked_at (the old bug) would read the recent run as the
+        last report and stay silent. checked_at is one hour old here, so only the refusal reports."""
+        for value in (None, ""):
+            with self.subTest(reported_at=value):
+                sp = self._seed(value)
+                rc, out, _ = run([self.DUE_ITEM()], as_json=False, now="2026-09-03T00:00:00Z",
+                                 extra=["--quiet-unless-changed", sp])
+                self.assertEqual(rc, 3)
+                self.assertIn("ertelmezhetetlen", out)
+
+    def test_a_reported_at_in_the_future_reports(self):
+        """trillian 49737: reported_at = now + 30 days kept a DUE item silent for 30 + 7 days."""
+        for future in ("2026-10-03T00:00:00+00:00", "2026-09-03T00:01:00+00:00"):
+            with self.subTest(reported_at=future):
+                sp = self._seed(future)
+                rc, out, _ = run([self.DUE_ITEM()], as_json=False, now="2026-09-03T00:00:00Z",
+                                 extra=["--quiet-unless-changed", sp])
+                self.assertEqual(rc, 3, "a last report in the future must not buy silence")
+                self.assertIn("a jovoben van", out)
+
     def test_corrupt_or_unreadable_state_reports(self):
-        for content in ("{not json", '{"states": "not a dict"}', '{"states": {"old": "DUE"}}'):
+        for content in ("{not json", '{"states": "not a dict"}', '{"states": {"old": "DUE"}}', '[1, 2]'):
             with self.subTest(content=content[:20]):
                 sp = self._state_path()
                 os.makedirs(os.path.dirname(sp), exist_ok=True)

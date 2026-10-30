@@ -326,6 +326,8 @@ def _previous_states(args):
     try:
         with open(path, encoding="utf-8") as fh:
             old = json.load(fh)
+        if not isinstance(old, dict):   # valid JSON, not an object: same as unreadable
+            return None
         return old.get("states") if isinstance(old.get("states"), dict) else None
     except (OSError, ValueError):
         return None
@@ -430,6 +432,8 @@ def _suppression(args, rows, now):
     try:
         with open(path, encoding="utf-8") as fh:
             old = json.load(fh)
+        if not isinstance(old, dict):
+            raise ValueError("the state file is not a JSON object")
         previous = old.get("states")
         has_reported_at = "reported_at" in old
         reported = _parse_iso(old.get("reported_at"))
@@ -444,6 +448,12 @@ def _suppression(args, rows, now):
         suppress, why = False, "a korabbi allapotban nincs reported_at: az utolso jelentes ideje ismeretlen"
     elif reported is None:
         suppress, why = False, "a korabbi idobelyeg ertelmezhetetlen"
+    elif reported > now:
+        # A future reported_at made (now - reported).days negative, so the ceiling never fired:
+        # +30 days bought 37 days of silence (trillian 49737). A legitimate file has
+        # reported_at <= now; a future one is a clock skew or a hand edit, like the live fix of
+        # 2026-10-30. Uncertain, therefore it reports.
+        suppress, why = False, "a korabbi jelentes ideje a jovoben van"
     elif (now - reported).days >= args.max_silence_days:
         suppress, why = False, f"a korabbi jelentes {(now - reported).days} napos"
     elif previous != current:
