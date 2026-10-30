@@ -215,6 +215,26 @@ export function decide(rc, counts, cause = null) {
   return { write: true, reason: null }
 }
 
+/**
+ * A blokk idobelyege a csapat zonajaban (Europe/Belgrade), a pillanathoz ILLO zonanevvel (kartya
+ * 9c4f0e1e). Eddig a " CEST" fixen volt beirva, igy 10-25 utan minden teli blokk hamis zonat
+ * allitott. A nevet az eltolasbol szamoljuk, nem az ICU `timeZoneName`-jebol: az ICU-adat a CI-n
+ * mas lehet (ott a de-CH ezres-elvalaszto is elter), a szamjegyek viszont nem.
+ */
+export function zoneStamp(date) {
+  const zone = 'Europe/Belgrade'
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: zone, hourCycle: 'h23',
+      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+    }).formatToParts(date).map((p) => [p.type, p.value]),
+  )
+  const wall = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second)
+  const offsetMin = Math.round((wall - Math.floor(date.getTime() / 1000) * 1000) / 60000)
+  const name = offsetMin === 120 ? 'CEST' : offsetMin === 60 ? 'CET' : `UTC${offsetMin >= 0 ? '+' : '-'}${Math.abs(offsetMin) / 60}`
+  return `${date.toLocaleString('hu-HU', { timeZone: zone, hour12: false })} ${name}`
+}
+
 /** A generalt blokk szovege. A szam ES a mondat EGYUTT keletkezik, hogy ne tudjanak szetcsuszni. */
 export function renderBlock(counts, stamp, how = 'npx vitest run') {
   return [
@@ -316,15 +336,17 @@ function main() {
     process.exit(1)
   }
 
-  const stamp = new Date().toLocaleString('hu-HU', { timeZone: 'Europe/Budapest', hour12: false })
+  const stamp = zoneStamp(new Date())
   const src = readFileSync(TARGET, 'utf-8')
   // A MERES MODJA IS A BLOKKBA KERUL. Enelkul a `--fast` utan a komment azt
   // allitana, hogy `vitest run` merte -- vagyis a szam es a MONDATA csuszna szet,
   // pontosan az a hiba, ami ellen ez a generalt blokk keszult.
   const how = cmd ? 'SUITE_BASELINE_CMD' : fast ? 'npx vitest list --json' : 'npx vitest run'
-  const next = replaceBlock(src, renderBlock(counts, `${stamp} CEST`, how))
+  const next = replaceBlock(src, renderBlock(counts, stamp, how))
   if (dry) {
-    console.log(`\n[--dry-run] uj alapvonal: ${counts.files} fajl / ${counts.tests} teszt (nem irtam)\n`)
+    // A belyeg is kiirodik: igy a --dry-run a main() VALODI belyeg-utjat mutatja, es egy teszt
+    // azon at merheti (trillian 49721: a zoneStamp bekotese fedetlen volt).
+    console.log(`\n[--dry-run] uj alapvonal: ${counts.files} fajl / ${counts.tests} teszt, belyeg: ${stamp} (nem irtam)\n`)
   } else if (next === src) {
     console.log(`\nAz alapvonal valtozatlan: ${counts.files} fajl / ${counts.tests} teszt\n`)
   } else {
