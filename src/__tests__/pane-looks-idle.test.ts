@@ -4,7 +4,7 @@ import { paneLooksIdle, isReadyForPrompt } from '../pane-state.js'
 // Unit tests for paneLooksIdle -- the pure idle predicate extracted as the
 // SINGLE source of truth for "is this pane idle / safe to send a prompt into".
 // It backs three call sites: the readiness check (isReadyForPrompt), the
-// auto-restart idle-guard (auto-restart-runner.paneIsIdle), and the
+// auto-restart idle-guard (auto-restart-runner checkAgent), and the
 // sendPromptToSession pre-flight wait-until-idle gate (waitForPaneIdle).
 //
 // These assertions are on DETERMINISTIC string->bool output only; no LLM

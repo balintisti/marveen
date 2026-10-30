@@ -168,20 +168,33 @@ export function localMidnightMs(nowMs: number): number {
   return d.getTime()
 }
 
+/** A block a due restart may outlast: each has its own capped deferral streak. */
+export type SoftRestartBlock = 'background-work' | 'open-question'
+export type RestartBlock = 'busy-pane' | SoftRestartBlock
+
 /**
  * Why a due restart must still be deferred, or null when it may proceed.
  * Pure so the invariants are unit-testable:
- *   - a busy pane defers (never cut off a live turn), and
+ *   - a busy pane defers (never cut off a live turn),
+ *   - background work defers (card c8a9bcff) -- shells, monitors and sub-agents
+ *     the pane footer counts, plus the agent's live heavy-run jobs. The footer
+ *     with "· N shell" used to read as unknown, so a due restart waited for it
+ *     by accident; once pane-state read it as idle (batch 5b4af8b6) the restart
+ *     would kill the running work. The count comes from the same measurement
+ *     the context-guard's routine restart waits on (measureBackgroundWork), and
  *   - an unanswered inbound question defers -- an idle pane is NOT proof there
  *     is nothing to lose, because an agent waiting on the owner's answer is
  *     idle precisely then, and a restart swallows the pending exchange (for a
  *     channel agent even a "continue" restart is effectively fresh).
  * Busy-pane wins the ordering: it is the harder invariant (mid-turn cutoff).
+ * backgroundWork is required, not optional: a caller that forgets it must not
+ * compile into "no background work".
  */
 export function restartBlockedBy(
-  signals: { paneIdle: boolean; openQuestion: boolean },
-): 'busy-pane' | 'open-question' | null {
+  signals: { paneIdle: boolean; backgroundWork: number; openQuestion: boolean },
+): RestartBlock | null {
   if (!signals.paneIdle) return 'busy-pane'
+  if (signals.backgroundWork > 0) return 'background-work'
   if (signals.openQuestion) return 'open-question'
   return null
 }
@@ -199,26 +212,50 @@ export function restartBlockedBy(
 export const OPEN_QUESTION_DEFERRAL_CAP_MS = OPEN_QUESTION_DEFERRAL_CAP_HOURS * 60 * 60 * 1000
 
 /**
+ * Cap on how long background work may keep deferring a due restart. A footer
+ * count has no clock either: a shell that never exits, or a sub-agent row left
+ * standing after its agent died, would pin the nightly restart forever. Six
+ * hours covers the longest gate runs we have measured (~3.5 h) with room; a
+ * 03:00 slot then runs by 09:00 at the latest, and the override is logged.
+ * Longer than the context-guard's BACKGROUND_DEFER_MAX_MS (45 min) on purpose: that hold races a
+ * growing context, this one only a clock -- nothing gets worse while a nightly restart waits.
+ */
+export const BACKGROUND_WORK_DEFERRAL_CAP_MS = 6 * 60 * 60 * 1000
+
+/**
  * Whether a due-but-deferred restart must proceed despite the block.
- * Only 'open-question' deferrals are overridden: a busy pane is the harder
- * invariant (never cut off a live turn) and is never overridden, no matter
- * how long the streak.
+ * Only the soft blocks ('background-work', 'open-question') are overridden: a
+ * busy pane is the harder invariant (never cut off a live turn) and is never
+ * overridden, no matter how long the streak.
  *
- * @param blocked          Result of restartBlockedBy for this tick.
- * @param deferredSinceMs  When the current open-question deferral streak
+ * @param blocked          The block this streak belongs to.
+ * @param deferredSinceMs  When the current deferral streak for that block
  *                         started, or null if there is no streak.
  * @param nowMs            Current clock (ms).
  * @param capMs            Maximum streak length before the override fires.
  */
 export function deferralOverride(
-  blocked: 'busy-pane' | 'open-question' | null,
+  blocked: RestartBlock | null,
   deferredSinceMs: number | null,
   nowMs: number,
   capMs: number = OPEN_QUESTION_DEFERRAL_CAP_MS,
 ): boolean {
-  if (blocked !== 'open-question') return false
+  if (blocked !== 'open-question' && blocked !== 'background-work') return false
   if (deferredSinceMs === null) return false
   return nowMs - deferredSinceMs >= capMs
+}
+
+/**
+ * The soft blocks still holding a due restart: every block present this tick
+ * whose own streak has not reached its own cap. Both are checked, not just the
+ * first in the ordering -- an open question past its cap must not let the
+ * restart through while a gate shell is still running, and the other way round.
+ */
+export function softBlocksHolding(
+  present: { block: SoftRestartBlock; sinceMs: number; capMs: number }[],
+  nowMs: number,
+): SoftRestartBlock[] {
+  return present.filter((p) => !deferralOverride(p.block, p.sinceMs, nowMs, p.capMs)).map((p) => p.block)
 }
 
 /**
