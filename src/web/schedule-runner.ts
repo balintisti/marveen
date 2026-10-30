@@ -41,7 +41,7 @@ import {
   wrapScheduledTaskByReference,
 } from '../prompt-safety.js'
 import { writeScheduledRunSnapshot, isScheduledRunReference } from './scheduled-run-snapshot.js'
-import { cronPrevOccurrence, cronGapMs, effectiveCronTz } from './cron.js'
+import { cronOccurrenceToFire, cronGapMs, effectiveCronTz } from './cron.js'
 
 // THE PRECONDITION `skipIfBusy` ALWAYS HAD, NOW CHECKED (card 40b2f3a1).
 //
@@ -2831,14 +2831,13 @@ export function startScheduleRunner(): NodeJS.Timeout {
 
     for (const task of tasks) {
       if (!task.enabled) continue
-      const occurrenceMs = cronPrevOccurrence(task.schedule, fromMs, now)
-      if (occurrenceMs == null) continue
-
       // Prevent double-firing across a restart: skip if the task already ran at
       // or after the start of this scan window (its occurrence is already
       // recorded, so re-scanning the catch-up window must not fire it again).
-      const lastRun = scheduleLastRun.get(task.name) || 0
-      if (lastRun >= fromMs) continue
+      // Also skip the repeated wall-clock time of an autumn clock change the
+      // task already ran at (card 093d6568).
+      const occurrenceMs = cronOccurrenceToFire(task.schedule, fromMs, now, scheduleLastRun.get(task.name) || 0)
+      if (occurrenceMs == null) continue
 
       // How late is this occurrence, and is it still worth running? An
       // occurrence the owning tick never scanned (process down, dropped tick)

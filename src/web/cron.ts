@@ -147,10 +147,85 @@ export function cronPrevOccurrence(cron: string, fromMs: number, toMs: number, t
     // toMs], so a boundary occurrence fires exactly once, never twice.
     const expr = CronExpressionParser.parse(cron, { tz, currentDate: new Date(toMs + 1) })
     const prev = expr.prev().getTime()
-    return prev > fromMs ? prev : null
+    if (prev > fromMs) return prev
+    // prev() and next() disagree around a DST change (cron-parser 5.5.0, measured
+    // 2027-03-28 in Europe/Belgrade, card 093d6568): a daily 02:07 task has its
+    // 03:07 CEST occurrence (01:07Z) found by next() from BEFORE the jump but not by
+    // prev(), which answers with the day before, and not by next() from after it
+    // (that already reads 03:06 as past 02:07). So walk forward from three hours
+    // before the window. It can only say yes when the occurrence really is inside
+    // (fromMs, toMs]; the few steps cap keeps a dense cron from walking for long.
+    const fwd = CronExpressionParser.parse(cron, { tz, currentDate: new Date(fromMs - 3 * 3600_000) })
+    for (let i = 0; i < 5; i++) {
+      const next = fwd.next().getTime()
+      if (next > fromMs) return next <= toMs ? next : null
+    }
+    return null
   } catch {
     return null
   }
+}
+
+// 'YYYY-MM-DD HH:mm' on the wall clock of `tz`: what an operator means by
+// "02:07 on that day", and the same string for both 02:07s of an autumn change.
+function wallClockLabel(ms: number, tz: string): string {
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(ms))
+}
+
+/**
+ * True when `occurrenceMs` is the SECOND pass over a wall-clock time the task
+ * already ran at: the autumn clock change repeats 02:00-03:00, so a daily
+ * "07 2 * * *" has two occurrences an hour apart that read the same on the
+ * wall clock (card 093d6568: dream-engine ran at 02:07 CEST and again at 02:07
+ * CET on 2026-10-25, same body hash).
+ *
+ * Applies only to a cron whose minute and hour are fixed ("07 2", "0 2,14"):
+ * there each wall-clock time is ONE intended run. "0 * * * *" and "*\/15" mean
+ * "every hour / quarter" and DO run in the repeated hour, so they are left
+ * alone. `lastRunMs` is when the task last fired; the occurrence it served is
+ * the latest one at or before it.
+ */
+export function isRepeatedWallClockOccurrence(
+  cron: string,
+  lastRunMs: number,
+  occurrenceMs: number,
+  tz: string = CRON_TZ,
+): boolean {
+  if (!lastRunMs || lastRunMs >= occurrenceMs) return false
+  const fields = cron.trim().split(/\s+/)
+  const [minute, hour] = fields.length === 6 ? [fields[1], fields[2]] : [fields[0], fields[1]]
+  if (minute == null || hour == null || /[*?/]/.test(minute) || /[*?/]/.test(hour)) return false
+  const served = cronPrevOccurrence(cron, lastRunMs - 3 * 3600_000, lastRunMs, tz)
+  return served != null && served < occurrenceMs && wallClockLabel(served, tz) === wallClockLabel(occurrenceMs, tz)
+}
+
+/**
+ * The occurrence a scheduler tick should fire for the window (fromMs, toMs], or
+ * null: nothing is due, the task already ran inside this window (restart
+ * re-scan), or the occurrence is the repeated wall-clock time of an autumn
+ * clock change the task already ran at. The one place the three questions are
+ * asked together, so the runner and its tests cannot ask them differently.
+ */
+export function cronOccurrenceToFire(
+  cron: string,
+  fromMs: number,
+  toMs: number,
+  lastRunMs: number,
+  tz: string = CRON_TZ,
+): number | null {
+  const occurrenceMs = cronPrevOccurrence(cron, fromMs, toMs, tz)
+  if (occurrenceMs == null) return null
+  if (lastRunMs >= fromMs) return null
+  if (isRepeatedWallClockOccurrence(cron, lastRunMs, occurrenceMs, tz)) return null
+  return occurrenceMs
 }
 
 // Back-compat shim faithful to the old fixed-window semantics -- "did an
