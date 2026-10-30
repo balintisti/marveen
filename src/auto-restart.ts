@@ -181,7 +181,11 @@ export type RestartBlock = 'busy-pane' | SoftRestartBlock
  *     with "· N shell" used to read as unknown, so a due restart waited for it
  *     by accident; once pane-state read it as idle (batch 5b4af8b6) the restart
  *     would kill the running work. The count comes from the same measurement
- *     the context-guard's routine restart waits on (measureBackgroundWork), and
+ *     the context-guard's routine restart waits on (measureBackgroundWork).
+ *     Detached heavy-run jobs count too, although a restart does not kill them
+ *     (didi 49730): a fresh session does not know its own gate is running and
+ *     starts it again, the double work card c8852bba was opened against. The
+ *     cost is a later restart, bounded by BACKGROUND_WORK_DEFERRAL_CAP_MS, and
  *   - an unanswered inbound question defers -- an idle pane is NOT proof there
  *     is nothing to lose, because an agent waiting on the owner's answer is
  *     idle precisely then, and a restart swallows the pending exchange (for a

@@ -189,6 +189,17 @@ describe('the scheduled restart runner waits for running work', () => {
     expect(String((override?.[0] as { killed?: string }).killed)).toContain('1 in the pane')
   })
 
+  it('after a cap override the next slot gets a full deferral window again (didi 49730 LOW1)', async () => {
+    h.pane = WITH_SHELL
+    await boot()
+    await minutes(BACKGROUND_WORK_DEFERRAL_CAP_MS / 60_000 + 5)
+    expect(h.restartAgentProcess).toHaveBeenCalledTimes(1)
+    // Next day's 03:00 slot, the same never-ending shell: a stale streak would override at once.
+    vi.setSystemTime(new Date(2026, 10, 1, 2, 59, 0).getTime())
+    await minutes(10)
+    expect(h.restartAgentProcess).toHaveBeenCalledTimes(1)
+  })
+
   it('nothing running and no question: the slot fires as before (control)', async () => {
     h.pane = NOTHING_RUNNING
     await boot()
