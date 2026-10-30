@@ -4,11 +4,11 @@
 // through mayIssueCredentials: the owner's session, also when the browser sends the stored token
 // alongside it; the bare token only before the first dashboard login exists. Reject and timeout
 // stay open to the token: with them an agent can only cancel a request, never gain a right.
-import { describe, it, expect, vi, afterAll, beforeAll } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { describe, it, expect, vi, beforeAll } from 'vitest'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
 vi.mock('../config.js', async (importOriginal) => ({ ...(await importOriginal<typeof import('../config.js')>()), MAIN_AGENT_ID: 'marveen', TELEGRAM_BOT_TOKEN: '' }))
 vi.mock('../web/telegram.js', async (importOriginal) => ({ ...(await importOriginal<typeof import('../web/telegram.js')>()), sendTelegramMessage: vi.fn(async () => 4242) }))
@@ -18,8 +18,7 @@ import { tryHandleApprovals } from '../web/routes/approvals.js'
 import { createSession, _clearSessionCacheForTest } from '../web/auth-sessions.js'
 import { SESSION_COOKIE_NAME } from '../web/auth-gate.js'
 
-const td = mkdtempSync(join(tmpdir(), 'approvals-owner-only-'))
-afterAll(() => rmSync(td, { recursive: true, force: true }))
+const td = tmpDirs()('approvals-owner-only-')
 const store = join(td, 'store'); mkdirSync(store, { recursive: true })
 initDatabase(join(store, 'claudeclaw.db'))
 
