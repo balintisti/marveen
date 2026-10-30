@@ -58,6 +58,9 @@ const NEM_ALLITHATO: Record<string, string> = {
   dispatched_at: 'sajat dedikalt fuggvenye van (db.ts, markKanbanCardDispatched), es a once-only ort az adja',
   // merge 88c366f2 (upstream 7e9a7362): a listazasban SZAMOLT ertek (az utolso oszlopvaltas esemenyebol,
   // enelkul created_at), nem tarolt oszlop -- egy PUT-nak nincs mit irnia.
+  // upstream 5b404c44d, card baabe0ba: a trigger mozgatja, a PUT-ban FELTETELKENT utazik (`version` /
+  // `expected_version`, a route kiveszi a torzsbol), sosem oszlop-ertekkent.
+  version: 'a sor verzioja: trigger mozgatja; a PUT-nak csak a feltetele (409 elavult peldanyra), nem irhato mezo',
   last_status_at: 'szarmaztatott: a status-esemenyekbol szamolva a lekerdezesben (db.ts), nem tarolt mezo',
 }
 

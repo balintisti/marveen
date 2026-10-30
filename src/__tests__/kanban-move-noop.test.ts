@@ -47,7 +47,7 @@ describe('POST /kanban/<id>/move -- a valasz megmondja, tortent-e valami', () =>
     createKanbanCard({ id: 'c1', title: 'x' })
     const r = await move('c1', { status: 'in_progress', actor: 'friday' })
     expect(r.status).toBe(200)
-    expect(r.payload).toEqual({ ok: true, changed: true })
+    expect(r.payload).toEqual({ ok: true, changed: true, version: 1 })
     // KETTO: a letrehozas sora (`d624222e`) + ez a move. A move-e a masodik.
     expect(getKanbanCardEvents('c1')).toHaveLength(2)
     expect(getKanbanCardEvents('c1')[1].from_status).toBe('planned')
@@ -60,7 +60,7 @@ describe('POST /kanban/<id>/move -- a valasz megmondja, tortent-e valami', () =>
     await move('c2', { status: 'done', actor: 'friday' })
     const again = await move('c2', { status: 'done', actor: 'friday' })
     expect(again.status).toBe(200)
-    expect(again.payload).toEqual({ ok: true, changed: false })
+    expect(again.payload).toEqual({ ok: true, changed: false, version: 1 })
     // EGY MOVE-esemeny, nem ketto: a masodik hivas nem tortent meg. (A teljes szam
     // 2, mert a letrehozas is ir egy sort a `d624222e` ota -- az allitas targya a
     // MOVE-ok szama, ezert a nem-null from_status-ra szurunk.)
@@ -84,7 +84,7 @@ describe('POST /kanban/<id>/move -- a valasz megmondja, tortent-e valami', () =>
     // valtozas, de nem az, amirol az esemeny-naplo szol.
     createKanbanCard({ id: 'c4', title: 'x' })
     const r = await move('c4', { status: 'planned', sort_order: 7, actor: 'friday' })
-    expect(r.payload).toEqual({ ok: true, changed: true })
+    expect(r.payload).toEqual({ ok: true, changed: true, version: 1 })
     // A puszta atrendezes NEM ir esemenyt -- tehat MOVE-sor nincs. A meglevo egyetlen
     // sor a letrehozase (`d624222e`), amit ez az allitas nem merne.
     expect(getKanbanCardEvents('c4').filter((e) => e.from_status !== null)).toHaveLength(0)

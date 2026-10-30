@@ -45,6 +45,10 @@ Minden projekt-feladat kártyán fut: az orchestrator kártyaként rögzíti, on
 
 Közvetlen SQLite, vagy a dashboard kanban-felülete. A kártya-állapot minden ügynök kontextusába automatikusan bekerül.
 
+A `POST /api/kanban/:id/move` opcionálisan `expected_status`-t is elfogad (compare-and-set). Ha meg van adva, a mozgatás csak akkor történik meg, ha a kártya aktuális státusza ezzel egyezik; az ellenőrzés az írás utasításában van. Különben semmi nem változik, és a válasz 409 `{error: "status_conflict", current_status, expected_status}`. Ismeretlen `expected_status` érték 400, hiányzó kártya továbbra is 404, a mező nélkül pedig a mozgatás feltétel nélküli, mint eddig. A sikeres válasz (`changed` igaz és hamis esetben is) a kártya mozgatás UTÁNI `version`-jét is hozza, hogy az, aki a kártyán marad, a következő teljes-kártyás PUT-ban az újat küldje. A 409 a lezárási kapu előtt dönt: aki elavult képpel dolgozik, azt tudja meg először.
+
+A `PUT /api/kanban/:id` elfogadja annak a kártya-verziónak a számát, amelyre a törzs épült: `version` (amit a GET visszaad, tehát a teljes kártyát visszaküldő dashboard külön kliensmódosítás nélkül védett) vagy `expected_version` (kézzel épített részleges törzshöz). A `version` oszlopot egy trigger mozgatja minden olyan mezőváltozásnál, amit a PUT visszaír (`KANBAN_WRITABLE_FIELDS`), bárki is az író; komment, dispatch-bélyeg és `updated_at` nem mozgatja. Ha a kártya közben továbblépett, a válasz 409 `{conflict: "stale_version", current_version}`, és semmi nem íródik. Hibás érték 400, a két név eltérése 400. Sikeres PUT visszaadja az új `version`-t. Verzió nélkül a PUT utolsó-író-nyer, pontosan úgy, mint eddig (az ügynök-szkriptek részleges PUT-jai változatlanul működnek).
+
 ### WIP-limit (folyamatban lévő kártyák korlátja) -- technikai részletek
 
 Minden kanban-oszlophoz beállítható egy maximális kártyaszám (Work In Progress limit). Ha a limit be van állítva, az oszlopfejlécben lévő kártyaszámláló `count/limit` formátumra vált, és a kihasználtság alapján változtatja a színét:

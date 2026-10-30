@@ -5,7 +5,7 @@ import {
   listKanbanCards, countArchivedKanbanCards, kanbanAssigneeExists, createKanbanCard, updateKanbanCard, KANBAN_CREATE_FIELDS,
   deleteKanbanCard, moveKanbanCard, archiveKanbanCard, unarchiveKanbanCard,
   getKanbanComments, addKanbanComment, getKanbanCardHistory, listKanbanProjects,
-  getKanbanCard, getChildCards, getDb,
+  getKanbanCard, getChildCards, getDb, KANBAN_STATUSES,
   createAgentMessage, markKanbanCardDispatched,
   getKanbanSeqByIdPrefix,
   listLabels, getLabel, createLabel, updateLabel, deleteLabel,
@@ -422,6 +422,26 @@ export function buildHeartbeatSummaryResponse(
 // GET is ours (the single-card read route, card 66454b7d and 2e493a4b); upstream's
 // list predates it on their side. merge 88c366f2.
 const KANBAN_CARD_METHODS = ['GET', 'PUT', 'DELETE'] as const
+
+// The 409 body of a PUT based on a stale copy. An instruction, not a diagnosis: the next act has to
+// be a re-read, because reposting the same body is exactly the overwrite this refused.
+function staleVersionBody(currentVersion: number | undefined): Record<string, unknown> {
+  return {
+    error: 'The card changed since you read it -- nothing was saved. Read it again and apply your change to the current version.',
+    conflict: 'stale_version',
+    current_version: currentVersion,
+  }
+}
+
+// 2dd78397 (upstream 1b0878897): a write that lands on an ARCHIVED card used to answer exactly like
+// one on a live card, so the writer never learned that nobody reads the card any more. The write
+// still happens (a 409 would break every existing caller that closes or comments after
+// archiving); the successful response says it, additively. On a live card the response is
+// unchanged: no field at all. The PUT already says it in its own words (66454b7d: `archived` plus
+// `warning`), so only the comment and the move use this helper.
+function archivedNote(card: { archived_at: number | null } | undefined): { archived?: true } {
+  return card && card.archived_at != null ? { archived: true } : {}
+}
 
 /**
  * Parse the `includeArchived` query parameter.
@@ -916,14 +936,29 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
       json(res, { ...card, labels: getLabelsForCard(id), blockers: getBlockersForCard(id), comment_count: count, comments_omitted: count > 0 })
       return true
     }
-    json(res, { error: 'Kártya nem található' }, 404)
+    // The 404 names the id (2dd78397): a bare "not found" cannot tell a wrong id from a wrong path.
+    json(res, { error: `Kártya nem található: ${id}` }, 404)
     return true
   }
 
   if (kanbanCardMatch && method === 'PUT') {
     const id = decodeURIComponent(kanbanCardMatch[1])
     const body = await readBody(req)
-    const data = JSON.parse(body.toString())
+    const parsedPut = JSON.parse(body.toString())
+    // The version the body was based on (updateKanbanCard; upstream 5b404c44d, card baabe0ba). Two
+    // spellings, because the two real caller shapes differ: `expected_version` for a caller that
+    // builds a partial body by hand, and `version` for one that GETs the card and PUTs the whole
+    // object back -- the dashboard does that on every inline edit, and that body carries
+    // `description` from whenever the board was loaded, so it gets the check without changing.
+    // Neither is ever written as a column, so both are taken OUT of the body here, before the
+    // unknown-key guard below sees it. Only an object body is split: null / array / scalar keep
+    // reaching the empty-body check exactly as before.
+    let version: unknown
+    let expected_version: unknown
+    let data = parsedPut
+    if (parsedPut && typeof parsedPut === 'object' && !Array.isArray(parsedPut)) {
+      ({ version, expected_version, ...data } = parsedPut)
+    }
     // AZ URES TORZS HIVOI HIBA, NEM MUVELET (kartya af9f6cd4). Megmerve: nulla
     // hivo kuld ilyet -- sem a frontend, sem az agens-lapok --, tehat a 400 nem
     // tor el semmit, viszont megnevezi, mi hianyzik.
@@ -931,6 +966,19 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
       json(res, { error: 'Ures torzsu PUT: nincs mit modositani. Add meg a valtoztatando mezot, pl. {"assignee":"..."}.' }, 400)
       return true
     }
+
+    // A malformed version is a 400, not "no check": a caller that believes it sent a guard must
+    // not get an unguarded write. Absent (undefined) is the unguarded write it always was.
+    const versionError = (v: unknown) => v !== undefined && !(Number.isSafeInteger(v) && (v as number) >= 0)
+    if (versionError(version) || versionError(expected_version)) {
+      json(res, { error: '"version" / "expected_version" must be a non-negative integer (the version the card was read at)' }, 400)
+      return true
+    }
+    if (version !== undefined && expected_version !== undefined && version !== expected_version) {
+      json(res, { error: '"version" and "expected_version" disagree -- send one' }, 400)
+      return true
+    }
+    const expectedVersion = (expected_version ?? version) as number | undefined
 
     // A PRECONDITION THIS ENDPOINT CANNOT HONOUR MUST NOT ANSWER 200 (card ddf11b94).
     // Measured before this change: `If-Match: anything` -> 200, and
@@ -1069,6 +1117,13 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
         + `akartal szerkeszteni, oldd fel: POST /api/kanban/${encodeURIComponent(id)}/unarchive.`
       : null
 
+    // A STALE COPY IS ANSWERED BEFORE THE VALUE CHECKS BELOW (they judge a card the caller no longer
+    // holds), and before the write. updateKanbanCard re-checks it inside the UPDATE itself.
+    if (expectedVersion !== undefined && roCard && (roCard as { version?: number }).version !== expectedVersion) {
+      json(res, staleVersionBody((roCard as { version?: number }).version), 409)
+      return true
+    }
+
     // AZ `actor` A TORZSBOL JON, ES OPCIONALIS -- card 4e27d5ad, ugyanaz az alak,
     // mint a `/move`-nal. Kotelezove tenni azt jelentene, hogy a mai hivok
     // (a dashboard harom PUT helye es minden agens-lap dokumentalt peldaja)
@@ -1127,8 +1182,10 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     if (roCard && data.status === 'done' && (roCard as { status?: string }).status !== 'done') {
       if (closeBlocked(res, id, data, actor, 'done')) return true
     }
-    const result = updateKanbanCard(id, data, actor)
+    const result = updateKanbanCard(id, data, actor, expectedVersion)
     if (result.outcome === 'not-found') { json(res, { error: 'Kártya nem található' }, 404); return true }
+    // Only reachable when the in-statement guard lost a race after the pre-check above.
+    if (result.outcome === 'stale') { json(res, staleVersionBody(result.current_version), 409); return true }
 
     // A `unchanged` NEM hiba: egy hivo joggal kuldheti ujra ugyanazt (a szerkeszto
     // modal minden mentesnel a TELJES objektumot kuldi). De az `updated_at` NEM
@@ -1136,7 +1193,7 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // frissnek latszana anelkul, hogy barmi valtozott volna. Felulirni ilyenkor
     // nincs mit, tehat `overwritten` szuksegszeruen ures.
     if (result.outcome === 'unchanged') {
-      json(res, { ok: true, changed: false, ...(archiveWarning ? { archived: true, warning: archiveWarning } : {}) })
+      json(res, { ok: true, changed: false, version: result.version, ...(archiveWarning ? { archived: true, warning: archiveWarning } : {}) })
       return true
     }
 
@@ -1149,6 +1206,7 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
       json(res, {
         ok: true,
         changed: true,
+        version: result.version,
         overwritten: result.overwritten,
         // KET FIGYELMEZTETES EGY VALASZBAN: a felulirast es az archivaltsagot NEM olvasztjuk
         // ossze egy mondatba -- ket kulonbozo dolgot kell tenni tolük, es egy osszevont szoveg
@@ -1160,7 +1218,7 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
       })
       return true
     }
-    json(res, { ok: true, changed: true, ...(archiveWarning ? { archived: true, warning: archiveWarning } : {}) })
+    json(res, { ok: true, changed: true, version: result.version, ...(archiveWarning ? { archived: true, warning: archiveWarning } : {}) })
     return true
   }
 
@@ -1177,7 +1235,25 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     const id = decodeURIComponent(kanbanMoveMatch[1])
     const body = await readBody(req)
     const parsedMove = JSON.parse(body.toString())
-    const { status, sort_order, actor } = parsedMove
+    const { status, sort_order, actor, expected_status } = parsedMove
+    // Optional compare-and-set guard (upstream a33b81af5, card baabe0ba). Absent (undefined/null)
+    // keeps the unconditional move exactly as it was. Present, it must name a real status: an
+    // unknown value could never match, and a 409 would wrongly suggest someone else moved the card.
+    const hasExpected = expected_status !== undefined && expected_status !== null
+    if (hasExpected && !(KANBAN_STATUSES as readonly string[]).includes(expected_status)) {
+      json(res, { error: `Invalid expected_status. Accepted: ${KANBAN_STATUSES.join(', ')}` }, 400)
+      return true
+    }
+    // A stale picture of the card is answered BEFORE the close gate below: "the card is not where
+    // you think it is" is the more basic fact, and the gate's verdict would be about a move the
+    // caller no longer means. moveKanbanCard re-checks it inside the UPDATE itself.
+    if (hasExpected) {
+      const seen = getKanbanCard(id)
+      if (seen && seen.status !== expected_status) {
+        json(res, { error: 'status_conflict', current_status: seen.status, expected_status }, 409)
+        return true
+      }
+    }
     // CARD 5a967042: the move to done is where a card closes; see closeBlocked.
     if (status === 'done') {
       const current = getKanbanCard(id)
@@ -1192,13 +1268,18 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // tovabbra is megerdemel egy sort, es a `serverUptimeSec` az egyetlen idobeli teny, amit
     // ez az oldal hozza tud tenni. Ami KIKERULT: a `getKanbanCard` ujra-lekerdezese, mert az
     // `outcome` mar megmondta, amit az meg akart tudni.
-    const outcome = moveKanbanCard(id, status, sort_order ?? 0, actor)
+    const outcome = moveKanbanCard(id, status, sort_order ?? 0, actor, hasExpected ? { expectedStatus: expected_status } : undefined)
     if (outcome === 'not-found') {
       logger.warn(
         { id, status, exists: false, serverUptimeSec: Math.round(process.uptime()) },
         'Kanban move: no such card',
       )
       json(res, { error: moveFailureMessage(false) }, 404)
+      return true
+    }
+    // Reached only when the in-statement guard lost a race after the pre-check above.
+    if (outcome === 'status-conflict') {
+      json(res, { error: 'status_conflict', current_status: getKanbanCard(id)?.status, expected_status }, 409)
       return true
     }
 
@@ -1208,12 +1289,21 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // lezarta oket) -- a valasz nem adott semmit, amin ez latszott volna.
     // A no-op itt sem ir semmit, tehat az `updated_at` sem emelkedik: egy kartya nem latszhat
     // frissen attol, hogy valaki ujrakuldte a mar fennallo allapotat.
-    if (outcome === 'unchanged') { json(res, { ok: true, changed: false }); return true }
+    // BOTH answers carry the card's `version` as it stands AFTER the move, read back from the row
+    // (card 03d531bf, baabe0ba F5): a move changes `status` / `sort_order`, which are versioned
+    // columns, and a client that stays on the card (the detail modal's status select) must send the
+    // new version with its next whole-card PUT, or its own move makes that PUT a false 409.
+    if (outcome === 'unchanged') {
+      const card = getKanbanCard(id)
+      json(res, { ok: true, changed: false, version: card?.version, ...archivedNote(card) })
+      return true
+    }
 
     // Wake the assigned agent once when the card enters in_progress -- unless
     // that agent is the one who moved it (self-pickup needs no wake-up).
     if (status === 'in_progress') fireKanbanDispatch(id, actor)
-    json(res, { ok: true, changed: true })
+    const moved = getKanbanCard(id)
+    json(res, { ok: true, changed: true, version: moved?.version, ...archivedNote(moved) })
     return true
   }
 
@@ -1397,9 +1487,10 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     const normalizedContent = normalizeKanbanRefs(content, getKanbanSeqByIdPrefix)
     // `automated: true`: a bulk/machine writer marks its own comment, so the
     // stuck detector never reads it as a work-trace (KANBANSTUCKURES916).
-    json(res, automated === true
+    const comment = automated === true
       ? addKanbanComment(cardId, author, normalizedContent, { automated: true })
-      : addKanbanComment(cardId, author, normalizedContent))
+      : addKanbanComment(cardId, author, normalizedContent)
+    json(res, { ...comment, ...archivedNote(card) })
     return true
   }
 

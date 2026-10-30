@@ -1896,8 +1896,24 @@ function toastWithWarning(body, fallbackMsg) {
 // visszaugrik, es a felhasznalo nem tudja, mi hianyzik. Kartya 3c7be3c4.
 async function refusalToast(r, fallbackMsg) {
   const body = await r.json().catch(() => null)
+  // A /move that sent `expected_status` and found the card elsewhere (409 status_conflict) is the
+  // same event as a stale whole-card PUT: say so in the user's language, not with the raw error
+  // code. Returns true then, so the caller reloads the board it is showing.
+  if (r.status === 409 && body && body.error === 'status_conflict') {
+    showToast(t('kanban.toast.stale_version'), 6000)
+    return true
+  }
   if (body && typeof body.error === 'string' && body.error) showToast(body.error, 12000)
   else showToast(fallbackMsg)
+  return false
+}
+
+// The status the board last showed for a card: what a /move sends as `expected_status`, so a move
+// made from a second tab that still shows the old column is refused (409) instead of silently
+// winning. undefined when the card is not on the loaded board (then no guard is sent).
+// Card 03d531bf (baabe0ba F5, mandark B).
+function kanbanShownStatus(cardId) {
+  return kanbanCards.find((c) => c.id === cardId)?.status
 }
 
 // === Drag & Drop ===
@@ -1941,7 +1957,7 @@ function wireKanbanColumnDnD(col) {
       const r = await fetch(`/api/kanban/${encodeURIComponent(cardId)}/move`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus, sort_order: sortOrder, actor: kanbanMoveActor() }),
+        body: JSON.stringify({ status: newStatus, sort_order: sortOrder, actor: kanbanMoveActor(), expected_status: kanbanShownStatus(cardId) }),
       })
       if (!r.ok) await refusalToast(r, t('kanban.toast.move_error'))
       loadKanban()
@@ -2108,9 +2124,9 @@ async function kanbanTouchEnd(e) {
     const r = await fetch(`/api/kanban/${encodeURIComponent(cardId)}/move`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: newStatus, sort_order: sortOrder, actor: kanbanMoveActor() }),
+      body: JSON.stringify({ status: newStatus, sort_order: sortOrder, actor: kanbanMoveActor(), expected_status: kanbanShownStatus(cardId) }),
     })
-    if (!r.ok) { await refusalToast(r, t('kanban.toast.move_error')); return }
+    if (!r.ok) { if (await refusalToast(r, t('kanban.toast.move_error'))) loadKanban(); return }
     loadKanban()
   } catch {
     showToast(t('kanban.toast.move_error'))
@@ -2215,6 +2231,13 @@ function dueDatePatch(value, initial) {
   return { due_date: value || null }
 }
 
+// The card version the edit form was FILLED from (PUT /api/kanban/:id refuses a stale one with
+// 409; upstream 5b404c44d, card baabe0ba). The form is the one write path that does not round-trip
+// the card object -- it rebuilds the body from its fields -- so without this it would be the one UI
+// write that can still replace someone else's description. null = a new card, or a card from a
+// server without versions: the PUT then goes unchecked.
+let cardEditBaseVersion = null
+
 // === New card modal ===
 function openNewCardModal(status) {
   document.getElementById('cardModalTitle').textContent = t('kanban.modal.title_new')
@@ -2225,6 +2248,7 @@ function openNewCardModal(status) {
   document.getElementById('cardDue').value = ''
   document.getElementById('cardDue').dataset.initial = ''
   document.getElementById('cardEditId').value = ''
+  cardEditBaseVersion = null
   document.getElementById('cardEditStatus').value = status || 'planned'
   populateAssigneeSelect('cardAssignee')
   populateProjectSuggestions()
@@ -2267,6 +2291,7 @@ document.getElementById('saveCardBtn').addEventListener('click', async () => {
 
   try {
     if (editId) {
+      if (cardEditBaseVersion !== null) data.expected_version = cardEditBaseVersion
       const res = await fetch(`/api/kanban/${encodeURIComponent(editId)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -2275,7 +2300,16 @@ document.getElementById('saveCardBtn').addEventListener('click', async () => {
         // amit senki nem ellenorzott. Amit tudunk, es amit ez mond: a feluletrol jott.
         body: JSON.stringify({ ...data, actor: 'dashboard' }),
       })
-      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.status) }
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}))
+        if (res.status === 409 && e.conflict === 'stale_version') {
+          // The modal STAYS OPEN: the typed text is the only copy of it, and closing would destroy
+          // it to report that something else was nearly destroyed.
+          showToast(t('kanban.toast.stale_version_form'), 8000)
+          return
+        }
+        throw new Error(e.error || res.status)
+      }
       showToast(t('kanban.toast.card_updated'))
     } else {
       data.status = document.getElementById('cardEditStatus').value
@@ -2579,12 +2613,20 @@ async function showCardDetail(card) {
       const newVal = sel.value
       if (newVal === current) { restore(current); return }
       try {
+        // expected_status = what this modal shows: a card moved elsewhere meanwhile answers 409,
+        // which reloads the board (refusalToast returns true). The open card keeps its old
+        // version on purpose, so a following whole-card write from this modal is refused too
+        // instead of reverting whatever changed.
         const r = await fetch(`/api/kanban/${encodeURIComponent(card.id)}/move`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status: newVal, sort_order: 0, actor: kanbanMoveActor() }),
+          body: JSON.stringify({ status: newVal, sort_order: 0, actor: kanbanMoveActor(), expected_status: current }),
         })
-        if (!r.ok) { restore(current); await refusalToast(r, t('kanban.toast.move_error')); return }
+        if (!r.ok) { restore(current); if (await refusalToast(r, t('kanban.toast.move_error')) && loadKanban) loadKanban(); return }
+        // The move changed a versioned field: the next whole-card PUT from this same modal must
+        // carry the NEW version, or our own move makes it a false 409 (mandark A).
+        const savedMove = await r.json().catch(() => ({}))
+        if (Number.isInteger(savedMove.version)) card.version = savedMove.version
         card.status = newVal
         restore(newVal)
         showToast(t('kanban.toast.status_updated'))
@@ -2630,7 +2672,22 @@ async function showCardDetail(card) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ...card, assignee: newVal, actor: 'dashboard' }),
         })
+        // `{...card}` carries the version this object was loaded at, so a card that changed
+        // meanwhile is refused instead of having its description reverted.
+        if (r.status === 409) {
+          const e = await r.json().catch(() => ({}))
+          if (e.conflict === 'stale_version') {
+            assigneeValueEl.textContent = current ? current : '-- nincs --'
+            showToast(t('kanban.toast.stale_version'), 6000)
+            loadKanban && loadKanban()
+            return
+          }
+        }
         if (!r.ok) throw new Error('PUT failed')
+        // The next whole-card write from this same view must carry the NEW version, or it would be
+        // refused as stale against our own write.
+        const saved = await r.json().catch(() => ({}))
+        if (Number.isInteger(saved.version)) card.version = saved.version
         card.assignee = newVal
         assigneeValueEl.textContent = newVal ? newVal : '-- nincs --'
         showToast(t('kanban.toast.assignee_updated'))
@@ -2680,8 +2737,14 @@ async function showCardDetail(card) {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...card, parent_id: newParentId, actor: 'dashboard' }),
       })
-      if (r.ok) { card.parent_id = newParentId; showToast(label); loadKanban(); showCardDetail(card) }
-      else showToast(t('kanban.toast.save_error'))
+      if (r.ok) {
+        const saved = await r.json().catch(() => ({}))
+        if (Number.isInteger(saved.version)) card.version = saved.version
+        card.parent_id = newParentId; showToast(label); loadKanban(); showCardDetail(card)
+      } else if (r.status === 409 && (await r.json().catch(() => ({}))).conflict === 'stale_version') {
+        showToast(t('kanban.toast.stale_version'), 6000)
+        loadKanban()
+      } else showToast(t('kanban.toast.save_error'))
     }
     parentMetaItem.style.display = ''
   } else {
@@ -2762,6 +2825,9 @@ async function showCardDetail(card) {
     dueEl.value = await dueDayForField(card.due_date)
     dueEl.dataset.initial = dueEl.value
     document.getElementById('cardEditId').value = card.id
+    // Taken at FILL time, not at save time: it has to describe the text the user is about to edit
+    // on top of, or the check certifies nothing.
+    cardEditBaseVersion = Number.isInteger(card.version) ? card.version : null
     document.getElementById('cardEditStatus').value = card.status
     populateAssigneeSelect('cardAssignee', card.assignee)
     populateProjectSuggestions()
@@ -3481,6 +3547,7 @@ document.getElementById('wizardCreateBtn').addEventListener('click', async () =>
 })
 
 // === Toast ===
+let toastHideTimer = null
 function showToast(msg, duration = 3000) {
   // A MEGJELENITES KERDEZI MEG AZ OKOT (kartya 3cc50c2a).
   //
@@ -3495,7 +3562,11 @@ function showToast(msg, duration = 3000) {
   if (typeof window.mvHumanError === 'function') msg = window.mvHumanError(msg)
   toast.textContent = msg
   toast.classList.add('visible')
-  setTimeout(() => toast.classList.remove('visible'), duration)
+  // ONE hide timer: a toast shown while an earlier one is still pending must cancel that timer, or
+  // the earlier toast's hide cuts the new message short (a 6 s stale-card toast vanished after ~2 s
+  // behind a 3 s "updated" toast; card 03d531bf, mandark C).
+  clearTimeout(toastHideTimer)
+  toastHideTimer = setTimeout(() => toast.classList.remove('visible'), duration)
 }
 
 // === Agents API ===
