@@ -9,7 +9,9 @@
 // FRESH restart and injects a resume prompt pointing at the handoff, so the
 // agent continues on its own. At hardPct (or when the handoff never appears)
 // it force-restarts anyway -- taskstate + kanban + hot memories are the
-// fallback context.
+// fallback context. One exception: while background work runs and the
+// model's real window still has room (REAL_WINDOW_HOLD_CEILING), hardPct takes
+// the act tier's handoff-and-bounded-hold path instead (card b6225f23).
 //
 // On top of the (opt-in) proactive tiers sits an ALWAYS-ON saturation net:
 // once a pane reads "100% context used", prompt dispatch refuses it and the
@@ -437,6 +439,11 @@ export interface GuardInputs {
   detachedWorkDetail?: string
   /** What is left of backgroundWork once the detached part is taken out: what the restart kills. */
   killedWorkDetail?: string
+  /** The same context as a fraction of the model's REAL window (the model / `[1m]` window, calibrated)
+   *  when `pct` is measured against a smaller `limitTokens` cost cap. Only the hard tier's background
+   *  hold reads it (REAL_WINDOW_HOLD_CEILING, card b6225f23). Absent/null = no room known: the hard
+   *  tier restarts as before. */
+  realWindowPct?: number | null
   /** The configured daily slot has come round and has not been served yet.
    *  Computed by the runner with dailyHandoffDue(), which needs a local
    *  midnight and the last-served stamp -- neither of which belongs in this
@@ -646,6 +653,21 @@ export function handoffStaleMinutes(inputs: GuardInputs): HandoffStaleness {
  * where nothing waits. After it the restart happens as before, and says what it killed.
  */
 export const BACKGROUND_DEFER_MAX_MS = 45 * 60_000
+
+/**
+ * Card b6225f23 (Isti TG 8526, 2026-10-30): the hard tier killed running background work at
+ * hardPct x limitTokens, but limitTokens is a COST cap (200k), not the model's window (Opus 5.5: 1M):
+ * a session at 97% of the cap was nowhere near wedging. While background work runs and the context
+ * is below this fraction of the REAL window, the hard tier takes the act tier's path instead (handoff
+ * request, then the BACKGROUND_DEFER_MAX_MS hold). At or above it, or with no real-window reading
+ * (a 200k-window model, `limitTokens` null), the hard tier restarts as before.
+ */
+export const REAL_WINDOW_HOLD_CEILING = 0.5
+
+function hardTierHoldsForBackground(inputs: GuardInputs): boolean {
+  return (inputs.backgroundWork ?? 0) > 0 &&
+    typeof inputs.realWindowPct === 'number' && inputs.realWindowPct < REAL_WINDOW_HOLD_CEILING
+}
 
 function backgroundWorkText(inputs: GuardInputs): string {
   const n = inputs.backgroundWork ?? 0
@@ -920,7 +942,7 @@ export function decideGuard(
         }
         // A routine restart waits for the agent's background work (card c8852bba), unless the
         // context already reached the hard threshold.
-        const atHard = inputs.pct !== null && inputs.pct >= cfg.hardPct
+        const atHard = inputs.pct !== null && inputs.pct >= cfg.hardPct && !hardTierHoldsForBackground(inputs)
         const held = atHard ? { hold: null, suffix: killedNote(inputs) } : holdForBackground(state, inputs, cfg, 'handoff written')
         if (held.hold) return held.hold
         // Refresh budget spent (or never applicable): ship what we have. Saying
@@ -941,7 +963,9 @@ export function decideGuard(
       // stays in the past while we defer, so the restart fires on the first
       // sweep that finds the pane no longer busy; a turn that saturates
       // mid-flight is caught by the paneSaturated branch above.
-      if (inputs.pct !== null && inputs.pct >= cfg.hardPct) {
+      // With room in the real window and background work running, the hard threshold waits like
+      // the act tier: for the handoff, then the deadline and its bounded hold below (b6225f23).
+      if (inputs.pct !== null && inputs.pct >= cfg.hardPct && !hardTierHoldsForBackground(inputs)) {
         if (inputs.paneBusy) return none('hard threshold during await-handoff but agent mid-turn -- deferring restart')
         return restartDecision(nowMs, `hard threshold during await-handoff${killedNote(inputs)}`, handoffStaleMinutes(inputs))
       }
@@ -1004,6 +1028,16 @@ function decideWedgeTiers(
     // which deliberately ignores the busy signal.
     if (inputs.paneBusy) {
       return none(`hard threshold (${Math.round(pct * 100)}%) but agent mid-turn -- deferring restart`, cleared)
+    }
+    if (hardTierHoldsForBackground(inputs)) {
+      return handoffRequest(
+        nowMs,
+        inputs,
+        cfg,
+        `hard threshold (${Math.round(pct * 100)}% >= ${Math.round(cfg.hardPct * 100)}%), but the real window is at ` +
+          `${Math.round((inputs.realWindowPct as number) * 100)}% and background work is running: ${backgroundWorkText(inputs)} ` +
+          `-- requesting a handoff, the restart waits like the act tier's`,
+      )
     }
     return restartDecision(
       nowMs,

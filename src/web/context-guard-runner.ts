@@ -391,22 +391,28 @@ export function measurePct(name: string, cfgLimit: number | null, since?: number
   const configDir = configDirFor(name)
   const tokens = readContextTokensFromProjectDir(workingDir, configDir, since)
   if (tokens === null || tokens <= 0) return null
-  let limit: number
-  if (cfgLimit) {
-    limit = cfgLimit
-  } else {
-    const model = (name === MAIN_AGENT_ID
-      // Same root as the token read above: the model decides the context LIMIT,
-      // so a model read from a stale root produces a wrong pct from a right
-      // token count -- and pct is what the handoff threshold compares.
-      ? readActiveModelFromProjectDir(PROJECT_ROOT, undefined, configDirFor(name))
-      : readAgentModel(name)) ?? ''
-    // Calibrate against the persisted per-(agent, model) maximum, not just
-    // the live reading: a fresh post-restart session must not un-learn a
-    // window the previous session already proved (see HighwaterMap above).
-    limit = calibrateLimit(observedHighwater(name, model, tokens), contextLimitForModel(model))
-  }
-  return tokens / limit
+  return tokens / (cfgLimit || modelWindowTokens(name, tokens))
+}
+
+/** The model's real context window for this agent (tokens), calibrated by the observation. */
+function modelWindowTokens(name: string, tokens: number): number {
+  const model = (name === MAIN_AGENT_ID
+    // Same root as the token read in measurePct: the model decides the context LIMIT,
+    // so a model read from a stale root produces a wrong pct from a right
+    // token count -- and pct is what the handoff threshold compares.
+    ? readActiveModelFromProjectDir(PROJECT_ROOT, undefined, configDirFor(name))
+    : readAgentModel(name)) ?? ''
+  // Calibrate against the persisted per-(agent, model) maximum, not just
+  // the live reading: a fresh post-restart session must not un-learn a
+  // window the previous session already proved (see HighwaterMap above).
+  return calibrateLimit(observedHighwater(name, model, tokens), contextLimitForModel(model))
+}
+
+/** A pct measured against a `limitTokens` cost cap, re-read against the model's real window
+ *  (card b6225f23). From the same reading: the transcript is not read a second time. */
+export function realWindowPctOf(name: string, capPct: number, cfgLimit: number): number {
+  const tokens = capPct * cfgLimit
+  return tokens / modelWindowTokens(name, tokens)
 }
 
 /** The restart notice's loss line AND whether anything in it needs the coordinator (card a85a9acd).
@@ -639,6 +645,12 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
   const measuredPct = running && needPct && (cfg.enabled || needCredibilityProbe)
     ? measurePct(name, cfg.limitTokens, since)
     : null
+  // The hard tier holds for background work while the REAL window has room (card b6225f23): with a
+  // limitTokens cost cap, pct is measured against the cap, so re-read the same reading against the
+  // model's window. Only at the hard threshold; without a cap pct already is that.
+  const realWindowPct = measuredPct !== null && cfg.limitTokens && measuredPct >= cfg.hardPct
+    ? realWindowPctOf(name, measuredPct, cfg.limitTokens)
+    : measuredPct
   const paneSaturatedTrusted = saturationBannerCredible(paneSaturatedRaw, bannerIsHardError, measuredPct)
   if (paneSaturatedRaw && !paneSaturatedTrusted) {
     noteSaturationBannerUntrusted(session, nowMs + SATURATION_OVERRIDE_TTL_MS)
@@ -688,6 +700,7 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
     // an unconfigured agent would arm tiers that are quiet there today. The
     // credibility check above therefore reads measuredPct directly.
     pct: cfg.enabled ? measuredPct : null,
+    realWindowPct: cfg.enabled ? realWindowPct : null,
     paneIdle: paneState === 'idle',
     paneBusy: paneState === 'busy',
     // Same capture as paneIdle (card d3f92923); only the idle-flush tier reads it. Held only until
