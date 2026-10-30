@@ -32,7 +32,7 @@ import { localMidnightMs } from '../auto-restart.js'
 import { recordRescueFailure, clearRescueFailures } from './rescue-failure-tracker.js'
 import { createAgentMessage, getRestartLossCandidates, getAgentCommentsSince, getAgentMessagesSince } from '../db.js'
 import {
-  RESTART_TAIL_FILE, COMMENTS_MAX, COMMENT_HEAD_CHARS, MESSAGES_MAX, MESSAGE_HEAD_CHARS, NO_HANDOFF_LOOKBACK_MS,
+  RESTART_TAIL_FILE, COMMENTS_MAX, COMMENT_HEAD_CHARS, MESSAGES_MAX, NO_HANDOFF_LOOKBACK_MS,
   buildRestartTail, needsRestartTail, type TailMessage,
 } from './restart-tail.js'
 import {
@@ -172,7 +172,7 @@ export function writeRestartTail(name: string, inputs: GuardInputs, staleMinutes
     const sinceSec = (mtime ?? nowMs - NO_HANDOFF_LOOKBACK_MS) / 1000
     let messages: TailMessage[] | null
     try {
-      messages = getAgentMessagesSince(name, sinceSec, MESSAGES_MAX, MESSAGE_HEAD_CHARS)
+      messages = getAgentMessagesSince(name, sinceSec, MESSAGES_MAX)
     } catch (err) {
       logger.warn({ err, name }, 'context-guard: restart-tail message query failed')
       messages = null
