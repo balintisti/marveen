@@ -91,9 +91,12 @@ describe('POST /api/kanban/:id/move to done carries the prose-leftover warning',
   beforeEach(() => {
     initDatabase(':memory:')
   })
+  // The done gate (card 3c7be3c4) refuses a closing without its proof line; the batch that brought
+  // this file in also brought that gate, so each card carries one (2026-10-30d batch seam).
   const card = (id: string) => {
     createKanbanCard({ id, title: 'Kartya', status: 'planned' })
     moveKanbanCard(id, 'testing', 0, 'dexter')
+    addKanbanComment(id, 'jarvis', 'KESZ-IGAZOLAS: ELES | teszt')
   }
 
   it('a prose leftover without a carrier: 200, the card is done, the warning quotes the line', async () => {
@@ -119,7 +122,8 @@ describe('POST /api/kanban/:id/move to done carries the prose-leftover warning',
     card('m3')
     addKanbanComment('m3', 'ford', 'Minden kesz.')
     const { payload } = await moveDone('m3')
-    expect(payload).toEqual({ ok: true, changed: true })
+    expect(payload).toMatchObject({ ok: true, changed: true })
+    expect(payload).not.toHaveProperty('proseWarning')
   })
 
   it('a failing hint path never holds up the closing: 200, done, no warning', async () => {
@@ -130,7 +134,8 @@ describe('POST /api/kanban/:id/move to done carries the prose-leftover warning',
       const { status, payload } = await moveDone('m4')
       expect(spy).toHaveBeenCalled()
       expect(status).toBe(200)
-      expect(payload).toEqual({ ok: true, changed: true })
+      expect(payload).toMatchObject({ ok: true, changed: true })
+      expect(payload).not.toHaveProperty('proseWarning')
       expect(getKanbanCard('m4')?.status).toBe('done')
     } finally {
       spy.mockRestore()
@@ -162,6 +167,7 @@ describe('PUT /api/kanban/:id status done carries the same warning', () => {
 
   it('prose leftover without a carrier: 200, done, proseWarning quotes the line', async () => {
     createKanbanCard({ id: 'p1', title: 'Kartya', status: 'testing' })
+    addKanbanComment('p1', 'jarvis', 'KESZ-IGAZOLAS: ELES | teszt')
     addKanbanComment('p1', 'ford', 'Nyitva marad. Dexter dontse el.')
     const { status, payload } = await putDone('p1')
     expect(status).toBe(200)
@@ -171,6 +177,7 @@ describe('PUT /api/kanban/:id status done carries the same warning', () => {
 
   it('no such line: no warning key', async () => {
     createKanbanCard({ id: 'p2', title: 'Kartya', status: 'testing' })
+    addKanbanComment('p2', 'jarvis', 'KESZ-IGAZOLAS: ELES | teszt')
     addKanbanComment('p2', 'ford', 'Minden kesz.')
     const { payload } = await putDone('p2')
     expect(payload.proseWarning).toBeUndefined()

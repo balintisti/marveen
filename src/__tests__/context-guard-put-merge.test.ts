@@ -1,9 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { EventEmitter } from 'node:events'
 import type { RouteContext } from '../web/routes/types.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // PUT /api/agents/:name/context-guard used to REPLACE the agent's stored row
 // with the normalized body. normalize() fills every omitted key with its
@@ -17,7 +19,7 @@ import type { RouteContext } from '../web/routes/types.js'
 // it. The dashboard's own guard panel has the same shape -- it sends 6 of the
 // 12 fields -- so saving it silently reset the idle-flush and daily-handoff
 // tiers. The endpoint now merges: an omitted key keeps its value.
-const SANDBOX = mkdtempSync(join(tmpdir(), 'cgmerge-'))
+const SANDBOX = mkTmp('cgmerge-')
 mkdirSync(join(SANDBOX, 'store'), { recursive: true })
 
 vi.mock('../config.js', async (orig) => {
@@ -76,7 +78,6 @@ function stored(): any {
 }
 
 beforeEach(() => rmSync(STORE, { force: true }))
-afterAll(() => rmSync(SANDBOX, { recursive: true, force: true }))
 
 describe('PUT /api/agents/:name/context-guard merges a partial body', () => {
   it('a single-field PUT changes that field and leaves the guard on', async () => {
