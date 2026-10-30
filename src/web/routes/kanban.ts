@@ -30,6 +30,7 @@ import {
   openVerdicts, openLeftovers, overrideReason, closeRefusal, hasDoneProof, proofRefusal, createDoneRefusal,
   type OpenVerdict,
 } from '../kanban-verdict-gate.js'
+import { proseLeftoverHints, proseLeftoverWarning } from '../../kanban-verdict.js'
 import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
 import { kanbanCreateError } from '../kanban-create-validation.js'
 import { normalizeDueDate, DUE_DATE_ZONE, DUE_DATE_ACCEPTED } from '../kanban-due-date.js'
@@ -545,6 +546,21 @@ export function parseIncludeArchived(raw: string | null): boolean | null {
   if (v === '' || v === '1' || v === 'true' || v === 'yes' || v === 'on') return true
   if (v === '0' || v === 'false' || v === 'no' || v === 'off') return false
   return null
+}
+
+/**
+ * Card 85f9f3ef: the prose-leftover hint for a card that is closing. A WARNING,
+ * never a refusal: any failure here is logged and ignored, so a closing is never
+ * held up by an advisory line. Both closing doors (POST /move, PUT status done) use it.
+ */
+function proseWarningFor(id: string): string | null {
+  try {
+    const hints = proseLeftoverHints(getKanbanComments(id), id, (c) => !!getKanbanCard(c))
+    return hints.length > 0 ? proseLeftoverWarning(hints) : null
+  } catch (err) {
+    logger.warn({ err, id }, 'Kanban close: prose leftover hint failed (ignored)')
+    return null
+  }
 }
 
 export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
@@ -1267,6 +1283,9 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     if (roCard && data.status === 'done' && (roCard as { status?: string }).status !== 'done') {
       if (closeBlocked(res, id, data, actor, 'done')) return true
     }
+    // Card 85f9f3ef: the same advisory line as POST /move, because this door closes too.
+    const closingProseWarning = roCard && data.status === 'done' && (roCard as { status?: string }).status !== 'done'
+      ? proseWarningFor(id) : null
     const result = updateKanbanCard(id, data, actor, expectedVersion)
     if (result.outcome === 'not-found') { json(res, { error: 'Kártya nem található' }, 404); return true }
     // Only reachable when the in-statement guard lost a race after the pre-check above.
@@ -1306,6 +1325,7 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
           + 'kinek a munkajat cserelted le -- a visszaolvasas ezt NEM mutatja meg, mert a '
           + 'sajat szovegedet adja vissza.',
         ...(archiveWarning ? { archived: true, archivedWarning: archiveWarning } : {}),
+        ...(closingProseWarning ? { proseWarning: closingProseWarning } : {}),
       })
       return true
     }
@@ -1327,6 +1347,7 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     const body = await readBody(req)
     const parsedMove = JSON.parse(body.toString())
     const { status, sort_order, actor, expected_status } = parsedMove
+    let proseWarning: string | null = null
     // Optional compare-and-set guard (upstream a33b81af5, card baabe0ba). Absent (undefined/null)
     // keeps the unconditional move exactly as it was. Present, it must name a real status: an
     // unknown value could never match, and a 409 would wrongly suggest someone else moved the card.
@@ -1349,6 +1370,9 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     if (status === 'done') {
       const current = getKanbanCard(id)
       if (current && current.status !== 'done' && closeBlocked(res, id, parsedMove, actor, 'done')) return true
+      // Card 85f9f3ef: a prose leftover is a WARNING in the response, never a refusal; a failure here
+      // must not hold up a closing.
+      if (current && current.status !== 'done') proseWarning = proseWarningFor(id)
     }
     // A HAROM-ALLAPOTU KIMENET ES A TORZS DIAGNOSZTIKAJA EGYUTT MARAD, es a sorrend a lenyeg
     // (kartya aca11ba5 x a 09-05-i /move-naplozas). A torzs azert naplozott, mert a BOOLEAN
@@ -1398,7 +1422,7 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // transition to done frees the cards waiting on this one.
     const moved = getKanbanCard(id)
     if (statusBeforeMove !== 'done' && moved?.status === 'done') notifyUnblockedCards(id, actor)
-    json(res, { ok: true, changed: true, version: moved?.version, ...archivedNote(moved) })
+    json(res, { ok: true, changed: true, version: moved?.version, ...archivedNote(moved), ...(proseWarning ? { proseWarning } : {}) })
     return true
   }
 
