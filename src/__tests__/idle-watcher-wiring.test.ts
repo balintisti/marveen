@@ -27,6 +27,12 @@ describe('the idle guard is actually fed what it needs', () => {
     expect(SRC).toMatch(/listKanbanCards\(\)\s*\.map\([\s\S]{0,120}?labels:/)
   })
 
+  it('the wake gets the bounced-fix ids of the SAME items it names (card 1affb872)', () => {
+    // bouncedCardIds is unit-tested in idle-bounced-fix.test.ts; this pins that the tick hands
+    // its result to buildWakeMessage, computed over the very list the wake names.
+    expect(SRC).toMatch(/buildWakeMessage\(agent, minutes, decision\.workCount, items, [^\n]*?, bouncedCardIds\(agent, items\)\)/)
+  })
+
   it('passes the work IDS, not only the count', () => {
     expect(SRC).toMatch(/ownWorkIds:/)
   })
