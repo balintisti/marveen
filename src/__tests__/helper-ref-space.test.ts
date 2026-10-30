@@ -59,7 +59,7 @@ function root(): string {
 }
 
 // Async: spawnSync would block the in-process fake dashboard.
-function run(r: string, port: number, args: string[]): Promise<{ status: number; stdout: string }> {
+function run(r: string, port: number, args: string[], input = ''): Promise<{ status: number; stdout: string }> {
   return new Promise((resolve) => {
     const p = spawn('bash', args, {
       cwd: r,
@@ -70,6 +70,8 @@ function run(r: string, port: number, args: string[]): Promise<{ status: number;
         MARVEEN_TOKEN_FILE: join(r, 'store', '.dashboard-token'),
       },
     })
+    // agent-msg.sh takes its body on STDIN only (card 16d66942); card-comment.sh ignores it
+    p.stdin.end(input)
     let stdout = ''
     p.stdout.on('data', (c) => (stdout += c))
     p.on('close', (code) => resolve({ status: code ?? -1, stdout }))
@@ -80,7 +82,7 @@ describe('helper output names the id space (ab8b23d0)', () => {
   it('agent-msg.sh: the OK id= contract stays first, the ref carries the message space', async () => {
     const port = await fakeDashboard()
     const r = root()
-    const out = await run(r, port, [join(r, 'scripts', 'agent-msg.sh'), 'friday', 'marveen', 'torzs'])
+    const out = await run(r, port, [join(r, 'scripts', 'agent-msg.sh'), 'friday', 'marveen', '-'], 'torzs\n')
     expect(out.status).toBe(0)
     const line = out.stdout.split('\n').find((l) => l.startsWith('OK id='))
     expect(line).toMatch(/^OK id=17156\b/)
