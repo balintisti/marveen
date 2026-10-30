@@ -3,9 +3,9 @@
 // "nothing happened": a missing pane is not an empty pane, a failed comment query is not zero
 // comments, and killed background work is named so nobody builds on its result.
 import { describe, it, expect, beforeEach } from 'vitest'
-import { initDatabase, getDb, createKanbanCard, addKanbanComment, getAgentCommentsSince } from '../db.js'
+import { initDatabase, getDb, createKanbanCard, addKanbanComment, getAgentCommentsSince, getAgentMessagesSince } from '../db.js'
 import {
-  lastAssistantSteps, buildRestartTail, needsRestartTail, COMMENTS_MAX, type RestartTailInput,
+  lastAssistantSteps, buildRestartTail, needsRestartTail, COMMENTS_MAX, MESSAGES_MAX, type RestartTailInput,
 } from '../web/restart-tail.js'
 
 const FOOTER = '─'.repeat(40)
@@ -49,7 +49,7 @@ describe('buildRestartTail', () => {
   const NOW = Date.UTC(2026, 9, 18, 3, 57) // 05:57 CEST
   const base: RestartTailInput = {
     name: 'friday', nowMs: NOW, handoffMtimeMs: NOW - 42 * 60_000, staleMinutes: 42,
-    killedCount: 0, killedDetail: '', detachedCount: 0, detachedDetail: '', pane: '⏺ writing tests', comments: [],
+    killedCount: 0, killedDetail: '', detachedCount: 0, detachedDetail: '', pane: '⏺ writing tests', comments: [], messages: [],
   }
   it('names the stale minutes and the handoff write time', () => {
     const t = buildRestartTail(base)
@@ -98,6 +98,19 @@ describe('buildRestartTail', () => {
     expect(t).not.toContain('korabbi is lehet')
     expect(buildRestartTail({ ...base, comments: Array(COMMENTS_MAX).fill(c) })).toContain('(az utolso 30; korabbi is lehet)')
   })
+  // Card 6494ca96: the messages delivered since the handoff, the fourth section.
+  it('a failed message query is not zero messages', () => {
+    expect(buildRestartTail({ ...base, messages: null })).toContain('Az uzeneteket NEM SIKERULT lekerdezni.')
+    expect(buildRestartTail({ ...base, messages: [] })).toContain('Nincs ilyen uzenet.')
+  })
+  it('lists messages with id, local time, sender, status and a one-line head; says when capped', () => {
+    const m = { id: 10003707, from_agent: 'dexter', created_at: Math.floor((NOW - 60_000) / 1000), status: 'delivered', head: 'review:\n  3fa1' }
+    const t = buildRestartTail({ ...base, messages: [m] })
+    expect(t).toContain('- 10003707 05:56 dexter [delivered] review: 3fa1')
+    expect(t).toContain('GET /api/messages/<id>')
+    expect(t).not.toContain('korabbi is lehet')
+    expect(buildRestartTail({ ...base, messages: Array(MESSAGES_MAX).fill(m) })).toContain('(az utolso 10; korabbi is lehet)')
+  })
   it('without a handoff says so and counts comments from the 6 h lookback', () => {
     const t = buildRestartTail({ ...base, handoffMtimeMs: null, staleMinutes: null })
     expect(t).toContain('HANDOFF.md NEM LETEZETT')
@@ -123,5 +136,29 @@ describe('getAgentCommentsSince', () => {
       { card_id: 'card0001', created_at: 400, head: 'fourth' },
     ])
     expect(getAgentCommentsSince('friday', 200, 3, 10)[0]).toEqual({ card_id: 'card0001', created_at: 200, head: 'second zzz' })
+  })
+})
+
+describe('getAgentMessagesSince', () => {
+  beforeEach(() => { initDatabase(':memory:') })
+  const add = (from: string, to: string, at: number, text: string, status: string) => {
+    const r = getDb().prepare('INSERT INTO agent_messages (from_agent, to_agent, content, status, created_at) VALUES (?, ?, ?, ?, ?)').run(from, to, text, status, at)
+    return Number(r.lastInsertRowid)
+  }
+  it('only to the agent, since the cutoff, not pending / system / [CONTEXT-GUARD]; NEWEST up to the cap, oldest first, head cut', () => {
+    add('dexter', 'friday', 100, 'before cutoff', 'delivered')
+    const second = add('dexter', 'friday', 200, 'second ' + 'z'.repeat(50), 'done')
+    const third = add('didi', 'friday', 300, 'third', 'delivered')
+    add('dexter', 'didi', 310, 'to another agent', 'delivered')
+    add('marveen', 'friday', 320, 'still pending', 'pending')
+    add('system', 'friday', 330, '[tetlen-or] 12 perce allsz', 'done')
+    add('mandark', 'friday', 340, '[CONTEXT-GUARD] Ujrainditottam a(z) "mandark" agentet', 'delivered')
+    const fourth = add('marveen', 'friday', 400, 'fourth', 'failed')
+    expect(getAgentMessagesSince('friday', 200, 2, 10)).toEqual([
+      { id: third, from_agent: 'didi', created_at: 300, status: 'delivered', head: 'third' },
+      { id: fourth, from_agent: 'marveen', created_at: 400, status: 'failed', head: 'fourth' },
+    ])
+    expect(getAgentMessagesSince('friday', 200, 10, 10)[0]).toEqual({ id: second, from_agent: 'dexter', created_at: 200, status: 'done', head: 'second zzz' })
+    expect(getAgentMessagesSince('friday', 200, 10, 10)).toHaveLength(3)
   })
 })
