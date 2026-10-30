@@ -1188,6 +1188,7 @@ window._i18n.hu = {
   'settings.desc.HEARTBEAT_START_HOUR':        'A heartbeat aktív időablakának kezdete (helyi idő, 0-22). Előtte nem küld értesítést.',
   'settings.desc.HEARTBEAT_END_HOUR':          'A heartbeat aktív időablakának vége (helyi idő, 1-24). Ettől nem küld értesítést.',
   'settings.desc.HEARTBEAT_AGENT_ENABLED':     'Heartbeat sub-ágens engedélyezése. 1 = bekapcsolva (újraindítás után lép életbe).',
+  'settings.desc.PERMISSION_ALERT_MARKS': 'Mikor szóljon a figyelő egy megválaszolatlan engedélykérő dialógusról: vesszővel elválasztott időpontok a dialógus megjelenésétől számítva (s, m, h, d; a puszta szám perc). Az utolsó érték egyben az ismétlési idő. Alapból 15m,30m,1h,2h,8h,24h (egy al-ügynök kérdéséről a fő ügynök azonnal hall, te az első időponttól); a dashboard újraindítása után lép életbe.',
   'settings.desc.IDEA_BREAKDOWN_MAX_SUBTASKS': 'Az "Kanbanra (AI)" ötlet-bontás során generált részfeladatok maximális száma.',
   'settings.desc.IDEA_STALE_DAYS':             'Ennyi napnyi mozdulatlanság után kap "Elavult" jelzést egy "új" státuszú ötlet.',
   'settings.desc.AUDIT_LOG_RETENTION_DAYS':    'Az audit napló (config-változások, ötletláda-audit, store-fájl események) megőrzési ideje napokban. Régebbi bejegyzések a napi sweepkor törlődnek.',

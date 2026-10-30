@@ -17,7 +17,7 @@ import { listKanbanCards } from '../db.js'
 import {
   agentHasChannel,
   agentSessionName,
-  capturePane,
+  capturePane, capturePaneWithHistory,
   captureParkedInputView,
   clearInputBuffer,
   dismissResumeSummaryModalIfPresent,
@@ -54,7 +54,6 @@ import { paneSourceSurvivesDrop, getPaneSource } from './pane-source-survival.js
 import { probeSigTransition, sigTransitionFacts } from './stuck-sig-transition-probe.js'
 import {
   detectPaneState, decidePaneErrorAlert, detectsBlockingMenu, detectsPermissionDialog, detectsFirstRunGate, detectsModelConsentDialog, detectsPermissionPrompt, type PaneErrorAlertState, type PaneState,
-  permissionPromptSummary,
   stuckInputSignature, decideStuckInputRecovery, parkedChannelInput, parkedHoldOverdue,
   parkedInputText, shouldClearTruncatedPreamble,
   parkedInputRowCount, submitLanded, decideStuckInputAction,
@@ -65,7 +64,8 @@ import {
 import { MAIN_CHANNELS_SESSION, MAIN_CHANNELS_PLIST } from './main-agent.js'
 import { recordChannelEvent } from './channel-event-log.js'
 import { notifyChannel, type AlertMeta } from '../notify.js'
-import { escalatePermissionPrompt, type PermPromptEscalationState } from './permission-prompt-escalation.js'
+import type { PermPromptEscalationState } from './permission-prompt-escalation.js'
+import { runPermissionPromptPass, clearPermissionPromptAlert } from './permission-prompt-alert.js'
 import { sendRoutineAlert } from './routine-alert.js'
 import { getProvider, channelStateDir, channelStateDirEnvVar, readChannelToken, type ChannelProviderType } from '../channel-provider.js'
 import { attemptChannelMcpReconnect } from './channel-mcp-reconnect.js'
@@ -2363,6 +2363,8 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
       if (decision.next.firstSeenAt === null) {
         paneMenuState.delete(t.session)
         permPromptState.delete(t.session)
+        // PERMFLOOD1012: the spell is over, so a later prompt is a new question.
+        clearPermissionPromptAlert(t.session)
       } else {
         paneMenuState.set(t.session, decision.next)
       }
@@ -2408,22 +2410,23 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
             // requests ~45s after they appeared, while the operator believed
             // they had approved them. Same rule as the unrecognised trust dialog
             // above: no keystroke is neutral, so send none and say so, loudly.
-            // Card baabe0ba (F7, upstream 68cb6715): the main agent hears first (an
-            // inter-agent message, Escape only), the owner only when the SAME prompt
-            // still stands PERM_PROMPT_OWNER_AFTER_MS later, so the owner is not
-            // spammed (card 88c366f2 / 296277e8 kept him out of ~15 prompts a day);
-            // the main agent's own prompt goes to the owner, nobody else can answer
-            // it. A main-agent message that cannot be queued falls back to the owner.
-            const escalation = escalatePermissionPrompt(permPromptState, {
-              session: t.session,
-              label,
+            // Card baabe0ba (F7, upstream 68cb6715 + PERMFLOOD1012): this branch is
+            // reached once per dedup window for as long as nobody answers. The main
+            // agent hears first (an inter-agent message, Escape only); the owner
+            // hears at fixed marks of the prompt's age (the first one, 15 min by
+            // default, is the main agent's head start), and the message says what
+            // is asked. The main agent's own prompt goes to the owner on the same
+            // marks. A main-agent message that cannot be queued falls back to the
+            // owner. The decision and both sends live in runPermissionPromptPass
+            // (permission-prompt-alert.ts), where they are under test. Before this
+            // card the owner heard nothing here (card 88c366f2 kept ~15 prompts a
+            // day off his phone); the marks keep that quiet for the first 15 min.
+            const escalation = runPermissionPromptPass(label, t.session, paneNow, {
+              captureWithHistory: capturePaneWithHistory,
+              escalation: permPromptState,
               isMainAgent: t.isMarveen,
-              ask: permissionPromptSummary(paneNow),
-              now: Date.now(),
-              ownerText: `🔐 A(z) ${label} session egy engedélykérésen vár, és NEM nyomtam meg semmit: ott az Escape NEM-et jelentene. Döntsd el te: tmux attach -t ${t.session}`,
-            }, {
               messageMainAgent: (text) => { createAgentMessage('system', MAIN_AGENT_ID, text) },
-              alertOwner: (text, meta) => sendAlert(text, meta),
+              send: (text, meta) => sendAlert(text, meta),
             })
             logger.warn({ session: t.session, agent: label, escalation }, 'Blocking "menu" is a tool-permission prompt -- a human decides, NO keystrokes sent')
           } else {
