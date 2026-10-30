@@ -8,7 +8,7 @@ import { resolveAgentSession } from './channel-mcp-reconnect.js'
 import { sendAlert } from './channel-monitor.js'
 import { busyEvidence, detectPaneState, detectsMidTurnApiError, runningBackgroundWork } from '../pane-state.js'
 import { usageLimitHolds } from '../usage-limit-window.js'
-import { endsOnClosingVerdict } from '../kanban-verdict.js'
+import { endsOnClosingVerdict, openLeftovers, openVerdicts, type VerdictComment } from '../kanban-verdict.js'
 import { wakeRows } from '../message-wake.js'
 import { getPendingMessages, getLastOutboundMessageAt, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
 import {
@@ -344,6 +344,13 @@ export function lastRealCommentAtByCard(raw: Map<string, Map<string, number>>): 
  * (isCensusComment, the same exact token lastRealCommentAtByCard uses) decides. A card whose three
  * newest are all census is left out, so it counts as before. A failed query -> undefined, which
  * selectDeclaredWork reads as "not measured": a broken lookup must not silence a queue.
+ *
+ * The latest word is ONE reviewer's. didi's review (2026-10-30): code review says NYITOTT, the
+ * browser check then says NINCS NYITOTT, and the code finding is still open -- the closing gate
+ * reads verdicts per author and refuses, while the guard went silent. So a card is only left out
+ * when it has no open verdict and no open leftover at all, the same reading as db.ts's sweep.
+ * Only the cards that end on a closing verdict load their verdict comments (measured 2026-10-30:
+ * 450 testing cards, 1609 comments carrying a VERDIKT/MARADEK line, 3.0 MB).
  */
 export function closingVerdictByCard(): Map<string, string> | undefined {
   try {
@@ -355,12 +362,20 @@ export function closingVerdictByCard(): Map<string, string> | undefined {
         ') WHERE rn <= 3 ORDER BY card_id, rn',
       )
       .all() as { card_id: string; author: string; content: string | null }[]
+    // A superset of the lines openVerdicts/openLeftovers read (LIKE ignores ASCII case; `%` takes
+    // the accented MARADÉK), so the filter can only add comments, never drop a verdict.
+    const verdictComments = getDb().prepare(
+      'SELECT id, author, content, created_at FROM kanban_comments WHERE card_id = ? ' +
+      "AND (content LIKE '%VERDIKT:%' OR content LIKE '%MARAD%K:%')",
+    )
     const decided = new Set<string>()
     const map = new Map<string, string>()
     for (const row of rows) {
       if (decided.has(row.card_id) || isCensusComment(row.content ?? '')) continue
       decided.add(row.card_id)
-      if (endsOnClosingVerdict(row)) map.set(row.card_id, row.author)
+      if (!endsOnClosingVerdict(row)) continue
+      const all = verdictComments.all(row.card_id) as VerdictComment[]
+      if (openVerdicts(all).length === 0 && openLeftovers(all).length === 0) map.set(row.card_id, row.author)
     }
     return map
   } catch (err) {
