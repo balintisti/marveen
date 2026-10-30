@@ -3632,7 +3632,26 @@ function contextPctBadgeHtml(agentName) {
   // Mirrors context-guard's own default tiers (actPct 0.90, hardPct 0.97):
   // green under act, amber from act to hard, red at/over hard.
   const tier = pct >= 0.97 ? 'danger' : pct >= 0.90 ? 'warning' : 'ok'
-  return `<span class="agent-ctx-badge ${tier}" title="${escapeHtml(t('agents.context_tip', { pct: pctRound }))}">${pctRound}%</span>`
+  const tokens = contextTokensFor(agentName)
+  const tip = t('agents.context_tip', { pct: pctRound }) + (tokens ? ` (${formatContextTokens(tokens)})` : '')
+  return `<span class="agent-ctx-badge ${tier}" title="${escapeHtml(tip)}">${escapeHtml(contextBadgeLabel(pct, tokens))}</span>`
+}
+
+// Absolute context tokens of one agent from the agents list (null when unknown).
+function contextTokensFor(agentName) {
+  // The main agent is NOT in the agents list (GET /api/agents); its contextTokens
+  // rides on /api/marveen (window._marveen).
+  const a = (Array.isArray(agents) ? agents.find(x => x && (x.name === agentName || x.autoRestartId === agentName)) : null)
+    || (agentName === mainAgentId() ? window._marveen : null)
+  return a && typeof a.contextTokens === 'number' && a.contextTokens > 0 ? a.contextTokens : null
+}
+
+// Badge text. Over 100% the guard's denominator (limitTokens) is simply smaller
+// than the real window, so a bare "129%" reads like an error: show the absolute
+// token count next to it. At or under 100% the badge stays as it was.
+function contextBadgeLabel(pct, tokens) {
+  const pctRound = Math.round(pct * 100)
+  return pct > 1 && tokens ? `${pctRound}% · ${formatContextTokens(tokens)}` : `${pctRound}%`
 }
 
 // Populate the auto-restart controls + context display from an agent payload.
@@ -3749,7 +3768,10 @@ function updateContextGuardLiveStatus(agentName) {
       if (!entry) return
       liveEl.style.display = ''
       phaseEl.textContent = CG_PHASE_LABELS[entry.phase] || entry.phase || '-'
-      pctEl.textContent = typeof entry.pct === 'number' ? Math.round(entry.pct * 100) + '%' : '-'
+      const tokens = contextTokensFor(agentName)
+      pctEl.textContent = typeof entry.pct === 'number'
+        ? Math.round(entry.pct * 100) + '%' + (tokens ? ` (${formatContextTokens(tokens)})` : '')
+        : '-'
     })
     .catch(() => {})
 }
