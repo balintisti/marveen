@@ -33,6 +33,8 @@ beforeEach(() => {
   writeFileSync(join(root, 'src', 'marveen', 'agents', 'x', 'CLAUDE.md'), 'x\n')
   writeFileSync(join(root, 'src', 'delta.md'), 'x\n')
   writeFileSync(join(root, 'src', 'skills', 's1', 'SKILL.md'), 'skill\n')
+  mkdirSync(join(root, 'src', 'projects', 'p', 'memory'), { recursive: true })
+  writeFileSync(join(root, 'src', 'projects', 'p', 'memory', 'm.md'), 'memory\n')
   writeFileSync(join(root, 'notify.sh'), '#!/usr/bin/env bash\ntrue\n', { mode: 0o755 })
 })
 afterEach(() => rmSync(root, { recursive: true, force: true }))
@@ -46,6 +48,12 @@ function runSnapshot(extra: Record<string, string> = {}) {
       RULEBOOK_MARVEEN_ROOT: join(root, 'src', 'marveen'),
       RULEBOOK_DELTA_CLAUDE: join(root, 'src', 'delta.md'),
       RULEBOOK_SKILLS_ROOT: join(root, 'src', 'skills'),
+      // Card 0ba35978: these three default to the LIVE tree. Without them every run copied
+      // 1410 real files (~/.claude/projects memories, scheduled tasks), 198 s per call against
+      // a 60 s test timeout: 5 of 7 timed out, on 761e3fb69 and 03aa19c54 alike.
+      RULEBOOK_MEMORY_ROOT: join(root, 'src', 'projects'),
+      RULEBOOK_SCHED_ROOT: join(root, 'no-such-scheduled-tasks'),
+      RULEBOOK_PUSH_MARK: join(root, 'rulebook-push-failed'),
       RULEBOOK_NOTIFY: join(root, 'notify.sh'),
       GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t',
       GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t',
@@ -58,6 +66,9 @@ function runSnapshot(extra: Record<string, string> = {}) {
 describe('minden naplosor megmondja, MIKOR es KI (5b6a78eb)', () => {
   it('idobelyeg + hivo-cimke minden soron', () => {
     const out = runSnapshot()
+    // The fixture's own 5 files and nothing else: a root left on its live default shows up
+    // here as a bigger count, not only as a slow run that times out.
+    expect(out, 'the snapshot read a root outside the fixture').toMatch(/committed 5 files \(tree 5, source 5\)/)
     const lines = out.split('\n').filter(l => l.includes('rulebook-snapshot:'))
     expect(lines.length).toBeGreaterThan(0)
     for (const l of lines) {
