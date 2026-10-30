@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { initDatabase, getDb, createKanbanCard, addKanbanComment, getAgentCommentsSince, getAgentMessagesSince } from '../db.js'
 import {
-  lastAssistantSteps, buildRestartTail, needsRestartTail, COMMENTS_MAX, MESSAGES_MAX, type RestartTailInput,
+  lastAssistantSteps, buildRestartTail, needsRestartTail, COMMENTS_MAX, MESSAGES_MAX, MESSAGE_HEAD_CHARS, type RestartTailInput,
 } from '../web/restart-tail.js'
 
 const FOOTER = '─'.repeat(40)
@@ -160,5 +160,18 @@ describe('getAgentMessagesSince', () => {
     ])
     expect(getAgentMessagesSince('friday', 200, 10, 10)[0]).toEqual({ id: second, from_agent: 'dexter', created_at: 200, status: 'done', head: 'second zzz' })
     expect(getAgentMessagesSince('friday', 200, 10, 10)).toHaveLength(3)
+  })
+  it('a row created before the cutoff but delivered after it counts (it waited in the queue across the HANDOFF)', () => {
+    const waited = add('dexter', 'friday', 150, 'waited in the queue', 'delivered')
+    add('didi', 'friday', 160, 'delivered before the cutoff', 'delivered')
+    getDb().prepare('UPDATE agent_messages SET delivered_at = ? WHERE id = ?').run(250, waited)
+    getDb().prepare("UPDATE agent_messages SET delivered_at = 170 WHERE content = 'delivered before the cutoff'").run()
+    expect(getAgentMessagesSince('friday', 200, 10, 50).map(r => r.id)).toEqual([waited])
+  })
+  it("the runner's head length keeps a normal message whole and cuts a long one at MESSAGE_HEAD_CHARS", () => {
+    add('dexter', 'friday', 300, 'm'.repeat(150), 'delivered')
+    add('dexter', 'friday', 310, 'l'.repeat(400), 'delivered')
+    const rows = getAgentMessagesSince('friday', 200, MESSAGES_MAX, MESSAGE_HEAD_CHARS)
+    expect(rows.map(r => r.head.length)).toEqual([150, 200])
   })
 })

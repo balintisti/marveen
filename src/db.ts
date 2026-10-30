@@ -3137,13 +3137,16 @@ export function getAgentCommentsSince(author: string, sinceSec: number, limit: n
  *  2026-10-30, 4 of friday's 10 messages in the 05:34-08:52 window, they would push agent requests out
  *  of the cap) and `[CONTEXT-GUARD]` notices (they ARE a restart, ours or another agent's).
  *  The NEWEST `limit`, returned oldest first, first `headChars` characters only. */
+// "Since" means received since: a row created before the cutoff but delivered after it (it waited
+// in the queue while the HANDOFF was written) is exactly what the fresh session has not seen.
 export function getAgentMessagesSince(agent: string, sinceSec: number, limit: number, headChars: number): { id: number; from_agent: string; created_at: number; status: string; head: string }[] {
+  const since = Math.floor(sinceSec)
   return (db.prepare(
     'SELECT id, from_agent, created_at, status, substr(content, 1, ?) AS head FROM agent_messages ' +
-    "WHERE to_agent = ? AND created_at >= ? AND status != 'pending' AND from_agent != 'system' " +
+    "WHERE to_agent = ? AND (created_at >= ? OR delivered_at >= ?) AND status != 'pending' AND from_agent != 'system' " +
     "AND content NOT LIKE '[CONTEXT-GUARD]%' " +
     'ORDER BY created_at DESC, id DESC LIMIT ?',
-  ).all(headChars, agent, Math.floor(sinceSec), limit) as { id: number; from_agent: string; created_at: number; status: string; head: string }[]).reverse()
+  ).all(headChars, agent, since, since, limit) as { id: number; from_agent: string; created_at: number; status: string; head: string }[]).reverse()
 }
 
 export function getKanbanComments(cardId: string): KanbanComment[] {
