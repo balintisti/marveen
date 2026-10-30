@@ -423,6 +423,16 @@ export function buildHeartbeatSummaryResponse(
 // list predates it on their side. merge 88c366f2.
 const KANBAN_CARD_METHODS = ['GET', 'PUT', 'DELETE'] as const
 
+// 2dd78397 (upstream 1b0878897): a write that lands on an ARCHIVED card used to answer exactly like
+// one on a live card, so the writer never learned that nobody reads the card any more. The write
+// still happens (a 409 would break every existing caller that closes or comments after
+// archiving); the successful response says it, additively. On a live card the response is
+// unchanged: no field at all. The PUT already says it in its own words (66454b7d: `archived` plus
+// `warning`), so only the comment and the move use this helper.
+function archivedNote(card: { archived_at: number | null } | undefined): { archived?: true } {
+  return card && card.archived_at != null ? { archived: true } : {}
+}
+
 /**
  * Parse the `includeArchived` query parameter.
  *
@@ -916,7 +926,8 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
       json(res, { ...card, labels: getLabelsForCard(id), blockers: getBlockersForCard(id), comment_count: count, comments_omitted: count > 0 })
       return true
     }
-    json(res, { error: 'Kártya nem található' }, 404)
+    // The 404 names the id (2dd78397): a bare "not found" cannot tell a wrong id from a wrong path.
+    json(res, { error: `Kártya nem található: ${id}` }, 404)
     return true
   }
 
@@ -1208,12 +1219,12 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // lezarta oket) -- a valasz nem adott semmit, amin ez latszott volna.
     // A no-op itt sem ir semmit, tehat az `updated_at` sem emelkedik: egy kartya nem latszhat
     // frissen attol, hogy valaki ujrakuldte a mar fennallo allapotat.
-    if (outcome === 'unchanged') { json(res, { ok: true, changed: false }); return true }
+    if (outcome === 'unchanged') { json(res, { ok: true, changed: false, ...archivedNote(getKanbanCard(id)) }); return true }
 
     // Wake the assigned agent once when the card enters in_progress -- unless
     // that agent is the one who moved it (self-pickup needs no wake-up).
     if (status === 'in_progress') fireKanbanDispatch(id, actor)
-    json(res, { ok: true, changed: true })
+    json(res, { ok: true, changed: true, ...archivedNote(getKanbanCard(id)) })
     return true
   }
 
@@ -1397,9 +1408,10 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     const normalizedContent = normalizeKanbanRefs(content, getKanbanSeqByIdPrefix)
     // `automated: true`: a bulk/machine writer marks its own comment, so the
     // stuck detector never reads it as a work-trace (KANBANSTUCKURES916).
-    json(res, automated === true
+    const comment = automated === true
       ? addKanbanComment(cardId, author, normalizedContent, { automated: true })
-      : addKanbanComment(cardId, author, normalizedContent))
+      : addKanbanComment(cardId, author, normalizedContent)
+    json(res, { ...comment, ...archivedNote(card) })
     return true
   }
 
