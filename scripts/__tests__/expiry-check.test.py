@@ -602,24 +602,68 @@ class ExpiryCheck(unittest.TestCase):
         self.assertEqual(verdicts, [(1, 3), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0),
                                     (8, 3), (9, 0), (10, 0)])
 
-    def test_a_snapshot_without_reported_at_counts_from_checked_at(self):
-        """The live state file predates reported_at. It must not buy a fresh 7 days of silence:
-        its checked_at is the oldest instant known, and the ceiling counts from it."""
+    def test_a_snapshot_without_reported_at_reports(self):
+        """Card 37955653: the first cut counted a legacy snapshot's silence from its checked_at,
+        which is the LAST RUN, not the last report. Live, that postponed a DUE item's ceiling from
+        10-22 to 11-03. Without reported_at the last report is unknown, so the run reports, and
+        from then on the ceiling counts from that report."""
         sp = self._state_path()
         os.makedirs(os.path.dirname(sp), exist_ok=True)
         with open(sp, "w", encoding="utf-8") as fh:
-            json.dump({"checked_at": "2026-09-01T00:00:00+00:00", "states": {"old": "DUE"}}, fh)
+            json.dump({"checked_at": "2026-09-02T00:00:00+00:00", "states": {"old": "DUE"}}, fh)
         rc, out, _ = run([self.DUE_ITEM()], as_json=False, now="2026-09-03T00:00:00Z",
                          extra=["--quiet-unless-changed", sp])
-        self.assertEqual(rc, 0)
+        self.assertEqual(rc, 3, "the last report is unknown: report, do not stay silent")
+        self.assertIn("nincs reported_at", out)
         with open(sp, encoding="utf-8") as fh:
-            self.assertEqual(json.load(fh)["reported_at"], "2026-09-01T00:00:00+00:00")
-        rc8, out8, _ = run([self.DUE_ITEM()], as_json=False, now="2026-09-08T00:00:00Z",
+            self.assertEqual(json.load(fh)["reported_at"], "2026-09-03T00:00:00+00:00")
+        rc2, out2, _ = run([self.DUE_ITEM()], as_json=False, now="2026-09-04T00:00:00Z",
                            extra=["--quiet-unless-changed", sp])
-        self.assertEqual(rc8, 3, "7 days after the legacy checked_at the report is forced")
+        self.assertEqual(rc2, 0, "after that report the silence is legitimate again")
+        self.assertIn("ELNEMITVA", out2)
+
+    def test_an_unparseable_reported_at_still_reports(self):
+        sp = self._state_path()
+        os.makedirs(os.path.dirname(sp), exist_ok=True)
+        with open(sp, "w", encoding="utf-8") as fh:
+            json.dump({"checked_at": "2026-09-02T00:00:00+00:00", "reported_at": "tegnap",
+                       "states": {"old": "DUE"}}, fh)
+        rc, out, _ = run([self.DUE_ITEM()], as_json=False, now="2026-09-03T00:00:00Z",
+                         extra=["--quiet-unless-changed", sp])
+        self.assertEqual(rc, 3)
+        self.assertIn("ertelmezhetetlen", out)
+
+    def _seed(self, reported_at):
+        sp = self._state_path()
+        os.makedirs(os.path.dirname(sp), exist_ok=True)
+        with open(sp, "w", encoding="utf-8") as fh:
+            json.dump({"checked_at": "2026-09-02T23:00:00+00:00", "reported_at": reported_at,
+                       "states": {"old": "DUE"}}, fh)
+        return sp
+
+    def test_an_empty_or_null_reported_at_reports_not_falls_back_to_checked_at(self):
+        """trillian 49737: a fallback to checked_at (the old bug) would read the recent run as the
+        last report and stay silent. checked_at is one hour old here, so only the refusal reports."""
+        for value in (None, ""):
+            with self.subTest(reported_at=value):
+                sp = self._seed(value)
+                rc, out, _ = run([self.DUE_ITEM()], as_json=False, now="2026-09-03T00:00:00Z",
+                                 extra=["--quiet-unless-changed", sp])
+                self.assertEqual(rc, 3)
+                self.assertIn("ertelmezhetetlen", out)
+
+    def test_a_reported_at_in_the_future_reports(self):
+        """trillian 49737: reported_at = now + 30 days kept a DUE item silent for 30 + 7 days."""
+        for future in ("2026-10-03T00:00:00+00:00", "2026-09-03T00:01:00+00:00"):
+            with self.subTest(reported_at=future):
+                sp = self._seed(future)
+                rc, out, _ = run([self.DUE_ITEM()], as_json=False, now="2026-09-03T00:00:00Z",
+                                 extra=["--quiet-unless-changed", sp])
+                self.assertEqual(rc, 3, "a last report in the future must not buy silence")
+                self.assertIn("a jovoben van", out)
 
     def test_corrupt_or_unreadable_state_reports(self):
-        for content in ("{not json", '{"states": "not a dict"}', '{"states": {"old": "DUE"}}'):
+        for content in ("{not json", '{"states": "not a dict"}', '{"states": {"old": "DUE"}}', '[1, 2]'):
             with self.subTest(content=content[:20]):
                 sp = self._state_path()
                 os.makedirs(os.path.dirname(sp), exist_ok=True)
