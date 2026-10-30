@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **462** kovetett fajl, ebbol
-**138** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **463** kovetett fajl, ebbol
+**139** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -343,6 +343,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/hooks/outgoing-copy-gate.py`
 
 - Why this exists (Szabi, 2026-08-10 12:57): a licence-delivery email went out to a
+
+### `scripts/hooks/session-status-page.py`
+
+- WHY (card 3af2d815, Isti TG 8534, 2026-10-30; measurement sirius dbcbb210 / 49372): after a restart
 
 ### `scripts/hooks/skills-snapshot-on-write.sh`
 

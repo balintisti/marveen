@@ -50,6 +50,16 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c '[ -f {{PROJECT_ROOT}}/scripts/hooks/session-status-page.py ] && exec python3 {{PROJECT_ROOT}}/scripts/hooks/session-status-page.py; exit 0'",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "SessionEnd": [

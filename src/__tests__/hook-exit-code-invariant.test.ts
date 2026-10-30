@@ -60,6 +60,7 @@ const HOOKS: HookCase[] = [
   { script: 'scripts/hooks/ledger-capture.py', runner: 'python3', cls: 'prompt', tool: 'Bash' },
   { script: 'scripts/hooks/ledger-replay.py', runner: 'python3', cls: 'prompt', tool: 'Bash' },
   { script: 'scripts/hooks/taskstate-replay.py', runner: 'python3', cls: 'prompt', tool: 'Bash' },
+  { script: 'scripts/hooks/session-status-page.py', runner: 'python3', cls: 'prompt', tool: 'Bash' },
   { script: 'scripts/hooks/ledger-outbound.py', runner: 'python3', cls: 'prompt', tool: 'Bash' },
   { script: 'scripts/hooks/tool-log-capture.py', runner: 'python3', cls: 'prompt', tool: 'Bash' },
 ]
