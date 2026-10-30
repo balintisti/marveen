@@ -12,10 +12,10 @@ import { sessionNameForAgent } from './session-names.js'
 import { respawnMainSessionFresh } from './channel-monitor.js'
 import { paneLooksIdle } from '../pane-state.js'
 import { readAutoRestartConfig } from './auto-restart-store.js'
-import { restartDue, dailyDueAtMs, localMidnightMs, parseHHMM, mainRestartMechanism, restartBlockedBy, deferralOverride, restartFailureAction, MAX_RESTART_ATTEMPTS, type AutoRestartConfig } from '../auto-restart.js'
+import { restartDue, dailyDueAtMs, localMidnightMs, parseHHMM, mainRestartMechanism, restartBlockedBy, softBlocksHolding, restartFailureAction, BACKGROUND_WORK_DEFERRAL_CAP_MS, type SoftRestartBlock, MAX_RESTART_ATTEMPTS, type AutoRestartConfig } from '../auto-restart.js'
 import { createAgentMessage, hasOpenInboundQuestion } from '../db.js'
 import { readContextGuardConfig } from './context-guard-store.js'
-import { getHardGuardPhase } from './context-guard-runner.js'
+import { getHardGuardPhase, measureBackgroundWork } from './context-guard-runner.js'
 import { dailyHandoffArmed } from '../context-guard.js'
 import { whileNotFrozen } from './fleet-freeze.js'
 
@@ -46,6 +46,10 @@ const lastRestart = new Map<string, number>()
 // extra window -- never overriding early.
 const openQuestionDeferrals = new Map<string, { sinceMs: number; count: number }>()
 
+// Same streak, for running background work (card c8a9bcff). Separate map: each
+// soft block has its own cap and must be past it before the restart proceeds.
+const backgroundWorkDeferrals = new Map<string, { sinceMs: number; count: number }>()
+
 // Agents whose stand-down for the guard's daily tier has already been logged.
 // The condition is steady state, not an event: without this the runner would
 // write the same line every 60 seconds, 1440 times a day, per agent.
@@ -71,11 +75,6 @@ function sessionFor(name: string): string {
   return sessionNameForAgent(name)
 }
 
-function paneIsIdle(session: string, host: string | null): boolean {
-  const pane = capturePane(session, host)
-  if (pane == null) return false
-  return paneLooksIdle(pane)
-}
 
 // The main channels session always comes back as a FRESH conversation, so
 // cfg.mode ('continue') never applies to it -- see buildMainSessionRespawnCmd's
@@ -208,26 +207,50 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
   } else {
     openQuestionDeferrals.delete(name)
   }
-  const blocked = restartBlockedBy({ paneIdle: paneIsIdle(session, host), openQuestion })
+  // One capture serves both reads: idle, and what is still running under it.
+  // An unreadable pane is not idle (busy-pane, never overridden), as before.
+  const pane = capturePane(session, host)
+  const paneIdle = pane != null && paneLooksIdle(pane)
+  const work = measureBackgroundWork(name, pane ?? null)
+  if (work.backgroundWork > 0) {
+    if (!backgroundWorkDeferrals.has(name)) backgroundWorkDeferrals.set(name, { sinceMs: nowMs, count: 0 })
+  } else {
+    backgroundWorkDeferrals.delete(name)
+  }
+  const blocked = restartBlockedBy({ paneIdle, backgroundWork: work.backgroundWork, openQuestion })
   if (blocked) {
-    const streak = openQuestionDeferrals.get(name) ?? null
-    const capMs = cfg.openQuestionDeferralCapHours * 60 * 60 * 1000
-    if (!deferralOverride(blocked, streak?.sinceMs ?? null, nowMs, capMs)) {
-      if (streak !== null) streak.count += 1
-      logger.info({ name, session, blocked,
-        deferredCount: streak?.count ?? null,
-        deferredForMs: streak === null ? null : nowMs - streak.sinceMs },
+    const streaks: { block: SoftRestartBlock; streak: { sinceMs: number; count: number }; capMs: number }[] = []
+    const bgStreak = backgroundWorkDeferrals.get(name)
+    if (bgStreak) streaks.push({ block: 'background-work', streak: bgStreak, capMs: BACKGROUND_WORK_DEFERRAL_CAP_MS })
+    const oqStreak = openQuestionDeferrals.get(name)
+    if (oqStreak) streaks.push({ block: 'open-question', streak: oqStreak, capMs: cfg.openQuestionDeferralCapHours * 60 * 60 * 1000 })
+    const holding = blocked === 'busy-pane'
+      ? ['busy-pane']
+      : softBlocksHolding(streaks.map((s) => ({ block: s.block, sinceMs: s.streak.sinceMs, capMs: s.capMs })), nowMs)
+    if (holding.length > 0) {
+      for (const s of streaks) s.streak.count += 1
+      logger.info({ name, session, blocked: holding[0],
+        backgroundWork: work.backgroundWork > 0 ? work.backgroundWorkDetail : null,
+        deferredCount: oqStreak?.count ?? null,
+        deferredForMs: oqStreak === undefined ? null : nowMs - oqStreak.sinceMs,
+        backgroundDeferredForMs: bgStreak === undefined ? null : nowMs - bgStreak.sinceMs },
         'auto-restart: due but deferred to next tick')
       return
     }
     // The deferral must have an end AND a voice: past the cap the restart
-    // proceeds, and the override is logged at warn so a permanently
-    // unanswered question is distinguishable from normal operation.
-    logger.warn({ name, session,
-      deferredCount: (streak as { count: number }).count,
-      deferredForMs: nowMs - (streak as { sinceMs: number }).sinceMs,
-      capHours: cfg.openQuestionDeferralCapHours },
-      'auto-restart: open-question deferral exceeded cap, restarting anyway')
+    // proceeds, and each override is logged at warn so a permanently
+    // unanswered question or a never-ending shell is distinguishable from
+    // normal operation. Running work is NAMED, because this restart kills it.
+    for (const s of streaks) {
+      logger.warn({ name, session, block: s.block,
+        deferredCount: s.streak.count,
+        deferredForMs: nowMs - s.streak.sinceMs,
+        capHours: s.capMs / 3_600_000,
+        killed: s.block === 'background-work' ? work.killedWorkDetail : undefined },
+        s.block === 'open-question'
+          ? 'auto-restart: open-question deferral exceeded cap, restarting anyway'
+          : 'auto-restart: background-work deferral exceeded cap, restarting anyway')
+    }
   }
 
   try {
@@ -237,6 +260,7 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
     // A restart does not answer the question -- reset the streak so the next
     // due slot gets a full deferral window again instead of overriding at once.
     openQuestionDeferrals.delete(name)
+    backgroundWorkDeferrals.delete(name)
     logger.info({ name, mode: name === MAIN_AGENT_ID ? 'fresh(main)' : cfg.mode }, 'auto-restart: restarted session')
   } catch (err) {
     // Root-caused 2026-09-19 (measured on our install): a throwing performRestart used to
