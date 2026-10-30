@@ -268,8 +268,8 @@ const UNBLOCK_SAFE_CARD_ID_RE = /^[A-Za-z0-9._-]{1,80}$/
 // Once per closing: a freed card that already carries this blocker's system comment from
 // the current done transition on is skipped. The /move and the PUT call this once per
 // transition anyway; the dedupe is for the second entry point, POST
-// /api/kanban/:id/notify-unblocked, which the card script calls after its own DB move and
-// which a caller may repeat.
+// /api/kanban/:id/notify-unblocked, which a caller may repeat. (Upstream's card script calls it
+// after its own DB move; ours refuses to write done, so on this tree nothing calls it yet.)
 function notifyUnblockedCards(blockerId: string, actor?: string | null): { freed: string[]; alreadyNotified: string[] } {
   const result = { freed: [] as string[], alreadyNotified: [] as string[] }
   let freed: ReturnType<typeof getCardsUnblockedBy>
@@ -1403,9 +1403,11 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   }
 
   // Card baabe0ba F2 (upstream b8eec4d7d): the unblock notice for a card closed OUTSIDE this
-  // route. The card script (scripts/kartya-es-ertesites.py) moves cards in the DB directly, so
-  // the /move and PUT hooks above never see its closings. The script calls this right after its
-  // move, and the rules stay here, in one place. Only a card that IS done is accepted; a repeated
+  // route, by a direct DB writer the /move and PUT hooks above never see. Upstream's card script
+  // calls it right after its own move. OURS DOES NOT: scripts/kartya-es-ertesites.py refuses to
+  // write done (_done_kapu), so on this tree the endpoint has no caller (didi, F2 review). It is
+  // kept for upstream parity, so a later port of the script needs no new route; the rules stay
+  // here, in one place. Only a card that IS done is accepted; a repeated
   // call does not notify twice (notifyUnblockedCards dedupes per closing).
   const unblockNotifyMatch = path.match(/^\/api\/kanban\/([^/]+)\/notify-unblocked$/)
   if (unblockNotifyMatch && method === 'POST') {
