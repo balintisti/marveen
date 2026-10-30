@@ -55,3 +55,7 @@ export function renderBlock(counts: SuiteCounts, stamp: string, how?: string): s
 export function refusalLines(output?: string): string[]
 
 export function replaceBlock(source: string, block: string): string
+
+/** A blokk idobelyege Europe/Belgrade-ben, a pillanathoz illo zonanevvel (CEST/CET; kartya 9c4f0e1e).
+ *  2026-10-30: a `.mjs` export ide nem kerult be, a `tsc` a kotegkapun bukott (TS2305). */
+export function zoneStamp(date: Date): string
