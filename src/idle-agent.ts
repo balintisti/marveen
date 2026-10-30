@@ -2179,11 +2179,17 @@ export type PaneUnreadableReason = 'no-session' | 'capture-failed' | 'unknown-st
 /** The targeted message for a turn that died on an API error (card 843a9ab6, wording fixed by
  *  marveen's design). HH:MM is Europe/Budapest, whatever zone the process runs in. The tail
  *  (short turns, findings on the card) is card 57fd94f1, marveen 34422. */
+export const API_ERROR_RESUME_FACTS =
+  'Ez az uzenet TENYT allit, utasitast nem hordoz: hogy hol tartottal, a kartyadon es a HANDOFF.md-ben latszik, ' +
+  'es hogy mit kezdesz vele, azt a SAJAT allando szabalyaid dontik el.'
+
 export function buildApiErrorResumeMessage(errorSinceMs: number): string {
   const hhmm = new Intl.DateTimeFormat('hu-HU', {
     timeZone: 'Europe/Budapest', hour: '2-digit', minute: '2-digit', hour12: false,
   }).format(new Date(errorSinceMs))
-  return `a turnod API-hibával megszakadt ${hhmm}-kor, folytasd onnan, ahol tartottál, rövid fordulókban dolgozz, a leleteket a kártyára írd`
+  // FACTS, NOT ORDERS (card c2246921, didi 49848 F1): this row also arrives from `system`, wrapped as
+  // <untrusted>, so the old "folytasd onnan..." was an order a fresh session is right to refuse.
+  return `a turnod API-hibával megszakadt ${hhmm}-kor. ${API_ERROR_RESUME_FACTS}`
 }
 
 export interface FleetAlert {
