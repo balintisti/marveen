@@ -45,6 +45,8 @@ Every project task runs on a card: the orchestrator records it as a card, delega
 
 Direct SQLite, or the dashboard kanban interface. Card status is automatically included in every agent's context.
 
+`POST /api/kanban/:id/move` also takes an optional `expected_status` (compare-and-set). When it is given, the move happens only if the card's current status equals it; the check is part of the write statement. Otherwise nothing changes and the answer is 409 `{error: "status_conflict", current_status, expected_status}`. An unknown `expected_status` value is a 400, a missing card is still a 404, and without the field the move is unconditional, as before. The 409 is decided before the close gate: a caller working from a stale picture learns that first.
+
 ### Dashboard kanban interface
 
 Key behaviours in the card editor on the web dashboard (`http://localhost:3420`):

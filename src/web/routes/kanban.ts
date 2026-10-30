@@ -5,7 +5,7 @@ import {
   listKanbanCards, countArchivedKanbanCards, kanbanAssigneeExists, createKanbanCard, updateKanbanCard, KANBAN_CREATE_FIELDS,
   deleteKanbanCard, moveKanbanCard, archiveKanbanCard, unarchiveKanbanCard,
   getKanbanComments, addKanbanComment, getKanbanCardHistory, listKanbanProjects,
-  getKanbanCard, getChildCards, getDb,
+  getKanbanCard, getChildCards, getDb, KANBAN_STATUSES,
   createAgentMessage, markKanbanCardDispatched,
   getKanbanSeqByIdPrefix,
   listLabels, getLabel, createLabel, updateLabel, deleteLabel,
@@ -1188,7 +1188,25 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     const id = decodeURIComponent(kanbanMoveMatch[1])
     const body = await readBody(req)
     const parsedMove = JSON.parse(body.toString())
-    const { status, sort_order, actor } = parsedMove
+    const { status, sort_order, actor, expected_status } = parsedMove
+    // Optional compare-and-set guard (upstream a33b81af5, card baabe0ba). Absent (undefined/null)
+    // keeps the unconditional move exactly as it was. Present, it must name a real status: an
+    // unknown value could never match, and a 409 would wrongly suggest someone else moved the card.
+    const hasExpected = expected_status !== undefined && expected_status !== null
+    if (hasExpected && !(KANBAN_STATUSES as readonly string[]).includes(expected_status)) {
+      json(res, { error: `Invalid expected_status. Accepted: ${KANBAN_STATUSES.join(', ')}` }, 400)
+      return true
+    }
+    // A stale picture of the card is answered BEFORE the close gate below: "the card is not where
+    // you think it is" is the more basic fact, and the gate's verdict would be about a move the
+    // caller no longer means. moveKanbanCard re-checks it inside the UPDATE itself.
+    if (hasExpected) {
+      const seen = getKanbanCard(id)
+      if (seen && seen.status !== expected_status) {
+        json(res, { error: 'status_conflict', current_status: seen.status, expected_status }, 409)
+        return true
+      }
+    }
     // CARD 5a967042: the move to done is where a card closes; see closeBlocked.
     if (status === 'done') {
       const current = getKanbanCard(id)
@@ -1203,13 +1221,18 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // tovabbra is megerdemel egy sort, es a `serverUptimeSec` az egyetlen idobeli teny, amit
     // ez az oldal hozza tud tenni. Ami KIKERULT: a `getKanbanCard` ujra-lekerdezese, mert az
     // `outcome` mar megmondta, amit az meg akart tudni.
-    const outcome = moveKanbanCard(id, status, sort_order ?? 0, actor)
+    const outcome = moveKanbanCard(id, status, sort_order ?? 0, actor, hasExpected ? { expectedStatus: expected_status } : undefined)
     if (outcome === 'not-found') {
       logger.warn(
         { id, status, exists: false, serverUptimeSec: Math.round(process.uptime()) },
         'Kanban move: no such card',
       )
       json(res, { error: moveFailureMessage(false) }, 404)
+      return true
+    }
+    // Reached only when the in-statement guard lost a race after the pre-check above.
+    if (outcome === 'status-conflict') {
+      json(res, { error: 'status_conflict', current_status: getKanbanCard(id)?.status, expected_status }, 409)
       return true
     }
 

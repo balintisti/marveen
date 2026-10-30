@@ -45,6 +45,8 @@ Minden projekt-feladat kártyán fut: az orchestrator kártyaként rögzíti, on
 
 Közvetlen SQLite, vagy a dashboard kanban-felülete. A kártya-állapot minden ügynök kontextusába automatikusan bekerül.
 
+A `POST /api/kanban/:id/move` opcionálisan `expected_status`-t is elfogad (compare-and-set). Ha meg van adva, a mozgatás csak akkor történik meg, ha a kártya aktuális státusza ezzel egyezik; az ellenőrzés az írás utasításában van. Különben semmi nem változik, és a válasz 409 `{error: "status_conflict", current_status, expected_status}`. Ismeretlen `expected_status` érték 400, hiányzó kártya továbbra is 404, a mező nélkül pedig a mozgatás feltétel nélküli, mint eddig. A 409 a lezárási kapu előtt dönt: aki elavult képpel dolgozik, azt tudja meg először.
+
 ### WIP-limit (folyamatban lévő kártyák korlátja) -- technikai részletek
 
 Minden kanban-oszlophoz beállítható egy maximális kártyaszám (Work In Progress limit). Ha a limit be van állítva, az oszlopfejlécben lévő kártyaszámláló `count/limit` formátumra vált, és a kihasználtság alapján változtatja a színét:

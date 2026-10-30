@@ -2928,7 +2928,22 @@ export function getChildCards(parentId: string): KanbanCard[] {
   return db.prepare('SELECT * FROM kanban_cards WHERE parent_id = ? AND archived_at IS NULL ORDER BY sort_order ASC').all(parentId) as KanbanCard[]
 }
 
-export type KanbanMoveOutcome = 'not-found' | 'unchanged' | 'moved'
+export type KanbanMoveOutcome = 'not-found' | 'unchanged' | 'moved' | 'status-conflict'
+
+// The statuses the kanban_cards CHECK constraint accepts. Exported so the HTTP boundary can
+// validate a caller-supplied status (the /move route's `expected_status`) against exactly this set
+// (ported from upstream a33b81af5).
+export const KANBAN_STATUSES: readonly KanbanCard['status'][] = [
+  'planned', 'in_progress', 'testing', 'waiting', 'done',
+]
+
+export interface MoveKanbanCardOptions {
+  // Compare-and-set guard (upstream a33b81af5, card baabe0ba). When given, the move only happens
+  // if the card's current status equals this value; otherwise nothing is written and the outcome
+  // is 'status-conflict'. Without it the move is unconditional (last writer wins), exactly as
+  // before. A missing card is still 'not-found', whatever was expected.
+  expectedStatus?: KanbanCard['status']
+}
 
 /** Move a card, and SAY WHETHER ANYTHING MOVED (card aca11ba5).
  *
@@ -2959,10 +2974,15 @@ export type KanbanMoveOutcome = 'not-found' | 'unchanged' | 'moved'
  */
 export function moveKanbanCard(
   id: string, status: KanbanCard['status'], sortOrder: number, actor?: string,
+  opts?: MoveKanbanCardOptions,
 ): KanbanMoveOutcome {
   const row = db.prepare('SELECT status, sort_order, parent_id FROM kanban_cards WHERE id=?').get(id) as
     { status: string; sort_order: number; parent_id: string | null } | undefined
   if (row === undefined) return 'not-found'
+  // The guard comes BEFORE the no-op check: a stale caller whose target happens to equal the
+  // current status must still learn that its picture of the card was wrong.
+  const expected = opts?.expectedStatus
+  if (expected !== undefined && row.status !== expected) return 'status-conflict'
   if (row.status === status && row.sort_order === sortOrder) return 'unchanged'
 
   const now = Math.floor(Date.now() / 1000)
@@ -2975,11 +2995,16 @@ export function moveKanbanCard(
   // 'unchanged' early return above means a no-op move writes nothing, so a row
   // already stuck with a stale dispatched_at is healed by its next REAL move,
   // not by a re-send of the status it is already in.
-  db.prepare(
-    status === 'in_progress'
-      ? 'UPDATE kanban_cards SET status=?, sort_order=?, updated_at=? WHERE id=?'
-      : 'UPDATE kanban_cards SET status=?, sort_order=?, updated_at=?, dispatched_at=NULL WHERE id=?'
-  ).run(status, sortOrder, now, id)
+  //
+  // With opts.expectedStatus the check is part of the SAME statement (WHERE id=? AND status=?), so
+  // a writer in another process cannot slip between the read above and this write.
+  const setClause = status === 'in_progress'
+    ? 'SET status=?, sort_order=?, updated_at=?'
+    : 'SET status=?, sort_order=?, updated_at=?, dispatched_at=NULL'
+  const written = expected === undefined
+    ? db.prepare(`UPDATE kanban_cards ${setClause} WHERE id=?`).run(status, sortOrder, now, id)
+    : db.prepare(`UPDATE kanban_cards ${setClause} WHERE id=? AND status=?`).run(status, sortOrder, now, id, expected)
+  if (written.changes === 0) return expected === undefined ? 'not-found' : 'status-conflict'
   // parent_id comes along in the same read: the ancestor chain has to be stamped too, and this
   // path (drag / status change) is the most common subcard event there is -- an subcard moved to
   // done (upstream, kanban-parent-activity).
