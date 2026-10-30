@@ -64,7 +64,8 @@ describe('PUT /api/kanban/:id -- jarvis acceptance criteria (spec 6005 §3)', ()
     // af9f6cd4 merged in and legitimately adds `changed` to every 200. The intent of this
     // NEGATIVE case is 'no OVERWRITE signal', so assert that directly instead of pinning
     // the whole object -- and keep it exact rather than loosening to a truthy check.
-    expect(second.payload).toEqual({ ok: true, changed: true })
+    // `version` (5b404c44d, card baabe0ba) is additive: the PUT now answers the new row version.
+    expect(second.payload).toEqual({ ok: true, changed: true, version: getKanbanCard('c1')!.version })
     expect(second.payload).not.toHaveProperty('overwritten')
     expect(second.payload).not.toHaveProperty('warning')
     expect(second.payload.overwritten).toBeUndefined()
@@ -78,7 +79,7 @@ describe('PUT /api/kanban/:id -- jarvis acceptance criteria (spec 6005 §3)', ()
     // af9f6cd4 adds: writing the same value back is NOT a change at all, so `updated_at`
     // is not bumped and the answer is `changed: false`. ddf11b94's test could not have
     // predicted that field; it is the intersection, not a regression.
-    expect(second.payload).toEqual({ ok: true, changed: false })
+    expect(second.payload).toEqual({ ok: true, changed: false, version: getKanbanCard('c1')!.version })
     expect(second.payload).not.toHaveProperty('overwritten')
     expect(second.payload).not.toHaveProperty('warning')
   })
@@ -86,7 +87,7 @@ describe('PUT /api/kanban/:id -- jarvis acceptance criteria (spec 6005 §3)', ()
   it('filling a BLANK field is not an overwrite', async () => {
     // `assignee` starts null. Setting it is an ordinary edit, not a replacement.
     const r = await put('c1', { assignee: 'friday' })
-    expect(r.payload).toEqual({ ok: true, changed: true })
+    expect(r.payload).toEqual({ ok: true, changed: true, version: getKanbanCard('c1')!.version })
     expect(r.payload).not.toHaveProperty('overwritten')
     expect(r.payload).not.toHaveProperty('warning')
     // ... but replacing that same assignee IS one.

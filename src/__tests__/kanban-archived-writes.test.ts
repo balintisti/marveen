@@ -101,7 +101,8 @@ describe('a write on an ARCHIVED card says so; on a live card the answer is unch
 
   it('NEGATIVE: PUT on a live card: no archived field, no warning', async () => {
     const out = await call(`/api/kanban/${LIVE}`, 'PUT', { assignee: 'dexter', actor: 'teszt' })
-    expect(out.body).toEqual({ ok: true, changed: true })
+    // `version` is the card's new row version (the PUT answers it on every write, 5b404c44d).
+    expect(out.body).toEqual({ ok: true, changed: true, version: readCard(LIVE).version })
   })
 })
 

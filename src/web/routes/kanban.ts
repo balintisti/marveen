@@ -423,6 +423,16 @@ export function buildHeartbeatSummaryResponse(
 // list predates it on their side. merge 88c366f2.
 const KANBAN_CARD_METHODS = ['GET', 'PUT', 'DELETE'] as const
 
+// The 409 body of a PUT based on a stale copy. An instruction, not a diagnosis: the next act has to
+// be a re-read, because reposting the same body is exactly the overwrite this refused.
+function staleVersionBody(currentVersion: number | undefined): Record<string, unknown> {
+  return {
+    error: 'The card changed since you read it -- nothing was saved. Read it again and apply your change to the current version.',
+    conflict: 'stale_version',
+    current_version: currentVersion,
+  }
+}
+
 // 2dd78397 (upstream 1b0878897): a write that lands on an ARCHIVED card used to answer exactly like
 // one on a live card, so the writer never learned that nobody reads the card any more. The write
 // still happens (a 409 would break every existing caller that closes or comments after
@@ -934,7 +944,21 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   if (kanbanCardMatch && method === 'PUT') {
     const id = decodeURIComponent(kanbanCardMatch[1])
     const body = await readBody(req)
-    const data = JSON.parse(body.toString())
+    const parsedPut = JSON.parse(body.toString())
+    // The version the body was based on (updateKanbanCard; upstream 5b404c44d, card baabe0ba). Two
+    // spellings, because the two real caller shapes differ: `expected_version` for a caller that
+    // builds a partial body by hand, and `version` for one that GETs the card and PUTs the whole
+    // object back -- the dashboard does that on every inline edit, and that body carries
+    // `description` from whenever the board was loaded, so it gets the check without changing.
+    // Neither is ever written as a column, so both are taken OUT of the body here, before the
+    // unknown-key guard below sees it. Only an object body is split: null / array / scalar keep
+    // reaching the empty-body check exactly as before.
+    let version: unknown
+    let expected_version: unknown
+    let data = parsedPut
+    if (parsedPut && typeof parsedPut === 'object' && !Array.isArray(parsedPut)) {
+      ({ version, expected_version, ...data } = parsedPut)
+    }
     // AZ URES TORZS HIVOI HIBA, NEM MUVELET (kartya af9f6cd4). Megmerve: nulla
     // hivo kuld ilyet -- sem a frontend, sem az agens-lapok --, tehat a 400 nem
     // tor el semmit, viszont megnevezi, mi hianyzik.
@@ -942,6 +966,19 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
       json(res, { error: 'Ures torzsu PUT: nincs mit modositani. Add meg a valtoztatando mezot, pl. {"assignee":"..."}.' }, 400)
       return true
     }
+
+    // A malformed version is a 400, not "no check": a caller that believes it sent a guard must
+    // not get an unguarded write. Absent (undefined) is the unguarded write it always was.
+    const versionError = (v: unknown) => v !== undefined && !(Number.isSafeInteger(v) && (v as number) >= 0)
+    if (versionError(version) || versionError(expected_version)) {
+      json(res, { error: '"version" / "expected_version" must be a non-negative integer (the version the card was read at)' }, 400)
+      return true
+    }
+    if (version !== undefined && expected_version !== undefined && version !== expected_version) {
+      json(res, { error: '"version" and "expected_version" disagree -- send one' }, 400)
+      return true
+    }
+    const expectedVersion = (expected_version ?? version) as number | undefined
 
     // A PRECONDITION THIS ENDPOINT CANNOT HONOUR MUST NOT ANSWER 200 (card ddf11b94).
     // Measured before this change: `If-Match: anything` -> 200, and
@@ -1080,6 +1117,13 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
         + `akartal szerkeszteni, oldd fel: POST /api/kanban/${encodeURIComponent(id)}/unarchive.`
       : null
 
+    // A STALE COPY IS ANSWERED BEFORE THE VALUE CHECKS BELOW (they judge a card the caller no longer
+    // holds), and before the write. updateKanbanCard re-checks it inside the UPDATE itself.
+    if (expectedVersion !== undefined && roCard && (roCard as { version?: number }).version !== expectedVersion) {
+      json(res, staleVersionBody((roCard as { version?: number }).version), 409)
+      return true
+    }
+
     // AZ `actor` A TORZSBOL JON, ES OPCIONALIS -- card 4e27d5ad, ugyanaz az alak,
     // mint a `/move`-nal. Kotelezove tenni azt jelentene, hogy a mai hivok
     // (a dashboard harom PUT helye es minden agens-lap dokumentalt peldaja)
@@ -1138,8 +1182,10 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     if (roCard && data.status === 'done' && (roCard as { status?: string }).status !== 'done') {
       if (closeBlocked(res, id, data, actor, 'done')) return true
     }
-    const result = updateKanbanCard(id, data, actor)
+    const result = updateKanbanCard(id, data, actor, expectedVersion)
     if (result.outcome === 'not-found') { json(res, { error: 'Kártya nem található' }, 404); return true }
+    // Only reachable when the in-statement guard lost a race after the pre-check above.
+    if (result.outcome === 'stale') { json(res, staleVersionBody(result.current_version), 409); return true }
 
     // A `unchanged` NEM hiba: egy hivo joggal kuldheti ujra ugyanazt (a szerkeszto
     // modal minden mentesnel a TELJES objektumot kuldi). De az `updated_at` NEM
@@ -1147,7 +1193,7 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // frissnek latszana anelkul, hogy barmi valtozott volna. Felulirni ilyenkor
     // nincs mit, tehat `overwritten` szuksegszeruen ures.
     if (result.outcome === 'unchanged') {
-      json(res, { ok: true, changed: false, ...(archiveWarning ? { archived: true, warning: archiveWarning } : {}) })
+      json(res, { ok: true, changed: false, version: result.version, ...(archiveWarning ? { archived: true, warning: archiveWarning } : {}) })
       return true
     }
 
@@ -1160,6 +1206,7 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
       json(res, {
         ok: true,
         changed: true,
+        version: result.version,
         overwritten: result.overwritten,
         // KET FIGYELMEZTETES EGY VALASZBAN: a felulirast es az archivaltsagot NEM olvasztjuk
         // ossze egy mondatba -- ket kulonbozo dolgot kell tenni tolük, es egy osszevont szoveg
@@ -1171,7 +1218,7 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
       })
       return true
     }
-    json(res, { ok: true, changed: true, ...(archiveWarning ? { archived: true, warning: archiveWarning } : {}) })
+    json(res, { ok: true, changed: true, version: result.version, ...(archiveWarning ? { archived: true, warning: archiveWarning } : {}) })
     return true
   }
 
