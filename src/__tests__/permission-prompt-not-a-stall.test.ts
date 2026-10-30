@@ -64,7 +64,7 @@ describe('what the prompt is asking, so the alert needs no pane visit', () => {
 
 // ADAPTED IN THE 88c366f2 MERGE. Both sides built "a permission prompt is not a stall" into the
 // stuck-session alert; OURS is kept (marveen's (B) decision 2026-09-03: its own [approval-needed]
-// tag, pane-driven via paneRemedy/describePermissionPrompt, pinned by router-stuck-alert.test.ts).
+// tag, pane-driven via paneRemedy/permissionPromptAsk since card fa6535bb, pinned by router-stuck-alert.test.ts).
 // Upstream's formatter took (awaitingPermission, permissionAsk) and reported under [session-stuck];
 // these cases keep upstream's INTENT -- answer, do not restart; quote the question; never alert the
 // main agent about itself -- against our signature, on upstream's three LIVE captures. That makes
@@ -85,10 +85,12 @@ describe('stuck-session alert for a permission prompt (our [approval-needed] API
     expect(alert).not.toMatch(/restart the agent if it is wedged/)
   })
 
-  it('quotes the question so the pane does not have to be opened', () => {
+  it('names what is asked (card header + reason) so the pane does not have to be opened', () => {
+    // Card fa6535bb (baabe0ba F7): the same summary as the other permission
+    // alerts, never the command box.
     const alert = alertFor(PANE_GREP)!
-    expect(alert).toContain('It is asking:')
-    expect(alert).toMatch(/Do you want to [^"]*\?/)
+    expect(alert).toContain('It is asking: "Bash command')
+    expect(alert).toContain('deny rule is configured')
   })
 
   it('control: without a pane there is no approval verdict (the null path is allowed and pinned)', () => {

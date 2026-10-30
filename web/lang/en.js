@@ -864,6 +864,7 @@ window._i18n.en = {
   'settings.desc.HEARTBEAT_START_HOUR':        'Start of the heartbeat active time window (local time, 0-22). No notifications sent before this hour.',
   'settings.desc.HEARTBEAT_END_HOUR':          'End of the heartbeat active time window (local time, 1-24). No notifications sent from this hour onward.',
   'settings.desc.HEARTBEAT_AGENT_ENABLED':     'Enable the heartbeat sub-agent. 1 = enabled (takes effect after restart).',
+  'settings.desc.PERMISSION_ALERT_MARKS': 'When the monitor messages you about an unanswered permission prompt: comma-separated ages counted from when the prompt appeared (s, m, h, d; a bare number is minutes). The last value is also the repeat period. Default 15m,30m,1h,2h,8h,24h (on a prompt of another agent the main agent is told at once, you from the first value on); takes effect after a dashboard restart.',
   'settings.desc.IDEA_BREAKDOWN_MAX_SUBTASKS': 'Maximum number of subtasks generated during "To Kanban (AI)" idea breakdown.',
   'settings.desc.IDEA_STALE_DAYS':             'Days of inactivity after which a "new" status idea receives a "Stale" indicator.',
   'settings.desc.AUDIT_LOG_RETENTION_DAYS':    'Retention period in days for the audit log (config changes, idea box audit, store file events). Older entries are deleted during the daily sweep.',

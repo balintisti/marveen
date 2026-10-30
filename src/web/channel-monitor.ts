@@ -17,7 +17,7 @@ import { listKanbanCards } from '../db.js'
 import {
   agentHasChannel,
   agentSessionName,
-  capturePane,
+  capturePane, capturePaneWithHistory,
   captureParkedInputView,
   clearInputBuffer,
   dismissResumeSummaryModalIfPresent,
@@ -63,7 +63,9 @@ import {
 } from '../pane-state.js'
 import { MAIN_CHANNELS_SESSION, MAIN_CHANNELS_PLIST } from './main-agent.js'
 import { recordChannelEvent } from './channel-event-log.js'
-import { notifyChannel } from '../notify.js'
+import { notifyChannel, type AlertMeta } from '../notify.js'
+import type { PermPromptEscalationState } from './permission-prompt-escalation.js'
+import { runPermissionPromptPass, clearPermissionPromptAlert } from './permission-prompt-alert.js'
 import { sendRoutineAlert } from './routine-alert.js'
 import { getProvider, channelStateDir, channelStateDirEnvVar, readChannelToken, type ChannelProviderType } from '../channel-provider.js'
 import { attemptChannelMcpReconnect } from './channel-mcp-reconnect.js'
@@ -794,6 +796,11 @@ const paneMenuState: Map<string, PaneErrorAlertState> = new Map()
 const MENU_RECOVER_CONFIRM_MS = 45_000
 const MENU_RECOVER_DEDUP_MS = 5 * 60 * 1000
 const MENU_RECOVER_CLEAR_MS = 2 * 60 * 1000
+// Card baabe0ba (F7, upstream 6dc8bfb3d / 68cb6715): per session, which
+// tool-permission prompt the main agent was told about and when
+// (permission-prompt-escalation.ts). Dropped together with the paneMenuState
+// entry, so a prompt answered in between never escalates to the owner.
+const permPromptState: Map<string, PermPromptEscalationState> = new Map()
 
 type MarveenRecoveryStage = 'soft' | 'save' | 'resume' | 'hard' | 'gave_up'
 interface MarveenDownState {
@@ -2057,8 +2064,8 @@ export function formatPermissionPromptCancelledNotice(
   ].join('\n')
 }
 
-export function sendAlert(text: string): void {
-  notifyChannel(text).catch(() => {})
+export function sendAlert(text: string, meta?: AlertMeta): void {
+  notifyChannel(text, meta).catch(() => {})
 }
 
 async function handleMarveenDown(): Promise<void> {
@@ -2355,6 +2362,9 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
       })
       if (decision.next.firstSeenAt === null) {
         paneMenuState.delete(t.session)
+        permPromptState.delete(t.session)
+        // PERMFLOOD1012: the spell is over, so a later prompt is a new question.
+        clearPermissionPromptAlert(t.session)
       } else {
         paneMenuState.set(t.session, decision.next)
       }
@@ -2400,15 +2410,25 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
             // requests ~45s after they appeared, while the operator believed
             // they had approved them. Same rule as the unrecognised trust dialog
             // above: no keystroke is neutral, so send none and say so, loudly.
-            logger.warn({ session: t.session, agent: label }, 'Blocking "menu" is a tool-permission prompt -- a human decides, NO keystrokes sent')
-            // TO THE COORDINATOR'S INBOX, NOT sendAlert (card 88c366f2, merge default until marveen
-            // decides P1): sendAlert reaches the owner on Telegram, and at ~15 prompts a day that is
-            // the spam card 296277e8 routed away from him on purpose. The no-keystroke half is kept.
-            try {
-              createAgentMessage('system', MAIN_AGENT_ID, `[approval-needed] A(z) '${label}' (tmux ${t.session}) egy TOOL-ENGEDELYKERESEN var, es NEM nyomtam meg semmit: ott az Escape NEM-et jelentene. Valaszolj a panelben: tmux attach -t ${t.session}`)
-            } catch (err) {
-              logger.warn({ err, session: t.session }, 'permission-prompt notice could not be queued')
-            }
+            // Card baabe0ba (F7, upstream 68cb6715 + PERMFLOOD1012): this branch is
+            // reached once per dedup window for as long as nobody answers. The main
+            // agent hears first (an inter-agent message, Escape only); the owner
+            // hears at fixed marks of the prompt's age (the first one, 15 min by
+            // default, is the main agent's head start), and the message says what
+            // is asked. The main agent's own prompt goes to the owner on the same
+            // marks. A main-agent message that cannot be queued falls back to the
+            // owner. The decision and both sends live in runPermissionPromptPass
+            // (permission-prompt-alert.ts), where they are under test. Before this
+            // card the owner heard nothing here (card 88c366f2 kept ~15 prompts a
+            // day off his phone); the marks keep that quiet for the first 15 min.
+            const escalation = runPermissionPromptPass(label, t.session, paneNow, {
+              captureWithHistory: capturePaneWithHistory,
+              escalation: permPromptState,
+              isMainAgent: t.isMarveen,
+              messageMainAgent: (text) => { createAgentMessage('system', MAIN_AGENT_ID, text) },
+              send: (text, meta) => sendAlert(text, meta),
+            })
+            logger.warn({ session: t.session, agent: label, escalation }, 'Blocking "menu" is a tool-permission prompt -- a human decides, NO keystrokes sent')
           } else {
             // A TOOL-PERMISSION prompt lands here too, and the recovery keystroke
             // on THAT dialog is `cancel` -- so the watchdog denies a tool call on

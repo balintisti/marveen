@@ -825,18 +825,29 @@ export function detectsBlockingMenu(pane: string): boolean {
 //
 // Returns null when either piece is missing: an alert with a half-parsed
 // question is worse than an alert that just says "open the pane".
-const PERMISSION_RULE_LINE_RX = /^\s*─{8,}\s*$/
+const PERMISSION_RULE_LINE_RX = /^─{8,}\s*$/
 // The question line the summary anchors on. detectsPermissionDialog (added on
 // develop by PR #1190) decides WHETHER a prompt is up; this module only has to
 // find the question again to quote it.
 const PERMISSION_SUMMARY_QUESTION_RX = /\bDo you want to (?:proceed|create|make|run)\b/i
 const PERMISSION_QUOTE_PREFIX_RX = /^\s*│\s?/
 const PERMISSION_REASON_MAX = 220
+// The cards whose subject line is a PATH: "Edit file", "Create file" (both
+// measured), any other "<Verb> file", and the same with the sub-agent suffix
+// ("Edit file · from the general-purpose agent"). On every other card -- a Bash
+// card above all -- the subject is what would RUN, and a command line can carry
+// a literal token (`curl -H "Authorization: Bearer ..."`).
+const PERMISSION_FILE_CARD_TITLE_RX = /^[A-Z][a-z]+ file(?: · from the \S+(?: \S+){0,3} agent)?$/
+
+/** Is this card header one whose subject line is a path, not a command? */
+export function isPermissionFileCardTitle(title: string | null | undefined): boolean {
+  return title != null && PERMISSION_FILE_CARD_TITLE_RX.test(title.trim())
+}
 
 export interface PermissionPromptSummary {
   /** The tool card's header, e.g. "Bash command · from the general-purpose agent". */
   title: string
-  /** First line of the reason Claude gives for needing consent. */
+  /** The reason Claude gives for needing consent, rejoined into one line. */
   reason: string
 }
 
@@ -845,46 +856,69 @@ export interface PermissionPromptSummary {
  *
  * Pure + dependency-free. Only meaningful on a pane where
  * detectsPermissionDialog() is true; returns null when the expected parts are
- * not both present.
+ * not both present -- and on a card that is not a file card, when no quoted
+ * block can be told apart from the command echo (see below).
  */
 export function permissionPromptSummary(pane: string): PermissionPromptSummary | null {
   if (!pane) return null
   const lines = pane.split('\n')
-  const questionIdx = lines.findIndex((l) => PERMISSION_SUMMARY_QUESTION_RX.test(l))
+  let questionIdx = -1
+  for (let i = lines.length - 1; i >= 0; i--) if (PERMISSION_SUMMARY_QUESTION_RX.test(lines[i])) { questionIdx = i; break }
   if (questionIdx < 0) return null
 
   // Title: first non-empty line after the horizontal rule that opens the card.
   let title = ''
+  let titleIdx = -1
   const ruleIdx = lines.slice(0, questionIdx).map((l) => PERMISSION_RULE_LINE_RX.test(l)).lastIndexOf(true)
   if (ruleIdx >= 0) {
-    for (const l of lines.slice(ruleIdx + 1, questionIdx)) {
-      const t = l.trim()
-      if (t) { title = t; break }
+    for (let i = ruleIdx + 1; i < questionIdx; i++) {
+      const t = lines[i].trim()
+      if (t) { title = t; titleIdx = i; break }
     }
+  }
+  if (!title) return null
+  const titleCol = lines[titleIdx].search(/\S/)
+
+  // The card's quoted blocks, top to bottom: runs of consecutive │ lines
+  // between the card's rule and the question, each rejoined into one line (the
+  // pane hard-wraps at the card width, so the first line alone can be as
+  // useless as "grep on", measured on the bash-grep fixture). Only the CARD: a
+  // │ line in the transcript above the rule -- a tree listing, a box another
+  // tool drew -- is not part of this prompt, and was read as its reason.
+  const blocks: { col: number; text: string; start: number; first: string }[] = []
+  for (let i = ruleIdx + 1; i < questionIdx; i++) {
+    if (!PERMISSION_QUOTE_PREFIX_RX.test(lines[i])) continue
+    const start = i
+    const parts: string[] = []
+    for (; i < questionIdx && PERMISSION_QUOTE_PREFIX_RX.test(lines[i]); i++) parts.push(lines[i].replace(PERMISSION_QUOTE_PREFIX_RX, '').trim())
+    blocks.push({ col: lines[start].indexOf('│'), text: parts.join(' ').replace(/\s+/g, ' ').trim(), start, first: parts[0] })
   }
 
-  // Reason: the LAST quoted block before the question, rejoined into one
-  // line. Two reasons for the shape:
-  //   - last block, not first: the command echo is quoted too, and the last
-  //     block is the one that says why consent is needed rather than what
-  //     would run.
-  //   - rejoined, not first-line: the pane hard-wraps at the card width, so
-  //     the first line alone can be as useless as "grep on" (measured on the
-  //     bash-grep fixture). Rejoining recovers the sentence; the cap keeps a
-  //     long reason from flooding the alert.
-  let reason = ''
-  let end = -1
-  for (let i = questionIdx - 1; i >= 0; i--) {
-    const quoted = PERMISSION_QUOTE_PREFIX_RX.test(lines[i])
-    if (quoted && end < 0) end = i
-    else if (!quoted && end >= 0) {
-      const block = lines.slice(i + 1, end + 1).map((l) => l.replace(PERMISSION_QUOTE_PREFIX_RX, '').trim())
-      reason = block.join(' ').replace(/\s+/g, ' ').trim()
-      break
-    }
-  }
+  // Reason: the LAST quoted block -- the command echo is quoted too, and comes
+  // first; the last block is the one that says why consent is needed. But on a
+  // card WITHOUT a reason block the last quoted block IS the command echo
+  // (review of #1907: the bash-grep capture with its reason block cut and a
+  // token in the command put the token into the sent alert). So on any card
+  // but a file card the last block is the reason only when the card has a
+  // block above it, and it sits LEFT of that block: on both live captures the
+  // command echo is indented under the header ("   │ cd ...") and the reason
+  // is not (" │ grep on ..."). Two blocks at one indent are a shape neither
+  // capture shows -- one command drawn in two runs would look like that -- so
+  // neither counts as a reason. The reason also sits in the card's MARGIN (the
+  // title's column): every line of the card body -- the echo, a path, a diff,
+  // and the command itself where it is drawn unquoted, │ boxes included -- is
+  // indented under the title. On a file card without a reason block, only the
+  // first line of the block right under the header is quoted: the path, which
+  // the alerts quote anyway. A quoted diff below it is file content.
+  const last = blocks[blocks.length - 1]
+  const above = blocks[blocks.length - 2]
+  const isReason = last != null && above != null && last.col < above.col && last.col <= titleCol
+  let reason: string
+  if (isReason) reason = last.text
+  else if (isPermissionFileCardTitle(title) && blocks[0] && lines.slice(titleIdx + 1, blocks[0].start).every((l) => !l.trim())) reason = blocks[0].first
+  else return null
   if (reason.length > PERMISSION_REASON_MAX) reason = reason.slice(0, PERMISSION_REASON_MAX - 1).trimEnd() + '…'
-  if (!title || !reason) return null
+  if (!reason) return null
   return { title, reason }
 }
 
@@ -1232,66 +1266,12 @@ export function detectsPermissionPrompt(pane: string): boolean {
     && PERMISSION_CANCEL_RX.test(footerRegion)
 }
 
-// AND THE ALERT HAS TO NAME WHAT IS BEING ASKED (marveen's (B) decision,
-// 2026-09-03 14:46). Reclassifying the pane is only half of it: "an approval is
-// pending" still makes the reader open the pane to find out what for, which is
-// the cost the reclassification was meant to remove.
-//
-// WHY THE BLOCK ABOVE THE QUESTION, and not the command box at the top. A tmux
-// capture holds only the VISIBLE pane, so the box is the part that gets cut off
-// by scrollback; the block immediately above the question is always on screen.
-// On the live 07:24 capture that block is the CLI's own explanation, and it
-// names both the command and the reason ("grep on
-// 'src/forms/submission.service.ts' ... a Read() deny rule is configured"). On a
-// prompt that renders no explanation, the same walk quotes the command box
-// itself. One rule, both shapes -- and neither depends on the wording of the
-// question, which varies per tool.
-//
-// COLLAPSED TO ONE LINE, AND CAPPED, deliberately. This string is pasted into an
-// inter-agent message, and pane content is not ours: a multi-line excerpt could
-// imitate the framing of the message that carries it. Control characters go for
-// the same reason. The cap is on the RESULT, so a pane that is one enormous line
-// cannot push the alert past a readable size.
-const PERMISSION_QUOTE_MAX_CHARS = 220
-const PERMISSION_QUOTE_MAX_LINES = 6
-// `[\s\S]*` and not `.*`: a tmux capture can carry a bare CR inside a line, and
-// JS treats CR as a line terminator that `.` refuses to cross -- so a `.*` body
-// would silently stop matching there and the walk would drop the rest of the
-// block. Found by a fixture that carries a CR, after the sanitiser mutation
-// survived against the clean capture.
-const BOX_LINE_RX = /^\s*\u2502\s?([\s\S]*)$/
-
-function collapseForAlert(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim()
-}
-
-export function describePermissionPrompt(pane: string): string | null {
-  if (!detectsPermissionPrompt(pane)) return null
-  const lines = pane.split('\n')
-  let qIdx = -1
-  let question = ''
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const m = lines[i].match(PERMISSION_ASK_RX)
-    if (m) { qIdx = i; question = m[0]; break }
-  }
-  if (qIdx < 0) return null
-  const context: string[] = []
-  let i = qIdx - 1
-  while (i >= 0 && lines[i].trim() === '') i--
-  while (i >= 0 && context.length < PERMISSION_QUOTE_MAX_LINES) {
-    const m = lines[i].match(BOX_LINE_RX)
-    if (!m) break
-    const body = m[1].trim()
-    if (body) context.unshift(body)
-    i--
-  }
-  const quoted = collapseForAlert(context.length ? `${context.join(' ')} -- ${question}` : question)
-  if (!quoted) return null
-  return quoted.length > PERMISSION_QUOTE_MAX_CHARS
-    ? `${quoted.slice(0, PERMISSION_QUOTE_MAX_CHARS - 3).trimEnd()}...`
-    : quoted
-}
+// The one-line account of what a permission prompt asks lives in
+// web/permission-prompt-alert.ts (permissionPromptAsk, built on
+// permissionPromptSummary above). This module used to quote the block above the
+// question here (describePermissionPrompt); on a Bash card with no reason block
+// that block IS the command, so a token in argv reached an inter-agent message.
+// Removed, not hidden: card fa6535bb (baabe0ba F7).
 
 // Claude Code's self-drafted feedback modal (first observed 2026-08-31 on
 // agent-samu, which sat not-ready for 10 minutes with 5 inter-agent messages
