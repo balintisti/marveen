@@ -344,7 +344,9 @@ function main() {
   const how = cmd ? 'SUITE_BASELINE_CMD' : fast ? 'npx vitest list --json' : 'npx vitest run'
   const next = replaceBlock(src, renderBlock(counts, stamp, how))
   if (dry) {
-    console.log(`\n[--dry-run] uj alapvonal: ${counts.files} fajl / ${counts.tests} teszt (nem irtam)\n`)
+    // A belyeg is kiirodik: igy a --dry-run a main() VALODI belyeg-utjat mutatja, es egy teszt
+    // azon at merheti (trillian 49721: a zoneStamp bekotese fedetlen volt).
+    console.log(`\n[--dry-run] uj alapvonal: ${counts.files} fajl / ${counts.tests} teszt, belyeg: ${stamp} (nem irtam)\n`)
   } else if (next === src) {
     console.log(`\nAz alapvonal valtozatlan: ${counts.files} fajl / ${counts.tests} teszt\n`)
   } else {

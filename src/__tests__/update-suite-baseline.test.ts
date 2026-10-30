@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 import { decide, diagnose, renderBlock, replaceBlock, refusalLines, zoneStamp } from '../../scripts/update-suite-baseline.mjs'
 
 // AZ ALAPVONAL-FRISSITO TESZTJEI (kartya c0f10926).
@@ -318,5 +321,38 @@ describe('zoneStamp -- a blokk idobelyegenek zonaneve a pillanathoz illik (karty
   it('az oszi atallitas ket oldala: 00:59:59Z meg CEST, 01:00:00Z mar CET', () => {
     expect(zoneStamp(new Date('2026-10-25T00:59:59Z')).endsWith(' CEST')).toBe(true)
     expect(zoneStamp(new Date('2026-10-25T01:00:00Z')).endsWith(' CET')).toBe(true)
+  })
+})
+
+describe('a main() a zoneStamp-ot hasznalja: a VALODI szkript --dry-run belyege (trillian 49721)', () => {
+  // A fuggveny tesztje nem bizonyitja a bekotest: a regi `toLocaleString(...) + ' CEST'` sor
+  // visszairva a fenti tesztek zoldek maradtak. Ez a szkriptet futtatja, rogzitett orara
+  // (preload a Date-re), a szamokat a SUITE_BASELINE_CMD adja, a --dry-run semmit nem ir.
+  const mkTmp = tmpDirs()
+  const ROOT = join(__dirname, '..', '..')
+  const run = (iso: string): string => {
+    const dir = mkTmp('baseline-stamp-')
+    const preload = join(dir, 'fake-now.mjs')
+    writeFileSync(preload, [
+      `const T = Date.parse(${JSON.stringify(iso)}); const R = Date`,
+      'globalThis.Date = class extends R { constructor(...a) { if (a.length) super(...a); else super(T) } static now() { return T } }',
+    ].join('\n'))
+    const r = spawnSync(process.execPath, ['--import', pathToFileURL(preload).href, 'scripts/update-suite-baseline.mjs', '--dry-run'], {
+      cwd: ROOT,
+      encoding: 'utf-8',
+      env: { ...process.env, SUITE_BASELINE_CMD: `printf '{"files":930,"tests":12416}' > "$SUITE_BASELINE_EMIT"` },
+    })
+    expect(r.status, r.stderr).toBe(0)
+    return r.stdout
+  }
+
+  it('telen CET, a fali ora UTC+1', () => {
+    const out = run('2026-12-01T10:00:00Z')
+    expect(out).toMatch(/belyeg: .*11:00:00 CET \(nem irtam\)/)
+  })
+
+  it('nyaron CEST, a fali ora UTC+2', () => {
+    const out = run('2026-07-01T10:00:00Z')
+    expect(out).toMatch(/belyeg: .*12:00:00 CEST \(nem irtam\)/)
   })
 })
