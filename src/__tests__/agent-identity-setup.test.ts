@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
+  identityAttemptResult,
   identitySlashCommands,
   submitOwnSlashCommand,
   sendRecoveryBriefWhenIdle,
@@ -178,5 +181,34 @@ describe('sendRecoveryBriefWhenIdle', () => {
     const res = await sendRecoveryBriefWhenIdle('s', 'brief', async () => { n++; return 'aborted-busy' as const }, async () => undefined)
     expect(res).toBe('gave-up-busy')
     expect(n).toBe(RECOVERY_BRIEF_BUSY_RETRIES)
+  })
+})
+
+// didi 49996 F3: the success line used to sit next to the outcomes behind a flag no test reached.
+describe('identityAttemptResult', () => {
+  it('a submitted command is the only success', () => {
+    expect(identityAttemptResult(['submitted'])).toEqual({ retry: false, level: 'info', message: 'Set session /rename' })
+  })
+
+  it('a parked box (foreign text, or our own line we cleared) retries and never logs success', () => {
+    for (const o of ['foreign-parked', 'cleared-own'] as const) {
+      const r = identityAttemptResult(['submitted', o])
+      expect(r.retry).toBe(true)
+      expect(r.message).not.toBe('Set session /rename')
+    }
+  })
+
+  it('a line that stayed parked is a loud non-success, not a retry', () => {
+    expect(identityAttemptResult(['still-parked'])).toEqual({ retry: false, level: 'warn', message: 'Identity /rename NOT confirmed -- its line stayed parked' })
+  })
+
+  it('no command sent is not a success', () => {
+    expect(identityAttemptResult([]).level).toBe('warn')
+  })
+
+  it('the success line is written only through identityAttemptResult', () => {
+    const src = readFileSync(join(__dirname, '..', 'web', 'agent-process.ts'), 'utf-8')
+    expect(src.match(/'Set session \/rename'/g) ?? []).toHaveLength(1)
+    expect(src).toContain('logger[result.level]({ session, displayName, attempt }, result.message)')
   })
 })

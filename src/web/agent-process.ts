@@ -3196,6 +3196,19 @@ export async function submitOwnSlashCommand(
   return 'still-parked'
 }
 
+// The attempt's summary line is decided by its outcomes, never next to them: a parked box must not
+// log "Set session /rename" (didi 49996 F3), and neither may a line that stayed parked.
+export function identityAttemptResult(outcomes: readonly OwnSlashSubmitOutcome[]): { retry: boolean; level: 'info' | 'warn'; message: string } {
+  if (outcomes.some((o) => o === 'foreign-parked' || o === 'cleared-own')) {
+    return { retry: true, level: 'info', message: 'Identity /rename not set in this attempt (parked box); retrying later' }
+  }
+  if (outcomes.length === 0) return { retry: false, level: 'warn', message: 'Identity /rename: no command was sent' }
+  if (outcomes.includes('still-parked')) {
+    return { retry: false, level: 'warn', message: 'Identity /rename NOT confirmed -- its line stayed parked' }
+  }
+  return { retry: false, level: 'info', message: 'Set session /rename' }
+}
+
 // Delays mirror the observed Claude Code first-render timing: the first-run /
 // resume modals appear within ~4-6s, so dismiss at 8s; the prompt input is
 // reliably ready ~5s after that.
@@ -3279,6 +3292,7 @@ export async function scheduleIdentitySetup(session: string, displayName: string
             }
             let retryParked = false
             try {
+              const outcomes: OwnSlashSubmitOutcome[] = []
               for (const cmd of identitySlashCommands(displayName)) {
                 const outcome = await submitOwnSlashCommand(cmd, {
                   typeLiteral: (text) => runTmux(host, ['send-keys', '-t', session, '-l', text], { timeout: 5000 }),
@@ -3290,18 +3304,19 @@ export async function scheduleIdentitySetup(session: string, displayName: string
                   delay,
                   clearOwnLine: () => clearInputBuffer(session, host),
                 })
+                outcomes.push(outcome)
                 if (outcome === 'foreign-parked') {
                   logger.warn({ session, displayName, cmd, attempt }, 'Identity /rename deferred -- the input box holds parked text; not typing onto it')
-                  retryParked = true
                 } else if (outcome === 'cleared-own') {
                   logger.warn({ session, displayName, cmd, attempt }, 'Identity /rename would not submit; cleared our own parked line, retrying later')
-                  retryParked = true
                 } else if (outcome === 'still-parked') {
                   // Loud: the next writer would paste onto this line (card e9f66084).
                   logger.warn({ session, displayName, cmd }, 'Identity /rename still PARKED in the input box after the extra Enters')
                 }
               }
-              if (!retryParked) logger.info({ session, displayName, attempt }, 'Set session /rename')
+              const result = identityAttemptResult(outcomes)
+              retryParked = result.retry
+              logger[result.level]({ session, displayName, attempt }, result.message)
             } catch (err) {
               logger.warn({ err, session, displayName }, 'Failed to set session /rename')
             } finally {

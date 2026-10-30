@@ -62,6 +62,7 @@ import {
   type StuckInputActionFacts,
 } from '../pane-state.js'
 import { MAIN_CHANNELS_SESSION, MAIN_CHANNELS_PLIST } from './main-agent.js'
+import { parseEtimeSeconds } from './ps-etime.js'
 import { recordChannelEvent } from './channel-event-log.js'
 import { notifyChannel, type AlertMeta } from '../notify.js'
 import type { PermPromptEscalationState } from './permission-prompt-escalation.js'
@@ -1573,37 +1574,98 @@ function mainPaneClaudePid(): number | null {
 // bypassed this process's send lane and split a guard directive (2026-10-26 05:19). So the
 // dashboard names the main session after ANY restart it can see, not only its own respawns: a
 // launchd reload, a manual kickstart, KeepAlive after a crash, a respawn-pane all give the pane a
-// new pid. The first reading after the dashboard starts is a baseline, not a restart. A respawn
-// path here that already scheduled the identity within MAIN_IDENTITY_DEDUPE_MS is not doubled.
+// new pid. A respawn path here that already scheduled the identity within MAIN_IDENTITY_DEDUPE_MS
+// is not doubled.
 export const MAIN_IDENTITY_DEDUPE_MS = 120_000
-let mainIdentityPid: number | null | undefined
-let mainIdentityScheduledAtMs = 0
+// The first reading after the dashboard starts has no pid to compare with. A pane that started no
+// earlier than this before the dashboard did came up WITH it (a reboot, both launchd jobs at once,
+// or a main restart whose delayed /rename timers died with the previous dashboard), so nobody named
+// it and the first reading does (didi 49996 F1). An older pane kept its name across the dashboard
+// restart. A redundant /rename is in-lane and cosmetic; a missing one leaves the main session
+// nameless until its next restart, so an unreadable age also names it.
+export const MAIN_IDENTITY_FIRST_READING_SLACK_MS = 300_000
+
+export type MainIdentityReason = 'restart' | 'started-with-dashboard'
 
 export function decideMainIdentity(
   prevPid: number | null | undefined,
   pid: number | null,
   lastScheduledMs: number,
   nowMs: number,
-): { schedule: boolean; nextPid: number | null | undefined } {
-  if (pid == null) return { schedule: false, nextPid: prevPid }
-  if (prevPid === undefined || pid === prevPid) return { schedule: false, nextPid: pid }
-  return { schedule: nowMs - lastScheduledMs >= MAIN_IDENTITY_DEDUPE_MS, nextPid: pid }
+  firstReading: { paneAgeMs: number | null; dashboardUptimeMs: number },
+): { schedule: boolean; reason: MainIdentityReason | null; nextPid: number | null | undefined } {
+  if (pid == null) return { schedule: false, reason: null, nextPid: prevPid }
+  if (pid === prevPid) return { schedule: false, reason: null, nextPid: pid }
+  let reason: MainIdentityReason = 'restart'
+  if (prevPid === undefined) {
+    const { paneAgeMs, dashboardUptimeMs } = firstReading
+    if (paneAgeMs != null && paneAgeMs > dashboardUptimeMs + MAIN_IDENTITY_FIRST_READING_SLACK_MS) {
+      return { schedule: false, reason: null, nextPid: pid }
+    }
+    reason = 'started-with-dashboard'
+  }
+  if (nowMs - lastScheduledMs < MAIN_IDENTITY_DEDUPE_MS) return { schedule: false, reason: null, nextPid: pid }
+  return { schedule: true, reason, nextPid: pid }
 }
+
+export interface MainIdentityTrackerDeps {
+  readPid: () => number | null
+  readPaneAgeMs: (pid: number) => number | null
+  dashboardUptimeMs: () => number
+  schedule: () => void
+  now: () => number
+}
+
+// Owns the pid baseline and the dedupe timestamp, so a respawn path's schedule() and the tick's
+// check() share them (didi 49996 F2: the timestamp was module state no test reached).
+export function createMainIdentityTracker(deps: MainIdentityTrackerDeps) {
+  let prevPid: number | null | undefined
+  let lastScheduledMs = Number.NEGATIVE_INFINITY
+  const schedule = (): void => {
+    lastScheduledMs = deps.now()
+    deps.schedule()
+  }
+  const check = (): { reason: MainIdentityReason | null; pidBefore: number | null | undefined; pidAfter: number | null } => {
+    const pid = deps.readPid()
+    const pidBefore = prevPid
+    const paneAgeMs = prevPid === undefined && pid != null ? deps.readPaneAgeMs(pid) : null
+    const d = decideMainIdentity(prevPid, pid, lastScheduledMs, deps.now(), { paneAgeMs, dashboardUptimeMs: deps.dashboardUptimeMs() })
+    prevPid = d.nextPid
+    if (d.schedule) schedule()
+    return { reason: d.reason, pidBefore, pidAfter: pid }
+  }
+  return { schedule, check }
+}
+
+function mainPaneAgeMs(pid: number): number | null {
+  try {
+    const out = execFileSync('/bin/ps', ['-p', String(pid), '-o', 'etime='],
+      { timeout: 2000, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] })
+    const sec = parseEtimeSeconds(out)
+    return sec == null ? null : sec * 1000
+  } catch {
+    return null
+  }
+}
+
+const mainIdentity = createMainIdentityTracker({
+  readPid: () => (mainChannelsSessionExists() ? mainPaneClaudePid() : null),
+  readPaneAgeMs: mainPaneAgeMs,
+  dashboardUptimeMs: () => process.uptime() * 1000,
+  // scheduleIdentitySetup only schedules delayed timers -> fire-and-forget.
+  schedule: () => { void scheduleIdentitySetup(MAIN_CHANNELS_SESSION, BOT_NAME) },
+  now: () => Date.now(),
+})
 
 function scheduleMainIdentity(): void {
-  mainIdentityScheduledAtMs = Date.now()
-  // scheduleIdentitySetup only schedules delayed timers -> fire-and-forget.
-  void scheduleIdentitySetup(MAIN_CHANNELS_SESSION, BOT_NAME)
+  mainIdentity.schedule()
 }
 
-function checkMainIdentityAfterRestart(nowMs: number = Date.now()): void {
-  const pid = mainChannelsSessionExists() ? mainPaneClaudePid() : null
-  const d = decideMainIdentity(mainIdentityPid, pid, mainIdentityScheduledAtMs, nowMs)
-  if (d.schedule) {
-    logger.info({ session: MAIN_CHANNELS_SESSION, pidBefore: mainIdentityPid, pidAfter: pid }, 'Main session pane has a new pid (restarted) and no recent /rename was scheduled: scheduling it')
-    scheduleMainIdentity()
+function checkMainIdentityAfterRestart(): void {
+  const r = mainIdentity.check()
+  if (r.reason) {
+    logger.info({ session: MAIN_CHANNELS_SESSION, pidBefore: r.pidBefore, pidAfter: r.pidAfter, reason: r.reason }, 'Main session pane is new to this dashboard and no recent /rename was scheduled: scheduling it')
   }
-  mainIdentityPid = d.nextPid
 }
 
 export function hardRestartMarveenChannels(): { ok: boolean; error?: string } {

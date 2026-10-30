@@ -33,6 +33,7 @@ import {
   type GateInputs,
 } from '../context-restart-gate.js'
 import { frozenSkip } from './fleet-freeze.js'
+import { parseEtimeSeconds } from './ps-etime.js'
 
 // Fleet context-restart gate: proactively send /clear to an agent session
 // before the context grows unwieldy, while holding the send lane and only
@@ -246,15 +247,8 @@ function getChildPids(parentPid: number): number[] {
   } catch { return [] }
 }
 
-/**
- * Parse ps `etime` ([[dd-]hh:]mm:ss) into seconds. Exported for tests.
- */
-export function parseEtimeSeconds(raw: string): number | null {
-  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(raw.trim())
-  if (!m) return null
-  const [, d, h, mi, s] = m
-  return ((Number(d ?? 0) * 24 + Number(h ?? 0)) * 60 + Number(mi)) * 60 + Number(s)
-}
+// Re-exported for the tests that import it from here; the one copy lives in ps-etime.ts.
+export { parseEtimeSeconds }
 
 // PORTABILITY: `etimes` (whole seconds) is GNU-only; BSD ps answers "keyword
 // not found" and exits non-zero, so EVERY age lookup returned null. Since a
