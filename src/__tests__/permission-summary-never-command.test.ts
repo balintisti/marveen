@@ -39,6 +39,10 @@ const noReasonNoDescription = (pane: string) => noReason(pane).replace(/\n {3}Ch
 // and the command echo at the card's own indent, still followed by its description
 const reasonNested = (pane: string) => pane.replace(/\n │ /g, '\n   │ ')
 const commandAtCardIndent = (pane: string) => noReason(pane).replace(/\n {3}│ /g, '\n │ ')
+// one command drawn in two runs, both in the card's margin: two blocks at one indent, the token in the
+// second (didi 49381 S2: without `last.col < above.col` that second run became the "reason")
+const commandTwoRunsAtMargin = (pane: string) =>
+  noReasonNoDescription(pane).replace(/\n {3}│ /g, '\n │ ').replace('\n │ && ', '\n\n │ && ')
 
 // Every outgoing text a permission card is quoted into, for one pane.
 function outgoing(pane: string): string[] {
@@ -87,6 +91,7 @@ describe('negative control: a card WITHOUT a reason block never puts the command
     ['no reason block and no description line, upper-half', noReasonNoDescription(UPPER)],
     ['unseen shape: reason nested as deep as the command', reasonNested(CD)],
     ['unseen shape: command echo at the card indent, followed by its description', commandAtCardIndent(CD)],
+    ['unseen shape: one command in two runs, both blocks in the card margin', commandTwoRunsAtMargin(CD)],
   ]
   it.each(cases)('%s', (_n, pane) => {
     expect(permissionPromptSummary(pane)).toBeNull()
