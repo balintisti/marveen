@@ -207,6 +207,27 @@ def _db_client(text: str):
     with the name in group 2, or None."""
     return DB_CLIENTS.search(text) or _DB_CLIENT_PATH.search(text)
 
+
+# A client held in a variable (`P=/opt/homebrew/opt/postgresql@15/bin/psql; $P -c "DROP
+# DATABASE x"`, didi 50541): the shell runs the client, the text shows only `$P`. 3 of
+# 306204 real commands had this shape, all on the shared e2e database, and all passed
+# (card 485228fd). The use is replaced by the value, as the shell expands it, but only
+# for a value that IS a client (bare or by path) and is assigned in the same command: a
+# value from the environment or a file is not in the text the gate sees. `dropdb` by
+# path is refused in the assignment itself already (TOOL_PATTERNS).
+_VAR_CLIENT = re.compile(
+    r"(?:^|[\s;&|(`])([A-Za-z_][A-Za-z0-9_]*)=([\"']?)((?:%s)*(?:psql|sqlite3|mysql|mariadb|mongo|"
+    r"mongosh|cockroach|pg_restore|pgcli|prisma|supabase|dbmate|flyway|liquibase))\2(?=[\s;&|)]|$)"
+    % _PATH_DIR, re.I)
+
+
+def expand_client_vars(command: str) -> str:
+    """`command` with each `$NAME` / `${NAME}` of a variable assigned a DB client in it
+    replaced by that client."""
+    for name, _quote, value in {m.groups() for m in _VAR_CLIENT.finditer(command)}:
+        command = re.sub(r"\$(?:\{%s\}|%s(?![A-Za-z0-9_]))" % (name, name), lambda _m: value, command)
+    return command
+
 # === CLOUD patterns: the third class, and it is here because a DENY LIST CANNOT
 # EXPRESS IT (card 9e3f2f5c, group G3) =========================================
 #
@@ -1321,6 +1342,7 @@ def find_hits(command: str, cwd=None, missing=None, _depth=0):
     """`missing`, if a list, collects literal files that do not exist (logged by the
     caller, never refused). Everything else stays pure."""
     hits = []
+    command = expand_client_vars(command)
     if _depth < _MAX_SHELL_DEPTH:
         for code in shell_code_strings(command) + [b for t, h in substitution_scope(command) for b in substitution_bodies(t, h)]:
             for why in find_hits(code, cwd, missing, _depth + 1):

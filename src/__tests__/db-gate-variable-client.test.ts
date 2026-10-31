@@ -1,0 +1,57 @@
+/**
+ * A DB-KAPU VALTOZOBAN TARTOTT KLIENSE (kartya 485228fd; didi 50541, a populacio merve
+ * 2026-10-31: 306204 valodi parancsbol 3, mind a kozos e2e adatbazison, mind ATMENT).
+ *
+ *     P=/opt/homebrew/opt/postgresql@15/bin/psql; $P -c "DROP DATABASE x"
+ *         -> ATMENT: a szovegben a parancsszo `$P`, a kliens neve csak az ertekadasban all
+ *
+ * A JAVITAS: ahol a parancs egy valtozot, amit UGYANABBAN a parancsban egy DB-kliens erteket
+ * kapott, `$NEV` / `${NEV}` alakban hasznal, oda az ertek kerul, ahogy a shell kifejti.
+ * Kornyezetbol vagy fajlbol jovo erteket a kapu nem lat (az nincs a parancs szovegeben).
+ * Ez a fajl SZOVEGET ad a dontesi fuggvenynek, es semmit nem hajt vegre.
+ */
+import { describe, it, expect } from 'vitest'
+import { execFileSync } from 'node:child_process'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const GATE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'hooks', 'db-destructive-gate.py')
+
+/** A kapu verdict()-je egy parancs-SZOVEGRE ("none" | "e2e" | "override" | "deny"). */
+function verdict(command: string): string {
+  const driver = `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("g", ${JSON.stringify(GATE)})
+g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+print(json.dumps(g.verdict(json.loads(sys.stdin.read()), env={})[0]))
+`
+  const out = execFileSync('python3', ['-I', '-B', '-c', driver], { input: JSON.stringify(command), encoding: 'utf8' })
+  return JSON.parse(out.trim())
+}
+
+describe('db-destructive-gate: valtozoban tartott DB-kliens (485228fd)', () => {
+  it.each([
+    // A mert valodi alak, szo szerint (a kozos e2e adatbazis).
+    ['a mert valodi parancs', 'P=/opt/homebrew/opt/postgresql@15/bin/psql; $P -h localhost -p 54392 -U postgres -q -c "DROP DATABASE crm_e2e_test"'],
+    ['csupasz kliens-nev', 'P=psql; $P -c "DROP TABLE x"'],
+    ['kapcsos alak, idezett ertek', 'PSQL="/opt/homebrew/bin/psql" && ${PSQL} -c "TRUNCATE x"'],
+    ['egyszeresen idezett ertek', "P='/opt/homebrew/bin/psql'; $P -c 'DROP TABLE x'"],
+    ['export utan', 'export P=/usr/local/bin/psql; $P -c "DROP SCHEMA s"'],
+    ['inditoval', 'P=/usr/bin/psql; timeout 60 $P -c "DROP TABLE x"'],
+    ['helyettesitesben', 'P=psql; x=$($P -c "DROP TABLE x")'],
+    ['$-os konyvtar az ertekben', 'P=$HOME/bin/psql; $P -c "DROP TABLE x"'],
+  ])('%s: TILTVA', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('deny')
+  })
+
+  it.each([
+    ['artalmatlan lekerdezes', 'P=/opt/homebrew/bin/psql; $P -c "select 1"'],
+    ['a valtozo csak kiirva', 'P=/opt/homebrew/bin/psql; echo $P'],
+    ['konyvtar, nem kliens', 'PG=/opt/homebrew/opt/postgresql@15/bin; ls $PG'],
+    ['kliens-nevu naplofajl', 'P=/tmp/psql.log; cat $P'],
+    // A `$P` utan betu all: az egy MASIK valtozo (`$PATH`), nem a kliens.
+    ['hosszabb nevu masik valtozo', 'P=psql; echo $PATH -c "DROP TABLE x"'],
+  ])('KONTROLL: %s ATMEGY', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('none')
+  })
+})
