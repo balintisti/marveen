@@ -213,11 +213,12 @@ def _db_client(text: str):
 # 306204 real commands had this shape, all on the shared e2e database, and all passed
 # (card 485228fd). The use is replaced by the value, as the shell expands it, but only
 # for a value that IS a client (bare or by path) and is assigned in the same command: a
-# value from the environment or a file is not in the text the gate sees. `dropdb` by
-# path is refused in the assignment itself already (TOOL_PATTERNS).
+# value from the environment or a file is not in the text the gate sees. `dropdb` is in
+# the value list too: `P=/opt/homebrew/bin/dropdb; $P crm_x` passed (didi 50616, F-C1);
+# the e2e carve-out reads the unexpanded command, and a `;` already keeps it out.
 _VAR_CLIENT = re.compile(
     r"(?:^|[\s;&|(`])([A-Za-z_][A-Za-z0-9_]*)=([\"']?)((?:%s)*(?:psql|sqlite3|mysql|mariadb|mongo|"
-    r"mongosh|cockroach|pg_restore|pgcli|prisma|supabase|dbmate|flyway|liquibase))\2(?=[\s;&|)]|$)"
+    r"mongosh|cockroach|pg_restore|pgcli|prisma|supabase|dbmate|flyway|liquibase|dropdb))\2(?=[\s;&|)]|$)"
     % _PATH_DIR, re.I)
 
 

@@ -44,13 +44,19 @@ describe('db-destructive-gate: valtozoban tartott DB-kliens (485228fd)', () => {
     ['sqlite3', 'P=sqlite3; $P a.db "DROP TABLE x"'],
     ['mysql', 'M=/usr/local/bin/mysql; $M -e "DROP TABLE x"'],
     ['prisma', 'P=prisma; $P migrate reset'],
+    // F-C1 (didi 50616): a dropdb is valtozoban; a komment azt allitotta, hogy az ertekadas mar tilt.
+    ['dropdb uttal', 'P=/opt/homebrew/bin/dropdb; $P crm_x'],
+    ['dropdb csupaszon', 'P=dropdb; $P crm_x'],
+    ['dropdb idezett ${}-vel', 'P=dropdb; "${P}" crm_x'],
+    // Az e2e-kivetel a ki NEM fejtett parancsot olvassa: a valtozos alak nem kivetel.
+    ['dropdb valtozoban e2e nevre', 'P=dropdb; $P -h localhost crm_e2e_dexter_x'],
   ])('%s: TILTVA', (_name, cmd) => {
     expect(verdict(cmd)).toBe('deny')
   })
 
   // A lista MINDEN neve, uttal: egy kieso nev nem olvasott kliens (C6-C8 csak a minta).
   it.each(['psql', 'sqlite3', 'mysql', 'mariadb', 'mongo', 'mongosh', 'cockroach', 'pg_restore', 'pgcli',
-    'prisma', 'supabase', 'dbmate', 'flyway', 'liquibase'])('valtozoban %s: TILTVA', (client) => {
+    'prisma', 'supabase', 'dbmate', 'flyway', 'liquibase', 'dropdb'])('valtozoban %s: TILTVA', (client) => {
     expect(verdict(`C=/opt/x/bin/${client}; $C -c "DROP TABLE x"`)).toBe('deny')
   })
 
