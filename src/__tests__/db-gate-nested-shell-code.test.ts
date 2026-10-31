@@ -274,6 +274,7 @@ describe('db-destructive-gate: uttal hivott kliens, didi 50541 (0f220f3f r8)', (
     ['sudo -u erteke', `sudo -u postgres /opt/homebrew/bin/psql ${DROP}`],
     ['timeout -s KILL 5', `timeout -s KILL 5 /opt/homebrew/bin/psql ${DROP}`],
     ['timeout 5s', `timeout 5s /opt/homebrew/bin/psql ${DROP}`],
+    ['timeout 0.5 (tizedes idotartam)', `timeout 0.5 /opt/homebrew/bin/psql ${DROP}`],
     ['nice -n 10', `nice -n 10 /opt/homebrew/bin/psql ${DROP}`],
     ['exec -a x', `exec -a x /opt/homebrew/bin/psql ${DROP}`],
     ['xargs csoben', `echo x | xargs /opt/homebrew/bin/psql ${DROP}`],
