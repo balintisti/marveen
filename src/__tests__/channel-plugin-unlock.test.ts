@@ -115,14 +115,16 @@ describe('channel-monitor wires the unlock probe into both in-process respawn pa
     return monitor.slice(start, end > start ? end : undefined)
   }
 
+  // Card e71b2b51: through the restart tracker, so the tick does not schedule a
+  // second probe for the same pid.
   it('resumeMarveenSession schedules the unlock probe after the respawn', () => {
     const body = bodyOf('resumeMarveenSession')
-    expect(body).toMatch(/schedulePluginUnlockAfterRespawn\(MAIN_CHANNELS_SESSION/)
+    expect(body).toMatch(/scheduleMainPluginUnlock\(\)/)
   })
 
   it('respawnMarveenSessionFresh schedules the unlock probe after the respawn', () => {
     const body = bodyOf('respawnMarveenSessionFresh')
-    expect(body).toMatch(/schedulePluginUnlockAfterRespawn\(MAIN_CHANNELS_SESSION/)
+    expect(body).toMatch(/scheduleMainPluginUnlock\(\)/)
   })
 })
 

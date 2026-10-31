@@ -1107,7 +1107,9 @@ export function respawnMainSessionFresh(): void {
       throw new Error(`main channels session gone and relaunch failed: ${created}`)
     }
     // A fresh session starts its own claude: the respawn-specific follow-ups below
-    // (identity, plugin unlock) are channels.sh's job on this path, not ours.
+    // (identity, plugin unlock) are not scheduled here. channels.sh no longer types
+    // either (cards c91a1989, e71b2b51); the monitor tick's restart trackers see the
+    // new pane pid and schedule both, in-lane.
     writeRespawnStamp()
     return
   }
@@ -1126,7 +1128,7 @@ export function respawnMainSessionFresh(): void {
   // resume path; skipping them is how a restarted session comes back nameless
   // or with the plugin stuck in `◯ disabled`.
   scheduleMainIdentity()
-  schedulePluginUnlockAfterRespawn(MAIN_CHANNELS_SESSION, provider.type)
+  scheduleMainPluginUnlock()
 }
 
 // Exported so the stuck-tool-call-watcher recovers a wedged main session via
@@ -1216,12 +1218,11 @@ export async function resumeMarveenSession(): Promise<boolean> {
     // scheduleIdentitySetup only SCHEDULES delayed timers and returns immediately;
     // fire-and-forget (void) is correct here -- there is nothing to await.
     scheduleMainIdentity()
-    // channels.sh runs an /mcp+Up+Enter+Enter unlock probe after launching
-    // the main session to revive a Failed/disabled channel plugin (#231/#232),
-    // but THIS code path skips channels.sh entirely - tmux respawn-pane is
-    // direct. Schedule the same probe in-process so the plugin doesn't get
-    // stuck in `◯ disabled` after an in-process respawn (2026-06-01 18:55).
-    schedulePluginUnlockAfterRespawn(MAIN_CHANNELS_SESSION, provider.type)
+    // The /mcp+Up+Enter+Enter unlock probe revives a Failed/disabled channel
+    // plugin (#231/#232) so it does not stay stuck in `◯ disabled` after an
+    // in-process respawn (2026-06-01 18:55). Scheduled through the restart
+    // tracker so the tick does not schedule it a second time for this pid.
+    scheduleMainPluginUnlock()
     // Post-resume guard (CC 2.1.193 regression). A --continue resume can come up
     // WITHOUT the --channels plugin (absent from /mcp, no poller -> deaf main
     // channel). The unlock probe above only revives a Failed/disabled plugin --
@@ -1358,8 +1359,9 @@ function checkExternalMainRespawn(): void {
 // the same path the service uses -- so recovery is channel-independent and
 // works even with the service disabled.
 const CHANNELS_SCRIPT = join(PROJECT_ROOT, 'scripts', 'channels.sh')
-// channels.sh creates the session, runs the first-run dialog auto-accept, sets
-// /rename, and brings up the channel plugin -- a cold start that takes minutes.
+// channels.sh creates the session and runs the first-run dialog auto-accept, then the
+// channel plugin comes up (the tick names the session and probes the plugin once the new
+// pane shows up) -- a cold start that takes minutes.
 // Throttle relaunches so a session that is still booting is not torn down and
 // recreated on the next 60s poll.
 const MAIN_SESSION_CREATE_GRACE_MS = 360_000
@@ -1445,12 +1447,10 @@ function respawnMarveenSessionFresh(): boolean {
     // Re-establish /rename on the fresh process (see note in resumeMarveenSession).
     // scheduleIdentitySetup only schedules delayed timers -> fire-and-forget.
     scheduleMainIdentity()
-    // Same channels.sh-bypass concern as in resumeMarveenSession: this respawn
-    // path does NOT invoke channels.sh, so the post-init plugin unlock probe
-    // (#231/#232) never runs. Wire it in-process so the keep-alive-watchdog
-    // fresh-respawn path also revives a Failed/disabled plugin instead of
-    // leaving the channel offline until manual intervention.
-    schedulePluginUnlockAfterRespawn(MAIN_CHANNELS_SESSION, provider.type)
+    // Same as in resumeMarveenSession: the keep-alive-watchdog fresh-respawn
+    // path also revives a Failed/disabled plugin instead of leaving the channel
+    // offline until manual intervention.
+    scheduleMainPluginUnlock()
     writeRespawnStamp() // coordinate with the systemd-timer watchdog (covers the keepalive path too)
     return true
   } catch (err) {
@@ -1665,6 +1665,34 @@ function checkMainIdentityAfterRestart(): void {
   const r = mainIdentity.check()
   if (r.reason) {
     logger.info({ session: MAIN_CHANNELS_SESSION, pidBefore: r.pidBefore, pidAfter: r.pidAfter, reason: r.reason }, 'Main session pane is new to this dashboard and no recent /rename was scheduled: scheduling it')
+  }
+}
+
+// Card e71b2b51 (didi 49996 F4): the same restart detection drives the channel-plugin unlock
+// probe. channels.sh no longer probes /mcp from its own process -- its keystrokes bypassed this
+// process's send lane, in the same seconds a guard directive is typed into the pane. So the cold
+// launches that were its job (the launchctl reload in hardRestartMarveenChannels, a session
+// recreate through channels.sh, a launchd KeepAlive or a manual kickstart) are probed from here,
+// in-lane. A separate tracker, so its dedupe is its own: the respawn paths above schedule it
+// through scheduleMainPluginUnlock. A duplicate would still be harmless (the probe does nothing
+// while the plugin's bun child runs), a missing one leaves the main channel deaf.
+const mainPluginUnlock = createMainIdentityTracker({
+  readPid: () => (mainChannelsSessionExists() ? mainPaneClaudePid() : null),
+  readPaneAgeMs: mainPaneAgeMs,
+  dashboardUptimeMs: () => process.uptime() * 1000,
+  // schedulePluginUnlockAfterRespawn only sets a timer.
+  schedule: () => { schedulePluginUnlockAfterRespawn(MAIN_CHANNELS_SESSION, getProvider(getMainAgentProvider()).type) },
+  now: () => Date.now(),
+})
+
+function scheduleMainPluginUnlock(): void {
+  mainPluginUnlock.schedule()
+}
+
+function checkMainPluginUnlockAfterRestart(): void {
+  const r = mainPluginUnlock.check()
+  if (r.reason) {
+    logger.info({ session: MAIN_CHANNELS_SESSION, pidBefore: r.pidBefore, pidAfter: r.pidAfter, reason: r.reason }, 'Main session pane is new to this dashboard and no recent plugin unlock probe was scheduled: scheduling it')
   }
 }
 
@@ -2609,6 +2637,8 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
     // on Enter rather than risk a partial re-inject to the wrong chat_id.
     // Card c91a1989: name the main session after any restart (channels.sh no longer does).
     try { checkMainIdentityAfterRestart() } catch (err) { logger.warn({ err }, 'main identity check failed') }
+    // Card e71b2b51: probe the channel plugin after any restart (channels.sh no longer does).
+    try { checkMainPluginUnlockAfterRestart() } catch (err) { logger.warn({ err }, 'main plugin unlock check failed') }
     mainStuckInput = await recoverStuckInputForSession(MAIN_CHANNELS_SESSION, MAIN_AGENT_ID, mainStuckInput, MAIN_STUCK_THRESHOLDS, false)
     // Reliable backstop: if the soft recovery is exhausted and the input is
     // STILL parked, the TUI is hard-wedged -- escalate to a respawn-pane (the

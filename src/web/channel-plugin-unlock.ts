@@ -1,15 +1,20 @@
 // Post-respawn channel-plugin unlock for in-process tmux respawn-pane paths.
 //
-// scripts/channels.sh already runs an unlock probe after launching the main
-// session (see PR #231 / #232): wait for the bun-poller, and if it never
-// appears, the plugin is stuck in a Failed/disabled state and a manual
-// /mcp + Up + Enter + Enter sequence is the only known revive. That helper
-// covers cold launches (launchd start, manual `launchctl kickstart`).
+// Card e71b2b51: this is now the ONLY unlock probe. scripts/channels.sh used to
+// run its own after launching the main session (PR #231 / #232), from its own
+// process, so its /mcp keystrokes bypassed this process's per-pane send lane and
+// could land inside a directive the dashboard was typing into the same pane in
+// the same seconds (didi 49996 F4; the /rename twin split a guard directive on
+// 2026-10-26 05:19, card c91a1989). channel-monitor.ts now schedules this probe
+// after ANY restart of the main pane it sees, including the cold launches that
+// used to be channels.sh's (launchd start, `launchctl kickstart`, KeepAlive).
+// The empty-input proof (MCPDUP806) that only the shell probe had moved here
+// with it: see unlockInputState below.
 //
-// What it does NOT cover: the in-process respawn-pane recovery paths in
-// channel-monitor.ts (resumeMarveenSession and respawnMarveenSessionFresh).
-// Those call `tmux respawn-pane` directly with the claude command, completely
-// bypassing channels.sh - so the post-init unlock never runs. The
+// Originally this module covered only the in-process respawn-pane recovery
+// paths in channel-monitor.ts (resumeMarveenSession and
+// respawnMarveenSessionFresh), which call `tmux respawn-pane` directly and so
+// never ran the channels.sh probe. The
 // 2026-06-01 18:55 incident demonstrated this end-to-end: the keep-alive
 // staleness watchdog fired respawnMarveenSessionFresh at 18:55:09, the new
 // session came up cleanly, but the Telegram plugin landed in `◯ disabled`
@@ -28,7 +33,7 @@
 // the plugin; the only failure mode (selecting "View tools" or "Disable" on
 // a healthy plugin) is precluded by the bun-absence gate.
 //
-// Same caveat as channels.sh: while the keystrokes are being delivered the
+// Caveat: while the keystrokes are being delivered the
 // session cannot accept other input, but the helper runs in a setTimeout off
 // the recovery thread and only fires once per respawn, so the cost is bounded.
 
@@ -37,6 +42,7 @@ import { execFileSync } from 'node:child_process'
 import { resolveFromPath } from '../platform.js'
 import { logger } from '../logger.js'
 import type { ChannelProviderType } from '../channel-provider.js'
+import { detectPaneState, idleConsideringDimGhost, parkedInputText, stripAllAnsi, stripGhostSuggestion } from '../pane-state.js'
 import { tryAcquireSessionSendLane } from './session-send-lock.js'
 
 const TMUX = resolveFromPath('tmux')
@@ -57,7 +63,7 @@ const UNLOCK_PROBE_DELAY_MS = 35_000
 const UNLOCK_PROBE_RETRY_DELAY_MS = 15_000
 const UNLOCK_PROBE_MAX_RETRIES = 2
 
-// Per-keystroke settling delays. Match the channels.sh script: opening /mcp
+// Per-keystroke settling delays, measured for the former channels.sh probe: opening /mcp
 // renders the server list (~3s), Up scrolls to the bottom of the list (~1s),
 // the first Enter opens the menu (~2s), the second Enter activates it (~3s).
 const MCP_OPEN_SETTLE_MS = 3000
@@ -160,6 +166,73 @@ function isSessionReadyForUnlock(session: string): boolean {
     logger.warn({ err, session }, 'channel-plugin-unlock: capture-pane failed')
     return false
   }
+}
+
+// MCPDUP806 (moved from channels.sh with card e71b2b51). Typing "/mcp" only opens
+// the MCP manager from an EMPTY idle prompt; into any other state the literal text
+// parks in the input box. On a fresh 0.3.9 install (2026-08-06) two boots in a row
+// did that: the second "/mcp" appended to the first ("/mcp/mcp"), the combined
+// text was submitted as a PROMPT, and while parked the router read the session as
+// busy and stopped delivering to it. The footer check above does not see parked
+// text, so the round is bracketed by this proof. It reads a COLOURED capture:
+// Claude Code renders placeholder hints dim (SGR 2) inside an empty box, and a
+// plain capture cannot tell them from parked text.
+//   'idle'           -- input box live and provably empty; safe to type
+//   'parked:<text>'  -- text parked in the box (collapsed, truncated for logs)
+//   anything else    -- the detectPaneState verdict; not safe to type
+export function unlockInputState(colouredPane: string): string {
+  const plain = stripAllAnsi(colouredPane)
+  const view = stripGhostSuggestion(colouredPane)
+  if (idleConsideringDimGhost(plain, view)) return 'idle'
+  const state = detectPaneState(plain)
+  if (state === 'typing') {
+    const parked = parkedInputText(view) || parkedInputText(plain) || ''
+    return 'parked:' + parked.replace(/\s+/g, ' ').slice(0, 120)
+  }
+  return state
+}
+
+// True when the parked text is nothing but OUR OWN probe residue ("/mcp" fragments
+// and whitespace). Only that is ever cleared here; anything else (a human draft, a
+// delivered channel message) belongs to the stuck-input recovery stack.
+export function isOwnProbeResidue(text: string): boolean {
+  return /^\s*(\/mcp\s*)+$/.test(text)
+}
+
+function readUnlockInputState(session: string): string {
+  try {
+    return unlockInputState(execFileSync(TMUX, ['capture-pane', '-t', session, '-e', '-p'], {
+      timeout: 3000,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }))
+  } catch (err) {
+    logger.warn({ site: 'channel-plugin-unlock.readUnlockInputState', session, tmux: tmuxStderr(err) }, 'channel-plugin-unlock: coloured capture failed')
+    return 'unverifiable'
+  }
+}
+
+// One Ctrl-C clears a parked line (measured; C-u and Escape do not empty it). Sent
+// only for our own residue, then the state is read again.
+function clearOwnResidue(session: string, state: string): string {
+  if (!state.startsWith('parked:') || !isOwnProbeResidue(state.slice('parked:'.length))) return state
+  execFileSync(TMUX, ['send-keys', '-t', session, 'C-c'], { timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] })
+  execFileSync('/bin/sleep', [String(KEYSTROKE_SETTLE_MS / 1000)], { timeout: KEYSTROKE_SETTLE_MS + 2000 })
+  return readUnlockInputState(session)
+}
+
+// End of round: leave the input line PROVABLY empty. Escape pops the /mcp modal
+// levels one at a time but never clears parked text, so after a bounded Escape
+// loop our own leftover "/mcp" gets one Ctrl-C. Returns the measured end state.
+const END_OF_ROUND_ESCAPES = 3
+function finishUnlockRound(session: string): string {
+  let state = readUnlockInputState(session)
+  for (let i = 0; i < END_OF_ROUND_ESCAPES && state !== 'idle' && !state.startsWith('parked:'); i++) {
+    execFileSync(TMUX, ['send-keys', '-t', session, 'Escape'], { timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] })
+    execFileSync('/bin/sleep', [String(KEYSTROKE_SETTLE_MS / 1000)], { timeout: KEYSTROKE_SETTLE_MS + 2000 })
+    state = readUnlockInputState(session)
+  }
+  return clearOwnResidue(session, state)
 }
 
 function sendUnlockKeystrokes(session: string, provider: ChannelProviderType): void {
@@ -282,28 +355,54 @@ function runUnlockProbe(state: UnlockProbeState): void {
     return
   }
 
-  logger.warn(
-    { session: state.session, claudePid, provider: state.provider },
-    'channel-plugin-unlock: bun child absent after cold-start window, firing /mcp unlock sequence',
-  )
+  // Inside the lane, so no delivery can start between the proof and the typing.
+  let inputState = 'unverifiable'
   try {
-    sendUnlockKeystrokes(state.session, state.provider)
+    inputState = clearOwnResidue(state.session, readUnlockInputState(state.session))
+    if (inputState === 'idle') {
+      logger.warn(
+        { session: state.session, claudePid, provider: state.provider },
+        'channel-plugin-unlock: bun child absent after cold-start window, firing /mcp unlock sequence',
+      )
+      sendUnlockKeystrokes(state.session, state.provider)
+      const endState = finishUnlockRound(state.session)
+      if (endState === 'idle') {
+        logger.info({ session: state.session }, 'channel-plugin-unlock: unlock round finished, input line verified empty')
+      } else {
+        logger.warn({ session: state.session, endState }, 'channel-plugin-unlock: input line NOT verified empty after the unlock round (MCPDUP806) -- the stuck-input recovery owns it from here')
+      }
+    }
+  } catch (err) {
+    logger.error({ err, session: state.session }, 'channel-plugin-unlock: unlock round failed')
+    return
   } finally {
     releaseLane()
   }
+  if (inputState === 'idle') return
+  if (state.retriesLeft > 0) {
+    logger.info(
+      { session: state.session, retriesLeft: state.retriesLeft, inputState },
+      'channel-plugin-unlock: input line not provably empty, not typing /mcp (MCPDUP806), retrying',
+    )
+    setTimeout(() => runUnlockProbe({ ...state, retriesLeft: state.retriesLeft - 1 }), UNLOCK_PROBE_RETRY_DELAY_MS)
+    return
+  }
+  logger.warn({ session: state.session, inputState }, 'channel-plugin-unlock: input line never proven empty, abandoning (MCPDUP806)')
 }
 
 /**
  * Schedule a post-respawn unlock probe for the main channels session.
  *
  * Call this fire-and-forget right after `tmux respawn-pane` in any in-process
- * recovery path (resumeMarveenSession, respawnMarveenSessionFresh, etc.).
+ * recovery path (resumeMarveenSession, respawnMarveenSessionFresh, etc.); for
+ * the main session channel-monitor's restart tracker also calls it after any
+ * restart it did not cause.
  * The probe waits for the new claude session to finish cold-starting, then
  * checks `pgrep -P <claude_pid> bun`:
  *   - bun child present: plugin healthy, do nothing.
- *   - bun child absent + idle pane: send /mcp + Up + Enter + Enter to
- *     enable or reconnect whichever channel plugin is at the bottom of
- *     the MCP list.
+ *   - bun child absent + idle pane + provably empty input line (inside the
+ *     send lane): send /mcp + Up + Enter + Enter to enable or reconnect
+ *     whichever channel plugin is at the bottom of the MCP list.
  *   - bun child absent + non-idle pane: retry up to UNLOCK_PROBE_MAX_RETRIES
  *     times every UNLOCK_PROBE_RETRY_DELAY_MS before giving up.
  *
