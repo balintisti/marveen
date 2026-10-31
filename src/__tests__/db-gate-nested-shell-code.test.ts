@@ -120,6 +120,10 @@ describe('db-destructive-gate: atiranyitashoz tapado shell- es interpreter-nev (
     ["bash<<'EOF' heredoc", "bash<<'EOF'\ndropdb x\nEOF"],
     ['teljes uttal: /bin/bash <<EOF', "/bin/bash <<'EOF'\ndropdb x\nEOF"],
     ['zarojelben: (bash <<EOF)', "(bash <<'EOF'\ndropdb x\nEOF\n)"],
+    // didi H1: a DB-kliens neve is tapadhat, es egy atiranyitas a masikhoz is.
+    ['psql<<<"..."', 'psql<<<"DROP TABLE x"'],
+    ['bash 2>/dev/null<<<"..."', 'bash 2>/dev/null<<<"dropdb x"'],
+    ["python3 2>/dev/null<<<'...'", `python3 2>/dev/null<<<'import os; os.system("dropdb x")'`],
   ])('%s: TILTVA', (_name, cmd) => {
     expect(verdict(cmd)).toBe('deny')
   })
@@ -128,6 +132,10 @@ describe('db-destructive-gate: atiranyitashoz tapado shell- es interpreter-nev (
     ['artalmatlan bash<<<', 'bash<<<"git status"'],
     ['szamozott atiranyitas egy szkript utan', 'bash scripts/x.sh 2>/dev/null'],
     ["adat-heredoc tapadva: cat<<'EOF'", "cat<<'EOF'\ndropdb x\nEOF"],
+    // Az eval NEM olvassa a stdint: `eval<<<".."` semmit nem futtat (merve: bash 5, a kiirt
+    // jel nem jelent meg). A szokozos alak tiltasa regi tulvedes, nem ennek a szabalynak a merteke.
+    ['eval<<<"..." (az eval nem olvas stdint)', 'eval<<<"dropdb x"'],
+    ['szkript bemenet-atiranyitassal', 'bash x.sh<in.txt'],
   ])('KONTROLL: %s ATMEGY', (_name, cmd) => {
     expect(verdict(cmd)).toBe('none')
   })

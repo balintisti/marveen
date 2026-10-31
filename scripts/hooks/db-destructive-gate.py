@@ -175,10 +175,11 @@ SQL_PATTERNS = [
 ]
 
 # Anything that can hand SQL to a server. `prisma`/`supabase` are here as well as in
-# the tool list: `prisma db execute --stdin` is a client, not just a CLI.
+# the tool list: `prisma db execute --stdin` is a client, not just a CLI. A redirect may
+# touch the name (`psql<<<"..."`, didi 50372 H1): that is still the client.
 DB_CLIENTS = re.compile(
     r"(^|[\s;&|(])(psql|sqlite3|mysql|mariadb|mongo|mongosh|cockroach|pg_restore|pgcli|"
-    r"prisma|supabase|npx\s+prisma|dbmate|flyway|liquibase)([\s;&|)]|$)", re.I)
+    r"prisma|supabase|npx\s+prisma|dbmate|flyway|liquibase)([\s;&|)<>]|$)", re.I)
 
 # === CLOUD patterns: the third class, and it is here because a DENY LIST CANNOT
 # EXPRESS IT (card 9e3f2f5c, group G3) =========================================
@@ -860,6 +861,7 @@ def _split_with_seps(command: str):
 # split: that boundary is card e81a72b7's.
 _SUBSHELL_MARKS = ("(", ")", "`", "$")
 _GLUED_REDIRECT = re.compile(r"^([^<>]+?)([<>].*)$", re.S)
+_REDIRECT_PIECE = re.compile(r"\d*[<>]+&?[^<>]*", re.S)
 
 
 def _command_words(segment: str):
@@ -887,14 +889,20 @@ def _command_words(segment: str):
     words = [w for w in shlex.split("".join(out), comments=False, posix=True) if w not in _SUBSHELL_MARKS]
     # A redirect GLUED to a shell or interpreter name is the same root (didi 50344, G2):
     # `bash<<<"..."`, `bash</dev/null -c ..`, `python3<<<"..."` are one shlex word, so the
-    # name is split off. Only after such a name: `2>/dev/null` stays one word.
-    split = []
+    # name is split off. Only after such a name: `2>/dev/null` stays one word. Behind
+    # one, a redirect glued to the previous redirect is split off too (`bash
+    # 2>/dev/null<<<".."`, didi H1): the spaced form was already refused.
+    split, after = [], False
     for w in words:
         m = _GLUED_REDIRECT.match(w)
         if m and (_SHELL_WORD.match(m.group(1)) or _INTERPRETER_WORD.match(m.group(1))):
             split.extend(m.groups())
+            after = True
+        elif after and _SHELL_REDIRECT.match(w):
+            split.extend(_REDIRECT_PIECE.findall(w))
         else:
             split.append(w)
+            after = after or bool(_SHELL_WORD.match(w) or _INTERPRETER_WORD.match(w))
     return split
 
 
