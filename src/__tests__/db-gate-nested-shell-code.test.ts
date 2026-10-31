@@ -108,6 +108,31 @@ describe('db-destructive-gate: a beagyazott shell sztringje parancs (0f220f3f)',
   })
 })
 
+// didi 50344, G2: ugyanaz a gyoker, mint F1, de a shell vagy interpreter nevehez TAPADO
+// atiranyitassal; a szokozos alak eddig is tiltott volt.
+describe('db-destructive-gate: atiranyitashoz tapado shell- es interpreter-nev (0f220f3f, G2)', () => {
+  it.each([
+    ['bash<<<"..."', 'bash<<<"dropdb x"'],
+    ['bash</dev/null -c', 'bash</dev/null -c "dropdb x"'],
+    ["python3<<<'...'", `python3<<<'import os; os.system("dropdb x")'`],
+    ["python3<<'PY' heredoc", `python3<<'PY'\nimport os; os.system("dropdb x")\nPY`],
+    ["python3<<'PY' nem tokenizalhato nyitosorral", `python3<<'PY' # don't\nimport os; os.system("dropdb x")\nPY`],
+    ["bash<<'EOF' heredoc", "bash<<'EOF'\ndropdb x\nEOF"],
+    ['teljes uttal: /bin/bash <<EOF', "/bin/bash <<'EOF'\ndropdb x\nEOF"],
+    ['zarojelben: (bash <<EOF)', "(bash <<'EOF'\ndropdb x\nEOF\n)"],
+  ])('%s: TILTVA', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('deny')
+  })
+
+  it.each([
+    ['artalmatlan bash<<<', 'bash<<<"git status"'],
+    ['szamozott atiranyitas egy szkript utan', 'bash scripts/x.sh 2>/dev/null'],
+    ["adat-heredoc tapadva: cat<<'EOF'", "cat<<'EOF'\ndropdb x\nEOF"],
+  ])('KONTROLL: %s ATMEGY', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('none')
+  })
+})
+
 // didi 50316, F1: a shell-szo csak kulon szokent volt felismerve; a zarojelhez, `$(`-hez
 // vagy visszapipahoz TAPADO alak atment, a szokozos `( bash -c` nem.
 describe('db-destructive-gate: subshellhez es helyettesiteshez tapado shell-szo (0f220f3f, F1)', () => {
@@ -135,6 +160,16 @@ describe('db-destructive-gate: subshellhez es helyettesiteshez tapado shell-szo 
     ['idezett szovegben a (bash -c ...) csak szoveg', 'git commit -m "never (bash -c dropdb x)"'],
   ])('KONTROLL: %s ATMEGY', (_name, cmd) => {
     expect(verdict(cmd)).toBe('none')
+  })
+
+  // didi 50344, G1: a nem tokenizalhato szegmens (itt a `don't` paratlan aposztrofja) tartalek-
+  // mintaja is ismerje a zarojelhez tapado interpretert (mutans B6 tulelt), es az atiranyitashoz
+  // tapadot is (G2 ugyanott; mutans G1b tulelt).
+  it.each([
+    ['(python3 -c ...)', `(python3 -c "import os; os.system('dropdb x')" # don't)`],
+    ["python3<<<'...'", `python3<<<'import os; os.system("dropdb x")' # don't`],
+  ])('nem tokenizalhato szegmensben: %s: TILTVA', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('deny')
   })
 
   // Idezojelen BELUL nem szabad szetszedni: az ottani szoveg kod, amit a kapu ujra olvas, es a

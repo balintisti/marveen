@@ -563,7 +563,11 @@ def strip_heredoc_bodies(command: str) -> str:
         m = _HEREDOC.search(line)
         if m:
             terminator = m.group(2)
-            executes = re.search(r"(^|[\s;&|])(bash|sh|zsh|psql|sqlite3|mysql|%s)([\s;&|]|$)" % _INTERPRETER, line)
+            # The opener the way _command_words reads a command (0f220f3f): by path too
+            # (`/bin/bash <<EOF`), after a subshell mark (`(bash <<EOF`), and glued to the
+            # redirect (`bash<<EOF`, didi 50344, G2); each of those dropped an executed body.
+            executes = re.search(r"(^|[\s;&|(`])(?:[\w.~-]*/)*(bash|sh|zsh|dash|ksh|psql|sqlite3|mysql|%s)([\s;&|<]|$)"
+                                 % _INTERPRETER, line)
             # Each kept body line is PREFIXED with the opener's client, so the SQL class
             # (which needs client AND statement in one segment) still sees them together
             # after the newline/semicolon split. Joining the body onto the opener line
@@ -855,6 +859,7 @@ def _split_with_seps(command: str):
 # longer be the driver import. A `$(...)` or a backtick INSIDE double quotes is not
 # split: that boundary is card e81a72b7's.
 _SUBSHELL_MARKS = ("(", ")", "`", "$")
+_GLUED_REDIRECT = re.compile(r"^([^<>]+?)([<>].*)$", re.S)
 
 
 def _command_words(segment: str):
@@ -879,7 +884,18 @@ def _command_words(segment: str):
         else:
             out.append(ch)
         i += 1
-    return [w for w in shlex.split("".join(out), comments=False, posix=True) if w not in _SUBSHELL_MARKS]
+    words = [w for w in shlex.split("".join(out), comments=False, posix=True) if w not in _SUBSHELL_MARKS]
+    # A redirect GLUED to a shell or interpreter name is the same root (didi 50344, G2):
+    # `bash<<<"..."`, `bash</dev/null -c ..`, `python3<<<"..."` are one shlex word, so the
+    # name is split off. Only after such a name: `2>/dev/null` stays one word.
+    split = []
+    for w in words:
+        m = _GLUED_REDIRECT.match(w)
+        if m and (_SHELL_WORD.match(m.group(1)) or _INTERPRETER_WORD.match(m.group(1))):
+            split.extend(m.groups())
+        else:
+            split.append(w)
+    return split
 
 
 def _interpreter_at(words):
@@ -951,7 +967,7 @@ def interpreter_code_blocks(command: str):
     blocks = []
     lines = command.split("\n")
     i = 0
-    opener = re.compile(r"(^|[\s;&|(`])(%s)([\s;&|]|$)" % _INTERPRETER)
+    opener = re.compile(r"(^|[\s;&|(`])(%s)([\s;&|<]|$)" % _INTERPRETER)
     while i < len(lines):
         m = _HEREDOC.search(lines[i])
         o = opener.search(lines[i]) if m else None
@@ -976,7 +992,7 @@ def interpreter_code_blocks(command: str):
         try:
             words = _command_words(segment)
         except ValueError:
-            u = re.search(r"(^|[\s(`])(%s)\s" % _INTERPRETER, segment)
+            u = re.search(r"(^|[\s(`])(%s)[\s<]" % _INTERPRETER, segment)
             if u:
                 blocks.append((_code_lang(u.group(2)), segment))
             continue
