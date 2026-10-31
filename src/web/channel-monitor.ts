@@ -62,6 +62,7 @@ import {
   type StuckInputActionFacts,
 } from '../pane-state.js'
 import { MAIN_CHANNELS_SESSION, MAIN_CHANNELS_PLIST } from './main-agent.js'
+import { parseEtimeSeconds } from './ps-etime.js'
 import { recordChannelEvent } from './channel-event-log.js'
 import { notifyChannel, type AlertMeta } from '../notify.js'
 import type { PermPromptEscalationState } from './permission-prompt-escalation.js'
@@ -1124,7 +1125,7 @@ export function respawnMainSessionFresh(): void {
   // identity nor a guaranteed-loaded channel plugin. Both follow-ups mirror the
   // resume path; skipping them is how a restarted session comes back nameless
   // or with the plugin stuck in `◯ disabled`.
-  void scheduleIdentitySetup(MAIN_CHANNELS_SESSION, BOT_NAME)
+  scheduleMainIdentity()
   schedulePluginUnlockAfterRespawn(MAIN_CHANNELS_SESSION, provider.type)
 }
 
@@ -1214,7 +1215,7 @@ export async function resumeMarveenSession(): Promise<boolean> {
     // start). /remote-control was dropped (the operator no longer uses it).
     // scheduleIdentitySetup only SCHEDULES delayed timers and returns immediately;
     // fire-and-forget (void) is correct here -- there is nothing to await.
-    void scheduleIdentitySetup(MAIN_CHANNELS_SESSION, BOT_NAME)
+    scheduleMainIdentity()
     // channels.sh runs an /mcp+Up+Enter+Enter unlock probe after launching
     // the main session to revive a Failed/disabled channel plugin (#231/#232),
     // but THIS code path skips channels.sh entirely - tmux respawn-pane is
@@ -1443,7 +1444,7 @@ function respawnMarveenSessionFresh(): boolean {
     logger.warn({ provider: provider.type }, 'Hard restart: marveen session respawned fresh (no --continue)')
     // Re-establish /rename on the fresh process (see note in resumeMarveenSession).
     // scheduleIdentitySetup only schedules delayed timers -> fire-and-forget.
-    void scheduleIdentitySetup(MAIN_CHANNELS_SESSION, BOT_NAME)
+    scheduleMainIdentity()
     // Same channels.sh-bypass concern as in resumeMarveenSession: this respawn
     // path does NOT invoke channels.sh, so the post-init plugin unlock probe
     // (#231/#232) never runs. Wire it in-process so the keep-alive-watchdog
@@ -1566,6 +1567,104 @@ function mainPaneClaudePid(): number | null {
   } catch (err) {
     logger.warn({ site: 'channel-monitor.mainPaneClaudePid', session: MAIN_CHANNELS_SESSION, tmux: tmuxStderr(err) }, 'tmux list-panes failed')
     return null
+  }
+}
+
+// Card c91a1989 (marveen 10004488): channels.sh no longer types /rename -- from its own process it
+// bypassed this process's send lane and split a guard directive (2026-10-26 05:19). So the
+// dashboard names the main session after ANY restart it can see, not only its own respawns: a
+// launchd reload, a manual kickstart, KeepAlive after a crash, a respawn-pane all give the pane a
+// new pid. A respawn path here that already scheduled the identity within MAIN_IDENTITY_DEDUPE_MS
+// is not doubled.
+export const MAIN_IDENTITY_DEDUPE_MS = 120_000
+// The first reading after the dashboard starts has no pid to compare with. A pane that started no
+// earlier than this before the dashboard did came up WITH it (a reboot, both launchd jobs at once,
+// or a main restart whose delayed /rename timers died with the previous dashboard), so nobody named
+// it and the first reading does (didi 49996 F1). An older pane kept its name across the dashboard
+// restart. A redundant /rename is in-lane and cosmetic; a missing one leaves the main session
+// nameless until its next restart, so an unreadable age also names it.
+export const MAIN_IDENTITY_FIRST_READING_SLACK_MS = 300_000
+
+export type MainIdentityReason = 'restart' | 'started-with-dashboard'
+
+export function decideMainIdentity(
+  prevPid: number | null | undefined,
+  pid: number | null,
+  lastScheduledMs: number,
+  nowMs: number,
+  firstReading: { paneAgeMs: number | null; dashboardUptimeMs: number },
+): { schedule: boolean; reason: MainIdentityReason | null; nextPid: number | null | undefined } {
+  if (pid == null) return { schedule: false, reason: null, nextPid: prevPid }
+  if (pid === prevPid) return { schedule: false, reason: null, nextPid: pid }
+  let reason: MainIdentityReason = 'restart'
+  if (prevPid === undefined) {
+    const { paneAgeMs, dashboardUptimeMs } = firstReading
+    if (paneAgeMs != null && paneAgeMs > dashboardUptimeMs + MAIN_IDENTITY_FIRST_READING_SLACK_MS) {
+      return { schedule: false, reason: null, nextPid: pid }
+    }
+    reason = 'started-with-dashboard'
+  }
+  if (nowMs - lastScheduledMs < MAIN_IDENTITY_DEDUPE_MS) return { schedule: false, reason: null, nextPid: pid }
+  return { schedule: true, reason, nextPid: pid }
+}
+
+export interface MainIdentityTrackerDeps {
+  readPid: () => number | null
+  readPaneAgeMs: (pid: number) => number | null
+  dashboardUptimeMs: () => number
+  schedule: () => void
+  now: () => number
+}
+
+// Owns the pid baseline and the dedupe timestamp, so a respawn path's schedule() and the tick's
+// check() share them (didi 49996 F2: the timestamp was module state no test reached).
+export function createMainIdentityTracker(deps: MainIdentityTrackerDeps) {
+  let prevPid: number | null | undefined
+  let lastScheduledMs = Number.NEGATIVE_INFINITY
+  const schedule = (): void => {
+    lastScheduledMs = deps.now()
+    deps.schedule()
+  }
+  const check = (): { reason: MainIdentityReason | null; pidBefore: number | null | undefined; pidAfter: number | null } => {
+    const pid = deps.readPid()
+    const pidBefore = prevPid
+    const paneAgeMs = prevPid === undefined && pid != null ? deps.readPaneAgeMs(pid) : null
+    const d = decideMainIdentity(prevPid, pid, lastScheduledMs, deps.now(), { paneAgeMs, dashboardUptimeMs: deps.dashboardUptimeMs() })
+    prevPid = d.nextPid
+    if (d.schedule) schedule()
+    return { reason: d.reason, pidBefore, pidAfter: pid }
+  }
+  return { schedule, check }
+}
+
+function mainPaneAgeMs(pid: number): number | null {
+  try {
+    const out = execFileSync('/bin/ps', ['-p', String(pid), '-o', 'etime='],
+      { timeout: 2000, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] })
+    const sec = parseEtimeSeconds(out)
+    return sec == null ? null : sec * 1000
+  } catch {
+    return null
+  }
+}
+
+const mainIdentity = createMainIdentityTracker({
+  readPid: () => (mainChannelsSessionExists() ? mainPaneClaudePid() : null),
+  readPaneAgeMs: mainPaneAgeMs,
+  dashboardUptimeMs: () => process.uptime() * 1000,
+  // scheduleIdentitySetup only schedules delayed timers -> fire-and-forget.
+  schedule: () => { void scheduleIdentitySetup(MAIN_CHANNELS_SESSION, BOT_NAME) },
+  now: () => Date.now(),
+})
+
+function scheduleMainIdentity(): void {
+  mainIdentity.schedule()
+}
+
+function checkMainIdentityAfterRestart(): void {
+  const r = mainIdentity.check()
+  if (r.reason) {
+    logger.info({ session: MAIN_CHANNELS_SESSION, pidBefore: r.pidBefore, pidAfter: r.pidAfter, reason: r.reason }, 'Main session pane is new to this dashboard and no recent /rename was scheduled: scheduling it')
   }
 }
 
@@ -2508,6 +2607,8 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
     // escalate to clear+re-inject only after MAIN_STUCK_ENTER_ATTEMPTS, and
     // only when the captured block looks COMPLETE -- a truncated capture stays
     // on Enter rather than risk a partial re-inject to the wrong chat_id.
+    // Card c91a1989: name the main session after any restart (channels.sh no longer does).
+    try { checkMainIdentityAfterRestart() } catch (err) { logger.warn({ err }, 'main identity check failed') }
     mainStuckInput = await recoverStuckInputForSession(MAIN_CHANNELS_SESSION, MAIN_AGENT_ID, mainStuckInput, MAIN_STUCK_THRESHOLDS, false)
     // Reliable backstop: if the soft recovery is exhausted and the input is
     // STILL parked, the TUI is hard-wedged -- escalate to a respawn-pane (the

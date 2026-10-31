@@ -1404,12 +1404,12 @@ for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
 done
 unset _eperm_restarted
 
-# Set agent name once the session is ready. (/remote-control dropped: the operator no
-# longer uses Remote Control.)
-_bot_name="${BOT_NAME:-${MAIN_AGENT_ID:-marveen}}"
-sleep 1
-$TMUX send-keys -t "$SESSION" "/rename ${_bot_name}" Enter
-unset _bot_name
+# No /rename here (card c91a1989). This script is a SEPARATE process from the dashboard, so its
+# keystrokes bypass the dashboard's per-pane send lane: on 2026-10-26 05:19 its one-call
+# "/rename Marveen" + Enter landed inside the context-guard directive the dashboard was typing
+# into the same pane in the same seconds, and split its header. The dashboard names the session
+# instead, in-lane, after ANY restart of it it sees (channel-monitor.ts
+# checkMainIdentityAfterRestart). With no dashboard running the session keeps its default name.
 
 # Reset the keep-alive watchdog baseline so a session that was just restarted
 # is not immediately judged stale by the dashboard's checkMainKeepaliveStaleness

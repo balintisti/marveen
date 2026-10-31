@@ -3149,12 +3149,26 @@ export interface OwnSlashSubmitDeps {
   /** The parked input text (parkedInputText of a ghost-stripped capture), or null. */
   readParked: () => string | null
   delay: (ms: number) => Promise<unknown>
+  /** Empties the input box and verifies it (clearInputBuffer); false = refused or not emptied.
+   *  Only ever called while the box holds exactly our own command. */
+  clearOwnLine?: () => Promise<boolean>
 }
+
+// Card c91a1989 (measured in store/dashboard.log, 2026-10-26): computress's restart directive
+// 10001251 went out at 07:44:12, five seconds after the restart, and stayed PARKED (parked-sig
+// 07:44:17). The /rename timer fired at 07:44:24, typed `/rename Computress` onto that parked
+// directive, and its Enter submitted both: the directive arrived split, with the /rename as its
+// last line. The re-read below only asked whether OUR text was gone, never what we typed onto.
+// So: 'foreign-parked' = the box was not empty, nothing typed, the caller retries later;
+// 'cleared-own' = our own line would not submit, so we emptied it before the caller releases the
+// lane (a later writer would otherwise paste onto it -- marveen counted 6+ parked /rename lines on
+// 10-27/28), and the caller retries later.
+export type OwnSlashSubmitOutcome = 'submitted' | 'still-parked' | 'foreign-parked' | 'cleared-own'
 
 export async function submitOwnSlashCommand(
   cmd: string,
   deps: OwnSlashSubmitDeps,
-): Promise<'submitted' | 'still-parked'> {
+): Promise<OwnSlashSubmitOutcome> {
   // A keystroke that THROWS is an Enter that did not land, not a reason to skip the check below.
   // Measured 2026-10-14 18:11:50 (trillian, card 9c182807): `tmux send-keys Enter` died on SIGABRT,
   // the throw jumped past this loop, and `/rename Trillian` stayed parked until a manual restart.
@@ -3165,17 +3179,34 @@ export async function submitOwnSlashCommand(
       logger.warn({ err, cmd }, 'Own slash command: the Enter keystroke failed; re-reading the input box')
     }
   }
+  if (deps.readParked()) return 'foreign-parked'
   deps.typeLiteral(cmd)
   await deps.delay(300)
   enter()
+  let parked: string | null = null
   for (let extra = 0; extra <= IDENTITY_SUBMIT_MAX_EXTRA_ENTERS; extra++) {
     await deps.delay(800)
-    const parked = deps.readParked()
+    parked = deps.readParked()
     if (parked == null || !parked.includes(cmd)) return 'submitted'
     if (extra === IDENTITY_SUBMIT_MAX_EXTRA_ENTERS) break
     enter()
   }
+  // Only our own line is ours to clear; anything that joined it is someone else's text.
+  if (deps.clearOwnLine && parked?.trim() === cmd && await deps.clearOwnLine()) return 'cleared-own'
   return 'still-parked'
+}
+
+// The attempt's summary line is decided by its outcomes, never next to them: a parked box must not
+// log "Set session /rename" (didi 49996 F3), and neither may a line that stayed parked.
+export function identityAttemptResult(outcomes: readonly OwnSlashSubmitOutcome[]): { retry: boolean; level: 'info' | 'warn'; message: string } {
+  if (outcomes.some((o) => o === 'foreign-parked' || o === 'cleared-own')) {
+    return { retry: true, level: 'info', message: 'Identity /rename not set in this attempt (parked box); retrying later' }
+  }
+  if (outcomes.length === 0) return { retry: false, level: 'warn', message: 'Identity /rename: no command was sent' }
+  if (outcomes.includes('still-parked')) {
+    return { retry: false, level: 'warn', message: 'Identity /rename NOT confirmed -- its line stayed parked' }
+  }
+  return { retry: false, level: 'info', message: 'Set session /rename' }
 }
 
 // Delays mirror the observed Claude Code first-render timing: the first-run /
@@ -3192,6 +3223,10 @@ const IDENTITY_SEND_DELAY_MS = 5000
 // 5 x 3s spans a typical chunked delivery without holding the lane itself.
 const IDENTITY_LANE_RETRY_MS = 3000
 const IDENTITY_LANE_MAX_ATTEMPTS = 5
+// A parked box (someone else's text, or our own line we just cleared) waits longer than a busy
+// lane: it empties when its owner's retry or the stuck-input recovery acts, not in seconds
+// (card c91a1989). 5 x 30 s still gives up within minutes, loudly, with the default name.
+const IDENTITY_PARKED_RETRY_MS = 30_000
 
 // Schedule the identity setup for a freshly (re)spawned session: once it has
 // had time to render, dismiss any first-run/resume modals, then send `/rename`.
@@ -3255,7 +3290,9 @@ export async function scheduleIdentitySetup(session: string, displayName: string
               await delay(IDENTITY_LANE_RETRY_MS)
               continue
             }
+            let retryParked = false
             try {
+              const outcomes: OwnSlashSubmitOutcome[] = []
               for (const cmd of identitySlashCommands(displayName)) {
                 const outcome = await submitOwnSlashCommand(cmd, {
                   typeLiteral: (text) => runTmux(host, ['send-keys', '-t', session, '-l', text], { timeout: 5000 }),
@@ -3265,26 +3302,35 @@ export async function scheduleIdentitySetup(session: string, displayName: string
                     return view == null ? null : parkedInputText(view)
                   },
                   delay,
+                  clearOwnLine: () => clearInputBuffer(session, host),
                 })
-                if (outcome === 'still-parked') {
+                outcomes.push(outcome)
+                if (outcome === 'foreign-parked') {
+                  logger.warn({ session, displayName, cmd, attempt }, 'Identity /rename deferred -- the input box holds parked text; not typing onto it')
+                } else if (outcome === 'cleared-own') {
+                  logger.warn({ session, displayName, cmd, attempt }, 'Identity /rename would not submit; cleared our own parked line, retrying later')
+                } else if (outcome === 'still-parked') {
                   // Loud: the next writer would paste onto this line (card e9f66084).
                   logger.warn({ session, displayName, cmd }, 'Identity /rename still PARKED in the input box after the extra Enters')
                 }
               }
-              logger.info({ session, displayName, attempt }, 'Set session /rename')
+              const result = identityAttemptResult(outcomes)
+              retryParked = result.retry
+              logger[result.level]({ session, displayName, attempt }, result.message)
             } catch (err) {
               logger.warn({ err, session, displayName }, 'Failed to set session /rename')
             } finally {
               releaseIdentityLane()
             }
-            return
+            if (!retryParked) return
+            if (attempt < IDENTITY_LANE_MAX_ATTEMPTS) await delay(IDENTITY_PARKED_RETRY_MS)
           }
           // Gave up: the display name stays default. Cosmetic, and strictly
           // better than splicing `/rename` into someone else's message. Logged
           // loudly because a skip nobody logs is not a skip.
           logger.warn(
             { session, displayName, max: IDENTITY_LANE_MAX_ATTEMPTS },
-            'Identity /rename abandoned -- the send lane stayed busy or a permission prompt stayed up; session keeps its default name',
+            'Identity /rename abandoned -- the send lane stayed busy, a permission prompt stayed up, or the input box stayed parked; session keeps its default name',
           )
         })()
       }, IDENTITY_SEND_DELAY_MS)
