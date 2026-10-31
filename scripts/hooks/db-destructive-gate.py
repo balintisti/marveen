@@ -156,6 +156,12 @@ TOOL_PATTERNS = [
     # (measured: find_hits -> [], card 251b5785). The one shape that stays allowed is
     # the narrow e2e carve-out further down (`e2e_drop_allowed`).
     (r"(?<![\w./-])dropdb(?![\w-])", "dropdb -- deletes a whole database"),
+    # The same tool by PATH: `/opt/homebrew/bin/dropdb x` passed, because the lookbehind
+    # above keeps `/` out (card 0f220f3f, didi measured it). Any word whose LAST path part
+    # is exactly `dropdb` (`/opt/x/`, `./`, `~/`, and `bin/dropdb`, which the shell runs
+    # as a path too); the bare name is refused as any word already, so `cat docs/dropdb`
+    # is refused the same way `cat dropdb` is. `docs/dropdb.md`, `notes/dropdb-x` are not it.
+    (r"(?<![\w.~/-])(?:[\w.~-]*/)+dropdb(?![\w./-])", "dropdb -- deletes a whole database"),
 ]
 
 SQL_PATTERNS = [
@@ -962,6 +968,71 @@ def interpreter_code_blocks(command: str):
     return blocks
 
 
+# NESTED SHELL CODE (card 0f220f3f). `bash -c "<tool> x"` passed: the whole nested
+# command is ONE quoted string, and the position classes blank quoted text. The string
+# a shell is told to run is a command, so it goes through find_hits again, as text,
+# to _MAX_SHELL_DEPTH levels: `-c` (also combined, `-lc`, `-ec`), `eval`, a here-string,
+# and `echo ... | bash`. The launcher rule is the interpreter one: the first shell word
+# anywhere in the segment (`timeout 60 bash -c`, `sudo -u x sh -c`). Only the shell's OWN
+# options are read (`-o pipefail`, redirects skipped): after its first operand, the
+# script, the words are that script's data. A shell heredoc body is already in scope
+# through strip_heredoc_bodies. Nesting deeper than _MAX_SHELL_DEPTH is not read.
+_SHELL_WORD = re.compile(r"^(?:.*/)?(?:ba|z|da|k)?sh$")
+_SHELL_FLAG = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
+_SHELL_OPT_WITH_ARG = ("-o", "+o", "-O", "+O")
+_SHELL_REDIRECT_OP = re.compile(r"^\d*(?:[<>]+|>&|<&)$")
+_SHELL_REDIRECT = re.compile(r"^\d*[<>]")
+_MAX_SHELL_DEPTH = 3
+
+
+def shell_code_strings(command: str):
+    """Every string a nested shell in `command` is told to run."""
+    out = []
+    stages = _split_with_seps(_LINE_CONT.sub(" ", command))
+    for n, (segment, _sep) in enumerate(stages):
+        try:
+            words = shlex.split(segment, comments=False, posix=True)
+        except ValueError:
+            continue  # the blind position split still sees this segment
+        k0 = next((k for k, w in enumerate(words) if _SHELL_WORD.match(w) or w == "eval"), -1)
+        if k0 < 0:
+            continue
+        args = words[k0 + 1:]
+        if words[k0] == "eval":
+            if args:
+                out.append(" ".join(args))
+            continue
+        k = 0
+        while k < len(args):
+            word = args[k]
+            if _SHELL_FLAG.match(word) and k + 1 < len(args):
+                out.append(args[k + 1])
+                break
+            if word == "<<<" and k + 1 < len(args):
+                out.append(args[k + 1])
+                break
+            if word.startswith("<<<") and len(word) > 3:
+                out.append(word[3:])
+                break
+            if word in _SHELL_OPT_WITH_ARG or _SHELL_REDIRECT_OP.match(word):
+                k += 2
+                continue
+            if word.startswith(("-", "+")) or _SHELL_REDIRECT.match(word):
+                k += 1
+                continue
+            # The first operand is the script: what follows are ITS arguments, data
+            # (`bash x.sh -c foo`), the same rule as a script heredoc (N7, 94d86b92).
+            break
+        if n and stages[n - 1][1] == "|" and all(w.startswith("-") for w in args):
+            try:
+                prev = shlex.split(stages[n - 1][0], comments=False, posix=True)
+            except ValueError:
+                prev = []
+            if prev and prev[0] in ("echo", "printf"):
+                out.append(" ".join(prev[1:]))
+    return out
+
+
 def _code_hits(lang: str, code: str):
     """The TOOL / CLOUD / GIT / SQL classes over one piece of interpreter code. A
     command name only counts when the code can start a process at all, and SQL only
@@ -992,10 +1063,15 @@ def _code_hits(lang: str, code: str):
     return ["%s [in executed interpreter code: a quoted name counts there]" % w for w in found]
 
 
-def find_hits(command: str, cwd=None, missing=None):
+def find_hits(command: str, cwd=None, missing=None, _depth=0):
     """`missing`, if a list, collects literal files that do not exist (logged by the
     caller, never refused). Everything else stays pure."""
     hits = []
+    if _depth < _MAX_SHELL_DEPTH:
+        for code in shell_code_strings(command):
+            for why in find_hits(code, cwd, missing, _depth + 1):
+                if why not in hits:
+                    hits.append(why)
     for lang, code in interpreter_code_blocks(command):
         for why in _code_hits(lang, code):
             if why not in hits:
