@@ -176,9 +176,11 @@ SQL_PATTERNS = [
 
 # Anything that can hand SQL to a server. `prisma`/`supabase` are here as well as in
 # the tool list: `prisma db execute --stdin` is a client, not just a CLI. A redirect may
-# touch the name (`psql<<<"..."`, didi 50372 H1): that is still the client.
+# touch the name (`psql<<<"..."`, didi 50372 H1): that is still the client. And the name
+# may come with a directory (`/opt/homebrew/bin/psql`, `$PG/psql`, didi 50405 J1): the
+# fleet does call psql that way, and the shell runs the same client.
 DB_CLIENTS = re.compile(
-    r"(^|[\s;&|(])(psql|sqlite3|mysql|mariadb|mongo|mongosh|cockroach|pg_restore|pgcli|"
+    r"(^|[\s;&|(])(?:[\w.~${}-]*/)*(psql|sqlite3|mysql|mariadb|mongo|mongosh|cockroach|pg_restore|pgcli|"
     r"prisma|supabase|npx\s+prisma|dbmate|flyway|liquibase)([\s;&|)<>]|$)", re.I)
 
 # === CLOUD patterns: the third class, and it is here because a DENY LIST CANNOT
@@ -463,7 +465,18 @@ GIT_PUSH_PATTERNS = [
 # The fix is not to stop splitting (joining does not help: the body's own `;` re-splits
 # it). Each executed body line CARRIES its opener's client instead -- see
 # strip_heredoc_bodies.
-_SEG = re.compile(r"(?:\|\||&&|[;\n|&])")
+#
+# The `&` of a redirect is not a separator (didi 50405 J2): `2>&1`, `1>&2`, `<&0` and
+# `&>file` are one word to the shell, but a split on every `&` cut `psql 2>&1 -c ".."`
+# into `psql 2>` and `1 -c ".."`, the client and its statement in two segments, and the
+# statement was never checked (the trailing `-c ".." 2>&1` was). Not splitting there can
+# only join segments, never separate them -- more checks, never fewer.
+_SEG = re.compile(r"(?:\|\||&&|[;\n|]|(?<![<>])&(?!>))")
+
+
+def _redirect_amp(command: str, i: int) -> bool:
+    """Is the `&` at `command[i]` part of a redirect (`>&`, `<&`, `&>`)? See _SEG."""
+    return (i > 0 and command[i - 1] in "<>") or command.startswith("&>", i)
 
 
 def _split_outside_quotes(command: str):
@@ -496,6 +509,8 @@ def _split_outside_quotes(command: str):
             cur = []
             i += 2
             continue
+        elif ch == "&" and _redirect_amp(command, i):
+            cur.append(ch)
         elif ch in ";\n|&":
             out.append("".join(cur))
             cur = []
@@ -840,6 +855,8 @@ def _split_with_seps(command: str):
             cur = []
             i += 2
             continue
+        elif ch == "&" and _redirect_amp(command, i):
+            cur.append(ch)
         elif ch in ";\n|&":
             out.append(("".join(cur), ch))
             cur = []
@@ -1043,8 +1060,9 @@ _SHELL_FLAG = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
 # bash's value-taking long options too: `--rcfile /tmp/r -c ..` read `/tmp/r` as the
 # script and its -c as data (didi 50316, F2).
 _SHELL_OPT_WITH_ARG = ("-o", "+o", "-O", "+O", "--rcfile", "--init-file")
-_SHELL_REDIRECT_OP = re.compile(r"^\d*(?:[<>]+|>&|<&)$")
-_SHELL_REDIRECT = re.compile(r"^\d*[<>]")
+# `&>file` / `&>>file` (stdout and stderr) is a redirect word as well (didi 50405 J2).
+_SHELL_REDIRECT_OP = re.compile(r"^(?:\d*(?:[<>]+|>&|<&)|&>>?)$")
+_SHELL_REDIRECT = re.compile(r"^(?:\d*[<>]|&>)")
 _MAX_SHELL_DEPTH = 3
 
 

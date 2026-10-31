@@ -53,6 +53,56 @@ describe('db-destructive-gate: teljes uttal hivott torlo eszkoz (0f220f3f)', () 
   })
 })
 
+// didi 50405, J1: a DB-kliens neve csak puszta szokent volt kliens; a flotta
+// `/opt/homebrew/bin/psql -h localhost`-ot hiv, es az a SQL-osztalyon atment.
+describe('db-destructive-gate: teljes uttal hivott DB-kliens (0f220f3f, J1)', () => {
+  it.each([
+    ['abszolut ut -c', '/opt/homebrew/bin/psql -h localhost -c "DROP TABLE x"'],
+    ['abszolut ut <<<', '/opt/homebrew/bin/psql <<<"DROP TABLE x"'],
+    ['abszolut ut, tapado <<<', '/opt/homebrew/bin/psql<<<"DROP TABLE x"'],
+    ['relativ ./ ut', './bin/psql -c "DROP TABLE x"'],
+    ['valtozo konyvtar', '$PG/psql -c "DROP TABLE x"'],
+    ['~/ ut, sqlite3', '~/pg/bin/sqlite3 a.db "DROP TABLE x"'],
+  ])('%s: TILTVA', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('deny')
+  })
+
+  it.each([
+    ['artalmatlan lekerdezes teljes uttal', '/opt/homebrew/bin/psql -h localhost -c "select 1"'],
+    ['egy psql.md dokumentum', 'cat /usr/bin/psql.md'],
+    ['egy psqlx nevu fajl', 'ls /opt/homebrew/bin/psqlx'],
+  ])('KONTROLL: %s ATMEGY', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('none')
+  })
+})
+
+// didi 50405, J2: a `2>&1` `&`-je elvalasztonak szamitott, igy a kliens/shell es a
+// parancsa ket szegmensbe esett; a parancs vegi `2>&1` mindig tiltva volt.
+describe('db-destructive-gate: az atiranyitas & jele nem elvalaszto (0f220f3f, J2)', () => {
+  it.each([
+    ['psql 2>&1 -c', 'psql 2>&1 -c "DROP TABLE x"'],
+    ['psql 1>&2 -c', 'psql 1>&2 -c "DROP TABLE x"'],
+    ['psql <&0 -c', 'psql <&0 -c "DROP TABLE x"'],
+    ['psql &>/dev/null -c', 'psql &>/dev/null -c "DROP TABLE x"'],
+    ['bash 2>&1 -c', 'bash 2>&1 -c "dropdb x"'],
+    ['bash 2>&1 <<<', 'bash 2>&1 <<<"dropdb x"'],
+    ['bash &>/dev/null -c', 'bash &>/dev/null -c "dropdb x"'],
+    ['bash 2>&1 -c ... | tail', 'bash 2>&1 -c "dropdb x" | tail -3'],
+    ['git 2>&1 push --force', 'git 2>&1 push --force origin main'],
+  ])('%s: TILTVA', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('deny')
+  })
+
+  it.each([
+    ['hatterbe kuldes, utana mas parancs', 'sleep 1 & echo done'],
+    ['hatterbe kuldott kiiras, utana artalmatlan psql', 'echo "DROP TABLE x" & /opt/homebrew/bin/psql -c "select 1"'],
+    ['szkript 2>&1-gyel', 'bash scripts/x.sh 2>&1'],
+    ['build kimenet csovezetekben', 'make 2>&1 | tail -3'],
+  ])('KONTROLL: %s ATMEGY', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('none')
+  })
+})
+
 describe('db-destructive-gate: a beagyazott shell sztringje parancs (0f220f3f)', () => {
   it.each([
     ['bash -c', 'bash -c "dropdb x"'],
