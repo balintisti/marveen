@@ -40,8 +40,18 @@ describe('db-destructive-gate: valtozoban tartott DB-kliens (485228fd)', () => {
     ['inditoval', 'P=/usr/bin/psql; timeout 60 $P -c "DROP TABLE x"'],
     ['helyettesitesben', 'P=psql; x=$($P -c "DROP TABLE x")'],
     ['$-os konyvtar az ertekben', 'P=$HOME/bin/psql; $P -c "DROP TABLE x"'],
+    // Minden kliens-nev a listaban (didi 50591: C6/C7/C8 kiesese tulelt, csak a psql volt rogzitve).
+    ['sqlite3', 'P=sqlite3; $P a.db "DROP TABLE x"'],
+    ['mysql', 'M=/usr/local/bin/mysql; $M -e "DROP TABLE x"'],
+    ['prisma', 'P=prisma; $P migrate reset'],
   ])('%s: TILTVA', (_name, cmd) => {
     expect(verdict(cmd)).toBe('deny')
+  })
+
+  // A lista MINDEN neve, uttal: egy kieso nev nem olvasott kliens (C6-C8 csak a minta).
+  it.each(['psql', 'sqlite3', 'mysql', 'mariadb', 'mongo', 'mongosh', 'cockroach', 'pg_restore', 'pgcli',
+    'prisma', 'supabase', 'dbmate', 'flyway', 'liquibase'])('valtozoban %s: TILTVA', (client) => {
+    expect(verdict(`C=/opt/x/bin/${client}; $C -c "DROP TABLE x"`)).toBe('deny')
   })
 
   it.each([
