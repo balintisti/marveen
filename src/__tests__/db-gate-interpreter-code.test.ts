@@ -107,3 +107,61 @@ describe('db-destructive-gate: a vegrehajtott interpreter-kodban az idezett nev 
     expect(verdict('dropdb -h localhost --if-exists crm_e2e_didi_x1')).toBe('e2e')
   })
 })
+
+/**
+ * didi 50294 (r2): ugyanaz a vegrehajtott kod, MAS alakban erkezve. K1: indito az
+ * interpreter elott (timeout, nice, env, sudo, uv run, npx tsx); K2: a kod stdin-en jon
+ * heredoc nelkul (here-string, echo | python3) vagy backslash-idezett heredocban;
+ * K3: asyncio.create_subprocess_exec; K4: a driver egy `import a, b` lista masodik eleme.
+ * N7: egy SZKRIPTNEK adott heredoc ADAT, nem kod.
+ */
+describe('db-destructive-gate: a vegrehajtott kod minden indito- es stdin-alakban (didi 50294)', () => {
+  const run = "import subprocess; subprocess.run(['dropdb','x'])"
+
+  it.each([
+    ['timeout 60', `timeout 60 python3 -c "${run}"`],
+    ['nice', `nice python3 -c "${run}"`],
+    ['env', `env FOO=1 python3 -c "${run}"`],
+    ['sudo -u', `sudo -u postgres python3 -c "${run}"`],
+    ['uv run', `uv run python -c "${run}"`],
+    ['npx tsx', `npx tsx -e "require('child_process').execSync('dropdb x')"`],
+  ])('K1: %s elotaggal a -c/-e kod TILTVA', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('deny')
+  })
+
+  it('K2: here-string (<<<) TILTVA', () => {
+    expect(verdict(`python3 <<< "${run}"`)).toBe('deny')
+  })
+
+  it('K2: echo | python3 TILTVA', () => {
+    expect(verdict(`echo "${run}" | python3`)).toBe('deny')
+  })
+
+  it('K2: backslash-idezett heredoc (<<\\PY) TILTVA', () => {
+    expect(verdict("python3 - <<\\PY\nimport subprocess\nsubprocess.run(['dropdb','x'])\nPY")).toBe('deny')
+  })
+
+  it('K3: asyncio.create_subprocess_exec folyamat-indito, TILTVA', () => {
+    expect(verdict("python3 - <<'PY'\nimport asyncio\nasyncio.run(asyncio.create_subprocess_exec('dropdb','x'))\nPY")).toBe('deny')
+  })
+
+  it('K4: a driver az import-lista masodik eleme, a WHERE nelkuli DELETE TILTVA', () => {
+    expect(verdict("python3 - <<'PY'\nimport os, sqlite3\nsqlite3.connect('/tmp/a.db').execute('DELETE FROM t')\nPY")).toBe('deny')
+  })
+
+  it('N7: egy szkriptnek adott heredoc ADAT, a kod-osztaly nem olvassa (ATMEGY)', () => {
+    expect(verdict("python3 /tmp/x.py <<'EOF'\nimport subprocess\nsubprocess.run(['dropdb','x'])\nEOF")).toBe('none')
+  })
+
+  it('N7 kontroll: ugyanaz a heredoc a `-` stdin-programkent TILTVA', () => {
+    expect(verdict("python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['dropdb','x'])\nEOF")).toBe('deny')
+  })
+
+  it('KONTROLL: echo | python3 egy szkripttel: az echo ADAT, ATMEGY', () => {
+    expect(verdict(`echo "${run}" | python3 /tmp/x.py`)).toBe('none')
+  })
+
+  it('KONTROLL: timeout elotti artalmatlan -c kod ATMEGY', () => {
+    expect(verdict(`timeout 60 python3 -c "import subprocess; subprocess.run(['git','status'])"`)).toBe('none')
+  })
+})

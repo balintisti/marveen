@@ -527,7 +527,9 @@ def _command_position_text(segment: str) -> str:
     return " ".join(parts)
 
 
-_HEREDOC = re.compile(r"<<-?\s*([\"\']?)([A-Za-z_][A-Za-z0-9_]*)\1")
+# `<<\\PY` (a backslash-quoted delimiter) is the same quoted heredoc as `<<'PY'` to a
+# shell; without it the body ran unrecognised (didi 50294, K2).
+_HEREDOC = re.compile(r"<<-?\s*(?:\\(?=[A-Za-z_]))?([\"\']?)([A-Za-z_][A-Za-z0-9_]*)\1")
 # The interpreters whose heredoc body or `-c`/`-e` argument is CODE, not shell. The
 # list is the executor side of strip_heredoc_bodies AND the trigger of the INTERPRETER
 # CODE class below, so one name cannot be in one and missing from the other.
@@ -775,13 +777,16 @@ _CODE_CLI_CLIENTS = re.compile(
     r"(?<![\w-])(psql|sqlite3|mysql|mariadb|mongo|mongosh|cockroach|pg_restore|pgcli|"
     r"prisma|supabase|dbmate|flyway|liquibase)(?![\w-])", re.I)
 _CODE_SINKS = {
-    "python": re.compile(r"\bsubprocess\b|\bos\.(?:system|popen|exec\w*|spawn\w*)\b|\bpty\.spawn\b"),
+    "python": re.compile(r"\bsubprocess\b|\bcreate_subprocess_(?:exec|shell)\b|"
+                         r"\bos\.(?:system|popen|exec\w*|spawn\w*)\b|\bpty\.spawn\b"),
     "node": re.compile(r"\bchild_process\b|\b(?:execSync|execFileSync|spawnSync)\b|\bBun\.spawn|\bDeno\.(?:Command|run)\b"),
     "perl": re.compile(r"\bsystem\s*\(|\bexec\s*\(|\bqx\s*[(\[{/]|`|\bIPC::|\bopen\s*\(?[^\n]*\|"),
     "ruby": re.compile(r"\bsystem\s*\(|\bexec\s*\(|%x\s*[(\[{]|`|\bOpen3\b|\bIO\.popen\b|\bspawn\s*\("),
 }
 _CODE_DRIVERS = {
-    "python": re.compile(r"^\s*(?:import|from)\s+(?:psycopg2?|psycopg|sqlite3|asyncpg|sqlalchemy|pg8000|"
+    # Any module of an `import a, b as c, ...` list counts, not only the first (didi 50294, K4).
+    "python": re.compile(r"^\s*(?:import\s+(?:[\w.]+(?:\s+as\s+\w+)?\s*,\s*)*|from\s+)"
+                         r"(?:psycopg2?|psycopg|sqlite3|asyncpg|sqlalchemy|pg8000|"
                          r"pymysql|MySQLdb|mysql\.connector|duckdb)\b", re.M),
     "node": re.compile(r"require\(\s*[\"'`](?:pg|mysql2?|better-sqlite3|sqlite3|knex|@prisma/client|postgres|mssql)"
                        r"[\"'`]\s*\)|^\s*import\b[^\n]*\bfrom\s*[\"'](?:pg|mysql2?|better-sqlite3|sqlite3|knex|"
@@ -806,11 +811,62 @@ def _code_lang(word: str) -> str:
     return name if name in ("perl", "ruby") else "node"
 
 
+def _split_with_seps(command: str):
+    """(segment, separator after it) with the split of _split_outside_quotes, so a
+    pipeline stage can see that it is fed by the one before it."""
+    out, cur, quote, i = [], [], None, 0
+    while i < len(command):
+        ch = command[i]
+        if quote:
+            cur.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+            cur.append(ch)
+        elif command.startswith("||", i) or command.startswith("&&", i):
+            out.append(("".join(cur), command[i:i + 2]))
+            cur = []
+            i += 2
+            continue
+        elif ch in ";\n|&":
+            out.append(("".join(cur), ch))
+            cur = []
+        else:
+            cur.append(ch)
+        i += 1
+    out.append(("".join(cur), ""))
+    return out
+
+
+def _interpreter_at(words):
+    """Index of the first interpreter word, or -1. ANY position, not only the first:
+    `timeout 60 python3 -c`, `nice`, `env`, `sudo -u x`, `uv run python`, `npx tsx -e`
+    all put a launcher in front, and listing launchers is a list that is never complete
+    (didi 50294, K1: those five passed while the same prefixes denied in plain shell).
+    What it costs: an interpreter NAME as an argument (`which python3 -c x`) also reads
+    its flag's argument as code -- which then still needs a process sink to count."""
+    return next((k for k, w in enumerate(words) if _INTERPRETER_WORD.match(w)), -1)
+
+
+def _reads_code_from_stdin(words) -> bool:
+    """The interpreter runs its STDIN as code: no script argument, or `-`. With a script
+    (`python3 x.py <<EOF`) the heredoc is that script's DATA (didi 50294, N7), and with
+    -c/-e the code is the argument."""
+    for w in words:
+        if w == "-":
+            return True
+        if _CODE_FLAG.match(w) or not w.startswith("-"):
+            return False
+    return True
+
+
 def interpreter_code_blocks(command: str):
     """(language, code) for every piece of interpreter CODE the command will execute:
-    heredoc bodies whose opener runs an interpreter, and the argument of `-c` / `-e` /
-    `--eval`. An argument that cannot be tokenised is returned whole -- an extra check,
-    never a missed one."""
+    heredoc bodies whose opener runs an interpreter reading stdin, the argument of `-c` /
+    `-e` / `--eval`, a here-string (`<<<`), and an `echo`/`printf` piped into an
+    interpreter. An argument that cannot be tokenised is returned whole -- an extra
+    check, never a missed one."""
     blocks = []
     lines = command.split("\n")
     i = 0
@@ -819,13 +875,23 @@ def interpreter_code_blocks(command: str):
         m = _HEREDOC.search(lines[i])
         o = opener.search(lines[i]) if m else None
         if o:
-            body, i = [], i + 1
+            body, i0, i = [], i, i + 1
             while i < len(lines) and lines[i].strip() != m.group(2):
                 body.append(lines[i])
                 i += 1
-            blocks.append((_code_lang(o.group(2)), "\n".join(body)))
+            # The interpreter's own arguments, from its name to the `<<` or the next
+            # separator (`python3 - <<PY`, and `cat <<PY | python3 -` after the pipe).
+            # An untokenisable opener counts as code -- the safe side.
+            head = re.split(r"<<|[;&|]", lines[i0][o.end(2):], maxsplit=1)[0]
+            try:
+                as_code = _reads_code_from_stdin(shlex.split(head, posix=True))
+            except ValueError:
+                as_code = True
+            if as_code:
+                blocks.append((_code_lang(o.group(2)), "\n".join(body)))
         i += 1
-    for segment in _split_outside_quotes(_LINE_CONT.sub(" ", command)):
+    stages = _split_with_seps(_LINE_CONT.sub(" ", command))
+    for n, (segment, _sep) in enumerate(stages):
         try:
             words = shlex.split(segment, comments=False, posix=True)
         except ValueError:
@@ -833,14 +899,28 @@ def interpreter_code_blocks(command: str):
             if u:
                 blocks.append((_code_lang(u.group(2)), segment))
             continue
-        while words and _ENV_ASSIGN.match(words[0]):
-            words.pop(0)
-        if not words or not _INTERPRETER_WORD.match(words[0]):
+        k0 = _interpreter_at(words)
+        if k0 < 0:
             continue
-        for k, word in enumerate(words[1:-1], start=1):
-            if _CODE_FLAG.match(word):
-                blocks.append((_code_lang(words[0]), words[k + 1]))
+        lang, args = _code_lang(words[k0]), words[k0 + 1:]
+        for k, word in enumerate(args):
+            if _CODE_FLAG.match(word) and k + 1 < len(args):
+                blocks.append((lang, args[k + 1]))
                 break
+            if word == "<<<" and k + 1 < len(args):
+                blocks.append((lang, args[k + 1]))
+                break
+            if word.startswith("<<<") and len(word) > 3:
+                blocks.append((lang, word[3:]))
+                break
+        # `echo "code" | python3`: the stage before the pipe prints the program.
+        if n and stages[n - 1][1] == "|" and _reads_code_from_stdin(args):
+            try:
+                prev = shlex.split(stages[n - 1][0], comments=False, posix=True)
+            except ValueError:
+                prev = [stages[n - 1][0]]
+            if prev and prev[0] in ("echo", "printf"):
+                blocks.append((lang, " ".join(prev[1:])))
     return blocks
 
 
