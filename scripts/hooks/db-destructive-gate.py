@@ -577,7 +577,8 @@ def _command_position_text(segment: str) -> str:
                 break
             body = segment[i + 1:j]
             edges = (segment[i - 1] if i else " ", segment[j + 1] if j + 1 < n else " ")
-            if body and not any(c.isspace() for c in body) and all(_QUOTED_WORD_EDGE.match(e) for e in edges):
+            # An EMPTY span too: `""psql`, `p""sql` are psql to the shell (didi 50590 F-B3).
+            if not any(c.isspace() for c in body) and all(_QUOTED_WORD_EDGE.match(e) for e in edges):
                 out.append(body)
             else:
                 out.append(ch + " " * len(body) + ch)
@@ -629,9 +630,12 @@ def strip_heredoc_bodies(command: str) -> str:
             # redirect (`bash<<EOF`, didi 50344, G2); each of those dropped an executed body.
             # The directory as _DB_CLIENT_PATH reads it (`$HOME/bin/psql`, `postgresql@16`,
             # didi 50541 F-A3).
-            # A quoted name runs the same client (`"psql" <<'EOF'`, didi 50542 F-B1).
-            executes = re.search(r"(^|[\s;&|(`])[\"']?(?:%s)*(bash|sh|zsh|dash|ksh|psql|sqlite3|mysql|%s)[\"']?([\s;&|<]|$)"
-                                 % (_PATH_DIR, _INTERPRETER), line)
+            # A quoted name runs the same client (`"psql" <<'EOF'`, didi 50542 F-B1), and so
+            # does a partly quoted one (`p"sql" <<'EOF'`, 50590 F-B3): the line is read
+            # also the way _command_position_text joins a shell word.
+            opener = (r"(^|[\s;&|(`])[\"']?(?:%s)*(bash|sh|zsh|dash|ksh|psql|sqlite3|mysql|%s)[\"']?([\s;&|<]|$)"
+                      % (_PATH_DIR, _INTERPRETER))
+            executes = re.search(opener, line) or re.search(opener, _command_position_text(line))
             # Each kept body line is PREFIXED with the opener's client, so the SQL class
             # (which needs client AND statement in one segment) still sees them together
             # after the newline/semicolon split. Joining the body onto the opener line

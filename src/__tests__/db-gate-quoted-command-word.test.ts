@@ -143,3 +143,26 @@ describe('db-destructive-gate: idezett DB-kliens heredockal vagy tapadt <<<-vel 
     expect(verdict(cmd)).toBe('none')
   })
 })
+
+describe('db-destructive-gate: tapadt kimeneti atiranyitas, ures es reszleges idezojel (e81a72b7, didi 50590)', () => {
+  it.each([
+    // B5: a _QUOTED_WORD_EDGE `>`-je nelkul ez atment.
+    ['idezett kliens, tapadt >', '"psql">/tmp/o -c "DROP TABLE x"'],
+    ['egyszeresen idezett kliens, tapadt >', "'psql'>/dev/null -c 'DROP TABLE x'"],
+    // F-B3: a shellnek mind psql.
+    ['ures idezojel elol', '""psql -c "DROP TABLE x"'],
+    ['ures idezojel hatul', 'psql"" -c "DROP TABLE x"'],
+    ['ures idezojel kozepen', 'p""sql -c "DROP TABLE x"'],
+    ['reszben idezett kliens heredockal', `p"sql" <<'EOF'\nDROP TABLE x;\nEOF`],
+  ])('%s: TILTVA', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('deny')
+  })
+
+  it.each([
+    ['tapadt >, artalmatlan lekerdezes', '"psql">/tmp/o -c "select 1"'],
+    ['ures argumentum', 'echo "" x'],
+    ['ures commit-uzenet', 'git commit -m "" --allow-empty'],
+  ])('KONTROLL: %s ATMEGY', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('none')
+  })
+})
