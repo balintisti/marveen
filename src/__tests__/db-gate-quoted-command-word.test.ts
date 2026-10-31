@@ -123,3 +123,23 @@ describe('db-destructive-gate: helyettesites heredoc-torzsben (e81a72b7)', () =>
     expect(verdict(cmd)).toBe('none')
   })
 })
+
+describe('db-destructive-gate: idezett DB-kliens heredockal vagy tapadt <<<-vel (e81a72b7, didi 50542 F-B1)', () => {
+  it.each([
+    ['dupla idezojeles kliens, idezett heredoc', `"psql" <<'EOF'\nDROP TABLE x;\nEOF`],
+    ['egyszeres idezojeles kliens, idezetlen heredoc', "'psql' <<EOF\nDROP TABLE x;\nEOF"],
+    ['idezett kliens, tapadt <<<', '"psql"<<<"DROP TABLE x"'],
+    ['idezett utas kliens, heredoc', `"/opt/homebrew/bin/psql" <<'EOF'\nDROP TABLE x;\nEOF`],
+    ['idezett @-os utas kliens, tapadt <<<', '"/opt/homebrew/opt/postgresql@16/bin/psql"<<<"DROP TABLE x"'],
+  ])('%s: TILTVA', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('deny')
+  })
+
+  it.each([
+    ['idezett kliens artalmatlan heredockal', `"psql" <<'EOF'\nselect 1;\nEOF`],
+    ['idezett szo, tapadt atiranyitas', 'echo "x">f'],
+    ['adat-heredoc SQL-szoveggel', `cat <<'EOF'\nDROP TABLE x;\nEOF`],
+  ])('KONTROLL: %s ATMEGY', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('none')
+  })
+})

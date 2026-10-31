@@ -548,8 +548,9 @@ _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
 # What may touch a quoted span that is unquoted as part of a shell word: a word character,
-# another quote, whitespace or a command separator. Not a bracket, comma or paren.
-_QUOTED_WORD_EDGE = re.compile(r"[\w./~+:=@%\-\s;&|`\"']")
+# another quote, whitespace, a command separator or a redirect (`"psql"<<<".."`, didi 50542
+# F-B1). Not a bracket, comma or paren.
+_QUOTED_WORD_EDGE = re.compile(r"[\w./~+:=@%\-\s;&|`\"'<>]")
 
 
 def _command_position_text(segment: str) -> str:
@@ -628,7 +629,8 @@ def strip_heredoc_bodies(command: str) -> str:
             # redirect (`bash<<EOF`, didi 50344, G2); each of those dropped an executed body.
             # The directory as _DB_CLIENT_PATH reads it (`$HOME/bin/psql`, `postgresql@16`,
             # didi 50541 F-A3).
-            executes = re.search(r"(^|[\s;&|(`])(?:%s)*(bash|sh|zsh|dash|ksh|psql|sqlite3|mysql|%s)([\s;&|<]|$)"
+            # A quoted name runs the same client (`"psql" <<'EOF'`, didi 50542 F-B1).
+            executes = re.search(r"(^|[\s;&|(`])[\"']?(?:%s)*(bash|sh|zsh|dash|ksh|psql|sqlite3|mysql|%s)[\"']?([\s;&|<]|$)"
                                  % (_PATH_DIR, _INTERPRETER), line)
             # Each kept body line is PREFIXED with the opener's client, so the SQL class
             # (which needs client AND statement in one segment) still sees them together
