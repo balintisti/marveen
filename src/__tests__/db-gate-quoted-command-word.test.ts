@@ -154,6 +154,9 @@ describe('db-destructive-gate: tapadt kimeneti atiranyitas, ures es reszleges id
     ['ures idezojel hatul', 'psql"" -c "DROP TABLE x"'],
     ['ures idezojel kozepen', 'p""sql -c "DROP TABLE x"'],
     ['reszben idezett kliens heredockal', `p"sql" <<'EOF'\nDROP TABLE x;\nEOF`],
+    // B1a-c: a heredoc-nyito idezojele a (-ben es $(-ben (ott a parancs-pozicios szoveg nem illeszt).
+    ['idezett kliens heredockal alhejban', `("psql" <<'EOF'\nDROP TABLE x;\nEOF\n)`],
+    ['idezett kliens heredockal $(-ben', `x=$("psql" <<'EOF'\nDROP TABLE x;\nEOF\n)`],
   ])('%s: TILTVA', (_name, cmd) => {
     expect(verdict(cmd)).toBe('deny')
   })
