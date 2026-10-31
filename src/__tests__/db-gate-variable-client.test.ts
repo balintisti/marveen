@@ -55,3 +55,27 @@ describe('db-destructive-gate: valtozoban tartott DB-kliens (485228fd)', () => {
     expect(verdict(cmd)).toBe('none')
   })
 })
+
+/** A kapu expand_client_vars()-a egy parancs-SZOVEGRE. */
+function expanded(command: string): string {
+  const driver = `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("g", ${JSON.stringify(GATE)})
+g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+print(json.dumps(g.expand_client_vars(json.loads(sys.stdin.read()))))
+`
+  const out = execFileSync('python3', ['-I', '-B', '-c', driver], { input: JSON.stringify(command), encoding: 'utf8' })
+  return JSON.parse(out.trim())
+}
+
+// A verdikten at ez a ket hatar nem latszik (a tulkifejtes betut hagy a nev utan, abbol
+// kliens nem lesz; mutans V2 es V5 igy tulelt), a kifejtett SZOVEG viszont mas lenne.
+describe('db-destructive-gate: expand_client_vars hatarai (485228fd)', () => {
+  it.each([
+    ['csak a sajat nevet fejti ki, a hosszabbat nem', 'P=psql; $P x; echo $PATH', 'P=psql; psql x; echo $PATH'],
+    ['kliens-nevu fajl nem kliens', 'P=/tmp/psql.log; cat $P', 'P=/tmp/psql.log; cat $P'],
+    ['kapcsos alak', 'P=/usr/bin/psql; ${P} x', 'P=/usr/bin/psql; /usr/bin/psql x'],
+  ])('%s', (_name, cmd, want) => {
+    expect(expanded(cmd)).toBe(want)
+  })
+})
