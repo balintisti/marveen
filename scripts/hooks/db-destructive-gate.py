@@ -547,23 +547,43 @@ _LINE_CONT = re.compile(r"\\\n")
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
+# What may touch a quoted span that is unquoted as part of a shell word: a word character,
+# another quote, whitespace or a command separator. Not a bracket, comma or paren.
+_QUOTED_WORD_EDGE = re.compile(r"[\w./~+:=@%\-\s;&|`\"']")
+
+
 def _command_position_text(segment: str) -> str:
     """The part of a segment that a shell would treat as command + arguments,
     with quoted strings blanked out so their CONTENTS cannot look like a command.
 
-    Quotes are replaced by spaces of the same length rather than removed, so the
-    word positions of everything after them stay put."""
-    out, quote = [], None
-    for ch in segment:
-        if quote:
-            out.append(" " if ch != quote else ch)
-            if ch == quote:
-                quote = None
-        elif ch in "\"'":
-            quote = ch
-            out.append(ch)
-        else:
-            out.append(ch)
+    A quoted span WITHOUT whitespace is one word to the shell, the same word as
+    unquoted, so its quotes are removed instead (card e81a72b7): `"<tool>" x`,
+    `d"ropdb"` and `'prisma' migrate reset` ran the tool while the blanking hid it.
+    What it costs: a one-word quoted argument counts like the bare word already does
+    (`-m "<tool>"` is refused as `-m <tool>` is; replayed 2026-10-31: 1 new refusal in
+    306204 commands, a grep pattern spelled as two adjacent quoted halves). A span with
+    whitespace is prose or several words and stays blanked; an unclosed quote blanks
+    the rest. So does a span glued to anything but a shell-word character
+    (_QUOTED_WORD_EDGE): `run(['<tool>','x'])` is interpreter code read through this
+    class, not a shell word (7 interpreter-code controls refused it)."""
+    out, i, n = [], 0, len(segment)
+    while i < n:
+        ch = segment[i]
+        if ch in "\"'":
+            j = segment.find(ch, i + 1)
+            if j < 0:
+                out.append(ch + " " * (n - i - 1))
+                break
+            body = segment[i + 1:j]
+            edges = (segment[i - 1] if i else " ", segment[j + 1] if j + 1 < n else " ")
+            if body and not any(c.isspace() for c in body) and all(_QUOTED_WORD_EDGE.match(e) for e in edges):
+                out.append(body)
+            else:
+                out.append(ch + " " * len(body) + ch)
+            i = j + 1
+            continue
+        out.append(ch)
+        i += 1
     text = "".join(out)
     # Drop leading VAR=value assignments so `FOO=1 prisma migrate reset` still reads
     # as a prisma invocation.
@@ -1143,6 +1163,124 @@ def shell_code_strings(command: str):
     return out
 
 
+# COMMAND SUBSTITUTION (card e81a72b7). `x=$(<tool> x)` passed: the leading-assignment
+# rule of _command_position_text drops the whole first word, the substitution with it.
+# `echo "$(<tool> x)"` passed too: inside double quotes the shell still runs `$(...)`
+# and backticks, but the blanking hid them. The body of every substitution outside
+# single quotes is a command, read again through find_hits like a nested shell string,
+# to the same depth. Escaped `\$(` and `$((` arithmetic are not substitutions. Heredoc
+# bodies are read the way the shell reads them (substitution_scope): an UNQUOTED
+# delimiter expands the body whatever the consumer is, a QUOTED one hands it over
+# verbatim, so only a shell running it as its script reads it again (the backticks of
+# a `python3 - <<'PY'` string or a markdown `<<'VEGE'` body ran nothing).
+def substitution_bodies(command: str, heredoc=False):
+    """The text of every `$(...)` and backtick substitution outside single quotes. In
+    an unquoted heredoc body (`heredoc=True`) quotes are plain characters."""
+    out, i, n, dq = [], 0, len(command), False
+    while i < n:
+        ch = command[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if heredoc and ch in "\"'":
+            i += 1
+            continue
+        if ch == "'" and not dq:
+            j = command.find("'", i + 1)
+            i = n if j < 0 else j + 1
+            continue
+        if ch == '"':
+            dq = not dq
+            i += 1
+            continue
+        if command.startswith("$(", i) and not command.startswith("$((", i):
+            depth, j, q = 1, i + 2, None
+            while j < n and depth:
+                c = command[j]
+                if q:
+                    if c == q:
+                        q = None
+                elif c == "\\":
+                    j += 1
+                elif c in "\"'":
+                    q = c
+                elif c == "(":
+                    depth += 1
+                elif c == ")":
+                    depth -= 1
+                j += 1
+            out.append(command[i + 2:j - 1] if depth == 0 else command[i + 2:])
+            i = j
+            continue
+        if ch == "`":
+            j = command.find("`", i + 1)
+            out.append(command[i + 1:] if j < 0 else command[i + 1:j])
+            i = n if j < 0 else j + 1
+            continue
+        i += 1
+    return out
+
+
+def _shell_runs_stdin(line: str) -> bool:
+    """A shell on the heredoc's opener line runs its stdin as the script: no script
+    operand before the `<<` or the end of its segment, or `-` / `-s` before one (`cat
+    <<'EOF' | bash` too). `bash x.sh - <<'EOF'` hands the body to x.sh as data, `-c` to
+    its code. An untokenisable segment counts as running it -- the safe side."""
+    for segment, _sep in _split_with_seps(line):
+        try:
+            words = _command_words(segment)
+        except ValueError:
+            return True
+        k0 = next((k for k, w in enumerate(words) if _SHELL_WORD.match(w)), -1)
+        if k0 < 0:
+            continue
+        args, k = words[k0 + 1:], 0
+        while k < len(args):
+            w = args[k]
+            if w.startswith("<<") or w == "-" or re.match(r"^-[A-Za-z]*s[A-Za-z]*$", w):
+                return True
+            if _SHELL_FLAG.match(w):
+                break
+            if _SHELL_REDIRECT_OP.match(w) or w in _SHELL_OPT_WITH_ARG:
+                k += 2
+                continue
+            if _SHELL_REDIRECT.match(w) or w[:1] in "-+":
+                k += 1
+                continue
+            break  # the first operand is the script
+        else:
+            return True
+    return False
+
+
+def substitution_scope(command: str):
+    """(text, heredoc) pairs for substitution_bodies: the command without its heredoc
+    bodies, every body with an unquoted delimiter in heredoc mode, and every quoted
+    body a shell runs as its script as shell text."""
+    lines = command.split("\n")
+    shell, out, i = [], [], 0
+    while i < len(lines):
+        line = lines[i]
+        shell.append(line)
+        m = _HEREDOC.search(line)
+        i += 1
+        if not m:
+            continue
+        body = []
+        while i < len(lines) and lines[i].strip() != m.group(2):
+            body.append(lines[i])
+            i += 1
+        quoted = bool(m.group(1)) or "\\" in m.group(0)
+        if not quoted:
+            out.append(("\n".join(body), True))
+        elif _shell_runs_stdin(line):  # `cat <<'EOF' | bash` runs it after the pipe
+            out.append(("\n".join(body), False))
+        if i < len(lines):
+            shell.append(lines[i])
+            i += 1
+    return [("\n".join(shell), False)] + out
+
+
 def _code_hits(lang: str, code: str):
     """The TOOL / CLOUD / GIT / SQL classes over one piece of interpreter code. A
     command name only counts when the code can start a process at all, and SQL only
@@ -1178,7 +1316,7 @@ def find_hits(command: str, cwd=None, missing=None, _depth=0):
     caller, never refused). Everything else stays pure."""
     hits = []
     if _depth < _MAX_SHELL_DEPTH:
-        for code in shell_code_strings(command):
+        for code in shell_code_strings(command) + [b for t, h in substitution_scope(command) for b in substitution_bodies(t, h)]:
             for why in find_hits(code, cwd, missing, _depth + 1):
                 if why not in hits:
                     hits.append(why)
