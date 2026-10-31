@@ -88,6 +88,15 @@ print("== the board check ==")
 r12 = row(12, "2026-10-30T21:00:00.000Z", "BUG")
 check("its own card is found", fp.already_on_board(r12, [fp.card_title(r12)]))
 check("FB#12 is not FB#123", not fp.already_on_board(r12, [fp.card_title(row(123, "x", "BUG"))]))
+# didi G1 (2026-10-31): the company name is in the title, and ids are sequential.
+for evil in ["FB#124", "x„FB#124”", "FB\u200b#124", "(FB#124)", "FB#12 FB#124 FB#125 FB#126 FB#127"]:
+    r123 = row(123, "x", "BUG")
+    r123["Organization"]["name"] = evil
+    filed = fp.card_title(r123)
+    check(f"company {evil!r} does not swallow submission 124", not fp.already_on_board(row(124, "y", "BUG"), [filed]))
+    check(f"company {evil!r}: the card is still found by its own marker", fp.already_on_board(row(123, "x", "BUG"), [filed]))
+check("the title company stays within COMPANY_MAX after the split",
+      len(fp.title_text("FB#1" * 30, fp.COMPANY_MAX)) <= fp.COMPANY_MAX)
 check("a card that mentions #12 without the FB marker is not it", not fp.already_on_board(r12, ["Valami más #12 kapcsán"]))
 check("a RENAMED card keeping its marker is still found (didi F2)",
       fp.already_on_board(r12, ["Mentés hiba (FB#12), átnevezve"]))

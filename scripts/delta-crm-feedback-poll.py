@@ -197,8 +197,17 @@ def type_label(row):
     return TYPE_HU.get(row.get("type")) or one_line(row.get("type"), 20)
 
 
+def title_text(value, limit):
+    """External text for the card TITLE: one line, and never a whole "FB#<id>" token. The board
+    check finds a card by that token anywhere in its title, and the ids are sequential, so a
+    company named "FB#124" would make submission 124 look already filed (didi G1, 2026-10-31).
+    The marker is split AFTER cleaning (an invisible mark between "FB" and "#" is removed there)
+    and BEFORE the cut (a cut only shortens, it cannot rejoin "FB #")."""
+    return _cut(one_line(value, MESSAGE_MAX).replace("FB#", "FB #"), limit)
+
+
 def card_title(row):
-    org = one_line((row.get("Organization") or {}).get("name"), COMPANY_MAX) or "?"
+    org = title_text((row.get("Organization") or {}).get("name"), COMPANY_MAX) or "?"
     return f"Tesztelői visszajelzés {marker(row)} {type_label(row)}: „{org}”"
 
 
