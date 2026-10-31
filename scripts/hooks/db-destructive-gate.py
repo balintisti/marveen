@@ -187,11 +187,19 @@ DB_CLIENTS = re.compile(r"(^|[\s;&|(])" + _DB_CLIENT_NAMES, re.I)
 # subshell mark. Anywhere, it would make every path argument ending in a client name one
 # (`git grep "<mark" -- backend/api/prisma`, the fleet replay's one false refusal: the
 # Delta-CRM repo has a `prisma` directory). Group 2 is the name, as in DB_CLIENTS.
+# A directory may hold `@` and `+` (`/opt/homebrew/opt/postgresql@16/bin/psql`, the
+# fleet's most common real path form, didi 50541 F-A2). A launcher option may take a
+# value (`timeout -s KILL 5`, `sudo -u postgres`, F-A1); the value has no `/`, so it
+# never swallows the client's path. Other prefixes (`ssh`, `find -exec`, `then`, `!`)
+# are not read: the gate is a guard against slips, not a sandbox (population 0 of
+# 217918 real commands, didi 50541).
+_PATH_DIR = r"[\w.~${}@+-]*/"
 _DB_CLIENT_PATH = re.compile(
     r"(?:^|[$<>]\()(\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|[^\s\"'])*\s+"
-    r"|(?:timeout|gtimeout|nice|nohup|env|command|exec|time|caffeinate)(?:\s+(?:-\S+|\d+[smhd]?))*\s+"
+    r"|(?:timeout|gtimeout|nice|nohup|env|command|exec|time|caffeinate|sudo|doas|xargs)"
+    r"(?:\s+(?:-\S+(?:\s+[^\s/-][^\s/]*)?|\d+(?:\.\d+)?[smhd]?))*\s+"
     r"|(?:\$\(|[(`{])\s*)*)"
-    r"(?:[\w.~${}-]*/)+" + _DB_CLIENT_NAMES, re.I)
+    r"(?:" + _PATH_DIR + r")+" + _DB_CLIENT_NAMES, re.I)
 
 
 def _db_client(text: str):
@@ -598,8 +606,10 @@ def strip_heredoc_bodies(command: str) -> str:
             # The opener the way _command_words reads a command (0f220f3f): by path too
             # (`/bin/bash <<EOF`), after a subshell mark (`(bash <<EOF`), and glued to the
             # redirect (`bash<<EOF`, didi 50344, G2); each of those dropped an executed body.
-            executes = re.search(r"(^|[\s;&|(`])(?:[\w.~-]*/)*(bash|sh|zsh|dash|ksh|psql|sqlite3|mysql|%s)([\s;&|<]|$)"
-                                 % _INTERPRETER, line)
+            # The directory as _DB_CLIENT_PATH reads it (`$HOME/bin/psql`, `postgresql@16`,
+            # didi 50541 F-A3).
+            executes = re.search(r"(^|[\s;&|(`])(?:%s)*(bash|sh|zsh|dash|ksh|psql|sqlite3|mysql|%s)([\s;&|<]|$)"
+                                 % (_PATH_DIR, _INTERPRETER), line)
             # Each kept body line is PREFIXED with the opener's client, so the SQL class
             # (which needs client AND statement in one segment) still sees them together
             # after the newline/semicolon split. Joining the body onto the opener line
@@ -893,7 +903,8 @@ def _split_with_seps(command: str):
 # longer be the driver import. A `$(...)` or a backtick INSIDE double quotes is not
 # split: that boundary is card e81a72b7's.
 _SUBSHELL_MARKS = ("(", ")", "`", "$")
-_GLUED_REDIRECT = re.compile(r"^([^<>]+?)([<>].*)$", re.S)
+# `&>` glued the same way (`bash&>/dev/null -c ..`, didi 50541 F-A4).
+_GLUED_REDIRECT = re.compile(r"^([^<>&]+?)(&?[<>].*)$", re.S)
 _REDIRECT_PIECE = re.compile(r"\d*[<>]+&?[^<>]*", re.S)
 
 

@@ -258,3 +258,53 @@ describe('db-destructive-gate: subshellhez es helyettesiteshez tapado shell-szo 
     expect(verdict(cmd)).toBe('deny')
   })
 })
+
+// didi 50541 (0f220f3f r7): az uttal hivott kliens tovabbi valodi alakjai, es a teszt-res,
+// amin 40 mutansbol 18 tulelte a fenti teszteket (minden indito-szo, opcio-ertek, nyito).
+describe('db-destructive-gate: uttal hivott kliens, didi 50541 (0f220f3f r8)', () => {
+  const DROP = '-c "DROP TABLE x"'
+  it.each([
+    ['@ az utban (F-A2)', `/opt/homebrew/opt/postgresql@16/bin/psql ${DROP}`],
+    ['+ az utban', `/opt/pg+x/bin/psql ${DROP}`],
+    ['kotojel az utban', `/opt/my-pg/bin/psql ${DROP}`],
+    ['$HOME ut heredoc-kal (F-A3)', "$HOME/bin/psql <<'EOF'\nDROP TABLE x;\nEOF"],
+    ['${PG_BIN} ut heredoc-kal', "${PG_BIN}/psql <<'EOF'\nDROP TABLE x;\nEOF"],
+    ['@ ut heredoc-kal', "/opt/homebrew/opt/postgresql@15/bin/psql <<'EOF'\nDROP TABLE x;\nEOF"],
+    ['sudo (F-A1)', `sudo /opt/homebrew/bin/psql ${DROP}`],
+    ['sudo -u erteke', `sudo -u postgres /opt/homebrew/bin/psql ${DROP}`],
+    ['timeout -s KILL 5', `timeout -s KILL 5 /opt/homebrew/bin/psql ${DROP}`],
+    ['timeout 5s', `timeout 5s /opt/homebrew/bin/psql ${DROP}`],
+    ['nice -n 10', `nice -n 10 /opt/homebrew/bin/psql ${DROP}`],
+    ['exec -a x', `exec -a x /opt/homebrew/bin/psql ${DROP}`],
+    ['xargs csoben', `echo x | xargs /opt/homebrew/bin/psql ${DROP}`],
+    ['egyszeres idezojeles env-ertek', `PGOPTIONS='-c a=b' /opt/homebrew/bin/psql ${DROP}`],
+    ['>( nyito', `tee >(/opt/homebrew/bin/psql ${DROP}) < f`],
+    ['{ nyito a szegmens kozepen', `true; { /opt/homebrew/bin/psql ${DROP}; }`],
+    ['ragasztott bash&> (F-A4)', 'bash&>/dev/null -c "dropdb x"'],
+  ])('%s: TILTVA', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('deny')
+  })
+
+  // Minden indito-szo kulon: egy kihagyott szo eddig zold tesztekkel ment at (PC3-PC10).
+  it.each(['timeout 60', 'gtimeout 60', 'nice', 'nohup', 'env', 'command', 'exec', 'time', 'caffeinate', 'sudo', 'doas', 'xargs'])(
+    'indito %s + uttal hivott psql: TILTVA', (launcher) => {
+      expect(verdict(`${launcher} /opt/homebrew/bin/psql ${DROP}`)).toBe('deny')
+    })
+
+  // S3: az `&>` nem elvalaszto a tobbi osztalynak sem (a (?!>) a _SEG-ben).
+  it.each([
+    ['git &>/dev/null push --force', 'git &>/dev/null push --force origin main'],
+    ['gcloud &>/dev/null torles', 'gcloud &>/dev/null run services delete svc'],
+  ])('%s: TILTVA', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('deny')
+  })
+
+  it.each([
+    ['az @ ut mint argumentum', 'ls /opt/homebrew/opt/postgresql@16/bin/psql'],
+    ['@ ut artalmatlan lekerdezessel', '/opt/homebrew/opt/postgresql@16/bin/psql -c "select 1"'],
+    ['sudo -u utan mas parancs psql-utvonallal', 'sudo -u postgres ls /var/lib/psql'],
+    ['ragasztott bash&> szkripttel', 'bash&>/dev/null scripts/x.sh'],
+  ])('KONTROLL: %s ATMEGY', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('none')
+  })
+})
