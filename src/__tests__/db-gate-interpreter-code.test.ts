@@ -161,6 +161,46 @@ describe('db-destructive-gate: a vegrehajtott kod minden indito- es stdin-alakba
     expect(verdict(`echo "${run}" | python3 /tmp/x.py`)).toBe('none')
   })
 
+  // K5 (didi, r2): egy opcio ERTEKE nem a szkript. r2-ben `-W ignore` `ignore`-ja szkriptnek
+  // latszott, es a heredoc-kod atment (r1 meg tiltotta).
+  const pyBody = "\nimport subprocess\nsubprocess.run(['dropdb','x'])\nPY"
+  it.each([
+    ['python3 -W ignore -', `python3 -W ignore - <<'PY'${pyBody}`],
+    ['python3 -W ignore (- nelkul)', `python3 -W ignore <<'PY'${pyBody}`],
+    ['python3 -X utf8', `python3 -X utf8 <<'PY'${pyBody}`],
+    ['python3 -uW ignore (osszevont)', `python3 -uW ignore <<'PY'${pyBody}`],
+    ['node -r x', "node -r ./x.js <<'JS'\nrequire('child_process').execSync('dropdb x')\nJS"],
+    ['node --require x', "node --require ./x.js <<'JS'\nrequire('child_process').execSync('dropdb x')\nJS"],
+    ['ismeretlen hosszu opcio + szo: eldonthetetlen, kod', "node --frobnicate x.js <<'JS'\nrequire('child_process').execSync('dropdb x')\nJS"],
+    ['ruby -r json', "ruby -r json <<'RB'\nsystem('dropdb', 'x')\nRB"],
+    ['perl -I lib', "perl -I lib <<'PL'\nsystem('dropdb', 'x');\nPL"],
+    ['- a szkript utan is', `python3 x.py - <<'PY'${pyBody}`],
+  ])('K5: %s heredoc-kodja TILTVA', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('deny')
+  })
+
+  it.each([
+    ['python3 -m modul (a modul olvassa a stdint)', `python3 -m json.tool <<'PY'${pyBody}`],
+    ['python3 -W ignore x.py (az ertek utan a szkript)', `python3 -W ignore x.py <<'PY'${pyBody}`],
+    ['node --require=x x.js (osszetapasztott ertek)', "node --require=./x.js x.js <<'JS'\nrequire('child_process').execSync('dropdb x')\nJS"],
+    ['python3 -- x.py', `python3 -- x.py <<'PY'${pyBody}`],
+    ['node --require x x.js (az ertekes hosszu opcio utan a szkript)', "node --require ./x.js x.js <<'JS'\nrequire('child_process').execSync('dropdb x')\nJS"],
+    ['python3 -Wignore x.py (osszetapasztott ertek)', `python3 -Wignore x.py <<'PY'${pyBody}`],
+    ['python3 -mjson.tool (osszetapasztott modul)', `python3 -mjson.tool <<'PY'${pyBody}`],
+    ['node --eval (a kod az argumentum)', "node --eval '1' <<'JS'\nrequire('child_process').execSync('dropdb x')\nJS"],
+  ])('K5 KONTROLL: %s: a heredoc ADAT, ATMEGY', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('none')
+  })
+
+  it('L1: osszetapasztott here-string (<<<"...") TILTVA', () => {
+    expect(verdict(`python3 <<<"${run}"`)).toBe('deny')
+  })
+
+  it('L2: tokenizalhatatlan nyito (parositatlan idezojel a << elott) a biztos oldal: kod, TILTVA', () => {
+    // A torzs aposztrofja (it's) zarja a nyito idezojelet: igy CSAK a nyito-ag latja a kodot.
+    expect(verdict(`python3 - 'a <<PY\n# it's\nimport subprocess\nsubprocess.run(["dropdb","x"])\nPY`)).toBe('deny')
+  })
+
   it('KONTROLL: timeout elotti artalmatlan -c kod ATMEGY', () => {
     expect(verdict(`timeout 60 python3 -c "import subprocess; subprocess.run(['git','status'])"`)).toBe('none')
   })

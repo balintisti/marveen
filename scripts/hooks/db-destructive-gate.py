@@ -849,15 +849,53 @@ def _interpreter_at(words):
     return next((k for k, w in enumerate(words) if _INTERPRETER_WORD.match(w)), -1)
 
 
-def _reads_code_from_stdin(words) -> bool:
+# Per interpreter: the short options whose code is their argument, the ones that run a
+# module instead of stdin, and the ones that take a VALUE (`-W ignore`, `-r x`, `-I lib`).
+# A value is not the script: reading `ignore` as one let `python3 -W ignore - <<PY` code
+# pass (didi, 94d86b92 r2, K5). Taking an unsure option as value-taking errs to the code side.
+_STDIN_CODE_LETTERS = {"python": "c", "node": "ep", "ruby": "e", "perl": "eE"}
+_STDIN_MODULE_LETTERS = {"python": "m"}
+_STDIN_VALUE_LETTERS = {"python": "WXQ", "node": "rC", "ruby": "rICEFT", "perl": "IMm"}
+_STDIN_CODE_LONG = ("--eval", "--print")
+_STDIN_VALUE_LONG = ("--require", "--import", "--loader", "--experimental-loader", "--conditions",
+                     "--input-type", "--env-file", "--title", "--inspect-port", "--disable-warning",
+                     "--check-hash-based-pycs", "--encoding", "--external-encoding", "--internal-encoding")
+
+
+def _reads_code_from_stdin(words, lang="python") -> bool:
     """The interpreter runs its STDIN as code: no script argument, or `-`. With a script
     (`python3 x.py <<EOF`) the heredoc is that script's DATA (didi 50294, N7), and with
-    -c/-e the code is the argument."""
-    for w in words:
-        if w == "-":
-            return True
-        if _CODE_FLAG.match(w) or not w.startswith("-"):
-            return False
+    -c/-e the code is the argument. An unknown long option followed by a word cannot be
+    told apart from a script (`--foo x.py` or `--foo value`): that counts as code."""
+    if "-" in words:
+        return True
+    k = 0
+    while k < len(words):
+        w = words[k]
+        if w == "--":
+            return k + 1 >= len(words)
+        if w.startswith("--"):
+            if w in _STDIN_CODE_LONG:
+                return False
+            if "=" not in w and k + 1 < len(words) and not words[k + 1].startswith("-"):
+                if w in _STDIN_VALUE_LONG:
+                    k += 2
+                    continue
+                return True
+            k += 1
+            continue
+        if w.startswith("-") and len(w) > 1:
+            letters = w[1:]
+            for j, ch in enumerate(letters):
+                if ch in _STDIN_CODE_LETTERS.get(lang, "") or ch in _STDIN_MODULE_LETTERS.get(lang, ""):
+                    return False
+                if ch in _STDIN_VALUE_LETTERS.get(lang, ""):
+                    if j == len(letters) - 1:
+                        k += 1  # the value is the next word
+                    break  # attached value (`-Wignore`, `-rjson`) ends the cluster
+            k += 1
+            continue
+        return False  # the first operand is the script
     return True
 
 
@@ -884,7 +922,7 @@ def interpreter_code_blocks(command: str):
             # An untokenisable opener counts as code -- the safe side.
             head = re.split(r"<<|[;&|]", lines[i0][o.end(2):], maxsplit=1)[0]
             try:
-                as_code = _reads_code_from_stdin(shlex.split(head, posix=True))
+                as_code = _reads_code_from_stdin(shlex.split(head, posix=True), _code_lang(o.group(2)))
             except ValueError:
                 as_code = True
             if as_code:
@@ -914,7 +952,7 @@ def interpreter_code_blocks(command: str):
                 blocks.append((lang, word[3:]))
                 break
         # `echo "code" | python3`: the stage before the pipe prints the program.
-        if n and stages[n - 1][1] == "|" and _reads_code_from_stdin(args):
+        if n and stages[n - 1][1] == "|" and _reads_code_from_stdin(args, lang):
             try:
                 prev = shlex.split(stages[n - 1][0], comments=False, posix=True)
             except ValueError:
