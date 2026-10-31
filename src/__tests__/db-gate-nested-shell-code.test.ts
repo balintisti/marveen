@@ -63,14 +63,22 @@ describe('db-destructive-gate: teljes uttal hivott DB-kliens (0f220f3f, J1)', ()
     ['relativ ./ ut', './bin/psql -c "DROP TABLE x"'],
     ['valtozo konyvtar', '$PG/psql -c "DROP TABLE x"'],
     ['~/ ut, sqlite3', '~/pg/bin/sqlite3 a.db "DROP TABLE x"'],
+    ['kornyezeti valtozo utan', 'PGPASSWORD="a b" /opt/homebrew/bin/psql -c "DROP TABLE x"'],
+    ['indito utan', 'timeout 60 /opt/homebrew/bin/psql -c "DROP TABLE x"'],
+    ['helyettesitesben', 'x=$(/opt/homebrew/bin/psql -c "DROP TABLE x")'],
+    ['&& utan', 'cd /tmp && /opt/homebrew/bin/psql -c "DROP TABLE x"'],
   ])('%s: TILTVA', (_name, cmd) => {
     expect(verdict(cmd)).toBe('deny')
   })
 
+  // Az utas alak CSAK parancs-pozicioban kliens: a Delta-CRM-ben van `prisma` konyvtar,
+  // es a flotta-visszajatszas egyetlen hamis tiltasa egy ilyen utvonal-argumentum volt.
   it.each([
     ['artalmatlan lekerdezes teljes uttal', '/opt/homebrew/bin/psql -h localhost -c "select 1"'],
     ['egy psql.md dokumentum', 'cat /usr/bin/psql.md'],
     ['egy psqlx nevu fajl', 'ls /opt/homebrew/bin/psqlx'],
+    ['prisma konyvtar argumentumkent (a visszajatszas esete)', 'git grep -n -E "data-color|<mark" "${R}" -- backend/api/src backend/api/prisma'],
+    ['SQL-szo keresese a prisma konyvtarban', 'grep -rn "DROP TABLE" backend/api/prisma'],
   ])('KONTROLL: %s ATMEGY', (_name, cmd) => {
     expect(verdict(cmd)).toBe('none')
   })
@@ -87,6 +95,7 @@ describe('db-destructive-gate: az atiranyitas & jele nem elvalaszto (0f220f3f, J
     ['bash 2>&1 -c', 'bash 2>&1 -c "dropdb x"'],
     ['bash 2>&1 <<<', 'bash 2>&1 <<<"dropdb x"'],
     ['bash &>/dev/null -c', 'bash &>/dev/null -c "dropdb x"'],
+    ['bash &> /dev/null -c (kulon szo)', 'bash &> /dev/null -c "dropdb x"'],
     ['bash 2>&1 -c ... | tail', 'bash 2>&1 -c "dropdb x" | tail -3'],
     ['git 2>&1 push --force', 'git 2>&1 push --force origin main'],
   ])('%s: TILTVA', (_name, cmd) => {

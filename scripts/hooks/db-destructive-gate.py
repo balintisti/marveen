@@ -176,12 +176,27 @@ SQL_PATTERNS = [
 
 # Anything that can hand SQL to a server. `prisma`/`supabase` are here as well as in
 # the tool list: `prisma db execute --stdin` is a client, not just a CLI. A redirect may
-# touch the name (`psql<<<"..."`, didi 50372 H1): that is still the client. And the name
-# may come with a directory (`/opt/homebrew/bin/psql`, `$PG/psql`, didi 50405 J1): the
-# fleet does call psql that way, and the shell runs the same client.
-DB_CLIENTS = re.compile(
-    r"(^|[\s;&|(])(?:[\w.~${}-]*/)*(psql|sqlite3|mysql|mariadb|mongo|mongosh|cockroach|pg_restore|pgcli|"
-    r"prisma|supabase|npx\s+prisma|dbmate|flyway|liquibase)([\s;&|)<>]|$)", re.I)
+# touch the name (`psql<<<"..."`, didi 50372 H1): that is still the client.
+_DB_CLIENT_NAMES = (r"(psql|sqlite3|mysql|mariadb|mongo|mongosh|cockroach|pg_restore|pgcli|"
+                    r"prisma|supabase|npx\s+prisma|dbmate|flyway|liquibase)([\s;&|)<>]|$)")
+DB_CLIENTS = re.compile(r"(^|[\s;&|(])" + _DB_CLIENT_NAMES, re.I)
+# The name may come with a directory (`/opt/homebrew/bin/psql`, `$PG/psql`, didi 50405
+# J1): the fleet calls psql that way, and the shell runs the same client. That form counts
+# ONLY in COMMAND POSITION -- the segment start, after env assignments, a launcher or a
+# subshell mark. Anywhere, it would make every path argument ending in a client name one
+# (`git grep "<mark" -- backend/api/prisma`, the fleet replay's one false refusal: the
+# Delta-CRM repo has a `prisma` directory). Group 2 is the name, as in DB_CLIENTS.
+_DB_CLIENT_PATH = re.compile(
+    r"^(\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:(?:\$\(|`)\s*|(?:\"[^\"]*\"|'[^']*'|[^\s\"'])*\s+)"
+    r"|(?:timeout|gtimeout|nice|nohup|env|command|exec|time|caffeinate)(?:\s+(?:-\S+|\d+[smhd]?))*\s+"
+    r"|(?:\$\(|[(`{])\s*)*)"
+    r"(?:[\w.~${}-]*/)+" + _DB_CLIENT_NAMES, re.I)
+
+
+def _db_client(text: str):
+    """The DB client of a segment, bare anywhere or by path in command position; match
+    with the name in group 2, or None."""
+    return DB_CLIENTS.search(text) or _DB_CLIENT_PATH.search(text)
 
 # === CLOUD patterns: the third class, and it is here because a DENY LIST CANNOT
 # EXPRESS IT (card 9e3f2f5c, group G3) =========================================
@@ -682,7 +697,7 @@ def _file_refs(command: str, cwd, script_dir):
     FILE's directory, everything else against the cwd -- as psql does."""
     refs = []
     for segment in _split_outside_quotes(command):
-        client = DB_CLIENTS.search(_command_position_text(segment))
+        client = _db_client(_command_position_text(segment))
         if not client:
             continue
         name = client.group(2)
@@ -693,7 +708,7 @@ def _file_refs(command: str, cwd, script_dir):
             else:
                 refs.append((name, m.group(1) or m.group(2) or "", cwd))
     for m in _CAT_PIPE.finditer(command):
-        client = DB_CLIENTS.search(" " + m.group(2))
+        client = _db_client(" " + m.group(2))
         if client:
             for arg in m.group(1).split():
                 if not arg.startswith("-"):
@@ -1192,7 +1207,7 @@ def find_hits(command: str, cwd=None, missing=None, _depth=0):
                 if re.search(pat, cmdpos, re.I) and why not in hits:
                     hits.append(why)
     for segment in _split_outside_quotes(command):
-        if DB_CLIENTS.search(segment):
+        if _db_client(segment):
             for pat, why in SQL_PATTERNS:
                 if re.search(pat, segment, re.I) and why not in hits:
                     hits.append(why)
