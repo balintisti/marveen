@@ -90,6 +90,7 @@ measuring what you think. Both are pinned as controls in
 import json
 import os
 import re
+import shlex
 import sys
 import time
 
@@ -155,6 +156,12 @@ TOOL_PATTERNS = [
     # (measured: find_hits -> [], card 251b5785). The one shape that stays allowed is
     # the narrow e2e carve-out further down (`e2e_drop_allowed`).
     (r"(?<![\w./-])dropdb(?![\w-])", "dropdb -- deletes a whole database"),
+    # The same tool by PATH: `/opt/homebrew/bin/dropdb x` passed, because the lookbehind
+    # above keeps `/` out (card 0f220f3f, didi measured it). Any word whose LAST path part
+    # is exactly `dropdb` (`/opt/x/`, `./`, `~/`, and `bin/dropdb`, which the shell runs
+    # as a path too); the bare name is refused as any word already, so `cat docs/dropdb`
+    # is refused the same way `cat dropdb` is. `docs/dropdb.md`, `notes/dropdb-x` are not it.
+    (r"(?<![\w.~/-])(?:[\w.~-]*/)+dropdb(?![\w./-])", "dropdb -- deletes a whole database"),
 ]
 
 SQL_PATTERNS = [
@@ -168,10 +175,59 @@ SQL_PATTERNS = [
 ]
 
 # Anything that can hand SQL to a server. `prisma`/`supabase` are here as well as in
-# the tool list: `prisma db execute --stdin` is a client, not just a CLI.
-DB_CLIENTS = re.compile(
-    r"(^|[\s;&|(])(psql|sqlite3|mysql|mariadb|mongo|mongosh|cockroach|pg_restore|pgcli|"
-    r"prisma|supabase|npx\s+prisma|dbmate|flyway|liquibase)([\s;&|)]|$)", re.I)
+# the tool list: `prisma db execute --stdin` is a client, not just a CLI. A redirect may
+# touch the name (`psql<<<"..."`, didi 50372 H1): that is still the client.
+_DB_CLIENT_NAMES = (r"(psql|sqlite3|mysql|mariadb|mongo|mongosh|cockroach|pg_restore|pgcli|"
+                    r"prisma|supabase|npx\s+prisma|dbmate|flyway|liquibase)([\s;&|)<>]|$)")
+DB_CLIENTS = re.compile(r"(^|[\s;&|(])" + _DB_CLIENT_NAMES, re.I)
+# The name may come with a directory (`/opt/homebrew/bin/psql`, `$PG/psql`, didi 50405
+# J1): the fleet calls psql that way, and the shell runs the same client. That form counts
+# ONLY in COMMAND POSITION -- the segment start or a `$(` / `<(` / `>(` anywhere (the bare
+# name counts after those too: `echo $(psql ..)`), then env assignments, a launcher or a
+# subshell mark. Anywhere, it would make every path argument ending in a client name one
+# (`git grep "<mark" -- backend/api/prisma`, the fleet replay's one false refusal: the
+# Delta-CRM repo has a `prisma` directory). Group 2 is the name, as in DB_CLIENTS.
+# A directory may hold `@` and `+` (`/opt/homebrew/opt/postgresql@16/bin/psql`, the
+# fleet's most common real path form, didi 50541 F-A2). A launcher option may take a
+# value (`timeout -s KILL 5`, `sudo -u postgres`, F-A1); the value has no `/`, so it
+# never swallows the client's path. Other prefixes (`ssh`, `find -exec`, `then`, `!`)
+# are not read: the gate is a guard against slips, not a sandbox (population 0 of
+# 217918 real commands, didi 50541).
+_PATH_DIR = r"[\w.~${}@+-]*/"
+_DB_CLIENT_PATH = re.compile(
+    r"(?:^|[$<>]\()(\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|[^\s\"'])*\s+"
+    r"|(?:timeout|gtimeout|nice|nohup|env|command|exec|time|caffeinate|sudo|doas|xargs)"
+    r"(?:\s+(?:-\S+(?:\s+[^\s/-][^\s/]*)?|\d+(?:\.\d+)?[smhd]?))*\s+"
+    r"|(?:\$\(|[(`{])\s*)*)"
+    r"(?:" + _PATH_DIR + r")+" + _DB_CLIENT_NAMES, re.I)
+
+
+def _db_client(text: str):
+    """The DB client of a segment, bare anywhere or by path in command position; match
+    with the name in group 2, or None."""
+    return DB_CLIENTS.search(text) or _DB_CLIENT_PATH.search(text)
+
+
+# A client held in a variable (`P=/opt/homebrew/opt/postgresql@15/bin/psql; $P -c "DROP
+# DATABASE x"`, didi 50541): the shell runs the client, the text shows only `$P`. 3 of
+# 306204 real commands had this shape, all on the shared e2e database, and all passed
+# (card 485228fd). The use is replaced by the value, as the shell expands it, but only
+# for a value that IS a client (bare or by path) and is assigned in the same command: a
+# value from the environment or a file is not in the text the gate sees. `dropdb` is in
+# the value list too: `P=/opt/homebrew/bin/dropdb; $P crm_x` passed (didi 50616, F-C1);
+# the e2e carve-out reads the unexpanded command, and a `;` already keeps it out.
+_VAR_CLIENT = re.compile(
+    r"(?:^|[\s;&|(`])([A-Za-z_][A-Za-z0-9_]*)=([\"']?)((?:%s)*(?:psql|sqlite3|mysql|mariadb|mongo|"
+    r"mongosh|cockroach|pg_restore|pgcli|prisma|supabase|dbmate|flyway|liquibase|dropdb))\2(?=[\s;&|)]|$)"
+    % _PATH_DIR, re.I)
+
+
+def expand_client_vars(command: str) -> str:
+    """`command` with each `$NAME` / `${NAME}` of a variable assigned a DB client in it
+    replaced by that client."""
+    for name, _quote, value in {m.groups() for m in _VAR_CLIENT.finditer(command)}:
+        command = re.sub(r"\$(?:\{%s\}|%s(?![A-Za-z0-9_]))" % (name, name), lambda _m: value, command)
+    return command
 
 # === CLOUD patterns: the third class, and it is here because a DENY LIST CANNOT
 # EXPRESS IT (card 9e3f2f5c, group G3) =========================================
@@ -455,7 +511,18 @@ GIT_PUSH_PATTERNS = [
 # The fix is not to stop splitting (joining does not help: the body's own `;` re-splits
 # it). Each executed body line CARRIES its opener's client instead -- see
 # strip_heredoc_bodies.
-_SEG = re.compile(r"(?:\|\||&&|[;\n|&])")
+#
+# The `&` of a redirect is not a separator (didi 50405 J2): `2>&1`, `1>&2`, `<&0` and
+# `&>file` are one word to the shell, but a split on every `&` cut `psql 2>&1 -c ".."`
+# into `psql 2>` and `1 -c ".."`, the client and its statement in two segments, and the
+# statement was never checked (the trailing `-c ".." 2>&1` was). Not splitting there can
+# only join segments, never separate them -- more checks, never fewer.
+_SEG = re.compile(r"(?:\|\||&&|[;\n|]|(?<![<>])&(?!>))")
+
+
+def _redirect_amp(command: str, i: int) -> bool:
+    """Is the `&` at `command[i]` part of a redirect (`>&`, `<&`, `&>`)? See _SEG."""
+    return (i > 0 and command[i - 1] in "<>") or command.startswith("&>", i)
 
 
 def _split_outside_quotes(command: str):
@@ -488,6 +555,8 @@ def _split_outside_quotes(command: str):
             cur = []
             i += 2
             continue
+        elif ch == "&" and _redirect_amp(command, i):
+            cur.append(ch)
         elif ch in ";\n|&":
             out.append("".join(cur))
             cur = []
@@ -500,23 +569,45 @@ _LINE_CONT = re.compile(r"\\\n")
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
+# What may touch a quoted span that is unquoted as part of a shell word: a word character,
+# another quote, whitespace, a command separator or a redirect (`"psql"<<<".."`, didi 50542
+# F-B1). Not a bracket, comma or paren.
+_QUOTED_WORD_EDGE = re.compile(r"[\w./~+:=@%\-\s;&|`\"'<>]")
+
+
 def _command_position_text(segment: str) -> str:
     """The part of a segment that a shell would treat as command + arguments,
     with quoted strings blanked out so their CONTENTS cannot look like a command.
 
-    Quotes are replaced by spaces of the same length rather than removed, so the
-    word positions of everything after them stay put."""
-    out, quote = [], None
-    for ch in segment:
-        if quote:
-            out.append(" " if ch != quote else ch)
-            if ch == quote:
-                quote = None
-        elif ch in "\"'":
-            quote = ch
-            out.append(ch)
-        else:
-            out.append(ch)
+    A quoted span WITHOUT whitespace is one word to the shell, the same word as
+    unquoted, so its quotes are removed instead (card e81a72b7): `"<tool>" x`,
+    `d"ropdb"` and `'prisma' migrate reset` ran the tool while the blanking hid it.
+    What it costs: a one-word quoted argument counts like the bare word already does
+    (`-m "<tool>"` is refused as `-m <tool>` is; replayed 2026-10-31: 1 new refusal in
+    306204 commands, a grep pattern spelled as two adjacent quoted halves). A span with
+    whitespace is prose or several words and stays blanked; an unclosed quote blanks
+    the rest. So does a span glued to anything but a shell-word character
+    (_QUOTED_WORD_EDGE): `run(['<tool>','x'])` is interpreter code read through this
+    class, not a shell word (7 interpreter-code controls refused it)."""
+    out, i, n = [], 0, len(segment)
+    while i < n:
+        ch = segment[i]
+        if ch in "\"'":
+            j = segment.find(ch, i + 1)
+            if j < 0:
+                out.append(ch + " " * (n - i - 1))
+                break
+            body = segment[i + 1:j]
+            edges = (segment[i - 1] if i else " ", segment[j + 1] if j + 1 < n else " ")
+            # An EMPTY span too: `""psql`, `p""sql` are psql to the shell (didi 50590 F-B3).
+            if not any(c.isspace() for c in body) and all(_QUOTED_WORD_EDGE.match(e) for e in edges):
+                out.append(body)
+            else:
+                out.append(ch + " " * len(body) + ch)
+            i = j + 1
+            continue
+        out.append(ch)
+        i += 1
     text = "".join(out)
     # Drop leading VAR=value assignments so `FOO=1 prisma migrate reset` still reads
     # as a prisma invocation.
@@ -526,7 +617,13 @@ def _command_position_text(segment: str) -> str:
     return " ".join(parts)
 
 
-_HEREDOC = re.compile(r"<<-?\s*([\"\']?)([A-Za-z_][A-Za-z0-9_]*)\1")
+# `<<\\PY` (a backslash-quoted delimiter) is the same quoted heredoc as `<<'PY'` to a
+# shell; without it the body ran unrecognised (didi 50294, K2).
+_HEREDOC = re.compile(r"<<-?\s*(?:\\(?=[A-Za-z_]))?([\"\']?)([A-Za-z_][A-Za-z0-9_]*)\1")
+# The interpreters whose heredoc body or `-c`/`-e` argument is CODE, not shell. The
+# list is the executor side of strip_heredoc_bodies AND the trigger of the INTERPRETER
+# CODE class below, so one name cannot be in one and missing from the other.
+_INTERPRETER = r"python(?:3(?:\.\d+)?)?|node|tsx|deno|bun|perl|ruby"
 
 
 def strip_heredoc_bodies(command: str) -> str:
@@ -550,7 +647,17 @@ def strip_heredoc_bodies(command: str) -> str:
         m = _HEREDOC.search(line)
         if m:
             terminator = m.group(2)
-            executes = re.search(r"(^|[\s;&|])(bash|sh|zsh|psql|sqlite3|mysql|python3?|node)([\s;&|]|$)", line)
+            # The opener the way _command_words reads a command (0f220f3f): by path too
+            # (`/bin/bash <<EOF`), after a subshell mark (`(bash <<EOF`), and glued to the
+            # redirect (`bash<<EOF`, didi 50344, G2); each of those dropped an executed body.
+            # The directory as _DB_CLIENT_PATH reads it (`$HOME/bin/psql`, `postgresql@16`,
+            # didi 50541 F-A3).
+            # A quoted name runs the same client (`"psql" <<'EOF'`, didi 50542 F-B1), and so
+            # does a partly quoted one (`p"sql" <<'EOF'`, 50590 F-B3): the line is read
+            # also the way _command_position_text joins a shell word.
+            opener = (r"(^|[\s;&|(`])[\"']?(?:%s)*(bash|sh|zsh|dash|ksh|psql|sqlite3|mysql|%s)[\"']?([\s;&|<]|$)"
+                      % (_PATH_DIR, _INTERPRETER))
+            executes = re.search(opener, line) or re.search(opener, _command_position_text(line))
             # Each kept body line is PREFIXED with the opener's client, so the SQL class
             # (which needs client AND statement in one segment) still sees them together
             # after the newline/semicolon split. Joining the body onto the opener line
@@ -649,7 +756,7 @@ def _file_refs(command: str, cwd, script_dir):
     FILE's directory, everything else against the cwd -- as psql does."""
     refs = []
     for segment in _split_outside_quotes(command):
-        client = DB_CLIENTS.search(_command_position_text(segment))
+        client = _db_client(_command_position_text(segment))
         if not client:
             continue
         name = client.group(2)
@@ -660,7 +767,7 @@ def _file_refs(command: str, cwd, script_dir):
             else:
                 refs.append((name, m.group(1) or m.group(2) or "", cwd))
     for m in _CAT_PIPE.finditer(command):
-        client = DB_CLIENTS.search(" " + m.group(2))
+        client = _db_client(" " + m.group(2))
         if client:
             for arg in m.group(1).split():
                 if not arg.startswith("-"):
@@ -706,10 +813,546 @@ def expand_file_args(command: str, cwd=None):
     return extra, problems, skipped
 
 
-def find_hits(command: str, cwd=None, missing=None):
+# === INTERPRETER CODE: the fifth class, because an executed body is CODE, not shell
+# (card 94d86b92) ===============================================================
+#
+# marveen's measurement, 2026-10-31, on the live tree a8cac9e26 (store/gate-probes/):
+#
+#     python3 - <<'PY' ... subprocess.run(['dropdb', '--if-exists', n]) ... PY  -> ALLOW
+#     dropdb --if-exists <same name>                                         -> DENY
+#
+# and it was not a probe only: 54 idle test databases were dropped that way the same
+# night, and the gate never spoke. The mechanism is two correct rules composed again.
+# strip_heredoc_bodies KEEPS a python body and prefixes every line with `python3`, so
+# the body is checked -- but it is checked AS SHELL, and shell rules blank quoted text.
+# In code the command name IS a quoted string (`'dropdb'`), and `['psql', '-c', sql]`
+# puts a quote, not a space, before the client the SQL class looks for. Every name the
+# gate knows arrives in exactly the form the shell rules are built to ignore.
+#
+# So an executed interpreter body (heredoc, or the argument of `python3 -c` / `node -e`)
+# gets a second reading as code:
+#   1. adjacent string literals are FOLDED first: `'drop' + 'db'` and `'drop' 'db'`
+#      become `'dropdb'`. That is the second shape marveen used (comment on the card) --
+#      a gate that one `+` switches off is not a gate.
+#   2. quotes and list/call punctuation become spaces, so `['npx', 'prisma', 'migrate',
+#      'reset']` reads `npx prisma migrate reset`, and the TOOL, CLOUD and GIT classes
+#      run over each line exactly as they run over a shell segment.
+#   3. the SQL class needs client AND statement in one place, as everywhere else -- but
+#      in code that place is the whole BODY, not a line: the statement is usually a
+#      variable a few lines above the call. The client is either a CLI reached through a
+#      process sink, or a driver the code imports in its own language (psycopg,
+#      asyncpg, sqlalchemy, `pg`, `@prisma/client`, ...).
+#      `DELETE FROM t` also ends at a closing quote or bracket here, because in code the
+#      statement sits inside `execute("...")`, not before a `;`.
+#
+# WHAT IS STILL NOT COVERED, and it is the same boundary as `psql -f "$f"`: a name or
+# statement built at runtime -- a variable, `''.join(...)`, a slice, `chr()`, base64,
+# a file the code reads. The hook sees a command string, never the process that will
+# run. This class closes the TYPED shape, including a typed literal concatenation; it
+# does not make the gate a sandbox. The way to run a genuinely intended drop stays one
+# token: MARVEEN_DB_GATE=allow, which leaves a log line (marveen's own correction on
+# the card: the concatenated name left none).
+#
+# THE FALSE-REFUSAL SIDE, MEASURED, and it decided the shape. The first version read
+# every executed body as code with no further condition. Replayed against the fleet's
+# real traffic -- 306 204 unique Bash commands from 30 days of every agent's transcripts,
+# old gate vs new, nothing executed -- it refused 32 commands the old gate allowed, and
+# about 24 of them were python heredocs that only EDIT a file (`s.replace(...)` with a
+# drop command as the text being inserted) or write notes. Roughly one false refusal a
+# day across the fleet, on exactly the editing work the gate exists to leave alone. So
+# a name only counts when the code has a PROCESS SINK (subprocess, os.system,
+# child_process, system(), ...) and SQL only with a client it can reach (a CLI through a
+# sink, or an imported driver). What that still refuses: an editing script that also
+# runs a subprocess, which is loud and one token away from passing. What it gives up:
+# a sink reached without its name (`__import__('sub' + 'process')`) -- runtime-built,
+# the boundary above. The numbers after the change are in the card 94d86b92 hand-off.
+# Prose written by `cat > x.md` is untouched -- cat executes nothing -- and the Write
+# tool never reaches this hook.
+_CODE_FOLD = re.compile(r"[\"'`]\s*\+?\s*[\"'`]")
+_CODE_PUNCT = re.compile(r"[\"'`,\[\](){}]")
+# A CLI client only runs from code through a process sink; a driver runs by itself, but
+# only when the code IMPORTS it in its own language -- a python body that writes a
+# TypeScript test file full of `@prisma/client` imports runs no database.
+_CODE_CLI_CLIENTS = re.compile(
+    r"(?<![\w-])(psql|sqlite3|mysql|mariadb|mongo|mongosh|cockroach|pg_restore|pgcli|"
+    r"prisma|supabase|dbmate|flyway|liquibase)(?![\w-])", re.I)
+_CODE_SINKS = {
+    "python": re.compile(r"\bsubprocess\b|\bcreate_subprocess_(?:exec|shell)\b|"
+                         r"\bos\.(?:system|popen|exec\w*|spawn\w*)\b|\bpty\.spawn\b"),
+    "node": re.compile(r"\bchild_process\b|\b(?:execSync|execFileSync|spawnSync)\b|\bBun\.spawn|\bDeno\.(?:Command|run)\b"),
+    "perl": re.compile(r"\bsystem\s*\(|\bexec\s*\(|\bqx\s*[(\[{/]|`|\bIPC::|\bopen\s*\(?[^\n]*\|"),
+    "ruby": re.compile(r"\bsystem\s*\(|\bexec\s*\(|%x\s*[(\[{]|`|\bOpen3\b|\bIO\.popen\b|\bspawn\s*\("),
+}
+_CODE_DRIVERS = {
+    # Any module of an `import a, b as c, ...` list counts, not only the first (didi 50294, K4).
+    "python": re.compile(r"^\s*(?:import\s+(?:[\w.]+(?:\s+as\s+\w+)?\s*,\s*)*|from\s+)"
+                         r"(?:psycopg2?|psycopg|sqlite3|asyncpg|sqlalchemy|pg8000|"
+                         r"pymysql|MySQLdb|mysql\.connector|duckdb)\b", re.M),
+    "node": re.compile(r"require\(\s*[\"'`](?:pg|mysql2?|better-sqlite3|sqlite3|knex|@prisma/client|postgres|mssql)"
+                       r"[\"'`]\s*\)|^\s*import\b[^\n]*\bfrom\s*[\"'](?:pg|mysql2?|better-sqlite3|sqlite3|knex|"
+                       r"@prisma/client|postgres|mssql)[\"']", re.M),
+    "perl": re.compile(r"\bDBI\b"),
+    "ruby": re.compile(r"require\s*\(?\s*[\"'](?:pg|sqlite3|mysql2|sequel|active_record)[\"']"),
+}
+# The terminator is `; ) ] ,` or the end -- NOT a quote. A quote there made the regex back off
+# one closing quote and read the `"` of `delete from "DuplicatePair" where id=...` as the end of
+# the statement: a false refusal the fleet replay found in mandark's real traffic. A statement in
+# code still ends at its call's `)` or list's `]`/`,` once the closing quotes are consumed.
+_CODE_DELETE = re.compile(
+    r"\bDELETE\s+FROM\s+[\\\"\'`]*[\w.]+[\\\"\'`]*\s*(?:;|$|[)\],])", re.I)
+_CODE_FLAG = re.compile(r"^(?:-[A-Za-z]*[cCeEp]|--eval|--print)$")
+_INTERPRETER_WORD = re.compile(r"^(?:.*/)?(?:%s)$" % _INTERPRETER)
+
+
+def _code_lang(word: str) -> str:
+    name = word.rsplit("/", 1)[-1]
+    if name.startswith("python"):
+        return "python"
+    return name if name in ("perl", "ruby") else "node"
+
+
+def _split_with_seps(command: str):
+    """(segment, separator after it) with the split of _split_outside_quotes, so a
+    pipeline stage can see that it is fed by the one before it."""
+    out, cur, quote, i = [], [], None, 0
+    while i < len(command):
+        ch = command[i]
+        if quote:
+            cur.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+            cur.append(ch)
+        elif command.startswith("||", i) or command.startswith("&&", i):
+            out.append(("".join(cur), command[i:i + 2]))
+            cur = []
+            i += 2
+            continue
+        elif ch == "&" and _redirect_amp(command, i):
+            cur.append(ch)
+        elif ch in ";\n|&":
+            out.append(("".join(cur), ch))
+            cur = []
+        else:
+            cur.append(ch)
+        i += 1
+    out.append(("".join(cur), ""))
+    return out
+
+
+# Subshell and substitution marks GLUED to a word (didi 50316, F1): `(bash -c "..")`,
+# `x=$(bash -c "..")`, a backtick, `(eval "..")`, `(python3 -c "..")`. shlex reads
+# `(bash` as ONE word, which is no shell or interpreter word, so the code it runs was
+# never read; with a space (`( bash -c`) it was. Outside quotes each of ( ) ` is split
+# off into a word of its own and then dropped, with the lone `$` a `$(` leaves (else
+# `$(echo .. | bash)` has `$` where `echo` is looked for). Inside quotes nothing is
+# padded: the text there is code that is read again, and `require ( "pg" )` would no
+# longer be the driver import. A `$(...)` or a backtick INSIDE double quotes is not
+# split: that boundary is card e81a72b7's.
+_SUBSHELL_MARKS = ("(", ")", "`", "$")
+# `&>` glued the same way (`bash&>/dev/null -c ..`, didi 50541 F-A4).
+_GLUED_REDIRECT = re.compile(r"^([^<>&]+?)(&?[<>].*)$", re.S)
+_REDIRECT_PIECE = re.compile(r"\d*[<>]+&?[^<>]*", re.S)
+
+
+def _command_words(segment: str):
+    """shlex words of one segment, glued subshell marks split off and dropped. Raises
+    ValueError like shlex.split."""
+    out, quote, i = [], None, 0
+    while i < len(segment):
+        ch = segment[i]
+        if ch == "\\" and quote != "'" and i + 1 < len(segment):
+            out.append(segment[i:i + 2])
+            i += 2
+            continue
+        if quote:
+            if ch == quote:
+                quote = None
+            out.append(ch)
+        elif ch in "\"'":
+            quote = ch
+            out.append(ch)
+        elif ch in "()`":
+            out.append(" %s " % ch)
+        else:
+            out.append(ch)
+        i += 1
+    words = [w for w in shlex.split("".join(out), comments=False, posix=True) if w not in _SUBSHELL_MARKS]
+    # A redirect GLUED to a shell or interpreter name is the same root (didi 50344, G2):
+    # `bash<<<"..."`, `bash</dev/null -c ..`, `python3<<<"..."` are one shlex word, so the
+    # name is split off. Only after such a name: `2>/dev/null` stays one word. Behind
+    # one, a redirect glued to the previous redirect is split off too (`bash
+    # 2>/dev/null<<<".."`, didi H1): the spaced form was already refused.
+    split, after = [], False
+    for w in words:
+        m = _GLUED_REDIRECT.match(w)
+        if m and (_SHELL_WORD.match(m.group(1)) or _INTERPRETER_WORD.match(m.group(1))):
+            split.extend(m.groups())
+            after = True
+        elif after and _SHELL_REDIRECT.match(w):
+            split.extend(_REDIRECT_PIECE.findall(w))
+        else:
+            split.append(w)
+            after = after or bool(_SHELL_WORD.match(w) or _INTERPRETER_WORD.match(w))
+    return split
+
+
+def _interpreter_at(words):
+    """Index of the first interpreter word, or -1. ANY position, not only the first:
+    `timeout 60 python3 -c`, `nice`, `env`, `sudo -u x`, `uv run python`, `npx tsx -e`
+    all put a launcher in front, and listing launchers is a list that is never complete
+    (didi 50294, K1: those five passed while the same prefixes denied in plain shell).
+    What it costs: an interpreter NAME as an argument (`which python3 -c x`) also reads
+    its flag's argument as code -- which then still needs a process sink to count."""
+    return next((k for k, w in enumerate(words) if _INTERPRETER_WORD.match(w)), -1)
+
+
+# Per interpreter: the short options whose code is their argument, the ones that run a
+# module instead of stdin, and the ones that take a VALUE (`-W ignore`, `-r x`, `-I lib`).
+# A value is not the script: reading `ignore` as one let `python3 -W ignore - <<PY` code
+# pass (didi, 94d86b92 r2, K5). Taking an unsure option as value-taking errs to the code side.
+_STDIN_CODE_LETTERS = {"python": "c", "node": "ep", "ruby": "e", "perl": "eE"}
+_STDIN_MODULE_LETTERS = {"python": "m"}
+_STDIN_VALUE_LETTERS = {"python": "WXQ", "node": "rC", "ruby": "rICEFT", "perl": "IMm"}
+_STDIN_CODE_LONG = ("--eval", "--print")
+_STDIN_VALUE_LONG = ("--require", "--import", "--loader", "--experimental-loader", "--conditions",
+                     "--input-type", "--env-file", "--title", "--inspect-port", "--disable-warning",
+                     "--check-hash-based-pycs", "--encoding", "--external-encoding", "--internal-encoding")
+
+
+def _reads_code_from_stdin(words, lang="python") -> bool:
+    """The interpreter runs its STDIN as code: no script argument, or `-`. With a script
+    (`python3 x.py <<EOF`) the heredoc is that script's DATA (didi 50294, N7), and with
+    -c/-e the code is the argument. An unknown long option followed by a word cannot be
+    told apart from a script (`--foo x.py` or `--foo value`): that counts as code."""
+    if "-" in words:
+        return True
+    k = 0
+    while k < len(words):
+        w = words[k]
+        if w == "--":
+            return k + 1 >= len(words)
+        if w.startswith("--"):
+            if w in _STDIN_CODE_LONG:
+                return False
+            if "=" not in w and k + 1 < len(words) and not words[k + 1].startswith("-"):
+                if w in _STDIN_VALUE_LONG:
+                    k += 2
+                    continue
+                return True
+            k += 1
+            continue
+        if w.startswith("-") and len(w) > 1:
+            letters = w[1:]
+            for j, ch in enumerate(letters):
+                if ch in _STDIN_CODE_LETTERS.get(lang, "") or ch in _STDIN_MODULE_LETTERS.get(lang, ""):
+                    return False
+                if ch in _STDIN_VALUE_LETTERS.get(lang, ""):
+                    if j == len(letters) - 1:
+                        k += 1  # the value is the next word
+                    break  # attached value (`-Wignore`, `-rjson`) ends the cluster
+            k += 1
+            continue
+        return False  # the first operand is the script
+    return True
+
+
+def interpreter_code_blocks(command: str):
+    """(language, code) for every piece of interpreter CODE the command will execute:
+    heredoc bodies whose opener runs an interpreter reading stdin, the argument of `-c` /
+    `-e` / `--eval`, a here-string (`<<<`), and an `echo`/`printf` piped into an
+    interpreter. An argument that cannot be tokenised is returned whole -- an extra
+    check, never a missed one."""
+    blocks = []
+    lines = command.split("\n")
+    i = 0
+    opener = re.compile(r"(^|[\s;&|(`])(%s)([\s;&|<]|$)" % _INTERPRETER)
+    while i < len(lines):
+        m = _HEREDOC.search(lines[i])
+        o = opener.search(lines[i]) if m else None
+        if o:
+            body, i0, i = [], i, i + 1
+            while i < len(lines) and lines[i].strip() != m.group(2):
+                body.append(lines[i])
+                i += 1
+            # The interpreter's own arguments, from its name to the `<<` or the next
+            # separator (`python3 - <<PY`, and `cat <<PY | python3 -` after the pipe).
+            # An untokenisable opener counts as code -- the safe side.
+            head = re.split(r"<<|[;&|]", lines[i0][o.end(2):], maxsplit=1)[0]
+            try:
+                as_code = _reads_code_from_stdin(shlex.split(head, posix=True), _code_lang(o.group(2)))
+            except ValueError:
+                as_code = True
+            if as_code:
+                blocks.append((_code_lang(o.group(2)), "\n".join(body)))
+        i += 1
+    stages = _split_with_seps(_LINE_CONT.sub(" ", command))
+    for n, (segment, _sep) in enumerate(stages):
+        try:
+            words = _command_words(segment)
+        except ValueError:
+            u = re.search(r"(^|[\s(`])(%s)[\s<]" % _INTERPRETER, segment)
+            if u:
+                blocks.append((_code_lang(u.group(2)), segment))
+            continue
+        k0 = _interpreter_at(words)
+        if k0 < 0:
+            continue
+        lang, args = _code_lang(words[k0]), words[k0 + 1:]
+        for k, word in enumerate(args):
+            if _CODE_FLAG.match(word) and k + 1 < len(args):
+                blocks.append((lang, args[k + 1]))
+                break
+            if word == "<<<" and k + 1 < len(args):
+                blocks.append((lang, args[k + 1]))
+                break
+            if word.startswith("<<<") and len(word) > 3:
+                blocks.append((lang, word[3:]))
+                break
+        # `echo "code" | python3`: the stage before the pipe prints the program.
+        if n and stages[n - 1][1] == "|" and _reads_code_from_stdin(args, lang):
+            try:
+                prev = _command_words(stages[n - 1][0])
+            except ValueError:
+                prev = [stages[n - 1][0]]
+            if prev and prev[0] in ("echo", "printf"):
+                blocks.append((lang, " ".join(prev[1:])))
+    return blocks
+
+
+# NESTED SHELL CODE (card 0f220f3f). `bash -c "<tool> x"` passed: the whole nested
+# command is ONE quoted string, and the position classes blank quoted text. The string
+# a shell is told to run is a command, so it goes through find_hits again, as text,
+# to _MAX_SHELL_DEPTH levels: `-c` (also combined, `-lc`, `-ec`), `eval`, a here-string,
+# and `echo ... | bash`. The launcher rule is the interpreter one: the first shell word
+# anywhere in the segment (`timeout 60 bash -c`, `sudo -u x sh -c`). Only the shell's OWN
+# options are read (`-o pipefail`, redirects skipped): after its first operand, the
+# script, the words are that script's data. A shell heredoc body is already in scope
+# through strip_heredoc_bodies. Nesting deeper than _MAX_SHELL_DEPTH is not read.
+_SHELL_WORD = re.compile(r"^(?:.*/)?(?:ba|z|da|k)?sh$")
+_SHELL_FLAG = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
+# bash's value-taking long options too: `--rcfile /tmp/r -c ..` read `/tmp/r` as the
+# script and its -c as data (didi 50316, F2).
+_SHELL_OPT_WITH_ARG = ("-o", "+o", "-O", "+O", "--rcfile", "--init-file")
+# `&>file` / `&>>file` (stdout and stderr) is a redirect word as well (didi 50405 J2):
+# behind a shell word _command_words already cuts it to `>` / `>>` (_REDIRECT_PIECE), so
+# only _SHELL_REDIRECT, which that cut uses, names `&>`.
+_SHELL_REDIRECT_OP = re.compile(r"^\d*(?:[<>]+|>&|<&)$")
+_SHELL_REDIRECT = re.compile(r"^(?:\d*[<>]|&>)")
+_MAX_SHELL_DEPTH = 3
+
+
+def shell_code_strings(command: str):
+    """Every string a nested shell in `command` is told to run."""
+    out = []
+    stages = _split_with_seps(_LINE_CONT.sub(" ", command))
+    for n, (segment, _sep) in enumerate(stages):
+        try:
+            words = _command_words(segment)
+        except ValueError:
+            continue  # the blind position split still sees this segment
+        k0 = next((k for k, w in enumerate(words) if _SHELL_WORD.match(w) or w == "eval"), -1)
+        if k0 < 0:
+            continue
+        args = words[k0 + 1:]
+        if words[k0] == "eval":
+            if args:
+                out.append(" ".join(args))
+            continue
+        k = 0
+        while k < len(args):
+            word = args[k]
+            if _SHELL_FLAG.match(word) and k + 1 < len(args):
+                out.append(args[k + 1])
+                break
+            if word == "<<<" and k + 1 < len(args):
+                out.append(args[k + 1])
+                break
+            if word.startswith("<<<") and len(word) > 3:
+                out.append(word[3:])
+                break
+            if word in _SHELL_OPT_WITH_ARG or _SHELL_REDIRECT_OP.match(word):
+                k += 2
+                continue
+            if word.startswith(("-", "+")) or _SHELL_REDIRECT.match(word):
+                k += 1
+                continue
+            # The first operand is the script: what follows are ITS arguments, data
+            # (`bash x.sh -c foo`), the same rule as a script heredoc (N7, 94d86b92).
+            break
+        if n and stages[n - 1][1] == "|" and all(w.startswith("-") for w in args):
+            try:
+                prev = _command_words(stages[n - 1][0])
+            except ValueError:
+                prev = []
+            if prev and prev[0] in ("echo", "printf"):
+                out.append(" ".join(prev[1:]))
+    return out
+
+
+# COMMAND SUBSTITUTION (card e81a72b7). `x=$(<tool> x)` passed: the leading-assignment
+# rule of _command_position_text drops the whole first word, the substitution with it.
+# `echo "$(<tool> x)"` passed too: inside double quotes the shell still runs `$(...)`
+# and backticks, but the blanking hid them. The body of every substitution outside
+# single quotes is a command, read again through find_hits like a nested shell string,
+# to the same depth. Escaped `\$(` and `$((` arithmetic are not substitutions. Heredoc
+# bodies are read the way the shell reads them (substitution_scope): an UNQUOTED
+# delimiter expands the body whatever the consumer is, a QUOTED one hands it over
+# verbatim, so only a shell running it as its script reads it again (the backticks of
+# a `python3 - <<'PY'` string or a markdown `<<'VEGE'` body ran nothing).
+def substitution_bodies(command: str, heredoc=False):
+    """The text of every `$(...)` and backtick substitution outside single quotes. In
+    an unquoted heredoc body (`heredoc=True`) quotes are plain characters."""
+    out, i, n, dq = [], 0, len(command), False
+    while i < n:
+        ch = command[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if heredoc and ch in "\"'":
+            i += 1
+            continue
+        if ch == "'" and not dq:
+            j = command.find("'", i + 1)
+            i = n if j < 0 else j + 1
+            continue
+        if ch == '"':
+            dq = not dq
+            i += 1
+            continue
+        if command.startswith("$(", i) and not command.startswith("$((", i):
+            depth, j, q = 1, i + 2, None
+            while j < n and depth:
+                c = command[j]
+                if q:
+                    if c == q:
+                        q = None
+                elif c == "\\":
+                    j += 1
+                elif c in "\"'":
+                    q = c
+                elif c == "(":
+                    depth += 1
+                elif c == ")":
+                    depth -= 1
+                j += 1
+            out.append(command[i + 2:j - 1] if depth == 0 else command[i + 2:])
+            i = j
+            continue
+        if ch == "`":
+            j = command.find("`", i + 1)
+            out.append(command[i + 1:] if j < 0 else command[i + 1:j])
+            i = n if j < 0 else j + 1
+            continue
+        i += 1
+    return out
+
+
+def _shell_runs_stdin(line: str) -> bool:
+    """A shell on the heredoc's opener line runs its stdin as the script: no script
+    operand before the `<<` or the end of its segment, or `-` / `-s` before one (`cat
+    <<'EOF' | bash` too). `bash x.sh - <<'EOF'` hands the body to x.sh as data, `-c` to
+    its code. An untokenisable segment counts as running it -- the safe side."""
+    for segment, _sep in _split_with_seps(line):
+        try:
+            words = _command_words(segment)
+        except ValueError:
+            return True
+        k0 = next((k for k, w in enumerate(words) if _SHELL_WORD.match(w)), -1)
+        if k0 < 0:
+            continue
+        args, k = words[k0 + 1:], 0
+        while k < len(args):
+            w = args[k]
+            if w.startswith("<<") or w == "-" or re.match(r"^-[A-Za-z]*s[A-Za-z]*$", w):
+                return True
+            if _SHELL_FLAG.match(w):
+                break
+            if _SHELL_REDIRECT_OP.match(w) or w in _SHELL_OPT_WITH_ARG:
+                k += 2
+                continue
+            if _SHELL_REDIRECT.match(w) or w[:1] in "-+":
+                k += 1
+                continue
+            break  # the first operand is the script
+        else:
+            return True
+    return False
+
+
+def substitution_scope(command: str):
+    """(text, heredoc) pairs for substitution_bodies: the command without its heredoc
+    bodies, every body with an unquoted delimiter in heredoc mode, and every quoted
+    body a shell runs as its script as shell text."""
+    lines = command.split("\n")
+    shell, out, i = [], [], 0
+    while i < len(lines):
+        line = lines[i]
+        shell.append(line)
+        m = _HEREDOC.search(line)
+        i += 1
+        if not m:
+            continue
+        body = []
+        while i < len(lines) and lines[i].strip() != m.group(2):
+            body.append(lines[i])
+            i += 1
+        quoted = bool(m.group(1)) or "\\" in m.group(0)
+        if not quoted:
+            out.append(("\n".join(body), True))
+        elif _shell_runs_stdin(line):  # `cat <<'EOF' | bash` runs it after the pipe
+            out.append(("\n".join(body), False))
+        if i < len(lines):
+            shell.append(lines[i])
+            i += 1
+    return [("\n".join(shell), False)] + out
+
+
+def _code_hits(lang: str, code: str):
+    """The TOOL / CLOUD / GIT / SQL classes over one piece of interpreter code. A
+    command name only counts when the code can start a process at all, and SQL only
+    with a client it can reach -- see THE FALSE-REFUSAL SIDE above."""
+    folded = _CODE_FOLD.sub("", code)
+    flat = _CODE_PUNCT.sub(" ", folded)
+    found = []
+    sink = bool(_CODE_SINKS[lang].search(code))
+    for line in flat.split("\n") if sink else []:
+        for segment in _SEG.split(line):
+            words = " ".join(segment.split())
+            if not words:
+                continue
+            for pat, why in TOOL_PATTERNS:
+                if re.search(pat, words, re.I):
+                    found.append(why)
+            if CLOUD_CLIS.search(words):
+                found.extend(why for pat, why in CLOUD_PATTERNS if re.search(pat, words, re.I))
+            if GIT_CLI.search(words) and GIT_PUSH_VERB.search(words):
+                found.extend(why for pat, why in GIT_PUSH_PATTERNS if re.search(pat, words, re.I))
+    if (sink and _CODE_CLI_CLIENTS.search(flat)) or _CODE_DRIVERS[lang].search(code):
+        joined = folded.replace("\n", " ")
+        for pat, why in SQL_PATTERNS[:-1]:
+            if re.search(pat, joined, re.I):
+                found.append(why)
+        if _CODE_DELETE.search(joined):
+            found.append(SQL_PATTERNS[-1][1])
+    return ["%s [in executed interpreter code: a quoted name counts there]" % w for w in found]
+
+
+def find_hits(command: str, cwd=None, missing=None, _depth=0):
     """`missing`, if a list, collects literal files that do not exist (logged by the
     caller, never refused). Everything else stays pure."""
     hits = []
+    command = expand_client_vars(command)
+    if _depth < _MAX_SHELL_DEPTH:
+        for code in shell_code_strings(command) + [b for t, h in substitution_scope(command) for b in substitution_bodies(t, h)]:
+            for why in find_hits(code, cwd, missing, _depth + 1):
+                if why not in hits:
+                    hits.append(why)
+    for lang, code in interpreter_code_blocks(command):
+        for why in _code_hits(lang, code):
+            if why not in hits:
+                hits.append(why)
     command = strip_heredoc_bodies(command)
     extra, problems, absent = expand_file_args(command, cwd)
     if missing is not None:
@@ -744,8 +1387,10 @@ def find_hits(command: str, cwd=None, missing=None):
             for pat, why in GIT_PUSH_PATTERNS:
                 if re.search(pat, cmdpos, re.I) and why not in hits:
                     hits.append(why)
+    # The client also by its quote-stripped word: `"psql" -c "DROP TABLE x"` and
+    # `p"sql"` run psql, as `"<tool>" x` runs the tool (card e81a72b7).
     for segment in _split_outside_quotes(command):
-        if DB_CLIENTS.search(segment):
+        if _db_client(segment) or _db_client(_command_position_text(segment)):
             for pat, why in SQL_PATTERNS:
                 if re.search(pat, segment, re.I) and why not in hits:
                     hits.append(why)
@@ -825,6 +1470,10 @@ def e2e_drop_allowed(command: str, env=None) -> bool:
         if raw.count(";") > 1 or (";" in raw and not re.search(r";\s*[\"']$", raw)):
             return False
         toks = shlex.split(raw)
+        # The bare name only: a path form (`/opt/homebrew/bin/<tool> crm_e2e_..`) is
+        # refused, not carved out. didi's census (50316, F3): 19 path-form drops, every one
+        # also done in the bare form, so the cost is 0; and a path names a program, which
+        # the one exact shape this carve-out admits does not.
         if not toks or toks[0] not in ("psql", "dropdb"):
             return False
         if not _env_is_local(env):

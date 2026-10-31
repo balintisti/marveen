@@ -77,6 +77,9 @@ describe('db-destructive-gate: fajlbol erkezo SQL', () => {
     ['psql --file=', 'psql "$URL" --file=destructive.sql'],
     ['psql < fajl', 'psql "$URL" < destructive.sql'],
     ['cat fajl | psql', 'cat destructive.sql | psql "$URL"'],
+    // didi 50541 R1/R2: az uttal hivott kliens fajl-hivatkozasa ugyanigy (0f220f3f).
+    ['uttal hivott psql -f', '/opt/homebrew/opt/postgresql@16/bin/psql "$URL" -f destructive.sql'],
+    ['cat fajl | uttal hivott psql', 'cat destructive.sql | /opt/homebrew/bin/psql "$URL"'],
     ['psql -c \\i', "psql \"$URL\" -c '\\i destructive.sql'"],
     ['psql -c \\ir', "psql \"$URL\" -c '\\ir destructive.sql'"],
     ['prisma db execute --file', 'npx prisma db execute --file destructive.sql'],
