@@ -845,6 +845,43 @@ def _split_with_seps(command: str):
     return out
 
 
+# Subshell and substitution marks GLUED to a word (didi 50316, F1): `(bash -c "..")`,
+# `x=$(bash -c "..")`, a backtick, `(eval "..")`, `(python3 -c "..")`. shlex reads
+# `(bash` as ONE word, which is no shell or interpreter word, so the code it runs was
+# never read; with a space (`( bash -c`) it was. Outside quotes each of ( ) ` is split
+# off into a word of its own and then dropped, with the lone `$` a `$(` leaves (else
+# `$(echo .. | bash)` has `$` where `echo` is looked for). Inside quotes nothing is
+# padded: the text there is code that is read again, and `require ( "pg" )` would no
+# longer be the driver import. A `$(...)` or a backtick INSIDE double quotes is not
+# split: that boundary is card e81a72b7's.
+_SUBSHELL_MARKS = ("(", ")", "`", "$")
+
+
+def _command_words(segment: str):
+    """shlex words of one segment, glued subshell marks split off and dropped. Raises
+    ValueError like shlex.split."""
+    out, quote, i = [], None, 0
+    while i < len(segment):
+        ch = segment[i]
+        if ch == "\\" and quote != "'" and i + 1 < len(segment):
+            out.append(segment[i:i + 2])
+            i += 2
+            continue
+        if quote:
+            if ch == quote:
+                quote = None
+            out.append(ch)
+        elif ch in "\"'":
+            quote = ch
+            out.append(ch)
+        elif ch in "()`":
+            out.append(" %s " % ch)
+        else:
+            out.append(ch)
+        i += 1
+    return [w for w in shlex.split("".join(out), comments=False, posix=True) if w not in _SUBSHELL_MARKS]
+
+
 def _interpreter_at(words):
     """Index of the first interpreter word, or -1. ANY position, not only the first:
     `timeout 60 python3 -c`, `nice`, `env`, `sudo -u x`, `uv run python`, `npx tsx -e`
@@ -914,7 +951,7 @@ def interpreter_code_blocks(command: str):
     blocks = []
     lines = command.split("\n")
     i = 0
-    opener = re.compile(r"(^|[\s;&|])(%s)([\s;&|]|$)" % _INTERPRETER)
+    opener = re.compile(r"(^|[\s;&|(`])(%s)([\s;&|]|$)" % _INTERPRETER)
     while i < len(lines):
         m = _HEREDOC.search(lines[i])
         o = opener.search(lines[i]) if m else None
@@ -937,9 +974,9 @@ def interpreter_code_blocks(command: str):
     stages = _split_with_seps(_LINE_CONT.sub(" ", command))
     for n, (segment, _sep) in enumerate(stages):
         try:
-            words = shlex.split(segment, comments=False, posix=True)
+            words = _command_words(segment)
         except ValueError:
-            u = re.search(r"(^|\s)(%s)\s" % _INTERPRETER, segment)
+            u = re.search(r"(^|[\s(`])(%s)\s" % _INTERPRETER, segment)
             if u:
                 blocks.append((_code_lang(u.group(2)), segment))
             continue
@@ -960,7 +997,7 @@ def interpreter_code_blocks(command: str):
         # `echo "code" | python3`: the stage before the pipe prints the program.
         if n and stages[n - 1][1] == "|" and _reads_code_from_stdin(args, lang):
             try:
-                prev = shlex.split(stages[n - 1][0], comments=False, posix=True)
+                prev = _command_words(stages[n - 1][0])
             except ValueError:
                 prev = [stages[n - 1][0]]
             if prev and prev[0] in ("echo", "printf"):
@@ -979,7 +1016,9 @@ def interpreter_code_blocks(command: str):
 # through strip_heredoc_bodies. Nesting deeper than _MAX_SHELL_DEPTH is not read.
 _SHELL_WORD = re.compile(r"^(?:.*/)?(?:ba|z|da|k)?sh$")
 _SHELL_FLAG = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
-_SHELL_OPT_WITH_ARG = ("-o", "+o", "-O", "+O")
+# bash's value-taking long options too: `--rcfile /tmp/r -c ..` read `/tmp/r` as the
+# script and its -c as data (didi 50316, F2).
+_SHELL_OPT_WITH_ARG = ("-o", "+o", "-O", "+O", "--rcfile", "--init-file")
 _SHELL_REDIRECT_OP = re.compile(r"^\d*(?:[<>]+|>&|<&)$")
 _SHELL_REDIRECT = re.compile(r"^\d*[<>]")
 _MAX_SHELL_DEPTH = 3
@@ -991,7 +1030,7 @@ def shell_code_strings(command: str):
     stages = _split_with_seps(_LINE_CONT.sub(" ", command))
     for n, (segment, _sep) in enumerate(stages):
         try:
-            words = shlex.split(segment, comments=False, posix=True)
+            words = _command_words(segment)
         except ValueError:
             continue  # the blind position split still sees this segment
         k0 = next((k for k, w in enumerate(words) if _SHELL_WORD.match(w) or w == "eval"), -1)
@@ -1025,7 +1064,7 @@ def shell_code_strings(command: str):
             break
         if n and stages[n - 1][1] == "|" and all(w.startswith("-") for w in args):
             try:
-                prev = shlex.split(stages[n - 1][0], comments=False, posix=True)
+                prev = _command_words(stages[n - 1][0])
             except ValueError:
                 prev = []
             if prev and prev[0] in ("echo", "printf"):
@@ -1191,6 +1230,10 @@ def e2e_drop_allowed(command: str, env=None) -> bool:
         if raw.count(";") > 1 or (";" in raw and not re.search(r";\s*[\"']$", raw)):
             return False
         toks = shlex.split(raw)
+        # The bare name only: a path form (`/opt/homebrew/bin/<tool> crm_e2e_..`) is
+        # refused, not carved out. didi's census (50316, F3): 19 path-form drops, every one
+        # also done in the bare form, so the cost is 0; and a path names a program, which
+        # the one exact shape this carve-out admits does not.
         if not toks or toks[0] not in ("psql", "dropdb"):
             return False
         if not _env_is_local(env):

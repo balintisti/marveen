@@ -99,4 +99,51 @@ describe('db-destructive-gate: a beagyazott shell sztringje parancs (0f220f3f)',
   ])('a shell sajat opcioja utan a -c meg a shelle: %s: TILTVA', (_name, cmd) => {
     expect(verdict(cmd)).toBe('deny')
   })
+
+  it.each([
+    ['--rcfile ERTEK a -c elott', 'bash --rcfile /tmp/r -c "dropdb x"'],
+    ['--init-file ERTEK a -c elott', 'bash --init-file /tmp/r -c "dropdb x"'],
+  ])('a bash erteket varo hosszu opcioja nem a szkript (didi 50316, F2): %s: TILTVA', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('deny')
+  })
+})
+
+// didi 50316, F1: a shell-szo csak kulon szokent volt felismerve; a zarojelhez, `$(`-hez
+// vagy visszapipahoz TAPADO alak atment, a szokozos `( bash -c` nem.
+describe('db-destructive-gate: subshellhez es helyettesiteshez tapado shell-szo (0f220f3f, F1)', () => {
+  it.each([
+    ['(bash -c ...)', '(bash -c "dropdb x")'],
+    ['x=$(bash -c ...)', 'x=$(bash -c "dropdb x")'],
+    ['visszapipas bash -c', 'x=`bash -c "dropdb x"`'],
+    ['(eval ...)', '(eval "dropdb x")'],
+    ['cd utan (sh -c ...)', 'cd /tmp && (sh -c "dropdb x")'],
+    ['<(bash -c ...) folyamat-helyettesites', 'cat <(bash -c "dropdb x")'],
+    ['(echo ... | bash)', '(echo "dropdb x" | bash)'],
+    ['$(echo ... | bash): a magaban maradt $ nem az echo helye', '$(echo "dropdb x" | bash)'],
+    ['(python3 -c ...) interpreter', `(python3 -c 'import os; os.system("dropdb x")')`],
+    ['$(python3 -c ...) interpreter', `y=$(python3 -c 'import os; os.system("dropdb x")')`],
+    ['(echo ... | python3)', `(echo 'import os; os.system("dropdb x")' | python3)`],
+    ['(python3 - <<PY) heredoc', `(python3 - <<'PY'\nimport os; os.system("dropdb x")\nPY\n)`],
+  ])('%s: TILTVA', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('deny')
+  })
+
+  it.each([
+    ['artalmatlan (bash -c ...)', '(bash -c "git status")'],
+    ['artalmatlan x=$(bash -c ...)', 'x=$(bash -c "ls -1 | wc -l")'],
+    ['zarojeles szkript-hivas, a -c a szkripte', '(bash scripts/x.sh -c "dropdb x")'],
+    ['idezett szovegben a (bash -c ...) csak szoveg', 'git commit -m "never (bash -c dropdb x)"'],
+  ])('KONTROLL: %s ATMEGY', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('none')
+  })
+
+  // Idezojelen BELUL nem szabad szetszedni: az ottani szoveg kod, amit a kapu ujra olvas, es a
+  // `require ( "pg" )` mar nem a driver importja (mutans F1i: mindharom atment).
+  it.each([
+    ['node -e driver-importtal', `node -e 'const { Client } = require("pg"); new Client().query("DROP TABLE x")'`],
+    ['ugyanez bash -c-ben', `bash -c "node -e 'const { Client } = require(\\"pg\\"); new Client().query(\\"DROP TABLE x\\")'"`],
+    ['ugyanez $(...)-ben', `x=$(node -e 'const { Client } = require("pg"); new Client().query("DROP TABLE x")')`],
+  ])('az idezett kod valtozatlan marad: %s: TILTVA', (_name, cmd) => {
+    expect(verdict(cmd)).toBe('deny')
+  })
 })
