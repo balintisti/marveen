@@ -6,7 +6,9 @@
 // now lives only here, and it carries the MCPDUP806 empty-input proof the shell
 // probe had. These tests drive the real probe against a fake tmux: every
 // keystroke must happen while the send lane is held, nothing is typed into
-// parked text, and only our own "/mcp" residue is ever cleared.
+// parked text, and only our own "/mcp" residue is ever cleared. The shell
+// probe's row gate (classify_mcp_plugin_row: fire on the plugin's own failed
+// row, never on a connected one) is ported too, with its fixtures (didi 50251 G1).
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -24,10 +26,11 @@ interface Fake {
   mcpOpen: boolean
   bun: boolean
   residueAfterRound: string | null // parked text the /mcp round leaves behind
+  mcpList: string          // what the open /mcp view shows
   keys: string[]
   keysOutsideLane: string[]
 }
-const fake: Fake = { input: '', mcpOpen: false, bun: false, residueAfterRound: null, keys: [], keysOutsideLane: [] }
+const fake: Fake = { input: '', mcpOpen: false, bun: false, residueAfterRound: null, mcpList: MCP_LIST, keys: [], keysOutsideLane: [] }
 
 vi.mock('../logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
@@ -44,7 +47,7 @@ vi.mock('node:child_process', async (importOriginal) => {
     }
     const sub = args[0]
     if (sub === 'list-panes') return '1234\n'
-    if (sub === 'capture-pane') return fake.mcpOpen ? MCP_LIST : box(fake.input)
+    if (sub === 'capture-pane') return fake.mcpOpen ? fake.mcpList : box(fake.input)
     if (sub === 'send-keys') {
       const key = args.slice(3).join(' ')
       fake.keys.push(key)
@@ -69,13 +72,14 @@ vi.mock('node:child_process', async (importOriginal) => {
   return { ...actual, execFileSync }
 })
 
-import { schedulePluginUnlockAfterRespawn, unlockInputState, isOwnProbeResidue } from '../web/channel-plugin-unlock.js'
+import { schedulePluginUnlockAfterRespawn, unlockInputState, isOwnProbeResidue, classifyMcpPluginRow, unlockRowFires, wasPluginConfirmedAbsent, clearPluginAbsent } from '../web/channel-plugin-unlock.js'
 import { tryAcquireSessionSendLane, __resetSessionSendLocks } from '../web/session-send-lock.js'
 
 beforeEach(() => {
   vi.useFakeTimers()
   __resetSessionSendLocks()
-  Object.assign(fake, { input: '', mcpOpen: false, bun: false, residueAfterRound: null, keys: [], keysOutsideLane: [] })
+  Object.assign(fake, { input: '', mcpOpen: false, bun: false, residueAfterRound: null, mcpList: MCP_LIST, keys: [], keysOutsideLane: [] })
+  clearPluginAbsent(SESSION)
 })
 afterEach(() => {
   vi.useRealTimers()
@@ -113,6 +117,90 @@ describe('isOwnProbeResidue (ported from channels.sh --classify-unlock-residue)'
     ['', false],
   ])('%j -> %s', (text, own) => {
     expect(isOwnProbeResidue(text)).toBe(own)
+  })
+})
+
+describe('classifyMcpPluginRow (ported from channels.sh --classify-mcp-pane)', () => {
+  // Verbatim capture from the 2026-07-27 incident (Claude Code 2.1.220, #727).
+  const PANE_2_1_220_FAILED = `   Manage MCP servers
+   7 servers
+
+     User MCPs (/home/ubuntu/.claude.json)
+   ❯ gmail · ✔ connected · 14 tools
+     google-calendar · ✔ connected · 13 tools
+
+     Built-in MCPs (always available)
+     plugin:telegram:telegram · ✘ failed
+
+   ※ Run claude --debug to see error logs`
+  it.each([
+    ['2.1.220 failed row (✘ failed)', 'telegram', PANE_2_1_220_FAILED, 'failed'],
+    ['2.1.159 failed row (✗ Failed)', 'telegram', '   Manage MCP servers\n\n     plugin:telegram@claude-plugins-official · ✗ Failed', 'failed'],
+    ['connected row', 'telegram', '   Manage MCP servers\n\n     plugin:telegram:telegram · ✔ connected · 8 tools', 'connected'],
+    ['disabled row', 'telegram', '   Manage MCP servers\n\n     plugin:telegram:telegram (disabled)', 'disabled'],
+    ['no plugin row', 'telegram', '   Manage MCP servers\n   0 servers', 'absent'],
+    ['empty pane', 'telegram', '', 'absent'],
+    ['banner + unrelated error, plugin connected', 'telegram', '  Listening for channel messages from: plugin:telegram@claude-plugins-official\n  ⎿  Error: some unrelated tool call failed\n\n     plugin:telegram:telegram · ✔ connected · 8 tools', 'connected'],
+    ['banner only (the plugin is not in the list)', 'telegram', '  Listening for channel messages from: plugin:telegram@claude-plugins-official\n   Manage MCP servers\n   ❯ gmail · ✔ connected', 'absent'],
+    ['a channel message naming telegram is not the row', 'telegram', '<channel source="plugin:telegram" chat_id="1">telegram failed?</channel>\n   Manage MCP servers\n   ❯ gmail · ✔ connected', 'absent'],
+    ['slack failed row', 'slack', '     plugin:slack-channel:marveen-marketplace · ✘ failed', 'failed'],
+    ['discord failed row', 'discord', '     plugin:discord:discord · ✘ failed', 'failed'],
+    ['telegram ignores a failed slack row', 'telegram', '     plugin:slack-channel:marveen-marketplace · ✘ failed', 'absent'],
+    ['disconnected row', 'telegram', '     plugin:telegram:telegram · ✘ disconnected', 'failed'],
+  ] as const)('%s -> %s / %s', (_label, provider, pane, state) => {
+    expect(classifyMcpPluginRow(pane, provider).state).toBe(state)
+  })
+
+  it('fires on a failed row under both policies, on a disabled row only for the respawn paths, never on connected or absent', () => {
+    expect(unlockRowFires('failed', 'failed-only')).toBe(true)
+    expect(unlockRowFires('failed', 'failed-or-disabled')).toBe(true)
+    expect(unlockRowFires('disabled', 'failed-only')).toBe(false)
+    expect(unlockRowFires('disabled', 'failed-or-disabled')).toBe(true)
+    for (const p of ['failed-only', 'failed-or-disabled'] as const) {
+      expect(unlockRowFires('connected', p)).toBe(false)
+      expect(unlockRowFires('absent', p)).toBe(false)
+    }
+  })
+})
+
+describe('the row gate decides whether Up+Enter+Enter is sent', () => {
+  const CONNECTED = `Manage MCP servers\n  google-workspace · ✔ connected\n❯ plugin:telegram:telegram · ✔ connected · 8 tools\n${FOOTER}`
+  const DISABLED = `Manage MCP servers\n  google-workspace · ✔ connected\n❯ plugin:telegram:telegram ◯ disabled\n${FOOTER}`
+
+  it('a connected row gets /mcp then Escape, never Up or Enter (the #232 "Disable" hazard)', () => {
+    fake.mcpList = CONNECTED
+    schedulePluginUnlockAfterRespawn(SESSION, 'telegram')
+    vi.advanceTimersByTime(35_000)
+    expect(fake.keys).toEqual(['/mcp Enter', 'Escape'])
+    expect(wasPluginConfirmedAbsent(SESSION, 60_000)).toBe(false)
+  })
+
+  it('a disabled row on a cold launch (failed-only) is left alone', () => {
+    fake.mcpList = DISABLED
+    schedulePluginUnlockAfterRespawn(SESSION, 'telegram', 'failed-only')
+    vi.advanceTimersByTime(35_000)
+    expect(fake.keys).toEqual(['/mcp Enter', 'Escape'])
+  })
+
+  it('a disabled row after an in-process respawn (the default) is enabled', () => {
+    fake.mcpList = DISABLED
+    schedulePluginUnlockAfterRespawn(SESSION, 'telegram')
+    vi.advanceTimersByTime(35_000)
+    expect(fake.keys).toEqual(['/mcp Enter', 'Up', 'Enter', 'Enter', 'Escape', 'Escape'])
+  })
+
+  it('a failed row on a cold launch fires', () => {
+    schedulePluginUnlockAfterRespawn(SESSION, 'telegram', 'failed-only')
+    vi.advanceTimersByTime(35_000)
+    expect(fake.keys).toEqual(['/mcp Enter', 'Up', 'Enter', 'Enter', 'Escape', 'Escape'])
+  })
+
+  it('telegram only in the scrollback, not in the list: absent verdict, no Up', () => {
+    fake.mcpList = `<channel source="plugin:telegram">hi</channel>\nManage MCP servers\n❯ gmail · ✔ connected\n${FOOTER}`
+    schedulePluginUnlockAfterRespawn(SESSION, 'telegram')
+    vi.advanceTimersByTime(35_000)
+    expect(fake.keys).toEqual(['/mcp Enter', 'Escape'])
+    expect(wasPluginConfirmedAbsent(SESSION, 60_000)).toBe(true)
   })
 })
 
@@ -189,5 +277,13 @@ describe('wiring: channels.sh no longer probes, the monitor probes after any res
     const direct = monitor.match(/schedulePluginUnlockAfterRespawn\(MAIN_CHANNELS_SESSION/g) ?? []
     expect(direct).toHaveLength(1) // only the tracker's own schedule callback
     expect((monitor.match(/scheduleMainPluginUnlock\(\)/g) ?? []).length).toBeGreaterThanOrEqual(4) // definition + 3 respawn paths
+  })
+
+  it('a restart the tick detects probes failed-only; the respawn paths set failed-or-disabled around their call', () => {
+    expect(monitor).toMatch(/let mainPluginUnlockPolicy: UnlockRowPolicy = 'failed-only'\n/)
+    const tracker = monitor.slice(monitor.indexOf('const mainPluginUnlock = createMainIdentityTracker('))
+    expect(tracker.slice(0, tracker.indexOf('\n})'))).toMatch(/schedulePluginUnlockAfterRespawn\(MAIN_CHANNELS_SESSION, [^\n]*, mainPluginUnlockPolicy\)/)
+    const fn = monitor.slice(monitor.indexOf('function scheduleMainPluginUnlock(): void {'))
+    expect(fn.slice(0, fn.indexOf('\n}'))).toMatch(/mainPluginUnlockPolicy = 'failed-or-disabled'\n\s*try \{ mainPluginUnlock\.schedule\(\) \} finally \{ mainPluginUnlockPolicy = 'failed-only' \}/)
   })
 })

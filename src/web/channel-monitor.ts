@@ -48,7 +48,7 @@ import { resolveMainConfigDecision, type MainConfigDecision } from './main-confi
 import { withSessionSendLock } from './session-send-lock.js'
 import { reapChannelOrphans, reapDetachedChannelClaudes, collectPollerEvidence, reapForeignMainPollers } from './channel-poller-reap.js'
 import { probeTelegramConflict } from './channel-conflict-probe.js'
-import { schedulePluginUnlockAfterRespawn, wasPluginConfirmedAbsent, clearPluginAbsent } from './channel-plugin-unlock.js'
+import { schedulePluginUnlockAfterRespawn, wasPluginConfirmedAbsent, clearPluginAbsent, type UnlockRowPolicy } from './channel-plugin-unlock.js'
 import { getInjectedPrompt, matchesInjectedPrompt } from './injected-prompt-registry.js'
 import { paneSourceSurvivesDrop, getPaneSource } from './pane-source-survival.js'
 import { probeSigTransition, sigTransitionFacts } from './stuck-sig-transition-probe.js'
@@ -1676,17 +1676,23 @@ function checkMainIdentityAfterRestart(): void {
 // in-lane. A separate tracker, so its dedupe is its own: the respawn paths above schedule it
 // through scheduleMainPluginUnlock. A duplicate would still be harmless (the probe does nothing
 // while the plugin's bun child runs), a missing one leaves the main channel deaf.
+// The row rule follows who restarted the pane (didi 50251 G1): a restart the tick detects is a
+// cold launch, the former channels.sh probe's job, which fired on a failed row only (#232); the
+// in-process respawn paths also revive a disabled row (#234). check() calls the same schedule
+// callback synchronously, so the policy is set only around scheduleMainPluginUnlock's call.
+let mainPluginUnlockPolicy: UnlockRowPolicy = 'failed-only'
 const mainPluginUnlock = createMainIdentityTracker({
   readPid: () => (mainChannelsSessionExists() ? mainPaneClaudePid() : null),
   readPaneAgeMs: mainPaneAgeMs,
   dashboardUptimeMs: () => process.uptime() * 1000,
   // schedulePluginUnlockAfterRespawn only sets a timer.
-  schedule: () => { schedulePluginUnlockAfterRespawn(MAIN_CHANNELS_SESSION, getProvider(getMainAgentProvider()).type) },
+  schedule: () => { schedulePluginUnlockAfterRespawn(MAIN_CHANNELS_SESSION, getProvider(getMainAgentProvider()).type, mainPluginUnlockPolicy) },
   now: () => Date.now(),
 })
 
 function scheduleMainPluginUnlock(): void {
-  mainPluginUnlock.schedule()
+  mainPluginUnlockPolicy = 'failed-or-disabled'
+  try { mainPluginUnlock.schedule() } finally { mainPluginUnlockPolicy = 'failed-only' }
 }
 
 function checkMainPluginUnlockAfterRestart(): void {

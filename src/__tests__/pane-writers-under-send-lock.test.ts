@@ -90,7 +90,7 @@ describe('every unguarded pane writer routes through the send lane', () => {
     // Card e71b2b51: the empty-input proof, the keystrokes and the end-of-round cleanup all run
     // between the acquire and the release.
     const fire = src.slice(src.indexOf('tryAcquireSessionSendLane(state.session, null)'))
-    expect(fire).toMatch(/clearOwnResidue\(state\.session, readUnlockInputState\(state\.session\)\)[\s\S]*?sendUnlockKeystrokes\(state\.session, state\.provider\)[\s\S]*?finishUnlockRound\(state\.session\)[\s\S]*?\} finally \{\s*releaseLane\(\)/)
+    expect(fire).toMatch(/clearOwnResidue\(state\.session, readUnlockInputState\(state\.session\)\)[\s\S]*?sendUnlockKeystrokes\(state\.session, state\.provider, state\.rowPolicy\)[\s\S]*?finishUnlockRound\(state\.session\)[\s\S]*?\} finally \{\s*releaseLane\(\)/)
   })
 
   it('reauth-healer wraps the /login sequence in recover-mode and logs the skip', () => {
