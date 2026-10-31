@@ -2664,7 +2664,8 @@ export async function startAgentProcess(name: string, opts: { fresh?: boolean } 
     // mid-turn. Channel-less agents (hasChannel false) get no probe; MAIN never
     // takes this path (it comes up via channels.sh) but guard defensively.
     if (hasChannel && name !== MAIN_AGENT_ID) {
-      schedulePluginUnlockAfterRespawn(session, provider.type)
+      // An in-process respawn: it also revives a disabled row (#234), stated, not defaulted.
+      schedulePluginUnlockAfterRespawn(session, provider.type, 'failed-or-disabled')
     }
 
     // A fresh session has no memory of what the agent was doing. Every fresh

@@ -12,8 +12,8 @@ const channelsSh = readFileSync(join(REPO_ROOT, 'scripts', 'channels.sh'), 'utf-
 // agent's telegram plugin on a multi-agent fleet host -- so the fallback
 // always found SOMEONE's live plugin and reported this agent's own dead
 // plugin as alive. The fix scopes the fallback to a `pgrep -P` check under
-// this session's own claude pane_pid (the same technique already used by the
-// post-init unlock Check 1 a few hundred lines above in this same file).
+// this session's own claude pane_pid (the same technique the dashboard's
+// channel-plugin-unlock.ts uses as its bun-child gate).
 
 function extractWatchdogLoop(): string {
   const start = channelsSh.indexOf('while $TMUX has-session -t "$SESSION"')

@@ -95,7 +95,7 @@ describe('channels.sh exit logging (CHEXIT910)', () => {
   })
 
   it('the trap sits AFTER the store-free test seams and BEFORE the exit-probe seam', () => {
-    const lastSeam = CHANNELS.indexOf('--classify-unlock-residue')
+    const lastSeam = CHANNELS.indexOf('--bot-owner-check')
     const trapAt = CHANNELS.indexOf("trap 'record_channels_exit")
     const probeAt = CHANNELS.indexOf('--exit-probe')
     expect(lastSeam).toBeGreaterThan(-1)
@@ -107,9 +107,8 @@ describe('channels.sh exit logging (CHEXIT910)', () => {
     const dir = mkTmp('chexit-')
     try {
       const log = join(dir, 'exits.log')
-      execFileSync('bash', [SCRIPT, '--classify-unlock-residue'], {
+      execFileSync('bash', [SCRIPT, '--bot-owner-check'], {
         encoding: 'utf-8',
-        input: '/mcp',
         env: { ...process.env, CHANNELS_EXITS_LOG: log },
       })
       expect(existsSync(log)).toBe(false)
