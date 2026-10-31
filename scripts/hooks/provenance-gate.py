@@ -312,12 +312,19 @@ def derive_agent_id(cwd):
 #     "...app\n\n<pasted_content id="3a95">\nearing..."   (was "appearing")
 #     "...fordulot\n</pasted_content id="3a95">\n\n\n<pasted_content id=...
 # so removing exactly those bytes restores the text the harness received.
+# A closing tag with TEXT after it carries TWO line breaks (card c9e33a5e,
+# 2026-10-31: 230 of 230 in 278 wrapped prompts, every agent transcript; one
+# break: 0): "KIVET\n</pasted_content id="d31f">\n\nEL" was "KIVETEL". Before
+# the next opening tag it is one break (the opening owns the other two, 77 of
+# 77), at the end of the prompt one or none (71 + 2). Taking one break before
+# text left a "\n" in the body, and 10 real directives read forged (jarvis 50280).
 # STRICT on purpose: tags must alternate open/close with the same id on each
 # pair; anything else -> None, the prompt is used as it came, and a mismatch
 # still reads forged. A strip can only DELETE tag text, never add any, so a
 # body still has to equal the queue row to verify.
 _PASTED_TAG_RX = re.compile(
-    r'(?:\n\n|^)<pasted_content id="([^"\n]+)">\n|\n</pasted_content id="([^"\n]+)">(?:\n|$)'
+    r'(?:\n\n|^)<pasted_content id="([^"\n]+)">\n'
+    r'|\n</pasted_content id="([^"\n]+)">(?:\n(?=\n\n<pasted_content id=")|\n\n|\n?\Z)'
 )
 
 
