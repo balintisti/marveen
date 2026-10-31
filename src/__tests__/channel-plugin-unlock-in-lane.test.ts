@@ -27,10 +27,11 @@ interface Fake {
   bun: boolean
   residueAfterRound: string | null // parked text the /mcp round leaves behind
   mcpList: string          // what the open /mcp view shows
+  captureThrows: boolean   // the coloured idle-box capture (-e) fails (tmux error)
   keys: string[]
   keysOutsideLane: string[]
 }
-const fake: Fake = { input: '', mcpOpen: false, bun: false, residueAfterRound: null, mcpList: MCP_LIST, keys: [], keysOutsideLane: [] }
+const fake: Fake = { input: '', mcpOpen: false, bun: false, residueAfterRound: null, mcpList: MCP_LIST, captureThrows: false, keys: [], keysOutsideLane: [] }
 
 vi.mock('../logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
@@ -47,7 +48,10 @@ vi.mock('node:child_process', async (importOriginal) => {
     }
     const sub = args[0]
     if (sub === 'list-panes') return '1234\n'
-    if (sub === 'capture-pane') return fake.mcpOpen ? fake.mcpList : box(fake.input)
+    if (sub === 'capture-pane') {
+      if (!fake.mcpOpen && fake.captureThrows && args.includes('-e')) throw Object.assign(new Error('capture failed'), { status: 1 })
+      return fake.mcpOpen ? fake.mcpList : box(fake.input)
+    }
     if (sub === 'send-keys') {
       const key = args.slice(3).join(' ')
       fake.keys.push(key)
@@ -78,7 +82,7 @@ import { tryAcquireSessionSendLane, __resetSessionSendLocks } from '../web/sessi
 beforeEach(() => {
   vi.useFakeTimers()
   __resetSessionSendLocks()
-  Object.assign(fake, { input: '', mcpOpen: false, bun: false, residueAfterRound: null, mcpList: MCP_LIST, keys: [], keysOutsideLane: [] })
+  Object.assign(fake, { input: '', mcpOpen: false, bun: false, residueAfterRound: null, mcpList: MCP_LIST, captureThrows: false, keys: [], keysOutsideLane: [] })
   clearPluginAbsent(SESSION)
 })
 afterEach(() => {
@@ -147,6 +151,8 @@ describe('classifyMcpPluginRow (ported from channels.sh --classify-mcp-pane)', (
     ['discord failed row', 'discord', '     plugin:discord:discord · ✘ failed', 'failed'],
     ['telegram ignores a failed slack row', 'telegram', '     plugin:slack-channel:marveen-marketplace · ✘ failed', 'absent'],
     ['disconnected row', 'telegram', '     plugin:telegram:telegram · ✘ disconnected', 'failed'],
+    // channel-health-monitor.ts PLUGIN_FAILED_RX: Claude Code also draws "✘ error" (didi 50263 M2b).
+    ['error row (✘ error)', 'telegram', '     plugin:telegram:telegram · ✘ error', 'failed'],
   ] as const)('%s -> %s / %s', (_label, provider, pane, state) => {
     expect(classifyMcpPluginRow(pane, provider).state).toBe(state)
   })
@@ -218,6 +224,14 @@ describe('the probe types only inside the send lane, only into an empty box', ()
     expect(tryAcquireSessionSendLane(SESSION, null)).not.toBeNull() // released afterwards
   })
 
+  // The old channels.sh fixture "missing pane-state.js -> unverifiable (fail closed)" (didi 50263 M10).
+  it('an input box that cannot be read is unverifiable: not one key, fail closed', () => {
+    fake.captureThrows = true
+    schedulePluginUnlockAfterRespawn(SESSION, 'telegram')
+    vi.advanceTimersByTime(35_000 + 3 * 15_000)
+    expect(fake.keys).toEqual([])
+  })
+
   it('never types /mcp into foreign parked text, and never clears it', () => {
     fake.input = 'a human draft'
     schedulePluginUnlockAfterRespawn(SESSION, 'telegram')
@@ -267,23 +281,41 @@ describe('wiring: channels.sh no longer probes, the monitor probes after any res
     expect(sends.filter((l) => /\/mcp|\bUp\b|Escape|C-c/.test(l))).toEqual([])
   })
 
-  it('the monitor tick runs the plugin-unlock restart check', () => {
-    expect(monitor).toMatch(/try \{ checkMainPluginUnlockAfterRestart\(\) \}/)
-    const tracker = monitor.slice(monitor.indexOf('const mainPluginUnlock = createMainIdentityTracker('))
-    expect(tracker.slice(0, tracker.indexOf('\n})'))).toMatch(/schedulePluginUnlockAfterRespawn\(MAIN_CHANNELS_SESSION/)
+  // The tick itself has no behavioural harness in this repo (every tick-wiring spec reads the
+  // source). So the call is pinned by its STATEMENT SHAPE, which a guard cannot hide behind:
+  // unconditional, as the statement right after the identity check, at the same depth, inside
+  // the monitor's check(). `if (false) try {...}` and `if (false)\n try {...}` both fail it
+  // (didi 50263 M8: the old regex matched under both).
+  it('the monitor tick runs the plugin-unlock restart check unconditionally', () => {
+    const lines = monitor.split('\n')
+    const at = lines.flatMap((l, i) => (l.includes('checkMainPluginUnlockAfterRestart()') && !/function /.test(l) ? [i] : []))
+    expect(at).toHaveLength(1)
+    const call = lines[at[0]]
+    expect(call).toMatch(/^(\s*)try \{ checkMainPluginUnlockAfterRestart\(\) \} catch \(err\) \{[^\n]*\}$/)
+    let prev = at[0] - 1
+    while (/^\s*\/\//.test(lines[prev])) prev--
+    expect(lines[prev]).toMatch(/^\s*try \{ checkMainIdentityAfterRestart\(\) \} catch \(err\) \{[^\n]*\}$/)
+    expect(call.match(/^\s*/)![0]).toBe(lines[prev].match(/^\s*/)![0])
+    const check = monitor.indexOf('  async function check() {', monitor.indexOf('export function startChannelPluginMonitor'))
+    expect(check).toBeGreaterThan(0)
+    const offset = lines.slice(0, at[0]).join('\n').length
+    expect(offset).toBeGreaterThan(check)
+    expect(monitor.slice(check, offset)).not.toMatch(/\n {2}\}\n/) // still inside check()
   })
 
-  it('every direct main-session schedule goes through the tracker (shared dedupe)', () => {
+  it('the agent-process respawn states its row rule (failed-or-disabled, #234)', () => {
+    const agentProcess = readFileSync(join(ROOT, 'src/web/agent-process.ts'), 'utf-8')
+    const calls = agentProcess.match(/schedulePluginUnlockAfterRespawn\([^)]*\)/g) ?? []
+    expect(calls).toEqual(["schedulePluginUnlockAfterRespawn(session, provider.type, 'failed-or-disabled')"])
+  })
+
+  it('every direct main-session schedule goes through the factory (shared dedupe, rule per path)', () => {
     const direct = monitor.match(/schedulePluginUnlockAfterRespawn\(MAIN_CHANNELS_SESSION/g) ?? []
-    expect(direct).toHaveLength(1) // only the tracker's own schedule callback
+    expect(direct).toHaveLength(1)
+    const factory = monitor.slice(monitor.indexOf('const mainPluginUnlock = createMainPluginUnlock('))
+    expect(factory.slice(0, factory.indexOf('\n})'))).toMatch(/scheduleProbe: \(policy\) => \{ schedulePluginUnlockAfterRespawn\(MAIN_CHANNELS_SESSION, [^\n]*, policy\) \}/)
+    expect(monitor).toMatch(/function scheduleMainPluginUnlock\(\): void \{\n\s*mainPluginUnlock\.fromRespawn\(\)\n\}/)
+    expect(monitor).toMatch(/function checkMainPluginUnlockAfterRestart\(\): void \{\n\s*const r = mainPluginUnlock\.afterRestartCheck\(\)/)
     expect((monitor.match(/scheduleMainPluginUnlock\(\)/g) ?? []).length).toBeGreaterThanOrEqual(4) // definition + 3 respawn paths
-  })
-
-  it('a restart the tick detects probes failed-only; the respawn paths set failed-or-disabled around their call', () => {
-    expect(monitor).toMatch(/let mainPluginUnlockPolicy: UnlockRowPolicy = 'failed-only'\n/)
-    const tracker = monitor.slice(monitor.indexOf('const mainPluginUnlock = createMainIdentityTracker('))
-    expect(tracker.slice(0, tracker.indexOf('\n})'))).toMatch(/schedulePluginUnlockAfterRespawn\(MAIN_CHANNELS_SESSION, [^\n]*, mainPluginUnlockPolicy\)/)
-    const fn = monitor.slice(monitor.indexOf('function scheduleMainPluginUnlock(): void {'))
-    expect(fn.slice(0, fn.indexOf('\n}'))).toMatch(/mainPluginUnlockPolicy = 'failed-or-disabled'\n\s*try \{ mainPluginUnlock\.schedule\(\) \} finally \{ mainPluginUnlockPolicy = 'failed-only' \}/)
   })
 })

@@ -1679,24 +1679,38 @@ function checkMainIdentityAfterRestart(): void {
 // The row rule follows who restarted the pane (didi 50251 G1): a restart the tick detects is a
 // cold launch, the former channels.sh probe's job, which fired on a failed row only (#232); the
 // in-process respawn paths also revive a disabled row (#234). check() calls the same schedule
-// callback synchronously, so the policy is set only around scheduleMainPluginUnlock's call.
-let mainPluginUnlockPolicy: UnlockRowPolicy = 'failed-only'
-const mainPluginUnlock = createMainIdentityTracker({
+// callback synchronously, so the policy is set only around fromRespawn's call. A factory, so
+// the rule per path is pinned by behaviour, not by the text of this file (didi 50263 M8).
+export interface MainPluginUnlockDeps extends Omit<MainIdentityTrackerDeps, 'schedule'> {
+  scheduleProbe: (policy: UnlockRowPolicy) => void
+}
+export function createMainPluginUnlock(deps: MainPluginUnlockDeps) {
+  let policy: UnlockRowPolicy = 'failed-only'
+  const tracker = createMainIdentityTracker({ ...deps, schedule: () => deps.scheduleProbe(policy) })
+  return {
+    afterRestartCheck: () => tracker.check(),
+    fromRespawn: (): void => {
+      policy = 'failed-or-disabled'
+      try { tracker.schedule() } finally { policy = 'failed-only' }
+    },
+  }
+}
+
+const mainPluginUnlock = createMainPluginUnlock({
   readPid: () => (mainChannelsSessionExists() ? mainPaneClaudePid() : null),
   readPaneAgeMs: mainPaneAgeMs,
   dashboardUptimeMs: () => process.uptime() * 1000,
   // schedulePluginUnlockAfterRespawn only sets a timer.
-  schedule: () => { schedulePluginUnlockAfterRespawn(MAIN_CHANNELS_SESSION, getProvider(getMainAgentProvider()).type, mainPluginUnlockPolicy) },
+  scheduleProbe: (policy) => { schedulePluginUnlockAfterRespawn(MAIN_CHANNELS_SESSION, getProvider(getMainAgentProvider()).type, policy) },
   now: () => Date.now(),
 })
 
 function scheduleMainPluginUnlock(): void {
-  mainPluginUnlockPolicy = 'failed-or-disabled'
-  try { mainPluginUnlock.schedule() } finally { mainPluginUnlockPolicy = 'failed-only' }
+  mainPluginUnlock.fromRespawn()
 }
 
 function checkMainPluginUnlockAfterRestart(): void {
-  const r = mainPluginUnlock.check()
+  const r = mainPluginUnlock.afterRestartCheck()
   if (r.reason) {
     logger.info({ session: MAIN_CHANNELS_SESSION, pidBefore: r.pidBefore, pidAfter: r.pidAfter, reason: r.reason }, 'Main session pane is new to this dashboard and no recent plugin unlock probe was scheduled: scheduling it')
   }

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   createMainIdentityTracker,
+  createMainPluginUnlock,
   decideMainIdentity,
   MAIN_IDENTITY_DEDUPE_MS,
   MAIN_IDENTITY_FIRST_READING_SLACK_MS,
@@ -119,6 +120,75 @@ describe('createMainIdentityTracker', () => {
     r.advance(30_000)
     expect(r.t.check().reason).toBeNull()
     expect(r.scheduled).toEqual([NOW])
+  })
+})
+
+// Card e71b2b51 (didi 50263 M8): the plugin-unlock probe rides the same tracker, and the row rule
+// follows who restarted the pane -- a restart the tick detects is a cold launch (failed-only, #232),
+// a respawn path also revives a disabled row (failed-or-disabled, #234).
+describe('createMainPluginUnlock', () => {
+  function rig() {
+    let pid: number | null = 4242
+    let now = NOW
+    const probes: string[] = []
+    const u = createMainPluginUnlock({
+      readPid: () => pid,
+      readPaneAgeMs: () => 3_600_000,
+      dashboardUptimeMs: () => 30_000,
+      scheduleProbe: (policy) => probes.push(policy),
+      now: () => now,
+    })
+    return { u, probes, setPid: (p: number | null) => { pid = p }, advance: (ms: number) => { now += ms } }
+  }
+
+  it('a restart the tick detects (new pane pid) probes failed-only', () => {
+    const r = rig()
+    r.u.afterRestartCheck()
+    r.setPid(5151)
+    r.advance(MAIN_IDENTITY_DEDUPE_MS)
+    expect(r.u.afterRestartCheck().reason).toBe('restart')
+    expect(r.probes).toEqual(['failed-only'])
+  })
+
+  it('a respawn path probes failed-or-disabled, and the tick does not double it', () => {
+    const r = rig()
+    r.u.afterRestartCheck()
+    r.u.fromRespawn()
+    r.setPid(5151)
+    r.advance(30_000)
+    expect(r.u.afterRestartCheck().reason).toBeNull()
+    expect(r.probes).toEqual(['failed-or-disabled'])
+  })
+
+  it('the respawn rule does not stick: the next cold launch is failed-only again', () => {
+    const r = rig()
+    r.u.afterRestartCheck()
+    r.u.fromRespawn()
+    r.setPid(5151)
+    r.advance(30_000)
+    r.u.afterRestartCheck() // the respawn's own pane: deduped
+    r.setPid(6262)
+    r.advance(MAIN_IDENTITY_DEDUPE_MS)
+    r.u.afterRestartCheck()
+    expect(r.probes).toEqual(['failed-or-disabled', 'failed-only'])
+  })
+
+  it('a throwing probe does not leave the respawn rule set', () => {
+    let pid: number | null = 4242
+    let now = NOW
+    const probes: string[] = []
+    let boom = true
+    const u = createMainPluginUnlock({
+      readPid: () => pid, readPaneAgeMs: () => 3_600_000, dashboardUptimeMs: () => 30_000, now: () => now,
+      scheduleProbe: (policy) => { probes.push(policy); if (boom) throw new Error('timer failed') },
+    })
+    u.afterRestartCheck()
+    expect(() => u.fromRespawn()).toThrow('timer failed')
+    boom = false
+    pid = 5151
+    now += MAIN_IDENTITY_DEDUPE_MS
+    u.afterRestartCheck()
+    expect(probes).toEqual(['failed-or-disabled', 'failed-only'])
   })
 })
 
