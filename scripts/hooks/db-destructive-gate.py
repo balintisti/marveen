@@ -1358,8 +1358,10 @@ def find_hits(command: str, cwd=None, missing=None, _depth=0):
             for pat, why in GIT_PUSH_PATTERNS:
                 if re.search(pat, cmdpos, re.I) and why not in hits:
                     hits.append(why)
+    # The client also by its quote-stripped word: `"psql" -c "DROP TABLE x"` and
+    # `p"sql"` run psql, as `"<tool>" x` runs the tool (card e81a72b7).
     for segment in _split_outside_quotes(command):
-        if _db_client(segment):
+        if _db_client(segment) or _db_client(_command_position_text(segment)):
             for pat, why in SQL_PATTERNS:
                 if re.search(pat, segment, re.I) and why not in hits:
                     hits.append(why)

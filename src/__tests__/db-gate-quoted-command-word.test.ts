@@ -45,6 +45,12 @@ describe('db-destructive-gate: idezett parancsszo (e81a72b7)', () => {
     ['tobbszavas eszkoz idezett szavakkal', "'prisma' migrate reset"],
     ['minden szava idezett', '"prisma" "migrate" "reset"'],
     ['felho-CLI idezett nevvel', '"gcloud" run services delete svc'],
+    // A DB-kliens is: az SQL-osztaly a nyers szegmensben kereste, ahol `"psql` nem szohatar.
+    ['idezett DB-kliens -c', '"psql" -c "DROP TABLE x"'],
+    ['egyszeresen idezett DB-kliens', "'psql' -c 'DROP TABLE x'"],
+    ['reszben idezett DB-kliens', 'p"sql" -c "DROP TABLE x"'],
+    ['idezett utas DB-kliens', '"/opt/homebrew/bin/psql" -c "DROP TABLE x"'],
+    ['idezett sqlite3', '"sqlite3" a.db "DROP TABLE x"'],
   ])('%s: TILTVA', (_name, cmd) => {
     expect(verdict(cmd)).toBe('deny')
   })
@@ -56,6 +62,8 @@ describe('db-destructive-gate: idezett parancsszo (e81a72b7)', () => {
     // A lezaratlan idezojel utani resz a shellnek is idezet (szintaxis-hiba, nem fut le).
     ['lezaratlan idezojel utan', "echo 'never run dropdb by hand"],
     ['ertekadas utan artalmatlan eszkoz', 'FOO=1 prisma generate'],
+    ['idezett DB-kliens artalmatlan lekerdezessel', '"psql" -c "select 1"'],
+    ['SQL-szo prozaban, a kliens csak emlitve', 'git commit -m "psql: never DROP TABLE by hand"'],
   ])('KONTROLL: %s ATMEGY', (_name, cmd) => {
     expect(verdict(cmd)).toBe('none')
   })
