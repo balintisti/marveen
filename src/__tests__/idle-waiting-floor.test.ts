@@ -110,7 +110,7 @@ describe('the wake names a floor expiry AS a floor expiry, not as work', () => {
     const msg = buildWakeMessage(ME, 12, 1, [floorCard], nowMs, 'assigned_open_cards')
     expect(msg).not.toMatch(/FELVEHETO MUNKA/)
     expect(msg).toMatch(/PADLO-LEJARAT \(1\)/)
-    expect(msg).toContain('Merd ujra a legfelso PADLO-LEJARAT')
+    expect(msg).toContain('A legfelso PADLO-LEJARAT kartya feltetele ujramerendo')
     expect(msg).not.toContain('csak valaszra varo ellenorzes')
     expect(msg).not.toContain('tetelt nem tudtam megnevezni')
   })

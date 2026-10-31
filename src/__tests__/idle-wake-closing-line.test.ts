@@ -25,7 +25,7 @@ describe('wake closing line (82c53a51)', () => {
   it.each(cases)('%s: warns against `none` and names where the answer goes', (_n, kind, items) => {
     const msg = buildWakeMessage('dexter', 13, Math.max(items.length, 1), items, NOW, kind)
     const tail = msg.split('\n').slice(-3).join('\n')
-    expect(tail).toContain('NE allitsd `none`-ra')
-    expect(tail).toContain('a kartyara vagy marveennek')
+    expect(tail).toContain('A workcheck.json `none` erteke elnemitja ezt az ort')
+    expect(tail).toContain('a kartya vagy marveen')
   })
 })
