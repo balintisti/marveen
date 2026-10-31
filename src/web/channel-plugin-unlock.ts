@@ -320,7 +320,7 @@ function sendUnlockKeystrokes(session: string, provider: ChannelProviderType, ro
       // on a path that never fires on one. The row is logged: a stale matcher is
       // invisible without it.
       logger.warn({ session, provider, rowState, rowPolicy, row }, 'channel-plugin-unlock: plugin row not in a state this path revives -- skipping unlock')
-      try { execFileSync(TMUX, ['send-keys', '-t', session, 'Escape'], { timeout: 5000 }) } catch { /* ignore */ }
+      try { execFileSync(TMUX, ['send-keys', '-t', session, 'Escape'], { timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] }) } catch { /* ignore */ }
       return
     }
 
