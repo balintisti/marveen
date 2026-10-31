@@ -182,12 +182,13 @@ _DB_CLIENT_NAMES = (r"(psql|sqlite3|mysql|mariadb|mongo|mongosh|cockroach|pg_res
 DB_CLIENTS = re.compile(r"(^|[\s;&|(])" + _DB_CLIENT_NAMES, re.I)
 # The name may come with a directory (`/opt/homebrew/bin/psql`, `$PG/psql`, didi 50405
 # J1): the fleet calls psql that way, and the shell runs the same client. That form counts
-# ONLY in COMMAND POSITION -- the segment start, after env assignments, a launcher or a
+# ONLY in COMMAND POSITION -- the segment start or a `$(` / `<(` / `>(` anywhere (the bare
+# name counts after those too: `echo $(psql ..)`), then env assignments, a launcher or a
 # subshell mark. Anywhere, it would make every path argument ending in a client name one
 # (`git grep "<mark" -- backend/api/prisma`, the fleet replay's one false refusal: the
 # Delta-CRM repo has a `prisma` directory). Group 2 is the name, as in DB_CLIENTS.
 _DB_CLIENT_PATH = re.compile(
-    r"^(\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:(?:\$\(|`)\s*|(?:\"[^\"]*\"|'[^']*'|[^\s\"'])*\s+)"
+    r"(?:^|[$<>]\()(\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|[^\s\"'])*\s+"
     r"|(?:timeout|gtimeout|nice|nohup|env|command|exec|time|caffeinate)(?:\s+(?:-\S+|\d+[smhd]?))*\s+"
     r"|(?:\$\(|[(`{])\s*)*)"
     r"(?:[\w.~${}-]*/)+" + _DB_CLIENT_NAMES, re.I)
@@ -1075,8 +1076,10 @@ _SHELL_FLAG = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
 # bash's value-taking long options too: `--rcfile /tmp/r -c ..` read `/tmp/r` as the
 # script and its -c as data (didi 50316, F2).
 _SHELL_OPT_WITH_ARG = ("-o", "+o", "-O", "+O", "--rcfile", "--init-file")
-# `&>file` / `&>>file` (stdout and stderr) is a redirect word as well (didi 50405 J2).
-_SHELL_REDIRECT_OP = re.compile(r"^(?:\d*(?:[<>]+|>&|<&)|&>>?)$")
+# `&>file` / `&>>file` (stdout and stderr) is a redirect word as well (didi 50405 J2):
+# behind a shell word _command_words already cuts it to `>` / `>>` (_REDIRECT_PIECE), so
+# only _SHELL_REDIRECT, which that cut uses, names `&>`.
+_SHELL_REDIRECT_OP = re.compile(r"^\d*(?:[<>]+|>&|<&)$")
 _SHELL_REDIRECT = re.compile(r"^(?:\d*[<>]|&>)")
 _MAX_SHELL_DEPTH = 3
 

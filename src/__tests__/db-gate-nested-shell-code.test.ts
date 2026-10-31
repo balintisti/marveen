@@ -67,6 +67,14 @@ describe('db-destructive-gate: teljes uttal hivott DB-kliens (0f220f3f, J1)', ()
     ['indito utan', 'timeout 60 /opt/homebrew/bin/psql -c "DROP TABLE x"'],
     ['helyettesitesben', 'x=$(/opt/homebrew/bin/psql -c "DROP TABLE x")'],
     ['&& utan', 'cd /tmp && /opt/homebrew/bin/psql -c "DROP TABLE x"'],
+    ['alhejban', '(/opt/homebrew/bin/psql -c "DROP TABLE x")'],
+    ['kapcsos blokkban', '{ /opt/homebrew/bin/psql -c "DROP TABLE x"; }'],
+    ['backtickben a szegmens elejen', '`/opt/homebrew/bin/psql -c "DROP TABLE x"`'],
+    // A csupasz nev ezekben mar tiltva volt: az utas alak ugyanott kliens.
+    ['$( a szegmens kozepen', 'echo $(/opt/homebrew/bin/psql -c "DROP TABLE x")'],
+    ['$( idezojelben', 'echo "$(/opt/homebrew/bin/psql -c "DROP TABLE x")"'],
+    ['$( utan kornyezeti valtozo', 'echo $(PGPASSWORD=a /opt/homebrew/bin/psql -c "DROP TABLE x")'],
+    ['folyamat-helyettesites <(', 'diff <(/opt/homebrew/bin/psql -c "DROP TABLE x") f'],
   ])('%s: TILTVA', (_name, cmd) => {
     expect(verdict(cmd)).toBe('deny')
   })
@@ -79,6 +87,7 @@ describe('db-destructive-gate: teljes uttal hivott DB-kliens (0f220f3f, J1)', ()
     ['egy psqlx nevu fajl', 'ls /opt/homebrew/bin/psqlx'],
     ['prisma konyvtar argumentumkent (a visszajatszas esete)', 'git grep -n -E "data-color|<mark" "${R}" -- backend/api/src backend/api/prisma'],
     ['SQL-szo keresese a prisma konyvtarban', 'grep -rn "DROP TABLE" backend/api/prisma'],
+    ['prisma konyvtar argumentum $( belul', 'x=$(grep -rln "DROP TABLE" backend/api/prisma)'],
   ])('KONTROLL: %s ATMEGY', (_name, cmd) => {
     expect(verdict(cmd)).toBe('none')
   })
