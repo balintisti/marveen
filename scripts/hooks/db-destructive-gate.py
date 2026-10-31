@@ -90,6 +90,7 @@ measuring what you think. Both are pinned as controls in
 import json
 import os
 import re
+import shlex
 import sys
 import time
 
@@ -527,6 +528,10 @@ def _command_position_text(segment: str) -> str:
 
 
 _HEREDOC = re.compile(r"<<-?\s*([\"\']?)([A-Za-z_][A-Za-z0-9_]*)\1")
+# The interpreters whose heredoc body or `-c`/`-e` argument is CODE, not shell. The
+# list is the executor side of strip_heredoc_bodies AND the trigger of the INTERPRETER
+# CODE class below, so one name cannot be in one and missing from the other.
+_INTERPRETER = r"python(?:3(?:\.\d+)?)?|node|tsx|deno|bun|perl|ruby"
 
 
 def strip_heredoc_bodies(command: str) -> str:
@@ -550,7 +555,7 @@ def strip_heredoc_bodies(command: str) -> str:
         m = _HEREDOC.search(line)
         if m:
             terminator = m.group(2)
-            executes = re.search(r"(^|[\s;&|])(bash|sh|zsh|psql|sqlite3|mysql|python3?|node)([\s;&|]|$)", line)
+            executes = re.search(r"(^|[\s;&|])(bash|sh|zsh|psql|sqlite3|mysql|%s)([\s;&|]|$)" % _INTERPRETER, line)
             # Each kept body line is PREFIXED with the opener's client, so the SQL class
             # (which needs client AND statement in one segment) still sees them together
             # after the newline/semicolon split. Joining the body onto the opener line
@@ -706,10 +711,177 @@ def expand_file_args(command: str, cwd=None):
     return extra, problems, skipped
 
 
+# === INTERPRETER CODE: the fifth class, because an executed body is CODE, not shell
+# (card 94d86b92) ===============================================================
+#
+# marveen's measurement, 2026-10-31, on the live tree a8cac9e26 (store/gate-probes/):
+#
+#     python3 - <<'PY' ... subprocess.run(['dropdb', '--if-exists', n]) ... PY  -> ALLOW
+#     dropdb --if-exists <same name>                                         -> DENY
+#
+# and it was not a probe only: 54 idle test databases were dropped that way the same
+# night, and the gate never spoke. The mechanism is two correct rules composed again.
+# strip_heredoc_bodies KEEPS a python body and prefixes every line with `python3`, so
+# the body is checked -- but it is checked AS SHELL, and shell rules blank quoted text.
+# In code the command name IS a quoted string (`'dropdb'`), and `['psql', '-c', sql]`
+# puts a quote, not a space, before the client the SQL class looks for. Every name the
+# gate knows arrives in exactly the form the shell rules are built to ignore.
+#
+# So an executed interpreter body (heredoc, or the argument of `python3 -c` / `node -e`)
+# gets a second reading as code:
+#   1. adjacent string literals are FOLDED first: `'drop' + 'db'` and `'drop' 'db'`
+#      become `'dropdb'`. That is the second shape marveen used (comment on the card) --
+#      a gate that one `+` switches off is not a gate.
+#   2. quotes and list/call punctuation become spaces, so `['npx', 'prisma', 'migrate',
+#      'reset']` reads `npx prisma migrate reset`, and the TOOL, CLOUD and GIT classes
+#      run over each line exactly as they run over a shell segment.
+#   3. the SQL class needs client AND statement in one place, as everywhere else -- but
+#      in code that place is the whole BODY, not a line: the statement is usually a
+#      variable a few lines above the call. The client is either a CLI reached through a
+#      process sink, or a driver the code imports in its own language (psycopg,
+#      asyncpg, sqlalchemy, `pg`, `@prisma/client`, ...).
+#      `DELETE FROM t` also ends at a closing quote or bracket here, because in code the
+#      statement sits inside `execute("...")`, not before a `;`.
+#
+# WHAT IS STILL NOT COVERED, and it is the same boundary as `psql -f "$f"`: a name or
+# statement built at runtime -- a variable, `''.join(...)`, a slice, `chr()`, base64,
+# a file the code reads. The hook sees a command string, never the process that will
+# run. This class closes the TYPED shape, including a typed literal concatenation; it
+# does not make the gate a sandbox. The way to run a genuinely intended drop stays one
+# token: MARVEEN_DB_GATE=allow, which leaves a log line (marveen's own correction on
+# the card: the concatenated name left none).
+#
+# THE FALSE-REFUSAL SIDE, MEASURED, and it decided the shape. The first version read
+# every executed body as code with no further condition. Replayed against the fleet's
+# real traffic -- 306 204 unique Bash commands from 30 days of every agent's transcripts,
+# old gate vs new, nothing executed -- it refused 32 commands the old gate allowed, and
+# about 24 of them were python heredocs that only EDIT a file (`s.replace(...)` with a
+# drop command as the text being inserted) or write notes. Roughly one false refusal a
+# day across the fleet, on exactly the editing work the gate exists to leave alone. So
+# a name only counts when the code has a PROCESS SINK (subprocess, os.system,
+# child_process, system(), ...) and SQL only with a client it can reach (a CLI through a
+# sink, or an imported driver). What that still refuses: an editing script that also
+# runs a subprocess, which is loud and one token away from passing. What it gives up:
+# a sink reached without its name (`__import__('sub' + 'process')`) -- runtime-built,
+# the boundary above. The numbers after the change are in the card 94d86b92 hand-off.
+# Prose written by `cat > x.md` is untouched -- cat executes nothing -- and the Write
+# tool never reaches this hook.
+_CODE_FOLD = re.compile(r"[\"'`]\s*\+?\s*[\"'`]")
+_CODE_PUNCT = re.compile(r"[\"'`,\[\](){}]")
+# A CLI client only runs from code through a process sink; a driver runs by itself, but
+# only when the code IMPORTS it in its own language -- a python body that writes a
+# TypeScript test file full of `@prisma/client` imports runs no database.
+_CODE_CLI_CLIENTS = re.compile(
+    r"(?<![\w-])(psql|sqlite3|mysql|mariadb|mongo|mongosh|cockroach|pg_restore|pgcli|"
+    r"prisma|supabase|dbmate|flyway|liquibase)(?![\w-])", re.I)
+_CODE_SINKS = {
+    "python": re.compile(r"\bsubprocess\b|\bos\.(?:system|popen|exec\w*|spawn\w*)\b|\bpty\.spawn\b"),
+    "node": re.compile(r"\bchild_process\b|\b(?:execSync|execFileSync|spawnSync)\b|\bBun\.spawn|\bDeno\.(?:Command|run)\b"),
+    "perl": re.compile(r"\bsystem\s*\(|\bexec\s*\(|\bqx\s*[(\[{/]|`|\bIPC::|\bopen\s*\(?[^\n]*\|"),
+    "ruby": re.compile(r"\bsystem\s*\(|\bexec\s*\(|%x\s*[(\[{]|`|\bOpen3\b|\bIO\.popen\b|\bspawn\s*\("),
+}
+_CODE_DRIVERS = {
+    "python": re.compile(r"^\s*(?:import|from)\s+(?:psycopg2?|psycopg|sqlite3|asyncpg|sqlalchemy|pg8000|"
+                         r"pymysql|MySQLdb|mysql\.connector|duckdb)\b", re.M),
+    "node": re.compile(r"require\(\s*[\"'`](?:pg|mysql2?|better-sqlite3|sqlite3|knex|@prisma/client|postgres|mssql)"
+                       r"[\"'`]\s*\)|^\s*import\b[^\n]*\bfrom\s*[\"'](?:pg|mysql2?|better-sqlite3|sqlite3|knex|"
+                       r"@prisma/client|postgres|mssql)[\"']", re.M),
+    "perl": re.compile(r"\bDBI\b"),
+    "ruby": re.compile(r"require\s*\(?\s*[\"'](?:pg|sqlite3|mysql2|sequel|active_record)[\"']"),
+}
+# The terminator is `; ) ] ,` or the end -- NOT a quote. A quote there made the regex back off
+# one closing quote and read the `"` of `delete from "DuplicatePair" where id=...` as the end of
+# the statement: a false refusal the fleet replay found in mandark's real traffic. A statement in
+# code still ends at its call's `)` or list's `]`/`,` once the closing quotes are consumed.
+_CODE_DELETE = re.compile(
+    r"\bDELETE\s+FROM\s+[\\\"\'`]*[\w.]+[\\\"\'`]*\s*(?:;|$|[)\],])", re.I)
+_CODE_FLAG = re.compile(r"^(?:-[A-Za-z]*[cCeEp]|--eval|--print)$")
+_INTERPRETER_WORD = re.compile(r"^(?:.*/)?(?:%s)$" % _INTERPRETER)
+
+
+def _code_lang(word: str) -> str:
+    name = word.rsplit("/", 1)[-1]
+    if name.startswith("python"):
+        return "python"
+    return name if name in ("perl", "ruby") else "node"
+
+
+def interpreter_code_blocks(command: str):
+    """(language, code) for every piece of interpreter CODE the command will execute:
+    heredoc bodies whose opener runs an interpreter, and the argument of `-c` / `-e` /
+    `--eval`. An argument that cannot be tokenised is returned whole -- an extra check,
+    never a missed one."""
+    blocks = []
+    lines = command.split("\n")
+    i = 0
+    opener = re.compile(r"(^|[\s;&|])(%s)([\s;&|]|$)" % _INTERPRETER)
+    while i < len(lines):
+        m = _HEREDOC.search(lines[i])
+        o = opener.search(lines[i]) if m else None
+        if o:
+            body, i = [], i + 1
+            while i < len(lines) and lines[i].strip() != m.group(2):
+                body.append(lines[i])
+                i += 1
+            blocks.append((_code_lang(o.group(2)), "\n".join(body)))
+        i += 1
+    for segment in _split_outside_quotes(_LINE_CONT.sub(" ", command)):
+        try:
+            words = shlex.split(segment, comments=False, posix=True)
+        except ValueError:
+            u = re.search(r"(^|\s)(%s)\s" % _INTERPRETER, segment)
+            if u:
+                blocks.append((_code_lang(u.group(2)), segment))
+            continue
+        while words and _ENV_ASSIGN.match(words[0]):
+            words.pop(0)
+        if not words or not _INTERPRETER_WORD.match(words[0]):
+            continue
+        for k, word in enumerate(words[1:-1], start=1):
+            if _CODE_FLAG.match(word):
+                blocks.append((_code_lang(words[0]), words[k + 1]))
+                break
+    return blocks
+
+
+def _code_hits(lang: str, code: str):
+    """The TOOL / CLOUD / GIT / SQL classes over one piece of interpreter code. A
+    command name only counts when the code can start a process at all, and SQL only
+    with a client it can reach -- see THE FALSE-REFUSAL SIDE above."""
+    folded = _CODE_FOLD.sub("", code)
+    flat = _CODE_PUNCT.sub(" ", folded)
+    found = []
+    sink = bool(_CODE_SINKS[lang].search(code))
+    for line in flat.split("\n") if sink else []:
+        for segment in _SEG.split(line):
+            words = " ".join(segment.split())
+            if not words:
+                continue
+            for pat, why in TOOL_PATTERNS:
+                if re.search(pat, words, re.I):
+                    found.append(why)
+            if CLOUD_CLIS.search(words):
+                found.extend(why for pat, why in CLOUD_PATTERNS if re.search(pat, words, re.I))
+            if GIT_CLI.search(words) and GIT_PUSH_VERB.search(words):
+                found.extend(why for pat, why in GIT_PUSH_PATTERNS if re.search(pat, words, re.I))
+    if (sink and _CODE_CLI_CLIENTS.search(flat)) or _CODE_DRIVERS[lang].search(code):
+        joined = folded.replace("\n", " ")
+        for pat, why in SQL_PATTERNS[:-1]:
+            if re.search(pat, joined, re.I):
+                found.append(why)
+        if _CODE_DELETE.search(joined):
+            found.append(SQL_PATTERNS[-1][1])
+    return ["%s [in executed interpreter code: a quoted name counts there]" % w for w in found]
+
+
 def find_hits(command: str, cwd=None, missing=None):
     """`missing`, if a list, collects literal files that do not exist (logged by the
     caller, never refused). Everything else stays pure."""
     hits = []
+    for lang, code in interpreter_code_blocks(command):
+        for why in _code_hits(lang, code):
+            if why not in hits:
+                hits.append(why)
     command = strip_heredoc_bodies(command)
     extra, problems, absent = expand_file_args(command, cwd)
     if missing is not None:
