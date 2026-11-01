@@ -796,6 +796,59 @@ def _heredoc_body_sends(body: str) -> bool:
     return bool(_CODE_EXECISH.search(body) and _HEREDOC_SENDER_ARGV.search(body))
 
 
+# A PYTHON BODY IS JUDGED ON ITS CODE, NOT ON ITS STRINGS (card bc98d6d5): string-literal
+# contents and comments blanked, fail-closed on a runner word, a script-path literal, an
+# f/t-string or an open literal. Full note and the named cost: pythonCodeText in
+# email-send-gate.mjs.
+_PY_RUNNER = re.compile(
+    r"\bsubprocess\b|os\.system|\bpopen\b|child_process|\bexec[A-Za-z]*\s*\(|\bspawn[A-Za-z]*\s*\("
+    r"|\beval\s*\(|(?<![\w.])compile\s*\(|__import__|__builtins__|\bbuiltins\b|\bimportlib\b"
+    r"|\brunpy\b|\bpickle\b|\bmarshal\b|\bcodecs\b",
+    re.I,
+)
+_PY_SCRIPT_PATH_LIT = re.compile(r"""['"][^'"\n]*\.(?:py|sh|bash|zsh|js|mjs|cjs)['"]""", re.I)
+_PY_STRING_PREFIX = re.compile(r"(?<!\w)[rRbBuUfFtT]{1,2}$")
+
+
+def _python_code_text(body: str):
+    """The body with string contents and comments blanked; None = judge it whole."""
+    if _PY_RUNNER.search(body) or _PY_SCRIPT_PATH_LIT.search(body):
+        return None
+    out, i, n = [], 0, len(body)
+    while i < n:
+        ch = body[i]
+        if ch == "#":
+            nl = body.find("\n", i)
+            i = n if nl < 0 else nl
+            continue
+        if ch in "'\"":
+            pre = _PY_STRING_PREFIX.search("".join(out[-3:]))
+            if pre and re.search(r"[fFtT]", pre.group(0)):
+                return None
+            q = ch * 3 if body.startswith(ch * 3, i) else ch
+            j = i + len(q)
+            while j < n and not body.startswith(q, j):
+                if body[j] == "\\":
+                    j += 2
+                    continue
+                if len(q) == 1 and body[j] == "\n":
+                    return None
+                j += 1
+            if j >= n:
+                return None
+            out.append(q + q)
+            i = j + len(q)
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _python_body_sends(body: str) -> bool:
+    code = _python_code_text(body)
+    return _heredoc_body_sends(body if code is None else code)
+
+
 # WHO READS THE HEREDOC (didi's K1, 6525aba3 50742; N1/N2, 50772): only the heredoc's OWN
 # command, the text after the last ; & | of the innermost command context open at the <<,
 # found by a quote-aware walk in which $( , ( and a backtick open a new command (inside
@@ -869,21 +922,23 @@ def _reader_runs_script_file(rest: str) -> bool:
 
 
 def _heredoc_head_kinds(head: str):
-    """(interp, shell): every reader word counts, not the first (didi's F2, 6525aba3 50861),
+    """(py, js, shell): every reader word counts, not the first (didi's F2, 6525aba3 50861),
     except one that runs a script file (the body is that script's stdin data).
 
     Twin: heredocHeadKinds in email-send-gate.mjs.
     """
-    interp = shell = False
+    py = js = shell = False
     own = _heredoc_own_command(head)
     for m in _HEREDOC_READER_WORD.finditer(own):
         if _reader_runs_script_file(own[m.end():]):
             continue
         if _WRAPPER_SHELL.match(m.group(1)):
             shell = True
+        elif _PYTHON.match(m.group(1)):
+            py = True
         else:
-            interp = True
-    return interp, shell
+            js = True
+    return py, js, shell
 
 
 # THE HEREDOC FORMS BASH RUNS (didi's K2, 6525aba3 50742): <<"EOF", <<\EOF, a - or . in the
@@ -935,7 +990,9 @@ def _written_then_run(cmd: str, written: dict, depth: int) -> bool:
             if not args or args[0] not in written:
                 continue
             body = written[args[0]]
-            if (_PYTHON.match(prog) or _NODEISH.match(prog)) and _heredoc_body_sends(body):
+            if _PYTHON.match(prog) and _python_body_sends(body):
+                return True
+            if _NODEISH.match(prog) and _heredoc_body_sends(body):
                 return True
             if _WRAPPER_SHELL.match(prog) and depth < 3 and is_send_invocation(body, _depth=depth + 1):
                 return True
@@ -953,8 +1010,10 @@ def _heredoc_program_sends(cmd: str, depth: int = 0) -> bool:
         if w:
             written[w.group(2)] = body
         ctx += cmd[frm:start]
-        interp, shell = _heredoc_head_kinds(ctx)
-        if interp and _heredoc_body_sends(body):
+        py, js, shell = _heredoc_head_kinds(ctx)
+        if js and _heredoc_body_sends(body):
+            return True
+        if py and _python_body_sends(body):
             return True
         if shell and depth < 3 and is_send_invocation(body, _depth=depth + 1):
             return True

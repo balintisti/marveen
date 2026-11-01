@@ -435,6 +435,53 @@ export const HEREDOC_BODY_WAY_OUT =
 const HEREDOC_SENDER_ARGV = /['"](?:[^'"\s]*\/)?(?:sendmail|msmtp|swaks|send\.py)(?=['"\s])/
 const heredocBodySends = (body) =>
   CODE_SEND.test(body) || CODE_SEND_MODULE.test(body) || (CODE_EXECISH.test(body) && HEREDOC_SENDER_ARGV.test(body))
+// A PYTHON BODY IS JUDGED ON ITS CODE, NOT ON ITS STRINGS (card bc98d6d5). All 34 denials that
+// 6525aba3 A2 added over 20 694 real commands (didi, 7 days) were Python patch scripts whose
+// send word sat in a string literal (TS source being written), never in a call. For a body
+// read by Python only, string-literal contents and comments are blanked before the send
+// patterns run. Fail-closed, the body is judged whole, when: a word that can run text as code
+// is anywhere in it (PY_RUNNER), a quoted literal names a runnable script file
+// (PY_SCRIPT_PATH_LIT: send code written to x.py and run later), an f-string or t-string is
+// present (its {} holds code, and nested quotes defeat a flat scan), or a literal is left
+// open. NOT COVERED, named: send code in a string written to a .ts file or a path built at
+// run time, and run by a LATER command; the literal used to be the only catch. A Node body is
+// judged whole as before. Twin: _python_code_text in hooks/outgoing-copy-gate.py.
+const PY_RUNNER = /\bsubprocess\b|os\.system|\bpopen\b|child_process|\bexec[A-Za-z]*\s*\(|\bspawn[A-Za-z]*\s*\(|\beval\s*\(|(?<![\w.])compile\s*\(|__import__|__builtins__|\bbuiltins\b|\bimportlib\b|\brunpy\b|\bpickle\b|\bmarshal\b|\bcodecs\b/i
+const PY_SCRIPT_PATH_LIT = /['"][^'"\n]*\.(?:py|sh|bash|zsh|js|mjs|cjs)['"]/i
+const PY_STRING_PREFIX = /(?<!\w)[rRbBuUfFtT]{1,2}$/
+export function pythonCodeText(body) {
+  const s = String(body ?? '')
+  if (PY_RUNNER.test(s) || PY_SCRIPT_PATH_LIT.test(s)) return null
+  let out = ''
+  let i = 0
+  while (i < s.length) {
+    const ch = s[i]
+    if (ch === '#') {
+      const nl = s.indexOf('\n', i)
+      i = nl < 0 ? s.length : nl
+      continue
+    }
+    if (ch === "'" || ch === '"') {
+      const pre = PY_STRING_PREFIX.exec(out)
+      if (pre && /[fFtT]/.test(pre[0])) return null
+      const q = s.startsWith(ch.repeat(3), i) ? ch.repeat(3) : ch
+      let j = i + q.length
+      while (j < s.length && !s.startsWith(q, j)) {
+        if (s[j] === '\\') { j += 2; continue }
+        if (q.length === 1 && s[j] === '\n') return null
+        j++
+      }
+      if (j >= s.length) return null
+      out += q + q
+      i = j + q.length
+      continue
+    }
+    out += ch
+    i++
+  }
+  return out
+}
+const pythonBodySends = (body) => heredocBodySends(pythonCodeText(body) ?? body)
 // WHO READS THE HEREDOC (didi's K1, 6525aba3 50742; N1/N2, 50772). The opener line used to
 // be matched as a whole, so ANY interpreter word before the << made the body a program: a
 // PATH entry (`export PATH=/opt/homebrew/opt/node@22/bin:$PATH && git commit -F - <<`), an
@@ -487,7 +534,8 @@ export function heredocOwnCommand(head) {
 // didi's F2 (6525aba3 50861): the FIRST reader word used to decide alone, so
 // `env bash -c 'python3 -' <<` and `docker exec -i c bash -c "python3 -" <<` read a Python
 // body as shell. Every reader word in the own command counts: a body read both ways is
-// judged both ways. Returns { interp, shell }.
+// judged both ways. Returns { py, js, shell }: a Python reader judges the body's code only
+// (pythonCodeText), any other interpreter the whole body.
 const HEREDOC_READER_WORD_G = new RegExp(HEREDOC_READER_WORD.source, 'gi')
 // A reader word followed by a script FILE runs that file, and the heredoc is the script's stdin:
 // data, not a program. `bash agent-msg.sh a b - <<'VEGE'` is the fleet's message form, and a
@@ -509,12 +557,13 @@ export function readerRunsScriptFile(rest) {
   return false
 }
 export function heredocHeadKinds(head) {
-  const kinds = { interp: false, shell: false }
+  const kinds = { py: false, js: false, shell: false }
   const own = heredocOwnCommand(head)
   for (const m of own.matchAll(HEREDOC_READER_WORD_G)) {
     if (readerRunsScriptFile(own.slice(m.index + m[0].length))) continue
     if (WRAPPER_SHELL.test(m[1])) kinds.shell = true
-    else kinds.interp = true
+    else if (PYTHON.test(m[1])) kinds.py = true
+    else kinds.js = true
   }
   return kinds
 }
@@ -557,7 +606,8 @@ function writtenThenRun(cmd, written, depth) {
       if (prog.toLowerCase() === 'npx' && args.length) args = args.slice(1) // npx <runner> <file>
       if (!args.length || !written.has(args[0])) continue
       const body = written.get(args[0])
-      if ((PYTHON.test(prog) || NODEISH.test(prog)) && heredocBodySends(body)) return true
+      if (PYTHON.test(prog) && pythonBodySends(body)) return true
+      if (NODEISH.test(prog) && heredocBodySends(body)) return true
       if (WRAPPER_SHELL.test(prog) && depth < 3 && isSendInvocation(body, depth + 1)) return true
     }
   }
@@ -688,7 +738,8 @@ function heredocProgramSends(cmd, depth = 0) {
     if (w) written.set(w[2], body)
     ctx += cmd.slice(from, index)
     const kinds = heredocHeadKinds(ctx)
-    if (kinds.interp && heredocBodySends(body)) return true
+    if (kinds.js && heredocBodySends(body)) return true
+    if (kinds.py && pythonBodySends(body)) return true
     if (kinds.shell && depth < 3 && isSendInvocation(body, depth + 1)) return true
     ctx += intro + '\n'
     from = end

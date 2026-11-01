@@ -1360,6 +1360,96 @@
       "name": "[6525aba3 A2 twin] whitespace between .send and ( is still the Resend SDK call in both twins",
       "cmd": "node -e \"new Resend(k).emails.send ({ to: 'a@b.c' })\"",
       "expected": true
+    },
+    {
+      "name": "[bc98d6d5] a Python patch script writing TS source with the send word only in a string literal is not a send",
+      "cmd": "python3 - <<'PY'\np='src/a.ts'\ns=open(p).read()\nopen(p,'w').write(s.replace('x', 'await this.mailer.sendMail(opts)'))\nPY",
+      "expected": false
+    },
+    {
+      "name": "[bc98d6d5] a send word in a Python comment is not a send",
+      "cmd": "python3 - <<'PY'\n# was: smtplib.SMTP('h').send_message(m)\nprint('ok')\nPY",
+      "expected": false
+    },
+    {
+      "name": "[bc98d6d5] a send word in a Python triple-quoted string is not a send",
+      "cmd": "python3 - <<'PY'\ndoc = \"\"\"\nimport smtplib\nsmtplib.SMTP('h')\n\"\"\"\nprint(len(doc))\nPY",
+      "expected": false
+    },
+    {
+      "name": "[bc98d6d5] real Python send code next to a string literal is still a send",
+      "cmd": "python3 - <<'PY'\nlabel = 'just text'\nimport smtplib\nsmtplib.SMTP('h').send_message(m)\nPY",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] a string literal that exec() runs is still a send (runner word, judged whole)",
+      "cmd": "python3 - <<'PY'\nexec('import smtplib; smtplib.SMTP(\"h\")')\nPY",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] bare compile() is a runner word: judged whole",
+      "cmd": "python3 - <<'PY'\nc = compile('import smtplib', 'x', 'exec')\nPY",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] re.compile is not a runner word: the literal is masked",
+      "cmd": "python3 - <<'PY'\nimport re\nr = re.compile('import smtplib')\nprint(r)\nPY",
+      "expected": false
+    },
+    {
+      "name": "[bc98d6d5] an f-string keeps the body whole (its braces hold code)",
+      "cmd": "python3 - <<'PY'\nprint(f\"{smtplib.SMTP('h')}\")\nPY",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] a nested-quote f-string cannot hide code in a later fragment",
+      "cmd": "python3 - <<'PY'\nprint(f\"{\"x\"}{smtplib.SMTP()}\")\nPY",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] a t-string keeps the body whole too",
+      "cmd": "python3 - <<'PY'\nprint(t'{smtplib.SMTP(1)}')\nPY",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] send code written to a .py path stays a send (run later by another command)",
+      "cmd": "python3 - <<'PY'\nopen('/tmp/s.py','w').write('import smtplib')\nPY",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] an unterminated single-quoted literal keeps the body whole",
+      "cmd": "python3 - <<'PY'\nx = 'open\nimport smtplib\nPY",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] a raw string ending in an escaped quote does not swallow the code after it",
+      "cmd": "python3 - <<'PY'\nx = r'\\''\nimport smtplib\nPY",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] a Node body is judged whole: a send word in a JS string literal still denies",
+      "cmd": "node - <<'JS'\nconst s = 'await t.sendMail(o)'\nconsole.log(s)\nJS",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] written then run by Python: a string-only body is not a send",
+      "cmd": "cat > /tmp/p.py <<'EOF'\nopen('a.ts','w').write('sendMail(x)')\nEOF\npython3 /tmp/p.py",
+      "expected": false
+    },
+    {
+      "name": "[bc98d6d5] written then run by Python: real send code is still a send",
+      "cmd": "cat > /tmp/p.py <<'EOF'\nimport smtplib\nEOF\npython3 /tmp/p.py",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] written then run by Node: a string-only body still denies (Node judged whole)",
+      "cmd": "cat > /tmp/p.js <<'EOF'\nconst s = 'sendMail(x)'\nEOF\nnode /tmp/p.js",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] an escaped quote does not end the literal: the send word after it stays string",
+      "cmd": "python3 - <<'PY'\nx = 'it\\'s sendMail(a)'\nprint(x)\nPY",
+      "expected": false
     }
   ]
 }
