@@ -406,6 +406,14 @@ export function buildWrapperDepthMsg() {
   )
 }
 
+// The way out when heredocBodyHit is the reason; the copy gate's twin is _HEREDOC_BODY_WAY_OUT.
+// A file written by the file tool and run by a SEPARATE Bash call is out of the classifier's
+// reach (NOT COVERED below); the same command writing and running it is not (writtenThenRun).
+export const HEREDOC_BODY_WAY_OUT =
+  'A heredoc torzse kodnak olvasodik, es egy kuldo-szo all benne (akar egy sztringben is). ' +
+  'Ha NEM kuldeni akartal (patch- vagy teszt-szkript): ird a szkriptet fajlba a fajliro eszkozzel, ' +
+  'es futtasd fajlkent egy KULON Bash-hivasban.'
+
 // Issue #1853, the heredoc form: the segmenter drops heredoc BODIES, but when the
 // command that opens one is an interpreter (`python3 - <<'PY'`, `node <<EOF`) the body
 // IS the program. Mirrors _heredoc_program_sends in hooks/outgoing-copy-gate.py.
@@ -689,7 +697,17 @@ function heredocProgramSends(cmd, depth = 0) {
 }
 
 export function isSendInvocation(cmd, depth = 0) {
-  if (heredocProgramSends(cmd, depth)) return true
+  return heredocProgramSends(cmd, depth) || commandTextSends(cmd, depth)
+}
+
+// True when a heredoc body read as a program is the WHOLE reason for the deny, so the
+// deny names the way out (marveen 50880, 6525aba3): the over-protection on string
+// literals in a patch script is accepted, and its price is one step, not a lost turn.
+export function heredocBodyHit(cmd) {
+  return heredocProgramSends(cmd) && !commandTextSends(cmd, 0)
+}
+
+function commandTextSends(cmd, depth) {
   let segments
   try {
     segments = segmentsTokens(cmd)
@@ -743,7 +761,10 @@ export function gateDecision(toolName, toolInput) {
   }
   if (name === 'Bash') {
     const cmd = String(toolInput?.command ?? '')
-    if (isSendInvocation(cmd)) return wrapperDepthHit(cmd) ? { deny: true, kind: 'wrapper-depth' } : { deny: true }
+    if (isSendInvocation(cmd)) {
+      if (wrapperDepthHit(cmd)) return { deny: true, kind: 'wrapper-depth' }
+      return heredocBodyHit(cmd) ? { deny: true, kind: 'heredoc-body' } : { deny: true }
+    }
   }
   return { deny: false }
 }
@@ -985,6 +1006,7 @@ if (isInvokedDirectly()) {
     const { botName, ownerName } = readBrandEnv()
     if (kind === 'draft-required') deny(buildDraftOnlyMsg(ownerName))
     if (kind === 'wrapper-depth') deny(buildWrapperDepthMsg())
+    if (kind === 'heredoc-body') deny(buildGateMsg(botName, ownerName) + ' ' + HEREDOC_BODY_WAY_OUT)
     // Thread-scoped narrowing: only when the scaffold wired this agent's hook
     // command with the flag (capability-driven, regenerated on every spawn),
     // and only for the direct send_email tool. Bash send routes and

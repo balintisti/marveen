@@ -117,7 +117,10 @@ _CURLISH = re.compile(r"^(curl|wget|http)$", re.I)
 # merve: a grep-alaku cenzusok ATENGEDNEK. KIMONDOTT MARADEK: egy `python3 -c "import smtplib; ..."`
 # alaku introspekcio blokkolodik; egy `grep`/`rg` alaku nem.
 _CODE_SEND = re.compile(
-    r"\bsmtplib\.|\bimport\s+smtplib\b|SMTP\s*\(|\bsendMail\s*\(|\bsendEmail\s*\(|\bmail\.send\s*\(",
+    r"\bsmtplib\.|\bimport\s+smtplib\b|SMTP\s*\(|\bsendMail\s*\(|\bsendEmail\s*\(|\bmail\.send\s*\("
+    # The Resend SDK call (`resend.emails.send(`). It was in email-send-gate.mjs only, so the
+    # twins split on 2 of 14 970 real commands (6525aba3; marveen 50880: align to the stricter).
+    r"|\bresend\b(?!-\w)[^\n]{0,80}\.\s*send\s*\(",
     re.I,
 )
 # Issue #1853 (stylnet): the support-mail sender LOADED AS A MODULE, not run by its
@@ -953,8 +956,23 @@ def _heredoc_program_sends(cmd: str, depth: int = 0) -> bool:
 
 
 def is_send_invocation(cmd: str, _depth: int = 0) -> bool:
-    if _heredoc_program_sends(cmd, _depth):
-        return True
+    return _heredoc_program_sends(cmd, _depth) or _command_text_sends(cmd, _depth)
+
+
+# The way out when a heredoc body read as a program is the WHOLE reason (marveen 50880,
+# 6525aba3). Twin: heredocBodyHit / HEREDOC_BODY_WAY_OUT in email-send-gate.mjs.
+_HEREDOC_BODY_WAY_OUT = (
+    "A heredoc torzse kodnak olvasodik, es egy kuldo-szo all benne (akar egy sztringben is). "
+    "Ha NEM kuldeni akartal (patch- vagy teszt-szkript): ird a szkriptet fajlba a fajliro eszkozzel, "
+    "es futtasd fajlkent egy KULON Bash-hivasban."
+)
+
+
+def heredoc_body_hit(cmd: str) -> bool:
+    return _heredoc_program_sends(cmd) and not _command_text_sends(cmd, 0)
+
+
+def _command_text_sends(cmd: str, _depth: int) -> bool:
     try:
         segments = _segments_tokens(cmd)
     except ValueError:
@@ -2304,9 +2322,11 @@ def main():
             )
             sys.exit(2)
         reason = unreadable or "a hook nem talalt vizsgalhato szoveget a hivasban"
+        way_out = _HEREDOC_BODY_WAY_OUT + "\n" if tool == "Bash" and heredoc_body_hit(cmd) else ""
         sys.stderr.write(
             "KIMENO-SZOVEG KAPU: TILTVA, mert a levelet nem tudtam megvizsgalni.\n"
             f"Ok: {reason}.\n\n"
+            + way_out +
             "Ez szandekosan fail-closed: egy vizsgalhatatlan kuldes pont a kaput utne ki.\n"
             "Tedd vizsgalhatova, aztan kuldd ujra -- ABSZOLUT utvonalu stdin-atiranyitas "
             "(< /teljes/ut/body.txt, shell-valtozo NELKUL), vagy --body-ban atadott szoveg.\n"

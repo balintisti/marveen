@@ -1295,6 +1295,21 @@
       "name": "[6525aba3 A2 script-file] CONTROL: a script file earlier in the line does not hide a later reader (bash x.sh && python3 -)",
       "cmd": "bash /x/a.sh; python3 - <<'EOF'\nimport smtplib\nsmtplib.SMTP('h').sendmail('a','b','c')\nEOF",
       "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 parity] the Resend SDK call in a Python heredoc program is a send in BOTH twins (was JS-only, marveen 50880)",
+      "cmd": "python3 - <<'PY'\nimport resend\nresend.Emails.send({'to': 'a@b.c'})\nPY",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 parity] the Resend SDK call in node -e is a send in BOTH twins",
+      "cmd": "node -e \"const { Resend } = require('resend'); new Resend(k).emails.send({ to: 'a@b.c' })\"",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 parity] CONTROL: importing resend without a .send( call is not a send",
+      "cmd": "python3 -c \"import resend; print(resend.__version__)\"",
+      "expected": false
     }
   ]
 }
