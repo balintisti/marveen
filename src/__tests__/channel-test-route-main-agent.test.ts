@@ -17,12 +17,13 @@
  * - the main agent without a token is 404 "not configured", not a crash.
  * fetch is stubbed: no Slack or Telegram call.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const ROOT = mkdtempSync(join(tmpdir(), 'chtest-route-'))
+const mkTmp = tmpDirs()
+const ROOT = mkTmp('chtest-route-')
 const AGENTS = join(ROOT, 'agents')
 
 vi.mock('../web/agent-config.js', async (importOriginal) => {
@@ -65,8 +66,8 @@ const saved = { slack: process.env.SLACK_STATE_DIR, telegram: process.env.TELEGR
 
 beforeEach(() => {
   calls.length = 0
-  mainSlack = mkdtempSync(join(tmpdir(), 'chtest-main-slack-'))
-  mainTelegram = mkdtempSync(join(tmpdir(), 'chtest-main-tg-'))
+  mainSlack = mkTmp('chtest-main-slack-')
+  mainTelegram = mkTmp('chtest-main-tg-')
   process.env.SLACK_STATE_DIR = mainSlack
   process.env.TELEGRAM_STATE_DIR = mainTelegram
   vi.stubGlobal('fetch', async (url: string, init?: { headers?: Record<string, string> }) => {
@@ -91,7 +92,6 @@ afterEach(() => {
 afterAll(() => {
   if (saved.slack === undefined) delete process.env.SLACK_STATE_DIR; else process.env.SLACK_STATE_DIR = saved.slack
   if (saved.telegram === undefined) delete process.env.TELEGRAM_STATE_DIR; else process.env.TELEGRAM_STATE_DIR = saved.telegram
-  rmSync(ROOT, { recursive: true, force: true })
 })
 
 describe('channel test route: the main agent', () => {
@@ -120,6 +120,13 @@ describe('channel test route: the main agent', () => {
     const out = await test(MAIN_AGENT_ID, 'slack')
     expect(out.status).toBe(200)
     expect(calls[0].token).toBe('fixture-slack-main')
+  })
+
+  it('telegram: a token left under agents/<main>/ is not a fallback either (404, no network call)', async () => {
+    writeEnv(join(AGENTS, MAIN_AGENT_ID, '.claude', 'channels', 'telegram'), 'TELEGRAM_BOT_TOKEN=222:wrong-place')
+    const out = await test(MAIN_AGENT_ID, 'telegram')
+    expect(out.status).toBe(404)
+    expect(calls).toHaveLength(0)
   })
 
   it('no token in the main state dir: 404 "not configured", no network call', async () => {
