@@ -242,12 +242,18 @@ const LAUNCHD_DIR_WRITE_RX = new RegExp(
 // interpreter (python/node/...), cp/mv/tee/sed/ln/... or anything else that names the
 // file is denied, because whether it writes cannot be read off the command string.
 //
-// What this gate CANNOT see -- a script that builds the path at runtime, a glob that
-// does not spell the name -- is written down, not hidden: the dashboard keeps a hash
+// A glob that does not spell the name (store/e*-allowlist.json, store/*.history) is read
+// the way bash expands it: resolved from the cwd and matched against the two store objects
+// (globHitsAllowlist below), so it counts as a mention like the spelled name does.
+//
+// What this gate CANNOT see -- a script that builds the path at runtime, a name assembled
+// from a variable (${F}list.json), a move of the whole store/ directory -- is written down,
+// not hidden: the dashboard keeps a hash
 // baseline of the file and reports every change, whoever made it, by whatever route
 // (src/egress-allowlist-baseline.ts). This gate narrows the casual route; that one
 // catches the rest after the fact.
 const ALLOWLIST_BASENAME = 'egress-allowlist.json'
+const HISTORY_DIRNAME = 'egress-allowlist.history'
 // The STORE objects, not the concept: the file and its history directory, or a glob that
 // starts on the name (egress-allow*, egress-allowlist.*). A plain /egress[-_]?allow/ also
 // matched this gate's own source and test names (egress-allowlist-baseline.ts), so no
@@ -260,9 +266,58 @@ const ALLOWLIST_READERS = new Set([
 // Output redirects: `>`, `>>`, `>|`, `&>`, `&>>`, `N>`. The target is the next word.
 const OUTPUT_REDIRECT_RX = /(?:&>>?|\d*>>?\|?)\s*([^\s;&|<>]+)/g
 
-export function allowlistBashSegmentAllowed(seg) {
+// One glob path component as a regex: * ? [...] [!...] {a,b}, the rest literal.
+function globComponentRx(part) {
+  let out = ''
+  let braces = 0
+  for (let i = 0; i < part.length; i++) {
+    const c = part[i]
+    if (c === '*') out += '[^/]*'
+    else if (c === '?') out += '[^/]'
+    else if (c === '[') {
+      const close = part.indexOf(']', i + 2)
+      if (close === -1) { out += '\\['; continue }
+      let body = part.slice(i + 1, close)
+      if (body.startsWith('!') || body.startsWith('^')) body = '^' + body.slice(1)
+      out += '[' + body.replace(/\\/g, '\\\\') + ']'
+      i = close
+    } else if (c === '{') { braces++; out += '(?:' }
+    else if (c === '}' && braces > 0) { braces--; out += ')' }
+    else if (c === ',' && braces > 0) out += '|'
+    else out += c.replace(/[.+^$()|\\\]{}]/g, '\\$&')
+  }
+  if (braces > 0) return null // an unclosed brace is literal in bash; too odd to guess
+  try { return new RegExp('^' + out + '$') } catch { return null }
+}
+
+// Does a word with glob characters land on the allowlist file or inside its history
+// directory, once bash expands it from `cwd`? Matched component by component against the
+// real paths, so `rm /tmp/*.json` (another directory) is not a hit and `cp x
+// store/e*-allowlist.json` is. Quotes are stripped first: a quoted glob is not expanded by
+// bash, but a script handed one (python glob, find) may expand it, so fail-closed.
+export function globHitsAllowlist(word, allowlistPath = DEFAULT_ALLOWLIST_PATH, cwd = process.cwd()) {
+  const w = String(word ?? '').replace(/^(?:&>>?|\d*>>?\|?)/, '').replace(/^[A-Za-z_-]+=/, '').replace(/['"]/g, '')
+    .replace(/^\$(?:HOME\b|\{HOME\})/, homedir())
+  if (!/[*?[{]/.test(w) || /[$`]/.test(w)) return false
+  const parts = resolve(cwd, expandHome(w)).split('/')
+  const rxs = parts.map(globComponentRx)
+  if (rxs.some((r) => r === null)) return false
+  const historyDir = join(dirname(allowlistPath), HISTORY_DIRNAME)
+  const targets = [
+    { path: allowlistPath, below: false }, { path: realOrSelf(allowlistPath), below: false },
+    { path: historyDir, below: true }, { path: realOrSelf(historyDir), below: true },
+  ]
+  return targets.some(({ path, below }) => {
+    const t = path.split('/')
+    if (rxs.length < t.length || (rxs.length > t.length && !below)) return false
+    return t.every((seg, i) => rxs[i].test(seg))
+  })
+}
+
+export function allowlistBashSegmentAllowed(seg, opts = {}) {
   const s = String(seg ?? '').trim()
-  if (!ALLOWLIST_MENTION_RX.test(s)) return true
+  const globHit = () => s.split(/\s+/).some((w) => globHitsAllowlist(w, opts.allowlistPath, opts.cwd))
+  if (!ALLOWLIST_MENTION_RX.test(s) && !globHit()) return true
   const words = s.split(/\s+/)
   let i = 0
   while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++ // leading VAR=x
@@ -271,7 +326,7 @@ export function allowlistBashSegmentAllowed(seg) {
   for (const m of s.matchAll(OUTPUT_REDIRECT_RX)) {
     const target = m[1]
     if (/^&?\d+$/.test(target) || target === '/dev/null') continue // 2>&1, >/dev/null
-    if (ALLOWLIST_MENTION_RX.test(target) || /[$`]/.test(target)) return false
+    if (ALLOWLIST_MENTION_RX.test(target) || /[$`]/.test(target) || globHitsAllowlist(target, opts.allowlistPath, opts.cwd)) return false
   }
   return true
 }
@@ -628,7 +683,12 @@ export function gateDecision(toolName, toolInput, opts = {}) {
     // Per-segment so an unrelated token elsewhere in a compound command cannot
     // turn a legit read (store inspection, schedule-API GET) into a false deny.
     const naiveSegs = splitSegments(safeCommand)
+    // A glob is expanded from the directory the shell is in: `cd store && rm *.json` hits the
+    // allowlist although no word names store/. Followed segment by segment (EGRESSSELFEDIT824).
+    let segCwd = opts.cwd ?? process.cwd()
     for (const seg of naiveSegs) {
+      const cd = /^(?:cd|pushd)\s+(['"]?)([^\s'";&|]+)\1\s*$/.exec(seg)
+      if (cd) segCwd = resolve(segCwd, expandHome(cd[2]))
       // Match the self-pace bash patterns against the shell-normalised segment so a
       // `\/loop` / `$IFS/loop` evasion (which bash resolves to `/loop` at exec) is
       // still caught; the scheduler/store/API checks below use the RAW seg (scoped).
@@ -644,7 +704,7 @@ export function gateDecision(toolName, toolInput, opts = {}) {
       // dashboard schedule API: block WRITE methods only (GET list/pending is legit)
       if (SCHEDULE_API_RX.test(seg) && HTTP_WRITE_RX.test(seg)) return { deny: true, reason: 'schedule-api-write' }
       // the egress allowlist: a plain read only (EGRESSSELFEDIT824)
-      if (!allowlistBashSegmentAllowed(seg)) return { deny: true, reason: 'egress-allowlist' }
+      if (!allowlistBashSegmentAllowed(seg, { ...opts, cwd: segCwd })) return { deny: true, reason: 'egress-allowlist' }
     }
     // launchd directory: block a write INTO it (a read or a copy out of it is legit).
     // Heredoc bodies that feed TEXT are blanked, so a message DESCRIBING an install
