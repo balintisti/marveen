@@ -4,6 +4,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // the alert delivery log line, so notifyChannel gets { kind: <key> } with it.
 const { mockNotify } = vi.hoisted(() => ({ mockNotify: vi.fn(async (_text: string, _meta?: unknown) => {}) }))
 vi.mock('../notify.js', () => ({ notifyChannel: mockNotify }))
+// Card 87687aca: routine alerts are off by default on this install; the meta
+// shape only matters when the channel is on, so pin the gate open here.
+vi.mock('../config.js', async (orig) => ({
+  ...(await orig<typeof import('../config.js')>()),
+  NOTIFY_ROUTINE_ALERTS: true,
+}))
 vi.mock('../logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
 }))

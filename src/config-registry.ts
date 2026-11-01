@@ -496,6 +496,17 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     requiresRestart: false,
   },
   // --- Channels module ---
+  // Boot-time const in src/config.ts (requiresRestart). Default OFF on this
+  // install (owner decision, card 87687aca); upstream ships '1'.
+  {
+    key: 'NOTIFY_ROUTINE_ALERTS',
+    type: 'boolean',
+    default: '0',
+    description: 'Menjenek-e ki a csatornára a rutin (önjavító) értesítések: a flotta saját, sikeres újraindításai és beragadás-feloldásai, például "a fő session beragadt, automatikusan újraindítottam", "a session eltűnt, újraindítom". Alapértelmezés: KI (a tulajdonos döntése, 87687aca): ilyenkor a sendRoutineAlert csak naplót ír (dashboard.log), a csatornára nem küld semmit. Bekapcsolva (1) a csatornára is kimennek. A VALÓDI hiba-értesítések (sendAlert, például "az automatikus újraindítás NEM sikerült") és a kézi beavatkozást kérő értesítések (sendOwnerActionAlert, például halott csatorna-bemenet) másik függvényen mennek ki, és ettől függetlenül mindig kimennek. A módosítás a dashboard újraindításakor lép életbe.',
+    module: 'channels',
+    secret: false,
+    requiresRestart: true,
+  },
   {
     key: 'MAIN_AGENT_ISOLATED_CONFIG',
     type: 'boolean',
