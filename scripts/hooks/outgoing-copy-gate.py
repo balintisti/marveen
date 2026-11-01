@@ -785,42 +785,61 @@ def _heredoc_body_sends(body: str) -> bool:
     return bool(_CODE_EXECISH.search(body) and _HEREDOC_SENDER_ARGV.search(body))
 
 
-# WHO READS THE HEREDOC (didi's K1, 6525aba3 50742): only the heredoc's OWN command, the last
-# segment before the <<, its command word after assignments and keywords -- not any
-# interpreter word on the opener line (a PATH entry like /opt/homebrew/opt/node@22/bin, an
-# earlier `python3 -m pytest &&`, a `cd /home/node/app &&`). A wrapper in that position keeps
-# the whole-segment reading, fail-closed. Full note: heredocHeadKind in email-send-gate.mjs.
-_HEREDOC_INTERP_PROG = re.compile(r"^(?:python3?(?:\.\d+)?|node|tsx|ts-node|deno|bun)$", re.I)
-_HEREDOC_HEAD_WRAPPERS = frozenset(("sudo", "doas", "env", "nohup", "time", "exec", "command", "builtin",
-                                    "nice", "ionice", "chrt", "timeout", "stdbuf", "setsid", "caffeinate",
-                                    "arch", "npx"))
+# WHO READS THE HEREDOC (didi's K1, 6525aba3 50742; N1/N2, 50772): only the heredoc's OWN
+# command, the text after the last ; & | of the innermost command context open at the <<,
+# found by a quote-aware walk in which $( , ( and a backtick open a new command (inside
+# double quotes too) and their closing returns to the outer one. Inside it, ANY word
+# naming an interpreter or a shell makes the body a program, whatever launches it (an
+# unknown launcher stays fail-closed; no second wrapper list). Full note and the named
+# cost: heredocHeadKind in email-send-gate.mjs.
+_HEREDOC_READER_WORD = re.compile(
+    r"""(?:^|[\s/'"`$(=;&|])(python3?(?:\.\d+)?|node|tsx|ts-node|deno|bun|sh|bash|zsh|dash)(?=$|[\s'"`);&|])""",
+    re.I)
+
+
+def _heredoc_own_command(head: str) -> str:
+    s = head.replace("|&", "|")
+    s = re.sub(r"\d*[<>]&\d*-?|&>>?|\d*>\|", " ", s)
+    frames, start, q, i = [], 0, None, 0
+    while i < len(s):
+        ch = s[i]
+        if q == "'":
+            if ch == "'":
+                q = None
+        elif ch == "\\":
+            i += 1
+        elif ch == "$" and s[i + 1:i + 2] == "(":
+            frames.append((start, q, ")"))
+            start, q = i + 2, None
+            i += 1
+        elif ch == "`":
+            if frames and frames[-1][2] == "`" and q is None:
+                start, q, _ = frames.pop()
+            else:
+                frames.append((start, q, "`"))
+                start, q = i + 1, None
+        elif q == '"':
+            if ch == '"':
+                q = None
+        elif ch in ("'", '"'):
+            q = ch
+        elif ch == "(":
+            frames.append((start, q, ")"))
+            start = i + 1
+        elif ch == ")":
+            if frames and frames[-1][2] == ")":
+                start, q, _ = frames.pop()
+        elif ch in ";&|":
+            start = i + 1
+        i += 1
+    return s[start:]
 
 
 def _heredoc_head_kind(head: str):
-    seg = head.replace("|&", "|")
-    seg = re.sub(r"\d*[<>]&\d*-?|&>>?|\d*>\|", " ", seg)
-    seg = re.split(r"[;&|(`]", seg)[-1]
-    words = seg.split()
-
-    def kind(w):
-        prog = _basename(re.sub(r"^['\"]+|['\"]+$", "", w))
-        if _HEREDOC_INTERP_PROG.match(prog):
-            return "interp"
-        return "shell" if _WRAPPER_SHELL.match(prog) else None
-
-    i = 0
-    while i < len(words) and (_ENV_ASSIGN.match(words[i]) or words[i] in _CMD_POSITION_KEYWORDS):
-        i += 1
-    if i >= len(words):
+    m = _HEREDOC_READER_WORD.search(_heredoc_own_command(head))
+    if not m:
         return None
-    if kind(words[i]):
-        return kind(words[i])
-    if _basename(words[i]).lower() not in _HEREDOC_HEAD_WRAPPERS:
-        return None
-    for w in words[i + 1:]:
-        if kind(w):
-            return kind(w)
-    return None
+    return "shell" if _WRAPPER_SHELL.match(m.group(1)) else "interp"
 
 
 # THE HEREDOC FORMS BASH RUNS (didi's K2, 6525aba3 50742): <<"EOF", <<\EOF, a - or . in the

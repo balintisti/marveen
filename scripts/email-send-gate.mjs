@@ -427,36 +427,59 @@ export function buildWrapperDepthMsg() {
 const HEREDOC_SENDER_ARGV = /['"](?:[^'"\s]*\/)?(?:sendmail|msmtp|swaks|send\.py)(?=['"\s])/
 const heredocBodySends = (body) =>
   CODE_SEND.test(body) || CODE_SEND_MODULE.test(body) || (CODE_EXECISH.test(body) && HEREDOC_SENDER_ARGV.test(body))
-// WHO READS THE HEREDOC (didi's K1, 6525aba3 50742). The opener line used to be matched as
-// a whole, so ANY interpreter word before the << made the body a program: a PATH entry
-// (`export PATH=/opt/homebrew/opt/node@22/bin:$PATH && git commit -F - <<`), an earlier
-// command (`python3 -m pytest && gh pr create --body-file - <<`), a directory
-// (`cd /home/node/app && cat <<`). Only the heredoc's OWN command reads it: the last
-// segment before the <<, its command word after assignments and keywords. A wrapper in
-// that position (sudo, env, nohup, ...) keeps the old reading of the whole segment, so
-// `sudo -u x python3 - <<EOF` stays a program: narrower only where the command word is known.
-// Twin: _heredoc_head_kind in hooks/outgoing-copy-gate.py.
-const HEREDOC_INTERP_PROG = /^(?:python3?(?:\.\d+)?|node|tsx|ts-node|deno|bun)$/i
-const HEREDOC_HEAD_WRAPPERS = new Set(['sudo', 'doas', 'env', 'nohup', 'time', 'exec', 'command', 'builtin',
-  'nice', 'ionice', 'chrt', 'timeout', 'stdbuf', 'setsid', 'caffeinate', 'arch', 'npx'])
-export function heredocHeadKind(head) {
-  const seg = String(head ?? '')
+// WHO READS THE HEREDOC (didi's K1, 6525aba3 50742; N1/N2, 50772). The opener line used to
+// be matched as a whole, so ANY interpreter word before the << made the body a program: a
+// PATH entry (`export PATH=/opt/homebrew/opt/node@22/bin:$PATH && git commit -F - <<`), an
+// earlier command (`python3 -m pytest && gh pr create --body-file - <<`), a directory
+// (`cd /home/node/app && cat <<`). Only the heredoc's OWN command reads it: the text after
+// the last ; & | of the innermost command context open at the <<. The walk is quote-aware
+// (a quoted `;` in `--subject "Re: x; y"` is not a separator) and context-aware: `$(`, `(`
+// and a backtick open a new command, inside double quotes too, and their closing returns
+// to the outer one. So `python3 - "$(date +%F)" <<` and `"$(which python3)" - <<` keep the
+// interpreter, and `git commit -m "$(cat <<'EOF'` is read as cat. segmentsTokens is NOT
+// used here: it splits at `$(` and `(`, which loses `$(which python3) - <<`.
+// Inside the own command, ANY word naming an interpreter or a shell makes the body a
+// program, whatever launches it: a launcher we do not know (uv run, poetry run, xargs,
+// docker exec -i, ssh host, pnpm exec, conda run) stays fail-closed, and there is no
+// second wrapper list to keep in step with WRAPPERS. The cost, named: an interpreter word
+// in the own command's arguments (`git commit -m "node fix" -F - <<`) reads the body as a
+// program too; that body is denied only if it sends. Twin: _heredoc_head_kind in
+// hooks/outgoing-copy-gate.py.
+const HEREDOC_READER_WORD = /(?:^|[\s/'"`$(=;&|])(python3?(?:\.\d+)?|node|tsx|ts-node|deno|bun|sh|bash|zsh|dash)(?=$|[\s'"`);&|])/i
+export function heredocOwnCommand(head) {
+  const s = String(head ?? '')
     .replace(/\|&/g, '|') // pipe incl. stderr: still a separator
     .replace(/\d*[<>]&\d*-?|&>>?|\d*>\|/g, ' ') // 2>&1, &>, >| are redirections, not separators
-    .split(/[;&|(`]/)
-    .pop()
-  const words = seg.trim().split(/\s+/).filter(Boolean)
-  const kind = (w) => {
-    const prog = basename(w.replace(/^['"]+|['"]+$/g, ''))
-    return HEREDOC_INTERP_PROG.test(prog) ? 'interp' : WRAPPER_SHELL.test(prog) ? 'shell' : null
+  const frames = []
+  let start = 0
+  let q = null
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    if (q === "'") { if (ch === "'") q = null; continue }
+    if (ch === '\\') { i++; continue }
+    if (ch === '$' && s[i + 1] === '(') { frames.push({ start, q, close: ')' }); start = i + 2; q = null; i++; continue }
+    if (ch === '`') {
+      const top = frames[frames.length - 1]
+      if (top && top.close === '`' && q === null) ({ start, q } = frames.pop())
+      else { frames.push({ start, q, close: '`' }); start = i + 1; q = null }
+      continue
+    }
+    if (q === '"') { if (ch === '"') q = null; continue }
+    if (ch === "'" || ch === '"') { q = ch; continue }
+    if (ch === '(') { frames.push({ start, q, close: ')' }); start = i + 1; continue }
+    if (ch === ')') {
+      const top = frames[frames.length - 1]
+      if (top && top.close === ')') ({ start, q } = frames.pop())
+      continue
+    }
+    if (ch === ';' || ch === '&' || ch === '|') start = i + 1
   }
-  let i = 0
-  while (i < words.length && (ENV_ASSIGN.test(words[i]) || CMD_POSITION_KEYWORDS.has(words[i]))) i++
-  if (i >= words.length) return null
-  if (kind(words[i])) return kind(words[i])
-  if (!HEREDOC_HEAD_WRAPPERS.has(basename(words[i]).toLowerCase())) return null
-  for (const w of words.slice(i + 1)) if (kind(w)) return kind(w)
-  return null
+  return s.slice(start)
+}
+export function heredocHeadKind(head) {
+  const m = HEREDOC_READER_WORD.exec(heredocOwnCommand(head))
+  if (!m) return null
+  return WRAPPER_SHELL.test(m[1]) ? 'shell' : 'interp'
 }
 
 // THE HEREDOC FORMS BASH RUNS (didi's K2, 6525aba3 50742). HEREDOC_RE knows <<TAG and

@@ -1035,6 +1035,146 @@
       "name": "[didi K2 6525aba3] a <<- tab-indented tag closes the body: the next command is not the program",
       "cmd": "python3 - <<-EOF\n\tprint(1)\n\tEOF\necho 'import send'",
       "expected": false
+    },
+    {
+      "name": "[didi N1 6525aba3] a $( in the interpreter's own argument does not cut the command",
+      "cmd": "python3 - \"$(date +%F)\" <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N1 6525aba3] a quoted assignment value before the interpreter",
+      "cmd": "FOO=\"a b\" python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N1 6525aba3] a quoted ; in an argument is not a separator",
+      "cmd": "python3 - --subject \"Re: x; y\" <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N1 6525aba3] the interpreter named by a quoted command substitution",
+      "cmd": "\"$(which python3)\" - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N1 6525aba3] the interpreter named by a bare command substitution",
+      "cmd": "$(which python3) - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N1 6525aba3] the interpreter named by a backtick substitution",
+      "cmd": "`which python3` - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N1 6525aba3] a redirection before the interpreter",
+      "cmd": ">/tmp/o python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N2 6525aba3] an unknown launcher: uv run",
+      "cmd": "uv run python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N2 6525aba3] an unknown launcher: poetry run",
+      "cmd": "poetry run python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N2 6525aba3] an unknown launcher: docker exec -i",
+      "cmd": "docker exec -i app python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N2 6525aba3] an unknown launcher: ssh host",
+      "cmd": "ssh host python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N2 6525aba3] an unknown launcher: gtimeout",
+      "cmd": "gtimeout 5 python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N2 6525aba3] an unknown launcher: pnpm exec node",
+      "cmd": "pnpm exec node - <<'EOF'\nfrom send import main\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N2 6525aba3] an unknown launcher feeding a shell: ssh host bash -s",
+      "cmd": "ssh host bash -s <<'EOF'\nsendmail a@b.c < m.txt\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3 pin] a versioned interpreter reads the heredoc",
+      "cmd": "python3.11 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3 pin] a subshell paren opens the own command",
+      "cmd": "(python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3 pin] then before the interpreter",
+      "cmd": "if true; then python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3 pin] a brace group before the interpreter",
+      "cmd": "{ python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3 pin] negation before the interpreter",
+      "cmd": "! python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3 pin] an absolute interpreter path",
+      "cmd": "/usr/bin/python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3 pin] a quoted interpreter word",
+      "cmd": "'python3' - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3 pin] the opener is its own line after a cd line",
+      "cmd": "cd /tmp\npython3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N1 6525aba3 control] an interpreter inside an EARLIER substitution is not the reader",
+      "cmd": "echo \"$(python3 -V)\"; git commit -F - <<'EOF'\nimport send\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi N1 6525aba3 control] a quoted ; does not hide an earlier interpreter's end",
+      "cmd": "python3 -m pytest && git commit -m \"a; b\" -F - <<'EOF'\nimport send\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi N1 6525aba3 control] a closed substitution with a paren in quotes",
+      "cmd": "x=$(echo ')' ) git commit -F - <<'EOF'\nimport send\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi N1 6525aba3 control] a script path ending in .sh is not a shell word",
+      "cmd": "./deploy.sh <<'EOF'\nimport send\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi N1 6525aba3 pin] an escaped quote inside a quoted argument does not end the quote",
+      "cmd": "python3 - --subject \"a\\\"; b\" <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N1 6525aba3 control] a $( inside single quotes opens no command",
+      "cmd": "echo '$(python3' ; git commit -F - <<'EOF'\nimport send\nEOF",
+      "expected": false
     }
   ]
 }
