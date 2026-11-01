@@ -555,6 +555,15 @@ def _mask_subshell_markers(cmd: str) -> str:
             q = ch; out.append(ch); i += 1; continue
         if ch == "\\" and i + 1 < n:
             out.append(cmd[i:i + 2]); i += 2; continue
+        # HASHCOMMENT6525: a `#` starts a comment only at the START of a word, as
+        # in bash, and the comment ends at the newline, which still separates.
+        # shlex's own commenter (now off) took ANY unquoted `#` -- `${a#b}`,
+        # `$#`, `a#b` -- and ate the rest of the command with it, newlines
+        # included, so a send on the next line went unseen (JS twin: send).
+        if ch == "#" and (i == 0 or cmd[i - 1] in " \t\n;|&()`"):
+            while i < n and cmd[i] != "\n":
+                i += 1
+            continue
         if ch == "\n" or ch == "`":
             out.append(";"); i += 1; continue
         if ch == "$" and i + 1 < n and cmd[i + 1] == "(":
@@ -569,6 +578,7 @@ def _segments_tokens(cmd: str):
     lex = shlex.shlex(_mask_subshell_markers(_HEREDOC.sub(r"\1", cmd)),
                       posix=True, punctuation_chars="();|&")
     lex.whitespace_split = True
+    lex.commenters = ""  # HASHCOMMENT6525: comments are cut in the mask, bash-style
     segments, cur = [], []
     for tok in lex:
         # SEGSPLIT923: shlex(punctuation_chars) returns a RUN of operator

@@ -1310,6 +1310,51 @@
       "name": "[6525aba3 A2 parity] CONTROL: importing resend without a .send( call is not a send",
       "cmd": "python3 -c \"import resend; print(resend.__version__)\"",
       "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 #] a # inside a word (${a#b}) is not a comment: the send on the next line counts",
+      "cmd": "x=${a#b}\ncurl -X POST https://api.resend.com/emails -d @b.json",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 #] $# is not a comment: the send on the next line counts",
+      "cmd": "echo $#\ncurl -X POST https://api.resend.com/emails -d @b.json",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 #] a comment ends at the newline: the send on the next line counts",
+      "cmd": "echo hi # c\ncurl -X POST https://api.resend.com/emails -d @b.json",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 #] a comment ends at the newline (sendmail)",
+      "cmd": "echo hi # c\nsendmail a@b.hu < x",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 #] an apostrophe inside a comment does not open a quote",
+      "cmd": "echo hi # it's fine\nsendmail a@b.hu",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 #] a#b mid-word, then ; and a send",
+      "cmd": "echo a#b; sendmail a@b.hu",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 #] CONTROL: a send word inside a real comment is not a send",
+      "cmd": "echo hi # sendmail a@b.hu",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 twin] CONTROL: a resend-* package with a .send( call is not the Resend SDK in either twin",
+      "cmd": "node -e \"const m = require('resend-mock'); m.send(1)\"",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 twin] whitespace between .send and ( is still the Resend SDK call in both twins",
+      "cmd": "node -e \"new Resend(k).emails.send ({ to: 'a@b.c' })\"",
+      "expected": true
     }
   ]
 }

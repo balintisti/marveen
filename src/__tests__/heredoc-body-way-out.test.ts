@@ -3,7 +3,11 @@
 // That over-protection is accepted, measured at 12 false denials on 14 970 real fleet commands
 // in 7 days and 0 real sends. Its price must be one step: when the heredoc body is the WHOLE
 // reason, both gates name the way out. A visible send elsewhere in the command keeps the
-// ordinary wording, so the way out is never offered for a real send.
+// ordinary wording. What this does NOT protect (didi 51494, measured): the gates cannot tell
+// a send word in a string literal from a real send in the body, so a REAL send inside a
+// heredoc body is offered the way out too, and a script run as a file is read by neither gate
+// (`python3 /tmp/real-send.py` passes, on the base as well). Reading the body by its consumer,
+// then checking file-run scripts, are separate cards (marveen 51498, in that order).
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import { rmSync, writeFileSync } from 'node:fs'
