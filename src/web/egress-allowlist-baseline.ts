@@ -20,9 +20,13 @@
 // HONEST LIMIT: every agent runs as the same OS user, so the history directory is as writable
 // as the file itself. This makes a change VISIBLE and the previous bytes RECOVERABLE; it does
 // not make the file unwritable. That needs an OS-level owner or flag, an owner decision.
+// The watcher's own record of the last sha lives OUTSIDE store/ (baselineMemoryFile), so a
+// history wiped while the dashboard is down is still reported at boot; deleting that record too
+// brings back the old first-run behaviour, and that is the remaining limit.
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync, watchFile, unwatchFile, type Stats } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync, realpathSync, watchFile, unwatchFile, type Stats } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { MAIN_AGENT_ID } from '../config.js'
 import { createAgentMessage } from '../db.js'
 import { logger } from '../logger.js'
@@ -102,10 +106,39 @@ function stamp(now: Date): string {
  * What THIS process last recorded or confirmed. Without it a removed history directory
  * looked like a first run (recorded, never reported), and a newest history entry rewritten
  * together with the file looked like no change at all (didi, 6525aba3 50773, W2/T7). The
- * watcher keeps one for its lifetime; a fresh process starts at null and trusts the history
- * on disk, exactly as before.
+ * watcher keeps one for its lifetime and, given a memory file, across restarts too (50862 W2);
+ * without one a fresh process starts at null and trusts the history on disk, exactly as before.
  */
 export interface BaselineMemory { sha: string | null }
+
+/**
+ * Where the dashboard keeps the last recorded sha between restarts: outside store/, so neither
+ * a removed history directory nor a removed store/ takes it along, and keyed by the store's real
+ * path, so two installs of one OS user do not share a record. The name starts with
+ * egress-allowlist.history, which self-pace-gate.mjs refuses to sub-agents like the history itself.
+ */
+export function baselineMemoryFile(storeDir: string, home: string = homedir()): string {
+  let real = storeDir
+  try { real = realpathSync(storeDir) } catch { /* not created yet: the path as given */ }
+  const key = createHash('sha256').update(real).digest('hex').slice(0, 12)
+  return join(home, '.marveen', `${HISTORY_DIRNAME}-${key}.sha`)
+}
+
+function readMemoryFile(path: string): string | null {
+  try {
+    const v = readFileSync(path, 'utf-8').trim()
+    return /^(?:[0-9a-f]{64}|missing)$/.test(v) ? v : null
+  } catch { return null }
+}
+
+/**
+ * Did the file change between two polls? ctime moves on every write, rename, chmod and utimes,
+ * so a rewrite whose mtime was put back (touch -r) with the same inode and size is still seen
+ * (didi 50862 W1b); mtime, inode and size stay for a filesystem that does not keep ctime.
+ */
+export function statMoved(curr: Pick<Stats, 'ctimeMs' | 'mtimeMs' | 'ino' | 'size'>, prev: Pick<Stats, 'ctimeMs' | 'mtimeMs' | 'ino' | 'size'>): boolean {
+  return curr.ctimeMs !== prev.ctimeMs || curr.mtimeMs !== prev.mtimeMs || curr.ino !== prev.ino || curr.size !== prev.size
+}
 
 /**
  * Compare the allowlist with its last recorded version; record and report a difference.
@@ -163,25 +196,36 @@ export function checkEgressAllowlistBaseline(
 
 /**
  * Check once now (catches a change made while the dashboard was down), then on every change
- * the poller sees. fs.watchFile (mtime polling) for the same reason as the reader re-render
- * watcher: it survives the file being replaced. Returns a stop function.
+ * the poller sees. fs.watchFile (stat polling) for the same reason as the reader re-render
+ * watcher: it survives the file being replaced. `memoryFile` (production: baselineMemoryFile)
+ * carries the last recorded sha across restarts; null keeps it in this process only.
+ * Returns a stop function.
  */
 export function watchEgressAllowlistBaseline(
   storeDir: string,
   notify: (report: string) => void,
   intervalMs = 5000,
+  memoryFile: string | null = null,
 ): () => void {
   const file = join(storeDir, 'egress-allowlist.json')
-  const memory: BaselineMemory = { sha: null }
-  const check = () => checkEgressAllowlistBaseline(storeDir, notify, new Date(), memory)
+  const memory: BaselineMemory = { sha: memoryFile ? readMemoryFile(memoryFile) : null }
+  const check = () => {
+    const r = checkEgressAllowlistBaseline(storeDir, notify, new Date(), memory)
+    if (memoryFile && memory.sha !== null && readMemoryFile(memoryFile) !== memory.sha) {
+      try {
+        mkdirSync(dirname(memoryFile), { recursive: true })
+        writeFileSync(memoryFile, memory.sha + '\n')
+      } catch (err) { logger.warn({ err, memoryFile }, 'egress-allowlist baseline memory not written') }
+    }
+    return r
+  }
   // The poller sees a stat change, not the edits in between: a domain added and removed again
   // within one interval (the 2026-08-24 case) leaves the same bytes, so the hash check alone
-  // records nothing. The file WAS rewritten though (mtime/size/inode moved), and that is said.
+  // records nothing. The file WAS rewritten though (its stat moved), and that is said.
   const onStat = (curr: Stats, prev: Stats) => {
     try {
       const r = check()
-      const touched = curr.mtimeMs !== prev.mtimeMs || curr.ino !== prev.ino || curr.size !== prev.size
-      if (!r.recorded && touched && prev.mtimeMs !== 0) {
+      if (!r.recorded && statMoved(curr, prev) && prev.mtimeMs !== 0) {
         notify(
           `[EGRESS-ALLOWLIST] store/egress-allowlist.json was REWRITTEN with its previous bytes (sha ${r.sha.slice(0, 12)}, ` +
           `mtime ${new Date(prev.mtimeMs).toISOString()} -> ${new Date(curr.mtimeMs).toISOString()}). ` +

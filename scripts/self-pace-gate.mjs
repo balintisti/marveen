@@ -244,7 +244,12 @@ const LAUNCHD_DIR_WRITE_RX = new RegExp(
 //
 // A glob that does not spell the name (store/e*-allowlist.json, store/*.history) is read
 // the way bash expands it: resolved from the cwd and matched against the two store objects
-// (globHitsAllowlist below), so it counts as a mention like the spelled name does.
+// (globHitsAllowlist below), so it counts as a mention like the spelled name does. A
+// `find ROOT -name PAT -delete` whose ROOT holds the store counts too (findHitsAllowlist).
+//
+// The history directory is part of the gate, not only the file: the baseline's reports
+// compare against it, so a native Write into store/egress-allowlist.history/ would rewrite
+// the evidence the way a Bash `cp` was already refused for (didi 6525aba3 50862 N1).
 //
 // What this gate CANNOT see -- a script that builds the path at runtime, a name assembled
 // from a variable (${F}list.json), a move of the whole store/ directory -- is written down,
@@ -259,6 +264,9 @@ const HISTORY_DIRNAME = 'egress-allowlist.history'
 // matched this gate's own source and test names (egress-allowlist-baseline.ts), so no
 // sub-agent could run, stage or diff them -- review on #1678.
 const ALLOWLIST_MENTION_RX = /egress[-_]?allowlist(?:\.json|\.history)|egress[-_]?allow[\w.]*[*?[]/i
+// A path component that IS one of the allowlist's objects: the file, its history directory
+// (and so everything below it), and the baseline's sha record (egress-allowlist.history-<key>.sha).
+const ALLOWLIST_OBJECT_RX = /^egress[-_]?allowlist\.(?:json|history)/i
 const ALLOWLIST_READERS = new Set([
   'cat', 'head', 'tail', 'grep', 'egrep', 'fgrep', 'rg', 'jq', 'wc', 'ls', 'stat',
   'file', 'shasum', 'sha256sum', 'md5', 'md5sum', 'diff', 'cmp', 'echo', 'printf',
@@ -296,8 +304,9 @@ function globComponentRx(part) {
 // store/e*-allowlist.json` is. Quotes are stripped first: a quoted glob is not expanded by
 // bash, but a script handed one (python glob, find) may expand it, so fail-closed.
 export function globHitsAllowlist(word, allowlistPath = DEFAULT_ALLOWLIST_PATH, cwd = process.cwd()) {
+  // A trailing ) closes a subshell `(cd store && rm e*)`; $PWD and $(pwd) are the cwd itself.
   const w = String(word ?? '').replace(/^(?:&>>?|\d*>>?\|?)/, '').replace(/^[A-Za-z_-]+=/, '').replace(/['"]/g, '')
-    .replace(/^\$(?:HOME\b|\{HOME\})/, homedir())
+    .replace(/\)+$/, '').replace(/^\$(?:HOME\b|\{HOME\})/, homedir()).replace(CWD_WORD_RX, cwd)
   if (!/[*?[{]/.test(w) || /[$`]/.test(w)) return false
   const parts = resolve(cwd, expandHome(w)).split('/')
   const rxs = parts.map(globComponentRx)
@@ -314,8 +323,55 @@ export function globHitsAllowlist(word, allowlistPath = DEFAULT_ALLOWLIST_PATH, 
   })
 }
 
+// `$PWD`, `${PWD}`, `$(pwd)` or `` `pwd` `` at the start of a word: the directory the shell is in.
+const CWD_WORD_RX = /^(?:\$PWD\b|\$\{PWD\}|\$\(pwd\)|`pwd`)/
+
+// `find ROOT... EXPR`: its -name pattern never spells a path and the shell expands nothing, but
+// find walks ROOT and acts on every match (`find store -name 'egress*' -delete`, didi 50862).
+// A hit: an acting expression (-delete, -exec, ...), a ROOT that holds the store or lies in the
+// history, and a filter that does not provably miss the allowlist objects. -path/-regex and a
+// negation are not read: fail-closed.
+const FIND_ACTION_RX = /^-(?:delete|exec|execdir|ok|okdir|fprint0?|fprintf|fls)$/
+const HISTORY_ENTRY_SAMPLE = '20261101T000000000Z-000000000000.json'
+const isAtOrBelow = (p, dir) => p === dir || p.startsWith(dir.endsWith('/') ? dir : dir + '/')
+export function findHitsAllowlist(seg, allowlistPath = DEFAULT_ALLOWLIST_PATH, cwd = process.cwd()) {
+  const words = String(seg ?? '').trim().replace(/^[({]\s*/, '').split(/\s+/).map((w) => w.replace(/['"]/g, ''))
+  let i = 0
+  while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++ // leading VAR=x
+  if ((words[i] ?? '').replace(/^.*\//, '') !== 'find') return false
+  i++
+  while (i < words.length && /^-[HLP]$/.test(words[i])) i++
+  const roots = []
+  for (; i < words.length && !/^[-(!]/.test(words[i]); i++) roots.push(words[i])
+  const expr = words.slice(i)
+  if (!expr.some((w) => FIND_ACTION_RX.test(w))) return false
+  const storeDir = dirname(allowlistPath)
+  const historyDir = join(storeDir, HISTORY_DIRNAME)
+  const covers = (root) => {
+    const r = realOrSelf(resolve(cwd, expandHome(root.replace(/\)+$/, '').replace(CWD_WORD_RX, cwd))))
+    return [storeDir, realOrSelf(storeDir)].some((d) => isAtOrBelow(d, r)) ||
+      [historyDir, realOrSelf(historyDir)].some((h) => isAtOrBelow(r, h))
+  }
+  if (!(roots.length ? roots : ['.']).some(covers)) return false
+  if (expr.some((w) => w === '!' || w === '-not' || /^-i?(?:path|wholename|regex)$/.test(w))) return true
+  const names = []
+  for (let k = 0; k < expr.length - 1; k++) {
+    if (/^-i?name$/.test(expr[k])) names.push({ pat: expr[k + 1], ci: expr[k] === '-iname' })
+  }
+  if (!names.length) return true
+  const objects = [ALLOWLIST_BASENAME, HISTORY_DIRNAME, 'history.log', HISTORY_ENTRY_SAMPLE]
+  return names.some(({ pat, ci }) => {
+    const rx = globComponentRx(pat)
+    if (!rx) return true
+    const t = ci ? new RegExp(rx.source, 'i') : rx
+    return objects.some((o) => t.test(o))
+  })
+}
+
 export function allowlistBashSegmentAllowed(seg, opts = {}) {
-  const s = String(seg ?? '').trim()
+  // A subshell or a group opens the segment: `(rm e*)`, `{ cat e*; }`.
+  const s = String(seg ?? '').trim().replace(/^[({]\s*/, '')
+  if (findHitsAllowlist(s, opts.allowlistPath, opts.cwd)) return false
   const globHit = () => s.split(/\s+/).some((w) => globHitsAllowlist(w, opts.allowlistPath, opts.cwd))
   if (!ALLOWLIST_MENTION_RX.test(s) && !globHit()) return true
   const words = s.split(/\s+/)
@@ -343,9 +399,16 @@ function realOrSelf(p) {
 export function fileToolTargetsAllowlist(toolInput, allowlistPath = DEFAULT_ALLOWLIST_PATH, cwd = process.cwd()) {
   const raw = String(toolInput?.file_path ?? toolInput?.notebook_path ?? '')
   if (!raw) return false
-  if (basename(raw).toLowerCase() === ALLOWLIST_BASENAME) return true
   const abs = resolve(cwd, expandHome(raw))
-  return realOrSelf(abs) === realOrSelf(allowlistPath)
+  // by name: any component that is one of the objects (case-insensitive, as APFS opens it)
+  if (abs.split('/').some((c) => ALLOWLIST_OBJECT_RX.test(c))) return true
+  // by real path: a relative path or a symlink that never spells the name; a new file is
+  // resolved through its (existing) directory
+  const real = realOrSelf(abs)
+  const viaDir = join(realOrSelf(dirname(abs)), basename(abs))
+  const historyDir = join(dirname(allowlistPath), HISTORY_DIRNAME)
+  return [real, viaDir].some((p) => p === realOrSelf(allowlistPath) ||
+    isAtOrBelow(p, realOrSelf(historyDir)) || isAtOrBelow(p, historyDir))
 }
 
 // Split a compound command into individual simple commands, so a token in one
@@ -687,7 +750,8 @@ export function gateDecision(toolName, toolInput, opts = {}) {
     // allowlist although no word names store/. Followed segment by segment (EGRESSSELFEDIT824).
     let segCwd = opts.cwd ?? process.cwd()
     for (const seg of naiveSegs) {
-      const cd = /^(?:cd|pushd)\s+(['"]?)([^\s'";&|]+)\1\s*$/.exec(seg)
+      // also inside a subshell or a group, and after `--`: `(cd store`, `{ cd -- store`
+      const cd = /^[({]?\s*(?:cd|pushd)\s+(?:--\s+)?(['"]?)([^\s'";&|()]+)\1\s*\)?$/.exec(seg)
       if (cd) segCwd = resolve(segCwd, expandHome(cd[2]))
       // Match the self-pace bash patterns against the shell-normalised segment so a
       // `\/loop` / `$IFS/loop` evasion (which bash resolves to `/loop` at exec) is

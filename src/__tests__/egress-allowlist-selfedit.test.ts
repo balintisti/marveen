@@ -2,7 +2,7 @@
 // change to the file -- by whatever route -- is recorded and reported.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 // @ts-expect-error -- plain .mjs hook script, no types
-import { gateDecision, allowlistBashSegmentAllowed } from '../../scripts/self-pace-gate.mjs'
+import { gateDecision, allowlistBashSegmentAllowed, globHitsAllowlist } from '../../scripts/self-pace-gate.mjs'
 import { agentGetsGovernanceGates, ensureGovernanceGateCommands } from '../web/agent-scaffold.js'
 import { initDatabase, getPendingMessages } from '../db.js'
 import {
@@ -11,9 +11,11 @@ import {
   watchEgressAllowlistBaseline,
   queueAllowlistReport,
   HISTORY_DIRNAME,
+  baselineMemoryFile,
+  statMoved,
 } from '../web/egress-allowlist-baseline.js'
 import { MAIN_AGENT_ID } from '../config.js'
-import { mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, statSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { tmpDirs } from './helpers/tmp-dirs.js'
@@ -380,7 +382,8 @@ describe('baseline: the dashboard actually runs it (binding lock)', () => {
     // same branch as the reader watcher: right after it, before the branch logs its patches
     expect(call).toBeGreaterThan(reader)
     expect(src.slice(reader, call)).not.toMatch(/^\s*\}/m) // no block closes in between
-    expect(src.slice(call, call + 80)).toContain('watchEgressAllowlistBaseline(STORE_DIR, queueAllowlistReport)')
+    // the last recorded sha survives a restart: the memory file is passed (50862 W2)
+    expect(src.slice(call, call + 120)).toContain('watchEgressAllowlistBaseline(STORE_DIR, queueAllowlistReport, 5000, baselineMemoryFile(STORE_DIR))')
   })
 })
 
@@ -411,5 +414,160 @@ describe('baseline: the report is a QUEUED message, not only a callback', () => 
     stop()
     expect(queued()).toHaveLength(1)
     expect(queued()[0].content).toContain('+offline.example')
+  })
+})
+
+// didi 6525aba3 50862: the history is gated like the file, the record survives a restart, a
+// ctime-only rewrite is seen, and the glob routes that still walked past are closed.
+describe('50862 N1: native file tools on the history and the baseline record', () => {
+  const historyDir = () => join(store, HISTORY_DIRNAME)
+  beforeEach(() => { checkEgressAllowlistBaseline(store, () => {}) })
+
+  it.each(['Write', 'Edit', 'MultiEdit'])('%s on a history entry and on history.log is denied', (tool) => {
+    const entry = readdirSync(historyDir()).find((n) => n.endsWith('.json'))!
+    expect(decide(tool, { file_path: join(historyDir(), entry), content: '{}' })).toEqual({ deny: true, reason: 'egress-allowlist' })
+    expect(decide(tool, { file_path: join(historyDir(), 'history.log'), content: '' })).toEqual({ deny: true, reason: 'egress-allowlist' })
+  })
+  it('NotebookEdit into the history (notebook_path) and a relative path are denied', () => {
+    expect(decide('NotebookEdit', { notebook_path: join(historyDir(), 'x.ipynb') }).deny).toBe(true)
+    expect(decide('Write', { file_path: 'store/egress-allowlist.history/new.json', content: '{}' }).deny).toBe(true)
+  })
+  it('a new file through a symlinked alias of the history directory is denied (real path of its directory)', () => {
+    symlinkSync(historyDir(), join(root, 'h'))
+    expect(decide('Write', { file_path: join(root, 'h', 'new.json'), content: '{}' })).toEqual({ deny: true, reason: 'egress-allowlist' })
+  })
+  it('the baseline record outside store/ is denied by its name', () => {
+    expect(decide('Write', { file_path: baselineMemoryFile(store, root), content: 'x' })).toEqual({ deny: true, reason: 'egress-allowlist' })
+  })
+  it('POSITIVE CONTROL: the baseline source, a doc about it and another store file stay writable', () => {
+    for (const fp of [join(root, 'src', 'web', 'egress-allowlist-baseline.ts'), join(root, 'docs', 'egress-allowlist-notes.md'), join(store, 'other.json')]) {
+      expect(decide('Write', { file_path: fp, content: 'x' }).deny).toBe(false)
+    }
+  })
+  it('NotebookEdit names the schedule store in notebook_path, and that is read too (A6b)', () => {
+    expect(decide('NotebookEdit', { notebook_path: join(root, 'scheduled_tasks.json') })).toEqual({ deny: true, reason: 'store-write' })
+  })
+})
+
+describe('50862 glob gaps: $PWD, subshell, group, cd --, find', () => {
+  beforeEach(() => { checkEgressAllowlistBaseline(store, () => {}) })
+  const bash = (command: string) => decide('Bash', { command })
+
+  it.each([
+    'rm $PWD/store/e*',
+    'rm ${PWD}/store/e*',
+    'rm "$(pwd)"/store/e*',
+    'rm `pwd`/store/*.history',
+    '(cd store && rm e*)',
+    '{ cd store; rm e*; }',
+    'cd -- store && rm e*',
+    "find store -name 'egress*' -delete",
+    "find . -name '*.json' -delete",
+    'find store -exec rm {} +',
+    "find store ! -name '*.db' -delete",
+    "find store -iname 'EGRESS*' -delete",
+    "find store -path '*x*' -delete",
+    "find store/egress-allowlist.history -type f -delete",
+    "find $PWD/store -name '2026*' -delete",
+  ])('DENY: %s', (command) => {
+    expect(bash(command)).toEqual({ deny: true, reason: 'egress-allowlist' })
+  })
+
+  it.each([
+    "find store -name '*.db-wal' -delete",
+    "find /tmp -name '*.json' -delete",
+    "find store -name 'egress*'",
+    '(cd /tmp && rm e*)',
+    'cat $PWD/store/other.json',
+    'rm $PWD/tmp/*.json',
+    '(cat store/e*-allowlist.json)',
+  ])('ALLOW: %s', (command) => {
+    expect(bash(command).deny).toBe(false)
+  })
+
+  it('the default allowlist path is this install\'s store/ (A18): a glob from the repo root hits it, from elsewhere not', () => {
+    const repoRoot = join(__dirname, '..', '..')
+    expect(globHitsAllowlist('store/e*-allowlist.json', undefined, repoRoot)).toBe(true)
+    expect(globHitsAllowlist('store/e*-allowlist.json', undefined, root)).toBe(false)
+  })
+})
+
+describe('50862 baseline: memory, a failed report, ctime, a restart', () => {
+  const reports: string[] = []
+  const notify = (r: string) => { reports.push(r) }
+  beforeEach(() => { reports.length = 0 })
+
+  it('an unchanged check teaches a fresh memory the sha, so a later wipe is REPORTED (M9a)', () => {
+    checkEgressAllowlistBaseline(store, notify)
+    const memory = { sha: null as string | null }
+    const r = checkEgressAllowlistBaseline(store, notify, new Date(), memory)
+    expect(r.recorded).toBe(false)
+    expect(memory.sha).toBe(r.sha)
+    rmSync(join(store, HISTORY_DIRNAME), { recursive: true, force: true })
+    writeFileSync(allowlist, JSON.stringify({ domains: ['evil.example'] }))
+    checkEgressAllowlistBaseline(store, notify, new Date(), memory)
+    expect(reports).toHaveLength(1)
+    expect(reports[0]).toContain('REMOVED')
+  })
+
+  it('a throwing report on the rewritten-history path does not throw, and the record stands (M10a)', () => {
+    const memory = { sha: null as string | null }
+    checkEgressAllowlistBaseline(store, notify, new Date('2026-10-03T08:00:00.000Z'), memory)
+    rmSync(join(store, HISTORY_DIRNAME), { recursive: true, force: true })
+    const r = checkEgressAllowlistBaseline(store, () => { throw new Error('queue down') }, new Date('2026-10-03T08:00:01.000Z'), memory)
+    expect(r.recorded).toBe(true)
+    expect(r.report).toContain('REMOVED')
+    expect(readdirSync(join(store, HISTORY_DIRNAME)).filter((n) => n !== 'history.log')).toHaveLength(1)
+  })
+
+  it('statMoved: each of ctime, mtime, inode and size alone counts, an identical stat does not (W1b, M7a, M7b)', () => {
+    const base = { ctimeMs: 1000, mtimeMs: 900, ino: 42, size: 10 }
+    expect(statMoved({ ...base }, base)).toBe(false)
+    for (const k of ['ctimeMs', 'mtimeMs', 'ino', 'size'] as const) {
+      expect(statMoved({ ...base, [k]: base[k] + 1 }, base)).toBe(true)
+    }
+  })
+
+  it('the watcher reports a same-bytes rewrite whose mtime was put back (touch -r: same inode and size, only ctime moved)', async () => {
+    // a whole-second mtime, so putting it back is exact (a Date drops the sub-millisecond part)
+    utimesSync(allowlist, 1_700_000_000, 1_700_000_000)
+    const stop = watchEgressAllowlistBaseline(store, notify, 20)
+    const before = statSync(allowlist)
+    try {
+      await new Promise((r) => setTimeout(r, 60))
+      writeFileSync(allowlist, readFileSync(allowlist))
+      utimesSync(allowlist, 1_700_000_000, 1_700_000_000)
+      const after = statSync(allowlist)
+      expect([after.ino, after.size, after.mtimeMs]).toEqual([before.ino, before.size, before.mtimeMs])
+      const deadline = Date.now() + 3000
+      while (!reports.some((x) => x.includes('REWRITTEN')) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20))
+    } finally { stop() }
+    expect(reports.some((x) => x.includes('REWRITTEN with its previous bytes'))).toBe(true)
+  })
+
+  it('a history wiped while the dashboard was down is REPORTED at the next boot through the memory file (W2)', () => {
+    const mem = baselineMemoryFile(store, root)
+    watchEgressAllowlistBaseline(store, notify, 60_000, mem)()
+    expect(readFileSync(mem, 'utf-8').trim()).toMatch(/^[0-9a-f]{64}$/)
+    rmSync(join(store, HISTORY_DIRNAME), { recursive: true, force: true })
+    writeFileSync(allowlist, JSON.stringify({ domains: ['while-down.example'] }))
+    watchEgressAllowlistBaseline(store, notify, 60_000, mem)()
+    expect(reports).toHaveLength(1)
+    expect(reports[0]).toContain('REMOVED')
+  })
+
+  it('POSITIVE CONTROL: the same restart without a memory file is a quiet first run, as before', () => {
+    watchEgressAllowlistBaseline(store, notify, 60_000)()
+    rmSync(join(store, HISTORY_DIRNAME), { recursive: true, force: true })
+    writeFileSync(allowlist, JSON.stringify({ domains: ['while-down.example'] }))
+    watchEgressAllowlistBaseline(store, notify, 60_000)()
+    expect(reports).toEqual([])
+  })
+
+  it('baselineMemoryFile lies outside store/, under <home>/.marveen, and differs per store', () => {
+    const a = baselineMemoryFile(store, root)
+    expect(a.startsWith(join(root, '.marveen') + '/')).toBe(true)
+    expect(a.startsWith(store)).toBe(false)
+    expect(a).not.toBe(baselineMemoryFile(join(root, 'other-store'), root))
   })
 })
