@@ -101,7 +101,9 @@ const ENV_ASSIGN = /^[A-Za-z_][A-Za-z_0-9]*=/
 const CMD_POSITION_KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '{', '!'])
 const SENDER_PROG = /^(sendmail|msmtp|swaks)$/i
 const SENDPY = /^send\.py$/i
-const PYTHON = /^python3?$/i
+// A versioned interpreter (python3.12) is the same python: the heredoc check already read it
+// that way, the -c / -m / send.py checks did not (didi, 6525aba3 50742). Twin: _PYTHON.
+const PYTHON = /^python3?(?:\.\d+)?$/i
 const NODEISH = /^(node|tsx|ts-node|deno|bun|npx)$/i
 const GRAPHMAIL = /^graph-mail(\.ts|\.js)?$/i
 const WRAPPER_SHELL = /^(sh|bash|zsh|dash)$/i
@@ -360,8 +362,10 @@ function headIsSend(toks, depth) {
   if ((PYTHON.test(prog) || NODEISH.test(prog)) && rest.length) candidates.push(basename(rest[0]))
   // Issue #1853: `python3 -m send` (or -m pkg.send) is the same sender by module name.
   if (PYTHON.test(prog)) {
-    for (let i = 0; i < rest.length - 1; i++) {
-      if (rest[i] === '-m' && rest[i + 1].split('.').pop() === 'send') candidates.push('send.py')
+    for (let i = 0; i < rest.length; i++) {
+      // -m send, and the glued -msend python accepts too
+      const mod = rest[i] === '-m' ? rest[i + 1] : /^-m./.test(rest[i]) ? rest[i].slice(2) : undefined
+      if (mod !== undefined && mod.split('.').pop() === 'send') candidates.push('send.py')
     }
   }
   if (candidates.some((c) => SENDPY.test(c)) &&
@@ -423,9 +427,64 @@ export function buildWrapperDepthMsg() {
 const HEREDOC_SENDER_ARGV = /['"](?:[^'"\s]*\/)?(?:sendmail|msmtp|swaks|send\.py)(?=['"\s])/
 const heredocBodySends = (body) =>
   CODE_SEND.test(body) || CODE_SEND_MODULE.test(body) || (CODE_EXECISH.test(body) && HEREDOC_SENDER_ARGV.test(body))
-const HEREDOC_SHELL = /(?:^|[\s;&|(])(?:\S*\/)?(?:bash|sh|zsh|dash)\b[^\n<]*$/i
-const HEREDOC_INTERP = /(?:^|[\s;&|(])(?:\S*\/)?(python3?(?:\.\d+)?|node|tsx|ts-node|deno|bun)\b[^\n<]*$/i
-const HEREDOC_REDIRECT = /(?:^|[\s;&|(])(?:cat|tee)\b[^\n]*?(?:>>?|\btee(?:\s+-a)?)\s*(['"]?)([^\s'"<>;&|]+)\1/
+// WHO READS THE HEREDOC (didi's K1, 6525aba3 50742). The opener line used to be matched as
+// a whole, so ANY interpreter word before the << made the body a program: a PATH entry
+// (`export PATH=/opt/homebrew/opt/node@22/bin:$PATH && git commit -F - <<`), an earlier
+// command (`python3 -m pytest && gh pr create --body-file - <<`), a directory
+// (`cd /home/node/app && cat <<`). Only the heredoc's OWN command reads it: the last
+// segment before the <<, its command word after assignments and keywords. A wrapper in
+// that position (sudo, env, nohup, ...) keeps the old reading of the whole segment, so
+// `sudo -u x python3 - <<EOF` stays a program: narrower only where the command word is known.
+// Twin: _heredoc_head_kind in hooks/outgoing-copy-gate.py.
+const HEREDOC_INTERP_PROG = /^(?:python3?(?:\.\d+)?|node|tsx|ts-node|deno|bun)$/i
+const HEREDOC_HEAD_WRAPPERS = new Set(['sudo', 'doas', 'env', 'nohup', 'time', 'exec', 'command', 'builtin',
+  'nice', 'ionice', 'chrt', 'timeout', 'stdbuf', 'setsid', 'caffeinate', 'arch', 'npx'])
+export function heredocHeadKind(head) {
+  const seg = String(head ?? '')
+    .replace(/\|&/g, '|') // pipe incl. stderr: still a separator
+    .replace(/\d*[<>]&\d*-?|&>>?|\d*>\|/g, ' ') // 2>&1, &>, >| are redirections, not separators
+    .split(/[;&|(`]/)
+    .pop()
+  const words = seg.trim().split(/\s+/).filter(Boolean)
+  const kind = (w) => {
+    const prog = basename(w.replace(/^['"]+|['"]+$/g, ''))
+    return HEREDOC_INTERP_PROG.test(prog) ? 'interp' : WRAPPER_SHELL.test(prog) ? 'shell' : null
+  }
+  let i = 0
+  while (i < words.length && (ENV_ASSIGN.test(words[i]) || CMD_POSITION_KEYWORDS.has(words[i]))) i++
+  if (i >= words.length) return null
+  if (kind(words[i])) return kind(words[i])
+  if (!HEREDOC_HEAD_WRAPPERS.has(basename(words[i]).toLowerCase())) return null
+  for (const w of words.slice(i + 1)) if (kind(w)) return kind(w)
+  return null
+}
+
+// THE HEREDOC FORMS BASH RUNS (didi's K2, 6525aba3 50742). HEREDOC_RE knows <<TAG and
+// <<'TAG' only, so a sender fed by <<"EOF", <<\EOF, <<'END-PY' (a - or . in the tag), a <<-
+// body closed by a TAB-indented tag, or an unterminated heredoc (bash feeds the body to the
+// end of the input) was never read as a program. Used ONLY here, where a body is judged as
+// a program: the segmenter keeps HEREDOC_RE, so no body it scans as commands today goes
+// unscanned. Twin: _heredoc_spans in hooks/outgoing-copy-gate.py.
+const HEREDOC_OPEN = /(?<!<)<<(?!<)(-?)[ \t]*(?:'([\w.-]+)'|"([\w.-]+)"|\\?([\w.-]+))[^\n]*/g
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+export function heredocSpans(cmd) {
+  const spans = []
+  const open = new RegExp(HEREDOC_OPEN.source, 'g')
+  let m
+  while ((m = open.exec(cmd))) {
+    const nl = m.index + m[0].length
+    if (nl >= cmd.length) break // no body line at all
+    const tag = m[2] ?? m[3] ?? m[4]
+    const term = new RegExp(String.raw`\n${m[1] ? String.raw`\t*` : ''}${escapeRegExp(tag)}(?=\s|$)`, 'g')
+    term.lastIndex = nl
+    const t = term.exec(cmd)
+    spans.push({ index: m.index, intro: m[0], body: cmd.slice(nl + 1, t ? t.index + 1 : cmd.length) })
+    open.lastIndex = t ? t.index + t[0].length : cmd.length
+  }
+  return spans
+}
+// `cat > P <<TAG`, `cat <<TAG > P`, `cat <<TAG | tee P`, and a bare `tee P <<TAG` (didi).
+const HEREDOC_REDIRECT = /(?:^|[\s;&|(])(?:cat\b[^\n]*?(?:>>?|\btee(?:\s+-a)?)|tee(?:\s+-a)?(?=\s))\s*(['"]?)([^\s'"<>;&|]+)\1/
 function writtenThenRun(cmd, written, depth) {
   if (!written.size) return false
   let segments
@@ -556,17 +615,14 @@ export function varUrlSend(cmd) {
 }
 function heredocProgramSends(cmd, depth = 0) {
   const written = new Map()
-  for (const m of cmd.matchAll(HEREDOC_RE)) {
-    const opener = cmd.slice(cmd.lastIndexOf('\n', m.index - 1) + 1, m.index) + m[1]
-    const w = HEREDOC_REDIRECT.exec(opener)
-    if (w) written.set(w[2], cmd.slice(m.index + m[1].length + 1, m.index + m[0].length - m[2].length))
-    const lineStart = cmd.lastIndexOf('\n', m.index - 1) + 1
-    const head = cmd.slice(lineStart, m.index)
-    const bodyStart = m.index + m[1].length + 1
-    const body = cmd.slice(bodyStart, m.index + m[0].length - m[2].length)
-    if (HEREDOC_INTERP.test(head)) {
+  for (const { index, intro, body } of heredocSpans(cmd)) {
+    const head = cmd.slice(cmd.lastIndexOf('\n', index - 1) + 1, index)
+    const w = HEREDOC_REDIRECT.exec(head + intro)
+    if (w) written.set(w[2], body)
+    const kind = heredocHeadKind(head)
+    if (kind === 'interp') {
       if (heredocBodySends(body)) return true
-    } else if (HEREDOC_SHELL.test(head) && depth < 3) {
+    } else if (kind === 'shell' && depth < 3) {
       if (isSendInvocation(body, depth + 1)) return true
     }
   }

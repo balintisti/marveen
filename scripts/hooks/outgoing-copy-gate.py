@@ -87,7 +87,8 @@ _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*=")
 _CMD_POSITION_KEYWORDS = frozenset(("if", "then", "else", "elif", "do", "while", "until", "{", "!"))
 _SENDER_PROG = re.compile(r"^(sendmail|msmtp|swaks)$", re.I)
 _SENDPY = re.compile(r"^send\.py$", re.I)
-_PYTHON = re.compile(r"^python3?$", re.I)
+# python3.12 is the same python (didi, 6525aba3 50742). Twin: PYTHON in email-send-gate.mjs.
+_PYTHON = re.compile(r"^python3?(?:\.\d+)?$", re.I)
 # A ket kapu (ez + scripts/email-send-gate.mjs) SZANDEKOSAN azonos
 # felismeres-szemantikat visel, es ezt kozos eset-lista orzi
 # (send-invocation-cases.json + konformancia-teszt): a divergencia
@@ -702,7 +703,9 @@ def _head_is_send(toks, depth: int) -> bool:
     # name; it gets the same --to rule as the file-name form.
     if _PYTHON.match(prog):
         for i, t in enumerate(rest):
-            if t == "-m" and i + 1 < len(rest) and rest[i + 1].rsplit(".", 1)[-1] == "send":
+            # -m send, and the glued -msend python accepts too
+            mod = (rest[i + 1] if i + 1 < len(rest) else None) if t == "-m" else (t[2:] if t.startswith("-m") and len(t) > 2 else None)
+            if mod is not None and mod.rsplit(".", 1)[-1] == "send":
                 candidates.append("send.py")
     if any(_SENDPY.match(c) for c in candidates) and any(
         t == "--to" or t.startswith("--to=") for t in rest
@@ -782,13 +785,72 @@ def _heredoc_body_sends(body: str) -> bool:
     return bool(_CODE_EXECISH.search(body) and _HEREDOC_SENDER_ARGV.search(body))
 
 
-_HEREDOC_SHELL = re.compile(r"(?:^|[\s;&|(])(?:\S*/)?(?:bash|sh|zsh|dash)\b[^\n<]*$", re.I)
-_HEREDOC_INTERP = re.compile(
-    r"(?:^|[\s;&|(])(?:\S*/)?(python3?(?:\.\d+)?|node|tsx|ts-node|deno|bun)\b[^\n<]*$", re.I
+# WHO READS THE HEREDOC (didi's K1, 6525aba3 50742): only the heredoc's OWN command, the last
+# segment before the <<, its command word after assignments and keywords -- not any
+# interpreter word on the opener line (a PATH entry like /opt/homebrew/opt/node@22/bin, an
+# earlier `python3 -m pytest &&`, a `cd /home/node/app &&`). A wrapper in that position keeps
+# the whole-segment reading, fail-closed. Full note: heredocHeadKind in email-send-gate.mjs.
+_HEREDOC_INTERP_PROG = re.compile(r"^(?:python3?(?:\.\d+)?|node|tsx|ts-node|deno|bun)$", re.I)
+_HEREDOC_HEAD_WRAPPERS = frozenset(("sudo", "doas", "env", "nohup", "time", "exec", "command", "builtin",
+                                    "nice", "ionice", "chrt", "timeout", "stdbuf", "setsid", "caffeinate",
+                                    "arch", "npx"))
+
+
+def _heredoc_head_kind(head: str):
+    seg = head.replace("|&", "|")
+    seg = re.sub(r"\d*[<>]&\d*-?|&>>?|\d*>\|", " ", seg)
+    seg = re.split(r"[;&|(`]", seg)[-1]
+    words = seg.split()
+
+    def kind(w):
+        prog = _basename(re.sub(r"^['\"]+|['\"]+$", "", w))
+        if _HEREDOC_INTERP_PROG.match(prog):
+            return "interp"
+        return "shell" if _WRAPPER_SHELL.match(prog) else None
+
+    i = 0
+    while i < len(words) and (_ENV_ASSIGN.match(words[i]) or words[i] in _CMD_POSITION_KEYWORDS):
+        i += 1
+    if i >= len(words):
+        return None
+    if kind(words[i]):
+        return kind(words[i])
+    if _basename(words[i]).lower() not in _HEREDOC_HEAD_WRAPPERS:
+        return None
+    for w in words[i + 1:]:
+        if kind(w):
+            return kind(w)
+    return None
+
+
+# THE HEREDOC FORMS BASH RUNS (didi's K2, 6525aba3 50742): <<"EOF", <<\EOF, a - or . in the
+# tag, a <<- body closed by a TAB-indented tag, an unterminated heredoc (body to the end).
+# Used only where a body is judged as a program; _segments_tokens keeps _HEREDOC.
+# Twin: heredocSpans in email-send-gate.mjs.
+_HEREDOC_OPEN = re.compile(r"(?<!<)<<(?!<)(-?)[ \t]*(?:'([\w.-]+)'|\"([\w.-]+)\"|\\?([\w.-]+))[^\n]*", re.A)
+
+
+def _heredoc_spans(cmd: str):
+    """[(start, intro, body), ...] for every heredoc bash would read."""
+    spans, pos = [], 0
+    while True:
+        m = _HEREDOC_OPEN.search(cmd, pos)
+        if not m:
+            return spans
+        nl = m.end()
+        if nl >= len(cmd):
+            return spans  # no body line at all
+        tag = m.group(2) or m.group(3) or m.group(4)
+        term = re.compile(r"\n" + (r"\t*" if m.group(1) else "") + re.escape(tag) + r"(?=\s|$)")
+        t = term.search(cmd, nl)
+        spans.append((m.start(), m.group(0), cmd[nl + 1:t.start() + 1 if t else len(cmd)]))
+        pos = t.end() if t else len(cmd)
+
+
+# `cat > P <<TAG`, `cat <<TAG > P`, `cat <<TAG | tee P`, and a bare `tee P <<TAG` (didi).
+_HEREDOC_REDIRECT = re.compile(
+    r"(?:^|[\s;&|(])(?:cat\b[^\n]*?(?:>>?|\btee(?:\s+-a)?)|tee(?:\s+-a)?(?=\s))\s*(['\"]?)([^\s'\"<>;&|]+)\1"
 )
-
-
-_HEREDOC_REDIRECT = re.compile(r"(?:^|[\s;&|(])(?:cat|tee)\b[^\n]*?(?:>>?|\btee(?:\s+-a)?)\s*(['\"]?)([^\s'\"<>;&|]+)\1")
 
 
 def _written_then_run(cmd: str, written: dict, depth: int) -> bool:
@@ -819,18 +881,16 @@ def _written_then_run(cmd: str, written: dict, depth: int) -> bool:
 
 def _heredoc_program_sends(cmd: str, depth: int = 0) -> bool:
     written = {}
-    for m in _HEREDOC.finditer(cmd):
-        opener = cmd[cmd.rfind("\n", 0, m.start()) + 1:m.start()] + m.group(1)
-        w = _HEREDOC_REDIRECT.search(opener)
+    for start, intro, body in _heredoc_spans(cmd):
+        head = cmd[cmd.rfind("\n", 0, start) + 1:start]
+        w = _HEREDOC_REDIRECT.search(head + intro)
         if w:
-            written[w.group(2)] = cmd[m.end(1) + 1:m.end() - len(m.group(2))]
-        line_start = cmd.rfind("\n", 0, m.start()) + 1
-        head = cmd[line_start:m.start()]
-        body = cmd[m.end(1) + 1:m.end() - len(m.group(2))]
-        if _HEREDOC_INTERP.search(head):
+            written[w.group(2)] = body
+        kind = _heredoc_head_kind(head)
+        if kind == "interp":
             if _heredoc_body_sends(body):
                 return True
-        elif _HEREDOC_SHELL.search(head) and depth < 3:
+        elif kind == "shell" and depth < 3:
             if is_send_invocation(body, _depth=depth + 1):
                 return True
     return _written_then_run(cmd, written, depth)

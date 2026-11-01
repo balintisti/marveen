@@ -895,6 +895,141 @@
       "name": "[VARURL926 cb63ddb4] kanban comment to a $DASH URL, prose quotes 'to': and 'subject': in single quotes (didi LOW)",
       "cmd": "curl -s -X POST $DASH/api/kanban/cb63ddb4/comments -H \"Authorization: Bearer $(cat store/.dashboard-token)\" -d \"{\\\"author\\\":\\\"didi\\\",\\\"content\\\":\\\"the gate reads 'to': and 'subject': keys\\\"}\"",
       "expected": false
+    },
+    {
+      "name": "[didi K1 6525aba3] a node@22 PATH entry does not make a commit-message heredoc a program",
+      "cmd": "export PATH=/opt/homebrew/opt/node@22/bin:$PATH && git commit -m \"$(cat <<'EOF'\nfix: import send is now denied\nEOF\n)\"",
+      "expected": false
+    },
+    {
+      "name": "[didi K1 6525aba3] an earlier python3 command does not make git's heredoc a program",
+      "cmd": "python3 -m pytest && git commit -F - <<'EOF'\nimport send\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi K1 6525aba3] an earlier node command does not make gh's heredoc a program",
+      "cmd": "node --test && gh pr create --body-file - <<'EOF'\nfrom send import main\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi K1 6525aba3] a /node/ directory does not make cat's heredoc a program",
+      "cmd": "cd /home/node/app && cat <<'EOF'\nimport send\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi K1 6525aba3] the fleet's agent-msg.sh heredoc after a node@22 PATH stays a message",
+      "cmd": "export PATH=/opt/homebrew/opt/node@22/bin:$PATH; bash scripts/agent-msg.sh computress marveen - <<'VEGE'\nreview: import send is now denied\nVEGE",
+      "expected": false
+    },
+    {
+      "name": "[didi K1 6525aba3] control: a wrapper with an option argument still feeds python",
+      "cmd": "sudo -u bot python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K1 6525aba3] control: an assignment before python still feeds python",
+      "cmd": "FOO=1 python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K1 6525aba3] control: 2>&1 is a redirection, not a separator",
+      "cmd": "python3 - 2>&1 <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K1 6525aba3] control: python in the LAST segment before the heredoc",
+      "cmd": "cd /tmp && python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K2 6525aba3] a double-quoted tag feeds python too",
+      "cmd": "python3 - <<\"EOF\"\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K2 6525aba3] a backslash-escaped tag feeds python too",
+      "cmd": "python3 - <<\\EOF\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K2 6525aba3] a <<- body closed by a tab-indented tag",
+      "cmd": "python3 - <<-EOF\n\timport send\n\tEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K2 6525aba3] a tag with a dash",
+      "cmd": "python3 - <<'END-PY'\nimport send\nEND-PY",
+      "expected": true
+    },
+    {
+      "name": "[didi K2 6525aba3] an unterminated heredoc feeds the body to the end",
+      "cmd": "python3 - <<'EOF'\nimport send",
+      "expected": true
+    },
+    {
+      "name": "[didi K2 6525aba3] without <<- a tab-indented tag does not close the body",
+      "cmd": "python3 - <<'EOF'\n\tEOF\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K3 6525aba3] J5: a spec built from send.py",
+      "cmd": "python3 - <<'EOF'\nimport importlib.util\nspec = importlib.util.spec_from_file_location('s', 'scripts/send.py')\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K3 6525aba3] J8: -m pkg.send is the sender by module name",
+      "cmd": "python3 -m pkg.send --to a@b.c",
+      "expected": true
+    },
+    {
+      "name": "[didi K3 6525aba3] J18: a heredoc fed to zsh is a shell program",
+      "cmd": "zsh <<'EOF'\nsendmail a@b.c < m.txt\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K3 6525aba3] J26: send imported after another module",
+      "cmd": "python3 - <<'EOF'\nimport os, send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K3 6525aba3] J1 control: send.helper is another module",
+      "cmd": "python3 - <<'EOF'\nimport send.helper\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi K3 6525aba3] J3 control: runpy on sender_tools.py",
+      "cmd": "python3 - <<'EOF'\nimport runpy\nrunpy.run_path('sender_tools.py')\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi K3 6525aba3] J4 control: import_module of sendgrid",
+      "cmd": "python3 - <<'EOF'\nimport importlib\nimportlib.import_module('sendgrid')\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi K3 6525aba3] J20 control: the module name is case-sensitive",
+      "cmd": "python3 - <<'EOF'\nimport Send\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi 6525aba3] the glued -msend form",
+      "cmd": "python3 -msend --to a@b.c",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3] a bare tee writes the program, the same command runs it",
+      "cmd": "tee /tmp/x.py <<'EOF' >/dev/null\nimport send\nEOF\npython3 /tmp/x.py",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3] a versioned python3.12 -m send",
+      "cmd": "python3.12 -m send --to a@b.c",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3] a versioned python3.12 -c",
+      "cmd": "python3.12 -c 'import send'",
+      "expected": true
     }
   ]
 }
