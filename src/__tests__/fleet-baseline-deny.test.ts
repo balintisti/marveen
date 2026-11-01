@@ -190,6 +190,13 @@ describe('the named QA exemption drops one rule for three agents and nothing els
     for (const name of [NAME, 'computress', 'dexter', 'ford', 'marveen', 'Mandark', '']) {
       expect(fleetBaselineDenyFor(name)).toEqual(FLEET_BASELINE_DENY)
     }
+  })
+
+  it('a name that only RESEMBLES a QA name gets the whole floor (exact match, not prefix/substring/trim)', () => {
+    // didi's A5 re-review L1: startsWith / includes / trim mutants of the membership test survived.
+    for (const name of ['didi2', 'mandark-test', 'xdidi', 'trill', 'mand', ' didi', 'didi ', 'trillian\n']) {
+      expect(fleetBaselineDenyFor(name), JSON.stringify(name)).toEqual(FLEET_BASELINE_DENY)
+    }
     writeAgentSettingsFromProfile(NAME, loadProfileTemplate('default'))
     expect(readDeny()).toContain(QA_BROWSER_RUN_CODE_RULE)
   })
@@ -301,5 +308,11 @@ describe('the two deny lists stay distinguishable', () => {
     expect(docs).toContain('FLEET_BASELINE_DENY')
     expect(docs).toContain('Two lists, and why they are not one')
     expect(docs).not.toMatch(/single source of truth\s*\n?\s*for a small `permissions\.deny` list/)
+  })
+
+  it('the docs name the QA run_code exemption, so the floor row cannot read as "every sub-agent"', () => {
+    const docs = readFileSync(join(PROJECT_ROOT, 'docs', 'security-hardening.md'), 'utf-8')
+    expect(docs).toContain('QA_BROWSER_RUN_CODE_AGENTS')
+    for (const qa of QA_BROWSER_RUN_CODE_AGENTS) expect(docs).toContain(`\`${qa}\``)
   })
 })

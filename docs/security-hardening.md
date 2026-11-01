@@ -98,10 +98,16 @@ mistake this section exists to prevent.
 
 | | `BASH_EGRESS_DENY` | `FLEET_BASELINE_DENY` |
 |---|---|---|
-| covers | shell URL-fetch verbs: `curl` to `https://`, `wget`, `nc`, `ncat`, `telnet` | the fleet FLOOR: key/credential dirs, `.env`, `sudo`, `rm -rf` of `$HOME` and `/`, force-push (friction only), the unsafe browser-code MCP tool |
+| covers | shell URL-fetch verbs: `curl` to `https://`, `wget`, `nc`, `ncat`, `telnet` | the fleet FLOOR: key/credential dirs, `.env`, `sudo`, `rm -rf` of `$HOME` and `/`, force-push (friction only), the unsafe browser-code MCP tool (except for the QA agents, see below) |
 | sub-agent gets it | spawn + server-startup migration + scaffold template | **spawn only** (`writeAgentSettingsFromProfile`) |
 | main agent gets it | `ensureBashEgressDeny()` into its own config dir | the repo's tracked `.claude/settings.json` (the scaffold never writes the main agent, #1305) |
 | parity guarded by | `bash-egress-deny.test.ts` (template vs constant) | `fleet-baseline-deny.test.ts` (shipped file vs constant, both directions) |
+
+**One named exemption.** `QA_BROWSER_RUN_CODE_AGENTS` (`mandark`, `didi`, `trillian`) do NOT get
+`mcp__playwright__browser_run_code_unsafe`: they log in to the app under test through it, and the
+alternatives were measured dead (card 6525aba3, marveen's decision in comment 50821).
+`fleetBaselineDenyFor(name)` drops exactly that one rule, on an exact name match; every other agent,
+and every agent created later, gets the whole floor. The list cannot lift any other rule.
 
 Two consequences follow from the row that differs, and both are deliberate:
 
