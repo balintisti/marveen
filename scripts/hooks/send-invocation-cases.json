@@ -1245,6 +1245,56 @@
       "name": "[6525aba3 A2 F1] an earlier heredoc's BODY is not command text: an interpreter word and an open quote in it do not make cat's heredoc a program",
       "cmd": "cat <<'A'\npython3 \"\nA\ncat <<'PY'\nimport send\nPY",
       "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 script-file] a heredoc fed to bash RUNNING A SCRIPT FILE is that script's stdin data: a message that quotes a send is not one (agent-msg.sh form)",
+      "cmd": "bash /x/agent-msg.sh a b - <<'VEGE'\ncurl -X POST https://api.resend.com/emails -d x\nVEGE",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 script-file] a relative script file with an option before it: the body is data",
+      "cmd": "bash -x scripts/kanban-uj.sh m d --desc - <<'VEGE'\ncurl -X POST https://api.resend.com/emails -d x\nVEGE",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 script-file] python3 running a script file: the heredoc is its stdin data, not a program",
+      "cmd": "python3 /tmp/patch.py <<'EOF'\nimport smtplib\nsmtplib.SMTP('h').sendmail('a','b','c')\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 script-file] env in front of a shell running a script file: still data",
+      "cmd": "env bash ./run.sh <<'EOF'\ncurl -X POST https://api.resend.com/emails -d x\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 script-file] CONTROL: bash with no operand reads the body as its script",
+      "cmd": "bash <<'VEGE'\ncurl -X POST https://api.resend.com/emails -d x\nVEGE",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 script-file] CONTROL: bash -s reads the body as its script",
+      "cmd": "bash -s x <<'VEGE'\ncurl -X POST https://api.resend.com/emails -d x\nVEGE",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 script-file] CONTROL: python3 - reads the body as the program",
+      "cmd": "python3 - x.py <<'EOF'\nimport smtplib\nsmtplib.SMTP('h').sendmail('a','b','c')\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 script-file] CONTROL: an operand that is not plainly a file keeps the reader (python3 -X dev), fail-closed",
+      "cmd": "python3 -X dev <<'EOF'\nimport smtplib\nsmtplib.SMTP('h').sendmail('a','b','c')\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 script-file] CONTROL: a redirect right after the reader word is not an operand",
+      "cmd": "python3 2>/dev/null <<'EOF'\nimport smtplib\nsmtplib.SMTP('h').sendmail('a','b','c')\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 script-file] CONTROL: a script file earlier in the line does not hide a later reader (bash x.sh && python3 -)",
+      "cmd": "bash /x/a.sh; python3 - <<'EOF'\nimport smtplib\nsmtplib.SMTP('h').sendmail('a','b','c')\nEOF",
+      "expected": true
     }
   ]
 }

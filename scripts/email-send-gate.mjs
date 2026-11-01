@@ -481,9 +481,30 @@ export function heredocOwnCommand(head) {
 // body as shell. Every reader word in the own command counts: a body read both ways is
 // judged both ways. Returns { interp, shell }.
 const HEREDOC_READER_WORD_G = new RegExp(HEREDOC_READER_WORD.source, 'gi')
+// A reader word followed by a script FILE runs that file, and the heredoc is the script's stdin:
+// data, not a program. `bash agent-msg.sh a b - <<'VEGE'` is the fleet's message form, and a
+// message body that QUOTES a send command was denied as one (6 of 14 970 real commands over 7
+// days, all ALLOW on 284961fa7; computress, 6525aba3 A2). Only an operand that is plainly a file
+// counts (a / or a script extension); no operand, `-`, `-s`, or any other word (`python3 -X dev`)
+// keeps the reader, fail-closed. A script that runs its own stdin is the cost, named; the
+// file-name rules (send.py) still judge the script itself. Twin: _reader_runs_script_file.
+const SCRIPT_FILE_OPERAND = /\/|\.(?:sh|bash|zsh|py|js|mjs|cjs|ts|mts|cts)$/i
+export function readerRunsScriptFile(rest) {
+  for (const raw of String(rest ?? '').split(/\s+/)) {
+    const t = raw.replace(/^['"]+|['"]+$/g, '')
+    if (!t) continue
+    if (t === '-') return false // "read the program from stdin"
+    if (/^[-+]/.test(t)) continue // an option
+    if (/^\d*[<>]/.test(t)) return false // a redirect: no operand before it
+    return SCRIPT_FILE_OPERAND.test(t)
+  }
+  return false
+}
 export function heredocHeadKinds(head) {
   const kinds = { interp: false, shell: false }
-  for (const m of heredocOwnCommand(head).matchAll(HEREDOC_READER_WORD_G)) {
+  const own = heredocOwnCommand(head)
+  for (const m of own.matchAll(HEREDOC_READER_WORD_G)) {
+    if (readerRunsScriptFile(own.slice(m.index + m[0].length))) continue
     if (WRAPPER_SHELL.test(m[1])) kinds.shell = true
     else kinds.interp = true
   }

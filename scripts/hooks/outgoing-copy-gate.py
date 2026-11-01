@@ -835,13 +835,39 @@ def _heredoc_own_command(head: str) -> str:
     return s[start:]
 
 
+# A reader word followed by a script FILE runs that file, and the heredoc is the script's stdin:
+# data, not a program (`bash agent-msg.sh a b - <<'VEGE'`, the fleet's message form). Only an
+# operand that is plainly a file counts (a / or a script extension); no operand, `-`, `-s`, or
+# any other word keeps the reader, fail-closed. Twin: readerRunsScriptFile in email-send-gate.mjs.
+_SCRIPT_FILE_OPERAND = re.compile(r"/|\.(?:sh|bash|zsh|py|js|mjs|cjs|ts|mts|cts)$", re.I)
+
+
+def _reader_runs_script_file(rest: str) -> bool:
+    for raw in rest.split():
+        t = re.sub(r"""^['"]+|['"]+$""", "", raw)
+        if not t:
+            continue
+        if t == "-":
+            return False
+        if re.match(r"[-+]", t):
+            continue
+        if re.match(r"\d*[<>]", t):
+            return False
+        return bool(_SCRIPT_FILE_OPERAND.search(t))
+    return False
+
+
 def _heredoc_head_kinds(head: str):
-    """(interp, shell): every reader word counts, not the first (didi's F2, 6525aba3 50861).
+    """(interp, shell): every reader word counts, not the first (didi's F2, 6525aba3 50861),
+    except one that runs a script file (the body is that script's stdin data).
 
     Twin: heredocHeadKinds in email-send-gate.mjs.
     """
     interp = shell = False
-    for m in _HEREDOC_READER_WORD.finditer(_heredoc_own_command(head)):
+    own = _heredoc_own_command(head)
+    for m in _HEREDOC_READER_WORD.finditer(own):
+        if _reader_runs_script_file(own[m.end():]):
+            continue
         if _WRAPPER_SHELL.match(m.group(1)):
             shell = True
         else:
