@@ -469,6 +469,7 @@ describe('50862 glob gaps: $PWD, subshell, group, cd --, find', () => {
     "find store -path '*x*' -delete",
     "find store/egress-allowlist.history -type f -delete",
     "find $PWD/store -name '2026*' -delete",
+    'find store -type f -exec chmod 644 {} +',
   ])('DENY: %s', (command) => {
     expect(bash(command)).toEqual({ deny: true, reason: 'egress-allowlist' })
   })
@@ -481,8 +482,20 @@ describe('50862 glob gaps: $PWD, subshell, group, cd --, find', () => {
     'cat $PWD/store/other.json',
     'rm $PWD/tmp/*.json',
     '(cat store/e*-allowlist.json)',
+    'find . -type f -exec grep -l needle {} +',
+    'find store -type f -exec /usr/bin/wc -c {} +',
   ])('ALLOW: %s', (command) => {
     expect(bash(command).deny).toBe(false)
+  })
+
+  it('a find whose root is a symlinked alias INSIDE the history is denied though no word names it (F6)', () => {
+    symlinkSync(join(store, HISTORY_DIRNAME), join(root, 'h'))
+    expect(bash('find h -type f -delete')).toEqual({ deny: true, reason: 'egress-allowlist' })
+    expect(bash("find h -name '*.json' -delete")).toEqual({ deny: true, reason: 'egress-allowlist' })
+  })
+
+  it('a scheduler under find -exec keeps its own reason, though the find would also reach the allowlist', () => {
+    expect(bash('find . -exec at now +').reason).toMatch(/^os-scheduler/)
   })
 
   it('the default allowlist path is this install\'s store/ (A18): a glob from the repo root hits it, from elsewhere not', () => {

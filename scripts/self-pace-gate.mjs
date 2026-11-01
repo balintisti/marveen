@@ -344,7 +344,10 @@ export function findHitsAllowlist(seg, allowlistPath = DEFAULT_ALLOWLIST_PATH, c
   const roots = []
   for (; i < words.length && !/^[-(!]/.test(words[i]); i++) roots.push(words[i])
   const expr = words.slice(i)
-  if (!expr.some((w) => FIND_ACTION_RX.test(w))) return false
+  // -exec cat/grep/... {} reads; -exec anything else, -delete and -fprint write
+  const writes = (w, k) => FIND_ACTION_RX.test(w) &&
+    !(/^-(?:exec|execdir|ok|okdir)$/.test(w) && ALLOWLIST_READERS.has(String(expr[k + 1] ?? '').replace(/^.*\//, '')))
+  if (!expr.some(writes)) return false
   const storeDir = dirname(allowlistPath)
   const historyDir = join(storeDir, HISTORY_DIRNAME)
   const covers = (root) => {
@@ -749,6 +752,8 @@ export function gateDecision(toolName, toolInput, opts = {}) {
     // A glob is expanded from the directory the shell is in: `cd store && rm *.json` hits the
     // allowlist although no word names store/. Followed segment by segment (EGRESSSELFEDIT824).
     let segCwd = opts.cwd ?? process.cwd()
+    // Returned after the scheduler checks below: `find . -exec at now` is a scheduler call first.
+    let allowlistDeny = null
     for (const seg of naiveSegs) {
       // also inside a subshell or a group, and after `--`: `(cd store`, `{ cd -- store`
       const cd = /^[({]?\s*(?:cd|pushd)\s+(?:--\s+)?(['"]?)([^\s'";&|()]+)\1\s*\)?$/.exec(seg)
@@ -768,7 +773,7 @@ export function gateDecision(toolName, toolInput, opts = {}) {
       // dashboard schedule API: block WRITE methods only (GET list/pending is legit)
       if (SCHEDULE_API_RX.test(seg) && HTTP_WRITE_RX.test(seg)) return { deny: true, reason: 'schedule-api-write' }
       // the egress allowlist: a plain read only (EGRESSSELFEDIT824)
-      if (!allowlistBashSegmentAllowed(seg, { ...opts, cwd: segCwd })) return { deny: true, reason: 'egress-allowlist' }
+      if (!allowlistDeny && !allowlistBashSegmentAllowed(seg, { ...opts, cwd: segCwd })) allowlistDeny = { deny: true, reason: 'egress-allowlist' }
     }
     // launchd directory: block a write INTO it (a read or a copy out of it is legit).
     // Heredoc bodies that feed TEXT are blanked, so a message DESCRIBING an install
@@ -794,6 +799,7 @@ export function gateDecision(toolName, toolInput, opts = {}) {
     if (INDIRECT_SCHEDULER_RX.test(heredocMasked)) {
       return { deny: true, reason: 'os-scheduler-indirect' }
     }
+    if (allowlistDeny) return allowlistDeny
   }
   return { deny: false }
 }
