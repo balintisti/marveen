@@ -53,6 +53,7 @@ import {
   READY_TIMEOUT_MS,
   READY_TIMEOUT_REASON,
   STALE_REFRESH_REASON_PREFIX,
+  SUBAGENT_GATE_REASON_PREFIX,
   SATURATION_CREDIBLE_MIN_PCT,
   saturationBannerCredible,
   type GuardState,
@@ -223,6 +224,29 @@ function handoffMtime(name: string): number | null {
   try { return statSync(handoffPathFor(name)).mtimeMs } catch { return null }
 }
 
+/** Where scripts/hooks/subagent-context-gate.py records its last refusal per agent: next to
+ *  store/context-guard.json, the config the gate reads (card b83e079c). */
+export const SUBAGENT_GATE_REFUSAL_DIR = join(PROJECT_ROOT, 'store', 'subagent-gate-refusals')
+
+/** The gate's last refusal for this agent, if it happened in the CURRENT session (card b83e079c).
+ *  A refusal older than the session start belongs to a session the guard already restarted, so it
+ *  is no reason to restart the fresh one. Unknown session start = null: a refusal that cannot be
+ *  placed in this session is not acted on (fails closed: the act tier still covers 90%). */
+export function readSubagentGateRefusal(
+  name: string,
+  sessionStartSec: number | undefined,
+  dir: string = SUBAGENT_GATE_REFUSAL_DIR,
+): { atMs: number; gatePct: number } | null {
+  if (sessionStartSec === undefined) return null
+  let raw: unknown
+  try { raw = JSON.parse(readFileSync(join(dir, `${name}.json`), 'utf8')) } catch { return null }
+  const { atMs, gatePct } = (raw ?? {}) as { atMs?: unknown; gatePct?: unknown }
+  if (typeof atMs !== 'number' || !Number.isFinite(atMs)) return null
+  if (typeof gatePct !== 'number' || !(gatePct > 0 && gatePct <= 1)) return null
+  if (atMs < sessionStartSec * 1000) return null
+  return { atMs, gatePct }
+}
+
 export function handoffPrompt(pctRound: number, handoffPath: string): string {
   return (
     `[CONTEXT-GUARD] A munkakontextusod ~${pctRound}%-on van -- kritikus. ` +
@@ -271,6 +295,24 @@ export function dailyHandoffPrompt(atTime: string, handoffPath: string): string 
     `EGYETLEN dolgod ebben a körben: írj HANDOFF.md-t a /handoff skill struktúrája szerint ide: ${handoffPath} ` +
     `(Goal / Current Progress / What Worked / What Didn't Work / Next Steps, konkrét fájl-útvonalakkal és kanban kártya-azonosítókkal). ` +
     `Ha nincs félbehagyott feladatod, írd bele hogy nincs -- az is teljes értékű válasz. ` +
+    `Utána ÁLLJ MEG; a rendszer újraindít és a HANDOFF.md-ből folytatod.`
+  )
+}
+
+/**
+ * Handoff request for the sub-agent gate tier (card b83e079c).
+ *
+ * A fifth wording: the gate already told this agent "handoff first, the fresh session spawns it",
+ * so the agent may well have written HANDOFF.md before this arrives. Asking for a first write would
+ * read as if that handoff had been lost; the prompt says it counts.
+ */
+export function subagentGateHandoffPrompt(pctRound: number, handoffPath: string): string {
+  return (
+    `[CONTEXT-GUARD] A sub-agent kapu megtagadott egy új al-ágenst (a kontextusod ~${pctRound}%), és azt írta: a friss session indítja el. ` +
+    `Ezt teljesítem: friss kontextussal újraindítalak. EGYETLEN dolgod ebben a körben: ha a megtagadás óta már megírtad a HANDOFF.md-t ` +
+    `(${handoffPath}), és benne van a megtagadott al-ágens briefje, ne írd újra, csak ÁLLJ MEG. Ha még nem, írd meg most a /handoff skill ` +
+    `struktúrája szerint (Goal / Current Progress / What Worked / What Didn't Work / Next Steps, konkrét fájl-útvonalakkal és kanban ` +
+    `kártya-azonosítókkal; a megtagadott al-ágens briefje a Next Steps első pontja). ` +
     `Utána ÁLLJ MEG; a rendszer újraindít és a HANDOFF.md-ből folytatod.`
   )
 }
@@ -763,6 +805,8 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
     // the tier armed is recorded as served NOW and is never due on that sweep;
     // a disarmed tier forgets the record, so arming it later in the day does
     // not find a stale seed from before the slot and fire at once.
+    // Same gate as pct: the tier reads it only next to a measured pct (card b83e079c).
+    subagentGateRefusal: running && needPct && cfg.enabled ? readSubagentGateRefusal(name, since) : null,
     dailyHandoffDue: (() => {
       // Forgetting does NOT wait for an idle sweep: an agent that was never idle
       // while the tier was off would otherwise keep its old armed record, and
@@ -892,7 +936,10 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
                 // agent, so the percentage prompt would announce "~0% --
                 // critical" at 04:00 to a session that is perfectly healthy.
                 ? dailyHandoffPrompt(cfg.dailyHandoffTime ?? '', handoffPathFor(name))
-                : handoffPrompt(pctRound ?? 0, handoffPathFor(name)),
+                : decision.reason.startsWith(SUBAGENT_GATE_REASON_PREFIX)
+                  // Below actPct: the "critical, drop everything" text would be false here.
+                  ? subagentGateHandoffPrompt(pctRound ?? 0, handoffPathFor(name))
+                  : handoffPrompt(pctRound ?? 0, handoffPathFor(name)),
           null,
           {
             survival: 'degrades',

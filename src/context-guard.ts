@@ -463,6 +463,10 @@ export interface GuardInputs {
    *  midnight and the last-served stamp -- neither of which belongs in this
    *  clock-free module's decision function. */
   dailyHandoffDue: boolean
+  /** The sub-agent gate (scripts/hooks/subagent-context-gate.py) refused an Agent call in THIS
+   *  session: when, and at which fraction of limitTokens the gate refuses. The runner passes it only
+   *  for a refusal newer than the session start. Absent/null = no refusal (card b83e079c). */
+  subagentGateRefusal?: { atMs: number; gatePct: number } | null
 }
 
 /**
@@ -493,6 +497,16 @@ export const STALE_REFRESH_REASON_PREFIX = 'stale-handoff-refresh'
  * matches this constant to pick the prompt.
  */
 export const DAILY_HANDOFF_REASON_PREFIX = 'daily-handoff'
+
+/**
+ * Reason prefix for the sub-agent gate tier (card b83e079c). The gate refuses a new sub-agent at
+ * 75% of limitTokens and tells the agent "handoff first, the fresh session spawns it"; the act tier
+ * asks for that handoff only at actPct (90%). In between, a handoff the agent wrote on the gate's
+ * word brought no fresh session: "handoff written" is read only in await-handoff, and no tier
+ * entered it (didi, 2026-11-01: 78%, 79%, 76%, three manual restarts in one night). The runner
+ * matches this constant to pick a fifth wording: a handoff may already be on disk.
+ */
+export const SUBAGENT_GATE_REASON_PREFIX = 'subagent-gate'
 
 /**
  * Whether the daily tier can actually fire for this config.
@@ -872,6 +886,8 @@ export function decideGuard(
       if (cfg.enabled && inputs.pct !== null) {
         const wedgeTier = decideWedgeTiers(nowMs, inputs, cfg, cleared, none)
         if (wedgeTier) return wedgeTier
+        const gateTier = decideSubagentGateTier(nowMs, inputs, cfg, cleared, none)
+        if (gateTier) return gateTier
       }
       // Idle-flush tier. Ranked BELOW the wedge tiers deliberately: those two
       // answer "is this session about to break", this one answers "is it worth
@@ -1150,6 +1166,38 @@ function decideIdleFlush(
     `${Math.round(inputs.idleMs / 60_000)}m >= ${cfg.idleMinutes}m, ${since})`,
     true,
   )
+}
+
+/**
+ * Sub-agent gate tier (card b83e079c): the gate's way out ("handoff first, the fresh session spawns
+ * it") is made true here. Below the wedge tiers, which own the same session on more urgent grounds.
+ *
+ * Fires only while the context is still at or above the gate's own threshold: a refusal the
+ * session has since fallen below (it cannot, without a restart; but a recalibrated limit can move
+ * pct) is not a reason. Not while background work runs, like the other tiers with no context
+ * pressure behind them (didi 35937): the restart would wait for the work anyway, and until it ends
+ * the agent can keep working inline.
+ *
+ * The baseline is the REFUSAL, not this sweep: a HANDOFF.md written after the gate said "handoff
+ * first" already counts as the written handoff, so the agent is not asked to write it twice.
+ */
+function decideSubagentGateTier(
+  nowMs: number,
+  inputs: GuardInputs,
+  cfg: ContextGuardConfig,
+  cleared: GuardState,
+  none: NoneFn,
+): GuardDecision | null {
+  const refusal = inputs.subagentGateRefusal
+  if (!refusal) return null
+  const pct = inputs.pct as number
+  if (pct < refusal.gatePct) return null
+  const what = `${SUBAGENT_GATE_REASON_PREFIX} (a sub-agent was refused at >= ${Math.round(refusal.gatePct * 100)}%, ` +
+    `context now ${Math.round(pct * 100)}%)`
+  const busy = notWhileBackground(inputs, what, cleared, none)
+  if (busy) return busy
+  const request = handoffRequest(nowMs, inputs, cfg, what, true)
+  return { ...request, nextState: { ...request.nextState, handoffMtimeAtRequest: refusal.atMs } }
 }
 
 /**
