@@ -1455,6 +1455,16 @@
       "name": "[bc98d6d5] an escaped quote does not end the literal: the send word after it stays string",
       "cmd": "python3 - <<'PY'\nx = 'it\\'s sendMail(a)'\nprint(x)\nPY",
       "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 twin, didi 51624 T3] whitespace between the dot and send is still the Resend SDK call in both twins",
+      "cmd": "node -e \"new Resend(k).emails. send({ to: 'a@b.c' })\"",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 twin, didi 51624 T3] a newline between the dot and send is still the Resend SDK call in both twins",
+      "cmd": "node -e \"new Resend(k).emails.\n  send({ to: 'a@b.c' })\"",
+      "expected": true
     }
   ]
 }

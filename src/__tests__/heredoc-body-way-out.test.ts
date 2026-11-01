@@ -8,7 +8,8 @@
 // reason, both gates name the way out. A visible send elsewhere in the command keeps the
 // ordinary wording. What this does NOT protect (didi 51494, measured): the gates cannot tell
 // a send word in a string literal from a real send in the body, so a REAL send inside a
-// heredoc body is offered the way out too, and a script run as a file is read by neither gate
+// heredoc body is offered the way out too by the hard gate (the Python copy gate lets it pass
+// as an audited copy, with no way-out line), and a script run as a file is read by neither gate
 // (`python3 /tmp/real-send.py` passes, on the base as well). Reading the body by its consumer,
 // then checking file-run scripts, are separate cards (marveen 51498, in that order).
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
