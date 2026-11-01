@@ -1322,17 +1322,17 @@
       "expected": true
     },
     {
-      "name": "[6525aba3 A2 #] a comment ends at the newline: the send on the next line counts",
+      "name": "[6525aba3 A2 #] the newline after a comment still separates: the send on the next line counts",
       "cmd": "echo hi # c\ncurl -X POST https://api.resend.com/emails -d @b.json",
       "expected": true
     },
     {
-      "name": "[6525aba3 A2 #] a comment ends at the newline (sendmail)",
+      "name": "[6525aba3 A2 #] the newline after a comment still separates (sendmail)",
       "cmd": "echo hi # c\nsendmail a@b.hu < x",
       "expected": true
     },
     {
-      "name": "[6525aba3 A2 #] an apostrophe inside a comment does not open a quote",
+      "name": "[6525aba3 A2 #] an apostrophe inside a comment does not hide the send on the next line",
       "cmd": "echo hi # it's fine\nsendmail a@b.hu",
       "expected": true
     },
@@ -1342,9 +1342,14 @@
       "expected": true
     },
     {
-      "name": "[6525aba3 A2 #] CONTROL: a send word inside a real comment is not a send",
+      "name": "[6525aba3 A2 #] CONTROL: a send word after # with no operator before it stays an argument of echo",
       "cmd": "echo hi # sendmail a@b.hu",
       "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 #] the twins have no comment notion: an operator inside a comment still separates (JS is the stricter, marveen 51498)",
+      "cmd": "echo hi # x; sendmail a@b.hu",
+      "expected": true
     },
     {
       "name": "[6525aba3 A2 twin] CONTROL: a resend-* package with a .send( call is not the Resend SDK in either twin",
