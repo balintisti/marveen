@@ -88,6 +88,43 @@ def parse_frontmatter(fm):
     return 'pyyaml', data, None
 
 
+def javitott_sor(fm):
+    """A ready replacement for the first frontmatter line that breaks, or None.
+
+    Card 79715a88: the gate used to say only "put it in double quotes"; the
+    measured fleet census (2026-11-01, 120/1420 broken, 106 of them an unquoted
+    value with ": ") showed the generic advice is not acted on. The hint is the
+    same line with its value re-encoded as a JSON string (a valid YAML double-
+    quoted scalar). It is offered ONLY if the whole frontmatter parses with the
+    line replaced; otherwise the caller keeps the generic advice, because a
+    "fix" that does not fix is worse than none.
+    Returns (line_number_1based, new_line) or None.
+    """
+    lines = fm.split('\n')
+    for i, ln in enumerate(lines):
+        stripped = ln.lstrip()
+        if not stripped or stripped.startswith('#') or ':' not in stripped:
+            continue
+        key, _, val = stripped.partition(':')
+        val = val.strip()
+        if val == '':
+            continue
+        _, err = _subset_check(stripped)
+        if err is None:
+            continue
+        # Strip a quote pair only when it WRAPS the value (a broken interior quote). A value that merely
+        # starts with a quoted phrase ('"x" != "y": z') keeps every character: stripping the first quote
+        # alone would change the text.
+        inner = val
+        if len(inner) >= 2 and inner[0] == inner[-1] and inner[0] in '"\'':
+            inner = inner[1:-1]
+        new_line = ln[:len(ln) - len(stripped)] + key.strip() + ': ' + json.dumps(inner, ensure_ascii=False)
+        fixed = '\n'.join(lines[:i] + [new_line] + lines[i + 1:])
+        _, _, still = parse_frontmatter(fixed)
+        return (i + 2, new_line) if still is None else None  # +2: 1-based, after the opening ---
+    return None
+
+
 def tartalom_hiba(body):
     """The block reason for a memory file body, or None when its frontmatter is fine.
 
@@ -100,6 +137,11 @@ def tartalom_hiba(body):
                 'Kezdd igy: ---\\nname: <slug>\\ndescription: "<egy mondat>"\\nmetadata:\\n  type: <user|feedback|project|reference>\\n---')
     parser, data, err = parse_frontmatter(fm)
     if err is not None:
+        fix = javitott_sor(fm)
+        if fix is not None:
+            return (f'MEMORIA-FRONTMATTER KAPU ({parser}): a frontmatter NEM parszol -> a memoria RECALL-VAK lenne. '
+                    f'Hiba: {err}. KESZ JAVITAS, a fajl {fix[0]}. sora legyen ez (ellenorizve: igy parszol):\n'
+                    f'{fix[1]}')
         return (f'MEMORIA-FRONTMATTER KAPU ({parser}): a frontmatter NEM parszol -> a memoria RECALL-VAK lenne. '
                 f'Hiba: {err}. Javitas: a description erteket JSON-stilusu dupla idezojelbe tedd '
                 f'(belso idezojel \\" alakban), es ird ujra a fajlt.')

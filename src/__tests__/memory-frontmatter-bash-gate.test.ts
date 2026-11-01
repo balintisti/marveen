@@ -74,7 +74,8 @@ describe('memory-frontmatter-bash-gate: a broken memory file written from Bash i
     expect(r.code).toBe(2)
     expect(r.stderr).toContain('feedback_new.md')
     expect(r.stderr).toContain('LEFUTOTT')
-    expect(r.stderr).toContain('JSON-stilusu dupla idezojelbe')
+    expect(r.stderr).toContain('KESZ JAVITAS, a fajl 3. sora legyen ez')
+    expect(r.stderr).toContain('\ndescription: "Ket route-meresi csapda: a literal grep vak"\n')
   })
 
   it('PostToolUseFailure: a failing command that still wrote the file is judged the same way', () => {

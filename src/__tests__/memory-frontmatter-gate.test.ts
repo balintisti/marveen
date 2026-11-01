@@ -48,7 +48,7 @@ describe('memory-frontmatter-gate: the measured failure shapes are blocked (exit
     const r = run(write(memPath, UNQUOTED_COLON))
     expect(r.code).toBe(2)
     expect(r.stderr).toMatch(/RECALL-VAK/)
-    expect(r.stderr).toMatch(/dupla idezojel/)
+    expect(r.stderr).toContain('KESZ JAVITAS, a fajl 3. sora legyen ez')
   })
   it('broken double-quoted description', () => {
     expect(run(write(memPath, BROKEN_QUOTE)).code).toBe(2)
@@ -67,6 +67,52 @@ describe('memory-frontmatter-gate: the measured failure shapes are blocked (exit
   })
   it('no frontmatter at all', () => {
     expect(run(write(memPath, '# just a body\n')).code).toBe(2)
+  })
+})
+
+// Card 79715a88: the generic "put it in double quotes" advice was not acted on (fleet census
+// 2026-11-01: 120/1420 broken, 106 an unquoted value with ": "). The gate now prints the exact
+// replacement line, and only when the frontmatter parses with it.
+describe('memory-frontmatter-gate: the block message carries a ready replacement line', () => {
+  const hintOf = (stderr: string) => stderr.split('\n')[1] ?? ''
+  const applyHint = (body: string, stderr: string) => {
+    const n = Number(/a fajl (\d+)\. sora/.exec(stderr)?.[1])
+    const lines = body.split('\n'); lines[n - 1] = hintOf(stderr); return lines.join('\n')
+  }
+
+  it('unquoted ": " value -> the same text as a JSON string, and the hinted file passes the gate', () => {
+    const r = run(write(memPath, UNQUOTED_COLON))
+    expect(hintOf(r.stderr)).toBe('description: "Ket route-meresi csapda: a literal grep vak"')
+    expect(run(write(memPath, applyHint(UNQUOTED_COLON, r.stderr))).code).toBe(0)
+  })
+
+  it('broken interior quote -> the wrapping pair dropped, the inner quote escaped, nothing else changed', () => {
+    const r = run(write(memPath, BROKEN_QUOTE))
+    expect(hintOf(r.stderr)).toBe('description: "a \\"b\\" c"')
+    expect(run(write(memPath, applyHint(BROKEN_QUOTE, r.stderr))).code).toBe(0)
+  })
+
+  it('a value that only STARTS with a quoted phrase keeps every character (no lone quote stripped)', () => {
+    const body = '---\nname: x\ndescription: "a" != "b": c\n---\n'
+    const r = run(write(memPath, body))
+    expect(hintOf(r.stderr)).toBe('description: "\\"a\\" != \\"b\\": c"')
+    expect(run(write(memPath, applyHint(body, r.stderr))).code).toBe(0)
+  })
+
+  it('a broken nested metadata line keeps its indentation', () => {
+    const body = '---\nname: x\ndescription: "ok"\nmetadata:\n  type: a: b\n---\n'
+    const r = run(write(memPath, body))
+    expect(r.stderr).toContain('a fajl 5. sora')
+    expect(hintOf(r.stderr)).toBe('  type: "a: b"')
+    expect(run(write(memPath, applyHint(body, r.stderr))).code).toBe(0)
+  })
+
+  it('no hint when the replacement alone would not parse (two broken lines): the generic advice stays', () => {
+    const body = '---\nname: x: y\ndescription: a: b\n---\n'
+    const r = run(write(memPath, body))
+    expect(r.code).toBe(2)
+    expect(r.stderr).not.toContain('KESZ JAVITAS')
+    expect(r.stderr).toContain('JSON-stilusu dupla idezojelbe')
   })
 })
 
