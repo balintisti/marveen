@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { writeFileSync, mkdirSync, readFileSync, existsSync, symlinkSync, rmSync, readdirSync } from 'node:fs'
+import { writeFileSync, mkdirSync, readFileSync, existsSync, symlinkSync, rmSync, readdirSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpDirs } from './helpers/tmp-dirs.js'
 
@@ -92,6 +92,16 @@ describe('memory-frontmatter-bash-gate: a broken memory file written from Bash i
     const r = call(`sed -i '' 's/x/y/' ${MEM}/reference_old.md`, () => writeFileSync(join(MEM, 'reference_old.md'), BROKEN))
     expect(r.code).toBe(2)
   })
+
+  it('an edit that keeps the byte size is still a change (the snapshot carries the mtime, not only the size)', () => {
+    const sameSize = GOOD.replace('body\n', 'body\n'.padStart(BROKEN.length - GOOD.length + 5, 'x'))
+    expect(sameSize.length).toBe(BROKEN.length)
+    writeFileSync(join(MEM, 'reference_same.md'), sameSize)
+    const past = new Date(Date.now() - 60_000)
+    utimesSync(join(MEM, 'reference_same.md'), past, past)
+    const r = call(`sed -i '' 's/x/y/' ${MEM}/reference_same.md`, () => writeFileSync(join(MEM, 'reference_same.md'), BROKEN))
+    expect(r.code).toBe(2)
+  })
 })
 
 describe('memory-frontmatter-bash-gate: positive control and scope', () => {
@@ -154,6 +164,16 @@ describe('memory-frontmatter-bash-gate: the caller\'s memory dir', () => {
     expect(state.dirs).toHaveLength(1)
     writeFileSync(join(MEM, 'feedback_new.md'), BROKEN)
     expect(run('PostToolUse', `cat > ${MEM}/feedback_new.md`, 'toolu_ln', extra, cfg2).code).toBe(2)
+  })
+
+  it('found from the transcript alone, when the cwd leads nowhere (no git root, no projects dir of its own)', () => {
+    const tmem = join(CONFIG, 'projects', enc(CWD), 'memory')
+    mkdirSync(tmem, { recursive: true })
+    const payload = { cwd: join(S, 'elsewhere') }
+    mkdirSync(payload.cwd)
+    expect(run('PreToolUse', `cat > ${tmem}/feedback_new.md`, 'toolu_tp', payload).code).toBe(0)
+    writeFileSync(join(tmem, 'feedback_new.md'), BROKEN)
+    expect(run('PostToolUse', `cat > ${tmem}/feedback_new.md`, 'toolu_tp', payload).code).toBe(2)
   })
 })
 
