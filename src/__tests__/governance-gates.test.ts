@@ -326,8 +326,15 @@ describe('self-pace-gate stripProseArguments (scoped to gh/git/glab)', () => {
     // runs on naive segments: the gh body must not read as the at scheduler
     // (the `(` is a SCHED_BOUNDARY). A `;` inside the body would still split the
     // naive segment and stay denied: fail-closed, accepted.
+    // FORK (6525aba3 A3 port): upstream asserted this command is ALLOWED. Here the
+    // fork's quote-intact INDIRECT_SCHEDULER_RX (card 3f18a5a6) still denies a
+    // parenthesised `(at noon)`, and the port does not loosen it. What the strip
+    // changes is WHICH check speaks: the anchored one no longer reads the prose.
     const command = `gh pr create --title "$(date +%F)" --body 'ships Friday (at noon) for review'`
-    expect(selfPaceDecision('Bash', { command }).deny).toBe(false)
+    expect(selfPaceDecision('Bash', { command })).toEqual({ deny: true, reason: 'os-scheduler-indirect' })
+    // A body only the anchored check would read: the strip is the whole verdict.
+    const bare = `gh pr create --title "$(date +%F)" --body 'drop the (crontab)'`
+    expect(selfPaceDecision('Bash', { command: bare }).deny).toBe(false)
   })
 
   it('on the fallback path, git LATER in the segment does not blank another tool\'s argument', () => {
