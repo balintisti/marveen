@@ -2008,7 +2008,7 @@ export function buildPullNotice(
   // Id and priority only, no title (card f494cace): this notice goes out as 'system', and the listed
   // cards are OWNERLESS planned cards, i.e. anyone's free text. CARD_TEXT_READ_HINT says where to read it.
   const line = (c: { id: string; priority?: string | null }) =>
-    `  ${cardRef(c.id, 8)}  ${c.priority ?? 'normal'}`
+    `  ${cardRef(c.id)}  ${c.priority ?? 'normal'}`
   // Mirrors `laneFilteredPullList`: no declared lane means no clause at all, and a card with an
   // EMPTY project is allowed through in either case.
   const declared = (lanes ?? []).map((l) => l.trim()).filter(Boolean)
@@ -2313,7 +2313,7 @@ export function buildWakeMessage(
 
   // No title here either (card f494cace): see buildPullNotice. CARD_TEXT_READ_HINT follows the lists.
   const line = (c: { id: string; priority?: string | null; status?: string }) =>
-    `  ${cardRef(c.id, 8)}  ${(c.status ?? '?').padEnd(11)} ${c.priority ?? 'normal'}`
+    `  ${cardRef(c.id)}  ${(c.status ?? '?').padEnd(11)} ${c.priority ?? 'normal'}`
 
   // CARD 2e78cf63 (marveen, comment 56870 + 56900): this wake went out 195 times a week at an average
   // of 2 692 characters, ~12% of the fleet's weekly message volume. It is now capped at WAKE_MAX_CHARS

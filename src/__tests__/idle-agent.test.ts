@@ -1101,7 +1101,7 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
     // Az `id`-alaku minta rá nem illik: a pending ertesites CIMZETT szerint sorol, nem kartya
     // szerint. Egy KOZOS, laza minta elrejtene ezt; ezert kap mindegyik SAJAT alakot.
     const ids = ['aaaaaaaa1', 'bbbbbbbb2', 'cccccccc3']
-    const ID_ITEM = /^ {2}[0-9a-z]{8}\s/
+    const ID_ITEM = /^ {2}[0-9a-z]{8,}\s/  // the whole id since f494cace (the GET is an exact match)
     const cases: { msg: string; item: RegExp }[] = [
       { msg: buildPullNotice('jarvis', 20, ids.map(it3), NOW), item: ID_ITEM },
       { msg: buildWakeMessage('jarvis', 20, 3, ids.map(it3), NOW, 'assigned_open_cards'), item: ID_ITEM },
