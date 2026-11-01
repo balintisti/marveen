@@ -190,6 +190,8 @@ describe('the named QA exemption drops one rule for three agents and nothing els
     for (const name of [NAME, 'computress', 'dexter', 'ford', 'marveen', 'Mandark', '']) {
       expect(fleetBaselineDenyFor(name)).toEqual(FLEET_BASELINE_DENY)
     }
+    writeAgentSettingsFromProfile(NAME, loadProfileTemplate('default'))
+    expect(readDeny()).toContain(QA_BROWSER_RUN_CODE_RULE)
   })
 
   it('a name that only RESEMBLES a QA name gets the whole floor (exact match, not prefix/substring/trim)', () => {
@@ -197,8 +199,6 @@ describe('the named QA exemption drops one rule for three agents and nothing els
     for (const name of ['didi2', 'mandark-test', 'xdidi', 'trill', 'mand', ' didi', 'didi ', 'trillian\n']) {
       expect(fleetBaselineDenyFor(name), JSON.stringify(name)).toEqual(FLEET_BASELINE_DENY)
     }
-    writeAgentSettingsFromProfile(NAME, loadProfileTemplate('default'))
-    expect(readDeny()).toContain(QA_BROWSER_RUN_CODE_RULE)
   })
 
   for (const qa of ['mandark', 'didi', 'trillian']) {
@@ -314,5 +314,9 @@ describe('the two deny lists stay distinguishable', () => {
     const docs = readFileSync(join(PROJECT_ROOT, 'docs', 'security-hardening.md'), 'utf-8')
     expect(docs).toContain('QA_BROWSER_RUN_CODE_AGENTS')
     for (const qa of QA_BROWSER_RUN_CODE_AGENTS) expect(docs).toContain(`\`${qa}\``)
+    // trillian's D1 (6525aba3 50868): the paragraph alone left the FLOOR row itself free to read
+    // "every sub-agent" again; the row must carry the exception where it names the rule.
+    const floorRow = docs.split('\n').find(l => l.startsWith('| covers |'))
+    expect(floorRow).toMatch(/unsafe browser-code MCP tool \(except for the QA agents, see below\)/)
   })
 })
