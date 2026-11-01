@@ -1175,6 +1175,21 @@
       "name": "[didi N1 6525aba3 control] a $( inside single quotes opens no command",
       "cmd": "echo '$(python3' ; git commit -F - <<'EOF'\nimport send\nEOF",
       "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 frame pin] a heredoc inside $( in double quotes belongs to that inner command: python3 outside only gets cat's text",
+      "cmd": "python3 tools/post.py --body \"$(cat <<'EOF'\nimport send\nEOF\n)\"",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 frame pin] a ; inside a process substitution <( ) does not end the heredoc's own command",
+      "cmd": "python3 - <(printf a; printf b) <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 frame pin] a ; inside backticks does not end the heredoc's own command",
+      "cmd": "python3 - `date; true` <<'EOF'\nimport send\nEOF",
+      "expected": true
     }
   ]
 }
