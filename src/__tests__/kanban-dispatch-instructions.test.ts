@@ -97,10 +97,10 @@ describe('kanbanMoveInstructions', () => {
       { id: 'zzz999', status: 'in_progress', description: 'neighbour, must not leak' },
       { id: 'abc123', status: 'testing', description: 'zaro-statusz: review, nem done' },
     ])
-    expect(runProbeProgram(out, board)).toBe('status: testing\ndescription: zaro-statusz: review, nem done')
+    expect(runProbeProgram(out, board)).toBe('title: (nincs)\nstatus: testing\ndescription: zaro-statusz: review, nem done')
     expect(runProbeProgram(out, JSON.stringify([{ id: 'zzz999', status: 'done' }]))).toBe('nincs ilyen kartya')
     const noDesc = runProbeProgram(out, JSON.stringify([{ id: 'abc123', status: 'planned', description: null }]))
-    expect(noDesc).toBe('status: planned\ndescription: (nincs)')
+    expect(noDesc).toBe('title: (nincs)\nstatus: planned\ndescription: (nincs)')
     const err = runProbeProgram(out, JSON.stringify({ error: 'Unauthorized' }))
     expect(err).toContain('Unauthorized')
     expect(err).not.toContain('Traceback')
