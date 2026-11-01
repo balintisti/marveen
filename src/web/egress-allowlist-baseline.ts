@@ -21,7 +21,7 @@
 // as the file itself. This makes a change VISIBLE and the previous bytes RECOVERABLE; it does
 // not make the file unwritable. That needs an OS-level owner or flag, an owner decision.
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync, watchFile, unwatchFile } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync, watchFile, unwatchFile, type Stats } from 'node:fs'
 import { join } from 'node:path'
 import { MAIN_AGENT_ID } from '../config.js'
 import { createAgentMessage } from '../db.js'
@@ -99,6 +99,15 @@ function stamp(now: Date): string {
 }
 
 /**
+ * What THIS process last recorded or confirmed. Without it a removed history directory
+ * looked like a first run (recorded, never reported), and a newest history entry rewritten
+ * together with the file looked like no change at all (didi, 6525aba3 50773, W2/T7). The
+ * watcher keeps one for its lifetime; a fresh process starts at null and trusts the history
+ * on disk, exactly as before.
+ */
+export interface BaselineMemory { sha: string | null }
+
+/**
  * Compare the allowlist with its last recorded version; record and report a difference.
  * `notify` receives the report text (production: an agent message to the main agent).
  */
@@ -106,18 +115,39 @@ export function checkEgressAllowlistBaseline(
   storeDir: string,
   notify: (report: string) => void,
   now: Date = new Date(),
+  memory: BaselineMemory = { sha: null },
 ): BaselineResult {
   const file = join(storeDir, 'egress-allowlist.json')
   const historyDir = join(storeDir, HISTORY_DIRNAME)
   const bytes = existsSync(file) ? readFileSync(file) : null
   const sha = bytes ? sha256(bytes) : MISSING
   const prev = lastEntry(historyDir)
-  if (prev && prev.sha === sha) return { sha, previous: prev.sha, recorded: false, report: null }
+  const known = memory.sha
+  // The history under us no longer holds what this process last saw: removed, or its newest entry rewritten.
+  const rewritten = known !== null && (prev === null || prev.sha !== known)
+  if (prev && prev.sha === sha && !rewritten) {
+    memory.sha = sha
+    return { sha, previous: prev.sha, recorded: false, report: null }
+  }
 
   mkdirSync(historyDir, { recursive: true })
   const name = `${stamp(now)}-${sha.slice(0, 12)}${bytes ? '.json' : '.missing'}`
   writeFileSync(join(historyDir, name), bytes ?? '')
   appendFileSync(join(historyDir, 'history.log'), `${now.toISOString()} ${sha} ${bytes ? bytes.length : 0} ${name}\n`)
+  memory.sha = sha
+
+  if (rewritten) {
+    const what = prev
+      ? `its newest entry ${prev.name} now has sha ${prev.sha.slice(0, 12)}`
+      : 'the directory or every entry in it was REMOVED'
+    const report =
+      `[EGRESS-ALLOWLIST] store/${HISTORY_DIRNAME} no longer holds the version this dashboard last recorded (${what}; ` +
+      `last recorded sha ${known.slice(0, 12)}, store/egress-allowlist.json now sha ${sha.slice(0, 12)}). ` +
+      'The history cannot show what changed: check store/egress-allowlist.json by hand and find out who rewrote the history. ' +
+      'Sub-agents may not edit these files (EGRESSSELFEDIT824).'
+    try { notify(report) } catch { /* the record above stands even if the report fails */ }
+    return { sha, previous: prev ? prev.sha : null, recorded: true, report }
+  }
 
   if (!prev) return { sha, previous: null, recorded: true, report: null }
 
@@ -142,12 +172,28 @@ export function watchEgressAllowlistBaseline(
   intervalMs = 5000,
 ): () => void {
   const file = join(storeDir, 'egress-allowlist.json')
-  const run = () => {
-    try { checkEgressAllowlistBaseline(storeDir, notify) } catch { /* a failed check must not crash the server */ }
+  const memory: BaselineMemory = { sha: null }
+  const check = () => checkEgressAllowlistBaseline(storeDir, notify, new Date(), memory)
+  // The poller sees a stat change, not the edits in between: a domain added and removed again
+  // within one interval (the 2026-08-24 case) leaves the same bytes, so the hash check alone
+  // records nothing. The file WAS rewritten though (mtime/size/inode moved), and that is said.
+  const onStat = (curr: Stats, prev: Stats) => {
+    try {
+      const r = check()
+      const touched = curr.mtimeMs !== prev.mtimeMs || curr.ino !== prev.ino || curr.size !== prev.size
+      if (!r.recorded && touched && prev.mtimeMs !== 0) {
+        notify(
+          `[EGRESS-ALLOWLIST] store/egress-allowlist.json was REWRITTEN with its previous bytes (sha ${r.sha.slice(0, 12)}, ` +
+          `mtime ${new Date(prev.mtimeMs).toISOString()} -> ${new Date(curr.mtimeMs).toISOString()}). ` +
+          `What it held in between (up to ${intervalMs} ms) is not known: a domain may have been added and removed again. ` +
+          'If you did not do this, find out who wrote it: sub-agents may not edit this file (EGRESSSELFEDIT824).',
+        )
+      }
+    } catch { /* a failed check must not crash the server */ }
   }
-  run()
-  watchFile(file, { interval: intervalMs }, run)
-  return () => unwatchFile(file, run)
+  try { check() } catch { /* a failed check must not crash the server */ }
+  watchFile(file, { interval: intervalMs }, onStat)
+  return () => unwatchFile(file, onStat)
 }
 
 /**

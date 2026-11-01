@@ -49,6 +49,13 @@ describe('gate: native file tools on the allowlist', () => {
     symlinkSync(allowlist, link)
     expect(decide('Write', { file_path: link, content: '{}' })).toEqual({ deny: true, reason: 'egress-allowlist' })
   })
+  it('the name check ignores case (APFS opens the same file under either spelling)', () => {
+    expect(decide('Write', { file_path: join(root, 'elsewhere', 'EGRESS-Allowlist.JSON'), content: '{}' }))
+      .toEqual({ deny: true, reason: 'egress-allowlist' })
+  })
+  it('NotebookEdit names its target in notebook_path, and that is read too', () => {
+    expect(decide('NotebookEdit', { notebook_path: allowlist })).toEqual({ deny: true, reason: 'egress-allowlist' })
+  })
   it('another file in store/ is not affected', () => {
     expect(decide('Write', { file_path: join(store, 'other.json'), content: '{}' }).deny).toBe(false)
   })
@@ -77,6 +84,19 @@ describe('gate: Bash is fail-closed on the allowlist', () => {
     'cp /tmp/x store/egress-allowlist.*',
     'rm -rf store/egress-allowlist.history',
     'echo x > store/egress-allowlist.history/history.log',
+    // a glob that does not spell the name lands on it all the same (didi, 6525aba3 50773 K3)
+    "sed -i '' 's/a/b/' store/e*-allowlist.json",
+    "echo '{}' > store/egress-a*.json",
+    'cp /tmp/x store/e*-allowlist.json',
+    'cp x store/?gress-allowlist.json',
+    'cp x store/egress-allowlis[t].json',
+    'cp x store/egress-{allowlist,x}.json',
+    'dd if=/tmp/x of=store/e*.json',
+    'rm store/*',
+    'rm -rf store/*.history',
+    'echo x > store/*.history/history.log',
+    'cd store && rm *.json',
+    'cd "store" && cp /tmp/x e*.json',
   ]
   it.each(denied)('denies: %s', (command) => {
     expect(decide('Bash', { command })).toEqual({ deny: true, reason: 'egress-allowlist' })
@@ -100,6 +120,14 @@ describe('gate: Bash is fail-closed on the allowlist', () => {
     'git diff develop -- src/web/egress-allowlist-baseline.ts',
     'npx tsc --noEmit -p . && npx vitest run src/__tests__/egress-allowlist-selfedit.test.ts',
     'cat store/egress-allowlist.history/history.log',
+    // a glob is matched where bash would expand it: another directory is not the allowlist
+    'rm -f /tmp/*.json',
+    'rm *.json',
+    'cp a/*.txt b/',
+    'rm store/*.db-wal',
+    'cat store/*.json',
+    'ls store/*',
+    'cd /tmp && rm *.json',
   ]
   it.each(allowed)('allows: %s', (command) => {
     expect(decide('Bash', { command }).deny).toBe(false)
@@ -113,6 +141,10 @@ describe('gate: Bash is fail-closed on the allowlist', () => {
     const command = "cat > /tmp/note.md <<'EOF'\nsub-agents may not edit store/egress-allowlist.json\nEOF"
     expect(decide('Bash', { command })).toEqual({ deny: true, reason: 'egress-allowlist' })
     expect(decide('Write', { file_path: '/tmp/note.md', content: 'sub-agents may not edit store/egress-allowlist.json' }).deny).toBe(false)
+  })
+
+  it('the history directory name the gate matches is the one the baseline writes', () => {
+    expect(decide('Bash', { command: `rm -rf store/${HISTORY_DIRNAME}` })).toEqual({ deny: true, reason: 'egress-allowlist' })
   })
 
   it('the segment check alone: a reader with no redirect passes, a writer does not', () => {
@@ -229,6 +261,87 @@ describe('baseline: every change is recorded and reported, whatever the route', 
     } finally { stop() }
     expect(reports).toHaveLength(1)
     expect(reports[0]).toContain('+live.example')
+  })
+
+  it('after two recorded changes an unchanged file records nothing (compared with the NEWEST entry)', () => {
+    checkEgressAllowlistBaseline(store, notify, new Date('2026-10-03T08:00:00.000Z'))
+    writeFileSync(allowlist, JSON.stringify({ domains: ['c.example'] }))
+    checkEgressAllowlistBaseline(store, notify, new Date('2026-10-03T08:00:01.000Z'))
+    const r = checkEgressAllowlistBaseline(store, notify, new Date('2026-10-03T08:00:02.000Z'))
+    expect(r.recorded).toBe(false)
+    expect(reports).toHaveLength(1)
+    expect(history()).toHaveLength(2)
+  })
+
+  it('a file that stays deleted is recorded once, not on every check', () => {
+    checkEgressAllowlistBaseline(store, notify, new Date('2026-10-03T08:00:00.000Z'))
+    unlinkSync(allowlist)
+    checkEgressAllowlistBaseline(store, notify, new Date('2026-10-03T08:00:01.000Z'))
+    const r = checkEgressAllowlistBaseline(store, notify, new Date('2026-10-03T08:00:02.000Z'))
+    expect(r.recorded).toBe(false)
+    expect(reports).toHaveLength(1)
+  })
+
+  it('a report that fails to send does not undo the record', () => {
+    checkEgressAllowlistBaseline(store, notify, new Date('2026-10-03T08:00:00.000Z'))
+    writeFileSync(allowlist, JSON.stringify({ domains: ['d.example'] }))
+    const r = checkEgressAllowlistBaseline(store, () => { throw new Error('queue down') }, new Date('2026-10-03T08:00:01.000Z'))
+    expect(r.recorded).toBe(true)
+    expect(history()).toHaveLength(2)
+  })
+
+  it('a removed history directory is REPORTED by a process that recorded before, with the change after it (W2)', () => {
+    const memory = { sha: null }
+    checkEgressAllowlistBaseline(store, notify, new Date('2026-10-03T08:00:00.000Z'), memory)
+    rmSync(join(store, HISTORY_DIRNAME), { recursive: true, force: true })
+    writeFileSync(allowlist, JSON.stringify({ domains: ['evil.example'] }))
+    const r = checkEgressAllowlistBaseline(store, notify, new Date('2026-10-03T08:00:01.000Z'), memory)
+    expect(r.recorded).toBe(true)
+    expect(reports).toHaveLength(1)
+    expect(reports[0]).toContain('REMOVED')
+    expect(history()).toHaveLength(1)
+    // the next unchanged check is quiet again: the new entry is what this process knows
+    expect(checkEgressAllowlistBaseline(store, notify, new Date('2026-10-03T08:00:02.000Z'), memory).recorded).toBe(false)
+    expect(reports).toHaveLength(1)
+  })
+
+  it('the newest history entry rewritten together with the file is REPORTED (T7)', () => {
+    const memory = { sha: null }
+    checkEgressAllowlistBaseline(store, notify, new Date('2026-10-03T08:00:00.000Z'), memory)
+    const bytes = JSON.stringify({ domains: ['evil.example'] })
+    writeFileSync(allowlist, bytes)
+    writeFileSync(join(store, HISTORY_DIRNAME, history()[0]), bytes)
+    const r = checkEgressAllowlistBaseline(store, notify, new Date('2026-10-03T08:00:01.000Z'), memory)
+    expect(r.recorded).toBe(true)
+    expect(reports).toHaveLength(1)
+    expect(reports[0]).toContain('newest entry')
+  })
+
+  it('POSITIVE CONTROL: without a memory (a fresh process) a missing history is a first run, as before', () => {
+    checkEgressAllowlistBaseline(store, notify)
+    rmSync(join(store, HISTORY_DIRNAME), { recursive: true, force: true })
+    const r = checkEgressAllowlistBaseline(store, notify)
+    expect(r).toMatchObject({ recorded: true, previous: null, report: null })
+  })
+
+  it('the watcher reports a domain added and removed again between two polls (same bytes, file rewritten: W1)', async () => {
+    const stop = watchEgressAllowlistBaseline(store, notify, 20)
+    const original = readFileSync(allowlist)
+    try {
+      await new Promise((r) => setTimeout(r, 60))
+      writeFileSync(allowlist, JSON.stringify({ domains: ['a.example', 'b.example', 'evil.example'] }))
+      writeFileSync(allowlist, original)
+      const deadline = Date.now() + 3000
+      while (!reports.some((x) => x.includes('REWRITTEN')) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20))
+    } finally { stop() }
+    expect(reports.some((x) => x.includes('REWRITTEN with its previous bytes'))).toBe(true)
+    expect(reports.filter((x) => x.includes('CHANGED'))).toEqual([])
+  })
+
+  it('POSITIVE CONTROL: the watcher stays quiet while nobody writes the file', async () => {
+    const stop = watchEgressAllowlistBaseline(store, notify, 20)
+    try { await new Promise((r) => setTimeout(r, 200)) } finally { stop() }
+    expect(reports).toEqual([])
   })
 
   it('describes non-list keys and invalid JSON', () => {
