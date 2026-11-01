@@ -10,6 +10,7 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpDirs } from './helpers/tmp-dirs.js'
 import {
+  BACKGROUND_DEFER_MAX_MS,
   DEFAULT_CONTEXT_GUARD,
   INITIAL_GUARD_STATE,
   SUBAGENT_GATE_REASON_PREFIX,
@@ -112,6 +113,42 @@ describe('the card control: 78%, a refusal, a handoff written on the gate\'s wor
   })
 })
 
+describe('continuous background work: the hold is bounded like the act tier\'s (marveen 50874 on didi 50873 F3)', () => {
+  // 78%, a handoff written on the gate's word, a sub-agent that never ends; one sweep every 5 minutes for 10 hours.
+  function simulate() {
+    const handoffAt = REFUSED_AT + 5 * MIN
+    let state = INITIAL_GUARD_STATE
+    let holdFrom: number | null = null
+    for (let t = NOW; t <= NOW + 10 * 60 * MIN; t += 5 * MIN) {
+      const d = decideGuard(state, inputs({
+        nowMs: t, handoffMtime: handoffAt, idleMs: t - handoffAt, backgroundWork: 1, backgroundWorkDetail: '1 sub-agent',
+      }), cfg)
+      if (t === NOW) expect(d.action).toBe('request-handoff')
+      if (holdFrom === null && d.nextState.backgroundDeferSinceMs != null) holdFrom = d.nextState.backgroundDeferSinceMs
+      if (d.action === 'restart') return { at: t, holdFrom, reason: d.reason }
+      state = d.nextState
+    }
+    return { at: null, holdFrom, reason: '' }
+  }
+  it('restarts at the 45th minute of the hold, not before, and names what it kills', () => {
+    const r = simulate()
+    expect(r.holdFrom).toBe(NOW + 5 * MIN)
+    expect(r.at).toBe((r.holdFrom as number) + BACKGROUND_DEFER_MAX_MS)
+    expect(r.reason).toContain('held 45m for background work, the 45m bound is reached -- KILLS running background work: 1 (1 sub-agent)')
+  })
+  it('work that ends inside the bound releases the restart on that sweep', () => {
+    const handoffAt = REFUSED_AT + 5 * MIN
+    const bg = { backgroundWork: 1, backgroundWorkDetail: '1 sub-agent' }
+    const asked = decideGuard(INITIAL_GUARD_STATE, inputs({ ...bg, handoffMtime: handoffAt }), cfg).nextState
+    const held = decideGuard(asked, inputs({ ...bg, nowMs: NOW + 5 * MIN, handoffMtime: handoffAt, idleMs: NOW + 5 * MIN - handoffAt }), cfg)
+    expect(held.action).toBe('none')
+    expect(held.reason).toContain('holding the restart (0m of 45m)')
+    const done = decideGuard(held.nextState, inputs({ nowMs: NOW + 15 * MIN, handoffMtime: handoffAt, idleMs: NOW + 15 * MIN - handoffAt }), cfg)
+    expect(done.action).toBe('restart')
+    expect(done.reason).toContain('held 10m until the background work finished')
+  })
+})
+
 describe('edges', () => {
   it('below the gate threshold the refusal is no reason', () => {
     const d = decideGuard(INITIAL_GUARD_STATE, inputs({ pct: 0.74 }), cfg)
@@ -121,11 +158,6 @@ describe('edges', () => {
     const d = decideGuard(INITIAL_GUARD_STATE, inputs({ pct: 0.91 }), cfg)
     expect(d.action).toBe('request-handoff')
     expect(d.reason.startsWith('act threshold')).toBe(true)
-  })
-  it('not while background work runs: the agent keeps working inline, the tier waits', () => {
-    const d = decideGuard(INITIAL_GUARD_STATE, inputs({ backgroundWork: 1, backgroundWorkDetail: '1 shell' }), cfg)
-    expect(d.action).toBe('none')
-    expect(d.reason).toContain('not starting a handoff')
   })
   it('the proactive guard off: no tier', () => {
     const d = decideGuard(INITIAL_GUARD_STATE, inputs({ pct: null }), { ...cfg, enabled: false })
@@ -186,6 +218,9 @@ describe('the gate records its refusal where the runner reads it', () => {
     const r = call(156_000)
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('The context guard has this refusal')
+    // the promise matches the guard: the act tier's bound (one constant) and the handoff timeout (didi F2)
+    expect(r.stderr).toContain(`holds that restart for at most ${BACKGROUND_DEFER_MAX_MS / MIN} min`)
+    expect(r.stderr).toContain('No handoff within 20 min: it restarts you anyway')
     const rec = JSON.parse(readFileSync(marker, 'utf8'))
     expect(rec.gatePct).toBe(0.75)
     expect(rec.pct).toBe(0.78)

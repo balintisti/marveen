@@ -122,14 +122,18 @@ def main():
     record_refusal(agent, pct)
     act = cfg.get("actPct")
     act_note = f" (the guard asks for a handoff at {round(act * 100)}%)" if isinstance(act, (int, float)) else ""
+    timeout = cfg.get("handoffTimeoutMinutes")
+    timeout_min = timeout if isinstance(timeout, (int, float)) and timeout > 0 else 20
     sys.stderr.write(
         f"SUBAGENT-GATE (card 66d4698a): no new sub-agent at {round(pct * 100)}% context "
         f"({tokens} of {int(limit)} tokens, the gate is at {round(SUBAGENT_MAX_PCT * 100)}%){act_note}. "
         "A sub-agent started now would most likely be killed by the context-guard restart, and its run "
         "paid for twice. Handoff first: put this sub-agent's brief into HANDOFF.md, so the fresh session "
-        "after the restart spawns it. The context guard has this refusal: within one sweep (5 min, once no "
-        "background work runs) it asks for that handoff and restarts you. Until then work on without a "
-        "sub-agent: nothing else is blocked.\n"
+        "after the restart spawns it. The context guard has this refusal: on its next sweep (every 5 min) it asks for that handoff, "
+        "and on a later sweep, once the handoff is written, it restarts you; while background work runs "
+        "it holds that restart for at most 45 min (BACKGROUND_DEFER_MAX_MS). No handoff within "
+        f"{round(timeout_min)} min: it restarts you anyway. Until then work on without a sub-agent: nothing "
+        "else is blocked.\n"
     )
     return 2
 

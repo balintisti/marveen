@@ -886,7 +886,7 @@ export function decideGuard(
       if (cfg.enabled && inputs.pct !== null) {
         const wedgeTier = decideWedgeTiers(nowMs, inputs, cfg, cleared, none)
         if (wedgeTier) return wedgeTier
-        const gateTier = decideSubagentGateTier(nowMs, inputs, cfg, cleared, none)
+        const gateTier = decideSubagentGateTier(nowMs, inputs, cfg)
         if (gateTier) return gateTier
       }
       // Idle-flush tier. Ranked BELOW the wedge tiers deliberately: those two
@@ -1174,29 +1174,24 @@ function decideIdleFlush(
  *
  * Fires only while the context is still at or above the gate's own threshold: a refusal the
  * session has since fallen below (it cannot, without a restart; but a recalibrated limit can move
- * pct) is not a reason. Not while background work runs, like the other tiers with no context
- * pressure behind them (didi 35937): the restart would wait for the work anyway, and until it ends
- * the agent can keep working inline.
+ * pct) is not a reason. Background work does NOT keep it from starting, and its hold is BOUNDED by
+ * BACKGROUND_DEFER_MAX_MS, the act tier's constant (marveen 50874 on didi 50873 F3): after a refusal no
+ * new sub-agent starts, so the running ones wind down; one that has not in 45 minutes is the stuck case
+ * this tier exists for. Waiting for "no background work" first, like idle-flush and daily, never fired
+ * under continuous work (didi: not in 10 simulated hours), and didi stood at 78% WITH background work.
  *
  * The baseline is the REFUSAL, not this sweep: a HANDOFF.md written after the gate said "handoff
  * first" already counts as the written handoff, so the agent is not asked to write it twice.
  */
-function decideSubagentGateTier(
-  nowMs: number,
-  inputs: GuardInputs,
-  cfg: ContextGuardConfig,
-  cleared: GuardState,
-  none: NoneFn,
-): GuardDecision | null {
+function decideSubagentGateTier(nowMs: number, inputs: GuardInputs, cfg: ContextGuardConfig): GuardDecision | null {
   const refusal = inputs.subagentGateRefusal
   if (!refusal) return null
   const pct = inputs.pct as number
   if (pct < refusal.gatePct) return null
   const what = `${SUBAGENT_GATE_REASON_PREFIX} (a sub-agent was refused at >= ${Math.round(refusal.gatePct * 100)}%, ` +
     `context now ${Math.round(pct * 100)}%)`
-  const busy = notWhileBackground(inputs, what, cleared, none)
-  if (busy) return busy
-  const request = handoffRequest(nowMs, inputs, cfg, what, true)
+  // noPressure false: the act tier's bounded hold, not the unbounded idle-flush/daily one.
+  const request = handoffRequest(nowMs, inputs, cfg, what)
   return { ...request, nextState: { ...request.nextState, handoffMtimeAtRequest: refusal.atMs } }
 }
 
