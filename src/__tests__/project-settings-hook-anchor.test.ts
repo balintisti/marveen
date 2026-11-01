@@ -74,6 +74,10 @@ const EXPECTED: Record<string, string[]> = {
     // would SIGTERM that poller just the same. The scaffold never writes the main agent's
     // settings (agentGetsChildClaudeGuard), so this file is the only place it is wired.
     'child-claude-channel-guard.mjs',
+    // Refuses a Bash command whose own text the shell would re-scan (a backtick
+    // in double quotes, $( ) in an inline interpreter payload, ...). Fail-open on
+    // any internal error, so it cannot wedge a session.
+    'shell-rescan-guard.py',
   ],
   Stop: ['marveen-commands.py', 'telegram-reply-guard.py', 'telegram_progress_clear.py', 'slack_progress_clear.py'],
   StopFailure: ['ledger-turn-failure.py'],

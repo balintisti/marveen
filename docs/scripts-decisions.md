@@ -16,10 +16,10 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **516** kovetett fajl, ebbol
-**158** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **518** kovetett fajl, ebbol
+**159** hordoz dontes-fejlecet.
 
-## Nem olvasott fejlec-alak (4)
+## Nem olvasott fejlec-alak (5)
 
 Ezek a fajlok egyik olvasott fejlec-alakot sem hasznaljak (sor-komment,
 docstring, blokk-komment), de a fejlec-tartomanyukban all dontes-alaku sor.
@@ -27,6 +27,7 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - `scripts/com.marveen.idle-reporter.plist.template` -- MIERT KULON FOLYAMAT, ES NEM A DASHBOARDBAN EGY TIMER: mert epp azt az esetet
 - `scripts/expiry-inventory.json` -- "WHY A DECLARED PROBE AND NOT A DATE FIELD: a stored date drifts silently the",
+- `scripts/hooks/shell_rescan_lib.py` -- WHY. Prose pasted into a command text is scanned by the shell before the
 - `scripts/review-queue.py` -- WHY THIS FILE EXISTS. Night of 2026-11-04/05: review lanes were handed out by hand three times and two
 - `scripts/sql/tasks-reopen-grant.sql` -- MIERT ALL EZ ITT, ES NEM CSAK A KARTYAN: a fajlt UJRAFUTTATTAK nyitott kerdeskent,
 
@@ -382,6 +383,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/hooks/session-status-page.py`
 
 - WHY (card 3af2d815, Isti TG 8534, 2026-10-30; measurement sirius dbcbb210 / 49372): after a restart
+
+### `scripts/hooks/shell-rescan-guard.py`
+
+- WHY THIS EXISTS. Prose pasted into a command -- a message body, a commit text, a
 
 ### `scripts/hooks/skills-snapshot-on-write.sh`
 
