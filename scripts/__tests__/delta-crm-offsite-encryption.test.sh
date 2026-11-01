@@ -500,15 +500,22 @@ echo "== 14. a havi archivum 12 HONAPIG el, a 13. mar torlodik (fe4d8ccc, ASZF-i
 M11=$(date -v-11m +%Y%m); M12=$(date -v-12m +%Y%m)
 K11="delta-crm-${M11}01-000000-public.dump"; K12="delta-crm-${M12}01-000000-public.dump"
 : > "$TMP/backups/$K11"; : > "$TMP/backups/$K12"
-# 14 newer fillers, so the daily window cannot be what keeps either of them.
-CUR=$(date +%Y%m)
-for d in 01 02 03 04 05 06 07 08 09 10 11 12 13 14; do : > "$TMP/backups/delta-crm-${CUR}${d}-000000-public.dump"; done
+# 14 newer fillers, so the daily window cannot be what keeps either of them. They sit in LAST
+# month: in this month they were in the future on the 1st (02-14 sort after today's real dumps),
+# the window kept them instead, the real dumps were pruned, and section 15 then found only 2
+# locals (b03a7562, red on 2026-11-01). CUR01 still holds this month's monthly slot, as a filler
+# did before on every day: without it the oldest real dump takes the slot, one more real dump
+# survives, and section 15's run prunes one (14 DRIVE POTOLVA lines for 15 locals).
+PREV=$(date -v-1m +%Y%m); CUR=$(date +%Y%m)
+for d in 01 02 03 04 05 06 07 08 09 10 11 12 13 14; do : > "$TMP/backups/delta-crm-${PREV}${d}-000000-public.dump"; done
+: > "$TMP/backups/delta-crm-${CUR}01-000000-public.dump"
 : > "$TMP/backups/backup.log"
 sleep 1; /bin/bash "$TMP/scripts/delta-crm-backup.sh" >/dev/null 2>&1
 [ -f "$TMP/backups/$K11" ] && ok "a 11 honapja ($M11) havi mentes megmaradt" || no "a 11 honapja ($M11) havi mentes TOROLVE (12 honap alatt)"
 [ -f "$TMP/backups/$K12" ] && no "a 12 honapja ($M12) havi mentes MEGMARADT (12 honapnal tovabb tartja)" || ok "a 12 honapja ($M12) havi mentes torolve"
 grep -q "PRUNE $K12" "$TMP/backups/backup.log" && ok 'a naplo megnevezi a torolt havi mentest' || no 'a torolt havi mentes nincs a naploban'
-rm -f "$TMP/backups/$K11" "$TMP/backups"/delta-crm-${CUR}0[1-9]-000000-public.dump "$TMP/backups"/delta-crm-${CUR}1[0-4]-000000-public.dump
+rm -f "$TMP/backups/$K11" "$TMP/backups"/delta-crm-${PREV}0[1-9]-000000-public.dump "$TMP/backups"/delta-crm-${PREV}1[0-4]-000000-public.dump \
+  "$TMP/backups/delta-crm-${CUR}01-000000-public.dump"
 
 echo "== 15. Drive-ag: potlas, a .gpg-nev a hiany-szuroben, tukor-torles es kapui (3b62a58e) =="
 # Every run above skips the Drive leg (temp BACKUP_DIR + the default, real credential paths =
