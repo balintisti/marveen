@@ -1235,6 +1235,16 @@
       "name": "[6525aba3 A2 survivor] an interpreter word after = (an option value) is a reader",
       "cmd": "launcher --cmd=python3 - <<'PY'\nimport send\nPY",
       "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 F1] a quoted ; on the opener's line belongs to a quote opened on the line before: python3 still reads the heredoc",
+      "cmd": "python3 - \"\n;\" <<'PY'\nimport send\nPY",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 F1] an earlier heredoc's BODY is not command text: an interpreter word and an open quote in it do not make cat's heredoc a program",
+      "cmd": "cat <<'A'\npython3 \"\nA\ncat <<'PY'\nimport send\nPY",
+      "expected": false
     }
   ]
 }
