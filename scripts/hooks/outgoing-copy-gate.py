@@ -1831,6 +1831,32 @@ def _http_channel_text(raw: str) -> str:
     return raw
 
 
+def _http_channel_unread_body(toks):
+    """Why a channel send carries body text that _curl_payload_raw does not
+    read, or None. Card 050196cf: the reader knows curl's
+    -d/--data/--data-binary/--data-raw/--data-ascii/--json only, and what it
+    did not read was simply not audited: httpie items or stdin, wget
+    --post-data, curl --data-urlencode, -F, --form-string, -T and a -sd
+    cluster all passed exit 0 with an em dash (measured 2026-11-01, 8 shapes;
+    --data-urlencode even beside a read `-d chat_id=1`). The default is now
+    NO: any program other than curl, and any curl body option the reader does
+    not read, is unreadable (fail-closed), whether or not another flag WAS
+    read. A curl with no body option at all stays a bare POST."""
+    prog = _basename(toks[0])
+    if prog.lower() != "curl":
+        return f"a(z) {prog} kuldes torzset a kapu nem olvassa (csak a curl -d/--data*/--json alakot)"
+    for t in toks[1:]:
+        opt = t.split("=", 1)[0] if t.startswith("--") else t
+        if opt in _CURL_BODY_OPTS and opt not in _IA_DATA_FLAGS:
+            return f"a torzs a(z) {opt} flaggel megy, ezt a kapu nem olvassa"
+        # a single-dash cluster carrying a body letter (-sd, -sF): the reader
+        # takes only a leading -d with its value glued on (-dtext=...)
+        if (t.startswith("-") and not t.startswith(("--", "-d")) and len(t) > 2
+                and any(c in t[1:] for c in "dFT")):
+            return f"a torzs egy osszevont flag-csoportban megy ({t}), ezt a kapu nem olvassa"
+    return None
+
+
 def http_channel_gate(cmd: str) -> None:
     """Exit 2 on a copy problem or an unreadable body, exit 0 when clean.
     RETURNS (does not exit) when the command is not a covered HTTP send, so
@@ -1840,6 +1866,8 @@ def http_channel_gate(cmd: str) -> None:
         return
     try:
         raw, unreadable = _curl_payload_raw(cmd, toks, all_flags=True)
+        if not unreadable:
+            unreadable = _http_channel_unread_body(toks)
         if unreadable:
             sys.stderr.write(
                 f"KIMENO-SZOVEG KAPU ({label}): TILTVA, mert a kimeno szoveget nem tudtam "

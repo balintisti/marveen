@@ -11,6 +11,8 @@ Contract pinned here:
     target is audited: em dash -> exit 2, clean prose -> exit 0;
   - all three body shapes are read: inline -d, @file, quoted heredoc (@-);
   - an unreadable body (run-time substitution) BLOCKS (fail-closed);
+  - so does a body the reader cannot read at all: httpie, wget, curl
+    --data-urlencode / -F / --form-string / -T / a -sd cluster (050196cf);
   - a READ (GET of the feed, getUpdates) passes untouched;
   - /api/messages (inter-agent, federation) is NOT pulled into the full audit:
     it keeps its own homoglyph-only gate;
@@ -90,6 +92,26 @@ CASES = [
     ("Telegram form body: em dash in parse_mode passes (only prose fields are audited)",
      "curl -s https://api.telegram.org/botXYZ/sendMessage -d chat_id=1 "
      "-d text='Rendes mondat.' -d 'parse_mode=\u2014'", 0),
+    # card 050196cf: a body the reader does not read is unreadable, not "bare"
+    # (each passed exit 0 with an em dash before; the default is now NO)
+    ("Telegram via httpie key=value items BLOCKS (unreadable)",
+     f"http POST https://api.telegram.org/botXYZ/sendMessage chat_id=1 text='{BAD}'", 2),
+    ("Telegram via httpie, body on stdin BLOCKS (unreadable)",
+     f"echo '{json.dumps({'text': BAD})}' | http POST https://api.telegram.org/botXYZ/sendMessage", 2),
+    ("Telegram via wget --post-data BLOCKS (unreadable)",
+     f"wget -qO- --post-data 'chat_id=1&text={BAD}' https://api.telegram.org/botXYZ/sendMessage", 2),
+    ("Telegram --data-urlencode text beside a READ -d chat_id BLOCKS (unreadable)",
+     f"curl -s https://api.telegram.org/botXYZ/sendMessage -d chat_id=1 --data-urlencode 'text={BAD}'", 2),
+    ("Telegram -F form text BLOCKS (unreadable)",
+     f"curl -s https://api.telegram.org/botXYZ/sendMessage -F chat_id=1 -F 'text={BAD}'", 2),
+    ("Telegram --form-string=text BLOCKS (unreadable)",
+     f"curl -s https://api.telegram.org/botXYZ/sendMessage '--form-string=text={BAD}'", 2),
+    ("community body in a -sd cluster BLOCKS (unreadable)",
+     f"curl -sd '{json.dumps({'content': BAD})}' {MIO}/feed/posts", 2),
+    ("community body uploaded with -T BLOCKS (unreadable)",
+     f"curl -s -X POST {MIO}/feed/posts -T {good_file}", 2),
+    ("a glued -d value is still READ, not unreadable: clean passes",
+     "curl -s https://api.telegram.org/botXYZ/sendMessage -dchat_id=1 -d text='Rendes mondat.'", 0),
     # scope boundary
     ("inter-agent /api/messages stays OUT of the full audit (homoglyph-only gate)",
      "curl -s -X POST http://localhost:3420/api/messages "
