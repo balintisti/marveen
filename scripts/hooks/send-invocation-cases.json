@@ -1480,6 +1480,21 @@
       "name": "[6525aba3 A2 twin, didi 51624 T2] an explicit GET to Resend is a send in both twins",
       "cmd": "curl -X GET https://api.resend.com/emails/abc123",
       "expected": true
+    },
+    {
+      "name": "[812bd946 httpie] positional POST to the Resend send endpoint is a send (method undecidable, fail-closed)",
+      "cmd": "http POST https://api.resend.com/emails to=a@b.hu",
+      "expected": true
+    },
+    {
+      "name": "[812bd946 httpie] no method word, key=value items make httpie POST: a send",
+      "cmd": "http https://api.resend.com/emails to=a@b.hu subject=x",
+      "expected": true
+    },
+    {
+      "name": "[812bd946 httpie] even a GET stays a send: httpie's method is not read, so it is never judged a read",
+      "cmd": "http GET https://api.resend.com/domains",
+      "expected": true
     }
   ]
 }
