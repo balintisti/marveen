@@ -105,6 +105,17 @@ describe('channel test route: the main agent', () => {
     expect(calls[0].token).toBe('fixture-slack-main-noimread')
   })
 
+  // didi L2 (A7): toMatchObject sees no extra field. The answer is these four keys
+  // and nothing else: no token, no raw x-oauth-scopes header string.
+  it('slack: the answer carries exactly ok/botName/scopes/missingScopes, never the token', async () => {
+    writeEnv(mainSlack, 'SLACK_BOT_TOKEN=fixture-slack-main-noimread')
+    const out = await test(MAIN_AGENT_ID, 'slack')
+    expect(out.status).toBe(200)
+    expect(Object.keys(out.body ?? {}).sort()).toEqual(['botName', 'missingScopes', 'ok', 'scopes'])
+    expect(out.body?.scopes).toEqual(ALL_SCOPES.split(',').filter((s) => s !== 'im:read'))
+    expect(JSON.stringify(out.body)).not.toContain('fixture-slack-main-noimread')
+  })
+
   it('telegram: the token comes from the main state dir too', async () => {
     writeEnv(mainTelegram, 'TELEGRAM_BOT_TOKEN=111:main-telegram')
     const out = await test(MAIN_AGENT_ID, 'telegram')
@@ -145,6 +156,19 @@ describe('channel test route: a sub-agent is unchanged', () => {
     expect(out.status).toBe(200)
     expect(calls[0].token).toBe('fixture-slack-zara')
   })
+
+  // didi L1 (A7): only the exact main name reaches the main state dir. A name that
+  // starts with it, contains it or differs in case is a sub-agent name, and none exists.
+  it.each([`${MAIN_AGENT_ID}2`, `${MAIN_AGENT_ID}-x`, `x${MAIN_AGENT_ID}`, MAIN_AGENT_ID.toUpperCase()])(
+    'a near-name (%s) is not the main agent: 404 "Agent not found", no network call',
+    async (name) => {
+      writeEnv(mainSlack, 'SLACK_BOT_TOKEN=fixture-slack-main')
+      const out = await test(name, 'slack')
+      expect(out.status).toBe(404)
+      expect(out.body?.error).toBe('Agent not found')
+      expect(calls).toHaveLength(0)
+    },
+  )
 
   it('an unknown sub-agent is still 404 "Agent not found", no network call', async () => {
     const out = await test('nincsilyen', 'slack')
