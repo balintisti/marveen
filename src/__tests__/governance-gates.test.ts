@@ -537,7 +537,7 @@ describe('governance gate scaffold wiring', () => {
     const pre = ((s.hooks as Record<string, unknown>).PreToolUse as Array<{ matcher: string }>)
     const entry = pre.find((e) => JSON.stringify(e).includes('self-pace-gate.mjs'))
     const re = new RegExp(`^(?:${entry!.matcher})$`)
-    for (const t of ['Bash', 'Write', 'Edit', 'NotebookEdit', 'ScheduleWakeup', 'CronCreate']) {
+    for (const t of ['Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'ScheduleWakeup', 'CronCreate']) {
       expect(re.test(t)).toBe(true)
     }
     expect(re.test('Read')).toBe(false)
