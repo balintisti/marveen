@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **468** kovetett fajl, ebbol
-**142** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **469** kovetett fajl, ebbol
+**143** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -530,6 +530,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/readonly-measure.sh`
 
 - MIERT LETEZIK. A CLAUDE.md „Eles adatbazis MERESE" receptje JO, es harman futtattuk egy
+
+### `scripts/readonly-repo-gate.mjs`
+
+- Why a hook and not a permissions deny-list. The two permission modes each
 
 ### `scripts/recipient-ledger.mjs`
 
