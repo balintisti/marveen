@@ -25,8 +25,9 @@ describe('an idle agent is never interrupted', () => {
 
 describe('a brief is sent when there is something concrete to resume', () => {
   it('names the in_progress cards', () => {
-    const b = buildRecoveryBrief(facts({ inProgress: [{ id: 'abc12345', title: 'Fix the thing' }] }))!
-    expect(b).toContain('abc12345: Fix the thing')
+    const b = buildRecoveryBrief(facts({ inProgress: [{ id: 'abc12345' }] }))!
+    expect(b).toContain('  - abc12345')
+    expect(b).toContain('/api/kanban/<id>')
     expect(b).toContain('FRISS session')
   })
 
@@ -57,7 +58,7 @@ describe('the brief states facts, it does not order a resume', () => {
     // Facts collected around a restart can be stale by the time they are read,
     // and the fleet has been burned by confident stale numbers before. The
     // brief must send the agent to check, not to act.
-    const b = buildRecoveryBrief(facts({ inProgress: [{ id: 'c1', title: 'T' }] }))!
+    const b = buildRecoveryBrief(facts({ inProgress: [{ id: 'c1' }] }))!
     expect(b).toMatch(/ellenorizd/i)
     expect(b).toMatch(/ne kezdd ujra/i)
   })

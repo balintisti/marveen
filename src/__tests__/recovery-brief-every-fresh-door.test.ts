@@ -54,7 +54,7 @@ describe('scheduleRecoveryBrief', () => {
     branch: 'devy/some-task',
     dirty: [{ code: ' M', path: 'src/web/thing.ts' }],
     dirtyTruncated: false,
-    inProgress: [{ id: 'abc12345', title: 'Fix the thing' }],
+    inProgress: [{ id: 'abc12345' }],
   })
 
   it('types the brief into the session after the delay, not before', async () => {
