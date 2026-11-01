@@ -97,6 +97,8 @@ describe('gate: Bash is fail-closed on the allowlist', () => {
     'echo x > store/*.history/history.log',
     'cd store && rm *.json',
     'cd "store" && cp /tmp/x e*.json',
+    // quoted, bash leaves it alone, but the script it is handed may expand it: fail-closed
+    "python3 tools/x.py 'store/e*.json'",
   ]
   it.each(denied)('denies: %s', (command) => {
     expect(decide('Bash', { command })).toEqual({ deny: true, reason: 'egress-allowlist' })
@@ -336,6 +338,19 @@ describe('baseline: every change is recorded and reported, whatever the route', 
     } finally { stop() }
     expect(reports.some((x) => x.includes('REWRITTEN with its previous bytes'))).toBe(true)
     expect(reports.filter((x) => x.includes('CHANGED'))).toEqual([])
+  })
+
+  it('the running watcher reports a change made after its history directory was removed (W2, through the watcher)', async () => {
+    const stop = watchEgressAllowlistBaseline(store, notify, 20)
+    try {
+      await new Promise((r) => setTimeout(r, 60))
+      rmSync(join(store, HISTORY_DIRNAME), { recursive: true, force: true })
+      writeFileSync(allowlist, JSON.stringify({ domains: ['after-wipe.example'] }))
+      const deadline = Date.now() + 3000
+      while (reports.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20))
+    } finally { stop() }
+    expect(reports).toHaveLength(1)
+    expect(reports[0]).toContain('REMOVED')
   })
 
   it('POSITIVE CONTROL: the watcher stays quiet while nobody writes the file', async () => {
