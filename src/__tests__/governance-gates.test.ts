@@ -342,6 +342,11 @@ describe('self-pace-gate stripProseArguments (scoped to gh/git/glab)', () => {
     // the watch argument prose, and the at-scheduler under it went through.
     const command = `watch -t '(at now)' ~/git "$(date +%F)"`
     expect(selfPaceDecision('Bash', { command }).deny).toBe(true)
+    // FORK (6525aba3 A3 port): on this base the quote-intact indirect check also
+    // denies `(at now)`, so the line above holds even without the anchor. A bare
+    // `(crontab)` is read by the anchored check alone: here the anchor decides.
+    const bare = `watch -t '(crontab)' ~/git "$(date +%F)"`
+    expect(selfPaceDecision('Bash', { command: bare })).toEqual({ deny: true, reason: 'os-scheduler' })
   })
 })
 
