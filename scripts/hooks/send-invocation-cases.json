@@ -1030,6 +1030,11 @@
       "name": "[didi 6525aba3] a versioned python3.12 -c",
       "cmd": "python3.12 -c 'import send'",
       "expected": true
+    },
+    {
+      "name": "[didi K2 6525aba3] a <<- tab-indented tag closes the body: the next command is not the program",
+      "cmd": "python3 - <<-EOF\n\tprint(1)\n\tEOF\necho 'import send'",
+      "expected": false
     }
   ]
 }
