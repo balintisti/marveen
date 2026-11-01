@@ -1190,6 +1190,51 @@
       "name": "[6525aba3 A2 frame pin] a ; inside backticks does not end the heredoc's own command",
       "cmd": "python3 - `date; true` <<'EOF'\nimport send\nEOF",
       "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 F1] a double quote opened on an EARLIER line closes there: the python3 that reads the heredoc is found",
+      "cmd": "python3 -c \"\nx=['bash','y']\"; cd /tmp && python3 - <<'PY'\nimport send\nPY",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 F1] a $( opened on an earlier line still holds the heredoc's own command",
+      "cmd": "x=$(\ncat foo; python3 - <<'PY'\nimport send\nPY\n)",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 F1] an earlier line's interpreter does not leak across the newline: cat reads the heredoc",
+      "cmd": "python3 -m pytest\ncat <<'PY'\nimport send\nPY",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 F1] an earlier heredoc's BODY is data, not command text: its unbalanced quote does not swallow the next opener",
+      "cmd": "cat <<'A'\nit's \"open\nA\npython3 - <<'PY'\nimport send\nPY",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 F2] a shell word BEFORE the interpreter: env bash -c 'python3 -' reads a Python body",
+      "cmd": "env bash -c 'python3 -' <<'PY'\nimport send\nPY",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 F2] docker exec -i c bash -c \"python3 -\" reads a Python body",
+      "cmd": "docker exec -i c bash -c \"python3 -\" <<'PY'\nimport send\nPY",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 survivor] a ; inside SINGLE quotes does not end the own command",
+      "cmd": "python3 - 'a;b' <<'PY'\nimport send\nPY",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 survivor] | ends the own command: cat after the pipe reads the heredoc, not python3",
+      "cmd": "python3 -V | cat <<'PY'\nimport send\nPY",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 survivor] an interpreter word after = (an option value) is a reader",
+      "cmd": "launcher --cmd=python3 - <<'PY'\nimport send\nPY",
+      "expected": true
     }
   ]
 }

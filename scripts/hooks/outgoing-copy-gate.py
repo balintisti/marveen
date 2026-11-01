@@ -791,7 +791,7 @@ def _heredoc_body_sends(body: str) -> bool:
 # double quotes too) and their closing returns to the outer one. Inside it, ANY word
 # naming an interpreter or a shell makes the body a program, whatever launches it (an
 # unknown launcher stays fail-closed; no second wrapper list). Full note and the named
-# cost: heredocHeadKind in email-send-gate.mjs.
+# cost: heredocHeadKinds in email-send-gate.mjs.
 _HEREDOC_READER_WORD = re.compile(
     r"""(?:^|[\s/'"`$(=;&|])(python3?(?:\.\d+)?|node|tsx|ts-node|deno|bun|sh|bash|zsh|dash)(?=$|[\s'"`);&|])""",
     re.I)
@@ -829,17 +829,24 @@ def _heredoc_own_command(head: str) -> str:
         elif ch == ")":
             if frames and frames[-1][2] == ")":
                 start, q, _ = frames.pop()
-        elif ch in ";&|":
+        elif ch in ";&|\n":
             start = i + 1
         i += 1
     return s[start:]
 
 
-def _heredoc_head_kind(head: str):
-    m = _HEREDOC_READER_WORD.search(_heredoc_own_command(head))
-    if not m:
-        return None
-    return "shell" if _WRAPPER_SHELL.match(m.group(1)) else "interp"
+def _heredoc_head_kinds(head: str):
+    """(interp, shell): every reader word counts, not the first (didi's F2, 6525aba3 50861).
+
+    Twin: heredocHeadKinds in email-send-gate.mjs.
+    """
+    interp = shell = False
+    for m in _HEREDOC_READER_WORD.finditer(_heredoc_own_command(head)):
+        if _WRAPPER_SHELL.match(m.group(1)):
+            shell = True
+        else:
+            interp = True
+    return interp, shell
 
 
 # THE HEREDOC FORMS BASH RUNS (didi's K2, 6525aba3 50742): <<"EOF", <<\EOF, a - or . in the
@@ -850,7 +857,7 @@ _HEREDOC_OPEN = re.compile(r"(?<!<)<<(?!<)(-?)[ \t]*(?:'([\w.-]+)'|\"([\w.-]+)\"
 
 
 def _heredoc_spans(cmd: str):
-    """[(start, intro, body), ...] for every heredoc bash would read."""
+    """[(start, intro, body, end), ...] for every heredoc bash would read."""
     spans, pos = [], 0
     while True:
         m = _HEREDOC_OPEN.search(cmd, pos)
@@ -862,7 +869,7 @@ def _heredoc_spans(cmd: str):
         tag = m.group(2) or m.group(3) or m.group(4)
         term = re.compile(r"\n" + (r"\t*" if m.group(1) else "") + re.escape(tag) + r"(?=\s|$)")
         t = term.search(cmd, nl)
-        spans.append((m.start(), m.group(0), cmd[nl + 1:t.start() + 1 if t else len(cmd)]))
+        spans.append((m.start(), m.group(0), cmd[nl + 1:t.start() + 1 if t else len(cmd)], t.end() if t else len(cmd)))
         pos = t.end() if t else len(cmd)
 
 
@@ -900,18 +907,22 @@ def _written_then_run(cmd: str, written: dict, depth: int) -> bool:
 
 def _heredoc_program_sends(cmd: str, depth: int = 0) -> bool:
     written = {}
-    for start, intro, body in _heredoc_spans(cmd):
+    # didi's F1 (6525aba3 50861): the walk gets everything before the <<, earlier heredoc
+    # bodies cut out, not the opener's line alone. Twin: heredocProgramSends.
+    ctx, frm = "", 0
+    for start, intro, body, end in _heredoc_spans(cmd):
         head = cmd[cmd.rfind("\n", 0, start) + 1:start]
         w = _HEREDOC_REDIRECT.search(head + intro)
         if w:
             written[w.group(2)] = body
-        kind = _heredoc_head_kind(head)
-        if kind == "interp":
-            if _heredoc_body_sends(body):
-                return True
-        elif kind == "shell" and depth < 3:
-            if is_send_invocation(body, _depth=depth + 1):
-                return True
+        ctx += cmd[frm:start]
+        interp, shell = _heredoc_head_kinds(ctx)
+        if interp and _heredoc_body_sends(body):
+            return True
+        if shell and depth < 3 and is_send_invocation(body, _depth=depth + 1):
+            return True
+        ctx += intro + "\n"
+        frm = end
     return _written_then_run(cmd, written, depth)
 
 

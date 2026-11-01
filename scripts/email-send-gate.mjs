@@ -443,7 +443,7 @@ const heredocBodySends = (body) =>
 // docker exec -i, ssh host, pnpm exec, conda run) stays fail-closed, and there is no
 // second wrapper list to keep in step with WRAPPERS. The cost, named: an interpreter word
 // in the own command's arguments (`git commit -m "node fix" -F - <<`) reads the body as a
-// program too; that body is denied only if it sends. Twin: _heredoc_head_kind in
+// program too; that body is denied only if it sends. Twin: _heredoc_head_kinds in
 // hooks/outgoing-copy-gate.py.
 const HEREDOC_READER_WORD = /(?:^|[\s/'"`$(=;&|])(python3?(?:\.\d+)?|node|tsx|ts-node|deno|bun|sh|bash|zsh|dash)(?=$|[\s'"`);&|])/i
 export function heredocOwnCommand(head) {
@@ -472,14 +472,22 @@ export function heredocOwnCommand(head) {
       if (top && top.close === ')') ({ start, q } = frames.pop())
       continue
     }
-    if (ch === ';' || ch === '&' || ch === '|') start = i + 1
+    if (ch === ';' || ch === '&' || ch === '|' || ch === '\n') start = i + 1
   }
   return s.slice(start)
 }
-export function heredocHeadKind(head) {
-  const m = HEREDOC_READER_WORD.exec(heredocOwnCommand(head))
-  if (!m) return null
-  return WRAPPER_SHELL.test(m[1]) ? 'shell' : 'interp'
+// didi's F2 (6525aba3 50861): the FIRST reader word used to decide alone, so
+// `env bash -c 'python3 -' <<` and `docker exec -i c bash -c "python3 -" <<` read a Python
+// body as shell. Every reader word in the own command counts: a body read both ways is
+// judged both ways. Returns { interp, shell }.
+const HEREDOC_READER_WORD_G = new RegExp(HEREDOC_READER_WORD.source, 'gi')
+export function heredocHeadKinds(head) {
+  const kinds = { interp: false, shell: false }
+  for (const m of heredocOwnCommand(head).matchAll(HEREDOC_READER_WORD_G)) {
+    if (WRAPPER_SHELL.test(m[1])) kinds.shell = true
+    else kinds.interp = true
+  }
+  return kinds
 }
 
 // THE HEREDOC FORMS BASH RUNS (didi's K2, 6525aba3 50742). HEREDOC_RE knows <<TAG and
@@ -501,7 +509,7 @@ export function heredocSpans(cmd) {
     const term = new RegExp(String.raw`\n${m[1] ? String.raw`\t*` : ''}${escapeRegExp(tag)}(?=\s|$)`, 'g')
     term.lastIndex = nl
     const t = term.exec(cmd)
-    spans.push({ index: m.index, intro: m[0], body: cmd.slice(nl + 1, t ? t.index + 1 : cmd.length) })
+    spans.push({ index: m.index, intro: m[0], body: cmd.slice(nl + 1, t ? t.index + 1 : cmd.length), end: t ? t.index + t[0].length : cmd.length })
     open.lastIndex = t ? t.index + t[0].length : cmd.length
   }
   return spans
@@ -638,16 +646,23 @@ export function varUrlSend(cmd) {
 }
 function heredocProgramSends(cmd, depth = 0) {
   const written = new Map()
-  for (const { index, intro, body } of heredocSpans(cmd)) {
+  // didi's F1 (6525aba3 50861): the own command was read from the opener's LINE only, so a
+  // quote or $( opened on an earlier line was lost (`python3 -c "<nl>x=['bash','y']"; cd /tmp
+  // && python3 - <<'PY'` read as shell). The walk gets everything before the <<, with the
+  // bodies of earlier heredocs cut out (they are data, not command text); an unquoted
+  // newline separates commands in the walk.
+  let ctx = ''
+  let from = 0
+  for (const { index, intro, body, end } of heredocSpans(cmd)) {
     const head = cmd.slice(cmd.lastIndexOf('\n', index - 1) + 1, index)
     const w = HEREDOC_REDIRECT.exec(head + intro)
     if (w) written.set(w[2], body)
-    const kind = heredocHeadKind(head)
-    if (kind === 'interp') {
-      if (heredocBodySends(body)) return true
-    } else if (kind === 'shell' && depth < 3) {
-      if (isSendInvocation(body, depth + 1)) return true
-    }
+    ctx += cmd.slice(from, index)
+    const kinds = heredocHeadKinds(ctx)
+    if (kinds.interp && heredocBodySends(body)) return true
+    if (kinds.shell && depth < 3 && isSendInvocation(body, depth + 1)) return true
+    ctx += intro + '\n'
+    from = end
   }
   return writtenThenRun(cmd, written, depth)
 }
