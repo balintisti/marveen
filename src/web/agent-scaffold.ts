@@ -856,7 +856,7 @@ export function writeAgentSettingsFromProfile(name: string, profile: ProfileTemp
   // profile added tomorrow cannot silently ship without it. Deduped against what
   // the profile already declared (developer-senior and marketer both carry some
   // of these), so the written file stays readable.
-  for (const rule of FLEET_BASELINE_DENY.map(r => resolveProfilePlaceholders(r, ctx))) {
+  for (const rule of fleetBaselineDenyFor(name).map(r => resolveProfilePlaceholders(r, ctx))) {
     if (!denyList.includes(rule)) denyList.push(rule)
   }
   // Per-agent tool-name deny (agent-config.json "toolDeny"): merged LAST and
@@ -1208,6 +1208,28 @@ export const FLEET_BASELINE_DENY = [
   'Bash(git push -f:*)',
   'mcp__playwright__browser_run_code_unsafe',
 ]
+
+// The ONE named exemption from the floor (marveen's decision on card 6525aba3, comment 50821, after
+// didi's A5 finding F1). The QA agents log in to the app under test through browser_run_code_unsafe:
+// the qa-bongeszo-hitelesitett-munkamenet skill measured the alternatives (document.cookie,
+// addCookies) dead, and mandark's transcripts hold 639 calls. A whole-tool deny would stop
+// authenticated browser QA on these three at their next respawn.
+//
+// Deliberately NOT a general per-agent map of exemptions: this list can drop exactly one rule, so
+// adding a name here cannot quietly lift sudo or rm for it. Every other agent, and every agent
+// created later, gets the full floor. The main agent's floor (tracked .claude/settings.json) is not
+// touched by this list. What stays open for the three: the run_code VM is sandboxed per the skill's
+// measurement (no require/process), and file:// reads are reachable via browser_navigate anyway, so
+// the deny closed no channel of its own there (not re-measured on this branch).
+export const QA_BROWSER_RUN_CODE_RULE = 'mcp__playwright__browser_run_code_unsafe'
+export const QA_BROWSER_RUN_CODE_AGENTS: readonly string[] = ['mandark', 'didi', 'trillian']
+
+// The floor as written for one agent: FLEET_BASELINE_DENY minus the run_code rule for the named QA
+// agents, nothing else.
+export function fleetBaselineDenyFor(name: string): string[] {
+  if (!QA_BROWSER_RUN_CODE_AGENTS.includes(name)) return [...FLEET_BASELINE_DENY]
+  return FLEET_BASELINE_DENY.filter(r => r !== QA_BROWSER_RUN_CODE_RULE)
+}
 
 // Idempotently merge the egress deny rules into a settings object's
 // permissions.deny. Pure (no I/O) so both the rule set and the merge behaviour

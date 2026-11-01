@@ -13,7 +13,7 @@ import { join } from 'node:path'
 //   (A) sub-agents  -> the code-level floor in writeAgentSettingsFromProfile
 //   (B) main agent  -> the repo's tracked project settings (.claude/settings.json),
 //       which the scaffold deliberately never writes (#1305).
-import { writeAgentSettingsFromProfile, agentSettingsPath, FLEET_BASELINE_DENY, BASH_EGRESS_DENY } from '../web/agent-scaffold.js'
+import { writeAgentSettingsFromProfile, agentSettingsPath, FLEET_BASELINE_DENY, BASH_EGRESS_DENY, fleetBaselineDenyFor, QA_BROWSER_RUN_CODE_AGENTS, QA_BROWSER_RUN_CODE_RULE } from '../web/agent-scaffold.js'
 import { agentDir } from '../web/agent-config.js'
 import { listProfileTemplates, loadProfileTemplate, resolveProfilePlaceholders } from '../web/profiles.js'
 import { PROJECT_ROOT } from '../config.js'
@@ -140,6 +140,70 @@ describe('(A) the baseline reaches EVERY profile, including ones added later', (
     expect(deny).toContain('Bash(*/wget *)')
     expect(deny).toContain('ScheduleWakeup')
   })
+})
+
+describe('the floor, rule by rule', () => {
+  it('is exactly these 13 rules, so dropping any ONE of them fails here and not only in the file parity', () => {
+    // didi's A5 finding F3: N1/N2/N4/N6 removed from the constant AND the tracked file together survived,
+    // because (B) only pins the two against each other. This is the literal list.
+    expect(FLEET_BASELINE_DENY).toEqual([
+      'Read(${HOME}/.ssh/**)',
+      'Read(${HOME}/.aws/**)',
+      'Read(${HOME}/.gnupg/**)',
+      'Read(${HOME}/.env)',
+      'Read(**/.env)',
+      'Bash(sudo:*)',
+      'Bash(*/sudo *)',
+      'Bash(rm -rf ${HOME}:*)',
+      'Bash(rm -rf /:*)',
+      'Bash(curl -X POST:*)',
+      'Bash(git push --force:*)',
+      'Bash(git push -f:*)',
+      'mcp__playwright__browser_run_code_unsafe',
+    ])
+  })
+})
+
+// marveen's decision on card 6525aba3 (comment 50821, after didi's A5 finding F1): the QA agents log in
+// to the app under test through browser_run_code_unsafe, so they -- and only they -- are exempt from
+// that ONE floor rule. Both directions are pinned, and on the real write path, not just the helper.
+describe('the named QA exemption drops one rule for three agents and nothing else', () => {
+  const created: string[] = []
+  afterEach(() => {
+    for (const d of created.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+  function scratchAgent(name: string): void {
+    const dir = agentDir(name)
+    if (existsSync(dir)) throw new Error(`refusing: ${dir} already exists`)
+    mkdirSync(dir, { recursive: true })
+    created.push(dir)
+    writeFileSync(join(dir, 'agent-config.json'), JSON.stringify({}, null, 2))
+  }
+
+  it('names exactly mandark, didi and trillian, and exactly the run_code rule', () => {
+    expect([...QA_BROWSER_RUN_CODE_AGENTS].sort()).toEqual(['didi', 'mandark', 'trillian'])
+    expect(QA_BROWSER_RUN_CODE_RULE).toBe('mcp__playwright__browser_run_code_unsafe')
+    expect(FLEET_BASELINE_DENY).toContain(QA_BROWSER_RUN_CODE_RULE)
+  })
+
+  it('a non-QA agent gets the whole floor, run_code included', () => {
+    for (const name of [NAME, 'computress', 'dexter', 'ford', 'marveen', 'Mandark', '']) {
+      expect(fleetBaselineDenyFor(name)).toEqual(FLEET_BASELINE_DENY)
+    }
+    writeAgentSettingsFromProfile(NAME, loadProfileTemplate('default'))
+    expect(readDeny()).toContain(QA_BROWSER_RUN_CODE_RULE)
+  })
+
+  for (const qa of ['mandark', 'didi', 'trillian']) {
+    it(`"${qa}" loses ONLY the run_code rule, on the real write path`, () => {
+      expect(fleetBaselineDenyFor(qa)).toEqual(FLEET_BASELINE_DENY.filter(r => r !== QA_BROWSER_RUN_CODE_RULE))
+      scratchAgent(qa)
+      writeAgentSettingsFromProfile(qa, loadProfileTemplate('default'))
+      const deny = JSON.parse(readFileSync(agentSettingsPath(qa), 'utf-8')).permissions.deny as string[]
+      expect(deny).not.toContain(QA_BROWSER_RUN_CODE_RULE)
+      for (const rule of expectedFor(qa).filter(r => r !== QA_BROWSER_RUN_CODE_RULE)) expect(deny).toContain(rule)
+    })
+  }
 })
 
 describe('(B) the main agent gets the baseline from the repo project settings', () => {

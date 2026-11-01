@@ -134,6 +134,9 @@ describe('egy jelolo sima sztringben SOHA nem helyettesitodik be', () => {
     expect(scanText('src/web/agent-scaffold.ts', "const FLEET_BASELINE_DENY = ['Read(${sender}/.x)', 'Read(${HOME}/${x})']").hits).toHaveLength(2)
     // a bare plain string (not an array element) with ${HOME} in that file is a hit
     expect(scanText('src/web/agent-scaffold.ts', "const x = 'Read(${HOME}/.x)'").hits).toHaveLength(1)
+    // the exempt NAME holding a string that is not an array element is a hit (didi A5 G3: without this
+    // control the ArrayLiteralExpression check could be dropped and every case above would still pass)
+    expect(scanText('src/web/agent-scaffold.ts', "const FLEET_BASELINE_DENY = ('Read(${HOME}/.x)')").hits).toHaveLength(1)
   })
 
   it('a TELJES forrasfaban egyetlen sima sztring sem hordoz jelolot', () => {
