@@ -348,6 +348,17 @@ describe('self-pace-gate stripProseArguments (scoped to gh/git/glab)', () => {
     const bare = `watch -t '(crontab)' ~/git "$(date +%F)"`
     expect(selfPaceDecision('Bash', { command: bare })).toEqual({ deny: true, reason: 'os-scheduler' })
   })
+
+  it.each([
+    ['$(...) in --body', `gh pr create --body "$(crontab)"`],
+    ['backtick in --body', 'gh pr create --body "`crontab`"'],
+    ['$(...) in git -m', `git notes add -m "$(crontab)"`],
+  ])('on the fallback path, a double-quoted prose value that substitutes stays visible: %s', (_name, command) => {
+    // The substitution runs before gh/git ever sees its argument, so it is a
+    // command, not prose. A bare `crontab` (no argument) is invisible to the
+    // indirect check, so keeping the value unblanked is the whole verdict here.
+    expect(selfPaceDecision('Bash', { command })).toEqual({ deny: true, reason: 'os-scheduler' })
+  })
 })
 
 // --- stripDataPayloads: a curl -d/--data body is DATA sent over the wire, never
