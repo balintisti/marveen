@@ -90,6 +90,9 @@ describe('gate: Bash is fail-closed on the allowlist', () => {
     'cp /tmp/x store/e*-allowlist.json',
     'cp x store/?gress-allowlist.json',
     'cp x store/egress-allowlis[t].json',
+    // a bracket before the name: only the glob reading sees it, the name pattern does not
+    'cp x store/[e]gress-allowlist.json',
+    'cp x store/[!x]gress-allowlist.json',
     'cp x store/egress-{allowlist,x}.json',
     'dd if=/tmp/x of=store/e*.json',
     'rm store/*',
