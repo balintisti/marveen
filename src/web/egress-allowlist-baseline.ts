@@ -209,6 +209,19 @@ export function watchEgressAllowlistBaseline(
 ): () => void {
   const file = join(storeDir, 'egress-allowlist.json')
   const memory: BaselineMemory = { sha: memoryFile ? readMemoryFile(memoryFile) : null }
+  // A missing record with a history on disk: removed, or never written. Removing it was the first
+  // of two steps around the W2 report (rm the record, then rewrite the history before the next
+  // boot: didi 51495 A4-3), so a boot without it says so instead of trusting the history.
+  if (memoryFile && memory.sha === null && lastEntry(join(storeDir, HISTORY_DIRNAME)) !== null) {
+    try {
+      notify(
+        `[EGRESS-ALLOWLIST] the baseline record ${memoryFile} is missing or unreadable, while store/${HISTORY_DIRNAME} holds entries. ` +
+        'Once, on the first start of a dashboard that keeps this record, that is expected. Otherwise someone removed it, and the history ' +
+        'may have been rewritten after that: check store/egress-allowlist.json by hand against a version you trust. ' +
+        'Sub-agents may not edit these files (EGRESSSELFEDIT824).',
+      )
+    } catch { /* the check below still records */ }
+  }
   const check = () => {
     const r = checkEgressAllowlistBaseline(storeDir, notify, new Date(), memory)
     if (memoryFile && memory.sha !== null && readMemoryFile(memoryFile) !== memory.sha) {

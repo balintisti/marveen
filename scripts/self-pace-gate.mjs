@@ -28,6 +28,7 @@
 // name !== MAIN_AGENT_ID, re-applied on every spawn (respawn-safe).
 
 import { readFileSync, realpathSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -306,15 +307,17 @@ function globComponentRx(part) {
 export function globHitsAllowlist(word, allowlistPath = DEFAULT_ALLOWLIST_PATH, cwd = process.cwd()) {
   // A trailing ) closes a subshell `(cd store && rm e*)`; $PWD and $(pwd) are the cwd itself.
   const w = String(word ?? '').replace(/^(?:&>>?|\d*>>?\|?)/, '').replace(/^[A-Za-z_-]+=/, '').replace(/['"]/g, '')
-    .replace(/\)+$/, '').replace(/^\$(?:HOME\b|\{HOME\})/, homedir()).replace(CWD_WORD_RX, cwd)
+    .replace(/\)+$/, '').replace(HOME_WORD_RX, homedir()).replace(CWD_WORD_RX, cwd)
   if (!/[*?[{]/.test(w) || /[$`]/.test(w)) return false
   const parts = resolve(cwd, expandHome(w)).split('/')
   const rxs = parts.map(globComponentRx)
   if (rxs.some((r) => r === null)) return false
   const historyDir = join(dirname(allowlistPath), HISTORY_DIRNAME)
+  const record = baselineRecordPath(allowlistPath)
   const targets = [
     { path: allowlistPath, below: false }, { path: realOrSelf(allowlistPath), below: false },
     { path: historyDir, below: true }, { path: realOrSelf(historyDir), below: true },
+    { path: record, below: false }, { path: realOrSelf(record), below: false },
   ]
   return targets.some(({ path, below }) => {
     const t = path.split('/')
@@ -324,7 +327,19 @@ export function globHitsAllowlist(word, allowlistPath = DEFAULT_ALLOWLIST_PATH, 
 }
 
 // `$PWD`, `${PWD}`, `$(pwd)` or `` `pwd` `` at the start of a word: the directory the shell is in.
+// The baseline's sha record, as src/web/egress-allowlist-baseline.ts baselineMemoryFile names it:
+// <home>/.marveen/<history dir>-<key>.sha, keyed by the store's real path. Its name is denied, but
+// a glob or a find under ~/.marveen reached it (`rm ~/.marveen/*.sha`, didi 51495 A4-3).
+function baselineRecordPath(allowlistPath) {
+  const key = createHash('sha256').update(realOrSelf(dirname(allowlistPath))).digest('hex').slice(0, 12)
+  return join(homedir(), '.marveen', `${HISTORY_DIRNAME}-${key}.sha`)
+}
+
 const CWD_WORD_RX = /^(?:\$PWD\b|\$\{PWD\}|\$\(pwd\)|`pwd`)/
+const HOME_WORD_RX = /^\$(?:HOME\b|\{HOME\})/
+// A find -exec terminator, masked before the allowlist pass splits on `;` (see gateDecision).
+const FIND_EXEC_END_RX = /\\;|';'|";"/g
+const FIND_EXEC_END_MARK = '\u241F'
 
 // `find ROOT... EXPR`: its -name pattern never spells a path and the shell expands nothing, but
 // find walks ROOT and acts on every match (`find store -name 'egress*' -delete`, didi 50862).
@@ -350,9 +365,10 @@ export function findHitsAllowlist(seg, allowlistPath = DEFAULT_ALLOWLIST_PATH, c
   if (!expr.some(writes)) return false
   const storeDir = dirname(allowlistPath)
   const historyDir = join(storeDir, HISTORY_DIRNAME)
+  const record = baselineRecordPath(allowlistPath)
   const covers = (root) => {
-    const r = realOrSelf(resolve(cwd, expandHome(root.replace(/\)+$/, '').replace(CWD_WORD_RX, cwd))))
-    return [storeDir, realOrSelf(storeDir)].some((d) => isAtOrBelow(d, r)) ||
+    const r = realOrSelf(resolve(cwd, expandHome(root.replace(/\)+$/, '').replace(HOME_WORD_RX, homedir()).replace(CWD_WORD_RX, cwd))))
+    return [storeDir, realOrSelf(storeDir), dirname(record), realOrSelf(dirname(record))].some((d) => isAtOrBelow(d, r)) ||
       [historyDir, realOrSelf(historyDir)].some((h) => isAtOrBelow(r, h))
   }
   if (!(roots.length ? roots : ['.']).some(covers)) return false
@@ -362,7 +378,7 @@ export function findHitsAllowlist(seg, allowlistPath = DEFAULT_ALLOWLIST_PATH, c
     if (/^-i?name$/.test(expr[k])) names.push({ pat: expr[k + 1], ci: expr[k] === '-iname' })
   }
   if (!names.length) return true
-  const objects = [ALLOWLIST_BASENAME, HISTORY_DIRNAME, 'history.log', HISTORY_ENTRY_SAMPLE]
+  const objects = [ALLOWLIST_BASENAME, HISTORY_DIRNAME, 'history.log', HISTORY_ENTRY_SAMPLE, basename(record)]
   return names.some(({ pat, ci }) => {
     const rx = globComponentRx(pat)
     if (!rx) return true
@@ -755,9 +771,6 @@ export function gateDecision(toolName, toolInput, opts = {}) {
     // Returned after the scheduler checks below: `find . -exec at now` is a scheduler call first.
     let allowlistDeny = null
     for (const seg of naiveSegs) {
-      // also inside a subshell or a group, and after `--`: `(cd store`, `{ cd -- store`
-      const cd = /^[({]?\s*(?:cd|pushd)\s+(?:--\s+)?(['"]?)([^\s'";&|()]+)\1\s*\)?$/.exec(seg)
-      if (cd) segCwd = resolve(segCwd, expandHome(cd[2]))
       // Match the self-pace bash patterns against the shell-normalised segment so a
       // `\/loop` / `$IFS/loop` evasion (which bash resolves to `/loop` at exec) is
       // still caught; the scheduler/store/API checks below use the RAW seg (scoped).
@@ -772,8 +785,19 @@ export function gateDecision(toolName, toolInput, opts = {}) {
       if (SCHEDULE_STORE_RX.test(seg) && WRITE_INTENT_RX.test(seg)) return { deny: true, reason: 'store-write-bash' }
       // dashboard schedule API: block WRITE methods only (GET list/pending is legit)
       if (SCHEDULE_API_RX.test(seg) && HTTP_WRITE_RX.test(seg)) return { deny: true, reason: 'schedule-api-write' }
-      // the egress allowlist: a plain read only (EGRESSSELFEDIT824)
-      if (!allowlistDeny && !allowlistBashSegmentAllowed(seg, { ...opts, cwd: segCwd })) allowlistDeny = { deny: true, reason: 'egress-allowlist' }
+    }
+    // the egress allowlist: a plain read only (EGRESSSELFEDIT824). Its own pass, on segments cut
+    // where the shell cuts for find: `\;` (or ';' / ";") ends a find -exec, it is an argument, not
+    // a separator. The naive split cut `find store -exec cat {} \; -delete` in two, the reader
+    // -exec made the first half a read and `-delete` stood alone: ALLOW (didi 51495 A4-1).
+    for (const seg of splitSegments(safeCommand.replace(FIND_EXEC_END_RX, ` ${FIND_EXEC_END_MARK} `))) {
+      // also inside a subshell or a group, and after `--`: `(cd store`, `{ cd -- store`;
+      // `$PWD`, `${PWD}`, `$(pwd)`, `$HOME` resolve as the shell resolves them (didi 51495 A4-2)
+      const cd = /^[({]?\s*(?:cd|pushd)\s+(?:--\s+)?(['"]?)((?:\$\(pwd\))?[^\s'";&|()]+)\1\s*\)?$/.exec(seg)
+      if (cd) segCwd = resolve(segCwd, expandHome(cd[2].replace(CWD_WORD_RX, segCwd).replace(HOME_WORD_RX, homedir())))
+      if (!allowlistDeny && !allowlistBashSegmentAllowed(seg.split(FIND_EXEC_END_MARK).join(' \\; '), { ...opts, cwd: segCwd })) {
+        allowlistDeny = { deny: true, reason: 'egress-allowlist' }
+      }
     }
     // launchd directory: block a write INTO it (a read or a copy out of it is legit).
     // Heredoc bodies that feed TEXT are blanked, so a message DESCRIBING an install

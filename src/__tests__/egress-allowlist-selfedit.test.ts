@@ -488,6 +488,37 @@ describe('50862 glob gaps: $PWD, subshell, group, cd --, find', () => {
     expect(bash(command).deny).toBe(false)
   })
 
+  // didi 51495: A4-1 the naive split cut a find at `\;`, so a reader -exec made the first half a
+  // read and the acting rest stood alone; A4-2 `cd` into $PWD/... was not resolved; A4-3 the
+  // baseline record under ~/.marveen was reachable by a glob or a find (the gate's own home).
+  it.each([
+    String.raw`find store -name 'egress*' -exec cat {} \; -delete`,
+    String.raw`find store -name 'egress*' -exec grep -q . {} \; -exec rm {} \;`,
+    "find store -name 'egress*' -exec cat {} ';' -delete",
+    'cd "$PWD/store" && rm e*',
+    'cd $(pwd)/store && rm e*',
+    'cd ${PWD}/store && rm e*',
+    'rm ~/.marveen/*.sha',
+    'rm $HOME/.marveen/egress*',
+    'cp x ~/.marveen/*.sha',
+    "find ~/.marveen -name '*.sha' -delete",
+    'find $HOME/.marveen -delete',
+  ])('DENY (51495): %s', (command) => {
+    expect(bash(command)).toEqual({ deny: true, reason: 'egress-allowlist' })
+  })
+
+  it.each([
+    String.raw`find store -name 'egress*' -exec cat {} \;`,
+    String.raw`find . -name '*.ts' -exec grep -l needle {} \;`,
+    'cd "$PWD/store" && ls e*',
+    'cd /tmp && rm e*',
+    'ls ~/.marveen/*.sha',
+    "find ~/.marveen -name 'cache*' -delete",
+    'rm ~/.marveen/skill/*.json',
+  ])('ALLOW (51495 controls): %s', (command) => {
+    expect(bash(command).deny).toBe(false)
+  })
+
   it('a find whose root is a symlinked alias INSIDE the history is denied though no word names it (F6)', () => {
     symlinkSync(join(store, HISTORY_DIRNAME), join(root, 'h'))
     expect(bash('find h -type f -delete')).toEqual({ deny: true, reason: 'egress-allowlist' })
@@ -574,6 +605,22 @@ describe('50862 baseline: memory, a failed report, ctime, a restart', () => {
     rmSync(join(store, HISTORY_DIRNAME), { recursive: true, force: true })
     writeFileSync(allowlist, JSON.stringify({ domains: ['while-down.example'] }))
     watchEgressAllowlistBaseline(store, notify, 60_000)()
+    expect(reports).toEqual([])
+  })
+
+  it('a boot that finds a history but no record REPORTS the missing record (51495 A4-3: rm the record, then rewrite the history)', () => {
+    const mem = baselineMemoryFile(store, root)
+    watchEgressAllowlistBaseline(store, notify, 60_000, mem)()
+    rmSync(mem)
+    watchEgressAllowlistBaseline(store, notify, 60_000, mem)()
+    expect(reports).toHaveLength(1)
+    expect(reports[0]).toContain(`the baseline record ${mem} is missing or unreadable`)
+  })
+
+  it('POSITIVE CONTROL: a first boot with neither history nor record, and a reboot with both, stay quiet', () => {
+    const mem = baselineMemoryFile(store, root)
+    watchEgressAllowlistBaseline(store, notify, 60_000, mem)()
+    watchEgressAllowlistBaseline(store, notify, 60_000, mem)()
     expect(reports).toEqual([])
   })
 
