@@ -13,16 +13,19 @@ import {
   HISTORY_DIRNAME,
 } from '../web/egress-allowlist-baseline.js'
 import { MAIN_AGENT_ID } from '../config.js'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// FORK (6525aba3 A4 port): temp dirs through tmpDirs(), the fork's tmp-dirs.test.ts guard.
+const mkTmp = tmpDirs()
 
 let root: string
 let store: string
 let allowlist: string
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'egress-selfedit-'))
+  root = mkTmp('egress-selfedit-')
   store = join(root, 'store')
   mkdirSync(store)
   allowlist = join(store, 'egress-allowlist.json')
