@@ -8,10 +8,10 @@
 // reason, both gates name the way out. A visible send elsewhere in the command keeps the
 // ordinary wording. What this does NOT protect (didi 51494, measured): the gates cannot tell
 // a send word in a string literal from a real send in the body, so a REAL send inside a
-// heredoc body is offered the way out too by the hard gate (the Python copy gate lets it pass
-// as an audited copy, with no way-out line), and a script run as a file is read by neither gate
-// (`python3 /tmp/real-send.py` passes, on the base as well). Reading the body by its consumer,
-// then checking file-run scripts, are separate cards (marveen 51498, in that order).
+// heredoc body is offered the way out too, by both gates (bc98d6d5 T1: the copy gate used to
+// audit that body as a letter and pass it, exit 0), and a script run as a file is read by
+// neither gate (`python3 /tmp/real-send.py` passes, on the base as well). Checking file-run
+// scripts is a separate card (marveen 51498).
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import { rmSync, writeFileSync } from 'node:fs'
@@ -34,6 +34,9 @@ const WAY_OUT = 'A heredoc torzse kodnak olvasodik'
 const STRING_ONLY_PATCH = "python3 - <<'PY'\nT = \"await mail.sendEmail({ html: '<b>x</b>' })\"\nprint(len(T))\nPY"
 const PATCH = "python3 - <<'PY'\nx = 1\nT = f\"await mail.sendEmail({{ html: '<b>{x}</b>' }})\"\nprint(len(T))\nPY"
 const VISIBLE_SEND_AND_PATCH = `sendmail a@b.hu < "$BODY"; ${PATCH}`
+const REAL_PY_HEREDOC_SEND = "python3 - <<'PY'\nimport smtplib\nsmtplib.SMTP('h').sendmail('a@b.hu', 'c@d.hu', 'Hello there, this is a test.')\nPY"
+const REAL_NODE_HEREDOC_SEND = "node - <<'JS'\nconst { Resend } = require('resend')\nnew Resend(k).emails.send({ to: 'a@b.hu', text: 'Hello there' })\nJS"
+const SEND_PY_LETTER = "python3 scripts/support-mail/send.py --to a@b.hu --subject Hello <<'EOF'\nHello there, this is a test.\nEOF"
 const PLAIN_CODE_SEND = "python3 -c \"import smtplib; smtplib.SMTP('h').sendmail('a', 'b', open('<b>').read())\""
 
 let dir: string
@@ -103,6 +106,17 @@ describe('copy gate: the unreadable-letter deny names the way out when a heredoc
     expect(r.code).toBe(2)
     expect(r.err).toContain('a levelet nem tudtam megvizsgalni')
     expect(r.err).toContain(WAY_OUT)
+  })
+
+  it('a real send that stands only in a heredoc body is denied, not audited as a letter (bc98d6d5 T1)', () => {
+    // On 7c63ae96f both exited 0: the copy gate took the code as the letter and found it clean.
+    for (const cmd of [REAL_PY_HEREDOC_SEND, REAL_NODE_HEREDOC_SEND]) {
+      const r = copyGate(cmd)
+      expect({ cmd, code: r.code }).toEqual({ cmd, code: 2 })
+      expect({ cmd, wayOut: r.err.includes(WAY_OUT) }).toEqual({ cmd, wayOut: true })
+    }
+    // CONTROL: a letter piped to the repo's sender by heredoc is still audited, and passes
+    expect(copyGate(SEND_PY_LETTER).code).toBe(0)
   })
 
   it('a string-only Python patch script passes the copy gate (bc98d6d5)', () => {

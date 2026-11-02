@@ -2380,6 +2380,12 @@ def main():
             http_channel_gate(cmd)  # exits if it is a human-facing HTTP send; else returns
             inter_agent_homoglyph_gate(cmd)  # exits; a no-op pass for anything else
         text, unreadable = collect_bash_body(cmd)
+        # bc98d6d5 T1 (didi 51624, marveen 10006089): a send that stands ONLY in a heredoc
+        # body read as a program has no letter to audit: the body is code, and auditing it
+        # as prose let a real send through (exit 0) while the hard-gate twin denied it.
+        # Where the twins differ, the stricter one is right: deny, with the way out.
+        if not unreadable and heredoc_body_hit(cmd):
+            unreadable = "a kuldes egy kodkent olvasott heredoc torzsben all, abbol nem valaszthato le a level szovege"
     else:
         sys.exit(0)
 
