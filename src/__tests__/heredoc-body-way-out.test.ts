@@ -1,5 +1,8 @@
 // 6525aba3 A2, marveen 50880: a heredoc body read as a program is denied when a send word
 // stands in it, even inside a string literal (a patch script editing mail code, a gate test).
+// bc98d6d5 narrowed that for Python bodies: their plain string literals are masked, so a
+// string-only patch script passes; a body the gates cannot mask (an f-string, a runner word,
+// a script-path literal) is still judged whole, and that is the deny the way out is for.
 // That over-protection is accepted, measured at 12 false denials on 14 970 real fleet commands
 // in 7 days and 0 real sends. Its price must be one step: when the heredoc body is the WHOLE
 // reason, both gates name the way out. A visible send elsewhere in the command keeps the
@@ -25,8 +28,10 @@ const WAY_OUT = 'A heredoc torzse kodnak olvasodik'
 
 // The shape of the real false denials: a Python patch script whose string holds a mailer call.
 // The `<b>` makes the copy gate's body reader take `< b` as a stdin file it cannot read, which
-// is how the real ones reached its fail-closed "unreadable" branch.
-const PATCH = "python3 - <<'PY'\nT = \"await mail.sendEmail({ html: '<b>x</b>' })\"\nprint(len(T))\nPY"
+// is how the real ones reached its fail-closed "unreadable" branch. Since bc98d6d5 the plain
+// string form passes (STRING_ONLY_PATCH); the f-string keeps the body judged whole (PATCH).
+const STRING_ONLY_PATCH = "python3 - <<'PY'\nT = \"await mail.sendEmail({ html: '<b>x</b>' })\"\nprint(len(T))\nPY"
+const PATCH = "python3 - <<'PY'\nx = 1\nT = f\"await mail.sendEmail({{ html: '<b>{x}</b>' }})\"\nprint(len(T))\nPY"
 const VISIBLE_SEND_AND_PATCH = `sendmail a@b.hu < "$BODY"; ${PATCH}`
 const PLAIN_CODE_SEND = "python3 -c \"import smtplib; smtplib.SMTP('h').sendmail('a', 'b', open('<b>').read())\""
 
@@ -63,6 +68,11 @@ describe('hard gate (sub-agents): a heredoc-only deny names the way out', () => 
     expect(heredocBodyHit("cat <<'EOF'\nsendEmail(x)\nEOF")).toBe(false)
   })
 
+  it('a string-only Python patch script is not denied at all (bc98d6d5)', () => {
+    expect(gateDecision('Bash', { command: STRING_ONLY_PATCH })).toEqual({ deny: false })
+    expect(hardGate(STRING_ONLY_PATCH)).not.toContain('"permissionDecision":"deny"')
+  })
+
   it('gives kind heredoc-body to the heredoc-only deny, the ordinary deny otherwise', () => {
     expect(gateDecision('Bash', { command: PATCH })).toEqual({ deny: true, kind: 'heredoc-body' })
     expect(gateDecision('Bash', { command: VISIBLE_SEND_AND_PATCH })).toEqual({ deny: true })
@@ -92,6 +102,10 @@ describe('copy gate: the unreadable-letter deny names the way out when a heredoc
     expect(r.code).toBe(2)
     expect(r.err).toContain('a levelet nem tudtam megvizsgalni')
     expect(r.err).toContain(WAY_OUT)
+  })
+
+  it('a string-only Python patch script passes the copy gate (bc98d6d5)', () => {
+    expect(copyGate(STRING_ONLY_PATCH).code).toBe(0)
   })
 
   it('a visible send or a plain code send keeps the ordinary wording only', () => {

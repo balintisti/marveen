@@ -1422,6 +1422,11 @@
       "expected": true
     },
     {
+      "name": "[bc98d6d5] an unterminated literal with a later quote cannot swallow the code up to that quote",
+      "cmd": "python3 - <<'PY'\nx = 'open\nimport smtplib\ny = 'z\nPY",
+      "expected": true
+    },
+    {
       "name": "[bc98d6d5] a raw string ending in an escaped quote does not swallow the code after it",
       "cmd": "python3 - <<'PY'\nx = r'\\''\nimport smtplib\nPY",
       "expected": true
