@@ -1465,6 +1465,21 @@
       "name": "[6525aba3 A2 twin, didi 51624 T3] a newline between the dot and send is still the Resend SDK call in both twins",
       "cmd": "node -e \"new Resend(k).emails.\n  send({ to: 'a@b.c' })\"",
       "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 twin, didi 51624 T2] a methodless curl to the Resend list endpoint is a send in both twins",
+      "cmd": "curl https://api.resend.com/emails",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 twin, didi 51624 T2] curl -s -H to the Resend list endpoint is a send in both twins",
+      "cmd": "curl -s -H 'Authorization: Bearer re_x' https://api.resend.com/emails",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 twin, didi 51624 T2] an explicit GET to Resend is a send in both twins",
+      "cmd": "curl -X GET https://api.resend.com/emails/abc123",
+      "expected": true
     }
   ]
 }

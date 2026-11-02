@@ -173,6 +173,9 @@ _RESEND_TARGET = re.compile(
 # torzs-flagekbol); ha nem allapithato meg (valtozo, config-fajl, csonka flag),
 # marad a fail-closed. Egy "nincs felismerheto torzs -> atmegy" szabaly a
 # kaput utne ki, ezert ILYEN AG NINCS.
+# 2026-11-02 (didi 51624 T2, marveen 10006089): a READ verdict mar NEM enged at a
+# kuldes-dontesben (a JS iker metodus-vak, es a szigorubb iker a helyes); a verdikt
+# csak a RESENDCFG926 konfig-kivetelhez es a csatorna-feed GET-hez kell.
 _CURL_BODY_OPTS = {
     "-d", "--data", "--data-raw", "--data-binary", "--data-urlencode",
     "--data-ascii", "-F", "--form", "--form-string", "--json",
@@ -737,7 +740,11 @@ def _head_is_send(toks, depth: int) -> bool:
             # 'unknown' (variable method, truncated flag, -K config file that may
             # carry its own URL) stays fail-closed exactly as before.
             return False
-        return verdict != "read"
+        # didi 51624 T2, marveen 10006089: where the twins differ, the stricter one is right.
+        # The JS hook denies every curl/wget to api.resend.com, so a read (GET/HEAD, -G) is
+        # a send here too; RESENDGATE826's read pass is gone. RESENDCFG926 above stays until
+        # marveen decides it (card 6525aba3, 51634).
+        return True
     return False
 
 

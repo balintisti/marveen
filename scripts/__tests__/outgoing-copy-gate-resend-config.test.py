@@ -35,7 +35,8 @@ CASES = [
     ("DELETE /webhooks/<id>", "curl -s -X DELETE https://api.resend.com/webhooks/e3cf6f6a-60ff -H 'Authorization: Bearer X'", False),
     ("POST /domains", f"curl -s -X POST https://api.resend.com/domains {A} -d '{{\"name\":\"x.hu\"}}'", False),
     ("POST /domains/<id>/verify", "curl -s -X POST https://api.resend.com/domains/abc123/verify -H 'Authorization: Bearer X'", False),
-    ("GET /webhooks still passes", "curl -s https://api.resend.com/webhooks -H 'Authorization: Bearer X'", False),
+    # didi 51624 T2, marveen 10006089: a read is a send now, like the JS twin
+    ("GET /webhooks is denied like the JS twin", "curl -s https://api.resend.com/webhooks -H 'Authorization: Bearer X'", True),
     # --- must STAY a send ---
     ("POST /emails", f"curl -s -X POST https://api.resend.com/emails {A} -d '{{\"to\":\"a@b.hu\"}}'", True),
     ("POST /emails/batch", f"curl -s -X POST https://api.resend.com/emails/batch {A} -d '[]'", True),
