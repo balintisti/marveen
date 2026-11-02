@@ -257,12 +257,12 @@ describe('gateDecision Bash: stacked value flags before the script (card a7ea5b8
 })
 
 // marveen 27615 (card 6525aba3), upstream 63a392c8 NOT taken: upstream made this
-// sub-agent gate pass a read-only Resend query (GET/HEAD, no body), like the main-agent
-// copy gate. The fork keeps the stricter rule on purpose: a sub-agent is denied EVERY
-// Resend curl, reads included. The shared send-invocation-cases.json cannot carry two
-// verdicts, so the ruling is pinned here, ON THE DIVERGENCE: the same inputs must
-// deny here AND pass the sibling. A change aligning EITHER gate to the other goes
-// red here -- that is a decision for the coordinator, not a cleanup.
+// sub-agent gate pass a read-only Resend query (GET/HEAD, no body). The fork keeps the
+// stricter rule on purpose: a sub-agent is denied EVERY Resend curl, reads included.
+// marveen 10006089 ("where the twins differ, the stricter one is right") made the
+// main-agent copy gate deny the same reads, so the old divergence is gone: both gates
+// must deny these inputs. A change letting EITHER gate pass a Resend read goes red
+// here -- that is a decision for the coordinator, not a cleanup.
 describe('gateDecision Bash: a read-only Resend query still denies HERE (marveen 27615, 63a392c8 not taken)', () => {
   const bash = (command: string) => gateDecision('Bash', { command })
   const READS = [
@@ -279,12 +279,14 @@ print(json.dumps([g.is_send_invocation(c) for c in json.load(sys.stdin)]))
 `, gate], { encoding: 'utf-8', input: JSON.stringify(cmds) })
     return JSON.parse(out.trim())
   }
-  it('denies every read form here, while the main-agent copy gate passes the same commands', () => {
+  it('denies every read form here, and the main-agent copy gate denies the same commands (marveen 10006089)', () => {
     for (const c of READS) expect(bash(c).deny, c).toBe(true)
-    expect(siblingVerdicts(READS)).toEqual([false, false, false])
+    expect(siblingVerdicts(READS)).toEqual([true, true, true])
   })
   it('CONTROL: the same read shape to a non-Resend host passes here', () => {
     expect(bash('curl https://api.example.com/domains').deny).toBe(false)
     expect(bash('curl -I https://example.com/').deny).toBe(false)
+    // and the sibling can still say no, so its [true, true, true] above is about Resend
+    expect(siblingVerdicts(['curl https://api.example.com/domains', 'curl -I https://example.com/'])).toEqual([false, false])
   })
 })
