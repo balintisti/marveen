@@ -338,7 +338,10 @@ function baselineRecordPath(allowlistPath) {
 const CWD_WORD_RX = /^(?:\$PWD\b|\$\{PWD\}|\$\(pwd\)|`pwd`)/
 const HOME_WORD_RX = /^\$(?:HOME\b|\{HOME\})/
 // A find -exec terminator, masked before the allowlist pass splits on `;` (see gateDecision).
-const FIND_EXEC_END_RX = /\\;|';'|";"/g
+// Only a WHOLE word is one: a word that is `\;`, `';'` or `";"` alone reaches its command as a
+// literal `;`, so it never separates. Glued to other text it may hide a real separator: in
+// `echo x\; rm f`, `echo 'a';'rm' f` and `echo "a";"rm" f` the shell runs the rm (didi 51654 L1).
+const FIND_EXEC_END_RX = /(?<=^|\s)(?:\\;|';'|";")(?=$|[\s;&|)])/g
 const FIND_EXEC_END_MARK = '\u241F'
 
 // `find ROOT... EXPR`: its -name pattern never spells a path and the shell expands nothing, but

@@ -507,6 +507,38 @@ describe('50862 glob gaps: $PWD, subshell, group, cd --, find', () => {
     expect(bash(command)).toEqual({ deny: true, reason: 'egress-allowlist' })
   })
 
+  // didi 51654: L1 the terminator mask ran on any `\;` / ';' / ";" text, so a real separator glued
+  // to it vanished and the rm became an echo argument (base DENY, 58080e315 ALLOW; bash and zsh run
+  // the rm). L3 K3: the ";" form had no case; K8: a cd into $HOME was not pinned; K14: the gate's
+  // record key must be the baseline's (12 hex), a find naming the exact record proves it.
+  it.each([
+    String.raw`echo x\; rm store/egress-allowlist.json`,
+    "echo 'a';'rm' store/egress-allowlist.json",
+    'echo "a";"rm" -f store/egress-allowlist.json',
+    String.raw`find store -name 'x' -exec cat {} \;; rm store/egress-allowlist.json`,
+    'find store -name \'egress*\' -exec cat {} ";" -delete',
+    'cd $HOME/.marveen && rm *.sha',
+    'cd ${HOME}/.marveen && rm egress*',
+  ])('DENY (51654): %s', (command) => {
+    expect(bash(command)).toEqual({ deny: true, reason: 'egress-allowlist' })
+  })
+
+  it('DENY (51654 K14): a glob that spells only the record\'s LENGTH hits it, so the gate keys it as the baseline does', () => {
+    // Its name is denied by itself, whatever the key; a `?` glob names nothing, so only the
+    // gate's own record path (key length included) can make it a hit.
+    const stem = baselineMemoryFile(store).split('/').pop()!.slice(0, -'.sha'.length)
+    expect(bash(`rm ~/.marveen/${'?'.repeat(stem.length)}.sha`)).toEqual({ deny: true, reason: 'egress-allowlist' })
+    // CONTROL: one `?` more matches no record, and an rm under ~/.marveen is otherwise allowed
+    expect(bash(`rm ~/.marveen/${'?'.repeat(stem.length + 1)}.sha`).deny).toBe(false)
+  })
+
+  it.each([
+    String.raw`echo x \; rm store/egress-allowlist.json`,
+    'cd $HOME/.marveen && ls *.sha',
+  ])('ALLOW (51654 controls: a lone \\; is an argument, a read stays a read): %s', (command) => {
+    expect(bash(command).deny).toBe(false)
+  })
+
   it.each([
     String.raw`find store -name 'egress*' -exec cat {} \;`,
     String.raw`find . -name '*.ts' -exec grep -l needle {} \;`,

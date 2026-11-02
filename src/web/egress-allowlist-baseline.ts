@@ -22,7 +22,11 @@
 // not make the file unwritable. That needs an OS-level owner or flag, an owner decision.
 // The watcher's own record of the last sha lives OUTSIDE store/ (baselineMemoryFile), so a
 // history wiped while the dashboard is down is still reported at boot; deleting that record too
-// brings back the old first-run behaviour, and that is the remaining limit.
+// brings back the old first-run behaviour, and that is the remaining limit. Measured (didi 51654
+// L2): record AND history removed, then the file changed: 0 reports; record AND newest history
+// entry both rewritten to the new sha: 0 reports. Any state this user can write, it can forge in
+// step, so no local record closes that. What keeps a sub-agent from it is self-pace-gate.mjs
+// denying writes to all three; the OS-level owner above is what would close it for real.
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync, realpathSync, watchFile, unwatchFile, type Stats } from 'node:fs'
 import { homedir } from 'node:os'
