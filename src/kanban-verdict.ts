@@ -95,8 +95,16 @@ export function verdictToken(line: string): string {
   return normalize(cut.length ? rest.slice(0, Math.min(...cut)) : rest)
 }
 
-/** NYITOTT TETEL, with or without a severity in parentheses after it. */
-const OPEN_TOKEN = /^NYITOTT TETEL(?: \([^)]*\))?$/
+/**
+ * NYITOTT TETEL, and whatever the writer put after it before the `|` -- card 1e5c33c9.
+ * The token used to be compared whole (only a "(severity)" allowed after it), so
+ * "VERDIKT: NYITOTT TETEL @28d1f4c1a (mandark, ...)" with no `|` read as no verdict
+ * at all and the done move went through over it. Measured 2026-11-03 on 1637 cards:
+ * 5 such lines (an `@<sha>` or a `:` after the token), one card already closed over
+ * one (83e09f55). An open item is the reading that fails safe: a close it wrongly
+ * refuses has `override_reason`, a close it wrongly allows has no way back.
+ */
+const OPEN_TOKEN = /^NYITOTT TETEL(?![A-Z0-9])/
 
 /** Each author's last verdict line, when it says the author has an open item. */
 export function openVerdicts(comments: VerdictComment[]): OpenVerdict[] {
@@ -118,7 +126,7 @@ export function openVerdicts(comments: VerdictComment[]): OpenVerdict[] {
   return open
 }
 
-/** The token a reviewer closes with. Compared whole, like OPEN_TOKEN. */
+/** The token a reviewer closes with. Compared whole (OPEN_TOKEN is a prefix: see there). */
 const CLOSED_TOKEN = 'NINCS NYITOTT TETEL'
 
 /**
