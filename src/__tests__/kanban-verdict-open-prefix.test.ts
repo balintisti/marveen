@@ -2,7 +2,7 @@
 // token and no `|` read as no verdict, so the done gate let the card close over it.
 // The lines below are the measured ones (2026-11-03, 5 of 1637 cards), shortened.
 import { describe, it, expect } from 'vitest'
-import { openVerdicts, type VerdictComment } from '../kanban-verdict.js'
+import { openVerdicts, endsOnClosingVerdict, type VerdictComment } from '../kanban-verdict.js'
 
 function c(id: number, author: string, content: string): VerdictComment {
   return { id, author, content, created_at: id }
@@ -34,5 +34,23 @@ describe('an open verdict token followed by more than a severity (card 1e5c33c9)
   it('a closing token with the same tail is not open, and a longer word is not the token', () => {
     expect(openVerdicts([c(1, 'didi', 'VERDIKT: NINCS NYITOTT TETEL @28d1f4c1a (didi, 2026-10-21)')])).toEqual([])
     expect(openVerdicts([c(1, 'didi', 'VERDIKT: NYITOTT TETELSZAM 3')])).toEqual([])
+  })
+})
+
+// The closing side, same card (marveen's decision 2026-11-03): a parenthetical scope after
+// NINCS NYITOTT TETEL closes; didi measured 158 live "(szallitas)" lines read as not closing.
+describe('a closing verdict with a parenthetical scope (card 1e5c33c9)', () => {
+  const c = (content: string, author = 'friday') => endsOnClosingVerdict({ author, content })
+  it('the measured shape closes, with either separator', () => {
+    expect(c('VERDIKT: NINCS NYITOTT TETEL (szallitas) | eles (friday, a fenti meres)')).toBe(true)
+    expect(c('VERDIKT: NINCS NYITOTT TÉTEL (szállítás) -- b40')).toBe(true)
+  })
+  it('the bare token still closes', () => {
+    expect(c('VERDIKT: NINCS NYITOTT TETEL')).toBe(true)
+  })
+  it('anything else after the token does not close', () => {
+    expect(c('VERDIKT: NINCS NYITOTT TETEL @28d1f4c1a')).toBe(false)
+    expect(c('VERDIKT: NINCS NYITOTT TETEL (szallitas) de a teszt hianyzik')).toBe(false)
+    expect(c('VERDIKT: NYITOTT TETEL (szallitas) | b41-re var')).toBe(false)
   })
 })

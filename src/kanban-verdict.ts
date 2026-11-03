@@ -126,8 +126,14 @@ export function openVerdicts(comments: VerdictComment[]): OpenVerdict[] {
   return open
 }
 
-/** The token a reviewer closes with. Compared whole (OPEN_TOKEN is a prefix: see there). */
-const CLOSED_TOKEN = 'NINCS NYITOTT TETEL'
+/**
+ * The token a reviewer closes with, and a parenthetical after it -- card 1e5c33c9 (marveen's
+ * decision, 2026-11-03): "VERDIKT: NINCS NYITOTT TETEL (szallitas) | ..." is a scoped close,
+ * and didi measured 158 live lines of that shape the idle guard read as not closing. Only a
+ * parenthetical: anything else after the token (an `@<sha>`, a word) stays not closing, the
+ * side that wakes the assignee rather than silences the guard. OPEN_TOKEN is a prefix: see there.
+ */
+const CLOSED_TOKEN = /^NINCS NYITOTT TETEL(?: \([^)]*\))?$/
 
 /**
  * Does this ONE comment end on a closing verdict -- is its last column-0 `VERDIKT:` line
@@ -146,7 +152,7 @@ export function endsOnClosingVerdict(comment: Pick<VerdictComment, 'author' | 'c
     const line = withoutOwnStamp(raw, comment.author)
     if (line.startsWith(VERDICT_PREFIX)) last = line
   }
-  return last !== null && verdictToken(last) === CLOSED_TOKEN
+  return last !== null && CLOSED_TOKEN.test(verdictToken(last))
 }
 
 const LEFTOVER_PREFIX = 'MARADEK:'
