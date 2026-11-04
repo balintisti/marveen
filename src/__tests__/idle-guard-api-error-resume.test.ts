@@ -6,6 +6,9 @@
 // agent; a targeted message does. Design (marveen, card comments 36878 / 36879): two consecutive
 // ticks, ONE message per streak, a repeat inside 10 minutes goes to the coordinator, no resume while
 // the background-wait indicator shows.
+// Card 46e6bfb0 (marveen 53925): when the transcript can be read, PROGRESS decides, not the 10 minutes:
+// the coordinator is told only on the API_ERROR_PARK_AFTER-th error in a row with no successful
+// response since the resume; any response zeroes the count. Unmeasured progress keeps the time rule.
 //
 // Part 1 is the pure decision. Part 2 runs the watcher's own tick() with the REAL pane classifier,
 // the REAL detector and the REAL idle_guard_state persistence (in-memory sqlite); only tmux, the
@@ -20,6 +23,7 @@ import {
   API_ERROR_RESUME_FACTS,
   buildFleetAlert,
   API_ERROR_REPEAT_MS,
+  API_ERROR_PARK_AFTER,
   NO_IDLE_STATE,
   type IdleAgentInput,
   type IdleAgentState,
@@ -56,7 +60,7 @@ function runTicks(
     const r = decideIdleAlert({ ...base, ...over }, s, th, now)
     s = r.next
     if (r.decision.alert && r.decision.reason === 'resume-api-error' && stampResumes) {
-      s = { ...s, lastApiErrorResumeAt: now, apiErrorHandledSince: s.apiErrorSinceMs }
+      s = { ...s, lastApiErrorResumeAt: now, apiErrorHandledSince: s.apiErrorSinceMs, apiErrorResumesNoProgress: (s.apiErrorResumesNoProgress ?? 0) + 1 }
     }
     reasons.push(r.decision.reason)
     decisions.push(r.decision)
@@ -169,6 +173,61 @@ describe('decideIdleAlert -- resume-api-error', () => {
   })
 })
 
+describe('decideIdleAlert -- progress, not time (card 46e6bfb0)', () => {
+  const OK = { apiErrorProgressSinceResume: true }
+  const NO = { apiErrorProgressSinceResume: false }
+
+  it('error, resume, a successful response, error again inside 10 minutes: resumed, NOT escalated', () => {
+    const first = runTicks([ERR, ERR], T0)
+    const t1 = T0 + 2 * TICK
+    const second = runTicks([CLEAN, OK, OK], t1, first.state)
+    expect(t1 + 2 * TICK - (first.state.lastApiErrorResumeAt as number)).toBeLessThan(API_ERROR_REPEAT_MS)
+    expect(second.reasons.slice(1)).toEqual(['api-error-confirming', 'resume-api-error'])
+    expect(second.state.apiErrorResumesNoProgress).toBe(1)          // zeroed, then this resume
+  })
+
+  it(`${API_ERROR_PARK_AFTER} errors in a row with no response: resumed twice, the coordinator told on the third`, () => {
+    expect(API_ERROR_PARK_AFTER).toBe(3)
+    const a = runTicks([ERR, ERR], T0)
+    const b = runTicks([CLEAN, NO, NO], T0 + 2 * TICK, a.state)      // inside 10 minutes: still a resume
+    expect(b.reasons.slice(1)).toEqual(['api-error-confirming', 'resume-api-error'])
+    expect(b.state.apiErrorResumesNoProgress).toBe(2)
+    const c = runTicks([CLEAN, NO, NO, NO, NO], T0 + 5 * TICK, b.state)
+    expect(c.reasons.slice(1, 3)).toEqual(['api-error-confirming', 'api-error-repeat'])
+    const d = c.decisions[2]
+    expect(d.alert && d.reason === 'api-error-repeat' && d.errorsWithoutProgress).toBe(3)
+    expect(c.reasons).not.toContain('resume-api-error')
+    expect(c.reasons.filter((r) => r === 'api-error-repeat')).toHaveLength(1)   // one alert per streak
+  })
+
+  it('time does not matter when progress is measured: the third failed error hours later still escalates', () => {
+    const a = runTicks([ERR, ERR], T0)
+    const b = runTicks([CLEAN, NO, NO], T0 + 2 * 60 * MIN, a.state)
+    expect(b.reasons[2]).toBe('resume-api-error')
+    const c = runTicks([CLEAN, NO, NO], T0 + 5 * 60 * MIN, b.state)
+    expect(c.reasons[2]).toBe('api-error-repeat')
+  })
+
+  it('any successful response zeroes the count: after two failed resumes a response buys two more', () => {
+    const a = runTicks([ERR, ERR], T0)
+    const b = runTicks([CLEAN, NO, NO], T0 + 2 * TICK, a.state)
+    const c = runTicks([CLEAN, OK, OK], T0 + 5 * TICK, b.state)
+    expect(c.reasons[2]).toBe('resume-api-error')
+    const d = runTicks([CLEAN, NO, NO], T0 + 8 * TICK, c.state)
+    expect(d.reasons[2]).toBe('resume-api-error')
+    const e = runTicks([CLEAN, NO, NO], T0 + 11 * TICK, d.state)
+    expect(e.reasons[2]).toBe('api-error-repeat')
+  })
+
+  it('unmeasured progress (null) keeps the 10-minute rule, and its alert carries no error count', () => {
+    const a = runTicks([ERR, ERR], T0)
+    const b = runTicks([CLEAN, { apiErrorProgressSinceResume: null }, { apiErrorProgressSinceResume: null }], T0 + 2 * TICK, a.state)
+    expect(b.reasons[2]).toBe('api-error-repeat')
+    const d = b.decisions[2]
+    expect(d.alert && d.reason === 'api-error-repeat' && d.errorsWithoutProgress).toBeNull()
+  })
+})
+
 describe('the message and the alert text', () => {
   it('names the error time in Europe/Budapest (CEST in October: UTC+2)', () => {
     expect(buildApiErrorResumeMessage(Date.UTC(2026, 9, 16, 10, 5, 0)))
@@ -188,6 +247,18 @@ describe('the message and the alert text', () => {
     ])
     expect(two).toContain('didi')
     expect(two).toContain('dexter')
+  })
+  it('the progress alert names the error count, alone and grouped (card 46e6bfb0)', () => {
+    const one = buildFleetAlert([{ kind: 'api-error-repeat', agent: 'didi', minutes: 4, errorsWithoutProgress: 3 }])
+    expect(one).toContain('3. alkalommal')
+    expect(one).toContain('EGYETLEN sikeres valasza sem volt')
+    expect(one).not.toContain('MASODSZOR')
+    const two = buildFleetAlert([
+      { kind: 'api-error-repeat', agent: 'didi', minutes: 4, errorsWithoutProgress: 3 },
+      { kind: 'api-error-repeat', agent: 'dexter', minutes: 3 },
+    ])
+    expect(two).toContain('didi -- 3 hiba sikeres valasz nelkul')
+    expect(two).toContain('dexter -- 3 perccel az elozo folytatas utan')
   })
 })
 
@@ -219,6 +290,9 @@ vi.mock('../web/agent-config.js', () => ({
   agentDir: (a: string) => join(hoisted.root, 'agents', a),
   readAgentRemoteHost: () => null,
   readAgentProjects: () => null,
+  // configDirFor (card 46e6bfb0) -> agents/x/.claude-config once its projects dir exists
+  readAgentClaudePlan: () => null,
+  readAgentClaudeConfigDir: () => null,
 }))
 vi.mock('../web/channel-monitor.js', () => ({ sendAlert: () => {} }))
 vi.mock('../db.js', () => ({
@@ -238,6 +312,7 @@ vi.mock('../db.js', () => ({
 }))
 
 let { tick } = await import('../web/idle-agent-watcher.js')
+const { projectsDirFor, readLastModelResponseMs } = await import('../web/active-model.js')
 const { MAIN_AGENT_ID } = await import('../config.js')
 const { detectPaneState } = await import('../pane-state.js')
 
@@ -261,11 +336,24 @@ describe('tick() -- the API-error resume, end to end', () => {
     writeFileSync(join(dir, 'workcheck.json'), JSON.stringify({ kind }))
   }
   const reload = async () => { vi.resetModules(); ;({ tick } = await import('../web/idle-agent-watcher.js')) }
+  // x's own transcript, where the watcher reads progress (agents/x/.claude-config, card 46e6bfb0).
+  const xDir = join(hoisted.root, 'agents', 'x')
+  const transcriptDir = () => projectsDirFor(xDir, join(xDir, '.claude-config'))
+  const transcript = (...lines: object[]) => {
+    mkdirSync(transcriptDir(), { recursive: true })
+    writeFileSync(join(transcriptDir(), 's.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
+  }
+  const reply = (min: number) => ({ type: 'assistant', timestamp: new Date(NOW + min * 60_000).toISOString(), message: { model: 'claude-opus-5-5', stop_reason: 'end_turn' } })
+  const apiErr = (min: number) => ({
+    type: 'assistant', isApiErrorMessage: true, error: 'server_error', timestamp: new Date(NOW + min * 60_000).toISOString(),
+    message: { model: '<synthetic>', stop_reason: 'stop_sequence', content: [{ type: 'text', text: 'API Error: Connection lost mid-response.' }] },
+  })
 
   beforeEach(async () => {
     await reload()
     realDb.initDatabase(':memory:')
     rmSync(join(hoisted.root, 'store'), { recursive: true, force: true })
+    rmSync(join(xDir, '.claude-config'), { recursive: true, force: true })
     mkdirSync(join(hoisted.root, 'store'), { recursive: true })
     vi.useFakeTimers(); vi.setSystemTime(NOW)
     panes.clear(); messages.length = 0; failNextEnqueueTo = null
@@ -353,5 +441,42 @@ describe('tick() -- the API-error resume, end to end', () => {
     at(9, ERR_PANE); at(12, ERR_PANE)
     expect(toX()).toHaveLength(1)
     expect(toCoordinator().filter((x) => x.content.includes('MASODSZOR'))).toHaveLength(1)
+  })
+
+  it('READER: the newest real response counts, the synthetic error line does not; no response = 0, no dir = null', () => {
+    expect(readLastModelResponseMs(xDir, join(xDir, '.claude-config'))).toBeNull()
+    transcript(reply(1), apiErr(2))
+    expect(readLastModelResponseMs(xDir, join(xDir, '.claude-config'))).toBe(NOW + 1 * MIN)
+    transcript(apiErr(1), apiErr(2))
+    expect(readLastModelResponseMs(xDir, join(xDir, '.claude-config'))).toBe(0)
+  })
+
+  it('PROGRESS (card 46e6bfb0): a response after the resume, then an error inside 10 minutes -> resumed again, coordinator not told', () => {
+    transcript(reply(-5), apiErr(-1))
+    at(0, ERR_PANE); at(3, ERR_PANE)                 // resume at +3
+    transcript(reply(-5), apiErr(-1), reply(5), apiErr(8))
+    at(6, BUSY_PANE)
+    at(9, ERR_PANE); at(12, ERR_PANE)                // 9 min after the resume, with a response at +5
+    expect(toX().filter((x) => x.content.startsWith('a turnod'))).toHaveLength(2)
+    expect(toCoordinator()).toHaveLength(0)
+  })
+
+  it('PROGRESS: three errors with no response since the resumes -> resumed twice, the coordinator told on the third, also after a restart', async () => {
+    transcript(reply(-5), apiErr(-1))                // the last real response is BEFORE every resume
+    at(0, ERR_PANE); at(3, ERR_PANE)                 // resume 1 at +3
+    transcript(reply(-5), apiErr(-1), apiErr(7))
+    at(6, BUSY_PANE)
+    at(9, ERR_PANE); at(12, ERR_PANE)                // resume 2 at +12 (inside 10 min: the old rule escalated here)
+    expect(toX().filter((x) => x.content.startsWith('a turnod'))).toHaveLength(2)
+    expect(toCoordinator()).toHaveLength(0)
+    expect(realDb.loadIdleGuardState('x', 60 * MIN, NOW + 12 * MIN)?.apiErrorResumesNoProgress).toBe(2)
+    await reload()                                   // the count is persisted, not in memory only
+    transcript(reply(-5), apiErr(-1), apiErr(7), apiErr(16))
+    at(15, BUSY_PANE)
+    at(18, ERR_PANE); at(21, ERR_PANE)
+    expect(toX().filter((x) => x.content.startsWith('a turnod'))).toHaveLength(2)
+    expect(toCoordinator()).toHaveLength(1)
+    expect(toCoordinator()[0].content).toContain('3. alkalommal')
+    expect(toCoordinator()[0].content).toContain('"x"')
   })
 })

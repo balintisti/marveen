@@ -6338,9 +6338,14 @@ export interface IdleGuardSuppressors {
    *  It only suppresses (a second error within the repeat window escalates instead of pumping), so
    *  it is restored whatever the row's age. */
   lastApiErrorResumeAt?: number | null
+  /** Resumes in a row with no successful model response after them (card 46e6bfb0). Restored whatever
+   *  the row's age: it is zeroed by the next measured response, never by time. */
+  apiErrorResumesNoProgress?: number
 }
 const SUPPRESSOR_TIMES = ['lastNoWorkNoticeAt', 'lastSubagentNoticeAt', 'lastPaneUnreadableAt', 'noWorkLiveSpellSince', 'lastApiErrorResumeAt'] as const
 const SUPPRESSOR_SETS = ['lastWakeWorkIds', 'lastNoWorkNoticeIds'] as const
+/** Non-negative integer counters (card 46e6bfb0). */
+const SUPPRESSOR_COUNTS = ['apiErrorResumesNoProgress'] as const
 
 /** Only well-typed fields come back: a malformed value is dropped, never passed on, because a
  *  suppressor read wrong would silence a notice nobody asked to silence. */
@@ -6357,6 +6362,9 @@ function parseSuppressors(raw: string | null): IdleGuardSuppressors {
   for (const k of SUPPRESSOR_SETS) {
     const v = o[k]
     if (v === null || (Array.isArray(v) && v.every((x) => typeof x === 'string'))) out[k] = v
+  }
+  for (const k of SUPPRESSOR_COUNTS) {
+    if (Number.isInteger(o[k]) && (o[k] as number) >= 0) out[k] = o[k]
   }
   return out as IdleGuardSuppressors
 }
@@ -6386,7 +6394,7 @@ export function saveIdleGuardState(
   now: number = Date.now(),
 ): void {
   const suppressors: Record<string, unknown> = {}
-  for (const k of [...SUPPRESSOR_TIMES, ...SUPPRESSOR_SETS]) {
+  for (const k of [...SUPPRESSOR_TIMES, ...SUPPRESSOR_SETS, ...SUPPRESSOR_COUNTS]) {
     if (state[k] !== undefined) suppressors[k] = state[k]
   }
   getDb().prepare(

@@ -279,6 +279,11 @@ export interface IdleAgentState {
   /** The streak (its apiErrorSinceMs) that was already answered, by the resume the watcher stamped or
    *  by the repeat alert. One answer per streak: no resume pumping. Reset when the streak ends. */
   apiErrorHandledSince?: number | null
+  /** Resumes in a row after which no successful model response came (card 46e6bfb0). Bumped by the
+   *  WATCHER together with lastApiErrorResumeAt, zeroed by the decision when a response is measured
+   *  since the last resume. Persisted (db.ts SUPPRESSOR_COUNTS): a restart must not hand an agent
+   *  whose resumes keep failing a fresh set of resumes. */
+  apiErrorResumesNoProgress?: number
 }
 
 export interface IdleAgentInput {
@@ -321,6 +326,11 @@ export interface IdleAgentInput {
   /** The pane's LAST content block above the input box is an API error that cut a turn off
    *  (detectsMidTurnApiError, card 843a9ab6). Absent = not measured = false. */
   paneApiError?: boolean
+  /** Did the agent produce a successful model response after lastApiErrorResumeAt (card 46e6bfb0)?
+   *  Read from its transcript: an assistant line that is not Claude Code's synthetic API-error line.
+   *  true = yes, false = no, absent/null = not measured (no resume yet, a remote agent, no readable
+   *  transcript); then the old 10-minute rule decides. */
+  apiErrorProgressSinceResume?: boolean | null
   /** Background work the pane shows RUNNING (runningBackgroundWork): sub-agent rows, the
    *  `Waiting for N background agents` line, and the shells and monitors the footer counts. An
    *  agent with a free prompt and background work at hand is not standing idle: no wake, no
@@ -374,9 +384,11 @@ export type IdleDecision =
    *  caller stamps lastApiErrorResumeAt / apiErrorHandledSince only after the enqueue succeeded; a
    *  failed enqueue leaves the decision to be taken again next tick. */
   | { alert: true; reason: 'resume-api-error'; errorSinceMs: number }
-  /** The same agent hit the error again inside API_ERROR_REPEAT_MS of the last resume: the resume did
-   *  not hold, so the coordinator is told and nothing more is pumped into the agent. */
-  | { alert: true; reason: 'api-error-repeat'; minutesSinceResume: number }
+  /** The resumes did not hold: API_ERROR_PARK_AFTER errors in a row with no successful response in
+   *  between (errorsWithoutProgress), or, when progress was not measured, a second error inside
+   *  API_ERROR_REPEAT_MS of the last resume (errorsWithoutProgress null). The coordinator is told and
+   *  nothing more is pumped into the agent. */
+  | { alert: true; reason: 'api-error-repeat'; minutesSinceResume: number; errorsWithoutProgress: number | null }
   /** Stage 1: tell the AGENT, not a human. The agent is awake, its queue is empty and
    *  the condition is about itself -- it is the only party that can both be reached and
    *  act. A human woken at 22:49 can do nothing here that the agent cannot do faster. */
@@ -524,8 +536,14 @@ export function decideIdleAlert(
   return { decision: r.decision, next: { ...r.next, lastSubagentNoticeAt: now } }
 }
 
-/** A second API error this soon after a resume means the resume did not hold (card 843a9ab6). */
+/** Used only when progress since the resume was NOT measured (apiErrorProgressSinceResume absent):
+ *  a second API error this soon after a resume counts as the resume not holding (card 843a9ab6). */
 export const API_ERROR_REPEAT_MS = 10 * 60_000
+/** The API error that makes the coordinator be told instead of a resume, counted in a row with no
+ *  successful response in between (card 46e6bfb0, marveen 53925). Not time: measured over 8 agents'
+ *  transcripts since 10-20, 0 of 2982 resumes failed twice in a row, yet 37.6% of errors came within
+ *  10 minutes of the previous one, so the time window stopped resumes after independent errors. */
+export const API_ERROR_PARK_AFTER = 3
 /** Consecutive ticks that must see the error before the agent is written to: at the 3-minute tick
  *  that is 3-6 minutes, long enough for a turn that is merely between two retries. */
 export const API_ERROR_CONFIRM_TICKS = 2
@@ -611,16 +629,28 @@ function decideIdleAlertCore(
         next: { ...state, idleSinceMs: keepSpell, apiErrorSinceMs: sinceMs, apiErrorTicks: ticks },
       }
     }
+    // PROGRESS, NOT TIME, decides whether the resumes still hold (card 46e6bfb0, marveen 53925): any
+    // successful response since the last resume zeroes the count. Unmeasured progress keeps the count
+    // and falls back to the time rule, so a remote agent behaves as before.
     const lastResume = state.lastApiErrorResumeAt ?? null
-    if (lastResume !== null && now - lastResume < API_ERROR_REPEAT_MS) {
+    const progress = input.apiErrorProgressSinceResume ?? null
+    const noProgress = lastResume === null || progress === true ? 0 : (state.apiErrorResumesNoProgress ?? 0)
+    const repeat = progress === null
+      ? lastResume !== null && now - lastResume < API_ERROR_REPEAT_MS
+      : noProgress >= API_ERROR_PARK_AFTER - 1
+    if (repeat && lastResume !== null) {
       return {
-        decision: { alert: true, reason: 'api-error-repeat', minutesSinceResume: Math.round((now - lastResume) / 60_000) },
-        next: { ...state, idleSinceMs: keepSpell, apiErrorSinceMs: sinceMs, apiErrorTicks: ticks, apiErrorHandledSince: sinceMs },
+        decision: {
+          alert: true, reason: 'api-error-repeat',
+          minutesSinceResume: Math.round((now - lastResume) / 60_000),
+          errorsWithoutProgress: progress === null ? null : noProgress + 1,
+        },
+        next: { ...state, idleSinceMs: keepSpell, apiErrorSinceMs: sinceMs, apiErrorTicks: ticks, apiErrorHandledSince: sinceMs, apiErrorResumesNoProgress: noProgress },
       }
     }
     return {
       decision: { alert: true, reason: 'resume-api-error', errorSinceMs: sinceMs },
-      next: { ...state, idleSinceMs: keepSpell, apiErrorSinceMs: sinceMs, apiErrorTicks: ticks },
+      next: { ...state, idleSinceMs: keepSpell, apiErrorSinceMs: sinceMs, apiErrorTicks: ticks, apiErrorResumesNoProgress: noProgress },
     }
   }
 
@@ -2199,6 +2229,9 @@ export interface FleetAlert {
   workCount?: number
   /** Only for 'pane-unreadable'. Absent means the caller did not say which branch. */
   paneReason?: PaneUnreadableReason
+  /** Only for 'api-error-repeat': errors in a row with no successful response in between; null or
+   *  absent = progress was not measured and the 10-minute rule fired (card 46e6bfb0). */
+  errorsWithoutProgress?: number | null
 }
 
 /** Collapse a sweep's alerts into ONE owner-facing message.
@@ -2244,8 +2277,12 @@ export function buildFleetAlert(alerts: FleetAlert[]): string {
     `A(z) "${a.agent}" ${a.minutes} perce tetlen, ${a.workCount} tetellel, es az EBRESZTO UZENETET ` +
     `SEM SIKERULT betenni a soraba. Ez nem tetlenseg-kerdes tobbe, hanem az uzenetsore. Nezd meg kezzel.`
   const apiErrorRepeat = (a: FleetAlert) =>
-    `A(z) "${a.agent}" turnja MASODSZOR szakadt meg API-hibaval ${a.minutes} perccel az elozo ` +
-    `folytatas utan. Tovabbi folytatast nem kuldok neki: a hiba nem a turnon mulik. Nezd meg a panelt ` +
+    (a.errorsWithoutProgress != null
+      ? `A(z) "${a.agent}" turnja ${a.errorsWithoutProgress}. alkalommal szakadt meg API-hibaval ugy, hogy ` +
+        `a folytatasok ota EGYETLEN sikeres valasza sem volt (utolso folytatas ${a.minutes} perce). `
+      : `A(z) "${a.agent}" turnja MASODSZOR szakadt meg API-hibaval ${a.minutes} perccel az elozo ` +
+        `folytatas utan. `) +
+    `Tovabbi folytatast nem kuldok neki: a hiba nem a turnon mulik. Nezd meg a panelt ` +
     `(halozat, API-allapot, telitett kontextus), es dontsd el, kell-e ujrainditas.`
 
   const single: Record<FleetAlert['kind'], (a: FleetAlert) => string> = {
@@ -2272,8 +2309,10 @@ export function buildFleetAlert(alerts: FleetAlert[]): string {
     },
     {
       kind: 'api-error-repeat',
-      header: 'API-HIBA MASODSZOR, A FOLYTATAS NEM HOZOTT TARTOS EREDMENYT (nezd meg a panelt):',
-      line: (a) => `  ${a.agent} -- ${a.minutes} perccel az elozo folytatas utan`,
+      header: 'API-HIBA UJRA, A FOLYTATAS NEM HOZOTT TARTOS EREDMENYT (nezd meg a panelt):',
+      line: (a) => a.errorsWithoutProgress != null
+        ? `  ${a.agent} -- ${a.errorsWithoutProgress} hiba sikeres valasz nelkul, utolso folytatas ${a.minutes} perce`
+        : `  ${a.agent} -- ${a.minutes} perccel az elozo folytatas utan`,
     },
     {
       kind: 'pane-unreadable',

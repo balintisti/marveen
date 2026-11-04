@@ -3,6 +3,8 @@ import { join } from 'node:path'
 import { logger } from '../logger.js'
 import { MAIN_AGENT_ID, PROJECT_ROOT } from '../config.js'
 import { listAgentNames, agentDir, readAgentRemoteHost, readAgentProjects } from './agent-config.js'
+import { readLastModelResponseMs } from './active-model.js'
+import { configDirFor } from './main-transcript-root.js'
 import { isAgentRunning, capturePane, saturationRefusesDispatch } from './agent-process.js'
 import { resolveAgentSession } from './channel-mcp-reconnect.js'
 import { sendAlert } from './channel-monitor.js'
@@ -497,6 +499,21 @@ export function readPane(agent: string): {
   }
 }
 
+/** Did a successful model response come after the last API-error resume (card 46e6bfb0)? Read from
+ *  the agent's own transcript; null = not measured (no resume yet, a remote agent whose transcript is
+ *  not on this host, or an unreadable transcript), and then the decision keeps the time rule. */
+export function apiErrorProgress(agent: string, lastResumeAt: number | null): boolean | null {
+  if (lastResumeAt === null) return null
+  try {
+    if (readAgentRemoteHost(agent)) return null
+    const at = readLastModelResponseMs(agent === MAIN_AGENT_ID ? PROJECT_ROOT : agentDir(agent), configDirFor(agent))
+    return at === null ? null : at > lastResumeAt
+  } catch {
+    // A config read that throws is "not measured": it must not take the tick down with it.
+    return null
+  }
+}
+
 // EXPORTALVA A NAPLOZAS MERHETOSEGEERT (kartya 60060415). A `readPane`-nel ugyanez a
 // dontes all: a kartya allitasa az, hogy MINDEN dontes naplozodik -- ezt csak ugy lehet
 // megmerni, ha a kort le lehet futtatni. Viselkedes nem mozdul, csak lathatosag.
@@ -674,6 +691,10 @@ export function tick(): void {
       const oldestPendingAgeMs = agent === MAIN_AGENT_ID && pending.length > 0
         ? now - pending[0].created_at * 1000
         : undefined
+      // Read only when the decision can use it: the pane shows the API error and a resume was sent.
+      const apiErrorProgressSinceResume = running && paneRead.apiError === true
+        ? apiErrorProgress(agent, state.lastApiErrorResumeAt ?? null)
+        : null
       const { decision, next } = decideIdleAlert(
         {
           agent,
@@ -684,6 +705,7 @@ export function tick(): void {
           staleCounterOnly: running ? paneRead.staleCounterOnly : false,
           paneUsageLimited: running ? paneRead.usageLimited === true : false,
           paneApiError: running ? paneRead.apiError === true : false,
+          apiErrorProgressSinceResume,
           runningSubagents: backgroundWork,
           // Read only when background work is seen: it is the one case that consumes it.
           lastActionAtMs: backgroundWork > 0 ? lastActionAtMs(agent, realComments ?? comments) : undefined,
@@ -762,7 +784,12 @@ export function tick(): void {
           logger.warn({ err, agent }, 'idle guard: could not enqueue the API-error resume message')
           continue
         }
-        const stamped = { ...next, lastApiErrorResumeAt: now, apiErrorHandledSince: next.apiErrorSinceMs ?? decision.errorSinceMs }
+        const stamped = {
+          ...next,
+          lastApiErrorResumeAt: now,
+          apiErrorHandledSince: next.apiErrorSinceMs ?? decision.errorSinceMs,
+          apiErrorResumesNoProgress: (next.apiErrorResumesNoProgress ?? 0) + 1,
+        }
         watchState.set(agent, stamped)
         try {
           saveIdleGuardState(agent, stamped, now)
@@ -777,10 +804,10 @@ export function tick(): void {
       }
 
       if (decision.reason === 'api-error-repeat') {
-        alerts.push({ kind: 'api-error-repeat', agent, minutes: decision.minutesSinceResume })
+        alerts.push({ kind: 'api-error-repeat', agent, minutes: decision.minutesSinceResume, errorsWithoutProgress: decision.errorsWithoutProgress })
         logger.warn(
-          { idleGuard: true, agent, minutesSinceResume: decision.minutesSinceResume },
-          'idle guard: API error again shortly after a resume -- coordinator told, no further resume',
+          { idleGuard: true, agent, minutesSinceResume: decision.minutesSinceResume, errorsWithoutProgress: decision.errorsWithoutProgress },
+          'idle guard: API error again and the resumes did not hold -- coordinator told, no further resume',
         )
         continue
       }

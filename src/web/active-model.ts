@@ -149,6 +149,48 @@ function isLocalCommandLine(e: { type?: unknown; message?: { content?: unknown }
   return typeof c === 'string' && /^\s*<(local-command-(stdout|stderr|caveat)|command-name)>/.test(c)
 }
 
+/**
+ * When the agent last got a SUCCESSFUL model response (card 46e6bfb0): the newest assistant line
+ * that is not Claude Code's synthetic API-error line (`isApiErrorMessage: true`, model
+ * `<synthetic>`). Measured 2026-11-04 over 300 transcripts: every real assistant line carries a
+ * stop_reason (38 927 tool_use, 2 625 end_turn), and the error lines are the synthetic ones. A tool
+ * call counts: the model answered, the agent moved.
+ * Returns 0 when the whole file was read and holds no response, null when it cannot tell (no
+ * directory, no transcript, or none found inside a tail window that did not cover the file).
+ */
+export function readLastModelResponseMs(workingDir: string, configDir?: string): number | null {
+  try {
+    const dir = projectsDirFor(workingDir, configDir)
+    if (!existsSync(dir)) return null
+    const newest = readdirSync(dir)
+      .filter(f => f.endsWith('.jsonl'))
+      .map(f => ({ f, mtime: statSync(join(dir, f)).mtimeMs, size: statSync(join(dir, f)).size }))
+      .sort((a, b) => b.mtime - a.mtime)[0]
+    if (!newest) return null
+    const fd = openSync(join(dir, newest.f), 'r')
+    let text: string
+    try {
+      const len = Math.min(newest.size, TURN_TAIL_BYTES)
+      const buf = Buffer.alloc(len)
+      readSync(fd, buf, 0, len, newest.size - len)
+      text = buf.toString('utf-8')
+    } finally { closeSync(fd) }
+    const lines = text.split('\n')
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim()
+      if (!line.startsWith('{')) continue
+      try {
+        const e = JSON.parse(line)
+        if (e?.type !== 'assistant' || e.isApiErrorMessage === true || e.message?.model === '<synthetic>') continue
+        const at = typeof e.timestamp === 'string' ? new Date(e.timestamp).getTime() : NaN
+        if (Number.isFinite(at)) return at
+      } catch { /* a line cut by the tail window, or malformed */ }
+    }
+    if (newest.size <= TURN_TAIL_BYTES) return 0
+  } catch { /* fall through */ }
+  return null
+}
+
 export function readLastTurnActivityMs(workingDir: string, configDir?: string): number | null {
   try {
     const dir = projectsDirFor(workingDir, configDir)
