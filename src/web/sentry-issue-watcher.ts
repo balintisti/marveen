@@ -55,13 +55,21 @@ import {
  * three today. Ten minutes leaves the budget untouched while keeping the lag
  * below the interval at which anyone would act on an error anyway.
  */
-const INTERVAL_MS = 600_000
+export const INTERVAL_MS = 600_000
 /** Offset from the uptime poller's 45s so two cold starts do not collide. */
 const INITIAL_DELAY_MS = 90_000
 
 const VAULT_KEY = 'sentry_olvaso_token'
 const API_ROOT = 'https://sentry.io/api/0'
-const FETCH_TIMEOUT_MS = 15_000
+/**
+ * Per call. 15 s timed out every slow round: measured 2026-11-03 with the watcher's own token
+ * (card a10a5b6d), the delta-crm issues call answered HTTP 200 in 33.9 s and 46.9 s and stats_v2
+ * in 47.6 s while status.sentry.io said operational -- Sentry slow, not down, and the tick wrote
+ * PARTIALLY UNREADABLE six times in a day. 90 s is ~1.9x the slowest answer, and a tick's five
+ * sequential calls (1 + 2 x two orgs) still end inside INTERVAL_MS. No retry: one would double
+ * that worst case past the interval.
+ */
+export const FETCH_TIMEOUT_MS = 90_000
 /** Cap on any borrowed text (HTTP body, error message) that can reach the queue. */
 const MAX_REASON_CHARS = 300
 /**
@@ -300,7 +308,24 @@ function enqueueVerified(content: string): boolean {
   }
 }
 
+// A tick that outlives INTERVAL_MS (more orgs than today, or calls near the timeout) must not
+// run beside the next one: both would read the same watermark and enqueue the same notice twice.
+let tickInFlight = false
+
 export async function sentryTick(now = Date.now()): Promise<void> {
+  if (tickInFlight) {
+    logger.warn('sentry reader: previous tick still running, this one skipped')
+    return
+  }
+  tickInFlight = true
+  try {
+    await readSentry(now)
+  } finally {
+    tickInFlight = false
+  }
+}
+
+async function readSentry(now: number): Promise<void> {
   const tokenProbe = token()
 
   // NO TOKEN IS AN ALERT, NOT A QUIET SKIP. This is the whole point of the card:
