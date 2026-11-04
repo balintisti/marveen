@@ -1,9 +1,11 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import type { ScheduledTask } from '../web/scheduled-tasks-io.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // TESTFOLLOWUP1007G (a #1723 review finding): the pending-retry loop checks
 // that the task exists and is enabled BEFORE `await retryPreCheck(...)`, and
@@ -110,7 +112,7 @@ vi.mock('../web/agent-process.js', () => ({
 
 // The pre-check needs a script that EXISTS (runPreCheckAsync checks before it
 // spawns); its content never runs, the fake spawn above stands in for it.
-const scriptDir = mkdtempSync(join(tmpdir(), 'retry-recheck-'))
+const scriptDir = mkTmp('retry-recheck-')
 const scriptPath = join(scriptDir, 'pre-check.sh')
 writeFileSync(scriptPath, '#!/usr/bin/env bash\necho unused\n', { mode: 0o755 })
 afterAll(() => rmSync(scriptDir, { recursive: true, force: true }))

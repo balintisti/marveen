@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { performance } from 'node:perf_hooks'
 import {
   RETRY_PRECHECK_MIN_INTERVAL_MS,
@@ -13,6 +12,9 @@ import {
   type PreCheckResult,
 } from '../web/schedule-runner.js'
 import type { ScheduledTask } from '../web/scheduled-tasks-io.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // df2e0d97 2a: the pending-retry loop re-ran a task's preCheck on every 15 s
 // tick through spawnSync, holding the dashboard's event loop for the whole
@@ -37,7 +39,7 @@ function makeTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
 }
 
 function withScript(content: string): { dir: string; file: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'precheck-async-'))
+  const dir = mkTmp('precheck-async-')
   const file = join(dir, 'pre-check.sh')
   writeFileSync(file, content, { mode: 0o755 })
   return { dir, file }

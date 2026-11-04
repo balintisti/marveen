@@ -65,7 +65,7 @@ describe('the retry-queue delivery declares its lateness at the call site', () =
   // Anchored on the CALL, not on the words: a source search for 'retry-queue'
   // would pass on a file that only mentions it in a comment -- and this file
   // mentions it in comments several times.
-  const retryCall = SRC.match(/const result = await attemptFireTask\(taskDef,[^\n]*\)/)
+  const retryCall = SRC.match(/const result = await attemptFireTask\(current,[^\n]*\)/)
 
   it('finds the retry-path call site at all (positive control)', () => {
     expect(retryCall, 'call site not found -- the meter is broken, not the code').not.toBeNull()

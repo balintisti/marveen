@@ -12,9 +12,11 @@
  * registry: a stale pid is reused, and kill(-pid) on it would hit a stranger.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from 'node:fs'
+import { readFileSync, existsSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 vi.mock('../config.js', async () => {
   const actual = await vi.importActual<typeof import('../config.js')>('../config.js')
@@ -36,7 +38,7 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
   vi.restoreAllMocks()
 })
-const tmp = (): string => { const d = mkdtempSync(join(tmpdir(), 'detachedshutdown-')); dirs.push(d); return d }
+const tmp = (): string => { const d = mkTmp('detachedshutdown-'); dirs.push(d); return d }
 const readPid = async (f: string): Promise<number> => {
   await vi.waitFor(() => { expect(existsSync(f) && readFileSync(f, 'utf-8').trim() !== '').toBe(true) }, { timeout: 3000 })
   const pid = Number(readFileSync(f, 'utf-8').trim()); leftovers.push(pid); return pid

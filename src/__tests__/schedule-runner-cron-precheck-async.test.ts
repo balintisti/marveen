@@ -1,10 +1,12 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createServer, type Server } from 'node:http'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import type { AddressInfo } from 'node:net'
 import type { ScheduledTask } from '../web/scheduled-tasks-io.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // CRONPRECHECKSYNC1007. The cron loop ran a task's pre-check with spawnSync on
 // the dashboard's event loop. A pre-check that calls the dashboard's own API
@@ -78,7 +80,7 @@ let served = 0
 let onRequest: () => void = () => {}
 // What the stand-in answers; "SKIP" makes the pre-check report nothing to do.
 let answer: () => string = () => `msg-${served}`
-const dir = mkdtempSync(join(tmpdir(), 'cron-precheck-'))
+const dir = mkTmp('cron-precheck-')
 const scriptPath = join(dir, 'pre-check.sh')
 
 beforeAll(async () => {
@@ -235,7 +237,7 @@ describe('runPreCheckAsync ends the script\'s whole process group', () => {
   afterAll(() => { for (const m of marks) rmSync(m, { force: true }) })
 
   function grandchildScript(head: string): { file: string; mark: string } {
-    const d = mkdtempSync(join(tmpdir(), 'precheck-group-'))
+    const d = mkTmp('precheck-group-')
     const mark = join(d, 'grandchild-was-here')
     marks.push(mark)
     const file = join(d, 'pre-check.sh')
@@ -262,7 +264,7 @@ describe('runPreCheckAsync ends the script\'s whole process group', () => {
 
   it('a grandchild that ignores TERM is KILLed a second later', async () => {
     const { runPreCheckAsync } = await import('../web/schedule-runner.js')
-    const d = mkdtempSync(join(tmpdir(), 'precheck-group-term-'))
+    const d = mkTmp('precheck-group-term-')
     const mark = join(d, 'grandchild-was-here')
     marks.push(mark)
     const file = join(d, 'pre-check.sh')
@@ -283,7 +285,7 @@ describe('runPreCheckAsync ends the script\'s whole process group', () => {
 
   it('control: a script that finishes in time is not touched, its grandchild lives on', async () => {
     const { runPreCheckAsync } = await import('../web/schedule-runner.js')
-    const d = mkdtempSync(join(tmpdir(), 'precheck-group-ctl-'))
+    const d = mkTmp('precheck-group-ctl-')
     const mark = join(d, 'grandchild-was-here')
     marks.push(mark)
     const file = join(d, 'pre-check.sh')
