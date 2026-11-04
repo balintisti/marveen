@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **468** kovetett fajl, ebbol
-**142** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **469** kovetett fajl, ebbol
+**143** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -327,6 +327,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - WHY THIS EXISTS, AND WHY THE PERMISSION LIST IS NOT ENOUGH (measured 2026-08-19,
 - === THE OVERRIDE, AND WHY IT IS A TOKEN AND NOT A CARVE-OUT
+
+### `scripts/hooks/heavy-run-gate.py`
+
+- WHY (measured 2026-11-03 22:10-22:25 CET): load 96 on 12 cores, swap 9.8 of 10.2 GB, the
 
 ### `scripts/hooks/ledger-turn-failure.py`
 
