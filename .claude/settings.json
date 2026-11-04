@@ -26,6 +26,7 @@
     "PreToolUse": [
       { "matcher": "*", "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/fleet-freeze-gate.sh\"", "timeout": 5 } ] },
       { "matcher": "Bash", "hooks": [ { "type": "command", "command": "if [ -f \"$CLAUDE_PROJECT_DIR/scripts/hooks/db-destructive-gate.py\" ]; then python3 \"$CLAUDE_PROJECT_DIR/scripts/hooks/db-destructive-gate.py\"; fi", "timeout": 10 } ] },
+      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "bash -c '[ -f \"$CLAUDE_PROJECT_DIR/scripts/hooks/main-checkout-git-guard.py\" ] && exec python3 \"$CLAUDE_PROJECT_DIR/scripts/hooks/main-checkout-git-guard.py\"; exit 0'", "timeout": 10 } ] },
       { "matcher": "Bash", "hooks": [ { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/hooks/outgoing-copy-gate.py\"", "timeout": 15 } ] },
       { "matcher": ".*send_email.*", "hooks": [ { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/hooks/outgoing-copy-gate.py\"", "timeout": 15 } ] },
       { "matcher": ".*manage_email.*", "hooks": [ { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/hooks/outgoing-copy-gate.py\"", "timeout": 15 } ] },

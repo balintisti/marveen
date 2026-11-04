@@ -58,6 +58,9 @@ const EXPECTED: Record<string, string[]> = {
     'outgoing-copy-gate.py', 'db-destructive-gate.py',
     'channel-image-resize.sh', 'egress-gate.mjs', 'memory-frontmatter-gate.py',
     'memory-index-write-gate.py',
+    // card 468cf59a: refuses `git clean` / `git reset --hard` aimed at the MAIN checkout.
+    // Registered behind an `[ -f ... ]` existence check, so an install without the script is a no-op.
+    'main-checkout-git-guard.py',
   ],
   Stop: ['marveen-commands.py', 'telegram-reply-guard.py', 'telegram_progress_clear.py', 'slack_progress_clear.py'],
   StopFailure: ['ledger-turn-failure.py'],
