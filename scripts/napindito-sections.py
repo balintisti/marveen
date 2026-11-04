@@ -72,8 +72,21 @@ def section_done_vs_live(root=DEFAULT_ROOT, now=None, max_age_h=26):
         return [c for c in open_ if c.get("status") == status and c.get("verdict") == verdict]
     nl_done, lm_done = pick("done", "NOT-LIVE"), pick("done", "LINES-MISSING")
     nl_test = pick("testing", "NOT-LIVE") + pick("testing", "LINES-MISSING")
-    when = datetime.fromtimestamp(measured).strftime("%H:%M")
+    # The DATE is printed: a bare "merve 06:45" read as today's while it was yesterday's (b6284542).
+    when = datetime.fromtimestamp(measured).strftime("%m-%d %H:%M")
     out = [f"{head} (merve {when}, elo kep {str(d.get('target'))[:12]}):"]
+    # done-vs-live.py marks the previous result while a newer run works (mark_running). Under way:
+    # these are the older numbers, said so. Older than any run can last: the run died unwritten.
+    try:
+        since = datetime.fromisoformat(d["running_since"]).timestamp() if d.get("running_since") else None
+    except (TypeError, ValueError):
+        since = None
+    if since is not None:
+        started = datetime.fromtimestamp(since).strftime("%m-%d %H:%M")
+        if now - since > 2 * 3600:
+            return [f"{head}: NEM MERHETO -- a {started}-kor indult meres nem fejezodott be es nem irt "
+                    f"eredmenyt (elhalt); az utolso befejezett meres {when}-es."]
+        out[0] = out[0][:-1] + f" -- EZ A KORABBI EREDMENY, a {started}-kor indult meres MEG FUT):"
     fetch = str(d.get("fetch") or "")
     if fetch.startswith("FAILED"):
         # didi, e572a1c2: a failed fetch measures yesterday's refs and looks clean. Say it.

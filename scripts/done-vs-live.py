@@ -48,8 +48,10 @@ never writes a local branch, never touches a worktree. A failed fetch does not s
 reported: the brief line says the refs are stale.
 
 INSTALL (a launchd unit, NOT live on merge): bash scripts/install-launchd-unit.sh com.marveen.done-vs-live
-It runs at 06:45, ahead of the 07:30 morning brief; a full run took 130-180 s on 2026-10-01
-(1417 cards, 916 branch tips). The cache keys every judgement by blob SHAs, so a rerun is cheaper.
+It runs at 05:45, ahead of the 07:00 morning brief (schedule reggeli-napindito). It ran at 06:45
+until card b6284542: a full run took 130-180 s on 2026-10-01 (1417 cards, 916 branch tips) but
+600-1760 s by 2026-11 (3540 done cards), so it ended after the brief had read the previous file.
+The cache keys every judgement by blob SHAs, so a rerun is cheaper.
 
 Exit: 0 measured (findings or not)   1 not measurable (no live SHA, git failure, no cards)
 Test seams: --live-sha, --cards-json, --no-fetch, --out, --acks, --cache.
@@ -137,7 +139,7 @@ if A.import_acks:
     import_acks(A.import_acks)
 
 T0 = time.time()
-RUN_BUDGET_S = 1800   # a wedged run must say so, not hold the next 06:45 hostage in silence
+RUN_BUDGET_S = 1800   # a wedged run must say so, not hold the next run hostage in silence
 result = {'measured_at': datetime.now().astimezone().isoformat(timespec='seconds'),
           'repo': A.repo, 'error': None}
 
@@ -200,7 +202,26 @@ def _crashed(kind, exc, tb):
     os._exit(1)
 
 
+def mark_running():
+    """Say in the PREVIOUS result that a newer run is under way. The old file stays readable for
+    the whole run (write_out replaces it only at the end), and on 2026-11-02 the 07:00 brief read
+    it mid-run and showed yesterday's image as today's (card b6284542). write_out writes a fresh
+    dict, so the marker leaves with the new result; one that outlives its run means the run died
+    without writing (a kill the alarm cannot catch), and the brief says that too."""
+    try:
+        with open(A.out, encoding='utf-8') as f:
+            prev = json.load(f)
+        prev['running_since'] = result['measured_at']
+        tmp = A.out + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(prev, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, A.out)
+    except (OSError, ValueError, AttributeError):
+        pass   # no previous result (first run) or an unreadable one: nothing to mark
+
+
 sys.excepthook = _crashed
+mark_running()
 signal.signal(signal.SIGALRM, lambda *_: fail(f'run exceeded {RUN_BUDGET_S} s (git or gcloud wedged)'))
 signal.alarm(RUN_BUDGET_S)
 tags = live_sha()

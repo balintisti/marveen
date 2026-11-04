@@ -288,6 +288,30 @@ class Meter(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn('crashed: KeyError', d['error'])
 
+    def test_the_previous_result_says_a_newer_run_is_under_way(self):
+        # b6284542: the 07:00 brief read the old file mid-run and took it for today's. A fake gcloud
+        # snapshots the result file at the moment the run asks for the live image, then fails.
+        out = tempfile.mkdtemp(prefix='dvl-out-')
+        oj, snap, fake = (os.path.join(out, n) for n in ('out.json', 'snap.json', 'gcloud'))
+        with open(oj, 'w') as f:
+            json.dump({'measured_at': '2026-11-03T06:45:00+01:00', 'error': None, 'target': 'old', 'cards': []}, f)
+        with open(fake, 'w') as f:
+            f.write(f'#!/bin/sh\ncp "{oj}" "{snap}"\nexit 1\n')
+        os.chmod(fake, 0o755)
+        cj = os.path.join(out, 'cards.json')
+        with open(cj, 'w') as f:
+            json.dump(self.cards, f)
+        r = subprocess.run([sys.executable, SCRIPT, '--repo', self.repo.dir, '--gcloud', fake, '--cards-json', cj,
+                            '--no-fetch', '--out', oj, '--acks', os.path.join(out, 'acks.json'),
+                            '--cache', os.path.join(out, 'cache.json')], capture_output=True, text=True, env=ENV)
+        mid, end = json.load(open(snap)), json.load(open(oj))
+        shutil.rmtree(out)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertEqual(mid['target'], 'old')               # the old numbers stay readable...
+        self.assertTrue(mid.get('running_since'))            # ...marked as older than a run under way
+        self.assertNotIn('running_since', end)               # the new result replaces the marker
+        self.assertIn('gcloud', end['error'])
+
     def test_a_failed_fetch_is_retried_then_reported_and_the_run_goes_on(self):
         self.repo.git('remote', 'add', 'origin', '/nonexistent/delta-crm.git')
         try:
@@ -330,6 +354,25 @@ class Section(unittest.TestCase):
         self.put(measured_at=(datetime.now().astimezone() - timedelta(hours=30)).isoformat())
         out = ns.section_done_vs_live(self.root)
         self.assertIn('NEM MERHETO', out[0]); self.assertIn('30 oras', out[0])
+
+    def test_the_date_is_printed(self):
+        # b6284542: a bare "merve 06:45" read as today's while it was yesterday's.
+        m = datetime.now().astimezone() - timedelta(hours=24)
+        self.put(measured_at=m.isoformat())
+        self.assertIn('merve ' + m.strftime('%m-%d %H:%M') + ',', ns.section_done_vs_live(self.root)[0])
+
+    def test_a_run_under_way_marks_the_numbers_as_older(self):
+        start = datetime.now().astimezone() - timedelta(minutes=15)
+        self.put(measured_at=(start - timedelta(hours=24)).isoformat(), running_since=start.isoformat())
+        out = ns.section_done_vs_live(self.root)
+        self.assertIn(f"EZ A KORABBI EREDMENY, a {start.strftime('%m-%d %H:%M')}-kor indult meres MEG FUT", out[0])
+        self.assertIn('0 kartya', '\n'.join(out))          # the older numbers are still shown
+
+    def test_a_marker_older_than_any_run_means_the_run_died(self):
+        self.put(running_since=(datetime.now().astimezone() - timedelta(hours=3)).isoformat())
+        out = ns.section_done_vs_live(self.root)
+        self.assertEqual(len(out), 1)
+        self.assertIn('NEM MERHETO', out[0]); self.assertIn('elhalt', out[0])
 
     def test_meter_error_is_said(self):
         self.put(error='gcloud delta-crm-backend: rc=1')
