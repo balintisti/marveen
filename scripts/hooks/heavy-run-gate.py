@@ -28,7 +28,10 @@ heavy-run, 443 full (refused, 2.5%), 33 unparseable (pass), 43 meta. Card commen
 KNOWN LIMITS, stated: a script whose path holds a variable (`bash $S/run.sh`) and was written
 in an EARLIER call is not read; `npx jest $FILES` counts as narrowed (the variable may be
 empty); a full suite started from inside a program (python subprocess, a package script
-that is not named test*) is not seen.
+that is not named test*) is not seen. Runners reached another way pass unseen too (didi, card
+comment 53873): `node node_modules/.bin/jest` (node is a data command here), `yarn jest`,
+`pnpm vitest run`, `bash -euc "npx jest"` (only a bare `-c` is read), a script fed on stdin
+(`bash -euo pipefail <<EOF ... EOF`), and package scripts not named test* (`npm run e2e`).
 
 FAIL-OPEN on an internal error, an unparseable command, or a missing heavy-run.py (the
 correct form must exist before the wrong one is refused). Override (logged):
@@ -73,10 +76,12 @@ VALUE_FLAGS = {
     '--minWorkers', '-w', '--outputFile', '--environment', '--shard', '--testTimeout', '--project',
     '--mode', '--coverageDirectory', '--coverageReporters', '--selectProjects', '--rootDir', '--workers',
     '-j', '--retries', '--timeout', '--prefix', '--workspace', '--hookTimeout', '--teardownTimeout',
-    '--seed', '--globalSetup', '--setupFiles', '--testSequencer', '--max-failures', '-x', '--repeat-each',
+    '--seed', '--globalSetup', '--setupFiles', '--testSequencer', '--max-failures', '--repeat-each',
     '--output', '--trace', '--maxConcurrency', '--browser', '--testEnvironment', '--coverageProvider',
-    '--logHeapUsage', '--projects', '--color', '--colors', '--update-snapshots',
+    '--projects',
 }
+# NOT here: boolean switches (--color, --colors, --logHeapUsage, playwright -x, --update-snapshots).
+# Listed as value flags they swallowed the next file path and refused a narrowed run (didi, 53873).
 IGNORE_FLAG = re.compile(r'(?i)^--[\w.-]*(ignore|exclude)[\w.-]*$')   # --testPathIgnorePatterns X: still full
 NARROW_FLAGS = {'-t', '--testNamePattern', '--testPathPattern', '--testPathPatterns', '--findRelatedTests',
                 '--related', '--changed', '--onlyChanged', '-o', '--grep', '-g', '--testRegex', '--testMatch',
@@ -107,7 +112,9 @@ def heredoc_bodies(cmd):
 
 
 def tokens(cmd):
-    lex = shlex.shlex(cmd, posix=True, punctuation_chars=PUNCT)
+    # a line continuation is not a newline: shlex hands `\<newline>` back as a '\n' token, which is
+    # a segment separator, so `npx jest \<newline> src/a.spec.ts` lost its file (didi, 53873)
+    lex = shlex.shlex(cmd.replace('\\\n', ' '), posix=True, punctuation_chars=PUNCT)
     lex.whitespace = ' \t\r'
     lex.whitespace_split = True
     lex.commenters = '#'

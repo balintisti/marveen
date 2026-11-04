@@ -112,6 +112,19 @@ describe('heavy-run gate: lets the routine through', () => {
     ['bash -n run-all.sh'],
     ['bash run-one.sh'],
     ['npm run testdata:seed -- foo.json'],
+    // data commands that only NAME a runner (didi 53873: without this exception 100 false denies
+    // in six weeks of the fleet's own commands)
+    ['pkill -f "mobile/node_modules/.bin/jest"'],
+    ['ls node_modules/.bin/jest'],
+    ['ps aux | grep jest-worker'],
+    // a line continuation keeps the file filter on the runner's line
+    ['npx jest \\\n  src/foo.spec.ts'],
+    ['npm run test:e2e:local -- \\\n  test/e2e/x.e2e-spec.ts'],
+    // boolean switches do not swallow the next path
+    ['npx jest --colors src/foo.spec.ts'],
+    ['npx playwright test -x e2e/foo.spec.ts'],
+    ['npx vitest run --color src/x.test.ts'],
+    ['npx jest --logHeapUsage src/foo.spec.ts'],
   ])('%s -> exit 0', (command) => {
     expect(run(command).code).toBe(0)
   })
@@ -137,7 +150,20 @@ describe('heavy-run gate: lets the routine through', () => {
   })
 })
 
+describe('heavy-run gate: still refuses the full suite in those shapes', () => {
+  it.each([['npx jest \\\n  --silent'], ['npx jest --colors'], ['npx playwright test -x']])('%s -> exit 2', (command) => {
+    expect(run(command).code).toBe(2)
+  })
+})
+
 describe('heavy-run gate: fails open', () => {
+  it('on an internal error, logged: a broken gate must not stop every Bash call', () => {
+    // tool_input as a string makes the gate itself raise; the command in it would be refused
+    const r = runGate(GATE, JSON.stringify({ tool_name: 'Bash', tool_input: 'npx jest', cwd: dir }))
+    expect(r.code).toBe(0)
+    expect(readFileSync(logFile, 'utf8')).toMatch(/ FAIL-OPEN internal error: AttributeError/)
+  })
+
   it('on unparseable shell syntax, logged', () => {
     expect(run('npx jest "unterminated').code).toBe(0)
     expect(readFileSync(logFile, 'utf8')).toMatch(/ FAIL-OPEN unparseable shell syntax \| npx jest "unterminated\n/)
