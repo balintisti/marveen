@@ -1360,7 +1360,7 @@ export const RESTART_NOTICE_AUTOCLOSED = '[auto-closed] restart-window triage wa
  *  True only when the loss window was MEASURED and holds nothing to resend (`false`, not null:
  *  a measurement that failed leaves the row open, as it wakes). The restarted agent already gets
  *  the stale-handoff and killed-background-work facts in its own resume directive and restart-tail
- *  file, so the coordinator's copy was a pure acknowledgement chore (card measured 282 notices in
+ *  file (killed work writes the tail even after a fresh handoff, card 0000e470), so the coordinator's copy was a pure acknowledgement chore (card measured 282 notices in
  *  24 h, six restarts with zero action in one night). A found `failed` row or sender-written
  *  `delivered` row keeps the row delivered: that one is a question or a request someone is waiting on. */
 export function restartNoticeClosesItself(lossNeedsAction: boolean | null): boolean {

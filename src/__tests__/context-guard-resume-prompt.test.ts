@@ -180,13 +180,31 @@ describe('writeRestartTail writes, replaces and removes the tail file', () => {
     expect(t).toContain('1 futott, es a restart MEGOLTE: 1 in the pane (shells / monitors / sub-agents).')
     expect(t).toContain('1 levalasztva futott a pane-en kivul, valoszinuleg TULELTE a restartot: heavy-run: gate-d')
   })
-  it('fresh handoff: an older tail is removed so it cannot pass for this restart', () => {
+  const nothingKilled = { backgroundWork: 0, backgroundWorkDetail: '', detachedWork: 0, detachedWorkDetail: '', killedWorkDetail: '' } as never
+  it('fresh handoff, nothing killed: an older tail is removed so it cannot pass for this restart', () => {
     reset()
     writeFileSync(HANDOFF, '# fresh')
     writeFileSync(TAIL, 'from an earlier restart')
-    writeRestartTail('marveen', inputs, null, '⏺ x', NOW)
+    writeRestartTail('marveen', nothingKilled, null, '⏺ x', NOW)
     expect(existsSync(TAIL)).toBe(false)
     expect(getAgentCommentsSince).not.toHaveBeenCalled()
+  })
+  // Card 0000e470: the tail is the resume prompt's only route to the killed work, and the
+  // coordinator's notice closes itself at birth on an empty loss window.
+  it('fresh handoff, empty window, work killed: the tail is written and names the killed work', () => {
+    reset()
+    writeFileSync(HANDOFF, '# fresh')
+    getAgentCommentsSince.mockReturnValue([])
+    writeRestartTail('marveen', inputs, null, '⏺ x', NOW)
+    expect(readFileSync(TAIL, 'utf8')).toContain('1 futott, es a restart MEGOLTE: heavy-run: gate-x.')
+  })
+  it('fresh handoff, empty window, only detached work: it survived, so no tail', () => {
+    reset()
+    writeFileSync(HANDOFF, '# fresh')
+    writeFileSync(TAIL, 'from an earlier restart')
+    const detachedOnly = { backgroundWork: 1, backgroundWorkDetail: 'heavy-run: gate-d', detachedWork: 1, detachedWorkDetail: 'heavy-run: gate-d', killedWorkDetail: '' } as never
+    writeRestartTail('marveen', detachedOnly, null, '⏺ x', NOW)
+    expect(existsSync(TAIL)).toBe(false)
   })
   // Card 6494ca96: a fresh handoff cannot know what arrived after it was written.
   it('fresh handoff but messages since it: the tail is written and lists them', () => {
@@ -206,7 +224,7 @@ describe('writeRestartTail writes, replaces and removes the tail file', () => {
     writeFileSync(HANDOFF, '# fresh')
     writeFileSync(TAIL, 'from an earlier restart')
     getAgentMessagesSince.mockImplementation(() => { throw new Error('db gone') })
-    expect(() => writeRestartTail('marveen', inputs, null, '⏺ x', NOW)).not.toThrow()
+    expect(() => writeRestartTail('marveen', nothingKilled, null, '⏺ x', NOW)).not.toThrow()
     expect(existsSync(TAIL)).toBe(false)
   })
   it('stale handoff and a failed message query: the tail says so instead of "none"', () => {
