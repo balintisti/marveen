@@ -312,6 +312,25 @@ except Exception:
     cache = {}
 used = {}
 fp_chain = git('rev-list', '--first-parent', LIVE, check=True).stdout.split()
+# landing[c] = index in fp_chain of the OLDEST mainline commit that contains c, for every commit in
+# the live history: ONE rev-list call answers "is c live" and "where did c land" from memory. Asking
+# git per commit took 37 433 merge-base calls (452 s) and the cherry-pick log on fully merged refs
+# another 450 s of a 1187 s run (profiled 2026-11-04, card b6284542; the 06:45 run hit 1424 s of
+# its 1800 s budget). Oldest first, so a commit is claimed by the first mainline commit reaching it.
+parents = {}
+for line in git('rev-list', '--parents', LIVE, check=True).stdout.splitlines():
+    sha, *ps = line.split()
+    parents[sha] = ps
+landing = {}
+for i in range(len(fp_chain) - 1, -1, -1):
+    landing.setdefault(fp_chain[i], i)
+    stack = list(parents.get(fp_chain[i], [])[1:])
+    while stack:
+        x = stack.pop()
+        if x not in landing:
+            landing[x] = i
+            stack.extend(parents.get(x, []))
+del parents
 # Subjects already in the live history: a missing commit whose subject is among them is most often
 # a pre-rebase copy whose content was re-resolved on the way in (measured 2026-10-01: 15 of 227
 # NOT-LIVE cards had ONLY such commits). Still reported -- the content does differ -- but marked,
@@ -354,22 +373,26 @@ def is_anc(x, y):
 
 
 def raw_files(a, b):
-    """(path, old_blob, new_blob) for a..b, renames off so paths are stable."""
-    out = []
-    for line in git('diff', '--raw', '--no-renames', '--no-abbrev', '-z', a, b).stdout.split('\0:'):
-        line = line.lstrip(':')
-        if not line:
-            continue
-        parts = line.split('\0')
-        meta = parts[0].split()
-        if len(meta) >= 4 and len(parts) >= 2:
-            out.append((parts[1], meta[2], meta[3]))
-    return out
+    """(path, old_blob, new_blob) for a..b, renames off so paths are stable. Cached: a and b are
+    full SHAs (or SHA^), so the answer never changes."""
+    def calc():
+        out = []
+        for line in git('diff', '--raw', '--no-renames', '--no-abbrev', '-z', a, b).stdout.split('\0:'):
+            line = line.lstrip(':')
+            if not line:
+                continue
+            parts = line.split('\0')
+            meta = parts[0].split()
+            if len(meta) >= 4 and len(parts) >= 2:
+                out.append((parts[1], meta[2], meta[3]))
+        return out
+    return cached(f'raw:{a}:{b}', calc)
 
 
 def commit_in_live(c):
     """(b) for one commit: its content is in the live tree."""
-    files = raw_files(c + '^', c) if git('rev-parse', '-q', '--verify', c + '^').returncode == 0 else []
+    has_parent = cached('par:' + c, lambda: git('rev-parse', '-q', '--verify', c + '^').returncode == 0)
+    files = raw_files(c + '^', c) if has_parent else []
     key = 'c:' + c + ':' + hashlib.sha1(''.join(f'{p}{live_blobs.get(p, ZERO)}' for p, _, _ in files).encode()).hexdigest()
 
     def calc():
@@ -383,17 +406,12 @@ def commit_in_live(c):
 
 
 def landing_base(tip):
-    """merge-base of tip with the mainline just before tip landed in LIVE."""
-    lo, hi = 0, len(fp_chain) - 1
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        if is_anc(tip, fp_chain[mid]):
-            lo = mid
-        else:
-            hi = mid - 1
+    """merge-base of tip with the mainline just before tip landed in LIVE (tip must be in LIVE)."""
+    lo = landing[tip]
     if lo + 1 >= len(fp_chain):
         return None
-    return git('merge-base', tip, fp_chain[lo + 1]).stdout.strip() or None
+    before = fp_chain[lo + 1]
+    return cached(f'mb:{tip}:{before}', lambda: git('merge-base', tip, before).stdout.strip()) or None
 
 
 def delta_added(base, tip):
@@ -461,12 +479,14 @@ for c in pop:
     rec['refs'] = sorted(crefs)
     missing_commits = {}
     for ref in sorted(crefs):
+        if crefs[ref] in landing:
+            continue   # the tip is in the live history: LIVE...tip has no right side to list
         for cm in git('log', '--no-merges', '--right-only', '--cherry-pick', '--format=%H',
                       f'{LIVE}...{crefs[ref]}').stdout.split():
             if cm not in missing_commits and not commit_in_live(cm):
                 missing_commits[cm] = ref
     gaps, added_total, tip_of = [], 0, {}
-    shipped_tips = [t for t in sorted(set(crefs.values())) if is_anc(t, LIVE)]
+    shipped_tips = [t for t in sorted(set(crefs.values())) if t in landing]
     if not missing_commits:
         for tip in shipped_tips:
             base = landing_base(tip)
@@ -484,7 +504,8 @@ for c in pop:
                       if not is_anc(h, tip_of[g['tip']]) and revert_removed(h, g['file']) & set(g['gone'])})
     if missing_commits:
         rec['verdict'] = 'NOT-LIVE'
-        subj = {k: git('log', '-1', '--format=%s', k).stdout.strip() for k in missing_commits}
+        subj = {k: cached('s:' + k, lambda k=k: git('log', '-1', '--format=%s', k).stdout.strip())
+                for k in missing_commits}
         rec['missing_commits'] = [{'commit': k[:9], 'ref': v, 'subject': subj[k][:100],
                                    'subject_in_live': subj[k] in live_subjects}
                                   for k, v in list(missing_commits.items())[:20]]
