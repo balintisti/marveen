@@ -66,7 +66,8 @@ knowledge lands nowhere. So for each index the gate first only WARNS (the write 
 warning goes into the model's context), and it starts REFUSING only after it has SEEN that
 index at or under the ceiling once (the agent trimmed it, or it never was over). That state
 is per realpath in MARVEEN_MEMORY_GATE_STATE (store/memory-gate-sub-trimmed.json), written
-only from a MEASURED current size, never from a write that has not happened yet.
+only from a MEASURED current size, never from a write that has not happened yet. A missing
+index counts as measured (0 characters); one that exists but cannot be read does not.
 
 The way out stays open on this path too: a write that makes an over-ceiling index strictly
 smaller passes. A shell write at a sub-agent index is ALLOWED with the warning (its size
@@ -234,13 +235,20 @@ def refuse_sub(agent, reason, chars, lines, cur_chars, cur_lines):
 
 def sub_gate(tool, ti, agent, rp):
     """The sub-agent branch of main(); always exits."""
+    # A MISSING index is a measurement (0 characters: it never was over); an index that exists
+    # but cannot be read is NOT, so it must not mark the agent as trimmed (didi M8, card 7d685b71).
+    sized = True
     try:
         with open(rp, encoding='utf-8') as fh:
             now = fh.read()
-    except OSError:
+    except FileNotFoundError:
         now = None
+    except (OSError, UnicodeDecodeError) as exc:
+        now = None
+        sized = False
+        log('UNSIZED-SUB', '%s %s: %s (not marked)' % (agent, rp, exc))
     c_chars, c_lines = measure(now) if now is not None else (0, 0)
-    if c_chars <= SUB_CHAR_CEILING and c_lines <= LINE_CEILING:
+    if sized and c_chars <= SUB_CHAR_CEILING and c_lines <= LINE_CEILING:
         mark_trimmed(rp, agent, c_chars)
     trimmed = rp in load_state()
 

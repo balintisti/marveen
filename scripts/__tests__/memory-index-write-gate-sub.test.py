@@ -195,6 +195,33 @@ def main():
                        {'MARVEEN_MEMORY_GATE_STATE': '/nonexistent-dir/x/state.json'})
         ok('15. irhatatlan allapotfajl -> enged (fail-open)', rc == 0, 'rc=%d' % rc)
 
+        # 16. "strictly smaller" is the way out, not "not bigger": an equal-size swap on a
+        #     trimmed, over-ceiling index is refused (didi M3, card 7d685b71)
+        put(idx, body(7000))
+        rc, _, err = run('Edit', {'file_path': idx, 'old_string': 'xxxx', 'new_string': 'yyyy'})
+        ok('16. vagott, folotte, AZONOS meretu csere -> TILT', rc == 2 and 'TILTVA' in err,
+           'rc=%d' % rc)
+
+        # 17. a MISSING index is measured as 0 characters: marked, so the first over-ceiling
+        #     Write of a new agent is refused (didi M8)
+        idx3 = os.path.join(proj, '-Users-Shared-marveen-newagent', 'memory', 'MEMORY.md')
+        os.makedirs(os.path.dirname(idx3), exist_ok=True)
+        rc, _, _ = run('Write', {'file_path': idx3, 'content': body(7000)})
+        ok('17. hianyzo index -> 0-nak MERT, jelolve, FOLE iras TILT', rc == 2 and marked(idx3),
+           'rc=%d' % rc)
+
+        # 18. an index that EXISTS but cannot be read is NOT a measurement: not marked, so an
+        #     over-ceiling Write only warns (didi M8)
+        idx4 = os.path.join(proj, '-Users-Shared-marveen-lockedagent', 'memory', 'MEMORY.md')
+        put(idx4, body(3000))
+        os.chmod(idx4, 0)
+        try:
+            rc, out, _ = run('Write', {'file_path': idx4, 'content': body(7000)})
+        finally:
+            os.chmod(idx4, 0o644)
+        ok('18. olvashatatlan index -> NEM jeloli, FOLE iras csak figyelmeztet',
+           rc == 0 and warned(out) and not marked(idx4), 'rc=%d out=%r' % (rc, out[:80]))
+
         ok('0. az ELES allapotfajl es az ELES al-agens index erintetlen',
            before == (mtime(LIVE_STATE), mtime(LIVE_SUB)), '%s -> %s' % (
                before, (mtime(LIVE_STATE), mtime(LIVE_SUB))))
