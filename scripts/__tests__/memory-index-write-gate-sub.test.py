@@ -222,6 +222,16 @@ def main():
         ok('18. olvashatatlan index -> NEM jeloli, FOLE iras csak figyelmeztet',
            rc == 0 and warned(out) and not marked(idx4), 'rc=%d out=%r' % (rc, out[:80]))
 
+        # 19. an index with bad UTF-8 is not a measurement either: the same warning phase, not
+        #     main()'s silent FAIL-OPEN (didi, 7d685b71 review)
+        idx5 = os.path.join(proj, '-Users-Shared-marveen-badutf8agent', 'memory', 'MEMORY.md')
+        os.makedirs(os.path.dirname(idx5), exist_ok=True)
+        with open(idx5, 'wb') as fh:
+            fh.write(b'\xff\xfe')
+        rc, out, _ = run('Write', {'file_path': idx5, 'content': body(7000)})
+        ok('19. rossz UTF-8 index -> NEM jeloli, FOLE iras csak figyelmeztet',
+           rc == 0 and warned(out) and not marked(idx5), 'rc=%d out=%r' % (rc, out[:80]))
+
         ok('0. az ELES allapotfajl es az ELES al-agens index erintetlen',
            before == (mtime(LIVE_STATE), mtime(LIVE_SUB)), '%s -> %s' % (
                before, (mtime(LIVE_STATE), mtime(LIVE_SUB))))
