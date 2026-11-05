@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
 // Card 3ed09d25: on 2026-09-16 the installer placeholder (0) in the .env sent 470
 // alerts to nobody during an 18-hour fleet outage, while the owner's chat sat in
@@ -40,6 +40,7 @@ vi.mock('../test-run-marker.js', () => ({ markIfTestRun: (t: string) => t }))
 
 import { notifyChannel, notifySecurityEvent, setOwnerChatMissingSink } from '../notify.js'
 
+const mkTmp = tmpDirs()
 const sink = vi.fn()
 function pair(provider: string, access: unknown): void {
   mkdirSync(join(stateRoot.dir, provider), { recursive: true })
@@ -47,7 +48,7 @@ function pair(provider: string, access: unknown): void {
 }
 
 beforeEach(() => {
-  stateRoot.dir = mkdtempSync(join(tmpdir(), 'notify-owner-'))
+  stateRoot.dir = mkTmp('notify-owner-')
   mockSend.mockClear(); mockWarn.mockClear(); sink.mockClear()
   cfg.provider = 'telegram'; cfg.token = 'bot-token'; cfg.chatId = '0'; cfg.alert = ''
   setOwnerChatMissingSink(sink)
@@ -55,7 +56,6 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   setOwnerChatMissingSink(null)
-  rmSync(stateRoot.dir, { recursive: true, force: true })
 })
 
 describe('notifyChannel: the owner chat is resolved at send time, and a refusal is heard (3ed09d25)', () => {
