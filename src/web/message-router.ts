@@ -1034,6 +1034,16 @@ export async function runMessageRouterTick(): Promise<void> {
     for (const agent of presentNow) {
       agentAbsentSince.delete(agent)
     }
+    // Card 71263d15 (A), S1 (upstream 033b3ff6, port 1bde6410): the clock stands for absence
+    // seen at EVERY tick. A receiver with no row in this tick's window was not looked at, so
+    // whether it came back in the meantime is unknown: its clock is dropped, and restarts at the
+    // next tick that sees it absent. selectTickWindow evaluates every receiver with a pending row
+    // (up to MAX_MESSAGES_PER_TICK of them), so a receiver that still has work waiting keeps its
+    // clock, and with it the reconnect-batch flag this map also carries. Dropping a clock can
+    // only delay an abandon, never cause one.
+    for (const agent of agentAbsentSince.keys()) {
+      if (!receiversInTick.has(agent)) agentAbsentSince.delete(agent)
+    }
 
     // Federated (slash-qualified) recipients delivered over the HTTPS bridge,
     // on their own budget so neither queue starves the other.
@@ -1479,8 +1489,12 @@ export async function runMessageRouterTick(): Promise<void> {
         if (!closed) {
           logger.warn({ id: msg.id }, 'markMessageFailed affected 0 rows (deleted concurrently?)')
         }
-        // Card cd404a64: this branch failed the row without telling the sender.
-        if (closed) notifySenderOfFailedHandoff(msg, 'kézbesítési hiba a routerben')
+        // Card cd404a64: this branch failed the row without telling the sender. Card 71263d15 (A,
+        // port 1bde6410): nor the orchestrator, which every other failing branch tells.
+        if (closed) {
+          notifyOrchestratorOfFailedHandoff(msg, `delivery error: ${String(err).slice(0, 200)}`)
+          notifySenderOfFailedHandoff(msg, 'kézbesítési hiba a routerben')
+        }
         routerLoggedMisses.delete(msg.id)
       }
     }
