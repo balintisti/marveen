@@ -74,6 +74,13 @@ DEFAULT_WINDOW = 20
 # truncation -- it does NOT change the window or the char budget.
 RECENT_TURNS_HIGHLIGHT = 5
 
+# Char cap on the OLDER backfill section alone (card a1846990, marveen 54158 (3)).
+# The recent highlight turns stay whole; only "KORÁBBI HÁTTÉR" is bounded, oldest
+# lines dropped first, because every fresh session pays for the whole block and
+# the background is the part it least needs. Env override:
+# LEDGER_CONTEXT_OLDER_CHAR_BUDGET.
+DEFAULT_OLDER_CHAR_BUDGET = 2000
+
 
 def _env_int(name, default):
     """Positive int from env var `name`, else `default`. Non-positive / non-numeric -> default."""
@@ -98,6 +105,10 @@ def _char_budget():
 
 def _byte_budget():
     return _env_int("LEDGER_CONTEXT_BYTE_BUDGET", DEFAULT_BYTE_BUDGET)
+
+
+def _older_char_budget():
+    return _env_int("LEDGER_CONTEXT_OLDER_CHAR_BUDGET", DEFAULT_OLDER_CHAR_BUDGET)
 
 
 def _max_snippet():
@@ -131,6 +142,11 @@ def _build_output(transcript, open_q, owner, reply_tool=None):
     else:
         recent = transcript
         older = []
+    older_budget = _older_char_budget()
+    older_total = sum(len(line) + 1 for line in older)
+    while older and older_total > older_budget:
+        older_total -= len(older[0]) + 1
+        older = older[1:]
 
     parts = [
         "KÖTELEZŐ: MIELŐTT bármely új bejövő üzenetre válaszolsz, dolgozd fel az "
