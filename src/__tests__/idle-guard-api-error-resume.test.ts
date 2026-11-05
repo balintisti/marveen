@@ -226,6 +226,20 @@ describe('decideIdleAlert -- progress, not time (card 46e6bfb0)', () => {
     const d = b.decisions[2]
     expect(d.alert && d.reason === 'api-error-repeat' && d.errorsWithoutProgress).toBeNull()
   })
+
+  it('an unmeasured gap breaks the chain (didi Tipp a): two failed resumes, a null one, then a failure -> resumed, not parked', () => {
+    const NUL = { apiErrorProgressSinceResume: null }
+    const a = runTicks([ERR, ERR], T0)
+    const b = runTicks([CLEAN, NO, NO], T0 + 2 * TICK, a.state)
+    expect(b.state.apiErrorResumesNoProgress).toBe(2)
+    const c = runTicks([CLEAN, NUL, NUL], T0 + 2 * TICK + 20 * MIN, b.state)   // past 10 min: the time rule resumes
+    expect(c.reasons[2]).toBe('resume-api-error')
+    expect(c.state.apiErrorResumesNoProgress).toBe(1)               // the response it may have had is unknown: only this resume counts
+    const d = runTicks([CLEAN, NO, NO], T0 + 2 * TICK + 23 * MIN, c.state)
+    expect(d.reasons[2]).toBe('resume-api-error')
+    const e = runTicks([CLEAN, NO, NO], T0 + 2 * TICK + 26 * MIN, d.state)
+    expect(e.reasons[2]).toBe('api-error-repeat')
+  })
 })
 
 describe('the message and the alert text', () => {
@@ -274,6 +288,7 @@ const realDb = await vi.importActual<typeof import('../db.js')>('../db.js')
 const panes = new Map<string, string | null>()
 const messages: Array<{ from: string; to: string; content: string }> = []
 let failNextEnqueueTo: string | null = null
+const remoteHosts = new Map<string, string>()
 
 vi.mock('../logger.js', () => ({ logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } }))
 vi.mock('../config.js', async (importOriginal) => {
@@ -288,7 +303,7 @@ vi.mock('../web/channel-mcp-reconnect.js', () => ({ resolveAgentSession: (a: str
 vi.mock('../web/agent-config.js', () => ({
   listAgentNames: () => ['x'],
   agentDir: (a: string) => join(hoisted.root, 'agents', a),
-  readAgentRemoteHost: () => null,
+  readAgentRemoteHost: (a: string) => remoteHosts.get(a) ?? null,
   readAgentProjects: () => null,
   // configDirFor (card 46e6bfb0) -> agents/x/.claude-config once its projects dir exists
   readAgentClaudePlan: () => null,
@@ -356,7 +371,7 @@ describe('tick() -- the API-error resume, end to end', () => {
     rmSync(join(xDir, '.claude-config'), { recursive: true, force: true })
     mkdirSync(join(hoisted.root, 'store'), { recursive: true })
     vi.useFakeTimers(); vi.setSystemTime(NOW)
-    panes.clear(); messages.length = 0; failNextEnqueueTo = null
+    panes.clear(); messages.length = 0; failNextEnqueueTo = null; remoteHosts.clear()
     workcheck(MAIN_AGENT_ID, 'none')
     workcheck('x', 'assigned_open_cards')          // no cards on the board: 0 own cards
     panes.set(`agent-${MAIN_AGENT_ID}`, COORDINATOR_BUSY)
@@ -478,5 +493,16 @@ describe('tick() -- the API-error resume, end to end', () => {
     expect(toCoordinator()).toHaveLength(1)
     expect(toCoordinator()[0].content).toContain('3. alkalommal')
     expect(toCoordinator()[0].content).toContain('"x"')
+  })
+
+  it('REMOTE agent (didi X9): a stale LOCAL transcript is not its progress -> the time rule decides', () => {
+    remoteHosts.set('x', 'mini2.local')              // its real transcript lives on that host
+    transcript(reply(-5), apiErr(-1))                // the local copy: no response after any resume
+    at(0, ERR_PANE); at(3, ERR_PANE)                 // resume at +3
+    at(6, BUSY_PANE)
+    at(9, ERR_PANE); at(12, ERR_PANE)                // inside 10 min: the time rule escalates; "no progress" would resume
+    expect(toX().filter((x) => x.content.startsWith('a turnod'))).toHaveLength(1)
+    expect(toCoordinator()).toHaveLength(1)
+    expect(toCoordinator()[0].content).toContain('MASODSZOR')
   })
 })

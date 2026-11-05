@@ -630,11 +630,12 @@ function decideIdleAlertCore(
       }
     }
     // PROGRESS, NOT TIME, decides whether the resumes still hold (card 46e6bfb0, marveen 53925): any
-    // successful response since the last resume zeroes the count. Unmeasured progress keeps the count
-    // and falls back to the time rule, so a remote agent behaves as before.
+    // successful response since the last resume zeroes the count. Unmeasured progress falls back to the
+    // time rule, so a remote agent behaves as before, and also zeroes the count: a response in the
+    // unmeasured gap would be invisible later, so the chain of "no progress" resumes is broken there.
     const lastResume = state.lastApiErrorResumeAt ?? null
     const progress = input.apiErrorProgressSinceResume ?? null
-    const noProgress = lastResume === null || progress === true ? 0 : (state.apiErrorResumesNoProgress ?? 0)
+    const noProgress = lastResume === null || progress !== false ? 0 : (state.apiErrorResumesNoProgress ?? 0)
     const repeat = progress === null
       ? lastResume !== null && now - lastResume < API_ERROR_REPEAT_MS
       : noProgress >= API_ERROR_PARK_AFTER - 1
