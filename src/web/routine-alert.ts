@@ -61,7 +61,8 @@ export function sendRoutineAlert(
     return false
   }
   states.set(key, { lastSentAt: now, suppressed: 0 })
-  // Owner-switchable noise gate (NOTIFY_ROUTINE_ALERTS, DEFAULT ON). The state
+  // Owner-switchable noise gate (NOTIFY_ROUTINE_ALERTS, DEFAULT OFF on this
+  // install, upstream ships ON -- see src/config.ts). The state
   // above is written either way: with the gate off the cooldown bookkeeping must
   // keep working, so turning the switch back on does not replay a backlog. The
   // real failure alerts travel sendAlert(), not this function, and are never
