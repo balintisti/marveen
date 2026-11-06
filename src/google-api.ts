@@ -150,11 +150,31 @@ export function hasServiceAccount(): boolean {
   }
 }
 
+/**
+ * A service-account key is a long-lived credential: refuse it when group or
+ * others can read it, rather than silently using a leaked-by-permission key.
+ */
+export function assertPrivateKeyMode(mode: number, path: string): void {
+  if ((mode & 0o077) !== 0) {
+    throw new Error(
+      `Service-account key ${path} is readable by group or others (mode ${(mode & 0o777).toString(8)}); `
+      + `refusing to use it. Fix: chmod 600 ${path}`,
+    )
+  }
+}
+
 function loadServiceAccount(): ServiceAccountKey {
   // Same mtime-invalidation contract as loadTokens: a key rotated by another
   // process must not be masked by our in-memory copy.
   let currentMtime = 0
-  try { currentMtime = statSync(SERVICE_ACCOUNT_PATH).mtimeMs } catch { /* fall through to readFileSync error */ }
+  try {
+    const st = statSync(SERVICE_ACCOUNT_PATH)
+    currentMtime = st.mtimeMs
+    assertPrivateKeyMode(st.mode, SERVICE_ACCOUNT_PATH)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    /* missing -- fall through to the readFileSync error */
+  }
   if (!cachedServiceAccount || cachedServiceAccount.mtimeMs !== currentMtime) {
     const parsed = JSON.parse(readFileSync(SERVICE_ACCOUNT_PATH, 'utf-8')) as ServiceAccountKey
     if (!parsed.client_email || !parsed.private_key) {
