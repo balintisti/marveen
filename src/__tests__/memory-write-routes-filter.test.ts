@@ -171,9 +171,22 @@ const RAW_SQL_WRITERS: Record<string, string> = {
   'src/web/fleet-transfer.ts':
     'POST /api/fleet/import restores a whole exported install: the rows are that install\'s own memories, '
     + 'including ones written before the filter existed, and a filtered restore would drop them silently. '
-    + 'Unfiltered by decision of this card, named on card 74161546 for marveen; the route takes the dashboard token.',
+    + 'Unfiltered by decision (marveen 10009639, card 74161546): it keeps every row and REPORTS the ones the '
+    + 'filter would refuse (memoriesFlagged + a log line, fleet-transfer.test.ts). Pinned below to ONE write in importFleet.',
+}
+// The exemption is for one write, not for the file (marveen 10009639): a second raw memories
+// writer in a pinned file fails here, even inside the same function.
+const RAW_SQL_PINNED: Record<string, { fn: string; writes: number }> = {
+  'src/web/fleet-transfer.ts': { fn: 'importFleet', writes: 1 },
 }
 const RAW_SQL_WRITE = /\b(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|UPDATE)\s+memories\b/
+const TOP_LEVEL_FN = /^(?:export\s+)?(?:async\s+)?function\s+(\w+)/gm
+/** The top-level function each raw memories write sits in ('' = outside any). */
+function rawWritesByFunction(src: string): string[] {
+  const starts = [...src.matchAll(TOP_LEVEL_FN)].map(m => ({ at: m.index!, name: m[1] }))
+  return [...src.matchAll(new RegExp(RAW_SQL_WRITE.source, 'g'))].map(w =>
+    starts.filter(f => f.at < w.index!).pop()?.name ?? '')
+}
 const ROUTE_DIR = 'src/web/routes/'
 const FILTER_CALL = /\b(containsSuspiciousContent|isRefused)\(/
 // A top-level handler in a tryHandle*() function: `  if (path === ...` or `  if (fooMatch && ...`.
@@ -206,6 +219,23 @@ describe('every HTTP route that writes a memory row filters it first', () => {
       .map(({ rel }) => rel)
       .sort()
     expect(raw, 'a new raw INSERT/UPDATE on memories: filter it with containsSuspiciousContent() if an HTTP body reaches it, or add it to RAW_SQL_WRITERS with the reason').toEqual(Object.keys(RAW_SQL_WRITERS).sort())
+  })
+
+  it('a pinned exemption covers exactly its named write, a second one fails', () => {
+    for (const [rel, pin] of Object.entries(RAW_SQL_PINNED)) {
+      const src = stripComments(readFileSync(join(root, rel), 'utf-8'))
+      expect(rawWritesByFunction(src), `${rel}: the exemption is for ${pin.writes} raw memories write(s) in ${pin.fn}(); a new one needs the filter or its own decision`)
+        .toEqual(Array(pin.writes).fill(pin.fn))
+    }
+  })
+
+  it('the pin counter sees a second write and a write outside the function (a counter that finds nothing proves nothing)', () => {
+    const one = 'export function importFleet() {\n  db.prepare(`INSERT INTO memories (a) VALUES (?)`)\n}\n'
+    expect(rawWritesByFunction(one)).toEqual(['importFleet'])
+    expect(rawWritesByFunction(one + 'function other() {\n  db.prepare("UPDATE memories SET a = 1")\n}\n'))
+      .toEqual(['importFleet', 'other'])
+    expect(rawWritesByFunction(one.replace('}\n', '  db.prepare("INSERT OR REPLACE INTO memories (a) VALUES (1)")\n}\n')))
+      .toEqual(['importFleet', 'importFleet'])
   })
 
   it('every caller outside the route directory is a known non-HTTP writer', () => {
