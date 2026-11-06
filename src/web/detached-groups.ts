@@ -1,7 +1,8 @@
 import { logger } from '../logger.js'
 
-// DETACHEDSHUTDOWN1007: the process groups the dashboard starts DETACHED (a
-// command task since #1772, a pre-check since #1759) are outside the
+// DETACHEDSHUTDOWN1007: the process groups the dashboard starts DETACHED (here
+// only a pre-check, since #1759; upstream a command task too, since #1772, not
+// ported: command-task.ts is a plain spawn, see 08fd6be4) are outside the
 // dashboard's own process group on purpose, so a timeout can end everything a
 // script started. The flip side: when the dashboard itself stops, nothing ends
 // them. Measured 2026-10-07 with a stand-in parent: after SIGTERM and exit, the

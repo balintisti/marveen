@@ -74,6 +74,23 @@ describe('the dashboard shutdown ends the running detached groups', () => {
     await vi.waitFor(() => { expect(labels()).not.toContain('pre-check:ds-pre-limit'); expect(alive(grand)).toBe(false) }, { timeout: sr.PRECHECK_KILL_GRACE_MS + 2000 })
   })
 
+  it('bash already gone, its TERM-proof grandchild still running: a shutdown inside the grace second ends it (didi 55352 MP2)', async () => {
+    const d = tmp(); const gF = join(d, 'grand.pid'); const bashF = join(d, 'bash.pid'); const script = join(d, 'pre.sh')
+    // The grandchild ignores TERM and holds no stdio, so bash's exit on the TERM closes the
+    // child: the close handler runs while the KILL is still a second away.
+    writeFileSync(script, `echo $$ > '${bashF}'\n(trap '' TERM; exec sleep 300) </dev/null >/dev/null 2>&1 & echo $! > '${gF}'\nwait\n`, { mode: 0o755 })
+    const p = sr.runPreCheckAsync({ name: 'ds-pre-grace', preCheck: script } as never, { timeoutMs: 300 })
+    const bashPid = await readPid(bashF); const grand = await readPid(gF)
+    expect(await p).toEqual({ skip: false })
+    await vi.waitFor(() => { expect(alive(bashPid)).toBe(false) }, { timeout: 500 })
+    await new Promise((r) => setTimeout(r, 50)) // let the close handler run
+    expect(alive(grand)).toBe(true)
+    expect(labels()).toContain('pre-check:ds-pre-grace') // closed, but still tracked until the KILL
+    reg.endAllDetachedGroups('test')
+    // well inside the grace second, so the shutdown ended it, not the delayed KILL
+    await vi.waitFor(() => { expect(alive(grand)).toBe(false) }, { timeout: 300 })
+  })
+
   it('a group kill that fails with anything but ESRCH is logged', () => {
     const untrack = reg.trackDetachedGroup(424242, 'test:eperm')
     vi.spyOn(process, 'kill').mockImplementation((() => { const e = new Error('operation not permitted') as NodeJS.ErrnoException; e.code = 'EPERM'; throw e }) as never)
