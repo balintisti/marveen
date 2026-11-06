@@ -4,6 +4,7 @@ import { saveAgentMemory } from '../../db.js'
 import { MAIN_AGENT_ID, OLLAMA_URL } from '../../config.js'
 import { logger } from '../../logger.js'
 import { readBody, json } from '../http-helpers.js'
+import { containsSuspiciousContent } from './memories.js'
 import type { RouteContext } from './types.js'
 
 // Longest run of characters a single memory row may hold. Anything longer is
@@ -182,12 +183,25 @@ export async function tryHandleMigrate(ctx: RouteContext): Promise<boolean> {
     let sourceChars = 0
     let importedChars = 0
     let skippedShortChars = 0
+    // Parts the injection filter refused (card 74161546). The source files are
+    // read from caller-supplied paths, so their text is as untrusted as a POST
+    // body; a refused part is skipped, counted and named in `details`, and its
+    // characters are kept apart so the source/imported gap stays explainable.
+    let rejectedParts = 0
+    let rejectedChars = 0
+    const isRefused = (text: string): boolean => {
+      if (!containsSuspiciousContent(text)) return false
+      rejectedParts++
+      rejectedChars += text.length
+      return true
+    }
 
     // Saves one source document as however many rows it needs, labelling the
     // parts when there is more than one so a reader can tell they belong together.
     const saveDocument = (label: string, content: string, keywords: string) => {
       const parts = chunkText(content, DOCUMENT_CHUNK_CHARS)
       parts.forEach((part, i) => {
+        if (isRefused(part)) return
         const suffix = parts.length > 1 ? ` (${i + 1}/${parts.length})` : ''
         saveAgentMemory(agentId, `[${label}${suffix}] ${part}`, 'warm', keywords, true)
         stats.warm++
@@ -265,7 +279,11 @@ export async function tryHandleMigrate(ctx: RouteContext): Promise<boolean> {
       } catch {}
     }
 
-    if (chunks.length > 0) {
+    // Filtered before the categorizer sees them: a refused chunk is neither
+    // written nor sent to Ollama.
+    const safeChunks = chunks.filter(chunk => !isRefused(chunk))
+
+    if (safeChunks.length > 0) {
       let categorizeModel: string | null = null
       // Why the reason is carried and not just the null: an install whose only
       // Ollama model is an embedding model (needed for vector search) gets no
@@ -285,7 +303,8 @@ export async function tryHandleMigrate(ctx: RouteContext): Promise<boolean> {
         categorizeUnavailable = 'az Ollama nem válaszolt'
       }
 
-      for (const chunk of chunks) {
+      for (let ci = 0; ci < safeChunks.length; ci++) {
+        const chunk = safeChunks[ci]
         try {
           let tier = 'warm'
           let keywords = ''
@@ -315,7 +334,7 @@ export async function tryHandleMigrate(ctx: RouteContext): Promise<boolean> {
           imported++
           importedChars += chunk.length
 
-          if (chunks.indexOf(chunk) < chunks.length - 1) {
+          if (ci < safeChunks.length - 1) {
             await new Promise(r => setTimeout(r, 200))
           }
         } catch {
@@ -326,7 +345,7 @@ export async function tryHandleMigrate(ctx: RouteContext): Promise<boolean> {
         }
       }
 
-      details.push(`${chunks.length} memória chunk feldolgozva`)
+      details.push(`${safeChunks.length} memória chunk feldolgozva`)
       if (categorizeUnavailable) {
         details.push(`Kategorizálás kimaradt (${categorizeUnavailable}), ezért minden sor warm lett, kulcsszavak nélkül`)
       }
@@ -339,14 +358,18 @@ export async function tryHandleMigrate(ctx: RouteContext): Promise<boolean> {
     // minimum length, which are counted separately. After the chunking fix no
     // kept section loses its tail, so a large unexplained gap is a bug report,
     // not normal operation.
-    const chars = { source: sourceChars, imported: importedChars, skippedShortSections: skippedShortChars }
+    if (rejectedParts > 0) {
+      details.push(`A biztonsági szűrő ${rejectedParts} részt visszautasított (${rejectedChars} karakter), ezek nem kerültek a memóriába`)
+      logger.warn({ agent: agentId, rejected: rejectedParts }, 'Migrate: parts rejected by security filter')
+    }
+    const chars = { source: sourceChars, imported: importedChars, skippedShortSections: skippedShortChars, rejected: rejectedChars }
     if (sourceChars > 0) {
       const pct = Math.round((importedChars / sourceChars) * 1000) / 10
       details.push(`Karakterek: ${importedChars} / ${sourceChars} importálva (${pct}%), rövid szekciókból kihagyva: ${skippedShortChars}`)
     }
 
-    logger.info({ agentId, imported, stats, chars }, 'Költöztetés kész')
-    json(res, { ok: true, imported, stats, details, chars })
+    logger.info({ agentId, imported, stats, chars, rejected: rejectedParts }, 'Költöztetés kész')
+    json(res, { ok: true, imported, stats, details, chars, rejected: rejectedParts })
     return true
   }
 

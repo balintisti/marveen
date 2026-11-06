@@ -105,7 +105,12 @@ function stripDiacritics(s: string): string {
   return s.normalize('NFD').replace(/[̀-ͯ]/g, '')
 }
 
-function containsSuspiciousContent(content: string): boolean {
+// Exported because every HTTP path that writes a memory row runs it, not only
+// POST/PATCH/PUT here: /api/memories/import and /api/migrate/run wrote with no
+// filter at all until card 74161546, and any token holder could plant a row in
+// ANOTHER agent's memories through them. src/__tests__/memory-write-routes-filter.test.ts
+// fails when a route file gains a write that this function does not gate.
+export function containsSuspiciousContent(content: string): boolean {
   const plain = stripDiacritics(content)
   return SUSPICIOUS_PATTERNS.some((pattern) => pattern.test(content) || pattern.test(plain))
 }
@@ -298,6 +303,25 @@ export async function tryHandleMemories(ctx: RouteContext): Promise<boolean> {
     const stats = { hot: 0, warm: 0, cold: 0, shared: 0 }
     let imported = 0
 
+    // The filter runs per chunk, BEFORE any of them is written or sent to the
+    // categorizer: one poisoned chunk must not cost the caller the other
+    // ninety-nine, and the refused ones are named by their index in the
+    // request so the caller can find them. A non-string chunk is refused the
+    // same way instead of crashing the loop halfway through an import.
+    const accepted: string[] = []
+    const rejected: number[] = []
+    chunks.forEach((chunk, i) => {
+      if (typeof chunk === 'string' && !containsSuspiciousContent(chunk)) accepted.push(chunk)
+      else rejected.push(i)
+    })
+    if (rejected.length > 0) {
+      logger.warn({ agent: agentId, rejected: rejected.length, of: chunks.length }, 'Memory import: chunks rejected by security filter')
+    }
+    if (accepted.length === 0) {
+      json(res, { error: 'Content rejected by security filter', imported: 0, rejected: rejected.length, rejectedIndexes: rejected }, 400)
+      return true
+    }
+
     // The model is never GUESSED -- and the feature is never silently switched
     // off either. Two rules, in this order:
     //
@@ -343,8 +367,8 @@ export async function tryHandleMemories(ctx: RouteContext): Promise<boolean> {
       }
     }
 
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i]
+    for (let i = 0; i < accepted.length; i++) {
+      const chunk = accepted[i]
 
       if (!categorizeModel) {
         saveAgentMemory(agentId, chunk, 'warm', '', true)
@@ -399,7 +423,7 @@ Respond ONLY with JSON, nothing else:
         stats[tier as keyof typeof stats]++
         imported++
 
-        if (i < chunks.length - 1) {
+        if (i < accepted.length - 1) {
           await new Promise(r => setTimeout(r, 200))
         }
       } catch {
@@ -409,8 +433,8 @@ Respond ONLY with JSON, nothing else:
       }
     }
 
-    logger.info({ agentId, imported, stats }, 'Migráció befejezve')
-    json(res, { ok: true, imported, stats })
+    logger.info({ agentId, imported, stats, rejected: rejected.length }, 'Migráció befejezve')
+    json(res, { ok: true, imported, stats, rejected: rejected.length, rejectedIndexes: rejected })
     return true
   }
 
