@@ -234,6 +234,8 @@ describe('gate: rm / rmdir / mv of a directory that holds the allowlist objects 
     'sudo -h host rm -rf store',
     'sudo -Z val rm -rf store',
     'sudo -Zu root rm -rf store',
+    'sudo -u root -n rm -rf store',
+    'sudo -u root --login rm -rf store',
     'sudo -Z -Y -X -W -V -u root rm -rf store',
     // each (runner, word) state once: 30 unknown options are 30 states, not 2^30 readings
     `sudo ${'-Z '.repeat(30)}rm -rf store`,
