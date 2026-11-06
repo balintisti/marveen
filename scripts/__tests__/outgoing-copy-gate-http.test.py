@@ -126,6 +126,8 @@ CASES = [
      f"curl -s -HContent-Type:application/json -X POST {MIO}/feed/posts/abc/comments -d '{json.dumps({'content': GOOD})}'", 0),
     ("the token after -d is its value, not a cluster: -d '-Fun' passes",
      "curl -s https://api.telegram.org/botXYZ/sendMessage -d chat_id=1 -d '-Fun'", 0),
+    ("the token after a long --data is its value, not a cluster: --data '-Fun' passes",
+     "curl -s https://api.telegram.org/botXYZ/sendMessage -d chat_id=1 --data '-Fun'", 0),
     ("-XPOST with an em dash is still READ and BLOCKS",
      f"curl -s -XPOST {MIO}/feed/posts/abc/comments -d '{json.dumps({'content': BAD})}'", 2),
     ("an upload in a -sT cluster BLOCKS (unreadable)",
