@@ -211,6 +211,20 @@ describe('gate: rm / rmdir / mv of a directory that holds the allowlist objects 
     'sudo -u isti rm -rf store',
     'time rm -rf store',
     'nice -n 5 rm -rf store',
+    // didi 55399 L1: the value-taking options are per runner, an unknown option is read both ways
+    'time -p rm -rf store',
+    'sudo -n rm -rf store',
+    'sudo -nu isti rm -rf store',
+    'sudo -uisti rm -rf store',
+    'sudo --user isti rm -rf store',
+    'sudo --user=isti rm -rf store',
+    'sudo --preserve-env rm -rf store',
+    'sudo -Z rm -rf store',
+    'sudo -- rm -rf store',
+    'time -o /tmp/t rm -rf store',
+    'exec -a x rm -rf store',
+    'nice -5 rm -rf store',
+    "env -S 'rm -rf store'",
     'rm -rf store>/dev/null',
     'rm -rf store 2>/dev/null',
     'rm -rf store > /tmp/log',
@@ -224,6 +238,10 @@ describe('gate: rm / rmdir / mv of a directory that holds the allowlist objects 
   })
   const wrappedAllowed = [
     'sudo -u isti ls store',
+    'sudo -u rm ls store',
+    'time -o store/t.txt ls',
+    // didi 55399 L2: a separate redirect word and its target are not the mv destination
+    'mv /tmp/x store > /tmp/log',
     'env rm -rf /tmp/x',
     'nohup rm -rf store/scratch-x',
     'rm -rf /tmp/x > store/log.txt',

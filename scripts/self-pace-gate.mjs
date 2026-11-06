@@ -400,9 +400,42 @@ export function findHitsAllowlist(seg, allowlistPath = DEFAULT_ALLOWLIST_PATH, c
 // src/web/egress-allowlist-baseline.ts says so: `cd store/.. && rm -rf *`, `find -delete` over a
 // parent, `python -c shutil.rmtree`, a script. The OS-level owner named there is the real close.
 const REMOVERS = new Set(['rm', 'rmdir', 'mv', 'trash'])
-// A prefix that runs the next word as the command (didi 55396 K2); the options that take a value.
-const RUNNERS = new Set(['command', 'builtin', 'exec', 'nohup', 'env', 'sudo', 'doas', 'time', 'nice'])
-const RUNNER_ARG_OPTS = new Set(['-u', '-g', '-n', '-C', '-p', '-h', '-U'])
+// A prefix that runs the next word as the command (didi 55396 K2), with the short options that take
+// a value FOR THAT RUNNER (didi 55399 L1: `time -p` is a flag, `sudo -p` takes a prompt). An option
+// the table does not know is read both ways, and the segment is denied if either reading removes.
+// env -S is a flag here on purpose: its value IS the command (`env -S 'rm -rf store'`).
+const RUNNER_VALUE_OPTS = {
+  command: '', builtin: '', nohup: '', exec: 'a', env: 'uCP', sudo: 'ugCDhpRrTtU', doas: 'uC', time: 'of', nice: 'n',
+}
+const RUNNER_FLAG_OPTS = {
+  command: 'pvV', builtin: '', nohup: '', exec: 'cl', env: 'i0vS', sudo: 'AbEeHiKkLlnPSsVv', doas: 'Lns', time: 'ahlpv', nice: '',
+}
+const cmdOf = (w) => (w ?? '').replace(/^\\/, '').replace(/^.*\//, '')
+// The indices a runner chain can hand the command word to: one, unless an unknown option forks it.
+function commandStarts(words, i) {
+  while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++ // leading VAR=x
+  const runner = cmdOf(words[i])
+  if (!Object.hasOwn(RUNNER_VALUE_OPTS, runner)) return [i]
+  i++
+  for (;;) {
+    const w = words[i]
+    if (w === undefined || !/^-/.test(w)) return commandStarts(words, i)
+    if (w === '--') return commandStarts(words, i + 1)
+    if (w.startsWith('--')) { // --user=root is one word; --user root or --preserve-env rm: both ways
+      if (w.includes('=')) { i++; continue }
+      return [...commandStarts(words, i + 1), ...commandStarts(words, i + 2)]
+    }
+    if (/^-\d+$/.test(w)) { i++; continue } // nice -5
+    let step = 1
+    for (let c = 1; c < w.length; c++) {
+      if (RUNNER_VALUE_OPTS[runner].includes(w[c])) { step = c === w.length - 1 ? 2 : 1; break }
+      if (!RUNNER_FLAG_OPTS[runner].includes(w[c])) {
+        return [...commandStarts(words, i + 1), ...(c === w.length - 1 ? commandStarts(words, i + 2) : [])]
+      }
+    }
+    i += step
+  }
+}
 export function removalHitsAncestor(seg, allowlistPath = DEFAULT_ALLOWLIST_PATH, cwd = process.cwd()) {
   const raw = String(seg ?? '').trim().replace(/^[({]\s*/, '').split(/\s+/).map((w) => w.replace(/['"]/g, '').replace(/\)+$/, ''))
   // A redirect is not an operand: `> f`, `2>/dev/null`, and the glued `store>/dev/null` (K3).
@@ -414,14 +447,10 @@ export function removalHitsAncestor(seg, allowlistPath = DEFAULT_ALLOWLIST_PATH,
     const left = w.split(/[<>]/)[0] // bash: `store2>x` is the word store2, not fd 2
     if (left) words.push(left)
   }
-  const cmdOf = (w) => (w ?? '').replace(/^\\/, '').replace(/^.*\//, '')
-  let i = 0
-  for (;;) {
-    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++ // leading VAR=x
-    if (!RUNNERS.has(cmdOf(words[i]))) break
-    i++
-    while (i < words.length && /^-/.test(words[i])) i += RUNNER_ARG_OPTS.has(words[i]) ? 2 : 1
-  }
+  return commandStarts(words, 0).some((i) => removerHitsAncestor(words, i, allowlistPath, cwd))
+}
+
+function removerHitsAncestor(words, i, allowlistPath, cwd) {
   const cmd = cmdOf(words[i])
   if (!REMOVERS.has(cmd)) return false
   const operands = []
