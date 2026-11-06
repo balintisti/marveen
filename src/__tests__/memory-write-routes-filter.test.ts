@@ -139,6 +139,26 @@ describe('the keywords are filtered like the content (didi 55431 K1)', () => {
     expect(moved.status).toBe(200)
   })
 
+  // didi 55441 K5: a row written before the filter existed (or by the fleet
+  // restore) must stay movable and re-taggable: the filter judges what the
+  // request SENDS, not what is already stored. Without this, a poisoned row
+  // could never be moved to cold or given clean keywords -- a trap, not a guard.
+  it('PATCH on a poisoned row already in the DB: a tier move and clean keywords go through, new poisoned content does not', async () => {
+    const { lastInsertRowid } = getDb().prepare(
+      "INSERT INTO memories (chat_id, content, sector, salience, created_at, accessed_at, agent_id, category) VALUES ('', ?, 'semantic', 0.5, 1000, 1000, 'victim-old-row', 'hot')",
+    ).run(ENGLISH)
+    const id = Number(lastInsertRowid)
+    const moved = await call(tryHandleMemories, `/api/memories/${id}`, { tier: 'cold' }, 'PATCH')
+    expect(moved.status).toBe(200)
+    const tagged = await call(tryHandleMemories, `/api/memories/${id}`, { keywords: 'legacy, review' }, 'PATCH')
+    expect(tagged.status).toBe(200)
+    expect(getDb().prepare('SELECT category, keywords, content FROM memories WHERE id = ?').get(id))
+      .toEqual({ category: 'cold', keywords: 'legacy, review', content: ENGLISH })
+    // CONTROL: sending content is judged, even on this row.
+    const rewritten = await call(tryHandleMemories, `/api/memories/${id}`, { content: UNACCENTED }, 'PATCH')
+    expect(rewritten.status).toBe(400)
+  })
+
   it("a categorizer's keywords are dropped when the filter refuses them, kept otherwise", () => {
     expect(modelKeywords(ENGLISH)).toBe('')
     expect(modelKeywords(`deploy, ${UNACCENTED}`)).toBe('')

@@ -1915,6 +1915,7 @@ window._i18n.en = {
   'fleet.import.dryrun_errors':   'Errors in import:',
   'fleet.import.apply_confirm':   'Are you sure? Import will overwrite existing agent configs. This is for empty/fresh installations only.',
   'fleet.import.apply_success':   'Import completed successfully.',
+  'fleet.import.memories_flagged': '{n} restored memories would fail the injection filter. They were kept; review them. First ids: {ids}',
   'fleet.import.error':           'Import error',
 
   'fleet.stat.main_agent':        'Main agent',
