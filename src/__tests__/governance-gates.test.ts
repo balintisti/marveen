@@ -3,7 +3,9 @@ import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 // @ts-expect-error -- plain .mjs hook script, no types
-import { gateDecision as selfPaceDecision, stripDataPayloads, stripGitCommitMessages, REASON_HINT } from '../../scripts/self-pace-gate.mjs'
+import { gateDecision as selfPaceDecision, stripDataPayloads, stripGitCommitMessages, stripProseArguments, REASON_HINT } from '../../scripts/self-pace-gate.mjs'
+// @ts-expect-error -- plain .mjs hook script, no types
+import { bashViolation, isExactInstall } from '../../scripts/readonly-repo-gate.mjs'
 import {
   agentGetsGovernanceGates,
   agentGetsTelegramCopyGate,
@@ -12,7 +14,13 @@ import {
   TELEGRAM_COPY_GATE_MATCHER,
 } from '../web/agent-scaffold.js'
 import { MAIN_AGENT_ID } from '../config.js'
+import { homedir } from 'node:os'
+import { mkdirSync, symlinkSync, rmSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 const PANE_WRITE = 't' + 'mux send-' + 'keys'
@@ -97,6 +105,14 @@ describe('self-pace-gate gateDecision', () => {
     for (const r of used) {
       expect(REASON_HINT[r], `${r}: hasznaljuk denykent, de nincs hozza hint`).toBeTruthy()
     }
+  })
+
+  it('egress-allowlist (FORK port of 618b57ca): mixed reason, the hint names both the data way out and the real write', () => {
+    // Bash names the file (may be documentation) and a file tool writes it (structural):
+    // one reason code for both, as upstream asserts, so the hint has to say both.
+    expect(REASON_HINT['egress-allowlist']).toMatch(/HA DOKUMENTALSZ/)
+    expect(REASON_HINT['egress-allowlist']).toMatch(/Write eszkozzel/)
+    expect(REASON_HINT['egress-allowlist']).toMatch(/Fajl-eszkoznel ilyen eset nincs/)
   })
 
   it('BLOCKS EXACTLY WHAT IT BLOCKED BEFORE -- only the message grew', () => {
@@ -271,6 +287,88 @@ describe('self-pace-gate gateDecision', () => {
   })
 })
 
+// FORK (card 6525aba3): upstream #770 also blanks heredoc bodies here
+// (stripHeredocBodies). Not taken, the fork's decision stands: a
+// `cat > x.sh <<'EOF'` body carrying a pane write must stay visible to the
+// self-pace patterns (pinned in egress-allowlist-selfedit.test.ts).
+describe('self-pace-gate stripProseArguments (scoped to gh/git/glab)', () => {
+  // PR #770 review (Szotasz): the prose-flag blanking is for a PR/issue body or
+  // release note, so it must be scoped to gh/git/glab. A short flag means
+  // something else to other tools, and blanking it there hides real data.
+  it('blanks a prose flag on gh', () => {
+    expect(stripProseArguments("gh pr create --body 'runs at midnight, cron style'"))
+      .not.toContain('midnight')
+  })
+
+  it('leaves a same-named flag on an unrelated tool alone', () => {
+    // tar -t is "list", cut -b is "bytes" -- not prose, must not be blanked.
+    const tar = "tar -t 'archive at now.tar'"
+    expect(stripProseArguments(tar)).toBe(tar)
+    const cut = "cut -b '1-3 at now'"
+    expect(stripProseArguments(cut)).toBe(cut)
+  })
+
+  // FORK (didi's C6 review, card 6525aba3): the guard used to be "gh/git/glab
+  // ANYWHERE in the command", on the whole command, so the word git in one
+  // segment blanked an argument another segment's command executes.
+  it('leaves a prose flag alone when gh/git/glab is only elsewhere in the text', () => {
+    const watch = "watch -t 'claude -p /loop'"
+    expect(stripProseArguments(watch)).toBe(watch)
+    const path = "cat ~/git/x -t 'at now'"
+    expect(stripProseArguments(path)).toBe(path)
+  })
+
+  it.each([
+    ['watch -t after cd into a git dir', "cd ~/git && watch -t 'tmux send-keys -t didi hi Enter'"],
+    ['watch -t after a git command', "git status; watch -t 'curl -s -X POST http://localhost:3420/api/schedules'"],
+    ['xargs -t after git', "git log -1; echo x | xargs -t 'tmux send-keys -t didi hi Enter'"],
+    ['setsid -b after git', "git status && setsid -b 'claude -p /loop'"],
+    ['env -m after git', "git -C . status; env -m 'tmux send-keys -t didi x Enter'"],
+    ['watch -t on the next line after git', "git status\nwatch -t 'tmux send-keys -t didi hi Enter'"],
+  ])('a quoted command another tool executes stays DENIED: %s', (_name, command) => {
+    expect(selfPaceDecision('Bash', { command }).deny).toBe(true)
+  })
+
+  it('still blanks prose on the scheduler fallback path (unresolvable quoting)', () => {
+    // "$(date)" makes maskInertLiterals give up, so the anchored scheduler check
+    // runs on naive segments: the gh body must not read as the at scheduler
+    // (the `(` is a SCHED_BOUNDARY). A `;` inside the body would still split the
+    // naive segment and stay denied: fail-closed, accepted.
+    // FORK (6525aba3 A3 port): upstream asserted this command is ALLOWED. Here the
+    // fork's quote-intact INDIRECT_SCHEDULER_RX (card 3f18a5a6) still denies a
+    // parenthesised `(at noon)`, and the port does not loosen it. What the strip
+    // changes is WHICH check speaks: the anchored one no longer reads the prose.
+    const command = `gh pr create --title "$(date +%F)" --body 'ships Friday (at noon) for review'`
+    expect(selfPaceDecision('Bash', { command })).toEqual({ deny: true, reason: 'os-scheduler-indirect' })
+    // A body only the anchored check would read: the strip is the whole verdict.
+    const bare = `gh pr create --title "$(date +%F)" --body 'drop the (crontab)'`
+    expect(selfPaceDecision('Bash', { command: bare }).deny).toBe(false)
+  })
+
+  it('on the fallback path, git LATER in the segment does not blank another tool\'s argument', () => {
+    // didi's M4: without the ^ anchor in PROSE_TOOL_RX the `~/git` below made
+    // the watch argument prose, and the at-scheduler under it went through.
+    const command = `watch -t '(at now)' ~/git "$(date +%F)"`
+    expect(selfPaceDecision('Bash', { command }).deny).toBe(true)
+    // FORK (6525aba3 A3 port): on this base the quote-intact indirect check also
+    // denies `(at now)`, so the line above holds even without the anchor. A bare
+    // `(crontab)` is read by the anchored check alone: here the anchor decides.
+    const bare = `watch -t '(crontab)' ~/git "$(date +%F)"`
+    expect(selfPaceDecision('Bash', { command: bare })).toEqual({ deny: true, reason: 'os-scheduler' })
+  })
+
+  it.each([
+    ['$(...) in --body', `gh pr create --body "$(crontab)"`],
+    ['backtick in --body', 'gh pr create --body "`crontab`"'],
+    ['$(...) in git -m', `git notes add -m "$(crontab)"`],
+  ])('on the fallback path, a double-quoted prose value that substitutes stays visible: %s', (_name, command) => {
+    // The substitution runs before gh/git ever sees its argument, so it is a
+    // command, not prose. A bare `crontab` (no argument) is invisible to the
+    // indirect check, so keeping the value unblanked is the whole verdict here.
+    expect(selfPaceDecision('Bash', { command })).toEqual({ deny: true, reason: 'os-scheduler' })
+  })
+})
+
 // --- stripDataPayloads: a curl -d/--data body is DATA sent over the wire, never
 // a shell invocation, so a trigger token INSIDE the payload must not false-deny a
 // legit dispatch. Only provably-literal payloads are blanked; a payload that can
@@ -439,7 +537,7 @@ describe('governance gate scaffold wiring', () => {
     const pre = ((s.hooks as Record<string, unknown>).PreToolUse as Array<{ matcher: string }>)
     const entry = pre.find((e) => JSON.stringify(e).includes('self-pace-gate.mjs'))
     const re = new RegExp(`^(?:${entry!.matcher})$`)
-    for (const t of ['Bash', 'Write', 'Edit', 'NotebookEdit', 'ScheduleWakeup', 'CronCreate']) {
+    for (const t of ['Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'ScheduleWakeup', 'CronCreate']) {
       expect(re.test(t)).toBe(true)
     }
     expect(re.test('Read')).toBe(false)
@@ -905,5 +1003,282 @@ describe('telegram copy gate wiring', () => {
     const ptu = (settings.hooks as Record<string, unknown>).PreToolUse as unknown[]
     expect(JSON.stringify(ptu)).toContain('egress-gate.mjs')
     expect(ptu).toHaveLength(2)
+  })
+})
+
+// --- readonly-repo-gate: only the EXACT install command is exempt ---
+//
+// Maintainer decision on #770 (2026-09-25): package installs are allowed, but
+// only the exact install command with nothing appended -- `npm install`,
+// `npm ci`, `yarn install`, bare `yarn`, `pnpm install`. The yarn branch used
+// to read `yarn\s+(install)?\b`, which matched `yarn ` + anything, so
+// `yarn add left-pad` and `yarn exec rm -rf src` skipped the gate. INSTALL_RX
+// is now anchored to the whole segment, and an appended form is judged (and,
+// inside a protected root, refused) like any other package-manager call.
+describe('readonly-repo-gate: only the exact install command is exempt', () => {
+  // ROOTS defaults to <home>/projects, resolved when the module loads.
+  const repo = join(homedir(), 'projects', 'app')
+  const outside = join(homedir(), 'agents', 'qa-worker')
+
+  const EXACT = ['npm install', 'npm ci', 'yarn install', 'yarn', 'pnpm install']
+
+  it('recognises exactly the five decided install commands', () => {
+    for (const cmd of EXACT) expect(isExactInstall(cmd), cmd).toBe(true)
+    for (const cmd of [
+      'yarn add left-pad',
+      'yarn exec rm -rf src',
+      'yarn dlx some-codemod',
+      'npm install evil-pkg',
+      'npm ci --prefix=src',
+      'npm i',
+      'pnpm install left-pad',
+      'pnpm add left-pad',
+      'yarn install --modules-folder=src',
+      'yarn --cwd src',
+      'npm ci --include=../src',
+      'npm ci --silent>src/x',
+      'CI=1 npm ci',
+      'pip install -r requirements.txt',
+    ]) {
+      expect(isExactInstall(cmd), cmd).toBe(false)
+    }
+  })
+
+  it('an install followed only by allowlisted flags is still the exact install', () => {
+    // Review question on #770 (2026-09-26): the updater runs `npm ci` with
+    // flags. An allowlist, not "anything starting with -": the flags that
+    // matter are the ones that move where the install writes.
+    for (const cmd of [
+      'npm ci --include=dev',
+      'npm ci --ignore-scripts --no-audit --no-fund',
+      'yarn install --frozen-lockfile',
+      'yarn --frozen-lockfile',
+      'pnpm install --frozen-lockfile',
+      'npm install --legacy-peer-deps',
+    ]) {
+      expect(isExactInstall(cmd), cmd).toBe(true)
+      expect(bashViolation(cmd, repo), cmd).toBeNull()
+    }
+  })
+
+  it('allows the exact installs inside a protected repo', () => {
+    for (const cmd of EXACT) {
+      expect(bashViolation(`cd ${repo} && ${cmd}`), cmd).toBeNull()
+      expect(bashViolation(cmd, repo), `${cmd} (session cwd)`).toBeNull()
+    }
+  })
+
+  it('refuses yarn add and yarn exec inside a protected repo', () => {
+    for (const cmd of ['yarn add left-pad', 'yarn exec rm -rf src', 'yarn exec tsx build.ts', 'yarn dlx some-codemod']) {
+      expect(bashViolation(`cd ${repo} && ${cmd}`), cmd).not.toBeNull()
+      expect(bashViolation(cmd, repo), `${cmd} (session cwd)`).not.toBeNull()
+    }
+  })
+
+  it('refuses an install with anything appended', () => {
+    for (const cmd of [
+      'npm install evil-pkg',
+      'npm install --save left-pad',
+      'npm ci --prefix=src',
+      'npm ci --include=dev --cwd=src',
+      'yarn --cwd src',
+      'yarn --cwd src add left-pad',
+      'npm --prefix src install left-pad',
+      'pnpm -C src add left-pad',
+      'pnpm install left-pad',
+      'yarn install --modules-folder src',
+      'npm i left-pad',
+    ]) {
+      expect(bashViolation(`cd ${repo} && ${cmd}`), cmd).not.toBeNull()
+    }
+  })
+
+  it('an appended redirect is no longer hidden behind the install', () => {
+    expect(bashViolation(`npm ci > ${repo}/src/index.ts`)).not.toBeNull()
+    expect(bashViolation(`yarn install > ${repo}/src/index.ts`)).not.toBeNull()
+  })
+
+  it('the exemption is per-segment, so a chained non-install is still judged', () => {
+    expect(bashViolation(`cd ${repo} && yarn install && yarn add left-pad`)).not.toBeNull()
+    expect(bashViolation(`cd ${repo} && npm ci && yarn exec rm -rf src`)).not.toBeNull()
+  })
+
+  it('judges from the session cwd the hook payload carries', () => {
+    // `cd <repo>` in one Bash call, `yarn add x` in the next: the shell kept
+    // the cwd, so the second call must be judged from the repo.
+    expect(bashViolation('yarn add left-pad', repo)).not.toBeNull()
+    expect(bashViolation('yarn add left-pad', outside)).toBeNull()
+  })
+
+  it('leaves read-only package-manager use alone', () => {
+    for (const cmd of ['npm test', 'npm run build', 'yarn test', 'pnpm run lint']) {
+      expect(bashViolation(`cd ${repo} && ${cmd}`), cmd).toBeNull()
+    }
+  })
+})
+
+// --- readonly-repo-gate: the artifact exemption is decided PER TARGET ---
+//
+// Review on #770 (2026-09-26): the exemption used to test the whole segment,
+// so one artifact-looking word (`node_modules/...`) exempted a command that
+// also named source. Every word that resolves into a protected root must now
+// itself be an artifact path, resolved the way the kernel resolves it.
+describe('readonly-repo-gate: artifact exemption per target', () => {
+  const home = homedir()
+  const repo = join(home, 'projects', 'app')
+  const outside = join(home, 'agents', 'qa-worker')
+
+  it('refuses the two shapes the review measured', () => {
+    expect(bashViolation('rm -rf src node_modules/.cache', repo)).not.toBeNull()
+    expect(bashViolation(`cd ${repo} && rm -rf src node_modules/.cache`)).not.toBeNull()
+    expect(bashViolation('./node_modules/.bin/yarn add x', repo)).not.toBeNull()
+    expect(bashViolation(`rm -rf ${repo}/src ${repo}/node_modules/.cache`)).not.toBeNull()
+  })
+
+  it('refuses a source target hidden among artifact targets, in any spelling', () => {
+    for (const cmd of [
+      'rm -rf -- src node_modules',
+      `rm -rf "src" 'node_modules/.cache'`,
+      'rm -rf node_modules/* src/*',
+      'rm -rf {src,node_modules}',
+      'mv src node_modules/x',
+      'mv dist src',
+      'cp node_modules/x/a.ts src/a.ts',
+      'cp -r dist/. src/',
+      'cp -t src node_modules/x',
+      'cp -tsrc node_modules/x',
+      'cp --target-directory=src node_modules/x',
+      'install -Dm644 node_modules/x src/y',
+      'echo x | tee src/a.ts node_modules/.cache/x',
+      'git rm -r src node_modules',
+      'sed -i s/a/b/ src/a.ts node_modules/x',
+      'sudo rm -rf src node_modules',
+      'env rm -rf src node_modules',
+      'FOO=1 rm -rf src node_modules',
+      '(rm -rf src node_modules)',
+      'bash -c "rm -rf src node_modules"',
+      'rm -rf node_modules && rm -rf src',
+      'rm -rf node_modules; rm -rf src',
+    ]) {
+      expect(bashViolation(cmd, repo), cmd).not.toBeNull()
+    }
+  })
+
+  it('an artifact directory is not a way out through .. or shell expansion', () => {
+    for (const cmd of [
+      'rm -rf node_modules/../src',
+      'rm -rf node_modules/.cache/../../src',
+      'rm -rf ./dist/.././src',
+      `rm -rf ${repo}/node_modules/../src`,
+      'echo x > node_modules/../src/a.ts',
+      `echo x > ${repo}/dist/../src/a.ts`,
+      'rm -rf node_modules/{..,x}/src',
+      'rm -rf node_modules/[.][.]/src',
+      'rm -rf node_modules/.?/src',
+      'rm -rf node_modules/$X/src',
+      'rm -rf node_modules/`echo ..`/src',
+      "rm -rf $'node_modules/../src'",
+    ]) {
+      expect(bashViolation(cmd, repo), cmd).not.toBeNull()
+    }
+  })
+
+  it('a safe-looking tail no longer exempts the segment', () => {
+    // GIT_SAFE_RX was unanchored: the segment was skipped if it merely ENDED
+    // in a branch switch or CONTAINED `git worktree list`.
+    expect(bashViolation('rm -rf src git checkout main', repo)).not.toBeNull()
+    expect(bashViolation('rm -rf src # git worktree list', repo)).not.toBeNull()
+    expect(bashViolation('echo x > src/a.ts # git worktree list', repo)).not.toBeNull()
+    expect(bashViolation('git checkout main', repo)).toBeNull()
+    expect(bashViolation('git worktree list', repo)).toBeNull()
+  })
+
+  it('finds the repo behind ~, $HOME and relative paths from outside it', () => {
+    for (const cmd of [
+      'rm -rf ~/projects/app/src',
+      'rm -rf $HOME/projects/app/src',
+      'rm -rf ${HOME}/projects/app/src',
+      '(cd ~/projects/app && rm -rf src node_modules)',
+      `cd ${home} && rm -rf projects/app/src node_modules`,
+      `cd ${home} && cd projects/app && rm -rf src`,
+      `echo ${repo}/src | xargs rm -rf`,
+    ]) {
+      expect(bashViolation(cmd, outside), cmd).not.toBeNull()
+    }
+    expect(bashViolation('rm -rf ../../projects/app/src', outside)).not.toBeNull()
+    expect(bashViolation('rm -rf projects/app/src', home)).not.toBeNull()
+  })
+
+  it('refuses package-manager writes with the flags in front of the subcommand', () => {
+    for (const cmd of [
+      'yarn --cwd src add left-pad',
+      'npm --prefix src install left-pad',
+      'pnpm -C src add left-pad',
+      'yarn --cwd src',
+    ]) {
+      expect(bashViolation(cmd, repo), cmd).not.toBeNull()
+    }
+  })
+
+  it('still allows commands whose every repo target is an artifact', () => {
+    for (const cmd of [
+      'rm -rf node_modules',
+      'rm -rf node_modules/.cache dist',
+      'rm -rf node_modules/*',
+      'rm -rf node_modules /tmp/x',
+      'mkdir -p node_modules/.cache',
+      'mv node_modules/x dist/y',
+      'touch dist/x',
+      'cp /tmp/x.txt dist/x.txt',
+      'echo x > dist/out.txt',
+      'echo x > node_modules/.cache/x',
+      'rm -rf /tmp/x',
+      'grep -rn foo src',
+      'cat src/a.ts | grep x',
+    ]) {
+      expect(bashViolation(cmd, repo), cmd).toBeNull()
+    }
+    expect(bashViolation(`rm -rf ${repo}/node_modules ${repo}/dist`)).toBeNull()
+    expect(bashViolation(`cat ${repo}/a | tee /tmp/out`, outside)).toBeNull()
+    expect(bashViolation('rm -rf src', outside)).toBeNull()
+  })
+})
+
+// The hook as the runtime calls it: a real root on disk (READONLY_REPO_ROOTS),
+// a JSON payload on stdin. This is where a symlinked workspace package counts:
+// `node_modules/@ws/core` pointing back at `packages/core` is SOURCE.
+describe('readonly-repo-gate: the hook end to end', () => {
+  const script = join(__dirname, '..', '..', 'scripts', 'readonly-repo-gate.mjs')
+  const root = mkTmp('rorg-')
+  const repo = join(root, 'app')
+  mkdirSync(join(repo, 'packages', 'core', 'src'), { recursive: true })
+  mkdirSync(join(repo, 'node_modules', '@ws'), { recursive: true })
+  mkdirSync(join(repo, 'node_modules', '.cache'), { recursive: true })
+  symlinkSync(join(repo, 'packages', 'core'), join(repo, 'node_modules', '@ws', 'core'))
+
+  const run = (payload: Record<string, unknown>) => {
+    const r = spawnSync(process.execPath, [script], {
+      input: JSON.stringify(payload),
+      env: { ...process.env, READONLY_REPO_ROOTS: root },
+      encoding: 'utf-8',
+    })
+    return r.stdout.includes('"permissionDecision":"deny"') ? 'deny' : 'allow'
+  }
+
+  it('refuses a write through a symlinked workspace package', () => {
+    expect(run({ tool_name: 'Bash', cwd: repo, tool_input: { command: 'rm -rf node_modules/@ws/core/src' } })).toBe('deny')
+    expect(run({ tool_name: 'Write', cwd: repo, tool_input: { file_path: join(repo, 'node_modules', '@ws', 'core', 'src', 'a.ts') } })).toBe('deny')
+  })
+
+  it('refuses a Write whose artifact directory is climbed out of with ..', () => {
+    expect(run({ tool_name: 'Write', tool_input: { file_path: join(repo, 'node_modules') + '/../packages/core/src/a.ts' } })).toBe('deny')
+    expect(run({ tool_name: 'Edit', tool_input: { file_path: join(repo, 'packages', 'core', 'src', 'a.ts') } })).toBe('deny')
+  })
+
+  it('allows real artifact writes and the review shapes are denied', () => {
+    expect(run({ tool_name: 'Write', tool_input: { file_path: join(repo, 'node_modules', '.cache', 'x') } })).toBe('allow')
+    expect(run({ tool_name: 'Bash', cwd: repo, tool_input: { command: 'rm -rf node_modules/.cache' } })).toBe('allow')
+    expect(run({ tool_name: 'Bash', cwd: repo, tool_input: { command: 'rm -rf packages node_modules/.cache' } })).toBe('deny')
+    expect(run({ tool_name: 'Bash', cwd: repo, tool_input: { command: './node_modules/.bin/yarn add x' } })).toBe('deny')
   })
 })

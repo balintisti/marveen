@@ -28,7 +28,13 @@
 // name !== MAIN_AGENT_ID, re-applied on every spawn (respawn-safe).
 
 import { readFileSync, realpathSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { homedir } from 'node:os'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+// The allowlist this install's egress-gate.mjs reads (scripts/ -> repo root -> store/).
+const DEFAULT_ALLOWLIST_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', 'store', 'egress-allowlist.json')
 
 // Claude Code runtime self-pace / scheduling tools. A sub-agent has no
 // legitimate need to schedule its own future turns -- it is input-driven.
@@ -222,6 +228,304 @@ const LAUNCHD_DIR_WRITE_RX = new RegExp(
   String.raw`|\bPlistBuddy\b[^;&|\n]*\s-c\s*['"]?\s*(?:Set|Add|Delete|Merge|Import|Clear|Save)\b|\bdefaults\s+write\b`,
   'i',
 )
+
+// THE EGRESS ALLOWLIST IS A GATE ON THE SUB-AGENT ITSELF (EGRESSSELFEDIT824).
+// store/egress-allowlist.json decides which hosts egress-gate.mjs lets through, and it
+// was a plain writable file in the sub-agent's own tree: on 2026-08-24 a nested
+// sub-agent added a domain to reach it and removed it afterwards. Its legitimate
+// writers are the MAIN agent (on the owner's go) and the owner by hand -- neither runs
+// this gate (it is wired for sub-agents only), so neither is affected.
+//
+// Native file tools: denied on the file name AND on the resolved real path, so a
+// relative path or a symlink created earlier does not walk past the name check.
+// Bash: FAIL-CLOSED. A segment that mentions the file may only be a plain READ
+// (cat/grep/jq/...), and an output redirect in it may not point at the file. An
+// interpreter (python/node/...), cp/mv/tee/sed/ln/... or anything else that names the
+// file is denied, because whether it writes cannot be read off the command string.
+//
+// A glob that does not spell the name (store/e*-allowlist.json, store/*.history) is read
+// the way bash expands it: resolved from the cwd and matched against the two store objects
+// (globHitsAllowlist below), so it counts as a mention like the spelled name does. A
+// `find ROOT -name PAT -delete` whose ROOT holds the store counts too (findHitsAllowlist).
+//
+// The history directory is part of the gate, not only the file: the baseline's reports
+// compare against it, so a native Write into store/egress-allowlist.history/ would rewrite
+// the evidence the way a Bash `cp` was already refused for (didi 6525aba3 50862 N1).
+//
+// What this gate CANNOT see -- a script that builds the path at runtime, a name assembled
+// from a variable (${F}list.json), a move of the whole store/ directory -- is written down,
+// not hidden: the dashboard keeps a hash
+// baseline of the file and reports every change, whoever made it, by whatever route
+// (src/egress-allowlist-baseline.ts). This gate narrows the casual route; that one
+// catches the rest after the fact.
+const ALLOWLIST_BASENAME = 'egress-allowlist.json'
+const HISTORY_DIRNAME = 'egress-allowlist.history'
+// The STORE objects, not the concept: the file and its history directory, or a glob that
+// starts on the name (egress-allow*, egress-allowlist.*). A plain /egress[-_]?allow/ also
+// matched this gate's own source and test names (egress-allowlist-baseline.ts), so no
+// sub-agent could run, stage or diff them -- review on #1678.
+const ALLOWLIST_MENTION_RX = /egress[-_]?allowlist(?:\.json|\.history)|egress[-_]?allow[\w.]*[*?[]/i
+// A path component that IS one of the allowlist's objects: the file, its history directory
+// (and so everything below it), and the baseline's sha record (egress-allowlist.history-<key>.sha).
+const ALLOWLIST_OBJECT_RX = /^egress[-_]?allowlist\.(?:json|history)/i
+const ALLOWLIST_READERS = new Set([
+  'cat', 'head', 'tail', 'grep', 'egrep', 'fgrep', 'rg', 'jq', 'wc', 'ls', 'stat',
+  'file', 'shasum', 'sha256sum', 'md5', 'md5sum', 'diff', 'cmp', 'echo', 'printf',
+])
+// Output redirects: `>`, `>>`, `>|`, `&>`, `&>>`, `N>`. The target is the next word.
+const OUTPUT_REDIRECT_RX = /(?:&>>?|\d*>>?\|?)\s*([^\s;&|<>]+)/g
+
+// One glob path component as a regex: * ? [...] [!...] {a,b}, the rest literal.
+function globComponentRx(part) {
+  let out = ''
+  let braces = 0
+  for (let i = 0; i < part.length; i++) {
+    const c = part[i]
+    if (c === '*') out += '[^/]*'
+    else if (c === '?') out += '[^/]'
+    else if (c === '[') {
+      const close = part.indexOf(']', i + 2)
+      if (close === -1) { out += '\\['; continue }
+      let body = part.slice(i + 1, close)
+      if (body.startsWith('!') || body.startsWith('^')) body = '^' + body.slice(1)
+      out += '[' + body.replace(/\\/g, '\\\\') + ']'
+      i = close
+    } else if (c === '{') { braces++; out += '(?:' }
+    else if (c === '}' && braces > 0) { braces--; out += ')' }
+    else if (c === ',' && braces > 0) out += '|'
+    else out += c.replace(/[.+^$()|\\\]{}]/g, '\\$&')
+  }
+  if (braces > 0) return null // an unclosed brace is literal in bash; too odd to guess
+  try { return new RegExp('^' + out + '$') } catch { return null }
+}
+
+// Does a word with glob characters land on the allowlist file or inside its history
+// directory, once bash expands it from `cwd`? Matched component by component against the
+// real paths, so `rm /tmp/*.json` (another directory) is not a hit and `cp x
+// store/e*-allowlist.json` is. Quotes are stripped first: a quoted glob is not expanded by
+// bash, but a script handed one (python glob, find) may expand it, so fail-closed.
+export function globHitsAllowlist(word, allowlistPath = DEFAULT_ALLOWLIST_PATH, cwd = process.cwd()) {
+  // A trailing ) closes a subshell `(cd store && rm e*)`; $PWD and $(pwd) are the cwd itself.
+  const w = String(word ?? '').replace(/^(?:&>>?|\d*>>?\|?)/, '').replace(/^[A-Za-z_-]+=/, '').replace(/['"]/g, '')
+    .replace(/\)+$/, '').replace(HOME_WORD_RX, homedir()).replace(CWD_WORD_RX, cwd)
+  if (!/[*?[{]/.test(w) || /[$`]/.test(w)) return false
+  const parts = resolve(cwd, expandHome(w)).split('/')
+  const rxs = parts.map(globComponentRx)
+  if (rxs.some((r) => r === null)) return false
+  const historyDir = join(dirname(allowlistPath), HISTORY_DIRNAME)
+  const record = baselineRecordPath(allowlistPath)
+  const targets = [
+    { path: allowlistPath, below: false }, { path: realOrSelf(allowlistPath), below: false },
+    { path: historyDir, below: true }, { path: realOrSelf(historyDir), below: true },
+    { path: record, below: false }, { path: realOrSelf(record), below: false },
+  ]
+  return targets.some(({ path, below }) => {
+    const t = path.split('/')
+    if (rxs.length < t.length || (rxs.length > t.length && !below)) return false
+    return t.every((seg, i) => rxs[i].test(seg))
+  })
+}
+
+// `$PWD`, `${PWD}`, `$(pwd)` or `` `pwd` `` at the start of a word: the directory the shell is in.
+// The baseline's sha record, as src/web/egress-allowlist-baseline.ts baselineMemoryFile names it:
+// <home>/.marveen/<history dir>-<key>.sha, keyed by the store's real path. Its name is denied, but
+// a glob or a find under ~/.marveen reached it (`rm ~/.marveen/*.sha`, didi 51495 A4-3).
+function baselineRecordPath(allowlistPath) {
+  const key = createHash('sha256').update(realOrSelf(dirname(allowlistPath))).digest('hex').slice(0, 12)
+  return join(homedir(), '.marveen', `${HISTORY_DIRNAME}-${key}.sha`)
+}
+
+const CWD_WORD_RX = /^(?:\$PWD\b|\$\{PWD\}|\$\(pwd\)|`pwd`)/
+const HOME_WORD_RX = /^\$(?:HOME\b|\{HOME\})/
+// A find -exec terminator, masked before the allowlist pass splits on `;` (see gateDecision).
+// Only a WHOLE word is one: a word that is `\;`, `';'` or `";"` alone reaches its command as a
+// literal `;`, so it never separates. Glued to other text it may hide a real separator: in
+// `echo x\; rm f`, `echo 'a';'rm' f` and `echo "a";"rm" f` the shell runs the rm (didi 51654 L1).
+const FIND_EXEC_END_RX = /(?<=^|\s)(?:\\;|';'|";")(?=$|[\s;&|)])/g
+const FIND_EXEC_END_MARK = '\u241F'
+
+// `find ROOT... EXPR`: its -name pattern never spells a path and the shell expands nothing, but
+// find walks ROOT and acts on every match (`find store -name 'egress*' -delete`, didi 50862).
+// A hit: an acting expression (-delete, -exec, ...), a ROOT that holds the store or lies in the
+// history, and a filter that does not provably miss the allowlist objects. -path/-regex and a
+// negation are not read: fail-closed.
+const FIND_ACTION_RX = /^-(?:delete|exec|execdir|ok|okdir|fprint0?|fprintf|fls)$/
+const HISTORY_ENTRY_SAMPLE = '20261101T000000000Z-000000000000.json'
+const isAtOrBelow = (p, dir) => p === dir || p.startsWith(dir.endsWith('/') ? dir : dir + '/')
+export function findHitsAllowlist(seg, allowlistPath = DEFAULT_ALLOWLIST_PATH, cwd = process.cwd()) {
+  const words = String(seg ?? '').trim().replace(/^[({]\s*/, '').split(/\s+/).map((w) => w.replace(/['"]/g, ''))
+  let i = 0
+  while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++ // leading VAR=x
+  if ((words[i] ?? '').replace(/^.*\//, '') !== 'find') return false
+  i++
+  while (i < words.length && /^-[HLP]$/.test(words[i])) i++
+  const roots = []
+  for (; i < words.length && !/^[-(!]/.test(words[i]); i++) roots.push(words[i])
+  const expr = words.slice(i)
+  // -exec cat/grep/... {} reads; -exec anything else, -delete and -fprint write
+  const writes = (w, k) => FIND_ACTION_RX.test(w) &&
+    !(/^-(?:exec|execdir|ok|okdir)$/.test(w) && ALLOWLIST_READERS.has(String(expr[k + 1] ?? '').replace(/^.*\//, '')))
+  if (!expr.some(writes)) return false
+  const storeDir = dirname(allowlistPath)
+  const historyDir = join(storeDir, HISTORY_DIRNAME)
+  const record = baselineRecordPath(allowlistPath)
+  const covers = (root) => {
+    const r = realOrSelf(resolve(cwd, expandHome(root.replace(/\)+$/, '').replace(HOME_WORD_RX, homedir()).replace(CWD_WORD_RX, cwd))))
+    return [storeDir, realOrSelf(storeDir), dirname(record), realOrSelf(dirname(record))].some((d) => isAtOrBelow(d, r)) ||
+      [historyDir, realOrSelf(historyDir)].some((h) => isAtOrBelow(r, h))
+  }
+  if (!(roots.length ? roots : ['.']).some(covers)) return false
+  if (expr.some((w) => w === '!' || w === '-not' || /^-i?(?:path|wholename|regex)$/.test(w))) return true
+  const names = []
+  for (let k = 0; k < expr.length - 1; k++) {
+    if (/^-i?name$/.test(expr[k])) names.push({ pat: expr[k + 1], ci: expr[k] === '-iname' })
+  }
+  if (!names.length) return true
+  const objects = [ALLOWLIST_BASENAME, HISTORY_DIRNAME, 'history.log', HISTORY_ENTRY_SAMPLE, basename(record)]
+  return names.some(({ pat, ci }) => {
+    const rx = globComponentRx(pat)
+    if (!rx) return true
+    const t = ci ? new RegExp(rx.source, 'i') : rx
+    return objects.some((o) => t.test(o))
+  })
+}
+
+// `rm` / `rmdir` / `mv` of a directory that HOLDS one of the three objects takes it along:
+// `rm -rf store`, `rm -rf ~/.marveen`, `mv store store2` (didi 55350 L2, marveen 55375). A hit:
+// an operand, resolved as the paths above are (~, $HOME, $PWD, relative to the cwd the segment
+// runs in, real path), that IS one of the objects or an ANCESTOR of one. For mv only the SOURCES
+// count: the destination is an existing directory the source goes INTO, or a new name, and
+// `mv /tmp/x .` from the install root must stay allowed. An operand with $ or ` (unknown at this
+// point) or a glob is not read. Indirect forms stay outside this check, and the header of
+// src/web/egress-allowlist-baseline.ts says so: `cd store/.. && rm -rf *`, `find -delete` over a
+// parent, `python -c shutil.rmtree`, a script. The OS-level owner named there is the real close.
+const REMOVERS = new Set(['rm', 'rmdir', 'mv', 'trash'])
+// A prefix that runs the next word as the command (didi 55396 K2), with the short options that take
+// a value FOR THAT RUNNER (didi 55399 L1: `time -p` is a flag, `sudo -p` takes a prompt). An option
+// the table does not know, and a long option without =, is read both ways INSIDE the runner's option
+// list (didi 55404 M1: `sudo --login -u root rm` must reach rm), and the segment is denied if any
+// reading removes. env -S is a flag here on purpose: its value IS the command (`env -S 'rm -rf store'`).
+// sudo -h is left out of both: it is --help alone and --host with a value.
+const RUNNER_VALUE_OPTS = {
+  command: '', builtin: '', nohup: '', exec: 'a', env: 'uCP', sudo: 'ugCDpRrTtU', doas: 'uC', time: 'of', nice: 'n',
+}
+const RUNNER_FLAG_OPTS = {
+  command: 'pvV', builtin: '', nohup: '', exec: 'cl', env: 'i0vS', sudo: 'ABbEeHiKkLlNnPSsVv', doas: 'Lns', time: 'ahlpv', nice: '',
+}
+const cmdOf = (w) => (w ?? '').replace(/^\\/, '').replace(/^.*\//, '')
+// Every index a runner chain can hand the command word to. Each (runner, word) state is visited
+// once, so n unknown options cost n states, not 2^n readings.
+function commandStarts(words, i, seen = new Set()) {
+  while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++ // leading VAR=x
+  const runner = cmdOf(words[i])
+  if (!Object.hasOwn(RUNNER_VALUE_OPTS, runner)) return [i]
+  const at = i
+  const out = []
+  const next = (j) => {
+    if (seen.has(`${at}:${j}`)) return
+    seen.add(`${at}:${j}`)
+    const w = words[j]
+    if (w === undefined || !/^-/.test(w)) return void out.push(...commandStarts(words, j, seen))
+    if (w === '--') return void out.push(...commandStarts(words, j + 1, seen))
+    if (w.startsWith('--')) return w.includes('=') ? next(j + 1) : (next(j + 1), next(j + 2)) // --user root, --login
+    if (/^-\d+$/.test(w)) return next(j + 1) // nice -5
+    for (let c = 1; c < w.length; c++) {
+      const value = RUNNER_VALUE_OPTS[runner].includes(w[c])
+      if (!value && RUNNER_FLAG_OPTS[runner].includes(w[c])) continue
+      next(c === w.length - 1 ? j + 2 : j + 1) // takes a value: the next word, or the rest glued (-uisti)
+      if (value) return
+      // an unknown letter may also be a flag: the cluster goes on (-Bu root)
+    }
+    next(j + 1)
+  }
+  next(i + 1)
+  return out
+}
+export function removalHitsAncestor(seg, allowlistPath = DEFAULT_ALLOWLIST_PATH, cwd = process.cwd()) {
+  const raw = String(seg ?? '').trim().replace(/^[({]\s*/, '').split(/\s+/).map((w) => w.replace(/['"]/g, '').replace(/\)+$/, ''))
+  // A redirect is not an operand: `> f`, `2>/dev/null`, and the glued `store>/dev/null` (K3).
+  const words = []
+  for (let k = 0; k < raw.length; k++) {
+    const w = raw[k]
+    if (/^\d*(?:>>?|<)&?$/.test(w)) { k++; continue }
+    if (/^\d*[<>]/.test(w)) continue
+    const left = w.split(/[<>]/)[0] // bash: `store2>x` is the word store2, not fd 2
+    if (left) words.push(left)
+  }
+  return commandStarts(words, 0).some((i) => removerHitsAncestor(words, i, allowlistPath, cwd))
+}
+
+function removerHitsAncestor(words, i, allowlistPath, cwd) {
+  const cmd = cmdOf(words[i])
+  if (!REMOVERS.has(cmd)) return false
+  const operands = []
+  let target = null
+  let opts = true
+  for (let k = i + 1; k < words.length; k++) {
+    const w = words[k]
+    if (opts && w === '--') { opts = false; continue }
+    if (opts && cmd === 'mv' && (w === '-t' || w === '--target-directory')) { target = words[++k] ?? null; continue }
+    if (opts && cmd === 'mv' && w.startsWith('--target-directory=')) { target = w.slice(19); continue }
+    if (opts && cmd === 'mv' && (w === '-S' || w === '--suffix')) { k++; continue }
+    if (opts && /^-./.test(w)) continue
+    operands.push(w)
+  }
+  // mv a b: b is the destination; mv -t dir a b: every operand is a source
+  const sources = cmd === 'mv' && target === null ? operands.slice(0, -1) : operands
+  const historyDir = join(dirname(allowlistPath), HISTORY_DIRNAME)
+  const objects = [allowlistPath, historyDir, baselineRecordPath(allowlistPath)].flatMap((o) => [o, realOrSelf(o)])
+  return sources.some((w) => {
+    if (!w || /[$`*?[{]/.test(w.replace(HOME_WORD_RX, '').replace(CWD_WORD_RX, ''))) return false
+    const abs = resolve(cwd, expandHome(w.replace(HOME_WORD_RX, homedir()).replace(CWD_WORD_RX, cwd)))
+    return [abs, realOrSelf(abs)].some((op) => objects.some((o) => isAtOrBelow(o, op)))
+  })
+}
+
+export function allowlistBashSegmentAllowed(seg, opts = {}) {
+  // A subshell or a group opens the segment: `(rm e*)`, `{ cat e*; }`.
+  const s = String(seg ?? '').trim().replace(/^[({]\s*/, '')
+  if (findHitsAllowlist(s, opts.allowlistPath, opts.cwd)) return false
+  if (removalHitsAncestor(s, opts.allowlistPath, opts.cwd)) return false
+  const globHit = () => s.split(/\s+/).some((w) => globHitsAllowlist(w, opts.allowlistPath, opts.cwd))
+  if (!ALLOWLIST_MENTION_RX.test(s) && !globHit()) return true
+  const words = s.split(/\s+/)
+  let i = 0
+  while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++ // leading VAR=x
+  const cmd = (words[i] ?? '').replace(/^.*\//, '')
+  if (!ALLOWLIST_READERS.has(cmd)) return false
+  for (const m of s.matchAll(OUTPUT_REDIRECT_RX)) {
+    const target = m[1]
+    if (/^&?\d+$/.test(target) || target === '/dev/null') continue // 2>&1, >/dev/null
+    if (ALLOWLIST_MENTION_RX.test(target) || /[$`]/.test(target) || globHitsAllowlist(target, opts.allowlistPath, opts.cwd)) return false
+  }
+  return true
+}
+
+function expandHome(p) {
+  return p.startsWith('~/') ? join(homedir(), p.slice(2)) : p
+}
+// .native: on a case-insensitive volume (APFS default) `STORE` IS store/, and only the native
+// realpath answers with the name on disk; the JS one keeps the typed case (didi 55396 K1).
+function realOrSelf(p) {
+  try { return realpathSync.native(p) } catch { return p }
+}
+
+// Does a native file-tool call target the allowlist? `allowlistPath` is the real file
+// this install's egress-gate reads; tests pass a tmp one.
+export function fileToolTargetsAllowlist(toolInput, allowlistPath = DEFAULT_ALLOWLIST_PATH, cwd = process.cwd()) {
+  const raw = String(toolInput?.file_path ?? toolInput?.notebook_path ?? '')
+  if (!raw) return false
+  const abs = resolve(cwd, expandHome(raw))
+  // by name: any component that is one of the objects (case-insensitive, as APFS opens it)
+  if (abs.split('/').some((c) => ALLOWLIST_OBJECT_RX.test(c))) return true
+  // by real path: a relative path or a symlink that never spells the name; a new file is
+  // resolved through its (existing) directory
+  const real = realOrSelf(abs)
+  const viaDir = join(realOrSelf(dirname(abs)), basename(abs))
+  const historyDir = join(dirname(allowlistPath), HISTORY_DIRNAME)
+  return [real, viaDir].some((p) => p === realOrSelf(allowlistPath) ||
+    isAtOrBelow(p, realOrSelf(historyDir)) || isAtOrBelow(p, historyDir))
+}
 
 // Split a compound command into individual simple commands, so a token in one
 // segment cannot trip a check anchored in another (e.g. `cat store && cp a b`).
@@ -446,6 +750,40 @@ export function maskInertLiterals(command, { heredocOnly = false } = {}) {
 // blank the out-of-band `; crontab -r` and let a real self-pace command slip.
 // ANSI-C $'...' DOES process \', so that branch keeps the \\. escape form; "..."
 // keeps it too (backslash is special inside bash double quotes).
+// Human prose in a command-argument position is DATA, not commands. The heredoc
+// fix closed one wrapper; this closes the rest of the family: a PR body, a PR
+// comment, a release note. The failure mode is identical -- a sentence like
+// "runs at the same time" reads as the `at` scheduler at a segment start, and
+// the better the prose, the likelier it contains words like at / cron /
+// schedule. Same literal-only rule as the other strippers: a double-quoted
+// value with $( or ` may substitute, so it is left alone.
+const PROSE_FLAGS = String.raw`--body|--message|--notes|--title|--subject|-b|-m|-t`
+
+// FORK (card 6525aba3, didi's C6 review): ONE segment in, and only when gh, git
+// or glab IS that segment's command word. Upstream ran this on the whole command
+// with "gh/git/glab anywhere" as the guard, so `cd ~/git && watch -t '<pane
+// write>'` blanked the argument `watch` executes. And it feeds ONLY the anchored
+// scheduler check's naive fallback (gateDecision): the self-inject, store, API
+// and allowlist checks keep seeing prose, as they did before this port.
+const PROSE_TOOL_RX = /^(?:\S*\/)?(?:gh|git|glab)(?:\s|$)/i
+
+export function stripProseArguments(seg) {
+  const s = String(seg ?? '')
+  // Scoped to the tools these prose flags were written for: gh, git, glab (a PR
+  // body, a PR comment, a release note). A short flag means different things to
+  // different binaries (`tar -t`, `cut -b`, `sort -t`), so blanking it on an
+  // unrelated tool would hide real data from the gate (PR #770 review, Szotasz).
+  if (!PROSE_TOOL_RX.test(s.trimStart())) return s
+  return s.replace(
+    new RegExp(String.raw`((?:^|\s)(?:${PROSE_FLAGS})(?:\s+|=))('[^']*'|\$'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")`, 'gi'),
+    (full, flag, arg) => {
+      const dq = arg.startsWith('"')
+      if (dq && (arg.includes('$(') || arg.includes('`'))) return full
+      return flag + (dq ? '""' : "''")
+    },
+  )
+}
+
 export function stripDataPayloads(seg) {
   return String(seg ?? '').replace(
     /((?:^|\s)(?:-d|--data(?:-(?:raw|binary|ascii|urlencode))?)(?:\s+|=))('[^']*'|\$'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/gi,
@@ -502,14 +840,15 @@ export function normalizeShellEvasion(seg) {
 }
 
 // Pure decision: does this tool call set up self-pace / self-injection?
-export function gateDecision(toolName, toolInput) {
+export function gateDecision(toolName, toolInput, opts = {}) {
   const name = String(toolName ?? '')
   if (SELF_PACE_TOOLS.has(name)) return { deny: true, reason: 'self-pace-tool' }
   // Native file tools writing the self-schedule store would bypass any Bash regex.
-  if (name === 'Write' || name === 'Edit' || name === 'NotebookEdit') {
+  if (name === 'Write' || name === 'Edit' || name === 'MultiEdit' || name === 'NotebookEdit') {
     const fp = String(toolInput?.file_path ?? toolInput?.notebook_path ?? '')
     if (SCHEDULE_STORE_RX.test(fp)) return { deny: true, reason: 'store-write' }
     if (LAUNCHD_DIR_RX.test(fp)) return { deny: true, reason: 'launchd-dir-write' }
+    if (fileToolTargetsAllowlist(toolInput, opts.allowlistPath, opts.cwd)) return { deny: true, reason: 'egress-allowlist' }
   }
   if (name === 'Bash') {
     // Strip -d/--data payloads on the WHOLE command BEFORE splitting. A payload is
@@ -523,6 +862,11 @@ export function gateDecision(toolName, toolInput) {
     // Per-segment so an unrelated token elsewhere in a compound command cannot
     // turn a legit read (store inspection, schedule-API GET) into a false deny.
     const naiveSegs = splitSegments(safeCommand)
+    // A glob is expanded from the directory the shell is in: `cd store && rm *.json` hits the
+    // allowlist although no word names store/. Followed segment by segment (EGRESSSELFEDIT824).
+    let segCwd = opts.cwd ?? process.cwd()
+    // Returned after the scheduler checks below: `find . -exec at now` is a scheduler call first.
+    let allowlistDeny = null
     for (const seg of naiveSegs) {
       // Match the self-pace bash patterns against the shell-normalised segment so a
       // `\/loop` / `$IFS/loop` evasion (which bash resolves to `/loop` at exec) is
@@ -539,6 +883,19 @@ export function gateDecision(toolName, toolInput) {
       // dashboard schedule API: block WRITE methods only (GET list/pending is legit)
       if (SCHEDULE_API_RX.test(seg) && HTTP_WRITE_RX.test(seg)) return { deny: true, reason: 'schedule-api-write' }
     }
+    // the egress allowlist: a plain read only (EGRESSSELFEDIT824). Its own pass, on segments cut
+    // where the shell cuts for find: `\;` (or ';' / ";") ends a find -exec, it is an argument, not
+    // a separator. The naive split cut `find store -exec cat {} \; -delete` in two, the reader
+    // -exec made the first half a read and `-delete` stood alone: ALLOW (didi 51495 A4-1).
+    for (const seg of splitSegments(safeCommand.replace(FIND_EXEC_END_RX, ` ${FIND_EXEC_END_MARK} `))) {
+      // also inside a subshell or a group, and after `--`: `(cd store`, `{ cd -- store`;
+      // `$PWD`, `${PWD}`, `$(pwd)`, `$HOME` resolve as the shell resolves them (didi 51495 A4-2)
+      const cd = /^[({]?\s*(?:cd|pushd)\s+(?:--\s+)?(['"]?)((?:\$\(pwd\))?[^\s'";&|()]+)\1\s*\)?$/.exec(seg)
+      if (cd) segCwd = resolve(segCwd, expandHome(cd[2].replace(CWD_WORD_RX, segCwd).replace(HOME_WORD_RX, homedir())))
+      if (!allowlistDeny && !allowlistBashSegmentAllowed(seg.split(FIND_EXEC_END_MARK).join(' \\; '), { ...opts, cwd: segCwd })) {
+        allowlistDeny = { deny: true, reason: 'egress-allowlist' }
+      }
+    }
     // launchd directory: block a write INTO it (a read or a copy out of it is legit).
     // Heredoc bodies that feed TEXT are blanked, so a message DESCRIBING an install
     // passes; a body that feeds a shell, and every quoted string, stays scanned.
@@ -549,9 +906,11 @@ export function gateDecision(toolName, toolInput) {
     // The scheduler check is the ANCHORED one -- it fires on what sits at a
     // segment START -- so it is the one a fake segment boundary can mislead, and
     // the only one that gets quote-aware segments. Null (unresolvable quoting)
-    // falls back to the naive split, i.e. to scanning strictly more.
+    // falls back to the naive split, i.e. to scanning strictly more. The masked
+    // path already blanks every quoted argument; on the fallback a gh/git/glab
+    // segment's prose flags are blanked per segment (stripProseArguments).
     const masked = maskInertLiterals(safeCommand)
-    for (const seg of (masked == null ? naiveSegs : splitSegments(masked))) {
+    for (const seg of (masked == null ? naiveSegs.map(stripProseArguments) : splitSegments(masked))) {
       // scheduler binaries: deny the exec/submit forms, allow pure read-listing
       if (SCHEDULER_RX.test(seg) && !SCHEDULER_READ_RX.test(seg)) return { deny: true, reason: 'os-scheduler' }
     }
@@ -561,6 +920,7 @@ export function gateDecision(toolName, toolInput) {
     if (INDIRECT_SCHEDULER_RX.test(heredocMasked)) {
       return { deny: true, reason: 'os-scheduler-indirect' }
     }
+    if (allowlistDeny) return allowlistDeny
   }
   return { deny: false }
 }
@@ -655,7 +1015,23 @@ export const REASON_HINT = {
     ' HA DOKUMENTALSZ (a szoveg ADAT, nem hivas): NE fogalmazd at a szoveget, hanem valassz' +
     ' MASIK UTAT -- a Write eszkozzel fajlba, vagy `-d`/`--data` payloadkent (azt a kapu' +
     ' blankolja). Igy a parancssorban csak egy utvonal all, es a dokumentum pontos marad.',
+  'egress-allowlist':
+    ' KIVALTO OK: egy fajl-eszkoz a store/egress-allowlist.json-ra irna (nev vagy valodi utvonal' +
+    ' szerint), vagy a Bash-parancs megnevezi a fajlt, es nem sima olvasas, vagy egy rm / rmdir / mv / trash' +
+    ' egy olyan mappat torolne vagy mozgatna, amiben a fajl, a tortenete vagy a ~/.marveen alatti' +
+    ' rekordja van (store/, ~/.marveen, a telepites gyokere). Egy fajlt store/ ALATT torolhetsz.' +
+    ' Ha egy domain kell, kerd a fo agenst (inter-agent uzenet: domain + miert); o a gazda' +
+    ' jovahagyasaval veszi fel. Olvasni szabad: cat / grep / jq a fajlra (ertelmezo -- python,' +
+    ' node -- nem).' +
+    ' HA DOKUMENTALSZ (jegyzet, heredoc a fajlrol): a jegyzetet a Write eszkozzel ird -- a kapu' +
+    ' a heredoc-torzset is parancsszovegnek nezi. Fajl-eszkoznel ilyen eset nincs: az iras valodi.',
 }
+
+// Its own header instead of GATE_MSG (this is not self-pace); the hint is REASON_HINT's, so
+// the every-reason-has-a-hint guard covers it like the others.
+const ALLOWLIST_GATE_MSG =
+  'Egress-engedelylista TILTOTT (governance hard-gate). Sub-agentkent NEM irhatod a ' +
+  'store/egress-allowlist.json-t: ez a kapu RAD vonatkozik.' + REASON_HINT['egress-allowlist']
 
 function allow() { process.exit(0) }
 
@@ -686,7 +1062,7 @@ if (isInvokedDirectly()) {
   } catch {
     allow() // malformed/empty input must never break the agent's tool calls
   }
-  const { deny: shouldDeny, reason } = gateDecision(payload?.tool_name, payload?.tool_input)
-  if (shouldDeny) deny(GATE_MSG + (REASON_HINT[reason] ?? ''))
+  const { deny: shouldDeny, reason } = gateDecision(payload?.tool_name, payload?.tool_input, { cwd: payload?.cwd })
+  if (shouldDeny) deny(reason === 'egress-allowlist' ? ALLOWLIST_GATE_MSG : GATE_MSG + (REASON_HINT[reason] ?? ''))
   allow()
 }

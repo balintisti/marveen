@@ -535,6 +535,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - MIERT LETEZIK. A CLAUDE.md „Eles adatbazis MERESE" receptje JO, es harman futtattuk egy
 
+### `scripts/readonly-repo-gate.mjs`
+
+- Why a hook and not a permissions deny-list. The two permission modes each
+
 ### `scripts/recipient-ledger.mjs`
 
 - Why this exists (2026-08-14): an agent wrote to support@connectors.hu, an
