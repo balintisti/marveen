@@ -6,8 +6,9 @@
 # and it CANNOT FAIL VISIBLY. curl exits 0 on a 400, `head` prints the error body
 # as if it were a result, and the agent moves on believing the memory was saved.
 # Measured 2026-08-21 (mandark, then re-measured here): the memory API rejects any
-# content matching an injection pattern -- `curl -s http://host/path` is the common
-# one -- with `400 {"error":"Content rejected by security filter"}`. Note the first
+# content matching an injection pattern -- `curl -s http://host/path` was the common
+# one until card 1d455b6c dropped the command patterns; since then only injection
+# idioms are refused -- with `400 {"error":"Content rejected by security filter"}`. Note the first
 # reading of that measurement was wrong in a way that MATTERS: "put the URL on its
 # own line" does NOT help, because the pattern's `\s+` matches a newline too. What
 # helps is not storing the raw command at all. A helper that hands out a fix which
@@ -44,40 +45,49 @@ esac
 # --- PREFLIGHT: name the pattern BEFORE the server refuses it ---
 # The server answers only "Content rejected by security filter", which does not
 # say WHICH line is the problem -- and in a 2000-character memory that is the
-# whole question. The list mirrors SUSPICIOUS_PATTERNS in
-# src/web/routes/memories.ts; if that list changes, this one has to follow, and
-# a mismatch is safe in the right direction (the server still refuses).
-HIT="$(AGENT_CONTENT="$C" python3 - <<'PY' 2>/dev/null
-import os, re
-pats = [
-    (r"\bcurl\s+(-[a-zA-Z]\s+)*https?://", "curl followed directly by a URL (flags between are still a hit; a NEWLINE does not help -- \\s matches it)"),
-    (r"\bbash\s+-c\b", "bash -c"),
-    (r"\beval\s*\(", "eval("),
-    (r"\bexec\s*\(", "exec("),
-    (r"\bimport\s+subprocess\b", "import subprocess"),
-    (r"ignore\s+(all\s+)?previous\s+instructions", "prompt-injection phrase"),
-    (r"override\s+your\s+(instructions|rules|safety|guidelines)", "prompt-injection phrase"),
-    (r"forget\s+your\s+(instructions|rules|safety|guidelines|training)", "prompt-injection phrase"),
-    (r"new\s+persona", "prompt-injection phrase"),
-    (r"\brm\s+-rf\b", "rm -rf"),
-]
-c = os.environ["AGENT_CONTENT"]
-for pat, label in pats:
-    m = re.search(pat, c, re.I)
-    if m:
-        line = c[:m.start()].count("\n") + 1
-        print(f"{label}\tline {line}\t{m.group(0)[:60]}")
-        break
-PY
-)"
+# whole question. The preflight evaluates the SERVER'S OWN SUSPICIOUS_PATTERNS
+# literals from src/web/routes/memories.ts in node (the same way
+# scripts/__tests__/memory-content-filter.test.py does), never a copy: the copy
+# this used to carry kept refusing curl/rm -rf content for as long as it went
+# unsynced after the server dropped those patterns (card 1d455b6c), and it never
+# knew the Hungarian ones. If the source cannot be read or parsed, the preflight
+# says so on stderr and steps aside: the server is still the guard.
+FILTER_SRC="$BASE/src/web/routes/memories.ts"
+HIT="$(AGENT_CONTENT="$C" node --input-type=module -e '
+import { readFileSync } from "node:fs"
+let src
+try { src = readFileSync(process.argv[1], "utf8") } catch { console.log("UNREAD"); process.exit(0) }
+const m = src.match(/const SUSPICIOUS_PATTERNS = \[([\s\S]*?)\n\]/)
+if (!m) { console.log("UNREAD"); process.exit(0) }
+const pats = m[1].split("\n").map(s => s.trim().replace(/,$/, ""))
+  .filter(s => s.startsWith("/") && !s.startsWith("//"))
+  .map(l => { const i = l.lastIndexOf("/"); return new RegExp(l.slice(1, i), l.slice(i + 1)) })
+if (pats.length === 0) { console.log("UNREAD"); process.exit(0) }
+const c = process.env.AGENT_CONTENT
+const plain = c.normalize("NFD").replace(/[̀-ͯ]/g, "")
+for (const p of pats) {
+  for (const t of [c, plain]) {
+    const r = p.exec(t)
+    if (r) {
+      const line = t.slice(0, r.index).split("\n").length
+      console.log(`line ${line}\t${r[0].slice(0, 60)}\t${p.source.slice(0, 60)}`)
+      process.exit(0)
+    }
+  }
+}
+' "$FILTER_SRC" 2>/dev/null)"
+if [ "$HIT" = "UNREAD" ] || { [ -z "$HIT" ] && ! command -v node >/dev/null 2>&1; }; then
+  echo "FIGYELEM: az elozetes szuro-ellenorzes NEM futott (nem olvashato: $FILTER_SRC, vagy nincs node); a szerver donti el." >&2
+  HIT=""
+fi
 if [ -n "$HIT" ]; then
   echo "NEM MENTETTEM. A tartalom beleutkozne a memoria-API biztonsagi szurojebe:" >&2
   printf '  %s\n' "$HIT" >&2
-  echo "  A szuro INDOKOLT: egy elmentett parancs kesobb egy masik agens kontextusaba kerul." >&2
-  echo "  A SORTORES NEM SEGIT (a \\s+ a sortorest is illeszti). Ami segit, mert megmerve:" >&2
-  echo "    - ne a NYERS parancsot mentsd, hanem a tenyt: 'a health vegpont a 4230-as porton valaszol'" >&2
-  echo "    - vagy tegyel szoveget a parancs es az URL koze: 'curl -s <a sajat portodon> http://...' " >&2
-  echo "    - vagy hagyd el a 'curl' szot: az URL onmagaban atmegy" >&2
+  echo "  A szuro INDOKOLT: egy elmentett emlek kesobb egy masik agens kontextusaba kerul, es a" >&2
+  echo "  befecskendezesi fordulatokat (ignore previous instructions, felejtsd el a szabalyaidat," >&2
+  echo "  mostantol uj szerep...) utasitaskent olvashatja. Ami segit: ne IDEZD szo szerint a" >&2
+  echo "  fordulatot, ird le a TENYT ('egy felejtsd-el tipusu mondatot a szuro elutasit')." >&2
+  echo "  Parancsot (curl, rm -rf, bash -c) a szuro mar NEM szur (1d455b6c): nem az a gond." >&2
   exit 2
 fi
 

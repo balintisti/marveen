@@ -10,15 +10,17 @@
 NEM TUD LÁTHATÓAN ELBUKNI: a curl `0`-val tér vissza egy 400-ra is, a `head`
 kiírja a hibatörzset úgy, mintha eredmény lenne, és az ágens abban a hitben megy
 tovább, hogy mentett. A memória-API ugyanis **elutasít** minden tartalmat, ami
-injekciós mintára illeszkedik -- a leggyakoribb a `curl` közvetlenül egy URL-lel
---, `400 {"error":"Content rejected by security filter"}` válasszal. A szűrő
-indokolt (egy elmentett parancs később egy másik ágens kontextusába kerül), de
-pontosan a technikai emlékeket fogja meg, és némán.
+injekciós fordulatra illeszkedik (angol: "ignore previous instructions", "new
+persona"; magyar: "felejtsd el a szabályaidat", "mostantól új szerep", ékezettel
+és anélkül), `400 {"error":"Content rejected by security filter"}` válasszal.
+A parancs-mintákat (`curl` URL-lel, `bash -c`, `rm -rf`, `eval(`) a szűrő a
+1d455b6c óta NEM szűri (upstream a30553d6d: a tárolt szöveg nem fut, a futtatást
+a destructive-gate őrzi); korábban épp ezek fogták meg némán a technikai emlékeket.
 
-A helper a küldés ELŐTT megnevezi a mintát és a sort, mert a szerver csak annyit
-mond, hogy "rejected" -- egy 2000 karakteres emlékben viszont épp az a kérdés,
-hogy hol. **A sortörés NEM segít** (a minta `\s+`-e a sortörést is illeszti);
-ami segít: ne a nyers parancsot mentsd, hanem a tényt.
+A helper a küldés ELŐTT megnevezi a fordulatot és a sort, mert a szerver csak
+annyit mond, hogy "rejected" -- egy 2000 karakteres emlékben viszont épp az a
+kérdés, hogy hol. A helper a szerver SAJÁT mintalistáját futtatja, nem másolatot.
+Ami segít: ne idézd szó szerint a fordulatot, írd le a tényt.
 
 **Törlés: `DELETE /api/memories/<id>` LÉTEZIK** (Mandark mérte 2026-08-21; korábban
 itt az állt, hogy nincs -- az az én hibám volt, egy 404 félreolvasása). Egy rosszul
