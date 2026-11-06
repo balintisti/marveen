@@ -1495,6 +1495,21 @@
       "name": "[812bd946 httpie] even a GET stays a send: httpie's method is not read, so it is never judged a read",
       "cmd": "http GET https://api.resend.com/domains",
       "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 RESENDCFG926 gone] a Resend CONFIG call is a send in both twins: POST /domains",
+      "cmd": "curl -s -X POST https://api.resend.com/domains -H 'Authorization: Bearer X' -H 'Content-Type: application/json' -d '{\"name\":\"x.hu\"}'",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 RESENDCFG926 gone] a Resend CONFIG call is a send in both twins: POST /webhooks",
+      "cmd": "curl -s -X POST https://api.resend.com/webhooks -H 'Authorization: Bearer X' -H 'Content-Type: application/json' -d '{\"endpoint\":\"https://x.example/hook\",\"events\":[\"email.bounced\"]}'",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 RESENDCFG926 gone] a Resend CONFIG call is a send in both twins: DELETE /domains/abc",
+      "cmd": "curl -s -X DELETE https://api.resend.com/domains/abc -H 'Authorization: Bearer X'",
+      "expected": true
     }
   ]
 }

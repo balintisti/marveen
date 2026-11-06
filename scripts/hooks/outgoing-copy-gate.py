@@ -175,7 +175,7 @@ _RESEND_TARGET = re.compile(
 # kaput utne ki, ezert ILYEN AG NINCS.
 # 2026-11-02 (didi 51624 T2, marveen 10006089): a READ verdict mar NEM enged at a
 # kuldes-dontesben (a JS iker metodus-vak, es a szigorubb iker a helyes); a verdikt
-# csak a RESENDCFG926 konfig-kivetelhez es a csatorna-feed GET-hez kell.
+# mar csak a csatorna-feed GET-hez kell (a RESENDCFG926 kivetel 2026-11-06 ota nincs).
 _CURL_BODY_OPTS = {
     "-d", "--data", "--data-raw", "--data-binary", "--data-urlencode",
     "--data-ascii", "-F", "--form", "--form-string", "--json",
@@ -186,25 +186,12 @@ _CURL_BODY_OPTS = {
 _SAFE_METHODS = {"GET", "HEAD"}
 
 
-# RESENDCFG926 (card a38fdb42, marveen 2026-09-26): a Resend CONFIG call is not
-# a mail send. Registering the delivery-events webhook (card 0f857c3d, the
-# owner's explicit order) is a POST /webhooks with {endpoint, events}: no
-# recipient, no copy. The method-only verdict above refused it fail-closed,
-# because every POST to api.resend.com counted as a send. The exemption is a
-# NARROW POSITIVE LIST on the parsed URL, everything else keeps the old path:
-#   - exactly ONE URL-like token in the whole curl (two URLs -> no exemption)
-#   - scheme https (or none), host EXACTLY api.resend.com, no userinfo, no port
-#   - no query, no fragment, no '%', no '..', no '//' in the path
-#   - path is /webhooks or /domains, optionally one id segment (and /verify
-#     for domains); case-sensitive, so /Webhooks does not qualify
-# /emails, /emails/batch, /broadcasts, /audiences and anything unparseable stay
-# on the old verdict. The sub-agent hard gate (email-send-gate.mjs) is NOT
-# changed: it already refuses every Resend curl including GET, deliberately
-# stricter (same split as RESENDGATE826). Only the main agent configures Resend.
-_URLISH = re.compile(r"^([a-z][a-z0-9+.-]*:)?//", re.I)
-_RESEND_CFG_PATH = re.compile(
-    r"^/(webhooks(/[A-Za-z0-9_-]+)?|domains(/[A-Za-z0-9_-]+(/verify)?)?)/?$"
-)
+# RESENDCFG926 is gone (card 6525aba3, marveen 10009481, 2026-11-06): the Resend
+# CONFIG exemption (POST /webhooks, /domains) made this twin pass what the JS twin
+# denies, and where the twins differ the stricter one is right. Every curl/wget to
+# api.resend.com is a send in both, config included; configuring Resend goes
+# through a gate exception the owner grants, not through a parser carve-out.
+# send-invocation-cases.json pins POST /domains, POST /webhooks, DELETE /domains/abc.
 
 
 _CURL_VALUE_SHORT = set("HdXoOwuAebcmFTEKrYyzCPQtx")
@@ -216,55 +203,6 @@ _CURL_VALUE_LONG = {
     "--upload-file", "--config", "--cert", "--key", "--cacert", "--proxy",
     "--resolve", "--connect-to", "--range", "--time-cond", "--oauth2-bearer",
 }
-
-
-def _curl_resend_config_only(rest):
-    from urllib.parse import urlsplit
-    # Every POSITIONAL argument is a URL to curl, scheme or not (didi's probe:
-    # a bare second host was not counted). So: walk the args, skip the values
-    # of the value-taking flags we know, and count everything else that is not
-    # a flag. An unknown flag's value is then counted as a URL too -- that only
-    # ever REMOVES the exemption (fail-closed), never grants it.
-    urls = []
-    i, n = 0, len(rest)
-    while i < n:
-        t = rest[i]
-        if t == "--url" and i + 1 < n:
-            urls.append(rest[i + 1]); i += 2; continue
-        if t.startswith("--url="):
-            urls.append(t.split("=", 1)[1]); i += 1; continue
-        if t.startswith("--"):
-            i += 2 if (t in _CURL_VALUE_LONG and i + 1 < n) else 1
-            continue
-        if t.startswith("-") and len(t) > 1:
-            letters = t[1:]
-            takes = next((k for k, ch in enumerate(letters) if ch in _CURL_VALUE_SHORT), None)
-            if takes is not None and takes == len(letters) - 1:
-                i += 2  # -H 'x', -sX POST: the value is the next token
-            else:
-                i += 1  # -s, -sS, or -XPOST with the value glued on
-            continue
-        urls.append(t)
-        i += 1
-    if len(urls) != 1:
-        return False
-    raw = urls[0]
-    if "%" in raw or "\\" in raw:
-        return False
-    if raw.lower().startswith("https://"):
-        u = urlsplit(raw)
-    elif "://" in raw or raw.startswith("//"):
-        return False  # http:// or any other scheme: not the provider's API
-    else:
-        u = urlsplit("https://" + raw)
-    if u.netloc != "api.resend.com":
-        return False
-    if u.query or u.fragment:
-        return False
-    path = u.path
-    if ".." in path or "//" in path:
-        return False
-    return bool(_RESEND_CFG_PATH.match(path))
 
 
 # RESENDGETTWIN1010: a httpie (`http`) metodusa POZICIONALIS (http POST URL),
@@ -745,16 +683,10 @@ def _head_is_send(toks, depth: int) -> bool:
     # fenn; a read-only GET/HEAD lekerdezes atmegy; a nem-donthato metodus
     # tovabbra is fail-closed.
     if _CURLISH.match(prog) and any(_RESEND_TARGET.match(t) for t in rest):
-        verdict = _curl_resend_verdict(prog, rest)
-        if verdict == "send" and _curl_resend_config_only(rest):
-            # RESENDCFG926: only a DETERMINED method gets the config exemption;
-            # 'unknown' (variable method, truncated flag, -K config file that may
-            # carry its own URL) stays fail-closed exactly as before.
-            return False
         # didi 51624 T2, marveen 10006089: where the twins differ, the stricter one is right.
         # The JS hook denies every curl/wget to api.resend.com, so a read (GET/HEAD, -G) is
-        # a send here too; RESENDGATE826's read pass is gone. RESENDCFG926 above stays until
-        # marveen decides it (card 6525aba3, 51634).
+        # a send here too (RESENDGATE826's read pass is gone), and so is a config call
+        # (RESENDCFG926 is gone, marveen 10009481).
         return True
     return False
 

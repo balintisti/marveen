@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""RESENDCFG926 (card a38fdb42): a Resend CONFIG call (webhooks, domains) is not
-a mail send; everything else toward api.resend.com keeps the old verdict.
+"""RESENDCFG926 is gone (card 6525aba3, marveen 10009481, 2026-11-06): a Resend
+CONFIG call (webhooks, domains) is a send in this twin too, as in the JS twin.
 
-The probe list is didi's review list from the card: what must pass, and every
-shape that must STAY a send (path smuggled in a query, traversal, %-encoding,
-host tricks, case/slash variants, two URLs, --url and -X ordering, /emails/batch,
-unparseable URL). NOT here, on purpose: `api.resend.com:443/...` and
-`api.resend.com@evil/...` -- the TARGET pattern upstream of this exemption does
-not match them at all, so they never reach it (a pre-existing gap, reported on
-the card, not pinned here: a test must not pin a hole). Each case runs through is_send_invocation, the function the
-hook itself calls. Run: python3 <thisfile>   Exit 0 = all pass.
+The list was didi's review list for the old exemption (card a38fdb42): the
+config shapes it let through, and every shape that had to stay a send (path
+smuggled in a query, traversal, %-encoding, host tricks, case/slash variants,
+two URLs, --url and -X ordering, /emails/batch, unparseable URL). All of them
+are a send now. The config shapes stay here so that putting the exemption back
+fails this file, not only the shared contract (send-invocation-cases.json).
+Each case runs through is_send_invocation, the function the hook itself calls.
+Run: python3 <thisfile>   Exit 0 = all pass.
 """
 import importlib.util
 import os
@@ -26,15 +26,15 @@ BODY = "-d '{\"endpoint\":\"https://api.deltacrm.io/api/v1/email/events/resend\"
 
 # (name, command, expected is_send)
 CASES = [
-    # --- must PASS (config, not a send) ---
-    ("POST /webhooks", f"curl -s -X POST https://api.resend.com/webhooks {A} {BODY}", False),
-    ("POST /webhooks, quoted URL, -o and -w", f"curl -s -o /tmp/x.json -w 'http=%{{http_code}}' -X POST 'https://api.resend.com/webhooks' {A} {BODY}", False),
-    ("POST /webhooks via --url", f"curl -s -X POST --url https://api.resend.com/webhooks {A} {BODY}", False),
-    ("-X after the URL", f"curl -s https://api.resend.com/webhooks -X POST {A} {BODY}", False),
-    ("PATCH /webhooks/<id>", f"curl -s -X PATCH https://api.resend.com/webhooks/e3cf6f6a-60ff {A} {BODY}", False),
-    ("DELETE /webhooks/<id>", "curl -s -X DELETE https://api.resend.com/webhooks/e3cf6f6a-60ff -H 'Authorization: Bearer X'", False),
-    ("POST /domains", f"curl -s -X POST https://api.resend.com/domains {A} -d '{{\"name\":\"x.hu\"}}'", False),
-    ("POST /domains/<id>/verify", "curl -s -X POST https://api.resend.com/domains/abc123/verify -H 'Authorization: Bearer X'", False),
+    # --- config: the old exemption passed these, now a send like the JS twin ---
+    ("POST /webhooks", f"curl -s -X POST https://api.resend.com/webhooks {A} {BODY}", True),
+    ("POST /webhooks, quoted URL, -o and -w", f"curl -s -o /tmp/x.json -w 'http=%{{http_code}}' -X POST 'https://api.resend.com/webhooks' {A} {BODY}", True),
+    ("POST /webhooks via --url", f"curl -s -X POST --url https://api.resend.com/webhooks {A} {BODY}", True),
+    ("-X after the URL", f"curl -s https://api.resend.com/webhooks -X POST {A} {BODY}", True),
+    ("PATCH /webhooks/<id>", f"curl -s -X PATCH https://api.resend.com/webhooks/e3cf6f6a-60ff {A} {BODY}", True),
+    ("DELETE /webhooks/<id>", "curl -s -X DELETE https://api.resend.com/webhooks/e3cf6f6a-60ff -H 'Authorization: Bearer X'", True),
+    ("POST /domains", f"curl -s -X POST https://api.resend.com/domains {A} -d '{{\"name\":\"x.hu\"}}'", True),
+    ("POST /domains/<id>/verify", "curl -s -X POST https://api.resend.com/domains/abc123/verify -H 'Authorization: Bearer X'", True),
     # didi 51624 T2, marveen 10006089: a read is a send now, like the JS twin
     ("GET /webhooks is denied like the JS twin", "curl -s https://api.resend.com/webhooks -H 'Authorization: Bearer X'", True),
     # --- must STAY a send ---
