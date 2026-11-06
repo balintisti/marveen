@@ -1764,6 +1764,12 @@ def _http_channel_text(raw: str) -> str:
     return raw
 
 
+# curl's short options that take an argument (curl(1)). Only these end a
+# cluster: a letter missing here is read on as a flag, so a later body letter
+# still blocks (the safe side). O, s, S, v, G, L, I, k... take none.
+_CURL_ARG_LETTERS = frozenset("AbcCdDeEFHKmoPQrtTuUwxXyYz")
+
+
 def _http_channel_unread_body(toks):
     """Why a channel send carries body text that _curl_payload_raw does not
     read, or None. Card 050196cf: the reader knows curl's
@@ -1778,15 +1784,36 @@ def _http_channel_unread_body(toks):
     prog = _basename(toks[0])
     if prog.lower() != "curl":
         return f"a(z) {prog} kuldes torzset a kapu nem olvassa (csak a curl -d/--data*/--json alakot)"
-    for t in toks[1:]:
+    # didi 55347: the cluster check read ANY d/F/T of a token, so an option VALUE
+    # (-XPOST, -o/dev/null, -w'%{http_code}', -HContent-Type:..., the '-Fun' after
+    # -d) was taken for a body flag and the send was denied with a false reason.
+    # Now curl's own reading: letters left to right, the first letter that takes
+    # an argument ends the cluster (the rest is its value), and a value-taking
+    # option that ends its token eats the next token, which is then not scanned.
+    rest = toks[1:]
+    i, n = 0, len(rest)
+    while i < n:
+        t = rest[i]
         opt = t.split("=", 1)[0] if t.startswith("--") else t
         if opt in _CURL_BODY_OPTS and opt not in _IA_DATA_FLAGS:
             return f"a torzs a(z) {opt} flaggel megy, ezt a kapu nem olvassa"
-        # a single-dash cluster carrying a body letter (-sd, -sF): the reader
-        # takes only a leading -d with its value glued on (-dtext=...)
-        if (t.startswith("-") and not t.startswith(("--", "-d")) and len(t) > 2
-                and any(c in t[1:] for c in "dFT")):
-            return f"a torzs egy osszevont flag-csoportban megy ({t}), ezt a kapu nem olvassa"
+        if t.startswith("--"):
+            i += 2 if ("=" not in t and (opt in _CURL_VALUE_LONG or opt in _CURL_BODY_OPTS)) else 1
+            continue
+        if t.startswith("-") and len(t) > 1:
+            letters = t[1:]
+            for k, ch in enumerate(letters):
+                # a body letter in a cluster (-sd, -sF, -sT): the reader takes
+                # only a leading -d, with its value next or glued on (-dtext=...)
+                if ch in "FT" or (ch == "d" and k > 0):
+                    return f"a torzs egy osszevont flag-csoportban megy ({t}), ezt a kapu nem olvassa"
+                if ch in _CURL_ARG_LETTERS:
+                    i += 2 if k == len(letters) - 1 else 1
+                    break
+            else:
+                i += 1
+            continue
+        i += 1
     return None
 
 
