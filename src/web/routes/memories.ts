@@ -105,7 +105,8 @@ function stripDiacritics(s: string): string {
   return s.normalize('NFD').replace(/[̀-ͯ]/g, '')
 }
 
-// Exported because every HTTP path that writes a memory row runs it, not only
+// Exported because every HTTP path that writes a memory row runs it (one named
+// exception: the whole-install restore, /api/fleet/import), not only
 // POST/PATCH/PUT here: /api/memories/import and /api/migrate/run wrote with no
 // filter at all until card 74161546, and any token holder could plant a row in
 // ANOTHER agent's memories through them. src/__tests__/memory-write-routes-filter.test.ts
@@ -115,6 +116,21 @@ export function containsSuspiciousContent(content: string): boolean {
   return SUSPICIOUS_PATTERNS.some((pattern) => pattern.test(content) || pattern.test(plain))
 }
 
+// The keywords are stored, searched and returned beside the content (the
+// recall GET hands them back), so they reach a later context just the same:
+// a clean content with "ignore all previous instructions" as its keywords was
+// saved by all four writers (didi 55431 K1). A caller's keywords are refused
+// with the request; a model's keywords (import/migrate categorizer) are
+// dropped, because the chunk itself already passed.
+export function keywordsRefused(keywords: unknown): boolean {
+  return keywords !== undefined && keywords !== null && containsSuspiciousContent(String(keywords))
+}
+
+export function modelKeywords(keywords: unknown): string {
+  if (typeof keywords !== 'string' || !keywords) return ''
+  return containsSuspiciousContent(keywords) ? '' : keywords
+}
+
 export async function tryHandleMemories(ctx: RouteContext): Promise<boolean> {
   const { req, res, path, method, url } = ctx
 
@@ -122,7 +138,7 @@ export async function tryHandleMemories(ctx: RouteContext): Promise<boolean> {
     const body = await readBody(req)
     const data = JSON.parse(body.toString()) as { agent_id?: string; content: string; tier?: string; category?: string; keywords?: string }
     if (!data.content?.trim()) { json(res, { error: 'Content is required' }, 400); return true }
-    if (containsSuspiciousContent(data.content)) {
+    if (containsSuspiciousContent(data.content) || keywordsRefused(data.keywords)) {
       logger.warn({ agent: data.agent_id }, 'Memory content rejected: suspicious pattern')
       json(res, { error: 'Content rejected by security filter' }, 400)
       return true
@@ -413,7 +429,7 @@ Respond ONLY with JSON, nothing else:
           if (jsonMatch) {
             const parsed = JSON.parse(jsonMatch[0])
             tier = ['hot', 'warm', 'cold', 'shared'].includes(parsed.tier) ? parsed.tier : 'warm'
-            keywords = parsed.keywords || ''
+            keywords = modelKeywords(parsed.keywords)
           }
         } catch {
           // Default to warm if parsing fails
@@ -531,7 +547,8 @@ Respond ONLY with JSON, nothing else:
       const row = getDb().prepare('SELECT content FROM memories WHERE id = ?').get(id) as { content: string } | undefined
       if (!row) { json(res, { error: 'Memory not found' }, 404); return true }
       effectiveContent = row.content
-    } else if (containsSuspiciousContent(effectiveContent)) {
+    }
+    if ((content !== undefined && containsSuspiciousContent(effectiveContent)) || keywordsRefused(keywords)) {
       logger.warn({ memoryId: id, agent: agent_id }, 'Memory update rejected: suspicious pattern')
       json(res, { error: 'Content rejected by security filter' }, 400)
       return true

@@ -4,7 +4,7 @@ import { saveAgentMemory } from '../../db.js'
 import { MAIN_AGENT_ID, OLLAMA_URL } from '../../config.js'
 import { logger } from '../../logger.js'
 import { readBody, json } from '../http-helpers.js'
-import { containsSuspiciousContent } from './memories.js'
+import { containsSuspiciousContent, modelKeywords } from './memories.js'
 import type { RouteContext } from './types.js'
 
 // Longest run of characters a single memory row may hold. Anything longer is
@@ -325,7 +325,7 @@ export async function tryHandleMigrate(ctx: RouteContext): Promise<boolean> {
             if (jsonMatch) {
               const parsed = JSON.parse(jsonMatch[0])
               tier = ['hot', 'warm', 'cold', 'shared'].includes(parsed.tier) ? parsed.tier : 'warm'
-              keywords = parsed.keywords || ''
+              keywords = modelKeywords(parsed.keywords)
             }
           }
 
