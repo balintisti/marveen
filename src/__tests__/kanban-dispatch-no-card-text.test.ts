@@ -95,8 +95,18 @@ describe('kanban dispatch carries no card text', () => {
     expect(buildKanbanDispatchContent({ id: 'c', priority: null }, 'dex')).toContain('prioritás: normal\n')
   })
 
-  it('a card id that is not a plain slug is not dispatched; the main agent gets a notice without the raw id', async () => {
-    const odd = "odd id ' x"
+  // One id per refused character: "odd id ' x" alone also fails on the space, so a quote let
+  // through by the pattern would survive it (didi 55326: x'or'1 printed another card's text).
+  it.each([
+    "odd id ' x",
+    "x'or'1",
+    'x"y',
+    'x$(id)',
+    'x`id`',
+    'x;y',
+    'x/y',
+    'x\ny',
+  ])('a card id that is not a plain slug (%j) is not dispatched; the main agent gets a notice without the raw id', async (odd) => {
     createKanbanCard({ id: odd, title: TITLE, assignee: 'dex' })
     await move(odd, 'in_progress', 'orin')
     expect(mockCreateAgentMessage.mock.calls.filter((c) => c[1] === 'dex')).toHaveLength(0)
