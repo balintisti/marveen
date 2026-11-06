@@ -221,11 +221,11 @@ describe('RESENDGATE826: the resend trigger fires on the METHOD, not the hostnam
   // recipient, nothing leaves) exactly when a domain-verification MEASUREMENT
   // needed it. The narrowing is strict: recognize the method, or stay closed.
 
-  it('read-only queries pass: bare GET, explicit GET, forced -G', () => {
-    expect(isSend(`curl -s -H "Authorization: Bearer re_x" https://api.resend.com/domains`)).toBe(false)
-    expect(isSend(`curl -sS -X GET https://api.resend.com/emails/abc123 -H "Authorization: Bearer re_x"`)).toBe(false)
-    expect(isSend(`curl -G https://api.resend.com/domains -H "Authorization: Bearer re_x"`)).toBe(false)
-    expect(isSend(`wget -qO- https://api.resend.com/domains`)).toBe(false)
+  it('read-only queries are denied too: the JS twin denies every resend curl, the stricter twin wins (didi 51624 T2, marveen 10006089)', () => {
+    expect(isSend(`curl -s -H "Authorization: Bearer re_x" https://api.resend.com/domains`)).toBe(true)
+    expect(isSend(`curl -sS -X GET https://api.resend.com/emails/abc123 -H "Authorization: Bearer re_x"`)).toBe(true)
+    expect(isSend(`curl -G https://api.resend.com/domains -H "Authorization: Bearer re_x"`)).toBe(true)
+    expect(isSend(`wget -qO- https://api.resend.com/domains`)).toBe(true)
   })
 
   it('KNOWN POSITIVE: a real POST /emails still fires, in every spelling', () => {
@@ -258,11 +258,11 @@ describe('RESENDGATE826: the resend trigger fires on the METHOD, not the hostnam
   // recipient, nothing leaves) exactly when a domain-verification MEASUREMENT
   // needed it. The narrowing is strict: recognize the method, or stay closed.
 
-  it('read-only queries pass: bare GET, explicit GET, forced -G', () => {
-    expect(isSend(`curl -s -H "Authorization: Bearer re_x" https://api.resend.com/domains`)).toBe(false)
-    expect(isSend(`curl -sS -X GET https://api.resend.com/emails/abc123 -H "Authorization: Bearer re_x"`)).toBe(false)
-    expect(isSend(`curl -G https://api.resend.com/domains -H "Authorization: Bearer re_x"`)).toBe(false)
-    expect(isSend(`wget -qO- https://api.resend.com/domains`)).toBe(false)
+  it('read-only queries are denied too: the JS twin denies every resend curl, the stricter twin wins (didi 51624 T2, marveen 10006089)', () => {
+    expect(isSend(`curl -s -H "Authorization: Bearer re_x" https://api.resend.com/domains`)).toBe(true)
+    expect(isSend(`curl -sS -X GET https://api.resend.com/emails/abc123 -H "Authorization: Bearer re_x"`)).toBe(true)
+    expect(isSend(`curl -G https://api.resend.com/domains -H "Authorization: Bearer re_x"`)).toBe(true)
+    expect(isSend(`wget -qO- https://api.resend.com/domains`)).toBe(true)
   })
 
   it('KNOWN POSITIVE: a real POST /emails still fires, in every spelling', () => {

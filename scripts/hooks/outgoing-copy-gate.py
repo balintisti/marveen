@@ -87,7 +87,8 @@ _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*=")
 _CMD_POSITION_KEYWORDS = frozenset(("if", "then", "else", "elif", "do", "while", "until", "{", "!"))
 _SENDER_PROG = re.compile(r"^(sendmail|msmtp|swaks)$", re.I)
 _SENDPY = re.compile(r"^send\.py$", re.I)
-_PYTHON = re.compile(r"^python3?$", re.I)
+# python3.12 is the same python (didi, 6525aba3 50742). Twin: PYTHON in email-send-gate.mjs.
+_PYTHON = re.compile(r"^python3?(?:\.\d+)?$", re.I)
 # A ket kapu (ez + scripts/email-send-gate.mjs) SZANDEKOSAN azonos
 # felismeres-szemantikat visel, es ezt kozos eset-lista orzi
 # (send-invocation-cases.json + konformancia-teszt): a divergencia
@@ -95,7 +96,8 @@ _PYTHON = re.compile(r"^python3?$", re.I)
 _NODEISH = re.compile(r"^(node|tsx|ts-node|deno|bun|npx)$", re.I)
 _GRAPHMAIL = re.compile(r"^graph-mail(\.ts|\.js)?$", re.I)
 _WRAPPER_SHELL = re.compile(r"^(sh|bash|zsh|dash)$", re.I)
-_CURLISH = re.compile(r"^(curl|wget|http)$", re.I)
+# httpie ships two commands, `http` and `https` (812bd946, didi 55346): both are senders.
+_CURLISH = re.compile(r"^(curl|wget|https?)$", re.I)
 # Interpreter kod-string argumentum (python -c / node -e): az interpreternek
 # atadott kod MUVELET, nem tartalom -- a kod-szintu kuldes-hivasokra szurunk.
 #
@@ -116,8 +118,27 @@ _CURLISH = re.compile(r"^(curl|wget|http)$", re.I)
 # merve: a grep-alaku cenzusok ATENGEDNEK. KIMONDOTT MARADEK: egy `python3 -c "import smtplib; ..."`
 # alaku introspekcio blokkolodik; egy `grep`/`rg` alaku nem.
 _CODE_SEND = re.compile(
-    r"\bsmtplib\.|\bimport\s+smtplib\b|SMTP\s*\(|\bsendMail\s*\(|\bsendEmail\s*\(|\bmail\.send\s*\(",
+    r"\bsmtplib\.|\bimport\s+smtplib\b|SMTP\s*\(|\bsendMail\s*\(|\bsendEmail\s*\(|\bmail\.send\s*\("
+    # The Resend SDK call (`resend.emails.send(`). It was in email-send-gate.mjs only, so the
+    # twins split on 2 of 14 970 real commands (6525aba3; marveen 50880: align to the stricter).
+    r"|\bresend\b(?!-\w)[^\n]{0,80}\.\s*send\s*\(",
     re.I,
+)
+# Issue #1853 (stylnet): the support-mail sender LOADED AS A MODULE, not run by its
+# file name -- `import send`, `from send import main`, runpy, __import__/import_module,
+# or a spec built from send.py. The file-name rule below never saw these, so the call
+# went past the approval gate. Case-sensitive on purpose (Python names are), and
+# `send` must be the whole module name: `import sendgrid_x` or a "send" word in a
+# string stays out. Mirrored in email-send-gate.mjs (CODE_SEND_MODULE).
+_CODE_SEND_MODULE = re.compile(
+    r"\bimport\s+(?:[\w.]+\s*,\s*)*send\b(?![\w.])"
+    r"|\bfrom\s+send\s+import\b"
+    r"|\brunpy\b[^\n]*\bsend\b"
+    r"|\b(?:__import__|import_module)\s*\(\s*['\"]send['\"]"
+    r"|\bspec_from_file_location\b[^\n]*\bsend\.py\b"
+    # The same class on the Graph sender (src/graph-mail.ts, export sendMail): renamed on
+    # import, or reached by a string key -- the call itself then never reads `sendMail(`.
+    r"|\bsendMail\s+as\b|\[\s*['\"]sendMail['\"]\s*\]"
 )
 _CODE_EXECISH = re.compile(
     r"\bsubprocess\b|os\.system|\bpopen\b|child_process|\bexec[A-Za-z]*\s*\(|\bspawn[A-Za-z]*\s*\(",
@@ -127,7 +148,7 @@ _CODE_SENDER_LIT = re.compile(r"sendmail|msmtp|swaks|send\.py", re.I)
 
 
 def _code_string_sends(code: str) -> bool:
-    if _CODE_SEND.search(code):
+    if _CODE_SEND.search(code) or _CODE_SEND_MODULE.search(code):
         return True
     return bool(_CODE_EXECISH.search(code) and _CODE_SENDER_LIT.search(code))
 # Token-ELEJERE horgonyzott cel-minta: egy URL-argumentum vagy csupasz
@@ -153,6 +174,9 @@ _RESEND_TARGET = re.compile(
 # torzs-flagekbol); ha nem allapithato meg (valtozo, config-fajl, csonka flag),
 # marad a fail-closed. Egy "nincs felismerheto torzs -> atmegy" szabaly a
 # kaput utne ki, ezert ILYEN AG NINCS.
+# 2026-11-02 (didi 51624 T2, marveen 10006089): a READ verdict mar NEM enged at a
+# kuldes-dontesben (a JS iker metodus-vak, es a szigorubb iker a helyes); a verdikt
+# mar csak a csatorna-feed GET-hez kell (a RESENDCFG926 kivetel 2026-11-06 ota nincs).
 _CURL_BODY_OPTS = {
     "-d", "--data", "--data-raw", "--data-binary", "--data-urlencode",
     "--data-ascii", "-F", "--form", "--form-string", "--json",
@@ -163,25 +187,12 @@ _CURL_BODY_OPTS = {
 _SAFE_METHODS = {"GET", "HEAD"}
 
 
-# RESENDCFG926 (card a38fdb42, marveen 2026-09-26): a Resend CONFIG call is not
-# a mail send. Registering the delivery-events webhook (card 0f857c3d, the
-# owner's explicit order) is a POST /webhooks with {endpoint, events}: no
-# recipient, no copy. The method-only verdict above refused it fail-closed,
-# because every POST to api.resend.com counted as a send. The exemption is a
-# NARROW POSITIVE LIST on the parsed URL, everything else keeps the old path:
-#   - exactly ONE URL-like token in the whole curl (two URLs -> no exemption)
-#   - scheme https (or none), host EXACTLY api.resend.com, no userinfo, no port
-#   - no query, no fragment, no '%', no '..', no '//' in the path
-#   - path is /webhooks or /domains, optionally one id segment (and /verify
-#     for domains); case-sensitive, so /Webhooks does not qualify
-# /emails, /emails/batch, /broadcasts, /audiences and anything unparseable stay
-# on the old verdict. The sub-agent hard gate (email-send-gate.mjs) is NOT
-# changed: it already refuses every Resend curl including GET, deliberately
-# stricter (same split as RESENDGATE826). Only the main agent configures Resend.
-_URLISH = re.compile(r"^([a-z][a-z0-9+.-]*:)?//", re.I)
-_RESEND_CFG_PATH = re.compile(
-    r"^/(webhooks(/[A-Za-z0-9_-]+)?|domains(/[A-Za-z0-9_-]+(/verify)?)?)/?$"
-)
+# RESENDCFG926 is gone (card 6525aba3, marveen 10009481, 2026-11-06): the Resend
+# CONFIG exemption (POST /webhooks, /domains) made this twin pass what the JS twin
+# denies, and where the twins differ the stricter one is right. Every curl/wget to
+# api.resend.com is a send in both, config included; configuring Resend goes
+# through a gate exception the owner grants, not through a parser carve-out.
+# send-invocation-cases.json pins POST /domains, POST /webhooks, DELETE /domains/abc.
 
 
 _CURL_VALUE_SHORT = set("HdXoOwuAebcmFTEKrYyzCPQtx")
@@ -195,57 +206,19 @@ _CURL_VALUE_LONG = {
 }
 
 
-def _curl_resend_config_only(rest):
-    from urllib.parse import urlsplit
-    # Every POSITIONAL argument is a URL to curl, scheme or not (didi's probe:
-    # a bare second host was not counted). So: walk the args, skip the values
-    # of the value-taking flags we know, and count everything else that is not
-    # a flag. An unknown flag's value is then counted as a URL too -- that only
-    # ever REMOVES the exemption (fail-closed), never grants it.
-    urls = []
-    i, n = 0, len(rest)
-    while i < n:
-        t = rest[i]
-        if t == "--url" and i + 1 < n:
-            urls.append(rest[i + 1]); i += 2; continue
-        if t.startswith("--url="):
-            urls.append(t.split("=", 1)[1]); i += 1; continue
-        if t.startswith("--"):
-            i += 2 if (t in _CURL_VALUE_LONG and i + 1 < n) else 1
-            continue
-        if t.startswith("-") and len(t) > 1:
-            letters = t[1:]
-            takes = next((k for k, ch in enumerate(letters) if ch in _CURL_VALUE_SHORT), None)
-            if takes is not None and takes == len(letters) - 1:
-                i += 2  # -H 'x', -sX POST: the value is the next token
-            else:
-                i += 1  # -s, -sS, or -XPOST with the value glued on
-            continue
-        urls.append(t)
-        i += 1
-    if len(urls) != 1:
-        return False
-    raw = urls[0]
-    if "%" in raw or "\\" in raw:
-        return False
-    if raw.lower().startswith("https://"):
-        u = urlsplit(raw)
-    elif "://" in raw or raw.startswith("//"):
-        return False  # http:// or any other scheme: not the provider's API
-    else:
-        u = urlsplit("https://" + raw)
-    if u.netloc != "api.resend.com":
-        return False
-    if u.query or u.fragment:
-        return False
-    path = u.path
-    if ".." in path or "//" in path:
-        return False
-    return bool(_RESEND_CFG_PATH.match(path))
+# RESENDGETTWIN1010: a httpie (`http`, `https`) metodusa POZICIONALIS (http POST URL),
+# a torzse `kulcs=ertek` / `kulcs:=json` elem -- egyiket sem ismeri az alabbi
+# curl/wget flag-olvaso, ezert a `http POST .../emails to=...` "read" lett, es a
+# kapu atengedte. A httpie-re a metodus itt nem dontheto: fail-closed.
+# FORK (812bd946): csak ezek a sorok jottek az upstream 63a392c8-bol; a JS iker
+# (email-send-gate.mjs) a httpie-t mar a bazison is kuldesnek veszi.
+_HTTPIE = re.compile(r"^https?$", re.I)  # http and https: both httpie
 
 
-def _curl_resend_verdict(rest):
+def _curl_resend_verdict(prog, rest):
     """'read' | 'send' | 'unknown' -- unknown a hivo oldalon fail-closed."""
+    if _HTTPIE.match(prog):
+        return "unknown"
     method = None
     has_body = False
     get_forced = False
@@ -549,6 +522,14 @@ def _segments_tokens(cmd: str):
     lex = shlex.shlex(_mask_subshell_markers(_HEREDOC.sub(r"\1", cmd)),
                       posix=True, punctuation_chars="();|&")
     lex.whitespace_split = True
+    # HASHCOMMENT6525: no comments. shlex's default commenter took ANY unquoted `#`
+    # (`${a#b}`, `$#`, `a#b`, `echo hi # c`) and dropped the rest of the command,
+    # newlines included, so a send on the next line went unseen while the JS twin
+    # denied it (didi 51494). A bash-faithful cut (a word-start `#` up to the newline)
+    # was measured and rejected: the JS twin has no comment notion, so
+    # `echo hi # x; sendmail a@b.hu` is a send there and the cut made this twin the
+    # weaker one (marveen 50880/51498: same final decision, align to the stricter).
+    lex.commenters = ""
     segments, cur = [], []
     for tok in lex:
         # SEGSPLIT923: shlex(punctuation_chars) returns a RUN of operator
@@ -682,6 +663,14 @@ def _head_is_send(toks, depth: int) -> bool:
     candidates = [prog] + (
         [_basename(rest[0])] if rest and (_PYTHON.match(prog) or _NODEISH.match(prog)) else []
     )
+    # Issue #1853: `python3 -m send` (or -m pkg.send) is the same sender run by module
+    # name; it gets the same --to rule as the file-name form.
+    if _PYTHON.match(prog):
+        for i, t in enumerate(rest):
+            # -m send, and the glued -msend python accepts too
+            mod = (rest[i + 1] if i + 1 < len(rest) else None) if t == "-m" else (t[2:] if t.startswith("-m") and len(t) > 2 else None)
+            if mod is not None and mod.rsplit(".", 1)[-1] == "send":
+                candidates.append("send.py")
     if any(_SENDPY.match(c) for c in candidates) and any(
         t == "--to" or t.startswith("--to=") for t in rest
     ):
@@ -695,13 +684,11 @@ def _head_is_send(toks, depth: int) -> bool:
     # fenn; a read-only GET/HEAD lekerdezes atmegy; a nem-donthato metodus
     # tovabbra is fail-closed.
     if _CURLISH.match(prog) and any(_RESEND_TARGET.match(t) for t in rest):
-        verdict = _curl_resend_verdict(rest)
-        if verdict == "send" and _curl_resend_config_only(rest):
-            # RESENDCFG926: only a DETERMINED method gets the config exemption;
-            # 'unknown' (variable method, truncated flag, -K config file that may
-            # carry its own URL) stays fail-closed exactly as before.
-            return False
-        return verdict != "read"
+        # didi 51624 T2, marveen 10006089: where the twins differ, the stricter one is right.
+        # The JS hook denies every curl/wget to api.resend.com, so a read (GET/HEAD, -G) is
+        # a send here too (RESENDGATE826's read pass is gone), and so is a config call
+        # (RESENDCFG926 is gone, marveen 10009481).
+        return True
     return False
 
 
@@ -722,7 +709,297 @@ def wrapper_depth_hit(cmd: str) -> bool:
         h is not None and _head_is_send(h, 0) for h in heads)
 
 
+# Issue #1853, the heredoc form: the segmenter drops every heredoc BODY (it is data
+# to the shell), but when the command that opens it is an interpreter
+# (`python3 - <<'PY'`, `node <<EOF`) the body IS the program, and a send in it went
+# unseen. The opening line is read up to its `<<`; when its last command word there
+# is python/node-ish, the body is judged with the -c / -e code rule. A heuristic
+# of the same naive class as the -c rule (see the boundary note above).
+# NARROWED (Geri's #1855 review, a 14-day replay: 1 real catch, 17 false): inside a heredoc
+# body the program is mostly PROSE that a script writes (an hourly report whose text held a
+# card id with SENDMAIL in it, next to `subprocess`). So the exec + sender-literal half of the
+# code rule takes the literal here only as a lowercase, QUOTED command word: a string that
+# starts with sendmail/msmtp/swaks or ends a path in send.py, as an argv item or an os.system
+# command is written. The real catch (`['python3', '.../send.py', '--to', ...]`) keeps it.
+# Development heredocs that patch or test the gates, and mention `import send` in a string,
+# still hit the module rule: that is the price of a naive rule, accepted.
+# NOT COVERED, named so nobody counts them as covered: a program the classifier never reads --
+# `python3 /tmp/x.py`, `python3 < /tmp/x.py`, `cat /tmp/x.py | python3 -`, and
+# `python3 -c "exec(open('/tmp/x.py').read())"`; also a here-string fed to an interpreter
+# (`python3 <<<'import send'`) and a CommonJS destructuring rename of the Graph sender
+# (`const { sendMail: s } = require(...)`).
+# A heredoc fed to a SHELL (`bash <<EOF`, `sh -s <<EOF`) is a shell program: its body is
+# judged with this classifier itself, one level deeper (Geri/Samu, #1855).
+# WRITTEN, THEN RUN IN THE SAME COMMAND (Samu/Geri, #1855: two of the three real gate-passing
+# sends in the sample had this shape): `cat > $S/x.py <<'EOF' ... EOF; python3 $S/x.py`. When a
+# heredoc writes a file (`cat > P <<TAG` or `cat <<TAG > P`) and the same command runs an
+# interpreter or a shell on the same path token P, the body is judged as if it had been fed to
+# that program directly. The match is by the exact token: `./x.py` and `x.py` are different. A
+# file written by one Bash call and run by ANOTHER stays out of reach (named above). Also NOT
+# COVERED yet: a heredoc PIPED on to an interpreter or a shell (`cat <<'EOF' | bash`,
+# `cat <<'EOF' | python3 -`) -- a follow-up to #1855.
+_HEREDOC_SENDER_ARGV = re.compile(r"""['"](?:[^'"\s]*/)?(?:sendmail|msmtp|swaks|send\.py)(?=['"\s])""")
+
+
+def _heredoc_body_sends(body: str) -> bool:
+    if _CODE_SEND.search(body) or _CODE_SEND_MODULE.search(body):
+        return True
+    return bool(_CODE_EXECISH.search(body) and _HEREDOC_SENDER_ARGV.search(body))
+
+
+# A PYTHON BODY IS JUDGED ON ITS CODE, NOT ON ITS STRINGS (card bc98d6d5): string-literal
+# contents and comments blanked, fail-closed on a runner word, a script-path literal, an
+# f/t-string or an open literal. Full note and the named cost: pythonCodeText in
+# email-send-gate.mjs.
+_PY_RUNNER = re.compile(
+    r"\bsubprocess\b|os\.system|\bpopen\b|child_process|\bexec[A-Za-z]*\s*\(|\bspawn[A-Za-z]*\s*\("
+    r"|\beval\s*\(|(?<![\w.])compile\s*\(|__import__|__builtins__|\bbuiltins\b|\bimportlib\b"
+    r"|\brunpy\b|\bpickle\b|\bmarshal\b|\bcodecs\b",
+    re.I,
+)
+_PY_SCRIPT_PATH_LIT = re.compile(r"""['"][^'"\n]*\.(?:py|sh|bash|zsh|js|mjs|cjs)['"]""", re.I)
+_PY_STRING_PREFIX = re.compile(r"(?<!\w)[rRbBuUfFtT]{1,2}$")
+
+
+def _python_code_text(body: str):
+    """The body with string contents and comments blanked; None = judge it whole."""
+    if _PY_RUNNER.search(body) or _PY_SCRIPT_PATH_LIT.search(body):
+        return None
+    out, i, n = [], 0, len(body)
+    while i < n:
+        ch = body[i]
+        if ch == "#":
+            nl = body.find("\n", i)
+            i = n if nl < 0 else nl
+            continue
+        if ch in "'\"":
+            pre = _PY_STRING_PREFIX.search("".join(out[-3:]))
+            if pre and re.search(r"[fFtT]", pre.group(0)):
+                return None
+            q = ch * 3 if body.startswith(ch * 3, i) else ch
+            j = i + len(q)
+            while j < n and not body.startswith(q, j):
+                if body[j] == "\\":
+                    j += 2
+                    continue
+                if len(q) == 1 and body[j] == "\n":
+                    return None
+                j += 1
+            if j >= n:
+                return None
+            out.append(q + q)
+            i = j + len(q)
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _python_body_sends(body: str, quoted: bool) -> bool:
+    # didi 55349: only a QUOTED delimiter (<<'X', <<"X", <<\X) hands Python the body as
+    # written. Under <<X the shell first halves backslashes (and expands $, `), so the
+    # raw text lexes to other strings than Python sees: `s = "\\\"; import resend; ...`
+    # reads as one literal here and as a closed literal plus a real send to Python.
+    # An unquoted body is judged whole. Twin: pythonBodySends.
+    if not quoted:
+        return _heredoc_body_sends(body)
+    code = _python_code_text(body)
+    return _heredoc_body_sends(body if code is None else code)
+
+
+# WHO READS THE HEREDOC (didi's K1, 6525aba3 50742; N1/N2, 50772): only the heredoc's OWN
+# command, the text after the last ; & | of the innermost command context open at the <<,
+# found by a quote-aware walk in which $( , ( and a backtick open a new command (inside
+# double quotes too) and their closing returns to the outer one. Inside it, ANY word
+# naming an interpreter or a shell makes the body a program, whatever launches it (an
+# unknown launcher stays fail-closed; no second wrapper list). Full note and the named
+# cost: heredocHeadKinds in email-send-gate.mjs.
+_HEREDOC_READER_WORD = re.compile(
+    r"""(?:^|[\s/'"`$(=;&|])(python3?(?:\.\d+)?|node|tsx|ts-node|deno|bun|sh|bash|zsh|dash)(?=$|[\s'"`);&|])""",
+    re.I)
+
+
+def _heredoc_own_command(head: str) -> str:
+    s = head.replace("|&", "|")
+    s = re.sub(r"\d*[<>]&\d*-?|&>>?|\d*>\|", " ", s)
+    frames, start, q, i = [], 0, None, 0
+    while i < len(s):
+        ch = s[i]
+        if q == "'":
+            if ch == "'":
+                q = None
+        elif ch == "\\":
+            i += 1
+        elif ch == "$" and s[i + 1:i + 2] == "(":
+            frames.append((start, q, ")"))
+            start, q = i + 2, None
+            i += 1
+        elif ch == "`":
+            if frames and frames[-1][2] == "`" and q is None:
+                start, q, _ = frames.pop()
+            else:
+                frames.append((start, q, "`"))
+                start, q = i + 1, None
+        elif q == '"':
+            if ch == '"':
+                q = None
+        elif ch in ("'", '"'):
+            q = ch
+        elif ch == "(":
+            frames.append((start, q, ")"))
+            start = i + 1
+        elif ch == ")":
+            if frames and frames[-1][2] == ")":
+                start, q, _ = frames.pop()
+        elif ch in ";&|\n":
+            start = i + 1
+        i += 1
+    return s[start:]
+
+
+# A reader word followed by a script FILE runs that file, and the heredoc is the script's stdin:
+# data, not a program (`bash agent-msg.sh a b - <<'VEGE'`, the fleet's message form). Only an
+# operand that is plainly a file counts (a / or a script extension); no operand, `-`, `-s`, or
+# any other word keeps the reader, fail-closed. Twin: readerRunsScriptFile in email-send-gate.mjs.
+_SCRIPT_FILE_OPERAND = re.compile(r"/|\.(?:sh|bash|zsh|py|js|mjs|cjs|ts|mts|cts)$", re.I)
+
+
+def _reader_runs_script_file(rest: str) -> bool:
+    for raw in rest.split():
+        t = re.sub(r"""^['"]+|['"]+$""", "", raw)
+        if not t:
+            continue
+        if t == "-":
+            return False
+        if re.match(r"[-+]", t):
+            continue
+        if re.match(r"\d*[<>]", t):
+            return False
+        return bool(_SCRIPT_FILE_OPERAND.search(t))
+    return False
+
+
+def _heredoc_head_kinds(head: str):
+    """(py, js, shell): every reader word counts, not the first (didi's F2, 6525aba3 50861),
+    except one that runs a script file (the body is that script's stdin data).
+
+    Twin: heredocHeadKinds in email-send-gate.mjs.
+    """
+    py = js = shell = False
+    own = _heredoc_own_command(head)
+    for m in _HEREDOC_READER_WORD.finditer(own):
+        if _reader_runs_script_file(own[m.end():]):
+            continue
+        if _WRAPPER_SHELL.match(m.group(1)):
+            shell = True
+        elif _PYTHON.match(m.group(1)):
+            py = True
+        else:
+            js = True
+    return py, js, shell
+
+
+# THE HEREDOC FORMS BASH RUNS (didi's K2, 6525aba3 50742): <<"EOF", <<\EOF, a - or . in the
+# tag, a <<- body closed by a TAB-indented tag, an unterminated heredoc (body to the end).
+# Used only where a body is judged as a program; _segments_tokens keeps _HEREDOC.
+# Twin: heredocSpans in email-send-gate.mjs.
+_HEREDOC_OPEN = re.compile(r"(?<!<)<<(?!<)(-?)[ \t]*(?:'([\w.-]+)'|\"([\w.-]+)\"|\\?([\w.-]+))[^\n]*", re.A)
+
+
+def _heredoc_spans(cmd: str):
+    """[(start, intro, body, end, quoted), ...] for every heredoc bash would read.
+    quoted: the delimiter is quoted (<<'X', <<"X", <<\\X), so bash reads the body as written."""
+    spans, pos = [], 0
+    while True:
+        m = _HEREDOC_OPEN.search(cmd, pos)
+        if not m:
+            return spans
+        nl = m.end()
+        if nl >= len(cmd):
+            return spans  # no body line at all
+        tag = m.group(2) or m.group(3) or m.group(4)
+        term = re.compile(r"\n" + (r"\t*" if m.group(1) else "") + re.escape(tag) + r"(?=\s|$)")
+        t = term.search(cmd, nl)
+        quoted = m.group(4) is None or re.match(r"<<-?[ \t]*\\", m.group(0)) is not None
+        spans.append((m.start(), m.group(0), cmd[nl + 1:t.start() + 1 if t else len(cmd)], t.end() if t else len(cmd), quoted))
+        pos = t.end() if t else len(cmd)
+
+
+# `cat > P <<TAG`, `cat <<TAG > P`, `cat <<TAG | tee P`, and a bare `tee P <<TAG` (didi).
+_HEREDOC_REDIRECT = re.compile(
+    r"(?:^|[\s;&|(])(?:cat\b[^\n]*?(?:>>?|\btee(?:\s+-a)?)|tee(?:\s+-a)?(?=\s))\s*(['\"]?)([^\s'\"<>;&|]+)\1"
+)
+
+
+def _written_then_run(cmd: str, written: dict, depth: int) -> bool:
+    """A heredoc body written to a file that the same command then runs (see the note above)."""
+    if not written:
+        return False
+    try:
+        segments = _segments_tokens(cmd)
+    except ValueError:
+        return False
+    for toks in segments:
+        for head in _command_heads(toks):
+            if not head:
+                continue
+            prog = _basename(head[0])
+            args = [t for t in head[1:] if not t.startswith("-")]
+            if prog.lower() == "npx" and args:
+                args = args[1:]  # npx <runner> <file>
+            if not args or args[0] not in written:
+                continue
+            body, quoted = written[args[0]]
+            if _PYTHON.match(prog) and _python_body_sends(body, quoted):
+                return True
+            if _NODEISH.match(prog) and _heredoc_body_sends(body):
+                return True
+            if _WRAPPER_SHELL.match(prog) and depth < 3 and is_send_invocation(body, _depth=depth + 1):
+                return True
+    return False
+
+
+def _heredoc_program_sends(cmd: str, depth: int = 0) -> bool:
+    written = {}
+    # didi's F1 (6525aba3 50861): the walk gets everything before the <<, earlier heredoc
+    # bodies cut out, not the opener's line alone. Twin: heredocProgramSends.
+    ctx, frm = "", 0
+    for start, intro, body, end, quoted in _heredoc_spans(cmd):
+        head = cmd[cmd.rfind("\n", 0, start) + 1:start]
+        w = _HEREDOC_REDIRECT.search(head + intro)
+        if w:
+            written[w.group(2)] = (body, quoted)
+        ctx += cmd[frm:start]
+        py, js, shell = _heredoc_head_kinds(ctx)
+        if js and _heredoc_body_sends(body):
+            return True
+        if py and _python_body_sends(body, quoted):
+            return True
+        if shell and depth < 3 and is_send_invocation(body, _depth=depth + 1):
+            return True
+        ctx += intro + "\n"
+        frm = end
+    return _written_then_run(cmd, written, depth)
+
+
 def is_send_invocation(cmd: str, _depth: int = 0) -> bool:
+    return _heredoc_program_sends(cmd, _depth) or _command_text_sends(cmd, _depth)
+
+
+# The way out when a heredoc body read as a program is the WHOLE reason (marveen 50880,
+# 6525aba3). Twin: heredocBodyHit / HEREDOC_BODY_WAY_OUT in email-send-gate.mjs.
+_HEREDOC_BODY_WAY_OUT = (
+    "A heredoc torzse kodnak olvasodik, es egy kuldo-szo all benne (akar egy sztringben is). "
+    "Ha NEM kuldeni akartal (patch- vagy teszt-szkript): ird a szkriptet fajlba a fajliro eszkozzel, "
+    "es futtasd fajlkent egy KULON Bash-hivasban."
+)
+
+
+def heredoc_body_hit(cmd: str) -> bool:
+    return _heredoc_program_sends(cmd) and not _command_text_sends(cmd, 0)
+
+
+def _command_text_sends(cmd: str, _depth: int) -> bool:
     try:
         segments = _segments_tokens(cmd)
     except ValueError:
@@ -1471,7 +1748,7 @@ def _http_channel_segment(cmd: str):
         rest = toks[1:]
         for label, target in _HTTP_CHANNEL_TARGETS:
             if any(target.match(t) for t in rest):
-                if _curl_resend_verdict(rest) == "read":
+                if _curl_resend_verdict(_basename(toks[0]), rest) == "read":
                     return None, None  # a GET of the feed: nothing is sent
                 return label, toks
     return None, None
@@ -1496,6 +1773,59 @@ def _http_channel_text(raw: str) -> str:
     return raw
 
 
+# curl's short options that take an argument (curl(1)). Only these end a
+# cluster: a letter missing here is read on as a flag, so a later body letter
+# still blocks (the safe side). O, s, S, v, G, L, I, k... take none.
+_CURL_ARG_LETTERS = frozenset("AbcCdDeEFHKmoPQrtTuUwxXyYz")
+
+
+def _http_channel_unread_body(toks):
+    """Why a channel send carries body text that _curl_payload_raw does not
+    read, or None. Card 050196cf: the reader knows curl's
+    -d/--data/--data-binary/--data-raw/--data-ascii/--json only, and what it
+    did not read was simply not audited: httpie items or stdin, wget
+    --post-data, curl --data-urlencode, -F, --form-string, -T and a -sd
+    cluster all passed exit 0 with an em dash (measured 2026-11-01, 8 shapes;
+    --data-urlencode even beside a read `-d chat_id=1`). The default is now
+    NO: any program other than curl, and any curl body option the reader does
+    not read, is unreadable (fail-closed), whether or not another flag WAS
+    read. A curl with no body option at all stays a bare POST."""
+    prog = _basename(toks[0])
+    if prog.lower() != "curl":
+        return f"a(z) {prog} kuldes torzset a kapu nem olvassa (csak a curl -d/--data*/--json alakot)"
+    # didi 55347: the cluster check read ANY d/F/T of a token, so an option VALUE
+    # (-XPOST, -o/dev/null, -w'%{http_code}', -HContent-Type:..., the '-Fun' after
+    # -d) was taken for a body flag and the send was denied with a false reason.
+    # Now curl's own reading: letters left to right, the first letter that takes
+    # an argument ends the cluster (the rest is its value), and a value-taking
+    # option that ends its token eats the next token, which is then not scanned.
+    rest = toks[1:]
+    i, n = 0, len(rest)
+    while i < n:
+        t = rest[i]
+        opt = t.split("=", 1)[0] if t.startswith("--") else t
+        if opt in _CURL_BODY_OPTS and opt not in _IA_DATA_FLAGS:
+            return f"a torzs a(z) {opt} flaggel megy, ezt a kapu nem olvassa"
+        if t.startswith("--"):
+            i += 2 if ("=" not in t and (opt in _CURL_VALUE_LONG or opt in _CURL_BODY_OPTS)) else 1
+            continue
+        if t.startswith("-") and len(t) > 1:
+            letters = t[1:]
+            for k, ch in enumerate(letters):
+                # a body letter in a cluster (-sd, -sF, -sT): the reader takes
+                # only a leading -d, with its value next or glued on (-dtext=...)
+                if ch in "FT" or (ch == "d" and k > 0):
+                    return f"a torzs egy osszevont flag-csoportban megy ({t}), ezt a kapu nem olvassa"
+                if ch in _CURL_ARG_LETTERS:
+                    i += 2 if k == len(letters) - 1 else 1
+                    break
+            else:
+                i += 1
+            continue
+        i += 1
+    return None
+
+
 def http_channel_gate(cmd: str) -> None:
     """Exit 2 on a copy problem or an unreadable body, exit 0 when clean.
     RETURNS (does not exit) when the command is not a covered HTTP send, so
@@ -1505,6 +1835,8 @@ def http_channel_gate(cmd: str) -> None:
         return
     try:
         raw, unreadable = _curl_payload_raw(cmd, toks, all_flags=True)
+        if not unreadable:
+            unreadable = _http_channel_unread_body(toks)
         if unreadable:
             sys.stderr.write(
                 f"KIMENO-SZOVEG KAPU ({label}): TILTVA, mert a kimeno szoveget nem tudtam "
@@ -2056,6 +2388,12 @@ def main():
             http_channel_gate(cmd)  # exits if it is a human-facing HTTP send; else returns
             inter_agent_homoglyph_gate(cmd)  # exits; a no-op pass for anything else
         text, unreadable = collect_bash_body(cmd)
+        # bc98d6d5 T1 (didi 51624, marveen 10006089): a send that stands ONLY in a heredoc
+        # body read as a program has no letter to audit: the body is code, and auditing it
+        # as prose let a real send through (exit 0) while the hard-gate twin denied it.
+        # Where the twins differ, the stricter one is right: deny, with the way out.
+        if not unreadable and heredoc_body_hit(cmd):
+            unreadable = "a kuldes egy kodkent olvasott heredoc torzsben all, abbol nem valaszthato le a level szovege"
     else:
         sys.exit(0)
 
@@ -2072,9 +2410,11 @@ def main():
             )
             sys.exit(2)
         reason = unreadable or "a hook nem talalt vizsgalhato szoveget a hivasban"
+        way_out = _HEREDOC_BODY_WAY_OUT + "\n" if tool == "Bash" and heredoc_body_hit(cmd) else ""
         sys.stderr.write(
             "KIMENO-SZOVEG KAPU: TILTVA, mert a levelet nem tudtam megvizsgalni.\n"
             f"Ok: {reason}.\n\n"
+            + way_out +
             "Ez szandekosan fail-closed: egy vizsgalhatatlan kuldes pont a kaput utne ki.\n"
             "Tedd vizsgalhatova, aztan kuldd ujra -- ABSZOLUT utvonalu stdin-atiranyitas "
             "(< /teljes/ut/body.txt, shell-valtozo NELKUL), vagy --body-ban atadott szoveg.\n"

@@ -622,6 +622,171 @@
       "expected": false
     },
     {
+      "name": "#1853: the sender imported as a module in a -c string",
+      "cmd": "cd scripts/support-mail && python3 -c \"import send; send.main()\"",
+      "expected": true
+    },
+    {
+      "name": "#1853: from send import main, after a sys.path insert",
+      "cmd": "python3 -c \"import sys; sys.path.insert(0,'scripts/support-mail'); from send import main; main()\"",
+      "expected": true
+    },
+    {
+      "name": "#1853: runpy runs send.py",
+      "cmd": "python3 -c \"import runpy; runpy.run_path('scripts/support-mail/send.py')\"",
+      "expected": true
+    },
+    {
+      "name": "#1853: __import__ of the sender",
+      "cmd": "python3 -c \"m = __import__('send'); m.main()\"",
+      "expected": true
+    },
+    {
+      "name": "#1853: importlib.import_module of the sender",
+      "cmd": "python3 -c \"import importlib; importlib.import_module('send').main()\"",
+      "expected": true
+    },
+    {
+      "name": "#1853: python -m send with a recipient",
+      "cmd": "cd scripts/support-mail && python3 -m send --to a@b.hu --subject x",
+      "expected": true
+    },
+    {
+      "name": "#1853: a heredoc-fed python that imports the sender",
+      "cmd": "cd scripts/support-mail && python3 - <<'PY'\nimport send\nsend.main()\nPY",
+      "expected": true
+    },
+    {
+      "name": "#1853: a heredoc-fed python that sends with smtplib",
+      "cmd": "python3 - <<'PY'\nimport smtplib\ns = smtplib.SMTP('localhost')\nPY",
+      "expected": true
+    },
+    {
+      "name": "#1853 control: a module whose name only starts with send",
+      "cmd": "python3 -c \"import sendgrid_helpers_x\"",
+      "expected": false
+    },
+    {
+      "name": "#1853 control: the word send inside a printed string",
+      "cmd": "python3 -c \"print('send it')\"",
+      "expected": false
+    },
+    {
+      "name": "#1853 control: a module named sender",
+      "cmd": "python3 -c \"from sender import x\"",
+      "expected": false
+    },
+    {
+      "name": "#1853 control: -m of a module whose last part is not send",
+      "cmd": "python3 -m sendmail_parser --to a@b.hu",
+      "expected": false
+    },
+    {
+      "name": "#1853 control: python -m send without a recipient (same rule as send.py)",
+      "cmd": "cd scripts/support-mail && python3 -m send --help",
+      "expected": false
+    },
+    {
+      "name": "#1853 control: a heredoc to cat that mentions import send",
+      "cmd": "cat <<'PY' > notes.txt\nimport send\nPY",
+      "expected": false
+    },
+    {
+      "name": "#1853 control: a heredoc-fed python that only writes a file mentioning send",
+      "cmd": "python3 - <<'PY'\nopen('n.md','w').write('the send step')\nPY",
+      "expected": false
+    },
+    {
+      "name": "#1853: the Graph sender imported under another name",
+      "cmd": "npx tsx -e \"import { sendMail as s } from './src/graph-mail.ts'; await s({to:'a@b.hu'})\"",
+      "expected": true
+    },
+    {
+      "name": "#1853: the Graph sender reached by a string key",
+      "cmd": "npx tsx -e \"const m = await import('./src/graph-mail.ts'); await m['sendMail']({to:'a@b.hu'})\"",
+      "expected": true
+    },
+    {
+      "name": "#1853: a heredoc-fed tsx that renames the Graph sender",
+      "cmd": "npx tsx - <<'TS'\nimport { sendMail as s } from './src/graph-mail.ts'\nawait s({ to: 'a@b.hu' })\nTS",
+      "expected": true
+    },
+    {
+      "name": "#1853 control: the Graph module loaded only to list messages",
+      "cmd": "npx tsx -e \"import { listMessages } from './src/graph-mail.ts'; console.log(await listMessages({top: 5}))\"",
+      "expected": false
+    },
+    {
+      "name": "#1855: a heredoc-fed python running send.py as an argv item",
+      "cmd": "python3 - <<'PY'\nimport subprocess\nsubprocess.run(['python3', 'scripts/support-mail/send.py', '--to', 'a@b.hu'])\nPY",
+      "expected": true
+    },
+    {
+      "name": "#1855: a heredoc-fed python calling sendmail through os.system",
+      "cmd": "python3 - <<'PY'\nimport os\nos.system('sendmail -t < /tmp/m.eml')\nPY",
+      "expected": true
+    },
+    {
+      "name": "#1855 control: a heredoc report whose prose holds an uppercase SENDMAIL card id, posted via subprocess",
+      "cmd": "python3 - <<'PY'\nimport subprocess, json\nt = 'Hourly: card FIXSENDMAIL1009 still open, the sendmail wrapper is fine'\nsubprocess.run(['curl', '-s', 'http://localhost:3420/api/messages', '-d', json.dumps({'content': t})])\nPY",
+      "expected": false
+    },
+    {
+      "name": "#1855 control: an uppercase SENDMAIL word that starts a quoted report line, next to subprocess",
+      "cmd": "python3 - <<'PY'\nimport subprocess\nsubprocess.run(['echo', 'SENDMAIL relay check: all green'])\nPY",
+      "expected": false
+    },
+    {
+      "name": "#1855: a heredoc fed to bash runs send.py with a recipient",
+      "cmd": "bash <<'SH'\ncd scripts/support-mail\npython3 send.py --to a@b.hu --subject x\nSH",
+      "expected": true
+    },
+    {
+      "name": "#1855: a heredoc fed to sh -s imports the sender",
+      "cmd": "sh -s <<'SH'\ncd scripts/support-mail && python3 -c \"import send; send.main()\"\nSH",
+      "expected": true
+    },
+    {
+      "name": "#1855 control: a heredoc fed to bash that only lists files",
+      "cmd": "bash <<'SH'\nls scripts/support-mail\ngrep -n 'def main' scripts/support-mail/send.py\nSH",
+      "expected": false
+    },
+    {
+      "name": "#1855: a heredoc writes x.py, the same command runs it (cat > P <<)",
+      "cmd": "S=/tmp/s; cat > $S/x.py <<'EOF'\nimport subprocess\nsubprocess.run(['python3', 'scripts/support-mail/send.py', '--to', 'a@example.invalid'])\nEOF\npython3 $S/x.py",
+      "expected": true
+    },
+    {
+      "name": "#1855: a heredoc writes x.py with the redirect after the tag, then runs it quoted",
+      "cmd": "S=/tmp/s; cat <<'EOF' > \"$S/x.py\"\nimport subprocess\nsubprocess.run(['python3', 'scripts/support-mail/send.py', '--to', 'a@example.invalid'])\nEOF\npython3 \"$S/x.py\"",
+      "expected": true
+    },
+    {
+      "name": "#1855: a heredoc writes a shell script that runs send.py, bash runs it",
+      "cmd": "cat > /tmp/s/r.sh <<'EOF'\ncd scripts/support-mail && python3 send.py --to a@example.invalid\nEOF\nbash /tmp/s/r.sh",
+      "expected": true
+    },
+    {
+      "name": "#1855: a heredoc writes a ts file that renames the Graph sender, npx tsx runs it",
+      "cmd": "cat > /tmp/s/x.ts <<'EOF'\nimport { sendMail as s } from './src/graph-mail.ts'\nEOF\nnpx tsx /tmp/s/x.ts",
+      "expected": true
+    },
+    {
+      "name": "#1855 control: the written sender script is not run, another path is",
+      "cmd": "S=/tmp/s; cat > $S/x.py <<'EOF'\nimport subprocess\nsubprocess.run(['python3', 'scripts/support-mail/send.py', '--to', 'a@example.invalid'])\nEOF\npython3 $S/other.py",
+      "expected": false
+    },
+    {
+      "name": "#1855 control: the sender script is only written, nothing runs it",
+      "cmd": "S=/tmp/s; cat > $S/x.py <<'EOF'\nimport subprocess\nsubprocess.run(['python3', 'scripts/support-mail/send.py', '--to', 'a@example.invalid'])\nEOF\necho written",
+      "expected": false
+    },
+    {
+      "name": "#1855 control: a written harmless script run on the same path",
+      "cmd": "S=/tmp/s; cat > $S/x.py <<'EOF'\nprint('hello')\nEOF\npython3 $S/x.py",
+      "expected": false
+    },
+    {
       "name": "[0ca64c14] resend host with explicit port",
       "cmd": "curl -X POST https://api.resend.com:443/emails -H 'Authorization: Bearer X' -d '{\"to\":\"a@b.hu\"}'",
       "expected": true
@@ -730,6 +895,661 @@
       "name": "[VARURL926 cb63ddb4] kanban comment to a $DASH URL, prose quotes 'to': and 'subject': in single quotes (didi LOW)",
       "cmd": "curl -s -X POST $DASH/api/kanban/cb63ddb4/comments -H \"Authorization: Bearer $(cat store/.dashboard-token)\" -d \"{\\\"author\\\":\\\"didi\\\",\\\"content\\\":\\\"the gate reads 'to': and 'subject': keys\\\"}\"",
       "expected": false
+    },
+    {
+      "name": "[didi K1 6525aba3] a node@22 PATH entry does not make a commit-message heredoc a program",
+      "cmd": "export PATH=/opt/homebrew/opt/node@22/bin:$PATH && git commit -m \"$(cat <<'EOF'\nfix: import send is now denied\nEOF\n)\"",
+      "expected": false
+    },
+    {
+      "name": "[didi K1 6525aba3] an earlier python3 command does not make git's heredoc a program",
+      "cmd": "python3 -m pytest && git commit -F - <<'EOF'\nimport send\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi K1 6525aba3] an earlier node command does not make gh's heredoc a program",
+      "cmd": "node --test && gh pr create --body-file - <<'EOF'\nfrom send import main\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi K1 6525aba3] a /node/ directory does not make cat's heredoc a program",
+      "cmd": "cd /home/node/app && cat <<'EOF'\nimport send\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi K1 6525aba3] the fleet's agent-msg.sh heredoc after a node@22 PATH stays a message",
+      "cmd": "export PATH=/opt/homebrew/opt/node@22/bin:$PATH; bash scripts/agent-msg.sh computress marveen - <<'VEGE'\nreview: import send is now denied\nVEGE",
+      "expected": false
+    },
+    {
+      "name": "[didi K1 6525aba3] control: a wrapper with an option argument still feeds python",
+      "cmd": "sudo -u bot python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K1 6525aba3] control: an assignment before python still feeds python",
+      "cmd": "FOO=1 python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K1 6525aba3] control: 2>&1 is a redirection, not a separator",
+      "cmd": "python3 - 2>&1 <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K1 6525aba3] control: python in the LAST segment before the heredoc",
+      "cmd": "cd /tmp && python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K2 6525aba3] a double-quoted tag feeds python too",
+      "cmd": "python3 - <<\"EOF\"\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K2 6525aba3] a backslash-escaped tag feeds python too",
+      "cmd": "python3 - <<\\EOF\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K2 6525aba3] a <<- body closed by a tab-indented tag",
+      "cmd": "python3 - <<-EOF\n\timport send\n\tEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K2 6525aba3] a tag with a dash",
+      "cmd": "python3 - <<'END-PY'\nimport send\nEND-PY",
+      "expected": true
+    },
+    {
+      "name": "[didi K2 6525aba3] an unterminated heredoc feeds the body to the end",
+      "cmd": "python3 - <<'EOF'\nimport send",
+      "expected": true
+    },
+    {
+      "name": "[didi K2 6525aba3] without <<- a tab-indented tag does not close the body",
+      "cmd": "python3 - <<'EOF'\n\tEOF\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K3 6525aba3] J5: a spec built from send.py",
+      "cmd": "python3 - <<'EOF'\nimport importlib.util\nspec = importlib.util.spec_from_file_location('s', 'scripts/send.py')\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K3 6525aba3] J8: -m pkg.send is the sender by module name",
+      "cmd": "python3 -m pkg.send --to a@b.c",
+      "expected": true
+    },
+    {
+      "name": "[didi K3 6525aba3] J18: a heredoc fed to zsh is a shell program",
+      "cmd": "zsh <<'EOF'\nsendmail a@b.c < m.txt\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K3 6525aba3] J26: send imported after another module",
+      "cmd": "python3 - <<'EOF'\nimport os, send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi K3 6525aba3] J1 control: send.helper is another module",
+      "cmd": "python3 - <<'EOF'\nimport send.helper\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi K3 6525aba3] J3 control: runpy on sender_tools.py",
+      "cmd": "python3 - <<'EOF'\nimport runpy\nrunpy.run_path('sender_tools.py')\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi K3 6525aba3] J4 control: import_module of sendgrid",
+      "cmd": "python3 - <<'EOF'\nimport importlib\nimportlib.import_module('sendgrid')\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi K3 6525aba3] J20 control: the module name is case-sensitive",
+      "cmd": "python3 - <<'EOF'\nimport Send\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi 6525aba3] the glued -msend form",
+      "cmd": "python3 -msend --to a@b.c",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3] a bare tee writes the program, the same command runs it",
+      "cmd": "tee /tmp/x.py <<'EOF' >/dev/null\nimport send\nEOF\npython3 /tmp/x.py",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3] a versioned python3.12 -m send",
+      "cmd": "python3.12 -m send --to a@b.c",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3] a versioned python3.12 -c",
+      "cmd": "python3.12 -c 'import send'",
+      "expected": true
+    },
+    {
+      "name": "[didi K2 6525aba3] a <<- tab-indented tag closes the body: the next command is not the program",
+      "cmd": "python3 - <<-EOF\n\tprint(1)\n\tEOF\necho 'import send'",
+      "expected": false
+    },
+    {
+      "name": "[didi N1 6525aba3] a $( in the interpreter's own argument does not cut the command",
+      "cmd": "python3 - \"$(date +%F)\" <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N1 6525aba3] a quoted assignment value before the interpreter",
+      "cmd": "FOO=\"a b\" python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N1 6525aba3] a quoted ; in an argument is not a separator",
+      "cmd": "python3 - --subject \"Re: x; y\" <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N1 6525aba3] the interpreter named by a quoted command substitution",
+      "cmd": "\"$(which python3)\" - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N1 6525aba3] the interpreter named by a bare command substitution",
+      "cmd": "$(which python3) - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N1 6525aba3] the interpreter named by a backtick substitution",
+      "cmd": "`which python3` - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N1 6525aba3] a redirection before the interpreter",
+      "cmd": ">/tmp/o python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N2 6525aba3] an unknown launcher: uv run",
+      "cmd": "uv run python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N2 6525aba3] an unknown launcher: poetry run",
+      "cmd": "poetry run python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N2 6525aba3] an unknown launcher: docker exec -i",
+      "cmd": "docker exec -i app python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N2 6525aba3] an unknown launcher: ssh host",
+      "cmd": "ssh host python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N2 6525aba3] an unknown launcher: gtimeout",
+      "cmd": "gtimeout 5 python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N2 6525aba3] an unknown launcher: pnpm exec node",
+      "cmd": "pnpm exec node - <<'EOF'\nfrom send import main\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N2 6525aba3] an unknown launcher feeding a shell: ssh host bash -s",
+      "cmd": "ssh host bash -s <<'EOF'\nsendmail a@b.c < m.txt\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3 pin] a versioned interpreter reads the heredoc",
+      "cmd": "python3.11 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3 pin] a subshell paren opens the own command",
+      "cmd": "(python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3 pin] then before the interpreter",
+      "cmd": "if true; then python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3 pin] a brace group before the interpreter",
+      "cmd": "{ python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3 pin] negation before the interpreter",
+      "cmd": "! python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3 pin] an absolute interpreter path",
+      "cmd": "/usr/bin/python3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3 pin] a quoted interpreter word",
+      "cmd": "'python3' - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi 6525aba3 pin] the opener is its own line after a cd line",
+      "cmd": "cd /tmp\npython3 - <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N1 6525aba3 control] an interpreter inside an EARLIER substitution is not the reader",
+      "cmd": "echo \"$(python3 -V)\"; git commit -F - <<'EOF'\nimport send\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi N1 6525aba3 control] a quoted ; does not hide an earlier interpreter's end",
+      "cmd": "python3 -m pytest && git commit -m \"a; b\" -F - <<'EOF'\nimport send\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi N1 6525aba3 control] a closed substitution with a paren in quotes",
+      "cmd": "x=$(echo ')' ) git commit -F - <<'EOF'\nimport send\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi N1 6525aba3 control] a script path ending in .sh is not a shell word",
+      "cmd": "./deploy.sh <<'EOF'\nimport send\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[didi N1 6525aba3 pin] an escaped quote inside a quoted argument does not end the quote",
+      "cmd": "python3 - --subject \"a\\\"; b\" <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[didi N1 6525aba3 control] a $( inside single quotes opens no command",
+      "cmd": "echo '$(python3' ; git commit -F - <<'EOF'\nimport send\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 frame pin] a heredoc inside $( in double quotes belongs to that inner command: python3 outside only gets cat's text",
+      "cmd": "python3 tools/post.py --body \"$(cat <<'EOF'\nimport send\nEOF\n)\"",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 frame pin] a ; inside a process substitution <( ) does not end the heredoc's own command",
+      "cmd": "python3 - <(printf a; printf b) <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 frame pin] a ; inside backticks does not end the heredoc's own command",
+      "cmd": "python3 - `date; true` <<'EOF'\nimport send\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 F1] a double quote opened on an EARLIER line closes there: the python3 that reads the heredoc is found",
+      "cmd": "python3 -c \"\nx=['bash','y']\"; cd /tmp && python3 - <<'PY'\nimport send\nPY",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 F1] a $( opened on an earlier line still holds the heredoc's own command",
+      "cmd": "x=$(\ncat foo; python3 - <<'PY'\nimport send\nPY\n)",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 F1] an earlier line's interpreter does not leak across the newline: cat reads the heredoc",
+      "cmd": "python3 -m pytest\ncat <<'PY'\nimport send\nPY",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 F1] an earlier heredoc's BODY is data, not command text: its unbalanced quote does not swallow the next opener",
+      "cmd": "cat <<'A'\nit's \"open\nA\npython3 - <<'PY'\nimport send\nPY",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 F2] a shell word BEFORE the interpreter: env bash -c 'python3 -' reads a Python body",
+      "cmd": "env bash -c 'python3 -' <<'PY'\nimport send\nPY",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 F2] docker exec -i c bash -c \"python3 -\" reads a Python body",
+      "cmd": "docker exec -i c bash -c \"python3 -\" <<'PY'\nimport send\nPY",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 survivor] a ; inside SINGLE quotes does not end the own command",
+      "cmd": "python3 - 'a;b' <<'PY'\nimport send\nPY",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 survivor] | ends the own command: cat after the pipe reads the heredoc, not python3",
+      "cmd": "python3 -V | cat <<'PY'\nimport send\nPY",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 survivor] an interpreter word after = (an option value) is a reader",
+      "cmd": "launcher --cmd=python3 - <<'PY'\nimport send\nPY",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 F1] a quoted ; on the opener's line belongs to a quote opened on the line before: python3 still reads the heredoc",
+      "cmd": "python3 - \"\n;\" <<'PY'\nimport send\nPY",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 F1] an earlier heredoc's BODY is not command text: an interpreter word and an open quote in it do not make cat's heredoc a program",
+      "cmd": "cat <<'A'\npython3 \"\nA\ncat <<'PY'\nimport send\nPY",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 script-file] a heredoc fed to bash RUNNING A SCRIPT FILE is that script's stdin data: a message that quotes a send is not one (agent-msg.sh form)",
+      "cmd": "bash /x/agent-msg.sh a b - <<'VEGE'\ncurl -X POST https://api.resend.com/emails -d x\nVEGE",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 script-file] a relative script file with an option before it: the body is data",
+      "cmd": "bash -x scripts/kanban-uj.sh m d --desc - <<'VEGE'\ncurl -X POST https://api.resend.com/emails -d x\nVEGE",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 script-file] python3 running a script file: the heredoc is its stdin data, not a program",
+      "cmd": "python3 /tmp/patch.py <<'EOF'\nimport smtplib\nsmtplib.SMTP('h').sendmail('a','b','c')\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 script-file] env in front of a shell running a script file: still data",
+      "cmd": "env bash ./run.sh <<'EOF'\ncurl -X POST https://api.resend.com/emails -d x\nEOF",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 script-file] CONTROL: bash with no operand reads the body as its script",
+      "cmd": "bash <<'VEGE'\ncurl -X POST https://api.resend.com/emails -d x\nVEGE",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 script-file] CONTROL: bash -s reads the body as its script",
+      "cmd": "bash -s x <<'VEGE'\ncurl -X POST https://api.resend.com/emails -d x\nVEGE",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 script-file] CONTROL: python3 - reads the body as the program",
+      "cmd": "python3 - x.py <<'EOF'\nimport smtplib\nsmtplib.SMTP('h').sendmail('a','b','c')\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 script-file] CONTROL: an operand that is not plainly a file keeps the reader (python3 -X dev), fail-closed",
+      "cmd": "python3 -X dev <<'EOF'\nimport smtplib\nsmtplib.SMTP('h').sendmail('a','b','c')\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 script-file] CONTROL: a redirect right after the reader word is not an operand",
+      "cmd": "python3 2>/dev/null <<'EOF'\nimport smtplib\nsmtplib.SMTP('h').sendmail('a','b','c')\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 script-file] CONTROL: a script file earlier in the line does not hide a later reader (bash x.sh && python3 -)",
+      "cmd": "bash /x/a.sh; python3 - <<'EOF'\nimport smtplib\nsmtplib.SMTP('h').sendmail('a','b','c')\nEOF",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 parity] the Resend SDK call in a Python heredoc program is a send in BOTH twins (was JS-only, marveen 50880)",
+      "cmd": "python3 - <<'PY'\nimport resend\nresend.Emails.send({'to': 'a@b.c'})\nPY",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 parity] the Resend SDK call in node -e is a send in BOTH twins",
+      "cmd": "node -e \"const { Resend } = require('resend'); new Resend(k).emails.send({ to: 'a@b.c' })\"",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 parity] CONTROL: importing resend without a .send( call is not a send",
+      "cmd": "python3 -c \"import resend; print(resend.__version__)\"",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 #] a # inside a word (${a#b}) is not a comment: the send on the next line counts",
+      "cmd": "x=${a#b}\ncurl -X POST https://api.resend.com/emails -d @b.json",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 #] $# is not a comment: the send on the next line counts",
+      "cmd": "echo $#\ncurl -X POST https://api.resend.com/emails -d @b.json",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 #] the newline after a comment still separates: the send on the next line counts",
+      "cmd": "echo hi # c\ncurl -X POST https://api.resend.com/emails -d @b.json",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 #] the newline after a comment still separates (sendmail)",
+      "cmd": "echo hi # c\nsendmail a@b.hu < x",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 #] an apostrophe inside a comment does not hide the send on the next line",
+      "cmd": "echo hi # it's fine\nsendmail a@b.hu",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 #] a#b mid-word, then ; and a send",
+      "cmd": "echo a#b; sendmail a@b.hu",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 #] CONTROL: a send word after # with no operator before it stays an argument of echo",
+      "cmd": "echo hi # sendmail a@b.hu",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 #] the twins have no comment notion: an operator inside a comment still separates (JS is the stricter, marveen 51498)",
+      "cmd": "echo hi # x; sendmail a@b.hu",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 twin] CONTROL: a resend-* package with a .send( call is not the Resend SDK in either twin",
+      "cmd": "node -e \"const m = require('resend-mock'); m.send(1)\"",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 twin] whitespace between .send and ( is still the Resend SDK call in both twins",
+      "cmd": "node -e \"new Resend(k).emails.send ({ to: 'a@b.c' })\"",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] a Python patch script writing TS source with the send word only in a string literal is not a send",
+      "cmd": "python3 - <<'PY'\np='src/a.ts'\ns=open(p).read()\nopen(p,'w').write(s.replace('x', 'await this.mailer.sendMail(opts)'))\nPY",
+      "expected": false
+    },
+    {
+      "name": "[bc98d6d5] a send word in a Python comment is not a send",
+      "cmd": "python3 - <<'PY'\n# was: smtplib.SMTP('h').send_message(m)\nprint('ok')\nPY",
+      "expected": false
+    },
+    {
+      "name": "[bc98d6d5] a send word in a Python triple-quoted string is not a send",
+      "cmd": "python3 - <<'PY'\ndoc = \"\"\"\nimport smtplib\nsmtplib.SMTP('h')\n\"\"\"\nprint(len(doc))\nPY",
+      "expected": false
+    },
+    {
+      "name": "[bc98d6d5] real Python send code next to a string literal is still a send",
+      "cmd": "python3 - <<'PY'\nlabel = 'just text'\nimport smtplib\nsmtplib.SMTP('h').send_message(m)\nPY",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] a string literal that exec() runs is still a send (runner word, judged whole)",
+      "cmd": "python3 - <<'PY'\nexec('import smtplib; smtplib.SMTP(\"h\")')\nPY",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] bare compile() is a runner word: judged whole",
+      "cmd": "python3 - <<'PY'\nc = compile('import smtplib', 'x', 'exec')\nPY",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] re.compile is not a runner word: the literal is masked",
+      "cmd": "python3 - <<'PY'\nimport re\nr = re.compile('import smtplib')\nprint(r)\nPY",
+      "expected": false
+    },
+    {
+      "name": "[bc98d6d5] an f-string keeps the body whole (its braces hold code)",
+      "cmd": "python3 - <<'PY'\nprint(f\"{smtplib.SMTP('h')}\")\nPY",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] a nested-quote f-string cannot hide code in a later fragment",
+      "cmd": "python3 - <<'PY'\nprint(f\"{\"x\"}{smtplib.SMTP()}\")\nPY",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] a t-string keeps the body whole too",
+      "cmd": "python3 - <<'PY'\nprint(t'{smtplib.SMTP(1)}')\nPY",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] send code written to a .py path stays a send (run later by another command)",
+      "cmd": "python3 - <<'PY'\nopen('/tmp/s.py','w').write('import smtplib')\nPY",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] an unterminated single-quoted literal keeps the body whole",
+      "cmd": "python3 - <<'PY'\nx = 'open\nimport smtplib\nPY",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] an unterminated literal with a later quote cannot swallow the code up to that quote",
+      "cmd": "python3 - <<'PY'\nx = 'open\nimport smtplib\ny = 'z\nPY",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] a raw string ending in an escaped quote does not swallow the code after it",
+      "cmd": "python3 - <<'PY'\nx = r'\\''\nimport smtplib\nPY",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] a Node body is judged whole: a send word in a JS string literal still denies",
+      "cmd": "node - <<'JS'\nconst s = 'await t.sendMail(o)'\nconsole.log(s)\nJS",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] written then run by Python: a string-only body is not a send",
+      "cmd": "cat > /tmp/p.py <<'EOF'\nopen('a.ts','w').write('sendMail(x)')\nEOF\npython3 /tmp/p.py",
+      "expected": false
+    },
+    {
+      "name": "[bc98d6d5] written then run by Python: real send code is still a send",
+      "cmd": "cat > /tmp/p.py <<'EOF'\nimport smtplib\nEOF\npython3 /tmp/p.py",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] written then run by Node: a string-only body still denies (Node judged whole)",
+      "cmd": "cat > /tmp/p.js <<'EOF'\nconst s = 'sendMail(x)'\nEOF\nnode /tmp/p.js",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5] an escaped quote does not end the literal: the send word after it stays string",
+      "cmd": "python3 - <<'PY'\nx = 'it\\'s sendMail(a)'\nprint(x)\nPY",
+      "expected": false
+    },
+    {
+      "name": "[6525aba3 A2 twin, didi 51624 T3] whitespace between the dot and send is still the Resend SDK call in both twins",
+      "cmd": "node -e \"new Resend(k).emails. send({ to: 'a@b.c' })\"",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 twin, didi 51624 T3] a newline between the dot and send is still the Resend SDK call in both twins",
+      "cmd": "node -e \"new Resend(k).emails.\n  send({ to: 'a@b.c' })\"",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 twin, didi 51624 T2] a methodless curl to the Resend list endpoint is a send in both twins",
+      "cmd": "curl https://api.resend.com/emails",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 twin, didi 51624 T2] curl -s -H to the Resend list endpoint is a send in both twins",
+      "cmd": "curl -s -H 'Authorization: Bearer re_x' https://api.resend.com/emails",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 twin, didi 51624 T2] an explicit GET to Resend is a send in both twins",
+      "cmd": "curl -X GET https://api.resend.com/emails/abc123",
+      "expected": true
+    },
+    {
+      "name": "[812bd946 httpie] positional POST to the Resend send endpoint is a send (method undecidable, fail-closed)",
+      "cmd": "http POST https://api.resend.com/emails to=a@b.hu",
+      "expected": true
+    },
+    {
+      "name": "[812bd946 httpie] no method word, key=value items make httpie POST: a send",
+      "cmd": "http https://api.resend.com/emails to=a@b.hu subject=x",
+      "expected": true
+    },
+    {
+      "name": "[812bd946 httpie] even a GET stays a send: httpie's method is not read, so it is never judged a read",
+      "cmd": "http GET https://api.resend.com/domains",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 RESENDCFG926 gone] a Resend CONFIG call is a send in both twins: POST /domains",
+      "cmd": "curl -s -X POST https://api.resend.com/domains -H 'Authorization: Bearer X' -H 'Content-Type: application/json' -d '{\"name\":\"x.hu\"}'",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 RESENDCFG926 gone] a Resend CONFIG call is a send in both twins: POST /webhooks",
+      "cmd": "curl -s -X POST https://api.resend.com/webhooks -H 'Authorization: Bearer X' -H 'Content-Type: application/json' -d '{\"endpoint\":\"https://x.example/hook\",\"events\":[\"email.bounced\"]}'",
+      "expected": true
+    },
+    {
+      "name": "[6525aba3 A2 RESENDCFG926 gone] a Resend CONFIG call is a send in both twins: DELETE /domains/abc",
+      "cmd": "curl -s -X DELETE https://api.resend.com/domains/abc -H 'Authorization: Bearer X'",
+      "expected": true
+    },
+    {
+      "name": "[812bd946 httpie] `https` is httpie's second command: a positional POST to the Resend send endpoint is a send",
+      "cmd": "https POST api.resend.com/emails to=a@b.hu",
+      "expected": true
+    },
+    {
+      "name": "[812bd946 httpie] `https` with key=value items and no method word POSTs: a send",
+      "cmd": "https api.resend.com/emails to=a@b.hu subject=x",
+      "expected": true
+    },
+    {
+      "name": "[812bd946 httpie] `https` GET stays a send: httpie's method is not read",
+      "cmd": "https GET https://api.resend.com/domains",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5 L1] an UNQUOTED delimiter halves backslashes before Python reads the body: the raw text's one literal is a closed literal plus a real send, judged whole",
+      "cmd": "python3 - <<E\ns = \"\\\\\\\"; import resend; resend.Emails.send({}) #\"\nE",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5 L1] the same body under a QUOTED delimiter reaches Python as written: one string literal, not a send",
+      "cmd": "python3 - <<'E'\ns = \"\\\\\\\"; import resend; resend.Emails.send({}) #\"\nE",
+      "expected": false
+    },
+    {
+      "name": "[bc98d6d5 L1] <<\\E is a quoted delimiter too: the body is one string literal, not a send",
+      "cmd": "python3 - <<\\E\ns = \"\\\\\\\"; import resend; resend.Emails.send({}) #\"\nE",
+      "expected": false
+    },
+    {
+      "name": "[bc98d6d5 L1] a body written through an UNQUOTED delimiter and then run is judged whole too",
+      "cmd": "cat > /tmp/p.py <<E\ns = \"\\\\\\\"; import resend; resend.Emails.send({}) #\"\nE\npython3 /tmp/p.py",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5 MB3] importlib is a runner word: a module loaded by name from a quoted Python body is judged whole",
+      "cmd": "python3 - <<'E'\nimport importlib\nm = importlib.import_module(\"send\")\nm.main()\nE",
+      "expected": true
     }
   ]
 }

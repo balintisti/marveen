@@ -101,11 +101,14 @@ const ENV_ASSIGN = /^[A-Za-z_][A-Za-z_0-9]*=/
 const CMD_POSITION_KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '{', '!'])
 const SENDER_PROG = /^(sendmail|msmtp|swaks)$/i
 const SENDPY = /^send\.py$/i
-const PYTHON = /^python3?$/i
+// A versioned interpreter (python3.12) is the same python: the heredoc check already read it
+// that way, the -c / -m / send.py checks did not (didi, 6525aba3 50742). Twin: _PYTHON.
+const PYTHON = /^python3?(?:\.\d+)?$/i
 const NODEISH = /^(node|tsx|ts-node|deno|bun|npx)$/i
 const GRAPHMAIL = /^graph-mail(\.ts|\.js)?$/i
 const WRAPPER_SHELL = /^(sh|bash|zsh|dash)$/i
-const CURLISH = /^(curl|wget|http)$/i
+// httpie ships two commands, `http` and `https` (812bd946, didi 55346): both are senders. Twin: _CURLISH.
+const CURLISH = /^(curl|wget|https?)$/i
 // RESENDHOST926 (card 0ca64c14): normalized host shape -- `--url=` glue, userinfo,
 // trailing root dots, port, `?`/`#` after the host. Twin of _RESEND_TARGET in
 // outgoing-copy-gate.py; send-invocation-cases.json pins both.
@@ -208,7 +211,21 @@ function executedNames(toks) {
   return names
 }
 const CODE_SENDER_LIT = /sendmail|msmtp|swaks|send\.py/i
-const codeStringSends = (code) => CODE_SEND.test(code) || (CODE_EXECISH.test(code) && CODE_SENDER_LIT.test(code))
+// Issue #1853 (stylnet): the support-mail sender LOADED AS A MODULE (`import send`,
+// `from send import main`, runpy, __import__/import_module, a spec built from send.py).
+// Case-sensitive on purpose; `send` must be the whole module name. Mirrors
+// _CODE_SEND_MODULE in hooks/outgoing-copy-gate.py; send-invocation-cases.json binds them.
+const CODE_SEND_MODULE = new RegExp(
+  String.raw`\bimport\s+(?:[\w.]+\s*,\s*)*send\b(?![\w.])` +
+  String.raw`|\bfrom\s+send\s+import\b` +
+  String.raw`|\brunpy\b[^\n]*\bsend\b` +
+  String.raw`|\b(?:__import__|import_module)\s*\(\s*['"]send['"]` +
+  String.raw`|\bspec_from_file_location\b[^\n]*\bsend\.py\b` +
+  // The same class on the Graph sender (export sendMail): renamed on import, or a string key.
+  String.raw`|\bsendMail\s+as\b|\[\s*['"]sendMail['"]\s*\]`,
+)
+const codeStringSends = (code) =>
+  CODE_SEND.test(code) || CODE_SEND_MODULE.test(code) || (CODE_EXECISH.test(code) && CODE_SENDER_LIT.test(code))
 
 // Unquoted newline / backtick / `$(` become segment separators; quoted text is
 // untouched (it is content). Tracks quote state by hand -- no shell involved.
@@ -344,6 +361,14 @@ function headIsSend(toks, depth) {
   }
   const candidates = [prog]
   if ((PYTHON.test(prog) || NODEISH.test(prog)) && rest.length) candidates.push(basename(rest[0]))
+  // Issue #1853: `python3 -m send` (or -m pkg.send) is the same sender by module name.
+  if (PYTHON.test(prog)) {
+    for (let i = 0; i < rest.length; i++) {
+      // -m send, and the glued -msend python accepts too
+      const mod = rest[i] === '-m' ? rest[i + 1] : /^-m./.test(rest[i]) ? rest[i].slice(2) : undefined
+      if (mod !== undefined && mod.split('.').pop() === 'send') candidates.push('send.py')
+    }
+  }
   if (candidates.some((c) => SENDPY.test(c)) &&
       rest.some((t) => t === '--to' || t.startsWith('--to='))) return true
   if (toks.some((t) => GRAPHMAIL.test(basename(t))) && rest.includes('send')) return true
@@ -380,6 +405,220 @@ export function buildWrapperDepthMsg() {
     `Ha ez NEM levelkuldes: csokkentsd a burkolok szamat ${HEAD_DEPTH} vagy kevesebb ala. ` +
     'Ha levelkuldes: sub-agentkent Bash-bol amugy sem kuldhetsz, a kimeno emailt a fo-agens kuldi.'
   )
+}
+
+// The way out when heredocBodyHit is the reason; the copy gate's twin is _HEREDOC_BODY_WAY_OUT.
+// A file written by the file tool and run by a SEPARATE Bash call is out of the classifier's
+// reach (NOT COVERED below); the same command writing and running it is not (writtenThenRun).
+export const HEREDOC_BODY_WAY_OUT =
+  'A heredoc torzse kodnak olvasodik, es egy kuldo-szo all benne (akar egy sztringben is). ' +
+  'Ha NEM kuldeni akartal (patch- vagy teszt-szkript): ird a szkriptet fajlba a fajliro eszkozzel, ' +
+  'es futtasd fajlkent egy KULON Bash-hivasban.'
+
+// Issue #1853, the heredoc form: the segmenter drops heredoc BODIES, but when the
+// command that opens one is an interpreter (`python3 - <<'PY'`, `node <<EOF`) the body
+// IS the program. Mirrors _heredoc_program_sends in hooks/outgoing-copy-gate.py.
+// NARROWED (Geri's #1855 review): inside a heredoc body the exec + sender-literal half takes
+// the literal only as a lowercase, QUOTED command word (an argv item or an os.system command),
+// so a card id like SENDMAIL... in a report's prose no longer matches. Mirrors
+// _HEREDOC_SENDER_ARGV / _heredoc_body_sends in hooks/outgoing-copy-gate.py.
+// NOT COVERED, named: a program the classifier never reads -- `python3 /tmp/x.py`,
+// `python3 < /tmp/x.py`, `cat /tmp/x.py | python3 -`, `python3 -c "exec(open('/tmp/x.py').read())"`;
+// also a here-string fed to an interpreter (`python3 <<<'import send'`) and a CommonJS
+// destructuring rename of the Graph sender (`const { sendMail: s } = require(...)`).
+// A heredoc fed to a SHELL (`bash <<EOF`) is a shell program: its body is judged with
+// isSendInvocation itself, one level deeper (Geri/Samu, #1855).
+// WRITTEN, THEN RUN IN THE SAME COMMAND (#1855): `cat > P <<TAG` / `cat <<TAG > P`, then an
+// interpreter or a shell on the same path token P: the body is judged as if fed directly.
+// Exact token match; a file run by ANOTHER Bash call stays out of reach. Also NOT COVERED yet:
+// a heredoc PIPED on to an interpreter or a shell (`cat <<'EOF' | bash`, `| python3 -`), a
+// follow-up to #1855.
+const HEREDOC_SENDER_ARGV = /['"](?:[^'"\s]*\/)?(?:sendmail|msmtp|swaks|send\.py)(?=['"\s])/
+const heredocBodySends = (body) =>
+  CODE_SEND.test(body) || CODE_SEND_MODULE.test(body) || (CODE_EXECISH.test(body) && HEREDOC_SENDER_ARGV.test(body))
+// A PYTHON BODY IS JUDGED ON ITS CODE, NOT ON ITS STRINGS (card bc98d6d5). All 34 denials that
+// 6525aba3 A2 added over 20 694 real commands (didi, 7 days) were Python patch scripts whose
+// send word sat in a string literal (TS source being written), never in a call. For a body
+// read by Python only, string-literal contents and comments are blanked before the send
+// patterns run. Fail-closed, the body is judged whole, when: a word that can run text as code
+// is anywhere in it (PY_RUNNER), a quoted literal names a runnable script file
+// (PY_SCRIPT_PATH_LIT: send code written to x.py and run later), an f-string or t-string is
+// present (its {} holds code, and nested quotes defeat a flat scan), or a literal is left
+// open. NOT COVERED, named: send code in a string written to a .ts file or a path built at
+// run time, and run by a LATER command; the literal used to be the only catch. A Node body is
+// judged whole as before. Twin: _python_code_text in hooks/outgoing-copy-gate.py.
+const PY_RUNNER = /\bsubprocess\b|os\.system|\bpopen\b|child_process|\bexec[A-Za-z]*\s*\(|\bspawn[A-Za-z]*\s*\(|\beval\s*\(|(?<![\w.])compile\s*\(|__import__|__builtins__|\bbuiltins\b|\bimportlib\b|\brunpy\b|\bpickle\b|\bmarshal\b|\bcodecs\b/i
+const PY_SCRIPT_PATH_LIT = /['"][^'"\n]*\.(?:py|sh|bash|zsh|js|mjs|cjs)['"]/i
+const PY_STRING_PREFIX = /(?<!\w)[rRbBuUfFtT]{1,2}$/
+export function pythonCodeText(body) {
+  const s = String(body ?? '')
+  if (PY_RUNNER.test(s) || PY_SCRIPT_PATH_LIT.test(s)) return null
+  let out = ''
+  let i = 0
+  while (i < s.length) {
+    const ch = s[i]
+    if (ch === '#') {
+      const nl = s.indexOf('\n', i)
+      i = nl < 0 ? s.length : nl
+      continue
+    }
+    if (ch === "'" || ch === '"') {
+      const pre = PY_STRING_PREFIX.exec(out)
+      if (pre && /[fFtT]/.test(pre[0])) return null
+      const q = s.startsWith(ch.repeat(3), i) ? ch.repeat(3) : ch
+      let j = i + q.length
+      while (j < s.length && !s.startsWith(q, j)) {
+        if (s[j] === '\\') { j += 2; continue }
+        if (q.length === 1 && s[j] === '\n') return null
+        j++
+      }
+      if (j >= s.length) return null
+      out += q + q
+      i = j + q.length
+      continue
+    }
+    out += ch
+    i++
+  }
+  return out
+}
+// didi 55349: only a QUOTED delimiter (<<'X', <<"X", <<\X) hands Python the body as written.
+// Under <<X the shell first halves backslashes (and expands $, `), so the raw text lexes to
+// other strings than Python sees. An unquoted body is judged whole. Twin: _python_body_sends.
+const pythonBodySends = (body, quoted) => // quoted must be true to blank: a missing flag judges whole
+  heredocBodySends(quoted ? pythonCodeText(body) ?? body : body)
+// WHO READS THE HEREDOC (didi's K1, 6525aba3 50742; N1/N2, 50772). The opener line used to
+// be matched as a whole, so ANY interpreter word before the << made the body a program: a
+// PATH entry (`export PATH=/opt/homebrew/opt/node@22/bin:$PATH && git commit -F - <<`), an
+// earlier command (`python3 -m pytest && gh pr create --body-file - <<`), a directory
+// (`cd /home/node/app && cat <<`). Only the heredoc's OWN command reads it: the text after
+// the last ; & | of the innermost command context open at the <<. The walk is quote-aware
+// (a quoted `;` in `--subject "Re: x; y"` is not a separator) and context-aware: `$(`, `(`
+// and a backtick open a new command, inside double quotes too, and their closing returns
+// to the outer one. So `python3 - "$(date +%F)" <<` and `"$(which python3)" - <<` keep the
+// interpreter, and `git commit -m "$(cat <<'EOF'` is read as cat. segmentsTokens is NOT
+// used here: it splits at `$(` and `(`, which loses `$(which python3) - <<`.
+// Inside the own command, ANY word naming an interpreter or a shell makes the body a
+// program, whatever launches it: a launcher we do not know (uv run, poetry run, xargs,
+// docker exec -i, ssh host, pnpm exec, conda run) stays fail-closed, and there is no
+// second wrapper list to keep in step with WRAPPERS. The cost, named: an interpreter word
+// in the own command's arguments (`git commit -m "node fix" -F - <<`) reads the body as a
+// program too; that body is denied only if it sends. Twin: _heredoc_head_kinds in
+// hooks/outgoing-copy-gate.py.
+const HEREDOC_READER_WORD = /(?:^|[\s/'"`$(=;&|])(python3?(?:\.\d+)?|node|tsx|ts-node|deno|bun|sh|bash|zsh|dash)(?=$|[\s'"`);&|])/i
+export function heredocOwnCommand(head) {
+  const s = String(head ?? '')
+    .replace(/\|&/g, '|') // pipe incl. stderr: still a separator
+    .replace(/\d*[<>]&\d*-?|&>>?|\d*>\|/g, ' ') // 2>&1, &>, >| are redirections, not separators
+  const frames = []
+  let start = 0
+  let q = null
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    if (q === "'") { if (ch === "'") q = null; continue }
+    if (ch === '\\') { i++; continue }
+    if (ch === '$' && s[i + 1] === '(') { frames.push({ start, q, close: ')' }); start = i + 2; q = null; i++; continue }
+    if (ch === '`') {
+      const top = frames[frames.length - 1]
+      if (top && top.close === '`' && q === null) ({ start, q } = frames.pop())
+      else { frames.push({ start, q, close: '`' }); start = i + 1; q = null }
+      continue
+    }
+    if (q === '"') { if (ch === '"') q = null; continue }
+    if (ch === "'" || ch === '"') { q = ch; continue }
+    if (ch === '(') { frames.push({ start, q, close: ')' }); start = i + 1; continue }
+    if (ch === ')') {
+      const top = frames[frames.length - 1]
+      if (top && top.close === ')') ({ start, q } = frames.pop())
+      continue
+    }
+    if (ch === ';' || ch === '&' || ch === '|' || ch === '\n') start = i + 1
+  }
+  return s.slice(start)
+}
+// didi's F2 (6525aba3 50861): the FIRST reader word used to decide alone, so
+// `env bash -c 'python3 -' <<` and `docker exec -i c bash -c "python3 -" <<` read a Python
+// body as shell. Every reader word in the own command counts: a body read both ways is
+// judged both ways. Returns { py, js, shell }: a Python reader judges the body's code only
+// (pythonCodeText), any other interpreter the whole body.
+const HEREDOC_READER_WORD_G = new RegExp(HEREDOC_READER_WORD.source, 'gi')
+// A reader word followed by a script FILE runs that file, and the heredoc is the script's stdin:
+// data, not a program. `bash agent-msg.sh a b - <<'VEGE'` is the fleet's message form, and a
+// message body that QUOTES a send command was denied as one (6 of 14 970 real commands over 7
+// days, all ALLOW on 284961fa7; computress, 6525aba3 A2). Only an operand that is plainly a file
+// counts (a / or a script extension); no operand, `-`, `-s`, or any other word (`python3 -X dev`)
+// keeps the reader, fail-closed. A script that runs its own stdin is the cost, named; the
+// file-name rules (send.py) still judge the script itself. Twin: _reader_runs_script_file.
+const SCRIPT_FILE_OPERAND = /\/|\.(?:sh|bash|zsh|py|js|mjs|cjs|ts|mts|cts)$/i
+export function readerRunsScriptFile(rest) {
+  for (const raw of String(rest ?? '').split(/\s+/)) {
+    const t = raw.replace(/^['"]+|['"]+$/g, '')
+    if (!t) continue
+    if (t === '-') return false // "read the program from stdin"
+    if (/^[-+]/.test(t)) continue // an option
+    if (/^\d*[<>]/.test(t)) return false // a redirect: no operand before it
+    return SCRIPT_FILE_OPERAND.test(t)
+  }
+  return false
+}
+export function heredocHeadKinds(head) {
+  const kinds = { py: false, js: false, shell: false }
+  const own = heredocOwnCommand(head)
+  for (const m of own.matchAll(HEREDOC_READER_WORD_G)) {
+    if (readerRunsScriptFile(own.slice(m.index + m[0].length))) continue
+    if (WRAPPER_SHELL.test(m[1])) kinds.shell = true
+    else if (PYTHON.test(m[1])) kinds.py = true
+    else kinds.js = true
+  }
+  return kinds
+}
+
+// THE HEREDOC FORMS BASH RUNS (didi's K2, 6525aba3 50742). HEREDOC_RE knows <<TAG and
+// <<'TAG' only, so a sender fed by <<"EOF", <<\EOF, <<'END-PY' (a - or . in the tag), a <<-
+// body closed by a TAB-indented tag, or an unterminated heredoc (bash feeds the body to the
+// end of the input) was never read as a program. Used ONLY here, where a body is judged as
+// a program: the segmenter keeps HEREDOC_RE, so no body it scans as commands today goes
+// unscanned. Twin: _heredoc_spans in hooks/outgoing-copy-gate.py.
+const HEREDOC_OPEN = /(?<!<)<<(?!<)(-?)[ \t]*(?:'([\w.-]+)'|"([\w.-]+)"|\\?([\w.-]+))[^\n]*/g
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+export function heredocSpans(cmd) {
+  const spans = []
+  const open = new RegExp(HEREDOC_OPEN.source, 'g')
+  let m
+  while ((m = open.exec(cmd))) {
+    const nl = m.index + m[0].length
+    if (nl >= cmd.length) break // no body line at all
+    const tag = m[2] ?? m[3] ?? m[4]
+    const term = new RegExp(String.raw`\n${m[1] ? String.raw`\t*` : ''}${escapeRegExp(tag)}(?=\s|$)`, 'g')
+    term.lastIndex = nl
+    const t = term.exec(cmd)
+    // quoted: the delimiter is quoted (<<'X', <<"X", <<\X), so bash reads the body as written
+    const quoted = m[4] === undefined || /^<<-?[ \t]*\\/.test(m[0])
+    spans.push({ index: m.index, intro: m[0], body: cmd.slice(nl + 1, t ? t.index + 1 : cmd.length), end: t ? t.index + t[0].length : cmd.length, quoted })
+    open.lastIndex = t ? t.index + t[0].length : cmd.length
+  }
+  return spans
+}
+// `cat > P <<TAG`, `cat <<TAG > P`, `cat <<TAG | tee P`, and a bare `tee P <<TAG` (didi).
+const HEREDOC_REDIRECT = /(?:^|[\s;&|(])(?:cat\b[^\n]*?(?:>>?|\btee(?:\s+-a)?)|tee(?:\s+-a)?(?=\s))\s*(['"]?)([^\s'"<>;&|]+)\1/
+function writtenThenRun(cmd, written, depth) {
+  if (!written.size) return false
+  let segments
+  try { segments = segmentsTokens(cmd) } catch { return false }
+  for (const toks of segments) {
+    for (const head of commandHeads(toks)) {
+      if (!head || !head.length) continue
+      const prog = basename(head[0])
+      let args = head.slice(1).filter((t) => !t.startsWith('-'))
+      if (prog.toLowerCase() === 'npx' && args.length) args = args.slice(1) // npx <runner> <file>
+      if (!args.length || !written.has(args[0])) continue
+      const { body, quoted } = written.get(args[0])
+      if (PYTHON.test(prog) && pythonBodySends(body, quoted)) return true
+      if (NODEISH.test(prog) && heredocBodySends(body)) return true
+      if (WRAPPER_SHELL.test(prog) && depth < 3 && isSendInvocation(body, depth + 1)) return true
+    }
+  }
+  return false
 }
 
 // VARURL926 (card cb63ddb4): a Resend URL in a shell variable or built by a
@@ -491,8 +730,42 @@ export function varUrlSend(cmd) {
   }
   return false
 }
+function heredocProgramSends(cmd, depth = 0) {
+  const written = new Map()
+  // didi's F1 (6525aba3 50861): the own command was read from the opener's LINE only, so a
+  // quote or $( opened on an earlier line was lost (`python3 -c "<nl>x=['bash','y']"; cd /tmp
+  // && python3 - <<'PY'` read as shell). The walk gets everything before the <<, with the
+  // bodies of earlier heredocs cut out (they are data, not command text); an unquoted
+  // newline separates commands in the walk.
+  let ctx = ''
+  let from = 0
+  for (const { index, intro, body, end, quoted } of heredocSpans(cmd)) {
+    const head = cmd.slice(cmd.lastIndexOf('\n', index - 1) + 1, index)
+    const w = HEREDOC_REDIRECT.exec(head + intro)
+    if (w) written.set(w[2], { body, quoted })
+    ctx += cmd.slice(from, index)
+    const kinds = heredocHeadKinds(ctx)
+    if (kinds.js && heredocBodySends(body)) return true
+    if (kinds.py && pythonBodySends(body, quoted)) return true
+    if (kinds.shell && depth < 3 && isSendInvocation(body, depth + 1)) return true
+    ctx += intro + '\n'
+    from = end
+  }
+  return writtenThenRun(cmd, written, depth)
+}
 
 export function isSendInvocation(cmd, depth = 0) {
+  return heredocProgramSends(cmd, depth) || commandTextSends(cmd, depth)
+}
+
+// True when a heredoc body read as a program is the WHOLE reason for the deny, so the
+// deny names the way out (marveen 50880, 6525aba3): the over-protection on string
+// literals in a patch script is accepted, and its price is one step, not a lost turn.
+export function heredocBodyHit(cmd) {
+  return heredocProgramSends(cmd) && !commandTextSends(cmd, 0)
+}
+
+function commandTextSends(cmd, depth) {
   let segments
   try {
     segments = segmentsTokens(cmd)
@@ -546,7 +819,10 @@ export function gateDecision(toolName, toolInput) {
   }
   if (name === 'Bash') {
     const cmd = String(toolInput?.command ?? '')
-    if (isSendInvocation(cmd)) return wrapperDepthHit(cmd) ? { deny: true, kind: 'wrapper-depth' } : { deny: true }
+    if (isSendInvocation(cmd)) {
+      if (wrapperDepthHit(cmd)) return { deny: true, kind: 'wrapper-depth' }
+      return heredocBodyHit(cmd) ? { deny: true, kind: 'heredoc-body' } : { deny: true }
+    }
   }
   return { deny: false }
 }
@@ -788,6 +1064,7 @@ if (isInvokedDirectly()) {
     const { botName, ownerName } = readBrandEnv()
     if (kind === 'draft-required') deny(buildDraftOnlyMsg(ownerName))
     if (kind === 'wrapper-depth') deny(buildWrapperDepthMsg())
+    if (kind === 'heredoc-body') deny(buildGateMsg(botName, ownerName) + ' ' + HEREDOC_BODY_WAY_OUT)
     // Thread-scoped narrowing: only when the scaffold wired this agent's hook
     // command with the flag (capability-driven, regenerated on every spawn),
     // and only for the direct send_email tool. Bash send routes and
