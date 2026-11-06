@@ -402,39 +402,44 @@ export function findHitsAllowlist(seg, allowlistPath = DEFAULT_ALLOWLIST_PATH, c
 const REMOVERS = new Set(['rm', 'rmdir', 'mv', 'trash'])
 // A prefix that runs the next word as the command (didi 55396 K2), with the short options that take
 // a value FOR THAT RUNNER (didi 55399 L1: `time -p` is a flag, `sudo -p` takes a prompt). An option
-// the table does not know is read both ways, and the segment is denied if either reading removes.
-// env -S is a flag here on purpose: its value IS the command (`env -S 'rm -rf store'`).
+// the table does not know, and a long option without =, is read both ways INSIDE the runner's option
+// list (didi 55404 M1: `sudo --login -u root rm` must reach rm), and the segment is denied if any
+// reading removes. env -S is a flag here on purpose: its value IS the command (`env -S 'rm -rf store'`).
+// sudo -h is left out of both: it is --help alone and --host with a value.
 const RUNNER_VALUE_OPTS = {
-  command: '', builtin: '', nohup: '', exec: 'a', env: 'uCP', sudo: 'ugCDhpRrTtU', doas: 'uC', time: 'of', nice: 'n',
+  command: '', builtin: '', nohup: '', exec: 'a', env: 'uCP', sudo: 'ugCDpRrTtU', doas: 'uC', time: 'of', nice: 'n',
 }
 const RUNNER_FLAG_OPTS = {
-  command: 'pvV', builtin: '', nohup: '', exec: 'cl', env: 'i0vS', sudo: 'AbEeHiKkLlnPSsVv', doas: 'Lns', time: 'ahlpv', nice: '',
+  command: 'pvV', builtin: '', nohup: '', exec: 'cl', env: 'i0vS', sudo: 'ABbEeHiKkLlNnPSsVv', doas: 'Lns', time: 'ahlpv', nice: '',
 }
 const cmdOf = (w) => (w ?? '').replace(/^\\/, '').replace(/^.*\//, '')
-// The indices a runner chain can hand the command word to: one, unless an unknown option forks it.
-function commandStarts(words, i) {
+// Every index a runner chain can hand the command word to. Each (runner, word) state is visited
+// once, so n unknown options cost n states, not 2^n readings.
+function commandStarts(words, i, seen = new Set()) {
   while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++ // leading VAR=x
   const runner = cmdOf(words[i])
   if (!Object.hasOwn(RUNNER_VALUE_OPTS, runner)) return [i]
-  i++
-  for (;;) {
-    const w = words[i]
-    if (w === undefined || !/^-/.test(w)) return commandStarts(words, i)
-    if (w === '--') return commandStarts(words, i + 1)
-    if (w.startsWith('--')) { // --user=root is one word; --user root or --preserve-env rm: both ways
-      if (w.includes('=')) { i++; continue }
-      return [...commandStarts(words, i + 1), ...commandStarts(words, i + 2)]
-    }
-    if (/^-\d+$/.test(w)) { i++; continue } // nice -5
-    let step = 1
+  const at = i
+  const out = []
+  const next = (j) => {
+    if (seen.has(`${at}:${j}`)) return
+    seen.add(`${at}:${j}`)
+    const w = words[j]
+    if (w === undefined || !/^-/.test(w)) return void out.push(...commandStarts(words, j, seen))
+    if (w === '--') return void out.push(...commandStarts(words, j + 1, seen))
+    if (w.startsWith('--')) return w.includes('=') ? next(j + 1) : (next(j + 1), next(j + 2)) // --user root, --login
+    if (/^-\d+$/.test(w)) return next(j + 1) // nice -5
     for (let c = 1; c < w.length; c++) {
-      if (RUNNER_VALUE_OPTS[runner].includes(w[c])) { step = c === w.length - 1 ? 2 : 1; break }
-      if (!RUNNER_FLAG_OPTS[runner].includes(w[c])) {
-        return [...commandStarts(words, i + 1), ...(c === w.length - 1 ? commandStarts(words, i + 2) : [])]
-      }
+      const value = RUNNER_VALUE_OPTS[runner].includes(w[c])
+      if (!value && RUNNER_FLAG_OPTS[runner].includes(w[c])) continue
+      next(c === w.length - 1 ? j + 2 : j + 1) // takes a value: the next word, or the rest glued (-uisti)
+      if (value) return
+      // an unknown letter may also be a flag: the cluster goes on (-Bu root)
     }
-    i += step
+    next(j + 1)
   }
+  next(i + 1)
+  return out
 }
 export function removalHitsAncestor(seg, allowlistPath = DEFAULT_ALLOWLIST_PATH, cwd = process.cwd()) {
   const raw = String(seg ?? '').trim().replace(/^[({]\s*/, '').split(/\s+/).map((w) => w.replace(/['"]/g, '').replace(/\)+$/, ''))

@@ -225,6 +225,18 @@ describe('gate: rm / rmdir / mv of a directory that holds the allowlist objects 
     'exec -a x rm -rf store',
     'nice -5 rm -rf store',
     "env -S 'rm -rf store'",
+    // didi 55404 M1/M2: an unknown option keeps the runner's option list going, read both ways
+    'sudo --login -u root rm -rf store',
+    'sudo --preserve-env -u isti rm -rf store',
+    'sudo -B -u root rm -rf store',
+    'sudo -Bu root rm -rf store',
+    'sudo -Nu isti rm -rf store',
+    'sudo -h host rm -rf store',
+    'sudo -Z val rm -rf store',
+    'sudo -Zu root rm -rf store',
+    'sudo -Z -Y -X -W -V -u root rm -rf store',
+    // each (runner, word) state once: 30 unknown options are 30 states, not 2^30 readings
+    `sudo ${'-Z '.repeat(30)}rm -rf store`,
     'rm -rf store>/dev/null',
     'rm -rf store 2>/dev/null',
     'rm -rf store > /tmp/log',
