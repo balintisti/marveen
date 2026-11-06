@@ -44,11 +44,12 @@ const EXPECTED: Record<string, string[]> = {
   PostToolUse: [
     'ledger-outbound.py', 'tool-log-capture.py',
     'telegram_progress_reply_clear.py', 'slack_progress_reply_clear.py',
-    'skill-usage-capture.py',
+    'skill-usage-capture.py', 'memory-frontmatter-bash-gate.py',
   ],
   // A failed tool call fires PostToolUseFailure, never PostToolUse
   // (TOOLLOGVAKSIKER921): without this entry tool_call_log cannot hold a 0.
-  PostToolUseFailure: ['tool-log-capture.py'],
+  // KAPUEGYUT918: a failed Bash call can still have written a memory file.
+  PostToolUseFailure: ['tool-log-capture.py', 'memory-frontmatter-bash-gate.py'],
   PreToolUse: [
     // merge 88c366f2: email-approval-gate.py held back for the main agent (D4, pending P10);
     // db-destructive-gate.py is ours (also wired at user level; see hook-registration-completeness).
@@ -58,6 +59,7 @@ const EXPECTED: Record<string, string[]> = {
     'outgoing-copy-gate.py', 'db-destructive-gate.py',
     'channel-image-resize.sh', 'egress-gate.mjs', 'memory-frontmatter-gate.py',
     'memory-index-write-gate.py',
+    'memory-frontmatter-bash-gate.py',
   ],
   Stop: ['marveen-commands.py', 'telegram-reply-guard.py', 'telegram_progress_clear.py', 'slack_progress_clear.py'],
   StopFailure: ['ledger-turn-failure.py'],

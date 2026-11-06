@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **469** kovetett fajl, ebbol
-**143** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **475** kovetett fajl, ebbol
+**146** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -341,6 +341,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - WHY (measured 2026-09-19 ~06:45 CEST): two backticked command names inside a
 - WHY A HOOK AND NOT A DENY RULE (marveen 2026-10-16 10:12): in a worktree these two
 
+### `scripts/hooks/memory-frontmatter-bash-gate.py`
+
+- WHY: memory-frontmatter-gate.py sits on Write/Edit/MultiEdit, but the fleet
+
 ### `scripts/hooks/memory-frontmatter-gate.py`
 
 - WHY (MEMFMGATE918, 2026-09-18): nine memory files in the fleet store had a
@@ -472,6 +476,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/memoria_heartbeat_gate.py`
 
 - WHO MOVES THE WATERMARK, AND WHY IT IS NOT THIS SCRIPT
+
+### `scripts/memory-frontmatter-sweep.py`
+
+- WHY: the two hooks (memory-frontmatter-gate.py on Write/Edit, memory-frontmatter-
 
 ### `scripts/memory-index-add.py`
 
