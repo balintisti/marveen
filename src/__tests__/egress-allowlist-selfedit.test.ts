@@ -250,6 +250,13 @@ describe('gate: rm / rmdir / mv of a directory that holds the allowlist objects 
   it.each(wrappedDenied)('denies: %s', (command) => {
     expect(decide('Bash', { command })).toEqual({ deny: true, reason: 'egress-allowlist' })
   })
+  // Without the visited set 34 unknown options took 2.9 s here and 40 crashed node; with it, 1 ms.
+  // A hook that a crafted command can stall blocks the agent, so the cost itself is pinned.
+  it('an unknown-option chain costs one state per word, not one per reading', () => {
+    const started = performance.now()
+    expect(decide('Bash', { command: `sudo ${'-Z '.repeat(34)}rm -rf store` }).deny).toBe(true)
+    expect(performance.now() - started).toBeLessThan(1000)
+  })
   const wrappedAllowed = [
     'sudo -u isti ls store',
     'sudo -u rm ls store',
