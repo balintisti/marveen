@@ -390,10 +390,50 @@ export function findHitsAllowlist(seg, allowlistPath = DEFAULT_ALLOWLIST_PATH, c
   })
 }
 
+// `rm` / `rmdir` / `mv` of a directory that HOLDS one of the three objects takes it along:
+// `rm -rf store`, `rm -rf ~/.marveen`, `mv store store2` (didi 55350 L2, marveen 55375). A hit:
+// an operand, resolved as the paths above are (~, $HOME, $PWD, relative to the cwd the segment
+// runs in, real path), that IS one of the objects or an ANCESTOR of one. For mv only the SOURCES
+// count: the destination is an existing directory the source goes INTO, or a new name, and
+// `mv /tmp/x .` from the install root must stay allowed. An operand with $ or ` (unknown at this
+// point) or a glob is not read. Indirect forms stay outside this check, and the header of
+// src/web/egress-allowlist-baseline.ts says so: `cd store/.. && rm -rf *`, `find -delete` over a
+// parent, `python -c shutil.rmtree`, a script. The OS-level owner named there is the real close.
+const REMOVERS = new Set(['rm', 'rmdir', 'mv'])
+export function removalHitsAncestor(seg, allowlistPath = DEFAULT_ALLOWLIST_PATH, cwd = process.cwd()) {
+  const words = String(seg ?? '').trim().replace(/^[({]\s*/, '').split(/\s+/).map((w) => w.replace(/['"]/g, '').replace(/\)+$/, ''))
+  let i = 0
+  while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++ // leading VAR=x
+  const cmd = (words[i] ?? '').replace(/^.*\//, '')
+  if (!REMOVERS.has(cmd)) return false
+  const operands = []
+  let target = null
+  let opts = true
+  for (let k = i + 1; k < words.length; k++) {
+    const w = words[k]
+    if (opts && w === '--') { opts = false; continue }
+    if (opts && cmd === 'mv' && (w === '-t' || w === '--target-directory')) { target = words[++k] ?? null; continue }
+    if (opts && cmd === 'mv' && w.startsWith('--target-directory=')) { target = w.slice(19); continue }
+    if (opts && cmd === 'mv' && (w === '-S' || w === '--suffix')) { k++; continue }
+    if (opts && /^-./.test(w)) continue
+    operands.push(w)
+  }
+  // mv a b: b is the destination; mv -t dir a b: every operand is a source
+  const sources = cmd === 'mv' && target === null ? operands.slice(0, -1) : operands
+  const historyDir = join(dirname(allowlistPath), HISTORY_DIRNAME)
+  const objects = [allowlistPath, historyDir, baselineRecordPath(allowlistPath)].flatMap((o) => [o, realOrSelf(o)])
+  return sources.some((w) => {
+    if (!w || /[$`*?[{]/.test(w.replace(HOME_WORD_RX, '').replace(CWD_WORD_RX, ''))) return false
+    const abs = resolve(cwd, expandHome(w.replace(HOME_WORD_RX, homedir()).replace(CWD_WORD_RX, cwd)))
+    return [abs, realOrSelf(abs)].some((op) => objects.some((o) => isAtOrBelow(o, op)))
+  })
+}
+
 export function allowlistBashSegmentAllowed(seg, opts = {}) {
   // A subshell or a group opens the segment: `(rm e*)`, `{ cat e*; }`.
   const s = String(seg ?? '').trim().replace(/^[({]\s*/, '')
   if (findHitsAllowlist(s, opts.allowlistPath, opts.cwd)) return false
+  if (removalHitsAncestor(s, opts.allowlistPath, opts.cwd)) return false
   const globHit = () => s.split(/\s+/).some((w) => globHitsAllowlist(w, opts.allowlistPath, opts.cwd))
   if (!ALLOWLIST_MENTION_RX.test(s) && !globHit()) return true
   const words = s.split(/\s+/)
@@ -923,7 +963,9 @@ export const REASON_HINT = {
     ' blankolja). Igy a parancssorban csak egy utvonal all, es a dokumentum pontos marad.',
   'egress-allowlist':
     ' KIVALTO OK: egy fajl-eszkoz a store/egress-allowlist.json-ra irna (nev vagy valodi utvonal' +
-    ' szerint), vagy a Bash-parancs megnevezi a fajlt, es nem sima olvasas.' +
+    ' szerint), vagy a Bash-parancs megnevezi a fajlt, es nem sima olvasas, vagy egy rm / rmdir / mv' +
+    ' egy olyan mappat torolne vagy mozgatna, amiben a fajl, a tortenete vagy a ~/.marveen alatti' +
+    ' rekordja van (store/, ~/.marveen, a telepites gyokere). Egy fajlt store/ ALATT torolhetsz.' +
     ' Ha egy domain kell, kerd a fo agenst (inter-agent uzenet: domain + miert); o a gazda' +
     ' jovahagyasaval veszi fel. Olvasni szabad: cat / grep / jq a fajlra (ertelmezo -- python,' +
     ' node -- nem).' +

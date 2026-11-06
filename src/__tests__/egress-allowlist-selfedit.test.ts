@@ -160,6 +160,48 @@ describe('gate: Bash is fail-closed on the allowlist', () => {
   })
 })
 
+describe('gate: rm / rmdir / mv of a directory that holds the allowlist objects (didi 55350 L2, marveen 55375)', () => {
+  const ancestorDenied = [
+    'rm -rf store',
+    'rm -r store/',
+    'rm -rf -- store',
+    '/bin/rm -rf ./store',
+    'rmdir store',
+    'mv store store2',
+    'mv -t /tmp store',
+    'rm -rf .',
+    'rm -rf ~/.marveen',
+    'rm -rf $HOME/.marveen',
+    'mv ~/.marveen /tmp/x',
+    'cd store && rm -rf ..',
+    "rm -rf 'store'",
+    '(rm -rf store)',
+  ]
+  it.each(ancestorDenied)('denies: %s', (command) => {
+    expect(decide('Bash', { command })).toEqual({ deny: true, reason: 'egress-allowlist' })
+  })
+  it('denies the install root by its absolute path, and a symlink that resolves to store/', () => {
+    expect(decide('Bash', { command: `rm -rf ${root}` })).toEqual({ deny: true, reason: 'egress-allowlist' })
+    symlinkSync(store, join(root, 'lnk'))
+    expect(decide('Bash', { command: 'rm -rf lnk/' })).toEqual({ deny: true, reason: 'egress-allowlist' })
+  })
+  // POSITIVE CONTROL: below store/, beside it, and a destination that is a parent stay allowed.
+  const stillAllowed = [
+    'rm -rf store/scratch-x',
+    'mv store/a.txt store/b.txt',
+    'rmdir store/emptydir',
+    'mv /tmp/x .',
+    'mv /tmp/x store',
+    'mv /tmp/x.json store/',
+    'rm -rf /tmp/other',
+    'rm -rf ~/.marveen-other',
+    'ls store',
+  ]
+  it.each(stillAllowed)('allows: %s', (command) => {
+    expect(decide('Bash', { command }).deny).toBe(false)
+  })
+})
+
 describe('gate: the hook end to end, and who it applies to', () => {
   const hook = join(__dirname, '..', '..', 'scripts', 'self-pace-gate.mjs')
   const run = (payload: unknown) =>

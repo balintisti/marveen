@@ -26,10 +26,11 @@
 // L2): record AND history removed, then the file changed: 0 reports; record AND newest history
 // entry both rewritten to the new sha: 0 reports. Any state this user can write, it can forge in
 // step, so no local record closes that. What keeps a sub-agent from it is self-pace-gate.mjs
-// denying writes to all three BY PATH. It does NOT deny removing or moving a parent directory
-// (rm -rf ~/.marveen, mv ~/.marveen x, rm -rf store, mv store store2: measured ALLOW, didi
-// 55350), which takes the record or the file and its history along. The OS-level owner above
-// is what would close it for real.
+// denying writes to all three BY PATH, and an rm / rmdir / mv whose operand is one of them or a
+// directory above them (rm -rf store, rm -rf ~/.marveen, mv store store2, rm -rf . from the
+// install root: didi 55350 L2, marveen 55375). It does NOT see the indirect forms that take a
+// parent along: cd store/.. && rm -rf *, find over a parent with -delete, python shutil.rmtree,
+// a script that builds the path. The OS-level owner above is what would close it for real.
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync, realpathSync, watchFile, unwatchFile, type Stats } from 'node:fs'
 import { homedir } from 'node:os'
