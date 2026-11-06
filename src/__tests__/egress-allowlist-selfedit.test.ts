@@ -228,6 +228,8 @@ describe('gate: rm / rmdir / mv of a directory that holds the allowlist objects 
     'nohup rm -rf store/scratch-x',
     'rm -rf /tmp/x > store/log.txt',
     'rm -rf store2>/dev/null',
+    // a redirect word is not the mv destination: else store becomes a source
+    'mv /tmp/x store 2>/dev/null',
     'trash store/scratch-x',
     'FOO=store rm -rf /tmp/x',
   ]
