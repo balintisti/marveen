@@ -399,12 +399,30 @@ export function findHitsAllowlist(seg, allowlistPath = DEFAULT_ALLOWLIST_PATH, c
 // point) or a glob is not read. Indirect forms stay outside this check, and the header of
 // src/web/egress-allowlist-baseline.ts says so: `cd store/.. && rm -rf *`, `find -delete` over a
 // parent, `python -c shutil.rmtree`, a script. The OS-level owner named there is the real close.
-const REMOVERS = new Set(['rm', 'rmdir', 'mv'])
+const REMOVERS = new Set(['rm', 'rmdir', 'mv', 'trash'])
+// A prefix that runs the next word as the command (didi 55396 K2); the options that take a value.
+const RUNNERS = new Set(['command', 'builtin', 'exec', 'nohup', 'env', 'sudo', 'doas', 'time', 'nice'])
+const RUNNER_ARG_OPTS = new Set(['-u', '-g', '-n', '-C', '-p', '-h', '-U'])
 export function removalHitsAncestor(seg, allowlistPath = DEFAULT_ALLOWLIST_PATH, cwd = process.cwd()) {
-  const words = String(seg ?? '').trim().replace(/^[({]\s*/, '').split(/\s+/).map((w) => w.replace(/['"]/g, '').replace(/\)+$/, ''))
+  const raw = String(seg ?? '').trim().replace(/^[({]\s*/, '').split(/\s+/).map((w) => w.replace(/['"]/g, '').replace(/\)+$/, ''))
+  // A redirect is not an operand: `> f`, `2>/dev/null`, and the glued `store>/dev/null` (K3).
+  const words = []
+  for (let k = 0; k < raw.length; k++) {
+    const w = raw[k]
+    if (/^\d*(?:>>?|<)&?$/.test(w)) { k++; continue }
+    if (/^\d*[<>]/.test(w)) continue
+    const left = w.split(/[<>]/)[0] // bash: `store2>x` is the word store2, not fd 2
+    if (left) words.push(left)
+  }
+  const cmdOf = (w) => (w ?? '').replace(/^\\/, '').replace(/^.*\//, '')
   let i = 0
-  while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++ // leading VAR=x
-  const cmd = (words[i] ?? '').replace(/^.*\//, '')
+  for (;;) {
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++ // leading VAR=x
+    if (!RUNNERS.has(cmdOf(words[i]))) break
+    i++
+    while (i < words.length && /^-/.test(words[i])) i += RUNNER_ARG_OPTS.has(words[i]) ? 2 : 1
+  }
+  const cmd = cmdOf(words[i])
   if (!REMOVERS.has(cmd)) return false
   const operands = []
   let target = null
@@ -452,8 +470,10 @@ export function allowlistBashSegmentAllowed(seg, opts = {}) {
 function expandHome(p) {
   return p.startsWith('~/') ? join(homedir(), p.slice(2)) : p
 }
+// .native: on a case-insensitive volume (APFS default) `STORE` IS store/, and only the native
+// realpath answers with the name on disk; the JS one keeps the typed case (didi 55396 K1).
 function realOrSelf(p) {
-  try { return realpathSync(p) } catch { return p }
+  try { return realpathSync.native(p) } catch { return p }
 }
 
 // Does a native file-tool call target the allowlist? `allowlistPath` is the real file
@@ -963,7 +983,7 @@ export const REASON_HINT = {
     ' blankolja). Igy a parancssorban csak egy utvonal all, es a dokumentum pontos marad.',
   'egress-allowlist':
     ' KIVALTO OK: egy fajl-eszkoz a store/egress-allowlist.json-ra irna (nev vagy valodi utvonal' +
-    ' szerint), vagy a Bash-parancs megnevezi a fajlt, es nem sima olvasas, vagy egy rm / rmdir / mv' +
+    ' szerint), vagy a Bash-parancs megnevezi a fajlt, es nem sima olvasas, vagy egy rm / rmdir / mv / trash' +
     ' egy olyan mappat torolne vagy mozgatna, amiben a fajl, a tortenete vagy a ~/.marveen alatti' +
     ' rekordja van (store/, ~/.marveen, a telepites gyokere). Egy fajlt store/ ALATT torolhetsz.' +
     ' Ha egy domain kell, kerd a fo agenst (inter-agent uzenet: domain + miert); o a gazda' +

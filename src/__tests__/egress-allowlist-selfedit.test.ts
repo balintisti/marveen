@@ -15,7 +15,7 @@ import {
   statMoved,
 } from '../web/egress-allowlist-baseline.js'
 import { MAIN_AGENT_ID } from '../config.js'
-import { mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, statSync, utimesSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, statSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { tmpDirs } from './helpers/tmp-dirs.js'
@@ -199,6 +199,47 @@ describe('gate: rm / rmdir / mv of a directory that holds the allowlist objects 
   ]
   it.each(stillAllowed)('allows: %s', (command) => {
     expect(decide('Bash', { command }).deny).toBe(false)
+  })
+  // didi 55396: a runner prefix (K2), a glued redirect (K3), trash (K4), VAR= and $PWD (K5).
+  const wrappedDenied = [
+    '\\rm -rf store',
+    'command rm -rf store',
+    'env rm -rf store',
+    'env FOO=1 rm -rf store',
+    'nohup rm -rf store',
+    'sudo rm -rf store',
+    'sudo -u isti rm -rf store',
+    'time rm -rf store',
+    'nice -n 5 rm -rf store',
+    'rm -rf store>/dev/null',
+    'rm -rf store 2>/dev/null',
+    'rm -rf store > /tmp/log',
+    'trash store',
+    'FOO=1 rm -rf store',
+    'rm -rf $PWD/store',
+    'rm -rf ${PWD}',
+  ]
+  it.each(wrappedDenied)('denies: %s', (command) => {
+    expect(decide('Bash', { command })).toEqual({ deny: true, reason: 'egress-allowlist' })
+  })
+  const wrappedAllowed = [
+    'sudo -u isti ls store',
+    'env rm -rf /tmp/x',
+    'nohup rm -rf store/scratch-x',
+    'rm -rf /tmp/x > store/log.txt',
+    'rm -rf store2>/dev/null',
+    'trash store/scratch-x',
+    'FOO=store rm -rf /tmp/x',
+  ]
+  it.each(wrappedAllowed)('allows: %s', (command) => {
+    expect(decide('Bash', { command }).deny).toBe(false)
+  })
+  // K1: on a case-insensitive volume STORE IS store/; on a case-sensitive one it is another name.
+  it('a differently cased name is denied exactly when the volume says it is the same directory', () => {
+    const same = existsSync(join(root, 'STORE'))
+    for (const command of ['rm -rf STORE', 'mv Store s2', 'find STORE -delete']) {
+      expect(decide('Bash', { command }).deny, command).toBe(same)
+    }
   })
 })
 
