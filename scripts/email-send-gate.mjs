@@ -482,7 +482,11 @@ export function pythonCodeText(body) {
   }
   return out
 }
-const pythonBodySends = (body) => heredocBodySends(pythonCodeText(body) ?? body)
+// didi 55349: only a QUOTED delimiter (<<'X', <<"X", <<\X) hands Python the body as written.
+// Under <<X the shell first halves backslashes (and expands $, `), so the raw text lexes to
+// other strings than Python sees. An unquoted body is judged whole. Twin: _python_body_sends.
+const pythonBodySends = (body, quoted) => // quoted must be true to blank: a missing flag judges whole
+  heredocBodySends(quoted ? pythonCodeText(body) ?? body : body)
 // WHO READS THE HEREDOC (didi's K1, 6525aba3 50742; N1/N2, 50772). The opener line used to
 // be matched as a whole, so ANY interpreter word before the << made the body a program: a
 // PATH entry (`export PATH=/opt/homebrew/opt/node@22/bin:$PATH && git commit -F - <<`), an
@@ -588,7 +592,9 @@ export function heredocSpans(cmd) {
     const term = new RegExp(String.raw`\n${m[1] ? String.raw`\t*` : ''}${escapeRegExp(tag)}(?=\s|$)`, 'g')
     term.lastIndex = nl
     const t = term.exec(cmd)
-    spans.push({ index: m.index, intro: m[0], body: cmd.slice(nl + 1, t ? t.index + 1 : cmd.length), end: t ? t.index + t[0].length : cmd.length })
+    // quoted: the delimiter is quoted (<<'X', <<"X", <<\X), so bash reads the body as written
+    const quoted = m[4] === undefined || /^<<-?[ \t]*\\/.test(m[0])
+    spans.push({ index: m.index, intro: m[0], body: cmd.slice(nl + 1, t ? t.index + 1 : cmd.length), end: t ? t.index + t[0].length : cmd.length, quoted })
     open.lastIndex = t ? t.index + t[0].length : cmd.length
   }
   return spans
@@ -606,8 +612,8 @@ function writtenThenRun(cmd, written, depth) {
       let args = head.slice(1).filter((t) => !t.startsWith('-'))
       if (prog.toLowerCase() === 'npx' && args.length) args = args.slice(1) // npx <runner> <file>
       if (!args.length || !written.has(args[0])) continue
-      const body = written.get(args[0])
-      if (PYTHON.test(prog) && pythonBodySends(body)) return true
+      const { body, quoted } = written.get(args[0])
+      if (PYTHON.test(prog) && pythonBodySends(body, quoted)) return true
       if (NODEISH.test(prog) && heredocBodySends(body)) return true
       if (WRAPPER_SHELL.test(prog) && depth < 3 && isSendInvocation(body, depth + 1)) return true
     }
@@ -733,14 +739,14 @@ function heredocProgramSends(cmd, depth = 0) {
   // newline separates commands in the walk.
   let ctx = ''
   let from = 0
-  for (const { index, intro, body, end } of heredocSpans(cmd)) {
+  for (const { index, intro, body, end, quoted } of heredocSpans(cmd)) {
     const head = cmd.slice(cmd.lastIndexOf('\n', index - 1) + 1, index)
     const w = HEREDOC_REDIRECT.exec(head + intro)
-    if (w) written.set(w[2], body)
+    if (w) written.set(w[2], { body, quoted })
     ctx += cmd.slice(from, index)
     const kinds = heredocHeadKinds(ctx)
     if (kinds.js && heredocBodySends(body)) return true
-    if (kinds.py && pythonBodySends(body)) return true
+    if (kinds.py && pythonBodySends(body, quoted)) return true
     if (kinds.shell && depth < 3 && isSendInvocation(body, depth + 1)) return true
     ctx += intro + '\n'
     from = end

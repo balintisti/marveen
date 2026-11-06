@@ -1525,6 +1525,31 @@
       "name": "[812bd946 httpie] `https` GET stays a send: httpie's method is not read",
       "cmd": "https GET https://api.resend.com/domains",
       "expected": true
+    },
+    {
+      "name": "[bc98d6d5 L1] an UNQUOTED delimiter halves backslashes before Python reads the body: the raw text's one literal is a closed literal plus a real send, judged whole",
+      "cmd": "python3 - <<E\ns = \"\\\\\\\"; import resend; resend.Emails.send({}) #\"\nE",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5 L1] the same body under a QUOTED delimiter reaches Python as written: one string literal, not a send",
+      "cmd": "python3 - <<'E'\ns = \"\\\\\\\"; import resend; resend.Emails.send({}) #\"\nE",
+      "expected": false
+    },
+    {
+      "name": "[bc98d6d5 L1] <<\\E is a quoted delimiter too: the body is one string literal, not a send",
+      "cmd": "python3 - <<\\E\ns = \"\\\\\\\"; import resend; resend.Emails.send({}) #\"\nE",
+      "expected": false
+    },
+    {
+      "name": "[bc98d6d5 L1] a body written through an UNQUOTED delimiter and then run is judged whole too",
+      "cmd": "cat > /tmp/p.py <<E\ns = \"\\\\\\\"; import resend; resend.Emails.send({}) #\"\nE\npython3 /tmp/p.py",
+      "expected": true
+    },
+    {
+      "name": "[bc98d6d5 MB3] importlib is a runner word: a module loaded by name from a quoted Python body is judged whole",
+      "cmd": "python3 - <<'E'\nimport importlib\nm = importlib.import_module(\"send\")\nm.main()\nE",
+      "expected": true
     }
   ]
 }

@@ -795,7 +795,14 @@ def _python_code_text(body: str):
     return "".join(out)
 
 
-def _python_body_sends(body: str) -> bool:
+def _python_body_sends(body: str, quoted: bool) -> bool:
+    # didi 55349: only a QUOTED delimiter (<<'X', <<"X", <<\X) hands Python the body as
+    # written. Under <<X the shell first halves backslashes (and expands $, `), so the
+    # raw text lexes to other strings than Python sees: `s = "\\\"; import resend; ...`
+    # reads as one literal here and as a closed literal plus a real send to Python.
+    # An unquoted body is judged whole. Twin: pythonBodySends.
+    if not quoted:
+        return _heredoc_body_sends(body)
     code = _python_code_text(body)
     return _heredoc_body_sends(body if code is None else code)
 
@@ -900,7 +907,8 @@ _HEREDOC_OPEN = re.compile(r"(?<!<)<<(?!<)(-?)[ \t]*(?:'([\w.-]+)'|\"([\w.-]+)\"
 
 
 def _heredoc_spans(cmd: str):
-    """[(start, intro, body, end), ...] for every heredoc bash would read."""
+    """[(start, intro, body, end, quoted), ...] for every heredoc bash would read.
+    quoted: the delimiter is quoted (<<'X', <<"X", <<\\X), so bash reads the body as written."""
     spans, pos = [], 0
     while True:
         m = _HEREDOC_OPEN.search(cmd, pos)
@@ -912,7 +920,8 @@ def _heredoc_spans(cmd: str):
         tag = m.group(2) or m.group(3) or m.group(4)
         term = re.compile(r"\n" + (r"\t*" if m.group(1) else "") + re.escape(tag) + r"(?=\s|$)")
         t = term.search(cmd, nl)
-        spans.append((m.start(), m.group(0), cmd[nl + 1:t.start() + 1 if t else len(cmd)], t.end() if t else len(cmd)))
+        quoted = m.group(4) is None or re.match(r"<<-?[ \t]*\\", m.group(0)) is not None
+        spans.append((m.start(), m.group(0), cmd[nl + 1:t.start() + 1 if t else len(cmd)], t.end() if t else len(cmd), quoted))
         pos = t.end() if t else len(cmd)
 
 
@@ -940,8 +949,8 @@ def _written_then_run(cmd: str, written: dict, depth: int) -> bool:
                 args = args[1:]  # npx <runner> <file>
             if not args or args[0] not in written:
                 continue
-            body = written[args[0]]
-            if _PYTHON.match(prog) and _python_body_sends(body):
+            body, quoted = written[args[0]]
+            if _PYTHON.match(prog) and _python_body_sends(body, quoted):
                 return True
             if _NODEISH.match(prog) and _heredoc_body_sends(body):
                 return True
@@ -955,16 +964,16 @@ def _heredoc_program_sends(cmd: str, depth: int = 0) -> bool:
     # didi's F1 (6525aba3 50861): the walk gets everything before the <<, earlier heredoc
     # bodies cut out, not the opener's line alone. Twin: heredocProgramSends.
     ctx, frm = "", 0
-    for start, intro, body, end in _heredoc_spans(cmd):
+    for start, intro, body, end, quoted in _heredoc_spans(cmd):
         head = cmd[cmd.rfind("\n", 0, start) + 1:start]
         w = _HEREDOC_REDIRECT.search(head + intro)
         if w:
-            written[w.group(2)] = body
+            written[w.group(2)] = (body, quoted)
         ctx += cmd[frm:start]
         py, js, shell = _heredoc_head_kinds(ctx)
         if js and _heredoc_body_sends(body):
             return True
-        if py and _python_body_sends(body):
+        if py and _python_body_sends(body, quoted):
             return True
         if shell and depth < 3 and is_send_invocation(body, _depth=depth + 1):
             return True
