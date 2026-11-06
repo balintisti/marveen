@@ -515,6 +515,10 @@ describe('50862 glob gaps: $PWD, subshell, group, cd --, find', () => {
     String.raw`echo x\; rm store/egress-allowlist.json`,
     "echo 'a';'rm' store/egress-allowlist.json",
     'echo "a";"rm" -f store/egress-allowlist.json',
+    // didi 55350 L1: a space before the closing quote satisfies the lookbehind, so only the
+    // lookahead (the word must END after the terminator) keeps the rm visible; bash runs it.
+    "echo 'a ';'rm' store/egress-allowlist.json",
+    'echo "a ";"rm" -f store/egress-allowlist.json',
     String.raw`find store -name 'x' -exec cat {} \;; rm store/egress-allowlist.json`,
     'find store -name \'egress*\' -exec cat {} ";" -delete',
     'cd $HOME/.marveen && rm *.sha',
