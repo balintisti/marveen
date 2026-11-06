@@ -96,7 +96,8 @@ _PYTHON = re.compile(r"^python3?(?:\.\d+)?$", re.I)
 _NODEISH = re.compile(r"^(node|tsx|ts-node|deno|bun|npx)$", re.I)
 _GRAPHMAIL = re.compile(r"^graph-mail(\.ts|\.js)?$", re.I)
 _WRAPPER_SHELL = re.compile(r"^(sh|bash|zsh|dash)$", re.I)
-_CURLISH = re.compile(r"^(curl|wget|http)$", re.I)
+# httpie ships two commands, `http` and `https` (812bd946, didi 55346): both are senders.
+_CURLISH = re.compile(r"^(curl|wget|https?)$", re.I)
 # Interpreter kod-string argumentum (python -c / node -e): az interpreternek
 # atadott kod MUVELET, nem tartalom -- a kod-szintu kuldes-hivasokra szurunk.
 #
@@ -205,13 +206,13 @@ _CURL_VALUE_LONG = {
 }
 
 
-# RESENDGETTWIN1010: a httpie (`http`) metodusa POZICIONALIS (http POST URL),
+# RESENDGETTWIN1010: a httpie (`http`, `https`) metodusa POZICIONALIS (http POST URL),
 # a torzse `kulcs=ertek` / `kulcs:=json` elem -- egyiket sem ismeri az alabbi
 # curl/wget flag-olvaso, ezert a `http POST .../emails to=...` "read" lett, es a
 # kapu atengedte. A httpie-re a metodus itt nem dontheto: fail-closed.
 # FORK (812bd946): csak ezek a sorok jottek az upstream 63a392c8-bol; a JS iker
 # (email-send-gate.mjs) a httpie-t mar a bazison is kuldesnek veszi.
-_HTTPIE = re.compile(r"^http$", re.I)
+_HTTPIE = re.compile(r"^https?$", re.I)  # http and https: both httpie
 
 
 def _curl_resend_verdict(prog, rest):

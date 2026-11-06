@@ -1510,6 +1510,21 @@
       "name": "[6525aba3 A2 RESENDCFG926 gone] a Resend CONFIG call is a send in both twins: DELETE /domains/abc",
       "cmd": "curl -s -X DELETE https://api.resend.com/domains/abc -H 'Authorization: Bearer X'",
       "expected": true
+    },
+    {
+      "name": "[812bd946 httpie] `https` is httpie's second command: a positional POST to the Resend send endpoint is a send",
+      "cmd": "https POST api.resend.com/emails to=a@b.hu",
+      "expected": true
+    },
+    {
+      "name": "[812bd946 httpie] `https` with key=value items and no method word POSTs: a send",
+      "cmd": "https api.resend.com/emails to=a@b.hu subject=x",
+      "expected": true
+    },
+    {
+      "name": "[812bd946 httpie] `https` GET stays a send: httpie's method is not read",
+      "cmd": "https GET https://api.resend.com/domains",
+      "expected": true
     }
   ]
 }

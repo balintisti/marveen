@@ -107,7 +107,8 @@ const PYTHON = /^python3?(?:\.\d+)?$/i
 const NODEISH = /^(node|tsx|ts-node|deno|bun|npx)$/i
 const GRAPHMAIL = /^graph-mail(\.ts|\.js)?$/i
 const WRAPPER_SHELL = /^(sh|bash|zsh|dash)$/i
-const CURLISH = /^(curl|wget|http)$/i
+// httpie ships two commands, `http` and `https` (812bd946, didi 55346): both are senders. Twin: _CURLISH.
+const CURLISH = /^(curl|wget|https?)$/i
 // RESENDHOST926 (card 0ca64c14): normalized host shape -- `--url=` glue, userinfo,
 // trailing root dots, port, `?`/`#` after the host. Twin of _RESEND_TARGET in
 // outgoing-copy-gate.py; send-invocation-cases.json pins both.

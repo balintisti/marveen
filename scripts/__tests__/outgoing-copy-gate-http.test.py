@@ -96,6 +96,8 @@ CASES = [
     # (each passed exit 0 with an em dash before; the default is now NO)
     ("Telegram via httpie key=value items BLOCKS (unreadable)",
      f"http POST https://api.telegram.org/botXYZ/sendMessage chat_id=1 text='{BAD}'", 2),
+    ("Telegram via httpie's second command `https` BLOCKS (unreadable, 812bd946)",
+     f"https POST api.telegram.org/botXYZ/sendMessage chat_id=1 text='{BAD}'", 2),
     ("Telegram via httpie, body on stdin BLOCKS (unreadable)",
      f"echo '{json.dumps({'text': BAD})}' | http POST https://api.telegram.org/botXYZ/sendMessage", 2),
     ("Telegram via wget --post-data BLOCKS (unreadable)",
