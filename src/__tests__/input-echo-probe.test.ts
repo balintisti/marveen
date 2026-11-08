@@ -17,6 +17,8 @@ const h = vi.hoisted(() => {
     reading: true,
     // a burst may drop the BSpaces (the residue case the next probe must erase)
     burstDropsBspace: false,
+    // the next N typed sentinels make the keystroke call throw (a keystroke-failed probe)
+    failSentinelSends: 0,
     box: '',
     buffered: [] as Key[],
     submitted: [] as string[],
@@ -53,6 +55,10 @@ vi.mock('node:child_process', async (orig) => ({
     const at = args.indexOf('send-keys')
     if (at >= 0) {
       const rest = args.slice(at + 3) // drop 'send-keys', '-t', <session>
+      if (rest[0] === '-l' && rest[1] === 'x' && h.tui.failSentinelSends > 0) {
+        h.tui.failSentinelSends--
+        throw new Error('keystroke failed (test)')
+      }
       if (rest[0] === '-l') h.send({ text: rest[1] })
       else if (rest[0] === '-N' && rest[2] === 'BSpace') h.send({ bspace: Number(rest[1]) })
       else if (rest[0] === 'BSpace') h.send({ bspace: 1 })
@@ -72,7 +78,7 @@ const typedTexts = () => h.calls.filter((a) => a.includes('send-keys') && a.incl
 
 beforeEach(() => {
   h.calls.length = 0
-  Object.assign(h.tui, { reading: true, burstDropsBspace: false, box: '', buffered: [], submitted: [], seenBoxes: [] })
+  Object.assign(h.tui, { reading: true, burstDropsBspace: false, failSentinelSends: 0, box: '', buffered: [], submitted: [], seenBoxes: [] })
   __resetSessionSendLocks()
 })
 
@@ -113,6 +119,12 @@ describe('probeInputEcho (pure)', () => {
     const { d, log } = deps(['xx', null])
     expect(await probeInputEcho(d)).toBe('echoed')
     expect(log).toEqual(['bs2'])
+  })
+
+  it('left-residue: a late-drawn residue is erased but the box never empties (didi 56466 #1)', async () => {
+    const { d, log } = deps(['x', 'x'])
+    expect(await probeInputEcho(d)).toBe('left-residue')
+    expect(log).toEqual(['bs1'])
   })
 
   it('left-residue: the sentinel appeared but the box never emptied', async () => {
@@ -190,6 +202,19 @@ describe('the identity /rename lane waits for an echo (marveen 10011456 c)', () 
     expect(h.tui.submitted).toEqual(['/rename Didi'])
     expect(h.tui.box).toBe('')
     expect(h.tui.seenBoxes.some((b) => b.includes('\n'))).toBe(false)
+  })
+
+  it('defers on every non-echo result, not only no-echo: a failed keystroke types no /rename (didi 56466 #2)', async () => {
+    h.tui.failSentinelSends = 1
+    await scheduleIdentitySetup('agent-didi', 'Didi')
+    // first attempt at 8 s + 5 s: the probe's keystroke throws -> keystroke-failed -> defer
+    await vi.advanceTimersByTimeAsync(16_000)
+    expect(h.tui.failSentinelSends).toBe(0)
+    expect(typedTexts().filter((t) => t.startsWith('/rename'))).toEqual([])
+    expect(h.tui.submitted).toEqual([])
+    // the 6 s echo retry probes again on a working pane and submits
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(h.tui.submitted).toEqual(['/rename Didi'])
   })
 
   it('control: a TUI that reads from the start gets /rename on the first attempt', async () => {
