@@ -68,6 +68,7 @@ import {
   RESTART_NOTICE_AUTOCLOSED,
 } from '../context-guard.js'
 import { whileNotFrozen } from './fleet-freeze.js'
+import { decideBootWedgeRescue, setInputNotEmptiedHandler, type GuardRestartRecord } from './boot-wedge-rescue.js'
 
 // Fleet context guard (kanban #81): acts BEFORE a session drowns in its own
 // context. Sweep every agent (main included) every five minutes; at actPct ask the
@@ -566,6 +567,68 @@ async function performRestart(name: string): Promise<void> {
   }
 }
 
+// agent name -> its last guard restart, for the boot-wedge rescue (card b1f0011b).
+// In memory on purpose: after a dashboard restart nothing is on record and the
+// rescue cannot fire, which is the safe direction (see boot-wedge-rescue.ts).
+const lastGuardRestart = new Map<string, GuardRestartRecord & { staleMinutes: HandoffStaleness }>()
+
+/**
+ * The boot-wedge rescue (boot-wedge-rescue.ts): the input box of a sub-agent the
+ * guard restarted moments ago could not be emptied, and the new session has
+ * written nothing. Restart it ONCE through the guard's own path and put the guard
+ * back into await-ready, so the ready poll delivers the resume prompt to the new
+ * session exactly as after the first restart (and the delivery hold covers it).
+ * Returns whether a restart ran.
+ */
+export async function rescueBootWedge(agent: string, nowMs: number = Date.now()): Promise<boolean> {
+  const rec = lastGuardRestart.get(agent) ?? null
+  const since = sessionStartSec(agent)
+  const decision = decideBootWedgeRescue({
+    isMainAgent: agent === MAIN_AGENT_ID,
+    lastGuardRestart: rec,
+    nowMs,
+    sessionHasTranscript: since === undefined
+      ? null
+      : readTranscriptMtimeFromProjectDir(workingDirFor(agent), configDirFor(agent), since) !== null,
+  })
+  if (!decision.rescue) {
+    // Only a refusal inside the window says something; elsewhere "could not be
+    // emptied" is the ordinary stuck-input story and has its own lines.
+    if (decision.reason !== 'no-guard-restart' && decision.reason !== 'outside-window' && decision.reason !== 'main-agent') {
+      logger.warn({ agent, reason: decision.reason, msSinceGuardRestart: rec ? nowMs - rec.atMs : null },
+        'context-guard: boot-wedge rescue refused -- the stuck-input escalation stays the path')
+    }
+    return false
+  }
+  const prevState = guardStates.get(agent) ?? INITIAL_GUARD_STATE
+  // Claimed before the first await, so a second report in the same episode is refused.
+  lastGuardRestart.set(agent, { atMs: nowMs, rescue: true, staleMinutes: rec!.staleMinutes })
+  guardStates.set(agent, {
+    ...INITIAL_GUARD_STATE,
+    phase: 'await-ready',
+    deadlineMs: nowMs + READY_TIMEOUT_MS,
+    handoffStaleMinutes: rec!.staleMinutes,
+  })
+  logger.warn(
+    { agent, trigger: 'input-not-emptied', msSinceGuardRestart: nowMs - rec!.atMs, sessionStartSec: since },
+    'context-guard: boot-wedge rescue -- the input box of a just-restarted session could not be emptied and it has no transcript; restarting the pane once',
+  )
+  try {
+    await performRestart(agent)
+    return true
+  } catch (err) {
+    guardStates.set(agent, prevState)
+    logger.error({ err, agent }, 'context-guard: boot-wedge rescue restart FAILED -- the stuck-input escalation stays the path')
+    return false
+  }
+}
+
+/** Test seam: the guard-restart record the boot-wedge rescue reads. */
+export function _setGuardRestartForTest(name: string, rec: (GuardRestartRecord & { staleMinutes: HandoffStaleness }) | null): void {
+  if (rec === null) lastGuardRestart.delete(name)
+  else lastGuardRestart.set(name, rec)
+}
+
 /** One process-table snapshot and the agent's pane pid: what tells a heavy-run job that dies with
  *  the restart from one launched detached (card 3c3d8e43). null = not measurable. */
 export type PaneTreeProbe = () => { rootPid: number; parentOf: Map<number, number> } | null
@@ -984,6 +1047,7 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
           await performRestart(name)
           // The streak is over: only a rescue that actually ran clears it.
           clearRescueFailures(name)
+          lastGuardRestart.set(name, { atMs: Date.now(), rescue: false, staleMinutes: decision.nextState.handoffStaleMinutes })
         } catch (err) {
           // guardStates was advanced to the post-restart phase BEFORE this
           // switch, so a failed rescue would otherwise be filed as a completed
@@ -1321,6 +1385,10 @@ export function contextGuardDeliveryHold(name: string, nowMs: number): DeliveryH
 export function startContextGuardRunner(): NodeJS.Timeout {
   // Before anything can put an agent into a restart sequence.
   setDeliveryHoldProbe(contextGuardDeliveryHold)
+  // A restart is an action on an agent: paused with the sweep under a fleet freeze.
+  setInputNotEmptiedHandler(whileNotFrozen('context-guard-boot-wedge', (agent: string) => {
+    rescueBootWedge(agent).catch((err) => logger.warn({ err, agent }, 'context-guard: boot-wedge rescue threw'))
+  }))
   const warnMissingConfig = makeContextGuardConfigWarner((msg) => logger.warn(msg))
   const { sweep, readyPoll } = makeGuardTicks({
     sweepNames: () => {

@@ -84,6 +84,7 @@ import { reapChannelOrphans, reapDetachedChannelClaudes } from './channel-poller
 import { MAIN_CHANNELS_SESSION } from './main-agent.js'
 import { agentSessionName, sessionNameForAgent } from './session-names.js'
 import { markRestartStarted, clearRestart } from './restart-inflight.js'
+import { reportInputNotEmptied } from './boot-wedge-rescue.js'
 import { notifyChannel, alertIsRedirected } from '../notify.js'
 
 // Lazy so a transient PATH gap at import time (e.g. the 04:00 auto-update
@@ -3472,6 +3473,9 @@ export async function clearInputBuffer(session: string, host: string | null = nu
     { session },
     'Input buffer could not be emptied -- a leftover fragment stays parked (escalation will have to restart the pane)',
   )
+  // Card b1f0011b: right after a guard restart this is the boot wedge, and the
+  // runner restarts the pane once (boot-wedge-rescue.ts decides when).
+  reportInputNotEmptied(session, host)
   return false
 }
 
