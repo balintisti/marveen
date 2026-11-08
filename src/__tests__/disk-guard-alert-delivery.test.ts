@@ -65,6 +65,21 @@ interface Run {
 }
 
 /**
+ * The runner's env minus every variable the script reads as an override (card df1e313a).
+ * An agent session carries TELEGRAM_STATE_DIR (measured 2026-11-08: friday's points at
+ * agents/friday/.claude/channels/telegram), and the script prefers it over the fake HOME:
+ * the token came from a REAL channel .env, and all six delivery cases went red from an
+ * agent shell while passing in a clean one.
+ */
+function inheritedEnvWithoutGuardHooks(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  for (const k of Object.keys(env)) {
+    if (k === 'TELEGRAM_STATE_DIR' || k.startsWith('DISK_GUARD_')) delete env[k]
+  }
+  return env
+}
+
+/**
  * Eldobhato telepites: valodi szkript, valodi /bin/bash, hamis HOME (hogy a valodi
  * bot-tokenhez SOHA ne nyulhasson), es egy PATH-ra tett `curl`-stub, ami rogzit es a
  * kert valaszt adja vissza.
@@ -112,7 +127,7 @@ function runGuard(curl: CurlBehaviour, usage = 96): Run {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
-      ...process.env,
+      ...inheritedEnvWithoutGuardHooks(),
       HOME: join(base, 'home'),
       PATH: `${join(base, 'bin')}:${process.env.PATH}`,
       DISK_GUARD_USAGE_OVERRIDE: String(usage),
