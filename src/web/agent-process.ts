@@ -3836,10 +3836,13 @@ export async function sendPromptToSession(
   }
   await sendChunks()
 
-  // Post-send retry loop. The payload hint is the first chunk of oneLine
-  // (truncated to a safe length) so the verbatim-stuck path has something
-  // recognisable to substring-match against without leaking the whole
-  // prompt body into log lines should the give-up branch fire.
+  // Post-send retry loop. The payload hints are the first AND the last 96
+  // chars of oneLine (truncated to a safe length) so the verbatim-stuck path
+  // has something recognisable to substring-match against without leaking the
+  // whole prompt body into log lines should the give-up branch fire. The tail
+  // is there because a box taller than the pane shows only its end (card
+  // b1f0011b: didi 2026-11-08 22:01, the head was scrolled off and the loop
+  // read the parked directive as landed).
   //
   // Two stuck modes, two recoveries (see decideSubmitFollowup):
   //   - VERBATIM text parked under an idle footer -> a plain Enter submits it
@@ -3854,14 +3857,20 @@ export async function sendPromptToSession(
   //     ('clear-and-resend'). The same Ctrl-C path also clears an expanded
   //     multi-row verbatim buffer that a plain Enter cannot submit, so a
   //     resend that itself parks is re-cleared and retried until it lands.
-  const payloadHint = oneLine.slice(0, Math.min(oneLine.length, 96))
+  const payloadHints = [oneLine.slice(0, Math.min(oneLine.length, 96)), oneLine.slice(-96)]
   for (let attempt = 0; ; attempt++) {
     await delay(SUBMIT_RETRY_POLL_MS)
     const pane = capturePane(session, host)
-    const action = decideSubmitFollowup(pane, payloadHint, attempt, SUBMIT_RETRY_MAX_ATTEMPTS)
+    const action = decideSubmitFollowup(pane, payloadHints, attempt, SUBMIT_RETRY_MAX_ATTEMPTS)
     if (action === 'done') break
     if (action === 'give-up') {
       logger.warn({ session, attempt }, 'sendPromptToSession: prompt still parked after retries')
+      break
+    }
+    if (action === 'parked-multirow') {
+      // No key is safe on this box (see decideSubmitFollowup); the stuck-input
+      // recovery clears it with verification and re-injects the recorded prompt.
+      logger.warn({ session, attempt }, 'sendPromptToSession: prompt parked in a multi-row box; left to the stuck-input recovery')
       break
     }
     // The prompt can appear AFTER the first send (the delivered text started a turn that asks

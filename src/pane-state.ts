@@ -2007,7 +2007,17 @@ export function shouldRetrySubmit(
   const safeMin = typeof rawMin === 'number' && Number.isFinite(rawMin) ? rawMin : 16
   const minHint = Math.max(safeMin, 1)
   if (payloadHint.length < minHint) return false
-  return inputBox.includes(payloadHint)
+  // Compared with ALL whitespace removed on both sides (card b1f0011b): the box
+  // is soft-wrapped -- every row break is a newline plus a two-space indent --
+  // so a hint longer than one row never appeared in it verbatim. Measured on
+  // didi's 2026-11-08 22:01 capture (80 columns, 6 rows): the raw comparison
+  // read 'not parked' for both the head and the tail of the parked directive.
+  // Same rule as squashForMatch (injected-prompt-registry.ts), kept local so
+  // this module stays dependency-free. The squashed hint must still reach the
+  // minimum: a hint of spaces would otherwise match every box.
+  const flatHint = payloadHint.replace(/\s+/g, '')
+  if (flatHint.length < minHint) return false
+  return inputBox.replace(/\s+/g, '').includes(flatHint)
 }
 
 /**
@@ -2053,7 +2063,7 @@ export function shouldClearTruncatedPreamble(pane: string): boolean {
   return true
 }
 
-export type SubmitFollowupAction = 'retry-enter' | 'clear-and-resend' | 'done' | 'give-up'
+export type SubmitFollowupAction = 'retry-enter' | 'clear-and-resend' | 'parked-multirow' | 'done' | 'give-up'
 
 /**
  * Decide what the post-send-keys loop should do next, given the
@@ -2063,9 +2073,18 @@ export type SubmitFollowupAction = 'retry-enter' | 'clear-and-resend' | 'done' |
  *
  *   - 'done'             -- the prompt landed (or the pane is busy
  *                           processing); no further action.
- *   - 'retry-enter'      -- the pane shows a VERBATIM stuck send; send
- *                           another Enter and re-sample. (A plain Enter
- *                           submits verbatim parked text.)
+ *   - 'retry-enter'      -- the pane shows a single-row VERBATIM stuck
+ *                           send; send another Enter and re-sample. (A
+ *                           plain Enter submits single-row parked text.)
+ *   - 'parked-multirow'  -- the prompt sits VERBATIM in a multi-row box.
+ *                           No key fits here: a plain Enter inserts a
+ *                           newline, and the placeholder discard below
+ *                           presses nothing on a box without a stub (it
+ *                           would report 'cleared' and the resend would
+ *                           type the prompt a second time behind it). The
+ *                           caller names the state and leaves the box to
+ *                           the stuck-input recovery, which owns that move
+ *                           (confirm window, verified clear, re-inject).
  *   - 'clear-and-resend' -- the pane shows a `[Pasted text #N]`
  *                           placeholder. A plain Enter is PROVEN not to
  *                           submit it (it merely expands the stub to
@@ -2095,17 +2114,26 @@ export type SubmitFollowupAction = 'retry-enter' | 'clear-and-resend' | 'done' |
  */
 export function decideSubmitFollowup(
   pane: string | null,
-  payloadHint: string,
+  payloadHint: string | readonly string[],
   attempt: number,
   maxAttempts: number,
 ): SubmitFollowupAction {
   if (pane == null) return 'give-up'
-  if (!shouldRetrySubmit(pane, payloadHint)) return 'done'
+  // Several hints (card b1f0011b): the head AND the tail of the prompt. A box
+  // taller than the pane shows only its tail (overfullParkedInputTail), so a
+  // head-only hint reads a parked long prompt as landed.
+  const hints = typeof payloadHint === 'string' ? [payloadHint] : payloadHint
+  const stuck = hints.length === 0 ? shouldRetrySubmit(pane, '') : hints.some(h => shouldRetrySubmit(pane, h))
+  if (!stuck) return 'done'
   if (attempt >= maxAttempts) return 'give-up'
   // A placeholder will NOT submit on a plain Enter (proven empirically: Enter
   // only expands the stub to still-parked verbatim text). Route it to the
   // clear-and-resend recovery instead of wasting a retry-Enter on it.
   if (detectsPastePlaceholder(pane)) return 'clear-and-resend'
+  // Nor will a MULTI-row verbatim box: there a plain Enter inserts a newline
+  // (see parkedInputRowCount). Since the hint is matched across the wrap, this
+  // loop now sees such boxes; it names them instead of pressing a key.
+  if (parkedInputRowCount(pane) > 1) return 'parked-multirow'
   return 'retry-enter'
 }
 
