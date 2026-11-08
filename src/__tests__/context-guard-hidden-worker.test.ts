@@ -45,6 +45,7 @@ vi.mock('../web/agent-process.js', () => ({
   capturePane: () => null,
   sendPromptToSession: vi.fn(),
   isSessionReadyForPrompt: async () => false,
+  paneEchoesInput: async () => 'echoed',
 }))
 vi.mock('../web/main-agent.js', () => ({ MAIN_CHANNELS_SESSION: 'marveen-channels' }))
 

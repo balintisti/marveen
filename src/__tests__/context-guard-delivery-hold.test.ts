@@ -57,6 +57,7 @@ vi.mock('../web/agent-process.js', () => ({
   capturePane: agentProcess.capturePane,
   sendPromptToSession: vi.fn(),
   isSessionReadyForPrompt: agentProcess.isSessionReadyForPrompt,
+  paneEchoesInput: async () => 'echoed',
   noteSaturationBannerUntrusted: vi.fn(),
   clearSaturationBannerOverride: vi.fn(),
   getAgentRunningSince: () => null,

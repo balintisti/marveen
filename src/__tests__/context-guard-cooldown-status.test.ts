@@ -34,6 +34,7 @@ vi.mock('../web/agent-process.js', () => ({
   capturePane: () => null,
   sendPromptToSession: vi.fn(),
   isSessionReadyForPrompt: async () => false,
+  paneEchoesInput: async () => 'echoed',
 }))
 
 const { cooldownStatusExtra } = await import('../web/context-guard-runner.js')

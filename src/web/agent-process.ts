@@ -48,6 +48,7 @@ import { renameSharedCredentialsIfSafe } from './claude-credentials-guard.js'
 import { atomicWriteFileSync } from './atomic-write.js'
 import { paneOneLine } from './pane-text.js'
 import { withSessionSendLock, tryAcquireSessionSendLane, type SendLockMode } from './session-send-lock.js'
+import { probeInputEcho, ECHO_SENTINEL, type EchoProbeResult } from './input-echo-probe.js'
 import {
   buildTmuxInvocation,
   buildSshExec,
@@ -3233,6 +3234,9 @@ const IDENTITY_LANE_MAX_ATTEMPTS = 5
 // lane: it empties when its owner's retry or the stuck-input recovery acts, not in seconds
 // (card c91a1989). 5 x 30 s still gives up within minutes, loudly, with the default name.
 const IDENTITY_PARKED_RETRY_MS = 30_000
+// A box that does not echo yet is a TUI still booting (card b1f0011b: ~+20s after start, measured
+// once). 6 s between tries, sharing the 5-attempt budget, covers ~+13 s .. ~+50 s.
+const IDENTITY_ECHO_RETRY_MS = 6000
 
 // Schedule the identity setup for a freshly (re)spawned session: once it has
 // had time to render, dismiss any first-run/resume modals, then send `/rename`.
@@ -3296,6 +3300,17 @@ export async function scheduleIdentitySetup(session: string, displayName: string
               await delay(IDENTITY_LANE_RETRY_MS)
               continue
             }
+            // Card b1f0011b: an empty box that does not read keystrokes buffers `/rename X` + Enter
+            // for a later burst (didi 2026-11-08: typed at +14.5s, parked with the directive at
+            // ~+20s). Type only into a box that echoed. Text already in the box is the parked
+            // path's business below (submitOwnSlashCommand reports it as foreign-parked).
+            const echo = await paneEchoesInputUnderHeldLane(session, host)
+            if (echo !== 'echoed' && echo !== 'foreign-text') {
+              logger.info({ session, displayName, attempt, echo }, 'Identity /rename deferred -- the input box did not echo a probe character; retrying')
+              releaseIdentityLane()
+              await delay(IDENTITY_ECHO_RETRY_MS)
+              continue
+            }
             let retryParked = false
             try {
               const outcomes: OwnSlashSubmitOutcome[] = []
@@ -3336,7 +3351,7 @@ export async function scheduleIdentitySetup(session: string, displayName: string
           // loudly because a skip nobody logs is not a skip.
           logger.warn(
             { session, displayName, max: IDENTITY_LANE_MAX_ATTEMPTS },
-            'Identity /rename abandoned -- the send lane stayed busy, a permission prompt stayed up, or the input box stayed parked; session keeps its default name',
+            'Identity /rename abandoned -- the send lane stayed busy, a permission prompt stayed up, the input box never echoed, or it stayed parked; session keeps its default name',
           )
         })()
       }, IDENTITY_SEND_DELAY_MS)
@@ -4002,6 +4017,40 @@ export function captureParkedInputView(session: string, host: string | null = nu
     return stripGhostSuggestion(captureTmux(host, ['capture-pane', '-t', session, '-e', '-p']))
   } catch {
     return null
+  }
+}
+
+/** Card b1f0011b: a drawn prompt is not a reading prompt. Types one sentinel character under the
+ *  pane's send lane and reports whether the TUI echoed it (see input-echo-probe.ts for the
+ *  measured case). The context-guard asks this before its first prompt into a restarted session. */
+export async function paneEchoesInput(session: string, host: string | null = null): Promise<EchoProbeResult> {
+  const release = tryAcquireSessionSendLane(session, host)
+  if (!release) return 'lane-busy'
+  try {
+    return await paneEchoesInputUnderHeldLane(session, host)
+  } finally {
+    release()
+  }
+}
+
+/** The probe for a caller that already holds this pane's send lane (the /rename lane). */
+async function paneEchoesInputUnderHeldLane(session: string, host: string | null): Promise<EchoProbeResult> {
+  try {
+    return await probeInputEcho({
+      readBox: () => {
+        const view = captureParkedInputView(session, host)
+        return view == null ? undefined : parkedInputText(view)
+      },
+      typeSentinel: () => runTmux(host, ['send-keys', '-t', session, '-l', ECHO_SENTINEL], { timeout: 5000 }),
+      backspace: (count) => runTmux(host, ['send-keys', '-t', session, '-N', String(count), 'BSpace'], { timeout: 5000 }),
+      permissionBlocks: () => permissionPromptBlocksBareEnter(session, host, captureTmux, 'Input-echo probe'),
+      delay,
+    })
+  } catch (err) {
+    // A failed send-keys is not an answer about the TUI. Not ready this tick; a sentinel it may
+    // have left is residue the next probe erases.
+    logger.warn({ err, session }, 'Input-echo probe: a keystroke failed; treating the pane as not ready this tick')
+    return 'keystroke-failed'
   }
 }
 

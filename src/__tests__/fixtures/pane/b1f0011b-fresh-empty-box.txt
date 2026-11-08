@@ -1,0 +1,25 @@
+
+[38;5;174m ▐[48;5;16m▛███▛█[39m[49m   [1mClaude Code[0m [38;5;246mv2.1.314[39m
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mOpus 5.5 with high effort · Claude API[39m
+[38;5;174m ▝▝   ▝▝ [39m  [38;5;246m/Users/Shared/marveen-didi[39m
+
+[2m▎[0m [38;5;246mChannels (experimental) messages from plugin:telegram@claude-plugins-official
+[2m[39m▎[0m [38;5;246minject directly in this session · restart without --channels to stop[39m
+
+
+
+
+
+
+
+
+
+
+
+
+                                                              [38;5;246m● high · /effort[39m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────
+[39m❯ 
+[38;5;244m────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;211m⏵⏵ bypass permissions on[38;5;246m (shift+tab to cycle)[39m
+

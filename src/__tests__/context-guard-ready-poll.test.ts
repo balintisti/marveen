@@ -15,6 +15,7 @@ const agentProcess = vi.hoisted(() => ({
   agentRunState: vi.fn((_n: string) => 'running'),
   capturePane: vi.fn((_s: string): string | null => null),
   isSessionReadyForPrompt: vi.fn(async (_s: string) => false),
+  paneEchoesInput: vi.fn(async (_s: string): Promise<string> => 'echoed'),
 }))
 const directive = vi.hoisted(() => ({ sendSystemDirective: vi.fn(async (..._args: unknown[]) => undefined) }))
 
@@ -51,6 +52,7 @@ vi.mock('../web/agent-process.js', () => ({
   capturePane: agentProcess.capturePane,
   sendPromptToSession: vi.fn(),
   isSessionReadyForPrompt: agentProcess.isSessionReadyForPrompt,
+  paneEchoesInput: agentProcess.paneEchoesInput,
   noteSaturationBannerUntrusted: vi.fn(),
   clearSaturationBannerOverride: vi.fn(),
   getAgentRunningSince: () => null,
@@ -161,6 +163,60 @@ describe('ready poll (card 9c182807)', () => {
         expect(agentProcess.agentRunState.mock.calls.map((c) => c[0])).not.toContain('idle-one')
       } finally {
         agentProcess.isSessionReadyForPrompt.mockResolvedValue(false)
+        for (const t of timers) clearInterval(t)
+        vi.clearAllTimers()
+      }
+    })
+
+    // Card b1f0011b, didi 2026-11-08 17:16:47: idle-looking but not reading input. The directive
+    // typed then parked as a multi-row paste. An idle pane without an echo is NOT ready.
+    it('an idle-looking session that does not echo input gets no prompt until it does', async () => {
+      const timers = [startContextGuardRunner()]
+      try {
+        agentProcess.isSessionReadyForPrompt.mockResolvedValue(true)
+        agentProcess.paneEchoesInput.mockResolvedValue('no-echo')
+        await vi.advanceTimersByTimeAsync(READY_POLL_MS)
+        expect(agentProcess.paneEchoesInput).toHaveBeenCalledTimes(1)
+        expect(agentProcess.paneEchoesInput.mock.calls[0]?.[0]).toBe('agent-ready-late')
+        expect(directive.sendSystemDirective).not.toHaveBeenCalled()
+        expect(getHardGuardPhase('ready-late')).toBe('await-ready')
+
+        agentProcess.paneEchoesInput.mockResolvedValue('echoed')
+        await vi.advanceTimersByTimeAsync(READY_POLL_MS)
+        expect(directive.sendSystemDirective).toHaveBeenCalledTimes(1)
+        expect(getHardGuardPhase('ready-late')).toBe('cooldown')
+      } finally {
+        agentProcess.isSessionReadyForPrompt.mockResolvedValue(false)
+        agentProcess.paneEchoesInput.mockResolvedValue('echoed')
+        for (const t of timers) clearInterval(t)
+        vi.clearAllTimers()
+      }
+    })
+
+    it('a session that never echoes takes the existing READY_TIMEOUT path: no prompt, cooldown', async () => {
+      const timers = [startContextGuardRunner()]
+      try {
+        agentProcess.isSessionReadyForPrompt.mockResolvedValue(true)
+        agentProcess.paneEchoesInput.mockResolvedValue('no-echo')
+        await vi.advanceTimersByTimeAsync(15 * 60_000 + READY_POLL_MS)
+        expect(agentProcess.paneEchoesInput.mock.calls.length).toBeGreaterThan(1)
+        expect(directive.sendSystemDirective).not.toHaveBeenCalled()
+        expect(getHardGuardPhase('ready-late')).toBe('cooldown')
+      } finally {
+        agentProcess.isSessionReadyForPrompt.mockResolvedValue(false)
+        agentProcess.paneEchoesInput.mockResolvedValue('echoed')
+        for (const t of timers) clearInterval(t)
+        vi.clearAllTimers()
+      }
+    })
+
+    it('the echo probe types nothing into a pane that is not idle', async () => {
+      const timers = [startContextGuardRunner()]
+      try {
+        await vi.advanceTimersByTimeAsync(READY_POLL_MS)
+        expect(agentProcess.isSessionReadyForPrompt).toHaveBeenCalled()
+        expect(agentProcess.paneEchoesInput).not.toHaveBeenCalled()
+      } finally {
         for (const t of timers) clearInterval(t)
         vi.clearAllTimers()
       }

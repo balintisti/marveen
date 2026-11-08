@@ -14,6 +14,7 @@ import {
   restartAgentProcess,
   capturePane,
   isSessionReadyForPrompt,
+  paneEchoesInput,
   noteSaturationBannerUntrusted,
   clearSaturationBannerOverride,
   getAgentRunningSince,
@@ -691,9 +692,15 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
   // Only pay for the tmux/transcript probes a decision can actually use.
   const needPct = state.phase === 'idle' || state.phase === 'await-handoff'
   const pane = running && needPct ? capturePane(session) : null
-  const sessionReady = running && state.phase === 'await-ready'
-    ? await isSessionReadyForPrompt(session)
-    : false
+  // Card b1f0011b: a drawn, idle-looking prompt can still be one that does not read keystrokes
+  // (didi 2026-11-08 17:16:47: the directive typed at +7.4s was not echoed at +15s and parked as
+  // a multi-row paste). Ready = idle by the pane AND the TUI echoed a probe character.
+  let sessionReady = false
+  if (running && state.phase === 'await-ready' && await isSessionReadyForPrompt(session)) {
+    const echo = await paneEchoesInput(session)
+    sessionReady = echo === 'echoed'
+    if (!sessionReady) logger.info({ name, session, echo }, 'context-guard: restarted session looks idle but did not echo input; not injecting this tick')
+  }
   // One classification, two distinct signals: 'idle' (safe to restart) and
   // 'busy' (positively mid-turn -- restarts defer). A pane that is neither
   // (error banner, modal, unknown surface) is treated as NOT busy, so a
