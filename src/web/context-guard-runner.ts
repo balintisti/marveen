@@ -25,7 +25,7 @@ import { notifyChannel } from '../notify.js'
 import { detectPaneState, paneShowsContextSaturation, paneShowsContextSaturationHardError, runningBackgroundWork } from '../pane-state.js'
 import { descendsFrom, liveHeavyRunJobs } from '../heavy-run-jobs.js'
 import { usageLimitHolds } from '../usage-limit-window.js'
-import { readContextTokensFromProjectDir, readActiveModelFromProjectDir, readTranscriptMtimeFromProjectDir, readLastTurnActivityMs, predatesSession } from './active-model.js'
+import { readContextTokensFromProjectDir, readActiveModelFromProjectDir, readTranscriptMtimeFromProjectDir, readLastTurnActivityMs, predatesSession, transcriptWrittenSince } from './active-model.js'
 import { readContextGuardConfig } from './context-guard-store.js'
 import { setDeliveryHoldProbe, type DeliveryHold } from './delivery-hold.js'
 import { readAllContextGuardConfigs } from './context-guard-store.js'
@@ -587,9 +587,8 @@ export async function rescueBootWedge(agent: string, nowMs: number = Date.now())
     isMainAgent: agent === MAIN_AGENT_ID,
     lastGuardRestart: rec,
     nowMs,
-    sessionHasTranscript: since === undefined
-      ? null
-      : readTranscriptMtimeFromProjectDir(workingDirFor(agent), configDirFor(agent), since) !== null,
+    // null (could not tell) refuses: a read error is not "no transcript".
+    sessionHasTranscript: since === undefined ? null : transcriptWrittenSince(workingDirFor(agent), configDirFor(agent), since),
   })
   if (!decision.rescue) {
     // Only a refusal inside the window says something; elsewhere "could not be

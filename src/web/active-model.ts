@@ -331,6 +331,31 @@ export function readTranscriptMtimeFromProjectDir(workingDir: string, configDir?
 }
 
 /**
+ * Has the session started at `sinceUnixSec` written a transcript for `workingDir`?
+ * true / false when that is known, null when it cannot be told.
+ *
+ * readTranscriptMtimeFromProjectDir folds "no transcript" and "could not read"
+ * into one null, which is right for a reader that only wants a time. A caller
+ * that ACTS on "no transcript" (the boot-wedge rescue restarts the pane on it)
+ * must not act on a read error: here a missing project dir is false (nothing was
+ * ever written), but a failed readdir or stat is null (card b1f0011b, didi 56593).
+ */
+export function transcriptWrittenSince(workingDir: string, configDir: string | undefined, sinceUnixSec: number): boolean | null {
+  let dir: string
+  try { dir = projectsDirFor(workingDir, configDir) } catch { return null }
+  if (!existsSync(dir)) return false
+  try {
+    let newest: number | null = null
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith('.jsonl')) continue
+      const m = statSync(join(dir, f)).mtimeMs
+      if (newest === null || m > newest) newest = m
+    }
+    return newest !== null && !predatesSession(newest, sinceUnixSec)
+  } catch { return null }
+}
+
+/**
  * Newest transcript mtime for `workingDir` across SEVERAL candidate config
  * roots, or null when no candidate has one.
  *

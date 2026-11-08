@@ -9,11 +9,15 @@
 
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { join } from 'node:path'
+import { mkdirSync } from 'node:fs'
 import { tmpDirs } from './helpers/tmp-dirs.js'
 import { INITIAL_GUARD_STATE, READY_POLL_MS } from '../context-guard.js'
 
 const mkTmp = tmpDirs()
 const SANDBOX = mkTmp('cgbootwedge-')
+// The runner asks heavy-run-jobs whether the agent has a live job before it restarts; without
+// this it reads the REAL ~/.heavy-run, and a live 'didi' job there turned a test red (didi 56593).
+process.env.HEAVY_RUN_DIR = mkTmp('cgbootwedge-heavy-')
 
 const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() }))
 const agentProcess = vi.hoisted(() => ({
@@ -23,7 +27,7 @@ const agentProcess = vi.hoisted(() => ({
   restartAgentProcess: vi.fn(async (_n: string, _o?: unknown) => ({ ok: true }) as { ok: boolean; error?: string }),
   getAgentRunningSince: vi.fn((_n: string): number | null => 1_800_000_000),
 }))
-const transcript = vi.hoisted(() => ({ mtime: null as number | null }))
+const transcript = vi.hoisted(() => ({ mtime: null as number | null, unreadable: false }))
 const directive = vi.hoisted(() => ({ sendSystemDirective: vi.fn(async (..._a: unknown[]) => undefined) }))
 const monitor = vi.hoisted(() => ({ hardRestartMarveenChannels: vi.fn(() => ({ ok: true })), markAgentRestartPending: vi.fn() }))
 
@@ -49,7 +53,12 @@ vi.mock('../web/stuck-tool-call-watcher.js', () => ({ shouldDeferForRecentRespaw
 vi.mock('../web/system-directive.js', () => directive)
 vi.mock('../web/active-model.js', async (orig) => {
   const actual = await orig<typeof import('../web/active-model.js')>()
-  return { ...actual, readTranscriptMtimeFromProjectDir: (_w: string, _c?: string, since?: number) => actual.predatesSession(transcript.mtime, since) ? null : transcript.mtime }
+  return {
+    ...actual,
+    readTranscriptMtimeFromProjectDir: (_w: string, _c?: string, since?: number) => actual.predatesSession(transcript.mtime, since) ? null : transcript.mtime,
+    transcriptWrittenSince: (_w: string, _c: string | undefined, since: number) =>
+      transcript.unreadable ? null : transcript.mtime !== null && !actual.predatesSession(transcript.mtime, since),
+  }
 })
 vi.mock('../web/context-guard-store.js', async (orig) => {
   const actual = await orig<typeof import('../web/context-guard-store.js')>()
@@ -79,6 +88,7 @@ const { decideBootWedgeRescue, reportInputNotEmptied, setInputNotEmptiedHandler,
 const { rescueBootWedge, _setGuardRestartForTest, _setGuardStateForTest, getHardGuardPhase, startContextGuardRunner } =
   await import('../web/context-guard-runner.js')
 const { setDeliveryHoldProbe } = await import('../web/delivery-hold.js')
+const { FLEET_FREEZE_PATH, writeFleetFreeze, clearFleetFreeze } = await import('../web/fleet-freeze.js')
 
 const T0 = 1_800_000_060_000 // the session (getAgentRunningSince) started 60 s before this
 const SESSION_START_MS = 1_800_000_000_000
@@ -152,6 +162,7 @@ describe('rescueBootWedge, through the real runner', () => {
     monitor.hardRestartMarveenChannels.mockClear()
     directive.sendSystemDirective.mockClear()
     transcript.mtime = SESSION_START_MS - 3_000 // the OLD session's file: predates this session
+    transcript.unreadable = false
     _setGuardStateForTest('didi', { ...INITIAL_GUARD_STATE, phase: 'cooldown', cooldownUntilMs: T0 + 30 * 60_000 })
     _setGuardRestartForTest('didi', { atMs: SESSION_START_MS, rescue: false, staleMinutes: null })
   })
@@ -196,6 +207,31 @@ describe('rescueBootWedge, through the real runner', () => {
     agentProcess.getAgentRunningSince.mockReturnValue(null)
     expect(await rescueBootWedge('didi', T0)).toBe(false)
     expect(agentProcess.restartAgentProcess).not.toHaveBeenCalled()
+  })
+
+  it('a transcript dir that cannot be read is not read as "no transcript"', async () => {
+    transcript.unreadable = true
+    expect(await rescueBootWedge('didi', T0)).toBe(false)
+    expect(agentProcess.restartAgentProcess).not.toHaveBeenCalled()
+    expect(log.warn.mock.calls.some((c) => (c[0] as { reason?: string }).reason === 'transcript-unknown')).toBe(true)
+  })
+
+  it('under a fleet freeze the signal restarts nothing; lifting the freeze lets the next one through', async () => {
+    // The freeze file must be the SANDBOX one: writing the live store/fleet-freeze.json would freeze the fleet.
+    expect(FLEET_FREEZE_PATH.startsWith(SANDBOX)).toBe(true)
+    mkdirSync(join(SANDBOX, 'store'), { recursive: true })
+    timers.push(startContextGuardRunner())
+    writeFleetFreeze({ mode: 'freeze', reason: 'test', by: 'boot-wedge-rescue.test', at: new Date(T0).toISOString() })
+    try {
+      reportInputNotEmptied('agent-didi', null)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(agentProcess.restartAgentProcess).not.toHaveBeenCalled()
+    } finally {
+      clearFleetFreeze()
+    }
+    reportInputNotEmptied('agent-didi', null)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(agentProcess.restartAgentProcess.mock.calls).toEqual([['didi', { fresh: true }]])
   })
 
   it('past the window, nothing (and no log line)', async () => {

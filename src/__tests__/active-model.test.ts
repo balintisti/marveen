@@ -1,7 +1,7 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { join } from 'node:path'
-import { mkdirSync, symlinkSync, rmSync, realpathSync } from 'node:fs'
-import { projectsDirFor } from '../web/active-model.js'
+import { mkdirSync, symlinkSync, rmSync, realpathSync, writeFileSync, utimesSync, chmodSync } from 'node:fs'
+import { projectsDirFor, transcriptWrittenSince } from '../web/active-model.js'
 import { tmpDirs } from './helpers/tmp-dirs.js'
 
 // Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
@@ -62,5 +62,45 @@ describe('projectsDirFor', () => {
         join('/cfg', 'projects', missing.replace(/[/.]/g, '-')),
       )
     })
+  })
+})
+
+// The boot-wedge rescue restarts a pane on "no transcript", so "could not read" must stay apart
+// from it (card b1f0011b, didi 56593). Real directories, no mocks.
+describe('transcriptWrittenSince', () => {
+  const SINCE = 1_800_000_000 // unix seconds
+  const setup = () => {
+    const cfg = mkTmp('tws-cfg-')
+    const work = mkTmp('tws-work-')
+    const dir = projectsDirFor(work, cfg)
+    return { cfg, work, dir }
+  }
+
+  it('a project dir that does not exist: false (nothing was ever written)', () => {
+    const { cfg, work } = setup()
+    expect(transcriptWrittenSince(work, cfg, SINCE)).toBe(false)
+  })
+
+  it('only an older session\'s jsonl: false; one written after the session start: true', () => {
+    const { cfg, work, dir } = setup()
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'old.jsonl'), '{}\n')
+    utimesSync(join(dir, 'old.jsonl'), SINCE - 10, SINCE - 10)
+    writeFileSync(join(dir, 'note.txt'), 'x')
+    expect(transcriptWrittenSince(work, cfg, SINCE)).toBe(false)
+    writeFileSync(join(dir, 'new.jsonl'), '{}\n')
+    utimesSync(join(dir, 'new.jsonl'), SINCE + 5, SINCE + 5)
+    expect(transcriptWrittenSince(work, cfg, SINCE)).toBe(true)
+  })
+
+  it('a project dir that cannot be listed: null, not false', () => {
+    const { cfg, work, dir } = setup()
+    mkdirSync(dir, { recursive: true })
+    chmodSync(dir, 0o000)
+    try {
+      expect(transcriptWrittenSince(work, cfg, SINCE)).toBeNull()
+    } finally {
+      chmodSync(dir, 0o755)
+    }
   })
 })
