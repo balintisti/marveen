@@ -2250,6 +2250,106 @@
       "name": "[aee98b5d N9] perl system ls is not a send",
       "cmd": "perl -e 'system(\"ls\")'",
       "expected": false
+    },
+    {
+      "name": "[aee98b5d didi P1] perl cluster+glued -le'code' is a send",
+      "cmd": "perl -le'system(\"sendmail\", \"a@b.c\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P2] ruby cluster+glued -we'code' Net::SMTP is a send",
+      "cmd": "ruby -we'Net::SMTP.start(\"smtp.x\") { |s| s.send_message(\"m\",\"a\",\"b\") }'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P3] ruby backticks sendmail is a send",
+      "cmd": "ruby -e '`sendmail -t < /tmp/m.txt`'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P4] perl backticks sendmail is a send",
+      "cmd": "perl -e '`/usr/sbin/sendmail -t < m.txt`'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P5] ruby %x sendmail is a send",
+      "cmd": "ruby -e '%x(sendmail -t < m.txt)'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P6] ruby Mail.new(...).deliver is a send",
+      "cmd": "ruby -rmail -e 'Mail.new(from: \"a@b.c\", to: \"d@e.f\", subject: \"s\", body: \"b\").deliver'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P7] ruby m = Mail.new ...; m.deliver! is a send",
+      "cmd": "ruby -rmail -e 'm = Mail.new do to \"d@e.f\" end; m.deliver!'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P8] perl Net::SMTPS is a send",
+      "cmd": "perl -MNet::SMTPS -e '$s=Net::SMTPS->new(\"smtp.gmail.com\", doSSL=>\"starttls\"); $s->mail(\"a\"); $s->to(\"b\"); $s->data; $s->datasend(\"x\"); $s->dataend'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P9] ruby Pony.mail is a send",
+      "cmd": "ruby -rpony -e 'Pony.mail(to: \"d@e.f\", subject: \"hi\", body: \"x\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P10] perl Email::Stuffer ->send is a send",
+      "cmd": "perl -MEmail::Stuffer -e 'Email::Stuffer->to(\"d@e.f\")->from(\"a@b.c\")->text_body(\"x\")->send'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P11] ruby Open3.capture2 sendmail is a send",
+      "cmd": "ruby -ropen3 -e 'Open3.capture2(\"sendmail\", \"-t\", stdin_data: \"To: d@e.f\\n\\nx\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P12] env perl -e system sendmail is a send",
+      "cmd": "env perl -e 'system(\"sendmail\",\"x\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P13] /usr/bin/perl -e system sendmail is a send",
+      "cmd": "/usr/bin/perl -e 'system(\"sendmail\",\"x\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P16] perl -e then -e split mailer is a send",
+      "cmd": "perl -e 'use Net::SMTP;' -e 'Net::SMTP->new(\"h\")->mail(\"a\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P17] ruby2.7 versioned is a send",
+      "cmd": "ruby2.7 -e 'system(\"sendmail\",\"x\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi N2] ruby system uname is not a send",
+      "cmd": "ruby -e 'system(\"uname -a\")'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d didi N3] perl open read || die is not a send",
+      "cmd": "perl -e 'open(my $f, \"<\", \"x.txt\") || die; print <$f>'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d didi N4] python3 -c platform.system + sendmail word is not a send",
+      "cmd": "python3 -c 'import platform; print(platform.system(), \"sendmail\" in open(\"/etc/services\").read())'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d didi N7] node -e system word + msmtp is not a send",
+      "cmd": "node -e 'console.log(process.platform, \"system\", \"msmtp\")'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d didi N8] perl open with || in arg is not a send",
+      "cmd": "perl -e 'open(F, \"a||b\"); print \"sendmail\"'",
+      "expected": false
     }
   ]
 }

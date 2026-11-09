@@ -109,10 +109,19 @@ const NODEISH = /^(node|tsx|ts-node|deno|bun|npx)$/i
 // fed to them) carried a Resend POST or a Net::SMTP send past both twins, since neither knew them as
 // interpreters. Their code is judged like a node body (heredocBodySends / codeStringSends). Twin: _PERLISH.
 const PERLISH = /^(perl|ruby)(?:\d[\d.]*)?$/i
-// The flag that takes the code: -e/-E, alone or closing a cluster (`-le`, `-wnE`); -M/-I/-r name a
-// module or a path, never code. `-e'code'` glued is the same code (perlrun, ruby -h).
-const PERLISH_CODE_FLAG = /^-(?![MmIr])[A-Za-z]*[eE]$/
-const PERLISH_CODE_GLUED = /^-[eE](.+)$/s
+// The flag that takes the code: -e/-E, alone or closing a cluster (`-le`, `-wnE`, `-0777ne`); -M/-I/-r
+// name a module or a path, never code. Glued, the code follows the cluster's FIRST e/E: `-e'code'` and
+// `-le'code'` (the shell hands over `-lecode`; didi aee98b5d 57012, perlrun, ruby -h).
+const PERLISH_CODE_FLAG = /^-(?![MmIr])[A-Za-z0-9]*[eE]$/
+const PERLISH_CODE_GLUED = /^-(?![MmIr])[A-Za-z0-9]*?[eE](.+)$/s
+// The perl and ruby senders and spawns are judged in perl/ruby code ONLY (didi 57012 L4: in the shared
+// lists a python or node code saying `system` and a mailer name was denied too). Senders: Net::SMTP(S),
+// Email::Sender / ::Stuffer, Mail::Sendmail, MIME::Lite ->send, ruby's mail gem (`Mail.deliver`,
+// `Mail.new ... .deliver!`) and Pony. Spawns, with a mailer name only: system, exec, qx, the backtick,
+// ruby %x(), the pipe open (`open(M, "|sendmail -t")`, `open($fh, "|-", "sendmail")`), Open3, IO.popen.
+// Twins: _PERLISH_SEND, _PERLISH_EXECISH.
+const PERLISH_SEND = /\bNet::SMTPS?\b|\bEmail::(?:Sender|Stuffer)\b|\bMail::Sendmail\b|\bMIME::Lite\b[^\n]{0,200}->\s*send\b|\bMail\.deliver\b|\bMail\.new\b[\s\S]{0,2000}?\.deliver!?(?!\w)|\bPony\.mail\b/i
+const PERLISH_EXECISH = /\bsystem\b|\bexec\b|\bqx\b|`|%x[^\w\s]|\bopen\s*\([^)\n]*["']\s*\||\bOpen3\b|\bIO\.popen\b/i
 const GRAPHMAIL = /^graph-mail(\.ts|\.js)?$/i
 const WRAPPER_SHELL = /^(sh|bash|zsh|dash)$/i
 // httpie ships two commands, `http` and `https` (812bd946, didi 55346): both are senders. Twin: _CURLISH.
@@ -138,14 +147,11 @@ const RESEND_TARGET = /^(--url=)?(https?:\/\/)?([^/?#@\s]*@)?([^/?#@\s]*\.)?api\
 // nem all fenn, mert ez a minta KIZAROLAG interpreter-kod-sztringre fut, nem a teljes parancsra --
 // merve: a grep-alaku cenzusok ATENGEDNEK. KIMONDOTT MARADEK: egy `python3 -c "import smtplib; ..."`
 // alaku introspekcio blokkolodik; egy `grep`/`rg` alaku nem.
-const CODE_SEND = /\bsmtplib\.|\bimport\s+smtplib\b|SMTP\s*\(|\bsendMail\s*\(|\bsendEmail\s*\(|\bmail\.send\s*\(|\bresend\b(?!-\w)[^\n]{0,80}\.\s*send\s*\(|\bNet::SMTP\b|\bEmail::Sender\b|\bMail::Sendmail\b|\bMIME::Lite\b[^\n]{0,200}->\s*send\b|\bMail\.deliver\b/i
-// ^ the last five: the perl and ruby mail senders (aee98b5d), Net::SMTP in both, ruby's mail gem.
+const CODE_SEND = /\bsmtplib\.|\bimport\s+smtplib\b|SMTP\s*\(|\bsendMail\s*\(|\bsendEmail\s*\(|\bmail\.send\s*\(|\bresend\b(?!-\w)[^\n]{0,80}\.\s*send\s*\(/i
 // Naive-shape exec heuristic (msg 14298): process-spawn AND a known mailer
 // name together in one interpreter code string. Covers the accidental shapes;
 // see the STATED LIMIT in the header for what it deliberately does not claim.
-// perl/ruby spawn (aee98b5d): system (with or without parens), qx, and the pipe open
-// `open(M, "|sendmail -t")` / `open($fh, "|-", "sendmail")`.
-const CODE_EXECISH = /\bsubprocess\b|os\.system|\bpopen\b|child_process|\bexec[A-Za-z]*\s*\(|\bspawn[A-Za-z]*\s*\(|\bsystem\b|\bqx\b|\bopen\s*\([^)\n]*\|/i
+const CODE_EXECISH = /\bsubprocess\b|os\.system|\bpopen\b|child_process|\bexec[A-Za-z]*\s*\(|\bspawn[A-Za-z]*\s*\(/i
 // Vendor-CLI, ugyanabban az alakban, mint a GRAPHMAIL alatta: a PROGRAM neve dont,
 // az alparancs pedig `send`. Merve 2026-08-23: az `npx resend send --to ...` alak
 // atment, mert az `npx` utani elso argumentumot csak a SENDPY-ag nezte meg.
@@ -277,6 +283,8 @@ const resendMailInCode = (code) => RESEND_HOST_IN_CODE.test(code) && !resendInbo
 const codeStringSends = (code) =>
   CODE_SEND.test(code) || CODE_SEND_MODULE.test(code) || resendMailInCode(code) ||
   (CODE_EXECISH.test(code) && CODE_SENDER_LIT.test(code))
+const perlOnlySends = (code) => PERLISH_SEND.test(code) || (PERLISH_EXECISH.test(code) && CODE_SENDER_LIT.test(code))
+const perlCodeSends = (code) => codeStringSends(code) || perlOnlySends(code)
 
 // Unquoted newline / backtick / `$(` become segment separators; quoted text is
 // untouched (it is content). Tracks quote state by hand -- no shell involved.
@@ -547,9 +555,9 @@ function headIsSend(toks, depth, ctx = NO_CTX) {
   if ((PYTHON.test(prog) || NODEISH.test(prog)) && codeStrings(prog, rest).some(codeStringSends)) return true
   if (PERLISH.test(prog)) {
     for (let i = 0; i < rest.length; i++) {
-      if (PERLISH_CODE_FLAG.test(rest[i]) && rest[i + 1] && codeStringSends(rest[i + 1])) return true
+      if (PERLISH_CODE_FLAG.test(rest[i]) && rest[i + 1] && perlCodeSends(rest[i + 1])) return true
       const glued = PERLISH_CODE_GLUED.exec(rest[i])
-      if (glued && codeStringSends(glued[1])) return true
+      if (glued && perlCodeSends(glued[1])) return true
     }
   }
   const candidates = [prog]
@@ -639,6 +647,7 @@ const HEREDOC_SENDER_ARGV = /['"](?:[^'"\s]*\/)?(?:sendmail|msmtp|swaks|send\.py
 const heredocBodySends = (body) =>
   CODE_SEND.test(body) || CODE_SEND_MODULE.test(body) || resendMailInCode(body) ||
   (CODE_EXECISH.test(body) && HEREDOC_SENDER_ARGV.test(body))
+const perlBodySends = (body) => heredocBodySends(body) || perlOnlySends(body)
 // A PYTHON BODY IS JUDGED ON ITS CODE, NOT ON ITS STRINGS (card bc98d6d5). All 34 denials that
 // 6525aba3 A2 added over 20 694 real commands (didi, 7 days) were Python patch scripts whose
 // send word sat in a string literal (TS source being written), never in a call. For a body
@@ -765,12 +774,13 @@ export function readerRunsScriptFile(rest) {
   return false
 }
 export function heredocHeadKinds(head) {
-  const kinds = { py: false, js: false, shell: false }
+  const kinds = { py: false, js: false, perl: false, shell: false }
   const own = heredocOwnCommand(head)
   for (const m of own.matchAll(HEREDOC_READER_WORD_G)) {
     if (readerRunsScriptFile(own.slice(m.index + m[0].length))) continue
     if (WRAPPER_SHELL.test(m[1])) kinds.shell = true
     else if (PYTHON.test(m[1])) kinds.py = true
+    else if (PERLISH.test(m[1])) kinds.perl = true
     else kinds.js = true
   }
   return kinds
@@ -817,7 +827,8 @@ function writtenThenRun(cmd, written, depth, ctx) {
       if (!args.length || !written.has(args[0])) continue
       const { body, quoted } = written.get(args[0])
       if (PYTHON.test(prog) && pythonBodySends(body, quoted)) return true
-      if ((NODEISH.test(prog) || PERLISH.test(prog)) && heredocBodySends(body)) return true
+      if (NODEISH.test(prog) && heredocBodySends(body)) return true
+      if (PERLISH.test(prog) && perlBodySends(body)) return true
       if (WRAPPER_SHELL.test(prog) && depth < 3 && isSendInvocation(body, depth + 1, ctx)) return true
     }
   }
@@ -949,6 +960,7 @@ function heredocProgramSends(cmd, depth = 0, gate = NO_CTX) {
     ctx += cmd.slice(from, index)
     const kinds = heredocHeadKinds(ctx)
     if (kinds.js && heredocBodySends(body)) return true
+    if (kinds.perl && perlBodySends(body)) return true
     if (kinds.py && pythonBodySends(body, quoted)) return true
     if (kinds.shell && depth < 3 && isSendInvocation(body, depth + 1, gate)) return true
     ctx += intro + '\n'

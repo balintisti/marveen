@@ -97,8 +97,18 @@ _PYTHON = re.compile(r"^python3?(?:\.\d+)?$", re.I)
 _NODEISH = re.compile(r"^(node|tsx|ts-node|deno|bun|npx)$", re.I)
 # Perl and ruby run code too (card aee98b5d); full note: PERLISH in email-send-gate.mjs.
 _PERLISH = re.compile(r"^(perl|ruby)(?:\d[\d.]*)?$", re.I)
-_PERLISH_CODE_FLAG = re.compile(r"^-(?![MmIr])[A-Za-z]*[eE]$")
-_PERLISH_CODE_GLUED = re.compile(r"^-[eE](.+)$", re.S)
+_PERLISH_CODE_FLAG = re.compile(r"^-(?![MmIr])[A-Za-z0-9]*[eE]$")
+# Glued, the code follows the cluster's FIRST e/E (`-le'code'` -> `-lecode`, didi aee98b5d 57012).
+_PERLISH_CODE_GLUED = re.compile(r"^-(?![MmIr])[A-Za-z0-9]*?[eE](.+)$", re.S)
+# Perl/ruby senders and spawns, judged in perl/ruby code ONLY (didi 57012 L4); full note:
+# PERLISH_SEND / PERLISH_EXECISH in email-send-gate.mjs.
+_PERLISH_SEND = re.compile(
+    r"\bNet::SMTPS?\b|\bEmail::(?:Sender|Stuffer)\b|\bMail::Sendmail\b|\bMIME::Lite\b[^\n]{0,200}->\s*send\b"
+    r"|\bMail\.deliver\b|\bMail\.new\b[\s\S]{0,2000}?\.deliver!?(?!\w)|\bPony\.mail\b",
+    re.I,
+)
+_PERLISH_EXECISH = re.compile(
+    r"""\bsystem\b|\bexec\b|\bqx\b|`|%x[^\w\s]|\bopen\s*\([^)\n]*["']\s*\||\bOpen3\b|\bIO\.popen\b""", re.I)
 _GRAPHMAIL = re.compile(r"^graph-mail(\.ts|\.js)?$", re.I)
 _WRAPPER_SHELL = re.compile(r"^(sh|bash|zsh|dash)$", re.I)
 # httpie ships two commands, `http` and `https` (812bd946, didi 55346): both are senders.
@@ -126,9 +136,7 @@ _CODE_SEND = re.compile(
     r"\bsmtplib\.|\bimport\s+smtplib\b|SMTP\s*\(|\bsendMail\s*\(|\bsendEmail\s*\(|\bmail\.send\s*\("
     # The Resend SDK call (`resend.emails.send(`). It was in email-send-gate.mjs only, so the
     # twins split on 2 of 14 970 real commands (6525aba3; marveen 50880: align to the stricter).
-    r"|\bresend\b(?!-\w)[^\n]{0,80}\.\s*send\s*\("
-    # The perl and ruby mail senders (aee98b5d); twin: CODE_SEND in email-send-gate.mjs.
-    r"|\bNet::SMTP\b|\bEmail::Sender\b|\bMail::Sendmail\b|\bMIME::Lite\b[^\n]{0,200}->\s*send\b|\bMail\.deliver\b",
+    r"|\bresend\b(?!-\w)[^\n]{0,80}\.\s*send\s*\(",
     re.I,
 )
 # Issue #1853 (stylnet): the support-mail sender LOADED AS A MODULE, not run by its
@@ -148,9 +156,7 @@ _CODE_SEND_MODULE = re.compile(
     r"|\bsendMail\s+as\b|\[\s*['\"]sendMail['\"]\s*\]"
 )
 _CODE_EXECISH = re.compile(
-    r"\bsubprocess\b|os\.system|\bpopen\b|child_process|\bexec[A-Za-z]*\s*\(|\bspawn[A-Za-z]*\s*\("
-    # perl/ruby spawn (aee98b5d): system, qx, the pipe open; twin: CODE_EXECISH.
-    r"|\bsystem\b|\bqx\b|\bopen\s*\([^)\n]*\|",
+    r"\bsubprocess\b|os\.system|\bpopen\b|child_process|\bexec[A-Za-z]*\s*\(|\bspawn[A-Za-z]*\s*\(",
     re.I,
 )
 _CODE_SENDER_LIT = re.compile(r"sendmail|msmtp|swaks|send\.py", re.I)
@@ -179,6 +185,14 @@ def _code_string_sends(code: str) -> bool:
     if _CODE_SEND.search(code) or _CODE_SEND_MODULE.search(code) or _resend_mail_in_code(code):
         return True
     return bool(_CODE_EXECISH.search(code) and _CODE_SENDER_LIT.search(code))
+
+
+def _perl_only_sends(code: str) -> bool:
+    return bool(_PERLISH_SEND.search(code) or (_PERLISH_EXECISH.search(code) and _CODE_SENDER_LIT.search(code)))
+
+
+def _perl_code_sends(code: str) -> bool:
+    return _code_string_sends(code) or _perl_only_sends(code)
 # Token-ELEJERE horgonyzott cel-minta: egy URL-argumentum vagy csupasz
 # domain/utvonal illik ra; egy JSON-payload ('{...api.resend.com...}') nem.
 # RESENDHOST926 (card 0ca64c14, didi's probe 2026-09-26): the host is matched
@@ -897,10 +911,10 @@ def _head_is_send(toks, depth: int, ctx=None) -> bool:
             return True
     if _PERLISH.match(prog):
         for i, t in enumerate(rest):
-            if _PERLISH_CODE_FLAG.match(t) and i + 1 < len(rest) and _code_string_sends(rest[i + 1]):
+            if _PERLISH_CODE_FLAG.match(t) and i + 1 < len(rest) and _perl_code_sends(rest[i + 1]):
                 return True
             glued = _PERLISH_CODE_GLUED.match(t)
-            if glued and _code_string_sends(glued.group(1)):
+            if glued and _perl_code_sends(glued.group(1)):
                 return True
     # send.py futtatasa (kozvetlenul, vagy python/runner utan) --to cimzettel
     candidates = [prog] + (
@@ -989,6 +1003,10 @@ def _heredoc_body_sends(body: str) -> bool:
     if _CODE_SEND.search(body) or _CODE_SEND_MODULE.search(body) or _resend_mail_in_code(body):
         return True
     return bool(_CODE_EXECISH.search(body) and _HEREDOC_SENDER_ARGV.search(body))
+
+
+def _perl_body_sends(body: str) -> bool:
+    return _heredoc_body_sends(body) or _perl_only_sends(body)
 
 
 # A PYTHON BODY IS JUDGED ON ITS CODE, NOT ON ITS STRINGS (card bc98d6d5): string-literal
@@ -1124,12 +1142,12 @@ def _reader_runs_script_file(rest: str) -> bool:
 
 
 def _heredoc_head_kinds(head: str):
-    """(py, js, shell): every reader word counts, not the first (didi's F2, 6525aba3 50861),
+    """(py, js, perl, shell): every reader word counts, not the first (didi's F2, 6525aba3 50861),
     except one that runs a script file (the body is that script's stdin data).
 
     Twin: heredocHeadKinds in email-send-gate.mjs.
     """
-    py = js = shell = False
+    py = js = perl = shell = False
     own = _heredoc_own_command(head)
     for m in _HEREDOC_READER_WORD.finditer(own):
         if _reader_runs_script_file(own[m.end():]):
@@ -1138,9 +1156,11 @@ def _heredoc_head_kinds(head: str):
             shell = True
         elif _PYTHON.match(m.group(1)):
             py = True
+        elif _PERLISH.match(m.group(1)):
+            perl = True
         else:
             js = True
-    return py, js, shell
+    return py, js, perl, shell
 
 
 # THE HEREDOC FORMS BASH RUNS (didi's K2, 6525aba3 50742): <<"EOF", <<\EOF, a - or . in the
@@ -1196,7 +1216,9 @@ def _written_then_run(cmd: str, written: dict, depth: int, ctx=None) -> bool:
             body, quoted = written[args[0]]
             if _PYTHON.match(prog) and _python_body_sends(body, quoted):
                 return True
-            if (_NODEISH.match(prog) or _PERLISH.match(prog)) and _heredoc_body_sends(body):
+            if _NODEISH.match(prog) and _heredoc_body_sends(body):
+                return True
+            if _PERLISH.match(prog) and _perl_body_sends(body):
                 return True
             if _WRAPPER_SHELL.match(prog) and depth < 3 and is_send_invocation(body, _depth=depth + 1, ctx=ctx):
                 return True
@@ -1214,8 +1236,10 @@ def _heredoc_program_sends(cmd: str, depth: int = 0, gate=None) -> bool:
         if w:
             written[w.group(2)] = (body, quoted)
         ctx += cmd[frm:start]
-        py, js, shell = _heredoc_head_kinds(ctx)
+        py, js, perl, shell = _heredoc_head_kinds(ctx)
         if js and _heredoc_body_sends(body):
+            return True
+        if perl and _perl_body_sends(body):
             return True
         if py and _python_body_sends(body, quoted):
             return True
