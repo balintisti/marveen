@@ -105,6 +105,14 @@ const SENDPY = /^send\.py$/i
 // that way, the -c / -m / send.py checks did not (didi, 6525aba3 50742). Twin: _PYTHON.
 const PYTHON = /^python3?(?:\.\d+)?$/i
 const NODEISH = /^(node|tsx|ts-node|deno|bun|npx)$/i
+// PERL AND RUBY RUN CODE TOO (card aee98b5d): `perl -e`, `ruby -e` (and a heredoc or a written file
+// fed to them) carried a Resend POST or a Net::SMTP send past both twins, since neither knew them as
+// interpreters. Their code is judged like a node body (heredocBodySends / codeStringSends). Twin: _PERLISH.
+const PERLISH = /^(perl|ruby)(?:\d[\d.]*)?$/i
+// The flag that takes the code: -e/-E, alone or closing a cluster (`-le`, `-wnE`); -M/-I/-r name a
+// module or a path, never code. `-e'code'` glued is the same code (perlrun, ruby -h).
+const PERLISH_CODE_FLAG = /^-(?![MmIr])[A-Za-z]*[eE]$/
+const PERLISH_CODE_GLUED = /^-[eE](.+)$/s
 const GRAPHMAIL = /^graph-mail(\.ts|\.js)?$/i
 const WRAPPER_SHELL = /^(sh|bash|zsh|dash)$/i
 // httpie ships two commands, `http` and `https` (812bd946, didi 55346): both are senders. Twin: _CURLISH.
@@ -130,11 +138,14 @@ const RESEND_TARGET = /^(--url=)?(https?:\/\/)?([^/?#@\s]*@)?([^/?#@\s]*\.)?api\
 // nem all fenn, mert ez a minta KIZAROLAG interpreter-kod-sztringre fut, nem a teljes parancsra --
 // merve: a grep-alaku cenzusok ATENGEDNEK. KIMONDOTT MARADEK: egy `python3 -c "import smtplib; ..."`
 // alaku introspekcio blokkolodik; egy `grep`/`rg` alaku nem.
-const CODE_SEND = /\bsmtplib\.|\bimport\s+smtplib\b|SMTP\s*\(|\bsendMail\s*\(|\bsendEmail\s*\(|\bmail\.send\s*\(|\bresend\b(?!-\w)[^\n]{0,80}\.\s*send\s*\(/i
+const CODE_SEND = /\bsmtplib\.|\bimport\s+smtplib\b|SMTP\s*\(|\bsendMail\s*\(|\bsendEmail\s*\(|\bmail\.send\s*\(|\bresend\b(?!-\w)[^\n]{0,80}\.\s*send\s*\(|\bNet::SMTP\b|\bEmail::Sender\b|\bMail::Sendmail\b|\bMIME::Lite\b[^\n]{0,200}->\s*send\b|\bMail\.deliver\b/i
+// ^ the last five: the perl and ruby mail senders (aee98b5d), Net::SMTP in both, ruby's mail gem.
 // Naive-shape exec heuristic (msg 14298): process-spawn AND a known mailer
 // name together in one interpreter code string. Covers the accidental shapes;
 // see the STATED LIMIT in the header for what it deliberately does not claim.
-const CODE_EXECISH = /\bsubprocess\b|os\.system|\bpopen\b|child_process|\bexec[A-Za-z]*\s*\(|\bspawn[A-Za-z]*\s*\(/i
+// perl/ruby spawn (aee98b5d): system (with or without parens), qx, and the pipe open
+// `open(M, "|sendmail -t")` / `open($fh, "|-", "sendmail")`.
+const CODE_EXECISH = /\bsubprocess\b|os\.system|\bpopen\b|child_process|\bexec[A-Za-z]*\s*\(|\bspawn[A-Za-z]*\s*\(|\bsystem\b|\bqx\b|\bopen\s*\([^)\n]*\|/i
 // Vendor-CLI, ugyanabban az alakban, mint a GRAPHMAIL alatta: a PROGRAM neve dont,
 // az alparancs pedig `send`. Merve 2026-08-23: az `npx resend send --to ...` alak
 // atment, mert az `npx` utani elso argumentumot csak a SENDPY-ag nezte meg.
@@ -534,6 +545,13 @@ function headIsSend(toks, depth, ctx = NO_CTX) {
   if (WRAPPER_SHELL.test(prog) && depth < 3 &&
       codeStrings(prog, rest).some((code) => isSendInvocation(code, depth + 1, ctx))) return true
   if ((PYTHON.test(prog) || NODEISH.test(prog)) && codeStrings(prog, rest).some(codeStringSends)) return true
+  if (PERLISH.test(prog)) {
+    for (let i = 0; i < rest.length; i++) {
+      if (PERLISH_CODE_FLAG.test(rest[i]) && rest[i + 1] && codeStringSends(rest[i + 1])) return true
+      const glued = PERLISH_CODE_GLUED.exec(rest[i])
+      if (glued && codeStringSends(glued[1])) return true
+    }
+  }
   const candidates = [prog]
   if ((PYTHON.test(prog) || NODEISH.test(prog)) && rest.length) candidates.push(basename(rest[0]))
   // Issue #1853: `python3 -m send` (or -m pkg.send) is the same sender by module name.
@@ -690,7 +708,7 @@ const pythonBodySends = (body, quoted) => // quoted must be true to blank: a mis
 // in the own command's arguments (`git commit -m "node fix" -F - <<`) reads the body as a
 // program too; that body is denied only if it sends. Twin: _heredoc_head_kinds in
 // hooks/outgoing-copy-gate.py.
-const HEREDOC_READER_WORD = /(?:^|[\s/'"`$(=;&|])(python3?(?:\.\d+)?|node|tsx|ts-node|deno|bun|sh|bash|zsh|dash)(?=$|[\s'"`);&|])/i
+const HEREDOC_READER_WORD = /(?:^|[\s/'"`$(=;&|])(python3?(?:\.\d+)?|node|tsx|ts-node|deno|bun|(?:perl|ruby)(?:\d[\d.]*)?|sh|bash|zsh|dash)(?=$|[\s'"`);&|])/i
 export function heredocOwnCommand(head) {
   const s = String(head ?? '')
     .replace(/\|&/g, '|') // pipe incl. stderr: still a separator
@@ -799,7 +817,7 @@ function writtenThenRun(cmd, written, depth, ctx) {
       if (!args.length || !written.has(args[0])) continue
       const { body, quoted } = written.get(args[0])
       if (PYTHON.test(prog) && pythonBodySends(body, quoted)) return true
-      if (NODEISH.test(prog) && heredocBodySends(body)) return true
+      if ((NODEISH.test(prog) || PERLISH.test(prog)) && heredocBodySends(body)) return true
       if (WRAPPER_SHELL.test(prog) && depth < 3 && isSendInvocation(body, depth + 1, ctx)) return true
     }
   }

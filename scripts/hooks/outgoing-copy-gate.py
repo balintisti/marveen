@@ -95,6 +95,10 @@ _PYTHON = re.compile(r"^python3?(?:\.\d+)?$", re.I)
 # (send-invocation-cases.json + konformancia-teszt): a divergencia
 # teszt-hibakent jelenjen meg, ne incidenskent (Marveen, msg 14289).
 _NODEISH = re.compile(r"^(node|tsx|ts-node|deno|bun|npx)$", re.I)
+# Perl and ruby run code too (card aee98b5d); full note: PERLISH in email-send-gate.mjs.
+_PERLISH = re.compile(r"^(perl|ruby)(?:\d[\d.]*)?$", re.I)
+_PERLISH_CODE_FLAG = re.compile(r"^-(?![MmIr])[A-Za-z]*[eE]$")
+_PERLISH_CODE_GLUED = re.compile(r"^-[eE](.+)$", re.S)
 _GRAPHMAIL = re.compile(r"^graph-mail(\.ts|\.js)?$", re.I)
 _WRAPPER_SHELL = re.compile(r"^(sh|bash|zsh|dash)$", re.I)
 # httpie ships two commands, `http` and `https` (812bd946, didi 55346): both are senders.
@@ -122,7 +126,9 @@ _CODE_SEND = re.compile(
     r"\bsmtplib\.|\bimport\s+smtplib\b|SMTP\s*\(|\bsendMail\s*\(|\bsendEmail\s*\(|\bmail\.send\s*\("
     # The Resend SDK call (`resend.emails.send(`). It was in email-send-gate.mjs only, so the
     # twins split on 2 of 14 970 real commands (6525aba3; marveen 50880: align to the stricter).
-    r"|\bresend\b(?!-\w)[^\n]{0,80}\.\s*send\s*\(",
+    r"|\bresend\b(?!-\w)[^\n]{0,80}\.\s*send\s*\("
+    # The perl and ruby mail senders (aee98b5d); twin: CODE_SEND in email-send-gate.mjs.
+    r"|\bNet::SMTP\b|\bEmail::Sender\b|\bMail::Sendmail\b|\bMIME::Lite\b[^\n]{0,200}->\s*send\b|\bMail\.deliver\b",
     re.I,
 )
 # Issue #1853 (stylnet): the support-mail sender LOADED AS A MODULE, not run by its
@@ -142,7 +148,9 @@ _CODE_SEND_MODULE = re.compile(
     r"|\bsendMail\s+as\b|\[\s*['\"]sendMail['\"]\s*\]"
 )
 _CODE_EXECISH = re.compile(
-    r"\bsubprocess\b|os\.system|\bpopen\b|child_process|\bexec[A-Za-z]*\s*\(|\bspawn[A-Za-z]*\s*\(",
+    r"\bsubprocess\b|os\.system|\bpopen\b|child_process|\bexec[A-Za-z]*\s*\(|\bspawn[A-Za-z]*\s*\("
+    # perl/ruby spawn (aee98b5d): system, qx, the pipe open; twin: CODE_EXECISH.
+    r"|\bsystem\b|\bqx\b|\bopen\s*\([^)\n]*\|",
     re.I,
 )
 _CODE_SENDER_LIT = re.compile(r"sendmail|msmtp|swaks|send\.py", re.I)
@@ -887,6 +895,13 @@ def _head_is_send(toks, depth: int, ctx=None) -> bool:
     if _PYTHON.match(prog) or _NODEISH.match(prog):
         if any(_code_string_sends(code) for code in _code_strings(prog, rest)):
             return True
+    if _PERLISH.match(prog):
+        for i, t in enumerate(rest):
+            if _PERLISH_CODE_FLAG.match(t) and i + 1 < len(rest) and _code_string_sends(rest[i + 1]):
+                return True
+            glued = _PERLISH_CODE_GLUED.match(t)
+            if glued and _code_string_sends(glued.group(1)):
+                return True
     # send.py futtatasa (kozvetlenul, vagy python/runner utan) --to cimzettel
     candidates = [prog] + (
         [_basename(rest[0])] if rest and (_PYTHON.match(prog) or _NODEISH.match(prog)) else []
@@ -1044,7 +1059,7 @@ def _python_body_sends(body: str, quoted: bool) -> bool:
 # unknown launcher stays fail-closed; no second wrapper list). Full note and the named
 # cost: heredocHeadKinds in email-send-gate.mjs.
 _HEREDOC_READER_WORD = re.compile(
-    r"""(?:^|[\s/'"`$(=;&|])(python3?(?:\.\d+)?|node|tsx|ts-node|deno|bun|sh|bash|zsh|dash)(?=$|[\s'"`);&|])""",
+    r"""(?:^|[\s/'"`$(=;&|])(python3?(?:\.\d+)?|node|tsx|ts-node|deno|bun|(?:perl|ruby)(?:\d[\d.]*)?|sh|bash|zsh|dash)(?=$|[\s'"`);&|])""",
     re.I)
 
 
@@ -1181,7 +1196,7 @@ def _written_then_run(cmd: str, written: dict, depth: int, ctx=None) -> bool:
             body, quoted = written[args[0]]
             if _PYTHON.match(prog) and _python_body_sends(body, quoted):
                 return True
-            if _NODEISH.match(prog) and _heredoc_body_sends(body):
+            if (_NODEISH.match(prog) or _PERLISH.match(prog)) and _heredoc_body_sends(body):
                 return True
             if _WRAPPER_SHELL.match(prog) and depth < 3 and is_send_invocation(body, _depth=depth + 1, ctx=ctx):
                 return True
