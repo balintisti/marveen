@@ -244,17 +244,25 @@ const CODE_SEND_MODULE = new RegExp(
 // A RESEND MAIL POST WRITTEN AS CODE (card 5768a25d, didi 55349): `requests.post("https://api.resend.com/emails", ...)`
 // or urllib's Request on the same URL read as "not a send" in both twins, because the Resend target was looked
 // for only as a curl/wget token and the code patterns knew the SDK call, smtplib and sendMail, not the URL.
-// In code, the host and an `/emails` path named anywhere in the text are a send: the path may be glued on
-// later (`BASE + "/emails"`), and the HTTP method is not readable from text. Matched on the RAW text, never
-// on the string-blanked Python body (bc98d6d5): the URL lives in a string literal, and blanking would erase it.
-// One path is not a send: `/emails/receiving` is the inbound-mail read (two marveen reads in the 7-day corpus).
-// It is skipped per occurrence, so the same text with a real `/emails` POST still matches; any other path
-// under /emails (`/emails/batch` is a send) matches.
-// NAMED COST: a read of a sent mail (`GET /emails/<id>`) and a script that merely writes this URL into a file
-// or a message are denied too. Twin: _resend_mail_in_code in hooks/outgoing-copy-gate.py.
+// In code, the provider HOST named anywhere in the text is a send, the same verdict the curl branch gives a
+// Resend URL on any path: the path may be glued on later in any form (`BASE + "/emails"`, a base ending in `/`
+// plus `"emails"`, `urljoin(host, "emails")`, an f-string, a variable: didi 56988), and the HTTP method is not
+// readable from text. Matched on the RAW text, never on the string-blanked Python body (bc98d6d5): the URL
+// lives in a string literal, and blanking would erase it.
+// One shape is not a send: a text whose EVERY `emails` word is the inbound-mail read `emails/receiving` (two
+// marveen reads in the 7-day corpus). One more `emails` anywhere (`/emails`, `"emails"`, `/emails/batch`)
+// and it is a send again; a text with no `emails/receiving` at all gets no exemption, so an unknown path is
+// denied by default.
+// NAMED COST: any other Resend API call written as code (`GET /domains`, `GET /emails/<id>`), and a script
+// that merely writes the host into a file or a message, are denied too. NAMED HOLE: an inbound read in the same
+// text as a send whose path never says `emails` (`H + path` from argv). Twin: _resend_mail_in_code in
+// hooks/outgoing-copy-gate.py.
 const RESEND_HOST_IN_CODE = /api\.resend\.com(?![\w-])/i
-const RESEND_MAIL_PATH_IN_CODE = /\/emails(?!\/receiving(?![\w-]))(?![\w-])/i
-const resendMailInCode = (code) => RESEND_HOST_IN_CODE.test(code) && RESEND_MAIL_PATH_IN_CODE.test(code)
+const RESEND_INBOUND_READ = /(?<![\w-])emails\/receiving(?![\w-])/gi
+const RESEND_EMAILS_WORD = /(?<![\w-])emails(?![\w-])/i
+const resendInboundReadOnly = (code) =>
+  code.search(RESEND_INBOUND_READ) >= 0 && !RESEND_EMAILS_WORD.test(code.replace(RESEND_INBOUND_READ, ' '))
+const resendMailInCode = (code) => RESEND_HOST_IN_CODE.test(code) && !resendInboundReadOnly(code)
 const codeStringSends = (code) =>
   CODE_SEND.test(code) || CODE_SEND_MODULE.test(code) || resendMailInCode(code) ||
   (CODE_EXECISH.test(code) && CODE_SENDER_LIT.test(code))
