@@ -100,7 +100,13 @@ describe('the wake names a bounced fix before any new card (1affb872)', () => {
   it('bounced items only: they are named, and the "could not name an item" line is absent', () => {
     const only = [card('bnc11111', 'testing'), card('bnc22222', 'in_progress')]
     const msg = buildWakeMessage('dexter', 13, 2, only, NOW, 'assigned_open_cards', new Set(['bnc11111', 'bnc22222']))
-    expect(listed(msg)).toEqual(['bnc11111', 'bnc22222'])
+    // Card 2e78cf63: the wake is capped in characters and the bounced header carries Isti's rule (~110 characters),
+    // so with a long install path only the first may fit: as many as fit, in order, the rest counted. The room
+    // depends on the install path length (a worktree is the worst case), so this asserts what holds everywhere.
+    const named = listed(msg)
+    expect(named.length).toBeGreaterThanOrEqual(1)
+    expect(named).toEqual(['bnc11111', 'bnc22222'].slice(0, named.length))
+    expect(named.length + Number(/^\+(\d+) tovabbi a tablan$/m.exec(msg)?.[1] ?? 0)).toBe(2)
     expect(msg).not.toContain('tetelt nem tudtam megnevezni')
   })
   // didi 49379 I8: the bounced block is capped like the other blocks, the header keeps the full count.

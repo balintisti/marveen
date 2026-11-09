@@ -8,7 +8,7 @@ const mkTmp = tmpDirs()
 // 49% of the fleet's weekly message characters, so each one has a length cap AND a list of
 // OPERATIVE steps that must survive the cut ("a fresh session does not follow links before
 // acting"). A shortening that drops a step, or a later edit that grows the text back, fails here.
-// Caps: resume prompt <= 900, critical handoff request <= 300 (tetlen-or <= 500 is pinned in
+// Caps: resume prompt <= 1000 (900 in marveen's decision; didi's review 56939 L2 put four operative steps back, the worst case is 992), critical handoff request <= 300 (tetlen-or <= 500 is pinned in
 // idle-wake-template-length.test.ts).
 
 const SANDBOX = mkTmp('template-length-test-')
@@ -85,8 +85,8 @@ describe('resume prompt (the "Friss kontextussal indultál" template, 775 per we
 
   for (const name of AGENTS) {
     for (const [label, p] of variants(name)) {
-      it(`${name}, ${label}: at most 900 characters`, () => {
-        expect(p.length).toBeLessThanOrEqual(900)
+      it(`${name}, ${label}: at most 1000 characters`, () => {
+        expect(p.length).toBeLessThanOrEqual(1000)
       })
     }
   }
@@ -106,6 +106,10 @@ describe('resume prompt (the "Friss kontextussal indultál" template, 775 per we
     ['prod tree: no commit', 'NE commitolj'],
     ['prod tree: no PR', 'NE nyiss PR-t'],
     ['prod tree: use a worktree', 'worktree'],
+    ['do not redo what the handoff says is done', 'a kész részt ne ismételd'],
+    ['do not start a second copy of a surviving task', 'mellé másodikat ne indíts'],
+    ['restart the killed task or say so', 'indítsd újra vagy jelezd'],
+    ['fill the stale gap from comments, messages, hot memory', 'kommentekből, üzenetekből, hot memóriából'],
     ['the background of the rules', 'context-guard-restart-recovery'],
   ]
   for (const name of AGENTS) {
@@ -130,6 +134,6 @@ describe('resume prompt (the "Friss kontextussal indultál" template, 775 per we
   it('main agent: no owner-channel notice, a transcript line; sub-agent: the channel notice', () => {
     expect(variants('marveen')[0][1]).toContain('transzkript')
     expect(variants('marveen')[0][1]).not.toContain('jelezz a csatornádon')
-    expect(variants('dexter')[0][1]).toContain('jelezz a csatornádon')
+    expect(variants('dexter')[0][1]).toContain('jelezz a csatornádon, hogy folytatod')
   })
 })

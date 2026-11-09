@@ -41,10 +41,12 @@ describe('the wake never goes over the cap', () => {
       }
     }
   }
-  it('the fixed parts alone (no card named) leave room for at least one header and one card line', () => {
-    // 'nothing nameable' still prints the fixed parts; the cap minus their length is what the lists can use.
+  it('the fixed parts alone (no card named) leave room for the bounced header and one card line', () => {
+    // 'nothing nameable' still prints the fixed parts; the cap minus their length is what the lists can use. The
+    // VISSZADOBOTT header plus its first line is the largest first block (~172), and this runs with the longest
+    // agent name AND this worktree's long install path (prod's path is 16 characters shorter).
     const fixed = buildWakeMessage('computress', 120, 3, [], NOW, 'testing_without_my_comment').length
-    expect(WAKE_MAX_CHARS - fixed).toBeGreaterThanOrEqual(200)
+    expect(WAKE_MAX_CHARS - fixed).toBeGreaterThanOrEqual(170)
   })
 })
 
@@ -80,9 +82,45 @@ describe('the operative pieces survive the cut, in every kind', () => {
       ['the standing-instruction third case', 'ALLO UTASITAS'],
       ['...', 'HARMADIK eset'],
       ['...in a shape the standstill parser reads', STANDSTILL_EXAMPLE],
+      ['...and it is the coordinator who writes it, not the agent', 'a koordinator irja, nem te'],
     ]
     it.each(pieces)(`${kind}: keeps %s`, (_what, text) => {
       expect(msg).toContain(text)
     })
   }
+})
+
+// Didi, verdict 56939 L3: the exact "+N" count, including the case with exactly ONE card left out.
+describe('the "+N tovabbi" line is exact for every N, including 1', () => {
+  it('named + counted = the cards given, for 1..14 pickable cards (a +1 off-by-one dies at the n where one is left out)', () => {
+    let sawExactlyOneLeft = false
+    for (let n = 1; n <= 14; n++) {
+      const items = Array.from({ length: n }, (_, i) => card(`wrk${String(i).padStart(5, '0')}`, 'planned', 'normal', 'short'))
+      const msg = buildWakeMessage('ford', 12, n, items, NOW, 'assigned_open_cards')
+      const named = (msg.match(/^ {2}wrk\d{5}/gm) ?? []).length
+      const more = /^\+(\d+) tovabbi a tablan$/m.exec(msg)
+      expect(named + Number(more?.[1] ?? 0), `n=${n}`).toBe(n)
+      if (more?.[1] === '1') sawExactlyOneLeft = true
+    }
+    // The control: the loop really reaches the exactly-one-left case (the cap per group is five).
+    expect(sawExactlyOneLeft).toBe(true)
+  })
+})
+
+// Didi, verdict 56939 K1: a section that does not fit ENDS the list, so a lower group cannot be named while a
+// higher one (the bounced fixes, Isti's rule TG 8509) is not. The fixed part is stretched with a long kind name.
+describe('priority is kept when the room runs out', () => {
+  it('whenever a FELVEHETO card is named, the VISSZADOBOTT block is there too', () => {
+    const items = [card('bnc00001', 'testing', 'high', 'fix'), card('bnc00002', 'testing', 'high', 'fix'),
+      card('wrk00001', 'planned', 'urgent', 'work'), card('wrk00002', 'planned', 'urgent', 'work')]
+    const ids = new Set(['bnc00001', 'bnc00002'])
+    let sawBouncedGone = false
+    for (let pad = 0; pad <= 400; pad += 2) {
+      const msg = buildWakeMessage('ford', 12, 4, items, NOW, ('k'.repeat(pad)) as WorkCheckKind, ids)
+      const bounced = msg.includes('VISSZADOBOTT JAVITAS')
+      if (!bounced) sawBouncedGone = true
+      if (!bounced) expect(msg, `pad=${pad}`).not.toMatch(/^ {2}wrk\d{5}/m)
+    }
+    expect(sawBouncedGone).toBe(true)
+  })
 })

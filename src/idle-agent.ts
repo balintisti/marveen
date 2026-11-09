@@ -2333,7 +2333,7 @@ export function buildWakeMessage(
     // answer belongs on the card. The third state (card 6ecd85e5): a standing instruction from the
     // coordinator, in a shape the standstill parser reads. The closing-line test reads the last three lines.
     'a kartya vagy marveen. A workcheck.json `none` erteke elnemitja ezt az ort (miert: rulebook/tetlen-or-ertesites.md).',
-    `ALLO UTASITAS alatt (HARMADIK eset): ${STANDSTILL_EXAMPLE}`,
+    `ALLO UTASITAS alatt (HARMADIK eset; a koordinator irja, nem te): ${STANDSTILL_EXAMPLE}`,
   ]
 
   // The item sections, in the order the reader acts on them. Each is { header, lines }.
@@ -2379,7 +2379,11 @@ export function buildWakeMessage(
   const total = bounced.length + work.length + floor.length + review.length
   for (const sec of sections) {
     const first = sec.lines[0]
-    if (first === undefined || left < sec.header.length + 1 + first.length + 1) continue
+    if (first === undefined) continue
+    // BREAK, not continue (didi K1, card 2e78cf63): a section that does not fit ends the list. With `continue` a
+    // lower one could take the room a higher one could not use, and a FELVEHETO card would be named before a
+    // VISSZADOBOTT one -- the order Isti's rule (TG 8509) forbids.
+    if (left < sec.header.length + 1 + first.length + 1) break
     listed.push(sec.header)
     left -= sec.header.length + 1
     for (const l of sec.lines) {
