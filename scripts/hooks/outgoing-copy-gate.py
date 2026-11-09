@@ -108,7 +108,7 @@ _PERLISH_SEND = re.compile(
     re.I,
 )
 _PERLISH_EXECISH = re.compile(
-    r"""\bsystem\b|\bexec\b|\bqx\b|`|%x[^\w\s]|\bopen\s*\([^)\n]*["']\s*\||\bOpen3\b|\bIO\.popen\b""", re.I)
+    r"""\bsystem\b|\bexec\b|\bqx\b|`|%x[^\w\s]|\bopen\b\s*\(?[^)\n]*["']\s*\||\bOpen3\b|\bIO\.popen\b|\bspawn\b""", re.I)
 _GRAPHMAIL = re.compile(r"^graph-mail(\.ts|\.js)?$", re.I)
 _WRAPPER_SHELL = re.compile(r"^(sh|bash|zsh|dash)$", re.I)
 # httpie ships two commands, `http` and `https` (812bd946, didi 55346): both are senders.

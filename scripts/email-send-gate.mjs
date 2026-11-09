@@ -118,10 +118,11 @@ const PERLISH_CODE_GLUED = /^-(?![MmIr])[A-Za-z0-9]*?[eE](.+)$/s
 // lists a python or node code saying `system` and a mailer name was denied too). Senders: Net::SMTP(S),
 // Email::Sender / ::Stuffer, Mail::Sendmail, MIME::Lite ->send, ruby's mail gem (`Mail.deliver`,
 // `Mail.new ... .deliver!`) and Pony. Spawns, with a mailer name only: system, exec, qx, the backtick,
-// ruby %x(), the pipe open (`open(M, "|sendmail -t")`, `open($fh, "|-", "sendmail")`), Open3, IO.popen.
+// ruby %x(), the pipe open with or without parens (`open(M, "|sendmail -t")`, `open MAIL, "|sendmail -t"`,
+// `open my $fh, "|-", "sendmail"`: didi 57019), Open3, IO.popen, ruby's bare `spawn "..."`.
 // Twins: _PERLISH_SEND, _PERLISH_EXECISH.
 const PERLISH_SEND = /\bNet::SMTPS?\b|\bEmail::(?:Sender|Stuffer)\b|\bMail::Sendmail\b|\bMIME::Lite\b[^\n]{0,200}->\s*send\b|\bMail\.deliver\b|\bMail\.new\b[\s\S]{0,2000}?\.deliver!?(?!\w)|\bPony\.mail\b/i
-const PERLISH_EXECISH = /\bsystem\b|\bexec\b|\bqx\b|`|%x[^\w\s]|\bopen\s*\([^)\n]*["']\s*\||\bOpen3\b|\bIO\.popen\b/i
+const PERLISH_EXECISH = /\bsystem\b|\bexec\b|\bqx\b|`|%x[^\w\s]|\bopen\b\s*\(?[^)\n]*["']\s*\||\bOpen3\b|\bIO\.popen\b|\bspawn\b/i
 const GRAPHMAIL = /^graph-mail(\.ts|\.js)?$/i
 const WRAPPER_SHELL = /^(sh|bash|zsh|dash)$/i
 // httpie ships two commands, `http` and `https` (812bd946, didi 55346): both are senders. Twin: _CURLISH.

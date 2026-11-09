@@ -2350,6 +2350,61 @@
       "name": "[aee98b5d didi N8] perl open with || in arg is not a send",
       "cmd": "perl -e 'open(F, \"a||b\"); print \"sendmail\"'",
       "expected": false
+    },
+    {
+      "name": "[aee98b5d 57019 R1] perl open my $fh, '|-', sendmail (no parens) is a send",
+      "cmd": "perl -e 'open my $fh, \"|-\", \"/usr/sbin/sendmail\", \"-t\" or die; print $fh \"To: a\\@b\\n\\nx\"; close $fh'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d 57019 R2] perl open MAIL, '|sendmail -t' (no parens) is a send",
+      "cmd": "perl -e 'open MAIL, \"|/usr/sbin/sendmail -t\"; print MAIL \"To: a\\@b\\n\\nx\"; close MAIL'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d 57019 R3] ruby open '|sendmail' (no parens) is a send",
+      "cmd": "ruby -e 'open \"|sendmail -t\", \"w\" do |f| f.puts \"x\" end'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d 57019 R4] ruby spawn without parens is a send",
+      "cmd": "ruby -e 'spawn \"sendmail -t < m.txt\"'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d 57019 N1] perl open a file for reading, no mailer is not a send",
+      "cmd": "perl -e 'open my $fh, \"<\", \"log.txt\" or die; print while <$fh>'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d 57019 N2] perl open no parens, pipe FROM ls (no mailer) is not a send",
+      "cmd": "perl -e 'open my $fh, \"-|\", \"ls\"; print <$fh>'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d 57019 N3] ruby spawn without a mailer is not a send",
+      "cmd": "ruby -e 'spawn \"ls -la\"'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d 57019 N4] python spawn word + mailer name stays python's rule is not a send",
+      "cmd": "python3 -c 'print(\"spawn\", \"sendmail\")'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d 57019 N5] perl read a sendmail log (no spawn, no open pipe) is not a send",
+      "cmd": "perl -ne 'print if /sendmail/' /var/log/mail.log",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d didi Q16] perl modern open my $fh, '|-', sendmail (no parens) is a send",
+      "cmd": "perl -e 'open my $fh, \"|-\", \"/usr/sbin/sendmail\", \"-t\" or die; print $fh \"To: a\\@b\\n\\nx\"; close $fh'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi Q17] perl open(my $fh, '|-', 'sendmail') single quotes in heredoc is a send",
+      "cmd": "perl <<'E'\nopen(my $fh, '|-', '/usr/sbin/sendmail', '-t') or die;\nprint $fh \"To: a\\@b\\n\\nx\";\nE",
+      "expected": true
     }
   ]
 }
