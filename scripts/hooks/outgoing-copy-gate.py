@@ -148,8 +148,20 @@ _CODE_EXECISH = re.compile(
 _CODE_SENDER_LIT = re.compile(r"sendmail|msmtp|swaks|send\.py", re.I)
 
 
+# A RESEND MAIL POST WRITTEN AS CODE (card 5768a25d, didi 55349): the host and an `/emails` path
+# named anywhere in the code text are a send, matched on the RAW text (the URL is a string literal;
+# the bc98d6d5 blanking would erase it). Full note and the named cost: resendMailInCode in
+# email-send-gate.mjs. `/emails/receiving` (the inbound-mail read) is skipped per occurrence.
+_RESEND_HOST_IN_CODE = re.compile(r"api\.resend\.com(?![\w-])", re.I)
+_RESEND_MAIL_PATH_IN_CODE = re.compile(r"/emails(?!/receiving(?![\w-]))(?![\w-])", re.I)
+
+
+def _resend_mail_in_code(code: str) -> bool:
+    return bool(_RESEND_HOST_IN_CODE.search(code) and _RESEND_MAIL_PATH_IN_CODE.search(code))
+
+
 def _code_string_sends(code: str) -> bool:
-    if _CODE_SEND.search(code) or _CODE_SEND_MODULE.search(code):
+    if _CODE_SEND.search(code) or _CODE_SEND_MODULE.search(code) or _resend_mail_in_code(code):
         return True
     return bool(_CODE_EXECISH.search(code) and _CODE_SENDER_LIT.search(code))
 # Token-ELEJERE horgonyzott cel-minta: egy URL-argumentum vagy csupasz
@@ -952,7 +964,7 @@ _HEREDOC_SENDER_ARGV = re.compile(r"""['"](?:[^'"\s]*/)?(?:sendmail|msmtp|swaks|
 
 
 def _heredoc_body_sends(body: str) -> bool:
-    if _CODE_SEND.search(body) or _CODE_SEND_MODULE.search(body):
+    if _CODE_SEND.search(body) or _CODE_SEND_MODULE.search(body) or _resend_mail_in_code(body):
         return True
     return bool(_CODE_EXECISH.search(body) and _HEREDOC_SENDER_ARGV.search(body))
 
@@ -1011,7 +1023,7 @@ def _python_body_sends(body: str, quoted: bool) -> bool:
     # raw text lexes to other strings than Python sees: `s = "\\\"; import resend; ...`
     # reads as one literal here and as a closed literal plus a real send to Python.
     # An unquoted body is judged whole. Twin: pythonBodySends.
-    if not quoted:
+    if not quoted or _resend_mail_in_code(body):  # the URL is judged on the raw body (5768a25d)
         return _heredoc_body_sends(body)
     code = _python_code_text(body)
     return _heredoc_body_sends(body if code is None else code)

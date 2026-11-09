@@ -241,8 +241,23 @@ const CODE_SEND_MODULE = new RegExp(
   // The same class on the Graph sender (export sendMail): renamed on import, or a string key.
   String.raw`|\bsendMail\s+as\b|\[\s*['"]sendMail['"]\s*\]`,
 )
+// A RESEND MAIL POST WRITTEN AS CODE (card 5768a25d, didi 55349): `requests.post("https://api.resend.com/emails", ...)`
+// or urllib's Request on the same URL read as "not a send" in both twins, because the Resend target was looked
+// for only as a curl/wget token and the code patterns knew the SDK call, smtplib and sendMail, not the URL.
+// In code, the host and an `/emails` path named anywhere in the text are a send: the path may be glued on
+// later (`BASE + "/emails"`), and the HTTP method is not readable from text. Matched on the RAW text, never
+// on the string-blanked Python body (bc98d6d5): the URL lives in a string literal, and blanking would erase it.
+// One path is not a send: `/emails/receiving` is the inbound-mail read (two marveen reads in the 7-day corpus).
+// It is skipped per occurrence, so the same text with a real `/emails` POST still matches; any other path
+// under /emails (`/emails/batch` is a send) matches.
+// NAMED COST: a read of a sent mail (`GET /emails/<id>`) and a script that merely writes this URL into a file
+// or a message are denied too. Twin: _resend_mail_in_code in hooks/outgoing-copy-gate.py.
+const RESEND_HOST_IN_CODE = /api\.resend\.com(?![\w-])/i
+const RESEND_MAIL_PATH_IN_CODE = /\/emails(?!\/receiving(?![\w-]))(?![\w-])/i
+const resendMailInCode = (code) => RESEND_HOST_IN_CODE.test(code) && RESEND_MAIL_PATH_IN_CODE.test(code)
 const codeStringSends = (code) =>
-  CODE_SEND.test(code) || CODE_SEND_MODULE.test(code) || (CODE_EXECISH.test(code) && CODE_SENDER_LIT.test(code))
+  CODE_SEND.test(code) || CODE_SEND_MODULE.test(code) || resendMailInCode(code) ||
+  (CODE_EXECISH.test(code) && CODE_SENDER_LIT.test(code))
 
 // Unquoted newline / backtick / `$(` become segment separators; quoted text is
 // untouched (it is content). Tracks quote state by hand -- no shell involved.
@@ -596,7 +611,8 @@ export const SCRIPT_FILE_WAY_OUT =
 // follow-up to #1855.
 const HEREDOC_SENDER_ARGV = /['"](?:[^'"\s]*\/)?(?:sendmail|msmtp|swaks|send\.py)(?=['"\s])/
 const heredocBodySends = (body) =>
-  CODE_SEND.test(body) || CODE_SEND_MODULE.test(body) || (CODE_EXECISH.test(body) && HEREDOC_SENDER_ARGV.test(body))
+  CODE_SEND.test(body) || CODE_SEND_MODULE.test(body) || resendMailInCode(body) ||
+  (CODE_EXECISH.test(body) && HEREDOC_SENDER_ARGV.test(body))
 // A PYTHON BODY IS JUDGED ON ITS CODE, NOT ON ITS STRINGS (card bc98d6d5). All 34 denials that
 // 6525aba3 A2 added over 20 694 real commands (didi, 7 days) were Python patch scripts whose
 // send word sat in a string literal (TS source being written), never in a call. For a body
@@ -647,7 +663,7 @@ export function pythonCodeText(body) {
 // Under <<X the shell first halves backslashes (and expands $, `), so the raw text lexes to
 // other strings than Python sees. An unquoted body is judged whole. Twin: _python_body_sends.
 const pythonBodySends = (body, quoted) => // quoted must be true to blank: a missing flag judges whole
-  heredocBodySends(quoted ? pythonCodeText(body) ?? body : body)
+  resendMailInCode(body) || heredocBodySends(quoted ? pythonCodeText(body) ?? body : body) // the URL: raw (5768a25d)
 // WHO READS THE HEREDOC (didi's K1, 6525aba3 50742; N1/N2, 50772). The opener line used to
 // be matched as a whole, so ANY interpreter word before the << made the body a program: a
 // PATH entry (`export PATH=/opt/homebrew/opt/node@22/bin:$PATH && git commit -F - <<`), an
