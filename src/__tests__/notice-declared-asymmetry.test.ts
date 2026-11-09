@@ -44,8 +44,11 @@ describe('beagyazott parancs = kimondott aszimmetria', () => {
     // KONTROLL eloszor: a vago egyaltalan lat-e fuggvenyt, es megtalalja-e a parancsokat.
     expect(bodies.length).toBeGreaterThan(20)
     const withCmd = bodies.filter(b => b.body.includes('python3 -c'))
-    expect(withCmd.length).toBeGreaterThanOrEqual(4)   // a negy ismert ertesites, vagy tobb
-    const missing = withCmd.filter(b => !b.body.includes('ASYMMETRY_NOTE')).map(b => b.name)
+    // Card 2e78cf63: a wake nem agyaz be python3-at, a `my-open-cards.sh` hivasa ugyanaz a parancs-alak.
+    const withScript = bodies.filter(b => b.body.includes('my-open-cards.sh'))
+    expect(withScript.map(b => b.name)).toContain('buildWakeMessage')
+    expect(withCmd.length).toBeGreaterThanOrEqual(3)   // a harom beagyazott python3 -c, vagy tobb
+    const missing = [...withCmd, ...withScript].filter(b => !b.body.includes('ASYMMETRY_NOTE')).map(b => b.name)
     expect(missing).toEqual([])
   })
 
@@ -75,7 +78,8 @@ describe('beagyazott parancs = kimondott aszimmetria', () => {
       buildPullNotice('didi', 30, items as never, 0, []),
     ]
     for (const o of outs) {
-      expect(o).toContain('python3 -c')
+      // The wake's command is the script (card 2e78cf63); the other two still embed python3.
+      expect(o.includes('python3 -c') || o.includes('my-open-cards.sh')).toBe(true)
       expect(o).toContain(ASYMMETRY_NOTE)
     }
   })

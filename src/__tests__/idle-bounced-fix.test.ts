@@ -104,10 +104,15 @@ describe('the wake names a bounced fix before any new card (1affb872)', () => {
     expect(msg).not.toContain('tetelt nem tudtam megnevezni')
   })
   // didi 49379 I8: the bounced block is capped like the other blocks, the header keeps the full count.
-  it('six bounced cards: the header says 6, five are listed', () => {
+  // Card 2e78cf63: the wake is capped in characters (WAKE_MAX_CHARS), so the block is filled into what the fixed
+  // parts leave: the header keeps the full count, at most five are listed, the rest is counted in one line.
+  it('six bounced cards: the header says 6, at most five are listed (as many as the character cap leaves), the rest counted', () => {
     const six = ['bnc11111', 'bnc22222', 'bnc33333', 'bnc44444', 'bnc55555', 'bnc66666'].map((id) => card(id, 'testing'))
     const msg = buildWakeMessage('dexter', 13, 6, six, NOW, 'assigned_open_cards', new Set(six.map((c) => c.id)))
     expect(msg).toContain('VISSZADOBOTT JAVITAS (6)')
-    expect(listed(msg)).toHaveLength(5)
+    expect(listed(msg).length).toBeGreaterThanOrEqual(1)
+    expect(listed(msg).length).toBeLessThanOrEqual(5)
+    expect(listed(msg)).toEqual(['bnc11111', 'bnc22222', 'bnc33333', 'bnc44444', 'bnc55555', 'bnc66666'].slice(0, listed(msg).length))
+    expect(msg).toMatch(new RegExp(`^\\+${6 - listed(msg).length} tovabbi a tablan$`, 'm'))
   })
 })

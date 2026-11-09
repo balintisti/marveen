@@ -1179,7 +1179,8 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
     const msg = buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW, 'assigned_open_cards')
     expect(msg).toMatch(/MERVE \d{2}:\d{2}:\d{2}-kor/)
     expect(msg).toContain('PILLANATFELVETEL')
-    expect(msg).toMatch(/nem az ora avultatja/)
+    // Card 2e78cf63: the long essay is gone, the claim stays in one clause.
+    expect(msg).toMatch(/a szam masok lepesetol avul/)
   })
 
   // TILOS CSAK BELYEGEZNI ES MEGALLNI (marveen, a kartya szukitese). A belyeg a DARABSZAMRA
@@ -1251,7 +1252,7 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
     // olvasodott, mintha nem is adna at parancsot. A tulajdonsag, amit allitok, az, hogy VAN
     // futtathato ujramero sor -- nem az, hogy melyik vegpontot hasznalja.
     const cmdOf = (msg: string) =>
-      msg.split('\n').filter((l) => /^(curl |python3 |\| python3 )/.test(l.trim()) || l.includes('| python3')).join('\n')
+      msg.split('\n').filter((l) => /^(curl |python3 |\| python3 )/.test(l.trim()) || l.includes('| python3') || l.includes('my-open-cards.sh')).join('\n')
 
     // A NEGYEDIK EPITO IS BENNE VAN, es jarvis kimondta, miert szamit: az elso alakom EPP AZON A
     // HARMON ciklizott, amelyiken a `${sender}` defektus SOHA nem volt. A valodi elofordulas a
@@ -1275,12 +1276,9 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
     }
 
     // AGENS-HATOKORU szamok: a parancs NEVEZZE MEG az agenst.
-    for (const msg of [
-      buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW, 'assigned_open_cards'),
-      buildNoWorkNotice('jarvis', 20, NOW),
-    ]) {
-      expect(cmdOf(msg)).toContain("=='jarvis'")
-    }
+    expect(cmdOf(buildNoWorkNotice('jarvis', 20, NOW))).toContain("=='jarvis'")
+    // Card 2e78cf63: the wake's re-measure is the script, and it is called WITH the agent's name.
+    expect(cmdOf(buildWakeMessage('jarvis', 20, 3, [it3('aaaaaaaa1')], NOW, 'assigned_open_cards'))).toMatch(/my-open-cards\.sh jarvis$/m)
 
     // A PULL szama GAZDATLAN kartyakrol szol -- a lekerdezese az assignee HIANYARA szur,
     // es NEM nevezhet meg agenst. Ez KONTROLL: megkulonbozteti a ket hatokort.

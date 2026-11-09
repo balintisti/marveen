@@ -20,6 +20,9 @@
 // config-gap reason instead, so the caller can nag about the missing declaration
 // without ever claiming the agent is slacking.
 
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 export type WorkCheckKind =
   // Cards assigned to this agent that are not finished. The default for a worker.
   | 'assigned_open_cards'
@@ -2232,6 +2235,19 @@ export function hasOpenFinding(items: readonly { status?: string }[]): boolean {
   return items.some((c) => c.status === 'testing')
 }
 
+/** Hard ceiling on one [tetlen-or] wake, in characters (card 2e78cf63, marveen comment 56900). The fixed
+ *  parts alone are ~730 (measured, 2026-11-09), so the item lists get what is left (2-3 cards at 950).
+ *  marveen's first figure was 500, then 650; the operative pieces he asked to keep (facts line, re-measure,
+ *  per-kind declaration, `none` warning, standing instruction) do not fit under ~800, and at 800 the wake
+ *  names NO card, which is the one thing that moved agents (measured 2026-08-21). Pinned in
+ *  idle-wake-template-length.test.ts. */
+export const WAKE_MAX_CHARS = 1100
+/** A card title in a wake line, in characters (was 60). */
+const WAKE_TITLE_MAX = 30
+/** The install root, from this file's location (dist/ or src/ is one level below it): the wake names the
+ *  re-measure script by an ABSOLUTE path, because an agent's cwd is its own folder. */
+const INSTALL_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+
 /** The wake an agent actually acts on.
  *
  *  Measured 2026-08-21: a wake that says "you have work" is the version that does not
@@ -2268,158 +2284,115 @@ export function buildWakeMessage(
   const { bounced, work, floor, review } = splitWakeItems(kind, items, bouncedIds)
 
   const line = (c: { id: string; title?: string | null; priority?: string | null; status?: string }) =>
-    `  ${c.id.slice(0, 8)}  ${(c.status ?? '?').padEnd(11)} ${(c.priority ?? 'normal').padEnd(6)}  ${(c.title ?? '').slice(0, 60)}`
+    `  ${c.id.slice(0, 8)}  ${(c.status ?? '?').padEnd(11)} ${(c.priority ?? 'normal').padEnd(6)}  ${(c.title ?? '').slice(0, WAKE_TITLE_MAX)}`
 
-  const out = [
-    `[tetlen-or] ${minutes} perce allsz ureses prompton (MERVE ${stampOf(nowMs)}-kor), es`,
-    `${workCount} tetel var rád.`,
-    '',
-    'EZ NEM SZEMREHANYAS, ES NEM A TE HIBAD. Egy agens nem tud maganak uj fordulot inditani:',
-    'a szandek a fordulo belsejeben el, es a fordulo vegen meghal vele. Az egyetlen dolog, ami',
-    'uj fordulot indit, egy beerkezo uzenet -- ezert kapod ezt. Isti NEM lett ertesitve.',
+  // CARD 2e78cf63 (marveen, comment 56870 + 56900): this wake went out 195 times a week at an average
+  // of 2 692 characters, ~12% of the fleet's weekly message volume. It is now capped at WAKE_MAX_CHARS
+  // BY CONSTRUCTION: the fixed parts below (what arrived, whose rule decides, how to re-measure, which
+  // set the line counts, what to do with it) are written first, and the item lists are filled into what
+  // is left, whole lines only. The prose that explained WHY (the "not your fault" paragraph, the snapshot
+  // essay, the per-kind history) lives in rulebook/tetlen-or-ertesites.md; none of it was an operative step.
+  // The re-measure is a SCRIPT call, not a ~320 character curl + python3 one-liner: the one-liner read the
+  // token from a RELATIVE path that only exists when the cwd is the install root.
+  const head = [
+    `[tetlen-or] ${minutes} perce allsz ureses prompton (MERVE ${stampOf(nowMs)}-kor), es ${workCount} tetel var rád. Isti NEM lett ertesitve.`,
     // FACTS, NOT ORDERS (card c2246921, marveen 40484 decision A). This row arrives from `system`,
     // which is not a known agent, so the router wraps it as <untrusted> and a fresh session is
-    // RIGHT to refuse an instruction inside it (jarvis 2026-09-28: the wake did not move him).
-    // A fact it can re-measure on the board still moves it (friday 41330). So the text states what
-    // is true and whose rule applies; the agent's own standing rule does the asking.
-    'Ez az uzenet TENYEKET allit (szamok, kartya-id-k), utasitast nem hordoz: mindet a tablarol',
-    'vissza tudod merni. Hogy mit kezdesz veluk, azt a SAJAT allando szabalyaid dontik el.',
-    '',
+    // RIGHT to refuse an instruction inside it. A fact it can re-measure on the board still moves it.
+    'Ez az uzenet TENYEKET allit (szamok, kartya-id-k), utasitast nem hordoz: a SAJAT allando szabalyaid dontik el.',
   ]
+
+  // WHICH SET THE RE-MEASURE LINE COUNTS, PER DECLARED KIND (cards 7edc5839, faa6003a, fb4e6622). Written per
+  // kind and never as one ternary: an unknown FUTURE kind gets the narrow, TRUE sentence (it names the kind it
+  // received, and says the set differs), never a claim of equality.
+  const declaration = isReviewQueue
+    ? 'A te deklaraciod `testing_without_my_comment`: a sor csak a NEVEDEN allo nyitott kartyakat adja: MASIK halmaz.'
+    : kind === 'assigned_open_cards'
+      // The floor clause (fb4e6622): only this kind counts expired-floor waiting cards.
+      ? 'A te deklaraciod `assigned_open_cards`: ugyanez a halmaz, a LEJART padloju `waiting` kartyakat kiveve.'
+      : kind === 'waiting_on_me'
+        ? 'A te deklaraciod `waiting_on_me`: a sor kihagyja a `waiting` oszlopot, MASIK halmaz.'
+        : `A te deklaraciod \`${kind}\`: a sor NEM ezt reprodukalja, MASIK halmaz.`
+  const measure = [
+    `PILLANATFELVETEL (a szam masok lepesetol avul). Ujrameres: bash ${INSTALL_ROOT}/scripts/my-open-cards.sh ${agent}`,
+    `${ASYMMETRY_NOTE} ${declaration}`,
+  ]
+
+  const closing = [
+    work.length
+      ? 'A legfelso FELVEHETO tetel a lista elso sora. Ha egyik sem a tied, egy soros indoklas a helye --'
+      // Only expired floors on the list: the generic fallback would call them "valaszra varo ellenorzes".
+      : floor.length
+        ? 'A legfelso PADLO-LEJARAT kartya feltetele ujramerendo. Ha egyik sem a tied, egy soros indoklas a helye --'
+        : isReviewQueue
+          ? 'Nem tudtam megnevezni felveheto ellenorzest. Ha a szamlalod megsem nulla, egy soros indoklas a helye --'
+          // SCOPED ON PURPOSE (card 5a499a19): `isMine` counts only cards with this agent's name, so
+          // "no work" would be a statement about the ASSIGNED column read as one about the board.
+          : 'Nincs A TE NEVEDEN felveheto munka; a GAZDATLAN `planned` kartyak nincsenek a szamban (pull-lista). Ha egyik ellenorzes sem a tied, egy soros indoklas a helye --',
+    // `none` silences this guard, the agent's only source of a new turn (cards 0e36eab0, 82c53a51): the
+    // answer belongs on the card. The third state (card 6ecd85e5): a standing instruction from the
+    // coordinator, in a shape the standstill parser reads. The closing-line test reads the last three lines.
+    'a kartya vagy marveen. A workcheck.json `none` erteke elnemitja ezt az ort (miert: rulebook/tetlen-or-ertesites.md).',
+    `ALLO UTASITAS alatt (HARMADIK eset): ${STANDSTILL_EXAMPLE}`,
+  ]
+
+  // The item sections, in the order the reader acts on them. Each is { header, lines }.
+  type Section = { header: string; lines: string[] }
+  const sections: Section[] = []
   if (bounced.length) {
-    out.push(
-      `VISSZADOBOTT JAVITAS (${bounced.length}) -- a NEVEDEN allo kartya, amin egy ellenorzo NYITOTT TETEL verdiktet hagyott.`,
-      'Isti szabalya (TG 8509): a visszadobott javitas MEGELOZI az uj kartya felvetelet.',
-      ...bounced.slice(0, 5).map(line),
-      ...(work.length || floor.length ? [''] : []),
-    )
+    sections.push({
+      header: `VISSZADOBOTT JAVITAS (${bounced.length}) -- Isti szabalya (TG 8509): a visszadobott javitas MEGELOZI az uj kartya felvetelet.`,
+      lines: bounced.slice(0, 5).map(line),
+    })
   }
   if (work.length) {
-    out.push(
-      isReviewQueue
-        ? `FELVEHETO ELLENORZES (${work.length}) -- ezek varnak a te valaszodra:`
-        : `FELVEHETO MUNKA (${work.length}) -- ezekbe bele lehet kezdeni:`,
-      ...work.slice(0, 5).map(line),
-    )
+    sections.push({
+      header: isReviewQueue ? `FELVEHETO ELLENORZES (${work.length}):` : `FELVEHETO MUNKA (${work.length}):`,
+      lines: work.slice(0, 5).map(line),
+    })
   }
   if (floor.length) {
     const day = (t: number | null | undefined) =>
       t == null ? '?' : new Date(t < 1e11 ? t * 1000 : t).toISOString().slice(0, 10)
-    out.push(
-      ...(work.length ? [''] : []),
-      `PADLO-LEJARAT (${floor.length}) -- waiting kartya, aminek a due_date-je ELMULT. NEM munka:`,
-      'a feladat a feltetel UJRAMERESE, utana vagy tovabbviszed, vagy UJ padlot irsz (due_date) indokkal:',
-      ...floor.slice(0, 5).map((c) => `${line(c)}  (padlo ${day(c.due_date)})`),
-    )
+    sections.push({
+      header: `PADLO-LEJARAT (${floor.length}) -- waiting, a due_date ELMULT, nem munka:`,
+      lines: floor.slice(0, 5).map((c) => `${line(c)}  (padlo ${day(c.due_date)})`),
+    })
   }
   if (review.length) {
-    out.push(
-      '',
-      isReviewQueue
-        ? `SAJAT KARTYAID (${review.length}) -- a NEVEDEN allo nyitott munka, nem a testing oszlopbol:`
-        : `VALASZRA VARO ELLENORZES (${review.length}) -- ezeken egy ellenorzo szolt utoljara, nem munka:`,
-      ...review.slice(0, 3).map(line),
-    )
+    sections.push({
+      header: isReviewQueue
+        ? `SAJAT KARTYAID (${review.length}) -- a NEVEDEN allo nyitott munka:`
+        : `VALASZRA VARO ELLENORZES (${review.length}) -- nem munka:`,
+      lines: review.slice(0, 3).map(line),
+    })
   }
-  if (!bounced.length && !work.length && !review.length && !floor.length) {
-    out.push('A szamlalod nem nulla, de tetelt nem tudtam megnevezni -- a tabla a forras.')
+
+  // Fill what is left, whole lines only. A section is opened only when its header AND its first line fit;
+  // what did not fit is counted in one closing line instead of being cut mid-line.
+  // Not indented: an indented line is an item line (the tests and the readers count those).
+  const MORE = (n: number) => `+${n} tovabbi a tablan`
+  const fixed = [...head, ...measure, ...closing]
+  let left = WAKE_MAX_CHARS - fixed.join('\n').length - 2 /* the two joins around the list block */ - MORE(99).length - 1
+  const listed: string[] = []
+  let shown = 0
+  const total = bounced.length + work.length + floor.length + review.length
+  for (const sec of sections) {
+    const first = sec.lines[0]
+    if (first === undefined || left < sec.header.length + 1 + first.length + 1) continue
+    listed.push(sec.header)
+    left -= sec.header.length + 1
+    for (const l of sec.lines) {
+      if (left < l.length + 1) break
+      listed.push(l)
+      left -= l.length + 1
+      shown++
+    }
   }
-  // THE STAMP ABOVE FIXES THE DURATION AND NOT THE COUNT, AND THE MESSAGE HAS TO SAY WHICH.
-  // A duration decays from the CLOCK, so a stamp repairs it completely -- the reader subtracts.
-  // A count decays because ANOTHER AGENT ACTED, and no stamp can repair that: it only says the
-  // number is old. Measured 2026-09-05, and the measurer falsified it himself -- a pull notice
-  // said "27 GAZDATLAN kartya var", he took one off that list four minutes later, and it was 26.
-  // A stamped-but-stale count reads as MORE authoritative than an unstamped one, so stamping and
-  // stopping would make this class look repaired while leaving it exactly as wrong (card 7edc5839).
-  out.push(
-    '',
-    `A ${workCount} es a fenti lista PILLANATFELVETEL. Az ora-resze fent megbelyegezve; a SZAMOT`,
-    'viszont nem az ora avultatja, hanem egy masik szereplo -- egy statuszvaltas vagy egy foglalas.',
-    'Ezert a meres a foglalas (`assignee` + `in_progress`) UTAN megbizhato, elotte nem. A tabla ujrakerdezese:',
-    `curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" http://localhost:3420/api/kanban \\`,
-    `| python3 -c "import json,sys;print([(c['id'][:8],c['status']) for c in json.load(sys.stdin)`
-      + ` if c.get('assignee')=='${agent}' and c.get('status') not in ('done','waiting') and not c.get('archived_at')])"`,
-    '',
-    // UGYANAZ A KIND-FUGGES, MINT A NO-WORK ERTESITESBEN -- es itt MERVE: ez a fuggveny ISMERI
-    // a kind-ot (`isReviewQueue` fentebb dönti el, mi szamit felvehetonek), de a fenti parancs
-    // BAJT-AZONOS a ket kind kozott. Megmerve 2026-09-06: `assigned_open_cards` es
-    // `testing_without_my_comment` mellett a parancs-sor azonos, mikozben az uzenet TOBBI resze
-    // elter -- tehat a fuggveny hasznalja a kind-ot, csak epp itt nem.
-    `${ASYMMETRY_NOTE} a jovobeli \`due_date\`-et, es a \`workcheck.json\` \`kind\`-jat.`,
-    // A CIMKE KIND-ENKENT IRODOTT, ES A KOVETKEZO KIND SAJAT AG NELKUL ERKEZETT (kartya faa6003a).
-    // 2026-09-06-an (5f36f85c) ez TELJES volt: harom kind letezett, es a fenti komment is "a HAROM
-    // kozul csak az EGYIKET"-et mond. 2026-09-11-en a `waiting_on_me` bekerult (b2516432, "a
-    // koordinator belep a populacioba"), es a cimke nem kovette. Ot napig minden `waiting_on_me`
-    // agens KET hamis allitast olvasott magarol: hogy a deklaracioja `assigned_open_cards`, es hogy
-    // a fenti sor "ugyanazt a halmazt kerdezi" -- mikozben a ketto DISZJUNKT (merve 2026-09-17: a
-    // felajanlott top5-bol 0 szerepelt a re-query 305-os listajaban).
-    // EZERT NEM TERNARY TOBBE: az ALAPERTELMEZES a szukszavu, IGAZ alak, es CSAK az
-    // `assigned_open_cards` allit kozel-azonossagot. Egy otodik kind igy NEMA tud maradni, de
-    // HAMISAT nem tud allitani -- ez a kulonbseg a hianyzo es a megteveszto valasz kozott.
-    ...(isReviewQueue
-      ? [
-          'A te deklaraciod `testing_without_my_comment`, tehat en a `testing` oszlopot szamoltam, amire',
-          'meg nem szoltal hozza, VAGY ami a legutobbi kommented OTA mozdult (koordinator-komment es jarvis-cenzus nem szamit),',
-          'ES a NEVEDEN allo nyitott kartyaidat. A fenti sor csak az utobbit adja: MASIK halmaz.',
-        ]
-      : kind === 'assigned_open_cards'
-        ? [
-            'A te deklaraciod `assigned_open_cards`, tehat ez a sor ugyanazt a halmazt kerdezi, amit szamoltam --',
-            // The floor clause from HEAD (fb4e6622): only this kind counts expired-floor waiting cards.
-            'a fenti ketto kivetelevel, ES a LEJART padloju `waiting` kartyakat, amiket en beszamitok, a sor nem.',
-          ]
-        : kind === 'waiting_on_me'
-          ? [
-              'A te deklaraciod `waiting_on_me`, es a fenti sor NEM ezt reprodukalja: kihagyja a',
-              '`waiting` oszlopot, tehat a fent felajanlott tetelek NEM lesznek benne. MASIK halmaz.',
-            ]
-          : [
-              // EZ AZ AG SZANDEKOSAN SZUKSZAVU (didi merte 2026-09-17, faa6003a k6). Az elozo
-              // alakja a `waiting` oszlopot nevezte meg INDOKKENT -- ami a `waiting_on_me`-re igaz,
-              // egy JOVOBELI otodik kindre viszont nem: egy `planned` tetelt a re-query
-              // (`status not in ('done','waiting')`) BELEVENNE, tehat a mondat masodik fele
-              // hamis lenne, a megnyugtato iranyba. A fenti komment ("hamisat nem tud allitani")
-              // a CIMKERE igaz volt, erre a MONDATRA nem -- ugyanaz az alak, egy reteggel lejjebb.
-              // Ezert itt csak az all, ami MINDEN kindre igaz: a sor nem ezt a deklaraciot
-              // reprodukalja. Hogy MIT hagy ki, azt a kind sajat aga mondja meg, ha van.
-              `A te deklaraciod \`${kind}\`, es a fenti sor NEM ezt reprodukalja. MASIK halmaz.`,
-            ]),
-  )
-  out.push(
-    '',
-    work.length
-      ? 'A legfelso FELVEHETO tetel a lista elso sora. Ha egyik sem a tied, egy soros indoklas a helye --'
-      // Only expired floors on the list: the fallback below would call them "valaszra varo
-      // ellenorzes", which is the wrong action for the wrong column.
-      : floor.length
-        ? 'A legfelso PADLO-LEJARAT kartya feltetele ujramerendo. Ha egyik sem a tied, egy soros indoklas a helye --'
-      : isReviewQueue
-        ? 'Nem tudtam megnevezni felveheto ellenorzest. Ha a szamlalod megsem nulla, egy soros indoklas a helye --'
-        : // SCOPED ON PURPOSE, and the old wording was not (card 5a499a19). `isMine` counts
-          // only cards with this agent's name on them, so "nincs felveheto munkad" was a
-          // statement about the ASSIGNED column read as a statement about the board.
-          // Measured 2026-09-04: 52 unowned `planned` delta-crm cards were invisible to
-          // this count, and rule 3 of the fleet page calls exactly those the pull list.
-          // An agent who believes there is no work STOPS -- the one failure this guard
-          // exists to prevent, and the same shape as telling a reviewer she has nothing
-          // while 40 items wait. The fix is not to list everything: it is that the guard
-          // must not say "no work" when it means "none assigned to you".
-          'Nincs A TE NEVEDEN felveheto munka, csak valaszra varo ellenorzes. A GAZDATLAN `planned` kartyak\n' +
-            'NEM szerepelnek ebben a szamban -- ha egyik ellenorzes sem a tied, azok a pull-listad. Ha meg azok\n' +
-            'sem, egy soros indoklas a helye --',
-    // The old close said the workcheck.json "lies" and must be fixed (dexter, 2026-09-14,
-    // card 0e36eab0 comment 15838). The only quiet value an agent can write there is
-    // `none`, and `none` silences this guard -- the one thing that gives a parked agent a
-    // new turn. So the old line steered a busy agent towards muting its own wake-up.
-    // The declaration is usually RIGHT when this fires; the answer belongs on the card.
-    'a kartya vagy marveen. A workcheck.json `none` erteke elnemitja ezt az ort,\n' +
-      // The third state (card 6ecd85e5): the declaration is right AND the agent stands on purpose,
-      // under the coordinator's standing instruction. Named, so it is not read as one of the two above.
-      // Two lines, not three: the closing-line test reads the last three, which must keep the `none` warning.
-      'es vele az egyetlen ebresztesedet. Ha ALLO UTASITAS alatt vagy (a koordinator idoablak-korlatja), az a\n' +
-      `HARMADIK eset: a szandekos leallast a koordinator allitja be, lejaro bejegyzessel, ${STANDSTILL_EXAMPLE}.`,
-  )
-  return out.join('\n')
+  if (!sections.length) listed.push('A szamlalod nem nulla, de tetelt nem tudtam megnevezni -- a tabla a forras.')
+  else if (total > shown) listed.push(MORE(total - shown))
+
+  return [...head, ...listed, ...measure, ...closing].join('\n')
 }
 
 /** One human-facing alert raised during a single sweep, before it is sent. */
