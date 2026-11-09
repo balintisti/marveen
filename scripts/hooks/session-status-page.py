@@ -52,6 +52,9 @@ MSGS_BUDGET = 430
 # full list is one call away (the pointer line names it).
 CARDS_MAX = 6
 MSGS_MAX = 3
+# The quoted verdict under an open-verdict card (was 100 characters). With 100 a card took ~180 characters and
+# CARDS_BUDGET fitted only two of the handed-back cards (didi, card 49ecc9fc L2); at 60 it takes ~140 and three fit.
+VERDICT_MAX = 60
 MSG_HEAD = 80
 MSG_WINDOW_S = 24 * 3600
 TIME_BUDGET_S = 6.0      # the WHOLE dashboard part, enforced by one timer (didi 3af2d815 L2: a response
@@ -170,7 +173,7 @@ def cards_section(api, agent, gaps):
         rank = 0 if c["status"] == "in_progress" else 1 if is_open else 2 + OPEN_STATUSES.index(c["status"])
         line = f"{'!' if is_open else ' '} {c['id'][:8]} {c['status']:<11} {one_line(c.get('title'), 50)}"
         if is_open:
-            line += f"\n    {one_line(verdict, 100)}"
+            line += f"\n    {one_line(verdict, VERDICT_MAX)}"
         rows.append((rank, line))
     rows.sort(key=lambda r: r[0])
     # Rank 0 = in_progress, 1 = open verdict; everything else is left out and only counted.

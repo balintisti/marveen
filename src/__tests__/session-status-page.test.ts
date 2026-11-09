@@ -219,6 +219,34 @@ describe('the start page is short (card 49ecc9fc, V5)', () => {
     expect(page.indexOf('i0000000')).toBeLessThan(page.indexOf('o0000000'))
   })
 
+  // Didi, verdict 56926 L2: an open-verdict card is two lines, and the budget must still name THREE of them.
+  it('three handed-back cards (open verdicts) are all named, with their verdict line', async () => {
+    const open = ids(3, 'o')
+    fake = {
+      cards: open.map((id) => card(id, 'testing')),
+      comments: Object.fromEntries(open.map((id) => [id, [{ content: `VERDIKT: NYITOTT TETEL | ${'q'.repeat(150)}` }]])),
+      messages: [],
+    }
+    const page = (await start('dexter')).page as string
+    expect(namedCards(page)).toBe(3)
+    expect(page).not.toContain('és még')
+    expect((page.match(/^ {4}VERDIKT: NYITOTT TETEL/gm) ?? []).length).toBe(3)
+  })
+
+  // Didi, verdict 56926 L1: the branch where the budget cuts AND cards were left out before it. Five open
+  // verdicts: the budget names four, the clip line counts the fifth, the five waiting cards come on top.
+  it('the budget cut and the left-out cards are ADDED in one pointer line', async () => {
+    const open = ids(5, 'o')
+    fake = {
+      cards: [...open.map((id) => card(id, 'testing')), ...ids(5, 'w').map((id) => card(id, 'waiting'))],
+      comments: Object.fromEntries(open.map((id) => [id, [{ content: `VERDIKT: NYITOTT TETEL | ${'q'.repeat(150)}` }]])),
+      messages: [],
+    }
+    const page = (await start('dexter')).page as string
+    expect(namedCards(page)).toBe(4)
+    expect(page).toContain('  ... és még 6 kártya (a lista levágva; teljes: GET /api/kanban?assignee=dexter)')
+  })
+
   it('five open messages: three are printed, the other two are counted', async () => {
     fake = { cards: [], comments: {}, messages: [], digest: { total: 5, unframed: 0, items: [item(5), item(4), item(3), item(2), item(1)] } }
     const page = (await start('dexter')).page as string
