@@ -2080,6 +2080,16 @@
       "name": "[5768a25d C8] CONTROL: an inbound read of one mail (/emails/receiving/<id>) is not a send",
       "cmd": "python3 -c 'import requests; requests.get(\"https://api.resend.com/emails/receiving/abc\")'",
       "expected": false
+    },
+    {
+      "name": "[5768a25d P9] a node heredoc body that fetches the Resend mail URL is a send (judged by the heredoc body rule, not the Python one)",
+      "cmd": "node - <<'E'\nfetch('https://api.resend.com/emails', { method: 'POST', body: '{}' })\nE",
+      "expected": true
+    },
+    {
+      "name": "[5768a25d P10] node -e fetch inside a bash heredoc body is a send",
+      "cmd": "bash <<'E'\nnode -e \"fetch('https://api.resend.com/emails',{method:'POST'})\"\nE",
+      "expected": true
     }
   ]
 }
