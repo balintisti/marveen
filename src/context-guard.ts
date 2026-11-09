@@ -1260,6 +1260,14 @@ export type RestartLossRow = {
  *  restart-loss-line.test.ts, so a reworded wake-up cannot silently start alarming. */
 const IDLE_SELF_WAKE = /^\[tetlen-or\] \d+ perce allsz /
 
+/** The guard's OWN message to an agent (resume directive, handoff request, restart wake): the
+ *  guard writes it and regenerates it, so a copy that died with the old pane is not something the
+ *  coordinator can act on (card 22d2288a). Measured 2026-11-09 over 7 days: of 631 restart notices
+ *  to the coordinator, 353 (56%) had ONLY such a row in the window and 37 had nothing, so 390 (62%)
+ *  carried no recoverable request. Matched on `from_agent = 'system'` AND the tag, like IDLE_SELF_WAKE:
+ *  a sender that merely quotes the tag is a real sender. */
+const OWN_GUARD_MESSAGE = /^\[CONTEXT-GUARD\]/
+
 /** `system` rows are NOT a class that regenerates: approvals, sentry and uptime edges and
  *  handoff failures are sent once. So a system row is listed like any other, with its tag. */
 function senderLabel(r: RestartLossRow): string {
@@ -1301,12 +1309,14 @@ function classifyRestartLoss(rows: RestartLossRow[], restartMs: number, windowMs
       && r.delivered_at >= sinceSec && r.delivered_at <= restartSec,
   )
   const isMootWake = (r: RestartLossRow) => r.from_agent === 'system' && IDLE_SELF_WAKE.test(r.head ?? '')
+  const isOwnGuard = (r: RestartLossRow) => r.from_agent === 'system' && OWN_GUARD_MESSAGE.test(r.head ?? '')
+  const deliveredOwnGuard = deliveredInWindow.filter(isOwnGuard)
   const deliveredMoot = deliveredInWindow.filter(isMootWake)
   const deliveredFromSenders = deliveredInWindow
-    .filter((r) => !isMootWake(r))
+    .filter((r) => !isMootWake(r) && !isOwnGuard(r))
     .sort((a, b) => (a.delivered_at as number) - (b.delivered_at as number))
 
-  return { sinceSec, restartSec, pending, failedInWindow, deliveredMoot, deliveredFromSenders }
+  return { sinceSec, restartSec, pending, failedInWindow, deliveredMoot, deliveredOwnGuard, deliveredFromSenders }
 }
 
 /** Does the restart notice to the coordinator have anything to ACT on? (card a85a9acd)
@@ -1399,15 +1409,19 @@ export function buildRestartLossLine(
   // true. So this is a CONSISTENCY change and not a correctness fix -- said plainly, because
   // the commit would otherwise claim to close a hole that was never open.
   const mins = Math.round(windowMs / 60_000)
-  const { restartSec, pending, failedInWindow, deliveredMoot, deliveredFromSenders } = classifyRestartLoss(rows, restartMs, windowMs)
+  const { restartSec, pending, failedInWindow, deliveredMoot, deliveredOwnGuard, deliveredFromSenders } = classifyRestartLoss(rows, restartMs, windowMs)
 
   const head = stamp ? ` MERVE ${stamp}-kor:` : ' MERVE:'
   if (pending.length === 0 && failedInWindow.length === 0 && deliveredFromSenders.length === 0) {
-    const mootNote = deliveredMoot.length > 0
-      ? ` (csak ${deliveredMoot.length} tetlen-or ebreszto a regi sessionnek, az uj sessionre targytalan)`
+    const mootParts = [
+      ...(deliveredMoot.length > 0 ? [`${deliveredMoot.length} tetlen-or ebreszto`] : []),
+      ...(deliveredOwnGuard.length > 0 ? [`${deliveredOwnGuard.length} sajat guard-uzenet`] : []),
+    ]
+    const mootNote = mootParts.length > 0
+      ? ` (csak ${mootParts.join(' es ')} a regi sessionnek, az uj sessionre targytalan)`
       : ''
     return `${head} pending 0 | failed a restart ${mins} perces ablakaban: 0`
-      + ` | delivered az ablakban: ${deliveredMoot.length}${mootNote} -- NINCS mit ujrakuldeni.`
+      + ` | delivered az ablakban: ${deliveredMoot.length + deliveredOwnGuard.length}${mootNote} -- NINCS mit ujrakuldeni.`
   }
   const parts: string[] = []
   if (deliveredFromSenders.length > 0) {
@@ -1421,7 +1435,8 @@ export function buildRestartLossLine(
       + ` -- a regi sessionbe BEINJEKTALODTAK, a feldolgozasuk ebbol NEM latszik.`
       + ` Triazs: van-e nyom a kezbesites UTAN (kimeno uzenet, kartya-komment, commit)?`
       + ` Ha nincs, es kerdes vagy engedely volt benne, az ujrakuldes a KULDO dontese`
-      + (deliveredMoot.length > 0 ? ` (plusz ${deliveredMoot.length} targytalan tetlen-or ebreszto)` : ''),
+      + (deliveredMoot.length > 0 ? ` (plusz ${deliveredMoot.length} targytalan tetlen-or ebreszto)` : '')
+      + (deliveredOwnGuard.length > 0 ? ` (plusz ${deliveredOwnGuard.length} targytalan sajat guard-uzenet)` : ''),
     )
   }
   if (failedInWindow.length > 0) {

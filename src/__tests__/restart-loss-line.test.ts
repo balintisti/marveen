@@ -158,6 +158,44 @@ describe('a restart-ertesites hordozza a sajat mereset', () => {
       expect(line).toContain('plusz 1 targytalan tetlen-or ebreszto')
     })
 
+    // Card 22d2288a. A guard sajat [CONTEXT-GUARD] uzenete (resume-direktiva, handoff-kerees) az
+    // ujrainditott agensnek: a guard irta es ujra eloallitja, a koordinator nem tud mit kezdeni vele.
+    // 7 napon at 631 ertesitesbol 390 (62%) ablakaban csak ez allt, vagy semmi.
+    const guardHead = '[CONTEXT-GUARD] Kerlek frissitsd a HANDOF'
+    it('a guard SAJAT uzenete targytalan: szamolva, nem listazva, egyedul nem riaszt', () => {
+      const line = buildRestartLossLine([dRow(700100, 'system', RESTART - 3 * 60_000, undefined, guardHead)], RESTART)
+      expect(line).toContain('NINCS mit ujrakuldeni')
+      expect(line).toContain('delivered az ablakban: 1')
+      expect(line).toContain('sajat guard-uzenet')
+      expect(line).not.toContain('700100')
+    })
+
+    it('guard-uzenet MELLETT a kuldoi sor riaszt, es mindketto benne van a sorban', () => {
+      const line = buildRestartLossLine([
+        dRow(700101, 'system', RESTART - 3 * 60_000, undefined, guardHead),
+        dRow(700102, 'mandark', RESTART - 4 * 60_000),
+      ], RESTART)
+      expect(line).toContain('delivered AZ ABLAKBAN: 1')
+      expect(line).toContain('700102<-mandark')
+      expect(line).not.toContain('700101')
+      expect(line).toContain('plusz 1 targytalan sajat guard-uzenet')
+    })
+
+    it('KONTROLL: az ugyanilyen cimkevel idezo MASIK kuldo (nem system) valodi sor', () => {
+      const line = buildRestartLossLine([dRow(700103, 'didi', RESTART - 3 * 60_000, undefined, guardHead)], RESTART)
+      expect(line).toContain('700103<-didi')
+      expect(line).not.toContain('NINCS mit ujrakuldeni')
+    })
+
+    it('KONTROLL: mas system-tag ([sentry]) tovabbra is riaszt a guard-uzenet mellett', () => {
+      const line = buildRestartLossLine([
+        dRow(700104, 'system', RESTART - 3 * 60_000, undefined, guardHead),
+        dRow(700105, 'system', RESTART - 4 * 60_000, undefined, '[sentry] 1 NEW unresolved issue(s):'),
+      ], RESTART)
+      expect(line).toContain('700105<-system[sentry]')
+      expect(line).not.toContain('700104')
+    })
+
     it('delivered_at NELKULI delivered sort nem szamol (az injektalas ideje ismeretlen)', () => {
       const line = buildRestartLossLine(
         [{ id: 700080, status: 'delivered', created_at: sec(RESTART - 60_000), delivered_at: null, from_agent: 'didi' }],

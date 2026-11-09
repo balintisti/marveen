@@ -70,6 +70,45 @@ describe('measureRestartLoss over the real queue: quiet rows (card a85a9acd)', (
   })
 })
 
+describe('measureRestartLoss over the real queue: the guard\'s own message (card 22d2288a)', () => {
+  beforeAll(() => { initDatabase(':memory:') })
+  const ownGuard = (to: string) => {
+    const m = createAgentMessage('system', to, '[CONTEXT-GUARD] Kerlek frissitsd a HANDOFF.md-t')
+    expect(markMessageDelivered(m.id)).toBe(true)
+    return m
+  }
+
+  it('a window holding only the guard\'s own delivered message: nothing needs action, the notice is log-only', () => {
+    const t = 'own-guard-only-' + Date.now()
+    ownGuard(t)
+    const r = measureRestartLoss(t)
+    expect(r.lossNeedsAction).toBe(false)
+    expect(restartNoticeIsLogOnly(r.lossNeedsAction, null, 'saturated pane, unrecoverable without restart')).toBe(true)
+  })
+
+  it('the guard\'s message plus an agent\'s message: needs action, and the agent row is in the line', () => {
+    const t = 'own-guard-plus-agent-' + Date.now()
+    ownGuard(t)
+    const agent = createAgentMessage('didi', t, 'kerdes: lefutott a merge?')
+    expect(markMessageDelivered(agent.id)).toBe(true)
+    const r = measureRestartLoss(t)
+    expect(r.lossNeedsAction).toBe(true)
+    expect(r.lossLine).toContain(`${agent.id}<-didi`)
+  })
+
+  // Pending rows SURVIVE the restart (the line says "NE kuldd ujra"), so they never needed the
+  // coordinator (card a85a9acd); this card does not change that, it only stops the guard's own row
+  // from counting as something at risk.
+  it('a pending row next to the guard\'s message decides exactly as the pending row alone', () => {
+    const alone = 'pending-alone-' + Date.now()
+    createAgentMessage('didi', alone, 'varakozik')
+    const withGuard = 'pending-with-guard-' + Date.now()
+    createAgentMessage('didi', withGuard, 'varakozik')
+    ownGuard(withGuard)
+    expect(measureRestartLoss(withGuard).lossNeedsAction).toBe(measureRestartLoss(alone).lossNeedsAction)
+  })
+})
+
 describe('restartNoticeIsLogOnly (card eca5e042)', () => {
   const idle = 'saturated pane, unrecoverable without restart'
   const killed = 'hard threshold (99% >= 97%) -- KILLS running background work: 2 (2 in the pane)'
