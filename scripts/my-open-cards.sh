@@ -28,7 +28,9 @@ api="${MY_OPEN_CARDS_API:-http://localhost:3420}"
 token="$(cat "$token_file" 2>/dev/null)" || { echo "my-open-cards: no dashboard token at $token_file" >&2; exit 1; }
 [ -n "$token" ] || { echo "my-open-cards: empty dashboard token at $token_file" >&2; exit 1; }
 
-body="$(curl -sS --max-time 10 -f -H "Authorization: Bearer $token" "$api/api/kanban?assignee=$agent")" \
+# The token goes to curl in a -K config from a process substitution, never on the argv: every local user can
+# read `ps -eo args=` (card 9ac56d05; src/__tests__/secrets-off-curl-argv.test.ts pins it for tracked scripts).
+body="$(curl -sS --max-time 10 -f -K <(printf 'header = "Authorization: Bearer %s"\n' "$token") "$api/api/kanban?assignee=$agent")" \
   || { echo "my-open-cards: the board could not be read ($api)" >&2; exit 1; }
 
 printf '%s' "$body" | AGENT="$agent" python3 -c "
