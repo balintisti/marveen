@@ -26,6 +26,7 @@ import sys
 import os
 import json
 import re
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ledger_lib  # noqa: E402
@@ -81,6 +82,14 @@ RECENT_TURNS_HIGHLIGHT = 5
 # LEDGER_CONTEXT_OLDER_CHAR_BUDGET.
 DEFAULT_OLDER_CHAR_BUDGET = 2000
 
+# Turns older than this many hours are not replayed (card 49ecc9fc, Isti TG 9311). Measured
+# 2026-11-09: six agents restarted with 2.0-6.7k characters of 4-18 day old turns each time (deeper's
+# newest was from 10-28), on every one of ~629 restarts a week. An old turn is in HANDOFF.md and on
+# its card; the one thing that must outlive the cut is the OPEN QUESTION (the last inbound with no
+# later reply), and it is read separately, so it stays whatever its age. Env override:
+# LEDGER_CONTEXT_MAX_AGE_HOURS.
+DEFAULT_MAX_AGE_HOURS = 48
+
 
 def _env_int(name, default):
     """Positive int from env var `name`, else `default`. Non-positive / non-numeric -> default."""
@@ -109,6 +118,10 @@ def _byte_budget():
 
 def _older_char_budget():
     return _env_int("LEDGER_CONTEXT_OLDER_CHAR_BUDGET", DEFAULT_OLDER_CHAR_BUDGET)
+
+
+def _max_age_hours():
+    return _env_int("LEDGER_CONTEXT_MAX_AGE_HOURS", DEFAULT_MAX_AGE_HOURS)
 
 
 def _max_snippet():
@@ -234,12 +247,12 @@ def main():
     agent_id = ledger_lib.agent_id_from_payload(payload)
 
     try:
-        rows = ledger_lib.recent(agent_id, _window_limit())
+        rows = ledger_lib.recent(agent_id, _window_limit(), since=time.time() - _max_age_hours() * 3600)
         open_q = ledger_lib.open_question(agent_id)
     except Exception:
         sys.exit(0)  # ledger unavailable -> no-op
     if not rows and not open_q:
-        sys.exit(0)  # nothing to replay
+        sys.exit(0)  # nothing to replay (also: every turn is older than the age cut)
 
     owner = ledger_lib.owner_name()
 
