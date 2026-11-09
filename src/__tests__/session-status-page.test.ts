@@ -91,7 +91,7 @@ const msg = (id: number, to: string, status: string, ageMin = 5, from = 'didi', 
   ({ id, from_agent: from, to_agent: to, status, created_at: NOW_S - ageMin * 60, content })
 
 describe('the card controls', () => {
-  it('the work under way first, then the work handed back (last verdict NYITOTT, with that line), then the rest', async () => {
+  it('the work under way first, then the work handed back (last verdict NYITOTT, with that line); the rest is only counted', async () => {
     fake = {
       cards: [
         card('aaaa1111', 'in_progress'),
@@ -118,8 +118,10 @@ describe('the card controls', () => {
     expect(lines[first + 1]).toMatch(/^ {2}aaaa1111 in_progress/)
     expect(lines[first + 2]).toMatch(/^! cccc3333 testing/)
     expect(lines[first + 3]).toBe('    VERDIKT: NYITOTT TETEL | L1 survives')
-    // NINCS NYITOTT carries the same word and is NOT open (the first live run flagged 12 of 12).
-    expect(lines[first + 4]).toMatch(/^ {2}bbbb2222 testing/)
+    // NINCS NYITOTT carries the same word and is NOT open (the first live run flagged 12 of 12). Card 49ecc9fc:
+    // a testing card without an open verdict is no first step, so it is counted in the pointer line, not named.
+    expect(page).not.toContain('bbbb2222')
+    expect(lines[first + 4]).toBe('  ... és még 1 kártya (a lista levágva; teljes: GET /api/kanban?assignee=dexter)')
     expect(page).not.toContain('all closed')
     for (const id of ['dddd4444', 'eeee5555', 'ffff6666']) expect(page).not.toContain(id)
     expect(seenAuth.at(-1)).toBe('Bearer test-token')
@@ -177,6 +179,86 @@ describe('the card controls', () => {
   })
 })
 
+// Card 49ecc9fc (plan V5): at most 6 cards and 3 open messages, the rest named in one pointer line.
+describe('the start page is short (card 49ecc9fc, V5)', () => {
+  const ids = (n: number, p = 'c') => Array.from({ length: n }, (_, i) => `${p}${String(i).padStart(7, '0')}`)
+  const namedCards = (page: string) => (page.match(/^[ !] [a-z0-9]{8} (in_progress|testing|waiting)/gm) ?? []).length
+  const item = (id: number) => ({
+    id, line: `[Uzenet @didi-tol -- trusted team member, msg_id:${id}]:`, block: `<trusted-peer source="agent:didi">\nbody ${id}\n</trusted-peer>`,
+  })
+
+  it('ten in_progress cards: six are named, the other four are counted with the pointer to the full list', async () => {
+    fake = { cards: ids(10).map((id) => card(id, 'in_progress')), comments: {}, messages: [] }
+    handoff('dexter', '# H', 3)
+    const page = (await start('dexter')).page as string
+    expect(namedCards(page)).toBe(6)
+    expect(page).toContain('  ... és még 4 kártya (a lista levágva; teljes: GET /api/kanban?assignee=dexter)')
+  })
+
+  it('CONTROL: exactly six cards are all named and there is no pointer line', async () => {
+    fake = { cards: ids(6).map((id) => card(id, 'in_progress')), comments: {}, messages: [] }
+    const page = (await start('dexter')).page as string
+    expect(namedCards(page)).toBe(6)
+    expect(page).not.toContain('és még')
+  })
+
+  it('open verdicts count toward the six too, and testing/waiting cards without one are only counted', async () => {
+    const open = ids(5, 'o')
+    const plain = ids(4, 'p')
+    fake = {
+      cards: [...open.map((id) => card(id, 'testing')), ...plain.map((id) => card(id, 'testing')), card('w0000000', 'waiting'), card('i0000000', 'in_progress'), card('i0000001', 'in_progress')],
+      comments: Object.fromEntries(open.map((id) => [id, [{ content: 'VERDIKT: NYITOTT TETEL | x' }]])),
+      messages: [],
+    }
+    const page = (await start('dexter')).page as string
+    // 2 in_progress + 4 of the 5 open verdicts = 6 named; 1 open verdict + 4 plain testing + 1 waiting = 6 counted.
+    expect(namedCards(page)).toBe(6)
+    expect(page).toContain('  ... és még 6 kártya (a lista levágva; teljes: GET /api/kanban?assignee=dexter)')
+    for (const id of plain) expect(page).not.toContain(id)
+    expect(page).not.toContain('w0000000')
+    expect(page.indexOf('i0000000')).toBeLessThan(page.indexOf('o0000000'))
+  })
+
+  it('five open messages: three are printed, the other two are counted', async () => {
+    fake = { cards: [], comments: {}, messages: [], digest: { total: 5, unframed: 0, items: [item(5), item(4), item(3), item(2), item(1)] } }
+    const page = (await start('dexter')).page as string
+    for (const id of [5, 4, 3]) expect(page).toContain(`msg_id:${id}]`)
+    for (const id of [2, 1]) expect(page).not.toContain(`msg_id:${id}]`)
+    expect(page).toContain('  ... és még 2 üzenet (a lista levágva)')
+  })
+
+  it('the digest is requested with max=3 (the server cuts, not only the hook)', async () => {
+    const urls: string[] = []
+    const probe = createServer((req, res) => {
+      urls.push(req.url ?? '')
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(req.url?.startsWith('/api/messages/open-digest') ? NO_DIGEST : []))
+    })
+    await new Promise<void>((r) => probe.listen(0, '127.0.0.1', () => r()))
+    const addr = probe.address()
+    await run({ source: 'startup', cwd: '/Users/Shared/marveen-dexter', transcript_path: '/x/projects/-Users-Shared-marveen-dexter/s.jsonl' },
+      { SESSION_PAGE_API: `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}` })
+    await new Promise<void>((r) => probe.close(() => r()))
+    expect(urls.find((u) => u.startsWith('/api/messages/open-digest'))).toMatch(/[?&]max=3(&|$)/)
+  })
+
+  it('a dashboard that ignores max=3 and sends ten items still prints three', async () => {
+    // Tiny items on purpose: ten of them fit the 430-character budget, so only the slice can cut them to three.
+    const tiny = (id: number) => ({ id, line: `msg_id:${id}]`, block: 'b' })
+    fake = { cards: [], comments: {}, messages: [], digest: { total: 10, unframed: 0, items: Array.from({ length: 10 }, (_, i) => tiny(100 + i)) } }
+    const page = (await start('dexter')).page as string
+    expect((page.match(/msg_id:\d+\]/g) ?? []).length).toBe(3)
+    expect(page).toContain('  ... és még 7 üzenet (a lista levágva)')
+  })
+
+  it('an older dashboard without the digest: five open ids, three printed, two counted', async () => {
+    fake = { cards: [], comments: {}, digest: null, messages: [11, 12, 13, 14, 15].map((id) => msg(id, 'dexter', 'pending', id)) }
+    const page = (await start('dexter')).page as string
+    expect((page.match(/^ {2}1\d didi /gm) ?? []).length).toBe(3)
+    expect(page).toContain('  ... és még 2 üzenet (a lista levágva)')
+  })
+})
+
 describe('the 3000-character page', () => {
   it('every section full: at most 3000, the HANDOFF whole, and the lists say what they left out', async () => {
     fake = {
@@ -197,7 +279,7 @@ describe('the 3000-character page', () => {
     expect(page.length).toBeLessThanOrEqual(3000)
     expect(page).not.toContain('a lap 3000 karakternél levágva')
     expect(page).toContain('H'.repeat(1500))
-    expect(page).toMatch(/\.\.\. és még \d+ kártya \(a lista levágva\)/)
+    expect(page).toMatch(/\.\.\. és még \d+ kártya \(a lista levágva; teljes: GET \/api\/kanban\?assignee=dexter\)/)
     expect(page).toMatch(/\.\.\. és még \d+ üzenet \(a lista levágva\)/)
     expect(page).toContain('RÉSZLETEK')
   })

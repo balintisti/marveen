@@ -43,8 +43,15 @@ HANDOFF_MAX = 1500
 # Each section has its own budget, so a long card list cannot push the HANDOFF off the page
 # (measured on the first live run: 34 cards filled all 3000 characters).
 # The sum (with the fixed lines) is held to PAGE_MAX by a test with every section full.
-CARDS_BUDGET = 560
+CARDS_BUDGET = 500
 MSGS_BUDGET = 430
+# Card 49ecc9fc (Isti TG 9311, plan store/reports/induloctx-vagasi-terv-2026-11-09.md V5): measured
+# 2 300-2 900 characters per restart here (dexter: "... és még 235 kártya"). Only the work under way
+# and the work handed back (last verdict NYITOTT) are named, at most CARDS_MAX of them, and at most
+# MSGS_MAX open messages; a testing or waiting card without an open verdict is no first step, and the
+# full list is one call away (the pointer line names it).
+CARDS_MAX = 6
+MSGS_MAX = 3
 MSG_HEAD = 80
 MSG_WINDOW_S = 24 * 3600
 TIME_BUDGET_S = 6.0      # the WHOLE dashboard part, enforced by one timer (didi 3af2d815 L2: a response
@@ -166,16 +173,30 @@ def cards_section(api, agent, gaps):
             line += f"\n    {one_line(verdict, 100)}"
         rows.append((rank, line))
     rows.sort(key=lambda r: r[0])
-    return clip_lines([r[1] for r in rows], CARDS_BUDGET, "kártya")
+    # Rank 0 = in_progress, 1 = open verdict; everything else is left out and only counted.
+    named = [r[1] for r in rows if r[0] <= 1]
+    left_out = len(rows) - len(named)
+    shown = named[:CARDS_MAX]
+    left_out += len(named) - len(shown)
+    out = clip_lines(shown, CARDS_BUDGET, "kártya")
+    if out and out[-1].startswith("  ... és még"):
+        # The budget cut it: its own count covers only the shown ones, so add the rest.
+        n = int(out[-1].split()[3]) + left_out
+        out[-1] = f"  ... és még {n} kártya (a lista levágva; teljes: GET /api/kanban?assignee={agent})"
+    elif left_out:
+        out.append(f"  ... és még {left_out} kártya (a lista levágva; teljes: GET /api/kanban?assignee={agent})")
+    return out
 
 
 def messages_section(api, agent, now, gaps):
     q = urllib.parse.quote(agent)
     try:
-        d = api.get(f"/api/messages/open-digest?agent={q}&head={MSG_HEAD}&max=10")
-        blocks = [f"{it.get('line', '')}\n{it.get('block', '')}".strip() for it in d.get("items", [])]
+        d = api.get(f"/api/messages/open-digest?agent={q}&head={MSG_HEAD}&max={MSGS_MAX}")
+        # Sliced here too: a dashboard that ignores `max` must not widen the page.
+        items = d.get("items", [])[:MSGS_MAX]
+        blocks = [f"{it.get('line', '')}\n{it.get('block', '')}".strip() for it in items]
         out = clip_lines(blocks, MSGS_BUDGET, "üzenet")
-        rest = (d.get("total") or 0) - len(d.get("items", []))
+        rest = (d.get("total") or 0) - len(items)
         if rest > 0 and not out[-1:][0].startswith("  ... és még"):
             out.append(f"  ... és még {rest} üzenet (a lista levágva)")
         if d.get("unframed"):
@@ -203,7 +224,11 @@ def messages_section(api, agent, now, gaps):
     rows = [f"  {m.get('id')} {m.get('from_agent')} {time.strftime('%m-%d %H:%M', time.localtime(m.get('created_at') or 0))} {m.get('status')}"
             for m in open_msgs]
     gaps.append("üzenet-kivonat: a dashboardon nincs /api/messages/open-digest, csak azonosítók")
-    return clip_lines(rows, MSGS_BUDGET, "üzenet"), False
+    shown = rows[:MSGS_MAX]
+    out = clip_lines(shown, MSGS_BUDGET, "üzenet")
+    if len(rows) > len(shown) and not out[-1:][0].startswith("  ... és még"):
+        out.append(f"  ... és még {len(rows) - len(shown)} üzenet (a lista levágva)")
+    return out, False
 
 
 def handoff_section(agent, now, gaps):
