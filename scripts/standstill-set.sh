@@ -25,11 +25,12 @@
 #   Kornyezet: STANDSTILL_ROOT (az agents/ es a koordinator fajl gyokere; alapertelmezes: a script
 #   melletti repo-gyoker), STANDSTILL_ENGINE (az ertekelo modul; alapertelmezes: <gyoker>/dist/idle-agent.js),
 #   STANDSTILL_ENV_PARSE (a watcher .env-parsere; alapertelmezes: <gyoker>/dist/env-parse.js),
-#   STANDSTILL_LOCK_WAIT (a zarra varas ciklusai 0,05 s-ent; alapertelmezes: 200).
+#   STANDSTILL_LOCK_WAIT (a zarra varas ciklusai 0,05 s-ent; alapertelmezes: 200). Halott pid-ju vagy pid nelkuli, egy percnel
+#   regebbi zarat a script maga vesz at; jelre (TERM, INT, HUP) a SAJAT zarat es atmeneti fajlt takaritja, es 128+jel kodot ad.
 #   A koordinator neve a <gyoker>/.env MAIN_AGENT_ID sorabol jon, a watcher SAJAT parserevel (utolso sor nyer),
 #   alapertelmezes (hianyzo kulcs vagy .env): marveen. Egy agensre egyszerre egy hivas ir (zar: <agens-mappa>/.workcheck.standstill.lock).
 #
-# KILEPESI KOD: 0 = beirva ES visszaolvasva | 1 = megtagadva vagy visszaallitva | 2 = hasznalati hiba
+# KILEPESI KOD: 0 = beirva ES visszaolvasva | 1 = megtagadva vagy visszaallitva | 2 = hasznalati hiba | 129/130/143 = jel (HUP/INT/TERM)
 set -uo pipefail
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -136,6 +137,27 @@ write_locked() {
   return 0
 }
 
+# A zar elavult, ha a tulajdonos pid-je nem fut, vagy ha nincs pid-fajl, es a zar egy percnel regebbi (a mkdir es a
+# pid-iras kozott megszakitott hivas hagyja igy; az iras ezredmasodpercek). Egy pid-fajl NELKULI friss zar elo.
+# A pid ujrakiosztasa (egy halott pid-et mas folyamat kapott) elo zarnak latszik: az a kezi torles utja.
+lock_is_stale() {
+  local lock="$1" pid="$2"
+  case "$pid" in
+    "") [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ] ;;
+    *[!0-9]*) return 1 ;;
+    *) ! ps -p "$pid" >/dev/null 2>&1 ;;
+  esac
+}
+
+# A set_standstill valtozoit hasznalja (dynamic scope); csak a zar MEGSZERZESE utan van bekotve, tehat a
+# SAJAT zarat es atmeneti fajlt takaritja.
+release_on_signal() {
+  trap - TERM INT HUP
+  [ -n "${tmp:-}" ] && rm -f "$tmp"
+  rm -rf "$lockdir"
+  exit "$1"
+}
+
 set_standstill() {
   local card="" by="unknown (standstill-set.sh)" root engine dir file tmp backup stamp main_id lockdir
   while [ "$#" -gt 0 ]; do
@@ -178,22 +200,50 @@ set_standstill() {
   # egyideju hivasnal a vesztes a SAJAT mentesevel irta felul a nyertes irasat, miutan az mar OK-t
   # mondott. A zar mkdir-rel (atomi); a varakozas lejarta utan NEM ir, es megnevezi a zarat.
   lockdir="$dir/.workcheck.standstill.lock"
-  local waited=0 max_wait="${STANDSTILL_LOCK_WAIT:-200}"
+  local waited=0 max_wait="${STANDSTILL_LOCK_WAIT:-200}" holder stolen
   until mkdir "$lockdir" 2>/dev/null; do
+    # A mkdir NEM a foglalt zar miatt bukott: nincs zar, es a mappa nem irhato (a60deb91). Varas nelkul,
+    # igaz okkal; ha a zar kozben eltunt (-w igen), a ciklus ujraprobalja.
+    if [ ! -e "$lockdir" ] && [ ! -w "$dir" ]; then
+      echo "standstill-set: nem irhato az agens mappaja, a zar nem hozhato letre: $dir; nem irok" >&2
+      return 1
+    fi
+    holder="$(cat "$lockdir/pid" 2>/dev/null || true)"
+    if lock_is_stale "$lockdir" "$holder"; then
+      # ATNEVEZESSEL vesszuk at (atomi: ket varakozo kozul egy nyer), es csak akkor toroljuk, ha a pid ugyanaz,
+      # amit elavultnak lattunk; ha kozben egy ELO hivas zarat vittuk el, visszaneveztuk.
+      stolen="$lockdir.stale.$$"
+      if mv "$lockdir" "$stolen" 2>/dev/null; then
+        if [ "$(cat "$stolen/pid" 2>/dev/null || true)" = "$holder" ]; then
+          rm -rf "$stolen"
+          echo "standstill-set: elavult zar torolve (zar: $lockdir, pid: ${holder:-nincs}, a folyamat nem fut)" >&2
+        elif [ -e "$lockdir" ] || ! mv "$stolen" "$lockdir" 2>/dev/null; then
+          echo "standstill-set: egy ELO hivas zarat elvittem, es a visszaadas nem sikerult: $stolen (kezzel kell visszanevezni: $lockdir)" >&2
+          return 1
+        fi
+      fi
+    fi
     waited=$((waited + 1))
     if [ "$waited" -gt "$max_wait" ]; then
-      echo "standstill-set: egy masik hivas ir ugyanennek az agensnek (zar: $lockdir, pid: $(cat "$lockdir/pid" 2>/dev/null || echo ismeretlen)); nem irok. Ha az a folyamat mar nem fut, a zarat kezzel kell torolni." >&2
+      echo "standstill-set: egy masik hivas ir ugyanennek az agensnek (zar: $lockdir, pid: ${holder:-ismeretlen}); nem irok. Ha az a folyamat mar nem fut, a zarat kezzel kell torolni." >&2
       return 1
     fi
     sleep 0.05
   done
   echo "$$" > "$lockdir/pid"
-  # NINCS trap (didi 57710, A5): egy globalis RETURN trap kulon ertelmezest igenyelt, hogy a masodik
-  # tuzelesnel ne vigye el egy MASIK hivas friss zarat. A zart tartó resz a write_locked-ben fut, es a zar
-  # meg az atmeneti fajl EGYSZER, kozvetlenul utana torlodik, minden uton (siker, megtagadas, sikertelen
-  # visszaallitas). Jel alatt a zar bent marad: a60deb91.
+  # NINCS RETURN trap (didi 57710, A5): az kulon ertelmezest igenyelt, hogy a masodik tuzelesnel ne vigye el
+  # egy MASIK hivas friss zarat. A zart tarto resz a write_locked-ben fut, es a zar meg az atmeneti fajl
+  # EGYSZER, kozvetlenul utana torlodik, minden uton (siker, megtagadas, sikertelen visszaallitas).
+  # JEL (TERM, INT, HUP) alatt ugyanezt a takaritast a release_on_signal vegzi (a60deb91). A trap a zar
+  # megszerzese UTAN all be (varakozas kozben nincs mit takaritani), es a takaritas ELOTT kerul le: kulonben
+  # egy kesei jel egy MASIK hivas frissen letrehozott zarat torolne. A jel a mkdir es a trap kozott
+  # (ezredmasodpercek) bent hagyhat egy zarat: azt a lock_is_stale veszi at.
   local rc_w=0
+  trap 'release_on_signal 143' TERM
+  trap 'release_on_signal 130' INT
+  trap 'release_on_signal 129' HUP
   write_locked || rc_w=$?
+  trap - TERM INT HUP
   rm -f "$tmp"; rm -rf "$lockdir"
   return "$rc_w"
 }
@@ -339,6 +389,7 @@ const cf = process.env.FAKE_COUNT
 let n = 1
 if (cf) { n = (existsSync(cf) ? Number(readFileSync(cf, 'utf8')) : 0) + 1; writeFileSync(cf, String(n)) }
 export function parseWorkCheck(t) {
+  if (mode === 'slow') Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.FAKE_SLEEP_MS))
   const r = real.parseWorkCheck(t)
   if (mode === 'kind-flip' && r && t.includes('"set_by": "selftest-flip"')) r.kind = 'none'
   if (mode === 'reviewer-flip' && r && t.includes('"set_by": "selftest-flip"')) r.reviewer = !r.reviewer
@@ -386,15 +437,81 @@ FAKE
   [ "$(tmps "$tmp/agents/alpha")" = "0" ] && ok "sikertelen visszaallitas utan nem marad atmeneti fajl vagy zar" || no "atmeneti fajl vagy zar maradt"
 
   # 5/c. ZAR: foglalt zar mellett nem ir (es megnevezi a zarat), a fajl valtozatlan
-  mkdir "$tmp/agents/alpha/.workcheck.standstill.lock"; echo 99999 > "$tmp/agents/alpha/.workcheck.standstill.lock/pid"
+  # ELO pid kell (a self-test sajat shellje): a halott pid-u zarat a script mar maga veszi at (5/e).
+  mkdir "$tmp/agents/alpha/.workcheck.standstill.lock"; echo "$$" > "$tmp/agents/alpha/.workcheck.standstill.lock/pid"
   h="$(sha "$a")"
   STANDSTILL_LOCK_WAIT=3 t alpha waiting "$fut" "x"; rc=$?
   want_rc 1 "foglalt zar -> megtagadja"
   grep -q 'standstill.lock' "$tmp/out" && ok "megnevezi a zarat" || no "nem nevezi meg a zarat"
-  grep -q 'pid: 99999' "$tmp/out" && ok "megnevezi a zarat tarto folyamat pid-jet" || no "nem nevezi meg a zarat tarto pid-et"
+  grep -q "pid: $$)" "$tmp/out" && ok "megnevezi a zarat tarto folyamat pid-jet" || no "nem nevezi meg a zarat tarto pid-et"
   [ "$(sha "$a")" = "$h" ] && ok "foglalt zarnal a fajl valtozatlan" || no "foglalt zarnal a fajl valtozott"
   [ -d "$tmp/agents/alpha/.workcheck.standstill.lock" ] && ok "a masik hivas zarjat nem torolte" || no "a megtagadott hivas letorolte a masik zarat"
   rm -rf "$tmp/agents/alpha/.workcheck.standstill.lock"
+
+  # 5/e. ELAVULT ZAR (a60deb91): halott pid-u zarat a hivas maga vesz at es ir; a pid nelkuli, FRISS zar elo
+  # (a mkdir es a pid-iras kozott vagyunk), a pid nelkuli, REGI zar elavult. Mindegyik utan nem marad zar/tmp.
+  local dead lk="$tmp/agents/alpha/.workcheck.standstill.lock"
+  sleep 0 & dead=$!; wait "$dead" 2>/dev/null
+  printf '%s' "$orig" > "$a"
+  mkdir "$lk"; echo "$dead" > "$lk/pid"
+  STANDSTILL_LOCK_WAIT=3 t alpha waiting "$fut" "x"; rc=$?
+  want_rc 0 "halott pid-u zar -> a hivas atveszi es ir"
+  grep -q 'elavult zar' "$tmp/out" && ok "kimondja, hogy elavult zarat torolt" || no "nem mondja ki az elavult zar torleset"
+  grep -q '"standstill"' "$a" && ok "az elavult zar utan a standstill a fajlban van" || no "az elavult zar utan nincs standstill"
+  [ "$(tmps "$tmp/agents/alpha")" = "0" ] && ok "elavult zar utan nem marad zar, atmeneti fajl vagy .stale mappa" || no "zar, atmeneti fajl vagy .stale mappa maradt"
+  printf '%s' "$orig" > "$a"; h="$(sha "$a")"
+  mkdir "$lk"
+  STANDSTILL_LOCK_WAIT=3 t alpha waiting "$fut" "x"; rc=$?
+  want_rc 1 "pid nelkuli FRISS zar elo -> megtagadja"
+  [ -d "$lk" ] && [ "$(sha "$a")" = "$h" ] && ok "a pid nelkuli friss zar es a fajl valtozatlan" || no "a pid nelkuli friss zar eltunt vagy a fajl valtozott"
+  touch -t 200001010000 "$lk"
+  STANDSTILL_LOCK_WAIT=3 t alpha waiting "$fut" "x"; rc=$?
+  want_rc 0 "pid nelkuli REGI zar -> atveszi es ir"
+  [ "$(tmps "$tmp/agents/alpha")" = "0" ] && ok "pid nelkuli regi zar utan nem marad zar vagy atmeneti fajl" || no "zar vagy atmeneti fajl maradt"
+
+  # 5/f. JEL A ZAR ALATT (a60deb91): a lassu ertekelo (fake, slow) alatt a hivas jelet kap; a SAJAT zarat es
+  # atmeneti fajlt takaritja, 128+jel kodot ad, a fajl valtozatlan. A jelet a script (bash) kapja, a node
+  # gyerek nem: a trap a gyerek lefutasa utan tuzel. A perl az INT-et alapertelmezettre allitja (egy hattérben
+  # indult folyamat orokli a SIG_IGN-t, es azt a bash nem tudja trapelni).
+  local sig sigrc spid i want
+  for sig in TERM INT HUP; do
+    case "$sig" in TERM) want=143 ;; INT) want=130 ;; HUP) want=129 ;; esac
+    printf '%s' "$orig" > "$a"; h="$(sha "$a")"
+    STANDSTILL_ROOT="$tmp" STANDSTILL_ENGINE="$fake" STANDSTILL_ENV_PARSE="$envp" FAKE_MODE=slow FAKE_SLEEP_MS=1500 \
+      perl -e '$SIG{INT}="DEFAULT"; $SIG{HUP}="DEFAULT"; exec @ARGV' bash "$SELF" alpha waiting "$fut" "x" >"$tmp/sig.out" 2>&1 &
+    spid=$!
+    for i in $(seq 1 100); do [ -f "$lk/pid" ] && break; sleep 0.05; done
+    [ -f "$lk/pid" ] || no "$sig: a zar nem jelent meg (a teszt nem tud jelet kuldeni zar alatt)"
+    kill "-$sig" "$spid" 2>/dev/null
+    wait "$spid" 2>/dev/null; sigrc=$?
+    [ "$sigrc" = "$want" ] && ok "$sig zar alatt -> rc $want" || no "$sig zar alatt rc $sigrc (vart: $want)"
+    [ ! -e "$lk" ] && ok "$sig utan a zar torolve" || no "$sig utan a zar bent maradt"
+    [ "$(tmps "$tmp/agents/alpha")" = "0" ] && ok "$sig utan nem marad atmeneti fajl" || no "$sig utan atmeneti fajl maradt"
+    [ "$(sha "$a")" = "$h" ] && ok "$sig utan a workcheck.json valtozatlan" || no "$sig utan a workcheck.json valtozott"
+  done
+  # jel egy MASIK hivas zarara: a varakozo hivas jelet kap, a tulajdonos zarat nem torli
+  mkdir "$lk"; echo "$$" > "$lk/pid"
+  STANDSTILL_ROOT="$tmp" STANDSTILL_ENGINE="$engine" STANDSTILL_ENV_PARSE="$envp" STANDSTILL_LOCK_WAIT=200 \
+    bash "$SELF" alpha waiting "$fut" "x" >"$tmp/sig.out" 2>&1 &
+  spid=$!; sleep 0.5; kill -TERM "$spid" 2>/dev/null; wait "$spid" 2>/dev/null
+  [ -d "$lk" ] && ok "a varakozo hivas jelre nem torli a masik hivas zarat" || no "a varakozo hivas jelre letorolte a masik zarat"
+  rm -rf "$lk"
+
+  # 5/g. IRHATATLAN AGENS-MAPPA (a60deb91): sajat, igaz uzenet, varakozas nelkul (nem a 'masik hivas ir' szoveg).
+  # root-kent a chmod nem tilt: akkor a kontrollt kihagyjuk.
+  if [ "$(id -u)" != 0 ]; then
+    printf '%s' "$orig" > "$a"; h="$(sha "$a")"
+    chmod 555 "$tmp/agents/alpha"
+    local t0 t1; t0=$SECONDS
+    STANDSTILL_LOCK_WAIT=200 t alpha waiting "$fut" "x"; rc=$?
+    t1=$((SECONDS - t0))
+    chmod 755 "$tmp/agents/alpha"
+    want_rc 1 "irhatatlan agens-mappa -> megtagadja"
+    grep -q 'nem irhato' "$tmp/out" && ok "kimondja, hogy a mappa nem irhato" || no "nem mondja ki az irhatatlan mappat"
+    grep -q 'masik hivas' "$tmp/out" && no "irhatatlan mappanal a 'masik hivas ir' uzenetet adja" || ok "nem allitja, hogy egy masik hivas ir"
+    [ "$t1" -lt 3 ] && ok "varakozas nelkul visszater (${t1} s)" || no "irhatatlan mappanal vart ${t1} s-ot"
+    [ "$(sha "$a")" = "$h" ] && ok "irhatatlan mappanal a fajl valtozatlan" || no "irhatatlan mappanal a fajl valtozott"
+  fi
 
   # 5/d. KET EGYIDEJU HIVAS UGYANARRA AZ AGENSRE (didi 57482: 20 korbol 15-ben az egyik OK-t mondott, es a
   # standstill nem volt a fajlban). Minden korben: ha valamelyik hivas OK-t mond, a fajlban ott a standstill.
