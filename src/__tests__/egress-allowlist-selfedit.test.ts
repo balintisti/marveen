@@ -2,8 +2,8 @@
 // change to the file -- by whatever route -- is recorded and reported.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 // @ts-expect-error -- plain .mjs hook script, no types
-import { gateDecision, allowlistBashSegmentAllowed, globHitsAllowlist } from '../../scripts/self-pace-gate.mjs'
-import { agentGetsGovernanceGates, ensureGovernanceGateCommands } from '../web/agent-scaffold.js'
+import { gateDecision, allowlistBashSegmentAllowed, globHitsAllowlist, DECISION_BUDGET_MS } from '../../scripts/self-pace-gate.mjs'
+import { agentGetsGovernanceGates, ensureGovernanceGateCommands, injectSelfPaceGate } from '../web/agent-scaffold.js'
 import { initDatabase, getPendingMessages } from '../db.js'
 import {
   checkEgressAllowlistBaseline,
@@ -257,6 +257,14 @@ describe('gate: rm / rmdir / mv of a directory that holds the allowlist objects 
     expect(decide('Bash', { command: `sudo ${'-Z '.repeat(34)}rm -rf store` }).deny).toBe(true)
     expect(performance.now() - started).toBeLessThan(1000)
   })
+  // Card 9534dd10: one stack frame per option word threw RangeError at ~12 000 options, and the
+  // hook let the crafted command through. A runner chain (sudo sudo ...) took the same road.
+  it.each([
+    ['20 000 unknown options', `sudo ${'-Z '.repeat(20000)}rm -rf store`],
+    ['20 000 chained runners', `${'sudo '.repeat(20000)}rm -rf store`],
+  ])('%s are still read to the command word, without a stack overflow', (_name, command) => {
+    expect(decide('Bash', { command })).toEqual({ deny: true, reason: 'egress-allowlist' })
+  })
   const wrappedAllowed = [
     'sudo -u isti ls store',
     'sudo -u rm ls store',
@@ -306,6 +314,25 @@ describe('gate: the hook end to end, and who it applies to', () => {
     const r = run({ tool_name: 'ScheduleWakeup', tool_input: {} })
     expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason).toContain('Self-pace')
   })
+  // Card 9534dd10: the crash was a hook exit 1 with no output, which lets the command through.
+  it('20 000 unknown runner options: the hook exits 0 with a deny, not a crash', () => {
+    const store = join(__dirname, '..', '..', 'store')
+    const r = run({ tool_name: 'Bash', tool_input: { command: `sudo ${'-Z '.repeat(20000)}rm -rf ${store}` }, cwd: root })
+    expect(r.stderr).not.toContain('RangeError')
+    expect(r.status).toBe(0)
+    expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision).toBe('deny')
+  })
+  // didi 57405 F10: the decision runs in a worker; a relative operand resolves against the
+  // PAYLOAD cwd, not the cwd the hook process happens to start in.
+  it('the payload cwd reaches the decision: a relative removal of the store is denied from the repo root', () => {
+    const repo = join(__dirname, '..', '..')
+    const hookIn = (cwd: string) => spawnSync(process.execPath, [hook], {
+      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'rm -rf store' }, cwd }), encoding: 'utf-8', cwd: root,
+    })
+    expect(JSON.parse(hookIn(repo).stdout).hookSpecificOutput.permissionDecision).toBe('deny')
+    // POSITIVE CONTROL: the same command from a directory whose store is not the gate's is allowed
+    expect(hookIn(root).stdout).toBe('')
+  })
   it('a read passes through the hook', () => {
     const r = run({ tool_name: 'Bash', tool_input: { command: 'cat store/egress-allowlist.json' }, cwd: root })
     expect(r.stdout).toBe('')
@@ -322,6 +349,240 @@ describe('gate: the hook end to end, and who it applies to', () => {
     }
     expect(decide('Bash', { command: "echo '{}' > store/egress-allowlist.json" }).deny).toBe(true)
     expect(decide('Bash', { command: "python3 -c \"open('store/egress-allowlist.json','w')\"" }).deny).toBe(true)
+  })
+})
+
+// Card bcc323dc (didi 57308, marveen 57313): the harness lets a command through when the hook
+// throws or runs past its 10 s timeout. So the gate is FAIL-CLOSED: the decision runs in a worker
+// under DECISION_BUDGET_MS, and a throw, a silent worker exit or a slow decision is a deny whose
+// message says the gate did NOT decide (not a policy deny). The tests run MUTATED COPIES of the
+// script, the way a real bug would reach the hook.
+describe('gate: fail-closed when the decision does not finish (bcc323dc)', () => {
+  const hook = join(__dirname, '..', '..', 'scripts', 'self-pace-gate.mjs')
+  const source = readFileSync(hook, 'utf-8')
+  const DECL = 'export function gateDecision(toolName, toolInput, opts = {}) {'
+  const mutant = (edit: (s: string) => string) => {
+    const dir = mkTmp('self-pace-mutant-')
+    const p = join(dir, 'self-pace-gate.mjs')
+    const text = edit(source)
+    expect(text).not.toBe(source) // the mutation landed
+    writeFileSync(p, text)
+    return p
+  }
+  const runHook = (script: string, command = 'ls') => {
+    const started = performance.now()
+    const r = spawnSync(process.execPath, [script], {
+      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command }, cwd: root }), encoding: 'utf-8', timeout: 30000,
+    })
+    return { ...r, ms: performance.now() - started }
+  }
+  const undecided = (r: { status: number | null; stdout: string }) => {
+    expect(r.status).toBe(0)
+    const reason = JSON.parse(r.stdout).hookSpecificOutput
+    expect(reason.permissionDecision).toBe('deny')
+    // distinct from a policy deny, so the agent rewords instead of looking for a way around
+    expect(reason.permissionDecisionReason).toContain('NEM TUDOTT DONTENI')
+    expect(reason.permissionDecisionReason).toContain('nem azt jelenti, hogy a parancs tiltott')
+    expect(reason.permissionDecisionReason).not.toMatch(/^Self-pace TILTOTT/)
+    return reason.permissionDecisionReason as string
+  }
+
+  it('POSITIVE CONTROL: the unmutated script allows a plain command and denies a scheduler', () => {
+    expect(runHook(hook, 'ls').stdout).toBe('')
+    expect(JSON.parse(runHook(hook, 'crontab -e').stdout).hookSpecificOutput.permissionDecisionReason).toMatch(/^Self-pace TILTOTT/)
+  })
+  it('a decision that throws is a deny that names the throw', () => {
+    const p = mutant((s) => s.replace(DECL, `${DECL}\n  throw new TypeError('mutant boom')`))
+    expect(undecided(runHook(p))).toContain('hibat dobott: TypeError mutant boom')
+  })
+  it('a decision slower than the budget is a deny, and it comes when the budget fires', () => {
+    const p = mutant((s) => s
+      .replace(DECL, `${DECL}\n  for (;;) {}`)
+      .replace(/export const DECISION_BUDGET_MS = \d+/, 'export const DECISION_BUDGET_MS = 300'))
+    const r = runHook(p)
+    expect(undecided(r)).toContain('300 ms alatt nem keszult el')
+    expect(r.ms).toBeLessThan(5000)
+  })
+  it('a worker that ends without an answer is a deny', () => {
+    const p = mutant((s) => s.replace(DECL, `${DECL}\n  process.exit(0)`))
+    expect(undecided(runHook(p))).toContain('valasz nelkul ert veget')
+  })
+  // didi 57405 item 3: a malformed answer used to throw on the MAIN thread (exit 1 = pass)
+  it.each([['undefined', 'undefined'], ['null', 'null'], ['a non-boolean deny', `{ deny: 'yes' }`]])(
+    'a decision that returns %s is a deny, not a crash', (_name, value) => {
+      const p = mutant((s) => s.replace(DECL, `${DECL}\n  return ${value}`))
+      expect(undecided(runHook(p))).toContain('nem szabalyos valaszt adott')
+    })
+  it('a throw on the main thread after the answer is a deny, not a crash', () => {
+    const p = mutant((s) => s.replace(/(\n {4})allow\(\)(\n {2}\}\)\n {2}worker\.once\('error')/, `$1throw new RangeError('main boom')$2`))
+    expect(undecided(runHook(p))).toContain('fo szala hibat dobott: RangeError main boom')
+  })
+  // didi 57405 F4: nothing killed a worker start failure that lets the command through
+  it('a worker that cannot start is a deny', () => {
+    const p = mutant((s) => s.replace('worker = new Worker(', `worker = new (class { constructor() { throw new Error('mutant start') } })(`))
+    expect(undecided(runHook(p))).toContain('nem indult el: mutant start')
+  })
+  // marveen 57408 decision 2 PIN: ssh/script nesting may stay exponential, but it never leaves
+  // the gate undecided: the budget turns it into the could-not-decide deny.
+  // 16 sudo/ssh pairs: ~9 s at 12 pairs in-process (measured 2026-11-10), far past the budget.
+  it('16 nested sudo/ssh pairs end in the could-not-decide deny inside the budget (accepted design, 57408)', () => {
+    const r = runHook(hook, `${'sudo -Z ssh -Z '.repeat(16)}ls`)
+    expect(undecided(r)).toContain(`${DECISION_BUDGET_MS} ms alatt nem keszult el`)
+    expect(r.ms).toBeLessThan(DECISION_BUDGET_MS + 3000)
+  }, 20000)
+  it('the budget fires well inside the harness hook timeout, which itself lets the command through', () => {
+    const settings: Record<string, unknown> = {}
+    injectSelfPaceGate(settings)
+    const entry = (settings.hooks as { PreToolUse: Array<{ hooks: Array<{ command: string; timeout: number }> }> })
+      .PreToolUse.find((e) => JSON.stringify(e).includes('self-pace-gate.mjs'))!
+    const hookTimeoutMs = entry.hooks[0].timeout * 1000
+    // node startup + module load + worker start come on top of the budget, on a loaded machine
+    expect(hookTimeoutMs - DECISION_BUDGET_MS).toBeGreaterThanOrEqual(5000)
+    // floor: the slowest of 2 940 real fleet Bash commands decided in 12 ms (bcc323dc comment)
+    expect(DECISION_BUDGET_MS).toBeGreaterThanOrEqual(1000)
+  })
+})
+
+// Card bcc323dc E: the wrapper reading is linear, so a long but harmless command is decided
+// on its merits instead of by the budget. didi 57308: 22 pairs took 21 s, the command ran.
+describe('gate: nested wrappers cost one state per word (bcc323dc)', () => {
+  // The long inputs are decided in a child with a hard cap: a backtracking regression is
+  // synchronous, vitest's timeout cannot stop it in-process, and the suite would hang instead
+  // of failing (bcc323dc mutant M4 did exactly that). ms is the decision alone, not node startup.
+  const gateUrl = new URL('../../scripts/self-pace-gate.mjs', import.meta.url).href
+  const decideCapped = (command: string) => {
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', [
+      `const { gateDecision } = await import(process.env.GATE_URL)`,
+      `const t = performance.now()`,
+      `const d = gateDecision('Bash', { command: process.env.GATE_CMD }, { allowlistPath: process.env.GATE_ALLOWLIST, cwd: process.env.GATE_CWD })`,
+      `process.stdout.write(JSON.stringify({ d, ms: performance.now() - t }))`,
+    ].join('\n')], {
+      env: { ...process.env, GATE_URL: gateUrl, GATE_CMD: command, GATE_ALLOWLIST: allowlist, GATE_CWD: root },
+      encoding: 'utf-8', timeout: 10000, killSignal: 'SIGKILL',
+    })
+    expect(r.signal, 'the decision did not finish in 10 s: the wrapper reading is no longer linear').toBeNull()
+    expect(r.status, r.stderr).toBe(0)
+    return JSON.parse(r.stdout) as { d: { deny: boolean; reason?: string }; ms: number }
+  }
+  it.each([
+    ['sudo -Z pairs, scheduler', `${'sudo -Z '.repeat(2000)}crontab -e`, 'os-scheduler'],
+    ['env -u env pairs, scheduler', `${'env -u env '.repeat(2000)}crontab -e`, 'os-scheduler'],
+    // VAR=x, a reserved word and `command` after a flag: one reading (the argument), not two
+    ['sudo -u X=1 pairs, scheduler', `${'sudo -u X=1 '.repeat(2000)}crontab -e`, 'os-scheduler'],
+    ['env -u command pairs, scheduler', `${'env -u command '.repeat(2000)}crontab -e`, 'os-scheduler'],
+    ['sudo -p then pairs, scheduler', `${'sudo -p then '.repeat(2000)}crontab -e`, 'os-scheduler'],
+    ['sudo -Z pairs, removal', `${'sudo -Z '.repeat(2000)}rm -rf store`, 'egress-allowlist'],
+    ['sudo -Z rm chain, removal', `${'sudo -Z rm '.repeat(2000)}-rf store`, 'egress-allowlist'],
+  ])('2000 %s: denied for its reason in under 500 ms', (_name, command, reason) => {
+    const { d, ms } = decideCapped(command)
+    expect(d).toEqual({ deny: true, reason })
+    expect(ms).toBeLessThan(500)
+  })
+  it.each([
+    ['env -u env pairs', `${'env -u env '.repeat(2000)}ls`],
+    ['sudo -Z pairs', `${'sudo -Z '.repeat(2000)}ls`],
+    // every rm here is a command start: each later word is resolved once per segment, not per start
+    ['sudo -Z rm links (500)', `${'sudo -Z rm '.repeat(500)}x`],
+    ['sudo -u X=1 pairs', `${'sudo -u X=1 '.repeat(2000)}ls`],
+    ['env -u command pairs', `${'env -u command '.repeat(2000)}ls`],
+    // a lookbehind per position made long prose quadratic: a real 31 KB report heredoc took > 60 s
+    ['prose lines in a text heredoc (200)', "cat > /tmp/r.txt <<'E'\n" +
+      'A-F1 (MEDIUM; scope) the fix does not deliver the stated contract "same scope", ask only X (contacts:read) and run -v if needed.\n'.repeat(200) + 'E'],
+  ])('2000 %s around a harmless command: allowed in under 500 ms', (_name, command) => {
+    const { d, ms } = decideCapped(command)
+    expect(d.deny).toBe(false)
+    expect(ms).toBeLessThan(500)
+  })
+  // A wrapper word in a flag-argument slot is read as the wrapper: the scheduler behind it
+  // is still found. `command -v` is a lookup and stays allowed behind any wrapper.
+  it.each([
+    'sudo -u command crontab -e',
+    'sudo -u env crontab -e',
+    'sudo -u nice -n 5 crontab -e',
+    'env -u env sudo -u root crontab -e',
+    'sudo -u then crontab -e',
+    'sudo -u X=1 crontab -e',
+    'command -p command crontab -e',
+    'command -p if crontab -e',
+  ])('still denied: %s', (command) => {
+    expect(decide('Bash', { command })).toEqual({ deny: true, reason: 'os-scheduler' })
+  })
+  it.each([
+    'sudo -u root command -v crontab',
+    'command -v crontab',
+  ])('still allowed (a lookup): %s', (command) => {
+    expect(decide('Bash', { command }).deny).toBe(false)
+  })
+  // After a flag word the gate cannot know whether the flag takes a value, so `command` there is
+  // read as its argument and `-v` as the next flag: a lookup behind `--user=x` is a FALSE deny.
+  // Denied on the live gate before this card too (1344c1ad5); the price of not losing
+  // `env -u command -i crontab -e` (didi 10012859).
+  it.each([
+    'sudo --user=x command -v crontab',
+    'env -u X sudo --user=x command -v crontab',
+  ])('denied as on the live gate (accepted false deny): %s', (command) => {
+    expect(decide('Bash', { command })).toEqual({ deny: true, reason: 'os-scheduler' })
+  })
+  // didi 10012859 / 57405 item 1: after a value flag, `command`, a reserved word or VAR=x is the
+  // flag's ARGUMENT, and what follows still runs (env -u NAME unsets NAME and runs the rest).
+  // ssh/timeout take any flag argument: a wrapper word there is not the next wrapper.
+  const SCHEDULERS = ['crontab -e', 'crontab mycron.txt', 'launchctl load x', 'at now', 'batch -f job', 'systemd-run x']
+  const ARG_SHAPES = [
+    'env -u command -i', 'env -u if -i', 'env -u X=1 -i', 'exec -a command -l', '/usr/bin/time -o command -l',
+    'sudo -p command -n', 'stdbuf -o command -e', 'sudo -p then -E', 'nice -n X=1 -5',
+    'ssh -i env host', 'ssh -l sudo host', 'timeout -s env 5',
+  ]
+  it.each(ARG_SHAPES.flatMap((shape) => SCHEDULERS.flatMap((tail) =>
+    ['', 'true; ', 'echo a | ', 'true && '].map((before) => `${before}${shape} ${tail}`))))('denied: %s', (command) => {
+    expect(decide('Bash', { command })).toEqual({ deny: true, reason: 'os-scheduler' })
+  })
+  // didi 57494: a VAR=x word after a value flag, where x is a path ending in a generic wrapper's
+  // name, had NO reading on 3fdc9dd4d (the path prefix spanned `X=/usr/bin/`, FLAG_NEEDS_ARG dropped
+  // the no-argument reading), so the scheduler behind it passed. Denied on the live gate.
+  const VAR_PATH_SHAPES = [
+    'env -i X=/usr/bin/env', 'sudo -E HOME=/home/env', 'env -i PATH=/usr/local/bin:/opt/env',
+    'time -p X=/usr/bin/time', 'nohup -x X=/usr/bin/env', 'env -i X=/a/b/sudo', 'env -i X=./nice',
+    'nice -n X=/bin/nice', 'env -i -- X=/usr/bin/env', 'sudo -u root -E X=/usr/bin/sudo',
+    // didi 57708: the VAR name class keeps a leading underscore and a digit after the first letter
+    'env -i _X=/usr/bin/env', 'env -i X1=/usr/bin/env', 'env -i x1_y=/usr/bin/env',
+  ]
+  it.each(VAR_PATH_SHAPES.flatMap((shape) => SCHEDULERS.flatMap((tail) =>
+    ['', 'true && '].map((before) => `${before}${shape} ${tail}`))))('denied (VAR=path after a flag): %s', (command) => {
+    expect(decide('Bash', { command })).toEqual({ deny: true, reason: 'os-scheduler' })
+  })
+  // A VAR=x word keeps exactly one reading, and a path word with `=` in a directory (not VAR=x) too:
+  // excluding `=` from the path prefix instead gave `/a=b/sudo` two readings, 15.7 s at 24 repeats.
+  it('a path word with = after a flag stays linear: (sudo -Z /a=b/sudo) x24 ls', () => {
+    const started = performance.now()
+    expect(decide('Bash', { command: 'sudo -Z /a=b/sudo '.repeat(24) + 'ls' }).deny).toBe(false)
+    expect(performance.now() - started).toBeLessThan(1000)
+  })
+  it.each(['env -i X=/usr/bin/env ls', 'env -i X=/usr/bin/env', 'sudo -E HOME=/home/env make'])('POSITIVE CONTROL, allowed: %s', (command) => {
+    expect(decide('Bash', { command }).deny).toBe(false)
+  })
+  it.each([
+    'echo f | xargs env -u command -i crontab',
+    'echo f | xargs env -i X=/usr/bin/env crontab -e',
+    "bash -c 'command -p X=1 launchctl load x'",
+    'find . -exec command crontab -e \\;',
+  ])('denied (indirect): %s', (command) => {
+    expect(decide('Bash', { command })).toEqual({ deny: true, reason: 'os-scheduler-indirect' })
+  })
+  // didi 57405 item 2, marveen 57408 decision 1: a bare `--` ends a wrapper's options, and the
+  // scheduler behind it runs. It was allowed for every wrapper (live since the gate exists).
+  it.each([
+    'env --', 'sudo --', 'nice --', 'exec --', 'command --', 'command -p --', 'nohup --', 'time --', 'env -i --',
+    'sudo -u root --', 'nice -n 5 --', 'doas --', 'stdbuf -o L --', 'caffeinate --', 'timeout -- 5', 'ssh -- host',
+    '/usr/bin/env --', 'env -- X=1',
+  ].flatMap((w) => SCHEDULERS.map((tail) => `${w} ${tail}`)))('denied behind a bare --: %s', (command) => {
+    expect(decide('Bash', { command })).toEqual({ deny: true, reason: 'os-scheduler' })
+  })
+  it.each(['env -- ls', 'sudo -- ls -la', 'nice -- make', 'command -- ls'])('POSITIVE CONTROL, allowed: %s', (command) => {
+    expect(decide('Bash', { command }).deny).toBe(false)
+  })
+  // didi 57405 F12: the visited key must hold the runner KIND (time's -p takes no value, sudo's does)
+  it('a removal behind two runners whose option tables differ is denied: time -Z sudo -p rm -rf store', () => {
+    expect(decide('Bash', { command: 'time -Z sudo -p rm -rf store' })).toEqual({ deny: true, reason: 'egress-allowlist' })
   })
 })
 

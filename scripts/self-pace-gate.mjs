@@ -32,6 +32,7 @@ import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads'
 
 // The allowlist this install's egress-gate.mjs reads (scripts/ -> repo root -> store/).
 const DEFAULT_ALLOWLIST_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', 'store', 'egress-allowlist.json')
@@ -92,15 +93,45 @@ const SELF_PACE_BASH_PATTERNS = [
 // requires its positional DURATION; `command` takes only -p (`command -v crontab`
 // is a lookup, never an exec, and must stay allowed). Shell reserved words that
 // introduce a command (`then`, `do`, `else`, ...) are prefixes too.
-const WRAPPER_OPTS = String.raw`(?:\s+--?[A-Za-z0-9][^\s]*(?:\s+[^\s-]\S*)?)*`
+//
+// ONE READING PER WORD (card bcc323dc, didi 57307): a word after a wrapper's flag had two
+// readings, the flag's argument or the next wrapper, so `sudo -Z sudo -Z ...` made a failing
+// match try all 2^n splits, and ~190 bytes took 16.6 s, past the hook timeout. After a GENERIC
+// wrapper's flag each such word now keeps only the reading whose continuation CONTAINS the
+// other's, so no command is lost:
+// - a generic wrapper is read as the wrapper: it goes on with WRAPPER_OPTS and then the next
+//   wrapper or the binary, exactly what the argument reading would have accepted
+//   (OPT_ARG_NOT_WRAPPER). A VAR=x word is never such a wrapper, even when x is a path ending in
+//   a wrapper name: `env -i X=/usr/bin/env crontab -e` lost BOTH readings (the path prefix spanned
+//   `X=/usr/bin/`, and FLAG_NEEDS_ARG drops the no-argument reading) and passed: didi 57494;
+// - VAR=x, a reserved word and `command` are read as the flag's ARGUMENT: as wrappers they cannot
+//   take a flag (`command` only -p), while the argument reading accepts more flags AND then the
+//   next wrapper (FLAG_NEEDS_ARG). The first version read them as wrappers, and lost
+//   `env -u command -i crontab -e`, a real exec (env unsets the variable `command`): didi 10012859.
+//   The second one said "not after a flag" with lookbehinds, which re-scan backwards at every
+//   position: a real 31 KB heredoc of the fleet took more than 60 s (13 ms before). A lookahead
+//   right after the flag costs one word.
+// timeout/script/ssh keep both readings (TAIL_WRAPPER_OPTS): after their options they demand a
+// further word (duration, file, host), so the wrapper reading does NOT contain the argument one
+// (`ssh -i env host crontab -e`: didi 57405). Their nesting stays exponential, and the budget
+// turns it into a could-not-decide deny: ACCEPTED DESIGN, marveen 57408 (decision 2, "no input
+// leaves the gate undecided"); the reopen condition is any real command over 1 s or budget-denied.
+// A bare `--` ends the options of every wrapper (didi 57405 item 2: `env -- crontab -e` passed,
+// because a flag needed a letter or digit after the dashes).
+const GENERIC_WRAPPERS = 'sudo|doas|env|exec|nice|ionice|caffeinate|stdbuf|time|setsid|nohup|watch|parallel|arch|builtin|taskpolicy'
+const OPT_ARG_NOT_WRAPPER = String.raw`(?!(?![A-Za-z_]\w*=)(?:\S*/)?(?:${GENERIC_WRAPPERS})(?:\s|$))`
+const FLAG_NEEDS_ARG = String.raw`\s+(?:[A-Za-z_]\w*=|(?:then|do|else|elif|if|while|until|!|\{|(?:\S*/)?command)(?:\s|$))`
+const END_OF_OPTS = String.raw`\s+--(?=\s|$)`
+const WRAPPER_OPTS = String.raw`(?:${END_OF_OPTS}|\s+--?[A-Za-z0-9][^\s]*(?:\s+${OPT_ARG_NOT_WRAPPER}[^\s-]\S*|(?!${FLAG_NEEDS_ARG})))*`
+const TAIL_WRAPPER_OPTS = String.raw`(?:${END_OF_OPTS}|\s+--?[A-Za-z0-9][^\s]*(?:\s+[^\s-]\S*)?)*`
 const WRAPPER_PATH = String.raw`(?:\S*/)?`
 const SCHED_WRAPPER = '(?:' + [
   String.raw`[A-Za-z_]\w*=\S*`,
   String.raw`(?:then|do|else|elif|if|while|until|!|\{)`,
-  String.raw`${WRAPPER_PATH}timeout${WRAPPER_OPTS}\s+\d\S*`,
-  String.raw`${WRAPPER_PATH}command(?:\s+-p)*`,
-  String.raw`${WRAPPER_PATH}(?:script|ssh)${WRAPPER_OPTS}\s+\S+`,
-  String.raw`${WRAPPER_PATH}(?:sudo|doas|env|exec|nice|ionice|caffeinate|stdbuf|time|setsid|nohup|watch|parallel|arch|builtin|taskpolicy)${WRAPPER_OPTS}`,
+  String.raw`${WRAPPER_PATH}timeout${TAIL_WRAPPER_OPTS}\s+\d\S*`,
+  String.raw`${WRAPPER_PATH}command(?:\s+-p)*(?:${END_OF_OPTS})?`,
+  String.raw`${WRAPPER_PATH}(?:script|ssh)${TAIL_WRAPPER_OPTS}\s+\S+`,
+  String.raw`${WRAPPER_PATH}(?:${GENERIC_WRAPPERS})${WRAPPER_OPTS}`,
 ].join('|') + ')'
 const SCHED_PREFIX = String.raw`(?:${SCHED_WRAPPER}\s+)*(?:\S*/)?`
 // The command-boundary anchor includes `(` so a $(...) command substitution
@@ -414,32 +445,48 @@ const RUNNER_FLAG_OPTS = {
 }
 const cmdOf = (w) => (w ?? '').replace(/^\\/, '').replace(/^.*\//, '')
 // Every index a runner chain can hand the command word to. Each (runner, word) state is visited
-// once, so n unknown options cost n states, not 2^n readings.
-function commandStarts(words, i, seen = new Set()) {
-  while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++ // leading VAR=x
-  const runner = cmdOf(words[i])
-  if (!Object.hasOwn(RUNNER_VALUE_OPTS, runner)) return [i]
-  const at = i
-  const out = []
-  const next = (j) => {
-    if (seen.has(`${at}:${j}`)) return
-    seen.add(`${at}:${j}`)
+// once, so n unknown options cost n states, not 2^n readings. A work list, not recursion: one
+// stack frame per option word threw RangeError at ~12 000 options, the hook exited 1, and the
+// harness lets a crashed hook's command through (card 9534dd10).
+function commandStarts(words, start) {
+  const out = new Set()
+  const seen = new Set()
+  // [runner, j]: a runner of this kind reads word j as an option. Keyed by the KIND, not by the
+  // runner's position (card bcc323dc): what follows depends only on the option table and j, and
+  // the position key made `sudo -Z sudo -Z ...` n runners x n words (2000 pairs: 2.6 s).
+  const pending = []
+  const command = (i) => {
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++ // leading VAR=x
+    const runner = cmdOf(words[i])
+    if (Object.hasOwn(RUNNER_VALUE_OPTS, runner)) pending.push([runner, i + 1])
+    else out.add(i)
+  }
+  command(start)
+  while (pending.length) {
+    const [runner, j] = pending.pop()
+    if (seen.has(`${runner}:${j}`)) continue
+    seen.add(`${runner}:${j}`)
+    const next = (k) => pending.push([runner, k])
     const w = words[j]
-    if (w === undefined || !/^-/.test(w)) return void out.push(...commandStarts(words, j, seen))
-    if (w === '--') return void out.push(...commandStarts(words, j + 1, seen))
-    if (w.startsWith('--')) return w.includes('=') ? next(j + 1) : (next(j + 1), next(j + 2)) // --user root, --login
-    if (/^-\d+$/.test(w)) return next(j + 1) // nice -5
+    if (w === undefined || !/^-/.test(w)) { command(j); continue }
+    if (w === '--') { command(j + 1); continue }
+    if (w.startsWith('--')) { // --user root, --login
+      next(j + 1)
+      if (!w.includes('=')) next(j + 2)
+      continue
+    }
+    if (/^-\d+$/.test(w)) { next(j + 1); continue } // nice -5
+    let valueTaken = false
     for (let c = 1; c < w.length; c++) {
       const value = RUNNER_VALUE_OPTS[runner].includes(w[c])
       if (!value && RUNNER_FLAG_OPTS[runner].includes(w[c])) continue
       next(c === w.length - 1 ? j + 2 : j + 1) // takes a value: the next word, or the rest glued (-uisti)
-      if (value) return
+      if (value) { valueTaken = true; break }
       // an unknown letter may also be a flag: the cluster goes on (-Bu root)
     }
-    next(j + 1)
+    if (!valueTaken) next(j + 1)
   }
-  next(i + 1)
-  return out
+  return [...out]
 }
 export function removalHitsAncestor(seg, allowlistPath = DEFAULT_ALLOWLIST_PATH, cwd = process.cwd()) {
   const raw = String(seg ?? '').trim().replace(/^[({]\s*/, '').split(/\s+/).map((w) => w.replace(/['"]/g, '').replace(/\)+$/, ''))
@@ -452,10 +499,13 @@ export function removalHitsAncestor(seg, allowlistPath = DEFAULT_ALLOWLIST_PATH,
     const left = w.split(/[<>]/)[0] // bash: `store2>x` is the word store2, not fd 2
     if (left) words.push(left)
   }
-  return commandStarts(words, 0).some((i) => removerHitsAncestor(words, i, allowlistPath, cwd))
+  // One cache per segment (card bcc323dc): `sudo -Z rm sudo -Z rm ... x` makes every rm a command
+  // start, and each start resolved every later word again (real path, a syscall): 2000 links, 45 s.
+  const cache = { objects: null, hits: new Map() }
+  return commandStarts(words, 0).some((i) => removerHitsAncestor(words, i, allowlistPath, cwd, cache))
 }
 
-function removerHitsAncestor(words, i, allowlistPath, cwd) {
+function removerHitsAncestor(words, i, allowlistPath, cwd, cache = { objects: null, hits: new Map() }) {
   const cmd = cmdOf(words[i])
   if (!REMOVERS.has(cmd)) return false
   const operands = []
@@ -472,12 +522,19 @@ function removerHitsAncestor(words, i, allowlistPath, cwd) {
   }
   // mv a b: b is the destination; mv -t dir a b: every operand is a source
   const sources = cmd === 'mv' && target === null ? operands.slice(0, -1) : operands
-  const historyDir = join(dirname(allowlistPath), HISTORY_DIRNAME)
-  const objects = [allowlistPath, historyDir, baselineRecordPath(allowlistPath)].flatMap((o) => [o, realOrSelf(o)])
-  return sources.some((w) => {
+  if (!cache.objects) {
+    const historyDir = join(dirname(allowlistPath), HISTORY_DIRNAME)
+    cache.objects = [allowlistPath, historyDir, baselineRecordPath(allowlistPath)].flatMap((o) => [o, realOrSelf(o)])
+  }
+  const objects = cache.objects
+  const hits = (w) => {
     if (!w || /[$`*?[{]/.test(w.replace(HOME_WORD_RX, '').replace(CWD_WORD_RX, ''))) return false
     const abs = resolve(cwd, expandHome(w.replace(HOME_WORD_RX, homedir()).replace(CWD_WORD_RX, cwd)))
     return [abs, realOrSelf(abs)].some((op) => objects.some((o) => isAtOrBelow(o, op)))
+  }
+  return sources.some((w) => {
+    if (!cache.hits.has(w)) cache.hits.set(w, hits(w))
+    return cache.hits.get(w)
   })
 }
 
@@ -1055,14 +1112,57 @@ function isInvokedDirectly() {
     return false
   }
 }
-if (isInvokedDirectly()) {
+// FAIL-CLOSED (card bcc323dc, didi 57307/57308). The harness lets a command through when its
+// hook exits non-zero OR runs past the hook timeout (10 s, injectSelfPaceGate). Both were
+// reachable with a crafted command: a RangeError at ~12 000 runner options (9534dd10), and a
+// regex that backtracked 2^n on ~190 bytes of nested wrappers (16.6 s measured, the command ran).
+// So the decision runs in a worker and this thread only waits: a throw, a worker that ends
+// without an answer, or a decision slower than the budget is a DENY that names what happened.
+// The budget leaves half the hook timeout for node startup on a loaded machine.
+export const DECISION_BUDGET_MS = 5000
+const FAIL_CLOSED_MSG = (what) =>
+  `Self-pace kapu: NEM TUDOTT DONTENI (${what}), ezert a parancsot NEM engedte at (fail-closed, kartya bcc323dc). ` +
+  'Ez nem azt jelenti, hogy a parancs tiltott: a kapu nem jutott a vegere. Ha rendes parancs volt, ' +
+  'bontsd kisebb reszekre (kevesebb egymasba agyazott sudo/env/nice burkolo, rovidebb sor), es probald ujra. ' +
+  'Ha egy rovid, rendes parancsnal is ezt latod, az a kapu hibaja: szolj a fo agensnek a pontos paranccsal.'
+
+if (!isMainThread && workerData?.selfPaceGateDecision) {
+  const p = workerData.payload
+  parentPort.postMessage(gateDecision(p?.tool_name, p?.tool_input, { cwd: p?.cwd }))
+} else if (isInvokedDirectly()) {
+  // Anything that throws on THIS thread would exit 1 with no output, which the harness lets
+  // through (didi 57405 item 3): it is a could-not-decide deny like the others.
+  process.on('uncaughtException', (e) => deny(FAIL_CLOSED_MSG(`a kapu fo szala hibat dobott: ${String(e?.name ?? '')} ${String(e?.message ?? e).slice(0, 200)}`.replace(/\s+/g, ' '))))
   let payload
   try {
     payload = JSON.parse(readFileSync(0, 'utf-8'))
   } catch {
     allow() // malformed/empty input must never break the agent's tool calls
   }
-  const { deny: shouldDeny, reason } = gateDecision(payload?.tool_name, payload?.tool_input, { cwd: payload?.cwd })
-  if (shouldDeny) deny(reason === 'egress-allowlist' ? ALLOWLIST_GATE_MSG : GATE_MSG + (REASON_HINT[reason] ?? ''))
-  allow()
+  const timer = setTimeout(() => deny(FAIL_CLOSED_MSG(`a dontes ${DECISION_BUDGET_MS} ms alatt nem keszult el`)), DECISION_BUDGET_MS)
+  let worker
+  try {
+    worker = new Worker(fileURLToPath(import.meta.url), { workerData: { selfPaceGateDecision: true, payload } })
+  } catch (e) {
+    clearTimeout(timer)
+    deny(FAIL_CLOSED_MSG(`a dontes nem indult el: ${String(e?.message ?? e).slice(0, 200)}`))
+  }
+  worker.once('message', (answer) => {
+    clearTimeout(timer)
+    // only a well-formed answer decides; undefined, null or a non-boolean deny is undecided
+    if (answer === null || typeof answer !== 'object' || typeof answer.deny !== 'boolean') {
+      deny(FAIL_CLOSED_MSG(`a dontes nem szabalyos valaszt adott: ${String(JSON.stringify(answer)).slice(0, 100)}`))
+    }
+    const { deny: shouldDeny, reason } = answer
+    if (shouldDeny) deny(reason === 'egress-allowlist' ? ALLOWLIST_GATE_MSG : GATE_MSG + (REASON_HINT[reason] ?? ''))
+    allow()
+  })
+  worker.once('error', (e) => {
+    clearTimeout(timer)
+    deny(FAIL_CLOSED_MSG(`a kapu hibat dobott: ${String(e?.name ?? '')} ${String(e?.message ?? e).slice(0, 200)}`.replace(/\s+/g, ' ')))
+  })
+  worker.once('exit', (code) => {
+    clearTimeout(timer)
+    deny(FAIL_CLOSED_MSG(`a dontes valasz nelkul ert veget (kilepesi kod ${code})`))
+  })
 }
