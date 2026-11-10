@@ -543,6 +543,8 @@ describe('gate: nested wrappers cost one state per word (bcc323dc)', () => {
     'env -i X=/usr/bin/env', 'sudo -E HOME=/home/env', 'env -i PATH=/usr/local/bin:/opt/env',
     'time -p X=/usr/bin/time', 'nohup -x X=/usr/bin/env', 'env -i X=/a/b/sudo', 'env -i X=./nice',
     'nice -n X=/bin/nice', 'env -i -- X=/usr/bin/env', 'sudo -u root -E X=/usr/bin/sudo',
+    // didi 57708: the VAR name class keeps a leading underscore and a digit after the first letter
+    'env -i _X=/usr/bin/env', 'env -i X1=/usr/bin/env', 'env -i x1_y=/usr/bin/env',
   ]
   it.each(VAR_PATH_SHAPES.flatMap((shape) => SCHEDULERS.flatMap((tail) =>
     ['', 'true && '].map((before) => `${before}${shape} ${tail}`))))('denied (VAR=path after a flag): %s', (command) => {
