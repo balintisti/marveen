@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **477** kovetett fajl, ebbol
-**146** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **478** kovetett fajl, ebbol
+**147** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -605,6 +605,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - MIERT KuLoN FAJL, ES NEM AZ `sms-send.py` BoVITESE: az `sms-send.py` az sms-gate.app
 - ATVETT ELEMEK, ES MIERT (ellenorizve a sajat testverenel, nem feltetelezve):
 - TUDATOSAN NEM ATVETT ELEMEK, ES MIERT:  /  - KLIENS-OLDALI TITKOSITAS (sms_crypto.py): az sms-gate.app tamogatja, mert egy
+
+### `scripts/standstill-set.sh`
+
+- MIERT LETEZIK (kartya 292ee15a, marveen mert 2026-11-09). A `parseWorkCheck` NYERS SZOVEGET var, nem
 
 ### `scripts/statusline-ratelimit.sh`
 
