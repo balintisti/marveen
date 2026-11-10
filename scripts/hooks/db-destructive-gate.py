@@ -193,11 +193,21 @@ DB_CLIENTS = re.compile(r"(^|[\s;&|(])" + _DB_CLIENT_NAMES, re.I)
 # never swallows the client's path. Other prefixes (`ssh`, `find -exec`, `then`, `!`)
 # are not read: the gate is a guard against slips, not a sandbox (population 0 of
 # 217918 real commands, didi 50541).
+# Every word has ONE reading (card d288b124, didi 57361): an option value may not be a
+# launcher name or a bare number. Those words are read as the next launcher / a duration,
+# which the loop accepts anyway, so no command changes verdict (0 diffs on 2940 real
+# commands and 8180 generated ones). With two readings per `sudo -Z sudo` or `-u env` pair,
+# a miss tried 2^n parses: 22 pairs (169 bytes) left the gate undecided past the 10 s hook
+# timeout, and the harness let a force push behind them through. Whitespace runs are NOT a
+# second source: without a guard on them, 200 pairs split by three spaces decide in 0.4 ms.
 _PATH_DIR = r"[\w.~${}@+-]*/"
+_LAUNCHERS = r"(?:timeout|gtimeout|nice|nohup|env|command|exec|time|caffeinate|sudo|doas|xargs)"
+_DURATION = r"\d+(?:\.\d+)?[smhd]?"
 _DB_CLIENT_PATH = re.compile(
     r"(?:^|[$<>]\()(\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|[^\s\"'])*\s+"
-    r"|(?:timeout|gtimeout|nice|nohup|env|command|exec|time|caffeinate|sudo|doas|xargs)"
-    r"(?:\s+(?:-\S+(?:\s+[^\s/-][^\s/]*)?|\d+(?:\.\d+)?[smhd]?))*\s+"
+    r"|" + _LAUNCHERS +
+    r"(?:\s+(?:-\S+(?:\s+(?!(?:" + _LAUNCHERS + r"|" + _DURATION + r")(?:\s|$))"
+    r"[^\s/-][^\s/]*)?|" + _DURATION + r"))*\s+"
     r"|(?:\$\(|[(`{])\s*)*)"
     r"(?:" + _PATH_DIR + r")+" + _DB_CLIENT_NAMES, re.I)
 
