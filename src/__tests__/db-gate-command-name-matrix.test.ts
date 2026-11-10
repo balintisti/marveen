@@ -16,6 +16,16 @@
  * from BEFORE the fix (`before`) and the one required now (`expect`). It was generated from the two
  * gate versions, then read row by row; the generator is not part of the repo, the rows are.
  *
+ * ROUND 2 (didi's review, comment 57750 on the card) added the spellings the first round left out:
+ * `$'name'` / `$"name"` / `$'\xHH..'`, a backslash-newline inside the name, the group `interpreter
+ * heredoc` (a quoted, backslashed, spliced, path-qualified or continued interpreter name before a
+ * heredoc whose body is the code), the group `continuation in executed code`, didi's four
+ * witnesses for the backslash rule (a digit and an underscore after the backslash, an escaped
+ * space in a file name and after `git`), and the group `dollar-quoted name after a quote`: a
+ * `$'name'` that follows an escaped quote, with three allow controls where the `$'` is text
+ * inside quotes. Each of those rows is the only one that fails when one rule of the quote
+ * tracking is taken out.
+ *
  * This file hands TEXT to the gate's verdict() and executes nothing.
  */
 import { describe, it, expect } from 'vitest'
@@ -50,10 +60,13 @@ const isLimit = (r: Row): boolean => r.form === 'var-assembled' && r.expect === 
 describe('db-destructive-gate: one verdict for every spelling of a command name (1a701051)', () => {
   // A fixture that lost rows would pass every row it still has.
   it('the fixture is whole', () => {
-    expect(ROWS).toHaveLength(71)
+    expect(ROWS).toHaveLength(138)
     expect(GOT).toHaveLength(ROWS.length)
-    expect(ROWS.filter((r) => r.expect === 'deny')).toHaveLength(58)
-    expect(ROWS.filter((r) => r.group === 'allow control')).toHaveLength(11)
+    expect(ROWS.filter((r) => r.expect === 'deny')).toHaveLength(108)
+    expect(ROWS.filter((r) => r.group === 'allow control')).toHaveLength(28)
+    expect(ROWS.filter((r) => r.group === 'interpreter heredoc')).toHaveLength(17)
+    expect(ROWS.filter((r) => r.group === 'continuation in executed code')).toHaveLength(5)
+    expect(ROWS.filter((r) => r.group === 'dollar-quoted name after a quote')).toHaveLength(6)
     expect(ROWS.filter(isLimit)).toHaveLength(2)
     expect(new Set(ROWS.map((r) => r.command)).size).toBe(ROWS.length)
   })
@@ -63,9 +76,9 @@ describe('db-destructive-gate: one verdict for every spelling of a command name 
   })
 
   // The cells the fix exists for: each of them passed before it.
-  it('17 rows passed before the fix, trillian\'s two among them', () => {
+  it('59 rows passed before the fix, trillian\'s two among them', () => {
     const fixed = ROWS.filter((r) => r.before !== r.expect)
-    expect(fixed).toHaveLength(17)
+    expect(fixed).toHaveLength(59)
     expect(fixed.every((r) => r.before === 'none' && r.expect === 'deny')).toBe(true)
     expect(fixed.map((r) => r.command)).toEqual(expect.arrayContaining(['\\psql -c "DROP TABLE users"', '\\git push fork main --force']))
   })

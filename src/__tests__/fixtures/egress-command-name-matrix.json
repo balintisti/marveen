@@ -1629,5 +1629,103 @@
   "command": "\"wget\" \"https://example.com/x\"",
   "before": "allow",
   "expect": "allow"
+ },
+ {
+  "group": "variable-held code flag",
+  "form": "F=-c; python3 $F CODE",
+  "command": "F=-c; python3 $F \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "variable-held code flag",
+  "form": "F=-c; \"python3\" $F CODE",
+  "command": "F=-c; \"python3\" $F \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "variable-held code flag",
+  "form": "F=-c; python3 \"$F\" CODE",
+  "command": "F=-c; python3 \"$F\" \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "variable-held code flag",
+  "form": "F=-c; python3 ${F} CODE",
+  "command": "F=-c; python3 ${F} \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "variable-held code flag",
+  "form": "F=-e; node $F CODE",
+  "command": "F=-e; node $F \"fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "variable-held code flag",
+  "form": "name and flag in one variable",
+  "command": "P=\"python3 -c\"; $P \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "reader witness",
+  "form": "\"read\" fed by a here-string, then curl \"$u\"",
+  "command": "\"read\" u <<< \"https://example.com/x\"; curl \"$u\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "reader witness",
+  "form": "here-string before the shell word",
+  "command": "<<< 'curl https://example.com/x' bash",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "reader witness",
+  "form": "quoted option of a prefix command",
+  "command": "sudo \"-u\" curl \"-g\" \"https://example.com/x\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "allow control",
+  "form": "prefix with an option, interpreter runs a SCRIPT FILE",
+  "command": "time -p python3 tool.py \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "variable-held code flag, no network in the code",
+  "command": "F=-c; python3 $F \"print(1)\"",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "variable-held code flag, the URL is only data",
+  "command": "F=-c; python3 $F \"import json; print(json.dumps({'u': 'https://example.com/x'}))\"",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "variable holds a script name, not a flag",
+  "command": "S=tool.py; python3 $S --lib urllib --url \"https://example.com/x\"",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "\"read\" fed a local URL, then curl \"$u\"",
+  "command": "\"read\" u <<< \"http://localhost:3420/api/kanban\"; curl \"$u\"",
+  "before": "allow",
+  "expect": "allow"
  }
 ]

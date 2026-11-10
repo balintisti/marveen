@@ -1325,7 +1325,7 @@ function commandWordAt(orig, masked, at) {
   for (const [a, b] of spans(masked)) {
     if (at < a || at > b) continue
     // every word kept: commandIndex steps over a group opener itself, and a `{}` is xargs's operand
-    const sw = shellWords(orig.slice(a, Math.max(a, at)))
+    const sw = shellWords(orig.slice(a, at))
     const k = commandIndex(sw)
     if (k < sw.length) return normalizedName(sw[k])
     const mw = words(masked.slice(a, b))
@@ -1912,8 +1912,9 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
       // Read from the masked words it was lost twice: a quoted name is blank there, so the index
       // pointed at the flag itself and the slice dropped it (`"<interpreter>" -c CODE`), and a quoted
       // flag is blank too (`<interpreter> "-c" CODE`), while the shell hands the interpreter the
-      // same argv either way (card 1a701051).
-      else if (INTERPRETER.test(cmd.toLowerCase()) && hasCodeFlag(cmd, argsAfterCommand(cw.includes('$') ? shellWords(text) : sw)) && usesNetwork(cmd, text)) target = 'one-liner'
+      // same argv either way (card 1a701051). Always the words of the EXPANDED text: a flag held in
+      // a variable this command assigned is the flag (`F=-c; <interpreter> $F CODE`, didi 57750, 2d).
+      else if (INTERPRETER.test(cmd.toLowerCase()) && hasCodeFlag(cmd, argsAfterCommand(shellWords(text))) && usesNetwork(cmd, text)) target = 'one-liner'
       if (!target) continue
       if (viaXargs) {
         const hosts = externalHosts(norm, vendorHosts, vendorDomains)

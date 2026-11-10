@@ -24,6 +24,12 @@
 // generated from the two parser versions, then read row by row; the rows are the test, the
 // generator is not in the repo.
 //
+// ROUND 2 (didi's review, comment 57750 on the card): the group `variable-held code flag` (the
+// code flag is read from the EXPANDED words, so `F=-c; <interpreter> $F CODE` is the one-liner it
+// runs), the group `reader witness` (one row for each reader the first round moved to the shell
+// words and no row pinned: a quoted `read`, a here-string before the shell word, a quoted option
+// of a prefix command) and five more allow controls, a prefix option before a script file among them.
+//
 // classify() reads TEXT. Nothing here is executed; the hook-process cases hand the same text to the
 // hook's entry point, which only decides.
 import { describe, it, expect } from 'vitest'
@@ -52,10 +58,12 @@ const isOpenPwsh = (r: Row): boolean => r.group === 'powershell.exe -c' && r.for
 describe('bash-egress-parser: one verdict for every spelling of a command name (1a701051)', () => {
   // A fixture that lost rows would pass every row it still has.
   it('the fixture is whole', () => {
-    expect(ROWS).toHaveLength(233)
+    expect(ROWS).toHaveLength(247)
     expect(new Set(ROWS.map((r) => r.command)).size).toBe(ROWS.length)
-    expect(ROWS.filter((r) => r.expect === 'deny')).toHaveLength(214)
-    expect(ROWS.filter((r) => r.group === 'allow control')).toHaveLength(16)
+    expect(ROWS.filter((r) => r.expect === 'deny')).toHaveLength(223)
+    expect(ROWS.filter((r) => r.group === 'allow control')).toHaveLength(21)
+    expect(ROWS.filter((r) => r.group === 'variable-held code flag')).toHaveLength(6)
+    expect(ROWS.filter((r) => r.group === 'reader witness')).toHaveLength(3)
     expect(ROWS.filter((r) => r.group === OPEN_GROUP)).toHaveLength(2)
     expect(ROWS.filter(isOpenPwsh)).toHaveLength(1)
     // nothing that was denied may be allowed now
@@ -67,9 +75,9 @@ describe('bash-egress-parser: one verdict for every spelling of a command name (
   })
 
   // The cells the fix exists for: each of them passed before it.
-  it('77 rows passed before the fix, trillian\'s two among them', () => {
+  it('84 rows passed before the fix, trillian\'s two among them', () => {
     const fixed = ROWS.filter((r) => r.before !== r.expect)
-    expect(fixed).toHaveLength(77)
+    expect(fixed).toHaveLength(84)
     const forms = fixed.filter((r) => r.group === 'python3 -c').map((r) => r.form)
     expect(forms).toEqual(expect.arrayContaining(['"name" args', 'env "name" args']))
   })
@@ -102,7 +110,7 @@ describe('bash-egress-parser: one verdict for every spelling of a command name (
       env: { ...process.env, BASH_EGRESS_BLOCK_LOG: join(dir, 'blocks.jsonl'), BASH_EGRESS_VENDOR_HOSTS: join(dir, 'none.json') },
     })
     const fixedGroups = [...new Set(ROWS.filter((r) => r.before !== r.expect).map((r) => r.group))]
-    expect(fixedGroups).toHaveLength(21)
+    expect(fixedGroups).toHaveLength(23)
     for (const g of fixedGroups) {
       const r = ROWS.find((x) => x.group === g && x.before !== x.expect)!
       expect({ cmd: r.command, out: run(r.command).stdout }).toEqual({ cmd: r.command, out: expect.stringContaining('"permissionDecision":"deny"') })

@@ -120,6 +120,34 @@ describe('db-destructive-gate: fajlbol erkezo SQL', () => {
     expect(d.missing).toEqual(['nincs-ilyen.sql (does not exist)'])
   })
 
+  // A sorfolytatast a kapu ket olvasatban iteli meg (1a701051, didi 57750 2c): a hianyzo fajl
+  // mindket olvasatbol a hivohoz jut, de ugyanaz a fajl csak egyszer.
+  it('NEM LETEZO fajl, a sor a -f ELOTT torik -> naplozva (ezt a fajlt csak az osszeragasztott olvasat latja)', () => {
+    const d = decide('psql "$URL" \\\n  -f nincs-ilyen.sql')
+    expect(d.kind).toBe('none')
+    expect(d.missing).toEqual(['nincs-ilyen.sql (does not exist)'])
+  })
+
+  it('NEM LETEZO fajl, a sor a fajl UTAN torik -> mindket olvasat latja, megis EGYSZER naplozva', () => {
+    const d = decide('psql "$URL" -f nincs-ilyen.sql \\\n  -q')
+    expect(d.kind).toBe('none')
+    expect(d.missing).toEqual(['nincs-ilyen.sql (does not exist)'])
+  })
+
+  it('a sor a -f ELOTT torik, a fajl LETEZIK es rombol -> BLOKKOLVA', () => {
+    expect(blocks('psql "$URL" \\\n  -f destructive.sql')).toBe(true)
+  })
+
+  it('a fajlnev kozepen torik a sor -> a shell szerinti (osszeragasztott) nev is a naploba kerul', () => {
+    const d = decide('psql "$URL" -f nincs-\\\nilyen.sql')
+    expect(d.kind).toBe('none')
+    expect(d.missing).toContain('nincs-ilyen.sql (does not exist)')
+  })
+
+  it('a fajlnev kozepen torik a sor, a fajl LETEZIK es rombol -> BLOKKOLVA', () => {
+    expect(blocks('psql "$URL" -f destruc\\\ntive.sql')).toBe(true)
+  })
+
   it('cat TOBB fajl | psql: a masodik fajl is BLOKKOLVA', () => {
     expect(blocks('cat safe.sql destructive.sql | psql "$URL"')).toBe(true)
   })
