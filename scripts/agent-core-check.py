@@ -46,7 +46,8 @@ class Unavailable(Exception):
 def load_sections(path):
     """-> (szakaszok {kulcs: [horgony, ...]}, ismert hiany {agens: {kulcs}}). Hibas sorra kivetel."""
     try:
-        lines = open(path, encoding='utf-8').read().splitlines()
+        with open(path, encoding='utf-8') as f:
+            lines = f.read().splitlines()
     except OSError as e:
         raise Unavailable(f"a szakasz-lista NEM OLVASHATO ({path}): {e}") from e
     secs, known = {}, {}
@@ -78,7 +79,8 @@ def load_sections(path):
 
 def generated_names(path):
     try:
-        src = open(path, encoding='utf-8').read()
+        with open(path, encoding='utf-8') as f:
+            src = f.read()
     except OSError as e:
         raise Unavailable(f"a futo scaffold NEM OLVASHATO ({path}): {e}") from e
     names = sorted(set(re.findall(r'BEGIN GENERATED: ([a-z][a-z-]*)', src)))
@@ -304,7 +306,8 @@ def main():
     for a in agents:
         p = f'{ROOT}/agents/{a}/CLAUDE.md'
         try:
-            s = open(p, encoding='utf-8').read()
+            with open(p, encoding='utf-8') as f:
+                s = f.read()
         except FileNotFoundError:
             print(f"  {a:12} NINCS LAP"); bad.append(a); continue
         start = UNKNOWN if starts is UNKNOWN else starts.get(f'agent-{a}')

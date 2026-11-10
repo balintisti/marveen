@@ -1,11 +1,15 @@
 """fleet-page-guard.sh + agent-core-check.py (card 074149c2, marveen 57647): a generated block that
 has not reached a page yet is NOT a defect and sends nothing; a defect names its pages on a
 machine-readable first line; an unmeasurable start never reads as reassuring."""
+import contextlib
 import importlib.util
+import io
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -178,6 +182,127 @@ class Checker(unittest.TestCase):
         finally:
             os.environ['PATH'] = old
             subprocess.run(['rm', '-rf', tmp])
+
+
+BLOCK = '<!-- BEGIN GENERATED: blk (x) -->\n<!-- END GENERATED: blk -->\n'
+
+
+class Main(unittest.TestCase):
+    """main() against a fake root, a fake tmux and a fake ps (didi 57938, finding 2): the wiring
+    between the session list, the writer start and each page's verdict. Nothing of the checker is
+    stubbed; the canary source (claude-md-edit.py) is a one-line stand-in. The fake dashboard has
+    been up for 10 minutes on a build an hour old, so the writer start is ten minutes ago."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix='page-guard-main-')
+        for d in ('scripts', 'store', 'dist/web', 'bin', 'agents'):
+            os.makedirs(os.path.join(self.root, d))
+        write(os.path.join(self.root, 'scripts', 'claude-md-edit.py'),
+              'def canary_lines():\n    return ["CANARY-LINE"]\n')
+        sections = os.path.join(self.root, 'sections.txt')
+        write(sections, 'a | ALPHA\n')
+        scaffold = os.path.join(self.root, 'dist', 'web', 'agent-scaffold.js')
+        write(scaffold, BLOCK)
+        self.now = int(time.time())
+        os.utime(scaffold, (self.now - 3600, self.now - 3600))
+        pidfile = os.path.join(self.root, 'store', 'claudeclaw.pid')
+        write(pidfile, '4242\n')
+        ps = os.path.join(self.root, 'bin', 'ps')
+        write(ps, '#!/bin/sh\ncase "$2" in command=) echo "node /x/dist/index.js";; etime=) echo "   10:00";; esac\n')
+        os.chmod(ps, 0o755)
+        self.old = (check.ROOT, check.SECTIONS, check.SCAFFOLD, check.PIDFILE, os.environ['PATH'])
+        check.ROOT, check.SECTIONS, check.SCAFFOLD, check.PIDFILE = self.root, sections, scaffold, pidfile
+        os.environ['PATH'] = os.path.join(self.root, 'bin')
+
+    def tearDown(self):
+        check.ROOT, check.SECTIONS, check.SCAFFOLD, check.PIDFILE, os.environ['PATH'] = self.old
+        subprocess.run(['rm', '-rf', self.root])
+
+    def page(self, agent, body='CANARY-LINE\nALPHA\n', block=True):
+        os.makedirs(os.path.join(self.root, 'agents', agent))
+        if body is not None:
+            write(os.path.join(self.root, 'agents', agent, 'CLAUDE.md'), body + (BLOCK if block else ''))
+
+    def run_main(self, tmux_body):
+        """tmux_body: the fake tmux as shell lines; `{ago:N}` becomes the epoch N seconds ago."""
+        tmux = os.path.join(self.root, 'bin', 'tmux')
+        write(tmux, '#!/bin/sh\n' + re.sub(r'\{ago:(\d+)\}', lambda m: str(self.now - int(m.group(1))), tmux_body) + '\n')
+        os.chmod(tmux, 0o755)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = check.main()
+        return rc, out.getvalue()
+
+    def test_pages_that_only_wait_for_the_next_start_exit_clean_and_name_no_defect(self):
+        self.page('early', block=False)    # its session is older than the writer
+        self.page('stopped', block=False)  # no agent session; a bare-named one is not the agent's
+        self.page('full')
+        rc, out = self.run_main('echo "agent-early {ago:3600}"\necho "stopped {ago:60}"\necho "agent-full {ago:60}"')
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out.splitlines()[-1], 'NINCS HIBAS LAP (3 lap): 2 lapra generalt blokk a kovetkezo '
+                                               'indulasnal erkezik (early, stopped)')
+        self.assertNotIn('HIBAS-LAPOK', out)
+        self.assertNotIn('HIANYZIK', out)
+        self.assertIn('nincs futo munkamenete', out)
+
+    def test_a_session_started_after_the_writer_is_a_defect_under_its_agent_prefixed_name(self):
+        self.page('late', block=False)
+        self.page('full')
+        # the decoy: an old session under the BARE name must not lend its age to the agent
+        rc, out = self.run_main('echo "late {ago:3600}"\necho "agent-late {ago:60}"\necho "agent-full {ago:60}"')
+        self.assertEqual(rc, 3, out)
+        self.assertEqual(out.splitlines()[-1], 'HIBAS-LAPOK: late')
+        self.assertIn('HIANYZIK generalt: blk', out)
+        self.assertIn('megsem irta meg', out)
+        self.assertNotIn('KESOBB ERKEZIK', out)
+
+    def test_tmux_that_does_not_answer_makes_a_missing_block_a_defect_not_a_stopped_agent(self):
+        self.page('gap', block=False)
+        self.page('full')
+        rc, out = self.run_main('exit 1')
+        self.assertEqual(rc, 3, out)
+        self.assertEqual(out.splitlines()[-1], 'HIBAS-LAPOK: gap')
+        self.assertIn('NEM MERHETO', out)
+        self.assertNotIn('KESOBB ERKEZIK', out)
+
+    def test_a_writer_that_cannot_be_measured_makes_a_missing_block_a_defect(self):
+        self.page('early', block=False)
+        os.remove(check.PIDFILE)
+        rc, out = self.run_main('echo "agent-early {ago:3600}"')
+        self.assertEqual(rc, 3, out)
+        self.assertEqual(out.splitlines()[-1], 'HIBAS-LAPOK: early')
+        self.assertIn('NEM MERHETO', out)
+
+    def test_a_waiting_page_neither_hides_nor_joins_the_defective_ones(self):
+        self.page('early', block=False)
+        self.page('both', body='CANARY-LINE\n', block=False)  # waits for its block AND lacks a section
+        self.page('broken', body='CANARY-LINE\n')  # the section is missing, the block is there
+        self.page('nopage', body=None)
+        rc, out = self.run_main('echo "agent-early {ago:3600}"\necho "agent-both {ago:3600}"\n'
+                                'echo "agent-broken {ago:60}"')
+        self.assertEqual(rc, 3, out)
+        self.assertEqual(out.splitlines()[-1], 'HIBAS-LAPOK: both, broken, nopage')
+        self.assertIn('(2 lapra generalt blokk a kovetkezo indulasnal erkezik (both, early))', out)
+        self.assertIn('HIANYZIK szakasz: a', out)
+        self.assertRegex(out, r'(?m)^  nopage +NINCS LAP$')
+
+    def test_complete_pages_exit_clean_whatever_tmux_says(self):
+        self.page('full')
+        for body in ('exit 1', 'echo "agent-full {ago:60}"'):
+            with self.subTest(tmux=body):
+                rc, out = self.run_main(body)
+                self.assertEqual(rc, 0, out)
+                self.assertEqual(out.splitlines()[-1], 'MIND A 1 LAP TELJES')
+
+    def test_a_fleet_without_agent_directories_refuses_to_measure(self):
+        with self.assertRaises(check.Unavailable):
+            self.run_main('exit 1')
+
+    def test_the_session_key_is_the_name_the_dashboard_gives_an_agent_session(self):
+        """main() looks a page's session up as `agent-<name>`. The name is made in
+        src/web/session-names.ts; if that template moves, this key must move with it."""
+        ts = read(os.path.join(os.path.dirname(SCRIPTS), 'src', 'web', 'session-names.ts'))
+        self.assertRegex(ts, r'export function agentSessionName\(name: string\): string \{\s*return `agent-\$\{name\}`')
 
 
 if __name__ == '__main__':
