@@ -11,6 +11,8 @@ import {
   type GuardState,
 } from '../context-guard.js'
 import { getSettingDefinition } from '../config-registry.js'
+import { COMPLETION_REPORT_PREFIX } from '../db.js'
+import { detectsThinkingBlockError, midTurnApiErrorAtTail } from '../pane-state.js'
 import {
   RESTART_NOTICE_HOLD_MS,
   RESTART_NOTICE_ORIGIN,
@@ -20,6 +22,7 @@ import {
   namesId,
   parseRestartNoticeSwallowMode,
   restartIsRoutine,
+  restartPaneTail,
   restartWindowCloseDirective,
   rowTrace,
   untracedLine,
@@ -171,12 +174,22 @@ describe('rowTrace: something that carries the id, later than the delivery', () 
   it.each([
     ['still delivered', { status: 'delivered', completed_at: null }],
     ['delivered with a stray completion time', { status: 'delivered', completed_at: T + 60 }],
-    ['failed', { status: 'failed', completed_at: T + 60 }],
+    ['failed, by its state alone', { status: 'failed', completed_at: T + 60 }],
     ['done in the SAME second as the delivery', { status: 'done', completed_at: T }],
     ['done BEFORE the delivery', { status: 'done', completed_at: T - 1 }],
     ['done without a completion time', { status: 'done', completed_at: null }],
   ])('%s: not a trace', (_name, st) => {
     expect(rowTrace(row(), ev({ states: new Map([[ID, st]]) }))).toBeNull()
+  })
+  // didi 57938, note 3: the PUT route's default receipt to the sender is a message in the agent's
+  // name that carries the id. The sender has been told, so the row has its reader. (That the route
+  // writes this text, and that the real evidence reader hands it to this rule, is measured on the
+  // real route in completion-notification.test.ts.)
+  it('failed AND the receipt that told its sender: a trace, by the message', () => {
+    const failed = new Map([[ID, { status: 'failed', completed_at: T + 60 }]])
+    const receipt = { created_at: T + 60, content: `${COMPLETION_REPORT_PREFIX} msg_id:${ID} status:failed\n\nnem az enyém`, origin_note: null }
+    expect(rowTrace(row(), ev({ states: failed, messages: [receipt] }))).toBe('message-names-id')
+    expect(rowTrace(row(), ev({ states: failed }))).toBeNull()
   })
   it('the state of ANOTHER row is not this row\'s trace', () => {
     expect(rowTrace(row(), ev({ states: new Map([[ID + 1, { status: 'done', completed_at: T + 1 }]]) }))).toBeNull()
@@ -256,6 +269,45 @@ describe('holdVerdict', () => {
 
   it('a hold over NO rows is a caller bug, and a bug delivers', () => {
     expect(holdVerdict([], ev(), T * 1000, DEADLINE)).toEqual({ verdict: 'deliver', traced: [], untraced: [] })
+  })
+})
+
+// didi 57938, finding 1: the pane the restart destroyed. The wiring (what a pane that is not clean
+// does to the notice) is in restart-notice-hold.test.ts.
+describe('restartPaneTail: clean only when the pane was read and neither recogniser fires', () => {
+  const SEP = '─'.repeat(80)
+  const BOX = `${'─'.repeat(70)} Agent ─\n❯ \n${SEP}`
+  const FOOT = '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ↓ to manage'
+  const REPLY = `\n⏺ Kész, minden zöld.\n\n${BOX}\n${FOOT}`
+  const TAIL_ERROR = `\n⏺ API Error: Connection lost mid-response. The response above may be \n  incomplete.\n\n${BOX}\n${FOOT}`
+  const THINKING_THEN_REPLY = `\n⏺ Bash(x)\n  ⎿  API Error: 400 {"error":{"message":"messages.1.content.0: thinking blocks cannot be modified"}}\n\n⏺ Megpróbálom újra.\n\n${BOX}\n${FOOT}`
+
+  it.each([
+    ['a reply, then the box', REPLY],
+    ['an empty screen above the box', `${BOX}\n${FOOT}`],
+    ['an error the session got over, a reply after it', TAIL_ERROR.replace(`\n${BOX}`, `\n⏺ Folytatom: a teszt lefutott, 12 passed.\n\n${BOX}`)],
+  ])('%s: clean', (_name, pane) => {
+    expect(restartPaneTail(pane)).toBe('clean')
+  })
+
+  it('api-error by EACH recogniser on its own', () => {
+    expect([midTurnApiErrorAtTail(TAIL_ERROR), detectsThinkingBlockError(TAIL_ERROR)]).toEqual([true, false])
+    expect(restartPaneTail(TAIL_ERROR)).toBe('api-error')
+    expect([midTurnApiErrorAtTail(THINKING_THEN_REPLY), detectsThinkingBlockError(THINKING_THEN_REPLY)]).toEqual([false, true])
+    expect(restartPaneTail(THINKING_THEN_REPLY)).toBe('api-error')
+  })
+
+  it.each([
+    ['null (the capture failed)', null],
+    ['undefined', undefined],
+    ['an empty string', ''],
+    ['whitespace only', ' \n\t\n'],
+    ['a reply with no input box under it', '\n⏺ Kész, minden zöld.\n'],
+    ['an error with no input box under it', '⏺ API Error: Connection lost mid-response.'],
+    ['one separator only (the capture was cut inside the box)', `\n⏺ Kész, minden zöld.\n\n${SEP}\n❯ `],
+    ['not a string at all', 7 as unknown as string],
+  ])('%s: unreadable, never clean', (_name, pane) => {
+    expect(restartPaneTail(pane)).toBe('unreadable')
   })
 })
 

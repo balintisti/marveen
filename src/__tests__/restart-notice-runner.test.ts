@@ -131,7 +131,7 @@ describe('the runner hands every notice it writes to the hold, right after the s
       'notice',
       `'${RESTART_NOTICE_ORIGIN}'`,
       'if (restartNoticeClosesItself(lossNeedsAction)) markMessageDone(notice.id, RESTART_NOTICE_AUTOCLOSED)',
-      'holdRoutineRestartNotice({ agent: name, noticeId: notice.id, reason: decision.reason, handoffStaleMinutes: decision.nextState.handoffStaleMinutes, lossWindow, snapshotPath })',
+      'holdRoutineRestartNotice({ agent: name, noticeId: notice.id, reason: decision.reason, handoffStaleMinutes: decision.nextState.handoffStaleMinutes, lossWindow, snapshotPath, finalPane })',
     ]])
   })
 

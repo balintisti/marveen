@@ -63,8 +63,9 @@ const { getSettingDefinition } = await import('../config-registry.js')
 const { frontDeskHeader, parseFrontDeskHeader, FRONT_DESK_TAG } = await import('../front-desk.js')
 const {
   RESTART_NOTICE_HOLD_MS, RESTART_NOTICE_ORIGIN, RESTART_NOTICE_HELD, RESTART_NOTICE_SWALLOWED, RESTART_NOTICE_DELIVERED_LATE,
-  TRACE_UNMEASURED_LINE, HOLD_RELEASED_LINE, holdVerdict, namesId,
+  TRACE_UNMEASURED_LINE, HOLD_RELEASED_LINE, holdVerdict, namesId, restartPaneTail,
 } = await import('../restart-notice-trace.js')
+const { detectsThinkingBlockError, midTurnApiErrorAtTail } = await import('../pane-state.js')
 const {
   holdRoutineRestartNotice, resolveRestartNoticeHolds, restartNoticeSwallowMode, RESTART_NOTICE_RESOLVE_MS,
 } = await import('../web/restart-notice-hold.js')
@@ -81,6 +82,26 @@ const AT_RESTART = RESTART_S * 1000 + 5_000
 const SNAPSHOT = '/store/context-guard-last-pane-x.txt'
 const HANDOFF_REQUEST = '[CONTEXT-GUARD] A munkakontextusod ~91%-on van -- kritikus. NE folytasd a feladatot. EGYETLEN dolgod ebben a körben: írj HANDOFF.md-t'
 const CARD = 'c074149c'
+
+// The pane the guard captured right before the restart (didi 57938, finding 1). The shapes are the
+// ones pane-state-mid-turn-api-error.test.ts measured on live panes; `the pane fixtures` below
+// runs every one of them through the recognisers, so a fixture cannot drift into another class.
+const SEP = '─'.repeat(80)
+const BOX = `${'─'.repeat(70)} Agent ─\n❯ \n${SEP}`
+const FOOT = '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ↓ to manage'
+/** A turn that ended in a reply: what a routine handoff restart leaves on the screen. */
+const CLEAN_PANE = `\n⏺ A HANDOFF.md megírva, megállok.\n\n✻ Worked for 2m 10s · done 19:12\n\n${BOX}\n${FOOT}`
+/** The turn died on the code-less error; the turn summary sits between it and the box. */
+const ERROR_PANE = `\n  Kész a javítás, indítom a tesztet.\n\n⏺ API Error: Connection lost mid-response. The response above may be \n  incomplete.\n\n✻ Worked for 4m 36s · done 22:42\n\n${BOX}\n${FOOT}`
+/** The same class under a tool call, with a numeric code. */
+const RESULT_ERROR_PANE = `\n⏺ Bash(npm test)\n  ⎿  API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}\n\n${BOX}\n${FOOT}`
+/** The persistent thinking-block error with a later line under it: not the LAST block any more,
+ *  so only the live-tail recogniser sees it. */
+const THINKING_PANE = `\n⏺ Bash(x)\n  ⎿  API Error: 400 {"error":{"message":"messages.1.content.0: thinking blocks cannot be modified"}}\n\n⏺ Megpróbálom újra.\n\n${BOX}\n${FOOT}`
+/** An error the session got over: it is in the scrollback, far above a later, finished reply. */
+const OLD_ERROR_PANE = `\n⏺ API Error: Connection lost mid-response. The response above may be \n  incomplete.\n\n❯ folytasd\n\n⏺ Folytatom: a teszt lefutott, 12 passed.\n${'\n  egy sor a kimenetből'.repeat(24)}\n\n⏺ A HANDOFF.md megírva, megállok.\n\n${BOX}\n${FOOT}`
+/** A capture without the input box: nothing can be said about what it ends in. */
+const NO_BOX_PANE = '\n⏺ A HANDOFF.md megírva, megállok.\n'
 
 beforeAll(() => {
   initDatabase(':memory:')
@@ -136,6 +157,7 @@ function restart(agent: string, ids: readonly number[], opts: RestartOpts = {}) 
     handoffStaleMinutes: null,
     lossWindow: { windowSec: WINDOW, delivered: ids, pending: [], failed: [] },
     snapshotPath: SNAPSHOT,
+    finalPane: CLEAN_PANE,
     ...opts.over,
   }, opts.nowMs ?? AT_RESTART)
   return { noticeId, outcome }
@@ -489,7 +511,7 @@ describe('live: every doubt delivers', () => {
     const id = delivered('marveen', a, 'please check the build')
     const noticeId = writeNotice(a, [id], 'handoff written', MAIN_AGENT_ID, false)
     markMessageDone(noticeId, '[auto-closed] earlier rule')
-    const outcome = holdRoutineRestartNotice({ agent: a, noticeId, reason: 'handoff written', handoffStaleMinutes: null, lossWindow: { windowSec: WINDOW, delivered: [id], pending: [], failed: [] }, snapshotPath: null }, AT_RESTART)
+    const outcome = holdRoutineRestartNotice({ agent: a, noticeId, reason: 'handoff written', handoffStaleMinutes: null, lossWindow: { windowSec: WINDOW, delivered: [id], pending: [], failed: [] }, snapshotPath: null, finalPane: CLEAN_PANE }, AT_RESTART)
     expect(outcome).toBe('untouched')
     expect(getAgentMessage(noticeId)?.result).toBe('[auto-closed] earlier rule')
     expect(holdsOf(a)).toEqual([])
@@ -599,6 +621,165 @@ describe('live: every doubt delivers', () => {
     h.mode = 'live'
     resolveRestartNoticeHolds(DEADLINE_MS + 60_000)
     expect(sentAfter(a, noticeId)).toHaveLength(1)
+  })
+})
+
+// didi 57938, finding 1 (marveen 57937): the third condition of a clean restart. Every pane here is
+// paired with a window whose rows WOULD let the notice go unread; the two controls at the end are
+// the same windows with a pane that ended in a reply.
+const NOT_CLEAN = [
+  ['the code-less error as the last block', ERROR_PANE, 'pane-tail-api-error'],
+  ['an error with a code under a tool call', RESULT_ERROR_PANE, 'pane-tail-api-error'],
+  ['the thinking-block error with a later line under it', THINKING_PANE, 'pane-tail-api-error'],
+  ['a capture without the input box', NO_BOX_PANE, 'pane-tail-unreadable'],
+  ['no capture at all', null, 'pane-tail-unreadable'],
+  ['an empty capture', '', 'pane-tail-unreadable'],
+] as const
+
+describe('the pane fixtures are what their names say', () => {
+  it('each recogniser separately, and the three answers of restartPaneTail', () => {
+    expect([midTurnApiErrorAtTail(CLEAN_PANE), detectsThinkingBlockError(CLEAN_PANE)]).toEqual([false, false])
+    expect([midTurnApiErrorAtTail(OLD_ERROR_PANE), detectsThinkingBlockError(OLD_ERROR_PANE)]).toEqual([false, false])
+    expect([midTurnApiErrorAtTail(ERROR_PANE), detectsThinkingBlockError(ERROR_PANE)]).toEqual([true, false])
+    expect([midTurnApiErrorAtTail(RESULT_ERROR_PANE), detectsThinkingBlockError(RESULT_ERROR_PANE)]).toEqual([true, false])
+    // Only the second recogniser: without it this pane would read as clean.
+    expect([midTurnApiErrorAtTail(THINKING_PANE), detectsThinkingBlockError(THINKING_PANE)]).toEqual([false, true])
+    expect(midTurnApiErrorAtTail(NO_BOX_PANE)).toBeNull()
+    expect([CLEAN_PANE, OLD_ERROR_PANE].map(restartPaneTail)).toEqual(['clean', 'clean'])
+    expect(NOT_CLEAN.map(([, pane]) => restartPaneTail(pane))).toEqual(['api-error', 'api-error', 'api-error', 'unreadable', 'unreadable', 'unreadable'])
+  })
+})
+
+describe('live: a pane that ended in an API error, or that was not read, keeps the notice for its reader', () => {
+  beforeEach(() => { h.mode = 'live' })
+
+  it.each(NOT_CLEAN)('%s, and every row has its trace: delivered as written, the ledger says why', (_name, pane, why) => {
+    const a = agentName()
+    const req = delivered('system', a, HANDOFF_REQUEST)
+    const { noticeId, outcome } = restart(a, [req], { over: { finalPane: pane } })
+    expect(outcome).toBe('untouched')
+    expect(getAgentMessage(noticeId)).toMatchObject({ status: 'pending', result: null })
+    expect(getPendingMessages(MAIN_AGENT_ID).map((m) => m.id)).toContain(noticeId)
+    const holds = holdsOf(a)
+    expect(holds).toMatchObject([{ notice_id: noticeId, mode: 'live', state: 'delivered', restart_at: RESTART_S, deadline_at: RESTART_S + RESTART_NOTICE_HOLD_MS / 1000 }])
+    expect(holds[0].resolved_at).not.toBeNull()
+    expect(JSON.parse(holds[0].detail!)).toEqual({ traced: [{ id: req, by: 'handoff-request' }], untraced: [], at: 'restart', why })
+    expect(JSON.parse(holds[0].payload)).toMatchObject({ delivered: [req], reason: 'handoff written', snapshot: SNAPSHOT })
+    expect(h.info).toHaveBeenCalledWith(expect.objectContaining({ agent: a, noticeId, holdId: holds[0].id, mode: 'live', why }), expect.stringContaining('the notice is delivered as before'))
+    expect(h.warn).not.toHaveBeenCalled()
+    // Not a hold: no tick has anything to settle or to send, before the deadline or after it.
+    expect(getHeldRestartNotices().map((x) => x.id)).not.toContain(holds[0].id)
+    resolveRestartNoticeHolds(DEADLINE_MS - 1)
+    resolveRestartNoticeHolds(DEADLINE_MS + 60_000)
+    expect(sentAfter(a, noticeId)).toEqual([])
+    expect(holdsOf(a)).toEqual(holds)
+    expect(getAgentMessage(noticeId)).toMatchObject({ status: 'pending', result: null })
+  })
+
+  it.each(NOT_CLEAN)('%s, and a row still waits for its trace: delivered NOW, not parked for the deadline', (_name, pane, why) => {
+    const a = agentName()
+    const id = delivered('marveen', a, 'please check the build')
+    const { noticeId, outcome } = restart(a, [id], { over: { finalPane: pane } })
+    expect(outcome).toBe('untouched')
+    expect(getAgentMessage(noticeId)).toMatchObject({ status: 'pending', result: null })
+    const holds = holdsOf(a)
+    expect(holds).toMatchObject([{ notice_id: noticeId, mode: 'live', state: 'delivered' }])
+    expect(JSON.parse(holds[0].detail!)).toEqual({ traced: [], untraced: [id], at: 'restart', why })
+    // The notice went out whole at the restart: the deadline adds no second message about the row.
+    resolveRestartNoticeHolds(DEADLINE_MS)
+    expect(sentAfter(a, noticeId)).toEqual([])
+    expect(holdsOf(a)).toEqual(holds)
+  })
+
+  it('a front desk keeps it in its own queue, header and all', () => {
+    const desk = frontDesk()
+    const a = agentName()
+    const req = delivered('system', a, HANDOFF_REQUEST)
+    const { noticeId, outcome } = restart(a, [req], { to: desk, rerouted: true, over: { finalPane: ERROR_PANE } })
+    expect(outcome).toBe('untouched')
+    expect(getPendingMessages(desk).map((m) => m.id)).toContain(noticeId)
+    expect(parseFrontDeskHeader(getAgentMessage(noticeId)!.content)).toMatchObject({ subjects: [a], delivered: [req] })
+  })
+
+  it('the ledger row cannot be written: still delivered, and the log says the step failed', () => {
+    const a = agentName()
+    const req = delivered('system', a, HANDOFF_REQUEST)
+    h.recordThrows = true
+    const { noticeId, outcome } = restart(a, [req], { over: { finalPane: ERROR_PANE } })
+    expect(outcome).toBe('untouched')
+    expect(getAgentMessage(noticeId)).toMatchObject({ status: 'pending', result: null })
+    expect(holdsOf(a)).toEqual([])
+    expect(h.warn).toHaveBeenCalledWith(expect.objectContaining({ agent: a, noticeId }), 'restart notice: the hold step failed -- the notice is delivered as before')
+  })
+
+  it('dry-run counts it the same way: a delivered row with its reason, never a would-swallow', () => {
+    h.mode = 'dry-run'
+    const a = agentName()
+    const req = delivered('system', a, HANDOFF_REQUEST)
+    const { noticeId, outcome } = restart(a, [req], { over: { finalPane: null } })
+    expect(outcome).toBe('untouched')
+    expect(getAgentMessage(noticeId)).toMatchObject({ status: 'pending', result: null })
+    expect(holdsOf(a)).toMatchObject([{ mode: 'dry-run', state: 'delivered' }])
+    expect(JSON.parse(holdsOf(a)[0].detail!)).toMatchObject({ at: 'restart', why: 'pane-tail-unreadable' })
+  })
+
+  it('off: the pane is not even asked, no ledger row', () => {
+    h.mode = 'off'
+    const a = agentName()
+    const req = delivered('system', a, HANDOFF_REQUEST)
+    expect(restart(a, [req], { over: { finalPane: ERROR_PANE } }).outcome).toBe('untouched')
+    expect(holdsOf(a)).toEqual([])
+  })
+
+  // CONTROL (marveen 57937): the routine restart that ended clean is swallowed as before, and an
+  // error the session got over long before the restart does not make its pane an error pane.
+  it.each([
+    ['a pane that ended in a reply', CLEAN_PANE],
+    ['an old API error in the scrollback, a finished reply after it', OLD_ERROR_PANE],
+  ])('control, %s: swallowed at the restart, held when a row waits', (_name, pane) => {
+    const a = agentName()
+    const req = delivered('system', a, HANDOFF_REQUEST)
+    const swallowed = restart(a, [req], { over: { finalPane: pane } })
+    expect(swallowed.outcome).toBe('swallowed')
+    expect(getAgentMessage(swallowed.noticeId)).toMatchObject({ status: 'done', result: RESTART_NOTICE_SWALLOWED })
+    expect(JSON.parse(holdsOf(a)[0].detail!)).toEqual({ traced: [{ id: req, by: 'handoff-request' }], untraced: [], at: 'restart' })
+    const b = agentName()
+    const id = delivered('marveen', b, 'please check the build')
+    const held = restart(b, [id], { over: { finalPane: pane } })
+    expect(held.outcome).toBe('held')
+    expect(getAgentMessage(held.noticeId)).toMatchObject({ status: 'done', result: RESTART_NOTICE_HELD })
+  })
+})
+
+// marveen 57937: "olyan értesítő, aminek a TÁRGYA a koordinátor, soha ne nyelődjön el."
+describe('a notice ABOUT the coordinator is never held and never swallowed', () => {
+  // The control inside each case is the same restart of an ordinary agent, which IS swallowed or
+  // held: only the subject differs.
+  it.each([
+    ['live', 'swallowed', 'held'],
+    ['dry-run', 'would-swallow', 'would-hold'],
+  ] as const)('%s: untouched and no ledger row, with every row traced and with a row waiting', (mode, wouldSwallow, wouldHold) => {
+    h.mode = mode
+    const desk = frontDesk()
+    const before = holdsOf(MAIN_AGENT_ID).length
+    const req = delivered('system', MAIN_AGENT_ID, HANDOFF_REQUEST)
+    const traced = restart(MAIN_AGENT_ID, [req], { to: desk, rerouted: true })
+    expect(traced.outcome).toBe('untouched')
+    expect(getAgentMessage(traced.noticeId)).toMatchObject({ status: 'pending', result: null })
+    expect(getPendingMessages(desk).map((m) => m.id)).toContain(traced.noticeId)
+    const id = delivered('didi', MAIN_AGENT_ID, 'verdict: two findings, see the card')
+    const waiting = restart(MAIN_AGENT_ID, [id], { to: desk, rerouted: true })
+    expect(waiting.outcome).toBe('untouched')
+    expect(getAgentMessage(waiting.noticeId)).toMatchObject({ status: 'pending', result: null })
+    expect(holdsOf(MAIN_AGENT_ID)).toHaveLength(before)
+    expect(before).toBe(0)
+    resolveRestartNoticeHolds(DEADLINE_MS + 60_000)
+    expect(sentAfter(MAIN_AGENT_ID, traced.noticeId).filter((m) => m.origin_note === RESTART_NOTICE_ORIGIN).map((m) => m.id)).toEqual([waiting.noticeId])
+
+    const a = agentName()
+    expect(restart(a, [delivered('system', a, HANDOFF_REQUEST)], { to: desk, rerouted: true }).outcome).toBe(wouldSwallow)
+    const b = agentName()
+    expect(restart(b, [delivered('didi', b, 'verdict: two findings, see the card')], { to: desk, rerouted: true }).outcome).toBe(wouldHold)
   })
 })
 

@@ -743,18 +743,26 @@ const MID_TURN_GLYPH_LINE_RX = /^\s*[⏺⎿●✻✢✽❯]/
 const MID_TURN_ERROR_BLOCK_LINES = 6
 
 export function detectsMidTurnApiError(pane: string): boolean {
-  if (!pane) return false
+  return midTurnApiErrorAtTail(pane) === true
+}
+
+/** The same walk with the one answer detectsMidTurnApiError cannot give: null when the live input
+ *  box is not in the capture, so nothing can be said about what the pane ends in. For a caller to
+ *  whom "no error" has to be something that was SEEN, not something that was not found (card
+ *  074149c2: a restart notice is swallowed only if the pane it destroyed did not end this way). */
+export function midTurnApiErrorAtTail(pane: string): boolean | null {
+  if (!pane) return null
   const lines = pane.split('\n')
   let bottom = -1
   for (let i = lines.length - 1; i >= 0; i--) {
     if (BOX_SEP_RX.test(lines[i])) { bottom = i; break }
   }
-  if (bottom < 0) return false
+  if (bottom < 0) return null
   let top = -1
   for (let i = bottom - 1; i >= 0; i--) {
     if (BOX_SEP_RX.test(lines[i])) { top = i; break }
   }
-  if (top < 0) return false
+  if (top < 0) return null
   // Walk up from the box over blank lines, the background-wait status line and the turn summary.
   let end = top - 1
   while (end >= 0 && (lines[end].trim() === '' || BG_WAITING_RX.test(lines[end]) || TURN_SUMMARY_RX.test(lines[end]))) end--

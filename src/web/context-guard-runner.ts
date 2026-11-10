@@ -1181,7 +1181,7 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
           // traces of the rows it reports on instead of asking a reader, and is delivered only if
           // one is still missing at the deadline. Never throws; whenever it does nothing, the row
           // written above is delivered exactly as before.
-          holdRoutineRestartNotice({ agent: name, noticeId: notice.id, reason: decision.reason, handoffStaleMinutes: decision.nextState.handoffStaleMinutes, lossWindow, snapshotPath })
+          holdRoutineRestartNotice({ agent: name, noticeId: notice.id, reason: decision.reason, handoffStaleMinutes: decision.nextState.handoffStaleMinutes, lossWindow, snapshotPath, finalPane })
         } catch (err) {
           logger.warn({ err, name }, 'context-guard: restart notice message failed')
         }

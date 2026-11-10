@@ -305,5 +305,56 @@ class Main(unittest.TestCase):
         self.assertRegex(ts, r'export function agentSessionName\(name: string\): string \{\s*return `agent-\$\{name\}`')
 
 
+class Process(unittest.TestCase):
+    """The script as the guard runs it, a process and its exit code (didi 57974, item 4): the
+    guard reads 4 as "could not measure" and 0 as "nothing to say", so a checker that cannot
+    measure must not exit clean. The copy differs from the script in ONE line, its root; the
+    canary source is the same one-line stand-in the Main tests use."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix='page-guard-proc-')
+        for d in ('scripts', 'store', 'dist/web', 'bin', 'agents/solo'):
+            os.makedirs(os.path.join(self.root, d))
+        source = read(CHECK)
+        line = "ROOT = '/Users/isti/marveen'\n"
+        self.assertEqual(source.count(line), 1)
+        self.script = os.path.join(self.root, 'scripts', 'agent-core-check.py')
+        write(self.script, source.replace(line, f'ROOT = {self.root!r}\n'))
+        write(os.path.join(self.root, 'scripts', 'claude-md-edit.py'),
+              'def canary_lines():\n    return ["CANARY-LINE"]\n')
+        write(os.path.join(self.root, 'dist', 'web', 'agent-scaffold.js'), BLOCK)
+        self.sections = os.path.join(self.root, 'scripts', 'fleet-sections.txt')
+
+    def tearDown(self):
+        subprocess.run(['rm', '-rf', self.root])
+
+    def run_script(self, page, sections='a | ALPHA\n'):
+        write(os.path.join(self.root, 'agents', 'solo', 'CLAUDE.md'), page)
+        if sections is not None:
+            write(self.sections, sections)
+        r = subprocess.run([sys.executable, self.script], capture_output=True, text=True, timeout=60,
+                           env=dict(os.environ, PATH=os.path.join(self.root, 'bin')))
+        return r.returncode, r.stdout + r.stderr
+
+    def test_a_checker_that_cannot_measure_exits_4_and_says_so(self):
+        for name, sections in (('no section list', None), ('an empty section list', '')):
+            with self.subTest(name):
+                if os.path.exists(self.sections):
+                    os.remove(self.sections)
+                rc, out = self.run_script('CANARY-LINE\nALPHA\n' + BLOCK, sections)
+                self.assertEqual(rc, 4, out)
+                self.assertTrue(out.startswith('!!! A MERO NEM FUTOTT: a szakasz-lista '), out)
+                self.assertNotIn('LAP TELJES', out)
+
+    def test_the_same_copy_exits_0_on_a_complete_page_and_3_on_a_defective_one(self):
+        # CONTROL: the copy can measure, so the 4 above is the refusal and not a broken copy.
+        rc, out = self.run_script('CANARY-LINE\nALPHA\n' + BLOCK)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out.splitlines()[-1], 'MIND A 1 LAP TELJES')
+        rc, out = self.run_script('CANARY-LINE\n' + BLOCK)
+        self.assertEqual(rc, 3, out)
+        self.assertEqual(out.splitlines()[-1], 'HIBAS-LAPOK: solo')
+
+
 if __name__ == '__main__':
     unittest.main()

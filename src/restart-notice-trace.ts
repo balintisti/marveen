@@ -9,6 +9,7 @@
 // nothing about delivery on its own; src/web/restart-notice-hold.ts does, and every doubt there
 // delivers the notice.
 import { RESTART_LOSS_WINDOW_MS, type HandoffStaleness } from './context-guard.js'
+import { detectsThinkingBlockError, midTurnApiErrorAtTail } from './pane-state.js'
 
 export const RESTART_NOTICE_SWALLOW_SETTING = 'RESTART_NOTICE_SWALLOW_MODE'
 
@@ -44,6 +45,23 @@ export function restartIsRoutine(reason: string, handoffStaleMinutes: HandoffSta
   if (!reason.startsWith('handoff written')) return false
   if (reason.startsWith('handoff written but STALE')) return false
   return !reason.includes('KILLS running background work')
+}
+
+/** What the pane the restart destroyed ended in. 'unreadable': there is no capture, or the live
+ *  input box is not in it, so its last block cannot be located. */
+export type RestartPaneTail = 'clean' | 'api-error' | 'unreadable'
+
+/** The third condition of a clean restart (card 074149c2 OUTCOME 1; didi 57938, marveen 57937): the
+ *  pane did not end in an API error. A turn that died that way can leave finished work nowhere but
+ *  on that screen, and the trace of a ROW says nothing about it. The recognisers are the two the
+ *  fleet already acts on (src/pane-state.ts): the error as the last block above the input box, and
+ *  the persistent thinking-block error in the live tail. Only a pane that was read and shows
+ *  neither is 'clean'. */
+export function restartPaneTail(pane: string | null | undefined): RestartPaneTail {
+  if (typeof pane !== 'string') return 'unreadable'
+  const atTail = midTurnApiErrorAtTail(pane)
+  if (atTail === null) return 'unreadable'
+  return atTail || detectsThinkingBlockError(pane) ? 'api-error' : 'clean'
 }
 
 /** How the stored text of each of the guard's five handoff requests starts (the builders are in
@@ -91,7 +109,13 @@ export function namesId(text: string, id: number): boolean {
 
 /** The trace of one row, or null. A trace carries the row's id and is later than its delivery:
  *  the row closed, or the agent naming the id in a message or in a card comment. Any other sign of
- *  life (an outgoing message, a commit) does not show that THIS row was seen. */
+ *  life (an outgoing message, a commit) does not show that THIS row was seen.
+ *
+ *  A row closed as FAILED is not a trace by its state. The receipt the PUT route then sends to the
+ *  row's sender by default (COMPLETION_REPORT_PREFIX + " msg_id:<id> status:failed", written in
+ *  the agent's name, src/web/routes/messages.ts) names the id, so it IS one: the sender has been
+ *  told, and the sender is the reader a failed row needs. Failed with notify:false tells nobody,
+ *  and that row stays untraced (didi 57938, note 3). */
 export function rowTrace(row: HeldRow, ev: TraceEvidence): RowTrace | null {
   if (row.handoffRequest) return 'handoff-request'
   const st = ev.states.get(row.id)

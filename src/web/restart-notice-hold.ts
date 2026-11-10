@@ -11,6 +11,7 @@
 // leaves that row pending, so it is delivered as before; anything that goes wrong after it
 // delivers the parked notice. Nothing here throws.
 import { logger } from '../logger.js'
+import { MAIN_AGENT_ID } from '../config.js'
 import { getEffectiveSettingValue } from '../settings-store.js'
 import {
   getAgentMessage,
@@ -37,6 +38,7 @@ import {
   isHandoffRequest,
   parseRestartNoticeSwallowMode,
   restartIsRoutine,
+  restartPaneTail,
   untracedLine,
   type HeldRow,
   type HoldVerdict,
@@ -70,6 +72,9 @@ export interface RoutineRestartNotice {
   handoffStaleMinutes: HandoffStaleness | undefined
   lossWindow: RestartLossWindow | null
   snapshotPath: string | null
+  /** The pane as the guard captured it right before the restart; null when it could not. The text
+   *  itself, not the snapshot file: that file is one per agent and every restart overwrites it. */
+  finalPane: string | null
 }
 
 /** What the ledger keeps of a notice: the rows it reports on and the fields of its header. */
@@ -90,12 +95,18 @@ function verdictDetail(v: HoldVerdict, extra: Record<string, unknown> = {}): str
 }
 
 /** Called right after the guard wrote its restart notice. Parks the notice when the restart was
- *  routine and the window holds nothing but delivered rows this module can follow; otherwise it
- *  touches nothing and the notice is delivered as before. Never throws. */
+ *  routine, the window holds nothing but delivered rows this module can follow, and the pane the
+ *  restart destroyed was read and did not end in an API error; otherwise it touches nothing and
+ *  the notice is delivered as before. Never throws. */
 export function holdRoutineRestartNotice(n: RoutineRestartNotice, nowMs: number = Date.now()): HoldOutcome {
   try {
     const mode = restartNoticeSwallowMode()
     if (mode === 'off') return 'untouched'
+    // A notice ABOUT the coordinator always has a reader (marveen, card comment 57937). The trace
+    // rule reads "a message in the agent's name that carries the id" as the agent having seen the
+    // row, and in the coordinator's name machines write too, without an origin note (the kanban
+    // dispatch, custom commands): there that sentence proves nothing.
+    if (n.agent === MAIN_AGENT_ID) return 'untouched'
     const w = n.lossWindow
     // Not measured, a failed row (already dead, somebody has to resend it), or nothing delivered
     // (that notice closes itself or is log-only): none of these is a question a trace answers.
@@ -118,7 +129,6 @@ export function holdRoutineRestartNotice(n: RoutineRestartNotice, nowMs: number 
     // The deadline is already behind us (a clock jump, a restart that took a quarter of an hour).
     if (verdict.verdict === 'deliver') return 'untouched'
 
-    const state = verdict.verdict === 'swallow' ? 'swallowed' : 'held'
     const payload: HoldPayload = {
       rows,
       windowSec: [w.windowSec[0], w.windowSec[1]],
@@ -128,6 +138,36 @@ export function holdRoutineRestartNotice(n: RoutineRestartNotice, nowMs: number 
       failed: [...w.failed],
       snapshot: n.snapshotPath,
     }
+    // The rows would let this notice go unread; the pane decides whether it may. A pane that ended
+    // in an API error, or that cannot be read, keeps the notice for its reader exactly as the
+    // runner wrote it. The ledger row (nothing is closed with it) is what makes the share of such
+    // restarts countable later, which is the condition this rule can be reopened on.
+    const tail = restartPaneTail(n.finalPane)
+    if (tail !== 'clean') {
+      const why = tail === 'api-error' ? 'pane-tail-api-error' : 'pane-tail-unreadable'
+      const holdId = recordRestartNoticeHold(
+        {
+          agent: n.agent,
+          noticeId: n.noticeId,
+          mode,
+          restartAt: w.windowSec[1],
+          deadlineAt: Math.floor(deadlineMs / 1000),
+          payload: JSON.stringify(payload),
+          state: 'delivered',
+          detail: verdictDetail(verdict, { at: 'restart', why }),
+        },
+        null,
+      )
+      logger.info(
+        { agent: n.agent, noticeId: n.noticeId, holdId, mode, why },
+        tail === 'api-error'
+          ? 'restart notice: the pane ended in an API error before the restart -- the notice is delivered as before'
+          : 'restart notice: the pane before the restart could not be read -- the notice is delivered as before',
+      )
+      return 'untouched'
+    }
+
+    const state = verdict.verdict === 'swallow' ? 'swallowed' : 'held'
     const holdId = recordRestartNoticeHold(
       {
         agent: n.agent,

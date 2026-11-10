@@ -4095,7 +4095,7 @@ export function getRestartTraceEvidence(agent: string, rows: readonly { id: numb
 /** Write one ledger row and, when `closeNoticeWith` is given, close the notice row with that result,
  *  in ONE transaction: a notice is never closed without the ledger row that will answer for it. */
 export function recordRestartNoticeHold(
-  h: { agent: string; noticeId: number; mode: string; restartAt: number; deadlineAt: number; payload: string; state: 'held' | 'swallowed'; detail: string | null },
+  h: { agent: string; noticeId: number; mode: string; restartAt: number; deadlineAt: number; payload: string; state: 'held' | 'swallowed' | 'delivered'; detail: string | null },
   closeNoticeWith: string | null,
 ): number {
   return db.transaction((): number => {

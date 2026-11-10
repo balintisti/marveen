@@ -1,13 +1,14 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { EventEmitter } from 'node:events'
 import {
-  initDatabase, createAgentMessage,
+  initDatabase, getDb, createAgentMessage, getRestartTraceEvidence,
   markMessageDone, markMessageFailed, getAgentMessage, listAgentMessages,
   getPendingMessages,
   COMPLETION_REPORT_PREFIX,
 } from '../db.js'
 import { shouldNotifyDelegator, tryHandleMessages } from '../web/routes/messages.js'
 import { MAIN_AGENT_ID } from '../config.js'
+import { rowTrace, type HeldRow } from '../restart-notice-trace.js'
 import type { RouteContext } from '../web/routes/types.js'
 
 // Contract tests for the completion-notification feature.
@@ -219,5 +220,39 @@ describe('PUT /api/messages/:id -- notify flag', () => {
     const r = await putStatus(msg.id, { status: 'done', notify: null, result: 'ok' })
     expect(r.statusCode).toBe(200)
     expect(ackCount() - before).toBe(1)
+  })
+})
+
+// Card 074149c2 (didi 57938, note 3). The restart-notice rule reads a row closed as FAILED as
+// untraced by its state, and as traced when the agent told the sender. The telling is this route's
+// default receipt, so the claim is measured here: the REAL route closes the row, the REAL evidence
+// reader collects what the database then holds, and the rule answers.
+describe('PUT /api/messages/:id status:failed, as a restart trace of the closed row', () => {
+  /** A row delivered five minutes ago to `agent`, with an id no other text here contains. */
+  function deliveredRow(agent: string, id: number): HeldRow {
+    const deliveredAt = Math.floor(Date.now() / 1000) - 300
+    const made = createAgentMessage(MAIN_AGENT_ID, agent, 'please check the build').id
+    getDb().prepare("UPDATE agent_messages SET id = ?, status = 'delivered', created_at = ?, delivered_at = ? WHERE id = ?").run(id, deliveredAt - 2, deliveredAt, made)
+    return { id, from: MAIN_AGENT_ID, deliveredAt, handoffRequest: false }
+  }
+
+  it('the default receipt names the id in the agent\'s name: a trace, by the message', async () => {
+    const row = deliveredRow('rcpt-a', 10030001)
+    expect(rowTrace(row, getRestartTraceEvidence('rcpt-a', [row]))).toBeNull()
+    expect((await putStatus(row.id, { status: 'failed', result: 'nem az enyém' })).statusCode).toBe(200)
+    const ev = getRestartTraceEvidence('rcpt-a', [row])
+    expect(ev.states.get(row.id)?.status).toBe('failed')
+    expect(ev.messages.map((m) => m.content)).toEqual([`${COMPLETION_REPORT_PREFIX} msg_id:${row.id} status:failed\n\nnem az enyém`])
+    expect(rowTrace(row, ev)).toBe('message-names-id')
+  })
+
+  it('notify:false tells nobody: the failed row stays untraced', async () => {
+    // Far from the first row: the receipt above took the id right after it.
+    const row = deliveredRow('rcpt-b', 10040001)
+    expect((await putStatus(row.id, { status: 'failed', result: 'nem az enyém', notify: false })).statusCode).toBe(200)
+    const ev = getRestartTraceEvidence('rcpt-b', [row])
+    expect(ev.states.get(row.id)?.status).toBe('failed')
+    expect(ev.messages).toEqual([])
+    expect(rowTrace(row, ev)).toBeNull()
   })
 })
