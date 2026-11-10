@@ -8,7 +8,8 @@
 #   1. EGY ATMENETI FAJLBA epiti az uj tartalmat, es az or ertekelojen (dist/idle-agent.js:
 #      parseWorkCheck + standstillVerdict) ELLENORZI, MIELOTT barmit felulirna: hibas hivasra a
 #      workcheck.json BAJTRA ugyanaz marad;
-#   2. biztonsagi mentest keszit (workcheck.json.bak-standstill-<idopont>), es atnevezessel felirja;
+#   2. biztonsagi mentest keszit (workcheck.json.bak-standstill-<idopont>-<pid>: ket hivas egy masodpercen
+#      belul ket mentest hagy), es atnevezessel felirja;
 #   3. a VEGLEGES fajlt ujra beolvassa ugyanazon az uton, es ha az ertekelo mast mond, mint amit
 #      kertek, VISSZAALLITJA a mentest, es nem nulla kodot ad. A `kind` es a `reviewer` valtozatlansaga
 #      is resze az ellenorzesnek (a standstill a kind MELLE kerul, nem a helyere).
@@ -23,6 +24,7 @@
 #   Nem tud: pid-es background_job (azt kezzel, a rulebook/workcheck-esetek.md szerint).
 #   Kornyezet: STANDSTILL_ROOT (az agents/ es a koordinator fajl gyokere; alapertelmezes: a script
 #   melletti repo-gyoker), STANDSTILL_ENGINE (az ertekelo modul; alapertelmezes: <gyoker>/dist/idle-agent.js).
+#   A koordinator neve a <gyoker>/.env MAIN_AGENT_ID sorabol jon (mint a watcheren), alapertelmezes: marveen.
 #
 # KILEPESI KOD: 0 = beirva ES visszaolvasva | 1 = megtagadva vagy visszaallitva | 2 = hasznalati hiba
 set -uo pipefail
@@ -90,7 +92,7 @@ JS
 run_node() { node --input-type=module -e "$NODE_PROG" -- "$@"; }
 
 set_standstill() {
-  local card="" by="unknown (standstill-set.sh)" root engine dir file tmp backup stamp
+  local card="" by="unknown (standstill-set.sh)" root engine dir file tmp backup stamp main_id
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --card) [ "$#" -ge 2 ] || { echo "standstill-set: a --card ertek nelkul" >&2; return 2; }; card="$2"; shift 2 ;;
@@ -109,8 +111,11 @@ set_standstill() {
   root="${STANDSTILL_ROOT:-$SCRIPT_ROOT}"
   engine="${STANDSTILL_ENGINE:-$root/dist/idle-agent.js}"
   [ -f "$engine" ] || { echo "standstill-set: nincs ertekelo modul: $engine (npm run build, vagy STANDSTILL_ENGINE)" >&2; return 1; }
-  # ugyanaz az ut, amit a watcher olvas (readWorkCheckRaw): a koordinatornak nincs agents/ mappaja
-  if [ "$agent" = "${MAIN_AGENT_ID:-marveen}" ]; then dir="$root"; else dir="$root/agents/$agent"; fi
+  # ugyanaz az ut, amit a watcher olvas (readWorkCheckRaw): a koordinatornak nincs agents/ mappaja.
+  # A koordinator neve a .env FAJLBOL jon (config.ts readEnvFile, mint az idle-reporter.py), NEM a
+  # folyamat kornyezetebol: a watcher sem olvas process.env-et.
+  main_id="$(sed -n 's/^MAIN_AGENT_ID=//p' "$root/.env" 2>/dev/null | head -n 1 | tr -d '\r' | sed "s/^[[:space:]]*//; s/[[:space:]]*\$//; s/^\"\(.*\)\"\$/\1/; s/^'\(.*\)'\$/\1/")"
+  if [ "$agent" = "${main_id:-marveen}" ]; then dir="$root"; else dir="$root/agents/$agent"; fi
   [ -d "$dir" ] || { echo "standstill-set: ismeretlen agens: $agent (nincs $dir)" >&2; return 1; }
   file="$dir/workcheck.json"
   [ -f "$file" ] || { echo "standstill-set: $agent-nak nincs workcheck.json-ja; a kind-ot elobb ki kell mondani, a standstill nem helyettesiti" >&2; return 1; }
@@ -126,13 +131,16 @@ set_standstill() {
   fi
 
   stamp="$(date '+%Y%m%d-%H%M%S')"
-  backup="$file.bak-standstill-$stamp"
+  backup="$file.bak-standstill-$stamp-$$"
   cp -p "$file" "$backup" || { echo "standstill-set: a mentes nem sikerult, nem irok" >&2; return 1; }
   mv -f "$tmp" "$file" || { echo "standstill-set: az atnevezes nem sikerult, a workcheck.json valtozatlan" >&2; return 1; }
 
   if ! run_node verify "$engine" "$file" "$backup" "$reason" "$until"; then
-    cp -p "$backup" "$file"
-    echo "standstill-set: a VEGLEGES fajl visszaolvasasa mast adott, mint amit kertek; a mentes VISSZAALLITVA ($backup)" >&2
+    if cp -p "$backup" "$file"; then
+      echo "standstill-set: a VEGLEGES fajl visszaolvasasa mast adott, mint amit kertek; a mentes VISSZAALLITVA ($backup)" >&2
+    else
+      echo "standstill-set: a VEGLEGES fajl visszaolvasasa mast adott, mint amit kertek, ES a visszaallitas SIKERTELEN: a mentes kezzel masolando vissza: $backup" >&2
+    fi
     return 1
   fi
   echo "OK $agent: standstill beirva; mentes: $backup"
@@ -158,6 +166,7 @@ self_test() {
   t() { STANDSTILL_ROOT="$tmp" STANDSTILL_ENGINE="${ENG:-$engine}" bash "$SELF" "$@" >"$tmp/out" 2>&1; }
   sha() { shasum "$1" | cut -d' ' -f1; }
   baks() { ls "$1"/workcheck.json.bak-standstill-* 2>/dev/null | wc -l | tr -d ' '; }
+  tmps() { ls -A "$1"/.workcheck.standstill.* 2>/dev/null | wc -l | tr -d ' '; }
   ok()  { echo "  OK    $1"; }
   no()  { echo "  BUKO  $1"; sed 's/^/        /' "$tmp/out"; bad=1; }
   want_rc() { [ "$rc" = "$1" ] && ok "$2 (rc=$1)" || no "$2: rc=$rc, vart $1"; }
@@ -174,12 +183,22 @@ self_test() {
   [ "$(cat "$tmp"/agents/alpha/workcheck.json.bak-standstill-* | head -c 4000)" = "$orig" ] && ok "a mentes bajtra az eredeti" || no "a mentes nem az eredeti"
   [ "$(stat -f %Lp "$a")" = "640" ] && ok "a fajl jogosultsaga megmaradt (640)" || no "a fajl jogosultsaga megvaltozott: $(stat -f %Lp "$a")"
 
-  # 2. FELULIRAS: a regi bejegyzes a history-ba kerul
-  sleep 1
+  # 2. FELULIRAS: a regi bejegyzes a history-ba kerul. NINCS sleep: ket hivas egy masodpercen belul
+  # KET mentest hagy (a mentes neve nem csak az idobelyegtol fugg)
   t alpha budget "$fut2" "masodik"; rc=$?
   want_rc 0 "masodik hivas felulir"
   [ "$(node -e 'const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(o.standstill.reason+"|"+o.history.length+"|"+o.history[0].lifted_entry.reason)' "$a")" = "budget|1|waiting" ] \
     && ok "a felulirt bejegyzes a history-ban" || no "a history nem tartalmazza a felulirt bejegyzest"
+  [ "$(baks "$tmp/agents/alpha")" = "2" ] && ok "ket hivas egy masodpercen belul ket mentest hagy" || no "a ket hivas $(baks "$tmp/agents/alpha") mentest hagyott, vart 2"
+  [ "$(tmps "$tmp/agents/alpha")" = "0" ] && ok "sikeres hivas utan nem marad atmeneti fajl" || no "atmeneti fajl maradt sikeres hivas utan"
+
+  # 2/b. FELULIRAS OLYAN FAJLON, AMIBEN MAR VAN history (mind a 13 elo fajl ilyen): az elozmeny megmarad
+  mkdir -p "$tmp/agents/hist"
+  node -e 'require("fs").writeFileSync(process.argv[1], JSON.stringify({kind:"assigned_open_cards",history:[{lifted:"2026-01-01T00:00:00.000Z",why:"regi"}],standstill:{reason:"waiting",until:process.argv[2],set_by:"x",set_at:"y",note:"n"}},null,2)+"\n")' "$tmp/agents/hist/workcheck.json" "$fut"
+  t hist budget "$fut2" "felulir"; rc=$?
+  want_rc 0 "feluliras history-s fajlon"
+  [ "$(node -e 'const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(o.history.length+"|"+o.history[0].why+"|"+o.history[1].lifted_entry.reason+"|"+o.standstill.reason)' "$tmp/agents/hist/workcheck.json")" = "2|regi|waiting|budget" ] \
+    && ok "a meglevo history megmaradt, a felulirt bejegyzes a vegere kerult" || no "a meglevo history elveszett vagy elmozdult"
 
   # 3. NEGATIV KONTROLLOK: semmi nem irodik (a fajl SHA-ja es a mentesek szama valtozatlan)
   h="$(sha "$a")"; local nb; nb="$(baks "$tmp/agents/alpha")"
@@ -188,6 +207,7 @@ self_test() {
     t "$@"; rc=$?
     want_rc "$w" "$d"
     [ "$(sha "$a")" = "$h" ] && [ "$(baks "$tmp/agents/alpha")" = "$nb" ] || no "$d: a fajl vagy a mentesek valtoztak"
+    [ "$(tmps "$tmp/agents/alpha")" = "0" ] || no "$d: atmeneti fajl maradt a megtagadas utan"
   }
   neg "until nelkul" 2 alpha waiting
   neg "ures until" 2 alpha waiting "" "x"
@@ -210,6 +230,16 @@ self_test() {
   t marveen forbidden "$fut" "koordinator"; rc=$?
   want_rc 0 "a koordinator fajlja a gyokerben"
 
+  # 4/b. A KOORDINATOR NEVE A .env FAJLBOL JON (mint a watcheren), NEM a folyamat kornyezetebol
+  printf 'FOO=1\nMAIN_AGENT_ID=boss\n' > "$tmp/.env"
+  h="$(sha "$tmp/workcheck.json")"
+  MAIN_AGENT_ID=marveen t marveen forbidden "$fut" "x"; rc=$?
+  want_rc 1 "a .env-ben boss a koordinator: a marveen nev (folyamat-kornyezet) NEM a gyoker fajlt irja"
+  [ "$(sha "$tmp/workcheck.json")" = "$h" ] && ok "a gyoker fajl valtozatlan" || no "a gyoker fajl valtozott a .env-tol eltero nevre"
+  MAIN_AGENT_ID=marveen t boss forbidden "$fut" "x"; rc=$?
+  want_rc 0 "a .env szerinti koordinator (boss) a gyoker fajlt irja"
+  rm -f "$tmp/.env"
+
   # 5. AZ ERTEKELO MEGSZOLALTATASA: hamis ertekelokkel a script NEM hihet a sajat irasanak
   local fake="$tmp/fake-engine.mjs"
   cat > "$fake" <<FAKE
@@ -229,6 +259,7 @@ export function standstillVerdict(c, now, p) {
   const v = real.standstillVerdict(c, now, p)
   if (mode === 'never-expire' && v.state === 'expired') return { state: 'active', standstill: v.standstill }
   if (mode === 'second-none' && n >= 2) return { state: 'none' }
+  if (mode === 'reason-flip' && v.state === 'active') return { state: 'active', standstill: { ...v.standstill, reason: v.standstill.reason === 'waiting' ? 'budget' : 'waiting' } }
   if (mode === 'until-shift' && v.state === 'active') return { state: 'active', standstill: { ...v.standstill, untilMs: v.standstill.untilMs + 3600e3 } }
   return v
 }
@@ -247,6 +278,9 @@ FAKE
   want_rc 1 "ha a reviewer megvaltozik a visszaolvasasban, megtagadja"
   ENG="$fake" FAKE_MODE=until-shift t alpha waiting "$fut" "x"; rc=$?
   want_rc 1 "ha az ertekelo mas until-t lat, mint a kert, megtagadja"
+  ENG="$fake" FAKE_MODE=reason-flip t alpha waiting "$fut" "x"; rc=$?
+  want_rc 1 "ha az ertekelo mas reason-t lat, mint a kert, megtagadja"
+  [ "$(tmps "$tmp/agents/alpha")" = "0" ] && ok "a hamis-ertekelos megtagadasok utan nem marad atmeneti fajl" || no "atmeneti fajl maradt"
   [ "$(sha "$a")" = "$h" ] && ok "a fajl a vegen is valtozatlan" || no "a fajl valtozott a hamis-ertekelos probak utan"
 
   # 6. A CSAPDA MAGA: objektummal hivva a parseWorkCheck csendben null-t ad (ez az, amit a script nem kovet el)
