@@ -257,6 +257,14 @@ describe('gate: rm / rmdir / mv of a directory that holds the allowlist objects 
     expect(decide('Bash', { command: `sudo ${'-Z '.repeat(34)}rm -rf store` }).deny).toBe(true)
     expect(performance.now() - started).toBeLessThan(1000)
   })
+  // Card 9534dd10: one stack frame per option word threw RangeError at ~12 000 options, and the
+  // hook let the crafted command through. A runner chain (sudo sudo ...) took the same road.
+  it.each([
+    ['20 000 unknown options', `sudo ${'-Z '.repeat(20000)}rm -rf store`],
+    ['20 000 chained runners', `${'sudo '.repeat(20000)}rm -rf store`],
+  ])('%s are still read to the command word, without a stack overflow', (_name, command) => {
+    expect(decide('Bash', { command })).toEqual({ deny: true, reason: 'egress-allowlist' })
+  })
   const wrappedAllowed = [
     'sudo -u isti ls store',
     'sudo -u rm ls store',
@@ -305,6 +313,14 @@ describe('gate: the hook end to end, and who it applies to', () => {
   it('the self-pace denial keeps its own message', () => {
     const r = run({ tool_name: 'ScheduleWakeup', tool_input: {} })
     expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason).toContain('Self-pace')
+  })
+  // Card 9534dd10: the crash was a hook exit 1 with no output, which lets the command through.
+  it('20 000 unknown runner options: the hook exits 0 with a deny, not a crash', () => {
+    const store = join(__dirname, '..', '..', 'store')
+    const r = run({ tool_name: 'Bash', tool_input: { command: `sudo ${'-Z '.repeat(20000)}rm -rf ${store}` }, cwd: root })
+    expect(r.stderr).not.toContain('RangeError')
+    expect(r.status).toBe(0)
+    expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision).toBe('deny')
   })
   it('a read passes through the hook', () => {
     const r = run({ tool_name: 'Bash', tool_input: { command: 'cat store/egress-allowlist.json' }, cwd: root })

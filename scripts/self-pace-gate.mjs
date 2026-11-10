@@ -414,31 +414,44 @@ const RUNNER_FLAG_OPTS = {
 }
 const cmdOf = (w) => (w ?? '').replace(/^\\/, '').replace(/^.*\//, '')
 // Every index a runner chain can hand the command word to. Each (runner, word) state is visited
-// once, so n unknown options cost n states, not 2^n readings.
-function commandStarts(words, i, seen = new Set()) {
-  while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++ // leading VAR=x
-  const runner = cmdOf(words[i])
-  if (!Object.hasOwn(RUNNER_VALUE_OPTS, runner)) return [i]
-  const at = i
+// once, so n unknown options cost n states, not 2^n readings. A work list, not recursion: one
+// stack frame per option word threw RangeError at ~12 000 options, the hook exited 1, and the
+// harness lets a crashed hook's command through (card 9534dd10).
+function commandStarts(words, start) {
   const out = []
-  const next = (j) => {
-    if (seen.has(`${at}:${j}`)) return
+  const seen = new Set()
+  const pending = [] // [runner, at, j]: the runner at index `at` reads word j as an option
+  const command = (i) => {
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++ // leading VAR=x
+    const runner = cmdOf(words[i])
+    if (Object.hasOwn(RUNNER_VALUE_OPTS, runner)) pending.push([runner, i, i + 1])
+    else out.push(i)
+  }
+  command(start)
+  while (pending.length) {
+    const [runner, at, j] = pending.pop()
+    if (seen.has(`${at}:${j}`)) continue
     seen.add(`${at}:${j}`)
+    const next = (k) => pending.push([runner, at, k])
     const w = words[j]
-    if (w === undefined || !/^-/.test(w)) return void out.push(...commandStarts(words, j, seen))
-    if (w === '--') return void out.push(...commandStarts(words, j + 1, seen))
-    if (w.startsWith('--')) return w.includes('=') ? next(j + 1) : (next(j + 1), next(j + 2)) // --user root, --login
-    if (/^-\d+$/.test(w)) return next(j + 1) // nice -5
+    if (w === undefined || !/^-/.test(w)) { command(j); continue }
+    if (w === '--') { command(j + 1); continue }
+    if (w.startsWith('--')) { // --user root, --login
+      next(j + 1)
+      if (!w.includes('=')) next(j + 2)
+      continue
+    }
+    if (/^-\d+$/.test(w)) { next(j + 1); continue } // nice -5
+    let valueTaken = false
     for (let c = 1; c < w.length; c++) {
       const value = RUNNER_VALUE_OPTS[runner].includes(w[c])
       if (!value && RUNNER_FLAG_OPTS[runner].includes(w[c])) continue
       next(c === w.length - 1 ? j + 2 : j + 1) // takes a value: the next word, or the rest glued (-uisti)
-      if (value) return
+      if (value) { valueTaken = true; break }
       // an unknown letter may also be a flag: the cluster goes on (-Bu root)
     }
-    next(j + 1)
+    if (!valueTaken) next(j + 1)
   }
-  next(i + 1)
   return out
 }
 export function removalHitsAncestor(seg, allowlistPath = DEFAULT_ALLOWLIST_PATH, cwd = process.cwd()) {
