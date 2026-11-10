@@ -23,8 +23,19 @@
 #
 # A NAPLO NEM DISZ: a kartya lezarasi feltetele egy MEGFIGYELES arrol, hogy ez lefutott az en
 # beavatkozasom nelkul. A konfig elolvasasa JOSLAT, a naplo-sor a megfigyeles.
+#
+# GENERALT BLOKK, AMI MEG NEM ERT ODA, NEM HIBA (kartya 074149c2, marveen 57647). 2026-11-10-en
+# ez az or orankent "7 LAP HIANYOS"-t kuldott a koordinatornak, mert het munkamenet a build
+# ELOTT indult, es az uj blokkot az iro csak INDULASKOR irja a lapra. A jelzes azt kerte, hogy
+# valaki kezzel irja be: egy generalt resznel az a rossz javitas. A mero (agent-core-check.py)
+# ezert kulon mondja ki, ami magatol megerkezik (rc=0, CSAK ide a naploba), es ami hiba (rc=3).
+# A hiba-jelzes elso sora GEPPEL olvashato (`LAPOK: nev, nev`): abbol donti el a dashboard, hogy
+# a front desk olvassa-e a koordinator helyett (src/front-desk.ts). Az "or nem tudott merni"
+# (rc=4) jelzesen nincs ilyen sor, az a koordinatornal marad.
+#
+# FLEET_PAGE_GUARD_ROOT: teszt-varrat, elesben nincs beallitva.
 set -uo pipefail
-ROOT=/Users/isti/marveen
+ROOT="${FLEET_PAGE_GUARD_ROOT:-/Users/isti/marveen}"
 LOG="$ROOT/store/fleet-page-guard.log"
 TS=$(date '+%Y-%m-%d %H:%M:%S %Z')
 
@@ -35,7 +46,13 @@ if [ "$RC" -eq 0 ]; then
   # A KONTROLL-sor IS tartalmazza a "23/23"-at, tehat egy csupasz `grep -c` NYOLCAT szamolna
   # hetre. Ezert a szamlalas az AGENS-sorokra horgonyzott (a nev utan `N,NNN kar.` all).
   N=$(printf '%s\n' "$OUT" | grep -cE '^  [a-z]+ +[0-9,]+ kar\.')
-  printf '%s  OK rc=0  %s agens-lap, mind teljes\n' "$TS" "$N" >> "$LOG"
+  # Ami indulaskor erkezik, az NEVVEL all a naploban: errol uzenet nem megy, ez az egyetlen nyoma.
+  WAIT=$(printf '%s\n' "$OUT" | grep -E '^NINCS HIBAS LAP ' | sed -E 's/^NINCS HIBAS LAP \([0-9]+ lap\): //')
+  if [ -n "$WAIT" ]; then
+    printf '%s  OK rc=0  %s agens-lap, hibas nincs; %s\n' "$TS" "$N" "$WAIT" >> "$LOG"
+  else
+    printf '%s  OK rc=0  %s agens-lap, mind teljes\n' "$TS" "$N" >> "$LOG"
+  fi
   exit 0
 fi
 
@@ -45,14 +62,20 @@ printf '%s  HIANYOS rc=%s\n%s\n' "$TS" "$RC" "$OUT" >> "$LOG"
 # vissza egy 401/400-ra is, es egy nema kuldes-hiba itt pont a vedelmet tunteti el.
 # rc=4: a MERO nem futott (hianyzo/ures/hibas forras-lista, kartya 83c47d59). Az a cim, hogy
 # "a lap hianyos", ilyenkor a nem letezo bajt nevezne meg, a meglevot (a vak orat) elhallgatna.
+# A hibas lapok neve a mero SAJAT soraban all (`HIBAS-LAPOK: a, b`). Ha nincs ilyen sor, vagy
+# nem pontosan ez az alakja, a fejlec nev nelkul megy ki, es a jelzes a koordinatornal marad.
+NAMES=$(printf '%s\n' "$OUT" | sed -nE 's/^HIBAS-LAPOK: ([a-z0-9_-]+(, [a-z0-9_-]+)*)$/\1/p' | tail -1)
 HEAD="[fleet-page-guard] EGY VAGY TOBB AGENS-LAP NEM HORDOZZA A TEHERHORDO MONDATOKAT."
+[ -n "$NAMES" ] && HEAD=$(printf '[fleet-page-guard] LAPOK: %s\nEGY VAGY TOBB AGENS-LAP NEM HORDOZZA A TEHERHORDO MONDATOKAT.' "$NAMES")
 [ "$RC" -eq 4 ] && HEAD="[fleet-page-guard] AZ AGENS-LAP OR NEM TUDOTT MERNI (rc=4): a lapokrol MOST semmit nem tudunk."
 MSG=$(printf '%s\n\n%s\n\n%s\n' \
   "$HEAD" \
   "$OUT" \
   "A kozos CLAUDE.md EGY olvasot er el (mind a het agens levalasztva), tehat ami ott all, az
-ODA NEM JUT EL. A javitas: ird be a hianyzo mondatot a nevezett lap(ok)ba, flock alatt,
-horgonyosan, es futtasd ujra ezt: python3 scripts/agent-core-check.py  (kartya b493b5a5)")
+ODA NEM JUT EL. A javitas KANARI es SZAKASZ hianyara: ird be a hianyzo mondatot a nevezett
+lap(ok)ba, flock alatt, horgonyosan. GENERALT blokkot kezzel NE irj: azt az iro (a dashboard)
+irja az agens indulasakor; ami itt HIANYZIK-kent all, ott az iro mar futott es megsem irta meg,
+az a keret hibaja, kartyara valo. Utana: python3 scripts/agent-core-check.py  (kartya b493b5a5)")
 
 # Through alert-coordinator.sh (card 906e9159): --force to the coordinator, the owner as the
 # fallback. A plain agent-msg.sh call went silent whenever the coordinator's queue was full.
