@@ -330,16 +330,19 @@ def log_outbound(agent_id, chat_id, text, message_id=None):
         con.close()
 
 
-def recent(agent_id, limit=RECENT_LIMIT):
+def recent(agent_id, limit=RECENT_LIMIT, since=None):
     """The last `limit` turns for this agent, oldest-first.
-    Rows: (direction, chat_id, text, ts, attachment_kind, attachment_file_id)."""
+    Rows: (direction, chat_id, text, ts, attachment_kind, attachment_file_id).
+    `since` (unix epoch seconds, card 49ecc9fc): only turns created at or after it; None = no age cut."""
     con = connect()
     try:
+        age = "" if since is None else " AND created_at >= ?"
+        args = (str(agent_id),) + (() if since is None else (int(since),)) + (int(limit),)
         rows = con.execute(
             "SELECT direction, chat_id, text, ts, attachment_kind, attachment_file_id"
             " FROM conversation_log"
-            " WHERE agent_id=? ORDER BY created_at DESC, id DESC LIMIT ?",
-            (str(agent_id), int(limit)),
+            " WHERE agent_id=?" + age + " ORDER BY created_at DESC, id DESC LIMIT ?",
+            args,
         ).fetchall()
         return list(reversed(rows))
     finally:
