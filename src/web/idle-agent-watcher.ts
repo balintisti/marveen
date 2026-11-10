@@ -36,6 +36,8 @@ import {
   type RecipientPaneState,
   type PendingRow,
   buildWakeMessage,
+  wakeHasPickableWork,
+  hasOpenFinding,
   deliverFleetAlerts,
   type FleetAlert,
   NO_IDLE_STATE,
@@ -82,6 +84,11 @@ const THRESHOLDS: IdleAgentThresholds = {
   // A repeated identical list is not news -- but after four hours, "nobody has touched
   // this" is. Without this the suppression is permanent on a stable queue.
   wakeStaleRearmMs: 4 * 60 * 60_000,
+  // A wake that names ONLY floor expiries (every item a waiting card whose floor ran out) with an
+  // UNCHANGED set waits 12 h instead of 4 (card 52abd0d4, marveen 44126). A testing card on the
+  // owner's list keeps the 4 h re-arm, and so does a `waiting_on_me` wake. A changed set, and every
+  // wake with pickable work, are untouched.
+  wakeStaleRearmCheckOnlyMs: 12 * 60 * 60_000,
   // "The guard is blind to this agent" is one fact per spell, not one per half hour (card
   // 3c27105f). Replayed over 7 days: 79 lines, 14 of them repeats inside six hours for an agent
   // already reported, none followed by anything the repeat caused; a blind spell that outlasts
@@ -706,6 +713,13 @@ export function tick(): void {
       const apiErrorProgressSinceResume = running && paneRead.apiError === true
         ? apiErrorProgress(agent, state.lastApiErrorResumeAt ?? null)
         : null
+      // The SAME split buildWakeMessage renders, on the SAME ownItems (card 52abd0d4); absent when the
+      // queue is undeclared, and then only the ordinary re-arm applies. The bounced ids are not read
+      // here: they regroup the message and cannot change this answer (see wakeHasPickableWork).
+      const ownWorkPickable = ownItems && check ? wakeHasPickableWork(check.kind, ownItems) : undefined
+      // A testing card still on the list is an owed answer, not a check (marveen 44180). Measured only
+      // for a check-only list, because only there does it decide anything.
+      const ownWorkOpenFinding = ownItems && ownWorkPickable === false ? hasOpenFinding(ownItems) : undefined
       const { decision, next } = decideIdleAlert(
         {
           agent,
@@ -726,6 +740,8 @@ export function tick(): void {
           // Without this the repeat-suppression never fires -- it is skipped whenever the
           // ids are absent, deliberately, because "unchanged" must be measured.
           ownWorkIds: ownItems ? ownItems.map((c) => c.id) : undefined,
+          ownWorkPickable,
+          ownWorkOpenFinding,
           // Same contract as ownWorkIds: absent means not measured, and the suppression
           // is skipped rather than guessed.
           pullWorkIds: pullPreview ? pullPreview.map((c) => c.id) : undefined,

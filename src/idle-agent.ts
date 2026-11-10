@@ -200,6 +200,15 @@ export interface IdleAgentThresholds {
    *  agents drop to a 1-4 item list, and every one of those lists is stable.
    *  A repeat is cheap once a shift; permanent silence is not. */
   wakeStaleRearmMs?: number
+  /** The re-arm for a wake that names ONLY floor expiries (card 52abd0d4, marveen 44126 option 1):
+   *  every named item is a waiting card whose floor ran out, so the agent has no work to start on,
+   *  and the set is unchanged. A testing card on the owner's list keeps wakeStaleRearmMs, and so
+   *  does a `waiting_on_me` wake. The measurement behind the card (2026-10-23, 7 days: 74 of 374
+   *  wakes check-only, 18 of those repeats, all at the 4 h re-arm) counted the OLDER, wider
+   *  check-only population; today's narrower scope has not been measured. A changed set still
+   *  wakes at once; a wake with pickable work keeps wakeStaleRearmMs. Never SHORTER than
+   *  wakeStaleRearmMs, and absent means the old single re-arm. */
+  wakeStaleRearmCheckOnlyMs?: number
   /** Floor between two wakes of the same agent, across spells. Without it, an agent
    *  that keeps finishing short turns would be woken every few minutes: each spell
    *  looks new, because going busy is exactly what ends the previous one. */
@@ -292,6 +301,15 @@ export interface IdleAgentInput {
    *  guard behaves exactly as before, so a caller that does not supply it loses nothing
    *  except the repeat-suppression. */
   ownWorkIds?: readonly string[]
+  /** Does the wake this list would produce carry PICKABLE work (wakeHasPickableWork, the same split
+   *  buildWakeMessage renders)? `false` = check-only. Absent means "not measured", and then the
+   *  ordinary re-arm applies: the longer one is only ever granted on a measured `false`. */
+  ownWorkPickable?: boolean
+  /** Does the list hold a TESTING card the assignee owes an answer on (hasOpenFinding, card 52abd0d4,
+   *  marveen 44180)? That is work, not a check, so the wake keeps the ordinary re-arm. `false` =
+   *  measured, no such card. Absent means "not measured", and then the ordinary re-arm applies,
+   *  exactly like ownWorkPickable. */
+  ownWorkOpenFinding?: boolean
   /**
    * The ownerless pull-list this tick would NAME, already lane-filtered -- the set the
    * repeat-suppression on the idle-no-work branch compares. Absent means "not measured",
@@ -422,6 +440,23 @@ export function sameWorkSet(a: readonly string[] | null | undefined, b: readonly
   const x = norm(a)
   const y = norm(b)
   return x.length === y.length && x.every((v, i) => v === y[i])
+}
+
+/** The stale re-arm for the WAKE path (card 52abd0d4). Only a wake MEASURED as check-only
+ *  (`pickable === false`) with no owed answer on it (`openFinding === false`) gets the longer
+ *  window, and never a shorter one than the base. Either one absent = not measured = the base.
+ *  With today's selection that leaves the wake that names floor expiries and nothing else. */
+export function wakeRearmFor(
+  thresholds: IdleAgentThresholds,
+  pickable: boolean | undefined,
+  openFinding: boolean | undefined,
+): number | undefined {
+  const base = thresholds.wakeStaleRearmMs
+  if (base === undefined) return undefined
+  if (pickable === false && openFinding === false && thresholds.wakeStaleRearmCheckOnlyMs !== undefined) {
+    return Math.max(base, thresholds.wakeStaleRearmCheckOnlyMs)
+  }
+  return base
 }
 
 export const NO_IDLE_STATE: IdleAgentState = { idleSinceMs: null, lastAlertAt: null, lastWakeAt: null }
@@ -797,7 +832,7 @@ function decideIdleAlertCore(
     // ...unless the silence has lasted long enough to be its own problem. An unchanged
     // list is not news the second time; it IS news again after a shift, because by then
     // "nobody has touched this in hours" is the finding.
-    const staleRearm = thresholds.wakeStaleRearmMs
+    const staleRearm = wakeRearmFor(thresholds, input.ownWorkPickable, input.ownWorkOpenFinding)
     const suppressionIsFresh =
       staleRearm === undefined || (lastWakeAt !== null && now - lastWakeAt < staleRearm)
     if (
@@ -1978,6 +2013,84 @@ export function buildNoWorkNotice(agent: string, minutes: number, nowMs: number,
   ].join('\n')
 }
 
+/** The split the wake message renders AND the guard decides on (card 52abd0d4): ONE definition, so
+ *  "this wake carries pickable work" can never mean something else in the decision than on the
+ *  page. Pickable first, then priority within each group. WHICH cards are pickable depends on
+ *  WHY they were selected, and getting that backwards produced a self-contradicting wake:
+ *  Didi (2026-08-22) received one message that said "40 tetel var rád" and "Nincs felveheto
+ *  munkad" at the same time. Her check is `testing_without_my_comment` -- for a reviewer the
+ *  `testing` column IS the work, so a rule written for an assignee's own queue inverts on her.
+ *  A reviewer told "no pickable work" is a reviewer who stops, which is exactly what this
+ *  guard exists to prevent.
+ *
+ *  A `waiting` card reaches the list for ONE reason: its floor ran out (card ce5c9e4b). It is not
+ *  pickable work and must not be listed as such -- the reader would start the work the card is
+ *  blocked on. ONLY for `assigned_open_cards` and the review queue (card b8674845): for
+ *  `waiting_on_me` EVERY item is a waiting card, taken for a different reason (didi's intersection
+ *  review, 2026-09-28, named the kind boundary).
+ *
+ *  A BOUNCED FIX IS TAKEN OUT OF EVERY OTHER GROUP AND LISTED FIRST (card 1affb872). In the
+ *  assignee's queue a `testing` card landed in the "not work" review group below the pickable
+ *  planned cards, so an urgent planned card was named before a fix the reviewer had already sent
+ *  back -- and the group's own label said it was not work. An open verdict makes it work.
+ *  `bouncedIds` absent = not measured: no bounced group, the other three as before. */
+export function splitWakeItems<T extends { id: string; priority?: string | null; status?: string }>(
+  kind: WorkCheckKind,
+  items: T[],
+  bouncedIds?: ReadonlySet<string>,
+): { bounced: T[]; work: T[]; floor: T[]; review: T[] } {
+  const rank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 }
+  const isReviewQueue = kind === 'testing_without_my_comment'
+  const pickable = (c: { status?: string }) =>
+    isReviewQueue ? c.status === 'testing' : c.status !== 'testing'
+  const byPriority = (a: { priority?: string | null }, b: { priority?: string | null }) =>
+    (rank[a.priority ?? 'normal'] ?? 2) - (rank[b.priority ?? 'normal'] ?? 2)
+  const bounced = bouncedIds ? [...items].filter((c) => bouncedIds.has(c.id)).sort(byPriority) : []
+  const rest = bounced.length ? items.filter((c) => !bounced.includes(c)) : items
+  const floor = kind === 'assigned_open_cards' || isReviewQueue
+    ? [...rest].filter((c) => c.status === 'waiting').sort(byPriority)
+    : []
+  const work = [...rest].filter((c) => pickable(c) && !floor.includes(c)).sort(byPriority)
+  // !floor too: in the review queue a waiting card is not pickable either, and must not be listed twice.
+  const review = [...rest].filter((c) => !pickable(c) && !floor.includes(c)).sort(byPriority)
+  return { bounced, work, floor, review }
+}
+
+/** Does a wake for these items name WORK the agent can start on? false = check-only.
+ *
+ *  Work is the FELVEHETO group, a BOUNCED fix (card 1affb872: an open verdict makes it work), and
+ *  for a reviewer the cards under their own name -- the message itself calls that group "a NEVEDEN
+ *  allo nyitott munka", and a reviewer's in_progress card is no more a check than a worker's.
+ *
+ *  THE BOUNCED IDS ARE OPTIONAL AND CANNOT CHANGE THE RE-ARM. A bounced card is `testing` or
+ *  `in_progress` (bouncedCardIds). Without the ids an in_progress one is already work here, in
+ *  either queue, and a testing one is work for a reviewer and an owed answer for an assignee
+ *  (hasOpenFinding). So the watcher does not load verdicts on every tick to decide a re-arm;
+ *  `idle-agent-checkonly-rearm.test.ts` pins this for every kind and both statuses. */
+export function wakeHasPickableWork(
+  kind: WorkCheckKind,
+  items: { id: string; priority?: string | null; status?: string }[],
+  bouncedIds?: ReadonlySet<string>,
+): boolean {
+  const { bounced, work, review } = splitWakeItems(kind, items, bouncedIds)
+  return bounced.length > 0 || work.length > 0 || (kind === 'testing_without_my_comment' && review.length > 0)
+}
+
+/** Is there a TESTING card in the list (card 52abd0d4, marveen 44180)? On an assignee's list that is
+ *  an owed answer, not a check, and the wake keeps the ordinary re-arm.
+ *
+ *  THE SELECTION IS THE READER, NOT A SECOND VERDICT PARSER. selectDeclaredWork keeps a testing card
+ *  on an assignee's list for two reasons only: it is marked `varakozik:assignee`, or a reviewer had
+ *  the last word and that word is not a closing verdict (closingVerdictByCard: no open verdict and
+ *  no open leftover from ANY reviewer; card 860db8cd). A card closed that way is not in the list at
+ *  all. So whatever testing card is still here is open -- including when the closing-verdict lookup
+ *  failed and nothing was dropped: unmeasured stays on the 4 h side. Reading the latest comment
+ *  here again would be a second definition of "closed", and the narrower one: it called a card
+ *  closed while another reviewer's NYITOTT TETEL still stood (didi 44208). */
+export function hasOpenFinding(items: readonly { status?: string }[]): boolean {
+  return items.some((c) => c.status === 'testing')
+}
+
 /** The wake an agent actually acts on.
  *
  *  Measured 2026-08-21: a wake that says "you have work" is the version that does not
@@ -2010,39 +2123,8 @@ export function buildWakeMessage(
    *  measured (the lookup failed, or the caller predates it): the old grouping, unchanged. */
   bouncedIds?: ReadonlySet<string>,
 ): string {
-  const rank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 }
-  // Pickable first, then priority within each group. WHICH cards are pickable depends on
-  // WHY they were selected, and getting that backwards produced a self-contradicting wake:
-  // Didi (2026-08-22) received one message that said "40 tetel var rád" and "Nincs felveheto
-  // munkad" at the same time. Her check is `testing_without_my_comment` -- for a reviewer the
-  // `testing` column IS the work, so a rule written for an assignee's own queue inverts on her.
-  // A reviewer told "no pickable work" is a reviewer who stops, which is exactly what this
-  // guard exists to prevent.
   const isReviewQueue = kind === 'testing_without_my_comment'
-  const pickable = (c: { status?: string }) =>
-    isReviewQueue ? c.status === 'testing' : c.status !== 'testing'
-  const byPriority = (a: { priority?: string | null }, b: { priority?: string | null }) =>
-    (rank[a.priority ?? 'normal'] ?? 2) - (rank[b.priority ?? 'normal'] ?? 2)
-  // A `waiting` card reaches this list for ONE reason: its floor ran out (card ce5c9e4b).
-  // It is not pickable work and must not be listed as such -- the reader would start the
-  // work the card is blocked on. So it gets its own group, and the group says why it came.
-  // ONLY for `assigned_open_cards`: that is the one kind whose selection admits a waiting card
-  // by its floor. For `waiting_on_me` EVERY item is a waiting card, taken for a different
-  // reason, and grouping them here would call the coordinator's whole decision queue a floor
-  // expiry (didi's intersection review, 2026-09-28, named the kind boundary).
-  // The review queue carries the assigned_open_cards selection too (card b8674845), floor included.
-  // A BOUNCED FIX IS TAKEN OUT OF EVERY OTHER GROUP AND LISTED FIRST (card 1affb872). In the
-  // assignee's queue a `testing` card landed in the "not work" review group below the pickable
-  // planned cards, so an urgent planned card was named before a fix the reviewer had already sent
-  // back -- and the group's own label said it was not work. An open verdict makes it work.
-  const bounced = bouncedIds ? [...items].filter((c) => bouncedIds.has(c.id)).sort(byPriority) : []
-  const rest = bounced.length ? items.filter((c) => !bounced.includes(c)) : items
-  const floor = kind === 'assigned_open_cards' || isReviewQueue
-    ? [...rest].filter((c) => c.status === 'waiting').sort(byPriority)
-    : []
-  const work = [...rest].filter((c) => pickable(c) && !floor.includes(c)).sort(byPriority)
-  // !floor too: in the review queue a waiting card is not pickable either, and must not be listed twice.
-  const review = [...rest].filter((c) => !pickable(c) && !floor.includes(c)).sort(byPriority)
+  const { bounced, work, floor, review } = splitWakeItems(kind, items, bouncedIds)
 
   const line = (c: { id: string; title?: string | null; priority?: string | null; status?: string }) =>
     `  ${c.id.slice(0, 8)}  ${(c.status ?? '?').padEnd(11)} ${(c.priority ?? 'normal').padEnd(6)}  ${(c.title ?? '').slice(0, 60)}`
