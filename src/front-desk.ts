@@ -131,6 +131,9 @@ export interface FrontDeskNotice {
   failed?: readonly number[] | null
   /** PATH of the pane snapshot taken before the restart; the snapshot itself is not embedded. */
   snapshot?: string | null
+  /** Stage 1, only on a restart notice that was held and delivered late: the ids of `delivered`
+   *  that had no id-bearing trace when it was sent. The key is absent on every other notice. */
+  untraced?: readonly number[] | null
 }
 
 /** The machine-readable first line of a rerouted notice (jarvis's requirement on the card).
@@ -147,6 +150,7 @@ export function frontDeskHeader(n: FrontDeskNotice): string {
     pending: n.pending ? [...n.pending] : null,
     failed: n.failed ? [...n.failed] : null,
     snapshot: n.snapshot ?? null,
+    ...(n.untraced !== undefined ? { untraced: n.untraced ? [...n.untraced] : null } : {}),
   })}`
 }
 
