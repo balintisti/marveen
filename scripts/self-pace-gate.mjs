@@ -101,7 +101,9 @@ const SELF_PACE_BASH_PATTERNS = [
 // other's, so no command is lost:
 // - a generic wrapper is read as the wrapper: it goes on with WRAPPER_OPTS and then the next
 //   wrapper or the binary, exactly what the argument reading would have accepted
-//   (OPT_ARG_NOT_WRAPPER);
+//   (OPT_ARG_NOT_WRAPPER). A VAR=x word is never such a wrapper, even when x is a path ending in
+//   a wrapper name: `env -i X=/usr/bin/env crontab -e` lost BOTH readings (the path prefix spanned
+//   `X=/usr/bin/`, and FLAG_NEEDS_ARG drops the no-argument reading) and passed: didi 57494;
 // - VAR=x, a reserved word and `command` are read as the flag's ARGUMENT: as wrappers they cannot
 //   take a flag (`command` only -p), while the argument reading accepts more flags AND then the
 //   next wrapper (FLAG_NEEDS_ARG). The first version read them as wrappers, and lost
@@ -117,7 +119,7 @@ const SELF_PACE_BASH_PATTERNS = [
 // A bare `--` ends the options of every wrapper (didi 57405 item 2: `env -- crontab -e` passed,
 // because a flag needed a letter or digit after the dashes).
 const GENERIC_WRAPPERS = 'sudo|doas|env|exec|nice|ionice|caffeinate|stdbuf|time|setsid|nohup|watch|parallel|arch|builtin|taskpolicy'
-const OPT_ARG_NOT_WRAPPER = String.raw`(?!(?:\S*/)?(?:${GENERIC_WRAPPERS})(?:\s|$))`
+const OPT_ARG_NOT_WRAPPER = String.raw`(?!(?![A-Za-z_]\w*=)(?:\S*/)?(?:${GENERIC_WRAPPERS})(?:\s|$))`
 const FLAG_NEEDS_ARG = String.raw`\s+(?:[A-Za-z_]\w*=|(?:then|do|else|elif|if|while|until|!|\{|(?:\S*/)?command)(?:\s|$))`
 const END_OF_OPTS = String.raw`\s+--(?=\s|$)`
 const WRAPPER_OPTS = String.raw`(?:${END_OF_OPTS}|\s+--?[A-Za-z0-9][^\s]*(?:\s+${OPT_ARG_NOT_WRAPPER}[^\s-]\S*|(?!${FLAG_NEEDS_ARG})))*`

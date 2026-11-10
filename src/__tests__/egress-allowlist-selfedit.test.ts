@@ -536,8 +536,31 @@ describe('gate: nested wrappers cost one state per word (bcc323dc)', () => {
     ['', 'true; ', 'echo a | ', 'true && '].map((before) => `${before}${shape} ${tail}`))))('denied: %s', (command) => {
     expect(decide('Bash', { command })).toEqual({ deny: true, reason: 'os-scheduler' })
   })
+  // didi 57494: a VAR=x word after a value flag, where x is a path ending in a generic wrapper's
+  // name, had NO reading on 3fdc9dd4d (the path prefix spanned `X=/usr/bin/`, FLAG_NEEDS_ARG dropped
+  // the no-argument reading), so the scheduler behind it passed. Denied on the live gate.
+  const VAR_PATH_SHAPES = [
+    'env -i X=/usr/bin/env', 'sudo -E HOME=/home/env', 'env -i PATH=/usr/local/bin:/opt/env',
+    'time -p X=/usr/bin/time', 'nohup -x X=/usr/bin/env', 'env -i X=/a/b/sudo', 'env -i X=./nice',
+    'nice -n X=/bin/nice', 'env -i -- X=/usr/bin/env', 'sudo -u root -E X=/usr/bin/sudo',
+  ]
+  it.each(VAR_PATH_SHAPES.flatMap((shape) => SCHEDULERS.flatMap((tail) =>
+    ['', 'true && '].map((before) => `${before}${shape} ${tail}`))))('denied (VAR=path after a flag): %s', (command) => {
+    expect(decide('Bash', { command })).toEqual({ deny: true, reason: 'os-scheduler' })
+  })
+  // A VAR=x word keeps exactly one reading, and a path word with `=` in a directory (not VAR=x) too:
+  // excluding `=` from the path prefix instead gave `/a=b/sudo` two readings, 15.7 s at 24 repeats.
+  it('a path word with = after a flag stays linear: (sudo -Z /a=b/sudo) x24 ls', () => {
+    const started = performance.now()
+    expect(decide('Bash', { command: 'sudo -Z /a=b/sudo '.repeat(24) + 'ls' }).deny).toBe(false)
+    expect(performance.now() - started).toBeLessThan(1000)
+  })
+  it.each(['env -i X=/usr/bin/env ls', 'env -i X=/usr/bin/env', 'sudo -E HOME=/home/env make'])('POSITIVE CONTROL, allowed: %s', (command) => {
+    expect(decide('Bash', { command }).deny).toBe(false)
+  })
   it.each([
     'echo f | xargs env -u command -i crontab',
+    'echo f | xargs env -i X=/usr/bin/env crontab -e',
     "bash -c 'command -p X=1 launchctl load x'",
     'find . -exec command crontab -e \\;',
   ])('denied (indirect): %s', (command) => {
