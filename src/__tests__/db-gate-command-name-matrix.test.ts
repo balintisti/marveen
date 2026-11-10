@@ -26,6 +26,14 @@
  * inside quotes. Each of those rows is the only one that fails when one rule of the quote
  * tracking is taken out.
  *
+ * ROUND 3 (didi's review, comment 58068) added the group `as-written reading beside a
+ * continuation`. find_hits judges a command twice, as written and with its backslash-newlines
+ * glued, and promises that every refusal of the first reading stays. Nothing held it to that: with
+ * the first reading dropped whenever the command holds a backslash-newline, every test stayed
+ * green. In these five rows the glued reading alone passes the line: after an ESCAPED backslash
+ * the newline is a real one and the next line runs, and a heredoc body line that ends in a
+ * backslash does not swallow the terminator. All five were refused before the fix as well.
+ *
  * This file hands TEXT to the gate's verdict() and executes nothing.
  */
 import { describe, it, expect } from 'vitest'
@@ -60,13 +68,14 @@ const isLimit = (r: Row): boolean => r.form === 'var-assembled' && r.expect === 
 describe('db-destructive-gate: one verdict for every spelling of a command name (1a701051)', () => {
   // A fixture that lost rows would pass every row it still has.
   it('the fixture is whole', () => {
-    expect(ROWS).toHaveLength(138)
+    expect(ROWS).toHaveLength(143)
     expect(GOT).toHaveLength(ROWS.length)
-    expect(ROWS.filter((r) => r.expect === 'deny')).toHaveLength(108)
+    expect(ROWS.filter((r) => r.expect === 'deny')).toHaveLength(113)
     expect(ROWS.filter((r) => r.group === 'allow control')).toHaveLength(28)
     expect(ROWS.filter((r) => r.group === 'interpreter heredoc')).toHaveLength(17)
     expect(ROWS.filter((r) => r.group === 'continuation in executed code')).toHaveLength(5)
     expect(ROWS.filter((r) => r.group === 'dollar-quoted name after a quote')).toHaveLength(6)
+    expect(ROWS.filter((r) => r.group === 'as-written reading beside a continuation')).toHaveLength(5)
     expect(ROWS.filter(isLimit)).toHaveLength(2)
     expect(new Set(ROWS.map((r) => r.command)).size).toBe(ROWS.length)
   })

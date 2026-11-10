@@ -964,5 +964,40 @@
   "command": "ls -la \\\n  notes",
   "before": "none",
   "expect": "none"
+ },
+ {
+  "group": "as-written reading beside a continuation",
+  "form": "an escaped backslash at a line end is not a continuation: the next line runs (dropdb)",
+  "command": "echo foo\\\\\ndropdb crm",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "as-written reading beside a continuation",
+  "form": "an escaped backslash at a line end, then a force push",
+  "command": "echo done\\\\\ngit push fork main --force",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "as-written reading beside a continuation",
+  "form": "an escaped backslash at a line end, then a client drop",
+  "command": "echo done\\\\\npsql -c \"DROP TABLE users\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "as-written reading beside a continuation",
+  "form": "a heredoc body line ends in a backslash: the terminator still ends the body",
+  "command": "cat <<EOF\nx\\\nEOF\ndropdb prod_db",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "as-written reading beside a continuation",
+  "form": "a quoted-terminator heredoc body line ends in a backslash",
+  "command": "cat <<'EOF'\nx\\\nEOF\ndropdb prod_db",
+  "before": "deny",
+  "expect": "deny"
  }
 ]
