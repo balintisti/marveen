@@ -182,3 +182,20 @@ mérve 2026-09-21-én, leállítja a csatorna-plugint (reply, react, edit_messag
 újraindítása visszahozza. Máshol hasznos diagnosztika. A BEJÖVŐ üzenetek sorsát nem mértük; részletek:
 `docs/mcp-list-channel-plugin.md`.
 ~~~~
+
+---
+
+## `report-routing`
+
+Nem rövidített szakasz, hanem új (kártya `074149c2`, 3. szakasz, 2026-11-10). Az indok: a koordinátor
+bejövő sorának nagy része gépi értesítő és ügynöki riport volt, és mindegyik egy teljes koordinátor-kört
+indított. A 2. szakasz a gépi értesítőket viszi át a beállított front deskre (`FRONT_DESK_AGENT_ID`); ez a
+szakasz az ügynökök saját riportjait: kész, státusz, átadás, tájékoztatás a front deskhez megy, a
+koordinátorhoz csak döntés (`DECISION:` első sor), átlépett határ, vagy ami a tulajdonoshoz kell jusson.
+
+Miért generált: a szabálynak körüzenet nélkül, az ügynök következő indulásakor kell életbe lépnie.
+Miért van ott a blokk akkor is, ha nincs front desk: a `scripts/agent-core-check.py` minden lapon minden
+generált nevet keres, egy eltűnő blokk kézzel átírt lapnak látszana. Front desk nélkül (üres, hibás
+alakú, maga a koordinátor, vagy nem a flotta ügynöke) a blokk egyetlen sor, és NEM ad szabályt.
+Korlát: a lap az ügynök indulásakor íródik, a beállítás menet közben is állítható; a kettő az ügynök
+következő indulásáig eltérhet.

@@ -46,6 +46,37 @@ export interface MachineNoticeRoute {
   why: FrontDeskWhy
 }
 
+/** Why a configured value cannot be a front desk at all, or null when it can. The router below and
+ *  the rule-file section (reportDesk) both ask this, so they cannot disagree about "configured". */
+export function frontDeskIdProblem(
+  coordinator: string,
+  desk: string,
+): 'not-configured' | 'malformed-id' | 'is-coordinator' | null {
+  if (desk === '') return 'not-configured'
+  // An id is used as written or not at all: stripping characters could turn a typo into the id of
+  // a different, real agent.
+  if (!/^[a-zA-Z0-9_-]+$/.test(desk)) return 'malformed-id'
+  if (desk === coordinator) return 'is-coordinator'
+  return null
+}
+
+/** The front desk the RULE FILES name (stage 3): the configured id when it can be one and is an
+ *  agent of this fleet, else null. Running or not is NOT asked: a rule file is written when an
+ *  agent starts and is read for hours, and the rule itself says what to do when the desk is down. */
+export function reportDesk(
+  coordinator: string,
+  configured: string | null | undefined,
+  isKnown: (agent: string) => boolean,
+): string | null {
+  const desk = String(configured ?? '').trim()
+  if (frontDeskIdProblem(coordinator, desk) !== null) return null
+  try {
+    return isKnown(desk) ? desk : null
+  } catch {
+    return null
+  }
+}
+
 /** Who gets a machine notice about `subjects`: the front desk, or (on any doubt) the coordinator. */
 export function machineNoticeRecipient(
   coordinator: string,
@@ -55,11 +86,8 @@ export function machineNoticeRecipient(
 ): MachineNoticeRoute {
   const stay = (why: FrontDeskWhy): MachineNoticeRoute => ({ to: coordinator, rerouted: false, why })
   const desk = String(configured ?? '').trim()
-  if (desk === '') return stay('not-configured')
-  // An id is used as written or not at all: stripping characters could turn a typo into the id of
-  // a different, real agent.
-  if (!/^[a-zA-Z0-9_-]+$/.test(desk)) return stay('malformed-id')
-  if (desk === coordinator) return stay('is-coordinator')
+  const problem = frontDeskIdProblem(coordinator, desk)
+  if (problem !== null) return stay(problem)
   if (subjects.length === 0) return stay('no-subject')
   // A notice about the coordinator itself is not front-desk work: the front desk cannot restart
   // it or hand it a card, so it would only come back as an escalation.

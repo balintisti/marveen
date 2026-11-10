@@ -9,7 +9,8 @@ import { atomicWriteFileSync } from './atomic-write.js'
 import { findDuplicateJsonKeys } from './json-dup-keys.js'
 import { logger } from '../logger.js'
 import { filterInheritableMcpServers, readInheritableMcpServerNames, logNotInherited } from './mcp-inheritance.js'
-import { agentDir, agentConfigRoot, listAgentNames, readAgentCapabilities, readAgentToolDeny } from './agent-config.js'
+import { agentDir, agentConfigRoot, listAgentNames, readAgentCapabilities, readAgentToolDeny, isKnownAgent } from './agent-config.js'
+import { FRONT_DESK_SETTING, reportDesk } from '../front-desk.js'
 import { resolveProfilePlaceholders, type ProfileTemplate } from './profiles.js'
 import { sanitizeCapabilityTag, CAPABILITY_TAG_MAX_PER_AGENT } from '../prompt-safety.js'
 import { TMP_ROOT_PREFIXES as _TMP_PREFIXES } from './tmp-root-prefixes.js'
@@ -2385,6 +2386,77 @@ export function ensureMessageCloseSection(name: string): void {
 
   const updated = MSGCLOSE_BLOCK_RE.test(existing)
     ? existing.replace(MSGCLOSE_BLOCK_RE, block)
+    : existing.trimEnd() + '\n\n' + block + '\n'
+
+  if (updated === existing) return
+  atomicWriteFileSync(claudeMdPath, updated)
+}
+
+// ---- Report routing: who gets a report (card 074149c2, stage 3) ----
+//
+// With a front desk configured (FRONT_DESK_AGENT_ID, stage 2) the machine notices leave the
+// coordinator's inbox, but every agent's own "done / status / FYI" message still starts a
+// coordinator turn. The rule that sends those to the front desk has to reach an agent without a
+// broadcast message, so it ships as a section: written at the agent's next start.
+//
+// THE BLOCK IS ALWAYS WRITTEN, the rule only when a front desk is configured.
+// scripts/agent-core-check.py asks every agent page for every generated name, so a block that
+// came and went with the setting would read there as a hand-edited page. With no front desk (empty,
+// malformed, the coordinator itself, or not an agent of this fleet: the same test the router
+// uses) the block is one line that says so, and adds no rule.
+const REPORTROUTE_BEGIN = '<!-- BEGIN GENERATED: report-routing (auto-generated, do not edit by hand) -->'
+const REPORTROUTE_END = '<!-- END GENERATED: report-routing -->'
+const REPORTROUTE_BLOCK_RE = new RegExp(
+  `${REPORTROUTE_BEGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${REPORTROUTE_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+)
+
+/** `desk` is the front desk the rule names, or null for the no-rule form (see reportDesk). */
+export function buildReportRoutingBody(name: string, desk: string | null): string {
+  if (desk === null) {
+    return [
+      '## Who gets what: reports',
+      '',
+      `No front desk is configured (\`${FRONT_DESK_SETTING}\`): this section adds no rule.`,
+    ].join('\n')
+  }
+  const lines = ['## Who gets what: reports go to the front desk', '']
+  // The two agents the rule is ABOUT read it from the other side.
+  if (name === desk) lines.push(`YOU are ${desk}, the front desk: this is the rule every other agent follows.`)
+  if (name === MAIN_AGENT_ID) lines.push(`YOU are ${MAIN_AGENT_ID}, the coordinator: this is the rule every other agent follows.`)
+  lines.push(
+    `REPORTS go to **${desk}**: done, status, handoff, FYI. **${MAIN_AGENT_ID}** gets ONLY:`,
+    '(a) a DECISION you cannot make yourself: first line starts with `DECISION:`, then the question in one line, the options, your recommendation, the evidence as ids;',
+    '(b) a crossed boundary: production write, push target, secret, anything irreversible;',
+    `(c) something that must reach ${OWNER_NAME}.`,
+    `If ${desk} is not running (the answer to your send says so), the report goes on the card and to nobody.`,
+    'No acknowledgement messages in either direction.',
+  )
+  return lines.join('\n')
+}
+
+// Idempotently ensures the report-routing block is present and current; same contract and the
+// same two surfaces as ensureMessageCloseSection. `configuredDesk` is the setting AS WRITTEN: the
+// caller reads it (web/front-desk-setting.ts), this decides whether it names a usable front desk.
+export function ensureReportRoutingSection(name: string, configuredDesk: string | null | undefined): void {
+  const claudeMdPath = name === MAIN_AGENT_ID
+    ? join(PROJECT_ROOT, 'CLAUDE.md')
+    : join(agentDir(name), 'CLAUDE.md')
+  if (!existsSync(claudeMdPath)) return
+
+  const desk = reportDesk(MAIN_AGENT_ID, configuredDesk, isKnownAgent)
+  const block = `${REPORTROUTE_BEGIN}\n${buildReportRoutingBody(name, desk)}\n${REPORTROUTE_END}`
+
+  let existing: string
+  try {
+    existing = readFileSync(claudeMdPath, 'utf-8')
+  } catch {
+    return
+  }
+
+  // A function replacement: the block is data, and a `$&` in an agent id or owner name must not be
+  // read as a replacement pattern.
+  const updated = REPORTROUTE_BLOCK_RE.test(existing)
+    ? existing.replace(REPORTROUTE_BLOCK_RE, () => block)
     : existing.trimEnd() + '\n\n' + block + '\n'
 
   if (updated === existing) return

@@ -74,7 +74,8 @@ import { filterInheritableMcpServers, readInheritableMcpServerNames, logNotInher
 import { readEnvFile } from '../env.js'
 import { loadProfileTemplate } from './profiles.js'
 import { resolveAgentSecurityProfile } from './agent-team.js'
-import { writeAgentSettingsFromProfile, ensureFleetRosterSection, ensureProjectRootInClaudeMd, ensureAutonomySection, ensureSkillsPathTrapSection, ensureSystemDirectiveAuthSection, ensureMemorySearchLabelSection, ensureFleetAuthSection, ensureEvidenceSection, ensureMcpListChannelSection, ensureMessageCloseSection } from './agent-scaffold.js'
+import { writeAgentSettingsFromProfile, ensureFleetRosterSection, ensureProjectRootInClaudeMd, ensureAutonomySection, ensureSkillsPathTrapSection, ensureSystemDirectiveAuthSection, ensureMemorySearchLabelSection, ensureFleetAuthSection, ensureEvidenceSection, ensureMcpListChannelSection, ensureMessageCloseSection, ensureReportRoutingSection } from './agent-scaffold.js'
+import { configuredFrontDesk } from './front-desk-setting.js'
 import { schedulePluginUnlockAfterRespawn } from './channel-plugin-unlock.js'
 import { recordInjectedPrompt } from './injected-prompt-registry.js'
 import { recordPaneSource, type SourceSurvival } from './pane-source-survival.js'
@@ -2023,6 +2024,7 @@ export async function startAgentProcess(name: string, opts: { fresh?: boolean } 
     ensureEvidenceSection(name)
     ensureMcpListChannelSection(name)
     ensureMessageCloseSection(name)
+    ensureReportRoutingSection(name, configuredFrontDesk())
     // A sub-agent must load ONLY its own channel plugin. The user-scope
     // enabledPlugins would otherwise make EVERY sub-agent spawn a telegram
     // (and slack/discord) poller that falls back to the main agent's bot
