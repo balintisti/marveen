@@ -629,7 +629,7 @@ setInterval(() => { try { sweepExpiredDesktopLock() } catch { /* never kill the 
   // dashboard-editor buffer PUT.
   if (!webOnly) {
     ensureFederationClaudeMdSection()
-    ensureAutonomySection(MAIN_AGENT_ID)
+    ensureAutonomySection(MAIN_AGENT_ID, configuredFrontDesk())
     ensureSkillsPathTrapSection(MAIN_AGENT_ID)
     ensureSystemDirectiveAuthSection(MAIN_AGENT_ID)
     ensureMemorySearchLabelSection(MAIN_AGENT_ID)

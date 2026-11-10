@@ -116,6 +116,7 @@ export type FrontDeskNoticeType =
   | 'idle-no-work'
   | 'idle-still-idle'
   | 'restart-window-receipt'
+  | 'fleet-page-guard'
 
 /** What the header carries. `null` always means NOT MEASURED for this notice, never "none": an
  *  empty list is a measured zero. */
@@ -131,6 +132,9 @@ export interface FrontDeskNotice {
   failed?: readonly number[] | null
   /** PATH of the pane snapshot taken before the restart; the snapshot itself is not embedded. */
   snapshot?: string | null
+  /** Stage 1, only on a restart notice that was held and delivered late: the ids of `delivered`
+   *  that had no id-bearing trace when it was sent. The key is absent on every other notice. */
+  untraced?: readonly number[] | null
 }
 
 /** The machine-readable first line of a rerouted notice (jarvis's requirement on the card).
@@ -147,6 +151,7 @@ export function frontDeskHeader(n: FrontDeskNotice): string {
     pending: n.pending ? [...n.pending] : null,
     failed: n.failed ? [...n.failed] : null,
     snapshot: n.snapshot ?? null,
+    ...(n.untraced !== undefined ? { untraced: n.untraced ? [...n.untraced] : null } : {}),
   })}`
 }
 
@@ -180,6 +185,21 @@ export function isReroutableWindowReceipt(content: string): boolean {
   if (!t.startsWith('[RESTART-ABLAK]')) return false
   if (t.includes('?')) return false
   return !/DECISION:/i.test(t)
+}
+
+/** The first line scripts/fleet-page-guard.sh puts on a DEFECT alarm: the pages it found
+ *  incomplete, as agent ids. The script writes this line only from the checker's own
+ *  machine-readable name line; a guard that could not measure (rc=4) and every hand-written text
+ *  carry no such line. */
+const PAGE_GUARD_HEAD_RE = /^\[fleet-page-guard\] LAPOK: ([a-z0-9_-]+(?:, [a-z0-9_-]+)*)$/
+
+/** The agent pages a page-guard alarm is about, or null when the text is not that alarm. Only the
+ *  FIRST line is read, and it must be the whole line: the names are the notice's subjects, so a
+ *  line this cannot read in full names nobody and the alarm stays where it was sent. */
+export function pageGuardNoticeSubjects(content: string): string[] | null {
+  const nl = content.indexOf('\n')
+  const m = PAGE_GUARD_HEAD_RE.exec(nl === -1 ? content : content.slice(0, nl))
+  return m ? m[1].split(', ') : null
 }
 
 /** Which coordinator-bound sweep alerts the front desk may read: a sweep that holds NOTHING BUT

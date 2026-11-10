@@ -5,7 +5,7 @@
 // agent stayed at an empty prompt. The fixture MANDARK_0855 is the shape of the real capture
 // (also in idle-guard-background-wait.test.ts); the others are the same pane with ONE thing changed.
 import { describe, it, expect } from 'vitest'
-import { detectPaneState, detectsMidTurnApiError, detectsThinkingBlockError } from '../pane-state.js'
+import { detectPaneState, detectsMidTurnApiError, detectsThinkingBlockError, midTurnApiErrorAtTail } from '../pane-state.js'
 
 const SEP = '─'.repeat(80)
 const BOX = (name: string) => `${'─'.repeat(70)} ${name} ─\n❯ \n${SEP}`
@@ -134,6 +134,26 @@ describe('detectsMidTurnApiError -- negatives', () => {
     expect(detectsMidTurnApiError('⏺ API Error: Connection lost mid-response.')).toBe(false)
     expect(detectsMidTurnApiError('')).toBe(false)
     expect(detectsMidTurnApiError('\n\n')).toBe(false)
+  })
+})
+
+// Card 074149c2 (didi 57938, finding 1): the same walk for a caller that must tell "the pane was
+// read and does not end in an error" from "the tail could not be located".
+describe('midTurnApiErrorAtTail -- three answers, the boolean detector is its `=== true`', () => {
+  const idle = `\n⏺ Kész, minden zöld.\n\n${BOX('Friday')}\n${FOOT}`
+  it('true exactly where the detector fires', () => {
+    for (const pane of [REAL, WITH_WAITING_LINE, WITH_TURN_SUMMARY, RESULT_GLYPH, WITH_CODE]) expect(midTurnApiErrorAtTail(pane)).toBe(true)
+  })
+  it('false when the box is there and the last block is something else, or nothing', () => {
+    expect(midTurnApiErrorAtTail(idle)).toBe(false)
+    expect(midTurnApiErrorAtTail(REAL.replace(`\n${BOX('Friday')}`, `\n⏺ Folytatom: a teszt lefutott, 12 passed.\n\n${BOX('Friday')}`))).toBe(false)
+    expect(midTurnApiErrorAtTail(`${BOX('Friday')}\n${FOOT}`)).toBe(false)
+  })
+  it('null when the input box is not in the capture: one separator, none, or no text at all', () => {
+    expect(midTurnApiErrorAtTail('⏺ API Error: Connection lost mid-response.')).toBeNull()
+    expect(midTurnApiErrorAtTail(`\n⏺ Kész, minden zöld.\n\n${SEP}\n❯ `)).toBeNull()
+    expect(midTurnApiErrorAtTail('\n\n')).toBeNull()
+    expect(midTurnApiErrorAtTail('')).toBeNull()
   })
 })
 

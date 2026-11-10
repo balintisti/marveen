@@ -28,7 +28,7 @@ import { getFederationConfig } from '../federation/config.js'
 import type { RouteContext } from './types.js'
 import { unknownQueryParams, unknownQueryParamError } from '../query-params.js'
 import { resolveMachineNoticeRecipient } from '../front-desk-route.js'
-import { isReroutableWindowReceipt, withFrontDeskHeader } from '../../front-desk.js'
+import { isReroutableWindowReceipt, pageGuardNoticeSubjects, withFrontDeskHeader, type FrontDeskNotice } from '../../front-desk.js'
 
 /** Query parameters `GET /api/messages` accepts. */
 const MESSAGES_PARAMS: readonly string[] = ['agent', 'status', 'limit', 'before']
@@ -400,17 +400,28 @@ export async function tryHandleMessages(ctx: RouteContext): Promise<boolean> {
     // ONLY a registered fleet agent's line is rerouted: the owner, the voice channel and the
     // neighbouring systems always reach the recipient they named. The response says so
     // (`rerouted`), because the sender asked for someone else.
+    //
+    // THE PAGE GUARD'S DEFECT ALARM (same card, follow-up; coordinator's comment 57647) is the
+    // second such line. scripts/fleet-page-guard.sh sends it through alert-coordinator.sh, which
+    // speaks AS the coordinator TO the coordinator, so the sender is no subject here: the subjects
+    // are the pages its first line names, and every one of them must be an agent of this fleet. A
+    // page list that holds the front desk's own page stays with the coordinator (is-subject).
     const senderIdent = sanitizeAgentIdent(from)
-    const desk = !isQualifiedId(storedTo)
-      && sanitizeAgentIdent(storedTo) === sanitizeAgentIdent(MAIN_AGENT_ID)
-      && isKnownAgent(senderIdent)
-      && isReroutableWindowReceipt(normalizedContent)
-      ? resolveMachineNoticeRecipient([senderIdent])
-      : null
+    const coordinatorIdent = sanitizeAgentIdent(MAIN_AGENT_ID)
+    const toCoordinator = !isQualifiedId(storedTo) && sanitizeAgentIdent(storedTo) === coordinatorIdent
+    const guardPages = senderIdent === coordinatorIdent ? pageGuardNoticeSubjects(normalizedContent) : null
+    const machineNotice: FrontDeskNotice | null = !toCoordinator
+      ? null
+      : isKnownAgent(senderIdent) && isReroutableWindowReceipt(normalizedContent)
+        ? { type: 'restart-window-receipt', subjects: [senderIdent] }
+        : guardPages !== null && guardPages.every((p) => isKnownAgent(p))
+          ? { type: 'fleet-page-guard', subjects: guardPages }
+          : null
+    const desk = machineNotice ? resolveMachineNoticeRecipient(machineNotice.subjects) : null
     const requestedTo = storedTo
     if (desk?.rerouted) storedTo = desk.to
-    const storedContent = desk
-      ? withFrontDeskHeader(desk, { type: 'restart-window-receipt', subjects: [senderIdent] }, normalizedContent)
+    const storedContent = desk && machineNotice
+      ? withFrontDeskHeader(desk, machineNotice, normalizedContent)
       : normalizedContent
     const msg = createAgentMessage(from.trim(), storedTo, storedContent, trimmedOriginNote)
     // Backpressure, returned WITH the id rather than behind a second call:

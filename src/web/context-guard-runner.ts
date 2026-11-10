@@ -71,6 +71,8 @@ import {
 import { whileNotFrozen } from './fleet-freeze.js'
 import { resolveMachineNoticeRecipient } from './front-desk-route.js'
 import { frontDeskHeader } from '../front-desk.js'
+import { holdRoutineRestartNotice, resolveRestartNoticeHolds, restartNoticeSwallowMode, RESTART_NOTICE_RESOLVE_MS } from './restart-notice-hold.js'
+import { restartWindowCloseDirective } from '../restart-notice-trace.js'
 import { decideBootWedgeRescue, setInputNotEmptiedHandler, type GuardRestartRecord } from './boot-wedge-rescue.js'
 
 // Fleet context guard (kanban #81): acts BEFORE a session drowns in its own
@@ -343,6 +345,10 @@ export function resumePrompt(
   hadHandoff: boolean,
   staleMinutes: HandoffStaleness = null,
   tailPath: string | null = null,
+  // Card 074149c2, stage 1 (marveen's decision, comment 57416): true only while
+  // RESTART_NOTICE_SWALLOW_MODE is 'live'. The fresh session then CLOSES the rows it reads back
+  // instead of acknowledging them by message; the close is the trace the held notice waits for.
+  closeNotAck = false,
 ): string {
   const base =
     // Wording covers both tiers that lead here: "grew too large" is true at the
@@ -382,6 +388,7 @@ export function resumePrompt(
     // ride in the resume prompt (the fresh session's only context), and the
     // ack-to-sender is the OBSERVABLE trace: without it, verifying this very
     // instruction would run into the same blindness it exists to fix.
+    (closeNotAck ? restartWindowCloseDirective(name) : (
     `RESTART-ABLAK: az előző session utolsó ~15 percében kézbesített inter-agent üzenet elveszhetett. ` +
     `Olvasd vissza a saját sorodat erre az ablakra (GET /api/messages?agent=${name}, created_at szerint szűrve), ` +
     `és minden ott talált, még el nem intézett kérést kezelj újként. KÖTELEZŐ MEGFIGYELHETŐ NYOM: minden ` +
@@ -392,7 +399,8 @@ export function resumePrompt(
     // almost every window (deeper retried 3x, msg 28923). The trace for those
     // rows is the row itself, closed with a result and no receipt.
     `KIVÉTEL: a "system" feladó nem ágens, neki küldött nyugta 400-at kap -- az ilyen tételt ` +
-    `PUT /api/messages/<id> {"status":"done","result":"[RESTART-ABLAK] felvéve a friss sessionben","notify":false} zárja, ez a nyoma. ` +
+    `PUT /api/messages/<id> {"status":"done","result":"[RESTART-ABLAK] felvéve a friss sessionben","notify":false} zárja, ez a nyoma. `
+    )) +
     // RESPAWNZAJ822/PRODFAAG822: a fresh session acting on a resume goal is
     // exactly the actor that branch-switched and committed on the live prod
     // tree (2026-08-22 10:10, PR #1036 duplicate). The constraint must ride in
@@ -1169,6 +1177,11 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
           // markMessageDone notifies nobody), kept for the audit trail. Synchronous right after the
           // insert, so no router tick can see it pending.
           if (restartNoticeClosesItself(lossNeedsAction)) markMessageDone(notice.id, RESTART_NOTICE_AUTOCLOSED)
+          // Card 074149c2, stage 1: after a ROUTINE restart the notice waits for the id-bearing
+          // traces of the rows it reports on instead of asking a reader, and is delivered only if
+          // one is still missing at the deadline. Never throws; whenever it does nothing, the row
+          // written above is delivered exactly as before.
+          holdRoutineRestartNotice({ agent: name, noticeId: notice.id, reason: decision.reason, handoffStaleMinutes: decision.nextState.handoffStaleMinutes, lossWindow, snapshotPath, finalPane })
         } catch (err) {
           logger.warn({ err, name }, 'context-guard: restart notice message failed')
         }
@@ -1185,7 +1198,7 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
         await sendSystemDirective(
           name,
           session,
-          resumePrompt(name, handoffPathFor(name), hadHandoff, state.handoffStaleMinutes, existsSync(restartTailPathFor(name)) ? restartTailPathFor(name) : null),
+          resumePrompt(name, handoffPathFor(name), hadHandoff, state.handoffStaleMinutes, existsSync(restartTailPathFor(name)) ? restartTailPathFor(name) : null, restartNoticeSwallowMode() === 'live'),
           null,
           {
             survival: 'lost',
@@ -1431,5 +1444,9 @@ export function startContextGuardRunner(): NodeJS.Timeout {
   // types the resume prompt into the session -- an action on an agent, so it
   // pauses with the sweep (upstream has no ready poll; this one is ours).
   setInterval(whileNotFrozen('context-guard-ready-poll', readyPoll), READY_POLL_MS)
+  // Card 074149c2, stage 1: the held restart notices are asked again every minute. Settling one
+  // can send a message, so this pauses with the sweep; an overdue hold is settled on the first
+  // tick after the freeze ends.
+  setInterval(whileNotFrozen('restart-notice-holds', resolveRestartNoticeHolds), RESTART_NOTICE_RESOLVE_MS)
   return setInterval(whileNotFrozen('context-guard', sweep), INTERVAL_MS)
 }

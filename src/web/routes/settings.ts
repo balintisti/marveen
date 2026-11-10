@@ -4,6 +4,8 @@ import { SETTINGS_REGISTRY, validateSettingValue } from '../../config-registry.j
 import { getEffectiveSettingValue, setOverride } from '../../settings-store.js'
 import { logConfigChange } from '../../db.js'
 import { setStoreWriteActor } from '../../store-watcher.js'
+import { FRONT_DESK_SETTING } from '../../front-desk.js'
+import { refreshFrontDeskSheets } from '../front-desk-sheets.js'
 import type { RouteContext } from './types.js'
 
 export async function tryHandleSettings(ctx: RouteContext): Promise<boolean> {
@@ -71,7 +73,12 @@ export async function tryHandleSettings(ctx: RouteContext): Promise<boolean> {
 
       logConfigChange(key, oldValue, validation.value!, resolvedActor)
       logger.info({ key, oldValue, newValue: validation.value }, 'Setting updated')
-      json(res, { ok: true, key, value: validation.value, requiresRestart: def.requiresRestart })
+      // The rule files name the front desk (report-routing, autonomy Level 3). Written here, at
+      // once: otherwise each sheet keeps the old name until its agent restarts, and the
+      // coordinator's until the dashboard does (card 074149c2). The answer carries the outcome,
+      // because a sheet that could not be rewritten is otherwise invisible to whoever flipped it.
+      const sheets = key === FRONT_DESK_SETTING ? refreshFrontDeskSheets() : undefined
+      json(res, { ok: true, key, value: validation.value, requiresRestart: def.requiresRestart, ...(sheets ? { sheets } : {}) })
     } catch (err) {
       logger.error({ err }, 'Failed to update setting')
       json(res, { error: 'Failed to update setting' }, 500)

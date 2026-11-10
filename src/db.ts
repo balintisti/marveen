@@ -934,6 +934,28 @@ export function initDatabase(dbPathOverride?: string): void {
   // The SENDER sets it (createAgentMessage); no reader infers it from the text.
   try { db.exec('ALTER TABLE agent_messages ADD COLUMN wake INTEGER NOT NULL DEFAULT 1') } catch { /* exists */ }
 
+  // Card 074149c2, stage 1: the ledger of routine restart notices that wait for (or already have)
+  // the traces of the rows delivered in their window. One row per such notice; `state` moves once,
+  // from 'held' to 'swallowed' or 'delivered', and the UPDATE that moves it is guarded on 'held'.
+  // `mode` is the switch position AT THE RESTART ('dry-run' rows never close or send anything).
+  // Times are epoch seconds, like agent_messages. `payload` and `detail` are JSON.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS restart_notice_holds (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent TEXT NOT NULL,
+      notice_id INTEGER NOT NULL,
+      mode TEXT NOT NULL,
+      restart_at INTEGER NOT NULL,
+      deadline_at INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      state TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      resolved_at INTEGER,
+      detail TEXT
+    )
+  `)
+  db.exec('CREATE INDEX IF NOT EXISTS idx_restart_notice_holds_state ON restart_notice_holds(state)')
+
   // INVARIANT: a row that says 'delivered' must carry a delivered_at.
   //
   // On 2026-07-27 an operator bulk-closed a 28-row backlog with raw SQL that
@@ -4008,6 +4030,114 @@ export function getRestartLossCandidates(
     + " WHERE to_agent = ? AND wake = 1 AND (status IN ('pending','failed') OR (status = 'delivered' AND delivered_at >= ?))"
     + " ORDER BY created_at ASC",
   ).all(toAgent, horizon) as (Pick<AgentMessage, 'id' | 'status' | 'created_at' | 'delivered_at' | 'from_agent'> & { head: string })[]
+}
+
+// --- Restart notice holds (card 074149c2, stage 1). The rules are in src/restart-notice-trace.ts
+// and the decisions in src/web/restart-notice-hold.ts; this is storage and three readers. ---
+
+export interface RestartNoticeHold {
+  id: number
+  agent: string
+  notice_id: number
+  mode: string
+  restart_at: number
+  deadline_at: number
+  payload: string
+  state: 'held' | 'swallowed' | 'delivered'
+  created_at: number
+  resolved_at: number | null
+  detail: string | null
+}
+
+/** The rows a restart notice reports on, as they are now: who sent them, when they were injected,
+ *  and enough of the text to recognise the guard's own handoff request. A missing id is absent. */
+export function getRestartHeldRowSources(ids: readonly number[]): { id: number; from_agent: string; delivered_at: number | null; head: string }[] {
+  if (ids.length === 0) return []
+  return db.prepare(
+    `SELECT id, from_agent, delivered_at, substr(content, 1, 80) AS head FROM agent_messages WHERE id IN (${ids.map(() => '?').join(',')}) ORDER BY id ASC`,
+  ).all(...ids) as { id: number; from_agent: string; delivered_at: number | null; head: string }[]
+}
+
+/** How many candidate rows one held row may bring back per source. The id filter is a text match,
+ *  so a row can match without naming the id; the rule that decides is rowTrace(). */
+const RESTART_TRACE_CANDIDATE_LIMIT = 200
+
+/** What the database holds about the given rows as trace evidence for `agent`: their current state,
+ *  and every message the agent SENT and every card comment it wrote after a row's delivery whose
+ *  text contains that row's id. A PREFILTER on purpose: no origin, automation or boundary rule here,
+ *  those are in rowTrace() where fixtures test them. */
+export function getRestartTraceEvidence(agent: string, rows: readonly { id: number; deliveredAt: number }[]): {
+  states: Map<number, { status: string; completed_at: number | null }>
+  messages: { created_at: number; content: string; origin_note: string | null }[]
+  comments: { created_at: number; content: string; automated: number }[]
+} {
+  const states = new Map<number, { status: string; completed_at: number | null }>()
+  const messages: { created_at: number; content: string; origin_note: string | null }[] = []
+  const comments: { created_at: number; content: string; automated: number }[] = []
+  if (rows.length === 0) return { states, messages, comments }
+  const stateRows = db.prepare(
+    `SELECT id, status, completed_at FROM agent_messages WHERE id IN (${rows.map(() => '?').join(',')})`,
+  ).all(...rows.map((r) => r.id)) as { id: number; status: string; completed_at: number | null }[]
+  for (const s of stateRows) states.set(s.id, { status: s.status, completed_at: s.completed_at })
+  const msgStmt = db.prepare(
+    'SELECT created_at, content, origin_note FROM agent_messages WHERE from_agent = ? AND created_at > ? AND instr(content, ?) > 0 ORDER BY id ASC LIMIT ?',
+  )
+  const commentStmt = db.prepare(
+    'SELECT created_at, content, automated FROM kanban_comments WHERE author = ? AND created_at > ? AND instr(content, ?) > 0 ORDER BY id ASC LIMIT ?',
+  )
+  for (const r of rows) {
+    messages.push(...(msgStmt.all(agent, r.deliveredAt, String(r.id), RESTART_TRACE_CANDIDATE_LIMIT) as typeof messages))
+    comments.push(...(commentStmt.all(agent, r.deliveredAt, String(r.id), RESTART_TRACE_CANDIDATE_LIMIT) as typeof comments))
+  }
+  return { states, messages, comments }
+}
+
+/** Write one ledger row and, when `closeNoticeWith` is given, close the notice row with that result,
+ *  in ONE transaction: a notice is never closed without the ledger row that will answer for it. */
+export function recordRestartNoticeHold(
+  h: { agent: string; noticeId: number; mode: string; restartAt: number; deadlineAt: number; payload: string; state: 'held' | 'swallowed' | 'delivered'; detail: string | null },
+  closeNoticeWith: string | null,
+): number {
+  return db.transaction((): number => {
+    const now = Math.floor(Date.now() / 1000)
+    const info = db.prepare(
+      'INSERT INTO restart_notice_holds (agent, notice_id, mode, restart_at, deadline_at, payload, state, created_at, resolved_at, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(h.agent, h.noticeId, h.mode, h.restartAt, h.deadlineAt, h.payload, h.state, now, h.state === 'held' ? null : now, h.detail)
+    if (closeNoticeWith !== null && !markMessageDone(h.noticeId, closeNoticeWith)) {
+      throw new Error(`restart notice ${h.noticeId} does not exist, nothing recorded`)
+    }
+    return Number(info.lastInsertRowid)
+  })()
+}
+
+export function getHeldRestartNotices(): RestartNoticeHold[] {
+  return db.prepare("SELECT * FROM restart_notice_holds WHERE state = 'held' ORDER BY id ASC").all() as RestartNoticeHold[]
+}
+
+/** Move a hold out of 'held', ONCE. The UPDATE is guarded on the state, and the notice's new result
+ *  and the late message are written in the same transaction: a second caller changes nothing and
+ *  sends nothing, and a message that cannot be written leaves the hold held for the next tick. */
+export function settleRestartNoticeHold(
+  id: number,
+  state: 'swallowed' | 'delivered',
+  detail: string,
+  opts: { noticeResult?: string | null; deliver?: { from: string; to: string; content: string; originNote: string } | null } = {},
+): { settled: boolean; deliveredId: number | null } {
+  return db.transaction((): { settled: boolean; deliveredId: number | null } => {
+    const now = Math.floor(Date.now() / 1000)
+    const moved = db.prepare(
+      "UPDATE restart_notice_holds SET state = ?, resolved_at = ?, detail = ? WHERE id = ? AND state = 'held'",
+    ).run(state, now, detail, id).changes > 0
+    if (!moved) return { settled: false, deliveredId: null }
+    if (opts.noticeResult) {
+      const hold = db.prepare('SELECT notice_id FROM restart_notice_holds WHERE id = ?').get(id) as { notice_id: number }
+      markMessageDone(hold.notice_id, opts.noticeResult)
+    }
+    const deliveredId = opts.deliver
+      ? createAgentMessage(opts.deliver.from, opts.deliver.to, opts.deliver.content, opts.deliver.originNote).id
+      : null
+    return { settled: true, deliveredId }
+  })()
 }
 
 // Status-guarded (pending only): the federation removal path bulk-fails

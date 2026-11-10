@@ -3,7 +3,14 @@
 // real (in-memory) table; the setting, the registry and the process table are the mocked edges.
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 import { EventEmitter } from 'node:events'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 import type { RouteContext } from '../web/routes/types.js'
+
+const mkTmp = tmpDirs()
 
 const h = vi.hoisted(() => ({ setting: '', running: new Map<string, boolean>(), agents: new Set<string>() }))
 
@@ -136,5 +143,105 @@ describe('POST /api/messages: a restart-window receipt to the coordinator', () =
     expect(stored(r)?.to_agent).toBe('ford')
     expect(stored(r)?.content).toBe(RECEIPT)
     expect(r.json.rerouted).toBeUndefined()
+  })
+})
+
+// THE PAGE GUARD'S DEFECT ALARM (follow-up, coordinator's comment 57647). The text under test is
+// not typed here: the checker's REAL summary() writes the closing lines, the REAL
+// scripts/fleet-page-guard.sh turns them into the alarm, and only the two edges are stubs (the
+// checker's page scan and the sender). So a change of the name line on either side of the seam
+// (python -> bash -> this route) fails here.
+const SCRIPTS = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts')
+
+function realGuardAlarm(bad: string[], waiting: string[]): string {
+  const root = mkTmp('page-guard-seam-')
+  mkdirSync(join(root, 'scripts'))
+  mkdirSync(join(root, 'store'))
+  const closing = execFileSync('python3', ['-c', [
+    'import importlib.util, json, sys',
+    "spec = importlib.util.spec_from_file_location('agent_core_check', sys.argv[1])",
+    'm = importlib.util.module_from_spec(spec)',
+    'spec.loader.exec_module(m)',
+    'print(m.summary(12, json.loads(sys.argv[2]), json.loads(sys.argv[3])))',
+  ].join('\n'), join(SCRIPTS, 'agent-core-check.py'), JSON.stringify(bad), JSON.stringify(waiting)], { encoding: 'utf-8' })
+  writeFileSync(join(root, 'checker-out.txt'), `  didi           39,962 kar.  kanari 22/23, szakasz 12/12, generalt 10/10\n\n${closing}`)
+  writeFileSync(join(root, 'scripts', 'agent-core-check.py'),
+    `import sys\nsys.stdout.write(open(${JSON.stringify(join(root, 'checker-out.txt'))}, encoding='utf-8').read())\nsys.exit(3)\n`)
+  writeFileSync(join(root, 'scripts', 'alert-coordinator.sh'),
+    `#!/bin/bash\ncat > "${join(root, 'sent.txt')}"\necho "OK coordinator OK id=1"\n`)
+  const r = spawnSync('bash', [join(SCRIPTS, 'fleet-page-guard.sh')], { env: { ...process.env, FLEET_PAGE_GUARD_ROOT: root }, encoding: 'utf-8' })
+  expect(r.status).toBe(3)
+  return readFileSync(join(root, 'sent.txt'), 'utf-8')
+}
+
+describe('POST /api/messages: the page guard\'s defect alarm, sent as the coordinator to the coordinator', () => {
+  const useDesk = (name: string) => { h.agents.add(name); h.running.set(name, true); h.setting = name }
+  const stays = async (body: { from: string; to: string; content: string }) => {
+    const r = await post(body)
+    expect(r.statusCode).toBe(200)
+    expect(stored(r)?.to_agent).toBe(body.to)
+    expect(stored(r)?.content).toBe(body.content.trim())
+    expect(r.json.rerouted).toBeUndefined()
+  }
+  const ALARM = (names: string) => `[fleet-page-guard] LAPOK: ${names}\nEGY VAGY TOBB AGENS-LAP NEM HORDOZZA A TEHERHORDO MONDATOKAT.`
+
+  it('THE REAL ALARM goes to the front desk: the row, the header with the pages, the text unchanged, the response', async () => {
+    useDesk('pgdesk1')
+    const alarm = realGuardAlarm(['didi', 'ford'], ['desk'])
+    expect(alarm.split('\n')[0]).toBe('[fleet-page-guard] LAPOK: didi, ford')
+    const r = await post({ from: MAIN_AGENT_ID, to: MAIN_AGENT_ID, content: alarm })
+    expect(r.statusCode).toBe(200)
+    const row = stored(r)
+    expect(row?.to_agent).toBe('pgdesk1')
+    expect(row?.from_agent).toBe(MAIN_AGENT_ID)
+    const [first, ...rest] = String(row?.content).split('\n')
+    expect(parseFrontDeskHeader(first)).toMatchObject({ v: 1, type: 'fleet-page-guard', subjects: ['didi', 'ford'] })
+    expect(rest.join('\n')).toBe(alarm.trim())
+    expect(r.json.rerouted).toEqual({ requested: MAIN_AGENT_ID, to: 'pgdesk1', why: 'front-desk' })
+  })
+
+  it('FAIL-OPEN: the front desk\'s own page is among the pages', async () => {
+    useDesk('pgdesk2')
+    await stays({ from: MAIN_AGENT_ID, to: MAIN_AGENT_ID, content: ALARM('didi, pgdesk2') })
+  })
+
+  it('FAIL-OPEN: the coordinator\'s own page is among the pages', async () => {
+    useDesk('pgdesk3')
+    await stays({ from: MAIN_AGENT_ID, to: MAIN_AGENT_ID, content: ALARM(`didi, ${MAIN_AGENT_ID}`) })
+  })
+
+  it('FAIL-OPEN: one named page is not an agent of this fleet', async () => {
+    useDesk('pgdesk4')
+    await stays({ from: MAIN_AGENT_ID, to: MAIN_AGENT_ID, content: ALARM('didi, nobody') })
+  })
+
+  it('FAIL-OPEN: no front desk configured, or it is not running', async () => {
+    h.setting = ''
+    await stays({ from: MAIN_AGENT_ID, to: MAIN_AGENT_ID, content: ALARM('didi') })
+    useDesk('pgdesk5')
+    h.running.set('pgdesk5', false)
+    await stays({ from: MAIN_AGENT_ID, to: MAIN_AGENT_ID, content: ALARM('didi') })
+  })
+
+  it('an AGENT that writes the same first line to the coordinator is not the page guard', async () => {
+    useDesk('pgdesk6')
+    await stays({ from: 'didi', to: MAIN_AGENT_ID, content: ALARM('ford') })
+    await stays({ from: OWNER_NAME, to: MAIN_AGENT_ID, content: ALARM('ford') })
+  })
+
+  it('the blind guard (rc=4) and a headline without names stay with the coordinator', async () => {
+    useDesk('pgdesk7')
+    await stays({ from: MAIN_AGENT_ID, to: MAIN_AGENT_ID, content: '[fleet-page-guard] AZ AGENS-LAP OR NEM TUDOTT MERNI (rc=4): a lapokrol MOST semmit nem tudunk.\n\nHIBAS-LAPOK: didi' })
+    await stays({ from: MAIN_AGENT_ID, to: MAIN_AGENT_ID, content: '[fleet-page-guard] EGY VAGY TOBB AGENS-LAP NEM HORDOZZA A TEHERHORDO MONDATOKAT.' })
+  })
+
+  it('the same text addressed to ANOTHER agent is not touched', async () => {
+    useDesk('pgdesk8')
+    await stays({ from: MAIN_AGENT_ID, to: 'ford', content: ALARM('didi') })
+  })
+
+  it('a receipt keeps its own type: the coordinator\'s own receipt is about the coordinator and stays', async () => {
+    useDesk('pgdesk9')
+    await stays({ from: MAIN_AGENT_ID, to: MAIN_AGENT_ID, content: RECEIPT })
   })
 })
