@@ -2428,6 +2428,9 @@ export function buildReportRoutingBody(name: string, desk: string | null): strin
     '(a) a DECISION you cannot make yourself: first line starts with `DECISION:`, then the question in one line, the options, your recommendation, the evidence as ids;',
     '(b) a crossed boundary: production write, push target, secret, anything irreversible;',
     `(c) something that must reach ${OWNER_NAME}.`,
+    // The page also carries older, hand-written lines that send reports to the coordinator; they are
+    // taken out one by one, later. Until then the reader must learn HERE which instruction wins.
+    `THIS SECTION WINS over any older line on this page that sends one of those four to ${MAIN_AGENT_ID}; a decision, a crossed boundary and anything for ${OWNER_NAME} stay with ${MAIN_AGENT_ID}.`,
     `If ${desk} is not running (the answer to your send says so), the report goes on the card and to nobody.`,
     'No acknowledgement messages in either direction.',
   )

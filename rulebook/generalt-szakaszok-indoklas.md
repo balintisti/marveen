@@ -197,5 +197,9 @@ Miért generált: a szabálynak körüzenet nélkül, az ügynök következő in
 Miért van ott a blokk akkor is, ha nincs front desk: a `scripts/agent-core-check.py` minden lapon minden
 generált nevet keres, egy eltűnő blokk kézzel átírt lapnak látszana. Front desk nélkül (üres, hibás
 alakú, maga a koordinátor, vagy nem a flotta ügynöke) a blokk egyetlen sor, és NEM ad szabályt.
+Az elsőbbségi mondat (`THIS SECTION WINS ...`, marveen döntése, kártya-komment 57560): a lapokon kézzel
+írt, a koordinátort megnevező riport-sorok is állnak, és azok soronként, később kerülnek ki. Addig a
+szakasz maga mondja ki, hogy a négy riport-fajtára ő nyer, a döntés, az átlépett határ és a tulajdonosnak
+szóló ügy pedig a koordinátornál marad. Front desk nélkül a mondat sincs a lapon.
 Korlát: a lap az ügynök indulásakor íródik, a beállítás menet közben is állítható; a kettő az ügynök
 következő indulásáig eltérhet.

@@ -91,6 +91,14 @@ describe('report-routing section: the rule, with a front desk', () => {
     expect(body).toContain('(c) something that must reach TestOwner.')
   })
 
+  it('says itself which instruction wins over the older lines of the same page, and what stays', () => {
+    expect(body).toContain('THIS SECTION WINS over any older line on this page that sends one of those four to agent-a;')
+    expect(body).toContain('a decision, a crossed boundary and anything for TestOwner stay with agent-a.')
+    // "those four" must have something to point at: the kinds are named BEFORE the sentence
+    expect(body.indexOf('done, status, handoff, FYI')).toBeGreaterThan(-1)
+    expect(body.indexOf('done, status, handoff, FYI')).toBeLessThan(body.indexOf('THIS SECTION WINS'))
+  })
+
   it('a front desk that is down does not turn the coordinator back into the recipient', () => {
     expect(body).toMatch(/If agent-desk is not running[^\n]*the report goes on the card and to nobody\./)
   })
@@ -120,7 +128,7 @@ describe('report-routing section: the rule, with a front desk', () => {
       expect(b).not.toContain('—')
       // CONTROL: the measure sees the real rule, not an empty string
       expect(b.length).toBeGreaterThan(400)
-      expect(b.length, `${who}: ${b.length}`).toBeLessThanOrEqual(760)
+      expect(b.length, `${who}: ${b.length}`).toBeLessThanOrEqual(960)
     }
   })
 })
@@ -135,7 +143,7 @@ describe('report-routing section: without a front desk it adds NO rule', () => {
   })
 
   it('carries none of the rule', () => {
-    for (const s of ['REPORTS go to', 'gets ONLY', 'DECISION', 'acknowledgement', 'YOU are']) {
+    for (const s of ['REPORTS go to', 'gets ONLY', 'DECISION', 'acknowledgement', 'YOU are', 'WINS', 'older line', 'stay with']) {
       expect(body, s).not.toContain(s)
     }
   })
@@ -200,6 +208,7 @@ describe('ensureReportRoutingSection: what lands in the file', () => {
     expect(out).toContain(END)
     expect(blockOf(out)).toContain(NO_RULE)
     expect(out).not.toContain('REPORTS go to')
+    expect(out).not.toContain('THIS SECTION WINS')
   })
 
   it('turning the front desk OFF takes the rule out of a page that had it, and keeps the rest', () => {
@@ -207,9 +216,11 @@ describe('ensureReportRoutingSection: what lands in the file', () => {
     ensureReportRoutingSection('agent-c', 'agent-desk')
     writeFileSync(join(tmpRoot, 'agents', 'agent-c', 'CLAUDE.md'), read('agent-c') + '\ntail\n', 'utf-8')
     expect(read('agent-c')).toContain('REPORTS go to **agent-desk**')
+    expect(read('agent-c')).toContain('THIS SECTION WINS over any older line')
     ensureReportRoutingSection('agent-c', '')
     const out = read('agent-c')
     expect(out).not.toContain('REPORTS go to')
+    expect(out).not.toContain('THIS SECTION WINS')
     expect(out).not.toContain('gets ONLY')
     expect(blockOf(out)).toContain(NO_RULE)
     expect(out).toContain('before')
