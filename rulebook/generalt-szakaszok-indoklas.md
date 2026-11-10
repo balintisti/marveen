@@ -13,6 +13,11 @@ előtti szövege, szó szerint, a friday lapjáról véve (a curl-példákban az
 
 A lapon maradt: a három szint és jelentésük, a `store/autonomy-config.json` út, a level 1 értesítő curl (idézett heredoc), a jóváhagyás POST/GET receptje (60 mp, approved/rejected/timeout, az ok naplózása), és a payload-szabály teherhordó mondatai (a `-d "{...}"` tilos, idézett határoló vagy `--data-binary @fájl`, változóhoz `python3` + `json.dumps`, a header `$(cat ...)`-ja maradhat, csak a visszaolvasás fogja meg). Ide került: a payload-szabály hatókörének felsorolása (memória-PATCH, napi napló, eset-jegyzet) és a `python3 -c` eset részletes leírása ("command not found", némán kiesett mezőnevek).
 
+A Level 3 sora (kártya `074149c2`, C11, 2026-11-10): a művelet utáni jelentés RIPORT, ezért beállított front
+desk mellett a sor a front desket nevezi meg (`jelented a front desknek (<id>)`), ugyanazzal a próbával,
+amivel a `report-routing` szakasz dönt. A front desk saját lapján, a koordinátor lapján és front desk nélkül
+a régi mondat áll. A Level 1 jelzés határ-ügy, az a koordinátornál marad.
+
 ~~~~markdown
 ## Autonómia és jóváhagyás
 
@@ -201,5 +206,9 @@ Az elsőbbségi mondat (`THIS SECTION WINS ...`, marveen döntése, kártya-komm
 írt, a koordinátort megnevező riport-sorok is állnak, és azok soronként, később kerülnek ki. Addig a
 szakasz maga mondja ki, hogy a négy riport-fajtára ő nyer, a döntés, az átlépett határ és a tulajdonosnak
 szóló ügy pedig a koordinátornál marad. Front desk nélkül a mondat sincs a lapon.
-Korlát: a lap az ügynök indulásakor íródik, a beállítás menet közben is állítható; a kettő az ügynök
-következő indulásáig eltérhet.
+Korlát: a lap az ügynök indulásakor íródik, a beállítás menet közben is állítható. A `FRONT_DESK_AGENT_ID`
+írása (POST `/api/settings`) ezért azonnal újraírja a koordinátor és minden ügynök lapján a két, front
+desktől függő szakaszt (ezt és az `autonomy-wiring` Level 3 sorát; `src/web/front-desk-sheets.ts`), és a
+válasz `sheets` mezője megnevezi azt a lapot, amit nem sikerült újraírni. Ami megmaradt: egy már futó
+munkamenet a régi szöveget olvasta be, az újat a következő indulásakor látja; és csak ez az út frissít, a
+felülíró-fájl kézi szerkesztése nem.

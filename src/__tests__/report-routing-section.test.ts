@@ -11,7 +11,7 @@
 //
 // Functional part mirrors message-close-section.test.ts (temp root, mocked config).
 import { describe, it, expect, vi } from 'vitest'
-import { writeFileSync, readFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, readFileSync, mkdirSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpDirs } from './helpers/tmp-dirs.js'
@@ -61,7 +61,7 @@ vi.mock('../web/atomic-write.js', () => ({
   atomicWriteFileSync: (path: string, content: string) => writeFileSync(path, content, 'utf-8'),
 }))
 
-const { ensureReportRoutingSection, buildReportRoutingBody } = await import('../web/agent-scaffold.js')
+const { ensureReportRoutingSection, buildReportRoutingBody, ensureAutonomySection } = await import('../web/agent-scaffold.js')
 const { reportDesk, frontDeskIdProblem } = await import('../front-desk.js')
 const { configuredFrontDesk } = await import('../web/front-desk-setting.js')
 
@@ -293,5 +293,104 @@ describe('report-routing section: wired to BOTH surfaces, with the configured va
     } finally {
       setting.throws = false
     }
+  })
+})
+
+// C11 (card 074149c2 follow-up, coordinator's comment 57647 item 3): the autonomy block's Level 3
+// line is a REPORT after the act, so with a front desk configured it names the front desk. It
+// lives in this file because the two sections read the same setting through the same test
+// (reportDesk) and must never name two different recipients on one page.
+describe('autonomy block, Level 3: who the report after the act goes to', () => {
+  const OLD = '**Level 3 (autonóm)**: elvégzed, majd utána jelented a főágensnek.'
+  const NEW = '**Level 3 (autonóm)**: elvégzed, majd utána jelented a front desknek (agent-desk).'
+  const level3 = (text: string) => text.split('\n').filter((l) => l.startsWith('**Level 3'))
+  const mainPage = join(tmpRoot, 'CLAUDE.md')
+
+  it('an ordinary agent with a front desk configured: the line names it', () => {
+    setup('aut-b', '# B\n')
+    ensureAutonomySection('aut-b', 'agent-desk')
+    expect(level3(read('aut-b'))).toEqual([NEW])
+  })
+
+  it.each([
+    ['left out', undefined],
+    ['null', null],
+    ['empty', ''],
+    ['malformed', 'agent desk'],
+    ['the coordinator itself', 'agent-a'],
+    ['not an agent of this fleet', 'agent-zzz'],
+  ])('setting %s: the line is the old one, and the whole page is byte for byte the one-argument page', (label, value) => {
+    const agent = `aut-off-${label.replace(/\W+/g, '-')}`
+    setup(agent, '# X\n')
+    ensureAutonomySection(agent, value)
+    expect(level3(read(agent))).toEqual([OLD])
+    setup(`${agent}-ref`, '# X\n')
+    ensureAutonomySection(`${agent}-ref`)
+    expect(read(agent)).toBe(read(`${agent}-ref`).replaceAll(`${agent}-ref`, agent))
+  })
+
+  it('the front desk\'s own page and the coordinator\'s page keep the old line', () => {
+    setup('agent-desk', '# Desk\n')
+    ensureAutonomySection('agent-desk', 'agent-desk')
+    expect(level3(read('agent-desk'))).toEqual([OLD])
+    writeFileSync(mainPage, '# Main\n', 'utf-8')
+    ensureAutonomySection('agent-a', 'agent-desk')
+    expect(level3(readFileSync(mainPage, 'utf-8'))).toEqual([OLD])
+  })
+
+  it('Level 1 is a boundary signal: it still goes to the coordinator, front desk or not', () => {
+    setup('aut-l1', '# L\n')
+    ensureAutonomySection('aut-l1', 'agent-desk')
+    const out = read('aut-l1')
+    expect(out).toContain('**Level 1 (csak jelez)**: értesítsd a főágenst')
+    expect(out).toContain('{"from":"aut-l1","to":"agent-a","content":"[FELHÍVÁS]')
+    expect(out).not.toContain('"to":"agent-desk"')
+  })
+
+  it('the setting changes: the line follows it on the next write, in both directions, one block only', () => {
+    setup('aut-flip', '# F\n\nbefore\n')
+    ensureAutonomySection('aut-flip', '')
+    expect(level3(read('aut-flip'))).toEqual([OLD])
+    ensureAutonomySection('aut-flip', 'agent-desk')
+    expect(level3(read('aut-flip'))).toEqual([NEW])
+    ensureAutonomySection('aut-flip', 'agent-b')
+    expect(level3(read('aut-flip'))).toEqual([NEW.replace('agent-desk', 'agent-b')])
+    ensureAutonomySection('aut-flip', '')
+    expect(level3(read('aut-flip'))).toEqual([OLD])
+    expect(read('aut-flip')).toContain('before')
+    expect(read('aut-flip').split('BEGIN GENERATED: autonomy-wiring').length - 1).toBe(1)
+  })
+
+  it('an unreadable registry reads as no front desk, and does not throw', () => {
+    setup('aut-reg', '# R\n')
+    known.throws = true
+    try {
+      expect(() => ensureAutonomySection('aut-reg', 'agent-desk')).not.toThrow()
+    } finally {
+      known.throws = false
+    }
+    expect(level3(read('aut-reg'))).toEqual([OLD])
+  })
+
+  // A caller that leaves the value out writes the OLD line back over the new one at its next run,
+  // and the page would flip with whoever wrote last. So: every live call passes a second argument.
+  it('EVERY live caller passes the configured value (census over src/, tests excluded)', () => {
+    const src = join(dirname(fileURLToPath(import.meta.url)), '..')
+    const files = (readdirSync(src, { recursive: true }) as string[])
+      .filter((f) => f.endsWith('.ts') && !f.includes('__tests__'))
+    const calls: string[] = []
+    for (const f of files) {
+      for (const line of readFileSync(join(src, f), 'utf-8').split('\n')) {
+        const t = line.trim()
+        if (t.startsWith('//') || t.startsWith('*') || t.startsWith('export function')) continue
+        const m = /ensureAutonomySection\((.*)\)\s*$/.exec(t)
+        if (m) calls.push(`${f}: ${m[1]}`)
+      }
+    }
+    expect(calls.sort()).toEqual([
+      'web.ts: MAIN_AGENT_ID, configuredFrontDesk()',
+      'web/agent-process.ts: name, configuredFrontDesk()',
+      'web/front-desk-sheets.ts: name, desk',
+    ])
   })
 })

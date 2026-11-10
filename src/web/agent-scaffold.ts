@@ -2182,7 +2182,15 @@ function buildFleetRosterBody(selfName: string): string {
 // never changes based on runtime fleet state, but the curl examples embed the
 // resolved dashboard origin and the agent's own name so agents don't have to
 // guess.
-function buildAutonomyBody(name: string): string {
+//
+// `desk` is the front desk the Level 3 line names (see reportDesk), or null. Level 3 is a REPORT
+// after the act, and with a front desk configured reports go there (card 074149c2, C11); Level 1
+// is a boundary signal and stays with the coordinator. The front desk's own page and the
+// coordinator's page keep the old line: neither of them reports to the front desk.
+function buildAutonomyBody(name: string, desk: string | null = null): string {
+  const reportTo = desk !== null && name !== desk && name !== MAIN_AGENT_ID
+    ? `a front desknek (${desk})`
+    : 'a főágensnek'
   return [
     GENERATED_INSERT_WARNING,
     '## Autonómia és jóváhagyás',
@@ -2201,7 +2209,7 @@ function buildAutonomyBody(name: string): string {
     `curl -s -H "Authorization: Bearer $(cat ${tokenPath})" "${dashboardOrigin}/api/approvals/<id>"`,
     'status=approved -> végezd el. status=rejected vagy status=timeout -> ne csináld, naplózd az okot.',
     '',
-    '**Level 3 (autonóm)**: elvégzed, majd utána jelented a főágensnek.',
+    `**Level 3 (autonóm)**: elvégzed, majd utána jelented ${reportTo}.`,
     '',
     'PAYLOAD, minden API-hívásnál: a `-d "{...}"` dupla idézőjeles alak TILOS (a backtick és a `$(...)` lefut,',
     "a küldés mégis 200; ugyanígy `python3 -c \"...\"`). IDÉZETT határoló (`<<'JSON'`; a `<<JSON` is behelyettesít)",
@@ -2472,7 +2480,11 @@ export function ensureReportRoutingSection(name: string, configuredDesk: string 
 // automatically on respawn without manual migration.
 //
 // Idempotency contract mirrors ensureFleetRosterSection (five rules apply).
-export function ensureAutonomySection(name: string): void {
+//
+// `configuredDesk` is the FRONT_DESK_AGENT_ID setting AS WRITTEN (the caller reads it, as for
+// ensureReportRoutingSection); left out, the block is the no-front-desk form. Every live caller
+// passes it: a caller that did not would write the old line back over the new one.
+export function ensureAutonomySection(name: string, configuredDesk?: string | null): void {
   // The main agent's CLAUDE.md lives at PROJECT_ROOT, not inside agents/<name>/.
   // Sub-agents use agentDir(name)/CLAUDE.md as usual.
   const claudeMdPath = name === MAIN_AGENT_ID
@@ -2480,7 +2492,9 @@ export function ensureAutonomySection(name: string): void {
     : join(agentDir(name), 'CLAUDE.md')
   if (!existsSync(claudeMdPath)) return
 
-  const body = buildAutonomyBody(name)
+  // The registry is asked only when a front desk is configured: with none, this path reads
+  // nothing it did not read before.
+  const body = buildAutonomyBody(name, reportDesk(MAIN_AGENT_ID, configuredDesk, (agent) => isKnownAgent(agent)))
   const block = `${AUTONOMY_BEGIN}\n${body}\n${AUTONOMY_END}`
 
   let existing: string

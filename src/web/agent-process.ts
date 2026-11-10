@@ -2016,7 +2016,7 @@ export async function startAgentProcess(name: string, opts: { fresh?: boolean } 
     writeAgentSettingsFromProfile(name, profile)
     ensureFleetRosterSection(name)
     ensureProjectRootInClaudeMd(name)
-    ensureAutonomySection(name)
+    ensureAutonomySection(name, configuredFrontDesk())
     ensureSkillsPathTrapSection(name)
     ensureSystemDirectiveAuthSection(name)
     ensureMemorySearchLabelSection(name)
