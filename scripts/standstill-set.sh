@@ -109,6 +109,33 @@ JS
 
 run_node() { node --input-type=module -e "$NODE_PROG" -- "$@"; }
 
+write_locked() {
+  # A zar alatti resz. A hivo (set_standstill) valtozoit hasznalja (dynamic scope), es o takarit utana.
+  tmp="$(mktemp "$dir/.workcheck.standstill.XXXXXX")" || { echo "standstill-set: nem hozhato letre atmeneti fajl" >&2; return 1; }
+  run_node build "$file" "$tmp" "$reason" "$until" "$note" "$card" "$by" "$(TZ=Europe/Belgrade date '+%Y-%m-%d %H:%M %Z')" \
+    || { echo "standstill-set: MEGTAGADVA, a workcheck.json valtozatlan" >&2; return 1; }
+  if ! run_node verify "$engine" "$tmp" "$file" "$reason" "$until" >/dev/null; then
+    echo "standstill-set: MEGTAGADVA, az or szerint a kert standstill nem all fenn (reszletek fent); a workcheck.json valtozatlan" >&2
+    return 1
+  fi
+
+  stamp="$(date '+%Y%m%d-%H%M%S')"
+  backup="$file.bak-standstill-$stamp-$$"
+  cp -p "$file" "$backup" || { echo "standstill-set: a mentes nem sikerult, nem irok" >&2; return 1; }
+  mv -f "$tmp" "$file" || { echo "standstill-set: az atnevezes nem sikerult, a workcheck.json valtozatlan" >&2; return 1; }
+
+  if ! run_node verify "$engine" "$file" "$backup" "$reason" "$until"; then
+    if cp -p "$backup" "$file"; then
+      echo "standstill-set: a VEGLEGES fajl visszaolvasasa mast adott, mint amit kertek; a mentes VISSZAALLITVA ($backup)" >&2
+    else
+      echo "standstill-set: a VEGLEGES fajl visszaolvasasa mast adott, mint amit kertek, ES a visszaallitas SIKERTELEN: a mentes kezzel masolando vissza: $backup" >&2
+    fi
+    return 1
+  fi
+  echo "OK $agent: standstill beirva; mentes: $backup"
+  return 0
+}
+
 set_standstill() {
   local card="" by="unknown (standstill-set.sh)" root engine dir file tmp backup stamp main_id lockdir
   while [ "$#" -gt 0 ]; do
@@ -161,37 +188,14 @@ set_standstill() {
     sleep 0.05
   done
   echo "$$" > "$lockdir/pid"
-  # A RETURN trap GLOBALIS: a kiertekeles a beallitaskor tortenik (a lokalisok mar nem leteznek, amikor a
-  # main visszater), es a trap onmagat torli, kulonben a MASODIK visszateresnel egy masik hivas friss
-  # zarat torolnek.
-  # shellcheck disable=SC2064
-  trap "rm -rf '$lockdir'; trap - RETURN" RETURN
-
-  tmp="$(mktemp "$dir/.workcheck.standstill.XXXXXX")" || { echo "standstill-set: nem hozhato letre atmeneti fajl" >&2; return 1; }
-  # shellcheck disable=SC2064
-  trap "rm -f '$tmp'; rm -rf '$lockdir'; trap - RETURN" RETURN
-  run_node build "$file" "$tmp" "$reason" "$until" "$note" "$card" "$by" "$(TZ=Europe/Belgrade date '+%Y-%m-%d %H:%M %Z')" \
-    || { echo "standstill-set: MEGTAGADVA, a workcheck.json valtozatlan" >&2; return 1; }
-  if ! run_node verify "$engine" "$tmp" "$file" "$reason" "$until" >/dev/null; then
-    echo "standstill-set: MEGTAGADVA, az or szerint a kert standstill nem all fenn (reszletek fent); a workcheck.json valtozatlan" >&2
-    return 1
-  fi
-
-  stamp="$(date '+%Y%m%d-%H%M%S')"
-  backup="$file.bak-standstill-$stamp-$$"
-  cp -p "$file" "$backup" || { echo "standstill-set: a mentes nem sikerult, nem irok" >&2; return 1; }
-  mv -f "$tmp" "$file" || { echo "standstill-set: az atnevezes nem sikerult, a workcheck.json valtozatlan" >&2; return 1; }
-
-  if ! run_node verify "$engine" "$file" "$backup" "$reason" "$until"; then
-    if cp -p "$backup" "$file"; then
-      echo "standstill-set: a VEGLEGES fajl visszaolvasasa mast adott, mint amit kertek; a mentes VISSZAALLITVA ($backup)" >&2
-    else
-      echo "standstill-set: a VEGLEGES fajl visszaolvasasa mast adott, mint amit kertek, ES a visszaallitas SIKERTELEN: a mentes kezzel masolando vissza: $backup" >&2
-    fi
-    return 1
-  fi
-  echo "OK $agent: standstill beirva; mentes: $backup"
-  return 0
+  # NINCS trap (didi 57710, A5): egy globalis RETURN trap kulon ertelmezest igenyelt, hogy a masodik
+  # tuzelesnel ne vigye el egy MASIK hivas friss zarat. A zart tartó resz a write_locked-ben fut, es a zar
+  # meg az atmeneti fajl EGYSZER, kozvetlenul utana torlodik, minden uton (siker, megtagadas, sikertelen
+  # visszaallitas). Jel alatt a zar bent marad: a60deb91.
+  local rc_w=0
+  write_locked || rc_w=$?
+  rm -f "$tmp"; rm -rf "$lockdir"
+  return "$rc_w"
 }
 
 self_test() {
@@ -210,8 +214,8 @@ self_test() {
   far="$(node -e 'console.log(new Date(Date.now()+10*86400e3).toISOString())')"
   local fut2; fut2="$(node -e 'console.log(new Date(Date.now()+3*3600e3).toISOString())')"
 
-  local envp="$(dirname "$engine")/env-parse.js"
-  t() { STANDSTILL_ROOT="$tmp" STANDSTILL_ENGINE="${ENG:-$engine}" STANDSTILL_ENV_PARSE="$envp" bash "$SELF" "$@" >"$tmp/out" 2>&1; }
+  local envp="${STANDSTILL_ENV_PARSE:-$(dirname "$engine")/env-parse.js}"
+  t() { STANDSTILL_ROOT="$tmp" STANDSTILL_ENGINE="${ENG:-$engine}" STANDSTILL_ENV_PARSE="${PARSE:-$envp}" bash "$SELF" "$@" >"$tmp/out" 2>&1; }
   sha() { shasum "$1" | cut -d' ' -f1; }
   baks() { ls "$1"/workcheck.json.bak-standstill-* 2>/dev/null | wc -l | tr -d ' '; }
   tmps() { ls -A "$1"/.workcheck.standstill.* 2>/dev/null | wc -l | tr -d ' '; }
@@ -286,6 +290,17 @@ self_test() {
   [ "$(sha "$tmp/workcheck.json")" = "$h" ] && ok "a gyoker fajl valtozatlan" || no "a gyoker fajl valtozott a .env-tol eltero nevre"
   MAIN_AGENT_ID=marveen t boss forbidden "$fut" "x"; rc=$?
   want_rc 0 "a .env szerinti koordinator (boss) a gyoker fajlt irja"
+  rm -f "$tmp/.env"
+
+  # 4/b2. A WATCHER PARSERE NEM TOLTHETO BE (didi 57710, A1): megtagadas, NEM visszaeses a marveen nevre.
+  # A .env a koordinatornak alpha-t nevezi; ha a hiba marveenre esne vissza, az alpha az agents/alpha fajlt
+  # irna (rc 0), pedig a watcher szerint ez a gyoker fajl.
+  printf 'MAIN_AGENT_ID=alpha\n' > "$tmp/.env"
+  h="$(sha "$tmp/workcheck.json")"; local ah0; ah0="$(sha "$a")"
+  PARSE="$tmp/nincs-ilyen-parser.js" t alpha waiting "$fut" "x"; rc=$?
+  want_rc 1 "betolthetetlen parser -> megtagadja"
+  grep -q 'nincs-ilyen-parser.js' "$tmp/out" && ok "megnevezi a parser utat" || no "nem nevezi meg a parser utat"
+  { [ "$(sha "$tmp/workcheck.json")" = "$h" ] && [ "$(sha "$a")" = "$ah0" ]; } && ok "betolthetetlen parsernel semmilyen fajl nem valtozik" || no "betolthetetlen parsernel valtozott egy fajl"
   rm -f "$tmp/.env"
 
   # 4/c. A .env-NYELVTAN A WATCHERE (dist/env-parse.js), nem egy masolt sed: a .env-alakok, amelyeken a
@@ -376,6 +391,7 @@ FAKE
   STANDSTILL_LOCK_WAIT=3 t alpha waiting "$fut" "x"; rc=$?
   want_rc 1 "foglalt zar -> megtagadja"
   grep -q 'standstill.lock' "$tmp/out" && ok "megnevezi a zarat" || no "nem nevezi meg a zarat"
+  grep -q 'pid: 99999' "$tmp/out" && ok "megnevezi a zarat tarto folyamat pid-jet" || no "nem nevezi meg a zarat tarto pid-et"
   [ "$(sha "$a")" = "$h" ] && ok "foglalt zarnal a fajl valtozatlan" || no "foglalt zarnal a fajl valtozott"
   [ -d "$tmp/agents/alpha/.workcheck.standstill.lock" ] && ok "a masik hivas zarjat nem torolte" || no "a megtagadott hivas letorolte a masik zarat"
   rm -rf "$tmp/agents/alpha/.workcheck.standstill.lock"

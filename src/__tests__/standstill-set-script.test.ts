@@ -18,12 +18,18 @@ const mkTmp = tmpDirs()
 
 describe('scripts/standstill-set.sh --self-test', () => {
   it('passes against the evaluator built from src/idle-agent.ts', () => {
-    const engine = join(mkTmp('standstill-engine-'), 'idle-agent.mjs')
-    const src = readFileSync(join(REPO, 'src', 'idle-agent.ts'), 'utf8')
-    writeFileSync(engine, transformSync(src, { loader: 'ts', format: 'esm' }).code)
+    const dir = mkTmp('standstill-engine-')
+    const engine = join(dir, 'idle-agent.mjs')
+    // The watcher's .env parser too: the script reads the coordinator name through it (card 292ee15a),
+    // and a temp dir holding only the engine has no env-parse.js next to it.
+    const envParse = join(dir, 'env-parse.mjs')
+    const build = (file: string) =>
+      transformSync(readFileSync(join(REPO, 'src', file), 'utf8'), { loader: 'ts', format: 'esm' }).code
+    writeFileSync(engine, build('idle-agent.ts'))
+    writeFileSync(envParse, build('env-parse.ts'))
     const out = execFileSync('bash', [SCRIPT, '--self-test'], {
       encoding: 'utf-8',
-      env: { ...process.env, STANDSTILL_ENGINE: engine },
+      env: { ...process.env, STANDSTILL_ENGINE: engine, STANDSTILL_ENV_PARSE: envParse },
     })
     expect(out).toContain('self-test: PASS')
     expect(out).not.toContain('BUKO')
