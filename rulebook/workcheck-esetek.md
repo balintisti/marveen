@@ -27,6 +27,10 @@ MAGÁTÓL"). Aki **van munkája, de most nem nyúlhat hozzá**, az a `kind` MELL
     pid ............ csak background_job-hoz, opcionális: a tartás a folyamat kilépésekor véget ér
     card ........... opcionális, a döntés helye
 
+- **Beírás:** `bash scripts/standstill-set.sh [--card <id>] [--by <név>] <ágens> <reason> <until> <megjegyzés>`
+  (kártya `292ee15a`). Az `until` nélküli hívást megtagadja, a `kind` MELLÉ írja a mezőt, és a
+  beírás UTÁN a tétlen-őr saját értékelőjén (`parseWorkCheck` nyers szöveggel + `standstillVerdict`)
+  olvassa vissza: ha az nem `active` a kért `until`-ig, a mentést visszaállítja és nem nulla kóddal lép ki.
 - **Amíg tart:** a tétlen-őr nem ébreszt és nem küld „nincs munkája" jelzést (a döntési napló oka:
   `standstill`), és az `idle-reporter.py` sem viszi Isti elé leállásként.
 - **Lejárt, vagy a pid-es folyamat véget ért:** rendes ébresztés, és az üzenet MEGNEVEZI a lejárt
