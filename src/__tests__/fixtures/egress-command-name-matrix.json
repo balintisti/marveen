@@ -1,0 +1,1633 @@
+[
+ {
+  "group": "curl https external",
+  "form": "plain (control)",
+  "command": "curl -s https://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl https external",
+  "form": "\"name\" args",
+  "command": "\"curl\" -s https://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl https external",
+  "form": "'name' args",
+  "command": "'curl' -s https://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl https external",
+  "form": "\\name args",
+  "command": "\\curl -s https://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl https external",
+  "form": "na\"\"me args",
+  "command": "cu\"\"rl -s https://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl https external",
+  "form": "na\\me args",
+  "command": "cu\\rl -s https://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl https external",
+  "form": "env \"name\" args",
+  "command": "env \"curl\" -s https://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl https external",
+  "form": "command \"name\" args",
+  "command": "command \"curl\" -s https://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl https external",
+  "form": "/usr/bin/\"name\" args",
+  "command": "/usr/bin/\"curl\" -s https://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl https external",
+  "form": "$(echo name) args",
+  "command": "$(echo curl) -s https://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl https external",
+  "form": "var-assembled",
+  "command": "c=curl; $c -s https://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl http external",
+  "form": "plain (control)",
+  "command": "curl -s http://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl http external",
+  "form": "\"name\" args",
+  "command": "\"curl\" -s http://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl http external",
+  "form": "'name' args",
+  "command": "'curl' -s http://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl http external",
+  "form": "\\name args",
+  "command": "\\curl -s http://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl http external",
+  "form": "na\"\"me args",
+  "command": "cu\"\"rl -s http://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl http external",
+  "form": "na\\me args",
+  "command": "cu\\rl -s http://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl http external",
+  "form": "env \"name\" args",
+  "command": "env \"curl\" -s http://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl http external",
+  "form": "command \"name\" args",
+  "command": "command \"curl\" -s http://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl http external",
+  "form": "/usr/bin/\"name\" args",
+  "command": "/usr/bin/\"curl\" -s http://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl http external",
+  "form": "$(echo name) args",
+  "command": "$(echo curl) -s http://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "curl http external",
+  "form": "var-assembled",
+  "command": "c=curl; $c -s http://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python3 -c",
+  "form": "plain (control)",
+  "command": "python3 -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python3 -c",
+  "form": "\"name\" args",
+  "command": "\"python3\" -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "python3 -c",
+  "form": "'name' args",
+  "command": "'python3' -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "python3 -c",
+  "form": "\\name args",
+  "command": "\\python3 -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python3 -c",
+  "form": "na\"\"me args",
+  "command": "py\"\"thon3 -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python3 -c",
+  "form": "na\\me args",
+  "command": "py\\thon3 -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python3 -c",
+  "form": "env \"name\" args",
+  "command": "env \"python3\" -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "python3 -c",
+  "form": "command \"name\" args",
+  "command": "command \"python3\" -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "python3 -c",
+  "form": "/usr/bin/\"name\" args",
+  "command": "/usr/bin/\"python3\" -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python3 -c",
+  "form": "$(echo name) args",
+  "command": "$(echo python3) -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python3 -c",
+  "form": "var-assembled",
+  "command": "c=python3; $c -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python -c",
+  "form": "plain (control)",
+  "command": "python -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python -c",
+  "form": "\"name\" args",
+  "command": "\"python\" -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "python -c",
+  "form": "'name' args",
+  "command": "'python' -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "python -c",
+  "form": "\\name args",
+  "command": "\\python -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python -c",
+  "form": "na\"\"me args",
+  "command": "py\"\"thon -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python -c",
+  "form": "na\\me args",
+  "command": "py\\thon -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python -c",
+  "form": "env \"name\" args",
+  "command": "env \"python\" -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "python -c",
+  "form": "command \"name\" args",
+  "command": "command \"python\" -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "python -c",
+  "form": "/usr/bin/\"name\" args",
+  "command": "/usr/bin/\"python\" -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python -c",
+  "form": "$(echo name) args",
+  "command": "$(echo python) -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python -c",
+  "form": "var-assembled",
+  "command": "c=python; $c -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python3.12 -c",
+  "form": "plain (control)",
+  "command": "python3.12 -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python3.12 -c",
+  "form": "\"name\" args",
+  "command": "\"python3.12\" -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "python3.12 -c",
+  "form": "'name' args",
+  "command": "'python3.12' -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "python3.12 -c",
+  "form": "\\name args",
+  "command": "\\python3.12 -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python3.12 -c",
+  "form": "na\"\"me args",
+  "command": "py\"\"thon3.12 -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python3.12 -c",
+  "form": "na\\me args",
+  "command": "py\\thon3.12 -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python3.12 -c",
+  "form": "env \"name\" args",
+  "command": "env \"python3.12\" -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "python3.12 -c",
+  "form": "command \"name\" args",
+  "command": "command \"python3.12\" -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "python3.12 -c",
+  "form": "/usr/bin/\"name\" args",
+  "command": "/usr/bin/\"python3.12\" -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python3.12 -c",
+  "form": "$(echo name) args",
+  "command": "$(echo python3.12) -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "python3.12 -c",
+  "form": "var-assembled",
+  "command": "c=python3.12; $c -c \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node -e",
+  "form": "plain (control)",
+  "command": "node -e \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node -e",
+  "form": "\"name\" args",
+  "command": "\"node\" -e \"fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "node -e",
+  "form": "'name' args",
+  "command": "'node' -e \"fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "node -e",
+  "form": "\\name args",
+  "command": "\\node -e \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node -e",
+  "form": "na\"\"me args",
+  "command": "no\"\"de -e \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node -e",
+  "form": "na\\me args",
+  "command": "no\\de -e \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node -e",
+  "form": "env \"name\" args",
+  "command": "env \"node\" -e \"fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "node -e",
+  "form": "command \"name\" args",
+  "command": "command \"node\" -e \"fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "node -e",
+  "form": "/usr/bin/\"name\" args",
+  "command": "/usr/bin/\"node\" -e \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node -e",
+  "form": "$(echo name) args",
+  "command": "$(echo node) -e \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node -e",
+  "form": "var-assembled",
+  "command": "c=node; $c -e \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node -p",
+  "form": "plain (control)",
+  "command": "node -p \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node -p",
+  "form": "\"name\" args",
+  "command": "\"node\" -p \"fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "node -p",
+  "form": "'name' args",
+  "command": "'node' -p \"fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "node -p",
+  "form": "\\name args",
+  "command": "\\node -p \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node -p",
+  "form": "na\"\"me args",
+  "command": "no\"\"de -p \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node -p",
+  "form": "na\\me args",
+  "command": "no\\de -p \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node -p",
+  "form": "env \"name\" args",
+  "command": "env \"node\" -p \"fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "node -p",
+  "form": "command \"name\" args",
+  "command": "command \"node\" -p \"fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "node -p",
+  "form": "/usr/bin/\"name\" args",
+  "command": "/usr/bin/\"node\" -p \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node -p",
+  "form": "$(echo name) args",
+  "command": "$(echo node) -p \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node -p",
+  "form": "var-assembled",
+  "command": "c=node; $c -p \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node --eval",
+  "form": "plain (control)",
+  "command": "node --eval \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node --eval",
+  "form": "\"name\" args",
+  "command": "\"node\" --eval \"fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "node --eval",
+  "form": "'name' args",
+  "command": "'node' --eval \"fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "node --eval",
+  "form": "\\name args",
+  "command": "\\node --eval \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node --eval",
+  "form": "na\"\"me args",
+  "command": "no\"\"de --eval \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node --eval",
+  "form": "na\\me args",
+  "command": "no\\de --eval \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node --eval",
+  "form": "env \"name\" args",
+  "command": "env \"node\" --eval \"fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "node --eval",
+  "form": "command \"name\" args",
+  "command": "command \"node\" --eval \"fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "node --eval",
+  "form": "/usr/bin/\"name\" args",
+  "command": "/usr/bin/\"node\" --eval \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node --eval",
+  "form": "$(echo name) args",
+  "command": "$(echo node) --eval \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "node --eval",
+  "form": "var-assembled",
+  "command": "c=node; $c --eval \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "nodejs -e",
+  "form": "plain (control)",
+  "command": "nodejs -e \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "nodejs -e",
+  "form": "\"name\" args",
+  "command": "\"nodejs\" -e \"fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "nodejs -e",
+  "form": "'name' args",
+  "command": "'nodejs' -e \"fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "nodejs -e",
+  "form": "\\name args",
+  "command": "\\nodejs -e \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "nodejs -e",
+  "form": "na\"\"me args",
+  "command": "no\"\"dejs -e \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "nodejs -e",
+  "form": "na\\me args",
+  "command": "no\\dejs -e \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "nodejs -e",
+  "form": "env \"name\" args",
+  "command": "env \"nodejs\" -e \"fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "nodejs -e",
+  "form": "command \"name\" args",
+  "command": "command \"nodejs\" -e \"fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "nodejs -e",
+  "form": "/usr/bin/\"name\" args",
+  "command": "/usr/bin/\"nodejs\" -e \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "nodejs -e",
+  "form": "$(echo name) args",
+  "command": "$(echo nodejs) -e \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "nodejs -e",
+  "form": "var-assembled",
+  "command": "c=nodejs; $c -e \"fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -e",
+  "form": "plain (control)",
+  "command": "perl -e 'use LWP::Simple; get(\"https://example.com/x\")'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -e",
+  "form": "\"name\" args",
+  "command": "\"perl\" -e 'use LWP::Simple; get(\"https://example.com/x\")'",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -e",
+  "form": "'name' args",
+  "command": "'perl' -e 'use LWP::Simple; get(\"https://example.com/x\")'",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -e",
+  "form": "\\name args",
+  "command": "\\perl -e 'use LWP::Simple; get(\"https://example.com/x\")'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -e",
+  "form": "na\"\"me args",
+  "command": "pe\"\"rl -e 'use LWP::Simple; get(\"https://example.com/x\")'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -e",
+  "form": "na\\me args",
+  "command": "pe\\rl -e 'use LWP::Simple; get(\"https://example.com/x\")'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -e",
+  "form": "env \"name\" args",
+  "command": "env \"perl\" -e 'use LWP::Simple; get(\"https://example.com/x\")'",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -e",
+  "form": "command \"name\" args",
+  "command": "command \"perl\" -e 'use LWP::Simple; get(\"https://example.com/x\")'",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -e",
+  "form": "/usr/bin/\"name\" args",
+  "command": "/usr/bin/\"perl\" -e 'use LWP::Simple; get(\"https://example.com/x\")'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -e",
+  "form": "$(echo name) args",
+  "command": "$(echo perl) -e 'use LWP::Simple; get(\"https://example.com/x\")'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -e",
+  "form": "var-assembled",
+  "command": "c=perl; $c -e 'use LWP::Simple; get(\"https://example.com/x\")'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -E",
+  "form": "plain (control)",
+  "command": "perl -E 'use HTTP::Tiny; HTTP::Tiny->new->get(\"https://example.com/x\")'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -E",
+  "form": "\"name\" args",
+  "command": "\"perl\" -E 'use HTTP::Tiny; HTTP::Tiny->new->get(\"https://example.com/x\")'",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -E",
+  "form": "'name' args",
+  "command": "'perl' -E 'use HTTP::Tiny; HTTP::Tiny->new->get(\"https://example.com/x\")'",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -E",
+  "form": "\\name args",
+  "command": "\\perl -E 'use HTTP::Tiny; HTTP::Tiny->new->get(\"https://example.com/x\")'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -E",
+  "form": "na\"\"me args",
+  "command": "pe\"\"rl -E 'use HTTP::Tiny; HTTP::Tiny->new->get(\"https://example.com/x\")'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -E",
+  "form": "na\\me args",
+  "command": "pe\\rl -E 'use HTTP::Tiny; HTTP::Tiny->new->get(\"https://example.com/x\")'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -E",
+  "form": "env \"name\" args",
+  "command": "env \"perl\" -E 'use HTTP::Tiny; HTTP::Tiny->new->get(\"https://example.com/x\")'",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -E",
+  "form": "command \"name\" args",
+  "command": "command \"perl\" -E 'use HTTP::Tiny; HTTP::Tiny->new->get(\"https://example.com/x\")'",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -E",
+  "form": "/usr/bin/\"name\" args",
+  "command": "/usr/bin/\"perl\" -E 'use HTTP::Tiny; HTTP::Tiny->new->get(\"https://example.com/x\")'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -E",
+  "form": "$(echo name) args",
+  "command": "$(echo perl) -E 'use HTTP::Tiny; HTTP::Tiny->new->get(\"https://example.com/x\")'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "perl -E",
+  "form": "var-assembled",
+  "command": "c=perl; $c -E 'use HTTP::Tiny; HTTP::Tiny->new->get(\"https://example.com/x\")'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "ruby -e",
+  "form": "plain (control)",
+  "command": "ruby -e 'require \"net/http\"; Net::HTTP.get(URI(\"https://example.com/x\"))'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "ruby -e",
+  "form": "\"name\" args",
+  "command": "\"ruby\" -e 'require \"net/http\"; Net::HTTP.get(URI(\"https://example.com/x\"))'",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "ruby -e",
+  "form": "'name' args",
+  "command": "'ruby' -e 'require \"net/http\"; Net::HTTP.get(URI(\"https://example.com/x\"))'",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "ruby -e",
+  "form": "\\name args",
+  "command": "\\ruby -e 'require \"net/http\"; Net::HTTP.get(URI(\"https://example.com/x\"))'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "ruby -e",
+  "form": "na\"\"me args",
+  "command": "ru\"\"by -e 'require \"net/http\"; Net::HTTP.get(URI(\"https://example.com/x\"))'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "ruby -e",
+  "form": "na\\me args",
+  "command": "ru\\by -e 'require \"net/http\"; Net::HTTP.get(URI(\"https://example.com/x\"))'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "ruby -e",
+  "form": "env \"name\" args",
+  "command": "env \"ruby\" -e 'require \"net/http\"; Net::HTTP.get(URI(\"https://example.com/x\"))'",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "ruby -e",
+  "form": "command \"name\" args",
+  "command": "command \"ruby\" -e 'require \"net/http\"; Net::HTTP.get(URI(\"https://example.com/x\"))'",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "ruby -e",
+  "form": "/usr/bin/\"name\" args",
+  "command": "/usr/bin/\"ruby\" -e 'require \"net/http\"; Net::HTTP.get(URI(\"https://example.com/x\"))'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "ruby -e",
+  "form": "$(echo name) args",
+  "command": "$(echo ruby) -e 'require \"net/http\"; Net::HTTP.get(URI(\"https://example.com/x\"))'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "ruby -e",
+  "form": "var-assembled",
+  "command": "c=ruby; $c -e 'require \"net/http\"; Net::HTTP.get(URI(\"https://example.com/x\"))'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "php -r",
+  "form": "plain (control)",
+  "command": "php -r 'echo file_get_contents(\"https://example.com/x\");'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "php -r",
+  "form": "\"name\" args",
+  "command": "\"php\" -r 'echo file_get_contents(\"https://example.com/x\");'",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "php -r",
+  "form": "'name' args",
+  "command": "'php' -r 'echo file_get_contents(\"https://example.com/x\");'",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "php -r",
+  "form": "\\name args",
+  "command": "\\php -r 'echo file_get_contents(\"https://example.com/x\");'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "php -r",
+  "form": "na\"\"me args",
+  "command": "ph\"\"p -r 'echo file_get_contents(\"https://example.com/x\");'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "php -r",
+  "form": "na\\me args",
+  "command": "ph\\p -r 'echo file_get_contents(\"https://example.com/x\");'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "php -r",
+  "form": "env \"name\" args",
+  "command": "env \"php\" -r 'echo file_get_contents(\"https://example.com/x\");'",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "php -r",
+  "form": "command \"name\" args",
+  "command": "command \"php\" -r 'echo file_get_contents(\"https://example.com/x\");'",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "php -r",
+  "form": "/usr/bin/\"name\" args",
+  "command": "/usr/bin/\"php\" -r 'echo file_get_contents(\"https://example.com/x\");'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "php -r",
+  "form": "$(echo name) args",
+  "command": "$(echo php) -r 'echo file_get_contents(\"https://example.com/x\");'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "php -r",
+  "form": "var-assembled",
+  "command": "c=php; $c -r 'echo file_get_contents(\"https://example.com/x\");'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "deno eval",
+  "form": "plain (control)",
+  "command": "deno eval \"await fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "deno eval",
+  "form": "\"name\" args",
+  "command": "\"deno\" eval \"await fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "deno eval",
+  "form": "'name' args",
+  "command": "'deno' eval \"await fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "deno eval",
+  "form": "\\name args",
+  "command": "\\deno eval \"await fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "deno eval",
+  "form": "na\"\"me args",
+  "command": "de\"\"no eval \"await fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "deno eval",
+  "form": "na\\me args",
+  "command": "de\\no eval \"await fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "deno eval",
+  "form": "env \"name\" args",
+  "command": "env \"deno\" eval \"await fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "deno eval",
+  "form": "command \"name\" args",
+  "command": "command \"deno\" eval \"await fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "deno eval",
+  "form": "/usr/bin/\"name\" args",
+  "command": "/usr/bin/\"deno\" eval \"await fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "deno eval",
+  "form": "$(echo name) args",
+  "command": "$(echo deno) eval \"await fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "deno eval",
+  "form": "var-assembled",
+  "command": "c=deno; $c eval \"await fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "bun -e",
+  "form": "plain (control)",
+  "command": "bun -e \"await fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "bun -e",
+  "form": "\"name\" args",
+  "command": "\"bun\" -e \"await fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "bun -e",
+  "form": "'name' args",
+  "command": "'bun' -e \"await fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "bun -e",
+  "form": "\\name args",
+  "command": "\\bun -e \"await fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "bun -e",
+  "form": "na\"\"me args",
+  "command": "bu\"\"n -e \"await fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "bun -e",
+  "form": "na\\me args",
+  "command": "bu\\n -e \"await fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "bun -e",
+  "form": "env \"name\" args",
+  "command": "env \"bun\" -e \"await fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "bun -e",
+  "form": "command \"name\" args",
+  "command": "command \"bun\" -e \"await fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "bun -e",
+  "form": "/usr/bin/\"name\" args",
+  "command": "/usr/bin/\"bun\" -e \"await fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "bun -e",
+  "form": "$(echo name) args",
+  "command": "$(echo bun) -e \"await fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "bun -e",
+  "form": "var-assembled",
+  "command": "c=bun; $c -e \"await fetch('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "pwsh -Command",
+  "form": "plain (control)",
+  "command": "pwsh -Command \"Invoke-WebRequest https://example.com/x\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "pwsh -Command",
+  "form": "\"name\" args",
+  "command": "\"pwsh\" -Command \"Invoke-WebRequest https://example.com/x\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "pwsh -Command",
+  "form": "'name' args",
+  "command": "'pwsh' -Command \"Invoke-WebRequest https://example.com/x\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "pwsh -Command",
+  "form": "\\name args",
+  "command": "\\pwsh -Command \"Invoke-WebRequest https://example.com/x\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "pwsh -Command",
+  "form": "na\"\"me args",
+  "command": "pw\"\"sh -Command \"Invoke-WebRequest https://example.com/x\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "pwsh -Command",
+  "form": "na\\me args",
+  "command": "pw\\sh -Command \"Invoke-WebRequest https://example.com/x\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "pwsh -Command",
+  "form": "env \"name\" args",
+  "command": "env \"pwsh\" -Command \"Invoke-WebRequest https://example.com/x\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "pwsh -Command",
+  "form": "command \"name\" args",
+  "command": "command \"pwsh\" -Command \"Invoke-WebRequest https://example.com/x\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "pwsh -Command",
+  "form": "/usr/bin/\"name\" args",
+  "command": "/usr/bin/\"pwsh\" -Command \"Invoke-WebRequest https://example.com/x\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "pwsh -Command",
+  "form": "$(echo name) args",
+  "command": "$(echo pwsh) -Command \"Invoke-WebRequest https://example.com/x\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "pwsh -Command",
+  "form": "var-assembled",
+  "command": "c=pwsh; $c -Command \"Invoke-WebRequest https://example.com/x\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "powershell.exe -c",
+  "form": "plain (control)",
+  "command": "powershell.exe -c \"iwr https://example.com/x\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "powershell.exe -c",
+  "form": "\"name\" args",
+  "command": "\"powershell.exe\" -c \"iwr https://example.com/x\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "powershell.exe -c",
+  "form": "'name' args",
+  "command": "'powershell.exe' -c \"iwr https://example.com/x\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "powershell.exe -c",
+  "form": "\\name args",
+  "command": "\\powershell.exe -c \"iwr https://example.com/x\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "powershell.exe -c",
+  "form": "na\"\"me args",
+  "command": "po\"\"wershell.exe -c \"iwr https://example.com/x\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "powershell.exe -c",
+  "form": "na\\me args",
+  "command": "po\\wershell.exe -c \"iwr https://example.com/x\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "powershell.exe -c",
+  "form": "env \"name\" args",
+  "command": "env \"powershell.exe\" -c \"iwr https://example.com/x\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "powershell.exe -c",
+  "form": "command \"name\" args",
+  "command": "command \"powershell.exe\" -c \"iwr https://example.com/x\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "powershell.exe -c",
+  "form": "/usr/bin/\"name\" args",
+  "command": "/usr/bin/\"powershell.exe\" -c \"iwr https://example.com/x\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "powershell.exe -c",
+  "form": "$(echo name) args",
+  "command": "$(echo powershell.exe) -c \"iwr https://example.com/x\"",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "powershell.exe -c",
+  "form": "var-assembled",
+  "command": "c=powershell.exe; $c -c \"iwr https://example.com/x\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "all words quoted",
+  "form": "\"curl\" \"URL\"",
+  "command": "\"curl\" \"https://example.com/x\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "all words quoted",
+  "form": "\"curl\" -s \"URL\"",
+  "command": "\"curl\" -s \"https://example.com/x\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "all words quoted",
+  "form": "env \"curl\" \"URL\"",
+  "command": "env \"curl\" \"https://example.com/x\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "all words quoted",
+  "form": "env \"curl\" -s \"URL\"",
+  "command": "env \"curl\" -s \"https://example.com/x\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "all words quoted",
+  "form": "'curl' 'URL'",
+  "command": "'curl' 'https://example.com/x'",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "all words quoted",
+  "form": "command \"curl\" \"URL\"",
+  "command": "command \"curl\" \"https://example.com/x\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "shell -c",
+  "form": "bash -c (control)",
+  "command": "bash -c \"curl -s https://example.com/x\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "shell -c",
+  "form": "\"bash\" -c",
+  "command": "\"bash\" -c \"curl -s https://example.com/x\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "shell -c",
+  "form": "\"bash\" \"-c\"",
+  "command": "\"bash\" \"-c\" \"curl -s https://example.com/x\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "shell -c",
+  "form": "bash \"-c\"",
+  "command": "bash \"-c\" \"curl -s https://example.com/x\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "shell -c",
+  "form": "env \"sh\" \"-c\"",
+  "command": "env \"sh\" \"-c\" \"curl -s https://example.com/x\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "eval",
+  "form": "eval (control)",
+  "command": "eval \"curl -s https://example.com/x\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "eval",
+  "form": "\"eval\" \"...\"",
+  "command": "\"eval\" \"curl -s https://example.com/x\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "xargs",
+  "form": "xargs (control)",
+  "command": "echo https://example.com/x | xargs curl",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "xargs",
+  "form": "\"xargs\" \"curl\"",
+  "command": "echo https://example.com/x | \"xargs\" \"curl\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "quoted code flag",
+  "form": "python3 \"-c\"",
+  "command": "python3 \"-c\" \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "quoted code flag",
+  "form": "node '-e'",
+  "command": "node '-e' \"fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "quoted code flag",
+  "form": "\"python3\" \"-c\"",
+  "command": "\"python3\" \"-c\" \"import urllib.request; urllib.request.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "stdin feed",
+  "form": "heredoc python3 (control)",
+  "command": "python3 - <<'PY'\nimport urllib.request\nurllib.request.urlopen('https://example.com/x')\nPY",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "stdin feed",
+  "form": "heredoc \"python3\"",
+  "command": "\"python3\" - <<'PY'\nimport urllib.request\nurllib.request.urlopen('https://example.com/x')\nPY",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "stdin feed",
+  "form": "heredoc env \"python3\"",
+  "command": "env \"python3\" - <<'PY'\nimport urllib.request\nurllib.request.urlopen('https://example.com/x')\nPY",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "stdin feed",
+  "form": "heredoc node (control)",
+  "command": "node <<'JS'\nfetch('https://example.com/x')\nJS",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "stdin feed",
+  "form": "heredoc \"node\"",
+  "command": "\"node\" <<'JS'\nfetch('https://example.com/x')\nJS",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "stdin feed",
+  "form": "heredoc bash (control)",
+  "command": "bash <<'SH'\ncurl -s https://example.com/x\nSH",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "stdin feed",
+  "form": "heredoc \"bash\"",
+  "command": "\"bash\" <<'SH'\ncurl -s https://example.com/x\nSH",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "stdin feed",
+  "form": "here-string bash (control)",
+  "command": "bash <<< 'curl -s https://example.com/x'",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "stdin feed",
+  "form": "here-string \"bash\"",
+  "command": "\"bash\" <<< 'curl -s https://example.com/x'",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "stdin feed",
+  "form": "here-string env \"sh\"",
+  "command": "env \"sh\" <<< 'curl -s https://example.com/x'",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "allow control",
+  "form": "prose (trillian)",
+  "command": "grep \"curl -s https://example.com/x\" notes.md",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "prose (trillian)",
+  "command": "grep \"python3 -c urlopen https://example.com/x\" notes.md",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "prose: a one-liner written to a file",
+  "command": "echo \"node -e fetch('https://example.com/x')\" >> notes.md",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "prose: the quoted spelling as a grep pattern",
+  "command": "grep -c \"\\\"python3\\\" -c\" notes.md",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "prose: the all-quoted curl as a grep pattern",
+  "command": "grep -n \"\\\"curl\\\" \\\"https://example.com/x\\\"\" notes.md",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "prose: a commit message naming the spelling",
+  "command": "git commit -m \"fix: \\\"python3\\\" -c is read now, see https://example.com/x\"",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "prose: single-quoted line appended to a file",
+  "command": "echo 'env \"curl\" -s \"https://example.com/x\"' >> notes.md",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "escaped spaces in a file name",
+  "command": "ls my\\ file\\ https.txt",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "every word quoted, the command is printf",
+  "command": "printf '%s\\n' \"node\" \"-e\" \"fetch('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "quoted interpreter running a SCRIPT FILE",
+  "command": "\"python3\" tool.py --lib urllib --url \"https://example.com/x\"",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "all-quoted curl to localhost",
+  "command": "\"curl\" \"http://localhost:3420/api/kanban\"",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "env + quoted curl to loopback",
+  "command": "env \"curl\" -s \"http://127.0.0.1:3420/api/overview\"",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "quoted interpreter, no network in the code",
+  "command": "\"python3\" -c \"print(1)\"",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "quoted code flag, the URL is only data",
+  "command": "python3 \"-c\" \"import json; print(json.dumps({'u': 'https://example.com/x'}))\"",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "quoted node, the URL is only printed",
+  "command": "\"node\" \"-e\" \"console.log('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "quoted shell -c that only echoes the URL",
+  "command": "\"bash\" \"-c\" \"echo https://example.com/x\"",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "open, not this card",
+  "form": "wget is not this gate (header: every other network binary)",
+  "command": "wget -q https://example.com/x",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "open, not this card",
+  "form": "wget is not this gate (header: every other network binary)",
+  "command": "\"wget\" \"https://example.com/x\"",
+  "before": "allow",
+  "expect": "allow"
+ }
+]
