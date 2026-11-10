@@ -23,8 +23,11 @@
 #   <until> : pl. 2026-11-11T09:00:00+01:00 (idozona KOTELEZO)
 #   Nem tud: pid-es background_job (azt kezzel, a rulebook/workcheck-esetek.md szerint).
 #   Kornyezet: STANDSTILL_ROOT (az agents/ es a koordinator fajl gyokere; alapertelmezes: a script
-#   melletti repo-gyoker), STANDSTILL_ENGINE (az ertekelo modul; alapertelmezes: <gyoker>/dist/idle-agent.js).
-#   A koordinator neve a <gyoker>/.env MAIN_AGENT_ID sorabol jon (mint a watcheren), alapertelmezes: marveen.
+#   melletti repo-gyoker), STANDSTILL_ENGINE (az ertekelo modul; alapertelmezes: <gyoker>/dist/idle-agent.js),
+#   STANDSTILL_ENV_PARSE (a watcher .env-parsere; alapertelmezes: <gyoker>/dist/env-parse.js),
+#   STANDSTILL_LOCK_WAIT (a zarra varas ciklusai 0,05 s-ent; alapertelmezes: 200).
+#   A koordinator neve a <gyoker>/.env MAIN_AGENT_ID sorabol jon, a watcher SAJAT parserevel (utolso sor nyer),
+#   alapertelmezes (hianyzo kulcs vagy .env): marveen. Egy agensre egyszerre egy hivas ir (zar: <agens-mappa>/.workcheck.standstill.lock).
 #
 # KILEPESI KOD: 0 = beirva ES visszaolvasva | 1 = megtagadva vagy visszaallitva | 2 = hasznalati hiba
 set -uo pipefail
@@ -61,6 +64,21 @@ if (mode === 'build') {
   process.exit(0)
 }
 
+if (mode === 'mainid') {
+  // mainid <env-parse.js> <envfile>: a koordinator neve UGYANAZZAL a parserrel, amit a watcher .env-olvasasa
+  // hasznal (dist/env-parse.js, a config.ts readEnvFile-ja): nincs masolt .env-nyelvtan.
+  // Kilepes: 0 = a kulcs van (az erteke a kimenet, lehet ures is); 3 = nincs .env vagy nincs kulcs
+  // (a watcher ilyenkor a marveen alapertelmezest hasznalja); mas = nem sikerult olvasni (a hivo megall).
+  const [parser, envFile] = a
+  const { parseEnvContent } = await import(pathToFileURL(parser).href)
+  let text
+  try { text = readFileSync(envFile, 'utf8') } catch { process.exit(3) }
+  const v = parseEnvContent(text, ['MAIN_AGENT_ID']).MAIN_AGENT_ID
+  if (v === undefined) process.exit(3)
+  console.log(v)
+  process.exit(0)
+}
+
 if (mode === 'verify') {
   // verify <engine> <path> <origPath> <reason> <until>
   const [engine, path, origPath, reason, until] = a
@@ -92,7 +110,7 @@ JS
 run_node() { node --input-type=module -e "$NODE_PROG" -- "$@"; }
 
 set_standstill() {
-  local card="" by="unknown (standstill-set.sh)" root engine dir file tmp backup stamp main_id
+  local card="" by="unknown (standstill-set.sh)" root engine dir file tmp backup stamp main_id lockdir
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --card) [ "$#" -ge 2 ] || { echo "standstill-set: a --card ertek nelkul" >&2; return 2; }; card="$2"; shift 2 ;;
@@ -112,17 +130,46 @@ set_standstill() {
   engine="${STANDSTILL_ENGINE:-$root/dist/idle-agent.js}"
   [ -f "$engine" ] || { echo "standstill-set: nincs ertekelo modul: $engine (npm run build, vagy STANDSTILL_ENGINE)" >&2; return 1; }
   # ugyanaz az ut, amit a watcher olvas (readWorkCheckRaw): a koordinatornak nincs agents/ mappaja.
-  # A koordinator neve a .env FAJLBOL jon (config.ts readEnvFile, mint az idle-reporter.py), NEM a
-  # folyamat kornyezetebol: a watcher sem olvas process.env-et.
-  main_id="$(sed -n 's/^MAIN_AGENT_ID=//p' "$root/.env" 2>/dev/null | head -n 1 | tr -d '\r' | sed "s/^[[:space:]]*//; s/[[:space:]]*\$//; s/^\"\(.*\)\"\$/\1/; s/^'\(.*\)'\$/\1/")"
-  if [ "$agent" = "${main_id:-marveen}" ]; then dir="$root"; else dir="$root/agents/$agent"; fi
+  # A koordinator neve a .env FAJLBOL jon, a watcher SAJAT parserevel (mode mainid: dist/env-parse.js),
+  # NEM a folyamat kornyezetebol es NEM egy ide masolt sed-ekkel: a watcher az UTOLSO MAIN_AGENT_ID sort
+  # veszi, a ket oldal kozti eltérest egy masolt nyelvtan okozta (didi, 57482). Ures ertek = ures nev
+  # (a watcher `??`-e csak a hianyzo kulcsra ad marveent).
+  local rc_m=0
+  local envparse="${STANDSTILL_ENV_PARSE:-$root/dist/env-parse.js}"
+  main_id="$(run_node mainid "$envparse" "$root/.env")" || rc_m=$?
+  case "$rc_m" in
+    0) ;;
+    3) main_id="marveen" ;;
+    *) echo "standstill-set: a koordinator neve nem olvashato (a watcher .env-parserenek betoltese vagy a .env olvasasa nem sikerult: $envparse)" >&2; return 1 ;;
+  esac
+  if [ "$agent" = "$main_id" ]; then dir="$root"; else dir="$root/agents/$agent"; fi
   [ -d "$dir" ] || { echo "standstill-set: ismeretlen agens: $agent (nincs $dir)" >&2; return 1; }
   file="$dir/workcheck.json"
   [ -f "$file" ] || { echo "standstill-set: $agent-nak nincs workcheck.json-ja; a kind-ot elobb ki kell mondani, a standstill nem helyettesiti" >&2; return 1; }
 
+  # EGY IRO AGENSENKENT (didi 57482): a build-mentes-csere-visszaolvasas egy olvas-modosit-ir sor; ket
+  # egyideju hivasnal a vesztes a SAJAT mentesevel irta felul a nyertes irasat, miutan az mar OK-t
+  # mondott. A zar mkdir-rel (atomi); a varakozas lejarta utan NEM ir, es megnevezi a zarat.
+  lockdir="$dir/.workcheck.standstill.lock"
+  local waited=0 max_wait="${STANDSTILL_LOCK_WAIT:-200}"
+  until mkdir "$lockdir" 2>/dev/null; do
+    waited=$((waited + 1))
+    if [ "$waited" -gt "$max_wait" ]; then
+      echo "standstill-set: egy masik hivas ir ugyanennek az agensnek (zar: $lockdir, pid: $(cat "$lockdir/pid" 2>/dev/null || echo ismeretlen)); nem irok. Ha az a folyamat mar nem fut, a zarat kezzel kell torolni." >&2
+      return 1
+    fi
+    sleep 0.05
+  done
+  echo "$$" > "$lockdir/pid"
+  # A RETURN trap GLOBALIS: a kiertekeles a beallitaskor tortenik (a lokalisok mar nem leteznek, amikor a
+  # main visszater), es a trap onmagat torli, kulonben a MASODIK visszateresnel egy masik hivas friss
+  # zarat torolnek.
+  # shellcheck disable=SC2064
+  trap "rm -rf '$lockdir'; trap - RETURN" RETURN
+
   tmp="$(mktemp "$dir/.workcheck.standstill.XXXXXX")" || { echo "standstill-set: nem hozhato letre atmeneti fajl" >&2; return 1; }
   # shellcheck disable=SC2064
-  trap "rm -f '$tmp'" RETURN
+  trap "rm -f '$tmp'; rm -rf '$lockdir'; trap - RETURN" RETURN
   run_node build "$file" "$tmp" "$reason" "$until" "$note" "$card" "$by" "$(TZ=Europe/Belgrade date '+%Y-%m-%d %H:%M %Z')" \
     || { echo "standstill-set: MEGTAGADVA, a workcheck.json valtozatlan" >&2; return 1; }
   if ! run_node verify "$engine" "$tmp" "$file" "$reason" "$until" >/dev/null; then
@@ -163,7 +210,8 @@ self_test() {
   far="$(node -e 'console.log(new Date(Date.now()+10*86400e3).toISOString())')"
   local fut2; fut2="$(node -e 'console.log(new Date(Date.now()+3*3600e3).toISOString())')"
 
-  t() { STANDSTILL_ROOT="$tmp" STANDSTILL_ENGINE="${ENG:-$engine}" bash "$SELF" "$@" >"$tmp/out" 2>&1; }
+  local envp="$(dirname "$engine")/env-parse.js"
+  t() { STANDSTILL_ROOT="$tmp" STANDSTILL_ENGINE="${ENG:-$engine}" STANDSTILL_ENV_PARSE="$envp" bash "$SELF" "$@" >"$tmp/out" 2>&1; }
   sha() { shasum "$1" | cut -d' ' -f1; }
   baks() { ls "$1"/workcheck.json.bak-standstill-* 2>/dev/null | wc -l | tr -d ' '; }
   tmps() { ls -A "$1"/.workcheck.standstill.* 2>/dev/null | wc -l | tr -d ' '; }
@@ -240,11 +288,37 @@ self_test() {
   want_rc 0 "a .env szerinti koordinator (boss) a gyoker fajlt irja"
   rm -f "$tmp/.env"
 
+  # 4/c. A .env-NYELVTAN A WATCHERE (dist/env-parse.js), nem egy masolt sed: a .env-alakok, amelyeken a
+  # regi sed elterne a watchertol (didi 57482: 16 alakbol 5). root = a gyoker fajl valtozik, agent = az
+  # agents/old fajlja, refused = semmi.
+  mkdir -p "$tmp/agents/old"; printf '{"kind":"none"}' > "$tmp/agents/old/workcheck.json"
+  envcase() { # <leiras> <env-tartalom (printf %b)> <agens> <root|agent|refused>
+    local d="$1" content="$2" ag="$3" want="$4" rh ah rn=same an=same
+    printf '%b' "$content" > "$tmp/.env"
+    rh="$(sha "$tmp/workcheck.json")"; ah="$(sha "$tmp/agents/old/workcheck.json")"
+    t "$ag" waiting "$fut" "x"; rc=$?
+    [ "$(sha "$tmp/workcheck.json")" = "$rh" ] || rn=changed
+    [ "$(sha "$tmp/agents/old/workcheck.json")" = "$ah" ] || an=changed
+    case "$want" in
+      root)    [ "$rc" = 0 ] && [ "$rn" = changed ] && [ "$an" = same ]    && ok "$d" || no "$d: rc=$rc gyoker=$rn old=$an, vart: a gyoker fajl valtozik" ;;
+      agent)   [ "$rc" = 0 ] && [ "$rn" = same ]    && [ "$an" = changed ] && ok "$d" || no "$d: rc=$rc gyoker=$rn old=$an, vart: az agents/old fajl valtozik" ;;
+      refused) [ "$rc" = 1 ] && [ "$rn" = same ]    && [ "$an" = same ]    && ok "$d" || no "$d: rc=$rc gyoker=$rn old=$an, vart: megtagadas, semmi nem valtozik" ;;
+    esac
+    rm -f "$tmp/.env"
+  }
+  envcase ".env ket MAIN_AGENT_ID sora: az UTOLSO (boss) a koordinator -> boss a gyokeret irja" 'MAIN_AGENT_ID=old\nMAIN_AGENT_ID=boss\n' boss root
+  envcase ".env ket MAIN_AGENT_ID sora: az ELSO (old) nem koordinator -> old a sajat fajljat irja" 'MAIN_AGENT_ID=old\nMAIN_AGENT_ID=boss\n' old agent
+  envcase ".env CRLF sorvegek" 'FOO=1\r\nMAIN_AGENT_ID=boss\r\n' boss root
+  envcase ".env idezojeles ertek (\")" 'MAIN_AGENT_ID="boss"\n' boss root
+  envcase ".env idezojeles ertek (')" "MAIN_AGENT_ID='boss'\n" boss root
+  envcase ".env sor eleji szokoz es KULCS = ertek" '  MAIN_AGENT_ID = boss  \n' boss root
+  envcase ".env ures ertek: a watcher ures nevet lat, a marveen nev NEM a gyoker" 'MAIN_AGENT_ID=\n' marveen refused
+
   # 5. AZ ERTEKELO MEGSZOLALTATASA: hamis ertekelokkel a script NEM hihet a sajat irasanak
   local fake="$tmp/fake-engine.mjs"
   cat > "$fake" <<FAKE
 import * as real from '$(node -e 'console.log(require("url").pathToFileURL(process.argv[1]).href)' "$engine")'
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, readdirSync, unlinkSync } from 'node:fs'
 const mode = process.env.FAKE_MODE
 const cf = process.env.FAKE_COUNT
 let n = 1
@@ -259,6 +333,10 @@ export function standstillVerdict(c, now, p) {
   const v = real.standstillVerdict(c, now, p)
   if (mode === 'never-expire' && v.state === 'expired') return { state: 'active', standstill: v.standstill }
   if (mode === 'second-none' && n >= 2) return { state: 'none' }
+  if (mode === 'drop-backup' && n >= 2) {
+    for (const f of readdirSync(process.env.FAKE_DIR)) if (f.includes('.bak-standstill-')) unlinkSync(process.env.FAKE_DIR + '/' + f)
+    return { state: 'none' }
+  }
   if (mode === 'reason-flip' && v.state === 'active') return { state: 'active', standstill: { ...v.standstill, reason: v.standstill.reason === 'waiting' ? 'budget' : 'waiting' } }
   if (mode === 'until-shift' && v.state === 'active') return { state: 'active', standstill: { ...v.standstill, untilMs: v.standstill.untilMs + 3600e3 } }
   return v
@@ -282,6 +360,42 @@ FAKE
   want_rc 1 "ha az ertekelo mas reason-t lat, mint a kert, megtagadja"
   [ "$(tmps "$tmp/agents/alpha")" = "0" ] && ok "a hamis-ertekelos megtagadasok utan nem marad atmeneti fajl" || no "atmeneti fajl maradt"
   [ "$(sha "$a")" = "$h" ] && ok "a fajl a vegen is valtozatlan" || no "a fajl valtozott a hamis-ertekelos probak utan"
+
+  # 5/b. A VISSZAALLITAS MAGA IS ELBUKHAT (a :141 ag): a mentes eltunt a visszaolvasas es a visszamasolas kozt
+  h="$(sha "$a")"
+  ENG="$fake" FAKE_MODE=drop-backup FAKE_DIR="$tmp/agents/alpha" FAKE_COUNT="$tmp/count-drop" t alpha waiting "$fut" "x"; rc=$?
+  want_rc 1 "sikertelen visszaallitas -> hiba"
+  grep -q 'visszaallitas SIKERTELEN' "$tmp/out" && grep -q 'kezzel masolando' "$tmp/out" \
+    && ok "kimondja, hogy a visszaallitas sikertelen, es hogy a mentest kezzel kell visszamasolni" || no "nem mondja ki a sikertelen visszaallitast"
+  grep -q 'VISSZAALLITVA' "$tmp/out" && no "sikertelen visszaallitast VISSZAALLITVA-nak mondja" || ok "nem allitja, hogy visszaallitott"
+  [ "$(tmps "$tmp/agents/alpha")" = "0" ] && ok "sikertelen visszaallitas utan nem marad atmeneti fajl vagy zar" || no "atmeneti fajl vagy zar maradt"
+
+  # 5/c. ZAR: foglalt zar mellett nem ir (es megnevezi a zarat), a fajl valtozatlan
+  mkdir "$tmp/agents/alpha/.workcheck.standstill.lock"; echo 99999 > "$tmp/agents/alpha/.workcheck.standstill.lock/pid"
+  h="$(sha "$a")"
+  STANDSTILL_LOCK_WAIT=3 t alpha waiting "$fut" "x"; rc=$?
+  want_rc 1 "foglalt zar -> megtagadja"
+  grep -q 'standstill.lock' "$tmp/out" && ok "megnevezi a zarat" || no "nem nevezi meg a zarat"
+  [ "$(sha "$a")" = "$h" ] && ok "foglalt zarnal a fajl valtozatlan" || no "foglalt zarnal a fajl valtozott"
+  [ -d "$tmp/agents/alpha/.workcheck.standstill.lock" ] && ok "a masik hivas zarjat nem torolte" || no "a megtagadott hivas letorolte a masik zarat"
+  rm -rf "$tmp/agents/alpha/.workcheck.standstill.lock"
+
+  # 5/d. KET EGYIDEJU HIVAS UGYANARRA AZ AGENSRE (didi 57482: 20 korbol 15-ben az egyik OK-t mondott, es a
+  # standstill nem volt a fajlban). Minden korben: ha valamelyik hivas OK-t mond, a fajlban ott a standstill.
+  local rnd silent=0 o1 o2 rcs
+  for rnd in 1 2 3 4 5 6 7 8; do
+    printf '%s' "$orig" > "$a"
+    ( STANDSTILL_ROOT="$tmp" STANDSTILL_ENGINE="$engine" STANDSTILL_ENV_PARSE="$envp" bash "$SELF" alpha waiting "$fut" "p1" >"$tmp/c1" 2>&1; echo $? >"$tmp/c1.rc" ) &
+    ( STANDSTILL_ROOT="$tmp" STANDSTILL_ENGINE="$engine" STANDSTILL_ENV_PARSE="$envp" bash "$SELF" alpha budget  "$fut2" "p2" >"$tmp/c2" 2>&1; echo $? >"$tmp/c2.rc" ) &
+    wait
+    o1="$(head -c 2 "$tmp/c1")"; o2="$(head -c 2 "$tmp/c2")"
+    if { [ "$o1" = "OK" ] || [ "$o2" = "OK" ]; } && ! grep -q '"standstill"' "$a"; then silent=$((silent + 1)); fi
+    rcs="$(cat "$tmp/c1.rc") $(cat "$tmp/c2.rc")"
+    [ "$rcs" = "0 0" ] || { echo "  BUKO  egyideju hivasok rc-je: $rcs (vart: 0 0, egymas utan sorosan)"; sed 's/^/        /' "$tmp/c1" "$tmp/c2"; bad=1; }
+  done
+  [ "$silent" = 0 ] && ok "egyideju hivasok: 8 korbol 0-ban mondott valamelyik OK-t standstill nelkul" || { echo "  BUKO  egyideju hivasok: 8 korbol $silent-ban OK, de nincs standstill a fajlban"; bad=1; }
+  [ "$(tmps "$tmp/agents/alpha")" = "0" ] && ok "egyideju hivasok utan nem marad atmeneti fajl vagy zar" || no "atmeneti fajl vagy zar maradt az egyideju hivasok utan"
+  h="$(sha "$a")"
 
   # 6. A CSAPDA MAGA: objektummal hivva a parseWorkCheck csendben null-t ad (ez az, amit a script nem kovet el)
   if [ "$(node --input-type=module -e "import('file://$engine').then(m=>console.log(m.parseWorkCheck({kind:'none'})===null))")" = "true" ]; then
