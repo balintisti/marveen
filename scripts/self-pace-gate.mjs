@@ -94,23 +94,41 @@ const SELF_PACE_BASH_PATTERNS = [
 // is a lookup, never an exec, and must stay allowed). Shell reserved words that
 // introduce a command (`then`, `do`, `else`, ...) are prefixes too.
 //
-// ONE READING PER WORD (card bcc323dc, didi 57307): the flag argument may not be a word that
-// SCHED_WRAPPER below matches unconditionally (a generic wrapper, `command`, VAR=x, a reserved
-// word). Otherwise `sudo -Z sudo -Z ...` had two readings per pair (argument, or the next
-// wrapper), a failing match tried all 2^n, and ~190 bytes took 16.6 s, past the hook timeout.
-// Such a word is now always read as the wrapper, which only goes on scanning: no command is
-// lost. timeout/script/ssh are NOT excluded: they demand a further word, and reading `ssh` in
-// `sudo -u ssh crontab` as a wrapper would swallow crontab as its host.
+// ONE READING PER WORD (card bcc323dc, didi 57307): a word after a wrapper's flag had two
+// readings, the flag's argument or the next wrapper, so `sudo -Z sudo -Z ...` made a failing
+// match try all 2^n splits, and ~190 bytes took 16.6 s, past the hook timeout. After a GENERIC
+// wrapper's flag each such word now keeps only the reading whose continuation CONTAINS the
+// other's, so no command is lost:
+// - a generic wrapper is read as the wrapper: it goes on with WRAPPER_OPTS and then the next
+//   wrapper or the binary, exactly what the argument reading would have accepted
+//   (OPT_ARG_NOT_WRAPPER);
+// - VAR=x, a reserved word and `command` are read as the flag's ARGUMENT: as wrappers they cannot
+//   take a flag (`command` only -p), while the argument reading accepts more flags AND then the
+//   next wrapper (FLAG_NEEDS_ARG). The first version read them as wrappers, and lost
+//   `env -u command -i crontab -e`, a real exec (env unsets the variable `command`): didi 10012859.
+//   The second one said "not after a flag" with lookbehinds, which re-scan backwards at every
+//   position: a real 31 KB heredoc of the fleet took more than 60 s (13 ms before). A lookahead
+//   right after the flag costs one word.
+// timeout/script/ssh keep both readings (TAIL_WRAPPER_OPTS): after their options they demand a
+// further word (duration, file, host), so the wrapper reading does NOT contain the argument one
+// (`ssh -i env host crontab -e`: didi 57405). Their nesting stays exponential, and the budget
+// turns it into a could-not-decide deny: ACCEPTED DESIGN, marveen 57408 (decision 2, "no input
+// leaves the gate undecided"); the reopen condition is any real command over 1 s or budget-denied.
+// A bare `--` ends the options of every wrapper (didi 57405 item 2: `env -- crontab -e` passed,
+// because a flag needed a letter or digit after the dashes).
 const GENERIC_WRAPPERS = 'sudo|doas|env|exec|nice|ionice|caffeinate|stdbuf|time|setsid|nohup|watch|parallel|arch|builtin|taskpolicy'
-const OPT_ARG_NOT_WRAPPER = String.raw`(?![A-Za-z_]\w*=|(?:then|do|else|elif|if|while|until|!|\{)(?:\s|$)|(?:\S*/)?(?:${GENERIC_WRAPPERS}|command)(?:\s|$))`
-const WRAPPER_OPTS = String.raw`(?:\s+--?[A-Za-z0-9][^\s]*(?:\s+${OPT_ARG_NOT_WRAPPER}[^\s-]\S*)?)*`
+const OPT_ARG_NOT_WRAPPER = String.raw`(?!(?:\S*/)?(?:${GENERIC_WRAPPERS})(?:\s|$))`
+const FLAG_NEEDS_ARG = String.raw`\s+(?:[A-Za-z_]\w*=|(?:then|do|else|elif|if|while|until|!|\{|(?:\S*/)?command)(?:\s|$))`
+const END_OF_OPTS = String.raw`\s+--(?=\s|$)`
+const WRAPPER_OPTS = String.raw`(?:${END_OF_OPTS}|\s+--?[A-Za-z0-9][^\s]*(?:\s+${OPT_ARG_NOT_WRAPPER}[^\s-]\S*|(?!${FLAG_NEEDS_ARG})))*`
+const TAIL_WRAPPER_OPTS = String.raw`(?:${END_OF_OPTS}|\s+--?[A-Za-z0-9][^\s]*(?:\s+[^\s-]\S*)?)*`
 const WRAPPER_PATH = String.raw`(?:\S*/)?`
 const SCHED_WRAPPER = '(?:' + [
   String.raw`[A-Za-z_]\w*=\S*`,
   String.raw`(?:then|do|else|elif|if|while|until|!|\{)`,
-  String.raw`${WRAPPER_PATH}timeout${WRAPPER_OPTS}\s+\d\S*`,
-  String.raw`${WRAPPER_PATH}command(?:\s+-p)*`,
-  String.raw`${WRAPPER_PATH}(?:script|ssh)${WRAPPER_OPTS}\s+\S+`,
+  String.raw`${WRAPPER_PATH}timeout${TAIL_WRAPPER_OPTS}\s+\d\S*`,
+  String.raw`${WRAPPER_PATH}command(?:\s+-p)*(?:${END_OF_OPTS})?`,
+  String.raw`${WRAPPER_PATH}(?:script|ssh)${TAIL_WRAPPER_OPTS}\s+\S+`,
   String.raw`${WRAPPER_PATH}(?:${GENERIC_WRAPPERS})${WRAPPER_OPTS}`,
 ].join('|') + ')'
 const SCHED_PREFIX = String.raw`(?:${SCHED_WRAPPER}\s+)*(?:\S*/)?`
@@ -1110,6 +1128,9 @@ if (!isMainThread && workerData?.selfPaceGateDecision) {
   const p = workerData.payload
   parentPort.postMessage(gateDecision(p?.tool_name, p?.tool_input, { cwd: p?.cwd }))
 } else if (isInvokedDirectly()) {
+  // Anything that throws on THIS thread would exit 1 with no output, which the harness lets
+  // through (didi 57405 item 3): it is a could-not-decide deny like the others.
+  process.on('uncaughtException', (e) => deny(FAIL_CLOSED_MSG(`a kapu fo szala hibat dobott: ${String(e?.name ?? '')} ${String(e?.message ?? e).slice(0, 200)}`.replace(/\s+/g, ' '))))
   let payload
   try {
     payload = JSON.parse(readFileSync(0, 'utf-8'))
@@ -1124,8 +1145,13 @@ if (!isMainThread && workerData?.selfPaceGateDecision) {
     clearTimeout(timer)
     deny(FAIL_CLOSED_MSG(`a dontes nem indult el: ${String(e?.message ?? e).slice(0, 200)}`))
   }
-  worker.once('message', ({ deny: shouldDeny, reason }) => {
+  worker.once('message', (answer) => {
     clearTimeout(timer)
+    // only a well-formed answer decides; undefined, null or a non-boolean deny is undecided
+    if (answer === null || typeof answer !== 'object' || typeof answer.deny !== 'boolean') {
+      deny(FAIL_CLOSED_MSG(`a dontes nem szabalyos valaszt adott: ${String(JSON.stringify(answer)).slice(0, 100)}`))
+    }
+    const { deny: shouldDeny, reason } = answer
     if (shouldDeny) deny(reason === 'egress-allowlist' ? ALLOWLIST_GATE_MSG : GATE_MSG + (REASON_HINT[reason] ?? ''))
     allow()
   })
