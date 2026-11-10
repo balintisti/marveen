@@ -200,7 +200,7 @@ set_standstill() {
   # egyideju hivasnal a vesztes a SAJAT mentesevel irta felul a nyertes irasat, miutan az mar OK-t
   # mondott. A zar mkdir-rel (atomi); a varakozas lejarta utan NEM ir, es megnevezi a zarat.
   lockdir="$dir/.workcheck.standstill.lock"
-  local waited=0 max_wait="${STANDSTILL_LOCK_WAIT:-200}" holder stolen
+  local waited=0 max_wait="${STANDSTILL_LOCK_WAIT:-200}" holder takeover="$dir/.workcheck.standstill.lock.takeover"
   until mkdir "$lockdir" 2>/dev/null; do
     # A mkdir NEM a foglalt zar miatt bukott: nincs zar, es a mappa nem irhato (a60deb91). Varas nelkul,
     # igaz okkal; ha a zar kozben eltunt (-w igen), a ciklus ujraprobalja.
@@ -210,17 +210,20 @@ set_standstill() {
     fi
     holder="$(cat "$lockdir/pid" 2>/dev/null || true)"
     if lock_is_stale "$lockdir" "$holder"; then
-      # ATNEVEZESSEL vesszuk at (atomi: ket varakozo kozul egy nyer), es csak akkor toroljuk, ha a pid ugyanaz,
-      # amit elavultnak lattunk; ha kozben egy ELO hivas zarat vittuk el, visszaneveztuk.
-      stolen="$lockdir.stale.$$"
-      if mv "$lockdir" "$stolen" 2>/dev/null; then
-        if [ "$(cat "$stolen/pid" 2>/dev/null || true)" = "$holder" ]; then
-          rm -rf "$stolen"
+      # Az atvetelt EGY masodik zar (mkdir) szerializalja, es a pid-et a MASODIK zar ALATT olvassuk ujra: a regi
+      # "mv, aztan pid-ellenorzes" sorrend (63960d9298) egy MASIK varakozo friss zarat vitte el, 5+ egyideju
+      # hivasnal ket iro volt egyszerre a zar alatt (trillian: N=8 14/30 kor). Elavult zarat csak a masodik zar
+      # birtokosa torolhet, es csak ha MOST is elavult: egy friss zar nem elavult, a pid-iras elotti sem.
+      if mkdir "$takeover" 2>/dev/null; then
+        holder="$(cat "$lockdir/pid" 2>/dev/null || true)"
+        if [ -e "$lockdir" ] && lock_is_stale "$lockdir" "$holder"; then
+          rm -rf "$lockdir"
           echo "standstill-set: elavult zar torolve (zar: $lockdir, pid: ${holder:-nincs}, a folyamat nem fut)" >&2
-        elif [ -e "$lockdir" ] || ! mv "$stolen" "$lockdir" 2>/dev/null; then
-          echo "standstill-set: egy ELO hivas zarat elvittem, es a visszaadas nem sikerult: $stolen (kezzel kell visszanevezni: $lockdir)" >&2
-          return 1
         fi
+        rmdir "$takeover" 2>/dev/null
+      elif [ -n "$(find "$takeover" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+        # a masodik zar tulajdonosa az atvetel kozben halt meg (az atvetel ezredmasodperces): a zar elavult
+        rmdir "$takeover" 2>/dev/null
       fi
     fi
     waited=$((waited + 1))
@@ -230,7 +233,12 @@ set_standstill() {
     fi
     sleep 0.05
   done
-  echo "$$" > "$lockdir/pid"
+  # a pid-iras hibaja megtagadas (a60deb91): pid nelkul a zar egy percig "elo" lenne, a tulajdonos pedig tovabb irna
+  if ! echo "$$" > "$lockdir/pid"; then
+    echo "standstill-set: a zar pid-fajlja nem irhato ($lockdir/pid); nem irok" >&2
+    rm -rf "$lockdir"
+    return 1
+  fi
   # NINCS RETURN trap (didi 57710, A5): az kulon ertelmezest igenyelt, hogy a masodik tuzelesnel ne vigye el
   # egy MASIK hivas friss zarat. A zart tarto resz a write_locked-ben fut, es a zar meg az atmeneti fajl
   # EGYSZER, kozvetlenul utana torlodik, minden uton (siker, megtagadas, sikertelen visszaallitas).
@@ -383,14 +391,16 @@ self_test() {
   local fake="$tmp/fake-engine.mjs"
   cat > "$fake" <<FAKE
 import * as real from '$(node -e 'console.log(require("url").pathToFileURL(process.argv[1]).href)' "$engine")'
-import { readFileSync, writeFileSync, existsSync, readdirSync, unlinkSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, readdirSync, unlinkSync, appendFileSync } from 'node:fs'
 const mode = process.env.FAKE_MODE
 const cf = process.env.FAKE_COUNT
 let n = 1
 if (cf) { n = (existsSync(cf) ? Number(readFileSync(cf, 'utf8')) : 0) + 1; writeFileSync(cf, String(n)) }
 export function parseWorkCheck(t) {
+  if (process.env.FAKE_LOG) appendFileSync(process.env.FAKE_LOG, 'S\\n')
   if (mode === 'slow') Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.FAKE_SLEEP_MS))
   const r = real.parseWorkCheck(t)
+  if (process.env.FAKE_LOG) appendFileSync(process.env.FAKE_LOG, 'E\\n')
   if (mode === 'kind-flip' && r && t.includes('"set_by": "selftest-flip"')) r.kind = 'none'
   if (mode === 'reviewer-flip' && r && t.includes('"set_by": "selftest-flip"')) r.reviewer = !r.reviewer
   return r
@@ -468,6 +478,67 @@ FAKE
   STANDSTILL_LOCK_WAIT=3 t alpha waiting "$fut" "x"; rc=$?
   want_rc 0 "pid nelkuli REGI zar -> atveszi es ir"
   [ "$(tmps "$tmp/agents/alpha")" = "0" ] && ok "pid nelkuli regi zar utan nem marad zar vagy atmeneti fajl" || no "zar vagy atmeneti fajl maradt"
+
+  # 5/e2. NEM SZAMJEGYES pid-fajl: nem tudjuk, ki tartja -> elo zarnak vesszuk (kezi torles az ut), nem veszi at
+  printf '%s' "$orig" > "$a"; h="$(sha "$a")"
+  mkdir "$lk"; echo "abc" > "$lk/pid"
+  STANDSTILL_LOCK_WAIT=3 t alpha waiting "$fut" "x"; rc=$?
+  want_rc 1 "nem szamjegyes pid-fajl -> nem veszi at"
+  [ -d "$lk" ] && [ "$(sha "$a")" = "$h" ] && ok "a nem szamjegyes pid-u zar es a fajl valtozatlan" || no "a nem szamjegyes pid-u zar eltunt vagy a fajl valtozott"
+  rm -rf "$lk"
+
+  # 5/e3. AZ ATVETEL MASODIK ZARA: egy FRISS masodik zar (egy masik atvevo dolgozik) mellett a halott zarat nem
+  # nyuljuk; egy REGI masodik zar (az atvevo meghalt) elavult, es az atvetel utan nem marad belole semmi.
+  local tk="$tmp/agents/alpha/.workcheck.standstill.lock.takeover"
+  mkdir "$lk"; echo "$dead" > "$lk/pid"; mkdir "$tk"
+  STANDSTILL_LOCK_WAIT=3 t alpha waiting "$fut" "x"; rc=$?
+  want_rc 1 "friss masodik zar mellett nem veszi at a halott zarat"
+  [ -d "$lk" ] && [ -d "$tk" ] && [ "$(sha "$a")" = "$h" ] && ok "a halott zar, a friss masodik zar es a fajl valtozatlan" || no "a friss masodik zar mellett valami valtozott"
+  touch -t 200001010000 "$tk"
+  STANDSTILL_LOCK_WAIT=60 t alpha waiting "$fut" "x"; rc=$?
+  want_rc 0 "regi (elhagyott) masodik zar -> elavult, az atvetel megtortenik"
+  [ "$(tmps "$tmp/agents/alpha")" = "0" ] && ok "az elhagyott masodik zar utan nem marad zar, masodik zar vagy atmeneti fajl" || no "zar vagy masodik zar maradt"
+
+  # 5/e4. ELO zar IRHATATLAN mappaban: a varakozas igaz uzenete a 'masik hivas ir', nem a 'nem irhato'
+  # (az irhatatlan-ag csak akkor jar, ha nincs zar). root-kent a chmod nem tilt.
+  if [ "$(id -u)" != 0 ]; then
+    printf '%s' "$orig" > "$a"
+    mkdir "$lk"; echo "$$" > "$lk/pid"
+    chmod 555 "$tmp/agents/alpha"
+    STANDSTILL_LOCK_WAIT=3 t alpha waiting "$fut" "x"; rc=$?
+    chmod 755 "$tmp/agents/alpha"
+    want_rc 1 "elo zar irhatatlan mappaban -> megtagadja"
+    grep -q 'masik hivas' "$tmp/out" && ok "az elo zarra a 'masik hivas ir' uzenetet adja" || no "az elo zarra nem a 'masik hivas ir' uzenetet adja"
+    grep -q 'nem irhato' "$tmp/out" && no "elo zarnal az irhatatlan-mappa uzenetet adja" || ok "elo zarnal nem mondja, hogy a mappa nem irhato"
+    rm -rf "$lk"
+  fi
+
+  # 5/e5. TOBB VARAKOZO EGY HALOTT ZARRA (trillian a60deb91, N=8: 14/30 kor atfedes az elozo csucson). 8 egyideju
+  # hivas, lassu ertekelo (150 ms) idobelyeget naploz (S = az ertekeles kezdete, E = vege); a zar alatt ket
+  # iro egyszerre azt jelenti, hogy a futo S-ek szama 1 fole megy. Mero-kontroll: a naplo legalabb 8 S-t tartalmaz
+  # (a mero latta az irokat). Kor: 6 (a verseny ablaka ezredmasodperces, egy kor az elozo csucson ~47 %).
+  local ov_rnd ov_n ov_max ov_s ov_bad=0 ov_over=0 ov_rcbad=0 ov_err=0 ov_i
+  for ov_rnd in 1 2 3 4 5 6; do
+    printf '%s' "$orig" > "$a"; rm -rf "$lk" "$tk"; : > "$tmp/ov.log"
+    mkdir "$lk"; echo "$dead" > "$lk/pid"
+    for ov_i in 1 2 3 4 5 6 7 8; do
+      ( STANDSTILL_ROOT="$tmp" STANDSTILL_ENGINE="$fake" STANDSTILL_ENV_PARSE="$envp" FAKE_MODE=slow FAKE_SLEEP_MS=150 \
+          FAKE_LOG="$tmp/ov.log" STANDSTILL_LOCK_WAIT=1200 bash "$SELF" alpha waiting "$fut" "w$ov_i" >"$tmp/ov$ov_i" 2>&1; echo $? >"$tmp/ov$ov_i.rc" ) &
+    done
+    wait
+    ov_max="$(awk '$1=="S"{a++; if(a>m)m=a} $1=="E"{a--} END{print m+0}' "$tmp/ov.log")"
+    ov_s="$(grep -c '^S' "$tmp/ov.log")"
+    [ "$ov_max" -gt 1 ] && ov_over=$((ov_over + 1))
+    [ "$ov_s" -ge 8 ] || ov_bad=$((ov_bad + 1))
+    cat "$tmp"/ov?.rc | grep -qv '^0$' && ov_rcbad=$((ov_rcbad + 1))
+    cat "$tmp"/ov? | grep -q 'No such file' && ov_err=$((ov_err + 1))
+    rm -f "$tmp"/ov?.rc "$tmp"/ov?
+  done
+  [ "$ov_bad" = 0 ] && ok "az atfedes-mero latta az irokat (mind a 6 korben legalabb 8 ertekeles-kezdet)" || { echo "  BUKO  az atfedes-mero nem latta az irokat ($ov_bad kor)"; bad=1; }
+  [ "$ov_over" = 0 ] && ok "8 egyideju hivas egy halott zarra: 6 korbol 0-ban volt ket iro egyszerre a zar alatt" || { echo "  BUKO  8 hivas egy halott zarra: 6 korbol $ov_over-ban volt ket iro egyszerre"; bad=1; }
+  [ "$ov_rcbad" = 0 ] && ok "mind a 8 hivas rc=0 minden korben" || { echo "  BUKO  nem nulla rc $ov_rcbad korben"; bad=1; }
+  [ "$ov_err" = 0 ] && ok "egyik hivas sem kapott fajl-hibat (No such file)" || { echo "  BUKO  fajl-hiba $ov_err korben"; bad=1; }
+  [ "$(tmps "$tmp/agents/alpha")" = "0" ] && ok "a tobb-varakozos korok utan nem marad zar, masodik zar vagy atmeneti fajl" || no "zar, masodik zar vagy atmeneti fajl maradt a tobb-varakozos korok utan"
 
   # 5/f. JEL A ZAR ALATT (a60deb91): a lassu ertekelo (fake, slow) alatt a hivas jelet kap; a SAJAT zarat es
   # atmeneti fajlt takaritja, 128+jel kodot ad, a fajl valtozatlan. A jelet a script (bash) kapja, a node
