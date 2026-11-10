@@ -200,11 +200,13 @@ export interface IdleAgentThresholds {
    *  agents drop to a 1-4 item list, and every one of those lists is stable.
    *  A repeat is cheap once a shift; permanent silence is not. */
   wakeStaleRearmMs?: number
-  /** The re-arm for a CHECK-ONLY wake (card 52abd0d4, marveen 44126 option 1): the agent has no
-   *  work to start on and owes no answer on a testing card (marveen 44180), and the set is
-   *  unchanged. Measured 2026-10-23 over 7 days: 74 of 374 wakes were check-only, 18 of those
-   *  repeated the previous set, ALL of them exactly at the 4 h re-arm and none inside it. A changed
-   *  set still wakes at once; a wake with pickable work keeps wakeStaleRearmMs. Never SHORTER than
+  /** The re-arm for a wake that names ONLY floor expiries (card 52abd0d4, marveen 44126 option 1):
+   *  every named item is a waiting card whose floor ran out, so the agent has no work to start on,
+   *  and the set is unchanged. A testing card on the owner's list keeps wakeStaleRearmMs, and so
+   *  does a `waiting_on_me` wake. The measurement behind the card (2026-10-23, 7 days: 74 of 374
+   *  wakes check-only, 18 of those repeats, all at the 4 h re-arm) counted the OLDER, wider
+   *  check-only population; today's narrower scope has not been measured. A changed set still
+   *  wakes at once; a wake with pickable work keeps wakeStaleRearmMs. Never SHORTER than
    *  wakeStaleRearmMs, and absent means the old single re-arm. */
   wakeStaleRearmCheckOnlyMs?: number
   /** Floor between two wakes of the same agent, across spells. Without it, an agent

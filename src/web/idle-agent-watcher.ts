@@ -84,10 +84,10 @@ const THRESHOLDS: IdleAgentThresholds = {
   // A repeated identical list is not news -- but after four hours, "nobody has touched
   // this" is. Without this the suppression is permanent on a stable queue.
   wakeStaleRearmMs: 4 * 60 * 60_000,
-  // A CHECK-ONLY wake (no pickable work, only cards a checker spoke last on) with an UNCHANGED set
-  // waits 12 h instead of 4 (card 52abd0d4, marveen 44126). Measured 2026-10-23 over 7 days: 18 of
-  // 74 check-only wakes repeated the previous set, every one at the 4 h re-arm. A changed set, and
-  // every wake with pickable work, are untouched.
+  // A wake that names ONLY floor expiries (every item a waiting card whose floor ran out) with an
+  // UNCHANGED set waits 12 h instead of 4 (card 52abd0d4, marveen 44126). A testing card on the
+  // owner's list keeps the 4 h re-arm, and so does a `waiting_on_me` wake. A changed set, and every
+  // wake with pickable work, are untouched.
   wakeStaleRearmCheckOnlyMs: 12 * 60 * 60_000,
   // "The guard is blind to this agent" is one fact per spell, not one per half hour (card
   // 3c27105f). Replayed over 7 days: 79 lines, 14 of them repeats inside six hours for an agent
