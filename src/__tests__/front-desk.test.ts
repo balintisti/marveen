@@ -8,6 +8,7 @@ import {
   frontDeskHeader,
   isReroutableWindowReceipt,
   machineNoticeRecipient,
+  pageGuardNoticeSubjects,
   parseFrontDeskHeader,
   withFrontDeskHeader,
   type FrontDeskProbe,
@@ -158,5 +159,37 @@ describe('fleetAlertsAreFrontDeskWork', () => {
       expect(fleetAlertsAreFrontDeskWork([k])).toBe(false)
       expect(fleetAlertsAreFrontDeskWork(['still-idle', k])).toBe(false)
     }
+  })
+})
+
+describe('pageGuardNoticeSubjects: the pages a fleet-page-guard defect alarm names', () => {
+  const REST = 'EGY VAGY TOBB AGENS-LAP NEM HORDOZZA A TEHERHORDO MONDATOKAT.\n\n  didi  39,962 kar.'
+
+  it('the names on the first line, in the order written', () => {
+    expect(pageGuardNoticeSubjects(`[fleet-page-guard] LAPOK: didi\n${REST}`)).toEqual(['didi'])
+    expect(pageGuardNoticeSubjects(`[fleet-page-guard] LAPOK: didi, ford-2, a_b\n${REST}`)).toEqual(['didi', 'ford-2', 'a_b'])
+    expect(pageGuardNoticeSubjects('[fleet-page-guard] LAPOK: didi')).toEqual(['didi'])
+  })
+
+  it.each([
+    ['the old headline, no names', `[fleet-page-guard] ${REST}`],
+    ['the blind guard (rc=4)', '[fleet-page-guard] AZ AGENS-LAP OR NEM TUDOTT MERNI (rc=4): a lapokrol MOST semmit nem tudunk.'],
+    ['an empty list', '[fleet-page-guard] LAPOK: \nx'],
+    ['text after the names', '[fleet-page-guard] LAPOK: didi es meg valaki\nx'],
+    ['a trailing comma', '[fleet-page-guard] LAPOK: didi, \nx'],
+    ['a separator the script does not write', '[fleet-page-guard] LAPOK: didi,ford\nx'],
+    ['an id with a capital', '[fleet-page-guard] LAPOK: Didi\nx'],
+    ['an id with a slash', '[fleet-page-guard] LAPOK: peer/didi\nx'],
+    ['the line is not the first', `elotte egy sor\n[fleet-page-guard] LAPOK: didi\n${REST}`],
+    ['a leading space', ' [fleet-page-guard] LAPOK: didi\nx'],
+    ['a carriage return before the line end', '[fleet-page-guard] LAPOK: didi\r\nx'],
+    ['nothing', ''],
+  ])('%s -> not that alarm', (_label, text) => {
+    expect(pageGuardNoticeSubjects(text)).toBeNull()
+  })
+
+  it('the header says which pages, as its own type', () => {
+    const h = frontDeskHeader({ type: 'fleet-page-guard', subjects: ['didi', 'ford'] })
+    expect(parseFrontDeskHeader(h)).toMatchObject({ v: 1, type: 'fleet-page-guard', subjects: ['didi', 'ford'], window_sec: null, delivered: null })
   })
 })
