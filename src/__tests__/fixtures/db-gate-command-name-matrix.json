@@ -1,0 +1,499 @@
+[
+ {
+  "group": "prisma reset (tool)",
+  "form": "plain (control)",
+  "command": "npx prisma migrate reset --force",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "prisma reset (tool)",
+  "form": "\"name\" args",
+  "command": "\"npx\" prisma migrate reset --force",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "prisma reset (tool)",
+  "form": "'name' args",
+  "command": "'npx' prisma migrate reset --force",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "prisma reset (tool)",
+  "form": "\\name args",
+  "command": "\\npx prisma migrate reset --force",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "prisma reset (tool)",
+  "form": "na\"\"me args",
+  "command": "np\"\"x prisma migrate reset --force",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "prisma reset (tool)",
+  "form": "na\\me args",
+  "command": "np\\x prisma migrate reset --force",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "prisma reset (tool)",
+  "form": "every letter backslashed",
+  "command": "\\n\\p\\x prisma migrate reset --force",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "prisma reset (tool)",
+  "form": "env \"name\" args",
+  "command": "env \"npx\" prisma migrate reset --force",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "prisma reset (tool)",
+  "form": "env \\name args",
+  "command": "env \\npx prisma migrate reset --force",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "prisma reset (tool)",
+  "form": "after a separator",
+  "command": "cd /tmp && \\npx prisma migrate reset --force",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "prisma reset (tool)",
+  "form": "$(echo name) args",
+  "command": "$(echo npx) prisma migrate reset --force",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "prisma reset (tool)",
+  "form": "var-assembled",
+  "command": "c=npx; $c prisma migrate reset --force",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "SQL drop via client",
+  "form": "plain (control)",
+  "command": "psql -c \"DROP TABLE users\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "SQL drop via client",
+  "form": "\"name\" args",
+  "command": "\"psql\" -c \"DROP TABLE users\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "SQL drop via client",
+  "form": "'name' args",
+  "command": "'psql' -c \"DROP TABLE users\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "SQL drop via client",
+  "form": "\\name args",
+  "command": "\\psql -c \"DROP TABLE users\"",
+  "before": "none",
+  "expect": "deny"
+ },
+ {
+  "group": "SQL drop via client",
+  "form": "na\"\"me args",
+  "command": "ps\"\"ql -c \"DROP TABLE users\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "SQL drop via client",
+  "form": "na\\me args",
+  "command": "ps\\ql -c \"DROP TABLE users\"",
+  "before": "none",
+  "expect": "deny"
+ },
+ {
+  "group": "SQL drop via client",
+  "form": "every letter backslashed",
+  "command": "\\p\\s\\q\\l -c \"DROP TABLE users\"",
+  "before": "none",
+  "expect": "deny"
+ },
+ {
+  "group": "SQL drop via client",
+  "form": "env \"name\" args",
+  "command": "env \"psql\" -c \"DROP TABLE users\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "SQL drop via client",
+  "form": "env \\name args",
+  "command": "env \\psql -c \"DROP TABLE users\"",
+  "before": "none",
+  "expect": "deny"
+ },
+ {
+  "group": "SQL drop via client",
+  "form": "after a separator",
+  "command": "cd /tmp && \\psql -c \"DROP TABLE users\"",
+  "before": "none",
+  "expect": "deny"
+ },
+ {
+  "group": "SQL drop via client",
+  "form": "$(echo name) args",
+  "command": "$(echo psql) -c \"DROP TABLE users\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "SQL drop via client",
+  "form": "var-assembled",
+  "command": "c=psql; $c -c \"DROP TABLE users\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "force push",
+  "form": "plain (control)",
+  "command": "git push fork main --force",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "force push",
+  "form": "\"name\" args",
+  "command": "\"git\" push fork main --force",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "force push",
+  "form": "'name' args",
+  "command": "'git' push fork main --force",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "force push",
+  "form": "\\name args",
+  "command": "\\git push fork main --force",
+  "before": "none",
+  "expect": "deny"
+ },
+ {
+  "group": "force push",
+  "form": "na\"\"me args",
+  "command": "gi\"\"t push fork main --force",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "force push",
+  "form": "na\\me args",
+  "command": "gi\\t push fork main --force",
+  "before": "none",
+  "expect": "deny"
+ },
+ {
+  "group": "force push",
+  "form": "every letter backslashed",
+  "command": "\\g\\i\\t push fork main --force",
+  "before": "none",
+  "expect": "deny"
+ },
+ {
+  "group": "force push",
+  "form": "env \"name\" args",
+  "command": "env \"git\" push fork main --force",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "force push",
+  "form": "env \\name args",
+  "command": "env \\git push fork main --force",
+  "before": "none",
+  "expect": "deny"
+ },
+ {
+  "group": "force push",
+  "form": "after a separator",
+  "command": "cd /tmp && \\git push fork main --force",
+  "before": "none",
+  "expect": "deny"
+ },
+ {
+  "group": "force push",
+  "form": "$(echo name) args",
+  "command": "$(echo git) push fork main --force",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "force push",
+  "form": "var-assembled",
+  "command": "c=git; $c push fork main --force",
+  "before": "none",
+  "expect": "none"
+ },
+ {
+  "group": "cloud delete",
+  "form": "plain (control)",
+  "command": "gcloud run services delete svc",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "cloud delete",
+  "form": "\"name\" args",
+  "command": "\"gcloud\" run services delete svc",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "cloud delete",
+  "form": "'name' args",
+  "command": "'gcloud' run services delete svc",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "cloud delete",
+  "form": "\\name args",
+  "command": "\\gcloud run services delete svc",
+  "before": "none",
+  "expect": "deny"
+ },
+ {
+  "group": "cloud delete",
+  "form": "na\"\"me args",
+  "command": "gc\"\"loud run services delete svc",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "cloud delete",
+  "form": "na\\me args",
+  "command": "gc\\loud run services delete svc",
+  "before": "none",
+  "expect": "deny"
+ },
+ {
+  "group": "cloud delete",
+  "form": "every letter backslashed",
+  "command": "\\g\\c\\l\\o\\u\\d run services delete svc",
+  "before": "none",
+  "expect": "deny"
+ },
+ {
+  "group": "cloud delete",
+  "form": "env \"name\" args",
+  "command": "env \"gcloud\" run services delete svc",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "cloud delete",
+  "form": "env \\name args",
+  "command": "env \\gcloud run services delete svc",
+  "before": "none",
+  "expect": "deny"
+ },
+ {
+  "group": "cloud delete",
+  "form": "after a separator",
+  "command": "cd /tmp && \\gcloud run services delete svc",
+  "before": "none",
+  "expect": "deny"
+ },
+ {
+  "group": "cloud delete",
+  "form": "$(echo name) args",
+  "command": "$(echo gcloud) run services delete svc",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "cloud delete",
+  "form": "var-assembled",
+  "command": "c=gcloud; $c run services delete svc",
+  "before": "none",
+  "expect": "none"
+ },
+ {
+  "group": "dropdb (tool)",
+  "form": "plain (control)",
+  "command": "dropdb crm",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "dropdb (tool)",
+  "form": "\"name\" args",
+  "command": "\"dropdb\" crm",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "dropdb (tool)",
+  "form": "'name' args",
+  "command": "'dropdb' crm",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "dropdb (tool)",
+  "form": "\\name args",
+  "command": "\\dropdb crm",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "dropdb (tool)",
+  "form": "na\"\"me args",
+  "command": "dr\"\"opdb crm",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "dropdb (tool)",
+  "form": "na\\me args",
+  "command": "dr\\opdb crm",
+  "before": "none",
+  "expect": "deny"
+ },
+ {
+  "group": "dropdb (tool)",
+  "form": "every letter backslashed",
+  "command": "\\d\\r\\o\\p\\d\\b crm",
+  "before": "none",
+  "expect": "deny"
+ },
+ {
+  "group": "dropdb (tool)",
+  "form": "env \"name\" args",
+  "command": "env \"dropdb\" crm",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "dropdb (tool)",
+  "form": "env \\name args",
+  "command": "env \\dropdb crm",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "dropdb (tool)",
+  "form": "after a separator",
+  "command": "cd /tmp && \\dropdb crm",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "dropdb (tool)",
+  "form": "$(echo name) args",
+  "command": "$(echo dropdb) crm",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "dropdb (tool)",
+  "form": "var-assembled",
+  "command": "c=dropdb; $c crm",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "allow control",
+  "form": "prose (trillian)",
+  "command": "grep \"DROP TABLE users\" notes.md",
+  "before": "none",
+  "expect": "none"
+ },
+ {
+  "group": "allow control",
+  "form": "prose (trillian)",
+  "command": "grep \"prisma migrate reset\" docs.md",
+  "before": "none",
+  "expect": "none"
+ },
+ {
+  "group": "allow control",
+  "form": "backslash inside quotes",
+  "command": "grep -n \"ps\\ql\" notes.md",
+  "before": "none",
+  "expect": "none"
+ },
+ {
+  "group": "allow control",
+  "form": "escaped space in a path",
+  "command": "ls -la my\\ notes/psql\\ tips.md",
+  "before": "none",
+  "expect": "none"
+ },
+ {
+  "group": "allow control",
+  "form": "escaped glob",
+  "command": "find . -name \\*.sql -newer schema.sql",
+  "before": "none",
+  "expect": "none"
+ },
+ {
+  "group": "allow control",
+  "form": "escaped quote",
+  "command": "echo it\\'s done",
+  "before": "none",
+  "expect": "none"
+ },
+ {
+  "group": "allow control",
+  "form": "quoted prose naming the spelling",
+  "command": "git commit -m \"docs: \\git skips an alias, see the gate\"",
+  "before": "none",
+  "expect": "none"
+ },
+ {
+  "group": "allow control",
+  "form": "backslashed word argument",
+  "command": "grep -rn \\bpsql\\b notes.md",
+  "before": "none",
+  "expect": "none"
+ },
+ {
+  "group": "allow control",
+  "form": "escaped backslash: a command named \\psql, not psql",
+  "command": "\\\\psql -c \"DROP TABLE users\"",
+  "before": "none",
+  "expect": "none"
+ },
+ {
+  "group": "allow control",
+  "form": "safe variant, backslashed name",
+  "command": "\\git push fork main --force-with-lease",
+  "before": "none",
+  "expect": "none"
+ },
+ {
+  "group": "allow control",
+  "form": "read-only client, backslashed name",
+  "command": "\\psql -c \"SELECT 1\"",
+  "before": "none",
+  "expect": "none"
+ }
+]

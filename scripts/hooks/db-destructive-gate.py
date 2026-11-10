@@ -588,10 +588,29 @@ def _command_position_text(segment: str) -> str:
     whitespace is prose or several words and stays blanked; an unclosed quote blanks
     the rest. So does a span glued to anything but a shell-word character
     (_QUOTED_WORD_EDGE): `run(['<tool>','x'])` is interpreter code read through this
-    class, not a shell word (7 interpreter-code controls refused it)."""
+    class, not a shell word (7 interpreter-code controls refused it).
+
+    An UNQUOTED backslash before a word character is dropped, as the shell drops it
+    (card 1a701051): `\\<client> -c "..."` and a force push spelled `\\git ...` ran the
+    client and git (the backslash only skips an alias), while every name pattern here
+    wants the name at the start or after a separator, so the backslash in front hid it;
+    one in the middle (`g\\it`) split the name. An escaped backslash (`\\\\x`) is a literal
+    backslash and stays, so a command really named `\\x` is not read as `x`. Inside quotes
+    nothing changes: the shell keeps a backslash before a letter there. What it costs:
+    a backslashed word in an ARGUMENT counts like the bare word already does."""
     out, i, n = [], 0, len(segment)
     while i < n:
         ch = segment[i]
+        if ch == "\\" and i + 1 < n:
+            nxt = segment[i + 1]
+            if nxt == "\\":
+                out.append("\\\\")
+                i += 2
+                continue
+            if nxt.isalnum() or nxt == "_":
+                out.append(nxt)
+                i += 2
+                continue
         if ch in "\"'":
             j = segment.find(ch, i + 1)
             if j < 0:
@@ -710,6 +729,13 @@ _FILE_ARG = re.compile(
 _CAT_PIPE = re.compile(r"(?:^|[\s;&(])cat((?:\s+[^\s|;&]+)+)\s*\|\s*((?:[A-Za-z_]\w*=\S*\s+)*\S+)")
 # A path we can resolve without running anything. Anything with shell expansion in it
 # is deliberately skipped: guessing what `$f` held is how a gate starts lying.
+# The same rule for a command NAME, and there it is an ACCEPTED LIMIT (marveen's decision on
+# card 9b5cf828, written down here by card 1a701051): a name held in a variable that is not a
+# DB client (`c=git; $c push <remote> <branch> --force`, `c=gcloud; $c run services delete x`)
+# is not expanded, so the command passes. expand_client_vars expands the DB clients only,
+# because those were SEEN in real commands (485228fd). db-gate-command-name-matrix.test.ts pins
+# both cells as they are, so a change shows in either direction. Reopen the DECISION, not this
+# comment, if a variable-held CLI name turns up in real agent commands.
 _LITERAL_PATH = re.compile(r"^[\w./~+-]+$")
 _MAX_FILE_BYTES = 16 * 1024 * 1024
 _MAX_FILE_DEPTH = 3
