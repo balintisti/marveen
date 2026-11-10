@@ -2386,7 +2386,8 @@ export function deliverFleetAlerts(
   coordinator: string,
   coordinatorRunning: boolean,
   io: {
-    toCoordinator: (text: string, wake: boolean) => void
+    /** `sent` is the rows this one message carries, so the caller can pick the reader by them. */
+    toCoordinator: (text: string, wake: boolean, sent: readonly FleetAlert[]) => void
     toOwner: (text: string) => void
     onCoordinatorFailed?: (err: unknown) => void
   },
@@ -2396,7 +2397,7 @@ export function deliverFleetAlerts(
   let toCoordinator = route.coordinator
   if (toCoordinator.length > 0) {
     try {
-      io.toCoordinator(buildFleetAlert(toCoordinator), fleetAlertWakes(toCoordinator))
+      io.toCoordinator(buildFleetAlert(toCoordinator), fleetAlertWakes(toCoordinator), toCoordinator)
     } catch (err) {
       io.onCoordinatorFailed?.(err)
       owner.push(...toCoordinator)

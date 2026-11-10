@@ -27,6 +27,8 @@ import { parseQualifiedId, formatQualifiedId, isQualifiedId } from '../federatio
 import { getFederationConfig } from '../federation/config.js'
 import type { RouteContext } from './types.js'
 import { unknownQueryParams, unknownQueryParamError } from '../query-params.js'
+import { resolveMachineNoticeRecipient } from '../front-desk-route.js'
+import { isReroutableWindowReceipt, withFrontDeskHeader } from '../../front-desk.js'
 
 /** Query parameters `GET /api/messages` accepts. */
 const MESSAGES_PARAMS: readonly string[] = ['agent', 'status', 'limit', 'before']
@@ -392,7 +394,25 @@ export async function tryHandleMessages(ctx: RouteContext): Promise<boolean> {
     // Card 06f062e4: optional attributability tag, self-declared like `from`
     // itself -- capped short so it stays a label, not a second content field.
     const trimmedOriginNote = origin_note?.trim().slice(0, 120) || null
-    const msg = createAgentMessage(from.trim(), storedTo, normalizedContent, trimmedOriginNote)
+    // FRONT DESK (card 074149c2, stage 2). A fresh session's "[RESTART-ABLAK] <id> felveve" line
+    // addressed to the coordinator is a machine notice written by an agent: it goes to the
+    // configured front desk, and stays with the coordinator on any doubt (see front-desk.ts).
+    // ONLY a registered fleet agent's line is rerouted: the owner, the voice channel and the
+    // neighbouring systems always reach the recipient they named. The response says so
+    // (`rerouted`), because the sender asked for someone else.
+    const senderIdent = sanitizeAgentIdent(from)
+    const desk = !isQualifiedId(storedTo)
+      && sanitizeAgentIdent(storedTo) === sanitizeAgentIdent(MAIN_AGENT_ID)
+      && isKnownAgent(senderIdent)
+      && isReroutableWindowReceipt(normalizedContent)
+      ? resolveMachineNoticeRecipient([senderIdent])
+      : null
+    const requestedTo = storedTo
+    if (desk?.rerouted) storedTo = desk.to
+    const storedContent = desk
+      ? withFrontDeskHeader(desk, { type: 'restart-window-receipt', subjects: [senderIdent] }, normalizedContent)
+      : normalizedContent
+    const msg = createAgentMessage(from.trim(), storedTo, storedContent, trimmedOriginNote)
     // Backpressure, returned WITH the id rather than behind a second call:
     // `{"id":N,"status":"pending"}` alone reads as "sent", and on a busy
     // recipient it can be 80 minutes from true. See getRecipientQueueState for
@@ -426,6 +446,7 @@ export async function tryHandleMessages(ctx: RouteContext): Promise<boolean> {
       'Agent message created',
     )
     const respBody: Record<string, unknown> = queue ? { ...msg, queue: { ...queue, ...advice } } : { ...msg }
+    if (desk?.rerouted) respBody.rerouted = { requested: requestedTo, to: storedTo, why: desk.why }
     // A LOCAL recipient that is not running never receives this (upstream): the
     // router retries for a while and then abandons it, and the failure notice goes
     // to the MAIN agent, not to the sender. A non-breaking warning field rather

@@ -12,6 +12,8 @@ import { busyEvidence, detectPaneState, detectsMidTurnApiError, runningBackgroun
 import { usageLimitHolds } from '../usage-limit-window.js'
 import { endsOnClosingVerdict, openLeftovers, openVerdicts, type VerdictComment } from '../kanban-verdict.js'
 import { wakeRows } from '../message-wake.js'
+import { resolveMachineNoticeRecipient } from './front-desk-route.js'
+import { fleetAlertsAreFrontDeskWork, withFrontDeskHeader, type FrontDeskNotice } from '../front-desk.js'
 import { probeDetachedWork, readPaneCwds, type DetachedGroup } from './detached-work.js'
 import { getPendingMessages, getLastOutboundMessageAt, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
 import {
@@ -261,6 +263,15 @@ function pidAlive(pid: number | undefined): boolean | null {
 /** The guard's message with the stale or broken standstill named under it (card 00f7455b). */
 function withStandstillNote(text: string, note: string | null): string {
   return note ? `${text}\n\n${note}` : text
+}
+
+/** The "idle with nothing assigned" notice about ONE agent (card 074149c2): to the configured
+ *  front desk, and to the coordinator on any doubt. Throws when the row cannot be written, as the
+ *  direct createAgentMessage call it replaces did: both callers have a way out for that. */
+function sendNoWorkNotice(agent: string, kind: string | null, text: string): void {
+  const desk = resolveMachineNoticeRecipient([agent])
+  const notice: FrontDeskNotice = { type: 'idle-no-work', subjects: [agent], reason: kind ?? 'no-work' }
+  createAgentMessage('system', desk.to, withFrontDeskHeader(desk, notice, text))
 }
 
 function readWorkCheckRaw(agent: string): string | null {
@@ -936,7 +947,7 @@ export function tick(): void {
         const isFirstOfSpell = next.idleSinceMs !== null && next.noWorkLiveSpellSince !== next.idleSinceMs
         if (isFirstOfSpell) {
           try {
-            createAgentMessage('system', MAIN_AGENT_ID, withStandstillNote(buildNoWorkNotice(agent, minutes, Date.now(), noticeKind), stillNote))
+            sendNoWorkNotice(agent, noticeKind, withStandstillNote(buildNoWorkNotice(agent, minutes, Date.now(), noticeKind), stillNote))
             watchState.set(agent, { ...next, noWorkLiveSpellSince: next.idleSinceMs })
             // Saved again here, not left to the next tick (card e6045a1b): the row above was written
             // before this stamp existed, so a restart inside the next three minutes would re-send it.
@@ -967,7 +978,7 @@ export function tick(): void {
         } catch (digestErr) {
           logger.warn({ err: digestErr, agent }, 'idle guard: could not write the daily digest -- telling the coordinator instead')
           try {
-            createAgentMessage('system', MAIN_AGENT_ID, withStandstillNote(buildNoWorkNotice(agent, minutes, Date.now(), noticeKind), stillNote))
+            sendNoWorkNotice(agent, noticeKind, withStandstillNote(buildNoWorkNotice(agent, minutes, Date.now(), noticeKind), stillNote))
           } catch (err) {
             logger.warn({ err, agent }, 'idle guard: could not tell the coordinator about an unassigned idle agent')
           }
@@ -1019,7 +1030,16 @@ export function tick(): void {
     const delivered = deliverFleetAlerts(alerts, MAIN_AGENT_ID, coordinatorRunning === true, {
       // wake: the guard's report on its OWN blindness (pane-unreadable only) is quiet; see
       // fleetAlertWakes. Everything else in a sweep stays waking.
-      toCoordinator: (text, wake) => createAgentMessage('system', MAIN_AGENT_ID, text, undefined, undefined, { wake }),
+      // Card 074149c2: a sweep that is nothing but 'still-idle' rows is front-desk work; any other
+      // kind in it keeps the whole message with the coordinator (fleetAlertsAreFrontDeskWork).
+      toCoordinator: (text, wake, sent) => {
+        const subjects = [...new Set(sent.map((a) => a.agent))]
+        const desk = fleetAlertsAreFrontDeskWork(sent.map((a) => a.kind))
+          ? resolveMachineNoticeRecipient(subjects)
+          : { to: MAIN_AGENT_ID, rerouted: false, why: 'not-configured' as const }
+        const stored = withFrontDeskHeader(desk, { type: 'idle-still-idle', subjects, reason: 'still-idle' }, text)
+        createAgentMessage('system', desk.to, stored, undefined, undefined, { wake })
+      },
       toOwner: (text) => sendAlert(text),
       onCoordinatorFailed: (err) =>
         logger.warn({ err }, 'idle guard: could not tell the coordinator -- falling back to the owner'),

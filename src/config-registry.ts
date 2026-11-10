@@ -183,6 +183,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     requiresRestart: false,
   },
   {
+    key: 'FRONT_DESK_AGENT_ID',
+    type: 'string',
+    default: '',
+    description: 'A gépi értesítők (context-guard restart, RESTART-ABLAK nyugta, tétlenség-őr egy másik ügynökről) ehhez az ügynökhöz mennek a koordinátor helyett. Üresen: kikapcsolva, minden a koordinátorhoz megy, mint korábban. Ha a megadott ügynök nem fut, 3 vagy több üzenet vár rá, vagy az értesítő róla szól, az értesítő a koordinátorhoz megy.',
+    module: 'agents',
+    secret: false,
+    requiresRestart: false,
+  },
+  {
     key: 'KANBAN_ARCHIVED_MAX_ROWS',
     type: 'int',
     default: 500,

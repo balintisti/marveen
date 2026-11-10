@@ -1309,6 +1309,24 @@ function classifyRestartLoss(rows: RestartLossRow[], restartMs: number, windowMs
   return { sinceSec, restartSec, pending, failedInWindow, deliveredMoot, deliveredFromSenders }
 }
 
+/** The loss window as ids, for the machine-readable header of a rerouted notice (card 074149c2).
+ *  Same classification as the line and the wake rule, by construction: `delivered` is the
+ *  sender-written rows only, the idle guard's moot self-wake is not in it. Seconds, because that
+ *  is the unit of agent_messages.delivered_at and the reader compares against that column. */
+export function restartLossWindowIds(
+  rows: RestartLossRow[],
+  restartMs: number,
+  windowMs: number = RESTART_LOSS_WINDOW_MS,
+): { windowSec: [number, number]; delivered: number[]; pending: number[]; failed: number[] } {
+  const c = classifyRestartLoss(rows, restartMs, windowMs)
+  return {
+    windowSec: [Math.floor(c.sinceSec), Math.floor(c.restartSec)],
+    delivered: c.deliveredFromSenders.map((r) => r.id),
+    pending: c.pending.map((r) => r.id),
+    failed: c.failedInWindow.map((r) => r.id),
+  }
+}
+
 /** Does the restart notice to the coordinator have anything to ACT on? (card a85a9acd)
  *
  *  False only when there is nothing to resend: no `failed` row in the window and no sender-written

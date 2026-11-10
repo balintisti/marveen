@@ -62,12 +62,15 @@ import {
   type GuardInputs,
   buildRestartLossLine,
   restartLossNeedsAction,
+  restartLossWindowIds,
   restartNoticeWakes,
   restartNoticeIsLogOnly,
   restartNoticeClosesItself,
   RESTART_NOTICE_AUTOCLOSED,
 } from '../context-guard.js'
 import { whileNotFrozen } from './fleet-freeze.js'
+import { resolveMachineNoticeRecipient } from './front-desk-route.js'
+import { frontDeskHeader } from '../front-desk.js'
 import { decideBootWedgeRescue, setInputNotEmptiedHandler, type GuardRestartRecord } from './boot-wedge-rescue.js'
 
 // Fleet context guard (kanban #81): acts BEFORE a session drowns in its own
@@ -503,15 +506,17 @@ export function hardTierRealWindowPct(
  *  One measurement feeds both, so the line and the decision to wake on it cannot be read from
  *  different rows. `lossNeedsAction` is null when the window could not be measured: the notice
  *  then WAKES (restartNoticeWakes), because a guard that cannot tell must not go quiet.
+ *  `lossWindow` is the same reading as ids, for the front-desk header (card 074149c2).
  *  The rows come from `readRows` so the failure path is testable without a database. */
 export function measureRestartLoss(
   name: string,
   readRows: (agent: string) => ReturnType<typeof getRestartLossCandidates> = getRestartLossCandidates,
   restartMs: number = Date.now(),
-): { lossLine: string; lossNeedsAction: boolean | null } {
+): { lossLine: string; lossNeedsAction: boolean | null; lossWindow: ReturnType<typeof restartLossWindowIds> | null } {
   try {
     const lossRows = readRows(name)
     return {
+      lossWindow: restartLossWindowIds(lossRows, restartMs),
       lossLine: buildRestartLossLine(
         lossRows,
         restartMs,
@@ -528,6 +533,8 @@ export function measureRestartLoss(
       lossLine: ' A VESZTESEGET NEM TUDTAM MEGMERNI (a lekerdezes hibazott)'
         + ' -- ellenorizd kezzel a `pending`/`failed` sorokat erre az agensre.',
       lossNeedsAction: null,
+      // Not measured: the header then says null, which is not the same as an empty window.
+      lossWindow: null,
     }
   }
 }
@@ -1108,7 +1115,7 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
         // AND A FAILURE TO MEASURE MUST NOT READ AS ZERO. If the query throws, the notice says
         // it could not measure and falls back to asking -- the old behaviour. A guard that
         // degrades into a confident "nothing was lost" is worse than one that admits it is blind.
-        const { lossLine, lossNeedsAction } = measureRestartLoss(name)
+        const { lossLine, lossNeedsAction, lossWindow } = measureRestartLoss(name)
         // Nothing to triage and nothing killed: the notice goes to the log, not to the coordinator's
         // queue (card eca5e042). The restart itself is still recorded here.
         if (restartNoticeIsLogOnly(lossNeedsAction, decision.nextState.handoffStaleMinutes, decision.reason)) {
@@ -1119,9 +1126,24 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
           break
         }
         try {
+          // Card 074149c2: a notice that is still a message goes to the configured front desk, and
+          // to the coordinator on any doubt. The text after the header line is the same either way.
+          const desk = resolveMachineNoticeRecipient([name])
           const notice = createAgentMessage(
             name,
-            MAIN_AGENT_ID,
+            desk.to,
+            (desk.rerouted
+              ? frontDeskHeader({
+                type: 'context-guard-restart',
+                subjects: [name],
+                windowSec: lossWindow?.windowSec ?? null,
+                reason: decision.reason,
+                delivered: lossWindow?.delivered ?? null,
+                pending: lossWindow?.pending ?? null,
+                failed: lossWindow?.failed ?? null,
+                snapshot: snapshotPath,
+              }) + '\n'
+              : '') +
             `[CONTEXT-GUARD] Ujrainditottam a(z) "${name}" agentet -- ok: ${decision.reason}` +
             (pctRound !== null ? ` (kontextus ~${pctRound}%)` : '') +
             `. A regi sessionbe kuldott uzenetek elveszhetnek egy restartnal.` +
