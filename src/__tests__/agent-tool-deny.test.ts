@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { homedir } from 'node:os'
 
 // ORSIKTXRATA914 (2026-09-14): a tool-name deny hand-written into an agent's
 // .claude/settings.json vanished at the next spawn, because
@@ -114,5 +115,26 @@ describe('writeAgentSettingsFromProfile + agent-config.json toolDeny', () => {
     writeConfig({ securityProfile: 'researcher' })
     writeAgentSettingsFromProfile(NAME, profile)
     expect(readDeny()).not.toContain('Artifact')
+  })
+})
+
+// b62414d0 (port of a30553d6d): a profile may declare directories outside the
+// agent's cwd; they land as permissions.additionalDirectories with the same
+// placeholder resolution as the rules, and a profile without them writes no key.
+describe('writeAgentSettingsFromProfile + profile additionalDirectories', () => {
+  it('no field -> no additionalDirectories key (existing profiles unchanged)', () => {
+    writeConfig({ securityProfile: 'researcher' })
+    writeAgentSettingsFromProfile(NAME, loadProfileTemplate('researcher'))
+    const s = JSON.parse(readFileSync(agentSettingsPath(NAME), 'utf-8'))
+    expect('additionalDirectories' in s.permissions).toBe(false)
+  })
+
+  it('declared dirs are resolved and written, and survive a respawn', () => {
+    writeConfig({ securityProfile: 'researcher' })
+    const profile = { ...loadProfileTemplate('researcher'), additionalDirectories: ['${AGENT_DIR}/../shared-inbox', '${HOME}/Downloads'] }
+    writeAgentSettingsFromProfile(NAME, profile)
+    writeAgentSettingsFromProfile(NAME, profile)
+    const s = JSON.parse(readFileSync(agentSettingsPath(NAME), 'utf-8'))
+    expect(s.permissions.additionalDirectories).toEqual([`${DIR}/../shared-inbox`, `${homedir()}/Downloads`])
   })
 })

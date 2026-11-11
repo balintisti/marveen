@@ -870,9 +870,20 @@ export function writeAgentSettingsFromProfile(name: string, profile: ProfileTemp
   for (const tool of readAgentToolDeny(name)) {
     if (!denyList.includes(tool)) denyList.push(tool)
   }
+
+  // additionalDirectories: scope OUTSIDE the agent's own cwd. Without it an
+  // allowlisted `Bash(ls:*)` + `Read(/mnt/e/.../**)` STILL prompts on every
+  // single call against that path (measured 2026-09-06 on gembaecho: the same
+  // `ls -la "/mnt/e/03_LEAN Library/03_OWN_EXPERIENCE/cards"` asked for approval
+  // before the grant and ran silently after it). Omitted entirely when the
+  // profile declares none, so existing profiles are unaffected. The entries are
+  // plain directories, not rules, so the leading-'//' normalization in
+  // resolveProfilePlaceholders (Read/Edit/Write rules only) leaves them as is.
+  const extraDirs = (profile.additionalDirectories ?? []).map(p => resolveProfilePlaceholders(p, ctx))
   existing.permissions = {
     allow: profile.filesystem.allow.map(p => resolveProfilePlaceholders(p, ctx)),
     deny: denyList,
+    ...(extraDirs.length ? { additionalDirectories: extraDirs } : {}),
   }
   // Governance hard-gates: every sub-agent (NOT the main agent) gets PreToolUse
   // hooks. Re-applied on every spawn (this function regenerates settings.json),

@@ -12,6 +12,13 @@ import { PROJECT_ROOT } from '../config.js'
 // These tests pin the normalization + template posture so a future edit cannot
 // silently regress to the never-matching shapes.
 
+// Every shipped profile template. Kept in one place so a new template cannot
+// be added while quietly skipping the whole-fleet assertions below.
+const PROFILE_IDS = [
+  'marketer', 'researcher', 'developer-junior', 'developer-senior',
+  'applier', 'sub-dev', 'default', 'chief-of-staff',
+] as const
+
 const ctx = { HOME: '/Users/testuser', AGENT_DIR: '/Users/testuser/ClaudeClaw/agents/tester' }
 
 describe('resolveProfilePlaceholders rule normalization', () => {
@@ -69,8 +76,44 @@ describe('web-reading profile posture (TMPLPERM908)', () => {
     })
   }
 
+  // No template may hardcode THIS install's directory name. `${HOME}/marveen`
+  // only resolves for an install that happens to live in ~/marveen; everywhere
+  // else the rule silently matches nothing, which turns an allow into a missing
+  // capability and a deny into no protection at all. `${PROJECT_ROOT}` is
+  // substituted from the running install (profiles.ts), so it is correct by
+  // construction. A bare `${HOME}` stays legal: ~/.ssh, ~/Downloads and
+  // ~/.claude/skills really are home-relative, not install-relative.
+  // The list above is the input to two whole-fleet assertions, so a template
+  // added without touching it would be silently exempt from both.
+  it('PROFILE_IDS covers every template on disk', () => {
+    expect([...PROFILE_IDS].sort()).toEqual(listProfileTemplates().map(p => p.id).sort())
+  })
+
+  it('no template hardcodes an install directory under ${HOME}', () => {
+    for (const id of PROFILE_IDS) {
+      const p = loadProfileTemplate(id)
+      for (const rule of [...p.filesystem.allow, ...p.filesystem.deny, ...(p.additionalDirectories ?? [])]) {
+        expect(rule).not.toContain('${HOME}/marveen')
+      }
+    }
+  })
+
+  // Every entry in a permission list must be a rule, not a path. A bare path
+  // ("/mnt/e/Library/**") is not a rule, Claude Code does not match it against
+  // anything, so it silently grants nothing while reading like a grant.
+  // (PR #1357 fleet review, 2026-09-25, item 1e.)
+  it('every allow/deny entry carries a tool prefix', () => {
+    for (const id of PROFILE_IDS) {
+      const p = loadProfileTemplate(id)
+      for (const rule of [...p.filesystem.allow, ...p.filesystem.deny]) {
+        // Tool(...), a bare tool name (WebSearch), or an MCP tool (mcp__srv__tool)
+        expect(rule, `${id}: ${rule}`).toMatch(/^(mcp__\w|[A-Z][A-Za-z]*(\(|$))/)
+      }
+    }
+  })
+
   it('no template carries a Bash rule with a ** glob (prefix matching cannot glob)', () => {
-    for (const id of ['marketer', 'researcher', 'developer-junior', 'developer-senior', 'applier', 'sub-dev', 'default']) {
+    for (const id of PROFILE_IDS) {
       const p = loadProfileTemplate(id)
       for (const rule of [...p.filesystem.allow, ...p.filesystem.deny]) {
         if (rule.startsWith('Bash(')) expect(rule).not.toContain('**')

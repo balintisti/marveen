@@ -14,11 +14,11 @@
       "Bash(rm -rf /:*)",
       "Bash(git push:*)",
       "Edit(${HOME}/Projektek/sajat-crm/**)",
-      "Edit(${HOME}/marveen/src/**)",
-      "Edit(${HOME}/marveen/scripts/**)",
-      "Edit(${HOME}/marveen/agents/dexter/**)",
-      "Edit(${HOME}/marveen/agents/didi/**)",
-      "Edit(${HOME}/marveen/agents/mandark/**)"
+      "Edit(${PROJECT_ROOT}/src/**)",
+      "Edit(${PROJECT_ROOT}/scripts/**)",
+      "Edit(${PROJECT_ROOT}/agents/dexter/**)",
+      "Edit(${PROJECT_ROOT}/agents/didi/**)",
+      "Edit(${PROJECT_ROOT}/agents/mandark/**)"
     ]
   }
 }
