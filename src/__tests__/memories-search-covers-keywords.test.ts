@@ -144,4 +144,21 @@ describe('memory search covers the keywords column', () => {
     const results = getBody() as any[]
     expect(results.length).toBeGreaterThan(0)
   })
+
+  it('finds a keyword-only memory through the CATEGORISED LIKE fallback (no ?agent=, with a category)', async () => {
+    // The categorised fallback is its own statement, separate from the
+    // uncategorised one above, and it must read keywords too. A fragment is
+    // invisible to FTS, so only that statement can answer.
+    const fragment = KEYWORD_ONLY.slice(2, 9)
+    const { ctx, getBody } = makeCtx('/api/memories', { q: fragment, category: 'warm' })
+    await tryHandleMemories(ctx)
+    const results = getBody() as any[]
+    expect(results).toHaveLength(1)
+    expect(results[0].keywords).toContain(KEYWORD_ONLY)
+
+    // Control: the category still narrows, so the hit above is not "everything".
+    const { ctx: cold, getBody: coldBody } = makeCtx('/api/memories', { q: fragment, category: 'cold' })
+    await tryHandleMemories(cold)
+    expect(coldBody() as any[]).toHaveLength(0)
+  })
 })
