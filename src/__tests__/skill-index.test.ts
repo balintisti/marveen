@@ -98,7 +98,9 @@ describe('skill-index.sh -- description truncation', () => {
       makeSkillMd('skill-accents', longAccented),
     )
 
-    runScript([], { HOME: tmpHome })
+    // LC_ALL=C: BSD cut (macOS) is character-aware under a UTF-8 locale and would hide the old byte-cut bug;
+    // the C locale makes `cut -c` count bytes on every platform, so this test can see the defect it guards.
+    runScript([], { HOME: tmpHome, LC_ALL: 'C' })
 
     const raw = readFileSync(join(tmpHome, '.claude', 'skills', '.skill-index.md'))
     // A replacement char means the bytes did not decode: the cut split a char.

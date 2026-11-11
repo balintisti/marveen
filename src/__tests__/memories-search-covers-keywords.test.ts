@@ -21,7 +21,7 @@
  * Fix: parity with the agent-scoped branch, in both halves.
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest'
-import { initDatabase, getDb, saveAgentMemory } from '../db.js'
+import { initDatabase, getDb, saveAgentMemory, searchMemories } from '../db.js'
 import { tryHandleMemories } from '../web/routes/memories.js'
 import type { RouteContext } from '../web/routes/types.js'
 
@@ -93,6 +93,23 @@ describe('memory search covers the keywords column', () => {
     // the LIKE fallback filtered on content alone.
     expect(results.length).toBeGreaterThan(0)
     expect(results[0].keywords).toContain(KEYWORD_ONLY)
+  })
+
+  it('finds a keyword-only memory WITH a category filter (the categorised FTS branch of searchMemories)', async () => {
+    // searchMemories() has two statements, with and without a category; the test above only drives the second.
+    const { ctx, getBody } = makeCtx('/api/memories', { q: KEYWORD_ONLY, category: 'warm' })
+    await tryHandleMemories(ctx)
+    const results = getBody() as any[]
+    expect(results.length).toBeGreaterThan(0)
+    expect(results[0].keywords).toContain(KEYWORD_ONLY)
+  })
+
+  it('searchMemories() itself matches keywords, with and without a category (not masked by the route LIKE fallback)', () => {
+    // Through the route, a keyword-only hit can come from the LIKE fallback even when the FTS statement
+    // searches `content` alone, so the FTS statements are pinned directly.
+    expect(searchMemories(KEYWORD_ONLY, 'test-chat', 3, false).length).toBeGreaterThan(0)
+    expect(searchMemories(KEYWORD_ONLY, 'test-chat', 3, false, 'warm').length).toBeGreaterThan(0)
+    expect(searchMemories(KEYWORD_ONLY, 'test-chat', 3, false, 'cold')).toHaveLength(0)
   })
 
   it('still finds a content-only term WITHOUT ?agent= (positive control)', async () => {
