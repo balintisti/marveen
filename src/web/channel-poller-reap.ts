@@ -63,12 +63,30 @@ export function parsePollerPidsFromPs(
   return out
 }
 
+/**
+ * TESTENVLEAK1101: what a failed execSync (ps, tmux) may put in a log line. Never the error object itself: execSync's error carries
+ * the child's whole stdout, and for the env scan that is every process's environment, tokens included (measured upstream
+ * 2026-11-01: dashboard.log held an 8.4 MB `err.stdout` from an ENOBUFS scan, every ~11 minutes). Only the kind of
+ * failure and how much output there was.
+ */
+export function execFailure(err: unknown): { code: string | null; signal: string | null; status: number | null; stdoutBytes: number } {
+  const e = (err ?? {}) as { code?: unknown; signal?: unknown; status?: unknown; stdout?: unknown }
+  const out = e.stdout
+  const stdoutBytes = typeof out === 'string' ? Buffer.byteLength(out) : Buffer.isBuffer(out) ? out.length : 0
+  return {
+    code: typeof e.code === 'string' ? e.code : null,
+    signal: typeof e.signal === 'string' ? e.signal : null,
+    status: typeof e.status === 'number' ? e.status : null,
+    stdoutBytes,
+  }
+}
+
 function listPollerPidsByStateDir(envVar: string, chanDir: string): number[] {
   try {
     const out = execSync('/bin/ps eww -e', { timeout: 5000, encoding: 'utf-8', maxBuffer: 8 * 1024 * 1024 })
     return parsePollerPidsFromPs(out, envVar, chanDir)
   } catch (err) {
-    logger.warn({ err, chanDir }, 'channel-poller-reap: ps scan failed')
+    logger.warn({ ...execFailure(err), chanDir }, 'channel-poller-reap: ps scan failed')
     return []
   }
 }
@@ -390,7 +408,7 @@ function snapshotProcs(): ProcRow[] {
     }
     return rows
   } catch (err) {
-    logger.warn({ err }, 'channel-poller-reap: ps -axww snapshot failed')
+    logger.warn(execFailure(err), 'channel-poller-reap: ps -axww snapshot failed')
     return []
   }
 }
@@ -402,7 +420,7 @@ function tmuxServerPid(tmuxPath: string): number | null {
     const n = parseInt(out.trim().split('\n')[0] ?? '', 10)
     return Number.isFinite(n) && n > 1 ? n : null
   } catch (err) {
-    logger.warn({ err }, 'channel-poller-reap: tmux display-message failed')
+    logger.warn(execFailure(err), 'channel-poller-reap: tmux display-message failed')
     return null
   }
 }
@@ -417,7 +435,7 @@ function livePanePids(tmuxPath: string): Set<number> {
     }
     return s
   } catch (err) {
-    logger.warn({ err }, 'channel-poller-reap: tmux list-panes failed')
+    logger.warn(execFailure(err), 'channel-poller-reap: tmux list-panes failed')
     return new Set()
   }
 }
@@ -622,7 +640,7 @@ export function reapForeignMainPollers(opts: {
   try {
     psEww = execSync('/bin/ps eww -e', { timeout: 5000, encoding: 'utf-8', maxBuffer: 8 * 1024 * 1024 })
   } catch (err) {
-    logger.warn({ err }, 'channel-poller-reap: ps eww scan failed (foreign-main reap skipped)')
+    logger.warn(execFailure(err), 'channel-poller-reap: ps eww scan failed (foreign-main reap skipped)')
     return []
   }
   const candidates = parseMainDirPollerPids(psEww, PLUGIN_ROOT_NEEDLE[opts.provider], STATE_ENV_VAR[opts.provider])
