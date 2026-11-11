@@ -86,9 +86,14 @@ export function classifyPowerRoute(method: string, path: string): PowerRoute | n
 
 // Non-secret scalar body fields whose VALUE is the target or the act (a setting name, an autonomy level, a
 // decision). Everything else is recorded by name only.
-const BODY_SCALAR_FIELDS = ['key', 'level', 'name', 'agent', 'agent_id', 'id', 'status', 'type', 'provider', 'enabled', 'action'] as const
+// resolved_by is who decided an approval, targetSession the tmux pane a schedule types into, autoStash whether an
+// update may stash a dirty tree: each is the target or the act of a power route (review 58885, item 3).
+const BODY_SCALAR_FIELDS = [
+  'key', 'level', 'name', 'agent', 'agent_id', 'id', 'status', 'type', 'provider', 'enabled', 'action',
+  'resolved_by', 'targetSession', 'autoStash',
+] as const
 // Identity the request CLAIMS (unauthenticated on the shared token); tokenAgent is the authenticated one.
-const CLAIM_BODY_FIELDS = ['actor', 'author', 'from_agent', 'updated_by', 'requested_by', 'agent_id', 'agent'] as const
+const CLAIM_BODY_FIELDS = ['actor', 'author', 'from_agent', 'updated_by', 'requested_by', 'resolved_by', 'agent_id', 'agent'] as const
 const CLAIM_HEADERS = ['x-agent-id', 'x-agent-name', 'x-marveen-agent'] as const
 const MAX_BODY_BYTES = 256 * 1024
 const clip = (v: string, n = 80) => (v.length > n ? v.slice(0, n) : v)

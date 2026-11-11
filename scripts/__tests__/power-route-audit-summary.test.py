@@ -82,5 +82,33 @@ with tempfile.TemporaryDirectory() as tmp:
     rm = run(os.path.join(tmp, "missing", "z.db"))
     check("unopenable db: exit 2", rm.returncode == 2)
 
+    # The connection the script opens refuses a write (review 58885, P1): the size check above would
+    # pass for a read-write connection that merely does not write, so ask the connection itself.
+    import importlib.util
+    sys.dont_write_bytecode = True  # a cached .pyc of a same-size mutant (ro to rw) would pass for the source
+    spec = importlib.util.spec_from_file_location("power_route_audit_summary", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    real_connect = sqlite3.connect
+    probe = {}
+
+    def probing_connect(*a, **kw):
+        con = real_connect(*a, **kw)
+        try:
+            con.execute("CREATE TABLE _write_probe (x)")
+            probe["write"] = "accepted"
+        except sqlite3.OperationalError as e:
+            probe["write"] = str(e)
+        return con
+
+    mod.sqlite3.connect = probing_connect
+    try:
+        mod.main(["--db", db])
+    finally:
+        mod.sqlite3.connect = real_connect
+    check("the script's own connection refuses a write", "readonly" in probe.get("write", ""))
+    names = [r[0] for r in real_connect(db).execute("SELECT name FROM sqlite_master")]
+    check("and no probe table landed in the database", "_write_probe" not in names)
+
 print("FAIL: " + ", ".join(failed) if failed else "PASS: 0 failed")
 sys.exit(1 if failed else 0)

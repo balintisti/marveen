@@ -2,12 +2,13 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { initDatabase, getDb, prunePowerRouteAudit, POWER_ROUTE_AUDIT_RETENTION_DAYS } from '../db.js'
 import { readBody } from '../web/http-helpers.js'
 import {
   POWER_ROUTES, OWNER_GATE_HELPER_FILES, SCHEDULE_POWER_FIELDS, classifyPowerRoute, buildPowerAuditRecord, auditPowerRoute,
 } from '../web/power-route-audit.js'
+import { runDecaySweep } from '../memory.js'
 import { SCHEDULE_OWNER_FIELDS } from '../web/routes/schedules.js'
 import type { RouteContext } from '../web/routes/types.js'
 
@@ -26,6 +27,9 @@ describe('classifyPowerRoute', () => {
     ['POST', '/api/agents', 'agent-create'],
     ['POST', '/api/autonomy', 'autonomy-write'],
     ['POST', '/api/settings', 'settings-write'],
+    ['PUT', '/api/settings/SOME_KEY', 'settings-write'],
+    ['PATCH', '/api/settings/SOME_KEY', 'settings-write'],
+    ['DELETE', '/api/settings/SOME_KEY', 'settings-write'],
     ['POST', '/api/schedules', 'schedule-write'],
     ['PUT', '/api/schedules/abc', 'schedule-write'],
     ['POST', '/api/fleet/import', 'fleet-import'],
@@ -144,19 +148,64 @@ describe('buildPowerAuditRecord', () => {
     expect(JSON.parse(rec.row.body_scalars!)).toEqual({ key: 'K' })
   })
 
-  it('an unreadable or oversized body gives no fields and still a row', () => {
+  it('an unreadable body gives no fields and still a row', () => {
     const bad = buildPowerAuditRecord(settings, fakeReq(), 'POST', '/api/settings', { kind: 'token' }, 400, Buffer.from('{not json'), NOW)
     const none = buildPowerAuditRecord(settings, fakeReq(), 'POST', '/api/settings', { kind: 'token' }, 400, undefined, NOW)
     expect(bad.row.body_fields).toBeNull()
     expect(none.row.body_fields).toBeNull()
     expect(none.wouldDeny).toBe(true)
   })
+
+  it('a body over 256 KiB is not parsed (no fields), one just under it is', () => {
+    const LIMIT = 256 * 1024
+    const fill = (total: number) => Buffer.from(JSON.stringify({ apiKey: 'x'.repeat(total - '{"apiKey":""}'.length) }))
+    const under = fill(LIMIT)
+    const over = fill(LIMIT + 1)
+    expect([under.length, over.length]).toEqual([LIMIT, LIMIT + 1])
+    const rec = (b: Buffer) => buildPowerAuditRecord(settings, fakeReq(), 'POST', '/api/settings', { kind: 'token' }, 200, b, NOW)
+    expect(rec(under).row.body_fields).toBe('apiKey')
+    const big = rec(over)
+    expect(big.row.body_fields).toBeNull()
+    expect(big.wouldDeny).toBe(true)
+    expect(JSON.stringify(big.row)).not.toContain('xxxxxxxx')
+  })
+
+  it('long values are clipped: scalars and user agent 80, claims and token agent 64, path 200', () => {
+    const long = 'a'.repeat(300)
+    const rec = buildPowerAuditRecord(
+      settings, fakeReq({ 'user-agent': long, 'x-agent-id': long }), 'POST', `/api/settings/${long}`,
+      { kind: 'token', agent: long }, 200, body({ name: long, actor: long }), NOW,
+    )
+    expect((JSON.parse(rec.row.body_scalars!) as { name: string }).name).toHaveLength(80)
+    expect(rec.row.user_agent).toHaveLength(80)
+    expect(rec.row.path).toHaveLength(200)
+    expect(rec.row.claimed!.split(' ')).toEqual([`actor=${'a'.repeat(64)}`, `x-agent-id=${'a'.repeat(64)}`, `token.agent=${'a'.repeat(64)}`])
+  })
+
+  it('stores the value of the act or target: who resolved an approval, the schedule pane, autoStash (review 58885)', () => {
+    const t = { kind: 'token' as const }
+    const approval = classifyPowerRoute('PATCH', '/api/approvals/77')!
+    const a = buildPowerAuditRecord(approval, fakeReq(), 'PATCH', '/api/approvals/77', t, 200, body({ status: 'approved', resolved_by: 'isti', telegram_message_id: 5 }), NOW)
+    expect(JSON.parse(a.row.body_scalars!)).toEqual({ status: 'approved', resolved_by: 'isti' })
+    expect(a.row.claimed).toBe('resolved_by=isti')
+    const sch = buildPowerAuditRecord(schedule, fakeReq(), 'POST', '/api/schedules', t, 200, body({ targetSession: 'agent-ford', command: 'rm x' }), NOW)
+    expect(JSON.parse(sch.row.body_scalars!)).toEqual({ targetSession: 'agent-ford' })
+    expect(sch.row.body_fields).toBe('command,targetSession')
+    const upd = buildPowerAuditRecord(classifyPowerRoute('POST', '/api/updates/apply')!, fakeReq(), 'POST', '/api/updates/apply', t, 200, body({ autoStash: true, rebaseApproval: 'SECRET-APPROVAL' }), NOW)
+    expect(JSON.parse(upd.row.body_scalars!)).toEqual({ autoStash: true })
+    expect(JSON.stringify(upd.row)).not.toContain('SECRET-APPROVAL')
+  })
+
+  it('a call that never got an answer is recorded with status null, not the default 200 (review 58885, A10)', () => {
+    const rec = buildPowerAuditRecord(settings, fakeReq(), 'POST', '/api/settings', { kind: 'token' }, null, undefined, NOW)
+    expect(rec.row.status).toBeNull()
+  })
 })
 
 describe('auditPowerRoute on a real HTTP server', () => {
   let server: http.Server
   let base = ''
-  let mode: 'ok' | 'forbidden' = 'ok'
+  let mode: 'ok' | 'forbidden' | 'dropped' = 'ok'
   let auth: RouteContext['auth'] = { kind: 'token', agent: 'dexter' }
 
   beforeAll(async () => {
@@ -164,6 +213,10 @@ describe('auditPowerRoute on a real HTTP server', () => {
       const url = new URL(req.url ?? '/', 'http://x')
       auditPowerRoute({ req, res, path: url.pathname, method: req.method ?? 'GET', auth })
       const raw = await readBody(req)
+      if (mode === 'dropped') {
+        res.destroy()
+        return
+      }
       res.writeHead(mode === 'ok' ? 200 : 403, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ echoed: raw.toString() }))
     })
@@ -204,6 +257,14 @@ describe('auditPowerRoute on a real HTTP server', () => {
     expect(rows()[0]).toMatchObject({ route_id: 'fleet-import', status: 403 })
   })
 
+  it('a call whose connection dies before any answer is recorded with status null (review 58885, A10)', async () => {
+    mode = 'dropped'
+    await fetch(`${base}/api/fleet/import`, { method: 'POST', body: '{}' }).catch(() => undefined)
+    await settled(1)
+    expect(rows()).toHaveLength(1)
+    expect(rows()[0]).toMatchObject({ route_id: 'fleet-import', status: null })
+  })
+
   it('writes nothing for a route that does not grant power', async () => {
     await fetch(`${base}/api/kanban`, { method: 'POST', body: '{}' })
     await fetch(`${base}/api/settings`)
@@ -226,6 +287,33 @@ describe('auditPowerRoute on a real HTTP server', () => {
       db.exec('ALTER TABLE power_route_audit_away RENAME TO power_route_audit')
     }
     expect(rows()).toHaveLength(0)
+  })
+})
+
+describe('the audit is wired in (review 58885, A1 and A2)', () => {
+  it('the daily decay sweep prunes the audit table: an old row goes, a fresh one stays', () => {
+    const db = getDb()
+    db.exec('DELETE FROM power_route_audit')
+    const ins = db.prepare("INSERT INTO power_route_audit (ts, method, route_id, path, auth_kind) VALUES (?, 'POST', 'x', '/p', 'token')")
+    const now = Math.floor(Date.now() / 1000)
+    ins.run(now - (POWER_ROUTE_AUDIT_RETENTION_DAYS + 1) * 86400)
+    ins.run(now - 60)
+    runDecaySweep()
+    expect(db.prepare('SELECT COUNT(*) AS n FROM power_route_audit').get()).toEqual({ n: 1 })
+  })
+
+  // startWebServer binds a port and loads the dashboard token from the real store, so a unit test cannot boot
+  // it (commands-dispatch-route.test.ts pins its wiring the same way). The pin is on ORDER, not mere presence:
+  // the call must come after ctxAuth exists, with it, and before the first route handler can answer.
+  it('web.ts calls auditPowerRoute with ctxAuth after the auth is resolved and before the route chain', () => {
+    const src = readFileSync(resolve(__dirname, '../web.ts'), 'utf8')
+    const call = "auditPowerRoute({ req, res, path, method, auth: ctxAuth })"
+    expect(src).toContain("import { auditPowerRoute } from './web/power-route-audit.js'")
+    expect(src.split(call).length - 1).toBe(1)
+    const at = src.indexOf(call)
+    expect(src.indexOf('const ctxAuth =')).toBeGreaterThan(-1)
+    expect(at).toBeGreaterThan(src.indexOf('const ctxAuth ='))
+    expect(at).toBeLessThan(src.indexOf('tryHandleAuth(routeCtx)'))
   })
 })
 
