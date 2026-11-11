@@ -50,6 +50,46 @@ check('reviewer NINCS = REVIEWED', st([cm('dexter', 'fix ' + H1), cm('didi', NIN
 check('reviewer NYITOTT = RETURNED', st([cm('dexter', 'fix ' + H1), cm('didi', NYIT)])[0], 'RETURNED')
 check('unparsable = UNREADABLE', st([cm('dexter', 'fix ' + H1), cm('didi', 'VERDIKT: NEM MERHETO | x')])[0], 'UNREADABLE')
 
+# --- a reviewer's LAST verdict counts (review 58925, Mh) ------------------------------------
+check('same reviewer NYITOTT, fix, NINCS = REVIEWED',
+      st([cm('dexter', 'fix ' + H1), cm('didi', NYIT), cm('dexter', 'fixed ' + H2), cm('didi', NINCS)])[0], 'REVIEWED')
+check('same reviewer NINCS, fix, NYITOTT = RETURNED',
+      st([cm('dexter', 'fix ' + H1), cm('didi', NINCS), cm('dexter', 'fixed ' + H2), cm('didi', NYIT)])[0], 'RETURNED')
+
+# --- REVIEW-CLAIM is only shown, never excludes (review 58925, Mg) -----------------------------
+claimed = rq.classify_card(CARD, [cm('dexter', 'fix ' + H1), cm('trillian', 'REVIEW-CLAIM trillian 2026-11-11')])
+check('claim is reported', claimed['claim'][0], 'trillian')
+check('a claimed card is still WAITING', claimed['state'], 'WAITING')
+
+# --- blind spot: another reviewer's later verdict hides A's pending re-check (58925, LELET 2) --
+def hid(comments):
+    r = rq.classify_card(CARD, comments)
+    return r['state'], r['hidden_recheck']
+
+
+check('A NYITOTT, fix, B NINCS = RETURNED and flagged hidden',
+      hid([cm('dexter', 'fix ' + H1), cm('didi', NYIT), cm('dexter', 'fixed ' + H2), cm('mandark', NINCS)]),
+      ('RETURNED', True))
+check('A NYITOTT, B NINCS, no fix between = not hidden',
+      hid([cm('dexter', 'fix ' + H1), cm('didi', NYIT), cm('mandark', NINCS)]), ('RETURNED', False))
+check('one reviewer, NYITOTT, no fix = not hidden', hid([cm('dexter', 'fix ' + H1), cm('didi', NYIT)]), ('RETURNED', False))
+check('a rewrite without a new hash between two verdicts is not hidden',
+      hid([cm('dexter', 'fix ' + H1), cm('didi', NYIT), cm('dexter', 'restated ' + H1), cm('mandark', NINCS)]),
+      ('RETURNED', False))
+
+check('a hash quoted in the earlier verdict itself is not a new fix when restated',
+      hid([cm('dexter', 'fix'), cm('didi', NYIT + ' @' + H1), cm('dexter', 'restated ' + H1), cm('mandark', NINCS)]),
+      ('RETURNED', False))
+check('a hash from a non-assignee between two verdicts is not a fix',
+      hid([cm('dexter', 'fix ' + H1), cm('didi', NYIT), cm('trillian', 'try ' + H2), cm('mandark', NINCS)]),
+      ('RETURNED', False))
+check('a TIER line from a non-assignee between two verdicts is not a fix',
+      hid([cm('dexter', 'fix ' + H1), cm('didi', NYIT), cm('trillian', 'TIER: LOW. again'), cm('mandark', NINCS)]),
+      ('RETURNED', False))
+check('the fix between two verdicts hides the EARLIER reviewer, REVIEWED card too',
+      hid([cm('dexter', 'fix ' + H1), cm('didi', NINCS), cm('dexter', 'fixed ' + H2), cm('mandark', NINCS)]),
+      ('REVIEWED', True))
+
 # --- rule 1: reviewer = ANY non-assignee commenter with a VERDIKT ------------------------
 check('unlisted reviewer counts', st([cm('dexter', 'fix ' + H1), cm('mandark', NINCS)])[0], 'REVIEWED')
 check('assignee VERDIKT is not a review', st([cm('dexter', NINCS)])[0], 'WAITING')
@@ -139,8 +179,17 @@ check('run: denominator sums to the population', sum(out['states'].values()), ou
 check('run: states', out['states'], dict(WAITING=2, RECHECK=0, UNREADABLE=1, RETURNED=1, REVIEWED=1))
 check('run: queue = WAITING + RECHECK + UNREADABLE, not RETURNED/REVIEWED',
       sorted(r['id'] for r in out['queue']), ['f1', 'u1', 'w1'])
+check('run: hidden re-check count is 0 when nothing is hidden', out['hidden_recheck'], 0)
+THREADS['x1'] = [cm('dexter', 'fix ' + H1), cm('didi', NYIT), cm('dexter', 'fixed ' + H2), cm('mandark', NINCS)]
+THREADS['k1'] = [cm('dexter', 'fix ' + H1), cm('trillian', 'REVIEW-CLAIM trillian')]
+BOARD.extend([dict(id='x1', status='testing', project='delta-crm', assignee='dexter', title='hidden'),
+              dict(id='k1', status='testing', project='delta-crm', assignee='dexter', title='claimed')])
+rc, out2 = run_json()
+check('run: hidden re-check is counted, the card stays out of the queue',
+      (out2['hidden_recheck'], 'x1' in [r['id'] for r in out2['queue']]), (1, False))
+check('run: a REVIEW-CLAIM card stays in the queue', 'k1' in [r['id'] for r in out2['queue']], True)
 rc, out = run_json(not_assignee='ford')
-check('run: --not-assignee drops that author', sorted(r['id'] for r in out['queue']), ['u1', 'w1'])
+check('run: --not-assignee drops that author', sorted(r['id'] for r in out['queue']), ['k1', 'u1', 'w1'])
 check('run: a status filter reaches the other status', run_json(status='planned')[1]['population'], 1)
 
 # --- helpers ----------------------------------------------------------------------------

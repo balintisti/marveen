@@ -32,6 +32,11 @@ THE FILTER (all of it is also printed in the header of every run)
   queue        WAITING + RECHECK + UNREADABLE. RETURNED and REVIEWED are counted, not listed.
   not a filter REVIEW-CLAIM lines are only SHOWN (claimant, age); the card stays listed.
 
+BLIND SPOT (counted, not listed): the new-fix search starts after the LAST VERDIKT of ANY reviewer. If reviewer A's
+open item was fixed and another reviewer B wrote a later VERDIKT, A's pending re-check is not in the queue; the
+header LIMIT line counts these cards (RETURNED/REVIEWED with a reviewer whose own last VERDIKT is older than a
+new author fix). It is an upper bound: B's verdict may have covered the fix.
+
 NOT MEASURED: the card description is not read (a hash only in the description counts as new);
 comments beyond the API limit are reported as `omitted` in the header and make the run UNCLEAN.
 
@@ -97,6 +102,19 @@ def tier_of(title, comments):
     return 'NORMAL', 'none'
 
 
+def _fix_after(comments, assignee, idx):
+    """True when the assignee posted a new hash (seen in no comment up to idx) or a TIER line after idx."""
+    seen = set()
+    for c in comments[:idx + 1]:
+        seen |= hashes(c['content'])
+    for c in comments[idx + 1:]:
+        if c.get('author') != assignee:
+            continue
+        if hashes(c['content']) - seen or TIER_LINE.search(c['content']):
+            return True
+    return False
+
+
 def classify_card(card, comments):
     """-> dict(state, why, lane, tier_src, reviewers{name:token}, claim)."""
     assignee = card.get('assignee') or ''
@@ -135,6 +153,11 @@ def classify_card(card, comments):
     toks = {v[1] for v in last_rev.values()}
     if new_fix:
         return dict(base, state='RECHECK', why='author %s after last reviewer verdict' % new_fix)
+    # Blind spot, counted not listed: a reviewer whose OWN last verdict is older than the assignee's new
+    # fix, while another reviewer wrote a later verdict. The later verdict may or may not have covered
+    # that fix, so the card is NOT put back in the queue (it would swamp the lanes), but it is counted.
+    # The reviewer who wrote the very last verdict needs no guard: a fix after it returned RECHECK above.
+    base['hidden_recheck'] = any(_fix_after(comments, assignee, i_r) for i_r, _ in last_rev.values())
     if vp.NYITOTT in toks:
         return dict(base, state='RETURNED', why='open item from ' + ','.join(
             a for a, v in sorted(last_rev.items()) if v[1] == vp.NYITOTT))
@@ -182,10 +205,11 @@ def run(args):
         rows.append(r)
     counts = {s: sum(1 for r in rows if r['state'] == s) for s in ALL_STATES}
     queue = [r for r in rows if r['state'] in QUEUE_STATES]
+    hidden = sum(1 for r in rows if r['state'] in ('RETURNED', 'REVIEWED') and r.get('hidden_recheck'))
     per_lane = {ln: [r for r in queue if r['lane'] == ln] for ln in LANES}
     if args.json:
         print(json.dumps(dict(measured=now, board_cards=total, population=len(rows), states=counts,
-                              omitted_comments=omitted, queue=queue), ensure_ascii=False, indent=1))
+                              omitted_comments=omitted, hidden_recheck=hidden, queue=queue), ensure_ascii=False, indent=1))
         return 0 if not omitted else 1
     out = ['REVIEW QUEUE | measured %s | board snapshot: %d cards' % (now, total),
            'FILTER  population: project=%s, status in {%s}, not archived%s' % (
@@ -196,7 +220,9 @@ def run(args):
            'FILTER  RECHECK only on a NEW FIX after the last reviewer VERDIKT: a hash seen in no earlier comment, or a TIER hand-off line; a newer author comment alone is NOT',
            'FILTER  queue = WAITING + RECHECK + UNREADABLE; REVIEW-CLAIM is shown, never excludes; description not read',
            'DENOMINATOR  population %d = %s' % (len(rows), ' + '.join('%s %d' % (s, counts[s]) for s in ALL_STATES)),
-           'DENOMINATOR  queue %d = %s' % (len(queue), ' + '.join('%s %d' % (ln, len(per_lane[ln])) for ln in LANES))]
+           'DENOMINATOR  queue %d = %s' % (len(queue), ' + '.join('%s %d' % (ln, len(per_lane[ln])) for ln in LANES)),
+           'LIMIT  %d of the RETURNED+REVIEWED cards have a reviewer whose own last VERDIKT is older than a new author fix, '
+           'hidden by another reviewer\'s later VERDIKT (upper bound: it may have covered the fix); counted here, NOT in the queue' % hidden]
     if omitted:
         out.append('UNCLEAN  %d comments omitted by the API limit: counts may be off' % omitted)
     out.append('')
