@@ -295,6 +295,14 @@ describe('GET /api/memories/:id/versions ?limit', () => {
     const id = await withVersions(25)
     expect((await call(`/api/memories/${id}/versions`, 'GET')).body).toHaveLength(20)
   })
+
+  // didi 58864 L1: with 25 versions the '500' case answers 25 with or without the cap.
+  it('limit=500 over 105 versions is capped at 100', async () => {
+    const id = await withVersions(105)
+    const r = await call(`/api/memories/${id}/versions`, 'GET', undefined, { limit: '500' })
+    expect(r.status).toBe(200)
+    expect(r.body).toHaveLength(100)
+  })
 })
 
 describe('validation parity with POST (measured gaps on row 276)', () => {

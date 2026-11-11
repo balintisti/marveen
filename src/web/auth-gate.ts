@@ -68,7 +68,7 @@ export function parseCookies(header: string | undefined): Record<string, string>
 // by every other agent, so a per-agent token would not be forgery-proof
 // either -- only more expensive. (The upstream text this was ported from
 // measured a Linux host with no vault and no keyring; here store/vault.json
-// exists and web/keychain.ts opens on darwin. Whether a login-keychain item
+// exists and src/web/keychain.ts opens on darwin. Whether a login-keychain item
 // would hold against another agent of the same user was not measured.)
 // Upstream also counted 119 files carrying the shared-token idiom and measured
 // the risk as an ACCIDENT, not an attack: of 8 destructive memory calls over
