@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
 import type http from 'node:http'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { initDatabase, createDashboardUser } from '../db.js'
 import { resolveAuth, requiresAuth, parseCookies, SESSION_COOKIE_NAME } from '../web/auth-gate.js'
 import { createSession, _clearSessionCacheForTest } from '../web/auth-sessions.js'
@@ -219,5 +221,17 @@ describe('self-asserted caller id (X-Agent-Id, card 29c8cf33)', () => {
     )
     expect(r.kind).toBe('session')
     expect((r as { agent?: string }).agent).toBeUndefined()
+  })
+})
+
+describe('X-Agent-Id reaches the routes (b62414d0)', () => {
+  it('web.ts carries the resolved claim from the gate into routeCtx.auth', () => {
+    // Source pin: the mapping lives inside startWebServer, which a unit test
+    // cannot drive. Without it the gate resolves the header and every route
+    // still sees no caller, so owner_mismatch never fires and every test of
+    // the route (which sets ctx.auth directly) stays green.
+    const web = readFileSync(join(__dirname, '..', 'web.ts'), 'utf-8')
+    const code = web.split('\n').filter(l => !l.trim().startsWith('//')).join('\n')
+    expect(code).toMatch(/auth\.kind === 'token' \? \{ kind: 'token' as const, agent: auth\.agent \}/)
   })
 })

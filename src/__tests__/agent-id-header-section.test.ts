@@ -89,3 +89,19 @@ describe('ensureAgentIdHeaderSection', () => {
     expect(() => ensureAgentIdHeaderSection('no-such-agent')).not.toThrow()
   })
 })
+
+describe('ensureAgentIdHeaderSection is wired', () => {
+  // A section nobody calls looks exactly like a finished one. Both places that
+  // write the generated sections must call it: the per-spawn scaffolding
+  // (every sub-agent) and the web boot (the main agent).
+  const code = (rel: string) => readFileSync(join(__dirname, '..', rel), 'utf-8')
+    .split('\n').filter(l => !l.trim().startsWith('//')).join('\n')
+
+  it('agent-process.ts calls it for the spawned agent', () => {
+    expect(code('web/agent-process.ts')).toMatch(/^\s*ensureAgentIdHeaderSection\(name\)$/m)
+  })
+
+  it('web.ts calls it for the main agent', () => {
+    expect(code('web.ts')).toMatch(/^\s*ensureAgentIdHeaderSection\(MAIN_AGENT_ID\)$/m)
+  })
+})
