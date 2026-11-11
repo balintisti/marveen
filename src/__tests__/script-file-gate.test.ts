@@ -124,6 +124,38 @@ print(json.dumps(g.is_send_invocation(i["cmd"], ctx={"cwd": i["cwd"], "files": T
     expect(both('python3 x.py', dir)).toEqual({ js: false, py: false })
   })
 
+  // didi 59096 T1: ~ and a bare cd go to HOME. Both twins read HOME (os.homedir, expanduser), so a
+  // temporary HOME holds the sender; the real one is never touched.
+  const bothAtHome = (cmd: string, cwd: string | null, home: string) => {
+    const saved = process.env.HOME
+    process.env.HOME = home
+    try {
+      const py = spawnSync('python3', ['-c', `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("gate", ${JSON.stringify(COPY_GATE)})
+g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+i = json.load(sys.stdin)
+print(json.dumps(g.is_send_invocation(i["cmd"], ctx={"cwd": i["cwd"], "files": True})))
+`], { input: JSON.stringify({ cmd, cwd }), encoding: 'utf-8', env: { ...process.env, HOME: home } })
+      return { js: isSendInvocation(cmd, 0, { cwd, files: true }), py: JSON.parse(py.stdout.trim()) }
+    } finally {
+      process.env.HOME = saved
+    }
+  }
+
+  it('~/ and a bare cd resolve against HOME, with or without a known cwd', () => {
+    const home = mkTmp('script-file-home-')
+    writeFileSync(join(home, 'sender.py'), "import subprocess\nsubprocess.run(['sendmail', '-t'])\n")
+    writeFileSync(join(home, 'harmless.py'), "print('ok')\n")
+    expect(bothAtHome('python3 ~/sender.py', null, home)).toEqual({ js: true, py: true })
+    expect(bothAtHome('cd && python3 sender.py', FX, home)).toEqual({ js: true, py: true })
+    expect(bothAtHome('cd ~ && python3 sender.py', null, home)).toEqual({ js: true, py: true })
+    // CONTROL: the same commands on a harmless file, and the sender NOT at HOME
+    expect(bothAtHome('python3 ~/harmless.py', null, home)).toEqual({ js: false, py: false })
+    expect(bothAtHome('cd && python3 harmless.py', FX, home)).toEqual({ js: false, py: false })
+    expect(bothAtHome('python3 ~/sender.py', null, mkTmp('script-file-home-empty-'))).toEqual({ js: false, py: false })
+  })
+
   it('an absolute path is read with no known cwd; a relative one is not resolved', () => {
     expect(both(`python3 ${join(FX, 'sender.py')}`, null)).toEqual({ js: true, py: true })
     expect(both('python3 sender.py', null)).toEqual({ js: false, py: false })

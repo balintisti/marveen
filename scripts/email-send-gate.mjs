@@ -159,7 +159,7 @@ const RESEND_TOOL_SENDS_BY_NAME = /send|mail/i
 // it executes, and so is the value of an option that names a package, module or
 // preloaded script. Runners chain (`npx -y tsx x.ts`, `uv run python3 -m x`), so
 // the walk repeats a few hops. `-c`/`-e` code strings are handled elsewhere.
-const RUNNER = /^(node|tsx|ts-node|deno|bun|bunx|npx|pnpx|npm|pnpm|yarn|uv|uvx|python3?|sh|bash|zsh|dash)$/i
+const RUNNER = /^(node|tsx|ts-node|deno|bun|bunx|npx|pnpx|npm|pnpm|yarn|uv|uvx|python3?(?:\.\d+)?|sh|bash|zsh|dash)$/i
 const RUNNER_SUBCOMMANDS = {
   npm: ['exec', 'x', 'run', 'run-script'], pnpm: ['dlx', 'exec', 'run'], yarn: ['dlx', 'exec', 'run'],
   uv: ['run', 'tool'], deno: ['run'], bun: ['run', 'x'],
@@ -179,6 +179,14 @@ const RUNNER_VALUE_OPTS = new Set([
   '-p', '--package', '-r', '--require', '--import', '--loader', '--tsconfig', '-m', '--from', '--with',
   '-X', '-W', '--env-file', '-o', '-O', '--prefix',
 ])
+// Short flags cluster: `bash -euo pipefail x.sh` gives pipefail to the o, `python3 -uX utf8 x.py` gives
+// utf8 to the X (didi 59096: the value was taken for the script). A shell also takes `+o name`.
+const runnerOption = (prog, t) =>
+  t !== '-' && (t.startsWith('-') || (WRAPPER_SHELL.test(prog) && /^\+[a-zA-Z]+$/.test(t)))
+const takesValue = (prog, t) =>
+  RUNNER_VALUE_OPTS.has(t) ||
+  (WRAPPER_SHELL.test(prog) && /^[-+][a-zA-Z]*[oO]$/.test(t)) ||
+  (PYTHON.test(prog) && /^-[a-zA-Z]*[XW]$/.test(t))
 function executedNames(toks) {
   const names = [basename(toks[0])]
   let prog = names[0]
@@ -187,7 +195,7 @@ function executedNames(toks) {
   for (; hop < 4 && RUNNER.test(prog); hop++) {
     const subs = RUNNER_SUBCOMMANDS[prog.toLowerCase()]
     if (subs && subs.includes(toks[i])) i++
-    while (i < toks.length && toks[i].startsWith('-') && toks[i] !== '-') {
+    while (i < toks.length && runnerOption(prog, toks[i])) {
       const t = toks[i]
       if (t === '--') { i++; break }
       // A value option, or a long flag that is neither `--x=v` nor a known
@@ -195,7 +203,7 @@ function executedNames(toks) {
       // pass). The value is a candidate too, so a boolean this list misjudges
       // cannot open a gap -- the script it swallowed is still checked.
       const unknownLong = t.startsWith('--') && !t.includes('=') && !RUNNER_BOOLEAN_LONG.test(t)
-      if ((RUNNER_VALUE_OPTS.has(t) || unknownLong) && i + 1 < toks.length && !toks[i + 1].startsWith('-')) {
+      if ((takesValue(prog, t) || unknownLong) && i + 1 < toks.length && !toks[i + 1].startsWith('-')) {
         names.push(basename(toks[i + 1]))
         i += 2
         continue
@@ -357,7 +365,8 @@ function segmentIsSend(toksIn, depth, ctx) {
 // didi's corpus): 7 249 run a script file, and judging the files' content now denies 5, all
 // gate-testing scripts holding send examples next to subprocess.
 // NOT COVERED, named: a path holding $, a backtick or a glob, a missing, unreadable or
-// over-1 MB file, a relative path with no known cwd (a `cd -` or `cd $X` clears it), a file
+// over-1 MB file, a relative path with no known cwd (`cd $X` clears it; `cd -` returns to the
+// directory before this command's last cd, and clears it when there was none), a file
 // with no script extension run directly (shebang), a file the same command writes by other
 // means than a heredoc (cp, a Python write) or that a subshell's cd moved. These are judged
 // as today: not a send. Twin: _script_operands / _script_file_sends in
@@ -388,12 +397,12 @@ export function scriptOperands(toks) {
   for (let hop = 0; hop < 4 && RUNNER.test(prog); hop++) {
     const subs = RUNNER_SUBCOMMANDS[prog.toLowerCase()]
     if (subs && subs.includes(toks[i])) i++
-    while (i < toks.length && toks[i].startsWith('-') && toks[i] !== '-') {
+    while (i < toks.length && runnerOption(prog, toks[i])) {
       const t = toks[i]
       if (t === '--') { i++; break }
       if (codeOptStops(prog, t)) return out
       const unknownLong = t.startsWith('--') && !t.includes('=') && !RUNNER_BOOLEAN_LONG.test(t)
-      if ((RUNNER_VALUE_OPTS.has(t) || unknownLong) && i + 1 < toks.length && !toks[i + 1].startsWith('-')) {
+      if ((takesValue(prog, t) || unknownLong) && i + 1 < toks.length && !toks[i + 1].startsWith('-')) {
         // A preload runs; so may the value of a long flag we do not know (it may be a boolean).
         if (SCRIPT_RUN_OPTS.has(t) || unknownLong) out.push({ path: toks[i + 1], kind: scriptExtKind(toks[i + 1]) ?? runnerKind(prog) })
         i += 2
@@ -437,10 +446,14 @@ function scriptFileSends(toks, depth, ctx) {
   return false
 }
 // The cwd after a segment: a literal `cd`/`pushd` moves it, anything unresolvable clears it.
-function cwdAfter(toks, cwd) {
+// `cd -` goes to the cwd before the last move IN THIS COMMAND (`oldCwd`); the shell's own OLDPWD
+// from before the command is not known, so then it clears (didi 59096 L2: `-` used to resolve as
+// a directory named "-").
+function cwdAfter(toks, cwd, oldCwd = null) {
   if (toks[0] !== 'cd' && toks[0] !== 'pushd') return cwd
   const args = toks.slice(1).filter((t) => t !== '--' && !/^-[LPe@]+$/.test(t))
   if (!args.length) return homedir()
+  if (args[0] === '-') return oldCwd
   return resolveScriptPath(args[0], cwd)
 }
 
@@ -895,9 +908,12 @@ function commandTextSends(cmd, depth, ctx = NO_CTX) {
     return SEND_PATTERNS.some((re) => re.test(cmd))
   }
   let cwd = ctx.cwd
+  let oldCwd = null
   for (const toks of segments) {
     if (segmentIsSend(toks, depth, cwd === ctx.cwd ? ctx : { ...ctx, cwd })) return true
-    cwd = cwdAfter(toks, cwd)
+    const next = cwdAfter(toks, cwd, oldCwd)
+    if (toks[0] === 'cd' || toks[0] === 'pushd') oldCwd = cwd
+    cwd = next
   }
   return varUrlSend(cmd)
 }

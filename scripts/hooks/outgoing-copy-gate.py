@@ -644,7 +644,7 @@ def _segment_is_send(toks, depth: int, ctx=None) -> bool:
 # rationale, the measurement and the NOT COVERED list stand at scriptOperands in
 # email-send-gate.mjs (the twin); send-invocation-cases.json binds the two. The runner walk is
 # the twin's executedNames walk, ported here for this one use.
-_RUNNER = re.compile(r"^(node|tsx|ts-node|deno|bun|bunx|npx|pnpx|npm|pnpm|yarn|uv|uvx|python3?|sh|bash|zsh|dash)$", re.I)
+_RUNNER = re.compile(r"^(node|tsx|ts-node|deno|bun|bunx|npx|pnpx|npm|pnpm|yarn|uv|uvx|python3?(?:\.\d+)?|sh|bash|zsh|dash)$", re.I)
 _RUNNER_SUBCOMMANDS = {
     "npm": ("exec", "x", "run", "run-script"), "pnpm": ("dlx", "exec", "run"), "yarn": ("dlx", "exec", "run"),
     "uv": ("run", "tool"), "deno": ("run",), "bun": ("run", "x"),
@@ -657,6 +657,18 @@ _RUNNER_VALUE_OPTS = frozenset((
     "-X", "-W", "--env-file", "-o", "-O", "--prefix",
 ))
 _SCRIPT_RUN_OPTS = frozenset(("-r", "--require", "--import", "--loader"))
+
+
+def _runner_option(prog: str, t: str) -> bool:
+    """An option of the runner: `-x`, and for a shell also `+o name`. Twin: runnerOption."""
+    return t != "-" and (t.startswith("-") or bool(_WRAPPER_SHELL.match(prog) and re.match(r"^\+[a-zA-Z]+$", t)))
+
+
+def _takes_value(prog: str, t: str) -> bool:
+    """Its next token is its value, clusters included (`-euo pipefail`, `-uX utf8`). Twin: takesValue."""
+    return (t in _RUNNER_VALUE_OPTS
+            or bool(_WRAPPER_SHELL.match(prog) and re.match(r"^[-+][a-zA-Z]*[oO]$", t))
+            or bool(_PYTHON.match(prog) and re.match(r"^-[a-zA-Z]*[XW]$", t)))
 _SCRIPT_MAX_BYTES = 1_000_000
 _JS_RUNNER = re.compile(r"^(node|tsx|ts-node|deno|bun)$", re.I)
 _NO_CTX = {"cwd": None, "files": True}
@@ -707,7 +719,7 @@ def _script_operands(toks):
         subs = _RUNNER_SUBCOMMANDS.get(prog.lower())
         if subs and i < len(toks) and toks[i] in subs:
             i += 1
-        while i < len(toks) and toks[i].startswith("-") and toks[i] != "-":
+        while i < len(toks) and _runner_option(prog, toks[i]):
             t = toks[i]
             if t == "--":
                 i += 1
@@ -715,7 +727,7 @@ def _script_operands(toks):
             if _code_opt_stops(prog, t):
                 return out
             unknown_long = t.startswith("--") and "=" not in t and not _RUNNER_BOOLEAN_LONG.match(t)
-            if (t in _RUNNER_VALUE_OPTS or unknown_long) and i + 1 < len(toks) and not toks[i + 1].startswith("-"):
+            if (_takes_value(prog, t) or unknown_long) and i + 1 < len(toks) and not toks[i + 1].startswith("-"):
                 # A preload runs; so may the value of a long flag we do not know (it may be a boolean).
                 if t in _SCRIPT_RUN_OPTS or unknown_long:
                     out.append((toks[i + 1], _script_ext_kind(toks[i + 1]) or _runner_kind(prog)))
@@ -770,13 +782,16 @@ def _script_file_sends(toks, depth: int, ctx) -> bool:
     return False
 
 
-def _cwd_after(toks, cwd):
-    """The cwd after a segment: a literal cd/pushd moves it, anything unresolvable clears it."""
+def _cwd_after(toks, cwd, old_cwd=None):
+    """The cwd after a segment: a literal cd/pushd moves it, anything unresolvable clears it.
+    `cd -` goes to the cwd before the last move in this command, else clears. Twin: cwdAfter."""
     if toks[0] not in ("cd", "pushd"):
         return cwd
     args = [t for t in toks[1:] if t != "--" and not re.match(r"^-[LPe@]+$", t)]
     if not args:
         return os.path.expanduser("~")
+    if args[0] == "-":
+        return old_cwd
     return _resolve_script_path(args[0], cwd)
 
 
@@ -1199,11 +1214,14 @@ def _command_text_sends(cmd: str, _depth: int, ctx=None) -> bool:
         # is_send_invocation 1 elofordulas, a Bash agon.)
         return bool(_FALLBACK_LITERALS.search(cmd))
     ctx = ctx or _NO_CTX
-    cwd = ctx["cwd"]
+    cwd, old_cwd = ctx["cwd"], None
     for toks in segments:
         if _segment_is_send(toks, _depth, ctx if cwd == ctx["cwd"] else {**ctx, "cwd": cwd}):
             return True
-        cwd = _cwd_after(toks, cwd)
+        nxt = _cwd_after(toks, cwd, old_cwd)
+        if toks and toks[0] in ("cd", "pushd"):
+            old_cwd = cwd
+        cwd = nxt
     return _var_url_send(cmd, _depth)
 
 # --- Hungarian detection (accent-insensitive markers) -----------------------

@@ -1726,14 +1726,62 @@
       "cwd": "src/__tests__/fixtures/script-file-gate"
     },
     {
-      "name": "[a4ae5970] cd - clears the known cwd: not resolvable (named limit)",
+      "name": "[a4ae5970] cd - returns to the cwd before this command's last cd (didi 59096 L2)",
       "cmd": "cd /tmp && cd - && python3 sender.py",
-      "expected": false,
+      "expected": true,
       "cwd": "src/__tests__/fixtures/script-file-gate"
     },
     {
       "name": "[a4ae5970] a path holding $ is not resolvable (named limit)",
       "cmd": "python3 $DIR/sender.py",
+      "expected": false,
+      "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
+      "name": "[a4ae5970] cd - with no earlier cd in the command: the shell's OLDPWD is not known, the cwd clears (named limit)",
+      "cmd": "cd - && python3 sender.py",
+      "expected": false,
+      "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
+      "name": "[a4ae5970] cd - leaves sub again: nested.py is not in the cwd it returns to",
+      "cmd": "cd sub && cd - && python3 nested.py",
+      "expected": false,
+      "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
+      "name": "[a4ae5970] pushd moves the cwd like cd (didi 59096 T1)",
+      "cmd": "pushd sub && python3 nested.py",
+      "expected": true,
+      "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
+      "name": "[a4ae5970] the script of a versioned python (python3.12) is read (didi 59096 L1)",
+      "cmd": "python3.12 sender.py",
+      "expected": true,
+      "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
+      "name": "[a4ae5970] a shell flag cluster ending in o takes its value: -euo pipefail (didi 59096 L1)",
+      "cmd": "bash -euo pipefail sender.sh",
+      "expected": true,
+      "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
+      "name": "[a4ae5970] a shell +o takes its value too",
+      "cmd": "bash +o posix sender.sh",
+      "expected": true,
+      "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
+      "name": "[a4ae5970] a python flag cluster ending in X takes its value: -uX utf8",
+      "cmd": "python3 -uX utf8 sender.py",
+      "expected": true,
+      "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
+      "name": "[a4ae5970] CONTROL: the option value itself is not judged as the script (harmless file after it)",
+      "cmd": "bash -euo pipefail harmless.sh",
       "expected": false,
       "cwd": "src/__tests__/fixtures/script-file-gate"
     }
