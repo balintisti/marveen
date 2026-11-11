@@ -229,6 +229,74 @@ describe('versioning -- the primary fix, independent of the guard', () => {
   })
 })
 
+// didi 58666 T1/T2: the edges of the measured thresholds. A one-character slip
+// of the floor or the ratio, or a looser confirm parse, must go red.
+describe('threshold edges (didi 58666)', () => {
+  const sameHeading = (len: number) => 'H'.repeat(Math.min(len, 30)) + 'x'.repeat(Math.max(0, len - 30))
+
+  it('exactly half the old length is not a shrink; one character less is', async () => {
+    const a = saveAgentMemory('leanscout', sameHeading(1000), 'warm')
+    expect((await call(`/api/memories/${a.id}`, 'PUT', { content: sameHeading(500) })).status).toBe(200)
+    const b = saveAgentMemory('leanscout', sameHeading(1000), 'warm')
+    const r = await call(`/api/memories/${b.id}`, 'PUT', { content: sameHeading(499) })
+    expect(r.status).toBe(409)
+    expect(r.body.signals).toEqual(['zsugorodas'])
+  })
+
+  it('an old row of exactly 591 characters is guarded; one of 590 is not', async () => {
+    const a = saveAgentMemory('leanscout', 'H'.repeat(591), 'warm')
+    expect((await call(`/api/memories/${a.id}`, 'PUT', { content: 'probe' })).status).toBe(409)
+    const b = saveAgentMemory('leanscout', 'H'.repeat(590), 'warm')
+    expect((await call(`/api/memories/${b.id}`, 'PUT', { content: 'probe' })).status).toBe(200)
+  })
+
+  it('a DELETE of exactly 591 characters in a guarded tier is refused; 590 goes through', async () => {
+    const a = saveAgentMemory('leanscout', 'S'.repeat(591), 'shared')
+    expect((await call(`/api/memories/${a.id}`, 'DELETE')).status).toBe(409)
+    expect(getMemoryById(a.id)).toBeDefined()
+    const b = saveAgentMemory('leanscout', 'S'.repeat(590), 'shared')
+    expect((await call(`/api/memories/${b.id}`, 'DELETE')).status).toBe(200)
+    expect(getMemoryById(b.id)).toBeUndefined()
+  })
+
+  it.each(['0', 'true', 'yes', ''])('confirm_overwrite=%j lets nothing through: only 1 does', async (value) => {
+    const edit = saveAgentMemory('leanscout', LONG, 'shared')
+    const r = await call(`/api/memories/${edit.id}`, 'PUT', { content: 'probe' }, { confirm_overwrite: value })
+    expect(r.status).toBe(409)
+    expect(getMemoryById(edit.id)!.content).toBe(LONG)
+    const del = saveAgentMemory('leanscout', HUGE, 'shared')
+    expect((await call(`/api/memories/${del.id}`, 'DELETE', undefined, { confirm_overwrite: value })).status).toBe(409)
+    expect(getMemoryById(del.id)).toBeDefined()
+  })
+})
+
+// didi 58666 L1: a bad ?limit used to reach SQLite as NaN or -1.
+describe('GET /api/memories/:id/versions ?limit', () => {
+  async function withVersions(n: number) {
+    const { id } = saveAgentMemory('leanscout', 'v0', 'cold')
+    for (let i = 1; i <= n; i += 1) await call(`/api/memories/${id}`, 'PUT', { content: `v${i}` })
+    return id
+  }
+
+  it.each([
+    ['abc', 20],
+    ['-1', 20],
+    ['0', 20],
+    ['5', 5],
+    ['500', 25],
+  ])('limit=%s answers 200 with %i versions', async (limit, expected) => {
+    const id = await withVersions(25)
+    const r = await call(`/api/memories/${id}/versions`, 'GET', undefined, { limit })
+    expect(r.status).toBe(200)
+    expect(r.body).toHaveLength(expected)
+  })
+
+  it('CONTROL: no limit gives the default 20', async () => {
+    const id = await withVersions(25)
+    expect((await call(`/api/memories/${id}/versions`, 'GET')).body).toHaveLength(20)
+  })
+})
+
 describe('validation parity with POST (measured gaps on row 276)', () => {
   it('PUT with empty content is rejected -- it returned 200 and wiped the row', async () => {
     const { id } = saveAgentMemory('leanscout', LONG, 'cold')

@@ -60,16 +60,20 @@ export function parseCookies(header: string | undefined): Record<string, string>
 // caller SAY which agent it is, and routes may use it to WARN -- never to
 // authorize.
 //
-// Why a claim and not a credential. Measured 2026-09-14 on this install: all
-// seven agents run as the same UNIX user (uid 1000), can read each other's
-// files (agents/*/ is drwxrwxr-x) and each other's /proc/<pid>/environ, there
-// is no vault (store/vault.json absent) and no OS keyring (keychain.ts gates on
-// darwin; this host is Linux). Any per-agent secret written to disk or to the
-// environment is therefore readable by every other agent, so a per-agent token
-// would not be forgery-proof either -- only more expensive, and 119 files carry
-// the shared-token idiom. Meanwhile the measured risk is an ACCIDENT, not an
-// attack: of 8 destructive memory calls over two days, zero touched another
-// agent's row. An accident tells the truth about its own name, which is exactly
+// Why a claim and not a credential. Measured 2026-11-11 on this install
+// (macOS): every agent's claude process runs as the same UNIX user (16 of 16
+// processes, one uid). The per-agent working directories are drwx------, but
+// owned by that same user, so they separate nothing between agents. Any
+// per-agent secret written to disk or to the environment is therefore readable
+// by every other agent, so a per-agent token would not be forgery-proof
+// either -- only more expensive. (The upstream text this was ported from
+// measured a Linux host with no vault and no keyring; here store/vault.json
+// exists and web/keychain.ts opens on darwin. Whether a login-keychain item
+// would hold against another agent of the same user was not measured.)
+// Upstream also counted 119 files carrying the shared-token idiom and measured
+// the risk as an ACCIDENT, not an attack: of 8 destructive memory calls over
+// two days, zero touched another agent's row (neither re-measured here). An
+// accident tells the truth about its own name, which is exactly
 // what this header captures. Real enforcement needs OS-level separation
 // (one UNIX user per agent); see docs/agens-azonositas-api.md.
 //

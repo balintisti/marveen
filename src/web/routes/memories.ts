@@ -193,6 +193,15 @@ function overwriteSignals(oldContent: string, newContent: string): string[] {
   return signals
 }
 
+/**
+ * A missing, non-numeric or non-positive ?limit gets the default (didi 58666
+ * L1): `abc` reached SQLite as NaN (datatype mismatch), `-1` as no limit.
+ */
+function parseLimit(raw: string | null, fallback: number, max: number): number {
+  const n = Number.parseInt(raw ?? '', 10)
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, max) : fallback
+}
+
 /** Deliberate destructive writes pass with ?confirm_overwrite=1. */
 function confirmOverwrite(url: URL): boolean {
   return url.searchParams.get('confirm_overwrite') === '1'
@@ -616,7 +625,7 @@ Respond ONLY with JSON, nothing else:
   const memVersionsMatch = path.match(/^\/api\/memories\/(\d+)\/versions$/)
   if (memVersionsMatch && method === 'GET') {
     const id = parseInt(memVersionsMatch[1], 10)
-    const limit = Math.min(parseInt(url.searchParams.get('limit') || '20', 10), 100)
+    const limit = parseLimit(url.searchParams.get('limit'), 20, 100)
     json(res, getMemoryVersions(id, limit).map(v => ({
       ...v,
       superseded_label: new Date(v.superseded_at * 1000).toLocaleString('hu-HU', { timeZone: APP_TZ }),
