@@ -59,6 +59,8 @@ export const KNOWN_HOOK_SCRIPTS: readonly string[] = [
   // The /clear continuity pair: SessionEnd capture + SessionStart replay.
   'clear-capture.py',
   'clear-replay.py',
+  // REPORT-ONLY (card 5b639edb): it logs what the upstream sub-agent write gate would deny, and decides nothing.
+  'y1-report-only.mjs',
 ]
 
 // Path fragment that marks a checkout as an agent worktree. Kept

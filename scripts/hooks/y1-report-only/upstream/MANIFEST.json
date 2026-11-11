@@ -1,0 +1,12 @@
+{
+  "upstream": "Szotasz/marveen",
+  "commit": "4bdb49da2fcdd809a91c1d8e9e884d0045993a0e",
+  "note": "Byte-identical copies of the upstream sub-agent write gate, kept in their own inner layout so the relative imports resolve. Never edit them: y1-report-only-upstream-pin.test.ts compares each file's git blob id with this list. Verify the list itself against the upstream commit with: git rev-parse <commit>:<path>",
+  "files": {
+    "scripts/self-pace-gate.mjs": "1f893071ba67bdcc061911b7266582cec3c1ca3e",
+    "scripts/hooks/db-write-gate.mjs": "90153cdc6e0e82ca8dafe4c84785b913bdabb2fb",
+    "scripts/hooks/child-claude-channel-guard.mjs": "829194fdce30c8fad99608a1552f5751c85768b5",
+    "scripts/hooks/mcp-file-targets.mjs": "5f9e7a5c0d81dd9f8fba6622deff67a41b920331",
+    "scripts/hooks/py-inline-data.py": "92fa51d622791d5fd289f7f29b3d5702a73e7ecd"
+  }
+}

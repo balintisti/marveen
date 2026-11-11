@@ -60,6 +60,7 @@ const EXPECTED: Record<string, string[]> = {
     'channel-image-resize.sh', 'egress-gate.mjs', 'memory-frontmatter-gate.py',
     'memory-index-write-gate.py',
     'memory-frontmatter-bash-gate.py',
+    'y1-report-only.mjs', // report-only (5b639edb): a log row per call, never a decision
   ],
   Stop: ['marveen-commands.py', 'telegram-reply-guard.py', 'telegram_progress_clear.py', 'slack_progress_clear.py'],
   StopFailure: ['ledger-turn-failure.py'],
