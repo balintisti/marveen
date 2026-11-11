@@ -505,7 +505,11 @@ export function readPane(agent: string): {
   // Counted from the same capture, and BEFORE the unknown verdict: a panel read off the screen
   // is evidence the pane is not a mystery, whatever else the classifier made of it.
   const runningSubagents = runningBackgroundWork(pane)
-  if (state === 'unknown') return { idle: null, staleCounterOnly: false, paneReason: 'unknown-state', runningSubagents }
+  // The error is read off an unclassifiable pane too (card 1f990d74): `idle: null` already keeps the
+  // resume from going out, and the tick's "no resume" line can then say so instead of saying nothing.
+  if (state === 'unknown') {
+    return { idle: null, staleCounterOnly: false, paneReason: 'unknown-state', runningSubagents, apiError: detectsMidTurnApiError(pane) }
+  }
   return {
     idle: state === 'idle',
     runningSubagents,
@@ -720,7 +724,7 @@ export function tick(): void {
       // A testing card still on the list is an owed answer, not a check (marveen 44180). Measured only
       // for a check-only list, because only there does it decide anything.
       const ownWorkOpenFinding = ownItems && ownWorkPickable === false ? hasOpenFinding(ownItems) : undefined
-      const { decision, next } = decideIdleAlert(
+      const { decision, next, apiErrorNoResume } = decideIdleAlert(
         {
           agent,
           running,
@@ -797,6 +801,19 @@ export function tick(): void {
         },
         `idle guard: ${agent} -> ${decision.reason}`,
       )
+
+      // AN API ERROR ON THE PANE AND NO RESUME IS SAID AT INFO, WITH THE REASON (card 1f990d74).
+      // The debug line above never reaches store/dashboard.log, and over five days 119 of 234 long
+      // standstills after an API error had no resume and no reason on record. At most one line per
+      // agent per tick, and only while its pane shows the error: not the 120 lines an hour above.
+      // (A resume that was decided and could not be enqueued has its own warn line below.)
+      if (apiErrorNoResume) {
+        const { why, blockedBy } = apiErrorNoResume
+        logger.info(
+          { idleGuard: true, agent, ...apiErrorNoResume },
+          `idle guard: ${agent} -> API error on the pane, no resume: ${why}${blockedBy.length > 0 ? ` by ${blockedBy.join(', ')}` : ''}`,
+        )
+      }
 
       if (!decision.alert) continue
 
