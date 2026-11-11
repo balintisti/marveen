@@ -227,16 +227,24 @@ describe('decideGuard: idle', () => {
   it('resets to initial state when fully disarmed (guard + net off)', () => {
     const disarmed = { ...CFG, enabled: false, saturationRestart: false }
     const stale: GuardState = { phase: 'await-handoff', handoffMtimeAtRequest: 1, deadlineMs: 2, cooldownUntilMs: 0, saturatedStreak: 0, staleRefreshCount: 0, handoffStaleMinutes: null }
+    // Card 17a19228: the sequence still ends here, but an agent that was asked to stop is TOLD
+    // (action 'release'); only an agent that is not running is dropped without a word.
     const d = decideGuard(stale, inputs({ pct: 0.99, paneSaturated: true }), disarmed)
-    expect(d.action).toBe('none')
+    expect(d.action).toBe('release')
     expect(d.nextState).toEqual(INITIAL_GUARD_STATE)
+    const gone = decideGuard(stale, inputs({ pct: 0.99, paneSaturated: true, running: false }), disarmed)
+    expect(gone.action).toBe('none')
+    expect(gone.nextState).toEqual(INITIAL_GUARD_STATE)
+    const idle = decideGuard({ ...stale, phase: 'cooldown' }, inputs({ pct: 0.99, paneSaturated: true }), disarmed)
+    expect(idle.action).toBe('none')
+    expect(idle.nextState).toEqual(INITIAL_GUARD_STATE)
   })
 
   it('stands down a stale await-handoff into cooldown when the guard is disabled mid-sequence', () => {
     const netOnly = { ...CFG, enabled: false }
     const stale: GuardState = { phase: 'await-handoff', handoffMtimeAtRequest: 1, deadlineMs: 2, cooldownUntilMs: 0, saturatedStreak: 0, staleRefreshCount: 0, handoffStaleMinutes: null }
     const d = decideGuard(stale, inputs({ pct: 0.99 }), netOnly)
-    expect(d.action).toBe('none')
+    expect(d.action).toBe('release') // card 17a19228: stood down AND told, not stood down in silence
     expect(d.nextState.phase).toBe('cooldown')
   })
 })

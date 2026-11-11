@@ -233,6 +233,46 @@ export function readLastTurnActivityMs(workingDir: string, configDir?: string): 
 
 const ctxCache = new Map<string, { value: number | null; mtime: number | null; expiresAt: number }>()
 
+// The line the CLI writes when a compaction is DONE (there is no line for its start). Measured
+// shape, 2026-11-11: {type:'system', subtype:'compact_boundary', timestamp, compactMetadata:
+// {trigger, preTokens, postTokens, durationMs, ...}}.
+function isCompactBoundary(e: unknown): e is { timestamp?: unknown; compactMetadata?: { postTokens?: unknown } } {
+  return !!e && typeof e === 'object'
+    && (e as { type?: unknown }).type === 'system'
+    && (e as { subtype?: unknown }).subtype === 'compact_boundary'
+}
+
+/**
+ * When the newest transcript's LAST compaction finished (ms), or null: no transcript, no
+ * compaction in it, or a boundary line without a readable timestamp. Not cached and it reads the
+ * whole file: for a caller that asks about ONE agent in a state where the answer decides
+ * something (the guard, while it waits for a handoff it asked for), not for a sweep of the fleet.
+ */
+export function readLastCompactionMs(workingDir: string, configDir?: string): number | null {
+  try {
+    const dir = projectsDirFor(workingDir, configDir)
+    if (!existsSync(dir)) return null
+    const newest = readdirSync(dir)
+      .filter(f => f.endsWith('.jsonl'))
+      .map(f => ({ f, mtime: statSync(join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime)[0]
+    if (!newest) return null
+    const lines = readFileSync(join(dir, newest.f), 'utf-8').split('\n')
+    for (let i = lines.length - 1; i >= 0; i--) {
+      // The words can stand in a tool result or a message too: the cheap test only picks the
+      // lines worth parsing, the parsed type decides.
+      if (!lines[i].includes('"compact_boundary"')) continue
+      try {
+        const e = JSON.parse(lines[i])
+        if (!isCompactBoundary(e)) continue
+        const at = typeof e.timestamp === 'string' ? new Date(e.timestamp).getTime() : NaN
+        return Number.isFinite(at) ? at : null
+      } catch { /* a malformed line: keep looking */ }
+    }
+  } catch { /* fall through */ }
+  return null
+}
+
 /**
  * A DEAD READING (card 6f362eb3): the newest transcript was last written BEFORE the agent's current
  * session started, so nothing in it is this session's. 5c094718 was one CAUSE of that (a symlinked
@@ -254,6 +294,17 @@ export function predatesSession(mtimeMs: number | null, sinceUnixSec: number | u
 // null when there is no transcript / no usage yet (fresh session). This is what
 // the dashboard surfaces so the operator can see a session growing heavy and
 // decide to restart it.
+//
+// A COMPACTION ENDS THE SCAN (card 17a19228). The CLI writes a `compact_boundary` line when a
+// compaction is done; every usage ABOVE it describes a context that is gone. The scan used to
+// walk straight past it, so between the boundary and the first call after it (seconds when the
+// compaction ran mid-turn, for as long as the session stays quiet when it ended a turn) the
+// reading was the size BEFORE the compaction, and the guard asked a session at a fifth of its
+// window to stop. The boundary carries `compactMetadata.postTokens`; that is what is returned.
+// It is a FLOOR, not the size: measured 2026-11-11 on 11 auto compactions of one agent,
+// postTokens 12k-19k and the first call after each 54k-67k (the system prompt and the tools are
+// not in it). Too low for one call at most, and every reader of this number acts on HIGH values.
+// No positive postTokens on the line: null (unmeasurable), never the old number.
 export function readContextTokensFromProjectDir(workingDir: string, configDir?: string, sinceUnixSec?: number): number | null {
   const now = Date.now()
   const cacheKey = `${workingDir}:${configDir ?? ''}`
@@ -278,7 +329,13 @@ export function readContextTokensFromProjectDir(workingDir: string, configDir?: 
           const line = lines[i].trim()
           if (!line) continue
           try {
-            const u = JSON.parse(line)?.message?.usage
+            const e = JSON.parse(line)
+            if (isCompactBoundary(e)) {
+              const post = Number(e.compactMetadata?.postTokens)
+              value = Number.isFinite(post) && post > 0 ? post : null
+              break
+            }
+            const u = e?.message?.usage
             if (u && typeof u === 'object') {
               const inp = Number(u.input_tokens) || 0
               const cr = Number(u.cache_read_input_tokens) || 0

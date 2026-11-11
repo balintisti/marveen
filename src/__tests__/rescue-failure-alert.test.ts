@@ -121,8 +121,11 @@ describe('the guard raises the alert (pinned at the source)', () => {
   it('still rolls the state back before it alerts', () => {
     // The retry is the actual rescue; the alert is the notification. Losing the
     // rollback to an alerting bug would be the worse trade.
-    expect(region.indexOf('guardStates.set(name, INITIAL_GUARD_STATE)'))
-      .toBeLessThan(region.indexOf('recordRescueFailure(name, nowMs)'))
+    // Found first: an anchor that is not in the source gives -1, and -1 is less than anything
+    // (this assertion stayed green when the rollback's call was renamed, card 17a19228).
+    const rollbackIdx = region.indexOf('setGuardState(name, INITIAL_GUARD_STATE)')
+    expect(rollbackIdx, 'rollback not found').toBeGreaterThan(-1)
+    expect(rollbackIdx).toBeLessThan(region.indexOf('recordRescueFailure(name, nowMs)'))
   })
 })
 

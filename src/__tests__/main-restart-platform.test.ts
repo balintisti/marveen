@@ -173,10 +173,12 @@ describe('context guard defers a main restart inside the post-respawn grace', ()
     // PREVIOUS state and return.
     const code = runner()
     const gateIdx = code.indexOf("decision.action === 'restart' && name === MAIN_AGENT_ID")
-    const commitIdx = code.indexOf('guardStates.set(name, decision.nextState)')
+    const commitIdx = code.indexOf('setGuardState(name, decision.nextState)')
     expect(gateIdx, 'restart gate not found').toBeGreaterThan(-1)
     expect(commitIdx, 'nextState commit not found').toBeGreaterThan(-1)
     expect(gateIdx, 'the grace gate must run BEFORE nextState is committed').toBeLessThan(commitIdx)
-    expect(code).toMatch(/guardStates\.set\(name, state\)/)
+    // Between the gate and the commit, so it is THIS path's re-commit and not another line that
+    // happens to read the same (the state setter is called with these words elsewhere too).
+    expect(code.slice(gateIdx, commitIdx)).toContain('setGuardState(name, state)')
   })
 })
