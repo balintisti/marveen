@@ -27,8 +27,26 @@ vi.mock('../logger.js', () => ({
 
 import { initDatabase, getDb, clearMemoryCache } from '../db.js'
 import { tryHandleRecall } from '../web/routes/recall.js'
-import { toBudapestTs } from '../date-range.js'
 import type { RouteContext } from '../web/routes/types.js'
+
+// Upstream imports this from src/date-range.ts, which our tree does not have (the
+// date parser lives inline in the recall route and db.ts keeps its own private
+// copy). Same body, local to the test, so the port does not touch db.ts.
+function toBudapestTs(dateStr: string, endOfDay: boolean): number {
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Budapest',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  })
+  const refDate = new Date(`${dateStr}T${endOfDay ? '23:59:59' : '00:00:00'}`)
+  const parts = fmt.formatToParts(refDate)
+  const get = (t: string) => parts.find(p => p.type === t)?.value || '0'
+  const localStr = `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}:${get('second')}`
+  const localMs = new Date(localStr + 'Z').getTime()
+  const offsetMs = localMs - refDate.getTime()
+  const target = new Date(`${dateStr}T${endOfDay ? '23:59:59' : '00:00:00'}Z`)
+  return Math.floor((target.getTime() - offsetMs) / 1000)
+}
 
 async function recall(pathAndQuery: string) {
   const out: { status: number; body: any } = { status: 200, body: null }
