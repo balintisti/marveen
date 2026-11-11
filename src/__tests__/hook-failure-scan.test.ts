@@ -3,8 +3,7 @@
 // warning when a hook blocks). For a PreToolUse gate a non-blocking error means the
 // call went through, so a crashed gate is silently fail-open until someone reads it.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync, utimesSync, chmodSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync, symlinkSync, utimesSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 
 vi.mock('../logger.js', () => ({
@@ -28,6 +27,9 @@ import {
 } from '../web/hook-failure-scan.js'
 import { MAIN_AGENT_ID } from '../config.js'
 import { parseArgs, renderReport } from '../hook-failure-report.js'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+const mkTmp = tmpDirs()
 
 // The shape of a real record: a PreToolUse gate that crashed at module load.
 const NON_BLOCKING = JSON.stringify({
@@ -113,7 +115,7 @@ describe('transcriptRoots', () => {
 
 describe('scanHookFailures over transcript roots', () => {
   let dir = ''
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'hookscan-')) })
+  beforeEach(() => { dir = mkTmp('hookscan-') })
   afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
   function transcript(root: string, name: string, lines: string[], ageDays = 0): string {

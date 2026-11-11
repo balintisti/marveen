@@ -2,14 +2,15 @@
 // other website may embed them. Both GETs answer with
 // Cross-Origin-Resource-Policy: same-origin, on a fresh 200, on a 304 revalidation
 // and on the 404, so a browser refuses a cross-origin <img> in every case.
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
-const tmpRoot = mkdtempSync(join(tmpdir(), 'avatar-corp-'))
+const mkTmp = tmpDirs()
+const tmpRoot = mkTmp('avatar-corp-')
 const STORE = join(tmpRoot, 'store')
 const WEB = join(tmpRoot, 'web')
 mkdirSync(STORE, { recursive: true })
@@ -21,8 +22,6 @@ vi.mock('../config.js', async (importOriginal) => ({
 }))
 
 const { tryHandleMarveen } = await import('../web/routes/marveen.js')
-
-afterAll(() => rmSync(tmpRoot, { recursive: true, force: true }))
 
 async function get(path: string, headers: Record<string, string> = {}) {
   const server = http.createServer(async (req, res) => {
