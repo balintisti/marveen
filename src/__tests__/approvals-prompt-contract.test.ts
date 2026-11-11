@@ -92,8 +92,14 @@ describe('agent-scaffold.ts buildAutonomyBody: approval wiring content', () => {
     expect(genFn).toContain('AUTONOMY_END')
   })
 
-  it('ensureAutonomySection is exported and calls atomicWriteFileSync', () => {
-    expect(SCAFFOLD).toContain('export function ensureAutonomySection(')
-    expect(SCAFFOLD).toContain('atomicWriteFileSync')
+  // The two sections a FRONT_DESK_AGENT_ID write rewrites on every sheet go under the sheet
+  // editors' lock (web/sheet-lock.ts, card 074149c2), not through the rename the others use.
+  it.each(['ensureAutonomySection', 'ensureReportRoutingSection'])('%s is exported and writes under the sheet lock, not by rename', (fn) => {
+    const start = SCAFFOLD.indexOf(`export function ${fn}(`)
+    expect(start).toBeGreaterThan(-1)
+    const body = SCAFFOLD.slice(start, SCAFFOLD.indexOf('\n}\n', start))
+    expect(body).toContain('rewriteSheetUnderLock(claudeMdPath, ')
+    expect(body).not.toContain('atomicWriteFileSync')
+    expect(body).not.toContain('writeFileSync')
   })
 })

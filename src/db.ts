@@ -4093,10 +4093,14 @@ export function getRestartTraceEvidence(agent: string, rows: readonly { id: numb
 }
 
 /** Write one ledger row and, when `closeNoticeWith` is given, close the notice row with that result,
- *  in ONE transaction: a notice is never closed without the ledger row that will answer for it. */
+ *  in ONE transaction: a notice is never closed without the ledger row that will answer for it.
+ *  `rewriteNoticeTo` replaces the text of a notice that is still PENDING, in the same transaction:
+ *  a notice whose text says why it is delivered always has the ledger row that says the same, and
+ *  a row somebody already took is never rewritten (the whole step rolls back). */
 export function recordRestartNoticeHold(
   h: { agent: string; noticeId: number; mode: string; restartAt: number; deadlineAt: number; payload: string; state: 'held' | 'swallowed' | 'delivered'; detail: string | null },
   closeNoticeWith: string | null,
+  rewriteNoticeTo: string | null = null,
 ): number {
   return db.transaction((): number => {
     const now = Math.floor(Date.now() / 1000)
@@ -4105,6 +4109,10 @@ export function recordRestartNoticeHold(
     ).run(h.agent, h.noticeId, h.mode, h.restartAt, h.deadlineAt, h.payload, h.state, now, h.state === 'held' ? null : now, h.detail)
     if (closeNoticeWith !== null && !markMessageDone(h.noticeId, closeNoticeWith)) {
       throw new Error(`restart notice ${h.noticeId} does not exist, nothing recorded`)
+    }
+    if (rewriteNoticeTo !== null
+      && db.prepare("UPDATE agent_messages SET content = ? WHERE id = ? AND status = 'pending'").run(rewriteNoticeTo, h.noticeId).changes !== 1) {
+      throw new Error(`restart notice ${h.noticeId} is not pending any more, nothing recorded`)
     }
     return Number(info.lastInsertRowid)
   })()

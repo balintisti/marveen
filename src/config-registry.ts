@@ -195,7 +195,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'RESTART_NOTICE_SWALLOW_MODE',
     type: 'string',
     default: 'off',
-    description: 'A rutin context-guard restart értesítője (handoff megírva és friss, háttérmunka nem veszett el) nem megy el üzenetként, ha a restart ablakában kézbesített minden sornak van az azonosítóját hordozó nyoma (lezárás, az ügynök üzenete vagy kártya-kommentje). Aminek 15 perc múlva sincs nyoma, azt az értesítő megnevezi és kézbesül. Értékek: off (kikapcsolva, minden megy, mint korábban), dry-run (minden megy, mint korábban, a napló és a restart_notice_holds tábla mutatja, mit nyelne el), live. Bármi más érték: off. Live állásban a restart utáni direktíva nyugta-üzenet helyett a sorok lezárását kéri.',
+    description: 'A rutin context-guard restart értesítője (handoff megírva és friss, háttérmunka nem veszett el) nem megy el üzenetként, ha a restart ablakában kézbesített minden sornak van az azonosítóját hordozó nyoma (lezárás, az ügynök üzenete vagy kártya-kommentje). Aminek 15 perc múlva sincs nyoma, azt az értesítő megnevezi és kézbesül. Értékek: off (kikapcsolva, minden megy, mint korábban), dry-run (minden megy, mint korábban, a napló és a restart_notice_holds tábla mutatja, mit nyelne el), live. Bármi más érték: off. Live állásban a restart utáni direktíva nyugta-üzenet helyett a sorok lezárását kéri. Régebbi buildre visszaállás ELŐTT, ebben a sorrendben: off, egy feloldó kör (60 mp), és nulla live módú \'held\' sor a táblában, különben a visszatartott értesítő senkihez nem jut el (docs/restart-notice-hold.md).',
     module: 'agents',
     secret: false,
     requiresRestart: false,

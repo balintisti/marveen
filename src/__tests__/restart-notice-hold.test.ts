@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   known: new Set<string>(),
   evidenceThrows: false,
   recordThrows: false,
+  takenBeforeRecord: false,
   info: vi.fn(),
   warn: vi.fn(),
 }))
@@ -46,6 +47,8 @@ vi.mock('../db.js', async (orig) => {
     },
     recordRestartNoticeHold: (...a: Parameters<typeof actual.recordRestartNoticeHold>) => {
       if (h.recordThrows) throw new Error('ledger write failed')
+      // Another process delivers the notice between the step's own check and its write.
+      if (h.takenBeforeRecord) actual.getDb().prepare("UPDATE agent_messages SET status = 'delivered' WHERE id = ?").run(a[0].noticeId)
       return actual.recordRestartNoticeHold(...a)
     },
   }
@@ -63,7 +66,7 @@ const { getSettingDefinition } = await import('../config-registry.js')
 const { frontDeskHeader, parseFrontDeskHeader, FRONT_DESK_TAG } = await import('../front-desk.js')
 const {
   RESTART_NOTICE_HOLD_MS, RESTART_NOTICE_ORIGIN, RESTART_NOTICE_HELD, RESTART_NOTICE_SWALLOWED, RESTART_NOTICE_DELIVERED_LATE,
-  TRACE_UNMEASURED_LINE, HOLD_RELEASED_LINE, holdVerdict, namesId, restartPaneTail,
+  TRACE_UNMEASURED_LINE, HOLD_RELEASED_LINE, holdVerdict, namesId, restartPaneTail, readRestartPaneTail, paneTailLine,
 } = await import('../restart-notice-trace.js')
 const { detectsThinkingBlockError, midTurnApiErrorAtTail } = await import('../pane-state.js')
 const {
@@ -102,6 +105,14 @@ const THINKING_PANE = `\n⏺ Bash(x)\n  ⎿  API Error: 400 {"error":{"message":
 const OLD_ERROR_PANE = `\n⏺ API Error: Connection lost mid-response. The response above may be \n  incomplete.\n\n❯ folytasd\n\n⏺ Folytatom: a teszt lefutott, 12 passed.\n${'\n  egy sor a kimenetből'.repeat(24)}\n\n⏺ A HANDOFF.md megírva, megállok.\n\n${BOX}\n${FOOT}`
 /** A capture without the input box: nothing can be said about what it ends in. */
 const NO_BOX_PANE = '\n⏺ A HANDOFF.md megírva, megállok.\n'
+/** The error wrapped over more lines than the old recogniser walks (marveen 58301, finding 1). */
+const WRAPPED_ERROR_PANE = `\n⏺ API Error: 529${'\n  {"type":"error","error":{"type":"overloaded_error"}}'.repeat(8)}\n\n${BOX}\n${FOOT}`
+/** A turn that is still running. */
+const SPINNER_PANE = `\n⏺ Bash(sleep 60)\n  ⎿  Running…\n\n✽ Cogitating… (12s · esc to interrupt)\n\n${BOX}\n${FOOT}`
+/** What a capture taken AFTER the restart shows: the new session, nothing above its box. */
+const FRESH_SESSION_PANE = `\n\n${BOX}\n${FOOT}`
+/** A finished reply, and input the session never took. */
+const TYPED_PANE = `\n⏺ A HANDOFF.md megírva, megállok.\n\n${'─'.repeat(70)} Agent ─\n❯ még egy kérés\n${SEP}\n${FOOT}`
 
 beforeAll(() => {
   initDatabase(':memory:')
@@ -115,7 +126,7 @@ beforeEach(() => {
   h.mode = 'off'
   h.desk = ''
   h.running.clear(); h.known.clear()
-  h.evidenceThrows = false; h.recordThrows = false
+  h.evidenceThrows = false; h.recordThrows = false; h.takenBeforeRecord = false
   h.info.mockReset(); h.warn.mockReset()
   // No hold of an earlier test may be waiting: a tick settles every held row it finds.
   getDb().prepare("UPDATE restart_notice_holds SET state = 'delivered', detail = 'left over from another test' WHERE state = 'held'").run()
@@ -253,6 +264,29 @@ describe('storage: the ledger and its three readers', () => {
     expect(getAgentMessage(pending)).toMatchObject({ status: 'pending', result: null })
     expect(holdsOf(c)[0].resolved_at).not.toBeNull()
     expect(getHeldRestartNotices().map((x) => x.id)).not.toContain(settled)
+  })
+
+  it('recordRestartNoticeHold rewrites a PENDING notice with its ledger row, or writes neither', () => {
+    const hold = { mode: 'live', restartAt: RESTART_S, deadlineAt: RESTART_S + 900, payload: '{}', state: 'delivered' as const, detail: '{}' }
+    const a = agentName()
+    const pending = writeNotice(a, [1], 'handoff written', MAIN_AGENT_ID, false)
+    recordRestartNoticeHold({ ...hold, agent: a, noticeId: pending }, null, 'the new text')
+    expect(getAgentMessage(pending)).toMatchObject({ status: 'pending', result: null, content: 'the new text' })
+    expect(holdsOf(a)).toHaveLength(1)
+
+    // Taken already (delivered, done, failed): the reader has the old text, so it stays the text.
+    for (const status of ['delivered', 'done', 'failed']) {
+      const b = agentName()
+      const taken = writeNotice(b, [1], 'handoff written', MAIN_AGENT_ID, false)
+      const before = getAgentMessage(taken)!.content
+      getDb().prepare('UPDATE agent_messages SET status = ? WHERE id = ?').run(status, taken)
+      expect(() => recordRestartNoticeHold({ ...hold, agent: b, noticeId: taken }, null, 'the new text')).toThrow(new RegExp(`${taken} is not pending any more`))
+      expect(getAgentMessage(taken)!.content).toBe(before)
+      expect(holdsOf(b)).toEqual([])
+    }
+    const c = agentName()
+    expect(() => recordRestartNoticeHold({ ...hold, agent: c, noticeId: 999_998 }, null, 'the new text')).toThrow(/999998 is not pending any more/)
+    expect(holdsOf(c)).toEqual([])
   })
 
   it('settleRestartNoticeHold moves a hold ONCE: the second caller changes nothing and sends nothing', () => {
@@ -624,48 +658,60 @@ describe('live: every doubt delivers', () => {
   })
 })
 
-// didi 57938, finding 1 (marveen 57937): the third condition of a clean restart. Every pane here is
-// paired with a window whose rows WOULD let the notice go unread; the two controls at the end are
-// the same windows with a pane that ended in a reply.
+// didi 57938, finding 1 (marveen 57937) and marveen 58301, findings 1 and 2: the third condition of
+// a clean restart. Every pane here is paired with a window whose rows WOULD let the notice go
+// unread; the two controls at the end are the same windows with a pane that ended in a reply.
+// Columns: the pane, the tail, the walk's own word for it, the pane line the ledger keeps.
 const NOT_CLEAN = [
-  ['the code-less error as the last block', ERROR_PANE, 'pane-tail-api-error'],
-  ['an error with a code under a tool call', RESULT_ERROR_PANE, 'pane-tail-api-error'],
-  ['the thinking-block error with a later line under it', THINKING_PANE, 'pane-tail-api-error'],
-  ['a capture without the input box', NO_BOX_PANE, 'pane-tail-unreadable'],
-  ['no capture at all', null, 'pane-tail-unreadable'],
-  ['an empty capture', '', 'pane-tail-unreadable'],
+  ['the code-less error as the last block', ERROR_PANE, 'api-error', 'last-block', '⏺ API Error: Connection lost mid-response. The response above may be'],
+  ['an error with a code under a tool call', RESULT_ERROR_PANE, 'api-error', 'last-block', '⎿  API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}'],
+  ['the thinking-block error with a later line under it', THINKING_PANE, 'api-error', 'thinking-block', null],
+  ['an error wrapped over nine lines', WRAPPED_ERROR_PANE, 'api-error', 'last-block', '⏺ API Error: 529'],
+  ['a turn that is still running', SPINNER_PANE, 'unknown', 'unrecognised-line', '✽ Cogitating… (12s · esc to interrupt)'],
+  ['the pane of the NEW session (a capture taken after the restart)', FRESH_SESSION_PANE, 'unknown', 'nothing-above-box', null],
+  ['a finished reply with text left in the input box', TYPED_PANE, 'unknown', 'box-not-empty', '❯ még egy kérés'],
+  ['a capture without the input box', NO_BOX_PANE, 'unreadable', 'no-input-box', null],
+  ['no capture at all', null, 'unreadable', 'no-capture', null],
+  ['an empty capture', '', 'unreadable', 'no-input-box', null],
 ] as const
 
 describe('the pane fixtures are what their names say', () => {
-  it('each recogniser separately, and the three answers of restartPaneTail', () => {
+  it('each recogniser separately, and the four answers of restartPaneTail', () => {
     expect([midTurnApiErrorAtTail(CLEAN_PANE), detectsThinkingBlockError(CLEAN_PANE)]).toEqual([false, false])
     expect([midTurnApiErrorAtTail(OLD_ERROR_PANE), detectsThinkingBlockError(OLD_ERROR_PANE)]).toEqual([false, false])
     expect([midTurnApiErrorAtTail(ERROR_PANE), detectsThinkingBlockError(ERROR_PANE)]).toEqual([true, false])
     expect([midTurnApiErrorAtTail(RESULT_ERROR_PANE), detectsThinkingBlockError(RESULT_ERROR_PANE)]).toEqual([true, false])
     // Only the second recogniser: without it this pane would read as clean.
     expect([midTurnApiErrorAtTail(THINKING_PANE), detectsThinkingBlockError(THINKING_PANE)]).toEqual([false, true])
+    // Neither of the two: before marveen 58301 these four read as clean.
+    for (const pane of [WRAPPED_ERROR_PANE, SPINNER_PANE, FRESH_SESSION_PANE, TYPED_PANE]) {
+      expect([midTurnApiErrorAtTail(pane), detectsThinkingBlockError(pane)]).toEqual([false, false])
+    }
     expect(midTurnApiErrorAtTail(NO_BOX_PANE)).toBeNull()
     expect([CLEAN_PANE, OLD_ERROR_PANE].map(restartPaneTail)).toEqual(['clean', 'clean'])
-    expect(NOT_CLEAN.map(([, pane]) => restartPaneTail(pane))).toEqual(['api-error', 'api-error', 'api-error', 'unreadable', 'unreadable', 'unreadable'])
+    expect(NOT_CLEAN.map(([, pane]) => readRestartPaneTail(pane))).toEqual(NOT_CLEAN.map(([, , tail, why, line]) => ({ tail, why, line })))
   })
 })
 
-describe('live: a pane that ended in an API error, or that was not read, keeps the notice for its reader', () => {
+describe('live: only a pane that was read and ends in a finished reply lets the notice go unread', () => {
   beforeEach(() => { h.mode = 'live' })
 
-  it.each(NOT_CLEAN)('%s, and every row has its trace: delivered as written, the ledger says why', (_name, pane, why) => {
+  it.each(NOT_CLEAN)('%s, and every row has its trace: delivered with the reason as its first line, the ledger says why', (_name, pane, tail, tailWhy, tailLine) => {
     const a = agentName()
+    const why = `pane-tail-${tail}`
     const req = delivered('system', a, HANDOFF_REQUEST)
     const { noticeId, outcome } = restart(a, [req], { over: { finalPane: pane } })
     expect(outcome).toBe('untouched')
-    expect(getAgentMessage(noticeId)).toMatchObject({ status: 'pending', result: null })
+    // marveen 58301, finding 2: the reader is told that this one is not the routine notice.
+    const stored = `${paneTailLine(a, tail)}\n${noticeBody(a, [req], 'handoff written')}`
+    expect(getAgentMessage(noticeId)).toMatchObject({ status: 'pending', result: null, content: stored })
     expect(getPendingMessages(MAIN_AGENT_ID).map((m) => m.id)).toContain(noticeId)
     const holds = holdsOf(a)
     expect(holds).toMatchObject([{ notice_id: noticeId, mode: 'live', state: 'delivered', restart_at: RESTART_S, deadline_at: RESTART_S + RESTART_NOTICE_HOLD_MS / 1000 }])
     expect(holds[0].resolved_at).not.toBeNull()
-    expect(JSON.parse(holds[0].detail!)).toEqual({ traced: [{ id: req, by: 'handoff-request' }], untraced: [], at: 'restart', why })
+    expect(JSON.parse(holds[0].detail!)).toEqual({ traced: [{ id: req, by: 'handoff-request' }], untraced: [], at: 'restart', why, tail_why: tailWhy, tail_line: tailLine })
     expect(JSON.parse(holds[0].payload)).toMatchObject({ delivered: [req], reason: 'handoff written', snapshot: SNAPSHOT })
-    expect(h.info).toHaveBeenCalledWith(expect.objectContaining({ agent: a, noticeId, holdId: holds[0].id, mode: 'live', why }), expect.stringContaining('the notice is delivered as before'))
+    expect(h.info).toHaveBeenCalledWith(expect.objectContaining({ agent: a, noticeId, holdId: holds[0].id, mode: 'live', why, tailWhy }), expect.stringContaining('the notice is delivered as before'))
     expect(h.warn).not.toHaveBeenCalled()
     // Not a hold: no tick has anything to settle or to send, before the deadline or after it.
     expect(getHeldRestartNotices().map((x) => x.id)).not.toContain(holds[0].id)
@@ -673,62 +719,81 @@ describe('live: a pane that ended in an API error, or that was not read, keeps t
     resolveRestartNoticeHolds(DEADLINE_MS + 60_000)
     expect(sentAfter(a, noticeId)).toEqual([])
     expect(holdsOf(a)).toEqual(holds)
-    expect(getAgentMessage(noticeId)).toMatchObject({ status: 'pending', result: null })
+    expect(getAgentMessage(noticeId)).toMatchObject({ status: 'pending', result: null, content: stored })
   })
 
-  it.each(NOT_CLEAN)('%s, and a row still waits for its trace: delivered NOW, not parked for the deadline', (_name, pane, why) => {
+  it.each(NOT_CLEAN)('%s, and a row still waits for its trace: delivered NOW, not parked for the deadline', (_name, pane, tail, tailWhy, tailLine) => {
     const a = agentName()
     const id = delivered('marveen', a, 'please check the build')
     const { noticeId, outcome } = restart(a, [id], { over: { finalPane: pane } })
     expect(outcome).toBe('untouched')
-    expect(getAgentMessage(noticeId)).toMatchObject({ status: 'pending', result: null })
+    expect(getAgentMessage(noticeId)).toMatchObject({ status: 'pending', result: null, content: `${paneTailLine(a, tail)}\n${noticeBody(a, [id], 'handoff written')}` })
     const holds = holdsOf(a)
     expect(holds).toMatchObject([{ notice_id: noticeId, mode: 'live', state: 'delivered' }])
-    expect(JSON.parse(holds[0].detail!)).toEqual({ traced: [], untraced: [id], at: 'restart', why })
+    expect(JSON.parse(holds[0].detail!)).toEqual({ traced: [], untraced: [id], at: 'restart', why: `pane-tail-${tail}`, tail_why: tailWhy, tail_line: tailLine })
     // The notice went out whole at the restart: the deadline adds no second message about the row.
     resolveRestartNoticeHolds(DEADLINE_MS)
     expect(sentAfter(a, noticeId)).toEqual([])
     expect(holdsOf(a)).toEqual(holds)
   })
 
-  it('a front desk keeps it in its own queue, header and all', () => {
+  it('a front desk keeps it in its own queue: the header stays the first line and names the tail, the reason is the second', () => {
     const desk = frontDesk()
     const a = agentName()
     const req = delivered('system', a, HANDOFF_REQUEST)
-    const { noticeId, outcome } = restart(a, [req], { to: desk, rerouted: true, over: { finalPane: ERROR_PANE } })
+    const { noticeId, outcome } = restart(a, [req], { to: desk, rerouted: true, over: { finalPane: SPINNER_PANE } })
     expect(outcome).toBe('untouched')
     expect(getPendingMessages(desk).map((m) => m.id)).toContain(noticeId)
-    expect(parseFrontDeskHeader(getAgentMessage(noticeId)!.content)).toMatchObject({ subjects: [a], delivered: [req] })
+    const [header, reason, ...body] = getAgentMessage(noticeId)!.content.split('\n')
+    // Every key the runner wrote is still there, and one more.
+    const written = parseFrontDeskHeader(frontDeskHeader({ type: 'context-guard-restart', subjects: [a], windowSec: WINDOW, reason: 'handoff written', delivered: [req], pending: [], failed: [], snapshot: SNAPSHOT }))
+    expect(parseFrontDeskHeader(header)).toEqual({ ...written, pane_tail: 'unknown' })
+    expect(reason).toBe(paneTailLine(a, 'unknown'))
+    expect(body.join('\n')).toBe(noticeBody(a, [req], 'handoff written'))
   })
 
-  it('the ledger row cannot be written: still delivered, and the log says the step failed', () => {
+  it('the ledger row cannot be written: still delivered, as it was written, and the log says the step failed', () => {
     const a = agentName()
     const req = delivered('system', a, HANDOFF_REQUEST)
     h.recordThrows = true
     const { noticeId, outcome } = restart(a, [req], { over: { finalPane: ERROR_PANE } })
     expect(outcome).toBe('untouched')
-    expect(getAgentMessage(noticeId)).toMatchObject({ status: 'pending', result: null })
+    expect(getAgentMessage(noticeId)).toMatchObject({ status: 'pending', result: null, content: noticeBody(a, [req], 'handoff written') })
     expect(holdsOf(a)).toEqual([])
     expect(h.warn).toHaveBeenCalledWith(expect.objectContaining({ agent: a, noticeId }), 'restart notice: the hold step failed -- the notice is delivered as before')
   })
 
-  it('dry-run counts it the same way: a delivered row with its reason, never a would-swallow', () => {
+  it('somebody took the notice before the step wrote: its text is not touched, and no ledger row claims a text that was never sent', () => {
+    const a = agentName()
+    const req = delivered('system', a, HANDOFF_REQUEST)
+    h.takenBeforeRecord = true
+    const { noticeId, outcome } = restart(a, [req], { over: { finalPane: ERROR_PANE } })
+    expect(outcome).toBe('untouched')
+    expect(getAgentMessage(noticeId)).toMatchObject({ status: 'delivered', content: noticeBody(a, [req], 'handoff written') })
+    expect(holdsOf(a)).toEqual([])
+    expect(h.warn).toHaveBeenCalledWith(expect.objectContaining({ agent: a, noticeId }), 'restart notice: the hold step failed -- the notice is delivered as before')
+  })
+
+  it('dry-run counts it the same way and leaves the text alone: a delivered row with its reason, never a would-swallow', () => {
     h.mode = 'dry-run'
     const a = agentName()
     const req = delivered('system', a, HANDOFF_REQUEST)
-    const { noticeId, outcome } = restart(a, [req], { over: { finalPane: null } })
+    const { noticeId, outcome } = restart(a, [req], { over: { finalPane: SPINNER_PANE } })
     expect(outcome).toBe('untouched')
-    expect(getAgentMessage(noticeId)).toMatchObject({ status: 'pending', result: null })
+    expect(getAgentMessage(noticeId)).toMatchObject({ status: 'pending', result: null, content: noticeBody(a, [req], 'handoff written') })
     expect(holdsOf(a)).toMatchObject([{ mode: 'dry-run', state: 'delivered' }])
-    expect(JSON.parse(holdsOf(a)[0].detail!)).toMatchObject({ at: 'restart', why: 'pane-tail-unreadable' })
+    // The share of each kind of tail is counted from these two fields.
+    expect(JSON.parse(holdsOf(a)[0].detail!)).toMatchObject({ at: 'restart', why: 'pane-tail-unknown', tail_why: 'unrecognised-line', tail_line: '✽ Cogitating… (12s · esc to interrupt)' })
   })
 
-  it('off: the pane is not even asked, no ledger row', () => {
+  it('off: the pane is not even asked, no ledger row, the text is as written', () => {
     h.mode = 'off'
     const a = agentName()
     const req = delivered('system', a, HANDOFF_REQUEST)
-    expect(restart(a, [req], { over: { finalPane: ERROR_PANE } }).outcome).toBe('untouched')
+    const { noticeId, outcome } = restart(a, [req], { over: { finalPane: ERROR_PANE } })
+    expect(outcome).toBe('untouched')
     expect(holdsOf(a)).toEqual([])
+    expect(getAgentMessage(noticeId)!.content).toBe(noticeBody(a, [req], 'handoff written'))
   })
 
   // CONTROL (marveen 57937): the routine restart that ended clean is swallowed as before, and an
@@ -741,7 +806,7 @@ describe('live: a pane that ended in an API error, or that was not read, keeps t
     const req = delivered('system', a, HANDOFF_REQUEST)
     const swallowed = restart(a, [req], { over: { finalPane: pane } })
     expect(swallowed.outcome).toBe('swallowed')
-    expect(getAgentMessage(swallowed.noticeId)).toMatchObject({ status: 'done', result: RESTART_NOTICE_SWALLOWED })
+    expect(getAgentMessage(swallowed.noticeId)).toMatchObject({ status: 'done', result: RESTART_NOTICE_SWALLOWED, content: noticeBody(a, [req], 'handoff written') })
     expect(JSON.parse(holdsOf(a)[0].detail!)).toEqual({ traced: [{ id: req, by: 'handoff-request' }], untraced: [], at: 'restart' })
     const b = agentName()
     const id = delivered('marveen', b, 'please check the build')

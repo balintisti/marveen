@@ -775,6 +775,107 @@ export function midTurnApiErrorAtTail(pane: string): boolean | null {
   return false
 }
 
+// DOES THE PANE END IN A FINISHED REPLY? (card 074149c2, review finding 1)
+//
+// midTurnApiErrorAtTail answers "is the error the last block" and says false for everything it does
+// not know: an error wrapped over more than MID_TURN_ERROR_BLOCK_LINES lines, an error with another
+// glyph line under it, a tool block, a spinner. For a caller that CLOSES something on "no error",
+// false has to mean something that was seen. This walk says 'reply' only for the one shape a turn
+// that ended in an answer leaves behind. Measured 2026-11-11 03:21 CET on the 13 pre-restart
+// snapshots in store/ (25-line captures; every restart overwrites its agent's): 8 are this shape,
+// in 3 the reply starts above the capture (so they are 'unknown': the visible lines alone cannot
+// tell a long reply from a long wrapped error), one is the code-less error, one has text in the
+// box. Counted again at 03:43 on the snapshots of that minute: 9, 3, none, 1.
+//
+//   ⏺ <the reply's first line>          <- column 0, in the capture, not an API error
+//     <indented text or blank lines>    <- none of them names an API error
+//   <blank>
+//   ✻ Worked for 2m 10s · done 19:12    <- optional, the turn summary
+//   <blank>
+//   ─────────────────── Agent ─
+//   ❯                                   <- the box holds nothing
+//   ───────────────────
+//
+// Everything else is 'unknown', with the line the walk stopped on. The capture is plain
+// capturePane: a dim ghost suggestion in the box reads as text here, which errs to 'unknown'. A background-wait line is NOT
+// skipped here: work in flight is not a finished turn.
+const EMPTY_PROMPT_RX = /^❯\s*$/
+const REPLY_START_RX = /^⏺/
+const REPLY_TEXT_LINE_RX = /^ {2,}\S/
+const API_ERROR_MENTION_RX = /API Error/i
+// A ⏺ line that starts something other than the model's text: a tool call (`⏺ Bash(npm test)`,
+// `⏺ plugin:x:y - reply (MCP)(chat_id: ...)`), a collapsed group of them (`⏺ Read 3 files (ctrl+o
+// to expand)`), or the harness's own notice (`⏺ Background command "..." completed`, two of the 13
+// snapshots have one in their scrollback). A pane that ENDS in one of these is a turn that has not
+// answered yet. A reply whose first words happen to look like a call errs to 'unknown'.
+const NOT_REPLY_START_RX = /^⏺\s+(?:Background command\b|[A-Za-z][\w.:-]*(?: - [^()]+ \(MCP\))?\(|.*\(ctrl\+o to expand\)\s*$)/
+// THE HARNESS SPEAKING IN THE REPLY'S PLACE (review 58529, finding 1). A turn can end in a line the
+// CLI wrote itself: a plan limit, a context hard error, a login that is gone. Whether the CLI
+// draws each of them with the reply's ⏺ is NOT measured (none is in the 13 snapshots); the
+// `API Error:` ones are drawn so, and these are the same kind of message in the transcript. So a
+// block that names one of them anywhere is not read as a finished reply. The file's own
+// recognisers decide (USAGE_LIMIT_RX, CTX_SAT_RX), plus the lines they do not know:
+//   - measured 2026-11-11 05:03 CET, the fleet's transcripts of the last 45 days (6284 files, the
+//     assistant lines the CLI wrote itself): 7782 `API Error: ...`, 56 `OAuth token revoked ·
+//     Please run /login`, 22 `No response requested.` (a turn that ended, left as a reply);
+//   - NOT seen there, taken from the reviewer's probe: `Prompt is too long`, `Credit balance is
+//     too low`.
+// A reply that talks about a usage limit or a full context errs to 'unknown' with it. What this
+// cannot do: know a line of the CLI's that nobody has listed. The dry run is what measures that.
+const HARNESS_NOTICE_RX = /Please run \/login|Prompt is too long|Credit balance is too low/i
+const harnessNoticeIn = (line: string): boolean =>
+  USAGE_LIMIT_RX.test(line) || CTX_SAT_RX.test(line) || HARNESS_NOTICE_RX.test(line)
+
+export type PaneTailShape =
+  | { shape: 'reply' }
+  | { shape: 'api-error'; line: string }
+  | {
+    shape: 'unknown'
+    why: 'box-not-empty' | 'nothing-above-box' | 'unrecognised-line' | 'not-a-reply' | 'error-mention' | 'harness-notice' | 'start-not-in-capture'
+    line: string | null
+  }
+
+/** Null when the live input box is not in the capture. */
+export function finishedReplyAtTail(pane: string): PaneTailShape | null {
+  if (!pane) return null
+  const lines = pane.split('\n')
+  let bottom = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (BOX_SEP_RX.test(lines[i])) { bottom = i; break }
+  }
+  if (bottom < 0) return null
+  let top = -1
+  for (let i = bottom - 1; i >= 0; i--) {
+    if (BOX_SEP_RX.test(lines[i])) { top = i; break }
+  }
+  if (top < 0) return null
+  // Text in the box is input the session never took: it dies with the restart.
+  if (bottom - top !== 2 || !EMPTY_PROMPT_RX.test(lines[top + 1])) {
+    return { shape: 'unknown', why: 'box-not-empty', line: lines[top + 1] ?? null }
+  }
+  let end = top - 1
+  while (end >= 0 && (lines[end].trim() === '' || TURN_SUMMARY_RX.test(lines[end]))) end--
+  if (end < 0) return { shape: 'unknown', why: 'nothing-above-box', line: null }
+  let mention: string | null = null
+  let notice: string | null = null
+  for (let i = end; i >= 0; i--) {
+    const line = lines[i]
+    if (line.trim() === '') continue
+    if (MID_TURN_ERROR_START_RX.test(line)) return { shape: 'api-error', line }
+    if (mention === null && API_ERROR_MENTION_RX.test(line)) mention = line
+    if (harnessNoticeIn(line)) notice = line
+    if (REPLY_START_RX.test(line)) {
+      if (NOT_REPLY_START_RX.test(line)) return { shape: 'unknown', why: 'not-a-reply', line }
+      if (mention !== null) return { shape: 'unknown', why: 'error-mention', line: mention }
+      return notice === null ? { shape: 'reply' } : { shape: 'unknown', why: 'harness-notice', line: notice }
+    }
+    if (MID_TURN_GLYPH_LINE_RX.test(line) || !REPLY_TEXT_LINE_RX.test(line)) {
+      return { shape: 'unknown', why: 'unrecognised-line', line }
+    }
+  }
+  return { shape: 'unknown', why: 'start-not-in-capture', line: mention ?? notice }
+}
+
 // Claude Code modal/overlay surfaces -- the /mcp server manager, the model/
 // config/theme pickers, and permission dialogs -- replace the input box with a
 // navigable list whose footer reads e.g.

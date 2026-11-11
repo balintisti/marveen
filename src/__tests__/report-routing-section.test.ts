@@ -275,11 +275,12 @@ describe('report-routing section: wired to BOTH surfaces, with the configured va
     .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n')
 
   it('web.ts ensures it for the main agent at boot', () => {
-    expect(live('web.ts')).toMatch(/^\s*ensureReportRoutingSection\(MAIN_AGENT_ID, configuredFrontDesk\(\)\)/m)
+    // Through ensureSheetSectionAtStart since review 58529 L2: a start does not fail on a held sheet.
+    expect(live('web.ts')).toMatch(/^\s*ensureSheetSectionAtStart\(MAIN_AGENT_ID, 'report-routing', \(\) => ensureReportRoutingSection\(MAIN_AGENT_ID, configuredFrontDesk\(\)\)\)$/m)
   })
 
   it('agent-process.ts ensures it for every agent start', () => {
-    expect(live('web/agent-process.ts')).toMatch(/^\s*ensureReportRoutingSection\(name, configuredFrontDesk\(\)\)/m)
+    expect(live('web/agent-process.ts')).toMatch(/^\s*ensureSheetSectionAtStart\(name, 'report-routing', \(\) => ensureReportRoutingSection\(name, configuredFrontDesk\(\)\)\)$/m)
   })
 
   it('the value both pass is the FRONT_DESK_AGENT_ID setting as written; an unreadable setting reads as empty', () => {
@@ -383,7 +384,10 @@ describe('autonomy block, Level 3: who the report after the act goes to', () => 
       for (const line of readFileSync(join(src, f), 'utf-8').split('\n')) {
         const t = line.trim()
         if (t.startsWith('//') || t.startsWith('*') || t.startsWith('export function')) continue
-        const m = /ensureAutonomySection\((.*)\)\s*$/.exec(t)
+        // A start path calls it inside ensureSheetSectionAtStart(<agent>, 'autonomy', () => ...)
+        // (review 58529 L2): the call is what stands after the arrow.
+        const call = t.replace(/^ensureSheetSectionAtStart\([^,]+, 'autonomy', \(\) => (.*)\)$/, '$1')
+        const m = /ensureAutonomySection\((.*)\)\s*$/.exec(call)
         if (m) calls.push(`${f}: ${m[1]}`)
       }
     }

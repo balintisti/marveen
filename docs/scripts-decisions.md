@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **479** kovetett fajl, ebbol
-**146** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **480** kovetett fajl, ebbol
+**147** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -590,6 +590,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/sentry-or-precheck.sh`
 
 - WHY: the `sentry-or` heartbeat wakes the model every 3 hours (8 turns a day) to find out, nearly
+
+### `scripts/sheet-locked-write.py`
+
+- WHY THIS EXISTS (card 074149c2, coordinator's decision 58301 item C). The sheet editors
 
 ### `scripts/skill-index.sh`
 
