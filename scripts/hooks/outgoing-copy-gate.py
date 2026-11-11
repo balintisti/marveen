@@ -795,6 +795,46 @@ def _cwd_after(toks, cwd, old_cwd=None):
     return _resolve_script_path(args[0], cwd)
 
 
+def _code_strings(prog: str, rest) -> list:
+    """The code strings a runner is handed by its code option. Twin: codeStrings.
+
+    A shell reads the c anywhere in a short cluster (`-lc`, `-ec`, `-c -l`, `-co pipefail`) and
+    runs the first operand after the options. Python takes the code glued (`-cprint(1)`) or as
+    the next word, in a cluster too (`-Ic`). Node takes -e/--eval and -p/--print, also `-pe` and
+    `--eval=code`. Matching the bare `-c` only let `bash -lc '<send>'`, the fleet's usual
+    login-shell form, pass both gates (didi 59096, card 003d0866)."""
+    out = []
+    for i, t in enumerate(rest):
+        if _WRAPPER_SHELL.match(prog):
+            if not re.match(r"^-[a-zA-Z]*c[a-zA-Z]*$", t):
+                continue
+            j = i + 2 if _takes_value(prog, t) else i + 1
+            while j < len(rest) and _runner_option(prog, rest[j]):
+                if rest[j] == "--":
+                    j += 1
+                    break
+                j += 2 if _takes_value(prog, rest[j]) else 1
+            if j < len(rest):
+                out.append(rest[j])
+        elif _PYTHON.match(prog):
+            m = re.match(r"^-[bBdEhiIOqsSuvVx]*c(.*)$", t, re.S)
+            if m and m.group(1):
+                out.append(m.group(1))
+            elif m and i + 1 < len(rest):
+                out.append(rest[i + 1])
+        elif _NODEISH.match(prog):
+            # -p is --package to npx: -p/--print count only on the runners where they run code
+            m = re.match(r"^(-e|--eval|-p|--print|-pe|-ep)(?:=(.*))?$", t, re.S)
+            if not m or (not re.match(r"^(node|tsx|ts-node|bun)$", prog, re.I)
+                         and m.group(1) not in ("-e", "--eval")):
+                continue
+            if m.group(2) is not None:
+                out.append(m.group(2))
+            elif i + 1 < len(rest):
+                out.append(rest[i + 1])
+    return out
+
+
 def _head_is_send(toks, depth: int, ctx=None) -> bool:
     ctx = ctx or _NO_CTX
     if toks is None:  # the depth bound was hit on a wrapper: audit it
@@ -807,15 +847,12 @@ def _head_is_send(toks, depth: int, ctx=None) -> bool:
         return True
     # burkolo hejj: a -c string-argumentum maga is parancs -- rekurzio
     if _WRAPPER_SHELL.match(prog) and depth < 3:
-        for i, t in enumerate(rest):
-            if t == "-c" and i + 1 < len(rest):
-                if is_send_invocation(rest[i + 1], _depth=depth + 1, ctx=ctx):
-                    return True
+        if any(is_send_invocation(code, _depth=depth + 1, ctx=ctx) for code in _code_strings(prog, rest)):
+            return True
     # interpreter kod-string: python -c / node -e / --eval, ami kuldest hiv
     if _PYTHON.match(prog) or _NODEISH.match(prog):
-        for i, t in enumerate(rest):
-            if t in ("-c", "-e", "--eval") and i + 1 < len(rest) and _code_string_sends(rest[i + 1]):
-                return True
+        if any(_code_string_sends(code) for code in _code_strings(prog, rest)):
+            return True
     # send.py futtatasa (kozvetlenul, vagy python/runner utan) --to cimzettel
     candidates = [prog] + (
         [_basename(rest[0])] if rest and (_PYTHON.match(prog) or _NODEISH.match(prog)) else []

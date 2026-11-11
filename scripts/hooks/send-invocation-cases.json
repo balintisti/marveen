@@ -1808,6 +1808,125 @@
       "cmd": "bash -euo pipefail harmless.sh",
       "expected": false,
       "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
+      "name": "[003d0866] a login shell: the c inside the cluster -lc (didi 59096)",
+      "cmd": "bash -lc 'sendmail -t < x'",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] CONTROL: the same send with -l and -c apart (judged before the fix too)",
+      "cmd": "bash -l -c 'sendmail -t < x'",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] the c first, a flag after it: the code is the first operand after the options",
+      "cmd": "bash -c -l 'sendmail -t < x'",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] a cluster -ec on sh",
+      "cmd": "sh -ec 'echo m | msmtp a@b.hu'",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] a cluster -fc on zsh",
+      "cmd": "zsh -fc 'swaks --to a@b.hu'",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] a cluster -xc on bash with the Python sender",
+      "cmd": "bash -xc \"python3 scripts/support-mail/send.py --to a@b.hu\"",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] a cluster -co takes the o value first: the code comes after pipefail",
+      "cmd": "bash -co pipefail 'sendmail -t < x'",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] -o value between -c and the code",
+      "cmd": "bash -c -o pipefail 'sendmail -t < x'",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] -- after -c: the code is the operand after it",
+      "cmd": "bash -c -- 'sendmail -t < x'",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] a login shell runs the script file",
+      "cmd": "bash -lc \"python3 sender.py\"",
+      "expected": true,
+      "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
+      "name": "[003d0866] a login shell runs a shell script that sends",
+      "cmd": "bash -lc 'bash sender.sh'",
+      "expected": true,
+      "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
+      "name": "[003d0866] CONTROL: a login shell running an ordinary script",
+      "cmd": "bash -lc 'bash harmless.sh'",
+      "expected": false,
+      "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
+      "name": "[003d0866] CONTROL: a login shell that only talks about sending",
+      "cmd": "bash -lc 'echo a sendmail regen a kuldo volt'",
+      "expected": false
+    },
+    {
+      "name": "[003d0866] CONTROL: a cluster without c runs a script, not a code string",
+      "cmd": "bash -ex harmless.sh",
+      "expected": false,
+      "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
+      "name": "[003d0866] python flags clustered with c: -Ic",
+      "cmd": "python3 -Ic \"import smtplib; s = smtplib.SMTP('smtp.x.hu'); s.sendmail('a','b','m')\"",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] python -c glued to its code",
+      "cmd": "python3 '-cimport send; send.main()'",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] python -Ec glued to its code",
+      "cmd": "python3 '-Ecimport send'",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] CONTROL: python -Ic with harmless code",
+      "cmd": "python3 -Ic \"print(1+1)\"",
+      "expected": false
+    },
+    {
+      "name": "[003d0866] node -p runs the code too",
+      "cmd": "node -p \"require('child_process').execSync('sendmail -t a@b.hu')\"",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] node -pe",
+      "cmd": "node -pe \"require('./src/graph-mail.js').sendMail({to:'a@b.hu'})\"",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] node --eval=code",
+      "cmd": "node --eval=\"require('./src/graph-mail.js').sendMail({to:'a@b.hu'})\"",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] CONTROL: npx -p names a package, not code",
+      "cmd": "npx -p \"require('./src/graph-mail.js').sendMail({to:'a@b.hu'})\" cowsay",
+      "expected": false
+    },
+    {
+      "name": "[003d0866] CONTROL: node -p with harmless code",
+      "cmd": "node -p \"40 + 2\"",
+      "expected": false
     }
   ]
 }

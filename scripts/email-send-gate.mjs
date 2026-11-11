@@ -458,23 +458,48 @@ function cwdAfter(toks, cwd, oldCwd = null) {
   return resolveScriptPath(args[0], cwd)
 }
 
+// The code strings a runner is handed by its code option. A shell reads the c anywhere in a short
+// cluster (`-lc`, `-ec`, `-c -l`, `-co pipefail`) and runs the first operand after the options.
+// Python takes the code glued (`-cprint(1)`) or as the next word, in a cluster too (`-Ic`). Node
+// takes -e/--eval and -p/--print, also `-pe` and `--eval=code`. Matching the bare `-c` only let
+// `bash -lc '<send>'`, the fleet's usual login-shell form, pass both gates (didi 59096, card
+// 003d0866). Each form was run on the real runner and runs the code. Twin: _code_strings.
+function codeStrings(prog, rest) {
+  const out = []
+  for (let i = 0; i < rest.length; i++) {
+    const t = rest[i]
+    if (WRAPPER_SHELL.test(prog)) {
+      if (!/^-[a-zA-Z]*c[a-zA-Z]*$/.test(t)) continue
+      let j = takesValue(prog, t) ? i + 2 : i + 1
+      while (j < rest.length && runnerOption(prog, rest[j])) {
+        if (rest[j] === '--') { j++; break }
+        j += takesValue(prog, rest[j]) ? 2 : 1
+      }
+      if (j < rest.length) out.push(rest[j])
+    } else if (PYTHON.test(prog)) {
+      const m = /^-[bBdEhiIOqsSuvVx]*c([\s\S]*)$/.exec(t)
+      if (m && m[1]) out.push(m[1])
+      else if (m && i + 1 < rest.length) out.push(rest[i + 1])
+    } else if (NODEISH.test(prog)) {
+      // -p is --package to npx: -p/--print count only on the runners where they run code
+      const m = /^(-e|--eval|-p|--print|-pe|-ep)(?:=([\s\S]*))?$/.exec(t)
+      if (!m || (!/^(node|tsx|ts-node|bun)$/i.test(prog) && m[1] !== '-e' && m[1] !== '--eval')) continue
+      if (m[2] !== undefined) out.push(m[2])
+      else if (i + 1 < rest.length) out.push(rest[i + 1])
+    }
+  }
+  return out
+}
+
 function headIsSend(toks, depth, ctx = NO_CTX) {
   if (toks === null) return true // the depth bound was hit on a wrapper: audit it
   if (!toks.length) return false
   const prog = basename(toks[0])
   const rest = toks.slice(1)
   if (SENDER_PROG.test(prog)) return true
-  if (WRAPPER_SHELL.test(prog) && depth < 3) {
-    for (let i = 0; i < rest.length; i++) {
-      if (rest[i] === '-c' && rest[i + 1] && isSendInvocation(rest[i + 1], depth + 1, ctx)) return true
-    }
-  }
-  if (PYTHON.test(prog) || NODEISH.test(prog)) {
-    for (let i = 0; i < rest.length; i++) {
-      if ((rest[i] === '-c' || rest[i] === '-e' || rest[i] === '--eval') &&
-          rest[i + 1] && codeStringSends(rest[i + 1])) return true
-    }
-  }
+  if (WRAPPER_SHELL.test(prog) && depth < 3 &&
+      codeStrings(prog, rest).some((code) => isSendInvocation(code, depth + 1, ctx))) return true
+  if ((PYTHON.test(prog) || NODEISH.test(prog)) && codeStrings(prog, rest).some(codeStringSends)) return true
   const candidates = [prog]
   if ((PYTHON.test(prog) || NODEISH.test(prog)) && rest.length) candidates.push(basename(rest[0]))
   // Issue #1853: `python3 -m send` (or -m pkg.send) is the same sender by module name.
