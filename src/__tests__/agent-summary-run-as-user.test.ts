@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
+
+// Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
+const mkTmp = tmpDirs()
 
 // #2358: GET /api/agents and GET /api/agents/:name carry runAsUser, so a tool
 // acting for the agent (console, launcher, monitor) reads it from the
@@ -60,7 +63,7 @@ async function get(path: string): Promise<unknown> {
 }
 
 beforeEach(() => {
-  SANDBOX = mkdtempSync(join(tmpdir(), 'runasuser-sum-'))
+  SANDBOX = mkTmp('runasuser-sum-')
   writeConfig('withuser', { runAsUser: 'marveen-withuser' })
   writeConfig('nouser', { model: 'sonnet' })
   // Fails RUN_AS_USER_ALLOWED: the API must not echo what the spawn would refuse.
