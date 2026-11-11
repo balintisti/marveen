@@ -148,7 +148,10 @@ print(json.dumps(g.is_send_invocation(i["cmd"], ctx={"cwd": i["cwd"], "files": T
     writeFileSync(join(home, 'sender.py'), "import subprocess\nsubprocess.run(['sendmail', '-t'])\n")
     writeFileSync(join(home, 'harmless.py'), "print('ok')\n")
     expect(bothAtHome('python3 ~/sender.py', null, home)).toEqual({ js: true, py: true })
-    expect(bothAtHome('cd && python3 sender.py', FX, home)).toEqual({ js: true, py: true })
+    // from a cwd with no sender in it: only the move to HOME can find one
+    const away = mkTmp('script-file-away-')
+    expect(bothAtHome('python3 sender.py', away, home)).toEqual({ js: false, py: false })
+    expect(bothAtHome('cd && python3 sender.py', away, home)).toEqual({ js: true, py: true })
     expect(bothAtHome('cd ~ && python3 sender.py', null, home)).toEqual({ js: true, py: true })
     // CONTROL: the same commands on a harmless file, and the sender NOT at HOME
     expect(bothAtHome('python3 ~/harmless.py', null, home)).toEqual({ js: false, py: false })
