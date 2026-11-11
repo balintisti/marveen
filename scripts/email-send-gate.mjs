@@ -366,7 +366,8 @@ function segmentIsSend(toksIn, depth, ctx) {
 // gate-testing scripts holding send examples next to subprocess.
 // NOT COVERED, named: a path holding $, a backtick or a glob, a missing, unreadable or
 // over-1 MB file, a relative path with no known cwd (`cd $X` clears it; `cd -` returns to the
-// directory before this command's last cd, and clears it when there was none), a file
+// directory before this command's last cd, and clears it when there was none; `popd` is not
+// followed, the cwd stays where the last cd or pushd left it), a file
 // with no script extension run directly (shebang), a file the same command writes by other
 // means than a heredoc (cp, a Python write) or that a subshell's cd moved. These are judged
 // as today: not a send. Twin: _script_operands / _script_file_sends in

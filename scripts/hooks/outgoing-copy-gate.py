@@ -881,8 +881,9 @@ def wrapper_depth_hit(cmd: str, ctx=None) -> bool:
 # Development heredocs that patch or test the gates, and mention `import send` in a string,
 # still hit the module rule: that is the price of a naive rule, accepted.
 # NOT COVERED, named so nobody counts them as covered: a program the classifier never reads --
-# `python3 /tmp/x.py`, `python3 < /tmp/x.py`, `cat /tmp/x.py | python3 -`, and
-# `python3 -c "exec(open('/tmp/x.py').read())"`; also a here-string fed to an interpreter
+# `python3 < /tmp/x.py`, `cat /tmp/x.py | python3 -`, and
+# `python3 -c "exec(open('/tmp/x.py').read())"` (a file RUN as `python3 /tmp/x.py` is read since
+# card a4ae5970, see _script_operands); also a here-string fed to an interpreter
 # (`python3 <<<'import send'`) and a CommonJS destructuring rename of the Graph sender
 # (`const { sendMail: s } = require(...)`).
 # A heredoc fed to a SHELL (`bash <<EOF`, `sh -s <<EOF`) is a shell program: its body is

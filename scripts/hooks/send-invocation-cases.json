@@ -1780,6 +1780,30 @@
       "cwd": "src/__tests__/fixtures/script-file-gate"
     },
     {
+      "name": "[a4ae5970] cd - goes back past a segment that is not a cd: only cd/pushd set the old cwd (didi 59113 D1/D2)",
+      "cmd": "cd sub && echo x && cd - && python3 sender.py",
+      "expected": true,
+      "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
+      "name": "[a4ae5970] a python flag cluster ending in W takes its value: -uW ignore (didi 59113 D6/D8)",
+      "cmd": "python3 -uW ignore sender.py",
+      "expected": true,
+      "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
+      "name": "[a4ae5970] a shell flag cluster ending in O takes its value: -eO extglob (didi 59113 D5/D7)",
+      "cmd": "bash -eO extglob sender.sh",
+      "expected": true,
+      "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
+      "name": "[a4ae5970] CONTROL: popd is not followed (named limit): the cwd stays in sub, where sender.py is not",
+      "cmd": "pushd sub && popd && python3 sender.py",
+      "expected": false,
+      "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
       "name": "[a4ae5970] CONTROL: the option value itself is not judged as the script (harmless file after it)",
       "cmd": "bash -euo pipefail harmless.sh",
       "expected": false,
