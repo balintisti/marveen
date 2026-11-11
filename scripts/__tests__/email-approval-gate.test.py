@@ -182,6 +182,16 @@ with tempfile.TemporaryDirectory() as td:
     code, _, err = run_gate(store, {"tool_name": "mcp__x__manage_email",
                                     "tool_input": {"action": "send", "to": ["a@b.hu"], "body": "x"}})
     check("level 1: manage_email DENIED too (2026-08-10 bypass class)", code == 2, f"exit={code}")
+    # a4ae5970: the script FILE a command runs is read, and a relative path resolves against
+    # the hook payload's cwd (this process runs elsewhere, so only the payload can say where).
+    fx = os.path.join(os.path.dirname(os.path.dirname(HERE)), "src", "__tests__", "fixtures", "script-file-gate")
+    code, _, err = run_gate(store, {"tool_name": "Bash", "cwd": fx,
+                                    "tool_input": {"command": "python3 sender.py"}})
+    check("a4ae5970: a sending script file run from the payload cwd: DENIED at level 1",
+          code == 2 and "szint 1" in err, f"exit={code}")
+    code, _, _ = run_gate(store, {"tool_name": "Bash", "cwd": fx,
+                                  "tool_input": {"command": "python3 harmless.py"}})
+    check("a4ae5970: an ordinary script file from the same cwd passes", code == 0, f"exit={code}")
 
     # --- level 3: allow ------------------------------------------------------
     store = make_store(os.path.join(td, "s3"), level=3)

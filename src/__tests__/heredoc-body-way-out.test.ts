@@ -9,9 +9,10 @@
 // ordinary wording. What this does NOT protect (didi 51494, measured): the gates cannot tell
 // a send word in a string literal from a real send in the body, so a REAL send inside a
 // heredoc body is offered the way out too, by both gates (bc98d6d5 T1: the copy gate used to
-// audit that body as a letter and pass it, exit 0), and a script run as a file is read by
-// neither gate (`python3 /tmp/real-send.py` passes, on the base as well). Checking file-run
-// scripts is a separate card (marveen 51498).
+// audit that body as a letter and pass it, exit 0). Running the script as a file used to be
+// the way out, and a real send went through it (`python3 /tmp/real-send.py`): since a4ae5970
+// both gates read the file a command runs (script-file-gate.test.ts), so the way out is a DATA
+// file the script reads, or an edit made with the file tool.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import { rmSync, writeFileSync } from 'node:fs'
@@ -88,7 +89,9 @@ describe('hard gate (sub-agents): a heredoc-only deny names the way out', () => 
     expect(out).toContain('"permissionDecision":"deny"')
     expect(out).toContain('Email-kuldes sub-agentkent tiltott')
     expect(out).toContain(WAY_OUT)
-    expect(HEREDOC_BODY_WAY_OUT).toContain('KULON Bash-hivasban')
+    // a4ae5970: running the script as a file is no longer a way out, so the text must not offer it
+    expect(HEREDOC_BODY_WAY_OUT).toContain('adatfajlba')
+    expect(HEREDOC_BODY_WAY_OUT).not.toContain('KULON Bash-hivasban')
   })
 
   it('a visible send or a plain code send gets no way out', () => {
