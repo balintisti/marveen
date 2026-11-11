@@ -25,7 +25,8 @@ import { notifyChannel } from '../notify.js'
 import { detectPaneState, paneShowsContextSaturation, paneShowsContextSaturationHardError, runningBackgroundWork } from '../pane-state.js'
 import { descendsFrom, liveHeavyRunJobs } from '../heavy-run-jobs.js'
 import { usageLimitHolds } from '../usage-limit-window.js'
-import { readContextTokensFromProjectDir, readActiveModelFromProjectDir, readTranscriptMtimeFromProjectDir, readLastTurnActivityMs, predatesSession, transcriptWrittenSince } from './active-model.js'
+import { readContextTokensFromProjectDir, readActiveModelFromProjectDir, readTranscriptMtimeFromProjectDir, readLastTurnActivityMs, readLastCompactionMs, predatesSession, transcriptWrittenSince } from './active-model.js'
+import { guardStatesBody, readGuardStateFile, writeGuardStateFile } from './context-guard-state-file.js'
 import { readContextGuardConfig } from './context-guard-store.js'
 import { setDeliveryHoldProbe, type DeliveryHold } from './delivery-hold.js'
 import { readAllContextGuardConfigs } from './context-guard-store.js'
@@ -67,6 +68,8 @@ import {
   restartNoticeIsLogOnly,
   restartNoticeClosesItself,
   RESTART_NOTICE_AUTOCLOSED,
+  RELEASE_COMPACTED_REASON_PREFIX,
+  RELEASE_UNDELIVERED_REASON_PREFIX,
 } from '../context-guard.js'
 import { whileNotFrozen } from './fleet-freeze.js'
 import { resolveMachineNoticeRecipient } from './front-desk-route.js'
@@ -99,10 +102,89 @@ const INTERVAL_MS = 300_000
 // today's "refuse and wait for the rescue" rather than staying open.
 const SATURATION_OVERRIDE_TTL_MS = 3 * INTERVAL_MS
 
-// agent name -> guard state. In-memory: a dashboard restart re-arms every
-// agent at 'idle', which is safe -- the worst case is a repeated handoff
-// request, and cooldown prevents restart loops within a run.
+// agent name -> guard state. Mirrored into GUARD_STATE_PATH on every change and read back when
+// the runner starts (card 17a19228, context-guard-state-file.ts): this map used to be memory
+// only, and a dashboard restart then forgot an agent that had been asked to stop and was waiting
+// for the restart the request promised. EVERY write goes through setGuardState.
 const guardStates = new Map<string, GuardState>()
+const GUARD_STATE_PATH = join(PROJECT_ROOT, 'store', 'context-guard-state.json')
+// The file belongs to a STARTED runner: nothing is read or written before
+// startContextGuardRunner, so a module that is only imported never touches the store.
+let guardStatesPersisted = false
+let guardStatesOnDisk: string | null = null
+
+function persistGuardStates(): void {
+  if (!guardStatesPersisted) return
+  const body = guardStatesBody(guardStates)
+  if (body === guardStatesOnDisk) return
+  try {
+    writeGuardStateFile(GUARD_STATE_PATH, guardStates, Date.now())
+    guardStatesOnDisk = body
+  } catch (err) {
+    logger.warn({ err, path: GUARD_STATE_PATH }, 'context-guard: guard state NOT saved -- a dashboard restart now would forget the running sequences')
+  }
+}
+
+function setGuardState(name: string, state: GuardState | null): void {
+  if (state === null) guardStates.delete(name)
+  else guardStates.set(name, state)
+  persistGuardStates()
+}
+
+/**
+ * Read the sequences a previous run of the dashboard left behind. Called once, when the runner
+ * starts, before anything asks about a state.
+ *
+ * - await-handoff: the agent was asked to stop. The sequence goes on from where it was: its
+ *   deadline is a wall-clock time, so the next sweep restarts the agent (handoff written, or the
+ *   deadline passed) or releases it. One exception: the agent's session STARTED after the
+ *   request. The session that was asked is gone and the new one was asked nothing; dropped.
+ * - await-ready, cooldown: restored as they are, both end at a wall-clock time.
+ */
+function loadGuardStates(): void {
+  const read = readGuardStateFile(GUARD_STATE_PATH)
+  if (read === 'absent') return
+  if (read === 'corrupt') {
+    logger.warn({ path: GUARD_STATE_PATH }, 'context-guard: guard state file is not readable -- every agent starts idle; a sequence that was running is forgotten')
+    return
+  }
+  if (read.dropped.length > 0) {
+    logger.warn({ agents: read.dropped, path: GUARD_STATE_PATH }, 'context-guard: saved guard state not usable for these agents -- they start idle')
+  }
+  for (const [name, state] of read.states) {
+    // A state this run already holds is newer than anything in the file.
+    if (guardStates.has(name)) continue
+    if (state.phase === 'await-handoff') {
+      const startedSec = sessionStartSec(name)
+      const askedAtMs = state.requestedAtMs ?? read.savedAtMs
+      if (startedSec !== undefined && startedSec * 1000 > askedAtMs) {
+        logger.info({ name, askedAtMs, sessionStartSec: startedSec },
+          'context-guard: saved await-handoff dropped -- the session that was asked to stop is gone, the running one was asked nothing')
+        continue
+      }
+    }
+    guardStates.set(name, state)
+    if (state.phase !== 'idle') {
+      logger.info({ name, phase: state.phase, deadlineMs: state.deadlineMs, cooldownUntilMs: state.cooldownUntilMs, savedAtMs: read.savedAtMs },
+        'context-guard: guard sequence restored from before the dashboard restart')
+    }
+  }
+}
+
+/**
+ * The withdrawal of a stop request (action 'release'). It has to say three things an agent that
+ * obeyed needs: the earlier request no longer stands, no restart is coming, carry on.
+ */
+export function releasePrompt(reason: string, askedMinutesAgo: number | null): string {
+  const why = reason.startsWith(RELEASE_COMPACTED_REASON_PREFIX)
+    ? 'a munkameneted időközben tömörített, a kontextusod már a küszöb alatt van'
+    : 'a context-guardot időközben kikapcsolták'
+  return (
+    `[CONTEXT-GUARD] A korábbi megállás-kérés (HANDOFF.md írása, utána megállás${askedMinutesAgo !== null ? `; ~${askedMinutesAgo} perce ment ki` : ''}) VISSZAVONVA: ${why}. ` +
+    `NEM lesz újraindítás. FOLYTASD a munkát ott, ahol abbahagytad. ` +
+    `Ha a kérésre már megírtad a HANDOFF.md-t, maradhat: teendő nincs vele.`
+  )
+}
 
 // agent name -> when its resume prompt started being typed (ms). The sweep's
 // inject-resume has already moved the state to cooldown when it sends, so the
@@ -617,7 +699,7 @@ export async function rescueBootWedge(agent: string, nowMs: number = Date.now())
   const prevState = guardStates.get(agent) ?? INITIAL_GUARD_STATE
   // Claimed before the first await, so a second report in the same episode is refused.
   lastGuardRestart.set(agent, { atMs: nowMs, rescue: true, staleMinutes: rec!.staleMinutes })
-  guardStates.set(agent, {
+  setGuardState(agent, {
     ...INITIAL_GUARD_STATE,
     phase: 'await-ready',
     deadlineMs: nowMs + READY_TIMEOUT_MS,
@@ -631,7 +713,7 @@ export async function rescueBootWedge(agent: string, nowMs: number = Date.now())
     await performRestart(agent)
     return true
   } catch (err) {
-    guardStates.set(agent, prevState)
+    setGuardState(agent, prevState)
     logger.error({ err, agent }, 'context-guard: boot-wedge rescue restart FAILED -- the stuck-input escalation stays the path')
     return false
   }
@@ -735,8 +817,11 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
   // missing from exactly this one: an operator who turned the saturation net
   // off and the daily tier on would have been skipped here, before
   // decideGuard ever saw the agent, with no log line to say so.
-  if (!cfg.enabled && !cfg.saturationRestart && !cfg.idleFlushEnabled && !cfg.dailyHandoffEnabled) {
-    guardStates.delete(name)
+  //
+  // One state does not leave here: await-handoff. That agent was asked to stop, and switching
+  // the guard off must not strand it; decideGuard answers with the release (card 17a19228).
+  if (!cfg.enabled && !cfg.saturationRestart && !cfg.idleFlushEnabled && !cfg.dailyHandoffEnabled && state.phase !== 'await-handoff') {
+    setGuardState(name, null)
     return
   }
 
@@ -891,6 +976,8 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
     // not find a stale seed from before the slot and fire at once.
     // Same gate as pct: the tier reads it only next to a measured pct (card b83e079c).
     subagentGateRefusal: running && needPct && cfg.enabled ? readSubagentGateRefusal(name, since) : null,
+    // Whole-file read, so only where the answer can decide something.
+    compactedAtMs: running && state.phase === 'await-handoff' ? readLastCompactionMs(workingDirFor(name), configDirFor(name)) : null,
     dailyHandoffDue: (() => {
       // Forgetting does NOT wait for an idle sweep: an agent that was never idle
       // while the tier was off would otherwise keep its old armed record, and
@@ -963,13 +1050,22 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
         { name, sinceRespawnMs: lastRespawn ? nowMs - lastRespawn : null, graceMs: MARVEEN_POST_RESPAWN_GRACE_MS },
         'context-guard: recent main respawn within grace, deferring restart (avoid restart loop / boot churn)',
       )
-      guardStates.set(name, state)
+      setGuardState(name, state)
       return
     }
   }
 
-  guardStates.set(name, decision.nextState)
+  setGuardState(name, decision.nextState)
   if (decision.action === 'none') {
+    // A hold for background work is a 'none' every sweep, so it never reached the log: an agent
+    // that had written its handoff and was not restarted for 45 minutes looked forgotten. Said
+    // once, when the hold begins.
+    if ((decision.nextState.backgroundDeferSinceMs ?? null) !== null && (state.backgroundDeferSinceMs ?? null) === null) {
+      logger.info({ name, reason: decision.reason }, 'context-guard: restart held while the agent\'s background work runs')
+    }
+    if (decision.reason.startsWith(RELEASE_UNDELIVERED_REASON_PREFIX)) {
+      logger.warn({ name, reason: decision.reason }, 'context-guard: the withdrawal of a stop request never reached the pane -- the sequence ends without it')
+    }
     // Idle-flush non-decisions carry the measurement that blocked them
     // ("quiet for only 4m of 20m"), which is the only way to see the tier
     // failing to reach its threshold. It matters because the idle clock is the
@@ -1036,6 +1132,26 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
           },
         )
         break
+      case 'release': {
+        // The state has already moved on (above). If the withdrawal does not land, it moves BACK:
+        // the next sweep decides the same release again, MAX_RELEASE_ATTEMPTS times at most.
+        const askedMinutesAgo = state.requestedAtMs !== undefined ? Math.round((nowMs - state.requestedAtMs) / 60_000) : null
+        let outcome: string
+        try {
+          outcome = await sendSystemDirective(name, session, releasePrompt(decision.reason, askedMinutesAgo), null, {
+            survival: 'redelivered',
+            survivalReason: 'a release that is not sent rolls the state back to await-handoff; the next sweep decides it again (MAX_RELEASE_ATTEMPTS)',
+          })
+        } catch (err) {
+          outcome = `threw: ${String(err).slice(0, 200)}`
+        }
+        if (outcome !== 'sent') {
+          const tried = (state.releaseAttempts ?? 0) + 1
+          setGuardState(name, { ...state, releaseAttempts: tried })
+          logger.warn({ name, outcome, tried }, 'context-guard: the withdrawal of a stop request was not delivered -- state rolled back, the next sweep tries again')
+        }
+        break
+      }
       case 'restart': {
         // A forced restart must never be silent: the supervisor has to know
         // that prompts delivered to the OLD session (queued steering input,
@@ -1069,7 +1185,7 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
           // resume prompt into the old saturated pane, and then sit out its
           // cooldown. Roll the state back so the next sweep re-measures and
           // retries, and never claim the restart on the message queue.
-          guardStates.set(name, INITIAL_GUARD_STATE)
+          setGuardState(name, INITIAL_GUARD_STATE)
           const { count, alert: shouldAlert } = recordRescueFailure(name, nowMs)
           logger.error({ err, name, reason: decision.reason, consecutiveFailures: count }, 'context-guard: rescue restart FAILED -- state rolled back for retry')
           // Honest and silent is still silent. A saturated pane cannot be
@@ -1309,8 +1425,7 @@ export function awaitReadyAgents(states: ReadonlyMap<string, GuardState>): strin
 
 /** Test seam: put one agent into a guard phase without driving the whole restart path. */
 export function _setGuardStateForTest(name: string, state: GuardState | null): void {
-  if (state === null) guardStates.delete(name)
-  else guardStates.set(name, state)
+  setGuardState(name, state)
 }
 
 export interface GuardTickDeps {
@@ -1417,6 +1532,10 @@ export function contextGuardDeliveryHold(name: string, nowMs: number): DeliveryH
 }
 
 export function startContextGuardRunner(): NodeJS.Timeout {
+  // First: the delivery hold below and the first sweep both ask about these states.
+  loadGuardStates()
+  guardStatesPersisted = true
+  persistGuardStates()
   // Before anything can put an agent into a restart sequence.
   setDeliveryHoldProbe(contextGuardDeliveryHold)
   // A restart is an action on an agent: paused with the sweep under a fleet freeze.

@@ -320,6 +320,14 @@ export interface GuardState {
   /** When a noPressure sequence's hold first saw the context at actPct: its bound counts from
    *  here, not from the hold's start, so the growth gets the same 45m an act sequence gets. */
   backgroundPressureSinceMs?: number | null
+  /** When this await-handoff sequence asked the agent to stop (ms). Absent = a state written
+   *  before card 17a19228; the release after a compaction then does not apply. */
+  requestedAtMs?: number
+  /** The fraction of the window whose crossing started this sequence: actPct, or the sub-agent
+   *  gate's. Absent for a noPressure sequence (nothing was crossed) and for an older state. */
+  startThresholdPct?: number
+  /** Release directives of THIS sequence that did not reach the pane (MAX_RELEASE_ATTEMPTS). */
+  releaseAttempts?: number
 }
 
 export const INITIAL_GUARD_STATE: GuardState = {
@@ -467,6 +475,9 @@ export interface GuardInputs {
    *  session: when, and at which fraction of limitTokens the gate refuses. The runner passes it only
    *  for a refusal newer than the session start. Absent/null = no refusal (card b83e079c). */
   subagentGateRefusal?: { atMs: number; gatePct: number } | null
+  /** When the session's last compaction FINISHED (the transcript's compact_boundary line), or
+   *  null. Read only in await-handoff, so the runner gathers it only there (card 17a19228). */
+  compactedAtMs?: number | null
 }
 
 /**
@@ -787,7 +798,11 @@ function notWhileBackground(inputs: GuardInputs, what: string, cleared: GuardSta
   return none(`${what}, but background work is running: ${backgroundWorkText(inputs)} -- not starting a handoff`, cleared)
 }
 
-export type GuardActionType = 'none' | 'request-handoff' | 'restart' | 'inject-resume'
+// 'release' (card 17a19228): the guard asked the agent to STOP and write a handoff, and the
+// sequence now ends WITHOUT a restart. The agent has to be told, or an agent that obeyed stays
+// stopped for good: nothing else ever says "carry on" (measured 2026-11-10: didi idle 53 minutes
+// behind an obeyed request whose cycle the dashboard's restart had dropped).
+export type GuardActionType = 'none' | 'request-handoff' | 'restart' | 'inject-resume' | 'release'
 
 export interface GuardDecision {
   action: GuardActionType
@@ -808,6 +823,31 @@ export const READY_TIMEOUT_MS = 15 * 60_000
 /** Re-check period for agents in await-ready (context-guard-runner), far below READY_TIMEOUT_MS. */
 export const READY_POLL_MS = 20_000
 export const READY_TIMEOUT_REASON = 'ready timeout -- giving up on resume injection'
+
+/** How often a release that did not reach the pane is tried again (one try per sweep). Past it
+ *  the sequence ends anyway, with a warning: an agent whose pane takes no text for three sweeps
+ *  is not waiting for this line. */
+export const MAX_RELEASE_ATTEMPTS = 3
+export const RELEASE_UNDELIVERED_REASON_PREFIX = 'release not delivered'
+/** Reason prefix of the release after a compaction: the runner words the withdrawal by it. */
+export const RELEASE_COMPACTED_REASON_PREFIX = 'compacted after the stop request'
+
+/** The reader's cache (active-model TTL_MS, 3 s) can hand the sweep a size measured just BEFORE a
+ *  compaction finished, so a request can follow its boundary line by that much. */
+export const COMPACTION_BEFORE_REQUEST_SLACK_MS = 5_000
+
+/**
+ * End an await-handoff sequence without a restart. `next` is where the state goes once the agent
+ * has been told. Nobody to tell (the session is not running): the state moves on in silence.
+ */
+function release(state: GuardState, inputs: GuardInputs, reason: string, next: GuardState): GuardDecision {
+  if (!inputs.running) return { action: 'none', reason: `${reason} (agent not running -- nobody to release)`, nextState: next }
+  const tried = state.releaseAttempts ?? 0
+  if (tried >= MAX_RELEASE_ATTEMPTS) {
+    return { action: 'none', reason: `${RELEASE_UNDELIVERED_REASON_PREFIX} in ${tried} tries -- ending the sequence without it (${reason})`, nextState: next }
+  }
+  return { action: 'release', reason, nextState: next }
+}
 
 function cooldown(nowMs: number, cfg: ContextGuardConfig, reason: string): GuardDecision {
   return {
@@ -857,6 +897,10 @@ export function decideGuard(
     ({ action: 'none', reason, nextState: next })
 
   if (!cfg.enabled && !cfg.saturationRestart && !cfg.idleFlushEnabled && !cfg.dailyHandoffEnabled) {
+    // Switched off while an agent sits behind a stop request: it is owed the withdrawal.
+    if (state.phase === 'await-handoff') {
+      return release(state, inputs, 'guard switched off during await-handoff', INITIAL_GUARD_STATE)
+    }
     return none('disabled', INITIAL_GUARD_STATE)
   }
 
@@ -931,7 +975,7 @@ export function decideGuard(
         // Every tier that can ENTER this phase has to appear here: omitting
         // one would stand the sequence down on the sweep after it started,
         // for an agent whose only armed tier is the missing one.
-        return cooldown(nowMs, cfg, 'guard disabled during await-handoff')
+        return release(state, inputs, 'guard disabled during await-handoff', cooldown(nowMs, cfg, '').nextState)
       }
       if (!inputs.running) {
         // Someone restarted/stopped the agent externally mid-sequence; a fresh
@@ -943,6 +987,27 @@ export function decideGuard(
         // no longer act on the request, so restart now (no debounce -- the
         // act-threshold pct already corroborates a near-full context).
         return restartDecision(nowMs, `pane saturated during await-handoff${killedNote(inputs)}`, handoffStaleMinutes(inputs))
+      }
+      // The session COMPACTED after it was asked to stop (or within the reader's cache of it), and
+      // the context is now below what started the sequence: the reason for the restart is gone.
+      // The CLI writes nothing when a compaction STARTS, and for its 70-90 s the transcript still
+      // ends in the old size, so a sweep in that window asks for a handoff on a context that is
+      // about to be a fifth of it (measured 2026-11-11: request 05:04:20, boundary 05:05:50, the
+      // session restarted at 05:09 with ~54k). Asked BEFORE the handoff is looked at: an agent
+      // that already wrote it is released too, not restarted for a pressure that no longer is.
+      // Not for a noPressure sequence: idle-flush and daily never were about the size, and their
+      // request records no threshold (handoffRequest), so this never holds for them.
+      if (
+        state.startThresholdPct !== undefined && state.requestedAtMs !== undefined &&
+        inputs.compactedAtMs !== undefined && inputs.compactedAtMs !== null &&
+        inputs.compactedAtMs >= state.requestedAtMs - COMPACTION_BEFORE_REQUEST_SLACK_MS &&
+        inputs.pct !== null && inputs.pct < state.startThresholdPct
+      ) {
+        return release(
+          state, inputs,
+          `${RELEASE_COMPACTED_REASON_PREFIX}: context now ${Math.round(inputs.pct * 100)}%, below the ${Math.round(state.startThresholdPct * 100)}% that started it`,
+          cooldown(nowMs, cfg, '').nextState,
+        )
       }
       const handoffWritten =
         inputs.handoffMtime !== null &&
@@ -1191,7 +1256,7 @@ function decideSubagentGateTier(nowMs: number, inputs: GuardInputs, cfg: Context
   const what = `${SUBAGENT_GATE_REASON_PREFIX} (a sub-agent was refused at >= ${Math.round(refusal.gatePct * 100)}%, ` +
     `context now ${Math.round(pct * 100)}%)`
   // noPressure false: the act tier's bounded hold, not the unbounded idle-flush/daily one.
-  const request = handoffRequest(nowMs, inputs, cfg, what)
+  const request = handoffRequest(nowMs, inputs, cfg, what, false, refusal.gatePct)
   return { ...request, nextState: { ...request.nextState, handoffMtimeAtRequest: refusal.atMs } }
 }
 
@@ -1212,6 +1277,8 @@ function handoffRequest(
   reason: string,
   /** idle-flush / daily: no context pressure behind this sequence (see GuardState.noPressure). */
   noPressure = false,
+  /** The fraction whose crossing started a PRESSURED sequence; actPct unless the tier has its own. */
+  startThresholdPct: number = cfg.actPct,
 ): GuardDecision {
   return {
     action: 'request-handoff',
@@ -1225,7 +1292,8 @@ function handoffRequest(
       // A NEW sequence starts with a fresh refresh budget.
       staleRefreshCount: 0,
       handoffStaleMinutes: null,
-      ...(noPressure ? { noPressure: true } : {}),
+      requestedAtMs: nowMs,
+      ...(noPressure ? { noPressure: true } : { startThresholdPct }),
     },
   }
 }
