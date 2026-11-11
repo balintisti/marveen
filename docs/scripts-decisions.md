@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **480** kovetett fajl, ebbol
-**147** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **481** kovetett fajl, ebbol
+**149** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -28,6 +28,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 - `scripts/com.marveen.idle-reporter.plist.template` -- MIERT KULON FOLYAMAT, ES NEM A DASHBOARDBAN EGY TIMER: mert epp azt az esetet
 - `scripts/expiry-inventory.json` -- "WHY A DECLARED PROBE AND NOT A DATE FIELD: a stored date drifts silently the",
 - `scripts/sql/tasks-reopen-grant.sql` -- MIERT ALL EZ ITT, ES NEM CSAK A KARTYAN: a fajlt UJRAFUTTATTAK nyitott kerdeskent,
+
+### `scripts/__tests__/channel-image-resize.test.sh`
+
+- WHY THIS EXISTS (2026-09-21, #1565 item 4). The hook parsed its stdin with
 
 ### `scripts/__tests__/channels-custom-provider.test.sh`
 
@@ -318,6 +322,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - WHY THIS EXISTS  /  ---------------
 - WHY THE LABEL NEVER QUOTES THE PAYLOAD  /  --------------------------------------
+
+### `scripts/hooks/channel-image-resize.sh`
+
+- WHY THIS WAS REWRITTEN (2026-09-21, #1565 item 4)
 
 ### `scripts/hooks/channel-process-gate.py`
 
