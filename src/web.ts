@@ -15,7 +15,7 @@ import { json } from './web/http-helpers.js'
 import { detectLanIp } from './web/network-info.js'
 import { AGENTS_BASE_DIR, listAgentNames, listAllAgentNames } from './web/agent-config.js'
 import { forEachAgentIsolated } from './web/agent-seed-loop.js'
-import { ensureAgentHooks, ensureProjectRootInClaudeMd, ensureAgentStalenessHook, ensureAgentProvenanceHook, ensureEgressGate, ensureBashEgressDeny, ensureBashEgressParser, ensureGovernanceGateCommands, ensureMemoryIndexWriteGate, ensureTelegramCopyGate, ensureQuarantineReader, ensureLeanWorker, watchEgressAllowlistForReaderRender, ensureDefaultScheduledTasks, agentSettingsPath, ensureAutonomySection, ensureSkillsPathTrapSection, ensureSystemDirectiveAuthSection, ensureMemorySearchLabelSection, ensureFleetAuthSection, ensureEvidenceSection, ensureMcpListChannelSection, ensureMessageCloseSection, ensureReportRoutingSection , ensureChildClaudeGuard, ensureWebSearchEnvelope } from './web/agent-scaffold.js'
+import { ensureAgentHooks, ensureProjectRootInClaudeMd, ensureAgentStalenessHook, ensureAgentProvenanceHook, ensureEgressGate, ensureBashEgressDeny, ensureBashEgressParser, ensureGovernanceGateCommands, ensureMemoryIndexWriteGate, ensureTelegramCopyGate, ensureQuarantineReader, ensureLeanWorker, watchEgressAllowlistForReaderRender, ensureDefaultScheduledTasks, agentSettingsPath, ensureAutonomySection, ensureSkillsPathTrapSection, ensureSystemDirectiveAuthSection, ensureAgentIdHeaderSection, ensureMemorySearchLabelSection, ensureFleetAuthSection, ensureEvidenceSection, ensureMcpListChannelSection, ensureMessageCloseSection, ensureReportRoutingSection , ensureChildClaudeGuard, ensureWebSearchEnvelope } from './web/agent-scaffold.js'
 import { ensureSheetSectionAtStart } from './web/sheet-lock.js'
 import { configuredFrontDesk } from './web/front-desk-setting.js'
 import { shouldRegisterHooks, pruneStaleHooksFromSettingsFile } from './web/hook-registration-guard.js'
@@ -211,7 +211,7 @@ export function startWebServer(port = 3420): http.Server {
     }
     const fedPeerForCtx: string | null = auth.kind === 'federation' ? auth.peer : null
     const ctxAuth =
-      auth.kind === 'token' ? { kind: 'token' as const }
+      auth.kind === 'token' ? { kind: 'token' as const, agent: auth.agent }
       : auth.kind === 'device' ? { kind: 'device' as const, device: auth.device, deviceId: auth.deviceId }
       : auth.kind === 'session' ? { kind: 'session' as const, user: auth.user }
       : auth.kind === 'federation' ? { kind: 'federation' as const, peer: auth.peer }
@@ -628,6 +628,7 @@ setInterval(() => { try { sweepExpiredDesktopLock() } catch { /* never kill the 
     ensureSheetSectionAtStart(MAIN_AGENT_ID, 'autonomy', () => ensureAutonomySection(MAIN_AGENT_ID, configuredFrontDesk()))
     ensureSkillsPathTrapSection(MAIN_AGENT_ID)
     ensureSystemDirectiveAuthSection(MAIN_AGENT_ID)
+    ensureAgentIdHeaderSection(MAIN_AGENT_ID)
     ensureMemorySearchLabelSection(MAIN_AGENT_ID)
     ensureFleetAuthSection(MAIN_AGENT_ID)
     ensureEvidenceSection(MAIN_AGENT_ID)

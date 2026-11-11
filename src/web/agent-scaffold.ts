@@ -3031,6 +3031,68 @@ export function ensureSystemDirectiveAuthSection(name: string): void {
   atomicWriteFileSync(claudeMdPath, updated)
 }
 
+// X-Agent-Id fejléc a memória-hívásokhoz (kártya 29c8cf33, A) opció).
+// Ugyanaz az öt-szabályos idempotencia-szerződés, mint a fenti szekcióknál.
+// A szekció szándékosan RÖVID és szándékosan mondja ki, hogy a fejléc nem
+// véd: ha "azonosításnak" olvasnák, az rosszabb volna a hiányánál -- egy
+// ágens azt hinné, a tulajdonos-szabály megállítja, holott csak megnevezi.
+const AGENT_ID_HEADER_BEGIN = '<!-- BEGIN GENERATED: agent-id-header (auto-generated, do not edit by hand) -->'
+const AGENT_ID_HEADER_END = '<!-- END GENERATED: agent-id-header -->'
+const AGENT_ID_HEADER_BLOCK_RE = new RegExp(
+  `${AGENT_ID_HEADER_BEGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${AGENT_ID_HEADER_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+)
+
+function buildAgentIdHeaderBody(name: string): string {
+  return [
+    '## Ki hívta az API-t: az `X-Agent-Id` fejléc',
+    '',
+    'A flotta EGYETLEN közös Bearer tokent használ, ezért a dashboard nem látja, melyik',
+    'ágens hívta. A memória-írásoknál (`PUT` / `DELETE /api/memories/<id>`) küldd el a saját',
+    'nevedet, hogy a szerver meg tudja nevezni, ki írt felül egy idegen bejegyzést:',
+    '',
+    '```bash',
+    `curl -s -X PUT ${dashboardOrigin}/api/memories/<id> \\`,
+    '  -H "Content-Type: application/json" \\',
+    `  -H "Authorization: Bearer $(cat ${tokenPath})" \\`,
+    `  -H "X-Agent-Id: ${name}" \\`,
+    `  -d '{"content":"..."}'`,
+    '```',
+    '',
+    'Amit tudni kell róla, mert könnyű félreérteni: ez ÖNBEVALLOTT azonosítás, nem',
+    'hitelesítés. A fejléc nélkül a hívás ugyanúgy sikerül, és ha idegen emléket írsz,',
+    'a szerver FIGYELMEZTET (`owner_mismatch` a válaszban), de NEM állít meg. Tehát a',
+    'fejléc nem véd meg attól, hogy rossz sort írj -- csak láthatóvá teszi. A tényleges',
+    'védelem a verziózás: minden felülírás előtt eltárolódik az előző tartalom',
+    '(`GET /api/memories/<id>/versions`). A TÖRLÉS viszont VÉGLEGES, a verziókat is viszi;',
+    'egy nagy `shared`/`warm` sor törlését a szerver 409-cel megállítja, amíg nem',
+    'erősíted meg (`?confirm_overwrite=1`). Törlés előtt olvasd ki: `GET /api/memories/<id>`.',
+  ].join('\n')
+}
+
+// Same five-rule idempotency contract as ensureSystemDirectiveAuthSection.
+export function ensureAgentIdHeaderSection(name: string): void {
+  const claudeMdPath = name === MAIN_AGENT_ID
+    ? join(PROJECT_ROOT, 'CLAUDE.md')
+    : join(agentDir(name), 'CLAUDE.md')
+  if (!existsSync(claudeMdPath)) return
+
+  const block = `${AGENT_ID_HEADER_BEGIN}\n${buildAgentIdHeaderBody(name)}\n${AGENT_ID_HEADER_END}`
+
+  let existing: string
+  try {
+    existing = readFileSync(claudeMdPath, 'utf-8')
+  } catch {
+    return
+  }
+
+  const updated = AGENT_ID_HEADER_BLOCK_RE.test(existing)
+    ? existing.replace(AGENT_ID_HEADER_BLOCK_RE, block)
+    : existing.trimEnd() + '\n\n' + block + '\n'
+
+  if (updated === existing) return
+  atomicWriteFileSync(claudeMdPath, updated)
+}
+
 // MEMKERESVAK917: the BACK-FILL half of #1380. That PR fixed the two GENERATING
 // surfaces (generateClaudeMd + templates/CLAUDE.md.template), which only run when
 // an agent is CREATED -- so on the day it merged it reached zero of the agents

@@ -74,7 +74,7 @@ import { filterInheritableMcpServers, readInheritableMcpServerNames, logNotInher
 import { readEnvFile } from '../env.js'
 import { loadProfileTemplate } from './profiles.js'
 import { resolveAgentSecurityProfile } from './agent-team.js'
-import { writeAgentSettingsFromProfile, ensureFleetRosterSection, ensureProjectRootInClaudeMd, ensureAutonomySection, ensureSkillsPathTrapSection, ensureSystemDirectiveAuthSection, ensureMemorySearchLabelSection, ensureFleetAuthSection, ensureEvidenceSection, ensureMcpListChannelSection, ensureMessageCloseSection, ensureReportRoutingSection } from './agent-scaffold.js'
+import { writeAgentSettingsFromProfile, ensureFleetRosterSection, ensureProjectRootInClaudeMd, ensureAutonomySection, ensureSkillsPathTrapSection, ensureSystemDirectiveAuthSection, ensureAgentIdHeaderSection, ensureMemorySearchLabelSection, ensureFleetAuthSection, ensureEvidenceSection, ensureMcpListChannelSection, ensureMessageCloseSection, ensureReportRoutingSection } from './agent-scaffold.js'
 import { ensureSheetSectionAtStart } from './sheet-lock.js'
 import { configuredFrontDesk } from './front-desk-setting.js'
 import { schedulePluginUnlockAfterRespawn } from './channel-plugin-unlock.js'
@@ -2063,6 +2063,7 @@ export async function startAgentProcess(name: string, opts: { fresh?: boolean } 
     ensureSheetSectionAtStart(name, 'autonomy', () => ensureAutonomySection(name, configuredFrontDesk()))
     ensureSkillsPathTrapSection(name)
     ensureSystemDirectiveAuthSection(name)
+    ensureAgentIdHeaderSection(name)
     ensureMemorySearchLabelSection(name)
     ensureFleetAuthSection(name)
     ensureEvidenceSection(name)
