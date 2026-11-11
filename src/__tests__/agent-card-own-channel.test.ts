@@ -114,7 +114,7 @@ describe('agent own-channel wiring', () => {
   })
 
   it('the backend summary carries the agent own channelProvider', () => {
-    const iface = ROUTES.match(/export interface AgentSummary \{[\s\S]*?\n\}/)
+    const iface = ROUTES.match(/(?:export )?interface AgentSummary \{[\s\S]*?\n\}/)
     if (!iface) throw new Error('AgentSummary interface not found in src/web/routes/agents.ts')
     expect(iface[0]).toContain('channelProvider: string | null')
     expect(ROUTES).toContain('channelProvider: readAgentChannelProvider(name),')

@@ -89,7 +89,7 @@ describe('skill-index.sh -- description truncation', () => {
   // loses its last character mid-encoding, and the index every agent reads
   // carries a broken byte.
   it('truncates a long accented description without splitting a character', () => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'skill-index-test-'))
+    tmpHome = mkTmp('skill-index-test-')
     mkdirSync(join(tmpHome, '.claude', 'skills', 'skill-accents'), { recursive: true })
     // 'é' is two bytes, so a byte-cut at 120 lands inside a character.
     const longAccented = 'é'.repeat(200)
