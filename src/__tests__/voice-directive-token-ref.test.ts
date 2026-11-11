@@ -1,11 +1,11 @@
 // VOICETOKENLEAK1101: buildTtsDirective's text is injected into the agent's prompt, so it
 // reaches the pane and the transcript. The dashboard token VALUE must never be in it: the
 // directive carries a reference to the token file that the shell resolves when it runs.
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
 const state = vi.hoisted(() => ({ storeDir: '' }))
 
@@ -15,6 +15,8 @@ vi.mock('../config.js', async (importOriginal) => ({
 }))
 
 const { buildTtsDirective } = await import('../web/voice-directive.js')
+
+const mkTmp = tmpDirs()
 
 // A probe value, not a real token: if it shows up in the directive, the value leaked.
 const PROBE_TOKEN = 'probe-token-VOICETOKENLEAK1101-0123456789abcdef'
@@ -30,12 +32,11 @@ function authHeaderWord(directive: string): string {
 describe('buildTtsDirective never embeds the dashboard token value', () => {
   let root: string
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'voicetok-'))
+    root = mkTmp('voicetok-')
     // A space and a single quote in the path: the reference must survive shell quoting.
     state.storeDir = join(root, "st ore'dir")
     execFileSync('mkdir', ['-p', state.storeDir])
   })
-  afterEach(() => rmSync(root, { recursive: true, force: true }))
 
   it('the directive does not contain the token, only a reference to the token file', () => {
     writeFileSync(join(state.storeDir, '.dashboard-token'), `${PROBE_TOKEN}\n`)
