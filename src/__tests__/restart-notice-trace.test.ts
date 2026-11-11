@@ -23,6 +23,8 @@ import {
   parseRestartNoticeSwallowMode,
   restartIsRoutine,
   restartPaneTail,
+  readRestartPaneTail,
+  paneTailLine,
   restartWindowCloseDirective,
   rowTrace,
   untracedLine,
@@ -272,46 +274,124 @@ describe('holdVerdict', () => {
   })
 })
 
-// didi 57938, finding 1: the pane the restart destroyed. The wiring (what a pane that is not clean
-// does to the notice) is in restart-notice-hold.test.ts.
-describe('restartPaneTail: clean only when the pane was read and neither recogniser fires', () => {
+// didi 57938, finding 1, and marveen 58301, finding 1: the pane the restart destroyed. The wiring
+// (what a pane that is not clean does to the notice) is in restart-notice-hold.test.ts.
+describe('restartPaneTail: clean ONLY for a pane that was read and ends in a finished reply', () => {
   const SEP = '─'.repeat(80)
   const BOX = `${'─'.repeat(70)} Agent ─\n❯ \n${SEP}`
   const FOOT = '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ↓ to manage'
-  const REPLY = `\n⏺ Kész, minden zöld.\n\n${BOX}\n${FOOT}`
-  const TAIL_ERROR = `\n⏺ API Error: Connection lost mid-response. The response above may be \n  incomplete.\n\n${BOX}\n${FOOT}`
-  const THINKING_THEN_REPLY = `\n⏺ Bash(x)\n  ⎿  API Error: 400 {"error":{"message":"messages.1.content.0: thinking blocks cannot be modified"}}\n\n⏺ Megpróbálom újra.\n\n${BOX}\n${FOOT}`
+  /** A capture that ends in `body`, a blank line, the input box and the footer. */
+  const above = (body: string, box: string = BOX): string => `\n${body}\n\n${box}\n${FOOT}`
+  const ERROR_HEAD = '⏺ API Error: Connection lost mid-response. The response above may be '
+  const TAIL_ERROR = above(`${ERROR_HEAD}\n  incomplete.`)
+  const THINKING_THEN_REPLY = above('⏺ Bash(x)\n  ⎿  API Error: 400 {"error":{"message":"messages.1.content.0: thinking blocks cannot be modified"}}\n\n⏺ Megpróbálom újra.')
+  const WRAPPED = '\n  {"type":"error","error":{"type":"overloaded_error"}}'.repeat(8)
 
   it.each([
-    ['a reply, then the box', REPLY],
-    ['an empty screen above the box', `${BOX}\n${FOOT}`],
-    ['an error the session got over, a reply after it', TAIL_ERROR.replace(`\n${BOX}`, `\n⏺ Folytatom: a teszt lefutott, 12 passed.\n\n${BOX}`)],
+    ['a one-line reply', above('⏺ Kész, minden zöld.')],
+    ['a reply over several lines with blank lines in it, then the turn summary', above('⏺ A HANDOFF.md megírva.\n  A következő lépés a teszt.\n\n  1. első\n  2. második\n\n✻ Worked for 2m 10s · done 19:12')],
+    ['an error the session got over, a reply after it', above(`${ERROR_HEAD}\n  incomplete.\n\n⏺ Folytatom: a teszt lefutott, 12 passed.`)],
+    ['a limit the session got over, a reply after it', above("⏺ You've hit your session limit · resets 5:50pm\n\n⏺ Folytatom: a napi korlát tesztje zöld.")],
+    ['the turn the CLI closes itself when nothing was asked', above('⏺ No response requested.')],
   ])('%s: clean', (_name, pane) => {
+    expect(readRestartPaneTail(pane)).toEqual({ tail: 'clean', why: null, line: null })
     expect(restartPaneTail(pane)).toBe('clean')
   })
 
-  it('api-error by EACH recogniser on its own', () => {
+  it('api-error by EACH of the two old recognisers on its own', () => {
     expect([midTurnApiErrorAtTail(TAIL_ERROR), detectsThinkingBlockError(TAIL_ERROR)]).toEqual([true, false])
-    expect(restartPaneTail(TAIL_ERROR)).toBe('api-error')
+    expect(readRestartPaneTail(TAIL_ERROR)).toEqual({ tail: 'api-error', why: 'last-block', line: ERROR_HEAD.trim() })
     expect([midTurnApiErrorAtTail(THINKING_THEN_REPLY), detectsThinkingBlockError(THINKING_THEN_REPLY)]).toEqual([false, true])
-    expect(restartPaneTail(THINKING_THEN_REPLY)).toBe('api-error')
+    expect(readRestartPaneTail(THINKING_THEN_REPLY)).toEqual({ tail: 'api-error', why: 'thinking-block', line: null })
+  })
+
+  // marveen 58301, finding 1: the old walk gives up after six lines and says "no error".
+  it.each([
+    ['an error wrapped over nine lines', above(`⏺ API Error: 529${WRAPPED}`), '⏺ API Error: 529'],
+    ['the same under a tool call', above(`⏺ Bash(npm test)\n  ⎿  API Error: 529${WRAPPED}`), '⎿  API Error: 529'],
+  ])('%s: the old recogniser says no, the tail is still api-error', (_name, pane, line) => {
+    expect([midTurnApiErrorAtTail(pane), detectsThinkingBlockError(pane)]).toEqual([false, false])
+    expect(readRestartPaneTail(pane)).toEqual({ tail: 'api-error', why: 'last-block', line })
+  })
+
+  const UNKNOWN: [string, string, string, string | null][] = [
+    ['an error with another glyph line under it', above(`${ERROR_HEAD}\n  incomplete.\n\n● valami más`), 'unrecognised-line', '● valami más'],
+    ['a reply whose start is above the capture', above('  ...a hosszú válasz vége.\n  még egy sor'), 'start-not-in-capture', null],
+    ['a wrapped error whose start is above the capture', `${WRAPPED}\n\n${BOX}\n${FOOT}`, 'start-not-in-capture', null],
+    ['a reply that talks about an API error', above('⏺ A futás közben API Error: 529 jött, újrapróbáltam.\n  Kész.'), 'error-mention', '⏺ A futás közben API Error: 529 jött, újrapróbáltam.'],
+    ['an API error named in lines whose start is above the capture', above('  api error: overloaded\n  request_id: req_1'), 'start-not-in-capture', 'api error: overloaded'],
+    ['text in the input box', above('⏺ Kész, minden zöld.', `${'─'.repeat(70)} Agent ─\n❯ folytasd a tesztet\n${SEP}`), 'box-not-empty', '❯ folytasd a tesztet'],
+    ['two lines in the input box', above('⏺ Kész, minden zöld.', `${'─'.repeat(70)} Agent ─\n❯ első sor\n  második sor\n${SEP}`), 'box-not-empty', '❯ első sor'],
+    ['nothing above the box (a session that has just started)', `\n\n${BOX}\n${FOOT}`, 'nothing-above-box', null],
+    ['the box on the first line', `${BOX}\n${FOOT}`, 'nothing-above-box', null],
+    ['a spinner: the turn is running', above('⏺ Bash(sleep 60)\n  ⎿  Running…\n\n✽ Cogitating… (12s · esc to interrupt)'), 'unrecognised-line', '✽ Cogitating… (12s · esc to interrupt)'],
+    ['a reply, then the background-wait line', above('⏺ Elindítottam a két al-ágenst.\n\n✻ Waiting for 2 background agents to finish'), 'unrecognised-line', '✻ Waiting for 2 background agents to finish'],
+    ['a tool call with its result', above('⏺ Read(src/db.ts)\n  ⎿  Read 120 lines'), 'unrecognised-line', '⎿  Read 120 lines'],
+    ['a tool call with no result under it', above('⏺ Bash(npm test)'), 'not-a-reply', '⏺ Bash(npm test)'],
+    ['an MCP tool call', above('⏺ plugin:telegram:telegram - reply (MCP)(chat_id: "1", text: "x")'), 'not-a-reply', '⏺ plugin:telegram:telegram - reply (MCP)(chat_id: "1", text: "x")'],
+    ['a collapsed group of tool calls', above('⏺ Read 3 files (ctrl+o to expand)'), 'not-a-reply', '⏺ Read 3 files (ctrl+o to expand)'],
+    ['the notice of a finished background command, not answered yet', above('⏺ Background command "Run the gate" completed (exit code 0)'), 'not-a-reply', '⏺ Background command "Run the gate" completed (exit code 0)'],
+    ['a line that is not indented under the reply', above('⏺ Kész.\n\n> egy idézett sor'), 'unrecognised-line', '> egy idézett sor'],
+    ['an earlier prompt as the last thing on the screen', above('⏺ Kész.\n\n❯ folytasd'), 'unrecognised-line', '❯ folytasd'],
+    // Review 58529, finding 1: the CLI's own lines in the reply's place. Each of the three
+    // recognisers has a line only it knows.
+    ['a plan limit in the reply\'s place', above("⏺ You've hit your session limit · resets 5:50pm"), 'harness-notice', "⏺ You've hit your session limit · resets 5:50pm"],
+    ['a context hard error in the reply\'s place', above('⏺ Context limit reached · /compact or /clear to continue'), 'harness-notice', '⏺ Context limit reached · /compact or /clear to continue'],
+    ['a login that is gone (the line measured in the fleet\'s transcripts)', above('⏺ OAuth token revoked · Please run /login'), 'harness-notice', '⏺ OAuth token revoked · Please run /login'],
+    ['a prompt the API refused for its length', above('⏺ Prompt is too long'), 'harness-notice', '⏺ Prompt is too long'],
+    ['an empty credit balance', above('⏺ Credit balance is too low'), 'harness-notice', '⏺ Credit balance is too low'],
+    ['a reply that names a limit on a later line', above('⏺ Megnéztem a panelt.\n  A didi sora: usage limit reached.'), 'harness-notice', 'A didi sora: usage limit reached.'],
+    ['a limit named in lines whose start is above the capture', above('  ...és a végén ez állt:\n  Credit balance is too low'), 'start-not-in-capture', 'Credit balance is too low'],
+  ]
+
+  it.each(UNKNOWN)('%s: unknown, never clean', (_name, pane, why, line) => {
+    expect(readRestartPaneTail(pane)).toEqual({ tail: 'unknown', why, line })
+    expect(restartPaneTail(pane)).toBe('unknown')
+  })
+
+  it('every unknown fixture is one the two old recognisers would have let through as "no error"', () => {
+    // This is what made them clean before the walk: the table above is the finding, case by case.
+    expect(UNKNOWN.map(([, pane]) => [midTurnApiErrorAtTail(pane), detectsThinkingBlockError(pane)])).toEqual(UNKNOWN.map(() => [false, false]))
+  })
+
+  it('the kept line is cut at 160 characters', () => {
+    const long = `● ${'x'.repeat(300)}`
+    const got = readRestartPaneTail(above(`⏺ Kész.\n\n${long}`))
+    expect(got).toMatchObject({ tail: 'unknown', why: 'unrecognised-line' })
+    expect(got.line).toBe(long.slice(0, 160))
   })
 
   it.each([
-    ['null (the capture failed)', null],
-    ['undefined', undefined],
-    ['an empty string', ''],
-    ['whitespace only', ' \n\t\n'],
-    ['a reply with no input box under it', '\n⏺ Kész, minden zöld.\n'],
-    ['an error with no input box under it', '⏺ API Error: Connection lost mid-response.'],
-    ['one separator only (the capture was cut inside the box)', `\n⏺ Kész, minden zöld.\n\n${SEP}\n❯ `],
-    ['not a string at all', 7 as unknown as string],
-  ])('%s: unreadable, never clean', (_name, pane) => {
+    ['null (the capture failed)', null, 'no-capture'],
+    ['undefined', undefined, 'no-capture'],
+    ['not a string at all', 7 as unknown as string, 'no-capture'],
+    ['an empty string', '', 'no-input-box'],
+    ['whitespace only', ' \n\t\n', 'no-input-box'],
+    ['a reply with no input box under it', '\n⏺ Kész, minden zöld.\n', 'no-input-box'],
+    ['an error with no input box under it', '⏺ API Error: Connection lost mid-response.', 'no-input-box'],
+    ['one separator only (the capture was cut inside the box)', `\n⏺ Kész, minden zöld.\n\n${SEP}\n❯ `, 'no-input-box'],
+  ])('%s: unreadable, never clean', (_name, pane, why) => {
+    expect(readRestartPaneTail(pane)).toEqual({ tail: 'unreadable', why, line: null })
     expect(restartPaneTail(pane)).toBe('unreadable')
   })
 })
 
 describe('the texts', () => {
+  it('paneTailLine: one first line per tail, with the agent, and never a word of the pane itself', () => {
+    const lines = (['api-error', 'unknown', 'unreadable'] as const).map((t) => paneTailLine('didi', t))
+    for (const line of lines) {
+      expect(line.startsWith('[CONTEXT-GUARD] PANELVEG: a(z) "didi" ')).toBe(true)
+      expect(line).toContain('a sorok nyomatol fuggetlenul kezbesul')
+      expect(line).not.toContain('\n')
+    }
+    expect(lines[0]).toContain('API-HIBAVAL vegzodott')
+    expect(lines[1]).toContain('NEM ISMERHETO FEL befejezett valaszkent')
+    expect(lines[2]).toContain('NEM TUDTAM OLVASNI')
+    expect(new Set(lines).size).toBe(3)
+    // An unreadable pane left no snapshot worth pointing at.
+    expect(lines.map((l) => l.includes('A pane-snapshotot a kovetkezo ujrainditas felulirja.'))).toEqual([true, true, false])
+  })
+
   it('untracedLine names every untraced row with its sender and says how long it waited', () => {
     const rows = [row({ id: 101 }), row({ id: 102, from: 'didi' }), row({ id: 103, from: 'system', handoffRequest: true })]
     const line = untracedLine(rows, [101, 102], 15)

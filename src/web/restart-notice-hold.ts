@@ -23,7 +23,7 @@ import {
   type RestartNoticeHold,
 } from '../db.js'
 import type { HandoffStaleness } from '../context-guard.js'
-import { FRONT_DESK_TAG, frontDeskHeader } from '../front-desk.js'
+import { FRONT_DESK_TAG, frontDeskHeader, parseFrontDeskHeader } from '../front-desk.js'
 import { resolveMachineNoticeRecipient } from './front-desk-route.js'
 import {
   HOLD_RELEASED_LINE,
@@ -36,13 +36,15 @@ import {
   TRACE_UNMEASURED_LINE,
   holdVerdict,
   isHandoffRequest,
+  paneTailLine,
   parseRestartNoticeSwallowMode,
+  readRestartPaneTail,
   restartIsRoutine,
-  restartPaneTail,
   untracedLine,
   type HeldRow,
   type HoldVerdict,
   type RestartNoticeSwallowMode,
+  type RestartPaneTail,
 } from '../restart-notice-trace.js'
 
 /** How often the held notices are asked again. */
@@ -94,10 +96,30 @@ function verdictDetail(v: HoldVerdict, extra: Record<string, unknown> = {}): str
   return JSON.stringify({ traced: v.traced, untraced: v.untraced, ...extra })
 }
 
+/** The stored notice with the reason in front (review finding 2): the first line of the text names
+ *  what the pane ended in, and a front-desk header, which stays the first line of the row, carries
+ *  the same word under `pane_tail`. Everything the runner wrote follows unchanged. */
+function withPaneTailReason(content: string, agent: string, tail: Exclude<RestartPaneTail, 'clean'>): string {
+  const line = paneTailLine(agent, tail)
+  if (!content.startsWith(`${FRONT_DESK_TAG} `)) return `${line}\n${content}`
+  const nl = content.indexOf('\n')
+  const headerLine = nl === -1 ? content : content.slice(0, nl)
+  const parsed = parseFrontDeskHeader(headerLine)
+  return (parsed ? `${FRONT_DESK_TAG} ${JSON.stringify({ ...parsed, pane_tail: tail })}` : headerLine)
+    + `\n${line}\n`
+    + (nl === -1 ? '' : content.slice(nl + 1))
+}
+
+const PANE_TAIL_LOG: Record<Exclude<RestartPaneTail, 'clean'>, string> = {
+  'api-error': 'restart notice: the pane ended in an API error before the restart -- the notice is delivered as before',
+  unknown: 'restart notice: the pane before the restart did not end in a recognised finished reply -- the notice is delivered as before',
+  unreadable: 'restart notice: the pane before the restart could not be read -- the notice is delivered as before',
+}
+
 /** Called right after the guard wrote its restart notice. Parks the notice when the restart was
  *  routine, the window holds nothing but delivered rows this module can follow, and the pane the
- *  restart destroyed was read and did not end in an API error; otherwise it touches nothing and
- *  the notice is delivered as before. Never throws. */
+ *  restart destroyed was read and ends in a finished reply; otherwise the notice is delivered as
+ *  before (in live mode with a first line that names what the pane ended in). Never throws. */
 export function holdRoutineRestartNotice(n: RoutineRestartNotice, nowMs: number = Date.now()): HoldOutcome {
   try {
     const mode = restartNoticeSwallowMode()
@@ -138,13 +160,18 @@ export function holdRoutineRestartNotice(n: RoutineRestartNotice, nowMs: number 
       failed: [...w.failed],
       snapshot: n.snapshotPath,
     }
-    // The rows would let this notice go unread; the pane decides whether it may. A pane that ended
-    // in an API error, or that cannot be read, keeps the notice for its reader exactly as the
-    // runner wrote it. The ledger row (nothing is closed with it) is what makes the share of such
-    // restarts countable later, which is the condition this rule can be reopened on.
-    const tail = restartPaneTail(n.finalPane)
-    if (tail !== 'clean') {
-      const why = tail === 'api-error' ? 'pane-tail-api-error' : 'pane-tail-unreadable'
+    // The rows would let this notice go unread; the pane decides whether it may. Only a pane that
+    // was read and ends in a finished reply lets it: one that ended in an API error, one that ends
+    // in anything the walk does not know, and one that cannot be read keep the notice for its
+    // reader. The ledger row (nothing is closed with it) is what makes the share of such restarts
+    // countable later, which is the condition this rule can be reopened on.
+    const reading = readRestartPaneTail(n.finalPane)
+    if (reading.tail !== 'clean') {
+      const tail = reading.tail
+      const why = `pane-tail-${tail}` as const
+      // live: the text says why this notice is not held, in the transaction of the ledger row.
+      // dry-run closes nothing and changes nothing: there every notice is delivered as written.
+      const stored = mode === 'live' ? getAgentMessage(n.noticeId)?.content : undefined
       const holdId = recordRestartNoticeHold(
         {
           agent: n.agent,
@@ -154,16 +181,12 @@ export function holdRoutineRestartNotice(n: RoutineRestartNotice, nowMs: number 
           deadlineAt: Math.floor(deadlineMs / 1000),
           payload: JSON.stringify(payload),
           state: 'delivered',
-          detail: verdictDetail(verdict, { at: 'restart', why }),
+          detail: verdictDetail(verdict, { at: 'restart', why, tail_why: reading.why, tail_line: reading.line }),
         },
         null,
+        typeof stored === 'string' ? withPaneTailReason(stored, n.agent, tail) : null,
       )
-      logger.info(
-        { agent: n.agent, noticeId: n.noticeId, holdId, mode, why },
-        tail === 'api-error'
-          ? 'restart notice: the pane ended in an API error before the restart -- the notice is delivered as before'
-          : 'restart notice: the pane before the restart could not be read -- the notice is delivered as before',
-      )
+      logger.info({ agent: n.agent, noticeId: n.noticeId, holdId, mode, why, tailWhy: reading.why }, PANE_TAIL_LOG[tail])
       return 'untouched'
     }
 

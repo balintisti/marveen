@@ -15,6 +15,7 @@ import { json } from './web/http-helpers.js'
 import { detectLanIp } from './web/network-info.js'
 import { AGENTS_BASE_DIR, listAgentNames, listAllAgentNames } from './web/agent-config.js'
 import { ensureAgentHooks, ensureProjectRootInClaudeMd, ensureAgentStalenessHook, ensureAgentProvenanceHook, ensureEgressGate, ensureBashEgressDeny, ensureBashEgressParser, ensureGovernanceGateCommands, ensureMemoryIndexWriteGate, ensureTelegramCopyGate, ensureQuarantineReader, watchEgressAllowlistForReaderRender, ensureDefaultScheduledTasks, agentSettingsPath, ensureAutonomySection, ensureSkillsPathTrapSection, ensureSystemDirectiveAuthSection, ensureMemorySearchLabelSection, ensureFleetAuthSection, ensureEvidenceSection, ensureMcpListChannelSection, ensureMessageCloseSection, ensureReportRoutingSection } from './web/agent-scaffold.js'
+import { ensureSheetSectionAtStart } from './web/sheet-lock.js'
 import { configuredFrontDesk } from './web/front-desk-setting.js'
 import { shouldRegisterHooks, pruneStaleHooksFromSettingsFile } from './web/hook-registration-guard.js'
 import { mainAgentConfigDirIfSeparate } from './web/agent-process.js'
@@ -629,7 +630,7 @@ setInterval(() => { try { sweepExpiredDesktopLock() } catch { /* never kill the 
   // dashboard-editor buffer PUT.
   if (!webOnly) {
     ensureFederationClaudeMdSection()
-    ensureAutonomySection(MAIN_AGENT_ID, configuredFrontDesk())
+    ensureSheetSectionAtStart(MAIN_AGENT_ID, 'autonomy', () => ensureAutonomySection(MAIN_AGENT_ID, configuredFrontDesk()))
     ensureSkillsPathTrapSection(MAIN_AGENT_ID)
     ensureSystemDirectiveAuthSection(MAIN_AGENT_ID)
     ensureMemorySearchLabelSection(MAIN_AGENT_ID)
@@ -637,7 +638,7 @@ setInterval(() => { try { sweepExpiredDesktopLock() } catch { /* never kill the 
     ensureEvidenceSection(MAIN_AGENT_ID)
     ensureMcpListChannelSection(MAIN_AGENT_ID)
     ensureMessageCloseSection(MAIN_AGENT_ID)
-    ensureReportRoutingSection(MAIN_AGENT_ID, configuredFrontDesk())
+    ensureSheetSectionAtStart(MAIN_AGENT_ID, 'report-routing', () => ensureReportRoutingSection(MAIN_AGENT_ID, configuredFrontDesk()))
   }
 
   // Owner slash commands (CMD920, spec D-4): the registry the main session's

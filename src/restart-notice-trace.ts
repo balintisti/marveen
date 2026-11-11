@@ -9,7 +9,7 @@
 // nothing about delivery on its own; src/web/restart-notice-hold.ts does, and every doubt there
 // delivers the notice.
 import { RESTART_LOSS_WINDOW_MS, type HandoffStaleness } from './context-guard.js'
-import { detectsThinkingBlockError, midTurnApiErrorAtTail } from './pane-state.js'
+import { detectsThinkingBlockError, finishedReplyAtTail, midTurnApiErrorAtTail } from './pane-state.js'
 
 export const RESTART_NOTICE_SWALLOW_SETTING = 'RESTART_NOTICE_SWALLOW_MODE'
 
@@ -48,20 +48,49 @@ export function restartIsRoutine(reason: string, handoffStaleMinutes: HandoffSta
 }
 
 /** What the pane the restart destroyed ended in. 'unreadable': there is no capture, or the live
- *  input box is not in it, so its last block cannot be located. */
-export type RestartPaneTail = 'clean' | 'api-error' | 'unreadable'
+ *  input box is not in it, so its last block cannot be located. 'unknown': the pane was read and
+ *  ends in something that is neither a finished reply nor a recognised error. */
+export type RestartPaneTail = 'clean' | 'api-error' | 'unknown' | 'unreadable'
+
+/** The verdict with what it was read from: `why` is the walk's own word for an unknown tail, `line`
+ *  the pane line it stopped on (the error line, or the first one it did not recognise). They go to
+ *  the ledger, so the share of each kind can be counted; they never go into a message. */
+export interface RestartPaneTailReading {
+  tail: RestartPaneTail
+  why: string | null
+  line: string | null
+}
+
+const PANE_LINE_KEPT_CHARS = 160
+
+function keptLine(line: string | null): string | null {
+  return line === null ? null : line.trim().slice(0, PANE_LINE_KEPT_CHARS)
+}
 
 /** The third condition of a clean restart (card 074149c2 OUTCOME 1; didi 57938, marveen 57937): the
  *  pane did not end in an API error. A turn that died that way can leave finished work nowhere but
- *  on that screen, and the trace of a ROW says nothing about it. The recognisers are the two the
- *  fleet already acts on (src/pane-state.ts): the error as the last block above the input box, and
- *  the persistent thinking-block error in the live tail. Only a pane that was read and shows
- *  neither is 'clean'. */
-export function restartPaneTail(pane: string | null | undefined): RestartPaneTail {
-  if (typeof pane !== 'string') return 'unreadable'
+ *  on that screen, and the trace of a ROW says nothing about it.
+ *
+ *  ONLY A TAIL THAT WAS RECOGNISED AS A FINISHED REPLY IS 'clean' (review finding 1, marveen 58301).
+ *  The two error recognisers the fleet already acts on (src/pane-state.ts) answer first: the error
+ *  as the last block above the input box, and the persistent thinking-block error in the live tail.
+ *  Both say "no" to whatever they do not know, so their "no" is not the answer here: the pane must
+ *  also END the way a turn that finished with a reply ends (finishedReplyAtTail). Any other tail is
+ *  'unknown', and the caller delivers. */
+export function readRestartPaneTail(pane: string | null | undefined): RestartPaneTailReading {
+  if (typeof pane !== 'string') return { tail: 'unreadable', why: 'no-capture', line: null }
   const atTail = midTurnApiErrorAtTail(pane)
-  if (atTail === null) return 'unreadable'
-  return atTail || detectsThinkingBlockError(pane) ? 'api-error' : 'clean'
+  const shape = finishedReplyAtTail(pane)
+  if (atTail === null || shape === null) return { tail: 'unreadable', why: 'no-input-box', line: null }
+  if (shape.shape === 'api-error') return { tail: 'api-error', why: 'last-block', line: keptLine(shape.line) }
+  if (atTail) return { tail: 'api-error', why: 'last-block', line: null }
+  if (detectsThinkingBlockError(pane)) return { tail: 'api-error', why: 'thinking-block', line: null }
+  if (shape.shape === 'unknown') return { tail: 'unknown', why: shape.why, line: keptLine(shape.line) }
+  return { tail: 'clean', why: null, line: null }
+}
+
+export function restartPaneTail(pane: string | null | undefined): RestartPaneTail {
+  return readRestartPaneTail(pane).tail
 }
 
 /** How the stored text of each of the guard's five handoff requests starts (the builders are in
@@ -185,6 +214,20 @@ export function untracedLine(rows: readonly HeldRow[], untraced: readonly number
 
 /** The sentence a notice gets when the trace check itself failed: it is delivered, and says why. */
 export const TRACE_UNMEASURED_LINE = ' A NYOMOKAT NEM TUDTAM MEGMERNI (a lekerdezes hibazott), ezert ez az ertesito kezbesul: a triazs kezi.'
+
+/** The FIRST line of a notice that goes out because of what the pane ended in (review finding 2,
+ *  marveen 58301). Without it the reader gets the routine "handoff written" text and nothing says
+ *  that this one is not routine. The pane's own text is not quoted: the snapshot path is in the
+ *  notice, and the line the walk stopped on is in the ledger. */
+export function paneTailLine(agent: string, tail: Exclude<RestartPaneTail, 'clean'>): string {
+  const what = tail === 'api-error'
+    ? `a(z) "${agent}" panelje API-HIBAVAL vegzodott az ujrainditas elott`
+    : tail === 'unknown'
+      ? `a(z) "${agent}" panelvege az ujrainditas elott NEM ISMERHETO FEL befejezett valaszkent`
+      : `a(z) "${agent}" paneljet az ujrainditas elott NEM TUDTAM OLVASNI`
+  return `[CONTEXT-GUARD] PANELVEG: ${what}, ezert ez az ertesito a sorok nyomatol fuggetlenul kezbesul.`
+    + (tail === 'unreadable' ? '' : ' A pane-snapshotot a kovetkezo ujrainditas felulirja.')
+}
 
 /** The sentence a held notice gets when the switch left `live` while it was waiting. */
 export const HOLD_RELEASED_LINE = ' A visszatartas kozben a kapcsolo (RESTART_NOTICE_SWALLOW_MODE) elhagyta a live allast, ezert ez az ertesito nyom-ellenorzes nelkul kezbesul.'

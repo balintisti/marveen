@@ -6,6 +6,7 @@ import { PROJECT_ROOT, OWNER_NAME, MAIN_AGENT_ID, HEARTBEAT_AGENT_ID, BOT_NAME, 
 import { channelStateDir } from '../channel-provider.js'
 import { runAgent } from '../agent.js'
 import { atomicWriteFileSync } from './atomic-write.js'
+import { rewriteSheetUnderLock } from './sheet-lock.js'
 import { findDuplicateJsonKeys } from './json-dup-keys.js'
 import { logger } from '../logger.js'
 import { filterInheritableMcpServers, readInheritableMcpServerNames, logNotInherited } from './mcp-inheritance.js'
@@ -2457,21 +2458,13 @@ export function ensureReportRoutingSection(name: string, configuredDesk: string 
   const desk = reportDesk(MAIN_AGENT_ID, configuredDesk, isKnownAgent)
   const block = `${REPORTROUTE_BEGIN}\n${buildReportRoutingBody(name, desk)}\n${REPORTROUTE_END}`
 
-  let existing: string
-  try {
-    existing = readFileSync(claudeMdPath, 'utf-8')
-  } catch {
-    return
-  }
-
+  // Under the sheet editors' lock (web/sheet-lock.ts): a settings write runs this on every sheet
+  // at any hour, also while an agent is editing its own. An unreadable page is left alone.
   // A function replacement: the block is data, and a `$&` in an agent id or owner name must not be
   // read as a replacement pattern.
-  const updated = REPORTROUTE_BLOCK_RE.test(existing)
+  rewriteSheetUnderLock(claudeMdPath, (existing) => REPORTROUTE_BLOCK_RE.test(existing)
     ? existing.replace(REPORTROUTE_BLOCK_RE, () => block)
-    : existing.trimEnd() + '\n\n' + block + '\n'
-
-  if (updated === existing) return
-  atomicWriteFileSync(claudeMdPath, updated)
+    : existing.trimEnd() + '\n\n' + block + '\n')
 }
 
 // Idempotently ensures the autonomy-wiring block is present and current in the
@@ -2497,22 +2490,10 @@ export function ensureAutonomySection(name: string, configuredDesk?: string | nu
   const body = buildAutonomyBody(name, reportDesk(MAIN_AGENT_ID, configuredDesk, (agent) => isKnownAgent(agent)))
   const block = `${AUTONOMY_BEGIN}\n${body}\n${AUTONOMY_END}`
 
-  let existing: string
-  try {
-    existing = readFileSync(claudeMdPath, 'utf-8')
-  } catch {
-    return
-  }
-
-  let updated: string
-  if (AUTONOMY_BLOCK_RE.test(existing)) {
-    updated = existing.replace(AUTONOMY_BLOCK_RE, block)
-  } else {
-    updated = existing.trimEnd() + '\n\n' + block + '\n'
-  }
-
-  if (updated === existing) return
-  atomicWriteFileSync(claudeMdPath, updated)
+  // Under the sheet editors' lock, for the reason given in ensureReportRoutingSection.
+  rewriteSheetUnderLock(claudeMdPath, (existing) => AUTONOMY_BLOCK_RE.test(existing)
+    ? existing.replace(AUTONOMY_BLOCK_RE, block)
+    : existing.trimEnd() + '\n\n' + block + '\n')
 }
 
 // Idempotently ensures the fleet roster block is present and current in the

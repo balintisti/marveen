@@ -10,15 +10,20 @@
 //   3. a WEB_ONLY instance rewrites nothing; a sheet that cannot be written is NAMED and does not
 //      stop the others; nothing here throws;
 //   4. the settings route runs it for this key only, after a successful write only, and the
-//      answer carries the outcome.
+//      answer carries the outcome;
+//   5. the rewrite goes under the sheet editors' lock (coordinator's decision 58301 item C): an
+//      editor that holds a sheet while the setting is written loses nothing, and neither do we.
 //
-// The files are real (temp root); the setting store, the registry listing and the route's two
-// side channels (change log, store-write actor) are the mocked edges.
+// The files are real (temp root) and so is the write step (web/sheet-lock.ts, the script under
+// python3); the setting store, the registry listing and the route's two side channels (change
+// log, store-write actor) are the mocked edges. A sheet that "cannot be written" is a real
+// read-only file.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs'
+import { writeFileSync, readFileSync, mkdirSync, existsSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpDirs } from './helpers/tmp-dirs.js'
+import { holdSheet } from './helpers/sheet-holder.js'
 import type { RouteContext } from '../web/routes/types.js'
 
 const mkTmp = tmpDirs()
@@ -43,7 +48,6 @@ const h = vi.hoisted(() => ({
   all: ['agent-b', 'agent-desk', 'agent-hidden'],
   listThrows: false,
   value: '' as unknown,
-  writeFails: '' as string,
   setOk: true,
   log: [] as unknown[][],
 }))
@@ -69,17 +73,11 @@ vi.mock('../settings-store.js', () => ({
   },
 }))
 
-vi.mock('../web/atomic-write.js', () => ({
-  atomicWriteFileSync: (path: string, content: string) => {
-    if (h.writeFails && path.includes(h.writeFails)) throw new Error('EACCES')
-    writeFileSync(path, content, 'utf-8')
-  },
-}))
-
 vi.mock('../db.js', () => ({ logConfigChange: (...a: unknown[]) => { h.log.push(a) } }))
 vi.mock('../store-watcher.js', () => ({ setStoreWriteActor: () => { /* not under test */ } }))
 
 const { refreshFrontDeskSheets } = await import('../web/front-desk-sheets.js')
+const { ensureAutonomySection, ensureReportRoutingSection } = await import('../web/agent-scaffold.js')
 const { tryHandleSettings } = await import('../web/routes/settings.js')
 
 const PAGES = ['agent-a', 'agent-b', 'agent-desk', 'agent-hidden']
@@ -91,10 +89,12 @@ const L3 = (desk: string) => `**Level 3 (autonóm)**: elvégzed, majd utána jel
 const NO_RULE = 'this section adds no rule'
 
 beforeEach(() => {
-  h.value = ''; h.writeFails = ''; h.listThrows = false; h.setOk = true; h.log.length = 0
+  h.value = ''; h.listThrows = false; h.setOk = true; h.log.length = 0
   delete process.env['WEB_ONLY']
   for (const a of PAGES) {
     if (a !== 'agent-a') mkdirSync(join(tmpRoot, 'agents', a), { recursive: true })
+    // A test may have left its sheet read-only.
+    if (existsSync(pagePath(a))) chmodSync(pagePath(a), 0o644)
     writeFileSync(pagePath(a), `# ${a}\n\npersona\n`, 'utf-8')
   }
 })
@@ -148,11 +148,36 @@ describe('refreshFrontDeskSheets', () => {
 
   it('a sheet that cannot be written is NAMED, and the others are still written', () => {
     h.value = 'agent-desk'
-    h.writeFails = join('agents', 'agent-b')
+    chmodSync(pagePath('agent-b'), 0o444)
     expect(refreshFrontDeskSheets()).toEqual({ pages: ['agent-a', 'agent-desk', 'agent-hidden'], failed: ['agent-b'] })
     expect(read('agent-b')).not.toContain('REPORTS go to')
     expect(read('agent-hidden')).toContain('REPORTS go to **agent-desk**')
     expect(read('agent-a')).toContain('REPORTS go to **agent-desk**')
+  })
+
+  it('an editor holds a sheet\'s lock while the setting is written: its edit AND both sections are on the sheet', async () => {
+    h.value = 'agent-desk'
+    // Shaped like scripts/claude-md-edit.py: it has read the sheet under the lock and will write
+    // its own text back in place. A rename from our side would leave that write in a file no
+    // path names; a write from our side that did not wait would be overwritten by it.
+    const editor = await holdSheet(pagePath('agent-b'), 'edit', 600)
+    expect(refreshFrontDeskSheets()).toEqual({ pages: PAGES, failed: [] })
+    expect(await editor.done).toBe(0)
+    expect(read('agent-b')).toContain('persona\nEDITOR LINE\n')
+    expect(read('agent-b')).toContain('REPORTS go to **agent-desk**')
+    expect(level3('agent-b')).toEqual([L3('agent-desk')])
+  })
+
+  // Each writer alone: in the refresh above the first writer does the waiting for both.
+  it.each([
+    ['autonomy', ensureAutonomySection, () => expect(level3('agent-b')).toEqual([L3('agent-desk')])],
+    ['report routing', ensureReportRoutingSection, () => expect(read('agent-b')).toContain('REPORTS go to **agent-desk**')],
+  ] as const)('the %s section alone, against an editor that holds the sheet: both texts stay', async (_name, ensure, sectionIsThere) => {
+    const editor = await holdSheet(pagePath('agent-b'), 'edit', 600)
+    ensure('agent-b', 'agent-desk')
+    expect(await editor.done).toBe(0)
+    expect(read('agent-b')).toContain('persona\nEDITOR LINE\n')
+    sectionIsThere()
   })
 
   it('an agent list that cannot be read: nothing written, the answer does not read as success, no throw', () => {
@@ -213,7 +238,7 @@ describe('POST /api/settings', () => {
   })
 
   it('a sheet that could not be rewritten is in the answer, and the setting is still saved', async () => {
-    h.writeFails = join('agents', 'agent-hidden')
+    chmodSync(pagePath('agent-hidden'), 0o444)
     const r = await post({ key: 'FRONT_DESK_AGENT_ID', value: 'agent-desk' })
     expect(r.statusCode).toBe(200)
     expect(r.json.sheets).toEqual({ pages: ['agent-a', 'agent-b', 'agent-desk'], failed: ['agent-hidden'] })
