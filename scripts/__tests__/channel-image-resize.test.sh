@@ -362,11 +362,22 @@ GLOBAL_HOOK="$HOME_REAL/.claude/hooks/channel-image-resize.sh"
 if [ -f "$GLOBAL_HOOK" ]; then
   if cmp -s "$HOOK" "$GLOBAL_HOOK"; then
     pass "~/.claude/hooks copy is byte-identical to the project copy"
+  elif head -3 "$INSTALL_DIR/scripts/install-channel-image-hook.sh" 2>/dev/null | grep -q 'DEPRECATED no-op'; then
+    # Adaptation (card 06cfe9e1): the installer no longer touches ~/.claude (#1305), so a stale
+    # copy there is a leftover for the global-prune round, not a half-done fix of this repo.
+    echo "  INFO  ~/.claude/hooks copy DIFFERS, but the installer is a deprecated no-op (#1305): a leftover, not this repo's fix"
   else
     fail "the two registered copies DIFFER -- one of them is still the old one"
   fi
 else
   echo "  INFO  no ~/.claude/hooks copy on this machine; nothing to compare"
+fi
+
+# The copy that matters now: the tracked project settings register the repo-shipped hook.
+if grep -q 'CLAUDE_PROJECT_DIR/scripts/hooks/channel-image-resize.sh' "$INSTALL_DIR/.claude/settings.json" 2>/dev/null; then
+  pass ".claude/settings.json registers the repo-shipped hook (project scope)"
+else
+  fail ".claude/settings.json does not register scripts/hooks/channel-image-resize.sh"
 fi
 
 echo
