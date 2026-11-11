@@ -187,6 +187,17 @@ BOARD.extend([dict(id='x1', status='testing', project='delta-crm', assignee='dex
 rc, out2 = run_json()
 check('run: hidden re-check is counted, the card stays out of the queue',
       (out2['hidden_recheck'], 'x1' in [r['id'] for r in out2['queue']]), (1, False))
+# review 58964: the counter has two branches that no other case pins (REVIEWED state, TIER-only fix)
+THREADS['x2'] = [cm('dexter', 'fix ' + H1), cm('didi', NINCS), cm('dexter', 'fixed ' + H2), cm('mandark', NINCS)]
+BOARD.append(dict(id='x2', status='testing', project='delta-crm', assignee='dexter', title='hidden, reviewed'))
+rc, out3 = run_json()
+check('run: a REVIEWED card with a hidden re-check is counted too',
+      (out3['hidden_recheck'], out3['states']['REVIEWED'], 'x2' in [r['id'] for r in out3['queue']]), (2, 2, False))
+THREADS['x3'] = [cm('dexter', 'fix ' + H1), cm('didi', NYIT), cm('dexter', 'TIER: LOW. again'), cm('mandark', NINCS)]
+BOARD.append(dict(id='x3', status='testing', project='delta-crm', assignee='dexter', title='hidden, tier line only'))
+rc, out4 = run_json()
+check('run: a TIER hand-off line without a new hash is a hidden re-check',
+      (out4['hidden_recheck'], 'x3' in [r['id'] for r in out4['queue']]), (3, False))
 check('run: a REVIEW-CLAIM card stays in the queue', 'k1' in [r['id'] for r in out2['queue']], True)
 rc, out = run_json(not_assignee='ford')
 check('run: --not-assignee drops that author', sorted(r['id'] for r in out['queue']), ['k1', 'u1', 'w1'])
