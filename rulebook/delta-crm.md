@@ -499,7 +499,7 @@ tulajdonsága -- nem fogja később valaki egy jobb lekérdezéssel bezárni.
 OTA-val. Egy mobilt érintő szerződés-változásnál az óvatosság ezért arányos, nem túlzó -- a
 visszafordíthatatlanság az ár, nem a valószínűség.
 
-## HOVÁ MEGY A PUSH, ÉS MIKOR KÉRDEZZ DEPLOY-RÓL (Isti, 2026-08-23)
+## HOVÁ MEGY A PUSH, ÉS MIKOR KÉRDEZZ DEPLOY-RÓL (Isti, 2026-08-23) [terület: Git Conventions]
 
 **Push mehet.** Isti feloldotta a tilalmat. Egy kikötéssel: *„csak arra figyelj, hogy mindig jó
 helyre… Mindig nézd meg, hogy mi hová megy."*
@@ -562,7 +562,7 @@ A „biztos meg fogom engedni" nem azt jelenti, hogy nem kell kérdezni. Azt jel
 olcsó -- a meg nem kérdezett deploy nem az.
 
 ## A KERET ELFOGYOTT, ES 2026-10-01-EN NULLAZODIK (Isti, 2026-09-06 12:44)
-## -- ES A HELYES SZABALY SOKKAL SZUKEBB, MINT A "NE PUSHOLJ"
+## -- ES A HELYES SZABALY SOKKAL SZUKEBB, MINT A "NE PUSHOLJ" [terület: CI/CD Pre-commit Checks]
 
 Isti kimondta: *"Elhasznaltuk a github perceket. Jo lenne sporolni vele. Oktober elsejen
 nullazodik."* ~~A SZAMOT NEM TUDJUK MERNI: a billing vegpont `404`-et ad, mert a tokenunkbol
@@ -626,7 +626,7 @@ Isti dontese, de LETEZIK es a keret nem erinti.
 **A MARVEEN REPOK PUBLIKUSAK, ott az Actions INGYENES.** A `synchronize`-csapda ott is tuzel, de
 nem kerul penzbe. Ez a szakasz KIZAROLAG a Delta-CRM-re szol.
 
-## MI INDÍT ACTIONS-FUTÁST EBBEN A REPÓBAN -- AZ ÁG NEVE NEM A VÁLASZ (mérve 2026-08-28 20:19)
+## MI INDÍT ACTIONS-FUTÁST EBBEN A REPÓBAN -- AZ ÁG NEVE NEM A VÁLASZ (mérve 2026-08-28 20:19) [terület: CI/CD Pre-commit Checks]
 
 **Ez a szakasz azért létezik, mert a marveen lapján áll egy HELYES mérés, ami ERRE a repóra
 olvasva hamis rendszabályt ad.** Ott a `secret-gate.yml` és a `test.yml` `on:` blokkja van
@@ -739,7 +739,7 @@ feltételei közt a „másik repó" nem szerepelt. Egy helyesen hatókörözöt
 pontosan így válik hamis szabállyá -- és a javítása nem a mérés, hanem a TESTVÉR-BEJEGYZÉS a
 másik repó lapján. Ez az.)*
 
-## EGY AHEAD/BEHIND SZÁM A REFJE NÉLKÜL NEM GYENGE MÉRÉS, HANEM NEM MÉRÉS (mérve 2026-08-28)
+## EGY AHEAD/BEHIND SZÁM A REFJE NÉLKÜL NEM GYENGE MÉRÉS, HANEM NEM MÉRÉS (mérve 2026-08-28) [terület: Git Conventions]
 
 **A szó `main` KÉTÉRTELMŰ ebben a checkoutban, és ma két ügynök mért vele ugyanabban a percben,
 ellentétes eredménnyel.** Egyik sem tévedett; egyik sem mondta meg, mihez képest mért.
@@ -810,7 +810,7 @@ KÉT teszt-konvenciót használ: a backend Jest `*.spec.ts`, a frontend Vitest `
 számol, mondja meg, MELYIK kiterjesztéseket számolta.
 
 ## ITT A `main` TÉNYLEG A TELEPÍTÉS FORRÁSA -- ÉS EZ A MARVEEN REPÓBAN NEM IGAZ
-## (didi mérte 2026-09-03, miután ugyanazon az éjszakán a marveen lapjára az ELLENKEZŐJE került)
+## (didi mérte 2026-09-03, miután ugyanazon az éjszakán a marveen lapjára az ELLENKEZŐJE került) [terület: CI/CD Pre-commit Checks]
 
 **Ez a bejegyzés azért van itt, mert a testvér-lapra ma éjjel egy HELYES mérés került, ami ERRE a
 repóra olvasva hamis rendszabályt ad.** A marveen `CLAUDE.md`-ben most ez áll: a `develop` NEM az
@@ -902,7 +902,7 @@ meg, mekkora volt a merítés. **Ezt a számot ne add tovább csupaszon.**
 "csak a `main`-en át" állítás a TÖRTÉNETRE nem szigorú -- a MAI revízióra igazolva van, a múltra nem.
 
 ## A `commit^` A FEATURE ÁGON VAN -- EZÉRT A „CÉL TÖRÖLTE" ÉS A „SOHA NEM ÉRT ODA" EGY MÉRŐVEL
-## NEM KÜLÖNBÖZTETHETŐ MEG (jarvis mérte és VONTA VISSZA, 2026-08-28)
+## NEM KÜLÖNBÖZTETHETŐ MEG (jarvis mérte és VONTA VISSZA, 2026-08-28) [terület: Git Conventions]
 
 Egy be nem olvasztott commitról azt akartuk eldönteni, hogy a benne módosított spec-fájlt a
 merge-köteg **törölte-e**. A mérés így nézett ki, és ésszerűnek látszik:
@@ -947,7 +947,7 @@ A koordinátor addigra KÁRTYA-CÍMBE írta -- a lista-nézetben csak a cím lá
 utazott volna tovább, amit senki nem próbált ki.)*
 
 ## EGY MÉRŐ, AMI EGY SORT OLVAS EGY TÖBB SOROS SZERKEZETBŐL, NÉMÁN HAMIS NEGATÍVOT AD -- ÉS A
-## RIASZTÓ IRÁNYBA (három eset, két ágens, egy este: 2026-08-28)
+## RIASZTÓ IRÁNYBA (három eset, két ágens, egy este: 2026-08-28) [terület: Testing]
 
 Ugyanaz az alak háromszor, néhány órán belül, és mindháromszor **egy védelemről állította volna,
 hogy nincs**:
@@ -2213,7 +2213,7 @@ a helyére. Enélkül a fenti recept egyetlen sora sem fut le -- és a hibaüzen
 a receptről, tehát elsőre úgy néz ki, mintha a hitelesítő adat lenne rossz.
 
 ## EGY VÁLTOZTATHATÓ MEZŐ NEM ESEMÉNYNAPLÓ -- ÉS A BELŐLE OLVASOTT NULLA MÁST ÁLLÍT, MINT AMIT
-## KÉRDEZTÉL (didi mérte élesen, 2026-08-28)
+## KÉRDEZTÉL (didi mérte élesen, 2026-08-28) [terület: Éles adatbázis MÉRÉSE]
 
 A kérdés az volt: *generált-e valaha bárki könyvelői adatfolyam-tokent?* A mérés helyes volt, a
 kapu tüzelt mindkét oldalon, a kontroll nem-nullát adott. **A válasz mégsem arra a kérdésre
@@ -2297,7 +2297,7 @@ használják, a másikat nem" -- és ez ellentétes döntéshez vezet. **Egy nul
 csak azt igazolja, hogy a számlálás működik: mérje meg a TESTVÉR-esetet is, ha van.**
 
 ## EGY KONZOLBAN BEALLITOTT ENV-VALTOZO SZERKEZETILEG ATMENETI -- A KOVETKEZO DEPLOY ELDOBJA
-## (didi merte 2026-09-03, `deploy.yml` @ a62ba2c1; kartya `6da18d22`)
+## (didi merte 2026-09-03, `deploy.yml` @ a62ba2c1; kartya `6da18d22`) [terület: CI/CD Pre-commit Checks]
 
     :311      `--env-vars-file=/tmp/backend-env.yaml`        <- a TELJES sima env-keszletet CSERELI
     :312-319  8 x `--update-secrets=NEV=secret:latest`       <- ezek MERGE-elnek
@@ -2371,7 +2371,7 @@ viselkedesen es a HIANYZO kapcsolokon all, nem egy megfigyelt rollback-futason -
 hogy futott-e valaha.)*
 
 ## EGY JAVITAS, AMI EGY BUKAST ATSOROL ERROR-ROL WARN-RA, MINDEN SEVERITY-SZURESU RIASZTAST
-## MEGVAKIT -- ES A JAVITAS KOZBEN EZ SIKERNEK LATSZIK (jarvis merte 2026-09-03, kartya afdd2bd7)
+## MEGVAKIT -- ES A JAVITAS KOZBEN EZ SIKERNEK LATSZIK (jarvis merte 2026-09-03, kartya afdd2bd7) [terület: Error Handling]
 
     a javitas elott ... SET NX hiba, ERROR szinten .............. 255 / ora
     a javitas utan .... ugyanaz ................................... **0**   <- a javitas MUKODIK
@@ -2394,7 +2394,7 @@ Egy „a hibak szama nullara esett" mondat sulyossag-atsorolas utan nem allitas.
 muvelet ELVEGZI a dolgat, es kozben elnemit egy jelzot, ami MAS dologrol szolt volna.)*
 
 ## EGY MUSZER, AMI CSAK A BUKASNAL NAPLOZ, SOHA NEM TUDJA MEGMONDANI, HOL A KUSZOB
-## (dexter tervezesi dontese, 2026-09-03, kartya e9c48aab)
+## (dexter tervezesi dontese, 2026-09-03, kartya e9c48aab) [terület: Error Handling]
 
 Egy zar-TTL-t kellett megvalasztani, es a hianyzo bemenet a FUTAS-IDOTARTAM volt. A kezenfekvo
 muszer: naplozd az idotartamot, AMIKOR tullepi a TTL-t.
