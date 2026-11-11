@@ -1230,6 +1230,30 @@ export function initDatabase(dbPathOverride?: string): void {
   `)
   db.exec(`CREATE INDEX IF NOT EXISTS idx_idea_status_log_idea ON idea_status_log(idea_id, created_at)`)
 
+  // --- Power-route audit (card 3fc4df30, marveen 58797): log-only record of who called which route that
+  // grants power. Nothing here refuses a request. ---
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS power_route_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts INTEGER NOT NULL,
+      method TEXT NOT NULL,
+      route_id TEXT NOT NULL,
+      path TEXT NOT NULL,
+      auth_kind TEXT NOT NULL,
+      auth_who TEXT,
+      token_agent TEXT,
+      claimed TEXT,
+      body_fields TEXT,
+      body_scalars TEXT,
+      remote TEXT,
+      user_agent TEXT,
+      status INTEGER,
+      would_deny INTEGER NOT NULL DEFAULT 0
+    )
+  `)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_power_route_audit_ts ON power_route_audit(ts)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_power_route_audit_route ON power_route_audit(route_id, ts)`)
+
   // --- Tool Call Log (auto-recorder) ---
   db.exec(`
     CREATE TABLE IF NOT EXISTS tool_call_log (
@@ -6192,6 +6216,35 @@ export function queryAuditLog(opts: {
   // Merge and sort by created_at DESC, then id DESC as tiebreaker
   parts.sort((a, b) => b.created_at - a.created_at || (b.id ?? 0) - (a.id ?? 0))
   return parts.slice(0, limit)
+}
+
+export interface PowerRouteAuditRow {
+  ts: number
+  method: string
+  route_id: string
+  path: string
+  auth_kind: string
+  auth_who: string | null
+  token_agent: string | null
+  claimed: string | null
+  body_fields: string | null
+  body_scalars: string | null
+  remote: string | null
+  user_agent: string | null
+  status: number | null
+  would_deny: boolean
+}
+
+export function logPowerRouteAudit(r: PowerRouteAuditRow): void {
+  db.prepare(
+    'INSERT INTO power_route_audit (ts, method, route_id, path, auth_kind, auth_who, token_agent, claimed, body_fields, body_scalars, remote, user_agent, status, would_deny) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run(r.ts, r.method, r.route_id, r.path, r.auth_kind, r.auth_who, r.token_agent, r.claimed, r.body_fields, r.body_scalars, r.remote, r.user_agent, r.status, r.would_deny ? 1 : 0)
+}
+
+/** Fixed, not opt-in: the audit exists to outlive the 24 h tool_call_log blind spot, so it keeps 30 days. */
+export const POWER_ROUTE_AUDIT_RETENTION_DAYS = 30
+export function prunePowerRouteAudit(nowSecs = Math.floor(Date.now() / 1000)): number {
+  return db.prepare('DELETE FROM power_route_audit WHERE ts < ?').run(nowSecs - POWER_ROUTE_AUDIT_RETENTION_DAYS * 86400).changes
 }
 
 // Prune all three audit tables to AUDIT_LOG_RETENTION_DAYS. Called from the
