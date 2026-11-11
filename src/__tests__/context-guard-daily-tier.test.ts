@@ -350,7 +350,7 @@ describe('runner wiring', () => {
   it('the runner does not treat a daily-only agent as fully disarmed', () => {
     const code = src('src/web/context-guard-runner.ts')
     expect(code).toContain(
-      "if (!cfg.enabled && !cfg.saturationRestart && !cfg.idleFlushEnabled && !cfg.dailyHandoffEnabled && state.phase !== 'await-handoff') {",
+      "if (!cfg.enabled && !cfg.saturationRestart && !cfg.idleFlushEnabled && !cfg.dailyHandoffEnabled && !cfg.cardRestartEnabled && state.phase !== 'await-handoff') {",
     )
   })
 })

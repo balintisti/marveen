@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { atomicWriteFileSync } from './atomic-write.js'
-import type { GuardPhase, GuardState, HandoffStaleness } from '../context-guard.js'
+import type { CardBoundary, GuardPhase, GuardState, HandoffStaleness } from '../context-guard.js'
 
 // THE GUARD'S SEQUENCES ON DISK (card 17a19228).
 //
@@ -28,6 +28,14 @@ const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinit
 const optNum = (v: unknown): boolean => v === undefined || num(v)
 const optNumOrNull = (v: unknown): boolean => v === undefined || v === null || num(v)
 
+/** The card boundary of a card-aligned restart (card 00262e3f), or null when it is not one. */
+function validCardBoundary(raw: unknown): CardBoundary | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  if (typeof r['cardId'] !== 'string' || r['cardId'] === '' || typeof r['toStatus'] !== 'string' || !num(r['movedAtMs'])) return null
+  return { cardId: r['cardId'], toStatus: r['toStatus'], movedAtMs: r['movedAtMs'] }
+}
+
 /**
  * One state as read from the file, or null when it is not a state this build can act on. Only the
  * known fields are carried over: a field a later build adds is dropped by an older one, never
@@ -46,6 +54,10 @@ export function validGuardState(raw: unknown): GuardState | null {
   if (!optNum(r['requestedAtMs']) || !optNum(r['startThresholdPct']) || !optNum(r['releaseAttempts'])) return null
   if (!optNum(r['apiErrorResends'])) return null
   if (!(r['noPressure'] === undefined || typeof r['noPressure'] === 'boolean')) return null
+  // A boundary that does not read back is not dropped on its own: without it the fresh session
+  // would be sent to a HANDOFF.md nobody wrote. The whole state is refused, and the caller says so.
+  const cardRestart = r['cardRestart'] === undefined ? undefined : validCardBoundary(r['cardRestart'])
+  if (cardRestart === null) return null
   const state: GuardState = {
     phase: r['phase'] as GuardPhase,
     handoffMtimeAtRequest: r['handoffMtimeAtRequest'] as number | null,
@@ -62,6 +74,7 @@ export function validGuardState(raw: unknown): GuardState | null {
   if (r['startThresholdPct'] !== undefined) state.startThresholdPct = r['startThresholdPct'] as number
   if (r['releaseAttempts'] !== undefined) state.releaseAttempts = r['releaseAttempts'] as number
   if (r['apiErrorResends'] !== undefined) state.apiErrorResends = r['apiErrorResends'] as number
+  if (cardRestart !== undefined) state.cardRestart = cardRestart
   return state
 }
 

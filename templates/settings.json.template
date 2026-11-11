@@ -95,6 +95,16 @@
         ]
       },
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c '[ -f {{PROJECT_ROOT}}/scripts/hooks/card-boundary-signal.py ] && exec python3 {{PROJECT_ROOT}}/scripts/hooks/card-boundary-signal.py; exit 0'",
+            "timeout": 10
+          }
+        ]
+      },
+      {
         "matcher": "telegram.*reply",
         "hooks": [
           {

@@ -274,6 +274,36 @@ export function readLastCompactionMs(workingDir: string, configDir?: string): nu
 }
 
 /**
+ * When the newest transcript's FIRST tool call after `afterMs` was made (ms), or null: no
+ * transcript, or no tool call after that moment yet (card 00262e3f: how long an agent stood
+ * between the end of a turn and its next piece of work). Whole-file read, like
+ * readLastCompactionMs, and for the same kind of caller: one agent, while an answer is awaited.
+ * Sub-agent lines (isSidechain) are not the agent's own work resuming, and are skipped.
+ */
+export function readFirstToolUseMsAfter(workingDir: string, configDir: string | undefined, afterMs: number): number | null {
+  try {
+    const dir = projectsDirFor(workingDir, configDir)
+    if (!existsSync(dir)) return null
+    const newest = readdirSync(dir)
+      .filter(f => f.endsWith('.jsonl'))
+      .map(f => ({ f, mtime: statSync(join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime)[0]
+    if (!newest || newest.mtime <= afterMs) return null
+    for (const line of readFileSync(join(dir, newest.f), 'utf-8').split('\n')) {
+      if (!line.includes('"tool_use"')) continue
+      try {
+        const e = JSON.parse(line) as { type?: unknown; isSidechain?: unknown; timestamp?: unknown; message?: { content?: unknown } }
+        if (e.type !== 'assistant' || e.isSidechain === true || !Array.isArray(e.message?.content)) continue
+        if (!e.message.content.some(b => !!b && typeof b === 'object' && (b as { type?: unknown }).type === 'tool_use')) continue
+        const at = typeof e.timestamp === 'string' ? new Date(e.timestamp).getTime() : NaN
+        if (Number.isFinite(at) && at > afterMs) return at
+      } catch { /* a malformed line: keep looking */ }
+    }
+  } catch { /* fall through */ }
+  return null
+}
+
+/**
  * A DEAD READING (card 6f362eb3): the newest transcript was last written BEFORE the agent's current
  * session started, so nothing in it is this session's. 5c094718 was one CAUSE of that (a symlinked
  * working dir keyed to a directory that exists and holds yesterday's files); this is the guard for
