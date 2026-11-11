@@ -32,6 +32,7 @@ import html
 import json
 import os
 import re
+import stat
 import sys
 
 # --- what counts as an email send -------------------------------------------
@@ -635,11 +636,152 @@ def _command_heads(toks, _d: int = 0):
     return heads
 
 
-def _segment_is_send(toks, depth: int) -> bool:
-    return any(_head_is_send(h, depth) for h in _command_heads(toks))
+def _segment_is_send(toks, depth: int, ctx=None) -> bool:
+    return any(_head_is_send(h, depth, ctx) for h in _command_heads(toks))
 
 
-def _head_is_send(toks, depth: int) -> bool:
+# A SCRIPT FILE RUN BY AN INTERPRETER IS JUDGED ON ITS CONTENT (card a4ae5970). The full
+# rationale, the measurement and the NOT COVERED list stand at scriptOperands in
+# email-send-gate.mjs (the twin); send-invocation-cases.json binds the two. The runner walk is
+# the twin's executedNames walk, ported here for this one use.
+_RUNNER = re.compile(r"^(node|tsx|ts-node|deno|bun|bunx|npx|pnpx|npm|pnpm|yarn|uv|uvx|python3?|sh|bash|zsh|dash)$", re.I)
+_RUNNER_SUBCOMMANDS = {
+    "npm": ("exec", "x", "run", "run-script"), "pnpm": ("dlx", "exec", "run"), "yarn": ("dlx", "exec", "run"),
+    "uv": ("run", "tool"), "deno": ("run",), "bun": ("run", "x"),
+}
+_RUNNER_BOOLEAN_LONG = re.compile(
+    r"^--(yes|no-[\w-]+|quiet|silent|verbose|inspect|inspect-brk|trace-[\w-]+|experimental-[\w-]+|enable-source-maps"
+    r"|watch|preserve-symlinks|frozen-lockfile|offline|ignore-scripts|if-present)$", re.I)
+_RUNNER_VALUE_OPTS = frozenset((
+    "-p", "--package", "-r", "--require", "--import", "--loader", "--tsconfig", "-m", "--from", "--with",
+    "-X", "-W", "--env-file", "-o", "-O", "--prefix",
+))
+_SCRIPT_RUN_OPTS = frozenset(("-r", "--require", "--import", "--loader"))
+_SCRIPT_MAX_BYTES = 1_000_000
+_JS_RUNNER = re.compile(r"^(node|tsx|ts-node|deno|bun)$", re.I)
+_NO_CTX = {"cwd": None, "files": True}
+
+
+def _script_ext_kind(t: str):
+    if re.search(r"\.py$", t, re.I):
+        return "py"
+    if re.search(r"\.[mc]?[jt]s$", t, re.I):
+        return "js"
+    if re.search(r"\.(?:sh|bash|zsh)$", t, re.I):
+        return "sh"
+    return None
+
+
+def _runner_kind(prog: str) -> str:
+    if _PYTHON.match(prog):
+        return "py"
+    if _WRAPPER_SHELL.match(prog):
+        return "sh"
+    return "js" if _JS_RUNNER.match(prog) else "any"
+
+
+def _code_opt_stops(prog: str, t: str) -> bool:
+    """The option that turns the rest into a code string or a module name, per runner."""
+    if _PYTHON.match(prog):
+        return bool(re.match(r"^-[bBdEhiIOqsSuvVx]*[cm]", t))
+    if _WRAPPER_SHELL.match(prog):
+        return bool(re.match(r"^-[a-z]*[cs]", t, re.I))
+    if _JS_RUNNER.match(prog):
+        return bool(re.match(r"^(?:-[ep]{1,2}|--eval|--print)(?:=|$)", t))
+    return False
+
+
+def _script_operands(toks):
+    """The files a command RUNS, each with the kind its content is judged as. Twin: scriptOperands."""
+    out = []
+    if not toks:
+        return out
+    if toks[0] in ("source", "."):
+        if len(toks) > 1:
+            out.append((toks[1], _script_ext_kind(toks[1]) or "sh"))
+        return out
+    if "/" in toks[0] and _script_ext_kind(toks[0]):
+        out.append((toks[0], _script_ext_kind(toks[0])))
+    prog, i, hop = _basename(toks[0]), 1, 0
+    while hop < 4 and _RUNNER.match(prog):
+        subs = _RUNNER_SUBCOMMANDS.get(prog.lower())
+        if subs and i < len(toks) and toks[i] in subs:
+            i += 1
+        while i < len(toks) and toks[i].startswith("-") and toks[i] != "-":
+            t = toks[i]
+            if t == "--":
+                i += 1
+                break
+            if _code_opt_stops(prog, t):
+                return out
+            unknown_long = t.startswith("--") and "=" not in t and not _RUNNER_BOOLEAN_LONG.match(t)
+            if (t in _RUNNER_VALUE_OPTS or unknown_long) and i + 1 < len(toks) and not toks[i + 1].startswith("-"):
+                # A preload runs; so may the value of a long flag we do not know (it may be a boolean).
+                if t in _SCRIPT_RUN_OPTS or unknown_long:
+                    out.append((toks[i + 1], _script_ext_kind(toks[i + 1]) or _runner_kind(prog)))
+                i += 2
+                continue
+            i += 1
+        if i >= len(toks):
+            break
+        out.append((toks[i], _script_ext_kind(toks[i]) or _runner_kind(prog)))
+        prog = _basename(toks[i])
+        i += 1
+        hop += 1
+    return out
+
+
+def _resolve_script_path(tok: str, cwd):
+    """The absolute path a token names, or None when it is not known. Twin: resolveScriptPath."""
+    if not tok or re.search(r"[$`*?\[{]", tok):
+        return None
+    if tok == "~" or tok.startswith("~/"):
+        return os.path.join(os.path.expanduser("~"), tok[2:]) if tok != "~" else os.path.expanduser("~")
+    if os.path.isabs(tok):
+        return tok
+    return os.path.normpath(os.path.join(cwd, tok)) if cwd else None
+
+
+def _read_script(path: str):
+    try:
+        st = os.stat(path)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > _SCRIPT_MAX_BYTES:
+            return None
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def _script_file_sends(toks, depth: int, ctx) -> bool:
+    if not ctx["files"]:
+        return False
+    for path, kind in _script_operands(toks):
+        file = _resolve_script_path(path, ctx["cwd"])
+        body = _read_script(file) if file else None
+        if body is None:
+            continue
+        if kind in ("py", "any") and _python_body_sends(body, True):
+            return True
+        if kind in ("js", "any") and _heredoc_body_sends(body):
+            return True
+        if kind in ("sh", "any") and depth < 3 and is_send_invocation(body, _depth=depth + 1, ctx=ctx):
+            return True
+    return False
+
+
+def _cwd_after(toks, cwd):
+    """The cwd after a segment: a literal cd/pushd moves it, anything unresolvable clears it."""
+    if toks[0] not in ("cd", "pushd"):
+        return cwd
+    args = [t for t in toks[1:] if t != "--" and not re.match(r"^-[LPe@]+$", t)]
+    if not args:
+        return os.path.expanduser("~")
+    return _resolve_script_path(args[0], cwd)
+
+
+def _head_is_send(toks, depth: int, ctx=None) -> bool:
+    ctx = ctx or _NO_CTX
     if toks is None:  # the depth bound was hit on a wrapper: audit it
         return True
     if not toks:
@@ -652,7 +794,7 @@ def _head_is_send(toks, depth: int) -> bool:
     if _WRAPPER_SHELL.match(prog) and depth < 3:
         for i, t in enumerate(rest):
             if t == "-c" and i + 1 < len(rest):
-                if is_send_invocation(rest[i + 1], _depth=depth + 1):
+                if is_send_invocation(rest[i + 1], _depth=depth + 1, ctx=ctx):
                     return True
     # interpreter kod-string: python -c / node -e / --eval, ami kuldest hiv
     if _PYTHON.match(prog) or _NODEISH.match(prog):
@@ -689,10 +831,10 @@ def _head_is_send(toks, depth: int) -> bool:
         # a send here too (RESENDGATE826's read pass is gone), and so is a config call
         # (RESENDCFG926 is gone, marveen 10009481).
         return True
-    return False
+    return _script_file_sends(toks, depth, ctx)
 
 
-def wrapper_depth_hit(cmd: str) -> bool:
+def wrapper_depth_hit(cmd: str, ctx=None) -> bool:
     """True when some segment is still a wrapper at the depth bound, so it was
     counted as a send without the real command being seen (HEADDEPTH924). The
     gate uses it to say WHY it blocks: "I could not audit the letter" is the
@@ -706,7 +848,7 @@ def wrapper_depth_hit(cmd: str) -> bool:
         return False
     heads = [h for toks in segments for h in _command_heads(toks)]
     return any(h is None for h in heads) and not any(
-        h is not None and _head_is_send(h, 0) for h in heads)
+        h is not None and _head_is_send(h, 0, ctx) for h in heads)
 
 
 # Issue #1853, the heredoc form: the segmenter drops every heredoc BODY (it is data
@@ -931,7 +1073,7 @@ _HEREDOC_REDIRECT = re.compile(
 )
 
 
-def _written_then_run(cmd: str, written: dict, depth: int) -> bool:
+def _written_then_run(cmd: str, written: dict, depth: int, ctx=None) -> bool:
     """A heredoc body written to a file that the same command then runs (see the note above)."""
     if not written:
         return False
@@ -954,12 +1096,12 @@ def _written_then_run(cmd: str, written: dict, depth: int) -> bool:
                 return True
             if _NODEISH.match(prog) and _heredoc_body_sends(body):
                 return True
-            if _WRAPPER_SHELL.match(prog) and depth < 3 and is_send_invocation(body, _depth=depth + 1):
+            if _WRAPPER_SHELL.match(prog) and depth < 3 and is_send_invocation(body, _depth=depth + 1, ctx=ctx):
                 return True
     return False
 
 
-def _heredoc_program_sends(cmd: str, depth: int = 0) -> bool:
+def _heredoc_program_sends(cmd: str, depth: int = 0, gate=None) -> bool:
     written = {}
     # didi's F1 (6525aba3 50861): the walk gets everything before the <<, earlier heredoc
     # bodies cut out, not the opener's line alone. Twin: heredocProgramSends.
@@ -975,31 +1117,51 @@ def _heredoc_program_sends(cmd: str, depth: int = 0) -> bool:
             return True
         if py and _python_body_sends(body, quoted):
             return True
-        if shell and depth < 3 and is_send_invocation(body, _depth=depth + 1):
+        if shell and depth < 3 and is_send_invocation(body, _depth=depth + 1, ctx=gate):
             return True
         ctx += intro + "\n"
         frm = end
-    return _written_then_run(cmd, written, depth)
+    return _written_then_run(cmd, written, depth, gate)
 
 
-def is_send_invocation(cmd: str, _depth: int = 0) -> bool:
-    return _heredoc_program_sends(cmd, _depth) or _command_text_sends(cmd, _depth)
+def is_send_invocation(cmd: str, _depth: int = 0, ctx=None) -> bool:
+    """ctx: {"cwd", "files"}; cwd is where relative script paths resolve (the hook payload's
+    cwd), files=False judges the command without reading any script file (card a4ae5970)."""
+    ctx = ctx or _NO_CTX
+    return _heredoc_program_sends(cmd, _depth, ctx) or _command_text_sends(cmd, _depth, ctx)
 
 
 # The way out when a heredoc body read as a program is the WHOLE reason (marveen 50880,
 # 6525aba3). Twin: heredocBodyHit / HEREDOC_BODY_WAY_OUT in email-send-gate.mjs.
+# Running the script as a file is no longer one (card a4ae5970); the data-file way out is.
+_DATA_FILE_WAY_OUT = (
+    "Ha NEM kuldeni akartal (patch- vagy teszt-szkript): a kuldes-alaku SZOVEGET tedd adatfajlba "
+    "(.json vagy .txt, a fajliro eszkozzel), es a szkript onnan olvassa be, vagy a celfajlt "
+    "szerkeszd kozvetlenul a fajliro eszkozzel. A kapu a futtatott szkriptet olvassa, az adatfajlt nem."
+)
 _HEREDOC_BODY_WAY_OUT = (
     "A heredoc torzse kodnak olvasodik, es egy kuldo-szo all benne (akar egy sztringben is). "
-    "Ha NEM kuldeni akartal (patch- vagy teszt-szkript): ird a szkriptet fajlba a fajliro eszkozzel, "
-    "es futtasd fajlkent egy KULON Bash-hivasban."
+    + _DATA_FILE_WAY_OUT
+)
+# Twin: SCRIPT_FILE_WAY_OUT / scriptFileHit in email-send-gate.mjs.
+_SCRIPT_FILE_WAY_OUT = (
+    "A futtatott szkriptfajl tartalma kodnak olvasodik, es egy kuldo-szo all benne (akar egy sztringben is). "
+    + _DATA_FILE_WAY_OUT
 )
 
 
-def heredoc_body_hit(cmd: str) -> bool:
-    return _heredoc_program_sends(cmd) and not _command_text_sends(cmd, 0)
+def heredoc_body_hit(cmd: str, ctx=None) -> bool:
+    ctx = ctx or _NO_CTX
+    return _heredoc_program_sends(cmd, 0, ctx) and not _command_text_sends(cmd, 0, ctx)
 
 
-def _command_text_sends(cmd: str, _depth: int) -> bool:
+def script_file_hit(cmd: str, ctx=None) -> bool:
+    """A script file's content is the WHOLE reason: without reading files it is not a send."""
+    ctx = ctx or _NO_CTX
+    return is_send_invocation(cmd, ctx=ctx) and not is_send_invocation(cmd, ctx={**ctx, "files": False})
+
+
+def _command_text_sends(cmd: str, _depth: int, ctx=None) -> bool:
     try:
         segments = _segments_tokens(cmd)
     except ValueError:
@@ -1036,8 +1198,12 @@ def _command_text_sends(cmd: str, _depth: int) -> bool:
         # nem ezen a fallbacken utazik. (Merve: az entrypoint-blokkban
         # is_send_invocation 1 elofordulas, a Bash agon.)
         return bool(_FALLBACK_LITERALS.search(cmd))
-    if any(_segment_is_send(toks, _depth) for toks in segments):
-        return True
+    ctx = ctx or _NO_CTX
+    cwd = ctx["cwd"]
+    for toks in segments:
+        if _segment_is_send(toks, _depth, ctx if cwd == ctx["cwd"] else {**ctx, "cwd": cwd}):
+            return True
+        cwd = _cwd_after(toks, cwd)
     return _var_url_send(cmd, _depth)
 
 # --- Hungarian detection (accent-insensitive markers) -----------------------
@@ -2384,7 +2550,9 @@ def main():
         text, unreadable = collect_mcp_body(tool_input), None
     elif tool == "Bash":
         cmd = str(tool_input.get("command") or "")
-        if not is_send_invocation(cmd):
+        # Relative script paths resolve against the session's cwd (card a4ae5970).
+        gate_ctx = {"cwd": str(payload.get("cwd") or "") or os.getcwd(), "files": True}
+        if not is_send_invocation(cmd, ctx=gate_ctx):
             http_channel_gate(cmd)  # exits if it is a human-facing HTTP send; else returns
             inter_agent_homoglyph_gate(cmd)  # exits; a no-op pass for anything else
         text, unreadable = collect_bash_body(cmd)
@@ -2392,13 +2560,16 @@ def main():
         # body read as a program has no letter to audit: the body is code, and auditing it
         # as prose let a real send through (exit 0) while the hard-gate twin denied it.
         # Where the twins differ, the stricter one is right: deny, with the way out.
-        if not unreadable and heredoc_body_hit(cmd):
+        if not unreadable and heredoc_body_hit(cmd, gate_ctx):
             unreadable = "a kuldes egy kodkent olvasott heredoc torzsben all, abbol nem valaszthato le a level szovege"
+        # a4ae5970: the same for a send that stands only in a script file the command runs.
+        elif not unreadable and script_file_hit(cmd, gate_ctx):
+            unreadable = "a kuldes egy futtatott szkriptfajlban all, abbol nem valaszthato le a level szovege"
     else:
         sys.exit(0)
 
     if unreadable or not text.strip():
-        if tool == "Bash" and wrapper_depth_hit(cmd):
+        if tool == "Bash" and wrapper_depth_hit(cmd, gate_ctx):
             sys.stderr.write(
                 "KIMENO-SZOVEG KAPU: TILTVA, mert a parancs valodi fejet nem latom.\n"
                 f"Ok: a parancs a burkolo-korlatnal ({_HEAD_DEPTH} egymasba agyazott burkolo: sudo, "
@@ -2410,7 +2581,11 @@ def main():
             )
             sys.exit(2)
         reason = unreadable or "a hook nem talalt vizsgalhato szoveget a hivasban"
-        way_out = _HEREDOC_BODY_WAY_OUT + "\n" if tool == "Bash" and heredoc_body_hit(cmd) else ""
+        way_out = ""
+        if tool == "Bash" and heredoc_body_hit(cmd, gate_ctx):
+            way_out = _HEREDOC_BODY_WAY_OUT + "\n"
+        elif tool == "Bash" and script_file_hit(cmd, gate_ctx):
+            way_out = _SCRIPT_FILE_WAY_OUT + "\n"
         sys.stderr.write(
             "KIMENO-SZOVEG KAPU: TILTVA, mert a levelet nem tudtam megvizsgalni.\n"
             f"Ok: {reason}.\n\n"

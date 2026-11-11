@@ -556,7 +556,9 @@ def main():
             sys.exit(0)
     elif tool == "Bash":
         cmd = str(tool_input.get("command") or "")
-        if not _load_is_send_invocation()(cmd):
+        # Relative script paths resolve against the session's cwd (card a4ae5970).
+        ctx = {"cwd": str(payload.get("cwd") or "") or os.getcwd(), "files": True}
+        if not _load_is_send_invocation()(cmd, ctx=ctx):
             sys.exit(0)
     else:
         sys.exit(0)

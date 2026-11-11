@@ -31,9 +31,9 @@
 // writeAgentSettingsFromProfile() (agent-scaffold.ts), guarded by
 // name !== MAIN_AGENT_ID, and re-applied on every spawn (respawn-safe).
 
-import { readFileSync, realpathSync } from 'node:fs'
+import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 
 // Bash command patterns that send mail. SUBGATEPOZ822 (2026-08-22): these are
@@ -338,11 +338,113 @@ function commandHeads(toksIn, d = 0) {
   return starts.flatMap((s) => commandHeads(toks.slice(s + positionals), d + 1))
 }
 
-function segmentIsSend(toksIn, depth) {
-  return commandHeads(toksIn).some((h) => headIsSend(h, depth))
+function segmentIsSend(toksIn, depth, ctx) {
+  return commandHeads(toksIn).some((h) => headIsSend(h, depth, ctx))
 }
 
-function headIsSend(toks, depth) {
+// A SCRIPT FILE RUN BY AN INTERPRETER IS JUDGED ON ITS CONTENT (card a4ae5970). `python3 x.py`
+// used to pass whatever x.py held, and the heredoc deny's way out told the agent to do exactly
+// that. The file a runner RUNS (the first operand after its options, along the same runner chain
+// as executedNames, a -r/--require/--import/--loader value, a `source`/`.` operand, or a direct
+// `./x.py` with a script extension) is read and judged by the heredoc rules: a .py file like a
+// quoted `python3 - <<'X'` body, a .js/.mjs/.cjs/.ts/.mts/.cts file like a `node <<X` body, a
+// .sh/.bash/.zsh file with isSendInvocation one level deeper. Without a known extension the
+// runner decides; a runner that is neither (npx, uv, npm) judges it all three ways.
+// Only the script operand: a later argument is data (`mut1.sh scripts/email-send-gate.mjs`).
+// A code string (-c, -e, -p, python -m, shell -s) stops the walk: the program is not a file.
+// A relative path resolves against the hook payload's cwd, moved by a literal `cd`/`pushd`
+// earlier in the same command (commandTextSends). Measured over 20 694 real commands (7 days,
+// didi's corpus): 7 249 run a script file, and judging the files' content now denies 5, all
+// gate-testing scripts holding send examples next to subprocess.
+// NOT COVERED, named: a path holding $, a backtick or a glob, a missing, unreadable or
+// over-1 MB file, a relative path with no known cwd (a `cd -` or `cd $X` clears it), a file
+// with no script extension run directly (shebang), a file the same command writes by other
+// means than a heredoc (cp, a Python write) or that a subshell's cd moved. These are judged
+// as today: not a send. Twin: _script_operands / _script_file_sends in
+// hooks/outgoing-copy-gate.py.
+const SCRIPT_RUN_OPTS = new Set(['-r', '--require', '--import', '--loader'])
+const SCRIPT_MAX_BYTES = 1_000_000
+const scriptExtKind = (t) =>
+  /\.py$/i.test(t) ? 'py' : /\.[mc]?[jt]s$/i.test(t) ? 'js' : /\.(?:sh|bash|zsh)$/i.test(t) ? 'sh' : null
+const runnerKind = (prog) =>
+  PYTHON.test(prog) ? 'py' : WRAPPER_SHELL.test(prog) ? 'sh' : /^(node|tsx|ts-node|deno|bun)$/i.test(prog) ? 'js' : 'any'
+// The option that turns the rest into a code string or a module name, per runner.
+function codeOptStops(prog, t) {
+  if (PYTHON.test(prog)) return /^-[bBdEhiIOqsSuvVx]*[cm]/.test(t)
+  if (WRAPPER_SHELL.test(prog)) return /^-[a-z]*[cs]/i.test(t)
+  if (/^(node|tsx|ts-node|deno|bun)$/i.test(prog)) return /^(?:-[ep]{1,2}|--eval|--print)(?:=|$)/.test(t)
+  return false
+}
+export function scriptOperands(toks) {
+  const out = []
+  if (!toks.length) return out
+  if (toks[0] === 'source' || toks[0] === '.') {
+    if (toks.length > 1) out.push({ path: toks[1], kind: scriptExtKind(toks[1]) ?? 'sh' })
+    return out
+  }
+  if (toks[0].includes('/') && scriptExtKind(toks[0])) out.push({ path: toks[0], kind: scriptExtKind(toks[0]) })
+  let prog = basename(toks[0])
+  let i = 1
+  for (let hop = 0; hop < 4 && RUNNER.test(prog); hop++) {
+    const subs = RUNNER_SUBCOMMANDS[prog.toLowerCase()]
+    if (subs && subs.includes(toks[i])) i++
+    while (i < toks.length && toks[i].startsWith('-') && toks[i] !== '-') {
+      const t = toks[i]
+      if (t === '--') { i++; break }
+      if (codeOptStops(prog, t)) return out
+      const unknownLong = t.startsWith('--') && !t.includes('=') && !RUNNER_BOOLEAN_LONG.test(t)
+      if ((RUNNER_VALUE_OPTS.has(t) || unknownLong) && i + 1 < toks.length && !toks[i + 1].startsWith('-')) {
+        // A preload runs; so may the value of a long flag we do not know (it may be a boolean).
+        if (SCRIPT_RUN_OPTS.has(t) || unknownLong) out.push({ path: toks[i + 1], kind: scriptExtKind(toks[i + 1]) ?? runnerKind(prog) })
+        i += 2
+        continue
+      }
+      i++
+    }
+    if (i >= toks.length) break
+    out.push({ path: toks[i], kind: scriptExtKind(toks[i]) ?? runnerKind(prog) })
+    prog = basename(toks[i])
+    i++
+  }
+  return out
+}
+// The directory a path resolves against: null when it is not known.
+export function resolveScriptPath(tok, cwd) {
+  if (!tok || /[$`*?[{]/.test(tok)) return null
+  if (tok === '~' || tok.startsWith('~/')) return join(homedir(), tok.slice(1))
+  if (isAbsolute(tok)) return tok
+  return cwd ? resolve(cwd, tok) : null
+}
+function readScript(file) {
+  try {
+    const st = statSync(file)
+    if (!st.isFile() || st.size > SCRIPT_MAX_BYTES) return null
+    return readFileSync(file, 'utf-8')
+  } catch {
+    return null
+  }
+}
+function scriptFileSends(toks, depth, ctx) {
+  if (!ctx.files) return false
+  for (const { path, kind } of scriptOperands(toks)) {
+    const file = resolveScriptPath(path, ctx.cwd)
+    const body = file && readScript(file)
+    if (body == null) continue
+    if ((kind === 'py' || kind === 'any') && pythonBodySends(body, true)) return true
+    if ((kind === 'js' || kind === 'any') && heredocBodySends(body)) return true
+    if ((kind === 'sh' || kind === 'any') && depth < 3 && isSendInvocation(body, depth + 1, ctx)) return true
+  }
+  return false
+}
+// The cwd after a segment: a literal `cd`/`pushd` moves it, anything unresolvable clears it.
+function cwdAfter(toks, cwd) {
+  if (toks[0] !== 'cd' && toks[0] !== 'pushd') return cwd
+  const args = toks.slice(1).filter((t) => t !== '--' && !/^-[LPe@]+$/.test(t))
+  if (!args.length) return homedir()
+  return resolveScriptPath(args[0], cwd)
+}
+
+function headIsSend(toks, depth, ctx = NO_CTX) {
   if (toks === null) return true // the depth bound was hit on a wrapper: audit it
   if (!toks.length) return false
   const prog = basename(toks[0])
@@ -350,7 +452,7 @@ function headIsSend(toks, depth) {
   if (SENDER_PROG.test(prog)) return true
   if (WRAPPER_SHELL.test(prog) && depth < 3) {
     for (let i = 0; i < rest.length; i++) {
-      if (rest[i] === '-c' && rest[i + 1] && isSendInvocation(rest[i + 1], depth + 1)) return true
+      if (rest[i] === '-c' && rest[i + 1] && isSendInvocation(rest[i + 1], depth + 1, ctx)) return true
     }
   }
   if (PYTHON.test(prog) || NODEISH.test(prog)) {
@@ -380,12 +482,12 @@ function headIsSend(toks, depth) {
   if (executed.some((c) => RESEND_TOOL.test(c) &&
       (sendArg || RESEND_TOOL_SENDS_BY_NAME.test(c.replace(/^resend[-_]/i, ''))))) return true
   if (CURLISH.test(prog) && rest.some((t) => RESEND_TARGET.test(t))) return true
-  return false
+  return scriptFileSends(toks, depth, ctx)
 }
 
 // True when some segment is still a wrapper at the depth bound (HEADDEPTH924),
 // so the deny says WHY -- see wrapper_depth_hit in outgoing-copy-gate.py.
-export function wrapperDepthHit(cmd) {
+export function wrapperDepthHit(cmd, ctx = NO_CTX) {
   let segments
   try {
     segments = segmentsTokens(cmd)
@@ -394,7 +496,7 @@ export function wrapperDepthHit(cmd) {
   }
   // Only when the bound is the WHOLE reason: a visible send in another segment wins.
   const heads = segments.flatMap((toks) => commandHeads(toks))
-  return heads.some((h) => h === null) && !heads.some((h) => h !== null && headIsSend(h, 0))
+  return heads.some((h) => h === null) && !heads.some((h) => h !== null && headIsSend(h, 0, ctx))
 }
 
 export function buildWrapperDepthMsg() {
@@ -408,12 +510,20 @@ export function buildWrapperDepthMsg() {
 }
 
 // The way out when heredocBodyHit is the reason; the copy gate's twin is _HEREDOC_BODY_WAY_OUT.
-// A file written by the file tool and run by a SEPARATE Bash call is out of the classifier's
-// reach (NOT COVERED below); the same command writing and running it is not (writtenThenRun).
+// Running the script as a file is no longer one (card a4ae5970: the file a runner runs is read
+// and judged the same way). What the gates do not read is a DATA file the script opens, and an
+// edit made with the file tool (the gates' matcher is Bash).
+const DATA_FILE_WAY_OUT =
+  'Ha NEM kuldeni akartal (patch- vagy teszt-szkript): a kuldes-alaku SZOVEGET tedd adatfajlba ' +
+  '(.json vagy .txt, a fajliro eszkozzel), es a szkript onnan olvassa be, vagy a celfajlt ' +
+  'szerkeszd kozvetlenul a fajliro eszkozzel. A kapu a futtatott szkriptet olvassa, az adatfajlt nem.'
 export const HEREDOC_BODY_WAY_OUT =
   'A heredoc torzse kodnak olvasodik, es egy kuldo-szo all benne (akar egy sztringben is). ' +
-  'Ha NEM kuldeni akartal (patch- vagy teszt-szkript): ird a szkriptet fajlba a fajliro eszkozzel, ' +
-  'es futtasd fajlkent egy KULON Bash-hivasban.'
+  DATA_FILE_WAY_OUT
+// The way out when scriptFileHit is the reason; twin: _SCRIPT_FILE_WAY_OUT.
+export const SCRIPT_FILE_WAY_OUT =
+  'A futtatott szkriptfajl tartalma kodnak olvasodik, es egy kuldo-szo all benne (akar egy sztringben is). ' +
+  DATA_FILE_WAY_OUT
 
 // Issue #1853, the heredoc form: the segmenter drops heredoc BODIES, but when the
 // command that opens one is an interpreter (`python3 - <<'PY'`, `node <<EOF`) the body
@@ -422,15 +532,16 @@ export const HEREDOC_BODY_WAY_OUT =
 // the literal only as a lowercase, QUOTED command word (an argv item or an os.system command),
 // so a card id like SENDMAIL... in a report's prose no longer matches. Mirrors
 // _HEREDOC_SENDER_ARGV / _heredoc_body_sends in hooks/outgoing-copy-gate.py.
-// NOT COVERED, named: a program the classifier never reads -- `python3 /tmp/x.py`,
-// `python3 < /tmp/x.py`, `cat /tmp/x.py | python3 -`, `python3 -c "exec(open('/tmp/x.py').read())"`;
+// NOT COVERED, named: a program the classifier never reads -- `python3 < /tmp/x.py`,
+// `cat /tmp/x.py | python3 -`, `python3 -c "exec(open('/tmp/x.py').read())"` (a file RUN as
+// `python3 /tmp/x.py` is read since card a4ae5970, see scriptOperands);
 // also a here-string fed to an interpreter (`python3 <<<'import send'`) and a CommonJS
 // destructuring rename of the Graph sender (`const { sendMail: s } = require(...)`).
 // A heredoc fed to a SHELL (`bash <<EOF`) is a shell program: its body is judged with
 // isSendInvocation itself, one level deeper (Geri/Samu, #1855).
 // WRITTEN, THEN RUN IN THE SAME COMMAND (#1855): `cat > P <<TAG` / `cat <<TAG > P`, then an
 // interpreter or a shell on the same path token P: the body is judged as if fed directly.
-// Exact token match; a file run by ANOTHER Bash call stays out of reach. Also NOT COVERED yet:
+// Exact token match; a file run by ANOTHER Bash call is read from disk (scriptFileSends). Also NOT COVERED yet:
 // a heredoc PIPED on to an interpreter or a shell (`cat <<'EOF' | bash`, `| python3 -`), a
 // follow-up to #1855.
 const HEREDOC_SENDER_ARGV = /['"](?:[^'"\s]*\/)?(?:sendmail|msmtp|swaks|send\.py)(?=['"\s])/
@@ -601,7 +712,7 @@ export function heredocSpans(cmd) {
 }
 // `cat > P <<TAG`, `cat <<TAG > P`, `cat <<TAG | tee P`, and a bare `tee P <<TAG` (didi).
 const HEREDOC_REDIRECT = /(?:^|[\s;&|(])(?:cat\b[^\n]*?(?:>>?|\btee(?:\s+-a)?)|tee(?:\s+-a)?(?=\s))\s*(['"]?)([^\s'"<>;&|]+)\1/
-function writtenThenRun(cmd, written, depth) {
+function writtenThenRun(cmd, written, depth, ctx) {
   if (!written.size) return false
   let segments
   try { segments = segmentsTokens(cmd) } catch { return false }
@@ -615,7 +726,7 @@ function writtenThenRun(cmd, written, depth) {
       const { body, quoted } = written.get(args[0])
       if (PYTHON.test(prog) && pythonBodySends(body, quoted)) return true
       if (NODEISH.test(prog) && heredocBodySends(body)) return true
-      if (WRAPPER_SHELL.test(prog) && depth < 3 && isSendInvocation(body, depth + 1)) return true
+      if (WRAPPER_SHELL.test(prog) && depth < 3 && isSendInvocation(body, depth + 1, ctx)) return true
     }
   }
   return false
@@ -730,7 +841,7 @@ export function varUrlSend(cmd) {
   }
   return false
 }
-function heredocProgramSends(cmd, depth = 0) {
+function heredocProgramSends(cmd, depth = 0, gate = NO_CTX) {
   const written = new Map()
   // didi's F1 (6525aba3 50861): the own command was read from the opener's LINE only, so a
   // quote or $( opened on an earlier line was lost (`python3 -c "<nl>x=['bash','y']"; cd /tmp
@@ -747,25 +858,34 @@ function heredocProgramSends(cmd, depth = 0) {
     const kinds = heredocHeadKinds(ctx)
     if (kinds.js && heredocBodySends(body)) return true
     if (kinds.py && pythonBodySends(body, quoted)) return true
-    if (kinds.shell && depth < 3 && isSendInvocation(body, depth + 1)) return true
+    if (kinds.shell && depth < 3 && isSendInvocation(body, depth + 1, gate)) return true
     ctx += intro + '\n'
     from = end
   }
-  return writtenThenRun(cmd, written, depth)
+  return writtenThenRun(cmd, written, depth, gate)
 }
 
-export function isSendInvocation(cmd, depth = 0) {
-  return heredocProgramSends(cmd, depth) || commandTextSends(cmd, depth)
+// ctx: { cwd, files }. cwd is the directory relative script paths resolve against (the hook
+// payload's cwd), files: false judges the command without reading any script file.
+const NO_CTX = Object.freeze({ cwd: null, files: true })
+export function isSendInvocation(cmd, depth = 0, ctx = NO_CTX) {
+  return heredocProgramSends(cmd, depth, ctx) || commandTextSends(cmd, depth, ctx)
 }
 
 // True when a heredoc body read as a program is the WHOLE reason for the deny, so the
 // deny names the way out (marveen 50880, 6525aba3): the over-protection on string
 // literals in a patch script is accepted, and its price is one step, not a lost turn.
-export function heredocBodyHit(cmd) {
-  return heredocProgramSends(cmd) && !commandTextSends(cmd, 0)
+export function heredocBodyHit(cmd, ctx = NO_CTX) {
+  return heredocProgramSends(cmd, 0, ctx) && !commandTextSends(cmd, 0, ctx)
 }
 
-function commandTextSends(cmd, depth) {
+// True when a script file's content is the WHOLE reason for the deny: the command alone,
+// judged without reading any file, is not a send. The deny then names the file way out.
+export function scriptFileHit(cmd, ctx = NO_CTX) {
+  return isSendInvocation(cmd, 0, ctx) && !isSendInvocation(cmd, 0, { ...ctx, files: false })
+}
+
+function commandTextSends(cmd, depth, ctx = NO_CTX) {
   let segments
   try {
     segments = segmentsTokens(cmd)
@@ -774,7 +894,12 @@ function commandTextSends(cmd, depth) {
     // this path the gate is exactly as strict as before -- never weaker.
     return SEND_PATTERNS.some((re) => re.test(cmd))
   }
-  return segments.some((toks) => segmentIsSend(toks, depth)) || varUrlSend(cmd)
+  let cwd = ctx.cwd
+  for (const toks of segments) {
+    if (segmentIsSend(toks, depth, cwd === ctx.cwd ? ctx : { ...ctx, cwd })) return true
+    cwd = cwdAfter(toks, cwd)
+  }
+  return varUrlSend(cmd)
 }
 
 // Outbound-shaped operations of the multiplexed manage_email tool. Each of
@@ -787,7 +912,7 @@ const MANAGE_EMAIL_SEND_OPS = new Set(['send', 'reply', 'replyall', 'forward'])
 // only the actual send is refused), 'send_email' is the direct MCP send tool
 // (the only path the thread-reply capability below can narrow), everything
 // else is the sub-agent governance block.
-export function gateDecision(toolName, toolInput) {
+export function gateDecision(toolName, toolInput, cwd = null) {
   const name = String(toolName ?? '')
   // Any MCP send_email tool, name-agnostic (gmail or a differently-named
   // server in a customer install -> the matcher + this both key on send_email).
@@ -819,9 +944,11 @@ export function gateDecision(toolName, toolInput) {
   }
   if (name === 'Bash') {
     const cmd = String(toolInput?.command ?? '')
-    if (isSendInvocation(cmd)) {
-      if (wrapperDepthHit(cmd)) return { deny: true, kind: 'wrapper-depth' }
-      return heredocBodyHit(cmd) ? { deny: true, kind: 'heredoc-body' } : { deny: true }
+    const ctx = { cwd: typeof cwd === 'string' && cwd ? cwd : null, files: true }
+    if (isSendInvocation(cmd, 0, ctx)) {
+      if (wrapperDepthHit(cmd, ctx)) return { deny: true, kind: 'wrapper-depth' }
+      if (heredocBodyHit(cmd, ctx)) return { deny: true, kind: 'heredoc-body' }
+      return scriptFileHit(cmd, ctx) ? { deny: true, kind: 'script-file' } : { deny: true }
     }
   }
   return { deny: false }
@@ -1059,12 +1186,14 @@ if (isInvokedDirectly()) {
   } catch {
     allow() // malformed/empty input must never break the agent's tool calls
   }
-  const { deny: shouldDeny, kind } = gateDecision(payload?.tool_name, payload?.tool_input)
+  // Relative script paths resolve against the session's cwd (card a4ae5970).
+  const { deny: shouldDeny, kind } = gateDecision(payload?.tool_name, payload?.tool_input, payload?.cwd || process.cwd())
   if (shouldDeny) {
     const { botName, ownerName } = readBrandEnv()
     if (kind === 'draft-required') deny(buildDraftOnlyMsg(ownerName))
     if (kind === 'wrapper-depth') deny(buildWrapperDepthMsg())
     if (kind === 'heredoc-body') deny(buildGateMsg(botName, ownerName) + ' ' + HEREDOC_BODY_WAY_OUT)
+    if (kind === 'script-file') deny(buildGateMsg(botName, ownerName) + ' ' + SCRIPT_FILE_WAY_OUT)
     // Thread-scoped narrowing: only when the scaffold wired this agent's hook
     // command with the flag (capability-driven, regenerated on every spawn),
     // and only for the direct send_email tool. Bash send routes and

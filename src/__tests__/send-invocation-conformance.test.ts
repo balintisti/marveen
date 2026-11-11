@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 // @ts-expect-error -- plain .mjs hook script, no types
 import { isSendInvocation } from '../../scripts/email-send-gate.mjs'
@@ -35,18 +35,23 @@ const ROOT = join(__dirname, '..', '..')
 const GATE_PY = join(ROOT, 'scripts', 'hooks', 'outgoing-copy-gate.py')
 const CASES = JSON.parse(
   readFileSync(join(ROOT, 'scripts', 'hooks', 'send-invocation-cases.json'), 'utf-8'),
-) as { cases: Array<{ name: string; cmd: string; expected: boolean }> }
+) as { cases: Array<{ name: string; cmd: string; expected: boolean; cwd?: string }> }
+
+// a4ae5970: a case's optional `cwd` (relative to the repo root) is where the command runs, so
+// both gates resolve a relative script path against it and read the file it runs.
+const caseCwd = (c: { cwd?: string }): string | null => (c.cwd ? join(ROOT, c.cwd) : null)
 
 // One python process for the whole list: stdin carries the JSON cases, stdout
 // returns the per-case verdicts. Spawning per-case would be ~30x slower.
-function pythonVerdicts(cmds: string[]): boolean[] {
+function pythonVerdicts(cmdsOrItems: Array<string | { cmd: string; cwd: string | null }>): boolean[] {
+  const items = cmdsOrItems.map((x) => (typeof x === 'string' ? { cmd: x, cwd: null } : x))
   const out = execFileSync('python3', ['-c', `
 import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("gate", ${JSON.stringify(GATE_PY)})
 g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
-cmds = json.load(sys.stdin)
-print(json.dumps([g.is_send_invocation(c) for c in cmds]))
-`], { encoding: 'utf-8', input: JSON.stringify(cmds) })
+items = json.load(sys.stdin)
+print(json.dumps([g.is_send_invocation(i["cmd"], ctx={"cwd": i["cwd"], "files": True}) for i in items]))
+`], { encoding: 'utf-8', input: JSON.stringify(items) })
   return JSON.parse(out.trim())
 }
 
@@ -116,11 +121,11 @@ print(json.dumps([unparseable(c) for c in json.load(sys.stdin)]))
 }
 
 describe('send-invocation conformance: both gates agree with the shared contract on every case', () => {
-  const py = pythonVerdicts(CASES.cases.map((c) => c.cmd))
+  const py = pythonVerdicts(CASES.cases.map((c) => ({ cmd: c.cmd, cwd: caseCwd(c) })))
 
   CASES.cases.forEach((c, i) => {
     it(`${c.name} -> ${c.expected}`, () => {
-      const js = isSendInvocation(c.cmd)
+      const js = isSendInvocation(c.cmd, 0, { cwd: caseCwd(c), files: true })
       expect(js, `JS verdict for: ${c.cmd}`).toBe(c.expected)
       expect(py[i], `python verdict for: ${c.cmd}`).toBe(c.expected)
     })
@@ -130,6 +135,38 @@ describe('send-invocation conformance: both gates agree with the shared contract
     expect(CASES.cases.some((c) => c.expected)).toBe(true)
     expect(CASES.cases.some((c) => !c.expected)).toBe(true)
     expect(CASES.cases.length).toBeGreaterThanOrEqual(20)
+  })
+
+  // a4ae5970: a script-file case that passes because its fixture went missing would pass
+  // for the wrong reason (a missing file is judged "not a send"). Every relative script
+  // operand the true cases name must exist under their cwd.
+  it('every script-file case points at a fixture that exists', () => {
+    const withCwd = CASES.cases.filter((c) => c.cwd)
+    expect(withCwd.length).toBeGreaterThanOrEqual(20)
+    for (const c of withCwd) {
+      expect({ name: c.name, dir: existsSync(join(ROOT, c.cwd as string)) }).toEqual({ name: c.name, dir: true })
+    }
+    for (const f of ['sender.py', 'import-send.py', 'sender.sh', 'runs-sender.sh', 'sender.mjs', 'sub/nested.py',
+      'string-only.py', 'harmless.py', 'harmless.sh', 'harmless.mjs']) {
+      expect({ f, exists: existsSync(join(ROOT, 'src/__tests__/fixtures/script-file-gate', f)) }).toEqual({ f, exists: true })
+    }
+  })
+
+  // The same commands with file reading OFF: every true script-file case flips to false, so
+  // each one is a send only because of what the file holds, not because of the command text.
+  it('every true script-file case is a send only through the file it runs', () => {
+    const cases = CASES.cases.filter((c) => c.cwd && c.expected)
+    const pyOff = JSON.parse(execFileSync('python3', ['-c', `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("gate", ${JSON.stringify(GATE_PY)})
+g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+items = json.load(sys.stdin)
+print(json.dumps([g.is_send_invocation(i["cmd"], ctx={"cwd": i["cwd"], "files": False}) for i in items]))
+`], { encoding: 'utf-8', input: JSON.stringify(cases.map((c) => ({ cmd: c.cmd, cwd: caseCwd(c) }))) }).trim())
+    cases.forEach((c, i) => {
+      expect({ name: c.name, js: isSendInvocation(c.cmd, 0, { cwd: caseCwd(c), files: false }) }).toEqual({ name: c.name, js: false })
+      expect({ name: c.name, py: pyOff[i] }).toEqual({ name: c.name, py: false })
+    })
   })
 })
 
