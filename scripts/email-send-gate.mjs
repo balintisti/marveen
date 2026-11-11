@@ -183,10 +183,18 @@ const RUNNER_VALUE_OPTS = new Set([
 // utf8 to the X (didi 59096: the value was taken for the script). A shell also takes `+o name`.
 const runnerOption = (prog, t) =>
   t !== '-' && (t.startsWith('-') || (WRAPPER_SHELL.test(prog) && /^\+[a-zA-Z]+$/.test(t)))
-const takesValue = (prog, t) =>
-  RUNNER_VALUE_OPTS.has(t) ||
-  (WRAPPER_SHELL.test(prog) && /^[-+][a-zA-Z]*[oO]$/.test(t)) ||
-  (PYTHON.test(prog) && /^-[a-zA-Z]*[XW]$/.test(t))
+// How many of the next tokens are the option's values. A shell gives one to EVERY o/O of a short
+// cluster, in order, wherever it stands (`-oc pipefail '<code>'`, `-euoc pipefail`, `-ooc a b`):
+// reading only a final o took pipefail for the code (didi 59145). Twin: _value_count.
+const valueCount = (prog, t) => {
+  if (RUNNER_VALUE_OPTS.has(t)) return 1
+  if (WRAPPER_SHELL.test(prog) && /^[-+][a-zA-Z]+$/.test(t)) return (t.match(/[oO]/g) ?? []).length
+  if (PYTHON.test(prog) && /^-[a-zA-Z]*[XW]$/.test(t)) return 1
+  return 0
+}
+// Python reads a short cluster left to right: any flag letter may stand before the c or m, until
+// one that takes the rest as its value (X, W). A fixed letter list missed -P and -R (didi 59145).
+const PY_FLAGS_BEFORE_CODE = '[abd-ln-zA-VYZ]*'
 function executedNames(toks) {
   const names = [basename(toks[0])]
   let prog = names[0]
@@ -203,9 +211,10 @@ function executedNames(toks) {
       // pass). The value is a candidate too, so a boolean this list misjudges
       // cannot open a gap -- the script it swallowed is still checked.
       const unknownLong = t.startsWith('--') && !t.includes('=') && !RUNNER_BOOLEAN_LONG.test(t)
-      if ((takesValue(prog, t) || unknownLong) && i + 1 < toks.length && !toks[i + 1].startsWith('-')) {
-        names.push(basename(toks[i + 1]))
-        i += 2
+      const n = unknownLong ? 1 : valueCount(prog, t)
+      if (n > 0 && i + n < toks.length && !toks[i + 1].startsWith('-')) {
+        for (let k = 1; k <= n; k++) names.push(basename(toks[i + k]))
+        i += 1 + n
         continue
       }
       i++
@@ -380,7 +389,7 @@ const runnerKind = (prog) =>
   PYTHON.test(prog) ? 'py' : WRAPPER_SHELL.test(prog) ? 'sh' : /^(node|tsx|ts-node|deno|bun)$/i.test(prog) ? 'js' : 'any'
 // The option that turns the rest into a code string or a module name, per runner.
 function codeOptStops(prog, t) {
-  if (PYTHON.test(prog)) return /^-[bBdEhiIOqsSuvVx]*[cm]/.test(t)
+  if (PYTHON.test(prog)) return new RegExp(`^-${PY_FLAGS_BEFORE_CODE}[cm]`).test(t)
   if (WRAPPER_SHELL.test(prog)) return /^-[a-z]*[cs]/i.test(t)
   if (/^(node|tsx|ts-node|deno|bun)$/i.test(prog)) return /^(?:-[ep]{1,2}|--eval|--print)(?:=|$)/.test(t)
   return false
@@ -403,10 +412,11 @@ export function scriptOperands(toks) {
       if (t === '--') { i++; break }
       if (codeOptStops(prog, t)) return out
       const unknownLong = t.startsWith('--') && !t.includes('=') && !RUNNER_BOOLEAN_LONG.test(t)
-      if ((takesValue(prog, t) || unknownLong) && i + 1 < toks.length && !toks[i + 1].startsWith('-')) {
+      const n = unknownLong ? 1 : valueCount(prog, t)
+      if (n > 0 && i + n < toks.length && !toks[i + 1].startsWith('-')) {
         // A preload runs; so may the value of a long flag we do not know (it may be a boolean).
         if (SCRIPT_RUN_OPTS.has(t) || unknownLong) out.push({ path: toks[i + 1], kind: scriptExtKind(toks[i + 1]) ?? runnerKind(prog) })
-        i += 2
+        i += 1 + n
         continue
       }
       i++
@@ -459,8 +469,9 @@ function cwdAfter(toks, cwd, oldCwd = null) {
 }
 
 // The code strings a runner is handed by its code option. A shell reads the c anywhere in a short
-// cluster (`-lc`, `-ec`, `-c -l`, `-co pipefail`) and runs the first operand after the options.
-// Python takes the code glued (`-cprint(1)`) or as the next word, in a cluster too (`-Ic`). Node
+// cluster (`-lc`, `-ec`, `-c -l`, `-co pipefail`, `-oc pipefail`) and runs the first operand left
+// after every option has taken its values. Python takes the code glued (`-cprint(1)`) or as the
+// next word, in a cluster too (`-Ic`, `-IPc`). Node
 // takes -e/--eval and -p/--print, also `-pe` and `--eval=code`. Matching the bare `-c` only let
 // `bash -lc '<send>'`, the fleet's usual login-shell form, pass both gates (didi 59096, card
 // 003d0866). Each form was run on the real runner and runs the code. Twin: _code_strings.
@@ -470,14 +481,14 @@ function codeStrings(prog, rest) {
     const t = rest[i]
     if (WRAPPER_SHELL.test(prog)) {
       if (!/^-[a-zA-Z]*c[a-zA-Z]*$/.test(t)) continue
-      let j = takesValue(prog, t) ? i + 2 : i + 1
+      let j = i + 1 + valueCount(prog, t)
       while (j < rest.length && runnerOption(prog, rest[j])) {
         if (rest[j] === '--') { j++; break }
-        j += takesValue(prog, rest[j]) ? 2 : 1
+        j += 1 + valueCount(prog, rest[j])
       }
       if (j < rest.length) out.push(rest[j])
     } else if (PYTHON.test(prog)) {
-      const m = /^-[bBdEhiIOqsSuvVx]*c([\s\S]*)$/.exec(t)
+      const m = new RegExp(`^-${PY_FLAGS_BEFORE_CODE}c([\\s\\S]*)$`).exec(t)
       if (m && m[1]) out.push(m[1])
       else if (m && i + 1 < rest.length) out.push(rest[i + 1])
     } else if (NODEISH.test(prog)) {

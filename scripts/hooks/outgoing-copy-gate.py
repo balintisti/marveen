@@ -664,11 +664,24 @@ def _runner_option(prog: str, t: str) -> bool:
     return t != "-" and (t.startswith("-") or bool(_WRAPPER_SHELL.match(prog) and re.match(r"^\+[a-zA-Z]+$", t)))
 
 
-def _takes_value(prog: str, t: str) -> bool:
-    """Its next token is its value, clusters included (`-euo pipefail`, `-uX utf8`). Twin: takesValue."""
-    return (t in _RUNNER_VALUE_OPTS
-            or bool(_WRAPPER_SHELL.match(prog) and re.match(r"^[-+][a-zA-Z]*[oO]$", t))
-            or bool(_PYTHON.match(prog) and re.match(r"^-[a-zA-Z]*[XW]$", t)))
+def _value_count(prog: str, t: str) -> int:
+    """How many of the next tokens are its values, clusters included (`-euo pipefail`, `-uX utf8`).
+
+    A shell gives one to EVERY o/O of a short cluster, in order, wherever it stands
+    (`-oc pipefail '<code>'`, `-euoc pipefail`, `-ooc a b`): reading only a final o took
+    pipefail for the code (didi 59145). Twin: valueCount."""
+    if t in _RUNNER_VALUE_OPTS:
+        return 1
+    if _WRAPPER_SHELL.match(prog) and re.match(r"^[-+][a-zA-Z]+$", t):
+        return len(re.findall(r"[oO]", t))
+    if _PYTHON.match(prog) and re.match(r"^-[a-zA-Z]*[XW]$", t):
+        return 1
+    return 0
+
+
+# Python reads a short cluster left to right: any flag letter may stand before the c or m, until
+# one that takes the rest as its value (X, W). A fixed letter list missed -P and -R (didi 59145).
+_PY_FLAGS_BEFORE_CODE = "[abd-ln-zA-VYZ]*"
 _SCRIPT_MAX_BYTES = 1_000_000
 _JS_RUNNER = re.compile(r"^(node|tsx|ts-node|deno|bun)$", re.I)
 _NO_CTX = {"cwd": None, "files": True}
@@ -695,7 +708,7 @@ def _runner_kind(prog: str) -> str:
 def _code_opt_stops(prog: str, t: str) -> bool:
     """The option that turns the rest into a code string or a module name, per runner."""
     if _PYTHON.match(prog):
-        return bool(re.match(r"^-[bBdEhiIOqsSuvVx]*[cm]", t))
+        return bool(re.match(rf"^-{_PY_FLAGS_BEFORE_CODE}[cm]", t))
     if _WRAPPER_SHELL.match(prog):
         return bool(re.match(r"^-[a-z]*[cs]", t, re.I))
     if _JS_RUNNER.match(prog):
@@ -727,11 +740,12 @@ def _script_operands(toks):
             if _code_opt_stops(prog, t):
                 return out
             unknown_long = t.startswith("--") and "=" not in t and not _RUNNER_BOOLEAN_LONG.match(t)
-            if (_takes_value(prog, t) or unknown_long) and i + 1 < len(toks) and not toks[i + 1].startswith("-"):
+            n = 1 if unknown_long else _value_count(prog, t)
+            if n > 0 and i + n < len(toks) and not toks[i + 1].startswith("-"):
                 # A preload runs; so may the value of a long flag we do not know (it may be a boolean).
                 if t in _SCRIPT_RUN_OPTS or unknown_long:
                     out.append((toks[i + 1], _script_ext_kind(toks[i + 1]) or _runner_kind(prog)))
-                i += 2
+                i += 1 + n
                 continue
             i += 1
         if i >= len(toks):
@@ -798,9 +812,10 @@ def _cwd_after(toks, cwd, old_cwd=None):
 def _code_strings(prog: str, rest) -> list:
     """The code strings a runner is handed by its code option. Twin: codeStrings.
 
-    A shell reads the c anywhere in a short cluster (`-lc`, `-ec`, `-c -l`, `-co pipefail`) and
-    runs the first operand after the options. Python takes the code glued (`-cprint(1)`) or as
-    the next word, in a cluster too (`-Ic`). Node takes -e/--eval and -p/--print, also `-pe` and
+    A shell reads the c anywhere in a short cluster (`-lc`, `-ec`, `-c -l`, `-co pipefail`,
+    `-oc pipefail`) and runs the first operand left after every option has taken its values.
+    Python takes the code glued (`-cprint(1)`) or as the next word, in a cluster too (`-Ic`,
+    `-IPc`). Node takes -e/--eval and -p/--print, also `-pe` and
     `--eval=code`. Matching the bare `-c` only let `bash -lc '<send>'`, the fleet's usual
     login-shell form, pass both gates (didi 59096, card 003d0866)."""
     out = []
@@ -808,16 +823,16 @@ def _code_strings(prog: str, rest) -> list:
         if _WRAPPER_SHELL.match(prog):
             if not re.match(r"^-[a-zA-Z]*c[a-zA-Z]*$", t):
                 continue
-            j = i + 2 if _takes_value(prog, t) else i + 1
+            j = i + 1 + _value_count(prog, t)
             while j < len(rest) and _runner_option(prog, rest[j]):
                 if rest[j] == "--":
                     j += 1
                     break
-                j += 2 if _takes_value(prog, rest[j]) else 1
+                j += 1 + _value_count(prog, rest[j])
             if j < len(rest):
                 out.append(rest[j])
         elif _PYTHON.match(prog):
-            m = re.match(r"^-[bBdEhiIOqsSuvVx]*c(.*)$", t, re.S)
+            m = re.match(rf"^-{_PY_FLAGS_BEFORE_CODE}c(.*)$", t, re.S)
             if m and m.group(1):
                 out.append(m.group(1))
             elif m and i + 1 < len(rest):

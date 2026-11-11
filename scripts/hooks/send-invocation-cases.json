@@ -1927,6 +1927,84 @@
       "name": "[003d0866] CONTROL: node -p with harmless code",
       "cmd": "node -p \"40 + 2\"",
       "expected": false
+    },
+    {
+      "name": "[003d0866] python -Pc: P before the c (didi 59145)",
+      "cmd": "python3 -Pc \"import smtplib; s = smtplib.SMTP('smtp.x.hu'); s.sendmail('a','b','m')\"",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] python -Rc: R before the c (didi 59145)",
+      "cmd": "python3 -Rc \"import smtplib; s = smtplib.SMTP('smtp.x.hu'); s.sendmail('a','b','m')\"",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] python -IPc: two flags before the c (didi 59145)",
+      "cmd": "python3 -IPc \"import smtplib; s = smtplib.SMTP('smtp.x.hu'); s.sendmail('a','b','m')\"",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] python -Pc glued to its code",
+      "cmd": "python3 '-Pcimport send; send.main()'",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] CONTROL: python -Xc: the X takes c as its value, the next word is a file name, not code (run: can't open file)",
+      "cmd": "python3 -Xc \"import smtplib; s = smtplib.SMTP('smtp.x.hu'); s.sendmail('a','b','m')\"",
+      "expected": false
+    },
+    {
+      "name": "[003d0866] CONTROL: python -Pc with harmless code",
+      "cmd": "python3 -Pc \"print(1+1)\"",
+      "expected": false
+    },
+    {
+      "name": "[003d0866] a cluster -oc: the o takes pipefail, the code comes after it (didi 59145)",
+      "cmd": "bash -oc pipefail 'sendmail -t < x'",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] a cluster -Oc: the O takes extglob, the code comes after it (didi 59145)",
+      "cmd": "bash -Oc extglob 'sendmail -t < x'",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] a cluster -euoc: the o in the middle takes pipefail (didi 59145)",
+      "cmd": "bash -euoc pipefail 'sendmail -t < x'",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] two o in one cluster take two values before the code",
+      "cmd": "bash -ooc pipefail nounset 'sendmail -t < x'",
+      "expected": true
+    },
+    {
+      "name": "[003d0866] CONTROL: -oc pipefail with harmless code",
+      "cmd": "bash -oc pipefail 'echo hi'",
+      "expected": false
+    },
+    {
+      "name": "[003d0866] CONTROL: -euoc pipefail with harmless code",
+      "cmd": "bash -euoc pipefail 'echo hi'",
+      "expected": false
+    },
+    {
+      "name": "[003d0866] an o inside a cluster without c takes its value: the script after it is judged",
+      "cmd": "bash -oe pipefail sender.sh",
+      "expected": true,
+      "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
+      "name": "[003d0866] two o in a cluster without c take two values before the script",
+      "cmd": "bash -ooe pipefail nounset sender.sh",
+      "expected": true,
+      "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
+      "name": "[003d0866] CONTROL: an o inside a cluster, then an ordinary script",
+      "cmd": "bash -oe pipefail harmless.sh",
+      "expected": false,
+      "cwd": "src/__tests__/fixtures/script-file-gate"
     }
   ]
 }
