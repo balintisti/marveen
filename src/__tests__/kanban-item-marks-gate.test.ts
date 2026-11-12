@@ -154,6 +154,30 @@ describe('a kapu: mindket done-ut, az override, a cim', () => {
     expect(getKanbanCard('m2')?.status).toBe('done')
   })
 
+  // didi 59425 P7: the item marks and the proof do not end the gate. With every item marked and
+  // the proof there, an open verdict or an open MARADEK still holds the card (the reopen path in
+  // kanban-verdict.ts rests on this), on both done routes.
+  it.each([
+    ['nyitott verdikt', 'didi', 'VERDIKT: NYITOTT TETEL | a 2. tetel javitasa hibas', 'open_verdicts'],
+    ['nyitott MARADEK', 'friday', 'MARADEK: a 2. tetel mobil fele | kartya 1234abcd', 'open_leftovers'],
+  ])('minden tetel jelolve + igazolas, de %s -> 409, a kartya marad', async (_, author, line, key) => {
+    for (const [id, route] of [['p1', 'move'], ['p2', 'put']] as const) {
+      cardInTesting(id, 'Koteg: 2 tetel')
+      addKanbanComment(id, 'dexter', 'TETEL 1: JAVITVA abc1234\nTETEL 2: HAMIS nem valodi lelet')
+      addKanbanComment(id, author, line)
+      addKanbanComment(id, 'friday', PROOF)
+      expect(state(id)).toEqual({ declared: 2, missing: [], invalid: [] })
+      const r = route === 'move'
+        ? await call('POST', `/api/kanban/${id}/move`, { status: 'done', actor: 'friday' })
+        : await call('PUT', `/api/kanban/${id}`, { status: 'done', actor: 'friday' })
+      expect(r.status, route).toBe(409)
+      expect(r.payload[key].map((v: { author: string }) => v.author), route).toEqual([author])
+      expect(r.payload.unmarked_items, route).toBeUndefined()
+      expect(getKanbanCard(id)?.status, route).toBe('testing')
+      initDatabase(':memory:')
+    }
+  })
+
   it('negativ kontroll: egy-teteles cim es cim nelkuli szamozott leiras nem akad meg', async () => {
     cardInTesting('n1', 'SEC/LOW köteg (48365fbf, files-email): 1 tétel')
     cardInTesting('n2', 'Lepesek', 'TEENDO:\n1. a kapu\n2. a triazs\n3. a dokumentacio')
