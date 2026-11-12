@@ -23,6 +23,7 @@ import {
   KANBAN_ELSEWHERE_FIELDS,
   getTokenPruneLag,
   getStuckKanbanCards,
+  getBoardSummary,
   type TokenPruneLag,
   recordKanbanCloseOverride,
 } from '../../db.js'
@@ -388,7 +389,7 @@ const KANBAN_LIST_PARAMS: readonly string[] = ['fields', 'agent', 'assignee', 'i
 const KANBAN_ARCHIVED_PARAMS: readonly string[] = ['q', 'project', 'label', 'from', 'to', 'limit']
 
 /** Literal sub-paths of /api/kanban that are NOT card ids. */
-export const KANBAN_RESERVED_SEGMENTS = ['archived', 'labels', 'assignees', 'heartbeat-summary', 'due-date-rules', 'stuck'] as const
+export const KANBAN_RESERVED_SEGMENTS = ['archived', 'labels', 'assignees', 'heartbeat-summary', 'due-date-rules', 'stuck', 'summary'] as const
 
 /** Match `/api/kanban/<id>` -- and NEVER match a literal sub-path.
  *
@@ -736,6 +737,19 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   // naming items; the numbers ONLY ever come from counts.
   if (path === '/api/kanban/heartbeat-summary' && method === 'GET') {
     json(res, buildHeartbeatSummaryResponse(getHeartbeatKanbanSummary(), countNewHotMemories(MAIN_AGENT_ID), countPlannedKanbanCards(), getDbFileSizeMb(), getTokenPruneLag()))
+    return true
+  }
+
+  // Card ed3c8caf (#569): per-agent board summary for the morning look.
+  // hours (default 24, max 168) sets how far back "closed" reaches.
+  if (path === '/api/kanban/summary' && method === 'GET') {
+    const hours = Number(url.searchParams.get('hours') ?? '24')
+    if (!Number.isFinite(hours) || hours <= 0 || hours > 168) {
+      json(res, { error: 'invalid hours: must be a number in (0, 168]' }, 400)
+      return true
+    }
+    const since = Math.floor(Date.now() / 1000) - Math.round(hours * 3600)
+    json(res, getBoardSummary({ since, ownerName: OWNER_NAME, botName: BOT_NAME, mainAgentId: MAIN_AGENT_ID }))
     return true
   }
 

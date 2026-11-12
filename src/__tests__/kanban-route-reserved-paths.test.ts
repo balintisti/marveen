@@ -33,7 +33,10 @@ describe('matchKanbanCardPath', () => {
     // failure, one endpoint later.
     expect([...KANBAN_RESERVED_SEGMENTS].sort()).toEqual(
       // 'stuck': upstream's GET /api/kanban/stuck (merge 88c366f2).
-      ['archived', 'assignees', 'due-date-rules', 'heartbeat-summary', 'labels', 'stuck'].sort(),
+      // 'summary': GET /api/kanban/summary (card ed3c8caf, #569): without it PUT/DELETE
+      // /api/kanban/summary fall to the card-id arms and POST could create a card with
+      // the id "summary" that the summary route then shadows.
+      ['archived', 'assignees', 'due-date-rules', 'heartbeat-summary', 'labels', 'stuck', 'summary'].sort(),
     )
   })
 

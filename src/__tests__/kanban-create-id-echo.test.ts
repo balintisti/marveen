@@ -44,6 +44,13 @@ describe('POST /api/kanban -- the reported id is the stored id', () => {
     expect(getKanbanCard(out.body.id)?.title).toBe('Generated card')
   })
 
+  it('refuses a supplied id that is a reserved sub-path, "summary" included', async () => {
+    const { ctx, out } = postCtx({ id: 'summary', title: 'Shadowed by the summary route' })
+    expect(await tryHandleKanban(ctx)).toBe(true)
+    expect(out.status).toBe(400)
+    expect(getKanbanCard('summary')).toBeUndefined()
+  })
+
   it('ignores a blank supplied id rather than storing an empty key', async () => {
     const { ctx, out } = postCtx({ id: '   ', title: 'Blank id card' })
     expect(await tryHandleKanban(ctx)).toBe(true)
