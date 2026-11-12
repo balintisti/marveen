@@ -47,11 +47,42 @@ describe('TESTENVLEAK1101: no environment in a failed scan\'s log line', () => {
 
   it('channel-poller-reap.ts never logs a raw error object (source pin)', () => {
     const src = readFileSync(join(__dirname, '..', 'web', 'channel-poller-reap.ts'), 'utf8')
-    // `{ err }`, `{ x, err }`, `{ err: e }`: the error object as a field (execFailure(err) is the allowed form)
-    expect(src).not.toMatch(/logger\.\w+\(\s*\{(?:[^}]*[{,]\s*)?err\s*[,}:]/)
+    // `{ err }`, `{ x, err }`, `{ err: e }`, `{ ...execFailure(err), cause: err }`: the error object as a
+    // field, spaced as this repo writes it (didi 59355). execFailure(err) is the allowed form.
+    expect(src).not.toMatch(/logger\.\w+\(\s*\{[^}]*\berr\b\s*[,}:]/)
     expect(src).not.toMatch(/logger\.\w+\(\s*err\s*[,)]/)
-    const catches = [...src.matchAll(/catch \((\w+)\) \{\n\s+logger\.\w+\(([^\n]*)/g)]
-    expect(catches.length).toBeGreaterThanOrEqual(5)
-    for (const [, name, args] of catches) expect(args, args).toContain(`execFailure(${name})`)
+    // Whatever the catch variable is called and wherever in the catch the log line stands: every
+    // logger call inside a catch names the error only through execFailure(<it>).
+    const logging = catchBlocks(src).filter((c) => /logger\.\w+\(/.test(c.body))
+    expect(logging.length).toBeGreaterThanOrEqual(5)
+    for (const { name, body } of logging) {
+      for (const call of loggerCalls(body)) {
+        expect(call, call).toContain(`execFailure(${name})`)
+        expect(call.split(`execFailure(${name})`).join(''), call).not.toMatch(new RegExp(`\\b${name}\\b`))
+      }
+    }
   })
 })
+
+/** The text from `open` (an opening bracket) to its matching close; brackets inside strings are not special-cased. */
+function balanced(src: string, open: number): string {
+  const pair: Record<string, string> = { '{': '}', '(': ')' }
+  const close = pair[src[open]!]!
+  let depth = 0
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === src[open]) depth++
+    else if (src[i] === close && --depth === 0) return src.slice(open, i + 1)
+  }
+  return src.slice(open)
+}
+
+function catchBlocks(src: string): Array<{ name: string; body: string }> {
+  return [...src.matchAll(/catch \((\w+)\) \{/g)].map((m) => ({
+    name: m[1]!,
+    body: balanced(src, m.index! + m[0].length - 1),
+  }))
+}
+
+function loggerCalls(body: string): string[] {
+  return [...body.matchAll(/logger\.\w+\(/g)].map((m) => balanced(body, m.index! + m[0].length - 1))
+}
