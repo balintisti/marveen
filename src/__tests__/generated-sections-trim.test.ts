@@ -34,7 +34,7 @@ const END = (n: Sec) => `<!-- END GENERATED: ${n} -->`
 // The ceiling is that measurement plus a small margin (the normalised root is shorter, the
 // long test agent name is longer).
 // autonomy-wiring again, card 134bff2f: the two curl recipes moved to the rulebook, measured on
-// this test's own agent and root: 1967 ceiling -> 1542 (the ceiling is that plus a margin).
+// this test's own agent and root: 1967 ceiling -> 1577 (the ceiling is that plus a margin).
 const CEILING: Record<Sec, number> = {
   'autonomy-wiring': 1600,
   'skills-path-trap': 960,
@@ -149,6 +149,7 @@ describe('autonomy-wiring: the approval flow survives the trim', () => {
     expect(p).toContain('a `<<JSON` is behelyettesít')
     expect(p).toContain('`--data-binary @fájl`')
     expect(p).toContain('`python3` + `json.dumps`')
+    expect(p).toContain('A header `$(cat ...)`-ja')
     expect(p).toContain('írás utáni VISSZAOLVASÁS fogja meg')
   })
 })

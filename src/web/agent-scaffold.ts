@@ -2216,7 +2216,7 @@ function buildAutonomyBody(name: string, desk: string | null = null): string {
     `A két hívás teljes curl-receptje (dashboard: ${dashboardOrigin}, token: ${tokenPath}): \`${generatedRationalePath}\`, "${AUTONOMY_RECIPE_HEADING.replace(/^## /, '')}" szakasz.`,
     'PAYLOAD, minden API-hívásnál: a `-d "{...}"` dupla idézőjeles alak TILOS (a backtick és a `$(...)` lefut, a küldés mégis 200).',
     "IDÉZETT határoló (`<<'JSON'`; a `<<JSON` is behelyettesít) vagy `--data-binary @fájl`; változóhoz `python3` + `json.dumps`.",
-    'Csak az írás utáni VISSZAOLVASÁS fogja meg.',
+    'A header `$(cat ...)`-ja maradhat. Csak az írás utáni VISSZAOLVASÁS fogja meg.',
   ].join('\n')
 }
 
