@@ -61,6 +61,47 @@ The sanctioned route for external content is unchanged: the quarantine-reader
 sub-agent, through `WebFetch`, where the domain check already runs. A host being
 on the egress allowlist does not open it to the shell.
 
+### The reader starts without the rule sheet (card ecbb62e6)
+
+`templates/sub-agents/quarantine-reader.md` carries `omitClaudeMd: true` in its
+frontmatter: Claude Code then leaves the parent's CLAUDE.md block out of the
+reader's first request. The reader has one tool and one answer shape, and it is
+the one sub-agent that reads pages nobody vetted, so the fleet rule sheet is text
+it cannot use and should not be holding while it describes a hostile page. The
+sheet was also most of what a launch cost: with it, two reader launches measured
+30 252 and 30 262 first-prompt tokens, the sheet block present in both. With the
+key, from a session started after the change, the same two launches measured
+5 964 and 5 974, the block absent in both, and the off-list host was refused with
+the same sentence and no tool call (2026-11-12, Claude Code 2.1.314, one agent's
+sheet, sub-agent model claude-haiku-5-5).
+
+What follows from it:
+
+- **The body is the only rule text the reader carries.** A rule that lives only
+  in an agent's CLAUDE.md no longer reaches the reader. Whatever it must obey goes
+  into the template body. `quarantine-allowlist-render.test.ts` pins, on the
+  shipped template and through the deploy's own render, that the key stays inside
+  the frontmatter and that the body keeps its rule sections.
+  The first case came with the change itself: the sheet's no-guessing rule was what
+  kept `status` at null when WebFetch exposed no code, and the first launch without
+  the sheet answered 200. The body's protocol now says null for that case.
+- **That test pins the key's text, not its effect.** A mistyped or unsupported
+  key is ignored without a word. The proof is a number: launch a reader, then read
+  its first request (`<CLAUDE_CONFIG_DIR>/projects/<cwd>/<session>/subagents/agent-*.jsonl`)
+  for the first-prompt token count and for the absence of the block that starts
+  "Codebase and user instructions are shown below". Measure again after a Claude
+  Code upgrade.
+- **Measure from a session that started after the definition changed.** On
+  2.1.314 a running session kept the definition it started with: with the key
+  added mid-session three launches still carried the sheet, and a host added to
+  the body's domain list mid-session was still refused without a tool call. The
+  next session of the same agent, started with the key already in the file, gave
+  the lean numbers above. So "the key does not work" is the wrong reading of a
+  mid-session miss; "this session has not read it yet" is the right one (the same
+  shape as the user-scope trap below). It also
+  disagrees with the 2026-08-24 reading recorded above `quarantineReaderDestDir()`;
+  that disagreement is open on card 4341fd40.
+
 ### Per-agent https exception (card fa917eba)
 
 `store/egress-vendor-hosts.json` may carry `"agents": {"<name>": ["exact.host"]}`.
