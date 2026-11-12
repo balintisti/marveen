@@ -149,6 +149,8 @@ Minden dashboard-szerkeszthető beállítás egy bejegyzésként szerepel a regi
 | `DASHBOARD_PUBLIC_URL` | string | (üres) | A dashboard nyilvánosan elérhető URL-je | igen |
 | `OLLAMA_URL` | string | `http://localhost:11434` | Ollama API alap-URL | igen |
 | `MEMORY_IMPORT_CATEGORIZE_MODEL` | string | (üres) | Memória-import besoroló Ollama modellje (felülbírálás); üres = telepített `gemma4` felismerése, olyan híján minden warm | igen |
+| `OSS_INVENTORY_NOTES_DIRS` | string | `research` | Vesszővel elválasztott mappanevek az ügynök mappáján belül, amelyek `*.md` kutatási jegyzeteiből az átvett nyílt forrású projektek leltára (Kapcsolatok oldal, `GET /api/opensource-inventory`) a csillagszámot és a mért előtte/utána hatást olvassa, pl. `research,kutatas`; csak sima mappanév (nincs `/`, nincs `..`) | nem |
+| `OSS_INVENTORY_OWN_OWNERS` | string | (üres) | Vesszővel elválasztott repó-tulajdonosnevek az átvett nyílt forrású projektek leltárához, pl. a saját GitHub-fiók(ok). A bejárás által elért, olvasható http(s)- vagy ssh-originű klónok a listán vannak, hacsak az origin-tulajdonosnevük nem szerepel az OSS_INVENTORY_OWN_OWNERS beállításban. A bejárás nem néz bele másik klónba, node_modules-ba, gyorsítótárakba, virtuális környezetekbe, kicsomagolt vendor-csomagokba és szimbolikus linkkel bekötött mappákba. A név a klón saját origin-címének első útvonal-tagja, bármelyik hoszton (a hosztot nem nézi); az egyező klónt, egy ilyen tulajdonosnál tartott, harmadik féltől származó forkot is, megszámolja (`summary.unlisted_clones`), nem listázza. A tulajdonjogot nem a telepítés remote-jaiból következteti ki. Az olvasható http(s)- vagy ssh-origin nélküli klónt megszámolja, nem listázza | nem |
 
 **Registry -- Heartbeat modul:**
 
