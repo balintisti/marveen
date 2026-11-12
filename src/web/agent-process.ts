@@ -1634,9 +1634,50 @@ function runTmux(target: string | null | TmuxTarget, tmuxArgs: string[], opts: {
   execFileSync(inv.file, inv.args, { timeout: opts.timeout ?? (host ? 8000 : 3000), stdio: ['ignore', 'ignore', 'pipe'] })
 }
 
+let tmuxBatch: Map<string, { out?: string; err?: unknown }> | null = null
+
+/**
+ * Run `fn` with a per-call memo for READ-ONLY tmux queries: inside it, identical `list-sessions`
+ * invocations run once (errors included). `fn` must be synchronous. Nested calls reuse the outer batch.
+ */
+export function withTmuxBatch<T>(fn: () => T): T {
+  if (tmuxBatch !== null) return assertSync(fn())
+  tmuxBatch = new Map()
+  try {
+    return assertSync(fn())
+  } finally {
+    tmuxBatch = null
+  }
+}
+
+function assertSync<T>(r: T): T {
+  if (r !== null && (typeof r === 'object' || typeof r === 'function') && typeof (r as any).then === 'function') {
+    // The refused promise is dropped here; a later rejection must not become an unhandled one.
+    ;(r as any).then(undefined, () => {})
+    throw new TypeError('withTmuxBatch: fn must be synchronous')
+  }
+  return r
+}
+
 function captureTmux(target: string | null | TmuxTarget, tmuxArgs: string[], opts: { timeout?: number } = {}): string {
   const { host } = resolveTarget(target, tmuxArgs)
   const inv = tmuxInvocationFor(tmuxArgs, target)
+  if (tmuxBatch !== null && tmuxArgs[0] === 'list-sessions') {
+    const key = JSON.stringify([inv.file, inv.args])
+    const hit = tmuxBatch.get(key)
+    if (hit) {
+      if ('err' in hit) throw hit.err
+      return hit.out as string
+    }
+    try {
+      const out = execFileSync(inv.file, inv.args, { timeout: opts.timeout ?? (host ? 8000 : 3000), encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] })
+      tmuxBatch.set(key, { out })
+      return out
+    } catch (err) {
+      tmuxBatch.set(key, { err })
+      throw err
+    }
+  }
   // stdout piped (we return it); stderr piped too so tmux's `can't find session`
   // noise lands in err.stderr on failure rather than the parent stderr / dashboard.log.
   return execFileSync(inv.file, inv.args, { timeout: opts.timeout ?? (host ? 8000 : 3000), encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] })
