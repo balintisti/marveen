@@ -22,7 +22,10 @@
 #   content:  "-" reads STDIN (use for anything long or multi-line):
 #     bash scripts/memory-save.sh marveen cold "git, push" - < /tmp/mem.txt
 # Output: success -> "OK id=<n>"; failure -> "FAIL <reason>", exit 1.
-# Env: MARVEEN_WEB_PORT (default 3420).
+#   A save that repeats one of the agent's OWN memories is refused by the API (409
+#   duplicate): "NEM MENTETTEM duplikatum: ... id=<n>", exit 3, no retry (a retry
+#   cannot change the answer). Genuinely new information: ALLOW_DUPLICATE=1.
+# Env: MARVEEN_WEB_PORT (default 3420); ALLOW_DUPLICATE=1 sends allow_duplicate:true.
 set -uo pipefail
 
 BASE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -94,7 +97,9 @@ fi
 attempt=0; max=3; CODE=""; ID=""
 while [ "$attempt" -lt "$max" ]; do
   attempt=$((attempt+1))
-  BODY="$(AGENT="$AGENT" CAT="$CAT" KW="$KW" C="$C" python3 -c 'import json,os; print(json.dumps({"agent_id":os.environ["AGENT"],"category":os.environ["CAT"],"keywords":os.environ["KW"],"content":os.environ["C"]}))')"
+  BODY="$(AGENT="$AGENT" CAT="$CAT" KW="$KW" C="$C" ALLOW_DUP="${ALLOW_DUPLICATE:-}" python3 -c 'import json,os; b={"agent_id":os.environ["AGENT"],"category":os.environ["CAT"],"keywords":os.environ["KW"],"content":os.environ["C"]}
+if os.environ.get("ALLOW_DUP")=="1": b["allow_duplicate"]=True
+print(json.dumps(b))')"
   # The secret goes in a -K config from a process substitution, not argv (ps-visible); card 9ac56d05.
   RESP="$(curl -s -X POST "$URL" -H "Content-Type: application/json" -K <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN") -d "$BODY" -w $'\n%{http_code}' 2>/dev/null || true)"
   CODE="$(printf '%s' "$RESP" | tail -n1)"
@@ -110,6 +115,16 @@ except Exception:
   if { [ "$CODE" = "200" ] || [ "$CODE" = "201" ]; } && [ -n "$ID" ]; then
     echo "OK id=$ID"
     exit 0
+  fi
+  if [ "$CODE" = "409" ]; then
+    DUPS="$(printf '%s' "$JSON" | python3 -c 'import sys,json
+try:
+  d = json.load(sys.stdin)
+  print(",".join(str(x.get("id")) + ":" + str(x.get("match")) for x in d.get("duplicate_of", [])))
+except Exception:
+  print("")' 2>/dev/null)"
+    echo "NEM MENTETTEM duplikatum: ez egy sajat emleked ismetlese, id:egyezes=${DUPS:-?}. Ha tenyleg uj tartalom: ALLOW_DUPLICATE=1 bash scripts/memory-save.sh ..."
+    exit 3
   fi
   sleep 1
 done
