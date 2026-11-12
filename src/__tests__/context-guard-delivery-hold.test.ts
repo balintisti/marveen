@@ -50,6 +50,7 @@ vi.mock('../web/context-guard-store.js', async (orig) => {
   }
 })
 vi.mock('../web/agent-process.js', () => ({
+  withTmuxBatch: (fn: () => unknown) => fn(),
   clearFeedbackModalAndRecheck: () => false,
   agentRunState: agentProcess.agentRunState,
   agentSessionName: (n: string) => `agent-${n}`,

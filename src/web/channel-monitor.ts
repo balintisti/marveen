@@ -26,6 +26,7 @@ import {
   permissionPromptBlocksBareEnter,
   stampFableOverageConsentSharedRoots,
   isAgentRunning,
+  withTmuxBatch,
   sendPromptToSession,
   startAgentProcess,
   stopAgentProcess,
@@ -2729,16 +2730,22 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
 
     type Target = { session: string; isMarveen: boolean; agentName?: string; provider: ChannelProviderType }
     const targets: Target[] = [{ session: MAIN_CHANNELS_SESSION, isMarveen: true, provider: mainProvider }]
-    for (const a of listAgentNames()) {
-      if (isAgentRunning(a) && agentHasChannel(a)) {
-        targets.push({
-          session: agentSessionName(a),
-          isMarveen: false,
-          agentName: a,
-          provider: resolveAgentProvider(a),
-        })
+    // One list-sessions for the whole per-agent read: every isAgentRunning()
+    // below asks the identical read-only query, and withTmuxBatch answers all
+    // of them from one memoized spawn while this (synchronous) loop runs. No
+    // session state changes inside -- the loop only builds the target list.
+    withTmuxBatch(() => {
+      for (const a of listAgentNames()) {
+        if (isAgentRunning(a) && agentHasChannel(a)) {
+          targets.push({
+            session: agentSessionName(a),
+            isMarveen: false,
+            agentName: a,
+            provider: resolveAgentProvider(a),
+          })
+        }
       }
-    }
+    })
 
     // Pane-level thinking-block error detection. Independent of channel
     // plugin liveness: a session can keep a live plugin yet be wedged on

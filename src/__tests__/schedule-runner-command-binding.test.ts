@@ -69,6 +69,7 @@ vi.mock('../web/scheduled-tasks-io.js', () => ({
 }))
 
 vi.mock('../web/agent-process.js', () => ({
+  withTmuxBatch: (fn: () => unknown) => fn(),
   // merge 88c366f2: the merged code also calls these; neutral here (the file measures something else).
   saturationRefusesDispatch: () => false,
   clearFeedbackModalAndRecheck: () => false,

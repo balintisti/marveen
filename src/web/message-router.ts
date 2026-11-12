@@ -34,6 +34,7 @@ import {
   sessionExistsOnHost,
   capturePane,
   clearFeedbackModalAndRecheck,
+  withTmuxBatch,
 } from './agent-process.js'
 import { detectPaneState, detectsFirstRunGate, detectsPermissionPrompt, paneShowsContextSaturation, busyEvidence, type PaneState } from '../pane-state.js'
 import { permissionPromptAsk } from './permission-prompt-alert.js'
@@ -916,20 +917,27 @@ export async function runMessageRouterTick(): Promise<void> {
     const presentNow = new Set<string>()
     // agent -> {exists: bool, host, session} cached lookup for the main loop.
     const agentSessionCache = new Map<string, {host: string | null, session: string, exists: boolean, worksource: boolean}>()
-    for (const agent of receiversInTick) {
-      const host = readAgentRemoteHost(agent)
-      const session = agentSessionName(agent)
-      const exists = sessionExistsOnHost(host, session)
-      // Read once per receiver per tick, not once per message: the flag decides
-      // the whole delivery path below and a per-message read would re-open the
-      // same config file for every queued item.
-      agentSessionCache.set(agent, { host, session, exists, worksource: readAgentWorksourceChannel(agent) })
-      if (exists) {
-        presentNow.add(agent)
-      } else {
-        absentNow.add(agent)
+    // One list-sessions for the whole receiver pass: every local receiver's
+    // sessionExistsOnHost() asks the identical read-only query, and
+    // withTmuxBatch answers all of them from one memoized spawn while this
+    // (synchronous) loop runs. The per-agent answer is unchanged -- each agent
+    // is classified from the same session list the spawns would have returned.
+    withTmuxBatch(() => {
+      for (const agent of receiversInTick) {
+        const host = readAgentRemoteHost(agent)
+        const session = agentSessionName(agent)
+        const exists = sessionExistsOnHost(host, session)
+        // Read once per receiver per tick, not once per message: the flag decides
+        // the whole delivery path below and a per-message read would re-open the
+        // same config file for every queued item.
+        agentSessionCache.set(agent, { host, session, exists, worksource: readAgentWorksourceChannel(agent) })
+        if (exists) {
+          presentNow.add(agent)
+        } else {
+          absentNow.add(agent)
+        }
       }
-    }
+    })
     // ---- busy-stuck sweep over the QUIET agents (card bd7de2ba) ----
     // The delivery loop below answers the stuck question only for agents that
     // have mail. This covers the rest, with the same threshold, the same pane

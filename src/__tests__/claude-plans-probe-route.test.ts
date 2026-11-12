@@ -14,7 +14,7 @@ const tmpRoot = mkTmp('marveen-claude-plans-probe-test-')
 vi.mock('../config.js', () => ({ PROJECT_ROOT: tmpRoot, MAIN_AGENT_ID: 'agent-a', DEFAULT_AGENT_MODEL: 'claude-opus-5' }))
 vi.mock('../settings-store.js', () => ({ getEffectiveSettingValue: () => '' }))
 vi.mock('../web/channel-monitor.js', () => ({ hardRestartMarveenChannels: () => ({ ok: true }) }))
-vi.mock('../web/agent-process.js', () => ({ restartAgentProcess: async () => ({ ok: true }) }))
+vi.mock('../web/agent-process.js', () => ({ withTmuxBatch: (fn: () => unknown) => fn(),  restartAgentProcess: async () => ({ ok: true }) }))
 
 // Captures every logger call, so a test can assert the plan token never lands
 // in a log line (today the probe route logs only id/ok/error/httpStatus).
