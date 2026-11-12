@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **480** kovetett fajl, ebbol
-**147** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **492** kovetett fajl, ebbol
+**149** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -387,6 +387,15 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/hooks/telegram_progress_reply_clear.py`
 
 - Why: a single long turn can pull a bigger task forward and emit several replies
+
+### `scripts/hooks/y1-report-only/upstream/scripts/hooks/child-claude-channel-guard.mjs`
+
+- WHY. On start the Telegram plugin's server.ts reads $TELEGRAM_STATE_DIR/bot.pid
+
+### `scripts/hooks/y1-report-only/upstream/scripts/self-pace-gate.mjs`
+
+- Governance control (2026-06-26, after the autonom-kor incident: a sub-agent
+- Why a hook and not only a permissions deny-list: permissive profiles launch
 
 ### `scripts/idle-reporter.py`
 

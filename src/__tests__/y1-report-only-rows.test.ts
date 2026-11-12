@@ -9,12 +9,12 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpDirs } from './helpers/tmp-dirs.js'
 import { makeInstall, type Y1Install } from './helpers/y1-install.js'
 // @ts-expect-error -- plain .mjs hook script, no types
-import { INPUT_CAP_BYTES, agentLabel, isJudgedTool, logDir, loggedInput, run } from '../../scripts/hooks/y1-report-only/core.mjs'
+import { CAP_BYTES, INPUT_CAP_BYTES, agentLabel, appendRow, isJudgedTool, logDir, loggedInput, run } from '../../scripts/hooks/y1-report-only/core.mjs'
 
 const mkTmp = tmpDirs()
 
@@ -140,5 +140,45 @@ describe('y1-report-only rows: the hand-over to the watchdog', () => {
     expect(rowsIn(r.dir, 'calls.jsonl')).toHaveLength(1)
     expect(rowsIn(r.dir, 'calls.jsonl')[0]).not.toHaveProperty('dog')
     expect(rowsIn(r.dir, 'findings.jsonl')).toHaveLength(1)
+  })
+})
+
+// The log holds whole commands of every agent: nobody but its owner reads it (didi's survivors D3 and D4, comment
+// 58963: the two modes could be dropped and no test noticed).
+describe('y1-report-only rows: who can read the log', () => {
+  const mode = (p: string): string => (statSync(p).mode & 0o777).toString(8)
+
+  it('makes the directory 700 and a log file 600', () => {
+    const dir = join(mkTmp('y1-rows-mode-'), 'a', 'log')
+    expect(appendRow(dir, 'calls.jsonl', { n: 1 })).toBe(true)
+    expect(mode(dir)).toBe('700')
+    expect(mode(join(dir, 'calls.jsonl'))).toBe('600')
+    expect(appendRow(dir, 'findings.jsonl', { n: 1 })).toBe(true)
+    expect(mode(join(dir, 'findings.jsonl'))).toBe('600')
+  })
+
+  it('makes the marker of a full log 600 as well, and writes no row past the cap', () => {
+    const dir = join(mkTmp('y1-rows-mode-'), 'log')
+    const cap = CAP_BYTES['calls.jsonl'] as number
+    try {
+      expect(appendRow(dir, 'calls.jsonl', { n: 1 })).toBe(true)
+      CAP_BYTES['calls.jsonl'] = 1
+      expect(appendRow(dir, 'calls.jsonl', { n: 2 })).toBe(false)
+    } finally {
+      CAP_BYTES['calls.jsonl'] = cap
+    }
+    expect(mode(join(dir, 'calls.jsonl.FULL'))).toBe('600')
+    expect(rowsIn(dir, 'calls.jsonl')).toEqual([{ n: 1 }])
+  })
+})
+
+// didi's survivor D5: `startsWith(home)` without the slash gave a home the label of the agent whose name it begins with.
+describe('y1-report-only rows: an agent whose name begins with another agent\'s name', () => {
+  it('carries its own label, at its home and below it', () => {
+    const root = mkTmp('y1-rows-label-')
+    for (const name of ['dexter', 'dexterx']) mkdirSync(join(root, 'agents', name, 'sub'), { recursive: true })
+    expect(agentLabel(root, { CLAUDE_PROJECT_DIR: join(root, 'agents', 'dexterx') })).toBe('dexterx')
+    expect(agentLabel(root, { CLAUDE_PROJECT_DIR: join(root, 'agents', 'dexterx', 'sub') })).toBe('dexterx')
+    expect(agentLabel(root, { CLAUDE_PROJECT_DIR: join(root, 'agents', 'dexter', 'sub') })).toBe('dexter')
   })
 })
