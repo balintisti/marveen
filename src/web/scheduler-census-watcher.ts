@@ -116,7 +116,7 @@ function tick(): void {
     const { round, reported } = runSchedulerCensusOnce()
     if (reported) {
       logger.info(
-        { newEntries: round.newEntries.length, unreached: round.unreached.length, baseline: round.baseline },
+        { newEntries: round.newEntries.length, changed: round.changedEntries.length, unreached: round.unreached.length, baseline: round.baseline },
         'scheduler-census: report stored',
       )
     }

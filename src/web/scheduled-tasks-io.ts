@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { MAIN_AGENT_ID } from '../config.js'
 import { atomicWriteFileSync } from './atomic-write.js'
 import { readJsonObjectForWrite } from './agent-config.js'
+import { scheduledTaskDirNames } from './scheduled-task-dirs.js'
 
 export const SCHEDULED_TASKS_DIR = join(homedir(), '.claude', 'scheduled-tasks')
 
@@ -272,9 +273,7 @@ export function parseQuotaExempt(raw: unknown): true | undefined {
 
 export function listScheduledTasks(): ScheduledTask[] {
   if (!existsSync(SCHEDULED_TASKS_DIR)) return []
-  const dirs = readdirSync(SCHEDULED_TASKS_DIR).filter(f => {
-    try { return statSync(join(SCHEDULED_TASKS_DIR, f)).isDirectory() } catch { return false }
-  })
+  const dirs = scheduledTaskDirNames(SCHEDULED_TASKS_DIR)
   const tasks: ScheduledTask[] = []
   for (const d of dirs) {
     const task = readScheduledTask(d)

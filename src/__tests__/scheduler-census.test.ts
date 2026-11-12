@@ -174,6 +174,82 @@ describe('positive control: one planted entry per store, each reported exactly o
   })
 })
 
+describe('an edited entry is reported once (didi 59440 L2), and a lookalike under an installer name (L3)', () => {
+  it('an unknown task whose prompt is edited after it was reported: changed, once', () => {
+    const s = sandbox()
+    runSchedulerCensusOnce(s.deps)
+    mkdirSync(join(s.tasks, 'mine'))
+    writeFileSync(join(s.tasks, 'mine', 'SKILL.md'), '---\nname: mine\n---\n\nsay hi\n')
+    expect(runSchedulerCensusOnce(s.deps).round.newEntries.map((e) => e.label)).toEqual(['mine'])
+    writeFileSync(join(s.tasks, 'mine', 'SKILL.md'), '---\nname: mine\n---\n\nwork all night\n')
+    const r = runSchedulerCensusOnce(s.deps)
+    expect(r.round.newEntries).toEqual([])
+    expect(r.round.changedEntries.map((e) => [e.store, e.label, e.kind])).toEqual([[STORE_SCHEDULED_TASKS, 'mine', 'changed']])
+    expect(r.reported).toBe(true)
+    expect(s.sent.at(-1)).toMatch(/^\[SCHEDULER-CENSUS\] No new scheduler entries; 1 changed/)
+    expect(s.sent.at(-1)).toContain(`- ${STORE_SCHEDULED_TASKS}: mine (content changed`)
+    expect(runSchedulerCensusOnce(s.deps).reported).toBe(false)
+  })
+
+  it('a SEEDED task (known name, never reported) whose task-config.json is rewritten: changed', () => {
+    const s = sandbox()
+    writeFileSync(join(s.tasks, 'seed-a', 'task-config.json'), '{"schedule":"0 9 * * *","agent":"marveen"}')
+    runSchedulerCensusOnce(s.deps)
+    writeFileSync(join(s.tasks, 'seed-a', 'task-config.json'), '{"schedule":"*/5 * * * *","agent":"dexter"}')
+    const r = runSchedulerCensusOnce(s.deps)
+    expect(r.round.changedEntries.map((e) => [e.label, e.kind])).toEqual([['seed-a', 'changed']])
+    expect(r.round.newEntries).toEqual([])
+  })
+
+  it('an installed plist rewritten in place, and a cron-file item edited under the same id: changed', () => {
+    const s = sandbox()
+    writeFileSync(s.cronFile, JSON.stringify([{ id: 'cron-1', cron: '0 * * * *', prompt: 'a' }]))
+    runSchedulerCensusOnce(s.deps)
+    writeFileSync(join(s.la, 'com.marveen.tmpl-unit.plist'), '<plist><string>/tmp/other.sh</string></plist>')
+    writeFileSync(s.cronFile, JSON.stringify([{ id: 'cron-1', cron: '* * * * *', prompt: 'a' }]))
+    const r = runSchedulerCensusOnce(s.deps)
+    expect(r.round.changedEntries.map((e) => [e.store, e.kind]).sort()).toEqual([
+      [STORE_LAUNCH_AGENTS, 'changed'],
+      [`claude-cron-file:${s.cronFile}`, 'changed'],
+    ].sort())
+    expect(r.round.newEntries).toEqual([])
+  })
+
+  it('a plist appearing later under a name our installers use is reported, the baseline ones are not', () => {
+    const s = sandbox()
+    rmSync(join(s.la, 'com.marveen.heredoc-unit.plist'))
+    const first = runSchedulerCensusOnce(s.deps)
+    expect(first.round.changedEntries).toEqual([])
+    expect(first.reported).toBe(false)
+    writeFileSync(join(s.la, 'com.marveen.heredoc-unit.plist'), '<plist/>')
+    const r = runSchedulerCensusOnce(s.deps)
+    expect(r.round.changedEntries.map((e) => [e.label, e.kind])).toEqual([['com.marveen.heredoc-unit.plist', 'known-appeared']])
+    expect(s.sent.at(-1)).toContain("com.marveen.heredoc-unit.plist (appeared under an installer's name: check it is ours)")
+    expect(runSchedulerCensusOnce(s.deps).reported).toBe(false)
+  })
+
+  it('a state written before digests existed: that round records them silently, no flood', () => {
+    const s = sandbox()
+    writeFileSync(s.deps.statePath, JSON.stringify({ v: 1, seen: {}, unreached: {} }))
+    const r = runSchedulerCensusOnce(s.deps)
+    expect(r.round.changedEntries).toEqual([])
+    expect(r.reported).toBe(false)
+    expect(Object.keys(JSON.parse(readFileSync(s.deps.statePath, 'utf-8')).content).length).toBeGreaterThan(0)
+  })
+
+  it('a store NOT REACHED keeps its digests: reading it again reports no change', () => {
+    const s = sandbox()
+    runSchedulerCensusOnce(s.deps)
+    chmodSync(s.tasks, 0o000)
+    try {
+      runSchedulerCensusOnce(s.deps)
+    } finally {
+      chmodSync(s.tasks, 0o755)
+    }
+    expect(runSchedulerCensusOnce(s.deps).round.changedEntries).toEqual([])
+  })
+})
+
 describe('a store the census cannot read is NOT REACHED with the reason, never empty', () => {
   it('each store, once per reason; the entries it had are not re-reported when it is read again', () => {
     const s = sandbox()
