@@ -93,6 +93,35 @@ describe('getBoardSummary', () => {
     expect(dex.stuck[0].idle_days).toBeGreaterThanOrEqual(9)
   })
 
+  it('a stuck card assigned to the owner is not an agent row; another assignee keeps theirs', () => {
+    for (const [id, assignee] of [['o1', 'Owner'], ['d1', 'dex']]) {
+      createKanbanCard({ id, title: `Stuck ${id}`, assignee })
+      setCard(id, { status: 'in_progress', created_at: NOW - 10 * DAY, updated_at: NOW - 10 * DAY })
+      getDb().prepare('UPDATE kanban_card_events SET created_at = ? WHERE card_id = ?').run(NOW - 10 * DAY, id)
+      event(id, 'planned', 'in_progress', 'dex', NOW - 10 * DAY)
+    }
+    const s = getBoardSummary({ ...OPTS, since: NOW - DAY })
+    expect(s.agents.map((a) => a.agent)).toEqual(['dex'])
+    expect(s.agents[0].stuck.map((c) => c.id)).toEqual(['d1'])
+  })
+
+  it('the bot name folds into the main agent id, in the stuck list and in the close list', () => {
+    // A main agent id that differs from the bot name once lower-cased: with OPTS
+    // ('Orin' / 'orin') the fold is invisible, a deleted fold would still pass.
+    const opts = { ownerName: 'Owner', botName: 'Orin', mainAgentId: 'main-agent', since: NOW - DAY }
+    createKanbanCard({ id: 'b1', title: 'Stuck bot card', assignee: 'Orin' })
+    setCard('b1', { status: 'in_progress', created_at: NOW - 10 * DAY, updated_at: NOW - 10 * DAY })
+    getDb().prepare('UPDATE kanban_card_events SET created_at = ? WHERE card_id = ?').run(NOW - 10 * DAY, 'b1')
+    event('b1', 'planned', 'in_progress', 'orin', NOW - 10 * DAY)
+    createKanbanCard({ id: 'b2', title: 'Closed bot card', assignee: 'Orin' })
+    event('b2', 'in_progress', 'done', 'Orin', NOW - 600)
+    const s = getBoardSummary(opts)
+    expect(s.agents.map((a) => a.agent)).toEqual(['main-agent'])
+    expect(s.agents[0].stuck.map((c) => c.id)).toEqual(['b1'])
+    expect(s.agents[0].closed.map((c) => c.id)).toEqual(['b2'])
+    expect(s.agents[0].closed[0].closed_by).toBe('main-agent')
+  })
+
   it('owner_waiting: waiting cards assigned to the owner, counted in full, listed with a cap', () => {
     for (let i = 0; i < BOARD_SUMMARY_OWNER_CAP + 2; i++) {
       createKanbanCard({ id: `w${i}`, title: `Decide ${i}`, assignee: 'Owner', status: 'waiting' })

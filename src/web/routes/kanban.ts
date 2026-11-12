@@ -388,7 +388,7 @@ const KANBAN_LIST_PARAMS: readonly string[] = ['fields', 'agent', 'assignee', 'i
 const KANBAN_ARCHIVED_PARAMS: readonly string[] = ['q', 'project', 'label', 'from', 'to', 'limit']
 
 /** Literal sub-paths of /api/kanban that are NOT card ids. */
-export const KANBAN_RESERVED_SEGMENTS = ['archived', 'labels', 'assignees', 'heartbeat-summary', 'due-date-rules', 'stuck'] as const
+export const KANBAN_RESERVED_SEGMENTS = ['archived', 'labels', 'assignees', 'heartbeat-summary', 'due-date-rules', 'stuck', 'summary'] as const
 
 /** Match `/api/kanban/<id>` -- and NEVER match a literal sub-path.
  *
