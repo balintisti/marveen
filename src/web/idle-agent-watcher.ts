@@ -15,13 +15,15 @@ import { wakeRows } from '../message-wake.js'
 import { resolveMachineNoticeRecipient } from './front-desk-route.js'
 import { fleetAlertsAreFrontDeskWork, withFrontDeskHeader, type FrontDeskNotice } from '../front-desk.js'
 import { probeDetachedWork, readPaneCwds, type DetachedGroup } from './detached-work.js'
-import { getPendingMessages, getLastOutboundMessageAt, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
+import { deliveryHoldFor } from './delivery-hold.js'
+import { getPendingMessages, getLastOutboundMessageAt, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, getAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
 import {
   decideIdleAlert,
   parseWorkCheck,
   selectDeclaredWork,
   isCensusComment,
   buildNoWorkNotice,
+  withPaneApiErrorNote,
   idleDigestLine,
   orphanPullList,
   deferredOrphanList,
@@ -41,6 +43,7 @@ import {
   deliverFleetAlerts,
   type FleetAlert,
   NO_IDLE_STATE,
+  API_ERROR_RECHECK_MS,
   type IdleAgentState,
   coveredIdsStillPending,
   type IdleAgentThresholds,
@@ -532,6 +535,18 @@ export function apiErrorProgress(agent: string, lastResumeAt: number | null): bo
   }
 }
 
+// ONE EXTRA SWEEP AFTER A FIRST API-ERROR SIGHTING (card 8b8864e4, didi e7b806c0). Confirming on
+// the 3-minute tick alone made an interrupted agent wait 3-6 minutes (median 4.7, ~7 agent-hours a
+// day). A whole sweep, not a per-agent probe: every judgement in it is time-based (the confirm floor,
+// API_ERROR_CONFIRM_MIN_MS, included), so an extra sample moves nothing but this one answer earlier,
+// and the coordinator is visited first as on every sweep. One timer at a time.
+let apiErrorRecheck: ReturnType<typeof setTimeout> | null = null
+function scheduleApiErrorRecheck(): void {
+  if (apiErrorRecheck !== null) return
+  apiErrorRecheck = setTimeout(() => { apiErrorRecheck = null; tick() }, API_ERROR_RECHECK_MS)
+  apiErrorRecheck.unref?.()
+}
+
 // EXPORTALVA A NAPLOZAS MERHETOSEGEERT (kartya 60060415). A `readPane`-nel ugyanez a
 // dontes all: a kartya allitasa az, hogy MINDEN dontes naplozodik -- ezt csak ugy lehet
 // megmerni, ha a kort le lehet futtatni. Viselkedes nem mozdul, csak lathatosag.
@@ -713,6 +728,10 @@ export function tick(): void {
       const apiErrorProgressSinceResume = running && paneRead.apiError === true
         ? apiErrorProgress(agent, state.lastApiErrorResumeAt ?? null)
         : null
+      // Card 8b8864e4: was the last resume typed in? Then an error at the tail is a later loss.
+      const apiErrorResumeDelivered = running && paneRead.apiError === true && state.apiErrorResumeMsgId != null
+        ? getAgentMessage(state.apiErrorResumeMsgId)?.delivered_at != null
+        : undefined
       // The SAME split buildWakeMessage renders, on the SAME ownItems (card 52abd0d4); absent when the
       // queue is undeclared, and then only the ordinary re-arm applies. The bounced ids are not read
       // here: they regroup the message and cannot change this answer (see wakeHasPickableWork).
@@ -731,6 +750,7 @@ export function tick(): void {
           paneUsageLimited: running ? paneRead.usageLimited === true : false,
           paneApiError: running ? paneRead.apiError === true : false,
           apiErrorProgressSinceResume,
+          apiErrorResumeDelivered,
           runningSubagents: backgroundWork,
           // Read only when background work is seen: it is the one case that consumes it.
           lastActionAtMs: backgroundWork > 0 ? lastActionAtMs(agent, realComments ?? comments) : undefined,
@@ -754,6 +774,8 @@ export function tick(): void {
         THRESHOLDS,
         now,
       )
+      // Ahead of the decision log below, which must not branch on a reason (idle-guard-decision-log).
+      if (decision.reason === 'api-error-confirming') scheduleApiErrorRecheck()
       watchState.set(agent, next)
       try {
         saveIdleGuardState(agent, next, now)
@@ -805,8 +827,19 @@ export function tick(): void {
         // 843a9ab6): a failed enqueue must not look like a resume that happened, or the repeat window
         // would escalate an agent that was never written to. Without a stamp the next tick takes the
         // same decision again.
+        // NOT INTO A HELD QUEUE (card 8b8864e4). While the context-guard holds the agent's inbound
+        // rows for a restart, the row would wait there and reach the FRESH session as a stale "your
+        // turn died" (measured on didi 2026-11-10: written 09:12:17, delivered 09:31:12). The guard
+        // answers the dead turn itself in that window (API_ERROR_RESEND_REASON_PREFIX). No stamp, as
+        // for a failed enqueue: once the hold lapses the next tick decides again.
+        const hold = deliveryHoldFor(agent, now)
+        if (hold) {
+          logger.info({ agent, holdPhase: hold.phase, holdUntilMs: hold.untilMs }, 'idle guard: API-error resume not written -- the context-guard holds this agent\'s queue for a restart')
+          continue
+        }
+        let resumeRow: { id: number }
         try {
-          createAgentMessage('system', agent, buildApiErrorResumeMessage(decision.errorSinceMs))
+          resumeRow = createAgentMessage('system', agent, buildApiErrorResumeMessage(decision.errorSinceMs))
         } catch (err) {
           logger.warn({ err, agent }, 'idle guard: could not enqueue the API-error resume message')
           continue
@@ -816,6 +849,7 @@ export function tick(): void {
           lastApiErrorResumeAt: now,
           apiErrorHandledSince: next.apiErrorSinceMs ?? decision.errorSinceMs,
           apiErrorResumesNoProgress: (next.apiErrorResumesNoProgress ?? 0) + 1,
+          apiErrorResumeMsgId: resumeRow.id,
         }
         watchState.set(agent, stamped)
         try {
@@ -963,7 +997,7 @@ export function tick(): void {
         const isFirstOfSpell = next.idleSinceMs !== null && next.noWorkLiveSpellSince !== next.idleSinceMs
         if (isFirstOfSpell) {
           try {
-            sendNoWorkNotice(agent, noticeKind, withStandstillNote(buildNoWorkNotice(agent, minutes, Date.now(), noticeKind), stillNote))
+            sendNoWorkNotice(agent, noticeKind, withStandstillNote(withPaneApiErrorNote(buildNoWorkNotice(agent, minutes, Date.now(), noticeKind), running && paneRead.apiError === true), stillNote))
             watchState.set(agent, { ...next, noWorkLiveSpellSince: next.idleSinceMs })
             // Saved again here, not left to the next tick (card e6045a1b): the row above was written
             // before this stamp existed, so a restart inside the next three minutes would re-send it.
@@ -994,7 +1028,7 @@ export function tick(): void {
         } catch (digestErr) {
           logger.warn({ err: digestErr, agent }, 'idle guard: could not write the daily digest -- telling the coordinator instead')
           try {
-            sendNoWorkNotice(agent, noticeKind, withStandstillNote(buildNoWorkNotice(agent, minutes, Date.now(), noticeKind), stillNote))
+            sendNoWorkNotice(agent, noticeKind, withStandstillNote(withPaneApiErrorNote(buildNoWorkNotice(agent, minutes, Date.now(), noticeKind), running && paneRead.apiError === true), stillNote))
           } catch (err) {
             logger.warn({ err, agent }, 'idle guard: could not tell the coordinator about an unassigned idle agent')
           }

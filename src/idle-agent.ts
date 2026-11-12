@@ -293,6 +293,9 @@ export interface IdleAgentState {
    *  since the last resume. Persisted (db.ts SUPPRESSOR_COUNTS): a restart must not hand an agent
    *  whose resumes keep failing a fresh set of resumes. */
   apiErrorResumesNoProgress?: number
+  /** The queue row of the last resume the watcher enqueued (card 8b8864e4). In memory only: after a
+   *  dashboard restart it is absent, and a second loss is then judged as before this card. */
+  apiErrorResumeMsgId?: number | null
 }
 
 export interface IdleAgentInput {
@@ -349,6 +352,9 @@ export interface IdleAgentInput {
    *  true = yes, false = no, absent/null = not measured (no resume yet, a remote agent, no readable
    *  transcript); then the old 10-minute rule decides. */
   apiErrorProgressSinceResume?: boolean | null
+  /** Has the resume behind lastApiErrorResumeAt been DELIVERED (typed into the pane)? Card 8b8864e4.
+   *  true = yes; false/absent = not delivered, or not known (no row id on record). */
+  apiErrorResumeDelivered?: boolean
   /** Background work the pane shows RUNNING (runningBackgroundWork): sub-agent rows, the
    *  `Waiting for N background agents` line, and the shells and monitors the footer counts. An
    *  agent with a free prompt and background work at hand is not standing idle: no wake, no
@@ -579,9 +585,17 @@ export const API_ERROR_REPEAT_MS = 10 * 60_000
  *  transcripts since 10-20, 0 of 2982 resumes failed twice in a row, yet 37.6% of errors came within
  *  10 minutes of the previous one, so the time window stopped resumes after independent errors. */
 export const API_ERROR_PARK_AFTER = 3
-/** Consecutive ticks that must see the error before the agent is written to: at the 3-minute tick
- *  that is 3-6 minutes, long enough for a turn that is merely between two retries. */
+/** Consecutive ticks that must see the error before the agent is written to. On the 3-minute tick
+ *  alone that was 3-6 minutes (didi e7b806c0: median 4.7 min, ~7 agent-hours a day over 225 losses);
+ *  the watcher now looks again API_ERROR_RECHECK_MS after the first sighting (card 8b8864e4). */
 export const API_ERROR_CONFIRM_TICKS = 2
+/** The least time between the sighting that starts a streak and the one that confirms it (card
+ *  8b8864e4). What keeps a turn that is merely between two retries safe now that the second sighting
+ *  can come a minute after the first: the CLI's own retry draws a spinner (the pane is not idle, so
+ *  not "seen"), and a pane still idle with the error at the tail after this long is not retrying. */
+export const API_ERROR_CONFIRM_MIN_MS = 50_000
+/** When the watcher looks again after a first sighting: one extra sweep, not a faster tick. */
+export const API_ERROR_RECHECK_MS = 60_000
 
 function decideIdleAlertCore(
   input: IdleAgentInput,
@@ -608,6 +622,23 @@ function decideIdleAlertCore(
     input.running && input.paneApiError === true && input.paneIdle === true && subagents <= 0 &&
     input.paneUsageLimited !== true && input.pendingMessages === 0 && input.standstillActive !== true
   if (!apiErrorSeen && (state.apiErrorSinceMs != null || (state.apiErrorTicks ?? 0) > 0 || state.apiErrorHandledSince != null)) {
+    state = { ...state, apiErrorSinceMs: null, apiErrorTicks: 0, apiErrorHandledSince: null }
+  }
+  // A LOSS AFTER THE DELIVERED RESUME IS A NEW LOSS (card 8b8864e4, marveen 57334). Measured on
+  // jarvis 2026-11-10: the resume 10012777 was typed in at 09:12:22, the resumed turn died the same
+  // way seconds later, and every 3-minute tick before and after showed the SAME pane -- idle, the
+  // error at the tail. The streak never broke, so "one answer per streak" read the second loss as
+  // the first, already answered; the agent stood 12 minutes until the no-work notice named the
+  // wrong cause. Once the resume this streak was answered with has been typed in, the error at the
+  // tail can only be a later one: start a new streak. It confirms like any other, and the
+  // progress count above (API_ERROR_PARK_AFTER) still stops a resume that keeps failing.
+  // Only a streak answered by a RESUME: one answered by the repeat alert has no resume of its own
+  // (lastApiErrorResumeAt is older than the streak), and restarting it would re-alert every tick.
+  if (
+    apiErrorSeen && input.apiErrorResumeDelivered === true &&
+    state.apiErrorHandledSince != null && state.apiErrorHandledSince === state.apiErrorSinceMs &&
+    state.lastApiErrorResumeAt != null && state.lastApiErrorResumeAt >= state.apiErrorHandledSince
+  ) {
     state = { ...state, apiErrorSinceMs: null, apiErrorTicks: 0, apiErrorHandledSince: null }
   }
   const clear = (reason: Extract<IdleDecision, { alert: false }>['reason']) => ({
@@ -658,7 +689,7 @@ function decideIdleAlertCore(
     const sinceMs = state.apiErrorSinceMs ?? now
     const ticks = (state.apiErrorTicks ?? 0) + 1
     const keepSpell = state.idleSinceMs ?? now
-    if (ticks < API_ERROR_CONFIRM_TICKS) {
+    if (ticks < API_ERROR_CONFIRM_TICKS || now - sinceMs < API_ERROR_CONFIRM_MIN_MS) {
       return {
         decision: { alert: false, reason: 'api-error-confirming' },
         next: { ...state, idleSinceMs: keepSpell, apiErrorSinceMs: sinceMs, apiErrorTicks: ticks },
@@ -1915,6 +1946,17 @@ export function buildPullNotice(
  *  scripts/napindito-sections.py. `ts` is epoch MILLISECONDS here -- the reader divides. */
 export function idleDigestLine(agent: string, minutes: number, nowMs: number, kind?: WorkCheckKind | null): string {
   return JSON.stringify({ ts: nowMs, agent, minutes, kind: kind ?? null }) + '\n'
+}
+
+/** The no-work notice for an agent whose pane ends in an API error (card 8b8864e4, marveen 57334):
+ *  "nothing is assigned" is then the wrong cause to give the coordinator. Reached after the API-error
+ *  answers are spent (a parked streak) or when the error is not judged (a letter on its way). */
+export function withPaneApiErrorNote(text: string, paneApiError: boolean): string {
+  if (!paneApiError) return text
+  return (
+    'FIGYELEM: a pane utolso blokkja API-HIBA, a fordulója megszakadt. Ez NEM a "nincs munka" esete: ' +
+    'lehet, hogy munka kozben allt meg; a lenti tanacs (kartya, standstill) erre nem valasz.\n\n' + text
+  )
 }
 
 export function buildNoWorkNotice(agent: string, minutes: number, nowMs: number, kind?: WorkCheckKind | null): string {

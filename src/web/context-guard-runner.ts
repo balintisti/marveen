@@ -22,7 +22,7 @@ import {
 import { sessionNameForAgent } from './session-names.js'
 import { sendSystemDirective } from './system-directive.js'
 import { notifyChannel } from '../notify.js'
-import { detectPaneState, paneShowsContextSaturation, paneShowsContextSaturationHardError, runningBackgroundWork } from '../pane-state.js'
+import { detectPaneState, detectsMidTurnApiError, paneShowsContextSaturation, paneShowsContextSaturationHardError, runningBackgroundWork } from '../pane-state.js'
 import { descendsFrom, liveHeavyRunJobs } from '../heavy-run-jobs.js'
 import { usageLimitHolds } from '../usage-limit-window.js'
 import { readContextTokensFromProjectDir, readActiveModelFromProjectDir, readTranscriptMtimeFromProjectDir, readLastTurnActivityMs, readLastCompactionMs, predatesSession, transcriptWrittenSince } from './active-model.js'
@@ -55,6 +55,7 @@ import {
   READY_TIMEOUT_MS,
   READY_TIMEOUT_REASON,
   STALE_REFRESH_REASON_PREFIX,
+  API_ERROR_RESEND_REASON_PREFIX,
   SUBAGENT_GATE_REASON_PREFIX,
   SATURATION_CREDIBLE_MIN_PCT,
   saturationBannerCredible,
@@ -418,6 +419,21 @@ export function staleRefreshHandoffPrompt(staleMinutes: number, handoffPath: str
     `tehát a mostani állapotot MÁR NEM fedi (döntések, verdiktek, üzenetváltások hiányoznak belőle). ` +
     `EGYETLEN dolgod ebben a körben: frissítsd a HANDOFF.md-t itt: ${handoffPath} úgy, hogy a legutóbbi munkát is tartalmazza ` +
     `(mi dőlt el, mi került leadásra, mi a következő lépés). Utána ÁLLJ MEG -- a rendszer friss kontextussal újraindít és ebből folytatod.`
+  )
+}
+
+/**
+ * The handoff request again, for a pane that ended in an API error before the handoff was written
+ * (card 8b8864e4). A sixth wording: the agent may not know its turn died, and the first request may
+ * read to it as already answered. It says what happened and that the request stands; it does not
+ * repeat the reason the sequence started, which the first request already gave.
+ */
+export function apiErrorResendHandoffPrompt(handoffPath: string): string {
+  return (
+    `[CONTEXT-GUARD] Az előző fordulód API-hibával megszakadt ("Connection lost" vagy hasonló), és a HANDOFF.md nem készült el. ` +
+    `A korábbi kérés áll. EGYETLEN dolgod ebben a körben: írj HANDOFF.md-t a /handoff skill struktúrája szerint ide: ${handoffPath} ` +
+    `(Goal / Current Progress / What Worked / What Didn't Work / Next Steps, konkrét fájl-útvonalakkal és kanban kártya-azonosítókkal). ` +
+    `Utána ÁLLJ MEG; a rendszer friss kontextussal újraindít és a HANDOFF.md-ből folytatod.`
   )
 }
 
@@ -978,6 +994,8 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
     subagentGateRefusal: running && needPct && cfg.enabled ? readSubagentGateRefusal(name, since) : null,
     // Whole-file read, so only where the answer can decide something.
     compactedAtMs: running && state.phase === 'await-handoff' ? readLastCompactionMs(workingDirFor(name), configDirFor(name)) : null,
+    // Same capture as paneIdle; only await-handoff reads it (card 8b8864e4).
+    paneApiError: state.phase === 'await-handoff' && pane !== null && detectsMidTurnApiError(pane),
     dailyHandoffDue: (() => {
       // Forgetting does NOT wait for an idle sweep: an agent that was never idle
       // while the tier was off would otherwise keep its old armed record, and
@@ -1106,6 +1124,9 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
             // The handoff exists but went stale while we waited for an idle
             // pane; ask for a refresh, not a first write.
             ? staleRefreshHandoffPrompt(((sm) => typeof sm === 'number' ? sm : 0)(handoffStaleMinutes(inputs)), handoffPathFor(name))
+            : decision.reason.startsWith(API_ERROR_RESEND_REASON_PREFIX)
+              // The turn that was to answer the first request died; say so, and that it stands.
+              ? apiErrorResendHandoffPrompt(handoffPathFor(name))
             : decision.reason.startsWith(IDLE_FLUSH_REASON_PREFIX)
               // pct is null whenever the idle tier runs without the proactive
               // tiers, so the alarming percentage-based prompt would read "~0%
@@ -1123,8 +1144,8 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
           null,
           {
             survival: 'degrades',
-            // Never re-issued: nextState is phase 'await-handoff' (context-guard.ts). But a
-            // dropped prompt is not silent either -- on deadlineMs the guard force-restarts,
+            // Never re-issued, except once to a pane that ended in an API error before answering
+            // (MAX_API_ERROR_RESENDS, card 8b8864e4). But a dropped prompt is not silent either -- on deadlineMs the guard force-restarts,
             // and its own comment expects exactly this ("agent wedged or ignored the prompt").
             // Worse outcome, not a lost one: that is what 'degrades' means. The daily tier goes
             // through the same handoffRequest(), so the same deadline covers it.

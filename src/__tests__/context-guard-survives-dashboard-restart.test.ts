@@ -35,6 +35,7 @@ const world = vi.hoisted(() => ({
   compactedAtMs: null as number | null,
   runningSinceSec: null as number | null,
   backgroundWork: 0,
+  pane: '',
   allOff: false,
   sessionReady: false,
   send: vi.fn(async (..._args: unknown[]): Promise<string> => 'sent'),
@@ -102,7 +103,7 @@ vi.mock('../web/agent-process.js', () => ({
   agentRunState: () => 'running',
   agentSessionName: (n: string) => `agent-${n}`,
   restartAgentProcess: world.restart,
-  capturePane: () => '',
+  capturePane: () => world.pane,
   sendPromptToSession: vi.fn(),
   isSessionReadyForPrompt: async () => world.sessionReady,
   paneEchoesInput: async () => 'echoed',
@@ -158,7 +159,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(T0)
   rmSync(join(SANDBOX, 'store'), { recursive: true, force: true })
-  Object.assign(world, { tokens: 0, compactedAtMs: null, runningSinceSec: T0 / 1000 - 3600, backgroundWork: 0, allOff: false, sessionReady: false })
+  Object.assign(world, { tokens: 0, compactedAtMs: null, runningSinceSec: T0 / 1000 - 3600, backgroundWork: 0, pane: '', allOff: false, sessionReady: false })
   world.send.mockReset().mockImplementation(async () => 'sent')
   world.restart.mockReset().mockImplementation(async () => ({ ok: true }))
   for (const fn of Object.values(world.log)) fn.mockClear()
@@ -454,5 +455,38 @@ describe('a restart held for background work is said once', () => {
     world.backgroundWork = 0
     await vi.advanceTimersByTimeAsync(5 * MIN)
     expect(restartsOf('boni')).toBe(1)
+  })
+})
+
+// Card 8b8864e4: the runner reads the API error off the capture it already takes, and the re-send
+// goes out in its own wording (the decision is pinned in context-guard-api-error-resend.test.ts).
+describe('the turn that was to write the handoff died in an API error', () => {
+  const SEP = '─'.repeat(80)
+  const BOX = `${SEP}\n❯ \n${SEP}`
+  const FOOT = '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ↓ to manage'
+  const ERR_PANE = `  Írom a handoffot.\n\n⏺ API Error: Connection lost mid-response. The response above may be \n  incomplete.\n\n${BOX}\n${FOOT}`
+  const CLEAN_PANE = `  Dolgozom.\n\n${BOX}\n${FOOT}`
+
+  it('the pane ends in the error -> the request goes out again, once, saying the turn died; the deadline still restarts', async () => {
+    await askedToStop()
+    const deadlineMs = savedState('boni')?.deadlineMs ?? 0
+    world.pane = ERR_PANE
+    await vi.advanceTimersByTimeAsync(5 * MIN)
+    expect(sentTo('boni')).toHaveLength(2)
+    expect(sentTo('boni')[1]).toContain('API-hibával megszakadt')
+    expect(sentTo('boni')[1]).toContain('HANDOFF.md')
+    expect(savedState('boni')?.apiErrorResends).toBe(1)
+    expect(savedState('boni')?.deadlineMs).toBe(deadlineMs)
+    await vi.advanceTimersByTimeAsync(5 * MIN)
+    expect(sentTo('boni')).toHaveLength(2) // once per sequence
+    await vi.advanceTimersByTimeAsync(deadlineMs - Date.now() + 5 * MIN)
+    expect(restartsOf('boni')).toBe(1)
+  })
+
+  it('CONTROL: the same sweeps on an idle pane without the error -> no second request', async () => {
+    await askedToStop()
+    world.pane = CLEAN_PANE
+    await vi.advanceTimersByTimeAsync(10 * MIN)
+    expect(sentTo('boni')).toHaveLength(1)
   })
 })

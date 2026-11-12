@@ -25,6 +25,9 @@ import {
   API_ERROR_REPEAT_MS,
   API_ERROR_PARK_AFTER,
   NO_IDLE_STATE,
+  withPaneApiErrorNote,
+  API_ERROR_CONFIRM_MIN_MS,
+  API_ERROR_RECHECK_MS,
   type IdleAgentInput,
   type IdleAgentState,
   type IdleAgentThresholds,
@@ -242,6 +245,58 @@ describe('decideIdleAlert -- progress, not time (card 46e6bfb0)', () => {
   })
 })
 
+// Card 8b8864e4 (marveen 57334, jarvis 2026-11-10): the resume was typed in, the resumed turn died the
+// same way seconds later, and no tick ever saw a different pane -- so the streak never broke and the
+// second loss was read as the first, already answered.
+describe('decideIdleAlert -- a loss after the delivered resume (card 8b8864e4)', () => {
+  const D = { apiErrorResumeDelivered: true, apiErrorProgressSinceResume: false }
+
+  it('the resume was delivered and the pane still ends in the error: a new streak, confirmed, resumed', () => {
+    expect(runTicks([ERR, ERR, D, D], T0).reasons)
+      .toEqual(['api-error-confirming', 'resume-api-error', 'api-error-confirming', 'resume-api-error'])
+  })
+
+  it('CONTROL: the resume not (yet) delivered -- the same streak, nothing more', () => {
+    const notYet = { apiErrorResumeDelivered: false, apiErrorProgressSinceResume: false }
+    const { reasons } = runTicks([ERR, ERR, notYet, notYet, notYet], T0)
+    expect(reasons.slice(2).filter((r) => r.startsWith('resume') || r.startsWith('api-error'))).toEqual([])
+  })
+
+  it(`no pumping: with no progress the ${API_ERROR_PARK_AFTER}rd loss tells the coordinator, and then the streak stays answered`, () => {
+    const { reasons } = runTicks([ERR, ERR, D, D, D, D, D, D, D, D, D], T0)
+    expect(reasons.slice(0, 6)).toEqual([
+      'api-error-confirming', 'resume-api-error',
+      'api-error-confirming', 'resume-api-error',
+      'api-error-confirming', 'api-error-repeat',
+    ])
+    // The repeat alert answered that streak without a resume of its own: an older delivered resume
+    // must not restart it, or the coordinator would be told every other tick.
+    expect(reasons.slice(6).filter((r) => r.startsWith('resume') || r.startsWith('api-error'))).toEqual([])
+  })
+})
+
+describe('decideIdleAlert -- the confirm floor (card 8b8864e4)', () => {
+  const input = { ...base }
+  it(`a second sighting under ${API_ERROR_CONFIRM_MIN_MS / 1000}s after the first does not confirm; one after it does`, () => {
+    const first = decideIdleAlert(input, NO_IDLE_STATE, TH, T0)
+    expect(first.decision.reason).toBe('api-error-confirming')
+    const tooSoon = decideIdleAlert(input, first.next, TH, T0 + API_ERROR_CONFIRM_MIN_MS - 1)
+    expect(tooSoon.decision.reason).toBe('api-error-confirming')
+    const atFloor = decideIdleAlert(input, first.next, TH, T0 + API_ERROR_CONFIRM_MIN_MS)
+    expect(atFloor.decision.reason).toBe('resume-api-error')
+  })
+  it('the recheck comes after the floor (the sweep it schedules can confirm)', () => {
+    expect(API_ERROR_RECHECK_MS).toBeGreaterThanOrEqual(API_ERROR_CONFIRM_MIN_MS)
+  })
+})
+
+describe('withPaneApiErrorNote (card 8b8864e4)', () => {
+  it('names the API error above the no-work notice, and leaves a clean pane\'s notice as it was', () => {
+    expect(withPaneApiErrorNote('NOTICE', true)).toMatch(/^FIGYELEM: a pane utolso blokkja API-HIBA[\s\S]*\n\nNOTICE$/)
+    expect(withPaneApiErrorNote('NOTICE', false)).toBe('NOTICE')
+  })
+})
+
 describe('the message and the alert text', () => {
   it('names the error time in Europe/Budapest (CEST in October: UTC+2)', () => {
     expect(buildApiErrorResumeMessage(Date.UTC(2026, 9, 16, 10, 5, 0)))
@@ -288,6 +343,8 @@ const realDb = await vi.importActual<typeof import('../db.js')>('../db.js')
 const panes = new Map<string, string | null>()
 const messages: Array<{ from: string; to: string; content: string }> = []
 let failNextEnqueueTo: string | null = null
+// Queue rows the router has typed in (card 8b8864e4): getAgentMessage reports delivered_at for these.
+const deliveredIds = new Set<number>()
 const remoteHosts = new Map<string, string>()
 
 vi.mock('../logger.js', () => ({ logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } }))
@@ -321,6 +378,7 @@ vi.mock('../db.js', () => ({
     messages.push({ from, to, content })
     return { id: messages.length }
   },
+  getAgentMessage: (id: number) => (id >= 1 && id <= messages.length ? { id, delivered_at: deliveredIds.has(id) ? 1 : null } : undefined),
   // The REAL persistence: whatever db.ts whitelists is what survives the "restart" below.
   saveIdleGuardState: (...a: Parameters<typeof realDb.saveIdleGuardState>) => realDb.saveIdleGuardState(...a),
   loadIdleGuardState: (...a: Parameters<typeof realDb.loadIdleGuardState>) => realDb.loadIdleGuardState(...a),
@@ -371,7 +429,7 @@ describe('tick() -- the API-error resume, end to end', () => {
     rmSync(join(xDir, '.claude-config'), { recursive: true, force: true })
     mkdirSync(join(hoisted.root, 'store'), { recursive: true })
     vi.useFakeTimers(); vi.setSystemTime(NOW)
-    panes.clear(); messages.length = 0; failNextEnqueueTo = null; remoteHosts.clear()
+    panes.clear(); messages.length = 0; failNextEnqueueTo = null; remoteHosts.clear(); deliveredIds.clear()
     workcheck(MAIN_AGENT_ID, 'none')
     workcheck('x', 'assigned_open_cards')          // no cards on the board: 0 own cards
     panes.set(`agent-${MAIN_AGENT_ID}`, COORDINATOR_BUSY)
@@ -414,6 +472,74 @@ describe('tick() -- the API-error resume, end to end', () => {
     at(3, `⏺ Rendben, folytatom.\n\n${BOX}\n${FOOT}`)
     at(6, ERR_PANE)
     expect(toX()).toHaveLength(0)                    // the streak restarted
+  })
+
+  it('RECHECK (card 8b8864e4): a first sighting schedules one extra sweep a minute later, and it writes the resume', () => {
+    at(0, ERR_PANE)
+    expect(toX()).toHaveLength(0)
+    vi.advanceTimersByTime(API_ERROR_RECHECK_MS)
+    expect(toX()).toHaveLength(1)
+    expect(toX()[0].content).toBe(`a turnod API-hibával megszakadt 12:00-kor. ${API_ERROR_RESUME_FACTS}`)
+    vi.advanceTimersByTime(30 * MIN)                // no further sweep of its own: nothing else is scheduled
+    expect(toX()).toHaveLength(1)
+  })
+
+  it('RECHECK CONTROL: the turn is retrying by the recheck (a spinner) -> no resume', () => {
+    at(0, ERR_PANE)
+    panes.set('agent-x', BUSY_PANE)
+    vi.advanceTimersByTime(API_ERROR_RECHECK_MS)
+    expect(toX()).toHaveLength(0)
+  })
+
+  it('RECHECK, AGAIN (didi 59520 N14): once the extra sweep has run, the next first sighting schedules its own', () => {
+    at(0, ERR_PANE)
+    panes.set('agent-x', BUSY_PANE)
+    vi.advanceTimersByTime(API_ERROR_RECHECK_MS)   // the first extra sweep: the turn is retrying, nothing to write
+    expect(toX()).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
+    at(6, ERR_PANE)                                // a new loss, first sighting
+    expect(vi.getTimerCount()).toBe(1)
+    vi.advanceTimersByTime(API_ERROR_RECHECK_MS)
+    expect(toX()).toHaveLength(1)
+    expect(toX()[0].content).toContain('megszakadt 12:06-kor')
+  })
+
+  it('RECHECK, ONE AT A TIME (didi 59520 N13): a second sighting under the floor does not start a second timer', () => {
+    at(0, ERR_PANE)
+    expect(vi.getTimerCount()).toBe(1)
+    vi.advanceTimersByTime(20_000)
+    tick()                                         // 20 s after the first: under the floor, still confirming
+    expect(toX()).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(1)
+    vi.advanceTimersByTime(API_ERROR_RECHECK_MS - 20_000)   // the one timer, a minute after the FIRST sighting
+    expect(toX()).toHaveLength(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('DIGEST DOWN (didi 59520 N12): the repeat that falls back to a live message still names the API error', () => {
+    const noWork = () => toCoordinator().filter((m) => m.content.includes('"x"'))
+    for (let m = 0; m <= 12; m += 3) at(m, ERR_PANE)
+    expect(noWork()).toHaveLength(1)               // the first notice of the spell, live
+    mkdirSync(join(hoisted.root, 'store', 'idle-digest.jsonl'), { recursive: true })   // appendFileSync -> EISDIR
+    at(12 + 4 * 60 + 1, ERR_PANE)                  // the repeat: no digest to write it into
+    expect(noWork()).toHaveLength(2)
+    expect(noWork()[1].content.startsWith('FIGYELEM: a pane utolso blokkja API-HIBA')).toBe(true)
+  })
+
+  it('HELD QUEUE (card 8b8864e4): while the context-guard holds x for a restart, no resume is written; once the hold lapses, the next tick writes it', async () => {
+    const { setDeliveryHoldProbe } = await import('../web/delivery-hold.js')
+    const heldUntil = NOW + 8 * MIN
+    setDeliveryHoldProbe((agent, nowMs) => (agent === 'x' && nowMs < heldUntil ? { phase: 'await-handoff', untilMs: heldUntil } : null))
+    try {
+      at(0, ERR_PANE); at(3, ERR_PANE); at(6, ERR_PANE)
+      expect(toX()).toHaveLength(0)
+      expect(realDb.loadIdleGuardState('x', 60 * MIN, NOW + 6 * MIN)?.lastApiErrorResumeAt ?? null).toBeNull()
+      at(9, ERR_PANE)
+      expect(toX()).toHaveLength(1)
+      expect(toX()[0].content).toContain('megszakadt 12:00-kor')
+    } finally {
+      setDeliveryHoldProbe(null)
+    }
   })
 
   it('a FAILED enqueue stamps nothing: no clock, and the next tick retries', () => {
@@ -493,6 +619,39 @@ describe('tick() -- the API-error resume, end to end', () => {
     expect(toCoordinator()).toHaveLength(1)
     expect(toCoordinator()[0].content).toContain('3. alkalommal')
     expect(toCoordinator()[0].content).toContain('"x"')
+  })
+
+  it('JARVIS 2026-11-10 (card 8b8864e4): the resumed turn dies again with NO busy tick between -> resumed again, then the coordinator', () => {
+    const resumes = () => messages.filter((m) => m.to === 'x' && m.content.startsWith('a turnod'))
+    transcript(reply(-5), apiErr(-1))
+    at(0, ERR_PANE); at(3, ERR_PANE)                 // resume 1 at +3
+    expect(resumes()).toHaveLength(1)
+    deliveredIds.add(messages.indexOf(resumes()[0]) + 1)   // typed in; the resumed turn dies in seconds
+    transcript(reply(-5), apiErr(-1), apiErr(4))
+    at(6, ERR_PANE)                                  // the SAME pane as at +3: confirming the new loss
+    expect(resumes()).toHaveLength(1)
+    at(9, ERR_PANE)
+    expect(resumes()).toHaveLength(2)                // the old code: still 1, and the no-work notice later
+    deliveredIds.add(messages.indexOf(resumes()[1]) + 1)
+    transcript(reply(-5), apiErr(-1), apiErr(4), apiErr(10))
+    at(12, ERR_PANE); at(15, ERR_PANE)               // third loss, no response since: the coordinator
+    expect(resumes()).toHaveLength(2)
+    const alerts = () => messages.filter((m) => m.content.includes('3. alkalommal'))
+    expect(alerts()).toHaveLength(1)
+    for (let m = 18; m <= 60; m += 3) at(m, ERR_PANE)
+    expect(resumes()).toHaveLength(2)
+    expect(alerts()).toHaveLength(1)
+    // Parked, still idle on the error, 0 own cards: the no-work notice comes, and it does not give
+    // "nothing is assigned" as the whole story (marveen 57334: it named the wrong cause).
+    const noWork = messages.filter((m) => m.content.includes('NINCS RA KIOSZTVA SEMMI'))
+    expect(noWork).toHaveLength(1)
+    expect(noWork[0].content.startsWith('FIGYELEM: a pane utolso blokkja API-HIBA')).toBe(true)
+  })
+
+  it('CONTROL: the same panes with the resume never delivered -> one resume, as before', () => {
+    transcript(reply(-5), apiErr(-1))
+    for (let m = 0; m <= 30; m += 3) at(m, ERR_PANE)
+    expect(messages.filter((m) => m.to === 'x' && m.content.startsWith('a turnod'))).toHaveLength(1)
   })
 
   it('REMOTE agent (didi X9): a stale LOCAL transcript is not its progress -> the time rule decides', () => {

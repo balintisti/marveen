@@ -328,6 +328,9 @@ export interface GuardState {
   startThresholdPct?: number
   /** Release directives of THIS sequence that did not reach the pane (MAX_RELEASE_ATTEMPTS). */
   releaseAttempts?: number
+  /** Handoff requests THIS sequence re-sent because the pane ended in an API error before the
+   *  handoff was written (MAX_API_ERROR_RESENDS, card 8b8864e4). Absent = 0. */
+  apiErrorResends?: number
 }
 
 export const INITIAL_GUARD_STATE: GuardState = {
@@ -478,6 +481,10 @@ export interface GuardInputs {
   /** When the session's last compaction FINISHED (the transcript's compact_boundary line), or
    *  null. Read only in await-handoff, so the runner gathers it only there (card 17a19228). */
   compactedAtMs?: number | null
+  /** The pane's last block is a mid-turn API error ("Connection lost mid-response" & co,
+   *  detectsMidTurnApiError): the turn died, and nothing more will come from it. Read only in
+   *  await-handoff, so the runner gathers it only there (card 8b8864e4). Absent = no error. */
+  paneApiError?: boolean
 }
 
 /**
@@ -832,6 +839,12 @@ export const RELEASE_UNDELIVERED_REASON_PREFIX = 'release not delivered'
 /** Reason prefix of the release after a compaction: the runner words the withdrawal by it. */
 export const RELEASE_COMPACTED_REASON_PREFIX = 'compacted after the stop request'
 
+/** How often one await-handoff sequence re-sends its request to a pane that ended in an API error
+ *  (card 8b8864e4). One: a second loss in a row is the deadline's to answer, not a loop's. */
+export const MAX_API_ERROR_RESENDS = 1
+/** Reason prefix of that re-send: the runner words the request by it. */
+export const API_ERROR_RESEND_REASON_PREFIX = 'api-error-handoff-resend'
+
 /** The reader's cache (active-model TTL_MS, 3 s) can hand the sweep a size measured just BEFORE a
  *  compaction finished, so a request can follow its boundary line by that much. */
 export const COMPACTION_BEFORE_REQUEST_SLACK_MS = 5_000
@@ -1069,6 +1082,22 @@ export function decideGuard(
       if (inputs.pct !== null && inputs.pct >= cfg.hardPct && !hardTierHoldsForBackground(inputs)) {
         if (inputs.paneBusy) return none('hard threshold during await-handoff but agent mid-turn -- deferring restart')
         return restartDecision(nowMs, `hard threshold during await-handoff${killedNote(inputs)}`, handoffStaleMinutes(inputs))
+      }
+      // THE TURN THAT WAS TO WRITE THE HANDOFF DIED (card 8b8864e4, marveen 57334). Measured on didi
+      // 2026-11-10: the pane ended in "API Error: Connection lost mid-response" while this phase
+      // waited, nothing re-asked, and the session stood until the deadline restarted it with no
+      // handoff written -- while the delivery hold kept its queue shut the whole time. The error at
+      // the tail means no turn is running and none will come: say the request again, once. The
+      // deadline is left alone, so a second loss still ends in the restart below.
+      if (
+        !handoffWritten && inputs.paneApiError === true && !inputs.paneBusy &&
+        (state.apiErrorResends ?? 0) < MAX_API_ERROR_RESENDS && nowMs < state.deadlineMs
+      ) {
+        return {
+          action: 'request-handoff',
+          reason: `${API_ERROR_RESEND_REASON_PREFIX}: the pane ends in an API error and no handoff was written -- requesting it again`,
+          nextState: { ...state, apiErrorResends: (state.apiErrorResends ?? 0) + 1 },
+        }
       }
       if (nowMs >= state.deadlineMs) {
         if (inputs.paneBusy) return none('handoff timeout but agent mid-turn -- deferring restart')

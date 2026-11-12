@@ -44,6 +44,7 @@ export function validGuardState(raw: unknown): GuardState | null {
   if (!(stale === null || stale === 'unknown' || num(stale))) return null
   if (!optNumOrNull(r['backgroundDeferSinceMs']) || !optNumOrNull(r['backgroundPressureSinceMs'])) return null
   if (!optNum(r['requestedAtMs']) || !optNum(r['startThresholdPct']) || !optNum(r['releaseAttempts'])) return null
+  if (!optNum(r['apiErrorResends'])) return null
   if (!(r['noPressure'] === undefined || typeof r['noPressure'] === 'boolean')) return null
   const state: GuardState = {
     phase: r['phase'] as GuardPhase,
@@ -60,6 +61,7 @@ export function validGuardState(raw: unknown): GuardState | null {
   if (r['requestedAtMs'] !== undefined) state.requestedAtMs = r['requestedAtMs'] as number
   if (r['startThresholdPct'] !== undefined) state.startThresholdPct = r['startThresholdPct'] as number
   if (r['releaseAttempts'] !== undefined) state.releaseAttempts = r['releaseAttempts'] as number
+  if (r['apiErrorResends'] !== undefined) state.apiErrorResends = r['apiErrorResends'] as number
   return state
 }
 
