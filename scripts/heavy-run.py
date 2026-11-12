@@ -489,10 +489,11 @@ JEST_CAP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "heavy-run-j
 def file_workers():
     try:
         n = open(os.path.join(DIR, "max-workers")).read().strip()
-    except (OSError, ValueError):  # UnicodeDecodeError is a ValueError: a non-UTF-8 byte is "not a number"
+        # isascii first: "\u00b2".isdigit() is True and int() then raises, and an Arabic-Indic digit would reach the env
+        ok = n.isascii() and n.isdigit() and int(n) <= 16
+    except (OSError, ValueError):  # a non-UTF-8 byte (UnicodeDecodeError) and 4301+ digits (int() limit) are "not a number"
         return None
-    # isascii first: "\u00b2".isdigit() is True and int() then raises, and an Arabic-Indic digit would reach the env
-    return n if n.isascii() and n.isdigit() and int(n) <= 16 else None
+    return n if ok else None
 
 
 def cap_workers(env):
@@ -1275,10 +1276,11 @@ def self_test():
                         [with_file(t)["a"] for t in ("abc", "99", "-1", "")]
                         == [["--maxWorkers=4", "src/x.spec.ts"]] * 4))
         # card 7a61f271: str.isdigit() accepts "\u00b2" and Arabic-Indic digits (int() raises or the env gets a
-        # non-ASCII number), and a 0xff byte is a UnicodeDecodeError; none of them may crash the run
-        results.append(("a max-workers file with a non-ASCII digit or a non-UTF-8 byte keeps the default 4",
-                        [with_file(t)["a"] for t in ("\u00b2".encode(), "\u0663".encode(), b"\xff\n", b"3\xff")]
-                        == [["--maxWorkers=4", "src/x.spec.ts"]] * 4))
+        # non-ASCII number), a 0xff byte is a UnicodeDecodeError and 4301 digits trip int()'s length limit;
+        # none of them may crash the run
+        results.append(("a max-workers file with a non-ASCII digit, a non-UTF-8 byte or 4301 digits keeps the default 4",
+                        [with_file(t)["a"] for t in ("\u00b2".encode(), "\u0663".encode(), b"\xff\n", b"3\xff", b"9" * 4301)]
+                        == [["--maxWorkers=4", "src/x.spec.ts"]] * 5))
         results.append(("CONTROL: the file removed again -> 4",
                         seen(node, entry, "src/x.spec.ts")["a"] == ["--maxWorkers=4", "src/x.spec.ts"]))
     else:
