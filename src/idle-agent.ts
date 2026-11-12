@@ -585,9 +585,17 @@ export const API_ERROR_REPEAT_MS = 10 * 60_000
  *  transcripts since 10-20, 0 of 2982 resumes failed twice in a row, yet 37.6% of errors came within
  *  10 minutes of the previous one, so the time window stopped resumes after independent errors. */
 export const API_ERROR_PARK_AFTER = 3
-/** Consecutive ticks that must see the error before the agent is written to: at the 3-minute tick
- *  that is 3-6 minutes, long enough for a turn that is merely between two retries. */
+/** Consecutive ticks that must see the error before the agent is written to. On the 3-minute tick
+ *  alone that was 3-6 minutes (didi e7b806c0: median 4.7 min, ~7 agent-hours a day over 225 losses);
+ *  the watcher now looks again API_ERROR_RECHECK_MS after the first sighting (card 8b8864e4). */
 export const API_ERROR_CONFIRM_TICKS = 2
+/** The least time between the sighting that starts a streak and the one that confirms it (card
+ *  8b8864e4). What keeps a turn that is merely between two retries safe now that the second sighting
+ *  can come a minute after the first: the CLI's own retry draws a spinner (the pane is not idle, so
+ *  not "seen"), and a pane still idle with the error at the tail after this long is not retrying. */
+export const API_ERROR_CONFIRM_MIN_MS = 50_000
+/** When the watcher looks again after a first sighting: one extra sweep, not a faster tick. */
+export const API_ERROR_RECHECK_MS = 60_000
 
 function decideIdleAlertCore(
   input: IdleAgentInput,
@@ -681,7 +689,7 @@ function decideIdleAlertCore(
     const sinceMs = state.apiErrorSinceMs ?? now
     const ticks = (state.apiErrorTicks ?? 0) + 1
     const keepSpell = state.idleSinceMs ?? now
-    if (ticks < API_ERROR_CONFIRM_TICKS) {
+    if (ticks < API_ERROR_CONFIRM_TICKS || now - sinceMs < API_ERROR_CONFIRM_MIN_MS) {
       return {
         decision: { alert: false, reason: 'api-error-confirming' },
         next: { ...state, idleSinceMs: keepSpell, apiErrorSinceMs: sinceMs, apiErrorTicks: ticks },

@@ -43,6 +43,7 @@ import {
   deliverFleetAlerts,
   type FleetAlert,
   NO_IDLE_STATE,
+  API_ERROR_RECHECK_MS,
   type IdleAgentState,
   coveredIdsStillPending,
   type IdleAgentThresholds,
@@ -534,6 +535,18 @@ export function apiErrorProgress(agent: string, lastResumeAt: number | null): bo
   }
 }
 
+// ONE EXTRA SWEEP AFTER A FIRST API-ERROR SIGHTING (card 8b8864e4, didi e7b806c0). Confirming on
+// the 3-minute tick alone made an interrupted agent wait 3-6 minutes (median 4.7, ~7 agent-hours a
+// day). A whole sweep, not a per-agent probe: every judgement in it is time-based (the confirm floor,
+// API_ERROR_CONFIRM_MIN_MS, included), so an extra sample moves nothing but this one answer earlier,
+// and the coordinator is visited first as on every sweep. One timer at a time.
+let apiErrorRecheck: ReturnType<typeof setTimeout> | null = null
+function scheduleApiErrorRecheck(): void {
+  if (apiErrorRecheck !== null) return
+  apiErrorRecheck = setTimeout(() => { apiErrorRecheck = null; tick() }, API_ERROR_RECHECK_MS)
+  apiErrorRecheck.unref?.()
+}
+
 // EXPORTALVA A NAPLOZAS MERHETOSEGEERT (kartya 60060415). A `readPane`-nel ugyanez a
 // dontes all: a kartya allitasa az, hogy MINDEN dontes naplozodik -- ezt csak ugy lehet
 // megmerni, ha a kort le lehet futtatni. Viselkedes nem mozdul, csak lathatosag.
@@ -761,6 +774,8 @@ export function tick(): void {
         THRESHOLDS,
         now,
       )
+      // Ahead of the decision log below, which must not branch on a reason (idle-guard-decision-log).
+      if (decision.reason === 'api-error-confirming') scheduleApiErrorRecheck()
       watchState.set(agent, next)
       try {
         saveIdleGuardState(agent, next, now)

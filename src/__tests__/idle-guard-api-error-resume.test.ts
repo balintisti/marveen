@@ -26,6 +26,8 @@ import {
   API_ERROR_PARK_AFTER,
   NO_IDLE_STATE,
   withPaneApiErrorNote,
+  API_ERROR_CONFIRM_MIN_MS,
+  API_ERROR_RECHECK_MS,
   type IdleAgentInput,
   type IdleAgentState,
   type IdleAgentThresholds,
@@ -273,6 +275,21 @@ describe('decideIdleAlert -- a loss after the delivered resume (card 8b8864e4)',
   })
 })
 
+describe('decideIdleAlert -- the confirm floor (card 8b8864e4)', () => {
+  const input = { ...base }
+  it(`a second sighting under ${API_ERROR_CONFIRM_MIN_MS / 1000}s after the first does not confirm; one after it does`, () => {
+    const first = decideIdleAlert(input, NO_IDLE_STATE, TH, T0)
+    expect(first.decision.reason).toBe('api-error-confirming')
+    const tooSoon = decideIdleAlert(input, first.next, TH, T0 + API_ERROR_CONFIRM_MIN_MS - 1)
+    expect(tooSoon.decision.reason).toBe('api-error-confirming')
+    const atFloor = decideIdleAlert(input, first.next, TH, T0 + API_ERROR_CONFIRM_MIN_MS)
+    expect(atFloor.decision.reason).toBe('resume-api-error')
+  })
+  it('the recheck comes after the floor (the sweep it schedules can confirm)', () => {
+    expect(API_ERROR_RECHECK_MS).toBeGreaterThanOrEqual(API_ERROR_CONFIRM_MIN_MS)
+  })
+})
+
 describe('withPaneApiErrorNote (card 8b8864e4)', () => {
   it('names the API error above the no-work notice, and leaves a clean pane\'s notice as it was', () => {
     expect(withPaneApiErrorNote('NOTICE', true)).toMatch(/^FIGYELEM: a pane utolso blokkja API-HIBA[\s\S]*\n\nNOTICE$/)
@@ -455,6 +472,23 @@ describe('tick() -- the API-error resume, end to end', () => {
     at(3, `⏺ Rendben, folytatom.\n\n${BOX}\n${FOOT}`)
     at(6, ERR_PANE)
     expect(toX()).toHaveLength(0)                    // the streak restarted
+  })
+
+  it('RECHECK (card 8b8864e4): a first sighting schedules one extra sweep a minute later, and it writes the resume', () => {
+    at(0, ERR_PANE)
+    expect(toX()).toHaveLength(0)
+    vi.advanceTimersByTime(API_ERROR_RECHECK_MS)
+    expect(toX()).toHaveLength(1)
+    expect(toX()[0].content).toBe(`a turnod API-hibával megszakadt 12:00-kor. ${API_ERROR_RESUME_FACTS}`)
+    vi.advanceTimersByTime(30 * MIN)                // no further sweep of its own: nothing else is scheduled
+    expect(toX()).toHaveLength(1)
+  })
+
+  it('RECHECK CONTROL: the turn is retrying by the recheck (a spinner) -> no resume', () => {
+    at(0, ERR_PANE)
+    panes.set('agent-x', BUSY_PANE)
+    vi.advanceTimersByTime(API_ERROR_RECHECK_MS)
+    expect(toX()).toHaveLength(0)
   })
 
   it('HELD QUEUE (card 8b8864e4): while the context-guard holds x for a restart, no resume is written; once the hold lapses, the next tick writes it', async () => {
