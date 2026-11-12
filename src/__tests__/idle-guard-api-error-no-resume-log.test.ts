@@ -236,6 +236,10 @@ const panes = new Map<string, string | null>()
 const messages: Array<{ from: string; to: string; content: string }> = []
 let pendingForX: Array<{ id: number; created_at: number; wake?: number }> = []
 let failNextEnqueueTo: string | null = null
+// Queue rows the router has typed in: the watcher asks getAgentMessage whether the last resume was
+// delivered (card 8b8864e4). Without this export the mocked module throws at that call, and the
+// tick dies before the line this file is about.
+const deliveredIds = new Set<number>()
 
 vi.mock('../logger.js', () => ({
   logger: { debug: hoisted.log('debug'), info: hoisted.log('info'), warn: hoisted.log('warn'), error: hoisted.log('error') },
@@ -269,6 +273,7 @@ vi.mock('../db.js', () => ({
     messages.push({ from, to, content })
     return { id: messages.length }
   },
+  getAgentMessage: (id: number) => (id >= 1 && id <= messages.length ? { id, delivered_at: deliveredIds.has(id) ? 1 : null } : undefined),
   saveIdleGuardState: (...a: Parameters<typeof realDb.saveIdleGuardState>) => realDb.saveIdleGuardState(...a),
   loadIdleGuardState: (...a: Parameters<typeof realDb.loadIdleGuardState>) => realDb.loadIdleGuardState(...a),
 }))
@@ -309,7 +314,7 @@ describe('tick() -- the line in the log', () => {
     rmSync(join(hoisted.root, 'store'), { recursive: true, force: true })
     mkdirSync(join(hoisted.root, 'store'), { recursive: true })
     vi.useFakeTimers(); vi.setSystemTime(NOW)
-    panes.clear(); messages.length = 0; logged.length = 0; pendingForX = []; failNextEnqueueTo = null
+    panes.clear(); messages.length = 0; logged.length = 0; pendingForX = []; failNextEnqueueTo = null; deliveredIds.clear()
     workcheck(MAIN_AGENT_ID, 'none')
     workcheck('x', 'assigned_open_cards')
     panes.set(`agent-${MAIN_AGENT_ID}`, COORDINATOR_BUSY)
@@ -342,6 +347,21 @@ describe('tick() -- the line in the log', () => {
       expect(lines[0].msg).toBe('idle guard: x -> API error on the pane, no resume: streak-already-answered')
     }
     expect(toX().filter((m) => m.content.startsWith('a turnod'))).toHaveLength(1)
+  })
+
+  // The seam with card 8b8864e4: once the resume was typed in, an error at the tail is a later loss,
+  // a new streak. The line must say so, not "already answered" -- that was the reason that hid the
+  // jarvis 2026-11-10 standstill. The CONTROL is the test above: the resume never delivered.
+  it('after the resume is DELIVERED, the next tick names a new streak being confirmed, not the old one answered', () => {
+    at(0, ERR_PANE)
+    expect(at(3, ERR_PANE)).toHaveLength(0)
+    const resumes = toX().filter((m) => m.content.startsWith('a turnod'))
+    expect(resumes).toHaveLength(1)
+    deliveredIds.add(messages.indexOf(resumes[0]) + 1)
+    const lines = at(6, ERR_PANE)
+    expect(lines).toHaveLength(1)
+    expect(lines[0].fields).toMatchObject({ why: 'confirming', decision: 'api-error-confirming', lastResumeAt: NOW + 3 * MIN })
+    expect(lines[0].msg).toBe('idle guard: x -> API error on the pane, no resume: confirming')
   })
 
   it('background work on the footer: blocked, named, with the count -- on every tick it lasts', () => {
