@@ -48,6 +48,8 @@ describe('heavy-run gate: refuses a whole-project tsc / eslint / typecheck / lin
     ['npx tsc -b tsconfig.app.json tsconfig.node.json'],
     ['npx tsc --project=tsconfig.json src/a.ts'],
     ['npx tsc --noEmit'],
+    ['npx tsc --extendedDiagnostics'],
+    ['npx tsc --noEmit --extendedDiagnostics'],
     ['tsc'],
     ['cd frontend && npx tsc -b 2>&1 | tail -5'],
     ['NODE_OPTIONS=--max-old-space-size=8192 npx tsc --noEmit -p tsconfig.spec.json'],
@@ -98,6 +100,9 @@ describe('heavy-run gate: lets a narrowed or a meta build command through', () =
     ['npm run lint -- src/a.ts'],
     ['npm run lint -- --fix src/a.ts'],
     ['npx tsc --noEmit src/a.ts'],
+    // didi 60768 LELET 2: --extendedDiagnostics is a boolean tsc flag, the file after it is still named
+    ['npx tsc --extendedDiagnostics src/a.ts'],
+    ['npx tsc --noEmit --extendedDiagnostics src/a.ts'],
     // what only NAMES the tool
     ['git log --grep tsc'],
     ['grep -rn "tsc -b" docs/'],
