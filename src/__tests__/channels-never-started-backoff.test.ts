@@ -131,9 +131,13 @@ describe('the streak is persisted and cleared in the right places', () => {
   })
 
   it('a plugin that comes up clears the streak, so recovery restores the fast watchdog', () => {
+    // The alive branch calls watchdog_plugin_alive; channels-watchdog-reload.test.ts
+    // runs that function and asserts the file and the counter are cleared.
     const aliveBranch = sliceBetween(CHANNELS, 'if [ "$_plugin_alive" = "true" ]; then', 'elif')
-    expect(aliveBranch).toMatch(/rm -f "\$NEVER_STARTED_STREAK_FILE"/)
-    expect(aliveBranch).toMatch(/NEVER_STARTED_STREAK=0/)
+    expect(aliveBranch).toMatch(/then\n\s+watchdog_plugin_alive\n\s+elif$/)
+    const fn = sliceBetween(CHANNELS, '\nwatchdog_plugin_alive() {', '\n}')
+    expect(fn).toMatch(/rm -f "\$NEVER_STARTED_STREAK_FILE"/)
+    expect(fn).toMatch(/NEVER_STARTED_STREAK=0/)
   })
 
   it('the streak file lives in store/, next to the other channel state', () => {
@@ -157,8 +161,10 @@ describe('the signal is NOT damped -- only the churn is', () => {
 
   it('leaves the died-after-up branch on its unchanged 180s grace (scope pin)', () => {
     expect(CHANNELS).toMatch(/^PLUGIN_DEAD_GRACE=180$/m)
-    const deadBranch = sliceBetween(CHANNELS, 'plugin dead for', 'break')
+    const deadBranch = sliceBetween(CHANNELS, 'elif [ "$_dead_verdict" = "exit" ]; then', 'break')
+    expect(deadBranch).toContain('plugin dead for')
     expect(deadBranch).not.toMatch(/NEVER_STARTED/)
+    expect(sliceBetween(CHANNELS, '\ndied_after_up_try_reload() {', '\n}')).not.toMatch(/NEVER_STARTED/)
   })
 })
 
@@ -204,6 +210,8 @@ function runChain(dir: string, opts: { ageSeconds: number; pluginAlive: boolean 
     'RESTART_REQUESTED=0',
     'NOW=$(date +%s)',
     `_plugin_alive=${opts.pluginAlive ? 'true' : 'false'}`,
+    // the alive branch calls this shipped function (unmodified, like the chain)
+    sliceBetween(CHANNELS, '\nwatchdog_plugin_alive() {', '\n}'),
     // `break` is meaningful only inside a loop; one iteration keeps the shipped
     // control flow honest without re-typing it.
     'for _once in 1; do',

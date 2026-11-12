@@ -1511,6 +1511,41 @@ dead_after_up_verdict() {
 PLUGIN_SEEN_ONCE=false
 PLUGIN_DEAD_SINCE=0
 PLUGIN_RELOAD_ATTEMPTED=false
+
+# The watchdog tick saw this agent's plugin alive. Also re-arms the
+# died-after-up reload: a plugin that came back and later dies again gets its
+# own /reload-plugins before the restart, not a straight session restart.
+# Tested in src/__tests__/channels-watchdog-reload.test.ts.
+watchdog_plugin_alive() {
+  PLUGIN_SEEN_ONCE=true
+  PLUGIN_DEAD_SINCE=0
+  PLUGIN_RELOAD_ATTEMPTED=false
+  # The plugin came up, so this host is not in the never-starting state:
+  # drop the streak so the next cold start gets the fast 10-minute watchdog
+  # again instead of inheriting a 40-minute budget from an old outage.
+  if [ "$NEVER_STARTED_STREAK" != "0" ]; then
+    rm -f "$NEVER_STARTED_STREAK_FILE" 2>/dev/null || true
+    NEVER_STARTED_STREAK=0
+  fi
+}
+
+# One died-after-up /reload-plugins attempt (the "reload" verdict), only into a
+# pane probe_pane_input_state proves idle. The coloured capture (-e) matters:
+# without it a dim placeholder reads as parked text and the reload never fires.
+# Marks the attempt only when the keys were sent, so the 5s ticks between
+# PLUGIN_RELOAD_AFTER and PLUGIN_DEAD_GRACE send it once, not once per tick;
+# a busy or unverifiable pane is retried on the next tick.
+# Tested in src/__tests__/channels-watchdog-reload.test.ts.
+died_after_up_try_reload() {
+  _reload_probe="$($TMUX capture-pane -t "=$SESSION:" -e -p 2>/dev/null | probe_pane_input_state)"
+  if [ "$_reload_probe" = "idle" ]; then
+    $TMUX send-keys -t "=$SESSION:" '/reload-plugins' Enter
+    PLUGIN_RELOAD_ATTEMPTED=true
+    echo "WARN: $CHANNEL_PROVIDER plugin dead for $((NOW - PLUGIN_DEAD_SINCE))s -- sent /reload-plugins, waiting out the rest of the ${PLUGIN_DEAD_GRACE}s grace before restart" >&2
+    respawn_log "died-after-up-reload-attempt: $CHANNEL_PROVIDER plugin dead for $((NOW - PLUGIN_DEAD_SINCE))s -- sent /reload-plugins"
+  fi
+  unset _reload_probe
+}
 # Set to 1 when the watchdog below breaks out ON PURPOSE to be restarted. The
 # exit status has to carry that intent: a watchdog exit is not a normal one, and
 # a unit still carrying the old Restart=on-failure would read exit 0 as "this
@@ -1643,16 +1678,7 @@ while $TMUX has-session -t "$SESSION" 2>/dev/null; do
   fi
 
   if [ "$_plugin_alive" = "true" ]; then
-    PLUGIN_SEEN_ONCE=true
-    PLUGIN_DEAD_SINCE=0
-    PLUGIN_RELOAD_ATTEMPTED=false
-    # The plugin came up, so this host is not in the never-starting state:
-    # drop the streak so the next cold start gets the fast 10-minute watchdog
-    # again instead of inheriting a 40-minute budget from an old outage.
-    if [ "$NEVER_STARTED_STREAK" != "0" ]; then
-      rm -f "$NEVER_STARTED_STREAK_FILE" 2>/dev/null || true
-      NEVER_STARTED_STREAK=0
-    fi
+    watchdog_plugin_alive
   elif [ "$PLUGIN_SEEN_ONCE" = "true" ]; then
     # Was up, now gone -- start/continue the dead-grace timer (a transient
     # gap that recovers resets it, so only a sustained death triggers exit).
@@ -1698,14 +1724,7 @@ while $TMUX has-session -t "$SESSION" 2>/dev/null; do
       # or busy pane just retries next tick), with the rest of the grace
       # window left afterwards for the plugin to actually come back before we
       # give up and restart.
-      _reload_probe="$($TMUX capture-pane -t "=$SESSION:" -e -p 2>/dev/null | probe_pane_input_state)"
-      if [ "$_reload_probe" = "idle" ]; then
-        $TMUX send-keys -t "=$SESSION:" '/reload-plugins' Enter
-        PLUGIN_RELOAD_ATTEMPTED=true
-        echo "WARN: $CHANNEL_PROVIDER plugin dead for $((NOW - PLUGIN_DEAD_SINCE))s -- sent /reload-plugins, waiting out the rest of the ${PLUGIN_DEAD_GRACE}s grace before restart" >&2
-        respawn_log "died-after-up-reload-attempt: $CHANNEL_PROVIDER plugin dead for $((NOW - PLUGIN_DEAD_SINCE))s -- sent /reload-plugins"
-      fi
-      unset _reload_probe
+      died_after_up_try_reload
     fi
     unset _respawn_stamp _dead_verdict
   else

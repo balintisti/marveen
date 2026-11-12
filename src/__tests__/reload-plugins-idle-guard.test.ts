@@ -95,6 +95,15 @@ describe('the give-up stage reload (GAVEUPRELOAD1033)', () => {
     expect(send).toHaveBeenCalledTimes(1)
   })
 
+  it('an empty box with a dim placeholder: the plain capture reads as typing, the dim-stripped view proves it empty', () => {
+    const send = vi.fn()
+    const parked = vi.fn(() => pane('❯ '))
+    const plain = pane('❯ Try refactor src/utils.ts to use the new API')
+    expect(sendGaveUpReloadIfIdle({ plain: () => plain, parked }, send)).toBe('sent')
+    expect(parked).toHaveBeenCalledTimes(1)
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+
   it.each([
     ['parked text', pane('❯ half-written draft'), pane('❯ half-written draft')],
     ['a menu', MENU, null],

@@ -105,7 +105,10 @@ describe('channels.sh watchdog exit status', () => {
   })
 
   it('sets the flag in BOTH watchdog branches, not just the one that was observed', () => {
-    const sustained = sliceBetween(CHANNELS, 'plugin dead for $((NOW - PLUGIN_DEAD_SINCE))s', 'break')
+    // The died-after-up exit branch (the first "plugin dead for" text is the reload attempt's log
+    // line in died_after_up_try_reload, defined above the loop).
+    const sustained = sliceBetween(CHANNELS, 'elif [ "$_dead_verdict" = "exit" ]; then', 'break')
+    expect(sustained).toContain('plugin dead for $((NOW - PLUGIN_DEAD_SINCE))s')
     const neverStarted = sliceBetween(CHANNELS, 'plugin never started within', 'break')
     expect(sustained).toContain('RESTART_REQUESTED=1')
     expect(neverStarted).toContain('RESTART_REQUESTED=1')
