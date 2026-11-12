@@ -51,6 +51,7 @@ const HOOKS: HookCase[] = [
   { script: 'scripts/hooks/memory-frontmatter-gate.py', runner: 'python3', cls: 'gate', tool: 'Write' },
   { script: 'scripts/hooks/subagent-context-gate.py', runner: 'python3', cls: 'gate', tool: 'Agent' },
   { script: 'scripts/hooks/memory-frontmatter-bash-gate.py', runner: 'python3', cls: 'gate', tool: 'Bash' },
+  { script: 'scripts/hooks/card-boundary-signal.py', runner: 'python3', cls: 'gate', tool: 'Bash' },
   // Stop guard
   { script: 'scripts/hooks/telegram-reply-guard.py', runner: 'python3', cls: 'gate', tool: 'Stop' },
   // Prompt-path hooks (UserPromptSubmit / SessionStart / PostToolUse wiring)

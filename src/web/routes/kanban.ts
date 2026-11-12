@@ -50,6 +50,7 @@ import { detectHomoglyphs, formatHomoglyphWarning } from '../../homoglyph.js'
 import { readBody, json, jsonMaybeGzip, methodNotAllowed } from '../http-helpers.js'
 import { getEffectiveSettingValue } from '../../settings-store.js'
 import type { RouteContext } from './types.js'
+import { signalCardBoundaryAtMove } from '../context-guard-runner.js'
 
 // #1023 (upstream): the keys a PUT body may carry WITHOUT being a writable column.
 // Upstream kept them in a local KANBAN_READONLY_FIELDS set; at the merge 88c366f2 the
@@ -1352,6 +1353,13 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     if ((roCard as { status?: string } | undefined)?.status !== 'done' && getKanbanCard(id)?.status === 'done') {
       notifyUnblockedCards(id, actor)
     }
+    // Card 00262e3f: this door changes the status too. BEFORE the answer goes out, like on /move:
+    // the hook that shows the signal runs when the caller's command returns.
+    {
+      const before = (roCard as { status?: string } | undefined)?.status
+      const after = getKanbanCard(id)?.status
+      if (after && before !== after) signalCardBoundaryAtMove(actor, id, before, after)
+    }
 
     // The overwrite travels in the response because that is where the caller
     // already looks; a log nobody reads is the same silence in another file.
@@ -1468,6 +1476,10 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     // transition to done frees the cards waiting on this one.
     const moved = getKanbanCard(id)
     if (statusBeforeMove !== 'done' && moved?.status === 'done') notifyUnblockedCards(id, actor)
+    // Card 00262e3f: the stop signal at a card boundary. BEFORE the answer goes out: the hook that
+    // shows it runs when the caller's command returns, and the file must be there by then. It
+    // never throws and never changes the answer.
+    if (moved && statusBeforeMove !== moved.status) signalCardBoundaryAtMove(actor, id, statusBeforeMove, moved.status)
     json(res, { ok: true, changed: true, version: moved?.version, ...archivedNote(moved), ...(proseWarning ? { proseWarning } : {}) })
     return true
   }

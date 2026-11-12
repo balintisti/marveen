@@ -56,6 +56,8 @@ export const KNOWN_HOOK_SCRIPTS: readonly string[] = [
   'tool-log-capture.py',
   'memory-frontmatter-gate.py',
   'memory-frontmatter-bash-gate.py',
+  // The context guard's stop signal at a card boundary (card 00262e3f).
+  'card-boundary-signal.py',
   // The /clear continuity pair: SessionEnd capture + SessionStart replay.
   'clear-capture.py',
   'clear-replay.py',

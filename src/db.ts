@@ -3301,6 +3301,24 @@ export function getAgentCommentsSince(author: string, sinceSec: number, limit: n
   ).all(headChars, author, Math.floor(sinceSec), limit) as { card_id: string; created_at: number; head: string }[]).reverse()
 }
 
+/** The LAST status event an agent itself recorded since `sinceSec`, or null when it recorded none
+ *  (card 00262e3f: the card-aligned restart asks whether the last thing the agent did on the board
+ *  was to move a card out of in_progress). A card it filed counts as an event (from_status NULL):
+ *  work done on the board after the move means the move is no longer the last word. */
+export function getLastOwnCardEvent(actor: string, sinceSec: number): { card_id: string; from_status: string | null; to_status: string; created_at: number } | null {
+  const row = db.prepare(
+    'SELECT card_id, from_status, to_status, created_at FROM kanban_card_events WHERE actor = ? AND created_at >= ? ORDER BY created_at DESC, id DESC LIMIT 1',
+  ).get(actor, Math.floor(sinceSec)) as { card_id: string; from_status: string | null; to_status: string; created_at: number } | undefined
+  return row ?? null
+}
+
+/** The ids of the live cards that stand in_progress on an agent's name (card 00262e3f). */
+export function listOwnInProgressCardIds(assignee: string): string[] {
+  return (db.prepare(
+    "SELECT id FROM kanban_cards WHERE status = 'in_progress' AND assignee = ? AND archived_at IS NULL ORDER BY id",
+  ).all(assignee) as { id: string }[]).map(r => r.id)
+}
+
 /** Messages delivered TO an agent since `sinceSec` (card 6494ca96): the restart tail lists what arrived
  *  after the HANDOFF was written -- a question or a review request the HANDOFF cannot know about.
  *  Measured 2026-10-30 08:13: the coordinator rebuilt this by hand for didi (dexter's three review
@@ -4756,6 +4774,35 @@ export function getDispatchedPendingStats(
     count:    liveRow?.cnt ?? 0,
     hasStale: (staleRow?.cnt ?? 0) > 0,
   }
+}
+
+/**
+ * An agent's own requests that nobody has closed yet, newest first, with the number of all of them
+ * (card 00262e3f, marveen's decision 58625: at a card boundary an open own request no longer forbids
+ * the restart; the fresh session is told what it is waiting for instead). Unlike the count above,
+ * rows sent to the main agent ARE listed: a DECISION the agent asked for is exactly what the fresh
+ * session has to know about. Receipts and rows closed without delivery are not requests.
+ */
+export function listOpenOwnOutbound(
+  fromAgent: string,
+  sinceSec: number,
+  limit: number,
+  headChars = 120,
+): { total: number; rows: { id: number; to_agent: string; created_at: number; head: string }[] } {
+  const OPEN =
+    `from_agent = ? AND to_agent != from_agent
+       AND status IN ('pending','delivered')
+       AND content NOT LIKE ?
+       AND COALESCE(result, '') NOT LIKE ?
+       AND COALESCE(origin_note, '') != '${GATE_ALERT_ORIGIN_NOTE}'
+       AND CAST(created_at AS INTEGER) >= ?`
+  const bindings = [fromAgent, `${COMPLETION_REPORT_PREFIX}%`, `${CLOSED_WITHOUT_DELIVERY_PREFIX}%`, Math.floor(sinceSec)]
+  const total = (db.prepare(`SELECT COUNT(*) AS cnt FROM agent_messages WHERE ${OPEN}`).get(...bindings) as { cnt: number }).cnt
+  const rows = db.prepare(
+    `SELECT id, to_agent, CAST(created_at AS INTEGER) AS created_at, substr(content, 1, ?) AS head FROM agent_messages
+       WHERE ${OPEN} ORDER BY id DESC LIMIT ?`,
+  ).all(headChars, ...bindings, limit) as { id: number; to_agent: string; created_at: number; head: string }[]
+  return { total, rows }
 }
 
 /**

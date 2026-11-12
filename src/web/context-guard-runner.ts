@@ -20,20 +20,20 @@ import {
   getAgentRunningSince,
 } from './agent-process.js'
 import { sessionNameForAgent } from './session-names.js'
-import { sendSystemDirective } from './system-directive.js'
+import { sendSystemDirective, systemDirectiveEnvelope, SYSTEM_DIRECTIVE_SENDER } from './system-directive.js'
 import { notifyChannel } from '../notify.js'
 import { detectPaneState, detectsMidTurnApiError, paneShowsContextSaturation, paneShowsContextSaturationHardError, runningBackgroundWork } from '../pane-state.js'
 import { descendsFrom, liveHeavyRunJobs } from '../heavy-run-jobs.js'
 import { usageLimitHolds } from '../usage-limit-window.js'
-import { readContextTokensFromProjectDir, readActiveModelFromProjectDir, readTranscriptMtimeFromProjectDir, readLastTurnActivityMs, readLastCompactionMs, predatesSession, transcriptWrittenSince } from './active-model.js'
+import { readContextTokensFromProjectDir, readActiveModelFromProjectDir, readTranscriptMtimeFromProjectDir, readLastTurnActivityMs, readLastCompactionMs, predatesSession, transcriptWrittenSince, readFirstToolUseMsAfter } from './active-model.js'
 import { guardStatesBody, readGuardStateFile, writeGuardStateFile } from './context-guard-state-file.js'
-import { readContextGuardConfig } from './context-guard-store.js'
+import { readContextGuardConfig, writeContextGuardConfig } from './context-guard-store.js'
 import { setDeliveryHoldProbe, type DeliveryHold } from './delivery-hold.js'
 import { readAllContextGuardConfigs } from './context-guard-store.js'
 import { makeContextGuardConfigWarner } from './context-guard-config-warning.js'
 import { localMidnightMs } from '../auto-restart.js'
 import { recordRescueFailure, clearRescueFailures } from './rescue-failure-tracker.js'
-import { createAgentMessage, getRestartLossCandidates, getAgentCommentsSince, getAgentMessagesSince, markMessageDone } from '../db.js'
+import { createAgentMessage, getRestartLossCandidates, getAgentCommentsSince, getAgentMessagesSince, listOpenOwnOutbound, markMessageDelivered, markMessageDone, markMessageFailed } from '../db.js'
 import {
   RESTART_TAIL_FILE, COMMENTS_MAX, COMMENT_HEAD_CHARS, MESSAGES_MAX, NO_HANDOFF_LOOKBACK_MS,
   buildRestartTail, needsRestartTail, type TailMessage,
@@ -71,8 +71,22 @@ import {
   RESTART_NOTICE_AUTOCLOSED,
   RELEASE_COMPACTED_REASON_PREFIX,
   RELEASE_UNDELIVERED_REASON_PREFIX,
+  CARD_RESTART_REASON_PREFIX,
+  CARD_RESTART_SKIPPED_REQUEST_MARK,
+  type CardBoundary,
+  type CardRestartFacts,
+  type ContextGuardConfig,
+  type GuardDecision,
 } from '../context-guard.js'
-import { whileNotFrozen } from './fleet-freeze.js'
+import { gatherCardRestartFacts } from './card-restart-facts.js'
+import {
+  STAND_LIMIT_MS,
+  answeredPath, cardBoundaryContinueText, cardBoundarySignalBody, clearAnswered, clearSignal, decideSignalAnswer,
+  decideSignalAtMove, hasSignalFile, isSignalAgentId, judgeStand, readAnswered, readShownMs, readSignal, signalApplies,
+  writeAnswered, writeSignal,
+  type AnsweredBoundary, type CardBoundarySignal, type SignalAnswer,
+} from './card-boundary-signal.js'
+import { isFleetFrozen, whileNotFrozen } from './fleet-freeze.js'
 import { resolveMachineNoticeRecipient } from './front-desk-route.js'
 import { frontDeskHeader } from '../front-desk.js'
 import { holdRoutineRestartNotice, resolveRestartNoticeHolds, restartNoticeSwallowMode, RESTART_NOTICE_RESOLVE_MS } from './restart-notice-hold.js'
@@ -437,6 +451,50 @@ export function apiErrorResendHandoffPrompt(handoffPath: string): string {
   )
 }
 
+/**
+ * What every first message of a guard-restarted session ends with: the restart-window re-read, the
+ * prod-tree constraint and where the "I am back" note goes. One text for the handoff resume and the
+ * card-restart resume (card 00262e3f), so a rule added here reaches both.
+ */
+function resumePromptTail(name: string, closeNotAck: boolean): string {
+  return (
+    // ORSICTX912: msg 23670 was delivered SEVEN SECONDS after the guard kill
+    // started, into the dying session -- the queue marked it delivered, the
+    // fresh session had no reason to look, and completed_at is unused (0/37
+    // measured), so the loss is invisible from the queue. The re-read must
+    // ride in the resume prompt (the fresh session's only context), and the
+    // ack-to-sender is the OBSERVABLE trace: without it, verifying this very
+    // instruction would run into the same blindness it exists to fix.
+    (closeNotAck ? restartWindowCloseDirective(name) : (
+    `RESTART-ABLAK: az előző session utolsó ~15 percében kézbesített inter-agent üzenet elveszhetett. ` +
+    `Olvasd vissza a saját sorodat erre az ablakra (GET /api/messages?agent=${name}, created_at szerint szűrve), ` +
+    `és minden ott talált, még el nem intézett kérést kezelj újként. KÖTELEZŐ MEGFIGYELHETŐ NYOM: minden ` +
+    `visszaolvasott tételről küldj rövid nyugtát a feladónak ("[RESTART-ABLAK] <id> felvéve a friss sessionben"), ` +
+    `akkor is, ha nincs belőle teendő -- e nélkül a visszaolvasás a sorból láthatatlan. ` +
+    // af9a6838: "system" is not a registered agent, so an ack POSTed to it is
+    // refused (400 unknown recipient) -- and the guard's own notice is in
+    // almost every window (deeper retried 3x, msg 28923). The trace for those
+    // rows is the row itself, closed with a result and no receipt.
+    `KIVÉTEL: a "system" feladó nem ágens, neki küldött nyugta 400-at kap -- az ilyen tételt ` +
+    `PUT /api/messages/<id> {"status":"done","result":"[RESTART-ABLAK] felvéve a friss sessionben","notify":false} zárja, ez a nyoma. `
+    )) +
+    // RESPAWNZAJ822/PRODFAAG822: a fresh session acting on a resume goal is
+    // exactly the actor that branch-switched and committed on the live prod
+    // tree (2026-08-22 10:10, PR #1036 duplicate). The constraint must ride in
+    // the resume prompt itself -- it is the ONLY context the fresh session has.
+    `KORLÁT: a futó prod fán (a repo fő checkoutján) NE válts ágat, NE commitolj és NE nyiss belőle PR-t ` +
+    `-- ha repo-munka kell, használj worktree-t (git worktree add). ` +
+    // The main agent's channel is the OWNER's channel (Telegram), and session
+    // meta must never go there (standing owner preference; a 3am status
+    // notice measured on 2026-08-05, review msg 14197). Sub-agents' channel
+    // is the inter-agent queue, where the notice belongs. This prompt is the
+    // fresh session's ONLY rule set, so the split must live here.
+    (name === MAIN_AGENT_ID
+      ? `Zárásul egyetlen transzkript-sorban rögzítsd, hogy friss kontextussal folytatod -- a csatornádra (a gazda Telegramjára) session-meta NEM mehet ki.`
+      : `Röviden jelezz a csatornádon, hogy friss kontextussal folytatod.`)
+  )
+}
+
 export function resumePrompt(
   name: string,
   handoffPath: string,
@@ -479,40 +537,50 @@ export function resumePrompt(
     base + source + tail +
     `Utána ellenőrizd a kanban tábládat (in_progress kártyák, assignee=${name}) és a hot memóriáidat, ` +
     `és FOLYTASD a megkezdett munkát magadtól. Ne kezdd elölről ami a handoff szerint már kész. ` +
-    // ORSICTX912: msg 23670 was delivered SEVEN SECONDS after the guard kill
-    // started, into the dying session -- the queue marked it delivered, the
-    // fresh session had no reason to look, and completed_at is unused (0/37
-    // measured), so the loss is invisible from the queue. The re-read must
-    // ride in the resume prompt (the fresh session's only context), and the
-    // ack-to-sender is the OBSERVABLE trace: without it, verifying this very
-    // instruction would run into the same blindness it exists to fix.
-    (closeNotAck ? restartWindowCloseDirective(name) : (
-    `RESTART-ABLAK: az előző session utolsó ~15 percében kézbesített inter-agent üzenet elveszhetett. ` +
-    `Olvasd vissza a saját sorodat erre az ablakra (GET /api/messages?agent=${name}, created_at szerint szűrve), ` +
-    `és minden ott talált, még el nem intézett kérést kezelj újként. KÖTELEZŐ MEGFIGYELHETŐ NYOM: minden ` +
-    `visszaolvasott tételről küldj rövid nyugtát a feladónak ("[RESTART-ABLAK] <id> felvéve a friss sessionben"), ` +
-    `akkor is, ha nincs belőle teendő -- e nélkül a visszaolvasás a sorból láthatatlan. ` +
-    // af9a6838: "system" is not a registered agent, so an ack POSTed to it is
-    // refused (400 unknown recipient) -- and the guard's own notice is in
-    // almost every window (deeper retried 3x, msg 28923). The trace for those
-    // rows is the row itself, closed with a result and no receipt.
-    `KIVÉTEL: a "system" feladó nem ágens, neki küldött nyugta 400-at kap -- az ilyen tételt ` +
-    `PUT /api/messages/<id> {"status":"done","result":"[RESTART-ABLAK] felvéve a friss sessionben","notify":false} zárja, ez a nyoma. `
-    )) +
-    // RESPAWNZAJ822/PRODFAAG822: a fresh session acting on a resume goal is
-    // exactly the actor that branch-switched and committed on the live prod
-    // tree (2026-08-22 10:10, PR #1036 duplicate). The constraint must ride in
-    // the resume prompt itself -- it is the ONLY context the fresh session has.
-    `KORLÁT: a futó prod fán (a repo fő checkoutján) NE válts ágat, NE commitolj és NE nyiss belőle PR-t ` +
-    `-- ha repo-munka kell, használj worktree-t (git worktree add). ` +
-    // The main agent's channel is the OWNER's channel (Telegram), and session
-    // meta must never go there (standing owner preference; a 3am status
-    // notice measured on 2026-08-05, review msg 14197). Sub-agents' channel
-    // is the inter-agent queue, where the notice belongs. This prompt is the
-    // fresh session's ONLY rule set, so the split must live here.
-    (name === MAIN_AGENT_ID
-      ? `Zárásul egyetlen transzkript-sorban rögzítsd, hogy friss kontextussal folytatod -- a csatornádra (a gazda Telegramjára) session-meta NEM mehet ki.`
-      : `Röviden jelezz a csatornádon, hogy friss kontextussal folytatod.`)
+    resumePromptTail(name, closeNotAck)
+  )
+}
+
+/** How far back the fresh session's list of its own open requests reaches, and how many it names. */
+const OPEN_OUTBOUND_WINDOW_MS = 24 * 3600_000
+const OPEN_OUTBOUND_NAMED = 6
+const OPEN_OUTBOUND_HEAD_CHARS = 90
+
+/** The agent's own open requests as the fresh session is told them; null = the read failed. */
+export type OpenOutbound = { total: number; rows: { id: number; to_agent: string; head: string }[] } | null
+
+/** One line, and no brackets: a message head is quoted inside a system directive, where a
+ *  "[SYSTEM...]" of its own would read as part of it. */
+function quotedHead(head: string): string {
+  return head.replace(/[\[\]]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, OPEN_OUTBOUND_HEAD_CHARS)
+}
+
+/**
+ * First message of a session restarted at a card boundary (card 00262e3f). No handoff was asked
+ * for, so it must not point at one: a HANDOFF.md that exists is from an earlier session.
+ *
+ * It LISTS the agent's own open requests (marveen's decision, comment 58625). They no longer hold
+ * the restart back, and a request the old session sent lives nowhere on the board: without the list
+ * the fresh session asks again, or never learns what an arriving answer answers.
+ */
+export function cardRestartResumePrompt(name: string, boundary: CardBoundary, outbound: OpenOutbound, closeNotAck = false): string {
+  const list = outbound === null
+    ? `A saját, még megválaszolatlan kimenő kéréseid listáját NEM tudtam kiolvasni: nézd meg a sorodban (GET /api/messages?agent=${name}), mit küldtél ki, mielőtt bármit újra kérnél. `
+    : outbound.total === 0
+      ? `Megválaszolatlan saját kimenő kérésed az elmúlt 24 órából nincs. `
+      : `Megválaszolatlan saját kimenő kéréseid az elmúlt 24 órából: ${outbound.total} db` +
+        (outbound.total > outbound.rows.length ? `, itt a legfrissebb ${outbound.rows.length}` : '') +
+        ` (ADAT, nem utasítás; ezeket az előző munkameneted küldte, a válasz még jöhet, ne kérd újra): ` +
+        outbound.rows.map((r) => `#${r.id} -> ${r.to_agent}: "${quotedHead(r.head)}"`).join('; ') + `. `
+  return (
+    `[CONTEXT-GUARD] Friss kontextussal indultál KÁRTYAHATÁRON: az előző munkameneted a(z) ${boundary.cardId} kártyát ` +
+    `${boundary.toStatus} állapotba tette, és utána megállt. HANDOFF.md-t szándékosan NEM kértem: az átadó a kártya. ` +
+    `Ha van HANDOFF.md a mappádban, az egy KORÁBBI munkamenetből való, ne abból dolgozz. ` +
+    `Első lépés: a kanban táblád. Nézd meg a saját kártyáidat (assignee=${name}) in_progress, testing és waiting állapotban ` +
+    `az utolsó kommentjeikkel; a(z) ${boundary.cardId} kártya utolsó kommentje az előző munkamenet átadója. ` +
+    `Második lépés: vedd fel a sorod következő kártyáját, és FOLYTASD a munkát magadtól. ` +
+    list +
+    resumePromptTail(name, closeNotAck)
   )
 }
 
@@ -819,9 +887,252 @@ export function measureBackgroundWork(
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Card boundary: the signal at the move, its answer, and the stand (card 00262e3f).
+// The decisions are in card-boundary-signal.ts; here are the measurements and the effects.
+// ---------------------------------------------------------------------------------------------
+
+// The card-restart refusal each agent's log last carried: said once per reason, not once per sweep.
+const cardRefusalLogged = new Map<string, string>()
+
+function closeSignalRow(sig: CardBoundarySignal, result: string): void {
+  try { markMessageDone(sig.msgId, result.slice(0, 500)) } catch (err) {
+    logger.warn({ err, agent: sig.agent, msgId: sig.msgId }, 'context-guard: card-boundary signal row could not be closed')
+  }
+}
+
+/**
+ * Called by the kanban routes after a status change that was really written. Issues the stop signal
+ * when everything the restart needs holds at this moment (decideSignalAtMove).
+ *
+ * Never throws and returns nothing: the move has happened, and nothing here may change its answer.
+ */
+export function signalCardBoundaryAtMove(actor: string | undefined, cardId: string, fromStatus: string | undefined, toStatus: string): void {
+  try {
+    if (!actor || !isSignalAgentId(actor) || fromStatus === toStatus) return
+    // A stop the agent was shown earlier ends with any later move of its own: it is working on.
+    if (hasSignalFile(actor)) {
+      const old = readSignal(actor)
+      const shown = readShownMs(actor) !== null
+      clearSignal(actor)
+      if (old) closeSignalRow(old, '[KARTYAHATAR] cleared: the agent moved a card after the signal')
+      logger.info({ name: actor, cardId: old?.cardId ?? null, shown, laterCardId: cardId },
+        'context-guard: card-boundary signal cleared without an answer -- not followed: the agent moved a card after it')
+    }
+    const cfg = readContextGuardConfig(actor)
+    if (!signalApplies(cfg, fromStatus, toStatus)) return
+    const running = agentRunState(actor) === 'running'
+    const since = running ? sessionStartSec(actor) : undefined
+    const contextTokens = running ? measureContextTokens(actor, since) : null
+    const pane = running ? capturePane(sessionFor(actor)) : null
+    const facts = since !== undefined ? gatherCardRestartFacts(actor, since) : null
+    const verdict = decideSignalAtMove({
+      cfg, cardId, fromStatus, toStatus,
+      frozen: isFleetFrozen(),
+      running,
+      guardPhase: (guardStates.get(actor) ?? INITIAL_GUARD_STATE).phase,
+      sessionStartSec: since,
+      contextTokens,
+      backgroundWork: pane !== null ? measureBackgroundWork(actor, pane).backgroundWork : null,
+      facts,
+    })
+    if (!verdict.issue) {
+      if (verdict.reason !== null) {
+        logger.info({ name: actor, cardId, toStatus, contextTokens, reason: verdict.reason }, 'context-guard: card-boundary signal NOT issued')
+      }
+      return
+    }
+    const boundary = (facts as CardRestartFacts).boundary as CardBoundary
+    const body = cardBoundarySignalBody(cardId, toStatus, contextTokens as number, cfg.cardRestartTokens)
+    // Anchor first, like sendSystemDirective: the agent verifies the row the instant it reads the text.
+    const anchor = createAgentMessage(SYSTEM_DIRECTIVE_SENDER, actor, body)
+    markMessageDelivered(anchor.id)
+    try {
+      writeSignal({
+        agent: actor, cardId, toStatus, movedAtMs: boundary.movedAtMs, issuedAtMs: Date.now(), msgId: anchor.id,
+        text: `${systemDirectiveEnvelope(anchor.id)}\n${body}`,
+      })
+    } catch (err) {
+      markMessageFailed(anchor.id, `card-boundary signal: file not written: ${String(err).slice(0, 200)}`)
+      throw err
+    }
+    logger.info({ name: actor, cardId, toStatus, contextTokens, msgId: anchor.id }, 'context-guard: card-boundary signal issued')
+  } catch (err) {
+    logger.warn({ err, actor, cardId }, 'context-guard: card-boundary signal step failed -- the move itself is unaffected')
+  }
+}
+
+interface BoundaryAnswer { answer: SignalAnswer; signal: CardBoundarySignal | null; shownAtMs: number | null }
+
+/** What this sweep owes an outstanding signal, read fresh from its files. */
+function boundaryAnswerFor(
+  name: string, nowMs: number, running: boolean, paneIdle: boolean, decision: GuardDecision, facts: CardRestartFacts | undefined,
+): BoundaryAnswer {
+  let signal: CardBoundarySignal | null = null
+  let shownAtMs: number | null = null
+  try {
+    if (hasSignalFile(name)) {
+      signal = readSignal(name)
+      if (signal) shownAtMs = readShownMs(name)
+      else {
+        // The hook shows nothing it cannot parse either, so nobody was told to stop on this file.
+        logger.warn({ name }, 'context-guard: card-boundary signal file is not readable -- removed')
+        clearSignal(name)
+      }
+    }
+  } catch (err) {
+    logger.warn({ err, name }, 'context-guard: card-boundary signal could not be read')
+  }
+  const cardRestart = decision.action === 'restart' ? decision.nextState.cardRestart : undefined
+  const answer = decideSignalAnswer({
+    signal, shownAtMs, nowMs, running, paneIdle,
+    sessionStartSec: signal ? sessionStartSec(name) : undefined,
+    decision: { action: decision.action, reason: decision.reason, ...(cardRestart ? { cardRestart } : {}) },
+    ...(facts ? { facts } : {}),
+  })
+  return { answer, signal, shownAtMs }
+}
+
+/** When the agent's turn ended, from the best source there is; the stand is counted from here. */
+function turnEndOf(idleMs: number | null, nowMs: number, shownAtMs: number | null, atMs: number): Pick<AnsweredBoundary, 'turnEndMs' | 'turnEndSource'> {
+  if (idleMs !== null) return { turnEndMs: nowMs - idleMs, turnEndSource: 'transcript' }
+  // Both fallbacks err towards a LONGER or a shorter stand; the line that reports it names the source.
+  if (shownAtMs !== null) return { turnEndMs: shownAtMs, turnEndSource: 'signal-shown' }
+  return { turnEndMs: atMs, turnEndSource: 'answer-time' }
+}
+
+/**
+ * The two answers that are not a restart: "carry on" to an agent that stopped and is not being
+ * restarted, and dropping a signal nobody stands on. The restart's own bookkeeping happens where
+ * the restart succeeds (noteCardRestartDone).
+ */
+async function settleBoundaryAnswer(name: string, session: string, b: BoundaryAnswer, idleMs: number | null, nowMs: number): Promise<void> {
+  const { answer, signal } = b
+  if (!signal) return
+  if (answer.kind === 'clear') {
+    clearSignal(name)
+    closeSignalRow(signal, `[KARTYAHATAR] cleared: ${answer.why}`)
+    const fields = { name, cardId: signal.cardId, shown: b.shownAtMs !== null, why: answer.why }
+    if (answer.warn) logger.warn(fields, 'context-guard: card-boundary signal cleared without an answer')
+    else logger.info(fields, 'context-guard: card-boundary signal cleared without an answer')
+    return
+  }
+  if (answer.kind !== 'continue') return
+  let outcome: string
+  try {
+    outcome = await sendSystemDirective(name, session, cardBoundaryContinueText(signal.cardId, answer.reason), null, {
+      survival: 'redelivered',
+      survivalReason: 'the signal record stays until this text is sent; the next sweep decides the same answer again',
+    })
+  } catch (err) {
+    outcome = `threw: ${String(err).slice(0, 200)}`
+  }
+  if (outcome !== 'sent') {
+    logger.warn({ name, cardId: signal.cardId, outcome }, 'context-guard: card-boundary continue signal was not delivered -- the next sweep tries again')
+    return
+  }
+  const atMs = Date.now()
+  writeAnswered({ agent: name, cardId: signal.cardId, toStatus: signal.toStatus, half: 'active', how: 'continue', atMs, ...turnEndOf(idleMs, nowMs, b.shownAtMs, atMs) })
+  clearSignal(name)
+  closeSignalRow(signal, `[KARTYAHATAR] answered: continue -- ${answer.reason}`)
+  logger.info({ name, cardId: signal.cardId, toStatus: signal.toStatus, half: 'active', reason: answer.reason },
+    'context-guard: card-boundary stop answered with a continue signal (no restart)')
+}
+
+/** A card-boundary restart has happened: the line the trial is counted from, and the stand record. */
+function noteCardRestartDone(
+  name: string, boundary: CardBoundary, b: BoundaryAnswer, reason: string, contextTokens: number | null, pctRound: number | null,
+  idleMs: number | null, nowMs: number,
+): void {
+  const half = b.answer.kind === 'restart' ? b.answer.half : 'passive'
+  logger.info(
+    {
+      name, cardId: boundary.cardId, toStatus: boundary.toStatus, half, contextTokens, pct: pctRound,
+      thresholdRequestSkipped: reason.includes(CARD_RESTART_SKIPPED_REQUEST_MARK), reason,
+    },
+    'context-guard: card-boundary restart done',
+  )
+  try {
+    const atMs = Date.now()
+    writeAnswered({ agent: name, cardId: boundary.cardId, toStatus: boundary.toStatus, half, how: 'restart', atMs, ...turnEndOf(idleMs, nowMs, b.shownAtMs, atMs) })
+    if (b.signal) {
+      clearSignal(name)
+      closeSignalRow(b.signal, `[KARTYAHATAR] answered: restart (${half})`)
+    }
+  } catch (err) {
+    logger.warn({ err, name }, 'context-guard: card-boundary restart could not be recorded -- its stand will not be measured')
+  }
+}
+
+/** Point 4 of decision 58608: one stand over the limit after a signal ends the active half for this agent. */
+function switchOffActiveHalf(name: string, rec: AnsweredBoundary, standMs: number): void {
+  const fields = { name, cardId: rec.cardId, how: rec.how, standMs, standLimitMs: STAND_LIMIT_MS }
+  try {
+    const now = readContextGuardConfig(name)
+    if (now.cardRestartSignal) writeContextGuardConfig(name, { ...now, cardRestartSignal: false })
+    logger.warn(fields, 'context-guard: card-boundary ACTIVE half switched off -- an agent stood longer than the limit after the signal')
+  } catch (err) {
+    logger.error({ err, ...fields }, 'context-guard: card-boundary ACTIVE half could NOT be switched off after a stand over the limit')
+  }
+  if (name === MAIN_AGENT_ID) return
+  try {
+    createAgentMessage(
+      name,
+      MAIN_AGENT_ID,
+      `[CARD-BOUNDARY] Active half switched OFF for "${name}": after the stop signal at card ${rec.cardId} the agent stood ` +
+      `${Math.round(standMs / 60_000)} min (limit ${Math.round(STAND_LIMIT_MS / 60_000)}) between the end of its turn and the next tool call ` +
+      `(the guard's answer was: ${rec.how}). This is the stop condition of the trial (card 00262e3f, decision comment 58608, point 4) ` +
+      `and a finding for that card. The passive half stays on; cardRestartSignal goes back on only by your hand.`,
+      'card-boundary stand limit',
+    )
+  } catch (err) {
+    logger.error({ err, name }, 'context-guard: FAILED TO REPORT the card-boundary switch-off')
+  }
+}
+
+function boundaryAnsweredOpen(name: string): boolean {
+  try { return existsSync(answeredPath(name)) } catch { return false }
+}
+
+/** Each sweep, for an answered boundary: has the next session made its first tool call yet? */
+function followBoundaryStand(name: string, nowMs: number): void {
+  try {
+    if (!boundaryAnsweredOpen(name)) return
+    const rec = readAnswered(name)
+    if (!rec) { clearAnswered(name); return }
+    const first = readFirstToolUseMsAfter(workingDirFor(name), configDirFor(name), rec.atMs)
+    const j = judgeStand(rec, first, nowMs)
+    const fields = { name, cardId: rec.cardId, half: rec.half, how: rec.how, standMs: j.standMs, standLimitMs: STAND_LIMIT_MS, turnEndSource: rec.turnEndSource }
+    if (j.kind === 'measured') {
+      logger.info(fields, 'context-guard: card-boundary stand measured (end of the turn -> first tool call after the answer)')
+      clearAnswered(name)
+    } else if (j.kind === 'gave-up') {
+      logger.warn(fields, 'context-guard: card-boundary stand NOT measured -- no tool call seen within the follow window, record dropped')
+      clearAnswered(name)
+    } else if (j.overLimit && !rec.limitReported) {
+      logger.warn(fields, 'context-guard: card-boundary stand is over the limit and the agent has not made a tool call yet')
+      writeAnswered({ ...rec, limitReported: true })
+    }
+    if (j.kind !== 'gave-up' && j.switchOff) switchOffActiveHalf(name, rec, j.standMs)
+  } catch (err) {
+    logger.warn({ err, name }, 'context-guard: card-boundary stand follow-up failed')
+  }
+}
+
+function readOpenOutbound(name: string, nowMs: number): OpenOutbound {
+  try {
+    return listOpenOwnOutbound(name, (nowMs - OPEN_OUTBOUND_WINDOW_MS) / 1000, OPEN_OUTBOUND_NAMED, OPEN_OUTBOUND_HEAD_CHARS)
+  } catch (err) {
+    logger.warn({ err, name }, 'context-guard: the agent\'s open own requests could not be read for the card-restart prompt')
+    return null
+  }
+}
+
 async function checkAgent(name: string, nowMs: number): Promise<void> {
   const cfg = readContextGuardConfig(name)
   const state = guardStates.get(name) ?? INITIAL_GUARD_STATE
+  // Before the disarm check: a stand is followed to its end even if the tier was switched off since.
+  followBoundaryStand(name, nowMs)
 
   // Fully disarmed only when EVERY tier and the always-on saturation net are
   // off; the net alone keeps the sweep alive so a 100%-context pane (which
@@ -836,9 +1147,12 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
   //
   // One state does not leave here: await-handoff. That agent was asked to stop, and switching
   // the guard off must not strand it; decideGuard answers with the release (card 17a19228).
-  if (!cfg.enabled && !cfg.saturationRestart && !cfg.idleFlushEnabled && !cfg.dailyHandoffEnabled && state.phase !== 'await-handoff') {
-    setGuardState(name, null)
-    return
+  if (!cfg.enabled && !cfg.saturationRestart && !cfg.idleFlushEnabled && !cfg.dailyHandoffEnabled && !cfg.cardRestartEnabled && state.phase !== 'await-handoff') {
+    // Nor an agent that was told to stop at a card boundary: it is owed its "carry on" (00262e3f).
+    if (!hasSignalFile(name)) {
+      setGuardState(name, null)
+      return
+    }
   }
 
   // v1: local agents only -- a remote host's transcripts are unreadable here.
@@ -979,8 +1293,8 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
     // Context-size probe, paid for only when the idle-flush tier is armed.
     // Note the condition is cfg.idleFlushEnabled, NOT cfg.enabled: the two
     // tiers are independently switchable, so an agent running the idle tier
-    // alone must still get its measurements.
-    contextTokens: running && needPct && cfg.idleFlushEnabled ? measureContextTokens(name, since) : null,
+    // alone must still get its measurements. The card-aligned restart reads the same number.
+    contextTokens: running && needPct && (cfg.idleFlushEnabled || cfg.cardRestartEnabled) ? measureContextTokens(name, since) : null,
     // idleMs is NOT gated on the idle-flush tier: the handoff-staleness check
     // (handoffStaleMinutes) needs the transcript mtime on every decision path
     // that can restart, and the probe is a single stat().
@@ -996,6 +1310,8 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
     compactedAtMs: running && state.phase === 'await-handoff' ? readLastCompactionMs(workingDirFor(name), configDirFor(name)) : null,
     // Same capture as paneIdle; only await-handoff reads it (card 8b8864e4).
     paneApiError: state.phase === 'await-handoff' && pane !== null && detectsMidTurnApiError(pane),
+    // Board and queue reads, only where the tier can act: armed, running, and no sequence under way.
+    ...(cfg.cardRestartEnabled && running && state.phase === 'idle' ? { cardRestart: gatherCardRestartFacts(name, since) } : {}),
     dailyHandoffDue: (() => {
       // Forgetting does NOT wait for an idle sweep: an agent that was never idle
       // while the tier was off would otherwise keep its old armed record, and
@@ -1074,7 +1390,24 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
   }
 
   setGuardState(name, decision.nextState)
+  // An agent that stopped on the card-boundary signal is answered on THIS check (00262e3f).
+  const boundary = boundaryAnswerFor(name, nowMs, running, paneState === 'idle', decision, inputs.cardRestart)
+  try {
+    await settleBoundaryAnswer(name, session, boundary, idleMs, nowMs)
+  } catch (err) {
+    logger.warn({ err, name }, 'context-guard: card-boundary answer failed')
+  }
   if (decision.action === 'none') {
+    // Every way the card restart did NOT happen at a boundary, with the reason: the trial is
+    // counted from these lines and from 'card-boundary restart done'.
+    if (decision.reason.startsWith(CARD_RESTART_REASON_PREFIX)) {
+      if (cardRefusalLogged.get(name) !== decision.reason) {
+        cardRefusalLogged.set(name, decision.reason)
+        logger.info({ name, reason: decision.reason, contextTokens: inputs.contextTokens }, 'context-guard: card-boundary restart not done')
+      }
+    } else {
+      cardRefusalLogged.delete(name)
+    }
     // A hold for background work is a 'none' every sweep, so it never reached the log: an agent
     // that had written its handoff and was not restarted for 45 minutes looked forgotten. Said
     // once, when the hold begins.
@@ -1193,12 +1526,24 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
         }
         // Outside the snapshot's try: a failed snapshot must not leave an OLDER tail in place for the
         // resume prompt to point at.
-        writeRestartTail(name, inputs, decision.nextState.handoffStaleMinutes, finalPane, nowMs)
+        const cardBoundary = decision.nextState.cardRestart
+        if (cardBoundary) {
+          // No handoff was asked for, so there is nothing for a tail to complete; an older one must
+          // not pass for this restart's (the fresh session's first message does not point at it).
+          try { if (existsSync(restartTailPathFor(name))) unlinkSync(restartTailPathFor(name)) } catch (err) {
+            logger.warn({ err, name }, 'context-guard: an older restart tail could not be removed')
+          }
+        } else {
+          writeRestartTail(name, inputs, decision.nextState.handoffStaleMinutes, finalPane, nowMs)
+        }
         try {
           await performRestart(name)
           // The streak is over: only a rescue that actually ran clears it.
           clearRescueFailures(name)
           lastGuardRestart.set(name, { atMs: Date.now(), rescue: false, staleMinutes: decision.nextState.handoffStaleMinutes })
+          // Before the loss window is measured: the signal's row is closed here, so it is not
+          // reported as a delivery the restart may have cost.
+          if (cardBoundary) noteCardRestartDone(name, cardBoundary, boundary, decision.reason, inputs.contextTokens ?? null, pctRound, idleMs, nowMs)
         } catch (err) {
           // guardStates was advanced to the post-restart phase BEFORE this
           // switch, so a failed rescue would otherwise be filed as a completed
@@ -1335,7 +1680,9 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
         await sendSystemDirective(
           name,
           session,
-          resumePrompt(name, handoffPathFor(name), hadHandoff, state.handoffStaleMinutes, existsSync(restartTailPathFor(name)) ? restartTailPathFor(name) : null, restartNoticeSwallowMode() === 'live'),
+          state.cardRestart
+            ? cardRestartResumePrompt(name, state.cardRestart, readOpenOutbound(name, nowMs), restartNoticeSwallowMode() === 'live')
+            : resumePrompt(name, handoffPathFor(name), hadHandoff, state.handoffStaleMinutes, existsSync(restartTailPathFor(name)) ? restartTailPathFor(name) : null, restartNoticeSwallowMode() === 'live'),
           null,
           {
             survival: 'lost',

@@ -189,6 +189,8 @@ describe('checkConfigPutFields', () => {
       // known set is refused by checkConfigPutFields, which is the mismatch
       // this pin exists to catch.
       'dailyHandoffEnabled', 'dailyHandoffTime',
+      // Card-aligned restart (card 00262e3f): the coordinator arms the trial through this route.
+      'cardRestartEnabled', 'cardRestartTokens', 'cardRestartSignal',
     ])
   })
 })

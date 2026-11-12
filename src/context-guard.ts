@@ -77,6 +77,18 @@ export interface ContextGuardConfig {
    *  false, so the auto-restart runner keeps its own nightly restart instead
    *  of standing aside for a tier that can never fire. */
   dailyHandoffTime: string | null
+  /** Card-aligned restart tier (card 00262e3f): a fresh session, with NO handoff turn, for an agent
+   *  that sits idle right after moving a card out of in_progress. The card it just handed off is the
+   *  handoff. Independent of `enabled` and default FALSE: it ends a conversation that no threshold
+   *  would have ended yet. The threshold tiers stay as they are, for the cards that outgrow them. */
+  cardRestartEnabled: boolean
+  /** Absolute context size (tokens) from which a card boundary is worth a fresh session. */
+  cardRestartTokens: number
+  /** The ACTIVE half of the card-aligned restart (marveen's decision, card 00262e3f comment 58608):
+   *  at the move itself the agent is told to put what lives only in its head on the card and end
+   *  its turn. Means something only with `cardRestartEnabled`. Default FALSE; the guard itself
+   *  switches it off after one event where the agent stood longer than the stand limit. */
+  cardRestartSignal: boolean
 }
 
 export const DEFAULT_CONTEXT_GUARD: ContextGuardConfig = {
@@ -132,6 +144,10 @@ export const DEFAULT_CONTEXT_GUARD: ContextGuardConfig = {
   // the tier without naming a time keeps the old nightly restart rather than
   // losing it to a tier that never fires.
   dailyHandoffTime: null,
+  cardRestartEnabled: false,
+  // 80k: the figure the trial was ordered with (card 00262e3f). Raw tokens, like idleFlushTokens.
+  cardRestartTokens: 80_000,
+  cardRestartSignal: false,
 }
 
 /**
@@ -164,6 +180,10 @@ export function normalizeContextGuardConfig(raw: unknown): ContextGuardConfig {
     (typeof o.idleFlushTokens === 'number' && Number.isFinite(o.idleFlushTokens) && o.idleFlushTokens >= 10_000)
       ? Math.floor(o.idleFlushTokens)
       : DEFAULT_CONTEXT_GUARD.idleFlushTokens
+  const cardRestartTokens =
+    (typeof o.cardRestartTokens === 'number' && Number.isFinite(o.cardRestartTokens) && o.cardRestartTokens >= 10_000)
+      ? Math.floor(o.cardRestartTokens)
+      : DEFAULT_CONTEXT_GUARD.cardRestartTokens
   return {
     enabled: o.enabled === true, // default-off (opt-in): only an explicit true enables
     saturationRestart: o.saturationRestart !== false, // default-ON: only an explicit false disarms the net
@@ -180,6 +200,9 @@ export function normalizeContextGuardConfig(raw: unknown): ContextGuardConfig {
     // not parse as HH:MM becomes null rather than being carried through, so a
     // typo disarms the tier instead of scheduling it at an unreadable time.
     dailyHandoffTime: parseHHMM(o.dailyHandoffTime) !== null ? (o.dailyHandoffTime as string).trim() : null,
+    cardRestartEnabled: o.cardRestartEnabled === true, // default-off (opt-in), like the other tiers
+    cardRestartTokens,
+    cardRestartSignal: o.cardRestartSignal === true, // default-off: an agent is told to stop only on an explicit yes
   }
 }
 
@@ -331,6 +354,31 @@ export interface GuardState {
   /** Handoff requests THIS sequence re-sent because the pane ended in an API error before the
    *  handoff was written (MAX_API_ERROR_RESENDS, card 8b8864e4). Absent = 0. */
   apiErrorResends?: number
+  /** Set by the card-aligned restart (card 00262e3f) and carried through await-ready: no handoff
+   *  was asked for, so the fresh session's first message must not send it to HANDOFF.md. It names
+   *  the card whose move was the boundary instead. */
+  cardRestart?: CardBoundary
+}
+
+/** The move that makes a card boundary: the agent itself took this card out of in_progress. */
+export interface CardBoundary {
+  cardId: string
+  toStatus: string
+  movedAtMs: number
+}
+
+/**
+ * What the card-aligned restart tier needs to know beyond the pane and the transcript (card
+ * 00262e3f). Gathered by the runner only while the tier is armed.
+ */
+export interface CardRestartFacts {
+  /** The agent's LAST own card move, when it took a card out of in_progress (to testing, waiting or
+   *  done) in THIS session. null = the last own move is not one (or there is none in this session).
+   *  'unknown' = it could not be read: no restart. */
+  boundary: CardBoundary | null | 'unknown'
+  /** Everything that forbids a restart right now, in words. A probe that could not answer is in
+   *  this list too ("... could not be read"): what cannot be told blocks. */
+  blockers: string[]
 }
 
 export const INITIAL_GUARD_STATE: GuardState = {
@@ -485,6 +533,8 @@ export interface GuardInputs {
    *  detectsMidTurnApiError): the turn died, and nothing more will come from it. Read only in
    *  await-handoff, so the runner gathers it only there (card 8b8864e4). Absent = no error. */
   paneApiError?: boolean
+  /** Card-aligned restart tier: the board and queue facts. Absent = not gathered (tier not armed). */
+  cardRestart?: CardRestartFacts
 }
 
 /**
@@ -515,6 +565,15 @@ export const STALE_REFRESH_REASON_PREFIX = 'stale-handoff-refresh'
  * matches this constant to pick the prompt.
  */
 export const DAILY_HANDOFF_REASON_PREFIX = 'daily-handoff'
+
+/**
+ * Reason prefix of the card-aligned restart tier (card 00262e3f): of its restart AND of every
+ * refusal at a card boundary. The runner matches it to write the lines the trial is measured from,
+ * and to give the fresh session a first message that does not point at a handoff.
+ */
+export const CARD_RESTART_REASON_PREFIX = 'card-restart'
+/** In a card restart's reason when the act threshold would have asked for a handoff on the same sweep. */
+export const CARD_RESTART_SKIPPED_REQUEST_MARK = 'threshold handoff request skipped'
 
 /**
  * Reason prefix for the sub-agent gate tier (card b83e079c). The gate refuses a new sub-agent at
@@ -909,7 +968,7 @@ export function decideGuard(
   const none = (reason: string, next: GuardState = state): GuardDecision =>
     ({ action: 'none', reason, nextState: next })
 
-  if (!cfg.enabled && !cfg.saturationRestart && !cfg.idleFlushEnabled && !cfg.dailyHandoffEnabled) {
+  if (!cfg.enabled && !cfg.saturationRestart && !cfg.idleFlushEnabled && !cfg.dailyHandoffEnabled && !cfg.cardRestartEnabled) {
     // Switched off while an agent sits behind a stop request: it is owed the withdrawal.
     if (state.phase === 'await-handoff') {
       return release(state, inputs, 'guard switched off during await-handoff', INITIAL_GUARD_STATE)
@@ -940,12 +999,25 @@ export function decideGuard(
         return none('pane saturated, awaiting confirmation sweep', { ...state, saturatedStreak: streak })
       }
       const cleared = state.saturatedStreak > 0 ? { ...state, saturatedStreak: 0 } : state
+      // Card-aligned restart (card 00262e3f). Decided first, ranked below: the hard tier's restart and
+      // the sub-agent gate's promise keep their sessions. A REFUSAL here does not stop the tiers
+      // below from acting; it is the answer only when none of them does, so the reason reaches the log.
+      const card = cfg.cardRestartEnabled ? decideCardRestart(nowMs, inputs, cfg, cleared, none) : null
       if (cfg.enabled && inputs.pct !== null) {
         const wedgeTier = decideWedgeTiers(nowMs, inputs, cfg, cleared, none)
-        if (wedgeTier) return wedgeTier
+        if (wedgeTier) {
+          // At a card boundary the restart replaces the threshold's handoff REQUEST (marveen,
+          // comment 58625): the request would cost a full-context turn to write what the card
+          // already says. The reason names the skip, so the two outcomes can be counted apart.
+          if (card?.action === 'restart' && wedgeTier.action === 'request-handoff') {
+            return { ...card, reason: `${card.reason}; ${CARD_RESTART_SKIPPED_REQUEST_MARK} (${wedgeTier.reason})` }
+          }
+          return wedgeTier
+        }
         const gateTier = decideSubagentGateTier(nowMs, inputs, cfg)
         if (gateTier) return gateTier
       }
+      if (card && card.action !== 'none') return card
       // Idle-flush tier. Ranked BELOW the wedge tiers deliberately: those two
       // answer "is this session about to break", this one answers "is it worth
       // paying for", and a session that is both should be rescued on the
@@ -953,7 +1025,7 @@ export function decideGuard(
       // sessions below actPct, which is exactly the band it is for.
       if (cfg.idleFlushEnabled) {
         const flush = decideIdleFlush(nowMs, inputs, cfg, cleared, none)
-        if (flush) return flush
+        if (flush && (flush.action !== 'none' || !card)) return flush
       }
       // Daily tier, ranked LAST. The three tiers above answer measured
       // questions -- is this session about to break, is it expensive, is it
@@ -977,6 +1049,7 @@ export function decideGuard(
           true,
         )
       }
+      if (card) return card
       if (!cfg.enabled) return none('proactive guard disabled (saturation net armed)', cleared)
       if (inputs.pct === null) return none('context unmeasurable', cleared)
       return none('below threshold', cleared)
@@ -1260,6 +1333,49 @@ function decideIdleFlush(
     `${Math.round(inputs.idleMs / 60_000)}m >= ${cfg.idleMinutes}m, ${since})`,
     true,
   )
+}
+
+/**
+ * Card-aligned restart tier (card 00262e3f). Null = not this tier's case: the context is below its
+ * threshold, or the agent is not at a card boundary. A `none` = AT a boundary and heavy enough,
+ * but something forbids the restart; the reason says what.
+ *
+ * No handoff is requested, so nothing here may rest on a guess: every fact that is missing or
+ * unreadable is a refusal. What a wrong "yes" costs is work in flight with no trace of it anywhere;
+ * a wrong "no" costs one more session that ends at the threshold, as all of them do today.
+ *
+ * What it does NOT know: work done after the move that left no trace on the board (a fix on a card
+ * that stayed in testing). The turn has ended and nothing runs in the background, which is the
+ * agent's own account of "nothing in flight"; the tier takes it at that.
+ */
+function decideCardRestart(
+  nowMs: number,
+  inputs: GuardInputs,
+  cfg: ContextGuardConfig,
+  cleared: GuardState,
+  none: NoneFn,
+): GuardDecision | null {
+  const facts = inputs.cardRestart
+  if (!facts) return none(`${CARD_RESTART_REASON_PREFIX}: armed, but the board facts were not gathered`, cleared)
+  if (facts.boundary === null) return null
+  if (inputs.contextTokens === null) return none(`${CARD_RESTART_REASON_PREFIX}: context size unmeasurable`, cleared)
+  if (inputs.contextTokens < cfg.cardRestartTokens) return null
+  if (facts.boundary === 'unknown') return none(`${CARD_RESTART_REASON_PREFIX}: the agent's last card move could not be read`, cleared)
+  const b = facts.boundary
+  const at = `card ${b.cardId} moved in_progress -> ${b.toStatus} at ${quietSinceStamp(b.movedAtMs, 0)}`
+  const refuse = (why: string) => none(`${CARD_RESTART_REASON_PREFIX}: refused at a card boundary (${at}) -- ${why}`, cleared)
+  if (!inputs.paneIdle) return refuse('the pane is not confirmed idle')
+  // A restart kills what the session owns (card c8852bba); nothing presses here.
+  if ((inputs.backgroundWork ?? 0) > 0) return refuse(`background work is running: ${backgroundWorkText(inputs)}`)
+  // The fresh session could not act on its first message, and the old one is gone.
+  if (inputs.paneUsageLimited === true) return refuse('the plan usage limit is reached')
+  if (facts.blockers.length > 0) return refuse(facts.blockers.join('; '))
+  const decision = restartDecision(
+    nowMs,
+    `${CARD_RESTART_REASON_PREFIX} (${at}, context ${Math.round(inputs.contextTokens / 1000)}k >= ` +
+    `${Math.round(cfg.cardRestartTokens / 1000)}k) -- no handoff requested, the card is the handoff`,
+  )
+  return { ...decision, nextState: { ...decision.nextState, cardRestart: b } }
 }
 
 /**

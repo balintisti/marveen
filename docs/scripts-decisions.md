@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **493** kovetett fajl, ebbol
-**151** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **494** kovetett fajl, ebbol
+**152** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -322,6 +322,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - WHY THIS EXISTS  /  ---------------
 - WHY THE LABEL NEVER QUOTES THE PAYLOAD  /  --------------------------------------
+
+### `scripts/hooks/card-boundary-signal.py`
+
+- WHY: an agent that moves its own card out of in_progress with a large context is about to be
 
 ### `scripts/hooks/channel-image-resize.sh`
 
