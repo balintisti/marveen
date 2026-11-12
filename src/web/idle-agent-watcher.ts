@@ -15,13 +15,14 @@ import { wakeRows } from '../message-wake.js'
 import { resolveMachineNoticeRecipient } from './front-desk-route.js'
 import { fleetAlertsAreFrontDeskWork, withFrontDeskHeader, type FrontDeskNotice } from '../front-desk.js'
 import { probeDetachedWork, readPaneCwds, type DetachedGroup } from './detached-work.js'
-import { getPendingMessages, getLastOutboundMessageAt, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
+import { getPendingMessages, getLastOutboundMessageAt, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, getAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
 import {
   decideIdleAlert,
   parseWorkCheck,
   selectDeclaredWork,
   isCensusComment,
   buildNoWorkNotice,
+  withPaneApiErrorNote,
   idleDigestLine,
   orphanPullList,
   deferredOrphanList,
@@ -713,6 +714,10 @@ export function tick(): void {
       const apiErrorProgressSinceResume = running && paneRead.apiError === true
         ? apiErrorProgress(agent, state.lastApiErrorResumeAt ?? null)
         : null
+      // Card 8b8864e4: was the last resume typed in? Then an error at the tail is a later loss.
+      const apiErrorResumeDelivered = running && paneRead.apiError === true && state.apiErrorResumeMsgId != null
+        ? getAgentMessage(state.apiErrorResumeMsgId)?.delivered_at != null
+        : undefined
       // The SAME split buildWakeMessage renders, on the SAME ownItems (card 52abd0d4); absent when the
       // queue is undeclared, and then only the ordinary re-arm applies. The bounced ids are not read
       // here: they regroup the message and cannot change this answer (see wakeHasPickableWork).
@@ -731,6 +736,7 @@ export function tick(): void {
           paneUsageLimited: running ? paneRead.usageLimited === true : false,
           paneApiError: running ? paneRead.apiError === true : false,
           apiErrorProgressSinceResume,
+          apiErrorResumeDelivered,
           runningSubagents: backgroundWork,
           // Read only when background work is seen: it is the one case that consumes it.
           lastActionAtMs: backgroundWork > 0 ? lastActionAtMs(agent, realComments ?? comments) : undefined,
@@ -805,8 +811,9 @@ export function tick(): void {
         // 843a9ab6): a failed enqueue must not look like a resume that happened, or the repeat window
         // would escalate an agent that was never written to. Without a stamp the next tick takes the
         // same decision again.
+        let resumeRow: { id: number }
         try {
-          createAgentMessage('system', agent, buildApiErrorResumeMessage(decision.errorSinceMs))
+          resumeRow = createAgentMessage('system', agent, buildApiErrorResumeMessage(decision.errorSinceMs))
         } catch (err) {
           logger.warn({ err, agent }, 'idle guard: could not enqueue the API-error resume message')
           continue
@@ -816,6 +823,7 @@ export function tick(): void {
           lastApiErrorResumeAt: now,
           apiErrorHandledSince: next.apiErrorSinceMs ?? decision.errorSinceMs,
           apiErrorResumesNoProgress: (next.apiErrorResumesNoProgress ?? 0) + 1,
+          apiErrorResumeMsgId: resumeRow.id,
         }
         watchState.set(agent, stamped)
         try {
@@ -963,7 +971,7 @@ export function tick(): void {
         const isFirstOfSpell = next.idleSinceMs !== null && next.noWorkLiveSpellSince !== next.idleSinceMs
         if (isFirstOfSpell) {
           try {
-            sendNoWorkNotice(agent, noticeKind, withStandstillNote(buildNoWorkNotice(agent, minutes, Date.now(), noticeKind), stillNote))
+            sendNoWorkNotice(agent, noticeKind, withStandstillNote(withPaneApiErrorNote(buildNoWorkNotice(agent, minutes, Date.now(), noticeKind), running && paneRead.apiError === true), stillNote))
             watchState.set(agent, { ...next, noWorkLiveSpellSince: next.idleSinceMs })
             // Saved again here, not left to the next tick (card e6045a1b): the row above was written
             // before this stamp existed, so a restart inside the next three minutes would re-send it.
@@ -994,7 +1002,7 @@ export function tick(): void {
         } catch (digestErr) {
           logger.warn({ err: digestErr, agent }, 'idle guard: could not write the daily digest -- telling the coordinator instead')
           try {
-            sendNoWorkNotice(agent, noticeKind, withStandstillNote(buildNoWorkNotice(agent, minutes, Date.now(), noticeKind), stillNote))
+            sendNoWorkNotice(agent, noticeKind, withStandstillNote(withPaneApiErrorNote(buildNoWorkNotice(agent, minutes, Date.now(), noticeKind), running && paneRead.apiError === true), stillNote))
           } catch (err) {
             logger.warn({ err, agent }, 'idle guard: could not tell the coordinator about an unassigned idle agent')
           }
