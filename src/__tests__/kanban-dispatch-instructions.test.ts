@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { kanbanMoveInstructions } from '../web/routes/kanban.js'
-import { hasDoneProof, DONE_PROOF_KINDS } from '../kanban-verdict.js'
+import { hasDoneProof, DONE_PROOF_KINDS, itemMarkState, ITEM_MARK_KINDS } from '../kanban-verdict.js'
 
 // The one line of the dispatch that is a COMMAND rather than prose.
 const probeLine = (out: string): string | undefined =>
@@ -40,6 +40,21 @@ describe('kanbanMoveInstructions', () => {
     // CONTROL: copied verbatim, the placeholder is not a kind and the gate refuses it.
     expect(hasDoneProof([comment(payload.content)])).toBe(false)
     for (const kind of DONE_PROOF_KINDS) expect(out).toContain(kind)
+  })
+
+  // Card bb9f4673: a "<N> tetel" title also needs every item marked. The mark shape the
+  // template hands over must be one the gate's own reader takes once filled in.
+  it('the item-mark line it hands over closes the items once filled in', () => {
+    const out = kanbanMoveInstructions('abc123', 'cody')
+    const shape = /`(TETEL <szám>: <[^>]+> [^`]+)`/.exec(out)
+    expect(shape).not.toBeNull()
+    for (const kind of ITEM_MARK_KINDS) expect(shape![1]).toContain(kind)
+    const filled = shape![1].replace('<szám>', '1-2').replace(/<[A-Z|]+>/, 'HAMIS').replace(/<[^>]+>$/, 'nem tetel-lista')
+    const state = itemMarkState('Koteg: 2 tetel', [{ id: 1, author: 'cody', content: filled, created_at: 0 }], 'abc12345', () => false)
+    expect(state).toEqual({ declared: 2, missing: [], invalid: [] })
+    // CONTROL: copied verbatim, the placeholder is not a mark.
+    const verbatim = itemMarkState('Koteg: 2 tetel', [{ id: 1, author: 'cody', content: shape![1], created_at: 0 }], 'abc12345', () => false)
+    expect(verbatim!.missing).toEqual([1, 2])
   })
 
   // Without an actor the board cannot tell a self-pickup from an assignment, so

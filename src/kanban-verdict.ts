@@ -346,3 +346,123 @@ export function proseLeftoverWarning(hints: ProseLeftoverHint[]): string {
   return `FIGYELEM: a kartya lezarult, de ${hints.length} komment prozaban nyitva marado tetelt jelez es nem nevez meg kartyat, ami viszi (${what}). `
     + 'Ha ez valodi marad: `MARADEK: <mi> | <hova>` sor (0. oszlop) vagy uj hordozo-kartya; ha nem, figyelmen kivul hagyhato.'
 }
+
+/**
+ * A MULTI-ITEM CARD GOES TO DONE ONLY WITH EVERY ITEM MARKED -- card bb9f4673.
+ *
+ * didi 57211 (2026-11-09): nine SEC/LOW batch cards went to done while 23 of their
+ * 47 items were not fixed, partly fixed or undecided; 60795c0c closed on a proof
+ * line for the 2 of its 10 items that shipped. marveen's decision: a card with
+ * several items goes to done only when EVERY item is marked JAVITVA <commit>,
+ * HAMIS <reason> or ATKERULT <card id>.
+ *
+ * WHICH CARD HAS ITEMS: the one whose TITLE says "<N> tetel", N >= 2. Measured
+ * 2026-11-12 03:50 on the 6089 live cards (mode=ro): a numbered list in the
+ * description stands on 814 of the 4860 done cards, mostly steps, not items -- a
+ * detector built on it would be the prose detector the tokens above refuse to be.
+ * The title shape stands on 26 cards, every one of them a real batch. "1/14 tetel"
+ * and "13-24 tetel" are a share and a range, not a count, and do not declare.
+ *
+ * THE MARK, a closed token read like MARADEK: a comment line that STARTS (column 0,
+ * after the author's own stamp) with `TETEL <items>: <kind> <evidence>`, accents
+ * off, case kept. <items> is a list or a range ("1, 3", "2-5"), so a title that
+ * declares items it does not have takes one visible line (`TETEL 1-12: HAMIS ...`)
+ * instead of an override. Any valid mark closes the items it names; a reviewer who
+ * finds a JAVITVA item still broken reopens it with a NYITOTT TETEL verdict, which
+ * the verdict gate already refuses to close over.
+ *   - JAVITVA needs a commit sha (7 to 40 hex) after it;
+ *   - HAMIS needs a reason (any text);
+ *   - ATKERULT needs the id of an EXISTING card other than this one.
+ * A line that has the prefix but fails these is not a mark, and the refusal names
+ * it with the reason, so the closer sees why the line did not count.
+ */
+export const ITEM_MARK_KINDS = ['JAVITVA', 'HAMIS', 'ATKERULT'] as const
+
+const ITEM_COUNT = /(?<![\d/-])(\d+) TETEL(?:ES)?\b/
+const ITEM_MARK = /^TETEL ([^:]*):\s*([A-Z]+)(.*)$/
+const SHA = /(?<![0-9a-zA-Z])[0-9a-f]{7,40}(?![0-9a-zA-Z])/
+
+export interface InvalidItemMark extends OpenVerdict {
+  why: string
+}
+
+export interface ItemMarkState {
+  /** The N the title declares. */
+  declared: number
+  /** The item numbers no valid mark covers, ascending. */
+  missing: number[]
+  invalid: InvalidItemMark[]
+}
+
+/** The item count the title declares, or null when it declares no list (or a single item). */
+export function declaredItemCount(title: string | null | undefined): number | null {
+  const m = ITEM_COUNT.exec(normalize(title ?? ''))
+  if (!m) return null
+  const n = Number(m[1])
+  return n >= 2 ? n : null
+}
+
+/** "1, 3" / "2-5" / "1,4-6" as numbers; a string message when a part is not one. */
+function parseItems(spec: string, declared: number): number[] | string {
+  const out: number[] = []
+  for (const part of spec.split(',').map((p) => p.trim())) {
+    const m = /^(\d+)(?:\s*-\s*(\d+))?$/.exec(part)
+    if (!m) return `"${part}" nem tetelszam (szam, lista vagy tartomany: 1,3 vagy 2-5)`
+    const from = Number(m[1])
+    const to = m[2] === undefined ? from : Number(m[2])
+    if (from < 1 || to < from || to > declared) return `"${part}" nincs a cim 1..${declared} tetele kozott`
+    for (let i = from; i <= to; i++) out.push(i)
+  }
+  return out
+}
+
+/** Why the evidence does not stand, or null when it does. */
+function evidenceProblem(
+  kind: string, evidence: string, ownCardId: string, cardExists: (id: string) => boolean,
+): string | null {
+  if (kind === 'JAVITVA') return SHA.test(evidence) ? null : 'a JAVITVA utan nincs commit-sha (7-40 hexa)'
+  if (kind === 'HAMIS') return evidence.replace(/^[\s|:-]+/, '') !== '' ? null : 'a HAMIS utan nincs indok'
+  if (kind === 'ATKERULT') {
+    const ids = evidence.match(CARD_ID_SHAPE) ?? []
+    return ids.some((id) => id !== ownCardId.slice(0, 8) && cardExists(id))
+      ? null
+      : 'az ATKERULT utan nincs letezo, masik kartya azonositoja'
+  }
+  return `ismeretlen jeloles "${kind}" (${ITEM_MARK_KINDS.join(' | ')})`
+}
+
+/**
+ * The marking state of a multi-item card, or null when the title declares no list.
+ * `title` is the title the card has AFTER the write being checked.
+ */
+export function itemMarkState(
+  title: string | null | undefined,
+  comments: VerdictComment[],
+  ownCardId: string,
+  cardExists: (id: string) => boolean,
+): ItemMarkState | null {
+  const declared = declaredItemCount(title)
+  if (declared === null) return null
+  const closed = new Set<number>()
+  const invalid: InvalidItemMark[] = []
+  const ordered = [...comments].sort((a, b) => a.created_at - b.created_at || a.id - b.id)
+  for (const comment of ordered) {
+    for (const written of (comment.content ?? '').split(/\r?\n/)) {
+      const raw = withoutOwnStamp(written, comment.author).normalize('NFD').replace(/[̀-ͯ]/g, '')
+      const m = ITEM_MARK.exec(raw)
+      if (!m) continue
+      const line = written.trimEnd()
+      const items = parseItems(m[1], declared)
+      const why = typeof items === 'string' ? items : evidenceProblem(m[2], m[3], ownCardId, cardExists)
+      // A string `items` is its own problem, so `why` is set whenever the line is not a mark.
+      if (why !== null) {
+        invalid.push({ author: comment.author, line, commentId: comment.id, why })
+        continue
+      }
+      for (const i of items as number[]) closed.add(i)
+    }
+  }
+  const missing: number[] = []
+  for (let i = 1; i <= declared; i++) if (!closed.has(i)) missing.push(i)
+  return { declared, missing, invalid }
+}
