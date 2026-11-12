@@ -327,7 +327,8 @@ describe('fleet import carries the version', () => {
   it('the INSERT lists version and takes a safe integer, 0 otherwise', async () => {
     const { readFileSync } = await import('node:fs')
     const src = readFileSync(new URL('../web/fleet-transfer.ts', import.meta.url), 'utf8')
-    expect(src).toMatch(/parent_id, dispatched_at, version\)/)
+    // The claim lock's columns follow version in the list (card 3954082a).
+    expect(src).toMatch(/parent_id, dispatched_at, version[,)]/)
     expect(src).toContain('Number.isSafeInteger(c.version) && c.version >= 0 ? c.version : 0')
   })
 })
