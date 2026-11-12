@@ -925,8 +925,8 @@ let breakdownIdeaId = null
 const columns = document.querySelectorAll('.kanban-col-body')
 
 // Modal wiring
-document.getElementById('cardModalClose').addEventListener('click', () => closeModal(cardModalOverlay))
-document.getElementById('cardDetailClose').addEventListener('click', () => closeModal(cardDetailOverlay))
+document.getElementById('cardModalClose').addEventListener('click', () => requestOverlayClose(cardModalOverlay))
+document.getElementById('cardDetailClose').addEventListener('click', () => requestOverlayClose(cardDetailOverlay))
 attachOverlayCloseGuard(cardModalOverlay)
 attachOverlayCloseGuard(cardDetailOverlay)
 
@@ -3460,13 +3460,29 @@ function overlayHasUnsavedInput(overlay) {
   return false
 }
 
-// Backdrop click closes the modal only if it has no unsaved input; if it
-// does, a confirm() gates the close so the click has to be deliberate.
-function attachOverlayCloseGuard(overlay) {
-  overlay.addEventListener('click', (e) => {
+// The default question before a guarded modal closes: none for an empty form; with typed input, a
+// confirm() so the close has to be deliberate.
+async function confirmUnsavedInputClose(overlay) {
+  if (!overlayHasUnsavedInput(overlay)) return true
+  return confirm('Van be nem mentett szöveg -- biztosan bezárod mentés nélkül?')
+}
+
+// Every way of closing a guarded modal goes through here: the backdrop click, its own close button,
+// and Escape. Before, only the backdrop asked, so the close button or Escape still dropped the input.
+async function requestOverlayClose(overlay) {
+  const check = overlay._closeCheck
+  if (check && !(await check())) return
+  closeModal(overlay)
+}
+
+// Registers the modal's question (by default the unsaved-input one) and wires the backdrop click.
+// The question is kept on the element itself: the first modals are guarded near the top of this
+// file, long before a module-level Map declared here would be initialized.
+function attachOverlayCloseGuard(overlay, check = () => confirmUnsavedInputClose(overlay)) {
+  overlay._closeCheck = check
+  overlay.addEventListener('click', async (e) => {
     if (e.target !== overlay) return
-    if (overlayHasUnsavedInput(overlay) && !confirm('Van be nem mentett szöveg -- biztosan bezárod mentés nélkül?')) return
-    closeModal(overlay)
+    await requestOverlayClose(overlay)
   })
 }
 
@@ -3478,20 +3494,19 @@ addBtn.addEventListener('click', () => {
 })
 
 // Close buttons
-document.getElementById('wizardClose').addEventListener('click', () => closeModal(agentWizardOverlay))
-document.getElementById('agentDetailClose').addEventListener('click', () => closeModal(agentDetailOverlay))
-document.getElementById('skillModalClose').addEventListener('click', () => closeModal(skillModalOverlay))
+document.getElementById('wizardClose').addEventListener('click', () => requestOverlayClose(agentWizardOverlay))
+document.getElementById('agentDetailClose').addEventListener('click', () => requestOverlayClose(agentDetailOverlay))
+document.getElementById('skillModalClose').addEventListener('click', () => requestOverlayClose(skillModalOverlay))
 
 // Click-outside-to-close
 attachOverlayCloseGuard(agentWizardOverlay)
 attachOverlayCloseGuard(agentDetailOverlay)
 attachOverlayCloseGuard(skillModalOverlay)
 
-// Close all modals on Escape
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    document.querySelectorAll('.modal-overlay.active').forEach((o) => closeModal(o))
-  }
+// Close all modals on Escape. A guarded modal asks first, as its backdrop and close button do.
+document.addEventListener('keydown', async (e) => {
+  if (e.key !== 'Escape') return
+  for (const o of document.querySelectorAll('.modal-overlay.active')) await requestOverlayClose(o)
 })
 
 // === Avatar Gallery ===
@@ -7115,7 +7130,7 @@ document.getElementById('addScheduleBtn').addEventListener('click', () => {
     setTimeout(() => document.getElementById('scheduleName').focus(), 200)
   })
 })
-document.getElementById('scheduleModalClose').addEventListener('click', () => closeModal(scheduleModalOverlay))
+document.getElementById('scheduleModalClose').addEventListener('click', () => requestOverlayClose(scheduleModalOverlay))
 attachOverlayCloseGuard(scheduleModalOverlay)
 
 // Frequency change handler
@@ -7554,7 +7569,7 @@ function renderScheduleList(tasks) {
 }
 
 const scheduleRunHistoryOverlay = document.getElementById('scheduleRunHistoryOverlay')
-document.getElementById('scheduleRunHistoryClose').addEventListener('click', () => closeModal(scheduleRunHistoryOverlay))
+document.getElementById('scheduleRunHistoryClose').addEventListener('click', () => requestOverlayClose(scheduleRunHistoryOverlay))
 attachOverlayCloseGuard(scheduleRunHistoryOverlay)
 
 const RUN_STATUS_LABEL = {
@@ -8120,7 +8135,7 @@ document.getElementById('memAddBtn').addEventListener('click', () => {
 })
 
 // Close memory modal
-document.getElementById('memModalClose').addEventListener('click', () => closeModal(memModalOverlay))
+document.getElementById('memModalClose').addEventListener('click', () => requestOverlayClose(memModalOverlay))
 attachOverlayCloseGuard(memModalOverlay)
 
 // Save memory (create or edit)
@@ -9230,7 +9245,7 @@ document.querySelectorAll('.catalog-filter-btn').forEach(btn => {
 })
 
 // Catalog install modal
-document.getElementById('catalogInstallClose').addEventListener('click', () => closeModal(catalogInstallOverlay))
+document.getElementById('catalogInstallClose').addEventListener('click', () => requestOverlayClose(catalogInstallOverlay))
 attachOverlayCloseGuard(catalogInstallOverlay)
 
 async function loadCatalog() {
@@ -9410,8 +9425,8 @@ document.getElementById('addConnectorBtn').addEventListener('click', () => {
   loadNewConnectorAgents()
   openModal(connectorModalOverlay)
 })
-document.getElementById('connectorModalClose').addEventListener('click', () => closeModal(connectorModalOverlay))
-document.getElementById('connectorDetailClose').addEventListener('click', () => closeModal(connectorDetailOverlay))
+document.getElementById('connectorModalClose').addEventListener('click', () => requestOverlayClose(connectorModalOverlay))
+document.getElementById('connectorDetailClose').addEventListener('click', () => requestOverlayClose(connectorDetailOverlay))
 attachOverlayCloseGuard(connectorModalOverlay)
 attachOverlayCloseGuard(connectorDetailOverlay)
 
@@ -11387,7 +11402,7 @@ document.getElementById('memImportOpenBtn').addEventListener('click', () => {
 })
 
 // Close import modal
-document.getElementById('memImportClose').addEventListener('click', () => closeModal(memImportOverlay))
+document.getElementById('memImportClose').addEventListener('click', () => requestOverlayClose(memImportOverlay))
 attachOverlayCloseGuard(memImportOverlay)
 
 // File area click -> trigger file input
@@ -11905,7 +11920,7 @@ function formatMtime(ms) {
   return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-document.getElementById('skillDetailClose').addEventListener('click', () => closeModal(skillDetailOverlay))
+document.getElementById('skillDetailClose').addEventListener('click', () => requestOverlayClose(skillDetailOverlay))
 attachOverlayCloseGuard(skillDetailOverlay)
 
 // Scope for the next skill create/import action. 'global' means the
@@ -19352,7 +19367,7 @@ async function openResearchDoc(agent, name) {
       const backBtn = document.getElementById('archivedBackToKanban')
       if (backBtn) backBtn.addEventListener('click', () => switchPage('kanban'))
       const adOverlay = document.getElementById('archivedDetailOverlay')
-      document.getElementById('archivedDetailClose').addEventListener('click', () => closeModal(adOverlay))
+      document.getElementById('archivedDetailClose').addEventListener('click', () => requestOverlayClose(adOverlay))
       attachOverlayCloseGuard(adOverlay)
     }
     populateArchivedProjects()
