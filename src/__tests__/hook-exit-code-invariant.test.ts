@@ -51,6 +51,7 @@ const HOOKS: HookCase[] = [
   { script: 'scripts/hooks/memory-frontmatter-gate.py', runner: 'python3', cls: 'gate', tool: 'Write' },
   { script: 'scripts/hooks/subagent-context-gate.py', runner: 'python3', cls: 'gate', tool: 'Agent' },
   { script: 'scripts/hooks/memory-frontmatter-bash-gate.py', runner: 'python3', cls: 'gate', tool: 'Bash' },
+  { script: 'scripts/hooks/subagent-wait-gate.py', runner: 'python3', cls: 'gate', tool: 'Bash' },
   // Stop guard
   { script: 'scripts/hooks/telegram-reply-guard.py', runner: 'python3', cls: 'gate', tool: 'Stop' },
   // Prompt-path hooks (UserPromptSubmit / SessionStart / PostToolUse wiring)
@@ -79,7 +80,11 @@ function runHook(h: HookCase, input: string): number {
       timeout: 15_000,
       stdio: ['pipe', 'ignore', 'ignore'],
       // Isolate side-effectful hooks from the checkout's real store.
-      env: { ...process.env, LEDGER_DB_PATH: join(SCRATCH, 'ledger.db') },
+      env: {
+        ...process.env,
+        LEDGER_DB_PATH: join(SCRATCH, 'ledger.db'),
+        MARVEEN_SUBAGENT_WAIT_GATE_LOG: join(SCRATCH, 'subagent-wait-gate.log'),
+      },
     })
     return 0
   } catch (err) {
