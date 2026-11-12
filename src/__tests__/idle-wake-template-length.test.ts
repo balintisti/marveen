@@ -124,3 +124,25 @@ describe('priority is kept when the room runs out', () => {
     expect(sawBouncedGone).toBe(true)
   })
 })
+
+// The rebase onto fa6f4f7af (12 h re-arm: "floor expiries only") found the order the room is spent in: PADLO-LEJARAT
+// is printed above VALASZRA VARO ELLENORZES but is NOT work, so with several floor cards it took the room of the owed
+// answer, and the page named floor expiries only while the watcher had decided on 4 h.
+describe('the floor section does not take the room of an owed answer', () => {
+  const past = Math.floor(NOW / 1000) - 86_400
+  const floor = ['flr00001', 'flr00002', 'flr00003', 'flr00004', 'flr00005'].map((id) => ({ ...card(id, 'waiting', 'normal', 'floor card'), due_date: past }))
+  const owed = card('owd00001', 'testing', 'normal', 'owed answer')
+  it('the owed card is named whenever the floor block is, and a tight page drops the FLOOR, not the owed card', () => {
+    let sawFloorDropped = false
+    for (let pad = 0; pad <= 400; pad += 2) {
+      // The agent name rides in the fixed part twice: a long one stretches it, and only the floor kind has a floor group.
+      const msg = buildWakeMessage('a'.repeat(pad + 4), 12, 6, [...floor, owed], NOW, 'assigned_open_cards')
+      // The closing line also names PADLO-LEJARAT: only the section HEADER means the block is printed.
+      const hasFloor = /^PADLO-LEJARAT \(\d+\)/m.test(msg)
+      const hasOwed = /^ {2}owd00001/m.test(msg)
+      if (hasFloor) expect(hasOwed, `pad=${pad}`).toBe(true)
+      if (hasOwed && !hasFloor) sawFloorDropped = true
+    }
+    expect(sawFloorDropped).toBe(true)
+  })
+})

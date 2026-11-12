@@ -2355,7 +2355,7 @@ export function buildWakeMessage(
     const day = (t: number | null | undefined) =>
       t == null ? '?' : new Date(t < 1e11 ? t * 1000 : t).toISOString().slice(0, 10)
     sections.push({
-      header: `PADLO-LEJARAT (${floor.length}) -- waiting, a due_date ELMULT, nem munka:`,
+      header: `PADLO-LEJARAT (${floor.length}) -- waiting, a padlo ELMULT, nem munka:`,
       lines: floor.slice(0, 5).map((c) => `${line(c)}  (padlo ${day(c.due_date)})`),
     })
   }
@@ -2374,25 +2374,32 @@ export function buildWakeMessage(
   const MORE = (n: number) => `+${n} tovabbi a tablan`
   const fixed = [...head, ...measure, ...closing]
   let left = WAKE_MAX_CHARS - fixed.join('\n').length - 2 /* the two joins around the list block */ - MORE(99).length - 1
-  const listed: string[] = []
   let shown = 0
   const total = bounced.length + work.length + floor.length + review.length
-  for (const sec of sections) {
+  // THE FLOOR SECTION IS FILLED LAST, though it is printed where it always was (card 2e78cf63; the 12 h re-arm
+  // of card fa6f4f7af reads the page: "floor expiries only" must mean the page names nothing else). It is the
+  // one section that is NOT work, so it must never take the room of an owed answer or a bounced fix below it
+  // in the printed order -- the decision (4 h) and the page would then disagree about what is on the list.
+  const fillOrder = [...sections.filter((s) => !s.header.startsWith('PADLO-LEJARAT')), ...sections.filter((s) => s.header.startsWith('PADLO-LEJARAT'))]
+  const filled = new Map<Section, string[]>()
+  for (const sec of fillOrder) {
     const first = sec.lines[0]
     if (first === undefined) continue
     // BREAK, not continue (didi K1, card 2e78cf63): a section that does not fit ends the list. With `continue` a
     // lower one could take the room a higher one could not use, and a FELVEHETO card would be named before a
     // VISSZADOBOTT one -- the order Isti's rule (TG 8509) forbids.
     if (left < sec.header.length + 1 + first.length + 1) break
-    listed.push(sec.header)
+    const out = [sec.header]
     left -= sec.header.length + 1
     for (const l of sec.lines) {
       if (left < l.length + 1) break
-      listed.push(l)
+      out.push(l)
       left -= l.length + 1
       shown++
     }
+    filled.set(sec, out)
   }
+  const listed: string[] = sections.flatMap((sec) => filled.get(sec) ?? [])
   if (!sections.length) listed.push('A szamlalod nem nulla, de tetelt nem tudtam megnevezni -- a tabla a forras.')
   else if (total > shown) listed.push(MORE(total - shown))
 
