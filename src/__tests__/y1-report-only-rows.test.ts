@@ -87,6 +87,30 @@ describe('y1-report-only rows: what a finding holds', () => {
     expect(r.armed.map((rows) => JSON.stringify(rows)).join('')).not.toContain('CONTENT-THAT-MUST-NOT-BE-LOGGED')
   })
 
+  // E4: behind a git deny the verdict is about the command without its git commands. The row holds the command as it
+  // was run, says so (git_out), and its classes are those of what the verdict is about.
+  it('marks a verdict that is about the command without its git commands, and classes that', async () => {
+    const command = `cd /no/such/dir; git add a; echo x > ${settings}`
+    // the time left for the classes is counted from the start of the process, which here is the test worker's
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(5)
+    const r = await hook('Bash', { command }).finally(() => clock.mockRestore())
+    expect(r.verdict).toMatchObject({ kind: 'would-deny', reason: 'install-file', git_out: true })
+    const [finding] = rowsIn(r.dir, 'findings.jsonl')
+    expect(finding).toMatchObject({ kind: 'would-deny', reason: 'install-file', base_deny: true, git_out: true, input: { command }, classes: ['.claude/settings.json'] })
+    // a run that is cut while the classes are found keeps the mark
+    expect(r.armed[2][1][1]).toMatchObject({ phase: 'attribute', verdict: 'would-deny', git_out: true, classes: null, input: { command } })
+    expect(r.armed[2][0][1]).toMatchObject({ phase: 'attribute', git_out: true })
+  })
+
+  it('leaves the mark off a row that is about the command as it was run', async () => {
+    const r = await hook('Bash', { command: `echo x > ${settings}` })
+    expect(rowsIn(r.dir, 'findings.jsonl')[0]).toMatchObject({ kind: 'would-deny', reason: 'install-file' })
+    expect(rowsIn(r.dir, 'findings.jsonl')[0]).not.toHaveProperty('git_out')
+    const git = await hook('Bash', { command: 'cd /no/such/dir; git add a' })
+    expect(rowsIn(git.dir, 'findings.jsonl')[0]).toMatchObject({ kind: 'exempted', reason: 'git', exemption: 'git-hunk-excluded' })
+    expect(rowsIn(git.dir, 'findings.jsonl')[0]).not.toHaveProperty('git_out')
+  })
+
   it('holds an MCP call as the JSON the gate read', () => {
     expect(loggedInput('mcp__fs__write_file', { path: '/a', n: 1 })).toEqual({ input: { json: '{"path":"/a","n":1}' } })
     expect(loggedInput('mcp__fs__list', undefined)).toEqual({ input: { json: 'null' } })

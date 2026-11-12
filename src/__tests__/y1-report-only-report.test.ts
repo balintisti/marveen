@@ -40,6 +40,7 @@ interface Report {
   agents: AgentRow[]
   silent_agents: string[]
   would_deny_rows: number
+  would_deny_behind_git: number
   classes: ClassRow[]
   exempted: { rule: string; rows: number; agents: Record<string, number> }[]
   other: { kind: string; rows: number; agents: Record<string, number> }[]
@@ -49,7 +50,7 @@ interface Report {
   unreadable_lines: { calls: number; findings: number }
   last_resort_lines: number
 }
-interface Verdict { kind: string; reason?: string; exemption?: string; base_deny?: boolean }
+interface Verdict { kind: string; reason?: string; exemption?: string; base_deny?: boolean; git_out?: boolean }
 
 let I: Y1Install
 let dir: string
@@ -206,6 +207,35 @@ describe('y1-report-only report: would-deny by target class', () => {
     expect(classOf(rep, '.claude/settings.json')).toMatchObject({ rows: 1, sub: 1, main: 0 })
     expect(classOf(rep, '(classes not found within the budget)')).toMatchObject({ rows: 2, upstream: 1, supplement_only: 1, agents: { main: 1, dexter: 1 } })
     expect(classOf(rep, 'own:agents/*/agent-config.json')).toBeUndefined()
+  })
+})
+
+// E4: behind a git deny the verdict is about the command without its git commands, and so are the classes. Read on the
+// command as it was run, the gate's git deny needs no target at all: the row would be a `(no target)` one.
+describe('y1-report-only report: a would-deny behind a git deny', () => {
+  it('is classed by the command without its git commands, and counted', async () => {
+    const J = makeInstall(mkTmp('y1-report-git-'), 'symlinked', ['dexter'])
+    const log = join(J.root, 'store', 'y1-report-only')
+    const s = join(J.root, '.claude', 'settings.json')
+    const env = { CLAUDE_PROJECT_DIR: J.homeOf('dexter'), CLAUDE_CONFIG_DIR: join(J.lexical('dexter'), '.claude-config') }
+    const hook = (command: string): Promise<Verdict> =>
+      run({ root: J.root, env, dir: log, stdin: () => JSON.stringify({ session_id: 's-1', tool_name: 'Bash', tool_input: { command }, cwd: env.CLAUDE_PROJECT_DIR }) }) as Promise<Verdict>
+    expect(await hook(`cd /no/such/dir; git add a; echo x > ${s}`)).toMatchObject({ kind: 'would-deny', reason: 'install-file', git_out: true })
+    expect(await hook('cd /no/such/dir; git add a')).toMatchObject({ kind: 'exempted', exemption: 'git-hunk-excluded' })
+    expect(await hook(`echo x > ${s}`)).toMatchObject({ kind: 'would-deny', reason: 'install-file' })
+    // as the live hook leaves its rows when its time for the classes is up: the classes are found here
+    const file = join(log, 'findings.jsonl')
+    const rows = readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as Row)
+    expect(rows.map((r) => [r.kind, r.git_out ?? false])).toEqual([['would-deny', true], ['exempted', false], ['would-deny', false]])
+    writeFileSync(file, rows.map((r) => JSON.stringify({ ...r, classes: null }) + '\n').join(''))
+
+    const rep = await buildReport({ root: J.root, dir: log, now: Date.now() + 1000 }) as Report
+    expect(rep.replay).toEqual({ rows: 3, unreproducible: [] })
+    expect(rep.would_deny_rows).toBe(2)
+    expect(rep.would_deny_behind_git).toBe(1)
+    expect(rep.classes).toEqual([{ class: '.claude/settings.json', rows: 2, upstream: 2, supplement_only: 0, main: 0, sub: 2, agents: { dexter: 2 } }])
+    expect(rep.exempted).toEqual([{ rule: 'git-hunk-excluded', rows: 1, agents: { dexter: 1 } }])
+    expect(render(rep)).toContain('   1 of the rows judged again stood behind a git deny')
   })
 })
 

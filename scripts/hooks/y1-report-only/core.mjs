@@ -131,9 +131,9 @@ export async function run({ root, env = process.env, dir = logDir(root, env), do
     const { judge, classesFor } = await import('./decide.mjs')
     v = judge(job)
     if (v.kind === 'would-deny' || v.kind === 'exempted') {
-      const verdict = { sub: v.sub, reason: v.reason, ms: v.ms, base_deny: v.base_deny, base_reason: v.base_reason, exemption: v.exemption, supplements: v.supplements, error: v.error }
+      const verdict = { sub: v.sub, reason: v.reason, ms: v.ms, base_deny: v.base_deny, base_reason: v.base_reason, exemption: v.exemption, git_out: v.git_out, supplements: v.supplements, error: v.error }
       late('attribute', { ...who, ...verdict }, { ...who, ...detail, ...verdict, verdict: v.kind, classes: null })
-      classes = classesFor(job, ATTRIBUTE_UNTIL_MS - performance.now())
+      classes = classesFor(v.decided ? { ...job, toolInput: v.decided } : job, ATTRIBUTE_UNTIL_MS - performance.now())
     }
   } catch (err) {
     if (!v) v = { kind: 'error', error: `the decision did not run: ${String(err?.stack ?? err).slice(0, 2000)}` }
@@ -146,6 +146,7 @@ export async function run({ root, env = process.env, dir = logDir(root, env), do
     base_deny: v.base_deny,
     base_reason: v.base_reason,
     exemption: v.exemption,
+    git_out: v.git_out,
     supplements: v.supplements,
     classes,
     error: v.error,

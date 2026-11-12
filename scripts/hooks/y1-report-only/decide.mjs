@@ -8,6 +8,10 @@
 //     - the log directory of this hook, so a write to the evidence is itself a row.
 //     A deny is re-decided WITHOUT the supplements (base_deny), so the table can tell upstream's rows from ours.
 //  2. EXEMPTIONS (exemptions.mjs): the known false classes, logged as `exempted` with their name, never dropped.
+//  3. A git deny is not this hook's, but the gate names only its FIRST deny. The verdict is therefore the gate's on
+//     the command with its git commands taken out (`git_out`, and `decided`: the input the verdict is about):
+//     allowed = `git-hunk-excluded`; denied for something else = that deny, with the exemptions tried on it; no git
+//     command the hook could take out, or still a git deny = a would-deny for `git` (the rest was read by nobody).
 //
 // No side effect at import: core.mjs calls judge() on the main thread, under the watchdog's deadline.
 import { readdirSync, realpathSync } from 'node:fs'
@@ -16,7 +20,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { gateDecision, installTargets, isSubAgentCaller } from './upstream/scripts/hooks/db-write-gate.mjs'
 import { mcpFileTargets } from './upstream/scripts/hooks/mcp-file-targets.mjs'
 import { normalizePathSegments, pathKey } from './upstream/scripts/self-pace-gate.mjs'
-import { exemptionFor } from './exemptions.mjs'
+import { exemptionFor, gitOut } from './exemptions.mjs'
 
 const AGENT_PATTERN_PREFIX = 'agents/*/'
 // noBareGlob as upstream gives the worker's own CLAUDE.md: agent-config.json has no leading dot, so the quoted `*` of a
@@ -187,6 +191,7 @@ export function attribute(job, opts, budgetMs = Infinity) {
 }
 
 // attribute() for a job judge() has decided: same opts, the supplements on. A budget that is already spent is null.
+// The job is the one the verdict is ABOUT: with `decided` of judge() as its input where judge() gave one.
 export function classesFor(job, budgetMs = Infinity) {
   if (!(budgetMs > 0)) return null
   const opts = gateOpts(job)
@@ -208,10 +213,24 @@ export function judge(job, gate = gateDecision) {
   const d = gate(toolName, toolInput, opts)
   if (!supplementsIntact(opts)) return out({ kind: 'error', error: 'the supplement entries are not on the list the gate cached' })
   if (!d.deny) return out({ kind: 'allow' })
-  const base = withoutSupplements(opts, () => gate(toolName, toolInput, opts))
-  const common = { base_deny: base.deny === true, base_reason: base.error ? 'gate-error' : base.reason, supplements }
+  const commonFor = (input) => {
+    const base = withoutSupplements(opts, () => gate(toolName, input, opts))
+    return { base_deny: base.deny === true, base_reason: base.error ? 'gate-error' : base.reason, supplements }
+  }
   // an exception inside the gate is a deny upstream (fail closed), so it is one here
-  if (d.error) return out({ kind: 'would-deny', reason: 'gate-error', error: String(d.error).slice(0, 2000), ...common })
-  const exemption = exemptionFor(job, opts, d, (input, o = opts) => gate(toolName, input, o))
-  return out({ kind: exemption ? 'exempted' : 'would-deny', reason: d.reason, exemption: exemption ?? undefined, ...common })
+  const failed = (v, input) => out({ kind: 'would-deny', reason: 'gate-error', error: String(v.error).slice(0, 2000), ...commonFor(input) })
+  if (d.error) return failed(d, toolInput)
+  if (d.reason !== 'git') {
+    const exemption = exemptionFor(job, opts, d, (input, o = opts) => gate(toolName, input, o))
+    return out({ kind: exemption ? 'exempted' : 'would-deny', reason: d.reason, exemption: exemption ?? undefined, ...commonFor(toolInput) })
+  }
+  const rest = toolName === 'Bash' && typeof toolInput?.command === 'string' ? gitOut(toolInput.command) : null
+  const decided = rest === null ? null : { ...toolInput, command: rest }
+  const r = decided && gate(toolName, decided, opts)
+  if (r && !supplementsIntact(opts)) return out({ kind: 'error', error: 'the supplement entries are not on the list the gate cached' })
+  if (!r || (r.deny && !r.error && r.reason === 'git')) return out({ kind: 'would-deny', reason: 'git', ...commonFor(toolInput) })
+  if (!r.deny) return out({ kind: 'exempted', reason: 'git', exemption: 'git-hunk-excluded', ...commonFor(toolInput) })
+  if (r.error) return { ...failed(r, decided), git_out: true, decided }
+  const exemption = exemptionFor({ ...job, toolInput: decided }, opts, r, (input, o = opts) => gate(toolName, input, o))
+  return out({ kind: exemption ? 'exempted' : 'would-deny', reason: r.reason, exemption: exemption ? `git-hunk-excluded+${exemption}` : undefined, ...commonFor(decided), git_out: true, decided })
 }

@@ -15,7 +15,7 @@ import { makeInstall, type Y1Install } from './helpers/y1-install.js'
 // @ts-expect-error -- plain .mjs hook script, no types
 import { judge } from '../../scripts/hooks/y1-report-only/decide.mjs'
 // @ts-expect-error -- plain .mjs hook script, no types
-import { RULES, exemptionFor, rewrite, shellKinds } from '../../scripts/hooks/y1-report-only/exemptions.mjs'
+import { RULES, TAKEN_OUT, exemptionFor, gitOut, rewrite, shellKinds } from '../../scripts/hooks/y1-report-only/exemptions.mjs'
 
 const mkTmp = tmpDirs()
 const NEUTRAL = '/nonexistent/y1-neutral'
@@ -23,6 +23,7 @@ const VAR = [0]
 const SQLITE = [1]
 const READ = [2]
 const ENV = { TMPDIR: '/var/tmp/' }
+const T = TAKEN_OUT as string
 
 // what the rules did to the text; WHY a rule refused is asserted apart, by refuses()
 const rw = (command: string, set: number[], env: Record<string, string> = ENV): { text: string; changed: string[] } => {
@@ -546,8 +547,112 @@ describe('y1-report-only exemptions: the gate decides the rewrite', () => {
     expect(asked).not.toHaveBeenCalled()
   })
 
-  it('names a git deny as outside this hook, whatever the command', () => {
-    expect(exemptionFor({ toolName: 'Bash', toolInput: { command: 'git push fork x' } }, {}, { deny: true, reason: 'git' }, null, ENV)).toBe('git-hunk-excluded')
+  // a git deny is judge()'s to explain, on the command without its git commands: a rule that rewrote it away here
+  // would give the call a rule's name with the git deny still in it
+  it('has no rule for a git deny, and does not ask the gate about one', () => {
+    const asked = vi.fn(() => ({ deny: false }))
+    const command = 'f=/tmp/a; git push fork $f'
+    expect(text(command, VAR)).toBe('f=/tmp/a; git push fork /tmp/a')
+    expect(exemptionFor({ toolName: 'Bash', toolInput: { command } }, {}, { deny: true, reason: 'git' }, asked, ENV)).toBeNull()
+    expect(asked).not.toHaveBeenCalled()
+  })
+})
+
+// E4 (found in the fix round): the gate names only its FIRST deny, and every git deny used to be `git-hunk-excluded`,
+// whatever stood behind it. gitOut gives the text the gate is asked about instead: `§` below is a `git` that must be
+// taken out (TAKEN_OUT stands there afterwards), a `git` written out must stay.
+describe('y1-report-only exemptions: gitOut, the git command words taken out', () => {
+  it.each([
+    '§ status',
+    '§',
+    '§ add a; § commit -m x',
+    '§\n§ x',
+    'cd /x && § push',
+    'a && § b || § c',
+    'a | § apply',
+    'a 2>&1 | § apply',
+    'a |& § b',
+    'foo &> out; § x',
+    // a path to git: only its last piece is the word
+    '/usr/bin/§ push',
+    './§ a',
+    // what may stand before a command word: assignments, redirections, precommand words
+    'X=1 Y="a b" § log',
+    '>out § a',
+    '2>/dev/null § a',
+    'command § push',
+    'time § x',
+    'xargs § add',
+    // compound commands and substitutions
+    'if § diff --quiet; then § add a; fi',
+    'while ! § a; do § b; done',
+    '(§ a)',
+    '{ § a; }',
+    'f() { § a; }',
+    'H=$(§ rev-parse HEAD)',
+    'echo "$(§ log -1)"',
+    'echo `§ log`',
+    // a git that is no command word stays, next to one that is
+    '§ a > git',
+    'echo git; § a',
+    'cp a b/git; § a',
+    'echo "a; git b"; § c',
+    '"git" a; § b',
+    'cat <<EOF\ngit commit\nEOF\n§ push',
+    // a git inside the assignment in front of another one is left: the gate still finds it, and the call stays git
+    'x=$(git a) § b',
+  ])('takes out: %j', (shape) => {
+    expect(gitOut(shape.replaceAll('§', 'git'))).toBe(shape.replaceAll('§', T))
+  })
+
+  it.each([
+    // an argument, a file name, a piece of another word
+    'echo git status',
+    'cp a /p/hooks/git',
+    'cat git | sh',
+    'gitk a',
+    'legit a',
+    'a.git b',
+    '.git a',
+    'x/git/y z',
+    'git-lfs x',
+    'git=1',
+    'foo=git; $foo x',
+    // the target of a redirection
+    'echo x > git',
+    'echo x >| git',
+    'echo x >& git',
+    'foo &> out git x',
+    'diff <(git a) <(git b)',
+    // a word with a quoted or escaped piece
+    '"git" status',
+    "'git' status",
+    'gi\\t status',
+    '\\git a',
+    '"/p/hooks/"git x',
+    '"a b"/git x',
+    'git"x" y',
+    // text the shell does not run where it stands
+    'echo "a; git b"',
+    "bash <<'EOF'\ngit commit\nEOF",
+    'sh -c "git commit"',
+    // a position this reader does not know
+    'find . -exec git add {} \\;',
+    'env -u X git push',
+    'xargs -I{} git add {}',
+  ])('takes nothing out of: %j', (command) => {
+    expect(gitOut(command)).toBeNull()
+  })
+
+  it.each<[string, string]>([
+    ['an array, whose words are not commands', 'x=(git a); git b'],
+    ['a zsh =( ) substitution, whose words are', 'diff =(git a) b; git c'],
+    ['the stand-in named by the command itself', `${T}() { :; }; git a`],
+    ['an open quote', 'echo "unterminated; git x'],
+    ['a case pattern', 'case x in a) git b;; esac'],
+    ['a heredoc without its end', 'cat <<EOF\ngit a'],
+  ])('gives no text at all for %s', (_why, command) => {
+    expect(gitOut(command)).toBeNull()
   })
 })
 
@@ -609,5 +714,62 @@ describe('y1-report-only exemptions: through the real gate, for a sub-agent', ()
     ['the file is opened for reading and its handle is printed for the next command', (_i, s) => `python3 -c "f=open('${s}'); print(str(f))" | cut -d"'" -f2 | xargs rm`],
   ])('stays a would-deny when %s', (_why, make, cwd) => {
     expect(verdict(make(I, settings), cwd?.(I))).toBe('would-deny')
+  })
+
+  // E4, through the gate itself. A cd that fails leaves the git where the gate cannot place it, which it reads as
+  // the install: a git deny in an install that is no repository.
+  describe('behind a git deny', () => {
+    const GIT = 'cd /no/such/dir; git add a'
+    const OUT = `cd /no/such/dir; ${T} add a`
+    const about = (command: string): unknown[] => {
+      const v = judge(I.sub('dexter', 'Bash', { command })) as { kind: string; reason?: string; exemption?: string; git_out?: boolean; decided?: { command: string } }
+      return [v.kind, v.reason, v.exemption ?? null, v.git_out ?? false, v.decided?.command ?? null]
+    }
+
+    it('names the git deny alone as the excluded hunk', () => {
+      expect(about(GIT)).toEqual(['exempted', 'git', 'git-hunk-excluded', false, null])
+    })
+
+    it('gives a write behind it as the verdict, about the command without its git commands', () => {
+      expect(about(`echo x > ${settings}`)).toEqual(['would-deny', 'install-file', null, false, null])
+      expect(about(`${GIT}; echo x > ${settings}`)).toEqual(['would-deny', 'install-file', null, true, `${OUT}; echo x > ${settings}`])
+      expect(about(`${GIT} && python3 -c "open('${settings}','w').write('{}')"`)).toEqual(['would-deny', 'install-file', null, true, `${OUT} && python3 -c "open('${settings}','w').write('{}')"`])
+    })
+
+    it('reads the rest too when the git deny comes from the environment of a git command', () => {
+      expect(about('GIT_DIR=/x git status')).toEqual(['exempted', 'git', 'git-hunk-excluded', false, null])
+      expect(about(`GIT_DIR=/x git status; echo x > ${settings}`)).toEqual(['would-deny', 'install-file', null, true, `GIT_DIR=/x ${T} status; echo x > ${settings}`])
+    })
+
+    it('lets a rule explain what stands behind it, and the name says both', () => {
+      const read = `N=${I.root}/scripts/hooks/db-write-gate.mjs; node $N`
+      expect(about(read)).toEqual(['exempted', 'install-file', 'variable-resolved', false, null])
+      expect(about(`${GIT}; ${read}`)).toEqual(['exempted', 'install-file', 'git-hunk-excluded+variable-resolved', true, `${OUT}; ${read}`])
+    })
+
+    it.each<[string, string]>([
+      ['a second git the gate finds and this reader leaves', `${GIT}; "git" add b; echo x > SETTINGS`],
+      ['a git this reader cannot take out at all', `cd /no/such/dir; "git" add a; echo x > SETTINGS`],
+      ['a shape this reader does not follow', `${GIT}; x=(a b); echo x > SETTINGS`],
+    ])('stays a would-deny FOR GIT when nobody read the rest: %s', (_why, command) => {
+      expect(about(command.replace('SETTINGS', settings))).toEqual(['would-deny', 'git', null, false, null])
+    })
+
+    // The stated price: behind a git deny a git command is read as a command the gate knows nothing about, and such
+    // a command writes every protected file it names.
+    it('counts a git command that only names a protected file as a write of it', () => {
+      expect(about(`cd /no/such/dir; git diff -- ${settings}`)[0]).toBe('allow')
+      expect(about(`${GIT}; git diff -- ${settings}`)).toEqual(['would-deny', 'install-file', null, true, `${OUT}; ${T} diff -- ${settings}`])
+      expect(about(`${GIT}; git commit -m "fix ${settings}"`)).toEqual(['would-deny', 'install-file', null, true, `${OUT}; ${T} commit -m "fix ${settings}"`])
+    })
+
+    // ...which holds only while the gate has no opinion of the stand-in. `true` is a word it has one of: it names the
+    // settings and is allowed, and a `git config -f <settings>` read as `true config -f <settings>` would be lost.
+    it('is read by the gate as a command it knows nothing about', () => {
+      expect(about(`${T} config -f ${settings} a.b c`).slice(0, 2)).toEqual(['would-deny', 'install-file'])
+      expect(about(`${T} ${settings}`).slice(0, 2)).toEqual(['would-deny', 'install-file'])
+      expect(about(`true ${settings}`)[0]).toBe('allow')
+      expect(about(`${T} add a`)[0]).toBe('allow')
+    })
   })
 })

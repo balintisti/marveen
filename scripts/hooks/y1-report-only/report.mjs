@@ -10,6 +10,8 @@
 //   - a would-deny row is `no target`, `any name` or `named` (decide.mjs, specificity); only a named row is counted
 //     under its target classes, and under EVERY class it has, so the class rows do not add up to the row total.
 //   - classes the live hook did not finish (classes: null) are found now, within --budget-ms per row.
+//   - a would-deny that stood behind a git deny (git_out) is classed by the command WITHOUT its git commands, the
+//     text its verdict is about, and such rows are counted.
 // An agent directory without a single row is printed as such: there the hook did not run, which is a finding.
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -93,6 +95,7 @@ export async function buildReport({ root = resolve(HERE, '..', '..', '..'), dir 
   const unreproducible = []
   let replayed = 0
   let wouldDeny = 0
+  let behindGit = 0
   for (const r of findings.rows) {
     if (r.kind !== 'would-deny' && r.kind !== 'exempted') {
       const key = r.kind === 'timeout' ? `timeout in ${r.phase}` : r.kind
@@ -117,11 +120,14 @@ export async function buildReport({ root = resolve(HERE, '..', '..', '..'), dir 
       e.agents[r.agent] = (e.agents[r.agent] || 0) + 1
       continue
     }
-    const opts = gateOpts(job)
+    // the targets are those of the input the verdict is about: without the git commands, where judge() took them out
+    const about = v.decided ? { ...job, toolInput: v.decided } : job
+    if (v.git_out) behindGit++
+    const opts = gateOpts(about)
     applySupplements(opts)
-    const spec = specificity(job, opts)
+    const spec = specificity(about, opts)
     if (spec !== 'named') { bump(`(${spec.replace('-', ' ')}) ${r.reason}`, r); continue }
-    const list = Array.isArray(r.classes) ? r.classes : attribute(job, opts, budgetMs)
+    const list = Array.isArray(r.classes) ? r.classes : attribute(about, opts, budgetMs)
     if (!list) bump('(classes not found within the budget)', r)
     else if (!list.length) bump(`(no target) ${r.reason}`, r)
     else for (const c of list) bump(c, r)
@@ -136,6 +142,7 @@ export async function buildReport({ root = resolve(HERE, '..', '..', '..'), dir 
     agents: perAgent,
     silent_agents: perAgent.filter((a) => a.calls === 0).map((a) => a.agent),
     would_deny_rows: wouldDeny,
+    would_deny_behind_git: behindGit,
     classes: Object.entries(classes).map(([name, c]) => ({ class: name, ...c })).sort((x, y) => y.rows - x.rows || (x.class < y.class ? -1 : 1)),
     exempted: Object.entries(exempted).map(([rule, e]) => ({ rule, ...e })).sort((x, y) => y.rows - x.rows),
     other: Object.entries(other).map(([kind, o]) => ({ kind, ...o })),
@@ -169,6 +176,8 @@ export function render(rep) {
     out.push(`  ${String(c.rows).padStart(5)}${String(c.upstream).padStart(10)}${String(c.supplement_only).padStart(11)}${String(c.main).padStart(7)}${String(c.sub).padStart(7)}  ${c.class}  [${who(c.agents)}]`)
   }
   if (!rep.classes.length) out.push('   none')
+  out.push(`   ${rep.would_deny_behind_git} of the rows judged again stood behind a git deny: counted for what the gate says of the command`)
+  out.push('   WITHOUT its git commands (git_out; there a git command that names a protected file counts as a write of it)')
   out.push('   (no target) = denied with an empty list; (any name) = a word that reaches whatever lies next to a')
   out.push('   protected name, read these one by one; upstream = the unchanged gate denies it too; ours-only = only')
   out.push('   with the entries this hook adds')

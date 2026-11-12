@@ -11,7 +11,9 @@
 //                          'r' / 'rb' / 'rt' whose handle is only read, Path('<p>').read_text() / read_bytes(), node
 //                          readFileSync('<p>')
 // The rules are tried alone, then together, smallest set first; the name is the rule, or `a+b`.
-// A git deny is outside this hook (the upstream gate's git part is not what Y1 adopts): `git-hunk-excluded`.
+// A git deny is outside this hook (the upstream gate's git part is not what Y1 adopts): `git-hunk-excluded`. The
+// gate names only its FIRST deny, so that name is given only after the gate has read the command WITHOUT its git
+// commands (gitOut below, asked by decide.mjs) and allowed it; a deny it finds there is the call's verdict.
 //
 // A rule that meets something it cannot vouch for REFUSES: it leaves the text as it got it and says why (`refused`
 // of rewrite(), for the tests and for whoever asks why a call stayed a would-deny). Every list below is a list of
@@ -510,8 +512,50 @@ export function rewrite(command, set, env = process.env) {
   return { text, changed, refused }
 }
 
+// ---------------------------------------------------------------------------------------------- git-hunk-excluded
+// `cd /gone; git add a; echo x > <protected>` is a git deny AND a write, and the gate names only the first. So the git
+// command words are taken out and the gate reads the rest: the word `git` (the last piece of a path to it too) becomes
+// TAKEN_OUT, a command the gate knows nothing about. Its arguments, the assignments, the redirections and the
+// substitutions of the statement stay where they are.
+//
+// Why an allow of that text says "only the git deny was dropped": to the gate a git command differs from an unknown
+// one in its git rule (the deny that is being taken out, and an allow that ends the reading of the segment) and in
+// what it lets git do with a protected path (a read, the text of a commit message). An unknown command gets none of
+// these: a protected path among its words is a deny. The rest is therefore read at least as strictly as the original
+// would be without the git rule. A word the gate knows (`true`, `:`) is the wrong stand-in for that reason: measured
+// on the corpus, `true` lost 5 denies and made 15 (`true ... | tar -x`).
+// The price, on purpose: next to a git deny, a git command that only reads a protected file, names one in a commit
+// message, or stages one is a would-deny.
+//
+// Only a word at a COMMAND position, in code and with no quoted piece, is taken; a `git` after a redirection operator
+// (`>| git`, `>& git`, `&> git`, `<(git ...)`) is left. The positions are those of STARTS / LEADS / PRECOMMANDS, a
+// text reading: where it takes a word that is an argument after all (`echo { git x; }`), a file called git gets another
+// name in the same directory, and no protected path leaves the text. null = nothing to ask the gate about: a shape
+// the reader does not follow, an array or zsh `=(` (its words are not commands, or are), a command that names the
+// stand-in itself, or no git command word found. A git the gate still finds in the text (quoted, in a heredoc, behind
+// `sh -c`, after an option of a precommand this reader does not know) keeps the call a would-deny for git, in decide.mjs.
+export const TAKEN_OUT = 'y1-taken-out'
+const GIT_COMMAND = new RegExp(String.raw`(?<![<>])(?!&>)${STARTS}[ \t]*${LEADS}${PRECOMMANDS}(?:[^\s;|&()<>=\x01\x60]*\/)?git(?=[ \t\n;|&)]|$)`, 'g')
+export function gitOut(command) {
+  const read = shellRead(command)
+  if (!read || command.includes(TAKEN_OUT)) return null
+  // quoted text is \x01, as in flatten(): it is part of a word, and no word taken here may hold one
+  let code = ''
+  for (let k = 0; k < command.length; k++) code += read.kind[k] === 'L' || read.kind[k] === 'N' ? command[k] : '\x01'
+  if (code.includes('=(')) return null
+  let out = ''
+  let at = 0
+  for (const m of code.matchAll(GIT_COMMAND)) {
+    const word = m.index + m[0].length - 'git'.length
+    out += command.slice(at, word) + TAKEN_OUT
+    at = word + 'git'.length
+  }
+  return at === 0 ? null : out + command.slice(at)
+}
+
 export function exemptionFor(job, opts, verdict, redecide, env = process.env) {
-  if (verdict.reason === 'git') return 'git-hunk-excluded'
+  // a git deny is decide.mjs's to explain (gitOut above): no rule here rewrites it away
+  if (verdict.reason === 'git') return null
   const command = job.toolName === 'Bash' ? job.toolInput?.command : null
   if (typeof command !== 'string' || !redecide) return null
   const tried = new Set([command])

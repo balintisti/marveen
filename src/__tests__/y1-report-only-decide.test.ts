@@ -17,6 +17,8 @@ import { makeInstall, type Layout, type Y1Install, type Y1Job } from './helpers/
 import { applySupplements, classesFor, gateOpts, judge, relocatedAgents, specificity } from '../../scripts/hooks/y1-report-only/decide.mjs'
 // @ts-expect-error -- plain .mjs hook script, no types
 import { gateDecision, installTargets } from '../../scripts/hooks/y1-report-only/upstream/scripts/hooks/db-write-gate.mjs'
+// @ts-expect-error -- plain .mjs hook script, no types
+import { TAKEN_OUT } from '../../scripts/hooks/y1-report-only/exemptions.mjs'
 
 const mkTmp = tmpDirs()
 
@@ -167,6 +169,86 @@ describe.each<Layout>(['symlinked', 'plain'])('y1-report-only decision, %s agent
       return gateDecision(tool, input, opts)
     }
     expect(judge(job, rebuilding)).toMatchObject({ kind: 'error', error: 'the supplement entries are not on the list the gate cached' })
+  })
+
+  // E4: the gate names only its first deny, so a git deny is decided on the command WITHOUT its git commands. The
+  // wiring, with gates that answer by the text they are asked about (the real gate: y1-report-only-exemptions.test.ts).
+  describe('a git deny is decided on the command without its git commands', () => {
+    const T = TAKEN_OUT as string
+    type Answer = Record<string, unknown>
+    const GIT: Answer = { deny: true, reason: 'git' }
+    const FILE: Answer = { deny: true, reason: 'install-file' }
+    const ALLOW: Answer = { deny: false }
+    const asked = (answer: (command: string) => Answer): { gate: (tool: string, input: { command: string }) => Answer; seen: string[] } => {
+      const seen: string[] = []
+      return { seen, gate: (_tool, input) => { seen.push(input.command); return answer(input.command) } }
+    }
+    const gitThen = (rest: (command: string) => Answer) => (command: string): Answer => (/\bgit\b/.test(command) ? GIT : rest(command))
+
+    it('asks the gate once about the rest, and an allow there is the excluded hunk', () => {
+      const { gate, seen } = asked(gitThen(() => ALLOW))
+      const v = judge(asSub(B('git push; ls')), gate)
+      expect(v).toMatchObject({ kind: 'exempted', reason: 'git', exemption: 'git-hunk-excluded', base_deny: true, base_reason: 'git' })
+      expect(v).not.toHaveProperty('git_out')
+      expect(v).not.toHaveProperty('decided')
+      // the decision, the rest, and the original again without the entries this hook adds
+      expect(seen).toEqual(['git push; ls', `${T} push; ls`, 'git push; ls'])
+    })
+
+    it('gives a deny of the rest as the verdict, with the rest as what it is about', () => {
+      const { gate, seen } = asked(gitThen((c) => (c.includes('> /x/f') ? FILE : ALLOW)))
+      const v = judge(asSub(B('git push; echo x > /x/f')), gate)
+      expect(v).toMatchObject({ kind: 'would-deny', reason: 'install-file', base_deny: true, base_reason: 'install-file', git_out: true, decided: { command: `${T} push; echo x > /x/f` } })
+      expect(v.exemption).toBeUndefined()
+      expect(seen).toEqual(['git push; echo x > /x/f', `${T} push; echo x > /x/f`, `${T} push; echo x > /x/f`])
+    })
+
+    it('tries the exemptions on the rest, and names the hunk and the rule', () => {
+      const { gate, seen } = asked(gitThen((c) => (c.includes('$f') ? FILE : ALLOW)))
+      const v = judge(asSub(B('git push; f=/tmp/a; echo x > $f')), gate)
+      expect(v).toMatchObject({ kind: 'exempted', reason: 'install-file', exemption: 'git-hunk-excluded+variable-resolved', base_reason: 'install-file', git_out: true, decided: { command: `${T} push; f=/tmp/a; echo x > $f` } })
+      expect(seen[2]).toBe(`${T} push; f=/tmp/a; echo x > /tmp/a`)
+    })
+
+    it('keeps the call a would-deny for git when the gate still finds a git in the rest', () => {
+      const { gate, seen } = asked(() => GIT)
+      const v = judge(asSub(B('git push; ls')), gate)
+      expect(v).toMatchObject({ kind: 'would-deny', reason: 'git', base_deny: true, base_reason: 'git' })
+      expect(v).not.toHaveProperty('git_out')
+      expect(v).not.toHaveProperty('decided')
+      expect(seen).toEqual(['git push; ls', `${T} push; ls`, 'git push; ls'])
+    })
+
+    it.each<[string, Call]>([
+      ['no git command word could be taken out', B('"git" push; echo x > /x/f')],
+      ['the call is not a Bash command', ['Write', { file_path: '/x/f', command: 'git push' }]],
+      ['the command is a list of words', ['Bash', { command: ['git', ' ', 'push'] }]],
+      // gitOut() reads text only: handed a number it throws, and the call would be an `error` row, not a git one
+      ['the command is a number', ['Bash', { command: 42 }]],
+    ])('keeps the call a would-deny for git, and asks nothing more, when %s', (_why, call) => {
+      const seen: unknown[] = []
+      const v = judge(asSub(call), (_tool: string, input: { command: unknown }): Answer => { seen.push(input.command); return seen.length > 2 ? ALLOW : GIT })
+      expect(v).toMatchObject({ kind: 'would-deny', reason: 'git', base_reason: 'git' })
+      expect(v).not.toHaveProperty('git_out')
+      expect(seen).toHaveLength(2)
+    })
+
+    it('logs a gate that fails on the rest as a would-deny with the error', () => {
+      const { gate } = asked(gitThen(() => ({ ...FILE, error: new Error('the gate broke on the rest') })))
+      const v = judge(asSub(B('git push; ls')), gate)
+      expect(v).toMatchObject({ kind: 'would-deny', reason: 'gate-error', base_reason: 'gate-error', git_out: true, decided: { command: `${T} push; ls` }, error: expect.stringContaining('the gate broke on the rest') })
+      expect(v.exemption).toBeUndefined()
+    })
+
+    it('reports an error when the gate rebuilt its list while reading the rest', () => {
+      const J = makeInstall(mkTmp('y1-decide-git-rebuilt-'), layout)
+      const rebuilding = (_tool: string, input: { command: string }, opts: { root: string; projectDir: string | null; configDir: string | null }): Answer => {
+        if (/\bgit\b/.test(input.command)) return GIT
+        installTargets(opts.root, true, opts.projectDir, opts.configDir).list.pop()
+        return ALLOW
+      }
+      expect(judge(J.sub('dexter', 'Bash', { command: 'git push; ls' }), rebuilding)).toMatchObject({ kind: 'error', error: 'the supplement entries are not on the list the gate cached' })
+    })
   })
 
   // The known cost of the agent-config.json entry. It follows upstream's own rule for a no-dot file in a home: a `*`
