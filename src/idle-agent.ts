@@ -557,7 +557,7 @@ function subagentVerdict(input: IdleAgentInput, sinceMs: number | null | undefin
  * none of the notice's bookkeeping, so the next window's notice is still the right stage (didi 31695:
  * zeroing the spell made the escalation unreachable).
  */
-export function decideIdleAlert(
+function decideIdleAlertNoticeWindow(
   input: IdleAgentInput,
   stateIn: IdleAgentState,
   thresholds: IdleAgentThresholds,
@@ -575,6 +575,18 @@ export function decideIdleAlert(
     }
   }
   return { decision: r.decision, next: { ...r.next, lastSubagentNoticeAt: now } }
+}
+
+/** The decision for one agent and one tick. With it, read off the SAME input and the decision that
+ *  is actually returned: why a pane showing the API error got no resume (card 1f990d74). */
+export function decideIdleAlert(
+  input: IdleAgentInput,
+  stateIn: IdleAgentState,
+  thresholds: IdleAgentThresholds,
+  now: number,
+): { decision: IdleDecision; next: IdleAgentState; apiErrorNoResume: ApiErrorNoResume | null } {
+  const r = decideIdleAlertNoticeWindow(input, stateIn, thresholds, now)
+  return { ...r, apiErrorNoResume: explainNoApiErrorResume(input, stateIn, r.decision, r.next) }
 }
 
 /** Used only when progress since the resume was NOT measured (apiErrorProgressSinceResume absent):
@@ -597,6 +609,92 @@ export const API_ERROR_CONFIRM_MIN_MS = 50_000
 /** When the watcher looks again after a first sighting: one extra sweep, not a faster tick. */
 export const API_ERROR_RECHECK_MS = 60_000
 
+/**
+ * WHEN THE API-ERROR STREAK IS "SEEN", one conjunct per input field, under that field's name (card
+ * 1f990d74). ONE table for the decision and for the line that explains a tick without a resume: a
+ * second list would be a second chance to disagree, and that line exists to be believed.
+ */
+const API_ERROR_SEEN_WHEN = {
+  running: (i) => i.running,
+  paneApiError: (i) => i.paneApiError === true,
+  paneIdle: (i) => i.paneIdle === true,
+  runningSubagents: (i) => (i.runningSubagents ?? 0) <= 0,
+  paneUsageLimited: (i) => i.paneUsageLimited !== true,
+  pendingMessages: (i) => i.pendingMessages === 0,
+  standstillActive: (i) => i.standstillActive !== true,
+} satisfies Partial<Record<keyof IdleAgentInput, (input: IdleAgentInput) => boolean>>
+export type ApiErrorConjunct = keyof typeof API_ERROR_SEEN_WHEN
+const API_ERROR_CONJUNCTS = Object.keys(API_ERROR_SEEN_WHEN) as ApiErrorConjunct[]
+
+/** The input fields whose value keeps the streak from being seen this tick. Empty = seen. */
+export function apiErrorBlockers(input: IdleAgentInput): ApiErrorConjunct[] {
+  return API_ERROR_CONJUNCTS.filter((name) => !API_ERROR_SEEN_WHEN[name](input))
+}
+
+/**
+ * Why a pane that shows the API error got NO resume this tick (card 1f990d74). Measured over five
+ * days, 119 of 234 long standstills after an API error had no resume and no reason on record: the
+ * per-tick decision is a debug line.
+ *   blocked                 -- the streak is not seen: `blockedBy` names the input fields that say so
+ *   confirming              -- seen, fewer than API_ERROR_CONFIRM_TICKS consecutive ticks so far
+ *   repeat-rule / park-rule -- the coordinator was told instead (the 10-minute rule on unmeasured
+ *                              progress / API_ERROR_PARK_AFTER errors with no response in between)
+ *   streak-already-answered -- this streak has had its one answer, and the tick went on to `decision`
+ *   unexplained             -- none of the above; the line is then a finding about this function
+ */
+export interface ApiErrorNoResume {
+  why: 'blocked' | 'confirming' | 'repeat-rule' | 'park-rule' | 'streak-already-answered' | 'unexplained'
+  blockedBy: ApiErrorConjunct[]
+  running: boolean
+  paneApiError: boolean
+  paneIdle: boolean | null
+  runningSubagents: number
+  paneUsageLimited: boolean
+  pendingMessages: number
+  standstillActive: boolean
+  /** The confirm counter as the tick found it and as it left it: a blocked tick zeroes it. */
+  confirmTicksBefore: number
+  confirmTicks: number
+  confirmTicksNeeded: number
+  /** What the tick decided instead. */
+  decision: IdleDecision['reason']
+  lastResumeAt: number | null
+}
+
+/** null when the pane does not show the error, or when the tick's decision IS the resume. */
+export function explainNoApiErrorResume(
+  input: IdleAgentInput,
+  before: IdleAgentState,
+  decision: IdleDecision,
+  next: IdleAgentState,
+): ApiErrorNoResume | null {
+  if (input.paneApiError !== true || decision.reason === 'resume-api-error') return null
+  const blockedBy = apiErrorBlockers(input)
+  const answered = before.apiErrorHandledSince != null && before.apiErrorHandledSince === before.apiErrorSinceMs
+  const why: ApiErrorNoResume['why'] =
+    blockedBy.length > 0 ? 'blocked'
+      : decision.reason === 'api-error-confirming' ? 'confirming'
+        : decision.reason === 'api-error-repeat' ? (decision.errorsWithoutProgress === null ? 'repeat-rule' : 'park-rule')
+          : answered ? 'streak-already-answered'
+            : 'unexplained'
+  return {
+    why,
+    blockedBy,
+    running: input.running,
+    paneApiError: true,
+    paneIdle: input.paneIdle,
+    runningSubagents: input.runningSubagents ?? 0,
+    paneUsageLimited: input.paneUsageLimited === true,
+    pendingMessages: input.pendingMessages,
+    standstillActive: input.standstillActive === true,
+    confirmTicksBefore: before.apiErrorTicks ?? 0,
+    confirmTicks: next.apiErrorTicks ?? 0,
+    confirmTicksNeeded: API_ERROR_CONFIRM_TICKS,
+    decision: decision.reason,
+    lastResumeAt: before.lastApiErrorResumeAt ?? null,
+  }
+}
+
 function decideIdleAlertCore(
   input: IdleAgentInput,
   stateIn: IdleAgentState,
@@ -618,9 +716,7 @@ function decideIdleAlertCore(
   // the error, shows NO background work (the hold owns that case; the streak does not run while it
   // lasts), is not usage-limited, has no waking letter on its way and no declared standstill. Any
   // tick that is not "seen" ends the streak, so two ticks must be CONSECUTIVE.
-  const apiErrorSeen =
-    input.running && input.paneApiError === true && input.paneIdle === true && subagents <= 0 &&
-    input.paneUsageLimited !== true && input.pendingMessages === 0 && input.standstillActive !== true
+  const apiErrorSeen = apiErrorBlockers(input).length === 0
   if (!apiErrorSeen && (state.apiErrorSinceMs != null || (state.apiErrorTicks ?? 0) > 0 || state.apiErrorHandledSince != null)) {
     state = { ...state, apiErrorSinceMs: null, apiErrorTicks: 0, apiErrorHandledSince: null }
   }

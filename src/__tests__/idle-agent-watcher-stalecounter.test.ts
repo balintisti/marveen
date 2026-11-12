@@ -83,6 +83,7 @@ describe('readPane -- a staleCounterOnly BEKOTESE (b5bff340)', () => {
       staleCounterOnly: false,
       paneReason: 'unknown-state',
       runningSubagents: 0,
+      apiError: false,                               // ugyanabbol a kepbol, osztalyozhatatlan panelrol is (1f990d74)
     })
 
     capturePane.mockReturnValue(null)
