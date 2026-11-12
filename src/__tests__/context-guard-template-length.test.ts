@@ -71,22 +71,31 @@ describe('critical handoff request (the "kritikus" template, 674 per week)', () 
 })
 
 describe('resume prompt (the "Friss kontextussal indultál" template, 775 per week)', () => {
-  const variants = (name: string) => {
+  // closeNotAck=false is the swallow-mode 'off' branch (acknowledge by message), true the 'live'
+  // branch (close the rows read back; card 074149c2). The live text carries restartWindowCloseDirective.
+  const variants = (name: string, closeNotAck = false) => {
     const tail = `${DIR(name)}/HANDOFF-RESTART-TAIL.md`
     const h = `${DIR(name)}/HANDOFF.md`
     return [
-      ['stale + tail', resumePrompt(name, h, true, 120, tail)],
-      ['unmeasurable + tail', resumePrompt(name, h, true, 'unknown', tail)],
-      ['fresh + tail', resumePrompt(name, h, true, null, tail)],
-      ['no handoff + tail', resumePrompt(name, h, false, null, tail)],
-      ['fresh, no tail', resumePrompt(name, h, true, null, null)],
+      ['stale + tail', resumePrompt(name, h, true, 120, tail, closeNotAck)],
+      ['unmeasurable + tail', resumePrompt(name, h, true, 'unknown', tail, closeNotAck)],
+      ['fresh + tail', resumePrompt(name, h, true, null, tail, closeNotAck)],
+      ['no handoff + tail', resumePrompt(name, h, false, null, tail, closeNotAck)],
+      ['fresh, no tail', resumePrompt(name, h, true, null, null, closeNotAck)],
     ] as const
   }
 
+  // Card db66de6c (didi's review 60098, marveen's decision 10016075): the cap is 1000 on the
+  // 'off' branch and 1700 on the 'live' branch; the live text is longer by the close directive.
   for (const name of AGENTS) {
     for (const [label, p] of variants(name)) {
-      it(`${name}, ${label}: at most 1000 characters`, () => {
+      it(`${name}, ${label}, swallow mode off: at most 1000 characters`, () => {
         expect(p.length).toBeLessThanOrEqual(1000)
+      })
+    }
+    for (const [label, p] of variants(name, true)) {
+      it(`${name}, ${label}, swallow mode live: at most 1700 characters`, () => {
+        expect(p.length).toBeLessThanOrEqual(1700)
       })
     }
   }
