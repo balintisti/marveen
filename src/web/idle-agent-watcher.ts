@@ -15,6 +15,7 @@ import { wakeRows } from '../message-wake.js'
 import { resolveMachineNoticeRecipient } from './front-desk-route.js'
 import { fleetAlertsAreFrontDeskWork, withFrontDeskHeader, type FrontDeskNotice } from '../front-desk.js'
 import { probeDetachedWork, readPaneCwds, type DetachedGroup } from './detached-work.js'
+import { deliveryHoldFor } from './delivery-hold.js'
 import { getPendingMessages, getLastOutboundMessageAt, listKanbanCards, getLabelsForAllCards, getDb, createAgentMessage, getAgentMessage, saveIdleGuardState, loadIdleGuardState } from '../db.js'
 import {
   decideIdleAlert,
@@ -811,6 +812,16 @@ export function tick(): void {
         // 843a9ab6): a failed enqueue must not look like a resume that happened, or the repeat window
         // would escalate an agent that was never written to. Without a stamp the next tick takes the
         // same decision again.
+        // NOT INTO A HELD QUEUE (card 8b8864e4). While the context-guard holds the agent's inbound
+        // rows for a restart, the row would wait there and reach the FRESH session as a stale "your
+        // turn died" (measured on didi 2026-11-10: written 09:12:17, delivered 09:31:12). The guard
+        // answers the dead turn itself in that window (API_ERROR_RESEND_REASON_PREFIX). No stamp, as
+        // for a failed enqueue: once the hold lapses the next tick decides again.
+        const hold = deliveryHoldFor(agent, now)
+        if (hold) {
+          logger.info({ agent, holdPhase: hold.phase, holdUntilMs: hold.untilMs }, 'idle guard: API-error resume not written -- the context-guard holds this agent\'s queue for a restart')
+          continue
+        }
         let resumeRow: { id: number }
         try {
           resumeRow = createAgentMessage('system', agent, buildApiErrorResumeMessage(decision.errorSinceMs))

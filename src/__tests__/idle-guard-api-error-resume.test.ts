@@ -457,6 +457,22 @@ describe('tick() -- the API-error resume, end to end', () => {
     expect(toX()).toHaveLength(0)                    // the streak restarted
   })
 
+  it('HELD QUEUE (card 8b8864e4): while the context-guard holds x for a restart, no resume is written; once the hold lapses, the next tick writes it', async () => {
+    const { setDeliveryHoldProbe } = await import('../web/delivery-hold.js')
+    const heldUntil = NOW + 8 * MIN
+    setDeliveryHoldProbe((agent, nowMs) => (agent === 'x' && nowMs < heldUntil ? { phase: 'await-handoff', untilMs: heldUntil } : null))
+    try {
+      at(0, ERR_PANE); at(3, ERR_PANE); at(6, ERR_PANE)
+      expect(toX()).toHaveLength(0)
+      expect(realDb.loadIdleGuardState('x', 60 * MIN, NOW + 6 * MIN)?.lastApiErrorResumeAt ?? null).toBeNull()
+      at(9, ERR_PANE)
+      expect(toX()).toHaveLength(1)
+      expect(toX()[0].content).toContain('megszakadt 12:00-kor')
+    } finally {
+      setDeliveryHoldProbe(null)
+    }
+  })
+
   it('a FAILED enqueue stamps nothing: no clock, and the next tick retries', () => {
     at(0, ERR_PANE)
     failNextEnqueueTo = 'x'
