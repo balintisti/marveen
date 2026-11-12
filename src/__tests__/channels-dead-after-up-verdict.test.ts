@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpDirs } from './helpers/tmp-dirs.js'
 
 // RESTARTCOALESCE1103 / RELOADDEADGRACE1040: the died-after-up watchdog tick in
 // scripts/channels.sh. A plugin that disappears after having been up is
@@ -32,26 +32,22 @@ function constant(name: string): number {
 const BUDGET = constant('RESPAWN_SETTLE_BUDGET')
 const GRACE = constant('PLUGIN_DEAD_GRACE')
 const RELOAD_AFTER = constant('PLUGIN_RELOAD_AFTER')
+const mkTmp = tmpDirs()
 
 type Tick = { now: number; deadSince: number; stamp: string; tried: boolean }
 
 /** Run the shipped dead_after_up_verdict over a list of ticks, one bash run. */
 function verdicts(ticks: Tick[]): string[] {
-  const dir = mkdtempSync(join(tmpdir(), 'deadafterup-'))
-  try {
-    const p = join(dir, 'probe.sh')
-    const body = [
-      `RESPAWN_SETTLE_BUDGET=${BUDGET}`,
-      `PLUGIN_DEAD_GRACE=${GRACE}`,
-      `PLUGIN_RELOAD_AFTER=${RELOAD_AFTER}`,
-      sliceShellFn(CHANNELS, 'dead_after_up_verdict'),
-      ...ticks.map((t) => `dead_after_up_verdict ${t.now} ${t.deadSince} '${t.stamp}' ${t.tried}`),
-    ].join('\n')
-    writeFileSync(p, body + '\n')
-    return execFileSync('bash', [p], { encoding: 'utf-8' }).trim().split('\n')
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
+  const p = join(mkTmp('deadafterup-'), 'probe.sh')
+  const body = [
+    `RESPAWN_SETTLE_BUDGET=${BUDGET}`,
+    `PLUGIN_DEAD_GRACE=${GRACE}`,
+    `PLUGIN_RELOAD_AFTER=${RELOAD_AFTER}`,
+    sliceShellFn(CHANNELS, 'dead_after_up_verdict'),
+    ...ticks.map((t) => `dead_after_up_verdict ${t.now} ${t.deadSince} '${t.stamp}' ${t.tried}`),
+  ].join('\n')
+  writeFileSync(p, body + '\n')
+  return execFileSync('bash', [p], { encoding: 'utf-8' }).trim().split('\n')
 }
 
 const one = (t: Tick) => verdicts([t])[0]
