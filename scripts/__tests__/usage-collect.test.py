@@ -1120,6 +1120,80 @@ class TestReadClaudeMacosKeychain(unittest.TestCase):
         ):
             self.assertIsNone(uc._read_claude_macos_keychain())
 
+    def test_empty_token_entry_says_so(self):
+        # card 5128e6f7: the entry existed with an empty accessToken; the collector then reported
+        # the .env token's 403 and nothing pointed at the keychain
+        why = []
+        with patch.object(uc.sys, "platform", "darwin"), patch.object(
+            uc.subprocess, "run", return_value=self._fake_run(self._blob(token="", expires_at=0))
+        ):
+            self.assertIsNone(uc._read_claude_macos_keychain(why))
+        self.assertEqual(len(why), 1)
+        self.assertIn("empty accessToken", why[0])
+
+    def test_absent_entry_says_so(self):
+        why = []
+        with patch.object(uc.sys, "platform", "darwin"), patch.object(
+            uc.subprocess, "run", return_value=self._fake_run("", returncode=44)
+        ):
+            self.assertIsNone(uc._read_claude_macos_keychain(why))
+        self.assertEqual(why, ["no keychain entry"])
+
+    # didi 59480 T4: the third reason of the docstring, and the reason on the no-token answer.
+    def test_unreadable_entry_says_so(self):
+        why = []
+        with patch.object(uc.sys, "platform", "darwin"), patch.object(
+            uc.subprocess, "run", return_value=self._fake_run("not json")
+        ):
+            self.assertIsNone(uc._read_claude_macos_keychain(why))
+        self.assertEqual(why, ["the keychain entry is unreadable (JSONDecodeError)"])
+
+    def test_no_token_anywhere_names_the_empty_keychain(self):
+        with patch.object(uc.os.path, "exists", lambda p: False), patch.object(
+            uc.sys, "platform", "darwin"
+        ), patch.object(
+            uc.subprocess, "run", return_value=self._fake_run(self._blob(token="", expires_at=0))
+        ):
+            windows, err, kind = uc._collect_claude_authoritative()
+        self.assertIsNone(windows)
+        self.assertEqual(kind, "no_token")
+        self.assertIn("no oauth token available", err)
+        self.assertTrue(err.endswith("; the keychain entry has an empty accessToken -- run /login in Claude Code"), err)
+
+    def test_env_token_403_names_the_empty_keychain(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".env", delete=False) as f:
+            f.write("CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-env-one\n")
+            env_path = f.name
+        err403 = uc.urllib.error.HTTPError("u", 403, "Forbidden", {}, None)
+        try:
+            with patch.object(uc, "ENV_PATH", env_path), patch.object(
+                uc.os.path, "exists", lambda p: p == env_path
+            ), patch.object(uc.sys, "platform", "darwin"), patch.object(
+                uc.subprocess, "run", return_value=self._fake_run(self._blob(token="", expires_at=0))
+            ), patch.object(uc, "_claude_cli_version", return_value="1"), patch.object(
+                uc.urllib.request, "urlopen", side_effect=err403
+            ):
+                windows, err, kind = uc._collect_claude_authoritative()
+        finally:
+            os.unlink(env_path)
+        self.assertIsNone(windows)
+        self.assertEqual(kind, "permanent")
+        self.assertIn("HTTP 403 (env_file token;", err)
+        self.assertIn("empty accessToken", err)
+
+    def test_working_keychain_error_has_no_keychain_note(self):
+        future_ms = (time.time() + 3600) * 1000
+        err403 = uc.urllib.error.HTTPError("u", 403, "Forbidden", {}, None)
+        with patch.object(uc.os.path, "exists", lambda p: False), patch.object(
+            uc.sys, "platform", "darwin"
+        ), patch.object(
+            uc.subprocess, "run", return_value=self._fake_run(self._blob(expires_at=future_ms))
+        ), patch.object(uc, "_claude_cli_version", return_value="1"), patch.object(
+            uc.urllib.request, "urlopen", side_effect=err403
+        ):
+            _, err, _ = uc._collect_claude_authoritative()
+        self.assertEqual(err, "HTTP 403 (macos_keychain token)")
+
     def test_non_darwin_never_shells_out(self):
         with patch.object(uc.sys, "platform", "linux"), patch.object(
             uc.subprocess, "run"
