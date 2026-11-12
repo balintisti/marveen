@@ -117,6 +117,7 @@ export type FrontDeskNoticeType =
   | 'idle-still-idle'
   | 'restart-window-receipt'
   | 'fleet-page-guard'
+  | 'scheduler-census'
 
 /** What the header carries. `null` always means NOT MEASURED for this notice, never "none": an
  *  empty list is a measured zero. */
