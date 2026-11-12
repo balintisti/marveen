@@ -64,7 +64,7 @@ import {
 } from './ssh-tmux.js'
 import { parseTelegramToken } from './telegram.js'
 import { getProvider, getProviderType, channelStateDir, readChannelToken, type ChannelProviderType } from '../channel-provider.js'
-import { decideContinueFlag, verifyContinueLaunch } from './channel-continue-policy.js'
+import { CONTINUE_OPT_OUT_REASON, decideContinueFlag, readContinueOptOut, verifyContinueLaunch } from './channel-continue-policy.js'
 import { buildChannelStateFence } from './channel-state-fence.js'
 import { measureClaudeCliVersion } from './claude-cli-version.js'
 import { getClaudePidForSession, probeChannelPluginLiveness } from '../channel-coordinator/liveness.js'
@@ -1794,7 +1794,7 @@ function startRemoteAgentProcess(
   // absolute path (validated), so the `/`->`-` encoding matches Claude Code's
   // own leading-'-' scheme. A probe failure defaults to a fresh launch (safe).
   let hasPriorSession = false
-  if (!opts.fresh) {
+  if (!opts.fresh && !readContinueOptOut(readFileOr(join(agentDir(name), 'agent-config.json'), '{}'))) {
     try {
       const probe = buildSshExec(host, buildContinueProbeCommand(workdir))
       execFileSync(probe.file, probe.args, { timeout: 8000, stdio: 'ignore' })
@@ -1802,6 +1802,8 @@ function startRemoteAgentProcess(
     } catch {
       hasPriorSession = false
     }
+  } else if (!opts.fresh) {
+    logger.info({ name, host }, 'remote agent opted out of --continue (agent-config.json "continue": false), launching fresh')
   }
 
   const model = readAgentModel(name)
@@ -2472,9 +2474,14 @@ export async function startAgentProcess(name: string, opts: { fresh?: boolean } 
       hasPriorSession, fresh: !!opts.fresh, hasChannel, isMainAgent: name === MAIN_AGENT_ID,
       provider: agentProvider, usesLaunchSecret, fleetTokenLaunch: oauthTokenEnv !== '',
       useMcpJsonForChannel, installedCli,
+      continueOptOut: readContinueOptOut(readFileOr(join(agentDir(name), 'agent-config.json'), '{}')),
     })
     if (hasChannel && hasPriorSession && !opts.fresh) {
       logger.info({ name, useContinue: continueDecision.useContinue, reason: continueDecision.reason, installedCli }, 'channel agent resume decision')
+    }
+    // The channel log above covers channel agents; a channel-less agent that opted out says so here.
+    if (!hasChannel && continueDecision.reason === CONTINUE_OPT_OUT_REASON) {
+      logger.info({ name, reason: continueDecision.reason }, 'agent resume decision')
     }
     const continueFlag = continueDecision.useContinue ? '--continue ' : ''
     const stateEnvVar = agentProvider === 'slack' ? 'SLACK_STATE_DIR' : agentProvider === 'discord' ? 'DISCORD_STATE_DIR' : agentProvider === 'googlechat' ? 'GOOGLECHAT_STATE_DIR' : agentProvider === 'teams' ? 'TEAMS_STATE_DIR' : 'TELEGRAM_STATE_DIR'
