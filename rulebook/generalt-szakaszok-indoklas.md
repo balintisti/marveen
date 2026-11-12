@@ -11,7 +11,9 @@ előtti szövege, szó szerint, a friday lapjáról véve (a curl-példákban az
 
 ## `autonomy-wiring`
 
-A lapon maradt: a három szint és jelentésük, a `store/autonomy-config.json` út, a level 1 értesítő curl (idézett heredoc), a jóváhagyás POST/GET receptje (60 mp, approved/rejected/timeout, az ok naplózása), és a payload-szabály teherhordó mondatai (a `-d "{...}"` tilos, idézett határoló vagy `--data-binary @fájl`, változóhoz `python3` + `json.dumps`, a header `$(cat ...)`-ja maradhat, csak a visszaolvasás fogja meg). Ide került: a payload-szabály hatókörének felsorolása (memória-PATCH, napi napló, eset-jegyzet) és a `python3 -c` eset részletes leírása ("command not found", némán kiesett mezőnevek).
+A második vágás (kártya `134bff2f`, a `c6cbfcb1` terv V4-e, 2026-11-12): a két curl-recept a lapról ide, a lenti "Autonómia: curl-recept" szakaszba került, mert a blokk minden ágens minden indulásakor betöltődik, a recept viszont csak egy Level 1 jelzés vagy Level 2 kérés előtt kell. A lapon maradt, ami egy Level 2 kéréshez recept nélkül is elég: a végpont (`POST /api/approvals`), a payload az ágens saját nevével, a `GET /api/approvals/<id>` 60 mp-enként, a három kimenet; és a dashboard címe meg a token útja, amivel a recept kitölthető. A recept fejlécét a generátor `AUTONOMY_RECIPE_HEADING` konstansa nevezi meg, és teszt olvassa ezt a fájlt: az egyik oldal átnevezése piros.
+
+Az első vágás után (2026-10-30) a lapon maradt: a három szint és jelentésük, a `store/autonomy-config.json` út, a level 1 értesítő curl (idézett heredoc), a jóváhagyás POST/GET receptje (60 mp, approved/rejected/timeout, az ok naplózása), és a payload-szabály teherhordó mondatai (a `-d "{...}"` tilos, idézett határoló vagy `--data-binary @fájl`, változóhoz `python3` + `json.dumps`, a header `$(cat ...)`-ja maradhat, csak a visszaolvasás fogja meg). Ide került: a payload-szabály hatókörének felsorolása (memória-PATCH, napi napló, eset-jegyzet) és a `python3 -c` eset részletes leírása ("command not found", némán kiesett mezőnevek).
 
 A Level 3 sora (kártya `074149c2`, C11, 2026-11-10): a művelet utáni jelentés RIPORT, ezért beállított front
 desk mellett a sor a front desket nevezi meg (`jelented a front desknek (<id>)`), ugyanazzal a próbával,
@@ -58,6 +60,30 @@ status=approved -> végezd el a műveletet. status=rejected vagy status=timeout 
 
 **Level 3 (autonóm)**: elvégzed a műveletet, majd utána jelented a főágensnek.
 ~~~~
+
+## Autonómia: curl-recept
+
+A lapod "Autonómia és jóváhagyás" blokkjából töltsd ki: `<DASHBOARD>` a dashboard címe, `<TOKEN>` a token útja,
+`<NEVED>` a saját ágens-azonosítód, `<FOAGENS>` a főágens azonosítója. A payload IDÉZETT határolóban vagy
+egyszeres idézőjelben áll: a shell semmit nem helyettesít be benne, ezért a helyőrzőket kézzel cseréld.
+A header `$(cat ...)`-ja szándékosan helyettesít be (az olvassa a tokent), az maradhat.
+
+Level 1 (csak jelez): értesítés a főágensnek, utána NEM végzed el a műveletet, és megállsz.
+```bash
+curl -s -X POST <DASHBOARD>/api/messages -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(cat <TOKEN>)" --data-binary @- <<'JSON'
+{"from":"<NEVED>","to":"<FOAGENS>","content":"[FELHÍVÁS] CATEGORY_KEY: MIT akartam elvégezni, de level 1 miatt csak jelzek."}
+JSON
+```
+
+Level 2 (jóváhagyás szükséges): MIELŐTT cselekszel, kérés, majd a kapott id-vel lekérdezés 60 mp-enként.
+```bash
+curl -s -X POST <DASHBOARD>/api/approvals -H "Content-Type: application/json" -H "Authorization: Bearer $(cat <TOKEN>)" -d '{"agent_id":"<NEVED>","category":"CATEGORY_KEY","action_description":"Mit tervezel elvégezni és miért","timeout_seconds":3600}'
+curl -s -H "Authorization: Bearer $(cat <TOKEN>)" "<DASHBOARD>/api/approvals/<id>"
+```
+status=approved -> végezd el. status=rejected vagy status=timeout -> ne csináld, naplózd az okot.
+Ha az `action_description` szövegében aposztróf van, az egyszeres idézőjeles `-d` eltörik: akkor `python3` +
+`json.dumps` írja fájlba a payloadot, és `--data-binary @fájl` küldje.
 
 ---
 

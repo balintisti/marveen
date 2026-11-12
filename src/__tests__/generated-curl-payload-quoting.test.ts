@@ -7,7 +7,8 @@
 // tell a working example from a hazardous one by looking at it.
 //
 // Two generated surfaces carry a curl example into every agent's CLAUDE.md:
-//   1. buildAutonomyBody()  -- rewritten on EVERY agent start (ensureAutonomySection)
+//   1. buildAutonomyBody()  -- rewritten on EVERY agent start (ensureAutonomySection);
+//      since card 134bff2f its curl recipes live in the rulebook section it points at
 //   2. generateClaudeMd()   -- written once, at agent creation (stranger-sender rule)
 // Both are asserted here: (1) functionally, on the file the generator writes, and
 // (2) at source level, the established idiom for the LLM-calling generator.
@@ -48,7 +49,7 @@ vi.mock('../web/atomic-write.js', () => ({
   atomicWriteFileSync: (path: string, content: string) => writeFileSync(path, content, 'utf-8'),
 }))
 
-const { ensureAutonomySection } = await import('../web/agent-scaffold.js')
+const { ensureAutonomySection, AUTONOMY_RECIPE_HEADING } = await import('../web/agent-scaffold.js')
 
 const MARKER_BEGIN = '<!-- BEGIN GENERATED: autonomy-wiring (auto-generated, do not edit by hand) -->'
 const MARKER_END = '<!-- END GENERATED: autonomy-wiring -->'
@@ -69,65 +70,30 @@ function writtenAutonomyBlock(agentName: string): string {
   return file.slice(from, to)
 }
 
+// Since card 134bff2f the page block carries no curl line: the two full recipes moved
+// to the rulebook section it points at (AUTONOMY_RECIPE_HEADING), so the quoting
+// measure follows them there. The page keeps the Level 2 payload with the agent's
+// own name, and the warning.
 describe('generated autonomy block: no shell-expanding curl payload', () => {
-  it('the measure is not vacuous -- the written block really carries curl examples', () => {
-    const block = writtenAutonomyBlock('meter-check-agent')
-    const curlLines = block.split('\n').filter((l) => l.trimStart().startsWith('curl '))
-    expect(curlLines.length).toBeGreaterThanOrEqual(2)
-  })
-
-  // Positive control: the level 2 approvals example has ALWAYS used a single-quoted
-  // payload. It must pass the same measure today, before any fix -- a meter that
-  // cannot see the correct form is blind to the broken one.
-  it('positive control: the level 2 approvals example passes the measure', () => {
-    const block = writtenAutonomyBlock('control-agent')
-    const level2 = block.slice(block.indexOf('Level 2'))
-    const approvals = level2.split('\n').find((l) => l.includes('/api/approvals') && l.includes('POST'))
-    expect(approvals, '/api/approvals POST example not found').toBeTruthy()
-    expect(approvals!).not.toMatch(SHELL_EXPANDING_PAYLOAD)
-    expect(approvals!).toContain(`-d '`)
-  })
-
-  it('the level 1 inter-agent example does not use a double-quoted payload', () => {
-    const block = writtenAutonomyBlock('level1-agent')
-    const level1 = block.slice(block.indexOf('Level 1'), block.indexOf('Level 2'))
-    expect(level1).toContain('/api/messages')
-    expect(level1).not.toMatch(SHELL_EXPANDING_PAYLOAD)
-  })
-
   it('no line of the whole generated block uses a double-quoted payload', () => {
     const block = writtenAutonomyBlock('whole-block-agent')
     const offenders = block.split('\n').filter((l) => SHELL_EXPANDING_PAYLOAD.test(l))
     expect(offenders, `shell-expanding payload in generated block:\n${offenders.join('\n')}`).toEqual([])
   })
 
-  it('the level 1 example ships the quoted-heredoc form, so free text stays inert', () => {
-    const block = writtenAutonomyBlock('heredoc-agent')
-    const level1 = block.slice(block.indexOf('Level 1'), block.indexOf('Level 2'))
-    expect(level1).toContain(`--data-binary @- <<'JSON'`)
-  })
-
-  // Carried over from the earlier CURLQUOTE909 branch, which fixed the same two
-  // lines and never shipped. Its level 1 assertion pinned a single-quoted payload,
-  // which the heredoc supersedes -- but the two protections underneath it are
-  // real and were not otherwise covered here.
-  it('the level 1 payload names the agent itself, not a placeholder', () => {
+  // Carried over from the earlier CURLQUOTE909 branch: the payload names the agent
+  // itself, not a placeholder. Since 134bff2f that is the Level 2 payload on the page.
+  it('the level 2 payload on the page names the agent itself, not a placeholder', () => {
     const block = writtenAutonomyBlock('named-agent')
-    const level1 = block.slice(block.indexOf('Level 1'), block.indexOf('Level 2'))
-    expect(level1).toContain('"from":"named-agent"')
-    expect(level1).not.toContain('AGENT_NAME')
+    const level2 = block.slice(block.indexOf('Level 2'), block.indexOf('Level 3'))
+    expect(level2).toContain('"agent_id":"named-agent"')
+    expect(level2).not.toContain('AGENT_NAME')
   })
 
-  it('the token read in the header still interpolates -- do not quote that away', () => {
-    const block = writtenAutonomyBlock('token-agent')
-    expect(block).toContain('$(cat ')
-  })
-
-  // The warning that ships with the fix recommends a heredoc. A heredoc whose
-  // delimiter is NOT quoted expands exactly like a double-quoted string, so a
-  // reader who needs one variable in the payload reaches for `<<JSON` and
-  // reopens the hole the block just closed. A warning that tells half of this
-  // is worse than none, because it is trusted.
+  // The warning recommends a heredoc. A heredoc whose delimiter is NOT quoted
+  // expands exactly like a double-quoted string, so a reader who needs one variable
+  // in the payload reaches for `<<JSON` and reopens the hole. A warning that tells
+  // half of this is worse than none, because it is trusted.
   it('the warning names the unquoted heredoc as the same hazard', () => {
     const block = writtenAutonomyBlock('unquoted-warning-agent')
     expect(block).toContain('<<JSON')
@@ -137,6 +103,48 @@ describe('generated autonomy block: no shell-expanding curl payload', () => {
     const block = writtenAutonomyBlock('payload-build-agent')
     expect(block).toMatch(/json\.dumps|jq/)
     expect(block).toContain('--data-binary @')
+  })
+})
+
+describe('the rulebook recipe the autonomy block points at: no shell-expanding curl payload', () => {
+  const book = readFileSync(join(process.cwd(), 'rulebook/generalt-szakaszok-indoklas.md'), 'utf-8')
+  const recipe = (): string => {
+    const from = book.indexOf(`\n${AUTONOMY_RECIPE_HEADING}\n`)
+    expect(from, `${AUTONOMY_RECIPE_HEADING} not found in the rulebook`).toBeGreaterThan(0)
+    const to = book.indexOf('\n## ', from + 1)
+    return book.slice(from, to > 0 ? to : book.length)
+  }
+
+  it('the measure is not vacuous -- the recipe really carries the curl examples', () => {
+    const curlLines = recipe().split('\n').filter((l) => l.trimStart().startsWith('curl '))
+    expect(curlLines.length).toBeGreaterThanOrEqual(3)
+  })
+
+  // Positive control: the level 2 approvals example has ALWAYS used a single-quoted
+  // payload. A meter that cannot see the correct form is blind to the broken one.
+  it('positive control: the level 2 approvals example passes the measure', () => {
+    const r = recipe()
+    const approvals = r.slice(r.indexOf('Level 2')).split('\n').find((l) => l.includes('/api/approvals') && l.includes('POST'))
+    expect(approvals, '/api/approvals POST example not found').toBeTruthy()
+    expect(approvals!).not.toMatch(SHELL_EXPANDING_PAYLOAD)
+    expect(approvals!).toContain(`-d '`)
+  })
+
+  it('the level 1 example ships the quoted-heredoc form, so free text stays inert', () => {
+    const r = recipe()
+    const level1 = r.slice(r.indexOf('Level 1'), r.indexOf('Level 2'))
+    expect(level1).toContain('/api/messages')
+    expect(level1).toContain(`--data-binary @- <<'JSON'`)
+    expect(level1).not.toMatch(SHELL_EXPANDING_PAYLOAD)
+  })
+
+  it('no line of the recipe uses a double-quoted payload', () => {
+    const offenders = recipe().split('\n').filter((l) => SHELL_EXPANDING_PAYLOAD.test(l))
+    expect(offenders, `shell-expanding payload in the rulebook recipe:\n${offenders.join('\n')}`).toEqual([])
+  })
+
+  it('the token read in the header still interpolates -- do not quote that away', () => {
+    expect(recipe()).toContain('$(cat <TOKEN>)')
   })
 })
 
