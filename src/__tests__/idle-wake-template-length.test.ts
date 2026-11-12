@@ -146,3 +146,38 @@ describe('the floor section does not take the room of an owed answer', () => {
     expect(sawFloorDropped).toBe(true)
   })
 })
+
+// Didi, verdict 60094 on card 2e78cf63, survivors N3 and N4 (card db66de6c). Two things the cap change claims and
+// nothing used to pin.
+describe('where the floor block is printed, and how long its header is', () => {
+  const past = Math.floor(NOW / 1000) - 86_400
+  const floor1 = { ...card('flr00001', 'waiting', 'normal', 'floor'), due_date: past }
+  const headerIndex = (msg: string, header: RegExp) => msg.search(header)
+
+  // N3: the floor block is FILLED last but PRINTED where it always was, above the owed / own-cards block. The fill
+  // order is a budget rule; a reader (and the 12 h re-arm test, which reads the page) must not see it as a reorder.
+  it.each([
+    ['assigned_open_cards', card('owd00001', 'testing', 'normal', 'owed'), /^VALASZRA VARO ELLENORZES \(\d+\)/m],
+    ['testing_without_my_comment', card('own00001', 'in_progress', 'normal', 'own'), /^SAJAT KARTYAID \(\d+\)/m],
+  ] as const)('%s: PADLO-LEJARAT is printed above the owed block, both present', (kind, other, otherHeader) => {
+    const msg = buildWakeMessage('x', 12, 2, [floor1, other], NOW, kind)
+    const f = headerIndex(msg, /^PADLO-LEJARAT \(\d+\)/m)
+    const o = headerIndex(msg, otherHeader)
+    expect(f, 'floor block missing').toBeGreaterThan(-1)
+    expect(o, 'owed block missing').toBeGreaterThan(-1)
+    expect(f).toBeLessThan(o)
+  })
+
+  // N4: the header was shortened by 3 characters ("due_date" -> "padlo") so that a bounced block plus a floor block
+  // fit under the cap. Measured 2026-11-12 (bounced c1 + three floor cards, testing_without_my_comment, agent name of
+  // n letters): the floor block still opens up to n=3 in a 36-character install root, and with the 3 characters back
+  // it did not open at n=1. The room depends on the LENGTH OF THE INSTALL ROOT (the re-measure line carries the
+  // absolute path: 19 characters live, ~36 in a ../marveen-wt-<topic> worktree), so no case sized to the limit can
+  // be written that holds in every checkout; what can be pinned is the header itself, and only the room it costs.
+  it('the PADLO-LEJARAT header stays at or under 56 characters', () => {
+    const msg = buildWakeMessage('x', 12, 1, [floor1], NOW, 'assigned_open_cards')
+    const header = msg.split('\n').find((l) => /^PADLO-LEJARAT \(\d+\)/.test(l))
+    expect(header).toBeDefined()
+    expect(header!.length).toBeLessThanOrEqual(56)
+  })
+})
