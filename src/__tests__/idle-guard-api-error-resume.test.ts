@@ -491,6 +491,41 @@ describe('tick() -- the API-error resume, end to end', () => {
     expect(toX()).toHaveLength(0)
   })
 
+  it('RECHECK, AGAIN (didi 59520 N14): once the extra sweep has run, the next first sighting schedules its own', () => {
+    at(0, ERR_PANE)
+    panes.set('agent-x', BUSY_PANE)
+    vi.advanceTimersByTime(API_ERROR_RECHECK_MS)   // the first extra sweep: the turn is retrying, nothing to write
+    expect(toX()).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
+    at(6, ERR_PANE)                                // a new loss, first sighting
+    expect(vi.getTimerCount()).toBe(1)
+    vi.advanceTimersByTime(API_ERROR_RECHECK_MS)
+    expect(toX()).toHaveLength(1)
+    expect(toX()[0].content).toContain('megszakadt 12:06-kor')
+  })
+
+  it('RECHECK, ONE AT A TIME (didi 59520 N13): a second sighting under the floor does not start a second timer', () => {
+    at(0, ERR_PANE)
+    expect(vi.getTimerCount()).toBe(1)
+    vi.advanceTimersByTime(20_000)
+    tick()                                         // 20 s after the first: under the floor, still confirming
+    expect(toX()).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(1)
+    vi.advanceTimersByTime(API_ERROR_RECHECK_MS - 20_000)   // the one timer, a minute after the FIRST sighting
+    expect(toX()).toHaveLength(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('DIGEST DOWN (didi 59520 N12): the repeat that falls back to a live message still names the API error', () => {
+    const noWork = () => toCoordinator().filter((m) => m.content.includes('"x"'))
+    for (let m = 0; m <= 12; m += 3) at(m, ERR_PANE)
+    expect(noWork()).toHaveLength(1)               // the first notice of the spell, live
+    mkdirSync(join(hoisted.root, 'store', 'idle-digest.jsonl'), { recursive: true })   // appendFileSync -> EISDIR
+    at(12 + 4 * 60 + 1, ERR_PANE)                  // the repeat: no digest to write it into
+    expect(noWork()).toHaveLength(2)
+    expect(noWork()[1].content.startsWith('FIGYELEM: a pane utolso blokkja API-HIBA')).toBe(true)
+  })
+
   it('HELD QUEUE (card 8b8864e4): while the context-guard holds x for a restart, no resume is written; once the hold lapses, the next tick writes it', async () => {
     const { setDeliveryHoldProbe } = await import('../web/delivery-hold.js')
     const heldUntil = NOW + 8 * MIN
