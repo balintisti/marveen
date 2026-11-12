@@ -42,6 +42,11 @@ describe('heavy-run gate: refuses a whole-project tsc / eslint / typecheck / lin
     ['npx tsc -p tsconfig.app.json'],
     ['npx tsc --project tsconfig.json --noEmit'],
     ['npx tsc --noEmit -p .'],
+    // didi 60768 N4: a tsconfig named after -b/--build/--project is a project flag, not a narrowing file
+    ['npx tsc -b tsconfig.app.json'],
+    ['npx tsc --build tsconfig.json'],
+    ['npx tsc -b tsconfig.app.json tsconfig.node.json'],
+    ['npx tsc --project=tsconfig.json src/a.ts'],
     ['npx tsc --noEmit'],
     ['tsc'],
     ['cd frontend && npx tsc -b 2>&1 | tail -5'],
