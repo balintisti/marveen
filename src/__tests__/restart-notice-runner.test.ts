@@ -79,12 +79,12 @@ describe('the five handoff requests the guard can send are all recognised from t
 })
 
 describe('the resume directive asks for the trace the hold looks for, only while the switch is live', () => {
-  const ACK = 'visszaolvasott tételről küldj rövid nyugtát a feladónak'
+  const ACK = 'nyugtát a feladónak ("[RESTART-ABLAK] <id> felvéve")'
 
   it('default (off / dry-run): the old text, with the receipt message and the old window', () => {
     const text = resumePrompt('didi', HANDOFF, true)
     expect(text).toContain(ACK)
-    expect(text).toContain('utolsó ~15 percében')
+    expect(text).toContain('RESTART-ABLAK (utolsó ~15 perc)')
     expect(text).not.toContain('nyugta-üzenetet NE küldj')
     expect(resumePrompt('didi', HANDOFF, true, null, null, false)).toBe(text)
   })
@@ -93,7 +93,7 @@ describe('the resume directive asks for the trace the hold looks for, only while
     for (const [hadHandoff, stale, tail] of [[true, null, null], [false, null, null], [true, 12, '/tmp/tail.md'], [true, 'unknown', null]] as const) {
       const off = resumePrompt('didi', HANDOFF, hadHandoff, stale, tail)
       const live = resumePrompt('didi', HANDOFF, hadHandoff, stale, tail, true)
-      const start = off.indexOf('RESTART-ABLAK: ')
+      const start = off.indexOf('RESTART-ABLAK (')
       const end = off.indexOf('KORLÁT: ')
       expect(start).toBeGreaterThan(0)
       expect(end).toBeGreaterThan(start)

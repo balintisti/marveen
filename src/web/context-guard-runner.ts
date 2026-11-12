@@ -359,7 +359,8 @@ export function handoffPrompt(pctRound: number, handoffPath: string): string {
   // Card 2e78cf63: <= 300 characters with a real path (pinned in context-guard-template-length.test.ts).
   // 674 of these went out in 7 days; the text is fixed, so every word costs 674 times.
   return (
-    `[CONTEXT-GUARD] A kontextusod ~${pctRound}%-on van -- kritikus. NE folytasd a feladatot. ` +
+    // The head "A munkakontextusod " is matched by restart-notice-trace.ts (HANDOFF_REQUEST_HEADS): keep it verbatim.
+    `[CONTEXT-GUARD] A munkakontextusod ~${pctRound}%-on van -- kritikus. NE folytasd a feladatot. ` +
     `EGYETLEN dolgod: írj HANDOFF.md-t a /handoff skill szerint (útvonalak, kártya-id-k) ide: ${handoffPath}. ` +
     `Nincs aktív feladat: írd bele. Utána ÁLLJ MEG, a rendszer újraindít.`
   )
