@@ -109,6 +109,21 @@ describe('db-destructive-gate: az indito-elotag egyertelmu olvasata (d288b124)',
     }
   })
 
+  // didi 58687 T1: a lookahead (`(?!(?:indito|idotartam)(?:\s|$))`) a kapcsolo-erteket
+  // csak akkor veti el, ha az EGESZ szo indito-nev vagy idotartam. A szohatar nelkul az
+  // indito-nevvel vagy szammal KEZDODO ertek (envoy, sudoers, timeouts, 5x) sem lehetne
+  // ertek, a lanc megszakadna, es a mogotte allo utas kliens csendben atmenne.
+  it('az indito-nevvel vagy szammal kezdodo kapcsolo-ertek mogott is tiltva (a lookahead szohatara)', () => {
+    for (const cmd of [
+      'env -u envoy /opt/pg/bin/psql -c "DROP TABLE t"',
+      'sudo -u sudoers /usr/bin/psql -c "DROP TABLE t"',
+      'timeout -s timeouts 5 /opt/x/mysql -e "DROP TABLE t"',
+      'sudo -u 5x /usr/bin/psql -c "DROP TABLE t"',
+    ]) {
+      expect(decide(cmd).blocked, cmd).toBe(true)
+    }
+  })
+
   it('utvonalas kliens NEM parancs-pozicioban tovabbra sem talalat (git grep -- .../prisma)', () => {
     expect(decide('git grep "x" -- backend/api/prisma').blocked).toBe(false)
   })
