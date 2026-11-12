@@ -152,9 +152,17 @@ describe('claimKanbanCard / releaseKanbanCardClaim (db layer)', () => {
     moveKanbanCard('t', 'testing', 0)
     expect(getKanbanCard('t')!.claimed_by).toBeNull()
 
-    moveKanbanCard('k', 'in_progress', 0)
+    // Each write is checked BEFORE the renewal (didi 59432 T6): a renewal re-takes the lock, so a
+    // check after it cannot see an in_progress re-save that released it. claimed_at unchanged =
+    // the same claim, not a re-taken one.
+    const held = { claimed_by: 'cody', claimed_at: getKanbanCard('k')!.claimed_at }
+    expect(held.claimed_at).not.toBeNull()
+    moveKanbanCard('k', 'in_progress', 0)            // planned -> in_progress
+    expect(getKanbanCard('k')).toMatchObject(held)
     moveKanbanCard('k', 'in_progress', 5)            // reorder within in_progress
+    expect(getKanbanCard('k')).toMatchObject(held)
     updateKanbanCard('k', { status: 'in_progress', title: 'Kept (renamed)' })
+    expect(getKanbanCard('k')).toMatchObject(held)
     claimKanbanCard('k', 'cody')                      // renewal
     expect(getKanbanCard('k')!.claimed_by).toBe('cody')
   })
