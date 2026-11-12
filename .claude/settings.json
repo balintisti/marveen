@@ -39,7 +39,8 @@
       { "matcher": "WebFetch", "hooks": [ { "type": "command", "command": "command -v node >/dev/null 2>&1 || { echo \"governance-kapu: node interpreter hianyzik, a kapu BLOKKOL\" >&2; exit 2; }; node \"$CLAUDE_PROJECT_DIR/scripts/hooks/egress-gate.mjs\"", "timeout": 10 } ] },
       { "matcher": "Write|Edit|MultiEdit", "hooks": [ { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/hooks/memory-frontmatter-gate.py\"", "timeout": 10 } ] },
       { "matcher": "Write|Edit|Bash", "hooks": [ { "type": "command", "command": "if [ -f \"$CLAUDE_PROJECT_DIR/scripts/hooks/memory-index-write-gate.py\" ]; then python3 \"$CLAUDE_PROJECT_DIR/scripts/hooks/memory-index-write-gate.py\"; fi", "timeout": 10 } ] },
-      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/hooks/memory-frontmatter-bash-gate.py\"", "timeout": 10 } ] }
+      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/hooks/memory-frontmatter-bash-gate.py\"", "timeout": 10 } ] },
+      { "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|mcp__.*", "hooks": [ { "type": "command", "command": "if [ -f \"$CLAUDE_PROJECT_DIR/scripts/hooks/y1-report-only.mjs\" ]; then node \"$CLAUDE_PROJECT_DIR/scripts/hooks/y1-report-only.mjs\" >/dev/null 2>&1; fi; exit 0", "timeout": 10 } ] }
     ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/hooks/telegram-reply-guard.py\"", "timeout": 10 } ] },

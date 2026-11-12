@@ -65,6 +65,8 @@ const HOOKS: HookCase[] = [
   { script: 'scripts/hooks/session-status-page.py', runner: 'python3', cls: 'prompt', tool: 'Bash' },
   { script: 'scripts/hooks/ledger-outbound.py', runner: 'python3', cls: 'prompt', tool: 'Bash' },
   { script: 'scripts/hooks/tool-log-capture.py', runner: 'python3', cls: 'prompt', tool: 'Bash' },
+  // report-only (5b639edb): a PreToolUse hook that must exit 0 on everything, so it is held to the stricter class
+  { script: 'scripts/hooks/y1-report-only.mjs', runner: 'node', cls: 'prompt', tool: 'Bash' },
 ]
 
 // script -> payload kind -> why the violation is tolerated FOR NOW. The stale
@@ -79,7 +81,7 @@ function runHook(h: HookCase, input: string): number {
       timeout: 15_000,
       stdio: ['pipe', 'ignore', 'ignore'],
       // Isolate side-effectful hooks from the checkout's real store.
-      env: { ...process.env, LEDGER_DB_PATH: join(SCRATCH, 'ledger.db') },
+      env: { ...process.env, LEDGER_DB_PATH: join(SCRATCH, 'ledger.db'), Y1_REPORT_ONLY_DIR: join(SCRATCH, 'y1-report-only') },
     })
     return 0
   } catch (err) {

@@ -263,6 +263,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c '[ -f {{PROJECT_ROOT}}/scripts/hooks/y1-report-only.mjs ] && node {{PROJECT_ROOT}}/scripts/hooks/y1-report-only.mjs >/dev/null 2>&1; exit 0'",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "Stop": [
