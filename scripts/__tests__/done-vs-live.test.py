@@ -369,12 +369,12 @@ class Section(unittest.TestCase):
 
     def test_missing_file_is_not_zero(self):
         out = ns.section_done_vs_live(self.root)
-        self.assertIn('NEM MERHETO', out[0])
+        self.assertIn('NEM MÉRHETŐ', out[0])
 
     def test_stale_by_content_not_mtime(self):
         self.put(measured_at=(datetime.now().astimezone() - timedelta(hours=30)).isoformat())
         out = ns.section_done_vs_live(self.root)
-        self.assertIn('NEM MERHETO', out[0]); self.assertIn('30 oras', out[0])
+        self.assertIn('NEM MÉRHETŐ', out[0]); self.assertIn('30 órás', out[0])
 
     def test_the_date_is_printed(self):
         # b6284542: a bare "merve 06:45" read as today's while it was yesterday's.
@@ -409,29 +409,29 @@ class Section(unittest.TestCase):
             dict(id='eeeeeee5', status='done', verdict='NOT-LIVE', acked={'reason': 'x'}, status_at=now - 99 * 86400),
             dict(id='12345678', status='done', verdict='NO-BRANCH')], projectless_without_ref=147)
         text = '\n'.join(ns.section_done_vs_live(self.root))
-        self.assertIn('nincs elesben: 2 kartya (ebbol urgent/high 1, reszben szallitva 1)', text)
-        self.assertIn('legregebbi: aaaaaaa1', text)          # the acked older one is NOT the oldest
-        self.assertIn('kesobb kikerult', text); self.assertIn('ccccccc3', text)
-        self.assertIn('testing, nincs elesben: 1', text)
-        self.assertIn('NEM MERHETO: 1 done kartya ag nelkul, es 147 projekt nelkuli', text)
-        self.assertIn('nyugtazva: 1', text)
+        self.assertIn('nincs élesben: 2 kártya (ebből urgent/high 1, részben szállítva 1)', text)
+        self.assertIn('legrégebbi: aaaaaaa1', text)          # the acked older one is NOT the oldest
+        self.assertIn('később kikerült', text); self.assertIn('ccccccc3', text)
+        self.assertIn('testing, nincs élesben: 1', text)
+        self.assertIn('NEM MÉRHETŐ: 1 done kártya ág nélkül, és 147 projekt nélküli', text)
+        self.assertIn('nyugtázva: 1', text)
 
     def test_a_hand_acked_no_branch_card_is_not_unmeasurable(self):
         self.put(cards=[dict(id='12345678', status='done', verdict='NO-BRANCH', acked={'reason': 'hand LIVE'}),
                         dict(id='87654321', status='done', verdict='NO-BRANCH')], projectless_without_ref=0)
         text = '\n'.join(ns.section_done_vs_live(self.root))
-        self.assertIn('NEM MERHETO: 1 done kartya ag nelkul', text)
-        self.assertIn('nyugtazva: 1', text)
+        self.assertIn('NEM MÉRHETŐ: 1 done kártya ág nélkül', text)
+        self.assertIn('nyugtázva: 1', text)
 
     def test_failed_fetch_is_said(self):
         self.put(fetch='FAILED rc=128: could not read Username')
-        self.assertIn('fetch NEM SIKERULT', ns.section_done_vs_live(self.root)[0])
+        self.assertIn('fetch NEM SIKERÜLT', ns.section_done_vs_live(self.root)[0])
         self.put(fetch='ok')
         self.assertNotIn('fetch', ns.section_done_vs_live(self.root)[0])
 
     def test_zero_is_said_when_measured(self):
         self.put()
-        self.assertIn('0 kartya', '\n'.join(ns.section_done_vs_live(self.root)))
+        self.assertIn('0 kártya', '\n'.join(ns.section_done_vs_live(self.root)))
 
 
 if __name__ == '__main__':

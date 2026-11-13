@@ -551,7 +551,7 @@ class OpusIsNeverCopied(Env):
         self.run_main()
         text = "\n".join(ns.section_quota(root=self._root()))
         self.assertIn("heti: 77.25%", text)   # the fleet numbers are shown
-        self.assertIn("heti opus: NEM MERHETO", text)
+        self.assertIn("heti opus: NEM MÉRHETŐ", text)
         # the host's opus value nowhere as a percentage (a bare "44" would also match a reset at :44)
         self.assertNotIn(f"{HOST_OPUS:g}%", text)
         self.assertNotIn(f"{HOST_OPUS}%", text)
@@ -567,7 +567,7 @@ class OpusIsNeverCopied(Env):
         os.environ["STUB_MODE"] = "fail"
         self.run_main()
         text = "\n".join(ns.section_quota(root=self._root()))
-        self.assertIn("NEM MERHETO", text)
+        self.assertIn("NEM MÉRHETŐ", text)
         self.assertNotIn("22", text)
         self.assertNotIn("44", text)
 
