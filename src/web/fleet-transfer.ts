@@ -24,7 +24,7 @@ import { safeJoin } from './sanitize.js'
 import { SCHEDULED_TASKS_DIR } from './scheduled-tasks-io.js'
 import { getBindings } from './vault-bindings.js'
 import { resolveMasterKeyForExport } from './vault.js'
-import { getDb, backfillEmbeddings } from '../db.js'
+import { getDb, backfillEmbeddings, settleImportedDoneCards } from '../db.js'
 import { logger } from '../logger.js'
 
 // ---------------------------------------------------------------------------
@@ -1110,6 +1110,9 @@ export function importFleet(
       trackedWrite(join(STORE_DIR, 'norbert-personal.json'), JSON.stringify(s.norbertPersonal, null, 2), tracker)
 
     // 5. DB -- single transaction (H3: before vault so vault is last and cleanup is cleaner)
+    // Cards this import created with status done; judged once comments and labels are in.
+    const createdDone: string[] = []
+    let demotedDone: string[] = []
     const importTx = db.transaction(() => {
       // labels first (FK dep for kanban_card_labels)
       // M3: skip rows with missing required fields to avoid SQLite constraint errors -> 500
@@ -1125,7 +1128,7 @@ export function importFleet(
         if (!c.id || !c.title || !c.status || !c.priority || c.sort_order == null) {
           logger.warn({ id: c.id }, 'Fleet import: skipping kanban card with missing required fields'); continue
         }
-        db.prepare(
+        const inserted = db.prepare(
           `INSERT OR IGNORE INTO kanban_cards
            (id, title, description, status, assignee, priority, project,
             due_date, sort_order, created_at, updated_at, archived_at, parent_id, dispatched_at, version)
@@ -1137,6 +1140,7 @@ export function importFleet(
           // against the same number after it. An export from an install without the column has
           // none: the NOT NULL column starts at 0 (upstream 5b404c44d).
           Number.isSafeInteger(c.version) && c.version >= 0 ? c.version : 0)
+        if (inserted.changes > 0 && c.status === 'done') createdDone.push(c.id)
       }
 
       // kanban comments (idempotent: card_id + content)
@@ -1166,6 +1170,10 @@ export function importFleet(
         db.prepare('INSERT OR IGNORE INTO kanban_card_labels (card_id, label_id, created_at) VALUES (?, ?, ?)')
           .run(c.card_id, c.label_id, c.created_at)
       }
+
+      // The done gate (card 7902ee84): an imported done card without its proof AND its
+      // verified label goes to testing, inside this transaction.
+      demotedDone = settleImportedDoneCards(createdDone)
 
       // memories -- idempotent on (agent_id, content); covers ALL agent_ids
       // agent_id-k pontosan a forrásból kerülnek át (a cél átveszi a forrás főagent identitását)
@@ -1263,6 +1271,12 @@ export function importFleet(
     // Preference: use identity object (full set) if present; fall back to agentId-only for
     // exports produced before the identity field was added.
     const applyWarnings: string[] = []
+    if (demotedDone.length > 0) {
+      applyWarnings.push(
+        `${demotedDone.length} importalt done kartya testing-be kerult, mert nem hozta a KESZ-IGAZOLAS sort `
+        + `es az igazolo cimket (kartya 7902ee84): ${demotedDone.join(', ')}.`
+      )
+    }
     const sourceIdentity = fleet.mainAgent?.identity
     const sourceAgentId = sourceIdentity?.MAIN_AGENT_ID ?? fleet.mainAgent?.agentId
     if (sourceAgentId && typeof sourceAgentId === 'string') {
