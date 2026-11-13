@@ -123,5 +123,32 @@ echo changed > "${F}/elsewhere/linked.md"; touch -t "${OLD}" "${F}/elsewhere/lin
 rc=$(run "${F}")
 [ "${rc}" = "7" ] && grep -q 'a1/linked.md' "${F}/out" && ok "a stale symlinked report is caught (same population as the snapshot job)" || bad "link rc=${rc}: $(cat "${F}/out")"
 
+# 10. DEPENDENCY TREES (card 212e319f): a report holding a project copy with node_modules / .venv. The
+#     snapshot job skips them, so must this script's population (else they read as "missing from the
+#     snapshot" -> exit 7), and they stay out of the archive.
+F="${T}/deps"; fixture "${F}"
+mkdir -p "${F}/agents/a1/reports/proj/node_modules/pkg" "${F}/agents/a1/reports/proj/sub/.venv/lib"
+echo dep > "${F}/agents/a1/reports/proj/node_modules/pkg/index.js"
+echo dep > "${F}/agents/a1/reports/proj/sub/.venv/lib/x.py"
+echo code > "${F}/agents/a1/reports/proj/main.ts"
+touch -t "${OLD}" "${F}/agents/a1/reports/proj/node_modules/pkg/index.js" "${F}/agents/a1/reports/proj/sub/.venv/lib/x.py" \
+  "${F}/agents/a1/reports/proj/main.ts"
+snapshot "${F}"
+rc=$(run "${F}"); arc="$(archive "${F}")"
+[ "${rc}" = "0" ] && ok "old dependency files the snapshot skips are not held against it -> exit 0" || bad "deps rc=${rc}: $(cat "${F}/out")"
+tar -tzf "${arc}" | grep -qxF 'home/Backups/agent-reports/a1/proj/main.ts' && ok "the project's own file is in the archive" || bad "main.ts not archived"
+! tar -tzf "${arc}" | grep -qE '/(node_modules|\.venv)(/|$)' && ok "no dependency tree in the archive" || bad "a dependency tree is archived: $(tar -tzf "${arc}" | grep -E 'node_modules|venv' | head -2)"
+tar -xzOf "${arc}" MANIFEST.txt | grep -q 'agent reports: 3 source files, 3 compared byte for byte, snapshot HEAD .*, 2 dependency trees skipped' \
+  && ok "the manifest counts the files without them, and says how many trees were skipped" || bad "manifest: $(tar -xzOf "${arc}" MANIFEST.txt | grep 'agent reports')"
+# 10b. a tree the snapshot mirrored BEFORE it skipped them (the 11-12 node_modules is on disk in the live
+#      snapshot directory): out of the archive, and the snapshot directory itself is left alone
+mkdir -p "${F}/home/Backups/agent-reports/a1/proj/node_modules/old"
+echo legacy > "${F}/home/Backups/agent-reports/a1/proj/node_modules/old/l.js"
+rm -f "${F}"/backups/claudeclaw-*.tar.gz
+rc=$(run "${F}"); arc="$(archive "${F}")"
+[ "${rc}" = "0" ] && ! tar -tzf "${arc}" | grep -q 'node_modules' && ok "an already-mirrored node_modules stays out of the archive" || bad "legacy rc=${rc}: $(tar -tzf "${arc}" | grep node_modules | head -2)"
+[ -f "${F}/home/Backups/agent-reports/a1/proj/node_modules/old/l.js" ] && ok "...and only the staged copy was pruned (the snapshot dir keeps it)" || bad "the backup deleted from the snapshot directory"
+tar -tzf "${arc}" | grep -qxF 'home/Backups/agent-reports/.git/HEAD' && ok "...and the snapshot's history is still in the archive" || bad "no .git after the prune"
+
 echo "Results: ${PASS}/$((PASS + FAIL)) passed"
 [ "${FAIL}" = "0" ]
