@@ -55,6 +55,11 @@ describe('zsh expansion-flag gate: refuses a parameter-expansion flag the permis
     // a nested double quote inside a command substitution does not end the outer one
     ['echo "$(echo "a b") ${(f)LIST}"'],
     ['cd /x; for f in ${(f)"$(git ls-files)"}\ndo echo $f\ndone'],
+    // a here-string is not a heredoc: its quoted word must not swallow the lines below it (didi 61035)
+    ['grep foo <<< "$x"\nprint -l ${(f)"$(git status)"}'],
+    ["cat <<< 'a b'\necho ${(f)x}"],
+    // `(#` is a comment start only when it is not a zsh glob flag such as (#i)
+    ['ls (#i)foo; echo ${(f)y}'],
   ])('%s -> exit 2', (command) => {
     expect(run(command).code).toBe(2)
   })
@@ -65,6 +70,12 @@ describe('zsh expansion-flag gate: refuses a parameter-expansion flag the permis
     expect(r.stderr).toContain('while IFS= read -r')
     expect(r.stderr).toContain('xargs')
     expect(r.stderr).toContain('MARVEEN_ZSHFLAG_GATE=allow')
+  })
+
+  it('says the override does not help a sub-agent', () => {
+    const r = run('F=(${(f)"$(git status --short)"})')
+    expect(r.stderr).toMatch(/Override, logged, MAIN CHAIN ONLY/)
+    expect(r.stderr).toContain('sub-agent still parks')
   })
 
   it('logs the refusal', () => {
@@ -95,6 +106,10 @@ describe('zsh expansion-flag gate: lets everything else through', () => {
     ['git log --grep "zsh flags"'],
     // a heredoc written and then a plain command on the next line
     ["cat <<'EOF' > n.txt\n${(f)x}\nEOF\nls"],
+    // a here-string and a comment after `(` stay data / harmless
+    ['grep foo <<< "$x"\nls'],
+    ["grep foo <<< '${(f)x}'"],
+    ['(# ${(f)x}\nls)'],
     [''],
   ])('%s -> exit 0', (command) => {
     expect(run(command).code).toBe(0)

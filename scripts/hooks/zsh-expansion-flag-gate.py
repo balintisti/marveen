@@ -33,6 +33,7 @@ import time
 OVERRIDE = re.compile(r'(?:^|[\s;&|(])MARVEEN_ZSHFLAG_GATE=allow\b')
 LOG_NAME = 'zsh-flag-gate.log'
 FLAG = '${('
+GLOB_FLAG = re.compile(r'\(#[A-Za-z0-9_,]*\)')  # (#i) and friends: a zsh glob flag, not a comment
 BODY_FLAG = re.compile(r'(?<!\\)\$\{\(')
 WORD_END = ' \t\n;&|()<>'
 
@@ -131,7 +132,7 @@ def find_flag(cmd):
             stack.append(['d'])
             i += 1
             continue
-        if c == '#' and (i == 0 or cmd[i - 1] in ' \t\n;&|('):
+        if c == '#' and (i == 0 or cmd[i - 1] in ' \t\n;&|(') and not GLOB_FLAG.match(cmd, i - 1):
             j = cmd.find('\n', i)
             i = n if j < 0 else j
             continue
@@ -145,7 +146,10 @@ def find_flag(cmd):
             top[1] -= 1
             if top[1] == 0:
                 stack.pop()
-        elif c == '<' and cmd.startswith('<<', i) and not cmd.startswith('<<<', i):
+        elif c == '<' and cmd.startswith('<<<', i):
+            i += 3
+            continue
+        elif c == '<' and cmd.startswith('<<', i):
             delim, quoted, strip_tabs, i = read_delimiter(cmd, i + 2)
             if delim:
                 pending.append((delim, quoted, strip_tabs))
@@ -172,7 +176,7 @@ FIX (rewrite, no flag):
   git status --short | awk '{{print $2}}' | xargs git add --
   list to a file, then python3 or "$(cat file)"; or explicit paths
 Text that only MENTIONS the flag: single-quote it, or use a quoted heredoc (<<'EOF').
-Override, logged (only if the flag is really needed): MARVEEN_ZSHFLAG_GATE=allow <command>
+Override, logged, MAIN CHAIN ONLY (a sub-agent still parks on the built-in check, so there it does not help): MARVEEN_ZSHFLAG_GATE=allow <command>
 """
 
 
