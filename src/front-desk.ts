@@ -208,3 +208,84 @@ export function pageGuardNoticeSubjects(content: string): string[] | null {
 export function fleetAlertsAreFrontDeskWork(kinds: readonly string[]): boolean {
   return kinds.length > 0 && kinds.every((k) => k === 'still-idle')
 }
+
+// ---- Reports TO the front desk (card f043d3f5) ----
+//
+// The rule files send every agent's report (done, status, FYI) to the front desk. When the front
+// desk is not running, such a report waited in a queue nobody reads, and the sender only got a
+// warning. When it runs but does not take its queue (a stuck session), the report waited forever.
+// Either way the report reached nobody. This is the reverse of machineNoticeRecipient: the sender
+// asked for the front desk, and only a MEASURED reason it cannot read moves the report to the
+// coordinator. A failed probe is not such a reason: the report stays where it was sent, and the
+// router's abandon path (failure notice to the coordinator) is still behind it.
+
+/** The oldest waking row pending for a RUNNING front desk is this old: the desk is not taking its
+ *  queue. Half the router's abandon window, so a report is moved before an absent session would
+ *  have it abandoned. */
+export const FRONT_DESK_STALL_SEC = 30 * 60
+
+export type FrontDeskReportWhy =
+  | 'not-to-desk'
+  | 'sender-not-agent'
+  | 'desk-ok'
+  | 'desk-not-running'
+  | 'desk-stalled'
+  | 'probe-failed'
+
+export interface FrontDeskReportProbe {
+  isKnown: (agent: string) => boolean
+  isRunning: (agent: string) => boolean
+  /** Age in seconds of the oldest waking row pending for the agent, 0 when none. */
+  oldestPendingSec: (agent: string) => number
+}
+
+export interface FrontDeskReportRoute {
+  to: string
+  rerouted: boolean
+  why: FrontDeskReportWhy
+  /** The measured age that made the desk 'stalled'; absent on every other answer. */
+  oldestPendingSec?: number
+}
+
+/** Who reads a message `sender` addressed to `to`: `to` itself, or the coordinator when `to` is the
+ *  configured front desk and the desk measurably cannot read it. */
+export function frontDeskReportRecipient(
+  coordinator: string,
+  configured: string | null | undefined,
+  sender: string,
+  to: string,
+  probe: FrontDeskReportProbe,
+): FrontDeskReportRoute {
+  const stay = (why: FrontDeskReportWhy): FrontDeskReportRoute => ({ to, rerouted: false, why })
+  const desk = String(configured ?? '').trim()
+  if (frontDeskIdProblem(coordinator, desk) !== null || to !== desk) return stay('not-to-desk')
+  // Only an agent of this fleet reports. The owner, the voice channel, a neighbouring system and
+  // the coordinator itself reach the recipient they named; so does the desk writing to itself.
+  if (sender === coordinator || sender === desk) return stay('sender-not-agent')
+  try {
+    if (!probe.isKnown(sender) || !probe.isKnown(desk)) return stay('sender-not-agent')
+    const move = (why: 'desk-not-running' | 'desk-stalled', age?: number): FrontDeskReportRoute =>
+      ({ to: coordinator, rerouted: true, why, ...(age !== undefined ? { oldestPendingSec: age } : {}) })
+    if (!probe.isRunning(desk)) return move('desk-not-running')
+    const age = probe.oldestPendingSec(desk)
+    // An age that is not a number is a failed measurement, not an empty queue.
+    if (typeof age !== 'number' || !Number.isFinite(age)) return stay('probe-failed')
+    if (age >= FRONT_DESK_STALL_SEC) return move('desk-stalled', age)
+  } catch {
+    return stay('probe-failed')
+  }
+  return stay('desk-ok')
+}
+
+/** First token of a report the front desk could not read and the coordinator got instead. */
+export const FRONT_DESK_DOWN_TAG = '[FRONT-DESK-DOWN]'
+
+/** One line of JSON after the tag; the original text starts on the next line, unchanged. */
+export function frontDeskDownHeader(route: FrontDeskReportRoute, requested: string): string {
+  return `${FRONT_DESK_DOWN_TAG} ${JSON.stringify({
+    v: 1,
+    requested,
+    why: route.why,
+    oldest_pending_sec: route.oldestPendingSec ?? null,
+  })}`
+}

@@ -6,7 +6,13 @@ import { getEffectiveSettingValue } from '../settings-store.js'
 import { getRecipientQueueState } from '../db.js'
 import { isKnownAgent } from './agent-config.js'
 import { isAgentRunning } from './agent-process.js'
-import { FRONT_DESK_SETTING, machineNoticeRecipient, type MachineNoticeRoute } from '../front-desk.js'
+import {
+  FRONT_DESK_SETTING,
+  frontDeskReportRecipient,
+  machineNoticeRecipient,
+  type FrontDeskReportRoute,
+  type MachineNoticeRoute,
+} from '../front-desk.js'
 
 /** Who gets a machine notice about `subjects` right now. The setting is read on every call, so
  *  turning the front desk on or off needs no restart. */
@@ -34,5 +40,33 @@ export function resolveMachineNoticeRecipient(subjects: readonly string[]): Mach
       logger.warn({ err, subjects }, 'front desk: could not resolve the recipient -- the notice stays with the coordinator')
     } catch { /* the notice matters more than the log line */ }
     return { to: MAIN_AGENT_ID, rerouted: false, why: 'probe-failed' }
+  }
+}
+
+/** Who reads a message `sender` addressed to `to` right now (card f043d3f5): `to`, or the
+ *  coordinator when `to` is the front desk and it is down or not taking its queue. Never throws: a
+ *  failure here leaves the message with the recipient the sender named. */
+export function resolveReportRecipient(sender: string, to: string): FrontDeskReportRoute {
+  try {
+    const configured = String(getEffectiveSettingValue(FRONT_DESK_SETTING))
+    const route = frontDeskReportRecipient(MAIN_AGENT_ID, configured, sender, to, {
+      isKnown: isKnownAgent,
+      isRunning: isAgentRunning,
+      oldestPendingSec: (agent) => getRecipientQueueState(agent).oldestPendingSec,
+    })
+    if (route.why !== 'not-to-desk' && route.why !== 'desk-ok') {
+      logger.info(
+        { frontDesk: configured, sender, to: route.to, why: route.why, oldestPendingSec: route.oldestPendingSec },
+        route.rerouted
+          ? 'front desk: report goes to the coordinator, the front desk cannot read it'
+          : 'front desk: report stays with the front desk',
+      )
+    }
+    return route
+  } catch (err) {
+    try {
+      logger.warn({ err, sender, to }, 'front desk: could not resolve a report recipient -- it stays where it was sent')
+    } catch { /* the message matters more than the log line */ }
+    return { to, rerouted: false, why: 'probe-failed' }
   }
 }

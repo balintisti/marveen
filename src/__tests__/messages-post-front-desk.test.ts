@@ -36,10 +36,10 @@ vi.mock('../web/agent-config.js', async (orig) => {
   }
 })
 
-const { initDatabase, getAgentMessage, createAgentMessage } = await import('../db.js')
+const { initDatabase, getAgentMessage, createAgentMessage, getDb } = await import('../db.js')
 const { MAIN_AGENT_ID, OWNER_NAME } = await import('../config.js')
 const { tryHandleMessages } = await import('../web/routes/messages.js')
-const { parseFrontDeskHeader } = await import('../front-desk.js')
+const { parseFrontDeskHeader, FRONT_DESK_DOWN_TAG, FRONT_DESK_STALL_SEC } = await import('../front-desk.js')
 
 function fakeCtx(body: unknown): { ctx: RouteContext; res: { statusCode: number; body: string } } {
   const req = new EventEmitter() as unknown as RouteContext['req'] & { destroy(): void }
@@ -243,5 +243,78 @@ describe('POST /api/messages: the page guard\'s defect alarm, sent as the coordi
   it('a receipt keeps its own type: the coordinator\'s own receipt is about the coordinator and stays', async () => {
     useDesk('pgdesk9')
     await stays({ from: MAIN_AGENT_ID, to: MAIN_AGENT_ID, content: RECEIPT })
+  })
+})
+
+// Card f043d3f5: an agent's REPORT addressed to the front desk, when the desk cannot read it.
+describe('POST /api/messages: a report to a front desk that cannot read it', () => {
+  const REPORT = 'Kész: 645a3ea3 javítási kör, a kártyán a bizonyíték'
+  const deskOf = (name: string) => { h.agents.add(name); h.running.set(name, true); h.setting = name }
+  const header = (content: unknown) => {
+    const [first, ...rest] = String(content).split('\n')
+    expect(first.startsWith(`${FRONT_DESK_DOWN_TAG} `)).toBe(true)
+    return { head: JSON.parse(first.slice(FRONT_DESK_DOWN_TAG.length + 1)), text: rest.join('\n') }
+  }
+
+  it('the desk is not running: the coordinator gets it, with the reason on the first line, and the response says so', async () => {
+    deskOf('rdesk1'); h.running.set('rdesk1', false)
+    const r = await post({ from: 'didi', to: 'rdesk1', content: REPORT })
+    expect(r.statusCode).toBe(200)
+    const row = stored(r)
+    expect(row?.to_agent).toBe(MAIN_AGENT_ID)
+    expect(row?.from_agent).toBe('didi')
+    expect(header(row?.content)).toEqual({ head: { v: 1, requested: 'rdesk1', why: 'desk-not-running', oldest_pending_sec: null }, text: REPORT })
+    expect(r.json.rerouted).toEqual({ requested: 'rdesk1', to: MAIN_AGENT_ID, why: 'desk-not-running' })
+    // the sender is not told to start the coordinator: the stopped-recipient warning is the old path
+    expect(r.json.warning).toBeUndefined()
+  })
+
+  it('the desk runs but its oldest pending row is FRONT_DESK_STALL_SEC old: the coordinator, with the measured age', async () => {
+    deskOf('rdesk2')
+    const old = createAgentMessage('ford', 'rdesk2', 'régi jelentés')
+    getDb().prepare('UPDATE agent_messages SET created_at = created_at - ? WHERE id = ?').run(FRONT_DESK_STALL_SEC + 5, old.id)
+    const r = await post({ from: 'didi', to: 'rdesk2', content: REPORT })
+    const row = stored(r)
+    expect(row?.to_agent).toBe(MAIN_AGENT_ID)
+    const { head, text } = header(row?.content)
+    expect(head.why).toBe('desk-stalled')
+    expect(head.oldest_pending_sec).toBeGreaterThanOrEqual(FRONT_DESK_STALL_SEC)
+    expect(text).toBe(REPORT)
+    expect(r.json.rerouted).toEqual({ requested: 'rdesk2', to: MAIN_AGENT_ID, why: 'desk-stalled' })
+  })
+
+  const reachesDesk = async (body: { from: string; to: string; content: string }) => {
+    const r = await post(body)
+    expect(r.statusCode).toBe(200)
+    expect(stored(r)?.to_agent).toBe(body.to)
+    expect(stored(r)?.content).toBe(body.content)
+    expect(r.json.rerouted).toBeUndefined()
+  }
+
+  it('a running desk with a young queue keeps the report, unchanged', async () => {
+    deskOf('rdesk3')
+    createAgentMessage('ford', 'rdesk3', 'friss')
+    await reachesDesk({ from: 'didi', to: 'rdesk3', content: REPORT })
+  })
+
+  it('the owner, and the coordinator itself, reach a stopped desk as they asked', async () => {
+    deskOf('rdesk4'); h.running.set('rdesk4', false)
+    await reachesDesk({ from: OWNER_NAME, to: 'rdesk4', content: REPORT })
+    await reachesDesk({ from: MAIN_AGENT_ID, to: 'rdesk4', content: REPORT })
+  })
+
+  it('a stopped agent that is NOT the front desk is not rerouted (the old warning still comes)', async () => {
+    deskOf('rdesk5'); h.agents.add('ford2'); h.running.set('ford2', false)
+    const r = await post({ from: 'didi', to: 'ford2', content: REPORT })
+    expect(stored(r)?.to_agent).toBe('ford2')
+    expect(r.json.rerouted).toBeUndefined()
+    expect(r.json.targetRunning).toBe(false)
+  })
+
+  it('no front desk configured: a message to a stopped agent stays where it was sent', async () => {
+    h.setting = ''; h.agents.add('rdesk6'); h.running.set('rdesk6', false)
+    const r = await post({ from: 'didi', to: 'rdesk6', content: REPORT })
+    expect(stored(r)?.to_agent).toBe('rdesk6')
+    expect(r.json.rerouted).toBeUndefined()
   })
 })

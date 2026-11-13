@@ -11,7 +11,7 @@ import { findDuplicateJsonKeys } from './json-dup-keys.js'
 import { logger } from '../logger.js'
 import { filterInheritableMcpServers, readInheritableMcpServerNames, logNotInherited } from './mcp-inheritance.js'
 import { agentDir, agentConfigRoot, listAgentNames, readAgentCapabilities, readAgentToolDeny, isKnownAgent } from './agent-config.js'
-import { FRONT_DESK_SETTING, reportDesk } from '../front-desk.js'
+import { FRONT_DESK_SETTING, FRONT_DESK_STALL_SEC, reportDesk } from '../front-desk.js'
 import { resolveProfilePlaceholders, type ProfileTemplate } from './profiles.js'
 import { sanitizeCapabilityTag, CAPABILITY_TAG_MAX_PER_AGENT } from '../prompt-safety.js'
 import { TMP_ROOT_PREFIXES as _TMP_PREFIXES } from './tmp-root-prefixes.js'
@@ -2440,7 +2440,7 @@ export function buildReportRoutingBody(name: string, desk: string | null): strin
     // The page also carries older, hand-written lines that send reports to the coordinator; they are
     // taken out one by one, later. Until then the reader must learn HERE which instruction wins.
     `THIS SECTION WINS over any older line on this page that sends one of those four to ${MAIN_AGENT_ID}; a decision, a crossed boundary and anything for ${OWNER_NAME} stay with ${MAIN_AGENT_ID}.`,
-    `If ${desk} is not running (the answer to your send says so), the report goes on the card and to nobody.`,
+    `If ${desk} is not running, or has not taken its queue for ${FRONT_DESK_STALL_SEC / 60} minutes, the system gives your report to ${MAIN_AGENT_ID} instead and the answer to your send says so (\`rerouted\`): do not send it again.`,
     'No acknowledgement messages in either direction.',
   )
   return lines.join('\n')
