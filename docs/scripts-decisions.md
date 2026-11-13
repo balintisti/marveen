@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **481** kovetett fajl, ebbol
-**149** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **482** kovetett fajl, ebbol
+**150** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -395,6 +395,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/hooks/telegram_progress_reply_clear.py`
 
 - Why: a single long turn can pull a bigger task forward and emit several replies
+
+### `scripts/hooks/zsh-expansion-flag-gate.py`
+
+- WHY (measured 2026-11-13, read-only SQLite + all agents' transcripts): the Claude Code permission
 
 ### `scripts/idle-reporter.py`
 
