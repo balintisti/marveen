@@ -417,7 +417,7 @@ export type IdleDecision =
    *  not the generic wake (card 843a9ab6). `errorSinceMs` is when the error was first seen. The
    *  caller stamps lastApiErrorResumeAt / apiErrorHandledSince only after the enqueue succeeded; a
    *  failed enqueue leaves the decision to be taken again next tick. */
-  | { alert: true; reason: 'resume-api-error'; errorSinceMs: number }
+  | { alert: true; reason: 'resume-api-error'; errorSinceMs: number; backgroundWork: number }
   /** The resumes did not hold: API_ERROR_PARK_AFTER errors in a row with no successful response in
    *  between (errorsWithoutProgress), or, when progress was not measured, a second error inside
    *  API_ERROR_REPEAT_MS of the last resume (errorsWithoutProgress null). The coordinator is told and
@@ -623,12 +623,21 @@ export const API_ERROR_RECHECK_MS = 60_000
  * WHEN THE API-ERROR STREAK IS "SEEN", one conjunct per input field, under that field's name (card
  * 1f990d74). ONE table for the decision and for the line that explains a tick without a resume: a
  * second list would be a second chance to disagree, and that line exists to be believed.
+ *
+ * BACKGROUND WORK IS NOT A CONJUNCT (card bd1f7b2c). It was, so a live sub-agent would not be
+ * interrupted; but the error at the tail of an idle pane means the MAIN turn is already dead, and a
+ * message typed into a free prompt interrupts nothing that runs in the background. Measured by
+ * marveen 2026-11-13: friday stood 26 minutes on 14 ticks of "blocked by runningSubagents" while
+ * only a DETACHED gate ran (probeDetachedWork counts those, and a detached process never wakes the
+ * agent when it ends), and computress stood with nothing on the footer at all. Whether a footer
+ * shell's or sub-agent's completion notice would have woken the dead turn later was not measured;
+ * the resume does not wait to find out. The resume names the background work it saw
+ * (buildApiErrorResumeMessage), so the agent reads its output instead of starting it again.
  */
 const API_ERROR_SEEN_WHEN = {
   running: (i) => i.running,
   paneApiError: (i) => i.paneApiError === true,
   paneIdle: (i) => i.paneIdle === true,
-  runningSubagents: (i) => (i.runningSubagents ?? 0) <= 0,
   paneUsageLimited: (i) => i.paneUsageLimited !== true,
   pendingMessages: (i) => i.pendingMessages === 0,
   // NO standstill term (card 62b67531, marveen 65821): a declared standstill says "hand this agent
@@ -726,9 +735,9 @@ function decideIdleAlertCore(
   // A tick with no sub-agents ends the stretch, and the stretch's notice window with it.
   if (subagentsSince === null && state.lastSubagentNoticeAt != null) state = { ...state, lastSubagentNoticeAt: null }
   // The mid-turn API error streak (card 843a9ab6). Seen = a running agent whose pane is idle, ends in
-  // the error, shows NO background work (the hold owns that case; the streak does not run while it
-  // lasts), is not usage-limited and has no waking letter on its way. A declared standstill does NOT block it
-  // (card 62b67531). Any tick that is not "seen" ends the streak, so two ticks must be CONSECUTIVE.
+  // the error, is not usage-limited and has no waking letter on its way. Background work does not
+  // stop it (card bd1f7b2c, see API_ERROR_SEEN_WHEN), nor does a declared standstill (card 62b67531).
+  // Any tick that is not "seen" ends the streak, so two ticks must be CONSECUTIVE.
   const apiErrorSeen = apiErrorBlockers(input).length === 0
   if (!apiErrorSeen && (state.apiErrorSinceMs != null || (state.apiErrorTicks ?? 0) > 0 || state.apiErrorHandledSince != null)) {
     state = { ...state, apiErrorSinceMs: null, apiErrorTicks: 0, apiErrorHandledSince: null }
@@ -756,6 +765,50 @@ function decideIdleAlertCore(
   })
 
   if (!input.running) return clear('not-running')
+
+  // A TURN THAT DIED ON AN API ERROR (card 843a9ab6, marveen's design 2026-10-16). Before the
+  // sustained window and before the zero-card branch: measured the same day, the generic wake came
+  // after 12-15+ minutes, never at all with 0 own cards, and did not move the agent; a targeted
+  // "continue" does. Two consecutive ticks confirm it; the answer is ONE message per streak.
+  // BEFORE THE SUB-AGENT HOLD (card bd1f7b2c): the hold keeps wakes away from an agent whose work runs
+  // in the background, but a dead main turn is not that agent. The streak needs a readable, idle,
+  // not usage-limited pane (API_ERROR_SEEN_WHEN), so the two checks below it cannot be skipped here.
+  // A streak already answered falls through, and the hold then applies as before.
+  if (apiErrorSeen && state.apiErrorHandledSince !== (state.apiErrorSinceMs ?? now)) {
+    const sinceMs = state.apiErrorSinceMs ?? now
+    const ticks = (state.apiErrorTicks ?? 0) + 1
+    const keepSpell = state.idleSinceMs ?? now
+    if (ticks < API_ERROR_CONFIRM_TICKS || now - sinceMs < API_ERROR_CONFIRM_MIN_MS) {
+      return {
+        decision: { alert: false, reason: 'api-error-confirming' },
+        next: { ...state, idleSinceMs: keepSpell, apiErrorSinceMs: sinceMs, apiErrorTicks: ticks },
+      }
+    }
+    // PROGRESS, NOT TIME, decides whether the resumes still hold (card 46e6bfb0, marveen 53925): any
+    // successful response since the last resume zeroes the count. Unmeasured progress falls back to the
+    // time rule, so a remote agent behaves as before, and also zeroes the count: a response in the
+    // unmeasured gap would be invisible later, so the chain of "no progress" resumes is broken there.
+    const lastResume = state.lastApiErrorResumeAt ?? null
+    const progress = input.apiErrorProgressSinceResume ?? null
+    const noProgress = lastResume === null || progress !== false ? 0 : (state.apiErrorResumesNoProgress ?? 0)
+    const repeat = progress === null
+      ? lastResume !== null && now - lastResume < API_ERROR_REPEAT_MS
+      : noProgress >= API_ERROR_PARK_AFTER - 1
+    if (repeat && lastResume !== null) {
+      return {
+        decision: {
+          alert: true, reason: 'api-error-repeat',
+          minutesSinceResume: Math.round((now - lastResume) / 60_000),
+          errorsWithoutProgress: progress === null ? null : noProgress + 1,
+        },
+        next: { ...state, idleSinceMs: keepSpell, apiErrorSinceMs: sinceMs, apiErrorTicks: ticks, apiErrorHandledSince: sinceMs, apiErrorResumesNoProgress: noProgress },
+      }
+    }
+    return {
+      decision: { alert: true, reason: 'resume-api-error', errorSinceMs: sinceMs, backgroundWork: subagents },
+      next: { ...state, idleSinceMs: keepSpell, apiErrorSinceMs: sinceMs, apiErrorTicks: ticks, apiErrorResumesNoProgress: noProgress },
+    }
+  }
 
   // RUNNING SUB-AGENTS COME BEFORE EVERYTHING ELSE, the unreadable pane included: rows that were
   // read off the screen mean the guard is not blind, and the agent is working. The bound keeps
@@ -789,46 +842,6 @@ function decideIdleAlertCore(
   // into it can do nothing until the limit resets. Named, not folded into 'busy': the log has to say
   // WHY a waiting agent was left alone, and the idle window restarts once the limit lifts.
   if (input.paneUsageLimited === true) return clear('usage-limited')
-
-  // A TURN THAT DIED ON AN API ERROR (card 843a9ab6, marveen's design 2026-10-16). Before the
-  // sustained window and before the zero-card branch: measured the same day, the generic wake came
-  // after 12-15+ minutes, never at all with 0 own cards, and did not move the agent; a targeted
-  // "continue" does. Two consecutive ticks confirm it; the answer is ONE message per streak.
-  if (apiErrorSeen && state.apiErrorHandledSince !== (state.apiErrorSinceMs ?? now)) {
-    const sinceMs = state.apiErrorSinceMs ?? now
-    const ticks = (state.apiErrorTicks ?? 0) + 1
-    const keepSpell = state.idleSinceMs ?? now
-    if (ticks < API_ERROR_CONFIRM_TICKS || now - sinceMs < API_ERROR_CONFIRM_MIN_MS) {
-      return {
-        decision: { alert: false, reason: 'api-error-confirming' },
-        next: { ...state, idleSinceMs: keepSpell, apiErrorSinceMs: sinceMs, apiErrorTicks: ticks },
-      }
-    }
-    // PROGRESS, NOT TIME, decides whether the resumes still hold (card 46e6bfb0, marveen 53925): any
-    // successful response since the last resume zeroes the count. Unmeasured progress falls back to the
-    // time rule, so a remote agent behaves as before, and also zeroes the count: a response in the
-    // unmeasured gap would be invisible later, so the chain of "no progress" resumes is broken there.
-    const lastResume = state.lastApiErrorResumeAt ?? null
-    const progress = input.apiErrorProgressSinceResume ?? null
-    const noProgress = lastResume === null || progress !== false ? 0 : (state.apiErrorResumesNoProgress ?? 0)
-    const repeat = progress === null
-      ? lastResume !== null && now - lastResume < API_ERROR_REPEAT_MS
-      : noProgress >= API_ERROR_PARK_AFTER - 1
-    if (repeat && lastResume !== null) {
-      return {
-        decision: {
-          alert: true, reason: 'api-error-repeat',
-          minutesSinceResume: Math.round((now - lastResume) / 60_000),
-          errorsWithoutProgress: progress === null ? null : noProgress + 1,
-        },
-        next: { ...state, idleSinceMs: keepSpell, apiErrorSinceMs: sinceMs, apiErrorTicks: ticks, apiErrorHandledSince: sinceMs, apiErrorResumesNoProgress: noProgress },
-      }
-    }
-    return {
-      decision: { alert: true, reason: 'resume-api-error', errorSinceMs: sinceMs },
-      next: { ...state, idleSinceMs: keepSpell, apiErrorSinceMs: sinceMs, apiErrorTicks: ticks, apiErrorResumesNoProgress: noProgress },
-    }
-  }
 
   // The no-work notice reads a counter-only 'busy' as idle, and NOTHING ELSE does.
   //
@@ -2434,13 +2447,19 @@ export const API_ERROR_RESUME_FACTS =
   'Ez az uzenet TENYT allit, utasitast nem hordoz: hogy hol tartottal, a kartyadon es a HANDOFF.md-ben latszik, ' +
   'es hogy mit kezdesz vele, azt a SAJAT allando szabalyaid dontik el.'
 
-export function buildApiErrorResumeMessage(errorSinceMs: number): string {
+/** `backgroundWork`: what the pane showed running in the background when the resume was decided
+ *  (sub-agent rows, shells, monitors, detached processes; card bd1f7b2c). 0 = none, and then the text
+ *  is the one it always was. */
+export function buildApiErrorResumeMessage(errorSinceMs: number, backgroundWork = 0): string {
   const hhmm = new Intl.DateTimeFormat('hu-HU', {
     timeZone: 'Europe/Budapest', hour: '2-digit', minute: '2-digit', hour12: false,
   }).format(new Date(errorSinceMs))
   // FACTS, NOT ORDERS (card c2246921, didi 49848 F1): this row also arrives from `system`, wrapped as
   // <untrusted>, so the old "folytasd onnan..." was an order a fresh session is right to refuse.
-  return `a turnod API-hibával megszakadt ${hhmm}-kor. ${API_ERROR_RESUME_FACTS}`
+  const background = backgroundWork > 0
+    ? ` Közben ${backgroundWork} háttérmunka fut (al-ágens, shell, monitor vagy leválasztott folyamat): a turnod ettől függetlenül állt meg, és ezek az üzenet idején még futottak.`
+    : ''
+  return `a turnod API-hibával megszakadt ${hhmm}-kor.${background} ${API_ERROR_RESUME_FACTS}`
 }
 
 export interface FleetAlert {

@@ -33,6 +33,10 @@ import {
   type IdleAgentThresholds,
 } from '../idle-agent.js'
 
+/** The background sentence of the resume (card bd1f7b2c), spelled out here so a change to it is seen. */
+const backgroundNote = (n: number) =>
+  `Közben ${n} háttérmunka fut (al-ágens, shell, monitor vagy leválasztott folyamat): a turnod ettől függetlenül állt meg, és ezek az üzenet idején még futottak.`
+
 const TH: IdleAgentThresholds = {
   sustainedMs: 12 * 60_000,
   realertMs: 30 * 60_000,
@@ -130,32 +134,41 @@ describe('decideIdleAlert -- resume-api-error', () => {
     expect(second.reasons.slice(1)).toEqual(['api-error-confirming', 'resume-api-error'])
   })
 
-  it('background-wait indicator: NO resume however long the error stands', () => {
-    const { reasons } = runTicks(Array(30).fill({ runningSubagents: 1 }), T0)
-    expect(reasons).not.toContain('resume-api-error')
-    expect(reasons).not.toContain('api-error-confirming')
+  // Card bd1f7b2c: background work no longer holds the resume back. The main turn is dead either way
+  // (the error at the tail of an idle pane), and a message typed into a free prompt interrupts
+  // nothing that runs in the background. Measured 2026-11-13: friday stood 26 minutes behind a
+  // DETACHED gate (the watcher adds those to this count), computress with nothing on the footer.
+  it('background work (a shell, a sub-agent, a detached gate: one count): confirmed, resumed once, the decision carries the count', () => {
+    const { reasons, decisions } = runTicks(Array(30).fill({ runningSubagents: 2 }), T0)
+    expect(reasons.slice(0, 2)).toEqual(['api-error-confirming', 'resume-api-error'])
+    expect(decisions[1]).toMatchObject({ reason: 'resume-api-error', backgroundWork: 2 })
+    expect(reasons.filter((r) => r === 'resume-api-error')).toHaveLength(1)              // one answer per streak
+    expect(reasons.slice(2).every((r) => r === 'subagents-running')).toBe(true)          // answered: the hold applies as before
   })
 
-  it('background-wait indicator PAST the hold / as a ghost row (the old hold no longer protects): still NO resume', () => {
+  it('CONTROL: without background work the decision carries 0', () => {
+    const { decisions } = runTicks([ERR, ERR], T0)
+    expect(decisions[1]).toMatchObject({ reason: 'resume-api-error', backgroundWork: 0 })
+  })
+
+  it('past the hold / as a ghost row: still the one resume, and the hold ends as before', () => {
     const th: IdleAgentThresholds = { ...TH, subagentHoldMs: 30 * MIN, subagentSilentMs: 20 * MIN }
     const { reasons } = runTicks(Array(60).fill({ runningSubagents: 1, lastActionAtMs: null }), T0, NO_IDLE_STATE, true, th)
-    expect(reasons).not.toContain('resume-api-error')
-    expect(reasons).not.toContain('api-error-confirming')
-    expect(reasons.slice(0, 5)).toEqual(Array(5).fill('subagents-running'))          // POSITIVE CONTROL: the hold phase happened
+    expect(reasons.filter((r) => r === 'resume-api-error')).toHaveLength(1)
+    expect(reasons.slice(2, 7)).toEqual(Array(5).fill('subagents-running'))          // POSITIVE CONTROL: the hold phase happened
     expect(reasons.slice(-5).every((r) => r !== 'subagents-running')).toBe(true)       // ... and the hold really ended
   })
 
-  it('TRANSITION: indicator gone, error still on the pane -> confirmation starts from that moment, then resume', () => {
+  it('the indicator going away is not a new streak: one resume in all', () => {
     const held = Array(10).fill({ runningSubagents: 1 })
     const { reasons } = runTicks([...held, ERR, ERR, ERR], T0)
-    expect(reasons.slice(0, 10)).not.toContain('resume-api-error')
-    expect(reasons[10]).toBe('api-error-confirming')
-    expect(reasons[11]).toBe('resume-api-error')
+    expect(reasons[1]).toBe('resume-api-error')
+    expect(reasons.filter((r) => r === 'resume-api-error')).toHaveLength(1)
   })
 
-  it('a single tick before the indicator appears does not count towards the later confirmation', () => {
+  it('a tick with background work counts towards the confirmation like any other', () => {
     const { reasons } = runTicks([ERR, { runningSubagents: 1 }, ERR], T0)
-    expect(reasons[2]).toBe('api-error-confirming')
+    expect(reasons.slice(0, 2)).toEqual(['api-error-confirming', 'resume-api-error'])
   })
 
   it.each([
@@ -320,6 +333,13 @@ describe('withPaneApiErrorNote (card 8b8864e4)', () => {
 })
 
 describe('the message and the alert text', () => {
+  it('names the background work it saw (bd1f7b2c), and without any the text is the one it always was', () => {
+    const t = Date.UTC(2026, 9, 16, 10, 5, 0)
+    expect(buildApiErrorResumeMessage(t, 3)).toBe(`a turnod API-hibával megszakadt 12:05-kor. ${backgroundNote(3)} ${API_ERROR_RESUME_FACTS}`)
+    expect(buildApiErrorResumeMessage(t, 0)).toBe(buildApiErrorResumeMessage(t))
+    expect(buildApiErrorResumeMessage(t)).toBe(`a turnod API-hibával megszakadt 12:05-kor. ${API_ERROR_RESUME_FACTS}`)
+  })
+
   it('names the error time in Europe/Budapest (CEST in October: UTC+2)', () => {
     expect(buildApiErrorResumeMessage(Date.UTC(2026, 9, 16, 10, 5, 0)))
       .toBe(`a turnod API-hibával megszakadt 12:05-kor. ${API_ERROR_RESUME_FACTS}`)
@@ -409,7 +429,7 @@ vi.mock('../db.js', () => ({
 let { tick } = await import('../web/idle-agent-watcher.js')
 const { projectsDirFor, readLastModelResponseMs } = await import('../web/active-model.js')
 const { MAIN_AGENT_ID } = await import('../config.js')
-const { detectPaneState } = await import('../pane-state.js')
+const { detectPaneState, runningBackgroundWork } = await import('../pane-state.js')
 
 const SEP = '─'.repeat(80)
 const BOX = `${'─'.repeat(70)} Friday ─\n❯ \n${SEP}`
@@ -417,6 +437,8 @@ const FOOT = '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ↓ to mana
 const ERR_PANE = `  Kész a javítás.\n\n⏺ API Error: Connection lost mid-response. The response above may be \n  incomplete.\n\n${BOX}\n${FOOT}`
 // verbatim shape of MANDARK_0855 (idle-guard-background-wait.test.ts): the indicator AND the error
 const WAITING_ERR_PANE = `\n⏺ API Error: Connection lost mid-response. The response above may be \n  incomplete.\n\n✻ Waiting for 1 background agent to finish\n\n${BOX}\n${FOOT}\n\n  ⏺ main\n  ◯ general-purpose  Checking trial daysLeft calcul… 25m 53s · ↓ 202.2k tokens`
+// friday 2026-11-13 01:16 (bd1f7b2c): the error, the turn's end line, an empty prompt, one shell on the footer
+const SHELL_ERR_PANE = `\n⏺ API Error: Connection lost mid-response. The response above may be \n  incomplete.\n\n✻ Worked for 12s · done 0:50 · 1 shell still running\n\n${BOX}\n  ⏵⏵ bypass permissions on · 1 shell · ↓ to manage`
 const BUSY_PANE = `✶ Fluttering… (41s · ↓ 2.1k tokens)\n\n${BOX}\n  ⏵⏵ bypass permissions on · esc to interrupt`
 const COORDINATOR_BUSY = `· Wrangling… (17s · ↓ 768 tokens)\n\n${BOX}\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt`
 
@@ -461,6 +483,9 @@ describe('tick() -- the API-error resume, end to end', () => {
   it('POSITIVE CONTROL: the fixture panes are what the guard reads as idle (so the detector, not the state, decides)', () => {
     expect(detectPaneState(ERR_PANE)).toBe('idle')
     expect(detectPaneState(WAITING_ERR_PANE)).toBe('idle')
+    expect(detectPaneState(SHELL_ERR_PANE)).toBe('idle')
+    expect(runningBackgroundWork(SHELL_ERR_PANE)).toBe(1)
+    expect(runningBackgroundWork(WAITING_ERR_PANE)).toBeGreaterThan(0)
   })
 
   it('0 own cards: tick 1 sends nothing, tick 2 sends the targeted message (minutes, not the 12-15+ of the generic wake)', () => {
@@ -474,19 +499,28 @@ describe('tick() -- the API-error resume, end to end', () => {
     expect(toX().filter((x) => x.content.startsWith('a turnod'))).toHaveLength(1)   // one answer per streak
   })
 
-  it('background indicator: an hour of ticks, no message to the agent', () => {
-    for (let m = 0; m <= 60; m += 3) at(m, WAITING_ERR_PANE)
+  it('FIELD CASE friday (bd1f7b2c): the error, one shell, 0 pending -> resumed on the second tick, the message names the shell', () => {
+    at(0, SHELL_ERR_PANE)
     expect(toX()).toHaveLength(0)
+    at(3, SHELL_ERR_PANE)
+    expect(toX()).toHaveLength(1)
+    expect(toX()[0].content).toBe(`a turnod API-hibával megszakadt 12:00-kor. ${backgroundNote(1)} ${API_ERROR_RESUME_FACTS}`)
+    for (let m = 6; m <= 60; m += 3) at(m, SHELL_ERR_PANE)
+    expect(toX()).toHaveLength(1)                                                     // one answer per streak
   })
 
-  it('TRANSITION: the indicator disappears with the error still last -> resume on the second tick after', () => {
+  it('background indicator (a live sub-agent): resumed once in an hour, the message names it', () => {
+    for (let m = 0; m <= 60; m += 3) at(m, WAITING_ERR_PANE)
+    expect(toX()).toHaveLength(1)
+    expect(toX()[0].content).toContain('háttérmunka fut')
+  })
+
+  it('the indicator disappearing with the error still last is the same streak: no second message', () => {
     for (let m = 0; m <= 30; m += 3) at(m, WAITING_ERR_PANE)
-    expect(toX()).toHaveLength(0)
+    expect(toX()).toHaveLength(1)
     at(33, ERR_PANE)
-    expect(toX()).toHaveLength(0)
     at(36, ERR_PANE)
     expect(toX()).toHaveLength(1)
-    expect(toX()[0].content).toContain('megszakadt 12:33-kor')
   })
 
   it('STANDSTILL (card 62b67531): x declared a standstill in workcheck.json -> the cut turn is still resumed on the second tick', () => {
