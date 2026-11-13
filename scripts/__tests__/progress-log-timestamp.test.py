@@ -20,6 +20,7 @@ Run: python3 <thisfile>   Exit 0 = all pass.
 import importlib.util
 import os
 import re
+import shutil
 import sys
 import tempfile
 
@@ -69,6 +70,8 @@ for name, state_dir_arg in WRITERS:
     except Exception as e:  # a writer that cannot be exercised is a failure too
         failed.append(f"{name}: {e}")
         print(f"FAIL {name}: {e}")
+    finally:  # card 5ae265af: one orphan dir per writer per run piled up in the shared temp tree
+        shutil.rmtree(tmp, ignore_errors=True)
 
 # CONTROL on the matcher itself. The old shape had a time but no date; if the
 # pattern accepted it, every assertion above would pass without the fix. A test
