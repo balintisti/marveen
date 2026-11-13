@@ -2440,7 +2440,7 @@ export function buildReportRoutingBody(name: string, desk: string | null): strin
     // The page also carries older, hand-written lines that send reports to the coordinator; they are
     // taken out one by one, later. Until then the reader must learn HERE which instruction wins.
     `THIS SECTION WINS over any older line on this page that sends one of those four to ${MAIN_AGENT_ID}; a decision, a crossed boundary and anything for ${OWNER_NAME} stay with ${MAIN_AGENT_ID}.`,
-    `If ${desk} is not running, or has not taken its queue for ${FRONT_DESK_STALL_SEC / 60} minutes, the system gives your report to ${MAIN_AGENT_ID} instead and the answer to your send says so (\`rerouted\`): do not send it again.`,
+    `If ${desk} is not running, or has not taken its queue for ${FRONT_DESK_STALL_SEC / 60} minutes, the system gives your report to ${MAIN_AGENT_ID} instead, and agent-msg.sh prints an \`ATIRANYITVA:\` line under the id (its \`queue=\` is then ${MAIN_AGENT_ID}'s): do not send it again.`,
     'No acknowledgement messages in either direction.',
   )
   return lines.join('\n')
