@@ -210,7 +210,12 @@ BUILD_VALUE_FLAGS = {'--ext', '--format', '-f', '--config', '-c', '--rulesdir', 
                      '--cache-location', '--max-warnings', '--output-file', '-o', '--plugin', '--rule',
                      '--resolve-plugins-relative-to', '--env', '--global', '--parser-options', '--report-unused-disable-directives-severity',
                      '--project', '-p', '--tsBuildInfoFile', '--outDir', '--target', '--module', '--lib', '--jsx',
-                     '--maxNodeModuleJsDepth'}
+                     '--maxNodeModuleJsDepth',
+                     # file- or pattern-valued flags: without them the value reads as a named file or a deep path
+                     # (card 53f1258a), and a whole-project run passes as "narrowed". Directory-valued tsc flags
+                     # (--rootDir, --baseUrl, ...) need no entry: their value is neither file-shaped nor an eslint path.
+                     '--ignore-pattern', '--stdin-filename', '--suppressions-location',
+                     '--outFile', '--generateTrace', '--generateCpuProfile'}
 
 
 def _deep_path(arg):
