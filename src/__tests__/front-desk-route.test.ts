@@ -27,7 +27,7 @@ vi.mock('../web/agent-config.js', () => ({ isKnownAgent: (a: string) => h.known.
 
 const { initDatabase, createAgentMessage, markMessageDone } = await import('../db.js')
 const { MAIN_AGENT_ID } = await import('../config.js')
-const { resolveMachineNoticeRecipient } = await import('../web/front-desk-route.js')
+const { resolveMachineNoticeRecipient, resolveReportRecipient } = await import('../web/front-desk-route.js')
 const { getSettingDefinition } = await import('../config-registry.js')
 
 beforeAll(() => { initDatabase(':memory:') })
@@ -103,6 +103,15 @@ describe('resolveMachineNoticeRecipient', () => {
   it('a setting that cannot be read -> the coordinator, with a warning, and no throw', () => {
     h.setting = () => { throw new Error('settings file unreadable') }
     expect(resolveMachineNoticeRecipient(['didi'])).toEqual({ to: MAIN_AGENT_ID, rerouted: false, why: 'probe-failed' })
+    expect(h.warn).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('resolveReportRecipient', () => {
+  // Card f043d3f5: this runs on EVERY POST /api/messages, so a throw here would refuse every send.
+  it('a setting that cannot be read -> the report stays where it was sent, with a warning, and no throw', () => {
+    h.setting = () => { throw new Error('settings file unreadable') }
+    expect(resolveReportRecipient('didi', 'desk-x')).toEqual({ to: 'desk-x', rerouted: false, why: 'probe-failed' })
     expect(h.warn).toHaveBeenCalledTimes(1)
   })
 })

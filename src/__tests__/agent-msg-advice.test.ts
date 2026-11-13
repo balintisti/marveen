@@ -186,6 +186,22 @@ describe('agent-msg.sh', () => {
     expect(stdout.trim()).toBe('OK id=7 ref=uzenet:7')
   })
 
+  it('SAYS SO when the server stored the message for someone else, and whose queue it printed', () => {
+    // Card f043d3f5: a report to a front desk that is down goes to the coordinator, and the queue in
+    // the answer is then the coordinator's. Without this line the sender reads it as the desk's.
+    const { stdout } = run(
+      '{"id":42,"queue":{"queueDepth":3},"rerouted":{"requested":"jarvis","to":"marveen","why":"desk-not-running"}}')
+    const lines = stdout.trim().split('\n')
+    expect(lines[0]).toBe('OK id=42 queue=3 ref=uzenet:42')
+    expect(lines[1]).toBe('ATIRANYITVA: jarvis -> marveen (desk-not-running); a queue= a(z) marveen sora, NE kuldd ujra')
+  })
+
+  it('and prints no such line when the message stayed where it was sent', () => {
+    const { stdout } = run('{"id":42,"queue":{"queueDepth":3}}')
+    expect(stdout).not.toContain('ATIRANYITVA')
+    expect(stdout.trim().split('\n')).toHaveLength(1)
+  })
+
   it('FAILS loudly on a rejected request instead of reporting success', () => {
     // The reason this helper exists: `curl -s ... && echo sent` exits 0 on a
     // 401 too.

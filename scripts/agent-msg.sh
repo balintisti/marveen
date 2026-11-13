@@ -829,14 +829,23 @@ try:
   # The warning is one line by construction: all whitespace (tabs, newlines)
   # collapsed, so it cannot shift a column either.
   warn = " ".join(str(d.get("warning") or "").split())
-  print("\t".join([str(d.get("id", "")), str(depth), mins, advice, warn]))
+  # The server stored the message for someone else (card f043d3f5: the front desk was down or
+  # not taking its queue). The queue above then belongs to the NEW recipient, so say whose it is.
+  r = d.get("rerouted") or {}
+  moved = ""
+  if isinstance(r, dict) and r.get("to"):
+    clean = lambda v: " ".join(str(v or "?").split())
+    moved = "ATIRANYITVA: %s -> %s (%s); a queue= a(z) %s sora, NE kuldd ujra" % (
+      clean(r.get("requested")), clean(r.get("to")), clean(r.get("why")), clean(r.get("to")))
+  print("\t".join([str(d.get("id", "")), str(depth), mins, advice, warn, moved]))
 except Exception:
-  print("\t\t\t\t")' 2>/dev/null)"
+  print("\t\t\t\t\t")' 2>/dev/null)"
   ID="$(printf '%s' "$PARSED" | cut -f1)"
   DEPTH="$(printf '%s' "$PARSED" | cut -f2)"
   MINS="$(printf '%s' "$PARSED" | cut -f3)"
   ADVICE="$(printf '%s' "$PARSED" | cut -f4)"
   WARN="$(printf '%s' "$PARSED" | cut -f5)"
+  MOVED="$(printf '%s' "$PARSED" | cut -f6)"
   if { [ "$CODE" = "200" ] || [ "$CODE" = "201" ]; } && [ -n "$ID" ]; then
     # The "OK id=<n>" prefix is a contract -- callers and CLAUDE.md grep for it.
     # Anything new goes after it.
@@ -848,6 +857,8 @@ except Exception:
     # ugyanabban a szamterben el, egy csupasz szam mindkettore feloldhato.
     LINE="$LINE ref=uzenet:$ID"
     echo "$LINE"
+    # On stdout, right under the id: it changes what the line above means.
+    [ -n "$MOVED" ] && echo "$MOVED"
     if [ -n "$WARN" ]; then
       echo "OK id=$ID  WARNING: $WARN" >&2
     fi

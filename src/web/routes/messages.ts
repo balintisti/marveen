@@ -27,8 +27,8 @@ import { parseQualifiedId, formatQualifiedId, isQualifiedId } from '../federatio
 import { getFederationConfig } from '../federation/config.js'
 import type { RouteContext } from './types.js'
 import { unknownQueryParams, unknownQueryParamError } from '../query-params.js'
-import { resolveMachineNoticeRecipient } from '../front-desk-route.js'
-import { isReroutableWindowReceipt, pageGuardNoticeSubjects, withFrontDeskHeader, type FrontDeskNotice } from '../../front-desk.js'
+import { resolveMachineNoticeRecipient, resolveReportRecipient } from '../front-desk-route.js'
+import { isReroutableWindowReceipt, pageGuardNoticeSubjects, withFrontDeskHeader, frontDeskDownHeader, type FrontDeskNotice } from '../../front-desk.js'
 
 /** Query parameters `GET /api/messages` accepts. */
 const MESSAGES_PARAMS: readonly string[] = ['agent', 'status', 'limit', 'before']
@@ -418,11 +418,22 @@ export async function tryHandleMessages(ctx: RouteContext): Promise<boolean> {
           ? { type: 'fleet-page-guard', subjects: guardPages }
           : null
     const desk = machineNotice ? resolveMachineNoticeRecipient(machineNotice.subjects) : null
+    // A REPORT TO A FRONT DESK THAT CANNOT READ IT (card f043d3f5). An agent's report addressed to
+    // the configured front desk goes to the coordinator when the desk is not running, or runs but
+    // has not taken a row for FRONT_DESK_STALL_SEC: before this, it waited in a queue nobody read.
+    // Only a measured reason moves it (see front-desk.ts); the response says so (`rerouted`), and
+    // the coordinator reads why on the stored first line.
+    const report = !machineNotice && !isQualifiedId(storedTo)
+      ? resolveReportRecipient(senderIdent, sanitizeAgentIdent(storedTo))
+      : null
     const requestedTo = storedTo
     if (desk?.rerouted) storedTo = desk.to
+    if (report?.rerouted) storedTo = report.to
     const storedContent = desk && machineNotice
       ? withFrontDeskHeader(desk, machineNotice, normalizedContent)
-      : normalizedContent
+      : report?.rerouted
+        ? `${frontDeskDownHeader(report, requestedTo)}\n${normalizedContent}`
+        : normalizedContent
     const msg = createAgentMessage(from.trim(), storedTo, storedContent, trimmedOriginNote)
     // Backpressure, returned WITH the id rather than behind a second call:
     // `{"id":N,"status":"pending"}` alone reads as "sent", and on a busy
@@ -458,6 +469,7 @@ export async function tryHandleMessages(ctx: RouteContext): Promise<boolean> {
     )
     const respBody: Record<string, unknown> = queue ? { ...msg, queue: { ...queue, ...advice } } : { ...msg }
     if (desk?.rerouted) respBody.rerouted = { requested: requestedTo, to: storedTo, why: desk.why }
+    if (report?.rerouted) respBody.rerouted = { requested: requestedTo, to: storedTo, why: report.why }
     // A LOCAL recipient that is not running never receives this (upstream): the
     // router retries for a while and then abandons it, and the failure notice goes
     // to the MAIN agent, not to the sender. A non-breaking warning field rather

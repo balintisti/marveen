@@ -99,8 +99,11 @@ describe('report-routing section: the rule, with a front desk', () => {
     expect(body.indexOf('done, status, handoff, FYI')).toBeLessThan(body.indexOf('THIS SECTION WINS'))
   })
 
-  it('a front desk that is down does not turn the coordinator back into the recipient', () => {
-    expect(body).toMatch(/If agent-desk is not running[^\n]*the report goes on the card and to nobody\./)
+  // Card f043d3f5 reversed the earlier "to nobody": the system moves the report, the sender must
+  // not resend it, and the rule names both triggers the code measures (front-desk.ts).
+  it('a front desk that is down: the system gives the report to the coordinator, the sender does not resend', () => {
+    expect(body).toContain('If agent-desk is not running, or has not taken its queue for 30 minutes, the system gives your report to agent-a instead, and agent-msg.sh prints an `ATIRANYITVA:` line under the id (its `queue=` is then agent-a\'s): do not send it again.')
+    expect(body).not.toContain('to nobody')
   })
 
   it('no acknowledgement messages, either way', () => {
