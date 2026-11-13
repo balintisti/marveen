@@ -87,6 +87,10 @@ describe('zsh expansion-flag gate: lets everything else through', () => {
     ['ls # ${(f)x}'],
     ['echo \\${(f)x}'],
     [`echo $'\${(f)x}'`],
+    // an escaped quote inside ANSI-C quoting does not end it
+    [`echo $'it\\'s \${(f)x}'`],
+    // a single quote inside a command substitution inside double quotes is data again
+    [`echo "$(echo '\${(f)x}')"`],
     // a command that is only text
     ['git log --grep "zsh flags"'],
     // a heredoc written and then a plain command on the next line
