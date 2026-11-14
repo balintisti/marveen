@@ -60,7 +60,7 @@ def feature(tag, n=10):
     return [f'{tag} feature line {i} with enough text' for i in range(n)]
 
 
-def run(repo, cards, live=None, acks=None, fetch=False):
+def run(repo, cards, live=None, acks=None, fetch=False, cache=None):
     out = tempfile.mkdtemp(prefix='dvl-out-')
     cj = os.path.join(out, 'cards.json')
     with open(cj, 'w') as f:
@@ -71,7 +71,7 @@ def run(repo, cards, live=None, acks=None, fetch=False):
     oj = os.path.join(out, 'out.json')
     r = subprocess.run([sys.executable, SCRIPT, '--repo', repo.dir, '--live-sha', live or repo.git('rev-parse', 'main'),
                         '--cards-json', cj, *([] if fetch else ['--no-fetch']), '--out', oj, '--acks', aj,
-                        '--cache', os.path.join(out, 'cache.json')], capture_output=True, text=True,
+                        '--cache', cache or os.path.join(out, 'cache.json')], capture_output=True, text=True,
                        env=dict(ENV, DONE_VS_LIVE_RETRY_SLEEP='0'))
     d = json.load(open(oj)) if os.path.exists(oj) else None
     shutil.rmtree(out)
@@ -121,12 +121,18 @@ class Meter(unittest.TestCase):
         r.branch_with('fix/abcabc12-shared-top', 'base.txt', feature('S', 5) + BODY, 'feat: S on top of base')
         r.merge('fix/abcabc12-shared-top')
         r.write('base.txt', feature('S', 5) + BODY[:-1] + ['the last shared line, rewritten']); r.commit('chore: tail')
+        # cherry-picked onto main, then main rewrites the file: the content check alone says missing,
+        # the patch-id equivalence (git's --cherry-pick) says shipped
+        k_sha = r.branch_with('fix/ddddddd9-picked-then-evolved', 'k.txt', feature('K'), 'feat: K')
+        r.write('k_other.txt', feature('k0')); r.commit('chore: main moves first, so the pick gets a new sha')
+        r.git('cherry-pick', k_sha)
+        r.write('k.txt', [f'K rewritten line {i} with enough text' for i in range(10)]); r.commit('refactor K')
         # project-less card with a ref, never merged
         r.branch_with('fix/99999997-projectless', 'g.txt', feature('G'), 'feat: G')
         cls.cards = [card('aaaaaaa1'), card('bbbbbbb2', priority='high'), card('ccccccc3'), card('ddddddd4'),
                      card('eeeeeee5'), card('fffffff6'), card('99999997', project=None), card('aaaabbb8'), card('abcabc12'),
                      card('12345678'), card('87654321', project=None), card('abcdef01', project='marveen'),
-                     card('0bbbbbb2', status='planned')]
+                     card('0bbbbbb2', status='planned'), card('ddddddd9')]
         cls.rc, cls.d, cls.proc = run(r, cls.cards)
         cls.v = verdicts(cls.d)
 
@@ -161,6 +167,10 @@ class Meter(unittest.TestCase):
     def test_cherry_picked_is_live(self):
         self.assertNotIn('ddddddd4', self.v)
 
+    def test_cherry_picked_then_rewritten_is_live_by_patch_id(self):
+        # the same verdict git log --cherry-pick gave before the patch-ids were cached (b6284542)
+        self.assertNotIn('ddddddd9', self.v)
+
     def test_stray_unshipped_commit_is_not_live_partly_shipped(self):
         self.assertEqual(self.v['eeeeeee5']['verdict'], 'NOT-LIVE')
         self.assertTrue(self.v['eeeeeee5']['partly_shipped'])
@@ -181,7 +191,7 @@ class Meter(unittest.TestCase):
         self.assertEqual(self.v['12345678']['verdict'], 'NO-BRANCH')
         self.assertNotIn('abcdef01', self.v)          # other project
         self.assertNotIn('0bbbbbb2', self.v)          # not done/testing
-        self.assertEqual(self.d['summary']['done']['population'], 10)
+        self.assertEqual(self.d['summary']['done']['population'], 11)
 
     def test_ack_holds_only_while_fingerprint_matches(self):
         fp = self.v['bbbbbbb2']['fingerprint']
@@ -287,6 +297,17 @@ class Meter(unittest.TestCase):
         rc, d, _ = run(self.repo, self.cards + [{'status': 'done', 'project': 'delta-crm'}])
         self.assertEqual(rc, 1)
         self.assertIn('crashed: KeyError', d['error'])
+
+    def test_a_run_that_dies_keeps_what_it_computed(self):
+        # The budget alarm and a crash both end in write_out with the error set; before b6284542
+        # the cache was saved only at the end, so a run dying at 1800 s left the next one cold.
+        cache = os.path.join(tempfile.mkdtemp(prefix='dvl-cache-'), 'cache.json')
+        rc, d, _ = run(self.repo, self.cards + [{'status': 'done', 'project': 'delta-crm'}], cache=cache)
+        kept = json.load(open(cache)) if os.path.exists(cache) else {}
+        shutil.rmtree(os.path.dirname(cache))
+        self.assertEqual(rc, 1)
+        self.assertIn('crashed', d['error'])
+        self.assertTrue(any(k.startswith('pid:') for k in kept), sorted(kept)[:5])
 
     def test_the_previous_result_says_a_newer_run_is_under_way(self):
         # b6284542: the 07:00 brief read the old file mid-run and took it for today's. A fake gcloud

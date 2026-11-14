@@ -51,7 +51,8 @@ INSTALL (a launchd unit, NOT live on merge): bash scripts/install-launchd-unit.s
 It runs at 05:45, ahead of the 07:00 morning brief (schedule reggeli-napindito). It ran at 06:45
 until card b6284542: a full run took 130-180 s on 2026-10-01 (1417 cards, 916 branch tips) but
 600-1760 s by 2026-11 (3540 done cards), so it ended after the brief had read the previous file.
-The cache keys every judgement by blob SHAs, so a rerun is cheaper.
+The cache keys every judgement by blob SHAs, so a rerun is cheaper; a run that dies (budget,
+crash) still saves it, so the next run goes on from there instead of starting cold.
 
 Exit: 0 measured (findings or not)   1 not measurable (no live SHA, git failure, no cards)
 Test seams: --live-sha, --cards-json, --no-fetch, --out, --acks, --cache.
@@ -144,8 +145,24 @@ result = {'measured_at': datetime.now().astimezone().isoformat(timespec='seconds
           'repo': A.repo, 'error': None}
 
 
+def save_cache(keep, suffix='.tmp'):
+    try:
+        tmp = A.cache + suffix
+        json.dump(keep, open(tmp, 'w'))
+        os.replace(tmp, A.cache)
+    except Exception as e:
+        result['cache_error'] = str(e)
+
+
 def write_out():
     result['duration_s'] = round(time.time() - T0, 1)
+    if result['error'] and 'cache' in globals():
+        # A run that dies (budget, crash) keeps what it computed: every entry is keyed by full SHAs,
+        # so it stays true. Saved only at the end, a cold cache made every run die at 1800 s with
+        # nothing kept, and the next one start cold again (live cache last written 11-12, card
+        # b6284542). The whole dict, old entries too: the next finished run prunes to what it used.
+        # Its own tmp name: the alarm may fire while the end-of-run save holds '.tmp' open.
+        save_cache(cache, '.tmp-err')
     os.makedirs(os.path.dirname(os.path.abspath(A.out)), exist_ok=True)
     tmp = A.out + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
@@ -317,6 +334,10 @@ fp_chain = git('rev-list', '--first-parent', LIVE, check=True).stdout.split()
 # git per commit took 37 433 merge-base calls (452 s) and the cherry-pick log on fully merged refs
 # another 450 s of a 1187 s run (profiled 2026-11-04, card b6284542; the 06:45 run hit 1424 s of
 # its 1800 s budget). Oldest first, so a commit is claimed by the first mainline commit reaching it.
+# With this alone the cold run still died at 1800 s; the cherry-pick log of the UNMERGED refs is now
+# right_only_cherry_pick (below). Measured 2026-11-14 on a frozen copy (5383 refs, 6337 cards, live
+# c4ffb0d260): cold cache 1771 s, with the live cache of 11-12 1060 s, warm 234 s, the same verdict
+# on all 2207 reported cards in the three runs.
 parents = {}
 for line in git('rev-list', '--parents', LIVE, check=True).stdout.splitlines():
     sha, *ps = line.split()
@@ -405,6 +426,41 @@ def commit_in_live(c):
     return cached(key, calc)
 
 
+def patch_ids(shas):
+    """patch-id per commit, cached by sha (a sha's patch never changes). The uncached ones go
+    through ONE diff-tree | patch-id pipe, with the diff --cherry-pick itself hashes: renames off,
+    plain myers WITHOUT the indent heuristic (with it, 15 of 1398 tips listed a commit git drops: a
+    slid hunk changes the context lines, measured 2026-11-14). A commit with an empty diff gets ''."""
+    todo = [s for s in shas if 'pid:' + s not in cache]
+    if todo:
+        d = subprocess.run(['git', '-C', A.repo, 'diff-tree', '--stdin', '-p', '-r', '--root', '--no-renames',
+                            '--binary', '--no-indent-heuristic', '--diff-algorithm=myers'],
+                           input='\n'.join(todo).encode() + b'\n', capture_output=True, timeout=900)
+        p = subprocess.run(['git', '-C', A.repo, 'patch-id', '--stable'], input=d.stdout, capture_output=True,
+                           timeout=900)
+        if d.returncode or p.returncode:
+            fail(f'patch-id: rc={d.returncode}/{p.returncode}, {(d.stderr or p.stderr).decode(errors="replace")[:300]}')
+        got = dict(reversed(line.split()) for line in p.stdout.decode().splitlines() if line.strip())
+        for s in todo:
+            cache['pid:' + s] = got.get(s, '')
+    return {s: cached('pid:' + s, lambda: '') for s in shas}
+
+
+def right_only_cherry_pick(tip):
+    """The commits `git log --no-merges --right-only --cherry-pick LIVE...tip` lists, in its order.
+    git computes the patch-id of every commit on BOTH sides on every call; for an old branch the
+    left side is thousands of live commits, recomputed per ref (77% of the 2026-11-13 launchd run,
+    which died at its 1800 s budget). Here the patch-ids are cached across refs and runs."""
+    left, right = [], []
+    for line in git('rev-list', '--no-merges', '--left-right', f'{LIVE}...{tip}').stdout.split():
+        (left if line[0] == '<' else right).append(line[1:])
+    if not right or not left:
+        return right
+    pid = patch_ids(left + right)
+    live_pids = {pid[c] for c in left}
+    return [c for c in right if pid[c] not in live_pids]
+
+
 def landing_base(tip):
     """merge-base of tip with the mainline just before tip landed in LIVE (tip must be in LIVE)."""
     lo = landing[tip]
@@ -481,8 +537,7 @@ for c in pop:
     for ref in sorted(crefs):
         if crefs[ref] in landing:
             continue   # the tip is in the live history: LIVE...tip has no right side to list
-        for cm in git('log', '--no-merges', '--right-only', '--cherry-pick', '--format=%H',
-                      f'{LIVE}...{crefs[ref]}').stdout.split():
+        for cm in right_only_cherry_pick(crefs[ref]):
             if cm not in missing_commits and not commit_in_live(cm):
                 missing_commits[cm] = ref
     gaps, added_total, tip_of = [], 0, {}
@@ -542,12 +597,7 @@ for c in pop:
     cards_out.append(rec)
 
 os.unlink(IDX)
-try:
-    tmp = A.cache + '.tmp'
-    json.dump(used, open(tmp, 'w'))
-    os.replace(tmp, A.cache)
-except Exception as e:
-    result['cache_error'] = str(e)
+save_cache(used)
 
 
 def summary(status):
