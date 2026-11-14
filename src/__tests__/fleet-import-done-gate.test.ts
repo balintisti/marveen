@@ -45,6 +45,8 @@ function fleet(opts: {
   cards: Card[]
   comments?: Array<{ card_id: string; content: string }>
   cardLabels?: string[]
+  labels?: Array<{ id: string; name: string }>
+  otherCardLabels?: Array<{ card_id: string; label_id: string }>
 }): string {
   return JSON.stringify({
     schemaVersion: 1,
@@ -55,8 +57,11 @@ function fleet(opts: {
       cards: opts.cards.map(card),
       comments: (opts.comments ?? []).map((c) => ({ ...c, author: 'friday', created_at: T + 1 })),
       cardEvents: [],
-      labels: [LABEL],
-      cardLabels: (opts.cardLabels ?? []).map((id) => ({ card_id: id, label_id: LABEL.id, created_at: T + 2 })),
+      labels: [LABEL, ...(opts.labels ?? []).map((l) => ({ ...l, color: '#00a', created_at: T }))],
+      cardLabels: [
+        ...(opts.cardLabels ?? []).map((id) => ({ card_id: id, label_id: LABEL.id })),
+        ...(opts.otherCardLabels ?? []),
+      ].map((cl) => ({ ...cl, created_at: T + 2 })),
     },
     ideaBox: { ideas: [], comments: [], statusLog: [] },
     dashboardSettings: { autonomy: {}, autoRestart: {}, agentsDesired: {}, norbertPersonal: {} },
@@ -118,6 +123,46 @@ describe('fleet import: done only with its proof AND the verified label (7902ee8
     await runImport(fleet({ cards: [{ id: 'none', status: 'done' }] }))
     expect(getKanbanCard('none')?.status).toBe('testing')
     expect(gateComments('none')[0].content).toContain('KESZ-IGAZOLAS sor es a(z) IGAZOLT cimke')
+  })
+
+  it('a comment that is not a done proof does not stand in for one', async () => {
+    // A verdict line and an unknown KESZ-IGAZOLAS kind: comments, but no proof.
+    await runImport(fleet({
+      cards: [{ id: 'talk', status: 'done' }],
+      comments: [{ card_id: 'talk', content: 'VERDIKT: ELFOGADVA | rendben' }, { card_id: 'talk', content: 'KESZ-IGAZOLAS: OK' }],
+      cardLabels: ['talk'],
+    }))
+    expect(getKanbanCard('talk')?.status).toBe('testing')
+    expect(gateComments('talk')[0].content).toContain('KESZ-IGAZOLAS sor')
+  })
+
+  it('only the verified label counts: another label next to the proof does not', async () => {
+    await runImport(fleet({
+      cards: [{ id: 'fe', status: 'done' }],
+      comments: [{ card_id: 'fe', content: PROOF }],
+      labels: [{ id: 'lbl-src-fe', name: 'frontend' }],
+      otherCardLabels: [{ card_id: 'fe', label_id: 'lbl-src-fe' }],
+    }))
+    expect(getKanbanCard('fe')?.status).toBe('testing')
+    expect(gateComments('fe')[0].content).toContain('IGAZOLT cimke')
+  })
+
+  it('the label name matches regardless of case, as the archive sweep reads it', async () => {
+    await runImport(fleet({
+      cards: [{ id: 'case', status: 'done' }],
+      comments: [{ card_id: 'case', content: PROOF }],
+      labels: [{ id: 'lbl-src-case', name: 'Igazolt' }],
+      otherCardLabels: [{ card_id: 'case', label_id: 'lbl-src-case' }],
+    }))
+    expect(getKanbanCard('case')?.status).toBe('done')
+  })
+
+  it('the gate comment is marked automated, so it does not read as work on the card', async () => {
+    await runImport(fleet({ cards: [{ id: 'auto', status: 'done' }] }))
+    const rows = getDb().prepare(
+      "SELECT automated FROM kanban_comments WHERE card_id = ? AND author = 'fleet-import'",
+    ).all('auto')
+    expect(rows).toEqual([{ automated: 1 }])
   })
 
   it('an archived done card is judged too (unarchive would bring it back as done) and stays archived', async () => {
