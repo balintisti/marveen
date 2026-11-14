@@ -15,7 +15,7 @@
 // real in compact-boundary-reader.test.ts).
 
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpDirs } from './helpers/tmp-dirs.js'
 import { INITIAL_GUARD_STATE, MAX_RELEASE_ATTEMPTS, READY_TIMEOUT_MS, type GuardState } from '../context-guard.js'
@@ -38,6 +38,8 @@ const world = vi.hoisted(() => ({
   pane: '',
   allOff: false,
   sessionReady: false,
+  /** The transcript's last activity; null = now (the default every older case runs on). */
+  transcriptAtMs: null as number | null,
   send: vi.fn(async (..._args: unknown[]): Promise<string> => 'sent'),
   restart: vi.fn(async (..._args: unknown[]) => ({ ok: true })),
   log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
@@ -73,8 +75,8 @@ vi.mock('../web/agent-config.js', async (orig) => ({
 vi.mock('../web/active-model.js', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   readContextTokensFromProjectDir: () => world.tokens,
-  readTranscriptMtimeFromProjectDir: () => Date.now(),
-  readLastTurnActivityMs: () => Date.now(),
+  readTranscriptMtimeFromProjectDir: () => world.transcriptAtMs ?? Date.now(),
+  readLastTurnActivityMs: () => world.transcriptAtMs ?? Date.now(),
   readActiveModelFromProjectDir: () => null,
   readLastCompactionMs: () => world.compactedAtMs,
   predatesSession: () => false,
@@ -159,7 +161,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(T0)
   rmSync(join(SANDBOX, 'store'), { recursive: true, force: true })
-  Object.assign(world, { tokens: 0, compactedAtMs: null, runningSinceSec: T0 / 1000 - 3600, backgroundWork: 0, pane: '', allOff: false, sessionReady: false })
+  Object.assign(world, { tokens: 0, compactedAtMs: null, runningSinceSec: T0 / 1000 - 3600, backgroundWork: 0, pane: '', allOff: false, sessionReady: false, transcriptAtMs: null })
   world.send.mockReset().mockImplementation(async () => 'sent')
   world.restart.mockReset().mockImplementation(async () => ({ ok: true }))
   for (const fn of Object.values(world.log)) fn.mockClear()
@@ -488,5 +490,56 @@ describe('the turn that was to write the handoff died in an API error', () => {
     world.pane = CLEAN_PANE
     await vi.advanceTimersByTimeAsync(10 * MIN)
     expect(sentTo('boni')).toHaveLength(1)
+  })
+})
+
+// Card 03fa1241: the handoff is written, background work holds the restart, and the turn dies. The
+// guard tells the agent to go on, in its own wording -- not "stop" -- and the restart still comes
+// when the work is done (the decision is pinned in context-guard-held-restart-api-error.test.ts).
+describe('the turn died while a written handoff\'s restart waited for background work', () => {
+  const SEP = '─'.repeat(80)
+  const BOX = `${SEP}\n❯ \n${SEP}`
+  const FOOT = '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ↓ to manage'
+  const ERR_PANE = `  Fut a gate.\n\n⏺ API Error: Connection lost mid-response. The response above may be \n  incomplete.\n\n${BOX}\n${FOOT}`
+  const CLEAN_PANE = `  Dolgozom.\n\n${BOX}\n${FOOT}`
+
+  /** Up to just before the handoff deadline with no handoff, then the handoff appears, two
+   *  background jobs run, and the pane shows `pane`. */
+  async function heldWith(pane: string): Promise<void> {
+    await askedToStop()
+    world.pane = CLEAN_PANE
+    const deadlineMs = savedState('boni')?.deadlineMs ?? 0
+    await vi.advanceTimersByTimeAsync(deadlineMs - Date.now() - 30_000)
+    expect(sentTo('boni')).toHaveLength(1)
+    const handoff = join(SANDBOX, 'agents', 'boni', 'HANDOFF.md')
+    mkdirSync(join(SANDBOX, 'agents', 'boni'), { recursive: true })
+    writeFileSync(handoff, '# HANDOFF\n')
+    utimesSync(handoff, new Date(), new Date())
+    // The handoff write is the last thing the session did: the turn died after it.
+    world.transcriptAtMs = Date.now()
+    world.backgroundWork = 2
+    world.pane = pane
+    await vi.advanceTimersByTimeAsync(6 * MIN)
+  }
+
+  it('the pane ends in the error -> "go on" goes out, the restart waits, and comes when the work is done', async () => {
+    await heldWith(ERR_PANE)
+    expect(sentTo('boni')).toHaveLength(2)
+    expect(sentTo('boni')[1]).toContain('API-hibával megszakadt')
+    expect(sentTo('boni')[1]).toContain('FOLYTASD')
+    expect(sentTo('boni')[1]).toContain('háttérmunkád végére vár (2')
+    expect(sentTo('boni')[1]).not.toContain('ÁLLJ MEG')
+    expect(savedState('boni')?.apiErrorHeldResumes).toBe(1)
+    expect(restartsOf('boni')).toBe(0)
+    world.backgroundWork = 0
+    world.pane = CLEAN_PANE
+    await vi.advanceTimersByTimeAsync(5 * MIN)
+    expect(restartsOf('boni')).toBe(1)
+  })
+
+  it('CONTROL: the same hold on a pane without the error -> nothing is sent, the restart waits', async () => {
+    await heldWith(CLEAN_PANE)
+    expect(sentTo('boni')).toHaveLength(1)
+    expect(restartsOf('boni')).toBe(0)
   })
 })

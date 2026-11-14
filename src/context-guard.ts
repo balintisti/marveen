@@ -354,6 +354,13 @@ export interface GuardState {
   /** Handoff requests THIS sequence re-sent because the pane ended in an API error before the
    *  handoff was written (MAX_API_ERROR_RESENDS, card 8b8864e4). Absent = 0. */
   apiErrorResends?: number
+  /** Resumes THIS sequence sent to a pane that ended in an API error while the restart waited for
+   *  background work behind a written handoff (MAX_API_ERROR_HELD_RESUMES, card 03fa1241). Absent = 0. */
+  apiErrorHeldResumes?: number
+  /** When the last of those resumes went out (ms). The next one waits for a turn that ran after it
+   *  (the transcript's last activity, nowMs - idleMs, is later): an error still at the tail from
+   *  before is not a second loss. Absent = none sent. */
+  apiErrorHeldResumedAtMs?: number
   /** Set by the card-aligned restart (card 00262e3f) and carried through await-ready: no handoff
    *  was asked for, so the fresh session's first message must not send it to HANDOFF.md. It names
    *  the card whose move was the boundary instead. */
@@ -779,7 +786,7 @@ function hardTierHoldsForBackground(inputs: GuardInputs): boolean {
     typeof inputs.realWindowPct === 'number' && inputs.realWindowPct < REAL_WINDOW_HOLD_CEILING
 }
 
-function backgroundWorkText(inputs: GuardInputs): string {
+export function backgroundWorkText(inputs: GuardInputs): string {
   const n = inputs.backgroundWork ?? 0
   return inputs.backgroundWorkDetail ? `${n} (${inputs.backgroundWorkDetail})` : String(n)
 }
@@ -903,6 +910,13 @@ export const RELEASE_COMPACTED_REASON_PREFIX = 'compacted after the stop request
 export const MAX_API_ERROR_RESENDS = 1
 /** Reason prefix of that re-send: the runner words the request by it. */
 export const API_ERROR_RESEND_REASON_PREFIX = 'api-error-handoff-resend'
+/** How many resumes one await-handoff sequence sends to a turn that died while a written handoff's
+ *  restart waited for background work (card 03fa1241). Not one, as for the re-send: here no near
+ *  deadline answers a second loss -- the hold runs up to BACKGROUND_DEFER_MAX_MS, and without
+ *  context pressure it has no bound at all -- so each loss gets its answer, up to this cap. */
+export const MAX_API_ERROR_HELD_RESUMES = 3
+/** Reason prefix of that resume: the runner words it by it. */
+export const API_ERROR_HELD_RESUME_REASON_PREFIX = 'api-error-held-restart-resume'
 
 /** The reader's cache (active-model TTL_MS, 3 s) can hand the sweep a size measured just BEFORE a
  *  compaction finished, so a request can follow its boundary line by that much. */
@@ -939,6 +953,26 @@ function cooldown(nowMs: number, cfg: ContextGuardConfig, reason: string): Guard
 
 /** staleMinutes rides into await-ready so inject-resume can tell the fresh
  *  session its handoff does not cover the last N minutes. */
+/**
+ * THE TURN DIED WHILE A WRITTEN HANDOFF'S RESTART WAITED FOR BACKGROUND WORK (card 03fa1241, dexter
+ * 2026-11-13 18:32-18:54). The idle guard writes no resume into the queue this phase holds
+ * (idle-agent-watcher, card 8b8864e4) and leaves the dead turn to this guard; the re-send above
+ * answers it only before the handoff is written. Behind a written handoff nobody did, and the agent
+ * stood 22 minutes until the hold lapsed. Here the hold stands, and the agent is told to go on.
+ */
+function answerHeldApiError(hold: GuardDecision, inputs: GuardInputs): GuardDecision {
+  const state = hold.nextState
+  const sent = state.apiErrorHeldResumes ?? 0
+  if (inputs.paneApiError !== true || inputs.paneBusy || sent >= MAX_API_ERROR_HELD_RESUMES) return hold
+  const last = state.apiErrorHeldResumedAtMs
+  if (last !== undefined && (inputs.idleMs === null || inputs.nowMs - inputs.idleMs <= last)) return hold
+  return {
+    action: 'request-handoff',
+    reason: `${API_ERROR_HELD_RESUME_REASON_PREFIX}: the pane ends in an API error, telling the agent to go on (${sent + 1} of ${MAX_API_ERROR_HELD_RESUMES}); ${hold.reason}`,
+    nextState: { ...state, apiErrorHeldResumes: sent + 1, apiErrorHeldResumedAtMs: inputs.nowMs },
+  }
+}
+
 function restartDecision(nowMs: number, reason: string, staleMinutes: HandoffStaleness = null): GuardDecision {
   return {
     action: 'restart',
@@ -1131,7 +1165,7 @@ export function decideGuard(
         // context already reached the hard threshold.
         const atHard = inputs.pct !== null && inputs.pct >= cfg.hardPct && !hardTierHoldsForBackground(inputs)
         const held = atHard ? { hold: null, suffix: killedNote(inputs) } : holdForBackground(state, inputs, cfg, 'handoff written')
-        if (held.hold) return held.hold
+        if (held.hold) return answerHeldApiError(held.hold, inputs)
         // Refresh budget spent (or never applicable): ship what we have. Saying
         // the budget is spent out loud matters -- the previous behaviour looked
         // identical in the log to "the agent never answered", which is the

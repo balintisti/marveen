@@ -56,6 +56,8 @@ import {
   READY_TIMEOUT_REASON,
   STALE_REFRESH_REASON_PREFIX,
   API_ERROR_RESEND_REASON_PREFIX,
+  API_ERROR_HELD_RESUME_REASON_PREFIX,
+  backgroundWorkText,
   SUBAGENT_GATE_REASON_PREFIX,
   SATURATION_CREDIBLE_MIN_PCT,
   saturationBannerCredible,
@@ -448,6 +450,21 @@ export function apiErrorResendHandoffPrompt(handoffPath: string): string {
     `A korábbi kérés áll. EGYETLEN dolgod ebben a körben: írj HANDOFF.md-t a /handoff skill struktúrája szerint ide: ${handoffPath} ` +
     `(Goal / Current Progress / What Worked / What Didn't Work / Next Steps, konkrét fájl-útvonalakkal és kanban kártya-azonosítókkal). ` +
     `Utána ÁLLJ MEG; a rendszer friss kontextussal újraindít és a HANDOFF.md-ből folytatod.`
+  )
+}
+
+/**
+ * The resume for a turn that died while the restart waited for background work behind a written
+ * handoff (card 03fa1241). A seventh wording, and the only one that does NOT say stop: the handoff
+ * is there, the restart comes when the work is done, so the agent is told to go on and to bring the
+ * handoff up to date before its turn ends -- or the restart ships one that misses this work.
+ */
+export function heldRestartApiErrorResumePrompt(backgroundText: string, handoffPath: string): string {
+  return (
+    `[CONTEXT-GUARD] Az előző fordulód API-hibával megszakadt ("Connection lost" vagy hasonló). A HANDOFF.md-d megvan, ` +
+    `az újraindítás a háttérmunkád végére vár (${backgroundText}). Addig FOLYTASD a megkezdett munkát onnan, ahol a forduló megszakadt; ` +
+    `a forduló vége előtt frissítsd a HANDOFF.md-t (${handoffPath}), ha azóta érdemi munka történt. ` +
+    `Amikor a háttérmunka véget ér, a rendszer friss kontextussal újraindít, és a HANDOFF.md-ből folytatod.`
   )
 }
 
@@ -1460,6 +1477,9 @@ async function checkAgent(name: string, nowMs: number): Promise<void> {
             : decision.reason.startsWith(API_ERROR_RESEND_REASON_PREFIX)
               // The turn that was to answer the first request died; say so, and that it stands.
               ? apiErrorResendHandoffPrompt(handoffPathFor(name))
+            : decision.reason.startsWith(API_ERROR_HELD_RESUME_REASON_PREFIX)
+              // The handoff is written and the restart waits for background work; the turn died.
+              ? heldRestartApiErrorResumePrompt(backgroundWorkText(inputs), handoffPathFor(name))
             : decision.reason.startsWith(IDLE_FLUSH_REASON_PREFIX)
               // pct is null whenever the idle tier runs without the proactive
               // tiers, so the alarming percentage-based prompt would read "~0%
