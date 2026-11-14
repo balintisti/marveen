@@ -79,6 +79,8 @@ import {
   type CardRestartFacts,
   type ContextGuardConfig,
   type GuardDecision,
+  GUARD_SWEEP_INTERVAL_MS,
+  deliveryHoldEndMs,
 } from '../context-guard.js'
 import { gatherCardRestartFacts } from './card-restart-facts.js'
 import {
@@ -109,7 +111,7 @@ import { decideBootWedgeRescue, setInputNotEmptiedHandler, type GuardRestartReco
 
 const tmuxBin = makeLazyBinResolver('tmux')
 const INITIAL_DELAY_MS = 270_000
-const INTERVAL_MS = 300_000
+const INTERVAL_MS = GUARD_SWEEP_INTERVAL_MS
 
 // How long the dispatch gate honours one sweep's "this banner is not
 // credible" verdict. Expressed in SWEEPS, not minutes, so it cannot silently
@@ -1915,7 +1917,7 @@ export function contextGuardDeliveryHold(name: string, nowMs: number): DeliveryH
   }
   const st = guardStates.get(name)
   if (!st || (st.phase !== 'await-handoff' && st.phase !== 'await-ready')) return null
-  const untilMs = st.deadlineMs + INTERVAL_MS
+  const untilMs = deliveryHoldEndMs(st)
   return nowMs < untilMs ? { phase: st.phase, untilMs } : lapsed(name, st.phase, untilMs, nowMs)
 }
 

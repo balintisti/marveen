@@ -893,6 +893,14 @@ export interface GuardDecision {
 // guard restarts never got an inject-resume). The runner now re-checks
 // await-ready agents every READY_POLL_MS, and the window spans three sweeps.
 export const READY_TIMEOUT_MS = 15 * 60_000
+/** The runner's sweep period. Here, not in the runner, because the delivery hold's end is counted
+ *  from it, and the decision below has to know that end (didi on card 03fa1241). */
+export const GUARD_SWEEP_INTERVAL_MS = 300_000
+/** Where the message router's delivery hold for a sequence ends: the phase deadline plus one sweep,
+ *  fixed by the deadline, never by `now` (contextGuardDeliveryHold). Past it the queue flows again. */
+export function deliveryHoldEndMs(state: Pick<GuardState, 'deadlineMs'>): number {
+  return state.deadlineMs + GUARD_SWEEP_INTERVAL_MS
+}
 /** Re-check period for agents in await-ready (context-guard-runner), far below READY_TIMEOUT_MS. */
 export const READY_POLL_MS = 20_000
 export const READY_TIMEOUT_REASON = 'ready timeout -- giving up on resume injection'
@@ -959,11 +967,17 @@ function cooldown(nowMs: number, cfg: ContextGuardConfig, reason: string): Guard
  * (idle-agent-watcher, card 8b8864e4) and leaves the dead turn to this guard; the re-send above
  * answers it only before the handoff is written. Behind a written handoff nobody did, and the agent
  * stood 22 minutes until the hold lapsed. Here the hold stands, and the agent is told to go on.
+ *
+ * Only while the delivery hold stands (didi on 03fa1241, L1): holdForBackground keeps the phase past
+ * its deadline but never moves the deadline, so the hold lapses at deliveryHoldEndMs, the queue
+ * flows, and from then the idle guard answers a dead turn itself. Two answers to one loss would be
+ * two "go on" letters for one turn.
  */
 function answerHeldApiError(hold: GuardDecision, inputs: GuardInputs): GuardDecision {
   const state = hold.nextState
   const sent = state.apiErrorHeldResumes ?? 0
   if (inputs.paneApiError !== true || inputs.paneBusy || sent >= MAX_API_ERROR_HELD_RESUMES) return hold
+  if (inputs.nowMs >= deliveryHoldEndMs(state)) return hold
   const last = state.apiErrorHeldResumedAtMs
   if (last !== undefined && (inputs.idleMs === null || inputs.nowMs - inputs.idleMs <= last)) return hold
   return {

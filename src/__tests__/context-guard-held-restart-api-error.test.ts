@@ -14,6 +14,7 @@ import {
   INITIAL_GUARD_STATE,
   MAX_API_ERROR_HELD_RESUMES,
   decideGuard,
+  deliveryHoldEndMs,
   type ContextGuardConfig,
   type GuardInputs,
   type GuardState,
@@ -107,30 +108,47 @@ describe('the turn died while a written handoff\'s restart waited for background
 
   it('the same error is answered once: no turn ran since the resume, so no second one', () => {
     const first = decideGuard(asked(), died(), cfg)
-    // Ten minutes later the transcript still ends at the handoff write: the resume did not land.
-    const again = decideGuard(first.nextState, died({ nowMs: NOW + 15 * MIN }), cfg)
+    // Eight minutes later, inside the delivery hold, the transcript still ends at the handoff write:
+    // the resume did not land.
+    const again = decideGuard(first.nextState, died({ nowMs: NOW + 13 * MIN }), cfg)
     expect(again.action).toBe('none')
     expect(again.reason).toContain('holding the restart')
     // An unmeasured transcript is not evidence of a new loss either.
-    expect(decideGuard(first.nextState, died({ nowMs: NOW + 15 * MIN, idleMs: null }), cfg).action).toBe('none')
+    expect(decideGuard(first.nextState, died({ nowMs: NOW + 13 * MIN, idleMs: null }), cfg).action).toBe('none')
   })
 
   it('a turn that ran after the resume and died again gets its own answer, up to the cap', () => {
     let state = decideGuard(asked(), died(), cfg).nextState
-    // Past the handoff deadline (+10), so the refresh request below does not apply; inside the hold's bound.
+    // Past the handoff deadline (+10), so the refresh request below does not apply; before the
+    // delivery hold ends (+15), the window this guard answers in.
+    const roundAt = (n: number) => NOW + 10 * MIN + (n - 2) * 90_000
+    expect(roundAt(MAX_API_ERROR_HELD_RESUMES + 1)).toBeLessThan(deliveryHoldEndMs(state))
     for (let n = 2; n <= MAX_API_ERROR_HELD_RESUMES; n++) {
-      const nowMs = NOW + (9 + 3 * n) * MIN
-      // The resumed turn wrote one minute ago, then died.
-      const d = decideGuard(state, died({ nowMs, idleMs: MIN }), cfg)
+      const nowMs = roundAt(n)
+      // The resumed turn wrote half a minute ago, then died.
+      const d = decideGuard(state, died({ nowMs, idleMs: 30_000 }), cfg)
       expect(d.action).toBe('request-handoff')
       expect(d.reason.startsWith(API_ERROR_HELD_RESUME_REASON_PREFIX)).toBe(true)
       expect(d.nextState.apiErrorHeldResumes).toBe(n)
       state = d.nextState
     }
-    const nowMs = NOW + (9 + 3 * (MAX_API_ERROR_HELD_RESUMES + 1)) * MIN
-    const capped = decideGuard(state, died({ nowMs, idleMs: MIN }), cfg)
+    const nowMs = roundAt(MAX_API_ERROR_HELD_RESUMES + 1)
+    const capped = decideGuard(state, died({ nowMs, idleMs: 30_000 }), cfg)
     expect(capped.action).toBe('none')
     expect(capped.reason).toContain('holding the restart')
+  })
+
+  it('once the delivery hold has lapsed the idle guard answers, not this one (one answer per loss)', () => {
+    const state = decideGuard(asked(), died(), cfg).nextState
+    const end = deliveryHoldEndMs(state)
+    // The same fresh loss, a moment before and at the hold's end: the restart is still held both times.
+    const before = decideGuard(state, died({ nowMs: end - 1, idleMs: 30_000 }), cfg)
+    expect(before.action).toBe('request-handoff')
+    expect(before.reason.startsWith(API_ERROR_HELD_RESUME_REASON_PREFIX)).toBe(true)
+    const at = decideGuard(state, died({ nowMs: end, idleMs: 30_000 }), cfg)
+    expect(at.action).toBe('none')
+    expect(at.reason).toContain('holding the restart')
+    expect(at.nextState.apiErrorHeldResumes).toBe(1)
   })
 
   it('before the deadline, work after the handoff gets the refresh request first (it answers the dead turn too)', () => {
