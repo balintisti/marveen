@@ -1,5 +1,5 @@
 # A kozos CLAUDE.md meret-alapvonala KARAKTERBEN (kartya 30169f86).
 # RACSNI: alapvonal := min(mert, regi). Novelni csak kimondott indokkal szabad.
-# elozo: 173094  uj: 42630  indok: racsni: csokkenes utan automatikusan szorul
-# 2026-10-24 03:37:29 CEST
-42630
+# elozo: 42630  uj: 41050  indok: kimondott noveles: d36fcf49: English swap, Isti TG 9850 + 9863; 19 532 -> 18 267 tokens measured (comment 61264), characters grow, tokens shrink
+# 2026-11-13 15:31:19 CET
+41050
