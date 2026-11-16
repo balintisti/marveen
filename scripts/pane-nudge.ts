@@ -16,6 +16,7 @@ import { execFileSync } from 'node:child_process'
 import {
   NUDGE_EXIT,
   decidePaneNudge,
+  isCallersOwnSession,
   nudgePane,
   nudgeTextProblem,
   type NudgeOutcome,
@@ -132,6 +133,20 @@ async function main(): Promise<number> {
   const tmux = (tmuxArgs: string[]): void => {
     const inv = proc.tmuxInvocationFor(tmuxArgs, target)
     execFileSync(inv.file, inv.args, { timeout: 5000, stdio: ['ignore', 'ignore', 'pipe'] })
+  }
+
+  // The caller's own session, from its own tmux pane. Not inside tmux = cannot be the target.
+  let callerSession: string | null = null
+  if (process.env.TMUX_PANE) {
+    try {
+      callerSession = execFileSync('tmux', ['display-message', '-p', '-t', process.env.TMUX_PANE, '#{session_name}'], {
+        encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim()
+    } catch { callerSession = null }
+  }
+  if (isCallersOwnSession(session, callerSession)) {
+    process.stderr.write(`pane-nudge: "${session}" is the session this command runs in: refused, nothing was typed\n`)
+    return NUDGE_EXIT.SELF
   }
 
   try {

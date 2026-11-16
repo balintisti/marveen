@@ -29,6 +29,7 @@ import {
   detectPaneState,
   detectsBlockingMenu,
   detectsFeedbackDraftModal,
+  detectsFeedbackOptOutPrompt,
   detectsFirstRunGate,
   detectsModelConsentDialog,
   detectsPermissionDialog,
@@ -60,6 +61,8 @@ export const NUDGE_EXIT = {
   NOT_STARTED: 8,
   /** The usage limit is reached: a nudge cannot help. Nothing typed. */
   USAGE_LIMIT: 9,
+  /** The target is the caller's own session: typing into it would feed the caller its own line. */
+  SELF: 10,
 } as const
 
 export type NudgeRefusal =
@@ -87,6 +90,16 @@ const REFUSAL_EXIT: Record<NudgeRefusal, number> = {
   'usage-limit': NUDGE_EXIT.USAGE_LIMIT,
 }
 
+/**
+ * Is the target the session the caller itself runs in? The self-pace gate only matches the raw
+ * pane-write text, not this tool, so the tool refuses it itself (didi, card 3cf0019f, L1). The
+ * caller's session is read from its own tmux pane (TMUX_PANE); null = the caller is not inside
+ * tmux, so it cannot be the target.
+ */
+export function isCallersOwnSession(targetSession: string, callerSession: string | null): boolean {
+  return callerSession != null && callerSession !== '' && callerSession === targetSession
+}
+
 export function exitCodeForRefusal(refusal: NudgeRefusal): number {
   return REFUSAL_EXIT[refusal]
 }
@@ -101,6 +114,7 @@ function dialogOwning(pane: string): string | null {
   if (detectsPermissionDialog(pane)) return 'a permission dialog is open'
   if (detectsModelConsentDialog(pane)) return 'a model consent dialog is open'
   if (detectsFeedbackDraftModal(pane)) return 'a feedback dialog is open'
+  if (detectsFeedbackOptOutPrompt(pane)) return 'the feedback opt-out prompt is open'
   const gate = detectsFirstRunGate(pane)
   if (gate != null) return `a first-run gate (${gate}) is open`
   if (detectsBlockingMenu(pane)) return 'a blocking menu is open'
@@ -158,6 +172,9 @@ export function nudgeTextProblem(text: string): string | null {
   if (text.length > MAX_NUDGE_CHARS) return `the text is ${text.length} characters; the limit is ${MAX_NUDGE_CHARS} (a nudge is one short line)`
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/.test(text)) return 'the text has a control character or a line break (a newline would submit early)'
+  // tmux reads an argument that ENDS in ";" as a command separator and drops it: measured on a
+  // scratch session, "continue now;" arrived as "continue now" (didi asked, card 3cf0019f).
+  if (text.endsWith(';')) return 'the text may not end in ";": tmux would swallow it as a command separator, so a different line would be typed'
   if (FORBIDDEN_FIRST_CHARS.includes(text[0])) {
     return `the text may not start with "${text[0]}": the TUI (or tmux) would read it as a command, not as a line`
   }

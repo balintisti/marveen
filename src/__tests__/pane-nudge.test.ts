@@ -9,6 +9,7 @@ import {
   NUDGE_EXIT,
   decidePaneNudge,
   exitCodeForRefusal,
+  isCallersOwnSession,
   nudgePane,
   nudgeTextProblem,
   type NudgeDeps,
@@ -41,7 +42,39 @@ const API_ERROR_IDLE = [
   FOOTER,
 ].join('\n')
 
+// Live captures (agent-samu, 2026-08-31) from feedback-draft-modal.test.ts: both read as idle to the
+// footer check, and both swallow the next keystroke.
+const FEEDBACK_MODAL = [
+  '✻ Crunched for 4m 19s · done 7:48',
+  '',
+  '╭──────────────────────────────────────────────────────────────────────────────╮',
+  "│ ✻ Bug report drafted: Adopted a peer's rebuttal and applied it to a differe… │",
+  '│ 1 to review · 2 to send · 0 to dismiss                                       │',
+  '╰──────────────────────────────────────────────────────────────────────────────╯',
+  '',
+  '───────────────────────────────────────────────────────────────────────── Samu ─',
+  '❯ ',
+  '────────────────────────────────────────────────────────────────────────────────',
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents · 1 feedback d…',
+].join('\n')
+const FEEDBACK_OPT_OUT = [
+  '✻ Crunched for 4m 19s · done 7:48',
+  '',
+  'Turn off Claude-drafted feedback? 0 to turn off · Esc to keep',
+  '',
+  '',
+  '───────────────────────────────────────────────────────────────────────── Samu ─',
+  '❯ ',
+  '────────────────────────────────────────────────────────────────────────────────',
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents · 1 feedback d…',
+].join('\n')
+
 describe('decidePaneNudge: go only on a provably stopped pane', () => {
+  it('the feedback draft modal and the feedback opt-out prompt are dialogs, never go (didi L2, T2)', () => {
+    expect(decidePaneNudge(FEEDBACK_MODAL)).toMatchObject({ go: false, refusal: 'dialog' })
+    expect(decidePaneNudge(FEEDBACK_OPT_OUT)).toMatchObject({ go: false, refusal: 'dialog' })
+  })
+
   it('an idle pane with an empty visible box is go', () => {
     const d = decidePaneNudge(IDLE)
     expect(d.go).toBe(true)
@@ -92,6 +125,7 @@ describe('nudgeTextProblem', () => {
   it('allows one short plain line', () => {
     expect(nudgeTextProblem('continue where you stopped')).toBeNull()
     expect(nudgeTextProblem('x'.repeat(300))).toBeNull()
+    expect(nudgeTextProblem('a;b')).toBeNull()
   })
 
   it.each([
@@ -107,6 +141,7 @@ describe('nudgeTextProblem', () => {
     ['bash mode', '!rm x'],
     ['memory shortcut', '#note'],
     ['tmux flag', '-s flag'],
+    ['tmux command separator at the end', 'continue now;'],
   ])('refuses %s', (_name, text) => {
     expect(nudgeTextProblem(text)).not.toBeNull()
   })
@@ -246,6 +281,16 @@ describe('nudgePane: dry run, start, and not-started', () => {
     const o = await nudgePane(f.deps, 'continue', { ...FAST, watchMs: 1000 })
     expect(o).toMatchObject({ kind: 'not-started', parked: false, exit: NUDGE_EXIT.NOT_STARTED })
     expect(f.typed).toEqual(['continue'])
+    // Exactly one Enter: a pane that is not parked gets no extra key (didi T1).
+    expect(f.enters.n).toBe(1)
+  })
+
+  it('a permission prompt that appears after the Enter gets NO further Enter (it would answer Yes)', async () => {
+    const f = fake([IDLE, IDLE, PERMISSION])
+    const o = await nudgePane(f.deps, 'continue', { ...FAST, watchMs: 2000 })
+    expect(o.kind).toBe('not-started')
+    expect(f.typed).toEqual(['continue'])
+    expect(f.enters.n).toBe(1)
   })
 
   it('a failed capture while watching is never read as started', async () => {
@@ -254,5 +299,14 @@ describe('nudgePane: dry run, start, and not-started', () => {
     f.deps.capture = () => (n++ < 2 ? IDLE : null)
     const o = await nudgePane(f.deps, 'continue', { ...FAST, watchMs: 1000 })
     expect(o.kind).toBe('not-started')
+  })
+})
+
+describe('isCallersOwnSession: the tool never types into the session it runs in (didi L1)', () => {
+  it('same session is refused, another one is not, outside tmux is not', () => {
+    expect(isCallersOwnSession('agent-ford', 'agent-ford')).toBe(true)
+    expect(isCallersOwnSession('agent-dexter', 'agent-ford')).toBe(false)
+    expect(isCallersOwnSession('agent-ford', null)).toBe(false)
+    expect(isCallersOwnSession('agent-ford', '')).toBe(false)
   })
 })
