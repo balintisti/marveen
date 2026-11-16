@@ -41,7 +41,9 @@ const base: IdleAgentInput = {
   ownWorkCount: 0, workCheckKind: 'assigned_open_cards', paneApiError: true,
 }
 
-/** The expression decideIdleAlertCore held before the table (983052ed2, idle-agent.ts:607-609), term by term. */
+/** The expression decideIdleAlertCore held before the table (983052ed2, idle-agent.ts:607-609), term by term,
+ *  WITHOUT the standstill term: card 62b67531 (marveen 65821) took it out on purpose, so a declared standstill
+ *  no longer blocks the resume of a cut turn. standstillActive stays in the input space below to prove it moves nothing. */
 const OLD_TERMS: Record<string, (i: IdleAgentInput) => boolean> = {
   running: (i) => i.running,
   paneApiError: (i) => i.paneApiError === true,
@@ -49,11 +51,10 @@ const OLD_TERMS: Record<string, (i: IdleAgentInput) => boolean> = {
   runningSubagents: (i) => (i.runningSubagents ?? 0) <= 0,
   paneUsageLimited: (i) => i.paneUsageLimited !== true,
   pendingMessages: (i) => i.pendingMessages === 0,
-  standstillActive: (i) => i.standstillActive !== true,
 }
 const oldSeen = (i: IdleAgentInput): boolean =>
   i.running && i.paneApiError === true && i.paneIdle === true && (i.runningSubagents ?? 0) <= 0 &&
-  i.paneUsageLimited !== true && i.pendingMessages === 0 && i.standstillActive !== true
+  i.paneUsageLimited !== true && i.pendingMessages === 0
 
 /** Every value each of the seven fields can take, absent included. */
 function everyInput(): IdleAgentInput[] {
@@ -90,9 +91,9 @@ const CLEAN = { paneApiError: false }
 describe('the conjuncts of "the API-error streak is seen" -- one table, no decision moved', () => {
   const inputs = everyInput()
 
-  it('covers the whole space: 1944 inputs, 8 of them seen', () => {
+  it('covers the whole space: 1944 inputs, 12 of them seen', () => {
     expect(inputs).toHaveLength(2 * 3 * 3 * 4 * 3 * 3 * 3)
-    expect(inputs.filter(oldSeen)).toHaveLength(8)        // absent or 0 sub-agents x absent or false limit x absent or false standstill
+    expect(inputs.filter(oldSeen)).toHaveLength(12)       // absent or 0 sub-agents x absent or false limit x ANY standstill (62b67531)
   })
 
   it('is seen exactly when the expression it replaced was, and names exactly the terms that were false', () => {
@@ -173,7 +174,6 @@ describe('explainNoApiErrorResume -- the reason, by name', () => {
     ['runningSubagents', { runningSubagents: 2 }, { runningSubagents: 2 }],
     ['paneUsageLimited', { paneUsageLimited: true }, { paneUsageLimited: true }],
     ['pendingMessages', { pendingMessages: 3 }, { pendingMessages: 3 }],
-    ['standstillActive', { standstillActive: true }, { standstillActive: true }],
   ])('blocked by %s: the field is named and its value is on the line', (name, over, value) => {
     const n = note(runTicks([over]).ticks[0])
     expect(n).toMatchObject({ why: 'blocked', blockedBy: [name], ...value, confirmTicks: 0 })
@@ -181,7 +181,14 @@ describe('explainNoApiErrorResume -- the reason, by name', () => {
 
   it('names every blocker when there are several, and what the tick decided instead', () => {
     const n = note(runTicks([{ pendingMessages: 1, standstillActive: true, runningSubagents: 1 }]).ticks[0])
-    expect(n).toMatchObject({ why: 'blocked', blockedBy: ['runningSubagents', 'pendingMessages', 'standstillActive'], decision: 'subagents-running' })
+    expect(n).toMatchObject({ why: 'blocked', blockedBy: ['runningSubagents', 'pendingMessages'], standstillActive: true, decision: 'subagents-running' })
+  })
+
+  it('a declared standstill is NOT a blocker (card 62b67531): no line on the resume tick, the confirming line names no blocker', () => {
+    const { ticks } = runTicks([{ standstillActive: true }, { standstillActive: true }])
+    expect(note(ticks[0])).toMatchObject({ why: 'confirming', blockedBy: [], standstillActive: true })
+    expect(ticks[1].decision.reason).toBe('resume-api-error')
+    expect(note(ticks[1])).toBeNull()
   })
 
   it('a blocked tick ZEROES the confirmation, and the line shows the counter it threw away', () => {

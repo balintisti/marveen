@@ -621,7 +621,10 @@ const API_ERROR_SEEN_WHEN = {
   runningSubagents: (i) => (i.runningSubagents ?? 0) <= 0,
   paneUsageLimited: (i) => i.paneUsageLimited !== true,
   pendingMessages: (i) => i.pendingMessages === 0,
-  standstillActive: (i) => i.standstillActive !== true,
+  // NO standstill term (card 62b67531, marveen 65821): a declared standstill says "hand this agent
+  // no new work", not "leave a turn that was cut mid-work broken". It silences the idle wake and the
+  // no-work notice further down; the resume of a cut turn goes through, bounded by API_ERROR_PARK_AFTER.
+  // Measured before: mandark stood 15:53-17:59 on 2026-11-15 with 46 ticks "blocked by standstillActive", 0 resumes.
 } satisfies Partial<Record<keyof IdleAgentInput, (input: IdleAgentInput) => boolean>>
 export type ApiErrorConjunct = keyof typeof API_ERROR_SEEN_WHEN
 const API_ERROR_CONJUNCTS = Object.keys(API_ERROR_SEEN_WHEN) as ApiErrorConjunct[]
@@ -714,8 +717,8 @@ function decideIdleAlertCore(
   if (subagentsSince === null && state.lastSubagentNoticeAt != null) state = { ...state, lastSubagentNoticeAt: null }
   // The mid-turn API error streak (card 843a9ab6). Seen = a running agent whose pane is idle, ends in
   // the error, shows NO background work (the hold owns that case; the streak does not run while it
-  // lasts), is not usage-limited, has no waking letter on its way and no declared standstill. Any
-  // tick that is not "seen" ends the streak, so two ticks must be CONSECUTIVE.
+  // lasts), is not usage-limited and has no waking letter on its way. A declared standstill does NOT block it
+  // (card 62b67531). Any tick that is not "seen" ends the streak, so two ticks must be CONSECUTIVE.
   const apiErrorSeen = apiErrorBlockers(input).length === 0
   if (!apiErrorSeen && (state.apiErrorSinceMs != null || (state.apiErrorTicks ?? 0) > 0 || state.apiErrorHandledSince != null)) {
     state = { ...state, apiErrorSinceMs: null, apiErrorTicks: 0, apiErrorHandledSince: null }
@@ -865,7 +868,7 @@ function decideIdleAlertCore(
   // kind means "I am supposed to have work, and I have none".
   //
   // A DECLARED STANDSTILL silences both the wake and the no-work notice, and only while it
-  // holds (card 00f7455b). It clears the spell like usage-limited does, so the agent gets a
+  // holds (card 00f7455b). Not the API-error resume above, which comes first (card 62b67531). It clears the spell like usage-limited does, so the agent gets a
   // full sustained window after the stop ends, not a wake at the first tick.
   if (input.standstillActive === true) return clear('standstill')
   if ((input.ownWorkCount ?? 0) <= 0 && (input.workCheckKind ?? '') === 'none') {

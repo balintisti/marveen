@@ -160,13 +160,35 @@ describe('decideIdleAlert -- resume-api-error', () => {
 
   it.each([
     ['a waking letter on its way', { pendingMessages: 1 }],
-    ['a declared standstill', { standstillActive: true }],
     ['a busy pane', { paneIdle: false }],
     ['the plan limit reached', { paneUsageLimited: true }],
     ['a stopped agent', { running: false }],
     ['an unreadable pane', { paneIdle: null }],
   ])('%s: never a resume', (_n, over) => {
     expect(runTicks(Array(6).fill(over), T0).reasons).not.toContain('resume-api-error')
+  })
+
+  // Card 62b67531 (marveen 65821, option b): a declared standstill says "no new work", not "leave a
+  // cut turn broken". It used to be a blocker here: mandark 2026-11-15, 46 ticks blocked, 0 resumes.
+  it('a declared standstill does NOT stop the resume of a cut turn: confirmed, then resumed', () => {
+    const { reasons } = runTicks([{ standstillActive: true }, { standstillActive: true }, { standstillActive: true }], T0)
+    expect(reasons.slice(0, 2)).toEqual(['api-error-confirming', 'resume-api-error'])
+    expect(reasons.filter((r) => r === 'resume-api-error')).toHaveLength(1)        // still one answer per streak
+  })
+
+  it(`a declared standstill keeps the loop limit: ${API_ERROR_PARK_AFTER} errors with no response -> the coordinator, not a third resume`, () => {
+    const S = { standstillActive: true }
+    const NO = { standstillActive: true, apiErrorProgressSinceResume: false }
+    const a = runTicks([S, S], T0)
+    const b = runTicks([{ ...S, paneApiError: false }, NO, NO], T0 + 2 * TICK, a.state)
+    const c = runTicks([{ ...S, paneApiError: false }, NO, NO], T0 + 5 * TICK, b.state)
+    expect([a.reasons[1], b.reasons[2], c.reasons[2]]).toEqual(['resume-api-error', 'resume-api-error', 'api-error-repeat'])
+  })
+
+  it('CONTROL: a declared standstill still silences a plain idle pane (no error): no wake, no notice', () => {
+    const { reasons, decisions } = runTicks(Array(20).fill({ standstillActive: true, paneApiError: false, ownWorkCount: 2 }), T0)
+    expect(decisions.some((d) => d.alert)).toBe(false)
+    expect(new Set(reasons)).toEqual(new Set(['standstill']))
   })
 
   it('CONTROL: without the detector flag the same agent takes the old path (not-sustained, then the old stages)', () => {
@@ -465,6 +487,24 @@ describe('tick() -- the API-error resume, end to end', () => {
     at(36, ERR_PANE)
     expect(toX()).toHaveLength(1)
     expect(toX()[0].content).toContain('megszakadt 12:33-kor')
+  })
+
+  it('STANDSTILL (card 62b67531): x declared a standstill in workcheck.json -> the cut turn is still resumed on the second tick', () => {
+    const until = new Date(NOW + 2 * 60 * 60_000).toISOString()
+    writeFileSync(join(hoisted.root, 'agents', 'x', 'workcheck.json'), JSON.stringify({ kind: 'assigned_open_cards', standstill: { reason: 'budget', until } }))
+    at(0, ERR_PANE)
+    expect(toX()).toHaveLength(0)
+    at(3, ERR_PANE)
+    expect(toX()).toHaveLength(1)
+    expect(toX()[0].content).toBe(`a turnod API-hibával megszakadt 12:00-kor. ${API_ERROR_RESUME_FACTS}`)
+  })
+
+  it('STANDSTILL CONTROL: the same standstill, a healthy idle pane for an hour -> nothing to x, nothing to the coordinator', () => {
+    const until = new Date(NOW + 2 * 60 * 60_000).toISOString()
+    writeFileSync(join(hoisted.root, 'agents', 'x', 'workcheck.json'), JSON.stringify({ kind: 'assigned_open_cards', standstill: { reason: 'budget', until } }))
+    for (let m = 0; m <= 60; m += 3) at(m, `⏺ Rendben, folytatom.\n\n${BOX}\n${FOOT}`)
+    expect(toX()).toHaveLength(0)
+    expect(toCoordinator()).toHaveLength(0)
   })
 
   it('a healthy idle pane after the error is gone is left to the old path', () => {
