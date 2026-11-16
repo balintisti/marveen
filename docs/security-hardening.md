@@ -41,14 +41,20 @@ place.
 ## What it does
 
 `BASH_EGRESS_DENY` in `src/web/agent-scaffold.ts` is the single source of truth
-for a small `permissions.deny` list that lands in **every** agent's
-`settings.json`:
+for the EGRESS part of `permissions.deny`, and it lands in **every** agent's
+`settings.json` by three routes:
 
 - on spawn, via `writeAgentSettingsFromProfile()`,
 - on server startup, via `ensureBashEgressDeny()` (existing fleet, and the main
   agent -- see the scope note below),
 - on scaffold, via `templates/settings.json.template` (so the next agent created
   starts gated -- a parity test keeps the template and the constant in step).
+
+It is **not** the only list any more: since DENYARGS925 a second constant, the
+fleet deny FLOOR, feeds the same block. The two are described together in the
+next section, because the difference between them is not what they deny but how
+they REACH an agent -- and that is the part that decides what happens when one
+of them is edited.
 
 Denied: `curl` to an `https://` URL, and `wget` / `nc` / `ncat` / `telnet`
 outright. A `deny` rule is checked **before** the
@@ -124,6 +130,50 @@ is case-insensitive, and Claude Code's own `Bash(...)` deny glob is case-sensiti
 so before this `Curl https://...` passed both layers. `wget` / `nc` / `ncat` / `telnet` stay denied whole; the main
 agent always keeps the full list. A new entry reaches a running agent at its next
 spawn: the startup migration only adds rules, it never removes one.
+
+## Two lists, and why they are not one
+
+Since DENYARGS925 (2026-09-25) `permissions.deny` is fed by TWO constants in
+`src/web/agent-scaffold.ts`. Reading either one as "the" deny list is the
+mistake this section exists to prevent.
+
+| | `BASH_EGRESS_DENY` | `FLEET_BASELINE_DENY` |
+|---|---|---|
+| covers | shell URL-fetch verbs: `curl` to `https://`, `wget`, `nc`, `ncat`, `telnet` | the fleet FLOOR: key/credential dirs, `.env`, `sudo`, `rm -rf` of `$HOME` and `/`, force-push (friction only), the unsafe browser-code MCP tool (except for the QA agents, see below) |
+| sub-agent gets it | spawn + server-startup migration + scaffold template | **spawn only** (`writeAgentSettingsFromProfile`) |
+| main agent gets it | `ensureBashEgressDeny()` into its own config dir | the repo's tracked `.claude/settings.json` (the scaffold never writes the main agent, #1305) |
+| parity guarded by | `bash-egress-deny.test.ts` (template vs constant) | `fleet-baseline-deny.test.ts` (shipped file vs constant, both directions) |
+
+**One named exemption.** `QA_BROWSER_RUN_CODE_AGENTS` (`mandark`, `didi`, `trillian`) do NOT get
+`mcp__playwright__browser_run_code_unsafe`: they log in to the app under test through it, and the
+alternatives were measured dead (card 6525aba3, marveen's decision in comment 50821).
+`fleetBaselineDenyFor(name)` drops exactly that one rule, on an exact name match; every other agent,
+and every agent created later, gets the whole floor. The list cannot lift any other rule.
+
+Two consequences follow from the row that differs, and both are deliberate:
+
+**The floor has no startup migration.** An agent that is running right now and is
+not respawned keeps whatever deny list it started with; the egress rules would be
+merged into its file at the next server start, the floor would not. The floor
+therefore takes effect at the next spawn, not at the next server restart. This is
+the honest limit, not a claim of immediate fleet-wide cover.
+
+**The floor is deliberately NOT in `templates/settings.json.template`.** Measured
+2026-09-25: after `scaffoldAgentDir()` the template-derived file carries 10 deny
+rules and **zero** of the floor's 13 -- but on the create path
+(`routes/agents.ts`) `scaffoldAgentDir()`, `writeAgentModel()`,
+`writeAgentSecurityProfile()` and `writeAgentSettingsFromProfile()` are four
+SYNCHRONOUS calls with no await and no session launch between them, and on the
+spawn path the profile write runs before the Claude Code process starts. So the
+template-only state exists on disk but no session reads it, and
+`loadProfileTemplate()` cannot throw its way around that: a missing or unparseable
+profile falls back to `default` and finally to `HARDCODED_DEFAULT_PROFILE`. The
+live fleet agrees: the leanest agent here carries 16 rules, none carries 10.
+
+If a future change adds a route that scaffolds WITHOUT writing the profile
+straight after, that reasoning expires and the floor belongs in the template too.
+The parity test names this condition so the decision can be re-measured rather
+than re-argued.
 
 ## Where the main agent's copy goes
 

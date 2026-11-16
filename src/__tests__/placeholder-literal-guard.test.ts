@@ -24,29 +24,58 @@ const PLACEHOLDER = /\$\{[A-Za-z_$][\w$.]*\}/
 
 interface Hit { file: string; line: number; text: string }
 
+// THE ONE DELIBERATE EXCEPTION (card 6525aba3, port of upstream 29d7f340): the elements of the
+// FLEET_BASELINE_DENY array in agent-scaffold.ts carry `${HOME}` in a plain string ON PURPOSE. They
+// are profile rules, and agent-scaffold.ts runs every one through resolveProfilePlaceholders(rule, ctx)
+// before it is written, exactly like profile.filesystem.deny. The exception is as narrow as it can
+// be stated: that file, that one array, that one placeholder name. Anything else in the same file
+// (another array, another placeholder) is still a hit, and the control below holds that.
+const RESOLVED_RULE_FILE = 'src/web/agent-scaffold.ts'
+const RESOLVED_RULE_ARRAY = 'FLEET_BASELINE_DENY'
+
+function isResolvedProfileRule(file: string, node: ts.StringLiteral): boolean {
+  if (file !== RESOLVED_RULE_FILE) return false
+  // every placeholder in the text must be ${HOME}
+  const names = [...node.text.matchAll(/\$\{([^}]*)\}/g)].map((m) => m[1])
+  if (names.length === 0 || names.some((n) => n !== 'HOME')) return false
+  const arr = node.parent
+  if (!arr || !ts.isArrayLiteralExpression(arr)) return false
+  const decl = arr.parent
+  return !!decl && ts.isVariableDeclaration(decl) && ts.isIdentifier(decl.name) && decl.name.text === RESOLVED_RULE_ARRAY
+}
+
+function scanText(file: string, source: string): { hits: Hit[]; literals: number } {
+  const hits: Hit[] = []
+  let literals = 0
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true)
+  const walk = (node: ts.Node): void => {
+    // `isStringLiteral` is true for '...' and "..." and FALSE for template literals, which is
+    // exactly the distinction that matters. A line-based regex cannot make it: jarvis's first
+    // pattern returned ten hits, all of them apostrophes INSIDE backtick strings, and my own
+    // earlier census had the same fault. The parser knows which is which.
+    if (ts.isStringLiteral(node)) {
+      literals++
+      if (PLACEHOLDER.test(node.text) && !isResolvedProfileRule(file, node)) {
+        hits.push({
+          file,
+          line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
+          text: node.text.slice(0, 80),
+        })
+      }
+    }
+    node.forEachChild(walk)
+  }
+  walk(sf)
+  return { hits, literals }
+}
+
 function scanSource(files: string[]): { hits: Hit[]; literals: number } {
   const hits: Hit[] = []
   let literals = 0
   for (const file of files) {
-    const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true)
-    const walk = (node: ts.Node): void => {
-      // `isStringLiteral` is true for '...' and "..." and FALSE for template literals, which is
-      // exactly the distinction that matters. A line-based regex cannot make it: jarvis's first
-      // pattern returned ten hits, all of them apostrophes INSIDE backtick strings, and my own
-      // earlier census had the same fault. The parser knows which is which.
-      if (ts.isStringLiteral(node)) {
-        literals++
-        if (PLACEHOLDER.test(node.text)) {
-          hits.push({
-            file,
-            line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
-            text: node.text.slice(0, 80),
-          })
-        }
-      }
-      node.forEachChild(walk)
-    }
-    walk(sf)
+    const r = scanText(file, readFileSync(file, 'utf8'))
+    hits.push(...r.hits)
+    literals += r.literals
   }
   return { hits, literals }
 }
@@ -91,6 +120,23 @@ describe('egy jelolo sima sztringben SOHA nem helyettesitodik be', () => {
     }
     walk(sf)
     expect(found).toEqual([])
+  })
+
+  it('a KIVETEL SZUK: csak az agent-scaffold FLEET_BASELINE_DENY tombjenek ${HOME} elemei mentesek', () => {
+    const rule = "const FLEET_BASELINE_DENY = ['Read(${HOME}/.ssh/**)', 'Bash(rm -rf ${HOME}:*)']"
+    // positive: the real shape, in the real file, is not a hit
+    expect(scanText('src/web/agent-scaffold.ts', rule).hits).toEqual([])
+    // the same text in any other file is a hit (both elements)
+    expect(scanText('src/web/other.ts', rule).hits).toHaveLength(2)
+    // another array in the same file is a hit
+    expect(scanText('src/web/agent-scaffold.ts', "const OTHER = ['Read(${HOME}/.x)']").hits).toHaveLength(1)
+    // another placeholder inside the exempt array is a hit
+    expect(scanText('src/web/agent-scaffold.ts', "const FLEET_BASELINE_DENY = ['Read(${sender}/.x)', 'Read(${HOME}/${x})']").hits).toHaveLength(2)
+    // a bare plain string (not an array element) with ${HOME} in that file is a hit
+    expect(scanText('src/web/agent-scaffold.ts', "const x = 'Read(${HOME}/.x)'").hits).toHaveLength(1)
+    // the exempt NAME holding a string that is not an array element is a hit (didi A5 G3: without this
+    // control the ArrayLiteralExpression check could be dropped and every case above would still pass)
+    expect(scanText('src/web/agent-scaffold.ts', "const FLEET_BASELINE_DENY = ('Read(${HOME}/.x)')").hits).toHaveLength(1)
   })
 
   it('a TELJES forrasfaban egyetlen sima sztring sem hordoz jelolot', () => {
