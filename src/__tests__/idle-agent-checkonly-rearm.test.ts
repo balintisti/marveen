@@ -310,6 +310,24 @@ describe('the decision and the message use ONE split', () => {
       }
     }
   }
+  // Card 2e78cf63 (trillian 66350): the table above leaves the floor section out only when the page reaches the cap,
+  // and the page length includes the install path, so on a short path that branch never ran. This case does not
+  // depend on the path: twelve pickable cards with full-width titles fill the page long before the floor section
+  // (filled LAST) can open, at ANY install path length.
+  it('a floor section that does not fit is left out, and the +N line counts every card not named', () => {
+    const fat = (id: string, status: string) => ({ id, status, priority: 'urgent', title: 'a'.repeat(80) })
+    const pickable = Array.from({ length: 12 }, (_, i) => fat(`pick${String(i).padStart(4, '0')}`, 'planned'))
+    const floor = ['flr00001', 'flr00002', 'flr00003'].map((id) => fat(id, 'waiting'))
+    const list = [...pickable, ...floor]
+    const text = buildWakeMessage('computress', 20, list.length, list, Date.UTC(2026, 9, 23), 'assigned_open_cards')
+    expect(splitWakeItems('assigned_open_cards', list).floor).toHaveLength(3) // control: the three really are floor items
+    expect(/^PADLO-LEJARAT \(\d+\)/m.test(text)).toBe(false) // control: this case really leaves the section out
+    const named = (text.match(/^ {2}(?:pick|flr)\d{4,5}/gm) ?? []).length
+    expect(named).toBeGreaterThan(0)
+    expect(named).toBeLessThan(list.length)
+    const more = Number(/^\+(\d+) tovabbi a tablan$/m.exec(text)?.[1] ?? NaN)
+    expect(named + more).toBe(list.length) // K7: total without floor.length makes this 3 short
+  })
   it('CONTROL: the table holds both outcomes', () => {
     expect(rearm('assigned_open_cards', mixes.floorOnly)).toBe(12 * H)
     expect(rearm('assigned_open_cards', mixes.pickable)).toBe(4 * H)
