@@ -45,7 +45,7 @@ vi.mock('../web/main-agent.js', () => ({ MAIN_CHANNELS_SESSION: 'marveen-channel
 
 
 
-const { resumePrompt, handoffPrompt } = await import('../web/context-guard-runner.js')
+const { resumePrompt, handoffPrompt, cardRestartResumePrompt } = await import('../web/context-guard-runner.js')
 
 // The longest agent names in the fleet make the longest prompt (the name rides in the text four times).
 const AGENTS = ['marveen', 'computress', 'dexter', 'trillian']
@@ -145,4 +145,24 @@ describe('resume prompt (the "Friss kontextussal indultál" template, 775 per we
     expect(variants('marveen')[0][1]).not.toContain('jelezz a csatornádon')
     expect(variants('dexter')[0][1]).toContain('jelezz a csatornádon, hogy folytatod')
   })
+})
+
+describe('card-boundary resume prompt (cardRestartResumePrompt, card 00262e3f)', () => {
+  // The worst case: the longest agent names, the full 6-row list of own open requests, every head at its 90 character cut.
+  const rows = Array.from({ length: 6 }, (_v, i) => ({ id: 10021400 + i, to_agent: 'computress', head: 'x'.repeat(120) }))
+  const boundary = { cardId: '2e78cf63', toStatus: 'testing' } as Parameters<typeof cardRestartResumePrompt>[1]
+  for (const name of AGENTS) {
+    it(`${name}, swallow mode off: the shared tail keeps its operative steps`, () => {
+      const p = cardRestartResumePrompt(name, boundary, { total: 9, rows }, false)
+      for (const text of [`GET /api/messages?agent=${name}`, '[RESTART-ABLAK] <id> felvéve', 'NE válts ágat', 'worktree', 'context-guard-restart-recovery']) {
+        expect(p).toContain(text)
+      }
+    })
+    // No cap was ever decided for this template (marveen's 1000 / 1700 are the handoff resume's): the live text
+    // carries the ~1100 character close directive, the body ~800 and a full list ~700, worst case 2625. The cap
+    // below only stops it from growing back; a real cap is marveen's call (card 2e78cf63).
+    it(`${name}, swallow mode live: at most 2700 characters with a full outbound list`, () => {
+      expect(cardRestartResumePrompt(name, boundary, { total: 9, rows }, true).length).toBeLessThanOrEqual(2700)
+    })
+  }
 })

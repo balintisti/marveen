@@ -296,7 +296,11 @@ describe('the decision and the message use ONE split', () => {
           const s = splitWakeItems(kind, list, bounced)
           expect(/^FELVEHETO (MUNKA|ELLENORZES) \(\d+\)/m.test(text)).toBe(s.work.length > 0)
           expect(/^VISSZADOBOTT JAVITAS \(\d+\)/m.test(text)).toBe(s.bounced.length > 0)
-          expect(/^PADLO-LEJARAT \(\d+\)/m.test(text)).toBe(s.floor.length > 0)
+          // The page is capped (WAKE_MAX_CHARS, card 2e78cf63) and the floor section is filled LAST, so beside a
+          // bounced or owed section it can be left out: then the closing "+N tovabbi a tablan" line counts it.
+          const floorShown = /^PADLO-LEJARAT \(\d+\)/m.test(text)
+          if (s.floor.length === 0) expect(floorShown).toBe(false)
+          else expect(floorShown || /^\+\d+ tovabbi a tablan/m.test(text)).toBe(true)
         })
       }
     }
