@@ -82,6 +82,7 @@ describe('readPane -- a staleCounterOnly BEKOTESE (b5bff340)', () => {
       idle: null,
       staleCounterOnly: false,
       paneReason: 'unknown-state',
+      paneTail: ['valamilyen pane-szoveg'],          // az osztalyozhatatlan kep vege, hogy a kovetkezo riasztasbol kiderulhessen az ok (8f4b2cf4)
       runningSubagents: 0,
       apiError: false,                               // ugyanabbol a kepbol, osztalyozhatatlan panelrol is (1f990d74)
     })

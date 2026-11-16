@@ -486,6 +486,24 @@ export function lastActionAtMs(
 // a KOZTUK LEVO BEKOTES viszont sehol. Merve: a `staleCounterOnly` szamitasat elvagva
 // mind a 3803 teszt ZOLD maradt.
 // Ez nem viselkedes-valtozas: csak lathatova teszi a fuggvenyt a tesztnek.
+/**
+ * The last non-empty lines of a pane, each cut short, for the log line that says the guard is blind
+ * (card 8f4b2cf4). The 'unknown-state' alert has fired 17 times in three days (measured in
+ * store/dashboard.log, 2026-11-16: computress 4, dexter 4, marveen 4, didi 2, trillian 2, ford 1),
+ * and the alert text only GUESSED a cause (a pinned title banner) because no unknown frame was ever
+ * kept: the classifier returned 'unknown' for a pane that, read again minutes later, classifies as
+ * idle. 'unknown' means one thing in detectPaneState: no idle footer line matched. The footer and
+ * the lines above it are what tells which footer shape the classifier did not know.
+ */
+export function paneTailForLog(pane: string, lines = 6, maxChars = 160): string[] {
+  return pane
+    .split('\n')
+    .map((l) => l.replace(/\s+$/, ''))
+    .filter((l) => l.trim() !== '')
+    .slice(-lines)
+    .map((l) => (l.length > maxChars ? `${l.slice(0, maxChars)}...` : l))
+}
+
 export function readPane(agent: string): {
   idle: boolean | null
   staleCounterOnly: boolean
@@ -493,6 +511,8 @@ export function readPane(agent: string): {
   /** The pane ends in a mid-turn API error (detectsMidTurnApiError, card 843a9ab6). */
   apiError?: boolean
   paneReason?: PaneUnreadableReason
+  /** Only for 'unknown-state': the last lines of the capture the classifier could not place. */
+  paneTail?: string[]
   runningSubagents?: number
 } {
   // WHICH branch produced `idle: null` -- three of them do, and the owner-facing
@@ -511,7 +531,7 @@ export function readPane(agent: string): {
   // The error is read off an unclassifiable pane too (card 1f990d74): `idle: null` already keeps the
   // resume from going out, and the tick's "no resume" line can then say so instead of saying nothing.
   if (state === 'unknown') {
-    return { idle: null, staleCounterOnly: false, paneReason: 'unknown-state', runningSubagents, apiError: detectsMidTurnApiError(pane) }
+    return { idle: null, staleCounterOnly: false, paneReason: 'unknown-state', paneTail: paneTailForLog(pane), runningSubagents, apiError: detectsMidTurnApiError(pane) }
   }
   return {
     idle: state === 'idle',
@@ -893,7 +913,7 @@ export function tick(): void {
       if (decision.reason === 'pane-unreadable') {
         alerts.push({ kind: 'pane-unreadable', agent, paneReason: paneRead.paneReason })
         logger.warn(
-          { idleGuard: true, agent, paneReason: paneRead.paneReason ?? null },
+          { idleGuard: true, agent, paneReason: paneRead.paneReason ?? null, ...(paneRead.paneTail ? { paneTail: paneRead.paneTail } : {}) },
           'idle guard: pane unreadable, guard blind for this agent',
         )
         continue
