@@ -6,6 +6,7 @@ import {
   decayMemories as dbDecay,
   pruneAuditLogs,
   pruneTokenUsage,
+  prunePowerRouteAudit,
   getMemoriesForChat,
 } from './db.js'
 import { runAgent } from './agent.js'
@@ -110,6 +111,7 @@ export function runDecaySweep(): void {
   dbDecay()
   pruneAuditLogs()
   const tokenRowsPruned = pruneTokenUsage()
+  prunePowerRouteAudit()
   logger.info({ tokenRowsPruned }, 'Memoria leepulesi sopres vegrehajtva')
 }
 

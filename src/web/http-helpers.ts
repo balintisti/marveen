@@ -31,7 +31,24 @@ export class RequestBodyTooLargeError extends Error {
   }
 }
 
-export function readBody(
+// Card 3fc4df30 (audit mode): the body a handler already consumed, kept for the life of the request so the
+// power-route audit can name the fields and target AFTER the response, without a second reader on the stream
+// (a second 'data' listener would change when the handler's own chunks flow). Weak: gone with the request.
+const readBodies = new WeakMap<http.IncomingMessage, Buffer>()
+export function bodyReadFor(req: http.IncomingMessage): Buffer | undefined {
+  return readBodies.get(req)
+}
+
+export async function readBody(
+  req: http.IncomingMessage,
+  opts: { maxBytes?: number } = {},
+): Promise<Buffer> {
+  const body = await readBodyOnce(req, opts)
+  readBodies.set(req, body)
+  return body
+}
+
+function readBodyOnce(
   req: http.IncomingMessage,
   opts: { maxBytes?: number } = {},
 ): Promise<Buffer> {

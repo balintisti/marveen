@@ -96,6 +96,7 @@ import { tryHandleSpans } from './web/routes/spans.js'
 import { tryHandleSkillUsage } from './web/routes/skill-usage.js'
 import { tryHandleSettings } from './web/routes/settings.js'
 import { tryHandleAuditLog } from './web/routes/audit-log.js'
+import { auditPowerRoute } from './web/power-route-audit.js'
 import { tryHandleFleetQ } from './web/routes/fleet-q.js'
 import { tryHandleStatic } from './web/routes/static.js'
 import { tryHandleVoice } from './web/routes/voice.js'
@@ -220,6 +221,8 @@ export function startWebServer(port = 3420): http.Server {
     }
 
     try {
+      // Card 3fc4df30: audit mode for the routes that grant power. Log-only; it registers a listener and returns.
+      auditPowerRoute({ req, res, path, method, auth: ctxAuth })
       const routeCtx: RouteContext = { req, res, path, method, url, fedPeer: fedPeerForCtx, auth: ctxAuth }
 
       if (await tryHandleAuth(routeCtx)) return
