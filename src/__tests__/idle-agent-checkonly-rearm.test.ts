@@ -300,7 +300,12 @@ describe('the decision and the message use ONE split', () => {
           // bounced or owed section it can be left out: then the closing "+N tovabbi a tablan" line counts it.
           const floorShown = /^PADLO-LEJARAT \(\d+\)/m.test(text)
           if (s.floor.length === 0) expect(floorShown).toBe(false)
-          else expect(floorShown || /^\+\d+ tovabbi a tablan/m.test(text)).toBe(true)
+          else if (!floorShown) {
+            // Left out: the closing line must count AT LEAST every floor item (didi K7: total without floor.length).
+            const more = /^\+(\d+) tovabbi a tablan/m.exec(text)
+            expect(more, 'floor section left out without a +N line').not.toBeNull()
+            expect(Number(more![1])).toBeGreaterThanOrEqual(s.floor.length)
+          }
         })
       }
     }

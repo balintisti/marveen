@@ -8,8 +8,8 @@ const mkTmp = tmpDirs()
 // 49% of the fleet's weekly message characters, so each one has a length cap AND a list of
 // OPERATIVE steps that must survive the cut ("a fresh session does not follow links before
 // acting"). A shortening that drops a step, or a later edit that grows the text back, fails here.
-// Caps: resume prompt <= 1000 (900 in marveen's decision; didi's review 56939 L2 put four operative steps back, the worst case is 992), critical handoff request <= 300 (tetlen-or <= 500 is pinned in
-// idle-wake-template-length.test.ts).
+// Caps: resume prompt <= 1000 (900 in marveen's decision; didi's review 56939 L2 put four operative steps back, the worst case is 992), critical handoff request <= 300 (the idle-agent page, WAKE_MAX_CHARS 1100 in
+// idle-agent.ts, is pinned in idle-wake-template-length.test.ts).
 
 const SANDBOX = mkTmp('template-length-test-')
 
