@@ -52,7 +52,7 @@ export function validGuardState(raw: unknown): GuardState | null {
   if (!(stale === null || stale === 'unknown' || num(stale))) return null
   if (!optNumOrNull(r['backgroundDeferSinceMs']) || !optNumOrNull(r['backgroundPressureSinceMs'])) return null
   if (!optNum(r['requestedAtMs']) || !optNum(r['startThresholdPct']) || !optNum(r['releaseAttempts'])) return null
-  if (!optNum(r['apiErrorResends'])) return null
+  if (!optNum(r['apiErrorResends']) || !optNum(r['apiErrorHeldResumes']) || !optNum(r['apiErrorHeldResumedAtMs'])) return null
   if (!(r['noPressure'] === undefined || typeof r['noPressure'] === 'boolean')) return null
   // A boundary that does not read back is not dropped on its own: without it the fresh session
   // would be sent to a HANDOFF.md nobody wrote. The whole state is refused, and the caller says so.
@@ -74,6 +74,8 @@ export function validGuardState(raw: unknown): GuardState | null {
   if (r['startThresholdPct'] !== undefined) state.startThresholdPct = r['startThresholdPct'] as number
   if (r['releaseAttempts'] !== undefined) state.releaseAttempts = r['releaseAttempts'] as number
   if (r['apiErrorResends'] !== undefined) state.apiErrorResends = r['apiErrorResends'] as number
+  if (r['apiErrorHeldResumes'] !== undefined) state.apiErrorHeldResumes = r['apiErrorHeldResumes'] as number
+  if (r['apiErrorHeldResumedAtMs'] !== undefined) state.apiErrorHeldResumedAtMs = r['apiErrorHeldResumedAtMs'] as number
   if (cardRestart !== undefined) state.cardRestart = cardRestart
   return state
 }
