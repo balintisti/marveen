@@ -40,7 +40,7 @@ const configText = (o: Record<string, unknown> = BASE_CONFIG): string => `${JSON
 
 const ctx: SeatContext = {
   coordinatorIds: ['marveen'],
-  knownModels: ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-2'],
+  knownModels: ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-2', 'deepseek-flash'],
   storeDir: STORE,
   agentExists: (a) => a === 'ford' || a === 'dexter',
 }
@@ -70,6 +70,8 @@ interface FakeOpts {
   /** Make the write land different bytes than asked. */
   corruptWrite?: boolean
   files?: Record<string, string>
+  /** What the launcher's start check says about the new config (null = it would start). */
+  startProblem?: string | null
 }
 
 function fake(o: FakeOpts = {}): Fake {
@@ -97,6 +99,7 @@ function fake(o: FakeOpts = {}): Fake {
     now: () => '2026-11-16 14:30:00',
     stamp: () => '20261116-143000',
     capturePane: () => (o.pane === undefined ? IDLE : o.pane),
+    startProblem: () => o.startProblem ?? null,
     processFacts: () => frames[Math.min(factsCall++, frames.length - 1)],
     restart: async () => { f.order.push('restart'); f.restarts.n++; return o.restart ?? { ok: true } },
     delay: async () => {},
@@ -112,7 +115,8 @@ describe('validateSeatRequest: refusals before any I/O', () => {
     ['the coordinator', { agent: 'marveen', model: 'claude-opus-5-5' }, /coordinator/],
     ['an unknown agent', { agent: 'nobody', model: 'claude-opus-5-5' }, /unknown agent/],
     ['a path-like agent name', { agent: '../ford', model: 'claude-opus-5-5' }, /not an agent name/],
-    ['an unknown model id', { agent: 'ford', model: 'gpt-9' }, /unknown model id/],
+    ['an unknown model id', { agent: 'ford', model: 'claude-nonesuch-9' }, /unknown model id/],
+    ['a non-Claude model (a setup-token cannot take effect there)', { agent: 'ford', model: 'deepseek-flash' }, /Claude seats only/],
     ['the gift API key as a plan', { agent: 'ford', plan: 'ANTHROPIC_API_KEY_SECOND' }, /API key, not a seat/],
     ['a plan that does not exist', { agent: 'ford', plan: 'harmadik' }, /only plans are elso and masodik/],
     ['a request that moves nothing', { agent: 'ford' }, /nothing to move/],
@@ -257,12 +261,47 @@ describe('runSeatSet: nothing is written unless it is asked for and allowed', ()
     untouched(f)
   })
 
+  it.each([['a line break', 'marveen\nforged line'], ['the field separator', 'a | b'], ['a tab', 'a\tb']])('--by with %s is a usage error and writes nothing', async (_n, by) => {
+    const f = fake()
+    const r = await runSeatSet(f.deps, { agent: 'ford', model: 'claude-opus-5-5' }, ctx, { ...OPTS, by })
+    expect(r.exit).toBe(SEAT_EXIT.USAGE)
+    untouched(f)
+  })
+
   it('a request that changes nothing writes nothing, even with --apply', async () => {
     const f = fake()
     const r = await runSeatSet(f.deps, { agent: 'ford', model: 'claude-sonnet-5-5', plan: 'elso' }, ctx, OPTS)
     expect(r.exit).toBe(SEAT_EXIT.OK)
     expect(r.lines.join('\n')).toContain('nothing to change')
     untouched(f)
+  })
+})
+
+describe('runSeatSet: the launcher start check runs before any write (didi L1)', () => {
+  it('a config the launcher would refuse is refused with nothing written, in a dry run too', async () => {
+    for (const apply of [false, true]) {
+      const f = fake({ startProblem: 'custom-provider' })
+      const r = await runSeatSet(f.deps, { agent: 'ford', plan: 'masodik' }, ctx, { ...OPTS, apply })
+      expect(r.exit).toBe(SEAT_EXIT.REFUSED)
+      expect(r.lines.join('\n')).toContain('custom-provider')
+      expect(r.lines.join('\n')).toContain('stay DOWN')
+      untouched(f)
+    }
+  })
+
+  it('the check sees the config as it WOULD be written', async () => {
+    const seen: string[] = []
+    const f = fake()
+    f.deps.startProblem = (t) => { seen.push(t); return null }
+    await runSeatSet(f.deps, { agent: 'ford', model: 'claude-opus-5-5', plan: 'masodik' }, ctx, { ...OPTS, apply: false })
+    expect(seen).toHaveLength(1)
+    expect(JSON.parse(seen[0])).toMatchObject({ model: 'claude-opus-5-5', oauthTokenFile: planTokenPath('masodik', STORE) })
+  })
+
+  it('a request that changes nothing is not checked (nothing would be written)', async () => {
+    const f = fake({ startProblem: 'custom-provider' })
+    const r = await runSeatSet(f.deps, { agent: 'ford', model: 'claude-sonnet-5-5' }, ctx, OPTS)
+    expect(r.exit).toBe(SEAT_EXIT.OK)
   })
 })
 
@@ -332,12 +371,17 @@ describe('runSeatSet --apply', () => {
     expect(r.lines.join('\n')).toContain('plan token on the process: unknown')
   })
 
-  it('a failed restart call: exit 12, config stays written, ledger no', async () => {
+  it('a failed restart call: exit 12, the old config is put back, and the text does not claim the old seat runs (didi L1b)', async () => {
     const f = fake({ restart: { ok: false, error: 'the dashboard answered HTTP 500' } })
     const r = await runSeatSet(f.deps, { agent: 'ford', model: 'claude-opus-5-5' }, ctx, OPTS)
     expect(r.exit).toBe(SEAT_EXIT.RESTART_FAILED)
     expect(f.writes).toEqual([CONFIG])
-    expect(f.ledger[0]).toContain('restart failed')
+    expect(f.files.get(CONFIG)).toBe(configText())
+    const text = r.lines.join('\n')
+    expect(text).toContain('may be STOPPED')
+    expect(text).toContain('restored from the backup')
+    expect(text).not.toContain('still runs the old seat')
+    expect(f.ledger[0]).toContain('config restored')
   })
 
   it('a write that does not read back as asked: exit 13 and the backup is copied back', async () => {

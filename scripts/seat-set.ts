@@ -14,6 +14,7 @@ import { execFileSync } from 'node:child_process'
 import { appendFileSync, copyFileSync, existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { atomicWriteFileSync } from '../src/web/atomic-write.js'
+import { homedir, userInfo } from 'node:os'
 import {
   SEAT_EXIT,
   runSeatSet,
@@ -93,6 +94,7 @@ async function main(): Promise<number> {
   const proc = await import('../src/web/agent-process.js')
   const names = await import('../src/web/session-names.js')
   const cfg = await import('../src/web/agent-config.js')
+  const oauthMod = await import('../src/web/agent-oauth-token-file.js')
   const appCfg = await import('../src/config.js')
 
   const session = names.sessionNameForAgent(agent)
@@ -168,7 +170,30 @@ async function main(): Promise<number> {
     }
   }
 
+  // The launcher's own start decision, from the same pure functions startAgentProcess runs.
+  const startProblem = (newConfigText: string): string | null => {
+    let c: Record<string, unknown>
+    try { c = JSON.parse(newConfigText) as Record<string, unknown> } catch { return 'config is not valid JSON' }
+    const remote = cfg.resolveRemoteConfig(newConfigText)
+    const model = typeof c.model === 'string' ? c.model : ''
+    const authRaw = c.authMode
+    const decision = oauthMod.decideOwnOauthToken({
+      rawConfigJson: newConfigText,
+      isMainAgent: agent === appCfg.MAIN_AGENT_ID,
+      isRemote: !!(remote.host && remote.workdir),
+      isCustomProvider: typeof c.customProvider === 'string' && c.customProvider.trim() !== '',
+      isClaudeModel: model.startsWith('claude-'),
+      authMode: authRaw === 'own_team' || authRaw === 'api' ? authRaw : 'shared',
+      hasExplicitConfigDir: cfg.resolveClaudeConfigDir(newConfigText, homedir()) !== null,
+      hasClaudePlan: typeof c.claudePlan === 'string' && c.claudePlan.trim() !== '',
+      fleetTokenPath: join(STORE_DIR, '.claude-oauth-token'),
+      uid: typeof process.getuid === 'function' ? process.getuid() : userInfo().uid,
+    })
+    return decision.kind === 'refused' ? `${decision.reason}${decision.detail ? `: ${decision.detail}` : ''}` : null
+  }
+
   const deps: SeatDeps = {
+    startProblem,
     readText,
     copyFile: (from, to) => { copyFileSync(from, to) },
     writeText: (path, text) => {

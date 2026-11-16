@@ -91,6 +91,9 @@ export function validateSeatRequest(req: SeatRequest, ctx: SeatContext): Refusal
   if (req.model !== undefined && !ctx.knownModels.includes(req.model)) {
     return { ok: false, why: `unknown model id "${req.model}": not in the alias table, store/model-choices.json or any agent config` }
   }
+  if (req.model !== undefined && !req.model.startsWith('claude-')) {
+    return { ok: false, why: `"${req.model}" is not a Claude model: seat-set moves Claude seats only (a setup-token cannot take effect on another provider)` }
+  }
   let plan: PlanId | null = null
   if (req.plan !== undefined) {
     if (!(PLAN_IDS as readonly string[]).includes(req.plan)) {
@@ -217,6 +220,13 @@ export interface SeatDeps {
   /** The claude process of the agent's pane, null = none found. */
   processFacts: () => ProcessFacts | null
   restart: () => Promise<{ ok: boolean; error?: string }>
+  /**
+   * The launcher's own start decision for the config as it WOULD be written (oauthTokenFileConflict +
+   * checkOauthTokenFile, the same code startAgentProcess runs). A string = the launcher would refuse
+   * the start; null = it would start. The dashboard restart STOPS the pane before it starts it, so a
+   * config the launcher refuses leaves the agent down (didi, card 336501d7, L1).
+   */
+  startProblem: (newConfigText: string) => string | null
   delay: (ms: number) => Promise<void>
 }
 
@@ -251,6 +261,9 @@ export async function runSeatSet(deps: SeatDeps, req: SeatRequest, ctx: SeatCont
   const v = validateSeatRequest(req, ctx)
   if (!v.ok) return refuse(v.why)
   if (opts.apply && !opts.by.trim()) return { exit: SEAT_EXIT.USAGE, lines: ['--by <who> is required with --apply (it goes into the ledger)'] }
+  // One ledger line per move: a line break or the field separator in --by would forge or split a line.
+  // eslint-disable-next-line no-control-regex
+  if (opts.apply && /[\u0000-\u001f\u007f|]/.test(opts.by)) return { exit: SEAT_EXIT.USAGE, lines: ['--by may not contain a line break, a control character or "|" (it goes into the one-line ledger)'] }
 
   const text = deps.readText(opts.configPath)
   if (text == null) return refuse(`cannot read ${opts.configPath}`)
@@ -258,6 +271,11 @@ export async function runSeatSet(deps: SeatDeps, req: SeatRequest, ctx: SeatCont
   const want = { model: req.model, plan: v.plan ?? undefined }
   const change = applySeatChange(text, want, opts.storeDir)
   if (!change.ok) return refuse(change.why)
+
+  const problem = change.changed ? deps.startProblem(change.newText) : null
+  if (problem != null) {
+    return refuse(`the launcher would refuse to start ${req.agent} with this config (${problem}): the dashboard restart stops the pane first, so the agent would stay DOWN. Nothing was written`)
+  }
 
   let expectSha: string | null | undefined
   if (v.plan != null) {
@@ -323,8 +341,12 @@ export async function runSeatSet(deps: SeatDeps, req: SeatRequest, ctx: SeatCont
   const oldPid = deps.processFacts()?.pid ?? null
   const r = await deps.restart()
   if (!r.ok) {
-    out(`RESTART FAILED: ${r.error ?? 'no detail'}. The config is already written; the agent still runs the old seat.`)
-    ledger('written, restart failed', 'no')
+    // The dashboard restart STOPS the pane before it starts it: after a failed restart the agent may be
+    // DOWN, not "still on the old seat". Put the old config back so a supervisor restart can succeed.
+    let restored = 'the config was restored from the backup'
+    try { deps.copyFile(backupPath, opts.configPath) } catch { restored = 'the config could NOT be restored: copy the backup back by hand' }
+    out(`RESTART FAILED: ${r.error ?? 'no detail'}. The agent may be STOPPED (a restart stops the pane before it starts it); ${restored} (${backupPath}). Check the pane and start it again.`)
+    ledger('written, restart failed, config restored', 'no')
     return { exit: SEAT_EXIT.RESTART_FAILED, lines }
   }
   const waitMs = opts.verifyWaitMs ?? 90_000
