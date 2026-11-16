@@ -62,6 +62,9 @@ const EXPECTED: Record<string, string[]> = {
     'memory-index-write-gate.py',
     'memory-frontmatter-bash-gate.py',
     'y1-report-only.mjs', // report-only (5b639edb): a log row per call, never a decision
+    // card 468cf59a: refuses `git clean` / `git reset --hard` aimed at the MAIN checkout.
+    // Registered behind an `[ -f ... ]` existence check, so an install without the script is a no-op.
+    'main-checkout-git-guard.py',
   ],
   Stop: ['marveen-commands.py', 'telegram-reply-guard.py', 'telegram_progress_clear.py', 'slack_progress_clear.py'],
   StopFailure: ['ledger-turn-failure.py'],
