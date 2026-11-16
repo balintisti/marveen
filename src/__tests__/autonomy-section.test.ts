@@ -108,7 +108,7 @@ describe('ensureAutonomySection', () => {
     expect(result).toContain('/api/approvals')
   })
 
-  it('(a) level 2 curl in the written block uses the agent name, not a placeholder', () => {
+  it('(a) level 2 approval payload in the written block uses the agent name, not a placeholder', () => {
     setup('agent-b', '# Agent B\n')
     ensureAutonomySection('agent-b')
     const result = read('agent-b')

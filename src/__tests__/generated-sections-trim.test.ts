@@ -33,8 +33,10 @@ const END = (n: Sec) => `<!-- END GENERATED: ${n} -->`
 // evidence 1420 -> 1205, fleet-auth 870 -> 681, message-close 794 -> 695, mcp-list 586 -> 537.
 // The ceiling is that measurement plus a small margin (the normalised root is shorter, the
 // long test agent name is longer).
+// autonomy-wiring again, card 134bff2f: the two curl recipes moved to the rulebook, measured on
+// this test's own agent and root: 1967 ceiling -> 1577 (the ceiling is that plus a margin).
 const CEILING: Record<Sec, number> = {
-  'autonomy-wiring': 2050,
+  'autonomy-wiring': 1600,
   'skills-path-trap': 960,
   'evidence-rule': 1280,
   'fleet-auth': 740,
@@ -91,23 +93,50 @@ describe('autonomy-wiring: the approval flow survives the trim', () => {
     expect(l3).not.toContain('/api/approvals')
   })
 
-  it('level 1 ships the notification curl to /api/messages with a quoted heredoc and the own name', async () => {
+  // Since card 134bff2f the two curl recipes live in the rulebook. The page keeps what a
+  // request needs without them: Level 1 names the endpoint and the signal, Level 2 the
+  // endpoint, the payload with the own name, the poll and the three outcomes.
+  it('level 1 names the endpoint, the payload with the own name and the coordinator, and calls no approval', async () => {
     const l1 = between((await render()).blocks['autonomy-wiring'], '**Level 1', '**Level 2')
-    expect(l1).toMatch(/curl -s -X POST \S+\/api\/messages /)
-    expect(l1).toContain(`--data-binary @- <<'JSON'`)
-    expect(l1).toContain(`"from":"${AGENT}"`)
+    expect(l1).toContain('`POST /api/messages`')
+    expect(l1).toContain(`"from":"${AGENT}","to":"`)
+    expect(l1).toContain('[FELHÍVÁS] CATEGORY_KEY')
+    expect(l1).toContain('NE végezd el')
+    expect(l1).toContain('ÁLLJ MEG')
     expect(l1).not.toContain('/api/approvals')
   })
 
-  it('level 2: approval BEFORE acting, POST with the four fields, GET every 60 s, the three outcomes', async () => {
+  it('level 2: approval BEFORE acting, POST with the four fields and the own name, GET every 60 s, the three outcomes', async () => {
     const l2 = between((await render()).blocks['autonomy-wiring'], '**Level 2', '**Level 3')
     expect(l2).toContain('MIELŐTT cselekszel')
-    expect(l2).toMatch(/curl -s -X POST \S+\/api\/approvals /)
+    expect(l2).toContain('`POST /api/approvals`')
     for (const f of [`"agent_id":"${AGENT}"`, '"category":', '"action_description":', '"timeout_seconds":']) expect(l2).toContain(f)
-    expect(l2).toContain('GET 60 mp-enként')
-    expect(l2).toMatch(/curl -s -H "Authorization: Bearer \$\(cat [^)]+\)" "\S+\/api\/approvals\/<id>"/)
+    expect(l2).toContain('`GET /api/approvals/<id>` 60 mp-enként')
     expect(l2).toContain('status=approved -> végezd el')
     expect(l2).toContain('status=rejected vagy status=timeout -> ne csináld, naplózd az okot')
+  })
+
+  it('the page points at a rulebook section that exists and holds both full recipes', async () => {
+    const { blocks, PROJECT_ROOT, sc } = await render()
+    const b = blocks['autonomy-wiring']
+    const book = join(PROJECT_ROOT, 'rulebook', 'generalt-szakaszok-indoklas.md')
+    const title = sc.AUTONOMY_RECIPE_HEADING.replace(/^## /, '')
+    expect(b).toContain(`\`${book}\`, "${title}" szakasz`)
+    expect(b).toMatch(/dashboard: http\S+, token: \/\S+\.dashboard-token\)/)
+    const text = readFileSync(book, 'utf-8')
+    const from = text.indexOf(`\n${sc.AUTONOMY_RECIPE_HEADING}\n`)
+    expect(from, 'the recipe heading is not in the rulebook').toBeGreaterThan(0)
+    const to = text.indexOf('\n## ', from + 1)
+    const r = text.slice(from, to > 0 ? to : text.length)
+    expect(r).toMatch(/curl -s -X POST <DASHBOARD>\/api\/messages /)
+    expect(r).toContain(`--data-binary @- <<'JSON'`)
+    expect(r).toContain('"from":"<NEVED>"')
+    expect(r).toMatch(/curl -s -X POST <DASHBOARD>\/api\/approvals /)
+    for (const f of ['"agent_id":"<NEVED>"', '"category":', '"action_description":', '"timeout_seconds":']) expect(r).toContain(f)
+    expect(r).toContain('curl -s -H "Authorization: Bearer $(cat <TOKEN>)" "<DASHBOARD>/api/approvals/<id>"')
+    expect(r).toContain('A header `$(cat ...)`-ja szándékosan helyettesít be')
+    expect(r).toContain('status=approved -> végezd el')
+    expect(r).toContain('status=rejected vagy status=timeout -> ne csináld, naplózd az okot')
   })
 
   it('the payload-quoting rule keeps every load-bearing clause', async () => {

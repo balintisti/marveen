@@ -2069,6 +2069,10 @@ const FLEET_ROSTER_BLOCK_RE = new RegExp(
 
 const AUTONOMY_BEGIN = '<!-- BEGIN GENERATED: autonomy-wiring (auto-generated, do not edit by hand) -->'
 const AUTONOMY_END = '<!-- END GENERATED: autonomy-wiring -->'
+// The heading of the rulebook section that carries the two full curl recipes the autonomy
+// block points at (card 134bff2f). A test reads the rulebook for it: renaming one side alone
+// leaves every agent page pointing at a section that is not there.
+export const AUTONOMY_RECIPE_HEADING = '## Autonómia: curl-recept'
 const AUTONOMY_BLOCK_RE = new RegExp(
   `${AUTONOMY_BEGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${AUTONOMY_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
 )
@@ -2180,9 +2184,15 @@ function buildFleetRosterBody(selfName: string): string {
 }
 
 // Builds the autonomy-wiring section body. Static per agent name: the content
-// never changes based on runtime fleet state, but the curl examples embed the
-// resolved dashboard origin and the agent's own name so agents don't have to
-// guess.
+// never changes based on runtime fleet state, but it embeds the resolved
+// dashboard origin, the token path and the agent's own name so agents don't
+// have to guess.
+//
+// The two full curl recipes live in the rulebook (AUTONOMY_RECIPE_HEADING, card
+// 134bff2f): the block is loaded on every start of every agent, the recipe is
+// read only before a Level 1 signal or a Level 2 request. What a Level 2 request
+// needs stays on the page even without the recipe: the endpoint, the payload with
+// the agent's own name, the poll and the three outcomes.
 //
 // `desk` is the front desk the Level 3 line names (see reportDesk), or null. Level 3 is a REPORT
 // after the act, and with a front desk configured reports go there (card 074149c2, C11); Level 1
@@ -2198,24 +2208,15 @@ function buildAutonomyBody(name: string, desk: string | null = null): string {
     '',
     'A kategória szintje (level) a store/autonomy-config.json-ban: önálló cselekvés előtt nézd meg.',
     '',
-    '**Level 1 (csak jelez)**: értesítsd a főágenst, a műveletet NE végezd el, és ÁLLJ MEG.',
-    '```bash',
-    `curl -s -X POST ${dashboardOrigin}/api/messages -H "Content-Type: application/json" \\`,
-    `  -H "Authorization: Bearer $(cat ${tokenPath})" --data-binary @- <<'JSON'`,
-    `{"from":"${name}","to":"${MAIN_AGENT_ID}","content":"[FELHÍVÁS] CATEGORY_KEY: MIT akartam elvégezni, de level 1 miatt csak jelzek."}`,
-    'JSON',
-    '```',
-    '**Level 2 (jóváhagyás szükséges)**: MIELŐTT cselekszel, POST, majd a kapott id-vel GET 60 mp-enként:',
-    `curl -s -X POST ${dashboardOrigin}/api/approvals -H "Content-Type: application/json" -H "Authorization: Bearer $(cat ${tokenPath})" -d '{"agent_id":"${name}","category":"CATEGORY_KEY","action_description":"Mit tervezel elvégezni és miért","timeout_seconds":3600}'`,
-    `curl -s -H "Authorization: Bearer $(cat ${tokenPath})" "${dashboardOrigin}/api/approvals/<id>"`,
+    `**Level 1 (csak jelez)**: értesítsd a főágenst: \`POST /api/messages\` ezzel: \`{"from":"${name}","to":"${MAIN_AGENT_ID}","content":"[FELHÍVÁS] CATEGORY_KEY: mit akartál elvégezni"}\`; a műveletet NE végezd el, és ÁLLJ MEG.`,
+    `**Level 2 (jóváhagyás szükséges)**: MIELŐTT cselekszel, \`POST /api/approvals\` ezzel: \`{"agent_id":"${name}","category":"CATEGORY_KEY","action_description":"mit és miért","timeout_seconds":3600}\`, majd a kapott id-vel \`GET /api/approvals/<id>\` 60 mp-enként.`,
     'status=approved -> végezd el. status=rejected vagy status=timeout -> ne csináld, naplózd az okot.',
-    '',
     `**Level 3 (autonóm)**: elvégzed, majd utána jelented ${reportTo}.`,
     '',
-    'PAYLOAD, minden API-hívásnál: a `-d "{...}"` dupla idézőjeles alak TILOS (a backtick és a `$(...)` lefut,',
-    "a küldés mégis 200; ugyanígy `python3 -c \"...\"`). IDÉZETT határoló (`<<'JSON'`; a `<<JSON` is behelyettesít)",
-    'vagy `--data-binary @fájl`; változóhoz `python3` + `json.dumps` (vagy `jq`) írja fájlba. A header `$(cat ...)`-ja',
-    `maradhat. Csak az írás utáni VISSZAOLVASÁS fogja meg. Indoklás: \`${generatedRationalePath}\`.`,
+    `A két hívás teljes curl-receptje (dashboard: ${dashboardOrigin}, token: ${tokenPath}): \`${generatedRationalePath}\`, "${AUTONOMY_RECIPE_HEADING.replace(/^## /, '')}" szakasz.`,
+    'PAYLOAD, minden API-hívásnál: a `-d "{...}"` dupla idézőjeles alak TILOS (a backtick és a `$(...)` lefut, a küldés mégis 200).',
+    "IDÉZETT határoló (`<<'JSON'`; a `<<JSON` is behelyettesít) vagy `--data-binary @fájl`; változóhoz `python3` + `json.dumps`.",
+    'A header `$(cat ...)`-ja maradhat. Csak az írás utáni VISSZAOLVASÁS fogja meg.',
   ].join('\n')
 }
 
