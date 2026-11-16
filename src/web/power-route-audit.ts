@@ -23,7 +23,8 @@ interface PowerRoute {
   ownerFields?: readonly string[]
 }
 
-// Same list as SCHEDULE_OWNER_FIELDS in routes/schedules.ts (pinned equal by the test).
+// The schedule body fields that grant power (a command, a pane to type into, a chat to message). The schedule route
+// has no owner gate for them on this line, so the audit table carries the list itself.
 export const SCHEDULE_POWER_FIELDS = [
   'type', 'command', 'timeoutMs', 'preCheck', 'preCheckTimeoutSeconds', 'targetSession', 'telegramChatId', 'channelProvider',
 ] as const
@@ -47,7 +48,6 @@ export const POWER_ROUTES: readonly PowerRoute[] = [
   { file: 'agent-terminal.ts', id: 'agent-session-input', methods: ['POST'], re: /^\/api\/agents\/[^/]+\/(?:keys|login)$/ },
   { file: 'autonomy.ts', id: 'autonomy-write', methods: ['POST'], re: /^\/api\/autonomy$/ },
   { file: 'claude-plans.ts', id: 'claude-plans-write', methods: WRITES, re: /^\/api\/claude-plans(?:\/.*)?$/ },
-  { file: 'claude-plans-login.ts', id: 'claude-plans-login', methods: ['POST'], re: /^\/api\/claude-plans\/login\/.+$/ },
   { file: 'connectors.ts', id: 'connectors-write', methods: WRITES, re: /^\/api\/(?:connectors|mcp-catalog)(?:\/.*)?$/ },
   { file: 'custom-providers.ts', id: 'custom-providers-write', methods: WRITES, re: /^\/api\/custom-providers(?:\/.*)?$/ },
   { file: 'fleet.ts', id: 'fleet-export', methods: ['GET'], re: /^\/api\/fleet\/export$/ },
@@ -72,10 +72,7 @@ export const POWER_ROUTES: readonly PowerRoute[] = [
 
 /** Route files that read an owner gate but own no route of their own (helpers). The completeness test names them,
  *  so a NEW gated route file is a red test until it is in POWER_ROUTES or here with its reason. */
-export const OWNER_GATE_HELPER_FILES: Readonly<Record<string, string>> = {
-  'operator-access.ts': 'helper: operator-key checks, no route of its own',
-  'cli-inventory.ts': 'helper: reads the owner gate for a CLI probe, no write route',
-}
+export const OWNER_GATE_HELPER_FILES: Readonly<Record<string, string>> = {}
 
 export function classifyPowerRoute(method: string, path: string): PowerRoute | null {
   for (const r of POWER_ROUTES) {
@@ -92,7 +89,8 @@ const BODY_SCALAR_FIELDS = [
   'key', 'level', 'name', 'agent', 'agent_id', 'id', 'status', 'type', 'provider', 'enabled', 'action',
   'resolved_by', 'targetSession', 'autoStash',
 ] as const
-// Identity the request CLAIMS (unauthenticated on the shared token); tokenAgent is the authenticated one.
+// Identity the request CLAIMS (unauthenticated on the shared token). This line's token carries no agent identity,
+// so token_agent stays null; the column is kept for a per-agent token.
 const CLAIM_BODY_FIELDS = ['actor', 'author', 'from_agent', 'updated_by', 'requested_by', 'resolved_by', 'agent_id', 'agent'] as const
 const CLAIM_HEADERS = ['x-agent-id', 'x-agent-name', 'x-marveen-agent'] as const
 const MAX_BODY_BYTES = 256 * 1024
@@ -148,7 +146,6 @@ export function buildPowerAuditRecord(
     const v = req.headers[h]
     if (typeof v === 'string' && v.trim()) claims.push(`${h}=${clip(v.trim(), 64)}`)
   }
-  if (auth?.agent) claims.push(`token.agent=${clip(auth.agent, 64)}`)
   // Only the routes with ownerFields depend on the body; a call that names none of them is not a power call.
   const isPowerCall = route.ownerFields === undefined || view.fields.some((f) => route.ownerFields!.includes(f))
   // "Would deny" is the UPPER BOUND of what an owner-session rule would refuse: a power call that does not come
@@ -167,7 +164,7 @@ export function buildPowerAuditRecord(
       path: clip(path, 200),
       auth_kind: auth?.kind ?? 'none',
       auth_who: clip(auth?.user ?? auth?.device ?? auth?.peer ?? '', 64) || null,
-      token_agent: auth?.tokenAgent ?? null,
+      token_agent: null,
       claimed: claims.length ? claims.join(' ') : null,
       body_fields: view.fields.length ? view.fields.join(',') : null,
       body_scalars: Object.keys(view.scalars).length ? JSON.stringify(view.scalars) : null,

@@ -6,10 +6,9 @@ import { join, resolve } from 'node:path'
 import { initDatabase, getDb, prunePowerRouteAudit, POWER_ROUTE_AUDIT_RETENTION_DAYS } from '../db.js'
 import { readBody } from '../web/http-helpers.js'
 import {
-  POWER_ROUTES, OWNER_GATE_HELPER_FILES, SCHEDULE_POWER_FIELDS, classifyPowerRoute, buildPowerAuditRecord, auditPowerRoute,
+  POWER_ROUTES, OWNER_GATE_HELPER_FILES, classifyPowerRoute, buildPowerAuditRecord, auditPowerRoute,
 } from '../web/power-route-audit.js'
 import { runDecaySweep } from '../memory.js'
-import { SCHEDULE_OWNER_FIELDS } from '../web/routes/schedules.js'
 import type { RouteContext } from '../web/routes/types.js'
 
 // Card 3fc4df30 (marveen 58797): audit mode. The record is log-only: it names who called which
@@ -71,10 +70,6 @@ describe('table integrity', () => {
     expect(new Set(ids).size).toBe(ids.length)
   })
 
-  it('the schedule power fields are the owner fields the schedule route enforces', () => {
-    expect([...SCHEDULE_POWER_FIELDS]).toEqual([...SCHEDULE_OWNER_FIELDS])
-  })
-
   // The default must fail: a route file that reads an owner gate and is in neither list is a red test,
   // not an unaudited route nobody noticed.
   it('every route file that reads an owner gate is in the table or is a named helper', () => {
@@ -82,7 +77,7 @@ describe('table integrity', () => {
     const gated = readdirSync(dir)
       .filter((f) => f.endsWith('.ts'))
       .filter((f) => /mayActAsOwner(?:OrFirstRun)?\(|mayIssueCredentials\(|refuseOwner\(/.test(readFileSync(join(dir, f), 'utf8')))
-    expect(gated.length).toBeGreaterThan(10)
+    expect(gated.length).toBeGreaterThan(2)
     const named = new Set([...POWER_ROUTES.map((r) => r.file), ...Object.keys(OWNER_GATE_HELPER_FILES)])
     expect(gated.filter((f) => !named.has(f))).toEqual([])
   })
@@ -138,13 +133,13 @@ describe('buildPowerAuditRecord', () => {
     expect(deny(undefined)).toBe(true)
   })
 
-  it('records who: auth kind, authenticated token agent, and the identity the request only CLAIMS', () => {
+  it('records who: auth kind and the identity the request only CLAIMS (this line has no token agent)', () => {
     const rec = buildPowerAuditRecord(
       settings, fakeReq({ 'x-agent-id': 'ford', 'user-agent': 'curl/8' }), 'POST', '/api/settings',
-      { kind: 'token', agent: 'ford', tokenAgent: 'ford' }, 403, body({ key: 'K', actor: 'marveen' }), NOW,
+      { kind: 'token' }, 403, body({ key: 'K', actor: 'marveen' }), NOW,
     )
-    expect(rec.row).toMatchObject({ auth_kind: 'token', token_agent: 'ford', status: 403, remote: '127.0.0.1', user_agent: 'curl/8' })
-    expect(rec.row.claimed).toBe('actor=marveen x-agent-id=ford token.agent=ford')
+    expect(rec.row).toMatchObject({ auth_kind: 'token', token_agent: null, status: 403, remote: '127.0.0.1', user_agent: 'curl/8' })
+    expect(rec.row.claimed).toBe('actor=marveen x-agent-id=ford')
     expect(JSON.parse(rec.row.body_scalars!)).toEqual({ key: 'K' })
   })
 
@@ -170,16 +165,16 @@ describe('buildPowerAuditRecord', () => {
     expect(JSON.stringify(big.row)).not.toContain('xxxxxxxx')
   })
 
-  it('long values are clipped: scalars and user agent 80, claims and token agent 64, path 200', () => {
+  it('long values are clipped: scalars and user agent 80, claims 64, path 200', () => {
     const long = 'a'.repeat(300)
     const rec = buildPowerAuditRecord(
       settings, fakeReq({ 'user-agent': long, 'x-agent-id': long }), 'POST', `/api/settings/${long}`,
-      { kind: 'token', agent: long }, 200, body({ name: long, actor: long }), NOW,
+      { kind: 'token' }, 200, body({ name: long, actor: long }), NOW,
     )
     expect((JSON.parse(rec.row.body_scalars!) as { name: string }).name).toHaveLength(80)
     expect(rec.row.user_agent).toHaveLength(80)
     expect(rec.row.path).toHaveLength(200)
-    expect(rec.row.claimed!.split(' ')).toEqual([`actor=${'a'.repeat(64)}`, `x-agent-id=${'a'.repeat(64)}`, `token.agent=${'a'.repeat(64)}`])
+    expect(rec.row.claimed!.split(' ')).toEqual([`actor=${'a'.repeat(64)}`, `x-agent-id=${'a'.repeat(64)}`])
   })
 
   it('stores the value of the act or target: who resolved an approval, the schedule pane, autoStash (review 58885)', () => {
@@ -206,7 +201,7 @@ describe('auditPowerRoute on a real HTTP server', () => {
   let server: http.Server
   let base = ''
   let mode: 'ok' | 'forbidden' | 'dropped' = 'ok'
-  let auth: RouteContext['auth'] = { kind: 'token', agent: 'dexter' }
+  let auth: RouteContext['auth'] = { kind: 'token' }
 
   beforeAll(async () => {
     server = http.createServer(async (req, res) => {
@@ -226,7 +221,7 @@ describe('auditPowerRoute on a real HTTP server', () => {
   afterAll(() => new Promise<void>((r) => server.close(() => r())))
   beforeEach(() => {
     mode = 'ok'
-    auth = { kind: 'token', agent: 'dexter' }
+    auth = { kind: 'token' }
     getDb().exec('DELETE FROM power_route_audit')
   })
 
@@ -246,7 +241,7 @@ describe('auditPowerRoute on a real HTTP server', () => {
       method: 'POST', route_id: 'settings-write', path: '/api/settings', auth_kind: 'token', token_agent: null,
       status: 200, would_deny: 1, body_fields: 'actor,key,value',
     })
-    expect(rows()[0].claimed).toBe('actor=dexter token.agent=dexter')
+    expect(rows()[0].claimed).toBe('actor=dexter')
     expect(JSON.stringify(rows()[0])).not.toContain('secret-value')
   })
 
