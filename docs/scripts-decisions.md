@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **496** kovetett fajl, ebbol
-**152** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **497** kovetett fajl, ebbol
+**153** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -391,6 +391,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/hooks/subagent-context-gate.py`
 
 - WHY (card 66d4698a, Isti TG 8534, 2026-10-30; measurement sirius dbcbb210): of 290 sub-agent runs
+
+### `scripts/hooks/subagent-wait-gate.py`
+
+- WHY (measured 2026-11-12, 574 sub-agent transcripts, 9.5 days, 22 698 sub-agent Bash calls):
 
 ### `scripts/hooks/telegram_fallback_send.py`
 
