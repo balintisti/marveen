@@ -98,20 +98,65 @@ export function verdictToken(line: string): string {
 /** NYITOTT TETEL, with or without a severity in parentheses after it. */
 const OPEN_TOKEN = /^NYITOTT TETEL(?: \([^)]*\))?$/
 
+/**
+ * THE FIX-ROUND HAND-OVER -- card c38bd6d0 (didi 10015070, marveen decision A).
+ *
+ * A reviewer who finds a TEST gap can hand the fix round to trillian by ending
+ * the open verdict line with `| FIX ROUND: trillian`; trillian then closes the
+ * round with her own `VERDIKT: NINCS NYITOTT TETEL`. "Last wins within an
+ * author" kept the reviewer's older open line open after that, and the done
+ * move got 409 until the reviewer posted a closer by hand (2026-11-11: 22
+ * manual closers, ~18 cards stalled).
+ *
+ * So such a line counts as closed when trillian's LAST verdict on the card is a
+ * closing one and comes AFTER it. Only to trillian: a behaviour defect without
+ * the marker stays the reviewer's to close.
+ *
+ * THE READER IS TOLERANT, NOT THE WRITER (didi 59475, measured on the 7 real
+ * trillian-closed rounds of the board: the verdict-line-only rule closed 2).
+ * The marker counts in two places of the comment that carries the verdict line:
+ * on the verdict line itself, colon or not ("..., FIX ROUND trillian"), or as a
+ * column-0 line of its own that STARTS with it ("FIX ROUND: trillian. Olendo:
+ * ..."). A quote further in a line ("(didi 59159 FIX ROUND: trillian)"), another
+ * name ("FIX ROUND: didi", "FIX ROUND: nem trillian") or a marker in an earlier
+ * comment hands nothing over.
+ */
+const FIX_ROUND_CLOSER = 'trillian'
+const FIX_ROUND_ON_VERDICT = /FIX ROUND ?:? ?TRILLIAN(?![A-Z0-9])/
+const FIX_ROUND_OWN_LINE = /^FIX ROUND ?:? ?TRILLIAN(?![A-Z0-9])/
+
+/** Does this comment hand its verdict's fix round to trillian on a column-0 line of its own? */
+function handsOnOwnLine(comment: VerdictComment): boolean {
+  return (comment.content ?? '').split(/\r?\n/).some((raw) => {
+    const line = withoutOwnStamp(raw, comment.author)
+    return /^\S/.test(line) && FIX_ROUND_OWN_LINE.test(normalize(line))
+  })
+}
+
 /** Each author's last verdict line, when it says the author has an open item. */
 export function openVerdicts(comments: VerdictComment[]): OpenVerdict[] {
   const ordered = [...comments].sort((a, b) => a.created_at - b.created_at || a.id - b.id)
-  const lastByAuthor = new Map<string, { line: string; commentId: number }>()
+  const lastByAuthor = new Map<string, { line: string; commentId: number; seq: number; handed: boolean }>()
+  let seq = 0
   for (const comment of ordered) {
+    let ownLine: boolean | undefined
     for (const raw of (comment.content ?? '').split(/\r?\n/)) {
       const line = withoutOwnStamp(raw, comment.author)
       if (!line.startsWith(VERDICT_PREFIX)) continue
-      lastByAuthor.set(comment.author, { line: line.trimEnd(), commentId: comment.id })
+      ownLine ??= handsOnOwnLine(comment)
+      const handed = ownLine || FIX_ROUND_ON_VERDICT.test(normalize(line))
+      lastByAuthor.set(comment.author, { line: line.trimEnd(), commentId: comment.id, seq: seq++, handed })
     }
   }
+  const closer = lastByAuthor.get(FIX_ROUND_CLOSER)
+  const closedByFixRound = (verdict: { seq: number; handed: boolean }) =>
+    closer !== undefined
+    && closer.seq > verdict.seq
+    && verdictToken(closer.line) === CLOSED_TOKEN
+    && verdict.handed
   const open: OpenVerdict[] = []
   for (const [author, verdict] of lastByAuthor) {
-    if (OPEN_TOKEN.test(verdictToken(verdict.line))) {
+    if (OPEN_TOKEN.test(verdictToken(verdict.line)) && !closedByFixRound(verdict)) {
       open.push({ author, line: verdict.line, commentId: verdict.commentId })
     }
   }

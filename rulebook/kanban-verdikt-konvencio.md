@@ -705,3 +705,20 @@ kartyan proza „MARADEK-JELZES" komment allt, a lezaras atment, a maradek az ar
 - A horgony szigoru 0. oszlop, mint a kapu `openVerdicts`-e (`startsWith`): a markdown-bold `**MARADEK:**` NEM token
   (a `**` mar a 0. oszlopban all), ezert a szerzo ne kiemelje. A magyar helyesirasu NAGYBETUS `MARADÉK:` (es a
   `MARADÉK: NINCS | <hova>` is) ugyanaz a token; a kisbetus vagy vegyes `Maradék:` proza (didi 31731).
+
+## A JAVITASI KOR ATADASA TRILLIANNAK: `| FIX ROUND: trillian` (kartya c38bd6d0, didi 10015070, marveen dontese A)
+
+Merve 2026-11-11: a szerzonkenti utolso verdikt miatt egy atnezo `FIX ROUND: trillian` jelolesu NYITOTT sora akkor is
+nyitva maradt, amikor trillian a javitasi kort `NINCS NYITOTT TETEL`-lel lezarta; a done 409-et kapott, amig az atnezo
+kezzel zaro sort nem irt (22 kezi zaras, ~18 elakadt kartya). A kapu (`openVerdicts`) azota igy olvas:
+
+- Egy NYITOTT verdikt-sor ZARTNAK szamit, ha trillian UTOLSO verdiktje a kartyan `NINCS NYITOTT TETEL`, es KESOBB
+  all, mint az a sor, es a verdiktet hordozo kommentben a jelolo KET helyen allhat: a verdikt-soron
+  (`... | FIX ROUND: trillian`, kettospont nelkul is), vagy egy SAJAT, 0. oszlopos sor ELEJEN
+  (`FIX ROUND: trillian. Olendo: ...`). Kis/nagybetu, szokoz mindegy. Az OLVASO enged, nem az irotol varjuk,
+  hogy megjegyezze a helyet (didi 59475: a csak-verdikt-soros szabaly a tabla 7 valodi trillian-korebol 2-t zart).
+- Nem adja at: mas nev (`FIX ROUND: didi`, `FIX ROUND: nem trillian`), sor kozepi idezet
+  (`(didi 59159 FIX ROUND: trillian)`), behuzott sor, egy KORABBI komment jeloloje.
+- Jelolo nelkul a sor az atnezoe marad (viselkedes-hibat o zar); trillian KORABBI zarasa nem zar; az atnezo egy
+  kesobbi NYITOTT sora ujranyit; mas szerzo zarasa nem zar; ha trillian utolso verdiktje maga NYITOTT, semmi nem zarul.
+- Az orai archivalo es az idle-figyelo ugyanezt a fuggvenyt kerdezi, tehat ugyanigy lat.
