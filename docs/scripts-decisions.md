@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **497** kovetett fajl, ebbol
-**153** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **499** kovetett fajl, ebbol
+**154** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (3)
 
@@ -541,6 +541,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/mutate-probe.py`
 
 - MIERT LETEZIK. Egy mutacios proba akkor er valamit, ha a ZOLD eredmeny EGY dolgot
+
+### `scripts/my-open-cards.sh`
+
+- WHY (card 2e78cf63): the idle wake ([tetlen-or]) used to carry this as a curl + python3 one-liner of
 
 ### `scripts/napindito-sections.py`
 
