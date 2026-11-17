@@ -88,7 +88,9 @@ function makeInstall(runningAgents: string[] = ['dexter'], deployed?: string[]):
   // the guard calls it (heredoc-safe, per CLAUDE.md).
   writeFileSync(
     join(base, 'scripts', 'agent-msg.sh'),
-    `#!/usr/bin/env bash\nprintf 'TO=%s\\n' "$2" >> "${join(base, 'store', 'agent.log')}"\ncat >> "${join(base, 'store', 'agent.log')}"\nprintf '\\n---\\n' >> "${join(base, 'store', 'agent.log')}"\n`,
+    // STUB_AGENT_MSG_FAIL_TO=<name>: the send to that recipient fails the way the real script
+    // does when the dashboard is down (exit 1, no OK id), recorded as FAILED-TO, not TO.
+    `#!/usr/bin/env bash\nif [ -n "\${STUB_AGENT_MSG_FAIL_TO:-}" ] && [ "$2" = "$STUB_AGENT_MSG_FAIL_TO" ]; then cat >/dev/null; printf 'FAILED-TO=%s\\n---\\n' "$2" >> "${join(base, 'store', 'agent.log')}"; echo "FAIL: dashboard down"; exit 1; fi\nprintf 'TO=%s\\n' "$2" >> "${join(base, 'store', 'agent.log')}"\ncat >> "${join(base, 'store', 'agent.log')}"\nprintf '\\n---\\n' >> "${join(base, 'store', 'agent.log')}"\necho "OK id=1"\n`,
   )
   chmodSync(join(base, 'scripts', 'agent-msg.sh'), 0o755)
 
@@ -379,18 +381,18 @@ describe('quota-ceiling-guard: PLAN MODE reads the plan the agents actually run 
     writeFileSync(join(base, 'agents', 'sirius', 'agent-config.json'), JSON.stringify({ model: 'claude-opus-5-5' }))
     return base
   }
-  function plansState(base: string, plans: Record<string, { pct: number; probeAt?: number; ageMin?: number }>): string {
+  function plansState(base: string, plans: Record<string, { pct: number; probeAt?: number; ageMin?: number; source?: string }>, file = 'plans-state.json'): string {
     const out: Record<string, unknown> = {}
     for (const [id, o] of Object.entries(plans)) {
       const observedAt = Date.now() - (o.ageMin ?? 1) * 60_000
       out[id] = {
         observedAt,
-        source: 'probe',
+        source: o.source ?? 'probe',
         windows: { seven_day: { usedPercent: o.pct, resetsAt: 1787810400 } },
         lastProbe: { at: o.probeAt ?? observedAt, ok: true },
       }
     }
-    const p = join(base, 'store', 'plans-state.json')
+    const p = join(base, 'store', file)
     writeFileSync(p, JSON.stringify({ activePlanByAgent: {}, plans: out }))
     return p
   }
@@ -512,6 +514,58 @@ describe('quota-ceiling-guard: PLAN MODE reads the plan the agents actually run 
     const r = runPlan(base, 'elso', plansState(base, { elso: { pct: 95 }, masodik: { pct: 97 } }))
     expect(r.agent).toContain('TO=sirius')
     expect(r.agent).not.toContain('TO=dexter')
+  })
+
+  // didi 67561 L1: a send that failed was marked fired, never retried, and the owner was
+  // told "I asked marveen". At night nobody heard anything.
+  it('a FAILED switch request is not marked: the next run asks again, the owner hears the truth once', () => {
+    const base = planInstall()
+    const st = plansState(base, { elso: { pct: 10 }, masodik: { pct: 95 } })
+    const down = { STUB_AGENT_MSG_FAIL_TO: 'marveen' }
+    runPlan(base, 'masodik', st, down)
+    const r = runPlan(base, 'masodik', st, down)
+    expect(r.agent.split('FAILED-TO=marveen').length - 1).toBe(2)
+    expect(r.agent).not.toContain('TO=dexter')
+    expect(r.owner).not.toContain('marveent kertem')
+    expect(r.owner.split('NEM ERTEM EL').length - 1).toBe(1)
+    const fired = JSON.parse(readFileSync(join(base, 'store', 'state.json'), 'utf8')).fired as string[]
+    expect(fired).not.toContain('switch')
+    // dashboard back: the request goes out, and only now is the owner told it was asked
+    const ok = runPlan(base, 'masodik', st)
+    expect(ok.agent).toContain('TO=marveen')
+    expect(ok.owner).toContain('marveent kertem')
+  })
+
+  it('AT NIGHT with the coordinator unreachable, the owner gets the Telegram after all', () => {
+    const base = planInstall()
+    const r = runPlan(base, 'masodik', plansState(base, { elso: { pct: 10 }, masodik: { pct: 95 } }),
+      { QUOTA_CEILING_NOW_HOUR: '02', STUB_AGENT_MSG_FAIL_TO: 'marveen' })
+    expect(r.owner).toContain('NEM ERTEM EL')
+    expect(r.agent).not.toContain('TO=dexter')
+  })
+
+  // didi 67561 T1-T3: three guards of the target choice that no test held.
+  it('its OWN plan is never the target, even when it is the emptiest under HARD', () => {
+    const base = planInstall()
+    const r = runPlan(base, 'masodik', plansState(base, { elso: { pct: 96 }, masodik: { pct: 93 } }))
+    expect(r.agent).not.toContain('ATTETEL')
+    expect(r.agent).toContain('TO=dexter')
+    expect(r.agent).toContain('KERET-OR / LAGY')
+  })
+
+  it('a target whose reading is not a probe is not room: stop', () => {
+    const base = planInstall()
+    const r = runPlan(base, 'masodik', plansState(base, { elso: { pct: 4, source: 'estimate' }, masodik: { pct: 95 } }))
+    expect(r.agent).not.toContain('ATTETEL')
+    expect(r.agent).toContain('TO=dexter')
+  })
+
+  it('OUTSIDE plan mode the ceiling stops, even with room in the plans file', () => {
+    const base = planInstall()
+    plansState(base, { elso: { pct: 4 }, masodik: { pct: 4 } }, 'claude-plans-state.json')
+    const r = runGuard(base, writeSnapshot(base, { percent: 95.0 }), { QUOTA_CEILING_PLANS_STATE: join(base, 'store', 'claude-plans-state.json') })
+    expect(r.agent).not.toContain('ATTETEL')
+    expect(r.agent).toContain('KERET-OR / HARD')
   })
 
   it('AT NIGHT the owner gets no Telegram: the notice goes to the coordinator', () => {
