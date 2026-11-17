@@ -495,9 +495,12 @@ function resumePromptTail(name: string, closeNotAck: boolean): string {
     // RESPAWNZAJ822/PRODFAAG822: a fresh session on a resume goal branch-switched and committed on the live prod tree.
     `KORLÁT: fő checkout: NE válts ágat, NE commitolj, NE nyiss PR-t; repo-munkához worktree. ` +
     // The main agent's channel is the OWNER's Telegram; session meta never goes there (review msg 14197).
+    // Card 44610c28: a sub-agent with its own bot has the OWNER on its channel too (zara: 7 "I restarted"
+    // push notifications in 3.5 hours, 2026-11-17). So no agent is asked for a channel line any more, and
+    // the sub-agent gets the prohibition spelled out: dropping the sentence alone would leave the habit.
     (name === MAIN_AGENT_ID
       ? `Telegramra session-meta NEM mehet (transzkript-sor). `
-      : `Röviden jelezz a csatornádon, hogy folytatod. `) +
+      : `Csatornára session-meta NEM mehet (transzkript-sor). `) +
     `Skill: context-guard-restart-recovery.`
   )
 }

@@ -112,8 +112,24 @@ describe('resumePrompt closing line is agent-dependent', () => {
     expect(p).toContain('transzkript')
     expect(p).toContain(CONSTRAINT)
   })
-  it('sub-agent: channel notice stays (their channel is the inter-agent queue)', () => {
-    expect(resumePrompt('samu', '/x/HANDOFF.md', true)).toContain('jelezz a csatornádon')
+  // Card 44610c28: the premise "their channel is the inter-agent queue" was false for every agent with
+  // its own bot: the owner sits on that channel, and each guard restart became a push notification.
+  it('sub-agent: no channel notice either, and the prohibition is spelled out', () => {
+    const p = resumePrompt('samu', '/x/HANDOFF.md', true)
+    expect(p).not.toContain('jelezz')
+    expect(p).toContain('Csatornára session-meta NEM mehet')
+    expect(p).toContain(CONSTRAINT)
+  })
+  it('no agent, in no variant, is asked to signal on a channel', () => {
+    for (const name of ['marveen', 'samu', 'zara']) {
+      for (const had of [true, false]) {
+        for (const closeNotAck of [true, false]) {
+          const p = resumePrompt(name, '/x/HANDOFF.md', had, null, null, closeNotAck)
+          expect(p).not.toContain('jelezz a csatorn')
+          expect(p).toContain('session-meta NEM mehet')
+        }
+      }
+    }
   })
 })
 

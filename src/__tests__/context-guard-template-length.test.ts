@@ -140,10 +140,11 @@ describe('resume prompt (the "Friss kontextussal indultál" template, 775 per we
     expect(variants('dexter')[0][1]).toContain('~120 perc')
   })
 
-  it('main agent: no owner-channel notice, a transcript line; sub-agent: the channel notice', () => {
+  it('main agent: no owner-channel notice, a transcript line; sub-agent: no channel notice either (card 44610c28)', () => {
     expect(variants('marveen')[0][1]).toContain('transzkript')
     expect(variants('marveen')[0][1]).not.toContain('jelezz a csatornádon')
-    expect(variants('dexter')[0][1]).toContain('jelezz a csatornádon, hogy folytatod')
+    expect(variants('dexter')[0][1]).not.toContain('jelezz a csatornádon')
+    expect(variants('dexter')[0][1]).toContain('Csatornára session-meta NEM mehet')
   })
 })
 
