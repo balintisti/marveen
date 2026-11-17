@@ -1,4 +1,4 @@
-import { PERMISSION_ALERT_MARKS } from '../config.js'
+import { PERMISSION_ALERT_MARKS, PERMISSION_HELPER_AUTODENY_MIN } from '../config.js'
 import { logger } from '../logger.js'
 import { isPermissionFileCardTitle, permissionPromptSummary } from '../pane-state.js'
 import type { AlertMeta } from '../notify.js'
@@ -83,6 +83,11 @@ const PERMISSION_CARD_DASH_RX = /^\s*[╌┄-]{8,}\s*$/
 // because the capture may reach past the card, where the nearest rule above
 // the question belongs to something else entirely.
 const PERMISSION_CARD_TITLE_RX = /^[A-Z][A-Za-z]+(?: [A-Za-z]+){0,3}(?: · from the \S+(?: \S+){0,3} agent)?$/
+// The agent type a sub-agent's card carries in its title suffix. Only ever read
+// from the TITLE (the header line), never from the command under it: a main
+// agent's Bash card whose command happens to say "· from the x agent" has no
+// suffix on its header, so it is not a helper's card.
+const PERMISSION_CARD_HELPER_RX = / · from the (\S+(?: \S+){0,3}) agent$/
 // Only on a "<Verb> file" card (isPermissionFileCardTitle, pane-state.ts) is
 // the line under the header quoted: it is a path. On every other card -- a
 // Bash card above all -- that line is the COMMAND, and a command line can
@@ -107,6 +112,8 @@ interface PermissionCard {
   subject: string | null
   /** Everything from the header to the question, for telling two prompts apart. */
   body: string
+  /** The sub-agent type from the header's suffix ("general-purpose"); null on the main agent's own card. */
+  helper: string | null
 }
 
 // The measured shape (CLI 2.1.110, an Edit on a file under ~/.claude):
@@ -145,9 +152,10 @@ function readPermissionCard(pane: string): PermissionCard | null {
       subject = head[1].replace(PERMISSION_SUBJECT_QUOTE_RX, '').trim() || null
     }
   }
+  const helper = title != null ? (PERMISSION_CARD_HELPER_RX.exec(title)?.[1] ?? null) : null
   const from = title != null ? ruleIdx + 1 : Math.max(0, questionIdx - 40)
   const body = lines.slice(from, questionIdx + 1).map((l) => l.trim()).filter(Boolean).join('\n')
-  return { question, title, subject, body }
+  return { question, title, subject, body, helper }
 }
 
 function capAsk(text: string): string {
@@ -207,6 +215,59 @@ export function permissionPromptIdentity(pane: string | null | undefined, deepPa
   const card = readPermissionCard(deepPane || pane || '')
   if (!card) return ''
   return card.body.replace(/[^\p{L}\p{N}]/gu, '').slice(-PERMISSION_IDENTITY_MAX)
+}
+
+/**
+ * The sub-agent type whose tool-permission prompt is on this pane, or null.
+ * Only a card whose header was found (title != null) and carries the
+ * "· from the <type> agent" suffix is a helper's. A main agent's own card, a
+ * header scrolled out of the capture, or a card whose header is not readable
+ * all give null: the caller must then leave the prompt alone.
+ */
+export function permissionPromptHelper(pane: string | null | undefined, deepPane: string | null | undefined = pane): string | null {
+  return readPermissionCard(deepPane || pane || '')?.helper ?? null
+}
+
+export const DEFAULT_PERMISSION_HELPER_AUTODENY_MIN = 30
+const PERMISSION_HELPER_AUTODENY_MAX_MIN = 10080
+
+/** PERMISSION_HELPER_AUTODENY_MIN: whole minutes; empty means the default, 0 means off. */
+export function parseHelperAutoDenyMin(raw: string | null | undefined): { minutes: number, valid: boolean } {
+  const text = (raw ?? '').trim()
+  if (text === '') return { minutes: DEFAULT_PERMISSION_HELPER_AUTODENY_MIN, valid: true }
+  if (!/^\d{1,5}$/.test(text)) return { minutes: DEFAULT_PERMISSION_HELPER_AUTODENY_MIN, valid: false }
+  const minutes = Number(text)
+  if (minutes > PERMISSION_HELPER_AUTODENY_MAX_MIN) return { minutes: DEFAULT_PERMISSION_HELPER_AUTODENY_MIN, valid: false }
+  return { minutes, valid: true }
+}
+
+export type HelperAutoDenyDecision = 'deny' | 'wait' | 'none'
+
+/**
+ * Pure: should the monitor send Escape (NO) to a helper's prompt that has stood
+ * for afterMs? Only on the MAIN agent's pane, only for a helper's card, never
+ * for an identity already denied once, and never when afterMs is 0 (off).
+ * `firstSeenAt` is the reminder clock of this question (the same one the owner
+ * marks use), so there is one clock, not two.
+ */
+export function decideHelperAutoDeny(input: {
+  isMainAgent: boolean
+  helper: string | null
+  firstSeenAt: number
+  now: number
+  afterMs: number
+  alreadyDeniedId: string | null
+  id: string
+}): HelperAutoDenyDecision {
+  if (input.afterMs <= 0) return 'none'
+  if (!input.isMainAgent || input.helper == null || input.id === '') return 'none'
+  if (input.alreadyDeniedId === input.id) return 'none'
+  return input.now - input.firstSeenAt >= input.afterMs ? 'deny' : 'wait'
+}
+
+export function formatHelperAutoDenyAlert(label: string, session: string, helper: string, ask: string | null, waitingMs: number): string {
+  const asks = ask ? ` Ezt kérdezte: „${ask}”.` : ''
+  return `🔐 A(z) ${label} session egy segédügynökének (${helper}) engedélykérése ${humanWaitHu(waitingMs)} vár válaszra, ezért NEM-et nyomtam (Escape).${asks} Ha ez a munkának kellett volna: tmux attach -t ${session}`
 }
 
 export interface PermissionReminderState {
@@ -291,6 +352,18 @@ if (!configured.valid) {
   logger.warn({ value: PERMISSION_ALERT_MARKS, using: DEFAULT_PERMISSION_ALERT_MARKS }, 'PERMISSION_ALERT_MARKS is not a list of durations (10m, 1h, 1d...) -- using the default schedule')
 }
 
+/** The helper auto-deny delay the monitor passes in (0 = off). */
+export const PERMISSION_HELPER_AUTODENY_AFTER_MS = (() => {
+  const parsed = parseHelperAutoDenyMin(PERMISSION_HELPER_AUTODENY_MIN)
+  if (!parsed.valid) {
+    logger.warn({ value: PERMISSION_HELPER_AUTODENY_MIN, using: DEFAULT_PERMISSION_HELPER_AUTODENY_MIN }, 'PERMISSION_HELPER_AUTODENY_MIN is not a whole number of minutes (0 = off) -- using the default')
+  }
+  return parsed.minutes * 60 * 1000
+})()
+
+/** Per session: the identity of the prompt already denied (exactly one Escape per identity). */
+const deniedIds = new Map<string, string>()
+
 /**
  * Stateful half for the monitor: returns the text to send, or null when this
  * session's open question has not reached its next mark. `deepPane`
@@ -326,9 +399,55 @@ export interface PermissionPromptPassDeps {
   isMainAgent?: boolean
   /** Who was told about which prompt, per session; dropped with the menu spell. */
   escalation?: Map<string, PermPromptEscalationState>
+  /**
+   * A helper's prompt on the MAIN agent's pane stood this long: Escape (NO) is
+   * sent. 0 or absent = off. PERMISSION_HELPER_AUTODENY_MIN, read by the monitor.
+   */
+  helperAutoDenyAfterMs?: number
+  /** The same pane with scrollback, freshly captured, just before the key. */
+  recapture?: (session: string) => string | null
+  /** Sends Escape (NO) to the session's pane. */
+  sendEscape?: (session: string) => void
 }
 
 const ownEscalation = new Map<string, PermPromptEscalationState>()
+
+/**
+ * The auto-deny step of the pass. Sends Escape only when the decision is
+ * `deny` AND the same question (same identity, still a helper's card) is on the
+ * pane at the moment of the key. Returns true when Escape was sent.
+ */
+function tryHelperAutoDeny(label: string, session: string, pane: string | null | undefined, deep: string | null | undefined, deps: PermissionPromptPassDeps, now: number): boolean {
+  const state = states.get(session)
+  if (!state) return false
+  const helper = permissionPromptHelper(pane, deep)
+  const decision = decideHelperAutoDeny({
+    isMainAgent: deps.isMainAgent === true,
+    helper,
+    firstSeenAt: state.firstSeenAt,
+    now,
+    afterMs: deps.helperAutoDenyAfterMs ?? 0,
+    alreadyDeniedId: deniedIds.get(session) ?? null,
+    id: state.id,
+  })
+  if (decision !== 'deny' || helper == null || !deps.recapture || !deps.sendEscape) return false
+  const again = deps.recapture(session)
+  if (!again || permissionPromptIdentity(again, again) !== state.id || permissionPromptHelper(again, again) !== helper) {
+    logger.info({ session, agent: label, helper }, 'helper permission prompt changed before the auto-deny -- nothing sent, the alert continues')
+    return false
+  }
+  try {
+    deps.sendEscape(session)
+  } catch (err) {
+    logger.warn({ err, session, agent: label }, 'helper auto-deny: Escape failed -- the prompt stands, retried on the next alert tick')
+    return false
+  }
+  deniedIds.set(session, state.id)
+  const waitingMs = now - state.firstSeenAt
+  logger.warn({ session, agent: label, helper, waitingMs }, 'helper permission prompt stood past PERMISSION_HELPER_AUTODENY_MIN -- sent Escape (NO) to the main agent pane')
+  deps.send(formatHelperAutoDenyAlert(label, session, helper, permissionPromptAsk(pane, deep), waitingMs), { agent: label, kind: 'permission-prompt' })
+  return true
+}
 
 /**
  * Everything the menu pass does for a session parked on a permission prompt,
@@ -354,6 +473,10 @@ export function runPermissionPromptPass(
   const ask = permissionPromptAsk(pane, deep)
   const state = states.get(session) as PermissionReminderState
   const age = now - state.firstSeenAt
+  // A helper's prompt past its mark is answered NO here, and that answer is the
+  // one owner message for it: the owner marks below would describe a prompt
+  // that no longer stands ("NEM nyomtam meg semmit"), so they are skipped.
+  if (tryHelperAutoDeny(label, session, pane, deep, deps, now)) return 'auto-deny'
   return escalatePermissionPrompt(deps.escalation ?? ownEscalation, {
     session,
     label,
@@ -374,9 +497,11 @@ export function runPermissionPromptPass(
 export function clearPermissionPromptAlert(session: string): void {
   states.delete(session)
   ownEscalation.delete(session)
+  deniedIds.delete(session)
 }
 
 export function resetPermissionPromptAlerts(): void {
   states.clear()
   ownEscalation.clear()
+  deniedIds.clear()
 }

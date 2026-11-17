@@ -66,7 +66,7 @@ import { parseEtimeSeconds } from './ps-etime.js'
 import { recordChannelEvent } from './channel-event-log.js'
 import { notifyChannel, type AlertMeta } from '../notify.js'
 import type { PermPromptEscalationState } from './permission-prompt-escalation.js'
-import { runPermissionPromptPass, clearPermissionPromptAlert } from './permission-prompt-alert.js'
+import { runPermissionPromptPass, clearPermissionPromptAlert, PERMISSION_HELPER_AUTODENY_AFTER_MS } from './permission-prompt-alert.js'
 import { sendRoutineAlert } from './routine-alert.js'
 import { getProvider, channelStateDir, channelStateDirEnvVar, readChannelToken, type ChannelProviderType } from '../channel-provider.js'
 import { attemptChannelMcpReconnect } from './channel-mcp-reconnect.js'
@@ -2568,14 +2568,24 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
             // (permission-prompt-alert.ts), where they are under test. Before this
             // card the owner heard nothing here (card 88c366f2 kept ~15 prompts a
             // day off his phone); the marks keep that quiet for the first 15 min.
+            // Card 2e0b6280: on the MAIN agent's pane, a HELPER's prompt that has
+            // stood PERMISSION_HELPER_AUTODENY_MIN gets one Escape (NO), decided
+            // and re-checked inside the pass. Every other prompt: no keystroke.
             const escalation = runPermissionPromptPass(label, t.session, paneNow, {
               captureWithHistory: capturePaneWithHistory,
               escalation: permPromptState,
               isMainAgent: t.isMarveen,
               messageMainAgent: (text) => { createAgentMessage('system', MAIN_AGENT_ID, text) },
               send: (text, meta) => sendAlert(text, meta),
+              helperAutoDenyAfterMs: PERMISSION_HELPER_AUTODENY_AFTER_MS,
+              recapture: (session) => capturePaneWithHistory(session),
+              sendEscape: (session) => { execFileSync(tmuxBin(), ['send-keys', '-t', session, 'Escape'], { timeout: 5000 }) },
             })
-            logger.warn({ session: t.session, agent: label, escalation }, 'Blocking "menu" is a tool-permission prompt -- a human decides, NO keystrokes sent')
+            if (escalation === 'auto-deny') {
+              logger.warn({ session: t.session, agent: label, escalation }, 'Blocking "menu" is a helper tool-permission prompt past its auto-deny mark -- answered NO (Escape), once')
+            } else {
+              logger.warn({ session: t.session, agent: label, escalation }, 'Blocking "menu" is a tool-permission prompt -- a human decides, NO keystrokes sent')
+            }
           } else {
             // A TOOL-PERMISSION prompt lands here too, and the recovery keystroke
             // on THAT dialog is `cancel` -- so the watchdog denies a tool call on
