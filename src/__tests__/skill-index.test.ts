@@ -77,6 +77,38 @@ describe('skill-index.sh -- no-arg mode (backward compat)', () => {
   })
 })
 
+describe('skill-index.sh -- description truncation', () => {
+  let tmpHome: string
+
+  afterEach(() => {
+    rmSync(tmpHome, { recursive: true, force: true })
+  })
+
+  // `cut -c` in GNU coreutils counts bytes, not characters, even under a UTF-8
+  // locale. A description of accented text long enough to hit the 120 cut then
+  // loses its last character mid-encoding, and the index every agent reads
+  // carries a broken byte.
+  it('truncates a long accented description without splitting a character', () => {
+    tmpHome = mkTmp('skill-index-test-')
+    mkdirSync(join(tmpHome, '.claude', 'skills', 'skill-accents'), { recursive: true })
+    // 'é' is two bytes, so a byte-cut at 120 lands inside a character.
+    const longAccented = 'é'.repeat(200)
+    writeFileSync(
+      join(tmpHome, '.claude', 'skills', 'skill-accents', 'SKILL.md'),
+      makeSkillMd('skill-accents', longAccented),
+    )
+
+    // LC_ALL=C: BSD cut (macOS) is character-aware under a UTF-8 locale and would hide the old byte-cut bug;
+    // the C locale makes `cut -c` count bytes on every platform, so this test can see the defect it guards.
+    runScript([], { HOME: tmpHome, LC_ALL: 'C' })
+
+    const raw = readFileSync(join(tmpHome, '.claude', 'skills', '.skill-index.md'))
+    // A replacement char means the bytes did not decode: the cut split a char.
+    expect(raw.toString('utf-8')).not.toContain('\uFFFD')
+    expect(raw.toString('utf-8')).toContain('é'.repeat(120))
+  })
+})
+
 describe('skill-index.sh -- AGENT_DIR mode (merged index)', () => {
   let tmpHome: string
   let agentDir: string

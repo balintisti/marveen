@@ -47,7 +47,7 @@ beforeAll(async () => {
 })
 
 describe('the agent card channel label names its own subject', () => {
-  const block = () => sliceOnce('const chConnected = agentIsConnected(agent)', 'card.innerHTML')
+  const block = () => sliceOnce('const chConnected = agentOwnChannelConnected(agent)', 'card.innerHTML')
 
   it('the channel label uses the channel keys, not the agent-status pair', () => {
     const s = block()
@@ -69,7 +69,7 @@ describe('the agent card channel label names its own subject', () => {
   })
 
   it('both signals are still rendered side by side, each with its own dot', () => {
-    const s = sliceOnce('const chConnected = agentIsConnected(agent)', '${agent.needsReauth')
+    const s = sliceOnce('const chConnected = agentOwnChannelConnected(agent)', '${agent.needsReauth')
     expect(s).toMatch(/process-dot \$\{runDotClass\}/)
     expect(s).toMatch(/tg-dot \$\{chDotClass\}/)
   })

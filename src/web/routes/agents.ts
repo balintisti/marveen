@@ -52,6 +52,7 @@ import {
   writeAgentMemoryIsolation,
   readAgentClaudeConfigDir,
   readAgentRemoteConfig,
+  readAgentRunAsUser,
   readAgentRemoteHost,
   writeAgentRemoteConfig,
   readAgentVoiceConfig,
@@ -435,6 +436,8 @@ interface AgentSummary {
   hasSlack: boolean
   hasGooglechat: boolean
   hasTeams: boolean
+  /** The agent's own channel provider from agent-config.json, null when unset. */
+  channelProvider: string | null
   status: 'configured' | 'draft'
   running: boolean
   /** Tri-state: 'running' | 'stopped' | 'unreachable' (remote ssh failure). */
@@ -442,6 +445,11 @@ interface AgentSummary {
   /** Remote ssh destination + workdir, or null for a local agent. */
   remoteHost: string | null
   remoteWorkdir: string | null
+  /** The OS user the agent runs as (agent-config.json runAsUser, validated by
+   *  readAgentRunAsUser -- the same value the spawn uses), null when not
+   *  configured. Not a secret: tools acting for the agent read it here instead
+   *  of parsing agent-config.json themselves (#2358). */
+  runAsUser: string | null
   session?: string
   hasAvatar: boolean
   /** Character nickname from store/team-nicknames.json; undefined when unset. */
@@ -594,11 +602,13 @@ function getAgentSummary(name: string): AgentSummary {
     hasSlack: sc.hasSlack,
     hasGooglechat: gc.hasGooglechat,
     hasTeams: tc.hasTeams,
+    channelProvider: readAgentChannelProvider(name),
     status: hasClaudeMd && hasSoulMd ? 'configured' : 'draft',
     running,
     runState,
     remoteHost: remote.host,
     remoteWorkdir: remote.workdir,
+    runAsUser: readAgentRunAsUser(name),
     session,
     hasAvatar: findAvatarForAgent(name) !== null,
     nickname: nicknameFor(name),
