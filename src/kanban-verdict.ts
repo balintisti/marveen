@@ -160,7 +160,7 @@ export function openVerdicts(comments: VerdictComment[]): OpenVerdict[] {
   const closedByFixRound = (verdict: { seq: number; handed: boolean }) =>
     closer !== undefined
     && closer.seq > verdict.seq
-    && verdictToken(closer.line) === CLOSED_TOKEN
+    && CLOSED_TOKEN.test(verdictToken(closer.line))
     && verdict.handed
   const open: OpenVerdict[] = []
   for (const [author, verdict] of lastByAuthor) {
