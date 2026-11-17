@@ -299,9 +299,16 @@ export function writeRestartTail(name: string, inputs: GuardInputs, staleMinutes
       logger.warn({ err, name }, 'context-guard: restart-tail message query failed')
       messages = null
     }
+    // Same split as the restart reason (killedNote, card 3c3d8e43): a detached gate survives the
+    // kill, and calling it killed would have the fresh session start a second one beside it.
+    const total = inputs.backgroundWork ?? 0
+    const detached = Math.min(inputs.detachedWork ?? 0, total)
     // Card 6494ca96: even a FRESH handoff cannot know the messages that arrived after it was written,
     // so those alone are a reason for a tail. A failed query keeps the old rule.
-    if (!needsRestartTail(mtime, staleMinutes) && !(messages && messages.length > 0)) {
+    // Card 0000e470: nor can it know the work the restart killed. The tail is the only place the
+    // resume prompt names it, and restartNoticeClosesItself closes the coordinator's copy at birth
+    // on an empty loss window, so without a tail the killed work left no trace with anyone.
+    if (!needsRestartTail(mtime, staleMinutes) && !(messages && messages.length > 0) && total - detached === 0) {
       if (existsSync(path)) unlinkSync(path)
       return
     }
@@ -312,11 +319,7 @@ export function writeRestartTail(name: string, inputs: GuardInputs, staleMinutes
       logger.warn({ err, name }, 'context-guard: restart-tail comment query failed')
       comments = null
     }
-    // Same split as the restart reason (killedNote, card 3c3d8e43): a detached gate survives the
-    // kill, and calling it killed would have the fresh session start a second one beside it.
     // killedWorkDetail even with nothing detached: only it carries '(pane link not measured)' (didi 38866).
-    const total = inputs.backgroundWork ?? 0
-    const detached = Math.min(inputs.detachedWork ?? 0, total)
     writeFileSync(path, buildRestartTail({
       name, nowMs, handoffMtimeMs: mtime, staleMinutes,
       killedCount: total - detached, killedDetail: inputs.killedWorkDetail || inputs.backgroundWorkDetail || '',
