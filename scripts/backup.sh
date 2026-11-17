@@ -218,18 +218,24 @@ REPORTS_SRC_N=0
 REPORTS_CHECKED=0
 REPORTS_SNAP_HEAD=""
 
-# reports_sources [find args] -> "<agent>/<path under reports/>" per file; the same glob and
-# `find -L` as the snapshot script, so both name the same population.
+# reports_sources [find args] -> "<agent>/<path under reports/>" per file; the same glob, the same
+# `find -L` and the same skipped dependency trees as the snapshot script, so both name the same
+# population. DEPENDENCY TREES (card 212e319f): node_modules, .venv, venv are rebuilt from a lockfile;
+# one report's node_modules (1081 MB) took the archive from 437 to 724 MB and the upload past the
+# Drive token's hour. agent-reports-snapshot.sh skips the same names: the two lists must stay the same.
+REPORTS_SKIP_DIRS=( \( -name node_modules -o -name .venv -o -name venv \) )
 reports_sources() {
   local d a
   for d in agents/*/reports; do
     [[ -d "${d}" ]] || continue
     a="$(basename "$(dirname "${d}")")"
-    ( cd "${d}" && find -L . -type f ! -name '.DS_Store' "$@" | sed "s|^\./|${a}/|" )
+    ( cd "${d}" && find -L . -type d "${REPORTS_SKIP_DIRS[@]}" -prune \
+        -o -type f ! -name '.DS_Store' "$@" -print | sed "s|^\./|${a}/|" )
   done
 }
 
 REPORTS_SRC_N="$(reports_sources | grep -c . || true)"
+REPORTS_SKIPPED="$(find -L agents/*/reports -type d "${REPORTS_SKIP_DIRS[@]}" -prune -print 2>/dev/null | grep -c . || true)"
 [[ -d "${REPORTS_SNAP}" ]] && echo "${REPORTS_REL}" >> "${HOMELIST}"
 if [[ "${REPORTS_SRC_N}" -gt 0 ]]; then
   if ! command -v git >/dev/null 2>&1; then
@@ -324,7 +330,7 @@ fi
   fi
   echo "--- home/ ---"; sed 's,^,home/,' "${HOMELIST}" 2>/dev/null || true
   echo "--- reports ---"
-  echo "agent reports: ${REPORTS_SRC_N} source files, ${REPORTS_CHECKED} compared byte for byte, snapshot HEAD ${REPORTS_SNAP_HEAD:-none}"
+  echo "agent reports: ${REPORTS_SRC_N} source files, ${REPORTS_CHECKED} compared byte for byte, snapshot HEAD ${REPORTS_SNAP_HEAD:-none}, ${REPORTS_SKIPPED} dependency trees skipped"
 } > "${MANIFEST}"
 
 # --- Assemble the archive via a staging dir, then one plain tar. -----------
@@ -373,6 +379,14 @@ if [[ -d "${STAGE}/home/${REPORTS_REL}/.git" ]]; then
       REPORTS_FAIL="${REPORTS_FAIL} the copied history of ${REPORTS_SNAP} does not pass a git connectivity check, twice;"
     fi
   fi
+fi
+
+# A dependency tree the snapshot job mirrored before it skipped them (card 212e319f) is still in its
+# directory: it stays out of the archive here. Only the STAGED copy is touched, never the snapshot.
+if [[ -d "${STAGE}/home/${REPORTS_REL}" ]]; then
+  find "${STAGE}/home/${REPORTS_REL}" -path "${STAGE}/home/${REPORTS_REL}/.git" -prune \
+    -o -type d "${REPORTS_SKIP_DIRS[@]}" -prune -exec rm -rf {} + \
+    || echo "backup: WARN could not drop every dependency tree from the staged reports (a larger archive, not a broken one)" >&2
 fi
 
 if [[ -n "${BUNDLE}" ]]; then

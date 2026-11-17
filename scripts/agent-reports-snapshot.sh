@@ -20,6 +20,13 @@
 # like that, and committing it would make the backup agree with the loss. A smaller
 # deletion is a real edit and is committed (git history keeps the old file).
 #
+# DEPENDENCY TREES ARE NOT REPORTS (card 212e319f, measured 2026-11-13): a report that holds a
+# project copy brings its installed dependencies along (sirius/3ccfe137-review/api/node_modules,
+# 1081 MB). They were mirrored here, and the daily archive took them: 437 -> 724 MB, an upload past
+# the Drive token's hour. A directory named node_modules, .venv or venv is rebuilt from the lockfile
+# next to it, so it is skipped, at every depth. scripts/backup.sh skips the same names in its own
+# population (reports_sources) and in the archive: the two lists must stay the same.
+#
 #   bash scripts/agent-reports-snapshot.sh      # launchd, every 30 minutes
 set -uo pipefail
 
@@ -62,11 +69,13 @@ fi
 TMP=$(mktemp -d)
 trap 'rm -rf "$LOCK_DIR" "$TMP"' EXIT
 
-# "<agent>/<relative path>" for every file of every agents/<name>/reports tree.
+# "<agent>/<relative path>" for every file of every agents/<name>/reports tree, dependency trees
+# left out (see the header).
 for d in "$MARVEEN_ROOT"/agents/*/reports; do
   [ -d "$d" ] || continue
   a=$(basename "$(dirname "$d")")
-  (cd "$d" && find -L . -type f ! -name '.DS_Store' | sed "s|^\./|$a/|")
+  (cd "$d" && find -L . -type d \( -name node_modules -o -name .venv -o -name venv \) -prune \
+                -o -type f ! -name '.DS_Store' -print | sed "s|^\./|$a/|")
 done | LC_ALL=C sort > "$TMP/src"
 git -C "$REPO" ls-files | LC_ALL=C sort > "$TMP/tracked"
 LC_ALL=C comm -23 "$TMP/tracked" "$TMP/src" > "$TMP/missing"

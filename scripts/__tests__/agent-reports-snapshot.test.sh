@@ -62,6 +62,23 @@ run; rc=$?
 git -C "$R" remote remove origin
 run; [ -f "$R/alfa/r8.md" ] && ok "CONTROL: without the remote the same run commits" || no "control run did not commit"
 
+echo "== dependency trees are not reports (card 212e319f) =="
+mkdir -p "$M/agents/alfa/reports/proj/api/node_modules/pkg" "$M/agents/alfa/reports/proj/.venv/lib" \
+         "$M/agents/alfa/reports/venv" "$M/agents/alfa/reports/proj/api/src"
+echo dep > "$M/agents/alfa/reports/proj/api/node_modules/pkg/index.js"
+echo dep > "$M/agents/alfa/reports/proj/.venv/lib/x.py"
+echo dep > "$M/agents/alfa/reports/venv/y.py"
+echo code > "$M/agents/alfa/reports/proj/api/src/main.ts"
+echo '{}' > "$M/agents/alfa/reports/proj/api/package-lock.json"
+run; rc=$?
+[ "$rc" -eq 0 ] && ok "a report with dependency trees snapshots rc=0" || no "deps rc=$rc: $(cat "$T/err.txt")"
+[ -f "$R/alfa/proj/api/src/main.ts" ] && [ -f "$R/alfa/proj/api/package-lock.json" ] && ok "the project's own files and lockfile are mirrored" || no "project files missing"
+[ ! -e "$R/alfa/proj/api/node_modules" ] && [ ! -e "$R/alfa/proj/.venv" ] && [ ! -e "$R/alfa/venv" ] \
+  && ok "node_modules, .venv and venv (any depth) are NOT copied" || no "a dependency tree was copied: $(find "$R/alfa" -path '*node_modules*' -o -path '*venv*' | head -3)"
+! git -C "$R" ls-files | grep -qE '(^|/)(node_modules|\.venv|venv)/' && ok "...nor committed" || no "a dependency file is tracked"
+C=$(commits); run
+[ "$(commits)" = "$C" ] && ok "CONTROL: a second run sees no change (the skipped trees are not 'new' every time)" || no "the skipped trees produce a commit each run"
+
 echo "== the lock =="
 mkdir "$T/lock" && echo $$ > "$T/lock/pid"
 echo "locked" > "$M/agents/alfa/reports/r9.md"; C=$(commits)
