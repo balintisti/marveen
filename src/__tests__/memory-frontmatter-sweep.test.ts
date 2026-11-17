@@ -65,6 +65,9 @@ describe('memory-frontmatter-sweep', () => {
     expect(sent()).toContain('from heartbeat')
     expect(sent()).toContain('UJ: ')
     expect(sent()).toContain('feedback_b.md')
+    // The alarm carries the verdict, not the writer's replacement line (79715a88): no cut-off hint.
+    expect(sent()).toContain('YAML mapping-hiba')
+    expect(sent()).not.toContain('KESZ JAVITAS')
   })
 
   it('the same broken set the next day: exit 1, but no repeated message', () => {

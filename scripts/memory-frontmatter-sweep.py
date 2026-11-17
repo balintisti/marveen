@@ -31,6 +31,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -62,7 +63,10 @@ def sweep(files):
         with open(p, encoding='utf-8', errors='replace') as fh:
             reason = tartalom_hiba(fh.read())
         if reason:
-            broken[p] = reason.split('. Javitas:')[0][:200]
+            # The verdict only: both advice forms (the generic '. Javitas:' and the line-level
+            # '. KESZ JAVITAS', card 79715a88) are for the writer at write time, and a 200-char cut
+            # would leave half a replacement line in the alarm.
+            broken[p] = re.split(r'\. (?:Javitas:|KESZ JAVITAS)', reason)[0][:200]
     return broken
 
 
