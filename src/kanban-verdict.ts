@@ -95,8 +95,16 @@ export function verdictToken(line: string): string {
   return normalize(cut.length ? rest.slice(0, Math.min(...cut)) : rest)
 }
 
-/** NYITOTT TETEL, with or without a severity in parentheses after it. */
-const OPEN_TOKEN = /^NYITOTT TETEL(?: \([^)]*\))?$/
+/**
+ * NYITOTT TETEL, and whatever the writer put after it before the `|` -- card 1e5c33c9.
+ * The token used to be compared whole (only a "(severity)" allowed after it), so
+ * "VERDIKT: NYITOTT TETEL @28d1f4c1a (mandark, ...)" with no `|` read as no verdict
+ * at all and the done move went through over it. Measured 2026-11-03 on 1637 cards:
+ * 5 such lines (an `@<sha>` or a `:` after the token), one card already closed over
+ * one (83e09f55). An open item is the reading that fails safe: a close it wrongly
+ * refuses has `override_reason`, a close it wrongly allows has no way back.
+ */
+const OPEN_TOKEN = /^NYITOTT TETEL(?![A-Z0-9])/
 
 /**
  * THE FIX-ROUND HAND-OVER -- card c38bd6d0 (didi 10015070, marveen decision A).
@@ -163,8 +171,14 @@ export function openVerdicts(comments: VerdictComment[]): OpenVerdict[] {
   return open
 }
 
-/** The token a reviewer closes with. Compared whole, like OPEN_TOKEN. */
-const CLOSED_TOKEN = 'NINCS NYITOTT TETEL'
+/**
+ * The token a reviewer closes with, and a parenthetical after it -- card 1e5c33c9 (marveen's
+ * decision, 2026-11-03): "VERDIKT: NINCS NYITOTT TETEL (szallitas) | ..." is a scoped close,
+ * and didi measured 158 live lines of that shape the idle guard read as not closing. Only a
+ * parenthetical: anything else after the token (an `@<sha>`, a word) stays not closing, the
+ * side that wakes the assignee rather than silences the guard. OPEN_TOKEN is a prefix: see there.
+ */
+const CLOSED_TOKEN = /^NINCS NYITOTT TETEL(?: \([^)]*\))?$/
 
 /**
  * Does this ONE comment end on a closing verdict -- is its last column-0 `VERDIKT:` line
@@ -183,7 +197,7 @@ export function endsOnClosingVerdict(comment: Pick<VerdictComment, 'author' | 'c
     const line = withoutOwnStamp(raw, comment.author)
     if (line.startsWith(VERDICT_PREFIX)) last = line
   }
-  return last !== null && verdictToken(last) === CLOSED_TOKEN
+  return last !== null && CLOSED_TOKEN.test(verdictToken(last))
 }
 
 const LEFTOVER_PREFIX = 'MARADEK:'
