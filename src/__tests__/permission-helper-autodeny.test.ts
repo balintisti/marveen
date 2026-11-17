@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  clearPermissionPromptAlert,
   decideHelperAutoDeny,
   parseHelperAutoDenyMin,
   permissionPromptHelper,
@@ -43,17 +44,23 @@ function harness(opts: {
   recaptured?: string | null
   isMainAgent?: boolean
   afterMs?: number
+  /** The first N sendEscape calls throw (a tmux error); later calls succeed. */
+  escapeFails?: number
 }) {
   const escapes: string[] = []
   const sent: string[] = []
   let current: string | null = opts.deep === undefined ? opts.pane : opts.deep
+  let failsLeft = opts.escapeFails ?? 0
   const deps = {
     captureWithHistory: () => current,
     send: (text: string) => { sent.push(text) },
     isMainAgent: opts.isMainAgent ?? true,
     helperAutoDenyAfterMs: opts.afterMs ?? AFTER,
     recapture: () => (opts.recaptured === undefined ? current : opts.recaptured),
-    sendEscape: (session: string) => { escapes.push(session) },
+    sendEscape: (session: string) => {
+      if (failsLeft > 0) { failsLeft--; throw new Error('tmux: no server running') }
+      escapes.push(session)
+    },
   }
   // pass(minute, pane): the visible pane and its scrollback for this tick. A
   // different pane (a new question) brings its own scrollback.
@@ -273,5 +280,87 @@ describe('runPermissionPromptPass: the helper auto-deny, end to end through the 
 
   it('the identity of the denied prompt is the one the pass compared (sanity)', () => {
     expect(permissionPromptIdentity(HELPER_PANE)).not.toBe('')
+  })
+})
+
+// FIX ROUND 1 (didi, card 2e0b6280 comment 67524): the four mutants that
+// survived the first suite. Each case below is the one that kills one of them.
+describe('fix round 1: the cases the first suite did not kill', () => {
+  beforeEach(() => resetPermissionPromptAlerts())
+
+  // D6: the same identity, but the re-capture is the MAIN card. The identity is
+  // the LAST PERMISSION_IDENTITY_MAX letters and digits of the card body, so a
+  // body longer than that drops the header (and its "from the ... agent" suffix)
+  // out of the identity. Only the helper check stops the key here.
+  const LONG_HELPER_PANE = (() => {
+    const lines = HELPER_PANE.split('\n')
+    const q = lines.findIndex((l) => /Do you want to proceed\?/.test(l))
+    if (q < 0) throw new Error('fixture shape changed: no question line')
+    const filler = Array.from({ length: 40 }, (_, i) => `   │ filler${i} ${'abcdefghijklmnopqrstuvwxyz0123456789'.repeat(2)}`)
+    lines.splice(q, 0, ...filler)
+    return lines.join('\n')
+  })()
+  const LONG_MAIN_PANE = LONG_HELPER_PANE.replace('· from the general-purpose agent', '')
+
+  it('(d) same identity, the re-capture is the main agent own card (suffix only in a dropped header): no Escape', () => {
+    // Preconditions: the identity really is the same, and the helper really differs.
+    expect(permissionPromptIdentity(LONG_MAIN_PANE, LONG_MAIN_PANE)).toBe(permissionPromptIdentity(LONG_HELPER_PANE, LONG_HELPER_PANE))
+    expect(permissionPromptHelper(LONG_HELPER_PANE)).toBe('general-purpose')
+    expect(permissionPromptHelper(LONG_MAIN_PANE)).toBeNull()
+    const h = harness({ pane: LONG_HELPER_PANE, recaptured: LONG_MAIN_PANE })
+    for (let m = 0; m <= 35; m += 5) expect(h.pass(m)).not.toBe('auto-deny')
+    expect(h.escapes).toHaveLength(0)
+  })
+
+  it('(d control) the same long helper card re-captured as itself still gets its one Escape at 30 min', () => {
+    const h = harness({ pane: LONG_HELPER_PANE })
+    for (let m = 0; m <= 30; m += 5) h.pass(m)
+    expect(h.escapes).toHaveLength(1)
+  })
+
+  // D11: a helper is read from the header only. With no header in the capture,
+  // a "from the ... agent" text in the pane (a command, or an older card) must
+  // not make the card a helper's.
+  it('(c) the suffix only in the COMMAND of a card whose header is not in the capture: no helper, no key', () => {
+    const pane = MAIN_WITH_SUFFIX_IN_COMMAND.split('\n').filter((l) => l.trim() !== 'Bash command').join('\n')
+    expect(pane).toContain('· from the general-purpose agent')
+    expect(permissionPromptHelper(pane)).toBeNull()
+    const h = harness({ pane })
+    for (let m = 0; m <= 35; m += 5) expect(h.pass(m)).not.toBe('auto-deny')
+    expect(h.escapes).toHaveLength(0)
+  })
+
+  it('(c) an OLDER helper card above a header-less main card: the older suffix is not this card, no key', () => {
+    const headerless = MAIN_PANE.split('\n').filter((l) => l.trim() !== 'Bash command').join('\n')
+    const pane = `${HELPER_PANE}\n${headerless}`
+    expect(pane).toContain('· from the general-purpose agent')
+    expect(permissionPromptHelper(pane)).toBeNull()
+    const h = harness({ pane })
+    for (let m = 0; m <= 35; m += 5) expect(h.pass(m)).not.toBe('auto-deny')
+    expect(h.escapes).toHaveLength(0)
+  })
+
+  // D3: the denied identity is forgotten when the menu episode ends, so the same
+  // question in a NEW episode gets its own Escape at its own mark.
+  it('a denied prompt whose episode ends and comes back as the SAME question gets its own Escape', () => {
+    const h = harness({ pane: HELPER_PANE })
+    for (let m = 0; m <= 30; m += 5) h.pass(m)
+    expect(h.escapes).toHaveLength(1)
+    clearPermissionPromptAlert('main-channels')
+    for (let m = 100; m <= 130; m += 5) h.pass(m)
+    expect(h.escapes).toHaveLength(2)
+  })
+
+  // D9: the identity is remembered only after a key really went out. A tmux
+  // error at the mark is retried on the next alert tick, not swallowed.
+  it('a sendEscape that throws at the mark is retried on the next tick, and the Escape then lands once', () => {
+    const h = harness({ pane: HELPER_PANE, escapeFails: 1 })
+    for (let m = 0; m <= 25; m += 5) h.pass(m)
+    expect(h.pass(30)).not.toBe('auto-deny')
+    expect(h.escapes).toHaveLength(0)
+    expect(h.pass(35)).toBe('auto-deny')
+    expect(h.escapes).toHaveLength(1)
+    expect(h.pass(40)).not.toBe('auto-deny')
+    expect(h.escapes).toHaveLength(1)
   })
 })
