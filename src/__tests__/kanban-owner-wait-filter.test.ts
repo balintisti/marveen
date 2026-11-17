@@ -19,24 +19,26 @@ function fn(name: string): string {
   return APP.slice(a, b + 2)
 }
 
-type Card = { id: string; assignee: string | null; project?: string; labels?: { id: string; name: string }[] }
+type Card = { id: string; assignee: string | null; project?: string; title?: string; labels?: { id: string; name: string }[] }
 const WAIT = { id: 'c288717c', name: 'varakozik:isti' }
 const CARDS: Card[] = [
-  { id: 'e756c0d5', assignee: 'jarvis', labels: [WAIT] },
+  { id: 'e756c0d5', assignee: 'jarvis', title: 'Shared word, waiting', labels: [WAIT] },
   { id: '69f38d7a', assignee: 'computress', labels: [{ id: '0554c87b', name: 'IGAZOLT' }, WAIT] },
-  { id: 'isti0001', assignee: 'Isti', labels: [] },
+  { id: 'isti0001', assignee: 'Isti', title: 'Shared word, not waiting', labels: [] },
   { id: 'none0001', assignee: 'didi' },
 ]
 
-function run(state: { waiting: boolean; assignee?: string; owner?: string | null }): string[] {
+function run(state: { waiting: boolean; assignee?: string; owner?: string | null; search?: string }): string[] {
   const ctx = vm.createContext({
     kanbanAssignees: state.owner === null ? [] : [{ name: state.owner ?? 'Isti', type: 'owner' }, { name: 'didi', type: 'agent' }],
     kanbanProjectFilter: '',
     kanbanAssigneeFilter: state.assignee ?? '',
     kanbanWaitingOnOwner: state.waiting,
+    // Batch m126 port (card 5c6e9968): the base filter asks the toolbar search first (upstream #1795).
+    kanbanSearchQuery: state.search ?? '',
     CARDS,
   })
-  vm.runInContext([fn('ownerAssigneeName'), fn('ownerWaitLabelName'), fn('kanbanCardMatchesBaseFilters')].join('\n'), ctx)
+  vm.runInContext([fn('ownerAssigneeName'), fn('ownerWaitLabelName'), fn('kanbanCardMatchesSearch'), fn('kanbanCardMatchesBaseFilters')].join('\n'), ctx)
   return vm.runInContext('CARDS.filter(kanbanCardMatchesBaseFilters).map((c) => c.id)', ctx) as string[]
 }
 
@@ -51,6 +53,12 @@ describe('"Rám vár" filters on the varakozik:<owner> label (card 17eedaee)', (
 
   it('the owner\'s own assigned cards stay reachable from the assignee dropdown', () => {
     expect(run({ waiting: false, assignee: 'Isti' })).toEqual(['isti0001'])
+  })
+
+  it('the toolbar search narrows the waiting view, it does not replace it (card 5c6e9968)', () => {
+    expect(run({ waiting: false, search: 'shared' })).toEqual(['e756c0d5', 'isti0001'])
+    expect(run({ waiting: true, search: 'shared' })).toEqual(['e756c0d5'])
+    expect(run({ waiting: true, search: 'nomatch' })).toEqual([])
   })
 
   it('the two filters combine', () => {
