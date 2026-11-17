@@ -210,7 +210,7 @@ BUILD_VALUE_FLAGS = {'--ext', '--format', '-f', '--config', '-c', '--rulesdir', 
                      '--cache-location', '--max-warnings', '--output-file', '-o', '--plugin', '--rule',
                      '--resolve-plugins-relative-to', '--env', '--global', '--parser-options', '--report-unused-disable-directives-severity',
                      '--project', '-p', '--tsBuildInfoFile', '--outDir', '--target', '--module', '--lib', '--jsx',
-                     '--extendedDiagnostics', '--maxNodeModuleJsDepth'}
+                     '--maxNodeModuleJsDepth'}
 
 
 def _deep_path(arg):
