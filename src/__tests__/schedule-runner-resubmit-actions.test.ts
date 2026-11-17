@@ -68,6 +68,8 @@ vi.mock('../web/scheduled-tasks-io.js', () => ({
   SCHEDULED_TASK_INLINE_MAX_CHARS: 1_500,
   SCHEDULED_TASK_BODY_WARN_CHARS: 20_000,
   listScheduledTasks: () => mockListScheduledTasks(),
+  // SCHEDFRESH1007: a fire reads its one task by name (card 69f5373a).
+  readScheduledTask: (n: string) => (mockListScheduledTasks() as Array<{ name: string }>).find(t => t.name === n) ?? null,
   SCHEDULED_TASKS_DIR: '/tmp/marveen-resubmit-actions-no-tasks-dir',
 }))
 

@@ -106,7 +106,8 @@ describe('schedule-runner wiring', () => {
     // owner-facing.
     // Both positions FOUND first: -1 is less than anything, so a vanished
     // pre-check call would otherwise pass this order check vacuously.
-    const pc = RUNNER_SRC.indexOf('const cronPc = runPreCheck(task)')
+    // CRONPRECHECKSYNC1007: the cron loop awaits the async form now.
+    const pc = RUNNER_SRC.indexOf('const cronPc = await runPreCheckAsync(task)')
     const gate = RUNNER_SRC.indexOf("if (quota.action === 'defer')")
     expect(pc).toBeGreaterThan(0)
     expect(gate).toBeGreaterThan(0)

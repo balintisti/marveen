@@ -2,7 +2,7 @@ import { join, isAbsolute } from 'node:path'
 import { checkTaskMcpRequirements } from './schedule-mcp-precheck.js'
 import { collectHeartbeatMetricsBlock } from './heartbeat-metrics-inject.js'
 import { existsSync, readFileSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { atomicWriteFileSync } from './atomic-write.js'
 import { logger } from '../logger.js'
 import { decideDesktopGate, readDesktopLock, recordDesktopSkip } from './desktop-lock.js'
@@ -23,6 +23,7 @@ import {
   reconcileOpenTaskRuns,
   getTaskRunMedianDurationMs,
   listPendingTaskRetries,
+  getPendingTaskRetry,
   deletePendingTaskRetry,
   updatePendingTaskRetry,
   insertPendingTaskRetryIfNew,
@@ -69,6 +70,7 @@ export function skipIfBusyIsSafe(schedule: string, nowMs: number): boolean {
 
 import {
   listScheduledTasks,
+  readScheduledTask,
   SCHEDULED_TASKS_DIR,
   SCHEDULED_TASK_INLINE_MAX_CHARS,
   SCHEDULED_TASK_BODY_WARN_CHARS,
@@ -99,6 +101,7 @@ import { sessionNameForAgent } from './session-names.js'
 import { isRestartInFlight } from './restart-lock.js'
 import { runCommandTask } from './command-task.js'
 import { DUE_CHECK_INTERVAL_MS, nextSkipStreak, runPromptTaskDueCheck } from './prompt-task-due.js'
+import { trackDetachedGroup } from './detached-groups.js'
 import { decideQuotaAction, type QuotaWorkClass } from '../quota-gate.js'
 import { readQuotaSnapshot } from '../quota-snapshot.js'
 import { detectsFirstRunGate, detectPaneState, overfullParkedInputTail, type PaneState } from '../pane-state.js'
@@ -782,7 +785,7 @@ function rememberRetryPrefix(key: string, prefix: string): void {
 }
 
 /**
- * Pure: the retry loop's pre-check decision (card 22d7f41e).
+ * The retry loop's pre-check decision (card 22d7f41e). Pure but for the fresh run, which is awaited.
  *
  *   a hit is STORED -> it is the only copy of a consumed message: re-check it
  *                      read-only and deliver what is still open. The consuming
@@ -793,17 +796,17 @@ function rememberRetryPrefix(key: string, prefix: string): void {
  *
  * `stored`: undefined = leave the store alone, null = clear it, string = store it.
  */
-export function decideRetryPreCheck(
+export async function decideRetryPreCheck(
   storedHit: string | undefined,
   isAnswered: (chatId: string, messageId: string) => boolean | null,
-  runFresh: () => { skip: boolean; prefix?: string },
-): { pc: { skip: boolean; prefix?: string }; stored: string | null | undefined } {
+  runFresh: () => PreCheckResult | Promise<PreCheckResult>,
+): Promise<{ pc: PreCheckResult; stored: string | null | undefined }> {
   if (storedHit !== undefined) {
     const open = stillOpenHits(storedHit, isAnswered)
     if (open === '') return { pc: { skip: true }, stored: null }
     return { pc: { skip: false, prefix: open }, stored: open === storedHit ? undefined : open }
   }
-  const pc = runFresh()
+  const pc = await runFresh()
   return { pc, stored: isPreCheckHit(pc) ? (pc.prefix as string) : undefined }
 }
 
@@ -1313,7 +1316,18 @@ export function resolvePreCheckPath(taskName: string, preCheck: string): string 
   return isAbsolute(rooted) ? rooted : join(SCHEDULED_TASKS_DIR, taskName, rooted)
 }
 
-export function runPreCheck(task: ScheduledTask): { skip: boolean; prefix?: string } {
+export type PreCheckResult = { skip: boolean; prefix?: string }
+
+// The preCheck script's time limit; over it the script is killed and the LLM runs anyway.
+export const PRECHECK_TIMEOUT_MS = 10_000
+// spawnSync's default maxBuffer: a longer stdout fails the run the same way in both forms.
+const PRECHECK_MAX_STDOUT_BYTES = 1024 * 1024
+
+// The synchronous form. Since CRONPRECHECKSYNC1007 the runner calls it from
+// nowhere: both loops use runPreCheckAsync. Kept only as the reference the
+// async form's contract tests compare against; do not call it from the runner
+// (it holds the event loop, and its timeout ends only the direct child).
+export function runPreCheck(task: ScheduledTask): PreCheckResult {
   if (!task.preCheck) return { skip: false }
   const scriptPath = resolvePreCheckPath(task.name, task.preCheck)
   if (!existsSync(scriptPath)) {
@@ -1322,7 +1336,7 @@ export function runPreCheck(task: ScheduledTask): { skip: boolean; prefix?: stri
   }
   try {
     // db775775: under the task's agent identity, like the command tasks.
-    const r = spawnSync('bash', [scriptPath], { timeout: 10_000, encoding: 'utf-8', env: { ...process.env, ...gitIdentityVars(task.agent || MAIN_AGENT_ID) } })
+    const r = spawnSync('bash', [scriptPath], { timeout: PRECHECK_TIMEOUT_MS, encoding: 'utf-8', env: { ...process.env, ...gitIdentityVars(task.agent || MAIN_AGENT_ID) } })
     if (r.error) {
       logger.warn({ task: task.name, error: r.error.message }, 'pre-check script spawn error, running LLM anyway')
       return { skip: false }
@@ -1342,6 +1356,189 @@ export function runPreCheck(task: ScheduledTask): { skip: boolean; prefix?: stri
     logger.warn({ err, task: task.name }, 'pre-check script threw, running LLM anyway')
     return { skip: false }
   }
+}
+
+// runPreCheck's contract without holding the event loop (df2e0d97 2a). The
+// pending-retry loop re-runs a task's preCheck on every tick, and spawnSync
+// kept the dashboard's main thread for the whole script run, up to the 10 s
+// limit, each time: in the 2026-10-01/02 measurement (df2e0d97, 20.7 h) the
+// synchronous retry pre-checks stood for 734.7 s of the loop's stalls. Same
+// limit, same answers: a missing script, a spawn error, a timeout, a non-zero
+// exit or an oversized stdout all run the LLM anyway.
+//
+// CRONPRECHECKSYNC1007: the cron loop uses it too. A pre-check that calls the
+// dashboard's own API could not be answered while spawnSync held the loop, so
+// it stood until the limit and its request landed after it (measured on two
+// community installs, 2026-09-30..10-07: on one, 6 of 12 timeouts had the
+// message created 0.02-0.32 s AFTER the timeout).
+//
+// The script runs in its OWN process group (detached), and a timeout or an
+// oversized output ends the whole group: TERM, then KILL a second later. A
+// kill of the direct child alone left what the script started running as an
+// orphan; on 2026-10-05 an orphaned python, still in its ssh session, ran next
+// to the task's own run and wiped its key file (#1698, sigee82, measured on the
+// synchronous form; the same gap was here).
+export const PRECHECK_KILL_GRACE_MS = 1_000
+
+function endPreCheckGroup(child: ReturnType<typeof spawn>, task: ScheduledTask, onEnded: () => void = () => {}): void {
+  const pid = child.pid
+  if (pid == null) { onEnded(); return }
+  const signalGroup = (sig: NodeJS.Signals): void => {
+    try { process.kill(-pid, sig) } catch (err) {
+      // ESRCH: the group is already gone, which is the goal.
+      if ((err as NodeJS.ErrnoException).code !== 'ESRCH') logger.warn({ task: task.name, sig, error: (err as Error).message }, 'pre-check: could not signal the script\'s process group')
+    }
+  }
+  signalGroup('SIGTERM')
+  // DETACHEDSHUTDOWN1007: the group stays tracked until the KILL, so a
+  // shutdown inside the grace second still ends it.
+  setTimeout(() => { signalGroup('SIGKILL'); onEnded() }, PRECHECK_KILL_GRACE_MS).unref()
+}
+
+export function runPreCheckAsync(
+  task: ScheduledTask,
+  opts: { timeoutMs?: number; maxStdoutBytes?: number } = {},
+): Promise<PreCheckResult> {
+  if (!task.preCheck) return Promise.resolve({ skip: false })
+  const scriptPath = resolvePreCheckPath(task.name, task.preCheck)
+  if (!existsSync(scriptPath)) {
+    logger.warn({ task: task.name, scriptPath }, 'pre-check script not found, running LLM anyway')
+    return Promise.resolve({ skip: false })
+  }
+  const timeoutMs = opts.timeoutMs ?? PRECHECK_TIMEOUT_MS
+  const maxStdoutBytes = opts.maxStdoutBytes ?? PRECHECK_MAX_STDOUT_BYTES
+  return new Promise<PreCheckResult>((resolve) => {
+    let settled = false
+    let timer: NodeJS.Timeout | undefined
+    const settle = (result: PreCheckResult): void => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      resolve(result)
+    }
+    let child: ReturnType<typeof spawn>
+    try {
+      // detached: the script leads its own process group, so the limit can end
+      // everything it started (endPreCheckGroup), not just bash.
+      // db775775: under the task's agent identity, like the synchronous form.
+      child = spawn('bash', [scriptPath], { stdio: ['ignore', 'pipe', 'pipe'], detached: true, env: { ...process.env, ...gitIdentityVars(task.agent || MAIN_AGENT_ID) } })
+    } catch (err) {
+      logger.warn({ err, task: task.name }, 'pre-check script threw, running LLM anyway')
+      settle({ skip: false })
+      return
+    }
+    // DETACHEDSHUTDOWN1007: the dashboard's shutdown ends this group while it
+    // runs. It leaves the registry when the script exits on its own, or, after
+    // a limit, once endPreCheckGroup's KILL has gone out.
+    const untrack = trackDetachedGroup(child.pid, `pre-check:${task.name}`)
+    let ending = false
+    const endGroup = (): void => { ending = true; endPreCheckGroup(child, task, untrack) }
+    const stdout: Buffer[] = []
+    let stdoutBytes = 0
+    let stderr = ''
+    timer = setTimeout(() => {
+      logger.warn({ task: task.name, timeoutMs }, 'pre-check script timed out, running LLM anyway')
+      endGroup()
+      settle({ skip: false })
+    }, timeoutMs)
+    child.stdout?.on('data', (chunk: Buffer) => {
+      if (settled) return
+      stdoutBytes += chunk.length
+      if (stdoutBytes > maxStdoutBytes) {
+        logger.warn({ task: task.name, maxStdoutBytes }, 'pre-check script output too long, running LLM anyway')
+        endGroup()
+        settle({ skip: false })
+        return
+      }
+      stdout.push(chunk)
+    })
+    child.stderr?.on('data', (chunk: Buffer) => {
+      if (stderr.length < 200) stderr += chunk.toString('utf-8')
+    })
+    child.on('error', (err) => {
+      untrack()
+      logger.warn({ task: task.name, error: err.message }, 'pre-check script spawn error, running LLM anyway')
+      settle({ skip: false })
+    })
+    child.on('close', (status) => {
+      if (!ending) untrack()
+      if (settled) return
+      if (status !== 0) {
+        logger.warn({ task: task.name, status, stderr: stderr.trim().slice(0, 200) }, 'pre-check script exited non-zero, running LLM anyway')
+        settle({ skip: false })
+        return
+      }
+      const out = Buffer.concat(stdout).toString('utf-8').trim()
+      if (out === 'SKIP') {
+        logger.info({ task: task.name }, 'pre-check: nothing actionable, skipping LLM')
+        settle({ skip: true })
+        return
+      }
+      settle(out ? { skip: false, prefix: out } : { skip: false })
+    })
+  })
+}
+
+// A pending retry re-runs its task's preCheck at most once per this interval;
+// the ticks in between (every SCHEDULE_TICK_MS) reuse the last answer
+// (df2e0d97 2a). The answer is the task's, not the target agent's (the cron
+// loop runs it once per task too), so the rows of one task share it, and the
+// cron loop's fresh run of the same task refreshes it.
+export const RETRY_PRECHECK_MIN_INTERVAL_MS = 60_000
+const preCheckAnswers = new Map<string, { atMs: number; result: PreCheckResult }>()
+
+function preCheckAnswerKey(task: ScheduledTask): string {
+  return `${task.name}\u0000${task.preCheck ?? ''}`
+}
+
+export function rememberPreCheckAnswer(task: ScheduledTask, nowMs: number, result: PreCheckResult): void {
+  if (task.preCheck) preCheckAnswers.set(preCheckAnswerKey(task), { atMs: nowMs, result })
+}
+
+export async function retryPreCheck(
+  task: ScheduledTask,
+  nowMs: number,
+  run: (task: ScheduledTask) => Promise<PreCheckResult> = runPreCheckAsync,
+): Promise<PreCheckResult> {
+  if (!task.preCheck) return { skip: false }
+  const last = preCheckAnswers.get(preCheckAnswerKey(task))
+  if (last && nowMs >= last.atMs && nowMs - last.atMs < RETRY_PRECHECK_MIN_INTERVAL_MS) return last.result
+  const result = await run(task)
+  rememberPreCheckAnswer(task, nowMs, result)
+  return result
+}
+
+// Test hook: forget every remembered answer.
+export function resetPreCheckAnswersForTests(): void {
+  preCheckAnswers.clear()
+}
+
+// SCHEDRECHECK1007: the task as it is on disk now, or null when it was deleted
+// or disabled since the tick read the list. A fire must act on this, not on the
+// tick's snapshot: an edited prompt or target is the one that goes out, and a
+// task switched off in the meantime does not fire.
+//
+// SCHEDFRESH1007: read the one task, not the whole list (93 tasks on the owner's
+// host, two files each, on every fire). A task's folder is normally named after
+// it, so the folder of that name is tried first; the full scan stays the
+// fallback for a folder whose SKILL.md names another task, or a task whose
+// folder is named differently -- the folder-read answer is only taken when its
+// name matches.
+function currentEnabledTask(name: string): ScheduledTask | null {
+  const direct = readScheduledTask(name)
+  const t = direct && direct.name === name ? direct : listScheduledTasks().find(x => x.name === name)
+  return t && t.enabled ? t : null
+}
+
+// Who a task fires at, from its `agent` field: everyone running plus the main
+// agent for 'all', otherwise the one agent (the main agent when unset).
+function resolveTargetAgents(task: ScheduledTask): string[] {
+  if (task.agent === 'all') {
+    // Broadcast to all running agents + main
+    const running = listAgentNames().filter(a => isAgentRunning(a))
+    return [MAIN_AGENT_ID, ...running]
+  }
+  return [task.agent || MAIN_AGENT_ID]
 }
 
 // Try to fire a task at a single target agent. Returns the outcome so the
@@ -2722,19 +2919,32 @@ export function startScheduleRunner(): NodeJS.Timeout {
       // was first scheduled (e.g. kanban cards already processed). UNLESS a hit
       // is already waiting for this key: re-running a CONSUMING pre-check would
       // answer SKIP from its own dedup and swallow the very message the retry
-      // exists to deliver (card 22d7f41e).
+      // exists to deliver (card 22d7f41e). The fresh run, when there is one, is
+      // off the event loop and at most once a minute per task (df2e0d97 2a): the
+      // ticks in between reuse the last answer.
       // A CARRIED hit is re-checked, read-only, before it is delivered: what the
       // agent answered in the meantime drops out, and if nothing is left the
       // retry closes through the ordinary pre-check skip below -- no turn, and
       // no second reply to a question that already has one.
-      const decided = decideRetryPreCheck(
+      const decided = await decideRetryPreCheck(
         retryPrefix.get(key),
         (chatId, messageId) => isLedgerInboundAnswered(row.agent_name, chatId, messageId),
-        () => runPreCheck(taskDef),
+        () => retryPreCheck(taskDef, now),
       )
       if (decided.stored === null) clearRetryPrefix(key)
       else if (decided.stored !== undefined) replaceRetryPrefix(key, decided.stored)
       const retryPc = decided.pc
+      // TESTFOLLOWUP1007G: a pre-check runs off the event loop for up to its
+      // time limit, and the operator may disable or delete the task, or cancel
+      // this retry, meanwhile. The checks above saw the state from before the
+      // await, so read both again before acting on the answer. Nothing fires
+      // here; a disabled or deleted task's row is dropped by the checks above
+      // on the next tick, as for any other retry. SCHEDRECHECK1007: the task
+      // is re-read even without a pre-check (an earlier row's fire in this
+      // tick awaits too), and the fire below uses the CURRENT definition.
+      const current = currentEnabledTask(row.task_name)
+      if (!current) continue
+      if (taskDef.preCheck && !getPendingTaskRetry(row.task_name, row.agent_name)) continue
       if (retryPc.skip) {
         deletePendingTaskRetry(row.task_name, row.agent_name)
         // Nothing to do NOW either: catching this up later would be wrong.
@@ -2768,7 +2978,7 @@ export function startScheduleRunner(): NodeJS.Timeout {
       // a fire count.
       const heldMs = Math.max(0, now - row.first_attempt)
       const heldReason = `retry-queue:${row.attempt_count}`
-      const result = await attemptFireTask(taskDef, row.agent_name, now, retryPc.prefix, heldMs, heldReason)
+      const result = await attemptFireTask(current, row.agent_name, now, retryPc.prefix, heldMs, heldReason)
       if (result === 'fired') {
         deletePendingTaskRetry(row.task_name, row.agent_name)
         clearRetryPrefix(key)
@@ -2807,7 +3017,7 @@ export function startScheduleRunner(): NodeJS.Timeout {
       // refuses anything that is genuinely mid-turn; if it clears, the next
       // tick's retry delivers on its own.
       if (stillPresent && result === 'busy' && view.ageMs > SCHEDULE_JANITOR_PARKED_MIN_AGE_MS) {
-        const { session, host } = resolveTaskTarget(taskDef, row.agent_name)
+        const { session, host } = resolveTaskTarget(current, row.agent_name)
         if (await clearStaleParkedInput(session, host)) {
           logger.warn(
             { task: row.task_name, agent: row.agent_name, session, waitingMs: view.ageMs, attempts: row.attempt_count },
@@ -2875,15 +3085,7 @@ export function startScheduleRunner(): NodeJS.Timeout {
         continue
       }
 
-      let targetAgents: string[]
-
-      if (task.agent === 'all') {
-        // Broadcast to all running agents + main
-        const running = listAgentNames().filter(a => isAgentRunning(a))
-        targetAgents = [MAIN_AGENT_ID, ...running]
-      } else {
-        targetAgents = [task.agent || MAIN_AGENT_ID]
-      }
+      const targetAgents = resolveTargetAgents(task)
 
       // PRE-CHECK FIRST, THEN THE QUOTA GATE (card 22d7f41e, reversing the
       // 2026-08-17 order that kept a deferred task from spawning its script).
@@ -2899,7 +3101,19 @@ export function startScheduleRunner(): NodeJS.Timeout {
       //
       // Run pre-check once per task (not per agent) since it queries shared
       // state (DB, filesystem) that does not vary by target agent.
-      const cronPc = runPreCheck(task)
+      // CRONPRECHECKSYNC1007: off the event loop, like the retry loop's, so a
+      // pre-check that calls the dashboard's own API gets its answer. The
+      // tickRunning guard holds the next tick while this one awaits.
+      const cronPc = await runPreCheckAsync(task)
+      rememberPreCheckAnswer(task, now, cronPc)
+      // The await is new here, so a task disabled or deleted while its
+      // pre-check ran is left alone: no fire (the per-target re-read below
+      // would catch that too) and no 'skipped-precheck' run or last-run stamp
+      // for a task that is no longer on.
+      if (task.preCheck && !currentEnabledTask(task.name)) {
+        logger.info({ task: task.name }, 'Schedule dropped: the task was disabled or deleted while its pre-check ran')
+        continue
+      }
       if (cronPc.skip) {
         scheduleLastRun.set(task.name, now)
         persistScheduleLastRun()
@@ -2995,7 +3209,26 @@ export function startScheduleRunner(): NodeJS.Timeout {
           if (preCheckHit) insertPendingTaskRetryIfNew(task.name, agentName, now, 'precheck-hit')
           continue
         }
-        const result = await attemptFireTask(task, agentName, now, cronPc.prefix, lateCatchUpMs)
+        // SCHEDRECHECK1007: `task` is from the list read at the start of the
+        // tick, and every await since (an earlier task's fire, this task's fire
+        // at an earlier target, a direct digest) let the operator change it.
+        // Fire with the definition as it is now; a task disabled or deleted
+        // meanwhile fires at none of its remaining targets.
+        const current = currentEnabledTask(task.name)
+        if (!current) break
+        // SCHEDFRESH1007: the target list above is from the tick's snapshot too.
+        // If the task's `agent` field changed meanwhile, a remaining target that
+        // the current definition no longer names does not fire. A target the
+        // edit ADDED is not fired in this tick; the next occurrence reaches it.
+        if (current.agent !== task.agent && !resolveTargetAgents(current).includes(agentName)) {
+          // SCHEDALLPIN1007: a dropped target leaves a line, not silence.
+          logger.info(
+            { task: task.name, agent: agentName, agentFieldWas: task.agent, agentFieldNow: current.agent },
+            'Schedule target dropped: the task\'s agent field changed during the tick',
+          )
+          continue
+        }
+        const result = await attemptFireTask(current, agentName, now, cronPc.prefix, lateCatchUpMs)
         if (result === 'fired') {
           clearRetryPrefix(key)
         } else if (result === 'starting') {
@@ -3011,7 +3244,7 @@ export function startScheduleRunner(): NodeJS.Timeout {
           // state is bypassed. Dropping that on skipIfBusy would turn the
           // deferral into a silent loss, so forceSend is exempt from the
           // skip and always queues the retry.
-          if (shouldDropBusyTick(task, now, preCheckHit)) {
+          if (shouldDropBusyTick(current, now, preCheckHit)) {
             // Opt-in skip for short-cadence tasks (e.g. 30-min heartbeats):
             // a single missed tick is harmless because the next one is
             // already on the way, and queueing them produces spurious
