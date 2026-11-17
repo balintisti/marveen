@@ -791,5 +791,152 @@ class JsonModeStaysPure(unittest.TestCase):
         self.assertIn("read-only", d["claude"]["error"])
 
 
+class HostPlanProbeFallback(Env):
+    """Card 5128e6f7: the fleet on the HOST plan and the keychain gives no real answer (an empty
+    keychain entry falls through to the .env setup-token: 403 on the usage endpoint). The host plan's
+    own probe -- the reading the ceiling guard already trusts -- is the claude section; the keychain
+    failure stays visible in `host_token_error`. Measured live 2026-11-11 22:10: marveen on elso,
+    the collector at `estimate` while store/claude-plans-state.json held a valid elso probe."""
+
+    KC_ERR = "HTTP 403 (env_file token; the keychain entry has an empty accessToken -- run /login in Claude Code)"
+
+    def _host_fails(self, err=KC_ERR, kind="permanent"):
+        for name, ret in (("_collect_claude_authoritative", (None, err, kind)),
+                          ("_collect_claude_estimate", {"five_hour_est_tokens": 1}),
+                          ("_read_statusline_windows", (None, "stub: no statusline"))):
+            p = mock.patch.object(uc, name, return_value=ret)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _fail_probe_cmd(self):
+        self.env_patch("STUB_MODE", "fail")
+
+    def test_403_on_the_host_plan_reads_the_host_plans_probe(self):
+        observed = _now_ms() - 3 * 60_000
+        self.write_state(_state(_plan_entry(observed), active="elso"))
+        self._host_fails()
+        host_out = {}
+        c = uc.collect_claude(host_out)
+        self.assertEqual((c["source"], c["ok"], c["plan"]), ("authoritative", True, "elso"))
+        self.assertEqual(c["windows"]["seven_day"]["used_percent"], 77.25)
+        self.assertEqual(datetime.fromisoformat(c["authoritative_at"]),
+                         datetime.fromtimestamp(observed / 1000.0, timezone.utc))
+        self.assertEqual(c["host_token_error"], self.KC_ERR, "the keychain failure must stay visible")
+        self.assertNotIn("auth_error", c)
+        self.assertEqual(self.probe_calls(), [], "a 3-minute-old valid probe is not re-run")
+        self.assertEqual(host_out, {})
+
+    def test_a_transient_429_without_cache_also_reads_the_probe(self):
+        self.write_state(_state(_plan_entry(_now_ms() - 60_000), active="elso"))
+        self._host_fails("HTTP 429 (env_file token)", "transient")
+        c = uc.collect_claude()
+        self.assertEqual((c["source"], c["plan"]), ("authoritative", "elso"))
+        self.assertIn("HTTP 429", c["host_token_error"])
+
+    def test_a_fresh_probe_beats_the_90_minute_cache(self):
+        self.write_state(_state(_plan_entry(_now_ms() - 60_000), active="elso"))
+        ts = datetime.fromtimestamp(time.time() - 40 * 60, timezone.utc).isoformat()
+        with open(self.paths["LATEST_PATH"], "w") as f:
+            json.dump({"generated_at": ts, "claude": {"source": "authoritative", "plan": "elso", "authoritative_at": ts,
+                       "windows": {"five_hour": {"used_percent": 55.0, "resets_at": time.time() + 7200}}}}, f)
+        self._host_fails("HTTP 429 (env_file token)", "transient")
+        c = uc.collect_claude()
+        self.assertEqual(c["source"], "authoritative")
+        self.assertEqual(c["windows"]["five_hour"]["used_percent"], 61.5)
+
+    def test_a_stale_host_probe_is_refreshed_once(self):
+        self.write_state(_state(_plan_entry(_now_ms() - 20 * 60_000), active="elso"))
+        self.set_payload(_state(_plan_entry(_now_ms()), active="elso"))
+        self._host_fails()
+        c = uc.collect_claude()
+        self.assertEqual(self.probe_calls(), ["elso"])
+        self.assertEqual(c["source"], "authoritative")
+
+    def test_no_valid_probe_keeps_the_keychain_answer_and_names_both_reasons(self):
+        self.write_state(_state(_plan_entry(_now_ms() - 60_000, at=_now_ms(), ok=False, error="http_500"), active="elso"))
+        self._fail_probe_cmd()
+        self._host_fails()
+        c = uc.collect_claude()
+        self.assertEqual((c["source"], c["plan"]), ("estimate", "elso"))
+        self.assertNotIn("windows", c)
+        self.assertIn("empty accessToken", c["auth_error"])
+        self.assertIn("host plan probe:", c["auth_error"])
+        self.assertIn("http_500", c["auth_error"])
+
+    def test_control_no_state_never_probes(self):
+        self._host_fails()
+        c = uc.collect_claude()
+        self.assertEqual(c["source"], "estimate")
+        self.assertEqual(c["auth_error"], self.KC_ERR)
+        self.assertEqual(self.probe_calls(), [])
+
+    def test_control_a_working_keychain_is_not_replaced_by_the_probe(self):
+        self.write_state(_state(_plan_entry(_now_ms() - 60_000), active="elso"))
+        c = uc.collect_claude()
+        self.assertEqual(c["windows"]["seven_day"]["used_percent"], 22.0)
+        self.assertNotIn("host_token_error", c)
+
+    def test_json_mode_reads_a_valid_probe_without_running_it(self):
+        self.write_state(_state(_plan_entry(_now_ms() - 60_000), active="elso"))
+        self._host_fails()
+        c = uc.collect_claude(allow_probe=False)
+        self.assertEqual(c["source"], "authoritative")
+        self.assertEqual(self.probe_calls(), [])
+
+    # didi 59480 T1: the fresh-probe test above reads the same with or without a refresh. A STALE probe is
+    # where --json and the scheduled run part ways (control: test_a_stale_host_probe_is_refreshed_once).
+    def test_json_never_runs_the_host_probe_and_keeps_the_keychain_answer_on_a_stale_one(self):
+        self.write_state(_state(_plan_entry(_now_ms() - 30 * 60_000), active="elso"))
+        self.set_payload(_state(_plan_entry(_now_ms()), active="elso"))
+        self._host_fails()
+        d = json.loads(self.run_main("--json"))
+        self.assertEqual(self.probe_calls(), [], "--json is read-only on the host-plan branch too")
+        self.assertEqual((d["claude"]["source"], d["claude"]["plan"]), ("estimate", "elso"))
+        self.assertNotIn("windows", d["claude"])
+        self.assertIn("empty accessToken", d["claude"]["auth_error"])
+        self.assertIn("host plan probe:", d["claude"]["auth_error"])
+        self.assertIn("read-only", d["claude"]["auth_error"])
+
+    def test_json_serves_a_10_minute_host_probe_without_the_refresh_ahead(self):
+        self.write_state(_state(_plan_entry(_now_ms() - 10 * 60_000), active="elso"))
+        self.set_payload(_state(_plan_entry(_now_ms()), active="elso"))
+        self._host_fails()
+        d = json.loads(self.run_main("--json"))
+        self.assertEqual(self.probe_calls(), [])
+        self.assertEqual(d["claude"]["source"], "authoritative")
+
+    # didi 59480 T2: the expired-window marking is promised on every branch of collect_claude.
+    def test_an_expired_window_in_the_host_probe_is_marked(self):
+        now = int(time.time())
+        windows = {"five_hour": {"usedPercent": 61.5, "resetsAt": now - 2 * 3600, "status": "allowed"},
+                   "seven_day": {"usedPercent": 77.25, "resetsAt": now + 4 * 86400, "status": "allowed"}}
+        self.write_state(_state(_plan_entry(_now_ms() - 60_000, windows=windows), active="elso"))
+        self._host_fails()
+        c = uc.collect_claude()
+        self.assertEqual(c["source"], "authoritative")
+        self.assertEqual(c["windows_expired"], ["five_hour"])
+        self.assertIs(c["all_windows_expired"], False)
+        self.assertAlmostEqual(c["windows"]["five_hour"]["expired_hours_ago"], 2.0, places=1)
+        self.assertNotIn("expired_hours_ago", c["windows"]["seven_day"])
+
+    # didi 59480 T3: a bug in the probe reading must not take the keychain path's answer with it.
+    def test_an_exception_in_the_host_probe_reading_keeps_the_keychain_answer(self):
+        self.write_state(_state(_plan_entry(_now_ms() - 60_000), active="elso"))
+        self._host_fails()
+        with mock.patch.object(uc, "_collect_claude_fleet", side_effect=RuntimeError("boom")):
+            c = uc.collect_claude()
+        self.assertEqual((c["source"], c["plan"]), ("estimate", "elso"))
+        self.assertIn("empty accessToken", c["auth_error"])
+        self.assertIn("host plan probe: host plan probe reading failed (RuntimeError)", c["auth_error"])
+
+    def test_end_to_end_snapshot_is_authoritative_on_the_host_plan(self):
+        self.write_state(_state(_plan_entry(_now_ms() - 60_000), active="elso"))
+        self._host_fails()
+        self.run_main()
+        latest = self.read_json("usage-latest.json")
+        self.assertEqual((latest["claude"]["source"], latest["claude"]["plan"]), ("authoritative", "elso"))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "usage-latest-elso.json")))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

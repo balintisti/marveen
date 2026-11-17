@@ -518,8 +518,12 @@ def _refresh_claude_macos_keychain():
     return access
 
 
-def _read_claude_macos_keychain():
+def _read_claude_macos_keychain(why=None):
     """Return the Claude Code session token from the macOS Keychain, or None.
+
+    `why`, when a list, gets one line appended on a None answer: WHICH of "no entry", "an entry with
+    an empty token" and "unreadable" it was (card 5128e6f7). Without it the caller falls through to
+    the .env token and reports that token's 403, and the remedy (log in again) is nowhere.
 
     WHY THIS EXISTS, and why its absence read as "no key on this machine"
     (measured 2026-08-22): on macOS the Claude Code login credentials are NOT
@@ -544,11 +548,15 @@ def _read_claude_macos_keychain():
             capture_output=True, text=True, timeout=5,
         )
         if out.returncode != 0 or not out.stdout.strip():
+            if why is not None:
+                why.append("no keychain entry")
             return None
         data = json.loads(out.stdout.strip())
         oauth = data.get("claudeAiOauth") or {}
         token = oauth.get("accessToken")
         if not token:
+            if why is not None:
+                why.append("the keychain entry has an empty accessToken -- run /login in Claude Code")
             return None
         # A 401 from the usage endpoint and an EXPIRED token look identical
         # from the outside, and the difference is the whole answer: one means
@@ -561,21 +569,26 @@ def _read_claude_macos_keychain():
             if delta > 0:
                 expired_for = int(delta // 3600)
         return {"token": token, "expired_hours": expired_for}
-    except (subprocess.SubprocessError, OSError, ValueError):
+    except (subprocess.SubprocessError, OSError, ValueError) as e:
         # Missing `security` binary, locked keychain, non-JSON blob: these
         # genuinely mean "no usable keychain credential". A NameError or
         # TypeError does NOT -- it is a bug in this function, and swallowing
         # it would report "no keychain entry" for code that never ran.
+        if why is not None:
+            why.append(f"the keychain entry is unreadable ({type(e).__name__})")
         return None
 
 
-def _read_claude_token():
+def _read_claude_token(why=None):
     """Return (token, token_source) or (None, None). Never logs the value.
 
     Source order matters: the long-lived `claude setup-token` value that
     typically lands in the .env file is NOT accepted by the oauth/usage
     endpoint (it answers 403), while the session token from the Keychain /
-    credentials file is. Cheapest authoritative source first, .env last."""
+    credentials file is. Cheapest authoritative source first, .env last.
+
+    `why` (a list): why the keychain gave nothing, when it did not -- see
+    _read_claude_macos_keychain."""
     cred_path = os.path.expanduser("~/.claude/.credentials.json")
     if os.path.exists(cred_path):
         try:
@@ -588,7 +601,7 @@ def _read_claude_token():
         except Exception:
             pass
 
-    kc = _read_claude_macos_keychain()
+    kc = _read_claude_macos_keychain(why)
     if kc:
         if kc["expired_hours"] is not None:
             refreshed = _refresh_claude_macos_keychain()
@@ -639,9 +652,13 @@ def _collect_claude_authoritative():
       'transient' -- 429 / 5xx / timeout / network error / unparseable
                      response -- safe to serve from cache if fresh enough
     """
-    token, token_source = _read_claude_token()
+    kc_why = []
+    token, token_source = _read_claude_token(kc_why)
+    # the keychain is the token that works here; when it gave nothing (kc_why is only ever filled
+    # then), say why (card 5128e6f7), not only how the .env token failed
+    kc_note = f"; {kc_why[0]}" if kc_why else ""
     if not token:
-        return None, "no oauth token available (no credentials.json, no macOS keychain entry, no .env token)", "no_token"
+        return None, "no oauth token available (no credentials.json, no macOS keychain entry, no .env token)" + kc_note, "no_token"
 
     version = _claude_cli_version()
     req = urllib.request.Request(
@@ -659,7 +676,7 @@ def _collect_claude_authoritative():
         # the stale authoritative cache would mask the auth problem. 401 needs a
         # token refresh, 403 a scope fix -- the HTTP code below tells them apart.
         kind = "permanent" if e.code in (401, 403) else "transient"
-        return None, f"HTTP {e.code} ({token_source} token)", kind
+        return None, f"HTTP {e.code} ({token_source} token{kc_note})", kind
     except Exception as e:
         return None, f"{type(e).__name__}: {e}", "transient"
 
@@ -1047,7 +1064,14 @@ def collect_claude(host_out=None, allow_probe=True):
     reading, as before, plus `plan`. Fleet on another plan: that plan's probe
     (_collect_claude_fleet); the host keychain reading is still taken and handed back through
     `host_out["claude"]` for store/usage-latest-<host>.json, and a host failure never touches the
-    fleet section."""
+    fleet section.
+
+    THE HOST PLAN HAS A PROBE TOO (card 5128e6f7). The state names the host plan as the fleet's and
+    the keychain gave no real answer (an empty keychain entry fell through to the .env token: 403,
+    or a 429): the host plan's own probe, the reading the ceiling guard already uses, is the claude
+    section, with the keychain's failure kept in `host_token_error`. No valid probe either: the
+    keychain path's answer stands (cache, statusline, estimate), and its auth_error also names why
+    the probe was no reading. No state at all: no probe, as before."""
     host_plan = _host_plan()
     fleet_plan = _fleet_plan()
     same = fleet_plan is None or fleet_plan == host_plan
@@ -1060,6 +1084,8 @@ def collect_claude(host_out=None, allow_probe=True):
             raise
         host = None
     if same:
+        if fleet_plan is not None and host.get("source") != "authoritative":
+            return _host_probe_fallback(host, host_plan, allow_probe)
         return host
     if host is not None and host_out is not None:
         host_out["claude"] = host
@@ -1070,6 +1096,21 @@ def collect_claude(host_out=None, allow_probe=True):
         fleet = {"provider": "claude", "source": "probe-failed", "ok": False, "plan": fleet_plan,
                  "error": msg, "auth_error": msg}
     return _mark_expired_windows(fleet)
+
+
+def _host_probe_fallback(host, host_plan, allow_probe):
+    """The host plan's probe in place of a keychain reading that was not a real answer (see
+    collect_claude). Returns the claude section: the probe's when it is a valid reading, else `host`
+    with the probe's reason added to its auth_error."""
+    try:
+        probe = _collect_claude_fleet(host_plan, allow_probe=allow_probe)
+    except Exception as e:
+        probe = {"source": "probe-failed", "error": f"host plan probe reading failed ({type(e).__name__})"}
+    if probe.get("source") == "authoritative":
+        probe["host_token_error"] = host.get("auth_error") or f"keychain reading was {host.get('source')}"
+        return _mark_expired_windows(probe)
+    host["auth_error"] = f"{host.get('auth_error') or 'no keychain reading'}; host plan probe: {probe.get('error')}"
+    return host
 
 
 def _collect_claude_raw(cache_path=None, plan=None):
