@@ -88,7 +88,9 @@ function makeInstall(runningAgents: string[] = ['dexter'], deployed?: string[]):
   // the guard calls it (heredoc-safe, per CLAUDE.md).
   writeFileSync(
     join(base, 'scripts', 'agent-msg.sh'),
-    `#!/usr/bin/env bash\nprintf 'TO=%s\\n' "$2" >> "${join(base, 'store', 'agent.log')}"\ncat >> "${join(base, 'store', 'agent.log')}"\nprintf '\\n---\\n' >> "${join(base, 'store', 'agent.log')}"\n`,
+    // STUB_AGENT_MSG_FAIL_TO=<name>: the send to that recipient fails the way the real script
+    // does when the dashboard is down (exit 1, no OK id), recorded as FAILED-TO, not TO.
+    `#!/usr/bin/env bash\nif [ -n "\${STUB_AGENT_MSG_FAIL_TO:-}" ] && [ "$2" = "$STUB_AGENT_MSG_FAIL_TO" ]; then cat >/dev/null; printf 'FAILED-TO=%s\\n---\\n' "$2" >> "${join(base, 'store', 'agent.log')}"; echo "FAIL: dashboard down"; exit 1; fi\nprintf 'TO=%s\\n' "$2" >> "${join(base, 'store', 'agent.log')}"\ncat >> "${join(base, 'store', 'agent.log')}"\nprintf '\\n---\\n' >> "${join(base, 'store', 'agent.log')}"\necho "OK id=1"\n`,
   )
   chmodSync(join(base, 'scripts', 'agent-msg.sh'), 0o755)
 
@@ -127,7 +129,7 @@ function writeSnapshot(base: string, o: SnapOpts): string {
   return p
 }
 
-function runGuard(base: string, snapshotPath: string): Run {
+function runGuard(base: string, snapshotPath: string, extraEnv: Record<string, string> = {}): Run {
   const ownerLog = join(base, 'store', 'owner.log')
   const agentLog = join(base, 'store', 'agent.log')
   let stdout = ''
@@ -140,6 +142,11 @@ function runGuard(base: string, snapshotPath: string): Run {
         PATH: `${join(base, 'bin')}:${process.env.PATH ?? ''}`,
         QUOTA_CEILING_SNAPSHOT: snapshotPath,
         QUOTA_CEILING_STATE: join(base, 'store', 'state.json'),
+        // Pinned to midday: at night (22-07 Belgrade) the owner notice goes to the
+        // coordinator instead of Telegram (card cda1c5da), so an unpinned hour made
+        // every owner assertion depend on when the suite ran.
+        QUOTA_CEILING_NOW_HOUR: '12',
+        ...extraEnv,
       },
     })
   } catch (e) {
@@ -208,6 +215,24 @@ describe('quota-ceiling-guard: the threshold comparison', () => {
     const r = go({ percent: pct })
     expect(r.stdout).not.toMatch(/invalid number/i)
     expect(r.agent, `expected a stop message at ${pct}%`).not.toBe('')
+  })
+
+  it.each(['22', '23', '00', '06'])('at %s h the owner notice goes to the coordinator, not Telegram', (h) => {
+    const base = makeInstall()
+    const r = runGuard(base, writeSnapshot(base, { percent: 95.0 }), { QUOTA_CEILING_NOW_HOUR: h })
+    expect(r.owner).toBe('')
+    expect(r.agent).toContain('TO=marveen')
+    expect(r.agent).toContain('[KERET-OR, EJJEL]')
+    expect(r.agent).toContain('ELERTUK A PLAFONT')
+    // The stop itself is not muted at night: the ceiling holds round the clock.
+    expect(r.agent).toContain('KERET-OR / HARD')
+  })
+
+  it.each(['07', '08', '09', '21'])('at %s h the owner gets the Telegram as before', (h) => {
+    const base = makeInstall()
+    const r = runGuard(base, writeSnapshot(base, { percent: 95.0 }), { QUOTA_CEILING_NOW_HOUR: h })
+    expect(r.owner).toContain('ELERTUK A PLAFONT')
+    expect(r.agent).not.toContain('[KERET-OR, EJJEL]')
   })
 
   it('never lets a reading print a shell number error', () => {
@@ -356,35 +381,28 @@ describe('quota-ceiling-guard: PLAN MODE reads the plan the agents actually run 
     writeFileSync(join(base, 'agents', 'sirius', 'agent-config.json'), JSON.stringify({ model: 'claude-opus-5-5' }))
     return base
   }
-  function plansState(base: string, plans: Record<string, { pct: number; probeAt?: number; ageMin?: number }>): string {
+  function plansState(base: string, plans: Record<string, { pct: number; probeAt?: number; ageMin?: number; source?: string }>, file = 'plans-state.json'): string {
     const out: Record<string, unknown> = {}
     for (const [id, o] of Object.entries(plans)) {
       const observedAt = Date.now() - (o.ageMin ?? 1) * 60_000
       out[id] = {
         observedAt,
-        source: 'probe',
+        source: o.source ?? 'probe',
         windows: { seven_day: { usedPercent: o.pct, resetsAt: 1787810400 } },
         lastProbe: { at: o.probeAt ?? observedAt, ok: true },
       }
     }
-    const p = join(base, 'store', 'plans-state.json')
+    const p = join(base, 'store', file)
     writeFileSync(p, JSON.stringify({ activePlanByAgent: {}, plans: out }))
     return p
   }
-  function runPlan(base: string, plan: string, statePath: string): Run {
-    const prev = { ...process.env }
-    process.env.QUOTA_CEILING_PLAN = plan
-    process.env.QUOTA_CEILING_PLANS_STATE = statePath
-    try {
-      // The snapshot argument is ignored in plan mode only when unset -- pass the plan file path.
-      const r = runGuard(base, join(base, 'store', `plan-snap-${plan}.json`))
-      return r
-    } finally {
-      for (const k of ['QUOTA_CEILING_PLAN', 'QUOTA_CEILING_PLANS_STATE']) {
-        if (prev[k] === undefined) delete process.env[k]
-        else process.env[k] = prev[k]
-      }
-    }
+  function runPlan(base: string, plan: string, statePath: string, extraEnv: Record<string, string> = {}): Run {
+    // The snapshot argument is not read in plan mode; the plan file decides.
+    return runGuard(base, join(base, 'store', `plan-snap-${plan}.json`), {
+      QUOTA_CEILING_PLAN: plan,
+      QUOTA_CEILING_PLANS_STATE: statePath,
+      ...extraEnv,
+    })
   }
 
   it('the 10-06 case: elso at 95% does NOT stop the agent on masodik at 8%', () => {
@@ -394,17 +412,168 @@ describe('quota-ceiling-guard: PLAN MODE reads the plan the agents actually run 
     expect(r.owner).toBe('')
   })
 
-  it('masodik at its ceiling stops ONLY the masodik agent', () => {
+  // CARD cda1c5da (Isti TG 10570, 10584): at the ceiling, if another plan has room, the
+  // agents MOVE there; nobody is stopped. 2026-11-17 02:33 the old stop branch halted four
+  // agents on masodik at 99 while elso stood at 4.
+  it('masodik full, elso has room: nobody stopped, ONE switch request to the coordinator', () => {
     const base = planInstall()
     const r = runPlan(base, 'masodik', plansState(base, { elso: { pct: 10 }, masodik: { pct: 95 } }))
-    expect(r.agent).toContain('TO=dexter')
+    expect(r.agent).not.toContain('TO=dexter')
     expect(r.agent).not.toContain('TO=sirius')
+    expect(r.agent).toContain('TO=marveen')
+    expect(r.agent).toContain('KERET-OR / ATTETEL')
+    expect(r.agent).toContain('ezen a terven: dexter')
+    expect(r.agent).toContain('SENKIT NEM ALLITOTTAM MEG')
+    expect(r.agent.split('TO=').length - 1).toBe(1)
+    expect(r.owner).toContain('Senkit nem allitottam meg')
+    expect(readFileSync(join(base, 'store', 'quota-ceiling-guard.log'), 'utf8')).toMatch(/SWITCH: plan=masodik at 95(\.0)?%, target elso at 10%/)
   })
 
-  it('an agent without oauthTokenFile belongs to the fleet plan (elso)', () => {
+  it('also at the SOFT level: a switch, not a soft stop warning', () => {
+    const base = planInstall()
+    const r = runPlan(base, 'masodik', plansState(base, { elso: { pct: 10 }, masodik: { pct: 93 } }))
+    expect(r.agent).toContain('KERET-OR / ATTETEL')
+    expect(r.agent).not.toContain('KERET-OR / LAGY')
+    expect(r.agent).not.toContain('TO=dexter')
+  })
+
+  it('every other plan full too: stops ONLY the masodik agent, as before', () => {
+    const base = planInstall()
+    const r = runPlan(base, 'masodik', plansState(base, { elso: { pct: 96 }, masodik: { pct: 95 } }))
+    expect(r.agent).toContain('TO=dexter')
+    expect(r.agent).toContain('KERET-OR / HARD')
+    expect(r.agent).not.toContain('TO=sirius')
+    expect(r.agent).not.toContain('ATTETEL')
+  })
+
+  it('a target at exactly HARD is not room: stop', () => {
+    const base = planInstall()
+    const r = runPlan(base, 'masodik', plansState(base, { elso: { pct: 95 }, masodik: { pct: 95 } }))
+    expect(r.agent).toContain('TO=dexter')
+    expect(r.agent).not.toContain('ATTETEL')
+  })
+
+  it('a STALE target reading is not room: stop', () => {
+    const base = planInstall()
+    const r = runPlan(base, 'masodik', plansState(base, { elso: { pct: 4, ageMin: 60 }, masodik: { pct: 95 } }))
+    expect(r.agent).toContain('TO=dexter')
+    expect(r.agent).not.toContain('ATTETEL')
+  })
+
+  it('a target whose latest probe FAILED is not room: stop', () => {
+    const base = planInstall()
+    const r = runPlan(base, 'masodik', plansState(base, { elso: { pct: 4, probeAt: Date.now() + 1000 }, masodik: { pct: 95 } }))
+    expect(r.agent).toContain('TO=dexter')
+    expect(r.agent).not.toContain('ATTETEL')
+  })
+
+  it('an unreadable plans file for the target is not room either (no crash, stop path)', () => {
+    const base = planInstall()
+    const r = runPlan(base, 'masodik', plansState(base, { masodik: { pct: 95 } }))
+    expect(r.agent).toContain('TO=dexter')
+    expect(r.agent).not.toContain('ATTETEL')
+  })
+
+  it('picks the EMPTIEST plan with room', () => {
+    const base = planInstall()
+    const r = runPlan(base, 'masodik', plansState(base, { elso: { pct: 50 }, harmadik: { pct: 7 }, masodik: { pct: 95 } }))
+    expect(r.agent).toContain('harmadik')
+    expect(readFileSync(join(base, 'store', 'quota-ceiling-guard.log'), 'utf8')).toContain('target harmadik at 7%')
+  })
+
+  it('the switch request comes once per window', () => {
+    const base = planInstall()
+    const st = plansState(base, { elso: { pct: 10 }, masodik: { pct: 95 } })
+    runPlan(base, 'masodik', st)
+    const r = runPlan(base, 'masodik', st)
+    expect(r.agent.split('TO=marveen').length - 1).toBe(1)
+    expect(readFileSync(join(base, 'store', 'quota-ceiling-guard.log'), 'utf8').split('SWITCH: plan=masodik').length - 1).toBe(2)
+  })
+
+  it('nobody on the full plan: nothing to move, no message to anyone', () => {
+    const base = planInstall()
+    // sirius (no oauthTokenFile) is elso's; elso full, masodik has room, nobody to move.
+    writeFileSync(join(base, 'agents', 'dexter', 'agent-config.json'), JSON.stringify({ model: 'claude-opus-5-5' }))
+    const r2 = runPlan(base, 'masodik', plansState(base, { elso: { pct: 10 }, masodik: { pct: 95 } }))
+    expect(r2.agent).toBe('')
+    expect(r2.owner).toBe('')
+    expect(readFileSync(join(base, 'store', 'quota-ceiling-guard.log'), 'utf8')).toContain('nothing to move')
+  })
+
+  it('an agent without oauthTokenFile belongs to the fleet plan (elso): the switch names sirius', () => {
     const base = planInstall()
     const r = runPlan(base, 'elso', plansState(base, { elso: { pct: 95 }, masodik: { pct: 8 } }))
+    expect(r.agent).toContain('TO=marveen')
+    expect(r.agent).toContain('ezen a terven: sirius')
+    expect(r.agent).not.toContain('TO=sirius')
+    expect(r.agent).not.toContain('TO=dexter')
+  })
+
+  it('and stops only sirius when masodik is full as well', () => {
+    const base = planInstall()
+    const r = runPlan(base, 'elso', plansState(base, { elso: { pct: 95 }, masodik: { pct: 97 } }))
     expect(r.agent).toContain('TO=sirius')
+    expect(r.agent).not.toContain('TO=dexter')
+  })
+
+  // didi 67561 L1: a send that failed was marked fired, never retried, and the owner was
+  // told "I asked marveen". At night nobody heard anything.
+  it('a FAILED switch request is not marked: the next run asks again, the owner hears the truth once', () => {
+    const base = planInstall()
+    const st = plansState(base, { elso: { pct: 10 }, masodik: { pct: 95 } })
+    const down = { STUB_AGENT_MSG_FAIL_TO: 'marveen' }
+    runPlan(base, 'masodik', st, down)
+    const r = runPlan(base, 'masodik', st, down)
+    expect(r.agent.split('FAILED-TO=marveen').length - 1).toBe(2)
+    expect(r.agent).not.toContain('TO=dexter')
+    expect(r.owner).not.toContain('marveent kertem')
+    expect(r.owner.split('NEM ERTEM EL').length - 1).toBe(1)
+    const fired = JSON.parse(readFileSync(join(base, 'store', 'state.json'), 'utf8')).fired as string[]
+    expect(fired).not.toContain('switch')
+    // dashboard back: the request goes out, and only now is the owner told it was asked
+    const ok = runPlan(base, 'masodik', st)
+    expect(ok.agent).toContain('TO=marveen')
+    expect(ok.owner).toContain('marveent kertem')
+  })
+
+  it('AT NIGHT with the coordinator unreachable, the owner gets the Telegram after all', () => {
+    const base = planInstall()
+    const r = runPlan(base, 'masodik', plansState(base, { elso: { pct: 10 }, masodik: { pct: 95 } }),
+      { QUOTA_CEILING_NOW_HOUR: '02', STUB_AGENT_MSG_FAIL_TO: 'marveen' })
+    expect(r.owner).toContain('NEM ERTEM EL')
+    expect(r.agent).not.toContain('TO=dexter')
+  })
+
+  // didi 67561 T1-T3: three guards of the target choice that no test held.
+  it('its OWN plan is never the target, even when it is the emptiest under HARD', () => {
+    const base = planInstall()
+    const r = runPlan(base, 'masodik', plansState(base, { elso: { pct: 96 }, masodik: { pct: 93 } }))
+    expect(r.agent).not.toContain('ATTETEL')
+    expect(r.agent).toContain('TO=dexter')
+    expect(r.agent).toContain('KERET-OR / LAGY')
+  })
+
+  it('a target whose reading is not a probe is not room: stop', () => {
+    const base = planInstall()
+    const r = runPlan(base, 'masodik', plansState(base, { elso: { pct: 4, source: 'estimate' }, masodik: { pct: 95 } }))
+    expect(r.agent).not.toContain('ATTETEL')
+    expect(r.agent).toContain('TO=dexter')
+  })
+
+  it('OUTSIDE plan mode the ceiling stops, even with room in the plans file', () => {
+    const base = planInstall()
+    plansState(base, { elso: { pct: 4 }, masodik: { pct: 4 } }, 'claude-plans-state.json')
+    const r = runGuard(base, writeSnapshot(base, { percent: 95.0 }), { QUOTA_CEILING_PLANS_STATE: join(base, 'store', 'claude-plans-state.json') })
+    expect(r.agent).not.toContain('ATTETEL')
+    expect(r.agent).toContain('KERET-OR / HARD')
+  })
+
+  it('AT NIGHT the owner gets no Telegram: the notice goes to the coordinator', () => {
+    const base = planInstall()
+    const r = runPlan(base, 'masodik', plansState(base, { elso: { pct: 10 }, masodik: { pct: 95 } }), { QUOTA_CEILING_NOW_HOUR: '02' })
+    expect(r.owner).toBe('')
+    expect(r.agent).toContain('[KERET-OR, EJJEL]')
+    expect(r.agent).toContain('KERET-OR / ATTETEL')
     expect(r.agent).not.toContain('TO=dexter')
   })
 
