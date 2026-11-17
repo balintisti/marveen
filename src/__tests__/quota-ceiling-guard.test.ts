@@ -30,12 +30,16 @@ import { writeFileSync, chmodSync, mkdirSync, rmSync, copyFileSync, existsSync, 
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpDirs } from './helpers/tmp-dirs.js'
+import { describeWithLocalFiles } from './helpers/local-only-files.js'
 
 // Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
 const mkTmp = tmpDirs()
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const REAL_SCRIPT = join(HERE, '..', '..', 'scripts', 'quota-ceiling-guard.sh')
+const ROOT = join(HERE, '..', '..')
+const REAL_SCRIPT = join(ROOT, 'scripts', 'quota-ceiling-guard.sh')
+// Not tracked in this repo (moved to the L2 repo): see helpers/local-only-files.ts.
+const LOCAL_ONLY = ['scripts/quota-ceiling-guard.sh']
 
 const made: string[] = []
 afterEach(() => {
@@ -182,7 +186,7 @@ function goWithEnvRoster(o: SnapOpts, roster: string, runningAgents: string[]): 
   }
 }
 
-describe('quota-ceiling-guard: the threshold comparison', () => {
+describeWithLocalFiles(ROOT, LOCAL_ONLY, 'quota-ceiling-guard: the threshold comparison', () => {
   it('stays silent well under the ceiling', () => {
     const r = go({ percent: 87.0 })
     expect(r.agent).toBe('')
@@ -241,7 +245,7 @@ describe('quota-ceiling-guard: the threshold comparison', () => {
   })
 })
 
-describe('quota-ceiling-guard: what it does when it cannot see', () => {
+describeWithLocalFiles(ROOT, LOCAL_ONLY, 'quota-ceiling-guard: what it does when it cannot see', () => {
   /**
    * A ceiling guard that goes quiet on a broken input is worse than no guard:
    * silence reads as "we are under the ceiling". These three paths must all
@@ -278,7 +282,7 @@ describe('quota-ceiling-guard: what it does when it cannot see', () => {
   })
 })
 
-describe('quota-ceiling-guard: it alerts once per window, and re-arms on rollover', () => {
+describeWithLocalFiles(ROOT, LOCAL_ONLY, 'quota-ceiling-guard: it alerts once per window, and re-arms on rollover', () => {
   it('does not repeat the same level while the window is unchanged', () => {
     const base = makeInstall()
     const snap = writeSnapshot(base, { percent: 93.0 })
@@ -311,7 +315,7 @@ describe('quota-ceiling-guard: it alerts once per window, and re-arms on rollove
   })
 })
 
-describe('quota-ceiling-guard: it only stops agents that are actually running', () => {
+describeWithLocalFiles(ROOT, LOCAL_ONLY, 'quota-ceiling-guard: it only stops agents that are actually running', () => {
   it('sends nothing to an agent with no session, but still tells the owner', () => {
     const r = go({ percent: 95.0 }, [])
     expect(r.agent).toBe('')
@@ -329,7 +333,7 @@ describe('quota-ceiling-guard: it only stops agents that are actually running', 
 // derived from agents/*/. These tests pin the derivation, the override that must
 // still win, and the case where the derivation yields nothing -- which is the
 // one that would otherwise be indistinguishable from a quiet, healthy run.
-describe('quota-ceiling-guard: who it guards is DERIVED, not hardcoded', () => {
+describeWithLocalFiles(ROOT, LOCAL_ONLY, 'quota-ceiling-guard: who it guards is DERIVED, not hardcoded', () => {
   it('messages every deployed agent, not just the one the default used to name', () => {
     const r = go({ percent: 95.0 }, ['dexter', 'didi', 'friday'])
     for (const a of ['dexter', 'didi', 'friday']) {
@@ -373,7 +377,7 @@ describe('quota-ceiling-guard: who it guards is DERIVED, not hardcoded', () => {
 // Card 9d4f3ac7 (measured 2026-10-06): usage-latest.json is the HOST account (plan
 // "elso", 95%), while the fleet ran on "masodik" (0-8%). In plan mode the guard reads
 // that plan's probe from claude-plans-state.json and guards only that plan's agents.
-describe('quota-ceiling-guard: PLAN MODE reads the plan the agents actually run on', () => {
+describeWithLocalFiles(ROOT, LOCAL_ONLY, 'quota-ceiling-guard: PLAN MODE reads the plan the agents actually run on', () => {
   function planInstall(): string {
     const base = makeInstall(['dexter', 'sirius'], ['dexter', 'sirius'])
     writeFileSync(join(base, 'agents', 'dexter', 'agent-config.json'),

@@ -13,6 +13,7 @@ import { join, dirname } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { tmpDirs } from './helpers/tmp-dirs.js'
+import { describeWithLocalFiles } from './helpers/local-only-files.js'
 
 // Removed when this file finishes (card 66756e73): every temp dir in a test goes through here.
 const mkTmp = tmpDirs()
@@ -61,7 +62,8 @@ beforeEach(() => {
 })
 afterEach(() => { if (tree) rmSync(tree, { recursive: true, force: true }) })
 
-describe('quota-ceiling guard: does not wake agents that already stopped', () => {
+// Not tracked in this repo (moved to the L2 repo): see helpers/local-only-files.ts.
+describeWithLocalFiles(ROOT, ['scripts/quota-ceiling-guard.sh'], 'quota-ceiling guard: does not wake agents that already stopped', () => {
   it('skips parked agents and still messages the working one', () => {
     agent('parkedA', '{"kind":"none"}')
     agent('parkedB', '{"kind":"none"}')
