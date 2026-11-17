@@ -1932,6 +1932,55 @@ export function ensureQuarantineReader(
   return !upToDate
 }
 
+// Deploy the lean-worker sub-agent definition (card dc5d2e53, stage B of
+// ecbb62e6) next to the quarantine-reader, for every agent, the main one
+// included. The type starts without the parent's rule sheet (omitClaudeMd in
+// its frontmatter), so the BODY is the whole rule set the worker holds: the
+// text is didi's, approved by marveen (ecbb62e6 comment 58694), and
+// lean-worker-definition.test.ts pins it by hash.
+//
+// The template names the install root as {{PROJECT_ROOT}}. A placeholder that
+// survives the render would leave a hole in a boundary rule ("the database at
+// {{...}} is read-only" protects nothing), so such a render is NOT deployed
+// and the refusal is logged: a missing type fails loudly at the first launch,
+// a type with a broken rule does not fail at all.
+//
+// Same write rule as the reader: content compared, a hand-edited copy is
+// replaced. A running session keeps the definition it started with (measured
+// 2026-11-12 on Claude Code 2.1.314, card 4341fd40), so a changed body reaches
+// an agent at its next session start.
+// Returns true if the file was written, false if up to date or not deployable.
+export function ensureLeanWorker(
+  name: string,
+  paths?: { tplPath?: string; destDir?: string },
+): boolean {
+  const tplPath = paths?.tplPath ?? join(PROJECT_ROOT, 'templates', 'sub-agents', 'lean-worker.md')
+  if (!existsSync(tplPath)) return false
+  let rendered: string
+  try {
+    rendered = resolveTemplatePlaceholders(readFileSync(tplPath, 'utf-8'))
+  } catch {
+    return false
+  }
+  const unresolved = rendered.match(/\{\{[A-Za-z_]+\}\}/)
+  if (unresolved) {
+    logger.warn({ agent: name, tplPath, placeholder: unresolved[0] },
+      'lean-worker definition NOT deployed: a placeholder survived the render, a boundary rule would have a hole')
+    return false
+  }
+  const destDir = paths?.destDir ?? quarantineReaderDestDir(name)
+  mkdirSync(destDir, { recursive: true })
+  const destPath = join(destDir, 'lean-worker.md')
+  let upToDate = false
+  if (existsSync(destPath)) {
+    try {
+      upToDate = readFileSync(destPath, 'utf-8') === rendered
+    } catch { /* unreadable -> treat as stale, re-write below */ }
+  }
+  if (!upToDate) writeFileSync(destPath, rendered)
+  return !upToDate
+}
+
 // EGRESSRENDER824 (b): a grant typed into store/egress-allowlist.json used to
 // reach the reader PROMPT copies only at the next scaffold (boot/spawn of the
 // dashboard) -- the egress-gate HOOK reads the JSON live, but the reader's
@@ -2046,6 +2095,7 @@ export function scaffoldAgentDir(name: string) {
   // scaffolded agent can use it for safe web/RSS fetching without calling WebFetch
   // directly in the main context (where untrusted content would run as instructions).
   ensureQuarantineReader(name)
+  ensureLeanWorker(name)
 
   // Initialize empty files if they don't exist
   const memoryMd = join(dir, 'memory', 'MEMORY.md')
