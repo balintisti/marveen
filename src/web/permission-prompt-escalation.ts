@@ -36,7 +36,10 @@ export interface PermPromptEscalationState {
   signature: string
 }
 
-export type PermPromptAction = 'notify-main' | 'notify-owner' | 'notify-both' | 'wait'
+// 'auto-deny' is not decided here: permission-prompt-alert.ts sends it when a
+// helper's prompt was answered NO (PERMISSION_HELPER_AUTODENY_MIN) and returns
+// before the escalation runs.
+export type PermPromptAction = 'notify-main' | 'notify-owner' | 'notify-both' | 'wait' | 'auto-deny'
 
 export interface PermPromptEscalationDecision {
   /** Tell the main agent now (a new round on a sub-agent's pane). */

@@ -692,14 +692,17 @@ describe('channel-monitor is wired to it', () => {
   })
 
   it('it runs the pass with the scrollback capture, the main agent and the real alert sink', () => {
-    expect(branch).toMatch(/runPermissionPromptPass\(label, t\.session, paneNow, \{\s*captureWithHistory: capturePaneWithHistory,\s*escalation: permPromptState,\s*isMainAgent: t\.isMarveen,\s*messageMainAgent: \(text\) => \{ createAgentMessage\('system', MAIN_AGENT_ID, text\) \},\s*send: \(text, meta\) => sendAlert\(text, meta\),\s*\}\)/)
+    expect(branch).toMatch(/runPermissionPromptPass\(label, t\.session, paneNow, \{\s*captureWithHistory: capturePaneWithHistory,\s*escalation: permPromptState,\s*isMainAgent: t\.isMarveen,\s*messageMainAgent: \(text\) => \{ createAgentMessage\('system', MAIN_AGENT_ID, text\) \},\s*send: \(text, meta\) => sendAlert\(text, meta\),\s*helperAutoDenyAfterMs: PERMISSION_HELPER_AUTODENY_AFTER_MS,\s*recapture: \(session\) => capturePaneWithHistory\(session\),\s*sendEscape: \(session\) => \{ execFileSync\(tmuxBin\(\), \['send-keys', '-t', session, 'Escape'\], \{ timeout: 5000, stdio: \['ignore', 'pipe', 'pipe'\] \}\) \},\s*\}\)/)
     expect(branch.match(/sendAlert\(/g) ?? []).toHaveLength(1)
   })
 
-  it('it sends nothing itself: no second alert path beside the pass, and no keystroke', () => {
+  it('it sends nothing itself: no second alert path beside the pass, and the one keystroke is the pass Escape hook', () => {
     expect(branch).not.toMatch(/sendAlert\(`/)
     expect(branch).not.toMatch(/sendRoutineAlert\(/)
-    expect(branch).not.toMatch(/send-keys/)
+    // Card 2e0b6280: the only send-keys in this branch is the Escape (NO) the
+    // pass asks for through sendEscape; the pass decides and re-checks it.
+    expect(branch.match(/send-keys/g) ?? []).toHaveLength(1)
+    expect(branch).toMatch(/sendEscape: \(session\) => \{ execFileSync\(tmuxBin\(\), \['send-keys', '-t', session, 'Escape'\]/)
   })
 
   it('the end of the menu spell forgets the prompt', () => {

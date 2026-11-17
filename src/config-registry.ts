@@ -544,6 +544,17 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     requiresRestart: true,
   },
   {
+    key: 'PERMISSION_HELPER_AUTODENY_MIN',
+    type: 'int',
+    default: 30,
+    min: 0,
+    max: 10080,
+    description: 'Hány perc után nyomja meg a figyelő a NEM-et (Escape) egy segédügynök (sub-agent) engedélykérésén, ha a főágens panelén áll és senki nem válaszolt. Egyszer kell a lenyomás kérdésenként. 0 = kikapcsolva. A figyelő 5 percenként néz a dialógusra, ezért a tényleges lenyomás a küszöb utáni első ilyen nézésen történik.',
+    module: 'channels',
+    secret: false,
+    requiresRestart: true,
+  },
+  {
     key: 'PERMISSION_ALERT_MARKS',
     type: 'string',
     default: '15m,30m,1h,2h,8h,24h',

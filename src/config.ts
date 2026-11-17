@@ -443,6 +443,13 @@ export const HEARTBEAT_AGENT_ENABLED =
 // web/permission-prompt-alert.ts. PERMFLOOD1012.
 export const PERMISSION_ALERT_MARKS = (cfg('PERMISSION_ALERT_MARKS') ?? '').trim()
 
+// A helper (sub-agent) tool-permission prompt on the MAIN agent's pane that has
+// stood this many minutes gets Escape (NO), once. Whole minutes; empty = the
+// default (30); 0 = off. Parsed in web/permission-prompt-alert.ts. The monitor
+// samples on its alert ticks (5 min apart), so the press lands on the first tick
+// at or after the mark. Card 2e0b6280.
+export const PERMISSION_HELPER_AUTODENY_MIN = (cfg('PERMISSION_HELPER_AUTODENY_MIN') ?? '').trim()
+
 // Routine (self-healing) recovery alerts on the owner's channel (DEFAULT OFF
 // on this install). web/routine-alert.ts reports the fleet's own recoveries --
 // "the main session got stuck, I restarted it", "the session disappeared,
