@@ -3188,6 +3188,62 @@ function syncVerifiedLabel(cardId: string, from: string | null | undefined, to: 
   addLabelToCard(cardId, label.id)
 }
 
+/** A FLEET IMPORT BRINGS NO CARD INTO DONE WITHOUT ITS PROOF -- card 7902ee84 (marveen 59873 C13).
+ *
+ *  The fleet import copies a card's status as the source had it (fleet-transfer.ts), so it
+ *  could write `done` on this board without the `KESZ-IGAZOLAS:` line the done gate demands
+ *  (3c7be3c4); d2d72d9a closed the script path, this one stayed open. The decision: an
+ *  imported done card stays done only if the import brought BOTH its proof comment and the
+ *  verified label (KANBAN_ARCHIVE_REQUIRE_LABEL, matched by name like the archive sweep);
+ *  otherwise it becomes `testing`, where whoever measures the live state can prove and close
+ *  it. An empty label setting means the install does not gate on the label (as the sweep and
+ *  syncVerifiedLabel read it): then the proof alone decides.
+ *
+ *  Judged on the board AFTER the import wrote the card, its comments and its labels, so the
+ *  result is what is checked, not what the payload promised. Archived cards too: unarchive
+ *  does not pass the gate, it would bring an unproven done card back as done. Pass only the
+ *  cards this import CREATED: a card already on the board keeps its own state.
+ *  Returns the ids set to testing; each gets an event and a comment naming what was missing.
+ */
+export function settleImportedDoneCards(cardIds: readonly string[]): string[] {
+  const name = String(getEffectiveSettingValue('KANBAN_ARCHIVE_REQUIRE_LABEL')).trim()
+  const now = Math.floor(Date.now() / 1000)
+  const demoted: string[] = []
+  for (const id of cardIds) {
+    const row = db.prepare('SELECT status FROM kanban_cards WHERE id = ?').get(id) as { status: string } | undefined
+    if (row?.status !== 'done') continue
+    const proven = hasDoneProof(getKanbanComments(id))
+    const labelled = !name || !!db.prepare(
+      `SELECT 1 FROM kanban_card_labels cl JOIN labels l ON l.id = cl.label_id
+        WHERE cl.card_id = ? AND l.name = ? COLLATE NOCASE`
+    ).get(id, name)
+    if (proven && labelled) continue
+    // The version moves with the status (kanban_cards_version_bump), so a copy read before this
+    // cannot write over it unseen.
+    db.prepare("UPDATE kanban_cards SET status = 'testing', updated_at = ? WHERE id = ?").run(now, id)
+    // A label without its proof says verified about a state the card is no longer in.
+    if (name) {
+      db.prepare(
+        `DELETE FROM kanban_card_labels WHERE card_id = ?
+           AND label_id IN (SELECT id FROM labels WHERE name = ? COLLATE NOCASE)`
+      ).run(id, name)
+    }
+    db.prepare(
+      'INSERT INTO kanban_card_events (card_id, from_status, to_status, actor, created_at) VALUES (?, ?, ?, ?, ?)'
+    ).run(id, 'done', 'testing', 'fleet-import', now)
+    const missing = [
+      ...(proven ? [] : ['a KESZ-IGAZOLAS sor']),
+      ...(labelled ? [] : [`a(z) ${name} cimke`]),
+    ].join(' es ')
+    db.prepare(
+      'INSERT INTO kanban_comments (card_id, author, content, created_at, automated) VALUES (?, ?, ?, ?, ?)'
+    ).run(id, 'fleet-import', `FLOTTA-IMPORT: a forras done-nak irta, de hianyzott ${missing}, ezert testing lett `
+      + '(kartya 7902ee84). Aki az elo allapotot meri, igazolja es zarja.', now, 1)
+    demoted.push(id)
+  }
+  return demoted
+}
+
 // Stamp the once-only kanban -> agent dispatch guard. Returns false if the
 // card id does not exist.
 export function markKanbanCardDispatched(id: string): boolean {
