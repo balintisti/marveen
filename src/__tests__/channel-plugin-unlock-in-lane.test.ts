@@ -201,11 +201,14 @@ describe('the row gate decides whether Up+Enter+Enter is sent', () => {
     expect(fake.keys).toEqual(['/mcp Enter', 'Up', 'Enter', 'Enter', 'Escape', 'Escape'])
   })
 
-  it('telegram only in the scrollback, not in the list: absent verdict, no Up', () => {
+  // An absent row ends with one /reload-plugins (RELOADPLUGINSABSENT1032, card 09861207
+  // slice 8): the line was just proven empty, and the reload is typed inside the lane.
+  it('telegram only in the scrollback, not in the list: absent verdict, no Up, one reload in-lane', () => {
     fake.mcpList = `<channel source="plugin:telegram">hi</channel>\nManage MCP servers\n❯ gmail · ✔ connected\n${FOOTER}`
     schedulePluginUnlockAfterRespawn(SESSION, 'telegram')
     vi.advanceTimersByTime(35_000)
-    expect(fake.keys).toEqual(['/mcp Enter', 'Escape'])
+    expect(fake.keys).toEqual(['/mcp Enter', 'Escape', '/reload-plugins Enter'])
+    expect(fake.keysOutsideLane).toEqual([])
     expect(wasPluginConfirmedAbsent(SESSION, 60_000)).toBe(true)
   })
 })

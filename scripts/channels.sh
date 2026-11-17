@@ -520,6 +520,55 @@ export CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1
 # Monitor and the Agent tool (foreground and background subagents) keep working.
 export CLAUDE_CODE_DISABLE_AGENT_VIEW=1
 
+# --- input-line probe (RELOADDEADGRACE1040, upstream 058ad0901e) --------------
+# Classifies a COLOURED capture (`tmux capture-pane -e -p`) of the main session,
+# for the died-after-up watchdog's one /reload-plugins attempt below: it may only
+# be typed into an EMPTY idle prompt; into any other state the literal text lands
+# in the input box (appended to a parked draft, and Enter submits both).
+#
+# Delegates to the compiled pane-state.js instruments (stripGhostSuggestion /
+# idleConsideringDimGhost / detectPaneState / parkedInputText) -- the same rule
+# the dashboard's unlock round uses (channel-plugin-unlock.ts unlockInputState,
+# MCPDUP806, card e71b2b51) -- rather than re-deriving TUI parsing in shell. The
+# coloured capture matters: Claude Code renders ghost/placeholder hints dim
+# (SGR 2) inside an EMPTY box, and a plain capture cannot tell them from
+# genuinely parked text.
+#
+# stdout, exactly one line:
+#   idle           -- input box live and provably empty; safe to type
+#   parked:<text>  -- text parked in the box (collapsed, truncated for logs)
+#   busy|unknown|… -- detectPaneState verdict; not safe to type
+#   unverifiable   -- node or dist/pane-state.js unavailable; not safe to type
+probe_pane_input_state() {
+  local _node _pane_js
+  _node="$(command -v node || true)"
+  # Test seam: the suite points this at a real build outside the checkout
+  # (dist/ is a build product, absent from a fresh clone). Runtime installs
+  # always carry dist/ -- the dashboard itself runs from it.
+  _pane_js="${CHANNELS_PANE_STATE_JS:-$INSTALL_DIR/dist/pane-state.js}"
+  if [ -z "$_node" ] || [ ! -f "$_pane_js" ]; then
+    echo "unverifiable"
+    return 0
+  fi
+  "$_node" -e '
+    const ps = require(process.argv[1])
+    let raw = ""
+    process.stdin.on("data", (d) => { raw += d })
+    process.stdin.on("end", () => {
+      const plain = ps.stripAllAnsi(raw)
+      const view = ps.stripGhostSuggestion(raw)
+      if (ps.idleConsideringDimGhost(plain, view)) { console.log("idle"); return }
+      const state = ps.detectPaneState(plain)
+      if (state === "typing") {
+        const parked = ps.parkedInputText(view) || ps.parkedInputText(plain) || ""
+        console.log("parked:" + parked.replace(/\s+/g, " ").slice(0, 120))
+        return
+      }
+      console.log(state)
+    })
+  ' "$_pane_js" 2>/dev/null || echo "unverifiable"
+}
+
 # The single, serialized Claude Code install/update point (see the
 # DISABLE_AUTOUPDATER block above).
 #
@@ -1414,8 +1463,101 @@ PLUGIN_NEVER_STARTED_DEADLINE=$((START_TS + PLUGIN_NEVER_STARTED_BUDGET))
 # Died-after-up budget: once we have seen the plugin alive, a continuous
 # disappearance this long means it crashed and is not self-recovering.
 PLUGIN_DEAD_GRACE=180
+# RELOADDEADGRACE1040: how long to wait inside the dead-grace window before
+# trying one in-place /reload-plugins. Half the grace leaves the other half
+# for the reload to actually take effect (bun poller respawn + reconnect)
+# before we give up and sacrifice the whole session.
+PLUGIN_RELOAD_AFTER=90
+# RESTARTCOALESCE1103: how long after store/.channel-last-respawn (epoch
+# seconds) a plugin disappearance is still the doing of the restart that wrote
+# the stamp, not a genuine unexplained crash. Compared against the FIXED stamp
+# (NOW - stamp), never against PLUGIN_DEAD_SINCE: the suppression branch below
+# leaves PLUGIN_DEAD_SINCE alone so it keeps the real death time, and a window
+# measured from it would slide.
+#
+# The value mirrors RESUME_GRACE_MS in src/web/channel-monitor.ts, which reads
+# this exact stamp file for the same question ("how long can a full resume
+# legitimately take", tuned 90s -> 150s -> 240s there). Two readers of one fact
+# should agree on it.
+#
+# Two writers, both covered ON PURPOSE:
+# - channel-monitor.ts writeRespawnStamp() on an in-process hard restart
+#   (e.g. a context-guard handoff restart). That restart tears the MCP server
+#   down just like a crash would, already has a fresh claude process and its
+#   own plugin-unlock probe scheduled, so exiting here as well would only
+#   sacrifice the conversation a second time.
+# - this script itself, on every start (the `date +%s >` line near the top).
+#   So the suppression also holds for the first $RESPAWN_SETTLE_BUDGET seconds
+#   after the watchdog's own start. That is intended: a plugin that came up
+#   and dropped again inside the cold-start window is still settling (the
+#   plugin-unlock probe and the /mcp handshake run in that window), and a
+#   restart there would cut the very startup it is waiting for. The delay is
+#   bounded: PLUGIN_DEAD_SINCE is not reset while suppressed, so once the
+#   budget runs out a plugin dead for $PLUGIN_DEAD_GRACE or longer exits on
+#   the next tick. Worst case: exit at start + RESPAWN_SETTLE_BUDGET instead of
+#   death + PLUGIN_DEAD_GRACE.
+RESPAWN_SETTLE_BUDGET=240
+
+# Pure verdict for one died-after-up watchdog tick, so the branch order is
+# testable without tmux (src/__tests__/channels-dead-after-up-verdict.test.ts).
+# Args: NOW DEAD_SINCE RESPAWN_STAMP RELOAD_ATTEMPTED(true|false)
+# stdout, exactly one word:
+#   suppress -- the respawn stamp is within $RESPAWN_SETTLE_BUDGET: keep watching
+#   exit     -- dead for $PLUGIN_DEAD_GRACE or longer: exit for a restart
+#   reload   -- dead for $PLUGIN_RELOAD_AFTER or longer, no reload tried yet
+#   wait     -- none of the above yet
+# A non-numeric or missing stamp counts as 0 (no stamp: nothing explains it).
+dead_after_up_verdict() {
+  _dv_now="$1"; _dv_since="$2"; _dv_stamp="$3"; _dv_tried="$4"
+  case "$_dv_stamp" in (*[!0-9]*|'') _dv_stamp=0 ;; esac
+  if [ "$_dv_stamp" -gt 0 ] && [ "$((_dv_now - _dv_stamp))" -le "$RESPAWN_SETTLE_BUDGET" ]; then
+    echo suppress
+  elif [ "$((_dv_now - _dv_since))" -ge "$PLUGIN_DEAD_GRACE" ]; then
+    echo exit
+  elif [ "$_dv_tried" != "true" ] && [ "$((_dv_now - _dv_since))" -ge "$PLUGIN_RELOAD_AFTER" ]; then
+    echo reload
+  else
+    echo wait
+  fi
+}
 PLUGIN_SEEN_ONCE=false
 PLUGIN_DEAD_SINCE=0
+PLUGIN_RELOAD_ATTEMPTED=false
+
+# The watchdog tick saw this agent's plugin alive. Also re-arms the
+# died-after-up reload: a plugin that came back and later dies again gets its
+# own /reload-plugins before the restart, not a straight session restart.
+# Tested in src/__tests__/channels-watchdog-reload.test.ts.
+watchdog_plugin_alive() {
+  PLUGIN_SEEN_ONCE=true
+  PLUGIN_DEAD_SINCE=0
+  PLUGIN_RELOAD_ATTEMPTED=false
+  # The plugin came up, so this host is not in the never-starting state:
+  # drop the streak so the next cold start gets the fast 10-minute watchdog
+  # again instead of inheriting a 40-minute budget from an old outage.
+  if [ "$NEVER_STARTED_STREAK" != "0" ]; then
+    rm -f "$NEVER_STARTED_STREAK_FILE" 2>/dev/null || true
+    NEVER_STARTED_STREAK=0
+  fi
+}
+
+# One died-after-up /reload-plugins attempt (the "reload" verdict), only into a
+# pane probe_pane_input_state proves idle. The coloured capture (-e) matters:
+# without it a dim placeholder reads as parked text and the reload never fires.
+# Marks the attempt only when the keys were sent, so the 5s ticks between
+# PLUGIN_RELOAD_AFTER and PLUGIN_DEAD_GRACE send it once, not once per tick;
+# a busy or unverifiable pane is retried on the next tick.
+# Tested in src/__tests__/channels-watchdog-reload.test.ts.
+died_after_up_try_reload() {
+  _reload_probe="$($TMUX capture-pane -t "=$SESSION:" -e -p 2>/dev/null | probe_pane_input_state)"
+  if [ "$_reload_probe" = "idle" ]; then
+    $TMUX send-keys -t "=$SESSION:" '/reload-plugins' Enter
+    PLUGIN_RELOAD_ATTEMPTED=true
+    echo "WARN: $CHANNEL_PROVIDER plugin dead for $((NOW - PLUGIN_DEAD_SINCE))s -- sent /reload-plugins, waiting out the rest of the ${PLUGIN_DEAD_GRACE}s grace before restart" >&2
+    respawn_log "died-after-up-reload-attempt: $CHANNEL_PROVIDER plugin dead for $((NOW - PLUGIN_DEAD_SINCE))s -- sent /reload-plugins"
+  fi
+  unset _reload_probe
+}
 # Set to 1 when the watchdog below breaks out ON PURPOSE to be restarted. The
 # exit status has to carry that intent: a watchdog exit is not a normal one, and
 # a unit still carrying the old Restart=on-failure would read exit 0 as "this
@@ -1548,27 +1690,55 @@ while $TMUX has-session -t "$SESSION" 2>/dev/null; do
   fi
 
   if [ "$_plugin_alive" = "true" ]; then
-    PLUGIN_SEEN_ONCE=true
-    PLUGIN_DEAD_SINCE=0
-    # The plugin came up, so this host is not in the never-starting state:
-    # drop the streak so the next cold start gets the fast 10-minute watchdog
-    # again instead of inheriting a 40-minute budget from an old outage.
-    if [ "$NEVER_STARTED_STREAK" != "0" ]; then
-      rm -f "$NEVER_STARTED_STREAK_FILE" 2>/dev/null || true
-      NEVER_STARTED_STREAK=0
-    fi
+    watchdog_plugin_alive
   elif [ "$PLUGIN_SEEN_ONCE" = "true" ]; then
     # Was up, now gone -- start/continue the dead-grace timer (a transient
     # gap that recovers resets it, so only a sustained death triggers exit).
     if [ "$PLUGIN_DEAD_SINCE" -eq 0 ]; then
       PLUGIN_DEAD_SINCE=$NOW
       echo "WARN: $CHANNEL_PROVIDER plugin (bot.pid) disappeared -- ${PLUGIN_DEAD_GRACE}s grace before restart" >&2
-    elif [ "$((NOW - PLUGIN_DEAD_SINCE))" -ge "$PLUGIN_DEAD_GRACE" ]; then
+    fi
+    # RESTARTCOALESCE1103: before counting this disappearance towards a
+    # systemd-level restart, check whether it is already explained. A
+    # channel-monitor.ts hard restart (e.g. a context-guard handoff restart,
+    # which tears down the MCP server with SIGINT/SIGTERM just like a crash
+    # would -- confirmed 2026-11-03 against
+    # ~/.cache/claude-cli-nodejs/.../mcp-logs-plugin-telegram-telegram/*.jsonl
+    # and store/dashboard.log "context-guard: acting" entries) writes
+    # store/.channel-last-respawn at the moment it respawns the pane. While
+    # we are still within $RESPAWN_SETTLE_BUDGET of THAT FIXED stamp (never
+    # compared against the sliding PLUGIN_DEAD_SINCE -- see the budget's own
+    # comment above for why), the disappearance is that restart's own doing:
+    # it already has a fresh claude process and its own plugin-unlock probe
+    # scheduled, so exiting here too would only sacrifice the conversation a
+    # second time for nothing. Keep watching instead of counting towards
+    # exit; PLUGIN_DEAD_SINCE is left untouched so it keeps tracking the real
+    # death time for whoever reads it once the settle budget runs out.
+    _respawn_stamp="$(cat "$INSTALL_DIR/store/.channel-last-respawn" 2>/dev/null | tr -d '[:space:]')"
+    case "$_respawn_stamp" in (*[!0-9]*|'') _respawn_stamp=0 ;; esac
+    _dead_verdict="$(dead_after_up_verdict "$NOW" "$PLUGIN_DEAD_SINCE" "$_respawn_stamp" "$PLUGIN_RELOAD_ATTEMPTED")"
+    if [ "$_dead_verdict" = "suppress" ]; then
+      respawn_log "died-after-up-suppressed: $CHANNEL_PROVIDER plugin gone, but store/.channel-last-respawn ($_respawn_stamp) explains it (within ${RESPAWN_SETTLE_BUDGET}s settle budget, $((NOW - _respawn_stamp))s elapsed) -- the restart that wrote the stamp (an in-process hard restart, or this watchdog's own start) is still settling, not restarting again"
+    elif [ "$_dead_verdict" = "exit" ]; then
       echo "WARN: $CHANNEL_PROVIDER plugin dead for $((NOW - PLUGIN_DEAD_SINCE))s -- exiting for service-manager restart" >&2
-      respawn_log "died-after-up: $CHANNEL_PROVIDER plugin dead for $((NOW - PLUGIN_DEAD_SINCE))s -- exiting for service-manager restart -- mcp-log tail: $(mcp_plugin_log_tail)"
+      respawn_log "died-after-up: $CHANNEL_PROVIDER plugin dead for $((NOW - PLUGIN_DEAD_SINCE))s (RESTARTCOALESCE1103 saw respawn_stamp=$_respawn_stamp, settle_budget=${RESPAWN_SETTLE_BUDGET}s -- did not explain the gap) -- exiting for service-manager restart -- mcp-log tail: $(mcp_plugin_log_tail)"
       RESTART_REQUESTED=1
       break
+    elif [ "$_dead_verdict" = "reload" ]; then
+      # RELOADDEADGRACE1040: the only thing measured to reliably revive a
+      # dead/absent plugin (RELOADPLUGINSABSENT1032, measured 2026-10-31 on
+      # the never-started path) is /reload-plugins. Until now this
+      # died-after-up path never tried it -- it went straight from "plugin
+      # gone" to "kill the whole session and lose the conversation", even
+      # though $PLUGIN_DEAD_GRACE leaves time for an in-place revival first.
+      # One shot, only into a provably idle pane (MCPDUP806 discipline -- never
+      # type over a live turn or someone else's parked draft; an unverifiable
+      # or busy pane just retries next tick), with the rest of the grace
+      # window left afterwards for the plugin to actually come back before we
+      # give up and restart.
+      died_after_up_try_reload
     fi
+    unset _respawn_stamp _dead_verdict
   else
     # Never came up at all (e.g. a Claude Code build that silently disables
     # --channels). Give it the full cold-start budget, then restart.

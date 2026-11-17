@@ -280,7 +280,8 @@ function finishUnlockRound(session: string): string {
   return clearOwnResidue(session, state)
 }
 
-function sendUnlockKeystrokes(session: string, provider: ChannelProviderType, rowPolicy: UnlockRowPolicy): void {
+// The plugin row the round saw, or null when it aborted before classifying it.
+function sendUnlockKeystrokes(session: string, provider: ChannelProviderType, rowPolicy: UnlockRowPolicy): McpPluginRowState | null {
   try {
     // Open the MCP dialog. Claude renders the server list within ~2s; the
     // 3s settle ensures the cursor is on the first item before we move.
@@ -302,7 +303,7 @@ function sendUnlockKeystrokes(session: string, provider: ChannelProviderType, ro
     } catch (err) {
       logger.warn({ err, session }, 'channel-plugin-unlock: capture-pane after /mcp open failed -- aborting')
       try { execFileSync(TMUX, ['send-keys', '-t', session, 'Escape'], { timeout: 5000 }) } catch { /* ignore */ }
-      return
+      return null
     }
     const { state: rowState, row } = classifyMcpPluginRow(paneAfterOpen, provider)
     if (rowState === 'absent') {
@@ -313,7 +314,7 @@ function sendUnlockKeystrokes(session: string, provider: ChannelProviderType, ro
       // after one restart instead of looping fresh-restarts that cannot help.
       markPluginAbsent(session)
       try { execFileSync(TMUX, ['send-keys', '-t', session, 'Escape'], { timeout: 5000 }) } catch { /* ignore */ }
-      return
+      return rowState
     }
     if (!unlockRowFires(rowState, rowPolicy)) {
       // A connected row (Up+Enter+Enter would pick "Disable"), or a disabled row
@@ -321,7 +322,7 @@ function sendUnlockKeystrokes(session: string, provider: ChannelProviderType, ro
       // invisible without it.
       logger.warn({ session, provider, rowState, rowPolicy, row }, 'channel-plugin-unlock: plugin row not in a state this path revives -- skipping unlock')
       try { execFileSync(TMUX, ['send-keys', '-t', session, 'Escape'], { timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] }) } catch { /* ignore */ }
-      return
+      return rowState
     }
 
     // Up wraps to the bottom of the list, where the plugin servers live
@@ -350,9 +351,46 @@ function sendUnlockKeystrokes(session: string, provider: ChannelProviderType, ro
     execFileSync('/bin/sleep', [String(KEYSTROKE_SETTLE_MS / 1000)], { timeout: KEYSTROKE_SETTLE_MS + 2000 })
     execFileSync(TMUX, ['send-keys', '-t', session, 'Escape'], { timeout: 5000 })
     logger.warn({ session }, 'channel-plugin-unlock: sent /mcp+Up+Enter+Enter+Esc+Esc unlock sequence')
+    return rowState
   } catch (err) {
     logger.error({ err, session }, 'channel-plugin-unlock: failed to deliver unlock keystrokes')
+    return null
   }
+}
+
+// RELOADPLUGINSABSENT1032 (upstream 058ad0901e, card 09861207). An absent
+// (never-loaded) plugin is not what Enable/Reconnect fixes -- it has no row in the
+// /mcp list -- but a manual `/reload-plugins` reliably brought it back (measured
+// upstream 2026-10-31, after 157 consecutive never-started cycles that no
+// soft-reconnect/resume/hard-restart stage repaired). It reloads skills, agents,
+// hooks and MCP servers from the main prompt in one shot, so there is no list
+// position to get wrong.
+//
+// Typed ONCE, and only into an input line finishUnlockRound has just PROVEN empty
+// (MCPDUP806): never blind into a menu level or onto parked text. That proof is
+// also why no second Escape is sent here: finishUnlockRound sends Escape only while
+// the pane is not idle, and a double Escape at an idle prompt is not a no-op.
+// Exported for testability; `send` is the keystroke seam.
+export function reloadPluginsAfterAbsent(
+  session: string,
+  provider: ChannelProviderType,
+  endState: string,
+  send: (session: string) => void = (s) => {
+    execFileSync(TMUX, ['send-keys', '-t', s, '/reload-plugins', 'Enter'], { timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] })
+  },
+): boolean {
+  if (endState !== 'idle') {
+    logger.warn({ session, provider, endState }, 'channel-plugin-unlock: input line not proven empty after leaving /mcp -- skipping /reload-plugins after confirmed-absent plugin')
+    return false
+  }
+  try {
+    send(session)
+  } catch (err) {
+    logger.error({ site: 'channel-plugin-unlock.reloadAfterAbsent', session, tmux: tmuxStderr(err) }, 'channel-plugin-unlock: failed to send /reload-plugins after confirmed-absent plugin')
+    return false
+  }
+  logger.warn({ session, provider }, 'channel-plugin-unlock: sent /reload-plugins after confirmed-absent plugin')
+  return true
 }
 
 interface UnlockProbeState {
@@ -420,13 +458,15 @@ function runUnlockProbe(state: UnlockProbeState): void {
         { session: state.session, claudePid, provider: state.provider },
         'channel-plugin-unlock: bun child absent after cold-start window, firing /mcp unlock sequence',
       )
-      sendUnlockKeystrokes(state.session, state.provider, state.rowPolicy)
+      const rowState = sendUnlockKeystrokes(state.session, state.provider, state.rowPolicy)
       const endState = finishUnlockRound(state.session)
       if (endState === 'idle') {
         logger.info({ session: state.session }, 'channel-plugin-unlock: unlock round finished, input line verified empty')
       } else {
         logger.warn({ session: state.session, endState }, 'channel-plugin-unlock: input line NOT verified empty after the unlock round (MCPDUP806) -- the stuck-input recovery owns it from here')
       }
+      // Last in the round, still inside the lane: the line was just proven empty.
+      if (rowState === 'absent') reloadPluginsAfterAbsent(state.session, state.provider, endState)
     }
   } catch (err) {
     logger.error({ err, session: state.session }, 'channel-plugin-unlock: unlock round failed')
