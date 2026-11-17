@@ -65,6 +65,21 @@ interface Run {
 }
 
 /**
+ * The runner's env minus every variable the script reads as an override (card df1e313a).
+ * An agent session carries TELEGRAM_STATE_DIR (measured 2026-11-08: friday's points at
+ * agents/friday/.claude/channels/telegram), and the script prefers it over the fake HOME:
+ * the token came from a REAL channel .env, and all six delivery cases went red from an
+ * agent shell while passing in a clean one.
+ */
+function inheritedEnvWithoutGuardHooks(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  for (const k of Object.keys(env)) {
+    if (k === 'TELEGRAM_STATE_DIR' || k.startsWith('DISK_GUARD_')) delete env[k]
+  }
+  return env
+}
+
+/**
  * Eldobhato telepites: valodi szkript, valodi /bin/bash, hamis HOME (hogy a valodi
  * bot-tokenhez SOHA ne nyulhasson), es egy PATH-ra tett `curl`-stub, ami rogzit es a
  * kert valaszt adja vissza.
@@ -112,7 +127,7 @@ function runGuard(curl: CurlBehaviour, usage = 96): Run {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
-      ...process.env,
+      ...inheritedEnvWithoutGuardHooks(),
       HOME: join(base, 'home'),
       PATH: `${join(base, 'bin')}:${process.env.PATH}`,
       DISK_GUARD_USAGE_OVERRIDE: String(usage),
@@ -207,5 +222,29 @@ describe('disk-space-guard: a mero tenyleg a riasztasi utat jarja', () => {
     const r = runGuard({ body: OK_BODY, status: '200' })
     expect(r.curlArgs).toContain('chat_id=111222333')
     expect(r.log).toContain('post-reap disk 96%')
+  })
+})
+
+describe('disk-space-guard: a harness nem orokli a futtato felulirasait (df1e313a)', () => {
+  it('egy agens-shell TELEGRAM_STATE_DIR-je es DISK_GUARD_ALERT_DRYRUN-ja mellett is a hamis HOME-bol kezbesit', () => {
+    // CI runs with a clean env, where the strip is invisible: this case plants the agent-shell
+    // shape itself (trillian, 2026-11-08), so dropping the strip goes red everywhere.
+    const channel = mkTmp('disk-guard-inherited-channel-')
+    made.push(channel)
+    writeFileSync(join(channel, '.env'), 'TELEGRAM_BOT_TOKEN=\n')
+    const saved = { state: process.env.TELEGRAM_STATE_DIR, dry: process.env.DISK_GUARD_ALERT_DRYRUN }
+    process.env.TELEGRAM_STATE_DIR = channel
+    process.env.DISK_GUARD_ALERT_DRYRUN = '1'
+    try {
+      const r = runGuard({ body: OK_BODY, status: '200' })
+      expect(r.curlCalled).toBe(true)
+      expect(r.log).toContain('owner alerted via direct Bot API')
+      expect(r.stamped).toBe(true)
+    } finally {
+      if (saved.state === undefined) delete process.env.TELEGRAM_STATE_DIR
+      else process.env.TELEGRAM_STATE_DIR = saved.state
+      if (saved.dry === undefined) delete process.env.DISK_GUARD_ALERT_DRYRUN
+      else process.env.DISK_GUARD_ALERT_DRYRUN = saved.dry
+    }
   })
 })
