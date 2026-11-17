@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process'
 import { writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpDirs } from './helpers/tmp-dirs.js'
+import { describeWithLocalFiles } from './helpers/local-only-files.js'
 
 const mkTmp = tmpDirs()
 const SCRIPT = join(__dirname, '..', '..', 'scripts', 'installed-drift-daily.sh')
@@ -81,11 +82,17 @@ describe('com.marveen.installed-drift.plist.template', () => {
 // THE QUOTA CEILINGS LIVE IN THE TEMPLATE (card 4a5a4aae, marveen's triage): the installed unit
 // carries SOFT 95 / HARD 97 while the script defaults to 93 / 95, so a template without them makes
 // every reinstall quietly lower both ceilings.
-describe('com.marveen.quota-ceiling-guard.plist.template', () => {
+// The template is not tracked in this repo (moved to the L2 repo): see helpers/local-only-files.ts.
+describeWithLocalFiles(
+  join(__dirname, '..', '..'),
+  ['scripts/com.marveen.quota-ceiling-guard.plist.template'],
+  'com.marveen.quota-ceiling-guard.plist.template',
+  () => {
   const tpl = readFileSync(join(__dirname, '..', '..', 'scripts', 'com.marveen.quota-ceiling-guard.plist.template'), 'utf-8')
   const val = (k: string) => Number(tpl.match(new RegExp(`<key>${k}</key><string>(\\d+)</string>`))?.[1])
   it('carries both ceilings, soft below hard', () => {
     expect(val('QUOTA_CEILING_SOFT')).toBe(95)
     expect(val('QUOTA_CEILING_HARD')).toBe(97)
   })
-})
+  },
+)
