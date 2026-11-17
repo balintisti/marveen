@@ -27,7 +27,14 @@ cleanup() {
 trap cleanup EXIT
 PASS=0; FAIL=0
 ok(){ printf '  ok   %s\n' "$1"; PASS=$((PASS+1)); }
-no(){ printf '  FAIL %s\n' "$1"; FAIL=$((FAIL+1)); }
+# A FAIL prints the tail of the backup log it judged: the TMP dir dies with the run,
+# and a red that does not reproduce alone (card 268cbac5, 13. d) under a full gate
+# at load 19, 0 of 23 isolated/parallel reruns) can only be named from this tail.
+no(){
+  printf '  FAIL %s\n' "$1"; FAIL=$((FAIL+1))
+  [ -s "$TMP/backups/backup.log" ] && tail -n 12 "$TMP/backups/backup.log" | sed 's/^/    log| /'
+  return 0
+}
 
 # ---------------------------------------------------------------------------
 # stubs
