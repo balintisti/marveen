@@ -102,6 +102,15 @@ check('fix round: the fixture has both outcomes',
 for case in FIX_ROUND_CASES:
     check('fix round (shared): ' + case['name'], still_open(case['comments']), case['open'])
 
+# KNOWN DIVERGENCE (didi 67519 L1): shapes the two readers tokenise differently. Each reader
+# asserts what IT does; the server side is in kanban-verdict-fix-round-shared.test.ts.
+with open(os.path.join(HERE, 'fixtures', 'fix-round-cases.json'), encoding='utf-8') as fh:
+    KNOWN_DIVERGENCE = json.load(fh)['known_divergence']
+check('known divergence: the fixture carries its 4 cases', len(KNOWN_DIVERGENCE), 4)
+for case in KNOWN_DIVERGENCE:
+    last = vp.parse_verdicts((x['author'], i, x['content']) for i, x in enumerate(case['comments']))
+    check('python reader, ' + case['name'], vp.card_state(last)[0], case['python_card_state'])
+
 HANDED = FIX_ROUND_CASES[0]['comments']
 closed = vp.parse_verdicts((x['author'], i, x['content']) for i, x in enumerate(HANDED))
 check('fix round: the scope says who closed it', 'FIX ROUND: trillian NINCS-e zarta' in closed['didi'][1], True)

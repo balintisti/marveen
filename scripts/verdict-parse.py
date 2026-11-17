@@ -94,9 +94,14 @@ def classify(line, author=None):
 
 
 # THE FIX-ROUND HAND-OVER (card e9d95660; marveen decision B, 10022702 on e7b806c0). ONE rule, and
-# it is the LIVE server rule: this mirrors src/kanban-verdict.ts openVerdicts (c38bd6d0) line by
-# line, so the close gate (scripts) and the done move (server) cannot disagree. A reviewer's LAST
-# open verdict counts as closed when ALL of these hold:
+# it is the LIVE server rule: the FIX-ROUND HAND-OVER below mirrors src/kanban-verdict.ts
+# openVerdicts (c38bd6d0). The gate is the server's done move; this reader is a mirror for the
+# census. The two readers still DIFFER at verdict-line token level (didi 67519): a "." or a
+# space-less "--" ends the token here, not on the server; a bold "**VERDIKT:" line is read here,
+# not there; "NYITOTT TETEL (ALACSONY)" is NEM MERHETO here and open there. So on those shapes the
+# census and the done move can disagree (a visible refusal, not a silent close). They are pinned
+# per reader under "known_divergence" in the fixture. A reviewer's LAST open verdict counts as
+# closed when ALL of these hold:
 #   1. the comment that carries it hands the fix round to trillian: the marker on the verdict line
 #      itself, colon or not ("..., FIX ROUND trillian"), or a column-0 line of that comment that
 #      STARTS with it (after the author's own stamp). Case, accents and spacing do not matter; a
@@ -107,8 +112,8 @@ def classify(line, author=None):
 #   3. any reviewer, not only didi; nothing is required between the two (no hand-off condition).
 # The cases both readers must agree on live in ONE file, scripts/__tests__/fixtures/
 # fix-round-cases.json, read by scripts/__tests__/verdict-parse.test.py AND by
-# src/__tests__/kanban-verdict-fix-round-shared.test.ts: change the rule in one reader and the
-# other reader's test fails on the same case.
+# src/__tests__/kanban-verdict-fix-round-shared.test.ts: change the fix-round rule in one reader
+# and the other reader's test fails on the same case.
 FIX_ROUND_CLOSER = 'trillian'
 FIX_ROUND_ON_VERDICT = re.compile(r'FIX ROUND ?:? ?TRILLIAN(?![A-Z0-9])')
 FIX_ROUND_OWN_LINE = re.compile(r'^FIX ROUND ?:? ?TRILLIAN(?![A-Z0-9])')

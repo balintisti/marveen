@@ -1,5 +1,5 @@
 {
-  "_about": "Card e9d95660 (marveen decision B, 10022702): the fix-round hand-over cases BOTH verdict readers must agree on. Read by scripts/__tests__/verdict-parse.test.py and src/__tests__/kanban-verdict-fix-round-shared.test.ts. created_at = position in the list. \"open\" = the authors whose last verdict is still open, sorted. Only plain column-0 \"VERDIKT:\" lines with \"|\" separators: the two readers tokenise other shapes differently (bold, \".\" separator, \"(severity)\") and that is outside this rule.",
+  "_about": "Card e9d95660 (marveen decision B, 10022702): the fix-round hand-over cases BOTH verdict readers must agree on. Read by scripts/__tests__/verdict-parse.test.py and src/__tests__/kanban-verdict-fix-round-shared.test.ts. created_at = position in the list. \"open\" = the authors whose last verdict is still open, sorted. Only plain column-0 \"VERDIKT:\" lines with \"|\" separators: the two readers tokenise other shapes differently (bold, \".\" separator, \"(severity)\") and that is outside this rule: those shapes are pinned per reader under known_divergence.",
   "cases": [
     {
       "name": "didi hands the round to trillian, trillian closes it later",
@@ -503,5 +503,74 @@
         "ford"
       ]
     }
-  ]
+  ],
+  "known_divergence": [
+    {
+      "name": "known divergence K1: trillian NINCS cut by \".\" -- python closes, server keeps didi open",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 KOZEPES teszt-res | FIX ROUND: trillian"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL. Mindket mutans hal"
+        }
+      ],
+      "python_card_state": "NINCS NYITOTT TETEL",
+      "server_open": [
+        "didi"
+      ]
+    },
+    {
+      "name": "known divergence K2: trillian NINCS cut by \"--\" with no spaces -- python closes, server keeps didi open",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 KOZEPES teszt-res | FIX ROUND: trillian"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL--@26aedaa8a"
+        }
+      ],
+      "python_card_state": "NINCS NYITOTT TETEL",
+      "server_open": [
+        "didi"
+      ]
+    },
+    {
+      "name": "known divergence K3: bold trillian verdict line -- python closes, server keeps didi open",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 KOZEPES teszt-res | FIX ROUND: trillian"
+        },
+        {
+          "author": "trillian",
+          "content": "**VERDIKT: NINCS NYITOTT TETEL | P7 elhal**"
+        }
+      ],
+      "python_card_state": "NINCS NYITOTT TETEL",
+      "server_open": [
+        "didi"
+      ]
+    },
+    {
+      "name": "known divergence K4: didi NYITOTT with \"(severity)\" -- server closes, python leaves it NEM MERHETO",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL (ALACSONY) | L1 teszt-res | FIX ROUND: trillian"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal"
+        }
+      ],
+      "python_card_state": "NEM MERHETO",
+      "server_open": []
+    }
+  ],
+  "_about_known_divergence": "didi review 67519 (L1): the two readers already differ at verdict-line token level, before the fix-round rule. These cases pin what EACH reader does today, each asserted by its own test, so a change in either reader shows up. They are not the rule; aligning the tokenisers is a separate decision (marveen)."
 }
