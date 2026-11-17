@@ -93,14 +93,71 @@ def classify(line, author=None):
     return UNMEASURABLE, scope                                  # step 5
 
 
+# THE FIX-ROUND HAND-OVER (card e9d95660; marveen decision B, 10022702 on e7b806c0). ONE rule, and
+# it is the LIVE server rule: the FIX-ROUND HAND-OVER below mirrors src/kanban-verdict.ts
+# openVerdicts (c38bd6d0). The gate is the server's done move; this reader is a mirror for the
+# census. The two readers still DIFFER at verdict-line token level (didi 67519): a "." or a
+# space-less "--" ends the token here, not on the server; a bold "**VERDIKT:" line is read here,
+# not there; "NYITOTT TETEL (ALACSONY)" is NEM MERHETO here and open there. So on those shapes the
+# census and the done move can disagree (a visible refusal, not a silent close). They are pinned
+# per reader under "known_divergence" in the fixture. A reviewer's LAST open verdict counts as
+# closed when ALL of these hold:
+#   1. the comment that carries it hands the fix round to trillian: the marker on the verdict line
+#      itself, colon or not ("..., FIX ROUND trillian"), or a column-0 line of that comment that
+#      STARTS with it (after the author's own stamp). Case, accents and spacing do not matter; a
+#      longer name ("trilliankent"), another name, an indented or quoted marker, or a marker in an
+#      EARLIER comment hands nothing over (didi 59475: the verdict-line-only form missed 5 of the
+#      7 real rounds, so the marker on its own line must count).
+#   2. trillian's LAST verdict is NINCS and comes AFTER that line. Her NYITOTT never closes.
+#   3. any reviewer, not only didi; nothing is required between the two (no hand-off condition).
+# The cases both readers must agree on live in ONE file, scripts/__tests__/fixtures/
+# fix-round-cases.json, read by scripts/__tests__/verdict-parse.test.py AND by
+# src/__tests__/kanban-verdict-fix-round-shared.test.ts: change the fix-round rule in one reader
+# and the other reader's test fails on the same case.
+FIX_ROUND_CLOSER = 'trillian'
+FIX_ROUND_ON_VERDICT = re.compile(r'FIX ROUND ?:? ?TRILLIAN(?![A-Z0-9])')
+FIX_ROUND_OWN_LINE = re.compile(r'^FIX ROUND ?:? ?TRILLIAN(?![A-Z0-9])')
+
+
+def _normalize(text):
+    """The server's normalize(): accents off, upper case, spaces collapsed, trimmed."""
+    return re.sub(r'\s+', ' ', _strip_accents(text).upper()).strip()
+
+
+def _hands_on_own_line(author, content):
+    for raw in re.split(r'\r?\n', content or ''):
+        line = without_own_stamp(raw, author)
+        if re.match(r'\S', line) and FIX_ROUND_OWN_LINE.match(_normalize(line)):
+            return True
+    return False
+
+
 def parse_verdicts(comments):
-    """comments: iterable of (author, created_at, content). -> {author: (token, scope, ts)}"""
-    last = {}
+    """comments: iterable of (author, created_at, content), in board order (oldest first).
+    -> {author: (token, scope, ts)}. An open verdict closed by the fix-round hand-over above
+    comes back as NINCS, its scope saying so."""
+    last, meta, seq = {}, {}, 0
     for author, ts, content in comments:
-        for line in content.split('\n'):
+        own_line = None
+        for line in re.split(r'\r?\n', content or ''):
             got = classify(line, author)
-            if got:
-                last[author] = (got[0], got[1], ts)
+            if not got:
+                continue
+            if own_line is None:
+                own_line = _hands_on_own_line(author, content)
+            handed = own_line or bool(
+                FIX_ROUND_ON_VERDICT.search(_normalize(without_own_stamp(line, author))))
+            last[author] = (got[0], got[1], ts)
+            meta[author] = (seq, handed)
+            seq += 1
+    closer = last.get(FIX_ROUND_CLOSER)
+    if closer and closer[0] == NINCS:
+        closer_seq = meta[FIX_ROUND_CLOSER][0]
+        for author, (tok, scope, ts) in list(last.items()):
+            at, handed = meta[author]
+            if tok == NYITOTT and handed and at < closer_seq:
+                last[author] = (NINCS, '%s || FIX ROUND: trillian NINCS-e zarta (%s)'
+                                % (scope, closer[2]), ts)
     return last
 
 

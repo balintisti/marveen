@@ -81,6 +81,41 @@ check('ANOTHER author\'s stamp is a citation', vp.classify(STAMPED_NINCS, 'marve
 check('no author given: stamp not taken off', vp.classify(STAMPED_NINCS), None)
 check('estimated time is not the stamp', vp.classify('[didi, 2026-10-14 23:1x CEST, date] VERDIKT: NYITOTT TETEL | x', 'didi'), None)
 
+# --- card e9d95660 (marveen decision B, 10022702): the fix-round hand-over, the server rule ----
+# The cases live in ONE file shared with src/__tests__/kanban-verdict-fix-round-shared.test.ts,
+# so this reader and the server's openVerdicts cannot drift apart.
+import json  # noqa: E402
+
+with open(os.path.join(HERE, 'fixtures', 'fix-round-cases.json'), encoding='utf-8') as fh:
+    FIX_ROUND_CASES = json.load(fh)['cases']
+
+
+def still_open(comments):
+    last = vp.parse_verdicts((x['author'], i, x['content']) for i, x in enumerate(comments))
+    return sorted(a for a, v in last.items() if v[0] == vp.NYITOTT)
+
+
+# population floor: a fixture that loads nothing must not turn the block into a pass
+check('fix round: the shared fixture carries its cases', len(FIX_ROUND_CASES) >= 30, True)
+check('fix round: the fixture has both outcomes',
+      (any(not c['open'] for c in FIX_ROUND_CASES), any(c['open'] for c in FIX_ROUND_CASES)), (True, True))
+for case in FIX_ROUND_CASES:
+    check('fix round (shared): ' + case['name'], still_open(case['comments']), case['open'])
+
+# KNOWN DIVERGENCE (didi 67519 L1): shapes the two readers tokenise differently. Each reader
+# asserts what IT does; the server side is in kanban-verdict-fix-round-shared.test.ts.
+with open(os.path.join(HERE, 'fixtures', 'fix-round-cases.json'), encoding='utf-8') as fh:
+    KNOWN_DIVERGENCE = json.load(fh)['known_divergence']
+check('known divergence: the fixture carries its 4 cases', len(KNOWN_DIVERGENCE), 4)
+for case in KNOWN_DIVERGENCE:
+    last = vp.parse_verdicts((x['author'], i, x['content']) for i, x in enumerate(case['comments']))
+    check('python reader, ' + case['name'], vp.card_state(last)[0], case['python_card_state'])
+
+HANDED = FIX_ROUND_CASES[0]['comments']
+closed = vp.parse_verdicts((x['author'], i, x['content']) for i, x in enumerate(HANDED))
+check('fix round: the scope says who closed it', 'FIX ROUND: trillian NINCS-e zarta' in closed['didi'][1], True)
+check('fix round: the card state reads the closed round as NINCS', vp.card_state(closed)[0], vp.NINCS)
+
 # --- CONTROL, both directions: the classifier can say each of the three ---------------
 kinds = {tok('VERDIKT: NINCS NYITOTT TETEL | x'),
          tok('VERDIKT: NYITOTT TETEL | x'),
