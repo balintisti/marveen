@@ -340,6 +340,14 @@ describe('main-checkout git guard: a discard is saved before it runs', () => {
   const backups = () => {
     try { return readdirSync(join(bmain, '.git', 'discard-backups')).filter((n) => n.endsWith('.patch')) } catch { return [] }
   }
+  // The ONE backup a hook call added, by set difference. Not the last name in sort order: the
+  // name is <second>-<tree>-<pid>-<n>, and two backups in one second sort by pid as TEXT, so
+  // after a pid wrap (99949 -> 312) the older file sorted last and the test read it (card a097355b).
+  const added = (before: string[]) => {
+    const fresh = backups().filter((n) => !before.includes(n))
+    expect(fresh).toHaveLength(1)
+    return fresh[0]
+  }
 
   beforeAll(() => {
     const broot = realpathSync(mkTmp('git-guard-backup-'))
@@ -353,16 +361,21 @@ describe('main-checkout git guard: a discard is saved before it runs', () => {
     g(bmain, 'add', 'f.txt', 'g.txt')
     g(bmain, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'init')
     g(bmain, 'worktree', 'add', '-q', '--detach', bwt)
+    // A decoy that sorts after every real name: a pick by sort order reads it every time,
+    // not only on a same-second pid wrap (the 3 gate reds, card a097355b).
+    mkdirSync(join(bmain, '.git', 'discard-backups'), { recursive: true })
+    writeFileSync(join(bmain, '.git', 'discard-backups', '99991231-235959-decoy-99999-0.patch'), '# decoy\n')
   })
 
   it('saves the uncommitted change of the named file, says where, and the patch restores it', () => {
     writeFileSync(join(bwt, 'f.txt'), 'one\nREAL WORK\n')
-    const before = backups().length
+    const beforeNames = backups()
+    const before = beforeNames.length
     const r = hook('git checkout -- f.txt', bwt)
     expect(r.code).toBe(0)
     const names = backups()
     expect(names.length).toBe(before + 1)
-    const patch = join(bmain, '.git', 'discard-backups', names.sort().at(-1)!)
+    const patch = join(bmain, '.git', 'discard-backups', added(beforeNames))
     expect(readFileSync(patch, 'utf8')).toContain('+REAL WORK')
     expect(readFileSync(patch, 'utf8')).toContain(`# restore: git -C ${bwt} apply ${patch}`)
     const ctx = JSON.parse(r.stdout).hookSpecificOutput
@@ -379,18 +392,20 @@ describe('main-checkout git guard: a discard is saved before it runs', () => {
   it('reset --hard in a worktree saves the whole tree diff', () => {
     writeFileSync(join(bwt, 'f.txt'), 'one\nA\n')
     writeFileSync(join(bwt, 'g.txt'), 'two\nB\n')
-    const before = backups().length
+    const beforeNames = backups()
+    const before = beforeNames.length
     expect(hook('git reset --hard', bwt).code).toBe(0)
-    const names = backups().sort()
+    const names = backups()
     expect(names.length).toBe(before + 1)
-    const body = readFileSync(join(bmain, '.git', 'discard-backups', names.at(-1)!), 'utf8')
+    const body = readFileSync(join(bmain, '.git', 'discard-backups', added(beforeNames)), 'utf8')
     expect(body).toContain('+A')
     expect(body).toContain('+B')
     g(bwt, 'checkout', '--', '.')
   })
 
   it('nothing to lose -> no file and no output; a refused discard saves nothing either', () => {
-    const before = backups().length
+    const beforeNames = backups()
+    const before = beforeNames.length
     const clean = hook('git checkout -- f.txt', bwt)
     expect(clean.code).toBe(0)
     expect(clean.stdout).toBe('')
@@ -405,11 +420,12 @@ describe('main-checkout git guard: a discard is saved before it runs', () => {
   it('a path discard saves ONLY its paths: another dirty file stays out, so the restore line applies', () => {
     writeFileSync(join(bwt, 'f.txt'), 'one\nMINE\n')
     writeFileSync(join(bwt, 'g.txt'), 'two\nKEPT\n')
-    const before = backups().length
+    const beforeNames = backups()
+    const before = beforeNames.length
     expect(hook('git checkout -- f.txt', bwt).code).toBe(0)
-    const names = backups().sort()
+    const names = backups()
     expect(names.length).toBe(before + 1)
-    const patch = join(bmain, '.git', 'discard-backups', names.at(-1)!)
+    const patch = join(bmain, '.git', 'discard-backups', added(beforeNames))
     const body = readFileSync(patch, 'utf8')
     expect(body).toContain('+MINE')
     expect(body).not.toContain('+KEPT')
@@ -421,7 +437,8 @@ describe('main-checkout git guard: a discard is saved before it runs', () => {
 
   it('git clean with a dirty tracked file saves nothing: clean never touches tracked changes', () => {
     writeFileSync(join(bwt, 'g.txt'), 'two\nTRACKED\n')
-    const before = backups().length
+    const beforeNames = backups()
+    const before = beforeNames.length
     const r = hook('git clean -fd', bwt)
     expect(r.code).toBe(0)
     expect(r.stdout).toBe('')
@@ -433,11 +450,12 @@ describe('main-checkout git guard: a discard is saved before it runs', () => {
     writeFileSync(join(bwt, 'f.txt'), 'one\nSTAGED\n')
     g(bwt, 'add', 'f.txt')
     writeFileSync(join(bwt, 'f.txt'), 'one\nSTAGED\nWORK\n')
-    const before = backups().length
+    const beforeNames = backups()
+    const before = beforeNames.length
     expect(hook('git checkout -- f.txt', bwt).code).toBe(0)
-    const names = backups().sort()
+    const names = backups()
     expect(names.length).toBe(before + 1)
-    const patch = join(bmain, '.git', 'discard-backups', names.at(-1)!)
+    const patch = join(bmain, '.git', 'discard-backups', added(beforeNames))
     const body = readFileSync(patch, 'utf8')
     expect(body).toContain('+WORK')
     expect(body).not.toContain('+STAGED')
@@ -453,11 +471,12 @@ describe('main-checkout git guard: a discard is saved before it runs', () => {
       writeFileSync(join(bwt, 'f.txt'), 'one\nSTAGED\n')
       g(bwt, 'add', 'f.txt')
       writeFileSync(join(bwt, 'f.txt'), 'one\nSTAGED\nWORK\n')
-      const before = backups().length
+      const beforeNames = backups()
+      const before = beforeNames.length
       expect(hook(command, bwt).code).toBe(0)
-      const names = backups().sort()
+      const names = backups()
       expect(names.length).toBe(before + 1)
-      const patch = join(bmain, '.git', 'discard-backups', names.at(-1)!)
+      const patch = join(bmain, '.git', 'discard-backups', added(beforeNames))
       g(bwt, 'checkout', 'HEAD', '--', 'f.txt')
       expect(readFileSync(join(bwt, 'f.txt'), 'utf8')).toBe('one\n')
       g(bwt, 'apply', patch)
@@ -469,11 +488,12 @@ describe('main-checkout git guard: a discard is saved before it runs', () => {
   it('checkout of two paths without a tree saves both from the index', () => {
     writeFileSync(join(bwt, 'f.txt'), 'one\nF\n')
     writeFileSync(join(bwt, 'g.txt'), 'two\nG\n')
-    const before = backups().length
+    const beforeNames = backups()
+    const before = beforeNames.length
     expect(hook('git checkout f.txt g.txt', bwt).code).toBe(0)
-    const names = backups().sort()
+    const names = backups()
     expect(names.length).toBe(before + 1)
-    const body = readFileSync(join(bmain, '.git', 'discard-backups', names.at(-1)!), 'utf8')
+    const body = readFileSync(join(bmain, '.git', 'discard-backups', added(beforeNames)), 'utf8')
     expect(body).toContain('+F')
     expect(body).toContain('+G')
     g(bwt, 'checkout', '--', '.')
@@ -490,11 +510,12 @@ describe('main-checkout git guard: a discard is saved before it runs', () => {
       writeFileSync(join(bwt, 'f.txt'), 'one\nSTAGED\n')
       g(bwt, 'add', 'f.txt')
       writeFileSync(join(bwt, 'f.txt'), 'one\nSTAGED\nWORK\n')
-      const before = backups().length
+      const beforeNames = backups()
+      const before = beforeNames.length
       expect(hook(command, bwt).code).toBe(0)
-      const names = backups().sort()
+      const names = backups()
       expect(names.length).toBe(before + 1)
-      const patch = join(bmain, '.git', 'discard-backups', names.at(-1)!)
+      const patch = join(bmain, '.git', 'discard-backups', added(beforeNames))
       g(bwt, ...real)
       expect(readFileSync(join(bwt, 'f.txt'), 'utf8')).toBe(after)
       g(bwt, 'apply', patch)
