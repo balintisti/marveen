@@ -486,12 +486,24 @@ def wake(me, rc, elapsed, detached):
 JEST_CAP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "heavy-run-jest-cap.cjs")
 
 
+def file_workers():
+    try:
+        n = open(os.path.join(DIR, "max-workers")).read().strip()
+    except OSError:
+        return None
+    return n if n.isdigit() and int(n) <= 16 else None
+
+
 def cap_workers(env):
     """Test-runner worker cap for the run's tree (card e96722e2). Vitest reads VITEST_MAX_WORKERS; jest has
     no env var, so heavy-run-jest-cap.cjs goes into NODE_OPTIONS and adds --maxWorkers in jest's entry
     process. An explicit VITEST_MAX_WORKERS or a --maxWorkers on the command still wins.
-    HEAVY_RUN_MAX_WORKERS=0 switches both off."""
-    n = env.get("HEAVY_RUN_MAX_WORKERS") or "4"
+    HEAVY_RUN_MAX_WORKERS=0 switches both off.
+    The number is, in order: the env var, the file "<DIR>/max-workers" (one integer 0..16, read at every
+    run start, so an experiment is set by writing the file and reverted by deleting it, with no restart;
+    card 0c5059ab, marveen's 24 h 4 -> 3 experiment of 2026-11-12), the default 4. A file that is not an
+    integer in range is ignored: the default holds. A run already queued keeps the number it started with."""
+    n = env.get("HEAVY_RUN_MAX_WORKERS") or file_workers() or "4"
     if not n.isdigit() or int(n) == 0:
         return env
     env = {**env, "HEAVY_RUN_MAX_WORKERS": n}
@@ -1217,8 +1229,11 @@ def self_test():
     node = shutil.which("node")
 
     def seen(*cmd, extra=None):
+        # the ambient worker settings of whoever runs the self-test (a gate exports VITEST_MAX_WORKERS) must
+        # not decide what the cap tests see
+        clean = {k: v for k, v in env.items() if k not in ("VITEST_MAX_WORKERS", "HEAVY_RUN_MAX_WORKERS")}
         r = subprocess.run([sys.executable, me, "--label", "cap", "--", *cmd], capture_output=True, text=True,
-                           timeout=60, env={**env, "HEAVY_AGENT": "cap", **(extra or {})})
+                           timeout=60, env={**clean, "HEAVY_AGENT": "cap", **(extra or {})})
         try:
             return json.loads(r.stdout.strip().splitlines()[-1])
         except (ValueError, IndexError):
@@ -1239,6 +1254,27 @@ def self_test():
                         seen(node, other, "x")["a"] == ["x"]))
         results.append(("an explicit VITEST_MAX_WORKERS is kept",
                         seen(node, other, extra={"VITEST_MAX_WORKERS": "2"})["v"] == "2"))
+        # card 0c5059ab: <DIR>/max-workers is the runtime knob; the CONTROL above (no file = 4) ran first
+        mw = os.path.join(base, "max-workers")
+
+        def with_file(text, **extra):
+            open(mw, "w").write(text)
+            try:
+                return seen(node, entry, "src/x.spec.ts", extra=extra or None)
+            finally:
+                os.remove(mw)
+
+        results.append(("max-workers file 3 -> --maxWorkers=3 and VITEST_MAX_WORKERS=3",
+                        (lambda r: r["a"] == ["--maxWorkers=3", "src/x.spec.ts"] and r["v"] == "3")(with_file("3\n"))))
+        results.append(("the env var wins over the max-workers file",
+                        with_file("3", HEAVY_RUN_MAX_WORKERS="2")["a"] == ["--maxWorkers=2", "src/x.spec.ts"]))
+        results.append(("max-workers file 0 switches the cap off",
+                        with_file("0")["a"] == ["src/x.spec.ts"]))
+        results.append(("a max-workers file that is garbage or out of range keeps the default 4",
+                        [with_file(t)["a"] for t in ("abc", "99", "-1", "")]
+                        == [["--maxWorkers=4", "src/x.spec.ts"]] * 4))
+        results.append(("CONTROL: the file removed again -> 4",
+                        seen(node, entry, "src/x.spec.ts")["a"] == ["--maxWorkers=4", "src/x.spec.ts"]))
     else:
         results.append(("worker cap: node not on PATH -- SKIPPED, not passed", False))
 
