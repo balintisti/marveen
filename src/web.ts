@@ -33,6 +33,7 @@ import { startInboxNudgeWatcher } from './web/inbox-nudge-watcher.js'
 import { startIdleAgentWatcher } from './web/idle-agent-watcher.js'
 import { startUptimeAlertWatcher } from './web/uptime-alert-watcher.js'
 import { startSentryIssueWatcher } from './web/sentry-issue-watcher.js'
+import { startSchedulerCensusWatcher } from './web/scheduler-census-watcher.js'
 import { startStuckToolCallWatcher } from './web/stuck-tool-call-watcher.js'
 import { startReauthHealer } from './web/reauth-healer.js'
 import { startAutoRestartRunner } from './web/auto-restart-runner.js'
@@ -538,6 +539,9 @@ export function startWebServer(port = 3420): http.Server {
   // A POLLER and not the `sentry-or` schedule: that schedule runs on an agent
   // turn, and on 09-05 it retried 628 times against `busy` and never ran.
   const sentryIssueInterval = webOnly ? undefined : startSentryIssueWatcher()
+  // Scheduler entries our installers did not create (card fe838f28): the outcome control behind
+  // the self-pace gate, which reads command text and cannot see every way a scheduler is called.
+  const schedulerCensusInterval = webOnly ? undefined : startSchedulerCensusWatcher()
   if (!webOnly) logger.info('Idle-agent guard started (3min poll, 90s offset)')
 
   const reauthHealerInterval = webOnly ? undefined : startReauthHealer()
@@ -796,6 +800,7 @@ setInterval(() => { try { sweepExpiredDesktopLock() } catch { /* never kill the 
     if (idleAgentInterval) clearInterval(idleAgentInterval)
     if (uptimeAlertInterval) clearInterval(uptimeAlertInterval)
     if (sentryIssueInterval) clearInterval(sentryIssueInterval)
+    if (schedulerCensusInterval) clearInterval(schedulerCensusInterval)
     if (reauthHealerInterval) clearInterval(reauthHealerInterval)
     clearInterval(autoRestartInterval)
     clearInterval(modelFallbackInterval)
