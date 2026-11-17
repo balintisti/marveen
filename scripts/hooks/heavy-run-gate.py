@@ -210,7 +210,15 @@ BUILD_VALUE_FLAGS = {'--ext', '--format', '-f', '--config', '-c', '--rulesdir', 
                      '--cache-location', '--max-warnings', '--output-file', '-o', '--plugin', '--rule',
                      '--resolve-plugins-relative-to', '--env', '--global', '--parser-options', '--report-unused-disable-directives-severity',
                      '--project', '-p', '--tsBuildInfoFile', '--outDir', '--target', '--module', '--lib', '--jsx',
-                     '--maxNodeModuleJsDepth'}
+                     '--maxNodeModuleJsDepth',
+                     # file- or pattern-valued flags: without them the value reads as a named file or a deep path
+                     # (card 53f1258a), and a whole-project run passes as "narrowed". The directory-valued tsc flags
+                     # are listed too: a plain directory value is no file, but a `$VAR` value would read as a variable
+                     # file list (the `$` branch of judge_build).
+                     '--ignore-pattern', '--stdin-filename', '--suppressions-location',
+                     '--outFile', '--generateTrace', '--generateCpuProfile',
+                     '--rootDir', '--rootDirs', '--baseUrl', '--declarationDir', '--typeRoots', '--sourceRoot',
+                     '--mapRoot'}
 
 
 def _deep_path(arg):
@@ -233,6 +241,8 @@ def judge_build(kind, args):
         kind = 'eslint'                              # what follows `--` is the tool's own argument list
     if any(a.split('=', 1)[0] in BUILD_META for a in args):
         return 'meta'
+    if kind == 'eslint' and '--stdin' in args:
+        return 'narrowed'                            # eslint lints the piped text only (lintText), no path argument is read
     if kind == 'tsc' and any(a.split('=', 1)[0] in TSC_PROJECT_FLAGS for a in args):
         return 'full'
     k = 0

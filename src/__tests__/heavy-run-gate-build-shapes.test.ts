@@ -50,6 +50,23 @@ describe('heavy-run gate: refuses a whole-project tsc / eslint / typecheck / lin
     ['npx tsc --noEmit'],
     ['npx tsc --extendedDiagnostics'],
     ['npx tsc --noEmit --extendedDiagnostics'],
+    // card 53f1258a: the value of a value flag is not a named file, so the run is still whole-project
+    ['npx eslint . --ignore-pattern src/legacy/**'],
+    ['npx eslint . --ignore-pattern dist/bundle.js'],
+    ['npx eslint --ignore-pattern src/legacy/old.ts .'],
+    ['npx eslint . --suppressions-location eslint-suppressions.json'],
+    ['npx tsc --noEmit --outFile out/bundle.js'],
+    ['npx tsc --noEmit --generateTrace trace/out.json'],
+    ['npx tsc --noEmit --generateCpuProfile prof/run.json'],
+    ['npx eslint . --stdin-filename a.ts'],
+    // didi 60826 LELET 2: a directory-valued tsc flag with a variable value is still a value, not a variable file list
+    ['npx tsc --noEmit --rootDir $SRC'],
+    ['npx tsc --noEmit --rootDirs $SRC'],
+    ['npx tsc --noEmit --baseUrl $ROOT'],
+    ['npx tsc --noEmit --declarationDir $OUT'],
+    ['npx tsc --noEmit --typeRoots $TYPES'],
+    ['npx tsc --noEmit --sourceRoot $SRC'],
+    ['npx tsc --noEmit --mapRoot $MAPS'],
     ['tsc'],
     ['cd frontend && npx tsc -b 2>&1 | tail -5'],
     ['NODE_OPTIONS=--max-old-space-size=8192 npx tsc --noEmit -p tsconfig.spec.json'],
@@ -103,6 +120,12 @@ describe('heavy-run gate: lets a narrowed or a meta build command through', () =
     // didi 60768 LELET 2: --extendedDiagnostics is a boolean tsc flag, the file after it is still named
     ['npx tsc --extendedDiagnostics src/a.ts'],
     ['npx tsc --noEmit --extendedDiagnostics src/a.ts'],
+    ['npx eslint --ignore-pattern dist/bundle.js src/a.ts'],
+    ['npx tsc --noEmit --outFile out/bundle.js src/a.ts'],
+    // didi 60826 LELET 1: with --stdin eslint lints the piped text only, whatever path arguments follow
+    ['cat src/a.ts | npx eslint --stdin --stdin-filename src/a.ts'],
+    ['npx eslint --stdin --stdin-filename src/a.ts < src/a.ts'],
+    ['npx eslint --stdin --stdin-filename a.ts < $F'],
     // what only NAMES the tool
     ['git log --grep tsc'],
     ['grep -rn "tsc -b" docs/'],
