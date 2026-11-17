@@ -752,13 +752,23 @@ describe('decideWake', () => {
 })
 
 describe('gateWakePrompt', () => {
-  // The nudge exists to produce a turn AND a visible sign of life; a nudge that
-  // only said "you restarted" would leave the owner staring at silence again.
-  it('asks the agent to continue and to report on its channel', () => {
+  // The nudge exists to produce a turn; a nudge that only said "you restarted"
+  // would leave the agent idle.
+  it('asks the agent to continue', () => {
     const p = gateWakePrompt()
     expect(p).toContain('[CONTEXT-RESTART-GATE]')
     expect(p.toLowerCase()).toContain('folytasd')
-    expect(p.toLowerCase()).toContain('csatorna')
+  })
+
+  // Card c7a579c0: the channel of the main agent and of every sub-agent with
+  // its own bot is the owner's Telegram, so the nudge must not ask for a
+  // notice there, and must say where the note goes instead.
+  it('keeps session meta off the channel: transcript line, no channel notice', () => {
+    const p = gateWakePrompt()
+    expect(p).not.toContain('jelzest kuldj')
+    expect(p).not.toContain('csatornadon')
+    expect(p).toContain('transzkript-sorban')
+    expect(p).toContain('session-meta NEM mehet ki')
   })
 
   // Guard against the nudge itself becoming a source of invented work.

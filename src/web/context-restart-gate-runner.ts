@@ -68,7 +68,10 @@ export function gateWakePrompt(): string {
     'Olvasd be oket, ellenorizd a kanban tabladat es a hot memoriaidat, es FOLYTASD onnan ahol abbamaradt. ' +
     'Ne kezdd elolrol ami mar kesz, es ne delegald ujra amit mar atadtal. ' +
     'Ha nem volt futo munkad, az is teljes erteku allapot -- olyankor ne talalj ki magadnak feladatot. ' +
-    'Rovid jelzest kuldj a sajat csatornadon, hogy friss kontextussal folytatod.'
+    // Card c7a579c0: "your channel" is the owner's Telegram for the main agent
+    // AND for every sub-agent with its own bot; session meta must not go there.
+    'Zarasul egyetlen transzkript-sorban rogzitsd, hogy friss kontextussal folytatod -- ' +
+    'a csatornadra (a gazda Telegramjara) session-meta NEM mehet ki.'
   )
 }
 
