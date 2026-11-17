@@ -33,6 +33,15 @@ comment 53873): `node node_modules/.bin/jest` (node is a data command here), `ya
 `pnpm vitest run`, `bash -euc "npx jest"` (only a bare `-c` is read), a script fed on stdin
 (`bash -euo pipefail <<EOF ... EOF`), and package scripts not named test* (`npm run e2e`).
 
+WHOLE-PROJECT BUILD SHAPES (card bf2dbcba, marveen 6e2c9a5b comment 60495 point b; measured 2026-11-12
+21:48-21:50: a single `tsc -b` 6.3 GB RSS and 112% CPU, an eslint 186% CPU, both outside any gate): `tsc` with
+-b / --build / -p / --project or with no file, `eslint` with no file (or `.` / a directory), and
+`npm|yarn|pnpm run typecheck*` / `lint*` / `tsc*` with no file after `--`, are refused like a full suite
+unless under heavy-run.py. WHAT PASSES: `tsc --version`, `eslint --version`, `--help`, `--print-config`,
+`eslint <file with an extension>`, `tsc <file.ts>` (no project: one file), a script with a file after
+`--`. The correct form for these is `heavy-run.py --short` (heavy-run.py's own header gives whole-project
+tsc/eslint the short class: 900 s, one place); the hook only checks that heavy-run.py is there, not the class.
+
 FAIL-OPEN on an internal error, an unparseable command, or a missing heavy-run.py (the
 correct form must exist before the wrong one is refused). Override (logged):
 MARVEEN_HEAVY_GATE=allow <command>.
@@ -173,6 +182,8 @@ def _runner(seg, i):
         return base, seg[i + 1:]
     if base == 'playwright' and i + 1 < len(seg) and seg[i + 1] == 'test':
         return 'playwright', seg[i + 2:]
+    if base in ('tsc', 'eslint'):
+        return base, seg[i + 1:]
     if base in ('npm', 'yarn', 'pnpm'):
         j = i + 1
         while j < len(seg) and seg[j].startswith('-'):
@@ -183,10 +194,67 @@ def _runner(seg, i):
             return 'npm-test', seg[j + 2:]
         if base in ('yarn', 'pnpm') and j < len(seg) and seg[j].startswith('test'):
             return 'npm-test', seg[j + 1:]
+        if j < len(seg) and seg[j] in ('run', 'run-script') and j + 1 < len(seg) and BUILD_SCRIPT.match(seg[j + 1]):
+            return 'npm-build', seg[j + 2:]
+        if base in ('yarn', 'pnpm') and j < len(seg) and BUILD_SCRIPT.match(seg[j]):
+            return 'npm-build', seg[j + 1:]
     return None
 
 
+BUILD_SCRIPT = re.compile(r'^(typecheck|lint|tsc)(:[\w:.-]+)?$')
+FILE_ARG = re.compile(r'\.(?:[cm]?[jt]sx?|json)$')
+BUILD_META = {'--version', '-v', '-V', '--help', '-h', '--print-config', '--init', '--showConfig', '--list-files-only',
+              '--listFilesOnly', '--all', '--print-help'}
+TSC_PROJECT_FLAGS = {'-b', '--build', '-p', '--project'}
+BUILD_VALUE_FLAGS = {'--ext', '--format', '-f', '--config', '-c', '--rulesdir', '--ignore-path', '--parser',
+                     '--cache-location', '--max-warnings', '--output-file', '-o', '--plugin', '--rule',
+                     '--resolve-plugins-relative-to', '--env', '--global', '--parser-options', '--report-unused-disable-directives-severity',
+                     '--project', '-p', '--tsBuildInfoFile', '--outDir', '--target', '--module', '--lib', '--jsx',
+                     '--extendedDiagnostics', '--maxNodeModuleJsDepth'}
+
+
+def _deep_path(arg):
+    """True for a path of two or more plain components before any glob (`src/layout`, `./src/a/**`)."""
+    parts = [p for p in arg.split('/') if p not in ('', '.')]
+    plain = []
+    for p in parts:
+        if re.search(r'[*?{\[]', p):
+            break
+        plain.append(p)
+    return len(plain) >= 2
+
+
+def judge_build(kind, args):
+    """tsc / eslint / npm run typecheck|lint: 'full' unless meta or narrowed to a named file."""
+    if kind == 'npm-build':
+        if '--' not in args:
+            return 'full'
+        args = args[args.index('--') + 1:]
+        kind = 'eslint'                              # what follows `--` is the tool's own argument list
+    if any(a.split('=', 1)[0] in BUILD_META for a in args):
+        return 'meta'
+    if kind == 'tsc' and any(a.split('=', 1)[0] in TSC_PROJECT_FLAGS for a in args):
+        return 'full'
+    k = 0
+    while k < len(args):
+        a = args[k]
+        if a.startswith('-'):
+            if '=' not in a and a in BUILD_VALUE_FLAGS and k + 1 < len(args) and not args[k + 1].startswith('-'):
+                k += 2
+                continue
+            k += 1
+            continue
+        if '$' in a or (FILE_ARG.search(a) and not re.search(r'[*?{]', a)):
+            return 'narrowed'                        # a named source file, or a variable list (`$F`): not the project
+        if kind == 'eslint' and _deep_path(a):
+            return 'narrowed'                        # `src/components/clients`: a subtree, not the project
+        k += 1                                       # `.` / `src` / `src/**`: still the tree
+    return 'full'
+
+
 def judge(kind, args):
+    if kind in ('tsc', 'eslint', 'npm-build'):
+        return judge_build(kind, args)
     if kind == 'npm-test':
         if '--' not in args:                       # only what follows `--` reaches the runner
             return 'full'
@@ -335,6 +403,10 @@ def classify(cmd, depth=0, scripts=None, wrappers=None, cwd=None):
         if r is None:
             continue
         kind, args = r
+        if not wrapped and kind in ('tsc', 'eslint', 'npm-build') and seg[i].startswith('$'):
+            # `$HR npx tsc -b`: a wrapper variable set in an earlier call is not visible here (fail open)
+            found.append(('narrowed', text))
+            continue
         found.append(('wrapped' if wrapped else judge(kind, args), text))
     return found
 
@@ -354,7 +426,7 @@ def main():
     try:
         command = str((payload.get('tool_input') or {}).get('command') or '')
         # a script run here (`bash x.sh`, `./x.sh`) may hold the runner even if its path does not
-        if not re.search(r'vitest|jest|playwright|test|\.(?:sh|bash|zsh)\b|\b(?:bash|sh|zsh)\b', command):
+        if not re.search(r'vitest|jest|playwright|test|tsc|eslint|typecheck|lint|\.(?:sh|bash|zsh)\b|\b(?:bash|sh|zsh)\b', command):
             sys.exit(0)
         if not os.path.isfile(HEAVY_RUN):
             log('FAIL-OPEN', 'heavy-run.py missing at %s' % HEAVY_RUN, command)
@@ -376,15 +448,15 @@ def main():
         log('FAIL-OPEN', 'internal error: %r' % exc)
         sys.exit(0)
     sys.stderr.write(
-        'HEAVY-RUN GATE: REFUSED -- a FULL test suite outside heavy-run.py (card c29f01b7).\n\n'
+        'HEAVY-RUN GATE: REFUSED -- a FULL test suite or whole-project tsc/eslint outside heavy-run.py (card c29f01b7, bf2dbcba).\n\n'
         + '\n'.join('  - %s' % s[:200] for s in full)
         + '\n\n'
         'A full suite runs only under the fleet limit (2026-11-03: three of them at once took the\n'
         'machine to load 96 and 10 GB swap). The correct form, with the Bash tool\'s\n'
         'run_in_background:\n'
         '    python3 %s --label "<agent> <card> <what>" -- <the command above>\n'
-        'Add --short only if it ends within 15 minutes. A NARROWED run passes without the wrapper:\n'
-        'name the test files / directories, or -t / --testPathPattern / --grep.\n'
+        'Add --short for tsc -b / eslint / typecheck (they end within 15 minutes) and for any run that does. A NARROWED run passes without the wrapper:\n'
+        'name the test files / directories, or -t / --testPathPattern / --grep; eslint: name the files.\n'
         'If the suite really must run outside the limit (your responsibility, logged):\n'
         '    MARVEEN_HEAVY_GATE=allow <the command>\n' % HEAVY_RUN
     )
