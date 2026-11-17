@@ -16,10 +16,10 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **499** kovetett fajl, ebbol
-**154** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **509** kovetett fajl, ebbol
+**155** hordoz dontes-fejlecet.
 
-## Nem olvasott fejlec-alak (3)
+## Nem olvasott fejlec-alak (4)
 
 Ezek a fajlok egyik olvasott fejlec-alakot sem hasznaljak (sor-komment,
 docstring, blokk-komment), de a fejlec-tartomanyukban all dontes-alaku sor.
@@ -27,6 +27,7 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - `scripts/com.marveen.idle-reporter.plist.template` -- MIERT KULON FOLYAMAT, ES NEM A DASHBOARDBAN EGY TIMER: mert epp azt az esetet
 - `scripts/expiry-inventory.json` -- "WHY A DECLARED PROBE AND NOT A DATE FIELD: a stored date drifts silently the",
+- `scripts/review-queue.py` -- WHY THIS FILE EXISTS. Night of 2026-11-04/05: review lanes were handed out by hand three times and two
 - `scripts/sql/tasks-reopen-grant.sql` -- MIERT ALL EZ ITT, ES NEM CSAK A KARTYAN: a fajlt UJRAFUTTATTAK nyitott kerdeskent,
 
 ### `scripts/__tests__/channel-image-resize.test.sh`
@@ -602,6 +603,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 ### `scripts/safety-core-drift-check.py`
 
 - MIERT NEM ELOSZTO (marveen dontese, 2026-09-24, a kartyan): friday merte, hogy a sablon a lapok
+
+### `scripts/sajat_nyitott_zarosorok.py`
+
+- WHY THIS EXISTS (card a31c7af0, Isti Telegram 10065). On 2026-11-14 friday asked three
 
 ### `scripts/schedule-artifact-watch.py`
 
