@@ -141,6 +141,11 @@ function runGuard(curl: CurlBehaviour, usage = 96): Run {
       // Safe here: HOME, the token and curl are all fakes.
       DISK_GUARD_ALLOW_FAKE_ALERT: '1',
       DISK_GUARD_TMUX_BIN: join(base, 'bin', 'tmux-down'),
+      // Card 496ed5ec: `...process.env` carries the RUNNING agent's TELEGRAM_STATE_DIR, and the script
+      // honours it before the install-scoped and the HOME paths: the token was looked up in the real
+      // agent's channel dir, found none, and all six delivery cases measured "no bot token" with the
+      // curl never called (red under any fleet agent, green in a plain shell). Pin it to the fake dir.
+      TELEGRAM_STATE_DIR: join(base, 'home', '.claude', 'channels', 'telegram'),
     },
   })
 
@@ -155,6 +160,19 @@ function runGuard(curl: CurlBehaviour, usage = 96): Run {
 const OK_BODY = '{"ok":true,"result":{"message_id":42}}'
 
 describe('disk-space-guard: a naplo csak akkor mond sikert, ha a Telegram elfogadta', () => {
+  it('egy orokolt TELEGRAM_STATE_DIR nem terit el a tokent a hamis csatorna-konyvtartol (kartya 496ed5ec)', () => {
+    const had = process.env.TELEGRAM_STATE_DIR
+    process.env.TELEGRAM_STATE_DIR = '/nonexistent-agent-channel-dir'
+    try {
+      const r = runGuard({ body: OK_BODY, status: '200' })
+      expect(r.curlCalled).toBe(true)
+      expect(r.log).toContain('owner alerted via direct Bot API')
+    } finally {
+      if (had === undefined) delete process.env.TELEGRAM_STATE_DIR
+      else process.env.TELEGRAM_STATE_DIR = had
+    }
+  })
+
   it('POZITIV KONTROLL: 200 + ok:true -> sikert naplo ES belyeget ir', () => {
     const r = runGuard({ body: OK_BODY, status: '200' })
     // Enelkul minden lenti allitas kielegitheto lenne egy ollyal is, ami SOHA nem
