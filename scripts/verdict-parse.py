@@ -93,47 +93,66 @@ def classify(line, author=None):
     return UNMEASURABLE, scope                                  # step 5
 
 
-# THE FIX-ROUND HAND-OVER (card e9d95660; marveen decision 67400 on e7b806c0, evidence didi
-# 67398 + 67399: 85 trillian fix rounds, 0 reopened; 36 of didi's 44 re-verdicts were a short
-# confirmation). didi may hand a TEST-gap fix round to trillian; trillian's later NINCS then
-# closes didi's open line without a confirming comment from didi. ALL of these must hold, each
-# one a condition of the decision, not a reading of it:
-#   1. didi's LAST verdict is NYITOTT and THAT LINE carries the marker literally (case and colon
-#      included). A marker elsewhere in the comment, or another name, hands nothing over.
-#   2. order: didi's NYITOTT -> a hand-off (a column-0 `TIER:` line from someone who is neither
-#      didi nor trillian: the author's fix) -> trillian's LAST verdict, which is NINCS.
-#   3. trillian's NYITOTT never closes, marker or not.
-# Withdrawal condition (decision point 4): didi re-reads 5 random closed rounds a week from
-# 2026-11-24; ONE rightful reopening suspends the rule and goes to marveen.
-# DIFFERENT FROM the live done-gate (src/kanban-verdict.ts openVerdicts, c38bd6d0): the gate
-# closes for any reviewer, reads the marker tolerantly and asks no hand-off, so this reader can
-# call a card open that the gate lets close, never the reverse (question to marveen 10022701).
-FIX_ROUND_MARKER = 'FIX ROUND: trillian'
-FIX_ROUND_OPENER, FIX_ROUND_CLOSER = 'didi', 'trillian'
-HANDOFF = re.compile(r'^\**TIER:')
+# THE FIX-ROUND HAND-OVER (card e9d95660; marveen decision B, 10022702 on e7b806c0). ONE rule, and
+# it is the LIVE server rule: this mirrors src/kanban-verdict.ts openVerdicts (c38bd6d0) line by
+# line, so the close gate (scripts) and the done move (server) cannot disagree. A reviewer's LAST
+# open verdict counts as closed when ALL of these hold:
+#   1. the comment that carries it hands the fix round to trillian: the marker on the verdict line
+#      itself, colon or not ("..., FIX ROUND trillian"), or a column-0 line of that comment that
+#      STARTS with it (after the author's own stamp). Case, accents and spacing do not matter; a
+#      longer name ("trilliankent"), another name, an indented or quoted marker, or a marker in an
+#      EARLIER comment hands nothing over (didi 59475: the verdict-line-only form missed 5 of the
+#      7 real rounds, so the marker on its own line must count).
+#   2. trillian's LAST verdict is NINCS and comes AFTER that line. Her NYITOTT never closes.
+#   3. any reviewer, not only didi; nothing is required between the two (no hand-off condition).
+# The cases both readers must agree on live in ONE file, scripts/__tests__/fixtures/
+# fix-round-cases.json, read by scripts/__tests__/verdict-parse.test.py AND by
+# src/__tests__/kanban-verdict-fix-round-shared.test.ts: change the rule in one reader and the
+# other reader's test fails on the same case.
+FIX_ROUND_CLOSER = 'trillian'
+FIX_ROUND_ON_VERDICT = re.compile(r'FIX ROUND ?:? ?TRILLIAN(?![A-Z0-9])')
+FIX_ROUND_OWN_LINE = re.compile(r'^FIX ROUND ?:? ?TRILLIAN(?![A-Z0-9])')
+
+
+def _normalize(text):
+    """The server's normalize(): accents off, upper case, spaces collapsed, trimmed."""
+    return re.sub(r'\s+', ' ', _strip_accents(text).upper()).strip()
+
+
+def _hands_on_own_line(author, content):
+    for raw in re.split(r'\r?\n', content or ''):
+        line = without_own_stamp(raw, author)
+        if re.match(r'\S', line) and FIX_ROUND_OWN_LINE.match(_normalize(line)):
+            return True
+    return False
 
 
 def parse_verdicts(comments):
     """comments: iterable of (author, created_at, content), in board order (oldest first).
-    -> {author: (token, scope, ts)}. A didi NYITOTT closed by the fix-round hand-over above
+    -> {author: (token, scope, ts)}. An open verdict closed by the fix-round hand-over above
     comes back as NINCS, its scope saying so."""
-    last, at, raw, handoffs = {}, {}, {}, []
-    for i, (author, ts, content) in enumerate(comments):
-        for line in (content or '').split('\n'):
-            if (author not in (FIX_ROUND_OPENER, FIX_ROUND_CLOSER)
-                    and HANDOFF.match(without_own_stamp(line, author))
-                    and (not handoffs or handoffs[-1] != i)):
-                handoffs.append(i)
+    last, meta, seq = {}, {}, 0
+    for author, ts, content in comments:
+        own_line = None
+        for line in re.split(r'\r?\n', content or ''):
             got = classify(line, author)
-            if got:
-                last[author] = (got[0], got[1], ts)
-                at[author], raw[author] = i, line
-    opened, closer = last.get(FIX_ROUND_OPENER), last.get(FIX_ROUND_CLOSER)
-    if (opened and closer and opened[0] == NYITOTT and closer[0] == NINCS
-            and FIX_ROUND_MARKER in raw[FIX_ROUND_OPENER]
-            and any(at[FIX_ROUND_OPENER] < h < at[FIX_ROUND_CLOSER] for h in handoffs)):
-        last[FIX_ROUND_OPENER] = (NINCS, '%s || FIX ROUND: trillian NINCS-e zarta (%s)'
-                                  % (opened[1], closer[2]), opened[2])
+            if not got:
+                continue
+            if own_line is None:
+                own_line = _hands_on_own_line(author, content)
+            handed = own_line or bool(
+                FIX_ROUND_ON_VERDICT.search(_normalize(without_own_stamp(line, author))))
+            last[author] = (got[0], got[1], ts)
+            meta[author] = (seq, handed)
+            seq += 1
+    closer = last.get(FIX_ROUND_CLOSER)
+    if closer and closer[0] == NINCS:
+        closer_seq = meta[FIX_ROUND_CLOSER][0]
+        for author, (tok, scope, ts) in list(last.items()):
+            at, handed = meta[author]
+            if tok == NYITOTT and handed and at < closer_seq:
+                last[author] = (NINCS, '%s || FIX ROUND: trillian NINCS-e zarta (%s)'
+                                % (scope, closer[2]), ts)
     return last
 
 

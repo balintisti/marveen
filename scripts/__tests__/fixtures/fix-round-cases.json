@@ -1,0 +1,507 @@
+{
+  "_about": "Card e9d95660 (marveen decision B, 10022702): the fix-round hand-over cases BOTH verdict readers must agree on. Read by scripts/__tests__/verdict-parse.test.py and src/__tests__/kanban-verdict-fix-round-shared.test.ts. created_at = position in the list. \"open\" = the authors whose last verdict is still open, sorted. Only plain column-0 \"VERDIKT:\" lines with \"|\" separators: the two readers tokenise other shapes differently (bold, \".\" separator, \"(severity)\") and that is outside this rule.",
+  "cases": [
+    {
+      "name": "didi hands the round to trillian, trillian closes it later",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 KOZEPES teszt-res: routes/kanban.ts:447 fedetlen, P7 tulel | FIX ROUND: trillian"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": []
+    },
+    {
+      "name": "without the marker the line stays open",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 viselkedes: a 409 rossz okot nevez"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": [
+        "didi"
+      ]
+    },
+    {
+      "name": "a trillian closer BEFORE the hand-over closes nothing",
+      "comments": [
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        },
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 KOZEPES teszt-res: routes/kanban.ts:447 fedetlen, P7 tulel | FIX ROUND: trillian"
+        }
+      ],
+      "open": [
+        "didi"
+      ]
+    },
+    {
+      "name": "a later unmarked open line after the closer is open again",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 KOZEPES teszt-res: routes/kanban.ts:447 fedetlen, P7 tulel | FIX ROUND: trillian"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        },
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 viselkedes: a 409 rossz okot nevez"
+        }
+      ],
+      "open": [
+        "didi"
+      ]
+    },
+    {
+      "name": "a later marked open line after the closer is open again",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 KOZEPES teszt-res: routes/kanban.ts:447 fedetlen, P7 tulel | FIX ROUND: trillian"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        },
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 KOZEPES teszt-res: routes/kanban.ts:447 fedetlen, P7 tulel | FIX ROUND: trillian"
+        }
+      ],
+      "open": [
+        "didi"
+      ]
+    },
+    {
+      "name": "trillian NYITOTT after her closer: her LAST verdict decides",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 KOZEPES teszt-res: routes/kanban.ts:447 fedetlen, P7 tulel | FIX ROUND: trillian"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NYITOTT TETEL | a teszt meg mindig a megujitas utan ellenoriz"
+        }
+      ],
+      "open": [
+        "didi",
+        "trillian"
+      ]
+    },
+    {
+      "name": "trillian NYITOTT never closes",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 KOZEPES teszt-res: routes/kanban.ts:447 fedetlen, P7 tulel | FIX ROUND: trillian"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NYITOTT TETEL | a teszt meg mindig a megujitas utan ellenoriz"
+        }
+      ],
+      "open": [
+        "didi",
+        "trillian"
+      ]
+    },
+    {
+      "name": "trillian NEM MERHETO line does not close",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 KOZEPES teszt-res: routes/kanban.ts:447 fedetlen, P7 tulel | FIX ROUND: trillian"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: majdnem kesz | Y7 el"
+        }
+      ],
+      "open": [
+        "didi"
+      ]
+    },
+    {
+      "name": "another author closer does not close it",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 KOZEPES teszt-res: routes/kanban.ts:447 fedetlen, P7 tulel | FIX ROUND: trillian"
+        },
+        {
+          "author": "mandark",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": [
+        "didi"
+      ]
+    },
+    {
+      "name": "any reviewer can hand over, not only didi",
+      "comments": [
+        {
+          "author": "ford",
+          "content": "VERDIKT: NYITOTT TETEL | L1 KOZEPES teszt-res: routes/kanban.ts:447 fedetlen, P7 tulel | FIX ROUND: trillian"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": []
+    },
+    {
+      "name": "no hand-off comment is needed between the two",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 KOZEPES teszt-res: routes/kanban.ts:447 fedetlen, P7 tulel | FIX ROUND: trillian"
+        },
+        {
+          "author": "computress",
+          "content": "TIER: LOW | csak teszt"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": []
+    },
+    {
+      "name": "marker on its own column-0 line BEFORE the verdict line (b0177416 58139)",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "L1 teszt-res: P7 tulel.\nFIX ROUND: trillian. Olendo: P7.\nVERDIKT: NYITOTT TETEL | L1 viselkedes: a 409 rossz okot nevez"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": []
+    },
+    {
+      "name": "marker on its own column-0 line AFTER the verdict line",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 viselkedes: a 409 rossz okot nevez\nFIX ROUND: trillian"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": []
+    },
+    {
+      "name": "marker on the verdict line without the colon (17a19228 58639)",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 teszt-res, FIX ROUND trillian"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": []
+    },
+    {
+      "name": "marker on its own line without the colon",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "FIX ROUND trillian. Olendo: P7.\nVERDIKT: NYITOTT TETEL | L1 viselkedes: a 409 rossz okot nevez"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": []
+    },
+    {
+      "name": "no hand-over: FIX ROUND: didi. Olendo: P7.",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "FIX ROUND: didi. Olendo: P7.\nVERDIKT: NYITOTT TETEL | L1 viselkedes: a 409 rossz okot nevez"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": [
+        "didi"
+      ]
+    },
+    {
+      "name": "no hand-over: FIX ROUND: nem trillian (08d35100 58457 ",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "FIX ROUND: nem trillian (08d35100 58457 shape)\nVERDIKT: NYITOTT TETEL | L1 viselkedes: a 409 rossz okot nevez"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": [
+        "didi"
+      ]
+    },
+    {
+      "name": "no hand-over: A kor: (didi 59159 FIX ROUND: trillian)",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "A kor: (didi 59159 FIX ROUND: trillian)\nVERDIKT: NYITOTT TETEL | L1 viselkedes: a 409 rossz okot nevez"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": [
+        "didi"
+      ]
+    },
+    {
+      "name": "no hand-over: FIX ROUND: trillian",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "  FIX ROUND: trillian\nVERDIKT: NYITOTT TETEL | L1 viselkedes: a 409 rossz okot nevez"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": [
+        "didi"
+      ]
+    },
+    {
+      "name": "no hand-over: FIX ROUND: trilliankent",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "FIX ROUND: trilliankent\nVERDIKT: NYITOTT TETEL | L1 viselkedes: a 409 rossz okot nevez"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": [
+        "didi"
+      ]
+    },
+    {
+      "name": "another name on the verdict line",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | FIX ROUND: nem trillian"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": [
+        "didi"
+      ]
+    },
+    {
+      "name": "a longer name on the verdict line: FIX ROUND: trilliankent",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 teszt-res | FIX ROUND: trilliankent"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": [
+        "didi"
+      ]
+    },
+    {
+      "name": "a longer name on the verdict line: FIX ROUND trillian2",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 teszt-res | FIX ROUND trillian2"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": [
+        "didi"
+      ]
+    },
+    {
+      "name": "a marker line in an EARLIER comment does not hand over",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "FIX ROUND: trillian"
+        },
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 viselkedes: a 409 rossz okot nevez"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": [
+        "didi"
+      ]
+    },
+    {
+      "name": "the reviewer own stamped marker line counts",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "[didi, 2026-11-12 05:31 CET, date] FIX ROUND: trillian. Olendo: P7.\nVERDIKT: NYITOTT TETEL | L1 viselkedes: a 409 rossz okot nevez"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": []
+    },
+    {
+      "name": "a marker line carrying ANOTHER author stamp is a quote",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "[trillian, 2026-11-12 04:54 CET, date] FIX ROUND: trillian. Olendo: P7.\nVERDIKT: NYITOTT TETEL | L1 viselkedes: a 409 rossz okot nevez"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": [
+        "didi"
+      ]
+    },
+    {
+      "name": "case and spacing of the marker do not matter",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | teszt-res |  fix  round:  Trillian"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": []
+    },
+    {
+      "name": "accents in the marker do not matter",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TÉTEL | teszt-rés | FIX ROUND: trillián"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": []
+    },
+    {
+      "name": "trillian own stamped closer counts (08832e26)",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 KOZEPES teszt-res: routes/kanban.ts:447 fedetlen, P7 tulel | FIX ROUND: trillian"
+        },
+        {
+          "author": "trillian",
+          "content": "[trillian, 2026-11-12 04:54 CET, date] VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": []
+    },
+    {
+      "name": "two reviewers handed, both closed by one trillian closer",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 KOZEPES teszt-res: routes/kanban.ts:447 fedetlen, P7 tulel | FIX ROUND: trillian"
+        },
+        {
+          "author": "ford",
+          "content": "VERDIKT: NYITOTT TETEL | L1 KOZEPES teszt-res: routes/kanban.ts:447 fedetlen, P7 tulel | FIX ROUND: trillian"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": []
+    },
+    {
+      "name": "one handed, one unmarked: only the handed closes",
+      "comments": [
+        {
+          "author": "didi",
+          "content": "VERDIKT: NYITOTT TETEL | L1 KOZEPES teszt-res: routes/kanban.ts:447 fedetlen, P7 tulel | FIX ROUND: trillian"
+        },
+        {
+          "author": "ford",
+          "content": "VERDIKT: NYITOTT TETEL | L1 viselkedes: a 409 rossz okot nevez"
+        },
+        {
+          "author": "trillian",
+          "content": "VERDIKT: NINCS NYITOTT TETEL | P7 elhal, kontroll egyezik"
+        }
+      ],
+      "open": [
+        "ford"
+      ]
+    }
+  ]
+}
