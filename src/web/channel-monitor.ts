@@ -2579,7 +2579,7 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
               send: (text, meta) => sendAlert(text, meta),
               helperAutoDenyAfterMs: PERMISSION_HELPER_AUTODENY_AFTER_MS,
               recapture: (session) => capturePaneWithHistory(session),
-              sendEscape: (session) => { execFileSync(tmuxBin(), ['send-keys', '-t', session, 'Escape'], { timeout: 5000 }) },
+              sendEscape: (session) => { execFileSync(tmuxBin(), ['send-keys', '-t', session, 'Escape'], { timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] }) },
             })
             if (escalation === 'auto-deny') {
               logger.warn({ session: t.session, agent: label, escalation }, 'Blocking "menu" is a helper tool-permission prompt past its auto-deny mark -- answered NO (Escape), once')

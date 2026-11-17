@@ -413,6 +413,18 @@ export interface PermissionPromptPassDeps {
 const ownEscalation = new Map<string, PermPromptEscalationState>()
 
 /**
+ * The owner line's ask for a helper's denial: the card's header with the
+ * sub-agent suffix removed ("Bash command"). permissionPromptAsk is NOT used
+ * here: its summary quotes the command text ("grep on '...'"), and a line that
+ * says the prompt was denied must not repeat what was typed.
+ */
+function helperHeaderAsk(pane: string | null | undefined, deep: string | null | undefined): string | null {
+  const title = readPermissionCard(deep || pane || '')?.title ?? null
+  if (!title) return null
+  return capAsk(title.replace(PERMISSION_CARD_HELPER_RX, '')) || null
+}
+
+/**
  * The auto-deny step of the pass. Sends Escape only when the decision is
  * `deny` AND the same question (same identity, still a helper's card) is on the
  * pane at the moment of the key. Returns true when Escape was sent.
@@ -445,7 +457,7 @@ function tryHelperAutoDeny(label: string, session: string, pane: string | null |
   deniedIds.set(session, state.id)
   const waitingMs = now - state.firstSeenAt
   logger.warn({ session, agent: label, helper, waitingMs }, 'helper permission prompt stood past PERMISSION_HELPER_AUTODENY_MIN -- sent Escape (NO) to the main agent pane')
-  deps.send(formatHelperAutoDenyAlert(label, session, helper, permissionPromptAsk(pane, deep), waitingMs), { agent: label, kind: 'permission-prompt' })
+  deps.send(formatHelperAutoDenyAlert(label, session, helper, helperHeaderAsk(pane, deep), waitingMs), { agent: label, kind: 'permission-prompt' })
   return true
 }
 

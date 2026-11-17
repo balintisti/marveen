@@ -163,7 +163,9 @@ describe('runPermissionPromptPass: the helper auto-deny, end to end through the 
 
   it('(a) running the pass twice past the mark still sends one Escape and one owner line', () => {
     const h = harness({ pane: HELPER_PANE })
+    // The monitor's alert ticks: the 15 min owner mark is one of them.
     h.pass(0)
+    h.pass(15)
     h.pass(30)
     h.pass(35)
     h.pass(40)
@@ -224,12 +226,13 @@ describe('runPermissionPromptPass: the helper auto-deny, end to end through the 
   })
 
   it('(e) another agent pane: nothing pressed, and its owner alerts are exactly those without the feature', () => {
+    // Two runs on the same session key share the module's alert state, so the
+    // second run starts from a clean slate (a reset between them).
     const withFeature = harness({ pane: HELPER_PANE, isMainAgent: false })
+    for (let m = 0; m <= 60; m += 5) withFeature.pass(m)
+    resetPermissionPromptAlerts()
     const withoutFeature = harness({ pane: HELPER_PANE, isMainAgent: false, afterMs: 0 })
-    for (let m = 0; m <= 60; m += 5) {
-      withFeature.pass(m)
-      withoutFeature.pass(m)
-    }
+    for (let m = 0; m <= 60; m += 5) withoutFeature.pass(m)
     expect(withFeature.escapes).toHaveLength(0)
     expect(withFeature.sent.length).toBeGreaterThan(0)
     expect(withFeature.sent).toEqual(withoutFeature.sent)
