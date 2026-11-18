@@ -1653,8 +1653,33 @@ const ASSIGNED_FROM_SUBST = /(?:^|[\s;&|(])(?:export\s+|local\s+|readonly\s+|dec
 // A function body glued to its head (`f()(curl ...)`, `function f()(curl`, `f ()(g()(curl`): a space
 // after the opener makes the head a word of its own, so commandIndex steps over it (didi 36014, 36034).
 const GLUED_FUNCTION_BODY = /(\(\)\s*)([({])(?=[^\s)}])/g
+// A backslash-newline is a line continuation: the shell removes it outside single quotes, so inside a
+// word it GLUES the two halves (`cu\<newline>rl URL` runs curl, `c\<newline>url URL` too). It was
+// replaced by a space, which split the name: the continued name read as `cu` and went out unjudged
+// (card 219bae8c; the db gate glues it the same way, a264ac28c). Inside single quotes nothing glues: the
+// pair becomes a space, as it always did, so a newline never starts a new command inside a quoted prose.
+function glueContinuations(text) {
+  let out = ''; let q = null
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (q === "'") {
+      if (c === '\\' && text[i + 1] === '\n') { out += ' '; i++; continue }
+      if (c === '\\' && text[i + 1] === '\r' && text[i + 2] === '\n') { out += ' '; i += 2; continue }
+      out += c; if (c === "'") q = null; continue
+    }
+    if (c === '\\') {
+      if (text[i + 1] === '\n') { i++; continue }
+      if (text[i + 1] === '\r' && text[i + 2] === '\n') { i += 2; continue }
+      out += c + (text[i + 1] ?? ''); i++; continue
+    }
+    if (q === '"') { if (c === '"') q = null; out += c; continue }
+    if (c === "'" || c === '"') q = c
+    out += c
+  }
+  return out
+}
 export function classify(command, depth = 0, vendorHosts = new Set(), vendorDomains = new Set(), substituted = false, inherited = null) {
-  const norm = String(command ?? '').replace(/\\\r?\n/g, ' ').replace(GLUED_FUNCTION_BODY, '$1$2 ')
+  const norm = glueContinuations(String(command ?? '')).replace(GLUED_FUNCTION_BODY, '$1$2 ')
   const { stripped: orig, marked, inners, innerAt, herestrings } = liftSubstitutions(norm)
   const masked = maskInertLiterals(orig)
   if (masked === null || masked.length !== orig.length) {

