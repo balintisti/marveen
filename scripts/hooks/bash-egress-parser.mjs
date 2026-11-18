@@ -1658,6 +1658,12 @@ const GLUED_FUNCTION_BODY = /(\(\)\s*)([({])(?=[^\s)}])/g
 // replaced by a space, which split the name: the continued name read as `cu` and went out unjudged
 // (card 219bae8c; the db gate glues it the same way, a264ac28c). Inside single quotes nothing glues: the
 // pair becomes a space, as it always did, so a newline never starts a new command inside a quoted prose.
+// This quote reading is the parser's own and does not know a heredoc body, a comment or $'...': an odd
+// apostrophe there (`# don't`, `it's` in a note) leaves it "inside single quotes" for the rest of the
+// line, and a continued name after it read as two words again (didi 69297 K1). So classify() also reads
+// the line glued WITHOUT any quote reading (glueAllContinuations, the db gate's way) and denies when
+// either reading denies: a second reading can only add a deny, never take one away. Its cost is an
+// over-deny where single quotes really hold a continued name (`'cu\<newline>rl' URL`).
 function glueContinuations(text) {
   let out = ''; let q = null
   for (let i = 0; i < text.length; i++) {
@@ -1678,8 +1684,21 @@ function glueContinuations(text) {
   }
   return out
 }
+function glueAllContinuations(text) {
+  return text.replace(/\\\r?\n/g, '')
+}
 export function classify(command, depth = 0, vendorHosts = new Set(), vendorDomains = new Set(), substituted = false, inherited = null) {
-  const norm = glueContinuations(String(command ?? '')).replace(GLUED_FUNCTION_BODY, '$1$2 ')
+  const raw = String(command ?? '')
+  const quoteAware = glueContinuations(raw)
+  const first = classifyGlued(quoteAware, depth, vendorHosts, vendorDomains, substituted, inherited)
+  if (first.deny) return first
+  const plain = glueAllContinuations(raw)
+  if (plain === quoteAware) return first
+  const second = classifyGlued(plain, depth, vendorHosts, vendorDomains, substituted, inherited)
+  return second.deny ? second : first
+}
+function classifyGlued(glued, depth, vendorHosts, vendorDomains, substituted, inherited) {
+  const norm = glued.replace(GLUED_FUNCTION_BODY, '$1$2 ')
   const { stripped: orig, marked, inners, innerAt, herestrings } = liftSubstitutions(norm)
   const masked = maskInertLiterals(orig)
   if (masked === null || masked.length !== orig.length) {

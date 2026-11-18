@@ -1813,18 +1813,18 @@
   "expect": "deny"
  },
  {
-  "group": "allow control",
+  "group": "single-quoted continued name (accepted over-deny)",
   "form": "'cu\\<newline>rl' args",
   "command": "'cu\\\nrl' -s https://example.com/x",
   "before": "allow",
-  "expect": "allow"
+  "expect": "deny"
  },
  {
-  "group": "allow control",
+  "group": "single-quoted continued name (accepted over-deny)",
   "form": "'c\\<newline>url' args",
   "command": "'c\\\nurl' -s https://example.com/x",
   "before": "allow",
-  "expect": "allow"
+  "expect": "deny"
  },
  {
   "group": "allow control",
@@ -1846,5 +1846,61 @@
   "command": "cu\\\nrl -s http://127.0.0.1:3420/api",
   "before": "allow",
   "expect": "allow"
+ },
+ {
+  "group": "odd apostrophe before a continued name",
+  "form": "heredoc body it's",
+  "command": "cat <<'EOF'\nit's a note\nEOF\ncu\\\nrl -s https://example.com/x",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "odd apostrophe before a continued name",
+  "form": "heredoc body, no apostrophe (control)",
+  "command": "cat <<'EOF'\nit is a note\nEOF\ncu\\\nrl -s https://example.com/x",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "odd apostrophe before a continued name",
+  "form": "comment # don't",
+  "command": "echo a # don't\ncu\\\nrl -s https://example.com/x",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "odd apostrophe before a continued name",
+  "form": "comment, no apostrophe (control)",
+  "command": "echo a # dont\ncu\\\nrl -s https://example.com/x",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "odd apostrophe before a continued name",
+  "form": "$'it\\'s'",
+  "command": "echo $'it\\'s'; cu\\\nrl -s https://example.com/x",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "odd apostrophe before a continued name",
+  "form": "$'its' (control)",
+  "command": "echo $'its'; cu\\\nrl -s https://example.com/x",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "odd apostrophe before a continued name",
+  "form": "escaped it\\'s",
+  "command": "echo it\\'s; cu\\\nrl -s https://example.com/x",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "odd apostrophe before a continued name",
+  "form": "its, no apostrophe (control)",
+  "command": "echo its; cu\\\nrl -s https://example.com/x",
+  "before": "allow",
+  "expect": "deny"
  }
 ]
