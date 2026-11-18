@@ -29,7 +29,7 @@ let runs = 0
  *  COPY inside the throwaway tree -- invoking it by its path in this worktree would
  *  make it read (and act on) the live fleet. Same trap that rewrote the live git
  *  hooks on 2026-08-29; here it would message real agents. */
-function guard(pct: number): string {
+function guard(pct: number, hour = '12'): string {
   const stub = join(tree, 'bin')
   return execFileSync('bash', [join(tree, 'scripts', 'quota-ceiling-guard.sh'),
                                '--dry-run', '--force-percent', String(pct)], {
@@ -37,7 +37,12 @@ function guard(pct: number): string {
     // tmux is stubbed to "session exists" for everyone: this test is about the
     // parked filter, not about session discovery, and it must never look at or
     // create real agent-* sessions.
+    // The clock is PINNED (card 51949dcc): the guard sends the owner's notice to the
+    // coordinator between QUIET_FROM and QUIET_TO (Europe/Belgrade, card cda1c5da), so
+    // 'marveen' joined the WOULD MESSAGE list after 22:00 and these tests were red at
+    // night and green by day. Noon unless a case names the hour.
     env: { ...process.env, PATH: `${stub}:${process.env.PATH}`,
+           QUOTA_CEILING_NOW_HOUR: hour,
            QUOTA_CEILING_STATE: join(tree, 'store', `st-${runs++}.json`) },
   })
 }
@@ -82,6 +87,16 @@ describeWithLocalFiles(ROOT, ['scripts/quota-ceiling-guard.sh'], 'quota-ceiling 
   it('still notifies the owner when everyone is parked (Telegram starts no agent turn)', () => {
     agent('a', '{"kind":"none"}')
     expect(guard(94)).toContain('WOULD TELEGRAM')
+  })
+
+  it('at night the owner notice goes to the coordinator, not Telegram -- the other side of the pinned clock', () => {
+    agent('parked', '{"kind":"none"}')
+    agent('working', '{"kind":"assigned_open_cards"}')
+    const out = guard(94, '03')
+    // POSITIVE CONTROL: the working agent is still woken; the coordinator is added.
+    expect(messaged(out)).toEqual(['marveen', 'working'])
+    expect(out).toContain('KERET-OR, EJJEL')
+    expect(out).not.toContain('WOULD TELEGRAM')
   })
 
   it('applies to the HARD level too, not only SOFT', () => {
