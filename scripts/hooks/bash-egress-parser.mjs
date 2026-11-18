@@ -1684,8 +1684,15 @@ function glueContinuations(text) {
   }
   return out
 }
+// Quote-blind, but escape-aware: only an ODD run of backslashes before the newline ends in a
+// continuation. `a\\<newline>` is an escaped backslash and the newline ends the command, so the next
+// line starts a new name; gluing it there turned `a\\<newline>cu\\<newline>rl URL` into one echo
+// argument `a\curl` while bash ran curl (didi 70223 K3).
 function glueAllContinuations(text) {
-  return text.replace(/\\\r?\n/g, '')
+  return text.replace(/\\+(?=\r?\n)\r?\n/g, (m) => {
+    const run = m.replace(/\r?\n$/, '')
+    return run.length % 2 === 1 ? run.slice(0, -1) : m
+  })
 }
 export function classify(command, depth = 0, vendorHosts = new Set(), vendorDomains = new Set(), substituted = false, inherited = null) {
   const raw = String(command ?? '')

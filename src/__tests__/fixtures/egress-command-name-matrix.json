@@ -1902,5 +1902,26 @@
   "command": "echo its; cu\\\nrl -s https://example.com/x",
   "before": "allow",
   "expect": "deny"
+ },
+ {
+  "group": "odd apostrophe before a continued name",
+  "form": "heredoc it's, an escaped backslash ends the line before (didi 70223 K3)",
+  "command": "cat <<EOF\nit's\nEOF\necho a\\\\\ncu\\\nrl -s https://example.com/x",
+  "before": "allow",
+  "expect": "deny"
+ },
+ {
+  "group": "allow control",
+  "form": "heredoc it's, three backslashes: the third glues curl into the echo argument",
+  "command": "cat <<EOF\nit's\nEOF\necho a\\\\\\\ncurl -s https://example.com/x",
+  "before": "allow",
+  "expect": "allow"
+ },
+ {
+  "group": "allow control",
+  "form": "heredoc it's, three backslashes then a continued name: one echo argument",
+  "command": "cat <<EOF\nit's\nEOF\necho a\\\\\\\ncu\\\nrl -s https://example.com/x",
+  "before": "allow",
+  "expect": "allow"
  }
 ]

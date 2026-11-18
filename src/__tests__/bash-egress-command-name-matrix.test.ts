@@ -41,6 +41,9 @@
 // `odd apostrophe before a continued name` pins the four shapes, each with an apostrophe-free control;
 // the two single-quoted continued names (`'cu\<newline>rl' URL`) moved from the allow controls to
 // `single-quoted continued name (accepted over-deny)`: bash would not glue them, the gate now denies.
+// Round 3 (didi 70223 K3): the quote-blind reading glued after ANY backslash, so `a\\<newline>` (an
+// escaped backslash, the command ends) glued the next line into an echo argument while bash ran curl.
+// It now glues only after an odd run; one deny row and two allow controls (three backslashes) pin it.
 //
 // classify() reads TEXT. Nothing here is executed; the hook-process cases hand the same text to the
 // hook's entry point, which only decides.
@@ -70,10 +73,10 @@ const isOpenPwsh = (r: Row): boolean => r.group === 'powershell.exe -c' && r.for
 describe('bash-egress-parser: one verdict for every spelling of a command name (1a701051)', () => {
   // A fixture that lost rows would pass every row it still has.
   it('the fixture is whole', () => {
-    expect(ROWS).toHaveLength(272)
+    expect(ROWS).toHaveLength(275)
     expect(new Set(ROWS.map((r) => r.command)).size).toBe(ROWS.length)
-    expect(ROWS.filter((r) => r.expect === 'deny')).toHaveLength(245)
-    expect(ROWS.filter((r) => r.group === 'allow control')).toHaveLength(24)
+    expect(ROWS.filter((r) => r.expect === 'deny')).toHaveLength(246)
+    expect(ROWS.filter((r) => r.group === 'allow control')).toHaveLength(26)
     expect(ROWS.filter((r) => r.group === 'variable-held code flag')).toHaveLength(6)
     expect(ROWS.filter((r) => r.group === 'reader witness')).toHaveLength(3)
     expect(ROWS.filter((r) => r.group === OPEN_GROUP)).toHaveLength(2)
@@ -87,9 +90,9 @@ describe('bash-egress-parser: one verdict for every spelling of a command name (
   })
 
   // The cells the fix exists for: each of them passed before it.
-  it('100 rows passed before the fix, trillian\'s two among them', () => {
+  it('101 rows passed before the fix, trillian\'s two among them', () => {
     const fixed = ROWS.filter((r) => r.before !== r.expect)
-    expect(fixed).toHaveLength(100)
+    expect(fixed).toHaveLength(101)
     const forms = fixed.filter((r) => r.group === 'python3 -c').map((r) => r.form)
     expect(forms).toEqual(expect.arrayContaining(['"name" args', 'env "name" args']))
   })
