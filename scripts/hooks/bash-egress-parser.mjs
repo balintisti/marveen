@@ -1182,6 +1182,10 @@ function commandName(swords, maskedWord) {
   const i = commandIndex(swords)
   return i < swords.length ? normalizedName(swords[i]) : normalizedName(maskedWord)
 }
+// The words after the command word commandName reads: the command's own arguments.
+function argsAfterCommand(swords) {
+  return swords.slice(commandIndex(swords) + 1)
+}
 // EGRESSHEREDOC924: STDIN FEEDS. A heredoc body or a here-string word is what the command on the
 // left reads from stdin. For an interpreter that stdin IS the program (`python3 - <<'PY'`,
 // `node <<EOF`, `bash <<< 'curl ...'`), and for a `while read u` loop it is the list of values `u`
@@ -1313,9 +1317,17 @@ function heredocBodies(orig, masked) {
   return out
 }
 // The command word of the sub-command that contains offset `at` (basename, prefixes skipped).
-function commandWordAt(masked, at) {
+// Read from the ORIGINAL text through shellWords, as the main reading in classify does: in the masked
+// text a quoted name is blank, so `"bash" <<< '...'` and `"python3" - <<'PY'` read as the commands
+// `<<<` and `-`, and the body fed to the shell or the interpreter went unjudged (card 1a701051). The
+// words are taken up to `at`, like argsBefore; the masked reading stays as the fallback.
+function commandWordAt(orig, masked, at) {
   for (const [a, b] of spans(masked)) {
     if (at < a || at > b) continue
+    // every word kept: commandIndex steps over a group opener itself, and a `{}` is xargs's operand
+    const sw = shellWords(orig.slice(a, at))
+    const k = commandIndex(sw)
+    if (k < sw.length) return normalizedName(sw[k])
     const mw = words(masked.slice(a, b))
     const i = commandIndex(mw)
     return i < mw.length ? mw[i].split('/').pop() : null
@@ -1682,7 +1694,7 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
   // the fed lines in the same command, exactly like `for u in URL`: the values join the loop values.
   const reads = collectReads(orig, masked)
   for (const f of reads.length ? feeds : []) {
-    const c = commandWordAt(masked, f.at)
+    const c = commandWordAt(orig, masked, f.at)
     if (c !== 'done' && c !== 'read') continue
     const text = f.expands ? expand(f.text, env) : f.text
     for (const r of reads) for (const [v, vals] of Object.entries(readValues(text, r))) loops[v] = [...(loops[v] ?? []), ...vals]
@@ -1694,7 +1706,7 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
   // same NET_PRIMITIVE test, the same URL_RE scan, the same local / private / vendor exceptions. A
   // shell interpreter's body is a command line of its own, so it gets the whole analysis.
   for (const f of feeds) {
-    let cmd = commandWordAt(masked, f.at)
+    let cmd = commandWordAt(orig, masked, f.at)
     let shell = cmd !== null && SHELL.test(cmd)
     const shellArgs = shell ? argsBefore(orig, masked, f.at) : []
     // `bash -c 'python3 -'`: the body is the interpreter's program, judged by the interpreter rule
@@ -1799,7 +1811,12 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
         if (hosts.length) return { deny: true, reason: 'unread-command-word', hosts }
       }
     }
-    if (i >= mw.length) continue
+    // No command word in the MASKED words is not "no command": masking blanks a quoted word, so a
+    // line whose name and arguments are all quoted (`"<tool>" "URL"`, `"eval" "..."`, `"sh" "-c" "..."`)
+    // has no masked word left, and after a prefix command the masked index runs past the end because a
+    // real argument is read as the prefix's own option (`env "<tool>" -s "URL"`). Skipping there let
+    // all of them through (card 1a701051). Skipped only when the shell words have no command either.
+    if (i >= mw.length && commandIndex(sw0) >= sw0.length) continue
     // Every loop reading AND the plain one: a loop variable can share its name with an assignment
     // elsewhere in the command (`for u in <local>; do ...; done; u=<external>; curl "$u"`), and a
     // loop-only reading would let the assigned value go unjudged (didi's review of 804ab1cf).
@@ -1891,7 +1908,13 @@ export function classify(command, depth = 0, vendorHosts = new Set(), vendorDoma
       }
       let target = null
       if (cmd === 'curl') target = 'curl'
-      else if (INTERPRETER.test(cmd.toLowerCase()) && hasCodeFlag(cmd, mw.slice(i + 1)) && usesNetwork(cmd, text)) target = 'one-liner'
+      // The code flag is looked for in the same shell words the NAME was read from, past that name.
+      // Read from the masked words it was lost twice: a quoted name is blank there, so the index
+      // pointed at the flag itself and the slice dropped it (`"<interpreter>" -c CODE`), and a quoted
+      // flag is blank too (`<interpreter> "-c" CODE`), while the shell hands the interpreter the
+      // same argv either way (card 1a701051). Always the words of the EXPANDED text: a flag held in
+      // a variable this command assigned is the flag (`F=-c; <interpreter> $F CODE`, didi 57750, 2d).
+      else if (INTERPRETER.test(cmd.toLowerCase()) && hasCodeFlag(cmd, argsAfterCommand(shellWords(text))) && usesNetwork(cmd, text)) target = 'one-liner'
       if (!target) continue
       if (viaXargs) {
         const hosts = externalHosts(norm, vendorHosts, vendorDomains)

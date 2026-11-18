@@ -232,6 +232,76 @@ _VAR_CLIENT = re.compile(
     % _PATH_DIR, re.I)
 
 
+# `$'word'` (ANSI-C quoting) and `$"word"` (locale quoting) are the same ONE word as `'word'`
+# and `"word"`, but no reader here knew the `$` form: `$'<client>' -c "..."` and a force push
+# spelled `$'git' ...` passed while every other quoting of the name was refused (didi 57750,
+# 2a, card 1a701051). So the form is rewritten ONCE, before anything reads the command, into
+# the ordinary quotes all readers already handle; the escapes of `$'...'` are decoded on the
+# way (`$'\x70sql'` is the client too). Only outside quotes: inside "..." and '...' a `$'`
+# is text. An apostrophe in the decoded value is written `'"'"'`, not `'\''`: the readers
+# below pair quotes without knowing a backslash-escaped one, so `'\''` would flip their
+# quote state for the rest of the command and hide a quoted client after it.
+# LIMIT: quote state is tracked over the whole command, heredoc bodies included, so
+# an apostrophe in a body can hide a later `$'...'` from this pass; that line then reads
+# as it did before the pass existed.
+_ANSI_C_ESC = re.compile(r"\\(x[0-9A-Fa-f]{1,2}|[0-7]{1,3}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}|c[\s\S]|[\s\S])")
+_ANSI_C_NAMED = {"n": "\n", "t": "\t", "r": "\r", "a": "\a", "b": "\b", "f": "\f", "v": "\v",
+                 "e": "\x1b", "E": "\x1b"}
+
+
+def _ansi_c_value(body: str) -> str:
+    """The text bash makes of the inside of `$'...'`."""
+    def one(m):
+        e = m.group(1)
+        try:
+            if e[0] in "xuU" and len(e) > 1:
+                return chr(int(e[1:], 16))
+            if e[0] in "01234567":
+                return chr(int(e, 8) & 0xFF)
+        except (ValueError, OverflowError):
+            return m.group(0)
+        if e[0] == "c" and len(e) == 2:
+            return chr(ord(e[1]) & 0x1F)
+        return _ANSI_C_NAMED.get(e, e)
+    return _ANSI_C_ESC.sub(one, body)
+
+
+def plain_dollar_quotes(command: str) -> str:
+    """`command` with every unquoted `$'...'` and `$"..."` written as an ordinary quoted string."""
+    if "$'" not in command and '$"' not in command:
+        return command
+    out, i, n, quote = [], 0, len(command), ""
+    while i < n:
+        ch = command[i]
+        if quote:
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                out.append(command[i:i + 2])
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+        elif ch == "\\" and i + 1 < n:
+            out.append(command[i:i + 2])
+            i += 2
+            continue
+        elif ch == "$" and command[i + 1:i + 2] == '"':
+            i += 1  # the `$` goes, the string stays as it is
+            continue
+        elif ch == "$" and command[i + 1:i + 2] == "'":
+            j = i + 2
+            while j < n and command[j] != "'":
+                j += 2 if command[j] == "\\" else 1
+            if j < n:
+                out.append("'" + _ansi_c_value(command[i + 2:j]).replace("'", "'\"'\"'") + "'")
+                i = j + 1
+                continue
+        elif ch in "\"'":
+            quote = ch
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def expand_client_vars(command: str) -> str:
     """`command` with each `$NAME` / `${NAME}` of a variable assigned a DB client in it
     replaced by that client."""
@@ -598,10 +668,26 @@ def _command_position_text(segment: str) -> str:
     whitespace is prose or several words and stays blanked; an unclosed quote blanks
     the rest. So does a span glued to anything but a shell-word character
     (_QUOTED_WORD_EDGE): `run(['<tool>','x'])` is interpreter code read through this
-    class, not a shell word (7 interpreter-code controls refused it)."""
+    class, not a shell word (7 interpreter-code controls refused it).
+
+    An UNQUOTED backslash before a word character is dropped, as the shell drops it
+    (card 1a701051): `\\<client> -c "..."` and a force push spelled `\\git ...` ran the
+    client and git (the backslash only skips an alias), while every name pattern here
+    wants the name at the start or after a separator, so the backslash in front hid it;
+    one in the middle (`g\\it`) split the name. Of an escaped backslash (`\\\\x`) only the
+    one before the word character goes, so a backslash stays in front and a command really
+    named `\\x` is not read as `x` (no branch of its own: didi 57750 measured it equal). Inside
+    quotes nothing changes: the shell keeps a backslash before a letter there. What it costs:
+    a backslashed word in an ARGUMENT counts like the bare word already does."""
     out, i, n = [], 0, len(segment)
     while i < n:
         ch = segment[i]
+        if ch == "\\" and i + 1 < n:
+            nxt = segment[i + 1]
+            if nxt.isalnum() or nxt == "_":
+                out.append(nxt)
+                i += 2
+                continue
         if ch in "\"'":
             j = segment.find(ch, i + 1)
             if j < 0:
@@ -720,6 +806,13 @@ _FILE_ARG = re.compile(
 _CAT_PIPE = re.compile(r"(?:^|[\s;&(])cat((?:\s+[^\s|;&]+)+)\s*\|\s*((?:[A-Za-z_]\w*=\S*\s+)*\S+)")
 # A path we can resolve without running anything. Anything with shell expansion in it
 # is deliberately skipped: guessing what `$f` held is how a gate starts lying.
+# The same rule for a command NAME, and there it is an ACCEPTED LIMIT (marveen's decision on
+# card 9b5cf828, written down here by card 1a701051): a name held in a variable that is not a
+# DB client (`c=git; $c push <remote> <branch> --force`, `c=gcloud; $c run services delete x`)
+# is not expanded, so the command passes. expand_client_vars expands the DB clients only,
+# because those were SEEN in real commands (485228fd). db-gate-command-name-matrix.test.ts pins
+# both cells as they are, so a change shows in either direction. Reopen the DECISION, not this
+# comment, if a variable-held CLI name turns up in real agent commands.
 _LITERAL_PATH = re.compile(r"^[\w./~+-]+$")
 _MAX_FILE_BYTES = 16 * 1024 * 1024
 _MAX_FILE_DEPTH = 3
@@ -1077,10 +1170,19 @@ def interpreter_code_blocks(command: str):
     blocks = []
     lines = command.split("\n")
     i = 0
-    opener = re.compile(r"(^|[\s;&|(`])(%s)([\s;&|<]|$)" % _INTERPRETER)
+    # The opener the way strip_heredoc_bodies reads it: by path too (`/usr/bin/python3 - <<PY`),
+    # and also on the line as _command_position_text joins a shell word. Read from the raw
+    # line alone, a quoted or backslashed interpreter name (`"python3" - <<'PY'`, `\\node
+    # <<'JS'`, `pyt\\hon3`) was no interpreter here, and the body it ran went unread while
+    # the plain name was refused (didi 57750, card 1a701051).
+    opener = re.compile(r"(^|[\s;&|(`])(?:%s)*(%s)([\s;&|<]|$)" % (_PATH_DIR, _INTERPRETER))
     while i < len(lines):
         m = _HEREDOC.search(lines[i])
-        o = opener.search(lines[i]) if m else None
+        o = line = None
+        for line in ((lines[i], _command_position_text(lines[i])) if m else ()):
+            o = opener.search(line)
+            if o:
+                break
         if o:
             body, i0, i = [], i, i + 1
             while i < len(lines) and lines[i].strip() != m.group(2):
@@ -1089,7 +1191,7 @@ def interpreter_code_blocks(command: str):
             # The interpreter's own arguments, from its name to the `<<` or the next
             # separator (`python3 - <<PY`, and `cat <<PY | python3 -` after the pipe).
             # An untokenisable opener counts as code -- the safe side.
-            head = re.split(r"<<|[;&|]", lines[i0][o.end(2):], maxsplit=1)[0]
+            head = re.split(r"<<|[;&|]", line[o.end(2):], maxsplit=1)[0]
             try:
                 as_code = _reads_code_from_stdin(shlex.split(head, posix=True), _code_lang(o.group(2)))
             except ValueError:
@@ -1351,9 +1453,31 @@ def _code_hits(lang: str, code: str):
 
 def find_hits(command: str, cwd=None, missing=None, _depth=0):
     """`missing`, if a list, collects literal files that do not exist (logged by the
-    caller, never refused). Everything else stays pure."""
+    caller, never refused). Everything else stays pure.
+
+    TWO READINGS, a hit of either is a hit. The shell REMOVES a backslash-newline, it does
+    not turn it into a space, so a name broken across one (`ps\\<nl>ql`, `git pu\\<nl>sh`,
+    `pyt\\<nl>hon3 - <<'PY'`) is ONE word, and every reader here saw two (didi 57750, 2c,
+    card 1a701051). So the command is judged as written, where a continuation separates
+    two words (every refusal that reading made stays), and again with its continuations
+    glued. The glued text joins a trailing backslash in a heredoc BODY too, where it is
+    body text; that can cost an extra check, and what it could hide the first reading
+    still sees."""
+    hits = _hits_as_read(command, cwd, missing, _depth)
+    glued = _LINE_CONT.sub("", command)
+    if glued != command:
+        absent = None if missing is None else []
+        for why in _hits_as_read(glued, cwd, absent, _depth):
+            if why not in hits:
+                hits.append(why)
+        if absent:
+            missing.extend(a for a in absent if a not in missing)
+    return hits
+
+
+def _hits_as_read(command: str, cwd, missing, _depth):
     hits = []
-    command = expand_client_vars(command)
+    command = expand_client_vars(plain_dollar_quotes(command))
     if _depth < _MAX_SHELL_DEPTH:
         for code in shell_code_strings(command) + [b for t, h in substitution_scope(command) for b in substitution_bodies(t, h)]:
             for why in find_hits(code, cwd, missing, _depth + 1):
