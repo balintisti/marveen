@@ -424,6 +424,7 @@ describe('belongsToInstall', () => {
   })
   it('ignores a degenerate root ("/" or empty) instead of matching everything', () => {
     expect(belongsToInstall('node /x/dist/index.js', () => '/x', ['/', ''])).toBe(false)
+    expect(belongsToInstall('node dist/index.js', () => '/', ['/'])).toBe(false)
   })
 })
 
