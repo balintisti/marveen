@@ -175,7 +175,9 @@ export function classifyPortHolders(
       if (cwd === undefined) cwd = ctx.getProcessCwd(pid)
       return cwd
     }
-    if (argv !== null && belongsToInstall(argv, getCwd, ctx.installRoots)) {
+    // An unreadable argv (racing exit, ps refused) is judged by the cwd alone;
+    // with the cwd unknown too, the holder cannot be attributed: refused.
+    if (belongsToInstall(argv ?? '', getCwd, ctx.installRoots)) {
       own.push(pid)
     } else {
       foreign.push({ pid, argv, cwd: getCwd() })
@@ -376,6 +378,39 @@ export async function acquirePortLock(
     waited += pollMs
   }
   ctx.log.warn({ port }, 'Port still held after drain window, server.listen may hit EADDRINUSE and recover via reclaim')
+}
+
+/**
+ * The web server's EADDRINUSE path: server.listen() failed because someone
+ * holds the port. Applies the SAME decision as acquirePortLock (card 77a48069,
+ * didi 72633: this path used to SIGTERM/SIGKILL any own-UID node listener with
+ * no install check, so a worktree that passed acquirePortLock while the live
+ * dashboard was down, then lost the bind race, killed the live one):
+ *  - a holder of another install: log ForeignPortHolderError's message, exit(1), signal nobody;
+ *  - no reclaimable holder: log and exit(1);
+ *  - holders of this install: SIGTERM, grace, SIGKILL survivors, then relisten().
+ */
+export async function reclaimPortAfterAddrInUse(
+  port: number,
+  ctx: ProcessLockContext,
+  hooks: { relisten(): void; exit(code: number): void },
+  opts: { graceMs?: number } = {},
+): Promise<'relisten' | 'exit'> {
+  const { own, foreign } = classifyPortHolders(port, ctx)
+  if (foreign.length) {
+    const err = new ForeignPortHolderError(port, foreign, ctx.installRoots[0])
+    ctx.log.error({ port, holders: foreign, installRoot: err.installRoot }, err.message)
+    hooks.exit(1)
+    return 'exit'
+  }
+  if (!own.length) {
+    ctx.log.error({ port }, 'Port foglalt de nem talaltunk felszabadithato node processt -- kilepes')
+    hooks.exit(1)
+    return 'exit'
+  }
+  await terminateProcesses(own, ctx, { graceMs: opts.graceMs ?? DEFAULT_GRACE_MS })
+  hooks.relisten()
+  return 'relisten'
 }
 
 /**

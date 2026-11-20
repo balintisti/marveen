@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   findOwnNodeHolders,
   findOwnBinaryMatches,
@@ -8,6 +10,7 @@ import {
   belongsToInstall,
   classifyPortHolders,
   ForeignPortHolderError,
+  reclaimPortAfterAddrInUse,
   writeBufferFully,
   DeferToPeerError,
   type ProcessLockContext,
@@ -18,7 +21,7 @@ import {
 // table directly so we can simulate PIDs dying at specific points, foreign
 // UIDs, non-node commands, etc. without ever touching real processes.
 
-interface MockProc { pid: number; uid: number; cmd: string; args?: string; alive: boolean; cwd?: string | null }
+interface MockProc { pid: number; uid: number; cmd: string; args?: string; alive: boolean; cwd?: string | null; argvUnreadable?: boolean }
 
 interface MockOptions {
   currentPid?: number
@@ -76,7 +79,8 @@ function makeCtx(options: MockOptions): {
     installRoots: options.installRoots ?? (selfProjectRoot != null ? [selfProjectRoot] : []),
     getProcessArgv: (pid: number) => {
       const p = table.get(pid)
-      return p ? p.args ?? p.cmd : null
+      if (!p || p.argvUnreadable) return null
+      return p.args ?? p.cmd
     },
     getProcessCwd: (pid: number) => {
       const p = table.get(pid)
@@ -401,6 +405,88 @@ describe('foreign port holder (77a48069, LOCAL DIVERGENCE FROM UPSTREAM)', () =>
     const { ctx, signalCalls } = makeCtx({ currentPid: 90000, selfProjectRoot: '/Users/isti/marveen', procs: [{ ...LIVE }], portHolders: { 3420: [84187] } })
     await acquirePortLock(3420, ctx, { binaryPattern: PATTERN, graceMs: 0, postKillDrainMs: 0 })
     expect(signalCalls).toContainEqual({ pid: 84187, sig: 'SIGTERM' })
+  })
+})
+
+describe('unreadable argv is judged by cwd alone (77a48069, didi D1)', () => {
+  const ROOT = '/home/user/marveen'
+  const holder = (cwd: string | null): MockProc => ({ pid: 200, uid: 501, cmd: 'node', args: 'node dist/index.js', alive: true, cwd, argvUnreadable: true })
+  it('argv unreadable, cwd in this install: still ours (taken over)', () => {
+    const { ctx } = makeCtx({ selfProjectRoot: ROOT, procs: [holder(ROOT)], portHolders: { 3420: [200] } })
+    expect(classifyPortHolders(3420, ctx)).toEqual({ own: [200], foreign: [] })
+  })
+  it('argv unreadable, cwd elsewhere: foreign, with argv reported unknown', () => {
+    const { ctx } = makeCtx({ selfProjectRoot: ROOT, procs: [holder('/elsewhere')], portHolders: { 3420: [200] } })
+    expect(classifyPortHolders(3420, ctx)).toEqual({ own: [], foreign: [{ pid: 200, argv: null, cwd: '/elsewhere' }] })
+  })
+  it('argv AND cwd unreadable: cannot be attributed, foreign (refused, not killed)', () => {
+    const { ctx } = makeCtx({ selfProjectRoot: ROOT, procs: [holder(null)], portHolders: { 3420: [200] } })
+    expect(classifyPortHolders(3420, ctx).foreign.map((h) => h.pid)).toEqual([200])
+  })
+})
+
+describe('EADDRINUSE reclaim uses the same decision (77a48069, didi 72633)', () => {
+  // The race didi named: the worktree passes acquirePortLock while the live
+  // dashboard is down, the live one binds first, the worktree's listen() hits
+  // EADDRINUSE. The reclaim must not kill the live dashboard either.
+  const LIVE = { pid: 84187, uid: 501, cmd: 'node', args: '/opt/homebrew/opt/node@22/bin/node /Users/isti/marveen/dist/index.js', alive: true, cwd: '/Users/isti/marveen' }
+  const WT = '/Users/isti/mandark-marveen-f327'
+  const hooks = () => {
+    const calls = { relisten: 0, exit: [] as number[] }
+    return { calls, h: { relisten: () => { calls.relisten++ }, exit: (c: number) => { calls.exit.push(c) } } }
+  }
+
+  it('a listener of another install: exits 1 with the named message, signals nobody, does not relisten', async () => {
+    const { ctx, signalCalls, logs, table } = makeCtx({ currentPid: 84730, selfProjectRoot: WT, procs: [{ ...LIVE }], portHolders: { 3420: [84187] } })
+    const { calls, h } = hooks()
+    expect(await reclaimPortAfterAddrInUse(3420, ctx, h, { graceMs: 0 })).toBe('exit')
+    expect(calls).toEqual({ relisten: 0, exit: [1] })
+    expect(signalCalls).toEqual([])
+    expect(table.get(84187)?.alive).toBe(true)
+    const line = logs.find((l) => l.level === 'error')
+    expect(line?.msg).toContain('pid 84187')
+    expect(line?.msg).toContain('Not killing it')
+    expect(line?.msg).toContain(`WEB_PORT in ${WT}/.env`)
+  })
+
+  it('a predecessor of this install: SIGTERM, then relisten, no exit', async () => {
+    const { ctx, signalCalls } = makeCtx({ currentPid: 90000, selfProjectRoot: '/Users/isti/marveen', procs: [{ ...LIVE }], portHolders: { 3420: [84187] } })
+    const { calls, h } = hooks()
+    expect(await reclaimPortAfterAddrInUse(3420, ctx, h, { graceMs: 0 })).toBe('relisten')
+    expect(signalCalls).toContainEqual({ pid: 84187, sig: 'SIGTERM' })
+    expect(calls).toEqual({ relisten: 1, exit: [] })
+  })
+
+  it('a SIGTERM-resistant predecessor is SIGKILLed before relisten', async () => {
+    const { ctx, signalCalls } = makeCtx({
+      currentPid: 90000, selfProjectRoot: '/Users/isti/marveen', procs: [{ ...LIVE }], portHolders: { 3420: [84187] },
+      signalOverride: (_pid, sig) => (sig === 'SIGKILL' ? 'sent' : 'sent'),
+    })
+    const { calls, h } = hooks()
+    await reclaimPortAfterAddrInUse(3420, ctx, h, { graceMs: 0 })
+    expect(signalCalls.map((c) => c.sig)).toEqual(['SIGTERM', '0', 'SIGKILL'])
+    expect(calls.relisten).toBe(1)
+  })
+
+  it('nothing reclaimable (non-node holder, or our own launcher): exit 1, nobody signalled', async () => {
+    const { ctx, signalCalls } = makeCtx({
+      currentPid: 90000, selfProjectRoot: '/Users/isti/marveen', ancestorPids: [300],
+      procs: [{ pid: 200, uid: 501, cmd: 'nginx', alive: true }, { pid: 300, uid: 501, cmd: 'node', args: 'node /Users/isti/marveen/node_modules/.bin/tsx src/index.ts', alive: true }],
+      portHolders: { 3420: [200, 300] },
+    })
+    const { calls, h } = hooks()
+    expect(await reclaimPortAfterAddrInUse(3420, ctx, h, { graceMs: 0 })).toBe('exit')
+    expect(calls).toEqual({ relisten: 0, exit: [1] })
+    expect(signalCalls).toEqual([])
+  })
+
+  it('web.ts has no kill loop of its own: its EADDRINUSE branch delegates to reclaimPortAfterAddrInUse', () => {
+    // A second, hand-rolled kill path in web.ts is exactly the defect didi found.
+    const web = readFileSync(join(__dirname, '..', 'web.ts'), 'utf-8')
+    expect(web).not.toMatch(/process\.kill\(|['"]SIG(?:TERM|KILL)['"]/)
+    const branch = web.slice(web.indexOf("err.code === 'EADDRINUSE'"))
+    expect(web.indexOf("err.code === 'EADDRINUSE'")).toBeGreaterThan(-1)
+    expect(branch.slice(0, 2500)).toContain('reclaimPortAfterAddrInUse(port, buildProcessLockContext()')
   })
 })
 
