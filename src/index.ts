@@ -10,7 +10,8 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { runLsof } from './lsof.js'
+import { listListeningPids, runLsof } from './lsof.js'
+import { listAncestorPids } from './process-tree.js'
 import type { Server as HttpServer } from 'node:http'
 import { PROJECT_ROOT, STORE_DIR, PID_FILENAME, WEB_PORT, MAIN_AGENT_ID, RESPAWN_ENABLED, HEARTBEAT_AGENT_ENABLED } from './config.js'
 import { resolveOwnerChatId } from './owner-chat.js'
@@ -116,6 +117,7 @@ function buildProcessLockContext(): ProcessLockContext {
     currentPid: process.pid,
     uid,
     selfProjectRoot,
+    ancestorPids: listAncestorPids(process.ppid),
     getProcessCwd(pid: number): string | null {
       // Resolve the PID's cwd on BOTH platforms via the shared processCwd
       // helper: /proc on Linux, `lsof -a -p <pid> -d cwd` on macOS. A previous
@@ -139,9 +141,9 @@ function buildProcessLockContext(): ProcessLockContext {
       // port-holder probe -- which the single-instance reclaim depends on --
       // found no one on the live box. runLsof resolves an absolute lsof and
       // warns loudly if none exists rather than returning a silent empty.
-      const raw = (runLsof(['-ti', `:${port}`], 3000) ?? '').trim()
-      if (!raw) return []
-      return raw.split('\n').map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isFinite(n) && n > 0)
+      // LISTEN only (lsof.ts listListeningPids): a client of the port is not a
+      // predecessor (card 77a48069).
+      return listListeningPids(port)
     },
     listOwnProcessesMatching(pattern: RegExp): number[] {
       // `ps -A -o pid=,uid=,args=` emits `<pid> <uid> <full argv>` per row.

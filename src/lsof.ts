@@ -91,6 +91,18 @@ export function runLsof(args: string[], timeoutMs: number): string | null {
   }
 }
 
+// PIDs LISTENING on a TCP port. LISTEN only, on purpose: a bare `lsof -ti
+// :<port>` also returns every process that holds a CLIENT connection to the
+// port (measured 2026-11-20, card 77a48069: a test client's pid came back next
+// to the dashboard's). The callers use this list to pick processes to SIGTERM
+// as a "previous instance", so a client in it is a process killed for calling
+// the dashboard. Empty when nothing listens or lsof cannot run.
+export function listListeningPids(port: number, timeoutMs = 3000): number[] {
+  const raw = (runLsof(['-ti', `tcp:${port}`, '-sTCP:LISTEN'], timeoutMs) ?? '').trim()
+  if (!raw) return []
+  return raw.split('\n').map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isFinite(n) && n > 0)
+}
+
 // Test-only: clear the resolution cache between cases.
 export function __resetLsofCache(): void {
   cachedLsofPath = undefined

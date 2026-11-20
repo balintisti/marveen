@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
-import { runLsof } from './lsof.js'
+import { listListeningPids } from './lsof.js'
 import { PROJECT_ROOT, WEB_HOST, DASHBOARD_PUBLIC_URL, DASHBOARD_ALLOWED_ORIGINS, MAIN_AGENT_ID, STORE_DIR } from './config.js'
 import { watchEgressAllowlistBaseline, queueAllowlistReport, baselineMemoryFile } from './web/egress-allowlist-baseline.js'
 import { loadOrCreateDashboardToken } from './web/dashboard-auth.js'
@@ -334,8 +334,9 @@ export function startWebServer(port = 3420): http.Server {
       // and under launchd it also race-kills the not-yet-dead predecessor.
       logger.warn({ port }, 'Web port foglalt, probalok felszabaditani...')
       try {
-        const pidsRaw = (runLsof(['-ti', `:${port}`], 3000) ?? '').trim()
-        const pids = pidsRaw.split('\n').map(s => s.trim()).filter(Boolean).map(Number).filter(n => Number.isFinite(n) && n > 0)
+        // LISTEN only (lsof.ts listListeningPids): a process holding a client
+        // connection to the port is a caller, not the listener (card 77a48069).
+        const pids = listListeningPids(port)
         const uid = typeof process.getuid === 'function' ? process.getuid() : null
         const victims: number[] = []
         for (const pid of pids) {

@@ -35,7 +35,18 @@ export interface ProcessLockContext {
    * then falls back to the old unscoped behavior (see `getProcessCwd`).
    */
   selfProjectRoot: string | null
-  /** List PIDs currently bound to the given TCP port (typically via `lsof -ti`). */
+  /**
+   * PIDs of this process's ancestors (parent, grandparent, ... up to init).
+   * Never victims: a dashboard started through a launcher (`npx tsx
+   * src/index.ts`, `npm run dev`) has the launcher as its parent, and the
+   * launcher's argv matches the binary pattern ("tsx src/index.ts") and lives
+   * in this install. Killing it takes this process down with it (exit 143,
+   * measured 2026-11-20, card 77a48069). An ancestor is never a predecessor.
+   */
+  ancestorPids: ReadonlySet<number>
+  /** List PIDs LISTENING on the given TCP port (typically via
+   * `lsof -ti tcp:<port> -sTCP:LISTEN`). Must not include processes that merely
+   * hold a client connection to the port: those are callers, not predecessors. */
   listPortHolders(port: number): number[]
   /** List own-UID PIDs whose argv matches `pattern` (typically via `ps -A -o pid,uid,args`).
    * Used to catch zombies that have already lost the listening socket but
@@ -129,6 +140,10 @@ function filterOwnNodeCandidates(
     if (pid === ctx.currentPid) continue
     if (seen.has(pid)) continue
     seen.add(pid)
+    if (ctx.ancestorPids.has(pid)) {
+      ctx.log.info({ pid }, 'Port/binary holder is an ancestor of this process (its launcher), leaving alone')
+      continue
+    }
     const cmd = ctx.getProcessCommand(pid)
     if (cmd == null) continue
     if (ctx.uid != null) {

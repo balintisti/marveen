@@ -26,6 +26,8 @@ interface MockOptions {
   selfProjectRoot?: string | null
   procs?: MockProc[]
   portHolders?: Record<number, number[]>
+  /** PIDs of the current process's ancestors (its launcher chain). */
+  ancestorPids?: number[]
   /** signal-probe override so tests can simulate EPERM etc. */
   signalOverride?: ProcessLockContext['signal']
 }
@@ -65,6 +67,7 @@ function makeCtx(options: MockOptions): {
     currentPid,
     uid,
     selfProjectRoot,
+    ancestorPids: new Set(options.ancestorPids ?? []),
     getProcessCwd: (pid: number) => {
       const p = table.get(pid)
       if (!p) return null
@@ -287,6 +290,43 @@ describe('findOwnBinaryMatches', () => {
       const { ctx } = makeCtx({ selfProjectRoot: '/home/user/marveen-worktrees/branch-a', procs })
       expect(findOwnBinaryMatches(/dist\/index\.js/, ctx)).toEqual([300])
     })
+  })
+})
+
+// Card 77a48069, measured 2026-11-20 10:58 (mandark's f327-server.log): a
+// dashboard started as `tsx src/index.ts` from a worktree SIGTERMed its own tsx
+// launcher (pid 84718, matchedBy byBinary) and died with exit 143. The launcher's
+// argv matches the binary pattern and lives in the same install, so the
+// install-affinity check cannot tell it from a predecessor. The ancestor set can.
+describe('own ancestors are never victims (77a48069)', () => {
+  const WT = '/Users/isti/mandark-marveen-f327'
+  // The measured process tree: zsh (84713) -> tsx launcher (84718) -> node child (84730, this process).
+  const tree = (): MockProc[] => [
+    { pid: 84713, uid: 501, cmd: '/bin/zsh', args: '-zsh', alive: true, cwd: WT },
+    { pid: 84718, uid: 501, cmd: 'node', args: `node ${WT}/node_modules/.bin/tsx src/index.ts`, alive: true, cwd: WT },
+  ]
+
+  it('findOwnBinaryMatches leaves the tsx launcher alone and says why', () => {
+    const { ctx, logs } = makeCtx({ currentPid: 84730, selfProjectRoot: WT, ancestorPids: [84718, 84713], procs: tree() })
+    expect(findOwnBinaryMatches(/(?:^|[\s/])(?:dist\/index\.js|src\/index\.ts)(?:\s|$)/, ctx)).toEqual([])
+    expect(logs.some((l) => l.level === 'info' && l.obj.pid === 84718 && /ancestor of this process/.test(l.msg))).toBe(true)
+  })
+
+  it('control: the same launcher shape is a victim when it is NOT an ancestor (a real leftover predecessor)', () => {
+    const { ctx } = makeCtx({ currentPid: 84730, selfProjectRoot: WT, ancestorPids: [84713], procs: tree() })
+    expect(findOwnBinaryMatches(/(?:^|[\s/])(?:dist\/index\.js|src\/index\.ts)(?:\s|$)/, ctx)).toEqual([84718])
+  })
+
+  it('acquirePortLock never signals an ancestor, by binary or by port', async () => {
+    const { ctx, signalCalls } = makeCtx({
+      currentPid: 84730,
+      selfProjectRoot: WT,
+      ancestorPids: [84718, 84713],
+      procs: tree(),
+      portHolders: { 4320: [84718] },
+    })
+    await acquirePortLock(4320, ctx, { binaryPattern: /(?:^|[\s/])(?:dist\/index\.js|src\/index\.ts)(?:\s|$)/, graceMs: 0, postKillDrainMs: 0 })
+    expect(signalCalls.filter((c) => c.pid === 84718 || c.pid === 84713)).toEqual([])
   })
 })
 
