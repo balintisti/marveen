@@ -488,6 +488,18 @@ describe('EADDRINUSE reclaim uses the same decision (77a48069, didi 72633)', () 
     expect(web.indexOf("err.code === 'EADDRINUSE'")).toBeGreaterThan(-1)
     expect(branch.slice(0, 2500)).toContain('reclaimPortAfterAddrInUse(port, buildProcessLockContext()')
   })
+
+  it('web.ts really exits when the reclaim refuses: its exit hook passes the code to process.exit', () => {
+    // didi 72649 E2: with `exit: () => {}` a refused reclaim (foreign listener)
+    // left the live process running without its web port, and launchd would
+    // never restart it. The delegation pin above does not see that, so the
+    // hook itself is pinned here, scoped to the reclaim call.
+    const web = readFileSync(join(__dirname, '..', 'web.ts'), 'utf-8')
+    const start = web.indexOf('reclaimPortAfterAddrInUse(port, buildProcessLockContext()')
+    expect(start).toBeGreaterThan(-1)
+    const call = web.slice(start, start + 1500)
+    expect(call).toMatch(/\bexit:\s*\((\w+)\)\s*=>\s*process\.exit\(\1\)/)
+  })
 })
 
 describe('belongsToInstall', () => {
