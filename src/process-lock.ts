@@ -15,6 +15,18 @@
 // The logic is split from the I/O so the ctx can be mocked in tests --
 // SIGKILL escalation ordering is impossible to unit-test against the real
 // process table.
+//
+// LOCAL DIVERGENCE FROM UPSTREAM (card 77a48069, decision on card 2fc37799):
+// upstream e9fd33bdb (#888) left the byPort branch unscoped ("a real port
+// conflict is still reclaimed"), so ANY own-UID node process on WEB_PORT was
+// killed, whichever install it came from. Measured 2026-11-20: a worktree
+// instance started on 3420 killed the live dashboard twice that way. Here a
+// port holder that does not belong to this install (belongsToInstall, the same
+// affinity rule upstream already applies to byBinary) is NOT killed:
+// acquirePortLock throws ForeignPortHolderError naming the holder and the way
+// out, before any signal is sent. Do not let an upstream merge revert this
+// silently; the pinning tests are in src/__tests__/process-lock.test.ts
+// ("foreign port holder").
 
 type LogFn = (obj: Record<string, unknown>, msg?: string) => void
 
@@ -44,6 +56,16 @@ export interface ProcessLockContext {
    * measured 2026-11-20, card 77a48069). An ancestor is never a predecessor.
    */
   ancestorPids: ReadonlySet<number>
+  /**
+   * The directory names this install is known by: the configured PROJECT_ROOT
+   * and its realpath (they differ when reached through a symlink). A port
+   * holder belongs to this install only if its argv or cwd is under one of
+   * them (belongsToInstall). Empty = cannot tell: the byPort branch then keeps
+   * the old unscoped behaviour.
+   */
+  installRoots: readonly string[]
+  /** Return the full argv of the PID as one string, or null if gone/unreadable. */
+  getProcessArgv(pid: number): string | null
   /** List PIDs LISTENING on the given TCP port (typically via
    * `lsof -ti tcp:<port> -sTCP:LISTEN`). Must not include processes that merely
    * hold a client connection to the port: those are callers, not predecessors. */
@@ -102,8 +124,88 @@ const DEFAULT_POST_KILL_POLL_MS = 100
  * an unrelated process (e.g. a dev server that happens to share the port).
  */
 export function findOwnNodeHolders(port: number, ctx: ProcessLockContext): number[] {
-  const raw = ctx.listPortHolders(port)
-  return filterOwnNodeCandidates(raw, ctx, { scopeToProjectRoot: false })
+  return classifyPortHolders(port, ctx).own
+}
+
+/** An own-UID node/tsx process on the port that is not part of this install. */
+export interface ForeignPortHolder {
+  pid: number
+  argv: string | null
+  cwd: string | null
+}
+
+/**
+ * True when a process with this argv/cwd is part of the install known by
+ * `roots`: an absolute argv path under a root (boundary-suffixed, so
+ * /path/marveen never matches /path/marveen2), or a cwd equal to or under a
+ * root (a relative argv such as `node dist/index.js` started by npm). A
+ * process we cannot attribute (no root in argv, cwd unknown) does NOT belong:
+ * leaving our own port unreclaimed surfaces as a named error, killing a
+ * stranger's dashboard is silent damage.
+ */
+export function belongsToInstall(
+  argv: string,
+  cwd: () => string | null,
+  roots: readonly string[],
+): boolean {
+  const usable = roots.filter((r) => r.length > 1)
+  if (usable.some((r) => argv.includes(r + '/'))) return true
+  const c = cwd()
+  return c !== null && usable.some((r) => c === r || c.startsWith(r + '/'))
+}
+
+/**
+ * Split the own-UID node/tsx holders of `port` into those that belong to this
+ * install (safe to take over: an earlier instance of ourselves) and those that
+ * do not (another install, e.g. a worktree started on the same port). Foreign
+ * UIDs, non-node commands and our own ancestors are dropped as before.
+ */
+export function classifyPortHolders(
+  port: number,
+  ctx: ProcessLockContext,
+): { own: number[]; foreign: ForeignPortHolder[] } {
+  const candidates = filterOwnNodeCandidates(ctx.listPortHolders(port), ctx, { scopeToProjectRoot: false })
+  if (!ctx.installRoots.length) return { own: candidates, foreign: [] }
+  const own: number[] = []
+  const foreign: ForeignPortHolder[] = []
+  for (const pid of candidates) {
+    const argv = ctx.getProcessArgv(pid)
+    let cwd: string | null | undefined
+    const getCwd = (): string | null => {
+      if (cwd === undefined) cwd = ctx.getProcessCwd(pid)
+      return cwd
+    }
+    if (argv !== null && belongsToInstall(argv, getCwd, ctx.installRoots)) {
+      own.push(pid)
+    } else {
+      foreign.push({ pid, argv, cwd: getCwd() })
+    }
+  }
+  return { own, foreign }
+}
+
+/**
+ * Thrown by acquirePortLock when the port is held by an own-UID node process
+ * of ANOTHER install. Nothing has been signalled when this is thrown. The
+ * message names the holder and the way out, so the operator sees the existing
+ * problem instead of a later EADDRINUSE or a dead neighbour.
+ */
+export class ForeignPortHolderError extends Error {
+  constructor(
+    readonly port: number,
+    readonly holders: readonly ForeignPortHolder[],
+    readonly installRoot: string,
+  ) {
+    const who = holders
+      .map((h) => `pid ${h.pid} (argv: ${h.argv ?? 'unknown'}; cwd: ${h.cwd ?? 'unknown'})`)
+      .join(', ')
+    super(
+      `Port ${port} is held by ${who}, which is not this install (${installRoot}). ` +
+        `Not killing it. Stop that process, or set another WEB_PORT in ${installRoot}/.env ` +
+        `(WEB_PORT is read from that file only, not from the environment).`,
+    )
+    this.name = 'ForeignPortHolderError'
+  }
 }
 
 /**
@@ -235,9 +337,11 @@ export async function terminateProcesses(
 
 /**
  * Make sure we are the only node/tsx dashboard process. If any own-UID
- * holders exist (listening on `port` OR matching `binaryPattern`), SIGTERM
- * then SIGKILL them. Returns once every holder is dead; the caller is free
- * to call server.listen() afterwards.
+ * holders of THIS install exist (listening on `port` OR matching
+ * `binaryPattern`), SIGTERM then SIGKILL them. Returns once every holder is
+ * dead; the caller is free to call server.listen() afterwards. If the port is
+ * held by an own-UID node process of another install, throws
+ * ForeignPortHolderError without signalling anyone.
  */
 export async function acquirePortLock(
   port: number,
@@ -247,7 +351,12 @@ export async function acquirePortLock(
   const graceMs = opts.graceMs ?? DEFAULT_GRACE_MS
   const drainMs = opts.postKillDrainMs ?? DEFAULT_POST_KILL_DRAIN_MS
   const pollMs = opts.postKillPollMs ?? DEFAULT_POST_KILL_POLL_MS
-  const byPort = findOwnNodeHolders(port, ctx)
+  const { own: byPort, foreign } = classifyPortHolders(port, ctx)
+  if (foreign.length) {
+    // Refuse BEFORE any signal (also to byBinary matches): we could not bind
+    // the port anyway, and the holder is someone else's process.
+    throw new ForeignPortHolderError(port, foreign, ctx.installRoots[0])
+  }
   const byBinary = opts.binaryPattern ? findOwnBinaryMatches(opts.binaryPattern, ctx) : []
   const victims = Array.from(new Set([...byPort, ...byBinary]))
   if (!victims.length) return

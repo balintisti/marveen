@@ -37,6 +37,8 @@ import {
   acquirePidfileLock,
   writeBufferFully,
   DeferToPeerError,
+  ForeignPortHolderError,
+  belongsToInstall,
   type ProcessLockContext,
   type PidfileLockContext,
 } from './process-lock.js'
@@ -91,11 +93,28 @@ function processCwd(pid: number): string | null {
   return line ? line.slice(1) : null
 }
 
-function argvBelongsToThisInstall(argv: string, pid: number): boolean {
-  // Boundary-suffixed so /path/marveen never matches /path/marveen2.
-  if (argv.includes(PROJECT_ROOT + '/')) return true
-  const cwd = processCwd(pid)
-  return cwd !== null && (cwd === PROJECT_ROOT || cwd.startsWith(PROJECT_ROOT + '/'))
+// The names this install is known by: PROJECT_ROOT as configured and its
+// realpath (a symlinked path and lsof's resolved cwd must both match).
+function installRoots(): string[] {
+  const roots = [PROJECT_ROOT]
+  try {
+    const real = realpathSync(PROJECT_ROOT)
+    if (real !== PROJECT_ROOT) roots.push(real)
+  } catch { /* unresolvable: the configured name alone */ }
+  return roots
+}
+
+function argvBelongsToThisInstall(argv: string, pid: number, roots: readonly string[]): boolean {
+  return belongsToInstall(argv, () => processCwd(pid), roots)
+}
+
+// Full argv of one PID (`ps -p <pid> -o args=`), or null if gone.
+function processArgv(pid: number): string | null {
+  try {
+    return execFileSync('/bin/ps', ['-p', String(pid), '-o', 'args='], { timeout: 2000, encoding: 'utf-8' }).trim() || null
+  } catch {
+    return null
+  }
 }
 
 // Build the I/O surface used by process-lock.ts. Kept here so the pure
@@ -113,11 +132,14 @@ function buildProcessLockContext(): ProcessLockContext {
   } catch {
     selfProjectRoot = null
   }
+  const roots = installRoots()
   return {
     currentPid: process.pid,
     uid,
     selfProjectRoot,
     ancestorPids: listAncestorPids(process.ppid),
+    installRoots: roots,
+    getProcessArgv: processArgv,
     getProcessCwd(pid: number): string | null {
       // Resolve the PID's cwd on BOTH platforms via the shared processCwd
       // helper: /proc on Linux, `lsof -a -p <pid> -d cwd` on macOS. A previous
@@ -166,7 +188,7 @@ function buildProcessLockContext(): ProcessLockContext {
           if (pid === process.pid) continue
           if (uid != null && rowUid !== uid) continue
           if (!pattern.test(argv)) continue
-          if (!argvBelongsToThisInstall(argv, pid)) continue
+          if (!argvBelongsToThisInstall(argv, pid, roots)) continue
           out.push(pid)
         }
         return out
@@ -628,6 +650,11 @@ main().catch((err) => {
   if (err instanceof DeferToPeerError) {
     logger.info({ peerPid: err.peerPid }, 'Peer dashboard already claimed the pidfile, exiting quietly')
     process.exit(0)
+  }
+  if (err instanceof ForeignPortHolderError) {
+    // Not a crash of ours: another install sits on our port and we refused to
+    // kill it (card 77a48069). The message names the holder and the way out.
+    logger.error({ port: err.port, holders: err.holders, installRoot: err.installRoot }, err.message)
   }
   // Route through shutdown() so any partial init (heartbeat, digest
   // timers, decay interval) is drained before exit. shutdown() is

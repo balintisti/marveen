@@ -5,6 +5,9 @@ import {
   terminateProcesses,
   acquirePortLock,
   acquirePidfileLock,
+  belongsToInstall,
+  classifyPortHolders,
+  ForeignPortHolderError,
   writeBufferFully,
   DeferToPeerError,
   type ProcessLockContext,
@@ -28,6 +31,8 @@ interface MockOptions {
   portHolders?: Record<number, number[]>
   /** PIDs of the current process's ancestors (its launcher chain). */
   ancestorPids?: number[]
+  /** Names of this install; defaults to [selfProjectRoot] (or [] when that is null). */
+  installRoots?: string[]
   /** signal-probe override so tests can simulate EPERM etc. */
   signalOverride?: ProcessLockContext['signal']
 }
@@ -68,6 +73,11 @@ function makeCtx(options: MockOptions): {
     uid,
     selfProjectRoot,
     ancestorPids: new Set(options.ancestorPids ?? []),
+    installRoots: options.installRoots ?? (selfProjectRoot != null ? [selfProjectRoot] : []),
+    getProcessArgv: (pid: number) => {
+      const p = table.get(pid)
+      return p ? p.args ?? p.cmd : null
+    },
     getProcessCwd: (pid: number) => {
       const p = table.get(pid)
       if (!p) return null
@@ -270,14 +280,33 @@ describe('findOwnBinaryMatches', () => {
       expect(findOwnBinaryMatches(/dist\/index\.js/, ctx)).toEqual([200])
     })
 
-    it('does NOT scope findOwnNodeHolders (byPort) by project root -- a real port conflict is still reclaimed', () => {
-      // byPort matching is intentionally left unscoped: it means "something
-      // is literally sitting on the exact port I need to bind", which is a
-      // genuine conflict regardless of which checkout it came from.
+    // LOCAL DIVERGENCE FROM UPSTREAM (77a48069, decision 2fc37799): upstream
+    // e9fd33bdb pinned the opposite ("a real port conflict is still
+    // reclaimed"). A port holder of another install is no longer ours to kill.
+    it('scopes findOwnNodeHolders (byPort) to this install -- a holder from another checkout is not taken over', () => {
       const procs: MockProc[] = [
         { pid: 200, uid: 501, cmd: 'node', alive: true, cwd: '/some/other/checkout' },
       ]
       const { ctx } = makeCtx({ selfProjectRoot: '/home/user/marveen', procs, portHolders: { 3420: [200] } })
+      expect(findOwnNodeHolders(3420, ctx)).toEqual([])
+      expect(classifyPortHolders(3420, ctx).foreign).toEqual([{ pid: 200, argv: 'node', cwd: '/some/other/checkout' }])
+    })
+
+    it('pair: an old instance of THIS install on the port is still taken over (updates keep working)', () => {
+      const procs: MockProc[] = [
+        { pid: 200, uid: 501, cmd: 'node', args: 'node dist/index.js', alive: true, cwd: '/home/user/marveen' },
+        { pid: 201, uid: 501, cmd: 'node', args: '/usr/bin/node /home/user/marveen/dist/index.js', alive: true, cwd: null },
+      ]
+      const { ctx } = makeCtx({ selfProjectRoot: '/home/user/marveen', procs, portHolders: { 3420: [200, 201] } })
+      expect(findOwnNodeHolders(3420, ctx)).toEqual([200, 201])
+      expect(classifyPortHolders(3420, ctx).foreign).toEqual([])
+    })
+
+    it('byPort stays unscoped when the install roots are unknown (old behaviour)', () => {
+      const procs: MockProc[] = [
+        { pid: 200, uid: 501, cmd: 'node', alive: true, cwd: '/some/other/checkout' },
+      ]
+      const { ctx } = makeCtx({ selfProjectRoot: null, procs, portHolders: { 3420: [200] } })
       expect(findOwnNodeHolders(3420, ctx)).toEqual([200])
     })
 
@@ -327,6 +356,74 @@ describe('own ancestors are never victims (77a48069)', () => {
     })
     await acquirePortLock(4320, ctx, { binaryPattern: /(?:^|[\s/])(?:dist\/index\.js|src\/index\.ts)(?:\s|$)/, graceMs: 0, postKillDrainMs: 0 })
     expect(signalCalls.filter((c) => c.pid === 84718 || c.pid === 84713)).toEqual([])
+  })
+})
+
+describe('foreign port holder (77a48069, LOCAL DIVERGENCE FROM UPSTREAM)', () => {
+  // Measured 2026-11-20 10:58 (mandark's f327-server.log): a dashboard started
+  // from the worktree /Users/isti/mandark-marveen-f327 bound 3420 (WEB_PORT
+  // comes from <root>/.env, the worktree had none) and killed the live
+  // dashboard, pid 84187, argv below, matchedBy byPort.
+  const LIVE = { pid: 84187, uid: 501, cmd: 'node', args: '/opt/homebrew/opt/node@22/bin/node /Users/isti/marveen/dist/index.js', alive: true, cwd: '/Users/isti/marveen' }
+  const WT = '/Users/isti/mandark-marveen-f327'
+  const PATTERN = /(?:^|[\s/])(?:dist\/index\.js|src\/index\.ts)(?:\s|$)/
+
+  it('refuses to take over the live dashboard of another install, signals nobody, and names holder, root and way out', async () => {
+    const { ctx, signalCalls, table } = makeCtx({ currentPid: 84730, selfProjectRoot: WT, procs: [{ ...LIVE }], portHolders: { 3420: [84187] } })
+    const err = await acquirePortLock(3420, ctx, { binaryPattern: PATTERN, graceMs: 0, postKillDrainMs: 0 }).then(() => null, (e: unknown) => e)
+    expect(err).toBeInstanceOf(ForeignPortHolderError)
+    const msg = (err as Error).message
+    expect(msg).toContain('Port 3420')
+    expect(msg).toContain('pid 84187')
+    expect(msg).toContain('/Users/isti/marveen/dist/index.js')
+    expect(msg).toContain(`not this install (${WT})`)
+    expect(msg).toContain('Not killing it')
+    expect(msg).toContain(`WEB_PORT in ${WT}/.env`)
+    expect(signalCalls).toEqual([])
+    expect(table.get(84187)?.alive).toBe(true)
+  })
+
+  it('refuses before killing even its OWN binary-pattern zombie', async () => {
+    const zombie = { pid: 500, uid: 501, cmd: 'node', args: 'node dist/index.js', alive: true, cwd: WT }
+    const { ctx, signalCalls } = makeCtx({ currentPid: 84730, selfProjectRoot: WT, procs: [{ ...LIVE }, zombie], portHolders: { 3420: [84187] } })
+    await expect(acquirePortLock(3420, ctx, { binaryPattern: PATTERN, graceMs: 0, postKillDrainMs: 0 })).rejects.toBeInstanceOf(ForeignPortHolderError)
+    expect(signalCalls).toEqual([])
+  })
+
+  it('an unattributable holder (relative argv, cwd unknown) is refused, not killed', async () => {
+    const { ctx, signalCalls } = makeCtx({ selfProjectRoot: WT, procs: [{ pid: 300, uid: 501, cmd: 'node', args: 'node dist/index.js', alive: true, cwd: null }], portHolders: { 3420: [300] } })
+    const err = await acquirePortLock(3420, ctx, { graceMs: 0, postKillDrainMs: 0 }).then(() => null, (e: unknown) => e)
+    expect((err as Error).message).toContain('cwd: unknown')
+    expect(signalCalls).toEqual([])
+  })
+
+  it('control: the live install itself, restarting, still takes over its predecessor on the same port', async () => {
+    const { ctx, signalCalls } = makeCtx({ currentPid: 90000, selfProjectRoot: '/Users/isti/marveen', procs: [{ ...LIVE }], portHolders: { 3420: [84187] } })
+    await acquirePortLock(3420, ctx, { binaryPattern: PATTERN, graceMs: 0, postKillDrainMs: 0 })
+    expect(signalCalls).toContainEqual({ pid: 84187, sig: 'SIGTERM' })
+  })
+})
+
+describe('belongsToInstall', () => {
+  const roots = ['/home/u/marveen', '/real/marveen']
+  it('matches an absolute argv under any root name, boundary-suffixed', () => {
+    expect(belongsToInstall('node /home/u/marveen/dist/index.js', () => null, roots)).toBe(true)
+    expect(belongsToInstall('node /real/marveen/dist/index.js', () => null, roots)).toBe(true)
+    expect(belongsToInstall('node /home/u/marveen2/dist/index.js', () => null, roots)).toBe(false)
+  })
+  it('matches a relative argv by cwd equal to or under a root', () => {
+    expect(belongsToInstall('node dist/index.js', () => '/real/marveen', roots)).toBe(true)
+    expect(belongsToInstall('node dist/index.js', () => '/home/u/marveen/sub', roots)).toBe(true)
+    expect(belongsToInstall('node dist/index.js', () => '/home/u/marveen2', roots)).toBe(false)
+    expect(belongsToInstall('node dist/index.js', () => null, roots)).toBe(false)
+  })
+  it('does not read the cwd when the argv already decides', () => {
+    let calls = 0
+    belongsToInstall('node /home/u/marveen/dist/index.js', () => { calls++; return null }, roots)
+    expect(calls).toBe(0)
+  })
+  it('ignores a degenerate root ("/" or empty) instead of matching everything', () => {
+    expect(belongsToInstall('node /x/dist/index.js', () => '/x', ['/', ''])).toBe(false)
   })
 })
 
