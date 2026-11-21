@@ -16,8 +16,8 @@ a valasz maga a szkript fejlecben all, teljes indoklassal.
 **Nincs benne idobelyeg** (hogy diffelheto legyen) es **nincs benne**
 **"lapon nevezik-e" oszlop** (a bemenete a repon kivuli, kovetetlen fajl).
 
-Populacio: `git ls-files scripts/` = **511** kovetett fajl, ebbol
-**156** hordoz dontes-fejlecet.
+Populacio: `git ls-files scripts/` = **512** kovetett fajl, ebbol
+**157** hordoz dontes-fejlecet.
 
 ## Nem olvasott fejlec-alak (4)
 
@@ -413,6 +413,10 @@ Nyers frazis-szuro, nem parser -- ezert kulon szakasz.
 
 - Governance control (2026-06-26, after the autonom-kor incident: a sub-agent
 - Why a hook and not only a permissions deny-list: permissive profiles launch
+
+### `scripts/hooks/zsh-expansion-flag-gate.py`
+
+- WHY (measured 2026-11-13, read-only SQLite + all agents' transcripts): the Claude Code permission
 
 ### `scripts/idle-reporter.py`
 
