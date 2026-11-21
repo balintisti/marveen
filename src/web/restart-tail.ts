@@ -14,6 +14,8 @@
 // itself, so nothing the pane happened to display can ride inside a directive.
 
 export const RESTART_TAIL_FILE = 'HANDOFF-RESTART-TAIL.md'
+/** A released shell's command is written whole (indented code block) up to this length. */
+export const RELEASED_COMMAND_MAX_CHARS = 4000
 export const STEPS_MAX_CHARS = 1500
 export const COMMENT_HEAD_CHARS = 120
 export const COMMENTS_MAX = 30
@@ -67,6 +69,10 @@ export interface RestartTailInput {
   staleMinutes: number | 'unknown' | null
   killedCount: number
   killedDetail: string
+  /** Card cb25d896: background shells the guard judged idle by CPU and did not wait for. They are
+   *  among the killed; listed here with their full command lines so the fresh session can re-arm a
+   *  poll loop that slept on purpose. Absent or empty = none. */
+  releasedShells?: string[]
   /** Detached from the pane (card 3c3d8e43): predicted to SURVIVE the restart. */
   detachedCount: number
   detachedDetail: string
@@ -100,6 +106,18 @@ export function buildRestartTail(t: RestartTailInput): string {
   out.push('')
   out.push('## 1. A restart altal MEGOLT hatterfeladatok')
   if (t.killedCount > 0) out.push(`${t.killedCount} futott, es a restart MEGOLTE: ${t.killedDetail || '(cimke nelkul)'}. Az eredmenyuk NEM LETEZIK: inditsd ujra vagy jelezd, mielott rajuk epitenel.`)
+  const released = t.releasedShells ?? []
+  if (released.length > 0) {
+    // Little LOCAL CPU is not idle: a shell waiting on work outside its own tree (psql, a deploy,
+    // ssh, a slow API) reads the same, so the text never says "re-run it" (didi L1, card cb25d896).
+    out.push(`ELENGEDETT hatter-shellek: ebbol ${released.length} keves HELYI CPU-t hasznalt (tetlen volt, VAGY a sajat fajan kivuli munkara vart: psql, deploy, ssh, lassu API), a restart nem vart ra, es MEGOLTE (card cb25d896). ` +
+      'Ujrainditas ELOTT nezd meg, befejezodott-e a muvelete, es megismetelheto-e (egy tavoli iras, deploy vagy migracio nem az). A parancsa volt:')
+    for (const cmd of released) {
+      out.push('')
+      for (const line of cmd.slice(0, RELEASED_COMMAND_MAX_CHARS).split('\n')) out.push(`    ${line}`)
+      if (cmd.length > RELEASED_COMMAND_MAX_CHARS) out.push(`    [... levagva ${RELEASED_COMMAND_MAX_CHARS} karakternel]`)
+    }
+  }
   if (t.detachedCount > 0) out.push(`${t.detachedCount} levalasztva futott a pane-en kivul, valoszinuleg TULELTE a restartot: ${t.detachedDetail || '(cimke nelkul)'}. Ps-sel ellenorizd, mielott ujrainditanad: mellette egy masodik futas ugyanabban a faban hamis eredmenyt ad.`)
   if (t.killedCount === 0 && t.detachedCount === 0) out.push('Nem futott hatterfeladat (a guard merese szerint).')
   out.push('')

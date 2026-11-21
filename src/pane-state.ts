@@ -1771,6 +1771,13 @@ function paneBackground(pane: string): PaneBackground {
   }
 }
 
+/** The same capture split by kind (card cb25d896): the guard measures the CPU of the footer's shells
+ *  and monitors only, and only while no sub-agent runs (their shells look the same in ps). */
+export function paneBackgroundCounts(pane: string): { subagents: number; shells: number; monitors: number } {
+  const b = paneBackground(pane)
+  return { subagents: Math.max(b.rows, b.waiting), shells: b.shells, monitors: b.monitors }
+}
+
 export function runningSubagentCount(pane: string): number {
   const b = paneBackground(pane)
   return Math.max(b.rows, b.waiting)

@@ -118,6 +118,7 @@ describe('resume prompt (the "Friss kontextussal indultál" template, 775 per we
     ['do not redo what the handoff says is done', 'a kész részt ne ismételd'],
     ['do not start a second copy of a surviving task', 'mellé másodikat ne indíts'],
     ['restart the killed task or say so', 'indítsd újra vagy jelezd'],
+    ['the tail also lists the released (idle) shells (card cb25d896, marveen 10027438)', 'ELENGEDETT shell'],
     ['fill the stale gap from comments, messages, hot memory', 'kommentekből, üzenetekből, hot memóriából'],
     ['the background of the rules', 'context-guard-restart-recovery'],
   ]
@@ -145,6 +146,34 @@ describe('resume prompt (the "Friss kontextussal indultál" template, 775 per we
     expect(variants('marveen')[0][1]).not.toContain('jelezz a csatornádon')
     expect(variants('dexter')[0][1]).not.toContain('jelezz a csatornádon')
     expect(variants('dexter')[0][1]).toContain('Csatornára session-meta NEM mehet')
+  })
+})
+
+// Card cb25d896: with background work running the critical request carries the stop sentence, under
+// the SAME 300-character cap and with every operative step above (no new cap, no raised cap). Three-digit
+// percentage and the longest agent name: the worst case.
+describe('critical handoff request with background work running (card cb25d896)', () => {
+  const p = handoffPrompt(100, `${DIR('computress')}/HANDOFF.md`, true)
+  it('is at most 300 characters with a real handoff path and a three-digit percentage', () => {
+    expect(p.length).toBeLessThanOrEqual(300)
+  })
+  it.each([
+    ['the alarm', 'kritikus'],
+    ['stop working', 'NE folytasd'],
+    ['write the handoff', 'írj HANDOFF.md-t'],
+    ['the structure reference', '/handoff skill'],
+    ['the path', `${DIR('computress')}/HANDOFF.md`],
+    ['the measured percentage', '~100%'],
+    ['stop after writing', 'ÁLLJ MEG'],
+    ['the empty answer', 'Nincs aktív feladat'],
+    ['stop the servers and watchers you do not need', 'Fölös szervert, figyelőt állíts le'],
+    ['the restart waits for the background work', 'az újraindítás vár a háttérmunkára'],
+    ['the head restart-notice-trace matches', 'A munkakontextusod '],
+  ])('keeps the operative step: %s', (_what, text) => {
+    expect(p).toContain(text)
+  })
+  it('without background work the request is byte-identical to the plain one', () => {
+    expect(handoffPrompt(61, `${DIR('computress')}/HANDOFF.md`, false)).toBe(handoffPrompt(61, `${DIR('computress')}/HANDOFF.md`))
   })
 })
 
