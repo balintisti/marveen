@@ -53,6 +53,7 @@ import {
   standstillNote,
   buildApiErrorResumeMessage,
 } from '../idle-agent.js'
+import { CARD_TEXT_READ_HINT } from '../card-text-read-hint.js'
 
 // The guard for the agent that HAS work and is not doing it.
 //
@@ -1012,7 +1013,7 @@ export function tick(): void {
           try {
             const lanes = readAgentProjects(agent)
             const parked = laneFilteredPullList(deferredOrphanList(cards, now), lanes).length
-            createAgentMessage('system', agent, withStandstillNote(buildPullNotice(agent, minutes, pull, Date.now(), lanes, parked, declinedCount), stillNote))
+            createAgentMessage('system', agent, withStandstillNote(buildPullNotice(agent, minutes, pull, Date.now(), lanes, parked, declinedCount, CARD_TEXT_READ_HINT), stillNote))
             logger.info(
               { idleGuard: true, agent, orphanCount: pull.length, top: pull[0]?.id },
               'idle guard: agent idle with nothing assigned -- named the ownerless pull-list',

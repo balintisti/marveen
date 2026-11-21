@@ -24,7 +24,8 @@ import { join } from 'node:path'
 import { logger } from '../logger.js'
 import { listKanbanCards } from '../db.js'
 import { agentDir } from './agent-config.js'
-import { cardRef, CARD_TEXT_READ_HINT } from '../card-ref.js'
+import { cardRef } from '../card-ref.js'
+import { CARD_TEXT_READ_HINT } from '../card-text-read-hint.js'
 
 /** A file the agent left modified in its working directory. */
 export interface DirtyFile {

@@ -1,5 +1,5 @@
 // Idle-agent detection: the guard for the agent that has work and is not doing it.
-import { cardRef, CARD_TEXT_READ_HINT, CARD_TEXT_READ_HINT_SHORT } from './card-ref.js'
+import { cardRef, cardTextReadHint, CARD_TEXT_READ_HINT_SHORT } from './card-ref.js'
 //
 // WHY THIS IS NOT A TIMER
 // -----------------------
@@ -2004,9 +2004,14 @@ export function buildPullNotice(
    *  therefore NOT offered (`notYetDeclinedBy`, card 860db8cd). The re-query cannot see comments,
    *  so they belong in the number it is compared against. */
   declined = 0,
+  /** Where the card titles are read (card f494cace). The watcher passes CARD_TEXT_READ_HINT
+   *  (card-text-read-hint.ts: the configured store dir, host and port). This module does not import
+   *  config.ts (scripts/standstill-set.sh loads it on its own), so the default uses config's own
+   *  defaults; only callers without config (tests) get it. */
+  readHint: string = cardTextReadHint(join(INSTALL_ROOT, 'store', '.dashboard-token'), '127.0.0.1', 3420),
 ): string {
   // Id and priority only, no title (card f494cace): this notice goes out as 'system', and the listed
-  // cards are OWNERLESS planned cards, i.e. anyone's free text. CARD_TEXT_READ_HINT says where to read it.
+  // cards are OWNERLESS planned cards, i.e. anyone's free text. readHint says where to read it.
   const line = (c: { id: string; priority?: string | null }) =>
     `  ${cardRef(c.id)}  ${c.priority ?? 'normal'}`
   // Mirrors `laneFilteredPullList`: no declared lane means no clause at all, and a card with an
@@ -2029,7 +2034,7 @@ export function buildPullNotice(
     `(MERVE ${stampOf(nowMs)}-kor):`,
     '',
     ...items.slice(0, 5).map(line),
-    CARD_TEXT_READ_HINT,
+    readHint,
     '',
     'A foglalas (`assignee` + `in_progress`) a meres ELOTT jar: ket agens 19 masodperc',
     'kulonbseggel vette fel ugyanazt a kartyat azon a napon, amikor ez a szabaly szuletett.',
