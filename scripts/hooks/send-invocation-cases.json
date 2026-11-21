@@ -2005,6 +2005,126 @@
       "cmd": "bash -oe pipefail harmless.sh",
       "expected": false,
       "cwd": "src/__tests__/fixtures/script-file-gate"
+    },
+    {
+      "name": "[5768a25d P1] a Resend mail POST written as Python requests code in a quoted heredoc is a send",
+      "cmd": "python3 - <<'E'\nimport requests\nrequests.post(\"https://api.resend.com/emails\", headers={\"Authorization\": \"Bearer x\"}, json={\"to\": \"a@b.c\", \"subject\": \"s\", \"html\": \"h\"})\nE",
+      "expected": true
+    },
+    {
+      "name": "[5768a25d P2] urllib Request on the Resend mail URL in python -c is a send",
+      "cmd": "python3 -c 'import urllib.request as u; u.urlopen(u.Request(\"https://api.resend.com/emails\", data=b\"{}\", method=\"POST\"))'",
+      "expected": true
+    },
+    {
+      "name": "[5768a25d P3] the same requests.post in an UNQUOTED heredoc is a send",
+      "cmd": "python3 - <<E\nimport requests\nrequests.post('https://api.resend.com/emails', json={})\nE",
+      "expected": true
+    },
+    {
+      "name": "[5768a25d P4] node -e fetch on the Resend mail URL is a send",
+      "cmd": "node -e 'fetch(\"https://api.resend.com/emails\",{method:\"POST\",body:\"{}\"})'",
+      "expected": true
+    },
+    {
+      "name": "[5768a25d P5] the mail path glued on later (BASE + \"/emails\") is a send",
+      "cmd": "python3 - <<'E'\nimport requests\nBASE = 'https://api.resend.com'\nrequests.post(BASE + '/emails', json={})\nE",
+      "expected": true
+    },
+    {
+      "name": "[5768a25d P6] the provider host in any letter case is a send",
+      "cmd": "python3 - <<'E'\nimport httpx\nhttpx.post('https://API.Resend.com/emails', json={})\nE",
+      "expected": true
+    },
+    {
+      "name": "[5768a25d C1] the provider host in code is a send on any path, as on the curl branch: a GET /domains is denied too (named cost)",
+      "cmd": "python3 - <<'E'\nimport requests\nrequests.get('https://api.resend.com/domains')\nE",
+      "expected": true
+    },
+    {
+      "name": "[5768a25d C2] CONTROL: resend.com/emails without the api host is not a send",
+      "cmd": "python3 -c 'print(\"resend.com/emails\")'",
+      "expected": false
+    },
+    {
+      "name": "[5768a25d C3] CONTROL: grep for the URL in a file is not a send",
+      "cmd": "grep -n 'api.resend.com/emails' notes.txt",
+      "expected": false
+    },
+    {
+      "name": "[5768a25d C5] CONTROL: lookalike host api.resend.com-x.io is not the provider",
+      "cmd": "python3 -c 'import requests; requests.post(\"https://api.resend.com-x.io/emails\")'",
+      "expected": false
+    },
+    {
+      "name": "[5768a25d C6] host alone decides: a path that only looks like /emails (/emails-archive) is still a send",
+      "cmd": "python3 -c 'import requests; requests.post(\"https://api.resend.com/emails-archive\")'",
+      "expected": true
+    },
+    {
+      "name": "[5768a25d P7] a POST to /emails/batch (the batch send) is a send",
+      "cmd": "python3 - <<'E'\nimport requests\nrequests.post('https://api.resend.com/emails/batch', json=[])\nE",
+      "expected": true
+    },
+    {
+      "name": "[5768a25d P8] an inbound read and a real send in one script is a send",
+      "cmd": "python3 - <<'E'\nimport requests\nB = 'https://api.resend.com'\nrequests.get(B + '/emails/receiving')\nrequests.post(B + '/emails', json={})\nE",
+      "expected": true
+    },
+    {
+      "name": "[5768a25d C7] CONTROL: the inbound-mail read (GET /emails/receiving) in code is not a send",
+      "cmd": "python3 - <<'E'\nimport urllib.request\nurllib.request.urlopen(urllib.request.Request('https://api.resend.com' + '/emails/receiving?limit=5'))\nE",
+      "expected": false
+    },
+    {
+      "name": "[5768a25d C8] CONTROL: an inbound read of one mail (/emails/receiving/<id>) is not a send",
+      "cmd": "python3 -c 'import requests; requests.get(\"https://api.resend.com/emails/receiving/abc\")'",
+      "expected": false
+    },
+    {
+      "name": "[5768a25d P9] a node heredoc body that fetches the Resend mail URL is a send (judged by the heredoc body rule, not the Python one)",
+      "cmd": "node - <<'E'\nfetch('https://api.resend.com/emails', { method: 'POST', body: '{}' })\nE",
+      "expected": true
+    },
+    {
+      "name": "[5768a25d P10] node -e fetch inside a bash heredoc body is a send",
+      "cmd": "bash <<'E'\nnode -e \"fetch('https://api.resend.com/emails',{method:'POST'})\"\nE",
+      "expected": true
+    },
+    {
+      "name": "[5768a25d didi 56988 B1] BASE ends in slash, path glued without slash is a send",
+      "cmd": "python3 - <<'E'\nimport requests\nBASE = \"https://api.resend.com/\"\nrequests.post(BASE + \"emails\", json={})\nE",
+      "expected": true
+    },
+    {
+      "name": "[5768a25d didi 56988 B2] -c, slash on host string, emails glued is a send",
+      "cmd": "python3 -c 'import requests; requests.post(\"https://api.resend.com/\" + \"emails\", json={})'",
+      "expected": true
+    },
+    {
+      "name": "[5768a25d didi 56988 B3] urljoin(host, emails) is a send",
+      "cmd": "python3 - <<'E'\nfrom urllib.parse import urljoin\nimport requests\nrequests.post(urljoin(\"https://api.resend.com\", \"emails\"), json={})\nE",
+      "expected": true
+    },
+    {
+      "name": "[5768a25d didi 56988 B3b] f-string path without slash is a send",
+      "cmd": "python3 - <<'E'\nimport requests\nH = \"https://api.resend.com/\"\nrequests.post(f\"{H}emails\", json={})\nE",
+      "expected": true
+    },
+    {
+      "name": "[5768a25d P11] an inbound read and a send whose path is glued without a slash is a send",
+      "cmd": "python3 - <<'E'\nimport requests\nB = 'https://api.resend.com/'\nrequests.get(B + 'emails/receiving')\nrequests.post(B + 'emails', json={})\nE",
+      "expected": true
+    },
+    {
+      "name": "[5768a25d P12] the host with a path from argv (no emails word at all) is a send",
+      "cmd": "python3 - x <<'E'\nimport sys, requests\nrequests.post('https://api.resend.com' + sys.argv[1], json={})\nE",
+      "expected": true
+    },
+    {
+      "name": "[5768a25d C9] NAMED COST: an inbound read that also names a variable emails is denied (one more emails word)",
+      "cmd": "python3 - <<'E'\nimport requests\nemails = requests.get('https://api.resend.com/emails/receiving').json()\nE",
+      "expected": true
     }
   ]
 }

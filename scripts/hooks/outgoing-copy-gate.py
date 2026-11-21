@@ -148,8 +148,27 @@ _CODE_EXECISH = re.compile(
 _CODE_SENDER_LIT = re.compile(r"sendmail|msmtp|swaks|send\.py", re.I)
 
 
+# A RESEND MAIL POST WRITTEN AS CODE (card 5768a25d, didi 55349, 56988): the provider host named
+# anywhere in the code text is a send (the same verdict the curl branch gives), matched on the RAW
+# text (the URL is a string literal; the bc98d6d5 blanking would erase it). The one exemption: every
+# `emails` word in the text is the inbound-mail read `emails/receiving`. Full note, the named cost and
+# the named hole: resendMailInCode in email-send-gate.mjs.
+_RESEND_HOST_IN_CODE = re.compile(r"api\.resend\.com(?![\w-])", re.I)
+_RESEND_INBOUND_READ = re.compile(r"(?<![\w-])emails/receiving(?![\w-])", re.I)
+_RESEND_EMAILS_WORD = re.compile(r"(?<![\w-])emails(?![\w-])", re.I)
+
+
+def _resend_inbound_read_only(code: str) -> bool:
+    return bool(_RESEND_INBOUND_READ.search(code)) and not _RESEND_EMAILS_WORD.search(
+        _RESEND_INBOUND_READ.sub(" ", code))
+
+
+def _resend_mail_in_code(code: str) -> bool:
+    return bool(_RESEND_HOST_IN_CODE.search(code)) and not _resend_inbound_read_only(code)
+
+
 def _code_string_sends(code: str) -> bool:
-    if _CODE_SEND.search(code) or _CODE_SEND_MODULE.search(code):
+    if _CODE_SEND.search(code) or _CODE_SEND_MODULE.search(code) or _resend_mail_in_code(code):
         return True
     return bool(_CODE_EXECISH.search(code) and _CODE_SENDER_LIT.search(code))
 # Token-ELEJERE horgonyzott cel-minta: egy URL-argumentum vagy csupasz
@@ -952,7 +971,7 @@ _HEREDOC_SENDER_ARGV = re.compile(r"""['"](?:[^'"\s]*/)?(?:sendmail|msmtp|swaks|
 
 
 def _heredoc_body_sends(body: str) -> bool:
-    if _CODE_SEND.search(body) or _CODE_SEND_MODULE.search(body):
+    if _CODE_SEND.search(body) or _CODE_SEND_MODULE.search(body) or _resend_mail_in_code(body):
         return True
     return bool(_CODE_EXECISH.search(body) and _HEREDOC_SENDER_ARGV.search(body))
 
@@ -1011,7 +1030,7 @@ def _python_body_sends(body: str, quoted: bool) -> bool:
     # raw text lexes to other strings than Python sees: `s = "\\\"; import resend; ...`
     # reads as one literal here and as a closed literal plus a real send to Python.
     # An unquoted body is judged whole. Twin: pythonBodySends.
-    if not quoted:
+    if not quoted or _resend_mail_in_code(body):  # the URL is judged on the raw body (5768a25d)
         return _heredoc_body_sends(body)
     code = _python_code_text(body)
     return _heredoc_body_sends(body if code is None else code)
