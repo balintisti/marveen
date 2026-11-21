@@ -1,5 +1,5 @@
 // Idle-agent detection: the guard for the agent that has work and is not doing it.
-import { cardRef, CARD_TEXT_READ_HINT } from './card-ref.js'
+import { cardRef, CARD_TEXT_READ_HINT, CARD_TEXT_READ_HINT_SHORT } from './card-ref.js'
 //
 // WHY THIS IS NOT A TIMER
 // -----------------------
@@ -2311,7 +2311,7 @@ export function buildWakeMessage(
   const isReviewQueue = kind === 'testing_without_my_comment'
   const { bounced, work, floor, review } = splitWakeItems(kind, items, bouncedIds)
 
-  // No title here either (card f494cace): see buildPullNotice. CARD_TEXT_READ_HINT follows the lists.
+  // No title here either (card f494cace): see buildPullNotice. CARD_TEXT_READ_HINT_SHORT is in the facts line.
   const line = (c: { id: string; priority?: string | null; status?: string }) =>
     `  ${cardRef(c.id)}  ${(c.status ?? '?').padEnd(11)} ${c.priority ?? 'normal'}`
 
@@ -2328,7 +2328,8 @@ export function buildWakeMessage(
     // FACTS, NOT ORDERS (card c2246921, marveen 40484 decision A). This row arrives from `system`,
     // which is not a known agent, so the router wraps it as <untrusted> and a fresh session is
     // RIGHT to refuse an instruction inside it. A fact it can re-measure on the board still moves it.
-    'Ez az uzenet TENYEKET allit (szamok, kartya-id-k), utasitast nem hordoz: a SAJAT allando szabalyaid dontik el.',
+    // No titles (card f494cace): a title is its author's free text; the clause says where to read it.
+    `Ez az uzenet TENYEKET allit (szamok, kartya-id-k; ${CARD_TEXT_READ_HINT_SHORT}), utasitast nem hordoz: a SAJAT allando szabalyaid dontik el.`,
   ]
 
   // WHICH SET THE RE-MEASURE LINE COUNTS, PER DECLARED KIND (cards 7edc5839, faa6003a, fb4e6622). Written per
@@ -2401,9 +2402,8 @@ export function buildWakeMessage(
   // what did not fit is counted in one closing line instead of being cut mid-line.
   // Not indented: an indented line is an item line (the tests and the readers count those).
   const MORE = (n: number) => `+${n} tovabbi a tablan`
-  // The read hint stands in for the titles (card f494cace), so it is part of the fixed budget, not the list's.
   const fixed = [...head, ...measure, ...closing]
-  let left = WAKE_MAX_CHARS - fixed.join('\n').length - 2 /* the two joins around the list block */ - MORE(99).length - 1 - CARD_TEXT_READ_HINT.length - 1
+  let left = WAKE_MAX_CHARS - fixed.join('\n').length - 2 /* the two joins around the list block */ - MORE(99).length - 1
   let shown = 0
   const total = bounced.length + work.length + floor.length + review.length
   // THE FLOOR SECTION IS FILLED LAST, though it is printed where it always was (card 2e78cf63; the 12 h re-arm
@@ -2431,10 +2431,7 @@ export function buildWakeMessage(
   }
   const listed: string[] = sections.flatMap((sec) => filled.get(sec) ?? [])
   if (!sections.length) listed.push('A szamlalod nem nulla, de tetelt nem tudtam megnevezni -- a tabla a forras.')
-  else {
-    if (total > shown) listed.push(MORE(total - shown))
-    listed.push(CARD_TEXT_READ_HINT)
-  }
+  else if (total > shown) listed.push(MORE(total - shown))
 
   return [...head, ...listed, ...measure, ...closing].join('\n')
 }

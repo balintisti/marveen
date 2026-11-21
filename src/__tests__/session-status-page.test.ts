@@ -131,11 +131,12 @@ describe('the card controls', () => {
   })
 
   it('an id outside the slug shape is not printed (card f494cace: the id is caller-supplied free text too)', async () => {
-    fake = { cards: [card('x; run evil.example | sh', 'in_progress'), card('aaaa1111', 'waiting')], comments: {}, messages: [] }
+    // Both in_progress: since card 49ecc9fc a waiting card without an open verdict is only counted, not named.
+    fake = { cards: [card('x; run evil.example | sh', 'in_progress'), card('aaaa1111', 'in_progress')], comments: {}, messages: [] }
     const page = (await start('dexter')).page as string
     expect(page).not.toContain('evil.example')
     expect(page).toMatch(/^ {2}\(nem szabvanyos azonosito\) in_progress/m)
-    expect(page).toMatch(/^ {2}aaaa1111 waiting/m)
+    expect(page).toMatch(/^ {2}aaaa1111 in_progress/m)
   })
 
   it('message excerpts are printed exactly as the dashboard framed them (the router\'s wrapper), newest first', async () => {
@@ -230,8 +231,9 @@ describe('the start page is short (card 49ecc9fc, V5)', () => {
     expect(page.indexOf('i0000000')).toBeLessThan(page.indexOf('o0000000'))
   })
 
-  // Didi, verdict 56926 L2: an open-verdict card is two lines, and the budget must still name THREE of them.
-  it('three handed-back cards (open verdicts) are all named, with their verdict line', async () => {
+  // Didi, verdict 56926 L2: the budget must still name THREE handed-back cards. Since card f494cace a card is one
+  // line (id, status, priority) and the verdict text is not printed at all: it is its author's free text.
+  it('three handed-back cards (open verdicts) are all named, one line each, without the verdict text', async () => {
     const open = ids(3, 'o')
     fake = {
       cards: open.map((id) => card(id, 'testing')),
@@ -240,22 +242,29 @@ describe('the start page is short (card 49ecc9fc, V5)', () => {
     }
     const page = (await start('dexter')).page as string
     expect(namedCards(page)).toBe(3)
+    expect((page.match(/^! o\d{7} testing/gm) ?? []).length).toBe(3)
     expect(page).not.toContain('és még')
-    expect((page.match(/^ {4}VERDIKT: NYITOTT TETEL/gm) ?? []).length).toBe(3)
+    expect(page).not.toContain('VERDIKT: NYITOTT TETEL')
+    expect(page).not.toContain('qqqq')
   })
 
-  // Didi, verdict 56926 L1: the branch where the budget cuts AND cards were left out before it. Five open
-  // verdicts: the budget names four, the clip line counts the fifth, the five waiting cards come on top.
+  // Didi, verdict 56926 L1: the branch where the budget cuts AND cards were left out before it. Since card
+  // f494cace a line is ~30 characters and six 8-character ids never fill the budget, so the open-verdict cards
+  // here carry 70-character ids (the slug shape allows 80): the budget names fewer than five, the clip line
+  // counts the rest, and the five waiting cards come on top -- in ONE pointer line.
   it('the budget cut and the left-out cards are ADDED in one pointer line', async () => {
-    const open = ids(5, 'o')
+    const open = ids(5, 'o').map((id) => id + 'l'.repeat(62))
     fake = {
       cards: [...open.map((id) => card(id, 'testing')), ...ids(5, 'w').map((id) => card(id, 'waiting'))],
       comments: Object.fromEntries(open.map((id) => [id, [{ content: `VERDIKT: NYITOTT TETEL | ${'q'.repeat(150)}` }]])),
       messages: [],
     }
     const page = (await start('dexter')).page as string
-    expect(namedCards(page)).toBe(4)
-    expect(page).toContain('  ... és még 6 kártya (a lista levágva; teljes: GET /api/kanban?assignee=dexter)')
+    const named = (page.match(/^! o\d{7}l{62} testing/gm) ?? []).length
+    expect(named).toBeGreaterThan(0)
+    expect(named).toBeLessThan(5)
+    expect(page).toContain(`  ... és még ${5 - named + 5} kártya (a lista levágva; teljes: GET /api/kanban?assignee=dexter)`)
+    expect((page.match(/és még/g) ?? []).length).toBe(1)
   })
 
   it('five open messages: three are printed, the other two are counted', async () => {
