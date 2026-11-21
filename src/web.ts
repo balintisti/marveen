@@ -2,8 +2,8 @@ import http from 'node:http'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { execFileSync } from 'node:child_process'
-import { runLsof } from './lsof.js'
+import { buildProcessLockContext } from './process-lock-context.js'
+import { reclaimPortAfterAddrInUse } from './process-lock.js'
 import { PROJECT_ROOT, WEB_HOST, DASHBOARD_PUBLIC_URL, DASHBOARD_ALLOWED_ORIGINS, MAIN_AGENT_ID, STORE_DIR } from './config.js'
 import { watchEgressAllowlistBaseline, queueAllowlistReport, baselineMemoryFile } from './web/egress-allowlist-baseline.js'
 import { loadOrCreateDashboardToken } from './web/dashboard-auth.js'
@@ -333,48 +333,20 @@ export function startWebServer(port = 3420): http.Server {
       // whatever happens to be on the port (e.g. an unrelated dev server),
       // and under launchd it also race-kills the not-yet-dead predecessor.
       logger.warn({ port }, 'Web port foglalt, probalok felszabaditani...')
+      // Same install-affinity decision as the startup takeover (card 77a48069,
+      // didi 72633): a listener of ANOTHER install is never killed here either;
+      // we exit with a message naming it. LISTEN only, own ancestors spared.
       try {
-        const pidsRaw = (runLsof(['-ti', `:${port}`], 3000) ?? '').trim()
-        const pids = pidsRaw.split('\n').map(s => s.trim()).filter(Boolean).map(Number).filter(n => Number.isFinite(n) && n > 0)
-        const uid = typeof process.getuid === 'function' ? process.getuid() : null
-        const victims: number[] = []
-        for (const pid of pids) {
-          if (pid === process.pid) continue
-          let cmd = ''
-          try {
-            cmd = execFileSync('/bin/ps', ['-p', String(pid), '-o', 'comm='], { timeout: 2000, encoding: 'utf-8' }).trim()
-          } catch { continue }
-          if (uid !== null) {
-            try {
-              const ownerUid = parseInt(execFileSync('/bin/ps', ['-p', String(pid), '-o', 'uid='], { timeout: 2000, encoding: 'utf-8' }).trim(), 10)
-              if (Number.isFinite(ownerUid) && ownerUid !== uid) continue
-            } catch { continue }
-          }
-          if (!/node|tsx/i.test(cmd)) {
-            logger.warn({ port, pid, cmd }, 'Port held by non-node process -- refusing to kill')
-            continue
-          }
-          victims.push(pid)
-        }
-        for (const pid of victims) {
-          try { process.kill(pid, 'SIGTERM') } catch { /* already gone */ }
-        }
-        if (victims.length) {
-          setTimeout(() => {
-            for (const pid of victims) {
-              try {
-                process.kill(pid, 0)
-                try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
-              } catch { /* gone */ }
-            }
+        reclaimPortAfterAddrInUse(port, buildProcessLockContext(), {
+          relisten: () => {
             server.listen(port, WEB_HOST, () => {
               logger.info({ port }, `Web dashboard: re-listen bound after port reclaim`)
             })
-          }, 1500)
-        } else {
-          logger.error({ port }, 'Port foglalt de nem talaltunk felszabadithato node processt -- kilepes')
-          process.exit(1)
-        }
+          },
+          exit: (code) => process.exit(code),
+        }).catch((e: unknown) => {
+          logger.error({ err: e }, 'Port-reclaim failed')
+        })
       } catch (e) {
         logger.error({ err: e }, 'Port-reclaim failed')
       }

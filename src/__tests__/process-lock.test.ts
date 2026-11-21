@@ -1,10 +1,16 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   findOwnNodeHolders,
   findOwnBinaryMatches,
   terminateProcesses,
   acquirePortLock,
   acquirePidfileLock,
+  belongsToInstall,
+  classifyPortHolders,
+  ForeignPortHolderError,
+  reclaimPortAfterAddrInUse,
   writeBufferFully,
   DeferToPeerError,
   type ProcessLockContext,
@@ -15,7 +21,7 @@ import {
 // table directly so we can simulate PIDs dying at specific points, foreign
 // UIDs, non-node commands, etc. without ever touching real processes.
 
-interface MockProc { pid: number; uid: number; cmd: string; args?: string; alive: boolean; cwd?: string | null }
+interface MockProc { pid: number; uid: number; cmd: string; args?: string; alive: boolean; cwd?: string | null; argvUnreadable?: boolean }
 
 interface MockOptions {
   currentPid?: number
@@ -26,6 +32,10 @@ interface MockOptions {
   selfProjectRoot?: string | null
   procs?: MockProc[]
   portHolders?: Record<number, number[]>
+  /** PIDs of the current process's ancestors (its launcher chain). */
+  ancestorPids?: number[]
+  /** Names of this install; defaults to [selfProjectRoot] (or [] when that is null). */
+  installRoots?: string[]
   /** signal-probe override so tests can simulate EPERM etc. */
   signalOverride?: ProcessLockContext['signal']
 }
@@ -65,6 +75,13 @@ function makeCtx(options: MockOptions): {
     currentPid,
     uid,
     selfProjectRoot,
+    ancestorPids: new Set(options.ancestorPids ?? []),
+    installRoots: options.installRoots ?? (selfProjectRoot != null ? [selfProjectRoot] : []),
+    getProcessArgv: (pid: number) => {
+      const p = table.get(pid)
+      if (!p || p.argvUnreadable) return null
+      return p.args ?? p.cmd
+    },
     getProcessCwd: (pid: number) => {
       const p = table.get(pid)
       if (!p) return null
@@ -267,14 +284,33 @@ describe('findOwnBinaryMatches', () => {
       expect(findOwnBinaryMatches(/dist\/index\.js/, ctx)).toEqual([200])
     })
 
-    it('does NOT scope findOwnNodeHolders (byPort) by project root -- a real port conflict is still reclaimed', () => {
-      // byPort matching is intentionally left unscoped: it means "something
-      // is literally sitting on the exact port I need to bind", which is a
-      // genuine conflict regardless of which checkout it came from.
+    // LOCAL DIVERGENCE FROM UPSTREAM (77a48069, decision 2fc37799): upstream
+    // e9fd33bdb pinned the opposite ("a real port conflict is still
+    // reclaimed"). A port holder of another install is no longer ours to kill.
+    it('scopes findOwnNodeHolders (byPort) to this install -- a holder from another checkout is not taken over', () => {
       const procs: MockProc[] = [
         { pid: 200, uid: 501, cmd: 'node', alive: true, cwd: '/some/other/checkout' },
       ]
       const { ctx } = makeCtx({ selfProjectRoot: '/home/user/marveen', procs, portHolders: { 3420: [200] } })
+      expect(findOwnNodeHolders(3420, ctx)).toEqual([])
+      expect(classifyPortHolders(3420, ctx).foreign).toEqual([{ pid: 200, argv: 'node', cwd: '/some/other/checkout' }])
+    })
+
+    it('pair: an old instance of THIS install on the port is still taken over (updates keep working)', () => {
+      const procs: MockProc[] = [
+        { pid: 200, uid: 501, cmd: 'node', args: 'node dist/index.js', alive: true, cwd: '/home/user/marveen' },
+        { pid: 201, uid: 501, cmd: 'node', args: '/usr/bin/node /home/user/marveen/dist/index.js', alive: true, cwd: null },
+      ]
+      const { ctx } = makeCtx({ selfProjectRoot: '/home/user/marveen', procs, portHolders: { 3420: [200, 201] } })
+      expect(findOwnNodeHolders(3420, ctx)).toEqual([200, 201])
+      expect(classifyPortHolders(3420, ctx).foreign).toEqual([])
+    })
+
+    it('byPort stays unscoped when the install roots are unknown (old behaviour)', () => {
+      const procs: MockProc[] = [
+        { pid: 200, uid: 501, cmd: 'node', alive: true, cwd: '/some/other/checkout' },
+      ]
+      const { ctx } = makeCtx({ selfProjectRoot: null, procs, portHolders: { 3420: [200] } })
       expect(findOwnNodeHolders(3420, ctx)).toEqual([200])
     })
 
@@ -287,6 +323,206 @@ describe('findOwnBinaryMatches', () => {
       const { ctx } = makeCtx({ selfProjectRoot: '/home/user/marveen-worktrees/branch-a', procs })
       expect(findOwnBinaryMatches(/dist\/index\.js/, ctx)).toEqual([300])
     })
+  })
+})
+
+// Card 77a48069, measured 2026-11-20 10:58 (mandark's f327-server.log): a
+// dashboard started as `tsx src/index.ts` from a worktree SIGTERMed its own tsx
+// launcher (pid 84718, matchedBy byBinary) and died with exit 143. The launcher's
+// argv matches the binary pattern and lives in the same install, so the
+// install-affinity check cannot tell it from a predecessor. The ancestor set can.
+describe('own ancestors are never victims (77a48069)', () => {
+  const WT = '/Users/isti/mandark-marveen-f327'
+  // The measured process tree: zsh (84713) -> tsx launcher (84718) -> node child (84730, this process).
+  const tree = (): MockProc[] => [
+    { pid: 84713, uid: 501, cmd: '/bin/zsh', args: '-zsh', alive: true, cwd: WT },
+    { pid: 84718, uid: 501, cmd: 'node', args: `node ${WT}/node_modules/.bin/tsx src/index.ts`, alive: true, cwd: WT },
+  ]
+
+  it('findOwnBinaryMatches leaves the tsx launcher alone and says why', () => {
+    const { ctx, logs } = makeCtx({ currentPid: 84730, selfProjectRoot: WT, ancestorPids: [84718, 84713], procs: tree() })
+    expect(findOwnBinaryMatches(/(?:^|[\s/])(?:dist\/index\.js|src\/index\.ts)(?:\s|$)/, ctx)).toEqual([])
+    expect(logs.some((l) => l.level === 'info' && l.obj.pid === 84718 && /ancestor of this process/.test(l.msg))).toBe(true)
+  })
+
+  it('control: the same launcher shape is a victim when it is NOT an ancestor (a real leftover predecessor)', () => {
+    const { ctx } = makeCtx({ currentPid: 84730, selfProjectRoot: WT, ancestorPids: [84713], procs: tree() })
+    expect(findOwnBinaryMatches(/(?:^|[\s/])(?:dist\/index\.js|src\/index\.ts)(?:\s|$)/, ctx)).toEqual([84718])
+  })
+
+  it('acquirePortLock never signals an ancestor, by binary or by port', async () => {
+    const { ctx, signalCalls } = makeCtx({
+      currentPid: 84730,
+      selfProjectRoot: WT,
+      ancestorPids: [84718, 84713],
+      procs: tree(),
+      portHolders: { 4320: [84718] },
+    })
+    await acquirePortLock(4320, ctx, { binaryPattern: /(?:^|[\s/])(?:dist\/index\.js|src\/index\.ts)(?:\s|$)/, graceMs: 0, postKillDrainMs: 0 })
+    expect(signalCalls.filter((c) => c.pid === 84718 || c.pid === 84713)).toEqual([])
+  })
+})
+
+describe('foreign port holder (77a48069, LOCAL DIVERGENCE FROM UPSTREAM)', () => {
+  // Measured 2026-11-20 10:58 (mandark's f327-server.log): a dashboard started
+  // from the worktree /Users/isti/mandark-marveen-f327 bound 3420 (WEB_PORT
+  // comes from <root>/.env, the worktree had none) and killed the live
+  // dashboard, pid 84187, argv below, matchedBy byPort.
+  const LIVE = { pid: 84187, uid: 501, cmd: 'node', args: '/opt/homebrew/opt/node@22/bin/node /Users/isti/marveen/dist/index.js', alive: true, cwd: '/Users/isti/marveen' }
+  const WT = '/Users/isti/mandark-marveen-f327'
+  const PATTERN = /(?:^|[\s/])(?:dist\/index\.js|src\/index\.ts)(?:\s|$)/
+
+  it('refuses to take over the live dashboard of another install, signals nobody, and names holder, root and way out', async () => {
+    const { ctx, signalCalls, table } = makeCtx({ currentPid: 84730, selfProjectRoot: WT, procs: [{ ...LIVE }], portHolders: { 3420: [84187] } })
+    const err = await acquirePortLock(3420, ctx, { binaryPattern: PATTERN, graceMs: 0, postKillDrainMs: 0 }).then(() => null, (e: unknown) => e)
+    expect(err).toBeInstanceOf(ForeignPortHolderError)
+    const msg = (err as Error).message
+    expect(msg).toContain('Port 3420')
+    expect(msg).toContain('pid 84187')
+    expect(msg).toContain('/Users/isti/marveen/dist/index.js')
+    expect(msg).toContain(`not this install (${WT})`)
+    expect(msg).toContain('Not killing it')
+    expect(msg).toContain(`WEB_PORT in ${WT}/.env`)
+    expect(signalCalls).toEqual([])
+    expect(table.get(84187)?.alive).toBe(true)
+  })
+
+  it('refuses before killing even its OWN binary-pattern zombie', async () => {
+    const zombie = { pid: 500, uid: 501, cmd: 'node', args: 'node dist/index.js', alive: true, cwd: WT }
+    const { ctx, signalCalls } = makeCtx({ currentPid: 84730, selfProjectRoot: WT, procs: [{ ...LIVE }, zombie], portHolders: { 3420: [84187] } })
+    await expect(acquirePortLock(3420, ctx, { binaryPattern: PATTERN, graceMs: 0, postKillDrainMs: 0 })).rejects.toBeInstanceOf(ForeignPortHolderError)
+    expect(signalCalls).toEqual([])
+  })
+
+  it('an unattributable holder (relative argv, cwd unknown) is refused, not killed', async () => {
+    const { ctx, signalCalls } = makeCtx({ selfProjectRoot: WT, procs: [{ pid: 300, uid: 501, cmd: 'node', args: 'node dist/index.js', alive: true, cwd: null }], portHolders: { 3420: [300] } })
+    const err = await acquirePortLock(3420, ctx, { graceMs: 0, postKillDrainMs: 0 }).then(() => null, (e: unknown) => e)
+    expect((err as Error).message).toContain('cwd: unknown')
+    expect(signalCalls).toEqual([])
+  })
+
+  it('control: the live install itself, restarting, still takes over its predecessor on the same port', async () => {
+    const { ctx, signalCalls } = makeCtx({ currentPid: 90000, selfProjectRoot: '/Users/isti/marveen', procs: [{ ...LIVE }], portHolders: { 3420: [84187] } })
+    await acquirePortLock(3420, ctx, { binaryPattern: PATTERN, graceMs: 0, postKillDrainMs: 0 })
+    expect(signalCalls).toContainEqual({ pid: 84187, sig: 'SIGTERM' })
+  })
+})
+
+describe('unreadable argv is judged by cwd alone (77a48069, didi D1)', () => {
+  const ROOT = '/home/user/marveen'
+  const holder = (cwd: string | null): MockProc => ({ pid: 200, uid: 501, cmd: 'node', args: 'node dist/index.js', alive: true, cwd, argvUnreadable: true })
+  it('argv unreadable, cwd in this install: still ours (taken over)', () => {
+    const { ctx } = makeCtx({ selfProjectRoot: ROOT, procs: [holder(ROOT)], portHolders: { 3420: [200] } })
+    expect(classifyPortHolders(3420, ctx)).toEqual({ own: [200], foreign: [] })
+  })
+  it('argv unreadable, cwd elsewhere: foreign, with argv reported unknown', () => {
+    const { ctx } = makeCtx({ selfProjectRoot: ROOT, procs: [holder('/elsewhere')], portHolders: { 3420: [200] } })
+    expect(classifyPortHolders(3420, ctx)).toEqual({ own: [], foreign: [{ pid: 200, argv: null, cwd: '/elsewhere' }] })
+  })
+  it('argv AND cwd unreadable: cannot be attributed, foreign (refused, not killed)', () => {
+    const { ctx } = makeCtx({ selfProjectRoot: ROOT, procs: [holder(null)], portHolders: { 3420: [200] } })
+    expect(classifyPortHolders(3420, ctx).foreign.map((h) => h.pid)).toEqual([200])
+  })
+})
+
+describe('EADDRINUSE reclaim uses the same decision (77a48069, didi 72633)', () => {
+  // The race didi named: the worktree passes acquirePortLock while the live
+  // dashboard is down, the live one binds first, the worktree's listen() hits
+  // EADDRINUSE. The reclaim must not kill the live dashboard either.
+  const LIVE = { pid: 84187, uid: 501, cmd: 'node', args: '/opt/homebrew/opt/node@22/bin/node /Users/isti/marveen/dist/index.js', alive: true, cwd: '/Users/isti/marveen' }
+  const WT = '/Users/isti/mandark-marveen-f327'
+  const hooks = () => {
+    const calls = { relisten: 0, exit: [] as number[] }
+    return { calls, h: { relisten: () => { calls.relisten++ }, exit: (c: number) => { calls.exit.push(c) } } }
+  }
+
+  it('a listener of another install: exits 1 with the named message, signals nobody, does not relisten', async () => {
+    const { ctx, signalCalls, logs, table } = makeCtx({ currentPid: 84730, selfProjectRoot: WT, procs: [{ ...LIVE }], portHolders: { 3420: [84187] } })
+    const { calls, h } = hooks()
+    expect(await reclaimPortAfterAddrInUse(3420, ctx, h, { graceMs: 0 })).toBe('exit')
+    expect(calls).toEqual({ relisten: 0, exit: [1] })
+    expect(signalCalls).toEqual([])
+    expect(table.get(84187)?.alive).toBe(true)
+    const line = logs.find((l) => l.level === 'error')
+    expect(line?.msg).toContain('pid 84187')
+    expect(line?.msg).toContain('Not killing it')
+    expect(line?.msg).toContain(`WEB_PORT in ${WT}/.env`)
+  })
+
+  it('a predecessor of this install: SIGTERM, then relisten, no exit', async () => {
+    const { ctx, signalCalls } = makeCtx({ currentPid: 90000, selfProjectRoot: '/Users/isti/marveen', procs: [{ ...LIVE }], portHolders: { 3420: [84187] } })
+    const { calls, h } = hooks()
+    expect(await reclaimPortAfterAddrInUse(3420, ctx, h, { graceMs: 0 })).toBe('relisten')
+    expect(signalCalls).toContainEqual({ pid: 84187, sig: 'SIGTERM' })
+    expect(calls).toEqual({ relisten: 1, exit: [] })
+  })
+
+  it('a SIGTERM-resistant predecessor is SIGKILLed before relisten', async () => {
+    const { ctx, signalCalls } = makeCtx({
+      currentPid: 90000, selfProjectRoot: '/Users/isti/marveen', procs: [{ ...LIVE }], portHolders: { 3420: [84187] },
+      signalOverride: (_pid, sig) => (sig === 'SIGKILL' ? 'sent' : 'sent'),
+    })
+    const { calls, h } = hooks()
+    await reclaimPortAfterAddrInUse(3420, ctx, h, { graceMs: 0 })
+    expect(signalCalls.map((c) => c.sig)).toEqual(['SIGTERM', '0', 'SIGKILL'])
+    expect(calls.relisten).toBe(1)
+  })
+
+  it('nothing reclaimable (non-node holder, or our own launcher): exit 1, nobody signalled', async () => {
+    const { ctx, signalCalls } = makeCtx({
+      currentPid: 90000, selfProjectRoot: '/Users/isti/marveen', ancestorPids: [300],
+      procs: [{ pid: 200, uid: 501, cmd: 'nginx', alive: true }, { pid: 300, uid: 501, cmd: 'node', args: 'node /Users/isti/marveen/node_modules/.bin/tsx src/index.ts', alive: true }],
+      portHolders: { 3420: [200, 300] },
+    })
+    const { calls, h } = hooks()
+    expect(await reclaimPortAfterAddrInUse(3420, ctx, h, { graceMs: 0 })).toBe('exit')
+    expect(calls).toEqual({ relisten: 0, exit: [1] })
+    expect(signalCalls).toEqual([])
+  })
+
+  it('web.ts has no kill loop of its own: its EADDRINUSE branch delegates to reclaimPortAfterAddrInUse', () => {
+    // A second, hand-rolled kill path in web.ts is exactly the defect didi found.
+    const web = readFileSync(join(__dirname, '..', 'web.ts'), 'utf-8')
+    expect(web).not.toMatch(/process\.kill\(|['"]SIG(?:TERM|KILL)['"]/)
+    const branch = web.slice(web.indexOf("err.code === 'EADDRINUSE'"))
+    expect(web.indexOf("err.code === 'EADDRINUSE'")).toBeGreaterThan(-1)
+    expect(branch.slice(0, 2500)).toContain('reclaimPortAfterAddrInUse(port, buildProcessLockContext()')
+  })
+
+  it('web.ts really exits when the reclaim refuses: its exit hook passes the code to process.exit', () => {
+    // didi 72649 E2: with `exit: () => {}` a refused reclaim (foreign listener)
+    // left the live process running without its web port, and launchd would
+    // never restart it. The delegation pin above does not see that, so the
+    // hook itself is pinned here, scoped to the reclaim call.
+    const web = readFileSync(join(__dirname, '..', 'web.ts'), 'utf-8')
+    const start = web.indexOf('reclaimPortAfterAddrInUse(port, buildProcessLockContext()')
+    expect(start).toBeGreaterThan(-1)
+    const call = web.slice(start, start + 1500)
+    expect(call).toMatch(/\bexit:\s*\((\w+)\)\s*=>\s*process\.exit\(\1\)/)
+  })
+})
+
+describe('belongsToInstall', () => {
+  const roots = ['/home/u/marveen', '/real/marveen']
+  it('matches an absolute argv under any root name, boundary-suffixed', () => {
+    expect(belongsToInstall('node /home/u/marveen/dist/index.js', () => null, roots)).toBe(true)
+    expect(belongsToInstall('node /real/marveen/dist/index.js', () => null, roots)).toBe(true)
+    expect(belongsToInstall('node /home/u/marveen2/dist/index.js', () => null, roots)).toBe(false)
+  })
+  it('matches a relative argv by cwd equal to or under a root', () => {
+    expect(belongsToInstall('node dist/index.js', () => '/real/marveen', roots)).toBe(true)
+    expect(belongsToInstall('node dist/index.js', () => '/home/u/marveen/sub', roots)).toBe(true)
+    expect(belongsToInstall('node dist/index.js', () => '/home/u/marveen2', roots)).toBe(false)
+    expect(belongsToInstall('node dist/index.js', () => null, roots)).toBe(false)
+  })
+  it('does not read the cwd when the argv already decides', () => {
+    let calls = 0
+    belongsToInstall('node /home/u/marveen/dist/index.js', () => { calls++; return null }, roots)
+    expect(calls).toBe(0)
+  })
+  it('ignores a degenerate root ("/" or empty) instead of matching everything', () => {
+    expect(belongsToInstall('node /x/dist/index.js', () => '/x', ['/', ''])).toBe(false)
+    expect(belongsToInstall('node dist/index.js', () => '/', ['/'])).toBe(false)
   })
 })
 
