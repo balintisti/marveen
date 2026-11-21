@@ -84,9 +84,9 @@ def section_done_vs_live(root=DEFAULT_ROOT, now=None, max_age_h=26):
     if since is not None:
         started = datetime.fromtimestamp(since).strftime("%m-%d %H:%M")
         if now - since > 2 * 3600:
-            return [f"{head}: NEM MÉRHETŐ -- a {started}-kor indult mérés nem fejeződött be és nem írt "
-                    f"eredményt (elhalt); az utolsó befejezett mérés {when}-es."]
-        out[0] = out[0][:-1] + f" -- EZ A KORÁBBI EREDMÉNY, a {started}-kor indult mérés MÉG FUT):"
+            return [f"{head}: NEM MÉRHETŐ, a {started}-kor indult mérés nem fejeződött be és nem írt "
+                    f"eredményt (elhalt); az utolsó befejezett mérés ideje: {when}."]
+        out[0] = out[0][:-1] + f", EZ A KORÁBBI EREDMÉNY, a {started}-kor indult mérés MÉG FUT):"
     fetch = str(d.get("fetch") or "")
     if fetch.startswith("FAILED"):
         # didi, e572a1c2: a failed fetch measures yesterday's refs and looks clean. Say it.

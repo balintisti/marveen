@@ -377,23 +377,23 @@ class Section(unittest.TestCase):
         self.assertIn('NEM MÉRHETŐ', out[0]); self.assertIn('30 órás', out[0])
 
     def test_the_date_is_printed(self):
-        # b6284542: a bare "merve 06:45" read as today's while it was yesterday's.
+        # b6284542: a bare "mérve 06:45" read as today's while it was yesterday's.
         m = datetime.now().astimezone() - timedelta(hours=24)
         self.put(measured_at=m.isoformat())
-        self.assertIn('merve ' + m.strftime('%m-%d %H:%M') + ',', ns.section_done_vs_live(self.root)[0])
+        self.assertIn('mérve ' + m.strftime('%m-%d %H:%M') + ',', ns.section_done_vs_live(self.root)[0])
 
     def test_a_run_under_way_marks_the_numbers_as_older(self):
         start = datetime.now().astimezone() - timedelta(minutes=15)
         self.put(measured_at=(start - timedelta(hours=24)).isoformat(), running_since=start.isoformat())
         out = ns.section_done_vs_live(self.root)
-        self.assertIn(f"EZ A KORABBI EREDMENY, a {start.strftime('%m-%d %H:%M')}-kor indult meres MEG FUT", out[0])
-        self.assertIn('0 kartya', '\n'.join(out))          # the older numbers are still shown
+        self.assertIn(f"EZ A KORÁBBI EREDMÉNY, a {start.strftime('%m-%d %H:%M')}-kor indult mérés MÉG FUT", out[0])
+        self.assertIn('0 kártya', '\n'.join(out))          # the older numbers are still shown
 
     def test_a_marker_older_than_any_run_means_the_run_died(self):
         self.put(running_since=(datetime.now().astimezone() - timedelta(hours=3)).isoformat())
         out = ns.section_done_vs_live(self.root)
         self.assertEqual(len(out), 1)
-        self.assertIn('NEM MERHETO', out[0]); self.assertIn('elhalt', out[0])
+        self.assertIn('NEM MÉRHETŐ', out[0]); self.assertIn('elhalt', out[0])
 
     def test_meter_error_is_said(self):
         self.put(error='gcloud delta-crm-backend: rc=1')
