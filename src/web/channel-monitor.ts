@@ -59,7 +59,6 @@ import {
   parkedInputText, shouldClearTruncatedPreamble,
   parkedInputRowCount, submitLanded, decideStuckInputAction,
   parkedScheduledTaskInput, parkedMachineOriginInput, parkedMainInputHasRemedy, liveTurnFooterVisible,
-  idleConsideringDimGhost,
   type StuckInputState, type StuckInputThresholds, type StuckInputAction,
   type StuckInputActionFacts,
 } from '../pane-state.js'
@@ -486,6 +485,9 @@ export function createStuckLadder(): StuckLadder {
 // here this function is its only production caller):
 // its prompt reads idle with an empty box, but the session is held at the
 // plan limit, so a cap alert closed there would read as a recovered channel.
+// Two callers, one rule (as upstream): the stuck-input ladder's evidence and the
+// give-up stage's /reload-plugins (sendGaveUpReloadIfIdle), which therefore
+// types nothing into a wall pane either.
 export function mainInputBoxProvenEmpty(plain: string | null, dimStripped: string | null): boolean {
   return plain != null && idleConsideringDimGhost(plain, dimStripped) && detectQuotaWall(plain) == null
 }
@@ -2444,14 +2446,6 @@ export function formatPermissionPromptCancelledNotice(
 
 export function sendAlert(text: string, meta?: AlertMeta): void {
   notifyChannel(text, meta).catch(() => {})
-}
-
-// The main input box is PROVABLY empty: the readiness rule over the plain capture
-// and the dim-stripped parked view (a dim placeholder in an empty box is not
-// text); an unreadable pane is not empty. Upstream also refuses a quota wall
-// here (detectQuotaWall), which this tree does not have. Exported for testability.
-export function mainInputBoxProvenEmpty(plain: string | null, dimStripped: string | null): boolean {
-  return plain != null && idleConsideringDimGhost(plain, dimStripped)
 }
 
 // GAVEUPRELOAD1033 (upstream 058ad0901e, card 09861207): the give-up stage's last

@@ -114,6 +114,14 @@ describe('the give-up stage reload (GAVEUPRELOAD1033)', () => {
     expect(send).not.toHaveBeenCalled()
   })
 
+  it('a plan usage-limit wall reads idle but is not proven empty: nothing typed (card 85ddce83)', () => {
+    const wall = readFileSync(join(__dirname, 'fixtures/pane/quota-wall-usage-limit.txt'), 'utf8')
+    expect(mainInputBoxProvenEmpty(wall, null)).toBe(false)
+    const send = vi.fn()
+    expect(sendGaveUpReloadIfIdle({ plain: () => wall, parked: () => pane('❯ ') }, send)).toBe('not-idle')
+    expect(send).not.toHaveBeenCalled()
+  })
+
   it('wiring: the give-up stage runs it inside the send lane', () => {
     expect(src('channel-monitor.ts')).toContain("withSessionSendLock(MAIN_CHANNELS_SESSION, null, 'recover', async () => sendGaveUpReloadIfIdle())")
   })
