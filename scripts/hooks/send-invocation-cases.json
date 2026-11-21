@@ -2125,6 +2125,286 @@
       "name": "[5768a25d C9] NAMED COST: an inbound read that also names a variable emails is denied (one more emails word)",
       "cmd": "python3 - <<'E'\nimport requests\nemails = requests.get('https://api.resend.com/emails/receiving').json()\nE",
       "expected": true
+    },
+    {
+      "name": "[aee98b5d S1] perl Net::SMTP -e is a send",
+      "cmd": "perl -MNet::SMTP -e 'Net::SMTP->new(\"smtp.x\")->mail(\"a\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d S2] perl system curl resend is a send",
+      "cmd": "perl -e 'system(\"curl\", \"https://api.resend.com/emails\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d S3] ruby Net::HTTP resend is a send",
+      "cmd": "ruby -e 'require \"net/http\"; Net::HTTP.post(URI(\"https://api.resend.com/emails\"), \"{}\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d S4] perl LWP resend is a send",
+      "cmd": "perl -MLWP::UserAgent -e 'LWP::UserAgent->new->post(\"https://api.resend.com/emails\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d S5] perl -le cluster is a send",
+      "cmd": "perl -le 'system(\"sendmail\", \"a@b.c\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d S6] perl -E is a send",
+      "cmd": "perl -E 'say 1; system \"sendmail a@b.c\"'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d S7] perl pipe open sendmail is a send",
+      "cmd": "perl -e 'open(M, \"|/usr/sbin/sendmail -t\"); print M \"To: a\\n\"; close M'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d S8] perl glued -e is a send",
+      "cmd": "perl '-esystem(\"sendmail\", \"x\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d S9] ruby Net::SMTP is a send",
+      "cmd": "ruby -rnet/smtp -e 'Net::SMTP.start(\"smtp.x\") { |s| s.send_message(\"m\", \"a\", \"b\") }'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d S10] ruby mail gem is a send",
+      "cmd": "ruby -rmail -e 'Mail.deliver { to \"a@b.c\" }'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d S11] perl heredoc is a send",
+      "cmd": "perl - <<'E'\nuse Net::SMTP;\nNet::SMTP->new(\"smtp.x\")->mail(\"a\");\nE",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d S12] ruby heredoc resend is a send",
+      "cmd": "ruby <<'E'\nrequire 'net/http'\nNet::HTTP.post(URI('https://api.resend.com/emails'), '{}')\nE",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d S13] versioned perl5.34 is a send",
+      "cmd": "perl5.34 -e 'system(\"sendmail\", \"x\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d S14] perl qx sendmail is a send",
+      "cmd": "perl -e 'qx(sendmail a@b.c < m.txt)'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d S15] written then run perl is a send",
+      "cmd": "cat > /tmp/m.pl <<'E'\nuse Net::SMTP;\nNet::SMTP->new(\"h\");\nE\nperl /tmp/m.pl",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d S16] perl Email::Sender is a send",
+      "cmd": "perl -MEmail::Sender::Simple=sendmail -e 'sendmail($e)'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d N1] perl text substitution is not a send",
+      "cmd": "perl -pi -e 's/foo/bar/g' src/a.ts",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d N2] perl -ne print is not a send",
+      "cmd": "perl -ne 'print if /emails/' log.txt",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d N3] ruby json read is not a send",
+      "cmd": "ruby -rjson -e 'puts JSON.parse(File.read(\"a.json\")).keys'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d N4] perl -M module only is not a send",
+      "cmd": "perl -MTime::HiRes -e 'print Time::HiRes::time()'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d N5] perl version is not a send",
+      "cmd": "perl -v",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d N6] ruby script file is not a send",
+      "cmd": "ruby scripts/report.rb",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d N7] perl replaces word sendmail in a file is not a send",
+      "cmd": "perl -pi -e 's/sendmail/msmtp/' notes.md",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d N8] grep for perl is not a send",
+      "cmd": "grep -rn perl scripts/",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d N9] perl system ls is not a send",
+      "cmd": "perl -e 'system(\"ls\")'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d didi P1] perl cluster+glued -le'code' is a send",
+      "cmd": "perl -le'system(\"sendmail\", \"a@b.c\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P2] ruby cluster+glued -we'code' Net::SMTP is a send",
+      "cmd": "ruby -we'Net::SMTP.start(\"smtp.x\") { |s| s.send_message(\"m\",\"a\",\"b\") }'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P3] ruby backticks sendmail is a send",
+      "cmd": "ruby -e '`sendmail -t < /tmp/m.txt`'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P4] perl backticks sendmail is a send",
+      "cmd": "perl -e '`/usr/sbin/sendmail -t < m.txt`'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P5] ruby %x sendmail is a send",
+      "cmd": "ruby -e '%x(sendmail -t < m.txt)'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P6] ruby Mail.new(...).deliver is a send",
+      "cmd": "ruby -rmail -e 'Mail.new(from: \"a@b.c\", to: \"d@e.f\", subject: \"s\", body: \"b\").deliver'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P7] ruby m = Mail.new ...; m.deliver! is a send",
+      "cmd": "ruby -rmail -e 'm = Mail.new do to \"d@e.f\" end; m.deliver!'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P8] perl Net::SMTPS is a send",
+      "cmd": "perl -MNet::SMTPS -e '$s=Net::SMTPS->new(\"smtp.gmail.com\", doSSL=>\"starttls\"); $s->mail(\"a\"); $s->to(\"b\"); $s->data; $s->datasend(\"x\"); $s->dataend'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P9] ruby Pony.mail is a send",
+      "cmd": "ruby -rpony -e 'Pony.mail(to: \"d@e.f\", subject: \"hi\", body: \"x\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P10] perl Email::Stuffer ->send is a send",
+      "cmd": "perl -MEmail::Stuffer -e 'Email::Stuffer->to(\"d@e.f\")->from(\"a@b.c\")->text_body(\"x\")->send'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P11] ruby Open3.capture2 sendmail is a send",
+      "cmd": "ruby -ropen3 -e 'Open3.capture2(\"sendmail\", \"-t\", stdin_data: \"To: d@e.f\\n\\nx\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P12] env perl -e system sendmail is a send",
+      "cmd": "env perl -e 'system(\"sendmail\",\"x\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P13] /usr/bin/perl -e system sendmail is a send",
+      "cmd": "/usr/bin/perl -e 'system(\"sendmail\",\"x\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P16] perl -e then -e split mailer is a send",
+      "cmd": "perl -e 'use Net::SMTP;' -e 'Net::SMTP->new(\"h\")->mail(\"a\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi P17] ruby2.7 versioned is a send",
+      "cmd": "ruby2.7 -e 'system(\"sendmail\",\"x\")'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi N2] ruby system uname is not a send",
+      "cmd": "ruby -e 'system(\"uname -a\")'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d didi N3] perl open read || die is not a send",
+      "cmd": "perl -e 'open(my $f, \"<\", \"x.txt\") || die; print <$f>'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d didi N4] python3 -c platform.system + sendmail word is not a send",
+      "cmd": "python3 -c 'import platform; print(platform.system(), \"sendmail\" in open(\"/etc/services\").read())'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d didi N7] node -e system word + msmtp is not a send",
+      "cmd": "node -e 'console.log(process.platform, \"system\", \"msmtp\")'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d didi N8] perl open with || in arg is not a send",
+      "cmd": "perl -e 'open(F, \"a||b\"); print \"sendmail\"'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d 57019 R1] perl open my $fh, '|-', sendmail (no parens) is a send",
+      "cmd": "perl -e 'open my $fh, \"|-\", \"/usr/sbin/sendmail\", \"-t\" or die; print $fh \"To: a\\@b\\n\\nx\"; close $fh'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d 57019 R2] perl open MAIL, '|sendmail -t' (no parens) is a send",
+      "cmd": "perl -e 'open MAIL, \"|/usr/sbin/sendmail -t\"; print MAIL \"To: a\\@b\\n\\nx\"; close MAIL'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d 57019 R3] ruby open '|sendmail' (no parens) is a send",
+      "cmd": "ruby -e 'open \"|sendmail -t\", \"w\" do |f| f.puts \"x\" end'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d 57019 R4] ruby spawn without parens is a send",
+      "cmd": "ruby -e 'spawn \"sendmail -t < m.txt\"'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d 57019 N1] perl open a file for reading, no mailer is not a send",
+      "cmd": "perl -e 'open my $fh, \"<\", \"log.txt\" or die; print while <$fh>'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d 57019 N2] perl open no parens, pipe FROM ls (no mailer) is not a send",
+      "cmd": "perl -e 'open my $fh, \"-|\", \"ls\"; print <$fh>'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d 57019 N3] ruby spawn without a mailer is not a send",
+      "cmd": "ruby -e 'spawn \"ls -la\"'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d 57019 N4] python spawn word + mailer name stays python's rule is not a send",
+      "cmd": "python3 -c 'print(\"spawn\", \"sendmail\")'",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d 57019 N5] perl read a sendmail log (no spawn, no open pipe) is not a send",
+      "cmd": "perl -ne 'print if /sendmail/' /var/log/mail.log",
+      "expected": false
+    },
+    {
+      "name": "[aee98b5d didi Q16] perl modern open my $fh, '|-', sendmail (no parens) is a send",
+      "cmd": "perl -e 'open my $fh, \"|-\", \"/usr/sbin/sendmail\", \"-t\" or die; print $fh \"To: a\\@b\\n\\nx\"; close $fh'",
+      "expected": true
+    },
+    {
+      "name": "[aee98b5d didi Q17] perl open(my $fh, '|-', 'sendmail') single quotes in heredoc is a send",
+      "cmd": "perl <<'E'\nopen(my $fh, '|-', '/usr/sbin/sendmail', '-t') or die;\nprint $fh \"To: a\\@b\\n\\nx\";\nE",
+      "expected": true
     }
   ]
 }
