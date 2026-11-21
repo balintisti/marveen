@@ -51,30 +51,30 @@ def section_done_vs_live(root=DEFAULT_ROOT, now=None, max_age_h=26):
     napi valtozasa maga a hir (a 173-as eset epp attol nott meg, hogy senki nem latta)."""
     path = os.path.join(root, "store", "done-vs-live.json")
     now = time.time() if now is None else now
-    head = "KESZ, DE NINCS ELESBEN"
+    head = "KÉSZ, DE NINCS ÉLESBEN"
     if not os.path.exists(path):
-        return [f"{head}: NEM MERHETO -- nincs {path} (a done-vs-live meres meg nem futott le)."]
+        return [f"{head}: NEM MÉRHETŐ, nincs {path} (a done-vs-live mérés még nem futott le)."]
     try:
         with open(path, encoding="utf-8") as f:
             d = json.load(f)
         measured = datetime.fromisoformat(d["measured_at"]).timestamp()
     except Exception as e:
-        return [f"{head}: NEM MERHETO -- az eredmeny-fajl olvashatatlan ({type(e).__name__})."]
+        return [f"{head}: NEM MÉRHETŐ, az eredmény-fájl olvashatatlan ({type(e).__name__})."]
     age_h = (now - measured) / 3600
     if age_h > max_age_h:
-        return [f"{head}: NEM MERHETO -- az utolso meres {age_h:.0f} oras (a hatar {max_age_h}); "
-                "a `com.marveen.done-vs-live` egyseg nem futott le."]
+        return [f"{head}: NEM MÉRHETŐ, az utolsó mérés {age_h:.0f} órás (a határ {max_age_h}); "
+                "a `com.marveen.done-vs-live` egység nem futott le."]
     if d.get("error"):
-        return [f"{head}: NEM MERHETO -- a mero jelentette: {str(d['error'])[:160]}"]
+        return [f"{head}: NEM MÉRHETŐ, a mérő jelentette: {str(d['error'])[:160]}"]
     cards = d.get("cards") or []
     open_ = [c for c in cards if not c.get("acked")]
     def pick(status, verdict):
         return [c for c in open_ if c.get("status") == status and c.get("verdict") == verdict]
     nl_done, lm_done = pick("done", "NOT-LIVE"), pick("done", "LINES-MISSING")
     nl_test = pick("testing", "NOT-LIVE") + pick("testing", "LINES-MISSING")
-    # The DATE is printed: a bare "merve 06:45" read as today's while it was yesterday's (b6284542).
+    # The DATE is printed: a bare "mérve 06:45" read as today's while it was yesterday's (b6284542).
     when = datetime.fromtimestamp(measured).strftime("%m-%d %H:%M")
-    out = [f"{head} (merve {when}, elo kep {str(d.get('target'))[:12]}):"]
+    out = [f"{head} (mérve {when}, éles kép {str(d.get('target'))[:12]}):"]
     # done-vs-live.py marks the previous result while a newer run works (mark_running). Under way:
     # these are the older numbers, said so. Older than any run can last: the run died unwritten.
     try:
@@ -84,34 +84,34 @@ def section_done_vs_live(root=DEFAULT_ROOT, now=None, max_age_h=26):
     if since is not None:
         started = datetime.fromtimestamp(since).strftime("%m-%d %H:%M")
         if now - since > 2 * 3600:
-            return [f"{head}: NEM MERHETO -- a {started}-kor indult meres nem fejezodott be es nem irt "
-                    f"eredmenyt (elhalt); az utolso befejezett meres {when}-es."]
-        out[0] = out[0][:-1] + f" -- EZ A KORABBI EREDMENY, a {started}-kor indult meres MEG FUT):"
+            return [f"{head}: NEM MÉRHETŐ, a {started}-kor indult mérés nem fejeződött be és nem írt "
+                    f"eredményt (elhalt); az utolsó befejezett mérés ideje: {when}."]
+        out[0] = out[0][:-1] + f", EZ A KORÁBBI EREDMÉNY, a {started}-kor indult mérés MÉG FUT):"
     fetch = str(d.get("fetch") or "")
     if fetch.startswith("FAILED"):
         # didi, e572a1c2: a failed fetch measures yesterday's refs and looks clean. Say it.
-        out[0] = out[0][:-1] + " -- a git fetch NEM SIKERULT, a meres regi refeken ment):"
+        out[0] = out[0][:-1] + "; a git fetch NEM SIKERÜLT, a mérés régi refeken ment:"
     if nl_done:
         hi = sum(1 for c in nl_done if c.get("priority") in ("urgent", "high"))
         part = sum(1 for c in nl_done if c.get("partly_shipped"))
         old = min(nl_done, key=lambda c: c.get("status_at") or now)
         old_when = datetime.fromtimestamp(old["status_at"]).strftime("%Y-%m-%d") if old.get("status_at") else "?"
-        out.append(f"  - done, de a munkaja nincs elesben: {len(nl_done)} kartya (ebbol urgent/high {hi}, "
-                   f"reszben szallitva {part}); legregebbi: {old['id']} ({old_when}) {old.get('title', '')[:60]}")
+        out.append(f"  - done, de a munkája nincs élesben: {len(nl_done)} kártya (ebből urgent/high {hi}, "
+                   f"részben szállítva {part}); legrégebbi: {old['id']} ({old_when}) {old.get('title', '')[:60]}")
     else:
-        out.append("  - done, de a munkaja nincs elesben: 0 kartya")
+        out.append("  - done, de a munkája nincs élesben: 0 kártya")
     if lm_done:
-        out.append(f"  - done, de a tartalma kesobb kikerult (revert vagy elveszett feloldas): {len(lm_done)} kartya: "
+        out.append(f"  - done, de a tartalma később kikerült (revert vagy elveszett feloldás): {len(lm_done)} kártya: "
                    + ", ".join(c["id"] for c in lm_done[:5]))
     if nl_test:
-        out.append(f"  - testing, nincs elesben: {len(nl_test)} kartya")
+        out.append(f"  - testing, nincs élesben: {len(nl_test)} kártya")
     nb = sum(1 for c in open_ if c.get("verdict") == "NO-BRANCH" and c.get("status") == "done")
     acked = sum(1 for c in cards if c.get("acked"))
     # marveen 23920: what this method cannot see is said as its own number, never folded into zero.
     pl = d.get("projectless_without_ref")
-    out.append(f"  - NEM MERHETO: {nb} done kartya ag nelkul, es "
-               + (f"{pl}" if pl is not None else "?") + " projekt nelkuli done/testing kartya ag nelkul; "
-               f"nyugtazva: {acked}")
+    out.append(f"  - NEM MÉRHETŐ: {nb} done kártya ág nélkül, és "
+               + (f"{pl}" if pl is not None else "?") + " projekt nélküli done/testing kártya ág nélkül; "
+               f"nyugtázva: {acked}")
     return out
 
 
@@ -128,15 +128,15 @@ def section_idle_digest(root=DEFAULT_ROOT, now=None, hours=24):
     meg nem fut), es a ketto kivulrol azonos -- ezert a sor ezt KIMONDJA, nem nullat ir."""
     path = os.path.join(root, "store", "idle-digest.jsonl")
     now = time.time() if now is None else now
-    head = "TETLEN, NINCS KIOSZTVA"
+    head = "TÉTLEN, NINCS KIOSZTVA"
     if not os.path.exists(path):
-        return [f"{head}: NINCS NAPLO ({path}) -- vagy nem volt ilyen eset, vagy a tetlen-or uj builde meg "
-                "nem fut; a ketto innen nem kulonboztetheto meg."]
+        return [f"{head}: NINCS NAPLÓ ({path}); vagy nem volt ilyen eset, vagy a tétlen-őr új builde még "
+                "nem fut, a kettő innen nem különböztethető meg."]
     try:
         with open(path, encoding="utf-8") as f:
             raw = f.read().splitlines()
     except Exception as e:
-        return [f"{head}: NEM MERHETO -- a naplo olvashatatlan ({type(e).__name__})."]
+        return [f"{head}: NEM MÉRHETŐ, a napló olvashatatlan ({type(e).__name__})."]
     entries, bad = [], 0
     for line in raw:
         if not line.strip():
@@ -147,23 +147,23 @@ def section_idle_digest(root=DEFAULT_ROOT, now=None, hours=24):
             # Masodperc-alaku ts (1e11 alatt: 1973 ezredmasodpercben) serult sor, NEM "regi": egy
             # egysegtevesztes ugyanis nulla jelzest mutatna, ami bajt-azonos a nyugodt nappal.
             if ts < 1e11:
-                raise ValueError("ts nem ezredmasodperc")
+                raise ValueError("ts nem ezredmásodperc")
             entries.append((ts / 1000.0, str(d["agent"]), int(d["minutes"])))
         except Exception:
             bad += 1
     recent = [e for e in entries if now - e[0] <= hours * 3600]
-    tail = f"; {bad} serult sor kihagyva" if bad else ""
+    tail = f"; {bad} sérült sor kihagyva" if bad else ""
     if not recent:
-        return [f"{head}: 0 jelzes az elmult {hours} oraban ({len(entries)} sor a naploban osszesen){tail}."]
+        return [f"{head}: 0 jelzés az elmúlt {hours} órában ({len(entries)} sor a naplóban összesen){tail}."]
     per = collections.defaultdict(list)
     for ts, agent, minutes in recent:
         per[agent].append((ts, minutes))
-    out = [f"{head} (elmult {hours} ora, {len(recent)} jelzes, {len(per)} ugynok; a tetlen-or ezeket mar nem "
-           f"kuldi uzenetkent){tail}:"]
+    out = [f"{head} (elmúlt {hours} óra, {len(recent)} jelzés, {len(per)} ügynök; a tétlen-őr ezeket már nem "
+           f"küldi üzenetként){tail}:"]
     for agent, xs in sorted(per.items(), key=lambda kv: -len(kv[1])):
         last = max(xs)
         when = datetime.fromtimestamp(last[0]).strftime("%H:%M")
-        out.append(f"  - {agent}: {len(xs)}x, legutobb {when} ({last[1]} perce tetlen, nincs kartyaja)")
+        out.append(f"  - {agent}: {len(xs)}x, legutóbb {when} ({last[1]} perce tétlen, nincs kártyája)")
     return out
 
 
@@ -200,12 +200,12 @@ def _assert_units(con):
             continue
         seen = "ms" if mx > 1e11 else "s"
         if seen != unit:
-            raise RuntimeError(f"{tbl}.{col} egysege {seen}, a szkript {unit}-et var")
+            raise RuntimeError(f"{tbl}.{col} egysége {seen}, a szkript {unit}-et vár")
         age = now - (mx / 1000 if seen == "ms" else mx)
         if age < -FUTURE_TOLERANCE_S:
-            raise RuntimeError(f"{tbl}.{col} legfrissebb erteke {-age:.0f} mp-cel a JOVOBEN van -- gyanus")
+            raise RuntimeError(f"{tbl}.{col} legfrissebb értéke {-age:.0f} mp-cel a JÖVŐBEN van, gyanús")
         if age > 30 * 86400:
-            raise RuntimeError(f"{tbl}.{col} legfrissebb erteke {age/86400:.0f} napos -- gyanus")
+            raise RuntimeError(f"{tbl}.{col} legfrissebb értéke {age/86400:.0f} napos, gyanús")
 
 
 def section_isti(con):
@@ -221,14 +221,14 @@ def section_isti(con):
         f"where {LIVE} and status='waiting' and {ISTI} order by updated_at"
     ).fetchall()
     if not rows:
-        return ["MI VAR RAD: semmi. Nincs olyan kartya, ami a te valaszodra var."]
+        return ["MI VÁR RÁD: semmi. Nincs olyan kártya, ami a te válaszodra vár."]
     now = time.time()
     oldest = (now - rows[0][2]) / 86400
-    out = [f"MI VAR RAD: {len(rows)} kartya var a dontesedre, a legregebbi {oldest:.0f} napja."]
+    out = [f"MI VÁR RÁD: {len(rows)} kártya vár a döntésedre, a legrégebbi {oldest:.0f} napja."]
     for _id, title, upd in rows[:3]:
         out.append(f"  - {(now - upd)/86400:>3.0f} nap: {str(title)[:88]}")
     if len(rows) > 3:
-        out.append(f"  - (es meg {len(rows)-3})")
+        out.append(f"  - (és még {len(rows)-3})")
     return out
 
 
@@ -251,11 +251,11 @@ def section_delta(con, snapshot_path, write):
             prev = json.load(open(snapshot_path, encoding="utf-8"))
         except Exception as e:
             prev = None
-            note = f"(az elozo pillanatfelvetel olvashatatlan: {e})"
+            note = f"(az előző pillanatfelvétel olvashatatlan: {e})"
     out = []
     if prev is None or "counts" not in prev:
-        out.append("VALTOZAS: ez az ELSO meres -- nincs mihez hasonlitani, holnaptol lesz delta.")
-        out.append("  (Egy hianyzo alapvonal es egy nyugodt nap ugyanugy nezne ki; ezert all itt ez a sor.)")
+        out.append("VÁLTOZÁS: ez az ELSŐ mérés, nincs mihez hasonlítani, holnaptól lesz delta.")
+        out.append("  (Egy hiányzó alapvonal és egy nyugodt nap ugyanúgy nézne ki; ezért áll itt ez a sor.)")
     else:
         p, when = prev["counts"], prev.get("taken_at_human", "?")
         parts = []
@@ -264,11 +264,11 @@ def section_delta(con, snapshot_path, write):
             if d:
                 parts.append(f"{s} {d:+d}")
         da = today["_archived"] - p.get("_archived", 0)
-        line = ", ".join(parts) if parts else "nulla valtozas egyik oszlopban sem"
-        out.append(f"VALTOZAS {when} ota: {line}.")
+        line = ", ".join(parts) if parts else "nulla változás egyik oszlopban sem"
+        out.append(f"VÁLTOZÁS {when} óta: {line}.")
         if da:
-            out.append(f"  archivalva: {da:+d} (ez NEM lezaras, csak eltunt a nezetbol)")
-        out.append("  (Motivacios sor, nem teljesitmeny-mutato: egy nagy es egy kicsi kartya egyet szamit.)")
+            out.append(f"  archiválva: {da:+d} (ez NEM lezárás, csak eltűnt a nézetből)")
+        out.append("  (Motivációs sor, nem teljesítmény-mutató: egy nagy és egy kicsi kártya egyet számít.)")
     if write:
         tmp = snapshot_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -293,13 +293,13 @@ def drift_lines(cur, prev, now):
     out = []
     if entered or left:
         for k in sorted(entered):
-            out.append(f"  - UJ sablon-elcsuszas: {k} ({cur[k]['direction']})")
+            out.append(f"  - ÚJ sablon-elcsúszás: {k} ({cur[k]['direction']})")
         for k in sorted(left):
-            out.append(f"  - MEGSZUNT sablon-elcsuszas: {k}")
+            out.append(f"  - MEGSZŰNT sablon-elcsúszás: {k}")
     elif cur:
         oldest = min(first_seen.values())
-        out.append(f"  - sablon-elcsuszas: {len(cur)} fajl, valtozatlan; a legregebbi "
-                   f"{(now - oldest)/86400:.0f} napja all")
+        out.append(f"  - sablon-elcsúszás: {len(cur)} fájl, változatlan; a legrégebbi "
+                   f"{(now - oldest)/86400:.0f} napja áll")
     return out, first_seen
 
 
@@ -322,12 +322,12 @@ def _seed_drift(root, state_path, write):
     """
     exe = os.path.join(root, "scripts", "seed-drift-check.ts")
     if not os.path.exists(exe):
-        return ["  - a sablon-elcsuszas ellenorzes NEM FUTOTT LE: nincs " + exe]
+        return ["  - a sablon-elcsúszás ellenőrzés NEM FUTOTT LE: nincs " + exe]
     try:
         r = subprocess.run(["npx", "--no-install", "tsx", exe, "--json"], cwd=root,
                            capture_output=True, text=True, timeout=120)
     except Exception as e:
-        return [f"  - a sablon-elcsuszas ellenorzes NEM FUTOTT LE: {e}"]
+        return [f"  - a sablon-elcsúszás ellenőrzés NEM FUTOTT LE: {e}"]
     last = (r.stdout or "").strip().splitlines()[-1:] or [""]
     try:
         data = json.loads(last[0])
@@ -341,11 +341,11 @@ def _seed_drift(root, state_path, write):
         # az uzenet igy nevezte meg az okot es nem mutatott semmit belole.)
         lines = [l.strip() for l in ((r.stdout or "") + "\n" + (r.stderr or "")).splitlines() if l.strip()]
         head = lines[0] if lines else ""
-        return ["  - a sablon-elcsuszas ellenorzes NEM ADOTT JSON-t (regebbi valtozat, `--json` nelkul?): "
-                + (head[:120] or "ures kimenet")]
+        return ["  - a sablon-elcsúszás ellenőrzés NEM ADOTT JSON-t (régebbi változat, `--json` nélkül?): "
+                + (head[:120] or "üres kimenet")]
     if data.get("stopped"):
         # A szerszam megtagadta az osszehasonlitast. Ez NEM "nincs elcsuszas".
-        return [f"  - a sablon-elcsuszas NEM MERHETO: {data['stopped'][:160]}"]
+        return [f"  - a sablon-elcsúszás NEM MÉRHETŐ: {data['stopped'][:160]}"]
 
     now = int(time.time())
     cur = {d["key"]: d for d in data.get("drifts", [])}
@@ -390,9 +390,9 @@ def section_broken(con, hours, tasks_dir=None, root=None, drift_state=None, writ
             if os.path.getmtime(cfg) >= since:
                 fresh.append(name)
         if fresh:
-            out.append(f"  - {len(fresh)} utemezes LETILTVA az ablakban: {', '.join(fresh)}")
+            out.append(f"  - {len(fresh)} ütemezés LETILTVA az ablakban: {', '.join(fresh)}")
     except Exception as e:
-        out.append(f"  - az utemezes-ellenorzes NEM FUTOTT LE: {e}")
+        out.append(f"  - az ütemezés-ellenőrzés NEM FUTOTT LE: {e}")
 
     try:
         bad = collections.Counter()
@@ -401,10 +401,10 @@ def section_broken(con, hours, tasks_dir=None, root=None, drift_state=None, writ
                 (since * 1000,)):
             bad[s] = n
         if bad:
-            out.append("  - kihagyott/hibas utemezett futasok: "
+            out.append("  - kihagyott/hibás ütemezett futások: "
                        + ", ".join(f"{k} {v}" for k, v in bad.most_common()))
     except Exception as e:
-        out.append(f"  - a futas-ellenorzes NEM FUTOTT LE: {e}")
+        out.append(f"  - a futás-ellenőrzés NEM FUTOTT LE: {e}")
 
     try:
         pref = collections.Counter()
@@ -414,9 +414,9 @@ def section_broken(con, hours, tasks_dir=None, root=None, drift_state=None, writ
             if m and not m.group(1).upper().startswith("[PROBA"):
                 pref[m.group(1)] += 1
         if pref:
-            out.append("  - or-jelzesek: " + ", ".join(f"{k} x{v}" for k, v in pref.most_common(6)))
+            out.append("  - őr-jelzések: " + ", ".join(f"{k} x{v}" for k, v in pref.most_common(6)))
     except Exception as e:
-        out.append(f"  - az or-jelzes-ellenorzes NEM FUTOTT LE: {e}")
+        out.append(f"  - az őr-jelzés-ellenőrzés NEM FUTOTT LE: {e}")
 
     if root:
         out.extend(_seed_drift(root, drift_state or os.path.join(root, "store", "seed-drift-state.json"),
@@ -424,7 +424,7 @@ def section_broken(con, hours, tasks_dir=None, root=None, drift_state=None, writ
 
     if not out:
         return []          # a spec szerint: ha nincs mit mondani, a szekcio KIMARAD
-    return [f"MI TORT EL AZ EJJEL (utolso {hours} ora):"] + out
+    return [f"MI TÖRT EL AZ ÉJJEL (utolsó {hours} óra):"] + out
 
 
 def reset_when(resets_at, now):
@@ -465,30 +465,30 @@ def section_quota(root=DEFAULT_ROOT, now=None, max_age_min=30):
     path = os.path.join(root, "store", "usage-latest.json")
     now = time.time() if now is None else now
     if not os.path.exists(path):
-        return ["KERET: NEM MERHETO -- nincs " + path + " (a kvota-pillanatfelvetel nem futott le)."]
+        return ["KERET: NEM MÉRHETŐ, nincs " + path + " (a kvóta-pillanatfelvétel nem futott le)."]
     try:
         with open(path, encoding="utf-8") as f:
             d = json.load(f)
     except Exception as e:
-        return [f"KERET: NEM MERHETO -- a pillanatfelvetel olvashatatlan ({type(e).__name__})."]
+        return [f"KERET: NEM MÉRHETŐ, a pillanatfelvétel olvashatatlan ({type(e).__name__})."]
     age_min = (now - os.path.getmtime(path)) / 60
     if age_min > max_age_min:
-        return [f"KERET: NEM MERHETO -- a pillanatfelvetel {age_min:.0f} perces "
-                f"(a hatar {max_age_min}); a 10 perces `usage-snapshot` feladat all."]
+        return [f"KERET: NEM MÉRHETŐ, a pillanatfelvétel {age_min:.0f} perces "
+                f"(a határ {max_age_min}); a 10 perces `usage-snapshot` feladat áll."]
     cl = d.get("claude") or {}
     if cl.get("source") != "authoritative" or not cl.get("ok"):
         why = cl.get("error") or cl.get("source") or "ismeretlen ok"
-        return [f"KERET: NEM MERHETO -- a mero nem hiteles forrasbol dolgozik ({str(why)[:80]}). "
-                "Becsulni nem fogom: a becsles se szazalekot, se reset-idot nem ad."]
+        return [f"KERET: NEM MÉRHETŐ, a mérő nem hiteles forrásból dolgozik ({str(why)[:80]}). "
+                "Becsülni nem fogom: a becslés se százalékot, se reset-időt nem ad."]
     w = cl.get("windows") or {}
     def one(key, label):
         x = w.get(key) or {}
         pct = x.get("used_percent")
         if pct is None:
-            return f"  - {label}: NEM MERHETO (hianyzo mezo)"
+            return f"  - {label}: NEM MÉRHETŐ (hiányzó mező)"
         r = x.get("resets_at")
         return f"  - {label}: {pct:g}% (reset {reset_when(r, now) if r else '?'})"
-    return ["KERET:", one("five_hour", "5 oras"), one("seven_day", "heti"),
+    return ["KERET:", one("five_hour", "5 órás"), one("seven_day", "heti"),
             one("seven_day_opus", "heti opus")]
 
 
@@ -519,23 +519,23 @@ def section_dream(root=DEFAULT_ROOT, today=None):
     path = os.path.join(root, "DREAM.md")
     today = today or datetime.now().strftime("%Y-%m-%d")
     if not os.path.exists(path):
-        return ["DREAM: nincs " + path + " -- a napindito dream-szekcioja KIMARAD (a SKILL igy is keri)."]
+        return ["DREAM: nincs " + path + ", a napindító dream-szekciója KIMARAD (a SKILL így is kéri)."]
     head = ""
     try:
         with open(path, encoding="utf-8") as f:
             head = f.readline()
     except Exception as e:
-        return [f"DREAM: a {path} elso sora nem olvashato ({type(e).__name__}) -- a dream-szekcio KIMARAD."]
+        return [f"DREAM: a {path} első sora nem olvasható ({type(e).__name__}), a dream-szekció KIMARAD."]
     m = re.search(r"(\d{4}-\d{2}-\d{2})", head)
     if not m:
-        return ["DREAM: a DREAM.md elso soraban NINCS datum, tehat a kora nem allapithato meg "
-                "-- a dream-szekciot HAGYD KI (egy nem merheto kor nem friss kor)."]
+        return ["DREAM: a DREAM.md első sorában NINCS dátum, tehát a kora nem állapítható meg; "
+                "a dream-szekciót HAGYD KI (egy nem mérhető kor nem friss kor)."]
     when = m.group(1)
     if when == today:
         return []
-    return [f"DREAM: a DREAM.md {when}-i, tehat a Dream Engine ma NEM futott le "
-            f"-- a dream-szekciot HAGYD KI a napinditobol, ne masold be a bucketeket. "
-            f"(A `dream-engine` utemezett feladat allapotat nezd meg: 09-06 ota `enabled:false` volt.)"]
+    return [f"DREAM: a DREAM.md {when}-i, tehát a Dream Engine ma NEM futott le; "
+            f"a dream-szekciót HAGYD KI a napindítóból, ne másold be a bucketeket. "
+            f"(A `dream-engine` ütemezett feladat állapotát nézd meg: 09-06 óta `enabled:false` volt.)"]
 
 
 HETNAPOK = ("hétfő", "kedd", "szerda", "csütörtök", "péntek", "szombat", "vasárnap")
@@ -555,18 +555,18 @@ def section_today(now=None):
     A VEGEN ALL, nem az elejen: a SKILL szerint a `DREAM:` sor a kimenet ELSO blokkja, ha
     a DREAM.md nem mai, es ezt a szerzodest nem mozditjuk el."""
     d = datetime.fromtimestamp(now, TZ) if now is not None else datetime.now(TZ)
-    return [f"FEJLEC-NAP (szkript, nem fejbol): {d.strftime('%Y-%m-%d')} {HETNAPOK[d.weekday()]}, "
-            f"{d.strftime('%H:%M')} {d.tzname()} -- a napindito fejlecebe ezt a napot ird."]
+    return [f"FEJLÉC-NAP (szkript, nem fejből): {d.strftime('%Y-%m-%d')} {HETNAPOK[d.weekday()]}, "
+            f"{d.strftime('%H:%M')} {d.tzname()}; a napindító fejlécébe ezt a napot írd."]
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--since-hours", type=int, default=24)
     ap.add_argument("--root", default=DEFAULT_ROOT)
-    ap.add_argument("--tasks-dir", default=None, help="csak mereshez/teszthez")
+    ap.add_argument("--tasks-dir", default=None, help="csak méréshez/teszthez")
     ap.add_argument("--snapshot", default=None)
     ap.add_argument("--no-write", action="store_true",
-                    help="ne frissitse a napi pillanatfelvetelt (proba-futashoz)")
+                    help="ne frissítse a napi pillanatfelvételt (próba-futáshoz)")
     a = ap.parse_args()
     db = os.path.join(a.root, "store", "claudeclaw.db")
     snap = a.snapshot or os.path.join(a.root, "store", "kanban-daily-snapshot.json")
@@ -574,7 +574,7 @@ def main():
         con = _connect(db)
         _assert_units(con)
     except Exception as e:
-        print(f"MIND A HAROM SZEKCIO KIMARAD: az adatbazis nem olvashato ({e})")
+        print(f"MIND A HÁROM SZEKCIÓ KIMARAD: az adatbázis nem olvasható ({e})")
         return 1
     blocks = [section_dream(a.root), section_isti(con), section_delta(con, snap, not a.no_write),
               section_broken(con, a.since_hours, a.tasks_dir, a.root, None, not a.no_write),

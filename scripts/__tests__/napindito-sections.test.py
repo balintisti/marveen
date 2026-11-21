@@ -65,12 +65,12 @@ check_true("1 KONTROLL: nulla eseten sajat mondat, nem '0 kartya'", "semmi" in e
 # --- 2. DELTA: a NEVESITETT CSAPDA -----------------------------------------
 snap = tempfile.mktemp(suffix=".json")
 first = ns.section_delta(con, snap, write=True)
-check_true("2: alapvonal NELKUL az elso futas KIMONDJA, hogy elso meres", "ELSO meres" in first[0])
-check_true("2: es NEM ir nulla deltat", "nulla valtozas" not in " ".join(first))
+check_true("2: alapvonal NELKUL az elso futas KIMONDJA, hogy elso meres", "ELSŐ mérés" in first[0])
+check_true("2: es NEM ir nulla deltat", "nulla változás" not in " ".join(first))
 check_true("2: a pillanatfelvetel elkeszult", os.path.exists(snap))
 second = ns.section_delta(con, snap, write=False)
-check_true("2: MASODIK futas ugyanazon az adaton MAR deltat mond", "VALTOZAS" in second[0])
-check_true("2: es valtozatlan adaton nullat", "nulla valtozas" in second[0])
+check_true("2: MASODIK futas ugyanazon az adaton MAR deltat mond", "VÁLTOZÁS" in second[0])
+check_true("2: es valtozatlan adaton nullat", "nulla változás" in second[0])
 # MAS allapot -> a delta a statuszt ES az elojelet is mondja ki.
 # Az alapvonal a fenti `db`: elo kartyak = waiting 3 (a,b,c), planned 1 (d);
 # az `e` archivalt, tehat nem szamit. A `db2`-ben egyetlen `planned` all, tehat
@@ -82,7 +82,7 @@ moved = ns.section_delta(con_for(db2), snap, write=False)
 check_true("2: valtozas eseten a statusz es az elojel is megjelenik", "waiting -3" in moved[0])
 check_true("2: a valtozatlan oszlop NEM kerul a sorba", "planned" not in moved[0])
 check_true("2 KONTROLL: a mondat kimondja, hogy NEM teljesitmeny-mutato",
-           any("nem teljesitmeny" in l for l in second))
+           any("nem teljesítmény" in l for l in second))
 
 # --- 3. MI TORT EL: csak az ABLAKON BELUL letiltott szamit ------------------
 tasks = tempfile.mkdtemp()
@@ -95,7 +95,7 @@ b = ns.section_broken(con_for(make_db()), hours=24, tasks_dir=tasks)
 joined = " ".join(b)
 check_true("3: az ABLAKBAN letiltott feladat hir", "most-tiltva" in joined)
 check_true("3: a REGOTA letiltott NEM hir (kulonben minden reggel ugyanaz)", "regota-tiltva" not in joined)
-check_true("3: a FUTO feladat sem", "fut" not in joined.replace("futasok", ""))
+check_true("3: a FUTO feladat sem", "fut" not in joined.replace("futások", ""))
 
 # --- 3b. A MASODIK NEVESITETT CSAPDA: a le nem futott ellenorzes SZOLJON ----
 b2 = ns.section_broken(con_for(make_db()), hours=24, tasks_dir="/nincs/ilyen/konyvtar")
@@ -114,7 +114,7 @@ bad = make_db(cards=[("x","x","planned","dexter", NOW*1000, None)])   # MS-ben i
 try:
     ns._assert_units(con_for(bad)); check("4: a rossz egyseg megallitja a szkriptet", "nem allt meg", "megall")
 except RuntimeError as e:
-    check_true("4: a rossz egyseg RuntimeError-t ad, nem ertelmetlen szamot", "egysege" in str(e))
+    check_true("4: a rossz egyseg RuntimeError-t ad, nem ertelmetlen szamot", "egysége" in str(e))
 try:
     ns._assert_units(con_for(db)); print("ok   4 KONTROLL: a HELYES egyseget atengedi")
 except RuntimeError as e:
@@ -131,7 +131,7 @@ try:
     ns._assert_units(con_for(make_db(runs=[("napindito", "friday", (NOW + 3600) * 1000, "ok")])))
     check("4b KONTROLL: az 1 oras jovo megallitja", "nem allt meg", "megall")
 except RuntimeError as e:
-    check_true("4b KONTROLL: az 1 oras jovo megall, es a JOVOT nevezi", "JOVOBEN" in str(e))
+    check_true("4b KONTROLL: az 1 oras jovo megall, es a JOVOT nevezi", "JÖVŐBEN" in str(e))
 
 
 # --- 5. SABLON-ELCSUSZAS: HIR KONTRA ALLANDO (kartya a22c9fe8) --------------
@@ -143,15 +143,15 @@ D = lambda k, d="both": {k: {"key": k, "direction": d}}
 
 out, fs = ns.drift_lines(D("a/x.md"), {}, NOW)
 check_true("5: egy UJ elteres HIRKENT jelenik meg, iranyostul",
-           len(out) == 1 and "UJ" in out[0] and "both" in out[0])
+           len(out) == 1 and "ÚJ" in out[0] and "both" in out[0])
 out, _ = ns.drift_lines({}, {"a/x.md": NOW - 100}, NOW)
-check_true("5: egy MEGSZUNT elteres is hir", len(out) == 1 and "MEGSZUNT" in out[0])
+check_true("5: egy MEGSZUNT elteres is hir", len(out) == 1 and "MEGSZŰNT" in out[0])
 
 # A LENYEG: valtozatlan halmazra NEM listaz, de NEM is hallgat.
 prev = {"a/x.md": NOW - 9 * 86400, "b/y.json": NOW - 2 * 86400}
 out, fs = ns.drift_lines({**D("a/x.md"), **D("b/y.json")}, prev, NOW)
 check("5: valtozatlan halmaz -> PONTOSAN EGY sor", len(out), 1)
-check_true("5: es abban a DARABSZAM all, nem a lista", "2 fajl" in out[0] and "a/x.md" not in out[0])
+check_true("5: es abban a DARABSZAM all, nem a lista", "2 fájl" in out[0] and "a/x.md" not in out[0])
 check_true("5: es a LEGREGEBBI kora, hogy lathatoan oregedjen", "9 napja" in out[0])
 check_true("5: a first_seen MEGORZI a regi idobelyeget (kulonben minden reggel 0 nap)",
            fs["a/x.md"] == prev["a/x.md"])
@@ -167,8 +167,8 @@ kinds = {
 }
 check_true("5 KONTROLL: harom bemenet, harom KULONBOZO kimenet",
            kinds["uj"] == 1 and kinds["valtozatlan"] == 1 and kinds["ures"] == 0
-           and "UJ" in ns.drift_lines(D("z/1"), {}, NOW)[0][0]
-           and "valtozatlan" in ns.drift_lines(D("z/1"), {"z/1": NOW - 86400}, NOW)[0][0])
+           and "ÚJ" in ns.drift_lines(D("z/1"), {}, NOW)[0][0]
+           and "változatlan" in ns.drift_lines(D("z/1"), {"z/1": NOW - 86400}, NOW)[0][0])
 
 
 # --- 5b. AZ ALPROCESSZ-UT: harom kimenet, harom KULONBOZO mondat -----------
@@ -189,12 +189,12 @@ try:
     st = tempfile.mktemp(suffix=".json")
     ns.subprocess.run = lambda *a, **k: _R('{"stopped":null,"unseeded":[],"drifts":[{"key":"a/x","direction":"both"}]}')
     out = ns._seed_drift(root, st, write=False)
-    check_true("5b: ervenyes JSON -> a HIR-sor all elo", len(out) == 1 and "UJ sablon-elcsuszas" in out[0])
+    check_true("5b: ervenyes JSON -> a HIR-sor all elo", len(out) == 1 and "ÚJ sablon-elcsúszás" in out[0])
 
     ns.subprocess.run = lambda *a, **k: _R('{"stopped":"not the install","unseeded":[],"drifts":[]}')
     out = ns._seed_drift(root, st, write=False)
     check_true("5b: a `stopped` NEM MERHETO-t ad, NEM 'nincs elcsuszas'-t",
-               len(out) == 1 and "NEM MERHETO" in out[0])
+               len(out) == 1 and "NEM MÉRHETŐ" in out[0])
 
     ns.subprocess.run = lambda *a, **k: _R('seed-drift: nincs elteres (6 sablon-feladat).')
     out = ns._seed_drift(root, st, write=False)
@@ -260,7 +260,7 @@ check_true("dream KONTROLL: hianyzo fajl sajat sort kap", len(out_missing) == 1 
 # alak (nincs datum -> nem ter el a mai datumtol -> nema) csendben atengedne.
 r = _dream_root("# Dream Engine")
 out_nodate = ns.section_dream(r, today=TODAY)
-check_true("dream: datum nelkuli elso sor NEM olvasodik frissnek", len(out_nodate) == 1 and "NINCS datum" in first(out_nodate))
+check_true("dream: datum nelkuli elso sor NEM olvasodik frissnek", len(out_nodate) == 1 and "NINCS dátum" in first(out_nodate))
 
 # A DONTO KONTROLL: a kort a TARTALOM adja, nem az mtime. Egy `git checkout`,
 # egy masolas vagy egy szerkesztes az mtime-ot frissiti, a tartalmat nem.
@@ -303,7 +303,7 @@ _wk = {"claude": {"source": "authoritative", "ok": True,
 _wk_root = _quota_root(_wk, mtime=_at(2026, 10, 4, 7, 35))
 _wk_out = ns.section_quota(_wk_root, now=_at(2026, 10, 4, 7, 39))
 check_true("keret 5aa4eccd: a szekcio a heti sort datummal irja", any("heti: 2% (reset 10-08 07:59)" in x for x in _wk_out))
-check_true("keret 5aa4eccd: az 5 oras sor 'ma'", any("5 oras: 1% (reset ma 10:00)" in x for x in _wk_out))
+check_true("keret 5aa4eccd: az 5 oras sor 'ma'", any("5 órás: 1% (reset ma 10:00)" in x for x in _wk_out))
 
 out = ns.section_quota(_quota_root(AUTH))
 check_true("keret: hiteles forrasnal kiirja a szazalekot", any("13%" in x for x in out))
@@ -314,17 +314,17 @@ check_true("keret: mind a harom ablak sort kap", len([x for x in out if "%" in x
 # ugyanabban az alakban, mint a hiteleset.
 est = {"claude": {"source": "estimate", "ok": True, "windows": {}}}
 out_est = ns.section_quota(_quota_root(est))
-check_true("keret: becslesre NEM MERHETO", "NEM MERHETO" in first(out_est))
+check_true("keret: becslesre NEM MERHETO", "NEM MÉRHETŐ" in first(out_est))
 check_true("keret KONTROLL: becslesnel NINCS szazalek a kimenetben", not any("%" in x for x in out_est))
 
 # Egy ALLO 10 perces feladat mellett a szam ORAKIG ugyanaz marad, es a regi szam
 # ugyanugy nez ki, mint egy friss. A 30 perces plafon a `quota-ceiling-guard.sh`-e.
 out_old = ns.section_quota(_quota_root(AUTH, mtime=NOW - 3 * 3600))
-check_true("keret: ELAVULT pillanatfelvetelre NEM MERHETO", "NEM MERHETO" in first(out_old))
+check_true("keret: ELAVULT pillanatfelvetelre NEM MERHETO", "NEM MÉRHETŐ" in first(out_old))
 check_true("keret: a sor kimondja a kort is", "perces" in first(out_old))
 
 out_none = ns.section_quota(tempfile.mkdtemp())
-check_true("keret: hianyzo pillanatfelvetel sajat sort kap", "NEM MERHETO" in first(out_none))
+check_true("keret: hianyzo pillanatfelvetel sajat sort kap", "NEM MÉRHETŐ" in first(out_none))
 
 # =============================================================================
 # 7. TETLEN, NINCS KIOSZTVA (kartya 3c27105f): a tetlen-or sorai a `store/idle-digest.jsonl`-ben
@@ -341,32 +341,32 @@ _row = lambda sec_ago, agent, minutes: json.dumps({"ts": _ms(sec_ago), "agent": 
 
 out_nofile = ns.section_idle_digest(tempfile.mkdtemp(), now=NOW)
 check_true("digest: hianyzo fajl sajat sort kap, es kimondja a ketertelmuseget",
-           "NINCS NAPLO" in first(out_nofile) and "nem kulonboztetheto" in first(out_nofile))
+           "NINCS NAPLÓ" in first(out_nofile) and "nem különböztethető" in first(out_nofile))
 
 out_empty = ns.section_idle_digest(_digest_root([]), now=NOW)
-check_true("digest: ures naplo = 0 jelzes, NEM hallgatas", "0 jelzes" in first(out_empty))
+check_true("digest: ures naplo = 0 jelzes, NEM hallgatas", "0 jelzés" in first(out_empty))
 
 out_old = ns.section_idle_digest(_digest_root([_row(30 * 3600, "didi", 40)]), now=NOW)
 check_true("digest: a 24 oranal regebbi sor kimarad, de a naplo mereteit kiirja",
-           "0 jelzes" in first(out_old) and "1 sor" in first(out_old))
+           "0 jelzés" in first(out_old) and "1 sor" in first(out_old))
 
 out_two = ns.section_idle_digest(
     _digest_root([_row(3600, "didi", 40), _row(1800, "mandark", 30), _row(600, "mandark", 70)]), now=NOW)
-check_true("digest: a fejlec megszamolja a jelzest es az ugynokot", "3 jelzes, 2 ugynok" in first(out_two))
+check_true("digest: a fejlec megszamolja a jelzest es az ugynokot", "3 jelzés, 2 ügynök" in first(out_two))
 # A gyakoribb ELOL, es a betusorrend ELLENE szol (didi < mandark): a rendezes-hiba igy latszik.
 check_true("digest: ugynokonkent sor, a gyakoribb elol",
            out_two[1].lstrip().startswith("- mandark: 2x") and out_two[2].lstrip().startswith("- didi: 1x"))
 check_true("digest: a legutobbi jelzes percszamat irja", "70 perce" in out_two[1])
 
 out_bad = ns.section_idle_digest(_digest_root([_row(600, "didi", 15), "ez nem json", '{"ts": 1}']), now=NOW)
-check_true("digest: a serult sor SZAMLALVA van, nem nyelve el", "2 serult sor" in first(out_bad))
+check_true("digest: a serult sor SZAMLALVA van, nem nyelve el", "2 sérült sor" in first(out_bad))
 check_true("digest: a serult sor mellett az ep sor is megvan", "didi: 1x" in "\n".join(out_bad))
 
 # Egysegtevesztes: egy MASODPERCES ts (1.79e9) ezredmasodpercnek olvasva 1970 januar, es "regi"
 # sorkent csendben kiesne -> nulla jelzes. Ezert serult sor, es latszik.
 out_sec = ns.section_idle_digest(
     _digest_root([json.dumps({"ts": NOW - 600, "agent": "didi", "minutes": 15, "kind": None})]), now=NOW)
-check_true("digest: masodperces ts SERULT sor, nem csendes nulla", "1 serult sor" in first(out_sec))
+check_true("digest: masodperces ts SERULT sor, nem csendes nulla", "1 sérült sor" in first(out_sec))
 
 # --- FEJLEC-NAP (kartya 4c43d099): a hetnapot a szkript adja, nem a fej ----------------------------
 import datetime as _dt
@@ -394,7 +394,77 @@ _weekday = ns.HETNAPOK[_dt.datetime.strptime(_oracle, "%Y-%m-%d").weekday()]
 _last = (_r.stdout.strip().splitlines() or [""])[-1]
 check("fejlec-nap: a main() exit 0", _r.returncode, 0)
 check_true("fejlec-nap: a main() kimenetenek UTOLSO sora a fejlec-nap, a mai datummal es hetnappal",
-           _last.startswith("FEJLEC-NAP") and f"{_oracle} {_weekday}" in _last)
+           _last.startswith("FEJLÉC-NAP") and f"{_oracle} {_weekday}" in _last)
+
+# --- A KIMENET ATMEGY A KIMENO-SZOVEG KAPUN (kartya d153a95b) ---------------------------------------
+# A reggeli-napindito skill SZO SZERINT kerte atvenni a kimenetet, a scripts/hooks/outgoing-copy-gate.py
+# viszont tiltja az ekezet nelkuli magyar szot es a ' -- '-t: a szkript ekezet nelkuli kimenete minden
+# reggel elbukott az elso kuldesen. A VALODI kaput futtatjuk, nem egy sajat masolatat: a kapu szotara
+# valtozik, es egy sajat lista ezt nem koveti. A tesztelt halmaz a szkript MINDEN nem-docstring
+# szoveg-literaljara kiterjed (AST), tehat azokra az agakra is, amelyeket egy futas nem erint el
+# (olvashatatlan fajl, nem futott mero, hibauzenetek).
+import ast, subprocess
+
+GATE = os.path.join(HERE, "..", "hooks", "outgoing-copy-gate.py")
+
+def emitted_literals(source):
+    """A forras minden szoveg-literalja a docstringek nelkul, soronkent egy darab."""
+    tree = ast.parse(source)
+    docs = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef)) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
+                docs.add(id(first.value))
+    parts = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docs:
+            parts.append(node.value)
+    return "\n".join(p for p in parts if p.strip())
+
+def through_gate(text):
+    with tempfile.TemporaryDirectory() as tmp:
+        rules = os.path.join(tmp, "rules.json")
+        with open(rules, "w", encoding="utf-8") as f:
+            json.dump({"no_name_rule": True, "no_name_rule_reason": "teszt: a kimenet szoveget, nem nevet vizsgalunk"}, f)
+        env = dict(os.environ, OUTGOING_COPY_GATE_RULES=rules)
+        p = subprocess.run([sys.executable, GATE],
+                           input=json.dumps({"tool_name": "mcp__plugin_telegram_telegram__reply",
+                                             "tool_input": {"text": text}}),
+                           capture_output=True, text=True, env=env, timeout=30)
+        return p.returncode, p.stderr
+
+_src = open(os.path.join(HERE, "..", "napindito-sections.py"), encoding="utf-8").read()
+_code, _err = through_gate(emitted_literals(_src))
+check("kapu: a szkript minden kiirt szovege atmegy a kimeno-szoveg kapun (exit 0)", _code, 0)
+if _code != 0: print(_err)
+
+# POZITIV KONTROLL, a szam ELOTT ertelmezendo: a KAPU tenyleg elutasit egy ekezet nelkuli, ' -- '-os
+# sort (a javitas elotti kimenet alakja), kulonben a fenti zold azt is jelenthetne, hogy a kapu nem lat semmit.
+_old_shape = "KESZ, DE NINCS ELESBEN: NEM MERHETO -- a mero jelentette: hiba\nMI VAR RAD: semmi. Nincs olyan kartya, ami a te valaszodra var."
+_ccode, _cerr = through_gate(_old_shape)
+check("kapu KONTROLL: az ekezet nelkuli, ' -- '-os sor exit 2", _ccode, 2)
+check_true("kapu KONTROLL: mindket okot nevezi (ekezet es dupla kotojel)",
+           "HIANYZO EKEZETEK" in _cerr and "DUPLA KOTOJEL" in _cerr)
+
+# MASODIK RETEG, mert a kapu szotara veges (egy "kesobb" vagy "pillanatfelvetel" neki nem szo, es atmegy):
+# ugyanaz a szo nem allhat a szoveg-literalokban ekezettel ES ekezet nelkul. Ez csak a KETFELE irast fogja,
+# a csupan egyszer elojovo, ekezet nelkul irt szot nem (arra a kapu szotara marad az egyetlen vedelem).
+import re, unicodedata
+
+def fold(word):
+    return "".join(c for c in unicodedata.normalize("NFD", word) if not unicodedata.combining(c))
+
+_words = re.findall(r"[^\W\d_]+", emitted_literals(_src))
+_accented = {fold(w).lower() for w in _words if fold(w) != w}
+# KIVETEL, indokkal: "meg" ES "még" is onallo, helyes szo ("nézd meg" / "még nem"); "proba" a `[PROBA`
+# adat-elotag (az uzenetek SAJAT jelolese), amit a kod szoveg szerint egyeztet, nem proza.
+_ALLOWED_BOTH = {"meg", "proba"}
+_split = sorted({w.lower() for w in _words if fold(w) == w and w.lower() in _accented} - _ALLOWED_BOTH)
+check("ekezet-kovetkezetesseg: nincs szo, ami ekezettel ES ekezet nelkul is all a kiirt szovegekben", _split, [])
+
+# A kimenetben nincs ' -- ' sehol, a tobbi szoveg-literalban sem (a kapu ezt is tiltja, de ez nev szerint mondja ki).
+check_true("kapu: nincs dupla kotojel a kiirt szovegekben", " -- " not in emitted_literals(_src))
 
 # AZ OSSZEGZO A FAJL VEGEN ALL, es ez nem stilus: 2026-09-10-ig a 200. soron
 # allt, tehat minden UTANA irt eset ugy bukhatott volna, hogy a futas exit 0-t ad.
