@@ -12006,6 +12006,10 @@ document.getElementById('fleetApplyBtn').addEventListener('click', async () => {
 
     const imp = data.imported || {}
     const agentNames = Array.isArray(imp.agents) ? imp.agents : []
+    // Card 74161546 (didi 55441 K4): the restore keeps rows the injection
+    // filter would refuse; the result says so instead of a plain green tick.
+    const flagged = data.memoriesFlagged || { count: 0, firstIds: [] }
+    const flaggedIds = Array.isArray(flagged.firstIds) ? flagged.firstIds.join(', ') : ''
 
     resultEl.className = 'fleet-apply-result'
     resultEl.hidden = false
@@ -12019,6 +12023,7 @@ document.getElementById('fleetApplyBtn').addEventListener('click', async () => {
         <div>${t('fleet.stat.skills')}: ${imp.globalSkills ?? 0}</div>
         <div>${t('fleet.stat.tasks')}: ${imp.scheduledTasks ?? 0}</div>
       </div>
+      ${flagged.count > 0 ? `<div class="fleet-apply-flagged">⚠️ ${escapeHtml(t('fleet.import.memories_flagged', { n: flagged.count, ids: flaggedIds }))}</div>` : ''}
     `
 
     fleetLastBody = null

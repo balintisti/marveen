@@ -1937,6 +1937,7 @@ window._i18n.hu = {
   'fleet.import.dryrun_errors':   'Hibák az importban:',
   'fleet.import.apply_confirm':   'Biztos vagy benne? Az import felülírja a meglévő ügynök-konfigurációkat. Ez kizárólag üres/friss telepítésre való.',
   'fleet.import.apply_success':   'Import sikeresen elvégezve.',
+  'fleet.import.memories_flagged': '{n} visszaállított emlék akadna fenn az injekciós szűrőn. Megtartottuk őket, nézd át őket. Első azonosítók: {ids}',
   'fleet.import.error':           'Import hiba',
 
   'fleet.stat.main_agent':        'Fő ügynök',

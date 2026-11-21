@@ -26,6 +26,7 @@ import { getBindings } from './vault-bindings.js'
 import { resolveMasterKeyForExport } from './vault.js'
 import { getDb, backfillEmbeddings, settleImportedDoneCards } from '../db.js'
 import { logger } from '../logger.js'
+import { containsSuspiciousContent, keywordsRefused } from './routes/memories.js'
 
 // ---------------------------------------------------------------------------
 // Schema version -- bump when the JSON shape changes incompatibly.
@@ -203,8 +204,16 @@ export interface ImportResult {
     dailyLogs: number
     ideaBox: number
   }
+  // Card 74161546 (marveen 10009639): the restore keeps every memory row, the
+  // injection filter does not run on it -- but it is not silent either: the
+  // restored rows the filter WOULD refuse (content or keywords) are counted
+  // here, with the first few new row ids, and logged.
+  memoriesFlagged: { count: number; firstIds: number[] }
   warnings?: string[]
 }
+
+/** How many flagged row ids the import response and the log line carry. */
+export const FLAGGED_IDS_SHOWN = 10
 
 // ---------------------------------------------------------------------------
 // Crypto helpers -- M7: versioned packed blob, scrypt N=2^17
@@ -1113,6 +1122,7 @@ export function importFleet(
     // Cards this import created with status done; judged once comments and labels are in.
     const createdDone: string[] = []
     let demotedDone: string[] = []
+    const flagged = { count: 0, firstIds: [] as number[] }
     const importTx = db.transaction(() => {
       // labels first (FK dep for kanban_card_labels)
       // M3: skip rows with missing required fields to avoid SQLite constraint errors -> 500
@@ -1182,16 +1192,24 @@ export function importFleet(
 
       // memories -- idempotent on (agent_id, content); covers ALL agent_ids
       // agent_id-k pontosan a forrásból kerülnek át (a cél átveszi a forrás főagent identitását)
+      // Unfiltered BY DECISION (marveen 10009639): this is the install's own
+      // backup, rows written before the filter existed included, and dropping
+      // them would lose data silently. What the filter would refuse is
+      // counted and reported instead (memoriesFlagged).
       const now = Math.floor(Date.now() / 1000)
       for (const mem of fleet.memories ?? []) {
         if (!db.prepare('SELECT 1 FROM memories WHERE agent_id = ? AND content = ?').get(mem.agent_id, mem.content)) {
-          db.prepare(
+          const inserted = db.prepare(
             `INSERT INTO memories
              (chat_id, topic_key, content, sector, salience, created_at, accessed_at,
               agent_id, category, auto_generated, keywords)
              VALUES ('', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
           ).run(mem.content, mem.sector, mem.salience, mem.created_at, mem.accessed_at ?? now,
             mem.agent_id, mem.category, mem.auto_generated ?? 0, mem.keywords ?? null)
+          if (containsSuspiciousContent(String(mem.content ?? '')) || keywordsRefused(mem.keywords)) {
+            flagged.count++
+            if (flagged.firstIds.length < FLAGGED_IDS_SHOWN) flagged.firstIds.push(Number(inserted.lastInsertRowid))
+          }
         }
       }
 
@@ -1240,6 +1258,12 @@ export function importFleet(
     })
 
     importTx()
+    if (flagged.count > 0) {
+      logger.warn(
+        { flagged: flagged.count, firstIds: flagged.firstIds },
+        'Fleet import: restored memory rows the injection filter would refuse (kept, not filtered)',
+      )
+    }
 
     // 6. Vault -- LAST: vault data is plaintext (decrypted at the top of importFleet)
     if (fleet.vault) {
@@ -1340,6 +1364,7 @@ export function importFleet(
         dailyLogs: (fleet.dailyLogs ?? []).length,
         ideaBox: (fleet.ideaBox?.ideas ?? []).length,
       },
+      memoriesFlagged: flagged,
       ...(applyWarnings.length > 0 ? { warnings: applyWarnings } : {}),
     }
   } catch (err: any) {
