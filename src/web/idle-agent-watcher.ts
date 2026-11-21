@@ -524,6 +524,18 @@ export function readPane(agent: string): {
   }
 }
 
+/** The agent's last successful model response (epoch ms) from its own transcript (card 03cdad67).
+ *  null = not measured: a remote agent, no transcript, or a read that threw. 0 (a short transcript with
+ *  no response) is passed through; the decision only uses a value later than the spell's start. */
+export function lastModelResponseAt(agent: string): number | null {
+  try {
+    if (readAgentRemoteHost(agent)) return null
+    return readLastModelResponseMs(agent === MAIN_AGENT_ID ? PROJECT_ROOT : agentDir(agent), configDirFor(agent))
+  } catch {
+    return null
+  }
+}
+
 /** Did a successful model response come after the last API-error resume (card 46e6bfb0)? Read from
  *  the agent's own transcript; null = not measured (no resume yet, a remote agent whose transcript is
  *  not on this host, or an unreadable transcript), and then the decision keeps the time rule. */
@@ -733,6 +745,11 @@ export function tick(): void {
         ? apiErrorProgress(agent, state.lastApiErrorResumeAt ?? null)
         : null
       // Card 8b8864e4: was the last resume typed in? Then an error at the tail is a later loss.
+      // Card 03cdad67: the last turn bounds the idle spell. Read only when a spell is already open on an
+      // idle pane, the one case that consumes it; the same transcript read apiErrorProgress makes.
+      const lastModelResponseMs = running && paneRead.idle && state.idleSinceMs != null
+        ? lastModelResponseAt(agent)
+        : null
       const apiErrorResumeDelivered = running && paneRead.apiError === true && state.apiErrorResumeMsgId != null
         ? getAgentMessage(state.apiErrorResumeMsgId)?.delivered_at != null
         : undefined
@@ -754,6 +771,7 @@ export function tick(): void {
           paneUsageLimited: running ? paneRead.usageLimited === true : false,
           paneApiError: running ? paneRead.apiError === true : false,
           apiErrorProgressSinceResume,
+          lastModelResponseMs,
           apiErrorResumeDelivered,
           runningSubagents: backgroundWork,
           // Read only when background work is seen: it is the one case that consumes it.

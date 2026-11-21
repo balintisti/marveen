@@ -355,6 +355,13 @@ export interface IdleAgentInput {
    *  true = yes, false = no, absent/null = not measured (no resume yet, a remote agent, no readable
    *  transcript); then the old 10-minute rule decides. */
   apiErrorProgressSinceResume?: boolean | null
+  /** When the agent's last successful model response was written (epoch ms), read from its own
+   *  transcript (card 03cdad67). An idle spell cannot have started before the agent's last turn: the
+   *  pane is sampled every three minutes, so a short turn that answers a wake BETWEEN two samples is
+   *  never seen busy, the spell is never cleared, and stage 2 reported "woken, did not move" about an
+   *  agent that had moved (jarvis 2026-11-17, 2 of 2 alarms false). Absent/null = not measured (remote
+   *  agent, no readable transcript): the spell keeps its sampled start, as before. */
+  lastModelResponseMs?: number | null
   /** Has the resume behind lastApiErrorResumeAt been DELIVERED (typed into the pane)? Card 8b8864e4.
    *  true = yes; false/absent = not delivered, or not known (no row id on record). */
   apiErrorResumeDelivered?: boolean
@@ -878,7 +885,13 @@ function decideIdleAlertCore(
     return clear('no-work')
   }
 
-  const idleSinceMs = state.idleSinceMs ?? now
+  // THE SPELL STARTS NO EARLIER THAN THE LAST TURN (card 03cdad67). A response after the sampled
+  // start means the agent took a turn the 3-minute sampling missed: the spell restarts there. After a
+  // wake this moves the spell past lastWakeAt, so the decision is stage 1 again (cooldown, unchanged
+  // list), not stage 2's "the wake did not take". A response from the future is ignored, not trusted.
+  const lastTurn = input.lastModelResponseMs ?? null
+  const sampledStart = state.idleSinceMs ?? now
+  const idleSinceMs = lastTurn !== null && lastTurn > sampledStart && lastTurn <= now ? lastTurn : sampledStart
   const idleForMs = now - idleSinceMs
   if (idleForMs < thresholds.sustainedMs) {
     return { decision: { alert: false, reason: 'not-sustained' }, next: { ...state, idleSinceMs } }
