@@ -64,6 +64,11 @@ const NEM_ALLITHATO: Record<string, string> = {
   last_status_at: 'szarmaztatott: a status-esemenyekbol szamolva a lekerdezesben (db.ts), nem tarolt mezo',
   // Fork port (card 5c6e9968, upstream faf6eda9): a listazasban SZAMOLT ertek (sumInProgressSeconds).
   active_seconds: 'szarmaztatott: a kanban_card_events in_progress szakaszaibol osszegezve a listazasban, nem tarolt mezo',
+  // upstream b02e0afd91, card 3954082a: a claim lock oszlopai. Csak a /claim es /release irja
+  // (compare-and-set), a release-triggerek torlik; egy PUT nem lehet kerulout a foglalas korul.
+  claimed_by: 'a foglalo ugynok: csak a /claim es /release irja (atomi compare-and-set), PUT nem',
+  claimed_at: 'a foglalas ideje: a claimKanbanCard irja, megujitaskor marad',
+  claim_expires_at: 'a foglalas lejarata: a /claim TTL-jebol, a release-triggerek torlik',
 }
 
 describe('KANBAN_UPDATABLE -- a lista a TIPUSBOL szarmazik, nem kezzel keszul', () => {

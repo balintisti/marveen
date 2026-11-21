@@ -1131,15 +1131,20 @@ export function importFleet(
         const inserted = db.prepare(
           `INSERT OR IGNORE INTO kanban_cards
            (id, title, description, status, assignee, priority, project,
-            due_date, sort_order, created_at, updated_at, archived_at, parent_id, dispatched_at, version)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            due_date, sort_order, created_at, updated_at, archived_at, parent_id, dispatched_at, version,
+            claimed_by, claimed_at, claim_expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(c.id, c.title, c.description ?? null, c.status, c.assignee ?? null,
           c.priority, c.project ?? null, c.due_date ?? null, c.sort_order,
           c.created_at, c.updated_at, c.archived_at ?? null, c.parent_id ?? null, c.dispatched_at ?? null,
           // The row version rides along too, so a copy read before the move is still checked
           // against the same number after it. An export from an install without the column has
           // none: the NOT NULL column starts at 0 (upstream 5b404c44d).
-          Number.isSafeInteger(c.version) && c.version >= 0 ? c.version : 0)
+          Number.isSafeInteger(c.version) && c.version >= 0 ? c.version : 0,
+          // The claim lock rides along: a card someone was working on stays
+          // held on the new host until the holder releases it or its TTL ends,
+          // so a host move cannot hand the same card to a second agent.
+          c.claimed_by ?? null, c.claimed_at ?? null, c.claim_expires_at ?? null)
         if (inserted.changes > 0 && c.status === 'done') createdDone.push(c.id)
       }
 
