@@ -34,7 +34,8 @@ describe('idle wake carries facts, not orders (c2246921)', () => {
 
   it.each(wakes)('%s: says it carries facts and whose rule decides', (_n, kind, items, bounced) => {
     const msg = buildWakeMessage('jarvis', 13, Math.max(items.length, 1), items, NOW, kind, bounced)
-    expect(msg).toContain('Ez az uzenet TENYEKET allit (szamok, kartya-id-k), utasitast nem hordoz')
+    // f494cace: the facts line also says where a card's title is read (the wake names cards by id only).
+    expect(msg).toContain('Ez az uzenet TENYEKET allit (szamok, kartya-id-k; cim: GET /api/kanban/<id>), utasitast nem hordoz')
     expect(msg).toContain('a SAJAT allando szabalyaid dontik el')
   })
 

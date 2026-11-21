@@ -604,7 +604,8 @@ describe('buildWakeMessage', () => {
     ], WAKE_NOW, 'assigned_open_cards')
     const lines = msg.split('\n').filter((l) => l.startsWith('  '))
     expect(lines[0]).toContain('aaaaaaaa')
-    expect(lines[0]).toContain('the urgent one')
+    // Ids only since card f494cace: the title is the card author's free text.
+    expect(lines[0]).not.toContain('the urgent one')
     expect(lines[2]).toContain('cccccccc')
   })
 
@@ -1100,7 +1101,7 @@ describe('a belyeg az IDOTARTAMOT javitja, a DARABSZAMOT nem', () => {
     // Az `id`-alaku minta rá nem illik: a pending ertesites CIMZETT szerint sorol, nem kartya
     // szerint. Egy KOZOS, laza minta elrejtene ezt; ezert kap mindegyik SAJAT alakot.
     const ids = ['aaaaaaaa1', 'bbbbbbbb2', 'cccccccc3']
-    const ID_ITEM = /^ {2}[0-9a-z]{8}\s/
+    const ID_ITEM = /^ {2}[0-9a-z]{8,}\s/  // the whole id since f494cace (the GET is an exact match)
     const cases: { msg: string; item: RegExp }[] = [
       { msg: buildPullNotice('jarvis', 20, ids.map(it3), NOW), item: ID_ITEM },
       { msg: buildWakeMessage('jarvis', 20, 3, ids.map(it3), NOW, 'assigned_open_cards'), item: ID_ITEM },
@@ -1515,7 +1516,9 @@ describe('the notice an idle agent gets when the board has ownerless work', () =
   it('NAMES the cards -- a count alone is what the old notice already was', () => {
     const msg = buildPullNotice('jarvis', 20, items, PULL_NOW)
     expect(msg).toContain('aaaaaaaa')
-    expect(msg).toContain('egy magas prioritasu tetel')
+    // By id, not by title (card f494cace): an ownerless card's title is anyone's free text.
+    expect(msg).not.toContain('egy magas prioritasu tetel')
+    expect(msg).toContain('/api/kanban/<id>')
   })
 
   it('and tells the reader to LOCK first', () => {

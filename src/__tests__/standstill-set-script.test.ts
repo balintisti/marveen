@@ -27,11 +27,19 @@ describe('scripts/standstill-set.sh --self-test', () => {
       transformSync(readFileSync(join(REPO, 'src', file), 'utf8'), { loader: 'ts', format: 'esm' }).code
     writeFileSync(engine, build('idle-agent.ts'))
     writeFileSync(envParse, build('env-parse.ts'))
+    // The evaluator's one local import (card f494cace): the card-id helpers. It is copied under the
+    // name idle-agent imports it by, as ESM; card-ref.ts imports nothing local, so it loads alone here.
+    // A local import added to either file fails this test: the script loads the evaluator on its own.
+    writeFileSync(join(dir, 'package.json'), '{"type":"module"}')
+    writeFileSync(join(dir, 'card-ref.js'), build('card-ref.ts'))
     const out = execFileSync('bash', [SCRIPT, '--self-test'], {
       encoding: 'utf-8',
       env: { ...process.env, STANDSTILL_ENGINE: engine, STANDSTILL_ENV_PARSE: envParse },
     })
     expect(out).toContain('self-test: PASS')
     expect(out).not.toContain('BUKO')
-  })
+    // Timeout budget, not a behaviour change (card f494cace): the self-test spawns the script ~40
+    // times; measured 2026-11-21 12:10 CET at load ~11, 52 s with the 401da4ece engine and 56 s with
+    // this one, against the suite-wide 60 s. Under a full parallel run it timed out.
+  }, 180_000)
 })

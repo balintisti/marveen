@@ -43,10 +43,12 @@ describe('the wake never goes over the cap', () => {
   }
   it('the fixed parts alone (no card named) leave room for the bounced header and one card line', () => {
     // 'nothing nameable' still prints the fixed parts; the cap minus their length is what the lists can use. The
-    // VISSZADOBOTT header plus its first line is the largest first block (~172), and this runs with the longest
-    // agent name AND this worktree's long install path (prod's path is 16 characters shorter).
+    // VISSZADOBOTT header (109) plus its first line is the largest first block, and this runs with the longest
+    // agent name AND this worktree's long install path (prod's path is 16 characters shorter). Since card f494cace
+    // a line carries no title (~172 before): 109 + 1 + a 32-character line for a 10-character id + 1 = 143 (held at 145), and
+    // the facts line took 29 characters for where to read the titles.
     const fixed = buildWakeMessage('computress', 120, 3, [], NOW, 'testing_without_my_comment').length
-    expect(WAKE_MAX_CHARS - fixed).toBeGreaterThanOrEqual(170)
+    expect(WAKE_MAX_CHARS - fixed).toBeGreaterThanOrEqual(145)
   })
 })
 

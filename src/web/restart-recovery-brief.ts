@@ -24,6 +24,8 @@ import { join } from 'node:path'
 import { logger } from '../logger.js'
 import { listKanbanCards } from '../db.js'
 import { agentDir } from './agent-config.js'
+import { cardRef } from '../card-ref.js'
+import { CARD_TEXT_READ_HINT } from '../card-text-read-hint.js'
 
 /** A file the agent left modified in its working directory. */
 export interface DirtyFile {
@@ -40,8 +42,9 @@ export interface RecoveryFacts {
   dirty: DirtyFile[]
   /** True when the dirty list was truncated, so the brief can say so. */
   dirtyTruncated: boolean
-  /** Cards this agent had in_progress at restart time. */
-  inProgress: { id: string; title: string }[]
+  /** Cards this agent had in_progress at restart time. Ids only: the title is the card author's free
+   *  text, and this brief is typed into a fresh prompt with no frame at all (card f494cace). */
+  inProgress: { id: string }[]
 }
 
 /** Longest brief we are willing to type into a fresh prompt. */
@@ -67,7 +70,8 @@ export function buildRecoveryBrief(facts: RecoveryFacts): string | null {
   if (hasCards) {
     lines.push('')
     lines.push(facts.inProgress.length === 1 ? 'Folyamatban levo kartyad:' : 'Folyamatban levo kartyaid:')
-    for (const c of facts.inProgress) lines.push(`  - ${c.id}: ${c.title}`)
+    for (const c of facts.inProgress) lines.push(`  - ${cardRef(c.id)}`)
+    lines.push(CARD_TEXT_READ_HINT)
   }
 
   if (hasDirty) {
@@ -150,7 +154,7 @@ export function gatherRecoveryFacts(agent: string): RecoveryFacts {
   try {
     inProgress = listKanbanCards()
       .filter((c) => c.assignee === agent && c.status === 'in_progress' && c.archived_at == null)
-      .map((c) => ({ id: c.id, title: c.title }))
+      .map((c) => ({ id: c.id }))
   } catch (err) {
     logger.debug({ err, agent }, 'recovery-brief: kanban facts unavailable')
   }
