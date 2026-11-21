@@ -82,7 +82,18 @@ except Exception:
 # card_id-t, tehat a valasz azt adja vissza, amit te kuldtel. A bizonyitek egy MASIK hivas.
 chk = urllib.request.Request(base, headers={'Authorization': 'Bearer ' + tok})
 cs = json.load(urllib.request.urlopen(chk))
-last = cs[-1]['content'] if cs else ''
+# A SAJAT komment a POST valaszabol vett id alapjan, NEM a lista utolso eleme: ha valaki kozben
+# ugyanarra a kartyara irt, a `cs[-1]` a MASIK agens kommentje, es hamis GYANUS jon. Merve
+# (mandark, kartya 1398a554): 95 eset egy nap alatt, ket szerzo 120 mp-en belul, a legszorosabb 1 mp.
+# Az id nelkuli valasz (nem a valos vegpont) a regi, utolso-elemes alakon marad: ott nincs mibol keresni.
+if posted_id is not None:
+    mine = [c for c in cs if c.get('id') == posted_id]
+    if not mine:
+        print('GYANUS kartya=%s: a %s id-ju kommentunk NINCS a visszaolvasott %d kozott -- nezd meg kezzel' % (card, posted_id, len(cs)))
+        sys.exit(1)
+    last = mine[0].get('content') or ''
+else:
+    last = cs[-1]['content'] if cs else ''
 # A SZERVER JOGOSAN NORMALIZAL: egy LETEZO kartyara mutato `#<8hex>` hivatkozast atirja a
 # kartya olvashato sorszamara (`#779`). Merve 2026-08-23: 101 -> 96 karakter, `#7d50804c` ->
 # `#779`, mikozben a nem letezo `#deadbeef` valtozatlan maradt.
@@ -104,7 +115,7 @@ cid = posted_id if posted_id is not None else (cs[-1].get('id') if cs and ok els
 ref = ' id=%s ref=komment:%s@%s' % (cid, cid, card) if cid is not None else ''
 print('%s kartya=%s komment=%d%s stamp=%s' % ('OK' if ok else 'GYANUS', card, len(cs), ref, stamp))
 if not ok:
-    print('  a visszaolvasott utolso komment NEM egyezik a kuldottel -- nezd meg kezzel')
+    print('  a visszaolvasott %s NEM egyezik a kuldottel -- nezd meg kezzel' % ('sajat komment (id=%s)' % posted_id if posted_id is not None else 'utolso komment'))
     print('  (a `#<kartya>` -> `#<sorszam>` csere VARHATO, azt nem jelzi; barmi mas elteres valodi)')
     print('  hossz: kuldott=%d visszaolvasott=%d' % (len(body), len(last)))
     sys.exit(1)
