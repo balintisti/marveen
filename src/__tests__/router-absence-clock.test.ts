@@ -55,6 +55,7 @@ vi.mock('../web/agent-config.js', () => ({
   listAgentNames: () => [],
 }))
 vi.mock('../web/agent-process.js', () => ({
+  withTmuxBatch: (fn: () => unknown) => fn(),
   clearFeedbackModalAndRecheck: () => false,
   agentSessionName: (name: string) => `agent-${name}`,
   isSessionReadyForPrompt: vi.fn(async (session: string) => ready.get(session) ?? false),
