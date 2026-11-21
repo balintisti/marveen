@@ -471,6 +471,30 @@ export function saturationBannerCredible(
   return pct >= SATURATION_CREDIBLE_MIN_PCT
 }
 
+/**
+ * THE CPU VERDICT ON THE PANE'S BACKGROUND SHELLS (card cb25d896). The footer only COUNTS shells and
+ * monitors, so an idle `python3 -m http.server` held a written handoff's restart for the full
+ * BACKGROUND_DEFER_MAX_MS (zara, 2026-11-18: 45-55 minutes, three times in one day). The runner maps
+ * the footer's shells to their processes and measures each one's subtree CPU over SHELL_CPU_WINDOW_MS.
+ *
+ * `ok: true` only when EVERY footer shell/monitor was mapped to exactly one process and each has a
+ * verdict; `idle` holds the command lines of the ones under SHELL_CPU_IDLE_FLOOR_SEC. Anything else
+ * (ps failed, the counts disagree, a sub-agent's shells cannot be told apart, the first sample is
+ * younger than the window) is `ok: false` with the reason, and the hold is today's.
+ */
+export type BackgroundShellCpu = { ok: true; idle: string[] } | { ok: false; why: string }
+
+/** The window a shell's CPU is judged over: two guard sweeps (GUARD_SWEEP_INTERVAL_MS). A baseline
+ *  sample counts from SHELL_CPU_MIN_SPAN_MS, because the sweep drifts by seconds. */
+export const SHELL_CPU_WINDOW_MS = 10 * 60_000
+export const SHELL_CPU_MIN_SPAN_MS = 9 * 60_000
+/** Under this many CPU seconds per SHELL_CPU_WINDOW_MS (the whole subtree, own + reaped-children CPU)
+ *  a shell is idle. From the cb25d896 measurements (2026-11-20, 13 minutes, 30 s samples, 10-minute
+ *  deltas): idle `python3 -m http.server` 0.03-0.07 s, `until [ -f X ]; do sleep 20; done` 0.07-0.08 s,
+ *  the same loop running `gh --version` every 20 s 1.10-1.17 s, a looping bare vitest 617-632 s. The
+ *  floor sits 4x above the busiest poll loop and over 100x below the vitest. */
+export const SHELL_CPU_IDLE_FLOOR_SEC = 5
+
 export interface GuardInputs {
   nowMs: number
   /** Live context fraction (0..1+), or null when unmeasurable (no transcript / not running). */
@@ -519,6 +543,11 @@ export interface GuardInputs {
   detachedWorkDetail?: string
   /** What is left of backgroundWork once the detached part is taken out: what the restart kills. */
   killedWorkDetail?: string
+  /** The CPU verdict on the pane's background SHELLS and MONITORS (the footer's `N shells, M monitors`),
+   *  measured by the runner over SHELL_CPU_WINDOW_MS (card cb25d896). Only a written handoff's hold
+   *  reads it: an `idle` shell there does not hold the restart, and the restart names it. Absent or
+   *  `ok: false` (not measured, ambiguous, no verdict yet) = every shell holds, as before. */
+  backgroundShellCpu?: BackgroundShellCpu
   /** The same context as a fraction of the model's REAL window (the model / `[1m]` window, calibrated)
    *  when `pct` is measured against a smaller `limitTokens` cost cap. Only the hard tier's background
    *  hold reads it (REAL_WINDOW_HOLD_CEILING, card b6225f23). Absent/null = no room known: the hard
@@ -826,9 +855,20 @@ function holdForBackground(
   inputs: GuardInputs,
   cfg: ContextGuardConfig,
   what: string,
+  releaseIdleShells = false,
 ): { hold: GuardDecision | null; suffix: string } {
   const since = state.backgroundDeferSinceMs ?? null
-  const running = (inputs.backgroundWork ?? 0) > 0
+  const total = inputs.backgroundWork ?? 0
+  // Card cb25d896: behind a WRITTEN handoff a shell idle by CPU does not hold. Everything else does:
+  // sub-agent rows, heavy-run jobs, working shells, and every shell whose CPU was not judged.
+  const cpu = releaseIdleShells ? inputs.backgroundShellCpu : undefined
+  const idle = cpu?.ok && cpu.idle.length <= total ? cpu.idle : []
+  const running = total - idle.length > 0
+  const cpuNote = cpu === undefined || total === 0
+    ? ''
+    : cpu.ok
+      ? (idle.length > 0 ? `; ${idle.length} of it idle by CPU, not waited for` : '')
+      : `; shell CPU not judged (${cpu.why}), every shell holds`
   const waitedMin = since !== null ? Math.round((inputs.nowMs - since) / 60_000) : 0
   const pressured = inputs.pct !== null && inputs.pct >= cfg.actPct
   const boundSince = !state.noPressure
@@ -844,7 +884,7 @@ function holdForBackground(
     return {
       hold: {
         action: 'none',
-        reason: `${what}, but background work is running: ${backgroundWorkText(inputs)} -- holding the restart (${progress})`,
+        reason: `${what}, but background work is running: ${backgroundWorkText(inputs)}${cpuNote} -- holding the restart (${progress})`,
         nextState: {
           ...state,
           backgroundDeferSinceMs: since ?? inputs.nowMs,
@@ -857,7 +897,27 @@ function holdForBackground(
   if (running) {
     return { hold: null, suffix: ` -- held ${waitedMin}m for background work, the ${maxMin}m bound is reached${killedNote(inputs)}` }
   }
+  if (idle.length > 0) return { hold: null, suffix: idleShellsNote(idle, since !== null ? waitedMin : null) }
   return { hold: null, suffix: since !== null ? ` -- held ${waitedMin}m until the background work finished` : '' }
+}
+
+/** How a released idle shell is named in the restart reason: its command line, newlines marked, cut at
+ *  a readable length (the restart tail carries the full command for the fresh session). */
+export const IDLE_SHELL_COMMAND_MAX_CHARS = 300
+export function idleShellText(command: string): string {
+  const one = command.replace(/\r?\n/g, ' ⏎ ').replace(/`/g, "'").trim()
+  return one.length > IDLE_SHELL_COMMAND_MAX_CHARS ? `${one.slice(0, IDLE_SHELL_COMMAND_MAX_CHARS)}…` : one
+}
+
+/** The restart that did not wait for idle shells (card cb25d896) names every one, with its command,
+ *  so the fresh session can re-arm a poll loop that slept on purpose. "KILLS running background work"
+ *  keeps the restart notice out of the log-only path (restartNoticeIsLogOnly): something was killed. */
+function idleShellsNote(idle: string[], waitedMin: number | null): string {
+  const win = Math.round(SHELL_CPU_WINDOW_MS / 60_000)
+  return ` -- did not wait for ${idle.length} background shell(s) idle by CPU (under ${SHELL_CPU_IDLE_FLOOR_SEC}s CPU per ${win}m)` +
+    (waitedMin !== null ? `, after holding ${waitedMin}m` : '') +
+    ` -- KILLS running background work: ${idle.length} (${idle.map((c) => `idle shell \`${idleShellText(c)}\``).join('; ')})` +
+    ` -- re-arm what is still needed`
 }
 
 /**
@@ -1178,7 +1238,7 @@ export function decideGuard(
         // A routine restart waits for the agent's background work (card c8852bba), unless the
         // context already reached the hard threshold.
         const atHard = inputs.pct !== null && inputs.pct >= cfg.hardPct && !hardTierHoldsForBackground(inputs)
-        const held = atHard ? { hold: null, suffix: killedNote(inputs) } : holdForBackground(state, inputs, cfg, 'handoff written')
+        const held = atHard ? { hold: null, suffix: killedNote(inputs) } : holdForBackground(state, inputs, cfg, 'handoff written', true)
         if (held.hold) return answerHeldApiError(held.hold, inputs)
         // Refresh budget spent (or never applicable): ship what we have. Saying
         // the budget is spent out loud matters -- the previous behaviour looked
