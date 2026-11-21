@@ -874,7 +874,7 @@ export function tick(): void {
         }
         let resumeRow: { id: number }
         try {
-          resumeRow = createAgentMessage('system', agent, buildApiErrorResumeMessage(decision.errorSinceMs))
+          resumeRow = createAgentMessage('system', agent, buildApiErrorResumeMessage(decision.errorSinceMs, decision.backgroundWork))
         } catch (err) {
           logger.warn({ err, agent }, 'idle guard: could not enqueue the API-error resume message')
           continue

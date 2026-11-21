@@ -26,6 +26,9 @@ const hoisted = await vi.hoisted(async () => {
 })
 tmpDirs().adopt(hoisted.root)
 const debug = vi.fn()
+// A tick that throws is swallowed by tick() itself (one warn line): without this list a missing mock
+// silently stops the tick, and the last debug line of an EARLIER tick is read as this tick's reason.
+const tickErrors: unknown[] = []
 const panes = new Map<string, string | null>()
 const messages: Array<{ from: string; to: string; content: string }> = []
 const ownerAlerts: string[] = []
@@ -35,7 +38,10 @@ let outboundSec: number | null = null
 let commentRows: Array<{ card_id: string; author: string; at: number }> = []
 
 vi.mock('../logger.js', () => ({
-  logger: { debug: (...a: unknown[]) => debug(...a), info: () => {}, warn: () => {}, error: () => {} },
+  logger: {
+    debug: (...a: unknown[]) => debug(...a), info: () => {}, error: () => {},
+    warn: (o: { err?: unknown }, msg?: string) => { if (msg === 'idle guard: tick error') tickErrors.push(o.err) },
+  },
 }))
 vi.mock('../config.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../config.js')>()
@@ -66,6 +72,8 @@ vi.mock('../db.js', () => ({
     }),
   }),
   createAgentMessage: (from: string, to: string, content: string) => { messages.push({ from, to, content }); return { id: messages.length } },
+  // The API-error resume (card bd1f7b2c) is followed by a delivery check on its row; never typed in here.
+  getAgentMessage: (id: number) => (id >= 1 && id <= messages.length ? { id, delivered_at: null } : undefined),
   saveIdleGuardState: () => {},
   loadIdleGuardState: () => null,
 }))
@@ -329,7 +337,7 @@ describe('tick() -- background work is working: no wake, no repeat, no coordinat
     // The watcher visits the coordinator too; a busy pane keeps its own verdict out of the counts.
     panes.set(`agent-${MAIN_AGENT_ID}`, COORDINATOR_BUSY)
   })
-  afterEach(() => { vi.useRealTimers() })
+  afterEach(() => { vi.useRealTimers(); expect(tickErrors.splice(0)).toEqual([]) })
 
   /** Tick every 3 minutes (the watcher's own interval) and return the reasons seen, per tick. */
   const runSpell = (paneAt: (minute: number) => string, minutes = SPELL_MIN): string[] => {
@@ -349,11 +357,23 @@ describe('tick() -- background work is working: no wake, no repeat, no coordinat
     ['2 assigned cards', true],
     ['NOTHING assigned (didi: her work arrives as review messages)', false],
   ])('agent with %s', (_label, withCards) => {
-    it.each(POSITIVES)('%s: a 110 minute spell, zero wakes, zero repeats, zero notices', (_n, p) => {
+    it.each(POSITIVES.filter(([, p]) => !p.includes('API Error')))('%s: a 110 minute spell, zero wakes, zero repeats, zero notices', (_n, p) => {
       workcheck('x', 'assigned_open_cards'); if (withCards) assignedCards()
       const reasons = runSpell(() => p)
       expect(new Set(reasons)).toEqual(new Set(['subagents-running']))
       expect(noise()).toBe(0)
+    })
+
+    // Card bd1f7b2c: the API error at the tail means the MAIN turn is dead, and background work no
+    // longer holds its resume back. One resume per streak, then the hold as before: still no wake,
+    // no repeat, no coordinator notice.
+    it('mandark 08:55 (the API error + waiting line + row): ONE API-error resume, then the hold; no wake, no repeat, no notice', () => {
+      workcheck('x', 'assigned_open_cards'); if (withCards) assignedCards()
+      const reasons = runSpell(() => MANDARK_0855)
+      expect(reasons.slice(0, 2)).toEqual(['api-error-confirming', 'resume-api-error'])
+      expect(new Set(reasons.slice(2))).toEqual(new Set(['subagents-running']))
+      expect(messages.filter(m => m.to === 'x').map(m => m.content.slice(0, 8))).toEqual(['a turnod'])
+      expect(noise()).toBe(1)
     })
 
     it('CONTROL: the same agent on a truly empty pane IS reported', () => {
@@ -386,9 +406,13 @@ describe('tick() -- background work is working: no wake, no repeat, no coordinat
       if (m === GONE) before = messages.length                     // everything sent while the row was still there
       return m < GONE ? MANDARK_0855 : EMPTY
     }, GONE + 45)
-    expect(before).toBe(0)
-    expect(reasons.slice(0, GONE / 3)).toEqual(Array(GONE / 3).fill('subagents-running'))
-    expect(messages[0].to).toBe('x')                                // the first thing sent is the wake
+    // While the row was there: only the one API-error resume (MANDARK_0855 carries the error; card
+    // bd1f7b2c), no wake.
+    expect(before).toBe(1)
+    expect(messages[0].content.startsWith('a turnod')).toBe(true)
+    expect(reasons.slice(0, 2)).toEqual(['api-error-confirming', 'resume-api-error'])
+    expect(reasons.slice(2, GONE / 3)).toEqual(Array(GONE / 3 - 2).fill('subagents-running'))
+    expect(messages[1].to).toBe('x')                                // the first thing sent after the row went is the wake
     const wakeIdx = reasons.findIndex(r => r === 'wake-agent')
     expect(wakeIdx * 3).toBeGreaterThanOrEqual(GONE + 12)           // sustainedMs = 12 min counted from the row disappearing
     expect(wakeIdx * 3).toBeLessThanOrEqual(GONE + 21)
@@ -509,7 +533,7 @@ describe('tick() -- a declared standstill in workcheck.json', () => {
       archived_at: null, updated_at: Math.floor(NOW / 1000), due_date: null,
     }))
   })
-  afterEach(() => { vi.useRealTimers() })
+  afterEach(() => { vi.useRealTimers(); expect(tickErrors.splice(0)).toEqual([]) })
 
   const spell = (minutes = 60): string[] => {
     const reasons: string[] = []
