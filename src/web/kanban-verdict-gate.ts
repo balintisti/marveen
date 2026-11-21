@@ -20,10 +20,14 @@
 // The reading itself is shared with the archive sweep (db.ts), so it lives
 // outside web/: see kanban-verdict.ts for the rule and the token.
 import {
-  openVerdicts, openLeftovers, hasDoneProof, DONE_PROOF_KINDS, type OpenVerdict, type OpenLeftover,
+  openVerdicts, openLeftovers, hasDoneProof, DONE_PROOF_KINDS, itemMarkState, ITEM_MARK_KINDS,
+  type OpenVerdict, type OpenLeftover, type ItemMarkState, type InvalidItemMark,
 } from '../kanban-verdict.js'
 
-export { openVerdicts, openLeftovers, hasDoneProof, DONE_PROOF_KINDS, type OpenVerdict, type OpenLeftover }
+export {
+  openVerdicts, openLeftovers, hasDoneProof, DONE_PROOF_KINDS, itemMarkState, ITEM_MARK_KINDS,
+  type OpenVerdict, type OpenLeftover, type ItemMarkState,
+}
 
 /**
  * The override the gate accepts: a stated reason, nothing less. An empty or
@@ -90,6 +94,46 @@ export function proofRefusal(
     + 'aztan ismeteld a lezarast. Az `override_reason` ezt nem helyettesiti.'
   if (open.length > 0 || leftovers.length > 0) error += ` Emellett: ${closeRefusal(open, leftovers).error}`
   return { error, missing_proof: true, proof_kinds: DONE_PROOF_KINDS, open_verdicts: open, open_leftovers: leftovers }
+}
+
+/**
+ * The 409 body when a multi-item card would go to done with an item unmarked -- card
+ * bb9f4673. It names the unmarked items, the mark that closes one, and every line that
+ * looked like a mark but did not count (with why). A missing proof, open verdicts or
+ * leftovers are named in the same body, so one call tells the closer everything.
+ * `override_reason` does not stand in for the marks: `TETEL <n>: HAMIS <reason>` is
+ * always possible and stays on the card.
+ */
+export function itemsRefusal(
+  items: ItemMarkState,
+  proofMissing: boolean,
+  open: OpenVerdict[],
+  leftovers: OpenLeftover[] = [],
+): {
+  error: string; declared_items: number; unmarked_items: number[]; invalid_item_marks: InvalidItemMark[]
+  item_mark_kinds: readonly string[]; missing_proof: boolean; open_verdicts: OpenVerdict[]; open_leftovers: OpenLeftover[]
+} {
+  let error =
+    `A kartya nem mehet done-ba: a cime ${items.declared} tetelt jelent be, `
+    + `es ${items.missing.length} nincs jelolve (${items.missing.join(', ')}). `
+    + 'Tetelenkent egy komment-sor (0. oszlopban): '
+    + `"TETEL <szam>: <${ITEM_MARK_KINDS.join('|')}> <commit-sha | indok | masik kartya azonositoja>"; `
+    + 'a <szam> lehet lista vagy tartomany (1,3 vagy 2-5). Az `override_reason` ezt nem helyettesiti.'
+  if (items.invalid.length > 0) {
+    error += ` Nem szamitott jelolesnek: ${items.invalid.map((i) => `komment ${i.commentId}, ${i.author}: "${i.line}" (${i.why})`).join('; ')}.`
+  }
+  if (proofMissing) error += ` Emellett: ${proofRefusal(open, leftovers).error}`
+  else if (open.length > 0 || leftovers.length > 0) error += ` Emellett: ${closeRefusal(open, leftovers).error}`
+  return {
+    error,
+    declared_items: items.declared,
+    unmarked_items: items.missing,
+    invalid_item_marks: items.invalid,
+    item_mark_kinds: ITEM_MARK_KINDS,
+    missing_proof: proofMissing,
+    open_verdicts: open,
+    open_leftovers: leftovers,
+  }
 }
 
 /** The 409 body for a card created straight into done: it cannot carry a proof yet. */

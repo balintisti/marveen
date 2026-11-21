@@ -32,6 +32,7 @@ import {
 } from '../../db.js'
 import {
   openVerdicts, openLeftovers, overrideReason, closeRefusal, hasDoneProof, proofRefusal, createDoneRefusal,
+  itemMarkState, itemsRefusal, ITEM_MARK_KINDS,
   type OpenVerdict,
 } from '../kanban-verdict-gate.js'
 import { proseLeftoverHints, proseLeftoverWarning } from '../../kanban-verdict.js'
@@ -148,6 +149,8 @@ export function kanbanMoveInstructions(id: string, target: string): string {
     `    ${auth} \\`,
     `    -H 'Content-Type: application/json' \\`,
     `    -d '{"author":"${target}","content":"KESZ-IGAZOLAS: FAJTA A BIZONYITEK\\nAZ EREDMENY ROVIDEN"}'`,
+    // Card bb9f4673: a title that declares "<N> tetel" also needs every item marked.
+    `Ha a kártya CÍME "<N> tétel"-t mond, a done-hoz MINDEN tétel jelölése is kell, tételenként (vagy listával, tartománnyal) egy sor a kommentben, 0. oszlopban: \`TETEL <szám>: <${ITEM_MARK_KINDS.join('|')}> <commit-sha | indok | a tételt vivő másik kártya azonosítója>\`. A nem jelölt tételt a 409 megnevezi.`,
     '',
     '2) Állítsd a kártyát done-ra:',
     `  curl -s -X POST ${moveUrl} \\`,
@@ -426,6 +429,10 @@ export const KANBAN_RESERVED_SEGMENTS = ['archived', 'labels', 'assignees', 'hea
  * Card 3c7be3c4: a move to DONE also needs the card's `KESZ-IGAZOLAS:` line, and no
  * override reason stands in for it. Archiving does not ask for it: an archived card
  * is not claimed done, and the archive sweep already takes only IGAZOLT-labelled ones.
+ *
+ * Card bb9f4673: a card whose title declares "<N> tetel" also needs every item marked
+ * (`TETEL <n>: JAVITVA|HAMIS|ATKERULT ...`, kanban-verdict.ts), and no override reason
+ * stands in for the marks either.
  */
 function closeBlocked(
   res: ServerResponse, cardId: string, body: unknown, actor: unknown, closing: 'done' | 'archive',
@@ -434,9 +441,22 @@ function closeBlocked(
   const verdicts: OpenVerdict[] = openVerdicts(comments)
   // Card 0a787690: the second closed token (`MARADEK:`) goes through the SAME door.
   const leftovers = openLeftovers(comments)
-  if (closing === 'done' && !hasDoneProof(comments)) {
-    json(res, proofRefusal(verdicts, leftovers), 409)
-    return true
+  if (closing === 'done') {
+    const proofMissing = !hasDoneProof(comments)
+    // Card bb9f4673: the title the card has AFTER this write declares the items, so a PUT
+    // that renames and closes in one call is read on the name it leaves behind.
+    const nextTitle = body && typeof body === 'object' && typeof (body as { title?: unknown }).title === 'string'
+      ? (body as { title: string }).title
+      : getKanbanCard(cardId)?.title
+    const items = itemMarkState(nextTitle, comments, cardId, (c) => !!getKanbanCard(c))
+    if (items && items.missing.length > 0) {
+      json(res, itemsRefusal(items, proofMissing, verdicts, leftovers), 409)
+      return true
+    }
+    if (proofMissing) {
+      json(res, proofRefusal(verdicts, leftovers), 409)
+      return true
+    }
   }
   if (verdicts.length === 0 && leftovers.length === 0) return false
   const reason = overrideReason(body)

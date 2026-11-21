@@ -722,3 +722,24 @@ kezzel zaro sort nem irt (22 kezi zaras, ~18 elakadt kartya). A kapu (`openVerdi
 - Jelolo nelkul a sor az atnezoe marad (viselkedes-hibat o zar); trillian KORABBI zarasa nem zar; az atnezo egy
   kesobbi NYITOTT sora ujranyit; mas szerzo zarasa nem zar; ha trillian utolso verdiktje maga NYITOTT, semmi nem zarul.
 - Az orai archivalo es az idle-figyelo ugyanezt a fuggvenyt kerdezi, tehat ugyanigy lat.
+
+## A HARMADIK ZART TOKEN: `TETEL <n>:` a tobb-teteles kartyan (kartya bb9f4673, didi 57211, marveen dontese)
+
+didi 57211 (2026-11-09): kilenc SEC/LOW kotegkartya kesz lett, mikozben 47 tetelbol 23 nem, reszben vagy eldonthetetlenul
+volt javitva; a 60795c0c a 10 tetelebol 2 elesitesenek igazolasaval zarult. A kapu (`src/kanban-verdict.ts`,
+`itemMarkState`) a done-utakon (move, PUT status) a KESZ-IGAZOLAS mellett ezt is keri:
+
+- TOBB-TETELES az a kartya, aminek a CIME `<N> tetel` (ekezet nelkul, N >= 2; a `teteles` alak is). A tetelek 1..N.
+  Az `1/14 tetel` (resz) es a `13-24 tetel` (tartomany) nem darabszam. Merve 2026-11-12 03:50, 6089 kartya (mode=ro): a
+  leirasbeli szamozott lista 4860 done kartyabol 814-en all, tobbnyire lepeslista, ezert arra NEM epul (proza-detektor
+  lenne); a cimbeli alak 26 kartyan all, mind valodi koteg.
+- JELOLES, 0. oszlopban (a szerzo sajat belyege levesz, ekezet nelkul, NAGYBETU): `TETEL <szamok>: JAVITVA <commit-sha>`,
+  `TETEL <szamok>: HAMIS <indok>`, `TETEL <szamok>: ATKERULT <a tetelt vivo masik, letezo kartya azonositoja>`. A
+  `<szamok>` lista vagy tartomany (`1, 3`, `2-5`); egy felreolvasott cim kiutja egy sor: `TETEL 1-12: HAMIS nem tetel-lista`.
+- Barmely ervenyes jeloles zarja a tetelt. Ha egy JAVITVA tetel megsem javult, az ellenorzo `VERDIKT: NYITOTT TETEL`-je
+  nyitja ujra (az a verdikt-kapun all meg).
+- Ami az elotagot viseli, de a bizonyitek hianyzik (sha nelkuli JAVITVA, indok nelkuli HAMIS, nem letezo vagy a sajat
+  kartyara mutato ATKERULT, nem letezo tetelszam), az NEM jeloles; a 409 megnevezi az okat (`invalid_item_marks`).
+- A 409 torzse: `unmarked_items`, `declared_items`, es egy valaszban a hianyzo igazolas, a nyitott verdikt, a maradek.
+  Az `override_reason` NEM helyettesiti (a HAMIS-sor mindig lehetseges, es a kartyan marad). Archivalast nem erint.
+- NEM fedi: a csak kommentben vagy leirasban felsorolt, a cimben ki nem mondott tetel-listat.
